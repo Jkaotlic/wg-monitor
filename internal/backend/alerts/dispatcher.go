@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -24,6 +25,7 @@ type Dispatcher struct {
 	d   *db.DB
 	tg  TGSender
 	cfg Config
+	mu  sync.Mutex
 }
 
 func NewDispatcher(d *db.DB, tg TGSender, cfg Config) *Dispatcher {
@@ -107,11 +109,20 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	if u.TelegramThreadID != nil {
 		return *u.TelegramThreadID, nil
 	}
+	di.mu.Lock()
+	defer di.mu.Unlock()
+	u, err = di.d.Users().GetByNickname(nickname)
+	if err != nil {
+		return 0, err
+	}
+	if u.TelegramThreadID != nil {
+		return *u.TelegramThreadID, nil
+	}
 	tid, err := di.tg.CreateForumTopic(ctx, di.cfg.ChatID, "👤 "+nickname, 0xFF8C00)
 	if err != nil {
 		return 0, err
 	}
-	if err := di.d.Users().UpdateThreadID(userID, tid); err != nil {
+	if err := di.d.Users().UpdateThreadID(u.ID, tid); err != nil {
 		return 0, err
 	}
 	return tid, nil
