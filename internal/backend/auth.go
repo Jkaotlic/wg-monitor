@@ -2,19 +2,25 @@ package backend
 
 import (
 	"context"
-	"crypto/subtle"
+	"errors"
 	"net/http"
 	"strings"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
 type ctxKey int
 
-const ctxKeyNickname ctxKey = iota
+const (
+	ctxKeyNickname ctxKey = iota
+	ctxKeyUserID
+)
 
-// AuthMiddleware returns middleware that requires `Authorization: Bearer <token>`.
-// On match, the matched nickname is attached to the request context.
-// Token comparison uses subtle.ConstantTimeCompare (timing-safe).
-func AuthMiddleware(tokenToNickname map[string]string) func(http.Handler) http.Handler {
+type UserLookup interface {
+	GetByToken(rawToken string) (*db.User, error)
+}
+
+func AuthMiddleware(lookup UserLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			hdr := r.Header.Get("Authorization")
@@ -28,21 +34,28 @@ func AuthMiddleware(tokenToNickname map[string]string) func(http.Handler) http.H
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			for token, nick := range tokenToNickname {
-				if subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1 {
-					ctx := context.WithValue(r.Context(), ctxKeyNickname, nick)
-					next.ServeHTTP(w, r.WithContext(ctx))
+			u, err := lookup.GetByToken(presented)
+			if err != nil {
+				if errors.Is(err, db.ErrUserNotFound) {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
 				}
+				http.Error(w, "auth lookup failed", http.StatusInternalServerError)
+				return
 			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			ctx := context.WithValue(r.Context(), ctxKeyNickname, u.Nickname)
+			ctx = context.WithValue(ctx, ctxKeyUserID, u.ID)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// NicknameFromContext returns the agent nickname attached by AuthMiddleware,
-// or empty string if not present.
 func NicknameFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyNickname).(string)
+	return v
+}
+
+func UserIDFromContext(ctx context.Context) int64 {
+	v, _ := ctx.Value(ctxKeyUserID).(int64)
 	return v
 }

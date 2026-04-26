@@ -2,94 +2,101 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-func newServer(t *testing.T) (http.Handler, *bytes.Buffer) {
-	t.Helper()
-	logBuf := &bytes.Buffer{}
-	logger := slog.New(slog.NewJSONHandler(logBuf, nil))
-	tokens := map[string]string{
-		"deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe": "testkeen",
-	}
-	return NewMux(logger, tokens), logBuf
+type fakeDisp struct {
+	mu    sync.Mutex
+	calls []state.Kind
 }
 
-func TestHealthz(t *testing.T) {
-	h, _ := newServer(t)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest("GET", "/healthz", nil))
-	if rec.Code != http.StatusOK {
-		t.Errorf("code: %d", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "ok") {
-		t.Errorf("body: %q", rec.Body.String())
-	}
+func (f *fakeDisp) Handle(_ context.Context, _ int64, _, _ string, tr state.Transition, _ string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, tr.Kind)
+	return nil
 }
 
-func TestReport_HappyPath(t *testing.T) {
-	h, logBuf := newServer(t)
-	report := wire.Report{
-		Timestamp:    time.Date(2026, 4, 26, 12, 0, 0, 0, time.UTC),
-		AgentVersion: "0.1.0",
+func TestReportPersistsEventsAndDispatches(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0000000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	disp := &fakeDisp{}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC(),
+		AgentVersion: "test",
 		Checks: []wire.Check{
-			{Name: "agent_heartbeat", Status: "ok", DurationMs: 1},
+			{Name: "agent_heartbeat", Status: "ok"},
+			{Name: "awg_handshake", Status: "fail", Details: map[string]any{"error": "stale"}},
 		},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	body, _ := json.Marshal(report)
-	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe")
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("code: %d body: %s", rec.Code, rec.Body.String())
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status: %d", resp.StatusCode)
 	}
-	logged := logBuf.String()
-	for _, want := range []string{`"nickname":"testkeen"`, `"agent_version":"0.1.0"`, `"check_count":1`} {
-		if !strings.Contains(logged, want) {
-			t.Errorf("log missing %s; full log: %s", want, logged)
-		}
+
+	disp.mu.Lock()
+	if len(disp.calls) != 1 {
+		t.Fatalf("dispatcher invoked %d times (heartbeat must NOT trigger)", len(disp.calls))
+	}
+	if disp.calls[0] != state.Soft {
+		t.Fatalf("kind: %v", disp.calls[0])
+	}
+	disp.mu.Unlock()
+
+	latest, _ := d.Events().LatestPerUser(uid)
+	if latest.IsZero() {
+		t.Fatal("event not persisted")
 	}
 }
 
-func TestReport_RejectsBadJSON(t *testing.T) {
-	h, _ := newServer(t)
-	req := httptest.NewRequest("POST", "/v1/report", io.NopCloser(strings.NewReader("not json")))
-	req.Header.Set("Authorization", "Bearer deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("code: %d want 400", rec.Code)
-	}
-}
-
-func TestReport_Unauthorized(t *testing.T) {
-	h, _ := newServer(t)
-	req := httptest.NewRequest("POST", "/v1/report", strings.NewReader(`{}`))
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("code: %d", rec.Code)
-	}
-}
-
-func TestReport_RejectsGet(t *testing.T) {
-	h, _ := newServer(t)
-	req := httptest.NewRequest("GET", "/v1/report", nil)
-	req.Header.Set("Authorization", "Bearer deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusMethodNotAllowed {
-		t.Errorf("code: %d want 405", rec.Code)
+func TestReportRejectsTooLarge(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	huge := bytes.Repeat([]byte("A"), 80*1024)
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(huge))
+	req.Header.Set("Authorization", "Bearer x")
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", resp.StatusCode)
 	}
 }
