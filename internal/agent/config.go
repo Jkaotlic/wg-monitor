@@ -15,6 +15,7 @@ var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 type Config struct {
 	Backend BackendConfig `yaml:"backend"`
 	Agent   AgentConfig   `yaml:"agent"`
+	Checks  ChecksConfig  `yaml:"checks"`
 }
 
 type BackendConfig struct {
@@ -23,10 +24,8 @@ type BackendConfig struct {
 }
 
 type AgentConfig struct {
-	Nickname       string `yaml:"nickname"`
-	IntervalSec    int    `yaml:"interval_sec"`
-	AwgIface       string `yaml:"awg_iface"`
-	ExpectedExitIP string `yaml:"expected_exit_ip"`
+	Nickname    string `yaml:"nickname"`
+	IntervalSec int    `yaml:"interval_sec"`
 }
 
 func (a AgentConfig) Interval() time.Duration {
@@ -34,6 +33,44 @@ func (a AgentConfig) Interval() time.Duration {
 		return 60 * time.Second
 	}
 	return time.Duration(a.IntervalSec) * time.Second
+}
+
+type ChecksConfig struct {
+	AWG AWGCheckConfig `yaml:"awg"`
+	DNS DNSCheckConfig `yaml:"dns"`
+}
+
+type AWGCheckConfig struct {
+	Interface          string `yaml:"interface"`
+	HandshakeMaxAgeSec int    `yaml:"handshake_max_age_sec"`
+	ExpectedExitIP     string `yaml:"expected_exit_ip"`
+	MarkerURL          string `yaml:"marker_url"`
+	RoutingProbeURL    string `yaml:"routing_probe_url"` // default https://api.ipify.org
+}
+
+func (a AWGCheckConfig) HandshakeMaxAge() time.Duration {
+	if a.HandshakeMaxAgeSec <= 0 {
+		return 180 * time.Second
+	}
+	return time.Duration(a.HandshakeMaxAgeSec) * time.Second
+}
+
+func (a AWGCheckConfig) RoutingURL() string {
+	if a.RoutingProbeURL != "" {
+		return a.RoutingProbeURL
+	}
+	return "https://api.ipify.org"
+}
+
+type DNSProviderConfig struct {
+	Name string `yaml:"name"`
+	Host string `yaml:"host"`
+}
+
+type DNSCheckConfig struct {
+	Providers     []DNSProviderConfig `yaml:"providers"`
+	TestDomain    string              `yaml:"test_domain"`
+	FailThreshold int                 `yaml:"fail_threshold"`
 }
 
 type LoadOption func(*loadOpts)
@@ -75,11 +112,27 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	if !nicknameRegexp.MatchString(cfg.Agent.Nickname) {
 		return nil, fmt.Errorf("agent.nickname %q must match %s", cfg.Agent.Nickname, nicknameRegexp)
 	}
-	if cfg.Agent.AwgIface == "" {
-		return nil, fmt.Errorf("agent.awg_iface is required (no default — per-user, see spec Q4)")
+	if cfg.Checks.AWG.Interface == "" {
+		return nil, fmt.Errorf("checks.awg.interface is required (no default — per-user, see spec Q4)")
 	}
-	if cfg.Agent.ExpectedExitIP == "" {
-		return nil, fmt.Errorf("agent.expected_exit_ip is required (no default — per-user, see spec Q4)")
+	if cfg.Checks.AWG.ExpectedExitIP == "" {
+		return nil, fmt.Errorf("checks.awg.expected_exit_ip is required (no default — per-user, see spec Q4)")
+	}
+	if cfg.Checks.AWG.MarkerURL == "" {
+		return nil, fmt.Errorf("checks.awg.marker_url is required")
+	}
+	if cfg.Checks.DNS.TestDomain == "" {
+		cfg.Checks.DNS.TestDomain = "example.com"
+	}
+	if cfg.Checks.DNS.FailThreshold <= 0 {
+		cfg.Checks.DNS.FailThreshold = 2
+	}
+	if len(cfg.Checks.DNS.Providers) == 0 {
+		cfg.Checks.DNS.Providers = []DNSProviderConfig{
+			{Name: "cloudflare", Host: "1.1.1.1"},
+			{Name: "google", Host: "8.8.8.8"},
+			{Name: "quad9", Host: "9.9.9.9"},
+		}
 	}
 	return &cfg, nil
 }
