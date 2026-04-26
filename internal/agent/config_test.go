@@ -197,3 +197,46 @@ agent: { nickname: testkeen }
 		t.Fatalf("expected error on missing checks.awg")
 	}
 }
+
+func TestLoadConfigDNSDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	body := `
+backend:
+  url: https://wgmonitor.jkaotlic.duckdns.org
+  token: 0123456789abcdef0123456789abcdef0123456789abcdef
+agent:
+  nickname: testkeen
+checks:
+  awg:
+    interface: awg0
+    expected_exit_ip: 89.125.101.122
+    marker_url: https://www.youtube.com/-/manifest
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Checks.DNS.TestDomain != "example.com" {
+		t.Fatalf("TestDomain default not applied: got %q", cfg.Checks.DNS.TestDomain)
+	}
+	if cfg.Checks.DNS.FailThreshold != 2 {
+		t.Fatalf("FailThreshold default not applied: got %d", cfg.Checks.DNS.FailThreshold)
+	}
+	if len(cfg.Checks.DNS.Providers) != 3 {
+		t.Fatalf("Providers default not applied: got %d providers", len(cfg.Checks.DNS.Providers))
+	}
+	wantNames := map[string]string{"cloudflare": "1.1.1.1", "google": "8.8.8.8", "quad9": "9.9.9.9"}
+	got := map[string]string{}
+	for _, p := range cfg.Checks.DNS.Providers {
+		got[p.Name] = p.Host
+	}
+	for name, host := range wantNames {
+		if got[name] != host {
+			t.Fatalf("provider %s: got host %q, want %q", name, got[name], host)
+		}
+	}
+}
