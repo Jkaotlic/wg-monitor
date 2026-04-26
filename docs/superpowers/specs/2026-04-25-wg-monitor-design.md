@@ -538,27 +538,20 @@ URL-схемы для агентов:
 
 ### 2026-04-26: Q2 — Telegram supergroup
 
-Используется существующая супергруппа `Status_Group` пользователя.
+Используется существующая частная супергруппа пользователя. Конкретные id'ники, ссылки и токены — вне репозитория, в `local-values.yaml` (gitignored) на разработческой машине и в `/etc/wg-monitor/backend.yaml.local` + `/root/wgmon-secrets/` на VPS Main.
 
-| Параметр | Значение |
-|---|---|
-| Bot username | `@keenmonitor_bot` |
-| Bot first_name | `Monitor_keen` |
-| Bot user id | `8534999804` |
-| Bot token path on VPS Main | `/root/wgmon-secrets/bot-token.txt` (chmod 600, owner root) |
-| Group title | `Status_Group` |
-| Group chat_id | `-1003651873378` |
-| Group invite link | `https://t.me/+uwsH2mhVbdNhMTVi` |
-| `is_forum` (Topics on) | ✓ true |
-| Bot is administrator | ✓ |
-| Bot `can_manage_topics` | ✓ true |
-| Bot `can_pin_messages` | ✓ true |
-| Bot `can_delete_messages` | ✓ true |
-| Admin user id | `136513775` (Nekhaev Andrey, `@SimpleSimplebest`, group creator) |
+| Параметр | Где хранится | В репо? |
+|---|---|---|
+| Bot HTTP API token | `/root/wgmon-secrets/bot-token.txt` (chmod 600 owner root) | ❌ |
+| Bot user id | local-values.yaml | ❌ |
+| Bot username | local-values.yaml | ❌ |
+| Group chat_id | local-values.yaml | ❌ |
+| Group invite link | вообще не записываем | ❌ |
+| Admin user id (callback allowlist) | local-values.yaml | ❌ |
 
-Acceptance check выполнен 2026-04-26 через `getMe`/`getChat`/`getChatAdministrators`/`getChatMember` — все 4 запроса вернули ok=true с ожидаемыми полями.
+Acceptance check выполнен 2026-04-26 через `getMe`/`getChat`/`getChatAdministrators`/`getChatMember` — все 4 запроса вернули ok=true: бот — administrator, `can_manage_topics: true`, `is_forum: true`, admin user is `creator` of the group.
 
-**Backend конфиг (`/etc/wg-monitor/backend.yaml`)** должен ссылаться на токен через `bot_token_file: /root/wgmon-secrets/bot-token.txt`, а не хранить значение inline (secret-isolation; конфиг можно бэкапить, токен — нет).
+**Backend конфиг (`/etc/wg-monitor/backend.yaml`)** должен ссылаться на токен через `bot_token_file: /root/wgmon-secrets/bot-token.txt`, а не хранить значение inline. Аналогично `chat_id` и `admin_user_id` берутся из `backend.yaml`, который deploy-only и не попадает в git.
 
 ### 2026-04-26: Q3 — Nicknames юзеров
 

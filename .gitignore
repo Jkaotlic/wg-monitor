@@ -1,0 +1,5 @@
+
+# Secret values — never commit
+local-values.yaml
+*.local.yaml
+deploy/**/*.local.*
