@@ -1,0 +1,12 @@
+#!/bin/sh
+# Entware init.d for wg-monitor agent on Keenetic.
+# Place at /opt/etc/init.d/S99wg-monitor and chmod +x.
+
+ENABLED=yes
+PROCS=wg-monitor
+ARGS="-config /opt/etc/wg-monitor/config.yaml"
+PREARGS=""
+DESC="wg-monitor agent"
+PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+. /opt/etc/init.d/rc.func
