@@ -79,7 +79,10 @@ func (c *Client) CreateForumTopic(ctx context.Context, chatID int64, name string
 
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {
 	url := c.BaseURL + c.Token + "/" + method
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("tg %s: build request: %w", method, err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
@@ -95,7 +98,9 @@ func (c *Client) call(ctx context.Context, method string, body []byte, dst any) 
 		return fmt.Errorf("tg %s: %s (code=%d)", method, ar.Description, ar.ErrorCode)
 	}
 	if dst != nil {
-		return json.Unmarshal(ar.Result, dst)
+		if err := json.Unmarshal(ar.Result, dst); err != nil {
+			return fmt.Errorf("tg %s: decode result: %w", method, err)
+		}
 	}
 	return nil
 }
