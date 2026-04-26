@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -32,9 +33,12 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 	if !tsStr.Valid {
 		return time.Time{}, nil
 	}
-	// SQLite stores time.Time as its .String() representation (e.g., "2026-04-26 18:04:05.123456789 +0000 UTC")
-	// Try to parse using time.UnixNano if it's a number, otherwise use Go's time format
-	ts, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", tsStr.String)
+	// modernc.org/sqlite returns MAX() result as a raw string (no declared column type → no driver time conversion).
+	s := tsStr.String
+	if i := strings.Index(s, " m="); i > 0 {
+		s = s[:i]
+	}
+	ts, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", s)
 	if err != nil {
 		return time.Time{}, err
 	}
