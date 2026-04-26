@@ -1,75 +1,67 @@
 package backend
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/anex/wg-monitor/internal/backend/db"
 )
 
-func TestAuthMiddleware_RejectsMissingHeader(t *testing.T) {
-	tokens := map[string]string{"deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe": "testkeen"}
-	mw := AuthMiddleware(tokens)
-	called := false
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
-	}))
-	req := httptest.NewRequest("POST", "/v1/report", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("code: got %d want 401", rec.Code)
+type fakeLookup struct {
+	want string
+	user *db.User
+}
+
+func (f *fakeLookup) GetByToken(raw string) (*db.User, error) {
+	if raw == f.want {
+		return f.user, nil
 	}
-	if called {
-		t.Error("inner handler must not be called on bad auth")
+	return nil, db.ErrUserNotFound
+}
+
+func TestAuthMiddleware_OK(t *testing.T) {
+	l := &fakeLookup{want: "tok-abc", user: &db.User{ID: 7, Nickname: "vasya"}}
+	mw := AuthMiddleware(l)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/v1/report", nil)
+	req.Header.Set("Authorization", "Bearer tok-abc")
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := NicknameFromContext(r.Context()); got != "vasya" {
+			t.Fatalf("nick: %s", got)
+		}
+		if got := UserIDFromContext(r.Context()); got != 7 {
+			t.Fatalf("uid: %d", got)
+		}
+		w.WriteHeader(204)
+	})).ServeHTTP(rec, req)
+	if rec.Code != 204 {
+		t.Fatalf("code: %d", rec.Code)
 	}
 }
 
-func TestAuthMiddleware_RejectsBadToken(t *testing.T) {
-	tokens := map[string]string{"deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe": "testkeen"}
-	mw := AuthMiddleware(tokens)
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	req := httptest.NewRequest("POST", "/v1/report", nil)
-	req.Header.Set("Authorization", "Bearer wrong-token")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("code: got %d want 401", rec.Code)
-	}
-}
-
-func TestAuthMiddleware_AcceptsValidToken_AttachesNickname(t *testing.T) {
-	const token = "deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe"
-	tokens := map[string]string{token: "testkeen"}
-	mw := AuthMiddleware(tokens)
-	var gotNick string
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotNick = NicknameFromContext(r.Context())
-	}))
-	req := httptest.NewRequest("POST", "/v1/report", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("code: got %d want 200", rec.Code)
-	}
-	if gotNick != "testkeen" {
-		t.Errorf("nickname: got %q want testkeen", gotNick)
-	}
-}
-
-func TestAuthMiddleware_RejectsMalformedHeader(t *testing.T) {
-	const token = "deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe"
-	tokens := map[string]string{token: "testkeen"}
-	mw := AuthMiddleware(tokens)
-	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
-	cases := []string{"Bearer", "", "Basic " + token, "Bearer  " + token, "bearer " + token}
-	for _, hdr := range cases {
-		req := httptest.NewRequest("POST", "/v1/report", nil)
-		req.Header.Set("Authorization", hdr)
+func TestAuthMiddleware_Reject(t *testing.T) {
+	l := &fakeLookup{want: "right"}
+	mw := AuthMiddleware(l)
+	for _, hdr := range []string{"", "Bearer ", "Bearer wrong", "tok-abc"} {
 		rec := httptest.NewRecorder()
-		h.ServeHTTP(rec, req)
+		req := httptest.NewRequest("POST", "/v1/report", nil)
+		if hdr != "" {
+			req.Header.Set("Authorization", hdr)
+		}
+		called := false
+		mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			called = true
+			w.WriteHeader(204)
+		})).ServeHTTP(rec, req)
+		if called {
+			t.Fatalf("hdr %q: handler should not have been called", hdr)
+		}
 		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("hdr=%q: code %d want 401", hdr, rec.Code)
+			t.Fatalf("hdr %q: code %d", hdr, rec.Code)
 		}
 	}
 }
+
+var _ = errors.New // import keeper

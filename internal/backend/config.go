@@ -3,22 +3,36 @@ package backend
 import (
 	"fmt"
 	"os"
-	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
-
 type Config struct {
-	Listen   string        `yaml:"listen"`
-	LogLevel string        `yaml:"log_level"`
-	Agents   []AgentConfig `yaml:"agents"`
+	Listen    string          `yaml:"listen"`
+	LogLevel  string          `yaml:"log_level"`
+	DBPath    string          `yaml:"db_path"`
+	Telegram  TelegramConfig  `yaml:"telegram"`
+	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
+	State     StateConfig     `yaml:"state"`
 }
 
-type AgentConfig struct {
-	Nickname string `yaml:"nickname"`
-	Token    string `yaml:"token"`
+type TelegramConfig struct {
+	BotTokenFile string `yaml:"bot_token_file"`
+	BotToken     string `yaml:"-"`
+	ChatID       int64  `yaml:"chat_id"`
+	AdminUserID  int64  `yaml:"admin_user_id"`
+}
+
+type HeartbeatConfig struct {
+	StaleAfterSec   int `yaml:"stale_after_sec"`
+	ScanIntervalSec int `yaml:"scan_interval_sec"`
+}
+
+type StateConfig struct {
+	FailThreshold     int `yaml:"fail_threshold"`
+	RecoveryThreshold int `yaml:"recovery_threshold"`
+	RealertEverySec   int `yaml:"realert_every_sec"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -36,18 +50,40 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
-	seen := make(map[string]struct{}, len(cfg.Agents))
-	for i, a := range cfg.Agents {
-		if !nicknameRegexp.MatchString(a.Nickname) {
-			return nil, fmt.Errorf("agents[%d]: nickname %q must match %s", i, a.Nickname, nicknameRegexp)
-		}
-		if len(a.Token) < 32 {
-			return nil, fmt.Errorf("agents[%d] %s: token must be at least 32 chars", i, a.Nickname)
-		}
-		if _, dup := seen[a.Nickname]; dup {
-			return nil, fmt.Errorf("agents[%d]: duplicate nickname %q", i, a.Nickname)
-		}
-		seen[a.Nickname] = struct{}{}
+	if cfg.DBPath == "" {
+		return nil, fmt.Errorf("db_path is required")
+	}
+	if cfg.Telegram.BotTokenFile == "" {
+		return nil, fmt.Errorf("telegram.bot_token_file is required")
+	}
+	tokBytes, err := os.ReadFile(cfg.Telegram.BotTokenFile)
+	if err != nil {
+		return nil, fmt.Errorf("read bot_token_file: %w", err)
+	}
+	cfg.Telegram.BotToken = strings.TrimSpace(string(tokBytes))
+	if cfg.Telegram.BotToken == "" {
+		return nil, fmt.Errorf("bot_token_file is empty")
+	}
+	if cfg.Telegram.ChatID == 0 {
+		return nil, fmt.Errorf("telegram.chat_id is required")
+	}
+	if cfg.Telegram.AdminUserID == 0 {
+		return nil, fmt.Errorf("telegram.admin_user_id is required")
+	}
+	if cfg.Heartbeat.StaleAfterSec == 0 {
+		cfg.Heartbeat.StaleAfterSec = 300
+	}
+	if cfg.Heartbeat.ScanIntervalSec == 0 {
+		cfg.Heartbeat.ScanIntervalSec = 30
+	}
+	if cfg.State.FailThreshold == 0 {
+		cfg.State.FailThreshold = 3
+	}
+	if cfg.State.RecoveryThreshold == 0 {
+		cfg.State.RecoveryThreshold = 2
+	}
+	if cfg.State.RealertEverySec == 0 {
+		cfg.State.RealertEverySec = 6 * 3600
 	}
 	return &cfg, nil
 }

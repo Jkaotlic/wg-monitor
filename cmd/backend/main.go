@@ -12,49 +12,89 @@ import (
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend"
+	"github.com/anex/wg-monitor/internal/backend/alerts"
+	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/heartbeat"
+	"github.com/anex/wg-monitor/internal/backend/state"
+	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
+var Version = "0.2.0-stage1-dev"
+
 func main() {
-	configPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to YAML config")
+	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
-
-	cfg, err := backend.LoadConfig(*configPath)
+	cfg, err := backend.LoadConfig(*cfgPath)
 	if err != nil {
-		logger.Error("config load", "err", err, "path", *configPath)
+		slog.Error("load config", "err", err)
 		os.Exit(2)
 	}
-	logger.Info("starting", "listen", cfg.Listen, "agents", len(cfg.Agents))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
+	slog.SetDefault(logger)
 
-	tokenMap := make(map[string]string, len(cfg.Agents))
-	for _, a := range cfg.Agents {
-		tokenMap[a.Token] = a.Nickname
+	d, err := db.Open(cfg.DBPath)
+	if err != nil {
+		logger.Error("db open", "err", err)
+		os.Exit(2)
 	}
+	defer d.Close()
 
+	tgClient := &tg.Client{
+		BaseURL: tg.DefaultBaseURL,
+		Token:   cfg.Telegram.BotToken,
+		HTTP:    &http.Client{Timeout: 15 * time.Second},
+	}
+	disp := alerts.NewDispatcher(d, tgClient, alerts.Config{
+		ChatID:            cfg.Telegram.ChatID,
+		FailThreshold:     cfg.State.FailThreshold,
+		RecoveryThreshold: cfg.State.RecoveryThreshold,
+	})
+
+	mux := backend.NewMux(backend.Deps{
+		Logger:     logger,
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+	})
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           backend.NewMux(logger, tokenMap),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      15 * time.Second,
-		IdleTimeout:       60 * time.Second,
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	watcher := heartbeat.NewWatcher(d, disp, heartbeat.Config{
+		StaleAfter: time.Duration(cfg.Heartbeat.StaleAfterSec) * time.Second,
+		ScanEvery:  time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
+	})
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	go watcher.Run(ctx)
+
 	go func() {
-		<-ctx.Done()
-		logger.Info("shutting down")
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutCtx)
+		logger.Info("backend listening", "addr", cfg.Listen, "version", Version)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("listen", "err", err)
+			cancel()
+		}
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Error("listen", "err", err)
-		os.Exit(1)
+	<-ctx.Done()
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	_ = srv.Shutdown(shutCtx)
+	watcher.WaitForExit()
+	logger.Info("backend stopped")
+}
+
+func parseLevel(s string) slog.Level {
+	switch s {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
 	}
-	logger.Info("stopped")
+	return slog.LevelInfo
 }
