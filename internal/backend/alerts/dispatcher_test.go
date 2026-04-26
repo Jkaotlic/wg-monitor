@@ -34,6 +34,8 @@ func (f *fakeTG) SendMessage(_ context.Context, chatID int64, threadID *int64, t
 }
 
 func (f *fakeTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.topicErr != nil {
 		return 0, f.topicErr
 	}
@@ -106,6 +108,16 @@ func TestDispatcherRecoveryRepliesToHardMessage(t *testing.T) {
 	}
 	if !strings.Contains(tg.sent[0].text, "RECOVERED") {
 		t.Fatalf("text: %s", tg.sent[0].text)
+	}
+	savedState, err := d.State().Get(uid, "awg_handshake")
+	if err != nil {
+		t.Fatalf("get state: %v", err)
+	}
+	if savedState.LastAlertMsgID != nil {
+		t.Fatalf("LastAlertMsgID should be nil after recovery, got %d", *savedState.LastAlertMsgID)
+	}
+	if savedState.CurrentStatus != "ok" {
+		t.Fatalf("status should be ok after recovery, got %s", savedState.CurrentStatus)
 	}
 }
 
