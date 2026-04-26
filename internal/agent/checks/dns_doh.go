@@ -49,8 +49,10 @@ func looksLikeAnAnswer(out string) bool {
 	if o == "" {
 		return false
 	}
-	// dig +short prints just the IPs; dig without +short prints a section header.
-	// We accept either: any non-empty trimmed output that contains a dot OR
-	// the literal "ANSWER SECTION" header.
+	// dig +short prints just the IPs (which contain digits); dig without +short prints
+	// a section header. We accept either: a non-empty trimmed output containing any
+	// digit (matches IP literals like "93.184.216.34") OR the literal "ANSWER SECTION"
+	// header. Subprocess errors (dig exit != 0) are caught earlier via err != nil and
+	// never reach this function.
 	return strings.Contains(o, "ANSWER SECTION") || strings.ContainsAny(o, "0123456789")
 }
