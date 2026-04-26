@@ -1,8 +1,8 @@
 # wg-monitor — Design Spec
 
-**Дата:** 2026-04-25
+**Дата:** 2026-04-25 (UPD 2026-04-26: все 5 open questions resolved, см. секцию «Resolved questions» в конце)
 **Автор:** Anatoly (asnekhaev@gmail.com)
-**Статус:** Draft → User review
+**Статус:** Approved → ready for Stage 0 implementation plan
 
 ## 1. Контекст и мотивация
 
@@ -144,8 +144,16 @@ checks:
 
 ### 5.1 Стек
 - Go + `net/http` + `mattn/go-sqlite3` + `go-telegram-bot-api/v5`
-- systemd service на VPS Main (103.106.1.253)
-- Caddy reverse proxy с автоматическим Let's Encrypt: `monitor.your.tld → :8080`
+- systemd service на VPS Main (103.106.1.253), backend listens на `127.0.0.1:8080`
+- **Публичный hostname:** `wgmonitor.jkaotlic.duckdns.org` — DuckDNS wildcard subdomain того же аккаунта, что обслуживает AdGuard на родительском `jkaotlic.duckdns.org`. Резолвится в `103.106.1.253` без отдельной регистрации (wildcard уже включён).
+- **Reverse proxy:** Caddy (apt-package), конфиг:
+  ```
+  wgmonitor.jkaotlic.duckdns.org {
+      reverse_proxy 127.0.0.1:8080
+  }
+  ```
+  Caddy auto-https через **TLS-ALPN-01** challenge на :443 (не использует :80 — он занят AdGuard Web UI). Не конфликтует с certbot, обслуживающим parent-cert на `jkaotlic.duckdns.org` для AdGuard DoH/DoT (:8443 / :853).
+- **Освобождение :443 уже сделано (2026-04-26):** прибили telemt-fallback (TSPU-режим, см. `feedback_tspu_dpi_telemt`) и mtg-Docker-контейнер. Бэкап в `/root/backup-pre-wgmonitor-2026-04-26/`.
 - БД: SQLite `/var/lib/wg-monitor/state.db`
 - Конфиг: `/etc/wg-monitor/backend.yaml` (TG bot token, admin chat_id, supergroup_id)
 
@@ -508,19 +516,96 @@ ssh root@vasya-keenetic 'curl -fsSL https://monitor.your.tld/install.sh | TOKEN=
    - Раскатка на 9 оставшихся роутеров с человеком
    - Verify: новый агент выкатился сам всем
 
-## 15. Открытые вопросы (для пользователя)
+## 15. Открытые вопросы — все resolved 2026-04-26
 
-1. **Subdomain для бэкенда** — какой именно использовать? `monitor.<домен>` дефолт, или есть предпочтение?
-2. **Telegram supergroup** — создавать отдельную супергруппу под этого бота, или есть существующая, куда добавить?
-3. **Имена юзеров (nicknames)** — реальные имена или nicknames? (Важно для приватности в логах БД и в TG-топиках)
-4. **Per-user routing**: у разных юзеров `expected_exit_ip` может отличаться (Main vs Amnezia VPS). Нужна ли в проверке `awg_routing` динамическая логика «exit IP должен быть из списка X», или каждому юзеру жёстко прописывается один ожидаемый IP?
-5. **Имя проекта** — `wg-monitor` или предпочитаешь другое (например, `keenetic-watch`, `awg-sentinel`)?
+См. раздел «Resolved questions» ниже.
+
+## Resolved questions
+
+### 2026-04-26: Q1 — Subdomain backend
+
+Выбран `wgmonitor.jkaotlic.duckdns.org` (DuckDNS wildcard, парент `jkaotlic.duckdns.org` обслуживает AdGuard Home через certbot-cert). Wildcard был уже включён в DuckDNS-панели — резолвится в `103.106.1.253` без отдельной регистрации.
+
+В рамках подготовки на VPS Main освобождён :443: удалены `telemt.service`, `telemt-update.service`, `telemt-update.timer`, `/usr/local/bin/telemt*`, `/etc/telemt/`, `/var/lib/telemt/`, Docker-контейнер `mtg` и `/etc/mtg/`. Полный бэкап в `/root/backup-pre-wgmonitor-2026-04-26/` (42 MB). `mtproto.zig` на :8444 не задет — он сейчас основной TG-прокси.
+
+URL-схемы для агентов:
+- `POST https://wgmonitor.jkaotlic.duckdns.org/v1/report`
+- `GET  https://wgmonitor.jkaotlic.duckdns.org/v1/cmd?token=X`
+- `POST https://wgmonitor.jkaotlic.duckdns.org/v1/cmd/result`
+- `GET  https://wgmonitor.jkaotlic.duckdns.org/install.sh`
+- `GET  https://wgmonitor.jkaotlic.duckdns.org/agent/<arch>/latest{,.sha256}`
+- `GET  https://wgmonitor.jkaotlic.duckdns.org/healthz`
+
+### 2026-04-26: Q2 — Telegram supergroup
+
+Используется существующая супергруппа `Status_Group` пользователя.
+
+| Параметр | Значение |
+|---|---|
+| Bot username | `@keenmonitor_bot` |
+| Bot first_name | `Monitor_keen` |
+| Bot user id | `8534999804` |
+| Bot token path on VPS Main | `/root/wgmon-secrets/bot-token.txt` (chmod 600, owner root) |
+| Group title | `Status_Group` |
+| Group chat_id | `-1003651873378` |
+| Group invite link | `https://t.me/+uwsH2mhVbdNhMTVi` |
+| `is_forum` (Topics on) | ✓ true |
+| Bot is administrator | ✓ |
+| Bot `can_manage_topics` | ✓ true |
+| Bot `can_pin_messages` | ✓ true |
+| Bot `can_delete_messages` | ✓ true |
+| Admin user id | `136513775` (Nekhaev Andrey, `@SimpleSimplebest`, group creator) |
+
+Acceptance check выполнен 2026-04-26 через `getMe`/`getChat`/`getChatAdministrators`/`getChatMember` — все 4 запроса вернули ok=true с ожидаемыми полями.
+
+**Backend конфиг (`/etc/wg-monitor/backend.yaml`)** должен ссылаться на токен через `bot_token_file: /root/wgmon-secrets/bot-token.txt`, а не хранить значение inline (secret-isolation; конфиг можно бэкапить, токен — нет).
+
+### 2026-04-26: Q3 — Nicknames юзеров
+
+Политика **A — реальные имена/прозвища**.
+
+Регексп валидации: `^[a-z][a-z0-9_-]{1,15}$`
+- ASCII lowercase, 2–16 символов, начинается с буквы
+- Кириллицу → транслит (`vasya`, `papa`, `kolya`, `serg`, …)
+- Не содержит spaces/dots/emoji — прозрачно для bash, systemd, filesystem, lograg
+
+CLI `wg-monitor-cli add-user --nickname=<X>` валидирует регексп, отвергает с понятной ошибкой при несоответствии.
+
+Список юзеров — заполняется по одному через CLI на этапе раскатки (Этап 5), не нужен в самом MVP.
+
+### 2026-04-26: Q4 — Per-user routing (`expected_exit_ip` + `awg_iface`)
+
+Топология **гетерогенная**: каждый из ~10 юзеров ходит через **свой** WG/AWG-выход (не через мою VPS Amnezia, не через VPS Main). Поэтому:
+
+- `expected_exit_ip` — **жёстко per-user**, без глобального дефолта.
+- `awg_iface` — **жёстко per-user**, без глобального дефолта (могут быть разные имена интерфейсов: `awg0`, `wg0`, `awg-amn`, etc.).
+- Оба поля хранятся в `users` таблице (это уже было в схеме раздела 5.2).
+- CLI `wg-monitor-cli add-user` делает оба аргумента **обязательными** без дефолта:
+  ```
+  wg-monitor-cli add-user \
+      --nickname=<X> \
+      --awg-iface=<X> \
+      --expected-exit-ip=<X>
+  ```
+
+Динамическая логика «exit IP должен быть из списка X» **не требуется** — каждый юзер привязан к одному ожидаемому IP. Если когда-то у кого-то появится несколько exit-ов (multi-WG-конфиг) — отдельная фича после MVP.
+
+### 2026-04-26: Q5 — Имя проекта
+
+Остаётся **`wg-monitor`**. Все артефакты:
+- repo: `wg-monitor`
+- бинари: `wg-monitor` (agent), `wg-monitor-cli` (CLI), `wg-monitor-backend` (server)
+- конфиг агента: `/opt/etc/wg-monitor/config.yaml`
+- конфиг бэкенда: `/etc/wg-monitor/backend.yaml`
+- init.d на роутерах: `/opt/etc/init.d/S99wg-monitor`
+- systemd на VPS Main: `wg-monitor-backend.service`
+- subdomain: `wgmonitor.jkaotlic.duckdns.org` (без дефиса — DuckDNS-style)
 
 ---
 
 ## Spec self-review
 
-- ✅ Placeholder scan: `your.tld`, `vasya/петя/etc` — это намеренные плейсхолдеры доменов и имён, не TBD; реальные значения подставит пользователь при онбординге. Никаких `TBD` / `TODO` в обязательных решениях.
+- ✅ Placeholder scan: `vasya/петя/etc` — намеренные плейсхолдеры имён, не TBD; реальные значения подставит пользователь при онбординге. `your.tld` снят 2026-04-26 → `wgmonitor.jkaotlic.duckdns.org`. Никаких `TBD` / `TODO` в обязательных решениях.
 - ✅ Internal consistency: command channel описан в 4.5/4.6, использован в 6.2 (кнопки) и 7.3 (upgrade) — consistent. State machine из 5.3 совместим с silence/ack из 6.2.
 - ✅ Scope: один MVP, поделён на 6 этапов с явным verify в каждом — годится для одного implementation plan.
 - ✅ Ambiguity: пороги (3 fails, 6h re-alert, 5 min ack TTL) — конкретные числа, не «достаточно». DNS fail criterion явно: 2 из 3 провайдеров.
