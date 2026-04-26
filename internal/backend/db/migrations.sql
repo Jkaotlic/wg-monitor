@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
     last_seen_at TIMESTAMP
 );
 
+CREATE INDEX IF NOT EXISTS idx_users_token_hash ON users(token_hash);
+
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
