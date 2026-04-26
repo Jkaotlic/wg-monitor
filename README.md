@@ -18,4 +18,5 @@ make pack              # UPX --best on cross-compiled binaries
 
 ## Stage status
 
-- Stage 0 (bootstrapping): in progress
+- Stage 0 (bootstrapping): ✅ complete — 2026-04-26 — agent + backend + Caddy live, heartbeat-only e2e verified (1 Keenetic, 3 reports/5 min through `https://wgmonitor.example.com/`)
+- Stage 1 (4 checks + state machine + TG basic): not started
