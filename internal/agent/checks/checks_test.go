@@ -29,3 +29,19 @@ func TestResultFail(t *testing.T) {
 		t.Fatalf("extra details lost: %+v", r.Details)
 	}
 }
+
+func TestFailDoesNotMutateCallerMap(t *testing.T) {
+	orig := map[string]any{"got": "1.2.3.4"}
+	_ = Fail("awg_routing", time.Now(), "exit ip mismatch", orig)
+	if _, leaked := orig["error"]; leaked {
+		t.Fatalf("Fail leaked 'error' into caller map: %+v", orig)
+	}
+}
+
+func TestOKDoesNotMutateCallerMap(t *testing.T) {
+	orig := map[string]any{"handshake_age_sec": 47}
+	_ = OK("awg_handshake", time.Now(), orig)
+	if len(orig) != 1 {
+		t.Fatalf("OK mutated caller map, now: %+v", orig)
+	}
+}

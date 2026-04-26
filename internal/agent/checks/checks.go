@@ -24,26 +24,28 @@ type Deps struct {
 }
 
 func OK(name string, start time.Time, details map[string]any) wire.Check {
-	if details == nil {
-		details = map[string]any{}
+	out := make(map[string]any, len(details))
+	for k, v := range details {
+		out[k] = v
 	}
 	return wire.Check{
 		Name:       name,
 		Status:     "ok",
 		DurationMs: time.Since(start).Milliseconds(),
-		Details:    details,
+		Details:    out,
 	}
 }
 
 func Fail(name string, start time.Time, errMsg string, details map[string]any) wire.Check {
-	if details == nil {
-		details = map[string]any{}
+	out := make(map[string]any, len(details)+1)
+	for k, v := range details {
+		out[k] = v
 	}
-	details["error"] = errMsg
+	out["error"] = errMsg
 	return wire.Check{
 		Name:       name,
 		Status:     "fail",
 		DurationMs: time.Since(start).Milliseconds(),
-		Details:    details,
+		Details:    out,
 	}
 }

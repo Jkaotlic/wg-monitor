@@ -1,4 +1,3 @@
-// internal/agent/checks/runner.go
 package checks
 
 import (
