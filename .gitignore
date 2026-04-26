@@ -1,5 +1,26 @@
-
 # Secret values — never commit
 local-values.yaml
 *.local.yaml
 deploy/**/*.local.*
+
+# Binaries
+/bin/
+*.exe
+*.upx
+wg-monitor
+wg-monitor-backend
+
+# Go test cache
+*.test
+*.out
+coverage.txt
+
+# Local config (never commit real tokens)
+backend.yaml
+config.yaml
+
+# Editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
