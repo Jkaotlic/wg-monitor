@@ -7,15 +7,19 @@ GOFLAGS := -trimpath -ldflags "$(LDFLAGS)"
 
 BIN_DIR := bin
 
-.PHONY: all build-host build-mipsel build-aarch64 pack test clean size
+.PHONY: all build-host build-cli build-mipsel build-aarch64 pack test clean size
 
-all: build-host
+all: build-host build-cli
 
 # Local OS, used for go test and dev
 build-host:
 	mkdir -p $(BIN_DIR)
 	go build $(GOFLAGS) -o $(BIN_DIR)/wg-monitor ./cmd/agent
 	go build $(GOFLAGS) -o $(BIN_DIR)/wg-monitor-backend ./cmd/backend
+
+build-cli:
+	mkdir -p $(BIN_DIR)
+	go build $(GOFLAGS) -o $(BIN_DIR)/wg-monitor-cli ./cmd/wg-monitor-cli
 
 # Keenetic with MIPS little-endian, no FPU (most common: Realtek/Qualcomm SoCs)
 build-mipsel:
