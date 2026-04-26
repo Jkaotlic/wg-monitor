@@ -76,7 +76,8 @@ func (s *StateRepo) Save(userID int64, checkName string, st IncidentState) error
 		    silenced_until    = excluded.silenced_until,
 		    acked_until       = excluded.acked_until`,
 		userID, checkName, st.ConsecutiveFails, st.ConsecutiveOKs, st.CurrentStatus,
-		st.HardSince, st.LastAlertMsgID, st.LastAlertAt, st.SilencedUntil, st.AckedUntil,
+		utcPtr(st.HardSince), st.LastAlertMsgID, utcPtr(st.LastAlertAt),
+		utcPtr(st.SilencedUntil), utcPtr(st.AckedUntil),
 	)
 	return err
 }
@@ -109,7 +110,7 @@ func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
 		 WHERE current_status = 'hard'
 		   AND last_alert_at < ?
 		   AND (silenced_until IS NULL OR silenced_until < CURRENT_TIMESTAMP)`,
-		cutoff)
+		cutoff.UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -131,4 +132,12 @@ func nullTime(n sql.NullTime) *time.Time {
 	}
 	v := n.Time
 	return &v
+}
+
+func utcPtr(t *time.Time) interface{} {
+	if t == nil {
+		return nil
+	}
+	v := t.UTC()
+	return v
 }

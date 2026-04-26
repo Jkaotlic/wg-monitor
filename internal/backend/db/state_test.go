@@ -73,4 +73,32 @@ func TestStaleHardsForRealert(t *testing.T) {
 	}
 }
 
+func TestStaleHardsCrossTimezone(t *testing.T) {
+	d := newTestDB(t)
+	tok := "6666666666666666666666666666666666666666666666666666666666666666"
+	uid, _ := d.Users().Insert("zorya", tok, "2.2.2.2", "awg1")
+
+	// Store incident with non-UTC local time (MSK UTC+3)
+	msk := time.FixedZone("MSK", 3*3600)
+	lastAlertAt := time.Now().In(msk).Add(-7 * time.Hour)
+	st := IncidentState{
+		CurrentStatus: "hard",
+		HardSince:     ptrTime(lastAlertAt),
+		LastAlertAt:   ptrTime(lastAlertAt),
+	}
+	if err := d.State().Save(uid, "awg_handshake", st); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cutoff in UTC — chronologically 1h more recent than lastAlertAt
+	cutoff := time.Now().UTC().Add(-6 * time.Hour)
+	stale, err := d.State().StaleHards(cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 1 {
+		t.Fatalf("cross-timezone: got %d stale hards, want 1", len(stale))
+	}
+}
+
 func ptrTime(t time.Time) *time.Time { return &t }
