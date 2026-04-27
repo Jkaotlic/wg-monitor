@@ -24,3 +24,6 @@ config.yaml
 .vscode/
 *.swp
 .DS_Store
+
+# Git worktrees (per-feature isolated workspaces)
+.worktrees/
