@@ -3,56 +3,39 @@ package checks
 import (
 	"context"
 	"errors"
-	"strconv"
 	"testing"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/checks/wgreader"
 )
 
+type fakeWGReader struct {
+	age time.Duration
+	err error
+}
+
+func (f *fakeWGReader) Name() string { return "fake" }
+func (f *fakeWGReader) LatestHandshakeAge(_ context.Context, _ string) (time.Duration, error) {
+	return f.age, f.err
+}
+
 func TestAwgHandshake(t *testing.T) {
-	now := time.Now().Unix()
 	cases := []struct {
 		name    string
-		stdout  string
-		runErr  error
+		age     time.Duration
+		readErr error
 		want    string
 		wantErr string
 	}{
-		{
-			name:   "fresh single peer",
-			stdout: "abcdEF=\t" + itoa(now-30) + "\n",
-			want:   "ok",
-		},
-		{
-			name:   "stale single peer",
-			stdout: "abcdEF=\t" + itoa(now-3600) + "\n",
-			want:   "fail",
-		},
-		{
-			name:   "never handshaked (0)",
-			stdout: "abcdEF=\t0\n",
-			want:   "fail",
-		},
-		{
-			name:   "two peers one fresh",
-			stdout: "aa==\t0\nbb==\t" + itoa(now-10) + "\n",
-			want:   "ok",
-		},
-		{
-			name:    "wg binary missing",
-			runErr:  errors.New("exec: \"wg\": executable file not found"),
-			want:    "fail",
-			wantErr: "wg show failed",
-		},
+		{name: "fresh", age: 30 * time.Second, want: "ok"},
+		{name: "stale", age: 3600 * time.Second, want: "fail"},
+		{name: "no peers", readErr: wgreader.ErrNoPeers, want: "fail", wantErr: "no peer ever handshook"},
+		{name: "reader error", readErr: errors.New("netlink: not permitted"), want: "fail", wantErr: "wg read failed"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			d := Deps{Runner: RunnerFunc(func(_ context.Context, name string, args ...string) (string, error) {
-				if name != "wg" {
-					t.Fatalf("unexpected exec %s", name)
-				}
-				return c.stdout, c.runErr
-			})}
-			chk := AwgHandshake{Iface: "awg0", MaxAge: 180 * time.Second}
+			d := Deps{WGReader: &fakeWGReader{age: c.age, err: c.readErr}}
+			chk := AwgHandshake{Iface: "wg0", MaxAge: 180 * time.Second}
 			got := chk.Run(context.Background(), d)
 			if got.Status != c.want {
 				t.Fatalf("status=%s want=%s details=%v", got.Status, c.want, got.Details)
@@ -64,4 +47,10 @@ func TestAwgHandshake(t *testing.T) {
 	}
 }
 
-func itoa(i int64) string { return strconv.FormatInt(i, 10) }
+func TestAwgHandshake_NilReader(t *testing.T) {
+	chk := AwgHandshake{Iface: "wg0", MaxAge: 180 * time.Second}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "fail" {
+		t.Fatalf("status=%s", got.Status)
+	}
+}
