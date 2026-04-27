@@ -158,12 +158,13 @@ checks:
     expected_exit_ip: 198.51.100.21
     marker_url: https://www.youtube.com/-/manifest
   dns:
+    auto_discover: true
     test_domain: example.com
     fail_threshold: 2
-    providers:
-      - { name: cloudflare, host: 1.1.1.1 }
-      - { name: google,     host: 8.8.8.8 }
-      - { name: quad9,      host: 9.9.9.9 }
+    endpoints:
+      - { type: plain, host: 1.1.1.1, port: 53 }
+      - { type: plain, host: 8.8.8.8, port: 53 }
+      - { type: plain, host: 9.9.9.9, port: 53 }
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -175,7 +176,7 @@ checks:
 	if cfg.Checks.AWG.Interface != "awg0" || cfg.Checks.AWG.ExpectedExitIP != "198.51.100.21" {
 		t.Fatalf("awg parse: %+v", cfg.Checks.AWG)
 	}
-	if len(cfg.Checks.DNS.Providers) != 3 || cfg.Checks.DNS.FailThreshold != 2 {
+	if len(cfg.Checks.DNS.Endpoints) != 3 || cfg.Checks.DNS.FailThreshold != 2 {
 		t.Fatalf("dns parse: %+v", cfg.Checks.DNS)
 	}
 	if cfg.Checks.AWG.HandshakeMaxAge() != 180*time.Second {
@@ -223,21 +224,15 @@ checks:
 	if cfg.Checks.DNS.TestDomain != "example.com" {
 		t.Fatalf("TestDomain default not applied: got %q", cfg.Checks.DNS.TestDomain)
 	}
-	if cfg.Checks.DNS.FailThreshold != 2 {
-		t.Fatalf("FailThreshold default not applied: got %d", cfg.Checks.DNS.FailThreshold)
+	if cfg.Checks.DNS.FailThreshold != 1 {
+		t.Fatalf("FailThreshold default not applied: got %d, want 1", cfg.Checks.DNS.FailThreshold)
 	}
-	if len(cfg.Checks.DNS.Providers) != 3 {
-		t.Fatalf("Providers default not applied: got %d providers", len(cfg.Checks.DNS.Providers))
+	// Endpoints can be empty; AutoDiscover has no default
+	if len(cfg.Checks.DNS.Endpoints) != 0 {
+		t.Fatalf("Endpoints should be empty when not specified: got %d", len(cfg.Checks.DNS.Endpoints))
 	}
-	wantNames := map[string]string{"cloudflare": "1.1.1.1", "google": "8.8.8.8", "quad9": "9.9.9.9"}
-	got := map[string]string{}
-	for _, p := range cfg.Checks.DNS.Providers {
-		got[p.Name] = p.Host
-	}
-	for name, host := range wantNames {
-		if got[name] != host {
-			t.Fatalf("provider %s: got host %q, want %q", name, got[name], host)
-		}
+	if cfg.Checks.DNS.AutoDiscover {
+		t.Fatalf("AutoDiscover should default to false")
 	}
 }
 
@@ -265,5 +260,51 @@ checks:
 	const want = "http://www.gstatic.com/generate_204"
 	if got := cfg.Checks.AWG.ResolvedMarkerURL(); got != want {
 		t.Fatalf("ResolvedMarkerURL() default: got %q want %q", got, want)
+	}
+}
+
+const minimalNewSchema = `
+backend:
+  url: https://wgmon.example.org
+  token: abcdefghijklmnopqrstuvwxyz0123456789ABCD
+agent:
+  nickname: testkeen
+  interval_sec: 60
+checks:
+  awg:
+    interface: nwg0
+    expected_exit_ip: 198.51.100.21
+  dns:
+    auto_discover: true
+    test_domain: example.com
+    fail_threshold: 1
+    endpoints:
+      - { type: doh, url: "https://my.example/dns-query" }
+      - { type: plain, host: 1.1.1.1, port: 53, ndms_name: Wireguard1 }
+`
+
+func TestLoadConfig_NewDNSSchema(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte(minimalNewSchema), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !cfg.Checks.DNS.AutoDiscover {
+		t.Errorf("AutoDiscover not parsed")
+	}
+	if len(cfg.Checks.DNS.Endpoints) != 2 {
+		t.Fatalf("Endpoints: %+v", cfg.Checks.DNS.Endpoints)
+	}
+	doh := cfg.Checks.DNS.Endpoints[0]
+	if doh.Type != "doh" || doh.URL != "https://my.example/dns-query" {
+		t.Errorf("doh: %+v", doh)
+	}
+	plain := cfg.Checks.DNS.Endpoints[1]
+	if plain.Type != "plain" || plain.Host != "1.1.1.1" || plain.Port != 53 || plain.NDMSName != "Wireguard1" {
+		t.Errorf("plain: %+v", plain)
 	}
 }
