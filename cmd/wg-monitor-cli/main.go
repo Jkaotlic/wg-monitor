@@ -39,6 +39,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
+	case "show-discovered-dns":
+		cmdShowDiscoveredDNS(os.Args[2:])
 	case "version":
 		fmt.Println(Version)
 	default:
@@ -52,6 +54,7 @@ func usage() string {
 
 Usage:
   wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--db PATH] [--backend-url URL]
+  wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
   wg-monitor-cli version
 `
 }
