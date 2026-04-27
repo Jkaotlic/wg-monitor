@@ -62,6 +62,13 @@ func (a AWGCheckConfig) RoutingURL() string {
 	return "https://1.1.1.1/cdn-cgi/trace"
 }
 
+func (a AWGCheckConfig) ResolvedMarkerURL() string {
+	if a.MarkerURL != "" {
+		return a.MarkerURL
+	}
+	return "http://www.gstatic.com/generate_204"
+}
+
 type DNSProviderConfig struct {
 	Name string `yaml:"name"`
 	Host string `yaml:"host"`
@@ -117,9 +124,6 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	}
 	if cfg.Checks.AWG.ExpectedExitIP == "" {
 		return nil, fmt.Errorf("checks.awg.expected_exit_ip is required (no default — per-user, see spec Q4)")
-	}
-	if cfg.Checks.AWG.MarkerURL == "" {
-		return nil, fmt.Errorf("checks.awg.marker_url is required")
 	}
 	if cfg.Checks.DNS.TestDomain == "" {
 		cfg.Checks.DNS.TestDomain = "example.com"
