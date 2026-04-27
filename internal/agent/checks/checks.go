@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/agent/checks/wgreader"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
@@ -19,8 +20,9 @@ type Check interface {
 // Deps is the set of injectable side effects every check may use.
 // Concrete checks pick what they need; tests pass mocks.
 type Deps struct {
-	Runner     Runner       // subprocess executor (wg, dig)
-	HTTPClient *http.Client // pre-configured with iface-bound dialer
+	Runner     Runner          // subprocess executor (used by HTTP-bound stuff & legacy paths)
+	HTTPClient *http.Client    // pre-configured with iface-bound dialer
+	WGReader   wgreader.Reader // WG peer-state reader (used by AwgHandshake)
 }
 
 func OK(name string, start time.Time, details map[string]any) wire.Check {

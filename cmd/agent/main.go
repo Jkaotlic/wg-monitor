@@ -12,6 +12,7 @@ import (
 
 	"github.com/anex/wg-monitor/internal/agent"
 	"github.com/anex/wg-monitor/internal/agent/checks"
+	"github.com/anex/wg-monitor/internal/agent/checks/wgreader"
 )
 
 // Version is overridable at link time: -ldflags "-X main.Version=0.1.0"
@@ -50,7 +51,10 @@ func main() {
 		checks.AwgMarker{Iface: cfg.Checks.AWG.Interface, URL: cfg.Checks.AWG.MarkerURL, MaxRetries: 3, BaseBackoff: 250 * time.Millisecond},
 		dnsCheckFromCfg(cfg.Checks.DNS),
 	}
-	deps := checks.Deps{Runner: checks.OSExec{}, HTTPClient: httpc}
+	wgr := wgreader.Detect(checks.OSExec{})
+	logger.Info("wg reader strategies", "strategies", wgr.Strategies())
+
+	deps := checks.Deps{Runner: checks.OSExec{}, HTTPClient: httpc, WGReader: wgr}
 	rep := agent.NewReporter(client, Version, cfg.Agent.Interval(), chks, deps)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
