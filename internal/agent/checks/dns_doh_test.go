@@ -2,87 +2,69 @@ package checks
 
 import (
 	"context"
-	"errors"
-	"strings"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 )
 
-func TestDNSDoH_AllOK(t *testing.T) {
-	d := Deps{Runner: RunnerFunc(func(_ context.Context, name string, args ...string) (string, error) {
-		if name != "dig" {
-			t.Fatalf("expected dig, got %s", name)
+const dohJSONOK = `{"Status":0,"TC":false,"RD":true,"RA":true,"AD":true,"CD":false,
+"Question":[{"name":"example.com","type":1}],
+"Answer":[{"name":"example.com","type":1,"TTL":83,"data":"93.184.216.34"}]}`
+
+const dohJSONNoAnswer = `{"Status":0,"TC":false,"RD":true,"RA":true,"Question":[{"name":"example.com","type":1}]}`
+
+const dohJSONNXDOMAIN = `{"Status":3,"TC":false,"RD":true,"RA":true,"Question":[{"name":"foo","type":1}]}`
+
+func TestProbeDoH_Answers(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("name") != "example.com" {
+			http.Error(w, "missing name", http.StatusBadRequest)
+			return
 		}
-		return ";; ANSWER SECTION:\nexample.com. 60 IN A 93.184.216.34\n", nil
-	})}
-	chk := DNSDoH{
-		Providers:     []DNSProvider{{Name: "cf", Host: "1.1.1.1"}, {Name: "g", Host: "8.8.8.8"}, {Name: "q9", Host: "9.9.9.9"}},
-		TestDomain:    "example.com",
-		FailThreshold: 2,
+		w.Header().Set("Content-Type", "application/dns-json")
+		_, _ = w.Write([]byte(dohJSONOK))
+	}))
+	defer srv.Close()
+
+	got, err := ProbeDoH(context.Background(), srv.URL, "example.com", srv.Client(), 1*time.Second)
+	if err != nil {
+		t.Fatalf("ProbeDoH: %v", err)
 	}
-	got := chk.Run(context.Background(), d)
-	if got.Status != "ok" {
-		t.Fatalf("got %+v", got)
+	if len(got) != 1 || got[0] != "93.184.216.34" {
+		t.Fatalf("answers: %+v", got)
 	}
 }
 
-func TestDNSDoH_TwoFail_TriggersFail(t *testing.T) {
-	calls := 0
-	d := Deps{Runner: RunnerFunc(func(_ context.Context, _ string, _ ...string) (string, error) {
-		calls++
-		if calls <= 2 {
-			return "", errors.New("connection timed out")
-		}
-		return ";; ANSWER SECTION:\nexample.com. 60 IN A 1.2.3.4\n", nil
-	})}
-	chk := DNSDoH{
-		Providers:     []DNSProvider{{Name: "cf", Host: "1.1.1.1"}, {Name: "g", Host: "8.8.8.8"}, {Name: "q9", Host: "9.9.9.9"}},
-		TestDomain:    "example.com",
-		FailThreshold: 2,
-	}
-	got := chk.Run(context.Background(), d)
-	if got.Status != "fail" {
-		t.Fatalf("expected fail, got %+v", got)
-	}
-	failed, _ := got.Details["failed_providers"].([]string)
-	if len(failed) != 2 {
-		t.Fatalf("failed_providers=%v", failed)
+func TestProbeDoH_EmptyAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(dohJSONNoAnswer))
+	}))
+	defer srv.Close()
+	got, err := ProbeDoH(context.Background(), srv.URL, "example.com", srv.Client(), 1*time.Second)
+	if err == nil {
+		t.Fatalf("expected error on empty answer, got %v", got)
 	}
 }
 
-func TestDNSDoH_OneFail_StillOK(t *testing.T) {
-	calls := 0
-	d := Deps{Runner: RunnerFunc(func(_ context.Context, _ string, _ ...string) (string, error) {
-		calls++
-		if calls == 1 {
-			return "", errors.New("timeout")
-		}
-		return "ANSWER SECTION", nil
-	})}
-	chk := DNSDoH{
-		Providers:     []DNSProvider{{Name: "cf", Host: "1.1.1.1"}, {Name: "g", Host: "8.8.8.8"}, {Name: "q9", Host: "9.9.9.9"}},
-		TestDomain:    "example.com",
-		FailThreshold: 2,
-	}
-	got := chk.Run(context.Background(), d)
-	if got.Status != "ok" {
-		t.Fatalf("expected ok with 1/3 fail, got %+v", got)
+func TestProbeDoH_NXDOMAIN(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(dohJSONNXDOMAIN))
+	}))
+	defer srv.Close()
+	_, err := ProbeDoH(context.Background(), srv.URL, "foo", srv.Client(), 1*time.Second)
+	if err == nil {
+		t.Fatalf("expected error on NXDOMAIN")
 	}
 }
 
-func TestDNSDoHRejectsEmptyAnswer(t *testing.T) {
-	d := Deps{Runner: RunnerFunc(func(_ context.Context, _ string, _ ...string) (string, error) {
-		return "no answer here", nil // no "ANSWER SECTION" → counted as fail
-	})}
-	chk := DNSDoH{
-		Providers:     []DNSProvider{{Name: "cf", Host: "1.1.1.1"}, {Name: "g", Host: "8.8.8.8"}, {Name: "q9", Host: "9.9.9.9"}},
-		TestDomain:    "example.com",
-		FailThreshold: 2,
-	}
-	got := chk.Run(context.Background(), d)
-	if got.Status != "fail" {
-		t.Fatalf("got %+v", got)
-	}
-	if !strings.Contains(got.Details["error"].(string), "providers failed") {
-		t.Fatalf("err msg: %v", got.Details["error"])
+func TestProbeDoH_Non200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	_, err := ProbeDoH(context.Background(), srv.URL, "x", srv.Client(), 1*time.Second)
+	if err == nil {
+		t.Fatalf("expected error on 502")
 	}
 }
