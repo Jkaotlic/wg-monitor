@@ -59,7 +59,7 @@ func (a AWGCheckConfig) RoutingURL() string {
 	if a.RoutingProbeURL != "" {
 		return a.RoutingProbeURL
 	}
-	return "https://api.ipify.org"
+	return "https://1.1.1.1/cdn-cgi/trace"
 }
 
 type DNSProviderConfig struct {
