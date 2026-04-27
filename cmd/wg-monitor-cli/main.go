@@ -107,16 +107,20 @@ agent:
 checks:
   awg:
     interface: %s
-    handshake_max_age_sec: 180
     expected_exit_ip: %s
-    marker_url: https://www.youtube.com/-/manifest
+    handshake_max_age_sec: 180
+    # marker_url defaults to http://www.gstatic.com/generate_204 — uncomment to override
+    # marker_url: http://www.gstatic.com/generate_204
+    # routing_probe_url defaults to https://1.1.1.1/cdn-cgi/trace — uncomment to override
+    # routing_probe_url: https://1.1.1.1/cdn-cgi/trace
   dns:
+    auto_discover: true        # discover endpoints from /bin/ndmc on Keenetic
     test_domain: example.com
-    fail_threshold: 2
-    providers:
-      - { name: cloudflare, host: 1.1.1.1 }
-      - { name: google,     host: 8.8.8.8 }
-      - { name: quad9,      host: 9.9.9.9 }
+    fail_threshold: 1
+    # Optional manual endpoints in addition to auto-discovered ones:
+    # endpoints:
+    #   - { type: doh, url: "https://dns.example/dns-query" }
+    #   - { type: plain, host: 1.1.1.1, port: 53, ndms_name: Wireguard0 }
 `, o.BackendURL, rawToken, o.Nickname, o.AWGIface, o.ExpectedExitIP)
 	fmt.Fprintf(o.Out, "\nThe Telegram topic for this user will be created automatically on the first HARD alert.\n")
 	return nil
