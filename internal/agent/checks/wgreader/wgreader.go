@@ -9,11 +9,12 @@
 //
 // Strategy order:
 //
-//  1. wgctrl  — pure-Go netlink (kernel WG) plus userspace UNIX-socket
-//               fallback at /var/run/wireguard/<iface>.sock (covers
-//               wireguard-go, BoringTun, amneziawg-go).
-//  2. shell   — `<binary> show <iface> latest-handshakes`. Probes for
-//               /opt/sbin/awg → awg → wg in that order; first found wins.
+//  1. wgctrl      — pure-Go netlink (kernel WG) plus userspace UNIX-socket
+//                   fallback at /var/run/wireguard/<iface>.sock (covers
+//                   wireguard-go, BoringTun, amneziawg-go).
+//  2. awg-manager — HTTP API at 127.0.0.1:2222 (Keenetic OS routers).
+//  3. shell       — `<binary> show <iface> latest-handshakes`. Probes for
+//                   /opt/sbin/awg → awg → wg in that order; first found wins.
 //
 // The `Multi` reader tries each in order. If one returns ErrNoPeers (the
 // iface exists but no peer has ever handshook) we treat that as the
@@ -22,8 +23,11 @@ package wgreader
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -87,11 +91,19 @@ func (m *Multi) Strategies() []string {
 	return out
 }
 
-// Detect probes the system at startup. wgctrl tried first (no binary needed);
-// then a single shell fallback picked from {/opt/sbin/awg, awg, wg}.
+// Detect probes the system at startup. Order:
+//
+//  1. wgctrl    — pure-Go netlink (vanilla kernel WG / userspace via UNIX socket)
+//  2. awg-manager — HTTP API at 127.0.0.1:2222 (Keenetic OS routers)
+//  3. shell     — /opt/sbin/awg → awg → wg, first found
+//
+// Each strategy is added only if a runtime probe confirms it can be reached.
 func Detect(runner CmdRunner) *Multi {
 	m := &Multi{}
 	if r, err := newWgctrlReader(); err == nil {
+		m.readers = append(m.readers, r)
+	}
+	if r := newAwgManagerReader(); r != nil {
 		m.readers = append(m.readers, r)
 	}
 	for _, candidate := range []string{"/opt/sbin/awg", "awg", "wg"} {
@@ -144,6 +156,113 @@ func (w *wgctrlReader) LatestHandshakeAge(ctx context.Context, iface string) (ti
 		return 0, ErrNoPeers
 	}
 	return freshest, nil
+}
+
+// --- awg-manager API reader (Keenetic OS) -----------------------------------
+//
+// awg-manager is the dominant tunnel manager on Keenetic OS routers. It
+// exposes a private HTTP API on 127.0.0.1:2222 that returns live tunnel
+// state. Without going through this API there's no portable way to read
+// handshake timestamps on Keenetic — neither netlink nor the awg/wg
+// binaries can talk to its custom WG kernel module.
+//
+// The API requires the `X-Requested-With: XMLHttpRequest` header to bypass
+// the SvelteKit static-site fallback and reach the real JSON handler.
+
+const defaultAwgManagerURL = "http://127.0.0.1:2222"
+const awgManagerSocketProbeTimeout = 1500 * time.Millisecond
+
+type awgManagerReader struct {
+	client *http.Client
+	base   string // e.g. "http://127.0.0.1:2222"
+}
+
+// newAwgManagerReaderForTest is exposed for tests to inject httptest URLs.
+func newAwgManagerReaderForTest(base string) *awgManagerReader {
+	return &awgManagerReader{
+		client: &http.Client{Timeout: 5 * time.Second},
+		base:   base,
+	}
+}
+
+// newAwgManagerReader constructs an awg-manager reader for production use,
+// returning nil if no awg-manager is reachable at the default URL.
+func newAwgManagerReader() *awgManagerReader {
+	r := newAwgManagerReaderForTest(defaultAwgManagerURL)
+	// Probe: a quick GET that we expect to come back successful with the right header.
+	ctx, cancel := context.WithTimeout(context.Background(), awgManagerSocketProbeTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.base+"/api/tunnels/all", nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Accept", "application/json")
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	return r
+}
+
+func (a *awgManagerReader) Name() string { return "awg-manager" }
+
+type awgManagerTunnel struct {
+	ID            string `json:"id"`
+	InterfaceName string `json:"interfaceName"`
+	Status        string `json:"status"`
+	LastHandshake string `json:"lastHandshake"` // RFC 3339; zero when never handshook
+}
+
+type awgManagerResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Tunnels []awgManagerTunnel `json:"tunnels"`
+	} `json:"data"`
+}
+
+func (a *awgManagerReader) LatestHandshakeAge(ctx context.Context, iface string) (time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.base+"/api/tunnels/all", nil)
+	if err != nil {
+		return 0, fmt.Errorf("awg-manager request: %w", err)
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Accept", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("awg-manager: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("awg-manager: status %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	var out awgManagerResponse
+	if err := json.Unmarshal(body, &out); err != nil {
+		return 0, fmt.Errorf("awg-manager: decode: %w", err)
+	}
+	for _, t := range out.Data.Tunnels {
+		if t.InterfaceName != iface {
+			continue
+		}
+		if t.Status != "running" {
+			return 0, ErrNoPeers // tunnel exists but is stopped
+		}
+		ts, err := time.Parse(time.RFC3339, t.LastHandshake)
+		if err != nil || ts.IsZero() || ts.Year() <= 1 {
+			return 0, ErrNoPeers
+		}
+		age := time.Since(ts)
+		if age < 0 {
+			age = 0
+		}
+		return age, nil
+	}
+	return 0, fmt.Errorf("awg-manager: tunnel with interface %q not found", iface)
 }
 
 // --- shell-based reader ------------------------------------------------------
