@@ -62,6 +62,10 @@ func (a AWGCheckConfig) RoutingURL() string {
 	return "https://1.1.1.1/cdn-cgi/trace"
 }
 
+// ResolvedMarkerURL returns the user-configured MarkerURL when non-empty,
+// otherwise defaults to Google's captive-portal endpoint (generate_204).
+// Default chosen because it always returns HTTP 204 by design and is
+// not subject to DNS-block lists (unlike e.g. ad-tech endpoints).
 func (a AWGCheckConfig) ResolvedMarkerURL() string {
 	if a.MarkerURL != "" {
 		return a.MarkerURL

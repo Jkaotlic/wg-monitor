@@ -240,3 +240,30 @@ checks:
 		}
 	}
 }
+
+func TestLoadConfig_MarkerURLDefaultsWhenOmitted(t *testing.T) {
+	body := `backend:
+  url: https://wgmonitor.example.org
+  token: 0123456789abcdef0123456789abcdef0123456789abcdef
+agent:
+  nickname: testkeen
+  interval_sec: 60
+checks:
+  awg:
+    interface: nwg0
+    expected_exit_ip: 198.51.100.21
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "c.yaml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("expected load to succeed without marker_url: %v", err)
+	}
+	const want = "http://www.gstatic.com/generate_204"
+	if got := cfg.Checks.AWG.ResolvedMarkerURL(); got != want {
+		t.Fatalf("ResolvedMarkerURL() default: got %q want %q", got, want)
+	}
+}
