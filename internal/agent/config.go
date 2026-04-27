@@ -73,13 +73,20 @@ func (a AWGCheckConfig) ResolvedMarkerURL() string {
 	return "http://www.gstatic.com/generate_204"
 }
 
-type DNSProviderConfig struct {
-	Name string `yaml:"name"`
-	Host string `yaml:"host"`
+// DNSEndpointConfig represents one user-supplied DNS endpoint to probe.
+// Auto-discovered endpoints (from `ndmc show running-config`) are merged
+// with these at agent startup.
+type DNSEndpointConfig struct {
+	Type     string `yaml:"type"`                // "plain", "doh", "dot"
+	Host     string `yaml:"host,omitempty"`      // for plain/dot
+	Port     int    `yaml:"port,omitempty"`      // for plain/dot; default 53/853
+	URL      string `yaml:"url,omitempty"`       // for doh
+	NDMSName string `yaml:"ndms_name,omitempty"` // bind via iface for plain
 }
 
 type DNSCheckConfig struct {
-	Providers     []DNSProviderConfig `yaml:"providers"`
+	AutoDiscover  bool                `yaml:"auto_discover"` // discover endpoints from ndmc
+	Endpoints     []DNSEndpointConfig `yaml:"endpoints"`     // explicit endpoints; merged with discovery
 	TestDomain    string              `yaml:"test_domain"`
 	FailThreshold int                 `yaml:"fail_threshold"`
 }
@@ -132,15 +139,11 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	if cfg.Checks.DNS.TestDomain == "" {
 		cfg.Checks.DNS.TestDomain = "example.com"
 	}
+	// FailThreshold default = 1 (alert if any single endpoint is unreachable).
+	// Endpoints can be empty if AutoDiscover succeeds at runtime; that's not an error.
+	// AutoDiscover has NO default — user must explicitly set auto_discover: true.
 	if cfg.Checks.DNS.FailThreshold <= 0 {
-		cfg.Checks.DNS.FailThreshold = 2
-	}
-	if len(cfg.Checks.DNS.Providers) == 0 {
-		cfg.Checks.DNS.Providers = []DNSProviderConfig{
-			{Name: "cloudflare", Host: "1.1.1.1"},
-			{Name: "google", Host: "8.8.8.8"},
-			{Name: "quad9", Host: "9.9.9.9"},
-		}
+		cfg.Checks.DNS.FailThreshold = 1
 	}
 	return &cfg, nil
 }
