@@ -48,7 +48,7 @@ func main() {
 	chks := []checks.Check{
 		checks.AwgHandshake{Iface: cfg.Checks.AWG.Interface, MaxAge: cfg.Checks.AWG.HandshakeMaxAge()},
 		checks.AwgRouting{Iface: cfg.Checks.AWG.Interface, URL: cfg.Checks.AWG.RoutingURL(), Expected: cfg.Checks.AWG.ExpectedExitIP},
-		checks.AwgMarker{Iface: cfg.Checks.AWG.Interface, URL: cfg.Checks.AWG.MarkerURL, MaxRetries: 3, BaseBackoff: 250 * time.Millisecond},
+		checks.AwgMarker{Iface: cfg.Checks.AWG.Interface, URL: cfg.Checks.AWG.ResolvedMarkerURL(), MaxRetries: 3, BaseBackoff: 250 * time.Millisecond},
 		dnsCheckFromCfg(cfg.Checks.DNS),
 	}
 	wgr := wgreader.Detect(checks.OSExec{})
