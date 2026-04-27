@@ -7,9 +7,31 @@ import (
 	"testing"
 )
 
+const cdnCgiTraceMatch = `fl=1179f36
+h=1.1.1.1
+ip=89.125.101.122
+ts=1777301814.000
+visit_scheme=https
+uag=curl/8.15.0
+colo=AMS
+http=http/2
+tls=TLSv1.3
+`
+
+const cdnCgiTraceMismatch = `fl=1179f36
+h=1.1.1.1
+ip=1.2.3.4
+ts=1777301814.000
+`
+
+const cdnCgiTraceMissingIP = `fl=1179f36
+h=1.1.1.1
+ts=1777301814.000
+`
+
 func TestAwgRoutingMatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("89.125.101.122"))
+		_, _ = w.Write([]byte(cdnCgiTraceMatch))
 	}))
 	defer srv.Close()
 
@@ -25,7 +47,7 @@ func TestAwgRoutingMatch(t *testing.T) {
 
 func TestAwgRoutingMismatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("1.2.3.4"))
+		_, _ = w.Write([]byte(cdnCgiTraceMismatch))
 	}))
 	defer srv.Close()
 
@@ -33,6 +55,19 @@ func TestAwgRoutingMismatch(t *testing.T) {
 	got := chk.Run(context.Background(), Deps{HTTPClient: srv.Client()})
 	if got.Status != "fail" || got.Details["got_ip"] != "1.2.3.4" {
 		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
+func TestAwgRoutingMissingIPLine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(cdnCgiTraceMissingIP))
+	}))
+	defer srv.Close()
+
+	chk := AwgRouting{URL: srv.URL, Expected: "89.125.101.122"}
+	got := chk.Run(context.Background(), Deps{HTTPClient: srv.Client()})
+	if got.Status != "fail" {
+		t.Fatalf("expected fail on missing ip= line, got %+v", got)
 	}
 }
 

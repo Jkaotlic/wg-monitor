@@ -11,8 +11,8 @@ import (
 )
 
 type AwgRouting struct {
-	Iface    string // informational; binding happens in the HTTPClient's dialer
-	URL      string // e.g. https://api.ipify.org
+	Iface    string // informational; binding happens in HTTPClient's dialer
+	URL      string // e.g. https://1.1.1.1/cdn-cgi/trace
 	Expected string // expected egress IPv4
 }
 
@@ -31,10 +31,24 @@ func (c AwgRouting) Run(ctx context.Context, d Deps) wire.Check {
 	if resp.StatusCode/100 != 2 {
 		return Fail(c.Name(), start, "non-2xx", map[string]any{"http_code": resp.StatusCode})
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
-	got := strings.TrimSpace(string(body))
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	got := parseCdnCgiTraceIP(string(body))
+	if got == "" {
+		return Fail(c.Name(), start, "no ip= line in trace body", nil)
+	}
 	if got != c.Expected {
 		return Fail(c.Name(), start, "exit ip mismatch", map[string]any{"got_ip": got, "expected_ip": c.Expected})
 	}
 	return OK(c.Name(), start, map[string]any{"got_ip": got})
+}
+
+// parseCdnCgiTraceIP extracts the value of the "ip=" line from a Cloudflare
+// cdn-cgi/trace response. Returns "" if no such line is present.
+func parseCdnCgiTraceIP(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		if v, ok := strings.CutPrefix(line, "ip="); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
