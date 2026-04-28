@@ -2,7 +2,6 @@ package callbacks
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -140,7 +139,6 @@ func TestRouterActionErrorReportedAsToast(t *testing.T) {
 	if len(f.edits) != 0 {
 		t.Error("on error, should NOT edit")
 	}
-	_ = errors.New
 }
 
 func itoa(n int64) string { return fmt.Sprintf("%d", n) }
