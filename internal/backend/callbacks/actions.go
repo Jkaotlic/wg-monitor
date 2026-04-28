@@ -32,7 +32,7 @@ func (a *SilenceAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Silenced до %s МСК (admin)",
+	return fmt.Sprintf("⏸ Silenced до %s МСК (admin)",
 		until.In(moscowLoc()).Format("15:04")), nil
 }
 
@@ -59,5 +59,5 @@ func (a *AckAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return "Ack'ed (до восстановления)", nil
+	return "✅ Ack'ed (до восстановления)", nil
 }
