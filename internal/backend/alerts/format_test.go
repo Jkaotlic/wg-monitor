@@ -43,3 +43,28 @@ func TestFormatRouterOffline(t *testing.T) {
 		t.Fatalf("got: %s", got)
 	}
 }
+
+func TestFormatRealert(t *testing.T) {
+	hardSince := time.Date(2026, 4, 28, 9, 3, 0, 0, time.UTC)
+	msg := FormatRealert(RealertArgs{
+		Nickname:     "vasya",
+		CheckName:    "awg_handshake",
+		HardSince:    hardSince,
+		RealertCount: 2,
+	})
+	if !strings.Contains(msg, "STILL DOWN") {
+		t.Errorf("missing STILL DOWN: %q", msg)
+	}
+	if !strings.Contains(msg, "vasya") {
+		t.Errorf("missing nickname: %q", msg)
+	}
+	if !strings.Contains(msg, "awg_handshake") {
+		t.Errorf("missing check name: %q", msg)
+	}
+	if !strings.Contains(msg, "Re-alert #2") {
+		t.Errorf("missing re-alert counter: %q", msg)
+	}
+	if !strings.Contains(msg, "🔁") {
+		t.Errorf("missing 🔁 emoji: %q", msg)
+	}
+}

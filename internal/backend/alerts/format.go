@@ -60,3 +60,22 @@ func mscLoc() *time.Location {
 	}
 	return loc
 }
+
+type RealertArgs struct {
+	Nickname     string
+	CheckName    string
+	HardSince    time.Time
+	RealertCount int
+}
+
+func FormatRealert(args RealertArgs) string {
+	age := time.Since(args.HardSince).Round(time.Minute)
+	return fmt.Sprintf(
+		"🔁 [%s] %s — STILL DOWN\nHard since: %s (%s ago)\nRe-alert #%d (every 6h)",
+		args.Nickname,
+		args.CheckName,
+		args.HardSince.UTC().Format("2006-01-02 15:04 MST"),
+		durFmt(age),
+		args.RealertCount,
+	)
+}
