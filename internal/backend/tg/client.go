@@ -77,6 +77,68 @@ func (c *Client) CreateForumTopic(ctx context.Context, chatID int64, name string
 	return out.MessageThreadID, nil
 }
 
+type sendMessageWithKBReq struct {
+	ChatID           int64                 `json:"chat_id"`
+	MessageThreadID  *int64                `json:"message_thread_id,omitempty"`
+	Text             string                `json:"text"`
+	ParseMode        string                `json:"parse_mode,omitempty"`
+	ReplyToMessageID *int64                `json:"reply_to_message_id,omitempty"`
+	ReplyMarkup      *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+// SendMessageWithKeyboard sends a message with an attached inline keyboard.
+// markup must be non-nil; for plain messages use SendMessage.
+func (c *Client) SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *InlineKeyboardMarkup) (int64, error) {
+	body, _ := json.Marshal(sendMessageWithKBReq{
+		ChatID:           chatID,
+		MessageThreadID:  threadID,
+		Text:             text,
+		ParseMode:        parseMode,
+		ReplyToMessageID: replyTo,
+		ReplyMarkup:      markup,
+	})
+	var out sendMessageResult
+	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+		return 0, err
+	}
+	return out.MessageID, nil
+}
+
+type answerCBReq struct {
+	CallbackQueryID string `json:"callback_query_id"`
+	Text            string `json:"text,omitempty"`
+}
+
+// AnswerCallbackQuery closes the loading spinner on the user's button.
+// text (optional, ≤200 chars) shows as a transient toast; pass "" for silent close.
+func (c *Client) AnswerCallbackQuery(ctx context.Context, callbackID, text string) error {
+	body, _ := json.Marshal(answerCBReq{CallbackQueryID: callbackID, Text: text})
+	return c.call(ctx, "answerCallbackQuery", body, nil)
+}
+
+type editMessageReq struct {
+	ChatID      int64                 `json:"chat_id"`
+	MessageID   int64                 `json:"message_id"`
+	Text        string                `json:"text"`
+	ParseMode   string                `json:"parse_mode,omitempty"`
+	ReplyMarkup *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+// EditMessageText edits an existing message. markup contract:
+//
+//	nil  → reply_markup not sent (TG does not change existing keyboard)
+//	&{}  → reply_markup sent with empty inline_keyboard array (removes buttons)
+func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, text, parseMode string, markup *InlineKeyboardMarkup) error {
+	body, _ := json.Marshal(editMessageReq{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		Text:        text,
+		ParseMode:   parseMode,
+		ReplyMarkup: markup,
+	})
+	return c.call(ctx, "editMessageText", body, nil)
+}
+
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {
 	url := c.BaseURL + c.Token + "/" + method
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
