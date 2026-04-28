@@ -110,6 +110,18 @@ func (s *StateRepo) GetSoftFlap(userID int64, checkName, date string) (int, erro
 	return n, err
 }
 
+// BumpLastAlertAt updates only the last_alert_at timestamp for an existing HARD incident.
+// No-op if the incident has been recovered (current_status != 'hard').
+// Use this from the realert poller to avoid race-overwriting an FSM-Recovery that
+// happened between StaleHards() and the poller's read-modify-write.
+func (s *StateRepo) BumpLastAlertAt(userID int64, checkName string, ts time.Time) error {
+	_, err := s.d.db.Exec(
+		`UPDATE incident_state SET last_alert_at = ?
+		 WHERE user_id = ? AND check_name = ? AND current_status = 'hard'`,
+		ts.UTC(), userID, checkName)
+	return err
+}
+
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
 // and which are not currently silenced, and have not been acked.
 func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {

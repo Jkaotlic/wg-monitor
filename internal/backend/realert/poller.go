@@ -6,6 +6,7 @@ package realert
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -26,6 +27,7 @@ type Poller struct {
 	d   *db.DB
 	tg  TGSender
 	cfg Config
+	wg  sync.WaitGroup
 }
 
 func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
@@ -33,6 +35,8 @@ func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 }
 
 func (p *Poller) Run(ctx context.Context) error {
+	p.wg.Add(1)
+	defer p.wg.Done()
 	t := time.NewTicker(p.cfg.TickEvery)
 	defer t.Stop()
 	for {
@@ -44,6 +48,8 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 	}
 }
+
+func (p *Poller) WaitForExit() { p.wg.Wait() }
 
 func (p *Poller) tick(ctx context.Context) {
 	cutoff := time.Now().Add(-p.cfg.RealertEvery)
@@ -79,11 +85,13 @@ func (p *Poller) tick(ctx context.Context) {
 			slog.Error("realert: tg send failed", "user_id", sh.UserID, "err", err)
 			continue // do not advance LastAlertAt → retry next tick
 		}
-		now := time.Now()
-		st.LastAlertAt = &now
-		// LastAlertMsgID retained — points to original HARD msg for RECOVERY reply.
-		if err := p.d.State().Save(sh.UserID, sh.CheckName, st); err != nil {
-			slog.Error("realert: state save failed", "user_id", sh.UserID, "err", err)
+		// Realerts are sent as standalone messages (replyTo nil above);
+		// LastAlertMsgID intentionally not updated so RECOVERY (dispatcher.go)
+		// replies to the original HARD root, not the most recent reminder.
+		// Use BumpLastAlertAt instead of Save to avoid race-overwriting an FSM
+		// Recovery that occurred between StaleHards and this update.
+		if err := p.d.State().BumpLastAlertAt(sh.UserID, sh.CheckName, time.Now()); err != nil {
+			slog.Error("realert: bump LastAlertAt failed", "user_id", sh.UserID, "err", err)
 		}
 	}
 }
