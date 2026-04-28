@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"encoding/base64"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func TestDNS_AllOK_PlainOnly(t *testing.T) {
@@ -31,8 +33,11 @@ func TestDNS_AllOK_PlainOnly(t *testing.T) {
 }
 
 func TestDNS_DoHOK(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(dohJSONOK))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.Query().Get("dns")
+		query, _ := base64.RawURLEncoding.DecodeString(raw)
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(buildDoHResponse(t, query, dnsmessage.RCodeSuccess, [4]byte{1, 2, 3, 4}, true))
 	}))
 	defer srv.Close()
 
