@@ -17,6 +17,7 @@ type IncidentState struct {
 	LastAlertAt      *time.Time
 	SilencedUntil    *time.Time
 	AckedUntil       *time.Time
+	Acked            bool
 }
 
 type StaleHard struct {
@@ -36,14 +37,15 @@ func (s *StateRepo) Get(userID int64, checkName string) (IncidentState, error) {
 	got.CurrentStatus = "ok"
 
 	row := s.d.db.QueryRow(
-		`SELECT consecutive_fails, consecutive_oks, current_status, hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until
+		`SELECT consecutive_fails, consecutive_oks, current_status, hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until, acked
 		   FROM incident_state WHERE user_id = ? AND check_name = ?`,
 		userID, checkName,
 	)
-	var hardSince, lastAlertAt, silenced, acked sql.NullTime
+	var hardSince, lastAlertAt, silenced, ackedUntil sql.NullTime
 	var lastMsgID sql.NullInt64
+	var ackedFlag int
 	err := row.Scan(&got.ConsecutiveFails, &got.ConsecutiveOKs, &got.CurrentStatus,
-		&hardSince, &lastMsgID, &lastAlertAt, &silenced, &acked)
+		&hardSince, &lastMsgID, &lastAlertAt, &silenced, &ackedUntil, &ackedFlag)
 	if errors.Is(err, sql.ErrNoRows) {
 		return got, nil
 	}
@@ -53,19 +55,24 @@ func (s *StateRepo) Get(userID int64, checkName string) (IncidentState, error) {
 	got.HardSince = nullTime(hardSince)
 	got.LastAlertAt = nullTime(lastAlertAt)
 	got.SilencedUntil = nullTime(silenced)
-	got.AckedUntil = nullTime(acked)
+	got.AckedUntil = nullTime(ackedUntil)
 	if lastMsgID.Valid {
 		v := lastMsgID.Int64
 		got.LastAlertMsgID = &v
 	}
+	got.Acked = ackedFlag == 1
 	return got, nil
 }
 
 func (s *StateRepo) Save(userID int64, checkName string, st IncidentState) error {
+	ackedInt := 0
+	if st.Acked {
+		ackedInt = 1
+	}
 	_, err := s.d.db.Exec(
 		`INSERT INTO incident_state(user_id, check_name, consecutive_fails, consecutive_oks, current_status,
-		    hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until)
-		 VALUES(?,?,?,?,?,?,?,?,?,?)
+		    hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until, acked)
+		 VALUES(?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(user_id, check_name) DO UPDATE SET
 		    consecutive_fails = excluded.consecutive_fails,
 		    consecutive_oks   = excluded.consecutive_oks,
@@ -74,10 +81,11 @@ func (s *StateRepo) Save(userID int64, checkName string, st IncidentState) error
 		    last_alert_msg_id = excluded.last_alert_msg_id,
 		    last_alert_at     = excluded.last_alert_at,
 		    silenced_until    = excluded.silenced_until,
-		    acked_until       = excluded.acked_until`,
+		    acked_until       = excluded.acked_until,
+		    acked             = excluded.acked`,
 		userID, checkName, st.ConsecutiveFails, st.ConsecutiveOKs, st.CurrentStatus,
 		utcPtr(st.HardSince), st.LastAlertMsgID, utcPtr(st.LastAlertAt),
-		utcPtr(st.SilencedUntil), utcPtr(st.AckedUntil),
+		utcPtr(st.SilencedUntil), utcPtr(st.AckedUntil), ackedInt,
 	)
 	return err
 }
@@ -103,13 +111,14 @@ func (s *StateRepo) GetSoftFlap(userID int64, checkName, date string) (int, erro
 }
 
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
-// and which are not currently silenced.
+// and which are not currently silenced, and have not been acked.
 func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
 	rows, err := s.d.db.Query(
 		`SELECT user_id, check_name, hard_since FROM incident_state
 		 WHERE current_status = 'hard'
 		   AND last_alert_at < ?
-		   AND (silenced_until IS NULL OR silenced_until < CURRENT_TIMESTAMP)`,
+		   AND (silenced_until IS NULL OR silenced_until < CURRENT_TIMESTAMP)
+		   AND acked = 0`,
 		cutoff.UTC())
 	if err != nil {
 		return nil, err

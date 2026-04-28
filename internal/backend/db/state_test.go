@@ -101,4 +101,57 @@ func TestStaleHardsCrossTimezone(t *testing.T) {
 	}
 }
 
+func TestStateAckedRoundTrip(t *testing.T) {
+	d := newTestDB(t)
+	tok := "7777777777777777777777777777777777777777777777777777777777777777"
+	uid, _ := d.Users().Insert("u1", tok, "1.1.1.1", "nwg0")
+
+	err := d.State().Save(uid, "awg_handshake", IncidentState{
+		UserID:           uid,
+		CheckName:        "awg_handshake",
+		CurrentStatus:    "hard",
+		ConsecutiveFails: 3,
+		Acked:            true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.State().Get(uid, "awg_handshake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Acked {
+		t.Errorf("Acked should round-trip true, got false")
+	}
+}
+
+func TestStateStaleHardsFiltersAcked(t *testing.T) {
+	d := newTestDB(t)
+	tok := "8888888888888888888888888888888888888888888888888888888888888888"
+	uid, _ := d.Users().Insert("u1", tok, "1.1.1.1", "nwg0")
+
+	oldAlert := time.Now().Add(-7 * time.Hour)
+	hardSince := oldAlert
+	err := d.State().Save(uid, "awg_handshake", IncidentState{
+		UserID:        uid,
+		CheckName:     "awg_handshake",
+		CurrentStatus: "hard",
+		HardSince:     &hardSince,
+		LastAlertAt:   &oldAlert,
+		Acked:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stale, err := d.State().StaleHards(time.Now().Add(-6 * time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stale) != 0 {
+		t.Errorf("acked=1 row should not appear in StaleHards, got %d rows", len(stale))
+	}
+}
+
 func ptrTime(t time.Time) *time.Time { return &t }
