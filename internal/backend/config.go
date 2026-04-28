@@ -33,6 +33,8 @@ type StateConfig struct {
 	FailThreshold     int `yaml:"fail_threshold"`
 	RecoveryThreshold int `yaml:"recovery_threshold"`
 	RealertEverySec   int `yaml:"realert_every_sec"`
+	RealertTickSec    int `yaml:"realert_tick_sec"`
+	MuteCutoffHour    int `yaml:"mute_cutoff_hour"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -84,6 +86,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.State.RealertEverySec == 0 {
 		cfg.State.RealertEverySec = 6 * 3600
+	}
+	if cfg.State.RealertTickSec == 0 {
+		cfg.State.RealertTickSec = 300
+	}
+	if cfg.State.MuteCutoffHour == 0 {
+		cfg.State.MuteCutoffHour = 9
 	}
 	return &cfg, nil
 }

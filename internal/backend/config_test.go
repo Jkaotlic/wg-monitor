@@ -53,3 +53,25 @@ telegram:
 		t.Fatal("expected chat_id required")
 	}
 }
+
+func TestLoadConfigDefaultsForStage2(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "test-token")
+	cfgPath := writeFile(t, dir, "cfg.yaml", `
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 12345
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.State.MuteCutoffHour != 9 {
+		t.Errorf("MuteCutoffHour default: got %d, want 9", cfg.State.MuteCutoffHour)
+	}
+	if cfg.State.RealertTickSec != 300 {
+		t.Errorf("RealertTickSec default: got %d, want 300", cfg.State.RealertTickSec)
+	}
+}
