@@ -34,8 +34,8 @@ func TestActionSilenceWritesUntil(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(statusLine, "Silenced") {
-		t.Errorf("status line: %q", statusLine)
+	if !strings.HasPrefix(statusLine, "⏸ Silenced") {
+		t.Errorf("status line should start with '⏸ Silenced', got: %q", statusLine)
 	}
 	st, _ := d.State().Get(uid, "awg_handshake")
 	if st.SilencedUntil == nil {
@@ -56,8 +56,8 @@ func TestActionAckSetsAcked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(statusLine, "Ack") {
-		t.Errorf("status line: %q", statusLine)
+	if !strings.HasPrefix(statusLine, "✅ Ack'ed") {
+		t.Errorf("status line should start with '✅ Ack'ed', got: %q", statusLine)
 	}
 	st, _ := d.State().Get(uid, "awg_handshake")
 	if !st.Acked {
