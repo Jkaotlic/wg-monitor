@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -51,4 +52,68 @@ func (e *EventsRepo) PruneBefore(cutoff time.Time) (int64, error) {
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// EventRow holds a single event from the events table.
+type EventRow struct {
+	ID          int64
+	UserID      int64
+	CheckName   string
+	Status      string
+	DetailsJSON string
+	TS          time.Time
+}
+
+// ListSince returns all events for (userID, checkName) with ts >= since, ordered by ts ASC.
+func (e *EventsRepo) ListSince(userID int64, checkName string, since time.Time) ([]EventRow, error) {
+	rows, err := e.d.db.Query(
+		`SELECT id, user_id, check_name, status, details_json, ts
+		   FROM events
+		  WHERE user_id = ? AND check_name = ? AND ts >= ?
+		  ORDER BY ts ASC`,
+		userID, checkName, since.UTC(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventRow
+	for rows.Next() {
+		var r EventRow
+		var tsStr string
+		if err := rows.Scan(&r.ID, &r.UserID, &r.CheckName, &r.Status, &r.DetailsJSON, &tsStr); err != nil {
+			return nil, err
+		}
+		// Parse timestamp stored by SQLite (UTC RFC3339 or Go time string).
+		t, err := parseEventTS(tsStr)
+		if err != nil {
+			return nil, err
+		}
+		r.TS = t
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// parseEventTS handles both "2006-01-02T15:04:05Z07:00" (RFC3339) and
+// "2006-01-02 15:04:05.999999999 -0700 MST" (Go time.String) formats.
+func parseEventTS(s string) (time.Time, error) {
+	// Strip Go's monotonic clock suffix if present.
+	if i := strings.Index(s, " m="); i > 0 {
+		s = s[:i]
+	}
+	// Try RFC3339 / RFC3339Nano first (standard SQLite DATETIME stored via time.UTC()).
+	formats := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05 -0700 MST",
+		"2006-01-02T15:04:05.999999999Z07:00",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("parseEventTS: unrecognised format %q", s)
 }
