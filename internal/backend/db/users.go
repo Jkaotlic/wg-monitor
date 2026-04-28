@@ -73,6 +73,31 @@ func (u *UsersRepo) GetByToken(rawToken string) (*User, error) {
 	return &got, nil
 }
 
+func (u *UsersRepo) GetByID(id int64) (*User, error) {
+	row := u.d.db.QueryRow(
+		`SELECT id, nickname, token_hash, expected_exit_ip, awg_iface, telegram_thread_id, created_at, last_seen_at FROM users WHERE id = ?`,
+		id,
+	)
+	var got User
+	var threadID sql.NullInt64
+	var lastSeen sql.NullTime
+	if err := row.Scan(&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &threadID, &got.CreatedAt, &lastSeen); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	if threadID.Valid {
+		v := threadID.Int64
+		got.TelegramThreadID = &v
+	}
+	if lastSeen.Valid {
+		v := lastSeen.Time
+		got.LastSeenAt = &v
+	}
+	return &got, nil
+}
+
 func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 	row := u.d.db.QueryRow(
 		`SELECT id, nickname, token_hash, expected_exit_ip, awg_iface, telegram_thread_id, created_at, last_seen_at FROM users WHERE nickname = ?`,
