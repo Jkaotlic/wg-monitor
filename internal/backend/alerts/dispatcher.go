@@ -8,10 +8,12 @@ import (
 
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/state"
+	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
 type TGSender interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
+	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
 	CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int) (int64, error)
 }
 
@@ -54,7 +56,8 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			HardSince:   *tr.Next.HardSince,
 			Detail:      detail,
 		})
-		mid, err := di.tg.SendMessage(ctx, di.cfg.ChatID, &threadID, text, "", nil)
+		kb := tg.HardAlertKeyboard(userID, checkName)
+		mid, err := di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &threadID, text, "", nil, &kb)
 		if err != nil {
 			return err
 		}
@@ -86,6 +89,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		next := tr.Next
 		next.LastAlertMsgID = nil
 		next.LastAlertAt = nil
+		next.Acked = false // defensive (FSM also sets this in Recovery transition)
 		return di.d.State().Save(userID, checkName, next)
 	}
 	return nil
