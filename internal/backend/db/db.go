@@ -31,7 +31,26 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := migrateAcked(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate acked: %w", err)
+	}
 	return &DB{db: d}, nil
+}
+
+// migrateAcked is a one-shot ALTER TABLE for Stage 2.
+// SQLite has no `ADD COLUMN IF NOT EXISTS`, so we probe pragma_table_info first.
+func migrateAcked(d *sql.DB) error {
+	var n int
+	if err := d.QueryRow(
+		`SELECT count(*) FROM pragma_table_info('incident_state') WHERE name='acked'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		_, err := d.Exec(`ALTER TABLE incident_state ADD COLUMN acked INTEGER NOT NULL DEFAULT 0`)
+		return err
+	}
+	return nil
 }
 
 func (d *DB) Close() error { return d.db.Close() }

@@ -45,3 +45,8 @@ CREATE TABLE IF NOT EXISTS daily_soft_flaps (
     PRIMARY KEY (user_id, check_name, date),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS tg_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
