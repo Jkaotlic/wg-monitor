@@ -4,9 +4,23 @@
 Binary upload uses raw stdin pipe (`cat > file`) since dropbear's busybox argv
 is too small for chunked base64 + heredoc would also choke; raw binary over
 stdin via paramiko channel works fine.
+
+Password handling: --password is optional; when omitted, the script reads it
+from `host_keenetic.md` in the user's auto-memory (matching keenetic_diag.py
+behavior).
 """
-import argparse, hashlib, sys, time
+import argparse, hashlib, pathlib, re, sys, time
 import paramiko
+
+MEMORY_FILE = pathlib.Path.home() / '.claude/projects/C--Users-Anex/memory/host_keenetic.md'
+
+
+def password_from_memory() -> str | None:
+    if not MEMORY_FILE.exists():
+        return None
+    txt = MEMORY_FILE.read_text(encoding='utf-8')
+    m = re.search(r'pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)', txt)
+    return m.group(1) if m else None
 
 
 def run(client, cmd, check=False):
@@ -45,11 +59,16 @@ def main():
     ap.add_argument("--host", default="192.168.31.1")
     ap.add_argument("--port", type=int, default=222)
     ap.add_argument("--user", default="root")
-    ap.add_argument("--password", required=True)
+    ap.add_argument("--password", default=None,
+                    help="router root password; if omitted, read from host_keenetic.md memory")
     ap.add_argument("--bin", default="bin/linux-arm64/wg-monitor")
     ap.add_argument("--init-d", default="deploy/agent/S99wg-monitor")
     ap.add_argument("--config", required=True, help="local config.yaml path")
     args = ap.parse_args()
+
+    pw = args.password or password_from_memory()
+    if not pw:
+        sys.exit("password not provided via --password and not found in host_keenetic.md")
 
     with open(args.bin, "rb") as f:
         data = f.read()
@@ -63,7 +82,7 @@ def main():
 
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(args.host, port=args.port, username=args.user, password=args.password,
+    c.connect(args.host, port=args.port, username=args.user, password=pw,
               look_for_keys=False, allow_agent=False, timeout=10)
     print(f"connected to {args.user}@{args.host}:{args.port}")
 
