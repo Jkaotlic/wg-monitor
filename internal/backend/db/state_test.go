@@ -154,4 +154,56 @@ func TestStateStaleHardsFiltersAcked(t *testing.T) {
 	}
 }
 
+func TestBumpLastAlertAtNoOpsOnRecoveredIncident(t *testing.T) {
+	d := newTestDB(t)
+	uid, _ := d.Users().Insert("u1", "h", "1.1.1.1", "nwg0")
+
+	// Pre-state: status='ok' (recovered)
+	origAlert := time.Now().Add(-1 * time.Hour)
+	_ = d.State().Save(uid, "awg_handshake", IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "ok",
+		LastAlertAt: &origAlert,
+	})
+
+	// Bump should be no-op since status != 'hard'
+	newTime := time.Now()
+	if err := d.State().BumpLastAlertAt(uid, "awg_handshake", newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	st, _ := d.State().Get(uid, "awg_handshake")
+	if st.LastAlertAt == nil {
+		t.Fatal("LastAlertAt nil")
+	}
+	// Should be unchanged (within 1s of orig)
+	if st.LastAlertAt.Sub(origAlert).Abs() > time.Second {
+		t.Errorf("BumpLastAlertAt should not have updated recovered incident; got LastAlertAt=%v want ~%v", st.LastAlertAt, origAlert)
+	}
+}
+
+func TestBumpLastAlertAtUpdatesHard(t *testing.T) {
+	d := newTestDB(t)
+	uid, _ := d.Users().Insert("u2", "h2", "1.1.1.2", "nwg1")
+
+	hardSince := time.Now().Add(-7 * time.Hour)
+	origAlert := time.Now().Add(-7 * time.Hour)
+	_ = d.State().Save(uid, "awg_handshake", IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "hard",
+		HardSince: &hardSince, LastAlertAt: &origAlert,
+	})
+
+	newTime := time.Now()
+	if err := d.State().BumpLastAlertAt(uid, "awg_handshake", newTime); err != nil {
+		t.Fatal(err)
+	}
+
+	st, _ := d.State().Get(uid, "awg_handshake")
+	if st.LastAlertAt == nil {
+		t.Fatal("LastAlertAt nil")
+	}
+	if time.Since(*st.LastAlertAt) > time.Second {
+		t.Errorf("expected LastAlertAt ~now, got %v ago", time.Since(*st.LastAlertAt))
+	}
+}
+
 func ptrTime(t time.Time) *time.Time { return &t }
