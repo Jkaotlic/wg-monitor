@@ -75,6 +75,7 @@ func Apply(prev db.IncidentState, incoming string, now time.Time, th Thresholds)
 			next.CurrentStatus = "ok"
 			next.ConsecutiveFails = 0
 			next.HardSince = nil
+			next.Acked = false
 			return Transition{Kind: Recovery, Next: next}
 		}
 		return Transition{Kind: Noop, Next: next}
