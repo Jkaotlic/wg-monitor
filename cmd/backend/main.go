@@ -13,13 +13,15 @@ import (
 
 	"github.com/anex/wg-monitor/internal/backend"
 	"github.com/anex/wg-monitor/internal/backend/alerts"
+	"github.com/anex/wg-monitor/internal/backend/callbacks"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/heartbeat"
+	"github.com/anex/wg-monitor/internal/backend/realert"
 	"github.com/anex/wg-monitor/internal/backend/state"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
-var Version = "0.2.0-stage1-dev"
+var Version = "0.3.0-stage2-dev"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
@@ -71,6 +73,28 @@ func main() {
 	defer cancel()
 	go watcher.Run(ctx)
 
+	cb := callbacks.NewRouter(d, tgClient, callbacks.Config{
+		ChatID:         cfg.Telegram.ChatID,
+		AdminUserID:    cfg.Telegram.AdminUserID,
+		MuteCutoffHour: cfg.State.MuteCutoffHour,
+	})
+	go func() {
+		if err := cb.Run(ctx); err != nil {
+			logger.Error("callbacks router exited", "err", err)
+		}
+	}()
+
+	rp := realert.NewPoller(d, tgClient, realert.Config{
+		ChatID:       cfg.Telegram.ChatID,
+		RealertEvery: time.Duration(cfg.State.RealertEverySec) * time.Second,
+		TickEvery:    time.Duration(cfg.State.RealertTickSec) * time.Second,
+	})
+	go func() {
+		if err := rp.Run(ctx); err != nil {
+			logger.Error("realert poller exited", "err", err)
+		}
+	}()
+
 	go func() {
 		logger.Info("backend listening", "addr", cfg.Listen, "version", Version)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -84,6 +108,7 @@ func main() {
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
 	watcher.WaitForExit()
+	rp.WaitForExit()
 	logger.Info("backend stopped")
 }
 
