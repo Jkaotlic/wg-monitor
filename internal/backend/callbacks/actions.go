@@ -141,7 +141,10 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	}
 
 	// Look up nickname and thread.
-	user, _ := a.d.Users().GetByID(args.UserID)
+	user, err := a.d.Users().GetByID(args.UserID)
+	if err != nil {
+		return "", fmt.Errorf("history: lookup user %d: %w", args.UserID, err)
+	}
 	var nickname string
 	var threadID *int64
 	if user != nil {
