@@ -88,3 +88,28 @@ func TestFSM_HardFail_OkResetCountIfBroken(t *testing.T) {
 		t.Fatalf("should reset oks, got %d", tr.Next.ConsecutiveOKs)
 	}
 }
+
+func TestApplyHardToOKZeroesAcked(t *testing.T) {
+	prev := db.IncidentState{
+		CurrentStatus: "hard", ConsecutiveOKs: 1, Acked: true,
+	}
+	now := time.Now()
+	tr := Apply(prev, "ok", now, Thresholds{Fail: 3, Recovery: 2})
+	if tr.Kind != Recovery {
+		t.Fatalf("expected Recovery, got %v", tr.Kind)
+	}
+	if tr.Next.Acked {
+		t.Errorf("recovery should zero Acked, got Acked=true")
+	}
+}
+
+func TestApplyHardToFailKeepsAcked(t *testing.T) {
+	prev := db.IncidentState{
+		CurrentStatus: "hard", ConsecutiveFails: 3, Acked: true,
+	}
+	now := time.Now()
+	tr := Apply(prev, "fail", now, Thresholds{Fail: 3, Recovery: 2})
+	if !tr.Next.Acked {
+		t.Errorf("hard→fail (no transition) must preserve Acked=true")
+	}
+}
