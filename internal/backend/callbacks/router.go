@@ -119,6 +119,8 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
 		return
 	}
+	// Parse() validates args.Action against the action whitelist (parse.go validActions),
+	// so by this point args.Action is one of {silence, ack, mute, history}.
 	var action Action
 	switch args.Action {
 	case "silence":
@@ -129,9 +131,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.mute
 	case "history":
 		action = r.history
-	default:
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown action")
-		return
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
