@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
@@ -13,7 +14,12 @@ import (
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-const maxReportBytes = 64 * 1024
+const (
+	maxReportBytes  = 64 * 1024
+	maxResultBytes  = 16 * 1024
+	defaultCmdWait  = 30 * time.Second
+	maxCmdWait      = 60 * time.Second
+)
 
 type Dispatcher interface {
 	Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error
@@ -28,12 +34,20 @@ type Resumer interface {
 	MarkResumed(userID int64)
 }
 
+// CommandSink is the subset of cmd.Queue used by the HTTP handlers.
+// Decoupled so tests can swap in a fake.
+type CommandSink interface {
+	Dequeue(ctx context.Context, userID int64, holdTimeout time.Duration) (*wire.Command, bool)
+	RecordResult(userID int64, result wire.CommandResult) error
+}
+
 type Deps struct {
-	Logger     *slog.Logger
-	DB         *db.DB
-	Dispatcher Dispatcher
-	Resumer    Resumer
-	Thresholds state.Thresholds
+	Logger      *slog.Logger
+	DB          *db.DB
+	Dispatcher  Dispatcher
+	Resumer     Resumer
+	CommandSink CommandSink
+	Thresholds  state.Thresholds
 }
 
 func NewMux(d Deps) http.Handler {
@@ -43,6 +57,10 @@ func NewMux(d Deps) http.Handler {
 	})
 	auth := AuthMiddleware(d.DB.Users())
 	mux.Handle("/v1/report", auth(http.HandlerFunc(reportHandler(d))))
+	if d.CommandSink != nil {
+		mux.Handle("/v1/cmd", auth(http.HandlerFunc(cmdGetHandler(d))))
+		mux.Handle("/v1/cmd/result", auth(http.HandlerFunc(cmdResultHandler(d))))
+	}
 	return mux
 }
 
@@ -115,4 +133,85 @@ func checkSummary(checks []wire.Check) []string {
 		out[i] = c.Name + "=" + c.Status
 	}
 	return out
+}
+
+// cmdGetHandler implements long-poll dequeue. ?wait=N caps the hold window
+// (seconds, default 30, max 60). 200+JSON when a command is ready, 204 on
+// timeout. Auth context provides the userID — agents only see their own queue.
+func cmdGetHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		wait := defaultCmdWait
+		if v := r.URL.Query().Get("wait"); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				http.Error(w, "bad wait", http.StatusBadRequest)
+				return
+			}
+			wait = time.Duration(n) * time.Second
+			if wait > maxCmdWait {
+				wait = maxCmdWait
+			}
+		}
+		uid := UserIDFromContext(r.Context())
+		nick := NicknameFromContext(r.Context())
+		cmd, ok := d.CommandSink.Dequeue(r.Context(), uid, wait)
+		if !ok {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		body, err := json.Marshal(cmd)
+		if err != nil {
+			d.Logger.Error("cmd marshal", "err", err)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+		d.Logger.Info("cmd dispatched", "nickname", nick, "cmd_id", cmd.ID, "action", cmd.Action)
+	}
+}
+
+func cmdResultHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxResultBytes+1))
+		if err != nil {
+			http.Error(w, "read body", http.StatusBadRequest)
+			return
+		}
+		if len(body) > maxResultBytes {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		var res wire.CommandResult
+		if err := json.Unmarshal(body, &res); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		if res.ID == "" {
+			http.Error(w, "id required", http.StatusBadRequest)
+			return
+		}
+		if !wire.IsValidCommandResultStatus(res.Status) {
+			http.Error(w, "invalid status", http.StatusBadRequest)
+			return
+		}
+		uid := UserIDFromContext(r.Context())
+		nick := NicknameFromContext(r.Context())
+		if err := d.CommandSink.RecordResult(uid, res); err != nil {
+			d.Logger.Warn("cmd result record", "nickname", nick, "err", err)
+			http.Error(w, "record failed", http.StatusInternalServerError)
+			return
+		}
+		d.Logger.Info("cmd result", "nickname", nick, "cmd_id", res.ID, "status", res.Status, "duration_ms", res.DurationMs)
+		w.WriteHeader(http.StatusOK)
+	}
 }

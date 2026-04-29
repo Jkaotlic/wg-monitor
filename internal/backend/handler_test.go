@@ -164,6 +164,207 @@ func TestReportNotResumedSkipsResumer(t *testing.T) {
 	}
 }
 
+type fakeCmdSink struct {
+	mu        sync.Mutex
+	dequeueRet *wire.Command
+	dequeueWaitMs int
+	results   []wire.CommandResult
+	resultErr error
+}
+
+func (f *fakeCmdSink) Dequeue(ctx context.Context, userID int64, hold time.Duration) (*wire.Command, bool) {
+	if f.dequeueWaitMs > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(time.Duration(f.dequeueWaitMs) * time.Millisecond):
+		}
+	}
+	if f.dequeueRet == nil {
+		return nil, false
+	}
+	c := *f.dequeueRet
+	return &c, true
+}
+
+func (f *fakeCmdSink) RecordResult(userID int64, r wire.CommandResult) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.resultErr != nil {
+		return f.resultErr
+	}
+	f.results = append(f.results, r)
+	return nil
+}
+
+func TestCmdGet_ReturnsQueuedCommand(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	want := &wire.Command{ID: "abc", Action: "diag_now", IssuedAt: time.Now().UTC()}
+	sink := &fakeCmdSink{dequeueRet: want}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+		CommandSink: sink,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/cmd?wait=1", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	var got wire.Command
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.ID != "abc" || got.Action != "diag_now" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestCmdGet_204WhenIdle(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	sink := &fakeCmdSink{} // dequeueRet=nil → no command
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/cmd?wait=1", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", resp.StatusCode)
+	}
+}
+
+func TestCmdGet_RequiresAuth(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: &fakeCmdSink{},
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("GET", srv.URL+"/v1/cmd", nil)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+func TestCmdResult_PostRecords(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	sink := &fakeCmdSink{}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "abc", Status: "ok", Output: "done", DurationMs: 42})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.results) != 1 {
+		t.Fatalf("RecordResult called %d times", len(sink.results))
+	}
+	if sink.results[0].ID != "abc" || sink.results[0].Status != "ok" || sink.results[0].DurationMs != 42 {
+		t.Errorf("got %+v", sink.results[0])
+	}
+}
+
+func TestCmdResult_RejectsBadJSON(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	sink := &fakeCmdSink{}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader([]byte("{not-json")))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestCmdResult_RejectsInvalidStatus(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	sink := &fakeCmdSink{}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	body, _ := json.Marshal(wire.CommandResult{ID: "abc", Status: "weird"})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestReportRejectsTooLarge(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
