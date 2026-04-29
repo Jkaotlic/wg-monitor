@@ -67,3 +67,56 @@ func TestHardAlertKeyboardCallbackData64ByteLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestHardAlertKeyboardWithTunnelActions(t *testing.T) {
+	kb := HardAlertKeyboard(42, "tunnel_amnezia_for_awg2", WithTunnelActions())
+	if len(kb.InlineKeyboard) != 3 {
+		t.Fatalf("expected 3 rows with tunnel actions, got %d", len(kb.InlineKeyboard))
+	}
+	want := map[string]bool{
+		"restart_tunnel:42:tunnel_amnezia_for_awg2": true,
+		"diag_now:42:tunnel_amnezia_for_awg2":       true,
+		"pingcheck_now:42:tunnel_amnezia_for_awg2":  true,
+	}
+	for _, btn := range kb.InlineKeyboard[2] {
+		if !want[btn.CallbackData] {
+			t.Errorf("unexpected tunnel-action callback: %q", btn.CallbackData)
+		}
+		delete(want, btn.CallbackData)
+	}
+	for k := range want {
+		t.Errorf("missing tunnel-action button: %q", k)
+	}
+}
+
+func TestHardAlertKeyboardWithMobileActions(t *testing.T) {
+	kb := HardAlertKeyboard(42, "agent_heartbeat", WithMobileActions())
+	if len(kb.InlineKeyboard) != 3 {
+		t.Fatalf("expected 3 rows with mobile actions, got %d", len(kb.InlineKeyboard))
+	}
+	if len(kb.InlineKeyboard[2]) != 1 {
+		t.Fatalf("expected 1 mobile-action button, got %d", len(kb.InlineKeyboard[2]))
+	}
+	got := kb.InlineKeyboard[2][0].CallbackData
+	if got != "force_recheck:42:agent_heartbeat" {
+		t.Errorf("got %q want force_recheck:42:agent_heartbeat", got)
+	}
+}
+
+func TestHardAlertKeyboardCombinedTunnelAndMobile(t *testing.T) {
+	kb := HardAlertKeyboard(42, "tunnel_amnezia_for_awg2", WithTunnelActions(), WithMobileActions())
+	if len(kb.InlineKeyboard) != 4 {
+		t.Errorf("expected 4 rows (base 2 + tunnel + mobile), got %d", len(kb.InlineKeyboard))
+	}
+}
+
+func TestHardAlertKeyboardCommandActionsRespect64ByteLimit(t *testing.T) {
+	kb := HardAlertKeyboard(999999999, "tunnel_amnezia_for_awg2_long", WithTunnelActions(), WithMobileActions())
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if len(btn.CallbackData) > 64 {
+				t.Errorf("callback_data exceeds 64-byte TG limit: %d bytes (%q)", len(btn.CallbackData), btn.CallbackData)
+			}
+		}
+	}
+}
