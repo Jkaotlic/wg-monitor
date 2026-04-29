@@ -35,19 +35,36 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate acked: %w", err)
 	}
+	if err := migrateUserKind(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users.kind: %w", err)
+	}
 	return &DB{db: d}, nil
 }
 
 // migrateAcked is a one-shot ALTER TABLE for Stage 2.
 // SQLite has no `ADD COLUMN IF NOT EXISTS`, so we probe pragma_table_info first.
 func migrateAcked(d *sql.DB) error {
+	return addColumnIfMissing(d, "incident_state", "acked",
+		`ALTER TABLE incident_state ADD COLUMN acked INTEGER NOT NULL DEFAULT 0`)
+}
+
+// migrateUserKind adds users.kind ('static'|'mobile') for awg-manager pivot:
+// mobile users (4G in-vehicle) get a longer heartbeat grace window and an
+// online-resumed code path on rejoin.
+func migrateUserKind(d *sql.DB) error {
+	return addColumnIfMissing(d, "users", "kind",
+		`ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'static'`)
+}
+
+func addColumnIfMissing(d *sql.DB, table, column, alter string) error {
 	var n int
 	if err := d.QueryRow(
-		`SELECT count(*) FROM pragma_table_info('incident_state') WHERE name='acked'`).Scan(&n); err != nil {
+		`SELECT count(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&n); err != nil {
 		return err
 	}
 	if n == 0 {
-		_, err := d.Exec(`ALTER TABLE incident_state ADD COLUMN acked INTEGER NOT NULL DEFAULT 0`)
+		_, err := d.Exec(alter)
 		return err
 	}
 	return nil
