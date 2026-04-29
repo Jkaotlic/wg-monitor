@@ -146,3 +146,28 @@ func (c *Client) RestartAll(ctx context.Context) error {
 func (c *Client) PingCheckNow(ctx context.Context) error {
 	return c.post(ctx, "/api/pingcheck/check-now", nil, nil)
 }
+
+// DiagResult returns the raw JSON body of /api/diagnostics/result. The exact
+// shape is owned by awg-manager and may change between versions, so we pass
+// it through unchanged for the TG side to render.
+func (c *Client) DiagResult(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/diagnostics/result", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Accept", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("awgmgr GET diagnostics/result: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
+	if err != nil {
+		return "", fmt.Errorf("awgmgr read diagnostics/result: %w", err)
+	}
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("awgmgr diagnostics/result: HTTP %d: %s", resp.StatusCode, snippet(body))
+	}
+	return string(body), nil
+}
