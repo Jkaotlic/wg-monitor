@@ -70,9 +70,8 @@ func TestDNS_AllFail_TriggersFail(t *testing.T) {
 	if got.Status != "fail" {
 		t.Fatalf("expected fail, got %+v", got)
 	}
-	failed, _ := got.Details["failed"].([]map[string]any)
-	if len(failed) != 2 {
-		t.Fatalf("failed=%+v", failed)
+	if got.Details["failed_count"] != 2 {
+		t.Fatalf("failed_count=%v details=%+v", got.Details["failed_count"], got.Details)
 	}
 }
 

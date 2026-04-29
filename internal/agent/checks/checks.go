@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Jkaotlic/wg-monitor/internal/agent/checks/wgreader"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -17,12 +16,19 @@ type Check interface {
 	Run(ctx context.Context, d Deps) wire.Check
 }
 
+// MultiCheck emits multiple wire.Check entries from a single Run call.
+// Used for groups whose membership is dynamic (e.g. one Check per tunnel
+// returned by awg-manager) — letting Reporter flatten them into the report.
+type MultiCheck interface {
+	Group() string
+	Run(ctx context.Context, d Deps) []wire.Check
+}
+
 // Deps is the set of injectable side effects every check may use.
 // Concrete checks pick what they need; tests pass mocks.
 type Deps struct {
-	Runner     Runner          // subprocess executor (used by HTTP-bound stuff & legacy paths)
-	HTTPClient *http.Client    // pre-configured with iface-bound dialer
-	WGReader   wgreader.Reader // WG peer-state reader (used by AwgHandshake)
+	Runner     Runner       // subprocess executor for shell-based checks (e.g. NDMC)
+	HTTPClient *http.Client // pre-configured with iface-bound dialer (used by DoH probe)
 }
 
 func OK(name string, start time.Time, details map[string]any) wire.Check {
