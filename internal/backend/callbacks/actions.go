@@ -2,13 +2,23 @@ package callbacks
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
+
+// CommandEnqueuer is the subset of cmd.Queue used by CommandAction. Decoupled
+// from the concrete queue so router_test/actions_test can substitute fakes.
+type CommandEnqueuer interface {
+	Enqueue(userID int64, cmd wire.Command) error
+}
 
 // Action applies a callback to incident state and returns a status line
 // to append to the original message after the keyboard is removed.
@@ -175,4 +185,60 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	}
 	// History does NOT edit original — return empty status line so router skips edit.
 	return "", nil
+}
+
+// ----- CommandAction (covers all 5 command-channel actions) -----
+
+type CommandAction struct {
+	sink  CommandEnqueuer
+	idGen func() string
+}
+
+// NewCommandAction wires up a CommandAction. idGen is injectable so tests
+// can pin a deterministic ID; pass nil for the default (16-byte hex random).
+func NewCommandAction(sink CommandEnqueuer, idGen func() string) *CommandAction {
+	if idGen == nil {
+		idGen = defaultCmdID
+	}
+	return &CommandAction{sink: sink, idGen: idGen}
+}
+
+func defaultCmdID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	if a.sink == nil {
+		return "", errors.New("command channel disabled (no sink configured)")
+	}
+	cmd := wire.Command{
+		ID:       a.idGen(),
+		Action:   args.Action,
+		Args:     map[string]any{"check_name": args.CheckName},
+		IssuedAt: time.Now().UTC(),
+	}
+	if err := a.sink.Enqueue(args.UserID, cmd); err != nil {
+		return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
+	}
+	return formatQueuedStatus(args.Action), nil
+}
+
+// formatQueuedStatus is the user-facing label appended to the alert message
+// after a command-channel button is tapped. Plain action names map to icons.
+func formatQueuedStatus(action string) string {
+	label := commandLabels[action]
+	if label == "" {
+		label = action
+	}
+	return fmt.Sprintf("📤 %s поставлено в очередь", label)
+}
+
+var commandLabels = map[string]string{
+	"restart_tunnel": "🔁 Restart",
+	"diag_now":       "📊 Diag",
+	"pingcheck_now":  "▶ Pingcheck",
+	"force_recheck":  "🔁 Force recheck",
+	"opkg_upgrade":   "⬆ Opkg upgrade",
 }

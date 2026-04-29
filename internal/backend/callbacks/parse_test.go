@@ -70,6 +70,28 @@ func TestParseHistory(t *testing.T) {
 	}
 }
 
+func TestParseCommandActions(t *testing.T) {
+	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade"} {
+		data := action + ":42:tunnel_amnezia_for_awg2"
+		a, err := Parse(data)
+		if err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		if a.Action != action {
+			t.Errorf("%s: action=%q", data, a.Action)
+		}
+		if a.UserID != 42 {
+			t.Errorf("%s: uid=%d", data, a.UserID)
+		}
+		if a.CheckName != "tunnel_amnezia_for_awg2" {
+			t.Errorf("%s: check=%q", data, a.CheckName)
+		}
+		if a.TTL != 0 {
+			t.Errorf("%s: command actions must not carry TTL, got %v", data, a.TTL)
+		}
+	}
+}
+
 func TestParseMalformed(t *testing.T) {
 	cases := []string{
 		"",

@@ -8,6 +8,7 @@ import (
 
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
+	wire1 "github.com/anex/wg-monitor/pkg/wire"
 )
 
 func newTestDB(t *testing.T) (*db.DB, int64) {
@@ -47,6 +48,109 @@ func TestActionSilenceWritesUntil(t *testing.T) {
 		t.Errorf("expected silence ~4h, got %v", elapsed)
 	}
 }
+
+type fakeEnqueuer struct {
+	calls []enqueueCall
+	err   error
+}
+
+type enqueueCall struct {
+	userID int64
+	cmdID  string
+	action string
+	check  string
+}
+
+func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
+	if f.err != nil {
+		return f.err
+	}
+	check, _ := cmd.Args["check_name"].(string)
+	f.calls = append(f.calls, enqueueCall{
+		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check,
+	})
+	return nil
+}
+
+func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := NewCommandAction(sink, func() string { return "fixed-id-1" })
+	statusLine, err := a.Apply(context.Background(), nil, Args{
+		Action: "restart_tunnel", UserID: 7, CheckName: "tunnel_amnezia_for_awg2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	c := sink.calls[0]
+	if c.userID != 7 || c.cmdID != "fixed-id-1" || c.action != "restart_tunnel" || c.check != "tunnel_amnezia_for_awg2" {
+		t.Errorf("got %+v", c)
+	}
+	if !strings.Contains(statusLine, "Restart") || !strings.Contains(statusLine, "очередь") {
+		t.Errorf("unexpected status line: %q", statusLine)
+	}
+}
+
+func TestCommandAction_AllFiveActions(t *testing.T) {
+	cases := []struct {
+		action  string
+		wantSub string
+	}{
+		{"restart_tunnel", "Restart"},
+		{"diag_now", "Diag"},
+		{"pingcheck_now", "Pingcheck"},
+		{"force_recheck", "Force recheck"},
+		{"opkg_upgrade", "Opkg"},
+	}
+	for _, c := range cases {
+		sink := &fakeEnqueuer{}
+		a := NewCommandAction(sink, func() string { return "id-" + c.action })
+		s, err := a.Apply(context.Background(), nil, Args{
+			Action: c.action, UserID: 1, CheckName: "x",
+		})
+		if err != nil {
+			t.Errorf("%s: err=%v", c.action, err)
+			continue
+		}
+		if !strings.Contains(s, c.wantSub) {
+			t.Errorf("%s: status %q missing %q", c.action, s, c.wantSub)
+		}
+		if len(sink.calls) != 1 || sink.calls[0].action != c.action {
+			t.Errorf("%s: expected 1 enqueue with action=%s, got calls=%+v", c.action, c.action, sink.calls)
+		}
+	}
+}
+
+func TestCommandAction_PropagatesEnqueueError(t *testing.T) {
+	sink := &fakeEnqueuer{err: errSentinel}
+	a := NewCommandAction(sink, func() string { return "x" })
+	_, err := a.Apply(context.Background(), nil, Args{
+		Action: "diag_now", UserID: 1, CheckName: "x",
+	})
+	if err == nil {
+		t.Fatal("expected error propagated")
+	}
+}
+
+func TestCommandAction_NilSinkReturnsError(t *testing.T) {
+	a := NewCommandAction(nil, func() string { return "x" })
+	_, err := a.Apply(context.Background(), nil, Args{
+		Action: "diag_now", UserID: 1, CheckName: "x",
+	})
+	if err == nil {
+		t.Fatal("expected error when sink is nil (command channel disabled)")
+	}
+}
+
+var errSentinel = newSentinelErr()
+
+func newSentinelErr() error { return &sentinel{} }
+
+type sentinel struct{}
+
+func (*sentinel) Error() string { return "boom" }
 
 func TestActionAckSetsAcked(t *testing.T) {
 	d, uid := newTestDB(t)

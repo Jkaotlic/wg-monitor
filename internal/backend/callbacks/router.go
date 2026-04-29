@@ -33,9 +33,18 @@ type Router struct {
 	ack     *AckAction
 	mute    *MuteAction
 	history *HistoryAction
+	command *CommandAction
 }
 
+// NewRouter builds a Router without a command-channel sink. Command-action
+// callbacks (restart_tunnel/diag_now/...) will toast an error.
 func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
+	return NewRouterWithSink(d, tgClient, nil, cfg)
+}
+
+// NewRouterWithSink builds a Router whose command-action callbacks enqueue
+// wire.Command into the provided sink for the agent to long-poll.
+func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Config) *Router {
 	return &Router{
 		d:       d,
 		tg:      tgClient,
@@ -44,6 +53,7 @@ func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 		ack:     NewAckAction(d),
 		mute:    NewMuteAction(d, cfg.MuteCutoffHour),
 		history: NewHistoryAction(d, tgClient, cfg.ChatID),
+		command: NewCommandAction(sink, nil),
 	}
 }
 
@@ -119,8 +129,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
 		return
 	}
-	// Parse() validates args.Action against the action whitelist (parse.go validActions),
-	// so by this point args.Action is one of {silence, ack, mute, history}.
+	// Parse() validates args.Action against the action whitelist (parse.go validActions).
 	var action Action
 	switch args.Action {
 	case "silence":
@@ -131,6 +140,8 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.mute
 	case "history":
 		action = r.history
+	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade":
+		action = r.command
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
