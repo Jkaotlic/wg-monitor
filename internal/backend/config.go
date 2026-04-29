@@ -25,8 +25,11 @@ type TelegramConfig struct {
 }
 
 type HeartbeatConfig struct {
-	StaleAfterSec   int `yaml:"stale_after_sec"`
-	ScanIntervalSec int `yaml:"scan_interval_sec"`
+	StaleAfterSec       int `yaml:"stale_after_sec"`         // legacy, applied to static if mobile_sec absent
+	StaleAfterStaticSec int `yaml:"stale_after_static_sec"`  // override for static (home/office) routers
+	StaleAfterMobileSec int `yaml:"stale_after_mobile_sec"`  // override for mobile (4G in-vehicle) routers
+	ResumeGraceSec      int `yaml:"resume_grace_sec"`        // suppress OFFLINE this long after Report.Resumed=true
+	ScanIntervalSec     int `yaml:"scan_interval_sec"`
 }
 
 type StateConfig struct {
@@ -74,6 +77,15 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Heartbeat.StaleAfterSec == 0 {
 		cfg.Heartbeat.StaleAfterSec = 300
+	}
+	if cfg.Heartbeat.StaleAfterStaticSec == 0 {
+		cfg.Heartbeat.StaleAfterStaticSec = cfg.Heartbeat.StaleAfterSec
+	}
+	if cfg.Heartbeat.StaleAfterMobileSec == 0 {
+		cfg.Heartbeat.StaleAfterMobileSec = 60 * 60
+	}
+	if cfg.Heartbeat.ResumeGraceSec == 0 {
+		cfg.Heartbeat.ResumeGraceSec = 90
 	}
 	if cfg.Heartbeat.ScanIntervalSec == 0 {
 		cfg.Heartbeat.ScanIntervalSec = 30
