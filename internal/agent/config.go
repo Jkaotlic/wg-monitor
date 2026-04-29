@@ -13,9 +13,11 @@ import (
 var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 
 type Config struct {
-	Backend BackendConfig `yaml:"backend"`
-	Agent   AgentConfig   `yaml:"agent"`
-	Checks  ChecksConfig  `yaml:"checks"`
+	Backend    BackendConfig    `yaml:"backend"`
+	Agent      AgentConfig      `yaml:"agent"`
+	AwgManager AwgManagerConfig `yaml:"awg_manager"`
+	Checks     ChecksConfig     `yaml:"checks"`
+	State      StateConfig      `yaml:"state"`
 }
 
 type BackendConfig struct {
@@ -35,17 +37,50 @@ func (a AgentConfig) Interval() time.Duration {
 	return time.Duration(a.IntervalSec) * time.Second
 }
 
+// AwgManagerConfig points the agent at the local awg-manager daemon.
+// Default base URL is http://127.0.0.1:2222 — that's where hoaxisr/awg-manager
+// listens by default on Keenetic. Users with a non-default port should
+// override base_url; otherwise the field can be omitted entirely.
+type AwgManagerConfig struct {
+	BaseURL string `yaml:"base_url"`
+}
+
+func (a AwgManagerConfig) URL() string {
+	if a.BaseURL != "" {
+		return a.BaseURL
+	}
+	return "http://127.0.0.1:2222"
+}
+
+// StateConfig: where the reporter persists last_report_at across restarts.
+// Empty path → in-memory only (Resumed flag won't survive process restart).
+type StateConfig struct {
+	Path string `yaml:"path"`
+}
+
+func (s StateConfig) ResolvedPath() string {
+	if s.Path != "" {
+		return s.Path
+	}
+	return "/opt/var/wg-monitor/reporter-state.json"
+}
+
 type ChecksConfig struct {
 	AWG AWGCheckConfig `yaml:"awg"`
 	DNS DNSCheckConfig `yaml:"dns"`
 }
 
+// AWGCheckConfig: most former fields (interface, expected_exit_ip, marker_url,
+// routing_probe_url) are no longer used — those checks were replaced with
+// awg-manager API wrappers in the 2026-04-29 pivot. The struct is kept so
+// existing config.yaml files don't fail to parse; legacy fields are silently
+// ignored. Only HandshakeMaxAgeSec still has effect.
 type AWGCheckConfig struct {
-	Interface          string `yaml:"interface"`
-	HandshakeMaxAgeSec int    `yaml:"handshake_max_age_sec"`
-	ExpectedExitIP     string `yaml:"expected_exit_ip"`
-	MarkerURL          string `yaml:"marker_url"`
-	RoutingProbeURL    string `yaml:"routing_probe_url"` // default https://api.ipify.org
+	Interface          string `yaml:"interface,omitempty"`           // deprecated (legacy parse only)
+	ExpectedExitIP     string `yaml:"expected_exit_ip,omitempty"`    // deprecated
+	MarkerURL          string `yaml:"marker_url,omitempty"`          // deprecated
+	RoutingProbeURL    string `yaml:"routing_probe_url,omitempty"`   // deprecated
+	HandshakeMaxAgeSec int    `yaml:"handshake_max_age_sec,omitempty"`
 }
 
 func (a AWGCheckConfig) HandshakeMaxAge() time.Duration {
@@ -55,40 +90,22 @@ func (a AWGCheckConfig) HandshakeMaxAge() time.Duration {
 	return time.Duration(a.HandshakeMaxAgeSec) * time.Second
 }
 
-func (a AWGCheckConfig) RoutingURL() string {
-	if a.RoutingProbeURL != "" {
-		return a.RoutingProbeURL
-	}
-	return "https://1.1.1.1/cdn-cgi/trace"
-}
-
-// ResolvedMarkerURL returns the user-configured MarkerURL when non-empty,
-// otherwise defaults to Google's captive-portal endpoint (generate_204).
-// Default chosen because it always returns HTTP 204 by design and is
-// not subject to DNS-block lists (unlike e.g. ad-tech endpoints).
-func (a AWGCheckConfig) ResolvedMarkerURL() string {
-	if a.MarkerURL != "" {
-		return a.MarkerURL
-	}
-	return "http://www.gstatic.com/generate_204"
-}
-
-// DNSEndpointConfig represents one user-supplied DNS endpoint to probe.
-// Auto-discovered endpoints (from `ndmc show running-config`) are merged
-// with these at agent startup.
+// DNSEndpointConfig: explicit DNS endpoint to probe in addition to whatever
+// auto-discovery finds via NDMC.
 type DNSEndpointConfig struct {
-	Type     string `yaml:"type"`                // "plain", "doh", "dot"
-	Host     string `yaml:"host,omitempty"`      // for plain/dot
-	Port     int    `yaml:"port,omitempty"`      // for plain/dot; default 53/853
-	URL      string `yaml:"url,omitempty"`       // for doh
-	NDMSName string `yaml:"ndms_name,omitempty"` // bind via iface for plain
+	Type     string `yaml:"type"`
+	Host     string `yaml:"host,omitempty"`
+	Port     int    `yaml:"port,omitempty"`
+	URL      string `yaml:"url,omitempty"`
+	NDMSName string `yaml:"ndms_name,omitempty"`
 }
 
 type DNSCheckConfig struct {
-	AutoDiscover  bool                `yaml:"auto_discover"` // discover endpoints from ndmc
-	Endpoints     []DNSEndpointConfig `yaml:"endpoints"`     // explicit endpoints; merged with discovery
-	TestDomain    string              `yaml:"test_domain"`
-	FailThreshold int                 `yaml:"fail_threshold"`
+	AutoDiscover   bool                `yaml:"auto_discover"`
+	Endpoints      []DNSEndpointConfig `yaml:"endpoints"`
+	TestDomain     string              `yaml:"test_domain"`
+	FailThreshold  int                 `yaml:"fail_threshold"`
+	RKNTestDomains []string            `yaml:"rkn_test_domains"`
 }
 
 type LoadOption func(*loadOpts)
@@ -97,7 +114,6 @@ type loadOpts struct {
 	allowHTTP bool
 }
 
-// WithAllowHTTP permits http:// backend URLs (dev/smoke only — production must use https://).
 func WithAllowHTTP() LoadOption {
 	return func(o *loadOpts) { o.allowHTTP = true }
 }
@@ -130,20 +146,17 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	if !nicknameRegexp.MatchString(cfg.Agent.Nickname) {
 		return nil, fmt.Errorf("agent.nickname %q must match %s", cfg.Agent.Nickname, nicknameRegexp)
 	}
-	if cfg.Checks.AWG.Interface == "" {
-		return nil, fmt.Errorf("checks.awg.interface is required (no default — per-user, see spec Q4)")
-	}
-	if cfg.Checks.AWG.ExpectedExitIP == "" {
-		return nil, fmt.Errorf("checks.awg.expected_exit_ip is required (no default — per-user, see spec Q4)")
-	}
 	if cfg.Checks.DNS.TestDomain == "" {
 		cfg.Checks.DNS.TestDomain = "example.com"
 	}
-	// FailThreshold default = 1 (alert if any single endpoint is unreachable).
-	// Endpoints can be empty if AutoDiscover succeeds at runtime; that's not an error.
-	// AutoDiscover has NO default — user must explicitly set auto_discover: true.
 	if cfg.Checks.DNS.FailThreshold <= 0 {
 		cfg.Checks.DNS.FailThreshold = 1
+	}
+	// If auto-discovery is on and the user didn't override RKN-test domains,
+	// supply the defaults so production agents get RKN-awareness without
+	// extra config plumbing.
+	if cfg.Checks.DNS.AutoDiscover && len(cfg.Checks.DNS.RKNTestDomains) == 0 {
+		cfg.Checks.DNS.RKNTestDomains = []string{"rutracker.org", "lostfilm.tv", "linkedin.com"}
 	}
 	return &cfg, nil
 }

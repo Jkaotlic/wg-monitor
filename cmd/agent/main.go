@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/anex/wg-monitor/internal/agent"
+	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/internal/agent/checks"
-	"github.com/anex/wg-monitor/internal/agent/checks/wgreader"
 	"github.com/anex/wg-monitor/internal/agent/keenetic"
 )
 
-// Version is overridable at link time: -ldflags "-X main.Version=0.1.0"
-var Version = "0.1.0-dev"
+// Version is overridable at link time: -ldflags "-X main.Version=0.5.0"
+var Version = "0.5.0-awgmgr-pivot-dev"
 
 func main() {
 	configPath := flag.String("config", "/opt/etc/wg-monitor/config.yaml", "path to YAML config")
@@ -37,26 +37,37 @@ func main() {
 		os.Exit(2)
 	}
 	logger.Info("starting", "nickname", cfg.Agent.Nickname, "backend", cfg.Backend.URL,
-		"interval", cfg.Agent.Interval(), "version", Version)
+		"interval", cfg.Agent.Interval(), "version", Version,
+		"awg_manager", cfg.AwgManager.URL())
 
 	client := agent.NewClient(cfg.Backend.URL, cfg.Backend.Token, Version, 10*time.Second)
-	httpc := &http.Client{
-		Transport: &http.Transport{
-			DialContext: checks.IfaceDialer(cfg.Checks.AWG.Interface).DialContext,
-		},
-		Timeout: 12 * time.Second,
-	}
-	chks := []checks.Check{
-		checks.AwgHandshake{Iface: cfg.Checks.AWG.Interface, MaxAge: cfg.Checks.AWG.HandshakeMaxAge()},
-		checks.AwgRouting{Iface: cfg.Checks.AWG.Interface, URL: cfg.Checks.AWG.RoutingURL(), Expected: cfg.Checks.AWG.ExpectedExitIP},
-		checks.AwgMarker{Iface: cfg.Checks.AWG.Interface, URL: cfg.Checks.AWG.ResolvedMarkerURL(), MaxRetries: 3, BaseBackoff: 250 * time.Millisecond},
+	awgClient := awgmgr.New(cfg.AwgManager.URL())
+
+	// Single-Check probes
+	singleChecks := []checks.Check{
+		checks.AwgManagerCheck{Client: awgClient},
+		checks.HydraRouteCheck{Client: awgClient},
 		buildDNSCheck(cfg, logger),
 	}
-	wgr := wgreader.Detect(checks.OSExec{})
-	logger.Info("wg reader strategies", "strategies", wgr.Strategies())
+	// MultiChecks emit per-tunnel results
+	multiChecks := []checks.MultiCheck{
+		checks.TunnelsCheck{
+			Client:          awgClient,
+			HandshakeMaxAge: cfg.Checks.AWG.HandshakeMaxAge(),
+		},
+	}
 
-	deps := checks.Deps{Runner: checks.OSExec{}, HTTPClient: httpc, WGReader: wgr}
-	rep := agent.NewReporter(client, Version, cfg.Agent.Interval(), chks, deps)
+	deps := checks.Deps{Runner: checks.OSExec{}}
+	rep := agent.NewReporter(agent.ReporterConfig{
+		Sender:      client,
+		Version:     Version,
+		Interval:    cfg.Agent.Interval(),
+		Checks:      singleChecks,
+		MultiChecks: multiChecks,
+		Deps:        deps,
+		AwgClient:   awgClient,
+		StatePath:   cfg.State.ResolvedPath(),
+	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -82,7 +93,6 @@ func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
 		}
 	}
 
-	// Merge with manual endpoints from config.
 	for _, ec := range dc.Endpoints {
 		ep := keenetic.DNSEndpoint{
 			Type:     ec.Type,
@@ -102,10 +112,9 @@ func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
 		endpoints = append(endpoints, ep)
 	}
 
-	// Iface map for NDMSName resolution.
 	mapCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ifaceMap, err := keenetic.FetchIfaceMap(mapCtx, keenetic.IfaceMapOptions{})
+	ifaceMap, err := keenetic.FetchIfaceMap(mapCtx, keenetic.IfaceMapOptions{AwgManagerURL: cfg.AwgManager.URL()})
 	if err != nil {
 		logger.Warn("iface map unavailable; plain DNS will use default routing", "err", err)
 		ifaceMap = nil
@@ -119,5 +128,6 @@ func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
 		HTTPClient:      &http.Client{Timeout: 5 * time.Second},
 		PerProbeTimeout: 3 * time.Second,
 		IfaceMap:        ifaceMap,
+		RKNTestDomains:  dc.RKNTestDomains,
 	}
 }

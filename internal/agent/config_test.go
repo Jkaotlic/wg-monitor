@@ -184,7 +184,10 @@ checks:
 	}
 }
 
-func TestLoadConfigRejectsMissingChecksAWG(t *testing.T) {
+// Post-pivot (2026-04-29): checks.awg fields are no longer required — the
+// agent reads tunnel state from awg-manager regardless of config. The minimal
+// config now needs only backend{url,token} + agent.nickname + (optional) DNS.
+func TestLoadConfig_MinimalNoAWGSection_OK(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "c.yaml")
 	body := `
@@ -194,8 +197,12 @@ agent: { nickname: testkeen }
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadConfig(path); err == nil {
-		t.Fatalf("expected error on missing checks.awg")
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("expected minimal config to load: %v", err)
+	}
+	if cfg.AwgManager.URL() != "http://127.0.0.1:2222" {
+		t.Errorf("awg_manager default url: %q", cfg.AwgManager.URL())
 	}
 }
 
@@ -236,17 +243,18 @@ checks:
 	}
 }
 
-func TestLoadConfig_MarkerURLDefaultsWhenOmitted(t *testing.T) {
+// TestLoadConfig_AutoDiscoverEnablesRKNDefaults verifies that turning on
+// AutoDiscover automatically populates the RKN test-domain list — production
+// agents get RKN-awareness without extra config.
+func TestLoadConfig_AutoDiscoverEnablesRKNDefaults(t *testing.T) {
 	body := `backend:
-  url: https://wgmonitor.example.org
+  url: https://wgmon.example.org
   token: 0123456789abcdef0123456789abcdef0123456789abcdef
 agent:
   nickname: testkeen
-  interval_sec: 60
 checks:
-  awg:
-    interface: nwg0
-    expected_exit_ip: 89.125.101.122
+  dns:
+    auto_discover: true
 `
 	dir := t.TempDir()
 	path := filepath.Join(dir, "c.yaml")
@@ -255,11 +263,10 @@ checks:
 	}
 	cfg, err := LoadConfig(path)
 	if err != nil {
-		t.Fatalf("expected load to succeed without marker_url: %v", err)
+		t.Fatalf("load: %v", err)
 	}
-	const want = "http://www.gstatic.com/generate_204"
-	if got := cfg.Checks.AWG.ResolvedMarkerURL(); got != want {
-		t.Fatalf("ResolvedMarkerURL() default: got %q want %q", got, want)
+	if len(cfg.Checks.DNS.RKNTestDomains) == 0 {
+		t.Fatalf("RKN-test-domains should be populated when AutoDiscover=true")
 	}
 }
 

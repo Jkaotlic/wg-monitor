@@ -8,6 +8,11 @@ type Report struct {
 	Timestamp    time.Time `json:"ts"`
 	AgentVersion string    `json:"agent_version"`
 	Checks       []Check   `json:"checks"`
+	// Resumed is true when this report follows a gap larger than the agent's
+	// resumed-threshold (e.g. mobile router back online). Backend uses it to
+	// suppress false ROUTER_OFFLINE alerts and grant a grace window for the
+	// freshly-collected check results to populate the FSM.
+	Resumed bool `json:"resumed,omitempty"`
 }
 
 type Check struct {
