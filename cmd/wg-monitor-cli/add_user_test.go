@@ -63,6 +63,44 @@ func TestAddUserRejectsBadNickname(t *testing.T) {
 	}
 }
 
+func TestAddUserMobileKind(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+	d, _ := db.Open(dbPath)
+	d.Close()
+	var out bytes.Buffer
+	if err := runAddUser(addUserOpts{
+		DBPath: dbPath, Nickname: "carvan", AWGIface: "nwg0",
+		ExpectedExitIP: "1.1.1.1", BackendURL: "https://x",
+		Kind: db.KindMobile, Out: &out,
+	}); err != nil {
+		t.Fatalf("add-user mobile: %v", err)
+	}
+	if !strings.Contains(out.String(), "kind=mobile") {
+		t.Fatalf("output missing kind=mobile: %s", out.String())
+	}
+	d, _ = db.Open(dbPath)
+	defer d.Close()
+	u, _ := d.Users().GetByNickname("carvan")
+	if !u.IsMobile() {
+		t.Fatalf("expected mobile, got kind=%q", u.Kind)
+	}
+}
+
+func TestAddUserRejectsBadKind(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "t.db")
+	d, _ := db.Open(dbPath)
+	d.Close()
+	var out bytes.Buffer
+	err := runAddUser(addUserOpts{
+		DBPath: dbPath, Nickname: "vasya", AWGIface: "awg0",
+		ExpectedExitIP: "1.1.1.1", BackendURL: "https://x",
+		Kind: "drone", Out: &out,
+	})
+	if err == nil {
+		t.Fatal("expected kind validation error")
+	}
+}
+
 func TestAddUserRejectsDuplicate(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "t.db")
 	d, _ := db.Open(dbPath)

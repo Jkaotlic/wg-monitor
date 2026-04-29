@@ -31,10 +31,11 @@ func main() {
 		iface := fs.String("awg-iface", "", "AWG interface name on the router (per-user, see spec Q4)")
 		exitIP := fs.String("expected-exit-ip", "", "expected exit IPv4 when probing through the tunnel")
 		backendURL := fs.String("backend-url", "https://wgmonitor.jkaotlic.duckdns.org", "backend HTTPS URL printed in install hint")
+		kind := fs.String("kind", db.KindStatic, "router kind: static (home/office, default) or mobile (4G in-vehicle)")
 		_ = fs.Parse(os.Args[2:])
 		if err := runAddUser(addUserOpts{
 			DBPath: *dbPath, Nickname: *nick, AWGIface: *iface,
-			ExpectedExitIP: *exitIP, BackendURL: *backendURL, Out: os.Stdout,
+			ExpectedExitIP: *exitIP, BackendURL: *backendURL, Kind: *kind, Out: os.Stdout,
 		}); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
@@ -53,7 +54,7 @@ func usage() string {
 	return `wg-monitor-cli — onboarding CLI
 
 Usage:
-  wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--db PATH] [--backend-url URL]
+  wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL]
   wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
   wg-monitor-cli version
 `
@@ -65,6 +66,7 @@ type addUserOpts struct {
 	AWGIface       string
 	ExpectedExitIP string
 	BackendURL     string
+	Kind           string
 	Out            io.Writer
 }
 
@@ -78,6 +80,12 @@ func runAddUser(o addUserOpts) error {
 	if o.ExpectedExitIP == "" {
 		return fmt.Errorf("--expected-exit-ip is required (no default — per-user)")
 	}
+	if o.Kind == "" {
+		o.Kind = db.KindStatic
+	}
+	if !db.IsValidKind(o.Kind) {
+		return fmt.Errorf("--kind=%q must be %q or %q", o.Kind, db.KindStatic, db.KindMobile)
+	}
 	d, err := db.Open(o.DBPath)
 	if err != nil {
 		return fmt.Errorf("open db %s: %w", o.DBPath, err)
@@ -88,12 +96,12 @@ func runAddUser(o addUserOpts) error {
 	if err != nil {
 		return err
 	}
-	id, err := d.Users().Insert(o.Nickname, rawToken, o.ExpectedExitIP, o.AWGIface)
+	id, err := d.Users().InsertWithKind(o.Nickname, rawToken, o.ExpectedExitIP, o.AWGIface, o.Kind)
 	if err != nil {
 		return fmt.Errorf("insert user: %w", err)
 	}
-	fmt.Fprintf(o.Out, "User created: id=%d nickname=%s awg_iface=%s expected_exit_ip=%s\n",
-		id, o.Nickname, o.AWGIface, o.ExpectedExitIP)
+	fmt.Fprintf(o.Out, "User created: id=%d nickname=%s kind=%s awg_iface=%s expected_exit_ip=%s\n",
+		id, o.Nickname, o.Kind, o.AWGIface, o.ExpectedExitIP)
 	fmt.Fprintf(o.Out, "Token (raw, save now — only shown once): %s\n\n", rawToken)
 	fmt.Fprintf(o.Out, "Place this in /opt/etc/wg-monitor/config.yaml on the router (chmod 600):\n\n")
 	fmt.Fprintf(o.Out, `backend:
