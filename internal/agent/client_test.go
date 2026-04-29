@@ -85,6 +85,101 @@ func TestClient_SendReport_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestClient_PollCommand_204ReturnsNil(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/cmd" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		if r.Method != http.MethodGet {
+			t.Errorf("method: %q", r.Method)
+		}
+		if r.URL.Query().Get("wait") != "10" {
+			t.Errorf("wait param: %q", r.URL.Query().Get("wait"))
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "tok", "0.1.0", 2*time.Second)
+	cmd, err := c.PollCommand(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd != nil {
+		t.Errorf("expected nil on 204, got %+v", cmd)
+	}
+}
+
+func TestClient_PollCommand_200ReturnsCommand(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"abc","action":"diag_now","issued_at":"2026-04-29T12:00:00Z"}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "tok", "0.1.0", 2*time.Second)
+	cmd, err := c.PollCommand(context.Background(), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd == nil || cmd.ID != "abc" || cmd.Action != "diag_now" {
+		t.Errorf("got %+v", cmd)
+	}
+}
+
+func TestClient_PollCommand_5xxErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "tok", "0.1.0", 2*time.Second)
+	_, err := c.PollCommand(context.Background(), 5)
+	if err == nil {
+		t.Fatal("expected error on 500")
+	}
+}
+
+func TestClient_PostResult_OK(t *testing.T) {
+	var gotBody []byte
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "tok-z", "0.1.0", 2*time.Second)
+	res := wire.CommandResult{ID: "abc", Status: "ok", DurationMs: 42}
+	if err := c.PostResult(context.Background(), res); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/cmd/result" {
+		t.Errorf("path: %q", gotPath)
+	}
+	if gotAuth != "Bearer tok-z" {
+		t.Errorf("auth: %q", gotAuth)
+	}
+	var back wire.CommandResult
+	if err := json.Unmarshal(gotBody, &back); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if back.ID != "abc" || back.Status != "ok" {
+		t.Errorf("back: %+v", back)
+	}
+}
+
+func TestClient_PostResult_5xxErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "tok", "0.1.0", 2*time.Second)
+	err := c.PostResult(context.Background(), wire.CommandResult{ID: "x", Status: "ok"})
+	if err == nil {
+		t.Fatal("expected error on 502")
+	}
+}
+
 func TestClient_SendReport_RecordsMetrics(t *testing.T) {
 	var hits int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
