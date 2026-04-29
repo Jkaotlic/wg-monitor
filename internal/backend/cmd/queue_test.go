@@ -1,0 +1,209 @@
+package cmd
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
+)
+
+func mkCmd(id, action string) wire.Command {
+	return wire.Command{
+		ID:       id,
+		Action:   action,
+		IssuedAt: time.Now().UTC(),
+	}
+}
+
+func TestQueue_EnqueueDequeueImmediate(t *testing.T) {
+	q := New()
+	c := mkCmd("c1", "diag_now")
+	if err := q.Enqueue(7, c); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	got, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond)
+	if !ok {
+		t.Fatalf("dequeue not ok")
+	}
+	if got.ID != "c1" {
+		t.Errorf("id mismatch: %q", got.ID)
+	}
+}
+
+func TestQueue_DequeueWaitsForEnqueue(t *testing.T) {
+	q := New()
+	var got *wire.Command
+	var ok bool
+	done := make(chan struct{})
+	go func() {
+		got, ok = q.Dequeue(context.Background(), 42, 500*time.Millisecond)
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	c := mkCmd("c-wakeup", "restart_tunnel")
+	if err := q.Enqueue(42, c); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("dequeue never woke up")
+	}
+	if !ok || got == nil || got.ID != "c-wakeup" {
+		t.Errorf("got=%+v ok=%v", got, ok)
+	}
+}
+
+func TestQueue_DequeueCtxCancel(t *testing.T) {
+	q := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var ok bool
+	go func() {
+		_, ok = q.Dequeue(ctx, 1, time.Hour)
+		close(done)
+	}()
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("dequeue did not unblock on ctx cancel")
+	}
+	if ok {
+		t.Error("expected ok=false on ctx cancel")
+	}
+}
+
+func TestQueue_DequeueHoldTimeout(t *testing.T) {
+	q := New()
+	start := time.Now()
+	got, ok := q.Dequeue(context.Background(), 1, 30*time.Millisecond)
+	if ok || got != nil {
+		t.Errorf("expected (nil,false) on timeout, got (%+v,%v)", got, ok)
+	}
+	if elapsed := time.Since(start); elapsed < 30*time.Millisecond {
+		t.Errorf("returned too fast: %v", elapsed)
+	}
+}
+
+func TestQueue_FIFO(t *testing.T) {
+	q := New()
+	for _, id := range []string{"a", "b", "c"} {
+		_ = q.Enqueue(99, mkCmd(id, "diag_now"))
+	}
+	for _, want := range []string{"a", "b", "c"} {
+		got, ok := q.Dequeue(context.Background(), 99, 10*time.Millisecond)
+		if !ok || got.ID != want {
+			t.Errorf("FIFO step want=%q got=%+v ok=%v", want, got, ok)
+		}
+	}
+}
+
+func TestQueue_MultiUserIsolation(t *testing.T) {
+	q := New()
+	_ = q.Enqueue(1, mkCmd("u1-cmd", "diag_now"))
+	_ = q.Enqueue(2, mkCmd("u2-cmd", "pingcheck_now"))
+
+	got1, ok1 := q.Dequeue(context.Background(), 1, 10*time.Millisecond)
+	got2, ok2 := q.Dequeue(context.Background(), 2, 10*time.Millisecond)
+	if !ok1 || got1.ID != "u1-cmd" {
+		t.Errorf("user1: got %+v ok=%v", got1, ok1)
+	}
+	if !ok2 || got2.ID != "u2-cmd" {
+		t.Errorf("user2: got %+v ok=%v", got2, ok2)
+	}
+}
+
+func TestQueue_EnqueueRejectsEmptyID(t *testing.T) {
+	q := New()
+	err := q.Enqueue(1, wire.Command{Action: "diag_now"})
+	if err == nil {
+		t.Fatal("expected error on empty Command.ID")
+	}
+}
+
+func TestQueue_EnqueueRejectsInvalidAction(t *testing.T) {
+	q := New()
+	err := q.Enqueue(1, wire.Command{ID: "x", Action: "rm-rf"})
+	if err == nil {
+		t.Fatal("expected error on invalid action")
+	}
+}
+
+func TestQueue_RecordAndAwaitResult(t *testing.T) {
+	q := New()
+	res := wire.CommandResult{ID: "c1", Status: "ok", DurationMs: 12}
+	if err := q.RecordResult(7, res); err != nil {
+		t.Fatalf("record: %v", err)
+	}
+	got, ok := q.AwaitResult(context.Background(), 7, "c1", 50*time.Millisecond)
+	if !ok || got == nil || got.Status != "ok" || got.DurationMs != 12 {
+		t.Errorf("got=%+v ok=%v", got, ok)
+	}
+}
+
+func TestQueue_AwaitResultWaitsForLateRecord(t *testing.T) {
+	q := New()
+	var got *wire.CommandResult
+	var ok bool
+	done := make(chan struct{})
+	go func() {
+		got, ok = q.AwaitResult(context.Background(), 7, "late", 500*time.Millisecond)
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	_ = q.RecordResult(7, wire.CommandResult{ID: "late", Status: "ok"})
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("await never woke up")
+	}
+	if !ok || got == nil || got.ID != "late" {
+		t.Errorf("got=%+v ok=%v", got, ok)
+	}
+}
+
+func TestQueue_AwaitResultTimeout(t *testing.T) {
+	q := New()
+	got, ok := q.AwaitResult(context.Background(), 7, "never", 30*time.Millisecond)
+	if ok || got != nil {
+		t.Errorf("expected (nil,false), got (%+v,%v)", got, ok)
+	}
+}
+
+func TestQueue_RecordResultRejectsInvalidStatus(t *testing.T) {
+	q := New()
+	err := q.RecordResult(1, wire.CommandResult{ID: "x", Status: "weird"})
+	if err == nil {
+		t.Fatal("expected error on invalid status")
+	}
+}
+
+// Race-test: many goroutines enqueueing concurrently — no deadlocks, no data race.
+func TestQueue_ConcurrentEnqueue(t *testing.T) {
+	q := New()
+	const N = 50
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_ = q.Enqueue(123, mkCmd(string(rune('A'+i%26))+"-"+string(rune('a'+i%26)), "diag_now"))
+		}(i)
+	}
+	wg.Wait()
+	count := 0
+	for {
+		_, ok := q.Dequeue(context.Background(), 123, 5*time.Millisecond)
+		if !ok {
+			break
+		}
+		count++
+	}
+	if count != N {
+		t.Errorf("expected %d items dequeued, got %d", N, count)
+	}
+}
