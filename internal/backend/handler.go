@@ -16,13 +16,23 @@ import (
 const maxReportBytes = 64 * 1024
 
 type Dispatcher interface {
-	Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, detail string) error
+	Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error
+}
+
+// Resumer is a back-edge from /v1/report into the heartbeat watcher.
+// When an agent reports Resumed=true (just rejoined after a gap), the
+// watcher needs to know so it can suppress a spurious OFFLINE alert
+// during the resume-grace window. Implemented by *heartbeat.Watcher;
+// tests can pass nil.
+type Resumer interface {
+	MarkResumed(userID int64)
 }
 
 type Deps struct {
 	Logger     *slog.Logger
 	DB         *db.DB
 	Dispatcher Dispatcher
+	Resumer    Resumer
 	Thresholds state.Thresholds
 }
 
@@ -60,6 +70,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 		nick := NicknameFromContext(r.Context())
 
 		_ = d.DB.Users().UpdateLastSeen(uid)
+		// Resumed=true means the agent self-detected a gap (mobile rejoin).
+		// Tell the watcher BEFORE running the FSM so a near-simultaneous
+		// scan-tick won't fire a spurious OFFLINE while we ingest the
+		// freshly-collected checks.
+		if rep.Resumed && d.Resumer != nil {
+			d.Resumer.MarkResumed(uid)
+		}
 		ts := rep.Timestamp
 		if ts.IsZero() {
 			ts = time.Now().UTC()
@@ -79,28 +96,17 @@ func reportHandler(d Deps) http.HandlerFunc {
 				continue
 			}
 			tr := state.Apply(prev, c.Status, time.Now(), d.Thresholds)
-			detail := buildDetail(c)
-			if err := d.Dispatcher.Handle(r.Context(), uid, nick, c.Name, tr, detail); err != nil {
+			if err := d.Dispatcher.Handle(r.Context(), uid, nick, c.Name, tr, c); err != nil {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
 			}
 		}
 		d.Logger.Info("report",
 			"nickname", nick, "agent_version", rep.AgentVersion,
+			"resumed", rep.Resumed,
 			"check_count", len(rep.Checks), "checks", checkSummary(rep.Checks),
 		)
 		w.WriteHeader(http.StatusOK)
 	}
-}
-
-func buildDetail(c wire.Check) string {
-	if c.Status == "ok" {
-		return ""
-	}
-	if e, ok := c.Details["error"].(string); ok {
-		return e
-	}
-	b, _ := json.Marshal(c.Details)
-	return string(b)
 }
 
 func checkSummary(checks []wire.Check) []string {

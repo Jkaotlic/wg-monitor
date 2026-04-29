@@ -23,11 +23,22 @@ type fakeDisp struct {
 	calls []state.Kind
 }
 
-func (f *fakeDisp) Handle(_ context.Context, _ int64, _, _ string, tr state.Transition, _ string) error {
+func (f *fakeDisp) Handle(_ context.Context, _ int64, _, _ string, tr state.Transition, _ wire.Check) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, tr.Kind)
 	return nil
+}
+
+type fakeResumer struct {
+	mu      sync.Mutex
+	resumed []int64
+}
+
+func (f *fakeResumer) MarkResumed(uid int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resumed = append(f.resumed, uid)
 }
 
 func TestReportPersistsEventsAndDispatches(t *testing.T) {
@@ -77,6 +88,79 @@ func TestReportPersistsEventsAndDispatches(t *testing.T) {
 	latest, _ := d.Events().LatestPerUser(uid)
 	if latest.IsZero() {
 		t.Fatal("event not persisted")
+	}
+}
+
+func TestReportResumedCallsResumer(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "1212121212121212121212121212121212121212121212121212121212121212"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+
+	disp := &fakeDisp{}
+	resumer := &fakeResumer{}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Resumer:    resumer,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC(),
+		AgentVersion: "test",
+		Resumed:      true,
+		Checks:       []wire.Check{{Name: "agent_heartbeat", Status: "ok"}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	resumer.mu.Lock()
+	defer resumer.mu.Unlock()
+	if len(resumer.resumed) != 1 || resumer.resumed[0] != uid {
+		t.Fatalf("expected MarkResumed(%d), got calls=%v", uid, resumer.resumed)
+	}
+}
+
+func TestReportNotResumedSkipsResumer(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "1313131313131313131313131313131313131313131313131313131313131313"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	resumer := &fakeResumer{}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+		Resumer:    resumer,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC(),
+		AgentVersion: "test",
+		Checks:       []wire.Check{{Name: "agent_heartbeat", Status: "ok"}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, _ := http.DefaultClient.Do(req)
+	resp.Body.Close()
+
+	resumer.mu.Lock()
+	defer resumer.mu.Unlock()
+	if len(resumer.resumed) != 0 {
+		t.Fatalf("MarkResumed must not be called when Resumed=false; calls=%v", resumer.resumed)
 	}
 }
 

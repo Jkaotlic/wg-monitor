@@ -18,6 +18,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // TestStage2EndToEnd exercises: HARD with keyboard → callback Silence → edited message → state row updated.
@@ -87,7 +88,7 @@ func TestStage2EndToEnd(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		prev, _ := d.State().Get(uid, "awg_handshake")
 		tr := state.Apply(prev, "fail", time.Now(), th)
-		if err := disp.Handle(ctx, uid, "vasya", "awg_handshake", tr, "h=200s"); err != nil {
+		if err := disp.Handle(ctx, uid, "vasya", "awg_handshake", tr, wire.Check{Name: "awg_handshake", Status: "fail", Details: map[string]any{"error": "h=200s"}}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -21,7 +21,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
-var Version = "0.3.0-stage2-dev"
+var Version = "0.4.0-awgmgr-pivot-dev"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
@@ -53,10 +53,19 @@ func main() {
 		RecoveryThreshold: cfg.State.RecoveryThreshold,
 	})
 
+	watcher := heartbeat.NewWatcher(d, disp, heartbeat.Config{
+		StaleAfter:       time.Duration(cfg.Heartbeat.StaleAfterSec) * time.Second,
+		StaleAfterStatic: time.Duration(cfg.Heartbeat.StaleAfterStaticSec) * time.Second,
+		StaleAfterMobile: time.Duration(cfg.Heartbeat.StaleAfterMobileSec) * time.Second,
+		ResumeGrace:      time.Duration(cfg.Heartbeat.ResumeGraceSec) * time.Second,
+		ScanEvery:        time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
+	})
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:     logger,
 		DB:         d,
 		Dispatcher: disp,
+		Resumer:    watcher,
 		Thresholds: state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 	})
 	srv := &http.Server{
@@ -64,11 +73,6 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-
-	watcher := heartbeat.NewWatcher(d, disp, heartbeat.Config{
-		StaleAfter: time.Duration(cfg.Heartbeat.StaleAfterSec) * time.Second,
-		ScanEvery:  time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
-	})
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go watcher.Run(ctx)
