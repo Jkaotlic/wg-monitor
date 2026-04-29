@@ -19,6 +19,19 @@ type Args struct {
 
 var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
+	// command-channel actions: enqueue a wire.Command for the agent.
+	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
+	"force_recheck": true, "opkg_upgrade": true,
+}
+
+// IsCommandAction reports whether action is dispatched via the cmd queue
+// (vs. local DB-only actions like silence/ack/mute/history).
+func IsCommandAction(a string) bool {
+	switch a {
+	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade":
+		return true
+	}
+	return false
 }
 
 func Parse(data string) (Args, error) {

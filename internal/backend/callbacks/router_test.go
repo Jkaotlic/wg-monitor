@@ -120,6 +120,51 @@ func TestRouterHistorySkipsEdit(t *testing.T) {
 	}
 }
 
+func TestRouterDispatchesCommandAction(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-restart",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
+		Data:    "restart_tunnel:" + itoa(uid) + ":tunnel_amnezia_for_awg2",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if sink.calls[0].action != "restart_tunnel" || sink.calls[0].userID != uid {
+		t.Errorf("got %+v", sink.calls[0])
+	}
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "очередь") {
+		t.Errorf("expected edit containing 'очередь', got %v", f.edits)
+	}
+}
+
+func TestRouterCommandActionWithoutSinkRejects(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	// NewRouter (no sink) — command actions must reject
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+	q := &tg.CallbackQuery{
+		ID:      "cbk-no-sink",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "diag_now:" + itoa(uid) + ":tunnel_x",
+	}
+	r.HandleCallback(context.Background(), q)
+	if len(f.answers) != 1 {
+		t.Fatal("expected answerCallback")
+	}
+	if !strings.Contains(strings.ToLower(f.answers[0]), "error") {
+		t.Errorf("expected 'error' toast when sink is nil, got %q", f.answers[0])
+	}
+}
+
 func TestRouterActionErrorReportedAsToast(t *testing.T) {
 	d, uid := newTestDB(t)
 	d.Close()
