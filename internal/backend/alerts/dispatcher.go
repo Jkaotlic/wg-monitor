@@ -2,13 +2,16 @@ package alerts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/state"
 	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 type TGSender interface {
@@ -34,7 +37,10 @@ func NewDispatcher(d *db.DB, tg TGSender, cfg Config) *Dispatcher {
 	return &Dispatcher{d: d, tg: tg, cfg: cfg}
 }
 
-func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, detail string) error {
+// Handle reacts to one FSM transition for one (user, check). The full
+// wire.Check is passed (not just an extracted detail string) so the
+// formatter can render rich per-category text from Details.
+func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error {
 	switch tr.Kind {
 	case state.Noop, state.Soft:
 		return di.d.State().Save(userID, checkName, tr.Next)
@@ -49,13 +55,23 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if err != nil {
 			return fmt.Errorf("ensure topic: %w", err)
 		}
-		text := FormatHard(HardArgs{
+		args := HardArgs{
 			Nickname:    nickname,
 			CheckName:   checkName,
 			ConsecFails: tr.Next.ConsecutiveFails,
 			HardSince:   *tr.Next.HardSince,
-			Detail:      detail,
-		})
+			Check:       check,
+		}
+		if u, err := di.d.Users().GetByID(userID); err == nil {
+			args.IsMobile = u.IsMobile()
+		}
+		// Tunnel checks get neighbour context: list other tunnel_* siblings
+		// so the operator can see at a glance whether this is one tunnel
+		// flapping or the whole router being unreachable.
+		if strings.HasPrefix(checkName, "tunnel_") {
+			args.Neighbors = di.collectNeighbors(userID, checkName)
+		}
+		text := FormatHard(args)
 		kb := tg.HardAlertKeyboard(userID, checkName)
 		mid, err := di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &threadID, text, "", nil, &kb)
 		if err != nil {
@@ -95,6 +111,39 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 	return nil
 }
 
+// collectNeighbors returns short summaries of the user's other tunnel checks.
+// On any DB error we silently return nil — neighbour context is decoration,
+// not the load-bearing payload, and we'd rather send a slightly thinner
+// alert than no alert at all.
+func (di *Dispatcher) collectNeighbors(userID int64, excludeCheck string) []NeighborSummary {
+	rows, err := di.d.Events().LatestEventsByPrefix(userID, "tunnel_")
+	if err != nil {
+		return nil
+	}
+	var out []NeighborSummary
+	for _, r := range rows {
+		if r.CheckName == excludeCheck {
+			continue
+		}
+		ns := NeighborSummary{CheckName: r.CheckName, Status: r.Status}
+		var details map[string]any
+		if r.DetailsJSON != "" && r.DetailsJSON != "null" {
+			if err := json.Unmarshal([]byte(r.DetailsJSON), &details); err == nil {
+				ns.TunnelName, _ = details["tunnel_name"].(string)
+				ns.Interface, _ = details["interface"].(string)
+				if pcStatus, ok := details["ping_check_status"].(string); ok && pcStatus != "" {
+					ns.Status = pcStatus
+				}
+				if v, ok := details["handshake_age_sec"].(float64); ok {
+					ns.HandshakeAge = int(v)
+				}
+			}
+		}
+		out = append(out, ns)
+	}
+	return out
+}
+
 // SendOffline sends a ROUTER OFFLINE notice (used by the heartbeat watcher).
 func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error {
 	threadID, err := di.ensureTopic(ctx, userID, nickname)
@@ -131,3 +180,4 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	}
 	return tid, nil
 }
+

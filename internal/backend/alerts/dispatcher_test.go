@@ -11,7 +11,12 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/state"
 	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
+
+func chk(name, status string, details map[string]any) wire.Check {
+	return wire.Check{Name: name, Status: status, Details: details}
+}
 
 type fakeTG struct {
 	mu              sync.Mutex
@@ -83,7 +88,7 @@ func TestDispatcherCreatesTopicLazily(t *testing.T) {
 		Kind: state.Hard,
 		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
 	}
-	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, "details"); err != nil {
+	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 	if len(tg.sentWithKeyboard) != 1 {
@@ -114,7 +119,7 @@ func TestDispatcherRecoveryRepliesToHardMessage(t *testing.T) {
 		Kind: state.Recovery,
 		Next: db.IncidentState{CurrentStatus: "ok"},
 	}
-	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, ""); err != nil {
+	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, chk("awg_handshake", "ok", nil)); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 	if len(tg.sent) != 1 {
@@ -146,7 +151,7 @@ func TestDispatcherSoftFlapNoTGButCounted(t *testing.T) {
 	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
 
 	tr := state.Transition{Kind: state.SoftFlap, Next: db.IncidentState{CurrentStatus: "ok"}}
-	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, ""); err != nil {
+	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, chk("awg_handshake", "fail", nil)); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 	if len(tg.sent) != 0 {
@@ -170,7 +175,7 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 		Kind: state.Hard,
 		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
 	}
-	if err := disp.Handle(context.Background(), uid, "bob", "awg_handshake", tr, "timeout"); err != nil {
+	if err := disp.Handle(context.Background(), uid, "bob", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "timeout"})); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 
@@ -230,7 +235,7 @@ func TestDispatcherRecoveryZeroesAcked(t *testing.T) {
 		Kind: state.Recovery,
 		Next: db.IncidentState{CurrentStatus: "ok"},
 	}
-	if err := disp.Handle(context.Background(), uid, "carol", "awg_handshake", tr, ""); err != nil {
+	if err := disp.Handle(context.Background(), uid, "carol", "awg_handshake", tr, chk("awg_handshake", "ok", nil)); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 
