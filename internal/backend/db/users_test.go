@@ -71,6 +71,62 @@ func TestUpdateLastSeenAndThreadID(t *testing.T) {
 	}
 }
 
+func TestInsertDefaultsKindToStatic(t *testing.T) {
+	d := newTestDB(t)
+	tok := "aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11aa11"
+	if _, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	u, err := d.Users().GetByToken(tok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != KindStatic {
+		t.Fatalf("kind=%q, want %q", u.Kind, KindStatic)
+	}
+	if u.IsMobile() {
+		t.Fatal("static user reported IsMobile=true")
+	}
+}
+
+func TestInsertWithKindMobile(t *testing.T) {
+	d := newTestDB(t)
+	tok := "bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22bb22"
+	if _, err := d.Users().InsertWithKind("petya", tok, "2.2.2.2", "awg1", KindMobile); err != nil {
+		t.Fatal(err)
+	}
+	u, err := d.Users().GetByNickname("petya")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != KindMobile || !u.IsMobile() {
+		t.Fatalf("kind=%q IsMobile=%v, want mobile", u.Kind, u.IsMobile())
+	}
+}
+
+func TestInsertWithKindRejectsUnknown(t *testing.T) {
+	d := newTestDB(t)
+	tok := "cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33"
+	if _, err := d.Users().InsertWithKind("kola", tok, "3.3.3.3", "awg2", "fancy"); err == nil {
+		t.Fatal("expected error for kind=fancy")
+	}
+}
+
+func TestMigrateUserKindIdempotent(t *testing.T) {
+	// Re-opening the same DB file must not error or duplicate-add the column.
+	path := filepath.Join(t.TempDir(), "t.db")
+	d1, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d1.Close()
+	d2, err := Open(path)
+	if err != nil {
+		t.Fatalf("re-open: %v", err)
+	}
+	d2.Close()
+}
+
 func TestGetAllUsers(t *testing.T) {
 	d := newTestDB(t)
 	for i, n := range []string{"a", "b", "c"} {
