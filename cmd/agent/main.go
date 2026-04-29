@@ -11,13 +11,15 @@ import (
 	"time"
 
 	"github.com/anex/wg-monitor/internal/agent"
+	"github.com/anex/wg-monitor/internal/agent/actions"
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/internal/agent/checks"
+	"github.com/anex/wg-monitor/internal/agent/cmdloop"
 	"github.com/anex/wg-monitor/internal/agent/keenetic"
 )
 
 // Version is overridable at link time: -ldflags "-X main.Version=0.5.0"
-var Version = "0.5.0-awgmgr-pivot-dev"
+var Version = "0.5.0-awgmgr-pivot-cmdchan-dev"
 
 func main() {
 	configPath := flag.String("config", "/opt/etc/wg-monitor/config.yaml", "path to YAML config")
@@ -71,6 +73,24 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// Command channel: long-poll /v1/cmd, dispatch to actions.Runner.
+	// force_recheck wires straight into reporter.ForceResumed so an admin
+	// taps "🔁 Force recheck" in TG and the agent emits a fresh report
+	// with Resumed=true within seconds.
+	opkg := &actions.OpkgRunner{
+		LockPath: "/opt/var/wg-monitor/opkg.lock",
+		LockTTL:  8 * time.Minute,
+		Exec:     actions.DefaultExec,
+	}
+	runner := &actions.Runner{
+		AwgClient:    awgClient,
+		ForceRecheck: rep.ForceResumed,
+		Opkg:         opkg,
+	}
+	loop := cmdloop.New(client, runner, 30)
+	go loop.Run(ctx)
+
 	rep.Run(ctx)
 	logger.Info("stopped")
 }

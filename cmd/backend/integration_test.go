@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,8 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/agent"
+	"github.com/anex/wg-monitor/internal/agent/actions"
+	"github.com/anex/wg-monitor/internal/agent/awgmgr"
+	"github.com/anex/wg-monitor/internal/backend"
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/callbacks"
+	bcmd "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/realert"
 	"github.com/anex/wg-monitor/internal/backend/state"
@@ -168,4 +174,115 @@ func TestStage2EndToEnd(t *testing.T) {
 		t.Errorf("realert must not have keyboard")
 	}
 	mu.Unlock()
+}
+
+// TestCommandChannelEndToEnd: TG callback enqueues a wire.Command, the agent
+// HTTP client polls /v1/cmd, the actions.Runner executes (with a fake
+// awg-manager), the result is POSTed back, and the backend's queue records it.
+//
+// Wire-up here mirrors cmd/backend/main.go and cmd/agent/main.go closely so
+// it catches integration regressions in either side.
+func TestCommandChannelEndToEnd(t *testing.T) {
+	tmp := t.TempDir() + "/cmdchan.db"
+	d, err := db.Open(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	const tok = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	uid, err := d.Users().Insert("victor", tok, "1.2.3.4", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queue := bcmd.New()
+
+	mux := backend.NewMux(backend.Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  noopDispatcher{},
+		CommandSink: queue,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	backendSrv := httptest.NewServer(mux)
+	defer backendSrv.Close()
+
+	var restartHits int
+	awgFake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/control/restart-all" {
+			restartHits++
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"success":true}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer awgFake.Close()
+
+	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
+		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
+	})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-restart",
+		From:    tg.User{ID: 555},
+		Message: tg.Message{MessageID: 4242, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
+		Data:    fmt.Sprintf("restart_tunnel:%d:tunnel_amnezia_for_awg2", uid),
+	}
+	router.HandleCallback(context.Background(), q)
+
+	agentClient := agent.NewClient(backendSrv.URL, tok, "test-agent", 5*time.Second)
+	cmd, err := agentClient.PollCommand(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("PollCommand: %v", err)
+	}
+	if cmd == nil {
+		t.Fatal("PollCommand returned nil — queue should have a restart_tunnel command")
+	}
+	if cmd.Action != "restart_tunnel" {
+		t.Errorf("got action %q want restart_tunnel", cmd.Action)
+	}
+
+	runner := &actions.Runner{AwgClient: awgmgr.New(awgFake.URL)}
+	res := runner.Execute(context.Background(), *cmd)
+	if res.Status != "ok" {
+		t.Errorf("expected ok status, got %q output=%q", res.Status, res.Output)
+	}
+	if restartHits != 1 {
+		t.Errorf("expected awg-manager RestartAll hit once, got %d", restartHits)
+	}
+
+	if err := agentClient.PostResult(context.Background(), res); err != nil {
+		t.Fatalf("PostResult: %v", err)
+	}
+
+	got, ok := queue.AwaitResult(context.Background(), uid, cmd.ID, 100*time.Millisecond)
+	if !ok || got == nil {
+		t.Fatal("queue.AwaitResult: command result not recorded")
+	}
+	if got.Status != "ok" || got.ID != cmd.ID {
+		t.Errorf("recorded result mismatch: %+v", got)
+	}
+}
+
+// noopDispatcher: minimal Dispatcher impl (this test doesn't exercise the FSM).
+type noopDispatcher struct{}
+
+func (noopDispatcher) Handle(_ context.Context, _ int64, _, _ string, _ state.Transition, _ wire.Check) error {
+	return nil
+}
+
+// noopTG fulfils callbacks.TGClient. HandleCallback calls AnswerCallbackQuery
+// and EditMessageText after a successful action; we ignore both for this test.
+type noopTG struct{}
+
+func (noopTG) SendMessage(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64) (int64, error) {
+	return 1, nil
+}
+func (noopTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
+func (noopTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
+	return nil
+}
+func (noopTG) GetUpdates(_ context.Context, _ int64, _ int) ([]tg.Update, error) {
+	return nil, nil
 }

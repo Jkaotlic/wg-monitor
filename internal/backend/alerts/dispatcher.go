@@ -72,7 +72,17 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			args.Neighbors = di.collectNeighbors(userID, checkName)
 		}
 		text := FormatHard(args)
-		kb := tg.HardAlertKeyboard(userID, checkName)
+		// Per-category command-channel buttons:
+		// - tunnel_* checks → restart/diag/pingcheck (awg-manager actions on a tunnel)
+		// - mobile-router heartbeat → force_recheck (poke a 4G router into a fresh report)
+		var opts []tg.KeyboardOption
+		if strings.HasPrefix(checkName, "tunnel_") {
+			opts = append(opts, tg.WithTunnelActions())
+		}
+		if args.IsMobile && checkName == "agent_heartbeat" {
+			opts = append(opts, tg.WithMobileActions())
+		}
+		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
 		mid, err := di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &threadID, text, "", nil, &kb)
 		if err != nil {
 			return err

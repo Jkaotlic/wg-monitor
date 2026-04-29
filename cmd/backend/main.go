@@ -14,6 +14,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend"
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/callbacks"
+	"github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/heartbeat"
 	"github.com/anex/wg-monitor/internal/backend/realert"
@@ -21,7 +22,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
-var Version = "0.4.0-awgmgr-pivot-dev"
+var Version = "0.5.0-awgmgr-pivot-cmdchan-dev"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
@@ -61,12 +62,14 @@ func main() {
 		ScanEvery:        time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
 	})
 
+	cmdQueue := cmd.New()
 	mux := backend.NewMux(backend.Deps{
-		Logger:     logger,
-		DB:         d,
-		Dispatcher: disp,
-		Resumer:    watcher,
-		Thresholds: state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		Logger:      logger,
+		DB:          d,
+		Dispatcher:  disp,
+		Resumer:     watcher,
+		CommandSink: cmdQueue,
+		Thresholds:  state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 	})
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -77,7 +80,7 @@ func main() {
 	defer cancel()
 	go watcher.Run(ctx)
 
-	cb := callbacks.NewRouter(d, tgClient, callbacks.Config{
+	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
 		ChatID:         cfg.Telegram.ChatID,
 		AdminUserID:    cfg.Telegram.AdminUserID,
 		MuteCutoffHour: cfg.State.MuteCutoffHour,

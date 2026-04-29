@@ -36,6 +36,7 @@ type Reporter struct {
 	statePath    string         // persists last_report_at across agent restarts
 	mu           sync.Mutex
 	lastReportAt time.Time
+	forceResumed bool // set by ForceResumed; consumed by next sendOnce
 }
 
 type ReporterConfig struct {
@@ -78,13 +79,25 @@ func (r *Reporter) Run(ctx context.Context) {
 	}
 }
 
+// ForceResumed triggers an immediate report cycle with Resumed=true regardless
+// of last-report timing. Wired into the cmdloop force_recheck action so an
+// admin can poke a mobile router into a fresh report from TG.
+func (r *Reporter) ForceResumed(ctx context.Context) {
+	r.mu.Lock()
+	r.forceResumed = true
+	r.mu.Unlock()
+	r.sendOnce(ctx)
+}
+
 func (r *Reporter) sendOnce(ctx context.Context) {
 	start := time.Now()
 
 	r.mu.Lock()
 	prev := r.lastReportAt
+	forced := r.forceResumed
+	r.forceResumed = false
 	r.mu.Unlock()
-	resumed := !prev.IsZero() && time.Since(prev) > ResumedThreshold
+	resumed := forced || (!prev.IsZero() && time.Since(prev) > ResumedThreshold)
 
 	if resumed && r.awgClient != nil {
 		// Kick awg-manager into a fresh ping cycle so our /pingcheck/status
