@@ -117,12 +117,19 @@ func (r *Router) saveOffset(offset int64) error {
 
 // HandleCallback applies allowlist, parses, dispatches to action, edits message.
 // Exposed for tests.
+//
+// Allowlist policy (changed 2026-04-30 per user request): any user IN the
+// configured group chat may tap buttons. The chat-id check still rejects
+// callbacks coming from arbitrary chats where the bot may be lurking. We
+// log every callback's from.id for audit so post-hoc you can see who pushed
+// what — important since opkg_upgrade is enabled in the menu.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
-	if q.From.ID != r.cfg.AdminUserID {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "not authorized")
-		slog.Warn("rejected callback (allowlist)", "from", q.From.ID, "data", q.Data)
+	if r.cfg.ChatID != 0 && q.Message.Chat.ID != r.cfg.ChatID {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "wrong chat")
+		slog.Warn("rejected callback (chat-id)", "from", q.From.ID, "chat", q.Message.Chat.ID, "data", q.Data)
 		return
 	}
+	slog.Info("callback", "from", q.From.ID, "data", q.Data)
 	args, err := Parse(q.Data)
 	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown action")
@@ -151,6 +158,17 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, msg)
 		slog.Error("action failed", "action", args.Action, "err", err)
+		return
+	}
+	if args.IsMenu {
+		// Control-panel callbacks: keep the keyboard intact (pinned message
+		// must survive taps) and surface confirmation via toast. statusLine
+		// is truncated because TG caps callback toasts at 200 chars.
+		toast := statusLine
+		if len(toast) > 190 {
+			toast = toast[:190]
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")

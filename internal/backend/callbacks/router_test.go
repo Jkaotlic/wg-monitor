@@ -60,7 +60,10 @@ func TestRouterDispatchesSilence(t *testing.T) {
 	}
 }
 
-func TestRouterRejectsNonAdmin(t *testing.T) {
+// Allowlist policy changed 2026-04-30: admin-only restriction lifted, chat-id
+// is now the gate. Anyone in the configured group chat can tap; callbacks from
+// other chats are rejected.
+func TestRouterRejectsWrongChat(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
 	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
@@ -68,17 +71,39 @@ func TestRouterRejectsNonAdmin(t *testing.T) {
 	q := &tg.CallbackQuery{
 		ID:      "cbk-2",
 		From:    tg.User{ID: 99999},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -999 /* not -100 */}},
 		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
 	}
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.answers) != 1 { t.Errorf("expected 1 answer (rejection), got %d", len(f.answers)) }
-	if !strings.Contains(f.answers[0], "not authorized") {
-		t.Errorf("expected 'not authorized', got %q", f.answers[0])
+	if len(f.answers) != 1 {
+		t.Errorf("expected 1 answer (rejection), got %d", len(f.answers))
+	}
+	if !strings.Contains(f.answers[0], "wrong chat") {
+		t.Errorf("expected 'wrong chat', got %q", f.answers[0])
 	}
 	if len(f.edits) != 0 {
-		t.Errorf("expected NO edits for non-admin, got %d", len(f.edits))
+		t.Errorf("expected NO edits for wrong-chat, got %d", len(f.edits))
+	}
+}
+
+// Non-admin user from the right chat is now allowed to tap (per 2026-04-30
+// product change). Verifies the policy reversal explicitly.
+func TestRouterAllowsNonAdminInRightChat(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-anon",
+		From:    tg.User{ID: 99999}, // not admin
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Errorf("expected 1 edit (action applied), got %d", len(f.edits))
 	}
 }
 
@@ -88,12 +113,15 @@ func TestRouterUnknownAction(t *testing.T) {
 	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
 
 	q := &tg.CallbackQuery{
-		ID:   "cbk-3",
-		From: tg.User{ID: 12345},
-		Data: "frobnicate:1:x",
+		ID:      "cbk-3",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{Chat: tg.Chat{ID: -100}}, // right chat, so we get past gate
+		Data:    "frobnicate:1:x",
 	}
 	r.HandleCallback(context.Background(), q)
-	if len(f.answers) != 1 { t.Fatal("expected answerCallback") }
+	if len(f.answers) != 1 {
+		t.Fatal("expected answerCallback")
+	}
 	if !strings.Contains(strings.ToLower(f.answers[0]), "unknown") {
 		t.Errorf("expected 'unknown' in answer, got %q", f.answers[0])
 	}
