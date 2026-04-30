@@ -167,3 +167,19 @@ func (u *UsersRepo) UpdateThreadID(id, threadID int64) error {
 	_, err := u.d.db.Exec(`UPDATE users SET telegram_thread_id = ? WHERE id = ?`, threadID, id)
 	return err
 }
+
+// GetByThreadID looks up a user by their assigned Telegram forum-topic id.
+// Used by the callbacks router to map an incoming Message's
+// message_thread_id to the owning user (per-router topic). Returns
+// ErrUserNotFound when no user owns this topic.
+func (u *UsersRepo) GetByThreadID(threadID int64) (*User, error) {
+	row := u.d.db.QueryRow(`SELECT `+userColsFull+` FROM users WHERE telegram_thread_id = ?`, threadID)
+	got, err := scanUserFull(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return got, nil
+}
