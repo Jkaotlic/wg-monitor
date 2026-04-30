@@ -59,3 +59,36 @@ type SmartReplyArgs struct {
 	IsMobile        bool
 	UserID          int64 // needed for callback_data on inline buttons
 }
+
+const (
+	smartReplyOfflineThreshold        = 5 * time.Minute
+	smartReplyDegradedHandshakeMinSec = 60
+)
+
+// ClassifyState applies the spec §5.2 decision tree:
+//  1. report age > 5 min                                    → Offline
+//  2. ≥1 active hard incident                                → Hard
+//  3. any tunnel handshake_age ≥ 60 s                        → Degraded
+//  4. any tunnel pingCheck has fail_count > 0 (below thresh) → Degraded
+//  5. else                                                   → OK
+//
+// Rule 3's upper bound is intentionally open — the FSM converts age ≥ 180 s
+// into a HARD only after fail_threshold consecutive observations, so during
+// the gap we still want "Degraded" rather than misleading "OK".
+func ClassifyState(a SmartReplyArgs) SmartReplyState {
+	if a.LastReportAge > smartReplyOfflineThreshold {
+		return StateOffline
+	}
+	if len(a.ActiveIncidents) > 0 {
+		return StateHard
+	}
+	for _, t := range a.Tunnels {
+		if t.HandshakeAge >= smartReplyDegradedHandshakeMinSec {
+			return StateDegraded
+		}
+		if t.FailCount > 0 && (t.FailThresh == 0 || t.FailCount < t.FailThresh) {
+			return StateDegraded
+		}
+	}
+	return StateOK
+}
