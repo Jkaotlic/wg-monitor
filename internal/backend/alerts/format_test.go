@@ -17,7 +17,7 @@ func TestFormatHardGenericFallback(t *testing.T) {
 		HardSince:   hardSince,
 		Check:       wire.Check{Name: "awg_handshake", Status: "fail", Details: map[string]any{"error": "handshake age 312s > 180s"}},
 	})
-	for _, want := range []string{"🔴", "vasya", "DOWN", "handshake age 312s", "Fails: 3"} {
+	for _, want := range []string{"🔴", "vasya", "DOWN", "handshake age 312s", "3 fails подряд"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
@@ -65,11 +65,11 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 	})
 	wants := []string{
 		"amnezia_for_awg2", "(nwg0)",
-		"Endpoint:", "89.125.101.122:37634", "eth3",
-		"Last handshake:", "4 мин 37 с",
-		"PingCheck:", "dead", "3/3",
-		"Auto-restart:", "2x",
-		"Backend:", "nativewg", "AWG2.0", "MTU 1280",
+		"🌐", "89.125.101.122:37634", "eth3",
+		"🤝 handshake:", "4 мин 37 с",
+		"pingCheck", "dead", "3/3",
+		"auto-restart 2x",
+		"⚙", "nativewg", "AWG AWG2.0", "MTU 1280",
 	}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {
@@ -89,7 +89,7 @@ func TestFormatHardDNSBody(t *testing.T) {
 			"error": "RKN block suspected",
 		}},
 	})
-	wants := []string{"DOWN", "Endpoints:", "4 total", "RKN probe:", "RKN block"}
+	wants := []string{"DOWN", "🌐 endpoints:", "4 total", "🚫 RKN probe:", "RKN block"}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {
 			t.Errorf("missing %q in:\n%s", w, got)
@@ -107,7 +107,7 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 			"error": "installed but not running",
 		}},
 	})
-	if !strings.Contains(got, "HydraRoute:") || !strings.Contains(got, "running=false") {
+	if !strings.Contains(got, "📦 HydraRoute") || !strings.Contains(got, "running=false") {
 		t.Fatalf("missing hydraroute body:\n%s", got)
 	}
 }
@@ -122,7 +122,7 @@ func TestFormatHardWithNeighbors(t *testing.T) {
 			{CheckName: "tunnel_awg12", TunnelName: "backup", Interface: "nwg1", Status: "alive", HandshakeAge: 12},
 		},
 	})
-	wants := []string{"Другие туннели", "backup", "(nwg1)", "alive", "12с"}
+	wants := []string{"Соседи:", "backup", "(nwg1)", "alive", "12с"}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {
 			t.Errorf("missing %q in neighbours block:\n%s", w, got)

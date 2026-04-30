@@ -44,6 +44,12 @@ type RecoveryArgs struct {
 
 // FormatHard renders a HARD alert. Returns plain text (no MarkdownV2 — too
 // many escaping landmines in dynamic strings like endpoint hostnames).
+//
+// Layout philosophy (revised 2026-04-30 after user feedback "all in one heap"):
+// emoji-marked metric lines instead of tabular `Label:    value` columns —
+// Telegram is proportional-font and tab-style alignment renders as visual
+// noise. One concept per line, blank line between header / body / neighbours /
+// tail — gives breathing room without HTML/Markdown.
 func FormatHard(a HardArgs) string {
 	var b strings.Builder
 	mobileBadge := ""
@@ -52,6 +58,7 @@ func FormatHard(a HardArgs) string {
 	}
 	pretty := prettyCheckLabel(a.CheckName, a.Check.Details)
 	fmt.Fprintf(&b, "🔴 %s[%s] %s — DOWN\n", mobileBadge, a.Nickname, pretty)
+	b.WriteString("\n")
 
 	switch checkCategory(a.CheckName) {
 	case "tunnel":
@@ -67,12 +74,12 @@ func FormatHard(a HardArgs) string {
 	}
 
 	if len(a.Neighbors) > 0 {
-		b.WriteString("\nДругие туннели:\n")
+		b.WriteString("\nСоседи:\n")
 		writeNeighbors(&b, a.Neighbors)
 	}
 
-	fmt.Fprintf(&b, "\nFails: %d подряд · Hard since: %s",
-		a.ConsecFails, a.HardSince.In(mscLoc()).Format("2006-01-02 15:04:05 МСК"))
+	fmt.Fprintf(&b, "\n%d fails подряд · с %s",
+		a.ConsecFails, a.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"))
 	return b.String()
 }
 
@@ -88,23 +95,61 @@ func FormatRouterOffline(nickname string, since time.Duration) string {
 	return fmt.Sprintf("🔴 [%s] ROUTER OFFLINE — нет heartbeat'ов %s", nickname, durFmt(since.Round(time.Minute)))
 }
 
+// RealertArgs feeds FormatRealert. Check carries the LAST KNOWN payload from
+// the agent (loaded by realert.Poller from events table) so the reminder can
+// render the same rich body as the original HARD alert. Empty Check is OK —
+// formatter degrades gracefully to a minimal 3-liner.
 type RealertArgs struct {
 	Nickname     string
 	CheckName    string
 	HardSince    time.Time
 	RealertCount int
+	IsMobile     bool
+	Check        wire.Check
+	Neighbors    []NeighborSummary
 }
 
+// FormatRealert renders a STILL-DOWN reminder using the same body writers as
+// FormatHard so the operator sees the same rich context they got at HARD time
+// — endpoint, handshake age, pingCheck stats, neighbours — instead of a bare
+// "still down" line that's been the source of complaints since Stage 2.
 func FormatRealert(args RealertArgs) string {
+	var b strings.Builder
+	mobileBadge := ""
+	if args.IsMobile {
+		mobileBadge = "📱 "
+	}
+	pretty := prettyCheckLabel(args.CheckName, args.Check.Details)
+	fmt.Fprintf(&b, "🔁 %s[%s] %s — STILL DOWN\n", mobileBadge, args.Nickname, pretty)
+
+	if args.Check.Name != "" {
+		b.WriteString("\n")
+		switch checkCategory(args.CheckName) {
+		case "tunnel":
+			writeTunnelBody(&b, args.Check.Details)
+		case "dns":
+			writeDNSBody(&b, args.Check.Details)
+		case "hydraroute":
+			writeHydraRouteBody(&b, args.Check.Details)
+		case "awg_manager":
+			writeAwgManagerBody(&b, args.Check.Details)
+		default:
+			writeGenericBody(&b, args.Check.Details)
+		}
+	}
+
+	if len(args.Neighbors) > 0 {
+		b.WriteString("\nСоседи:\n")
+		writeNeighbors(&b, args.Neighbors)
+	}
+
 	age := time.Since(args.HardSince).Round(time.Minute)
-	return fmt.Sprintf(
-		"🔁 [%s] %s — STILL DOWN\nHard since: %s (%s ago)\nRe-alert #%d (every 6h)",
-		args.Nickname,
-		args.CheckName,
-		args.HardSince.UTC().Format("2006-01-02 15:04 MST"),
+	fmt.Fprintf(&b, "\nс %s (%s назад) · Re-alert #%d / 6h",
+		args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
 		durFmt(age),
 		args.RealertCount,
 	)
+	return b.String()
 }
 
 // checkCategory classifies a check name so the formatter can dispatch.
@@ -141,32 +186,41 @@ func prettyCheckLabel(name string, details map[string]any) string {
 
 func writeTunnelBody(b *strings.Builder, d map[string]any) {
 	if ep := strOrEmpty(d, "endpoint"); ep != "" {
-		isp := strOrEmpty(d, "isp_interface")
-		if isp != "" {
-			fmt.Fprintf(b, "Endpoint:       %s (через %s)\n", ep, isp)
+		if isp := strOrEmpty(d, "isp_interface"); isp != "" {
+			fmt.Fprintf(b, "🌐 %s (через %s)\n", ep, isp)
 		} else {
-			fmt.Fprintf(b, "Endpoint:       %s\n", ep)
+			fmt.Fprintf(b, "🌐 %s\n", ep)
 		}
 	}
 	if age, ok := intOrZero(d, "handshake_age_sec"); ok {
-		fmt.Fprintf(b, "Last handshake: %s назад\n", humanAgeSec(age))
+		fmt.Fprintf(b, "🤝 handshake: %s назад\n", humanAgeSec(age))
 	} else {
-		b.WriteString("Last handshake: ни разу\n")
+		b.WriteString("🤝 handshake: ни разу\n")
 	}
 	if pc := strOrEmpty(d, "ping_check_status"); pc != "" {
+		icon := "💀"
+		if isLiveStatus(pc) {
+			icon = "✅"
+		}
 		fc, _ := intOrZero(d, "ping_check_fail_count")
 		ft, _ := intOrZero(d, "ping_check_fail_threshold")
-		fmt.Fprintf(b, "PingCheck:      %s — failCount %d/%d", pc, fc, ft)
+		// Build "(restart 2x · last 8ms)" as parens-grouped extras so the
+		// line doesn't sprawl when both metrics are zero.
+		var extras []string
+		if rc, _ := intOrZero(d, "ping_check_restart_count"); rc > 0 {
+			extras = append(extras, fmt.Sprintf("auto-restart %dx", rc))
+		}
 		if lat, ok := intOrZero(d, "ping_check_last_latency_ms"); ok && lat > 0 {
-			fmt.Fprintf(b, " · last %dms", lat)
+			extras = append(extras, fmt.Sprintf("last %dms", lat))
+		}
+		fmt.Fprintf(b, "%s pingCheck %s — %d/%d fails", icon, pc, fc, ft)
+		if len(extras) > 0 {
+			fmt.Fprintf(b, " (%s)", strings.Join(extras, " · "))
 		}
 		b.WriteString("\n")
-		if rc, _ := intOrZero(d, "ping_check_restart_count"); rc > 0 {
-			fmt.Fprintf(b, "Auto-restart:   %dx\n", rc)
-		}
 	}
 	if conflict, ok := boolOrFalse(d, "address_conflict"); ok && conflict {
-		b.WriteString("⚠ Address conflict on interface\n")
+		b.WriteString("⚠ address conflict on interface\n")
 	}
 	be := strOrEmpty(d, "backend")
 	awgVer := strOrEmpty(d, "awg_version")
@@ -182,10 +236,10 @@ func writeTunnelBody(b *strings.Builder, d map[string]any) {
 		if mtu > 0 {
 			parts = append(parts, fmt.Sprintf("MTU %d", mtu))
 		}
-		fmt.Fprintf(b, "Backend:        %s\n", strings.Join(parts, ", "))
+		fmt.Fprintf(b, "⚙ %s\n", strings.Join(parts, " · "))
 	}
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "Reason:         %s\n", errStr)
+		fmt.Fprintf(b, "❓ %s\n", errStr)
 	}
 }
 
@@ -195,28 +249,33 @@ func writeDNSBody(b *strings.Builder, d map[string]any) {
 	rknSus, _ := intOrZero(d, "rkn_suspect")
 	rknProbed, _ := intOrZero(d, "rkn_probed")
 	if total > 0 {
-		fmt.Fprintf(b, "Endpoints:      %d total, %d unreachable\n", total, failed)
+		fmt.Fprintf(b, "🌐 endpoints: %d total · %d unreachable\n", total, failed)
 	}
 	if rknProbed > 0 {
-		marker := "✅ clean"
-		if rknSus == rknProbed {
-			marker = "⚠ suspected RKN block"
-		} else if rknSus > 0 {
-			marker = fmt.Sprintf("⚠ %d/%d suspect", rknSus, rknProbed)
+		switch {
+		case rknSus == 0:
+			fmt.Fprintf(b, "🚫 RKN probe: ✅ clean (%d probed)\n", rknProbed)
+		case rknSus == rknProbed:
+			b.WriteString("🚫 RKN probe: ⚠ suspected block on every endpoint\n")
+		default:
+			fmt.Fprintf(b, "🚫 RKN probe: ⚠ %d/%d suspect\n", rknSus, rknProbed)
 		}
-		fmt.Fprintf(b, "RKN probe:      %s\n", marker)
 	}
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "Reason:         %s\n", errStr)
+		fmt.Fprintf(b, "❓ %s\n", errStr)
 	}
 }
 
 func writeHydraRouteBody(b *strings.Builder, d map[string]any) {
 	installed, _ := boolOrFalse(d, "installed")
 	running, _ := boolOrFalse(d, "running")
-	fmt.Fprintf(b, "HydraRoute:     installed=%v running=%v\n", installed, running)
+	state := "✅"
+	if !installed || !running {
+		state = "❌"
+	}
+	fmt.Fprintf(b, "📦 HydraRoute %s installed=%v running=%v\n", state, installed, running)
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "Reason:         %s\n", errStr)
+		fmt.Fprintf(b, "❓ %s\n", errStr)
 	}
 }
 
@@ -225,16 +284,26 @@ func writeAwgManagerBody(b *strings.Builder, d map[string]any) {
 	fw := strOrEmpty(d, "firmware")
 	be := strOrEmpty(d, "active_backend")
 	if v != "" || fw != "" || be != "" {
-		fmt.Fprintf(b, "awg-manager:    %s · %s · backend %s\n", v, fw, be)
+		var parts []string
+		if v != "" {
+			parts = append(parts, "v"+v)
+		}
+		if fw != "" {
+			parts = append(parts, "fw "+fw)
+		}
+		if be != "" {
+			parts = append(parts, "backend "+be)
+		}
+		fmt.Fprintf(b, "📦 awg-manager · %s\n", strings.Join(parts, " · "))
 	}
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "Reason:         %s\n", errStr)
+		fmt.Fprintf(b, "❓ %s\n", errStr)
 	}
 }
 
 func writeGenericBody(b *strings.Builder, d map[string]any) {
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "Reason: %s\n", errStr)
+		fmt.Fprintf(b, "❓ %s\n", errStr)
 	}
 }
 
