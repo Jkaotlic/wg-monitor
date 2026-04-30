@@ -144,6 +144,64 @@ func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, t
 	return c.call(ctx, "editMessageText", body, nil)
 }
 
+// sendMessageWithRMReq lets reply_markup be ANY of {InlineKeyboardMarkup,
+// ReplyKeyboardMarkup, ReplyKeyboardRemove}. Encoded as raw json.RawMessage
+// avoids polymorphic struct fields and keeps the wire format clean.
+type sendMessageWithRMReq struct {
+	ChatID           int64           `json:"chat_id"`
+	MessageThreadID  *int64          `json:"message_thread_id,omitempty"`
+	Text             string          `json:"text"`
+	ParseMode        string          `json:"parse_mode,omitempty"`
+	ReplyToMessageID *int64          `json:"reply_to_message_id,omitempty"`
+	ReplyMarkup      json.RawMessage `json:"reply_markup,omitempty"`
+}
+
+// SendMessageWithReplyKeyboard sends a message with any kind of reply_markup
+// payload. markup may be:
+//   - *InlineKeyboardMarkup
+//   - *ReplyKeyboardMarkup
+//   - *ReplyKeyboardRemove
+//   - nil (no reply_markup field)
+//
+// We marshal first, then forward as RawMessage so json.Marshal produces the
+// canonical TG payload regardless of which variant was passed.
+func (c *Client) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error) {
+	var rawMarkup json.RawMessage
+	if markup != nil {
+		raw, err := json.Marshal(markup)
+		if err != nil {
+			return 0, fmt.Errorf("tg sendMessage: marshal reply_markup: %w", err)
+		}
+		rawMarkup = raw
+	}
+	body, _ := json.Marshal(sendMessageWithRMReq{
+		ChatID:           chatID,
+		MessageThreadID:  threadID,
+		Text:             text,
+		ParseMode:        parseMode,
+		ReplyToMessageID: replyTo,
+		ReplyMarkup:      rawMarkup,
+	})
+	var out sendMessageResult
+	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
+		return 0, err
+	}
+	return out.MessageID, nil
+}
+
+type deleteMessageReq struct {
+	ChatID    int64 `json:"chat_id"`
+	MessageID int64 `json:"message_id"`
+}
+
+// DeleteMessage calls TG `deleteMessage`. Used to wipe the operator's
+// "📊 Что происходит?" message after the smart-reply is composed (spec §6.2 b).
+// Caller is responsible for swallowing 403 / can_delete_messages errors.
+func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	body, _ := json.Marshal(deleteMessageReq{ChatID: chatID, MessageID: messageID})
+	return c.call(ctx, "deleteMessage", body, nil)
+}
+
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {
 	return c.callWith(ctx, c.HTTP, method, body, dst)
 }

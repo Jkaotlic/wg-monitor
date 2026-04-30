@@ -155,3 +155,75 @@ func TestEditMessageTextWithNilMarkupOmitsField(t *testing.T) {
 		t.Errorf("nil markup should omit reply_markup field, got %v", captured)
 	}
 }
+
+func TestSendMessageWithReplyKeyboard_AcceptsReplyMarkup(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"ok":true,"result":{"message_id":7}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+
+	rk := &ReplyKeyboardMarkup{
+		Keyboard:       [][]ReplyKeyboardButton{{{Text: "📊 Что происходит?"}}},
+		IsPersistent:   true,
+		ResizeKeyboard: true,
+	}
+	mid, err := c.SendMessageWithReplyKeyboard(context.Background(), -100, intPtr(11), "hi", "", nil, rk)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if mid != 7 {
+		t.Fatalf("mid=%d", mid)
+	}
+	rm, ok := got["reply_markup"].(map[string]any)
+	if !ok {
+		t.Fatalf("reply_markup missing or wrong type: %T", got["reply_markup"])
+	}
+	if rm["is_persistent"] != true {
+		t.Errorf("is_persistent missing: %+v", rm)
+	}
+}
+
+func TestSendMessageWithReplyKeyboard_AcceptsInlineMarkup(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Write([]byte(`{"ok":true,"result":{"message_id":8}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	ik := &InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{{{Text: "X", CallbackData: "y"}}}}
+	_, err := c.SendMessageWithReplyKeyboard(context.Background(), -100, nil, "hi", "", nil, ik)
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	rm, ok := got["reply_markup"].(map[string]any)
+	if !ok || rm["inline_keyboard"] == nil {
+		t.Errorf("inline_keyboard not propagated: %+v", got)
+	}
+}
+
+func TestDeleteMessage(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/deleteMessage") {
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &got)
+		w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	if err := c.DeleteMessage(context.Background(), -100, 42); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if got["chat_id"].(float64) != -100 || got["message_id"].(float64) != 42 {
+		t.Errorf("payload: %+v", got)
+	}
+}
