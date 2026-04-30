@@ -44,6 +44,8 @@ func main() {
 		cmdShowDiscoveredDNS(os.Args[2:])
 	case "init-menu":
 		cmdInitMenu(os.Args[2:])
+	case "list-users":
+		cmdListUsers(os.Args[2:])
 	case "version":
 		fmt.Println(Version)
 	default:
@@ -57,6 +59,7 @@ func usage() string {
 
 Usage:
   wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL]
+  wg-monitor-cli list-users [--db PATH]
   wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
   wg-monitor-cli init-menu --nickname NAME [--config PATH] [--tunnels CSV] [--pin]
   wg-monitor-cli version
