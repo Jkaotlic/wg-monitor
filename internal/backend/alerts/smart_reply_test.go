@@ -1,6 +1,7 @@
 package alerts
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +128,120 @@ func TestClassifyState_HardWinsOverDegradedHandshake(t *testing.T) {
 	})
 	if got := ClassifyState(a); got != StateHard {
 		t.Errorf("got %v want hard", got)
+	}
+}
+
+func TestFormatSmartReply_OK(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 23 * time.Second,
+		Tunnels: []TunnelView{{Name: "amnezia", HandshakeAge: 47, PingStatus: "ok", Latency: 12}},
+	}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"✅", "vasya", "всё работает", "amnezia", "47с", "12 ms", "23с"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("OK template missing %q in:\n%s", want, text)
+		}
+	}
+	// inline keyboard must contain only 📋 Подробнее
+	if len(kb.InlineKeyboard) != 1 || len(kb.InlineKeyboard[0]) != 1 || kb.InlineKeyboard[0][0].CallbackData != "details:7" {
+		t.Errorf("OK keyboard wrong: %+v", kb)
+	}
+}
+
+func TestFormatSmartReply_Degraded(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 142, PingStatus: "ok", FailCount: 3, FailThresh: 5}},
+	}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"⚠️", "подозрения", "amnezia", "142", "3", "5"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Degraded missing %q in:\n%s", want, text)
+		}
+	}
+	// inline kb: row 0 [Перезапуск][Тест связи], row 1 [Подробнее]
+	if len(kb.InlineKeyboard) < 2 {
+		t.Fatalf("Degraded keyboard rows: %d, want ≥2", len(kb.InlineKeyboard))
+	}
+	want := map[string]bool{
+		"restart_tunnel:7:tunnel_awg11": true,
+		"pingcheck_now:7:tunnel_awg11":  true,
+		"details:7":                     true,
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for k := range want {
+		t.Errorf("Degraded missing button: %s", k)
+	}
+}
+
+func TestFormatSmartReply_Hard(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
+		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-4 * time.Minute), FailCount: 5}},
+	}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"🔴", "vasya", "проблема"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Hard missing %q in:\n%s", want, text)
+		}
+	}
+	// inline kb must contain restart + diag + silence + details
+	want := map[string]bool{
+		"restart_tunnel:7:tunnel_awg11":   true,
+		"diag_now:7:tunnel_awg11":         true,
+		"silence:7:tunnel_awg11:1h":       true,
+		"details:7":                       true,
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for k := range want {
+		t.Errorf("Hard missing button: %s", k)
+	}
+}
+
+func TestFormatSmartReply_Offline(t *testing.T) {
+	a := SmartReplyArgs{Nickname: "vasya", UserID: 7, LastReportAge: 14 * time.Minute}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"📵", "vasya", "не на связи", "14"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Offline missing %q in:\n%s", want, text)
+		}
+	}
+	// only one inline button: last_report:7
+	if len(kb.InlineKeyboard) != 1 || kb.InlineKeyboard[0][0].CallbackData != "last_report:7" {
+		t.Errorf("Offline kb: %+v", kb)
+	}
+}
+
+func TestFormatSmartReply_MultiTunnelHardSplit(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{
+			{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"},
+			{Name: "secondary", CheckName: "tunnel_awg12", HandshakeAge: 200, PingStatus: "dead"},
+		},
+		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-2 * time.Minute), FailCount: 5}},
+	}
+	_, kb := FormatSmartReply(a)
+	// must have at least one row per tunnel for restart
+	want := map[string]bool{
+		"restart_tunnel:7:tunnel_awg11": true,
+		"restart_tunnel:7:tunnel_awg12": true,
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for k := range want {
+		t.Errorf("multi-tunnel missing %s", k)
 	}
 }
