@@ -46,21 +46,56 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 	return ts, nil
 }
 
+// LatestEvent returns the most recent event for (userID, checkName).
+// Returns (zero, false, nil) when there are no events. Used by realert to
+// pull last-known Details for the rich STILL-DOWN format and by control-panel
+// init to derive the user's tunnel list from recent reports.
+func (e *EventsRepo) LatestEvent(userID int64, checkName string) (EventRow, bool, error) {
+	var r EventRow
+	var tsStr string
+	err := e.d.db.QueryRow(
+		`SELECT id, user_id, check_name, status, details_json, ts
+		   FROM events
+		  WHERE user_id = ? AND check_name = ?
+		  ORDER BY ts DESC LIMIT 1`,
+		userID, checkName,
+	).Scan(&r.ID, &r.UserID, &r.CheckName, &r.Status, &r.DetailsJSON, &tsStr)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return EventRow{}, false, nil
+		}
+		return EventRow{}, false, err
+	}
+	t, err := parseEventTS(tsStr)
+	if err != nil {
+		return EventRow{}, false, err
+	}
+	r.TS = t
+	return r, true, nil
+}
+
 // LatestEventsByPrefix returns the most recent event for each distinct
 // check_name starting with `prefix`, for a single user. Used by the
 // alerts formatter to render "neighbouring tunnels" context next to a
 // failing tunnel — we want the latest known status of each sibling
 // without doing a full per-name query in Go.
 func (e *EventsRepo) LatestEventsByPrefix(userID int64, prefix string) ([]EventRow, error) {
+	// Escape SQL LIKE wildcards (_ and %) inside the user-supplied prefix so
+	// callers passing "tunnel_" don't accidentally match "tunnels" (where _
+	// is a single-char wildcard). The literal backslash before _/% is
+	// declared via ESCAPE clause.
+	escaped := strings.ReplaceAll(prefix, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
 	rows, err := e.d.db.Query(
 		`SELECT e1.id, e1.user_id, e1.check_name, e1.status, e1.details_json, e1.ts
 		   FROM events e1
-		  WHERE e1.user_id = ? AND e1.check_name LIKE ?
+		  WHERE e1.user_id = ? AND e1.check_name LIKE ? ESCAPE '\'
 		    AND e1.ts = (
 		        SELECT MAX(e2.ts) FROM events e2
 		         WHERE e2.user_id = e1.user_id AND e2.check_name = e1.check_name
 		    )`,
-		userID, prefix+"%",
+		userID, escaped+"%",
 	)
 	if err != nil {
 		return nil, err
