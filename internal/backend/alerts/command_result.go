@@ -67,11 +67,11 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 
 // paginate splits body into chunks each prefixed with "(K/N) <header>".
 // The header is repeated on every chunk for context. K and N are 1-based.
-//
-// Body is split byte-wise at per = maxChars; the prefix ("(K/N) <header>\n")
-// is added on top, so each rendered chunk lands at roughly maxChars + ~50
-// bytes. Callers pass maxChars in the 3500-4000 range so the rendered chunk
-// stays under TG's hard 4096-byte limit.
+// Each rendered chunk is hard-capped at tgMaxMessageBytes (4096) regardless
+// of maxChars: a defensive truncation runs after rendering to guarantee TG
+// will never reject the message for length, even if the caller passed an
+// over-aggressive maxChars (or if a multi-byte UTF-8 header consumed more
+// of the budget than expected).
 func paginate(header, body string, maxChars int) []string {
 	per := maxChars
 	if per < 100 {
@@ -87,7 +87,17 @@ func paginate(header, body string, maxChars int) []string {
 	}
 	out := make([]string, len(chunks))
 	for i, c := range chunks {
-		out[i] = fmt.Sprintf("(%d/%d) %s\n%s", i+1, len(chunks), header, c)
+		rendered := fmt.Sprintf("(%d/%d) %s\n%s", i+1, len(chunks), header, c)
+		if len(rendered) > tgMaxMessageBytes {
+			// Trim the body tail to keep the rendered chunk under TG's hard
+			// 4096-byte limit. This only fires when the caller's maxChars
+			// + UTF-8 header overhead would have produced an over-sized
+			// message; pagination at chunk boundaries already happened, so
+			// the body byte loss is bounded by header_bytes + prefix_bytes.
+			excess := len(rendered) - tgMaxMessageBytes
+			rendered = rendered[:len(rendered)-excess]
+		}
+		out[i] = rendered
 	}
 	return out
 }
