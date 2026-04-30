@@ -11,11 +11,23 @@ import (
 
 // Args is the parsed shape of a callback_data string.
 type Args struct {
-	Action    string        // "silence" | "ack" | "mute" | "history"
+	Action    string        // "silence" | "ack" | "mute" | "history" | command-channel actions
 	UserID    int64
 	CheckName string
 	TTL       time.Duration // only set for silence
+	// IsMenu marks callbacks originating from the persistent control-panel
+	// (pinned message). Detected via "_menu" suffix on CheckName, which the
+	// parser strips. The router uses this to skip EditMessageText so menu
+	// buttons stay visible after taps. HARD-alert callbacks have IsMenu=false
+	// and continue to lose their keyboard on first tap.
+	IsMenu bool
 }
+
+// menuSuffix is appended to CheckName in control-panel callback_data so the
+// router can distinguish menu taps from HARD-alert taps without inventing
+// a new top-level callback_data namespace. Choosing "_menu" because real
+// FSM check names never carry this suffix (synthetic + reserved).
+const menuSuffix = "_menu"
 
 var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
@@ -47,7 +59,19 @@ func Parse(data string) (Args, error) {
 	if err != nil {
 		return Args{}, fmt.Errorf("bad user_id %q: %w", parts[1], err)
 	}
-	a := Args{Action: action, UserID: uid, CheckName: parts[2]}
+	checkName := parts[2]
+	isMenu := false
+	if strings.HasSuffix(checkName, menuSuffix) {
+		checkName = strings.TrimSuffix(checkName, menuSuffix)
+		// "_menu" alone collapses to empty after strip — treat as global menu
+		// op (opkg/force_recheck) where CheckName has no FSM meaning. We keep
+		// it as "_menu" sentinel so action handlers can branch if they need to.
+		if checkName == "" {
+			checkName = menuSuffix
+		}
+		isMenu = true
+	}
+	a := Args{Action: action, UserID: uid, CheckName: checkName, IsMenu: isMenu}
 	if action == "silence" {
 		if len(parts) != 4 {
 			return Args{}, fmt.Errorf("silence requires ttl: %q", data)
