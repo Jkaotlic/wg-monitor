@@ -19,7 +19,7 @@ import (
 )
 
 // Version is overridable at link time: -ldflags "-X main.Version=0.5.0"
-var Version = "0.5.0-awgmgr-pivot-cmdchan-dev"
+var Version = "0.5.0-awgmgr-pivot"
 
 func main() {
 	configPath := flag.String("config", "/opt/etc/wg-monitor/config.yaml", "path to YAML config")

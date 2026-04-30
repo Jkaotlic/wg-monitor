@@ -13,7 +13,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
-var Version = "0.5.0-awgmgr-pivot-cmdchan-dev"
+var Version = "0.5.0-awgmgr-pivot"
 
 var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 
