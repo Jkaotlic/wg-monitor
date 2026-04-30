@@ -49,7 +49,15 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		}
 	}
 
-	out := make([]wire.Check, 0, len(tunnels.Tunnels))
+	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
+	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
+	// On error (above) we emit "tunnels=fail"; on success here we emit
+	// "tunnels=ok" so the FSM can transition out of HARD when awg-manager
+	// recovers — without this, an old "tunnels=fail" incident has no recovery
+	// path because the success branch only emits per-tunnel checks.
+	out = append(out, OK("tunnels", start, map[string]any{
+		"tunnel_count": len(tunnels.Tunnels),
+	}))
 	for _, tu := range tunnels.Tunnels {
 		if tu.Type != "" && tu.Type != "awg" && tu.Type != "wg" {
 			continue
