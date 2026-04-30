@@ -5,6 +5,7 @@ deploy/**/*.local.*
 
 # Binaries
 /bin/
+/dist/
 *.exe
 *.upx
 wg-monitor
