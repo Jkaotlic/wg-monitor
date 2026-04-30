@@ -1,9 +1,21 @@
 package db
 
 import (
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 )
+
+func openTempDB(t *testing.T) *DB {
+	t.Helper()
+	d, err := Open(t.TempDir() + "/u.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
+}
 
 func newTestDB(t *testing.T) *DB {
 	t.Helper()
@@ -140,5 +152,61 @@ func TestGetAllUsers(t *testing.T) {
 	all, err := d.Users().GetAll()
 	if err != nil || len(all) != 3 {
 		t.Fatalf("getall: n=%d err=%v", len(all), err)
+	}
+}
+
+func TestUsersGetByThreadID_Hit(t *testing.T) {
+	d := openTempDB(t)
+	uid, err := d.Users().Insert("vasya", "tok", "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uid, 4242); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.Users().GetByThreadID(4242)
+	if err != nil {
+		t.Fatalf("GetByThreadID: %v", err)
+	}
+	if got.ID != uid || got.Nickname != "vasya" {
+		t.Errorf("got id=%d nick=%s want id=%d nick=vasya", got.ID, got.Nickname, uid)
+	}
+	if got.TelegramThreadID == nil || *got.TelegramThreadID != 4242 {
+		t.Errorf("thread id not populated: %+v", got.TelegramThreadID)
+	}
+}
+
+func TestUsersGetByThreadID_Miss(t *testing.T) {
+	d := openTempDB(t)
+	_, err := d.Users().GetByThreadID(99999)
+	if !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("expected ErrUserNotFound, got %v", err)
+	}
+}
+
+func TestUsersGetByThreadID_NoRaceOnConcurrentInsert(t *testing.T) {
+	d := openTempDB(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			nick := []string{"a", "b", "c", "d"}[i]
+			uid, err := d.Users().Insert(nick, nick+"-tok", "1.1.1.1", "nwg0")
+			if err != nil {
+				t.Errorf("insert %s: %v", nick, err)
+				return
+			}
+			if err := d.Users().UpdateThreadID(uid, int64(1000+i)); err != nil {
+				t.Errorf("thread %s: %v", nick, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < 4; i++ {
+		_, err := d.Users().GetByThreadID(int64(1000 + i))
+		if err != nil {
+			t.Errorf("lookup %d: %v", 1000+i, err)
+		}
 	}
 }
