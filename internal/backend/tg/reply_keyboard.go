@@ -23,3 +23,33 @@ type ReplyKeyboardRemove struct {
 	RemoveKeyboard bool `json:"remove_keyboard"`
 	Selective      bool `json:"selective,omitempty"`
 }
+
+// ReplyKeyboardForTopic returns the right ReplyKeyboardMarkup (or a
+// ReplyKeyboardRemove) for a given topic kind. Returned type is `any` so
+// callers can pass either *ReplyKeyboardMarkup or *ReplyKeyboardRemove
+// directly into SendMessageWithReplyKeyboard.
+//
+// kind ∈ {"per_router","summary","systemic","unknown"}.
+func ReplyKeyboardForTopic(kind string) any {
+	switch kind {
+	case "per_router":
+		return &ReplyKeyboardMarkup{
+			Keyboard: [][]ReplyKeyboardButton{
+				{{Text: "📊 Что происходит?"}},
+				{{Text: "🆘 Помощь"}},
+			},
+			IsPersistent:   true,
+			ResizeKeyboard: true,
+		}
+	case "summary", "systemic":
+		return &ReplyKeyboardMarkup{
+			Keyboard: [][]ReplyKeyboardButton{
+				{{Text: "📋 Список юзеров"}, {Text: "📊 Здоровье флота"}},
+			},
+			IsPersistent:   true,
+			ResizeKeyboard: true,
+		}
+	default:
+		return &ReplyKeyboardRemove{RemoveKeyboard: true}
+	}
+}
