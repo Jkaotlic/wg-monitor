@@ -8,6 +8,7 @@ import (
 type Update struct {
 	UpdateID      int64          `json:"update_id"`
 	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+	Message       *Message       `json:"message,omitempty"`
 }
 
 type CallbackQuery struct {
@@ -20,6 +21,7 @@ type CallbackQuery struct {
 type Message struct {
 	MessageID       int64  `json:"message_id"`
 	Chat            Chat   `json:"chat"`
+	From            User   `json:"from"`
 	MessageThreadID *int64 `json:"message_thread_id,omitempty"`
 	Text            string `json:"text"`
 }
@@ -39,14 +41,13 @@ type getUpdatesReq struct {
 }
 
 // GetUpdates performs a long-poll request to the TG Bot API.
-// timeoutSec is the server-side hold time (TG keeps connection open for this many seconds
-// if no updates are available). offset = last_processed_update_id + 1.
-// Filters to callback_query updates only.
+// Filters to callback_query AND message updates — the latter feeds
+// ReplyKeyboard-button taps to the router (spec §6.2).
 func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]Update, error) {
 	body, _ := json.Marshal(getUpdatesReq{
 		Offset:         offset,
 		Timeout:        timeoutSec,
-		AllowedUpdates: []string{"callback_query"},
+		AllowedUpdates: []string{"callback_query", "message"},
 	})
 	var out []Update
 	if err := c.callLongPoll(ctx, "getUpdates", body, &out); err != nil {

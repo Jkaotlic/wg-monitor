@@ -17,8 +17,14 @@ func TestGetUpdatesParsesCallback(t *testing.T) {
 		var req map[string]any
 		json.Unmarshal(body, &req)
 		au, _ := req["allowed_updates"].([]any)
-		if len(au) != 1 || au[0] != "callback_query" {
-			t.Errorf("expected allowed_updates=[callback_query], got %v", au)
+		hasCallback := false
+		for _, v := range au {
+			if v == "callback_query" {
+				hasCallback = true
+			}
+		}
+		if !hasCallback {
+			t.Errorf("expected allowed_updates to include callback_query, got %v", au)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"ok": true,
@@ -100,4 +106,51 @@ func TestGetUpdatesPassesOffset(t *testing.T) {
 	}
 	_ = url.Parse
 	_ = strings.Contains
+}
+
+func TestGetUpdatesIncludesMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		_ = json.Unmarshal(body, &req)
+		// Verify the new message type is in the allowed_updates list
+		au, _ := req["allowed_updates"].([]any)
+		hasMessage := false
+		for _, v := range au {
+			if v == "message" {
+				hasMessage = true
+			}
+		}
+		if !hasMessage {
+			t.Errorf("allowed_updates missing 'message': %v", au)
+		}
+		w.Write([]byte(`{"ok":true,"result":[
+			{"update_id":1,"message":{"message_id":42,"chat":{"id":-100},"from":{"id":555},"text":"📊 Что происходит?","message_thread_id":11}}
+		]}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client(), LongPollHTTP: srv.Client()}
+	ups, err := c.GetUpdates(context.Background(), 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ups) != 1 || ups[0].Message == nil {
+		t.Fatalf("expected 1 update with non-nil Message, got %+v", ups)
+	}
+	m := ups[0].Message
+	if m.Text != "📊 Что происходит?" {
+		t.Errorf("text: %q", m.Text)
+	}
+	if m.MessageID != 42 {
+		t.Errorf("message_id: %d", m.MessageID)
+	}
+	if m.MessageThreadID == nil || *m.MessageThreadID != 11 {
+		t.Errorf("thread id: %v", m.MessageThreadID)
+	}
+	if m.From.ID != 555 {
+		t.Errorf("from.id: %d", m.From.ID)
+	}
+	if m.Chat.ID != -100 {
+		t.Errorf("chat.id: %d", m.Chat.ID)
+	}
 }
