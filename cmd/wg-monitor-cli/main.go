@@ -13,7 +13,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/db"
 )
 
-var Version = "0.2.0-stage1-dev"
+var Version = "0.5.0-awgmgr-pivot-cmdchan-dev"
 
 var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 
@@ -42,6 +42,8 @@ func main() {
 		}
 	case "show-discovered-dns":
 		cmdShowDiscoveredDNS(os.Args[2:])
+	case "init-menu":
+		cmdInitMenu(os.Args[2:])
 	case "version":
 		fmt.Println(Version)
 	default:
@@ -56,6 +58,7 @@ func usage() string {
 Usage:
   wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL]
   wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
+  wg-monitor-cli init-menu --nickname NAME [--config PATH] [--tunnels CSV] [--pin]
   wg-monitor-cli version
 `
 }
