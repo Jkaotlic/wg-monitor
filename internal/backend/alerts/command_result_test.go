@@ -93,3 +93,21 @@ func itoa1(n int) string { // local int→str without importing strconv into the
 	}
 	return string(b)
 }
+
+func TestFormatCommandResult_HardCapAt4096(t *testing.T) {
+	// Edge case: caller passes maxChars=4096 (the TG hard limit). The
+	// rendered chunk includes a UTF-8 header prefix (~50 bytes) on top of
+	// the body slice. Without the protective truncation in paginate, this
+	// would produce chunks of ~4146 bytes and TG would reject them.
+	body := strings.Repeat("Y", 12000)
+	r := wire.CommandResult{Status: "ok", Output: body}
+	chunks := FormatCommandResult("opkg_upgrade", r, 4096)
+	if len(chunks) == 0 {
+		t.Fatal("expected at least one chunk")
+	}
+	for i, c := range chunks {
+		if len(c) > 4096 {
+			t.Errorf("chunk %d busts TG hard limit: %d bytes", i, len(c))
+		}
+	}
+}
