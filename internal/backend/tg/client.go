@@ -20,6 +20,11 @@ type Client struct {
 	BaseURL string // typically https://api.telegram.org/bot — Token is appended
 	Token   string
 	HTTP    *http.Client
+	// LongPollHTTP is used for getUpdates — its Timeout must exceed the
+	// server-side hold (typically 30s) plus network grace. Falls back to HTTP
+	// when nil, but production callers should always set a separate client
+	// (HTTP.Timeout=15s would otherwise rip every long-poll mid-flight).
+	LongPollHTTP *http.Client
 }
 
 type apiResp struct {
@@ -140,13 +145,25 @@ func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, t
 }
 
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {
+	return c.callWith(ctx, c.HTTP, method, body, dst)
+}
+
+func (c *Client) callLongPoll(ctx context.Context, method string, body []byte, dst any) error {
+	httpc := c.LongPollHTTP
+	if httpc == nil {
+		httpc = c.HTTP
+	}
+	return c.callWith(ctx, httpc, method, body, dst)
+}
+
+func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string, body []byte, dst any) error {
 	url := c.BaseURL + c.Token + "/" + method
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("tg %s: build request: %w", method, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		return fmt.Errorf("tg %s: %w", method, err)
 	}
