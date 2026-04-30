@@ -49,7 +49,7 @@ func (c *Client) GetUpdates(ctx context.Context, offset int64, timeoutSec int) (
 		AllowedUpdates: []string{"callback_query"},
 	})
 	var out []Update
-	if err := c.call(ctx, "getUpdates", body, &out); err != nil {
+	if err := c.callLongPoll(ctx, "getUpdates", body, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

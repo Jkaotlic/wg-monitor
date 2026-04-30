@@ -44,9 +44,10 @@ func main() {
 	defer d.Close()
 
 	tgClient := &tg.Client{
-		BaseURL: tg.DefaultBaseURL,
-		Token:   cfg.Telegram.BotToken,
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
+		BaseURL:      tg.DefaultBaseURL,
+		Token:        cfg.Telegram.BotToken,
+		HTTP:         &http.Client{Timeout: 15 * time.Second},
+		LongPollHTTP: &http.Client{Timeout: 90 * time.Second},
 	}
 	disp := alerts.NewDispatcher(d, tgClient, alerts.Config{
 		ChatID:            cfg.Telegram.ChatID,
