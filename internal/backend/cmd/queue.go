@@ -16,13 +16,27 @@ import (
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-// Queue is per-user FIFO queues plus a per-(user,id) result map.
-// Concurrent-safe. Single mutex is fine — operations are short and the fleet
-// is ~10 users, not 10k.
+// MessageRef identifies the originating TG message for a command — chat, the
+// message that carried the inline button, the optional topic, and the action
+// name (copied from cmd.Action so the result-handler can format the relay
+// without re-fetching the queued command).
+type MessageRef struct {
+	ChatID    int64
+	MessageID int64
+	ThreadID  *int64
+	Action    string
+}
+
+// Queue is per-user FIFO queues plus a per-(user,id) result map plus a
+// per-(user,id) origin map. Concurrent-safe. Single mutex is fine —
+// operations are short and the fleet is ~10 users, not 10k.
 type Queue struct {
 	mu      sync.Mutex
-	pending map[int64][]wire.Command           // userID → FIFO
+	pending map[int64][]wire.Command // userID → FIFO
 	results map[int64]map[string]wire.CommandResult
+	// origins maps (userID → cmd.ID → MessageRef). Populated by
+	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
+	origins map[int64]map[string]MessageRef
 	signal  *sync.Cond // signals on Enqueue and RecordResult
 }
 
@@ -30,9 +44,60 @@ func New() *Queue {
 	q := &Queue{
 		pending: make(map[int64][]wire.Command),
 		results: make(map[int64]map[string]wire.CommandResult),
+		origins: make(map[int64]map[string]MessageRef),
 	}
 	q.signal = sync.NewCond(&q.mu)
 	return q
+}
+
+// EnqueueWithRef is Enqueue + records MessageRef (with ref.Action populated
+// from cmd.Action) so that when the agent posts CommandResult later, the
+// backend can reply to the original message. Bare Enqueue does not touch
+// origins.
+func (q *Queue) EnqueueWithRef(userID int64, cmd wire.Command, ref MessageRef) error {
+	if err := q.Enqueue(userID, cmd); err != nil {
+		return err
+	}
+	ref.Action = cmd.Action
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	bucket, ok := q.origins[userID]
+	if !ok {
+		bucket = make(map[string]MessageRef)
+		q.origins[userID] = bucket
+	}
+	bucket[cmd.ID] = ref
+	return nil
+}
+
+// OriginRef returns the MessageRef stored at EnqueueWithRef time, or
+// (zero, false) if the command was enqueued without ref or already consumed.
+func (q *Queue) OriginRef(userID int64, cmdID string) (MessageRef, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	bucket, ok := q.origins[userID]
+	if !ok {
+		return MessageRef{}, false
+	}
+	r, ok := bucket[cmdID]
+	return r, ok
+}
+
+// ConsumeOriginRef is OriginRef + delete in one shot. Use from the result
+// handler so the same ref isn't relayed twice if RecordResult somehow fires
+// twice for the same command id.
+func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	bucket, ok := q.origins[userID]
+	if !ok {
+		return MessageRef{}, false
+	}
+	r, ok := bucket[cmdID]
+	if ok {
+		delete(bucket, cmdID)
+	}
+	return r, ok
 }
 
 // Enqueue appends cmd to userID's queue and wakes any waiter.

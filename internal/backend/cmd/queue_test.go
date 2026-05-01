@@ -182,6 +182,48 @@ func TestQueue_RecordResultRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+func TestQueueEnqueueWithRefAndLookup(t *testing.T) {
+	q := New()
+	tid := int64(11)
+	ref := MessageRef{ChatID: -100, MessageID: 99, ThreadID: &tid}
+	cmd := wire.Command{ID: "abc", Action: "diag_now", IssuedAt: time.Now()}
+	if err := q.EnqueueWithRef(7, cmd, ref); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	got, ok := q.OriginRef(7, "abc")
+	if !ok {
+		t.Fatalf("OriginRef miss")
+	}
+	if got.ChatID != -100 || got.MessageID != 99 || got.ThreadID == nil || *got.ThreadID != 11 {
+		t.Errorf("ref mismatch: %+v", got)
+	}
+	// Action must be copied from cmd.Action (consumed in T16 by relay).
+	if got.Action != "diag_now" {
+		t.Errorf("Action not copied: %q", got.Action)
+	}
+	// Bare Enqueue still works and does NOT record a ref.
+	if err := q.Enqueue(7, wire.Command{ID: "no-ref", Action: "diag_now", IssuedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.OriginRef(7, "no-ref"); ok {
+		t.Errorf("bare Enqueue should NOT record ref")
+	}
+}
+
+func TestQueueConsumeOriginRefDeletes(t *testing.T) {
+	q := New()
+	cmd := wire.Command{ID: "once", Action: "diag_now", IssuedAt: time.Now()}
+	ref := MessageRef{ChatID: -100, MessageID: 50}
+	_ = q.EnqueueWithRef(3, cmd, ref)
+	got, ok := q.ConsumeOriginRef(3, "once")
+	if !ok || got.MessageID != 50 {
+		t.Fatalf("first consume miss: %+v ok=%v", got, ok)
+	}
+	if _, ok := q.ConsumeOriginRef(3, "once"); ok {
+		t.Errorf("second consume should miss after delete")
+	}
+}
+
 // Race-test: many goroutines enqueueing concurrently — no deadlocks, no data race.
 func TestQueue_ConcurrentEnqueue(t *testing.T) {
 	q := New()
