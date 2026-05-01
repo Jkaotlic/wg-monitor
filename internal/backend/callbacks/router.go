@@ -431,9 +431,45 @@ func (r *Router) dispatchListUsers(ctx context.Context, m *tg.Message) {
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, tg.ReplyKeyboardForTopic("summary"))
 }
 
-// dispatchFleetHealth is filled in Task 20.
+// dispatchFleetHealth renders the operator-only "📊 Здоровье флота" reply:
+// counts of currently-HARD incidents, breakdown by check, and a per-row list
+// keyed by nickname. Includes silenced/acked rows so the operator sees them.
 func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message) {
-	// T20
+	rows, err := r.d.State().AllActiveHard()
+	if err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "ошибка чтения incident_state: "+err.Error(), "", nil)
+		return
+	}
+	users, _ := r.d.Users().GetAll()
+	nickByID := make(map[int64]string, len(users))
+	for _, u := range users {
+		nickByID[u.ID] = u.Nickname
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "📊 Здоровье флота\nАктивных HARD: %d\n", len(rows))
+	if len(rows) > 0 {
+		byCheck := make(map[string]int, len(rows))
+		for _, row := range rows {
+			byCheck[row.CheckName]++
+		}
+		b.WriteString("\nПо типам проблем:\n")
+		for check, n := range byCheck {
+			fmt.Fprintf(&b, "  • %s — %d\n", check, n)
+		}
+		b.WriteString("\nДетали:\n")
+		for _, row := range rows {
+			nick := nickByID[row.UserID]
+			if nick == "" {
+				nick = "user#" + strconv.FormatInt(row.UserID, 10)
+			}
+			age := "—"
+			if !row.HardSince.IsZero() {
+				age = humanAgeDur(time.Since(row.HardSince))
+			}
+			fmt.Fprintf(&b, "  • [%s] %s — %s\n", nick, row.CheckName, age)
+		}
+	}
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, tg.ReplyKeyboardForTopic("summary"))
 }
 
 // humanAgeDur is a local copy of alerts.humanAgeDur (private there). Keeping
