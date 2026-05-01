@@ -1,3 +1,7 @@
+// DEPRECATED v0.6.0: ControlPanel-based pinned menu was replaced by
+// ReplyKeyboardForTopic + smart-replies (spec 2026-04-30). Kept for one
+// release window so any in-flight callbacks dispatched against pinned
+// messages still parse correctly. Remove in v0.7.0.
 package tg
 
 import "fmt"

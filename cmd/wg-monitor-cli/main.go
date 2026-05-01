@@ -61,7 +61,6 @@ Usage:
   wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL]
   wg-monitor-cli list-users [--db PATH]
   wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
-  wg-monitor-cli init-menu --nickname NAME [--config PATH] [--tunnels CSV] [--pin]
   wg-monitor-cli version
 `
 }
