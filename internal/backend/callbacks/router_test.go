@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
@@ -406,5 +407,44 @@ func TestRouterDispatchSmartReply_NeverReportedShowsSpecialMessage(t *testing.T)
 	// Keenetic runs Entware (no systemd); the agent uses init.d S99wg-monitor.
 	if strings.Contains(body, "journalctl") {
 		t.Errorf("never-reported message must not reference journalctl (no systemd on Keenetic): %s", body)
+	}
+}
+
+func allTexts(ss []rkSend) []string {
+	out := make([]string, len(ss))
+	for i, s := range ss {
+		out[i] = s.text
+	}
+	return out
+}
+
+func TestRouterDispatchListUsers(t *testing.T) {
+	d, _ := newTestDB(t) // creates "vasya"
+	if _, err := d.Users().InsertWithKind("petya", "tok2", "2.2.2.2", "nwg0", db.KindMobile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Users().InsertWithKind("masha", "tok3", "3.3.3.3", "nwg0", db.KindStatic); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	if err := d.KV().SetTopicID("summary", 77); err != nil {
+		t.Fatal(err)
+	}
+	tid := int64(77)
+	msg := &tg.Message{MessageID: 50, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345}, MessageThreadID: &tid, Text: "📋 Список юзеров"}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.sentMsgs) == 0 && len(f.rkSends) == 0 {
+		t.Fatal("no message sent")
+	}
+	all := strings.Join(append(append([]string{}, f.sentMsgs...), allTexts(f.rkSends)...), "\n")
+	for _, want := range []string{"vasya", "petya", "masha"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("list missing %s in:\n%s", want, all)
+		}
+	}
+	if !strings.Contains(all, "Всего: 3") {
+		t.Errorf("missing total count in:\n%s", all)
 	}
 }

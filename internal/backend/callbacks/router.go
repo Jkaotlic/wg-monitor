@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/alerts"
@@ -403,12 +405,49 @@ func intOrZero(d map[string]any, k string) int {
 	return 0
 }
 
-// dispatchListUsers is filled in Task 19.
+// dispatchListUsers prints every onboarded router with kind + last_seen age,
+// scoped for the operator-only Сводка topic.
 func (r *Router) dispatchListUsers(ctx context.Context, m *tg.Message) {
-	// T19
+	users, err := r.d.Users().GetAll()
+	if err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "ошибка чтения пользователей: "+err.Error(), "", nil)
+		return
+	}
+	if len(users) == 0 {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "Пользователей нет.", "", nil, tg.ReplyKeyboardForTopic("summary"))
+		return
+	}
+	var b strings.Builder
+	b.WriteString("📋 Список юзеров\n")
+	now := time.Now()
+	for _, u := range users {
+		seen := "никогда"
+		if u.LastSeenAt != nil {
+			seen = humanAgeDur(now.Sub(*u.LastSeenAt)) + " назад"
+		}
+		fmt.Fprintf(&b, "• %s — %s — %s\n", u.Nickname, u.Kind, seen)
+	}
+	fmt.Fprintf(&b, "\nВсего: %d", len(users))
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, tg.ReplyKeyboardForTopic("summary"))
 }
 
 // dispatchFleetHealth is filled in Task 20.
 func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message) {
 	// T20
+}
+
+// humanAgeDur is a local copy of alerts.humanAgeDur (private there). Keeping
+// it local avoids exporting an alerts symbol just for this caller.
+func humanAgeDur(d time.Duration) string {
+	if d <= 0 {
+		return "0с"
+	}
+	s := int(d.Seconds())
+	if s < 60 {
+		return fmt.Sprintf("%dс", s)
+	}
+	if s < 3600 {
+		return fmt.Sprintf("%dм", s/60)
+	}
+	return fmt.Sprintf("%dч", s/3600)
 }
