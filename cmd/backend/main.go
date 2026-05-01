@@ -64,12 +64,15 @@ func main() {
 	})
 
 	cmdQueue := cmd.New()
+	notifier := callbacks.NewNotifier(tgClient)
 	mux := backend.NewMux(backend.Deps{
 		Logger:      logger,
 		DB:          d,
 		Dispatcher:  disp,
 		Resumer:     watcher,
 		CommandSink: cmdQueue,
+		TGNotifier:  notifier,
+		UI:          cfg.UI,
 		Thresholds:  state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 	})
 	srv := &http.Server{

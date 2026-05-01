@@ -265,6 +265,135 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 	}
 }
 
+// TestCommandResultRelayEndToEnd extends TestCommandChannelEndToEnd to cover
+// the v0.6.0 relay path: after the agent POSTs result, the backend must invoke
+// the configured TGNotifier with a MessageRef whose MessageID equals the
+// original alert message id. This is the test that closes the "жму diag —
+// молчит" symptom against regression.
+func TestCommandResultRelayEndToEnd(t *testing.T) {
+	tmp := t.TempDir() + "/relay.db"
+	d, err := db.Open(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	const tok = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	uid, err := d.Users().Insert("vasya", tok, "1.2.3.4", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queue := bcmd.New()
+
+	rec := &recordingNotifier{}
+	mux := backend.NewMux(backend.Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  noopDispatcher{},
+		CommandSink: queue,
+		TGNotifier:  rec,
+		UI:          backend.UIConfig{DiagMaxChars: 3500},
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	backendSrv := httptest.NewServer(mux)
+	defer backendSrv.Close()
+
+	awgFake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/diagnostics/result" {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"success":true,"data":"diagnostics: all OK"}`))
+			return
+		}
+		w.WriteHeader(404)
+	}))
+	defer awgFake.Close()
+
+	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
+		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
+	})
+
+	// 1. Operator taps Diag on the original alert message_id=4242.
+	tid := int64(11)
+	q := &tg.CallbackQuery{
+		ID:   "cbk-diag",
+		From: tg.User{ID: 555},
+		Message: tg.Message{
+			MessageID: 4242, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+			Text: "🔴 [vasya] tunnel_amnezia — DOWN",
+		},
+		Data: fmt.Sprintf("diag_now:%d:tunnel_amnezia_for_awg2", uid),
+	}
+	router.HandleCallback(context.Background(), q)
+
+	// 2. Agent polls + runs + posts.
+	agentClient := agent.NewClient(backendSrv.URL, tok, "test-agent", 5*time.Second)
+	cmd, err := agentClient.PollCommand(context.Background(), 2)
+	if err != nil || cmd == nil {
+		t.Fatalf("PollCommand: %v cmd=%+v", err, cmd)
+	}
+	runner := &actions.Runner{AwgClient: awgmgr.New(awgFake.URL)}
+	res := runner.Execute(context.Background(), *cmd)
+	if res.Status != "ok" {
+		t.Fatalf("expected ok, got %+v", res)
+	}
+	if err := agentClient.PostResult(context.Background(), res); err != nil {
+		t.Fatalf("PostResult: %v", err)
+	}
+
+	// 3. Wait for the async relay to fire (handler kicks goroutine).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if rec.calls() > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec.calls() != 1 {
+		t.Fatalf("expected 1 NotifyCommandResult call, got %d", rec.calls())
+	}
+	got := rec.last()
+	if got.ref.ChatID != -100 || got.ref.MessageID != 4242 {
+		t.Errorf("ref mis-routed: chat=%d msg=%d (want -100, 4242)", got.ref.ChatID, got.ref.MessageID)
+	}
+	if got.ref.ThreadID == nil || *got.ref.ThreadID != 11 {
+		t.Errorf("thread id lost: %+v", got.ref.ThreadID)
+	}
+	if got.action != "diag_now" {
+		t.Errorf("action: got %q want diag_now", got.action)
+	}
+}
+
+type recordingNotifier struct {
+	mu      sync.Mutex
+	records []notifyCall
+}
+
+type notifyCall struct {
+	ref      bcmd.MessageRef
+	action   string
+	result   wire.CommandResult
+	maxChars int
+}
+
+func (r *recordingNotifier) NotifyCommandResult(ctx context.Context, ref bcmd.MessageRef, action string, result wire.CommandResult, maxChars int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, notifyCall{ref: ref, action: action, result: result, maxChars: maxChars})
+	return nil
+}
+
+func (r *recordingNotifier) calls() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.records)
+}
+
+func (r *recordingNotifier) last() notifyCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.records[len(r.records)-1]
+}
+
 // noopDispatcher: minimal Dispatcher impl (this test doesn't exercise the FSM).
 type noopDispatcher struct{}
 
@@ -282,7 +411,7 @@ func (noopTG) SendMessage(_ context.Context, _ int64, _ *int64, _ string, _ stri
 func (noopTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64, _ any) (int64, error) {
 	return 1, nil
 }
-func (noopTG) DeleteMessage(_ context.Context, _, _ int64) error                  { return nil }
+func (noopTG) DeleteMessage(_ context.Context, _, _ int64) error                              { return nil }
 func (noopTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
 func (noopTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
 	return nil
