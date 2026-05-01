@@ -2,11 +2,14 @@ package callbacks
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"log/slog"
 	"math"
 	"strconv"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
@@ -265,11 +268,118 @@ func (r *Router) dispatchHelp(ctx context.Context, m *tg.Message, kind string) {
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic(kind))
 }
 
-// dispatchSmartReply is a temporary stub. T13 fills the full implementation
-// using ClassifyState + FormatSmartReply.
+// dispatchSmartReply renders the [📊 Что происходит?] response (spec §5.2,
+// §6.2 c) by collecting per-tunnel views + active hard incidents from DB,
+// classifying state, and formatting via alerts.FormatSmartReply.
 func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db.User) {
-	body := "✅ " + user.Nickname + " — всё работает."
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+	tunnels := r.collectTunnelViews(user.ID)
+	incidents := r.collectActiveIncidents(user.ID)
+	lastTS, _ := r.d.Events().LatestPerUser(user.ID)
+	var lastAge time.Duration
+	if !lastTS.IsZero() {
+		lastAge = time.Since(lastTS)
+	} else {
+		lastAge = 24 * time.Hour // never reported
+	}
+	args := alerts.SmartReplyArgs{
+		Nickname:        user.Nickname,
+		UserID:          user.ID,
+		Tunnels:         tunnels,
+		ActiveIncidents: incidents,
+		LastReportAge:   lastAge,
+		IsMobile:        user.IsMobile(),
+	}
+	text, inline := alerts.FormatSmartReply(args)
+	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
+	// — TG accepts only one reply_markup per send. Per spec §6.1, inline
+	// keyboard wins for the smart-reply itself; the ReplyKeyboard re-installs
+	// on the next bot message (alert / RECOVERY). However we still pass the
+	// inline as the reply_markup so smart-reply buttons appear.
+	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &inline)
+	if err != nil {
+		slog.Warn("smart reply send failed", "err", err, "user", user.Nickname)
+	}
+}
+
+// collectTunnelViews builds []alerts.TunnelView from the latest per-tunnel
+// event for this user.
+func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
+	rows, err := r.d.Events().LatestEventsByPrefix(userID, "tunnel_")
+	if err != nil {
+		return nil
+	}
+	var out []alerts.TunnelView
+	for _, row := range rows {
+		var det map[string]any
+		if row.DetailsJSON != "" {
+			_ = json.Unmarshal([]byte(row.DetailsJSON), &det)
+		}
+		out = append(out, alerts.TunnelView{
+			Name:         strOrEmpty(det, "tunnel_name"),
+			CheckName:    row.CheckName,
+			Interface:    strOrEmpty(det, "interface"),
+			HandshakeAge: intOrZero(det, "handshake_age_sec"),
+			PingStatus:   strOrEmpty(det, "ping_check_status"),
+			Latency:      intOrZero(det, "ping_check_last_latency_ms"),
+			FailCount:    intOrZero(det, "ping_check_fail_count"),
+			FailThresh:   intOrZero(det, "ping_check_fail_threshold"),
+		})
+	}
+	return out
+}
+
+// collectActiveIncidents returns each `incident_state` row with
+// current_status='hard' for this user. Direct SQL — no new repo method needed.
+func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
+	q, err := r.d.SQL().Query(`SELECT check_name, hard_since, consecutive_fails FROM incident_state WHERE user_id = ? AND current_status = 'hard'`, userID)
+	if err != nil {
+		return nil
+	}
+	defer q.Close()
+	var out []alerts.IncidentView
+	for q.Next() {
+		var iv alerts.IncidentView
+		var hs sql.NullTime
+		if err := q.Scan(&iv.CheckName, &hs, &iv.FailCount); err != nil {
+			continue
+		}
+		if hs.Valid {
+			iv.HardSince = hs.Time
+		}
+		out = append(out, iv)
+	}
+	return out
+}
+
+// Local helpers for map-pulling (mirrors alerts/format.go's helpers but kept
+// here so we don't widen the alerts package's exported surface).
+func strOrEmpty(d map[string]any, k string) string {
+	if d == nil {
+		return ""
+	}
+	if v, ok := d[k].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func intOrZero(d map[string]any, k string) int {
+	if d == nil {
+		return 0
+	}
+	v, ok := d[k]
+	if !ok {
+		return 0
+	}
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case int64:
+		return int(x)
+	}
+	return 0
 }
 
 // dispatchListUsers is filled in Task 19.

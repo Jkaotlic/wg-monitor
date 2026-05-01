@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
@@ -311,5 +312,30 @@ func TestRouterHandleMessage_DeleteFailureDoesNotAbort(t *testing.T) {
 	r.HandleMessage(context.Background(), msg)
 	if len(f.rkSends) != 1 {
 		t.Errorf("smart reply must still be sent after delete failure")
+	}
+}
+
+func TestRouterDispatchSmartReply_RendersOK(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = d.Users().UpdateThreadID(uid, 11)
+	// Insert a fresh tunnel event so the smart reply sees a Tunnel.
+	now := time.Now().UTC()
+	_ = d.Events().Insert(uid, "tunnel_awg11", "ok", `{"tunnel_name":"amnezia","interface":"nwg0","handshake_age_sec":12,"ping_check_status":"ok","ping_check_last_latency_ms":15}`, now)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	msg := &tg.Message{
+		MessageID: 42, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "📊 Что происходит?",
+	}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Fatalf("want 1 send, got %d", len(f.rkSends))
+	}
+	body := f.rkSends[0].text
+	for _, want := range []string{"✅", "vasya", "amnezia", "12с", "15 ms"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
 	}
 }
