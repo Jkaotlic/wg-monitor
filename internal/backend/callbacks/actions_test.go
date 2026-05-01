@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	wire1 "github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -50,8 +51,9 @@ func TestActionSilenceWritesUntil(t *testing.T) {
 }
 
 type fakeEnqueuer struct {
-	calls []enqueueCall
-	err   error
+	calls   []enqueueCall
+	refs    []enqueueRefCall
+	err     error
 }
 
 type enqueueCall struct {
@@ -61,6 +63,13 @@ type enqueueCall struct {
 	check  string
 }
 
+type enqueueRefCall struct {
+	userID    int64
+	cmdID     string
+	chatID    int64
+	messageID int64
+}
+
 func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 	if f.err != nil {
 		return f.err
@@ -68,6 +77,16 @@ func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 	check, _ := cmd.Args["check_name"].(string)
 	f.calls = append(f.calls, enqueueCall{
 		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check,
+	})
+	return nil
+}
+
+func (f *fakeEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref cmdpkg.MessageRef) error {
+	if err := f.Enqueue(userID, cmd); err != nil {
+		return err
+	}
+	f.refs = append(f.refs, enqueueRefCall{
+		userID: userID, cmdID: cmd.ID, chatID: ref.ChatID, messageID: ref.MessageID,
 	})
 	return nil
 }
