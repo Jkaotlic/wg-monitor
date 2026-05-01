@@ -22,7 +22,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
-var Version = "0.5.0-awgmgr-pivot"
+var Version = "0.6.0-ui-rework-dev"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
