@@ -46,6 +46,8 @@ func main() {
 		cmdInitMenu(os.Args[2:])
 	case "list-users":
 		cmdListUsers(os.Args[2:])
+	case "set-topic":
+		cmdSetTopic(os.Args[2:])
 	case "version":
 		fmt.Println(Version)
 	default:
@@ -61,6 +63,7 @@ Usage:
   wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL]
   wg-monitor-cli list-users [--db PATH]
   wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
+  wg-monitor-cli set-topic --kind=summary|systemic --thread-id=N [--db PATH]
   wg-monitor-cli version
 `
 }
