@@ -279,6 +279,10 @@ type noopTG struct{}
 func (noopTG) SendMessage(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64) (int64, error) {
 	return 1, nil
 }
+func (noopTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64, _ any) (int64, error) {
+	return 1, nil
+}
+func (noopTG) DeleteMessage(_ context.Context, _, _ int64) error                  { return nil }
 func (noopTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
 func (noopTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
 	return nil

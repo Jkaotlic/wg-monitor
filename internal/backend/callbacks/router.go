@@ -14,6 +14,8 @@ import (
 // TGClient is the subset of tg.Client used by the router.
 type TGClient interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
+	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
+	DeleteMessage(ctx context.Context, chatID, messageID int64) error
 	AnswerCallbackQuery(ctx context.Context, callbackID, text string) error
 	EditMessageText(ctx context.Context, chatID, messageID int64, text, parseMode string, markup *tg.InlineKeyboardMarkup) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]tg.Update, error)
@@ -23,6 +25,16 @@ type Config struct {
 	ChatID         int64
 	AdminUserID    int64
 	MuteCutoffHour int
+	UI             UIConfigSnapshot
+}
+
+// UIConfigSnapshot mirrors backend.UIConfig (avoid an import cycle).
+// Bool fields here are values, not pointers — caller (cmd/backend/main.go)
+// dereferences backend.UIConfig.*bool fields when building the snapshot.
+type UIConfigSnapshot struct {
+	DeleteUserCommandMessages bool
+	SmartReplyWithKeyboard    bool
+	DiagMaxChars              int
 }
 
 type Router struct {
@@ -97,10 +109,12 @@ func (r *Router) Run(ctx context.Context) error {
 }
 
 func (r *Router) handleUpdate(ctx context.Context, u tg.Update) {
-	if u.CallbackQuery == nil {
-		return
+	switch {
+	case u.CallbackQuery != nil:
+		r.HandleCallback(ctx, u.CallbackQuery)
+	case u.Message != nil:
+		r.HandleMessage(ctx, u.Message)
 	}
-	r.HandleCallback(ctx, u.CallbackQuery)
 }
 
 func (r *Router) loadOffset() (int64, error) {
@@ -181,4 +195,89 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, newText, "", &empty); err != nil {
 		slog.Warn("editMessageText failed (state already updated)", "err", err)
 	}
+}
+
+// HandleMessage dispatches an incoming text Message: chat/admin gate, topic
+// resolution, then the appropriate smart-reply / operations action.
+//
+// Allowlist: chat must equal cfg.ChatID; from must equal cfg.AdminUserID
+// (text-message router is admin-only — group members can still tap inline
+// callbacks per the 2026-04-30 policy reversal, but typing into the chat
+// is a one-operator surface).
+func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
+	if r.cfg.ChatID != 0 && m.Chat.ID != r.cfg.ChatID {
+		return
+	}
+	if r.cfg.AdminUserID != 0 && m.From.ID != r.cfg.AdminUserID {
+		return
+	}
+	kind, user := r.resolveTopicKind(m.MessageThreadID)
+	switch m.Text {
+	case "📊 Что происходит?":
+		if kind == "per_router" && user != nil {
+			r.dispatchSmartReply(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике пользователя или в Сводке.", "", nil)
+		}
+	case "🆘 Помощь":
+		r.dispatchHelp(ctx, m, kind)
+	case "📋 Список юзеров":
+		r.dispatchListUsers(ctx, m)
+	case "📊 Здоровье флота":
+		r.dispatchFleetHealth(ctx, m)
+	default:
+		// Ignore — could be operator chatting; don't delete.
+		return
+	}
+	if r.cfg.UI.DeleteUserCommandMessages {
+		if err := r.tg.DeleteMessage(ctx, m.Chat.ID, m.MessageID); err != nil {
+			slog.Warn("deleteMessage failed (non-fatal)", "err", err, "chat", m.Chat.ID, "msg", m.MessageID)
+		}
+	}
+}
+
+// resolveTopicKind classifies a thread id into "per_router" / "summary" /
+// "systemic" / "unknown" using db.Users + db.KV operations-topic IDs.
+func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
+	if threadID == nil || *threadID == 0 {
+		return "unknown", nil
+	}
+	if u, err := r.d.Users().GetByThreadID(*threadID); err == nil {
+		return "per_router", u
+	}
+	if id, ok, err := r.d.KV().GetTopicID("summary"); err == nil && ok && id == *threadID {
+		return "summary", nil
+	}
+	if id, ok, err := r.d.KV().GetTopicID("systemic"); err == nil && ok && id == *threadID {
+		return "systemic", nil
+	}
+	return "unknown", nil
+}
+
+// dispatchHelp sends the static help text for the topic kind.
+func (r *Router) dispatchHelp(ctx context.Context, m *tg.Message, kind string) {
+	body := "Кнопки внизу:\n" +
+		"📊 Что происходит? — состояние роутера прямо сейчас.\n" +
+		"🆘 Помощь — этот текст.\n\n" +
+		"В топиках Сводки/Системного:\n" +
+		"📋 Список юзеров, 📊 Здоровье флота — операторские команды."
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic(kind))
+}
+
+// dispatchSmartReply is a temporary stub. T13 fills the full implementation
+// using ClassifyState + FormatSmartReply.
+func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db.User) {
+	body := "✅ " + user.Nickname + " — всё работает."
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+}
+
+// dispatchListUsers is filled in Task 19.
+func (r *Router) dispatchListUsers(ctx context.Context, m *tg.Message) {
+	// T19
+}
+
+// dispatchFleetHealth is filled in Task 20.
+func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message) {
+	// T20
 }

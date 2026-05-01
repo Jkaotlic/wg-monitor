@@ -38,6 +38,13 @@ func (f *fakeRouterTG) EditMessageText(ctx context.Context, chatID, messageID in
 func (f *fakeRouterTG) GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]tg.Update, error) {
 	return nil, nil
 }
+func (f *fakeRouterTG) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sentMsgs = append(f.sentMsgs, text)
+	return 1, nil
+}
+func (f *fakeRouterTG) DeleteMessage(ctx context.Context, chatID, messageID int64) error { return nil }
 
 func TestRouterDispatchesSilence(t *testing.T) {
 	d, uid := newTestDB(t)
@@ -215,3 +222,94 @@ func TestRouterActionErrorReportedAsToast(t *testing.T) {
 }
 
 func itoa(n int64) string { return fmt.Sprintf("%d", n) }
+
+// fakeRouterTGFull adds capture of SendMessageWithReplyKeyboard + DeleteMessage
+type fakeRouterTGFull struct {
+	fakeRouterTG
+	rkSends   []rkSend
+	deleted   []deleteCall
+	deleteErr error
+}
+type rkSend struct {
+	chatID  int64
+	thread  *int64
+	text    string
+	markup  any
+	replyTo *int64
+}
+type deleteCall struct{ chatID, msgID int64 }
+
+func (f *fakeRouterTGFull) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.rkSends = append(f.rkSends, rkSend{chatID, threadID, text, markup, replyTo})
+	return 100, nil
+}
+func (f *fakeRouterTGFull) DeleteMessage(ctx context.Context, chatID, msgID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleted = append(f.deleted, deleteCall{chatID, msgID})
+	return f.deleteErr
+}
+
+func TestRouterHandleMessage_RoutesPerRouter(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9, UI: UIConfigSnapshot{DeleteUserCommandMessages: true}})
+
+	tid := int64(11)
+	msg := &tg.Message{
+		MessageID: 42, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "📊 Что происходит?",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.rkSends) != 1 {
+		t.Fatalf("want 1 smart-reply send, got %d", len(f.rkSends))
+	}
+	if !strings.Contains(f.rkSends[0].text, "vasya") {
+		t.Errorf("smart reply missing nickname: %s", f.rkSends[0].text)
+	}
+	if len(f.deleted) != 1 || f.deleted[0].msgID != 42 {
+		t.Errorf("expected DeleteMessage(_, 42), got %+v", f.deleted)
+	}
+}
+
+func TestRouterHandleMessage_RejectsWrongChat(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = uid
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100})
+	msg := &tg.Message{Chat: tg.Chat{ID: -999}, From: tg.User{ID: 12345}, Text: "📊 Что происходит?"}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 0 || len(f.deleted) != 0 {
+		t.Errorf("must no-op on wrong chat: %+v %+v", f.rkSends, f.deleted)
+	}
+}
+
+func TestRouterHandleMessage_NonAdminIgnored(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	msg := &tg.Message{Chat: tg.Chat{ID: -100}, From: tg.User{ID: 99999}, Text: "📊 Что происходит?"}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 0 {
+		t.Errorf("non-admin message must be ignored")
+	}
+}
+
+func TestRouterHandleMessage_DeleteFailureDoesNotAbort(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = d.Users().UpdateThreadID(uid, 11)
+	f := &fakeRouterTGFull{deleteErr: fmt.Errorf("403: bot lacks can_delete_messages")}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, UI: UIConfigSnapshot{DeleteUserCommandMessages: true}})
+	tid := int64(11)
+	msg := &tg.Message{MessageID: 42, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345}, MessageThreadID: &tid, Text: "📊 Что происходит?"}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Errorf("smart reply must still be sent after delete failure")
+	}
+}
