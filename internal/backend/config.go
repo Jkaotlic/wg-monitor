@@ -15,6 +15,7 @@ type Config struct {
 	Telegram  TelegramConfig  `yaml:"telegram"`
 	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
 	State     StateConfig     `yaml:"state"`
+	UI        UIConfig        `yaml:"ui"`
 }
 
 type TelegramConfig struct {
@@ -38,6 +39,21 @@ type StateConfig struct {
 	RealertEverySec   int `yaml:"realert_every_sec"`
 	RealertTickSec    int `yaml:"realert_tick_sec"`
 	MuteCutoffHour    int `yaml:"mute_cutoff_hour"`
+}
+
+// UIConfig controls v0.6.0 ReplyKeyboard / smart-reply behaviour (spec §8).
+type UIConfig struct {
+	// DeleteUserCommandMessages — bot deletes the operator's
+	// "📊 Что происходит?" message after the smart-reply is composed.
+	// Disable if the bot lacks `can_delete_messages` admin right.
+	DeleteUserCommandMessages bool `yaml:"delete_user_command_messages"`
+	// SmartReplyWithKeyboard — re-attach the topic-appropriate ReplyKeyboard
+	// to every smart-reply message (mitigation for desktop-client bug
+	// where ReplyKeyboard intermittently disappears).
+	SmartReplyWithKeyboard bool `yaml:"smart_reply_with_keyboard"`
+	// DiagMaxChars — soft cap for code-fenced diag output before pagination
+	// kicks in. TG raw limit is 4096; 3500 leaves room for fence and prefix.
+	DiagMaxChars int `yaml:"diag_max_chars"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -104,6 +120,17 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.State.MuteCutoffHour == 0 {
 		cfg.State.MuteCutoffHour = 9
+	}
+	// UI defaults: only set when YAML omitted the field. We treat `false`
+	// as "not set" for bool fields because YAML tri-state is awkward in Go.
+	if !cfg.UI.DeleteUserCommandMessages {
+		cfg.UI.DeleteUserCommandMessages = true
+	}
+	if !cfg.UI.SmartReplyWithKeyboard {
+		cfg.UI.SmartReplyWithKeyboard = true
+	}
+	if cfg.UI.DiagMaxChars == 0 {
+		cfg.UI.DiagMaxChars = 3500
 	}
 	return &cfg, nil
 }

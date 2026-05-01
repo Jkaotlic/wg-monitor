@@ -75,3 +75,29 @@ telegram:
 		t.Errorf("RealertTickSec default: got %d, want 300", cfg.State.RealertTickSec)
 	}
 }
+
+func TestConfigUIDefaults(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "abc")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+listen: ":8080"
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 1
+`)
+	c, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.UI.DeleteUserCommandMessages {
+		t.Errorf("DeleteUserCommandMessages should default true")
+	}
+	if !c.UI.SmartReplyWithKeyboard {
+		t.Errorf("SmartReplyWithKeyboard should default true")
+	}
+	if c.UI.DiagMaxChars != 3500 {
+		t.Errorf("DiagMaxChars default = %d, want 3500", c.UI.DiagMaxChars)
+	}
+}
