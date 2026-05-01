@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"math"
 	"strconv"
@@ -248,11 +249,17 @@ func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
 	}
 	if u, err := r.d.Users().GetByThreadID(*threadID); err == nil {
 		return "per_router", u
+	} else if !errors.Is(err, db.ErrUserNotFound) {
+		slog.Warn("resolveTopicKind: users lookup failed", "thread", *threadID, "err", err)
 	}
-	if id, ok, err := r.d.KV().GetTopicID("summary"); err == nil && ok && id == *threadID {
+	if id, ok, err := r.d.KV().GetTopicID("summary"); err != nil {
+		slog.Warn("resolveTopicKind: kv summary lookup failed", "err", err)
+	} else if ok && id == *threadID {
 		return "summary", nil
 	}
-	if id, ok, err := r.d.KV().GetTopicID("systemic"); err == nil && ok && id == *threadID {
+	if id, ok, err := r.d.KV().GetTopicID("systemic"); err != nil {
+		slog.Warn("resolveTopicKind: kv systemic lookup failed", "err", err)
+	} else if ok && id == *threadID {
 		return "systemic", nil
 	}
 	return "unknown", nil
@@ -275,12 +282,19 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 	tunnels := r.collectTunnelViews(user.ID)
 	incidents := r.collectActiveIncidents(user.ID)
 	lastTS, _ := r.d.Events().LatestPerUser(user.ID)
-	var lastAge time.Duration
-	if !lastTS.IsZero() {
-		lastAge = time.Since(lastTS)
-	} else {
-		lastAge = 24 * time.Hour // never reported
+	if lastTS.IsZero() {
+		// Never reported — show a clear message instead of fabricating an
+		// "offline 1440 минут назад" via the StateOffline template.
+		body := "🆕 " + user.Nickname + " — ещё не отчитывался.\n\n" +
+			"Подождите, пока агент пришлёт первый heartbeat. Если агент уже " +
+			"запущен на роутере, проверьте логи `journalctl -u wg-monitor`."
+		_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+		if err != nil {
+			slog.Warn("smart reply (never reported) send failed", "err", err, "user", user.Nickname)
+		}
+		return
 	}
+	lastAge := time.Since(lastTS)
 	args := alerts.SmartReplyArgs{
 		Nickname:        user.Nickname,
 		UserID:          user.ID,
@@ -306,6 +320,7 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 	rows, err := r.d.Events().LatestEventsByPrefix(userID, "tunnel_")
 	if err != nil {
+		slog.Warn("collectTunnelViews: query failed", "err", err, "user", userID)
 		return nil
 	}
 	var out []alerts.TunnelView
@@ -331,8 +346,13 @@ func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 // collectActiveIncidents returns each `incident_state` row with
 // current_status='hard' for this user. Direct SQL — no new repo method needed.
 func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
-	q, err := r.d.SQL().Query(`SELECT check_name, hard_since, consecutive_fails FROM incident_state WHERE user_id = ? AND current_status = 'hard'`, userID)
+	q, err := r.d.SQL().Query(`SELECT check_name, hard_since, consecutive_fails
+                            FROM incident_state
+                           WHERE user_id = ? AND current_status = 'hard'
+                             AND (silenced_until IS NULL OR silenced_until < CURRENT_TIMESTAMP)
+                             AND acked = 0`, userID)
 	if err != nil {
+		slog.Warn("collectActiveIncidents: query failed", "err", err, "user", userID)
 		return nil
 	}
 	defer q.Close()

@@ -339,3 +339,67 @@ func TestRouterDispatchSmartReply_RendersOK(t *testing.T) {
 		}
 	}
 }
+
+func TestRouterDispatchSmartReply_SilencedIncidentDropsFromHard(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = d.Users().UpdateThreadID(uid, 11)
+	now := time.Now().UTC()
+	_ = d.Events().Insert(uid, "tunnel_awg11", "ok", `{"tunnel_name":"amnezia","interface":"nwg0","handshake_age_sec":12,"ping_check_status":"ok","ping_check_last_latency_ms":15}`, now)
+	// Insert a HARD incident, then silence it.
+	_, err := d.SQL().Exec(
+		`INSERT INTO incident_state(user_id, check_name, current_status, consecutive_fails, hard_since, silenced_until, acked)
+		 VALUES (?, 'tunnel_awg11', 'hard', 5, ?, datetime('now','+1 hour'), 0)`,
+		uid, now.Add(-10*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	msg := &tg.Message{
+		MessageID: 42, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "📊 Что происходит?",
+	}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Fatalf("want 1 send, got %d", len(f.rkSends))
+	}
+	body := f.rkSends[0].text
+	// Silenced incident must drop from Hard view — expect OK template (✅) not 🔴.
+	if strings.Contains(body, "🔴") {
+		t.Errorf("silenced incident should NOT trigger Hard template: %s", body)
+	}
+	if !strings.Contains(body, "✅") {
+		t.Errorf("expected OK template (✅) when only incident is silenced, got: %s", body)
+	}
+}
+
+func TestRouterDispatchSmartReply_NeverReportedShowsSpecialMessage(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = d.Users().UpdateThreadID(uid, 11)
+	// Do NOT insert any events — user has never reported.
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	msg := &tg.Message{
+		MessageID: 42, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "📊 Что происходит?",
+	}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Fatalf("want 1 send, got %d", len(f.rkSends))
+	}
+	body := f.rkSends[0].text
+	if !strings.Contains(body, "🆕") || !strings.Contains(body, "ещё не отчитывался") {
+		t.Errorf("never-reported user must get the special message, got: %s", body)
+	}
+	// The fabricated "1440 минут назад" must NOT appear.
+	if strings.Contains(body, "1440") {
+		t.Errorf("never-reported message must not fabricate a 1440-minute timestamp: %s", body)
+	}
+	// The Offline emoji must NOT appear.
+	if strings.Contains(body, "📵") {
+		t.Errorf("never-reported user must not be classified as Offline: %s", body)
+	}
+}
