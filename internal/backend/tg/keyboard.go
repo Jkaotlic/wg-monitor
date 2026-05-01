@@ -48,26 +48,26 @@ func HardAlertKeyboard(userID int64, checkName string, opts ...KeyboardOption) I
 	}
 	rows := [][]InlineKeyboardButton{
 		{
-			{Text: "⏸ 1ч", CallbackData: silenceCD("1h")},
-			{Text: "⏸ 4ч", CallbackData: silenceCD("4h")},
-			{Text: "⏸ 24ч", CallbackData: silenceCD("24h")},
-			{Text: "✅ Ack", CallbackData: plainCD("ack")},
+			{Text: "⏸ Тише на 1ч", CallbackData: silenceCD("1h")},
+			{Text: "⏸ Тише на 4ч", CallbackData: silenceCD("4h")},
+			{Text: "⏸ Тише на 24ч", CallbackData: silenceCD("24h")},
+			{Text: "✅ Понял", CallbackData: plainCD("ack")},
 		},
 		{
-			{Text: "📋 История 24ч", CallbackData: plainCD("history")},
-			{Text: "🔇 Mute до утра", CallbackData: plainCD("mute")},
+			{Text: "📋 История за 24ч", CallbackData: plainCD("history")},
+			{Text: "🔇 Тихо до утра", CallbackData: plainCD("mute")},
 		},
 	}
 	if o.tunnelActions {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "🔁 Restart", CallbackData: plainCD("restart_tunnel")},
-			{Text: "📊 Diag", CallbackData: plainCD("diag_now")},
-			{Text: "▶ Pingcheck", CallbackData: plainCD("pingcheck_now")},
+			{Text: "🔁 Перезапуск туннеля", CallbackData: plainCD("restart_tunnel")},
+			{Text: "📊 Диагностика", CallbackData: plainCD("diag_now")},
+			{Text: "▶ Тест связи", CallbackData: plainCD("pingcheck_now")},
 		})
 	}
 	if o.mobileActions {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "🔁 Force recheck", CallbackData: plainCD("force_recheck")},
+			{Text: "🔄 Дай отчёт сейчас", CallbackData: plainCD("force_recheck")},
 		})
 	}
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
