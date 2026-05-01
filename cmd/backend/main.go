@@ -22,7 +22,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
-var Version = "0.6.0-ui-rework-dev"
+var Version = "0.6.0-ui-rework"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
