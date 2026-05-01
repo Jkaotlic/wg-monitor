@@ -448,3 +448,58 @@ func TestRouterDispatchListUsers(t *testing.T) {
 		t.Errorf("missing total count in:\n%s", all)
 	}
 }
+
+func TestRouterDispatchFleetHealth_AllGreen(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	if err := d.KV().SetTopicID("summary", 77); err != nil {
+		t.Fatal(err)
+	}
+	tid := int64(77)
+	msg := &tg.Message{Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345}, MessageThreadID: &tid, Text: "📊 Здоровье флота"}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(f.rkSends))
+	}
+	body := f.rkSends[0].text
+	if !strings.Contains(body, "Активных HARD: 0") {
+		t.Errorf("expected zero-incident body, got: %s", body)
+	}
+}
+
+func TestRouterDispatchFleetHealth_WithIncidents(t *testing.T) {
+	d, uid := newTestDB(t)
+	hs := time.Now().Add(-10 * time.Minute)
+	st := db.IncidentState{UserID: uid, CheckName: "tunnel_awg11", CurrentStatus: "hard", ConsecutiveFails: 5, HardSince: &hs}
+	if err := d.State().Save(uid, "tunnel_awg11", st); err != nil {
+		t.Fatal(err)
+	}
+	uid2, err := d.Users().Insert("petya", "tok2", "2.2.2.2", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs2 := time.Now().Add(-5 * time.Minute)
+	st2 := db.IncidentState{UserID: uid2, CheckName: "dns", CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: &hs2}
+	if err := d.State().Save(uid2, "dns", st2); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	if err := d.KV().SetTopicID("summary", 77); err != nil {
+		t.Fatal(err)
+	}
+	tid := int64(77)
+	msg := &tg.Message{Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345}, MessageThreadID: &tid, Text: "📊 Здоровье флота"}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Fatal("no reply")
+	}
+	body := f.rkSends[0].text
+	for _, want := range []string{"Активных HARD: 2", "tunnel_awg11", "dns", "vasya", "petya"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}

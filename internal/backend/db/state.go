@@ -122,6 +122,43 @@ func (s *StateRepo) BumpLastAlertAt(userID int64, checkName string, ts time.Time
 	return err
 }
 
+// ActiveIncidentRow is one currently-HARD incident as seen by Fleet-Health.
+// Includes silenced/acked rows so the operator sees the full picture; UI may
+// filter or annotate them later.
+type ActiveIncidentRow struct {
+	UserID    int64
+	CheckName string
+	HardSince time.Time
+	FailCount int
+}
+
+// AllActiveHard returns every incident_state row with current_status='hard',
+// regardless of silence/ack — used by the operator-only Fleet-Health reply.
+func (s *StateRepo) AllActiveHard() ([]ActiveIncidentRow, error) {
+	rows, err := s.d.db.Query(
+		`SELECT user_id, check_name, hard_since, consecutive_fails
+		   FROM incident_state
+		  WHERE current_status = 'hard'
+		  ORDER BY hard_since`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveIncidentRow
+	for rows.Next() {
+		var r ActiveIncidentRow
+		var hs sql.NullTime
+		if err := rows.Scan(&r.UserID, &r.CheckName, &hs, &r.FailCount); err != nil {
+			return nil, err
+		}
+		if hs.Valid {
+			r.HardSince = hs.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
 // and which are not currently silenced, and have not been acked.
 func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
