@@ -402,4 +402,9 @@ func TestRouterDispatchSmartReply_NeverReportedShowsSpecialMessage(t *testing.T)
 	if strings.Contains(body, "📵") {
 		t.Errorf("never-reported user must not be classified as Offline: %s", body)
 	}
+	// Regression: never-reported message must NOT reference journalctl.
+	// Keenetic runs Entware (no systemd); the agent uses init.d S99wg-monitor.
+	if strings.Contains(body, "journalctl") {
+		t.Errorf("never-reported message must not reference journalctl (no systemd on Keenetic): %s", body)
+	}
 }

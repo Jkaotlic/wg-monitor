@@ -286,8 +286,9 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 		// Never reported — show a clear message instead of fabricating an
 		// "offline 1440 минут назад" via the StateOffline template.
 		body := "🆕 " + user.Nickname + " — ещё не отчитывался.\n\n" +
-			"Подождите, пока агент пришлёт первый heartbeat. Если агент уже " +
-			"запущен на роутере, проверьте логи `journalctl -u wg-monitor`."
+			"Подождите, пока агент пришлёт первый heartbeat. Проверить агент: " +
+			"ssh root@router и `/opt/etc/init.d/S99wg-monitor status` " +
+			"(на Keenetic нет systemd; агент логирует в stderr и логи не сохраняются)."
 		_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic("per_router"))
 		if err != nil {
 			slog.Warn("smart reply (never reported) send failed", "err", err, "user", user.Nickname)
