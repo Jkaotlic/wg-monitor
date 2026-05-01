@@ -110,6 +110,35 @@ func TestHardAlertKeyboardCombinedTunnelAndMobile(t *testing.T) {
 	}
 }
 
+func TestHardAlertKeyboardHumanisedLabels(t *testing.T) {
+	kb := HardAlertKeyboard(42, "tunnel_amnezia", WithTunnelActions(), WithMobileActions())
+	want := map[string]string{
+		"silence:42:tunnel_amnezia:1h":     "⏸ Тише на 1ч",
+		"silence:42:tunnel_amnezia:4h":     "⏸ Тише на 4ч",
+		"silence:42:tunnel_amnezia:24h":    "⏸ Тише на 24ч",
+		"ack:42:tunnel_amnezia":            "✅ Понял",
+		"history:42:tunnel_amnezia":        "📋 История за 24ч",
+		"mute:42:tunnel_amnezia":           "🔇 Тихо до утра",
+		"restart_tunnel:42:tunnel_amnezia": "🔁 Перезапуск туннеля",
+		"diag_now:42:tunnel_amnezia":       "📊 Диагностика",
+		"pingcheck_now:42:tunnel_amnezia":  "▶ Тест связи",
+		"force_recheck:42:tunnel_amnezia":  "🔄 Дай отчёт сейчас",
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			if expected, ok := want[b.CallbackData]; ok {
+				if b.Text != expected {
+					t.Errorf("cd=%q got text %q want %q", b.CallbackData, b.Text, expected)
+				}
+				delete(want, b.CallbackData)
+			}
+		}
+	}
+	for cd := range want {
+		t.Errorf("missing callback_data: %s", cd)
+	}
+}
+
 func TestHardAlertKeyboardCommandActionsRespect64ByteLimit(t *testing.T) {
 	kb := HardAlertKeyboard(999999999, "tunnel_amnezia_for_awg2_long", WithTunnelActions(), WithMobileActions())
 	for _, row := range kb.InlineKeyboard {
