@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/pkg/wire"
@@ -18,6 +19,7 @@ import (
 // from the concrete queue so router_test/actions_test can substitute fakes.
 type CommandEnqueuer interface {
 	Enqueue(userID int64, cmd wire.Command) error
+	EnqueueWithRef(userID int64, cmd wire.Command, ref cmdpkg.MessageRef) error
 }
 
 // Action applies a callback to incident state and returns a status line
@@ -219,8 +221,21 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		Args:     map[string]any{"check_name": args.CheckName},
 		IssuedAt: time.Now().UTC(),
 	}
-	if err := a.sink.Enqueue(args.UserID, cmd); err != nil {
-		return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
+	// When invoked from a real callback, record MessageRef so the result can
+	// reply to the original alert. Tests pass q=nil and use bare Enqueue.
+	if q != nil {
+		ref := cmdpkg.MessageRef{
+			ChatID:    q.Message.Chat.ID,
+			MessageID: q.Message.MessageID,
+			ThreadID:  q.Message.MessageThreadID,
+		}
+		if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+			return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
+		}
+	} else {
+		if err := a.sink.Enqueue(args.UserID, cmd); err != nil {
+			return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
+		}
 	}
 	return formatQueuedStatus(args.Action), nil
 }

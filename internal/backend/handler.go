@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/state"
 	"github.com/anex/wg-monitor/pkg/wire"
@@ -39,6 +40,13 @@ type Resumer interface {
 type CommandSink interface {
 	Dequeue(ctx context.Context, userID int64, holdTimeout time.Duration) (*wire.Command, bool)
 	RecordResult(userID int64, result wire.CommandResult) error
+	ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.MessageRef, bool)
+}
+
+// TGNotifier posts command-result text back to the originating TG message.
+// Implemented by callbacks.Notifier; nil-safe (handler skips relay if absent).
+type TGNotifier interface {
+	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, maxChars int) error
 }
 
 type Deps struct {
@@ -47,6 +55,8 @@ type Deps struct {
 	Dispatcher  Dispatcher
 	Resumer     Resumer
 	CommandSink CommandSink
+	TGNotifier  TGNotifier
+	UI          UIConfig
 	Thresholds  state.Thresholds
 }
 
@@ -158,12 +168,12 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
-		cmd, ok := d.CommandSink.Dequeue(r.Context(), uid, wait)
+		c, ok := d.CommandSink.Dequeue(r.Context(), uid, wait)
 		if !ok {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		body, err := json.Marshal(cmd)
+		body, err := json.Marshal(c)
 		if err != nil {
 			d.Logger.Error("cmd marshal", "err", err)
 			http.Error(w, "internal", http.StatusInternalServerError)
@@ -172,7 +182,7 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
-		d.Logger.Info("cmd dispatched", "nickname", nick, "cmd_id", cmd.ID, "action", cmd.Action)
+		d.Logger.Info("cmd dispatched", "nickname", nick, "cmd_id", c.ID, "action", c.Action)
 	}
 }
 
@@ -210,6 +220,24 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			d.Logger.Warn("cmd result record", "nickname", nick, "err", err)
 			http.Error(w, "record failed", http.StatusInternalServerError)
 			return
+		}
+		// Relay result back to TG if a notifier is configured and we recorded
+		// the originating message. Async — must not stall the agent's POST on
+		// TG network latency.
+		if d.TGNotifier != nil {
+			if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
+				maxChars := d.UI.DiagMaxChars
+				if maxChars == 0 {
+					maxChars = 3500
+				}
+				go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
+					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
+						d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
+					}
+				}(ref, res, maxChars)
+			}
 		}
 		d.Logger.Info("cmd result", "nickname", nick, "cmd_id", res.ID, "status", res.Status, "duration_ms", res.DurationMs)
 		w.WriteHeader(http.StatusOK)
