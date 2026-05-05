@@ -196,15 +196,15 @@ func prettyCheckLabel(name string, details map[string]any) string {
 	}
 	switch name {
 	case "dns":
-		return "DNS"
+		return "🔎 DNS-резолвинг"
 	case "hydraroute":
-		return "HydraRoute"
+		return "🚏 HydraRoute"
 	case "awg_manager":
-		return "awg-manager"
+		return "🩺 Состояние роутера"
 	case "tunnels":
-		return "awg-manager API"
+		return "🛠 Реестр туннелей"
 	case "external_reach":
-		return "Иностранные сервисы"
+		return "🌍 Иностранные сервисы"
 	}
 	return name
 }
