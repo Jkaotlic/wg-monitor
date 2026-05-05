@@ -69,6 +69,10 @@ func FormatHard(a HardArgs) string {
 		writeHydraRouteBody(&b, a.Check.Details)
 	case "awg_manager":
 		writeAwgManagerBody(&b, a.Check.Details)
+	case "awgmgr_api":
+		writeAwgmgrAPIBody(&b, a.Check.Details)
+	case "external_reach":
+		writeExternalReachBody(&b, a.Check.Details)
 	default:
 		writeGenericBody(&b, a.Check.Details)
 	}
@@ -133,6 +137,10 @@ func FormatRealert(args RealertArgs) string {
 			writeHydraRouteBody(&b, args.Check.Details)
 		case "awg_manager":
 			writeAwgManagerBody(&b, args.Check.Details)
+		case "awgmgr_api":
+			writeAwgmgrAPIBody(&b, args.Check.Details)
+		case "external_reach":
+			writeExternalReachBody(&b, args.Check.Details)
 		default:
 			writeGenericBody(&b, args.Check.Details)
 		}
@@ -164,6 +172,10 @@ func checkCategory(name string) string {
 		return "hydraroute"
 	case name == "awg_manager":
 		return "awg_manager"
+	case name == "tunnels":
+		return "awgmgr_api"
+	case name == "external_reach":
+		return "external_reach"
 	}
 	return "generic"
 }
@@ -180,6 +192,19 @@ func prettyCheckLabel(name string, details map[string]any) string {
 		case iface != "":
 			return iface
 		}
+		return name
+	}
+	switch name {
+	case "dns":
+		return "DNS"
+	case "hydraroute":
+		return "HydraRoute"
+	case "awg_manager":
+		return "awg-manager"
+	case "tunnels":
+		return "awg-manager API"
+	case "external_reach":
+		return "Иностранные сервисы"
 	}
 	return name
 }
@@ -261,9 +286,39 @@ func writeDNSBody(b *strings.Builder, d map[string]any) {
 			fmt.Fprintf(b, "🚫 RKN probe: ⚠ %d/%d suspect\n", rknSus, rknProbed)
 		}
 	}
-	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "❓ %s\n", errStr)
+	// Per-endpoint failure rows: which resolver actually died, with why.
+	// Replaces the previous '❓ <error>' line that just echoed the metric
+	// summary ("2/5 endpoints unreachable") and gave no actionable info.
+	if failed > 0 {
+		for _, ep := range mapsSlice(d, "endpoints_detail") {
+			reachable, _ := ep["reachable"].(bool)
+			if reachable {
+				continue
+			}
+			tp, _ := ep["type"].(string)
+			tg, _ := ep["target"].(string)
+			ndms, _ := ep["ndms_name"].(string)
+			errStr, _ := ep["err"].(string)
+			label := tg
+			if ndms != "" {
+				label = fmt.Sprintf("%s (%s)", tg, ndms)
+			}
+			if tp != "" {
+				label = tp + " " + label
+			}
+			fmt.Fprintf(b, "  ✗ %s — %s\n", label, trimErr(errStr))
+		}
 	}
+}
+
+// trimErr crops over-long network errors so the alert stays under TG's
+// 4096-byte limit when many endpoints fail at once.
+func trimErr(s string) string {
+	const max = 80
+	if len(s) > max {
+		return s[:max] + "…"
+	}
+	return s
 }
 
 func writeHydraRouteBody(b *strings.Builder, d map[string]any) {
@@ -301,10 +356,88 @@ func writeAwgManagerBody(b *strings.Builder, d map[string]any) {
 	}
 }
 
+func writeAwgmgrAPIBody(b *strings.Builder, d map[string]any) {
+	if errStr := strOrEmpty(d, "error"); errStr != "" {
+		fmt.Fprintf(b, "❓ %s\n", trimBodyDump(errStr))
+	}
+	if cnt, ok := intOrZero(d, "tunnel_count"); ok && cnt > 0 {
+		fmt.Fprintf(b, "📊 туннелей видно: %d\n", cnt)
+	}
+}
+
+func writeExternalReachBody(b *strings.Builder, d map[string]any) {
+	failed := mapsSlice(d, "targets_failed")
+	okList := strSlice(d, "targets_ok")
+	total, _ := intOrZero(d, "targets_total")
+	if total > 0 {
+		fmt.Fprintf(b, "🎯 целей: %d · недоступно: %d\n", total, len(failed))
+	}
+	for _, t := range failed {
+		name, _ := t["name"].(string)
+		errStr, _ := t["err"].(string)
+		fmt.Fprintf(b, "  ✗ %s — %s\n", name, errStr)
+	}
+	if len(okList) > 0 {
+		fmt.Fprintf(b, "  ✓ работает: %s\n", strings.Join(okList, ", "))
+	}
+	if iface, _ := d["via_interface"].(string); iface != "" {
+		fmt.Fprintf(b, "🛣 через %s\n", iface)
+	}
+}
+
 func writeGenericBody(b *strings.Builder, d map[string]any) {
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
 		fmt.Fprintf(b, "❓ %s\n", errStr)
 	}
+}
+
+// trimBodyDump strips a trailing "(body=…)" segment from awgmgr error
+// messages — useful in agent logs but visual noise in Telegram alerts.
+func trimBodyDump(s string) string {
+	if i := strings.Index(s, " (body="); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+func strSlice(d map[string]any, key string) []string {
+	v, ok := d[key]
+	if !ok {
+		return nil
+	}
+	switch x := v.(type) {
+	case []string:
+		return x
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, e := range x {
+			if s, ok := e.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func mapsSlice(d map[string]any, key string) []map[string]any {
+	v, ok := d[key]
+	if !ok {
+		return nil
+	}
+	switch x := v.(type) {
+	case []map[string]any:
+		return x
+	case []any:
+		out := make([]map[string]any, 0, len(x))
+		for _, e := range x {
+			if m, ok := e.(map[string]any); ok {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func writeNeighbors(b *strings.Builder, ns []NeighborSummary) {

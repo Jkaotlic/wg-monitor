@@ -89,7 +89,7 @@ func TestFormatHardDNSBody(t *testing.T) {
 			"error": "RKN block suspected",
 		}},
 	})
-	wants := []string{"DOWN", "🌐 endpoints:", "4 total", "🚫 RKN probe:", "RKN block"}
+	wants := []string{"DOWN", "🌐 endpoints:", "4 total", "🚫 RKN probe:", "suspected block"}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {
 			t.Errorf("missing %q in:\n%s", w, got)
