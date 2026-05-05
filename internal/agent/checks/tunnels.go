@@ -87,12 +87,12 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, start time.Time, ma
 		"rx_bytes":             tu.RxBytes,
 		"tx_bytes":             tu.TxBytes,
 	}
-	if tu.LastHandshake != nil {
-		details["last_handshake"] = tu.LastHandshake.UTC().Format(time.RFC3339)
-		details["handshake_age_sec"] = int(time.Since(*tu.LastHandshake).Seconds())
+	if t := tu.LastHandshake.Time(); t != nil {
+		details["last_handshake"] = t.UTC().Format(time.RFC3339)
+		details["handshake_age_sec"] = int(time.Since(*t).Seconds())
 	}
-	if tu.StartedAt != nil {
-		details["started_at"] = tu.StartedAt.UTC().Format(time.RFC3339)
+	if t := tu.StartedAt.Time(); t != nil {
+		details["started_at"] = t.UTC().Format(time.RFC3339)
 	}
 	// pingCheck data: prefer the dedicated /api/pingcheck/status (richer)
 	// over the brief object embedded in /api/tunnels/all.
@@ -129,9 +129,9 @@ func tunnelFailReasons(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, maxAge time.
 	if tu.HasAddressConflict {
 		reasons = append(reasons, "address conflict on interface")
 	}
-	if tu.LastHandshake == nil {
+	if t := tu.LastHandshake.Time(); t == nil {
 		reasons = append(reasons, "no handshake ever")
-	} else if age := time.Since(*tu.LastHandshake); age > maxAge {
+	} else if age := time.Since(*t); age > maxAge {
 		reasons = append(reasons, fmt.Sprintf("handshake stale (%ds > %ds)", int(age.Seconds()), int(maxAge.Seconds())))
 	}
 	if pc.TunnelID != "" {
