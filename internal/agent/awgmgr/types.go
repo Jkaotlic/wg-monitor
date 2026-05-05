@@ -4,8 +4,6 @@
 // it the daemon serves the SvelteKit SPA shell instead of JSON.
 package awgmgr
 
-import "time"
-
 type Envelope[T any] struct {
 	Success bool `json:"success"`
 	Data    T    `json:"data"`
@@ -27,12 +25,12 @@ type Tunnel struct {
 	HasAddressConflict   bool           `json:"hasAddressConflict"`
 	RxBytes              int64          `json:"rxBytes"`
 	TxBytes              int64          `json:"txBytes"`
-	LastHandshake        *time.Time     `json:"lastHandshake"`
+	LastHandshake        nullableTime   `json:"lastHandshake"`
 	Backend              string         `json:"backend"`
 	BackendType          string         `json:"backendType"`
 	AWGVersion           string         `json:"awgVersion"`
 	MTU                  int            `json:"mtu"`
-	StartedAt            *time.Time     `json:"startedAt"`
+	StartedAt            nullableTime   `json:"startedAt"`
 	PingCheck            PingCheckBrief `json:"pingCheck"`
 }
 
@@ -57,7 +55,7 @@ type PingCheckTunnel struct {
 	Backend        string     `json:"backend"`
 	Status         string     `json:"status"`
 	Method         string     `json:"method"`
-	LastCheck      *time.Time `json:"lastCheck"`
+	LastCheck      nullableTime `json:"lastCheck"`
 	LastLatency    int        `json:"lastLatency"`
 	FailCount      int        `json:"failCount"`
 	SuccessCount   int64      `json:"successCount"`
