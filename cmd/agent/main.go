@@ -51,6 +51,11 @@ func main() {
 		checks.HydraRouteCheck{Client: awgClient},
 		buildDNSCheck(cfg, logger),
 	}
+	if cfg.ExternalReach.Enabled {
+		if er := buildExternalReachCheck(cfg, awgClient, logger); er != nil {
+			singleChecks = append(singleChecks, er)
+		}
+	}
 	// MultiChecks emit per-tunnel results
 	multiChecks := []checks.MultiCheck{
 		checks.TunnelsCheck{
@@ -149,5 +154,63 @@ func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
 		PerProbeTimeout: 3 * time.Second,
 		IfaceMap:        ifaceMap,
 		RKNTestDomains:  dc.RKNTestDomains,
+	}
+}
+
+// pickDefaultRouteIface returns the linux iface name (e.g. "nwg1") of the
+// tunnel marked defaultRoute=true. Empty when no such tunnel exists or
+// awg-manager is unreachable — caller is expected to fall back to the
+// system default route.
+func pickDefaultRouteIface(ctx context.Context, c *awgmgr.Client, logger *slog.Logger) string {
+	ta, err := c.TunnelsAll(ctx)
+	if err != nil {
+		logger.Warn("external_reach: cannot pick default-route iface", "err", err)
+		return ""
+	}
+	for _, t := range ta.Tunnels {
+		if t.DefaultRoute && t.Enabled && t.InterfaceName != "" {
+			return t.InterfaceName
+		}
+	}
+	return ""
+}
+
+func buildExternalReachCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) checks.Check {
+	pc := cfg.ExternalReach
+	if len(pc.Targets) == 0 {
+		logger.Warn("external_reach enabled but no targets — skipping")
+		return nil
+	}
+
+	targets := make([]checks.ExternalReachTarget, 0, len(pc.Targets))
+	for _, t := range pc.Targets {
+		targets = append(targets, checks.ExternalReachTarget{Name: t.Name, URL: t.URL})
+	}
+
+	httpc := &http.Client{Timeout: 6 * time.Second}
+	viaIface := ""
+	if pc.BindToDefault {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		viaIface = pickDefaultRouteIface(ctx, awgClient, logger)
+		cancel()
+		if viaIface != "" {
+			httpc = &http.Client{
+				Timeout: 6 * time.Second,
+				Transport: &http.Transport{
+					DialContext: checks.IfaceDialer(viaIface).DialContext,
+				},
+			}
+			logger.Info("external_reach iface-bound", "iface", viaIface, "targets", len(targets))
+		} else {
+			logger.Warn("external_reach: no defaultRoute tunnel found, using system route")
+		}
+	}
+
+	return checks.ExternalReachCheck{
+		Targets:         targets,
+		FailThreshold:   pc.FailThreshold,
+		HTTPClient:      httpc,
+		PerProbeTimeout: 5 * time.Second,
+		ViaInterface:    viaIface,
 	}
 }

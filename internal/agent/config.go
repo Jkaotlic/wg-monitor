@@ -13,11 +13,35 @@ import (
 var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 
 type Config struct {
-	Backend    BackendConfig    `yaml:"backend"`
-	Agent      AgentConfig      `yaml:"agent"`
-	AwgManager AwgManagerConfig `yaml:"awg_manager"`
-	Checks     ChecksConfig     `yaml:"checks"`
-	State      StateConfig      `yaml:"state"`
+	Backend       BackendConfig       `yaml:"backend"`
+	Agent         AgentConfig         `yaml:"agent"`
+	AwgManager    AwgManagerConfig    `yaml:"awg_manager"`
+	Checks        ChecksConfig        `yaml:"checks"`
+	State         StateConfig         `yaml:"state"`
+	ExternalReach ExternalReachConfig `yaml:"external_reach"`
+}
+
+// ExternalReachConfig: probes blocked-in-RU services through the
+// defaultRoute=true WG tunnel. When Enabled and Targets is empty, defaults
+// to YouTube/Telegram/Instagram. BindToDefault binds the HTTP client to
+// the linux iface backing the default-route tunnel; without it, probes go
+// through the system default route (often outside any WG tunnel).
+type ExternalReachConfig struct {
+	Enabled       bool                  `yaml:"enabled"`
+	FailThreshold int                   `yaml:"fail_threshold"`
+	Targets       []ExternalReachTarget `yaml:"targets"`
+	BindToDefault bool                  `yaml:"bind_to_default"`
+}
+
+type ExternalReachTarget struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
+}
+
+var defaultExternalReachTargets = []ExternalReachTarget{
+	{Name: "YouTube", URL: "https://www.youtube.com/generate_204"},
+	{Name: "Telegram", URL: "https://web.telegram.org/"},
+	{Name: "Instagram", URL: "https://www.instagram.com/favicon.ico"},
 }
 
 type BackendConfig struct {
@@ -157,6 +181,18 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	// extra config plumbing.
 	if cfg.Checks.DNS.AutoDiscover && len(cfg.Checks.DNS.RKNTestDomains) == 0 {
 		cfg.Checks.DNS.RKNTestDomains = []string{"rutracker.org", "lostfilm.tv", "linkedin.com"}
+	}
+	if cfg.ExternalReach.Enabled {
+		if len(cfg.ExternalReach.Targets) == 0 {
+			cfg.ExternalReach.Targets = append([]ExternalReachTarget(nil), defaultExternalReachTargets...)
+		}
+		if cfg.ExternalReach.FailThreshold <= 0 {
+			n := len(cfg.ExternalReach.Targets)
+			cfg.ExternalReach.FailThreshold = (n*2 + 2) / 3
+			if cfg.ExternalReach.FailThreshold < 1 {
+				cfg.ExternalReach.FailThreshold = 1
+			}
+		}
 	}
 	return &cfg, nil
 }
