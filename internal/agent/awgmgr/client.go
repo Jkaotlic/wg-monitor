@@ -174,9 +174,49 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 }
 
 // ImportConf calls POST /api/import/conf — passes raw .conf text, awg-manager
-// does its own parsing. Returns the created Tunnel (enabled=false).
-func (c *Client) ImportConf(ctx context.Context, rawConf, name string) (*Tunnel, error) {
-	return c.confPost(ctx, "/api/import/conf", rawConf, name)
+// does its own parsing. Returns the created Tunnel (enabled=false by default).
+// backend may be "" to let awg-manager use its active backend.
+func (c *Client) ImportConf(ctx context.Context, rawConf, name, backend string) (*Tunnel, error) {
+	body, err := json.Marshal(struct {
+		Content string `json:"content"`
+		Name    string `json:"name"`
+		Backend string `json:"backend,omitempty"`
+	}{Content: rawConf, Name: name, Backend: backend})
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/import/conf", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("awgmgr POST /api/import/conf: %w", err)
+	}
+	defer resp.Body.Close()
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("awgmgr read import/conf: %w", err)
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("awgmgr import/conf: HTTP %d: %s", resp.StatusCode, snippet(rb))
+	}
+	var env Envelope[Tunnel]
+	if err := json.Unmarshal(rb, &env); err != nil {
+		return nil, fmt.Errorf("awgmgr import/conf: decode: %w", err)
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr import/conf: success=false")
+	}
+	return &env.Data, nil
+}
+
+// StartTunnel calls POST /api/control/start?id=<tunnelID>.
+func (c *Client) StartTunnel(ctx context.Context, tunnelID string) error {
+	return c.post(ctx, "/api/control/start?id="+tunnelID, nil, nil)
 }
 
 // ReplaceConf calls POST /api/tunnels/replace?id=<tunnelID> — replaces an
