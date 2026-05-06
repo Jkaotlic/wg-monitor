@@ -28,3 +28,11 @@ config.yaml
 
 # Git worktrees (per-feature isolated workspaces)
 .worktrees/
+
+# Deploy wizard local config (contains hosts; not secrets, but local-only)
+wizard.toml
+cmd/deploy/wizard.toml
+
+# Locally built deploy binaries
+dist/wg-monitor-deploy*
+bin/wg-monitor-deploy*

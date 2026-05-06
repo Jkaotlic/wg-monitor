@@ -1,6 +1,0 @@
-listen: 127.0.0.1:8080
-log_level: info
-agents:
-  - nickname: testkeen
-    # 64-hex-char random — generate with: openssl rand -hex 32
-    token: REPLACE_WITH_GENERATED_HEX_TOKEN_64_CHARS_LONG_DEADBEEFCAFEBABEDEADBEEF

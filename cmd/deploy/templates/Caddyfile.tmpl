@@ -1,0 +1,21 @@
+# wg-monitor backend reverse proxy.
+# Terminate TLS via TLS-ALPN-01 on :443.
+
+{
+	email {{.Email}}
+	auto_https disable_redirects
+}
+
+{{.Domain}} {
+	reverse_proxy 127.0.0.1:8080 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+	request_body {
+		max_size 1MB
+	}
+	log {
+		output stderr
+		format console
+	}
+}
