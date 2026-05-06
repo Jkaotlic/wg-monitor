@@ -54,7 +54,7 @@
 
 ## Архитектура / Architecture
 
-```
+```text
 ┌──────────────────────────┐       HTTPS/JSON        ┌──────────────────────────┐
 │   Keenetic router         │ ── reports + cmds ────► │   VPS (Go backend)        │
 │                           │                          │                           │
@@ -102,8 +102,10 @@ make pack              # UPX --best на cross-compiled бинарниках
 - **VPS:** любой Linux amd64, Caddy или nginx для TLS
 - **Telegram:** токен бота + супергруппа с топиками на каждый роутер (режим forum)
 
-## Конфигурация / Config
+## Деплой / Deployment
+
+Подробная пошаговая инструкция: **[DEPLOY.md](DEPLOY.md)**
 
 Агент: `/opt/etc/wg-monitor/config.yaml`  
 Бэкенд: `/etc/wg-monitor/backend.yaml`  
-Спецификации: `docs/superpowers/specs/`
+Примеры конфигов: `deploy/agent/config.yaml.example`, `deploy/backend/backend.yaml.example`
