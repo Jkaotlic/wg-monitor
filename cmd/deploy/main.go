@@ -39,8 +39,7 @@ func main() {
 
 	args := flag.Args()
 	if len(args) == 0 {
-		fmt.Println("wg-monitor-deploy", Version, "— меню в Task 12")
-		fmt.Println("пока доступно: update-backend")
+		RunMenu(state, statePath, secrets, dl)
 		return
 	}
 
