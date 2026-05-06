@@ -38,7 +38,7 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 		wantR1 int  // row 1 button count (0 means "don't care")
 		wantR2 int
 	}{
-		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🆘 Помощь"}, 2, 1},
+		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через тоннель?", "🇷🇺 Напрямую?"}, 2, 2},
 		{"summary", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"systemic", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"unknown", false, nil, 0, 0},

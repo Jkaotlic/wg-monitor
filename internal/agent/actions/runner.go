@@ -95,6 +95,13 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 			return "err", "opkg runner not configured"
 		}
 		return r.Opkg.DryRun(ctx)
+	case "check_via_tunnel":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured"
+		}
+		return CheckViaTunnel(ctx, r.AwgClient)
+	case "check_direct":
+		return CheckDirect(ctx)
 	case "tunnel_enable", "tunnel_disable":
 		if r.Exec == nil {
 			return "err", "exec not configured"

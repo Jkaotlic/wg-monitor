@@ -142,9 +142,10 @@ func TestFormatSmartReply_OK(t *testing.T) {
 			t.Errorf("OK template missing %q in:\n%s", want, text)
 		}
 	}
-	// inline keyboard must contain only 📋 Подробнее
-	if len(kb.InlineKeyboard) != 1 || len(kb.InlineKeyboard[0]) != 1 || kb.InlineKeyboard[0][0].CallbackData != "details:7" {
-		t.Errorf("OK keyboard wrong: %+v", kb)
+	// OK template no longer carries an inline keyboard (details/last_report
+	// removed 2026-05-06 — text-only).
+	if len(kb.InlineKeyboard) != 0 {
+		t.Errorf("OK keyboard expected empty, got: %+v", kb)
 	}
 }
 
@@ -159,14 +160,13 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 			t.Errorf("Degraded missing %q in:\n%s", want, text)
 		}
 	}
-	// inline kb: row 0 [Перезапуск][Тест связи], row 1 [Подробнее]
-	if len(kb.InlineKeyboard) < 2 {
-		t.Fatalf("Degraded keyboard rows: %d, want ≥2", len(kb.InlineKeyboard))
+	// inline kb: single row [Перезапуск][Тест связи] — details button removed.
+	if len(kb.InlineKeyboard) < 1 {
+		t.Fatalf("Degraded keyboard rows: %d, want ≥1", len(kb.InlineKeyboard))
 	}
 	want := map[string]bool{
 		"restart_tunnel:7:tunnel_awg11": true,
 		"pingcheck_now:7:tunnel_awg11":  true,
-		"details:7":                     true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
@@ -190,12 +190,12 @@ func TestFormatSmartReply_Hard(t *testing.T) {
 			t.Errorf("Hard missing %q in:\n%s", want, text)
 		}
 	}
-	// inline kb must contain restart + diag + silence + details
+	// inline kb must contain restart + diag + silence (details/last_report
+	// buttons were removed in 2026-05-06 — no working handler).
 	want := map[string]bool{
-		"restart_tunnel:7:tunnel_awg11":   true,
-		"diag_now:7:tunnel_awg11":         true,
-		"silence:7:tunnel_awg11:1h":       true,
-		"details:7":                       true,
+		"restart_tunnel:7:tunnel_awg11": true,
+		"diag_now:7:tunnel_awg11":       true,
+		"silence:7:tunnel_awg11:1h":     true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
@@ -215,9 +215,9 @@ func TestFormatSmartReply_Offline(t *testing.T) {
 			t.Errorf("Offline missing %q in:\n%s", want, text)
 		}
 	}
-	// only one inline button: last_report:7
-	if len(kb.InlineKeyboard) != 1 || kb.InlineKeyboard[0][0].CallbackData != "last_report:7" {
-		t.Errorf("Offline kb: %+v", kb)
+	// Inline keyboard removed in 2026-05-06 — Offline is text-only now.
+	if len(kb.InlineKeyboard) != 0 {
+		t.Errorf("Offline kb expected empty, got: %+v", kb)
 	}
 }
 

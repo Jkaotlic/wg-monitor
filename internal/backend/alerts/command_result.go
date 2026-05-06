@@ -42,8 +42,13 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	switch action {
 	case "pingcheck_now":
 		return []string{fmt.Sprintf("%s: %s (за %dмс)", header, strings.TrimSpace(body), r.DurationMs)}
-	case "restart_tunnel":
+	case "restart_tunnel", "tunnel_enable", "tunnel_disable":
 		return []string{fmt.Sprintf("%s: %s", header, strings.TrimSpace(body))}
+	case "check_via_tunnel", "check_direct":
+		// Body is already a human-readable multi-line report from
+		// actions.CheckViaTunnel/CheckDirect. Don't double-prefix or
+		// wrap in code fences — just pass it through.
+		return []string{strings.TrimSpace(body)}
 	case "diag_now":
 		full := fmt.Sprintf("%s:\n\n```\n%s\n```", header, body)
 		if len(full) <= maxChars {
@@ -114,6 +119,14 @@ func commandLabelHuman(action string) string {
 		return "⬆ Обновление пакетов"
 	case "force_recheck":
 		return "🔁 Force recheck"
+	case "check_via_tunnel":
+		return "🌍 Через тоннель"
+	case "check_direct":
+		return "🇷🇺 Напрямую"
+	case "tunnel_enable":
+		return "▶ Включить туннель"
+	case "tunnel_disable":
+		return "⏸ Выключить туннель"
 	}
 	return action
 }
