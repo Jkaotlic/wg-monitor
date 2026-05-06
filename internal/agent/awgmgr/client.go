@@ -1,6 +1,7 @@
 package awgmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -170,4 +171,58 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("awgmgr diagnostics/result: HTTP %d: %s", resp.StatusCode, snippet(body))
 	}
 	return string(body), nil
+}
+
+// CreateTunnel calls POST /api/tunnels/create. Returns the newly created Tunnel.
+func (c *Client) CreateTunnel(ctx context.Context, req CreateTunnelRequest) (*Tunnel, error) {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/tunnels/create", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("awgmgr POST /api/tunnels/create: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("awgmgr read create: %w", err)
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("awgmgr create: HTTP %d: %s", resp.StatusCode, snippet(body))
+	}
+	var env Envelope[Tunnel]
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("awgmgr create: decode: %w", err)
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr create: success=false")
+	}
+	return &env.Data, nil
+}
+
+// DeleteTunnel calls DELETE /api/tunnels/{id}.
+func (c *Client) DeleteTunnel(ctx context.Context, tunnelID string) error {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.BaseURL+"/api/tunnels/"+tunnelID, nil)
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+	resp, err := c.HTTP.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("awgmgr DELETE tunnel %s: %w", tunnelID, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("awgmgr DELETE tunnel %s: HTTP %d: %s", tunnelID, resp.StatusCode, snippet(body))
+	}
+	return nil
 }
