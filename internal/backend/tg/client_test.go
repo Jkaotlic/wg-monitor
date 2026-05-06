@@ -227,3 +227,69 @@ func TestDeleteMessage(t *testing.T) {
 		t.Errorf("payload: %+v", got)
 	}
 }
+
+func TestGetFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/getFile") {
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]any
+		json.Unmarshal(body, &req)
+		if req["file_id"] != "file123" {
+			t.Errorf("file_id: %v", req["file_id"])
+		}
+		w.Write([]byte(`{"ok":true,"result":{"file_id":"file123","file_path":"documents/file123.conf"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	fp, err := c.GetFile(context.Background(), "file123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fp != "documents/file123.conf" {
+		t.Errorf("file_path: %q", fp)
+	}
+}
+
+func TestDownloadFile(t *testing.T) {
+	content := []byte("[Interface]\nPrivateKey = abc\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/file/bottok/documents/file123.conf") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write(content)
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	data, err := c.DownloadFile(context.Background(), "documents/file123.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(content) {
+		t.Errorf("data: %q", data)
+	}
+}
+
+func TestGetUpdates_ParseDocument(t *testing.T) {
+	resp := `{"ok":true,"result":[{"update_id":1,"message":{"message_id":10,"from":{"id":99},"chat":{"id":-100},"message_thread_id":5,"document":{"file_id":"fid1","file_name":"awg11.conf","file_size":512}}}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(resp))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client(), LongPollHTTP: srv.Client()}
+	updates, err := c.GetUpdates(context.Background(), 0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("len: %d", len(updates))
+	}
+	doc := updates[0].Message.Document
+	if doc == nil {
+		t.Fatal("Document is nil")
+	}
+	if doc.FileID != "fid1" || doc.FileName != "awg11.conf" {
+		t.Errorf("doc: %+v", doc)
+	}
+}
