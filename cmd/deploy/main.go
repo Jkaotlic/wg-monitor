@@ -91,6 +91,10 @@ func main() {
 		}
 		SaveState(statePath, state)
 		PrintSecretsSaveAdvice(secrets)
+	case "status":
+		if err := actionStatus(state, secrets); err != nil {
+			os.Exit(1)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
 		os.Exit(2)
