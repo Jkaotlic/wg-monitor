@@ -173,13 +173,32 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 	return string(body), nil
 }
 
-// CreateTunnel calls POST /api/tunnels/create. Returns the newly created Tunnel.
-func (c *Client) CreateTunnel(ctx context.Context, req CreateTunnelRequest) (*Tunnel, error) {
-	data, err := json.Marshal(req)
+// ImportConf calls POST /api/import/conf — passes raw .conf text, awg-manager
+// does its own parsing. Returns the created Tunnel (enabled=false).
+func (c *Client) ImportConf(ctx context.Context, rawConf, name string) (*Tunnel, error) {
+	return c.confPost(ctx, "/api/import/conf", rawConf, name)
+}
+
+// ReplaceConf calls POST /api/tunnels/replace?id=<tunnelID> — replaces an
+// existing tunnel's config in-place. Returns the updated Tunnel.
+func (c *Client) ReplaceConf(ctx context.Context, tunnelID, rawConf, name string) (*Tunnel, error) {
+	return c.confPost(ctx, "/api/tunnels/replace?id="+tunnelID, rawConf, name)
+}
+
+// DeleteTunnel calls POST /api/tunnels/delete?id=<tunnelID>.
+func (c *Client) DeleteTunnel(ctx context.Context, tunnelID string) error {
+	return c.post(ctx, "/api/tunnels/delete?id="+tunnelID, nil, nil)
+}
+
+func (c *Client) confPost(ctx context.Context, path, rawConf, name string) (*Tunnel, error) {
+	body, err := json.Marshal(struct {
+		Content string `json:"content"`
+		Name    string `json:"name"`
+	}{Content: rawConf, Name: name})
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/tunnels/create", bytes.NewReader(data))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -188,41 +207,22 @@ func (c *Client) CreateTunnel(ctx context.Context, req CreateTunnelRequest) (*Tu
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("awgmgr POST /api/tunnels/create: %w", err)
+		return nil, fmt.Errorf("awgmgr POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("awgmgr read create: %w", err)
+		return nil, fmt.Errorf("awgmgr read %s: %w", path, err)
 	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("awgmgr create: HTTP %d: %s", resp.StatusCode, snippet(body))
+		return nil, fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(rb))
 	}
 	var env Envelope[Tunnel]
-	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, fmt.Errorf("awgmgr create: decode: %w", err)
+	if err := json.Unmarshal(rb, &env); err != nil {
+		return nil, fmt.Errorf("awgmgr %s: decode: %w", path, err)
 	}
 	if !env.Success {
-		return nil, fmt.Errorf("awgmgr create: success=false")
+		return nil, fmt.Errorf("awgmgr %s: success=false", path)
 	}
 	return &env.Data, nil
-}
-
-// DeleteTunnel calls DELETE /api/tunnels/{id}.
-func (c *Client) DeleteTunnel(ctx context.Context, tunnelID string) error {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.BaseURL+"/api/tunnels/"+tunnelID, nil)
-	if err != nil {
-		return err
-	}
-	httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-	resp, err := c.HTTP.Do(httpReq)
-	if err != nil {
-		return fmt.Errorf("awgmgr DELETE tunnel %s: %w", tunnelID, err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("awgmgr DELETE tunnel %s: HTTP %d: %s", tunnelID, resp.StatusCode, snippet(body))
-	}
-	return nil
 }
