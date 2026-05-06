@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // stepCheckSSH connects and reports OK/fail.
@@ -115,4 +116,90 @@ func stepVerifyHTTP(s *SSH, url string) error {
 
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// stepDetectKeeneticArch returns "arm64" or "mipsle" based on `uname -m`.
+// Aborts on unsupported arch.
+func stepDetectKeeneticArch(s *SSH) (string, error) {
+	out, err := s.MustRun("uname -m")
+	if err != nil {
+		return "", err
+	}
+	arch := strings.TrimSpace(out)
+	switch arch {
+	case "aarch64", "arm64":
+		PrintOK("архитектура: arm64")
+		return "arm64", nil
+	case "mips", "mipsel", "mipsle":
+		PrintOK("архитектура: mipsle")
+		return "mipsle", nil
+	default:
+		PrintFail(fmt.Sprintf("неподдерживаемая архитектура %q (поддержано: aarch64, mipsel)", arch))
+		return "", fmt.Errorf("unsupported arch: %s", arch)
+	}
+}
+
+// stepUploadAgentBinary stops, swaps, restarts the Keenetic agent.
+// Uses UploadStdin (dropbear has no SFTP/dd-friendly stack on some firmwares).
+func stepUploadAgentBinary(s *SSH, localPath, remotePath string) error {
+	data, err := readFile(localPath)
+	if err != nil {
+		PrintFail("read local: " + err.Error())
+		return err
+	}
+	wantSha := hashHex(data)
+
+	PrintInfo("ensure /opt/var/wg-monitor exists")
+	if _, err := s.MustRun("mkdir -p /opt/var/wg-monitor /opt/bin /opt/etc/wg-monitor /opt/etc/init.d"); err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+
+	PrintInfo("остановка агента")
+	s.Run("/opt/etc/init.d/S99wg-monitor stop 2>/dev/null; killall -9 wg-monitor 2>/dev/null; sleep 1; true")
+
+	tmp := remotePath + ".new"
+	PrintInfo(fmt.Sprintf("upload → %s (%d bytes, через stdin pipe)", tmp, len(data)))
+	if err := s.UploadStdin(tmp, data); err != nil {
+		PrintFail("upload: " + err.Error())
+		return err
+	}
+	if _, err := s.MustRun("chmod 755 " + tmp); err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+
+	out, err := s.MustRun("sha256sum " + tmp + " | awk '{print $1}'")
+	if err != nil {
+		PrintFail("sha256sum: " + err.Error())
+		return err
+	}
+	gotSha := strings.TrimSpace(out)
+	if gotSha != wantSha {
+		PrintFail(fmt.Sprintf("sha256 mismatch: local %s remote %s", wantSha[:16], gotSha[:16]))
+		s.Run("rm -f " + tmp)
+		return fmt.Errorf("sha256 mismatch")
+	}
+	PrintOK("sha256 совпадает")
+
+	if _, err := s.MustRun("mv " + tmp + " " + remotePath); err != nil {
+		PrintFail("atomic swap: " + err.Error())
+		return err
+	}
+	PrintOK("бинарь обновлён")
+
+	if _, err := s.MustRun("/opt/etc/init.d/S99wg-monitor start"); err != nil {
+		PrintFail("start: " + err.Error())
+		return err
+	}
+
+	// Wait briefly for the daemon to come up.
+	time.Sleep(2 * time.Second)
+	out, _ = s.MustRun("pidof wg-monitor")
+	if strings.TrimSpace(out) == "" {
+		PrintFail("процесс wg-monitor не появился после старта")
+		return fmt.Errorf("agent did not start")
+	}
+	PrintOK("агент запущен (PID " + strings.TrimSpace(out) + ")")
+	return nil
 }

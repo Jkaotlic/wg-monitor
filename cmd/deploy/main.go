@@ -53,6 +53,20 @@ func main() {
 			fmt.Fprintln(os.Stderr, "save state:", err)
 		}
 		PrintSecretsSaveAdvice(secrets)
+	case "update-agent":
+		agentFlag := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--agent" && i+1 < len(args) {
+				agentFlag = args[i+1]
+			}
+		}
+		if err := actionUpdateAgent(state, secrets, dl, agentFlag); err != nil {
+			os.Exit(1)
+		}
+		if err := SaveState(statePath, state); err != nil {
+			fmt.Fprintln(os.Stderr, "save state:", err)
+		}
+		PrintSecretsSaveAdvice(secrets)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
 		os.Exit(2)
