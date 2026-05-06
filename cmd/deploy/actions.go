@@ -479,6 +479,101 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	return nil
 }
 
+func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
+	if state.Backend.Host == "" {
+		PrintFail("сначала install-backend (нужно куда добавлять)")
+		return fmt.Errorf("no backend")
+	}
+
+	nick := Ask("Никнейм нового роутера (a-z0-9_-, уникальный)", "")
+	if nick == "" {
+		return fmt.Errorf("nickname required")
+	}
+	if state.FindAgent(nick) != nil {
+		PrintFail("такой никнейм уже есть в wizard.toml")
+		return fmt.Errorf("duplicate nickname")
+	}
+
+	// 1. Сгенерировать токен.
+	tok := randomHexToken(32)
+	PrintWarn(fmt.Sprintf("сгенерирован токен для %s — сохрани в WG_AGENT_TOKEN_%s",
+		nick, strings.ToUpper(nick)))
+	fmt.Println("    " + tok)
+
+	// 2. Добавить в backend.yaml на VPS.
+	PrintStep(1, 3, "Обновить backend.yaml на VPS")
+	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
+	if pass == "" {
+		return fmt.Errorf("missing VPS password")
+	}
+	kh, _ := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	bs, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh)
+	if err != nil {
+		return err
+	}
+	defer bs.Close()
+
+	threadID := parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
+
+	// Добавить в state и регенерить backend.yaml
+	state.Agents = append(state.Agents, AgentState{
+		Nickname: nick,
+		ThreadID: threadID,
+	})
+
+	// Все токены: для уже существующих — из env, для нового — только что сгенерированный
+	var entries []AgentEntry
+	for _, a := range state.Agents {
+		envName := "WG_AGENT_TOKEN_" + strings.ToUpper(a.Nickname)
+		t := os.Getenv(envName)
+		if a.Nickname == nick {
+			t = tok
+		}
+		if t == "" {
+			PrintFail(fmt.Sprintf("токен для %s неизвестен (нет в %s). Прервать?", a.Nickname, envName))
+			return fmt.Errorf("missing token for %s", a.Nickname)
+		}
+		entries = append(entries, AgentEntry{
+			Nickname: a.Nickname,
+			Token:    t,
+			ThreadID: a.ThreadID,
+		})
+	}
+
+	// Bot token берём заново — т.к. не в state
+	botToken, _ := secrets.Get("WG_BOT_TOKEN", "Telegram bot token", nil)
+	yamlBytes, err := RenderBackendYAML(BackendParams{
+		BotToken:    botToken,
+		ChatID:      state.Telegram.ChatID,
+		AdminUserID: state.Telegram.AdminUserID,
+		Agents:      entries,
+	})
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(bs, "/etc/wg-monitor/backend.yaml", yamlBytes, "600"); err != nil {
+		return err
+	}
+
+	PrintStep(2, 3, "Перезапустить бэкенд")
+	if _, err := bs.MustRun("systemctl restart wg-monitor-backend"); err != nil {
+		return err
+	}
+	time.Sleep(2 * time.Second)
+	out, _ := bs.MustRun("systemctl is-active wg-monitor-backend")
+	if strings.TrimSpace(out) != "active" {
+		jr, _ := bs.MustRun("journalctl -u wg-monitor-backend -n 30 --no-pager")
+		PrintFail("бэкенд не active после restart:\n" + jr)
+		return fmt.Errorf("backend not active")
+	}
+	PrintOK("бэкенд перезапущен")
+
+	PrintStep(3, 3, "Установить агента на новый роутер")
+	// Сохранить токен в env для текущего процесса, чтобы install-agent его подхватил.
+	os.Setenv("WG_AGENT_TOKEN_"+strings.ToUpper(nick), tok)
+	return actionInstallAgent(state, secrets, dl, nick)
+}
+
 // --- helpers ---
 
 func parseIntOr(s string, def int) int {
