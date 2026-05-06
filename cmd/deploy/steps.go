@@ -118,6 +118,112 @@ func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
 
+// stepEnsureUser creates a system user if missing.
+func stepEnsureUser(s *SSH, name string) error {
+	out, _ := s.MustRun("id -u " + name + " 2>/dev/null; true")
+	if strings.TrimSpace(out) != "" {
+		PrintSkip("user " + name + " существует")
+		return nil
+	}
+	cmd := fmt.Sprintf("useradd --system --no-create-home --shell /usr/sbin/nologin %s", name)
+	if _, err := s.MustRun(cmd); err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+	PrintOK("user " + name + " создан")
+	return nil
+}
+
+// stepEnsureDir mkdir -p with chown.
+func stepEnsureDir(s *SSH, path, owner string) error {
+	if _, err := s.MustRun("mkdir -p " + path); err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+	if owner != "" {
+		s.MustRun("chown " + owner + " " + path)
+	}
+	PrintOK(path)
+	return nil
+}
+
+// stepUploadFile uploads bytes via UploadSFTP and chmod's.
+func stepUploadFile(s *SSH, remotePath string, data []byte, mode string) error {
+	if err := s.UploadSFTP(remotePath, data); err != nil {
+		PrintFail("upload: " + err.Error())
+		return err
+	}
+	if _, err := s.MustRun("chmod " + mode + " " + remotePath); err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+	PrintOK(remotePath)
+	return nil
+}
+
+// stepCheckCaddyInstalled returns true if caddy is on PATH.
+func stepCheckCaddyInstalled(s *SSH) bool {
+	_, _, rc, _ := s.Run("which caddy")
+	return rc == 0
+}
+
+// stepInstallCaddy: A/M/S choice. A only if Debian-family.
+func stepInstallCaddy(s *SSH) error {
+	if stepCheckCaddyInstalled(s) {
+		PrintSkip("caddy уже установлен")
+		return nil
+	}
+	PrintWarn("Caddy не установлен. Команды для установки на Debian/Ubuntu:")
+	fmt.Println(Colorize("    apt install -y debian-keyring debian-archive-keyring apt-transport-https", ColorDim))
+	fmt.Println(Colorize("    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \\", ColorDim))
+	fmt.Println(Colorize("      | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg", ColorDim))
+	fmt.Println(Colorize("    echo 'deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] \\", ColorDim))
+	fmt.Println(Colorize("      https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' \\", ColorDim))
+	fmt.Println(Colorize("      > /etc/apt/sources.list.d/caddy-stable.list", ColorDim))
+	fmt.Println(Colorize("    apt update && apt install -y caddy", ColorDim))
+	fmt.Println()
+
+	// Detect Debian family for [A] availability.
+	_, _, rc, _ := s.Run("test -f /etc/debian_version")
+	debian := rc == 0
+
+	opts := []ChoiceOption{}
+	if debian {
+		opts = append(opts, ChoiceOption{"A", "Сделай за меня по SSH"})
+	}
+	opts = append(opts,
+		ChoiceOption{"M", "Я сам поставлю — нажму Enter когда готов"},
+		ChoiceOption{"S", "Скипнуть"},
+	)
+	choice := AskChoice("Что делаем?", opts)
+
+	switch choice {
+	case "A":
+		install := strings.Join([]string{
+			"apt install -y debian-keyring debian-archive-keyring apt-transport-https",
+			"curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg",
+			"echo 'deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main' > /etc/apt/sources.list.d/caddy-stable.list",
+			"apt update",
+			"apt install -y caddy",
+		}, " && ")
+		if _, err := s.MustRun(install); err != nil {
+			PrintFail(err.Error())
+			return err
+		}
+		PrintOK("caddy установлен")
+	case "M":
+		Ask("Поставь Caddy и нажми Enter", "")
+		if !stepCheckCaddyInstalled(s) {
+			PrintFail("Caddy всё ещё не найден. Прерываю.")
+			return fmt.Errorf("caddy not installed")
+		}
+		PrintOK("caddy найден")
+	case "S":
+		PrintWarn("Caddy скипнут. /health не сможет ответить через TLS.")
+	}
+	return nil
+}
+
 // stepDetectKeeneticArch returns "arm64" or "mipsle" based on `uname -m`.
 // Aborts on unsupported arch.
 func stepDetectKeeneticArch(s *SSH) (string, error) {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -177,4 +179,222 @@ func userOrDefault(u, def string) string {
 		return def
 	}
 	return u
+}
+
+func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) error {
+	rel, err := dl.GetLatestRelease()
+	if err != nil {
+		return err
+	}
+	PrintOK("последний релиз: " + rel.TagName)
+
+	// 1. Запросить параметры
+	state.Backend.Host = Ask("VPS host или IP", state.Backend.Host)
+	state.Backend.Port = parseIntOr(Ask("SSH port", strOrDefault(state.Backend.Port, "22")), 22)
+	state.Backend.User = orDefault(Ask("SSH user", strOrDefaultS(state.Backend.User, "root")), "root")
+	state.Backend.Domain = Ask("Домен бэкенда (например wgmon.example.com)", state.Backend.Domain)
+	caddyEmail := Ask("Email для Let's Encrypt", "admin@"+state.Backend.Domain)
+
+	if state.Telegram.ChatID == 0 {
+		state.Telegram.ChatID = parseInt64Or(Ask("Telegram chat_id (отрицательное число)", ""), 0)
+	}
+	if state.Telegram.AdminUserID == 0 {
+		state.Telegram.AdminUserID = parseInt64Or(Ask("Telegram admin user_id (твой User ID)", ""), 0)
+	}
+
+	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
+	botToken, _ := secrets.Get("WG_BOT_TOKEN", "Telegram bot token (1234:ABC...)", nil)
+
+	if pass == "" || botToken == "" || state.Backend.Host == "" || state.Backend.Domain == "" {
+		PrintFail("обязательные поля пустые")
+		return fmt.Errorf("missing required fields")
+	}
+
+	// Запросить хотя бы одного агента (для backend.yaml.agents)
+	if len(state.Agents) == 0 {
+		nick := Ask("Никнейм первого роутера (a-z, 2-16)", "testkeen")
+		thread := parseIntOr(Ask("Telegram thread_id для топика этого роутера", "1"), 1)
+		state.Agents = append(state.Agents, AgentState{
+			Nickname: nick,
+			ThreadID: thread,
+		})
+	}
+	// Сгенерить токен агенту если ещё нет в env
+	agentTokens := map[string]string{}
+	for i := range state.Agents {
+		ag := &state.Agents[i]
+		envName := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
+		tok := os.Getenv(envName)
+		if tok == "" {
+			tok = randomHexToken(32)
+			PrintWarn(fmt.Sprintf("сгенерирован токен для %s — сохрани в %s", ag.Nickname, envName))
+			fmt.Println("    " + tok)
+		}
+		agentTokens[ag.Nickname] = tok
+	}
+
+	// 2. SSH
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+	PrintStep(1, 12, "SSH к VPS")
+	s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh)
+	if err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+	defer s.Close()
+
+	PrintStep(2, 12, "User wgmonitor")
+	if err := stepEnsureUser(s, "wgmonitor"); err != nil {
+		return err
+	}
+
+	PrintStep(3, 12, "Директории")
+	stepEnsureDir(s, "/etc/wg-monitor", "")
+	stepEnsureDir(s, "/var/lib/wg-monitor", "wgmonitor:wgmonitor")
+
+	PrintStep(4, 12, "backend.yaml")
+	var entries []AgentEntry
+	for _, ag := range state.Agents {
+		entries = append(entries, AgentEntry{
+			Nickname: ag.Nickname,
+			Token:    agentTokens[ag.Nickname],
+			ThreadID: ag.ThreadID,
+		})
+	}
+	yamlBytes, err := RenderBackendYAML(BackendParams{
+		BotToken:    botToken,
+		ChatID:      state.Telegram.ChatID,
+		AdminUserID: state.Telegram.AdminUserID,
+		Agents:      entries,
+	})
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(s, "/etc/wg-monitor/backend.yaml", yamlBytes, "600"); err != nil {
+		return err
+	}
+
+	PrintStep(5, 12, "systemd unit")
+	unit, err := ReadStaticTemplate("wg-monitor-backend.service")
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backend.service", unit, "644"); err != nil {
+		return err
+	}
+	if _, err := s.MustRun("systemctl daemon-reload && systemctl enable wg-monitor-backend"); err != nil {
+		return err
+	}
+	PrintOK("daemon-reload + enable")
+
+	PrintStep(6, 12, "Caddy")
+	if err := stepInstallCaddy(s); err != nil {
+		return err
+	}
+
+	PrintStep(7, 12, "Caddyfile")
+	cf, err := RenderCaddyfile(CaddyParams{Domain: state.Backend.Domain, Email: caddyEmail})
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(s, "/etc/caddy/Caddyfile", cf, "644"); err != nil {
+		return err
+	}
+	if _, err := s.MustRun("systemctl enable --now caddy && systemctl reload caddy"); err != nil {
+		PrintWarn("caddy reload не прошёл — возможно, не установлен")
+	} else {
+		PrintOK("caddy reloaded")
+	}
+
+	PrintStep(8, 12, "Скачать backend бинарь")
+	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
+	if err != nil {
+		return err
+	}
+
+	PrintStep(9, 12, "Upload + sha + swap")
+	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", ""); err != nil {
+		return err
+	}
+
+	PrintStep(10, 12, "Start service")
+	if _, err := s.MustRun("systemctl start wg-monitor-backend"); err != nil {
+		return err
+	}
+	PrintOK("wg-monitor-backend started")
+
+	time.Sleep(3 * time.Second)
+
+	PrintStep(11, 12, "Verify systemctl is-active")
+	out, _ := s.MustRun("systemctl is-active wg-monitor-backend")
+	if strings.TrimSpace(out) != "active" {
+		PrintFail("сервис не active. Логи:")
+		jr, _ := s.MustRun("journalctl -u wg-monitor-backend -n 30 --no-pager")
+		fmt.Println(jr)
+		return fmt.Errorf("service not active")
+	}
+	PrintOK("active")
+
+	PrintStep(12, 12, "Verify /health через домен")
+	url := "https://" + state.Backend.Domain + "/health"
+	if err := stepVerifyHTTP(s, url); err != nil {
+		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
+	}
+
+	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
+	state.Backend.LastDeployedVersion = rel.TagName
+	return nil
+}
+
+// --- helpers ---
+
+func parseIntOr(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	var n int
+	fmt.Sscanf(s, "%d", &n)
+	if n == 0 {
+		return def
+	}
+	return n
+}
+
+func parseInt64Or(s string, def int64) int64 {
+	if s == "" {
+		return def
+	}
+	var n int64
+	fmt.Sscanf(s, "%d", &n)
+	return n
+}
+
+func strOrDefault(n int, def string) string {
+	if n == 0 {
+		return def
+	}
+	return fmt.Sprintf("%d", n)
+}
+
+func strOrDefaultS(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func orDefault(s, def string) string {
+	if s == "" {
+		return def
+	}
+	return s
+}
+
+func randomHexToken(nBytes int) string {
+	b := make([]byte, nBytes)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }

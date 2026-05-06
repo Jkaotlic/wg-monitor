@@ -45,6 +45,12 @@ func main() {
 	}
 
 	switch args[0] {
+	case "install-backend":
+		if err := actionInstallBackend(state, secrets, dl); err != nil {
+			os.Exit(1)
+		}
+		SaveState(statePath, state)
+		PrintSecretsSaveAdvice(secrets)
 	case "update-backend":
 		if err := actionUpdateBackend(state, secrets, dl); err != nil {
 			os.Exit(1)
