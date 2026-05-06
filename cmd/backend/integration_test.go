@@ -419,3 +419,5 @@ func (noopTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string,
 func (noopTG) GetUpdates(_ context.Context, _ int64, _ int) ([]tg.Update, error) {
 	return nil, nil
 }
+func (noopTG) GetFile(_ context.Context, _ string) (string, error)      { return "", nil }
+func (noopTG) DownloadFile(_ context.Context, _ string) ([]byte, error) { return nil, nil }
