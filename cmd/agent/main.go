@@ -92,6 +92,7 @@ func main() {
 		AwgClient:    awgClient,
 		ForceRecheck: rep.ForceResumed,
 		Opkg:         opkg,
+		Exec:         actions.DefaultExec,
 	}
 	loop := cmdloop.New(client, runner, 30)
 	go loop.Run(ctx)

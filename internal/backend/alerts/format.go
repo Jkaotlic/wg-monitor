@@ -263,9 +263,10 @@ func writeTunnelBody(b *strings.Builder, d map[string]any) {
 		}
 		fmt.Fprintf(b, "⚙ %s\n", strings.Join(parts, " · "))
 	}
-	if errStr := strOrEmpty(d, "error"); errStr != "" {
-		fmt.Fprintf(b, "❓ %s\n", errStr)
-	}
+	// Intentionally no '❓ <error>' line: the error string from tunnels.go
+	// (e.g. "status=disabled; no handshake ever; pingCheck=disabled (fails 0/3)")
+	// duplicates content already rendered above as structured rows. Operators
+	// reported it as visual noise — same fix as DNS dedup.
 }
 
 func writeDNSBody(b *strings.Builder, d map[string]any) {

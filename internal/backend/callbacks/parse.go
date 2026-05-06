@@ -21,6 +21,14 @@ type Args struct {
 	// buttons stay visible after taps. HARD-alert callbacks have IsMenu=false
 	// and continue to lose their keyboard on first tap.
 	IsMenu bool
+	// NDMSName is the Keenetic interface id ("Wireguard0") tucked into the
+	// 4th colon-segment of tunnel_enable/disable callbacks. Empty for any
+	// other action — the agent's runner needs it to call ndmc.
+	NDMSName string
+	// IsPanel marks callbacks originating from the Tunnels Panel (CheckName
+	// ends in "_panel_"). The router uses this to refresh the panel inline
+	// instead of editing the original alert message.
+	IsPanel bool
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -29,18 +37,26 @@ type Args struct {
 // FSM check names never carry this suffix (synthetic + reserved).
 const menuSuffix = "_menu"
 
+// panelSentinel is the CheckName placeholder used by Tunnels-Panel global
+// buttons (restart / refresh) where there is no per-tunnel target.
+const panelSentinel = "_panel_"
+
 var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
 	// command-channel actions: enqueue a wire.Command for the agent.
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
 	"force_recheck": true, "opkg_upgrade": true,
+	"tunnel_enable": true, "tunnel_disable": true,
+	// backend-only callback (no agent action): re-render Tunnels-panel inline.
+	"tunnels_refresh": true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
 // (vs. local DB-only actions like silence/ack/mute/history).
 func IsCommandAction(a string) bool {
 	switch a {
-	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade":
+	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck",
+		"opkg_upgrade", "tunnel_enable", "tunnel_disable":
 		return true
 	}
 	return false
@@ -72,6 +88,9 @@ func Parse(data string) (Args, error) {
 		isMenu = true
 	}
 	a := Args{Action: action, UserID: uid, CheckName: checkName, IsMenu: isMenu}
+	if checkName == panelSentinel {
+		a.IsPanel = true
+	}
 	if action == "silence" {
 		if len(parts) != 4 {
 			return Args{}, fmt.Errorf("silence requires ttl: %q", data)
@@ -81,6 +100,12 @@ func Parse(data string) (Args, error) {
 			return Args{}, err
 		}
 		a.TTL = ttl
+	}
+	if action == "tunnel_enable" || action == "tunnel_disable" {
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
+		}
+		a.NDMSName = parts[3]
 	}
 	return a, nil
 }

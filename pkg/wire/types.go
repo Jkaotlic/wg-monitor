@@ -39,6 +39,8 @@ var validCommandActions = map[string]bool{
 	"pingcheck_now":  true,
 	"opkg_upgrade":   true,
 	"force_recheck":  true,
+	"tunnel_enable":  true,
+	"tunnel_disable": true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

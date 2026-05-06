@@ -7,6 +7,10 @@
 //   - force_recheck   → caller-provided callback (typically reporter.SendOnce)
 //   - opkg_upgrade    → OpkgRunner.DryRun (preflight only — no live upgrade
 //     yet; juicy live-upgrade path is deferred to a later iteration)
+//   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
+//     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
+//     ndmc CLI is the authoritative path. NDMSName must be supplied in
+//     cmd.Args["ndms_name"] by the backend.)
 //
 // Every action returns a wire.CommandResult with the original Command.ID
 // preserved so the backend can correlate outcome with the TG callback.
@@ -14,6 +18,7 @@ package actions
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
@@ -30,6 +35,7 @@ type Runner struct {
 	AwgClient    *awgmgr.Client
 	ForceRecheck func(ctx context.Context) // typically wraps reporter.SendOnce
 	Opkg         OpkgExecutor
+	Exec         ExecFunc // for tunnel_enable/disable via ndmc
 	Now          func() time.Time
 }
 
@@ -89,6 +95,23 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 			return "err", "opkg runner not configured"
 		}
 		return r.Opkg.DryRun(ctx)
+	case "tunnel_enable", "tunnel_disable":
+		if r.Exec == nil {
+			return "err", "exec not configured"
+		}
+		ndms, _ := cmd.Args["ndms_name"].(string)
+		if ndms == "" {
+			return "err", "tunnel_enable/disable: ndms_name missing in args"
+		}
+		state := "up"
+		if cmd.Action == "tunnel_disable" {
+			state = "down"
+		}
+		out, err := r.Exec(ctx, "ndmc", "-c", fmt.Sprintf("interface %s %s", ndms, state))
+		if err != nil {
+			return "err", fmt.Sprintf("ndmc interface %s %s: %v\n%s", ndms, state, err, string(out))
+		}
+		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out))
 	default:
 		return "err", "unknown action: " + cmd.Action
 	}
