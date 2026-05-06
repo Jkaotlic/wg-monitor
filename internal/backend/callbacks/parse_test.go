@@ -107,3 +107,39 @@ func TestParseMalformed(t *testing.T) {
 		}
 	}
 }
+
+func TestParse_TunnelImportReplace(t *testing.T) {
+	args, err := Parse("tunnel_import_replace:42:awg11:a1b2c3d4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Action != "tunnel_import_replace" {
+		t.Errorf("action: %q", args.Action)
+	}
+	if args.UserID != 42 {
+		t.Errorf("uid: %d", args.UserID)
+	}
+	if args.CheckName != "awg11" {
+		t.Errorf("check: %q", args.CheckName)
+	}
+	if args.ImportToken != "a1b2c3d4" {
+		t.Errorf("token: %q", args.ImportToken)
+	}
+}
+
+func TestParse_TunnelImportAdd(t *testing.T) {
+	args, err := Parse("tunnel_import_add:7:new-tun:deadbeef")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args.Action != "tunnel_import_add" || args.ImportToken != "deadbeef" {
+		t.Errorf("args: %+v", args)
+	}
+}
+
+func TestParse_TunnelImportMissingToken(t *testing.T) {
+	_, err := Parse("tunnel_import_replace:42:awg11")
+	if err == nil {
+		t.Error("expected error for missing token")
+	}
+}

@@ -286,3 +286,53 @@ var commandLabels = map[string]string{
 	"tunnel_enable":  "▶ Включить",
 	"tunnel_disable": "⏸ Выключить",
 }
+
+// pendingUpload holds a downloaded .conf while the admin confirms what to do.
+// Stored in Router.pending keyed by userID; consumed by ImportAction.
+type pendingUpload struct {
+	ConfB64       string
+	Name          string    // empty = still waiting for admin to type tunnel name
+	SuggestedName string    // sanitized from filename, shown in "how to name?" prompt
+	ThreadID      *int64
+	Token         string    // 8-hex random, embedded in callback_data
+	ExpiresAt     time.Time // 5 min from upload
+}
+
+// ImportAction handles tunnel_import_replace / tunnel_import_add callback buttons.
+// It looks up the pending conf upload, then enqueues a tunnel_import wire.Command.
+type ImportAction struct {
+	sink      CommandEnqueuer
+	consumeFn func(userID int64, token string) (*pendingUpload, bool)
+	idGen     func() string
+}
+
+func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	up, ok := a.consumeFn(args.UserID, args.ImportToken)
+	if !ok {
+		return "", fmt.Errorf("загрузка истекла или не найдена; отправь конфиг заново")
+	}
+	replace := args.Action == "tunnel_import_replace"
+	cmd := wire.Command{
+		ID:     a.idGen(),
+		Action: "tunnel_import",
+		Args: map[string]any{
+			"conf":    up.ConfB64,
+			"name":    up.Name,
+			"replace": replace,
+		},
+		IssuedAt: time.Now().UTC(),
+	}
+	ref := cmdpkg.MessageRef{
+		ChatID:    q.Message.Chat.ID,
+		MessageID: q.Message.MessageID,
+		ThreadID:  q.Message.MessageThreadID,
+	}
+	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+		return "", fmt.Errorf("enqueue tunnel_import: %w", err)
+	}
+	verb := "добавление"
+	if replace {
+		verb = "замена"
+	}
+	return fmt.Sprintf("📤 Import (%s %q) поставлен в очередь", verb, up.Name), nil
+}

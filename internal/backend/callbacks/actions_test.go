@@ -288,3 +288,65 @@ func (f *fakeTGForHistory) SendMessage(ctx context.Context, chatID int64, thread
 
 // Ensure db import is used (newTestDB already uses it, but keep explicit).
 var _ *db.DB
+
+func TestImportAction_Apply_Replace(t *testing.T) {
+	pending := map[int64]*pendingUpload{
+		42: {ConfB64: "abc", Name: "awg11", Token: "tok1", ExpiresAt: time.Now().Add(time.Minute)},
+	}
+	sink := &fakeEnqueuer{}
+	a := &ImportAction{
+		sink: sink,
+		consumeFn: func(uid int64, token string) (*pendingUpload, bool) {
+			if uid == 42 && token == "tok1" {
+				up := pending[uid]
+				delete(pending, uid)
+				return up, true
+			}
+			return nil, false
+		},
+		idGen: func() string { return "fixed-id" },
+	}
+	q := &tg.CallbackQuery{
+		ID:      "cbq1",
+		From:    tg.User{ID: 42},
+		Message: tg.Message{MessageID: 10, Chat: tg.Chat{ID: -100}},
+		Data:    "tunnel_import_replace:42:awg11:tok1",
+	}
+	args := Args{Action: "tunnel_import_replace", UserID: 42, CheckName: "awg11", ImportToken: "tok1"}
+	status, err := a.Apply(context.Background(), q, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "awg11") {
+		t.Errorf("status: %q", status)
+	}
+	// EnqueueWithRef was called — check via refs slice
+	if len(sink.refs) == 0 {
+		t.Fatal("no EnqueueWithRef call")
+	}
+	// Action and args stored in calls (EnqueueWithRef delegates to Enqueue)
+	if len(sink.calls) == 0 {
+		t.Fatal("no enqueue call recorded")
+	}
+	lastCall := sink.calls[len(sink.calls)-1]
+	if lastCall.action != "tunnel_import" {
+		t.Errorf("cmd action: %q", lastCall.action)
+	}
+	if len(pending) != 0 {
+		t.Error("pending should be consumed")
+	}
+}
+
+func TestImportAction_Apply_Expired(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := &ImportAction{
+		sink:      sink,
+		consumeFn: func(uid int64, token string) (*pendingUpload, bool) { return nil, false },
+		idGen:     func() string { return "x" },
+	}
+	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: -100}}}
+	_, err := a.Apply(context.Background(), q, Args{Action: "tunnel_import_replace", UserID: 99})
+	if err == nil || !strings.Contains(err.Error(), "истекла") {
+		t.Errorf("expected expiry error, got %v", err)
+	}
+}
