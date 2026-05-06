@@ -19,11 +19,20 @@ type CallbackQuery struct {
 }
 
 type Message struct {
-	MessageID       int64  `json:"message_id"`
-	Chat            Chat   `json:"chat"`
-	From            User   `json:"from"`
-	MessageThreadID *int64 `json:"message_thread_id,omitempty"`
-	Text            string `json:"text"`
+	MessageID       int64     `json:"message_id"`
+	Chat            Chat      `json:"chat"`
+	From            User      `json:"from"`
+	MessageThreadID *int64    `json:"message_thread_id,omitempty"`
+	Text            string    `json:"text"`
+	Document        *Document `json:"document,omitempty"`
+}
+
+// Document represents a TG file attachment on a Message.
+type Document struct {
+	FileID   string `json:"file_id"`
+	FileName string `json:"file_name"`
+	FileSize int64  `json:"file_size"`
+	MimeType string `json:"mime_type,omitempty"`
 }
 
 type User struct {

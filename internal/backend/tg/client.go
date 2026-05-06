@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const DefaultBaseURL = "https://api.telegram.org/bot"
@@ -200,6 +201,45 @@ type deleteMessageReq struct {
 func (c *Client) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
 	body, _ := json.Marshal(deleteMessageReq{ChatID: chatID, MessageID: messageID})
 	return c.call(ctx, "deleteMessage", body, nil)
+}
+
+type getFileReq struct {
+	FileID string `json:"file_id"`
+}
+
+type getFileResult struct {
+	FilePath string `json:"file_path"`
+}
+
+// GetFile returns the server-side file_path for a TG file_id. The path is
+// valid for 1 hour. Use DownloadFile to fetch the actual bytes.
+func (c *Client) GetFile(ctx context.Context, fileID string) (string, error) {
+	body, _ := json.Marshal(getFileReq{FileID: fileID})
+	var out getFileResult
+	if err := c.call(ctx, "getFile", body, &out); err != nil {
+		return "", err
+	}
+	return out.FilePath, nil
+}
+
+// DownloadFile fetches raw bytes from the TG file CDN.
+// filePath comes from GetFile. Limit 20 MB (TG Bot API hard cap).
+func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, error) {
+	fileBase := strings.TrimSuffix(c.BaseURL, "bot") + "file/bot"
+	url := fileBase + c.Token + "/" + filePath
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("tg DownloadFile: build request: %w", err)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("tg DownloadFile: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("tg DownloadFile: HTTP %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
 }
 
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {
