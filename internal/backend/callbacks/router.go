@@ -2,7 +2,10 @@ package callbacks
 
 import (
 	"context"
+	cryptoRand "crypto/rand"
 	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +13,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/alerts"
@@ -25,6 +29,8 @@ type TGClient interface {
 	AnswerCallbackQuery(ctx context.Context, callbackID, text string) error
 	EditMessageText(ctx context.Context, chatID, messageID int64, text, parseMode string, markup *tg.InlineKeyboardMarkup) error
 	GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]tg.Update, error)
+	GetFile(ctx context.Context, fileID string) (string, error)
+	DownloadFile(ctx context.Context, filePath string) ([]byte, error)
 }
 
 type Config struct {
@@ -44,14 +50,17 @@ type UIConfigSnapshot struct {
 }
 
 type Router struct {
-	d       *db.DB
-	tg      TGClient
-	cfg     Config
-	silence *SilenceAction
-	ack     *AckAction
-	mute    *MuteAction
-	history *HistoryAction
-	command *CommandAction
+	d            *db.DB
+	tg           TGClient
+	cfg          Config
+	silence      *SilenceAction
+	ack          *AckAction
+	mute         *MuteAction
+	history      *HistoryAction
+	command      *CommandAction
+	importAction *ImportAction
+	pendingMu    sync.Mutex
+	pending      map[int64]*pendingUpload
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -63,16 +72,32 @@ func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 // NewRouterWithSink builds a Router whose command-action callbacks enqueue
 // wire.Command into the provided sink for the agent to long-poll.
 func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Config) *Router {
-	return &Router{
+	r := &Router{
 		d:       d,
 		tg:      tgClient,
 		cfg:     cfg,
+		pending: make(map[int64]*pendingUpload),
 		silence: NewSilenceAction(d),
 		ack:     NewAckAction(d),
 		mute:    NewMuteAction(d, cfg.MuteCutoffHour),
 		history: NewHistoryAction(d, tgClient, cfg.ChatID),
 		command: NewCommandAction(sink, nil),
 	}
+	r.importAction = &ImportAction{
+		sink: sink,
+		consumeFn: func(userID int64, token string) (*pendingUpload, bool) {
+			r.pendingMu.Lock()
+			defer r.pendingMu.Unlock()
+			up, ok := r.pending[userID]
+			if !ok || up.Token != token || time.Now().After(up.ExpiresAt) || up.Name == "" {
+				return nil, false
+			}
+			delete(r.pending, userID)
+			return up, true
+		},
+		idGen: defaultCmdID,
+	}
+	return r
 }
 
 // Run loops on GetUpdates, persisting the last-processed update_id in tg_state KV.
@@ -135,6 +160,18 @@ func (r *Router) saveOffset(offset int64) error {
 	return r.d.KV().Set("last_update_id", strconv.FormatInt(offset, 10))
 }
 
+func (r *Router) storePending(userID int64, up *pendingUpload) {
+	r.pendingMu.Lock()
+	defer r.pendingMu.Unlock()
+	r.pending[userID] = up
+}
+
+func newImportToken() string {
+	var b [4]byte
+	_, _ = cryptoRand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
 // HandleCallback applies allowlist, parses, dispatches to action, edits message.
 // Exposed for tests.
 //
@@ -170,6 +207,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade",
 		"tunnel_enable", "tunnel_disable":
 		action = r.command
+	case "tunnel_import_replace", "tunnel_import_add":
+		if r.importAction != nil {
+			action = r.importAction
+		}
 	case "tunnels_refresh":
 		// Local-only callback: re-render the Tunnels Panel inline.
 		// Look up the user owning this thread (panel was sent from per_router topic).
@@ -250,6 +291,11 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		return
 	}
 	kind, user := r.resolveTopicKind(m.MessageThreadID)
+	// Document handler — before text switch.
+	if m.Document != nil {
+		r.handleDocumentUpload(ctx, m, kind, user)
+		return
+	}
 	switch m.Text {
 	case "📊 Что происходит?":
 		if kind == "per_router" && user != nil {
@@ -283,6 +329,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	case "📊 Здоровье флота":
 		r.dispatchFleetHealth(ctx, m)
 	default:
+		if r.handlePendingNameReply(ctx, m, user) {
+			return
+		}
 		// Ignore — could be operator chatting; don't delete.
 		return
 	}
@@ -576,6 +625,89 @@ func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message) {
 		}
 	}
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, tg.ReplyKeyboardForTopic("summary"))
+}
+
+func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind string, user *db.User) {
+	if kind != "per_router" || user == nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			"конфиги принимаются только в топике роутера.", "", nil)
+		return
+	}
+	if m.Document.FileSize > 50*1024 {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			"файл слишком большой (максимум 50 КБ для .conf).", "", nil)
+		return
+	}
+	filePath, err := r.tg.GetFile(ctx, m.Document.FileID)
+	if err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			"не удалось получить файл: "+err.Error(), "", nil)
+		return
+	}
+	data, err := r.tg.DownloadFile(ctx, filePath)
+	if err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			"не удалось скачать файл: "+err.Error(), "", nil)
+		return
+	}
+	confB64 := base64.StdEncoding.EncodeToString(data)
+	suggested := sanitizeTunnelName(strings.TrimSuffix(m.Document.FileName, ".conf"))
+	token := newImportToken()
+	up := &pendingUpload{
+		ConfB64:       confB64,
+		SuggestedName: suggested,
+		ThreadID:      m.MessageThreadID,
+		Token:         token,
+		ExpiresAt:     time.Now().Add(5 * time.Minute),
+	}
+	if isValidTunnelName(suggested) {
+		up.Name = suggested
+		r.storePending(user.ID, up)
+		r.sendImportConfirmation(ctx, m.Chat.ID, m.MessageThreadID, user.ID, suggested, token)
+	} else {
+		r.storePending(user.ID, up)
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			fmt.Sprintf("📁 Получен файл «%s». Как назвать туннель? (a-z0-9_-, начинается с буквы, предложение: %q)",
+				m.Document.FileName, suggested),
+			"", nil, tg.ReplyKeyboardForTopic("per_router"))
+	}
+}
+
+func (r *Router) sendImportConfirmation(ctx context.Context, chatID int64, threadID *int64, userID int64, name, token string) {
+	kb := tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{{Text: fmt.Sprintf("🔄 Заменить %s", name),
+				CallbackData: fmt.Sprintf("tunnel_import_replace:%d:%s:%s", userID, name, token)}},
+			{{Text: "➕ Добавить как новый",
+				CallbackData: fmt.Sprintf("tunnel_import_add:%d:%s:%s", userID, name, token)}},
+		},
+	}
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID,
+		fmt.Sprintf("📁 Конфиг для туннеля *%s*. Что делать?", name),
+		"MarkdownV2", nil, &kb)
+}
+
+func (r *Router) handlePendingNameReply(ctx context.Context, m *tg.Message, user *db.User) bool {
+	if user == nil {
+		return false
+	}
+	r.pendingMu.Lock()
+	up, ok := r.pending[user.ID]
+	r.pendingMu.Unlock()
+	if !ok || time.Now().After(up.ExpiresAt) || up.Name != "" {
+		return false
+	}
+	name := sanitizeTunnelName(m.Text)
+	if !isValidTunnelName(name) {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			fmt.Sprintf("Имя %q не подходит (нужно a-z0-9_-, начинается с буквы). Попробуй снова.", m.Text),
+			"", nil)
+		return true
+	}
+	up.Name = name
+	r.storePending(user.ID, up)
+	r.sendImportConfirmation(ctx, m.Chat.ID, m.MessageThreadID, user.ID, name, up.Token)
+	return true
 }
 
 // humanAgeDur is a local copy of alerts.humanAgeDur (private there). Keeping

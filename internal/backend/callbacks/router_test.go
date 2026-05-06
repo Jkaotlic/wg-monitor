@@ -47,6 +47,8 @@ func (f *fakeRouterTG) SendMessageWithReplyKeyboard(ctx context.Context, chatID 
 	return 1, nil
 }
 func (f *fakeRouterTG) DeleteMessage(ctx context.Context, chatID, messageID int64) error { return nil }
+func (f *fakeRouterTG) GetFile(_ context.Context, _ string) (string, error)              { return "", nil }
+func (f *fakeRouterTG) DownloadFile(_ context.Context, _ string) ([]byte, error)         { return nil, nil }
 
 func TestRouterDispatchesSilence(t *testing.T) {
 	d, uid := newTestDB(t)
