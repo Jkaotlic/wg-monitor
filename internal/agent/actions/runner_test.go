@@ -187,6 +187,62 @@ func TestRunner_PreservesAction(t *testing.T) {
 	}
 }
 
+const testConfB64 = "W0ludGVyZmFjZV0KUHJpdmF0ZUtleSA9IEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9CkpjID0gNApKbWluID0gNDAKSm1heCA9IDcwClMxID0gMApTMiA9IDAKSDEgPSAxMTExMTExMTExCkgyID0gMjIyMjIyMjIyMgpIMyA9IDMzMzMzMzMzMzMKSDQgPSA0MDAwMDAwMDAwCgpbUGVlcl0KUHVibGljS2V5ID0gQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQj0KRW5kcG9pbnQgPSB2cG4uZXhhbXBsZS5jb206NTE4MjAKQWxsb3dlZElQcyA9IDAuMC4wLjAvMA=="
+
+func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
+	tunnelsAllResp := `{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","defaultRoute":true,"enabled":true}],"external":[],"system":[]}}`
+	createResp := `{"success":true,"data":{"id":"new-id","name":"awg11","type":"amnezia_wg","status":"running","enabled":true,"defaultRoute":true}}`
+	hydroResp := `{"success":true,"data":{"installed":false,"running":false}}`
+
+	var deletedID string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(tunnelsAllResp))
+	})
+	mux.HandleFunc("/api/tunnels/create", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(createResp))
+	})
+	mux.HandleFunc("/api/tunnels/old-id", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			deletedID = "old-id"
+			w.Write([]byte(`{"success":true}`))
+		}
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(hydroResp))
+	})
+	cli := awgmgrFake(t, mux)
+	r := Runner{AwgClient: cli, Exec: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
+		return nil, nil
+	}, Now: mockNow()}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "imp1",
+		Action: "tunnel_import",
+		Args:   map[string]any{"conf": testConfB64, "name": "awg11", "replace": true},
+	})
+	if res.Status != "ok" {
+		t.Errorf("status=%q output=%q", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, "awg11") {
+		t.Errorf("output missing tunnel name: %q", res.Output)
+	}
+	if deletedID != "old-id" {
+		t.Errorf("expected old tunnel deleted, deletedID=%q", deletedID)
+	}
+}
+
+func TestRunner_TunnelImport_MissingArgs(t *testing.T) {
+	r := Runner{AwgClient: awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})), Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "imp2", Action: "tunnel_import",
+		Args: map[string]any{},
+	})
+	if res.Status != "err" {
+		t.Errorf("expected err, got %q", res.Status)
+	}
+}
+
 // Make sure errors package import is used to avoid unused-import lint
 var _ = errors.New
 var _ = fmt.Sprint
