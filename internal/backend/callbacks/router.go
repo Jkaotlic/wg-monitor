@@ -275,6 +275,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	case "🇷🇺 Напрямую?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
 			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
+	case "⬆ Обновить пакеты":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
+			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
 	case "📋 Список юзеров":
 		r.dispatchListUsers(ctx, m)
 	case "📊 Здоровье флота":
