@@ -75,7 +75,8 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
 		return "err", "opkg list-upgradable failed: " + err.Error() + "\n" + string(listing)
 	}
 	pkgs := parseUpgradablePkgs(string(listing))
-	if len(pkgs) == 0 {
+	listingHasNoise := strings.Contains(string(listing), "ERROR") || strings.Contains(string(listing), "WARNING")
+	if len(pkgs) == 0 && !listingHasNoise {
 		return "ok", "✅ Все пакеты актуальны — обновлять нечего."
 	}
 
@@ -83,36 +84,60 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
 	if err != nil {
 		return "err", "df /opt failed: " + err.Error()
 	}
-	neededKB := o.estimateInstallSizeKB(ctx, pkgs)
-	headroomKB := totalKB / 10 // require ≥ 10% free post-upgrade
-	if freeKB-neededKB < headroomKB {
-		return "err", fmt.Sprintf(
-			"❌ Не хватит места на /opt.\n"+
-				"Пакетов к обновлению: %d\n"+
-				"Оценка установки: %s\n"+
-				"Свободно сейчас: %s / всего %s\n"+
-				"После upgrade осталось бы: %s (порог headroom %s = 10%%)\n"+
-				"Освободи /opt и повтори.",
-			len(pkgs), humanKB(neededKB), humanKB(freeKB), humanKB(totalKB),
-			humanKB(freeKB-neededKB), humanKB(headroomKB),
-		)
+	// Space safety check is meaningful only when we have a parsed pkg list.
+	// If list-upgradable returned only noise (ERROR/WARNING but `opkg upgrade`
+	// may still find work via package feeds), we proceed without a preflight
+	// estimate — `opkg upgrade` itself will refuse if a single download would
+	// fill /opt mid-flight.
+	neededKB := int64(0)
+	if len(pkgs) > 0 {
+		neededKB = o.estimateInstallSizeKB(ctx, pkgs)
+		headroomKB := totalKB / 10 // require ≥ 10% free post-upgrade
+		if freeKB-neededKB < headroomKB {
+			return "err", fmt.Sprintf(
+				"❌ Не хватит места на /opt.\n"+
+					"Пакетов к обновлению: %d\n"+
+					"Оценка установки: %s\n"+
+					"Свободно сейчас: %s / всего %s\n"+
+					"После upgrade осталось бы: %s (порог headroom %s = 10%%)\n"+
+					"Освободи /opt и повтори.",
+				len(pkgs), humanKB(neededKB), humanKB(freeKB), humanKB(totalKB),
+				humanKB(freeKB-neededKB), humanKB(headroomKB),
+			)
+		}
 	}
 
 	upgradeOut, err := o.Exec(ctx, "opkg", "upgrade")
 	if err != nil {
 		return "err", "opkg upgrade failed: " + err.Error() + "\n" + string(upgradeOut)
 	}
-	pkgList := strings.Join(pkgs, ", ")
-	if len(pkgList) > 200 {
-		pkgList = pkgList[:200] + "…"
+	// Recover the actual upgraded package names from `opkg upgrade` stdout.
+	// list-upgradable can lie (multi-feed conflicts surface as ERROR with
+	// no rows), but the upgrade command's "Upgrading <pkg> on root..." lines
+	// are authoritative — they print only for packages that actually moved.
+	if upgraded := parseUpgradedFromOutput(string(upgradeOut)); len(upgraded) > 0 {
+		pkgs = upgraded
+	}
+	post, _, _ := o.dfOpt(ctx) // post-upgrade free; ignore err — best-effort
+
+	sizeNote := "~" + humanKB(neededKB)
+	if neededKB == 0 {
+		sizeNote = "размер не определён"
+	}
+	pkgListStr := strings.Join(pkgs, ", ")
+	if pkgListStr == "" {
+		pkgListStr = "(не определён)"
+	}
+	if len(pkgListStr) > 200 {
+		pkgListStr = pkgListStr[:200] + "…"
 	}
 	return "ok", fmt.Sprintf(
-		"✅ Обновлено пакетов: %d (~%s)\n"+
+		"✅ Обновлено пакетов: %d (%s)\n"+
 			"Список: %s\n"+
 			"Свободно после: %s / %s\n\n"+
 			"%s",
-		len(pkgs), humanKB(neededKB), pkgList,
-		humanKB(freeKB-neededKB), humanKB(totalKB),
+		len(pkgs), sizeNote, pkgListStr,
+		humanKB(post), humanKB(totalKB),
 		strings.TrimSpace(string(upgradeOut)),
 	)
 }
@@ -161,18 +186,72 @@ func (o *OpkgRunner) estimateInstallSizeKB(ctx context.Context, pkgs []string) i
 	return totalKB
 }
 
+// parseUpgradablePkgs extracts package names from `opkg list-upgradable`
+// output. Strict format: each line must split as "name - vOld - vNew" via
+// the literal " - " separator. Anything else (ERROR:/WARNING:/multi-feed
+// notices that opkg sometimes prints into the same stream) is dropped.
 func parseUpgradablePkgs(listing string) []string {
 	var pkgs []string
 	for _, line := range strings.Split(strings.TrimSpace(listing), "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			pkgs = append(pkgs, fields[0])
+		parts := strings.SplitN(line, " - ", 3)
+		if len(parts) != 3 {
+			continue
+		}
+		name := strings.TrimSpace(parts[0])
+		// First-token sanity: package names are lowercase + digits/-/_/+/.
+		if name == "" || !looksLikePkgName(name) {
+			continue
+		}
+		pkgs = append(pkgs, name)
+	}
+	return pkgs
+}
+
+// parseUpgradedFromOutput extracts package names from `opkg upgrade` stdout
+// — used as a source of truth when list-upgradable was noisy. Lines look
+// like "Upgrading hrweb on root from 1.24.0-1 to 1.26.0-1..." (one per
+// actually-upgraded package).
+func parseUpgradedFromOutput(out string) []string {
+	var pkgs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "Upgrading ")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		if !seen[name] && looksLikePkgName(name) {
+			seen[name] = true
+			pkgs = append(pkgs, name)
 		}
 	}
 	return pkgs
+}
+
+// looksLikePkgName accepts lowercase letters, digits, and the punctuation
+// opkg permits in package names (`-`, `_`, `+`, `.`).
+func looksLikePkgName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= '0' && r <= '9':
+		case r == '-' || r == '_' || r == '+' || r == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func humanKB(kb int64) string {
