@@ -122,6 +122,24 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 			return "err", fmt.Sprintf("ndmc interface %s %s: %v\n%s", ndms, state, err, string(out))
 		}
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out))
+	case "tunnel_import":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured"
+		}
+		if r.Exec == nil {
+			return "err", "exec not configured"
+		}
+		confB64, _ := cmd.Args["conf"].(string)
+		name, _ := cmd.Args["name"].(string)
+		replace, _ := cmd.Args["replace"].(bool)
+		if confB64 == "" || name == "" {
+			return "err", "tunnel_import: conf and name are required"
+		}
+		out, err := ImportTunnel(ctx, r.AwgClient, r.Exec, confB64, name, replace)
+		if err != nil {
+			return "err", err.Error()
+		}
+		return "ok", out
 	default:
 		return "err", "unknown action: " + cmd.Action
 	}
