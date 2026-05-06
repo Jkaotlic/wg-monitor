@@ -1,0 +1,25 @@
+[Unit]
+Description=wg-monitor backend
+Documentation=https://github.com/anex/wg-monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=wgmonitor
+Group=wgmonitor
+ExecStart=/usr/local/bin/wg-monitor-backend -config /etc/wg-monitor/backend.yaml
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+StateDirectory=wg-monitor
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/wg-monitor
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

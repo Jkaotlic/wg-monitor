@@ -1,0 +1,10 @@
+backend:
+  url: https://wgmonitor.jkaotlic.duckdns.org
+  # 64-hex-char random — backend operator generates this and gives it to you
+  token: REPLACE_WITH_64_HEX_CHARS_FROM_BACKEND_OPERATOR_DEADBEEFCAFEBABEDEADBEEF
+
+agent:
+  nickname: testkeen          # ASCII lowercase, 2-16 chars, regexp ^[a-z][a-z0-9_-]{1,15}$
+  interval_sec: 60
+  awg_iface: awg0             # AmneziaWG interface name on this router (per-user)
+  expected_exit_ip: 1.2.3.4   # public IP this router should appear as when egressing via awg_iface (per-user)
