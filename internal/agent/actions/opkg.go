@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -41,9 +42,154 @@ func (o *OpkgRunner) now() time.Time {
 	return o.Now()
 }
 
+// SmartUpgrade is the live opkg update + upgrade flow with a /opt
+// space safety check. It:
+//   1. takes the lock-file (refuses if a fresh one exists),
+//   2. runs `opkg update`,
+//   3. lists upgradable pkgs and estimates installed-size from `opkg info`,
+//   4. checks df -k /opt — refuses if the post-upgrade free space would
+//      drop below 10% of the partition (Entware on Keenetic typically has
+//      150-250 MB free, so we want a meaningful headroom),
+//   5. runs `opkg upgrade` if all checks pass.
+//
+// Returns wire-protocol status ∈ {"ok","err","locked"} plus a multi-line
+// human report. Designed to be safe-by-default: any size estimation error
+// is treated as "skip the package in the estimate", so the headroom check
+// errs on the side of *under-estimating* the install need (the caller's
+// 10% margin absorbs the slack).
+func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
+	if held, age, ok := o.lockHeldFresh(); ok {
+		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held)
+	}
+	if err := o.takeLock(); err != nil {
+		return "err", "acquire lock: " + err.Error()
+	}
+	defer o.releaseLock()
+
+	if out, err := o.Exec(ctx, "opkg", "update"); err != nil {
+		return "err", "opkg update failed: " + err.Error() + "\n" + string(out)
+	}
+
+	listing, err := o.Exec(ctx, "opkg", "list-upgradable")
+	if err != nil {
+		return "err", "opkg list-upgradable failed: " + err.Error() + "\n" + string(listing)
+	}
+	pkgs := parseUpgradablePkgs(string(listing))
+	if len(pkgs) == 0 {
+		return "ok", "✅ Все пакеты актуальны — обновлять нечего."
+	}
+
+	freeKB, totalKB, err := o.dfOpt(ctx)
+	if err != nil {
+		return "err", "df /opt failed: " + err.Error()
+	}
+	neededKB := o.estimateInstallSizeKB(ctx, pkgs)
+	headroomKB := totalKB / 10 // require ≥ 10% free post-upgrade
+	if freeKB-neededKB < headroomKB {
+		return "err", fmt.Sprintf(
+			"❌ Не хватит места на /opt.\n"+
+				"Пакетов к обновлению: %d\n"+
+				"Оценка установки: %s\n"+
+				"Свободно сейчас: %s / всего %s\n"+
+				"После upgrade осталось бы: %s (порог headroom %s = 10%%)\n"+
+				"Освободи /opt и повтори.",
+			len(pkgs), humanKB(neededKB), humanKB(freeKB), humanKB(totalKB),
+			humanKB(freeKB-neededKB), humanKB(headroomKB),
+		)
+	}
+
+	upgradeOut, err := o.Exec(ctx, "opkg", "upgrade")
+	if err != nil {
+		return "err", "opkg upgrade failed: " + err.Error() + "\n" + string(upgradeOut)
+	}
+	pkgList := strings.Join(pkgs, ", ")
+	if len(pkgList) > 200 {
+		pkgList = pkgList[:200] + "…"
+	}
+	return "ok", fmt.Sprintf(
+		"✅ Обновлено пакетов: %d (~%s)\n"+
+			"Список: %s\n"+
+			"Свободно после: %s / %s\n\n"+
+			"%s",
+		len(pkgs), humanKB(neededKB), pkgList,
+		humanKB(freeKB-neededKB), humanKB(totalKB),
+		strings.TrimSpace(string(upgradeOut)),
+	)
+}
+
+// dfOpt parses busybox `df -k /opt` and returns (free, total) in KB.
+// Falls back gracefully on unexpected output formats.
+func (o *OpkgRunner) dfOpt(ctx context.Context) (free, total int64, err error) {
+	out, err := o.Exec(ctx, "df", "-k", "/opt")
+	if err != nil {
+		return 0, 0, err
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		return 0, 0, fmt.Errorf("unexpected df output: %s", string(out))
+	}
+	// Busybox df: "Filesystem 1024-blocks Used Available Capacity Mounted on"
+	fields := strings.Fields(lines[1])
+	if len(fields) < 4 {
+		return 0, 0, fmt.Errorf("unexpected df fields: %q", lines[1])
+	}
+	total, _ = strconv.ParseInt(fields[1], 10, 64)
+	free, _ = strconv.ParseInt(fields[3], 10, 64)
+	return free, total, nil
+}
+
+// estimateInstallSizeKB sums Installed-Size: from `opkg info <pkg>` for
+// every upgradable package. Best-effort — any per-pkg failure is silently
+// skipped (the 10% headroom margin in SmartUpgrade absorbs underestimates).
+func (o *OpkgRunner) estimateInstallSizeKB(ctx context.Context, pkgs []string) int64 {
+	var totalKB int64
+	for _, p := range pkgs {
+		out, err := o.Exec(ctx, "opkg", "info", p)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			v, ok := strings.CutPrefix(line, "Installed-Size:")
+			if !ok {
+				continue
+			}
+			bytes, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+			totalKB += bytes / 1024
+			break
+		}
+	}
+	return totalKB
+}
+
+func parseUpgradablePkgs(listing string) []string {
+	var pkgs []string
+	for _, line := range strings.Split(strings.TrimSpace(listing), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			pkgs = append(pkgs, fields[0])
+		}
+	}
+	return pkgs
+}
+
+func humanKB(kb int64) string {
+	if kb < 1024 {
+		return fmt.Sprintf("%d KB", kb)
+	}
+	mb := float64(kb) / 1024.0
+	return fmt.Sprintf("%.1f MB", mb)
+}
+
 // DryRun returns ("locked", ...) if a fresh lock-file exists, otherwise
 // runs the preflight, releases the lock, and returns ("ok", listing) or
 // ("err", explanation).
+//
+// DEPRECATED 2026-05-06: kept for the OpkgExecutor interface contract +
+// any external callers (none known in the tree). New work calls
+// SmartUpgrade — it does the live upgrade with a space safety check.
 func (o *OpkgRunner) DryRun(ctx context.Context) (status, output string) {
 	if held, age, ok := o.lockHeldFresh(); ok {
 		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held)

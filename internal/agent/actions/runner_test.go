@@ -167,6 +167,14 @@ func (s *stubOpkg) DryRun(ctx context.Context) (status, output string) {
 	return s.retStatus, s.retOutput
 }
 
+func (s *stubOpkg) SmartUpgrade(ctx context.Context) (status, output string) {
+	s.calls++
+	if s.retErr != nil {
+		return "err", s.retErr.Error()
+	}
+	return s.retStatus, s.retOutput
+}
+
 // Sanity: errors.Is plumbing works for opkg run errors when unwrapping.
 func TestRunner_PreservesAction(t *testing.T) {
 	cli := awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

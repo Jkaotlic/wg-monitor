@@ -57,6 +57,8 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 		// Diag too large — paginate the raw body (without code fences per chunk).
 		return paginate(header+":", body, maxChars)
 	case "opkg_upgrade":
+		// SmartUpgrade returns a human-readable multi-line summary; no
+		// code-fence wrapping needed. Just paginate if it overflows.
 		full := fmt.Sprintf("%s:\n\n%s", header, body)
 		if len(full) <= maxChars {
 			return []string{full}

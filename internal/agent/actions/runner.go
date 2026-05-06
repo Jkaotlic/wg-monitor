@@ -26,8 +26,11 @@ import (
 )
 
 // OpkgExecutor is the surface a real Opkg implementation exposes to Runner.
+// SmartUpgrade does the full live workflow (update + space-check + upgrade);
+// DryRun is kept for tests / external callers that want a preflight only.
 type OpkgExecutor interface {
 	DryRun(ctx context.Context) (status, output string)
+	SmartUpgrade(ctx context.Context) (status, output string)
 }
 
 // Runner is built once at agent startup and re-used per-command.
@@ -94,7 +97,7 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 		if r.Opkg == nil {
 			return "err", "opkg runner not configured"
 		}
-		return r.Opkg.DryRun(ctx)
+		return r.Opkg.SmartUpgrade(ctx)
 	case "check_via_tunnel":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured"
