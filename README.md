@@ -104,8 +104,4 @@ make pack              # UPX --best на cross-compiled бинарниках
 
 ## Деплой / Deployment
 
-Подробная пошаговая инструкция: **[DEPLOY.md](DEPLOY.md)**
-
-Агент: `/opt/etc/wg-monitor/config.yaml`  
-Бэкенд: `/etc/wg-monitor/backend.yaml`  
-Примеры конфигов: `deploy/agent/config.yaml.example`, `deploy/backend/backend.yaml.example`
+Деплой делается интерактивным wizard'ом. Скачай `wg-monitor-deploy` из [Releases](https://github.com/anex/wg-monitor/releases/latest), запусти и следуй инструкциям. Подробнее в [DEPLOY.md](DEPLOY.md).
