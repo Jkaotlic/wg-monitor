@@ -117,10 +117,12 @@ type InterfaceConfig struct {
 	Jmax       int    `json:"jmax"`
 	S1         int    `json:"s1"`
 	S2         int    `json:"s2"`
-	H1         uint32 `json:"h1"`
-	H2         uint32 `json:"h2"`
-	H3         uint32 `json:"h3"`
-	H4         uint32 `json:"h4"`
+	S3         int    `json:"s3,omitempty"`
+	S4         int    `json:"s4,omitempty"`
+	H1         string `json:"h1"`
+	H2         string `json:"h2"`
+	H3         string `json:"h3"`
+	H4         string `json:"h4"`
 }
 
 type PeerConfig struct {

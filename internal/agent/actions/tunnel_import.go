@@ -85,14 +85,6 @@ func parseInterfaceField(iface *awgmgr.InterfaceConfig, key, val string) error {
 		*dst = n
 		return nil
 	}
-	parseU32 := func(dst *uint32) error {
-		n, err := strconv.ParseUint(val, 10, 32)
-		if err != nil {
-			return err
-		}
-		*dst = uint32(n)
-		return nil
-	}
 	switch key {
 	case "PrivateKey":
 		iface.PrivateKey = val
@@ -106,14 +98,19 @@ func parseInterfaceField(iface *awgmgr.InterfaceConfig, key, val string) error {
 		return parseInt(&iface.S1)
 	case "S2":
 		return parseInt(&iface.S2)
+	case "S3":
+		return parseInt(&iface.S3)
+	case "S4":
+		return parseInt(&iface.S4)
+	// H1-H4 are passed as-is (single value "1234567890" or range "lo-hi").
 	case "H1":
-		return parseU32(&iface.H1)
+		iface.H1 = val
 	case "H2":
-		return parseU32(&iface.H2)
+		iface.H2 = val
 	case "H3":
-		return parseU32(&iface.H3)
+		iface.H3 = val
 	case "H4":
-		return parseU32(&iface.H4)
+		iface.H4 = val
 	}
 	return nil
 }
