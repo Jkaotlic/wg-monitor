@@ -1,0 +1,27 @@
+{
+  "tag_name": "v0.9.0",
+  "name": "v0.9.0",
+  "published_at": "2026-05-06T12:00:00Z",
+  "assets": [
+    {
+      "name": "wg-monitor-deploy-linux-amd64",
+      "browser_download_url": "https://example.com/wg-monitor-deploy-linux-amd64",
+      "size": 5242880
+    },
+    {
+      "name": "wg-monitor-agent-linux-arm64",
+      "browser_download_url": "https://example.com/wg-monitor-agent-linux-arm64",
+      "size": 2097152
+    },
+    {
+      "name": "wg-monitor-backend-linux-amd64",
+      "browser_download_url": "https://example.com/wg-monitor-backend-linux-amd64",
+      "size": 8388608
+    },
+    {
+      "name": "checksums.txt",
+      "browser_download_url": "https://example.com/checksums.txt",
+      "size": 256
+    }
+  ]
+}
