@@ -85,6 +85,12 @@ func main() {
 			fmt.Fprintln(os.Stderr, "save state:", err)
 		}
 		PrintSecretsSaveAdvice(secrets)
+	case "add-router":
+		if err := actionAddRouter(state, secrets, dl); err != nil {
+			os.Exit(1)
+		}
+		SaveState(statePath, state)
+		PrintSecretsSaveAdvice(secrets)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
 		os.Exit(2)
