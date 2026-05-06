@@ -99,3 +99,33 @@ type HydraRouteStatus struct {
 	Installed bool `json:"installed"`
 	Running   bool `json:"running"`
 }
+
+// CreateTunnelRequest is the body for POST /api/tunnels/create.
+type CreateTunnelRequest struct {
+	Name         string          `json:"name"`
+	Type         string          `json:"type"`
+	Interface    InterfaceConfig `json:"interface"`
+	Peer         PeerConfig      `json:"peer"`
+	DefaultRoute bool            `json:"defaultRoute"`
+	Enabled      bool            `json:"enabled"`
+}
+
+type InterfaceConfig struct {
+	PrivateKey string `json:"privateKey"`
+	Jc         int    `json:"jc"`
+	Jmin       int    `json:"jmin"`
+	Jmax       int    `json:"jmax"`
+	S1         int    `json:"s1"`
+	S2         int    `json:"s2"`
+	H1         uint32 `json:"h1"`
+	H2         uint32 `json:"h2"`
+	H3         uint32 `json:"h3"`
+	H4         uint32 `json:"h4"`
+}
+
+type PeerConfig struct {
+	PublicKey    string   `json:"publicKey"`
+	PresharedKey string   `json:"presharedKey,omitempty"`
+	Endpoint     string   `json:"endpoint"`
+	AllowedIPs   []string `json:"allowedIPs"`
+}

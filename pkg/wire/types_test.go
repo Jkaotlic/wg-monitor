@@ -181,3 +181,9 @@ func TestIsValidCommandResultStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestIsValidCommandAction_TunnelImport(t *testing.T) {
+	if !IsValidCommandAction("tunnel_import") {
+		t.Error("tunnel_import must be valid")
+	}
+}
