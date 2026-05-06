@@ -45,11 +45,11 @@ func TestParseWGConf_Happy(t *testing.T) {
 	if req.Interface.Jmax != 70 {
 		t.Errorf("Jmax: %d", req.Interface.Jmax)
 	}
-	if req.Interface.H1 != 1111111111 {
-		t.Errorf("H1: %d", req.Interface.H1)
+	if req.Interface.H1 != "1111111111" {
+		t.Errorf("H1: %q", req.Interface.H1)
 	}
-	if req.Interface.H4 != 4000000000 {
-		t.Errorf("H4: %d", req.Interface.H4)
+	if req.Interface.H4 != "4000000000" {
+		t.Errorf("H4: %q", req.Interface.H4)
 	}
 	if req.Peer.PublicKey != "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=" {
 		t.Errorf("PublicKey: %q", req.Peer.PublicKey)
