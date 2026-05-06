@@ -134,55 +134,54 @@ func parsePeerField(peer *awgmgr.PeerConfig, key, val string) error {
 }
 
 // ImportTunnel is the agent-side handler for the tunnel_import wire.Command.
-// confB64 is base64-encoded .conf content. If replace=true, finds the tunnel
-// by name in awg-manager and deletes it AFTER successful create.
+// confB64 is base64-encoded .conf content.
+// replace=true  → find existing tunnel by name and use ReplaceConf API (atomic).
+// replace=false → ImportConf (creates new tunnel, enabled=false).
 // Restarts HydraRoute daemon if installed.
 func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, confB64, name string, replace bool) (string, error) {
 	confData, err := base64.StdEncoding.DecodeString(confB64)
 	if err != nil {
 		return "", fmt.Errorf("decode conf: %w", err)
 	}
+	rawConf := string(confData)
 
-	req, err := ParseWGConf(string(confData))
-	if err != nil {
+	// Validate required fields before hitting awg-manager.
+	if _, err := ParseWGConf(rawConf); err != nil {
 		return "", fmt.Errorf("parse conf: %w", err)
 	}
-	req.Name = name
 
-	var oldTunnelID string
+	var result strings.Builder
 	if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
 			return "", fmt.Errorf("list tunnels: %w", err)
 		}
+		var oldID string
 		for _, t := range all.Tunnels {
 			if t.Name == name {
-				oldTunnelID = t.ID
-				req.DefaultRoute = t.DefaultRoute
+				oldID = t.ID
 				break
 			}
 		}
-		if oldTunnelID == "" {
-			req.DefaultRoute = true
+		if oldID != "" {
+			newTun, err := client.ReplaceConf(ctx, oldID, rawConf, name)
+			if err != nil {
+				return "", fmt.Errorf("replace tunnel: %w", err)
+			}
+			fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", name, newTun.ID)
+		} else {
+			newTun, err := client.ImportConf(ctx, rawConf, name)
+			if err != nil {
+				return "", fmt.Errorf("create tunnel: %w", err)
+			}
+			fmt.Fprintf(&result, "✅ Туннель %q создан (id=%s)", name, newTun.ID)
 		}
 	} else {
-		req.DefaultRoute = false
-	}
-
-	newTun, err := client.CreateTunnel(ctx, req)
-	if err != nil {
-		return "", fmt.Errorf("create tunnel: %w", err)
-	}
-
-	var result strings.Builder
-	fmt.Fprintf(&result, "✅ Туннель %q создан (id=%s)", name, newTun.ID)
-
-	if oldTunnelID != "" {
-		if err := client.DeleteTunnel(ctx, oldTunnelID); err != nil {
-			fmt.Fprintf(&result, "\n⚠️ Удалить старый туннель не удалось: %v", err)
-		} else {
-			fmt.Fprintf(&result, "\n🗑 Старый туннель удалён")
+		newTun, err := client.ImportConf(ctx, rawConf, name)
+		if err != nil {
+			return "", fmt.Errorf("create tunnel: %w", err)
 		}
+		fmt.Fprintf(&result, "✅ Туннель %q создан (id=%s)", name, newTun.ID)
 	}
 
 	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {

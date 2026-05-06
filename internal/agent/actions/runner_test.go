@@ -187,26 +187,23 @@ func TestRunner_PreservesAction(t *testing.T) {
 	}
 }
 
-const testConfB64 = "W0ludGVyZmFjZV0KUHJpdmF0ZUtleSA9IEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9CkpjID0gNApKbWluID0gNDAKSm1heCA9IDcwClMxID0gMApTMiA9IDAKSDEgPSAxMTExMTExMTExCkgyID0gMjIyMjIyMjIyMgpIMyA9IDMzMzMzMzMzMzMKSDQgPSA0MDAwMDAwMDAwCgpbUGVlcl0KUHVibGljS2V5ID0gQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQj0KRW5kcG9pbnQgPSB2cG4uZXhhbXBsZS5jb206NTE4MjAKQWxsb3dlZElQcyA9IDAuMC4wLjAvMA=="
+// base64 of a minimal valid .conf with Address field
+const testConfB64 = "W0ludGVyZmFjZV0KUHJpdmF0ZUtleSA9IEFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE9CkFkZHJlc3MgPSAxMC45OS4wLjIvMzIKSmMgPSA0CkptaW4gPSA0MApKbWF4ID0gNzAKUzEgPSAwClMyID0gMApIMSA9IDExMTExMTExMTEKSDIgPSAyMjIyMjIyMjIyCkgzID0gMzMzMzMzMzMzMwpINCA9IDQwMDAwMDAwMDAKCltQZWVyXQpQdWJsaWNLZXkgPSBCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCPQpFbmRwb2ludCA9IHZwbi5leGFtcGxlLmNvbTo1MTgyMApBbGxvd2VkSVBzID0gMC4wLjAuMC8wCg=="
 
 func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 	tunnelsAllResp := `{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","defaultRoute":true,"enabled":true}],"external":[],"system":[]}}`
-	createResp := `{"success":true,"data":{"id":"new-id","name":"awg11","type":"amnezia_wg","status":"running","enabled":true,"defaultRoute":true}}`
+	replaceResp := `{"success":true,"data":{"id":"old-id","name":"awg11","type":"awg","status":"running","enabled":true,"defaultRoute":true}}`
 	hydroResp := `{"success":true,"data":{"installed":false,"running":false}}`
 
-	var deletedID string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(tunnelsAllResp))
 	})
-	mux.HandleFunc("/api/tunnels/create", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(createResp))
-	})
-	mux.HandleFunc("/api/tunnels/old-id", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			deletedID = "old-id"
-			w.Write([]byte(`{"success":true}`))
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != "old-id" {
+			t.Errorf("replace: wrong id %q", r.URL.Query().Get("id"))
 		}
+		w.Write([]byte(replaceResp))
 	})
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(hydroResp))
@@ -226,9 +223,6 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "awg11") {
 		t.Errorf("output missing tunnel name: %q", res.Output)
-	}
-	if deletedID != "old-id" {
-		t.Errorf("expected old tunnel deleted, deletedID=%q", deletedID)
 	}
 }
 

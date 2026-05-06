@@ -47,32 +47,26 @@ func TestClient_DiagResult_5xx(t *testing.T) {
 	}
 }
 
-func TestClient_CreateTunnel_OK(t *testing.T) {
-	want := `{"success":true,"data":{"id":"abc123","name":"awg11","type":"amnezia_wg","status":"running","enabled":true,"defaultRoute":true}}`
+func TestClient_ImportConf_OK(t *testing.T) {
+	want := `{"success":true,"data":{"id":"abc123","name":"sg","type":"awg","status":"running","enabled":false,"defaultRoute":false}}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method: %s", r.Method)
 		}
-		if r.URL.Path != "/api/tunnels/create" {
+		if r.URL.Path != "/api/import/conf" {
 			t.Errorf("path: %q", r.URL.Path)
 		}
 		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
 			t.Errorf("missing X-Requested-With")
 		}
 		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("missing Content-Type: %s", r.Header.Get("Content-Type"))
+			t.Errorf("Content-Type: %s", r.Header.Get("Content-Type"))
 		}
 		w.Write([]byte(want))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	req := CreateTunnelRequest{
-		Name: "awg11", Type: "amnezia_wg",
-		Interface: InterfaceConfig{PrivateKey: "abc", Jc: 4, Jmin: 40, Jmax: 70},
-		Peer:      PeerConfig{PublicKey: "xyz", Endpoint: "1.2.3.4:51820", AllowedIPs: []string{"0.0.0.0/0"}},
-		DefaultRoute: true, Enabled: true,
-	}
-	tun, err := c.CreateTunnel(context.Background(), req)
+	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,14 +75,14 @@ func TestClient_CreateTunnel_OK(t *testing.T) {
 	}
 }
 
-func TestClient_CreateTunnel_Error(t *testing.T) {
+func TestClient_ImportConf_Error(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)
-		w.Write([]byte(`{"success":false,"error":{"message":"bad request"}}`))
+		w.Write([]byte(`{"error":true,"message":"parse conf: missing Address","code":"IMPORT_FAILED"}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	_, err := c.CreateTunnel(context.Background(), CreateTunnelRequest{Name: "x"})
+	_, err := c.ImportConf(context.Background(), "", "x")
 	if err == nil {
 		t.Fatal("expected error on 400")
 	}
@@ -96,11 +90,14 @@ func TestClient_CreateTunnel_Error(t *testing.T) {
 
 func TestClient_DeleteTunnel_OK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete {
+		if r.Method != http.MethodPost {
 			t.Errorf("method: %s", r.Method)
 		}
-		if r.URL.Path != "/api/tunnels/abc123" {
+		if r.URL.Path != "/api/tunnels/delete" {
 			t.Errorf("path: %q", r.URL.Path)
+		}
+		if r.URL.RawQuery != "id=abc123" {
+			t.Errorf("query: %q", r.URL.RawQuery)
 		}
 		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
 			t.Errorf("missing X-Requested-With")
