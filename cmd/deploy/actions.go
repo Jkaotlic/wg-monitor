@@ -181,6 +181,136 @@ func userOrDefault(u, def string) string {
 	return u
 }
 
+func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
+	rel, err := dl.GetLatestRelease()
+	if err != nil {
+		return err
+	}
+
+	// 1. Найти или создать агента
+	var ag *AgentState
+	if nickname != "" {
+		ag = state.FindAgent(nickname)
+	}
+	if ag == nil {
+		// Создать новую запись
+		nick := nickname
+		if nick == "" {
+			nick = Ask("Никнейм роутера (a-z0-9_-, 2-16)", "")
+		}
+		if nick == "" {
+			return fmt.Errorf("nickname required")
+		}
+		state.Agents = append(state.Agents, AgentState{Nickname: nick})
+		ag = &state.Agents[len(state.Agents)-1]
+	}
+
+	ag.Host = Ask("Хост роутера", strOrDefaultS(ag.Host, "192.168.31.1"))
+	ag.Port = parseIntOr(Ask("SSH port", strOrDefault(ag.Port, "222")), 222)
+	ag.User = orDefault(Ask("SSH user", strOrDefaultS(ag.User, "root")), "root")
+	ag.AwgIface = orDefault(Ask("AmneziaWG iface", strOrDefaultS(ag.AwgIface, "awg0")), "awg0")
+	ag.ExpectedExitIP = Ask("Expected exit IP (что bot должен видеть как public IP)", ag.ExpectedExitIP)
+	if ag.ThreadID == 0 {
+		ag.ThreadID = parseIntOr(Ask("Telegram thread_id топика этого роутера", "1"), 1)
+	}
+
+	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(ag.Nickname)
+	home, _ := os.UserHomeDir()
+	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
+	pass, _ := secrets.Get(envName, "пароль root для "+ag.Nickname, &MemoryFileLookup{
+		Path:    memFile,
+		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
+	})
+	if pass == "" {
+		pass, _ = secrets.Get("WG_KEENETIC_PASS", "пароль root", nil)
+	}
+	if pass == "" {
+		return fmt.Errorf("missing password")
+	}
+
+	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
+	tok := os.Getenv(tokenEnv)
+	if tok == "" {
+		PrintWarn("Токен агента не найден в " + tokenEnv + ".")
+		PrintWarn("При install-backend он должен был сгенерироваться. Введи руками или сгенерирую новый:")
+		tok = Ask("Token (Enter — сгенерировать новый)", "")
+		if tok == "" {
+			tok = randomHexToken(32)
+			PrintWarn("новый токен: " + tok + " — сохрани в " + tokenEnv + " И в backend.yaml на VPS!")
+		}
+	}
+
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+
+	PrintStep(1, 7, "SSH к роутеру")
+	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	PrintStep(2, 7, "Архитектура")
+	arch, err := stepDetectKeeneticArch(s)
+	if err != nil {
+		return err
+	}
+	ag.Arch = arch
+
+	PrintStep(3, 7, "Директории /opt/{bin,etc/wg-monitor,etc/init.d,var/wg-monitor}")
+	if _, err := s.MustRun("mkdir -p /opt/bin /opt/etc/wg-monitor /opt/etc/init.d /opt/var/wg-monitor"); err != nil {
+		return err
+	}
+	PrintOK("ok")
+
+	PrintStep(4, 7, "config.yaml")
+	cfg, err := RenderAgentYAML(AgentParams{
+		BackendURL:     "https://" + state.Backend.Domain,
+		Token:          tok,
+		Nickname:       ag.Nickname,
+		AWGIface:       ag.AwgIface,
+		ExpectedExitIP: ag.ExpectedExitIP,
+	})
+	if err != nil {
+		return err
+	}
+	// dropbear: prefer UploadStdin
+	if err := s.UploadStdin("/opt/etc/wg-monitor/config.yaml", cfg); err != nil {
+		return err
+	}
+	s.MustRun("chmod 600 /opt/etc/wg-monitor/config.yaml")
+	PrintOK("/opt/etc/wg-monitor/config.yaml")
+
+	PrintStep(5, 7, "init.d скрипт")
+	initd, err := ReadStaticTemplate("S99wg-monitor")
+	if err != nil {
+		return err
+	}
+	if err := s.UploadStdin("/opt/etc/init.d/S99wg-monitor", initd); err != nil {
+		return err
+	}
+	s.MustRun("chmod +x /opt/etc/init.d/S99wg-monitor")
+	PrintOK("/opt/etc/init.d/S99wg-monitor")
+
+	PrintStep(6, 7, "Скачать агент бинарь")
+	assetName := "wg-monitor-agent-linux-" + arch
+	localPath, err := stepDownloadAsset(dl, rel, assetName)
+	if err != nil {
+		return err
+	}
+
+	PrintStep(7, 7, "Upload + start")
+	if err := stepUploadAgentBinary(s, localPath, "/opt/bin/wg-monitor"); err != nil {
+		return err
+	}
+
+	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
+	ag.LastDeployedVersion = rel.TagName
+	return nil
+}
+
 func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) error {
 	rel, err := dl.GetLatestRelease()
 	if err != nil {

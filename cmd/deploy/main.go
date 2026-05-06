@@ -59,6 +59,18 @@ func main() {
 			fmt.Fprintln(os.Stderr, "save state:", err)
 		}
 		PrintSecretsSaveAdvice(secrets)
+	case "install-agent":
+		nick := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--agent" && i+1 < len(args) {
+				nick = args[i+1]
+			}
+		}
+		if err := actionInstallAgent(state, secrets, dl, nick); err != nil {
+			os.Exit(1)
+		}
+		SaveState(statePath, state)
+		PrintSecretsSaveAdvice(secrets)
 	case "update-agent":
 		agentFlag := ""
 		for i := 1; i < len(args); i++ {
