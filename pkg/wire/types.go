@@ -34,13 +34,15 @@ type Command struct {
 }
 
 var validCommandActions = map[string]bool{
-	"restart_tunnel": true,
-	"diag_now":       true,
-	"pingcheck_now":  true,
-	"opkg_upgrade":   true,
-	"force_recheck":  true,
-	"tunnel_enable":  true,
-	"tunnel_disable": true,
+	"restart_tunnel":   true,
+	"diag_now":         true,
+	"pingcheck_now":    true,
+	"opkg_upgrade":     true,
+	"force_recheck":    true,
+	"tunnel_enable":    true,
+	"tunnel_disable":   true,
+	"check_via_tunnel": true,
+	"check_direct":     true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

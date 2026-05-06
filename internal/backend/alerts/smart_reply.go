@@ -108,8 +108,6 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	state := ClassifyState(a)
 	plainCD := func(action, cn string) string { return fmt.Sprintf("%s:%d:%s", action, a.UserID, cn) }
 	silenceCD := func(cn, ttl string) string { return fmt.Sprintf("silence:%d:%s:%s", a.UserID, cn, ttl) }
-	detailsCD := fmt.Sprintf("details:%d", a.UserID)
-	lastReportCD := fmt.Sprintf("last_report:%d", a.UserID)
 
 	var b strings.Builder
 	switch state {
@@ -126,10 +124,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 			b.WriteString(line + ".\n")
 		}
 		fmt.Fprintf(&b, "Роутер последний раз отчитывался: %s назад.", humanAgeDur(a.LastReportAge))
-		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-			{{Text: "📋 Подробнее", CallbackData: detailsCD}},
-		}}
-		return b.String(), kb
+		return b.String(), tg.InlineKeyboardMarkup{}
 
 	case StateDegraded:
 		fmt.Fprintf(&b, "⚠️ %s — есть подозрения.\n\n", a.Nickname)
@@ -151,7 +146,6 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)},
 			})
 		}
-		rows = append(rows, []tg.InlineKeyboardButton{{Text: "📋 Подробнее", CallbackData: detailsCD}})
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
 	case StateHard:
@@ -189,7 +183,6 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				{Text: "🔁 Перезапуск " + t.Name, CallbackData: plainCD("restart_tunnel", t.CheckName)},
 			})
 		}
-		rows = append(rows, []tg.InlineKeyboardButton{{Text: "📋 Подробнее", CallbackData: detailsCD}})
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
 	case StateOffline:
@@ -197,11 +190,8 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		mins := int(a.LastReportAge.Minutes())
 		fmt.Fprintf(&b, "Последний отчёт: %d минут назад.\n", mins)
 		b.WriteString("Возможные причины: роутер выключен, нет интернета, агент упал.\n\n")
-		b.WriteString("Действия ограничены пока агент не появится:")
-		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-			{{Text: "📋 Последний отчёт", CallbackData: lastReportCD}},
-		}}
-		return b.String(), kb
+		b.WriteString("Действия ограничены пока агент не появится.")
+		return b.String(), tg.InlineKeyboardMarkup{}
 	}
 	return "", tg.InlineKeyboardMarkup{}
 }

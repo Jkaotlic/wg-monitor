@@ -244,6 +244,29 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	return formatQueuedStatus(args.Action), nil
 }
 
+// DispatchFromMessage enqueues a command originating from a *text* message
+// (not an inline-button callback). Used by the router for ReplyKeyboard
+// taps like "🌍 Через тоннель?" / "🇷🇺 Напрямую?". The agent's
+// CommandResult will reply to the user's text message via Notifier.
+func (a *CommandAction) DispatchFromMessage(_ context.Context, action string, userID int64, chatID, messageID int64, threadID *int64) error {
+	if a.sink == nil {
+		return errors.New("command channel disabled (no sink configured)")
+	}
+	cmd := wire.Command{
+		ID:       a.idGen(),
+		Action:   action,
+		Args:     map[string]any{},
+		IssuedAt: time.Now().UTC(),
+	}
+	ref := cmdpkg.MessageRef{
+		ChatID:    chatID,
+		MessageID: messageID,
+		ThreadID:  threadID,
+		Action:    action,
+	}
+	return a.sink.EnqueueWithRef(userID, cmd, ref)
+}
+
 // formatQueuedStatus is the user-facing label appended to the alert message
 // after a command-channel button is tapped. Plain action names map to icons.
 func formatQueuedStatus(action string) string {

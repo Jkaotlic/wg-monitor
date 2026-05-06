@@ -269,8 +269,12 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil)
 		}
-	case "🆘 Помощь":
-		r.dispatchHelp(ctx, m, kind)
+	case "🌍 Через тоннель?":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
+			"⏳ Проверяю YouTube/Telegram/Instagram через тоннель…")
+	case "🇷🇺 Напрямую?":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
+			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
 	case "📋 Список юзеров":
 		r.dispatchListUsers(ctx, m)
 	case "📊 Здоровье флота":
@@ -308,6 +312,27 @@ func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
 		return "systemic", nil
 	}
 	return "unknown", nil
+}
+
+// dispatchConnectivityCheck enqueues an on-demand check_via_tunnel /
+// check_direct command and acks the user with a "⏳ Проверяю…" line. The
+// agent's CommandResult will reply to the user's text message via Notifier.
+func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, kind string, user *db.User, action, ackText string) {
+	if kind != "per_router" || user == nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			"эта команда работает только в топике пользователя.", "", nil)
+		return
+	}
+	if err := r.command.DispatchFromMessage(ctx, action, user.ID, m.Chat.ID, m.MessageID, m.MessageThreadID); err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+			"не удалось поставить задачу: "+err.Error(), "", nil)
+		slog.Warn("dispatchConnectivityCheck enqueue failed", "err", err, "action", action)
+		return
+	}
+	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, ackText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+	if err != nil {
+		slog.Warn("dispatchConnectivityCheck ack failed", "err", err)
+	}
 }
 
 // buildTunnelsPanel queries the user's latest per-tunnel events and renders

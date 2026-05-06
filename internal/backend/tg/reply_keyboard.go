@@ -36,7 +36,7 @@ func ReplyKeyboardForTopic(kind string) any {
 		return &ReplyKeyboardMarkup{
 			Keyboard: [][]ReplyKeyboardButton{
 				{{Text: "📊 Что происходит?"}, {Text: "🎛 Туннели"}},
-				{{Text: "🆘 Помощь"}},
+				{{Text: "🌍 Через тоннель?"}, {Text: "🇷🇺 Напрямую?"}},
 			},
 			IsPersistent:   true,
 			ResizeKeyboard: true,

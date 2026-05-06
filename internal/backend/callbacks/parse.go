@@ -47,6 +47,7 @@ var validActions = map[string]bool{
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
 	"force_recheck": true, "opkg_upgrade": true,
 	"tunnel_enable": true, "tunnel_disable": true,
+	"check_via_tunnel": true, "check_direct": true,
 	// backend-only callback (no agent action): re-render Tunnels-panel inline.
 	"tunnels_refresh": true,
 }
@@ -56,7 +57,8 @@ var validActions = map[string]bool{
 func IsCommandAction(a string) bool {
 	switch a {
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck",
-		"opkg_upgrade", "tunnel_enable", "tunnel_disable":
+		"opkg_upgrade", "tunnel_enable", "tunnel_disable",
+		"check_via_tunnel", "check_direct":
 		return true
 	}
 	return false
