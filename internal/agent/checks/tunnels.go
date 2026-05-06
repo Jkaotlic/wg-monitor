@@ -111,6 +111,15 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, start time.Time, ma
 		details["ping_check_restart_count"] = tu.PingCheck.RestartCount
 	}
 
+	// A tunnel that's `enabled=false` in the router config is a deliberate
+	// admin choice, not a failure. Don't drag it through the FSM as HARD —
+	// no handshake / no pingCheck are *expected* when disabled. Mark OK with
+	// a `note` so the renderer can still show "выключен" if anyone looks.
+	if !tu.Enabled {
+		details["note"] = "tunnel disabled in config"
+		return OK(name, start, details)
+	}
+
 	reasons := tunnelFailReasons(tu, pc, maxAge)
 	if len(reasons) == 0 {
 		return OK(name, start, details)
@@ -120,9 +129,6 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, start time.Time, ma
 
 func tunnelFailReasons(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, maxAge time.Duration) []string {
 	var reasons []string
-	if !tu.Enabled {
-		reasons = append(reasons, "tunnel disabled in config")
-	}
 	if tu.Status != "" && tu.Status != "running" {
 		reasons = append(reasons, fmt.Sprintf("status=%s", tu.Status))
 	}

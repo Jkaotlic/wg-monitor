@@ -167,8 +167,20 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.mute
 	case "history":
 		action = r.history
-	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade":
+	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade",
+		"tunnel_enable", "tunnel_disable":
 		action = r.command
+	case "tunnels_refresh":
+		// Local-only callback: re-render the Tunnels Panel inline.
+		// Look up the user owning this thread (panel was sent from per_router topic).
+		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
+			text, kb := r.buildTunnelsPanel(u)
+			if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+				slog.Warn("tunnels_refresh: edit failed", "err", err)
+			}
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновлено")
+		return
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
@@ -189,6 +201,26 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 			toast = toast[:190]
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
+		return
+	}
+	if args.IsPanel {
+		// Tunnels-Panel callbacks: surface confirmation via toast, then
+		// refresh the panel inline so the toggle state updates without
+		// the operator re-tapping "🔄 Обновить". (We can't read the new
+		// awg-manager state instantly — the toggle ran async via cmd-queue
+		// — but refreshing pulls the freshest event row from DB; the next
+		// agent tick (~60s) will reflect the actual change.)
+		toast := statusLine
+		if len(toast) > 190 {
+			toast = toast[:190]
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
+		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
+			text, kb := r.buildTunnelsPanel(u)
+			if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+				slog.Warn("panel refresh after action failed", "err", err)
+			}
+		}
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -225,6 +257,17 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		} else {
 			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя или в Сводке.", "", nil)
+		}
+	case "🎛 Туннели":
+		if kind == "per_router" && user != nil {
+			text, kb := r.buildTunnelsPanel(user)
+			_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
+			if err != nil {
+				slog.Warn("tunnels-panel send failed", "err", err, "user", user.Nickname)
+			}
+		} else {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике пользователя.", "", nil)
 		}
 	case "🆘 Помощь":
 		r.dispatchHelp(ctx, m, kind)
@@ -265,6 +308,41 @@ func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
 		return "systemic", nil
 	}
 	return "unknown", nil
+}
+
+// buildTunnelsPanel queries the user's latest per-tunnel events and renders
+// (text, inline-keyboard) for the Tunnels Panel. Used both by initial dispatch
+// (tap on "🎛 Туннели" reply-keyboard button) and by the tunnels_refresh
+// callback after a toggle action.
+func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup) {
+	rows, err := r.d.Events().LatestEventsByPrefix(u.ID, "tunnel_")
+	if err != nil {
+		slog.Warn("buildTunnelsPanel: events lookup failed", "err", err, "user", u.ID)
+	}
+	entries := make([]tg.TunnelPanelEntry, 0, len(rows))
+	for _, row := range rows {
+		var det map[string]any
+		if row.DetailsJSON != "" && row.DetailsJSON != "null" {
+			_ = json.Unmarshal([]byte(row.DetailsJSON), &det)
+		}
+		// `enabled` may not be present in older events — default to true so we
+		// don't accidentally render a stale entry as disabled (the rest of the
+		// row will still surface real state via Status / handshake).
+		enabled := true
+		if v, ok := det["enabled"].(bool); ok {
+			enabled = v
+		}
+		entries = append(entries, tg.TunnelPanelEntry{
+			Name:         strOrEmpty(det, "tunnel_name"),
+			CheckName:    row.CheckName,
+			Interface:    strOrEmpty(det, "interface"),
+			NDMSName:     strOrEmpty(det, "ndms_name"),
+			Enabled:      enabled,
+			Status:       strOrEmpty(det, "status"),
+			HandshakeAge: intOrZero(det, "handshake_age_sec"),
+		})
+	}
+	return tg.TunnelsPanelText(u.Nickname, entries), tg.TunnelsPanelKeyboard(u.ID, entries)
 }
 
 // dispatchHelp sends the static help text for the topic kind.

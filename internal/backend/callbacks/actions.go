@@ -215,10 +215,14 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if a.sink == nil {
 		return "", errors.New("command channel disabled (no sink configured)")
 	}
+	cmdArgs := map[string]any{"check_name": args.CheckName}
+	if args.NDMSName != "" {
+		cmdArgs["ndms_name"] = args.NDMSName
+	}
 	cmd := wire.Command{
 		ID:       a.idGen(),
 		Action:   args.Action,
-		Args:     map[string]any{"check_name": args.CheckName},
+		Args:     cmdArgs,
 		IssuedAt: time.Now().UTC(),
 	}
 	// When invoked from a real callback, record MessageRef so the result can
@@ -256,4 +260,6 @@ var commandLabels = map[string]string{
 	"pingcheck_now":  "▶ Pingcheck",
 	"force_recheck":  "🔁 Force recheck",
 	"opkg_upgrade":   "⬆ Opkg upgrade",
+	"tunnel_enable":  "▶ Включить",
+	"tunnel_disable": "⏸ Выключить",
 }

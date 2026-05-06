@@ -35,7 +35,7 @@ func ReplyKeyboardForTopic(kind string) any {
 	case "per_router":
 		return &ReplyKeyboardMarkup{
 			Keyboard: [][]ReplyKeyboardButton{
-				{{Text: "📊 Что происходит?"}},
+				{{Text: "📊 Что происходит?"}, {Text: "🎛 Туннели"}},
 				{{Text: "🆘 Помощь"}},
 			},
 			IsPersistent:   true,
