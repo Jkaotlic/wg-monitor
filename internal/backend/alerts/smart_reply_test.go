@@ -1,0 +1,247 @@
+package alerts
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestSmartReplyStateValues(t *testing.T) {
+	if StateOK == StateDegraded || StateDegraded == StateHard || StateHard == StateOffline {
+		t.Errorf("states must be distinct")
+	}
+}
+
+func TestSmartReplyArgsBuilderSmoke(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname:      "vasya",
+		Tunnels:       []TunnelView{{Name: "amnezia", Interface: "nwg0", HandshakeAge: 47, PingStatus: "ok", Latency: 12}},
+		LastReportAge: 0,
+	}
+	if a.Nickname != "vasya" || len(a.Tunnels) != 1 || a.Tunnels[0].HandshakeAge != 47 {
+		t.Errorf("smoke: args build: %+v", a)
+	}
+}
+
+func mkArgs(t *testing.T, build func(*SmartReplyArgs)) SmartReplyArgs {
+	t.Helper()
+	a := SmartReplyArgs{Nickname: "x"}
+	build(&a)
+	return a
+}
+
+func TestClassifyState_OfflineWhenReportStale(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) { a.LastReportAge = 6 * time.Minute })
+	if got := ClassifyState(a); got != StateOffline {
+		t.Errorf("got %v want offline", got)
+	}
+}
+
+func TestClassifyState_HardWhenIncident(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 30 * time.Second
+		a.ActiveIncidents = []IncidentView{{CheckName: "tunnel_awg11", FailCount: 5}}
+	})
+	if got := ClassifyState(a); got != StateHard {
+		t.Errorf("got %v want hard", got)
+	}
+}
+
+func TestClassifyState_DegradedHandshakeBoundary(t *testing.T) {
+	cases := []struct {
+		age   int
+		state SmartReplyState
+	}{
+		{0, StateOK},
+		{59, StateOK},
+		{60, StateDegraded},
+		{179, StateDegraded},
+		// 180+ would normally be a HARD via FSM, but here we test the gap
+		// between thresholds: handshake age 180 with no active incident
+		// is the unusual "FSM hasn't ticked yet" race — treat as Degraded.
+		{180, StateDegraded},
+	}
+	for _, c := range cases {
+		t.Run(time.Duration(c.age).String(), func(t *testing.T) {
+			a := mkArgs(t, func(a *SmartReplyArgs) {
+				a.LastReportAge = 10 * time.Second
+				a.Tunnels = []TunnelView{{Name: "amnezia", HandshakeAge: c.age, PingStatus: "ok"}}
+			})
+			if got := ClassifyState(a); got != c.state {
+				t.Errorf("age=%d got %v want %v", c.age, got, c.state)
+			}
+		})
+	}
+}
+
+func TestClassifyState_DegradedPingFails(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 10 * time.Second
+		a.Tunnels = []TunnelView{{Name: "amnezia", HandshakeAge: 30, PingStatus: "ok", FailCount: 2, FailThresh: 5}}
+	})
+	if got := ClassifyState(a); got != StateDegraded {
+		t.Errorf("got %v want degraded", got)
+	}
+}
+
+func TestClassifyState_OKBaseline(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 5 * time.Second
+		a.Tunnels = []TunnelView{{Name: "amnezia", HandshakeAge: 12, PingStatus: "ok"}}
+	})
+	if got := ClassifyState(a); got != StateOK {
+		t.Errorf("got %v want ok", got)
+	}
+}
+
+func TestClassifyState_MobileLongerStaleWindow(t *testing.T) {
+	// Mobile users have a 60-min OFFLINE grace window in heartbeat config,
+	// but for smart-reply context we still want to surface "offline" as soon
+	// as a report >5 min is stale — that's the user-facing definition.
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 6 * time.Minute
+		a.IsMobile = true
+	})
+	if got := ClassifyState(a); got != StateOffline {
+		t.Errorf("mobile: got %v want offline", got)
+	}
+}
+
+func TestClassifyState_MultiTunnelOnlyOneDegraded(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 10 * time.Second
+		a.Tunnels = []TunnelView{
+			{Name: "amnezia", HandshakeAge: 12, PingStatus: "ok"},
+			{Name: "secondary", HandshakeAge: 120, PingStatus: "ok"},
+		}
+	})
+	if got := ClassifyState(a); got != StateDegraded {
+		t.Errorf("got %v want degraded", got)
+	}
+}
+
+func TestClassifyState_HardWinsOverDegradedHandshake(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 10 * time.Second
+		a.Tunnels = []TunnelView{{Name: "amnezia", HandshakeAge: 120, PingStatus: "ok"}}
+		a.ActiveIncidents = []IncidentView{{CheckName: "dns"}}
+	})
+	if got := ClassifyState(a); got != StateHard {
+		t.Errorf("got %v want hard", got)
+	}
+}
+
+func TestFormatSmartReply_OK(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 23 * time.Second,
+		Tunnels: []TunnelView{{Name: "amnezia", HandshakeAge: 47, PingStatus: "ok", Latency: 12}},
+	}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"✅", "vasya", "всё работает", "amnezia", "47с", "12 ms", "23с"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("OK template missing %q in:\n%s", want, text)
+		}
+	}
+	// OK template no longer carries an inline keyboard (details/last_report
+	// removed 2026-05-06 — text-only).
+	if len(kb.InlineKeyboard) != 0 {
+		t.Errorf("OK keyboard expected empty, got: %+v", kb)
+	}
+}
+
+func TestFormatSmartReply_Degraded(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 142, PingStatus: "ok", FailCount: 3, FailThresh: 5}},
+	}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"⚠️", "подозрения", "amnezia", "142", "3", "5"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Degraded missing %q in:\n%s", want, text)
+		}
+	}
+	// inline kb: single row [Перезапуск][Тест связи] — details button removed.
+	if len(kb.InlineKeyboard) < 1 {
+		t.Fatalf("Degraded keyboard rows: %d, want ≥1", len(kb.InlineKeyboard))
+	}
+	want := map[string]bool{
+		"restart_tunnel:7:tunnel_awg11": true,
+		"pingcheck_now:7:tunnel_awg11":  true,
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for k := range want {
+		t.Errorf("Degraded missing button: %s", k)
+	}
+}
+
+func TestFormatSmartReply_Hard(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
+		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-4 * time.Minute), FailCount: 5}},
+	}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"🔴", "vasya", "проблема"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Hard missing %q in:\n%s", want, text)
+		}
+	}
+	// inline kb must contain restart + diag + silence (details/last_report
+	// buttons were removed in 2026-05-06 — no working handler).
+	want := map[string]bool{
+		"restart_tunnel:7:tunnel_awg11": true,
+		"diag_now:7:tunnel_awg11":       true,
+		"silence:7:tunnel_awg11:1h":     true,
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for k := range want {
+		t.Errorf("Hard missing button: %s", k)
+	}
+}
+
+func TestFormatSmartReply_Offline(t *testing.T) {
+	a := SmartReplyArgs{Nickname: "vasya", UserID: 7, LastReportAge: 14 * time.Minute}
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{"📵", "vasya", "не на связи", "14"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("Offline missing %q in:\n%s", want, text)
+		}
+	}
+	// Inline keyboard removed in 2026-05-06 — Offline is text-only now.
+	if len(kb.InlineKeyboard) != 0 {
+		t.Errorf("Offline kb expected empty, got: %+v", kb)
+	}
+}
+
+func TestFormatSmartReply_MultiTunnelHardSplit(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{
+			{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"},
+			{Name: "secondary", CheckName: "tunnel_awg12", HandshakeAge: 200, PingStatus: "dead"},
+		},
+		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-2 * time.Minute), FailCount: 5}},
+	}
+	_, kb := FormatSmartReply(a)
+	// must have at least one row per tunnel for restart
+	want := map[string]bool{
+		"restart_tunnel:7:tunnel_awg11": true,
+		"restart_tunnel:7:tunnel_awg12": true,
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for k := range want {
+		t.Errorf("multi-tunnel missing %s", k)
+	}
+}
