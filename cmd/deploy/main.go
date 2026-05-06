@@ -8,20 +8,53 @@ import (
 
 func main() {
 	versionFlag := flag.Bool("version", false, "print version and exit")
+	configPath := flag.String("config", "", "path to wizard.toml (default: platform default)")
+	noColor := flag.Bool("no-color", false, "disable ANSI colors")
 	flag.Parse()
 
 	if *versionFlag {
 		fmt.Println(Version)
 		return
 	}
+	if *noColor {
+		UseColor = false
+	}
+
+	statePath := *configPath
+	if statePath == "" {
+		// cwd-fallback first, for repo-local dev
+		if _, err := os.Stat("wizard.toml"); err == nil {
+			statePath = "wizard.toml"
+		} else {
+			statePath = DefaultStatePath()
+		}
+	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load state:", err)
+		os.Exit(1)
+	}
+	secrets := NewSecretStore()
+	dl := NewDownloader()
 
 	args := flag.Args()
 	if len(args) == 0 {
-		fmt.Println("wg-monitor-deploy", Version)
-		fmt.Println("(меню пока не реализовано — Task 12)")
+		fmt.Println("wg-monitor-deploy", Version, "— меню в Task 12")
+		fmt.Println("пока доступно: update-backend")
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
-	os.Exit(2)
+	switch args[0] {
+	case "update-backend":
+		if err := actionUpdateBackend(state, secrets, dl); err != nil {
+			os.Exit(1)
+		}
+		if err := SaveState(statePath, state); err != nil {
+			fmt.Fprintln(os.Stderr, "save state:", err)
+		}
+		PrintSecretsSaveAdvice(secrets)
+	default:
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
+		os.Exit(2)
+	}
 }
