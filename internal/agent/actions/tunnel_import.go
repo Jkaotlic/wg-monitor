@@ -133,6 +133,16 @@ func parsePeerField(peer *awgmgr.PeerConfig, key, val string) error {
 	return nil
 }
 
+// preferredBackend returns the backend used by the first existing tunnel so new
+// tunnels match. Falls back to "" (awg-manager picks its active backend).
+func preferredBackend(ctx context.Context, client *awgmgr.Client) string {
+	all, err := client.TunnelsAll(ctx)
+	if err != nil || len(all.Tunnels) == 0 {
+		return ""
+	}
+	return all.Tunnels[0].Backend
+}
+
 // ImportTunnel is the agent-side handler for the tunnel_import wire.Command.
 // confB64 is base64-encoded .conf content.
 // replace=true  → find existing tunnel by name and use ReplaceConf API (atomic).
@@ -150,7 +160,12 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 		return "", fmt.Errorf("parse conf: %w", err)
 	}
 
+	// Determine preferred backend from existing tunnels so the new tunnel
+	// uses the same backend (e.g. nativewg) rather than the system default.
+	backend := preferredBackend(ctx, client)
+
 	var result strings.Builder
+	var newID string
 	if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
@@ -168,20 +183,27 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 			if err != nil {
 				return "", fmt.Errorf("replace tunnel: %w", err)
 			}
+			newID = newTun.ID
 			fmt.Fprintf(&result, "✅ Туннель %q заменён (id=%s)", name, newTun.ID)
 		} else {
-			newTun, err := client.ImportConf(ctx, rawConf, name)
+			newTun, err := client.ImportConf(ctx, rawConf, name, backend)
 			if err != nil {
 				return "", fmt.Errorf("create tunnel: %w", err)
 			}
+			newID = newTun.ID
 			fmt.Fprintf(&result, "✅ Туннель %q создан (id=%s)", name, newTun.ID)
 		}
 	} else {
-		newTun, err := client.ImportConf(ctx, rawConf, name)
+		newTun, err := client.ImportConf(ctx, rawConf, name, backend)
 		if err != nil {
 			return "", fmt.Errorf("create tunnel: %w", err)
 		}
+		newID = newTun.ID
 		fmt.Fprintf(&result, "✅ Туннель %q создан (id=%s)", name, newTun.ID)
+	}
+
+	if err := client.StartTunnel(ctx, newID); err != nil {
+		fmt.Fprintf(&result, "\n⚠️ Запустить туннель не удалось: %v", err)
 	}
 
 	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {

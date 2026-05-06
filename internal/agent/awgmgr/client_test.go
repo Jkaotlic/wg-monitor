@@ -66,7 +66,7 @@ func TestClient_ImportConf_OK(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg")
+	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg", "nativewg")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestClient_ImportConf_Error(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	_, err := c.ImportConf(context.Background(), "", "x")
+	_, err := c.ImportConf(context.Background(), "", "x", "")
 	if err == nil {
 		t.Fatal("expected error on 400")
 	}
