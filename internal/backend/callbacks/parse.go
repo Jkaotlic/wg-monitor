@@ -29,6 +29,9 @@ type Args struct {
 	// ends in "_panel_"). The router uses this to refresh the panel inline
 	// instead of editing the original alert message.
 	IsPanel bool
+	// ImportToken is set for tunnel_import_replace / tunnel_import_add callbacks.
+	// It is an 8-hex-char random token that ties the callback to the pending upload.
+	ImportToken string
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -50,6 +53,9 @@ var validActions = map[string]bool{
 	"check_via_tunnel": true, "check_direct": true,
 	// backend-only callback (no agent action): re-render Tunnels-panel inline.
 	"tunnels_refresh": true,
+	// tunnel import confirmation buttons (sent after conf upload review).
+	"tunnel_import_replace": true,
+	"tunnel_import_add":     true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
@@ -108,6 +114,12 @@ func Parse(data string) (Args, error) {
 			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
 		}
 		a.NDMSName = parts[3]
+	}
+	if action == "tunnel_import_replace" || action == "tunnel_import_add" {
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
+		}
+		a.ImportToken = parts[3]
 	}
 	return a, nil
 }
