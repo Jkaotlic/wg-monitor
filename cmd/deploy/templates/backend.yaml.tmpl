@@ -1,0 +1,29 @@
+listen: 127.0.0.1:8080
+log_level: info
+db_path: /var/lib/wg-monitor/state.db
+
+telegram:
+  bot_token: "{{.BotToken}}"
+  chat_id: {{.ChatID}}
+  admin_user_id: {{.AdminUserID}}
+
+agents:
+{{- range .Agents }}
+  - nickname: {{.Nickname}}
+    token: "{{.Token}}"
+    thread_id: {{.ThreadID}}
+{{- end }}
+
+state:
+  fail_threshold: 2
+  recovery_threshold: 2
+  mute_cutoff_hour: 23
+  realert_every_sec: 3600
+  realert_tick_sec: 60
+
+heartbeat:
+  stale_after_sec: 120
+  stale_after_static_sec: 180
+  stale_after_mobile_sec: 300
+  resume_grace_sec: 30
+  scan_interval_sec: 30

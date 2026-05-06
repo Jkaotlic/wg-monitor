@@ -1,0 +1,101 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+)
+
+func main() {
+	versionFlag := flag.Bool("version", false, "print version and exit")
+	configPath := flag.String("config", "", "path to wizard.toml (default: platform default)")
+	noColor := flag.Bool("no-color", false, "disable ANSI colors")
+	flag.Parse()
+
+	if *versionFlag {
+		fmt.Println(Version)
+		return
+	}
+	if *noColor {
+		UseColor = false
+	}
+
+	statePath := *configPath
+	if statePath == "" {
+		// cwd-fallback first, for repo-local dev
+		if _, err := os.Stat("wizard.toml"); err == nil {
+			statePath = "wizard.toml"
+		} else {
+			statePath = DefaultStatePath()
+		}
+	}
+	state, err := LoadState(statePath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "load state:", err)
+		os.Exit(1)
+	}
+	secrets := NewSecretStore()
+	dl := NewDownloader()
+
+	args := flag.Args()
+	if len(args) == 0 {
+		RunMenu(state, statePath, secrets, dl)
+		return
+	}
+
+	switch args[0] {
+	case "install-backend":
+		if err := actionInstallBackend(state, secrets, dl); err != nil {
+			os.Exit(1)
+		}
+		SaveState(statePath, state)
+		PrintSecretsSaveAdvice(secrets)
+	case "update-backend":
+		if err := actionUpdateBackend(state, secrets, dl); err != nil {
+			os.Exit(1)
+		}
+		if err := SaveState(statePath, state); err != nil {
+			fmt.Fprintln(os.Stderr, "save state:", err)
+		}
+		PrintSecretsSaveAdvice(secrets)
+	case "install-agent":
+		nick := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--agent" && i+1 < len(args) {
+				nick = args[i+1]
+			}
+		}
+		if err := actionInstallAgent(state, secrets, dl, nick); err != nil {
+			os.Exit(1)
+		}
+		SaveState(statePath, state)
+		PrintSecretsSaveAdvice(secrets)
+	case "update-agent":
+		agentFlag := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--agent" && i+1 < len(args) {
+				agentFlag = args[i+1]
+			}
+		}
+		if err := actionUpdateAgent(state, secrets, dl, agentFlag); err != nil {
+			os.Exit(1)
+		}
+		if err := SaveState(statePath, state); err != nil {
+			fmt.Fprintln(os.Stderr, "save state:", err)
+		}
+		PrintSecretsSaveAdvice(secrets)
+	case "add-router":
+		if err := actionAddRouter(state, secrets, dl); err != nil {
+			os.Exit(1)
+		}
+		SaveState(statePath, state)
+		PrintSecretsSaveAdvice(secrets)
+	case "status":
+		if err := actionStatus(state, secrets); err != nil {
+			os.Exit(1)
+		}
+	default:
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
+		os.Exit(2)
+	}
+}

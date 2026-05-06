@@ -1,0 +1,23 @@
+# Default: text files get LF in repo, CRLF on Windows checkout
+* text=auto
+
+# Go source files: always LF
+*.go text eol=lf
+
+# Shell scripts: always LF (must work on Linux)
+*.sh text eol=lf
+cmd/deploy/templates/S99wg-monitor text eol=lf
+
+# Systemd unit files: always LF
+*.service text eol=lf
+
+# YAML templates: LF
+*.yaml text eol=lf
+*.yaml.tmpl text eol=lf
+
+# Caddyfile template: LF
+Caddyfile.tmpl text eol=lf
+
+# Binary files: no conversion
+*.exe binary
+*.db binary
