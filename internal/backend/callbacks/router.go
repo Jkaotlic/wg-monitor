@@ -628,6 +628,7 @@ func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message) {
 }
 
 func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind string, user *db.User) {
+	slog.Info("document-upload", "file", m.Document.FileName, "size", m.Document.FileSize, "kind", kind, "has_user", user != nil)
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
 			"конфиги принимаются только в топике роутера.", "", nil)
@@ -682,9 +683,11 @@ func (r *Router) sendImportConfirmation(ctx context.Context, chatID int64, threa
 				CallbackData: fmt.Sprintf("tunnel_import_add:%d:%s:%s", userID, name, token)}},
 		},
 	}
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID,
-		fmt.Sprintf("📁 Конфиг для туннеля *%s*. Что делать?", name),
-		"MarkdownV2", nil, &kb)
+	if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID,
+		fmt.Sprintf("📁 Конфиг для туннеля «%s». Что делать?", name),
+		"", nil, &kb); err != nil {
+		slog.Warn("sendImportConfirmation failed", "err", err, "name", name)
+	}
 }
 
 func (r *Router) handlePendingNameReply(ctx context.Context, m *tg.Message, user *db.User) bool {
