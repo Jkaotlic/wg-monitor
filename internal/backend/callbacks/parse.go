@@ -32,6 +32,11 @@ type Args struct {
 	// ImportToken is set for tunnel_import_replace / tunnel_import_add callbacks.
 	// It is an 8-hex-char random token that ties the callback to the pending upload.
 	ImportToken string
+	// RebindToken is set for routes_confirm callbacks. 8 hex chars, 5-min TTL.
+	RebindToken string
+	// RebindSrcID / RebindDstID parsed from routes_pick / routes_confirm.
+	RebindSrcID string
+	RebindDstID string
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -56,6 +61,10 @@ var validActions = map[string]bool{
 	// tunnel import confirmation buttons (sent after conf upload review).
 	"tunnel_import_replace": true,
 	"tunnel_import_add":     true,
+	// routes panel actions: browse, rebind, and confirm route changes.
+	"routes_open": true, "routes_router": true, "routes_rebind": true,
+	"routes_pick": true, "routes_confirm": true, "routes_refresh": true,
+	"routes_back": true, "routes_close": true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
@@ -120,6 +129,25 @@ func Parse(data string) (Args, error) {
 			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
 		}
 		a.ImportToken = parts[3]
+	}
+	switch action {
+	case "routes_rebind":
+		if len(parts) >= 3 && parts[2] != "" && parts[2] != panelSentinel {
+			a.RebindSrcID = parts[2]
+		}
+	case "routes_pick":
+		if len(parts) < 4 {
+			return Args{}, fmt.Errorf("routes_pick requires src and dst: %q", data)
+		}
+		a.RebindSrcID = parts[2]
+		a.RebindDstID = parts[3]
+	case "routes_confirm":
+		if len(parts) < 5 || parts[4] == "" {
+			return Args{}, fmt.Errorf("routes_confirm requires token: %q", data)
+		}
+		a.RebindSrcID = parts[2]
+		a.RebindDstID = parts[3]
+		a.RebindToken = parts[4]
 	}
 	return a, nil
 }
