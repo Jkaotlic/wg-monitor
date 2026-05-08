@@ -24,7 +24,12 @@ var Version = "0.8.0-tunnel-import"
 func main() {
 	configPath := flag.String("config", "/opt/etc/wg-monitor/config.yaml", "path to YAML config")
 	allowHTTP := flag.Bool("allow-http", false, "allow http:// backend URL (dev only)")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		_, _ = os.Stdout.WriteString(Version + "\n")
+		return
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
