@@ -44,6 +44,8 @@ var validCommandActions = map[string]bool{
 	"check_via_tunnel": true,
 	"check_direct":     true,
 	"tunnel_import":    true,
+	"route_status":     true,
+	"route_rebind":     true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }
