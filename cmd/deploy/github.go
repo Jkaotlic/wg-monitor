@@ -13,12 +13,17 @@ import (
 	"time"
 )
 
-// RepoOwner and RepoName are set via -ldflags at build time so forks can rebuild
-// without code changes:
+// RepoOwner and RepoName point at the GitHub repository the wizard pulls
+// release artefacts from. CI sets these via -ldflags at build time:
 //
-//	-X main.RepoOwner=myname -X main.RepoName=wg-monitor-fork
+//	-X main.RepoOwner=${{ github.repository_owner }}
+//	-X main.RepoName=${{ github.event.repository.name }}
+//
+// Forks rebuilding locally can override the same way. The defaults below
+// match the canonical upstream so a fresh `go build ./cmd/deploy` from
+// the upstream tree without ldflags still works.
 var (
-	RepoOwner = "user"
+	RepoOwner = "Jkaotlic"
 	RepoName  = "wg-monitor"
 )
 
