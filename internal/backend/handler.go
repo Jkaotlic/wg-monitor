@@ -49,15 +49,22 @@ type TGNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, maxChars int) error
 }
 
+// RoutesNotifier is the subset used by cmdResultHandler when ref.Action is
+// route_status or route_rebind. Implemented by callbacks.RoutesPanelNotifier.
+type RoutesNotifier interface {
+	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
+}
+
 type Deps struct {
-	Logger      *slog.Logger
-	DB          *db.DB
-	Dispatcher  Dispatcher
-	Resumer     Resumer
-	CommandSink CommandSink
-	TGNotifier  TGNotifier
-	UI          UIConfig
-	Thresholds  state.Thresholds
+	Logger         *slog.Logger
+	DB             *db.DB
+	Dispatcher     Dispatcher
+	Resumer        Resumer
+	CommandSink    CommandSink
+	TGNotifier     TGNotifier
+	RoutesNotifier RoutesNotifier // nil-safe (handler skips if nil)
+	UI             UIConfig
+	Thresholds     state.Thresholds
 }
 
 func NewMux(d Deps) http.Handler {
@@ -221,22 +228,35 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			http.Error(w, "record failed", http.StatusInternalServerError)
 			return
 		}
-		// Relay result back to TG if a notifier is configured and we recorded
-		// the originating message. Async — must not stall the agent's POST on
-		// TG network latency.
-		if d.TGNotifier != nil {
-			if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
-				maxChars := d.UI.DiagMaxChars
-				if maxChars == 0 {
-					maxChars = 3500
+		// Relay result back to TG (or routes notifier) if a notifier is configured
+		// and we recorded the originating message. Async — must not stall the
+		// agent's POST on TG network latency.
+		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
+			switch ref.Action {
+			case "route_status", "route_rebind":
+				if d.RoutesNotifier != nil {
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						if err := d.RoutesNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
+							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
+						}
+					}(ref, res)
 				}
-				go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
-					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
-						d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
+			default:
+				if d.TGNotifier != nil {
+					maxChars := d.UI.DiagMaxChars
+					if maxChars == 0 {
+						maxChars = 3500
 					}
-				}(ref, res, maxChars)
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
+							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
+						}
+					}(ref, res, maxChars)
+				}
 			}
 		}
 		d.Logger.Info("cmd result", "nickname", nick, "cmd_id", res.ID, "status", res.Status, "duration_ms", res.DurationMs)
