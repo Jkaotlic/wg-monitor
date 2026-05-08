@@ -32,6 +32,28 @@ func (c *Client) UpdateDNSRoute(ctx context.Context, rule DNSRoute) error {
 	return c.postJSON(ctx, "/api/dns-routes/update?id="+rule.ID, body, nil)
 }
 
+// ListStaticRoutes returns /api/static-routes/list .data.
+func (c *Client) ListStaticRoutes(ctx context.Context) ([]StaticRoute, error) {
+	var env Envelope[[]StaticRoute]
+	if err := c.get(ctx, "/api/static-routes/list", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr static-routes/list: success=false")
+	}
+	return env.Data, nil
+}
+
+// UpdateStaticRoute calls POST /api/static-routes/update — the id is in the
+// body, NOT in the URL (different from DNS update). awg-manager full-replaces.
+func (c *Client) UpdateStaticRoute(ctx context.Context, rule StaticRoute) error {
+	body, err := json.Marshal(rule)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/static-routes/update", body, nil)
+}
+
 // postJSON is a helper that POSTs JSON with the right headers. The existing
 // (lowercase) post helper accepts a body io.Reader but doesn't set
 // Content-Type; awg-manager's update endpoints require it. Inline here to
