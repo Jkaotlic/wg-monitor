@@ -79,7 +79,21 @@ func (e *EventsRepo) LatestEvent(userID int64, checkName string) (EventRow, bool
 // alerts formatter to render "neighbouring tunnels" context next to a
 // failing tunnel — we want the latest known status of each sibling
 // without doing a full per-name query in Go.
+//
+// Equivalent to LatestEventsByPrefixSince with since=0.
 func (e *EventsRepo) LatestEventsByPrefix(userID int64, prefix string) ([]EventRow, error) {
+	return e.LatestEventsByPrefixSince(userID, prefix, time.Time{})
+}
+
+// LatestEventsByPrefixSince is LatestEventsByPrefix with an additional
+// freshness filter: only returns rows whose latest ts is at-or-after `since`.
+// A zero time disables the filter (matches LatestEventsByPrefix exactly).
+//
+// The filter exists so panels like Tunnels Panel don't render long-dead
+// tunnels: when an entity is removed from awg-manager, the agent stops
+// emitting events for it, but the historical row remains as "the latest"
+// forever. Callers pass `now - threshold` to elide stale entities.
+func (e *EventsRepo) LatestEventsByPrefixSince(userID int64, prefix string, since time.Time) ([]EventRow, error) {
 	// Escape SQL LIKE wildcards (_ and %) inside the user-supplied prefix so
 	// callers passing "tunnel_" don't accidentally match "tunnels" (where _
 	// is a single-char wildcard). The literal backslash before _/% is
@@ -87,16 +101,19 @@ func (e *EventsRepo) LatestEventsByPrefix(userID int64, prefix string) ([]EventR
 	escaped := strings.ReplaceAll(prefix, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
 	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
-	rows, err := e.d.db.Query(
-		`SELECT e1.id, e1.user_id, e1.check_name, e1.status, e1.details_json, e1.ts
-		   FROM events e1
-		  WHERE e1.user_id = ? AND e1.check_name LIKE ? ESCAPE '\'
-		    AND e1.ts = (
-		        SELECT MAX(e2.ts) FROM events e2
-		         WHERE e2.user_id = e1.user_id AND e2.check_name = e1.check_name
-		    )`,
-		userID, escaped+"%",
-	)
+	q := `SELECT e1.id, e1.user_id, e1.check_name, e1.status, e1.details_json, e1.ts
+	        FROM events e1
+	       WHERE e1.user_id = ? AND e1.check_name LIKE ? ESCAPE '\'
+	         AND e1.ts = (
+	             SELECT MAX(e2.ts) FROM events e2
+	              WHERE e2.user_id = e1.user_id AND e2.check_name = e1.check_name
+	         )`
+	args := []any{userID, escaped + "%"}
+	if !since.IsZero() {
+		q += ` AND e1.ts >= ?`
+		args = append(args, since.UTC())
+	}
+	rows, err := e.d.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

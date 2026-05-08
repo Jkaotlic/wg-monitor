@@ -458,7 +458,12 @@ func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user
 // (tap on "🎛 Туннели" reply-keyboard button) and by the tunnels_refresh
 // callback after a toggle action.
 func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup) {
-	rows, err := r.d.Events().LatestEventsByPrefix(u.ID, "tunnel_")
+	// Stale-entity elision: only show tunnels whose latest event is at most
+	// 3 agent cycles old (~3 min). When awg-manager removes a tunnel, the
+	// agent stops emitting events for it; without this filter the dead
+	// tunnel sticks in the panel forever as "last known state".
+	freshSince := time.Now().Add(-3 * time.Minute)
+	rows, err := r.d.Events().LatestEventsByPrefixSince(u.ID, "tunnel_", freshSince)
 	if err != nil {
 		slog.Warn("buildTunnelsPanel: events lookup failed", "err", err, "user", u.ID)
 	}
