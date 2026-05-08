@@ -77,6 +77,13 @@ func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 	return NewRouterWithSink(d, tgClient, nil, cfg)
 }
 
+// SetRoutesCache attaches the per-user RoutesCache. Called from cmd/backend
+// during startup so the router can serve cached snapshots for routes_open
+// callbacks without re-querying the agent each time.
+func (r *Router) SetRoutesCache(c *RoutesCache) {
+	r.routesCache = c
+}
+
 // NewRouterWithSink builds a Router whose command-action callbacks enqueue
 // wire.Command into the provided sink for the agent to long-poll.
 func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Config) *Router {
