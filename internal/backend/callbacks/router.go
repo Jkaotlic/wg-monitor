@@ -16,9 +16,11 @@ import (
 	"sync"
 	"time"
 
+	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 // TGClient is the subset of tg.Client used by the router.
@@ -61,6 +63,12 @@ type Router struct {
 	importAction *ImportAction
 	pendingMu    sync.Mutex
 	pending      map[int64]*pendingUpload
+
+	routesCache         *RoutesCache
+	rebindConfirmAction Action
+	cmdSink             CommandEnqueuer // saved for routes_open/refresh enqueue paths
+	pendingRebindsMu    sync.Mutex
+	pendingRebinds      map[string]*pendingRebind // keyed by 8-hex token
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -97,6 +105,9 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 		},
 		idGen: defaultCmdID,
 	}
+	r.cmdSink = sink
+	r.pendingRebinds = make(map[string]*pendingRebind)
+	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebind, defaultCmdID)
 	return r
 }
 
@@ -222,6 +233,27 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновлено")
 		return
+	case "routes_open", "routes_refresh":
+		r.handleRoutesOpen(ctx, q, args, args.Action == "routes_refresh")
+		return
+	case "routes_rebind":
+		r.handleRoutesRebindStart(ctx, q, args)
+		return
+	case "routes_pick":
+		r.handleRoutesRebindPick(ctx, q, args)
+		return
+	case "routes_back":
+		r.handleRoutesOpen(ctx, q, args, false)
+		return
+	case "routes_close":
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
+		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, q.Message.Text, "", &empty)
+		return
+	case "routes_confirm":
+		if r.rebindConfirmAction != nil {
+			action = r.rebindConfirmAction
+		}
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
@@ -727,4 +759,112 @@ func humanAgeDur(d time.Duration) string {
 		return fmt.Sprintf("%dм", s/60)
 	}
 	return fmt.Sprintf("%dч", s/3600)
+}
+
+// ----- pendingRebind helpers -----
+
+func (r *Router) putPendingRebind(pr *pendingRebind) {
+	r.pendingRebindsMu.Lock()
+	defer r.pendingRebindsMu.Unlock()
+	if r.pendingRebinds == nil {
+		r.pendingRebinds = make(map[string]*pendingRebind)
+	}
+	r.pendingRebinds[pr.Token] = pr
+}
+
+func (r *Router) consumePendingRebind(userID int64, token string) (*pendingRebind, bool) {
+	r.pendingRebindsMu.Lock()
+	defer r.pendingRebindsMu.Unlock()
+	pr, ok := r.pendingRebinds[token]
+	if !ok || pr.UserID != userID || time.Now().After(pr.ExpiresAt) {
+		delete(r.pendingRebinds, token)
+		return nil, false
+	}
+	delete(r.pendingRebinds, token)
+	return pr, true
+}
+
+// ----- routes handlers -----
+
+// handleRoutesOpen renders Screen 2. Cache lookup unless force=true.
+// On miss, enqueues route_status; the result handler (RoutesPanelNotifier
+// in M7.4) edits the panel when the agent answers.
+func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args Args, force bool) {
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "user not found")
+		return
+	}
+	if !force && r.routesCache != nil {
+		if snap, ok := r.routesCache.Get(user.ID); ok {
+			text := tg.RoutesPanelText(user.Nickname, snap)
+			kb := tg.RoutesPanelKeyboard(user.ID, snap)
+			_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+			return
+		}
+	}
+	if r.cmdSink == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command sink не подключён")
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "route_status", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
+	loadingKB := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", &loadingKB)
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		slog.Warn("routes_open: enqueue failed", "err", err)
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось запросить статус")
+		return
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		return
+	}
+	if r.routesCache == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
+		return
+	}
+	snap, ok := r.routesCache.Get(user.ID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
+		return
+	}
+	text, kb := tg.RebindPickKeyboard(user.ID, args.RebindSrcID, snap)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		return
+	}
+	if args.RebindSrcID == args.RebindDstID {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "src == dst — нечего переносить")
+		return
+	}
+	if r.routesCache == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
+		return
+	}
+	snap, ok := r.routesCache.Get(user.ID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
+		return
+	}
+	token := makeRebindToken()
+	r.putPendingRebind(&pendingRebind{
+		UserID: user.ID, SrcID: args.RebindSrcID, DstID: args.RebindDstID,
+		Token: token, ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	text := tg.RebindPreviewText(snap, args.RebindSrcID, args.RebindDstID, token)
+	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindSrcID, args.RebindDstID, token)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
