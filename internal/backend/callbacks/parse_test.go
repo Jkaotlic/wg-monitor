@@ -143,3 +143,43 @@ func TestParse_TunnelImportMissingToken(t *testing.T) {
 		t.Error("expected error for missing token")
 	}
 }
+
+func TestParse_RoutesActions(t *testing.T) {
+	cases := []struct {
+		data    string
+		action  string
+		token   string
+		isPanel bool
+	}{
+		{"routes_open:42:_panel_", "routes_open", "", true},
+		{"routes_refresh:42:_panel_", "routes_refresh", "", true},
+		{"routes_rebind:42:t1", "routes_rebind", "", false},
+		{"routes_pick:42:t1:t2", "routes_pick", "", false},
+		{"routes_confirm:42:t1:t2:abc12345", "routes_confirm", "abc12345", false},
+		{"routes_close:0:_panel_", "routes_close", "", true},
+		{"routes_back:42:_panel_", "routes_back", "", true},
+	}
+	for _, tc := range cases {
+		args, err := Parse(tc.data)
+		if err != nil {
+			t.Errorf("%s: %v", tc.data, err)
+			continue
+		}
+		if args.Action != tc.action {
+			t.Errorf("%s: action=%s", tc.data, args.Action)
+		}
+		if tc.token != "" && args.RebindToken != tc.token {
+			t.Errorf("%s: token=%q want %q", tc.data, args.RebindToken, tc.token)
+		}
+		if args.IsPanel != tc.isPanel {
+			t.Errorf("%s: isPanel=%v want %v", tc.data, args.IsPanel, tc.isPanel)
+		}
+	}
+}
+
+func TestParse_RoutesConfirm_MissingToken(t *testing.T) {
+	_, err := Parse("routes_confirm:42:t1:t2")
+	if err == nil {
+		t.Errorf("expected error for missing token")
+	}
+}
