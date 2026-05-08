@@ -73,3 +73,44 @@ func TestUpdateDNSRoute_SendsFullBody(t *testing.T) {
 		t.Errorf("backend not preserved: %+v", got)
 	}
 }
+
+func TestListStaticRoutes_HappyPath(t *testing.T) {
+	const payload = `{"success":true,"data":[
+		{"id":"s1","name":"work","tunnelID":"nwg1","subnets":["10.0.0.0/8"],"fallback":"auto","enabled":true}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/static-routes/list" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	got, err := c.ListStaticRoutes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].TunnelID != "nwg1" {
+		t.Errorf("got: %+v", got)
+	}
+}
+
+func TestUpdateStaticRoute_NoIDInURL_FullBody(t *testing.T) {
+	var got StaticRoute
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/static-routes/update" || r.URL.RawQuery != "" {
+			t.Errorf("expected path /api/static-routes/update with NO query, got %q?%q", r.URL.Path, r.URL.RawQuery)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := StaticRoute{ID: "s1", Name: "work", TunnelID: "nwg0", Subnets: []string{"10.0.0.0/8"}, Fallback: "auto", Enabled: true}
+	if err := c.UpdateStaticRoute(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "s1" || got.TunnelID != "nwg0" {
+		t.Errorf("body: %+v", got)
+	}
+}
