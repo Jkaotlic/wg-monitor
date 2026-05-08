@@ -230,6 +230,13 @@ func (c *Client) DeleteTunnel(ctx context.Context, tunnelID string) error {
 	return c.post(ctx, "/api/tunnels/delete?id="+tunnelID, nil, nil)
 }
 
+// GetEnv is a public version of the lowercase get helper. Used by callers in
+// other packages (internal/agent/actions) that need to issue typed GETs
+// against awg-manager without duplicating the HTTP plumbing.
+func (c *Client) GetEnv(ctx context.Context, path string, out any) error {
+	return c.get(ctx, path, out)
+}
+
 func (c *Client) confPost(ctx context.Context, path, rawConf, name string) (*Tunnel, error) {
 	body, err := json.Marshal(struct {
 		Content string `json:"content"`

@@ -114,3 +114,62 @@ func TestUpdateStaticRoute_NoIDInURL_FullBody(t *testing.T) {
 		t.Errorf("body: %+v", got)
 	}
 }
+
+func TestRoutingTunnels_HappyPath(t *testing.T) {
+	const payload = `{"success":true,"data":[
+		{"id":"awg11","name":"amnezia_for_awg","iface":"nwg1","type":"managed","status":"running","available":true},
+		{"id":"wan:eth3","name":"WAN","iface":"eth3","type":"wan","status":"up","available":true}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/routing/tunnels" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	got, err := c.RoutingTunnels(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Iface != "nwg1" || got[1].Type != "wan" {
+		t.Errorf("got: %+v", got)
+	}
+}
+
+func TestRoutingRefresh_HappyPath(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/routing/refresh" && r.Method == http.MethodPost {
+			called = true
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	if err := c.RoutingRefresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Errorf("/api/routing/refresh not called")
+	}
+}
+
+func TestHydraRouteControl_BodyShape(t *testing.T) {
+	var body map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/system/hydraroute-control" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	if err := c.HydraRouteControl(context.Background(), "restart"); err != nil {
+		t.Fatal(err)
+	}
+	if body["action"] != "restart" {
+		t.Errorf("body: %+v", body)
+	}
+}

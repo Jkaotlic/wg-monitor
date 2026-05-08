@@ -54,6 +54,36 @@ func (c *Client) UpdateStaticRoute(ctx context.Context, rule StaticRoute) error 
 	return c.postJSON(ctx, "/api/static-routes/update", body, nil)
 }
 
+// RoutingTunnels returns /api/routing/tunnels .data — the catalogue of all
+// routable interfaces (managed/system/wan). Used by the rebind action to
+// resolve the iface value used in route bindings.
+func (c *Client) RoutingTunnels(ctx context.Context) ([]RoutingTunnel, error) {
+	var env Envelope[[]RoutingTunnel]
+	if err := c.get(ctx, "/api/routing/tunnels", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr routing/tunnels: success=false")
+	}
+	return env.Data, nil
+}
+
+// RoutingRefresh forces NDMS cache reset.
+func (c *Client) RoutingRefresh(ctx context.Context) error {
+	return c.post(ctx, "/api/routing/refresh", nil, nil)
+}
+
+// HydraRouteControl posts {"action":"<action>"} to /api/system/hydraroute-control.
+// action ∈ {"start","stop","restart"}. Called after rebinding any rule with
+// backend=="hydraroute" so the daemon reloads.
+func (c *Client) HydraRouteControl(ctx context.Context, action string) error {
+	body, err := json.Marshal(map[string]string{"action": action})
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/system/hydraroute-control", body, nil)
+}
+
 // postJSON is a helper that POSTs JSON with the right headers. The existing
 // (lowercase) post helper accepts a body io.Reader but doesn't set
 // Content-Type; awg-manager's update endpoints require it. Inline here to
