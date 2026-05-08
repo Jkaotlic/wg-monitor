@@ -198,8 +198,8 @@ The 8-hex token follows the existing `tunnel_import_*` pattern — single-use, 5
 
 | File | Change |
 |------|--------|
-| `internal/agent/awgmgr/types_routing.go` | NEW — `DNSRoute`, `StaticRoute`, `HRConfig`, `HRPolicy`, `RouteSnapshot`, `RouteRebindResult` |
-| `internal/agent/awgmgr/routing.go` | NEW — `ListDNSRoutes`, `ListStaticRoutes`, `BulkBackendDNS`, `UpdateStaticRoute`, `GetHRConfig`, `PutHRConfig`, `HydraRouteControl`, `RoutingRefresh` |
+| `internal/agent/awgmgr/types_routing.go` | NEW — `DNSRoute`, `DNSRouteEntry`, `StaticRoute`, `RoutingTunnel`, `RouteSnapshot`, `RouteRebindResult` |
+| `internal/agent/awgmgr/routing.go` | NEW — `ListDNSRoutes`, `UpdateDNSRoute`, `ListStaticRoutes`, `UpdateStaticRoute`, `RoutingTunnels`, `RoutingRefresh`, `HydraRouteControl` |
 | `internal/agent/actions/route_status.go` | NEW — collects snapshot via parallel calls (errgroup) |
 | `internal/agent/actions/route_rebind.go` | NEW — three-phase execution, builds `srcRefs`, calls per-category methods, returns counts + failures |
 | `internal/agent/actions/runner.go` | EDIT — add `route_status` and `route_rebind` cases |
@@ -214,51 +214,118 @@ The 8-hex token follows the existing `tunnel_import_*` pattern — single-use, 5
 
 ## 6. awg-manager API Contract
 
+> **Verified 2026-05-08 against awg-manager 2.8.2 on testkeen.** Findings recorded in [docs/superpowers/notes/2026-05-08-routing-api-probes.md](../notes/2026-05-08-routing-api-probes.md).
+
 ### 6.1 Endpoints used
 
 | Method | Path | Use |
 |--------|------|-----|
-| GET | `/api/system/hydraroute-status` | detect HR-Neo |
-| GET | `/api/tunnels/all` | list managed tunnels |
-| GET | `/api/tunnels/get?id=` | resolve src/dst refs |
-| GET | `/api/dns-routes/list` | enumerate DNS rules |
+| GET | `/api/system/hydraroute-status` | detect HR-Neo daemon |
+| GET | `/api/tunnels/all` | list managed tunnels (for display) |
+| GET | `/api/tunnels/get?id=` | resolve src/dst → `interfaceName` |
+| GET | `/api/routing/tunnels` | catalogue of all routable interfaces (managed/system/wan) for "untouched" classification |
+| GET | `/api/dns-routes/list` | enumerate DNS rules (mixed engines: HR-Neo + NDMS) |
+| POST | `/api/dns-routes/update?id=` | per-rule rebind (full body resent) |
 | GET | `/api/static-routes/list` | enumerate static IP rules |
-| GET | `/api/hydraroute/config` | full HR-Neo config |
-| POST | `/api/dns-routes/bulk-backend` | atomic batch rebind for DNS |
-| POST | `/api/static-routes/update?id=` | per-rule rebind for static |
-| PUT | `/api/hydraroute/config/update` | write modified HR-Neo config |
-| POST | `/api/system/hydraroute-control` | restart HR-Neo daemon |
-| POST | `/api/routing/refresh` | reset NDMS cache |
+| POST | `/api/static-routes/update` | per-rule rebind (full body, id in body, NO query param) |
+| POST | `/api/system/hydraroute-control` | restart HR-Neo daemon (body `{"action":"restart"}`) — only invoked if any rule with `backend:"hydraroute"` was touched |
+| POST | `/api/routing/refresh` | reset NDMS routing cache after a batch |
 
-All requests carry `X-Requested-With: XMLHttpRequest` and use the existing awgmgr session cookie.
+All requests carry `X-Requested-With: XMLHttpRequest`. **NOT used in v1** (originally planned but not the right primitive): `bulk-backend` (changes the engine field, not the tunnel target), `hydraroute/config` GET/PUT (daemon settings only — no per-rule data).
 
-### 6.2 srcRefs identity
+### 6.2 The bind identifier — `iface`
 
-awg-manager binds each route to a backend identifier. The exact field name (`backend` vs `target_id` vs `target_interface`) and whether it is a tunnel ID, NDMSName, or interface name MUST be verified by curl on the router before writing code (rule from `feedback_awgmgr_api`). The implementation accommodates uncertainty by building a *set* of candidate identifiers per tunnel:
+DNS and static routes both bind to an interface by its **kernel device name** (`iface` field from `/api/routing/tunnels`):
+- managed tunnels: `nwg0`, `nwg1`, …
+- system tunnels: `Wireguard0`, `Wireguard2`, …
+- WAN: `eth3`, `apcli0`, …
 
+For a managed tunnel, the iface value matches `Tunnel.interfaceName` from `/api/tunnels/all`. So the rebind logic uses:
 ```go
-srcRefs := []string{src.ID, src.NDMSName, src.InterfaceName, src.Name}
+srcIface := src.InterfaceName  // e.g. "nwg1" for awg11
+dstIface := dst.InterfaceName  // e.g. "nwg0" for awg12
 ```
 
-A rule is considered "owned by src" iff its target field equals any element of srcRefs. The write path always emits `dst.NDMSName` because that is what awg-manager UI sends in its bulk-backend call (also to be verified by curl).
+A rule "belongs to src" iff its bind field equals `srcIface`. WAN-targeted rules (e.g. `iface == "eth3"`) NEVER match — guaranteed by interface uniqueness on the router.
 
-### 6.3 Order of operations within a single rebind
+#### DNS rule binding
+
+```json
+{
+  "id": "hr:Vk",
+  "routes": [{"interface": "nwg1", "tunnelId": "nwg1", "fallback": "auto"}],
+  "backend": "hydraroute" | "ndms",
+  "hrPolicyName": "HydraRoute"
+}
+```
+
+`routes[i].interface` and `routes[i].tunnelId` always carry the same value. A rule with `routes: null` falls through to its global engine policy (HR-Neo's `policyOrder[0]` = `"HydraRoute"` policy whose default tunnel is set in `ip route table 4096`, NOT manageable via API).
+
+#### Static rule binding
+
+```json
+{
+  "id":       "<rid>",
+  "name":     "<name>",
+  "tunnelID": "nwg1",
+  "subnets":  ["10.0.0.0/24"],
+  "fallback": "auto",
+  "enabled":  true
+}
+```
+
+Note: `tunnelID` (capital D) — different casing from DNS's `tunnelId`.
+
+### 6.3 Per-category rebind logic
+
+#### DNS routes
+
+For each rule from `/api/dns-routes/list`:
 
 ```
-1. resolve src and dst (single GET each)
-2. DNS:    list → filter → bulk-backend                 (one HTTP call after listing)
-3. Static: list → filter → loop update                  (N HTTP calls)
-4. HR-Neo: get config → modify → put → control restart  (4 HTTP calls)
-5. routing refresh                                      (1 HTTP call)
+if rule.routes != null:
+    for entry in rule.routes:
+        if entry.interface == srcIface:
+            entry.interface = dstIface
+            entry.tunnelId  = dstIface
+            mark rule as touched
+elif convertFallthroughEnabled and rule.routes == null
+                                and rule.backend == "hydraroute"
+                                and globalHRPolicyDefault == srcIface:
+    rule.routes = [{interface: dstIface, tunnelId: dstIface, fallback: "auto"}]
+    mark rule as touched
+
+if rule was touched:
+    POST /api/dns-routes/update?id=<rule.id> body=full_rule_object
 ```
 
-Categories run sequentially, never in parallel — NDMS recomputes its mapping on each write and we don't want to interleave updates.
+`convertFallthroughEnabled` is a v1 default-on flag. The fall-through-conversion case is the user's primary use case (47/48 rules on testkeen are fall-through). Without it, a rebind would touch nearly nothing for HR-Neo users.
 
-### 6.4 Concurrency
+`globalHRPolicyDefault` detection: heuristic — assume it equals the `defaultRoute=true` managed tunnel's iface from `/api/tunnels/all`. For testkeen that's `awg11/nwg1`. Edge case: if no managed tunnel has `defaultRoute=true`, fall-through conversion is skipped and a UI warning is shown.
 
-- The agent serialises rebinds per router via a `sync.Mutex` keyed by router ID. A second concurrent rebind queues behind the first.
-- Within a rebind there is no rollback. If HR-Neo fails after Static succeeded, we report partial success and rely on idempotent retry.
-- Optional optimistic lock for HR-Neo: if `GET /api/hydraroute/config` returns a `version` or `etag` field, we send it back in `PUT`. To be confirmed by curl; if absent, accept the small race window (single-admin scenario).
+#### Static routes
+
+For each rule from `/api/static-routes/list` where `rule.tunnelID == srcIface`:
+```
+rule.tunnelID = dstIface
+POST /api/static-routes/update body=full_rule_object   (id is in the body, NOT in URL)
+```
+
+#### Finalisation
+
+```
+POST /api/routing/refresh
+if any DNS rule with backend == "hydraroute" was touched:
+    POST /api/system/hydraroute-control body={"action":"restart"}
+```
+
+### 6.4 Order and concurrency
+
+- Sequential: DNS → Static → finalisation. No parallelism (NDMS recomputes on each write).
+- Per-rule failures within a category are recorded but do not stop subsequent rules.
+- Idempotent: re-running rebind src→dst on already-migrated rules finds no rules matching srcIface and is a no-op.
+- The agent serialises rebinds per router via a `sync.Mutex`. A second concurrent rebind queues behind the first.
+- No rollback within a rebind. If Static fails after DNS succeeded, partial success is reported and the user can re-run.
 
 ---
 
@@ -283,7 +350,7 @@ The cache lives in process memory only — a backend restart drops it, which is 
 | Timeout (10 s) on a single call | category failure recorded, other categories proceed |
 | 401 Unauthorized | agent re-auths (existing flow), retries once; on second 401 → `Err = "awg-manager auth failed"` |
 | 4xx on a per-rule update | `Failed++` for that category, loop continues |
-| 5xx on bulk-backend | entire DNS category marked failed; Static and HR-Neo still run |
+| 5xx on the listing endpoint | entire category marked failed (no rules to iterate); other categories still run |
 | Connection refused / EOF | `Err` returned, no further calls in this rebind |
 | Cancelled context | propagates, returns clean "cancelled" error |
 
@@ -370,18 +437,17 @@ Acceptance is conditional on step 8 passing.
 
 ---
 
-## 10. Open Questions for Implementation
+## 10. Resolved Questions (post-probes 2026-05-08)
 
-These are deliberately unresolved at design time and will be answered by curl probes on the live router during the first implementation milestone:
+1. **Bind field for DNS rules** — `routes[i].interface` and `routes[i].tunnelId` (same value, both fields). Fall-through if `routes==null`.
+2. **Bind field for static rules** — `tunnelID` (capital D — note the casing difference from DNS).
+3. **Bind value form** — the `iface` from `/api/routing/tunnels`, equal to `Tunnel.interfaceName` for managed tunnels (`nwg0`, `nwg1`, …); WAN/system have their own `iface` (`eth3`, `Wireguard2`, …).
+4. **Update endpoint shape** — DNS uses `POST /api/dns-routes/update?id=<id>` body=full rule. Static uses `POST /api/static-routes/update` (no id in URL) body=full rule (id inside body).
+5. **HR-Neo rule storage** — HR-Neo rules are NOT in `/api/hydraroute/config`. They are DNS rules with `backend:"hydraroute"` and live in `/api/dns-routes/list`. The hydraroute config endpoint contains daemon settings only.
+6. **Fall-through rules** — DNS rules with `routes:null` and `backend:"hydraroute"` follow the global HR-Neo policy (named in `policyOrder[0]`). The policy's default tunnel is set via `ip route table 4096` outside awg-manager API. v1 converts these to explicit routes when the user-detectable global policy default matches `srcIface` (heuristic: managed tunnel with `defaultRoute=true`).
+7. **bulk-backend** — `POST /api/dns-routes/bulk-backend` body `{listIDs, backend}` changes the engine field (hydraroute↔ndms), not the tunnel target. NOT used in this design.
 
-1. Exact field name in DNS / Static / HR-Neo route objects that holds the tunnel reference (`backend` vs `target_id` vs `interface`).
-2. Whether that field stores the tunnel ID, NDMSName, or InterfaceName. Probably NDMSName based on awg-manager UI labels, but unverified.
-3. Whether `bulk-backend` accepts NDMSName directly or requires another form.
-4. Whether `GET /api/hydraroute/config` returns a version/etag for optimistic locking.
-5. Exact JSON shape for HR-Neo "policy" objects so the replacement function can find every nested target reference.
-6. Behaviour of `bulk-backend` when an ID in the list does not exist — full failure or per-id skip.
-
-The first milestone of the implementation plan must be a curl-probe pass that resolves all six questions and freezes the contract before any Go code is written.
+Full transcripts and shape excerpts: [docs/superpowers/notes/2026-05-08-routing-api-probes.md](../notes/2026-05-08-routing-api-probes.md).
 
 ---
 

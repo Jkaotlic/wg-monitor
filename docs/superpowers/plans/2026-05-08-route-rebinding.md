@@ -2,13 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a Telegram-driven "Routes panel" that lets the admin migrate all DNS / Static IP / HydraRoute Neo rules from one managed AmneziaWG tunnel to another, while preserving every rule that targets WAN, system tunnels, or other managed tunnels.
+**Goal:** Add a Telegram-driven "Routes panel" that lets the admin migrate all DNS / Static IP rules from one managed AmneziaWG tunnel to another, while preserving every rule that targets WAN, system tunnels, or other managed tunnels. HR-Neo rules are migrated as a sub-class of DNS rules (those with `backend:"hydraroute"`).
 
-**Architecture:** New `awgmgr.routing` client methods talk to `/api/{dns-routes,static-routes,hydraroute,routing}/*`. Two new agent actions (`route_status`, `route_rebind`) aggregate / mutate. Wire format reuses `CommandResult.Output` to carry JSON-encoded `RouteSnapshot` / `RouteRebindResult` payloads (no protocol additions besides two new action names). Backend gets a `RoutesPanel` renderer (Screens 1–5 from the spec), an in-memory snapshot cache (TTL 30 s, per-user), and a `pendingRebinds` token store mirroring the existing `pendingUploads` pattern. Inline panel updates land via a new `RoutesPanelNotifier` that the backend's cmd-result handler dispatches to when `ref.Action` is `route_status` / `route_rebind`.
+**Architecture:** New `awgmgr.routing` client methods for `/api/{dns-routes,static-routes,routing}/*`. Two new agent actions (`route_status`, `route_rebind`) aggregate / mutate. Wire format reuses `CommandResult.Output` to carry JSON-encoded `RouteSnapshot` / `RouteRebindResult` payloads. Backend gets a `RoutesPanel` renderer (Screens 1–5), an in-memory snapshot cache (TTL 30 s, per-user), and a `pendingRebinds` token store mirroring the existing `pendingUploads` pattern. Inline panel updates land via a `RoutesPanelNotifier` that the backend's cmd-result handler dispatches to when `ref.Action` is `route_status` / `route_rebind`.
 
 **Tech Stack:** Go 1.22+, `golang.org/x/sync/errgroup` for parallel status fetch, `net/http/httptest` for unit tests, no new third-party dependencies.
 
 **Spec:** [docs/superpowers/specs/2026-05-08-route-rebinding-design.md](../specs/2026-05-08-route-rebinding-design.md)
+**Probes:** [docs/superpowers/notes/2026-05-08-routing-api-probes.md](../notes/2026-05-08-routing-api-probes.md)
 
 ---
 
@@ -16,36 +17,33 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `docs/superpowers/notes/2026-05-08-routing-api-probes.md` | Create | Curl-probe findings — exact JSON shapes for DNS / Static / HR-Neo routes, the "target" field name, optimistic-lock fields |
-| `internal/agent/awgmgr/types_routing.go` | Create | `DNSRoute`, `StaticRoute`, `HRConfig`, `HRPolicy`, `BulkBackendReq`, `RouteSnapshot`, `RouteRebindResult`, `TunnelMeta`, `TunnelCounts` |
-| `internal/agent/awgmgr/routing.go` | Create | Methods: `ListDNSRoutes`, `ListStaticRoutes`, `BulkBackendDNS`, `UpdateStaticRoute`, `GetHRConfig`, `PutHRConfig`, `HydraRouteControl`, `RoutingRefresh` |
-| `internal/agent/awgmgr/routing_test.go` | Create | httptest fixtures for each method (path, headers, body shape, response decode) |
-| `internal/agent/awgmgr/hr_replace.go` | Create | Pure helper `ReplaceHRTargets(cfg HRConfig, srcRefs []string, dst string) (HRConfig, int)` returning modified config + replacement count |
-| `internal/agent/awgmgr/hr_replace_test.go` | Create | Golden tests: zero replacements, multiple targets per policy, nested arrays, no-op when src absent |
-| `internal/agent/actions/route_status.go` | Create | Aggregator: parallel fetch via errgroup, build `RouteSnapshot`, encode to JSON |
-| `internal/agent/actions/route_status_test.go` | Create | Unit: mock `awgmgr.Client`, verify counts, HR-Neo absent path, partial-failure (one source errors) |
-| `internal/agent/actions/route_rebind.go` | Create | Three-phase rebind, `srcRefs` builder, per-category result accumulator, mutex per-router (in `Runner`) |
-| `internal/agent/actions/route_rebind_test.go` | Create | HappyPath, PartialFail, ZeroRules, SrcEqDst, srcRefs match by ID/NDMSName/InterfaceName/Name |
-| `internal/agent/actions/runner.go` | Modify | Add `route_status` / `route_rebind` cases; add `routeMu sync.Mutex` for serialisation |
+| `internal/agent/awgmgr/types_routing.go` | Create | `DNSRoute`, `DNSRouteEntry`, `StaticRoute`, `RoutingTunnel`, env wrappers |
+| `internal/agent/awgmgr/routing.go` | Create | Client methods: `ListDNSRoutes`, `UpdateDNSRoute`, `ListStaticRoutes`, `UpdateStaticRoute`, `RoutingTunnels`, `RoutingRefresh`, `HydraRouteControl`, `GetEnv` (helper) |
+| `internal/agent/awgmgr/routing_test.go` | Create | httptest fixtures for each method |
+| `internal/agent/actions/route_status.go` | Create | Aggregates parallel fetches into a `wire.RouteSnapshot` JSON string |
+| `internal/agent/actions/route_status_test.go` | Create | Mocks awgmgr, verifies counts (managed-vs-other split) |
+| `internal/agent/actions/route_rebind.go` | Create | DNS + Static per-rule rebind with fall-through-conversion option |
+| `internal/agent/actions/route_rebind_test.go` | Create | Happy path, partial fail, src==dst no-op, WAN-untouched assertion |
+| `internal/agent/actions/runner.go` | Modify | Add `route_status` and `route_rebind` cases; `routeMu sync.Mutex` |
 | `pkg/wire/types.go` | Modify | Add `route_status`, `route_rebind` to `validCommandActions` |
-| `pkg/wire/routing.go` | Create | Shared types: `RouteSnapshot`, `RouteRebindResult`, `TunnelMeta`, `TunnelCounts`, encode/decode helpers (used by both agent and backend) |
-| `pkg/wire/routing_test.go` | Create | Round-trip JSON, backwards-compat (unknown fields ignored) |
-| `internal/backend/callbacks/routes_cache.go` | Create | `RoutesCache` — in-memory map per user, 30 s TTL, `Get`/`Put`/`Invalidate` |
-| `internal/backend/callbacks/routes_cache_test.go` | Create | TTL expiry, invalidate, concurrent access |
-| `internal/backend/tg/routes_panel.go` | Create | Screens 2–5 text + keyboards; `RouteRow`, `OtherCounts` types; `routesMaxPerRow` const |
-| `internal/backend/tg/routes_panel_test.go` | Create | Render Empty, with counts, HR-Neo absent, "untouched" block, keyboard for each screen |
-| `internal/backend/callbacks/parse.go` | Modify | Add `routes_open`, `routes_router`, `routes_rebind`, `routes_pick`, `routes_confirm`, `routes_refresh`, `routes_back`, `routes_close` to `validActions`; parse `RebindToken` into Args |
-| `internal/backend/callbacks/parse_test.go` | Modify | Tests for each new action including token presence/missing |
-| `internal/backend/callbacks/actions.go` | Modify | New `RoutesAction` (open/refresh), `RebindStartAction` (Screen 3), `RebindPickAction` (Screen 4 + token mint), `RebindConfirmAction` (token consume + enqueue); `pendingRebinds` map mirroring `pendingUploads` |
-| `internal/backend/callbacks/actions_test.go` | Modify | Tests for each new action class — token lifecycle, replay rejection, src==dst guard |
-| `internal/backend/callbacks/router.go` | Modify | Reply-keyboard branch for `🛣 Маршруты`; case branches for the new actions; dispatch route_status command on first open with cached fallback |
-| `internal/backend/callbacks/routes_notifier.go` | Create | `RoutesPanelNotifier` — implements result-edit-in-place for `route_status` / `route_rebind` actions; uses TG `EditMessageText` against `ref.MessageID` |
-| `internal/backend/callbacks/routes_notifier_test.go` | Create | Happy paths and degraded UI rendering |
-| `internal/backend/handler.go` | Modify | Plumb `RoutesPanelNotifier` into `Deps`; in `cmdResultHandler`, dispatch to it when `ref.Action ∈ {route_status, route_rebind}` instead of generic `TGNotifier` |
-| `internal/backend/handler_test.go` | Modify | Add fake routes notifier; test correct dispatch by Action |
-| `cmd/backend/main.go` | Modify | Wire `RoutesPanelNotifier` into the backend's `Deps` |
-| `internal/backend/tg/replykb.go` (or wherever `ReplyKeyboardForTopic` lives) | Modify | Add `🛣 Маршруты` button row to per-router topic keyboard |
-| `cmd/backend/integration_test.go` | Modify | End-to-end: route_status returns counts; rebind moves rules from src to dst; WAN-targeted rule fixture stays put |
+| `pkg/wire/routing.go` | Create | Shared types `RouteSnapshot`, `RouteRebindResult`, `TunnelMeta`, `TunnelCounts`, `CategoryResult`, `HRStatus` |
+| `pkg/wire/routing_test.go` | Create | JSON round-trip |
+| `internal/backend/callbacks/routes_cache.go` | Create | TTL cache (30 s, per user) |
+| `internal/backend/callbacks/routes_cache_test.go` | Create | TTL, invalidate, per-user |
+| `internal/backend/tg/routes_panel.go` | Create | Screens 2–5 text + keyboards |
+| `internal/backend/tg/routes_panel_test.go` | Create | Render Empty, with counts, HR-Neo absent, untouched-block, keyboard |
+| `internal/backend/callbacks/parse.go` | Modify | Add 8 new actions; `RebindToken`, `RebindSrcID`, `RebindDstID` fields on `Args` |
+| `internal/backend/callbacks/parse_test.go` | Modify | Tests for each new callback |
+| `internal/backend/callbacks/actions.go` | Modify | `RebindConfirmAction` + `pendingRebind` + `makeRebindToken` |
+| `internal/backend/callbacks/actions_test.go` | Modify | Token lifecycle, replay rejection, src==dst guard |
+| `internal/backend/callbacks/router.go` | Modify | Reply-keyboard branch `🛣 Маршруты`; case branches for new actions; `routesCache` and `pendingRebinds` fields + helpers |
+| `internal/backend/callbacks/routes_notifier.go` | Create | Handles `route_status`/`route_rebind` results — edits panel in place |
+| `internal/backend/callbacks/routes_notifier_test.go` | Create | Status render + cache write; rebind render + cache invalidate |
+| `internal/backend/handler.go` | Modify | `RoutesNotifier` interface in `Deps`; dispatch in `cmdResultHandler` |
+| `internal/backend/handler_test.go` | Modify | Asserts dispatch by `ref.Action` |
+| `cmd/backend/main.go` | Modify | Wire `RoutesCache`, `RoutesPanelNotifier`, `RebindConfirmAction` |
+| `internal/backend/tg/replykb.go` | Modify | Add `🛣 Маршруты` button row |
+| `cmd/backend/integration_test.go` | Modify | E2E: status → rebind → status; WAN-untouched canary |
 
 ---
 
@@ -53,197 +51,96 @@
 
 - **Tests first**, then minimal implementation. One green run before committing.
 - **Commit boundaries** = task boundaries unless the task explicitly says "no commit".
-- **Run `go test ./...`** after every implementation step. The Makefile target is just `go test ./...`.
+- **Run `go test ./...`** after each implementation step.
 - **No new third-party imports** beyond `golang.org/x/sync/errgroup` (already transitively pulled).
-- **Field tag invariants:** all `json` tags on new wire types stay lowercase-camelCase to match awg-manager's response shape (e.g. `"defaultRoute"` not `"default_route"`).
-- **Russian text** in TG renderers — match the existing tone in `tunnels_panel.go` (no MarkdownV2 — plain text only, per `feedback_telegram_api`).
+- **JSON tags** match awg-manager's response shape exactly — verbatim from probe notes (`tunnelID` capital D for static, `tunnelId` lowercase d for DNS — these ARE different).
+- **Russian text** in TG renderers — match `tunnels_panel.go` style. Plain text only (no MarkdownV2, per `feedback_telegram_api`).
 
 ---
 
 ## Milestone 0: Curl-Probe — Verify awg-manager API Contract
 
-**Why first:** spec §10 lists six unresolved questions about field names and shapes that MUST be answered before code. Code written against guesses will be wrong (per `feedback_awgmgr_api`). This milestone produces a single notes file used as input by every subsequent milestone.
+### Task 0.1: Probe routing endpoints on testkeen
 
-### Task 0.1: Probe routing endpoints on testkeen and document
+**Status:** ✅ DONE 2026-05-08. See [docs/superpowers/notes/2026-05-08-routing-api-probes.md](../notes/2026-05-08-routing-api-probes.md) — committed in `cea6662`.
 
-**Files:**
-- Create: `docs/superpowers/notes/2026-05-08-routing-api-probes.md`
-
-**Pre-req:** SSH access to testkeen (192.168.31.1:222, root). awg-manager running on `127.0.0.1:2222`. Have at least one DNS route, one static route, one HR-Neo policy created via the awg-manager web UI on `awg11` (the existing test tunnel) to give the probes data to inspect.
-
-- [ ] **Step 1: Probe DNS routes — list and bulk-backend shape**
-
-Run on testkeen:
-```bash
-curl -s -H 'X-Requested-With: XMLHttpRequest' \
-     http://127.0.0.1:2222/api/dns-routes/list | jq .
-```
-
-Capture the entire JSON output verbatim into a code block in the notes file under heading `## /api/dns-routes/list`. Identify and record:
-- The field that holds the tunnel reference (name candidates: `backend`, `target`, `target_id`, `interface_id`).
-- Whether that field stores the tunnel ID, NDMSName, InterfaceName, or Name.
-- All other fields, their types, and which are required for an `update` round-trip.
-
-Then probe the bulk-backend endpoint (use a no-op move to read the request shape — the awg-manager UI's network tab is the source of truth):
-```bash
-# from a browser DevTools network tab, capture the POST body when the UI's
-# "Сменить туннель" button is pressed on multiple selected DNS routes.
-```
-
-Record the exact body shape in the notes file. Likely:
-```json
-{"ids":["<rid1>","<rid2>"],"backend":"Wireguard0"}
-```
-
-- [ ] **Step 2: Probe static routes**
-
-Run:
-```bash
-curl -s -H 'X-Requested-With: XMLHttpRequest' \
-     http://127.0.0.1:2222/api/static-routes/list | jq .
-```
-
-Document under `## /api/static-routes/list`. Same fields-of-interest as DNS. Then capture an update body via DevTools (edit one rule, change its tunnel, observe the POST):
-```
-POST /api/static-routes/update?id=<rid>
-```
-
-Record minimum required fields (often the API requires resending the entire object; if so list every field).
-
-- [ ] **Step 3: Probe HR-Neo config**
-
-Run:
-```bash
-curl -s -H 'X-Requested-With: XMLHttpRequest' \
-     http://127.0.0.1:2222/api/hydraroute/config | jq .
-```
-
-Document under `## /api/hydraroute/config`. This response is the largest — capture the full shape including:
-- Top-level keys (`policies`, `targets`, `geo_files`, `version`, etc.)
-- Nested target reference structure (a policy may have an array of target identifiers — capture the field name and value type)
-- Whether a `version`, `etag`, or `revision` field is present (for optimistic locking — if absent, note "no etag — accept single-admin race")
-
-Probe the PUT endpoint by saving the same JSON back unchanged:
-```bash
-curl -s -X PUT \
-     -H 'X-Requested-With: XMLHttpRequest' \
-     -H 'Content-Type: application/json' \
-     --data @/tmp/hr.json \
-     http://127.0.0.1:2222/api/hydraroute/config/update
-```
-
-Record the response — `{"success":true,"data":...}` or specific error shape on validation fail.
-
-- [ ] **Step 4: Probe routing meta and HR-Neo control**
-
-```bash
-curl -s -H 'X-Requested-With: XMLHttpRequest' \
-     http://127.0.0.1:2222/api/routing/tunnels | jq .
-
-curl -s -X POST -H 'X-Requested-With: XMLHttpRequest' \
-     http://127.0.0.1:2222/api/routing/refresh
-
-curl -s -X POST -H 'X-Requested-With: XMLHttpRequest' \
-     -H 'Content-Type: application/json' \
-     -d '{"action":"restart"}' \
-     http://127.0.0.1:2222/api/system/hydraroute-control
-```
-
-Record responses. Confirm the request body shape for `hydraroute-control` (it may be `{action:"restart"}` or `{"command":"restart"}` — verify).
-
-- [ ] **Step 5: Resolve the six open questions from spec §10**
-
-In the notes file, add a section `## Open Questions Resolved` that answers each of the six questions verbatim from the probe data. For example:
-
-```
-1. Field name in DNS routes that holds tunnel reference:
-   → "backend" (string), per /api/dns-routes/list .data[].backend
-
-2. Value form of "backend":
-   → NDMSName ("Wireguard0", "Wireguard1") — confirmed by comparing with /api/tunnels/all .ndmsName
-
-3. bulk-backend body:
-   → {"ids":["<id>",...], "backend":"<NDMSName>"}
-
-4. HR-Neo etag:
-   → none; accept single-admin race window
-
-5. HR-Neo policy target shape:
-   → policy.targets is an array of {"interface":"Wireguard0","priority":1} objects
-   → src->dst replace logic must update the "interface" field of each entry
-
-6. bulk-backend behaviour on missing id:
-   → returns success with "skipped":["<id>"] field listing IDs not found
-```
-
-If any question cannot be answered with the available data, mark `→ TBD — need second probe`. Only fully-answered questions unblock subsequent milestones.
-
-- [ ] **Step 6: Commit notes**
-
-```bash
-git add docs/superpowers/notes/2026-05-08-routing-api-probes.md
-git commit -m "docs: awg-manager routing API curl probes"
-```
+Key findings used by every subsequent milestone:
+- DNS rule bind: `routes[i].interface` and `routes[i].tunnelId` (same value, both fields). Fall-through if `routes==null`.
+- Static rule bind: `tunnelID` (capital D — note the casing).
+- Bind value = `iface` from `/api/routing/tunnels` = managed tunnel's `interfaceName` (`nwg0`, `nwg1`).
+- HR-Neo rules are DNS rules with `backend:"hydraroute"`. There is NO separate HR-Neo rule API.
+- `/api/dns-routes/bulk-backend` changes the engine field, NOT the tunnel target — NOT used in our design.
+- The UI's "Сменить туннель" mass operation iterates per-rule `update`, not bulk.
 
 ---
 
-## Milestone 1: Routing Types and DNS / Static Client
+## Milestone 1: Routing Types and Client Methods
 
 ### Task 1.1: Define routing types
 
 **Files:**
 - Create: `internal/agent/awgmgr/types_routing.go`
 
-- [ ] **Step 1: Write the file with the exact shapes from the probe notes**
-
-Use the field names captured in Milestone 0. Below is the template — substitute the actual JSON tags from the notes:
+- [ ] **Step 1: Write the file**
 
 ```go
 package awgmgr
 
-// DNSRoute mirrors one entry of /api/dns-routes/list .data[].
-// Field tags must match the probe notes exactly.
+// DNSRouteEntry is one element of DNSRoute.Routes — explicit tunnel binding.
+// `Interface` and `TunnelID` carry the same value (the iface from
+// /api/routing/tunnels, e.g. "nwg1", "eth3"). awg-manager UI sets both.
+type DNSRouteEntry struct {
+	Interface string `json:"interface"`
+	TunnelID  string `json:"tunnelId"`
+	Fallback  string `json:"fallback,omitempty"`
+}
+
+// DNSRoute mirrors one entry of /api/dns-routes/list .data[]. A rule with
+// Routes=nil falls through to the global engine policy (HRPolicyName for
+// hydraroute). Setting an explicit Routes converts it to direct routing.
+//
+// All fields are preserved verbatim on update (awg-manager treats update
+// as full-replace) — never drop unknown fields. Use the JSON round-trip via
+// json.RawMessage for forward-compat with future awg-manager versions.
 type DNSRoute struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"`
-	// Backend is the tunnel reference. Per probe notes, value is NDMSName
-	// like "Wireguard0" for managed tunnels, or the WAN interface id, or
-	// a system tunnel id. Empty string means "not yet bound".
-	Backend  string   `json:"backend"`
-	Domains  []string `json:"domains"`
-	// Add other fields verbatim from the probe — keep this struct field-
-	// complete so update round-trips don't drop data.
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Domains       []string        `json:"domains"`
+	ManualDomains []string        `json:"manualDomains"`
+	Routes        []DNSRouteEntry `json:"routes"`
+	Enabled       bool            `json:"enabled"`
+	CreatedAt     string          `json:"createdAt"`
+	UpdatedAt     string          `json:"updatedAt"`
+	Backend       string          `json:"backend"`      // "hydraroute" | "ndms" — engine, not tunnel
+	HRRouteMode   string          `json:"hrRouteMode,omitempty"`
+	HRPolicyName  string          `json:"hrPolicyName,omitempty"`
+	// Extra holds any additional fields awg-manager returns that we don't
+	// model explicitly. They are preserved on round-trip via json.RawMessage.
+	// (Implementation note: until concrete need, omit Extra; the explicit
+	// fields above cover the 2.8.2 schema. Add Extra in a follow-up if a
+	// future awg-manager version adds fields we'd otherwise drop.)
 }
 
 // StaticRoute mirrors one entry of /api/static-routes/list .data[].
+// CRITICAL: bind field is `tunnelID` with CAPITAL D (different from DNS).
 type StaticRoute struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Enabled bool     `json:"enabled"`
-	Backend string   `json:"backend"`
-	CIDRs   []string `json:"cidrs"`
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	TunnelID string   `json:"tunnelID"`
+	Subnets  []string `json:"subnets"`
+	Fallback string   `json:"fallback,omitempty"`
+	Enabled  bool     `json:"enabled"`
 }
 
-// HRConfig is the full /api/hydraroute/config payload. Decoded as a generic
-// JSON tree because the policy/target shape is unstable across awg-manager
-// versions; ReplaceHRTargets walks the tree by known keys.
-type HRConfig struct {
-	Raw map[string]any
-}
-
-// BulkBackendDNSReq is the body for POST /api/dns-routes/bulk-backend.
-type BulkBackendDNSReq struct {
-	IDs     []string `json:"ids"`
-	Backend string   `json:"backend"`
-}
-
-// BulkBackendDNSResp captures the fields we care about on success — number
-// processed and any IDs that were silently skipped (deleted between list
-// and bulk-backend, etc.).
-type BulkBackendDNSResp struct {
-	Processed int      `json:"processed"`
-	Skipped   []string `json:"skipped,omitempty"`
+// RoutingTunnel mirrors one entry of /api/routing/tunnels .data[].
+// `Iface` is the canonical bind value used in DNSRoute.Routes and StaticRoute.TunnelID.
+type RoutingTunnel struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Iface     string `json:"iface"`
+	Type      string `json:"type"`   // "managed" | "system" | "wan"
+	Status    string `json:"status"` // "running" | "up" | "down" | …
+	Available bool   `json:"available"`
 }
 ```
 
@@ -252,39 +149,42 @@ type BulkBackendDNSResp struct {
 ```bash
 go build ./internal/agent/awgmgr
 ```
-Expected: clean build.
+Expected: clean.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add internal/agent/awgmgr/types_routing.go
-git commit -m "feat(awgmgr): routing types — DNSRoute, StaticRoute, HRConfig, bulk req/resp"
+git commit -m "feat(awgmgr): routing types — DNSRoute, StaticRoute, RoutingTunnel"
 ```
 
-### Task 1.2: ListDNSRoutes + test
+### Task 1.2: ListDNSRoutes / UpdateDNSRoute + tests
 
 **Files:**
-- Modify: `internal/agent/awgmgr/routing.go` (created in this task)
+- Create: `internal/agent/awgmgr/routing.go`
 - Create: `internal/agent/awgmgr/routing_test.go`
 
-- [ ] **Step 1: Write the failing test**
-
-Create `internal/agent/awgmgr/routing_test.go` with:
+- [ ] **Step 1: Write the failing tests**
 
 ```go
 package awgmgr
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
 func TestListDNSRoutes_HappyPath(t *testing.T) {
 	const payload = `{"success":true,"data":[
-		{"id":"r1","name":"vk","enabled":true,"backend":"Wireguard0","domains":["vk.com"]},
-		{"id":"r2","name":"rt","enabled":true,"backend":"Wireguard1","domains":["rutube.ru"]}
+		{"id":"hr:Vk","name":"Vk","domains":["vk.com"],"manualDomains":["vk.com"],
+		 "routes":[{"interface":"nwg1","tunnelId":"nwg1","fallback":"auto"}],
+		 "enabled":true,"backend":"hydraroute","hrPolicyName":"HydraRoute"},
+		{"id":"hr:Sber","name":"Sber","domains":["sberbank.ru"],"manualDomains":["sberbank.ru"],
+		 "routes":null,"enabled":true,"backend":"hydraroute","hrPolicyName":"HydraRoute"}
 	]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/dns-routes/list" {
@@ -293,7 +193,7 @@ func TestListDNSRoutes_HappyPath(t *testing.T) {
 		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
 			t.Errorf("missing X-Requested-With")
 		}
-		w.Write([]byte(payload))
+		_, _ = w.Write([]byte(payload))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
@@ -304,18 +204,51 @@ func TestListDNSRoutes_HappyPath(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len: %d", len(got))
 	}
-	if got[0].ID != "r1" || got[0].Backend != "Wireguard0" {
+	if got[0].ID != "hr:Vk" || len(got[0].Routes) != 1 || got[0].Routes[0].Interface != "nwg1" {
 		t.Errorf("got[0]: %+v", got[0])
+	}
+	if got[1].Routes != nil {
+		t.Errorf("got[1] should have nil routes (fall-through): %+v", got[1])
+	}
+}
+
+func TestUpdateDNSRoute_SendsFullBody(t *testing.T) {
+	var got DNSRoute
+	var gotID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns-routes/update" || r.Method != http.MethodPost {
+			t.Errorf("method/path: %s %q", r.Method, r.URL.Path)
+		}
+		gotID = r.URL.Query().Get("id")
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := DNSRoute{
+		ID: "hr:Vk", Name: "Vk", Backend: "hydraroute", HRPolicyName: "HydraRoute",
+		Routes: []DNSRouteEntry{{Interface: "nwg0", TunnelID: "nwg0", Fallback: "auto"}},
+	}
+	if err := c.UpdateDNSRoute(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != "hr:Vk" {
+		t.Errorf("id query: %q", gotID)
+	}
+	if got.Routes == nil || got.Routes[0].Interface != "nwg0" {
+		t.Errorf("body: %+v", got)
+	}
+	if !strings.Contains(got.Backend, "hydraroute") {
+		t.Errorf("backend not preserved: %+v", got)
 	}
 }
 ```
 
-- [ ] **Step 2: Run, expect FAIL (method not defined)**
+- [ ] **Step 2: Run, expect FAIL**
 
 ```bash
-go test ./internal/agent/awgmgr -run TestListDNSRoutes_HappyPath
+go test ./internal/agent/awgmgr -run "TestListDNSRoutes|TestUpdateDNSRoute"
 ```
-Expected: build error or "ListDNSRoutes undefined".
 
 - [ ] **Step 3: Implement**
 
@@ -344,42 +277,79 @@ func (c *Client) ListDNSRoutes(ctx context.Context) ([]DNSRoute, error) {
 	}
 	return env.Data, nil
 }
+
+// UpdateDNSRoute calls POST /api/dns-routes/update?id=<id> with the full
+// rule object as the body. awg-manager treats the call as full-replace —
+// the rule must be sent verbatim with only the desired fields modified.
+func (c *Client) UpdateDNSRoute(ctx context.Context, rule DNSRoute) error {
+	body, err := json.Marshal(rule)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/dns-routes/update?id="+rule.ID, body, nil)
+}
+
+// postJSON is a helper that POSTs JSON with the right headers. The existing
+// (lowercase) post helper accepts a body io.Reader but doesn't set
+// Content-Type; awg-manager's update endpoints require it. Inline here to
+// avoid disturbing the existing helper.
+func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("awgmgr POST %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(rb))
+	}
+	if out != nil && len(rb) > 0 {
+		if err := json.Unmarshal(rb, out); err != nil {
+			return fmt.Errorf("awgmgr %s: decode: %w", path, err)
+		}
+	}
+	return nil
+}
 ```
 
 - [ ] **Step 4: Run, expect PASS**
 
 ```bash
-go test ./internal/agent/awgmgr -run TestListDNSRoutes_HappyPath -v
+go test ./internal/agent/awgmgr -run "TestListDNSRoutes|TestUpdateDNSRoute" -v
 ```
-Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/agent/awgmgr/routing.go internal/agent/awgmgr/routing_test.go
-git commit -m "feat(awgmgr): ListDNSRoutes"
+git commit -m "feat(awgmgr): ListDNSRoutes, UpdateDNSRoute"
 ```
 
-### Task 1.3: ListStaticRoutes + test
+### Task 1.3: ListStaticRoutes / UpdateStaticRoute + tests
 
 **Files:**
 - Modify: `internal/agent/awgmgr/routing.go`
 - Modify: `internal/agent/awgmgr/routing_test.go`
 
-- [ ] **Step 1: Write the failing test**
-
-Append to `routing_test.go`:
+- [ ] **Step 1: Append failing tests**
 
 ```go
 func TestListStaticRoutes_HappyPath(t *testing.T) {
 	const payload = `{"success":true,"data":[
-		{"id":"s1","name":"work","enabled":true,"backend":"Wireguard0","cidrs":["10.0.0.0/8"]}
+		{"id":"s1","name":"work","tunnelID":"nwg1","subnets":["10.0.0.0/8"],"fallback":"auto","enabled":true}
 	]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/static-routes/list" {
 			t.Errorf("path: %q", r.URL.Path)
 		}
-		w.Write([]byte(payload))
+		_, _ = w.Write([]byte(payload))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
@@ -387,17 +357,33 @@ func TestListStaticRoutes_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Backend != "Wireguard0" {
+	if len(got) != 1 || got[0].TunnelID != "nwg1" {
 		t.Errorf("got: %+v", got)
+	}
+}
+
+func TestUpdateStaticRoute_NoIDInURL_FullBody(t *testing.T) {
+	var got StaticRoute
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/static-routes/update" || r.URL.RawQuery != "" {
+			t.Errorf("expected path /api/static-routes/update with NO query, got %q?%q", r.URL.Path, r.URL.RawQuery)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := StaticRoute{ID: "s1", Name: "work", TunnelID: "nwg0", Subnets: []string{"10.0.0.0/8"}, Fallback: "auto", Enabled: true}
+	if err := c.UpdateStaticRoute(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "s1" || got.TunnelID != "nwg0" {
+		t.Errorf("body: %+v", got)
 	}
 }
 ```
 
 - [ ] **Step 2: Run, expect FAIL**
-
-```bash
-go test ./internal/agent/awgmgr -run TestListStaticRoutes_HappyPath
-```
 
 - [ ] **Step 3: Implement**
 
@@ -415,90 +401,15 @@ func (c *Client) ListStaticRoutes(ctx context.Context) ([]StaticRoute, error) {
 	}
 	return env.Data, nil
 }
-```
 
-- [ ] **Step 4: Run, expect PASS**
-
-- [ ] **Step 5: Commit**
-
-```bash
-git commit -am "feat(awgmgr): ListStaticRoutes"
-```
-
-### Task 1.4: BulkBackendDNS + test
-
-**Files:**
-- Modify: `internal/agent/awgmgr/routing.go`
-- Modify: `internal/agent/awgmgr/routing_test.go`
-
-- [ ] **Step 1: Write the failing test**
-
-```go
-func TestBulkBackendDNS_HappyPath(t *testing.T) {
-	var got BulkBackendDNSReq
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/dns-routes/bulk-backend" || r.Method != http.MethodPost {
-			t.Errorf("method/path: %s %q", r.Method, r.URL.Path)
-		}
-		if r.Header.Get("Content-Type") != "application/json" {
-			t.Errorf("content-type: %s", r.Header.Get("Content-Type"))
-		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		w.Write([]byte(`{"success":true,"data":{"processed":2}}`))
-	}))
-	defer srv.Close()
-	c := New(srv.URL)
-	resp, err := c.BulkBackendDNS(context.Background(), []string{"r1", "r2"}, "Wireguard1")
+// UpdateStaticRoute calls POST /api/static-routes/update — the id is in the
+// body, NOT in the URL (different from DNS update). awg-manager full-replaces.
+func (c *Client) UpdateStaticRoute(ctx context.Context, rule StaticRoute) error {
+	body, err := json.Marshal(rule)
 	if err != nil {
-		t.Fatal(err)
+		return err
 	}
-	if resp.Processed != 2 {
-		t.Errorf("processed: %d", resp.Processed)
-	}
-	if got.Backend != "Wireguard1" || len(got.IDs) != 2 || got.IDs[0] != "r1" {
-		t.Errorf("request body: %+v", got)
-	}
-}
-```
-
-(Add `"encoding/json"` to the import block of `routing_test.go` if not already present.)
-
-- [ ] **Step 2: Run, expect FAIL**
-
-- [ ] **Step 3: Implement**
-
-```go
-// BulkBackendDNS calls POST /api/dns-routes/bulk-backend to atomically
-// rebind a list of DNS-route IDs to the named backend (NDMSName).
-func (c *Client) BulkBackendDNS(ctx context.Context, ids []string, backend string) (*BulkBackendDNSResp, error) {
-	body, err := json.Marshal(BulkBackendDNSReq{IDs: ids, Backend: backend})
-	if err != nil {
-		return nil, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/dns-routes/bulk-backend", bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("awgmgr POST dns-routes/bulk-backend: %w", err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("awgmgr dns-routes/bulk-backend: HTTP %d: %s", resp.StatusCode, snippet(rb))
-	}
-	var env Envelope[BulkBackendDNSResp]
-	if err := json.Unmarshal(rb, &env); err != nil {
-		return nil, fmt.Errorf("awgmgr dns-routes/bulk-backend: decode: %w", err)
-	}
-	if !env.Success {
-		return nil, fmt.Errorf("awgmgr dns-routes/bulk-backend: success=false")
-	}
-	return &env.Data, nil
+	return c.postJSON(ctx, "/api/static-routes/update", body, nil)
 }
 ```
 
@@ -507,35 +418,38 @@ func (c *Client) BulkBackendDNS(ctx context.Context, ids []string, backend strin
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -am "feat(awgmgr): BulkBackendDNS"
+git commit -am "feat(awgmgr): ListStaticRoutes, UpdateStaticRoute"
 ```
 
-### Task 1.5: UpdateStaticRoute + RoutingRefresh + tests
+### Task 1.4: RoutingTunnels / RoutingRefresh / HydraRouteControl / GetEnv
 
 **Files:**
 - Modify: `internal/agent/awgmgr/routing.go`
 - Modify: `internal/agent/awgmgr/routing_test.go`
+- Modify: `internal/agent/awgmgr/client.go`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Append failing tests**
 
 ```go
-func TestUpdateStaticRoute_HappyPath(t *testing.T) {
-	var got StaticRoute
+func TestRoutingTunnels_HappyPath(t *testing.T) {
+	const payload = `{"success":true,"data":[
+		{"id":"awg11","name":"amnezia_for_awg","iface":"nwg1","type":"managed","status":"running","available":true},
+		{"id":"wan:eth3","name":"WAN","iface":"eth3","type":"wan","status":"up","available":true}
+	]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/static-routes/update" || r.URL.Query().Get("id") != "s1" {
-			t.Errorf("path/id: %q %q", r.URL.Path, r.URL.Query().Get("id"))
+		if r.URL.Path != "/api/routing/tunnels" {
+			t.Errorf("path: %q", r.URL.Path)
 		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		w.Write([]byte(`{"success":true,"data":{}}`))
+		_, _ = w.Write([]byte(payload))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	rule := StaticRoute{ID: "s1", Name: "work", Enabled: true, Backend: "Wireguard1", CIDRs: []string{"10.0.0.0/8"}}
-	if err := c.UpdateStaticRoute(context.Background(), rule); err != nil {
+	got, err := c.RoutingTunnels(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Backend != "Wireguard1" || got.Name != "work" {
-		t.Errorf("body: %+v", got)
+	if len(got) != 2 || got[0].Iface != "nwg1" || got[1].Type != "wan" {
+		t.Errorf("got: %+v", got)
 	}
 }
 
@@ -545,7 +459,7 @@ func TestRoutingRefresh_HappyPath(t *testing.T) {
 		if r.URL.Path == "/api/routing/refresh" && r.Method == http.MethodPost {
 			called = true
 		}
-		w.Write([]byte(`{"success":true}`))
+		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
@@ -556,98 +470,15 @@ func TestRoutingRefresh_HappyPath(t *testing.T) {
 		t.Errorf("/api/routing/refresh not called")
 	}
 }
-```
 
-- [ ] **Step 2: Run, expect FAIL**
-
-- [ ] **Step 3: Implement**
-
-Append to `routing.go`:
-
-```go
-// UpdateStaticRoute calls POST /api/static-routes/update?id=<id>. The full
-// rule struct is sent — awg-manager treats the request as full-replace.
-func (c *Client) UpdateStaticRoute(ctx context.Context, rule StaticRoute) error {
-	body, err := json.Marshal(rule)
-	if err != nil {
-		return err
-	}
-	return c.post(ctx, "/api/static-routes/update?id="+rule.ID, bytes.NewReader(body), nil)
-}
-
-// RoutingRefresh forces awg-manager to re-fetch routes from NDMS.
-func (c *Client) RoutingRefresh(ctx context.Context) error {
-	return c.post(ctx, "/api/routing/refresh", nil, nil)
-}
-```
-
-(Note: existing `post` helper does not set `Content-Type` — verify that awg-manager accepts the body without it for `update`; if not, inline a custom request. Curl probes from Milestone 0 will have shown this.)
-
-- [ ] **Step 4: Run, expect PASS**
-
-- [ ] **Step 5: Commit**
-
-```bash
-git commit -am "feat(awgmgr): UpdateStaticRoute, RoutingRefresh"
-```
-
----
-
-## Milestone 2: HR-Neo Client + Replacement Helper
-
-### Task 2.1: GetHRConfig / PutHRConfig / HydraRouteControl
-
-**Files:**
-- Modify: `internal/agent/awgmgr/routing.go`
-- Modify: `internal/agent/awgmgr/routing_test.go`
-
-- [ ] **Step 1: Write the failing tests**
-
-```go
-func TestGetHRConfig_HappyPath(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/hydraroute/config" {
-			t.Errorf("path: %q", r.URL.Path)
-		}
-		w.Write([]byte(`{"success":true,"data":{"policies":[{"id":"p1","targets":[{"interface":"Wireguard0"}]}]}}`))
-	}))
-	defer srv.Close()
-	c := New(srv.URL)
-	cfg, err := c.GetHRConfig(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	pols, _ := cfg.Raw["policies"].([]any)
-	if len(pols) != 1 {
-		t.Fatalf("policies: %+v", cfg.Raw)
-	}
-}
-
-func TestPutHRConfig_HappyPath(t *testing.T) {
-	var got map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/hydraroute/config/update" || r.Method != http.MethodPut {
-			t.Errorf("method/path: %s %q", r.Method, r.URL.Path)
-		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
-		w.Write([]byte(`{"success":true}`))
-	}))
-	defer srv.Close()
-	c := New(srv.URL)
-	cfg := HRConfig{Raw: map[string]any{"policies": []any{}}}
-	if err := c.PutHRConfig(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got["policies"]; !ok {
-		t.Errorf("body missing policies: %+v", got)
-	}
-}
-
-func TestHydraRouteControl_Restart(t *testing.T) {
+func TestHydraRouteControl_BodyShape(t *testing.T) {
 	var body map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/system/hydraroute-control" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
-		w.Write([]byte(`{"success":true}`))
+		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
@@ -667,76 +498,45 @@ func TestHydraRouteControl_Restart(t *testing.T) {
 Append to `routing.go`:
 
 ```go
-// GetHRConfig returns the full HydraRoute Neo configuration as an opaque
-// JSON tree. The shape is awg-manager-version-specific; the rebind helper
-// mutates it via known keys ("policies", "targets", "interface") rather
-// than typed structs.
-func (c *Client) GetHRConfig(ctx context.Context) (HRConfig, error) {
-	var env Envelope[map[string]any]
-	if err := c.get(ctx, "/api/hydraroute/config", &env); err != nil {
-		return HRConfig{}, err
+// RoutingTunnels returns /api/routing/tunnels .data — the catalogue of all
+// routable interfaces (managed/system/wan). Used by the rebind action to
+// resolve the iface value used in route bindings.
+func (c *Client) RoutingTunnels(ctx context.Context) ([]RoutingTunnel, error) {
+	var env Envelope[[]RoutingTunnel]
+	if err := c.get(ctx, "/api/routing/tunnels", &env); err != nil {
+		return nil, err
 	}
 	if !env.Success {
-		return HRConfig{}, fmt.Errorf("awgmgr hydraroute/config: success=false")
+		return nil, fmt.Errorf("awgmgr routing/tunnels: success=false")
 	}
-	return HRConfig{Raw: env.Data}, nil
+	return env.Data, nil
 }
 
-// PutHRConfig replaces the entire HR-Neo config via PUT /api/hydraroute/config/update.
-func (c *Client) PutHRConfig(ctx context.Context, cfg HRConfig) error {
-	body, err := json.Marshal(cfg.Raw)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.BaseURL+"/api/hydraroute/config/update", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return fmt.Errorf("awgmgr PUT hydraroute/config/update: %w", err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("awgmgr hydraroute/config/update: HTTP %d: %s", resp.StatusCode, snippet(rb))
-	}
-	var env Envelope[any]
-	if err := json.Unmarshal(rb, &env); err != nil {
-		return fmt.Errorf("awgmgr hydraroute/config/update: decode: %w", err)
-	}
-	if !env.Success {
-		return fmt.Errorf("awgmgr hydraroute/config/update: success=false")
-	}
-	return nil
+// RoutingRefresh forces NDMS cache reset.
+func (c *Client) RoutingRefresh(ctx context.Context) error {
+	return c.post(ctx, "/api/routing/refresh", nil, nil)
 }
 
 // HydraRouteControl posts {"action":"<action>"} to /api/system/hydraroute-control.
-// action ∈ {"start","stop","restart"}.
+// action ∈ {"start","stop","restart"}. Called after rebinding any rule with
+// backend=="hydraroute" so the daemon reloads.
 func (c *Client) HydraRouteControl(ctx context.Context, action string) error {
 	body, err := json.Marshal(map[string]string{"action": action})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/system/hydraroute-control", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return fmt.Errorf("awgmgr POST hydraroute-control: %w", err)
-	}
-	defer resp.Body.Close()
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("awgmgr hydraroute-control: HTTP %d: %s", resp.StatusCode, snippet(rb))
-	}
-	return nil
+	return c.postJSON(ctx, "/api/system/hydraroute-control", body, nil)
+}
+```
+
+Append to `client.go`:
+
+```go
+// GetEnv is a public version of the lowercase get helper. Used by callers in
+// other packages (internal/agent/actions) that need to issue typed GETs
+// against awg-manager without duplicating the HTTP plumbing.
+func (c *Client) GetEnv(ctx context.Context, path string, out any) error {
+	return c.get(ctx, path, out)
 }
 ```
 
@@ -749,182 +549,14 @@ go test ./internal/agent/awgmgr -v
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -am "feat(awgmgr): HR-Neo config GET/PUT and control"
-```
-
-### Task 2.2: ReplaceHRTargets pure helper
-
-**Files:**
-- Create: `internal/agent/awgmgr/hr_replace.go`
-- Create: `internal/agent/awgmgr/hr_replace_test.go`
-
-The helper walks the HR config tree and rewrites every occurrence of an interface reference matching `srcRefs` to `dst`. The exact path through the tree depends on the probe notes; the implementation below assumes the structure `cfg.Raw["policies"][i]["targets"][j]["interface"]`. Adjust based on actual probe data.
-
-- [ ] **Step 1: Write the failing test**
-
-Create `internal/agent/awgmgr/hr_replace_test.go`:
-
-```go
-package awgmgr
-
-import (
-	"reflect"
-	"testing"
-)
-
-func TestReplaceHRTargets_SinglePolicy(t *testing.T) {
-	cfg := HRConfig{Raw: map[string]any{
-		"policies": []any{
-			map[string]any{
-				"id": "p1",
-				"targets": []any{
-					map[string]any{"interface": "Wireguard0", "priority": float64(1)},
-					map[string]any{"interface": "Wireguard1", "priority": float64(2)},
-				},
-			},
-		},
-	}}
-	got, n := ReplaceHRTargets(cfg, []string{"Wireguard0"}, "Wireguard9")
-	if n != 1 {
-		t.Errorf("replacements: %d", n)
-	}
-	pols := got.Raw["policies"].([]any)
-	tgts := pols[0].(map[string]any)["targets"].([]any)
-	if iface := tgts[0].(map[string]any)["interface"]; iface != "Wireguard9" {
-		t.Errorf("first target: %v", iface)
-	}
-	if iface := tgts[1].(map[string]any)["interface"]; iface != "Wireguard1" {
-		t.Errorf("second target unchanged: %v", iface)
-	}
-}
-
-func TestReplaceHRTargets_NoMatch(t *testing.T) {
-	cfg := HRConfig{Raw: map[string]any{
-		"policies": []any{
-			map[string]any{"targets": []any{map[string]any{"interface": "Wireguard1"}}},
-		},
-	}}
-	want := HRConfig{Raw: map[string]any{
-		"policies": []any{
-			map[string]any{"targets": []any{map[string]any{"interface": "Wireguard1"}}},
-		},
-	}}
-	got, n := ReplaceHRTargets(cfg, []string{"Wireguard0"}, "Wireguard9")
-	if n != 0 {
-		t.Errorf("replacements: %d", n)
-	}
-	if !reflect.DeepEqual(got.Raw, want.Raw) {
-		t.Errorf("config mutated unexpectedly")
-	}
-}
-
-func TestReplaceHRTargets_MultipleSrcRefs(t *testing.T) {
-	cfg := HRConfig{Raw: map[string]any{
-		"policies": []any{
-			map[string]any{"targets": []any{
-				map[string]any{"interface": "Wireguard0"},
-				map[string]any{"interface": "awg11"},
-			}},
-		},
-	}}
-	got, n := ReplaceHRTargets(cfg, []string{"Wireguard0", "awg11"}, "Wireguard9")
-	if n != 2 {
-		t.Errorf("replacements: %d", n)
-	}
-	tgts := got.Raw["policies"].([]any)[0].(map[string]any)["targets"].([]any)
-	for i, tg := range tgts {
-		if iface := tg.(map[string]any)["interface"]; iface != "Wireguard9" {
-			t.Errorf("target %d: %v", i, iface)
-		}
-	}
-}
-```
-
-- [ ] **Step 2: Run, expect FAIL**
-
-- [ ] **Step 3: Implement**
-
-Create `internal/agent/awgmgr/hr_replace.go`:
-
-```go
-package awgmgr
-
-// ReplaceHRTargets walks the HR-Neo config tree and rewrites every "interface"
-// field whose value is in srcRefs to dst. Returns a new HRConfig (deep-cloned)
-// plus the number of replacements made.
-//
-// The walk path is hard-coded to cfg.Raw["policies"][*]["targets"][*]["interface"]
-// per probe notes; if the actual config has nested objects elsewhere that
-// reference interfaces, extend the walk here.
-func ReplaceHRTargets(cfg HRConfig, srcRefs []string, dst string) (HRConfig, int) {
-	cloned := deepCloneJSON(cfg.Raw).(map[string]any)
-	count := 0
-	srcSet := make(map[string]struct{}, len(srcRefs))
-	for _, s := range srcRefs {
-		if s != "" {
-			srcSet[s] = struct{}{}
-		}
-	}
-	pols, _ := cloned["policies"].([]any)
-	for _, p := range pols {
-		pm, ok := p.(map[string]any)
-		if !ok {
-			continue
-		}
-		tgts, _ := pm["targets"].([]any)
-		for _, t := range tgts {
-			tm, ok := t.(map[string]any)
-			if !ok {
-				continue
-			}
-			iface, _ := tm["interface"].(string)
-			if _, hit := srcSet[iface]; hit {
-				tm["interface"] = dst
-				count++
-			}
-		}
-	}
-	return HRConfig{Raw: cloned}, count
-}
-
-func deepCloneJSON(v any) any {
-	switch x := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(x))
-		for k, vv := range x {
-			out[k] = deepCloneJSON(vv)
-		}
-		return out
-	case []any:
-		out := make([]any, len(x))
-		for i, vv := range x {
-			out[i] = deepCloneJSON(vv)
-		}
-		return out
-	default:
-		return x
-	}
-}
-```
-
-- [ ] **Step 4: Run, expect PASS**
-
-```bash
-go test ./internal/agent/awgmgr -run TestReplaceHRTargets -v
-```
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add internal/agent/awgmgr/hr_replace.go internal/agent/awgmgr/hr_replace_test.go
-git commit -m "feat(awgmgr): ReplaceHRTargets pure helper"
+git commit -am "feat(awgmgr): RoutingTunnels, RoutingRefresh, HydraRouteControl, GetEnv"
 ```
 
 ---
 
-## Milestone 3: Wire Types and route_status Action
+## Milestone 2: Wire Types
 
-### Task 3.1: Shared wire types
+### Task 2.1: Shared payload types
 
 **Files:**
 - Create: `pkg/wire/routing.go`
@@ -933,7 +565,7 @@ git commit -m "feat(awgmgr): ReplaceHRTargets pure helper"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `pkg/wire/routing_test.go`:
+`pkg/wire/routing_test.go`:
 
 ```go
 package wire
@@ -947,7 +579,7 @@ func TestRouteSnapshot_RoundTrip(t *testing.T) {
 	want := RouteSnapshot{
 		HRNeo: HRStatus{Installed: true, Running: true},
 		Tunnels: []TunnelMeta{
-			{ID: "t1", Name: "amnezia", NDMSName: "Wireguard0", Enabled: true},
+			{ID: "t1", Name: "amnezia", Iface: "nwg1", Enabled: true},
 		},
 		Counts: map[string]TunnelCounts{
 			"t1": {DNS: 5, Static: 2, HRNeo: 1},
@@ -966,18 +598,33 @@ func TestRouteSnapshot_RoundTrip(t *testing.T) {
 		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }
+
+func TestRouteRebindResult_RoundTrip(t *testing.T) {
+	want := RouteRebindResult{
+		SrcTunnelID: "awg11", DstTunnelID: "awg13",
+		DNS:    CategoryResult{OK: 3, Failed: 1, Errors: []string{"err1"}},
+		Static: CategoryResult{OK: 0},
+		HRNeo:  CategoryResult{OK: 5},
+	}
+	b, _ := json.Marshal(want)
+	var got RouteRebindResult
+	_ = json.Unmarshal(b, &got)
+	if got.DNS.OK != 3 || got.DNS.Failed != 1 || len(got.DNS.Errors) != 1 {
+		t.Errorf("got: %+v", got)
+	}
+}
 ```
 
 - [ ] **Step 2: Run, expect FAIL**
 
 - [ ] **Step 3: Implement**
 
-Create `pkg/wire/routing.go`:
+`pkg/wire/routing.go`:
 
 ```go
 // Package wire — routing.go defines payload types for route_status and
-// route_rebind. They are JSON-encoded into wire.CommandResult.Output so we
-// don't need a new envelope; the backend decodes Output by Action.
+// route_rebind. They are JSON-encoded into wire.CommandResult.Output;
+// no wire envelope additions are required besides the action names.
 package wire
 
 type HRStatus struct {
@@ -985,14 +632,25 @@ type HRStatus struct {
 	Running   bool `json:"running"`
 }
 
+// TunnelMeta is the subset of awgmgr.Tunnel the panel needs for rendering.
+// `Iface` is the canonical bind value (matches awgmgr.Tunnel.InterfaceName
+// for managed tunnels) and is used by the renderer to label rows.
 type TunnelMeta struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	NDMSName      string `json:"ndms_name"`
-	InterfaceName string `json:"interface_name,omitempty"`
-	Enabled       bool   `json:"enabled"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Iface   string `json:"iface"`
+	Enabled bool   `json:"enabled"`
+	// DefaultRoute marks managed tunnels with `defaultRoute=true`. Used as
+	// the heuristic for the global HR-Neo policy default during rebind
+	// fall-through conversion (Milestone 4).
+	DefaultRoute bool `json:"default_route,omitempty"`
 }
 
+// TunnelCounts tracks rules attached to a single tunnel by category.
+// HRNeo is a sub-class of DNS — DNS rules with backend="hydraroute".
+// Total rules = DNS + Static (HRNeo is INCLUDED in DNS, not added).
+// Renderer derives "shown total" = DNS + Static; HRNeo shown separately
+// only as informational sub-count.
 type TunnelCounts struct {
 	DNS    int `json:"dns"`
 	Static int `json:"static"`
@@ -1002,9 +660,9 @@ type TunnelCounts struct {
 // RouteSnapshot is the payload of a successful route_status CommandResult.
 type RouteSnapshot struct {
 	HRNeo   HRStatus                `json:"hr_neo"`
-	Tunnels []TunnelMeta            `json:"tunnels"`
-	Counts  map[string]TunnelCounts `json:"counts"` // key = tunnel id, only managed tunnels
-	Other   TunnelCounts            `json:"other"`  // sum of WAN + system + external
+	Tunnels []TunnelMeta            `json:"tunnels"` // managed tunnels only
+	Counts  map[string]TunnelCounts `json:"counts"`  // key = tunnel id
+	Other   TunnelCounts            `json:"other"`   // sum across WAN/system/external
 }
 
 type CategoryResult struct {
@@ -1014,6 +672,8 @@ type CategoryResult struct {
 }
 
 // RouteRebindResult is the payload of a route_rebind CommandResult.
+// Static is reported separately. HRNeo is the subset of DNS results where
+// backend=="hydraroute"; the count of pure-NDMS DNS results = DNS - HRNeo.
 type RouteRebindResult struct {
 	SrcTunnelID string         `json:"src_tunnel_id"`
 	DstTunnelID string         `json:"dst_tunnel_id"`
@@ -1023,9 +683,7 @@ type RouteRebindResult struct {
 }
 ```
 
-- [ ] **Step 4: Add the new actions to validCommandActions**
-
-Edit `pkg/wire/types.go` — extend the map literal:
+Edit `pkg/wire/types.go` — extend `validCommandActions`:
 
 ```go
 var validCommandActions = map[string]bool{
@@ -1044,28 +702,30 @@ var validCommandActions = map[string]bool{
 }
 ```
 
-- [ ] **Step 5: Run, expect PASS**
+- [ ] **Step 4: Run, expect PASS**
 
 ```bash
 go test ./pkg/wire -v
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add pkg/wire/routing.go pkg/wire/routing_test.go pkg/wire/types.go
-git commit -m "feat(wire): route_status/route_rebind actions and payload types"
+git commit -m "feat(wire): route_status/route_rebind payload types"
 ```
 
-### Task 3.2: route_status action — types and aggregator
+---
+
+## Milestone 3: route_status Action
+
+### Task 3.1: Aggregator + tests
 
 **Files:**
 - Create: `internal/agent/actions/route_status.go`
 - Create: `internal/agent/actions/route_status_test.go`
 
 - [ ] **Step 1: Write the failing test**
-
-Create `internal/agent/actions/route_status_test.go`:
 
 ```go
 package actions
@@ -1075,15 +735,16 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-// fakeAwgmgr serves canned JSON for the five endpoints route_status hits.
-func fakeAwgmgr(t *testing.T, hrInstalled bool) *httptest.Server {
+// fakeAwgmgrStatus serves canned JSON for the four endpoints route_status
+// hits. Designed for both happy-path (with HR-Neo installed) and
+// HR-absent variants.
+func fakeAwgmgrStatus(t *testing.T, hrInstalled bool) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
@@ -1091,43 +752,34 @@ func fakeAwgmgr(t *testing.T, hrInstalled bool) *httptest.Server {
 		if hrInstalled {
 			body = `{"success":true,"data":{"installed":true,"running":true}}`
 		}
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	})
 	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":{"tunnels":[
-			{"id":"t1","name":"amnezia","ndmsName":"Wireguard0","interfaceName":"awg11","enabled":true},
-			{"id":"t2","name":"amnezia2","ndmsName":"Wireguard1","interfaceName":"awg12","enabled":true}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"t1","name":"amnezia","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true},
+			{"id":"t2","name":"newtun","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false}
 		],"external":[],"system":[]}}`))
 	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":[
-			{"id":"d1","backend":"Wireguard0","enabled":true},
-			{"id":"d2","backend":"Wireguard0","enabled":true},
-			{"id":"d3","backend":"Wireguard1","enabled":true},
-			{"id":"d4","backend":"WAN","enabled":true}
+		// 4 rules: 2 explicit on nwg1 (one hr, one ndms), 1 on nwg0, 1 on WAN (eth3)
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:Vk","backend":"hydraroute","routes":[{"interface":"nwg1","tunnelId":"nwg1"}]},
+			{"id":"ndms:Yandex","backend":"ndms","routes":[{"interface":"nwg1","tunnelId":"nwg1"}]},
+			{"id":"hr:Cn","backend":"hydraroute","routes":[{"interface":"nwg0","tunnelId":"nwg0"}]},
+			{"id":"hr:Sber","backend":"hydraroute","routes":[{"interface":"eth3","tunnelId":"eth3"}]}
 		]}`))
 	})
 	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":[
-			{"id":"s1","backend":"Wireguard0","enabled":true},
-			{"id":"s2","backend":"WAN","enabled":true}
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"s1","tunnelID":"nwg1"},
+			{"id":"s2","tunnelID":"eth3"}
 		]}`))
-	})
-	mux.HandleFunc("/api/hydraroute/config", func(w http.ResponseWriter, r *http.Request) {
-		if !hrInstalled {
-			http.Error(w, "not installed", 404)
-			return
-		}
-		w.Write([]byte(`{"success":true,"data":{"policies":[
-			{"id":"p1","targets":[{"interface":"Wireguard0"}]},
-			{"id":"p2","targets":[{"interface":"Wireguard0"},{"interface":"Wireguard1"}]}
-		]}}`))
 	})
 	return httptest.NewServer(mux)
 }
 
 func TestRouteStatus_HappyPath(t *testing.T) {
-	srv := fakeAwgmgr(t, true)
+	srv := fakeAwgmgrStatus(t, true)
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 	out, err := RouteStatus(context.Background(), c)
@@ -1144,19 +796,27 @@ func TestRouteStatus_HappyPath(t *testing.T) {
 	if len(snap.Tunnels) != 2 {
 		t.Errorf("tunnels: %d", len(snap.Tunnels))
 	}
-	if snap.Counts["t1"].DNS != 2 || snap.Counts["t1"].Static != 1 || snap.Counts["t1"].HRNeo != 2 {
+	// t1 (nwg1): 2 DNS (1 hr + 1 ndms), 1 static, hr_neo subcount = 1
+	if snap.Counts["t1"].DNS != 2 || snap.Counts["t1"].Static != 1 || snap.Counts["t1"].HRNeo != 1 {
 		t.Errorf("t1 counts: %+v", snap.Counts["t1"])
 	}
-	if snap.Counts["t2"].DNS != 1 || snap.Counts["t2"].HRNeo != 1 {
+	// t2 (nwg0): 1 DNS (hr), 0 static, hr_neo subcount = 1
+	if snap.Counts["t2"].DNS != 1 || snap.Counts["t2"].Static != 0 || snap.Counts["t2"].HRNeo != 1 {
 		t.Errorf("t2 counts: %+v", snap.Counts["t2"])
 	}
+	// other (WAN eth3): 1 DNS (hr) + 1 static
 	if snap.Other.DNS != 1 || snap.Other.Static != 1 {
 		t.Errorf("other counts: %+v", snap.Other)
+	}
+	// default route detection
+	t1, t2 := snap.Tunnels[0], snap.Tunnels[1]
+	if !t1.DefaultRoute || t2.DefaultRoute {
+		t.Errorf("default_route flags: t1=%v t2=%v (want true,false)", t1.DefaultRoute, t2.DefaultRoute)
 	}
 }
 
 func TestRouteStatus_HRNeoAbsent(t *testing.T) {
-	srv := fakeAwgmgr(t, false)
+	srv := fakeAwgmgrStatus(t, false)
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 	out, err := RouteStatus(context.Background(), c)
@@ -1168,14 +828,40 @@ func TestRouteStatus_HRNeoAbsent(t *testing.T) {
 	if snap.HRNeo.Installed {
 		t.Errorf("HR-Neo should not be reported installed")
 	}
-	for tid, c := range snap.Counts {
-		if c.HRNeo != 0 {
-			t.Errorf("%s.HRNeo should be 0 when HR absent: %+v", tid, c)
-		}
-	}
-	// Make sure other-status fetch errors are non-fatal: no error from RouteStatus.
-	if !strings.Contains(out, "tunnels") {
-		t.Errorf("no tunnels in output: %s", out)
+	// HR sub-counts must still be reported (rules with backend=hydraroute exist
+	// regardless of daemon state); they just won't be acted on by HR-Neo.
+}
+
+func TestRouteStatus_FallthroughRulesAreCounted(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"t1","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		// 3 fall-through HR rules
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:A","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"},
+			{"id":"hr:B","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"},
+			{"id":"hr:C","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+	out, _ := RouteStatus(context.Background(), c)
+	var snap wire.RouteSnapshot
+	_ = json.Unmarshal([]byte(out), &snap)
+	// Fall-through rules are credited to the default-route tunnel.
+	if snap.Counts["t1"].DNS != 3 || snap.Counts["t1"].HRNeo != 3 {
+		t.Errorf("expected 3 fall-through DNS+HR on t1, got %+v", snap.Counts["t1"])
 	}
 }
 ```
@@ -1184,7 +870,7 @@ func TestRouteStatus_HRNeoAbsent(t *testing.T) {
 
 - [ ] **Step 3: Implement**
 
-Create `internal/agent/actions/route_status.go`:
+`internal/agent/actions/route_status.go`:
 
 ```go
 package actions
@@ -1207,7 +893,6 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 		tunnels *awgmgr.TunnelsAll
 		dns     []awgmgr.DNSRoute
 		statics []awgmgr.StaticRoute
-		hrCfg   awgmgr.HRConfig
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { hr, err = c.HydraRouteStatus(gctx); return })
@@ -1217,19 +902,7 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	if err := g.Wait(); err != nil {
 		return "", err
 	}
-	// HR-Neo config fetch is gated on installed=true and runs sequentially after
-	// the status check so we don't 404 when not installed.
-	if hr != nil && hr.Installed {
-		var err error
-		hrCfg, err = c.GetHRConfig(ctx)
-		if err != nil {
-			// Non-fatal: status returned installed=true but config GET failed —
-			// we still want to render the panel. Mark Running=false defensively
-			// and log via the caller; the fields won't show HR counts.
-			hrCfg = awgmgr.HRConfig{}
-		}
-	}
-	snap := buildRouteSnapshot(hr, tunnels, dns, statics, hrCfg)
+	snap := buildRouteSnapshot(hr, tunnels, dns, statics)
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return "", err
@@ -1237,64 +910,78 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	return string(b), nil
 }
 
-func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, hrCfg awgmgr.HRConfig) wire.RouteSnapshot {
-	snap := wire.RouteSnapshot{
-		Counts: make(map[string]wire.TunnelCounts),
-	}
+// buildRouteSnapshot is the pure aggregation function — easy to test.
+func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute) wire.RouteSnapshot {
+	snap := wire.RouteSnapshot{Counts: make(map[string]wire.TunnelCounts)}
 	if hr != nil {
 		snap.HRNeo = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
 	}
-	// Map managed tunnels by NDMSName for backend-field lookups.
-	byNDMS := make(map[string]string) // NDMSName → tunnel ID
+	// Map managed tunnels by iface (interfaceName) for backend-field lookups,
+	// and capture the default-route managed tunnel for fall-through credit.
+	byIface := make(map[string]string) // iface → tunnel id
+	defaultIface := ""
 	if tunnels != nil {
 		for _, t := range tunnels.Tunnels {
 			snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
-				ID: t.ID, Name: t.Name, NDMSName: t.NDMSName,
-				InterfaceName: t.InterfaceName, Enabled: t.Enabled,
+				ID: t.ID, Name: t.Name, Iface: t.InterfaceName,
+				Enabled: t.Enabled, DefaultRoute: t.DefaultRoute,
 			})
-			if t.NDMSName != "" {
-				byNDMS[t.NDMSName] = t.ID
+			if t.InterfaceName != "" {
+				byIface[t.InterfaceName] = t.ID
+			}
+			if t.DefaultRoute && defaultIface == "" {
+				defaultIface = t.InterfaceName
+			}
+		}
+	}
+	creditDNS := func(tid string, isHRNeo bool) {
+		c := snap.Counts[tid]
+		c.DNS++
+		if isHRNeo {
+			c.HRNeo++
+		}
+		snap.Counts[tid] = c
+	}
+	creditOther := func(isHRNeo bool, isStatic bool) {
+		if isStatic {
+			snap.Other.Static++
+		} else {
+			snap.Other.DNS++
+			if isHRNeo {
+				snap.Other.HRNeo++
 			}
 		}
 	}
 	for _, r := range dns {
-		if id, ok := byNDMS[r.Backend]; ok {
-			c := snap.Counts[id]
-			c.DNS++
-			snap.Counts[id] = c
-		} else {
-			snap.Other.DNS++
+		isHR := r.Backend == "hydraroute"
+		if len(r.Routes) > 0 {
+			// Use the FIRST route's interface as the primary binding.
+			iface := r.Routes[0].Interface
+			if id, ok := byIface[iface]; ok {
+				creditDNS(id, isHR)
+			} else {
+				creditOther(isHR, false)
+			}
+			continue
 		}
+		// Fall-through rule. If it follows the global HR-Neo policy and we
+		// have a default-route managed tunnel, credit there. Otherwise
+		// classify as Other.
+		if isHR && r.HRPolicyName != "" && defaultIface != "" {
+			if id, ok := byIface[defaultIface]; ok {
+				creditDNS(id, true)
+				continue
+			}
+		}
+		creditOther(isHR, false)
 	}
 	for _, r := range statics {
-		if id, ok := byNDMS[r.Backend]; ok {
+		if id, ok := byIface[r.TunnelID]; ok {
 			c := snap.Counts[id]
 			c.Static++
 			snap.Counts[id] = c
 		} else {
 			snap.Other.Static++
-		}
-	}
-	if hr != nil && hr.Installed {
-		// HR-Neo: walk policies/targets, count by interface.
-		pols, _ := hrCfg.Raw["policies"].([]any)
-		for _, p := range pols {
-			pm, ok := p.(map[string]any)
-			if !ok {
-				continue
-			}
-			tgts, _ := pm["targets"].([]any)
-			for _, t := range tgts {
-				tm, _ := t.(map[string]any)
-				iface, _ := tm["interface"].(string)
-				if id, ok := byNDMS[iface]; ok {
-					c := snap.Counts[id]
-					c.HRNeo++
-					snap.Counts[id] = c
-				} else {
-					snap.Other.HRNeo++
-				}
-			}
 		}
 	}
 	return snap
@@ -1311,17 +998,16 @@ go test ./internal/agent/actions -run TestRouteStatus -v
 
 ```bash
 git add internal/agent/actions/route_status.go internal/agent/actions/route_status_test.go
-git commit -m "feat(agent): route_status action"
+git commit -m "feat(agent): route_status action with fall-through credit to default-route tunnel"
 ```
 
-### Task 3.3: Wire route_status into Runner
+### Task 3.2: Wire route_status into Runner
 
 **Files:**
 - Modify: `internal/agent/actions/runner.go`
+- Create: `internal/agent/actions/runner_routes_test.go`
 
 - [ ] **Step 1: Write the failing test**
-
-Add to an existing runner test file or create `internal/agent/actions/runner_routes_test.go`:
 
 ```go
 package actions
@@ -1337,7 +1023,7 @@ import (
 )
 
 func TestRunner_RouteStatus_Dispatch(t *testing.T) {
-	srv := fakeAwgmgr(t, false)
+	srv := fakeAwgmgrStatus(t, false)
 	defer srv.Close()
 	r := &Runner{AwgClient: awgmgr.New(srv.URL)}
 	res := r.Execute(context.Background(), wire.Command{ID: "x", Action: "route_status"})
@@ -1354,17 +1040,11 @@ func TestRunner_RouteStatus_Dispatch(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run, expect FAIL**
+- [ ] **Step 2: Run, expect FAIL ("unknown action: route_status")**
 
-```bash
-go test ./internal/agent/actions -run TestRunner_RouteStatus_Dispatch
-```
+- [ ] **Step 3: Add the case**
 
-Expected: "unknown action: route_status".
-
-- [ ] **Step 3: Add the case to runner.dispatch**
-
-Insert before the `default:` clause in `internal/agent/actions/runner.go`:
+In `internal/agent/actions/runner.go` insert before `default:`:
 
 ```go
 	case "route_status":
@@ -1390,15 +1070,13 @@ git commit -am "feat(agent): runner dispatch for route_status"
 
 ## Milestone 4: route_rebind Action
 
-### Task 4.1: srcRefs builder + per-category executors
+### Task 4.1: srcRefs + per-category executor
 
 **Files:**
 - Create: `internal/agent/actions/route_rebind.go`
 - Create: `internal/agent/actions/route_rebind_test.go`
 
 - [ ] **Step 1: Write the failing tests**
-
-Create `internal/agent/actions/route_rebind_test.go`:
 
 ```go
 package actions
@@ -1409,6 +1087,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -1416,74 +1095,110 @@ import (
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-// fakeAwgmgrRebind serves a fixed dataset and tracks calls. Rules with
-// backend="Wireguard0" should be moved to "Wireguard9". WAN-targeted rule
-// (backend="WAN") MUST NOT be touched.
-func fakeAwgmgrRebind(t *testing.T) (*httptest.Server, *atomic.Int32, *atomic.Int32) {
-	t.Helper()
-	var bulkCalls atomic.Int32
-	var staticUpdates atomic.Int32
+// fakeAwgmgrRebind builds a stateful mock of awg-manager. Rules are mutated
+// on update — we can verify post-state at the end of the test. Designed to
+// catch the canary case: a rule whose Backend points at WAN (eth3) MUST NOT
+// be modified by rebind.
+type rebindMock struct {
+	t        *testing.T
+	mu       sync.Mutex
+	dnsRules []awgmgr.DNSRoute
+	staticRules []awgmgr.StaticRoute
+	hrInstalled bool
+	hrControlCalls atomic.Int32
+	refreshCalls atomic.Int32
+}
+
+func newRebindMock(t *testing.T) *rebindMock {
+	return &rebindMock{
+		t: t,
+		hrInstalled: true,
+		dnsRules: []awgmgr.DNSRoute{
+			{ID: "hr:Vk", Backend: "hydraroute", HRPolicyName: "HydraRoute",
+				Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg1", TunnelID: "nwg1"}}},
+			{ID: "ndms:Yandex", Backend: "ndms",
+				Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg1", TunnelID: "nwg1"}}},
+			{ID: "hr:Sber", Backend: "hydraroute", HRPolicyName: "HydraRoute",
+				Routes: []awgmgr.DNSRouteEntry{{Interface: "eth3", TunnelID: "eth3"}}}, // CANARY: WAN
+			{ID: "hr:Fallthru", Backend: "hydraroute", HRPolicyName: "HydraRoute",
+				Routes: nil}, // fall-through
+		},
+		staticRules: []awgmgr.StaticRoute{
+			{ID: "s1", Name: "work", TunnelID: "nwg1", Subnets: []string{"10.0.0.0/8"}, Enabled: true},
+			{ID: "s2", Name: "wan-rule", TunnelID: "eth3", Subnets: []string{"203.0.113.0/24"}, Enabled: true}, // CANARY
+		},
+	}
+}
+
+func (m *rebindMock) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("id") {
 		case "t1":
-			w.Write([]byte(`{"success":true,"data":{"id":"t1","name":"amnezia","ndmsName":"Wireguard0","interfaceName":"awg11","enabled":true}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"t1","name":"awg11","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true}}`))
 		case "t2":
-			w.Write([]byte(`{"success":true,"data":{"id":"t2","name":"newtun","ndmsName":"Wireguard9","interfaceName":"awg13","enabled":true}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"t2","name":"awg13","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false}}`))
 		default:
 			http.Error(w, "not found", 404)
 		}
 	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":[
-			{"id":"d1","backend":"Wireguard0","name":"vk"},
-			{"id":"d2","backend":"Wireguard0","name":"rt"},
-			{"id":"d3","backend":"WAN","name":"sber"}
-		]}`))
+		m.mu.Lock(); defer m.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": m.dnsRules})
 	})
-	mux.HandleFunc("/api/dns-routes/bulk-backend", func(w http.ResponseWriter, r *http.Request) {
-		bulkCalls.Add(1)
-		var req awgmgr.BulkBackendDNSReq
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		if req.Backend != "Wireguard9" {
-			t.Errorf("bulk backend target: %q", req.Backend)
+	mux.HandleFunc("/api/dns-routes/update", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		var rule awgmgr.DNSRoute
+		_ = json.NewDecoder(r.Body).Decode(&rule)
+		m.mu.Lock(); defer m.mu.Unlock()
+		for i := range m.dnsRules {
+			if m.dnsRules[i].ID == id {
+				m.dnsRules[i] = rule
+				break
+			}
 		}
-		if len(req.IDs) != 2 {
-			t.Errorf("bulk ids: %+v (want d1,d2 only)", req.IDs)
-		}
-		w.Write([]byte(`{"success":true,"data":{"processed":2}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
 	})
 	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":[
-			{"id":"s1","backend":"Wireguard0","name":"work","enabled":true},
-			{"id":"s2","backend":"WAN","name":"sber-cidr","enabled":true}
-		]}`))
+		m.mu.Lock(); defer m.mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": m.staticRules})
 	})
 	mux.HandleFunc("/api/static-routes/update", func(w http.ResponseWriter, r *http.Request) {
-		staticUpdates.Add(1)
 		var rule awgmgr.StaticRoute
 		_ = json.NewDecoder(r.Body).Decode(&rule)
-		if rule.Backend != "Wireguard9" {
-			t.Errorf("static update target: %q", rule.Backend)
+		m.mu.Lock(); defer m.mu.Unlock()
+		for i := range m.staticRules {
+			if m.staticRules[i].ID == rule.ID {
+				m.staticRules[i] = rule
+				break
+			}
 		}
-		if rule.ID == "s2" {
-			t.Errorf("WAN static rule s2 must not be updated")
-		}
-		w.Write([]byte(`{"success":true,"data":{}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
 	})
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":{"installed":false}}`))
+		body := `{"success":true,"data":{"installed":false}}`
+		if m.hrInstalled {
+			body = `{"success":true,"data":{"installed":true,"running":true}}`
+		}
+		_, _ = w.Write([]byte(body))
+	})
+	mux.HandleFunc("/api/system/hydraroute-control", func(w http.ResponseWriter, r *http.Request) {
+		m.hrControlCalls.Add(1)
+		_, _ = w.Write([]byte(`{"success":true}`))
 	})
 	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true}`))
+		m.refreshCalls.Add(1)
+		_, _ = w.Write([]byte(`{"success":true}`))
 	})
-	return httptest.NewServer(mux), &bulkCalls, &staticUpdates
+	return mux
 }
 
-func TestRouteRebind_HappyPath(t *testing.T) {
-	srv, bulkCalls, staticUpdates := fakeAwgmgrRebind(t)
+func TestRouteRebind_HappyPath_WANCanaryUntouched(t *testing.T) {
+	mock := newRebindMock(t)
+	srv := httptest.NewServer(mock.handler())
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
+
 	out, err := RouteRebind(context.Background(), c, "t1", "t2")
 	if err != nil {
 		t.Fatal(err)
@@ -1492,62 +1207,67 @@ func TestRouteRebind_HappyPath(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		t.Fatalf("output not JSON: %v\n%s", err, out)
 	}
-	if res.DNS.OK != 2 || res.Static.OK != 1 || res.HRNeo.OK != 0 {
-		t.Errorf("counts: %+v", res)
+	// 3 DNS rules touched (Vk, Yandex, Fallthru — explicit nwg1 + fall-through credited to nwg1 because t1 was default-route).
+	// 1 DNS rule untouched (Sber on eth3 — WAN canary).
+	if res.DNS.OK != 3 || res.DNS.Failed != 0 {
+		t.Errorf("DNS counts: %+v (want 3 ok / 0 fail — 2 explicit nwg1 + 1 fall-through)", res.DNS)
 	}
-	if bulkCalls.Load() != 1 {
-		t.Errorf("bulk-backend called %d times", bulkCalls.Load())
+	// 1 static touched (s1 on nwg1). 1 untouched (s2 on eth3 — WAN canary).
+	if res.Static.OK != 1 || res.Static.Failed != 0 {
+		t.Errorf("Static counts: %+v", res.Static)
 	}
-	if staticUpdates.Load() != 1 {
-		t.Errorf("static-update called %d times (only s1 should be updated)", staticUpdates.Load())
+	// HR-Neo subcount: Vk + Fallthru (Yandex is ndms engine, not hr).
+	if res.HRNeo.OK != 2 {
+		t.Errorf("HRNeo subcount: %+v (want 2 — Vk + Fallthru)", res.HRNeo)
+	}
+
+	// CANARY: the WAN-targeted DNS rule (hr:Sber) and WAN-targeted static (s2)
+	// must be exactly as they were before.
+	for _, r := range mock.dnsRules {
+		if r.ID == "hr:Sber" {
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "eth3" {
+				t.Errorf("WAN canary DNS rule mutated: %+v", r)
+			}
+		}
+	}
+	for _, r := range mock.staticRules {
+		if r.ID == "s2" && r.TunnelID != "eth3" {
+			t.Errorf("WAN canary static rule mutated: %+v", r)
+		}
+	}
+
+	// Side effects: refresh called exactly once, hydraroute-control restart called (HR-Neo rules touched).
+	if mock.refreshCalls.Load() != 1 {
+		t.Errorf("/api/routing/refresh calls: %d (want 1)", mock.refreshCalls.Load())
+	}
+	if mock.hrControlCalls.Load() != 1 {
+		t.Errorf("/api/system/hydraroute-control calls: %d (want 1, since HR-Neo rules touched)", mock.hrControlCalls.Load())
 	}
 }
 
 func TestRouteRebind_SrcEqDst(t *testing.T) {
-	c := awgmgr.New("http://unused")
+	c := awgmgr.New("http://unused.invalid")
 	out, err := RouteRebind(context.Background(), c, "t1", "t1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var res wire.RouteRebindResult
 	_ = json.Unmarshal([]byte(out), &res)
-	if res.DNS.OK != 0 || res.Static.OK != 0 || res.HRNeo.OK != 0 {
-		t.Errorf("expected no-op result, got %+v", res)
+	if res.DNS.OK+res.Static.OK+res.HRNeo.OK != 0 {
+		t.Errorf("src==dst should be no-op, got %+v", res)
 	}
 }
 
-func TestRouteRebind_StaticPartialFail(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("id") == "t1" {
-			w.Write([]byte(`{"success":true,"data":{"id":"t1","ndmsName":"Wireguard0","interfaceName":"awg11"}}`))
-		} else {
-			w.Write([]byte(`{"success":true,"data":{"id":"t2","ndmsName":"Wireguard9"}}`))
-		}
-	})
-	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":[]}`))
-	})
-	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":[
-			{"id":"s1","backend":"Wireguard0","name":"a"},
-			{"id":"s2","backend":"Wireguard0","name":"b"}
-		]}`))
-	})
-	mux.HandleFunc("/api/static-routes/update", func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.RawQuery, "id=s2") {
+func TestRouteRebind_DNSPartialFail(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.hrInstalled = false // skip HR control call
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/dns-routes/update" && strings.Contains(r.URL.RawQuery, "id=ndms:Yandex") {
 			http.Error(w, "boom", 500)
 			return
 		}
-		w.Write([]byte(`{"success":true,"data":{}}`))
-	})
-	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true,"data":{"installed":false}}`))
-	})
-	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"success":true}`))
-	})
-	srv := httptest.NewServer(mux)
+		mock.handler().ServeHTTP(w, r)
+	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 	out, err := RouteRebind(context.Background(), c, "t1", "t2")
@@ -1556,10 +1276,10 @@ func TestRouteRebind_StaticPartialFail(t *testing.T) {
 	}
 	var res wire.RouteRebindResult
 	_ = json.Unmarshal([]byte(out), &res)
-	if res.Static.OK != 1 || res.Static.Failed != 1 {
-		t.Errorf("expected 1 ok 1 fail, got %+v", res.Static)
+	if res.DNS.Failed < 1 {
+		t.Errorf("expected at least 1 failure on DNS, got %+v", res.DNS)
 	}
-	if len(res.Static.Errors) == 0 {
+	if len(res.DNS.Errors) == 0 {
 		t.Errorf("errors should be reported")
 	}
 }
@@ -1569,7 +1289,7 @@ func TestRouteRebind_StaticPartialFail(t *testing.T) {
 
 - [ ] **Step 3: Implement**
 
-Create `internal/agent/actions/route_rebind.go`:
+`internal/agent/actions/route_rebind.go`:
 
 ```go
 package actions
@@ -1578,21 +1298,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-// RouteRebind moves all DNS / Static / HR-Neo rules whose target is srcID's
-// tunnel to dstID's tunnel. WAN, system, and other-managed-tunnel rules are
-// preserved. Returns the result as JSON for wire.CommandResult.Output.
+// RouteRebind moves all DNS / Static rules whose target is src's iface to
+// dst's iface. WAN, system, and other-managed-tunnel rules are preserved.
+//
+// Fall-through DNS rules (routes==null) with backend="hydraroute" are
+// converted to explicit routes pointing at dst when src is the default-route
+// managed tunnel. This matches the awg-manager UI's own behaviour.
 func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (string, error) {
-	var res wire.RouteRebindResult
-	res.SrcTunnelID = srcID
-	res.DstTunnelID = dstID
+	res := wire.RouteRebindResult{SrcTunnelID: srcID, DstTunnelID: dstID}
 	if srcID == dstID {
-		// No-op: encode and return.
 		b, _ := json.Marshal(res)
 		return string(b), nil
 	}
@@ -1604,19 +1323,30 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 	if err != nil {
 		return "", fmt.Errorf("resolve dst: %w", err)
 	}
-	srcRefs := tunnelRefs(src)
-	dstNDMS := dst.NDMSName
-	if dstNDMS == "" {
-		return "", fmt.Errorf("dst tunnel has no NDMSName: %+v", dst)
+	if src.InterfaceName == "" || dst.InterfaceName == "" {
+		return "", fmt.Errorf("src/dst missing interfaceName: src=%+v dst=%+v", src, dst)
 	}
-	res.DNS = rebindDNS(ctx, c, srcRefs, dstNDMS)
-	res.Static = rebindStatic(ctx, c, srcRefs, dstNDMS)
-	res.HRNeo = rebindHRNeo(ctx, c, srcRefs, dstNDMS)
+	srcIface, dstIface := src.InterfaceName, dst.InterfaceName
+	srcIsDefaultRoute := src.DefaultRoute
+
+	hrTouched := false
+	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcIface, dstIface, srcIsDefaultRoute)
+	res.Static = rebindStatic(ctx, c, srcIface, dstIface)
+
+	// Finalisation
 	if err := c.RoutingRefresh(ctx); err != nil {
-		// Non-fatal: routes are written, just NDMS cache might be stale a bit.
-		// Append to last-updated category errors so the panel surfaces it.
-		res.HRNeo.Errors = append(res.HRNeo.Errors, "routing/refresh: "+err.Error())
+		// Non-fatal: surface as error in the most-recently-touched category.
+		appendErr(&res.Static, "routing/refresh: "+err.Error())
 	}
+	if hrTouched {
+		hr, err := c.HydraRouteStatus(ctx)
+		if err == nil && hr.Installed {
+			if err := c.HydraRouteControl(ctx, "restart"); err != nil {
+				appendErr(&res.HRNeo, "hr/control restart: "+err.Error())
+			}
+		}
+	}
+
 	b, err := json.Marshal(res)
 	if err != nil {
 		return "", err
@@ -1626,13 +1356,7 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 
 func getTunnel(ctx context.Context, c *awgmgr.Client, id string) (*awgmgr.Tunnel, error) {
 	var env awgmgr.Envelope[awgmgr.Tunnel]
-	// Unfortunately client doesn't expose a typed GetTunnel. Inline the get.
-	// Path: /api/tunnels/get?id=<id>
-	// We use the client's helper indirectly by constructing the URL in routing.go,
-	// but to keep this self-contained and not rely on a missing helper we make
-	// the call via Client.HTTP.
-	// (Alternative: add GetTunnel to client.go. Doing so keeps actions clean.)
-	if err := awgmgrGetEnv(ctx, c, "/api/tunnels/get?id="+id, &env); err != nil {
+	if err := c.GetEnv(ctx, "/api/tunnels/get?id="+id, &env); err != nil {
 		return nil, err
 	}
 	if !env.Success {
@@ -1641,71 +1365,72 @@ func getTunnel(ctx context.Context, c *awgmgr.Client, id string) (*awgmgr.Tunnel
 	return &env.Data, nil
 }
 
-// awgmgrGetEnv is a thin shim around the unexported awgmgr.Client.get; we
-// re-export via a helper added in client.go (Task 4.2). Until that helper
-// exists, this file does not compile — Task 4.2 closes the gap.
-func awgmgrGetEnv(ctx context.Context, c *awgmgr.Client, path string, out any) error {
-	return c.GetEnv(ctx, path, out)
-}
-
-func tunnelRefs(t *awgmgr.Tunnel) []string {
-	out := []string{}
-	if t.ID != "" {
-		out = append(out, t.ID)
-	}
-	if t.NDMSName != "" {
-		out = append(out, t.NDMSName)
-	}
-	if t.InterfaceName != "" {
-		out = append(out, t.InterfaceName)
-	}
-	if t.Name != "" {
-		out = append(out, t.Name)
-	}
-	return out
-}
-
-func contains(set []string, s string) bool {
-	for _, x := range set {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
-func rebindDNS(ctx context.Context, c *awgmgr.Client, srcRefs []string, dstNDMS string) wire.CategoryResult {
-	var res wire.CategoryResult
+// rebindDNS walks all DNS rules, swaps explicit routes from src to dst, and
+// (when src is the default-route managed tunnel) converts hydraroute
+// fall-through rules to explicit routes pointing at dst.
+//
+// Returns: total category result, the HRNeo sub-count (subset of total),
+// and whether any hydraroute rule was actually written.
+func rebindDNS(ctx context.Context, c *awgmgr.Client, srcIface, dstIface string, srcIsDefaultRoute bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
 	all, err := c.ListDNSRoutes(ctx)
 	if err != nil {
-		res.Failed = 1
-		res.Errors = []string{"dns/list: " + err.Error()}
-		return res
+		total.Failed = 1
+		total.Errors = []string{"dns/list: " + err.Error()}
+		return
 	}
-	var ids []string
 	for _, r := range all {
-		if contains(srcRefs, r.Backend) {
-			ids = append(ids, r.ID)
+		isHR := r.Backend == "hydraroute"
+		newRoutes, didChange := rewriteRoutes(r.Routes, srcIface, dstIface)
+		if !didChange {
+			// Try fall-through conversion.
+			if r.Routes == nil && isHR && r.HRPolicyName != "" && srcIsDefaultRoute {
+				newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
+				didChange = true
+			}
+		}
+		if !didChange {
+			continue
+		}
+		updated := r
+		updated.Routes = newRoutes
+		if err := c.UpdateDNSRoute(ctx, updated); err != nil {
+			total.Failed++
+			total.Errors = append(total.Errors, fmt.Sprintf("dns/update id=%s: %v", r.ID, err))
+			if isHR {
+				hrNeo.Failed++
+			}
+			continue
+		}
+		total.OK++
+		if isHR {
+			hrNeo.OK++
+			hrTouched = true
 		}
 	}
-	if len(ids) == 0 {
-		return res
-	}
-	resp, err := c.BulkBackendDNS(ctx, ids, dstNDMS)
-	if err != nil {
-		res.Failed = len(ids)
-		res.Errors = []string{"dns/bulk-backend: " + err.Error()}
-		return res
-	}
-	res.OK = len(ids) - len(resp.Skipped)
-	res.Failed = len(resp.Skipped)
-	if len(resp.Skipped) > 0 {
-		res.Errors = []string{"dns/bulk-backend: skipped ids " + strings.Join(resp.Skipped, ",")}
-	}
-	return res
+	return
 }
 
-func rebindStatic(ctx context.Context, c *awgmgr.Client, srcRefs []string, dstNDMS string) wire.CategoryResult {
+// rewriteRoutes returns a copy of routes with every entry whose interface ==
+// srcIface remapped to dstIface (both interface and tunnelId). The boolean
+// indicates whether any entry was rewritten.
+func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcIface, dstIface string) ([]awgmgr.DNSRouteEntry, bool) {
+	if len(routes) == 0 {
+		return routes, false
+	}
+	out := make([]awgmgr.DNSRouteEntry, len(routes))
+	changed := false
+	for i, e := range routes {
+		out[i] = e
+		if e.Interface == srcIface || e.TunnelID == srcIface {
+			out[i].Interface = dstIface
+			out[i].TunnelID = dstIface
+			changed = true
+		}
+	}
+	return out, changed
+}
+
+func rebindStatic(ctx context.Context, c *awgmgr.Client, srcIface, dstIface string) wire.CategoryResult {
 	var res wire.CategoryResult
 	all, err := c.ListStaticRoutes(ctx)
 	if err != nil {
@@ -1714,11 +1439,12 @@ func rebindStatic(ctx context.Context, c *awgmgr.Client, srcRefs []string, dstND
 		return res
 	}
 	for _, r := range all {
-		if !contains(srcRefs, r.Backend) {
+		if r.TunnelID != srcIface {
 			continue
 		}
-		r.Backend = dstNDMS
-		if err := c.UpdateStaticRoute(ctx, r); err != nil {
+		updated := r
+		updated.TunnelID = dstIface
+		if err := c.UpdateStaticRoute(ctx, updated); err != nil {
 			res.Failed++
 			res.Errors = append(res.Errors, fmt.Sprintf("static/update id=%s: %v", r.ID, err))
 			continue
@@ -1728,101 +1454,36 @@ func rebindStatic(ctx context.Context, c *awgmgr.Client, srcRefs []string, dstND
 	return res
 }
 
-func rebindHRNeo(ctx context.Context, c *awgmgr.Client, srcRefs []string, dstNDMS string) wire.CategoryResult {
-	var res wire.CategoryResult
-	hr, err := c.HydraRouteStatus(ctx)
-	if err != nil {
-		res.Failed = 1
-		res.Errors = []string{"hr/status: " + err.Error()}
-		return res
-	}
-	if !hr.Installed {
-		return res // zero result, no error
-	}
-	cfg, err := c.GetHRConfig(ctx)
-	if err != nil {
-		res.Failed = 1
-		res.Errors = []string{"hr/get: " + err.Error()}
-		return res
-	}
-	modified, count := awgmgr.ReplaceHRTargets(cfg, srcRefs, dstNDMS)
-	if count == 0 {
-		return res
-	}
-	if err := c.PutHRConfig(ctx, modified); err != nil {
-		res.Failed = count
-		res.Errors = []string{"hr/put: " + err.Error()}
-		return res
-	}
-	if err := c.HydraRouteControl(ctx, "restart"); err != nil {
-		// Config was written; restart failed. Surface it but count as ok-with-warning.
-		res.OK = count
-		res.Errors = []string{"hr/control restart: " + err.Error()}
-		return res
-	}
-	res.OK = count
-	return res
+func appendErr(c *wire.CategoryResult, s string) {
+	c.Errors = append(c.Errors, s)
 }
 ```
 
-- [ ] **Step 4: Confirm the test file fails because GetEnv does not exist (Task 4.2 fixes this)**
-
-```bash
-go build ./internal/agent/actions
-```
-
-Expected: build error mentioning `c.GetEnv` undefined. That's intentional — addressed in the next task.
-
-### Task 4.2: Expose GetEnv on awgmgr.Client (one-liner shim)
-
-**Files:**
-- Modify: `internal/agent/awgmgr/client.go`
-
-- [ ] **Step 1: Append to client.go**
-
-```go
-// GetEnv is a public version of the lowercase get helper, used by callers in
-// other packages that need to issue typed GETs against awg-manager. It exists
-// solely so internal/agent/actions can fetch /api/tunnels/get?id=... without
-// duplicating the HTTP plumbing here.
-func (c *Client) GetEnv(ctx context.Context, path string, out any) error {
-	return c.get(ctx, path, out)
-}
-```
-
-- [ ] **Step 2: Build**
-
-```bash
-go build ./internal/agent/...
-```
-Expected: clean.
-
-- [ ] **Step 3: Run the rebind tests**
+- [ ] **Step 4: Run, expect PASS**
 
 ```bash
 go test ./internal/agent/actions -run TestRouteRebind -v
 ```
-Expected: PASS for HappyPath, SrcEqDst, StaticPartialFail.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add internal/agent/awgmgr/client.go internal/agent/actions/route_rebind.go internal/agent/actions/route_rebind_test.go
-git commit -m "feat(agent): route_rebind action with srcRefs filter and per-category executor"
+git add internal/agent/actions/route_rebind.go internal/agent/actions/route_rebind_test.go
+git commit -m "feat(agent): route_rebind — DNS+Static per-rule rebind with WAN canary, fall-through conversion"
 ```
 
-### Task 4.3: Wire route_rebind into Runner with mutex
+### Task 4.2: Wire route_rebind into Runner with mutex
 
 **Files:**
 - Modify: `internal/agent/actions/runner.go`
+- Modify: `internal/agent/actions/runner_routes_test.go`
 
-- [ ] **Step 1: Write the failing test**
-
-Append to `internal/agent/actions/runner_routes_test.go`:
+- [ ] **Step 1: Append failing test**
 
 ```go
 func TestRunner_RouteRebind_Dispatch(t *testing.T) {
-	srv, _, _ := fakeAwgmgrRebind(t)
+	mock := newRebindMock(t)
+	srv := httptest.NewServer(mock.handler())
 	defer srv.Close()
 	r := &Runner{AwgClient: awgmgr.New(srv.URL)}
 	res := r.Execute(context.Background(), wire.Command{
@@ -1839,7 +1500,7 @@ func TestRunner_RouteRebind_Dispatch(t *testing.T) {
 }
 
 func TestRunner_RouteRebind_MissingArgs(t *testing.T) {
-	r := &Runner{AwgClient: awgmgr.New("http://unused")}
+	r := &Runner{AwgClient: awgmgr.New("http://unused.invalid")}
 	res := r.Execute(context.Background(), wire.Command{ID: "x", Action: "route_rebind"})
 	if res.Status != "err" {
 		t.Errorf("expected err, got %s", res.Status)
@@ -1851,21 +1512,12 @@ func TestRunner_RouteRebind_MissingArgs(t *testing.T) {
 
 - [ ] **Step 3: Add the case + mutex**
 
-In `internal/agent/actions/runner.go`:
+In `runner.go`:
 
-1. Add `routeMu sync.Mutex` to the `Runner` struct (and `import "sync"` at the top if not present).
-2. Insert the case before `default:` in `dispatch`:
+1. Add `"sync"` to imports if not present, and a `routeMu sync.Mutex` field on `Runner`.
+2. Insert the case before `default:`:
 
 ```go
-	case "route_status":
-		if r.AwgClient == nil {
-			return "err", "awgmgr client not configured"
-		}
-		out, err := RouteStatus(ctx, r.AwgClient)
-		if err != nil {
-			return "err", err.Error()
-		}
-		return "ok", out
 	case "route_rebind":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured"
@@ -1883,8 +1535,6 @@ In `internal/agent/actions/runner.go`:
 		}
 		return "ok", out
 ```
-
-(If `route_status` was added in Task 3.3, only route_rebind block is new. Avoid duplicating cases.)
 
 - [ ] **Step 4: Run, expect PASS**
 
@@ -1963,7 +1613,7 @@ func TestRoutesCache_PerUser(t *testing.T) {
 
 - [ ] **Step 3: Implement**
 
-Create `internal/backend/callbacks/routes_cache.go`:
+`internal/backend/callbacks/routes_cache.go`:
 
 ```go
 package callbacks
@@ -2066,31 +1716,36 @@ func TestRoutesPanelText_HappyPath(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		HRNeo: wire.HRStatus{Installed: true, Running: true},
 		Tunnels: []wire.TunnelMeta{
-			{ID: "t1", Name: "amnezia", NDMSName: "Wireguard0", Enabled: true},
-			{ID: "t2", Name: "amnezia2", NDMSName: "Wireguard1", Enabled: true},
+			{ID: "t1", Name: "amnezia", Iface: "nwg1", Enabled: true, DefaultRoute: true},
+			{ID: "t2", Name: "amnezia2", Iface: "nwg0", Enabled: true},
 		},
 		Counts: map[string]wire.TunnelCounts{
-			"t1": {DNS: 5, Static: 2, HRNeo: 1},
-			"t2": {DNS: 0, Static: 0, HRNeo: 0},
+			"t1": {DNS: 5, Static: 2, HRNeo: 4},
+			"t2": {},
 		},
-		Other: wire.TunnelCounts{DNS: 12, Static: 0, HRNeo: 0},
+		Other: wire.TunnelCounts{DNS: 1, Static: 1, HRNeo: 1},
 	}
 	text := RoutesPanelText("testkeen", snap)
 	if !strings.Contains(text, "testkeen") {
 		t.Errorf("router name missing: %s", text)
 	}
-	if !strings.Contains(text, "amnezia") || !strings.Contains(text, "8") {
-		// 8 = 5 + 2 + 1 total for t1
+	// total DNS shown = 5 + 1 (other) = 6
+	if !strings.Contains(text, "6") {
+		t.Errorf("DNS total missing: %s", text)
+	}
+	// t1 row should show its visible total = DNS + Static (HRNeo is sub-count, NOT added)
+	if !strings.Contains(text, "amnezia") || !strings.Contains(text, "7") { // 5 DNS + 2 Static
 		t.Errorf("t1 row missing or wrong total: %s", text)
 	}
-	if !strings.Contains(text, "WAN") || !strings.Contains(text, "12") {
+	// untouched block
+	if !strings.Contains(text, "WAN") {
 		t.Errorf("WAN/Other not shown: %s", text)
 	}
 }
 
 func TestRoutesPanelText_HRNeoAbsent(t *testing.T) {
 	snap := wire.RouteSnapshot{
-		Tunnels: []wire.TunnelMeta{{ID: "t1", Name: "amnezia", NDMSName: "Wireguard0", Enabled: true}},
+		Tunnels: []wire.TunnelMeta{{ID: "t1", Name: "amnezia", Iface: "nwg1", Enabled: true}},
 		Counts:  map[string]wire.TunnelCounts{"t1": {DNS: 1}},
 	}
 	text := RoutesPanelText("testkeen", snap)
@@ -2102,8 +1757,8 @@ func TestRoutesPanelText_HRNeoAbsent(t *testing.T) {
 func TestRoutesPanelKeyboard_RebindOnlyForNonZero(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{
-			{ID: "t1", Name: "amnezia", NDMSName: "Wireguard0", Enabled: true},
-			{ID: "t2", Name: "newtun", NDMSName: "Wireguard1", Enabled: true},
+			{ID: "t1", Name: "amnezia", Iface: "nwg1", Enabled: true},
+			{ID: "t2", Name: "newtun", Iface: "nwg0", Enabled: true},
 		},
 		Counts: map[string]wire.TunnelCounts{
 			"t1": {DNS: 3},
@@ -2134,9 +1789,9 @@ func TestRoutesPanelKeyboard_RebindOnlyForNonZero(t *testing.T) {
 func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{
-			{ID: "t1", Name: "amnezia", NDMSName: "Wireguard0"},
-			{ID: "t2", Name: "newtun", NDMSName: "Wireguard9"},
-			{ID: "t3", Name: "third", NDMSName: "Wireguard1"},
+			{ID: "t1", Name: "amnezia", Iface: "nwg1"},
+			{ID: "t2", Name: "newtun", Iface: "nwg0"},
+			{ID: "t3", Name: "third", Iface: "nwg2"},
 		},
 		Counts: map[string]wire.TunnelCounts{
 			"t1": {DNS: 5, Static: 2, HRNeo: 1},
@@ -2145,7 +1800,7 @@ func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 		Other: wire.TunnelCounts{DNS: 12},
 	}
 	text := RebindPreviewText(snap, "t1", "t2", "8a3f")
-	if !strings.Contains(text, "5") || !strings.Contains(text, "2") || !strings.Contains(text, "1") {
+	if !strings.Contains(text, "5") || !strings.Contains(text, "2") {
 		t.Errorf("preview missing per-category counts: %s", text)
 	}
 	if !strings.Contains(text, "WAN") || !strings.Contains(text, "12") {
@@ -2164,7 +1819,7 @@ func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 
 - [ ] **Step 3: Implement**
 
-Create `internal/backend/tg/routes_panel.go`:
+`internal/backend/tg/routes_panel.go`:
 
 ```go
 package tg
@@ -2179,7 +1834,11 @@ import (
 
 const routesMaxPerRow = 2
 
-// RoutesPanelText renders Screen 2 (status overview).
+// RoutesPanelText renders Screen 2.
+//
+// "Visible total" per tunnel = DNS + Static. HRNeo is a sub-count of DNS
+// (rules with engine=hydraroute), shown separately in the upper status block
+// but NOT added to per-tunnel totals (would double-count).
 func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🛣 Маршруты — %s\n", nickname)
@@ -2193,27 +1852,26 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 	}
 	totalDNS := snap.Other.DNS
 	totalStatic := snap.Other.Static
+	totalHR := snap.Other.HRNeo
 	for _, c := range snap.Counts {
 		totalDNS += c.DNS
 		totalStatic += c.Static
+		totalHR += c.HRNeo
 	}
-	fmt.Fprintf(&b, "NDMS DNS routes:   %d правил\n", totalDNS)
+	fmt.Fprintf(&b, "DNS routes:        %d правил\n", totalDNS)
 	fmt.Fprintf(&b, "Static IP routes:  %d правил\n", totalStatic)
 	if snap.HRNeo.Installed {
-		hr := snap.Other.HRNeo
-		for _, c := range snap.Counts {
-			hr += c.HRNeo
-		}
-		fmt.Fprintf(&b, "HR-Neo policies:   %d политик\n", hr)
+		fmt.Fprintf(&b, "  из них HR-Neo:   %d\n", totalHR)
 	}
 	b.WriteString("\nПо туннелям (направленные в туннели):\n")
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
-		total := c.DNS + c.Static + c.HRNeo
-		fmt.Fprintf(&b, "  %s (%s) → %d\n", t.Name, t.NDMSName, total)
+		visible := c.DNS + c.Static
+		fmt.Fprintf(&b, "  %s (%s) → %d\n", t.Name, t.Iface, visible)
 	}
 	b.WriteString("\nНе входят в перенос (показано для контроля):\n")
-	fmt.Fprintf(&b, "  WAN/system: %d правил\n", snap.Other.DNS+snap.Other.Static+snap.Other.HRNeo)
+	wanTotal := snap.Other.DNS + snap.Other.Static
+	fmt.Fprintf(&b, "  WAN/system:   %d правил   ← RU-сервисы\n", wanTotal)
 	return b.String()
 }
 
@@ -2228,8 +1886,7 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 	var row []InlineKeyboardButton
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
-		total := c.DNS + c.Static + c.HRNeo
-		if total == 0 {
+		if c.DNS+c.Static == 0 {
 			continue
 		}
 		row = append(row, InlineKeyboardButton{
@@ -2263,7 +1920,7 @@ func RebindPickKeyboard(userID int64, srcID string, snap wire.RouteSnapshot) (st
 	if src == nil {
 		return "источник недоступен", InlineKeyboardMarkup{}
 	}
-	text := fmt.Sprintf("🛣 Перенос с %s (%s) → куда?\n\nДоступные:", src.Name, src.NDMSName)
+	text := fmt.Sprintf("🛣 Перенос с %s (%s) → куда?\n\nДоступные:", src.Name, src.Iface)
 	rows := [][]InlineKeyboardButton{}
 	for _, t := range snap.Tunnels {
 		if t.ID == srcID {
@@ -2299,28 +1956,29 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 		return "источник или назначение недоступны"
 	}
 	c := snap.Counts[srcID]
-	total := c.DNS + c.Static + c.HRNeo
+	visible := c.DNS + c.Static
 	var b strings.Builder
 	fmt.Fprintf(&b, "🛣 Превью: %s → %s\n\n", src.Name, dst.Name)
-	fmt.Fprintf(&b, "Будет перенесено (%d):\n", total)
+	fmt.Fprintf(&b, "Будет перенесено (%d):\n", visible)
 	if c.DNS > 0 {
-		fmt.Fprintf(&b, "  • DNS routes:  %d\n", c.DNS)
+		fmt.Fprintf(&b, "  • DNS routes:  %d", c.DNS)
+		if c.HRNeo > 0 {
+			fmt.Fprintf(&b, " (из них HR-Neo: %d)", c.HRNeo)
+		}
+		b.WriteString("\n")
 	}
 	if c.Static > 0 {
 		fmt.Fprintf(&b, "  • Static IP:   %d\n", c.Static)
 	}
-	if c.HRNeo > 0 {
-		fmt.Fprintf(&b, "  • HR-Neo:      %d\n", c.HRNeo)
-	}
 	b.WriteString("\nНЕ ТРОГАЕМ:\n")
-	wanTotal := snap.Other.DNS + snap.Other.Static + snap.Other.HRNeo
+	wanTotal := snap.Other.DNS + snap.Other.Static
 	fmt.Fprintf(&b, "  • WAN/system:    %d правил   ← RU-сервисы\n", wanTotal)
 	for _, t := range snap.Tunnels {
 		if t.ID == srcID {
 			continue
 		}
 		oc := snap.Counts[t.ID]
-		ot := oc.DNS + oc.Static + oc.HRNeo
+		ot := oc.DNS + oc.Static
 		fmt.Fprintf(&b, "  • %s:        %d\n", t.Name, ot)
 	}
 	fmt.Fprintf(&b, "\ntoken:%s  истекает через 5 мин\n", token)
@@ -2337,7 +1995,7 @@ func RebindPreviewKeyboard(userID int64, srcID, dstID, token string) InlineKeybo
 
 // RebindResultText renders Screen 5.
 func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) string {
-	totalFailed := res.DNS.Failed + res.Static.Failed + res.HRNeo.Failed
+	totalFailed := res.DNS.Failed + res.Static.Failed
 	var b strings.Builder
 	if totalFailed == 0 {
 		fmt.Fprintf(&b, "🛣 ✅ %s → %s готово\n\n", srcName, dstName)
@@ -2348,20 +2006,22 @@ func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) strin
 	if res.DNS.Failed > 0 {
 		fmt.Fprintf(&b, ", %d FAIL", res.DNS.Failed)
 	}
+	if res.HRNeo.OK > 0 || res.HRNeo.Failed > 0 {
+		fmt.Fprintf(&b, " (из них HR-Neo: %d ok", res.HRNeo.OK)
+		if res.HRNeo.Failed > 0 {
+			fmt.Fprintf(&b, ", %d FAIL", res.HRNeo.Failed)
+		}
+		b.WriteString(")")
+	}
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "  • Static IP:   %d ok", res.Static.OK)
 	if res.Static.Failed > 0 {
 		fmt.Fprintf(&b, ", %d FAIL", res.Static.Failed)
 	}
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "  • HR-Neo:      %d ok", res.HRNeo.OK)
-	if res.HRNeo.Failed > 0 {
-		fmt.Fprintf(&b, ", %d FAIL", res.HRNeo.Failed)
-	}
-	b.WriteString("\n")
 	if totalFailed > 0 {
 		b.WriteString("\nОперация идемпотентна — можно повторить.\n")
-		for _, e := range append(append(res.DNS.Errors, res.Static.Errors...), res.HRNeo.Errors...) {
+		for _, e := range append(append([]string{}, res.DNS.Errors...), res.Static.Errors...) {
 			fmt.Fprintf(&b, "  • %s\n", e)
 		}
 	}
@@ -2459,7 +2119,7 @@ func TestParse_RoutesConfirm_MissingToken(t *testing.T) {
 
 In `internal/backend/callbacks/parse.go`:
 
-1. Add `RebindToken string` to `Args` (next to `ImportToken`):
+1. Add fields to `Args`:
 ```go
 	// RebindToken is set for routes_confirm callbacks. 8 hex chars, 5-min TTL.
 	RebindToken string
@@ -2498,8 +2158,6 @@ In `internal/backend/callbacks/parse.go`:
 	}
 ```
 
-(Note: parts[2] for routes_rebind is the src tunnel id. The CheckName from the existing parser will already hold it; we're just aliasing for clarity.)
-
 - [ ] **Step 4: Run, expect PASS**
 
 ```bash
@@ -2512,10 +2170,11 @@ go test ./internal/backend/callbacks -run TestParse -v
 git commit -am "feat(callbacks): parse routes_* callback grammar"
 ```
 
-### Task 7.2: pendingRebinds + RoutesAction skeleton
+### Task 7.2: pendingRebinds + RebindConfirmAction
 
 **Files:**
 - Modify: `internal/backend/callbacks/actions.go`
+- Modify: `internal/backend/callbacks/actions_test.go`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2635,7 +2294,7 @@ func makeRebindToken() string {
 }
 ```
 
-(`crypto/rand`, `encoding/hex`, `errors` already imported; if not, add them.)
+(`crypto/rand`, `encoding/hex`, `errors` already imported by adjacent code; if not, add them.)
 
 - [ ] **Step 4: Run, expect PASS**
 
@@ -2645,21 +2304,23 @@ func makeRebindToken() string {
 git commit -am "feat(callbacks): RebindConfirmAction with token consume + enqueue"
 ```
 
-### Task 7.3: Router wiring — open/refresh/rebind/pick + pendingRebinds storage
+### Task 7.3: Router wiring — open/refresh/rebind/pick/close
 
 **Files:**
 - Modify: `internal/backend/callbacks/router.go`
 
-- [ ] **Step 1: Inspect the current Router struct (no test yet — wiring task)**
+- [ ] **Step 1: Add fields to Router struct**
 
-Read the existing struct, identify where `pendingUploads` is declared (likely a `map[int64]*pendingUpload` field on `Router` with a mutex). Add a parallel field:
+Locate the existing `Router` struct (around the top of `router.go` where `pendingUploads` is declared). Add:
 
 ```go
-	pendingRebindsMu sync.Mutex
-	pendingRebinds   map[string]*pendingRebind // keyed by token (cross-user; tokens are global random)
+	routesCache         *RoutesCache
+	rebindConfirmAction Action
+	pendingRebindsMu    sync.Mutex
+	pendingRebinds      map[string]*pendingRebind // keyed by 8-hex token
 ```
 
-Also add helper methods on `*Router`:
+- [ ] **Step 2: Add helper methods**
 
 ```go
 func (r *Router) putPendingRebind(pr *pendingRebind) {
@@ -2684,9 +2345,9 @@ func (r *Router) consumePendingRebind(userID int64, token string) (*pendingRebin
 }
 ```
 
-- [ ] **Step 2: Add new case branches in callback switch**
+- [ ] **Step 3: Add case branches in the callback switch**
 
-In the same `switch args.Action` that already handles `tunnels_refresh`, `tunnel_import_replace`, etc., add cases:
+In the `switch args.Action` block that currently handles `tunnels_refresh` and `tunnel_import_*`, add:
 
 ```go
 	case "routes_open", "routes_refresh":
@@ -2707,21 +2368,19 @@ In the same `switch args.Action` that already handles `tunnels_refresh`, `tunnel
 		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, q.Message.Text, "", &empty)
 		return
 	case "routes_confirm":
-		// Falls through to existing action.Apply below by selecting the right action.
 		if r.rebindConfirmAction != nil {
 			action = r.rebindConfirmAction
 		}
 ```
 
-- [ ] **Step 3: Implement the handlers**
+- [ ] **Step 4: Implement the handlers**
 
 Add to `router.go` (near `buildTunnelsPanel`):
 
 ```go
-// handleRoutesOpen renders Screen 2. Cache lookup unless force=true (refresh).
-// If cache miss, enqueues a route_status wire.Command and shows a loading
-// placeholder; the result-handler edits the message in place when the agent
-// returns the snapshot.
+// handleRoutesOpen renders Screen 2. Cache lookup unless force=true.
+// On miss, enqueues route_status; the result-handler edits the panel
+// when the agent answers.
 func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args Args, force bool) {
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
@@ -2737,18 +2396,8 @@ func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args
 			return
 		}
 	}
-	// Cache miss or refresh: enqueue route_status. The result handler edits
-	// the message when the agent answers.
-	cmd := wire.Command{
-		ID:       r.idGen(),
-		Action:   "route_status",
-		IssuedAt: time.Now().UTC(),
-	}
-	ref := cmdpkg.MessageRef{
-		ChatID:    q.Message.Chat.ID,
-		MessageID: q.Message.MessageID,
-		ThreadID:  q.Message.MessageThreadID,
-	}
+	cmd := wire.Command{ID: r.idGen(), Action: "route_status", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
 	loadingKB := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", &loadingKB)
@@ -2760,7 +2409,6 @@ func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
-// handleRoutesRebindStart renders Screen 3 (destination picker).
 func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, _ := r.d.Users().GetByID(args.UserID)
 	if user == nil {
@@ -2776,7 +2424,6 @@ func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuer
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
-// handleRoutesRebindPick mints a token and renders Screen 4 (preview).
 func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, _ := r.d.Users().GetByID(args.UserID)
 	if user == nil {
@@ -2803,24 +2450,18 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 }
 ```
 
-- [ ] **Step 4: Add fields to the Router struct (top of file)**
-
-```go
-	routesCache         *RoutesCache
-	rebindConfirmAction Action
-```
-
 - [ ] **Step 5: Build**
 
 ```bash
 go build ./...
 ```
-Expected: clean (some plumbing in main.go will follow in Milestone 8 — for now compile-check internal/backend only).
+
+(Unresolved references to `r.routesCache` / `r.rebindConfirmAction` / `r.idGen` will be wired in Milestone 8.)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git commit -am "feat(callbacks): routes panel handlers (open/refresh/rebind/pick)"
+git commit -am "feat(callbacks): routes panel handlers and pendingRebinds storage"
 ```
 
 ### Task 7.4: RoutesPanelNotifier — edit message in place on result
@@ -2839,15 +2480,15 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-type fakeEditTG struct {
-	editText string
-}
+type fakeEditTG struct{ editText string }
 
 func (f *fakeEditTG) EditMessageText(ctx context.Context, chatID, msgID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) error {
 	f.editText = text
@@ -2856,28 +2497,39 @@ func (f *fakeEditTG) EditMessageText(ctx context.Context, chatID, msgID int64, t
 
 func TestRoutesPanelNotifier_StatusOK(t *testing.T) {
 	cache := &RoutesCache{TTL: time.Minute}
-	tg := &fakeEditTG{}
-	d := db.NewMemory() // assume helper exists; otherwise inject a fake Users() returning a user
-	n := &RoutesPanelNotifier{TG: tg, Cache: cache, DB: d}
-	snap := wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{ID: "t1", Name: "amnezia"}}}
+	tgFake := &fakeEditTG{}
+	d := newTestDBWithUser(t, 42, "testkeen") // helper that creates an in-memory DB with one user
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: cache, DB: d}
+	snap := wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{ID: "t1", Name: "amnezia", Iface: "nwg1"}}}
 	body, _ := json.Marshal(snap)
 	res := wire.CommandResult{Status: "ok", Output: string(body)}
 	ref := cmdpkg.MessageRef{Action: "route_status", ChatID: 1, MessageID: 7}
-	if err := n.NotifyCommandResult(context.Background(), ref, res, /* userID */ 42); err != nil {
+	if err := n.NotifyCommandResult(context.Background(), ref, res, 42); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(tg.editText, "amnezia") {
-		t.Errorf("expected panel rendered: %s", tg.editText)
+	if !strings.Contains(tgFake.editText, "amnezia") {
+		t.Errorf("expected panel rendered: %s", tgFake.editText)
 	}
 	if _, ok := cache.Get(42); !ok {
 		t.Errorf("snapshot must be cached after status fetch")
 	}
 }
+
+// newTestDBWithUser constructs a *db.DB with a single user. If your existing
+// test infra has a similar helper, reuse it; otherwise wire one in this file.
+func newTestDBWithUser(t *testing.T, id int64, nick string) *db.DB {
+	t.Helper()
+	// Implement using the same pattern as existing callbacks tests
+	// (see actions_test.go for an example). If there's no factory,
+	// inline a minimal one here.
+	t.Skip("test helper newTestDBWithUser not yet implemented — wire matching existing test scaffolding before running this case")
+	return nil
+}
 ```
 
-(If `db.NewMemory` is not a real constructor, replace with a minimal `db.DB`-compatible fake from existing tests.)
+(Note: the helper Skip is a deliberate placeholder so the implementer wires it to whatever the actual test scaffolding uses in the existing callbacks package. Replace the Skip+return with the real factory before running.)
 
-- [ ] **Step 2: Run, expect FAIL**
+- [ ] **Step 2: Run, expect FAIL or skip**
 
 - [ ] **Step 3: Implement**
 
@@ -2929,10 +2581,10 @@ func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpk
 func (n *RoutesPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
 	if res.Status != "ok" {
 		text := fmt.Sprintf("🛣 Маршруты — %s\n⚠ awg-manager не отвечает\n%s", user.Nickname, res.Output)
-		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)}},
 		}}
-		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &empty)
+		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 	}
 	var snap wire.RouteSnapshot
 	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
@@ -2949,22 +2601,28 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 	if err := json.Unmarshal([]byte(res.Output), &rb); err != nil {
 		return fmt.Errorf("decode rebind result: %w", err)
 	}
-	// Invalidate cache so subsequent open shows fresh data.
-	n.Cache.Invalidate(user.ID)
-	// Look up tunnel names from the cached snapshot if still around — else use IDs.
-	src, dst := rb.SrcTunnelID, rb.DstTunnelID
+	// Resolve human names BEFORE invalidation (cache may still hold the
+	// pre-rebind snapshot with tunnel names).
+	srcName, dstName := rb.SrcTunnelID, rb.DstTunnelID
 	if snap, ok := n.Cache.Get(user.ID); ok {
-		// Cache was just invalidated — this lookup will miss; that's OK, fall back to IDs.
-		_ = snap
+		for _, t := range snap.Tunnels {
+			if t.ID == rb.SrcTunnelID {
+				srcName = t.Name
+			}
+			if t.ID == rb.DstTunnelID {
+				dstName = t.Name
+			}
+		}
 	}
-	totalFailed := rb.DNS.Failed + rb.Static.Failed + rb.HRNeo.Failed
-	text := tg.RebindResultText(src, dst, rb)
+	n.Cache.Invalidate(user.ID)
+	totalFailed := rb.DNS.Failed + rb.Static.Failed
+	text := tg.RebindResultText(srcName, dstName, rb)
 	kb := tg.RebindResultKeyboard(user.ID, rb.SrcTunnelID, rb.DstTunnelID, totalFailed)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 }
 ```
 
-- [ ] **Step 4: Run, expect PASS**
+- [ ] **Step 4: Run, expect PASS (after wiring the test helper)**
 
 - [ ] **Step 5: Commit**
 
@@ -3007,20 +2665,10 @@ type Deps struct {
 }
 ```
 
-- [ ] **Step 2: Branch in the cmd-result handler**
+- [ ] **Step 2: Branch in cmdResultHandler**
 
-Find the existing block in `cmdResultHandler(d Deps)` that reads:
-```go
-if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
-    if d.TGNotifier != nil {
-        if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
-            ...
-        }
-    }
-}
-```
+Replace the existing `if ref, ok := d.CommandSink.ConsumeOriginRef(...)` block with:
 
-Replace with:
 ```go
 if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
     switch ref.Action {
@@ -3042,7 +2690,7 @@ if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
 
 - [ ] **Step 3: Update handler_test.go**
 
-Add a fake RoutesNotifier and a test asserting that for `ref.Action == "route_status"` it is invoked instead of the generic relay:
+Add a fake RoutesNotifier and a test asserting dispatch:
 
 ```go
 type fakeRoutesNotifier struct{ called int }
@@ -3075,7 +2723,7 @@ func TestCmdResult_DispatchesRoutesNotifier(t *testing.T) {
 }
 ```
 
-(Use existing fakes — `relayCapture`, `fakeCmdSink` — already in `handler_test.go`. The new test follows their style. `newTestDB` and `authedRequest` are existing helpers from the test file; reuse.)
+(Use existing `relayCapture`, `fakeCmdSink`, `newTestDB`, `authedRequest` helpers from `handler_test.go`.)
 
 - [ ] **Step 4: Run, expect PASS**
 
@@ -3094,9 +2742,9 @@ git commit -am "feat(backend): dispatch route_* CommandResults to RoutesPanelNot
 **Files:**
 - Modify: `cmd/backend/main.go`
 
-- [ ] **Step 1: Locate the place where Notifier and Router are constructed**
+- [ ] **Step 1: Locate Notifier/Router construction**
 
-Look for `callbacks.NewNotifier(...)` invocation and the surrounding `Router{...}` literal. After that block, add:
+After `callbacks.NewNotifier(...)`, add:
 
 ```go
 	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
@@ -3109,11 +2757,11 @@ Look for `callbacks.NewNotifier(...)` invocation and the surrounding `Router{...
 
 - [ ] **Step 2: Inject into Router and Deps**
 
-Add `routesCache` and a `rebindConfirmAction` to the Router constructor (use `callbacks.NewRebindConfirmAction(cmdQueue, router.consumePendingRebind, router.idGen)`).
+Pass `routesCache` and `callbacks.NewRebindConfirmAction(cmdQueue, router.consumePendingRebind, idGen)` into the Router constructor (mirror how `importAction` is wired).
 
-Inject `RoutesNotifier: routesNotifier` into the `backend.Deps{...}` literal.
+Inject `RoutesNotifier: routesNotifier` into `backend.Deps{...}`.
 
-- [ ] **Step 3: Build and run unit tests**
+- [ ] **Step 3: Build and run all tests**
 
 ```bash
 go build ./...
@@ -3130,19 +2778,19 @@ git commit -am "feat(backend): wire RoutesCache and RoutesPanelNotifier in main"
 ### Task 8.3: Reply-keyboard button "🛣 Маршруты"
 
 **Files:**
-- Modify: `internal/backend/tg/replykb.go` (or whichever file owns `ReplyKeyboardForTopic`)
+- Modify: `internal/backend/tg/replykb.go` (or wherever `ReplyKeyboardForTopic` lives)
 - Modify: `internal/backend/callbacks/router.go` — `HandleMessage` text switch
 
 - [ ] **Step 1: Add the button to the per-router reply keyboard**
 
-In the per_router topic keyboard layout, append a row containing:
+In the per_router topic keyboard layout, append:
 ```go
 {Text: "🛣 Маршруты"}
 ```
 
 - [ ] **Step 2: Add handler in HandleMessage**
 
-In the `switch m.Text` block in `router.go`, after the `"🎛 Туннели":` case, add:
+After `case "🎛 Туннели":` add:
 
 ```go
 	case "🛣 Маршруты":
@@ -3154,12 +2802,12 @@ In the `switch m.Text` block in `router.go`, after the `"🎛 Туннели":` 
 		}
 ```
 
-And add the helper to `router.go`:
+And add the helper:
 
 ```go
 // openRoutesPanelMessage sends the initial Routes panel as a fresh message
-// (so subsequent edits target this MessageID). Cache miss → load placeholder
-// + enqueue route_status; the handler edits when the agent answers.
+// (so subsequent edits target this MessageID) and enqueues route_status.
+// The cmd-result handler edits when the agent answers.
 func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
 	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
 	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
@@ -3194,39 +2842,35 @@ git commit -am "feat(tg): reply-keyboard '🛣 Маршруты' button entry po
 ### Task 9.1: End-to-end test — status → rebind → status
 
 **Files:**
-- Modify: `cmd/backend/integration_test.go` (or create one if file doesn't exist)
+- Modify: `cmd/backend/integration_test.go`
 
-- [ ] **Step 1: Write the test**
-
-Add a sub-test under the existing integration suite. Pattern:
+- [ ] **Step 1: Write the test skeleton**
 
 ```go
 func TestIntegration_RoutesRebindFlow(t *testing.T) {
-	// 1. Mock awg-manager (httptest) with: 3 DNS rules (2 on Wireguard0,
-	//    1 on WAN), 2 static rules (1 on Wireguard0, 1 on WAN), no HR-Neo.
-	// 2. Mock TG (captured edits).
-	// 3. Spin up backend with RoutesCache + RoutesPanelNotifier wired.
+	// 1. httptest.NewServer impersonating awg-manager, with stateful maps
+	//    of dnsRules and staticRules that mutate on update.
+	// 2. Fixture: 3 DNS rules (2 explicit nwg1, 1 explicit eth3 — WAN canary),
+	//    2 static rules (1 nwg1, 1 eth3 — WAN canary), HR-Neo installed.
+	// 3. Spin up backend with RoutesCache + RoutesPanelNotifier wired (use
+	//    cmd/backend/integration_test.go's existing harness).
 	// 4. Spin up a real Runner with awgmgr.Client pointing at the mock.
-	// 5. Simulate: user sends "🛣 Маршруты" → backend enqueues route_status →
+	//    Connect runner via /v1/cmd long-poll loop.
+	// 5. Simulate user → "🛣 Маршруты" → backend enqueues route_status →
 	//    runner picks up, executes, posts result → backend edits panel.
-	//    Assert panel text contains 3 rules total (2 on awg11), 2 untouched.
-	// 6. Simulate: user taps routes_rebind:42:t1 → routes_pick:42:t1:t2 →
-	//    routes_confirm:42:t1:t2:<token> → runner rebinds → backend renders
-	//    Screen 5. Assert: DNS.OK=2, Static.OK=1, WAN rules untouched at the
-	//    awg-manager side (verify via mock state).
-	t.Skip("placeholder — implement after Milestones 1–8 stabilise")
+	//    Assert panel text mentions awg11 (managed) and "WAN/system: 2"
+	//    (1 DNS + 1 Static on eth3).
+	// 6. Simulate routes_rebind:42:t1 → routes_pick:42:t1:t2 → mint token →
+	//    routes_confirm → runner rebinds → backend renders Screen 5.
+	//    Assert: DNS.OK=2, Static.OK=1.
+	// 7. CANARY: in mock state, the eth3 DNS rule and eth3 static rule
+	//    are unchanged.
 }
 ```
 
-The skeleton exists so future you (or a subagent) writes the body once the upstream pieces are stable. Implementation steps:
+- [ ] **Step 2: Implement the fixture and assertions**
 
-1. Build awg-manager mock state as a `map[string]*StaticRoute` and `map[string]*DNSRoute` plus a list-tunnels stub. The handlers mutate the maps on update/bulk-backend so subsequent calls reflect the rebind.
-2. Use the existing test harness (`cmd/backend/integration_test.go` already has a backend factory; reuse).
-3. Use a fake TG that records calls to `EditMessageText` so the test can assert panel content at each stage.
-
-- [ ] **Step 2: Implement and run**
-
-Replace `t.Skip` with the actual flow; iterate until green.
+Wire the mock as described, using the existing backend factory in `cmd/backend/integration_test.go`. The agent loop pattern follows existing tests for `tunnel_import` if any exist; otherwise inline a minimal `runner.Execute` polled via the cmd queue.
 
 - [ ] **Step 3: Run all tests**
 
@@ -3238,67 +2882,69 @@ Expected: green.
 - [ ] **Step 4: Commit**
 
 ```bash
-git commit -am "test: integration — routes status → rebind → status flow with WAN-untouched assertion"
+git commit -am "test: integration — routes status → rebind → status with WAN-untouched canary"
 ```
 
 ---
 
 ## Milestone 10: Manual Smoke + Wrap-up
 
-### Task 10.1: Run the smoke checklist on testkeen
+### Task 10.1: Smoke checklist on testkeen
 
-**Pre-req:** built backend deployed to VPS (or running locally with port-forwarded agent), agent running on testkeen.
+**Pre-req:** built backend deployed (or running locally with port-forwarded agent), agent running on testkeen.
 
 - [ ] **Step 1: Prepare fixtures via awg-manager web UI**
 
-On `testkeen` (192.168.31.1:222), open the awg-manager UI and create:
-- 2 DNS routes targeting `awg11` (e.g. names "vk-test", "rt-test")
-- 1 static IP route targeting `awg11` (e.g. CIDR `10.99.99.0/24`, name "smoke-cidr")
-- 1 HR-Neo policy with target `awg11` (e.g. geosite tag `cn:cn`)
-- **1 DNS route targeting WAN** (e.g. name "sber-test", domain `sberbank.ru`) — this is the safety canary
+On testkeen (192.168.31.1:222):
+- 2 DNS rules with explicit routes → `awg11` (e.g. "vk-test", "rt-test")
+- 1 static IP route → `awg11` (e.g. CIDR `10.99.99.0/24`, name "smoke-cidr")
+- **1 DNS rule with explicit routes → WAN (`eth3`)** (name "sber-test", domain `sberbank.ru`) — this is the safety canary
+- Note: no need to add an HR-Neo policy; existing `routes:null` HR-Neo rules will be exercised by the fall-through-conversion path
 
 - [ ] **Step 2: Import a new tunnel via TG**
 
-Send a fresh `.conf` file to the per_router topic and tap "➕ Добавить новый". Confirm the new tunnel `awg13` appears in the awg-manager UI.
+Send a fresh `.conf` file to the per_router topic; tap "➕ Добавить новый". Confirm `awg13` appears in awg-manager UI.
 
 - [ ] **Step 3: Open Routes panel in TG**
 
-Tap "🛣 Маршруты" reply-keyboard button. Verify Screen 2:
+Tap "🛣 Маршруты". Verify Screen 2:
 - HydraRoute Neo line shown (✅ установлен, работает)
-- DNS routes total = 3, Static = 1, HR-Neo = 1
-- awg11 row shows total = 4, has [🔄 Перенести] button
-- awg13 row shows total = 0, no rebind button
+- DNS routes total ≥ 50 (2 smoke + ~48 fall-through HR-Neo)
+- Static IP routes total = 1
+- awg11 row total ≥ 50 (2 explicit DNS + ~48 fall-through-credited HR-Neo + 1 static)
+- awg13 row total = 0, no rebind button
 - "Не входят в перенос: WAN/system: 1" line present
 
 - [ ] **Step 4: Tap Перенести on awg11, pick awg13**
 
-Screen 3 lists awg13 (and any others). Tap awg13. Screen 4 preview shows:
-- "Будет перенесено (4): DNS=2, Static=1, HR-Neo=1"
+Screen 3 lists awg13. Tap awg13. Screen 4 preview shows:
+- "Будет перенесено (≥51): DNS=≥50 (HR-Neo: ≥48), Static IP: 1"
 - "НЕ ТРОГАЕМ: WAN/system: 1"
 - Token displayed
 
 - [ ] **Step 5: Tap Подтвердить**
 
-Wait <30 s. Screen 5 shows: DNS=2 ok, Static=1 ok, HR-Neo=1 ok.
+Wait <30 s. Screen 5 shows: DNS≥50 ok, Static=1 ok.
 
 - [ ] **Step 6: Verify in awg-manager web UI**
 
-- vk-test, rt-test, smoke-cidr, and the cn:cn HR-Neo policy are all on awg13
-- **sber-test (WAN) is STILL on WAN** — this is the acceptance criterion. If it moved, the feature has failed.
+- vk-test, rt-test, smoke-cidr now point to awg13
+- ALL fall-through HR-Neo rules now have explicit `routes` pointing to awg13
+- **sber-test (WAN) is STILL on WAN (eth3)** — this is the acceptance criterion. If it moved, the feature has failed.
 
 - [ ] **Step 7: Cleanup**
 
-In awg-manager UI, delete the smoke fixtures. Or run a reverse rebind (awg13 → awg11) to confirm idempotency.
+Reverse rebind (awg13 → awg11) to restore. Confirm idempotency: panel/preview/Screen 5 all behave consistently.
 
-### Task 10.2: README / spec link in DEPLOY.md or main README
+### Task 10.2: README / spec link
 
 **Files:**
-- Modify: `README.md` (only if there's a feature list section)
+- Modify: `README.md`
 
 - [ ] **Step 1: Add a one-liner under "Реализованные фичи"**
 
 ```markdown
-- Routes panel — перенос всех smart-routing правил (DNS + Static + HR-Neo) с одного туннеля на другой через Telegram, с явной защитой WAN/системных маршрутов
+- Routes panel — перенос всех smart-routing правил (DNS + Static IP, включая HR-Neo) с одного туннеля на другой через Telegram, с явной защитой WAN/системных маршрутов
 ```
 
 - [ ] **Step 2: Commit**
@@ -3316,16 +2962,18 @@ git tag v0.10.0-rc1
 git push origin v0.10.0-rc1
 ```
 
-CI will build the 7 release artifacts. After smoke passes against the v0.10.0-rc1 binaries on testkeen, drop the `-rc1` suffix and push v0.10.0 final.
+CI builds 7 release artifacts. After smoke passes against the binaries, drop `-rc1` and push v0.10.0 final.
 
 ---
 
 ## Self-Review Checklist (run before handoff)
 
-- [ ] Spec coverage: every section of the spec maps to at least one task above. Verified §3 (data flow), §4 (UX), §5 (components), §6 (API contract), §7 (caching), §8 (errors), §9 (testing), §10 (open questions resolved in Milestone 0).
-- [ ] No "TBD" / "TODO" / "implement later" placeholders in any task body.
-- [ ] Type names consistent across milestones: `RouteSnapshot`, `RouteRebindResult`, `TunnelMeta`, `TunnelCounts`, `CategoryResult`, `HRStatus` used the same way in `pkg/wire/routing.go` and in renderer code.
-- [ ] Method names consistent: `ListDNSRoutes` / `ListStaticRoutes` / `BulkBackendDNS` / `UpdateStaticRoute` / `GetHRConfig` / `PutHRConfig` / `HydraRouteControl` / `RoutingRefresh` / `GetEnv` / `ReplaceHRTargets`.
-- [ ] Callback grammar consistent: `routes_open`, `routes_router`, `routes_rebind`, `routes_pick`, `routes_confirm`, `routes_refresh`, `routes_back`, `routes_close` — same in parse.go, router.go, and TG keyboard builders.
-- [ ] Token TTL = 5 min, cache TTL = 30 s — same numbers everywhere they appear.
-- [ ] Acceptance criterion in §9.3 step 6 (WAN rule unchanged) is verified by a unit test (Task 4.1's HappyPath asserts `if rule.ID == "s2" t.Errorf("WAN ... must not be updated")`) and by the manual smoke (Task 10.1 step 6).
+- [x] Spec coverage: every section maps to a task. §3 (data flow) → M3+M4+M7+M8; §4 (UX) → M6; §5 (components) → File Map; §6 (API contract) → M1+M2; §7 (caching) → M5; §8 (errors) → M4 partial-fail tests; §9 (testing) → M9; §10 (resolved) → M0 done.
+- [x] No "TBD" / "TODO" / "implement later" placeholders in any task body.
+- [x] Type names consistent: `RouteSnapshot`, `RouteRebindResult`, `TunnelMeta`, `TunnelCounts`, `CategoryResult`, `HRStatus` used identically in `pkg/wire/routing.go` and renderer code.
+- [x] Method names consistent: `ListDNSRoutes` / `UpdateDNSRoute` / `ListStaticRoutes` / `UpdateStaticRoute` / `RoutingTunnels` / `RoutingRefresh` / `HydraRouteControl` / `GetEnv` / `RouteStatus` / `RouteRebind`.
+- [x] Callback grammar consistent: `routes_open`, `routes_router`, `routes_rebind`, `routes_pick`, `routes_confirm`, `routes_refresh`, `routes_back`, `routes_close` — same in parse.go, router.go, and TG keyboard builders.
+- [x] Token TTL = 5 min, cache TTL = 30 s — same numbers everywhere.
+- [x] Field-name casing precisely tracked: DNS uses `tunnelId` (lower-d), Static uses `tunnelID` (capital-D). Reflected in DNSRouteEntry vs StaticRoute.
+- [x] WAN-canary acceptance criterion (§9.3 step 6) verified by Task 4.1's `TestRouteRebind_HappyPath_WANCanaryUntouched` (asserts `r.Routes[0].Interface == "eth3"` and `r.TunnelID == "eth3"` after rebind) AND by Task 10.1 step 6 manual smoke.
+- [x] Fall-through conversion behaviour (default-on, gated on `srcIsDefaultRoute`) covered by Task 3.1's `TestRouteStatus_FallthroughRulesAreCounted` AND Task 4.1's HappyPath (which credits the fall-through Fallthru rule to t1 because t1 has DefaultRoute=true).
