@@ -65,15 +65,22 @@ func main() {
 
 	cmdQueue := cmd.New()
 	notifier := callbacks.NewNotifier(tgClient)
+	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
+	routesNotifier := &callbacks.RoutesPanelNotifier{
+		TG:    tgClient,
+		Cache: routesCache,
+		DB:    d,
+	}
 	mux := backend.NewMux(backend.Deps{
-		Logger:      logger,
-		DB:          d,
-		Dispatcher:  disp,
-		Resumer:     watcher,
-		CommandSink: cmdQueue,
-		TGNotifier:  notifier,
-		UI:          cfg.UI,
-		Thresholds:  state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		Logger:         logger,
+		DB:             d,
+		Dispatcher:     disp,
+		Resumer:        watcher,
+		CommandSink:    cmdQueue,
+		TGNotifier:     notifier,
+		RoutesNotifier: routesNotifier,
+		UI:             cfg.UI,
+		Thresholds:     state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 	})
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -89,6 +96,7 @@ func main() {
 		AdminUserID:    cfg.Telegram.AdminUserID,
 		MuteCutoffHour: cfg.State.MuteCutoffHour,
 	})
+	cb.SetRoutesCache(routesCache)
 	go func() {
 		if err := cb.Run(ctx); err != nil {
 			logger.Error("callbacks router exited", "err", err)
