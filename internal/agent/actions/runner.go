@@ -140,6 +140,15 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 			return "err", err.Error()
 		}
 		return "ok", out
+	case "route_status":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured"
+		}
+		out, err := RouteStatus(ctx, r.AwgClient)
+		if err != nil {
+			return "err", err.Error()
+		}
+		return "ok", out
 	default:
 		return "err", "unknown action: " + cmd.Action
 	}
