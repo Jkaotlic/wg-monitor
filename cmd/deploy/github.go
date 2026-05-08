@@ -77,9 +77,14 @@ func defaultCacheDir() string {
 	return filepath.Join(cache, "wg-monitor-deploy")
 }
 
-// GetLatestRelease calls https://api.github.com/repos/<owner>/<repo>/releases/latest.
+// GetLatestRelease returns the most recent published release, including
+// prereleases. The /releases/latest endpoint skips prereleases entirely
+// (returns 404 if every release is a prerelease), which is the wrong
+// semantic for an RC-driven project — we always want "the freshest tag",
+// rc or not. So we hit /releases (which lists all, newest first) and
+// take element 0.
 func (d *Downloader) GetLatestRelease() (*Release, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", RepoOwner, RepoName)
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=1", RepoOwner, RepoName)
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
@@ -96,7 +101,15 @@ func (d *Downloader) GetLatestRelease() (*Release, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ParseRelease(body)
+	var list []Release
+	if err := json.Unmarshal(body, &list); err != nil {
+		return nil, fmt.Errorf("decode releases: %w", err)
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("no releases published yet for %s/%s", RepoOwner, RepoName)
+	}
+	rel := list[0]
+	return &rel, nil
 }
 
 // GetAsset downloads and caches an asset, verifying its sha256 against checksumsURL.
