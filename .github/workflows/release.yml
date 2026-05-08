@@ -41,7 +41,10 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath \
-            -ldflags "-s -w -X main.Version=${{ github.ref_name }}" \
+            -ldflags "-s -w \
+              -X main.Version=${{ github.ref_name }} \
+              -X main.RepoOwner=${{ github.repository_owner }} \
+              -X main.RepoName=${{ github.event.repository.name }}" \
             -o dist/${{ matrix.name }} ${{ matrix.pkg }}
 
       - name: UPX pack
