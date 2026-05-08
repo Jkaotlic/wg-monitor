@@ -354,6 +354,13 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil)
 		}
+	case "🛣 Маршруты":
+		if kind == "per_router" && user != nil {
+			r.openRoutesPanelMessage(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике пользователя.", "", nil)
+		}
 	case "🌍 Через тоннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
 			"⏳ Проверяю YouTube/Telegram/Instagram через тоннель…")
@@ -423,6 +430,26 @@ func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, k
 	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, ackText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
 	if err != nil {
 		slog.Warn("dispatchConnectivityCheck ack failed", "err", err)
+	}
+}
+
+// openRoutesPanelMessage sends the initial Routes panel as a fresh message
+// (so subsequent edits target this MessageID) and enqueues route_status.
+// The cmd-result handler edits when the agent answers.
+func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
+	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
+	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
+	if err != nil {
+		slog.Warn("routes panel send failed", "err", err)
+		return
+	}
+	if r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "route_status", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		slog.Warn("route_status enqueue failed", "err", err)
 	}
 }
 
