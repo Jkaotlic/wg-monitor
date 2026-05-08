@@ -488,6 +488,76 @@ func TestCmdResult_RejectsBadJSON(t *testing.T) {
 	}
 }
 
+type fakeRoutesNotifier struct {
+	mu     sync.Mutex
+	called int
+}
+
+func (f *fakeRoutesNotifier) NotifyCommandResult(_ context.Context, _ cmdpkg.MessageRef, _ wire.CommandResult, _ int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.called++
+	return nil
+}
+
+func TestCmdResult_DispatchesRoutesNotifier(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	rn := &fakeRoutesNotifier{}
+	rc := &relayCapture{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "route_status", ChatID: 1, MessageID: 2}}
+	mux := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		Dispatcher:     &fakeDisp{},
+		CommandSink:    sink,
+		TGNotifier:     rc,
+		RoutesNotifier: rn,
+		Thresholds:     state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "x", Status: "ok", Output: `{"tunnels":[]}`, DurationMs: 1})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	// Goroutine dispatch is async — poll briefly.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		rn.mu.Lock()
+		c := rn.called
+		rn.mu.Unlock()
+		if c > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	rn.mu.Lock()
+	rnCalled := rn.called
+	rn.mu.Unlock()
+	if rnCalled != 1 {
+		t.Errorf("RoutesNotifier called %d times, want 1", rnCalled)
+	}
+
+	snap := rc.snapshot()
+	if len(snap.chunks) != 0 {
+		t.Errorf("generic relay called %d chunk(s) for route_status, want 0", len(snap.chunks))
+	}
+}
+
 func TestCmdResult_RejectsInvalidStatus(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
