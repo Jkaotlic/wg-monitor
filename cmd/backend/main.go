@@ -26,7 +26,12 @@ var Version = "0.8.0-tunnel-import"
 
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		_, _ = os.Stdout.WriteString(Version + "\n")
+		return
+	}
 
 	cfg, err := backend.LoadConfig(*cfgPath)
 	if err != nil {

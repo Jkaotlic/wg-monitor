@@ -66,11 +66,11 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 		return err
 	}
 
-	PrintStep(4, 4, "Verify /health")
+	PrintStep(4, 4, "Verify /healthz")
 	if state.Backend.Domain == "" {
 		PrintWarn("домен не задан в wizard.toml — пропускаю /health проверку")
 	} else {
-		url := "https://" + state.Backend.Domain + "/health"
+		url := "https://" + state.Backend.Domain + "/healthz"
 		if err := stepVerifyHTTP(s, url); err != nil {
 			return err
 		}
@@ -469,7 +469,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	PrintOK("active")
 
 	PrintStep(12, 12, "Verify /health через домен")
-	url := "https://" + state.Backend.Domain + "/health"
+	url := "https://" + state.Backend.Domain + "/healthz"
 	if err := stepVerifyHTTP(s, url); err != nil {
 		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
 	}
@@ -597,7 +597,7 @@ func actionStatus(state *State, secrets *SecretStore) error {
 				out, _ := s.MustRun("systemctl is-active wg-monitor-backend")
 				PrintInfo("systemctl: " + strings.TrimSpace(out))
 				if state.Backend.Domain != "" {
-					stepVerifyHTTP(s, "https://"+state.Backend.Domain+"/health")
+					stepVerifyHTTP(s, "https://"+state.Backend.Domain+"/healthz")
 				}
 				vout, _ := s.MustRun("/usr/local/bin/wg-monitor-backend --version 2>&1 || true")
 				PrintInfo("version: " + strings.TrimSpace(vout))
