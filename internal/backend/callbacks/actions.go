@@ -287,6 +287,64 @@ var commandLabels = map[string]string{
 	"tunnel_disable": "⏸ Выключить",
 }
 
+// pendingRebind holds a scheduled rebind awaiting Confirm. Stored in
+// Router.pendingRebinds keyed by token; consumed by RebindConfirmAction.
+// Mirrors pendingUpload in lifetime semantics: token+TTL, single use.
+type pendingRebind struct {
+	UserID    int64
+	SrcID     string
+	DstID     string
+	Token     string
+	ExpiresAt time.Time
+}
+
+// RebindConfirmAction handles routes_confirm:<uid>:<src>:<dst>:<token>. It
+// consumes the pendingRebind by token and enqueues a route_rebind wire.Command.
+type RebindConfirmAction struct {
+	sink      CommandEnqueuer
+	consumeFn func(userID int64, token string) (*pendingRebind, bool)
+	idGen     func() string
+}
+
+func NewRebindConfirmAction(sink CommandEnqueuer, consume func(int64, string) (*pendingRebind, bool), idGen func() string) *RebindConfirmAction {
+	return &RebindConfirmAction{sink: sink, consumeFn: consume, idGen: idGen}
+}
+
+func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	pr, ok := a.consumeFn(args.UserID, args.RebindToken)
+	if !ok {
+		return "", errors.New("сессия истекла или не найдена; открой панель заново")
+	}
+	if pr.SrcID != args.RebindSrcID || pr.DstID != args.RebindDstID {
+		return "", errors.New("параметры rebind не совпадают с подтверждением")
+	}
+	cmd := wire.Command{
+		ID:     a.idGen(),
+		Action: "route_rebind",
+		Args: map[string]any{
+			"src_tunnel_id": pr.SrcID,
+			"dst_tunnel_id": pr.DstID,
+		},
+		IssuedAt: time.Now().UTC(),
+	}
+	ref := cmdpkg.MessageRef{
+		ChatID:    q.Message.Chat.ID,
+		MessageID: q.Message.MessageID,
+		ThreadID:  q.Message.MessageThreadID,
+	}
+	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+		return "", fmt.Errorf("enqueue route_rebind: %w", err)
+	}
+	return "🛣 запускаем перенос…", nil
+}
+
+// makeRebindToken returns 8 hex chars cryptographically random.
+func makeRebindToken() string {
+	var b [4]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
 // pendingUpload holds a downloaded .conf while the admin confirms what to do.
 // Stored in Router.pending keyed by userID; consumed by ImportAction.
 type pendingUpload struct {
