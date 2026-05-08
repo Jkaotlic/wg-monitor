@@ -19,6 +19,7 @@ package actions
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
@@ -40,6 +41,7 @@ type Runner struct {
 	Opkg         OpkgExecutor
 	Exec         ExecFunc // for tunnel_enable/disable via ndmc
 	Now          func() time.Time
+	routeMu      sync.Mutex // serialises concurrent route_rebind calls
 }
 
 func (r *Runner) now() time.Time {
@@ -145,6 +147,22 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 			return "err", "awgmgr client not configured"
 		}
 		out, err := RouteStatus(ctx, r.AwgClient)
+		if err != nil {
+			return "err", err.Error()
+		}
+		return "ok", out
+	case "route_rebind":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured"
+		}
+		srcID, _ := cmd.Args["src_tunnel_id"].(string)
+		dstID, _ := cmd.Args["dst_tunnel_id"].(string)
+		if srcID == "" || dstID == "" {
+			return "err", "route_rebind: src_tunnel_id and dst_tunnel_id are required"
+		}
+		r.routeMu.Lock()
+		defer r.routeMu.Unlock()
+		out, err := RouteRebind(ctx, r.AwgClient, srcID, dstID)
 		if err != nil {
 			return "err", err.Error()
 		}
