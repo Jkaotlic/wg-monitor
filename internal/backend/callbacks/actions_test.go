@@ -350,3 +350,66 @@ func TestImportAction_Apply_Expired(t *testing.T) {
 		t.Errorf("expected expiry error, got %v", err)
 	}
 }
+
+// fakeRebindEnqueuer is a minimal CommandEnqueuer that records the last
+// enqueued action and args. Used by RebindConfirmAction tests only.
+type fakeRebindEnqueuer struct {
+	lastAction string
+	lastArgs   map[string]any
+}
+
+func (f *fakeRebindEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
+	f.lastAction = cmd.Action
+	f.lastArgs = cmd.Args
+	return nil
+}
+
+func (f *fakeRebindEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref cmdpkg.MessageRef) error {
+	f.lastAction = cmd.Action
+	f.lastArgs = cmd.Args
+	return nil
+}
+
+func TestRebindConfirmAction_TokenMissing(t *testing.T) {
+	a := &RebindConfirmAction{
+		consumeFn: func(int64, string) (*pendingRebind, bool) { return nil, false },
+		idGen:     func() string { return "id1" },
+	}
+	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: 1}}}
+	_, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "x"})
+	if err == nil {
+		t.Errorf("expected error when token unknown")
+	}
+}
+
+func TestRebindConfirmAction_HappyPath(t *testing.T) {
+	pr := &pendingRebind{
+		SrcID: "t1", DstID: "t2",
+		Token:     "tok1",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	consumed := false
+	sink := &fakeRebindEnqueuer{}
+	a := &RebindConfirmAction{
+		consumeFn: func(uid int64, token string) (*pendingRebind, bool) {
+			if uid == 42 && token == "tok1" && !consumed {
+				consumed = true
+				return pr, true
+			}
+			return nil, false
+		},
+		idGen: func() string { return "id1" },
+		sink:  sink,
+	}
+	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: 1}, MessageID: 7}}
+	_, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sink.lastAction != "route_rebind" {
+		t.Errorf("enqueued %q, want route_rebind", sink.lastAction)
+	}
+	if sink.lastArgs["src_tunnel_id"] != "t1" || sink.lastArgs["dst_tunnel_id"] != "t2" {
+		t.Errorf("args: %+v", sink.lastArgs)
+	}
+}
