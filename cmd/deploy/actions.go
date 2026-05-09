@@ -253,11 +253,11 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	tok := os.Getenv(tokenEnv)
 	if tok == "" {
 		PrintWarn("Токен агента не найден в " + tokenEnv + ".")
-		PrintWarn("При install-backend он должен был сгенерироваться. Введи руками или сгенерирую новый:")
+		PrintWarn("Он должен был лечь в disk-кэш при [4] Add Router. Введи руками или сгенерирую новый:")
 		tok = Ask("Token (Enter — сгенерировать новый)", "")
 		if tok == "" {
 			tok = randomHexToken(32)
-			PrintWarn("новый токен: " + tok + " — сохрани в " + tokenEnv + " И в backend.yaml на VPS!")
+			PrintWarn("новый токен: " + tok + " — сохрани в " + tokenEnv + ". В DB на VPS его нет — backend не примет heartbeat'ы!")
 		}
 	}
 
@@ -266,10 +266,22 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		return err
 	}
 
-	PrintStep(1, 7, "SSH к роутеру")
+	PrintStep(1, 7, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
 	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
 	if err != nil {
-		return err
+		// Single retry: дефолты (192.168.31.1:222 root) подходят к
+		// Keenetic из коробки, но если у оператора другой роутер /
+		// нестандартный port forward / user не root — даём ввести
+		// руками и пробуем ещё раз. Дальше — bail.
+		PrintWarn("SSH не подключился: " + err.Error())
+		PrintInfo("введи параметры роутера руками (Enter — оставить текущее)")
+		ag.Host = orDefault(Ask("Хост роутера", ag.Host), ag.Host)
+		ag.Port = parseIntOr(Ask("SSH port", fmt.Sprint(ag.Port)), ag.Port)
+		ag.User = orDefault(Ask("SSH user", ag.User), ag.User)
+		s, err = ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
+		if err != nil {
+			return err
+		}
 	}
 	defer s.Close()
 
