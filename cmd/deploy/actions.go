@@ -210,14 +210,30 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		ag = &state.Agents[len(state.Agents)-1]
 	}
 
-	ag.Host = Ask("Хост роутера", strOrDefaultS(ag.Host, "192.168.0.1"))
-	ag.Port = parseIntOr(Ask("SSH port", strOrDefault(ag.Port, "222")), 222)
-	ag.User = orDefault(Ask("SSH user", strOrDefaultS(ag.User, "root")), "root")
-	ag.AwgIface = orDefault(Ask("AmneziaWG iface", strOrDefaultS(ag.AwgIface, "awg0")), "awg0")
-	ag.ExpectedExitIP = Ask("Expected exit IP (что bot должен видеть как public IP)", ag.ExpectedExitIP)
-	if ag.ThreadID == 0 {
-		ag.ThreadID = parseIntOr(Ask("Telegram thread_id топика этого роутера", "1"), 1)
+	// Каждый Ask условный — поле уже могли заполнить в state (через
+	// actionAddRouter, или вручную в wizard.toml, или прошлый прогон).
+	// Цель — нулевые prompt'ы на повторных запусках и при вызове из [4].
+	if ag.Host == "" {
+		ag.Host = orDefault(Ask("Хост роутера", "192.168.0.1"), "192.168.0.1")
 	}
+	if ag.Port == 0 {
+		ag.Port = parseIntOr(Ask("SSH port", "222"), 222)
+	}
+	if ag.User == "" {
+		ag.User = orDefault(Ask("SSH user", "root"), "root")
+	}
+	if ag.AwgIface == "" {
+		// awg_iface поле уже deprecated в агенте (silently ignored
+		// после awg-manager pivot), но wg-monitor-cli требует
+		// non-empty. awg0 — стандартный AmneziaWG iface на Keenetic.
+		ag.AwgIface = "awg0"
+	}
+	if ag.ExpectedExitIP == "" {
+		// expected_exit_ip тоже deprecated — placeholder для DB.
+		ag.ExpectedExitIP = "0.0.0.0"
+	}
+	// thread_id оставляем 0, если не задан: backend сам выставит
+	// telegram_thread_id в users-таблице на первом hard-alert от агента.
 
 	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(ag.Nickname)
 	home, _ := os.UserHomeDir()
@@ -467,7 +483,11 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("no backend")
 	}
 
-	nick := Ask("Никнейм нового роутера (a-z, начинается с буквы, 2-16 символов)", "")
+	// Минимум интерактивности: единственный мандатный prompt — nickname.
+	// Всё остальное wizard вытаскивает из state / secrets-кэша / разумных
+	// дефолтов; password пробуется через env+cache+memory-файл и
+	// запрашивается только если всё пусто.
+	nick := Ask("Никнейм нового роутера (a-z, 2-16)", "")
 	if nick == "" {
 		return fmt.Errorf("nickname required")
 	}
@@ -476,32 +496,14 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("invalid nickname")
 	}
 
-	awgIface := "awg0"
-	expectedExitIP := ""
-	kind := "static"
-	if existing := state.FindAgent(nick); existing != nil {
-		if existing.AwgIface != "" {
-			awgIface = existing.AwgIface
-		}
-		expectedExitIP = existing.ExpectedExitIP
-	}
-	awgIface = orDefault(Ask("AmneziaWG iface на роутере", awgIface), "awg0")
-	expectedExitIP = Ask("Expected exit IPv4 (что бэкенд должен видеть как public IP через тоннель)", expectedExitIP)
-	if expectedExitIP == "" {
-		return fmt.Errorf("expected exit IP required")
-	}
-	kind = orDefault(strings.ToLower(Ask("Kind (static / mobile)", kind)), "static")
-	if kind != "static" && kind != "mobile" {
-		PrintFail("kind должен быть static или mobile")
-		return fmt.Errorf("invalid kind")
-	}
-
-	// SSH к VPS — все шаги ниже идут через одно подключение.
+	// Регистрация в users-table на VPS через wg-monitor-cli.
 	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
 	if pass == "" {
 		return fmt.Errorf("missing VPS password")
 	}
 	kh, _ := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+
+	PrintStep(1, 3, "VPS: зарегистрировать "+nick+" в users DB")
 	bs, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
 	if err != nil {
 		return err
@@ -509,14 +511,11 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	defer bs.Close()
 
 	// Источник истины по агентам — таблица users в /var/lib/wg-monitor/state.db.
-	// Создаём запись через wg-monitor-cli (он сам сгенерит raw-токен и захэширует
-	// в DB). Из stdout вытягиваем raw-токен — единственный момент, когда его
-	// видно открытым. Идемпотентности на стороне CLI нет: повторный вызов с тем
-	// же nickname упадёт на UNIQUE constraint, и raw-токен мы тогда уже не
-	// получим (хэш в DB не обратим). Поэтому сначала проверяем, есть ли уже
-	// запись в DB.
+	// CLI сам генерит raw-токен и хэширует в DB; из stdout вытягиваем raw-токен
+	// (последний шанс его увидеть). Идемпотентности на стороне CLI нет: повтор
+	// с тем же nickname упадёт на UNIQUE constraint, и raw мы тогда уже не
+	// получим — поэтому сначала проверяем DB.
 	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
-	PrintStep(1, 3, "Зарегистрировать "+nick+" в DB на VPS")
 	exists, err := vpsUserExists(bs, nick)
 	if err != nil {
 		return fmt.Errorf("check users table: %w", err)
@@ -524,18 +523,20 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	var rawToken string
 	switch {
 	case exists && secrets.GetNonInteractive(tokEnv) != "":
-		PrintInfo(fmt.Sprintf("%s уже в DB на VPS, использую токен из локального disk-кэша", nick))
+		PrintInfo(fmt.Sprintf("%s уже в DB на VPS, беру токен из локального disk-кэша", nick))
 		rawToken = secrets.GetNonInteractive(tokEnv)
-	case exists && secrets.GetNonInteractive(tokEnv) == "":
+	case exists:
 		PrintFail(fmt.Sprintf(
-			"%s уже в DB на VPS, но raw-токен утерян (token_hash необратим). Удали запись вручную:\n"+
+			"%s уже в DB на VPS, но raw-токен утерян (token_hash необратим). Удали запись:\n"+
 				"  ssh root@%s sqlite3 /var/lib/wg-monitor/state.db \"DELETE FROM users WHERE nickname='%s';\"\n"+
 				"и запусти [4] заново.",
 			nick, state.Backend.Host, nick))
 		return fmt.Errorf("user exists in DB but token unknown")
 	default:
-		// Чистый путь — CLI создаёт пользователя и печатает raw-токен.
-		rawToken, err = vpsAddUser(bs, nick, awgIface, expectedExitIP, kind)
+		// AwgIface / ExpectedExitIP — deprecated в agent (silently ignored
+		// после awg-manager pivot), но CLI требует non-empty значения для
+		// DB. Передаём placeholder'ы, чтобы не дёргать пользователя.
+		rawToken, err = vpsAddUser(bs, nick, "awg0", "0.0.0.0", "static")
 		if err != nil {
 			return err
 		}
@@ -547,28 +548,35 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 	os.Setenv(tokEnv, rawToken)
 
-	// Запись в wizard.toml: создаём, если ещё нет; обновляем поля иначе.
+	// Запись в wizard.toml.
 	ag := state.FindAgent(nick)
 	if ag == nil {
 		state.Agents = append(state.Agents, AgentState{Nickname: nick})
 		ag = &state.Agents[len(state.Agents)-1]
 	}
-	ag.AwgIface = awgIface
-	ag.ExpectedExitIP = expectedExitIP
+	if ag.AwgIface == "" {
+		ag.AwgIface = "awg0"
+	}
+	if ag.ExpectedExitIP == "" {
+		ag.ExpectedExitIP = "0.0.0.0"
+	}
 
-	// Telegram-топик. Если уже есть thread_id (резюм), не дёргаем API.
+	// Telegram-топик: если ag.ThreadID == 0, пытаемся создать через Bot API.
+	// Если chat_id не задан или Bot API возвращает ошибку — оставляем 0;
+	// топик создастся автоматически на первом hard-alert от агента.
 	PrintStep(2, 3, "Telegram форум-топик")
 	if ag.ThreadID == 0 {
 		threadID := autoCreateForumTopic(state, secrets, nick)
-		if threadID == 0 {
-			threadID = parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
+		if threadID != 0 {
+			ag.ThreadID = threadID
+		} else {
+			PrintInfo("thread_id=0 — топик создастся автоматически на первом hard-alert")
 		}
-		ag.ThreadID = threadID
 	} else {
 		PrintInfo(fmt.Sprintf("thread_id=%d уже сохранён, пропускаю createForumTopic", ag.ThreadID))
 	}
 
-	PrintStep(3, 3, "Установить агента на новый роутер")
+	PrintStep(3, 3, "Установить агента на роутер")
 	return actionInstallAgent(state, secrets, dl, nick)
 }
 
