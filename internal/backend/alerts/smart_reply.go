@@ -55,6 +55,15 @@ type IncidentView struct {
 	FailCount int // consecutive_fails at HARD time
 }
 
+// UpdateAvailable is one row in the optional "🟡 Доступны обновления:"
+// section appended to the smart-reply body. Populated by the router from
+// the upstream version cache + the latest VersionAudit for this user.
+type UpdateAvailable struct {
+	Name      string // "KeeneticOS" | "awg-manager" | "HydraRoute-Neo"
+	Installed string
+	Available string
+}
+
 // SmartReplyArgs is everything FormatSmartReply needs to render a message.
 // Built by callbacks.Router.dispatchSmartReply (Task 12).
 type SmartReplyArgs struct {
@@ -64,6 +73,9 @@ type SmartReplyArgs struct {
 	LastReportAge   time.Duration
 	IsMobile        bool
 	UserID          int64 // needed for callback_data on inline buttons
+	// Updates is the optional list of outdated components surfaced as a soft
+	// warning. Empty slice (or nil) → section is hidden.
+	Updates []UpdateAvailable
 }
 
 const (
@@ -124,6 +136,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 			b.WriteString(line + ".\n")
 		}
 		fmt.Fprintf(&b, "Роутер последний раз отчитывался: %s назад.", humanAgeDur(a.LastReportAge))
+		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{}
 
 	case StateDegraded:
@@ -146,6 +159,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)},
 			})
 		}
+		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
 	case StateHard:
@@ -183,6 +197,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				{Text: "🔁 Перезапуск " + t.Name, CallbackData: plainCD("restart_tunnel", t.CheckName)},
 			})
 		}
+		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
 	case StateOffline:
@@ -191,6 +206,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		fmt.Fprintf(&b, "Последний отчёт: %d минут назад.\n", mins)
 		b.WriteString("Возможные причины: роутер выключен, нет интернета, агент упал.\n\n")
 		b.WriteString("Действия ограничены пока агент не появится.")
+		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{}
 	}
 	return "", tg.InlineKeyboardMarkup{}
@@ -202,4 +218,16 @@ func humanAgeDur(d time.Duration) string {
 		return "0с"
 	}
 	return humanAgeSec(int(d.Seconds()))
+}
+
+// appendUpdatesSection writes a soft-warning block listing outdated software
+// to b. No-op when updates is empty.
+func appendUpdatesSection(b *strings.Builder, updates []UpdateAvailable) {
+	if len(updates) == 0 {
+		return
+	}
+	b.WriteString("\n\n🟡 Доступны обновления:\n")
+	for _, u := range updates {
+		fmt.Fprintf(b, "  • %s %s → %s\n", u.Name, u.Installed, u.Available)
+	}
 }
