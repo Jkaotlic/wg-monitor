@@ -221,6 +221,39 @@ func TestFormatSmartReply_Offline(t *testing.T) {
 	}
 }
 
+func TestFormatSmartReply_WithUpdates(t *testing.T) {
+	args := SmartReplyArgs{
+		Nickname: "testkeen",
+		Tunnels:  nil,
+		Updates: []UpdateAvailable{
+			{Name: "KeeneticOS", Installed: "5.00.C.11.0-0", Available: "5.00.C.12.0-0"},
+			{Name: "awg-manager", Installed: "2.8.2", Available: "2.9.0"},
+		},
+	}
+	text, _ := FormatSmartReply(args)
+	for _, want := range []string{
+		"🟡 Доступны обновления:",
+		"KeeneticOS 5.00.C.11.0-0 → 5.00.C.12.0-0",
+		"awg-manager 2.8.2 → 2.9.0",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestFormatSmartReply_EmptyUpdatesHidesSection(t *testing.T) {
+	args := SmartReplyArgs{
+		Nickname: "testkeen",
+		Tunnels:  nil,
+		Updates:  nil,
+	}
+	text, _ := FormatSmartReply(args)
+	if strings.Contains(text, "Доступны обновления") {
+		t.Errorf("expected NO updates section, got:\n%s", text)
+	}
+}
+
 func TestFormatSmartReply_MultiTunnelHardSplit(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,

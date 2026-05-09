@@ -595,6 +595,11 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 		LastReportAge:   lastAge,
 		IsMobile:        user.IsMobile(),
 	}
+	if r.auditCache != nil {
+		if va, ok := r.auditCache.GetVersionAudit(user.ID); ok {
+			args.Updates = computeUpdates(ctx, r.upstream, va)
+		}
+	}
 	text, inline := alerts.FormatSmartReply(args)
 	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
 	// — TG accepts only one reply_markup per send. Per spec §6.1, inline
@@ -1089,6 +1094,33 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 // Updates section computation. Optional — nil-safe in dispatchSmartReply.
 func (r *Router) SetUpstream(c *upstream.Cache) {
 	r.upstream = c
+}
+
+// computeUpdates builds the soft-warning list for the smart-reply Updates
+// section from the latest VersionAudit + the upstream Cache (nil-safe).
+// Compares with FirmwareNewerThan / SoftwareNewerThan; mismatches return
+// false so we never raise false-positive warnings.
+func computeUpdates(ctx context.Context, up *upstream.Cache, va wire.VersionAudit) []alerts.UpdateAvailable {
+	var out []alerts.UpdateAvailable
+	if va.FirmwareAvail != "" && upstream.FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail) {
+		out = append(out, alerts.UpdateAvailable{
+			Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail,
+		})
+	}
+	if up == nil {
+		return out
+	}
+	if v, _ := up.Latest(ctx, "awgmgr"); v != "" && upstream.SoftwareNewerThan(va.AwgmgrVersion, v) {
+		out = append(out, alerts.UpdateAvailable{
+			Name: "awg-manager", Installed: va.AwgmgrVersion, Available: v,
+		})
+	}
+	if v, _ := up.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && upstream.SoftwareNewerThan(va.HrneoVersion, v) {
+		out = append(out, alerts.UpdateAvailable{
+			Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v,
+		})
+	}
+	return out
 }
 
 // NewMaintNotifier returns a MaintPanelNotifier wired to this router's
