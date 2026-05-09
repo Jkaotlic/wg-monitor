@@ -18,6 +18,7 @@ type Config struct {
 	State     StateConfig     `yaml:"state"`
 	UI        UIConfig        `yaml:"ui"`
 	Upstream  UpstreamConfig  `yaml:"upstream"`
+	Retention RetentionConfig `yaml:"retention"`
 }
 
 // UpstreamConfig points the upstream version cache at the right GitHub repos.
@@ -28,6 +29,22 @@ type UpstreamConfig struct {
 	AwgmgrRepo string        `yaml:"awgmgr_repo"`
 	HrneoRepo  string        `yaml:"hrneo_repo"`
 	CacheTTL   time.Duration `yaml:"cache_ttl"`
+}
+
+// RetentionConfig governs periodic DB maintenance: pruning old events,
+// VACUUM to reclaim space, and WAL checkpointing. Each field 0 disables
+// that operation independently — useful for tests or short-lived
+// deployments.
+//
+// Defaults applied in LoadConfig:
+//
+//	EventsDays: 30
+//	VacuumInterval: 168h (weekly)
+//	WALCheckpointEvery: 1h
+type RetentionConfig struct {
+	EventsDays         int           `yaml:"events_days"`
+	VacuumInterval     time.Duration `yaml:"vacuum_interval"`
+	WALCheckpointEvery time.Duration `yaml:"wal_checkpoint_every"`
 }
 
 type TelegramConfig struct {
@@ -151,6 +168,15 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Upstream.CacheTTL == 0 {
 		cfg.Upstream.CacheTTL = 12 * time.Hour
+	}
+	if cfg.Retention.EventsDays == 0 {
+		cfg.Retention.EventsDays = 30
+	}
+	if cfg.Retention.VacuumInterval == 0 {
+		cfg.Retention.VacuumInterval = 168 * time.Hour
+	}
+	if cfg.Retention.WALCheckpointEvery == 0 {
+		cfg.Retention.WALCheckpointEvery = 1 * time.Hour
 	}
 	return &cfg, nil
 }

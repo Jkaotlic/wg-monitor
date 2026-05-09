@@ -72,6 +72,52 @@ func TestParseComponentsList_MissingLocal(t *testing.T) {
 	}
 }
 
+// TestParseComponentsList_IgnoresComponentBlocks reproduces the testkeen
+// 2026-05-09 bug: the real `ndmc components list` output continues for ~2700
+// lines AFTER `local:` with one `component:` block per installed package.
+// Each component has its own `version:` line, which (before the fix) was
+// silently overwriting localVersion. The last component in the list ended up
+// determining what the bot rendered as "installed firmware".
+func TestParseComponentsList_IgnoresComponentBlocks(t *testing.T) {
+	in := "\x1b[K\n" +
+		"         firmware: \n" +
+		"              version: 5.00.C.11.0-0\n" +
+		"                title: 5.0.11\n" +
+		"\n" +
+		"          sandbox: stable\n" +
+		"\n" +
+		"            local: \n" +
+		"              sandbox: stable\n" +
+		"              version: 5.00.C.11.0-0\n" +
+		"                title: 5.0.11\n" +
+		"\n" +
+		"        component: \n" +
+		"                 name: acl\n" +
+		"              version: 5.00.C.11.0-0\n" +
+		"\n" +
+		"        component: \n" +
+		"                 name: afp\n" +
+		"            installed: 3.1.18-1\n" +
+		"              version: 3.1.18-1\n" +
+		"\n" +
+		"        component: \n" +
+		"                 name: chilli\n" +
+		"              version: 1.6-1\n"
+	fs, err := parseComponentsList(in)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fs.Current != "5.00.C.11.0-0" {
+		t.Errorf("Current=%q, want 5.00.C.11.0-0 (component blocks must NOT overwrite local.version)", fs.Current)
+	}
+	if fs.Available != "" {
+		t.Errorf("Available=%q, expected empty (firmware == local)", fs.Available)
+	}
+	if fs.Channel != "stable" {
+		t.Errorf("Channel=%q, want stable", fs.Channel)
+	}
+}
+
 func TestGetFirmwareStatus_ExecError(t *testing.T) {
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		return nil, &execErr{msg: "boom"}
@@ -270,8 +316,11 @@ func TestEncodeVersionAudit_RoundTrip(t *testing.T) {
 
 func TestVersionAudit_SysInfoError(t *testing.T) {
 	awg := &fakeAwgInfo{sysErr: fmt.Errorf("connection refused")}
+	// Phase 1 fans out concurrently, so other exec'es may run; just return
+	// errors so the best-effort callers ignore them. We only assert on the
+	// final error surfacing the SystemInfo failure.
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return nil, fmt.Errorf("should not be called")
+		return nil, fmt.Errorf("ignored")
 	}
 	_, err := VersionAudit(context.Background(), awg, exec)
 	if err == nil {

@@ -53,13 +53,14 @@ func TestClassifyState_DegradedHandshakeBoundary(t *testing.T) {
 		state SmartReplyState
 	}{
 		{0, StateOK},
-		{59, StateOK},
-		{60, StateDegraded},
-		{179, StateDegraded},
-		// 180+ would normally be a HARD via FSM, but here we test the gap
-		// between thresholds: handshake age 180 with no active incident
-		// is the unusual "FSM hasn't ticked yet" race — treat as Degraded.
+		{60, StateOK},   // was Degraded; threshold raised to align with "норма до 180" text
+		{179, StateOK},  // was Degraded; same reason
+		// 180+ matches the "FSM HARD threshold" — when handshake hits this
+		// without an active incident yet (the race between agent tick and FSM
+		// transition), surface as Degraded so the operator sees the early
+		// warning without waiting for the next tick.
 		{180, StateDegraded},
+		{200, StateDegraded},
 	}
 	for _, c := range cases {
 		t.Run(time.Duration(c.age).String(), func(t *testing.T) {
@@ -112,7 +113,7 @@ func TestClassifyState_MultiTunnelOnlyOneDegraded(t *testing.T) {
 		a.LastReportAge = 10 * time.Second
 		a.Tunnels = []TunnelView{
 			{Name: "amnezia", HandshakeAge: 12, PingStatus: "ok"},
-			{Name: "secondary", HandshakeAge: 120, PingStatus: "ok"},
+			{Name: "secondary", HandshakeAge: 200, PingStatus: "ok"},
 		}
 	})
 	if got := ClassifyState(a); got != StateDegraded {
