@@ -481,7 +481,12 @@ func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, k
 // The cmd-result handler edits when the agent answers.
 func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
 	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
-	mid, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+	// IMPORTANT: send WITHOUT a reply_markup. TG refuses editMessageText on
+	// messages whose reply_markup is a ReplyKeyboardMarkup (only inline-kb
+	// markups are editable). RoutesNotifier needs to edit this message in
+	// place, so we forgo the per-message keyboard re-attach here — the
+	// bottom panel persists from the user's previous message anyway.
+	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
 	if err != nil {
 		slog.Warn("routes panel send failed", "err", err)
 		return
@@ -512,14 +517,14 @@ func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user 
 		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown)
 		text := "🔄 обновляется в фоне…\n\n" + tg.MaintPanelText(args)
 		kb := tg.MaintPanelKeyboard(user.ID, args)
-		// Inline + reply keyboards can't share a single sendMessage payload
-		// (TG accepts only one reply_markup). The persistent reply keyboard
-		// re-installs naturally on the next non-inline message; here the
-		// inline panel kb wins so the user can act immediately on cached data.
+		// SendMessageWithReplyKeyboard accepts an *InlineKeyboardMarkup —
+		// editMessageText works against inline-kb markups (unlike reply-kb).
 		mid, err = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
 	} else {
 		loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
-		mid, err = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+		// IMPORTANT: no reply_markup — see openRoutesPanelMessage for the
+		// editMessageText/ReplyKeyboardMarkup incompatibility.
+		mid, err = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
 	}
 	if err != nil {
 		slog.Warn("maint panel send failed", "err", err)
