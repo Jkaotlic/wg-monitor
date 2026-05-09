@@ -245,6 +245,10 @@ func confirmTargetContext(t updateTarget, currentIP string) bool {
 		fmt.Printf("  Твой IP     : %s\n", Colorize("не определён", ColorDim))
 	}
 	fmt.Println(Colorize("─────────────────────────────────────────────", ColorCyan))
+	if os.Getenv("WG_YES_TO_ALL") == "1" {
+		PrintWarn("WG_YES_TO_ALL=1 → пропускаю подтверждение")
+		return true
+	}
 	resp := strings.ToLower(strings.TrimSpace(Ask("Подтвердить и продолжить? [y/N]", "")))
 	return resp == "y" || resp == "yes" || resp == "д" || resp == "да"
 }
