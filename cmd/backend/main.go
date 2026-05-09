@@ -20,6 +20,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 )
 
 var Version = "0.8.0-tunnel-import"
@@ -76,6 +77,30 @@ func main() {
 		Cache: routesCache,
 		DB:    d,
 	}
+
+	// Build upstream version cache from configured GitHub repos. Skip sources
+	// without a configured repo — graceful "no warning" beats fabricated data.
+	var upSources []upstream.Source
+	if cfg.Upstream.AwgmgrRepo != "" {
+		upSources = append(upSources, upstream.Source{Name: "awgmgr", GitHubRepo: cfg.Upstream.AwgmgrRepo})
+	}
+	if cfg.Upstream.HrneoRepo != "" {
+		upSources = append(upSources, upstream.Source{Name: "hrneo", GitHubRepo: cfg.Upstream.HrneoRepo})
+	}
+	upCache := upstream.NewCache(cfg.Upstream.CacheTTL, upSources)
+
+	// Build the callbacks router BEFORE the mux Deps so we can derive the
+	// MaintNotifier from it (its internal cooldown + audit cache stores
+	// must be shared between handlers and notifier).
+	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
+		ChatID:         cfg.Telegram.ChatID,
+		AdminUserID:    cfg.Telegram.AdminUserID,
+		MuteCutoffHour: cfg.State.MuteCutoffHour,
+	})
+	cb.SetRoutesCache(routesCache)
+	cb.SetUpstream(upCache)
+	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
 		DB:             d,
@@ -84,6 +109,7 @@ func main() {
 		CommandSink:    cmdQueue,
 		TGNotifier:     notifier,
 		RoutesNotifier: routesNotifier,
+		MaintNotifier:  maintNotifier,
 		UI:             cfg.UI,
 		Thresholds:     state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 	})
@@ -96,12 +122,6 @@ func main() {
 	defer cancel()
 	go watcher.Run(ctx)
 
-	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
-		ChatID:         cfg.Telegram.ChatID,
-		AdminUserID:    cfg.Telegram.AdminUserID,
-		MuteCutoffHour: cfg.State.MuteCutoffHour,
-	})
-	cb.SetRoutesCache(routesCache)
 	go func() {
 		if err := cb.Run(ctx); err != nil {
 			logger.Error("callbacks router exited", "err", err)
