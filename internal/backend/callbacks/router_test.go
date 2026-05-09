@@ -412,6 +412,68 @@ func TestRouterDispatchSmartReply_NeverReportedShowsSpecialMessage(t *testing.T)
 	}
 }
 
+// TestRouterHandleMessage_MaintButton verifies that tapping "🛠 Обслуживание"
+// in a per_router thread sends a loading placeholder and enqueues version_audit.
+func TestRouterHandleMessage_MaintButton(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	tid := int64(55)
+	msg := &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 12345},
+		MessageThreadID: &tid,
+		Text:            "🛠 Обслуживание",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("want 1 loading message sent, got %d: %v", len(f.sentMsgs), f.sentMsgs)
+	}
+	if !strings.Contains(f.sentMsgs[0], "Обслуживание") {
+		t.Errorf("loading text missing 'Обслуживание': %q", f.sentMsgs[0])
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("want 1 enqueue (version_audit), got %d", len(sink.calls))
+	}
+	if sink.calls[0].action != "version_audit" {
+		t.Errorf("enqueued action=%q, want version_audit", sink.calls[0].action)
+	}
+	if sink.calls[0].userID != uid {
+		t.Errorf("enqueued userID=%d, want %d", sink.calls[0].userID, uid)
+	}
+}
+
+// TestRouterHandleMessage_MaintButton_WrongTopic verifies that the maint
+// button in a non-per_router thread sends an error message instead.
+func TestRouterHandleMessage_MaintButton_WrongTopic(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, nil, Config{ChatID: -100, AdminUserID: 12345})
+
+	// MessageThreadID nil → resolves to "unknown"
+	msg := &tg.Message{
+		MessageID: 10,
+		Chat:      tg.Chat{ID: -100},
+		From:      tg.User{ID: 12345},
+		Text:      "🛠 Обслуживание",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("want 1 error message, got %d", len(f.sentMsgs))
+	}
+	if !strings.Contains(f.sentMsgs[0], "топике пользователя") {
+		t.Errorf("error message missing expected text: %q", f.sentMsgs[0])
+	}
+}
+
 func allTexts(ss []rkSend) []string {
 	out := make([]string, len(ss))
 	for i, s := range ss {
