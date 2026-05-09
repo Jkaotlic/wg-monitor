@@ -94,6 +94,74 @@ func main() {
 		if err := actionStatus(state, secrets); err != nil {
 			os.Exit(1)
 		}
+	case "smoke":
+		if err := actionSmokeTest(state, secrets); err != nil {
+			os.Exit(1)
+		}
+	case "doctor":
+		if err := actionDoctor(state, secrets); err != nil {
+			os.Exit(1)
+		}
+	case "known-hosts":
+		// known-hosts list | known-hosts forget [alias]
+		sub := ""
+		if len(args) > 1 {
+			sub = args[1]
+		}
+		switch sub {
+		case "list", "":
+			path := defaultCacheDir() + "/known_hosts"
+			aliases, err := ListKnownHostAliases(path)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "list:", err)
+				os.Exit(1)
+			}
+			for _, a := range aliases {
+				fmt.Println(a)
+			}
+		case "forget":
+			if len(args) >= 3 {
+				path := defaultCacheDir() + "/known_hosts"
+				n, err := ForgetKnownHost(path, args[2])
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "forget:", err)
+					os.Exit(1)
+				}
+				fmt.Printf("removed %d entries for %s\n", n, args[2])
+			} else if err := ForgetKnownHostInteractive(); err != nil {
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy known-hosts [list|forget [alias]]")
+			os.Exit(2)
+		}
+	case "secrets":
+		// secrets export <file.tgz> | secrets import <file.tgz> [--force]
+		if len(args) < 3 {
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy secrets export <file.tgz> | secrets import <file.tgz> [--force]")
+			os.Exit(2)
+		}
+		switch args[1] {
+		case "export":
+			if err := ExportSecrets(args[2], statePath); err != nil {
+				fmt.Fprintln(os.Stderr, "export:", err)
+				os.Exit(1)
+			}
+		case "import":
+			force := false
+			for i := 3; i < len(args); i++ {
+				if args[i] == "--force" {
+					force = true
+				}
+			}
+			if err := ImportSecrets(args[2], statePath, force); err != nil {
+				fmt.Fprintln(os.Stderr, "import:", err)
+				os.Exit(1)
+			}
+		default:
+			fmt.Fprintln(os.Stderr, "secrets: expected 'export' or 'import'")
+			os.Exit(2)
+		}
 	default:
 		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
 		os.Exit(2)
