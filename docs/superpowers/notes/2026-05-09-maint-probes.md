@@ -31,18 +31,36 @@ and uses the same path the operator would SSH to.
 
 ## Probe 2 — Upstream repos
 
-GitHub identifiers needed for `internal/backend/upstream/versions.go`:
+GitHub identifiers needed for `internal/backend/upstream/versions.go`.
+Verified via `api.github.com/repos/<owner>/<repo>/releases?per_page=3` calls
+2026-05-09:
 
-- **awg-manager:** `Slava-Shchipunov/awg-keenetic` — TBD verify (not done in
-  this probe session — only access is GitHub web; check before wiring backend
-  config). Tag format observed in past: `vX.Y.Z`.
-- **HydraRoute-Neo:** `Mihaylov-Sergei/HydraRoute-Neo` — TBD verify. (Note:
-  `opkg info hrneo` lists `Maintainer: Ground_Zerro` — that may be the actual
-  GitHub owner; check both before committing to one.)
+- **awg-manager:** `hoaxisr/awg-manager` ✓
+  - Latest tag at probe time: `v2.8.2` (matches what's installed on testkeen).
+  - Uses GitHub Releases. Tag format `vX.Y.Z` — `SoftwareNewerThan` strips
+    leading `v` correctly.
+  - Spec's original placeholder `Slava-Shchipunov/awg-keenetic` was wrong —
+    that's a different (Go-based AWG-Go fork) project.
 
-→ **Plan delta:** Treat `cfg.Upstream.{AwgmgrRepo,HrneoRepo}` as required
-  config; fall back to empty (graceful "no warning") when unset. Final repo
-  IDs to be confirmed before deploy.
+- **HydraRoute (HR-Neo):** `Ground-Zerro/HydraRoute` — **but unusable**
+  - `/releases?per_page=3` returns `[]` (empty array — repo does not publish
+    GitHub Releases).
+  - `/tags?per_page=3` also returns `[]` (no tags either).
+  - `Neo/` directory has README only, no `VERSION` file.
+  - Versions are announced via Boosty (paywall) and the opkg feed
+    (`Packages.gz`), not GitHub.
+  - Spec's original placeholder `Mihaylov-Sergei/HydraRoute-Neo` did not
+    exist; even the real owner has no release surface to query.
+
+→ **Plan delta:** The `upstream` config in `backend.yaml.tmpl` ships
+  `awgmgr_repo: "hoaxisr/awg-manager"` + `hrneo_repo: ""`. Empty repo string
+  is honoured by `cmd/backend/main.go` — that source is silently skipped, so
+  the Updates section omits the hrneo line.
+
+  **Follow-up (out of scope for this PR):** parse the opkg feed
+  (`Packages.gz`) to surface hrneo updates. Different code path from the
+  GitHub fetcher — would land as a separate `internal/backend/upstream/
+  opkg.go` source type.
 
 ## Probe 3 — `ndmc -c "show version"` format
 

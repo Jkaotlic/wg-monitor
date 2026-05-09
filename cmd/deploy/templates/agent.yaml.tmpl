@@ -22,3 +22,10 @@ checks:
 
 state:
   path: /opt/var/wg-monitor/state.json
+
+# Maintenance panel destructive-op gates. Both default to false in code;
+# wizard enables them on add-router because the operator explicitly
+# onboarded this router for ops. Edit to false here for paranoid setups.
+maintenance:
+  allow_router_reboot: true
+  allow_firmware_install: true
