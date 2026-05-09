@@ -183,3 +183,46 @@ func TestParse_RoutesConfirm_MissingToken(t *testing.T) {
 		t.Errorf("expected error for missing token")
 	}
 }
+
+func TestParse_MaintActions(t *testing.T) {
+	cases := []struct {
+		data    string
+		want    Args
+		wantErr bool
+	}{
+		{data: "maint_open:42:_panel_", want: Args{Action: "maint_open", UserID: 42, CheckName: "_panel_", IsPanel: true}},
+		{data: "maint_close:42:_panel_", want: Args{Action: "maint_close", UserID: 42, CheckName: "_panel_", IsPanel: true}},
+		{data: "maint_restart:42:hrneo", want: Args{Action: "maint_restart", UserID: 42, CheckName: "hrneo", MaintName: "hrneo"}},
+		{data: "maint_restart:42:awgmgr", want: Args{Action: "maint_restart", UserID: 42, CheckName: "awgmgr", MaintName: "awgmgr"}},
+		{data: "maint_restart:42:router", want: Args{Action: "maint_restart", UserID: 42, CheckName: "router", MaintName: "router"}},
+		{data: "maint_confirm:42:hrneo:a1b2c3d4", want: Args{Action: "maint_confirm", UserID: 42, CheckName: "hrneo", MaintName: "hrneo", MaintToken: "a1b2c3d4"}},
+		{data: "maint_fw_open:42:_panel_", want: Args{Action: "maint_fw_open", UserID: 42, CheckName: "_panel_", IsPanel: true}},
+		{data: "maint_fw_check:42:_panel_", want: Args{Action: "maint_fw_check", UserID: 42, CheckName: "_panel_", IsPanel: true}},
+		{data: "maint_fw_install:42:_panel_", want: Args{Action: "maint_fw_install", UserID: 42, CheckName: "_panel_", IsPanel: true}},
+		{data: "maint_fw_confirm:42:_panel_:deadbeef", want: Args{Action: "maint_fw_confirm", UserID: 42, CheckName: "_panel_", IsPanel: true, MaintName: "firmware", MaintToken: "deadbeef"}},
+		// negative cases
+		{data: "maint_restart:42", wantErr: true},             // missing name segment
+		{data: "maint_restart:42:_panel_", wantErr: true},     // sentinel as name is rejected
+		{data: "maint_confirm:42:hrneo", wantErr: true},       // missing token
+		{data: "maint_fw_confirm:42:_panel_", wantErr: true},  // missing token
+		{data: "maint_fw_confirm:42:_panel_:", wantErr: true}, // empty token
+	}
+	for _, c := range cases {
+		t.Run(c.data, func(t *testing.T) {
+			got, err := Parse(c.data)
+			if c.wantErr {
+				if err == nil {
+					t.Errorf("expected error for %q, got Args=%+v", c.data, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Parse(%q): %v", c.data, err)
+				return
+			}
+			if got != c.want {
+				t.Errorf("Parse(%q):\n  got=%+v\n want=%+v", c.data, got, c.want)
+			}
+		})
+	}
+}

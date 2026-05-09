@@ -70,6 +70,11 @@ var validActions = map[string]bool{
 	"routes_open": true, "routes_router": true, "routes_rebind": true,
 	"routes_pick": true, "routes_confirm": true, "routes_refresh": true,
 	"routes_back": true, "routes_close": true,
+	// maintenance panel actions: open/close panel, restart services, firmware update.
+	"maint_open": true, "maint_close": true,
+	"maint_restart": true, "maint_confirm": true,
+	"maint_fw_open": true, "maint_fw_check": true,
+	"maint_fw_install": true, "maint_fw_confirm": true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
@@ -153,6 +158,23 @@ func Parse(data string) (Args, error) {
 		a.RebindSrcID = parts[2]
 		a.RebindDstID = parts[3]
 		a.RebindToken = parts[4]
+	case "maint_restart":
+		if len(parts) < 3 || parts[2] == "" || parts[2] == panelSentinel {
+			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr|router): %q", data)
+		}
+		a.MaintName = parts[2]
+	case "maint_confirm":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("maint_confirm requires token: %q", data)
+		}
+		a.MaintName = parts[2]
+		a.MaintToken = parts[3]
+	case "maint_fw_confirm":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("maint_fw_confirm requires token: %q", data)
+		}
+		a.MaintName = "firmware"
+		a.MaintToken = parts[3]
 	}
 	return a, nil
 }
