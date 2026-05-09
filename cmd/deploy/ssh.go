@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,12 +22,21 @@ type SSH struct {
 	host   string
 }
 
-func ConnectSSH(host string, port int, user, password string, kh *KnownHosts) (*SSH, error) {
+// ConnectSSH dials host:port. alias is used as the known_hosts lookup key
+// instead of the real address — pass the agent's nickname (or "backend",
+// "vps", etc.) so two different routers reachable through the SAME LAN IP
+// (e.g. 192.168.0.1 over rotating SSTP tunnels) don't collide. Empty alias
+// falls back to host:port for backward compatibility.
+func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, alias string) (*SSH, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
+	hkcb := kh.HostKeyCallback
+	if alias != "" {
+		hkcb = kh.HostKeyCallbackFor(alias)
+	}
 	cfg := &ssh.ClientConfig{
 		User:            user,
 		Auth:            []ssh.AuthMethod{ssh.Password(password)},
-		HostKeyCallback: kh.HostKeyCallback,
+		HostKeyCallback: hkcb,
 		Timeout:         10 * time.Second,
 	}
 	c, err := ssh.Dial("tcp", addr, cfg)
@@ -198,24 +208,52 @@ type fakeAddr string
 func (a fakeAddr) Network() string { return "tcp" }
 func (a fakeAddr) String() string  { return string(a) }
 
-// HostKeyCallback implements ssh.HostKeyCallback with TOFU semantics:
-//   - first connect to a host: append fingerprint to known_hosts, accept
-//   - subsequent connects: must match
-//   - mismatch: return error with clear message
+// HostKeyCallback implements ssh.HostKeyCallback with TOFU semantics keyed
+// by the real hostname:port. Suitable for stable endpoints (a public VPS,
+// a static LAN IP) where the address itself uniquely identifies the host.
+//
+// For LAN IPs that may resolve to different physical hosts depending on
+// which VPN is active (e.g. several Keenetic routers all on 192.168.0.1
+// reachable through rotating SSTP tunnels), use HostKeyCallbackFor with a
+// stable alias (the agent nickname).
 func (k *KnownHosts) HostKeyCallback(hostname string, remote net.Addr, key ssh.PublicKey) error {
+	return k.checkOrAppend(hostname, remote, key)
+}
+
+// HostKeyCallbackFor returns an ssh.HostKeyCallback that ignores the dialed
+// hostname and looks up / records the fingerprint under the supplied alias
+// instead. This decouples the TOFU record from the network address so
+// reused IPs across different physical machines do not collide.
+func (k *KnownHosts) HostKeyCallbackFor(alias string) ssh.HostKeyCallback {
+	return func(_ string, remote net.Addr, key ssh.PublicKey) error {
+		return k.checkOrAppend(alias, remote, key)
+	}
+}
+
+// checkOrAppend is the shared TOFU body:
+//   - first sighting under `key` → append fingerprint, accept
+//   - subsequent sightings → must match
+//   - mismatch → return error with the file path so the operator can inspect
+func (k *KnownHosts) checkOrAppend(hostKey string, remote net.Addr, pub ssh.PublicKey) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
 
+	// knownhosts.New uses net.SplitHostPort on the lookup key, which fails
+	// for bare aliases without a port (e.g. "router_alice"). Normalise to a
+	// dummy ":22" — this is purely an internal lookup token; it never
+	// touches the network. Real "host:port" keys pass through unchanged.
+	hostKey = normaliseHostKey(hostKey)
+
 	// knownhosts callbacks dereference remote.String(); provide a fallback when nil.
 	if remote == nil {
-		remote = fakeAddr(hostname)
+		remote = fakeAddr(hostKey)
 	}
 
 	cb, err := knownhosts.New(k.path)
 	if err != nil {
 		return err
 	}
-	err = cb(hostname, remote, key)
+	err = cb(hostKey, remote, pub)
 	if err == nil {
 		return nil
 	}
@@ -223,7 +261,7 @@ func (k *KnownHosts) HostKeyCallback(hostname string, remote net.Addr, key ssh.P
 	if errors.As(err, &keyErr) {
 		if len(keyErr.Want) == 0 {
 			// First time seeing this host — append.
-			line := knownhosts.Line([]string{hostname}, key)
+			line := knownhosts.Line([]string{hostKey}, pub)
 			f, ferr := os.OpenFile(k.path, os.O_APPEND|os.O_WRONLY, 0o600)
 			if ferr != nil {
 				return ferr
@@ -236,9 +274,16 @@ func (k *KnownHosts) HostKeyCallback(hostname string, remote net.Addr, key ssh.P
 		}
 		return fmt.Errorf("HOST KEY CHANGED for %s — possible MITM attack. "+
 			"Inspect %s and remove the offending line if you trust the new key",
-			hostname, k.path)
+			hostKey, k.path)
 	}
 	return err
+}
+
+func normaliseHostKey(s string) string {
+	if strings.Contains(s, ":") {
+		return s
+	}
+	return s + ":22"
 }
 
 // generateEd25519Signer is exported for tests.
