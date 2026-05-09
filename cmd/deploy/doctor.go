@@ -24,13 +24,15 @@ func (t *doctorTally) warnf(msg string) { t.warn++; PrintWarn(msg) }
 func (t *doctorTally) failf(msg string) { t.fail++; PrintFail(msg) }
 
 // doctorBackendYAML matches just the bits we need to validate from
-// /etc/wg-monitor/backend.yaml on the VPS.
+// /etc/wg-monitor/backend.yaml on the VPS. Agent enrollment is NOT in this
+// file — it lives in /var/lib/wg-monitor/state.db's users table — so we
+// only check that the loader-required fields are present.
 type doctorBackendYAML struct {
-	Agents []struct {
-		Nickname string `yaml:"nickname"`
-		Token    string `yaml:"token"`
-		ThreadID int    `yaml:"thread_id"`
-	} `yaml:"agents"`
+	Telegram struct {
+		BotTokenFile string `yaml:"bot_token_file"`
+		ChatID       int64  `yaml:"chat_id"`
+		AdminUserID  int64  `yaml:"admin_user_id"`
+	} `yaml:"telegram"`
 }
 
 // dialableTCP is a private clone of probeReachable from update_components.go.
@@ -215,7 +217,8 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		t.warnf("backend.domain не задан в wizard.toml — пропускаю /healthz")
 	}
 
-	// backend.yaml exists + agents coverage
+	// backend.yaml parses + has loader-required fields. Agents/users
+	// coverage is checked separately against the DB below.
 	yamlOut, _, rc, err := s.Run("cat /etc/wg-monitor/backend.yaml")
 	if err != nil || rc != 0 {
 		t.failf("чтение /etc/wg-monitor/backend.yaml не удалось")
@@ -224,17 +227,45 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		if perr := yaml.Unmarshal([]byte(yamlOut), &by); perr != nil {
 			t.failf("backend.yaml не парсится: " + perr.Error())
 		} else {
-			t.ok(fmt.Sprintf("backend.yaml парсится (%d agents)", len(by.Agents)))
-			have := map[string]bool{}
-			for _, a := range by.Agents {
-				have[a.Nickname] = true
+			t.ok("backend.yaml парсится")
+			if by.Telegram.BotTokenFile == "" {
+				t.failf("backend.yaml: telegram.bot_token_file пустое (config-loader откажется стартовать)")
 			}
-			for _, ag := range state.Agents {
-				if have[ag.Nickname] {
-					t.ok("backend.yaml: agent " + ag.Nickname + " присутствует")
+			if by.Telegram.ChatID == 0 {
+				t.failf("backend.yaml: telegram.chat_id == 0")
+			}
+			if by.Telegram.AdminUserID == 0 {
+				t.failf("backend.yaml: telegram.admin_user_id == 0")
+			}
+			if by.Telegram.BotTokenFile != "" {
+				if out, _, rc, _ := s.Run("test -f " + shellSingleQuote(by.Telegram.BotTokenFile)); rc != 0 {
+					t.failf("backend.yaml ссылается на " + by.Telegram.BotTokenFile + ", но файла нет на VPS: " + strings.TrimSpace(out))
 				} else {
-					t.failf("backend.yaml: НЕТ записи для агента " + ag.Nickname)
+					t.ok(by.Telegram.BotTokenFile + " существует")
 				}
+			}
+		}
+	}
+
+	// users DB ↔ wizard.toml agents reconciliation. The DB is the source
+	// of truth — populated by wg-monitor-cli add-user (called from the
+	// wizard's [4] Add Router action).
+	dbOut, _, rc2, err2 := s.Run(`sqlite3 /var/lib/wg-monitor/state.db "SELECT nickname FROM users;"`)
+	if err2 != nil || rc2 != 0 {
+		t.failf("чтение users из /var/lib/wg-monitor/state.db не удалось")
+	} else {
+		have := map[string]bool{}
+		for _, line := range strings.Split(dbOut, "\n") {
+			if n := strings.TrimSpace(line); n != "" {
+				have[n] = true
+			}
+		}
+		t.ok(fmt.Sprintf("users в DB: %d", len(have)))
+		for _, ag := range state.Agents {
+			if have[ag.Nickname] {
+				t.ok("DB: agent " + ag.Nickname + " присутствует")
+			} else {
+				t.failf("DB: НЕТ записи для агента " + ag.Nickname + " (запусти [4] Add Router)")
 			}
 		}
 	}

@@ -7,15 +7,10 @@ import (
 )
 
 func TestSmokeCheckAgentReconcile(t *testing.T) {
-	yaml := `
-agents:
-  - nickname: alpha
-    token: "deadbeef"
-    thread_id: 12
-  - nickname: beta-router_2
-    token: "cafebabe"
-    thread_id: 34
-`
+	// sqlite3 -separator '|' would prefix; we use plain SELECT nickname so
+	// each row is just the nickname plus a trailing newline. Test against
+	// that exact format.
+	dbOut := "alpha\nbeta-router_2\n"
 	tests := []struct {
 		name    string
 		agents  []AgentState
@@ -44,7 +39,7 @@ agents:
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := smokeCheckAgentReconcile(yaml, tc.agents)
+			got := smokeCheckAgentReconcile(dbOut, tc.agents)
 			sort.Strings(got)
 			sort.Strings(tc.missing)
 			if !reflect.DeepEqual(got, tc.missing) {

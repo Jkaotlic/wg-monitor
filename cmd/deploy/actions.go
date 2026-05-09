@@ -8,11 +8,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
-	"gopkg.in/yaml.v3"
 )
 
 func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) error {
@@ -345,35 +345,12 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		return fmt.Errorf("missing required fields")
 	}
 
-	// Запросить хотя бы одного агента (для backend.yaml.agents)
-	if len(state.Agents) == 0 {
-		nick := Ask("Никнейм первого роутера (a-z, 2-16)", "testkeen")
-		thread := parseIntOr(Ask("Telegram thread_id для топика этого роутера", "1"), 1)
-		state.Agents = append(state.Agents, AgentState{
-			Nickname: nick,
-			ThreadID: thread,
-		})
-	}
-	// Сгенерить токен агенту если ещё нет в env
-	agentTokens := map[string]string{}
-	for i := range state.Agents {
-		ag := &state.Agents[i]
-		envName := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
-		tok := os.Getenv(envName)
-		if tok == "" {
-			tok = randomHexToken(32)
-			PrintWarn(fmt.Sprintf("сгенерирован токен для %s — сохрани в %s", ag.Nickname, envName))
-			fmt.Println("    " + tok)
-		}
-		agentTokens[ag.Nickname] = tok
-	}
-
 	// 2. SSH
 	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
 	if err != nil {
 		return err
 	}
-	PrintStep(1, 12, "SSH к VPS")
+	PrintStep(1, 13, "SSH к VPS")
 	s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
 	if err != nil {
 		PrintFail(err.Error())
@@ -381,29 +358,19 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	defer s.Close()
 
-	PrintStep(2, 12, "User wgmonitor")
+	PrintStep(2, 13, "User wgmonitor")
 	if err := stepEnsureUser(s, "wgmonitor"); err != nil {
 		return err
 	}
 
-	PrintStep(3, 12, "Директории")
+	PrintStep(3, 13, "Директории")
 	stepEnsureDir(s, "/etc/wg-monitor", "")
 	stepEnsureDir(s, "/var/lib/wg-monitor", "wgmonitor:wgmonitor")
 
-	PrintStep(4, 12, "backend.yaml")
-	var entries []AgentEntry
-	for _, ag := range state.Agents {
-		entries = append(entries, AgentEntry{
-			Nickname: ag.Nickname,
-			Token:    agentTokens[ag.Nickname],
-			ThreadID: ag.ThreadID,
-		})
-	}
+	PrintStep(4, 13, "backend.yaml")
 	yamlBytes, err := RenderBackendYAML(BackendParams{
-		BotToken:    botToken,
 		ChatID:      state.Telegram.ChatID,
 		AdminUserID: state.Telegram.AdminUserID,
-		Agents:      entries,
 	})
 	if err != nil {
 		return err
@@ -412,7 +379,17 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		return err
 	}
 
-	PrintStep(5, 12, "systemd unit")
+	PrintStep(5, 13, "bot-token.txt")
+	// Отдельный файл, потому что backend.yaml имеет mode 600 root:wgmonitor —
+	// читаемый отладчиком. Токен бота — нет: только wgmonitor.
+	if err := stepUploadFile(s, "/etc/wg-monitor/bot-token.txt", []byte(strings.TrimSpace(botToken)+"\n"), "600"); err != nil {
+		return err
+	}
+	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/bot-token.txt"); err != nil {
+		PrintWarn("chown bot-token.txt: " + err.Error())
+	}
+
+	PrintStep(6, 13, "systemd unit")
 	unit, err := ReadStaticTemplate("wg-monitor-backend.service")
 	if err != nil {
 		return err
@@ -425,12 +402,12 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("daemon-reload + enable")
 
-	PrintStep(6, 12, "Caddy")
+	PrintStep(7, 13, "Caddy")
 	if err := stepInstallCaddy(s); err != nil {
 		return err
 	}
 
-	PrintStep(7, 12, "Caddyfile")
+	PrintStep(8, 13, "Caddyfile")
 	cf, err := RenderCaddyfile(CaddyParams{Domain: state.Backend.Domain, Email: caddyEmail})
 	if err != nil {
 		return err
@@ -444,18 +421,18 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintOK("caddy reloaded")
 	}
 
-	PrintStep(8, 12, "Скачать backend бинарь")
+	PrintStep(9, 13, "Скачать backend бинарь")
 	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
 	if err != nil {
 		return err
 	}
 
-	PrintStep(9, 12, "Upload + sha + swap")
+	PrintStep(10, 13, "Upload + sha + swap")
 	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", ""); err != nil {
 		return err
 	}
 
-	PrintStep(10, 12, "Start service")
+	PrintStep(11, 13, "Start service")
 	if _, err := s.MustRun("systemctl start wg-monitor-backend"); err != nil {
 		return err
 	}
@@ -463,7 +440,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 
 	time.Sleep(3 * time.Second)
 
-	PrintStep(11, 12, "Verify systemctl is-active")
+	PrintStep(12, 13, "Verify systemctl is-active")
 	out, _ := s.MustRun("systemctl is-active wg-monitor-backend")
 	if strings.TrimSpace(out) != "active" {
 		PrintFail("сервис не active. Логи:")
@@ -473,7 +450,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("active")
 
-	PrintStep(12, 12, "Verify /health через домен")
+	PrintStep(13, 13, "Verify /health через домен")
 	url := "https://" + state.Backend.Domain + "/healthz"
 	if err := stepVerifyHTTP(s, url); err != nil {
 		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
@@ -490,49 +467,36 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("no backend")
 	}
 
-	nick := Ask("Никнейм нового роутера (a-z0-9_-, уникальный)", "")
+	nick := Ask("Никнейм нового роутера (a-z, начинается с буквы, 2-16 символов)", "")
 	if nick == "" {
 		return fmt.Errorf("nickname required")
 	}
+	if !cliNicknameRe.MatchString(nick) {
+		PrintFail(fmt.Sprintf("nickname %q не подходит под ^[a-z][a-z0-9_-]{1,15}$ (требование wg-monitor-cli)", nick))
+		return fmt.Errorf("invalid nickname")
+	}
 
-	// Идемпотентность: если предыдущий прогон упал между «токен сгенерирован
-	// + agent в wizard.toml» и «backend.yaml залит на VPS / install-agent
-	// прошёл», nickname уже есть в state. В этом случае резюмируем — токен
-	// в disk-кэше есть, threadID сохранён, нужно только дойти до конца.
-	resume := false
-	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
+	awgIface := "awg0"
+	expectedExitIP := ""
+	kind := "static"
 	if existing := state.FindAgent(nick); existing != nil {
-		if secrets.GetNonInteractive(tokEnv) == "" {
-			PrintFail("такой никнейм уже есть в wizard.toml, но токен утерян — почини вручную")
-			return fmt.Errorf("duplicate nickname without cached token")
+		if existing.AwgIface != "" {
+			awgIface = existing.AwgIface
 		}
-		ans := strings.ToLower(strings.TrimSpace(Ask(
-			fmt.Sprintf("nickname %q уже в wizard.toml — резюмировать установку? [y/N]", nick), "n")))
-		if ans != "y" && ans != "yes" {
-			return fmt.Errorf("aborted by user")
-		}
-		resume = true
-		PrintOK(fmt.Sprintf("резюмирую установку %s (токен из disk-кэша, threadID=%d)", nick, existing.ThreadID))
+		expectedExitIP = existing.ExpectedExitIP
+	}
+	awgIface = orDefault(Ask("AmneziaWG iface на роутере", awgIface), "awg0")
+	expectedExitIP = Ask("Expected exit IPv4 (что бэкенд должен видеть как public IP через тоннель)", expectedExitIP)
+	if expectedExitIP == "" {
+		return fmt.Errorf("expected exit IP required")
+	}
+	kind = orDefault(strings.ToLower(Ask("Kind (static / mobile)", kind)), "static")
+	if kind != "static" && kind != "mobile" {
+		PrintFail("kind должен быть static или mobile")
+		return fmt.Errorf("invalid kind")
 	}
 
-	// 1. Сгенерировать токен и сразу положить в disk-кэш секретов, чтобы
-	// последующие действия (regen backend.yaml в этой сессии + любые
-	// re-deploy в будущем) не просили его вводить вручную. На resume —
-	// пропускаем, токен уже в disk-кэше.
-	if !resume {
-		tok := randomHexToken(32)
-		if err := secrets.Set(tokEnv, tok); err != nil {
-			PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
-		} else {
-			PrintOK(fmt.Sprintf("токен %s сгенерирован и сохранён в disk-кэш", tokEnv))
-		}
-		// also seed the in-process env so old code paths reading via os.Getenv
-		// (install-agent below, RenderBackendYAML loop) still find the value.
-		os.Setenv(tokEnv, tok)
-	}
-
-	// 2. Добавить в backend.yaml на VPS.
-	PrintStep(1, 3, "Обновить backend.yaml на VPS")
+	// SSH к VPS — все шаги ниже идут через одно подключение.
 	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
 	if pass == "" {
 		return fmt.Errorf("missing VPS password")
@@ -544,128 +508,145 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 	defer bs.Close()
 
-	// На resume — топик и запись в state уже есть, не дёргаем TG API повторно.
-	if !resume {
+	// Источник истины по агентам — таблица users в /var/lib/wg-monitor/state.db.
+	// Создаём запись через wg-monitor-cli (он сам сгенерит raw-токен и захэширует
+	// в DB). Из stdout вытягиваем raw-токен — единственный момент, когда его
+	// видно открытым. Идемпотентности на стороне CLI нет: повторный вызов с тем
+	// же nickname упадёт на UNIQUE constraint, и raw-токен мы тогда уже не
+	// получим (хэш в DB не обратим). Поэтому сначала проверяем, есть ли уже
+	// запись в DB.
+	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
+	PrintStep(1, 3, "Зарегистрировать "+nick+" в DB на VPS")
+	exists, err := vpsUserExists(bs, nick)
+	if err != nil {
+		return fmt.Errorf("check users table: %w", err)
+	}
+	var rawToken string
+	switch {
+	case exists && secrets.GetNonInteractive(tokEnv) != "":
+		PrintInfo(fmt.Sprintf("%s уже в DB на VPS, использую токен из локального disk-кэша", nick))
+		rawToken = secrets.GetNonInteractive(tokEnv)
+	case exists && secrets.GetNonInteractive(tokEnv) == "":
+		PrintFail(fmt.Sprintf(
+			"%s уже в DB на VPS, но raw-токен утерян (token_hash необратим). Удали запись вручную:\n"+
+				"  ssh root@%s sqlite3 /var/lib/wg-monitor/state.db \"DELETE FROM users WHERE nickname='%s';\"\n"+
+				"и запусти [4] заново.",
+			nick, state.Backend.Host, nick))
+		return fmt.Errorf("user exists in DB but token unknown")
+	default:
+		// Чистый путь — CLI создаёт пользователя и печатает raw-токен.
+		rawToken, err = vpsAddUser(bs, nick, awgIface, expectedExitIP, kind)
+		if err != nil {
+			return err
+		}
+		if err := secrets.Set(tokEnv, rawToken); err != nil {
+			PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
+		} else {
+			PrintOK(fmt.Sprintf("токен %s сохранён в disk-кэш", tokEnv))
+		}
+	}
+	os.Setenv(tokEnv, rawToken)
+
+	// Запись в wizard.toml: создаём, если ещё нет; обновляем поля иначе.
+	ag := state.FindAgent(nick)
+	if ag == nil {
+		state.Agents = append(state.Agents, AgentState{Nickname: nick})
+		ag = &state.Agents[len(state.Agents)-1]
+	}
+	ag.AwgIface = awgIface
+	ag.ExpectedExitIP = expectedExitIP
+
+	// Telegram-топик. Если уже есть thread_id (резюм), не дёргаем API.
+	PrintStep(2, 3, "Telegram форум-топик")
+	if ag.ThreadID == 0 {
 		threadID := autoCreateForumTopic(state, secrets, nick)
 		if threadID == 0 {
 			threadID = parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
 		}
-		state.Agents = append(state.Agents, AgentState{
-			Nickname: nick,
-			ThreadID: threadID,
-		})
+		ag.ThreadID = threadID
+	} else {
+		PrintInfo(fmt.Sprintf("thread_id=%d уже сохранён, пропускаю createForumTopic", ag.ThreadID))
 	}
-
-	// Cross-PC fallback: токены агентов, установленных с другой машины, в
-	// локальном disk-кэше отсутствуют (env+disk на этом ПК их никогда не
-	// видели). Источник истины — задеплоенный backend.yaml на VPS, оттуда
-	// и забираем недостающие. Соединение уже открыто (bs).
-	deployedTokens := readDeployedAgentTokens(bs)
-
-	// Все токены: для нового — только что сгенерированный (уже в disk-кэше),
-	// для существующих — env → disk → deployed yaml. Если найден в env, но не
-	// в disk-кэше — миграция: пишем в disk, чтобы следующий раз тоже нашёлся.
-	var entries []AgentEntry
-	for _, a := range state.Agents {
-		envName := "WG_AGENT_TOKEN_" + strings.ToUpper(a.Nickname)
-		t := secrets.GetNonInteractive(envName)
-		if t == "" {
-			if dt, ok := deployedTokens[a.Nickname]; ok && dt != "" {
-				t = dt
-				PrintInfo(fmt.Sprintf("токен для %s восстановлен из backend.yaml на VPS", a.Nickname))
-			}
-		}
-		if t == "" {
-			PrintFail(fmt.Sprintf(
-				"токен для %s неизвестен. Если этот агент устанавливался раньше, добавь токен в %s или экспортируй %s",
-				a.Nickname, secretsCachePath(), envName))
-			return fmt.Errorf("missing token for %s", a.Nickname)
-		}
-		// best-effort migration into the disk cache; ignore write errors.
-		_ = secrets.Set(envName, t)
-		entries = append(entries, AgentEntry{
-			Nickname: a.Nickname,
-			Token:    t,
-			ThreadID: a.ThreadID,
-		})
-	}
-
-	// Bot token берём заново — т.к. не в state
-	botToken, _ := secrets.Get("WG_BOT_TOKEN", "Telegram bot token", nil)
-	yamlBytes, err := RenderBackendYAML(BackendParams{
-		BotToken:    botToken,
-		ChatID:      state.Telegram.ChatID,
-		AdminUserID: state.Telegram.AdminUserID,
-		Agents:      entries,
-	})
-	if err != nil {
-		return err
-	}
-	if err := stepUploadFile(bs, "/etc/wg-monitor/backend.yaml", yamlBytes, "600"); err != nil {
-		return err
-	}
-
-	PrintStep(2, 3, "Перезапустить бэкенд")
-	if _, err := bs.MustRun("systemctl restart wg-monitor-backend"); err != nil {
-		return err
-	}
-	time.Sleep(2 * time.Second)
-	out, _ := bs.MustRun("systemctl is-active wg-monitor-backend")
-	if strings.TrimSpace(out) != "active" {
-		jr, _ := bs.MustRun("journalctl -u wg-monitor-backend -n 30 --no-pager")
-		PrintFail("бэкенд не active после restart:\n" + jr)
-		return fmt.Errorf("backend not active")
-	}
-	PrintOK("бэкенд перезапущен")
 
 	PrintStep(3, 3, "Установить агента на новый роутер")
-	// Сохранить токен в env для текущего процесса, чтобы install-agent его подхватил.
-	// Источник — disk-кэш: и в свежем прогоне (только что записан), и в resume.
-	os.Setenv(tokEnv, secrets.GetNonInteractive(tokEnv))
 	return actionInstallAgent(state, secrets, dl, nick)
 }
 
-// readDeployedAgentTokens fetches /etc/wg-monitor/backend.yaml from the VPS
-// and returns nickname → token from its agents list. Used by actionAddRouter
-// to recover tokens for agents originally enrolled from a different operator
-// workstation: the secrets disk-cache is per-machine, but the deployed yaml
-// is the source of truth on the server. All errors are warned but non-fatal
-// — caller degrades to the existing "missing token" failure path.
-func readDeployedAgentTokens(bs *SSH) map[string]string {
-	out := map[string]string{}
-	yamlOut, stderr, rc, err := bs.Run("cat /etc/wg-monitor/backend.yaml")
+// cliNicknameRe mirrors wg-monitor-cli's own regex (cmd/wg-monitor-cli/main.go).
+// The CLI rejects anything else, so we validate up-front to avoid a confusing
+// error after we've already collected awg_iface/expected_exit_ip.
+var cliNicknameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
+
+// vpsUserExists checks /var/lib/wg-monitor/state.db for a row with the given
+// nickname via sqlite3 (which is part of the standard VPS toolchain — same
+// binary the CLI uses). Returns (exists, err); a missing DB or sqlite3 binary
+// is treated as a real error so the caller doesn't silently fall through to
+// vpsAddUser and clobber an existing row.
+func vpsUserExists(bs *SSH, nick string) (bool, error) {
+	cmd := fmt.Sprintf(
+		`sqlite3 /var/lib/wg-monitor/state.db "SELECT 1 FROM users WHERE nickname = '%s' LIMIT 1;"`,
+		strings.ReplaceAll(nick, "'", "''"),
+	)
+	out, stderr, rc, err := bs.Run(cmd)
 	if err != nil {
-		PrintWarn("не смог прочитать backend.yaml с VPS (ssh transport): " + err.Error())
-		return out
+		return false, fmt.Errorf("ssh transport: %w", err)
 	}
 	if rc != 0 {
-		PrintWarn(fmt.Sprintf("cat /etc/wg-monitor/backend.yaml вернул rc=%d, stderr=%q", rc, strings.TrimSpace(stderr)))
-		return out
+		return false, fmt.Errorf("sqlite3 rc=%d stderr=%q", rc, strings.TrimSpace(stderr))
 	}
-	if strings.TrimSpace(yamlOut) == "" {
-		PrintWarn("backend.yaml на VPS пустой — нечего восстанавливать")
-		return out
+	return strings.TrimSpace(out) == "1", nil
+}
+
+// vpsAddUser invokes /usr/local/bin/wg-monitor-cli add-user on the VPS and
+// extracts the raw token from its stdout. The CLI prints exactly one
+// "Token (raw, save now — only shown once): <hex>\n" line — see
+// cmd/wg-monitor-cli/main.go runAddUser. Returns an actionable error if the
+// CLI binary isn't installed (operator either ran wizard before that release
+// or wiped /usr/local/bin).
+func vpsAddUser(bs *SSH, nick, awgIface, expectedExitIP, kind string) (string, error) {
+	if _, _, rc, _ := bs.Run("test -x /usr/local/bin/wg-monitor-cli"); rc != 0 {
+		return "", fmt.Errorf(
+			"/usr/local/bin/wg-monitor-cli не установлен на VPS — на этом VPS он добавлялся вручную. " +
+				"Поставь его вручную (scp wg-monitor-cli-linux-amd64 → /usr/local/bin/wg-monitor-cli, chmod +x) и повтори [4].")
 	}
-	var by doctorBackendYAML
-	if perr := yaml.Unmarshal([]byte(yamlOut), &by); perr != nil {
-		PrintWarn("backend.yaml на VPS не парсится: " + perr.Error())
-		return out
+	cmd := fmt.Sprintf(
+		`/usr/local/bin/wg-monitor-cli add-user --nickname=%s --awg-iface=%s --expected-exit-ip=%s --kind=%s`,
+		shellSingleQuote(nick), shellSingleQuote(awgIface), shellSingleQuote(expectedExitIP), shellSingleQuote(kind),
+	)
+	out, stderr, rc, err := bs.Run(cmd)
+	if err != nil {
+		return "", fmt.Errorf("ssh transport: %w", err)
 	}
-	for _, a := range by.Agents {
-		if a.Nickname != "" && a.Token != "" {
-			out[a.Nickname] = a.Token
-		}
+	if rc != 0 {
+		return "", fmt.Errorf("wg-monitor-cli add-user rc=%d stderr=%q", rc, strings.TrimSpace(stderr))
 	}
-	if len(out) == 0 {
-		PrintWarn(fmt.Sprintf("в backend.yaml на VPS нет агентов с токенами (parsed %d entries)", len(by.Agents)))
-	} else {
-		nicks := make([]string, 0, len(out))
-		for k := range out {
-			nicks = append(nicks, k)
-		}
-		PrintInfo(fmt.Sprintf("из backend.yaml на VPS поднято %d токен(ов): %s", len(out), strings.Join(nicks, ", ")))
+	tok := extractRawTokenFromAddUserOutput(out)
+	if tok == "" {
+		return "", fmt.Errorf("wg-monitor-cli add-user отработал rc=0, но raw-токен не найден в stdout: %q", out)
 	}
-	return out
+	PrintOK("wg-monitor-cli add-user выполнился, raw-токен получен")
+	return tok, nil
+}
+
+// addUserTokenLineRe matches the raw-token line printed by wg-monitor-cli.
+// Format is fixed (cmd/wg-monitor-cli/main.go:113). Token is 64 hex chars
+// (32-byte rand → hex.EncodeToString).
+var addUserTokenLineRe = regexp.MustCompile(`Token \(raw, save now[^)]*\):\s*([0-9a-fA-F]{64})`)
+
+func extractRawTokenFromAddUserOutput(stdout string) string {
+	m := addUserTokenLineRe.FindStringSubmatch(stdout)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+// shellSingleQuote wraps s in POSIX single quotes for safe inclusion in a
+// remote `sh -c` command. ASCII-only inputs (validated upstream) make the
+// escape trivial — we just close the quote, emit a backslash-quote, and
+// reopen.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // autoCreateForumTopic tries to create a Telegram forum topic for the new
