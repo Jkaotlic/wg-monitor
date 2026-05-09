@@ -1,9 +1,34 @@
 package callbacks
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
+
+	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
+	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
+
+// fakeSink implements CommandEnqueuer for tests.
+type fakeSink struct {
+	enq []enqueued
+}
+
+type enqueued struct {
+	UserID int64
+	Cmd    wire.Command
+}
+
+func (f *fakeSink) Enqueue(uid int64, cmd wire.Command) error {
+	f.enq = append(f.enq, enqueued{uid, cmd})
+	return nil
+}
+func (f *fakeSink) EnqueueWithRef(uid int64, cmd wire.Command, _ cmdpkg.MessageRef) error {
+	f.enq = append(f.enq, enqueued{uid, cmd})
+	return nil
+}
 
 func TestPendingMaintStore_HappyPath(t *testing.T) {
 	store := newPendingMaintStore()
@@ -106,5 +131,134 @@ func TestCooldownStore_ExpiredCleared(t *testing.T) {
 	time.Sleep(5 * time.Millisecond)
 	if rem := store.remaining(1, "router_reboot"); rem != 0 {
 		t.Errorf("expired cooldown should report 0, got %v", rem)
+	}
+}
+
+func TestMaintConfirmAction_Hrneo(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, Name: "hrneo", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-1" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "hrneo", MaintToken: tok}
+	status, err := a.Apply(context.Background(), q, args)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !strings.Contains(status, "hrneo") {
+		t.Errorf("status=%q should mention hrneo", status)
+	}
+	if len(sink.enq) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.enq))
+	}
+	if sink.enq[0].Cmd.Action != "service_restart" {
+		t.Errorf("Action=%q want service_restart", sink.enq[0].Cmd.Action)
+	}
+	if sink.enq[0].Cmd.Args["name"] != "hrneo" {
+		t.Errorf("Args=%v", sink.enq[0].Cmd.Args)
+	}
+	if cd.remaining(1, "router_reboot") != 0 {
+		t.Error("hrneo should NOT set router_reboot cooldown")
+	}
+	if cd.remaining(1, "firmware_install") != 0 {
+		t.Error("hrneo should NOT set firmware_install cooldown")
+	}
+}
+
+func TestMaintConfirmAction_Awgmgr(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, Name: "awgmgr", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-2" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "awgmgr", MaintToken: tok}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatal(err)
+	}
+	if sink.enq[0].Cmd.Args["name"] != "awgmgr" {
+		t.Errorf("Args=%v want name=awgmgr", sink.enq[0].Cmd.Args)
+	}
+	if cd.remaining(1, "router_reboot") != 0 || cd.remaining(1, "firmware_install") != 0 {
+		t.Error("awgmgr should NOT set any cooldown")
+	}
+}
+
+func TestMaintConfirmAction_Router_AppliesCooldown(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, Name: "router", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-3" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "router", MaintToken: tok}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatal(err)
+	}
+	if sink.enq[0].Cmd.Action != "service_restart" {
+		t.Errorf("Action=%q", sink.enq[0].Cmd.Action)
+	}
+	if sink.enq[0].Cmd.Args["name"] != "router" {
+		t.Errorf("Args=%v", sink.enq[0].Cmd.Args)
+	}
+	if cd.remaining(1, "router_reboot") <= 0 {
+		t.Error("router should set router_reboot cooldown")
+	}
+}
+
+func TestMaintConfirmAction_Firmware_AppliesCooldown(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, Name: "firmware", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-4" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "firmware", MaintToken: tok}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatal(err)
+	}
+	if sink.enq[0].Cmd.Action != "firmware_install" {
+		t.Errorf("Action=%q want firmware_install", sink.enq[0].Cmd.Action)
+	}
+	// firmware_install does not need a `name` arg
+	if cd.remaining(1, "firmware_install") <= 0 {
+		t.Error("firmware should set firmware_install cooldown")
+	}
+}
+
+func TestMaintConfirmAction_BadToken(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-x" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "hrneo", MaintToken: "deadbeef"}
+	if _, err := a.Apply(context.Background(), q, args); err == nil {
+		t.Error("expected error for unknown token")
+	}
+	if len(sink.enq) != 0 {
+		t.Errorf("nothing should be enqueued on bad token, got %d entries", len(sink.enq))
+	}
+}
+
+func TestMaintConfirmAction_UnknownName(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, Name: "wat", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-x" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "wat", MaintToken: tok}
+	if _, err := a.Apply(context.Background(), q, args); err == nil {
+		t.Error("expected error for unknown name")
+	}
+	if len(sink.enq) != 0 {
+		t.Errorf("nothing should be enqueued on unknown name")
 	}
 }

@@ -1,10 +1,16 @@
 package callbacks
 
 import (
+	"context"
 	cryptoRand "crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"time"
+
+	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
+	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 // pendingMaint is one queued maintenance confirmation. Created when the user
@@ -104,3 +110,55 @@ func (s *cooldownStore) remaining(userID int64, action string) time.Duration {
 	}
 	return rem
 }
+
+// MaintConfirmAction implements the Action interface for the maint_confirm /
+// maint_fw_confirm callbacks. It atomically consumes the pending token,
+// enqueues the appropriate wire.Command for the agent, and applies a
+// per-user, per-action cooldown for destructive ops (router reboot, firmware
+// install). hrneo / awgmgr restarts are cheap and do not trigger cooldown.
+type MaintConfirmAction struct {
+	sink  CommandEnqueuer
+	store *pendingMaintStore
+	cd    *cooldownStore
+	idGen func() string
+}
+
+func NewMaintConfirmAction(sink CommandEnqueuer, store *pendingMaintStore, cd *cooldownStore, idGen func() string) *MaintConfirmAction {
+	return &MaintConfirmAction{sink: sink, store: store, cd: cd, idGen: idGen}
+}
+
+func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	pm, ok := a.store.consume(args.UserID, args.MaintToken)
+	if !ok {
+		return "", fmt.Errorf("token expired or unknown")
+	}
+	cmd := wire.Command{ID: a.idGen(), IssuedAt: time.Now().UTC()}
+	cooldownAction := ""
+	switch pm.Name {
+	case "hrneo", "awgmgr":
+		cmd.Action = "service_restart"
+		cmd.Args = map[string]any{"name": pm.Name}
+	case "router":
+		cmd.Action = "service_restart"
+		cmd.Args = map[string]any{"name": "router"}
+		cooldownAction = "router_reboot"
+	case "firmware":
+		cmd.Action = "firmware_install"
+		cooldownAction = "firmware_install"
+	default:
+		return "", fmt.Errorf("unknown maint name: %q", pm.Name)
+	}
+	if err := a.sink.Enqueue(args.UserID, cmd); err != nil {
+		return "", fmt.Errorf("enqueue failed: %w", err)
+	}
+	if cooldownAction != "" {
+		a.cd.set(args.UserID, cooldownAction, 5*time.Minute)
+	}
+	return fmt.Sprintf("✅ запрос отправлен: %s", pm.Name), nil
+}
+
+// ensure MaintConfirmAction satisfies Action at compile time.
+var _ Action = (*MaintConfirmAction)(nil)
+
+// suppress unused-import lint until callers wire cmdpkg.MessageRef.
+var _ cmdpkg.MessageRef

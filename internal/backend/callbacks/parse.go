@@ -37,6 +37,11 @@ type Args struct {
 	// RebindSrcID / RebindDstID parsed from routes_pick / routes_confirm.
 	RebindSrcID string
 	RebindDstID string
+	// MaintName is the target of a maint_restart / maint_confirm callback:
+	// "hrneo" | "awgmgr" | "router" | "firmware". Set by Parse for those actions.
+	MaintName string
+	// MaintToken is the 8-hex confirm token for maint_confirm / maint_fw_confirm.
+	MaintToken string
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
