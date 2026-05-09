@@ -46,6 +46,10 @@ var validCommandActions = map[string]bool{
 	"tunnel_import":    true,
 	"route_status":     true,
 	"route_rebind":     true,
+	"service_restart":  true,
+	"firmware_status":  true,
+	"firmware_install": true,
+	"version_audit":    true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }
