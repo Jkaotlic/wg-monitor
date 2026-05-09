@@ -10,6 +10,7 @@ import (
 )
 
 func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloader) {
+	PrintBanner()
 	for {
 		printMenuHeader(state)
 		printMenuItems(state)
@@ -25,7 +26,7 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 			})
 		case "2":
 			runActionAndSave(state, statePath, secrets, func() error {
-				return actionUpdateBackend(state, secrets, dl)
+				return actionUpdateComponents(state, secrets, dl)
 			})
 		case "3":
 			runActionAndSave(state, statePath, secrets, func() error {
@@ -33,15 +34,11 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 			})
 		case "4":
 			runActionAndSave(state, statePath, secrets, func() error {
-				return actionUpdateAgent(state, secrets, dl, "")
-			})
-		case "5":
-			runActionAndSave(state, statePath, secrets, func() error {
 				return actionAddRouter(state, secrets, dl)
 			})
-		case "6":
+		case "5":
 			actionStatus(state, secrets) //nolint:errcheck
-		case "7":
+		case "6":
 			openInEditor(statePath)
 			// Reload after edit.
 			if reloaded, err := LoadState(statePath); err == nil {
@@ -50,7 +47,7 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–7 или Q.")
+			PrintFail("Не понял. Введи 1–6 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -77,22 +74,15 @@ func printMenuHeader(state *State) {
 func printMenuItems(state *State) {
 	fmt.Println()
 	fmt.Println("  [1] Первичная установка бэкенда на VPS")
-	if state.Backend.Host != "" {
-		fmt.Printf("  [2] Обновить бэкенд на VPS  %s\n",
-			Colorize("(last: "+state.Backend.LastDeploy+")", ColorDim))
+	if state.Backend.Host == "" && len(state.Agents) == 0 {
+		fmt.Println("  [2] Обновить компоненты  " + Colorize("(сначала установи)", ColorDim))
 	} else {
-		fmt.Println("  [2] Обновить бэкенд на VPS  " + Colorize("(сначала установи)", ColorDim))
+		fmt.Println("  [2] Обновить компоненты  " + Colorize("(проверка релиза + выбор что обновить)", ColorDim))
 	}
 	fmt.Println("  [3] Первичная установка агента на роутер")
-	if len(state.Agents) > 0 {
-		fmt.Printf("  [4] Обновить агента на роутере  %s\n",
-			Colorize("(last: "+state.Agents[0].LastDeploy+")", ColorDim))
-	} else {
-		fmt.Println("  [4] Обновить агента на роутере  " + Colorize("(сначала установи)", ColorDim))
-	}
-	fmt.Println("  [5] Добавить новый роутер")
-	fmt.Println("  [6] Проверить статус")
-	fmt.Println("  [7] Открыть wizard.toml в редакторе")
+	fmt.Println("  [4] Добавить новый роутер")
+	fmt.Println("  [5] Проверить статус")
+	fmt.Println("  [6] Открыть wizard.toml в редакторе")
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }
