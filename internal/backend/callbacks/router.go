@@ -496,12 +496,31 @@ func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user
 	}
 }
 
-// openMaintPanelMessage sends the initial Maintenance panel placeholder and
-// enqueues a version_audit command. The cmd-result handler (MaintNotifier
-// in M11) edits the panel in place when the agent answers.
+// openMaintPanelMessage sends the initial Maintenance panel and enqueues a
+// fresh version_audit. When a recent (≤ maintCacheFreshFor) audit is cached,
+// the panel is rendered from cache instantly with a "🔄 обновляется в фоне…"
+// header — the MaintNotifier replaces it with fresh data when the agent
+// answers (typically within a second). With no usable cache, falls back to
+// the bare "обновляется…" placeholder.
 func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
-	loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
-	mid, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+	const maintCacheFreshFor = 5 * time.Minute
+	var (
+		mid int64
+		err error
+	)
+	if va, age, ok := r.auditCache.GetVersionAuditWithAge(user.ID); ok && age < maintCacheFreshFor {
+		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown)
+		text := "🔄 обновляется в фоне…\n\n" + tg.MaintPanelText(args)
+		kb := tg.MaintPanelKeyboard(user.ID, args)
+		// Inline + reply keyboards can't share a single sendMessage payload
+		// (TG accepts only one reply_markup). The persistent reply keyboard
+		// re-installs naturally on the next non-inline message; here the
+		// inline panel kb wins so the user can act immediately on cached data.
+		mid, err = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
+	} else {
+		loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
+		mid, err = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+	}
 	if err != nil {
 		slog.Warn("maint panel send failed", "err", err)
 		return
