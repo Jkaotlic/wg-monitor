@@ -28,7 +28,10 @@ func TestFirmwareStatus_RoundTrip(t *testing.T) {
 		Hint:      "system upgrade is available",
 		Channel:   "release",
 	}
-	b, _ := json.Marshal(in)
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
 	var out FirmwareStatus
 	if err := json.Unmarshal(b, &out); err != nil { t.Fatalf("unmarshal: %v", err) }
 	if out != in { t.Fatalf("round-trip diverged:\n  in=%+v\n out=%+v", in, out) }
