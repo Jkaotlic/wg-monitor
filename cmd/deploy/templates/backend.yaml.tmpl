@@ -27,3 +27,11 @@ heartbeat:
   stale_after_mobile_sec: 300
   resume_grace_sec: 30
   scan_interval_sec: 30
+
+# Soft-warning Updates section sources for the Maintenance panel +
+# 📊 Что происходит? smart-reply. Empty repo → that source is silently
+# skipped (no false-positive warnings). Cache TTL defaults to 12h.
+upstream:
+  awgmgr_repo: "hoaxisr/awg-manager"
+  hrneo_repo: ""    # Ground-Zerro/HydraRoute publishes via opkg feed, not GitHub releases — leave empty
+  cache_ttl: 12h
