@@ -18,6 +18,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/heartbeat"
 	"github.com/anex/wg-monitor/internal/backend/realert"
+	"github.com/anex/wg-monitor/internal/backend/retention"
 	"github.com/anex/wg-monitor/internal/backend/state"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/internal/backend/upstream"
@@ -121,6 +122,17 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	go watcher.Run(ctx)
+
+	retentionPolicy := &retention.Policy{
+		DB: d,
+		Cfg: retention.Config{
+			EventsDays:         cfg.Retention.EventsDays,
+			VacuumInterval:     cfg.Retention.VacuumInterval,
+			WALCheckpointEvery: cfg.Retention.WALCheckpointEvery,
+		},
+		Logger: logger,
+	}
+	go retentionPolicy.Run(ctx)
 
 	go func() {
 		if err := cb.Run(ctx); err != nil {
