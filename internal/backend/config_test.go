@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -132,5 +133,59 @@ ui:
 	if c.UI.SmartReplyWithKeyboard == nil || *c.UI.SmartReplyWithKeyboard {
 		t.Errorf("SmartReplyWithKeyboard: explicit false should be honoured, got %v",
 			c.UI.SmartReplyWithKeyboard)
+	}
+}
+
+func TestLoadConfig_UpstreamDefaults(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "test-token")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 1
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Upstream.CacheTTL != 12*time.Hour {
+		t.Errorf("CacheTTL default = %v, want 12h", cfg.Upstream.CacheTTL)
+	}
+	if cfg.Upstream.AwgmgrRepo != "" {
+		t.Errorf("AwgmgrRepo default = %q, want empty", cfg.Upstream.AwgmgrRepo)
+	}
+	if cfg.Upstream.HrneoRepo != "" {
+		t.Errorf("HrneoRepo default = %q, want empty", cfg.Upstream.HrneoRepo)
+	}
+}
+
+func TestLoadConfig_UpstreamParsed(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "test-token")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 1
+upstream:
+  awgmgr_repo: owner/awg-manager
+  hrneo_repo: owner/hr-neo
+  cache_ttl: 6h
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Upstream.AwgmgrRepo != "owner/awg-manager" {
+		t.Errorf("AwgmgrRepo = %q, want owner/awg-manager", cfg.Upstream.AwgmgrRepo)
+	}
+	if cfg.Upstream.HrneoRepo != "owner/hr-neo" {
+		t.Errorf("HrneoRepo = %q, want owner/hr-neo", cfg.Upstream.HrneoRepo)
+	}
+	if cfg.Upstream.CacheTTL != 6*time.Hour {
+		t.Errorf("CacheTTL = %v, want 6h", cfg.Upstream.CacheTTL)
 	}
 }
