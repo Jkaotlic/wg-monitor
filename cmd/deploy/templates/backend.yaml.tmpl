@@ -35,3 +35,10 @@ upstream:
   awgmgr_repo: "hoaxisr/awg-manager"
   hrneo_repo: ""    # Ground-Zerro/HydraRoute publishes via opkg feed, not GitHub releases — leave empty
   cache_ttl: 12h
+
+# DB maintenance: prune old events, VACUUM, WAL checkpoint. Defaults below
+# are conservative; set any field to 0 (or omit) to disable that operation.
+retention:
+  events_days: 30
+  vacuum_interval: 168h
+  wal_checkpoint_every: 1h
