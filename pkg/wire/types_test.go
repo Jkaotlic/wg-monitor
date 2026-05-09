@@ -111,14 +111,18 @@ func TestCommand_JSONFieldNames(t *testing.T) {
 
 func TestIsValidCommandAction(t *testing.T) {
 	cases := map[string]bool{
-		"restart_tunnel": true,
-		"diag_now":       true,
-		"pingcheck_now":  true,
-		"opkg_upgrade":   true,
-		"force_recheck":  true,
-		"":               false,
-		"reboot":         false,
-		"silence":        false, // not a command-channel action
+		"restart_tunnel":   true,
+		"diag_now":         true,
+		"pingcheck_now":    true,
+		"opkg_upgrade":     true,
+		"force_recheck":    true,
+		"service_restart":  true,
+		"firmware_status":  true,
+		"firmware_install": true,
+		"version_audit":    true,
+		"":                 false,
+		"reboot":           false,
+		"silence":          false, // not a command-channel action
 	}
 	for in, want := range cases {
 		got := IsValidCommandAction(in)
