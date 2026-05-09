@@ -41,39 +41,47 @@ func InstallFirmware(ctx context.Context, exec ExecFunc) error {
 // Leading whitespace per line is variable (10-16 spaces); we use suffix
 // matching of trimmed prefixes rather than fixed-column parsing.
 //
-// We track which top-level block we're inside (`firmware:` vs `local:`) by
-// detecting block headers (lines whose trimmed text equals "firmware:" or
-// "local:"), then read the `version:` and `sandbox:` keys within them.
+// The full output is ~2700 lines and contains many per-component blocks AFTER
+// `local:` (each with its own `version:` line). To avoid those overwriting
+// `localVersion`, we (a) reset the block tracker on ANY new top-level block
+// header (`component:`, `sandbox:`, etc.), and (b) only capture the FIRST
+// `version:` per block.
 func parseComponentsList(s string) (wire.FirmwareStatus, error) {
 	var fs wire.FirmwareStatus
 	var firmwareVersion, localVersion string
-	block := "" // "firmware" | "local" | "" (top-level)
+	block := "" // "firmware" | "local" | "" (top-level / unknown)
 	for _, raw := range strings.Split(s, "\n") {
 		// Strip ANSI erase-line escape if present at the very start of a line.
 		line := strings.TrimPrefix(raw, "\x1b[K")
 		line = strings.TrimRight(line, "\r")
 		trimmed := strings.TrimSpace(line)
-		switch trimmed {
-		case "firmware:":
-			block = "firmware"
-			continue
-		case "local:":
-			block = "local"
+		// Detect block headers — lines like "firmware:" / "local:" / "component:"
+		// where the value after `:` is empty.
+		if k, v, ok := splitKV(trimmed); ok && v == "" {
+			switch k {
+			case "firmware":
+				block = "firmware"
+			case "local":
+				block = "local"
+			default:
+				// Any other header (component, etc.) takes us out of firmware/local.
+				block = ""
+			}
 			continue
 		}
 		// Within current block, harvest version: / sandbox: keys.
 		if k, v, ok := splitKV(trimmed); ok {
 			switch {
-			case k == "version" && block == "firmware":
+			case k == "version" && block == "firmware" && firmwareVersion == "":
 				firmwareVersion = v
-			case k == "version" && block == "local":
+			case k == "version" && block == "local" && localVersion == "":
 				localVersion = v
 			case k == "sandbox" && block == "local":
 				// Ignore local.sandbox — we only want the top-level channel.
-			case k == "sandbox":
+			case k == "sandbox" && fs.Channel == "":
 				// Top-level sandbox: line (appears between firmware: and local:
-				// blocks); capture it and reset block context so subsequent
-				// unrelated keys don't pollute the firmware block.
+				// blocks while block is still "firmware"). Capture once and
+				// reset block context so subsequent unrelated keys don't pollute.
 				fs.Channel = v
 				block = ""
 			}
