@@ -316,8 +316,11 @@ func TestEncodeVersionAudit_RoundTrip(t *testing.T) {
 
 func TestVersionAudit_SysInfoError(t *testing.T) {
 	awg := &fakeAwgInfo{sysErr: fmt.Errorf("connection refused")}
+	// Phase 1 fans out concurrently, so other exec'es may run; just return
+	// errors so the best-effort callers ignore them. We only assert on the
+	// final error surfacing the SystemInfo failure.
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return nil, fmt.Errorf("should not be called")
+		return nil, fmt.Errorf("ignored")
 	}
 	_, err := VersionAudit(context.Background(), awg, exec)
 	if err == nil {
