@@ -271,6 +271,30 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.rebindConfirmAction != nil {
 			action = r.rebindConfirmAction
 		}
+	case "maint_open":
+		r.handleMaintOpen(ctx, q, args)
+		return
+	case "maint_close":
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
+		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, q.Message.Text, "", &empty)
+		return
+	case "maint_restart":
+		r.handleMaintRestart(ctx, q, args)
+		return
+	case "maint_fw_open":
+		r.handleMaintFwOpen(ctx, q, args)
+		return
+	case "maint_fw_check":
+		r.handleMaintFwCheck(ctx, q, args)
+		return
+	case "maint_fw_install":
+		r.handleMaintFwInstall(ctx, q, args)
+		return
+	case "maint_confirm", "maint_fw_confirm":
+		if r.maintConfirmAct != nil {
+			action = r.maintConfirmAct
+		}
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
@@ -915,6 +939,120 @@ func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuer
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
+
+// ----- maint handlers -----
+
+// handleMaintOpen re-renders the maint panel: re-enqueues version_audit so
+// MaintNotifier (M11) edits the panel with fresh data when the agent answers.
+func (r *Router) handleMaintOpen(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "user not found")
+		return
+	}
+	if r.cmdSink == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command sink не подключён")
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "version_audit", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
+	loadingKB := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", &loadingKB)
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось запросить статус")
+		return
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// handleMaintRestart renders the per-service confirm screen and stores a
+// pending token. For "router" name, also checks the existing cooldown
+// window and short-circuits with a toast if active.
+func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		return
+	}
+	if args.MaintName == "router" {
+		if rem := r.cooldown.remaining(user.ID, "router_reboot"); rem > 0 {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, fmt.Sprintf("🕒 кулдаун ещё %s", rem.Round(time.Second)))
+			return
+		}
+	}
+	tok := makeMaintToken()
+	r.pendingMaint.put(&pendingMaint{
+		UserID: user.ID, Name: args.MaintName, Token: tok,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	text := tg.RestartConfirmText(args.MaintName, tok)
+	kb := tg.RestartConfirmKeyboard(user.ID, args.MaintName, tok)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// handleMaintFwOpen renders the firmware screen using cached FirmwareStatus
+// when available, or triggers a fresh fetch via handleMaintFwCheck if not.
+func (r *Router) handleMaintFwOpen(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		return
+	}
+	fs, ok := r.auditCache.GetFirmwareStatus(user.ID)
+	if !ok {
+		// Fall back to a fresh fetch — same code path as Перепроверить.
+		r.handleMaintFwCheck(ctx, q, args)
+		return
+	}
+	cdRem := r.cooldown.remaining(user.ID, "firmware_install")
+	text := tg.FirmwareScreenText(user.Nickname, fs)
+	kb := tg.FirmwareScreenKeyboard(user.ID, fs, cdRem)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// handleMaintFwCheck enqueues a firmware_status command and shows a loading
+// placeholder while we wait for the agent.
+func (r *Router) handleMaintFwCheck(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "firmware_status", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	loading := fmt.Sprintf("📦 Прошивка — %s\n   обновляется…", user.Nickname)
+	empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loading, "", &empty)
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось")
+		return
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// handleMaintFwInstall renders the firmware install confirm screen.
+// Cooldown check short-circuits with a toast.
+func (r *Router) handleMaintFwInstall(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		return
+	}
+	if rem := r.cooldown.remaining(user.ID, "firmware_install"); rem > 0 {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, fmt.Sprintf("🕒 кулдаун ещё %s", rem.Round(time.Second)))
+		return
+	}
+	tok := makeMaintToken()
+	r.pendingMaint.put(&pendingMaint{
+		UserID: user.ID, Name: "firmware", Token: tok,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	text := tg.FirmwareConfirmText(tok)
+	kb := tg.FirmwareConfirmKeyboard(user.ID, tok)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// ----- routes rebind handlers -----
 
 func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, _ := r.d.Users().GetByID(args.UserID)
