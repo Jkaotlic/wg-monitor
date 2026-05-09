@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,28 @@ func TestParseComponentsList_HasUpdate(t *testing.T) {
 	}
 	if fs.Available != "5.00.C.12.0-0" {
 		t.Errorf("Available=%q, want 5.00.C.12.0-0", fs.Available)
+	}
+	if fs.Channel != "stable" {
+		t.Errorf("Channel=%q, want stable", fs.Channel)
+	}
+}
+
+func TestParseComponentsList_CRLF(t *testing.T) {
+	// Same content as NoUpdate golden but with CRLF line endings, as produced by
+	// some SSH wrappers or Windows test fixtures.
+	crlf := strings.ReplaceAll(ndmcComponentsListGolden_NoUpdate, "\n", "\r\n")
+	fs, err := parseComponentsList(crlf)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if fs.Current != "5.00.C.11.0-0" {
+		t.Errorf("Current=%q, want 5.00.C.11.0-0", fs.Current)
+	}
+	if fs.Available != "" {
+		t.Errorf("Available=%q, expected empty when current==firmware", fs.Available)
+	}
+	if fs.Channel != "stable" {
+		t.Errorf("Channel=%q, want stable", fs.Channel)
 	}
 }
 

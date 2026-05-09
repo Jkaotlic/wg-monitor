@@ -37,6 +37,7 @@ func parseComponentsList(s string) (wire.FirmwareStatus, error) {
 	for _, raw := range strings.Split(s, "\n") {
 		// Strip ANSI erase-line escape if present at the very start of a line.
 		line := strings.TrimPrefix(raw, "\x1b[K")
+		line = strings.TrimRight(line, "\r")
 		trimmed := strings.TrimSpace(line)
 		switch trimmed {
 		case "firmware:":
@@ -76,9 +77,9 @@ func parseComponentsList(s string) (wire.FirmwareStatus, error) {
 
 // splitKV splits a "key: value" line, returning ok=false if not formatted that way.
 func splitKV(line string) (key, value string, ok bool) {
-	idx := strings.Index(line, ":")
-	if idx < 0 {
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) != 2 {
 		return "", "", false
 	}
-	return strings.TrimSpace(line[:idx]), strings.TrimSpace(line[idx+1:]), true
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
 }
