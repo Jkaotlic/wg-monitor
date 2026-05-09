@@ -38,6 +38,7 @@ func ReplyKeyboardForTopic(kind string) any {
 				{{Text: "📊 Что происходит?"}, {Text: "🎛 Туннели"}},
 				{{Text: "🌍 Через тоннель?"}, {Text: "🇷🇺 Напрямую?"}},
 				{{Text: "🛣 Маршруты"}, {Text: "⬆ Обновить пакеты"}},
+			{{Text: "🛠 Обслуживание"}},
 			},
 			IsPersistent:   true,
 			ResizeKeyboard: true,

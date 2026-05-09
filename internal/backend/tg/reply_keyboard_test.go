@@ -38,7 +38,7 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 		wantR1 int  // row 1 button count (0 means "don't care")
 		wantR2 int
 	}{
-		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через тоннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "⬆ Обновить пакеты"}, 2, 2},
+		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через тоннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "⬆ Обновить пакеты", "🛠 Обслуживание"}, 2, 2},
 		{"summary", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"systemic", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"unknown", false, nil, 0, 0},
@@ -82,6 +82,25 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestReplyKeyboard_PerRouter_HasMaintButton(t *testing.T) {
+	v := ReplyKeyboardForTopic("per_router")
+	kb, ok := v.(*ReplyKeyboardMarkup)
+	if !ok {
+		t.Fatalf("type=%T, want *ReplyKeyboardMarkup", v)
+	}
+	found := false
+	for _, row := range kb.Keyboard {
+		for _, b := range row {
+			if b.Text == "🛠 Обслуживание" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("🛠 Обслуживание button missing from per_router keyboard")
 	}
 }
 
