@@ -486,22 +486,32 @@ func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
 
 // dispatchConnectivityCheck enqueues an on-demand check_via_tunnel /
 // check_direct command and acks the user with a "⏳ Проверяю…" line. The
-// agent's CommandResult will reply to the user's text message via Notifier.
+// agent's CommandResult will reply to the ack message via Notifier.
+//
+// IMPORTANT: we send the ack FIRST and pass ITS message id to
+// DispatchFromMessage as reply_to_message_id. The original user-tap message
+// gets deleted by handleNonCommandMessage when DeleteUserCommandMessages=true,
+// so replying to it from the result handler 30+ seconds later fails with
+// "message to be replied not found (code=400)" and the operator never sees
+// the result. The ack message stays in the chat, so anchoring on it is safe.
 func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, kind string, user *db.User, action, ackText string) {
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
-	if err := r.command.DispatchFromMessage(ctx, action, user.ID, m.Chat.ID, m.MessageID, m.MessageThreadID); err != nil {
+	ackMid, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+	if err != nil {
+		slog.Warn("dispatchConnectivityCheck ack failed", "err", err)
+		// Fall through and still try to enqueue — at worst the result
+		// reply target is missing, which is the bug we're already
+		// fixing for the happy path.
+	}
+	if err := r.command.DispatchFromMessage(ctx, action, user.ID, m.Chat.ID, ackMid, m.MessageThreadID); err != nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"не удалось поставить задачу: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		slog.Warn("dispatchConnectivityCheck enqueue failed", "err", err, "action", action)
 		return
-	}
-	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-	if err != nil {
-		slog.Warn("dispatchConnectivityCheck ack failed", "err", err)
 	}
 }
 
@@ -655,11 +665,18 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 	}
 	text, inline := alerts.FormatSmartReply(args)
 	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
-	// — TG accepts only one reply_markup per send. Per spec §6.1, inline
-	// keyboard wins for the smart-reply itself; the ReplyKeyboard re-installs
-	// on the next bot message (alert / RECOVERY). However we still pass the
-	// inline as the reply_markup so smart-reply buttons appear.
-	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &inline)
+	// — TG accepts only one reply_markup per send. When FormatSmartReply
+	// returns an empty inline keyboard (StateOK / StateOffline have no
+	// per-tunnel actions), we MUST swap to the topic ReplyKeyboard
+	// instead — passing &inline with a nil 2D-slice marshals to
+	// {"inline_keyboard": null} and TG rejects it with "field
+	// inline_keyboard must be of type Array (code=400)". Bonus: keeps the
+	// bottom panel re-attached when there are no inline buttons to show.
+	var kbArg any = &inline
+	if len(inline.InlineKeyboard) == 0 {
+		kbArg = r.cfg.UI.KeyboardForTopic("per_router")
+	}
+	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, kbArg)
 	if err != nil {
 		slog.Warn("smart reply send failed", "err", err, "user", user.Nickname)
 	}
