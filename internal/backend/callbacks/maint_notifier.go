@@ -67,7 +67,7 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 		return fmt.Errorf("decode version_audit: %w", err)
 	}
 	n.Audit.PutVersionAudit(user.ID, va)
-	args := n.buildPanelArgs(ctx, user, va)
+	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
@@ -111,24 +111,26 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 		}}
 		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 	}
-	args := n.buildPanelArgs(ctx, user, va)
+	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
 	text := banner + "\n\n" + tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 }
 
-// buildPanelArgs assembles the renderer args from the cached VersionAudit
-// + upstream cache (for the Updates section) + cooldown state.
-func (n *MaintPanelNotifier) buildPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit) tg.MaintPanelArgs {
+// buildMaintPanelArgs assembles the renderer args from the cached
+// VersionAudit + upstream cache (for the Updates section) + cooldown state.
+// Pure function so both the notifier (refresh path) and the router (instant
+// cached render in openMaintPanelMessage) can call it.
+func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore) tg.MaintPanelArgs {
 	var updates []tg.UpdateLine
 	if va.FirmwareAvail != "" && upstream.FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail) {
 		updates = append(updates, tg.UpdateLine{Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail})
 	}
-	if n.Up != nil {
-		if v, _ := n.Up.Latest(ctx, "awgmgr"); v != "" && upstream.SoftwareNewerThan(va.AwgmgrVersion, v) {
+	if up != nil {
+		if v, _ := up.Latest(ctx, "awgmgr"); v != "" && upstream.SoftwareNewerThan(va.AwgmgrVersion, v) {
 			updates = append(updates, tg.UpdateLine{Name: "awg-manager", Installed: va.AwgmgrVersion, Available: v})
 		}
-		if v, _ := n.Up.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && upstream.SoftwareNewerThan(va.HrneoVersion, v) {
+		if v, _ := up.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && upstream.SoftwareNewerThan(va.HrneoVersion, v) {
 			updates = append(updates, tg.UpdateLine{Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v})
 		}
 	}
@@ -142,7 +144,7 @@ func (n *MaintPanelNotifier) buildPanelArgs(ctx context.Context, user *db.User, 
 		KeeneticOS:                "", // model not in VersionAudit; left empty for now
 		Firmware:                  wire.FirmwareStatus{Current: va.FirmwareCurrent, Available: va.FirmwareAvail},
 		Updates:                   updates,
-		RouterCooldownRemaining:   n.Cooldown.remaining(user.ID, "router_reboot"),
-		FirmwareCooldownRemaining: n.Cooldown.remaining(user.ID, "firmware_install"),
+		RouterCooldownRemaining:   cd.remaining(user.ID, "router_reboot"),
+		FirmwareCooldownRemaining: cd.remaining(user.ID, "firmware_install"),
 	}
 }
