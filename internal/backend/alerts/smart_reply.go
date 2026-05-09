@@ -80,19 +80,22 @@ type SmartReplyArgs struct {
 
 const (
 	smartReplyOfflineThreshold        = 5 * time.Minute
-	smartReplyDegradedHandshakeMinSec = 60
+	// smartReplyDegradedHandshakeMinSec must match the "норма до N" value
+	// printed in the StateDegraded message body (see line below). The original
+	// value of 60 conflicted with the rendered "норма до 180" text — it
+	// flagged AWG tunnels without PersistentKeepalive (handshake naturally
+	// >60s when idle) as "есть подозрения" while telling the user it was
+	// within norm. Now aligned with the FSM HARD threshold so degraded only
+	// fires when something is actually about to break.
+	smartReplyDegradedHandshakeMinSec = 180
 )
 
 // ClassifyState applies the spec §5.2 decision tree:
-//  1. report age > 5 min                                    → Offline
-//  2. ≥1 active hard incident                                → Hard
-//  3. any tunnel handshake_age ≥ 60 s                        → Degraded
-//  4. any tunnel pingCheck has fail_count > 0 (below thresh) → Degraded
-//  5. else                                                   → OK
-//
-// Rule 3's upper bound is intentionally open — the FSM converts age ≥ 180 s
-// into a HARD only after fail_threshold consecutive observations, so during
-// the gap we still want "Degraded" rather than misleading "OK".
+//  1. report age > 5 min                                          → Offline
+//  2. ≥1 active hard incident                                      → Hard
+//  3. any tunnel handshake_age ≥ smartReplyDegradedHandshakeMinSec → Degraded
+//  4. any tunnel pingCheck has fail_count > 0 (below thresh)       → Degraded
+//  5. else                                                         → OK
 func ClassifyState(a SmartReplyArgs) SmartReplyState {
 	if a.LastReportAge > smartReplyOfflineThreshold {
 		return StateOffline
