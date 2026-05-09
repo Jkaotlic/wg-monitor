@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"gopkg.in/yaml.v3"
 )
 
 func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) error {
@@ -493,24 +494,42 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	if nick == "" {
 		return fmt.Errorf("nickname required")
 	}
-	if state.FindAgent(nick) != nil {
-		PrintFail("такой никнейм уже есть в wizard.toml")
-		return fmt.Errorf("duplicate nickname")
+
+	// Идемпотентность: если предыдущий прогон упал между «токен сгенерирован
+	// + agent в wizard.toml» и «backend.yaml залит на VPS / install-agent
+	// прошёл», nickname уже есть в state. В этом случае резюмируем — токен
+	// в disk-кэше есть, threadID сохранён, нужно только дойти до конца.
+	resume := false
+	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
+	if existing := state.FindAgent(nick); existing != nil {
+		if secrets.GetNonInteractive(tokEnv) == "" {
+			PrintFail("такой никнейм уже есть в wizard.toml, но токен утерян — почини вручную")
+			return fmt.Errorf("duplicate nickname without cached token")
+		}
+		ans := strings.ToLower(strings.TrimSpace(Ask(
+			fmt.Sprintf("nickname %q уже в wizard.toml — резюмировать установку? [y/N]", nick), "n")))
+		if ans != "y" && ans != "yes" {
+			return fmt.Errorf("aborted by user")
+		}
+		resume = true
+		PrintOK(fmt.Sprintf("резюмирую установку %s (токен из disk-кэша, threadID=%d)", nick, existing.ThreadID))
 	}
 
 	// 1. Сгенерировать токен и сразу положить в disk-кэш секретов, чтобы
 	// последующие действия (regen backend.yaml в этой сессии + любые
-	// re-deploy в будущем) не просили его вводить вручную.
-	tok := randomHexToken(32)
-	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
-	if err := secrets.Set(tokEnv, tok); err != nil {
-		PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
-	} else {
-		PrintOK(fmt.Sprintf("токен %s сгенерирован и сохранён в disk-кэш", tokEnv))
+	// re-deploy в будущем) не просили его вводить вручную. На resume —
+	// пропускаем, токен уже в disk-кэше.
+	if !resume {
+		tok := randomHexToken(32)
+		if err := secrets.Set(tokEnv, tok); err != nil {
+			PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
+		} else {
+			PrintOK(fmt.Sprintf("токен %s сгенерирован и сохранён в disk-кэш", tokEnv))
+		}
+		// also seed the in-process env so old code paths reading via os.Getenv
+		// (install-agent below, RenderBackendYAML loop) still find the value.
+		os.Setenv(tokEnv, tok)
 	}
-	// also seed the in-process env so old code paths reading via os.Getenv
-	// (install-agent below, RenderBackendYAML loop) still find the value.
-	os.Setenv(tokEnv, tok)
 
 	// 2. Добавить в backend.yaml на VPS.
 	PrintStep(1, 3, "Обновить backend.yaml на VPS")
@@ -525,25 +544,37 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 	defer bs.Close()
 
-	threadID := autoCreateForumTopic(state, secrets, nick)
-	if threadID == 0 {
-		threadID = parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
+	// На resume — топик и запись в state уже есть, не дёргаем TG API повторно.
+	if !resume {
+		threadID := autoCreateForumTopic(state, secrets, nick)
+		if threadID == 0 {
+			threadID = parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
+		}
+		state.Agents = append(state.Agents, AgentState{
+			Nickname: nick,
+			ThreadID: threadID,
+		})
 	}
 
-	// Добавить в state и регенерить backend.yaml
-	state.Agents = append(state.Agents, AgentState{
-		Nickname: nick,
-		ThreadID: threadID,
-	})
+	// Cross-PC fallback: токены агентов, установленных с другой машины, в
+	// локальном disk-кэше отсутствуют (env+disk на этом ПК их никогда не
+	// видели). Источник истины — задеплоенный backend.yaml на VPS, оттуда
+	// и забираем недостающие. Соединение уже открыто (bs).
+	deployedTokens := readDeployedAgentTokens(bs)
 
 	// Все токены: для нового — только что сгенерированный (уже в disk-кэше),
-	// для существующих — env → disk без prompt'а (токен 64hex руками не
-	// вспомнить). Если найден в env, но не в disk-кэше — миграция: пишем
-	// в disk, чтобы следующий раз тоже нашёлся.
+	// для существующих — env → disk → deployed yaml. Если найден в env, но не
+	// в disk-кэше — миграция: пишем в disk, чтобы следующий раз тоже нашёлся.
 	var entries []AgentEntry
 	for _, a := range state.Agents {
 		envName := "WG_AGENT_TOKEN_" + strings.ToUpper(a.Nickname)
 		t := secrets.GetNonInteractive(envName)
+		if t == "" {
+			if dt, ok := deployedTokens[a.Nickname]; ok && dt != "" {
+				t = dt
+				PrintInfo(fmt.Sprintf("токен для %s восстановлен из backend.yaml на VPS", a.Nickname))
+			}
+		}
 		if t == "" {
 			PrintFail(fmt.Sprintf(
 				"токен для %s неизвестен. Если этот агент устанавливался раньше, добавь токен в %s или экспортируй %s",
@@ -589,8 +620,33 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 
 	PrintStep(3, 3, "Установить агента на новый роутер")
 	// Сохранить токен в env для текущего процесса, чтобы install-agent его подхватил.
-	os.Setenv("WG_AGENT_TOKEN_"+strings.ToUpper(nick), tok)
+	// Источник — disk-кэш: и в свежем прогоне (только что записан), и в resume.
+	os.Setenv(tokEnv, secrets.GetNonInteractive(tokEnv))
 	return actionInstallAgent(state, secrets, dl, nick)
+}
+
+// readDeployedAgentTokens fetches /etc/wg-monitor/backend.yaml from the VPS
+// and returns nickname → token from its agents list. Used by actionAddRouter
+// to recover tokens for agents originally enrolled from a different operator
+// workstation: the secrets disk-cache is per-machine, but the deployed yaml
+// is the source of truth on the server. All errors are non-fatal — caller
+// degrades to the existing "missing token" failure path.
+func readDeployedAgentTokens(bs *SSH) map[string]string {
+	out := map[string]string{}
+	yamlOut, _, rc, err := bs.Run("cat /etc/wg-monitor/backend.yaml")
+	if err != nil || rc != 0 {
+		return out
+	}
+	var by doctorBackendYAML
+	if perr := yaml.Unmarshal([]byte(yamlOut), &by); perr != nil {
+		return out
+	}
+	for _, a := range by.Agents {
+		if a.Nickname != "" && a.Token != "" {
+			out[a.Nickname] = a.Token
+		}
+	}
+	return out
 }
 
 // autoCreateForumTopic tries to create a Telegram forum topic for the new
