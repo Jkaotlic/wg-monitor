@@ -234,7 +234,9 @@ func TestVersionAudit_AllFields(t *testing.T) {
 	if got.FirmwareCurrent != "5.00.C.11.0-0" { t.Errorf("FirmwareCurrent=%q", got.FirmwareCurrent) }
 	if got.FirmwareAvail   != "" { t.Errorf("FirmwareAvail=%q, expected empty (no update in golden)", got.FirmwareAvail) }
 	if got.HrneoUptime  != "17ч 53м" { t.Errorf("HrneoUptime=%q",  got.HrneoUptime) }
-	if got.AwgmgrUptime == "" { t.Errorf("AwgmgrUptime should be populated") }
+	if got.AwgmgrUptime != "1д 3ч" {
+		t.Errorf("AwgmgrUptime=%q, want 1д 3ч", got.AwgmgrUptime)
+	}
 }
 
 func TestVersionAudit_HrneoNotInstalled(t *testing.T) {
@@ -263,5 +265,61 @@ func TestEncodeVersionAudit_RoundTrip(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if !strings.Contains(s, `"awgmgr_version":"2.8.2"`) {
 		t.Errorf("encoded missing field: %s", s)
+	}
+}
+
+func TestVersionAudit_SysInfoError(t *testing.T) {
+	awg := &fakeAwgInfo{sysErr: fmt.Errorf("connection refused")}
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("should not be called")
+	}
+	_, err := VersionAudit(context.Background(), awg, exec)
+	if err == nil {
+		t.Fatal("expected non-nil error when SystemInfo fails")
+	}
+	if !strings.Contains(err.Error(), "SystemInfo") {
+		t.Errorf("error should mention SystemInfo, got: %v", err)
+	}
+}
+
+func TestParseProcStatStarttime(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want int64
+		ok   bool
+	}{
+		{
+			name: "simple",
+			in:   "1234 (myproc) S 1 1234 1234 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 555000 1024 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+			want: 555000,
+			ok:   true,
+		},
+		{
+			name: "name with spaces and parens",
+			in:   "999 ((weird) name)) R 1 999 999 0 -1 4194560 0 0 0 0 0 0 0 0 20 0 1 0 12345 1024 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+			want: 12345,
+			ok:   true,
+		},
+		{
+			name: "no closing paren",
+			in:   "1234 myproc S 1 1234",
+			ok:   false,
+		},
+		{
+			name: "too few fields after )",
+			in:   "1 (x) S 1 2 3",
+			ok:   false,
+		},
+	}
+	for _, c := range cases {
+		got, ok := parseProcStatStarttime(c.in)
+		if ok != c.ok {
+			t.Errorf("%s: ok=%v want %v", c.name, ok, c.ok)
+			continue
+		}
+		if ok && got != c.want {
+			t.Errorf("%s: got=%d want %d", c.name, got, c.want)
+		}
 	}
 }
