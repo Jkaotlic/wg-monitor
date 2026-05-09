@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -12,6 +15,7 @@ type SecretSource int
 const (
 	SourceMissing SecretSource = iota
 	SourceEnv
+	SourceDisk
 	SourceMemoryFile
 	SourcePrompt
 )
@@ -20,6 +24,8 @@ func (s SecretSource) String() string {
 	switch s {
 	case SourceEnv:
 		return "env"
+	case SourceDisk:
+		return "disk cache"
 	case SourceMemoryFile:
 		return "memory file"
 	case SourcePrompt:
@@ -33,19 +39,48 @@ type MemoryFileLookup struct {
 	Pattern string // regexp with one capture group
 }
 
+// secretsCachePath returns the disk location of the wizard's auto-saved
+// secret cache (KEY=VALUE per line, lock-tightened to 0600 on POSIX).
+// Honoured: WG_SECRETS_FILE=<path> override; WG_NO_SECRET_CACHE=1 disables
+// auto-load and auto-save (returns "" so callers skip disk operations).
+func secretsCachePath() string {
+	if os.Getenv("WG_NO_SECRET_CACHE") != "" {
+		return ""
+	}
+	if p := os.Getenv("WG_SECRETS_FILE"); p != "" {
+		return p
+	}
+	return filepath.Join(defaultCacheDir(), "secrets.env")
+}
+
 type SecretStore struct {
 	prompted map[string]bool
+	disk     map[string]string // loaded once on construction; written through on Set/prompt
+	saved    map[string]bool   // env var names auto-persisted in this session
 }
 
 func NewSecretStore() *SecretStore {
-	return &SecretStore{prompted: map[string]bool{}}
+	s := &SecretStore{
+		prompted: map[string]bool{},
+		disk:     map[string]string{},
+		saved:    map[string]bool{},
+	}
+	if path := secretsCachePath(); path != "" {
+		s.disk = loadSecretsFile(path)
+	}
+	return s
 }
 
-// Get tries: env var → memory file (if provided) → prompt.
-// Returns (secret, source). Empty string and SourceMissing if even prompt failed.
+// Get tries: env var → disk cache → memory file (if provided) → prompt.
+// Returns (secret, source). Empty string and SourceMissing if even prompt
+// failed. Successful prompts auto-persist to the disk cache (unless
+// WG_NO_SECRET_CACHE=1) so the next session finds the value.
 func (s *SecretStore) Get(envVar, label string, mem *MemoryFileLookup) (string, SecretSource) {
 	if v := os.Getenv(envVar); v != "" {
 		return v, SourceEnv
+	}
+	if v, ok := s.disk[envVar]; ok && v != "" {
+		return v, SourceDisk
 	}
 	if mem != nil {
 		if v, ok := lookupMemoryFile(mem.Path, mem.Pattern); ok {
@@ -57,7 +92,35 @@ func (s *SecretStore) Get(envVar, label string, mem *MemoryFileLookup) (string, 
 		return "", SourceMissing
 	}
 	s.recordPrompted(envVar)
+	if err := s.Set(envVar, v); err == nil {
+		s.saved[envVar] = true
+	}
 	return v, SourcePrompt
+}
+
+// GetNonInteractive returns the secret looked up via env → disk only,
+// never prompting. Empty string when nothing is found. Use when the value
+// must already exist (e.g. agent enrollment token regenerated weeks ago)
+// — prompting would waste the operator's time on a value they cannot
+// recall by hand.
+func (s *SecretStore) GetNonInteractive(envVar string) string {
+	if v := os.Getenv(envVar); v != "" {
+		return v
+	}
+	return s.disk[envVar]
+}
+
+// Set persists a secret to the on-disk cache and the in-memory map. Used
+// for values the wizard generates itself (e.g. agent enrollment tokens) so
+// future sessions find them without re-prompting. No-op when the cache is
+// disabled (WG_NO_SECRET_CACHE=1).
+func (s *SecretStore) Set(envVar, value string) error {
+	s.disk[envVar] = value
+	path := secretsCachePath()
+	if path == "" {
+		return nil
+	}
+	return writeSecretsFile(path, s.disk)
 }
 
 func (s *SecretStore) recordPrompted(envVar string) {
@@ -71,6 +134,17 @@ func (s *SecretStore) PromptedSecrets() []string {
 	for k := range s.prompted {
 		out = append(out, k)
 	}
+	return out
+}
+
+// SavedThisSession returns the env var names auto-saved to the disk cache
+// during the current session.
+func (s *SecretStore) SavedThisSession() []string {
+	out := make([]string, 0, len(s.saved))
+	for k := range s.saved {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -90,24 +164,91 @@ func lookupMemoryFile(path, pattern string) (string, bool) {
 	return strings.TrimSpace(m[1]), true
 }
 
-// PrintSecretsSaveAdvice prints instructions to set the prompted secrets as env vars,
-// so the user doesn't re-enter them next run.
+// loadSecretsFile reads KEY=VALUE pairs from path. Missing or unreadable
+// file → empty map (best-effort; the wizard re-prompts on cache miss).
+func loadSecretsFile(path string) map[string]string {
+	out := map[string]string{}
+	f, err := os.Open(path)
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out
+}
+
+// writeSecretsFile rewrites the secrets cache atomically with 0600 perms.
+// All keys are emitted sorted so the file is deterministic across runs.
+func writeSecretsFile(path string, data map[string]string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(data))
+	for k := range data {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	w := bufio.NewWriter(f)
+	for _, k := range keys {
+		if _, err := fmt.Fprintf(w, "%s=%s\n", k, data[k]); err != nil {
+			f.Close()
+			return err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// PrintSecretsSaveAdvice tells the user what got persisted this session and
+// where the cache lives. Quiet when nothing was prompted/saved.
 func PrintSecretsSaveAdvice(store *SecretStore) {
+	saved := store.SavedThisSession()
+	if len(saved) > 0 {
+		path := secretsCachePath()
+		PrintOK(fmt.Sprintf("секреты сохранены в %s — на следующий запуск wizard их подхватит", path))
+	}
 	prompted := store.PromptedSecrets()
-	if len(prompted) == 0 {
+	stillMissing := stringsMinus(prompted, saved)
+	if len(stillMissing) == 0 {
 		return
 	}
-	PrintWarn("В этой сессии ты ввёл секреты вручную: " + strings.Join(prompted, ", "))
-	fmt.Println("  Чтобы не вводить заново, сохрани их в env vars:")
-	fmt.Println()
-	fmt.Println("  PowerShell (постоянно):")
-	for _, name := range prompted {
-		fmt.Printf("    [Environment]::SetEnvironmentVariable(\"%s\", \"<значение>\", \"User\")\n", name)
+	PrintWarn("В этой сессии ты ввёл секреты, но disk-кэш отключён или недоступен: " + strings.Join(stillMissing, ", "))
+	fmt.Println("  Чтобы не вводить заново, экспортируй их через env vars или включи WG_NO_SECRET_CACHE=0.")
+}
+
+func stringsMinus(a, b []string) []string {
+	skip := map[string]bool{}
+	for _, x := range b {
+		skip[x] = true
 	}
-	fmt.Println()
-	fmt.Println("  Bash/Zsh (~/.zshrc или ~/.bashrc):")
-	for _, name := range prompted {
-		fmt.Printf("    export %s=\"<значение>\"\n", name)
+	out := make([]string, 0, len(a))
+	for _, x := range a {
+		if !skip[x] {
+			out = append(out, x)
+		}
 	}
-	fmt.Println()
+	return out
 }

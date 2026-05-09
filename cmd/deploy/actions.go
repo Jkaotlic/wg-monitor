@@ -494,11 +494,19 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("duplicate nickname")
 	}
 
-	// 1. Сгенерировать токен.
+	// 1. Сгенерировать токен и сразу положить в disk-кэш секретов, чтобы
+	// последующие действия (regen backend.yaml в этой сессии + любые
+	// re-deploy в будущем) не просили его вводить вручную.
 	tok := randomHexToken(32)
-	PrintWarn(fmt.Sprintf("сгенерирован токен для %s — сохрани в WG_AGENT_TOKEN_%s",
-		nick, strings.ToUpper(nick)))
-	fmt.Println("    " + tok)
+	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
+	if err := secrets.Set(tokEnv, tok); err != nil {
+		PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
+	} else {
+		PrintOK(fmt.Sprintf("токен %s сгенерирован и сохранён в disk-кэш", tokEnv))
+	}
+	// also seed the in-process env so old code paths reading via os.Getenv
+	// (install-agent below, RenderBackendYAML loop) still find the value.
+	os.Setenv(tokEnv, tok)
 
 	// 2. Добавить в backend.yaml на VPS.
 	PrintStep(1, 3, "Обновить backend.yaml на VPS")
@@ -521,18 +529,22 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		ThreadID: threadID,
 	})
 
-	// Все токены: для уже существующих — из env, для нового — только что сгенерированный
+	// Все токены: для нового — только что сгенерированный (уже в disk-кэше),
+	// для существующих — env → disk без prompt'а (токен 64hex руками не
+	// вспомнить). Если найден в env, но не в disk-кэше — миграция: пишем
+	// в disk, чтобы следующий раз тоже нашёлся.
 	var entries []AgentEntry
 	for _, a := range state.Agents {
 		envName := "WG_AGENT_TOKEN_" + strings.ToUpper(a.Nickname)
-		t := os.Getenv(envName)
-		if a.Nickname == nick {
-			t = tok
-		}
+		t := secrets.GetNonInteractive(envName)
 		if t == "" {
-			PrintFail(fmt.Sprintf("токен для %s неизвестен (нет в %s). Прервать?", a.Nickname, envName))
+			PrintFail(fmt.Sprintf(
+				"токен для %s неизвестен. Если этот агент устанавливался раньше, добавь токен в %s или экспортируй %s",
+				a.Nickname, secretsCachePath(), envName))
 			return fmt.Errorf("missing token for %s", a.Nickname)
 		}
+		// best-effort migration into the disk cache; ignore write errors.
+		_ = secrets.Set(envName, t)
 		entries = append(entries, AgentEntry{
 			Nickname: a.Nickname,
 			Token:    t,
