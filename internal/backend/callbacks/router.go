@@ -50,6 +50,29 @@ type UIConfigSnapshot struct {
 	DeleteUserCommandMessages bool
 	SmartReplyWithKeyboard    bool
 	DiagMaxChars              int
+	// CompatInlineKeyboard mirrors backend.UIConfig.CompatInlineKeyboard.
+	// When true, the router substitutes inline-keyboard buttons for the
+	// persistent ReplyKeyboardMarkup on every bot reply (TG Desktop forum
+	// topic workaround).
+	CompatInlineKeyboard bool
+}
+
+// KeyboardForTopic picks between the native ReplyKeyboardMarkup and the
+// CompatInlineKeyboardForTopic equivalent based on the operator's UI
+// preference. Returned type matches what SendMessageWithReplyKeyboard
+// expects (any of *ReplyKeyboardMarkup, *ReplyKeyboardRemove,
+// *InlineKeyboardMarkup, or nil). Returns nil — meaning "no reply_markup
+// at all" — when compat mode is on and the kind has no matching button
+// set, so the bot doesn't accidentally clobber the persistent keyboard
+// with an empty one.
+func (ui UIConfigSnapshot) KeyboardForTopic(kind string) any {
+	if ui.CompatInlineKeyboard {
+		if kb := tg.CompatInlineKeyboardForTopic(kind); kb != nil {
+			return kb
+		}
+		return nil
+	}
+	return tg.ReplyKeyboardForTopic(kind)
 }
 
 type Router struct {
@@ -297,6 +320,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.maintConfirmAct != nil {
 			action = r.maintConfirmAct
 		}
+	case "compat_btn":
+		r.handleCompatBtn(ctx, q, args)
+		return
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
@@ -377,7 +403,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			r.dispatchSmartReply(ctx, m, user)
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя или в Сводке.", "", nil, tg.ReplyKeyboardForTopic(kind))
+				"эта команда работает только в топике пользователя или в Сводке.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🎛 Туннели":
 		if kind == "per_router" && user != nil {
@@ -388,21 +414,21 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			}
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, tg.ReplyKeyboardForTopic(kind))
+				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🛣 Маршруты":
 		if kind == "per_router" && user != nil {
 			r.openRoutesPanelMessage(ctx, m, user)
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, tg.ReplyKeyboardForTopic(kind))
+				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🛠 Обслуживание":
 		if kind == "per_router" && user != nil {
 			r.openMaintPanelMessage(ctx, m, user)
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, tg.ReplyKeyboardForTopic(kind))
+				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🌍 Через тоннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
@@ -424,7 +450,10 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		// Ignore — could be operator chatting; don't delete.
 		return
 	}
-	if r.cfg.UI.DeleteUserCommandMessages {
+	// MessageID==0 marks a synthetic message (e.g. compat-inline-keyboard tap
+	// dispatched through HandleMessage) — there is no real user message to
+	// delete, and TG would reject deleteMessage(0) with "message not found".
+	if r.cfg.UI.DeleteUserCommandMessages && m.MessageID != 0 {
 		if err := r.tg.DeleteMessage(ctx, m.Chat.ID, m.MessageID); err != nil {
 			slog.Warn("deleteMessage failed (non-fatal)", "err", err, "chat", m.Chat.ID, "msg", m.MessageID)
 		}
@@ -461,16 +490,16 @@ func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
 func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, kind string, user *db.User, action, ackText string) {
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"эта команда работает только в топике пользователя.", "", nil, tg.ReplyKeyboardForTopic(kind))
+			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
 	if err := r.command.DispatchFromMessage(ctx, action, user.ID, m.Chat.ID, m.MessageID, m.MessageThreadID); err != nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"не удалось поставить задачу: "+err.Error(), "", nil, tg.ReplyKeyboardForTopic("per_router"))
+			"не удалось поставить задачу: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		slog.Warn("dispatchConnectivityCheck enqueue failed", "err", err, "action", action)
 		return
 	}
-	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, ackText, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+	_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 	if err != nil {
 		slog.Warn("dispatchConnectivityCheck ack failed", "err", err)
 	}
@@ -587,7 +616,7 @@ func (r *Router) dispatchHelp(ctx context.Context, m *tg.Message, kind string) {
 		"🆘 Помощь — этот текст.\n\n" +
 		"В топиках Сводки/Системного:\n" +
 		"📋 Список юзеров, 📊 Здоровье флота — операторские команды."
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic(kind))
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, r.cfg.UI.KeyboardForTopic(kind))
 }
 
 // dispatchSmartReply renders the [📊 Что происходит?] response (spec §5.2,
@@ -604,7 +633,7 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 			"Подождите, пока агент пришлёт первый heartbeat. Проверить агент: " +
 			"ssh root@router и `/opt/etc/init.d/S99wg-monitor status` " +
 			"(на Keenetic нет systemd; агент логирует в stderr и логи не сохраняются)."
-		_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, tg.ReplyKeyboardForTopic("per_router"))
+		_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		if err != nil {
 			slog.Warn("smart reply (never reported) send failed", "err", err, "user", user.Nickname)
 		}
@@ -728,11 +757,11 @@ func intOrZero(d map[string]any, k string) int {
 func (r *Router) dispatchListUsers(ctx context.Context, m *tg.Message, kind string) {
 	users, err := r.d.Users().GetAll()
 	if err != nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "ошибка чтения пользователей: "+err.Error(), "", nil, tg.ReplyKeyboardForTopic(kind))
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "ошибка чтения пользователей: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
 	if len(users) == 0 {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "Пользователей нет.", "", nil, tg.ReplyKeyboardForTopic(kind))
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "Пользователей нет.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
 	var b strings.Builder
@@ -746,7 +775,7 @@ func (r *Router) dispatchListUsers(ctx context.Context, m *tg.Message, kind stri
 		fmt.Fprintf(&b, "• %s — %s — %s\n", u.Nickname, u.Kind, seen)
 	}
 	fmt.Fprintf(&b, "\nВсего: %d", len(users))
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, tg.ReplyKeyboardForTopic(kind))
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 }
 
 // dispatchFleetHealth renders the operator-only "📊 Здоровье флота" reply:
@@ -755,7 +784,7 @@ func (r *Router) dispatchListUsers(ctx context.Context, m *tg.Message, kind stri
 func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message, kind string) {
 	rows, err := r.d.State().AllActiveHard()
 	if err != nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "ошибка чтения incident_state: "+err.Error(), "", nil, tg.ReplyKeyboardForTopic(kind))
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, "ошибка чтения incident_state: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
 	users, _ := r.d.Users().GetAll()
@@ -787,31 +816,31 @@ func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message, kind st
 			fmt.Fprintf(&b, "  • [%s] %s — %s\n", nick, row.CheckName, age)
 		}
 	}
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, tg.ReplyKeyboardForTopic(kind))
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 }
 
 func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind string, user *db.User) {
 	slog.Info("document-upload", "file", m.Document.FileName, "size", m.Document.FileSize, "kind", kind, "has_user", user != nil)
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"конфиги принимаются только в топике роутера.", "", nil, tg.ReplyKeyboardForTopic(kind))
+			"конфиги принимаются только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
 	if m.Document.FileSize > 50*1024 {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"файл слишком большой (максимум 50 КБ для .conf).", "", nil, tg.ReplyKeyboardForTopic("per_router"))
+			"файл слишком большой (максимум 50 КБ для .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return
 	}
 	filePath, err := r.tg.GetFile(ctx, m.Document.FileID)
 	if err != nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"не удалось получить файл: "+err.Error(), "", nil, tg.ReplyKeyboardForTopic("per_router"))
+			"не удалось получить файл: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return
 	}
 	data, err := r.tg.DownloadFile(ctx, filePath)
 	if err != nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"не удалось скачать файл: "+err.Error(), "", nil, tg.ReplyKeyboardForTopic("per_router"))
+			"не удалось скачать файл: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return
 	}
 	confB64 := base64.StdEncoding.EncodeToString(data)
@@ -833,7 +862,7 @@ func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind s
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			fmt.Sprintf("📁 Получен файл «%s». Как назвать туннель? (a-z0-9_-, начинается с буквы, предложение: %q)",
 				m.Document.FileName, suggested),
-			"", nil, tg.ReplyKeyboardForTopic("per_router"))
+			"", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 	}
 }
 
@@ -867,7 +896,7 @@ func (r *Router) handlePendingNameReply(ctx context.Context, m *tg.Message, user
 	if !isValidTunnelName(name) {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			fmt.Sprintf("Имя %q не подходит (нужно a-z0-9_-, начинается с буквы). Попробуй снова.", m.Text),
-			"", nil, tg.ReplyKeyboardForTopic("per_router"))
+			"", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return true
 	}
 	up.Name = name

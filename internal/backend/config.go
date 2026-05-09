@@ -86,6 +86,12 @@ type UIConfig struct {
 	// DiagMaxChars — soft cap for code-fenced diag output before pagination
 	// kicks in. TG raw limit is 4096; 3500 leaves room for fence and prefix.
 	DiagMaxChars int `yaml:"diag_max_chars"`
+	// CompatInlineKeyboard — replace the persistent ReplyKeyboardMarkup with
+	// equivalent inline buttons attached to every bot reply. Workaround for
+	// TG Desktop dropping the bottom-keyboard panel in forum topics; also
+	// useful for users who never installed the mobile client. Default false
+	// (mobile users get the proper bottom panel as before).
+	CompatInlineKeyboard bool `yaml:"compat_inline_keyboard"`
 }
 
 func LoadConfig(path string) (*Config, error) {
