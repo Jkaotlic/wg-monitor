@@ -41,9 +41,46 @@ func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, al
 	}
 	c, err := ssh.Dial("tcp", addr, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("ssh %s: %w", addr, err)
+		return nil, diagnoseSSHErr(addr, err)
 	}
 	return &SSH{client: c, host: addr}, nil
+}
+
+// diagnoseSSHErr wraps a transport-level SSH error with a Russian operator
+// hint matched against well-known failure substrings. The original err is
+// preserved via %w so callers can still errors.As / errors.Is on it.
+//
+// HOST KEY CHANGED messages from our own KnownHosts already carry an
+// actionable explanation, so we pass them through verbatim (still wrapped
+// for the addr prefix) without adding a redundant hint.
+func diagnoseSSHErr(addr string, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+
+	// Our own MITM message is self-explanatory — don't double-annotate.
+	if strings.Contains(msg, "HOST KEY CHANGED") {
+		return fmt.Errorf("ssh %s: %w", addr, err)
+	}
+
+	var hint string
+	switch {
+	case strings.Contains(lower, "unable to authenticate"):
+		hint = "пароль не подошёл — проверь WG_VPS_PASS / WG_KEENETIC_PASS_<NICK> или disk-кэш"
+	case strings.Contains(lower, "no route to host"), strings.Contains(lower, "connect: network"):
+		hint = "хост недоступен — SSTP/VPN не подключён? проверь host:port в wizard.toml"
+	case strings.Contains(lower, "i/o timeout"), strings.Contains(lower, "deadline exceeded"):
+		hint = "таймаут SSH-handshake — медленный канал или роутер занят, попробуй ещё раз"
+	case strings.Contains(lower, "connection refused"):
+		hint = "порт закрыт — на роутере dropbear/sshd не слушает <port> или firewall"
+	}
+
+	if hint == "" {
+		return fmt.Errorf("ssh %s: %w", addr, err)
+	}
+	return fmt.Errorf("ssh %s: %s: %w", addr, hint, err)
 }
 
 func (s *SSH) Close() error {
@@ -104,6 +141,7 @@ func (s *SSH) UploadStdin(remotePath string, data []byte) error {
 	if err := sess.Start(fmt.Sprintf("cat > %s", remotePath)); err != nil {
 		return err
 	}
+	prog := newProgressDots(len(data), os.Stderr)
 	view := data
 	for len(view) > 0 {
 		chunk := view
@@ -111,10 +149,13 @@ func (s *SSH) UploadStdin(remotePath string, data []byte) error {
 			chunk = chunk[:32768]
 		}
 		if _, err := stdin.Write(chunk); err != nil {
+			prog.finish()
 			return err
 		}
+		prog.add(len(chunk))
 		view = view[len(chunk):]
 	}
+	prog.finish()
 	stdin.Close()
 	return sess.Wait()
 }
@@ -137,12 +178,79 @@ func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
 	if err := sess.Start(fmt.Sprintf("dd of=%s bs=1M status=none", remotePath)); err != nil {
 		return err
 	}
-	if _, err := io.Copy(stdin, bytesReader(data)); err != nil {
+	prog := newProgressDots(len(data), os.Stderr)
+	// Tee writes through the progress counter so dots land on stderr only,
+	// never into the SSH stdin stream.
+	w := io.MultiWriter(stdin, prog)
+	if _, err := io.Copy(w, bytesReader(data)); err != nil {
+		prog.finish()
 		stdin.Close()
 		return err
 	}
+	prog.finish()
 	stdin.Close()
 	return sess.Wait()
+}
+
+// progressDots prints one '.' to its writer per 1 MiB consumed, and a
+// trailing '\n' on finish. It is silent for payloads under 256 KiB to
+// avoid noise on small config uploads. The writer is intended to be
+// stderr — never wire it into the SSH stdin pipe.
+type progressDots struct {
+	w        io.Writer
+	total    int
+	step     int
+	written  int
+	emitted  int
+	enabled  bool
+	finished bool
+}
+
+const (
+	progressDotStep      = 1 << 20 // 1 MiB
+	progressMinThreshold = 256 << 10
+)
+
+func newProgressDots(total int, w io.Writer) *progressDots {
+	return &progressDots{
+		w:       w,
+		total:   total,
+		step:    progressDotStep,
+		enabled: total >= progressMinThreshold && w != nil,
+	}
+}
+
+// add records n more bytes consumed and prints any newly-crossed dot
+// boundaries. Safe to call with n == 0.
+func (p *progressDots) add(n int) {
+	if !p.enabled || n <= 0 {
+		return
+	}
+	p.written += n
+	target := p.written / p.step
+	for p.emitted < target {
+		_, _ = p.w.Write([]byte{'.'})
+		p.emitted++
+	}
+}
+
+// Write satisfies io.Writer so progressDots can be plugged into io.MultiWriter.
+// It only counts bytes; it never echoes payload data.
+func (p *progressDots) Write(b []byte) (int, error) {
+	p.add(len(b))
+	return len(b), nil
+}
+
+// finish prints the trailing newline (once) so subsequent log lines start
+// on a fresh line. Safe to call multiple times.
+func (p *progressDots) finish() {
+	if !p.enabled || p.finished {
+		return
+	}
+	p.finished = true
+	if p.emitted > 0 {
+		_, _ = p.w.Write([]byte{'\n'})
+	}
 }
 
 // safeBuf is a thread-safe bytes.Buffer (ssh stdout/stderr writes can race).
