@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -368,7 +369,22 @@ func (k *KnownHosts) checkOrAppend(hostKey string, remote net.Addr, pub ssh.Publ
 	var keyErr *knownhosts.KeyError
 	if errors.As(err, &keyErr) {
 		if len(keyErr.Want) == 0 {
-			// First time seeing this host — append.
+			// First time seeing this alias. Cross-check fingerprint against
+			// every other entry in known_hosts BEFORE appending: if this
+			// fingerprint is already saved under a different alias we are
+			// almost certainly talking to a router that was added before —
+			// classic "forgot to switch on VPN, cabled into the same LAN
+			// router on 192.168.0.1" scenario. Refusing here prevents the
+			// caller (install-agent / add-router) from clobbering /opt/bin
+			// /wg-monitor on a host that already has a different agent.
+			if other := k.aliasForFingerprint(pub); other != "" && other != hostKey {
+				return fmt.Errorf(
+					"SSH host key fingerprint совпадает с уже сохранённым под alias %q. "+
+						"Скорее всего ты цепляешься к ФИЗИЧЕСКИ ТОМУ ЖЕ роутеру под новым nickname'ом "+
+						"— проверь, поднят ли VPN/SSTP. Если правда хочешь добавить тот же роутер "+
+						"под двумя именами, удали строку для %q из %s.",
+					other, other, k.path)
+			}
 			line := knownhosts.Line([]string{hostKey}, pub)
 			f, ferr := os.OpenFile(k.path, os.O_APPEND|os.O_WRONLY, 0o600)
 			if ferr != nil {
@@ -385,6 +401,43 @@ func (k *KnownHosts) checkOrAppend(hostKey string, remote net.Addr, pub ssh.Publ
 			hostKey, k.path)
 	}
 	return err
+}
+
+// aliasForFingerprint scans known_hosts for an entry whose public key has
+// the same SHA256 fingerprint as `pub` and returns the alias (first host
+// field) of that entry. Returns "" if nothing matches or the file can't be
+// read. Used by checkOrAppend to detect alias collisions on the same
+// physical SSH endpoint (typically: forgotten VPN / multiple nicknames
+// resolving to one box on 192.168.0.1).
+func (k *KnownHosts) aliasForFingerprint(pub ssh.PublicKey) string {
+	f, err := os.Open(k.path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	target := ssh.FingerprintSHA256(pub)
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Each known_hosts line: "<hosts> <keytype> <base64-key> [comment]".
+		// Reconstruct authorized_keys form ("<keytype> <base64>") and parse.
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		host, keytype, b64 := fields[0], fields[1], fields[2]
+		pk, _, _, _, perr := ssh.ParseAuthorizedKey([]byte(keytype + " " + b64))
+		if perr != nil {
+			continue
+		}
+		if ssh.FingerprintSHA256(pk) == target {
+			return host
+		}
+	}
+	return ""
 }
 
 func normaliseHostKey(s string) string {
