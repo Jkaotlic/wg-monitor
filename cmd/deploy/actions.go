@@ -1,13 +1,17 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) error {
@@ -521,7 +525,10 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 	defer bs.Close()
 
-	threadID := parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
+	threadID := autoCreateForumTopic(state, secrets, nick)
+	if threadID == 0 {
+		threadID = parseIntOr(Ask("Telegram thread_id для нового топика", ""), 0)
+	}
 
 	// Добавить в state и регенерить backend.yaml
 	state.Agents = append(state.Agents, AgentState{
@@ -584,6 +591,38 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	// Сохранить токен в env для текущего процесса, чтобы install-agent его подхватил.
 	os.Setenv("WG_AGENT_TOKEN_"+strings.ToUpper(nick), tok)
 	return actionInstallAgent(state, secrets, dl, nick)
+}
+
+// autoCreateForumTopic tries to create a Telegram forum topic for the new
+// router via createForumTopic Bot API. Returns 0 on any failure (missing
+// bot token, missing chat_id, network error, bot lacks manage_topics, chat
+// is not a forum) — caller should fall back to a manual prompt.
+//
+// Failure printing is best-effort PrintWarn; the calling flow stays alive.
+func autoCreateForumTopic(state *State, secrets *SecretStore, nick string) int {
+	if state.Telegram.ChatID == 0 {
+		PrintWarn("telegram chat_id не задан в wizard.toml — не могу создать топик автоматически")
+		return 0
+	}
+	tok, _ := secrets.Get("WG_BOT_TOKEN", "Telegram bot token", nil)
+	if tok == "" {
+		PrintWarn("WG_BOT_TOKEN не задан — не могу создать топик автоматически")
+		return 0
+	}
+	cli := &tg.Client{
+		BaseURL: tg.DefaultBaseURL,
+		Token:   tok,
+		HTTP:    &http.Client{Timeout: 15 * time.Second},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	id, err := cli.CreateForumTopic(ctx, state.Telegram.ChatID, nick, 0)
+	if err != nil {
+		PrintWarn("createForumTopic не удался (" + err.Error() + ") — спрошу thread_id вручную")
+		return 0
+	}
+	PrintOK(fmt.Sprintf("создан топик thread_id=%d", id))
+	return int(id)
 }
 
 // --- helpers ---
