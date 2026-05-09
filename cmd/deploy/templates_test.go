@@ -7,27 +7,28 @@ import (
 
 func TestRenderBackendYAML(t *testing.T) {
 	got, err := RenderBackendYAML(BackendParams{
-		BotToken:    "1234:ABCD",
 		ChatID:      -1001,
 		AdminUserID: 42,
-		Agents: []AgentEntry{
-			{Nickname: "testkeen", Token: "deadbeef", ThreadID: 7},
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(got)
 	for _, want := range []string{
-		`bot_token: "1234:ABCD"`,
+		`bot_token_file: /etc/wg-monitor/bot-token.txt`,
 		`chat_id: -1001`,
 		`admin_user_id: 42`,
-		`nickname: testkeen`,
-		`token: "deadbeef"`,
-		`thread_id: 7`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered yaml missing %q\nfull:\n%s", want, s)
+		}
+	}
+	// agents/users belong in the DB, not the yaml — make sure we didn't
+	// accidentally re-introduce the legacy section that the running
+	// backend's config loader silently ignores.
+	for _, dont := range []string{"agents:", `bot_token:`} {
+		if strings.Contains(s, dont) {
+			t.Errorf("rendered yaml unexpectedly contains %q\nfull:\n%s", dont, s)
 		}
 	}
 }

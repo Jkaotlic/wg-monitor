@@ -2,17 +2,15 @@ listen: 127.0.0.1:8080
 log_level: info
 db_path: /var/lib/wg-monitor/state.db
 
+# bot_token is read from a separate file (mode 0600, owned by wgmonitor)
+# so the main config can stay readable for debugging without exposing the
+# token. Agents/users live in the SQLite DB at db_path — managed via
+# `wg-monitor-cli add-user` (called by the wizard's [4] Add Router action)
+# — and are NOT mirrored here.
 telegram:
-  bot_token: "{{.BotToken}}"
+  bot_token_file: /etc/wg-monitor/bot-token.txt
   chat_id: {{.ChatID}}
   admin_user_id: {{.AdminUserID}}
-
-agents:
-{{- range .Agents }}
-  - nickname: {{.Nickname}}
-    token: "{{.Token}}"
-    thread_id: {{.ThreadID}}
-{{- end }}
 
 state:
   fail_threshold: 2

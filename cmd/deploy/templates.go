@@ -10,17 +10,14 @@ import (
 //go:embed templates
 var templatesFS embed.FS
 
-type AgentEntry struct {
-	Nickname string
-	Token    string
-	ThreadID int
-}
-
+// BackendParams drives backend.yaml.tmpl. The bot token is uploaded as a
+// separate /etc/wg-monitor/bot-token.txt file (referenced by bot_token_file
+// in the rendered yaml) — it is NOT a template variable. Agents/users live
+// in the SQLite DB and are added via `wg-monitor-cli add-user` on the VPS,
+// not via this template.
 type BackendParams struct {
-	BotToken    string
 	ChatID      int64
 	AdminUserID int64
-	Agents      []AgentEntry
 }
 
 type AgentParams struct {

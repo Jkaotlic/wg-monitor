@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 )
@@ -84,19 +83,21 @@ func actionSmokeTest(state *State, secrets *SecretStore) error {
 				vout, _ := s.MustRun("/usr/local/bin/wg-monitor-backend -version 2>&1 || /usr/local/bin/wg-monitor-backend --version 2>&1 || true")
 				PrintInfo("backend version: " + strings.TrimSpace(vout))
 
-				// backend.yaml ↔ wizard.toml agent reconciliation
-				yamlBytes, err := s.MustRun("cat /etc/wg-monitor/backend.yaml")
-				if err != nil {
-					PrintFail("read /etc/wg-monitor/backend.yaml: " + err.Error())
+				// users DB ↔ wizard.toml agent reconciliation. The DB
+				// (state.db / users table, managed by wg-monitor-cli) is
+				// the source of truth; backend.yaml has no agents section.
+				dbOut, _, rc, err := s.Run(`sqlite3 /var/lib/wg-monitor/state.db "SELECT nickname FROM users;"`)
+				if err != nil || rc != 0 {
+					PrintFail("read users from /var/lib/wg-monitor/state.db (rc=" + fmt.Sprint(rc) + "): " + fmt.Sprint(err))
 					add(false)
 				} else {
-					missing := smokeCheckAgentReconcile(yamlBytes, state.Agents)
+					missing := smokeCheckAgentReconcile(dbOut, state.Agents)
 					if len(missing) == 0 {
-						PrintOK("agents в wizard.toml совпадают с backend.yaml")
+						PrintOK("agents в wizard.toml совпадают с users в DB")
 						add(true)
 					} else {
 						for _, n := range missing {
-							PrintFail("agent " + n + " в wizard.toml но не в backend.yaml")
+							PrintFail("agent " + n + " в wizard.toml но не в users DB на VPS")
 						}
 						add(false)
 					}
@@ -209,15 +210,15 @@ func smokeCheckHealthz(url string) bool {
 }
 
 // smokeCheckAgentReconcile returns nicknames present in wizard.toml's
-// agents list that are missing from the deployed backend.yaml. Parsing is
-// regex-based to avoid pulling a YAML decoder into the smoke flow — the
-// template's `nickname:` line format is stable and fully under our control.
-var smokeAgentNickRe = regexp.MustCompile(`(?m)^\s*-\s*nickname:\s*([A-Za-z0-9_\-]+)`)
-
-func smokeCheckAgentReconcile(yaml string, agents []AgentState) []string {
+// agents list that are missing from the deployed users table on the VPS.
+// `dbNicknamesOutput` is sqlite3's plain-text output of `SELECT nickname FROM users` —
+// one nickname per line.
+func smokeCheckAgentReconcile(dbNicknamesOutput string, agents []AgentState) []string {
 	deployed := map[string]bool{}
-	for _, m := range smokeAgentNickRe.FindAllStringSubmatch(yaml, -1) {
-		deployed[m[1]] = true
+	for _, line := range strings.Split(dbNicknamesOutput, "\n") {
+		if n := strings.TrimSpace(line); n != "" {
+			deployed[n] = true
+		}
 	}
 	var missing []string
 	for _, a := range agents {
