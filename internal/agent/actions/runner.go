@@ -11,6 +11,11 @@
 //     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
 //     ndmc CLI is the authoritative path. NDMSName must be supplied in
 //     cmd.Args["ndms_name"] by the backend.)
+//   - service_restart  → init.d for hrneo/awg-mgr; ndmc system reboot for router
+//     (router gated on AllowRouterReboot config flag)
+//   - firmware_status  → ndmc components list parsed into wire.FirmwareStatus
+//   - firmware_install → ndmc components commit (gated on AllowFirmwareInstall)
+//   - version_audit    → composite of awgmgr SystemInfo + opkg + components list
 //
 // Every action returns a wire.CommandResult with the original Command.ID
 // preserved so the backend can correlate outcome with the TG callback.
@@ -18,6 +23,7 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -36,12 +42,14 @@ type OpkgExecutor interface {
 
 // Runner is built once at agent startup and re-used per-command.
 type Runner struct {
-	AwgClient    *awgmgr.Client
-	ForceRecheck func(ctx context.Context) // typically wraps reporter.SendOnce
-	Opkg         OpkgExecutor
-	Exec         ExecFunc // for tunnel_enable/disable via ndmc
-	Now          func() time.Time
-	routeMu      sync.Mutex // serialises concurrent route_rebind calls
+	AwgClient            *awgmgr.Client
+	ForceRecheck         func(ctx context.Context) // typically wraps reporter.SendOnce
+	Opkg                 OpkgExecutor
+	Exec                 ExecFunc // for tunnel_enable/disable via ndmc
+	Now                  func() time.Time
+	AllowRouterReboot    bool // gates `service_restart router`
+	AllowFirmwareInstall bool // gates `firmware_install`
+	routeMu              sync.Mutex // serialises concurrent route_rebind calls
 }
 
 func (r *Runner) now() time.Time {
@@ -142,6 +150,80 @@ func (r *Runner) dispatch(ctx context.Context, cmd wire.Command) (status, output
 			return "err", err.Error()
 		}
 		return "ok", out
+	case "service_restart":
+		name, _ := cmd.Args["name"].(string)
+		if r.Exec == nil {
+			return "err", "exec not configured"
+		}
+		switch name {
+		case "hrneo":
+			out, err := r.Exec(ctx, "/opt/etc/init.d/S99hrneo", "restart")
+			if err != nil {
+				return "err", fmt.Sprintf("S99hrneo restart: %v\n%s", err, string(out))
+			}
+			return "ok", "hrneo restart sent\n" + string(out)
+		case "awgmgr":
+			out, err := r.Exec(ctx, "/opt/etc/init.d/S99awg-manager", "restart")
+			if err != nil {
+				return "err", fmt.Sprintf("S99awg-manager restart: %v\n%s", err, string(out))
+			}
+			return "ok", "awg-manager restart sent\n" + string(out)
+		case "router":
+			if !r.AllowRouterReboot {
+				return "err", "router reboot disabled in agent config"
+			}
+			out, err := r.Exec(ctx, "ndmc", "-c", "system reboot")
+			if err != nil {
+				return "err", fmt.Sprintf("ndmc system reboot: %v\n%s", err, string(out))
+			}
+			return "ok", "reboot scheduled\n" + string(out)
+		default:
+			return "err", "unknown service: " + name
+		}
+
+	case "firmware_status":
+		if r.Exec == nil {
+			return "err", "exec not configured"
+		}
+		fs, err := GetFirmwareStatus(ctx, r.Exec)
+		if err != nil {
+			return "err", err.Error()
+		}
+		b, jerr := json.Marshal(fs)
+		if jerr != nil {
+			return "err", "encode firmware_status: " + jerr.Error()
+		}
+		return "ok", string(b)
+
+	case "firmware_install":
+		if !r.AllowFirmwareInstall {
+			return "err", "firmware install disabled in agent config"
+		}
+		if r.Exec == nil {
+			return "err", "exec not configured"
+		}
+		if err := InstallFirmware(ctx, r.Exec); err != nil {
+			return "err", err.Error()
+		}
+		return "ok", "firmware install kicked; router will reboot"
+
+	case "version_audit":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured"
+		}
+		if r.Exec == nil {
+			return "err", "exec not configured"
+		}
+		va, err := VersionAudit(ctx, r.AwgClient, r.Exec)
+		if err != nil {
+			return "err", err.Error()
+		}
+		out, err := EncodeVersionAudit(va)
+		if err != nil {
+			return "err", "encode version_audit: " + err.Error()
+		}
+		return "ok", out
+
 	case "route_status":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured"
