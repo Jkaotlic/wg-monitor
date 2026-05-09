@@ -20,6 +20,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
+	"github.com/anex/wg-monitor/internal/backend/upstream"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
@@ -75,6 +76,7 @@ type Router struct {
 	cooldown        *cooldownStore
 	maintConfirmAct Action
 	auditCache      *simpleAuditCache
+	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -1081,4 +1083,23 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindSrcID, args.RebindDstID, token)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// SetUpstream attaches the upstream version cache used by smart-reply
+// Updates section computation. Optional — nil-safe in dispatchSmartReply.
+func (r *Router) SetUpstream(c *upstream.Cache) {
+	r.upstream = c
+}
+
+// NewMaintNotifier returns a MaintPanelNotifier wired to this router's
+// internal stores (cooldown, auditCache). Call once at startup with the
+// upstream cache and DB; pass the returned value into handler.Deps.MaintNotifier.
+func (r *Router) NewMaintNotifier(tgClient MaintEditTG, up *upstream.Cache) *MaintPanelNotifier {
+	return &MaintPanelNotifier{
+		TG:       tgClient,
+		Up:       up,
+		Cooldown: r.cooldown,
+		Audit:    r.auditCache,
+		DB:       r.d,
+	}
 }

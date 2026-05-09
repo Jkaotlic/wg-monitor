@@ -55,6 +55,13 @@ type RoutesNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
+// MaintNotifier is the subset used by cmdResultHandler when ref.Action is
+// version_audit / firmware_status / service_restart / firmware_install.
+// Implemented by callbacks.MaintPanelNotifier.
+type MaintNotifier interface {
+	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
+}
+
 type Deps struct {
 	Logger         *slog.Logger
 	DB             *db.DB
@@ -63,6 +70,7 @@ type Deps struct {
 	CommandSink    CommandSink
 	TGNotifier     TGNotifier
 	RoutesNotifier RoutesNotifier // nil-safe (handler skips if nil)
+	MaintNotifier  MaintNotifier  // nil-safe (handler skips if nil)
 	UI             UIConfig
 	Thresholds     state.Thresholds
 }
@@ -240,6 +248,16 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 						defer cancel()
 						if err := d.RoutesNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
 							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
+						}
+					}(ref, res)
+				}
+			case "version_audit", "firmware_status", "service_restart", "firmware_install":
+				if d.MaintNotifier != nil {
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						if err := d.MaintNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
+							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
 					}(ref, res)
 				}
