@@ -558,6 +558,88 @@ func TestCmdResult_DispatchesRoutesNotifier(t *testing.T) {
 	}
 }
 
+type fakeMaintNotifier struct {
+	mu     sync.Mutex
+	called int
+	action string
+}
+
+func (f *fakeMaintNotifier) NotifyCommandResult(_ context.Context, ref cmdpkg.MessageRef, _ wire.CommandResult, _ int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.called++
+	f.action = ref.Action
+	return nil
+}
+
+func testCmdResultDispatchesMaintNotifier(t *testing.T, action string) {
+	t.Helper()
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	mn := &fakeMaintNotifier{}
+	rc := &relayCapture{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: action, ChatID: 1, MessageID: 2}}
+	mux := NewMux(Deps{
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:            d,
+		Dispatcher:    &fakeDisp{},
+		CommandSink:   sink,
+		TGNotifier:    rc,
+		MaintNotifier: mn,
+		Thresholds:    state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "m1", Status: "ok", Output: `{}`, DurationMs: 1})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	// Goroutine dispatch is async — poll briefly.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		mn.mu.Lock()
+		c := mn.called
+		mn.mu.Unlock()
+		if c > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	mn.mu.Lock()
+	mnCalled := mn.called
+	mn.mu.Unlock()
+	if mnCalled != 1 {
+		t.Errorf("MaintNotifier called %d times for action %q, want 1", mnCalled, action)
+	}
+
+	// TGNotifier must NOT be called for maint actions.
+	snap := rc.snapshot()
+	if len(snap.chunks) != 0 {
+		t.Errorf("generic TGNotifier called %d chunk(s) for %q, want 0", len(snap.chunks), action)
+	}
+}
+
+func TestCmdResult_DispatchesMaintNotifier_VersionAudit(t *testing.T) {
+	testCmdResultDispatchesMaintNotifier(t, "version_audit")
+}
+
+func TestCmdResult_DispatchesMaintNotifier_ServiceRestart(t *testing.T) {
+	testCmdResultDispatchesMaintNotifier(t, "service_restart")
+}
+
 func TestCmdResult_RejectsInvalidStatus(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()

@@ -57,7 +57,11 @@ func MaintPanelText(a MaintPanelArgs) string {
 		fmt.Fprintf(&b, "  • HydraRoute-Neo  %s running, v%s  uptime %s\n", hrIcon, a.HrneoVersion, a.HrneoUptime)
 	}
 	fmt.Fprintf(&b, "  • awg-manager     ✅ running, v%s  uptime %s\n", a.AwgmgrVersion, a.AwgmgrUptime)
-	fmt.Fprintf(&b, "  • Keenetic OS     %s, v%s\n", a.KeeneticOS, a.Firmware.Current)
+	if a.KeeneticOS != "" {
+		fmt.Fprintf(&b, "  • Keenetic OS     %s, v%s\n", a.KeeneticOS, a.Firmware.Current)
+	} else {
+		fmt.Fprintf(&b, "  • Keenetic OS     v%s\n", a.Firmware.Current)
+	}
 	if len(a.Updates) > 0 {
 		b.WriteString("\n🟡 Доступны обновления:\n")
 		for _, u := range a.Updates {

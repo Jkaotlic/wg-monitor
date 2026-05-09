@@ -44,6 +44,25 @@ func TestMaintPanelText_FullState(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
+	if !strings.Contains(text, "KN-1811, v") {
+		t.Errorf("with non-empty model, expected comma between model and version")
+	}
+}
+
+func TestMaintPanelText_EmptyKeeneticOSHidesComma(t *testing.T) {
+	args := MaintPanelArgs{
+		Nickname:      "x",
+		AwgmgrVersion: "2.8.2",
+		Firmware:      wire.FirmwareStatus{Current: "5.0.0"},
+		// KeeneticOS deliberately omitted
+	}
+	text := MaintPanelText(args)
+	if strings.Contains(text, ", v5.0.0") {
+		t.Errorf("empty KeeneticOS must not produce leading-comma artifact:\n%s", text)
+	}
+	if !strings.Contains(text, "Keenetic OS     v5.0.0") {
+		t.Errorf("expected 'Keenetic OS     v5.0.0' line, got:\n%s", text)
+	}
 }
 
 func TestMaintPanelText_HrneoNotInstalled(t *testing.T) {
