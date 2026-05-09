@@ -39,15 +39,20 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 		case "5":
 			actionStatus(state, secrets) //nolint:errcheck
 		case "6":
+			actionSmokeTest(state, secrets) //nolint:errcheck
+		case "7":
+			actionDoctor(state, secrets) //nolint:errcheck
+		case "8":
+			ForgetKnownHostInteractive() //nolint:errcheck
+		case "9":
 			openInEditor(statePath)
-			// Reload after edit.
 			if reloaded, err := LoadState(statePath); err == nil {
 				*state = *reloaded
 			}
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–6 или Q.")
+			PrintFail("Не понял. Введи 1–9 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -81,8 +86,11 @@ func printMenuItems(state *State) {
 	}
 	fmt.Println("  [3] Первичная установка агента на роутер")
 	fmt.Println("  [4] Добавить новый роутер")
-	fmt.Println("  [5] Проверить статус")
-	fmt.Println("  [6] Открыть wizard.toml в редакторе")
+	fmt.Println("  [5] Проверить статус         " + Colorize("(быстрая static-проверка)", ColorDim))
+	fmt.Println("  [6] Smoke-тест               " + Colorize("(end-to-end: /healthz, версии, sync)", ColorDim))
+	fmt.Println("  [7] Doctor (полный аудит)    " + Colorize("(local + VPS + каждый агент)", ColorDim))
+	fmt.Println("  [8] Управление known_hosts   " + Colorize("(забыть alias)", ColorDim))
+	fmt.Println("  [9] Открыть wizard.toml в редакторе")
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }
