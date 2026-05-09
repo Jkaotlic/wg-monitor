@@ -45,7 +45,7 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	}
 
 	PrintStep(1, 4, "SSH к VPS")
-	s, err := ConnectSSH(state.Backend.Host, port, user, pass, kh)
+	s, err := ConnectSSH(state.Backend.Host, port, user, pass, kh, "backend")
 	if err != nil {
 		PrintFail(err.Error())
 		return err
@@ -131,7 +131,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	}
 
 	PrintStep(1, 4, "SSH к роутеру "+ag.Nickname)
-	s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh)
+	s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh, ag.Nickname)
 	if err != nil {
 		PrintFail(err.Error())
 		return err
@@ -246,7 +246,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	}
 
 	PrintStep(1, 7, "SSH к роутеру")
-	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh)
+	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
 	if err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		return err
 	}
 	PrintStep(1, 12, "SSH к VPS")
-	s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh)
+	s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
 	if err != nil {
 		PrintFail(err.Error())
 		return err
@@ -507,7 +507,7 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("missing VPS password")
 	}
 	kh, _ := NewKnownHosts(defaultCacheDir() + "/known_hosts")
-	bs, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh)
+	bs, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
 	if err != nil {
 		return err
 	}
@@ -590,7 +590,7 @@ func actionStatus(state *State, secrets *SecretStore) error {
 		if pass == "" {
 			PrintWarn("WG_VPS_PASS не задан — пропускаю VPS")
 		} else {
-			s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh)
+			s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
 			if err != nil {
 				PrintFail(err.Error())
 			} else {
@@ -624,7 +624,7 @@ func actionStatus(state *State, secrets *SecretStore) error {
 			continue
 		}
 
-		s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh)
+		s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh, ag.Nickname)
 		if err != nil {
 			PrintFail(err.Error())
 			continue

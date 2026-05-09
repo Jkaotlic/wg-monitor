@@ -65,6 +65,70 @@ func TestKnownHosts_KeyMismatch(t *testing.T) {
 	}
 }
 
+// TestKnownHosts_AliasScopesSameIP verifies the SSTP-rotation scenario:
+// two physically different routers reachable through the SAME LAN IP at
+// different times must not trigger the MITM guard when looked up under
+// distinct aliases (their nicknames).
+func TestKnownHosts_AliasScopesSameIP(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "known_hosts")
+	kh, err := NewKnownHosts(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := genTestSigner()
+	if err != nil {
+		t.Skip()
+	}
+	s2, err := genTestSigner()
+	if err != nil {
+		t.Skip()
+	}
+
+	cb1 := kh.HostKeyCallbackFor("router_alice")
+	cb2 := kh.HostKeyCallbackFor("router_bob")
+
+	if err := cb1("192.168.31.1:22", nil, s1.PublicKey()); err != nil {
+		t.Fatalf("alice first connect: %v", err)
+	}
+	if err := cb2("192.168.31.1:22", nil, s2.PublicKey()); err != nil {
+		t.Fatalf("bob first connect (same IP, different alias): %v", err)
+	}
+	if err := cb1("192.168.31.1:22", nil, s1.PublicKey()); err != nil {
+		t.Errorf("alice second connect should still match: %v", err)
+	}
+	if err := cb2("192.168.31.1:22", nil, s2.PublicKey()); err != nil {
+		t.Errorf("bob second connect should still match: %v", err)
+	}
+}
+
+// TestKnownHosts_AliasMismatchStillCaught verifies the MITM guard remains
+// effective WITHIN a single alias: if router_alice's key changes between
+// connects, we must reject — only the cross-alias collision is fixed.
+func TestKnownHosts_AliasMismatchStillCaught(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "known_hosts")
+	kh, err := NewKnownHosts(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := genTestSigner()
+	if err != nil {
+		t.Skip()
+	}
+	s2, err := genTestSigner()
+	if err != nil {
+		t.Skip()
+	}
+	cb := kh.HostKeyCallbackFor("router_alice")
+	if err := cb("192.168.31.1:22", nil, s1.PublicKey()); err != nil {
+		t.Fatalf("first connect: %v", err)
+	}
+	if err := cb("192.168.31.1:22", nil, s2.PublicKey()); err == nil {
+		t.Fatal("expected MITM detection on key change for same alias")
+	}
+}
+
 func genTestSigner() (ssh.Signer, error) {
 	// Generate ephemeral ed25519 key for tests.
 	// (Implementation in ssh.go must export this helper, or use real ssh.NewSignerFromKey.)
