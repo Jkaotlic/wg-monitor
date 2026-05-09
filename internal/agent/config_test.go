@@ -290,6 +290,69 @@ checks:
       - { type: plain, host: 1.1.1.1, port: 53, ndms_name: Wireguard1 }
 `
 
+func TestLoadConfig_MaintenanceDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+backend:
+  url: https://wgmonitor.jkaotlic.duckdns.org
+  token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
+agent:
+  nickname: testkeen
+checks:
+  awg:
+    interface: awg0
+    expected_exit_ip: 1.2.3.4
+    marker_url: https://www.youtube.com/-/manifest
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Maintenance.AllowRouterReboot {
+		t.Error("AllowRouterReboot should default false (secure default)")
+	}
+	if cfg.Maintenance.AllowFirmwareInstall {
+		t.Error("AllowFirmwareInstall should default false (secure default)")
+	}
+}
+
+func TestLoadConfig_MaintenanceParsed(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+backend:
+  url: https://wgmonitor.jkaotlic.duckdns.org
+  token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
+agent:
+  nickname: testkeen
+checks:
+  awg:
+    interface: awg0
+    expected_exit_ip: 1.2.3.4
+    marker_url: https://www.youtube.com/-/manifest
+maintenance:
+  allow_router_reboot: true
+  allow_firmware_install: true
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Maintenance.AllowRouterReboot {
+		t.Errorf("AllowRouterReboot=%v, want true", cfg.Maintenance.AllowRouterReboot)
+	}
+	if !cfg.Maintenance.AllowFirmwareInstall {
+		t.Errorf("AllowFirmwareInstall=%v, want true", cfg.Maintenance.AllowFirmwareInstall)
+	}
+}
+
 func TestLoadConfig_NewDNSSchema(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

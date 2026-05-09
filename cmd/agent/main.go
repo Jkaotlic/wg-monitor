@@ -94,10 +94,12 @@ func main() {
 		Exec:     actions.DefaultExec,
 	}
 	runner := &actions.Runner{
-		AwgClient:    awgClient,
-		ForceRecheck: rep.ForceResumed,
-		Opkg:         opkg,
-		Exec:         actions.DefaultExec,
+		AwgClient:            awgClient,
+		ForceRecheck:         rep.ForceResumed,
+		Opkg:                 opkg,
+		Exec:                 actions.DefaultExec,
+		AllowRouterReboot:    cfg.Maintenance.AllowRouterReboot,
+		AllowFirmwareInstall: cfg.Maintenance.AllowFirmwareInstall,
 	}
 	loop := cmdloop.New(client, runner, 30)
 	go loop.Run(ctx)

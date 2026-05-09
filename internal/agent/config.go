@@ -19,6 +19,7 @@ type Config struct {
 	Checks        ChecksConfig        `yaml:"checks"`
 	State         StateConfig         `yaml:"state"`
 	ExternalReach ExternalReachConfig `yaml:"external_reach"`
+	Maintenance   MaintenanceConfig   `yaml:"maintenance"`
 }
 
 // ExternalReachConfig: probes blocked-in-RU services through the
@@ -36,6 +37,15 @@ type ExternalReachConfig struct {
 type ExternalReachTarget struct {
 	Name string `yaml:"name"`
 	URL  string `yaml:"url"`
+}
+
+// MaintenanceConfig gates destructive ops the bot can trigger remotely.
+// Both default to false — wizard's `add-router` step opts in by setting them
+// to true, so the operator must explicitly accept the destructive surface
+// (or hand-edit the file).
+type MaintenanceConfig struct {
+	AllowRouterReboot    bool `yaml:"allow_router_reboot"`
+	AllowFirmwareInstall bool `yaml:"allow_firmware_install"`
 }
 
 var defaultExternalReachTargets = []ExternalReachTarget{
