@@ -69,6 +69,12 @@ type Router struct {
 	cmdSink             CommandEnqueuer // saved for routes_open/refresh enqueue paths
 	pendingRebindsMu    sync.Mutex
 	pendingRebinds      map[string]*pendingRebind // keyed by 8-hex token
+
+	// Maintenance panel plumbing (M6/M10/M11). All in-memory; lost on restart.
+	pendingMaint    *pendingMaintStore
+	cooldown        *cooldownStore
+	maintConfirmAct Action
+	auditCache      *simpleAuditCache
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -115,6 +121,10 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.cmdSink = sink
 	r.pendingRebinds = make(map[string]*pendingRebind)
 	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebind, defaultCmdID)
+	r.pendingMaint = newPendingMaintStore()
+	r.cooldown = newCooldownStore()
+	r.auditCache = newSimpleAuditCache()
+	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
 	return r
 }
 
@@ -361,6 +371,13 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil)
 		}
+	case "🛠 Обслуживание":
+		if kind == "per_router" && user != nil {
+			r.openMaintPanelMessage(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике пользователя.", "", nil)
+		}
 	case "🌍 Через тоннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
 			"⏳ Проверяю YouTube/Telegram/Instagram через тоннель…")
@@ -450,6 +467,26 @@ func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user
 	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
 		slog.Warn("route_status enqueue failed", "err", err)
+	}
+}
+
+// openMaintPanelMessage sends the initial Maintenance panel placeholder and
+// enqueues a version_audit command. The cmd-result handler (MaintNotifier
+// in M11) edits the panel in place when the agent answers.
+func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
+	loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
+	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
+	if err != nil {
+		slog.Warn("maint panel send failed", "err", err)
+		return
+	}
+	if r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "version_audit", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		slog.Warn("version_audit enqueue failed", "err", err)
 	}
 }
 
