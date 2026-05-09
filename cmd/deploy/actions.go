@@ -629,22 +629,41 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 // and returns nickname → token from its agents list. Used by actionAddRouter
 // to recover tokens for agents originally enrolled from a different operator
 // workstation: the secrets disk-cache is per-machine, but the deployed yaml
-// is the source of truth on the server. All errors are non-fatal — caller
-// degrades to the existing "missing token" failure path.
+// is the source of truth on the server. All errors are warned but non-fatal
+// — caller degrades to the existing "missing token" failure path.
 func readDeployedAgentTokens(bs *SSH) map[string]string {
 	out := map[string]string{}
-	yamlOut, _, rc, err := bs.Run("cat /etc/wg-monitor/backend.yaml")
-	if err != nil || rc != 0 {
+	yamlOut, stderr, rc, err := bs.Run("cat /etc/wg-monitor/backend.yaml")
+	if err != nil {
+		PrintWarn("не смог прочитать backend.yaml с VPS (ssh transport): " + err.Error())
+		return out
+	}
+	if rc != 0 {
+		PrintWarn(fmt.Sprintf("cat /etc/wg-monitor/backend.yaml вернул rc=%d, stderr=%q", rc, strings.TrimSpace(stderr)))
+		return out
+	}
+	if strings.TrimSpace(yamlOut) == "" {
+		PrintWarn("backend.yaml на VPS пустой — нечего восстанавливать")
 		return out
 	}
 	var by doctorBackendYAML
 	if perr := yaml.Unmarshal([]byte(yamlOut), &by); perr != nil {
+		PrintWarn("backend.yaml на VPS не парсится: " + perr.Error())
 		return out
 	}
 	for _, a := range by.Agents {
 		if a.Nickname != "" && a.Token != "" {
 			out[a.Nickname] = a.Token
 		}
+	}
+	if len(out) == 0 {
+		PrintWarn(fmt.Sprintf("в backend.yaml на VPS нет агентов с токенами (parsed %d entries)", len(by.Agents)))
+	} else {
+		nicks := make([]string, 0, len(out))
+		for k := range out {
+			nicks = append(nicks, k)
+		}
+		PrintInfo(fmt.Sprintf("из backend.yaml на VPS поднято %d токен(ов): %s", len(out), strings.Join(nicks, ", ")))
 	}
 	return out
 }
