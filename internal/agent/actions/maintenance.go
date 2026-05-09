@@ -20,6 +20,18 @@ func GetFirmwareStatus(ctx context.Context, exec ExecFunc) (wire.FirmwareStatus,
 	return parseComponentsList(string(out))
 }
 
+// InstallFirmware kicks the KeeneticOS firmware install via
+// `ndmc -c "components commit"`. After the call returns successfully the
+// router will reboot within seconds — the agent will lose connection long
+// before any follow-up work can complete; the caller should not expect
+// further status updates from this command.
+func InstallFirmware(ctx context.Context, exec ExecFunc) error {
+	if _, err := exec(ctx, "ndmc", "-c", "components commit"); err != nil {
+		return fmt.Errorf("ndmc components commit: %w", err)
+	}
+	return nil
+}
+
 // parseComponentsList is the format parser, separated for table-driven tests.
 //
 // Format observed on testkeen (M0 Probe 4): ndmc emits an `\x1b[K` ANSI
