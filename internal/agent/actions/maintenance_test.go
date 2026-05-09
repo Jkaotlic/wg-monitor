@@ -80,3 +80,38 @@ func TestGetFirmwareStatus_ExecError(t *testing.T) {
 type execErr struct{ msg string }
 
 func (e *execErr) Error() string { return e.msg }
+
+func TestInstallFirmware_ExecCommand(t *testing.T) {
+	var got [][]string
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		got = append(got, append([]string{name}, args...))
+		return []byte("ok"), nil
+	}
+	if err := InstallFirmware(context.Background(), exec); err != nil {
+		t.Fatalf("InstallFirmware: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 exec, got %d", len(got))
+	}
+	want := []string{"ndmc", "-c", "components commit"}
+	if !slicesEq(got[0], want) {
+		t.Errorf("exec=%v, want %v", got[0], want)
+	}
+}
+
+func TestInstallFirmware_ExecError(t *testing.T) {
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, &execErr{msg: "no such command"}
+	}
+	if err := InstallFirmware(context.Background(), exec); err == nil {
+		t.Error("expected error from exec failure")
+	}
+}
+
+func slicesEq(a, b []string) bool {
+	if len(a) != len(b) { return false }
+	for i := range a {
+		if a[i] != b[i] { return false }
+	}
+	return true
+}
