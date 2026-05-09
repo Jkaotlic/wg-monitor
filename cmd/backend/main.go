@@ -71,7 +71,13 @@ func main() {
 	})
 
 	cmdQueue := cmd.New()
-	notifier := callbacks.NewNotifier(tgClient)
+	uiSnap := callbacks.UIConfigSnapshot{
+		DeleteUserCommandMessages: cfg.UI.DeleteUserCommandMessages != nil && *cfg.UI.DeleteUserCommandMessages,
+		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
+		DiagMaxChars:              cfg.UI.DiagMaxChars,
+		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard,
+	}
+	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
 	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
 	routesNotifier := &callbacks.RoutesPanelNotifier{
 		TG:    tgClient,
@@ -97,6 +103,7 @@ func main() {
 		ChatID:         cfg.Telegram.ChatID,
 		AdminUserID:    cfg.Telegram.AdminUserID,
 		MuteCutoffHour: cfg.State.MuteCutoffHour,
+		UI:             uiSnap,
 	})
 	cb.SetRoutesCache(routesCache)
 	cb.SetUpstream(upCache)

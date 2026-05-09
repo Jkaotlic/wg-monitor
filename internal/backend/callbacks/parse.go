@@ -75,6 +75,11 @@ var validActions = map[string]bool{
 	"maint_restart": true, "maint_confirm": true,
 	"maint_fw_open": true, "maint_fw_check": true,
 	"maint_fw_install": true, "maint_fw_confirm": true,
+	// compat-mode inline button: encodes the per-topic reply-keyboard label
+	// as an inline-keyboard tap (TG Desktop forum-topic workaround). The
+	// short code lives in CheckName and is mapped back to the original
+	// label by tg.CompatBtnTextByCode.
+	"compat_btn": true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
