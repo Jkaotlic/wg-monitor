@@ -309,3 +309,57 @@ func stepUploadAgentBinary(s *SSH, localPath, remotePath string) error {
 	PrintOK("агент запущен (PID " + strings.TrimSpace(out) + ")")
 	return nil
 }
+
+// stepReadOrEmpty runs `cmd` and returns trimmed stdout. Any non-zero rc or
+// transport error becomes "" — caller treats absence as missing data, not a
+// fatal condition. Used for purely diagnostic reads (hostname, MAC, etc.).
+func stepReadOrEmpty(s *SSH, cmd string) string {
+	out, _, rc, err := s.Run(cmd)
+	if err != nil || rc != 0 {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// stepDetectPrimaryMAC reads the MAC of the first non-loopback ethernet
+// interface that has one. Returns "" when nothing matches (e.g. dropbear's
+// minimal toolchain doesn't surface /sys/class/net contents). Diagnostic
+// only — used by the install-agent identity-check banner so the operator
+// can sanity-check which physical box they're talking to before any write.
+func stepDetectPrimaryMAC(s *SSH) string {
+	cmd := `for iface in $(ls /sys/class/net 2>/dev/null); do
+		[ "$iface" = "lo" ] && continue
+		mac=$(cat /sys/class/net/$iface/address 2>/dev/null)
+		[ -n "$mac" ] && [ "$mac" != "00:00:00:00:00:00" ] && { echo "$iface=$mac"; break; }
+	done`
+	return stepReadOrEmpty(s, cmd)
+}
+
+// stepReadExistingAgentNickname returns the `agent.nickname` value found in
+// /opt/etc/wg-monitor/config.yaml on the router, or "" if the file doesn't
+// exist or has no nickname line. Used as a pre-flight guard against
+// accidentally clobbering an agent set up under a different name (typical
+// trigger: VPN is down and the operator is unintentionally talking to the
+// LAN-side router on 192.168.31.1 that already hosts another wg-monitor).
+//
+// Match is line-based to avoid pulling a YAML decoder onto the
+// pre-mkdir code path. The template's `nickname:` line is fully under our
+// control (cmd/deploy/templates/agent.yaml.tmpl).
+func stepReadExistingAgentNickname(s *SSH) string {
+	out := stepReadOrEmpty(s, "cat /opt/etc/wg-monitor/config.yaml 2>/dev/null")
+	if out == "" {
+		return ""
+	}
+	// Look for the line under `agent:` block. Tolerant — trims whitespace
+	// and quotes, ignores commented lines.
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(line, "nickname:"); ok {
+			return strings.Trim(strings.TrimSpace(rest), `"'`)
+		}
+	}
+	return ""
+}

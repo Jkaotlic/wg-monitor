@@ -285,20 +285,41 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	}
 	defer s.Close()
 
-	PrintStep(2, 7, "Архитектура")
+	PrintStep(2, 8, "Идентификация роутера")
+	hostname := strings.TrimSpace(stepReadOrEmpty(s, "cat /proc/sys/kernel/hostname 2>/dev/null || uname -n"))
+	mac := stepDetectPrimaryMAC(s)
+	existingNick := stepReadExistingAgentNickname(s)
+	if hostname != "" || mac != "" {
+		PrintInfo(fmt.Sprintf("hostname=%q mac=%s", hostname, mac))
+	}
+	if existingNick != "" && existingNick != ag.Nickname {
+		PrintFail(fmt.Sprintf(
+			"на роутере уже установлен агент под именем %q — НЕ перезаписываю под %q. "+
+				"Возможные причины: (a) ты случайно цепляешься не к тому роутеру (VPN не активен?); "+
+				"(b) хочешь честно переименовать — тогда сначала убери его на VPS "+
+				"(sqlite3 /var/lib/wg-monitor/state.db \"DELETE FROM users WHERE nickname='%s';\") "+
+				"и удали /opt/etc/wg-monitor/config.yaml на роутере.",
+			existingNick, ag.Nickname, existingNick))
+		return fmt.Errorf("router already hosts agent %q, refusing to overwrite", existingNick)
+	}
+	if existingNick == ag.Nickname {
+		PrintInfo(fmt.Sprintf("существующий агент с тем же nickname'ом — переустановка %s", ag.Nickname))
+	}
+
+	PrintStep(3, 8, "Архитектура")
 	arch, err := stepDetectKeeneticArch(s)
 	if err != nil {
 		return err
 	}
 	ag.Arch = arch
 
-	PrintStep(3, 7, "Директории /opt/{bin,etc/wg-monitor,etc/init.d,var/wg-monitor}")
+	PrintStep(4, 8, "Директории /opt/{bin,etc/wg-monitor,etc/init.d,var/wg-monitor}")
 	if _, err := s.MustRun("mkdir -p /opt/bin /opt/etc/wg-monitor /opt/etc/init.d /opt/var/wg-monitor"); err != nil {
 		return err
 	}
 	PrintOK("ok")
 
-	PrintStep(4, 7, "config.yaml")
+	PrintStep(5, 8, "config.yaml")
 	cfg, err := RenderAgentYAML(AgentParams{
 		BackendURL:     "https://" + state.Backend.Domain,
 		Token:          tok,
@@ -316,7 +337,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	s.MustRun("chmod 600 /opt/etc/wg-monitor/config.yaml")
 	PrintOK("/opt/etc/wg-monitor/config.yaml")
 
-	PrintStep(5, 7, "init.d скрипт")
+	PrintStep(6, 8, "init.d скрипт")
 	initd, err := ReadStaticTemplate("S99wg-monitor")
 	if err != nil {
 		return err
@@ -327,14 +348,14 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	s.MustRun("chmod +x /opt/etc/init.d/S99wg-monitor")
 	PrintOK("/opt/etc/init.d/S99wg-monitor")
 
-	PrintStep(6, 7, "Скачать агент бинарь")
+	PrintStep(7, 8, "Скачать агент бинарь")
 	assetName := "wg-monitor-agent-linux-" + arch
 	localPath, err := stepDownloadAsset(dl, rel, assetName)
 	if err != nil {
 		return err
 	}
 
-	PrintStep(7, 7, "Upload + start")
+	PrintStep(8, 8, "Upload + start")
 	if err := stepUploadAgentBinary(s, localPath, "/opt/bin/wg-monitor"); err != nil {
 		return err
 	}
@@ -560,11 +581,24 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 	os.Setenv(tokEnv, rawToken)
 
-	// Запись в wizard.toml.
+	// Запись в wizard.toml. Дефолты подставляем здесь, чтобы actionInstallAgent
+	// ниже по флоу не спрашивал host/port/user/awg_iface/exit_ip — happy path
+	// (стандартный Keenetic) идёт без единого prompt'а кроме nickname'а.
+	// SSH-fail в actionInstallAgent поднимет интерактив только если эти
+	// дефолты реально не подошли.
 	ag := state.FindAgent(nick)
 	if ag == nil {
 		state.Agents = append(state.Agents, AgentState{Nickname: nick})
 		ag = &state.Agents[len(state.Agents)-1]
+	}
+	if ag.Host == "" {
+		ag.Host = "192.168.31.1"
+	}
+	if ag.Port == 0 {
+		ag.Port = 222
+	}
+	if ag.User == "" {
+		ag.User = "root"
 	}
 	if ag.AwgIface == "" {
 		ag.AwgIface = "awg0"
