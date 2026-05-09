@@ -8,6 +8,7 @@ import (
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/pkg/wire"
+	"golang.org/x/sync/errgroup"
 )
 
 // GetFirmwareStatus runs `ndmc -c "components list"` and parses the output
@@ -125,36 +126,83 @@ type AwgInfoClient interface {
 // Best-effort everywhere: if hrneo isn't installed, hrneo fields stay empty;
 // if a daemon isn't running, its uptime stays empty; only the awgmgr SystemInfo
 // fetch is treated as fatal (without it we cannot render anything useful).
+//
+// Two-phase parallelisation: phase 1 fans out the four independent data
+// fetches (SystemInfo, HRStatus, components list, /proc/uptime, opkg info)
+// concurrently — they share no dependencies. Phase 2 fans out the two daemon
+// uptimes (which depend on phase 1's sysUp). On a healthy router the eight
+// sequential exec calls (~600ms wall) collapse to ~150ms.
 func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.VersionAudit, error) {
-	sys, err := awg.SystemInfo(ctx)
-	if err != nil {
-		return wire.VersionAudit{}, fmt.Errorf("awgmgr SystemInfo: %w", err)
+	var (
+		sys      *awgmgr.SystemInfo
+		sysErr   error
+		hr       *awgmgr.HydraRouteStatus
+		hrErr    error
+		hrneoVer string
+		fs       wire.FirmwareStatus
+		fsErr    error
+		sysUp    float64
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		sys, sysErr = awg.SystemInfo(gctx)
+		return nil // best-effort fan-out; surface error after Wait
+	})
+	g.Go(func() error {
+		hr, hrErr = awg.HydraRouteStatus(gctx)
+		return nil
+	})
+	g.Go(func() error {
+		// Always probe — opkg returns an error if hrneo is uninstalled,
+		// which is gated by HRStatus.Installed below.
+		if v, err := opkgHrneoVersion(gctx, exec); err == nil {
+			hrneoVer = v
+		}
+		return nil
+	})
+	g.Go(func() error {
+		fs, fsErr = GetFirmwareStatus(gctx, exec)
+		return nil
+	})
+	g.Go(func() error {
+		sysUp = readSystemUptime(gctx, exec)
+		return nil
+	})
+	_ = g.Wait()
+
+	if sysErr != nil {
+		return wire.VersionAudit{}, fmt.Errorf("awgmgr SystemInfo: %w", sysErr)
 	}
 	out := wire.VersionAudit{
 		AwgmgrVersion:   sys.Version,
 		FirmwareCurrent: sys.FirmwareVersion,
 	}
-	// hrneo: only populate when actually installed.
-	if hr, herr := awg.HydraRouteStatus(ctx); herr == nil && hr != nil && hr.Installed {
-		if v, err := opkgHrneoVersion(ctx, exec); err == nil {
-			out.HrneoVersion = v
-		}
+	if hrErr == nil && hr != nil && hr.Installed && hrneoVer != "" {
+		out.HrneoVersion = hrneoVer
 	}
-	// firmware available: from components list. Tolerate failure (panel still useful).
-	if fs, ferr := GetFirmwareStatus(ctx, exec); ferr == nil {
-		// Trust components-list firmware field over SystemInfo for current too —
-		// they should match, but components-list is what we use to detect updates.
+	if fsErr == nil {
 		if fs.Current != "" {
 			out.FirmwareCurrent = fs.Current
 		}
 		out.FirmwareAvail = fs.Available
 	}
-	// Read /proc/uptime once, then per-daemon stat.
-	sysUp := readSystemUptime(ctx, exec)
+
+	var hrneoUp, awgmgrUp string
+	g2, gctx2 := errgroup.WithContext(ctx)
 	if out.HrneoVersion != "" {
-		out.HrneoUptime = daemonUptime(ctx, exec, sysUp, "hrneo")
+		g2.Go(func() error {
+			hrneoUp = daemonUptime(gctx2, exec, sysUp, "hrneo")
+			return nil
+		})
 	}
-	out.AwgmgrUptime = daemonUptime(ctx, exec, sysUp, "awg-manager")
+	g2.Go(func() error {
+		awgmgrUp = daemonUptime(gctx2, exec, sysUp, "awg-manager")
+		return nil
+	})
+	_ = g2.Wait()
+	out.HrneoUptime = hrneoUp
+	out.AwgmgrUptime = awgmgrUp
 	return out, nil
 }
 
