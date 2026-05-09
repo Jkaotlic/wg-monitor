@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -240,3 +241,155 @@ func TestRunner_TunnelImport_MissingArgs(t *testing.T) {
 // Make sure errors package import is used to avoid unused-import lint
 var _ = errors.New
 var _ = fmt.Sprint
+
+// --- M4.1 service_restart / firmware_* / version_audit tests ---
+
+func TestRunner_ServiceRestart_Hrneo(t *testing.T) {
+	var seen [][]string
+	r := &Runner{Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		seen = append(seen, append([]string{name}, args...))
+		return []byte("hrneo restart ok"), nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "1", Action: "service_restart",
+		Args: map[string]any{"name": "hrneo"},
+	})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{"/opt/etc/init.d/S99hrneo", "restart"}
+	if len(seen) != 1 || !equalStrSlice(seen[0], want) {
+		t.Errorf("exec=%v, want %v", seen, want)
+	}
+}
+
+func TestRunner_ServiceRestart_Awgmgr(t *testing.T) {
+	var seen [][]string
+	r := &Runner{Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		seen = append(seen, append([]string{name}, args...))
+		return []byte("awgmgr restart ok"), nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "1", Action: "service_restart",
+		Args: map[string]any{"name": "awgmgr"},
+	})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{"/opt/etc/init.d/S99awg-manager", "restart"}
+	if len(seen) != 1 || !equalStrSlice(seen[0], want) {
+		t.Errorf("exec=%v, want %v", seen, want)
+	}
+}
+
+func TestRunner_ServiceRestart_Router_Disabled(t *testing.T) {
+	r := &Runner{AllowRouterReboot: false, Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Errorf("Exec must NOT be called when AllowRouterReboot=false")
+		return nil, nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "1", Action: "service_restart",
+		Args: map[string]any{"name": "router"},
+	})
+	if res.Status != "err" || !strings.Contains(res.Output, "disabled") {
+		t.Errorf("expected disabled error; got status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func TestRunner_ServiceRestart_Router_Allowed(t *testing.T) {
+	var seen [][]string
+	r := &Runner{AllowRouterReboot: true, Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		seen = append(seen, append([]string{name}, args...))
+		return []byte("reboot scheduled"), nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "1", Action: "service_restart",
+		Args: map[string]any{"name": "router"},
+	})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{"ndmc", "-c", "system reboot"}
+	if len(seen) != 1 || !equalStrSlice(seen[0], want) {
+		t.Errorf("exec=%v, want %v", seen, want)
+	}
+}
+
+func TestRunner_ServiceRestart_UnknownName(t *testing.T) {
+	r := &Runner{Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Errorf("Exec must NOT be called for unknown service")
+		return nil, nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "1", Action: "service_restart",
+		Args: map[string]any{"name": "wat"},
+	})
+	if res.Status != "err" || !strings.Contains(res.Output, "unknown service") {
+		t.Errorf("expected unknown service error; got status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func TestRunner_FirmwareInstall_Disabled(t *testing.T) {
+	r := &Runner{AllowFirmwareInstall: false, Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Errorf("Exec must NOT be called when AllowFirmwareInstall=false")
+		return nil, nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
+	if res.Status != "err" || !strings.Contains(res.Output, "disabled") {
+		t.Errorf("expected disabled error; got status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func TestRunner_FirmwareInstall_Allowed(t *testing.T) {
+	var seen [][]string
+	r := &Runner{AllowFirmwareInstall: true, Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		seen = append(seen, append([]string{name}, args...))
+		return []byte("ok"), nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_install"})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{"ndmc", "-c", "components commit"}
+	if len(seen) != 1 || !equalStrSlice(seen[0], want) {
+		t.Errorf("exec=%v, want %v", seen, want)
+	}
+}
+
+func TestRunner_FirmwareStatus_OK(t *testing.T) {
+	r := &Runner{Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		// only ndmc components list expected
+		return []byte(ndmcComponentsListGolden_NoUpdate), nil
+	}}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "firmware_status"})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	var fs wire.FirmwareStatus
+	if err := json.Unmarshal([]byte(res.Output), &fs); err != nil {
+		t.Fatalf("output not valid JSON FirmwareStatus: %v\noutput=%q", err, res.Output)
+	}
+	if fs.Current != "5.00.C.11.0-0" {
+		t.Errorf("Current=%q", fs.Current)
+	}
+}
+
+func TestRunner_VersionAudit_NoAwgClient(t *testing.T) {
+	r := &Runner{Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) { return nil, nil }}
+	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "version_audit"})
+	if res.Status != "err" || !strings.Contains(res.Output, "awgmgr client not configured") {
+		t.Errorf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
