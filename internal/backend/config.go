@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -16,6 +17,17 @@ type Config struct {
 	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
 	State     StateConfig     `yaml:"state"`
 	UI        UIConfig        `yaml:"ui"`
+	Upstream  UpstreamConfig  `yaml:"upstream"`
+}
+
+// UpstreamConfig points the upstream version cache at the right GitHub repos.
+// Both repo fields are optional — empty strings mean "skip that source"
+// (the panel and smart-reply just won't surface that comparison).
+// CacheTTL defaults to 12h.
+type UpstreamConfig struct {
+	AwgmgrRepo string        `yaml:"awgmgr_repo"`
+	HrneoRepo  string        `yaml:"hrneo_repo"`
+	CacheTTL   time.Duration `yaml:"cache_ttl"`
 }
 
 type TelegramConfig struct {
@@ -136,6 +148,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.UI.DiagMaxChars == 0 {
 		cfg.UI.DiagMaxChars = 3500
+	}
+	if cfg.Upstream.CacheTTL == 0 {
+		cfg.Upstream.CacheTTL = 12 * time.Hour
 	}
 	return &cfg, nil
 }
