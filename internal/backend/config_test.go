@@ -161,6 +161,60 @@ telegram:
 	}
 }
 
+func TestLoadConfig_RetentionDefaults(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "test-token")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 1
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Retention.EventsDays != 30 {
+		t.Errorf("EventsDays default = %d, want 30", cfg.Retention.EventsDays)
+	}
+	if cfg.Retention.VacuumInterval != 168*time.Hour {
+		t.Errorf("VacuumInterval default = %v, want 168h", cfg.Retention.VacuumInterval)
+	}
+	if cfg.Retention.WALCheckpointEvery != 1*time.Hour {
+		t.Errorf("WALCheckpointEvery default = %v, want 1h", cfg.Retention.WALCheckpointEvery)
+	}
+}
+
+func TestLoadConfig_RetentionParsed(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "test-token")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 1
+retention:
+  events_days: 90
+  vacuum_interval: 72h
+  wal_checkpoint_every: 30m
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Retention.EventsDays != 90 {
+		t.Errorf("EventsDays = %d, want 90", cfg.Retention.EventsDays)
+	}
+	if cfg.Retention.VacuumInterval != 72*time.Hour {
+		t.Errorf("VacuumInterval = %v, want 72h", cfg.Retention.VacuumInterval)
+	}
+	if cfg.Retention.WALCheckpointEvery != 30*time.Minute {
+		t.Errorf("WALCheckpointEvery = %v, want 30m", cfg.Retention.WALCheckpointEvery)
+	}
+}
+
 func TestLoadConfig_UpstreamParsed(t *testing.T) {
 	dir := t.TempDir()
 	tokPath := writeFile(t, dir, "tok", "test-token")

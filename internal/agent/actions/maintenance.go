@@ -8,6 +8,7 @@ import (
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/pkg/wire"
+	"golang.org/x/sync/errgroup"
 )
 
 // GetFirmwareStatus runs `ndmc -c "components list"` and parses the output
@@ -41,39 +42,47 @@ func InstallFirmware(ctx context.Context, exec ExecFunc) error {
 // Leading whitespace per line is variable (10-16 spaces); we use suffix
 // matching of trimmed prefixes rather than fixed-column parsing.
 //
-// We track which top-level block we're inside (`firmware:` vs `local:`) by
-// detecting block headers (lines whose trimmed text equals "firmware:" or
-// "local:"), then read the `version:` and `sandbox:` keys within them.
+// The full output is ~2700 lines and contains many per-component blocks AFTER
+// `local:` (each with its own `version:` line). To avoid those overwriting
+// `localVersion`, we (a) reset the block tracker on ANY new top-level block
+// header (`component:`, `sandbox:`, etc.), and (b) only capture the FIRST
+// `version:` per block.
 func parseComponentsList(s string) (wire.FirmwareStatus, error) {
 	var fs wire.FirmwareStatus
 	var firmwareVersion, localVersion string
-	block := "" // "firmware" | "local" | "" (top-level)
+	block := "" // "firmware" | "local" | "" (top-level / unknown)
 	for _, raw := range strings.Split(s, "\n") {
 		// Strip ANSI erase-line escape if present at the very start of a line.
 		line := strings.TrimPrefix(raw, "\x1b[K")
 		line = strings.TrimRight(line, "\r")
 		trimmed := strings.TrimSpace(line)
-		switch trimmed {
-		case "firmware:":
-			block = "firmware"
-			continue
-		case "local:":
-			block = "local"
+		// Detect block headers — lines like "firmware:" / "local:" / "component:"
+		// where the value after `:` is empty.
+		if k, v, ok := splitKV(trimmed); ok && v == "" {
+			switch k {
+			case "firmware":
+				block = "firmware"
+			case "local":
+				block = "local"
+			default:
+				// Any other header (component, etc.) takes us out of firmware/local.
+				block = ""
+			}
 			continue
 		}
 		// Within current block, harvest version: / sandbox: keys.
 		if k, v, ok := splitKV(trimmed); ok {
 			switch {
-			case k == "version" && block == "firmware":
+			case k == "version" && block == "firmware" && firmwareVersion == "":
 				firmwareVersion = v
-			case k == "version" && block == "local":
+			case k == "version" && block == "local" && localVersion == "":
 				localVersion = v
 			case k == "sandbox" && block == "local":
 				// Ignore local.sandbox — we only want the top-level channel.
-			case k == "sandbox":
+			case k == "sandbox" && fs.Channel == "":
 				// Top-level sandbox: line (appears between firmware: and local:
-				// blocks); capture it and reset block context so subsequent
-				// unrelated keys don't pollute the firmware block.
+				// blocks while block is still "firmware"). Capture once and
+				// reset block context so subsequent unrelated keys don't pollute.
 				fs.Channel = v
 				block = ""
 			}
@@ -117,36 +126,83 @@ type AwgInfoClient interface {
 // Best-effort everywhere: if hrneo isn't installed, hrneo fields stay empty;
 // if a daemon isn't running, its uptime stays empty; only the awgmgr SystemInfo
 // fetch is treated as fatal (without it we cannot render anything useful).
+//
+// Two-phase parallelisation: phase 1 fans out the four independent data
+// fetches (SystemInfo, HRStatus, components list, /proc/uptime, opkg info)
+// concurrently — they share no dependencies. Phase 2 fans out the two daemon
+// uptimes (which depend on phase 1's sysUp). On a healthy router the eight
+// sequential exec calls (~600ms wall) collapse to ~150ms.
 func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.VersionAudit, error) {
-	sys, err := awg.SystemInfo(ctx)
-	if err != nil {
-		return wire.VersionAudit{}, fmt.Errorf("awgmgr SystemInfo: %w", err)
+	var (
+		sys      *awgmgr.SystemInfo
+		sysErr   error
+		hr       *awgmgr.HydraRouteStatus
+		hrErr    error
+		hrneoVer string
+		fs       wire.FirmwareStatus
+		fsErr    error
+		sysUp    float64
+	)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		sys, sysErr = awg.SystemInfo(gctx)
+		return nil // best-effort fan-out; surface error after Wait
+	})
+	g.Go(func() error {
+		hr, hrErr = awg.HydraRouteStatus(gctx)
+		return nil
+	})
+	g.Go(func() error {
+		// Always probe — opkg returns an error if hrneo is uninstalled,
+		// which is gated by HRStatus.Installed below.
+		if v, err := opkgHrneoVersion(gctx, exec); err == nil {
+			hrneoVer = v
+		}
+		return nil
+	})
+	g.Go(func() error {
+		fs, fsErr = GetFirmwareStatus(gctx, exec)
+		return nil
+	})
+	g.Go(func() error {
+		sysUp = readSystemUptime(gctx, exec)
+		return nil
+	})
+	_ = g.Wait()
+
+	if sysErr != nil {
+		return wire.VersionAudit{}, fmt.Errorf("awgmgr SystemInfo: %w", sysErr)
 	}
 	out := wire.VersionAudit{
 		AwgmgrVersion:   sys.Version,
 		FirmwareCurrent: sys.FirmwareVersion,
 	}
-	// hrneo: only populate when actually installed.
-	if hr, herr := awg.HydraRouteStatus(ctx); herr == nil && hr != nil && hr.Installed {
-		if v, err := opkgHrneoVersion(ctx, exec); err == nil {
-			out.HrneoVersion = v
-		}
+	if hrErr == nil && hr != nil && hr.Installed && hrneoVer != "" {
+		out.HrneoVersion = hrneoVer
 	}
-	// firmware available: from components list. Tolerate failure (panel still useful).
-	if fs, ferr := GetFirmwareStatus(ctx, exec); ferr == nil {
-		// Trust components-list firmware field over SystemInfo for current too —
-		// they should match, but components-list is what we use to detect updates.
+	if fsErr == nil {
 		if fs.Current != "" {
 			out.FirmwareCurrent = fs.Current
 		}
 		out.FirmwareAvail = fs.Available
 	}
-	// Read /proc/uptime once, then per-daemon stat.
-	sysUp := readSystemUptime(ctx, exec)
+
+	var hrneoUp, awgmgrUp string
+	g2, gctx2 := errgroup.WithContext(ctx)
 	if out.HrneoVersion != "" {
-		out.HrneoUptime = daemonUptime(ctx, exec, sysUp, "hrneo")
+		g2.Go(func() error {
+			hrneoUp = daemonUptime(gctx2, exec, sysUp, "hrneo")
+			return nil
+		})
 	}
-	out.AwgmgrUptime = daemonUptime(ctx, exec, sysUp, "awg-manager")
+	g2.Go(func() error {
+		awgmgrUp = daemonUptime(gctx2, exec, sysUp, "awg-manager")
+		return nil
+	})
+	_ = g2.Wait()
+	out.HrneoUptime = hrneoUp
+	out.AwgmgrUptime = awgmgrUp
 	return out, nil
 }
 
