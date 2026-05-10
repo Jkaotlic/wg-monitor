@@ -4,10 +4,20 @@ package callbacks
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// ndmsNameRe whitelists Keenetic interface ids passed in callback_data.
+// Source values come from events JSON returned by awg-manager → agent →
+// backend; downstream they are concatenated into a `ndmc -c "interface
+// <name> <state>"` invocation on the router, where the internal ndmc
+// tokenizer can split on whitespace and let an attacker reshape the
+// command. Whitelist matches all real Keenetic interface ids
+// (Wireguard0..N, AmneziaWG0..N, Tunnel0..N).
+var ndmsNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 // Args is the parsed shape of a callback_data string.
 type Args struct {
@@ -136,6 +146,15 @@ func Parse(data string) (Args, error) {
 	if action == "tunnel_enable" || action == "tunnel_disable" {
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
+		}
+		// Whitelist NDMS interface names: alphanumerics + underscore/hyphen.
+		// Защищаемся от пробельных символов в значении, которые потом
+		// передаются в `ndmc -c "interface <ndms> <state>"` на роутере —
+		// внутренний токенизатор ndmc может разделить аргумент и переопределить
+		// команду (SEC-02). Источник значения — events JSON от агента,
+		// то есть от awg-manager API; формат шире чем нужно нам.
+		if !ndmsNameRe.MatchString(parts[3]) {
+			return Args{}, fmt.Errorf("%s: ndms_name %q must match ^[A-Za-z0-9_-]{1,32}$", action, parts[3])
 		}
 		a.NDMSName = parts[3]
 	}

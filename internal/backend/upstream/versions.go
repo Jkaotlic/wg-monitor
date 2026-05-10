@@ -43,6 +43,12 @@ type Cache struct {
 
 	mu   sync.RWMutex
 	data map[string]Entry
+	// inflight[name] !=  nil means a fetch is in progress; subsequent
+	// callers wait on the channel and read the cached entry instead of
+	// firing concurrent GitHub requests. Anonymous-IP rate limit is
+	// 60 req/h — three TG-button taps in quick succession used to burn
+	// 3 of those for one repo (LOGIC-05).
+	inflight map[string]chan struct{}
 }
 
 const defaultAPI = "https://api.github.com/repos/%s/releases?per_page=1"
@@ -55,11 +61,12 @@ func NewCache(ttl time.Duration, sources []Source) *Cache {
 		m[s.Name] = s
 	}
 	return &Cache{
-		TTL:     ttl,
-		sources: m,
-		http:    &http.Client{Timeout: 10 * time.Second},
-		api:     defaultAPI,
-		data:    make(map[string]Entry),
+		TTL:      ttl,
+		sources:  m,
+		http:     &http.Client{Timeout: 10 * time.Second},
+		api:      defaultAPI,
+		data:     make(map[string]Entry),
+		inflight: make(map[string]chan struct{}),
 	}
 }
 
@@ -73,18 +80,37 @@ func (c *Cache) Latest(ctx context.Context, name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("unknown upstream source: %q", name)
 	}
-	c.mu.RLock()
-	if e, ok := c.data[name]; ok && time.Since(e.FetchedAt) < c.TTL {
-		c.mu.RUnlock()
-		return e.Latest, e.Err
-	}
-	c.mu.RUnlock()
+	for {
+		c.mu.Lock()
+		if e, ok := c.data[name]; ok && time.Since(e.FetchedAt) < c.TTL {
+			c.mu.Unlock()
+			return e.Latest, e.Err
+		}
+		// Already-fetching path: ждём окончания, потом возвращаем
+		// свежий cached entry. Не дёргаем GitHub параллельно.
+		if waitCh, busy := c.inflight[name]; busy {
+			c.mu.Unlock()
+			select {
+			case <-waitCh:
+				continue // re-check cache
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		// Acquire fetch slot.
+		ch := make(chan struct{})
+		c.inflight[name] = ch
+		c.mu.Unlock()
 
-	v, err := c.fetch(ctx, src.GitHubRepo)
-	c.mu.Lock()
-	c.data[name] = Entry{Latest: v, Err: err, FetchedAt: time.Now()}
-	c.mu.Unlock()
-	return v, err
+		v, err := c.fetch(ctx, src.GitHubRepo)
+
+		c.mu.Lock()
+		c.data[name] = Entry{Latest: v, Err: err, FetchedAt: time.Now()}
+		delete(c.inflight, name)
+		c.mu.Unlock()
+		close(ch)
+		return v, err
+	}
 }
 
 // LatestAll returns a snapshot of all currently cached entries (cache-only —

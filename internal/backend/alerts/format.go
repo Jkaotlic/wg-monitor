@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anex/wg-monitor/pkg/wire"
@@ -543,10 +544,22 @@ func durFmt(d time.Duration) string {
 	return fmt.Sprintf("%dm", m)
 }
 
+// mscLoc возвращает один и тот же *time.Location, инициализированный лениво
+// под sync.Once. До этого LoadLocation парсил tzdata на каждое форматирование
+// HARD/STILL-DOWN/Smart-reply (~ms на VPS), сейчас один раз за процесс.
+var (
+	mscLocOnce sync.Once
+	mscLocVal  *time.Location
+)
+
 func mscLoc() *time.Location {
-	loc, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		return time.FixedZone("МСК", 3*3600)
-	}
-	return loc
+	mscLocOnce.Do(func() {
+		loc, err := time.LoadLocation("Europe/Moscow")
+		if err != nil {
+			mscLocVal = time.FixedZone("МСК", 3*3600)
+			return
+		}
+		mscLocVal = loc
+	})
+	return mscLocVal
 }
