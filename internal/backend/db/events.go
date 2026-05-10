@@ -34,16 +34,7 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 	if !tsStr.Valid {
 		return time.Time{}, nil
 	}
-	// modernc.org/sqlite returns MAX() result as a raw string (no declared column type → no driver time conversion).
-	s := tsStr.String
-	if i := strings.Index(s, " m="); i > 0 {
-		s = s[:i]
-	}
-	ts, err := time.Parse("2006-01-02 15:04:05.999999999 -0700 MST", s)
-	if err != nil {
-		return time.Time{}, err
-	}
-	return ts, nil
+	return parseEventTS(tsStr.String)
 }
 
 // LatestEvent returns the most recent event for (userID, checkName).

@@ -323,6 +323,9 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
 					}(ref, res)
+				} else {
+					d.Logger.Warn("routes notifier not configured; result not relayed",
+						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			case "version_audit", "firmware_status", "service_restart", "firmware_install":
 				if d.MaintNotifier != nil {
@@ -333,6 +336,9 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
 					}(ref, res)
+				} else {
+					d.Logger.Warn("maint notifier not configured; result not relayed",
+						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			default:
 				if d.TGNotifier != nil {
@@ -347,6 +353,9 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
 						}
 					}(ref, res, maxChars)
+				} else {
+					d.Logger.Warn("tg notifier not configured; result not relayed",
+						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			}
 		}

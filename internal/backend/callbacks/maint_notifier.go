@@ -122,17 +122,10 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 // Pure function so both the notifier (refresh path) and the router (instant
 // cached render in openMaintPanelMessage) can call it.
 func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore) tg.MaintPanelArgs {
-	var updates []tg.UpdateLine
-	if va.FirmwareAvail != "" && upstream.FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail) {
-		updates = append(updates, tg.UpdateLine{Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail})
-	}
-	if up != nil {
-		if v, _ := up.Latest(ctx, "awgmgr"); v != "" && upstream.SoftwareNewerThan(va.AwgmgrVersion, v) {
-			updates = append(updates, tg.UpdateLine{Name: "awg-manager", Installed: va.AwgmgrVersion, Available: v})
-		}
-		if v, _ := up.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && upstream.SoftwareNewerThan(va.HrneoVersion, v) {
-			updates = append(updates, tg.UpdateLine{Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v})
-		}
+	infos := upstream.ComputeUpdates(ctx, up, va)
+	updates := make([]tg.UpdateLine, 0, len(infos))
+	for _, u := range infos {
+		updates = append(updates, tg.UpdateLine{Name: u.Name, Installed: u.Installed, Available: u.Available})
 	}
 	return tg.MaintPanelArgs{
 		Nickname:                  user.Nickname,

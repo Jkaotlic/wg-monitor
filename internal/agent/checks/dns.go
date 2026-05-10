@@ -186,10 +186,15 @@ func (c DNS) resolveIPs(ctx context.Context, ep keenetic.DNSEndpoint, domain str
 }
 
 // rknProbe queries `ep` for each RKN-test domain and reports per-domain
-// results. The endpoint is considered "blocked" if at least 2 of the
-// domains return a suspect answer (no IPs, error, or any spoof IP).
+// results. The endpoint is considered "blocked" if a strict majority of the
+// configured domains return a suspect answer (no IPs, error, or spoof IP).
+// Threshold scales with len(domains) so 1-domain probes still work and
+// 5-domain probes don't false-positive on a single transient flap.
 func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []string, httpc *http.Client) (blocked bool, perDomain map[string]any) {
 	perDomain = map[string]any{}
+	if len(domains) == 0 {
+		return false, perDomain
+	}
 	susCount := 0
 	for _, dom := range domains {
 		info := map[string]any{}
@@ -213,7 +218,9 @@ func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []st
 		}
 		perDomain[dom] = info
 	}
-	return susCount >= 2, perDomain
+	// Strict majority: 2*sus > len(domains). For 1 domain → 1 sus blocks; for
+	// 3 → 2 of 3; for 5 → 3 of 5.
+	return susCount*2 > len(domains), perDomain
 }
 
 func hasSpoofIP(ips []string) bool {

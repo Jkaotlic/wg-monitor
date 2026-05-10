@@ -10,6 +10,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -27,24 +28,37 @@ type MessageRef struct {
 	Action    string
 }
 
+// resultEntry / originEntry pair their payload with a creation timestamp so
+// the Sweep janitor can evict stale entries (LOGIC-02). Without this both
+// maps grew without bound for the lifetime of the backend process.
+type resultEntry struct {
+	result     wire.CommandResult
+	recordedAt time.Time
+}
+
+type originEntry struct {
+	ref        MessageRef
+	enqueuedAt time.Time
+}
+
 // Queue is per-user FIFO queues plus a per-(user,id) result map plus a
 // per-(user,id) origin map. Concurrent-safe. Single mutex is fine —
 // operations are short and the fleet is ~10 users, not 10k.
 type Queue struct {
 	mu      sync.Mutex
 	pending map[int64][]wire.Command // userID → FIFO
-	results map[int64]map[string]wire.CommandResult
-	// origins maps (userID → cmd.ID → MessageRef). Populated by
+	results map[int64]map[string]resultEntry
+	// origins maps (userID → cmd.ID → originEntry). Populated by
 	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
-	origins map[int64]map[string]MessageRef
+	origins map[int64]map[string]originEntry
 	signal  *sync.Cond // signals on Enqueue and RecordResult
 }
 
 func New() *Queue {
 	q := &Queue{
 		pending: make(map[int64][]wire.Command),
-		results: make(map[int64]map[string]wire.CommandResult),
-		origins: make(map[int64]map[string]MessageRef),
+		results: make(map[int64]map[string]resultEntry),
+		origins: make(map[int64]map[string]originEntry),
 	}
 	q.signal = sync.NewCond(&q.mu)
 	return q
@@ -63,10 +77,10 @@ func (q *Queue) EnqueueWithRef(userID int64, cmd wire.Command, ref MessageRef) e
 	defer q.mu.Unlock()
 	bucket, ok := q.origins[userID]
 	if !ok {
-		bucket = make(map[string]MessageRef)
+		bucket = make(map[string]originEntry)
 		q.origins[userID] = bucket
 	}
-	bucket[cmd.ID] = ref
+	bucket[cmd.ID] = originEntry{ref: ref, enqueuedAt: time.Now()}
 	return nil
 }
 
@@ -80,12 +94,14 @@ func (q *Queue) OriginRef(userID int64, cmdID string) (MessageRef, bool) {
 		return MessageRef{}, false
 	}
 	r, ok := bucket[cmdID]
-	return r, ok
+	return r.ref, ok
 }
 
 // ConsumeOriginRef is OriginRef + delete in one shot. Use from the result
 // handler so the same ref isn't relayed twice if RecordResult somehow fires
-// twice for the same command id.
+// twice for the same command id. Result-map cleanup is handled separately by
+// Sweep so AwaitResult-using callers (tests, future inline-toast UIs) can
+// still read the result after the relay path has consumed the origin.
 func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -97,7 +113,7 @@ func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) 
 	if ok {
 		delete(bucket, cmdID)
 	}
-	return r, ok
+	return r.ref, ok
 }
 
 // Enqueue appends cmd to userID's queue and wakes any waiter.
@@ -126,13 +142,17 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 	deadline := time.Now().Add(holdTimeout)
 
 	// Spawn a goroutine that wakes the cond when ctx is done or deadline hits,
-	// so the cond.Wait below can unblock without a busy-loop.
+	// so the cond.Wait below can unblock without a busy-loop. Use NewTimer +
+	// Stop instead of time.After so the underlying timer is GC'd promptly when
+	// the early-exit `stop` channel fires (PERF-05/BUG-21).
 	stop := make(chan struct{})
 	defer close(stop)
+	timer := time.NewTimer(holdTimeout)
+	defer timer.Stop()
 	go func() {
 		select {
 		case <-ctx.Done():
-		case <-time.After(holdTimeout):
+		case <-timer.C:
 		case <-stop:
 			return
 		}
@@ -144,7 +164,20 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 	for {
 		if cmds := q.pending[userID]; len(cmds) > 0 {
 			head := cmds[0]
-			q.pending[userID] = cmds[1:]
+			// Realloc when slack >= 4× live entries to release the underlying
+			// array (BUG-22). Stays an O(1) amortised pop in the steady-state
+			// small-queue case.
+			tail := cmds[1:]
+			if len(tail) > 16 && cap(tail) > 4*len(tail) {
+				fresh := make([]wire.Command, len(tail))
+				copy(fresh, tail)
+				tail = fresh
+			}
+			if len(tail) == 0 {
+				delete(q.pending, userID)
+			} else {
+				q.pending[userID] = tail
+			}
 			return &head, true
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
@@ -171,10 +204,10 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	q.mu.Lock()
 	bucket, ok := q.results[userID]
 	if !ok {
-		bucket = make(map[string]wire.CommandResult)
+		bucket = make(map[string]resultEntry)
 		q.results[userID] = bucket
 	}
-	bucket[result.ID] = result
+	bucket[result.ID] = resultEntry{result: result, recordedAt: time.Now()}
 	q.mu.Unlock()
 	q.signal.Broadcast()
 	return nil
@@ -187,10 +220,12 @@ func (q *Queue) AwaitResult(ctx context.Context, userID int64, id string, timeou
 	deadline := time.Now().Add(timeout)
 	stop := make(chan struct{})
 	defer close(stop)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	go func() {
 		select {
 		case <-ctx.Done():
-		case <-time.After(timeout):
+		case <-timer.C:
 		case <-stop:
 			return
 		}
@@ -202,12 +237,49 @@ func (q *Queue) AwaitResult(ctx context.Context, userID int64, id string, timeou
 	for {
 		if bucket, ok := q.results[userID]; ok {
 			if r, found := bucket[id]; found {
-				return &r, true
+				out := r.result
+				return &out, true
 			}
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			slog.Debug("AwaitResult timeout", "user_id", userID, "cmd_id", id, "waited", timeout)
 			return nil, false
 		}
 		q.signal.Wait()
 	}
+}
+
+// Sweep evicts origin and result entries older than ttl. Caller drives the
+// schedule (see cmd/backend/main.go); not auto-spawned to keep the package
+// dependency-free of context plumbing. Returns the number of entries evicted.
+func (q *Queue) Sweep(ttl time.Duration) (origins, results int) {
+	if ttl <= 0 {
+		return 0, 0
+	}
+	cutoff := time.Now().Add(-ttl)
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for uid, bucket := range q.origins {
+		for id, e := range bucket {
+			if e.enqueuedAt.Before(cutoff) {
+				delete(bucket, id)
+				origins++
+			}
+		}
+		if len(bucket) == 0 {
+			delete(q.origins, uid)
+		}
+	}
+	for uid, bucket := range q.results {
+		for id, e := range bucket {
+			if e.recordedAt.Before(cutoff) {
+				delete(bucket, id)
+				results++
+			}
+		}
+		if len(bucket) == 0 {
+			delete(q.results, uid)
+		}
+	}
+	return origins, results
 }

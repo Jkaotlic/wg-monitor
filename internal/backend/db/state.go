@@ -159,6 +159,39 @@ func (s *StateRepo) AllActiveHard() ([]ActiveIncidentRow, error) {
 	return out, rows.Err()
 }
 
+// ActiveHardForUser returns hard, non-silenced, non-acked incidents for a
+// single user — feeds the smart-reply panel. Mirrors StaleHards' silenced_until
+// handling: pass time.Now().UTC() so SQL serialisation matches the column
+// format (see StaleHards comment for the lexicographic-compare gotcha).
+func (s *StateRepo) ActiveHardForUser(userID int64, now time.Time) ([]ActiveIncidentRow, error) {
+	cutoff := now.UTC()
+	rows, err := s.d.db.Query(
+		`SELECT user_id, check_name, hard_since, consecutive_fails
+		   FROM incident_state
+		  WHERE user_id = ? AND current_status = 'hard'
+		    AND (silenced_until IS NULL OR silenced_until < ?)
+		    AND acked = 0
+		  ORDER BY hard_since`,
+		userID, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveIncidentRow
+	for rows.Next() {
+		var r ActiveIncidentRow
+		var hs sql.NullTime
+		if err := rows.Scan(&r.UserID, &r.CheckName, &hs, &r.FailCount); err != nil {
+			return nil, err
+		}
+		if hs.Valid {
+			r.HardSince = hs.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
 // and which are not currently silenced, and have not been acked.
 //

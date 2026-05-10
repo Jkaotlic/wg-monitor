@@ -26,6 +26,11 @@ type OfflineSender interface {
 // the FSM to ingest its checks and emit accurate signals — not race a
 // premature OFFLINE.
 //
+// RenotifyEvery controls how often a sustained ROUTER-OFFLINE re-fires per
+// user. Defaults to defaultRenotifyEvery when zero so it stays consistent
+// with the realert poller's HARD re-alert cadence (operators tuning the
+// realert knob expect both surfaces to follow).
+//
 // StaleAfter is the legacy single-threshold knob. If non-zero and the new
 // kind-aware fields are zero, it's used as both static and mobile threshold
 // (for backward compatibility with the Stage 1 config layout).
@@ -35,12 +40,15 @@ type Config struct {
 	StaleAfterMobile time.Duration
 	ResumeGrace      time.Duration
 	ScanEvery        time.Duration
+	RenotifyEvery    time.Duration
 }
 
 const (
 	defaultStaleAfterStatic = 5 * time.Minute
 	defaultStaleAfterMobile = 60 * time.Minute
 	defaultResumeGrace      = 90 * time.Second
+	defaultScanEvery        = 30 * time.Second
+	defaultRenotifyEvery    = 6 * time.Hour
 )
 
 func (c Config) staleFor(u db.User) time.Duration {
@@ -72,16 +80,31 @@ type Watcher struct {
 	resumed  map[int64]time.Time
 	mu       sync.Mutex
 	wg       sync.WaitGroup
+	now      func() time.Time // injectable for tests; defaults to time.Now
 }
 
 func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 	if cfg.ResumeGrace <= 0 {
 		cfg.ResumeGrace = defaultResumeGrace
 	}
+	if cfg.ScanEvery <= 0 {
+		cfg.ScanEvery = defaultScanEvery
+	}
+	if cfg.RenotifyEvery <= 0 {
+		cfg.RenotifyEvery = defaultRenotifyEvery
+	}
 	return &Watcher{
 		d: d, off: off, cfg: cfg,
 		notified: map[int64]time.Time{},
 		resumed:  map[int64]time.Time{},
+		now:      time.Now,
+	}
+}
+
+// SetNow overrides the clock used by scan(). Test-only.
+func (w *Watcher) SetNow(now func() time.Time) {
+	if now != nil {
+		w.now = now
 	}
 }
 
@@ -90,7 +113,7 @@ func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 // skip OFFLINE notices for that user.
 func (w *Watcher) MarkResumed(userID int64) {
 	w.mu.Lock()
-	w.resumed[userID] = time.Now()
+	w.resumed[userID] = w.now()
 	w.mu.Unlock()
 }
 
@@ -118,15 +141,17 @@ func (w *Watcher) scan(ctx context.Context) {
 		slog.Warn("heartbeat scan: list users", "err", err)
 		return
 	}
-	now := time.Now()
 	for _, u := range users {
 		latest, err := w.d.Events().LatestPerUser(u.ID)
 		if err != nil {
+			slog.Warn("heartbeat: latest event lookup failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 			continue
 		}
 		if latest.IsZero() {
 			continue
 		}
+		// Refresh `now` per-user so a long scan loop doesn't render stale durations.
+		now := w.now()
 		stale := now.Sub(latest)
 		threshold := w.cfg.staleFor(u)
 		if stale < threshold {
@@ -146,7 +171,7 @@ func (w *Watcher) scan(ctx context.Context) {
 			delete(w.resumed, u.ID)
 		}
 		last, sent := w.notified[u.ID]
-		notify := !sent || now.Sub(last) > 6*time.Hour
+		notify := !sent || now.Sub(last) > w.cfg.RenotifyEvery
 		if notify {
 			w.notified[u.ID] = now
 		}
@@ -155,7 +180,7 @@ func (w *Watcher) scan(ctx context.Context) {
 			continue
 		}
 		if err := w.off.SendOffline(ctx, u.ID, u.Nickname, stale); err != nil {
-			slog.Warn("heartbeat: send offline failed", "nickname", u.Nickname, "err", err)
+			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 		}
 	}
 }
