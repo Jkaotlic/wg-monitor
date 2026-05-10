@@ -289,10 +289,23 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	hostname := strings.TrimSpace(stepReadOrEmpty(s, "cat /proc/sys/kernel/hostname 2>/dev/null || uname -n"))
 	mac := stepDetectPrimaryMAC(s)
 	existingNick := stepReadExistingAgentNickname(s)
-	if hostname != "" || mac != "" {
-		PrintInfo(fmt.Sprintf("hostname=%q mac=%s", hostname, mac))
+
+	// Всегда печатаем — оператор видит к чему реально подключились,
+	// даже если все поля пустые (тогда видна аномалия).
+	if hostname == "" {
+		hostname = "?"
 	}
-	if existingNick != "" && existingNick != ag.Nickname {
+	if mac == "" {
+		mac = "?"
+	}
+	PrintInfo(fmt.Sprintf("hostname=%q  mac=%s", hostname, mac))
+
+	switch {
+	case existingNick == "":
+		PrintInfo("существующий агент: (нет, чистый роутер)")
+	case existingNick == ag.Nickname:
+		PrintInfo(fmt.Sprintf("существующий агент: %q — переустановка", existingNick))
+	default:
 		PrintFail(fmt.Sprintf(
 			"на роутере уже установлен агент под именем %q — НЕ перезаписываю под %q. "+
 				"Возможные причины: (a) ты случайно цепляешься не к тому роутеру (VPN не активен?); "+
@@ -301,9 +314,6 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 				"и удали /opt/etc/wg-monitor/config.yaml на роутере.",
 			existingNick, ag.Nickname, existingNick))
 		return fmt.Errorf("router already hosts agent %q, refusing to overwrite", existingNick)
-	}
-	if existingNick == ag.Nickname {
-		PrintInfo(fmt.Sprintf("существующий агент с тем же nickname'ом — переустановка %s", ag.Nickname))
 	}
 
 	PrintStep(3, 8, "Архитектура")
