@@ -23,7 +23,7 @@ func (f *fakeLookup) GetByToken(raw string) (*db.User, error) {
 
 func TestAuthMiddleware_OK(t *testing.T) {
 	l := &fakeLookup{want: "tok-abc", user: &db.User{ID: 7, Nickname: "vasya"}}
-	mw := AuthMiddleware(l)
+	mw := AuthMiddleware(l, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/report", nil)
 	req.Header.Set("Authorization", "Bearer tok-abc")
@@ -43,7 +43,7 @@ func TestAuthMiddleware_OK(t *testing.T) {
 
 func TestAuthMiddleware_Reject(t *testing.T) {
 	l := &fakeLookup{want: "right"}
-	mw := AuthMiddleware(l)
+	mw := AuthMiddleware(l, nil)
 	for _, hdr := range []string{"", "Bearer ", "Bearer wrong", "tok-abc"} {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("POST", "/v1/report", nil)

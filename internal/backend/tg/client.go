@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -26,6 +27,12 @@ type Client struct {
 	// when nil, but production callers should always set a separate client
 	// (HTTP.Timeout=15s would otherwise rip every long-poll mid-flight).
 	LongPollHTTP *http.Client
+	// Logger surfaces TG API errors at Warn level (4xx/5xx + transport).
+	// Optional — nil disables logging entirely (preserves test silence).
+	// CRITICAL: errors emitted from this client redact the URL token before
+	// wrapping, so logs never expose the bot-token even when slog dumps
+	// `err`.
+	Logger *slog.Logger
 }
 
 type apiResp struct {
@@ -263,21 +270,68 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpc.Do(req)
 	if err != nil {
-		return fmt.Errorf("tg %s: %w", method, err)
+		// Go's *url.Error embeds the full URL — including our bot-token —
+		// in Error(), and `%w`-wrapping carries that all the way to slog
+		// JSON. Strip it down to the method name; details (timeout / DNS
+		// failure / etc.) survive on the underlying error.
+		safe := redactURLError(err)
+		c.warn(method, "transport error", "err", safe)
+		return fmt.Errorf("tg %s: %s", method, safe)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 	var ar apiResp
 	if err := json.Unmarshal(raw, &ar); err != nil {
+		c.warn(method, "bad response", "status", resp.StatusCode, "body_len", len(raw))
 		return fmt.Errorf("tg %s: bad response (status %d): %s", method, resp.StatusCode, string(raw))
 	}
 	if !ar.OK {
+		c.warn(method, "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
 		return fmt.Errorf("tg %s: %s (code=%d)", method, ar.Description, ar.ErrorCode)
 	}
 	if dst != nil {
 		if err := json.Unmarshal(ar.Result, dst); err != nil {
+			c.warn(method, "decode result failed", "err", err)
 			return fmt.Errorf("tg %s: decode result: %w", method, err)
 		}
 	}
 	return nil
 }
+
+// warn emits a structured log if Logger is configured. method is the TG
+// API method name (sendMessage, getUpdates, ...). attrs follow slog's
+// key-value convention.
+func (c *Client) warn(method, msg string, attrs ...any) {
+	if c.Logger == nil {
+		return
+	}
+	c.Logger.Warn("tg "+method+": "+msg, attrs...)
+}
+
+// redactURLError replaces the embedded URL in `*url.Error.Error()` with one
+// where the bot-token segment is masked as `***`. Best-effort: any error
+// shape we don't recognise is returned unchanged. Anchored by the literal
+// "https://api.telegram.org/bot" prefix that DefaultBaseURL carries.
+func redactURLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	s := err.Error()
+	const prefix = "https://api.telegram.org/bot"
+	idx := strings.Index(s, prefix)
+	if idx < 0 {
+		return err
+	}
+	// Token = everything between "/bot" and the next "/" (method separator).
+	tail := s[idx+len(prefix):]
+	slash := strings.Index(tail, "/")
+	if slash <= 0 {
+		return err
+	}
+	redacted := s[:idx+len(prefix)] + "***" + tail[slash:]
+	return errSanitized(redacted)
+}
+
+type errSanitized string
+
+func (e errSanitized) Error() string { return string(e) }
