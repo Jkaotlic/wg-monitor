@@ -52,6 +52,20 @@ type Queue struct {
 	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
 	origins map[int64]map[string]originEntry
 	signal  *sync.Cond // signals on Enqueue and RecordResult
+	logger  *slog.Logger // optional; nil → slog.Default()
+}
+
+// SetLogger overrides the queue's structured logger. Used by main to inject
+// the JSON-handler with `component=cmd_queue` (OBS-08). Tests skip this.
+func (q *Queue) SetLogger(l *slog.Logger) {
+	q.logger = l
+}
+
+func (q *Queue) log() *slog.Logger {
+	if q.logger != nil {
+		return q.logger
+	}
+	return slog.Default()
 }
 
 func New() *Queue {
@@ -120,15 +134,19 @@ func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) 
 // Validates ID non-empty and Action whitelist.
 func (q *Queue) Enqueue(userID int64, cmd wire.Command) error {
 	if cmd.ID == "" {
+		q.log().Warn("queue enqueue rejected", "reason", "id-empty", "user_id", userID, "action", cmd.Action)
 		return errors.New("command id is required")
 	}
 	if !wire.IsValidCommandAction(cmd.Action) {
+		q.log().Warn("queue enqueue rejected", "reason", "invalid-action", "user_id", userID, "action", cmd.Action)
 		return errors.New("invalid command action: " + cmd.Action)
 	}
 	q.mu.Lock()
 	q.pending[userID] = append(q.pending[userID], cmd)
+	pendingLen := len(q.pending[userID])
 	q.mu.Unlock()
 	q.signal.Broadcast()
+	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
 	return nil
 }
 
@@ -196,9 +214,11 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 // backend'у статус.
 func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	if result.ID == "" {
+		q.log().Warn("queue record result rejected", "reason", "id-empty", "user_id", userID)
 		return errors.New("result id is required")
 	}
 	if result.Status == "" {
+		q.log().Warn("queue record result rejected", "reason", "status-empty", "user_id", userID, "cmd_id", result.ID)
 		return errors.New("result status is required")
 	}
 	q.mu.Lock()
@@ -210,6 +230,7 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	bucket[result.ID] = resultEntry{result: result, recordedAt: time.Now()}
 	q.mu.Unlock()
 	q.signal.Broadcast()
+	q.log().Debug("queue record result", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
 	return nil
 }
 

@@ -44,12 +44,14 @@ func AuthMiddleware(lookup UserLookup, logger *slog.Logger) func(http.Handler) h
 			const prefix = "Bearer "
 			if !strings.HasPrefix(hdr, prefix) {
 				logUnauthorized(r, "missing-bearer", 0)
+				incAuthReject()
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			presented := strings.TrimPrefix(hdr, prefix)
 			if presented == "" || strings.HasPrefix(presented, " ") {
 				logUnauthorized(r, "empty-token", 0)
+				incAuthReject()
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
@@ -57,6 +59,7 @@ func AuthMiddleware(lookup UserLookup, logger *slog.Logger) func(http.Handler) h
 			if err != nil {
 				if errors.Is(err, db.ErrUserNotFound) {
 					logUnauthorized(r, "token-not-found", len(presented))
+					incAuthReject()
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
 				}
