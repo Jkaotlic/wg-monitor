@@ -21,11 +21,9 @@ type BackendParams struct {
 }
 
 type AgentParams struct {
-	BackendURL     string
-	Token          string
-	Nickname       string
-	AWGIface       string
-	ExpectedExitIP string
+	BackendURL string
+	Token      string
+	Nickname   string
 }
 
 type CaddyParams struct {

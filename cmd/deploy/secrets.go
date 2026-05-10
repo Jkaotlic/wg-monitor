@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -112,13 +114,18 @@ func (s *SecretStore) GetNonInteractive(envVar string) string {
 
 // Set persists a secret to the on-disk cache and the in-memory map. Used
 // for values the wizard generates itself (e.g. agent enrollment tokens) so
-// future sessions find them without re-prompting. No-op when the cache is
-// disabled (WG_NO_SECRET_CACHE=1).
+// future sessions find them without re-prompting. When the cache is disabled
+// (WG_NO_SECRET_CACHE=1) the value lives only in s.disk for the current
+// process — caller MUST treat it as ephemeral. We surface this with an
+// explicit ErrCacheDisabled so callers can decide whether to abort, warn
+// the operator, or fall back to env.
+var ErrCacheDisabled = errors.New("secret cache disabled (WG_NO_SECRET_CACHE=1) — value is process-only, save manually before exit")
+
 func (s *SecretStore) Set(envVar, value string) error {
 	s.disk[envVar] = value
 	path := secretsCachePath()
 	if path == "" {
-		return nil
+		return ErrCacheDisabled
 	}
 	return writeSecretsFile(path, s.disk)
 }
@@ -191,10 +198,17 @@ func loadSecretsFile(path string) map[string]string {
 
 // writeSecretsFile rewrites the secrets cache atomically with 0600 perms.
 // All keys are emitted sorted so the file is deterministic across runs.
+//
+// First-time creation on Windows triggers a one-shot ACL warning: the 0o600
+// mode is silently ignored by the Windows filesystem layer (NTFS uses ACLs,
+// not POSIX bits) — by default the file inherits ACLs from %LOCALAPPDATA%,
+// which means BUILTIN\Administrators on the local machine can read it. This
+// is fine for a single-admin laptop, but worth surfacing.
 func writeSecretsFile(path string, data map[string]string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
+	firstCreate := !fileExistsAt(path)
 	tmp := path + ".tmp"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -219,7 +233,25 @@ func writeSecretsFile(path string, data map[string]string) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	if firstCreate && runtime.GOOS == "windows" {
+		PrintWarn(fmt.Sprintf(
+			"%s создан. Mode 0600 на Windows — no-op (NTFS ACL, не POSIX). "+
+				"По умолчанию файл наследует ACL от %%LOCALAPPDATA%% — читаем тобой и "+
+				"BUILTIN\\Administrators этой машины. Для multi-user PC рассмотри BitLocker "+
+				"или WG_NO_SECRET_CACHE=1 + хранение секретов в внешнем менеджере паролей.",
+			path))
+	}
+	return nil
+}
+
+// fileExistsAt — true когда path существует и доступен для stat. False при
+// любой ошибке. Используется для one-shot first-create detection.
+func fileExistsAt(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 // PrintSecretsSaveAdvice tells the user what got persisted this session and

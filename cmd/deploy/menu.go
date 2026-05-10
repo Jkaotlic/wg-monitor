@@ -43,7 +43,7 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 		case "7":
 			actionDoctor(state, secrets) //nolint:errcheck
 		case "8":
-			ForgetKnownHostInteractive() //nolint:errcheck
+			ForgetKnownHostInteractive(state) //nolint:errcheck
 		case "9":
 			openInEditor(statePath)
 			if reloaded, err := LoadState(statePath); err == nil {

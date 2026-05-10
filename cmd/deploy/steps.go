@@ -41,8 +41,20 @@ func stepDownloadAsset(dl *Downloader, rel *Release, assetName string) (string, 
 	return path, nil
 }
 
-// stepUploadAndSwap: stop service → upload to TMP via dd-stdin → sha256 verify → atomic mv → start.
-// service = systemd unit name (e.g. "wg-monitor-backend") or empty to skip systemctl
+// stepUploadAndSwap: upload TMP via SFTP → sha256 verify → stop service →
+// backup current binary as .bak → atomic mv → start. On start failure auto-
+// rollback: stop, restore .bak, start old binary; surface the original
+// systemctl error to the caller.
+//
+// Sequence rationale:
+//   - Verify upload integrity (sha) BEFORE we touch the running service —
+//     a CDN-corrupted download must not trigger a stop.
+//   - Backup current binary before swap so a broken new binary is recoverable
+//     without manual intervention.
+//   - On systemctl start failure, we know the binary is at fault (not the
+//     filesystem swap) and the .bak is intact — auto-restore.
+//
+// service = systemd unit name (e.g. "wg-monitor-backend") or empty to skip systemctl.
 func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	data, err := readFile(localPath)
 	if err != nil {
@@ -51,15 +63,8 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	}
 	wantSha := hashHex(data)
 
-	if service != "" {
-		PrintInfo("systemctl stop " + service)
-		if _, err := s.MustRun("systemctl stop " + service); err != nil {
-			PrintFail(err.Error())
-			return err
-		}
-	}
-
 	tmp := remotePath + ".new"
+	bak := remotePath + ".bak"
 	PrintInfo(fmt.Sprintf("upload → %s (%d bytes)", tmp, len(data)))
 	if err := s.UploadSFTP(tmp, data); err != nil {
 		PrintFail("upload: " + err.Error())
@@ -69,6 +74,7 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	out, err := s.MustRun("sha256sum " + tmp + " | awk '{print $1}'")
 	if err != nil {
 		PrintFail("sha256sum: " + err.Error())
+		s.Run("rm -f " + tmp)
 		return err
 	}
 	gotSha := strings.TrimSpace(out)
@@ -79,18 +85,53 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	}
 	PrintOK("sha256 совпадает")
 
+	if service != "" {
+		PrintInfo("systemctl stop " + service)
+		if _, err := s.MustRun("systemctl stop " + service); err != nil {
+			PrintFail(err.Error())
+			s.Run("rm -f " + tmp)
+			return err
+		}
+	}
+
+	// Backup current binary (best-effort: missing remotePath on first install
+	// → cp returns rc=1, that's fine, we just won't have rollback capability).
+	s.Run(fmt.Sprintf("cp -p %s %s 2>/dev/null", remotePath, bak))
+
 	cmd := fmt.Sprintf("mv %s %s && chmod 755 %s", tmp, remotePath, remotePath)
 	if _, err := s.MustRun(cmd); err != nil {
 		PrintFail("atomic swap: " + err.Error())
+		// tmp may or may not exist after a partial mv; clean up best-effort.
+		s.Run("rm -f " + tmp)
+		// Swap failed — old binary still in place; just restart.
+		if service != "" {
+			s.Run("systemctl start " + service)
+		}
 		return err
 	}
 	PrintOK("бинарь обновлён")
 
 	if service != "" {
 		PrintInfo("systemctl start " + service)
-		if _, err := s.MustRun("systemctl start " + service); err != nil {
-			PrintFail(err.Error())
-			return err
+		if _, startErr := s.MustRun("systemctl start " + service); startErr != nil {
+			PrintFail("новый бинарь не запустился: " + startErr.Error())
+			// Auto-rollback to .bak if it exists.
+			if _, _, rc, _ := s.Run("test -f " + bak); rc == 0 {
+				PrintWarn("автоматический откат на " + bak)
+				s.Run("systemctl stop " + service)
+				if _, rbErr := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", bak, remotePath, remotePath)); rbErr != nil {
+					PrintFail("откат не удался: " + rbErr.Error())
+					return startErr
+				}
+				if _, rbErr := s.MustRun("systemctl start " + service); rbErr != nil {
+					PrintFail("старый бинарь тоже не стартует: " + rbErr.Error())
+					return startErr
+				}
+				PrintOK("откат успешен — работает старая версия")
+			} else {
+				PrintWarn(".bak отсутствует, откатывать нечего (вероятно, это был первый install)")
+			}
+			return startErr
 		}
 		PrintOK(service + " запущен")
 	}
@@ -247,6 +288,10 @@ func stepDetectKeeneticArch(s *SSH) (string, error) {
 
 // stepUploadAgentBinary stops, swaps, restarts the Keenetic agent.
 // Uses UploadStdin (dropbear has no SFTP/dd-friendly stack on some firmwares).
+//
+// Sequence: upload to .new → sha256 verify (BEFORE killing the agent — a bad
+// upload must NOT take the agent down) → backup current binary as .bak →
+// killall + atomic mv → start. On start failure, auto-rollback to .bak.
 func stepUploadAgentBinary(s *SSH, localPath, remotePath string) error {
 	data, err := readFile(localPath)
 	if err != nil {
@@ -261,10 +306,8 @@ func stepUploadAgentBinary(s *SSH, localPath, remotePath string) error {
 		return err
 	}
 
-	PrintInfo("остановка агента")
-	s.Run("/opt/etc/init.d/S99wg-monitor stop 2>/dev/null; killall -9 wg-monitor 2>/dev/null; sleep 1; true")
-
 	tmp := remotePath + ".new"
+	bak := remotePath + ".bak"
 	PrintInfo(fmt.Sprintf("upload → %s (%d bytes, через stdin pipe)", tmp, len(data)))
 	if err := s.UploadStdin(tmp, data); err != nil {
 		PrintFail("upload: " + err.Error())
@@ -272,31 +315,43 @@ func stepUploadAgentBinary(s *SSH, localPath, remotePath string) error {
 	}
 	if _, err := s.MustRun("chmod 755 " + tmp); err != nil {
 		PrintFail(err.Error())
+		s.Run("rm -f " + tmp)
 		return err
 	}
 
 	out, err := s.MustRun("sha256sum " + tmp + " | awk '{print $1}'")
 	if err != nil {
 		PrintFail("sha256sum: " + err.Error())
+		s.Run("rm -f " + tmp)
 		return err
 	}
 	gotSha := strings.TrimSpace(out)
 	if gotSha != wantSha {
 		PrintFail(fmt.Sprintf("sha256 mismatch: local %s remote %s", wantSha[:16], gotSha[:16]))
 		s.Run("rm -f " + tmp)
+		// Агент при этом не остановлен — продолжает работать на старом бинаре.
 		return fmt.Errorf("sha256 mismatch")
 	}
 	PrintOK("sha256 совпадает")
 
+	// Backup ДО kill — иначе если cp упадёт, у нас нет .bak для отката.
+	s.Run(fmt.Sprintf("cp -p %s %s 2>/dev/null", remotePath, bak))
+
+	PrintInfo("остановка агента")
+	s.Run("/opt/etc/init.d/S99wg-monitor stop 2>/dev/null; killall -9 wg-monitor 2>/dev/null; sleep 1; true")
+
 	if _, err := s.MustRun("mv " + tmp + " " + remotePath); err != nil {
 		PrintFail("atomic swap: " + err.Error())
+		// mv упал, агент остановлен — пытаемся восстановить старый.
+		s.Run("rm -f " + tmp)
+		s.Run(fmt.Sprintf("cp -p %s %s && /opt/etc/init.d/S99wg-monitor start", bak, remotePath))
 		return err
 	}
 	PrintOK("бинарь обновлён")
 
 	if _, err := s.MustRun("/opt/etc/init.d/S99wg-monitor start"); err != nil {
 		PrintFail("start: " + err.Error())
-		return err
+		return tryRestoreAgentBak(s, remotePath, bak, err)
 	}
 
 	// Wait briefly for the daemon to come up.
@@ -304,10 +359,38 @@ func stepUploadAgentBinary(s *SSH, localPath, remotePath string) error {
 	out, _ = s.MustRun("pidof wg-monitor")
 	if strings.TrimSpace(out) == "" {
 		PrintFail("процесс wg-monitor не появился после старта")
-		return fmt.Errorf("agent did not start")
+		return tryRestoreAgentBak(s, remotePath, bak, fmt.Errorf("agent did not start"))
 	}
 	PrintOK("агент запущен (PID " + strings.TrimSpace(out) + ")")
 	return nil
+}
+
+// tryRestoreAgentBak rolls back /opt/bin/wg-monitor to its .bak after a failed
+// start of the new binary. Best-effort: if .bak doesn't exist (first install)
+// or the rollback itself fails, surface the original startErr unchanged so
+// the caller doesn't see misleading "rollback failed" noise.
+func tryRestoreAgentBak(s *SSH, remotePath, bak string, startErr error) error {
+	if _, _, rc, _ := s.Run("test -f " + bak); rc != 0 {
+		PrintWarn(".bak отсутствует, откатывать нечего (первый install?)")
+		return startErr
+	}
+	PrintWarn("автоматический откат на " + bak)
+	s.Run("killall -9 wg-monitor 2>/dev/null; sleep 1; true")
+	if _, err := s.MustRun(fmt.Sprintf("cp -p %s %s && chmod 755 %s", bak, remotePath, remotePath)); err != nil {
+		PrintFail("откат не удался: " + err.Error())
+		return startErr
+	}
+	if _, err := s.MustRun("/opt/etc/init.d/S99wg-monitor start"); err != nil {
+		PrintFail("старый бинарь тоже не стартует: " + err.Error())
+		return startErr
+	}
+	time.Sleep(2 * time.Second)
+	if pid, _ := s.MustRun("pidof wg-monitor"); strings.TrimSpace(pid) != "" {
+		PrintOK("откат успешен — работает старая версия (PID " + strings.TrimSpace(pid) + ")")
+	} else {
+		PrintFail("после отката pidof пуст — агент не поднялся")
+	}
+	return startErr
 }
 
 // stepReadOrEmpty runs `cmd` and returns trimmed stdout. Any non-zero rc or
@@ -319,6 +402,48 @@ func stepReadOrEmpty(s *SSH, cmd string) string {
 		return ""
 	}
 	return strings.TrimSpace(out)
+}
+
+// readRemoteFile cat's a file via SSH; returns (content, true) on success,
+// ("", false) on any failure (file missing, permission denied, transport
+// error). Caller distinguishes "no existing file" from "read failed" only via
+// the boolean.
+func readRemoteFile(s *SSH, path string) (string, bool) {
+	out, _, rc, err := s.Run("cat " + path + " 2>/dev/null")
+	if err != nil || rc != 0 {
+		return "", false
+	}
+	return out, true
+}
+
+// existingInstallDetected returns true when /etc/wg-monitor/backend.yaml is
+// present on the remote — meaning install-backend has already run against
+// this VPS and a re-run will overwrite it. Permissions denied counts as
+// "exists" (file exists, we just can't read it as the SSH user — still a
+// rewrite-risk).
+func existingInstallDetected(s *SSH) bool {
+	_, _, rc, err := s.Run("test -f /etc/wg-monitor/backend.yaml")
+	return err == nil && rc == 0
+}
+
+// readDeployedTelegramMeta extracts chat_id and admin_user_id from the
+// currently-deployed /etc/wg-monitor/backend.yaml on the VPS. Used by
+// install-backend's preflight to show the operator what they're about to
+// overwrite. Best-effort — returns 0/0 on any failure.
+func readDeployedTelegramMeta(s *SSH) (chatID, adminUserID int64) {
+	out, ok := readRemoteFile(s, "/etc/wg-monitor/backend.yaml")
+	if !ok {
+		return 0, 0
+	}
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if rest, ok := strings.CutPrefix(line, "chat_id:"); ok {
+			fmt.Sscanf(strings.TrimSpace(rest), "%d", &chatID)
+		} else if rest, ok := strings.CutPrefix(line, "admin_user_id:"); ok {
+			fmt.Sscanf(strings.TrimSpace(rest), "%d", &adminUserID)
+		}
+	}
+	return chatID, adminUserID
 }
 
 // stepDetectPrimaryMAC reads the MAC of the first non-loopback ethernet

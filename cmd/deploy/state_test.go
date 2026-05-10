@@ -24,7 +24,7 @@ func TestStateRoundTrip(t *testing.T) {
 			AdminUserID: 123456789,
 		},
 		Agents: []AgentState{
-			{Nickname: "test", Host: "192.168.1.1", Port: 222, User: "root", Arch: "arm64", ThreadID: 42, AwgIface: "awg0", ExpectedExitIP: "1.2.3.4"},
+			{Nickname: "test", Host: "192.168.1.1", Port: 222, User: "root", Arch: "arm64", ThreadID: 42, Kind: "static"},
 		},
 	}
 

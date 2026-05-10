@@ -173,7 +173,14 @@ func ForgetKnownHost(path, alias string) (int, error) {
 // ForgetKnownHostInteractive is the CLI entry point: lists current
 // aliases, asks which to forget (operator types alias name or "*" for
 // all), and calls ForgetKnownHost. Returns nil on success / no-op.
-func ForgetKnownHostInteractive() error {
+//
+// Если state передан, для alias-ов, совпадающих с nickname'ом живого
+// агента в wizard.toml, выводится warning + требуется явный y/N. Это
+// защита от: оператор forget'нет alias живого агента → следующий connect
+// делает TOFU без сравнения с прежним fingerprint'ом, что эквивалентно
+// принять любой ключ (и любой подменённый роутер). state=nil оставляет
+// старое поведение (CLI usage где state не загружен).
+func ForgetKnownHostInteractive(state *State) error {
 	path := filepath.Join(defaultCacheDir(), "known_hosts")
 	aliases, err := ListKnownHostAliases(path)
 	if err != nil {
@@ -185,9 +192,21 @@ func ForgetKnownHostInteractive() error {
 		return nil
 	}
 
+	// Map nickname → bool для быстрой проверки.
+	live := map[string]bool{}
+	if state != nil {
+		for _, a := range state.Agents {
+			live[a.Nickname] = true
+		}
+	}
+
 	fmt.Println(Colorize("Текущие записи в known_hosts:", ColorBold))
 	for _, a := range aliases {
-		fmt.Println("  • " + a)
+		marker := ""
+		if live[a] {
+			marker = " " + Colorize("(живой агент в wizard.toml)", ColorYellow)
+		}
+		fmt.Println("  • " + a + marker)
 	}
 	fmt.Println()
 	answer := strings.TrimSpace(Ask("Какой alias забыть? (имя из списка, '*' — все, Enter — отмена)", ""))
@@ -197,6 +216,22 @@ func ForgetKnownHostInteractive() error {
 	}
 
 	if answer == "*" {
+		// Проверяем, есть ли среди aliases живые агенты.
+		var liveHits []string
+		for _, a := range aliases {
+			if live[a] {
+				liveHits = append(liveHits, a)
+			}
+		}
+		if len(liveHits) > 0 {
+			PrintWarn("в known_hosts есть alias'ы живых агентов: " + strings.Join(liveHits, ", "))
+			PrintWarn("после forget следующий connect к ним пойдёт через TOFU без сравнения fingerprint'а — подменённый роутер примется без проверки")
+			confirm := strings.ToLower(strings.TrimSpace(Ask("точно забыть ВСЕ записи? [y/N]", "n")))
+			if confirm != "y" && confirm != "yes" {
+				PrintInfo("отмена")
+				return nil
+			}
+		}
 		total := 0
 		for _, a := range aliases {
 			n, err := ForgetKnownHost(path, a)
@@ -221,6 +256,16 @@ func ForgetKnownHostInteractive() error {
 	if !found {
 		PrintFail("alias " + answer + " не найден в known_hosts")
 		return fmt.Errorf("alias not found: %s", answer)
+	}
+
+	if live[answer] {
+		PrintWarn(answer + " — alias живого агента в wizard.toml")
+		PrintWarn("после forget следующий connect к нему пойдёт через TOFU без сравнения fingerprint'а — подменённый роутер примется без проверки")
+		confirm := strings.ToLower(strings.TrimSpace(Ask(fmt.Sprintf("точно забыть %s? [y/N]", answer), "n")))
+		if confirm != "y" && confirm != "yes" {
+			PrintInfo("отмена")
+			return nil
+		}
 	}
 
 	n, err := ForgetKnownHost(path, answer)

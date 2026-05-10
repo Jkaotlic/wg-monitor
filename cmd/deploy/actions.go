@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -135,11 +136,29 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		return err
 	}
 
-	PrintStep(1, 4, "SSH к роутеру "+ag.Nickname)
+	PrintStep(1, 4, fmt.Sprintf("SSH к роутеру %s (%s:%d)", ag.Nickname, ag.Host, portOrDefault(ag.Port, 222)))
 	s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh, ag.Nickname)
 	if err != nil {
-		PrintFail(err.Error())
-		return err
+		// SSH-fail retry: оператор мог переехать роутером (новый IP / port
+		// forward / ротированный пароль). Один re-prompt host/port/user/
+		// password, ещё одна попытка, дальше — bail. Параллель к [3] install
+		// (rc14+rc17), update-agent теперь тоже не молчит при auth/connect
+		// fail вместо того чтобы тупо упасть.
+		PrintWarn("SSH не подключился: " + err.Error())
+		PrintInfo("введи параметры роутера руками (Enter — оставить текущее)")
+		ag.Host = orDefault(Ask("Хост роутера", ag.Host), ag.Host)
+		ag.Port = parseIntOr(Ask("SSH port", fmt.Sprint(portOrDefault(ag.Port, 222))), portOrDefault(ag.Port, 222))
+		ag.User = orDefault(Ask("SSH user", userOrDefault(ag.User, "root")), userOrDefault(ag.User, "root"))
+		if newPass := AskSecret("пароль root для " + ag.Nickname + " (Enter — оставить прежний)"); newPass != "" {
+			pass = newPass
+			if err := secrets.Set("WG_KEENETIC_PASS_"+strings.ToUpper(ag.Nickname), pass); err != nil && !errors.Is(err, ErrCacheDisabled) {
+				PrintWarn("не смог обновить пароль в disk-кэше: " + err.Error())
+			}
+		}
+		s, err = ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
+		if err != nil {
+			return err
+		}
 	}
 	defer s.Close()
 	if err := stepCheckSSH(s, ag.Host); err != nil {
@@ -228,16 +247,6 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	if ag.User == "" {
 		ag.User = orDefault(Ask("SSH user", "root"), "root")
 	}
-	if ag.AwgIface == "" {
-		// awg_iface поле уже deprecated в агенте (silently ignored
-		// после awg-manager pivot), но wg-monitor-cli требует
-		// non-empty. awg0 — стандартный AmneziaWG iface на Keenetic.
-		ag.AwgIface = "awg0"
-	}
-	if ag.ExpectedExitIP == "" {
-		// expected_exit_ip тоже deprecated — placeholder для DB.
-		ag.ExpectedExitIP = "0.0.0.0"
-	}
 	// thread_id оставляем 0, если не задан: backend сам выставит
 	// telegram_thread_id в users-таблице на первом hard-alert от агента.
 
@@ -294,7 +303,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 			// Перезаписываем disk-кэш под per-nickname env — иначе
 			// при следующем запуске опять подтянется старый
 			// (кривой) пароль и retry-цикл повторится.
-			if err := secrets.Set("WG_KEENETIC_PASS_"+strings.ToUpper(ag.Nickname), pass); err != nil {
+			if err := secrets.Set("WG_KEENETIC_PASS_"+strings.ToUpper(ag.Nickname), pass); err != nil && !errors.Is(err, ErrCacheDisabled) {
 				PrintWarn("не смог обновить пароль в disk-кэше: " + err.Error())
 			}
 		}
@@ -351,11 +360,9 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 
 	PrintStep(5, 8, "config.yaml")
 	cfg, err := RenderAgentYAML(AgentParams{
-		BackendURL:     "https://" + state.Backend.Domain,
-		Token:          tok,
-		Nickname:       ag.Nickname,
-		AWGIface:       ag.AwgIface,
-		ExpectedExitIP: ag.ExpectedExitIP,
+		BackendURL: "https://" + state.Backend.Domain,
+		Token:      tok,
+		Nickname:   ag.Nickname,
 	})
 	if err != nil {
 		return err
@@ -437,6 +444,21 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	defer s.Close()
 
+	// Pre-flight: detect existing install and require explicit confirmation.
+	// install-backend перезаписывает backend.yaml, bot-token.txt и unit-файл
+	// — на работающем backend'е без подтверждения это может молча сломать
+	// прод (другой chat_id/admin_user_id, устаревший токен из disk-cache, и т.п.).
+	if existingInstallDetected(s) {
+		existingChat, existingAdmin := readDeployedTelegramMeta(s)
+		PrintWarn("на VPS уже установлен wg-monitor-backend:")
+		PrintInfo(fmt.Sprintf("  существующий chat_id=%d admin_user_id=%d", existingChat, existingAdmin))
+		PrintInfo(fmt.Sprintf("  будет записан chat_id=%d admin_user_id=%d", state.Telegram.ChatID, state.Telegram.AdminUserID))
+		ans := strings.ToLower(strings.TrimSpace(Ask("перезаписать backend.yaml + bot-token.txt + unit? [y/N]", "n")))
+		if ans != "y" && ans != "yes" {
+			return fmt.Errorf("install-backend aborted by user (existing install detected)")
+		}
+	}
+
 	PrintStep(2, 13, "User wgmonitor")
 	if err := stepEnsureUser(s, "wgmonitor"); err != nil {
 		return err
@@ -461,7 +483,21 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	PrintStep(5, 13, "bot-token.txt")
 	// Отдельный файл, потому что backend.yaml имеет mode 600 root:wgmonitor —
 	// читаемый отладчиком. Токен бота — нет: только wgmonitor.
-	if err := stepUploadFile(s, "/etc/wg-monitor/bot-token.txt", []byte(strings.TrimSpace(botToken)+"\n"), "600"); err != nil {
+	// Drift detection: если файл уже есть и его содержимое != локальному кэшу,
+	// предупреждаем перед перезаписью. Помогает поймать сценарий "оператор
+	// ротировал токен на VPS вручную, локальный кэш устарел".
+	newBot := strings.TrimSpace(botToken) + "\n"
+	if existingBot, ok := readRemoteFile(s, "/etc/wg-monitor/bot-token.txt"); ok {
+		if strings.TrimSpace(existingBot) != strings.TrimSpace(botToken) {
+			PrintWarn("bot-token.txt на VPS отличается от локального WG_BOT_TOKEN — перезаписываю значением из локального кэша")
+			PrintInfo("  если на VPS правильный (а локальный устарел), отмени и обнови WG_BOT_TOKEN в " + secretsCachePath())
+			ans := strings.ToLower(strings.TrimSpace(Ask("перезаписать удалённый bot-token? [y/N]", "n")))
+			if ans != "y" && ans != "yes" {
+				return fmt.Errorf("bot-token overwrite aborted by user")
+			}
+		}
+	}
+	if err := stepUploadFile(s, "/etc/wg-monitor/bot-token.txt", []byte(newBot), "600"); err != nil {
 		return err
 	}
 	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/bot-token.txt"); err != nil {
@@ -596,29 +632,55 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 			nick, state.Backend.Host, nick))
 		return fmt.Errorf("user exists in DB but token unknown")
 	default:
-		// AwgIface / ExpectedExitIP — deprecated в agent (silently ignored
-		// после awg-manager pivot), но CLI требует non-empty значения для
-		// DB. Передаём placeholder'ы, чтобы не дёргать пользователя.
-		rawToken, err = vpsAddUser(bs, nick, "awg0", "0.0.0.0", "static")
+		// Kind — единственное поле, которое реально влияет на поведение
+		// backend'а (StaleAfterMobileSec для mobile). Берём из state'а
+		// если оператор уже сохранял для этого nickname'а, иначе спрашиваем.
+		// Дефолт "static" — оператор просто давит Enter для домашнего/офисного
+		// роутера, mobile только для in-vehicle 4G.
+		ag := state.FindAgent(nick)
+		kind := "static"
+		if ag != nil && ag.Kind != "" {
+			kind = ag.Kind
+		}
+		kind = strings.ToLower(strings.TrimSpace(orDefault(Ask("Kind (static / mobile)", kind), kind)))
+		if kind != "static" && kind != "mobile" {
+			PrintFail("kind должен быть static или mobile")
+			return fmt.Errorf("invalid kind")
+		}
+		rawToken, err = vpsAddUser(bs, nick, kind)
 		if err != nil {
 			return err
 		}
-		if err := secrets.Set(tokEnv, rawToken); err != nil {
-			PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
-		} else {
+		switch err := secrets.Set(tokEnv, rawToken); {
+		case err == nil:
 			PrintOK(fmt.Sprintf("токен %s сохранён в disk-кэш", tokEnv))
+		case errors.Is(err, ErrCacheDisabled):
+			// Disk-кэш выключен — токен живёт только в памяти процесса.
+			// Если оператор Ctrl-C'нёт между этим шагом и установкой агента
+			// на роутер, raw-токен потеряется навсегда (в DB только хэш).
+			// Громкий warning + явная подсказка как сохранить.
+			PrintWarn("WG_NO_SECRET_CACHE=1 — токен не записан на диск, живёт только в памяти текущего процесса")
+			PrintWarn(fmt.Sprintf("СОХРАНИ СЕЙЧАС вручную, иначе при сбое retry потребует DELETE FROM users:"))
+			fmt.Printf("    %s=%s\n", tokEnv, rawToken)
+		default:
+			PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
+		}
+		// Сохраняем kind в state — на retry/reinstall не спрашиваем заново.
+		if ag == nil {
+			state.Agents = append(state.Agents, AgentState{Nickname: nick, Kind: kind})
+		} else {
+			ag.Kind = kind
 		}
 	}
 	os.Setenv(tokEnv, rawToken)
 
 	// Запись в wizard.toml. Дефолты подставляем здесь, чтобы actionInstallAgent
-	// ниже по флоу не спрашивал host/port/user/awg_iface/exit_ip — happy path
-	// (стандартный Keenetic) идёт без единого prompt'а кроме nickname'а.
-	// SSH-fail в actionInstallAgent поднимет интерактив только если эти
-	// дефолты реально не подошли.
+	// ниже по флоу не спрашивал host/port/user — happy path (стандартный
+	// Keenetic) идёт без единого prompt'а кроме nickname'а + kind. SSH-fail
+	// в actionInstallAgent поднимет интерактив только если дефолты не подошли.
 	ag := state.FindAgent(nick)
 	if ag == nil {
-		state.Agents = append(state.Agents, AgentState{Nickname: nick})
+		state.Agents = append(state.Agents, AgentState{Nickname: nick, Kind: "static"})
 		ag = &state.Agents[len(state.Agents)-1]
 	}
 	if ag.Host == "" {
@@ -630,11 +692,8 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	if ag.User == "" {
 		ag.User = "root"
 	}
-	if ag.AwgIface == "" {
-		ag.AwgIface = "awg0"
-	}
-	if ag.ExpectedExitIP == "" {
-		ag.ExpectedExitIP = "0.0.0.0"
+	if ag.Kind == "" {
+		ag.Kind = "static"
 	}
 
 	// Telegram-топик: если ag.ThreadID == 0, пытаемся создать через Bot API.
@@ -666,10 +725,18 @@ var cliNicknameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 // binary the CLI uses). Returns (exists, err); a missing DB or sqlite3 binary
 // is treated as a real error so the caller doesn't silently fall through to
 // vpsAddUser and clobber an existing row.
+//
+// SQL string is built with shell single-quote escaping for the outer shell
+// (sqlite3 is invoked via SSH `sh -c`) AND SQL-double-single-quote for the
+// inner SELECT — both layers needed because the value crosses both. Today
+// nickname is regex-restricted (cliNicknameRe = ^[a-z][a-z0-9_-]{1,15}$,
+// no quotes possible), but consistent escaping keeps this safe even if the
+// regex is loosened later.
 func vpsUserExists(bs *SSH, nick string) (bool, error) {
+	sqlNick := strings.ReplaceAll(nick, "'", "''")
 	cmd := fmt.Sprintf(
-		`sqlite3 /var/lib/wg-monitor/state.db "SELECT 1 FROM users WHERE nickname = '%s' LIMIT 1;"`,
-		strings.ReplaceAll(nick, "'", "''"),
+		`sqlite3 /var/lib/wg-monitor/state.db %s`,
+		shellSingleQuote(fmt.Sprintf("SELECT 1 FROM users WHERE nickname = '%s' LIMIT 1;", sqlNick)),
 	)
 	out, stderr, rc, err := bs.Run(cmd)
 	if err != nil {
@@ -687,15 +754,22 @@ func vpsUserExists(bs *SSH, nick string) (bool, error) {
 // cmd/wg-monitor-cli/main.go runAddUser. Returns an actionable error if the
 // CLI binary isn't installed (operator either ran wizard before that release
 // or wiped /usr/local/bin).
-func vpsAddUser(bs *SSH, nick, awgIface, expectedExitIP, kind string) (string, error) {
+//
+// awg_iface / expected_exit_ip are passed as fixed placeholders: both fields
+// are deprecated in the agent (silently ignored after the awg-manager pivot,
+// see internal/agent/config.go::AWGCheckConfig), but wg-monitor-cli still
+// requires non-empty values for the DB schema. Kind ("static"/"mobile") IS
+// load-bearing: backend's heartbeat watcher uses StaleAfterMobileSec for
+// mobile-kind users.
+func vpsAddUser(bs *SSH, nick, kind string) (string, error) {
 	if _, _, rc, _ := bs.Run("test -x /usr/local/bin/wg-monitor-cli"); rc != 0 {
 		return "", fmt.Errorf(
 			"/usr/local/bin/wg-monitor-cli не установлен на VPS — на этом VPS он добавлялся вручную. " +
 				"Поставь его вручную (scp wg-monitor-cli-linux-amd64 → /usr/local/bin/wg-monitor-cli, chmod +x) и повтори [4].")
 	}
 	cmd := fmt.Sprintf(
-		`/usr/local/bin/wg-monitor-cli add-user --nickname=%s --awg-iface=%s --expected-exit-ip=%s --kind=%s`,
-		shellSingleQuote(nick), shellSingleQuote(awgIface), shellSingleQuote(expectedExitIP), shellSingleQuote(kind),
+		`/usr/local/bin/wg-monitor-cli add-user --nickname=%s --awg-iface=awg0 --expected-exit-ip=0.0.0.0 --kind=%s`,
+		shellSingleQuote(nick), shellSingleQuote(kind),
 	)
 	out, stderr, rc, err := bs.Run(cmd)
 	if err != nil {

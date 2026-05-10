@@ -295,11 +295,26 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 }
 
 func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTally) {
-	_ = state
 	fmt.Println(Colorize("=== Agent: "+ag.Nickname+" ===", ColorBold))
 
 	port := portOrDefault(ag.Port, 222)
 	user := userOrDefault(ag.User, "root")
+
+	// Auth-probe: проверяем что raw-токен в disk-кэше всё ещё совпадает с
+	// token_hash в DB — единственный способ убедиться, что агент сможет
+	// аутентифицироваться. "doctor зелёный" без этой проверки = ложное
+	// успокоение.
+	if state.Backend.Domain != "" {
+		tok := secrets.GetNonInteractive("WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname))
+		switch {
+		case tok == "":
+			t.warnf("auth-probe пропущен: токен не в disk-кэше (запусти [4] на этом ПК)")
+		case probeAgentTokenValid("https://"+state.Backend.Domain+"/v1/cmd?wait=0", tok):
+			t.ok("auth-probe: токен валиден")
+		default:
+			t.failf("auth-probe: backend ответил 401 — disk-cache токен НЕ совпадает с token_hash в DB")
+		}
+	}
 
 	// TCP probe (3s)
 	if !dialableTCP(ag.Host, port, 3*time.Second) {
