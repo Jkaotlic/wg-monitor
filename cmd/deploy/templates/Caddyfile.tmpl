@@ -4,9 +4,32 @@
 {
 	email {{.Email}}
 	auto_https disable_redirects
+	servers {
+		# Force TLS 1.2+ — все живые агенты Go-builds, modern TLS обязательно.
+		protocols h1 h2
+	}
 }
 
 {{.Domain}} {
+	# DEPLOY-19: Security headers. agent клиенты их игнорируют, но если в
+	# будущем появится /admin UI или ad-hoc browser-debug — заголовки уже
+	# на месте.
+	header {
+		# 1 year HSTS, includeSubDomains; preload опускаем (нужно явное
+		# подтверждение из hstspreload.org).
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# MIME-type sniffing off.
+		X-Content-Type-Options "nosniff"
+		# Никаких frame'ов вообще.
+		X-Frame-Options "DENY"
+		# Минимальный referrer.
+		Referrer-Policy "no-referrer"
+		# CSP заглушка — backend сейчас отдаёт только plain-text/JSON.
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+		# Снять Caddy-ный default Server header — лишний reconnaissance.
+		-Server
+	}
+
 	reverse_proxy 127.0.0.1:8080 {
 		header_up Host {host}
 		header_up X-Real-IP {remote_host}

@@ -9,17 +9,63 @@ Type=simple
 User=wgmonitor
 Group=wgmonitor
 ExecStart=/usr/local/bin/wg-monitor-backend -config /etc/wg-monitor/backend.yaml
-Restart=on-failure
+Restart=always
 RestartSec=5
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
-# Hardening
+# --- Hardening (DEPLOY-10) ---
+# Pure-Go HTTP+SQLite service: no kernel modules, no /proc/sys writes, no
+# device access, no exec'ing children. Almost the entire systemd hardening
+# bundle is safe to enable; what's not enabled is documented per-line.
+
+# Filesystem
 NoNewPrivileges=true
 ProtectSystem=strict
-StateDirectory=wg-monitor
 ProtectHome=true
-PrivateTmp=true
 ReadWritePaths=/var/lib/wg-monitor
+StateDirectory=wg-monitor
+PrivateTmp=true
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+
+# Kernel/runtime
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+# Networking — IPv4/IPv6 only, no UNIX sockets exposed.
+RestrictAddressFamilies=AF_INET AF_INET6
+
+# Capabilities — drop everything; service binds to 127.0.0.1:8080, no
+# privileged port needed.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Syscalls — common system service profile + json/sqlite + http.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# Limits — bounded RAM and process count protect the host from a leak/
+# fork bomb in our process. Adjust MemoryMax if SQLite cache + WAL grows
+# beyond 256MiB on real-fleet load.
+MemoryMax=512M
+TasksMax=128
 LimitNOFILE=65535
+
+# Logging
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
