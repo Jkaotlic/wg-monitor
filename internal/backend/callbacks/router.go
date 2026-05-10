@@ -712,12 +712,17 @@ func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 
 // collectActiveIncidents returns each `incident_state` row with
 // current_status='hard' for this user. Direct SQL — no new repo method needed.
+//
+// silenced_until сравнивается с Go-side time.Now().UTC() — см. длинный комментарий
+// в db.StateRepo.StaleHards: SQL CURRENT_TIMESTAMP возвращает другой формат,
+// чем хранится в колонке (space vs T separator), и lexicographic compare
+// никогда не даёт true.
 func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
 	q, err := r.d.SQL().Query(`SELECT check_name, hard_since, consecutive_fails
                             FROM incident_state
                            WHERE user_id = ? AND current_status = 'hard'
-                             AND (silenced_until IS NULL OR silenced_until < CURRENT_TIMESTAMP)
-                             AND acked = 0`, userID)
+                             AND (silenced_until IS NULL OR silenced_until < ?)
+                             AND acked = 0`, userID, time.Now().UTC())
 	if err != nil {
 		slog.Warn("collectActiveIncidents: query failed", "err", err, "user", userID)
 		return nil
@@ -953,7 +958,15 @@ func (r *Router) consumePendingRebind(userID int64, token string) (*pendingRebin
 	r.pendingRebindsMu.Lock()
 	defer r.pendingRebindsMu.Unlock()
 	pr, ok := r.pendingRebinds[token]
-	if !ok || pr.UserID != userID || time.Now().After(pr.ExpiresAt) {
+	if !ok {
+		return nil, false
+	}
+	// Don't delete on UserID mismatch — другой member чата не должен
+	// иметь возможности DoS'нуть owner'у его подтверждение (BUG-04).
+	if pr.UserID != userID {
+		return nil, false
+	}
+	if time.Now().After(pr.ExpiresAt) {
 		delete(r.pendingRebinds, token)
 		return nil, false
 	}

@@ -82,8 +82,19 @@ func (l *Loop) Run(ctx context.Context) {
 }
 
 func (l *Loop) backoff(attempt int) time.Duration {
+	// Clamp attempt PRE-Pow: math.Pow(2, ~63) уже превышает float64 mantissa
+	// precision, ~1024 даёт +Inf. time.Duration(int64) от +Inf — undefined,
+	// в 1.21+ становится отрицательным → time.NewTimer(-d) срабатывает
+	// мгновенно → busy-loop при долгих оффлайнах (BUG-05). 30 шагов хватает
+	// чтобы уверенно перешагнуть BackoffMax при любом разумном BackoffBase.
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 30 {
+		attempt = 30
+	}
 	d := time.Duration(math.Pow(2, float64(attempt-1))) * l.BackoffBase
-	if d > l.BackoffMax {
+	if d > l.BackoffMax || d < 0 {
 		d = l.BackoffMax
 	}
 	return d

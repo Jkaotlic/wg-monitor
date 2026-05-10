@@ -13,19 +13,36 @@ import (
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
+// Client разделяет два HTTP-клиента: short для report/result (быстрый
+// timeout — если backend жив, ответ должен прийти моментально) и longPoll
+// для GET /v1/cmd?wait=N (timeout > 60s, чтобы перекрыть backend'овский
+// `maxCmdWait`). Прежде был один общий клиент с Timeout=10s, что рвало
+// каждый long-poll до того, как backend успевал вернуть команду — кнопки
+// из TG (restart_tunnel/diag_now/firmware_install/...) фактически НИКОГДА
+// не доходили до агента в проде.
 type Client struct {
-	baseURL string
-	token   string
-	version string
-	http    *http.Client
+	baseURL  string
+	token    string
+	version  string
+	http     *http.Client
+	longPoll *http.Client
 }
 
+// NewClient: timeout — для коротких report/result. long-poll-клиент
+// автоматически получает timeout = max(timeout, 90s). Один общий
+// http.Transport переиспользуется обоими — keep-alive не дублируется.
 func NewClient(baseURL, token, version string, timeout time.Duration) *Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	longTimeout := timeout
+	if longTimeout < 90*time.Second {
+		longTimeout = 90 * time.Second
+	}
 	return &Client{
-		baseURL: baseURL,
-		token:   token,
-		version: version,
-		http:    &http.Client{Timeout: timeout},
+		baseURL:  baseURL,
+		token:    token,
+		version:  version,
+		http:     &http.Client{Transport: tr, Timeout: timeout},
+		longPoll: &http.Client{Transport: tr, Timeout: longTimeout},
 	}
 }
 
@@ -67,7 +84,7 @@ func (c *Client) PollCommand(ctx context.Context, waitSec int) (*wire.Command, e
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("User-Agent", "wg-monitor/"+c.version)
-	resp, err := c.http.Do(req)
+	resp, err := c.longPoll.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("get: %w", err)
 	}

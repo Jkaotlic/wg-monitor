@@ -51,9 +51,21 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		}
 		return di.d.State().Save(userID, checkName, tr.Next)
 	case state.Hard:
+		// Save FSM transition FIRST, отправка в TG — после. Иначе при
+		// 5xx/429 от TG возвращалась ошибка ДО Save, FSM оставался в
+		// pre-Hard состоянии, следующий fail-репорт снова пересекал
+		// порог → дубль алерта на каждый TG-глюк (BUG-02).
+		// LastAlertMsgID/LastAlertAt пишем вторым save'ом только при
+		// успехе TG-send. Если TG упал — FSM корректно в HARD, но
+		// LastAlertAt=NULL значит realert poller его не подхватит до
+		// следующего ручного refresh / OK-репорта.
 		threadID, err := di.ensureTopic(ctx, userID, nickname)
 		if err != nil {
 			return fmt.Errorf("ensure topic: %w", err)
+		}
+		next := tr.Next
+		if err := di.d.State().Save(userID, checkName, next); err != nil {
+			return fmt.Errorf("save HARD state: %w", err)
 		}
 		args := HardArgs{
 			Nickname:    nickname,
@@ -87,12 +99,14 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if err != nil {
 			return err
 		}
-		next := tr.Next
 		next.LastAlertMsgID = &mid
 		now := time.Now()
 		next.LastAlertAt = &now
 		return di.d.State().Save(userID, checkName, next)
 	case state.Recovery:
+		// Same ordering invariant как Hard: state-Save до TG-send. Если
+		// TG отвалится, recovery фактически уже сохранён в FSM; следующий
+		// OK-репорт превратится в Noop (state==ok), не в дубль Recovery.
 		threadID, err := di.ensureTopic(ctx, userID, nickname)
 		if err != nil {
 			return fmt.Errorf("ensure topic: %w", err)
@@ -102,21 +116,23 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if prev.HardSince != nil {
 			hardSince = *prev.HardSince
 		}
+		next := tr.Next
+		next.LastAlertMsgID = nil
+		next.LastAlertAt = nil
+		next.Acked = false // defensive (FSM also sets this in Recovery transition)
+		if err := di.d.State().Save(userID, checkName, next); err != nil {
+			return fmt.Errorf("save Recovery state: %w", err)
+		}
 		text := FormatRecovery(RecoveryArgs{
 			Nickname:    nickname,
 			CheckName:   checkName,
 			HardSince:   hardSince,
 			RecoveredAt: time.Now(),
 		})
-		_, err = di.tg.SendMessage(ctx, di.cfg.ChatID, &threadID, text, "", prev.LastAlertMsgID)
-		if err != nil {
+		if _, err := di.tg.SendMessage(ctx, di.cfg.ChatID, &threadID, text, "", prev.LastAlertMsgID); err != nil {
 			return err
 		}
-		next := tr.Next
-		next.LastAlertMsgID = nil
-		next.LastAlertAt = nil
-		next.Acked = false // defensive (FSM also sets this in Recovery transition)
-		return di.d.State().Save(userID, checkName, next)
+		return nil
 	}
 	return nil
 }
