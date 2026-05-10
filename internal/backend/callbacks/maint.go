@@ -157,7 +157,17 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 	default:
 		return "", fmt.Errorf("unknown maint name: %q", pm.Name)
 	}
-	if err := a.sink.Enqueue(args.UserID, cmd); err != nil {
+	// EnqueueWithRef (а не голый Enqueue) — иначе ConsumeOriginRef в
+	// handler.go::cmdResultHandler возвращает false, MaintNotifier
+	// .NotifyCommandResult НЕ вызывается, и maint-панель оператора никогда
+	// не обновится после исполнения. Симметричный RebindConfirmAction
+	// делает это правильно — у нас был чистый asymmetry-bug (LOGIC-01).
+	ref := cmdpkg.MessageRef{
+		ChatID:    q.Message.Chat.ID,
+		MessageID: q.Message.MessageID,
+		ThreadID:  q.Message.MessageThreadID,
+	}
+	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
 		return "", fmt.Errorf("enqueue failed: %w", err)
 	}
 	if cooldownAction != "" {

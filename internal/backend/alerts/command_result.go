@@ -84,25 +84,34 @@ func paginate(header, body string, maxChars int) []string {
 	if per < 100 {
 		per = 100
 	}
+	// Rune-aware split: byte-indexing раньше резало multi-byte UTF-8 (русский
+	// в opkg_upgrade output / hostname с кириллицей) на половине символа,
+	// и Telegram возвращал не валидный текст (BUG-09). Шагаем по rune'ам,
+	// конвертируем в []byte у границ.
+	runes := []rune(body)
 	var chunks []string
-	for i := 0; i < len(body); i += per {
-		end := i + per
-		if end > len(body) {
-			end = len(body)
+	if len(runes) == 0 {
+		chunks = []string{""}
+	} else {
+		for i := 0; i < len(runes); i += per {
+			end := i + per
+			if end > len(runes) {
+				end = len(runes)
+			}
+			chunks = append(chunks, string(runes[i:end]))
 		}
-		chunks = append(chunks, body[i:end])
 	}
 	out := make([]string, len(chunks))
 	for i, c := range chunks {
 		rendered := fmt.Sprintf("(%d/%d) %s\n%s", i+1, len(chunks), header, c)
 		if len(rendered) > tgMaxMessageBytes {
-			// Trim the body tail to keep the rendered chunk under TG's hard
-			// 4096-byte limit. This only fires when the caller's maxChars
-			// + UTF-8 header overhead would have produced an over-sized
-			// message; pagination at chunk boundaries already happened, so
-			// the body byte loss is bounded by header_bytes + prefix_bytes.
-			excess := len(rendered) - tgMaxMessageBytes
-			rendered = rendered[:len(rendered)-excess]
+			// Trim by RUNES (не bytes) until под лимитом — тот же UTF-8
+			// safety contract на уровне defensive truncation.
+			rr := []rune(rendered)
+			for len(string(rr)) > tgMaxMessageBytes && len(rr) > 0 {
+				rr = rr[:len(rr)-1]
+			}
+			rendered = string(rr)
 		}
 		out[i] = rendered
 	}
