@@ -10,6 +10,10 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_token_hash ON users(token_hash);
+-- Used by callbacks router on every TG forum-topic message routing
+-- (GetByThreadID). Without it the lookup is a full table scan per
+-- inbound message.
+CREATE INDEX IF NOT EXISTS idx_users_thread_id ON users(telegram_thread_id) WHERE telegram_thread_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,6 +25,11 @@ CREATE TABLE IF NOT EXISTS events (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_events_user_ts ON events(user_id, ts DESC);
+-- LatestEventsByPrefix and per-user-per-check lookups need check_name in the
+-- key — the user_id-only prefix index above can't satisfy them efficiently.
+CREATE INDEX IF NOT EXISTS idx_events_user_check_ts ON events(user_id, check_name, ts DESC);
+-- retention.PruneBefore and event aggregations across all users.
+CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
 
 CREATE TABLE IF NOT EXISTS incident_state (
     user_id INTEGER NOT NULL,
@@ -36,6 +45,10 @@ CREATE TABLE IF NOT EXISTS incident_state (
     PRIMARY KEY (user_id, check_name),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+-- StaleHards / AllActiveHard / collectActiveIncidents все фильтруют
+-- current_status='hard'. Без индекса каждый realert tick (раз в TickEverySec,
+-- по умолчанию каждые 60s) и каждый клик в Fleet-Health делают full scan.
+CREATE INDEX IF NOT EXISTS idx_incident_state_hard ON incident_state(user_id, check_name) WHERE current_status = 'hard';
 
 CREATE TABLE IF NOT EXISTS daily_soft_flaps (
     user_id INTEGER NOT NULL,

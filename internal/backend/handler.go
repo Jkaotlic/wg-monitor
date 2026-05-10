@@ -77,10 +77,29 @@ type Deps struct {
 
 func NewMux(d Deps) http.Handler {
 	mux := http.NewServeMux()
+	// /healthz: liveness only — process is up & accepting HTTP. Caddy uses
+	// it for upstream health, no DB checks.
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(w, "ok\n")
 	})
-	auth := AuthMiddleware(d.DB.Users())
+	// /readyz: deep health — DB ping + sanity checks. External monitoring
+	// (smoke/doctor/cron) should use this. 503 means "process is up but
+	// can't service requests" — restart, page operator, etc.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		if d.DB == nil {
+			http.Error(w, "db not configured", http.StatusServiceUnavailable)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := d.DB.SQL().PingContext(ctx); err != nil {
+			d.Logger.Warn("readyz db ping failed", "err", err)
+			http.Error(w, "db ping: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = io.WriteString(w, "ready\n")
+	})
+	auth := AuthMiddleware(d.DB.Users(), d.Logger)
 	mux.Handle("/v1/report", auth(http.HandlerFunc(reportHandler(d))))
 	if d.CommandSink != nil {
 		mux.Handle("/v1/cmd", auth(http.HandlerFunc(cmdGetHandler(d))))
@@ -112,7 +131,6 @@ func reportHandler(d Deps) http.HandlerFunc {
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
 
-		_ = d.DB.Users().UpdateLastSeen(uid)
 		// Resumed=true means the agent self-detected a gap (mobile rejoin).
 		// Tell the watcher BEFORE running the FSM so a near-simultaneous
 		// scan-tick won't fire a spurious OFFLINE while we ingest the
@@ -124,12 +142,57 @@ func reportHandler(d Deps) http.HandlerFunc {
 		if ts.IsZero() {
 			ts = time.Now().UTC()
 		}
+
+		// Ingest всех событий + UpdateLastSeen — одной транзакцией. Раньше
+		// был N+1 без atomicity: краш или ctx.Cancel в середине цикла
+		// оставлял часть events записанными без advance LastSeen, или
+		// наоборот; FSM этих агентов оставался "глух" до следующего отчёта.
+		// Транзакция гарантирует "всё или ничего" по части ingest-а; FSM-
+		// dispatch делается ОТДЕЛЬНО после commit'а — он имеет TG side
+		// effects, обернуть в DB-tx нельзя.
+		tx, err := d.DB.SQL().BeginTx(r.Context(), nil)
+		if err != nil {
+			d.Logger.Warn("report tx begin", "nickname", nick, "err", err)
+			http.Error(w, "tx begin", http.StatusInternalServerError)
+			return
+		}
+		if _, err := tx.ExecContext(r.Context(),
+			"UPDATE users SET last_seen_at = ? WHERE id = ?", ts, uid); err != nil {
+			tx.Rollback()
+			d.Logger.Warn("update last_seen", "nickname", nick, "err", err)
+			http.Error(w, "update last_seen", http.StatusInternalServerError)
+			return
+		}
+		insertStmt, err := tx.PrepareContext(r.Context(),
+			`INSERT INTO events(user_id, check_name, status, details_json, ts) VALUES(?,?,?,?,?)`)
+		if err != nil {
+			tx.Rollback()
+			d.Logger.Warn("report tx prepare", "nickname", nick, "err", err)
+			http.Error(w, "prepare", http.StatusInternalServerError)
+			return
+		}
 		for _, c := range rep.Checks {
 			detailsJSON, _ := json.Marshal(c.Details)
-			if err := d.DB.Events().Insert(uid, c.Name, c.Status, string(detailsJSON), ts); err != nil {
-				d.Logger.Warn("event insert", "nickname", nick, "check", c.Name, "err", err)
-				continue
+			if _, err := insertStmt.ExecContext(r.Context(), uid, c.Name, c.Status, string(detailsJSON), ts); err != nil {
+				insertStmt.Close()
+				tx.Rollback()
+				d.Logger.Warn("event insert (tx rollback)", "nickname", nick, "check", c.Name, "err", err)
+				http.Error(w, "event insert", http.StatusInternalServerError)
+				return
 			}
+		}
+		insertStmt.Close()
+		if err := tx.Commit(); err != nil {
+			d.Logger.Warn("report tx commit", "nickname", nick, "err", err)
+			http.Error(w, "commit", http.StatusInternalServerError)
+			return
+		}
+
+		// Post-commit: FSM dispatch. Каждая итерация — отдельный State.Save
+		// внутри Dispatcher.Handle (single-statement, атомарная per check).
+		// Если dispatch падает (TG 5xx), state уже сохранён до TG-send
+		// после rc19 fix BUG-02 — следующий report не дублирует alert.
+		for _, c := range rep.Checks {
 			if c.Name == "agent_heartbeat" {
 				continue
 			}

@@ -55,6 +55,7 @@ func main() {
 		Token:        cfg.Telegram.BotToken,
 		HTTP:         &http.Client{Timeout: 15 * time.Second},
 		LongPollHTTP: &http.Client{Timeout: 90 * time.Second},
+		Logger:       logger.With("component", "tg"),
 	}
 	disp := alerts.NewDispatcher(d, tgClient, alerts.Config{
 		ChatID:            cfg.Telegram.ChatID,
@@ -137,7 +138,27 @@ func main() {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	go watcher.Run(ctx)
+
+	// notifyDegradation surfaces a fatal background-goroutine exit to the
+	// admin via TG. Без этого backend продолжал отвечать /healthz=200 пока
+	// alert dispatcher / realert poller / callbacks router молча умерли —
+	// операторы узнавали о проблеме только когда переставали приходить
+	// уведомления. ctx canceled (SIGTERM/Int) → nil notify (graceful).
+	notifyDegradation := func(component string, err error) {
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+		text := "🛑 *backend " + component + " exited*\n```\n" + err.Error() + "\n```\nрестарт нужен."
+		alertCtx, alertCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer alertCancel()
+		if _, sendErr := tgClient.SendMessage(alertCtx, cfg.Telegram.ChatID, nil, text, "MarkdownV2", nil); sendErr != nil {
+			logger.Error("degradation TG alert failed", "component", component, "err", sendErr)
+		}
+	}
+
+	go func() {
+		watcher.Run(ctx)
+	}()
 
 	retentionPolicy := &retention.Policy{
 		DB: d,
@@ -153,6 +174,7 @@ func main() {
 	go func() {
 		if err := cb.Run(ctx); err != nil {
 			logger.Error("callbacks router exited", "err", err)
+			notifyDegradation("callbacks router", err)
 		}
 	}()
 
@@ -164,6 +186,7 @@ func main() {
 	go func() {
 		if err := rp.Run(ctx); err != nil {
 			logger.Error("realert poller exited", "err", err)
+			notifyDegradation("realert poller", err)
 		}
 	}()
 
