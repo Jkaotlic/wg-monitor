@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"time"
 )
 
 // ListDNSRoutes returns /api/dns-routes/list .data.
@@ -89,6 +91,7 @@ func (c *Client) HydraRouteControl(ctx context.Context, action string) error {
 // Content-Type; awg-manager's update endpoints require it. Inline here to
 // avoid disturbing the existing helper.
 func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any) error {
+	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return err
@@ -98,9 +101,11 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(rb))
