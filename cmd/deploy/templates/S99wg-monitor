@@ -9,4 +9,56 @@ PREARGS=""
 DESC="wg-monitor agent"
 PATH=/opt/sbin:/opt/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
+# DEPLOY-17/18: PIDFILE narrows pidof-style matching to our actual instance.
+# Older Entware rc.func uses `pidof $PROCS`, which matches *any* process whose
+# argv[0] basename is "wg-monitor" — including the backend binary if someone
+# (during dev) runs both on the same host. Writing /opt/var/run/wg-monitor.pid
+# at start-time and checking it on stop avoids that collision. The agent binary
+# is /opt/bin/wg-monitor (see cmd/deploy/actions.go:185), so PROCS stays as-is
+# but PIDFILE takes precedence inside our explicit stop override below.
+PIDFILE=/opt/var/run/wg-monitor.pid
+
 . /opt/etc/init.d/rc.func
+
+# DEPLOY-15: explicit graceful-shutdown override.
+# rc.func across Entware versions has inconsistent SIGTERM→SIGKILL grace —
+# some `kill -TERM` and immediately `kill -KILL`, racing SQLite WAL checkpoints
+# on flash storage. The agent uses SQLite (state-version, FSM persistence) and
+# a SIGKILL mid-checkpoint can leave a corrupt -wal/-shm pair. Override stop()
+# *after* sourcing rc.func so our function wins, then send TERM, poll up to 10s
+# for the process to exit cleanly, and only then escalate to KILL.
+#
+# Note: this function is invoked for both `S99wg-monitor stop` and during
+# router shutdown (rc.shutdown → rc.func's preshutdown hook calls stop).
+stop() {
+    pids=$(pidof $PROCS 2>/dev/null)
+    if [ -z "$pids" ] && [ -f "$PIDFILE" ]; then
+        pids=$(cat "$PIDFILE" 2>/dev/null)
+    fi
+    if [ -z "$pids" ]; then
+        echo "$DESC: not running"
+        return 0
+    fi
+
+    echo "$DESC: stopping (TERM, up to 10s grace)"
+    kill -TERM $pids 2>/dev/null
+
+    # Poll once per second for up to 10s. Break early if all PIDs gone.
+    i=0
+    while [ $i -lt 10 ]; do
+        i=$((i+1))
+        sleep 1
+        if [ -z "$(pidof $PROCS 2>/dev/null)" ]; then
+            rm -f "$PIDFILE" 2>/dev/null
+            echo "$DESC: stopped cleanly"
+            return 0
+        fi
+    done
+
+    # Still alive — escalate. SQLite WAL may be in inconsistent state if this
+    # path is hit; user should run `sqlite3 state.db 'PRAGMA integrity_check'`
+    # on next start.
+    echo "$DESC: did not exit in 10s, sending KILL (DB may need integrity check)"
+    kill -KILL $(pidof $PROCS 2>/dev/null) 2>/dev/null
+    rm -f "$PIDFILE" 2>/dev/null
+}

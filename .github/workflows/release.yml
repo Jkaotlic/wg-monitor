@@ -34,7 +34,13 @@ jobs:
       - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
           go-version-file: go.mod
+          # DEPLOY-04: explicit cache config. setup-go's default `cache: true`
+          # auto-detects go.sum only when working-directory holds it; pinning
+          # both flags makes intent auditable and avoids cache-miss surprises
+          # if anyone moves the workflow into a subdir later. With 7 matrix
+          # legs this saves ~30s/leg of cold module download per release.
           cache: true
+          cache-dependency-path: go.sum
 
       - name: Install UPX
         if: matrix.upx
@@ -71,12 +77,39 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checkout source @ the tag — needed for SBOM generation below (Anchore
+      # walks go.mod/go.sum to enumerate dependencies). Pinned by SHA per
+      # DEPLOY-01 hardening.
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
       - uses: actions/download-artifact@65a9edc5881444af0b9093a5e628f2fe47ea3b2e # v4.1.7
         with:
           path: dist
           merge-multiple: true
 
       - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      # DEPLOY-09: SBOM (SPDX-JSON) of the released source tree. Lets
+      # downstream consumers run CVE scanners (grype, trivy) against a
+      # pinned manifest instead of re-deriving deps. Anchore's sbom-action
+      # is pinned by commit SHA (v0.24.0, 2026-03-20).
+      - name: Generate SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          artifact-name: wg-monitor-${{ github.ref_name }}-sbom.spdx.json
+          output-file: dist/wg-monitor-${{ github.ref_name }}-sbom.spdx.json
+          # Don't fail the release if SBOM generation hiccups — it's a nice
+          # to have, not a blocker for binary publication.
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Re-checksum with SBOM included
         run: |
           cd dist
           sha256sum * > checksums.txt

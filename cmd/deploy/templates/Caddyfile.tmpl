@@ -3,6 +3,20 @@
 
 {
 	email {{.Email}}
+	# DEPLOY-22: auto_https disable_redirects — мы намеренно НЕ редиректим
+	# HTTP→HTTPS, потому что:
+	#   1) backend слушает только loopback (127.0.0.1:8080), наружу торчит
+	#      исключительно HTTPS-vhost ниже. Открывать :80 ради 301 — лишняя
+	#      attack surface (port-scan footprint, Slowloris на пустой redirect).
+	#   2) ACME TLS-ALPN-01 challenge работает на :443, не нужен :80 для
+	#      HTTP-01.
+	#   3) Все клиенты (агенты на Keenetic + wizard) ходят строго по HTTPS;
+	#      ручной браузерный доступ с http:// — анти-паттерн (вернёт connection
+	#      refused, что лучше, чем фишинг-friendly 301 на любую введённую
+	#      хост-часть).
+	# Если в будущем появится /admin UI и понадобится дружелюбное поведение
+	# для пользователей — снять этот флаг и добавить явный `:80 { redir }`
+	# блок.
 	auto_https disable_redirects
 	servers {
 		# Force TLS 1.2+ — все живые агенты Go-builds, modern TLS обязательно.
@@ -11,6 +25,14 @@
 }
 
 {{.Domain}} {
+	# DEPLOY-20: TLS protocol pin. Caddy default уже tls1.2+, но явная
+	# декларация делает intent auditable и переживает изменения дефолтов
+	# Caddy между мажорами. tls1.0/tls1.1 запрещены regulatory-compliance
+	# (PCI-DSS, NIST SP 800-52r2), tls1.3 — обязательно для forward secrecy.
+	tls {
+		protocols tls1.2 tls1.3
+	}
+
 	# DEPLOY-19: Security headers. agent клиенты их игнорируют, но если в
 	# будущем появится /admin UI или ad-hoc browser-debug — заголовки уже
 	# на месте.
@@ -37,8 +59,13 @@
 	request_body {
 		max_size 1MB
 	}
+	# DEPLOY-25: format json — structured logs дружелюбны к будущему
+	# SIEM-экспорту (Loki, Elastic, journald→fluent-bit). console-формат
+	# человекочитаем, но требует кастомного парсера на стороне SIEM. JSON
+	# выгрузить в jq для local-debug тоже несложно: `journalctl -u caddy
+	# -o cat | jq .`.
 	log {
 		output stderr
-		format console
+		format json
 	}
 }
