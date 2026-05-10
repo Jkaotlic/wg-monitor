@@ -22,6 +22,90 @@ const (
 	maxCmdWait      = 60 * time.Second
 )
 
+// Version is set by main.Version via SetVersion at startup so /healthz can
+// surface it without circular import. Defaults to "unknown" if unset.
+var serverVersion = "unknown"
+
+// SetVersion is called from main with the build version string.
+func SetVersion(v string) { serverVersion = v }
+
+// errCode → HTTP status mapping for writeJSONError. Codes are wire-stable
+// (see pkg/wire/errors.md once we ship one); HTTP status follows API-03.
+const (
+	errCodeBadJSON       = "bad_json"
+	errCodeIDRequired    = "id_required"
+	errCodeStatusReq     = "status_required"
+	errCodeBodyTooLarge  = "body_too_large"
+	errCodeMethodNotAll  = "method_not_allowed"
+	errCodeInvalidWait   = "invalid_wait"
+	errCodeUnsupportedCT = "unsupported_content_type"
+	errCodeInternal      = "internal"
+)
+
+// writeJSONError emits {code,message} JSON with the given HTTP status. Used by
+// /v1/* endpoints (API-02). /healthz keeps text/plain for k8s-style probes.
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}{Code: code, Message: message})
+}
+
+// requireJSONContentType enforces application/json (or empty) on POST bodies
+// (API-08). Empty Content-Type stays accepted for backward compat with old
+// agents that didn't set the header. Returns true on success.
+func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	ct := r.Header.Get("Content-Type")
+	if ct == "" {
+		return true
+	}
+	// Strip parameters (`application/json; charset=utf-8`).
+	if i := indexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	ct = trimSpace(ct)
+	if ct != "application/json" {
+		writeJSONError(w, http.StatusUnsupportedMediaType, errCodeUnsupportedCT,
+			"expected application/json")
+		return false
+	}
+	return true
+}
+
+// relayParent returns the parent context for cmdResultHandler relay goroutines:
+// d.ShutdownCtx if wired, else context.Background. Wired path lets srv.Shutdown
+// signal in-flight TG sends instead of letting them outlive the server.
+func relayParent(d Deps) context.Context {
+	if d.ShutdownCtx != nil {
+		return d.ShutdownCtx
+	}
+	return context.Background()
+}
+
+// trimSpace + indexByte are tiny one-line helpers to avoid importing strings
+// only for two calls — handler.go already pulls many deps. Using stdlib here
+// would also be fine.
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func trimSpace(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t') {
+		s = s[1:]
+	}
+	for len(s) > 0 && (s[len(s)-1] == ' ' || s[len(s)-1] == '\t') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
 type Dispatcher interface {
 	Handle(ctx context.Context, userID int64, nickname, checkName string, tr state.Transition, check wire.Check) error
 }
@@ -73,14 +157,24 @@ type Deps struct {
 	MaintNotifier  MaintNotifier  // nil-safe (handler skips if nil)
 	UI             UIConfig
 	Thresholds     state.Thresholds
+	// ShutdownCtx, when non-nil, parents the relay goroutines spawned by
+	// cmdResultHandler so SIGTERM cancels in-flight TG sends instead of letting
+	// them outlive srv.Shutdown (BUG-15). Nil falls back to context.Background
+	// for callers that don't wire it.
+	ShutdownCtx context.Context
 }
 
 func NewMux(d Deps) http.Handler {
 	mux := http.NewServeMux()
 	// /healthz: liveness only — process is up & accepting HTTP. Caddy uses
-	// it for upstream health, no DB checks.
+	// it for upstream health, no DB checks. JSON envelope so the deploy
+	// wizard can `curl /healthz | jq .version` without SSH (API-12).
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = io.WriteString(w, "ok\n")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(struct {
+			Status  string `json:"status"`
+			Version string `json:"version"`
+		}{Status: "ok", Version: serverVersion})
 	})
 	// /readyz: deep health — DB ping + sanity checks. External monitoring
 	// (smoke/doctor/cron) should use this. 503 means "process is up but
@@ -111,21 +205,24 @@ func NewMux(d Deps) http.Handler {
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if !requireJSONContentType(w, r) {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxReportBytes+1))
 		if err != nil {
-			http.Error(w, "read body", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "read body: "+err.Error())
 			return
 		}
 		if len(body) > maxReportBytes {
-			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			writeJSONError(w, http.StatusRequestEntityTooLarge, errCodeBodyTooLarge, "body too large")
 			return
 		}
 		var rep wire.Report
 		if err := json.Unmarshal(body, &rep); err != nil {
-			http.Error(w, "bad json", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json")
 			return
 		}
 		uid := UserIDFromContext(r.Context())
@@ -153,14 +250,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 		tx, err := d.DB.SQL().BeginTx(r.Context(), nil)
 		if err != nil {
 			d.Logger.Warn("report tx begin", "nickname", nick, "err", err)
-			http.Error(w, "tx begin", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "tx begin")
 			return
 		}
 		if _, err := tx.ExecContext(r.Context(),
 			"UPDATE users SET last_seen_at = ? WHERE id = ?", ts, uid); err != nil {
 			tx.Rollback()
 			d.Logger.Warn("update last_seen", "nickname", nick, "err", err)
-			http.Error(w, "update last_seen", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update last_seen")
 			return
 		}
 		insertStmt, err := tx.PrepareContext(r.Context(),
@@ -168,7 +265,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		if err != nil {
 			tx.Rollback()
 			d.Logger.Warn("report tx prepare", "nickname", nick, "err", err)
-			http.Error(w, "prepare", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "prepare")
 			return
 		}
 		for _, c := range rep.Checks {
@@ -177,14 +274,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 				insertStmt.Close()
 				tx.Rollback()
 				d.Logger.Warn("event insert (tx rollback)", "nickname", nick, "check", c.Name, "err", err)
-				http.Error(w, "event insert", http.StatusInternalServerError)
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "event insert")
 				return
 			}
 		}
 		insertStmt.Close()
 		if err := tx.Commit(); err != nil {
 			d.Logger.Warn("report tx commit", "nickname", nick, "err", err)
-			http.Error(w, "commit", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "commit")
 			return
 		}
 
@@ -245,14 +342,14 @@ func checkSummary(checks []wire.Check) []string {
 func cmdGetHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
 			return
 		}
 		wait := defaultCmdWait
 		if v := r.URL.Query().Get("wait"); v != "" {
 			n, err := strconv.Atoi(v)
 			if err != nil || n < 0 {
-				http.Error(w, "bad wait", http.StatusBadRequest)
+				writeJSONError(w, http.StatusBadRequest, errCodeInvalidWait, "bad wait")
 				return
 			}
 			wait = time.Duration(n) * time.Second
@@ -270,7 +367,7 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		body, err := json.Marshal(c)
 		if err != nil {
 			d.Logger.Error("cmd marshal", "err", err)
-			http.Error(w, "internal", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "internal")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -283,25 +380,29 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 func cmdResultHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if !requireJSONContentType(w, r) {
 			return
 		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxResultBytes+1))
 		if err != nil {
-			http.Error(w, "read body", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "read body: "+err.Error())
 			return
 		}
 		if len(body) > maxResultBytes {
-			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			writeJSONError(w, http.StatusRequestEntityTooLarge, errCodeBodyTooLarge, "body too large")
 			return
 		}
 		var res wire.CommandResult
 		if err := json.Unmarshal(body, &res); err != nil {
-			http.Error(w, "bad json", http.StatusBadRequest)
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json")
 			return
 		}
 		if res.ID == "" {
-			http.Error(w, "id required", http.StatusBadRequest)
+			// 422: parsed correctly but required field is empty (API-03).
+			writeJSONError(w, http.StatusUnprocessableEntity, errCodeIDRequired, "id required")
 			return
 		}
 		// Status: log-and-accept для unknown значений. Раньше backend
@@ -310,7 +411,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		// "rate_limited", и т.п.) терял результат, пока backend не обновлён.
 		// Postel's law для внутреннего API: liberal in what we accept.
 		if res.Status == "" {
-			http.Error(w, "status required", http.StatusBadRequest)
+			writeJSONError(w, http.StatusUnprocessableEntity, errCodeStatusReq, "status required")
 			return
 		}
 		if !wire.IsValidCommandResultStatus(res.Status) {
@@ -322,7 +423,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		nick := NicknameFromContext(r.Context())
 		if err := d.CommandSink.RecordResult(uid, res); err != nil {
 			d.Logger.Warn("cmd result record", "nickname", nick, "err", err)
-			http.Error(w, "record failed", http.StatusInternalServerError)
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "record failed")
 			return
 		}
 		// Relay result back to TG (or routes notifier) if a notifier is configured
@@ -333,7 +434,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			case "route_status", "route_rebind":
 				if d.RoutesNotifier != nil {
 					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
-						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
 						if err := d.RoutesNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
 							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
@@ -346,7 +447,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			case "version_audit", "firmware_status", "service_restart", "firmware_install":
 				if d.MaintNotifier != nil {
 					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
-						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
 						if err := d.MaintNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
 							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
@@ -363,7 +464,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 						maxChars = 3500
 					}
 					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
-						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
 						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
 							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)

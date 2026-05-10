@@ -717,7 +717,7 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 
 // cliNicknameRe mirrors wg-monitor-cli's own regex (cmd/wg-monitor-cli/main.go).
 // The CLI rejects anything else, so we validate up-front to avoid a confusing
-// error after we've already collected awg_iface/expected_exit_ip.
+// error after the nickname is already collected.
 var cliNicknameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 
 // vpsUserExists checks /var/lib/wg-monitor/state.db for a row with the given
