@@ -34,6 +34,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "load state:", err)
 		os.Exit(1)
 	}
+
+	// Защита от двух wizard'ов одновременно — оба пишут в один wizard.toml
+	// и secrets.env через temp+rename, но это атомарно per-write, не
+	// межпроцессно: window where A loads, B loads, A saves, B saves =
+	// потерянные правки A. Один operator-процесс на cache-dir.
+	releaseLock, err := AcquirePIDLock()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	defer releaseLock()
+
 	secrets := NewSecretStore()
 	dl := NewDownloader()
 
@@ -43,21 +55,28 @@ func main() {
 		return
 	}
 
+	// runCLIAction всегда сохраняет state, даже когда action упал. Это
+	// важно: actions могут полу-применяться (state.Agents append, ag.Arch
+	// set, etc.) до возврата ошибки, и потеря этих мутаций приводит к
+	// orphan-данным в DB на VPS / disk-кэше / TG-топиках, которые wizard
+	// больше никогда не увидит. Любая ошибка SaveState отдельно логируется,
+	// но финальный exit-код приходит из original action error.
+	runCLIAction := func(name string, fn func() error) {
+		actErr := fn()
+		if saveErr := SaveState(statePath, state); saveErr != nil {
+			fmt.Fprintln(os.Stderr, name+": save state:", saveErr)
+		}
+		PrintSecretsSaveAdvice(secrets)
+		if actErr != nil {
+			os.Exit(1)
+		}
+	}
+
 	switch args[0] {
 	case "install-backend":
-		if err := actionInstallBackend(state, secrets, dl); err != nil {
-			os.Exit(1)
-		}
-		SaveState(statePath, state)
-		PrintSecretsSaveAdvice(secrets)
+		runCLIAction("install-backend", func() error { return actionInstallBackend(state, secrets, dl) })
 	case "update-backend":
-		if err := actionUpdateBackend(state, secrets, dl); err != nil {
-			os.Exit(1)
-		}
-		if err := SaveState(statePath, state); err != nil {
-			fmt.Fprintln(os.Stderr, "save state:", err)
-		}
-		PrintSecretsSaveAdvice(secrets)
+		runCLIAction("update-backend", func() error { return actionUpdateBackend(state, secrets, dl) })
 	case "install-agent":
 		nick := ""
 		for i := 1; i < len(args); i++ {
@@ -65,11 +84,16 @@ func main() {
 				nick = args[i+1]
 			}
 		}
-		if err := actionInstallAgent(state, secrets, dl, nick); err != nil {
-			os.Exit(1)
+		// Если оператор передал --agent foo, foo должен уже быть в state
+		// (создан через [4] add-router). Иначе actionInstallAgent сейчас
+		// молча промптит nickname — что в неинтерактивном CLI повисает.
+		if nick != "" && state.FindAgent(nick) == nil {
+			fmt.Fprintf(os.Stderr,
+				"install-agent: agent %q не найден в wizard.toml. Сначала запусти `wg-monitor-deploy add-router` (он создаст user'а в DB на VPS и сохранит токен).\n",
+				nick)
+			os.Exit(2)
 		}
-		SaveState(statePath, state)
-		PrintSecretsSaveAdvice(secrets)
+		runCLIAction("install-agent", func() error { return actionInstallAgent(state, secrets, dl, nick) })
 	case "update-agent":
 		agentFlag := ""
 		for i := 1; i < len(args); i++ {
@@ -77,19 +101,13 @@ func main() {
 				agentFlag = args[i+1]
 			}
 		}
-		if err := actionUpdateAgent(state, secrets, dl, agentFlag); err != nil {
-			os.Exit(1)
+		if agentFlag != "" && state.FindAgent(agentFlag) == nil {
+			fmt.Fprintf(os.Stderr, "update-agent: agent %q не найден в wizard.toml\n", agentFlag)
+			os.Exit(2)
 		}
-		if err := SaveState(statePath, state); err != nil {
-			fmt.Fprintln(os.Stderr, "save state:", err)
-		}
-		PrintSecretsSaveAdvice(secrets)
+		runCLIAction("update-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag) })
 	case "add-router":
-		if err := actionAddRouter(state, secrets, dl); err != nil {
-			os.Exit(1)
-		}
-		SaveState(statePath, state)
-		PrintSecretsSaveAdvice(secrets)
+		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
 	case "status":
 		if err := actionStatus(state, secrets); err != nil {
 			os.Exit(1)
@@ -128,7 +146,7 @@ func main() {
 					os.Exit(1)
 				}
 				fmt.Printf("removed %d entries for %s\n", n, args[2])
-			} else if err := ForgetKnownHostInteractive(); err != nil {
+			} else if err := ForgetKnownHostInteractive(state); err != nil {
 				os.Exit(1)
 			}
 		default:

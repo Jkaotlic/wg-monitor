@@ -112,6 +112,25 @@ func actionSmokeTest(state *State, secrets *SecretStore) error {
 	for _, ag := range state.Agents {
 		fmt.Println(Colorize("=== Agent: "+ag.Nickname+" ===", ColorBold))
 
+		// 0. Token auth-probe — единственная проверка, реально подтверждающая,
+		// что raw-токен в disk-кэше всё ещё совпадает с token_hash в DB.
+		// Делаем до TCP-пробы потому что не зависит от наличия SSH.
+		if state.Backend.Domain != "" {
+			tok := secrets.GetNonInteractive("WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname))
+			switch {
+			case tok == "":
+				PrintWarn("auth-probe пропущен: токен агента не в disk-кэше (запусти [4] на этом ПК для пере-enroll'а)")
+			default:
+				if ok := probeAgentTokenValid("https://"+state.Backend.Domain+"/v1/cmd?wait=0", tok); ok {
+					PrintOK("auth-probe: токен валиден (backend принимает)")
+					add(true)
+				} else {
+					PrintFail("auth-probe: backend отвечает 401 — disk-cache токен НЕ совпадает с token_hash в DB")
+					add(false)
+				}
+			}
+		}
+
 		// 1. TCP probe (no creds needed).
 		port := portOrDefault(ag.Port, 222)
 		if probeReachable(ag.Host, port, 3*time.Second) {
@@ -181,6 +200,35 @@ func actionSmokeTest(state *State, secrets *SecretStore) error {
 	// ---------- Summary ----------
 	fmt.Println(Colorize(fmt.Sprintf("%d/%d проверок прошли", ok, total), ColorBold))
 	return nil
+}
+
+// probeAgentTokenValid hits backend's authenticated /v1/cmd?wait=0 endpoint
+// with the raw token from disk-cache. Returns true if backend accepts the
+// token (any 2xx incl. 204 No Content from an empty queue), false on 401
+// (token_hash mismatch in DB) or any transport error. We DON'T fail on other
+// non-2xx codes (e.g. 5xx) — only 401 conclusively proves the auth token is
+// the wrong one; everything else is "backend is unhealthy" which the
+// existing /healthz check already covers.
+func probeAgentTokenValid(url, rawToken string) bool {
+	cli := &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	req.Header.Set("User-Agent", "wg-monitor-deploy/auth-probe")
+	resp, err := cli.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp.StatusCode != http.StatusUnauthorized
 }
 
 // smokeCheckHealthz hits the URL with a 5s timeout; expects 2xx and prints

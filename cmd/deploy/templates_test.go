@@ -35,11 +35,9 @@ func TestRenderBackendYAML(t *testing.T) {
 
 func TestRenderAgentYAML(t *testing.T) {
 	got, err := RenderAgentYAML(AgentParams{
-		BackendURL:     "https://example.com",
-		Token:          "feedface",
-		Nickname:       "router1",
-		AWGIface:       "awg0",
-		ExpectedExitIP: "1.2.3.4",
+		BackendURL: "https://example.com",
+		Token:      "feedface",
+		Nickname:   "router1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,11 +47,15 @@ func TestRenderAgentYAML(t *testing.T) {
 		"url: https://example.com",
 		`token: "feedface"`,
 		"nickname: router1",
-		"awg_iface: awg0",
-		"expected_exit_ip: 1.2.3.4",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered yaml missing %q", want)
+		}
+	}
+	// awg_iface / expected_exit_ip — deprecated в агенте; шаблон не должен их рендерить.
+	for _, dont := range []string{"awg_iface:", "expected_exit_ip:"} {
+		if strings.Contains(s, dont) {
+			t.Errorf("rendered yaml unexpectedly contains %q\nfull:\n%s", dont, s)
 		}
 	}
 }

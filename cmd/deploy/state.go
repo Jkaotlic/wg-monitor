@@ -40,8 +40,7 @@ type AgentState struct {
 	User                string `toml:"user"`
 	Arch                string `toml:"arch"`
 	ThreadID            int    `toml:"thread_id"`
-	AwgIface            string `toml:"awg_iface"`
-	ExpectedExitIP      string `toml:"expected_exit_ip"`
+	Kind                string `toml:"kind,omitempty"` // "static" (default) or "mobile" — пробрасывается в DB и решает StaleAfterMobileSec в backend
 	LastDeploy          string `toml:"last_deploy"`
 	LastDeployedVersion string `toml:"last_deployed_version"`
 }

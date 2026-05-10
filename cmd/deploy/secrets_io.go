@@ -9,7 +9,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// backupBeforeOverwrite копирует path в path.bak.<stamp>, если path
+// существует. Использует io.Copy + 0o600. Любая ошибка — warning, но не
+// останавливает import: оператор уже подтвердил force=true и важнее
+// сохранить намерение чем pessimistic abort'нуть.
+func backupBeforeOverwrite(path, stamp string) {
+	src, err := os.Open(path)
+	if err != nil {
+		// Файла нет (первый импорт) — no-op.
+		return
+	}
+	defer src.Close()
+	bakPath := path + ".bak." + stamp
+	dst, err := os.OpenFile(bakPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		PrintWarn("backup " + path + ": " + err.Error())
+		return
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		PrintWarn("backup " + path + ": " + err.Error())
+		_ = os.Remove(bakPath)
+		return
+	}
+	PrintInfo("backup: " + bakPath)
+}
 
 // archiveMember names — kept short and at the archive root so a sysadmin
 // can `tar tzf` and immediately see what's inside.
@@ -170,6 +197,17 @@ func ImportSecrets(src string, statePath string, force bool) error {
 			if _, err := os.Stat(statePath); err == nil {
 				return fmt.Errorf("%s already exists; pass force=true to overwrite", statePath)
 			}
+		}
+	}
+
+	// Backup существующих файлов с force=true. Дешёвая страховка от
+	// случайного импорта legacy-архива поверх current state — оператор
+	// видит .bak.<timestamp> рядом и может откатить вручную.
+	stamp := time.Now().UTC().Format("20060102T150405Z")
+	if force {
+		backupBeforeOverwrite(secPath, stamp)
+		if stateData != nil {
+			backupBeforeOverwrite(statePath, stamp)
 		}
 	}
 
