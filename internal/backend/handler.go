@@ -225,9 +225,19 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			http.Error(w, "id required", http.StatusBadRequest)
 			return
 		}
-		if !wire.IsValidCommandResultStatus(res.Status) {
-			http.Error(w, "invalid status", http.StatusBadRequest)
+		// Status: log-and-accept для unknown значений. Раньше backend
+		// возвращал 400 на любой статус не из whitelist'а — это ломало
+		// schema evolution: новый агент с дополнительным статусом ("partial",
+		// "rate_limited", и т.п.) терял результат, пока backend не обновлён.
+		// Postel's law для внутреннего API: liberal in what we accept.
+		if res.Status == "" {
+			http.Error(w, "status required", http.StatusBadRequest)
 			return
+		}
+		if !wire.IsValidCommandResultStatus(res.Status) {
+			d.Logger.Warn("cmd result with unknown status — accepting forward-compat",
+				"status", res.Status, "cmd_id", res.ID,
+				"nickname", NicknameFromContext(r.Context()))
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())

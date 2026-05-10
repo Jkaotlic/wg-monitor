@@ -43,9 +43,12 @@ func (s *pendingMaintStore) put(p *pendingMaint) {
 }
 
 // consume atomically removes the pendingMaint and returns it iff it matches
-// userID and is unexpired. Returns ok=false on any mismatch — and in the
-// expired case, also evicts the stale entry so a re-issued token under the
-// same key can succeed.
+// userID and is unexpired. Returns ok=false on any mismatch.
+//
+// Важно: при mismatch UserID мы НЕ удаляем pending — иначе любой member
+// чата может тапнуть кнопку чужого подтверждения и DoS'нуть owner'у его
+// maintenance-операцию (BUG-04). Удаляем только при success или истечении
+// expiry.
 func (s *pendingMaintStore) consume(userID int64, token string) (*pendingMaint, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -53,10 +56,16 @@ func (s *pendingMaintStore) consume(userID int64, token string) (*pendingMaint, 
 	if !ok {
 		return nil, false
 	}
-	delete(s.m, token)
-	if p.UserID != userID || time.Now().After(p.ExpiresAt) {
+	if p.UserID != userID {
+		// чужой member тапнул кнопку — игнорируем, токен оставляем для owner'а.
 		return nil, false
 	}
+	if time.Now().After(p.ExpiresAt) {
+		// expired — эвиктим, чтобы новый token мог занять место.
+		delete(s.m, token)
+		return nil, false
+	}
+	delete(s.m, token)
 	return p, true
 }
 

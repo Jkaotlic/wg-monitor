@@ -174,11 +174,16 @@ func TestQueue_AwaitResultTimeout(t *testing.T) {
 	}
 }
 
-func TestQueue_RecordResultRejectsInvalidStatus(t *testing.T) {
+// TestQueue_RecordResultAcceptsUnknownStatus pins forward-compat: queue
+// stores results with unknown statuses (logging is the caller's concern).
+// Empty status remains a hard error (real client bug, not schema evolution).
+func TestQueue_RecordResultAcceptsUnknownStatus(t *testing.T) {
 	q := New()
-	err := q.RecordResult(1, wire.CommandResult{ID: "x", Status: "weird"})
-	if err == nil {
-		t.Fatal("expected error on invalid status")
+	if err := q.RecordResult(1, wire.CommandResult{ID: "x", Status: "weird"}); err != nil {
+		t.Errorf("expected unknown status to be accepted, got %v", err)
+	}
+	if err := q.RecordResult(1, wire.CommandResult{ID: "y", Status: ""}); err == nil {
+		t.Errorf("expected empty status to be rejected")
 	}
 }
 

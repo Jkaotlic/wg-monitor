@@ -122,9 +122,18 @@ func main() {
 		Thresholds:     state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 	})
 	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           mux,
+		Addr:    cfg.Listen,
+		Handler: mux,
+		// Timeouts защищают от slow-loris и за-висших клиентов.
+		// ReadHeaderTimeout — отдельно жёстко (5s), даже long-poll должен
+		// прислать заголовки моментально. ReadTimeout 30s покрывает обычные
+		// /v1/report (агенты в 4G) с запасом. WriteTimeout 90s = 60s
+		// max-cmdWait (cmdGetHandler) + 30s slack — иначе long-poll
+		// завершается раньше времени. IdleTimeout даёт keep-alive 120s.
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      90 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

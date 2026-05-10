@@ -155,12 +155,18 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 }
 
 // RecordResult stores result under (userID, result.ID) and wakes any AwaitResult waiter.
+//
+// Status validation: пустой статус — отказ (явный bug в агенте). Любой
+// non-empty статус принимаем — log-and-accept policy (см. handler.go).
+// Whitelist enforcement (validCommandResultStatuses) был причиной потери
+// данных при rolling-upgrade флота с новым агентом, эмитящим неизвестный
+// backend'у статус.
 func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	if result.ID == "" {
 		return errors.New("result id is required")
 	}
-	if !wire.IsValidCommandResultStatus(result.Status) {
-		return errors.New("invalid result status: " + result.Status)
+	if result.Status == "" {
+		return errors.New("result status is required")
 	}
 	q.mu.Lock()
 	bucket, ok := q.results[userID]

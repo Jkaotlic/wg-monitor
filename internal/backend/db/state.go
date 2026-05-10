@@ -161,14 +161,24 @@ func (s *StateRepo) AllActiveHard() ([]ActiveIncidentRow, error) {
 
 // StaleHards returns hard incidents whose last_alert_at is older than `cutoff`
 // and which are not currently silenced, and have not been acked.
+//
+// silenced_until is compared against the SAME `cutoff` parameter rather than
+// SQL CURRENT_TIMESTAMP. modernc.org/sqlite serialises Go time.Time as
+// `2026-05-10T14:30:00Z` (RFC3339, capital T) while SQL CURRENT_TIMESTAMP
+// returns `2026-05-10 14:30:00` (space). Lexicographic comparison treats
+// 'T' (0x54) > ' ' (0x20), so `silenced_until < CURRENT_TIMESTAMP` was
+// always false → silenced incidents NEVER re-surface after the silence
+// window expires. Bug surfaced in 2026-05 audit (BUG-18). Using a Go-side
+// parameter via database/sql gives consistent serialisation.
 func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
+	now := cutoff.UTC()
 	rows, err := s.d.db.Query(
 		`SELECT user_id, check_name, hard_since FROM incident_state
 		 WHERE current_status = 'hard'
 		   AND last_alert_at < ?
-		   AND (silenced_until IS NULL OR silenced_until < CURRENT_TIMESTAMP)
+		   AND (silenced_until IS NULL OR silenced_until < ?)
 		   AND acked = 0`,
-		cutoff.UTC())
+		now, now)
 	if err != nil {
 		return nil, err
 	}

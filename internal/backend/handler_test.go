@@ -640,7 +640,12 @@ func TestCmdResult_DispatchesMaintNotifier_ServiceRestart(t *testing.T) {
 	testCmdResultDispatchesMaintNotifier(t, "service_restart")
 }
 
-func TestCmdResult_RejectsInvalidStatus(t *testing.T) {
+// TestCmdResult_AcceptsUnknownStatus verifies forward-compat: a status not in
+// wire.validCommandResultStatuses is logged but accepted (200), so a future
+// agent emitting "partial"/"rate_limited"/etc. doesn't lose its result during
+// a rolling fleet upgrade. Empty status is still rejected (400) — that's a
+// real client bug, not schema evolution.
+func TestCmdResult_AcceptsUnknownStatus(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
@@ -655,13 +660,25 @@ func TestCmdResult_RejectsInvalidStatus(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
+
+	// Unknown but non-empty status must be accepted (forward-compat).
 	body, _ := json.Marshal(wire.CommandResult{ID: "abc", Status: "weird"})
 	req, _ := http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, _ := http.DefaultClient.Do(req)
 	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200 for unknown status (forward-compat), got %d", resp.StatusCode)
+	}
+
+	// Empty status must still be rejected.
+	body, _ = json.Marshal(wire.CommandResult{ID: "abc2", Status: ""})
+	req, _ = http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, _ = http.DefaultClient.Do(req)
+	resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400, got %d", resp.StatusCode)
+		t.Errorf("expected 400 for empty status, got %d", resp.StatusCode)
 	}
 }
 
