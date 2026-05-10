@@ -37,7 +37,7 @@ type Poller struct {
 	tg  TGSender
 	cfg Config
 	wg  sync.WaitGroup
-	now func() time.Time // injectable for tests
+	now func() time.Time // injectable for tests; defaults to time.Now
 	// sendFailCount tracks consecutive TG-send failures per (user,check) so
 	// we don't spam ERROR every tick when TG is sustained-down (OBS-11).
 	// Reset on success.
@@ -84,11 +84,14 @@ func (p *Poller) recordSendOutcome(userID int64, checkName string, ok bool) (log
 	}
 }
 
-// SetNow overrides the clock used by tick(). Test-only.
-func (p *Poller) SetNow(now func() time.Time) {
-	if now != nil {
-		p.now = now
+// SetNow overrides the wall-clock seam for deterministic tests. Must be
+// called before Run() starts; production callers must not use this.
+func (p *Poller) SetNow(fn func() time.Time) {
+	if fn == nil {
+		p.now = time.Now
+		return
 	}
+	p.now = fn
 }
 
 func (p *Poller) Run(ctx context.Context) error {
@@ -179,14 +182,14 @@ func (p *Poller) tick(ctx context.Context) {
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
 		neighbors := p.neighborSummaries(sh.UserID, sh.CheckName)
 		text := alerts.FormatRealert(alerts.RealertArgs{
-			Nickname:      u.Nickname,
-			CheckName:     sh.CheckName,
-			HardSince:     *st.HardSince,
-			RealertCount:  count,
-			IsMobile:      u.IsMobile(),
-			Check:         check,
-			Neighbors:     neighbors,
-			RealertEvery:  p.cfg.RealertEvery,
+			Nickname:     u.Nickname,
+			CheckName:    sh.CheckName,
+			HardSince:    *st.HardSince,
+			RealertCount: count,
+			IsMobile:     u.IsMobile(),
+			Check:        check,
+			Neighbors:    neighbors,
+			RealertEvery: p.cfg.RealertEvery,
 		})
 		_, err = p.tg.SendMessage(ctx, p.cfg.ChatID, u.TelegramThreadID, text, "", nil)
 		if err != nil {
