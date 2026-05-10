@@ -31,10 +31,35 @@ type Poller struct {
 	tg  TGSender
 	cfg Config
 	wg  sync.WaitGroup
+
+	mu  sync.Mutex
+	now func() time.Time // overridable for deterministic tests; defaults to time.Now
 }
 
 func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
-	return &Poller{d: d, tg: tg, cfg: cfg}
+	return &Poller{d: d, tg: tg, cfg: cfg, now: time.Now}
+}
+
+// SetNow overrides the wall-clock for tests. Production callers must not use
+// this. When unset (or set to nil), the poller falls back to time.Now.
+func (p *Poller) SetNow(fn func() time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if fn == nil {
+		p.now = time.Now
+		return
+	}
+	p.now = fn
+}
+
+func (p *Poller) timeNow() time.Time {
+	p.mu.Lock()
+	fn := p.now
+	p.mu.Unlock()
+	if fn == nil {
+		return time.Now()
+	}
+	return fn()
 }
 
 func (p *Poller) Run(ctx context.Context) error {
@@ -108,7 +133,7 @@ func (p *Poller) neighborSummaries(userID int64, checkName string) []alerts.Neig
 }
 
 func (p *Poller) tick(ctx context.Context) {
-	cutoff := time.Now().Add(-p.cfg.RealertEvery)
+	cutoff := p.timeNow().Add(-p.cfg.RealertEvery)
 	stale, err := p.d.State().StaleHards(cutoff)
 	if err != nil {
 		slog.Error("realert: StaleHards query failed", "err", err)
@@ -129,7 +154,7 @@ func (p *Poller) tick(ctx context.Context) {
 			slog.Warn("realert: HardSince nil despite hard status", "user_id", sh.UserID)
 			continue
 		}
-		count := int(time.Since(*st.HardSince) / p.cfg.RealertEvery)
+		count := int(p.timeNow().Sub(*st.HardSince) / p.cfg.RealertEvery)
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
 		neighbors := p.neighborSummaries(sh.UserID, sh.CheckName)
 		text := alerts.FormatRealert(alerts.RealertArgs{
@@ -151,7 +176,7 @@ func (p *Poller) tick(ctx context.Context) {
 		// replies to the original HARD root, not the most recent reminder.
 		// Use BumpLastAlertAt instead of Save to avoid race-overwriting an FSM
 		// Recovery that occurred between StaleHards and this update.
-		if err := p.d.State().BumpLastAlertAt(sh.UserID, sh.CheckName, time.Now()); err != nil {
+		if err := p.d.State().BumpLastAlertAt(sh.UserID, sh.CheckName, p.timeNow()); err != nil {
 			slog.Error("realert: bump LastAlertAt failed", "user_id", sh.UserID, "err", err)
 		}
 	}

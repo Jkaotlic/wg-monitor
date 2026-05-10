@@ -341,15 +341,8 @@ func TestCommandResultRelayEndToEnd(t *testing.T) {
 	}
 
 	// 3. Wait for the async relay to fire (handler kicks goroutine).
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if rec.calls() > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if rec.calls() != 1 {
-		t.Fatalf("expected 1 NotifyCommandResult call, got %d", rec.calls())
+	if got := waitForRelay(t, rec.calls, 1, 2*time.Second); got != 1 {
+		t.Fatalf("expected 1 NotifyCommandResult call, got %d", got)
 	}
 	got := rec.last()
 	if got.ref.ChatID != -100 || got.ref.MessageID != 4242 {
