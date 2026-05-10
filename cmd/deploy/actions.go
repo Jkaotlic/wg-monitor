@@ -206,8 +206,14 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		if nick == "" {
 			return fmt.Errorf("nickname required")
 		}
-		state.Agents = append(state.Agents, AgentState{Nickname: nick})
-		ag = &state.Agents[len(state.Agents)-1]
+		// Повторный FindAgent после prompt'а: если оператор только что
+		// ввёл nickname агента, добавленного через [4] — переиспользуем
+		// существующий entry вместо создания дубликата в state.Agents.
+		ag = state.FindAgent(nick)
+		if ag == nil {
+			state.Agents = append(state.Agents, AgentState{Nickname: nick})
+			ag = &state.Agents[len(state.Agents)-1]
+		}
 	}
 
 	// Каждый Ask условный — поле уже могли заполнить в state (через
@@ -250,15 +256,19 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	}
 
 	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
-	tok := os.Getenv(tokenEnv)
+	// env (выставляет [4] в текущем процессе) + disk-кэш (выставляет [4]
+	// между сессиями). Случайно сгенерить новый токен здесь нельзя —
+	// раскорреляция с DB (token_hash на VPS не совпадёт) → backend
+	// будет отвергать heartbeat'ы агента молча.
+	tok := secrets.GetNonInteractive(tokenEnv)
 	if tok == "" {
-		PrintWarn("Токен агента не найден в " + tokenEnv + ".")
-		PrintWarn("Он должен был лечь в disk-кэш при [4] Add Router. Введи руками или сгенерирую новый:")
-		tok = Ask("Token (Enter — сгенерировать новый)", "")
-		if tok == "" {
-			tok = randomHexToken(32)
-			PrintWarn("новый токен: " + tok + " — сохрани в " + tokenEnv + ". В DB на VPS его нет — backend не примет heartbeat'ы!")
-		}
+		PrintFail(fmt.Sprintf(
+			"токен %s не найден ни в env, ни в disk-кэше.\n"+
+				"  Это значит, что %s ещё не зарегистрирован в DB на VPS.\n"+
+				"  Запусти [4] Добавить новый роутер — wizard сам создаст user'а через wg-monitor-cli\n"+
+				"  и сохранит raw-токен в disk-кэш. После этого можно использовать [3] для переустановки.",
+			tokenEnv, ag.Nickname))
+		return fmt.Errorf("agent token for %s not in cache; use [4] Add Router first", ag.Nickname)
 	}
 
 	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
@@ -266,18 +276,28 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		return err
 	}
 
-	PrintStep(1, 7, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
+	PrintStep(1, 8, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
 	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
 	if err != nil {
 		// Single retry: дефолты (192.168.0.1:222 root) подходят к
 		// Keenetic из коробки, но если у оператора другой роутер /
-		// нестандартный port forward / user не root — даём ввести
-		// руками и пробуем ещё раз. Дальше — bail.
+		// нестандартный port forward / user не root / устаревший
+		// disk-кэш с не тем паролем — даём перевввести и host/port/
+		// user, и пароль (Enter — оставить текущий). Дальше — bail.
 		PrintWarn("SSH не подключился: " + err.Error())
 		PrintInfo("введи параметры роутера руками (Enter — оставить текущее)")
 		ag.Host = orDefault(Ask("Хост роутера", ag.Host), ag.Host)
 		ag.Port = parseIntOr(Ask("SSH port", fmt.Sprint(ag.Port)), ag.Port)
 		ag.User = orDefault(Ask("SSH user", ag.User), ag.User)
+		if newPass := AskSecret("пароль root для " + ag.Nickname + " (Enter — оставить прежний)"); newPass != "" {
+			pass = newPass
+			// Перезаписываем disk-кэш под per-nickname env — иначе
+			// при следующем запуске опять подтянется старый
+			// (кривой) пароль и retry-цикл повторится.
+			if err := secrets.Set("WG_KEENETIC_PASS_"+strings.ToUpper(ag.Nickname), pass); err != nil {
+				PrintWarn("не смог обновить пароль в disk-кэше: " + err.Error())
+			}
+		}
 		s, err = ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
 		if err != nil {
 			return err
