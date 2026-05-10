@@ -40,9 +40,9 @@ checks:
 	if cfg.Agent.Interval() != 60*time.Second {
 		t.Errorf("interval: %v", cfg.Agent.Interval())
 	}
-	if cfg.Checks.AWG.Interface != "awg0" {
-		t.Errorf("awg_iface: %q", cfg.Checks.AWG.Interface)
-	}
+	// AWG.Interface / AWG.ExpectedExitIP — deprecated fields removed in rc20
+	// cleanup. yaml.v3 Unmarshal silently drops unknown keys, so legacy
+	// config.yaml files keep parsing without surfacing those values.
 }
 
 func TestLoadConfig_DefaultsInterval(t *testing.T) {
@@ -173,9 +173,9 @@ checks:
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if cfg.Checks.AWG.Interface != "awg0" || cfg.Checks.AWG.ExpectedExitIP != "198.51.100.21" {
-		t.Fatalf("awg parse: %+v", cfg.Checks.AWG)
-	}
+	// AWG.Interface / AWG.ExpectedExitIP были удалены в rc20 cleanup —
+	// проверять на YAML-уровне больше нечего, важно лишь что HandshakeMaxAge
+	// парсится (см. ниже) и весь блок не падает на unknown-полях.
 	if len(cfg.Checks.DNS.Endpoints) != 3 || cfg.Checks.DNS.FailThreshold != 2 {
 		t.Fatalf("dns parse: %+v", cfg.Checks.DNS)
 	}

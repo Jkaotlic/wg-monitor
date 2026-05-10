@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  vet-test:
+    name: vet + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go vet ./...
+      - run: go test ./... -count=1 -timeout 180s
+
+  test-race:
+    name: race detector
+    # TEST-01 от rc20 audit: codebase имеет ≥5 concurrency surfaces
+    # (Dispatcher.ensureTopic double-checked-lock, Watcher.scan map,
+    # async relay в handler, retention 3 параллельных loop'а, command
+    # queue), но `-race` НИКОГДА не запускался — Makefile и CI оба
+    # пропускали. CGO=1 (race требует gcc) на ubuntu-latest есть из коробки.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test ./... -race -count=1 -timeout 360s
+        env:
+          CGO_ENABLED: 1

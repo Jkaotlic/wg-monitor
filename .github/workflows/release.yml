@@ -23,12 +23,18 @@ jobs:
           - { os: ubuntu-latest, goos: linux, goarch: arm64,  name: wg-monitor-agent-linux-arm64,  pkg: ./cmd/agent, upx: true }
           - { os: ubuntu-latest, goos: linux, goarch: mipsle, gomips: softfloat, name: wg-monitor-agent-linux-mipsle, pkg: ./cmd/agent, upx: true }
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v4
+      # Pin actions by commit SHA — protects against malicious tag re-pushes
+      # in 3rd-party action repos. Comments name the released version for
+      # human reference; bump SHAs when bumping the version.
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
         with:
-          go-version: '1.26'
+          go-version-file: go.mod
+          cache: true
 
       - name: Install UPX
         if: matrix.upx
@@ -53,7 +59,7 @@ jobs:
         if: matrix.upx
         run: upx --best --lzma dist/${{ matrix.name }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@5d5d22a31266ced268874388b861e4b58bb5c2f3 # v4.3.1
         with:
           name: ${{ matrix.name }}
           path: dist/${{ matrix.name }}
@@ -65,7 +71,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@65a9edc5881444af0b9093a5e628f2fe47ea3b2e # v4.1.7
         with:
           path: dist
           merge-multiple: true
@@ -77,7 +83,7 @@ jobs:
           cat checksums.txt
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v2.0.4
         with:
           files: dist/*
           generate_release_notes: true

@@ -104,17 +104,13 @@ type ChecksConfig struct {
 	DNS DNSCheckConfig `yaml:"dns"`
 }
 
-// AWGCheckConfig: most former fields (interface, expected_exit_ip, marker_url,
-// routing_probe_url) are no longer used — those checks were replaced with
-// awg-manager API wrappers in the 2026-04-29 pivot. The struct is kept so
-// existing config.yaml files don't fail to parse; legacy fields are silently
-// ignored. Only HandshakeMaxAgeSec still has effect.
+// AWGCheckConfig: legacy `interface`, `expected_exit_ip`, `marker_url`,
+// `routing_probe_url` fields were dropped in the rc20 audit cleanup —
+// gopkg.in/yaml.v3's Unmarshal already silently ignores unknown keys, so
+// legacy config.yaml files keep parsing without those fields in the struct.
+// Only HandshakeMaxAgeSec still has effect (post awg-manager pivot, 2026-04-29).
 type AWGCheckConfig struct {
-	Interface          string `yaml:"interface,omitempty"`           // deprecated (legacy parse only)
-	ExpectedExitIP     string `yaml:"expected_exit_ip,omitempty"`    // deprecated
-	MarkerURL          string `yaml:"marker_url,omitempty"`          // deprecated
-	RoutingProbeURL    string `yaml:"routing_probe_url,omitempty"`   // deprecated
-	HandshakeMaxAgeSec int    `yaml:"handshake_max_age_sec,omitempty"`
+	HandshakeMaxAgeSec int `yaml:"handshake_max_age_sec,omitempty"`
 }
 
 func (a AWGCheckConfig) HandshakeMaxAge() time.Duration {
