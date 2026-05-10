@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -216,18 +217,18 @@ func (c *Client) ImportConf(ctx context.Context, rawConf, name, backend string) 
 
 // StartTunnel calls POST /api/control/start?id=<tunnelID>.
 func (c *Client) StartTunnel(ctx context.Context, tunnelID string) error {
-	return c.post(ctx, "/api/control/start?id="+tunnelID, nil, nil)
+	return c.post(ctx, "/api/control/start?id="+url.QueryEscape(tunnelID), nil, nil)
 }
 
 // ReplaceConf calls POST /api/tunnels/replace?id=<tunnelID> — replaces an
 // existing tunnel's config in-place. Returns the updated Tunnel.
 func (c *Client) ReplaceConf(ctx context.Context, tunnelID, rawConf, name string) (*Tunnel, error) {
-	return c.confPost(ctx, "/api/tunnels/replace?id="+tunnelID, rawConf, name)
+	return c.confPost(ctx, "/api/tunnels/replace?id="+url.QueryEscape(tunnelID), rawConf, name)
 }
 
 // DeleteTunnel calls POST /api/tunnels/delete?id=<tunnelID>.
 func (c *Client) DeleteTunnel(ctx context.Context, tunnelID string) error {
-	return c.post(ctx, "/api/tunnels/delete?id="+tunnelID, nil, nil)
+	return c.post(ctx, "/api/tunnels/delete?id="+url.QueryEscape(tunnelID), nil, nil)
 }
 
 // GetEnv is a public version of the lowercase get helper. Used by callers in

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -60,7 +61,7 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 
 func getTunnel(ctx context.Context, c *awgmgr.Client, id string) (*awgmgr.Tunnel, error) {
 	var env awgmgr.Envelope[awgmgr.Tunnel]
-	if err := c.GetEnv(ctx, "/api/tunnels/get?id="+id, &env); err != nil {
+	if err := c.GetEnv(ctx, "/api/tunnels/get?id="+url.QueryEscape(id), &env); err != nil {
 		return nil, err
 	}
 	if !env.Success {

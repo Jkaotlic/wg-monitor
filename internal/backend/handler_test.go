@@ -671,14 +671,15 @@ func TestCmdResult_AcceptsUnknownStatus(t *testing.T) {
 		t.Errorf("expected 200 for unknown status (forward-compat), got %d", resp.StatusCode)
 	}
 
-	// Empty status must still be rejected.
+	// Empty status must still be rejected. 422 = parsed correctly, semantic
+	// violation of required field (API-03).
 	body, _ = json.Marshal(wire.CommandResult{ID: "abc2", Status: ""})
 	req, _ = http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, _ = http.DefaultClient.Do(req)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("expected 400 for empty status, got %d", resp.StatusCode)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("expected 422 for empty status, got %d", resp.StatusCode)
 	}
 }
 

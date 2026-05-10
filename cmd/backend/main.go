@@ -40,6 +40,7 @@ func main() {
 		slog.Error("load config", "err", err)
 		os.Exit(2)
 	}
+	backend.SetVersion(Version)
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
 	slog.SetDefault(logger)
 
@@ -113,6 +114,9 @@ func main() {
 	cb.SetUpstream(upCache)
 	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)
 
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
 		DB:             d,
@@ -124,6 +128,9 @@ func main() {
 		MaintNotifier:  maintNotifier,
 		UI:             cfg.UI,
 		Thresholds:     state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		// Wire the server-shutdown ctx so cmd-result relay goroutines respect
+		// SIGTERM and don't outlive srv.Shutdown (BUG-15).
+		ShutdownCtx: ctx,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,
@@ -139,8 +146,6 @@ func main() {
 		WriteTimeout:      90 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
 
 	// notifyDegradation surfaces a fatal background-goroutine exit to the
 	// admin via TG. Без этого backend продолжал отвечать /healthz=200 пока

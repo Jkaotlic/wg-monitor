@@ -200,8 +200,18 @@ func (d *Downloader) downloadTo(url, path string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-	return err
+	// Cap downloads at 200 MB so a poisoned CDN/release can't fill the
+	// operator's disk before the SHA verify catches it (SEC-06). All current
+	// release assets are ≤30 MB; 200 MB is a generous ceiling.
+	const maxArtifactBytes = 200 << 20
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxArtifactBytes+1))
+	if err != nil {
+		return err
+	}
+	if n > maxArtifactBytes {
+		return fmt.Errorf("download exceeded %d-byte cap (got >%d) for %s", maxArtifactBytes, maxArtifactBytes, url)
+	}
+	return nil
 }
 
 func hashHex(b []byte) string {
