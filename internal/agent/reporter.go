@@ -35,6 +35,7 @@ type Reporter struct {
 	awgClient    *awgmgr.Client // optional, used to force fresh pingcheck on resume
 	statePath    string         // persists last_report_at across agent restarts
 	mu           sync.Mutex
+	sendOnceMu   sync.Mutex // serialises sendOnce; see sendOnce comment
 	lastReportAt time.Time
 	forceResumed bool // set by ForceResumed; consumed by next sendOnce
 }
@@ -51,6 +52,9 @@ type ReporterConfig struct {
 }
 
 func NewReporter(cfg ReporterConfig) *Reporter {
+	if cfg.Interval <= 0 {
+		cfg.Interval = 60 * time.Second
+	}
 	r := &Reporter{
 		sender:      cfg.Sender,
 		version:     cfg.Version,
@@ -89,7 +93,16 @@ func (r *Reporter) ForceResumed(ctx context.Context) {
 	r.sendOnce(ctx)
 }
 
+// sendMu serialises sendOnce — both the scheduled tick and ForceResumed call
+// sendOnce. Without serialisation, concurrent invocations issue duplicate
+// /v1/report POSTs and pollute events with same-timestamp duplicates.
 func (r *Reporter) sendOnce(ctx context.Context) {
+	r.sendOnceMu.Lock()
+	defer r.sendOnceMu.Unlock()
+	r.sendOnceLocked(ctx)
+}
+
+func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	start := time.Now()
 
 	r.mu.Lock()
@@ -189,7 +202,10 @@ func (r *Reporter) loadLastReportAt() time.Time {
 		return time.Time{}
 	}
 	var s reporterState
-	if json.Unmarshal(body, &s) != nil {
+	if err := json.Unmarshal(body, &s); err != nil {
+		// State file existed but was corrupt: surface so accumulated stale
+		// `.tmp` artefacts or aborted writes are diagnosable.
+		slog.Warn("reporter state corrupt; treating agent as freshly-started", "path", r.statePath, "err", err)
 		return time.Time{}
 	}
 	return s.LastReportAt

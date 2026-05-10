@@ -1,10 +1,42 @@
 package upstream
 
 import (
+	"context"
 	"strings"
 
 	"golang.org/x/mod/semver"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
+
+// UpdateInfo is the canonical "X needs an update" record used by both the
+// smart-reply Updates section and the Maintenance panel rendering. Both UI
+// surfaces project this into their own struct (LOGIC-09).
+type UpdateInfo struct {
+	Name      string
+	Installed string
+	Available string
+}
+
+// ComputeUpdates produces the soft-warning list comparing a wire.VersionAudit
+// against the upstream cache. Pure-ish (passes ctx to Cache.Latest); nil-safe
+// for cache. Each caller projects to its UI struct after this returns.
+func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) []UpdateInfo {
+	var out []UpdateInfo
+	if va.FirmwareAvail != "" && FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail) {
+		out = append(out, UpdateInfo{Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail})
+	}
+	if cache == nil {
+		return out
+	}
+	if v, _ := cache.Latest(ctx, "awgmgr"); v != "" && SoftwareNewerThan(va.AwgmgrVersion, v) {
+		out = append(out, UpdateInfo{Name: "awg-manager", Installed: va.AwgmgrVersion, Available: v})
+	}
+	if v, _ := cache.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && SoftwareNewerThan(va.HrneoVersion, v) {
+		out = append(out, UpdateInfo{Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v})
+	}
+	return out
+}
 
 // SoftwareNewerThan returns true if `candidate` is strictly newer than
 // `installed` in semver order. Returns false if either input is empty or

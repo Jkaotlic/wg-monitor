@@ -225,21 +225,20 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		Args:     cmdArgs,
 		IssuedAt: time.Now().UTC(),
 	}
-	// When invoked from a real callback, record MessageRef so the result can
-	// reply to the original alert. Tests pass q=nil and use bare Enqueue.
+	// Always go through EnqueueWithRef so the result-relay codepath is the
+	// single source of truth. Tests previously passed q==nil and went through
+	// the bare-Enqueue branch, but that diverged production from tests; the
+	// nil-ref case is harmless (zero ChatID/MessageID skips the relay).
+	var ref cmdpkg.MessageRef
 	if q != nil {
-		ref := cmdpkg.MessageRef{
+		ref = cmdpkg.MessageRef{
 			ChatID:    q.Message.Chat.ID,
 			MessageID: q.Message.MessageID,
 			ThreadID:  q.Message.MessageThreadID,
 		}
-		if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-			return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
-		}
-	} else {
-		if err := a.sink.Enqueue(args.UserID, cmd); err != nil {
-			return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
-		}
+	}
+	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+		return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
 	}
 	return formatQueuedStatus(args.Action), nil
 }

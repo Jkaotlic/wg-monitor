@@ -3,7 +3,6 @@ package callbacks
 import (
 	"context"
 	cryptoRand "crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -711,34 +710,21 @@ func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 }
 
 // collectActiveIncidents returns each `incident_state` row with
-// current_status='hard' for this user. Direct SQL — no new repo method needed.
-//
-// silenced_until сравнивается с Go-side time.Now().UTC() — см. длинный комментарий
-// в db.StateRepo.StaleHards: SQL CURRENT_TIMESTAMP возвращает другой формат,
-// чем хранится в колонке (space vs T separator), и lexicographic compare
-// никогда не даёт true.
+// current_status='hard' for this user. Routed via StateRepo so the SQL stays
+// in one place (LOGIC-07).
 func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
-	q, err := r.d.SQL().Query(`SELECT check_name, hard_since, consecutive_fails
-                            FROM incident_state
-                           WHERE user_id = ? AND current_status = 'hard'
-                             AND (silenced_until IS NULL OR silenced_until < ?)
-                             AND acked = 0`, userID, time.Now().UTC())
+	rows, err := r.d.State().ActiveHardForUser(userID, time.Now())
 	if err != nil {
 		slog.Warn("collectActiveIncidents: query failed", "err", err, "user", userID)
 		return nil
 	}
-	defer q.Close()
-	var out []alerts.IncidentView
-	for q.Next() {
-		var iv alerts.IncidentView
-		var hs sql.NullTime
-		if err := q.Scan(&iv.CheckName, &hs, &iv.FailCount); err != nil {
-			continue
-		}
-		if hs.Valid {
-			iv.HardSince = hs.Time
-		}
-		out = append(out, iv)
+	out := make([]alerts.IncidentView, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, alerts.IncidentView{
+			CheckName: row.CheckName,
+			HardSince: row.HardSince,
+			FailCount: row.FailCount,
+		})
 	}
 	return out
 }
@@ -1179,29 +1165,17 @@ func (r *Router) SetUpstream(c *upstream.Cache) {
 	r.upstream = c
 }
 
-// computeUpdates builds the soft-warning list for the smart-reply Updates
-// section from the latest VersionAudit + the upstream Cache (nil-safe).
-// Compares with FirmwareNewerThan / SoftwareNewerThan; mismatches return
-// false so we never raise false-positive warnings.
+// computeUpdates projects upstream.ComputeUpdates into alerts.UpdateAvailable
+// for the smart-reply Updates section. Single source of truth via the upstream
+// helper (LOGIC-09).
 func computeUpdates(ctx context.Context, up *upstream.Cache, va wire.VersionAudit) []alerts.UpdateAvailable {
-	var out []alerts.UpdateAvailable
-	if va.FirmwareAvail != "" && upstream.FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail) {
-		out = append(out, alerts.UpdateAvailable{
-			Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail,
-		})
+	infos := upstream.ComputeUpdates(ctx, up, va)
+	if len(infos) == 0 {
+		return nil
 	}
-	if up == nil {
-		return out
-	}
-	if v, _ := up.Latest(ctx, "awgmgr"); v != "" && upstream.SoftwareNewerThan(va.AwgmgrVersion, v) {
-		out = append(out, alerts.UpdateAvailable{
-			Name: "awg-manager", Installed: va.AwgmgrVersion, Available: v,
-		})
-	}
-	if v, _ := up.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && upstream.SoftwareNewerThan(va.HrneoVersion, v) {
-		out = append(out, alerts.UpdateAvailable{
-			Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v,
-		})
+	out := make([]alerts.UpdateAvailable, 0, len(infos))
+	for _, u := range infos {
+		out = append(out, alerts.UpdateAvailable{Name: u.Name, Installed: u.Installed, Available: u.Available})
 	}
 	return out
 }

@@ -144,9 +144,10 @@ func tunnelFailReasons(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, maxAge time.
 		if pc.Status != "" && pc.Status != "alive" {
 			reasons = append(reasons, fmt.Sprintf("pingCheck=%s (fails %d/%d)", pc.Status, pc.FailCount, pc.FailThreshold))
 		}
-		if pc.RestartCount > 0 {
-			reasons = append(reasons, fmt.Sprintf("auto-restarted %dx", pc.RestartCount))
-		}
+		// pc.RestartCount is the cumulative restart counter since awg-manager
+		// boot, not a current-failure indicator. A live tunnel with a non-zero
+		// restart history was previously kept HARD forever — log only via
+		// Details (formatter renders it for context).
 	} else if tu.PingCheck.Status != "" && tu.PingCheck.Status != "alive" {
 		reasons = append(reasons, fmt.Sprintf("pingCheck=%s (fails %d/%d)", tu.PingCheck.Status, tu.PingCheck.FailCount, tu.PingCheck.FailThreshold))
 	}

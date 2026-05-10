@@ -69,6 +69,9 @@ func main() {
 		StaleAfterMobile: time.Duration(cfg.Heartbeat.StaleAfterMobileSec) * time.Second,
 		ResumeGrace:      time.Duration(cfg.Heartbeat.ResumeGraceSec) * time.Second,
 		ScanEvery:        time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
+		// Reuse the realert cadence so operators tuning RealertEverySec see a
+		// matching ROUTER-OFFLINE re-notify cadence (LOGIC-03).
+		RenotifyEvery: time.Duration(cfg.State.RealertEverySec) * time.Second,
 	})
 
 	cmdQueue := cmd.New()
@@ -170,6 +173,24 @@ func main() {
 		Logger: logger,
 	}
 	go retentionPolicy.Run(ctx)
+
+	// Janitor: evict origin/result entries from the in-memory cmd.Queue older
+	// than 1h. Production relay-path purges origins on consume; this guards
+	// against the orphan-result and crashed-agent cases (LOGIC-02).
+	go func() {
+		t := time.NewTicker(15 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if o, r := cmdQueue.Sweep(1 * time.Hour); o > 0 || r > 0 {
+					logger.Debug("cmd queue swept", "origins", o, "results", r)
+				}
+			}
+		}
+	}()
 
 	go func() {
 		if err := cb.Run(ctx); err != nil {

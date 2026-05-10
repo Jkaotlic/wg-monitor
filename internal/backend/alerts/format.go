@@ -112,6 +112,10 @@ type RealertArgs struct {
 	IsMobile     bool
 	Check        wire.Check
 	Neighbors    []NeighborSummary
+	// RealertEvery is the configured re-alert cadence. Used to render the
+	// "/ 6h" suffix in the tail; if zero, defaults to 6h to preserve old
+	// behaviour for callers that don't pass it yet.
+	RealertEvery time.Duration
 }
 
 // FormatRealert renders a STILL-DOWN reminder using the same body writers as
@@ -153,12 +157,36 @@ func FormatRealert(args RealertArgs) string {
 	}
 
 	age := time.Since(args.HardSince).Round(time.Minute)
-	fmt.Fprintf(&b, "\nс %s (%s назад) · Re-alert #%d / 6h",
+	cadence := args.RealertEvery
+	if cadence <= 0 {
+		cadence = 6 * time.Hour
+	}
+	fmt.Fprintf(&b, "\nс %s (%s назад) · Re-alert #%d / %s",
 		args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
 		durFmt(age),
 		args.RealertCount,
+		shortDur(cadence),
 	)
 	return b.String()
+}
+
+// shortDur renders a duration as "6h" / "30m" / "1h30m" — no fractional units.
+func shortDur(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	h := int(d / time.Hour)
+	m := int((d % time.Hour) / time.Minute)
+	switch {
+	case h > 0 && m > 0:
+		return fmt.Sprintf("%dh%dm", h, m)
+	case h > 0:
+		return fmt.Sprintf("%dh", h)
+	case m > 0:
+		return fmt.Sprintf("%dm", m)
+	default:
+		return fmt.Sprintf("%ds", int(d/time.Second))
+	}
 }
 
 // checkCategory classifies a check name so the formatter can dispatch.

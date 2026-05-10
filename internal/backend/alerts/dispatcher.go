@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -76,6 +77,8 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		}
 		if u, err := di.d.Users().GetByID(userID); err == nil {
 			args.IsMobile = u.IsMobile()
+		} else {
+			slog.Warn("dispatch HARD: user lookup failed; mobile-badge omitted", "user_id", userID, "err", err)
 		}
 		// Tunnel checks get neighbour context: list other tunnel_* siblings
 		// so the operator can see at a glance whether this is one tunnel
@@ -111,7 +114,10 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if err != nil {
 			return fmt.Errorf("ensure topic: %w", err)
 		}
-		prev, _ := di.d.State().Get(userID, checkName)
+		prev, prevErr := di.d.State().Get(userID, checkName)
+		if prevErr != nil {
+			slog.Warn("recovery: state.Get failed; rendering without HardSince", "user_id", userID, "check", checkName, "err", prevErr)
+		}
 		var hardSince time.Time
 		if prev.HardSince != nil {
 			hardSince = *prev.HardSince
@@ -144,16 +150,25 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 func (di *Dispatcher) collectNeighbors(userID int64, excludeCheck string) []NeighborSummary {
 	rows, err := di.d.Events().LatestEventsByPrefix(userID, "tunnel_")
 	if err != nil {
+		slog.Warn("collectNeighbors: events lookup failed", "user_id", userID, "err", err)
 		return nil
 	}
+	return BuildNeighborSummaries(rows, excludeCheck)
+}
+
+// BuildNeighborSummaries projects events.LatestEventsByPrefix rows into
+// renderable []NeighborSummary, applying the ping_check_status override and
+// JSON detail extraction that both dispatcher and realert.poller need
+// identically (LOGIC-08). Single source of truth for "neighbour view".
+func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborSummary {
 	var out []NeighborSummary
 	for _, r := range rows {
 		if r.CheckName == excludeCheck {
 			continue
 		}
 		ns := NeighborSummary{CheckName: r.CheckName, Status: r.Status}
-		var details map[string]any
 		if r.DetailsJSON != "" && r.DetailsJSON != "null" {
+			var details map[string]any
 			if err := json.Unmarshal([]byte(r.DetailsJSON), &details); err == nil {
 				ns.TunnelName, _ = details["tunnel_name"].(string)
 				ns.Interface, _ = details["interface"].(string)
