@@ -5,6 +5,7 @@ package checks
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -36,10 +37,12 @@ func OK(name string, start time.Time, details map[string]any) wire.Check {
 	for k, v := range details {
 		out[k] = v
 	}
+	dur := time.Since(start)
+	slog.Debug("check ok", "name", name, "duration_ms", dur.Milliseconds())
 	return wire.Check{
 		Name:       name,
 		Status:     "ok",
-		DurationMs: time.Since(start).Milliseconds(),
+		DurationMs: dur.Milliseconds(),
 		Details:    out,
 	}
 }
@@ -50,10 +53,12 @@ func Fail(name string, start time.Time, errMsg string, details map[string]any) w
 		out[k] = v
 	}
 	out["error"] = errMsg
+	dur := time.Since(start)
+	slog.Warn("check failed", "name", name, "err", errMsg, "duration_ms", dur.Milliseconds())
 	return wire.Check{
 		Name:       name,
 		Status:     "fail",
-		DurationMs: time.Since(start).Milliseconds(),
+		DurationMs: dur.Milliseconds(),
 		Details:    out,
 	}
 }
