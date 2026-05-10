@@ -252,3 +252,86 @@ func TestDispatcherRecoveryZeroesAcked(t *testing.T) {
 }
 
 func ptrT(t time.Time) *time.Time { return &t }
+
+// TestSendOffline_HappyPath: heartbeat watcher invokes SendOffline; topic
+// must resolve via ensureTopic and a non-keyboard SendMessage fires with
+// the OFFLINE text shape (TEST-04).
+func TestSendOffline_HappyPath(t *testing.T) {
+	d := newDB(t)
+	tok := "5555555555555555555555555555555555555555555555555555555555555555"
+	uid, _ := d.Users().Insert("dora", tok, "1.1.1.1", "awg0")
+	d.Users().UpdateThreadID(uid, 8888)
+	ftg := &fakeTG{}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	if err := disp.SendOffline(context.Background(), uid, "dora", 12*time.Minute); err != nil {
+		t.Fatalf("SendOffline: %v", err)
+	}
+	if len(ftg.sent) != 1 {
+		t.Fatalf("expected 1 plain SendMessage, got %d", len(ftg.sent))
+	}
+	if !strings.Contains(ftg.sent[0].text, "ROUTER OFFLINE") {
+		t.Fatalf("text missing ROUTER OFFLINE: %q", ftg.sent[0].text)
+	}
+	if ftg.sent[0].thread == nil || *ftg.sent[0].thread != 8888 {
+		t.Fatalf("thread mismatch: %v", ftg.sent[0].thread)
+	}
+}
+
+// TestSendOffline_TopicCreateFailure: ensureTopic surfaces fakeTG.topicErr;
+// SendOffline must propagate, not swallow.
+func TestSendOffline_TopicCreateFailure(t *testing.T) {
+	d := newDB(t)
+	tok := "6666666666666666666666666666666666666666666666666666666666666666"
+	uid, _ := d.Users().Insert("eve", tok, "1.1.1.1", "awg0")
+	// no UpdateThreadID — ensureTopic will hit CreateForumTopic
+	ftg := &fakeTG{topicErr: errStub("rate limited")}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	if err := disp.SendOffline(context.Background(), uid, "eve", time.Hour); err == nil {
+		t.Fatalf("expected error from SendOffline when topic create fails")
+	}
+	if len(ftg.sent) != 0 {
+		t.Fatalf("no message should have been sent on topic-create-failure, got %d", len(ftg.sent))
+	}
+}
+
+type errStub string
+
+func (e errStub) Error() string { return string(e) }
+
+// TestBuildNeighborSummaries: shared helper used by both dispatcher and
+// realert; covers the four interesting paths — empty, exclusion of self,
+// ping_check_status override, malformed JSON tolerated (LOGIC-08, TEST-04).
+func TestBuildNeighborSummaries(t *testing.T) {
+	rows := []db.EventRow{
+		{CheckName: "tunnel_self", Status: "fail", DetailsJSON: `{"tunnel_name":"self"}`},
+		{CheckName: "tunnel_a", Status: "ok", DetailsJSON: `{"tunnel_name":"alpha","interface":"nwg0","handshake_age_sec":42}`},
+		{CheckName: "tunnel_b", Status: "fail", DetailsJSON: `{"tunnel_name":"beta","ping_check_status":"dead"}`},
+		{CheckName: "tunnel_c", Status: "ok", DetailsJSON: `not-json`},
+	}
+	out := BuildNeighborSummaries(rows, "tunnel_self")
+	if len(out) != 3 {
+		t.Fatalf("expected 3 entries (self excluded), got %d", len(out))
+	}
+	got := map[string]NeighborSummary{}
+	for _, ns := range out {
+		got[ns.CheckName] = ns
+	}
+	if got["tunnel_a"].TunnelName != "alpha" || got["tunnel_a"].HandshakeAge != 42 {
+		t.Errorf("alpha row: %+v", got["tunnel_a"])
+	}
+	// ping_check_status override: stored Status was "fail", details promoted to "dead".
+	if got["tunnel_b"].Status != "dead" {
+		t.Errorf("beta status override: %+v", got["tunnel_b"])
+	}
+	// malformed JSON tolerated: stored Status preserved.
+	if got["tunnel_c"].Status != "ok" {
+		t.Errorf("tunnel_c with bad JSON should keep stored Status: %+v", got["tunnel_c"])
+	}
+}
+
+// TestBuildNeighborSummaries_Empty: nil input → nil output (no allocation).
+func TestBuildNeighborSummaries_Empty(t *testing.T) {
+	if got := BuildNeighborSummaries(nil, ""); got != nil {
+		t.Fatalf("expected nil for nil input, got %v", got)
+	}
+}
