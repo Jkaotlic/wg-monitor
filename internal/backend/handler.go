@@ -202,6 +202,22 @@ func reportHandler(d Deps) http.HandlerFunc {
 				continue
 			}
 			tr := state.Apply(prev, c.Status, time.Now(), d.Thresholds)
+			// FSM transition timeline for post-mortem (OBS-09). Hard/Recovery
+			// stay at Info; SoftFlap is Debug to avoid noise on transient flaps.
+			switch tr.Kind {
+			case state.Hard, state.Recovery:
+				d.Logger.Info("fsm transition",
+					"nickname", nick, "check", c.Name,
+					"kind", tr.Kind.String(),
+					"prev_status", prev.CurrentStatus, "next_status", tr.Next.CurrentStatus,
+					"consecutive_fails", tr.Next.ConsecutiveFails,
+				)
+			case state.SoftFlap:
+				d.Logger.Debug("fsm transition",
+					"nickname", nick, "check", c.Name, "kind", tr.Kind.String(),
+					"consecutive_fails", tr.Next.ConsecutiveFails,
+				)
+			}
 			if err := d.Dispatcher.Handle(r.Context(), uid, nick, c.Name, tr, c); err != nil {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
 			}

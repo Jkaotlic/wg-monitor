@@ -80,13 +80,44 @@ func (p *Policy) prune(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	p.Logger.Info("retention: events pruned", "before", cutoff.UTC(), "deleted", deleted)
+	// daily_soft_flaps shares the same retention horizon as events (DB-08).
+	// Date format 'YYYY-MM-DD' lex-compares correctly so the cutoff in
+	// time.DateOnly is sufficient.
+	flapCutoff := cutoff.UTC().Format(time.DateOnly)
+	flapsDeleted := int64(0)
+	if res, err := p.DB.SQL().ExecContext(ctx, `DELETE FROM daily_soft_flaps WHERE date < ?`, flapCutoff); err != nil {
+		p.Logger.Warn("retention: daily_soft_flaps prune failed", "err", err)
+	} else {
+		flapsDeleted, _ = res.RowsAffected()
+	}
+	// incident_state orphan cleanup (DB-14): rows where the (user_id,check_name)
+	// pair has had no events for >7d are treated as renamed/removed checks.
+	// Recovery semantics already null HardSince and the FSM re-creates rows
+	// on demand, so nuking is safe.
+	orphanCutoff := p.now().Add(-7 * 24 * time.Hour).UTC()
+	orphanDeleted := int64(0)
+	if res, err := p.DB.SQL().ExecContext(ctx,
+		`DELETE FROM incident_state WHERE (user_id, check_name) NOT IN (
+		    SELECT user_id, check_name FROM events WHERE ts >= ?
+		 )`, orphanCutoff); err != nil {
+		p.Logger.Warn("retention: incident_state orphan prune failed", "err", err)
+	} else {
+		orphanDeleted, _ = res.RowsAffected()
+	}
+	p.Logger.Info("retention: pruned",
+		"before", cutoff.UTC(),
+		"events_deleted", deleted,
+		"daily_flaps_deleted", flapsDeleted,
+		"incident_orphans_deleted", orphanDeleted)
 	return nil
 }
 
 func (p *Policy) vacuum(ctx context.Context) error {
 	start := p.now()
 	if _, err := p.DB.SQL().ExecContext(ctx, "VACUUM"); err != nil {
+		// Surface duration on error too — VACUUM that hangs near busy_timeout
+		// before failing is a meaningful signal for capacity-planning (OBS-17).
+		p.Logger.Warn("retention: VACUUM failed", "duration_ms", p.now().Sub(start).Milliseconds(), "err", err)
 		return err
 	}
 	p.Logger.Info("retention: VACUUM done", "duration_ms", p.now().Sub(start).Milliseconds())

@@ -49,6 +49,7 @@ func New(client BackendClient, runner CommandRunner, waitSec int) *Loop {
 
 func (l *Loop) Run(ctx context.Context) {
 	attempt := 0
+	escalated := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -62,13 +63,24 @@ func (l *Loop) Run(ctx context.Context) {
 			}
 			attempt++
 			wait := l.backoff(attempt)
+			// Escalate to ERROR once after 10 sustained failures so a chronic
+			// outage is visible in journalctl without each retry spamming
+			// (OBS-12). Reset on next success.
+			if attempt >= 10 && !escalated {
+				slog.Error("cmdloop chronically failing — backend unreachable", "consecutive_fails", attempt, "err", err)
+				escalated = true
+			}
 			slog.Warn("cmdloop poll failed, backing off", "err", err, "wait", wait, "attempt", attempt)
 			if !sleepCtx(ctx, wait) {
 				return
 			}
 			continue
 		}
+		if escalated {
+			slog.Info("cmdloop recovered after sustained failure", "previous_consecutive_fails", attempt)
+		}
 		attempt = 0
+		escalated = false
 		if cmd == nil {
 			// 204 idle — go right back to long-poll.
 			continue

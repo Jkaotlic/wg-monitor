@@ -58,6 +58,9 @@ CREATE TABLE IF NOT EXISTS daily_soft_flaps (
     PRIMARY KEY (user_id, check_name, date),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+-- retention prunes daily_soft_flaps by date alongside events; PK doesn't
+-- prefix on date so a date-range delete would be a full scan (DB-08).
+CREATE INDEX IF NOT EXISTS idx_daily_soft_flaps_date ON daily_soft_flaps(date);
 
 CREATE TABLE IF NOT EXISTS tg_state (
     key TEXT PRIMARY KEY,

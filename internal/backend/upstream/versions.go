@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -103,6 +104,12 @@ func (c *Cache) Latest(ctx context.Context, name string) (string, error) {
 		c.mu.Unlock()
 
 		v, err := c.fetch(ctx, src.GitHubRepo)
+		if err != nil {
+			// Loud-fail: lets the operator notice expired GitHub tokens / repo
+			// renames / 403 rate-limit before "no update warnings" mystery
+			// (OBS-15). Hit at most once per TTL since the entry caches the err.
+			slog.Warn("upstream fetch failed", "source", name, "repo", src.GitHubRepo, "err", err)
+		}
 
 		c.mu.Lock()
 		c.data[name] = Entry{Latest: v, Err: err, FetchedAt: time.Now()}

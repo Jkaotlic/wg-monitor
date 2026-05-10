@@ -37,6 +37,34 @@ func (e *EventsRepo) LatestPerUser(userID int64) (time.Time, error) {
 	return parseEventTS(tsStr.String)
 }
 
+// LatestPerUserAll returns one (user_id → MAX(ts)) entry per user that has at
+// least one event. Used by the heartbeat watcher to replace its N+1 loop
+// (PERF-03/DB-09). Users with no events at all are absent from the map.
+func (e *EventsRepo) LatestPerUserAll() (map[int64]time.Time, error) {
+	rows, err := e.d.db.Query(`SELECT user_id, MAX(ts) FROM events GROUP BY user_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]time.Time)
+	for rows.Next() {
+		var uid int64
+		var tsStr sql.NullString
+		if err := rows.Scan(&uid, &tsStr); err != nil {
+			return nil, err
+		}
+		if !tsStr.Valid {
+			continue
+		}
+		t, err := parseEventTS(tsStr.String)
+		if err != nil {
+			continue
+		}
+		out[uid] = t
+	}
+	return out, rows.Err()
+}
+
 // LatestEvent returns the most recent event for (userID, checkName).
 // Returns (zero, false, nil) when there are no events. Used by realert to
 // pull last-known Details for the rich STILL-DOWN format and by control-panel

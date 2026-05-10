@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,11 @@ type Poller struct {
 	cfg Config
 	wg  sync.WaitGroup
 	now func() time.Time // injectable for tests
+	// sendFailCount tracks consecutive TG-send failures per (user,check) so
+	// we don't spam ERROR every tick when TG is sustained-down (OBS-11).
+	// Reset on success.
+	sendFailMu    sync.Mutex
+	sendFailCount map[string]int
 }
 
 func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
@@ -46,7 +52,36 @@ func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 	if cfg.TickEvery <= 0 {
 		cfg.TickEvery = defaultTickEvery
 	}
-	return &Poller{d: d, tg: tg, cfg: cfg, now: time.Now}
+	return &Poller{
+		d: d, tg: tg, cfg: cfg, now: time.Now,
+		sendFailCount: make(map[string]int),
+	}
+}
+
+// recordSendOutcome bumps/clears the per-(user,check) consecutive-failure
+// counter and returns whether the current outcome should be logged. We log
+// the 1st, 5th, and every 50th sustained failure so a chronic TG outage
+// produces a small, useful trail instead of one ERROR every realert tick.
+func (p *Poller) recordSendOutcome(userID int64, checkName string, ok bool) (logIt bool, count int) {
+	key := strconv.FormatInt(userID, 10) + "/" + checkName
+	p.sendFailMu.Lock()
+	defer p.sendFailMu.Unlock()
+	if ok {
+		if _, had := p.sendFailCount[key]; had {
+			delete(p.sendFailCount, key)
+		}
+		return false, 0
+	}
+	p.sendFailCount[key]++
+	c := p.sendFailCount[key]
+	switch {
+	case c == 1, c == 5:
+		return true, c
+	case c%50 == 0:
+		return true, c
+	default:
+		return false, c
+	}
 }
 
 // SetNow overrides the clock used by tick(). Test-only.
@@ -155,9 +190,12 @@ func (p *Poller) tick(ctx context.Context) {
 		})
 		_, err = p.tg.SendMessage(ctx, p.cfg.ChatID, u.TelegramThreadID, text, "", nil)
 		if err != nil {
-			slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "err", err)
+			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
+				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
+			}
 			continue // do not advance LastAlertAt → retry next tick
 		}
+		p.recordSendOutcome(sh.UserID, sh.CheckName, true)
 		// Realerts are sent as standalone messages (replyTo nil above);
 		// LastAlertMsgID intentionally not updated so RECOVERY (dispatcher.go)
 		// replies to the original HARD root, not the most recent reminder.
