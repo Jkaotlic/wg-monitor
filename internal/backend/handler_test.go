@@ -291,13 +291,7 @@ func TestCmdResultRelayedToTG(t *testing.T) {
 	}
 
 	// Relay is async (goroutine). Poll briefly.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		if snap := rc.snapshot(); len(snap.chunks) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond)
 
 	got := rc.snapshot()
 	if len(got.chunks) != 1 {
@@ -534,20 +528,11 @@ func TestCmdResult_DispatchesRoutesNotifier(t *testing.T) {
 	}
 
 	// Goroutine dispatch is async — poll briefly.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
+	rnCalled := waitForRelay(t, func() int {
 		rn.mu.Lock()
-		c := rn.called
-		rn.mu.Unlock()
-		if c > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	rn.mu.Lock()
-	rnCalled := rn.called
-	rn.mu.Unlock()
+		defer rn.mu.Unlock()
+		return rn.called
+	}, 1, 500*time.Millisecond)
 	if rnCalled != 1 {
 		t.Errorf("RoutesNotifier called %d times, want 1", rnCalled)
 	}
@@ -607,20 +592,11 @@ func testCmdResultDispatchesMaintNotifier(t *testing.T, action string) {
 	}
 
 	// Goroutine dispatch is async — poll briefly.
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
+	mnCalled := waitForRelay(t, func() int {
 		mn.mu.Lock()
-		c := mn.called
-		mn.mu.Unlock()
-		if c > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-
-	mn.mu.Lock()
-	mnCalled := mn.called
-	mn.mu.Unlock()
+		defer mn.mu.Unlock()
+		return mn.called
+	}, 1, 500*time.Millisecond)
 	if mnCalled != 1 {
 		t.Errorf("MaintNotifier called %d times for action %q, want 1", mnCalled, action)
 	}

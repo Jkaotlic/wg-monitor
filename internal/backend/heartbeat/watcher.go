@@ -80,7 +80,11 @@ type Watcher struct {
 	resumed  map[int64]time.Time
 	mu       sync.Mutex
 	wg       sync.WaitGroup
-	now      func() time.Time // injectable for tests; defaults to time.Now
+	// now is set once at construction (or by SetNow before Run starts) and
+	// read concurrently from scan/MarkResumed. Tests inject a deterministic
+	// clock; production keeps time.Now. The pointer write is single-shot;
+	// no atomic needed.
+	now func() time.Time
 }
 
 func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
@@ -101,19 +105,24 @@ func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 	}
 }
 
-// SetNow overrides the clock used by scan(). Test-only.
-func (w *Watcher) SetNow(now func() time.Time) {
-	if now != nil {
-		w.now = now
+// SetNow overrides the wall-clock seam for deterministic tests. Production
+// callers must not use this; it must be called BEFORE Run starts so the
+// production scan() loop sees a stable clock pointer.
+func (w *Watcher) SetNow(fn func() time.Time) {
+	if fn == nil {
+		w.now = time.Now
+		return
 	}
+	w.now = fn
 }
 
 // MarkResumed records that the user's agent reported a Resumed=true tick.
 // While the resume mark is younger than cfg.ResumeGrace, the watcher will
 // skip OFFLINE notices for that user.
 func (w *Watcher) MarkResumed(userID int64) {
+	t := w.now()
 	w.mu.Lock()
-	w.resumed[userID] = w.now()
+	w.resumed[userID] = t
 	w.mu.Unlock()
 }
 
@@ -164,7 +173,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		if latest.IsZero() {
 			continue
 		}
-		// Refresh `now` per-user so a long scan loop doesn't render stale durations.
+		// Refresh `now` per-user so a long scan loop doesn't render stale durations (BUG-19).
 		now := w.now()
 		stale := now.Sub(latest)
 		threshold := w.cfg.staleFor(u)
