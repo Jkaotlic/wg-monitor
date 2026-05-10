@@ -72,6 +72,7 @@ type Watcher struct {
 	resumed  map[int64]time.Time
 	mu       sync.Mutex
 	wg       sync.WaitGroup
+	now      func() time.Time // overridable for deterministic tests; defaults to time.Now
 }
 
 func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
@@ -82,15 +83,39 @@ func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 		d: d, off: off, cfg: cfg,
 		notified: map[int64]time.Time{},
 		resumed:  map[int64]time.Time{},
+		now:      time.Now,
 	}
+}
+
+// SetNow overrides the wall-clock for tests. Production callers must not use
+// this. When unset (or set to nil), the watcher falls back to time.Now.
+func (w *Watcher) SetNow(fn func() time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if fn == nil {
+		w.now = time.Now
+		return
+	}
+	w.now = fn
+}
+
+func (w *Watcher) timeNow() time.Time {
+	w.mu.Lock()
+	fn := w.now
+	w.mu.Unlock()
+	if fn == nil {
+		return time.Now()
+	}
+	return fn()
 }
 
 // MarkResumed records that the user's agent reported a Resumed=true tick.
 // While the resume mark is younger than cfg.ResumeGrace, the watcher will
 // skip OFFLINE notices for that user.
 func (w *Watcher) MarkResumed(userID int64) {
+	now := w.timeNow()
 	w.mu.Lock()
-	w.resumed[userID] = time.Now()
+	w.resumed[userID] = now
 	w.mu.Unlock()
 }
 
@@ -118,7 +143,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		slog.Warn("heartbeat scan: list users", "err", err)
 		return
 	}
-	now := time.Now()
+	now := w.timeNow()
 	for _, u := range users {
 		latest, err := w.d.Events().LatestPerUser(u.ID)
 		if err != nil {
