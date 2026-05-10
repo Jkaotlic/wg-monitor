@@ -141,11 +141,25 @@ func (w *Watcher) scan(ctx context.Context) {
 		slog.Warn("heartbeat scan: list users", "err", err)
 		return
 	}
+	// One GROUP BY query instead of N per-user MAX(ts) queries (PERF-03/DB-09).
+	// On lookup failure, fall back to per-user query so the scan still produces
+	// signal — degraded mode beats silent skip.
+	latestByUID, err := w.d.Events().LatestPerUserAll()
+	if err != nil {
+		slog.Warn("heartbeat scan: bulk latest lookup failed; falling back to per-user", "err", err)
+		latestByUID = nil
+	}
 	for _, u := range users {
-		latest, err := w.d.Events().LatestPerUser(u.ID)
-		if err != nil {
-			slog.Warn("heartbeat: latest event lookup failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
-			continue
+		var latest time.Time
+		if latestByUID != nil {
+			latest = latestByUID[u.ID]
+		} else {
+			lp, perr := w.d.Events().LatestPerUser(u.ID)
+			if perr != nil {
+				slog.Warn("heartbeat: latest event lookup failed", "user_id", u.ID, "nickname", u.Nickname, "err", perr)
+				continue
+			}
+			latest = lp
 		}
 		if latest.IsZero() {
 			continue

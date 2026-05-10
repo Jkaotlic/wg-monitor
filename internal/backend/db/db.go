@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"database/sql"
 	"fmt"
+	"log/slog"
+	"os"
 
 	_ "modernc.org/sqlite"
 )
@@ -26,6 +28,10 @@ func Open(path string) (*DB, error) {
 	//                         meaningful corruption-risk increase under WAL.
 	//   busy_timeout(5000) — block up to 5s for the writer lock instead of
 	//                         returning SQLITE_BUSY immediately.
+	existed := true
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		existed = false
+	}
 	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(5000)"
 	d, err := sql.Open("sqlite", dsn)
 	if err != nil {
@@ -53,6 +59,9 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate users.kind: %w", err)
 	}
+	// Surface where the DB lives and whether this is a fresh init — useful for
+	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
+	slog.Info("db opened", "path", path, "preexisting", existed)
 	return &DB{db: d}, nil
 }
 
