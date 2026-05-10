@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"expvar"
 	"io"
 	"log/slog"
 	"net/http"
@@ -72,6 +73,21 @@ func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+// normaliseDetailsJSON canonicalises a check's details map for storage. nil
+// or empty map → empty string (NULL-equivalent semantically; cheaper to scan
+// than `"null"` literal). DB-13: previously `json.Marshal(nil)` produced the
+// literal string `"null"` which downstream readers had to special-case.
+func normaliseDetailsJSON(details map[string]any) string {
+	if len(details) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(details)
+	if err != nil || string(b) == "null" {
+		return ""
+	}
+	return string(b)
 }
 
 // relayParent returns the parent context for cmdResultHandler relay goroutines:
@@ -162,6 +178,12 @@ type Deps struct {
 	// them outlive srv.Shutdown (BUG-15). Nil falls back to context.Background
 	// for callers that don't wire it.
 	ShutdownCtx context.Context
+	// ReportRatePerSec / ReportBurst configure the per-token /v1/report rate
+	// limit (API-06). Zero disables. Recommended: 0.2 r/s + burst 5 = "1 every
+	// 5s sustained, burst of 5". /v1/cmd is naturally long-poll-bounded so we
+	// limit only the write path.
+	ReportRatePerSec float64
+	ReportBurst      int
 }
 
 func NewMux(d Deps) http.Handler {
@@ -176,6 +198,11 @@ func NewMux(d Deps) http.Handler {
 			Version string `json:"version"`
 		}{Status: "ok", Version: serverVersion})
 	})
+	// /debug/vars exposes expvar counters (OBS-13). Bound to loopback via
+	// cfg.Listen so external attackers can't hit it; if you ever expose
+	// backend behind something other than Caddy reverse-proxy, gate this
+	// behind a separate mux on a different port.
+	mux.Handle("/debug/vars", expvar.Handler())
 	// /readyz: deep health — DB ping + sanity checks. External monitoring
 	// (smoke/doctor/cron) should use this. 503 means "process is up but
 	// can't service requests" — restart, page operator, etc.
@@ -194,10 +221,16 @@ func NewMux(d Deps) http.Handler {
 		_, _ = io.WriteString(w, "ready\n")
 	})
 	auth := AuthMiddleware(d.DB.Users(), d.Logger)
-	mux.Handle("/v1/report", auth(http.HandlerFunc(reportHandler(d))))
+	limiter := newUserRateLimiter(d.ReportRatePerSec, d.ReportBurst)
+	rate := RateLimitMiddleware(limiter, d.Logger)
+	// /v1/report is the write-path that hits the SQLite writer-mutex; cap
+	// its throughput per-token. /v1/cmd long-poll is naturally bounded; result
+	// post is small and infrequent (one per cmd) — leave un-limited.
+	reqID := requestIDMiddleware()
+	mux.Handle("/v1/report", reqID(auth(rate(http.HandlerFunc(reportHandler(d))))))
 	if d.CommandSink != nil {
-		mux.Handle("/v1/cmd", auth(http.HandlerFunc(cmdGetHandler(d))))
-		mux.Handle("/v1/cmd/result", auth(http.HandlerFunc(cmdResultHandler(d))))
+		mux.Handle("/v1/cmd", reqID(auth(http.HandlerFunc(cmdGetHandler(d)))))
+		mux.Handle("/v1/cmd/result", reqID(auth(http.HandlerFunc(cmdResultHandler(d)))))
 	}
 	return mux
 }
@@ -260,25 +293,41 @@ func reportHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update last_seen")
 			return
 		}
+		// INSERT OR IGNORE — idempotent on (user_id, check_name, ts) per
+		// uq_events_user_check_ts (API-01). Agent retry on transient TCP error
+		// no longer duplicates the report's events.
 		insertStmt, err := tx.PrepareContext(r.Context(),
-			`INSERT INTO events(user_id, check_name, status, details_json, ts) VALUES(?,?,?,?,?)`)
+			`INSERT OR IGNORE INTO events(user_id, check_name, status, details_json, ts) VALUES(?,?,?,?,?)`)
 		if err != nil {
 			tx.Rollback()
 			d.Logger.Warn("report tx prepare", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "prepare")
 			return
 		}
+		var dupes int
 		for _, c := range rep.Checks {
-			detailsJSON, _ := json.Marshal(c.Details)
-			if _, err := insertStmt.ExecContext(r.Context(), uid, c.Name, c.Status, string(detailsJSON), ts); err != nil {
+			detailsJSON := normaliseDetailsJSON(c.Details)
+			res, err := insertStmt.ExecContext(r.Context(), uid, c.Name, c.Status, detailsJSON, ts)
+			if err != nil {
 				insertStmt.Close()
 				tx.Rollback()
 				d.Logger.Warn("event insert (tx rollback)", "nickname", nick, "check", c.Name, "err", err)
 				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "event insert")
 				return
 			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				dupes++
+			}
 		}
 		insertStmt.Close()
+		if dupes > 0 {
+			addReportDup(dupes)
+			d.Logger.Info("report idempotent retry",
+				"nickname", nick, "duplicates", dupes, "total", len(rep.Checks),
+				"req_id", RequestIDFromContext(r.Context()),
+			)
+		}
+		incReports()
 		if err := tx.Commit(); err != nil {
 			d.Logger.Warn("report tx commit", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "commit")
@@ -319,11 +368,32 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
 			}
 		}
-		d.Logger.Info("report",
-			"nickname", nick, "agent_version", rep.AgentVersion,
-			"resumed", rep.Resumed,
-			"check_count", len(rep.Checks), "checks", checkSummary(rep.Checks),
-		)
+		// OBS-14: full check-summary INFO sampled to 1-in-10 reports + every
+		// resumed marker. Per-check status changes already emit dedicated
+		// FSM-transition logs (OBS-09); spamming Info every 60s for every
+		// agent doubled journal volume without adding signal. Debug carries
+		// the full payload for op-on-call who flips log_level=debug.
+		anyFail := false
+		for _, c := range rep.Checks {
+			if c.Status == "fail" {
+				anyFail = true
+				break
+			}
+		}
+		if anyFail || rep.Resumed || globalReportTracker.shouldLogReport() {
+			d.Logger.Info("report",
+				"nickname", nick, "agent_version", rep.AgentVersion,
+				"resumed", rep.Resumed,
+				"check_count", len(rep.Checks), "summary", checksSummaryRollup(rep.Checks),
+				"req_id", RequestIDFromContext(r.Context()),
+			)
+		} else {
+			d.Logger.Debug("report",
+				"nickname", nick, "agent_version", rep.AgentVersion,
+				"check_count", len(rep.Checks), "checks", checkSummary(rep.Checks),
+				"req_id", RequestIDFromContext(r.Context()),
+			)
+		}
 		w.WriteHeader(http.StatusOK)
 	}
 }
@@ -332,6 +402,30 @@ func checkSummary(checks []wire.Check) []string {
 	out := make([]string, len(checks))
 	for i, c := range checks {
 		out[i] = c.Name + "=" + c.Status
+	}
+	return out
+}
+
+// checksSummaryRollup compresses N "name=status" lines into one "Aok/Bfail"
+// counter for the sampled INFO log (OBS-14). Cheap to grep / dashboard.
+func checksSummaryRollup(checks []wire.Check) string {
+	ok, fail, other := 0, 0, 0
+	for _, c := range checks {
+		switch c.Status {
+		case "ok":
+			ok++
+		case "fail":
+			fail++
+		default:
+			other++
+		}
+	}
+	out := strconv.Itoa(ok) + "ok"
+	if fail > 0 {
+		out += "/" + strconv.Itoa(fail) + "fail"
+	}
+	if other > 0 {
+		out += "/" + strconv.Itoa(other) + "other"
 	}
 	return out
 }
@@ -373,7 +467,11 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
-		d.Logger.Info("cmd dispatched", "nickname", nick, "cmd_id", c.ID, "action", c.Action)
+		incCmdEnqueued()
+		d.Logger.Info("cmd dispatched",
+			"nickname", nick, "cmd_id", c.ID, "action", c.Action,
+			"req_id", RequestIDFromContext(r.Context()),
+		)
 	}
 }
 
@@ -426,10 +524,12 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "record failed")
 			return
 		}
+		incCmdResult()
 		// Relay result back to TG (or routes notifier) if a notifier is configured
 		// and we recorded the originating message. Async — must not stall the
 		// agent's POST on TG network latency.
 		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
+			incCmdResultRelay()
 			switch ref.Action {
 			case "route_status", "route_rebind":
 				if d.RoutesNotifier != nil {
@@ -437,6 +537,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
 						if err := d.RoutesNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
+							incTGError()
 							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
 					}(ref, res)
@@ -450,6 +551,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
 						if err := d.MaintNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
+							incTGError()
 							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
 					}(ref, res)
@@ -467,6 +569,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
 						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
+							incTGError()
 							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
 						}
 					}(ref, res, maxChars)
@@ -476,7 +579,11 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
-		d.Logger.Info("cmd result", "nickname", nick, "cmd_id", res.ID, "status", res.Status, "duration_ms", res.DurationMs)
+		d.Logger.Info("cmd result",
+			"nickname", nick, "cmd_id", res.ID, "status", res.Status,
+			"duration_ms", res.DurationMs,
+			"req_id", RequestIDFromContext(r.Context()),
+		)
 		w.WriteHeader(http.StatusOK)
 	}
 }

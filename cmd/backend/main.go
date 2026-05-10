@@ -76,6 +76,7 @@ func main() {
 	})
 
 	cmdQueue := cmd.New()
+	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
 	uiSnap := callbacks.UIConfigSnapshot{
 		DeleteUserCommandMessages: cfg.UI.DeleteUserCommandMessages != nil && *cfg.UI.DeleteUserCommandMessages,
 		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
@@ -131,6 +132,11 @@ func main() {
 		// Wire the server-shutdown ctx so cmd-result relay goroutines respect
 		// SIGTERM and don't outlive srv.Shutdown (BUG-15).
 		ShutdownCtx: ctx,
+		// Per-token rate limit on /v1/report (API-06). Defaults applied in
+		// LoadConfig so production yaml without rate_limit section gets sane
+		// throttling automatically.
+		ReportRatePerSec: cfg.RateLimit.ReportPerSec,
+		ReportBurst:      cfg.RateLimit.ReportBurst,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,

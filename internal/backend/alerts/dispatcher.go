@@ -62,11 +62,11 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// следующего ручного refresh / OK-репорта.
 		threadID, err := di.ensureTopic(ctx, userID, nickname)
 		if err != nil {
-			return fmt.Errorf("ensure topic: %w", err)
+			return fmt.Errorf("ensure topic for %s/%s: %w", nickname, checkName, err)
 		}
 		next := tr.Next
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
-			return fmt.Errorf("save HARD state: %w", err)
+			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
 		}
 		args := HardArgs{
 			Nickname:    nickname,
@@ -100,7 +100,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
 		mid, err := di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &threadID, text, "", nil, &kb)
 		if err != nil {
-			return err
+			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
 		}
 		next.LastAlertMsgID = &mid
 		now := time.Now()
@@ -112,7 +112,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// OK-репорт превратится в Noop (state==ok), не в дубль Recovery.
 		threadID, err := di.ensureTopic(ctx, userID, nickname)
 		if err != nil {
-			return fmt.Errorf("ensure topic: %w", err)
+			return fmt.Errorf("ensure topic for recovery %s/%s: %w", nickname, checkName, err)
 		}
 		prev, prevErr := di.d.State().Get(userID, checkName)
 		if prevErr != nil {
@@ -127,7 +127,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		next.LastAlertAt = nil
 		next.Acked = false // defensive (FSM also sets this in Recovery transition)
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
-			return fmt.Errorf("save Recovery state: %w", err)
+			return fmt.Errorf("save Recovery state %s/%s: %w", nickname, checkName, err)
 		}
 		text := FormatRecovery(RecoveryArgs{
 			Nickname:    nickname,
@@ -136,7 +136,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			RecoveredAt: time.Now(),
 		})
 		if _, err := di.tg.SendMessage(ctx, di.cfg.ChatID, &threadID, text, "", prev.LastAlertMsgID); err != nil {
-			return err
+			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 		}
 		return nil
 	}

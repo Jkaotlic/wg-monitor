@@ -59,10 +59,43 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate users.kind: %w", err)
 	}
+	if err := migrateEventsUniqueIdx(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate events unique idx: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
 	return &DB{db: d}, nil
+}
+
+// migrateEventsUniqueIdx is the API-01 idempotency migration. Without a UNIQUE
+// index a TCP retry from the agent inserted a second copy of every event in
+// the report, polluting daily_soft_flaps and skewing realert cadence.
+//
+// Dedup-then-create. The DELETE step keeps the lowest `id` per
+// (user_id, check_name, ts) triple, which preserves the FSM-relevant ordering
+// the dispatcher saw during the original ingest. If the index already exists
+// (re-run on a clean DB) the function is a no-op.
+func migrateEventsUniqueIdx(d *sql.DB) error {
+	var exists int
+	if err := d.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='uq_events_user_check_ts'`,
+	).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return nil
+	}
+	if _, err := d.Exec(
+		`DELETE FROM events WHERE id NOT IN (
+		    SELECT MIN(id) FROM events GROUP BY user_id, check_name, ts
+		 )`); err != nil {
+		return err
+	}
+	_, err := d.Exec(
+		`CREATE UNIQUE INDEX uq_events_user_check_ts ON events(user_id, check_name, ts)`)
+	return err
 }
 
 // migrateAcked is a one-shot ALTER TABLE for Stage 2.

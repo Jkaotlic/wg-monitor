@@ -19,6 +19,15 @@ type Config struct {
 	UI        UIConfig        `yaml:"ui"`
 	Upstream  UpstreamConfig  `yaml:"upstream"`
 	Retention RetentionConfig `yaml:"retention"`
+	RateLimit RateLimitConfig `yaml:"rate_limit"`
+}
+
+// RateLimitConfig governs per-userID throttling on /v1/report (API-06).
+// Zero values disable rate limiting altogether (default in tests; production
+// LoadConfig fills sane defaults).
+type RateLimitConfig struct {
+	ReportPerSec float64 `yaml:"report_per_sec"`
+	ReportBurst  int     `yaml:"report_burst"`
 }
 
 // UpstreamConfig points the upstream version cache at the right GitHub repos.
@@ -158,6 +167,15 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.State.MuteCutoffHour == 0 {
 		cfg.State.MuteCutoffHour = 9
+	}
+	// Rate-limit defaults: 0.2 r/s × burst 5 = "1 every 5s sustained, burst
+	// of 5". Reporter interval is 60s so legitimate traffic uses ~1/60 r/s
+	// per agent — room for transient ForceResumed spikes without limiting.
+	if cfg.RateLimit.ReportPerSec == 0 {
+		cfg.RateLimit.ReportPerSec = 0.2
+	}
+	if cfg.RateLimit.ReportBurst == 0 {
+		cfg.RateLimit.ReportBurst = 5
 	}
 	// UI defaults: pointer types let us distinguish "field omitted" (nil → apply default)
 	// from "field explicitly set to false" (honour the user's choice).
