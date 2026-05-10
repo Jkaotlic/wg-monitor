@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -149,14 +150,17 @@ func preferredBackend(ctx context.Context, client *awgmgr.Client) string {
 // replace=false → ImportConf (creates new tunnel, enabled=false).
 // Restarts HydraRoute daemon if installed.
 func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, confB64, name string, replace bool) (string, error) {
+	slog.Info("tunnel import", "name", name, "replace", replace)
 	confData, err := base64.StdEncoding.DecodeString(confB64)
 	if err != nil {
+		slog.Warn("tunnel import failed", "name", name, "stage", "decode", "err", err)
 		return "", fmt.Errorf("decode conf: %w", err)
 	}
 	rawConf := string(confData)
 
 	// Validate required fields before hitting awg-manager.
 	if _, err := ParseWGConf(rawConf); err != nil {
+		slog.Warn("tunnel import failed", "name", name, "stage", "parse", "err", err)
 		return "", fmt.Errorf("parse conf: %w", err)
 	}
 
@@ -169,6 +173,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 	if replace {
 		all, err := client.TunnelsAll(ctx)
 		if err != nil {
+			slog.Warn("tunnel import failed", "name", name, "stage", "list", "err", err)
 			return "", fmt.Errorf("list tunnels: %w", err)
 		}
 		var oldID string
@@ -181,6 +186,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 		if oldID != "" {
 			newTun, err := client.ReplaceConf(ctx, oldID, rawConf, name)
 			if err != nil {
+				slog.Warn("tunnel import failed", "name", name, "stage", "replace", "old_id", oldID, "err", err)
 				return "", fmt.Errorf("replace tunnel: %w", err)
 			}
 			newID = newTun.ID
@@ -188,6 +194,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 		} else {
 			newTun, err := client.ImportConf(ctx, rawConf, name, backend)
 			if err != nil {
+				slog.Warn("tunnel import failed", "name", name, "stage", "create", "err", err)
 				return "", fmt.Errorf("create tunnel: %w", err)
 			}
 			newID = newTun.ID
@@ -196,6 +203,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 	} else {
 		newTun, err := client.ImportConf(ctx, rawConf, name, backend)
 		if err != nil {
+			slog.Warn("tunnel import failed", "name", name, "stage", "create", "err", err)
 			return "", fmt.Errorf("create tunnel: %w", err)
 		}
 		newID = newTun.ID
@@ -203,17 +211,20 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 	}
 
 	if err := client.StartTunnel(ctx, newID); err != nil {
+		slog.Warn("tunnel import: start failed", "name", name, "id", newID, "err", err)
 		fmt.Fprintf(&result, "\n⚠️ Запустить туннель не удалось: %v", err)
 	}
 
 	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {
 		out, execErr := exec(ctx, "/opt/etc/init.d/S99hrneo", "restart")
 		if execErr != nil {
+			slog.Warn("tunnel import: hydraroute restart failed", "name", name, "err", execErr)
 			fmt.Fprintf(&result, "\n⚠️ HydraRoute restart failed: %v\n%s", execErr, string(out))
 		} else {
 			fmt.Fprintf(&result, "\n🔁 HydraRoute перезапущен")
 		}
 	}
 
+	slog.Info("tunnel import ok", "name", name, "id", newID, "replace", replace)
 	return result.String(), nil
 }

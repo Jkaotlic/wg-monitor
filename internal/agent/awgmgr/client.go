@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -31,6 +32,7 @@ func New(baseURL string) *Client {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
+	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return err
@@ -39,9 +41,11 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "GET", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("awgmgr read %s: %w", path, err)
@@ -56,6 +60,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) post(ctx context.Context, path string, body io.Reader, out any) error {
+	start := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, body)
 	if err != nil {
 		return err
@@ -64,9 +69,11 @@ func (c *Client) post(ctx context.Context, path string, body io.Reader, out any)
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	rbody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return fmt.Errorf("awgmgr read %s: %w", path, err)
@@ -152,7 +159,9 @@ func (c *Client) PingCheckNow(ctx context.Context) error {
 // shape is owned by awg-manager and may change between versions, so we pass
 // it through unchanged for the TG side to render.
 func (c *Client) DiagResult(ctx context.Context) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/diagnostics/result", nil)
+	start := time.Now()
+	const path = "/api/diagnostics/result"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 	if err != nil {
 		return "", err
 	}
@@ -160,9 +169,11 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 	req.Header.Set("Accept", "application/json")
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return "", fmt.Errorf("awgmgr GET diagnostics/result: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "GET", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
 	if err != nil {
 		return "", fmt.Errorf("awgmgr read diagnostics/result: %w", err)
@@ -177,6 +188,8 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 // does its own parsing. Returns the created Tunnel (enabled=false by default).
 // backend may be "" to let awg-manager use its active backend.
 func (c *Client) ImportConf(ctx context.Context, rawConf, name, backend string) (*Tunnel, error) {
+	start := time.Now()
+	const path = "/api/import/conf"
 	body, err := json.Marshal(struct {
 		Content string `json:"content"`
 		Name    string `json:"name"`
@@ -185,7 +198,7 @@ func (c *Client) ImportConf(ctx context.Context, rawConf, name, backend string) 
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/import/conf", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -194,9 +207,11 @@ func (c *Client) ImportConf(ctx context.Context, rawConf, name, backend string) 
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return nil, fmt.Errorf("awgmgr POST /api/import/conf: %w", err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("awgmgr read import/conf: %w", err)
@@ -238,6 +253,7 @@ func (c *Client) GetEnv(ctx context.Context, path string, out any) error {
 }
 
 func (c *Client) confPost(ctx context.Context, path, rawConf, name string) (*Tunnel, error) {
+	start := time.Now()
 	body, err := json.Marshal(struct {
 		Content string `json:"content"`
 		Name    string `json:"name"`
@@ -254,9 +270,11 @@ func (c *Client) confPost(ctx context.Context, path, rawConf, name string) (*Tun
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(httpReq)
 	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return nil, fmt.Errorf("awgmgr POST %s: %w", path, err)
 	}
 	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
 	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("awgmgr read %s: %w", path, err)
