@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
@@ -59,6 +61,10 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 		r.panelHandlePush(ctx, q, args)
 	case "no_topic":
 		r.panelHandleNoTopic(ctx, q, args)
+	case "awaken_confirm":
+		r.panelAwakenConfirm(ctx, q)
+	case "awaken_do":
+		r.panelAwakenDo(ctx, q)
 	default:
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "screen TBA")
 	}
@@ -162,6 +168,86 @@ func (r *Router) panelClose(ctx context.Context, q *tg.CallbackQuery) {
 // panelEditToKindPick renders the router selection screen for the chosen
 // kind. Users without TelegramThreadID render with a ⚠ prefix and a
 // no_topic callback that toasts an explanation.
+func (r *Router) panelAwakenConfirm(ctx context.Context, q *tg.CallbackQuery) {
+	users, err := r.d.Users().GetAll()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось прочитать роутеров")
+		return
+	}
+	var count int
+	for _, u := range users {
+		if u.TelegramThreadID != nil {
+			count++
+		}
+	}
+	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики (отправить приветствие с кнопками во все per_router топики)\n\nБудут затронуты: %d топика", count)
+	kb := tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "✓ Подтвердить", CallbackData: "panel:0:awaken_do"},
+				{Text: "« Назад", CallbackData: "panel:0:home"},
+			},
+		},
+	}
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("panel awaken confirm edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) panelAwakenDo(ctx context.Context, q *tg.CallbackQuery) {
+	users, err := r.d.Users().GetAll()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось прочитать роутеров")
+		return
+	}
+	start := time.Now()
+	var sent, failed int
+	var failLines []string
+	const sleep = 200 * time.Millisecond
+	first := true
+	for _, u := range users {
+		if u.TelegramThreadID == nil {
+			continue
+		}
+		if !first {
+			// Use a timer + select so a context cancellation is honoured
+			// immediately rather than waiting out the full 200 ms sleep.
+			t := time.NewTimer(sleep)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				goto done
+			case <-t.C:
+			}
+		}
+		first = false
+		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, *u.TelegramThreadID, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+			failed++
+			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, werr))
+			continue
+		}
+		sent++
+	}
+done:
+	slog.Info("panel awaken", "sent", sent, "failed", failed, "elapsed_ms", time.Since(start).Milliseconds())
+	var b strings.Builder
+	fmt.Fprintf(&b, "🎛 Панель управления\n\n✅ Оживлено: %d топиков, %d ошибок.", sent, failed)
+	for _, line := range failLines {
+		b.WriteString("\n  ")
+		b.WriteString(line)
+	}
+	text := b.String()
+	if len(text) > 4096 {
+		text = text[:4093] + "..."
+	}
+	kb := panelResultKb()
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("panel awaken result edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
 func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, kind string) {
 	users, err := r.d.Users().GetAll()
 	if err != nil {
