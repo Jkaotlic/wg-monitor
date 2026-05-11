@@ -209,6 +209,36 @@ func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
 	}
 }
 
+// TestAdminRecreateTopic_SendsWelcomeAfterRebuild: after /recreate_topic,
+// the new per_router topic gets a welcome message so reply-keyboard
+// buttons attach immediately to the new thread.
+func TestAdminRecreateTopic_SendsWelcomeAfterRebuild(t *testing.T) {
+	d, uid := newTestDB(t)
+	const oldThread = int64(7777)
+	if err := d.Users().UpdateThreadID(uid, oldThread); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := oldThread
+	msg := &tg.Message{
+		MessageID: 51, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "/recreate_topic",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	var welcomeCount int
+	for _, s := range f.rkSends {
+		if strings.HasPrefix(s.text, "👋 Топик роутера vasya") {
+			welcomeCount++
+		}
+	}
+	if welcomeCount != 1 {
+		t.Fatalf("want 1 welcome rkSend for vasya, got %d (rkSends: %d)", welcomeCount, len(f.rkSends))
+	}
+}
+
 // TestAdminCommand_TolerateBotnameSuffix: TG appends @bot_name when the
 // command is picked from the command menu in a group. Parsing must ignore
 // the suffix.
