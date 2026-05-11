@@ -7,6 +7,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
+
 // TopicCreator is the slice of *tg.Client used by topic-creation paths.
 // Extracted so the alerts package doesn't import the full tg client API,
 // and so CLI/Router tests can drop a mock in without an HTTPS server.
@@ -48,4 +49,27 @@ func EnsureTopicForUser(ctx context.Context, tg TopicCreator, d *db.DB, chatID, 
 		return 0, fmt.Errorf("ensure topic: persist thread id for %s: %w", u.Nickname, err)
 	}
 	return tid, nil
+}
+
+// WelcomeSender is the slice of *tg.Client used by SendWelcome. Narrow
+// interface so tests can substitute a fake and the alerts package doesn't
+// pull in the full TG client surface for one helper.
+type WelcomeSender interface {
+	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
+}
+
+// SendWelcome posts the first-contact message into a freshly-created
+// per_router topic so the reply-keyboard buttons attach immediately (TG
+// only re-installs the persistent keyboard on bot-originated messages —
+// an empty topic has none until something arrives).
+//
+// markup must be the value returned by callbacks/UIConfigSnapshot.KeyboardForTopic("per_router")
+// so the same compat-inline / reply-kb switch the rest of the app uses
+// is honoured here. Pass nil to skip the keyboard entirely (not recommended).
+func SendWelcome(ctx context.Context, tg WelcomeSender, chatID, threadID int64, nickname string, markup any) error {
+	text := "👋 Топик роутера " + nickname + " готов.\n\n" +
+		"Кнопки внизу — то, что я умею. Тапни 📊 чтобы посмотреть статус прямо сейчас."
+	t := threadID
+	_, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, markup)
+	return err
 }
