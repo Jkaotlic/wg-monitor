@@ -52,6 +52,13 @@ type Args struct {
 	MaintName string
 	// MaintToken is the 8-hex confirm token for maint_confirm / maint_fw_confirm.
 	MaintToken string
+	// PanelScreen identifies the panel-hub screen for callbacks where
+	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
+	// "awaken_confirm" | "awaken_do" | "close".
+	PanelScreen string
+	// PanelKind is the panel type ("maint" | "routes" | "status") for
+	// the "kind" and "push" screens.
+	PanelKind string
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -90,6 +97,8 @@ var validActions = map[string]bool{
 	// short code lives in CheckName and is mapped back to the original
 	// label by tg.CompatBtnTextByCode.
 	"compat_btn": true,
+	// admin panel hub — multi-screen inline-kb dispatcher.
+	"panel": true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
@@ -199,6 +208,30 @@ func Parse(data string) (Args, error) {
 		}
 		a.MaintName = "firmware"
 		a.MaintToken = parts[3]
+	}
+	if action == "panel" {
+		if len(parts) < 3 {
+			return Args{}, fmt.Errorf("panel requires screen: %q", data)
+		}
+		screen := parts[2]
+		validPanelScreens := map[string]bool{
+			"home": true, "kind": true, "push": true, "no_topic": true,
+			"awaken_confirm": true, "awaken_do": true, "close": true,
+		}
+		if !validPanelScreens[screen] {
+			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)
+		}
+		a.PanelScreen = screen
+		if screen == "kind" || screen == "push" {
+			if len(parts) < 4 || parts[3] == "" {
+				return Args{}, fmt.Errorf("panel %s requires kind: %q", screen, data)
+			}
+			validKinds := map[string]bool{"maint": true, "routes": true, "status": true}
+			if !validKinds[parts[3]] {
+				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
+			}
+			a.PanelKind = parts[3]
+		}
 	}
 	return a, nil
 }
