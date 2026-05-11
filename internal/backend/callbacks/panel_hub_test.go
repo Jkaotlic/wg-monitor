@@ -223,3 +223,74 @@ func TestPanelPush_StaleTopicSurfacesError(t *testing.T) {
 		t.Errorf("expected stale-topic error in hub edit; got %v", f.edits)
 	}
 }
+
+func TestPanelAwakenConfirm_ShowsCountOfTopics(t *testing.T) {
+	d, uid := newTestDB(t) // vasya — no thread by default
+	if err := d.Users().UpdateThreadID(uid, 100); err != nil {
+		t.Fatal(err)
+	}
+	uid2, err := d.Users().Insert("betak", "tb", "2.2.2.2", "nwg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uid2, 200); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Users().Insert("gamma", "tc", "3.3.3.3", "nwg1"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID: "cb-aw-c", From: tg.User{ID: 12345},
+		Data:    "panel:0:awaken_confirm",
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 80},
+	}
+	r.HandleCallback(context.Background(), q)
+	if len(f.edits) != 1 {
+		t.Fatalf("want 1 edit, got %d", len(f.edits))
+	}
+	if !strings.Contains(f.edits[0], "Будут затронуты: 2") {
+		t.Errorf("expected 'Будут затронуты: 2 топика' (vasya+betak have thread), got %q", f.edits[0])
+	}
+}
+
+func TestPanelAwakenDo_SendsWelcomeOnlyToUsersWithThread(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 100); err != nil {
+		t.Fatal(err)
+	}
+	uid2, _ := d.Users().Insert("betak", "tb", "2.2.2.2", "nwg1")
+	if err := d.Users().UpdateThreadID(uid2, 200); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Users().Insert("gamma", "tc", "3.3.3.3", "nwg1"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID: "cb-aw-do", From: tg.User{ID: 12345},
+		Data:    "panel:0:awaken_do",
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 81},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	var welcomeCount int
+	for _, s := range f.rkSends {
+		if strings.HasPrefix(s.text, "👋 Топик роутера") {
+			welcomeCount++
+		}
+	}
+	if welcomeCount != 2 {
+		t.Errorf("want 2 welcomes (vasya+betak), got %d", welcomeCount)
+	}
+	// Hub edit shows result with count.
+	if len(f.edits) == 0 || !strings.Contains(f.edits[len(f.edits)-1], "Оживлено: 2") {
+		t.Errorf("expected hub result mentioning 'Оживлено: 2', got: %v", f.edits)
+	}
+}
