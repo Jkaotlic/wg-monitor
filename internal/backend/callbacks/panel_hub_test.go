@@ -294,3 +294,19 @@ func TestPanelAwakenDo_SendsWelcomeOnlyToUsersWithThread(t *testing.T) {
 		t.Errorf("expected hub result mentioning 'Оживлено: 2', got: %v", f.edits)
 	}
 }
+
+func TestPanelClose_EditsToClosedText(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID: "cb-close", From: tg.User{ID: 12345},
+		Data:    "panel:0:close",
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 85},
+	}
+	r.HandleCallback(context.Background(), q)
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "закрыта") {
+		t.Errorf("expected 'закрыта' in edit, got %v", f.edits)
+	}
+}
