@@ -210,9 +210,6 @@ func Parse(data string) (Args, error) {
 		a.MaintToken = parts[3]
 	}
 	if action == "panel" {
-		if len(parts) < 3 {
-			return Args{}, fmt.Errorf("panel requires screen: %q", data)
-		}
 		screen := parts[2]
 		validPanelScreens := map[string]bool{
 			"home": true, "kind": true, "push": true, "no_topic": true,
