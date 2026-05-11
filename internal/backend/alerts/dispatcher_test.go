@@ -22,6 +22,7 @@ type fakeTG struct {
 	mu               sync.Mutex
 	sent             []sentMsg
 	sentWithKeyboard []sentKBMsg
+	welcomeSends     []welcomeSend
 	topicID          int64
 	topicErr         error
 	// sendErrOnce, when non-nil, is returned by the next Send*; it is then
@@ -44,6 +45,13 @@ type sentKBMsg struct {
 	text     string
 	replyTo  *int64
 	keyboard *tg.InlineKeyboardMarkup
+}
+
+type welcomeSend struct {
+	chatID   int64
+	threadID *int64
+	text     string
+	markup   any
 }
 
 func (f *fakeTG) SendMessage(_ context.Context, chatID int64, threadID *int64, text, _ string, replyTo *int64) (int64, error) {
@@ -81,6 +89,18 @@ func (f *fakeTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (
 		return 4242, nil
 	}
 	return f.topicID, nil
+}
+
+func (f *fakeTG) SendMessageWithReplyKeyboard(_ context.Context, chatID int64, threadID *int64, text, _ string, _ *int64, markup any) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.welcomeSends = append(f.welcomeSends, welcomeSend{chatID, threadID, text, markup})
+	if f.sendErrOnce != nil {
+		err := f.sendErrOnce
+		f.sendErrOnce = nil
+		return 0, err
+	}
+	return int64(len(f.welcomeSends) + 2000), nil
 }
 
 func newDB(t *testing.T) *db.DB {
@@ -424,5 +444,57 @@ func TestBuildNeighborSummaries(t *testing.T) {
 func TestBuildNeighborSummaries_Empty(t *testing.T) {
 	if got := BuildNeighborSummaries(nil, ""); got != nil {
 		t.Fatalf("expected nil for nil input, got %v", got)
+	}
+}
+
+func TestEnsureTopic_SendsWelcomeOnFreshCreate(t *testing.T) {
+	d := newDB(t)
+	tok := "0000000000000000000000000000000000000000000000000000000000000000"
+	uid, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ftg := &fakeTG{topicID: 9999}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
+	disp.WelcomeKeyboard = func() any { return "stub-kb" }
+
+	tid, err := disp.ensureTopic(context.Background(), uid, "vasya")
+	if err != nil {
+		t.Fatalf("ensureTopic fresh: %v", err)
+	}
+	if tid != 9999 {
+		t.Errorf("want tid 9999, got %d", tid)
+	}
+	if len(ftg.welcomeSends) != 1 {
+		t.Fatalf("want 1 welcome send on fresh create, got %d", len(ftg.welcomeSends))
+	}
+	if !strings.Contains(ftg.welcomeSends[0].text, "vasya") {
+		t.Errorf("welcome text missing nickname: %s", ftg.welcomeSends[0].text)
+	}
+	if ftg.welcomeSends[0].markup != "stub-kb" {
+		t.Errorf("welcome markup not propagated: %v", ftg.welcomeSends[0].markup)
+	}
+
+	// Second call — thread already exists, no new welcome.
+	if _, err := disp.ensureTopic(context.Background(), uid, "vasya"); err != nil {
+		t.Fatalf("ensureTopic no-op: %v", err)
+	}
+	if len(ftg.welcomeSends) != 1 {
+		t.Errorf("want still 1 welcome (no-op), got %d", len(ftg.welcomeSends))
+	}
+}
+
+func TestEnsureTopic_NoWelcomeWhenKeyboardNil(t *testing.T) {
+	d := newDB(t)
+	tok := "0000000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	ftg := &fakeTG{topicID: 9999}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
+	// disp.WelcomeKeyboard intentionally nil.
+	if _, err := disp.ensureTopic(context.Background(), uid, "vasya"); err != nil {
+		t.Fatal(err)
+	}
+	if len(ftg.welcomeSends) != 0 {
+		t.Errorf("want 0 welcome (nil keyboard), got %d", len(ftg.welcomeSends))
 	}
 }

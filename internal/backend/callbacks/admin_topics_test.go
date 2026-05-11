@@ -176,10 +176,66 @@ func TestAdminTopicHelp(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	help := f.sentMsgs[0]
-	for _, cmd := range []string{"/ensure_topics", "/recreate_topic", "/this_is", "/topic_help"} {
+	for _, cmd := range []string{"/ensure_topics", "/recreate_topic", "/this_is", "/panel", "/topic_help"} {
 		if !strings.Contains(help, cmd) {
 			t.Errorf("help missing %q in:\n%s", cmd, help)
 		}
+	}
+}
+
+// TestAdminEnsureTopics_SendsWelcomeForFreshTopic: after /ensure_topics
+// creates a topic, the freshly-created per_router topic gets a welcome
+// message so reply-keyboard buttons attach immediately.
+func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
+	d, _ := newTestDB(t) // vasya has no topic by default
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	msg := &tg.Message{
+		MessageID: 50, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		Text: "/ensure_topics",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	// Welcome lands in rkSends (SendMessageWithReplyKeyboard) — not sentMsgs.
+	var welcomeCount int
+	for _, s := range f.rkSends {
+		if strings.HasPrefix(s.text, "👋 Топик роутера vasya") {
+			welcomeCount++
+		}
+	}
+	if welcomeCount != 1 {
+		t.Fatalf("want 1 welcome rkSend for vasya, got %d (all rkSends: %d)", welcomeCount, len(f.rkSends))
+	}
+}
+
+// TestAdminRecreateTopic_SendsWelcomeAfterRebuild: after /recreate_topic,
+// the new per_router topic gets a welcome message so reply-keyboard
+// buttons attach immediately to the new thread.
+func TestAdminRecreateTopic_SendsWelcomeAfterRebuild(t *testing.T) {
+	d, uid := newTestDB(t)
+	const oldThread = int64(7777)
+	if err := d.Users().UpdateThreadID(uid, oldThread); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := oldThread
+	msg := &tg.Message{
+		MessageID: 51, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "/recreate_topic",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	var welcomeCount int
+	for _, s := range f.rkSends {
+		if strings.HasPrefix(s.text, "👋 Топик роутера vasya") {
+			welcomeCount++
+		}
+	}
+	if welcomeCount != 1 {
+		t.Fatalf("want 1 welcome rkSend for vasya, got %d (rkSends: %d)", welcomeCount, len(f.rkSends))
 	}
 }
 
@@ -198,5 +254,23 @@ func TestAdminCommand_TolerateBotnameSuffix(t *testing.T) {
 	r.HandleMessage(context.Background(), msg)
 	if len(f.sentMsgs) != 1 {
 		t.Fatalf("expected help reply despite @suffix, got %d", len(f.sentMsgs))
+	}
+}
+
+// TestPanel_AdminOnlyGate verifies /panel from a non-admin user produces
+// zero side effects — the HandleMessage admin-gate stops it before
+// handleAdminCommand even runs.
+func TestPanel_AdminOnlyGate(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	msg := &tg.Message{
+		MessageID: 90, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 99999},
+		Text: "/panel",
+	}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 0 || len(f.sentMsgs) != 0 {
+		t.Errorf("non-admin /panel must be ignored; rkSends=%d sentMsgs=%d", len(f.rkSends), len(f.sentMsgs))
 	}
 }

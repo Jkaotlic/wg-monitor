@@ -226,3 +226,91 @@ func TestParse_MaintActions(t *testing.T) {
 		})
 	}
 }
+
+func TestParse_PanelHome(t *testing.T) {
+	a, err := Parse("panel:0:home")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.Action != "panel" || a.PanelScreen != "home" || a.UserID != 0 {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelKindMaint(t *testing.T) {
+	a, err := Parse("panel:0:kind:maint")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "kind" || a.PanelKind != "maint" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelPush(t *testing.T) {
+	a, err := Parse("panel:42:push:routes")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "push" || a.PanelKind != "routes" || a.UserID != 42 {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelNoTopic(t *testing.T) {
+	a, err := Parse("panel:7:no_topic")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "no_topic" || a.UserID != 7 {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelAwakenConfirm(t *testing.T) {
+	a, err := Parse("panel:0:awaken_confirm")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "awaken_confirm" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelAwakenDo(t *testing.T) {
+	a, err := Parse("panel:0:awaken_do")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "awaken_do" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelClose(t *testing.T) {
+	a, err := Parse("panel:0:close")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "close" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelRejectsUnknownScreen(t *testing.T) {
+	if _, err := Parse("panel:0:wat"); err == nil {
+		t.Error("expected error for unknown screen")
+	}
+}
+
+func TestParse_PanelRejectsUnknownKind(t *testing.T) {
+	if _, err := Parse("panel:0:kind:lol"); err == nil {
+		t.Error("expected error for unknown kind")
+	}
+}
+
+func TestParse_PanelKindRequiresKind(t *testing.T) {
+	if _, err := Parse("panel:0:kind"); err == nil {
+		t.Error("expected error for kind screen without kind value")
+	}
+}
