@@ -14,13 +14,35 @@ import (
 )
 
 type fakeRouterTG struct {
-	mu        sync.Mutex
-	answers   []string
-	edits     []string
-	sentMsgs  []string
-	sendErr   error
-	answerErr error
-	editErr   error
+	mu              sync.Mutex
+	answers         []string
+	edits           []string
+	sentMsgs        []string
+	topicCalls      []fakeTopicCallRouter
+	nextTopicID     int64
+	topicErr        error
+	sendErr         error
+	answerErr       error
+	editErr         error
+}
+
+type fakeTopicCallRouter struct {
+	ChatID int64
+	Name   string
+}
+
+func (f *fakeRouterTG) CreateForumTopic(ctx context.Context, chatID int64, name string, _ int) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.topicCalls = append(f.topicCalls, fakeTopicCallRouter{ChatID: chatID, Name: name})
+	if f.topicErr != nil {
+		return 0, f.topicErr
+	}
+	if f.nextTopicID == 0 {
+		f.nextTopicID = 6000
+	}
+	f.nextTopicID++
+	return f.nextTopicID, nil
 }
 
 func (f *fakeRouterTG) SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error) {
@@ -708,5 +730,144 @@ func TestRouterDispatchFleetHealth_WithIncidents(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}
+	}
+}
+
+// ACL gate: a non-admin user who is not the bound owner of the targeted
+// router gets rejected with the "это не твой роутер" toast, no action runs.
+func TestACL_RejectsNonOwner(t *testing.T) {
+	d, uid := newTestDB(t)
+	const owner, intruder = int64(11111), int64(22222)
+	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-1",
+		From:    tg.User{ID: intruder},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "не твой роутер") {
+		t.Fatalf("expected 'не твой роутер' toast, got %v", f.answers)
+	}
+	if len(f.edits) != 0 {
+		t.Fatalf("expected no edits (action must not run), got %d", len(f.edits))
+	}
+}
+
+// ACL gate: bound owner can tap callbacks targeting their own router.
+func TestACL_AllowsBoundOwner(t *testing.T) {
+	d, uid := newTestDB(t)
+	const owner = int64(11111)
+	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-2",
+		From:    tg.User{ID: owner},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("expected action to apply (1 edit), got %d (answers=%v)", len(f.edits), f.answers)
+	}
+}
+
+// ACL gate: admin override — admin can tap regardless of owner binding.
+func TestACL_AdminBypassesOwnerCheck(t *testing.T) {
+	d, uid := newTestDB(t)
+	const owner, admin = int64(11111), int64(12345)
+	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: admin, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-3",
+		From:    tg.User{ID: admin},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("admin should bypass ACL: expected 1 edit, got %d (answers=%v)", len(f.edits), f.answers)
+	}
+}
+
+// ACL TOFU bind: unbound router, callback from owner's own per-router topic
+// → SetTelegramUserID happens and action proceeds. The next non-owner tap
+// will be rejected by TestACL_RejectsNonOwner-style logic.
+func TestACL_TOFUBindFromOwnerTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	const thread = int64(4242)
+	const newOwner = int64(99999)
+	if err := d.Users().UpdateThreadID(uid, thread); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := thread
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-4",
+		From:    tg.User{ID: newOwner},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TelegramUserID == nil || *u.TelegramUserID != newOwner {
+		t.Fatalf("TOFU did not bind: got %v, want %d", u.TelegramUserID, newOwner)
+	}
+	if len(f.edits) != 1 {
+		t.Fatalf("expected action to apply after TOFU, got %d edits", len(f.edits))
+	}
+}
+
+// ACL: unbound router, callback NOT from owner's own topic — allow without
+// binding (backwards-compat path; protects against random members
+// auto-claiming routers by tapping in foreign topics).
+func TestACL_UnboundOutsideOwnTopic_AllowsWithoutBind(t *testing.T) {
+	d, uid := newTestDB(t)
+	const ownThread = int64(4242)
+	const otherThread = int64(9999)
+	const tapper = int64(77777)
+	if err := d.Users().UpdateThreadID(uid, ownThread); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := otherThread
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-5",
+		From:    tg.User{ID: tapper},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	u, _ := d.Users().GetByID(uid)
+	if u.TelegramUserID != nil {
+		t.Fatalf("must NOT bind when callback not in owner's topic, got %v", u.TelegramUserID)
+	}
+	if len(f.edits) != 1 {
+		t.Fatalf("unbound-allow path: expected 1 edit, got %d", len(f.edits))
 	}
 }

@@ -33,6 +33,10 @@ type TGClient interface {
 	GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]tg.Update, error)
 	GetFile(ctx context.Context, fileID string) (string, error)
 	DownloadFile(ctx context.Context, filePath string) ([]byte, error)
+	// CreateForumTopic — used by admin slash-commands (/ensure_topics,
+	// /recreate_topic) to provision topics on demand from inside Telegram
+	// rather than via the wg-monitor-cli on the VPS.
+	CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int) (int64, error)
 }
 
 type Config struct {
@@ -245,6 +249,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
 		return
 	}
+	if !r.aclAllow(ctx, q, args) {
+		return
+	}
 	// Parse() validates args.Action against the action whitelist (parse.go validActions).
 	var action Action
 	switch args.Action {
@@ -376,6 +383,56 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	}
 }
 
+// aclAllow gates a callback by owner identity. Returns true to proceed,
+// false to short-circuit (the function itself sends the toast and logs).
+//
+// Decision table (q.From.ID = F, args.UserID = R, user.TelegramUserID = O,
+// user.TelegramThreadID = T, q.Message.MessageThreadID = M):
+//
+//	F == AdminUserID                        → allow (admin override)
+//	R == 0                                  → allow (no router target encoded)
+//	users.GetByID(R) fails or returns nil   → allow + warn (don't break on DB hiccup)
+//	O != nil && *O == F                     → allow (rightful owner)
+//	O != nil && *O != F                     → reject ("это не твой роутер")
+//	O == nil && M != nil && T != nil && *M == *T  → TOFU bind F → SetTelegramUserID, allow
+//	O == nil (otherwise)                    → allow (unbound, backwards-compat)
+//
+// The unbound-allow branch lets existing deployments keep working until
+// the first owner action in the owner's topic auto-binds them. After that
+// non-owner taps are rejected.
+func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
+	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
+		return true
+	}
+	if args.UserID == 0 {
+		return true
+	}
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		slog.Warn("acl: user lookup failed, allowing", "router_user_id", args.UserID, "err", err)
+		return true
+	}
+	if user.TelegramUserID != nil {
+		if *user.TelegramUserID == q.From.ID {
+			return true
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
+		slog.Warn("acl: rejected (owner mismatch)",
+			"from", q.From.ID, "router_user_id", args.UserID, "owner", *user.TelegramUserID, "data", q.Data)
+		return false
+	}
+	// Unbound. TOFU only if callback came from this router's own topic.
+	if q.Message.MessageThreadID != nil && user.TelegramThreadID != nil &&
+		*q.Message.MessageThreadID == *user.TelegramThreadID {
+		if err := r.d.Users().SetTelegramUserID(user.ID, q.From.ID); err != nil {
+			slog.Warn("acl: TOFU bind failed, allowing", "router_user_id", user.ID, "from", q.From.ID, "err", err)
+		} else {
+			slog.Info("acl: TOFU bound router owner", "router_user_id", user.ID, "tg_user_id", q.From.ID)
+		}
+	}
+	return true
+}
+
 // HandleMessage dispatches an incoming text Message: chat/admin gate, topic
 // resolution, then the appropriate smart-reply / operations action.
 //
@@ -388,6 +445,17 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		return
 	}
 	if r.cfg.AdminUserID != 0 && m.From.ID != r.cfg.AdminUserID {
+		return
+	}
+	// Slash-style admin commands run BEFORE topic resolution: /this_is is
+	// useful precisely when the topic is unbound (resolveTopicKind would
+	// return "unknown" + nil), and /ensure_topics works from any topic.
+	if r.handleAdminCommand(ctx, m) {
+		if r.cfg.UI.DeleteUserCommandMessages && m.MessageID != 0 {
+			if err := r.tg.DeleteMessage(ctx, m.Chat.ID, m.MessageID); err != nil {
+				slog.Warn("deleteMessage failed (non-fatal)", "err", err, "chat", m.Chat.ID, "msg", m.MessageID)
+			}
+		}
 		return
 	}
 	kind, user := r.resolveTopicKind(m.MessageThreadID)

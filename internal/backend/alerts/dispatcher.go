@@ -98,7 +98,13 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			opts = append(opts, tg.WithMobileActions())
 		}
 		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
-		mid, err := di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &threadID, text, "", nil, &kb)
+		sendHard := func(tid int64) (int64, error) {
+			return di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &tid, text, "", nil, &kb)
+		}
+		mid, err := sendHard(threadID)
+		if err != nil {
+			mid, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendHard)
+		}
 		if err != nil {
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
 		}
@@ -135,8 +141,13 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			HardSince:   hardSince,
 			RecoveredAt: time.Now(),
 		})
-		if _, err := di.tg.SendMessage(ctx, di.cfg.ChatID, &threadID, text, "", prev.LastAlertMsgID); err != nil {
-			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
+		sendRecovery := func(tid int64) (int64, error) {
+			return di.tg.SendMessage(ctx, di.cfg.ChatID, &tid, text, "", prev.LastAlertMsgID)
+		}
+		if _, err := sendRecovery(threadID); err != nil {
+			if _, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendRecovery); err != nil {
+				return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
+			}
 		}
 		return nil
 	}
@@ -191,10 +202,50 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	if err != nil {
 		return err
 	}
-	_, err = di.tg.SendMessage(ctx, di.cfg.ChatID, &threadID, FormatRouterOffline(nickname, since), "", nil)
+	text := FormatRouterOffline(nickname, since)
+	sendOffline := func(tid int64) (int64, error) {
+		return di.tg.SendMessage(ctx, di.cfg.ChatID, &tid, text, "", nil)
+	}
+	if _, err = sendOffline(threadID); err != nil {
+		_, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendOffline)
+	}
 	return err
 }
 
+// retryOnStaleTopic handles the case where SendMessage* failed because TG
+// reports the cached topic_id no longer exists (e.g. the operator deleted
+// the forum topic manually). When tg.IsTopicNotFound(initialErr) holds we
+// clear users.telegram_thread_id, recreate the topic via ensureTopic, and
+// invoke send once more with the fresh id. Other errors are returned
+// untouched. Only a single retry is attempted — if the recreate-then-send
+// also fails, the original error is wrapped so the caller sees both.
+func (di *Dispatcher) retryOnStaleTopic(
+	ctx context.Context,
+	userID int64,
+	nickname string,
+	initialErr error,
+	send func(threadID int64) (int64, error),
+) (int64, error) {
+	if !tg.IsTopicNotFound(initialErr) {
+		return 0, initialErr
+	}
+	slog.Warn("dispatch: stale forum topic; clearing and recreating",
+		"user_id", userID, "nickname", nickname, "err", initialErr)
+	if err := di.d.Users().ClearThreadID(userID); err != nil {
+		return 0, fmt.Errorf("self-heal clear thread id: %w (orig: %v)", err, initialErr)
+	}
+	newID, err := di.ensureTopic(ctx, userID, nickname)
+	if err != nil {
+		return 0, fmt.Errorf("self-heal recreate topic: %w (orig: %v)", err, initialErr)
+	}
+	return send(newID)
+}
+
+// ensureTopic returns a forum_topic id for `nickname`, creating one if
+// missing. Fast path is lock-free; on cache miss it takes the dispatcher
+// mutex and double-checks before delegating to EnsureTopicForUser so
+// concurrent alerts for the same user don't race to create duplicate
+// topics in TG.
 func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname string) (int64, error) {
 	u, err := di.d.Users().GetByNickname(nickname)
 	if err != nil {
@@ -205,20 +256,6 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	}
 	di.mu.Lock()
 	defer di.mu.Unlock()
-	u, err = di.d.Users().GetByNickname(nickname)
-	if err != nil {
-		return 0, err
-	}
-	if u.TelegramThreadID != nil {
-		return *u.TelegramThreadID, nil
-	}
-	tid, err := di.tg.CreateForumTopic(ctx, di.cfg.ChatID, "👤 "+nickname, 0xFF8C00)
-	if err != nil {
-		return 0, err
-	}
-	if err := di.d.Users().UpdateThreadID(u.ID, tid); err != nil {
-		return 0, err
-	}
-	return tid, nil
+	return EnsureTopicForUser(ctx, di.tg, di.d, di.cfg.ChatID, u.ID, false)
 }
 

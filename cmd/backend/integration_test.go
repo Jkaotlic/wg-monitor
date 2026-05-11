@@ -167,8 +167,8 @@ func TestStage2EndToEnd(t *testing.T) {
 		t.Fatalf("expected 1 realert message, got %d (total %d)", realertSent, len(sentMsgs))
 	}
 	last := sentMsgs[len(sentMsgs)-1]
-	if !strings.Contains(last["text"].(string), "STILL DOWN") {
-		t.Errorf("realert text missing 'STILL DOWN': %v", last["text"])
+	if !strings.Contains(last["text"].(string), "Всё ещё:") {
+		t.Errorf("realert text missing realert marker: %v", last["text"])
 	}
 	if last["reply_markup"] != nil {
 		t.Errorf("realert must not have keyboard")
@@ -414,3 +414,6 @@ func (noopTG) GetUpdates(_ context.Context, _ int64, _ int) ([]tg.Update, error)
 }
 func (noopTG) GetFile(_ context.Context, _ string) (string, error)      { return "", nil }
 func (noopTG) DownloadFile(_ context.Context, _ string) ([]byte, error) { return nil, nil }
+func (noopTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
+	return 0, nil
+}

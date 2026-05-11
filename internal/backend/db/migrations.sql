@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     expected_exit_ip TEXT NOT NULL,
     awg_iface TEXT NOT NULL,
     telegram_thread_id INTEGER,
+    telegram_user_id INTEGER,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at TIMESTAMP
 );

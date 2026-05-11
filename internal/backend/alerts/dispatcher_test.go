@@ -19,11 +19,16 @@ func chk(name, status string, details map[string]any) wire.Check {
 }
 
 type fakeTG struct {
-	mu              sync.Mutex
-	sent            []sentMsg
+	mu               sync.Mutex
+	sent             []sentMsg
 	sentWithKeyboard []sentKBMsg
-	topicID         int64
-	topicErr        error
+	topicID          int64
+	topicErr         error
+	// sendErrOnce, when non-nil, is returned by the next Send*; it is then
+	// cleared so the subsequent call succeeds. Lets tests simulate a
+	// transient TG failure (e.g. "thread not found") with retry.
+	sendErrOnce    error
+	topicCallCount int
 }
 
 type sentMsg struct {
@@ -45,6 +50,11 @@ func (f *fakeTG) SendMessage(_ context.Context, chatID int64, threadID *int64, t
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, sentMsg{chatID, threadID, text, replyTo})
+	if f.sendErrOnce != nil {
+		err := f.sendErrOnce
+		f.sendErrOnce = nil
+		return 0, err
+	}
 	return int64(len(f.sent)) * 100, nil
 }
 
@@ -52,7 +62,12 @@ func (f *fakeTG) SendMessageWithKeyboard(_ context.Context, chatID int64, thread
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sentWithKeyboard = append(f.sentWithKeyboard, sentKBMsg{chatID, threadID, text, replyTo, kb})
-	return int64(len(f.sentWithKeyboard)+1000), nil
+	if f.sendErrOnce != nil {
+		err := f.sendErrOnce
+		f.sendErrOnce = nil
+		return 0, err
+	}
+	return int64(len(f.sentWithKeyboard) + 1000), nil
 }
 
 func (f *fakeTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
@@ -61,6 +76,7 @@ func (f *fakeTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (
 	if f.topicErr != nil {
 		return 0, f.topicErr
 	}
+	f.topicCallCount++
 	if f.topicID == 0 {
 		return 4242, nil
 	}
@@ -128,8 +144,8 @@ func TestDispatcherRecoveryRepliesToHardMessage(t *testing.T) {
 	if tg.sent[0].replyTo == nil || *tg.sent[0].replyTo != 999 {
 		t.Fatalf("replyTo: %v", tg.sent[0].replyTo)
 	}
-	if !strings.Contains(tg.sent[0].text, "RECOVERED") {
-		t.Fatalf("text: %s", tg.sent[0].text)
+	if !strings.Contains(tg.sent[0].text, "снова в норме") && !strings.Contains(tg.sent[0].text, "снова на связи") && !strings.Contains(tg.sent[0].text, "снова работает") && !strings.Contains(tg.sent[0].text, "восстановился") && !strings.Contains(tg.sent[0].text, "снова отвечает") && !strings.Contains(tg.sent[0].text, "снова доступен") && !strings.Contains(tg.sent[0].text, "снова доступны") {
+		t.Fatalf("text missing recovery headline: %s", tg.sent[0].text)
 	}
 	savedState, err := d.State().Get(uid, "awg_handshake")
 	if err != nil {
@@ -269,8 +285,8 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	if len(ftg.sent) != 1 {
 		t.Fatalf("expected 1 plain SendMessage, got %d", len(ftg.sent))
 	}
-	if !strings.Contains(ftg.sent[0].text, "ROUTER OFFLINE") {
-		t.Fatalf("text missing ROUTER OFFLINE: %q", ftg.sent[0].text)
+	if !strings.Contains(ftg.sent[0].text, "Роутер не на связи") {
+		t.Fatalf("text missing offline headline: %q", ftg.sent[0].text)
 	}
 	if ftg.sent[0].thread == nil || *ftg.sent[0].thread != 8888 {
 		t.Fatalf("thread mismatch: %v", ftg.sent[0].thread)
@@ -297,6 +313,81 @@ func TestSendOffline_TopicCreateFailure(t *testing.T) {
 type errStub string
 
 func (e errStub) Error() string { return string(e) }
+
+// TestDispatcherSelfHealsStaleTopic: when the cached telegram_thread_id
+// points at a topic that no longer exists in TG (operator deleted it),
+// the first SendMessage* returns a 400 "message thread not found" and the
+// dispatcher must clear the id, recreate the topic, and resend once
+// against the fresh id. Covers scenario "тема была и пропала".
+func TestDispatcherSelfHealsStaleTopic(t *testing.T) {
+	d := newDB(t)
+	tok := "7777777777777777777777777777777777777777777777777777777777777777"
+	uid, _ := d.Users().Insert("frank", tok, "1.1.1.1", "awg0")
+	const staleID, freshID = int64(1111), int64(9999)
+	if err := d.Users().UpdateThreadID(uid, staleID); err != nil {
+		t.Fatal(err)
+	}
+	ftg := &fakeTG{
+		topicID:     freshID,
+		sendErrOnce: &tg.APIError{Method: "sendMessage", Description: "Bad Request: message thread not found", Code: 400},
+	}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+	}
+	if err := disp.Handle(context.Background(), uid, "frank", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "x"})); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	if got := len(ftg.sentWithKeyboard); got != 2 {
+		t.Fatalf("expected 2 send attempts (stale + retry), got %d", got)
+	}
+	if tid := ftg.sentWithKeyboard[0].threadID; tid == nil || *tid != staleID {
+		t.Fatalf("first send threadID: want %d, got %v", staleID, tid)
+	}
+	if tid := ftg.sentWithKeyboard[1].threadID; tid == nil || *tid != freshID {
+		t.Fatalf("retry threadID: want %d, got %v", freshID, tid)
+	}
+	u, _ := d.Users().GetByNickname("frank")
+	if u.TelegramThreadID == nil || *u.TelegramThreadID != freshID {
+		t.Fatalf("DB thread_id after heal: want %d, got %v", freshID, u.TelegramThreadID)
+	}
+	if ftg.topicCallCount != 1 {
+		t.Fatalf("CreateForumTopic call count: want 1 (only the heal), got %d", ftg.topicCallCount)
+	}
+}
+
+// TestDispatcherSurfacesNonHealableTGError: a TG error that is NOT a
+// stale-topic signal (e.g. 403 forbidden, 429 rate-limit, malformed) must
+// propagate untouched — no retry, no thread_id reset.
+func TestDispatcherSurfacesNonHealableTGError(t *testing.T) {
+	d := newDB(t)
+	tok := "8888888888888888888888888888888888888888888888888888888888888888"
+	uid, _ := d.Users().Insert("grace", tok, "1.1.1.1", "awg0")
+	const stableID = int64(5555)
+	_ = d.Users().UpdateThreadID(uid, stableID)
+	ftg := &fakeTG{
+		sendErrOnce: &tg.APIError{Method: "sendMessage", Description: "Forbidden: bot was kicked", Code: 403},
+	}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+	}
+	err := disp.Handle(context.Background(), uid, "grace", "awg_handshake", tr, chk("awg_handshake", "fail", nil))
+	if err == nil {
+		t.Fatal("expected error to surface, got nil")
+	}
+	if len(ftg.sentWithKeyboard) != 1 {
+		t.Fatalf("expected 1 send attempt (no retry on non-stale err), got %d", len(ftg.sentWithKeyboard))
+	}
+	u, _ := d.Users().GetByNickname("grace")
+	if u.TelegramThreadID == nil || *u.TelegramThreadID != stableID {
+		t.Fatalf("thread_id must be untouched on non-stale err: got %v", u.TelegramThreadID)
+	}
+}
 
 // TestBuildNeighborSummaries: shared helper used by both dispatcher and
 // realert; covers the four interesting paths — empty, exclusion of self,
