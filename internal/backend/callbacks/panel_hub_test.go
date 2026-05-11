@@ -2,9 +2,11 @@ package callbacks
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
@@ -145,4 +147,79 @@ func newTestDBEmpty(t *testing.T) *db.DB {
 	}
 	t.Cleanup(func() { d.Close() })
 	return d
+}
+
+func TestPanelPush_StatusSendsSmartReplyToTargetThread(t *testing.T) {
+	d, uid := newTestDB(t) // vasya, no thread by default
+	const targetThread = int64(4242)
+	if err := d.Users().UpdateThreadID(uid, targetThread); err != nil {
+		t.Fatal(err)
+	}
+	// Smart-reply needs at least one event to avoid the "never reported" branch.
+	if err := d.Events().Insert(uid, "tunnel_amnezia_for_awg", "ok", `{"tunnel_name":"amnezia_for_awg","status":"ok"}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:   "cb-push",
+		From: tg.User{ID: 12345},
+		Data: fmt.Sprintf("panel:%d:push:status", uid),
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: -100},
+			MessageID: 75,
+		},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	// At least one rkSend went into the target thread with the user's nickname.
+	var landedInTarget bool
+	for _, s := range f.rkSends {
+		if s.thread != nil && *s.thread == targetThread && strings.Contains(s.text, "vasya") {
+			landedInTarget = true
+			break
+		}
+	}
+	if !landedInTarget {
+		t.Errorf("smart-reply did not land in target thread %d; rkSends=%+v", targetThread, f.rkSends)
+	}
+	// Hub edited to show result.
+	if len(f.edits) == 0 {
+		t.Errorf("expected hub edit with result, got 0 edits")
+	}
+}
+
+func TestPanelPush_StaleTopicSurfacesError(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 555); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	f.sendErr = &tg.APIError{Method: "sendMessage", Description: "message thread not found", Code: 400}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:   "cb-stale",
+		From: tg.User{ID: 12345},
+		Data: fmt.Sprintf("panel:%d:push:status", uid),
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: -100},
+			MessageID: 76,
+		},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	// Hub edit should surface stale-topic guidance.
+	var stale bool
+	for _, e := range f.edits {
+		if strings.Contains(e, "удалён") || strings.Contains(e, "не найден") {
+			stale = true
+			break
+		}
+	}
+	if !stale {
+		t.Errorf("expected stale-topic error in hub edit; got %v", f.edits)
+	}
 }
