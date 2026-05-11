@@ -7,7 +7,6 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
-
 // TopicCreator is the slice of *tg.Client used by topic-creation paths.
 // Extracted so the alerts package doesn't import the full tg client API,
 // and so CLI/Router tests can drop a mock in without an HTTPS server.
