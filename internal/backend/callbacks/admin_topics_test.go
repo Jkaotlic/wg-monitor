@@ -183,6 +183,32 @@ func TestAdminTopicHelp(t *testing.T) {
 	}
 }
 
+// TestAdminEnsureTopics_SendsWelcomeForFreshTopic: after /ensure_topics
+// creates a topic, the freshly-created per_router topic gets a welcome
+// message so reply-keyboard buttons attach immediately.
+func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
+	d, _ := newTestDB(t) // vasya has no topic by default
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	msg := &tg.Message{
+		MessageID: 50, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		Text: "/ensure_topics",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	// Welcome lands in rkSends (SendMessageWithReplyKeyboard) — not sentMsgs.
+	var welcomeCount int
+	for _, s := range f.rkSends {
+		if strings.HasPrefix(s.text, "👋 Топик роутера vasya") {
+			welcomeCount++
+		}
+	}
+	if welcomeCount != 1 {
+		t.Fatalf("want 1 welcome rkSend for vasya, got %d (all rkSends: %d)", welcomeCount, len(f.rkSends))
+	}
+}
+
 // TestAdminCommand_TolerateBotnameSuffix: TG appends @bot_name when the
 // command is picked from the command menu in a group. Parsing must ignore
 // the suffix.
