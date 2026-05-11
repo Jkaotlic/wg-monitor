@@ -2,9 +2,11 @@ package callbacks
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -60,4 +62,87 @@ func containsStr(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func TestPanelKindPick_ListsRoutersWithThreadFlag(t *testing.T) {
+	d, _ := newTestDB(t) // vasya, no thread
+	// Add a second user WITH thread, a third WITHOUT thread.
+	uid2, err := d.Users().Insert("betak", "tok-b", "2.2.2.2", "nwg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uid2, 1234); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Users().Insert("gamma", "tok-g", "3.3.3.3", "nwg1"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:   "cb-1",
+		From: tg.User{ID: 12345},
+		Data: "panel:0:kind:maint",
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: -100},
+			MessageID: 70,
+		},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	// Hub edited (not new send).
+	if len(f.edits) != 1 {
+		t.Fatalf("want 1 edit, got %d", len(f.edits))
+	}
+	got := f.edits[0]
+	if !strings.Contains(got, "Maintenance") {
+		t.Errorf("kind pick header missing 'Maintenance': %s", got)
+	}
+	for _, want := range []string{"betak", "vasya", "gamma"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("kind pick missing router %q: %s", want, got)
+		}
+	}
+	// Users without thread carry a warning marker.
+	if !strings.Contains(got, "⚠") {
+		t.Errorf("expected ⚠ marker for users without thread, got: %s", got)
+	}
+}
+
+func TestPanelKindPick_NoUsersShowsEmptyState(t *testing.T) {
+	d := newTestDBEmpty(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:   "cb-empty",
+		From: tg.User{ID: 12345},
+		Data: "panel:0:kind:routes",
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: -100},
+			MessageID: 71,
+		},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("want 1 edit, got %d", len(f.edits))
+	}
+	if !strings.Contains(f.edits[0], "Роутеров нет") {
+		t.Errorf("expected empty-state text, got: %s", f.edits[0])
+	}
+}
+
+// newTestDBEmpty opens a fresh test DB without inserting any users.
+// (Sibling helper to newTestDB which inserts a default "vasya".)
+func newTestDBEmpty(t *testing.T) *db.DB {
+	t.Helper()
+	d, err := db.Open(filepath.Join(t.TempDir(), "panel.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d
 }
