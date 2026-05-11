@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -54,9 +55,92 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 		r.panelEditToKindPick(ctx, q, args.PanelKind)
 	case "close":
 		r.panelClose(ctx, q)
+	case "push":
+		r.panelHandlePush(ctx, q, args)
+	case "no_topic":
+		r.panelHandleNoTopic(ctx, q, args)
 	default:
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "screen TBA")
 	}
+}
+
+// panelHandlePush publishes the chosen panel kind into the target router's
+// per_router topic via a synthetic tg.Message, then edits the hub message
+// to the result screen. The synthetic-Message pattern mirrors compat_btn
+// (callbacks/compat_inline.go) — MessageID=0 marks the message as
+// synthetic so the user-message deletion branch in HandleMessage skips.
+func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	u, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || u == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if u.TelegramThreadID == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "у роутера нет топика")
+		return
+	}
+	threadID := *u.TelegramThreadID
+	synth := &tg.Message{
+		MessageID:       0, // sentinel: skip user-message deletion
+		Chat:            q.Message.Chat,
+		From:            q.From,
+		MessageThreadID: &threadID,
+	}
+	publishErr := r.panelPublish(ctx, synth, u, args.PanelKind)
+	kindLabel := map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status"}[args.PanelKind]
+	var resultText string
+	switch {
+	case publishErr == nil:
+		resultText = fmt.Sprintf("🎛 Панель управления\n\n✅ %s отправлен в топик @%s.", kindLabel, u.Nickname)
+	case tg.IsTopicNotFound(publishErr):
+		resultText = fmt.Sprintf("🎛 Панель управления\n\n❌ Топик роутера @%s похоже удалён. Сделай /recreate_topic внутри его топика или /ensure_topics.", u.Nickname)
+	default:
+		resultText = fmt.Sprintf("🎛 Панель управления\n\n❌ Не удалось опубликовать %s в @%s: %v", kindLabel, u.Nickname, publishErr)
+	}
+	kb := panelResultKb()
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, resultText, "", &kb); err != nil {
+		slog.Warn("panel push result edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+// panelPublish dispatches to the appropriate kind-specific builder. Each
+// builder posts a fresh message in the target topic (via the synthetic
+// Message) and enqueues any associated agent command. To surface
+// stale-topic errors synchronously (the builders log errors internally
+// rather than returning them), we do a cheap probe SendMessage first;
+// the panel will then overwrite/replace it normally.
+func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, kind string) error {
+	probeMsg := fmt.Sprintf("🎛 %s готовится…", map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status"}[kind])
+	if _, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, probeMsg, "", nil); err != nil {
+		return err
+	}
+	switch kind {
+	case "maint":
+		r.openMaintPanelMessage(ctx, m, u)
+	case "routes":
+		r.openRoutesPanelMessage(ctx, m, u)
+	case "status":
+		r.dispatchSmartReply(ctx, m, u)
+	default:
+		return fmt.Errorf("unknown panel kind: %q", kind)
+	}
+	return nil
+}
+
+func panelResultKb() tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{
+		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "« К панели", CallbackData: "panel:0:home"},
+				{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
+			},
+		},
+	}
+}
+
+func (r *Router) panelHandleNoTopic(ctx context.Context, q *tg.CallbackQuery, _ Args) {
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "У роутера нет топика — сделай /ensure_topics")
 }
 
 func (r *Router) panelEditToHome(ctx context.Context, q *tg.CallbackQuery) {
