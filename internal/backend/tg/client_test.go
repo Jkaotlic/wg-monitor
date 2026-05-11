@@ -271,6 +271,37 @@ func TestDownloadFile(t *testing.T) {
 	}
 }
 
+func TestSetMyCommands_PostsExpectedPayload(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/setMyCommands") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{
+		BaseURL: ts.URL + "/bot",
+		Token:   "T",
+		HTTP:    ts.Client(),
+	}
+	cmds := []BotCommand{
+		{Command: "panel", Description: "Открыть панель управления"},
+		{Command: "topic_help", Description: "Шпаргалка"},
+	}
+	if err := c.SetMyCommands(context.Background(), cmds); err != nil {
+		t.Fatalf("SetMyCommands: %v", err)
+	}
+	if !strings.Contains(string(gotBody), `"command":"panel"`) {
+		t.Errorf("body missing panel command: %s", gotBody)
+	}
+	if !strings.Contains(string(gotBody), `"description":"Шпаргалка"`) {
+		t.Errorf("body missing description: %s", gotBody)
+	}
+}
+
 func TestGetUpdates_ParseDocument(t *testing.T) {
 	resp := `{"ok":true,"result":[{"update_id":1,"message":{"message_id":10,"from":{"id":99},"chat":{"id":-100},"message_thread_id":5,"document":{"file_id":"fid1","file_name":"awg11.conf","file_size":512}}}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

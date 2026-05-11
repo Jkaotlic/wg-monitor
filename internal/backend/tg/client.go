@@ -283,6 +283,25 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, err
 	return io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
 }
 
+// BotCommand mirrors the TG Bot API BotCommand object used by setMyCommands.
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+type setMyCommandsReq struct {
+	Commands []BotCommand `json:"commands"`
+}
+
+// SetMyCommands registers the bot's slash-command menu so TG clients show
+// the commands in the command picker. Idempotent — TG replaces the previous
+// list each call. Errors are non-fatal at call sites (the bot keeps working
+// without the menu hint).
+func (c *Client) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
+	body, _ := json.Marshal(setMyCommandsReq{Commands: cmds})
+	return c.call(ctx, "setMyCommands", body, nil)
+}
+
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {
 	return c.callWith(ctx, c.HTTP, method, body, dst)
 }
