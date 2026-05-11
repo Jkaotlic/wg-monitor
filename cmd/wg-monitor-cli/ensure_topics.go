@@ -31,7 +31,14 @@ type ensureTopicsOpts struct {
 	Sleep time.Duration
 	// Creator must implement alerts.TopicCreator.
 	Creator topicCreator
-	Out     io.Writer
+	// Welcomer is optional — when non-nil, a welcome message is sent
+	// into each freshly-created topic so reply-keyboard buttons attach
+	// immediately. nil disables (used by older tests that don't model TG).
+	Welcomer alerts.WelcomeSender
+	// WelcomeKeyboard returns the reply-markup attached to the welcome.
+	// Mirrors Dispatcher.WelcomeKeyboard contract.
+	WelcomeKeyboard func() any
+	Out             io.Writer
 }
 
 func cmdEnsureTopics(args []string) {
@@ -58,13 +65,15 @@ func cmdEnsureTopics(args []string) {
 		HTTP:    &http.Client{Timeout: 30 * time.Second},
 	}
 	if err := runEnsureTopics(context.Background(), ensureTopicsOpts{
-		DBPath:   dbPath,
-		ChatID:   cfg.Telegram.ChatID,
-		Nickname: *nick,
-		Force:    *force,
-		Sleep:    time.Duration(*sleepMs) * time.Millisecond,
-		Creator:  tgClient,
-		Out:      os.Stdout,
+		DBPath:          dbPath,
+		ChatID:          cfg.Telegram.ChatID,
+		Nickname:        *nick,
+		Force:           *force,
+		Sleep:           time.Duration(*sleepMs) * time.Millisecond,
+		Creator:         tgClient,
+		Welcomer:        tgClient,
+		WelcomeKeyboard: func() any { return tg.ReplyKeyboardForTopic("per_router") },
+		Out:             os.Stdout,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -137,6 +146,13 @@ func runEnsureTopics(ctx context.Context, o ensureTopicsOpts) error {
 			fmt.Fprintf(o.Out, "+ rebuilt %s — old topic id=%d → new topic id=%d (old topic left intact in TG)\n", u.Nickname, oldID, tid)
 		} else {
 			fmt.Fprintf(o.Out, "+ created %s — topic id=%d\n", u.Nickname, tid)
+		}
+		// Send welcome so reply-keyboard attaches to the new topic.
+		// Non-fatal: log to stdout and continue.
+		if o.Welcomer != nil && o.WelcomeKeyboard != nil {
+			if werr := alerts.SendWelcome(ctx, o.Welcomer, o.ChatID, tid, u.Nickname, o.WelcomeKeyboard()); werr != nil {
+				fmt.Fprintf(o.Out, "  (welcome send failed for %s: %v)\n", u.Nickname, werr)
+			}
 		}
 		created++
 	}

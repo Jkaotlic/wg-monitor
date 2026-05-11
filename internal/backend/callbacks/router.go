@@ -326,6 +326,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.maintConfirmAct != nil {
 			action = r.maintConfirmAct
 		}
+	case "panel":
+		r.handlePanelCallback(ctx, q, args)
+		return
 	case "compat_btn":
 		r.handleCompatBtn(ctx, q, args)
 		return

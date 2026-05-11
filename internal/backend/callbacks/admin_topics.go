@@ -47,6 +47,9 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	case "/this_is":
 		r.adminThisIs(ctx, m, arg)
 		return true
+	case "/panel":
+		r.adminPanelOpen(ctx, m)
+		return true
 	case "/topic_help":
 		r.adminTopicHelp(ctx, m)
 		return true
@@ -88,6 +91,11 @@ func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 			failed++
 			continue
 		}
+		// Welcome: best-effort, non-fatal. Skip if it fails — fresh topic
+		// is still usable; the reply-kb will attach on the next bot message.
+		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+			slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
+		}
 		fmt.Fprintf(&b, "✅ %s — thread_id=%d\n", u.Nickname, tid)
 		created++
 	}
@@ -118,6 +126,11 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 	if err != nil {
 		r.adminReply(ctx, m, "❌ не удалось пересоздать тему: "+err.Error())
 		return
+	}
+	// Welcome: always fires on rebuild (new thread_id = new topic) so the
+	// reply-keyboard attaches to the fresh thread. Non-fatal.
+	if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+		slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
 	}
 	r.adminReply(ctx, m, fmt.Sprintf(
 		"🔄 Тема для %s пересоздана.\n  Старая thread_id=%d (осталась в TG, можешь удалить руками)\n  Новая thread_id=%d — алерты пойдут туда.",
@@ -159,6 +172,8 @@ func (r *Router) adminTopicHelp(ctx context.Context, m *tg.Message) {
 /recreate_topic — пересоздать тему ТЕКУЩЕГО топика (пиши команду внутри топика роутера). Старая остаётся в TG, новая становится активной.
 
 /this_is <nickname> — привязать ЭТОТ топик к роутеру <nickname>. Полезно если ты создал тему руками в TG и хочешь, чтобы алерты этого роутера шли в неё.
+
+/panel — открыть админ-панель: оттуда можно отправить Maintenance / Routes / Status в любой роутер, или "оживить" все топики (добавить кнопки во все).
 
 /topic_help — эта справка.
 

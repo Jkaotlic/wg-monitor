@@ -271,6 +271,52 @@ func TestDownloadFile(t *testing.T) {
 	}
 }
 
+func TestSetMyCommands_PostsExpectedPayload(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/setMyCommands") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{
+		BaseURL: ts.URL + "/bot",
+		Token:   "T",
+		HTTP:    ts.Client(),
+	}
+	cmds := []BotCommand{
+		{Command: "panel", Description: "Открыть панель управления"},
+		{Command: "topic_help", Description: "Шпаргалка"},
+	}
+	if err := c.SetMyCommands(context.Background(), cmds); err != nil {
+		t.Fatalf("SetMyCommands: %v", err)
+	}
+	var got struct {
+		Commands []BotCommand `json:"commands"`
+	}
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("unmarshal body: %v\nbody: %s", err, gotBody)
+	}
+	if len(got.Commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %+v", len(got.Commands), got.Commands)
+	}
+	if got.Commands[0].Command != "panel" {
+		t.Errorf("commands[0].command: got %q, want %q", got.Commands[0].Command, "panel")
+	}
+	if got.Commands[0].Description != "Открыть панель управления" {
+		t.Errorf("commands[0].description: got %q, want %q", got.Commands[0].Description, "Открыть панель управления")
+	}
+	if got.Commands[1].Command != "topic_help" {
+		t.Errorf("commands[1].command: got %q, want %q", got.Commands[1].Command, "topic_help")
+	}
+	if got.Commands[1].Description != "Шпаргалка" {
+		t.Errorf("commands[1].description: got %q, want %q", got.Commands[1].Description, "Шпаргалка")
+	}
+}
+
 func TestGetUpdates_ParseDocument(t *testing.T) {
 	resp := `{"ok":true,"result":[{"update_id":1,"message":{"message_id":10,"from":{"id":99},"chat":{"id":-100},"message_thread_id":5,"document":{"file_id":"fid1","file_name":"awg11.conf","file_size":512}}}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
