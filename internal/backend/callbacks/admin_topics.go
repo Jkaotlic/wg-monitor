@@ -124,6 +124,11 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 		r.adminReply(ctx, m, "❌ не удалось пересоздать тему: "+err.Error())
 		return
 	}
+	// Welcome: always fires on rebuild (new thread_id = new topic) so the
+	// reply-keyboard attaches to the fresh thread. Non-fatal.
+	if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+		slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
+	}
 	r.adminReply(ctx, m, fmt.Sprintf(
 		"🔄 Тема для %s пересоздана.\n  Старая thread_id=%d (осталась в TG, можешь удалить руками)\n  Новая thread_id=%d — алерты пойдут туда.",
 		u.Nickname, oldID, tid))
