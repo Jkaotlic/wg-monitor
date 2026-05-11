@@ -294,11 +294,26 @@ func TestSetMyCommands_PostsExpectedPayload(t *testing.T) {
 	if err := c.SetMyCommands(context.Background(), cmds); err != nil {
 		t.Fatalf("SetMyCommands: %v", err)
 	}
-	if !strings.Contains(string(gotBody), `"command":"panel"`) {
-		t.Errorf("body missing panel command: %s", gotBody)
+	var got struct {
+		Commands []BotCommand `json:"commands"`
 	}
-	if !strings.Contains(string(gotBody), `"description":"Шпаргалка"`) {
-		t.Errorf("body missing description: %s", gotBody)
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("unmarshal body: %v\nbody: %s", err, gotBody)
+	}
+	if len(got.Commands) != 2 {
+		t.Fatalf("expected 2 commands, got %d: %+v", len(got.Commands), got.Commands)
+	}
+	if got.Commands[0].Command != "panel" {
+		t.Errorf("commands[0].command: got %q, want %q", got.Commands[0].Command, "panel")
+	}
+	if got.Commands[0].Description != "Открыть панель управления" {
+		t.Errorf("commands[0].description: got %q, want %q", got.Commands[0].Description, "Открыть панель управления")
+	}
+	if got.Commands[1].Command != "topic_help" {
+		t.Errorf("commands[1].command: got %q, want %q", got.Commands[1].Command, "topic_help")
+	}
+	if got.Commands[1].Description != "Шпаргалка" {
+		t.Errorf("commands[1].description: got %q, want %q", got.Commands[1].Description, "Шпаргалка")
 	}
 }
 
