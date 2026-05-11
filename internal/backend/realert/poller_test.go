@@ -75,11 +75,11 @@ func TestTickStaleHardSendsRealert(t *testing.T) {
 	if len(f.sent) != 1 {
 		t.Fatalf("expected 1 realert, got %d", len(f.sent))
 	}
-	if !strings.Contains(f.sent[0], "STILL DOWN") {
-		t.Errorf("missing 'STILL DOWN' in: %q", f.sent[0])
+	if !strings.Contains(f.sent[0], "Всё ещё:") {
+		t.Errorf("missing realert marker in: %q", f.sent[0])
 	}
-	if !strings.Contains(f.sent[0], "Re-alert #1") {
-		t.Errorf("expected 'Re-alert #1' (7h since), got: %q", f.sent[0])
+	if !strings.Contains(f.sent[0], "#1") {
+		t.Errorf("expected re-alert counter '#1' (7h since), got: %q", f.sent[0])
 	}
 
 	st, _ := d.State().Get(uid, "awg_handshake")

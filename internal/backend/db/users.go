@@ -27,8 +27,13 @@ type User struct {
 	AWGIface         string
 	Kind             string
 	TelegramThreadID *int64
-	CreatedAt        time.Time
-	LastSeenAt       *time.Time
+	// TelegramUserID is the numeric Telegram user id of the router's owner,
+	// captured either via CLI bind-tg-user or via TOFU on the first action
+	// in the owner's per-router topic. NULL until bound; callbacks router
+	// uses it to gate non-admin button taps to the rightful owner.
+	TelegramUserID *int64
+	CreatedAt      time.Time
+	LastSeenAt     *time.Time
 }
 
 // IsMobile reports whether this user is a mobile (4G in-vehicle) router.
@@ -66,7 +71,7 @@ func (u *UsersRepo) InsertWithKind(nickname, rawToken, expectedExitIP, awgIface,
 
 // userColsFull lists every column read by single-row Get*. GetAll uses a
 // shorter projection (no token_hash, no created_at) and has its own scanner.
-const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, created_at, last_seen_at`
+const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at`
 
 type userScanner interface {
 	Scan(dest ...any) error
@@ -75,13 +80,18 @@ type userScanner interface {
 func scanUserFull(s userScanner) (*User, error) {
 	var got User
 	var threadID sql.NullInt64
+	var tgUserID sql.NullInt64
 	var lastSeen sql.NullTime
-	if err := s.Scan(&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind, &threadID, &got.CreatedAt, &lastSeen); err != nil {
+	if err := s.Scan(&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind, &threadID, &tgUserID, &got.CreatedAt, &lastSeen); err != nil {
 		return nil, err
 	}
 	if threadID.Valid {
 		v := threadID.Int64
 		got.TelegramThreadID = &v
+	}
+	if tgUserID.Valid {
+		v := tgUserID.Int64
+		got.TelegramUserID = &v
 	}
 	if lastSeen.Valid {
 		v := lastSeen.Time
@@ -132,7 +142,7 @@ func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 }
 
 func (u *UsersRepo) GetAll() ([]User, error) {
-	rows, err := u.d.db.Query(`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, last_seen_at FROM users ORDER BY id`)
+	rows, err := u.d.db.Query(`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, last_seen_at FROM users ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -141,13 +151,18 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 	for rows.Next() {
 		var got User
 		var threadID sql.NullInt64
+		var tgUserID sql.NullInt64
 		var lastSeen sql.NullTime
-		if err := rows.Scan(&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind, &threadID, &lastSeen); err != nil {
+		if err := rows.Scan(&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind, &threadID, &tgUserID, &lastSeen); err != nil {
 			return nil, err
 		}
 		if threadID.Valid {
 			v := threadID.Int64
 			got.TelegramThreadID = &v
+		}
+		if tgUserID.Valid {
+			v := tgUserID.Int64
+			got.TelegramUserID = &v
 		}
 		if lastSeen.Valid {
 			v := lastSeen.Time
@@ -165,6 +180,27 @@ func (u *UsersRepo) UpdateLastSeen(id int64) error {
 
 func (u *UsersRepo) UpdateThreadID(id, threadID int64) error {
 	_, err := u.d.db.Exec(`UPDATE users SET telegram_thread_id = ? WHERE id = ?`, threadID, id)
+	return err
+}
+
+// SetTelegramUserID binds the router to a specific Telegram user id.
+// Used by the callbacks router (TOFU on first owner action) and the
+// `bind-tg-user` CLI. Pass 0 to clear the binding.
+func (u *UsersRepo) SetTelegramUserID(id, tgUserID int64) error {
+	if tgUserID == 0 {
+		_, err := u.d.db.Exec(`UPDATE users SET telegram_user_id = NULL WHERE id = ?`, id)
+		return err
+	}
+	_, err := u.d.db.Exec(`UPDATE users SET telegram_user_id = ? WHERE id = ?`, tgUserID, id)
+	return err
+}
+
+// ClearThreadID nulls out telegram_thread_id for a user. Used by the
+// dispatcher's self-heal path: when sendMessage reports the cached topic
+// no longer exists in TG, we clear the id so the next ensureTopic call
+// invokes createForumTopic and persists a fresh id.
+func (u *UsersRepo) ClearThreadID(id int64) error {
+	_, err := u.d.db.Exec(`UPDATE users SET telegram_thread_id = NULL WHERE id = ?`, id)
 	return err
 }
 

@@ -9,12 +9,46 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"strings"
 )
+
+// APIError is the structured form of a non-OK Telegram Bot API response.
+// Callers should use errors.As to extract it and inspect Code/Description
+// for self-heal decisions (see IsTopicNotFound).
+type APIError struct {
+	Method      string
+	Description string
+	Code        int
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("tg %s: %s (code=%d)", e.Method, e.Description, e.Code)
+}
+
+// IsTopicNotFound reports whether err signals the target forum topic no
+// longer exists in TG. Used by the alert dispatcher to clear the cached
+// telegram_thread_id and recreate the topic on the next attempt rather
+// than retry forever against a dead id.
+func IsTopicNotFound(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	if ae.Code != 400 {
+		return false
+	}
+	d := strings.ToLower(ae.Description)
+	// topic_closed deliberately NOT included: a closed topic still exists
+	// and can be reopened by an admin; recreating would orphan history.
+	return strings.Contains(d, "message thread not found") ||
+		strings.Contains(d, "message_thread_not_found") ||
+		strings.Contains(d, "topic_deleted")
+}
 
 const DefaultBaseURL = "https://api.telegram.org/bot"
 
@@ -287,7 +321,7 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 	}
 	if !ar.OK {
 		c.warn(method, "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
-		return fmt.Errorf("tg %s: %s (code=%d)", method, ar.Description, ar.ErrorCode)
+		return &APIError{Method: method, Description: ar.Description, Code: ar.ErrorCode}
 	}
 	if dst != nil {
 		if err := json.Unmarshal(ar.Result, dst); err != nil {

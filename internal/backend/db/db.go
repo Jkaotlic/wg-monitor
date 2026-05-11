@@ -63,6 +63,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate events unique idx: %w", err)
 	}
+	if err := migrateTelegramUserID(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users.telegram_user_id: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -111,6 +115,15 @@ func migrateAcked(d *sql.DB) error {
 func migrateUserKind(d *sql.DB) error {
 	return addColumnIfMissing(d, "users", "kind",
 		`ALTER TABLE users ADD COLUMN kind TEXT NOT NULL DEFAULT 'static'`)
+}
+
+// migrateTelegramUserID adds users.telegram_user_id (NULL by default) for
+// callback ACL: the TG numeric user id of the router's owner. Used by
+// HandleCallback to reject taps from members of the group chat who are
+// not the owner of the targeted router (admin always passes).
+func migrateTelegramUserID(d *sql.DB) error {
+	return addColumnIfMissing(d, "users", "telegram_user_id",
+		`ALTER TABLE users ADD COLUMN telegram_user_id INTEGER`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {
