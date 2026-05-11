@@ -165,9 +165,10 @@ func (r *Router) panelClose(ctx context.Context, q *tg.CallbackQuery) {
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
-// panelEditToKindPick renders the router selection screen for the chosen
-// kind. Users without TelegramThreadID render with a ⚠ prefix and a
-// no_topic callback that toasts an explanation.
+// panelAwakenConfirm renders the "Оживить топики" confirmation screen
+// showing the count of routers that have a topic and will receive a
+// welcome message. Two-button kb: Подтвердить (panel:0:awaken_do) /
+// « Назад (panel:0:home).
 func (r *Router) panelAwakenConfirm(ctx context.Context, q *tg.CallbackQuery) {
 	users, err := r.d.Users().GetAll()
 	if err != nil {
@@ -248,6 +249,9 @@ done:
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
+// panelEditToKindPick renders the router selection screen for the chosen
+// kind. Users without TelegramThreadID render with a ⚠ prefix and a
+// no_topic callback that toasts an explanation.
 func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, kind string) {
 	users, err := r.d.Users().GetAll()
 	if err != nil {
