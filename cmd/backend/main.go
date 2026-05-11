@@ -58,6 +58,19 @@ func main() {
 		LongPollHTTP: &http.Client{Timeout: 90 * time.Second},
 		Logger:       logger.With("component", "tg"),
 	}
+	// Register slash-command menu so TG clients show the commands in the
+	// picker. Non-fatal — the bot keeps working if TG refuses.
+	smcCtx, smcCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := tgClient.SetMyCommands(smcCtx, []tg.BotCommand{
+		{Command: "panel", Description: "Открыть панель управления"},
+		{Command: "ensure_topics", Description: "Создать темы для всех роутеров"},
+		{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
+		{Command: "this_is", Description: "Привязать этот топик к роутеру (укажи nickname)"},
+		{Command: "topic_help", Description: "Шпаргалка по управлению темами"},
+	}); err != nil {
+		logger.Warn("setMyCommands failed (non-fatal)", "err", err)
+	}
+	smcCancel()
 	disp := alerts.NewDispatcher(d, tgClient, alerts.Config{
 		ChatID:            cfg.Telegram.ChatID,
 		FailThreshold:     cfg.State.FailThreshold,
@@ -82,6 +95,9 @@ func main() {
 		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
 		DiagMaxChars:              cfg.UI.DiagMaxChars,
 		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard,
+	}
+	disp.WelcomeKeyboard = func() any {
+		return uiSnap.KeyboardForTopic("per_router")
 	}
 	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
 	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
