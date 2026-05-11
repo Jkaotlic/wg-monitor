@@ -88,6 +88,11 @@ func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 			failed++
 			continue
 		}
+		// Welcome: best-effort, non-fatal. Skip if it fails — fresh topic
+		// is still usable; the reply-kb will attach on the next bot message.
+		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+			slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
+		}
 		fmt.Fprintf(&b, "✅ %s — thread_id=%d\n", u.Nickname, tid)
 		created++
 	}
