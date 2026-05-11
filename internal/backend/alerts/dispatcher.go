@@ -18,6 +18,7 @@ import (
 type TGSender interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
 	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
+	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
 	CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int) (int64, error)
 }
 
@@ -32,6 +33,12 @@ type Dispatcher struct {
 	tg  TGSender
 	cfg Config
 	mu  sync.Mutex
+	// WelcomeKeyboard returns the reply-keyboard markup to attach to the
+	// first message in a freshly-created per_router topic. Set by
+	// cmd/backend/main.go after construction (the Dispatcher doesn't
+	// import the callbacks UI snapshot to avoid a cycle). Nil disables
+	// welcome — used only by tests or admin-disabled flows.
+	WelcomeKeyboard func() any
 }
 
 func NewDispatcher(d *db.DB, tg TGSender, cfg Config) *Dispatcher {
@@ -256,6 +263,24 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	}
 	di.mu.Lock()
 	defer di.mu.Unlock()
-	return EnsureTopicForUser(ctx, di.tg, di.d, di.cfg.ChatID, u.ID, false)
+	// Double-check under lock — another goroutine may have created the
+	// topic while we waited.
+	u2, err := di.d.Users().GetByID(u.ID)
+	if err == nil && u2 != nil && u2.TelegramThreadID != nil {
+		return *u2.TelegramThreadID, nil
+	}
+	tid, err := EnsureTopicForUser(ctx, di.tg, di.d, di.cfg.ChatID, u.ID, false)
+	if err != nil {
+		return 0, err
+	}
+	// Fresh create — send welcome so reply-keyboard attaches to the topic.
+	// Non-fatal: log and continue if welcome fails. The topic is usable
+	// without it (it appears on first alert).
+	if di.WelcomeKeyboard != nil {
+		if werr := SendWelcome(ctx, di.tg, di.cfg.ChatID, tid, nickname, di.WelcomeKeyboard()); werr != nil {
+			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
+		}
+	}
+	return tid, nil
 }
 
