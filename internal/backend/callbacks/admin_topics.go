@@ -173,6 +173,8 @@ func (r *Router) adminTopicHelp(ctx context.Context, m *tg.Message) {
 
 /this_is <nickname> — привязать ЭТОТ топик к роутеру <nickname>. Полезно если ты создал тему руками в TG и хочешь, чтобы алерты этого роутера шли в неё.
 
+/panel — открыть админ-панель: оттуда можно отправить Maintenance / Routes / Status в любой роутер, или "оживить" все топики (добавить кнопки во все).
+
 /topic_help — эта справка.
 
 Подсказка: thread_id топика можно посмотреть в /list_users — он совпадает с message_thread_id из TG API.`)
