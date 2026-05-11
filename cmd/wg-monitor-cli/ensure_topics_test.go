@@ -18,6 +18,15 @@ type fakeTopicCreator struct {
 	nextID int64
 	// errOn maps 1-based call ordinal → error to return; absence → success.
 	errOn map[int]error
+	// welcomeSends captures SendMessageWithReplyKeyboard invocations.
+	welcomeSends []fakeWelcomeCall
+}
+
+type fakeWelcomeCall struct {
+	ChatID   int64
+	ThreadID *int64
+	Text     string
+	Markup   any
 }
 
 type fakeTopicCall struct {
@@ -35,6 +44,13 @@ func (f *fakeTopicCreator) CreateForumTopic(_ context.Context, chatID int64, nam
 	}
 	f.nextID++
 	return 5000 + f.nextID, nil
+}
+
+func (f *fakeTopicCreator) SendMessageWithReplyKeyboard(_ context.Context, chatID int64, threadID *int64, text, _ string, _ *int64, markup any) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.welcomeSends = append(f.welcomeSends, fakeWelcomeCall{chatID, threadID, text, markup})
+	return int64(len(f.welcomeSends) + 7000), nil
 }
 
 func newEnsureTestDB(t *testing.T, nicknames ...string) (string, []int64) {
@@ -246,5 +262,67 @@ func TestEnsureTopics_NoSleepBetween(t *testing.T) {
 	}
 	if len(fc.calls) != 3 {
 		t.Fatalf("calls: %d", len(fc.calls))
+	}
+}
+
+// TestEnsureTopics_SendsWelcomeForNewTopic: when Welcomer + WelcomeKeyboard
+// are provided, each freshly-created topic gets a welcome message.
+func TestEnsureTopics_SendsWelcomeForNewTopic(t *testing.T) {
+	dbPath, _ := newEnsureTestDB(t, "alpha", "beta")
+	fc := &fakeTopicCreator{}
+	var out bytes.Buffer
+	err := runEnsureTopics(context.Background(), ensureTopicsOpts{
+		DBPath:          dbPath,
+		ChatID:          -100,
+		Creator:         fc,
+		Welcomer:        fc,
+		WelcomeKeyboard: func() any { return "stub-kb" },
+		Out:             &out,
+	})
+	if err != nil {
+		t.Fatalf("run: %v\noutput:\n%s", err, out.String())
+	}
+	if len(fc.welcomeSends) != 2 {
+		t.Errorf("want 2 welcome sends, got %d", len(fc.welcomeSends))
+	}
+	for _, w := range fc.welcomeSends {
+		if w.ChatID != -100 {
+			t.Errorf("welcome chatID: %d", w.ChatID)
+		}
+		if w.ThreadID == nil {
+			t.Errorf("welcome thread nil")
+		}
+		if w.Markup != "stub-kb" {
+			t.Errorf("welcome markup not propagated: %v", w.Markup)
+		}
+	}
+}
+
+// TestEnsureTopics_NoWelcomeForSkippedUser: a user that already has a
+// topic is skipped — no welcome should be sent for them.
+func TestEnsureTopics_NoWelcomeForSkippedUser(t *testing.T) {
+	dbPath, ids := newEnsureTestDB(t, "delta")
+	d, _ := db.Open(dbPath)
+	if err := d.Users().UpdateThreadID(ids[0], 555); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	fc := &fakeTopicCreator{}
+	if err := runEnsureTopics(context.Background(), ensureTopicsOpts{
+		DBPath:          dbPath,
+		ChatID:          -100,
+		Creator:         fc,
+		Welcomer:        fc,
+		WelcomeKeyboard: func() any { return "stub-kb" },
+		Out:             &bytes.Buffer{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fc.calls) != 0 {
+		t.Errorf("want 0 CreateForumTopic (skip), got %d", len(fc.calls))
+	}
+	if len(fc.welcomeSends) != 0 {
+		t.Errorf("want 0 welcome sends for skipped user, got %d", len(fc.welcomeSends))
 	}
 }
