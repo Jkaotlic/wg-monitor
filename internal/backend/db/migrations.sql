@@ -67,3 +67,15 @@ CREATE TABLE IF NOT EXISTS tg_state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS router_operators (
+    user_id          INTEGER NOT NULL,
+    telegram_user_id INTEGER NOT NULL,
+    granted_by       INTEGER NOT NULL,
+    granted_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, telegram_user_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+-- HasAccess fires on every callback to a router-scoped action; needs an
+-- index on the lookup pair. Composite PK already gives the right key order
+-- (user_id, telegram_user_id) so no extra index needed.
