@@ -34,7 +34,7 @@ type OpkgRunner struct {
 	LockTTL    time.Duration
 	Exec       ExecFunc
 	Now        func() time.Time
-	// ConfigRoot is the directory containing `opkg.conf` and the `opkg/`
+	// ConfigRoot is the absolute directory containing `opkg.conf` and the `opkg/`
 	// subdirectory of per-feed `.conf` files. Defaults to "/opt/etc" when
 	// empty — tests substitute t.TempDir() to point at a sandbox.
 	ConfigRoot string
@@ -53,10 +53,11 @@ func (o *OpkgRunner) configRoot() string {
 // `opkg/*.conf`. Missing files are silently skipped by callers.
 func (o *OpkgRunner) opkgConfPaths() []string {
 	root := o.configRoot()
-	paths := []string{root + "/opkg.conf"}
-	matches, _ := filepath.Glob(root + "/opkg/*.conf")
-	paths = append(paths, matches...)
-	return paths
+	// Glob error is ignored on purpose: the pattern is a compile-time literal,
+	// so only ErrBadPattern is possible and the pattern is well-formed.
+	matches, _ := filepath.Glob(filepath.Join(root, "opkg", "*.conf"))
+	paths := []string{filepath.Join(root, "opkg.conf")}
+	return append(paths, matches...)
 }
 
 func (o *OpkgRunner) now() time.Time {
