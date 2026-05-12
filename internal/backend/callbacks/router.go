@@ -103,6 +103,11 @@ type Router struct {
 	maintConfirmAct Action
 	auditCache      *simpleAuditCache
 	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
+
+	// OPKG-feed repair plumbing. All in-memory; lost on restart (tokens are
+	// short-lived, 5 min TTL). SetOpkgRepair wires both at startup.
+	pendingOpkgRepair *pendingOpkgRepairStore
+	opkgRepairAction  Action
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -116,6 +121,21 @@ func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 // callbacks without re-querying the agent each time.
 func (r *Router) SetRoutesCache(c *RoutesCache) {
 	r.routesCache = c
+}
+
+// SetOpkgRepair attaches the pendingOpkgRepair store and the OpkgRepairAction
+// handler. Called from cmd/backend at startup; both must be wired together
+// because the handler relay (in backend/handler.go) creates pending entries
+// and the action consumes them.
+func (r *Router) SetOpkgRepair(store *pendingOpkgRepairStore, action Action) {
+	r.pendingOpkgRepair = store
+	r.opkgRepairAction = action
+}
+
+// OpkgRepairStore exposes the store for the backend handler relay path,
+// which needs to register pending entries when rendering 🔧 buttons.
+func (r *Router) OpkgRepairStore() *pendingOpkgRepairStore {
+	return r.pendingOpkgRepair
 }
 
 // NewRouterWithSink builds a Router whose command-action callbacks enqueue
@@ -326,6 +346,18 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.maintConfirmAct != nil {
 			action = r.maintConfirmAct
 		}
+	case "opkg_disable":
+		if r.opkgRepairAction == nil {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ремонт фидов не настроен")
+			return
+		}
+		status, err := r.opkgRepairAction.Apply(ctx, q, args)
+		if err != nil {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, err.Error())
+			return
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, status)
+		return
 	case "panel":
 		r.handlePanelCallback(ctx, q, args)
 		return
