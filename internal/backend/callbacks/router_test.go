@@ -871,3 +871,78 @@ func TestACL_UnboundOutsideOwnTopic_AllowsWithoutBind(t *testing.T) {
 		t.Fatalf("unbound-allow path: expected 1 edit, got %d", len(f.edits))
 	}
 }
+
+// TestRouter_OpkgDisable_DispatchesEnqueue verifies the full dispatch path for
+// the opkg_disable callback: SetOpkgRepair wires the action, a tap by the
+// admin on a valid token enqueues opkg_feed_disable and returns a toast.
+func TestRouter_OpkgDisable_DispatchesEnqueue(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	store := newPendingOpkgRepairStore()
+	store.put(&pendingOpkgRepair{
+		UserID:    uid,
+		URL:       "https://anonym-tsk.github.io/nfqws-keenetic/all",
+		Token:     "tok1",
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	r.SetOpkgRepair(store, NewOpkgRepairAction(sink, store, func() string { return "cmd-1" }))
+
+	// opkg_disable:<uid>:_menu:<token> — _menu suffix sets IsMenu=true so the
+	// router answers with the status toast and does NOT edit the message.
+	q := &tg.CallbackQuery{
+		ID:   "q1",
+		From: tg.User{ID: 12345},
+		// AdminUserID=12345 passes ACL; uid stored in the pending entry.
+		Data:    fmt.Sprintf("opkg_disable:%d:_menu:tok1", uid),
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 555},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	// The action must have enqueued exactly one opkg_feed_disable command.
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if sink.calls[0].action != "opkg_feed_disable" {
+		t.Errorf("enqueued action=%q, want opkg_feed_disable", sink.calls[0].action)
+	}
+	if sink.calls[0].userID != uid {
+		t.Errorf("enqueued userID=%d, want %d", sink.calls[0].userID, uid)
+	}
+	// IsMenu path: AnswerCallbackQuery with the status toast; no EditMessageText.
+	if len(f.answers) != 1 {
+		t.Fatalf("expected 1 AnswerCallbackQuery, got %d", len(f.answers))
+	}
+	if !strings.Contains(f.answers[0], "фид") {
+		t.Errorf("toast should mention фид, got %q", f.answers[0])
+	}
+	if len(f.edits) != 0 {
+		t.Errorf("opkg_disable(_menu) must NOT edit the message, got %d edits", len(f.edits))
+	}
+}
+
+// TestRouter_OpkgDisable_NilAction toasts "не настроен" when SetOpkgRepair
+// has not been called (action is nil).
+func TestRouter_OpkgDisable_NilAction(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, nil, Config{ChatID: -100, AdminUserID: 12345})
+	// Do NOT call r.SetOpkgRepair — action stays nil.
+
+	q := &tg.CallbackQuery{
+		ID:      "q2",
+		From:    tg.User{ID: 12345},
+		Data:    fmt.Sprintf("opkg_disable:%d:_menu:sometoken", uid),
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.answers) != 1 {
+		t.Fatalf("expected 1 AnswerCallbackQuery, got %d", len(f.answers))
+	}
+	if !strings.Contains(f.answers[0], "не настроен") {
+		t.Errorf("expected 'не настроен' toast when action is nil, got %q", f.answers[0])
+	}
+}
