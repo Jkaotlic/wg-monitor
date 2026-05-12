@@ -38,6 +38,7 @@ import (
 type OpkgExecutor interface {
 	DryRun(ctx context.Context) (status, output string)
 	SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult)
+	DisableFeed(ctx context.Context, url string) (status, output string, payload wire.OpkgUpgradeResult)
 }
 
 // Runner is built once at agent startup and re-used per-command.
@@ -114,6 +115,16 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "opkg runner not configured", payload
 		}
 		s, o, p := r.Opkg.SmartUpgrade(ctx)
+		return s, o, p
+	case "opkg_feed_disable":
+		if r.Opkg == nil {
+			return "err", "opkg runner not configured", payload
+		}
+		url, _ := cmd.Args["url"].(string)
+		if url == "" {
+			return "err", "opkg_feed_disable: url is required", payload
+		}
+		s, o, p := r.Opkg.DisableFeed(ctx, url)
 		return s, o, p
 	case "check_via_tunnel":
 		if r.AwgClient == nil {
