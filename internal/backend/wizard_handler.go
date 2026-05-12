@@ -3,9 +3,12 @@ package backend
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
 // WizardAuthMiddleware gates /v1/wizard/* endpoints with a constant-time
@@ -102,5 +105,59 @@ func wizardListAgentsHandler(d Deps) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(out)
+	}
+}
+
+type wizardPutAgentReq struct {
+	SSHHost             string `json:"ssh_host"`
+	SSHPort             int64  `json:"ssh_port"`
+	SSHUser             string `json:"ssh_user"`
+	Arch                string `json:"arch"`
+	LastDeployedVersion string `json:"last_deployed_version"`
+}
+
+// wizardPutAgentHandler upserts deploy metadata into an existing users row.
+// Route path is /v1/wizard/agents/{nickname} — Go 1.22+ ServeMux pattern.
+func wizardPutAgentHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		nickname := r.PathValue("nickname")
+		if nickname == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req wizardPutAgentReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+			return
+		}
+		if req.SSHHost == "" || req.SSHPort == 0 || req.SSHUser == "" || req.Arch == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
+				"ssh_host, ssh_port, ssh_user, arch are required")
+			return
+		}
+		err := d.DB.Users().UpdateDeployInfo(nickname, db.DeployInfo{
+			SSHHost:             req.SSHHost,
+			SSHPort:             req.SSHPort,
+			SSHUser:             req.SSHUser,
+			Arch:                req.Arch,
+			LastDeployedVersion: req.LastDeployedVersion,
+		})
+		if err != nil {
+			if errors.Is(err, db.ErrUserNotFound) {
+				writeJSONError(w, http.StatusNotFound, "user_not_found",
+					"nickname not registered — run actionAddRouter first")
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -99,5 +100,50 @@ func TestWizardList_OneAgent(t *testing.T) {
 	}
 	if len(got.Agents) != 1 || got.Agents[0].Nickname != "client-a" || got.Agents[0].SSHHost != "192.168.1.1" {
 		t.Fatalf("unexpected: %+v", got)
+	}
+}
+
+func TestWizardPut_404OnUnknown(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := wizardPutAgentHandler(Deps{DB: d})
+	body := `{"ssh_host":"1.2.3.4","ssh_port":22,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.1"}`
+	req := httptest.NewRequest("PUT", "/v1/wizard/agents/ghost", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "ghost")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWizardPut_204Updates(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("client-a", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	h := wizardPutAgentHandler(Deps{DB: d})
+	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.10.3"}`
+	req := httptest.NewRequest("PUT", "/v1/wizard/agents/client-a", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "client-a")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("client-a")
+	if err != nil || u.SSHHost == nil || *u.SSHHost != "10.0.0.1" {
+		t.Fatalf("not persisted: u=%+v err=%v", u, err)
 	}
 }
