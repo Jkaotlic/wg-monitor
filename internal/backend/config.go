@@ -14,6 +14,7 @@ type Config struct {
 	LogLevel  string          `yaml:"log_level"`
 	DBPath    string          `yaml:"db_path"`
 	Telegram  TelegramConfig  `yaml:"telegram"`
+	Wizard    WizardConfig    `yaml:"wizard"`
 	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
 	State     StateConfig     `yaml:"state"`
 	UI        UIConfig        `yaml:"ui"`
@@ -61,6 +62,16 @@ type TelegramConfig struct {
 	BotToken     string `yaml:"-"`
 	ChatID       int64  `yaml:"chat_id"`
 	AdminUserID  int64  `yaml:"admin_user_id"`
+}
+
+// WizardConfig wires the optional /v1/wizard/* endpoints. When TokenFile
+// is empty OR points to a missing/empty file, the endpoints are NOT
+// registered (fail-closed). To enable: put a 64-hex token (any opaque
+// secret really) into the file, mode 0600 root:wgmonitor.
+type WizardConfig struct {
+	TokenFile string `yaml:"token_file"`
+	// Token is loaded from TokenFile at config-load time. Empty → feature off.
+	Token string `yaml:"-"`
 }
 
 type HeartbeatConfig struct {
@@ -137,6 +148,14 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Telegram.AdminUserID == 0 {
 		return nil, fmt.Errorf("telegram.admin_user_id is required")
+	}
+	// Wizard token is optional — empty file/path means the /v1/wizard/* feature
+	// is disabled. Missing file is NOT an error (the wizard pre-rc1 didn't write
+	// one; backend upgrades without immediate wizard upgrade should still boot).
+	if cfg.Wizard.TokenFile != "" {
+		if b, err := os.ReadFile(cfg.Wizard.TokenFile); err == nil {
+			cfg.Wizard.Token = strings.TrimSpace(string(b))
+		}
 	}
 	if cfg.Heartbeat.StaleAfterSec == 0 {
 		cfg.Heartbeat.StaleAfterSec = 300
