@@ -162,6 +162,7 @@ func main() {
 		// throttling automatically.
 		ReportRatePerSec: cfg.RateLimit.ReportPerSec,
 		ReportBurst:      cfg.RateLimit.ReportBurst,
+		WizardToken:      cfg.Wizard.Token,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,
