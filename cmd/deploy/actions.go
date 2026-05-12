@@ -16,6 +16,21 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
+// ensureWizardToken returns a 64-hex token from the SecretStore, generating
+// + persisting one if absent. Cached under key WIZARD_TOKEN.
+func ensureWizardToken(secrets *SecretStore) (string, error) {
+	if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
+		return tok, nil
+	}
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	tok := hex.EncodeToString(b[:])
+	secrets.Set("WIZARD_TOKEN", tok)
+	return tok, nil
+}
+
 func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) error {
 	if state.Backend.Host == "" {
 		PrintFail("В wizard.toml нет [backend] — сначала запусти install-backend")
@@ -436,7 +451,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	if err != nil {
 		return err
 	}
-	PrintStep(1, 13, "SSH к VPS")
+	PrintStep(1, 14, "SSH к VPS")
 	s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
 	if err != nil {
 		PrintFail(err.Error())
@@ -459,16 +474,16 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		}
 	}
 
-	PrintStep(2, 13, "User wgmonitor")
+	PrintStep(2, 14, "User wgmonitor")
 	if err := stepEnsureUser(s, "wgmonitor"); err != nil {
 		return err
 	}
 
-	PrintStep(3, 13, "Директории")
+	PrintStep(3, 14, "Директории")
 	stepEnsureDir(s, "/etc/wg-monitor", "")
 	stepEnsureDir(s, "/var/lib/wg-monitor", "wgmonitor:wgmonitor")
 
-	PrintStep(4, 13, "backend.yaml")
+	PrintStep(4, 14, "backend.yaml")
 	yamlBytes, err := RenderBackendYAML(BackendParams{
 		ChatID:      state.Telegram.ChatID,
 		AdminUserID: state.Telegram.AdminUserID,
@@ -480,7 +495,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		return err
 	}
 
-	PrintStep(5, 13, "bot-token.txt")
+	PrintStep(5, 14, "bot-token.txt")
 	// Отдельный файл, потому что backend.yaml имеет mode 600 root:wgmonitor —
 	// читаемый отладчиком. Токен бота — нет: только wgmonitor.
 	// Drift detection: если файл уже есть и его содержимое != локальному кэшу,
@@ -504,7 +519,20 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintWarn("chown bot-token.txt: " + err.Error())
 	}
 
-	PrintStep(6, 13, "systemd unit")
+	PrintStep(6, 14, "wizard-token.txt")
+	wizTok, err := ensureWizardToken(secrets)
+	if err != nil {
+		return fmt.Errorf("generate wizard token: %w", err)
+	}
+	if err := stepUploadFile(s, "/etc/wg-monitor/wizard-token.txt", []byte(wizTok+"\n"), "600"); err != nil {
+		return err
+	}
+	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/wizard-token.txt"); err != nil {
+		PrintWarn("chown wizard-token.txt: " + err.Error())
+	}
+	PrintOK("wizard-token.txt")
+
+	PrintStep(7, 14, "systemd unit")
 	unit, err := ReadStaticTemplate("wg-monitor-backend.service")
 	if err != nil {
 		return err
@@ -517,12 +545,12 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("daemon-reload + enable")
 
-	PrintStep(7, 13, "Caddy")
+	PrintStep(8, 14, "Caddy")
 	if err := stepInstallCaddy(s); err != nil {
 		return err
 	}
 
-	PrintStep(8, 13, "Caddyfile")
+	PrintStep(9, 14, "Caddyfile")
 	cf, err := RenderCaddyfile(CaddyParams{Domain: state.Backend.Domain, Email: caddyEmail})
 	if err != nil {
 		return err
@@ -536,18 +564,18 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintOK("caddy reloaded")
 	}
 
-	PrintStep(9, 13, "Скачать backend бинарь")
+	PrintStep(10, 14, "Скачать backend бинарь")
 	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
 	if err != nil {
 		return err
 	}
 
-	PrintStep(10, 13, "Upload + sha + swap")
+	PrintStep(11, 14, "Upload + sha + swap")
 	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", ""); err != nil {
 		return err
 	}
 
-	PrintStep(11, 13, "Start service")
+	PrintStep(12, 14, "Start service")
 	if _, err := s.MustRun("systemctl start wg-monitor-backend"); err != nil {
 		return err
 	}
@@ -555,7 +583,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 
 	time.Sleep(3 * time.Second)
 
-	PrintStep(12, 13, "Verify systemctl is-active")
+	PrintStep(13, 14, "Verify systemctl is-active")
 	out, _ := s.MustRun("systemctl is-active wg-monitor-backend")
 	if strings.TrimSpace(out) != "active" {
 		PrintFail("сервис не active. Логи:")
@@ -565,7 +593,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("active")
 
-	PrintStep(13, 13, "Verify /health через домен")
+	PrintStep(14, 14, "Verify /health через домен")
 	url := "https://" + state.Backend.Domain + "/healthz"
 	if err := stepVerifyHTTP(s, url); err != nil {
 		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
