@@ -49,6 +49,10 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 			if reloaded, err := LoadState(statePath); err == nil {
 				*state = *reloaded
 			}
+		case "10":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionSyncVPS(state, secrets)
+			})
 		case "Q", "":
 			return
 		default:
@@ -91,6 +95,7 @@ func printMenuItems(state *State) {
 	fmt.Println("  [7] Doctor (полный аудит)    " + Colorize("(local + VPS + каждый агент)", ColorDim))
 	fmt.Println("  [8] Управление known_hosts   " + Colorize("(забыть alias)", ColorDim))
 	fmt.Println("  [9] Открыть wizard.toml в редакторе")
+	fmt.Println("  [10] Синхронизация с VPS  " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }
