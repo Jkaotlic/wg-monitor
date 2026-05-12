@@ -125,6 +125,53 @@ func TestOpkg_DryRun_ReleasesLockOnExit(t *testing.T) {
 	}
 }
 
+// Real-world opkg update output when one of five feeds is dead (HTTP 404).
+// opkg exits 1 even though four feeds downloaded successfully — historically
+// SmartUpgrade treated this as total failure, blocking the upgrade.
+const partialUpdateOutput = `Downloading http://bin.entware.net/aarch64-k3.10/Packages.gz
+Updated list of available packages in /opt/var/opkg-lists/entware
+Downloading http://bin.entware.net/aarch64-k3.10/keenetic/Packages.gz
+Updated list of available packages in /opt/var/opkg-lists/keendev
+Downloading http://repo.hoaxisr.ru/aarch64-k3.10/Packages.gz
+Updated list of available packages in /opt/var/opkg-lists/hoaxisr
+Downloading https://git.zerrolabs.org/Ground-Zerro/release/pages/keenetic/aarch64-k3.10/Packages.gz
+Updated list of available packages in /opt/var/opkg-lists/ground-zerro
+Downloading https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz
+*** Failed to download the package list from https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz
+
+Collected errors:
+ * opkg_download: Failed to download https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz, wget returned 8.
+`
+
+func TestParseOpkgUpdate_PartialFailure(t *testing.T) {
+	got := parseOpkgUpdate(partialUpdateOutput)
+	if got.feedsUpdated != 4 {
+		t.Errorf("feedsUpdated = %d, want 4", got.feedsUpdated)
+	}
+	if len(got.failedFeeds) != 1 {
+		t.Fatalf("failedFeeds = %v, want 1 entry", got.failedFeeds)
+	}
+	if got.failedFeeds[0] != "https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz" {
+		t.Errorf("failedFeeds[0] = %q", got.failedFeeds[0])
+	}
+}
+
+func TestParseOpkgUpdate_AllSuccess(t *testing.T) {
+	out := "Downloading http://x/Packages.gz\nUpdated list of available packages in /opt/var/opkg-lists/x\n"
+	got := parseOpkgUpdate(out)
+	if got.feedsUpdated != 1 || len(got.failedFeeds) != 0 {
+		t.Errorf("got %+v, want feedsUpdated=1, failedFeeds=[]", got)
+	}
+}
+
+func TestParseOpkgUpdate_TotalFailure(t *testing.T) {
+	out := "Downloading http://x/Packages.gz\n*** Failed to download the package list from http://x/Packages.gz\n"
+	got := parseOpkgUpdate(out)
+	if got.feedsUpdated != 0 || len(got.failedFeeds) != 1 {
+		t.Errorf("got %+v, want feedsUpdated=0, failedFeeds=[1]", got)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

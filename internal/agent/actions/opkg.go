@@ -254,6 +254,33 @@ func looksLikePkgName(s string) bool {
 	return true
 }
 
+// opkgUpdateOutcome is the parsed shape of `opkg update` combined output.
+type opkgUpdateOutcome struct {
+	feedsUpdated int      // count of "Updated list of available packages in ..." lines
+	failedFeeds  []string // URLs from "*** Failed to download the package list from <url>" lines
+}
+
+// parseOpkgUpdate scans opkg's combined output and tallies feed success/failure.
+// `Collected errors:` block is ignored — URLs appear there in a different
+// format and would otherwise double-count.
+func parseOpkgUpdate(out string) opkgUpdateOutcome {
+	var o opkgUpdateOutcome
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "Updated list of available packages in "):
+			o.feedsUpdated++
+		case strings.HasPrefix(line, "*** Failed to download the package list from "):
+			url := strings.TrimPrefix(line, "*** Failed to download the package list from ")
+			url = strings.TrimSpace(url)
+			if url != "" {
+				o.failedFeeds = append(o.failedFeeds, url)
+			}
+		}
+	}
+	return o
+}
+
 func humanKB(kb int64) string {
 	if kb < 1024 {
 		return fmt.Sprintf("%d KB", kb)
