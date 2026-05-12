@@ -122,7 +122,7 @@ func (a *OpkgRepairAction) Apply(ctx context.Context, q *tg.CallbackQuery, args 
 var _ Action = (*OpkgRepairAction)(nil)
 
 // PendingOpkgRepairStore is the exported type alias used by package backend
-// (handler.go / opkg_render.go) to reference the store across package boundaries.
+// (handler.go and notifier.go) to reference the store across package boundaries.
 type PendingOpkgRepairStore = pendingOpkgRepairStore
 
 // NewPendingOpkgRepairStore is the production constructor exposed for use by

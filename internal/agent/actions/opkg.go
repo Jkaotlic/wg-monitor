@@ -27,10 +27,9 @@ func DefaultExec(ctx context.Context, name string, args ...string) ([]byte, erro
 // OpkgRunner enforces a lock-file so two opkg actions don't overlap and
 // performs the dry-run preflight (`opkg update` + `opkg list-upgradable`).
 //
-// The actual `opkg upgrade` step is intentionally NOT executed yet — that's
-// deferred to a later iteration where the TG flow includes a confirm step.
-// Today's purpose: surface "what would change" to the admin in TG without
-// touching the system.
+// SmartUpgrade runs the full live update + upgrade pipeline. DryRun is kept
+// for the OpkgExecutor interface contract but is no longer wired into the
+// runner dispatch.
 type OpkgRunner struct {
 	LockPath   string
 	LockTTL    time.Duration
