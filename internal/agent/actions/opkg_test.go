@@ -305,3 +305,167 @@ func TestDisableMatchingLine_SrcWithoutGz(t *testing.T) {
 		t.Errorf("expected comment prefix, got %q", out)
 	}
 }
+
+// mkOpkgRunnerWithRoot is a variant of mkOpkgRunner that points ConfigRoot at
+// a temp dir holding an opkg.conf and/or opkg/<feed>.conf files. Used by
+// DisableFeed tests.
+func mkOpkgRunnerWithRoot(t *testing.T, root string, exec ExecFunc) *OpkgRunner {
+	t.Helper()
+	r := mkOpkgRunner(t, exec)
+	r.ConfigRoot = root
+	return r
+}
+
+func writeFile(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpkg_DisableFeed_PerFeedFile(t *testing.T) {
+	root := t.TempDir()
+	confPath := filepath.Join(root, "opkg", "nfqws.conf")
+	writeFile(t, confPath, "src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n")
+	writeFile(t, filepath.Join(root, "opkg.conf"), "")
+
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "update" {
+			return []byte("Updated list of available packages in /opt/var/opkg-lists/x\n"), nil
+		}
+		if args[0] == "list-upgradable" {
+			return []byte(""), nil
+		}
+		return nil, nil
+	})
+
+	status, output, _ := o.DisableFeed(context.Background(), "https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz")
+	if status != "ok" {
+		t.Fatalf("status=%q output=%q", status, output)
+	}
+	body, _ := os.ReadFile(confPath)
+	if !strings.Contains(string(body), "# disabled by wg-monitor") {
+		t.Errorf("expected comment line in %s, got %q", confPath, body)
+	}
+	matches, _ := filepath.Glob(confPath + ".bak.*")
+	if len(matches) != 1 {
+		t.Errorf("expected 1 backup file, got %v", matches)
+	}
+}
+
+func TestOpkg_DisableFeed_MultiFeedFile(t *testing.T) {
+	root := t.TempDir()
+	confPath := filepath.Join(root, "opkg.conf")
+	writeFile(t, confPath, "src/gz entware http://bin.entware.net/aarch64-k3.10\n"+
+		"src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n"+
+		"src/gz hoaxisr http://repo.hoaxisr.ru/aarch64-k3.10\n")
+
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "update" {
+			return []byte("Updated list of available packages in /opt/var/opkg-lists/x\n"), nil
+		}
+		return nil, nil
+	})
+
+	status, _, _ := o.DisableFeed(context.Background(), "https://anonym-tsk.github.io/nfqws-keenetic/all")
+	if status != "ok" {
+		t.Fatalf("status=%q", status)
+	}
+	body, _ := os.ReadFile(confPath)
+	s := string(body)
+	if !strings.Contains(s, "src/gz entware http://bin.entware.net/aarch64-k3.10\n") {
+		t.Errorf("entware untouched: %q", s)
+	}
+	if !strings.Contains(s, "# disabled by wg-monitor") || !strings.Contains(s, "src/gz nfqws") {
+		t.Errorf("nfqws not commented: %q", s)
+	}
+}
+
+func TestOpkg_DisableFeed_Idempotent(t *testing.T) {
+	root := t.TempDir()
+	confPath := filepath.Join(root, "opkg", "nfqws.conf")
+	writeFile(t, confPath, "# src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n")
+	writeFile(t, filepath.Join(root, "opkg.conf"), "")
+
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, nil
+	})
+
+	status, output, _ := o.DisableFeed(context.Background(), "https://anonym-tsk.github.io/nfqws-keenetic/all")
+	if status != "ok" {
+		t.Errorf("status=%q output=%q (idempotent should be ok)", status, output)
+	}
+	if !strings.Contains(output, "уже отключён") && !strings.Contains(output, "не найден") {
+		t.Errorf("output should explain no-op, got %q", output)
+	}
+	matches, _ := filepath.Glob(confPath + ".bak.*")
+	if len(matches) != 0 {
+		t.Errorf("no backup should be created on no-op, got %v", matches)
+	}
+}
+
+func TestOpkg_DisableFeed_NotFound(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "opkg.conf"), "src/gz entware http://bin.entware.net/aarch64-k3.10\n")
+
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, nil
+	})
+
+	status, _, _ := o.DisableFeed(context.Background(), "https://nowhere.example/Packages.gz")
+	if status != "ok" {
+		t.Errorf("status=%q, want ok (no-op)", status)
+	}
+}
+
+func TestOpkg_DisableFeed_InvalidURL(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "opkg.conf"), "")
+	called := 0
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		called++
+		return nil, nil
+	})
+	for _, bad := range []string{"", "ftp://x", "javascript:alert(1)", "/etc/passwd"} {
+		status, _, _ := o.DisableFeed(context.Background(), bad)
+		if status != "err" {
+			t.Errorf("DisableFeed(%q) status=%q, want err", bad, status)
+		}
+	}
+	if called != 0 {
+		t.Errorf("DisableFeed should not invoke exec for invalid URLs; called=%d", called)
+	}
+}
+
+func TestOpkg_DisableFeed_ThenSmartUpgrade(t *testing.T) {
+	root := t.TempDir()
+	confPath := filepath.Join(root, "opkg.conf")
+	writeFile(t, confPath, "src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n")
+
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "update":
+			return []byte("Updated list of available packages in /opt/var/opkg-lists/entware\n"), nil
+		case "list-upgradable":
+			return []byte(""), nil
+		}
+		return nil, nil
+	})
+
+	status, output, payload := o.DisableFeed(context.Background(), "https://anonym-tsk.github.io/nfqws-keenetic/all")
+	if status != "ok" {
+		t.Fatalf("status=%q", status)
+	}
+	if !strings.Contains(output, "🔧 Отключён фид") {
+		t.Errorf("combined output should start with disable header, got %q", output)
+	}
+	if !strings.Contains(output, "Все пакеты актуальны") {
+		t.Errorf("combined output should include SmartUpgrade body, got %q", output)
+	}
+	if len(payload.FailedFeeds) != 0 {
+		t.Errorf("payload.FailedFeeds should be empty after repair; got %v", payload.FailedFeeds)
+	}
+}
