@@ -54,33 +54,25 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 			})
 		case "3":
 			runActionAndSave(state, statePath, secrets, func() error {
-				return actionInstallAgent(state, secrets, dl, "")
-			})
-		case "4":
-			runActionAndSave(state, statePath, secrets, func() error {
 				return actionAddRouter(state, secrets, dl)
 			})
-		case "5":
-			actionStatus(state, secrets) //nolint:errcheck
-		case "6":
-			actionSmokeTest(state, secrets) //nolint:errcheck
-		case "7":
+		case "4":
 			actionDoctor(state, secrets) //nolint:errcheck
-		case "8":
-			ForgetKnownHostInteractive(state) //nolint:errcheck
-		case "9":
+		case "5":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionSyncVPS(state, secrets)
+			})
+		case "6":
 			openInEditor(statePath)
 			if reloaded, err := LoadState(statePath); err == nil {
 				*state = *reloaded
 			}
-		case "10":
-			runActionAndSave(state, statePath, secrets, func() error {
-				return actionSyncVPS(state, secrets)
-			})
+		case "7":
+			ForgetKnownHostInteractive(state) //nolint:errcheck
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–9 или Q.")
+			PrintFail("Не понял. Введи 1–7 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -106,20 +98,17 @@ func printMenuHeader(state *State) {
 
 func printMenuItems(state *State) {
 	fmt.Println()
-	fmt.Println("  [1] Первичная установка бэкенда на VPS")
+	fmt.Println("  [1] Установить бэкенд          " + Colorize("(первичная установка на VPS)", ColorDim))
 	if state.Backend.Host == "" && len(state.Agents) == 0 {
-		fmt.Println("  [2] Обновить компоненты  " + Colorize("(сначала установи)", ColorDim))
+		fmt.Println("  [2] Обновить компоненты        " + Colorize("(сначала установи)", ColorDim))
 	} else {
-		fmt.Println("  [2] Обновить компоненты  " + Colorize("(проверка релиза + выбор что обновить)", ColorDim))
+		fmt.Println("  [2] Обновить компоненты        " + Colorize("(проверка релиза + выбор что обновить)", ColorDim))
 	}
-	fmt.Println("  [3] Первичная установка агента на роутер")
-	fmt.Println("  [4] Добавить новый роутер")
-	fmt.Println("  [5] Проверить статус         " + Colorize("(быстрая static-проверка)", ColorDim))
-	fmt.Println("  [6] Smoke-тест               " + Colorize("(end-to-end: /healthz, версии, sync)", ColorDim))
-	fmt.Println("  [7] Doctor (полный аудит)    " + Colorize("(local + VPS + каждый агент)", ColorDim))
-	fmt.Println("  [8] Управление known_hosts   " + Colorize("(забыть alias)", ColorDim))
-	fmt.Println("  [9] Открыть wizard.toml в редакторе")
-	fmt.Println("  [10] Синхронизация с VPS  " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
+	fmt.Println("  [3] Установить агента          " + Colorize("(новый или ре-установка существующего)", ColorDim))
+	fmt.Println("  [4] Проверить состояние        " + Colorize("(Doctor: local + VPS + каждый агент)", ColorDim))
+	fmt.Println("  [5] Синхронизация с VPS        " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
+	fmt.Println("  [6] Открыть wizard.toml в редакторе")
+	fmt.Println("  [7] Забыть known_hosts alias   " + Colorize("(если физически заменил роутер)", ColorDim))
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }

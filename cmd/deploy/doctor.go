@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +13,33 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// probeAgentTokenValid GETs /v1/cmd with the supplied raw token and reports
+// whether the response status is anything other than 401 — that's the only
+// signal that confirms the disk-cached token still matches the SHA-256 hash
+// stored in the users-table on the VPS. Used by doctorAgent for the auth-probe
+// check (a green doctor without this is a false positive — see DOC-01).
+func probeAgentTokenValid(url, rawToken string) bool {
+	cli := &http.Client{
+		Timeout: 8 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	req.Header.Set("User-Agent", "wg-monitor-deploy/auth-probe")
+	resp, err := cli.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp.StatusCode != http.StatusUnauthorized
+}
 
 // doctorTally is the running counter the per-section helpers feed into.
 // At the end of actionDoctor it's painted as a colored summary line.

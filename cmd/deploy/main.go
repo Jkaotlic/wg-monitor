@@ -108,14 +108,6 @@ func main() {
 		runCLIAction("update-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag) })
 	case "add-router":
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
-	case "status":
-		if err := actionStatus(state, secrets); err != nil {
-			os.Exit(1)
-		}
-	case "smoke":
-		if err := actionSmokeTest(state, secrets); err != nil {
-			os.Exit(1)
-		}
 	case "doctor":
 		if err := actionDoctor(state, secrets); err != nil {
 			os.Exit(1)
