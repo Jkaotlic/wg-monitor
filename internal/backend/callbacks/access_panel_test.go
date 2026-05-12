@@ -268,3 +268,119 @@ func TestHandleAccessCallback_CancelAdd_ClearsFSM(t *testing.T) {
 		t.Error("cancel_add should clear FSM")
 	}
 }
+
+// --- processAddOperatorMessage tests ---
+
+func TestProcessAddOperatorMessage_Forward(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	r.pendingAddOperator.put(42, uid, 5*time.Minute)
+
+	m := &tg.Message{
+		MessageID:   100,
+		Chat:        tg.Chat{ID: 42}, // DM: chat.id == user.id
+		From:        tg.User{ID: 42},
+		ForwardFrom: &tg.User{ID: 555},
+	}
+	r.HandleMessage(context.Background(), m)
+
+	if !r.d.RouterOperators().HasAccess(uid, 555) {
+		t.Error("operator 555 should have been added")
+	}
+	if _, ok := r.pendingAddOperator.get(42); ok {
+		t.Error("FSM should have been cleared")
+	}
+}
+
+func TestProcessAddOperatorMessage_NumericText(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	r.pendingAddOperator.put(42, uid, 5*time.Minute)
+
+	m := &tg.Message{
+		MessageID: 100,
+		Chat:      tg.Chat{ID: 42},
+		From:      tg.User{ID: 42},
+		Text:      "777",
+	}
+	r.HandleMessage(context.Background(), m)
+
+	if !r.d.RouterOperators().HasAccess(uid, 777) {
+		t.Error("operator 777 should have been added")
+	}
+}
+
+func TestProcessAddOperatorMessage_Garbage_FSMRemains(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	r.pendingAddOperator.put(42, uid, 5*time.Minute)
+
+	m := &tg.Message{
+		MessageID: 100,
+		Chat:      tg.Chat{ID: 42},
+		From:      tg.User{ID: 42},
+		Text:      "hello world",
+	}
+	r.HandleMessage(context.Background(), m)
+
+	ops, _ := r.d.RouterOperators().List(uid)
+	if len(ops) != 0 {
+		t.Errorf("nothing should have been added, got %+v", ops)
+	}
+	if _, ok := r.pendingAddOperator.get(42); !ok {
+		t.Error("FSM must remain after garbage input")
+	}
+}
+
+func TestProcessAddOperatorMessage_NotInDM_NotConsumed(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	r.pendingAddOperator.put(42, uid, 5*time.Minute)
+
+	// Message in the forum chat, NOT DM (chat.id != from.id)
+	m := &tg.Message{
+		MessageID:   100,
+		Chat:        tg.Chat{ID: 7},
+		From:        tg.User{ID: 42},
+		ForwardFrom: &tg.User{ID: 555},
+	}
+	r.HandleMessage(context.Background(), m)
+
+	ops, _ := r.d.RouterOperators().List(uid)
+	if len(ops) != 0 {
+		t.Errorf("FSM must not consume forum-chat messages, got %+v", ops)
+	}
+	if _, ok := r.pendingAddOperator.get(42); !ok {
+		t.Error("FSM must remain")
+	}
+}
+
+func TestProcessAddOperatorMessage_NonAdmin_NotConsumed(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	r.pendingAddOperator.put(42, uid, 5*time.Minute) // admin 42 has pending
+
+	// Message from a different user
+	m := &tg.Message{
+		MessageID:   100,
+		Chat:        tg.Chat{ID: 999},
+		From:        tg.User{ID: 999},
+		ForwardFrom: &tg.User{ID: 555},
+	}
+	r.HandleMessage(context.Background(), m)
+
+	ops, _ := r.d.RouterOperators().List(uid)
+	if len(ops) != 0 {
+		t.Errorf("non-admin must not consume FSM, got %+v", ops)
+	}
+}

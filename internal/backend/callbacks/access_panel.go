@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -238,6 +239,46 @@ func (r *Router) accessCancelAdd(ctx context.Context, q *tg.CallbackQuery) {
 	r.pendingAddOperator.clear(q.From.ID)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "отменено")
 	r.accessShowHome(ctx, q)
+}
+
+// processAddOperatorMessage is invoked by HandleMessage when the admin
+// sends a message in DM with the bot while an add-operator FSM is active.
+// Determines the new operator's TG ID via forward_from (preferred) or
+// numeric text. On success, persists the row and clears the FSM. On
+// soft-failure (garbage input, channel forward), replies with a hint and
+// keeps the FSM alive.
+func (r *Router) processAddOperatorMessage(ctx context.Context, m *tg.Message, p *pendingAddOperator) {
+	var opTGID int64
+	switch {
+	case m.ForwardFrom != nil:
+		opTGID = m.ForwardFrom.ID
+	case strings.TrimSpace(m.Text) != "":
+		v, err := strconv.ParseInt(strings.TrimSpace(m.Text), 10, 64)
+		if err == nil && v > 0 {
+			opTGID = v
+		}
+	}
+	if opTGID == 0 {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, nil,
+			"Не вижу TG user ID — нужно либо forward от человека, либо положительное число. Жду дальше. ✖ Отмена доступна в исходном экране.", "", nil)
+		return
+	}
+	u, err := r.d.Users().GetByID(p.RouterID)
+	if err != nil || u == nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, nil,
+			"Роутер для FSM уже не существует, отменяю.", "", nil)
+		r.pendingAddOperator.clear(m.From.ID)
+		return
+	}
+	if err := r.d.RouterOperators().Add(p.RouterID, opTGID, m.From.ID); err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, nil,
+			fmt.Sprintf("Не удалось добавить оператора: %v", err), "", nil)
+		return
+	}
+	r.pendingAddOperator.clear(m.From.ID)
+	_, _ = r.tg.SendMessage(ctx, m.Chat.ID, nil,
+		fmt.Sprintf("Добавлен оператор %d для %s. Открой /panel чтобы продолжить.", opTGID, u.Nickname),
+		"", nil)
 }
 
 // pluralOperators returns a Russian-correct count label: "0 операторов",
