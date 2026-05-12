@@ -31,6 +31,57 @@ func ensureWizardToken(secrets *SecretStore) (string, error) {
 	return tok, nil
 }
 
+// stepEnsureWizardSetup makes the VPS side ready for /v1/wizard/* endpoints,
+// idempotently. Bridges the install-backend / update-backend gap: update path
+// only swaps the binary, so a v0.11→v0.12 upgrade has the new code but no
+// token file and no `wizard:` block in backend.yaml. This helper makes both
+// ready in one shot; safe to call from both actionInstallBackend and
+// actionUpdateBackend. Returns silently if everything is already in place.
+//
+// Caller is responsible for restarting the backend after this returns (the
+// update + install paths already do that via stepUploadAndSwap / systemctl
+// daemon-reload+restart).
+func stepEnsureWizardSetup(s *SSH, secrets *SecretStore) error {
+	tok, err := ensureWizardToken(secrets)
+	if err != nil {
+		return fmt.Errorf("ensure wizard token: %w", err)
+	}
+	if err := stepUploadFile(s, "/etc/wg-monitor/wizard-token.txt", []byte(tok+"\n"), "600"); err != nil {
+		return fmt.Errorf("upload wizard-token.txt: %w", err)
+	}
+	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/wizard-token.txt"); err != nil {
+		PrintWarn("chown wizard-token.txt: " + err.Error())
+	}
+	// Probe backend.yaml for an existing wizard: block. grep returns 0 when
+	// found; non-zero (typically 1) when not. Run swallows non-zero exit
+	// codes into rc so this never errors out — we just check the value.
+	_, _, rc, runErr := s.Run("grep -q '^wizard:' /etc/wg-monitor/backend.yaml")
+	if runErr != nil {
+		return fmt.Errorf("probe backend.yaml: %w", runErr)
+	}
+	if rc == 0 {
+		// Block already present — nothing to do.
+		return nil
+	}
+	PrintInfo("backend.yaml без wizard:-блока — добавляю")
+	// Single-quoted heredoc — bash does NOT expand $/`` inside, so the
+	// literal contents land verbatim. Leading blank line keeps separation
+	// from whatever the file ends with.
+	appendCmd := `cat >> /etc/wg-monitor/backend.yaml <<'EOF'
+
+# Wizard sync token: enables /v1/wizard/agents read + PUT for the deploy
+# wizard so any admin PC sees the same fleet picture. Added by
+# update-backend (was missing in installs predating v0.12.0-rc2).
+wizard:
+  token_file: /etc/wg-monitor/wizard-token.txt
+EOF`
+	if _, err := s.MustRun(appendCmd); err != nil {
+		return fmt.Errorf("append wizard block: %w", err)
+	}
+	PrintOK("backend.yaml: добавлен wizard: token_file")
+	return nil
+}
+
 func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) error {
 	if state.Backend.Host == "" {
 		PrintFail("В wizard.toml нет [backend] — сначала запусти install-backend")
@@ -83,6 +134,12 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	}
 
 	PrintStep(3, 4, "Atomic upload + restart")
+	// Ensure wizard token file + backend.yaml wizard: block exist BEFORE
+	// the swap so the restarted backend picks up /v1/wizard/* endpoints on
+	// first start. Idempotent — no-op when both already in place.
+	if err := stepEnsureWizardSetup(s, secrets); err != nil {
+		PrintWarn("wizard setup пропущен: " + err.Error())
+	}
 	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", "wg-monitor-backend"); err != nil {
 		return err
 	}
