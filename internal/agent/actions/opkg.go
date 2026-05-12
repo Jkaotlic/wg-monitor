@@ -342,6 +342,15 @@ func parseOpkgUpdate(out string) opkgUpdateOutcome {
 	return o
 }
 
+// normalizeFeedURL strips a trailing `/Packages.gz` (once) and any trailing
+// `/`, returning the base URL form that appears in opkg config files
+// (`src/gz <name> <base-url>`).
+func normalizeFeedURL(u string) string {
+	u = strings.TrimSuffix(u, "/Packages.gz")
+	u = strings.TrimRight(u, "/")
+	return u
+}
+
 func humanKB(kb int64) string {
 	if kb < 1024 {
 		return fmt.Sprintf("%d KB", kb)
