@@ -492,6 +492,15 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 // callbacks per the 2026-04-30 policy reversal, but typing into the chat
 // is a one-operator surface).
 func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
+	// Add-operator FSM intercept: admin sends a qualifying message in DM
+	// with the bot while a pending FSM exists. Falls through to normal
+	// handlers otherwise.
+	if r.cfg.AdminUserID != 0 && m.From.ID == r.cfg.AdminUserID && m.Chat.ID == m.From.ID {
+		if p, ok := r.pendingAddOperator.get(m.From.ID); ok {
+			r.processAddOperatorMessage(ctx, m, p)
+			return
+		}
+	}
 	if r.cfg.ChatID != 0 && m.Chat.ID != r.cfg.ChatID {
 		return
 	}

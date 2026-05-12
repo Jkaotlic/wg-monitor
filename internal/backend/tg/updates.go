@@ -25,6 +25,7 @@ type Message struct {
 	MessageThreadID *int64    `json:"message_thread_id,omitempty"`
 	Text            string    `json:"text"`
 	Document        *Document `json:"document,omitempty"`
+	ForwardFrom     *User     `json:"forward_from,omitempty"`
 }
 
 // Document represents a TG file attachment on a Message.
