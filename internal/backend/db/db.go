@@ -67,6 +67,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate users.telegram_user_id: %w", err)
 	}
+	if err := migrateWizardSync(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users wizard sync: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -124,6 +128,31 @@ func migrateUserKind(d *sql.DB) error {
 func migrateTelegramUserID(d *sql.DB) error {
 	return addColumnIfMissing(d, "users", "telegram_user_id",
 		`ALTER TABLE users ADD COLUMN telegram_user_id INTEGER`)
+}
+
+// migrateWizardSync adds five nullable columns used by the wizard sync
+// feature (v0.12.0). All NULL for pre-existing rows; wizard fills them on
+// the first push after deploy. Reverse-compatible: older backend versions
+// ignore unknown columns (SQLite never drops on schema reload).
+func migrateWizardSync(d *sql.DB) error {
+	if err := addColumnIfMissing(d, "users", "ssh_host",
+		`ALTER TABLE users ADD COLUMN ssh_host TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "ssh_port",
+		`ALTER TABLE users ADD COLUMN ssh_port INTEGER`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "ssh_user",
+		`ALTER TABLE users ADD COLUMN ssh_user TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "arch",
+		`ALTER TABLE users ADD COLUMN arch TEXT`); err != nil {
+		return err
+	}
+	return addColumnIfMissing(d, "users", "last_deployed_version",
+		`ALTER TABLE users ADD COLUMN last_deployed_version TEXT`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {
