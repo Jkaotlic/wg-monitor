@@ -168,12 +168,12 @@ func (s *stubOpkg) DryRun(ctx context.Context) (status, output string) {
 	return s.retStatus, s.retOutput
 }
 
-func (s *stubOpkg) SmartUpgrade(ctx context.Context) (status, output string) {
+func (s *stubOpkg) SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult) {
 	s.calls++
 	if s.retErr != nil {
-		return "err", s.retErr.Error()
+		return "err", s.retErr.Error(), payload
 	}
-	return s.retStatus, s.retOutput
+	return s.retStatus, s.retOutput, payload
 }
 
 // Sanity: errors.Is plumbing works for opkg run errors when unwrapping.

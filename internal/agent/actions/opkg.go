@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // ExecFunc is the contract for invoking external programs from OpkgRunner.
@@ -69,45 +71,59 @@ func (o *OpkgRunner) now() time.Time {
 
 // SmartUpgrade is the live opkg update + upgrade flow with a /opt
 // space safety check. It:
-//   1. takes the lock-file (refuses if a fresh one exists),
-//   2. runs `opkg update`,
-//   3. lists upgradable pkgs and estimates installed-size from `opkg info`,
-//   4. checks df -k /opt — refuses if the post-upgrade free space would
-//      drop below 10% of the partition (Entware on Keenetic typically has
-//      150-250 MB free, so we want a meaningful headroom),
-//   5. runs `opkg upgrade` if all checks pass.
+//  1. takes the lock-file (refuses if a fresh one exists),
+//  2. runs `opkg update` — tolerates partial feed failure as long as at
+//     least one feed downloaded successfully (common when a GitHub Pages
+//     feed goes 404; blocking the whole upgrade for one dead feed is
+//     worse than surfacing the failure and continuing),
+//  3. lists upgradable pkgs and estimates installed-size from `opkg info`,
+//  4. checks df -k /opt — refuses if the post-upgrade free space would
+//     drop below 10% of the partition (Entware on Keenetic typically has
+//     150-250 MB free, so we want a meaningful headroom),
+//  5. runs `opkg upgrade` if all checks pass.
 //
-// Returns wire-protocol status ∈ {"ok","err","locked"} plus a multi-line
-// human report. Designed to be safe-by-default: any size estimation error
-// is treated as "skip the package in the estimate", so the headroom check
-// errs on the side of *under-estimating* the install need (the caller's
-// 10% margin absorbs the slack).
-func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
+// Returns wire-protocol status ∈ {"ok","err","locked"}, a multi-line
+// human report, and a wire.OpkgUpgradeResult payload (FailedFeeds lists
+// any feeds that returned HTTP errors during `opkg update`). Designed to
+// be safe-by-default: any size estimation error is treated as "skip the
+// package in the estimate", so the headroom check errs on the side of
+// *under-estimating* the install need (the caller's 10% margin absorbs
+// the slack).
+func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult) {
 	if held, age, ok := o.lockHeldFresh(); ok {
-		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held)
+		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held), payload
 	}
 	if err := o.takeLock(); err != nil {
-		return "err", "acquire lock: " + err.Error()
+		return "err", "acquire lock: " + err.Error(), payload
 	}
 	defer o.releaseLock()
 
-	if out, err := o.Exec(ctx, "opkg", "update"); err != nil {
-		return "err", "opkg update failed: " + err.Error() + "\n" + string(out)
+	updateOut, updateErr := o.Exec(ctx, "opkg", "update")
+	upd := parseOpkgUpdate(string(updateOut))
+	payload.FailedFeeds = upd.failedFeeds
+	if updateErr != nil && upd.feedsUpdated == 0 {
+		// Total failure: no feed downloaded successfully — can't proceed.
+		return "err", "opkg update failed: " + updateErr.Error() + "\n" + string(updateOut), payload
 	}
+	// Partial success: at least one feed updated. Continue with the upgrade
+	// flow; failed-feeds list is surfaced in the final report and in payload.
 
 	listing, err := o.Exec(ctx, "opkg", "list-upgradable")
 	if err != nil {
-		return "err", "opkg list-upgradable failed: " + err.Error() + "\n" + string(listing)
+		return "err", "opkg list-upgradable failed: " + err.Error() + "\n" + string(listing), payload
 	}
 	pkgs := parseUpgradablePkgs(string(listing))
 	listingHasNoise := strings.Contains(string(listing), "ERROR") || strings.Contains(string(listing), "WARNING")
 	if len(pkgs) == 0 && !listingHasNoise {
-		return "ok", "✅ Все пакеты актуальны — обновлять нечего."
+		out := "✅ Все пакеты актуальны — обновлять нечего."
+		out = appendFailedFeedsBlock(out, upd.failedFeeds)
+		payload.Output = out
+		return "ok", out, payload
 	}
 
 	freeKB, totalKB, err := o.dfOpt(ctx)
 	if err != nil {
-		return "err", "df /opt failed: " + err.Error()
+		return "err", "df /opt failed: " + err.Error(), payload
 	}
 	// Space safety check is meaningful only when we have a parsed pkg list.
 	// If list-upgradable returned only noise (ERROR/WARNING but `opkg upgrade`
@@ -128,13 +144,13 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
 					"Освободи /opt и повтори.",
 				len(pkgs), humanKB(neededKB), humanKB(freeKB), humanKB(totalKB),
 				humanKB(freeKB-neededKB), humanKB(headroomKB),
-			)
+			), payload
 		}
 	}
 
 	upgradeOut, err := o.Exec(ctx, "opkg", "upgrade")
 	if err != nil {
-		return "err", "opkg upgrade failed: " + err.Error() + "\n" + string(upgradeOut)
+		return "err", "opkg upgrade failed: " + err.Error() + "\n" + string(upgradeOut), payload
 	}
 	// Recover the actual upgraded package names from `opkg upgrade` stdout.
 	// list-upgradable can lie (multi-feed conflicts surface as ERROR with
@@ -156,7 +172,7 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
 	if len(pkgListStr) > 200 {
 		pkgListStr = pkgListStr[:200] + "…"
 	}
-	return "ok", fmt.Sprintf(
+	out := fmt.Sprintf(
 		"✅ Обновлено пакетов: %d (%s)\n"+
 			"Список: %s\n"+
 			"Свободно после: %s / %s\n\n"+
@@ -165,6 +181,26 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string) {
 		humanKB(post), humanKB(totalKB),
 		strings.TrimSpace(string(upgradeOut)),
 	)
+	out = appendFailedFeedsBlock(out, upd.failedFeeds)
+	payload.Output = out
+	return "ok", out, payload
+}
+
+// appendFailedFeedsBlock appends a "⚠️ Недоступные фиды" section to a
+// SmartUpgrade report when at least one feed failed to download during
+// `opkg update`. No-op when the list is empty.
+func appendFailedFeedsBlock(report string, failed []string) string {
+	if len(failed) == 0 {
+		return report
+	}
+	var b strings.Builder
+	b.WriteString(report)
+	b.WriteString("\n\n⚠️ Недоступные фиды:")
+	for _, u := range failed {
+		b.WriteString("\n • ")
+		b.WriteString(u)
+	}
+	return b.String()
 }
 
 // dfOpt parses busybox `df -k /opt` and returns (free, total) in KB.

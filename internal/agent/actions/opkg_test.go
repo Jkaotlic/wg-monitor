@@ -172,6 +172,44 @@ func TestParseOpkgUpdate_TotalFailure(t *testing.T) {
 	}
 }
 
+func TestOpkg_SmartUpgrade_PartialUpdateFailure_Continues(t *testing.T) {
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "update":
+			return []byte(partialUpdateOutput), errors.New("exit status 1")
+		case "list-upgradable":
+			return []byte(""), nil // empty → SmartUpgrade exits early with "up to date"
+		}
+		return nil, nil
+	})
+	status, output, payload := o.SmartUpgrade(context.Background())
+	if status != "ok" {
+		t.Fatalf("status=%q, want ok; output=%q", status, output)
+	}
+	if !strings.Contains(output, "anonym-tsk.github.io") {
+		t.Errorf("output should surface dead URL; got %q", output)
+	}
+	if len(payload.FailedFeeds) != 1 || payload.FailedFeeds[0] != "https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz" {
+		t.Errorf("payload.FailedFeeds = %v", payload.FailedFeeds)
+	}
+}
+
+func TestOpkg_SmartUpgrade_TotalUpdateFailure_Errs(t *testing.T) {
+	totalFail := `Downloading http://bin.entware.net/aarch64-k3.10/Packages.gz
+*** Failed to download the package list from http://bin.entware.net/aarch64-k3.10/Packages.gz
+`
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if args[0] == "update" {
+			return []byte(totalFail), errors.New("exit status 1")
+		}
+		return nil, nil
+	})
+	status, _, _ := o.SmartUpgrade(context.Background())
+	if status != "err" {
+		t.Fatalf("status=%q, want err", status)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
