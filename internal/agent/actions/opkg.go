@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -29,10 +30,33 @@ func DefaultExec(ctx context.Context, name string, args ...string) ([]byte, erro
 // Today's purpose: surface "what would change" to the admin in TG without
 // touching the system.
 type OpkgRunner struct {
-	LockPath string
-	LockTTL  time.Duration
-	Exec     ExecFunc
-	Now      func() time.Time
+	LockPath   string
+	LockTTL    time.Duration
+	Exec       ExecFunc
+	Now        func() time.Time
+	// ConfigRoot is the directory containing `opkg.conf` and the `opkg/`
+	// subdirectory of per-feed `.conf` files. Defaults to "/opt/etc" when
+	// empty — tests substitute t.TempDir() to point at a sandbox.
+	ConfigRoot string
+}
+
+// configRoot returns ConfigRoot or the production default.
+func (o *OpkgRunner) configRoot() string {
+	if o.ConfigRoot != "" {
+		return o.ConfigRoot
+	}
+	return "/opt/etc"
+}
+
+// opkgConfPaths returns the candidate paths that may declare feeds, in
+// scan order: the single-file `opkg.conf` first, then any per-feed
+// `opkg/*.conf`. Missing files are silently skipped by callers.
+func (o *OpkgRunner) opkgConfPaths() []string {
+	root := o.configRoot()
+	paths := []string{root + "/opkg.conf"}
+	matches, _ := filepath.Glob(root + "/opkg/*.conf")
+	paths = append(paths, matches...)
+	return paths
 }
 
 func (o *OpkgRunner) now() time.Time {
