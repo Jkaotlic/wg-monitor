@@ -5,8 +5,10 @@
 //   - diag_now        → awgmgr GET /api/diagnostics/result (raw body)
 //   - pingcheck_now   → awgmgr.PingCheckNow
 //   - force_recheck   → caller-provided callback (typically reporter.SendOnce)
-//   - opkg_upgrade    → OpkgRunner.DryRun (preflight only — no live upgrade
-//     yet; juicy live-upgrade path is deferred to a later iteration)
+//   - opkg_upgrade    → OpkgRunner.SmartUpgrade (opkg update + space check +
+//     live upgrade; partial-update failures continue and surface failed feeds)
+//   - opkg_feed_disable → OpkgRunner.DisableFeed (comment matching feed in
+//     opkg config + auto-retry SmartUpgrade)
 //   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
 //     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
 //     ndmc CLI is the authoritative path. NDMSName must be supplied in

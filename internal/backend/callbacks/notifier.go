@@ -124,8 +124,8 @@ func (n *OpkgResultNotifier) buildOpkgMarkup(res wire.CommandResult, userID int6
 }
 
 // notifierNormalizeFeedURL strips /Packages.gz suffix and trailing slashes.
-// Mirrors normalizeFeedURLBackend in backend/opkg_render.go and the agent's
-// normalizeFeedURL — kept here so callbacks does not import backend.
+// Mirrors the agent's normalizeFeedURL — kept here so callbacks does not
+// import backend.
 func notifierNormalizeFeedURL(u string) string {
 	const suffix = "/Packages.gz"
 	if len(u) >= len(suffix) && u[len(u)-len(suffix):] == suffix {
