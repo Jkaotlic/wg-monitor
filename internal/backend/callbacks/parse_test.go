@@ -344,3 +344,83 @@ func TestParse_OpkgDisable_NoTokenSegment(t *testing.T) {
 		t.Error("expected error for missing token segment")
 	}
 }
+
+func TestParse_Access_Home(t *testing.T) {
+	a, err := Parse("access:0:home")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.Action != "access" || a.AccessScreen != "home" {
+		t.Errorf("a=%+v", a)
+	}
+}
+
+func TestParse_Access_Router(t *testing.T) {
+	a, err := Parse("access:0:router:42")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.AccessScreen != "router" || a.AccessRouterID != 42 {
+		t.Errorf("a=%+v", a)
+	}
+}
+
+func TestParse_Access_Add(t *testing.T) {
+	a, err := Parse("access:0:add:42")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.AccessScreen != "add" || a.AccessRouterID != 42 {
+		t.Errorf("a=%+v", a)
+	}
+}
+
+func TestParse_Access_RemoveOp(t *testing.T) {
+	a, err := Parse("access:0:remove_op:42:1234567890")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.AccessScreen != "remove_op" || a.AccessRouterID != 42 || a.AccessOperatorTGID != 1234567890 {
+		t.Errorf("a=%+v", a)
+	}
+}
+
+func TestParse_Access_UnbindOwner(t *testing.T) {
+	a, err := Parse("access:0:unbind_owner:42")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.AccessScreen != "unbind_owner" || a.AccessRouterID != 42 {
+		t.Errorf("a=%+v", a)
+	}
+}
+
+func TestParse_Access_BackCancel(t *testing.T) {
+	for _, s := range []string{"access:0:back", "access:0:cancel_add"} {
+		a, err := Parse(s)
+		if err != nil {
+			t.Errorf("%s: %v", s, err)
+			continue
+		}
+		if a.Action != "access" {
+			t.Errorf("%s: a=%+v", s, a)
+		}
+	}
+}
+
+func TestParse_Access_Errors(t *testing.T) {
+	for _, bad := range []string{
+		"access:0:bogus",            // unknown screen
+		"access:0:router",           // missing router id
+		"access:0:router:",          // empty router id
+		"access:0:router:abc",       // non-numeric
+		"access:0:remove_op:42",     // missing tg id
+		"access:0:remove_op:42:abc", // non-numeric tg id
+		"access:0:add",              // missing router id
+		"access:0:unbind_owner",     // missing router id
+	} {
+		if _, err := Parse(bad); err == nil {
+			t.Errorf("%q should have errored", bad)
+		}
+	}
+}

@@ -62,6 +62,16 @@ type Args struct {
 	// PanelKind is the panel type ("maint" | "routes" | "status") for
 	// the "kind" and "push" screens.
 	PanelKind string
+	// AccessScreen identifies the access:* admin-panel screen for callbacks
+	// where Action == "access". One of: "home" | "router" | "add" |
+	// "remove_op" | "unbind_owner" | "back" | "cancel_add".
+	AccessScreen string
+	// AccessRouterID is the users.id of the router whose access list is
+	// being viewed/modified. Set for "router" / "add" / "remove_op" /
+	// "unbind_owner" screens.
+	AccessRouterID int64
+	// AccessOperatorTGID is the target operator's TG user ID for remove_op.
+	AccessOperatorTGID int64
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -102,6 +112,8 @@ var validActions = map[string]bool{
 	"compat_btn": true,
 	// admin panel hub — multi-screen inline-kb dispatcher.
 	"panel": true,
+	// admin access-control panel — per-router operator whitelist.
+	"access": true,
 }
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
@@ -236,6 +248,43 @@ func Parse(data string) (Args, error) {
 				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
 			}
 			a.PanelKind = parts[3]
+		}
+	}
+	if action == "access" {
+		screen := parts[2]
+		validAccessScreens := map[string]bool{
+			"home": true, "router": true, "add": true,
+			"remove_op": true, "unbind_owner": true,
+			"back": true, "cancel_add": true,
+		}
+		if !validAccessScreens[screen] {
+			return Args{}, fmt.Errorf("access: unknown screen %q", screen)
+		}
+		a.AccessScreen = screen
+		switch screen {
+		case "router", "add", "unbind_owner":
+			if len(parts) < 4 || parts[3] == "" {
+				return Args{}, fmt.Errorf("access %s requires router id: %q", screen, data)
+			}
+			rid, err := strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				return Args{}, fmt.Errorf("access %s: bad router id %q", screen, parts[3])
+			}
+			a.AccessRouterID = rid
+		case "remove_op":
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+				return Args{}, fmt.Errorf("access remove_op requires router id and tg id: %q", data)
+			}
+			rid, err := strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				return Args{}, fmt.Errorf("access remove_op: bad router id %q", parts[3])
+			}
+			tgid, err := strconv.ParseInt(parts[4], 10, 64)
+			if err != nil {
+				return Args{}, fmt.Errorf("access remove_op: bad tg id %q", parts[4])
+			}
+			a.AccessRouterID = rid
+			a.AccessOperatorTGID = tgid
 		}
 	}
 	return a, nil
