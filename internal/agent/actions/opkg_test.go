@@ -210,6 +210,22 @@ func TestOpkg_SmartUpgrade_TotalUpdateFailure_Errs(t *testing.T) {
 	}
 }
 
+func TestNormalizeFeedURL(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz", "https://anonym-tsk.github.io/nfqws-keenetic/all"},
+		{"https://anonym-tsk.github.io/nfqws-keenetic/all/", "https://anonym-tsk.github.io/nfqws-keenetic/all"},
+		{"https://anonym-tsk.github.io/nfqws-keenetic/all", "https://anonym-tsk.github.io/nfqws-keenetic/all"},
+		{"http://bin.entware.net/aarch64-k3.10", "http://bin.entware.net/aarch64-k3.10"},
+		{"https://x.example/Packages.gz/Packages.gz", "https://x.example/Packages.gz"},
+	}
+	for _, c := range cases {
+		got := normalizeFeedURL(c.in)
+		if got != c.want {
+			t.Errorf("normalizeFeedURL(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
