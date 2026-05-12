@@ -120,3 +120,31 @@ func (a *OpkgRepairAction) Apply(ctx context.Context, q *tg.CallbackQuery, args 
 
 // ensure OpkgRepairAction satisfies Action at compile time.
 var _ Action = (*OpkgRepairAction)(nil)
+
+// PendingOpkgRepairStore is the exported type alias used by package backend
+// (handler.go / opkg_render.go) to reference the store across package boundaries.
+type PendingOpkgRepairStore = pendingOpkgRepairStore
+
+// NewPendingOpkgRepairStore is the production constructor exposed for use by
+// cmd/backend (which lives in a different package and cannot call the
+// unexported newPendingOpkgRepairStore).
+func NewPendingOpkgRepairStore() *PendingOpkgRepairStore {
+	return newPendingOpkgRepairStore()
+}
+
+// PutForRender registers a pending entry from the backend handler relay path.
+// Exported because the renderer lives in package `backend`, not `callbacks`.
+func (s *pendingOpkgRepairStore) PutForRender(userID int64, url, token string, ttl time.Duration) {
+	s.put(&pendingOpkgRepair{
+		UserID:    userID,
+		URL:       url,
+		Token:     token,
+		ExpiresAt: time.Now().Add(ttl),
+	})
+}
+
+// MakeOpkgRepairToken is the production token generator exposed for use by
+// cmd/backend's renderer wiring.
+func MakeOpkgRepairToken() string {
+	return makeOpkgRepairToken()
+}

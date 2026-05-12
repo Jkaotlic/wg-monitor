@@ -162,6 +162,15 @@ type MaintNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
+// OpkgNotifier is the subset used by cmdResultHandler when ref.Action is
+// opkg_upgrade or opkg_feed_disable. Implemented by callbacks.Notifier via
+// the NotifyOpkgResult method. Receives userID so it can register pending
+// repair entries per FailedFeed URL before sending the TG message with
+// the inline 🔧 buttons.
+type OpkgNotifier interface {
+	NotifyOpkgResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64, maxChars int) error
+}
+
 type Deps struct {
 	Logger         *slog.Logger
 	DB             *db.DB
@@ -171,6 +180,7 @@ type Deps struct {
 	TGNotifier     TGNotifier
 	RoutesNotifier RoutesNotifier // nil-safe (handler skips if nil)
 	MaintNotifier  MaintNotifier  // nil-safe (handler skips if nil)
+	OpkgNotifier   OpkgNotifier   // nil-safe (handler falls back to TGNotifier if nil)
 	UI             UIConfig
 	Thresholds     state.Thresholds
 	// ShutdownCtx, when non-nil, parents the relay goroutines spawned by
@@ -557,6 +567,38 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					}(ref, res)
 				} else {
 					d.Logger.Warn("maint notifier not configured; result not relayed",
+						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
+				}
+			case "opkg_upgrade", "opkg_feed_disable":
+				if d.OpkgNotifier != nil {
+					maxChars := d.UI.DiagMaxChars
+					if maxChars == 0 {
+						maxChars = 3500
+					}
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
+						defer cancel()
+						if err := d.OpkgNotifier.NotifyOpkgResult(ctx, ref, res, uid, maxChars); err != nil {
+							incTGError()
+							d.Logger.Warn("opkg notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
+						}
+					}(ref, res, maxChars)
+				} else if d.TGNotifier != nil {
+					// Graceful fallback: no repair buttons, but still relay the text.
+					maxChars := d.UI.DiagMaxChars
+					if maxChars == 0 {
+						maxChars = 3500
+					}
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
+						defer cancel()
+						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
+							incTGError()
+							d.Logger.Warn("tg notify failed (opkg fallback)", "cmd_id", res.ID, "err", err)
+						}
+					}(ref, res, maxChars)
+				} else {
+					d.Logger.Warn("opkg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			default:

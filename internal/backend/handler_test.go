@@ -659,6 +659,132 @@ func TestCmdResult_AcceptsUnknownStatus(t *testing.T) {
 	}
 }
 
+// fakeOpkgNotifier captures calls to NotifyOpkgResult so we can assert the
+// handler relay path dispatches to OpkgNotifier for opkg_upgrade / opkg_feed_disable.
+type fakeOpkgNotifier struct {
+	mu     sync.Mutex
+	called int
+	action string
+	userID int64
+	result wire.CommandResult
+}
+
+func (f *fakeOpkgNotifier) NotifyOpkgResult(_ context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64, _ int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.called++
+	f.action = ref.Action
+	f.userID = userID
+	f.result = res
+	return nil
+}
+
+func testCmdResultDispatchesOpkgNotifier(t *testing.T, action string) {
+	t.Helper()
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01cc01"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	on := &fakeOpkgNotifier{}
+	rc := &relayCapture{}
+	payload, _ := json.Marshal(wire.CommandResult{ID: "op1", Status: "ok", Output: "✅ обновлено"})
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: action, ChatID: 1, MessageID: 2}}
+	mux := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   &fakeDisp{},
+		CommandSink:  sink,
+		TGNotifier:   rc,
+		OpkgNotifier: on,
+		Thresholds:   state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_ = payload
+	body, _ := json.Marshal(wire.CommandResult{ID: "op1", Status: "ok", Output: "✅ обновлено"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	onCalled := waitForRelay(t, func() int {
+		on.mu.Lock()
+		defer on.mu.Unlock()
+		return on.called
+	}, 1, 500*time.Millisecond)
+	if onCalled != 1 {
+		t.Errorf("OpkgNotifier called %d times for action %q, want 1", onCalled, action)
+	}
+
+	on.mu.Lock()
+	gotAction := on.action
+	on.mu.Unlock()
+	if gotAction != action {
+		t.Errorf("OpkgNotifier action=%q, want %q", gotAction, action)
+	}
+
+	// TGNotifier must NOT be called when OpkgNotifier is wired.
+	snap := rc.snapshot()
+	if len(snap.chunks) != 0 {
+		t.Errorf("generic TGNotifier called %d chunk(s) for %q with OpkgNotifier wired, want 0", len(snap.chunks), action)
+	}
+}
+
+func TestCmdResult_DispatchesOpkgNotifier_OpkgUpgrade(t *testing.T) {
+	testCmdResultDispatchesOpkgNotifier(t, "opkg_upgrade")
+}
+
+func TestCmdResult_DispatchesOpkgNotifier_OpkgFeedDisable(t *testing.T) {
+	testCmdResultDispatchesOpkgNotifier(t, "opkg_feed_disable")
+}
+
+func TestCmdResult_OpkgFallsBackToTGNotifier_WhenNoOpkgNotifier(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	rc := &relayCapture{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "opkg_upgrade", ChatID: 1, MessageID: 2}}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		TGNotifier:  rc,
+		// OpkgNotifier intentionally nil — should fall back to TGNotifier
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "op2", Status: "ok", Output: "✅ обновлено"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	// Without OpkgNotifier the generic TGNotifier should relay the result.
+	got := waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond)
+	if got != 1 {
+		t.Errorf("TGNotifier fallback: expected 1 chunk, got %d", got)
+	}
+}
+
 func TestReportRejectsTooLarge(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
