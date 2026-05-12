@@ -37,6 +37,9 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 				{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
 			},
 			{
+				{Text: "👥 Доступ", CallbackData: "access:0:home"},
+			},
+			{
 				{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
 			},
 		},
