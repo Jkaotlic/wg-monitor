@@ -451,6 +451,10 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		if *user.TelegramUserID == q.From.ID {
 			return true
 		}
+		// Owner mismatch — try the operator whitelist before rejecting.
+		if r.d.RouterOperators().HasAccess(user.ID, q.From.ID) {
+			return true
+		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
 		slog.Warn("acl: rejected (owner mismatch)",
 			"from", q.From.ID, "router_user_id", args.UserID, "owner", *user.TelegramUserID, "data", q.Data)
