@@ -314,3 +314,33 @@ func TestParse_PanelKindRequiresKind(t *testing.T) {
 		t.Error("expected error for kind screen without kind value")
 	}
 }
+
+func TestParse_OpkgDisable_Valid(t *testing.T) {
+	a, err := Parse("opkg_disable:12345:_menu:abcd1234")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.Action != "opkg_disable" {
+		t.Errorf("Action=%q", a.Action)
+	}
+	if a.UserID != 12345 {
+		t.Errorf("UserID=%d", a.UserID)
+	}
+	if a.OpkgRepairToken != "abcd1234" {
+		t.Errorf("OpkgRepairToken=%q", a.OpkgRepairToken)
+	}
+}
+
+func TestParse_OpkgDisable_MissingToken(t *testing.T) {
+	_, err := Parse("opkg_disable:12345:_menu:")
+	if err == nil {
+		t.Error("expected error for empty token")
+	}
+}
+
+func TestParse_OpkgDisable_NoTokenSegment(t *testing.T) {
+	_, err := Parse("opkg_disable:12345:_menu")
+	if err == nil {
+		t.Error("expected error for missing token segment")
+	}
+}
