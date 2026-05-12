@@ -389,6 +389,91 @@ func disableMatchingLine(body []byte, normalizedURL, stamp string) ([]byte, bool
 	return []byte(strings.Join(lines, "")), true
 }
 
+// DisableFeed comments out the line in opkg config matching the given feed
+// URL, writes a timestamped backup of the modified file, then re-runs
+// SmartUpgrade so the user sees a single clean report.
+//
+// Behavior table:
+//   - Invalid URL (not http/https): status="err", no FS access.
+//   - URL not present in any conf: status="ok", "уже отключён или не найден", no FS writes.
+//   - URL matched and commented: status from SmartUpgrade re-run (typically "ok").
+//   - Lock held by concurrent op: status="locked".
+//
+// The opkg lock-file is held during the disable phase, released before the
+// SmartUpgrade re-run (which takes its own lock). This means a concurrent
+// SmartUpgrade can squeeze in between, which is acceptable: at worst the
+// user sees two upgrade reports in quick succession.
+func (o *OpkgRunner) DisableFeed(ctx context.Context, rawURL string) (status, output string, payload wire.OpkgUpgradeResult) {
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return "err", "invalid feed URL: " + rawURL, payload
+	}
+	url := normalizeFeedURL(rawURL)
+
+	if held, age, ok := o.lockHeldFresh(); ok {
+		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held), payload
+	}
+	if err := o.takeLock(); err != nil {
+		return "err", "acquire lock: " + err.Error(), payload
+	}
+
+	stamp := o.now().UTC().Format(time.RFC3339)
+	backupSuffix := o.now().UTC().Format("20060102-150405")
+
+	var changedFiles []string
+	for _, path := range o.opkgConfPaths() {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			o.releaseLock()
+			return "err", fmt.Sprintf("read %s: %v", path, err), payload
+		}
+		newBody, hit := disableMatchingLine(body, url, stamp)
+		if !hit {
+			continue
+		}
+		if err := backupAndWrite(path, body, newBody, backupSuffix); err != nil {
+			o.releaseLock()
+			return "err", fmt.Sprintf("rewrite %s: %v", path, err), payload
+		}
+		changedFiles = append(changedFiles, path)
+	}
+
+	o.releaseLock()
+
+	if len(changedFiles) == 0 {
+		return "ok", fmt.Sprintf("🔧 Фид %s уже отключён или не найден в opkg-конфигах.", url), payload
+	}
+
+	prefix := fmt.Sprintf("🔧 Отключён фид %s в %s (backup suffix: %s)\n\n",
+		url, strings.Join(changedFiles, ", "), backupSuffix)
+
+	s, smartOut, p := o.SmartUpgrade(ctx)
+	combined := prefix + smartOut
+	p.Output = combined
+	return s, combined, p
+}
+
+// backupAndWrite writes oldBody to <path>.bak.<suffix>, then atomically
+// replaces <path> with newBody. Atomicity via tmp-file + Rename ensures no
+// half-written config is ever visible to opkg.
+func backupAndWrite(path string, oldBody, newBody []byte, suffix string) error {
+	bakPath := path + ".bak." + suffix
+	if err := os.WriteFile(bakPath, oldBody, 0o644); err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	tmpPath := path + ".tmp." + suffix
+	if err := os.WriteFile(tmpPath, newBody, 0o644); err != nil {
+		return fmt.Errorf("tmp write: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename: %w", err)
+	}
+	return nil
+}
+
 func humanKB(kb int64) string {
 	if kb < 1024 {
 		return fmt.Sprintf("%d KB", kb)
