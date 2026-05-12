@@ -237,3 +237,71 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+func TestDisableMatchingLine_SimpleMatch(t *testing.T) {
+	body := []byte("src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n")
+	url := "https://anonym-tsk.github.io/nfqws-keenetic/all"
+	out, hit := disableMatchingLine(body, url, "2026-05-12T10:00:00Z")
+	if !hit {
+		t.Fatalf("expected hit")
+	}
+	want := "# disabled by wg-monitor 2026-05-12T10:00:00Z: src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n"
+	if string(out) != want {
+		t.Errorf("got %q want %q", out, want)
+	}
+}
+
+func TestDisableMatchingLine_MultiFeed_OnlyTargetCommented(t *testing.T) {
+	body := []byte("src/gz entware http://bin.entware.net/aarch64-k3.10\n" +
+		"src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n" +
+		"src/gz hoaxisr http://repo.hoaxisr.ru/aarch64-k3.10\n")
+	url := "https://anonym-tsk.github.io/nfqws-keenetic/all"
+	out, hit := disableMatchingLine(body, url, "T")
+	if !hit {
+		t.Fatalf("expected hit")
+	}
+	s := string(out)
+	if !strings.Contains(s, "src/gz entware http://bin.entware.net/aarch64-k3.10\n") {
+		t.Errorf("entware line should be untouched, got %q", s)
+	}
+	if !strings.Contains(s, "# disabled by wg-monitor T: src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n") {
+		t.Errorf("nfqws line should be commented, got %q", s)
+	}
+	if !strings.Contains(s, "src/gz hoaxisr http://repo.hoaxisr.ru/aarch64-k3.10\n") {
+		t.Errorf("hoaxisr line should be untouched, got %q", s)
+	}
+}
+
+func TestDisableMatchingLine_SkipsAlreadyCommented(t *testing.T) {
+	body := []byte("# src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n")
+	out, hit := disableMatchingLine(body, "https://anonym-tsk.github.io/nfqws-keenetic/all", "T")
+	if hit {
+		t.Errorf("commented line must not be re-disabled")
+	}
+	if string(out) != string(body) {
+		t.Errorf("body must be unchanged, got %q", out)
+	}
+}
+
+func TestDisableMatchingLine_NoMatch(t *testing.T) {
+	body := []byte("src/gz entware http://bin.entware.net/aarch64-k3.10\n")
+	out, hit := disableMatchingLine(body, "https://anonym-tsk.github.io/nfqws-keenetic/all", "T")
+	if hit {
+		t.Errorf("should not match")
+	}
+	if string(out) != string(body) {
+		t.Errorf("body must be unchanged")
+	}
+}
+
+func TestDisableMatchingLine_SrcWithoutGz(t *testing.T) {
+	// Some feeds use `src` (no /gz) for uncompressed Packages files.
+	body := []byte("src nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n")
+	out, hit := disableMatchingLine(body, "https://anonym-tsk.github.io/nfqws-keenetic/all", "T")
+	if !hit {
+		t.Fatalf("expected hit on `src` variant")
+	}
+	if !strings.HasPrefix(string(out), "# disabled by wg-monitor T:") {
+		t.Errorf("expected comment prefix, got %q", out)
+	}
+}

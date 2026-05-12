@@ -351,6 +351,44 @@ func normalizeFeedURL(u string) string {
 	return u
 }
 
+// disableMatchingLine scans `body` line-by-line, commenting out any
+// uncommented `src` or `src/gz` line whose URL (third whitespace-separated
+// field) equals normalizedURL. Returns the rewritten body and true iff at
+// least one line was modified. Already-commented lines (leading `#`) are
+// never re-touched.
+//
+// stamp is the timestamp string baked into the comment prefix; the caller
+// owns time-source choice for deterministic tests.
+func disableMatchingLine(body []byte, normalizedURL, stamp string) ([]byte, bool) {
+	lines := strings.SplitAfter(string(body), "\n")
+	hit := false
+	for i, line := range lines {
+		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) < 3 {
+			continue
+		}
+		if fields[0] != "src" && fields[0] != "src/gz" {
+			continue
+		}
+		lineURL := strings.TrimRight(fields[2], "/")
+		if lineURL != normalizedURL {
+			continue
+		}
+		// Preserve the original line in the suffix so reverting is just
+		// `sed -i 's|^# disabled by wg-monitor [^:]*: ||'`.
+		lines[i] = "# disabled by wg-monitor " + stamp + ": " + line
+		hit = true
+	}
+	if !hit {
+		return body, false
+	}
+	return []byte(strings.Join(lines, "")), true
+}
+
 func humanKB(kb int64) string {
 	if kb < 1024 {
 		return fmt.Sprintf("%d KB", kb)
