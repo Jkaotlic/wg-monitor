@@ -395,16 +395,13 @@ func TestParse_Access_UnbindOwner(t *testing.T) {
 	}
 }
 
-func TestParse_Access_BackCancel(t *testing.T) {
-	for _, s := range []string{"access:0:back", "access:0:cancel_add"} {
-		a, err := Parse(s)
-		if err != nil {
-			t.Errorf("%s: %v", s, err)
-			continue
-		}
-		if a.Action != "access" {
-			t.Errorf("%s: a=%+v", s, a)
-		}
+func TestParse_Access_CancelAdd(t *testing.T) {
+	a, err := Parse("access:0:cancel_add")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.Action != "access" || a.AccessScreen != "cancel_add" {
+		t.Errorf("a=%+v", a)
 	}
 }
 
