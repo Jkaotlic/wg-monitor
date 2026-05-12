@@ -2,15 +2,39 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 )
 
 func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloader) {
 	PrintBanner()
+
+	// Best-effort: pull fresh fleet picture at startup so the menu reflects
+	// what's actually on VPS. Silent on first-run / offline / missing token.
+	if state.Backend.Domain != "" {
+		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
+			if c := NewVPSClient(state.Backend.Domain, tok); c != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				if remote, err := c.ListAgents(ctx); err == nil {
+					merged, added, _ := MergeAgents(state.Agents, remote)
+					state.Agents = merged
+					if len(added) > 0 {
+						PrintInfo(fmt.Sprintf("VPS sync на старте: добавлено %d новых роутеров (%s)", len(added), strings.Join(added, ", ")))
+						_ = SaveState(statePath, state)
+					}
+				} else {
+					PrintWarn("⚠ VPS unreachable на старте — работаю с локальным кэшем")
+				}
+				cancel()
+			}
+		}
+	}
+
 	for {
 		printMenuHeader(state)
 		printMenuItems(state)
