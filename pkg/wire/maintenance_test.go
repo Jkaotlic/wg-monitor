@@ -15,10 +15,16 @@ func TestVersionAudit_RoundTrip(t *testing.T) {
 		AwgmgrUptime:    "7д 12ч",
 	}
 	b, err := json.Marshal(in)
-	if err != nil { t.Fatalf("marshal: %v", err) }
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
 	var out VersionAudit
-	if err := json.Unmarshal(b, &out); err != nil { t.Fatalf("unmarshal: %v", err) }
-	if out != in { t.Fatalf("round-trip diverged:\n  in=%+v\n out=%+v", in, out) }
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out != in {
+		t.Fatalf("round-trip diverged:\n  in=%+v\n out=%+v", in, out)
+	}
 }
 
 func TestFirmwareStatus_RoundTrip(t *testing.T) {
@@ -33,6 +39,10 @@ func TestFirmwareStatus_RoundTrip(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 	var out FirmwareStatus
-	if err := json.Unmarshal(b, &out); err != nil { t.Fatalf("unmarshal: %v", err) }
-	if out != in { t.Fatalf("round-trip diverged:\n  in=%+v\n out=%+v", in, out) }
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out != in {
+		t.Fatalf("round-trip diverged:\n  in=%+v\n out=%+v", in, out)
+	}
 }
