@@ -222,6 +222,20 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		return fmt.Errorf("ambiguous agent")
 	}
 
+	// Update-flow только подменяет бинарь — init-скрипт, config.yaml, директории
+	// и токен заводит actionInstallAgent. Если последний install ещё не
+	// случался ([5] VPS Sync даёт запись с пустыми SSH-полями и пустой версией,
+	// или сюда вручную добавили [[agents]] блок), update сломает роутер: стопнет
+	// агента и попытается стартануть несуществующий S99-скрипт. Bail заранее,
+	// до prompt'а пароля.
+	if ag.LastDeployedVersion == "" {
+		PrintFail(fmt.Sprintf(
+			"%s ещё ни разу не устанавливался (last_deployed_version пуст в wizard.toml).\n"+
+				"  Это update-flow, он только подменяет бинарь. Для первого install запусти [3] Установить агента.",
+			ag.Nickname))
+		return fmt.Errorf("agent %s never deployed — use [3] install-agent first", ag.Nickname)
+	}
+
 	rel, err := dl.GetLatestRelease()
 	if err != nil {
 		PrintFail("GitHub API: " + err.Error())
@@ -276,6 +290,33 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	defer s.Close()
 	if err := stepCheckSSH(s, ag.Host); err != nil {
 		return err
+	}
+
+	// Defence-in-depth: state может врать (last_deployed_version выставлен
+	// руками, или /opt был вайпнут после reset). Если init-скрипта нет, не
+	// продолжаем — kill+swap+start с несуществующим S99 заведомо сломает
+	// агента, оставив роутер молчащим.
+	if _, _, rc, _ := s.Run("test -x /opt/etc/init.d/S99wg-monitor"); rc != 0 {
+		PrintFail(fmt.Sprintf(
+			"на %s нет /opt/etc/init.d/S99wg-monitor — агент не установлен на роутере, хотя в wizard.toml last_deployed_version=%q.\n"+
+				"  Возможно, /opt был вайпнут или агент ставился без wizard'а. Запусти [3] Установить агента.",
+			ag.Nickname, ag.LastDeployedVersion))
+		return fmt.Errorf("S99wg-monitor missing on %s — use [3] install-agent", ag.Nickname)
+	}
+
+	// Нормализация SSH-полей после успешного подключения. До этой точки оператор
+	// мог иметь ag.User=="" / ag.Port==0 (например, агент попал в state через
+	// [5] VPS Sync, где remote SSHUser=NULL и MergeAgents оставляет local пустым).
+	// SSH мы устанавливали через `userOrDefault(ag.User, "root")` — фактически
+	// "root", но это значение не возвращалось обратно в state. Дальше
+	// pushToVPSBestEffort шлёт ag.* в PUT /v1/wizard/agents/<nick>, бэкенд
+	// валидирует ssh_user/ssh_host/ssh_port/arch != "" и режет с HTTP 400.
+	// Симметрично к ag.Arch ниже.
+	if ag.User == "" {
+		ag.User = "root"
+	}
+	if ag.Port == 0 {
+		ag.Port = 222
 	}
 
 	PrintStep(2, 4, "Определить архитектуру")
