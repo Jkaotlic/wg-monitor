@@ -158,6 +158,8 @@ type stubOpkg struct {
 	retStatus string
 	retOutput string
 	retErr    error
+	smartFn   func(ctx context.Context) (string, string, wire.OpkgUpgradeResult)
+	disableFn func(ctx context.Context, url string) (string, string, wire.OpkgUpgradeResult)
 }
 
 func (s *stubOpkg) DryRun(ctx context.Context) (status, output string) {
@@ -170,10 +172,20 @@ func (s *stubOpkg) DryRun(ctx context.Context) (status, output string) {
 
 func (s *stubOpkg) SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult) {
 	s.calls++
+	if s.smartFn != nil {
+		return s.smartFn(ctx)
+	}
 	if s.retErr != nil {
 		return "err", s.retErr.Error(), payload
 	}
 	return s.retStatus, s.retOutput, payload
+}
+
+func (s *stubOpkg) DisableFeed(ctx context.Context, url string) (status, output string, payload wire.OpkgUpgradeResult) {
+	if s.disableFn != nil {
+		return s.disableFn(ctx, url)
+	}
+	return "ok", "", payload
 }
 
 // Sanity: errors.Is plumbing works for opkg run errors when unwrapping.
@@ -379,6 +391,50 @@ func TestRunner_VersionAudit_NoAwgClient(t *testing.T) {
 	res := r.Execute(context.Background(), wire.Command{ID: "1", Action: "version_audit"})
 	if res.Status != "err" || !strings.Contains(res.Output, "awgmgr client not configured") {
 		t.Errorf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func TestRunner_OpkgFeedDisable_Dispatch(t *testing.T) {
+	called := ""
+	r := &Runner{
+		Opkg: &stubOpkg{
+			disableFn: func(ctx context.Context, url string) (string, string, wire.OpkgUpgradeResult) {
+				called = url
+				return "ok", "🔧 Отключён", wire.OpkgUpgradeResult{Output: "🔧 Отключён"}
+			},
+		},
+		Now: mockNow(),
+	}
+	cmd := wire.Command{
+		ID:     "c1",
+		Action: "opkg_feed_disable",
+		Args:   map[string]any{"url": "https://x/Packages.gz"},
+	}
+	res := r.Execute(context.Background(), cmd)
+	if res.Status != "ok" {
+		t.Errorf("status=%q", res.Status)
+	}
+	if called != "https://x/Packages.gz" {
+		t.Errorf("DisableFeed called with url=%q", called)
+	}
+	if len(res.Payload) == 0 {
+		t.Error("res.Payload should be non-empty (OpkgUpgradeResult.IsZero() was false)")
+	}
+}
+
+func TestRunner_OpkgFeedDisable_MissingURL(t *testing.T) {
+	r := &Runner{Opkg: &stubOpkg{}, Now: mockNow()}
+	cmd := wire.Command{
+		ID:     "c1",
+		Action: "opkg_feed_disable",
+		Args:   map[string]any{},
+	}
+	res := r.Execute(context.Background(), cmd)
+	if res.Status != "err" {
+		t.Errorf("status=%q, want err", res.Status)
+	}
+	if !strings.Contains(res.Output, "url") {
+		t.Errorf("output should mention missing url: %q", res.Output)
 	}
 }
 
