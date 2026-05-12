@@ -946,3 +946,36 @@ func TestRouter_OpkgDisable_NilAction(t *testing.T) {
 		t.Errorf("expected 'не настроен' toast when action is nil, got %q", f.answers[0])
 	}
 }
+
+func TestAclAllow_OperatorAllowed(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, err := d.Users().Insert("router-x", "tok-x", "1.1.1.1", "awg11")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	// Owner is bound to TG user 100; verify TG user 200 (operator) is also allowed.
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 999)
+
+	r := NewRouterWithSink(d, &fakeRouterTG{}, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	q := &tg.CallbackQuery{ID: "q", From: tg.User{ID: 200}, Message: tg.Message{Chat: tg.Chat{ID: 7}}}
+
+	if !r.aclAllow(context.Background(), q, Args{UserID: uid}) {
+		t.Error("operator (TG 200) should be allowed for router uid")
+	}
+}
+
+func TestAclAllow_FormerOperatorDenied(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("router-y", "tok-y", "1.1.1.1", "awg11")
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 999)
+	_ = d.RouterOperators().Remove(uid, 200)
+
+	r := NewRouterWithSink(d, &fakeRouterTG{}, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	q := &tg.CallbackQuery{ID: "q", From: tg.User{ID: 200}, Message: tg.Message{Chat: tg.Chat{ID: 7}}}
+
+	if r.aclAllow(context.Background(), q, Args{UserID: uid}) {
+		t.Error("removed operator (TG 200) must not be allowed")
+	}
+}
