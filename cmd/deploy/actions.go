@@ -985,3 +985,59 @@ func randomHexToken(nBytes int) string {
 	rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+// actionSyncVPS pulls the fleet list from /v1/wizard/agents and merges into
+// state.Agents. Best-effort: prints what changed; never deletes local-only
+// entries (warns instead).
+func actionSyncVPS(state *State, secrets *SecretStore) error {
+	if state.Backend.Domain == "" {
+		return fmt.Errorf("backend.domain пустой — сначала [1] install-backend")
+	}
+	tok, _ := secrets.Get("WIZARD_TOKEN", "Wizard sync token (из /etc/wg-monitor/wizard-token.txt на VPS)", nil)
+	if tok == "" {
+		return fmt.Errorf("WIZARD_TOKEN не задан")
+	}
+	c := NewVPSClient(state.Backend.Domain, tok)
+	if c == nil {
+		return fmt.Errorf("VPSClient init failed (empty domain or token)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	remote, err := c.ListAgents(ctx)
+	if err != nil {
+		return fmt.Errorf("VPS unreachable or auth failed: %w", err)
+	}
+	merged, added, divergent := MergeAgents(state.Agents, remote)
+	state.Agents = merged
+	PrintOK(fmt.Sprintf("Получено с VPS: %d роутеров", len(remote)))
+	if len(added) > 0 {
+		PrintInfo("Добавлено локально:")
+		for _, n := range added {
+			PrintInfo("  + " + n)
+		}
+	}
+	if len(divergent) > 0 {
+		PrintWarn("SSH-координаты разошлись (VPS-значение применено):")
+		for _, n := range divergent {
+			PrintWarn("  ~ " + n)
+		}
+	}
+	// Local-only detection: nicknames present locally but not in remote.
+	remoteSet := make(map[string]struct{}, len(remote))
+	for _, r := range remote {
+		remoteSet[r.Nickname] = struct{}{}
+	}
+	var localOnly []string
+	for _, a := range state.Agents {
+		if _, ok := remoteSet[a.Nickname]; !ok {
+			localOnly = append(localOnly, a.Nickname)
+		}
+	}
+	if len(localOnly) > 0 {
+		PrintWarn("Локально есть, на VPS нет (возможно удалены через CLI):")
+		for _, n := range localOnly {
+			PrintWarn("  ? " + n)
+		}
+	}
+	return nil
+}
