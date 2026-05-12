@@ -384,3 +384,18 @@ func TestProcessAddOperatorMessage_NonAdmin_NotConsumed(t *testing.T) {
 		t.Errorf("non-admin must not consume FSM, got %+v", ops)
 	}
 }
+
+func TestPanelHomeMessage_HasAccessButton(t *testing.T) {
+	_, kb := panelHomeMessage()
+	found := false
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == "access:0:home" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Error("panel home should expose 👥 Доступ button")
+	}
+}
