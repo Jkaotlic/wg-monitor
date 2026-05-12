@@ -194,6 +194,9 @@ type Deps struct {
 	// limit only the write path.
 	ReportRatePerSec float64
 	ReportBurst      int
+	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
+	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
+	WizardToken string
 }
 
 func NewMux(d Deps) http.Handler {
@@ -241,6 +244,14 @@ func NewMux(d Deps) http.Handler {
 	if d.CommandSink != nil {
 		mux.Handle("/v1/cmd", reqID(auth(http.HandlerFunc(cmdGetHandler(d)))))
 		mux.Handle("/v1/cmd/result", reqID(auth(http.HandlerFunc(cmdResultHandler(d)))))
+	}
+	// Wizard sync endpoints — feature-flagged on cfg.Wizard.Token being non-empty.
+	// Single global token, separate from per-agent tokens. Pattern uses Go 1.22+
+	// {nickname} path variable on the PUT.
+	if d.WizardToken != "" {
+		wizAuth := WizardAuthMiddleware(d.WizardToken, d.Logger)
+		mux.Handle("GET /v1/wizard/agents", reqID(wizAuth(wizardListAgentsHandler(d))))
+		mux.Handle("PUT /v1/wizard/agents/{nickname}", reqID(wizAuth(wizardPutAgentHandler(d))))
 	}
 	return mux
 }
