@@ -147,3 +147,44 @@ func TestWizardPut_204Updates(t *testing.T) {
 		t.Fatalf("not persisted: u=%+v err=%v", u, err)
 	}
 }
+
+// Locks in the contract that wizard MUST satisfy: any of ssh_host/ssh_port/
+// ssh_user/arch missing → 400. Real-world trigger: alyaba/de4ddy entered
+// wizard.toml via [5] VPS Sync with ssh_user="" (remote DB had NULL), the
+// update flow connected via userOrDefault("root") but never wrote that
+// back to ag.User, so post-deploy push sent ssh_user="" → 400. The wizard
+// fix backfills ag.User/ag.Port after a successful SSH; this guard ensures
+// the backend's rejection contract doesn't drift.
+func TestWizardPut_400OnEmptyRequiredFields(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("alyaba", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"empty ssh_user", `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"","arch":"arm64"}`},
+		{"empty ssh_host", `{"ssh_host":"","ssh_port":222,"ssh_user":"root","arch":"arm64"}`},
+		{"zero ssh_port", `{"ssh_host":"10.0.0.1","ssh_port":0,"ssh_user":"root","arch":"arm64"}`},
+		{"empty arch", `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":""}`},
+	}
+	h := wizardPutAgentHandler(Deps{DB: d})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			req := httptest.NewRequest("PUT", "/v1/wizard/agents/alyaba", strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetPathValue("nickname", "alyaba")
+			rec := httptest.NewRecorder()
+			h(rec, req)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
