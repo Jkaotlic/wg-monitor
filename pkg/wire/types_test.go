@@ -2,6 +2,7 @@ package wire
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -147,7 +148,7 @@ func TestCommandResult_JSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got != res {
+	if got.ID != res.ID || got.Status != res.Status || got.Output != res.Output || got.DurationMs != res.DurationMs {
 		t.Errorf("roundtrip mismatch: got %+v want %+v", got, res)
 	}
 	s := string(b)
@@ -189,5 +190,70 @@ func TestIsValidCommandResultStatus(t *testing.T) {
 func TestIsValidCommandAction_TunnelImport(t *testing.T) {
 	if !IsValidCommandAction("tunnel_import") {
 		t.Error("tunnel_import must be valid")
+	}
+}
+
+func TestIsValidCommandAction_OpkgFeedDisable(t *testing.T) {
+	if !IsValidCommandAction("opkg_feed_disable") {
+		t.Error("opkg_feed_disable should be a valid command action")
+	}
+}
+
+func TestOpkgUpgradeResult_JSONRoundTrip(t *testing.T) {
+	in := OpkgUpgradeResult{
+		Output:      "✅ Обновлено: 3 пакета",
+		FailedFeeds: []string{"https://dead.example/Packages.gz"},
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out OpkgUpgradeResult
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Output != in.Output {
+		t.Errorf("Output: got %q want %q", out.Output, in.Output)
+	}
+	if len(out.FailedFeeds) != 1 || out.FailedFeeds[0] != in.FailedFeeds[0] {
+		t.Errorf("FailedFeeds: got %v want %v", out.FailedFeeds, in.FailedFeeds)
+	}
+}
+
+func TestOpkgUpgradeResult_OmitsEmptyFailedFeeds(t *testing.T) {
+	in := OpkgUpgradeResult{Output: "ok"}
+	b, _ := json.Marshal(in)
+	if strings.Contains(string(b), "failed_feeds") {
+		t.Errorf("empty failed_feeds should be omitted, got %s", b)
+	}
+}
+
+func TestCommandResult_PayloadRoundTrip(t *testing.T) {
+	payload := OpkgUpgradeResult{FailedFeeds: []string{"https://x/Packages.gz"}}
+	pb, _ := json.Marshal(payload)
+	in := CommandResult{
+		ID:      "cmd-1",
+		Status:  "ok",
+		Output:  "hello",
+		Payload: pb,
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out CommandResult
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if string(out.Payload) != string(pb) {
+		t.Errorf("Payload round-trip mismatch: %s vs %s", out.Payload, pb)
+	}
+}
+
+func TestCommandResult_OmitsEmptyPayload(t *testing.T) {
+	in := CommandResult{ID: "x", Status: "ok"}
+	b, _ := json.Marshal(in)
+	if strings.Contains(string(b), "payload") {
+		t.Errorf("nil payload should be omitted, got %s", b)
 	}
 }
