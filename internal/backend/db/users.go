@@ -34,6 +34,14 @@ type User struct {
 	TelegramUserID *int64
 	CreatedAt      time.Time
 	LastSeenAt     *time.Time
+	// Wizard-sync deploy metadata (v0.12.0). All NULL for routers added
+	// before sync existed. Filled by PUT /v1/wizard/agents/{nickname} after
+	// a successful wizard deploy. NEVER read by the agent — wizard-only.
+	SSHHost             *string
+	SSHPort             *int64
+	SSHUser             *string
+	Arch                *string
+	LastDeployedVersion *string
 }
 
 // IsMobile reports whether this user is a mobile (4G in-vehicle) router.
@@ -71,7 +79,7 @@ func (u *UsersRepo) InsertWithKind(nickname, rawToken, expectedExitIP, awgIface,
 
 // userColsFull lists every column read by single-row Get*. GetAll uses a
 // shorter projection (no token_hash, no created_at) and has its own scanner.
-const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at`
+const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version`
 
 type userScanner interface {
 	Scan(dest ...any) error
@@ -82,7 +90,16 @@ func scanUserFull(s userScanner) (*User, error) {
 	var threadID sql.NullInt64
 	var tgUserID sql.NullInt64
 	var lastSeen sql.NullTime
-	if err := s.Scan(&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind, &threadID, &tgUserID, &got.CreatedAt, &lastSeen); err != nil {
+	var sshHost sql.NullString
+	var sshPort sql.NullInt64
+	var sshUser sql.NullString
+	var arch sql.NullString
+	var lastDepVer sql.NullString
+	if err := s.Scan(
+		&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
+		&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
+		&sshHost, &sshPort, &sshUser, &arch, &lastDepVer,
+	); err != nil {
 		return nil, err
 	}
 	if threadID.Valid {
@@ -96,6 +113,26 @@ func scanUserFull(s userScanner) (*User, error) {
 	if lastSeen.Valid {
 		v := lastSeen.Time
 		got.LastSeenAt = &v
+	}
+	if sshHost.Valid {
+		v := sshHost.String
+		got.SSHHost = &v
+	}
+	if sshPort.Valid {
+		v := sshPort.Int64
+		got.SSHPort = &v
+	}
+	if sshUser.Valid {
+		v := sshUser.String
+		got.SSHUser = &v
+	}
+	if arch.Valid {
+		v := arch.String
+		got.Arch = &v
+	}
+	if lastDepVer.Valid {
+		v := lastDepVer.String
+		got.LastDeployedVersion = &v
 	}
 	return &got, nil
 }
@@ -142,7 +179,9 @@ func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 }
 
 func (u *UsersRepo) GetAll() ([]User, error) {
-	rows, err := u.d.db.Query(`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, last_seen_at FROM users ORDER BY id`)
+	rows, err := u.d.db.Query(
+		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version FROM users ORDER BY id`,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +192,16 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		var threadID sql.NullInt64
 		var tgUserID sql.NullInt64
 		var lastSeen sql.NullTime
-		if err := rows.Scan(&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind, &threadID, &tgUserID, &lastSeen); err != nil {
+		var sshHost sql.NullString
+		var sshPort sql.NullInt64
+		var sshUser sql.NullString
+		var arch sql.NullString
+		var lastDepVer sql.NullString
+		if err := rows.Scan(
+			&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
+			&threadID, &tgUserID, &lastSeen,
+			&sshHost, &sshPort, &sshUser, &arch, &lastDepVer,
+		); err != nil {
 			return nil, err
 		}
 		if threadID.Valid {
@@ -167,6 +215,26 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		if lastSeen.Valid {
 			v := lastSeen.Time
 			got.LastSeenAt = &v
+		}
+		if sshHost.Valid {
+			v := sshHost.String
+			got.SSHHost = &v
+		}
+		if sshPort.Valid {
+			v := sshPort.Int64
+			got.SSHPort = &v
+		}
+		if sshUser.Valid {
+			v := sshUser.String
+			got.SSHUser = &v
+		}
+		if arch.Valid {
+			v := arch.String
+			got.Arch = &v
+		}
+		if lastDepVer.Valid {
+			v := lastDepVer.String
+			got.LastDeployedVersion = &v
 		}
 		out = append(out, got)
 	}
@@ -218,4 +286,36 @@ func (u *UsersRepo) GetByThreadID(threadID int64) (*User, error) {
 		return nil, err
 	}
 	return got, nil
+}
+
+// DeployInfo carries the wizard-side metadata pushed via
+// PUT /v1/wizard/agents/{nickname}. All fields required; empty strings or
+// zero port are rejected by the handler before reaching here.
+type DeployInfo struct {
+	SSHHost             string
+	SSHPort             int64
+	SSHUser             string
+	Arch                string
+	LastDeployedVersion string
+}
+
+// UpdateDeployInfo upserts the wizard-side deploy fields by nickname. Returns
+// ErrUserNotFound when no row matches (we do NOT auto-create — agent
+// enrollment goes through the existing wg-monitor-cli add-user path).
+func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
+	res, err := u.d.db.Exec(
+		`UPDATE users SET ssh_host=?, ssh_port=?, ssh_user=?, arch=?, last_deployed_version=? WHERE nickname=?`,
+		info.SSHHost, info.SSHPort, info.SSHUser, info.Arch, info.LastDeployedVersion, nickname,
+	)
+	if err != nil {
+		return fmt.Errorf("users.UpdateDeployInfo: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
 }
