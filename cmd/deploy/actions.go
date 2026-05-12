@@ -46,7 +46,12 @@ func stepEnsureWizardSetup(s *SSH, secrets *SecretStore) error {
 	if err != nil {
 		return fmt.Errorf("ensure wizard token: %w", err)
 	}
-	if err := stepUploadFile(s, "/etc/wg-monitor/wizard-token.txt", []byte(tok+"\n"), "600"); err != nil {
+	// Mode 640: owner root (writable for ops), group wgmonitor (readable by
+	// the backend process). Mode 600 would leave the wgmonitor group with no
+	// access — backend would silently fail to load the token and /v1/wizard/*
+	// endpoints would return 404. Symmetric to what bot-token.txt SHOULD have
+	// (see DEPLOY-NN).
+	if err := stepUploadFile(s, "/etc/wg-monitor/wizard-token.txt", []byte(tok+"\n"), "640"); err != nil {
 		return fmt.Errorf("upload wizard-token.txt: %w", err)
 	}
 	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/wizard-token.txt"); err != nil {
@@ -152,11 +157,47 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 		if err := stepVerifyHTTP(s, url); err != nil {
 			return err
 		}
+		// Probe /v1/wizard/agents — expect 401 (endpoint registered + auth
+		// required). 404 means the token file is unreadable by wgmonitor or
+		// the wizard:-block in backend.yaml didn't parse — actionable hint.
+		probeWizardEndpoint("https://" + state.Backend.Domain + "/v1/wizard/agents")
 	}
 
 	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	state.Backend.LastDeployedVersion = rel.TagName
 	return nil
+}
+
+// probeWizardEndpoint GETs /v1/wizard/agents with NO Authorization header.
+// A correctly-wired backend returns 401 (endpoint registered, auth required).
+// Anything else — 404 in particular — means the wizard.token_file in
+// backend.yaml is empty/unreadable/missing, and the deploy wizard's [5] sync
+// won't work. Best-effort: prints a colored line; never returns an error so
+// it can't block the deploy flow.
+func probeWizardEndpoint(url string) {
+	cli := &http.Client{Timeout: 5 * time.Second}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return
+	}
+	resp, err := cli.Do(req)
+	if err != nil {
+		PrintWarn("wizard endpoint probe failed: " + err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		PrintOK("wizard endpoint: 401 (auth required, ready for [5] Sync)")
+	case http.StatusNotFound:
+		PrintWarn("wizard endpoint: 404 — /v1/wizard/* НЕ зарегистрирован")
+		PrintInfo("  Возможные причины:")
+		PrintInfo("  • /etc/wg-monitor/wizard-token.txt не читается процессом wgmonitor (проверь права)")
+		PrintInfo("  • wizard:-блок в backend.yaml отсутствует или некорректен")
+		PrintInfo("  • journalctl -u wg-monitor-backend -n 20 покажет точную причину")
+	default:
+		PrintWarn(fmt.Sprintf("wizard endpoint: HTTP %d (ожидался 401)", resp.StatusCode))
+	}
 }
 
 func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
@@ -582,17 +623,12 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 
 	PrintStep(6, 14, "wizard-token.txt")
-	wizTok, err := ensureWizardToken(secrets)
-	if err != nil {
-		return fmt.Errorf("generate wizard token: %w", err)
+	// Idempotent helper handles both upload (mode 640 root:wgmonitor) and
+	// the backend.yaml wizard:-block. The template already includes the
+	// block, so the probe inside the helper will skip the append step.
+	if err := stepEnsureWizardSetup(s, secrets); err != nil {
+		return fmt.Errorf("wizard setup: %w", err)
 	}
-	if err := stepUploadFile(s, "/etc/wg-monitor/wizard-token.txt", []byte(wizTok+"\n"), "600"); err != nil {
-		return err
-	}
-	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/wizard-token.txt"); err != nil {
-		PrintWarn("chown wizard-token.txt: " + err.Error())
-	}
-	PrintOK("wizard-token.txt")
 
 	PrintStep(7, 14, "systemd unit")
 	unit, err := ReadStaticTemplate("wg-monitor-backend.service")
