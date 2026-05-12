@@ -203,6 +203,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 
 	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	ag.LastDeployedVersion = rel.TagName
+	pushToVPSBestEffort(state, secrets, *ag)
 	return nil
 }
 
@@ -414,6 +415,10 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 
 	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	ag.LastDeployedVersion = rel.TagName
+	// Best-effort sync push so other wizard PCs see this deploy.
+	if a := state.FindAgent(ag.Nickname); a != nil {
+		pushToVPSBestEffort(state, secrets, *a)
+	}
 	return nil
 }
 
@@ -1040,4 +1045,28 @@ func actionSyncVPS(state *State, secrets *SecretStore) error {
 		}
 	}
 	return nil
+}
+
+// pushToVPSBestEffort PUTs deploy info for the given agent. Logs but does
+// NOT return errors — push is best-effort and must never break the deploy
+// flow (e.g. when offline or token rotation pending).
+func pushToVPSBestEffort(state *State, secrets *SecretStore, a AgentState) {
+	if state.Backend.Domain == "" {
+		return
+	}
+	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
+	if tok == "" {
+		return
+	}
+	c := NewVPSClient(state.Backend.Domain, tok)
+	if c == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := c.PushAgent(ctx, AgentStateToRemote(a)); err != nil {
+		PrintWarn(fmt.Sprintf("VPS sync push failed for %s: %v (deploy itself succeeded)", a.Nickname, err))
+		return
+	}
+	PrintOK("VPS sync: " + a.Nickname)
 }
