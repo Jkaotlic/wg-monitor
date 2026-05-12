@@ -163,8 +163,6 @@ func (r *Router) handleAccessCallback(ctx context.Context, q *tg.CallbackQuery, 
 		r.accessRemoveOp(ctx, q, args.AccessRouterID, args.AccessOperatorTGID)
 	case "unbind_owner":
 		r.accessUnbindOwner(ctx, q, args.AccessRouterID)
-	case "back":
-		r.accessBack(ctx, q)
 	case "cancel_add":
 		r.accessCancelAdd(ctx, q)
 	default:
@@ -227,18 +225,13 @@ func (r *Router) accessUnbindOwner(ctx context.Context, q *tg.CallbackQuery, rou
 	r.accessShowRouter(ctx, q, routerID)
 }
 
-func (r *Router) accessBack(ctx context.Context, q *tg.CallbackQuery) {
-	text, kb := panelHomeMessage()
-	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
-		slog.Warn("access back edit failed", "err", err)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
 func (r *Router) accessCancelAdd(ctx context.Context, q *tg.CallbackQuery) {
 	r.pendingAddOperator.clear(q.From.ID)
+	text, kb := accessHomeMessage(r.d)
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("access cancel_add edit failed", "err", err)
+	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "отменено")
-	r.accessShowHome(ctx, q)
 }
 
 // processAddOperatorMessage is invoked by HandleMessage when the admin

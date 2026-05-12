@@ -64,7 +64,7 @@ type Args struct {
 	PanelKind string
 	// AccessScreen identifies the access:* admin-panel screen for callbacks
 	// where Action == "access". One of: "home" | "router" | "add" |
-	// "remove_op" | "unbind_owner" | "back" | "cancel_add".
+	// "remove_op" | "unbind_owner" | "cancel_add".
 	AccessScreen string
 	// AccessRouterID is the users.id of the router whose access list is
 	// being viewed/modified. Set for "router" / "add" / "remove_op" /
@@ -255,7 +255,7 @@ func Parse(data string) (Args, error) {
 		validAccessScreens := map[string]bool{
 			"home": true, "router": true, "add": true,
 			"remove_op": true, "unbind_owner": true,
-			"back": true, "cancel_add": true,
+			"cancel_add": true,
 		}
 		if !validAccessScreens[screen] {
 			return Args{}, fmt.Errorf("access: unknown screen %q", screen)
