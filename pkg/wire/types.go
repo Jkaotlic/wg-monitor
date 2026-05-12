@@ -2,7 +2,10 @@
 // Field tags here are the contract — changing them is a breaking change.
 package wire
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Report struct {
 	Timestamp    time.Time `json:"ts"`
@@ -34,22 +37,23 @@ type Command struct {
 }
 
 var validCommandActions = map[string]bool{
-	"restart_tunnel":   true,
-	"diag_now":         true,
-	"pingcheck_now":    true,
-	"opkg_upgrade":     true,
-	"force_recheck":    true,
-	"tunnel_enable":    true,
-	"tunnel_disable":   true,
-	"check_via_tunnel": true,
-	"check_direct":     true,
-	"tunnel_import":    true,
-	"route_status":     true,
-	"route_rebind":     true,
-	"service_restart":  true,
-	"firmware_status":  true,
-	"firmware_install": true,
-	"version_audit":    true,
+	"restart_tunnel":    true,
+	"diag_now":          true,
+	"pingcheck_now":     true,
+	"opkg_upgrade":      true,
+	"opkg_feed_disable": true,
+	"force_recheck":     true,
+	"tunnel_enable":     true,
+	"tunnel_disable":    true,
+	"check_via_tunnel":  true,
+	"check_direct":      true,
+	"tunnel_import":     true,
+	"route_status":      true,
+	"route_rebind":      true,
+	"service_restart":   true,
+	"firmware_status":   true,
+	"firmware_install":  true,
+	"version_audit":     true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }
@@ -59,11 +63,18 @@ func IsValidCommandAction(a string) bool { return validCommandActions[a] }
 //   - "err"     — action failed; Output carries the diagnostic
 //   - "locked"  — another instance of the same action holds the lock-file
 //   - "timeout" — action exceeded its per-action timeout
+//
+// Payload carries action-specific structured data when the human-readable
+// Output isn't enough. Currently used by opkg_upgrade / opkg_feed_disable to
+// surface `failed_feeds` to the backend so it can render repair buttons.
+// Optional: omitted entirely when the action has no structured response,
+// preserving wire compatibility with old agents/backends.
 type CommandResult struct {
-	ID         string `json:"id"`
-	Status     string `json:"status"`
-	Output     string `json:"output,omitempty"`
-	DurationMs int64  `json:"duration_ms"`
+	ID         string          `json:"id"`
+	Status     string          `json:"status"`
+	Output     string          `json:"output,omitempty"`
+	DurationMs int64           `json:"duration_ms"`
+	Payload    json.RawMessage `json:"payload,omitempty"`
 }
 
 var validCommandResultStatuses = map[string]bool{
@@ -71,3 +82,19 @@ var validCommandResultStatuses = map[string]bool{
 }
 
 func IsValidCommandResultStatus(s string) bool { return validCommandResultStatuses[s] }
+
+// OpkgUpgradeResult is the structured payload returned by opkg_upgrade and
+// opkg_feed_disable. Output mirrors the human-readable text in
+// CommandResult.Output (the backend stays canonical for rendering).
+// FailedFeeds is the list of URLs opkg failed to download during the update
+// step; non-empty triggers the repair-button UI on the backend.
+type OpkgUpgradeResult struct {
+	Output      string   `json:"output,omitempty"`
+	FailedFeeds []string `json:"failed_feeds,omitempty"`
+}
+
+// IsZero reports whether the payload carries no actionable data. Used by the
+// agent runner to decide whether to attach the payload to CommandResult.
+func (r OpkgUpgradeResult) IsZero() bool {
+	return r.Output == "" && len(r.FailedFeeds) == 0
+}
