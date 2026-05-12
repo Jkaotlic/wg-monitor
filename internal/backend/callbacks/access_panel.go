@@ -1,7 +1,9 @@
 package callbacks
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -143,6 +145,99 @@ func accessRouterMessage(d *db.DB, routerID int64) (string, tg.InlineKeyboardMar
 		{Text: "« К списку роутеров", CallbackData: "access:0:home"},
 	})
 	return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
+}
+
+// handleAccessCallback is the dispatcher for access:* callbacks. Admin gate
+// is enforced in HandleCallback; this method assumes the caller is admin.
+func (r *Router) handleAccessCallback(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	slog.Info("access callback", "screen", args.AccessScreen, "router_id", args.AccessRouterID, "op_tg_id", args.AccessOperatorTGID, "from", q.From.ID)
+	switch args.AccessScreen {
+	case "home":
+		r.accessShowHome(ctx, q)
+	case "router":
+		r.accessShowRouter(ctx, q, args.AccessRouterID)
+	case "add":
+		r.accessStartAdd(ctx, q, args.AccessRouterID)
+	case "remove_op":
+		r.accessRemoveOp(ctx, q, args.AccessRouterID, args.AccessOperatorTGID)
+	case "unbind_owner":
+		r.accessUnbindOwner(ctx, q, args.AccessRouterID)
+	case "back":
+		r.accessBack(ctx, q)
+	case "cancel_add":
+		r.accessCancelAdd(ctx, q)
+	default:
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown screen")
+	}
+}
+
+func (r *Router) accessShowHome(ctx context.Context, q *tg.CallbackQuery) {
+	text, kb := accessHomeMessage(r.d)
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("access home edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) accessShowRouter(ctx context.Context, q *tg.CallbackQuery, routerID int64) {
+	text, kb, err := accessRouterMessage(r.d, routerID)
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("access router edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) accessStartAdd(ctx context.Context, q *tg.CallbackQuery, routerID int64) {
+	u, err := r.d.Users().GetByID(routerID)
+	if err != nil || u == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	r.pendingAddOperator.put(q.From.ID, routerID, 5*time.Minute)
+	hint := fmt.Sprintf("🆔 Добавление оператора для %s\n\nПерешли мне (в личку с ботом) любое сообщение от нужного человека ИЛИ напиши его числовой Telegram ID. Жду 5 минут.", u.Nickname)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		{{Text: "✖ Отмена", CallbackData: "access:0:cancel_add"}},
+	}}
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, hint, "", &kb); err != nil {
+		slog.Warn("access add edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "жду forward или ID в личке")
+}
+
+func (r *Router) accessRemoveOp(ctx context.Context, q *tg.CallbackQuery, routerID, opTGID int64) {
+	if err := r.d.RouterOperators().Remove(routerID, opTGID); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось удалить")
+		slog.Warn("access remove op failed", "err", err, "router_id", routerID, "op_tg", opTGID)
+		return
+	}
+	r.accessShowRouter(ctx, q, routerID)
+}
+
+func (r *Router) accessUnbindOwner(ctx context.Context, q *tg.CallbackQuery, routerID int64) {
+	if err := r.d.Users().SetTelegramUserID(routerID, 0); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось отвязать owner'a")
+		slog.Warn("access unbind owner failed", "err", err, "router_id", routerID)
+		return
+	}
+	r.accessShowRouter(ctx, q, routerID)
+}
+
+func (r *Router) accessBack(ctx context.Context, q *tg.CallbackQuery) {
+	text, kb := panelHomeMessage()
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("access back edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) accessCancelAdd(ctx context.Context, q *tg.CallbackQuery) {
+	r.pendingAddOperator.clear(q.From.ID)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "отменено")
+	r.accessShowHome(ctx, q)
 }
 
 // pluralOperators returns a Russian-correct count label: "0 операторов",

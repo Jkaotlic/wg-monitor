@@ -108,6 +108,9 @@ type Router struct {
 	// short-lived, 5 min TTL). SetOpkgRepair wires both at startup.
 	pendingOpkgRepair *pendingOpkgRepairStore
 	opkgRepairAction  Action
+
+	// Access-control panel plumbing. All in-memory; lost on restart.
+	pendingAddOperator *pendingAddOperatorStore
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -173,6 +176,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.cooldown = newCooldownStore()
 	r.auditCache = newSimpleAuditCache()
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
+	r.pendingAddOperator = newPendingAddOperatorStore()
 	return r
 }
 
@@ -267,6 +271,14 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown action")
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
+		return
+	}
+	if args.Action == "access" {
+		if r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
+			return
+		}
+		r.handleAccessCallback(ctx, q, args)
 		return
 	}
 	if !r.aclAllow(ctx, q, args) {

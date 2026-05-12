@@ -1,11 +1,14 @@
 package callbacks
 
 import (
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
 func TestPendingAddOperator_PutGetClear(t *testing.T) {
@@ -141,5 +144,127 @@ func TestAccessRouterMessage_UnknownRouter(t *testing.T) {
 	_, _, err := accessRouterMessage(d, 9999)
 	if err == nil {
 		t.Error("expected error for unknown router id")
+	}
+}
+
+func TestHandleAccessCallback_NonAdminToast(t *testing.T) {
+	d, _ := newTestDB(t)
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID: "q1", From: tg.User{ID: 999}, // not admin
+		Data:    "access:0:home",
+		Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+	if len(tgFake.answers) != 1 || !strings.Contains(tgFake.answers[0], "только у админа") {
+		t.Errorf("expected admin-only toast, got answers=%+v", tgFake.answers)
+	}
+	if len(tgFake.edits) != 0 {
+		t.Errorf("non-admin must not edit message, got %d edits", len(tgFake.edits))
+	}
+}
+
+func TestHandleAccessCallback_AdminOpensHome(t *testing.T) {
+	d, _ := newTestDB(t)
+	_, _ = d.Users().Insert("zoo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID: "q1", From: tg.User{ID: 42},
+		Data:    "access:0:home",
+		Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+	if len(tgFake.edits) != 1 {
+		t.Fatalf("expected 1 edit, got %d", len(tgFake.edits))
+	}
+	if !strings.Contains(tgFake.edits[0], "Управление доступом") {
+		t.Errorf("edit text wrong: %q", tgFake.edits[0])
+	}
+}
+
+func TestHandleAccessCallback_RemoveOp(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	_ = d.RouterOperators().Add(uid, 555, 999)
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID: "q", From: tg.User{ID: 42},
+		Data:    fmt.Sprintf("access:0:remove_op:%d:555", uid),
+		Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	ops, _ := d.RouterOperators().List(uid)
+	if len(ops) != 0 {
+		t.Errorf("operator should have been removed, got %+v", ops)
+	}
+	if len(tgFake.edits) != 1 {
+		t.Fatalf("expected edit-in-place, got %d edits", len(tgFake.edits))
+	}
+}
+
+func TestHandleAccessCallback_UnbindOwner(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	_ = d.Users().SetTelegramUserID(uid, 777)
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID: "q", From: tg.User{ID: 42},
+		Data:    fmt.Sprintf("access:0:unbind_owner:%d", uid),
+		Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	u, _ := d.Users().GetByID(uid)
+	if u.TelegramUserID != nil {
+		t.Errorf("owner should be unbound, still %v", *u.TelegramUserID)
+	}
+}
+
+func TestHandleAccessCallback_Add_StartsFSM(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID: "q", From: tg.User{ID: 42},
+		Data:    fmt.Sprintf("access:0:add:%d", uid),
+		Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	got, ok := r.pendingAddOperator.get(42)
+	if !ok {
+		t.Fatal("FSM entry should exist for admin 42")
+	}
+	if got.RouterID != uid {
+		t.Errorf("FSM RouterID=%d, want %d", got.RouterID, uid)
+	}
+}
+
+func TestHandleAccessCallback_CancelAdd_ClearsFSM(t *testing.T) {
+	d, _ := newTestDB(t)
+	tgFake := &fakeRouterTG{}
+	r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 42})
+	r.pendingAddOperator.put(42, 100, 5*time.Minute)
+
+	q := &tg.CallbackQuery{
+		ID: "q", From: tg.User{ID: 42},
+		Data:    "access:0:cancel_add",
+		Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if _, ok := r.pendingAddOperator.get(42); ok {
+		t.Error("cancel_add should clear FSM")
 	}
 }
