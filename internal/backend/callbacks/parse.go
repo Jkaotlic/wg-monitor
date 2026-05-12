@@ -52,6 +52,9 @@ type Args struct {
 	MaintName string
 	// MaintToken is the 8-hex confirm token for maint_confirm / maint_fw_confirm.
 	MaintToken string
+	// OpkgRepairToken is the 8-hex confirm token for opkg_disable callbacks
+	// originating from the "🔧 Отключить мёртвый фид" inline button.
+	OpkgRepairToken string
 	// PanelScreen identifies the panel-hub screen for callbacks where
 	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
 	// "awaken_confirm" | "awaken_do" | "close".
@@ -75,7 +78,7 @@ var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
 	// command-channel actions: enqueue a wire.Command for the agent.
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
-	"force_recheck": true, "opkg_upgrade": true,
+	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true,
 	"tunnel_enable": true, "tunnel_disable": true,
 	"check_via_tunnel": true, "check_direct": true,
 	// backend-only callback (no agent action): re-render Tunnels-panel inline.
@@ -208,6 +211,11 @@ func Parse(data string) (Args, error) {
 		}
 		a.MaintName = "firmware"
 		a.MaintToken = parts[3]
+	case "opkg_disable":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("opkg_disable requires token: %q", data)
+		}
+		a.OpkgRepairToken = parts[3]
 	}
 	if action == "panel" {
 		screen := parts[2]
