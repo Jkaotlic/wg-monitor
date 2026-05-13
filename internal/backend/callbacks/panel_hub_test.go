@@ -310,3 +310,24 @@ func TestPanelClose_EditsToClosedText(t *testing.T) {
 		t.Errorf("expected 'закрыта' in edit, got %v", f.edits)
 	}
 }
+
+func TestPanelHub_HelpScreen_EditsBody(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 1, Chat: tg.Chat{ID: -100}},
+		Data:    "panel:0:help:maint",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("want 1 edit, got %d", len(f.edits))
+	}
+	if !strings.Contains(f.edits[0], "Restart hrneo") {
+		t.Errorf("maint help body should mention 'Restart hrneo':\n%s", f.edits[0])
+	}
+}

@@ -99,6 +99,9 @@ func MaintPanelKeyboard(userID int64, a MaintPanelArgs) InlineKeyboardMarkup {
 		},
 		{
 			{Text: "🔄 Проверить апдейты", CallbackData: cd("maint_open", "_panel_")},
+		},
+		HelpRowFor("maint"),
+		{
 			{Text: "✖ Закрыть", CallbackData: cd("maint_close", "_panel_")},
 		},
 	}}

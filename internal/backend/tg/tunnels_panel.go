@@ -134,6 +134,7 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 	}
 
 	// Global controls.
+	rows = append(rows, HelpRowFor("tunnels"))
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "🔁 Перезагрузить awg-mgr", CallbackData: fmt.Sprintf("restart_tunnel:%d:_panel_", userID)},
 		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},

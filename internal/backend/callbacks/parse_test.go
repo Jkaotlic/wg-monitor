@@ -443,3 +443,25 @@ func TestParse_DiagRaw_MissingToken(t *testing.T) {
 		t.Errorf("expected error on empty token")
 	}
 }
+
+func TestParse_PanelHelpDiag(t *testing.T) {
+	a, err := Parse("panel:0:help:diag")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Action != "panel" || a.PanelScreen != "help" || a.PanelKind != "diag" {
+		t.Errorf("got Action=%q Screen=%q Kind=%q", a.Action, a.PanelScreen, a.PanelKind)
+	}
+}
+
+func TestParse_PanelHelp_UnknownScreen(t *testing.T) {
+	if _, err := Parse("panel:0:help:totally_made_up"); err == nil {
+		t.Error("expected error on unknown help screen")
+	}
+}
+
+func TestParse_PanelHelp_MissingScreen(t *testing.T) {
+	if _, err := Parse("panel:0:help:"); err == nil {
+		t.Error("expected error on missing help screen arg")
+	}
+}
