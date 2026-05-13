@@ -26,6 +26,9 @@ func TestFormatCommandResult_DiagOK_ParsedReport(t *testing.T) {
 	if strings.Contains(body, "```") {
 		t.Errorf("parsed diag must not use code-fence: %s", body)
 	}
+	if strings.Contains(body, "📊 📊") {
+		t.Errorf("doubled emoji in diag header: %s", body)
+	}
 }
 
 func TestFormatCommandResult_DiagOK_FallbackToRaw(t *testing.T) {

@@ -72,7 +72,7 @@ func formatDiagSuccess(label, body string, maxChars int) []string {
 		return paginate(label+":", body, maxChars)
 	}
 	card := Card{
-		Badge:   "📊",
+		Badge:   "",
 		Label:   label,
 		Summary: summary,
 		Details: strings.Join(bullets, "\n"),
