@@ -210,3 +210,28 @@ func TestUsersGetByThreadID_NoRaceOnConcurrentInsert(t *testing.T) {
 		}
 	}
 }
+
+func TestUsers_HasAnyOperatorOrOwnerBinding(t *testing.T) {
+	d := newTestDB(t)
+	uid, _ := d.Users().Insert("alpha", "tok", "1.1.1.1", "awg11")
+
+	if has, err := d.Users().HasAnyOperatorOrOwnerBinding(999); err != nil {
+		t.Fatalf("err: %v", err)
+	} else if has {
+		t.Error("stranger should not have a binding")
+	}
+
+	// As owner.
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	if has, _ := d.Users().HasAnyOperatorOrOwnerBinding(100); !has {
+		t.Error("owner 100 should have a binding")
+	}
+
+	// As operator of a different router.
+	uid2, _ := d.Users().Insert("beta", "tok2", "2.2.2.2", "awg11")
+	_ = d.Users().SetTelegramUserID(uid2, 200)
+	_ = d.RouterOperators().Add(uid2, 300, 42)
+	if has, _ := d.Users().HasAnyOperatorOrOwnerBinding(300); !has {
+		t.Error("operator 300 should have a binding")
+	}
+}
