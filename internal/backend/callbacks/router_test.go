@@ -979,3 +979,139 @@ func TestAclAllow_FormerOperatorDenied(t *testing.T) {
 		t.Error("removed operator (TG 200) must not be allowed")
 	}
 }
+
+// Operator (non-admin, listed in router_operators) taps a reply-keyboard
+// button in the router's per_router topic. Must pass the admin-gate in
+// HandleMessage and reach the maintenance-panel dispatch, mirroring the
+// admin path. Regression for the rc25 gap where operators could tap inline
+// buttons but not the reply-keyboard entries.
+func TestRouterHandleMessage_OperatorReplyKeyboard_InOwnTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	// Bind a different owner so this user is not the operator we test below.
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	// Operator: TG 200 whitelisted for this router.
+	if err := d.RouterOperators().Add(uid, 200, 42); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	msg := &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "🛠 Обслуживание",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("operator should reach maint dispatch; got sentMsgs=%d %v", len(f.sentMsgs), f.sentMsgs)
+	}
+	if !strings.Contains(f.sentMsgs[0], "Обслуживание") {
+		t.Errorf("expected maint loading text, got %q", f.sentMsgs[0])
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "version_audit" {
+		t.Errorf("expected version_audit enqueue, got %+v", sink.calls)
+	}
+}
+
+// Operator for router A taps the reply-keyboard in router B's topic. Must
+// be dropped — operators only have access to their own router's topic.
+func TestRouterHandleMessage_OperatorBlocked_DifferentRouterTopic(t *testing.T) {
+	d, uidA := newTestDB(t)
+	// Router A: operator 200 is whitelisted.
+	if err := d.Users().UpdateThreadID(uidA, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uidA, 100)
+	_ = d.RouterOperators().Add(uidA, 200, 42)
+
+	// Router B: different router, different topic, operator 200 is NOT in its whitelist.
+	uidB, err := d.Users().Insert("router-b", "tok-b", "2.2.2.2", "awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uidB, 66); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uidB, 101)
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(66) // router B's topic
+	msg := &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200}, // operator of A, not B
+		MessageThreadID: &tid,
+		Text:            "🛠 Обслуживание",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 0 || len(sink.calls) != 0 {
+		t.Errorf("operator must be dropped in foreign router topic; sentMsgs=%v calls=%+v",
+			f.sentMsgs, sink.calls)
+	}
+}
+
+// Operator types an admin-only slash command in their topic. Must be
+// dropped — slash commands stay admin-only.
+func TestRouterHandleMessage_OperatorBlocked_AdminSlashCommand(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	msg := &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "/ensure_topics",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 0 {
+		t.Errorf("operator slash command must be dropped, got sentMsgs=%v", f.sentMsgs)
+	}
+}
+
+// Operator taps a reply-keyboard entry outside any router topic (e.g. in
+// the summary topic or no topic). Must be dropped — operator scope is
+// per_router topics only.
+func TestRouterHandleMessage_OperatorBlocked_OutsideRouterTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 42})
+
+	// No MessageThreadID → resolveTopicKind == "unknown".
+	msg := &tg.Message{
+		MessageID: 99,
+		Chat:      tg.Chat{ID: -100},
+		From:      tg.User{ID: 200},
+		Text:      "🛠 Обслуживание",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 0 {
+		t.Errorf("operator outside per_router topic must be dropped, got %v", f.sentMsgs)
+	}
+}
