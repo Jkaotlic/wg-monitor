@@ -7,17 +7,65 @@ import (
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
-func TestFormatCommandResult_DiagOK(t *testing.T) {
-	r := wire.CommandResult{Status: "ok", Output: "diagnostics:\nall green"}
+func TestFormatCommandResult_DiagOK_ParsedReport(t *testing.T) {
+	r := wire.CommandResult{Status: "ok", Output: fixtureDiagSuccess}
 	chunks := FormatCommandResult("diag_now", r, 3500)
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d", len(chunks))
 	}
-	if !strings.Contains(chunks[0], "📊") || !strings.Contains(chunks[0], "Диагностика") {
-		t.Errorf("missing label: %s", chunks[0])
+	body := chunks[0]
+	if !strings.Contains(body, "📊 Диагностика") {
+		t.Errorf("missing label: %s", body)
 	}
+	if !strings.Contains(body, "📊") {
+		t.Errorf("expected 📊 badge: %s", body)
+	}
+	if !strings.Contains(body, "2.8.2") {
+		t.Errorf("expected parsed appVersion: %s", body)
+	}
+	if strings.Contains(body, "```") {
+		t.Errorf("parsed diag must not use code-fence: %s", body)
+	}
+}
+
+func TestFormatCommandResult_DiagOK_FallbackToRaw(t *testing.T) {
+	r := wire.CommandResult{Status: "ok", Output: "diagnostics:\nall green"}
+	chunks := FormatCommandResult("diag_now", r, 3500)
 	if !strings.Contains(chunks[0], "```") {
-		t.Errorf("diag must use code-fence: %s", chunks[0])
+		t.Errorf("unparseable diag should fall back to code-fence: %s", chunks[0])
+	}
+	if !strings.Contains(chunks[0], "all green") {
+		t.Errorf("raw body must be preserved on fallback: %s", chunks[0])
+	}
+}
+
+func TestFormatCommandResult_DiagErr_NoReportHint(t *testing.T) {
+	r := wire.CommandResult{Status: "err", Output: "HTTP_400: NO_REPORT"}
+	chunks := FormatCommandResult("diag_now", r, 3500)
+	body := chunks[0]
+	if !strings.Contains(body, "❌") {
+		t.Errorf("error body missing ❌ badge: %s", body)
+	}
+	if !strings.Contains(body, "💡") {
+		t.Errorf("error body missing hint marker 💡: %s", body)
+	}
+	if strings.Contains(body, "HTTP_400") {
+		t.Errorf("typed prefix must NOT leak to user: %s", body)
+	}
+	if strings.Contains(body, "```") {
+		t.Errorf("error must not be code-fenced: %s", body)
+	}
+}
+
+func TestFormatCommandResult_DiagErr_DiagTimeoutHint(t *testing.T) {
+	r := wire.CommandResult{Status: "err", Output: "DIAG_TIMEOUT: triggered but no result after 12 iterations"}
+	chunks := FormatCommandResult("diag_now", r, 3500)
+	body := chunks[0]
+	if !strings.Contains(body, "36") {
+		t.Errorf("timeout summary should mention 36с: %s", body)
+	}
+	if !strings.Contains(body, "💡") {
+		t.Errorf("timeout body missing hint: %s", body)
 	}
 }
 
@@ -61,11 +109,11 @@ func TestFormatCommandResult_OpkgPaginated(t *testing.T) {
 	}
 }
 
-func TestFormatCommandResult_ErrorPrefix(t *testing.T) {
+func TestFormatCommandResult_ErrorBadge(t *testing.T) {
 	r := wire.CommandResult{Status: "err", Output: "tunnel not found"}
 	chunks := FormatCommandResult("restart_tunnel", r, 3500)
-	if !strings.Contains(chunks[0], "❌ Не удалось:") {
-		t.Errorf("missing error prefix: %s", chunks[0])
+	if !strings.Contains(chunks[0], "❌") {
+		t.Errorf("missing error badge: %s", chunks[0])
 	}
 }
 
@@ -73,11 +121,12 @@ func TestFormatCommandResult_LockedAndTimeout(t *testing.T) {
 	for _, st := range []string{"locked", "timeout"} {
 		r := wire.CommandResult{Status: st, Output: ""}
 		chunks := FormatCommandResult("diag_now", r, 3500)
-		if !strings.Contains(chunks[0], "❌ Не удалось:") {
-			t.Errorf("status=%s: missing error prefix", st)
+		body := chunks[0]
+		if !strings.Contains(body, "❌") {
+			t.Errorf("status=%s: missing ❌ badge: %s", st, body)
 		}
-		if !strings.Contains(chunks[0], st) {
-			t.Errorf("status=%s: status word missing in body", st)
+		if !strings.Contains(body, "💡") {
+			t.Errorf("status=%s: missing hint: %s", st, body)
 		}
 	}
 }
