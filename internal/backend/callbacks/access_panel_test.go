@@ -399,3 +399,14 @@ func TestPanelHomeMessage_HasAccessButton(t *testing.T) {
 		t.Error("panel home should expose 👥 Доступ button")
 	}
 }
+
+// TestAccess_HomeDBErrorRendersHint: when the DB is closed,
+// accessHomeMessage must return a Card-shaped body (❌ badge + 💡 hint).
+func TestAccess_HomeDBErrorRendersHint(t *testing.T) {
+	d, _ := newTestDB(t)
+	d.Close()
+	body, _ := accessHomeMessage(d)
+	if !strings.Contains(body, "❌") || !strings.Contains(body, "💡") {
+		t.Errorf("error body should have ❌ + 💡, got: %s", body)
+	}
+}

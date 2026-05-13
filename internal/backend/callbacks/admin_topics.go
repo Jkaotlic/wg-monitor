@@ -70,7 +70,9 @@ func (r *Router) adminReply(ctx context.Context, m *tg.Message, text string) {
 func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 	users, err := r.d.Users().GetAll()
 	if err != nil {
-		r.adminReply(ctx, m, "❌ ошибка чтения пользователей: "+err.Error())
+		sum, hint := alerts.HintFor("admin_ensure_topics", err.Error())
+		card := alerts.Card{Badge: "❌", Label: "Не удалось получить пользователей", Summary: sum, Hint: hint}
+		r.adminReply(ctx, m, card.Render(alerts.CardOpts{MaxBytes: 3500}))
 		return
 	}
 	if len(users) == 0 {
@@ -124,7 +126,9 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 	}
 	tid, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, true)
 	if err != nil {
-		r.adminReply(ctx, m, "❌ не удалось пересоздать тему: "+err.Error())
+		sum, hint := alerts.HintFor("admin_recreate_topic", err.Error())
+		card := alerts.Card{Badge: "❌", Label: "Не удалось пересоздать топик", Summary: sum, Hint: hint}
+		r.adminReply(ctx, m, card.Render(alerts.CardOpts{MaxBytes: 3500}))
 		return
 	}
 	// Welcome: always fires on rebuild (new thread_id = new topic) so the
@@ -157,7 +161,9 @@ func (r *Router) adminThisIs(ctx context.Context, m *tg.Message, arg string) {
 		return
 	}
 	if err := r.d.Users().UpdateThreadID(u.ID, *m.MessageThreadID); err != nil {
-		r.adminReply(ctx, m, "❌ не удалось сохранить привязку: "+err.Error())
+		sum, hint := alerts.HintFor("admin_this_is", err.Error())
+		card := alerts.Card{Badge: "❌", Label: "Не удалось сохранить привязку", Summary: sum, Hint: hint}
+		r.adminReply(ctx, m, card.Render(alerts.CardOpts{MaxBytes: 3500}))
 		return
 	}
 	r.adminReply(ctx, m, fmt.Sprintf("✅ Топик thread_id=%d привязан к роутеру %s. Алерты для %s теперь будут идти в этот топик.",

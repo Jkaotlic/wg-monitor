@@ -104,7 +104,9 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 	case tg.IsTopicNotFound(publishErr):
 		resultText = fmt.Sprintf("🎛 Панель управления\n\n❌ Топик роутера @%s похоже удалён. Сделай /recreate_topic внутри его топика или /ensure_topics.", u.Nickname)
 	default:
-		resultText = fmt.Sprintf("🎛 Панель управления\n\n❌ Не удалось опубликовать %s в @%s: %v", kindLabel, u.Nickname, publishErr)
+		sum, hint := alerts.HintFor("panel_push", publishErr.Error())
+		card := alerts.Card{Badge: "❌", Label: fmt.Sprintf("Не удалось опубликовать %s в @%s", kindLabel, u.Nickname), Summary: sum, Hint: hint}
+		resultText = "🎛 Панель управления\n\n" + card.Render(alerts.CardOpts{MaxBytes: 3500})
 	}
 	kb := panelResultKb()
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, resultText, "", &kb); err != nil {
