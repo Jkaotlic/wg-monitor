@@ -319,3 +319,23 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	}
 	return nil
 }
+
+// HasAnyOperatorOrOwnerBinding reports whether the given Telegram
+// user id is bound to any router as owner (users.telegram_user_id)
+// or listed in any router_operators row. Used by /help to pick
+// admin vs operator vs none content.
+func (u *UsersRepo) HasAnyOperatorOrOwnerBinding(tgUserID int64) (bool, error) {
+	var one int
+	err := u.d.db.QueryRow(
+		`SELECT 1 WHERE EXISTS (SELECT 1 FROM users WHERE telegram_user_id = ?)
+		            OR EXISTS (SELECT 1 FROM router_operators WHERE telegram_user_id = ?)`,
+		tgUserID, tgUserID,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("HasAnyOperatorOrOwnerBinding: %w", err)
+	}
+	return true, nil
+}
