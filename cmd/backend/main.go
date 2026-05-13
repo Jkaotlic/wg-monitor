@@ -129,6 +129,7 @@ func main() {
 	})
 	cb.SetRoutesCache(routesCache)
 	cb.SetUpstream(upCache)
+	notifier.DiagCache = cb.DiagCache()
 	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)
 
 	// OPKG feed repair plumbing — store holds tokens for pending 🔧 button taps;

@@ -55,6 +55,9 @@ type Args struct {
 	// OpkgRepairToken is the 8-hex confirm token for opkg_disable callbacks
 	// originating from the "🔧 Отключить мёртвый фид" inline button.
 	OpkgRepairToken string
+	// DiagRawToken is the 8-hex token of a cached diag JSON body retrieved
+	// by the "📄 Полный отчёт" button under a diag result.
+	DiagRawToken string
 	// PanelScreen identifies the panel-hub screen for callbacks where
 	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
 	// "awaken_confirm" | "awaken_do" | "close".
@@ -105,6 +108,8 @@ var validActions = map[string]bool{
 	"maint_restart": true, "maint_confirm": true,
 	"maint_fw_open": true, "maint_fw_check": true,
 	"maint_fw_install": true, "maint_fw_confirm": true,
+	// diag_raw: fetch cached raw diag JSON body for "📄 Полный отчёт" button.
+	"diag_raw": true,
 	// compat-mode inline button: encodes the per-topic reply-keyboard label
 	// as an inline-keyboard tap (TG Desktop forum-topic workaround). The
 	// short code lives in CheckName and is mapped back to the original
@@ -228,6 +233,11 @@ func Parse(data string) (Args, error) {
 			return Args{}, fmt.Errorf("opkg_disable requires token: %q", data)
 		}
 		a.OpkgRepairToken = parts[3]
+	case "diag_raw":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)
+		}
+		a.DiagRawToken = parts[3]
 	}
 	if action == "panel" {
 		screen := parts[2]

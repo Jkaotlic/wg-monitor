@@ -146,7 +146,7 @@ type CommandSink interface {
 // TGNotifier posts command-result text back to the originating TG message.
 // Implemented by callbacks.Notifier; nil-safe (handler skips relay if absent).
 type TGNotifier interface {
-	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, maxChars int) error
+	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error
 }
 
 // RoutesNotifier is the subset used by cmdResultHandler when ref.Action is
@@ -600,14 +600,14 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					if maxChars == 0 {
 						maxChars = 3500
 					}
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult, uid int64, maxChars int) {
 						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
-						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
+						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, uid, maxChars); err != nil {
 							incTGError()
 							d.Logger.Warn("tg notify failed (opkg fallback)", "cmd_id", res.ID, "err", err)
 						}
-					}(ref, res, maxChars)
+					}(ref, res, uid, maxChars)
 				} else {
 					d.Logger.Warn("opkg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
@@ -618,14 +618,14 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					if maxChars == 0 {
 						maxChars = 3500
 					}
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult, uid int64, maxChars int) {
 						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
 						defer cancel()
-						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, maxChars); err != nil {
+						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, uid, maxChars); err != nil {
 							incTGError()
 							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
 						}
-					}(ref, res, maxChars)
+					}(ref, res, uid, maxChars)
 				} else {
 					d.Logger.Warn("tg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)

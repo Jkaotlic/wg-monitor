@@ -421,3 +421,25 @@ func TestParse_Access_Errors(t *testing.T) {
 		}
 	}
 }
+
+func TestParse_DiagRaw(t *testing.T) {
+	a, err := Parse("diag_raw:42:_panel_:deadbeef")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Action != "diag_raw" {
+		t.Errorf("action=%q", a.Action)
+	}
+	if a.UserID != 42 {
+		t.Errorf("UserID=%d", a.UserID)
+	}
+	if a.DiagRawToken != "deadbeef" {
+		t.Errorf("DiagRawToken=%q", a.DiagRawToken)
+	}
+}
+
+func TestParse_DiagRaw_MissingToken(t *testing.T) {
+	if _, err := Parse("diag_raw:42:_panel_:"); err == nil {
+		t.Errorf("expected error on empty token")
+	}
+}

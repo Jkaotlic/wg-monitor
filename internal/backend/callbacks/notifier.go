@@ -17,8 +17,9 @@ import (
 // (ref.MessageID); subsequent chunks chain to the previous chunk so a paginated
 // diag stays threaded together rather than scattered across the topic.
 type Notifier struct {
-	TG TGClient
-	UI UIConfigSnapshot
+	TG        TGClient
+	UI        UIConfigSnapshot
+	DiagCache *diagCache // staged by NotifyCommandResult when action=="diag_now" + Status=="ok"
 }
 
 func NewNotifier(c TGClient) *Notifier { return &Notifier{TG: c} }
@@ -30,15 +31,34 @@ func NewNotifierWithUI(c TGClient, ui UIConfigSnapshot) *Notifier {
 	return &Notifier{TG: c, UI: ui}
 }
 
-func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, maxChars int) error {
+func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error {
 	chunks := alerts.FormatCommandResult(action, result, maxChars)
 	if len(chunks) == 0 {
 		return nil
 	}
+
+	// Diag results get an inline keyboard with "Полный отчёт" / retry / close.
+	// Cache the raw body so the first button can fetch it without a re-run.
+	var diagMarkup *tg.InlineKeyboardMarkup
+	if action == "diag_now" {
+		token := ""
+		if result.Status == "ok" && n.DiagCache != nil {
+			token = n.DiagCache.Put(result.Output, 5*time.Minute)
+		}
+		kb := tg.DiagResultKeyboard(result.Status, userID, token)
+		diagMarkup = &kb
+	}
+
 	prev := ref.MessageID
-	for _, c := range chunks {
+	for i, c := range chunks {
 		replyTo := prev
-		mid, err := n.TG.SendMessageWithReplyKeyboard(ctx, ref.ChatID, ref.ThreadID, c, "", &replyTo, n.UI.KeyboardForTopic("per_router"))
+		var markup any
+		if i == 0 && diagMarkup != nil {
+			markup = diagMarkup
+		} else {
+			markup = n.UI.KeyboardForTopic("per_router")
+		}
+		mid, err := n.TG.SendMessageWithReplyKeyboard(ctx, ref.ChatID, ref.ThreadID, c, "", &replyTo, markup)
 		if err != nil {
 			return err
 		}
