@@ -78,6 +78,7 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 	if len(row) > 0 {
 		rows = append(rows, row)
 	}
+	rows = append(rows, HelpRowFor("routes"))
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
 		{Text: "Закрыть", CallbackData: "routes_close:0:_panel_"},

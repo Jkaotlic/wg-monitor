@@ -244,6 +244,7 @@ func Parse(data string) (Args, error) {
 		validPanelScreens := map[string]bool{
 			"home": true, "kind": true, "push": true, "no_topic": true,
 			"awaken_confirm": true, "awaken_do": true, "close": true,
+			"help": true,
 		}
 		if !validPanelScreens[screen] {
 			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)
@@ -257,6 +258,20 @@ func Parse(data string) (Args, error) {
 			if !validKinds[parts[3]] {
 				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
 			}
+			a.PanelKind = parts[3]
+		}
+		if screen == "help" {
+			if len(parts) < 4 || parts[3] == "" {
+				return Args{}, fmt.Errorf("panel help requires screen: %q", data)
+			}
+			validHelpScreens := map[string]bool{
+				"maint": true, "routes": true, "tunnels": true,
+				"access": true, "diag": true, "status": true,
+			}
+			if !validHelpScreens[parts[3]] {
+				return Args{}, fmt.Errorf("panel help: unknown screen %q", parts[3])
+			}
+			// Reuse PanelKind as transport for the help-target screen name.
 			a.PanelKind = parts[3]
 		}
 	}
