@@ -111,6 +111,11 @@ type Router struct {
 
 	// Access-control panel plumbing. All in-memory; lost on restart.
 	pendingAddOperator *pendingAddOperatorStore
+
+	// diagCache stores raw diag_now result bodies so "📄 Полный отчёт"
+	// inline-button taps can fetch the body without re-running the diagnostic.
+	// Shared with the Notifier via DiagCache(). All in-memory; lost on restart.
+	diagCache *diagCache
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -177,7 +182,15 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.auditCache = newSimpleAuditCache()
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
 	r.pendingAddOperator = newPendingAddOperatorStore()
+	r.diagCache = newDiagCache()
 	return r
+}
+
+// DiagCache returns the Router's cache for raw diag bodies, shared with
+// the command-result notifier so "📄 Полный отчёт" taps can fetch the
+// body the notifier stored.
+func (r *Router) DiagCache() *diagCache {
+	return r.diagCache
 }
 
 // Run loops on GetUpdates, persisting the last-processed update_id in tg_state KV.
@@ -358,6 +371,18 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.maintConfirmAct != nil {
 			action = r.maintConfirmAct
 		}
+	case "diag_raw":
+		body, ok := r.diagCache.Get(args.DiagRawToken)
+		if !ok {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "отчёт уже не доступен (5 мин TTL)")
+			return
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+		full := "📄 Полный отчёт диагностики:\n\n```\n" + body + "\n```"
+		if _, err := r.tg.SendMessage(ctx, q.Message.Chat.ID, q.Message.MessageThreadID, full, "", nil); err != nil {
+			slog.Warn("diag_raw send failed", "err", err)
+		}
+		return
 	case "opkg_disable":
 		if r.opkgRepairAction == nil {
 			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ремонт фидов не настроен")

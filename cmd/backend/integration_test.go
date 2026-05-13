@@ -368,7 +368,7 @@ type notifyCall struct {
 	maxChars int
 }
 
-func (r *recordingNotifier) NotifyCommandResult(ctx context.Context, ref bcmd.MessageRef, action string, result wire.CommandResult, maxChars int) error {
+func (r *recordingNotifier) NotifyCommandResult(ctx context.Context, ref bcmd.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.records = append(r.records, notifyCall{ref: ref, action: action, result: result, maxChars: maxChars})

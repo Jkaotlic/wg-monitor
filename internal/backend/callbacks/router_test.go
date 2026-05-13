@@ -1091,6 +1091,46 @@ func TestRouterHandleMessage_OperatorBlocked_AdminSlashCommand(t *testing.T) {
 	}
 }
 
+func TestRouter_DiagRaw_ServesCachedBody(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345})
+	tok := r.DiagCache().Put("RAW_BODY", time.Minute)
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "diag_raw:" + itoa(uid) + ":_panel_:" + tok,
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("want 1 sent raw-report message, got %d", len(f.sentMsgs))
+	}
+	if !strings.Contains(f.sentMsgs[0], "RAW_BODY") {
+		t.Errorf("raw body missing from sent message: %s", f.sentMsgs[0])
+	}
+}
+
+func TestRouter_DiagRaw_ExpiredTokenAnswersToast(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "diag_raw:" + itoa(uid) + ":_panel_:deadbeef", // never staged
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "уже не доступен") {
+		t.Errorf("expected expired-toast, got %v", f.answers)
+	}
+}
+
 // Operator taps a reply-keyboard entry outside any router topic (e.g. in
 // the summary topic or no topic). Must be dropped — operator scope is
 // per_router topics only.

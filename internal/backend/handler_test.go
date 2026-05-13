@@ -221,7 +221,7 @@ type relayCapture struct {
 	action  string
 }
 
-func (rc *relayCapture) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, maxChars int) error {
+func (rc *relayCapture) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.chatID = ref.ChatID
