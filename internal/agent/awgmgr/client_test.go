@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClient_DiagResult_HappyPath(t *testing.T) {
@@ -121,5 +122,59 @@ func TestClient_DeleteTunnel_404(t *testing.T) {
 	err := c.DeleteTunnel(context.Background(), "bad-id")
 	if err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("expected 404 error, got %v", err)
+	}
+}
+
+func TestClient_DiagRun_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/diagnostics/run" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("method: %q", r.Method)
+		}
+		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+			t.Errorf("missing X-Requested-With header")
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"success":true,"data":{"status":"running"}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
+	if err := c.DiagRun(context.Background()); err != nil {
+		t.Errorf("DiagRun: %v", err)
+	}
+}
+
+func TestClient_DiagRun_BubblesHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(503)
+		_, _ = w.Write([]byte(`{"error":true,"message":"down"}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
+	err := c.DiagRun(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "HTTP_503") {
+		t.Errorf("expected HTTP_503 in error, got: %v", err)
+	}
+}
+
+func TestClient_DiagResult_TypedNoReportOnHTTP400(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"error":true,"message":"no report available","code":"NO_REPORT"}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
+	_, err := c.DiagResult(context.Background())
+	if err == nil {
+		t.Fatal("expected error on 400, got nil")
+	}
+	if !strings.Contains(err.Error(), "NO_REPORT") {
+		t.Errorf("expected NO_REPORT in error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP_400") {
+		t.Errorf("expected HTTP_400 prefix, got: %v", err)
 	}
 }
