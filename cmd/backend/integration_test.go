@@ -417,3 +417,219 @@ func (noopTG) DownloadFile(_ context.Context, _ string) ([]byte, error) { return
 func (noopTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
 	return 0, nil
 }
+
+// capturingTG is a TGClient that records SendMessageWithReplyKeyboard calls
+// so tests can assert on rendered text and markup.
+type capturingTG struct {
+	mu   sync.Mutex
+	sent []tgSentMsg
+}
+
+type tgSentMsg struct {
+	text   string
+	markup any
+}
+
+func (c *capturingTG) SendMessage(_ context.Context, _ int64, _ *int64, text, _ string, _ *int64) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent = append(c.sent, tgSentMsg{text: text})
+	return int64(len(c.sent)), nil
+}
+func (c *capturingTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _ *int64, text, _ string, _ *int64, markup any) (int64, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sent = append(c.sent, tgSentMsg{text: text, markup: markup})
+	return int64(len(c.sent)), nil
+}
+func (c *capturingTG) DeleteMessage(_ context.Context, _, _ int64) error { return nil }
+func (c *capturingTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
+func (c *capturingTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
+	return nil
+}
+func (c *capturingTG) GetUpdates(_ context.Context, _ int64, _ int) ([]tg.Update, error) {
+	return nil, nil
+}
+func (c *capturingTG) GetFile(_ context.Context, _ string) (string, error)      { return "", nil }
+func (c *capturingTG) DownloadFile(_ context.Context, _ string) ([]byte, error) { return nil, nil }
+func (c *capturingTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
+	return 0, nil
+}
+
+func (c *capturingTG) calls() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.sent)
+}
+
+func (c *capturingTG) lastSent() (tgSentMsg, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.sent) == 0 {
+		return tgSentMsg{}, false
+	}
+	return c.sent[len(c.sent)-1], true
+}
+
+// TestIntegration_DiagNow_NoReportAutoTriggers verifies the diag auto-trigger
+// state machine end-to-end:
+//  1. Runner calls GET /api/diagnostics/result → 400+NO_REPORT.
+//  2. Runner auto-triggers POST /api/diagnostics/run → 200.
+//  3. Runner polls GET /api/diagnostics/result again → 200 with parseable body.
+//  4. Backend renders a Card with "📊 Диагностика" / "2.8.2" and an inline
+//     keyboard whose first row contains "📄 Полный отчёт" (callback diag_raw:…).
+func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
+	var (
+		resultHits int
+		runHits    int
+		mu         sync.Mutex
+	)
+	awgFake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/api/diagnostics/result":
+			resultHits++
+			if resultHits == 1 {
+				w.WriteHeader(400)
+				_, _ = w.Write([]byte(`{"error":true,"code":"NO_REPORT"}`))
+				return
+			}
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"system":{"appVersion":"2.8.2","uptime":"5m"}}`))
+		case "/api/diagnostics/run":
+			runHits++
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"status":"running"}}`))
+		default:
+			t.Errorf("unexpected awg-mgr path: %q", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	defer awgFake.Close()
+
+	// --- Harness wiring ---
+	tmp := t.TempDir() + "/diag_autotrigger.db"
+	d, err := db.Open(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	const tok = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	uid, err := d.Users().Insert("natasha", tok, "1.2.3.4", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queue := bcmd.New()
+
+	// Real callbacks.Notifier with a capturing TG so we can inspect rendered text + markup.
+	capTG := &capturingTG{}
+	notifier := callbacks.NewNotifier(capTG)
+
+	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
+		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
+	})
+	// Share the diagCache between router and notifier so the "Полный отчёт"
+	// token written by the notifier is retrievable via the router (standard main.go wiring).
+	notifier.DiagCache = router.DiagCache()
+
+	mux := backend.NewMux(backend.Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  noopDispatcher{},
+		CommandSink: queue,
+		TGNotifier:  notifier,
+		UI:          backend.UIConfig{DiagMaxChars: 3500},
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	backendSrv := httptest.NewServer(mux)
+	defer backendSrv.Close()
+
+	// 1. Operator taps Diag on the original alert message.
+	tid := int64(22)
+	q := &tg.CallbackQuery{
+		ID:   "cbk-diag-autotrigger",
+		From: tg.User{ID: 555},
+		Message: tg.Message{
+			MessageID: 5050, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+			Text: "🔴 [natasha] tunnel_amnezia — DOWN",
+		},
+		Data: fmt.Sprintf("diag_now:%d:tunnel_amnezia_for_awg2", uid),
+	}
+	router.HandleCallback(context.Background(), q)
+
+	// 2. Agent polls command, runs with DiagPollEvery=5ms so poll loop is fast.
+	agentClient := agent.NewClient(backendSrv.URL, tok, "test-agent-diag", 5*time.Second)
+	cmd, err := agentClient.PollCommand(context.Background(), 2)
+	if err != nil || cmd == nil {
+		t.Fatalf("PollCommand: %v cmd=%+v", err, cmd)
+	}
+	if cmd.Action != "diag_now" {
+		t.Fatalf("expected diag_now, got %q", cmd.Action)
+	}
+
+	runner := &actions.Runner{
+		AwgClient:     awgmgr.New(awgFake.URL),
+		DiagPollEvery: 5 * time.Millisecond,
+		DiagPollMax:   20,
+	}
+	res := runner.Execute(context.Background(), *cmd)
+	if res.Status != "ok" {
+		t.Fatalf("runner.Execute: status=%q output=%q", res.Status, res.Output)
+	}
+
+	if err := agentClient.PostResult(context.Background(), res); err != nil {
+		t.Fatalf("PostResult: %v", err)
+	}
+
+	// 3. Wait for the async relay to fire.
+	if got := waitForRelay(t, capTG.calls, 1, 3*time.Second); got < 1 {
+		t.Fatalf("expected at least 1 TG message, got %d", got)
+	}
+
+	// 4. Assert hit counters.
+	mu.Lock()
+	rh := resultHits
+	rnh := runHits
+	mu.Unlock()
+	if rh < 2 {
+		t.Errorf("resultHits: want >= 2, got %d (first returned NO_REPORT, second should return 200)", rh)
+	}
+	if rnh != 1 {
+		t.Errorf("runHits: want 1, got %d", rnh)
+	}
+
+	// 5. Assert rendered TG message contains diag card text and version.
+	msg, ok := capTG.lastSent()
+	if !ok {
+		t.Fatal("no TG message captured")
+	}
+	if !strings.Contains(msg.text, "📊 Диагностика") {
+		t.Errorf("TG text missing '📊 Диагностика': %q", msg.text)
+	}
+	if !strings.Contains(msg.text, "2.8.2") {
+		t.Errorf("TG text missing '2.8.2': %q", msg.text)
+	}
+
+	// 6. Assert inline keyboard has "📄 Полный отчёт" with diag_raw callback.
+	kb, ok := msg.markup.(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("expected *tg.InlineKeyboardMarkup, got %T (%v)", msg.markup, msg.markup)
+	}
+	if len(kb.InlineKeyboard) == 0 {
+		t.Fatal("inline keyboard has no rows")
+	}
+	firstRow := kb.InlineKeyboard[0]
+	foundRaw := false
+	for _, btn := range firstRow {
+		if strings.Contains(btn.Text, "Полный отчёт") || strings.HasPrefix(btn.CallbackData, "diag_raw:") {
+			foundRaw = true
+			break
+		}
+	}
+	if !foundRaw {
+		t.Errorf("inline keyboard first row missing 'Полный отчёт' / diag_raw: button; got %+v", firstRow)
+	}
+}
