@@ -257,6 +257,29 @@ func TestAdminCommand_TolerateBotnameSuffix(t *testing.T) {
 	}
 }
 
+// TestAdmin_EnsureTopics_FailsRendersHint: when the DB is closed before
+// /ensure_topics runs, the error reply must contain both the ❌ badge and
+// the 💡 hint block (Card shape, not a raw Go error string).
+func TestAdmin_EnsureTopics_FailsRendersHint(t *testing.T) {
+	d, _ := newTestDB(t)
+	d.Close() // force DB error on next access
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+	msg := &tg.Message{
+		Chat: tg.Chat{ID: -100},
+		From: tg.User{ID: 12345},
+		Text: "/ensure_topics",
+	}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.sentMsgs) == 0 {
+		t.Fatal("expected an error reply")
+	}
+	body := f.sentMsgs[0]
+	if !strings.Contains(body, "❌") || !strings.Contains(body, "💡") {
+		t.Errorf("error reply should contain ❌ badge AND 💡 hint, got: %s", body)
+	}
+}
+
 // TestPanel_AdminOnlyGate verifies /panel from a non-admin user produces
 // zero side effects — the HandleMessage admin-gate stops it before
 // handleAdminCommand even runs.

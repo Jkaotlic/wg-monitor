@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
@@ -75,10 +76,11 @@ func (s *pendingAddOperatorStore) clear(adminID int64) {
 func accessHomeMessage(d *db.DB) (string, tg.InlineKeyboardMarkup) {
 	users, err := d.Users().GetAll()
 	if err != nil {
-		return "👥 Управление доступом\n\nНе удалось прочитать роутеров: " + err.Error(),
-			tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-				{{Text: "« Назад", CallbackData: "panel:0:home"}},
-			}}
+		sum, hint := alerts.HintFor("access_home", err.Error())
+		card := alerts.Card{Badge: "❌", Label: "👥 Управление доступом", Summary: sum, Hint: hint}
+		return card.Render(alerts.CardOpts{MaxBytes: 3500}), tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{{Text: "« Назад", CallbackData: "panel:0:home"}},
+		}}
 	}
 	var b strings.Builder
 	b.WriteString("👥 Управление доступом\n\nВыбери роутер:")
