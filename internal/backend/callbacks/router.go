@@ -504,13 +504,28 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if r.cfg.ChatID != 0 && m.Chat.ID != r.cfg.ChatID {
 		return
 	}
-	if r.cfg.AdminUserID != 0 && m.From.ID != r.cfg.AdminUserID {
-		return
-	}
-	// Slash-style admin commands run BEFORE topic resolution: /this_is is
-	// useful precisely when the topic is unbound (resolveTopicKind would
-	// return "unknown" + nil), and /ensure_topics works from any topic.
-	if r.handleAdminCommand(ctx, m) {
+	isAdmin := r.cfg.AdminUserID == 0 || m.From.ID == r.cfg.AdminUserID
+	if !isAdmin {
+		// Non-admin path: operators get owner-parity but ONLY in their own
+		// router's per_router topic. resolveTopicKind classifies by thread
+		// id; if the topic is unknown / summary / systemic, drop. If the
+		// operator isn't whitelisted on that router, drop. The downstream
+		// switch re-runs resolveTopicKind, which is cheap — keeping the
+		// existing flow untouched simplifies the diff.
+		kind, user := r.resolveTopicKind(m.MessageThreadID)
+		if kind != "per_router" || user == nil {
+			return
+		}
+		if !r.d.RouterOperators().HasAccess(user.ID, m.From.ID) {
+			return
+		}
+		// Operator passes the gate. Skip handleAdminCommand entirely — slash
+		// commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
+	} else if r.handleAdminCommand(ctx, m) {
+		// Slash-style admin commands run BEFORE topic resolution: /this_is
+		// is useful precisely when the topic is unbound (resolveTopicKind
+		// would return "unknown" + nil), and /ensure_topics works from any
+		// topic.
 		if r.cfg.UI.DeleteUserCommandMessages && m.MessageID != 0 {
 			if err := r.tg.DeleteMessage(ctx, m.Chat.ID, m.MessageID); err != nil {
 				slog.Warn("deleteMessage failed (non-fatal)", "err", err, "chat", m.Chat.ID, "msg", m.MessageID)

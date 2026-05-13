@@ -52,8 +52,14 @@ admin-only convention.
   of band.
 - **No history-screen / audit-log UI.** `granted_at` and `granted_by`
   are stored for forensics but not rendered in any screen.
-- **`HandleMessage` text commands stay admin-only.** Operators control
-  routers only through inline buttons in the router topic.
+- ~~**`HandleMessage` text commands stay admin-only.** Operators control
+  routers only through inline buttons in the router topic.~~
+  **Revised 2026-05-13:** operators reach owner-parity through the
+  reply-keyboard buttons of their router's per_router topic too. Admin-only
+  slash commands (`/ensure_topics`, `/this_is`, `/recreate_topic`, `/panel`,
+  `/topic_help`) stay admin-only. Operators outside per_router topics
+  (summary / systemic / unknown) are dropped. See
+  `internal/backend/callbacks/router.go::HandleMessage` operator gate.
 - **No race protection against the global admin being unbound mid-flow.**
   Admin is a config-level identity; bot restart picks up the latest config.
 
@@ -121,7 +127,19 @@ if r.d.RouterOperators() != nil && r.d.RouterOperators().HasAccess(user.ID, q.Fr
 // existing TOFU fallback stays unchanged
 ```
 
-No other ACL paths change. `HandleMessage` admin-gate stays single-admin.
+**Revised 2026-05-13:** `HandleMessage` also gets an operator gate. After
+the chat-id check, non-admin senders go through:
+
+```go
+kind, user := r.resolveTopicKind(m.MessageThreadID)
+if kind != "per_router" || user == nil {
+    return
+}
+if !r.d.RouterOperators().HasAccess(user.ID, m.From.ID) {
+    return
+}
+// Operator passes; skip handleAdminCommand (slash commands stay admin-only).
+```
 
 ### Callback grammar
 
