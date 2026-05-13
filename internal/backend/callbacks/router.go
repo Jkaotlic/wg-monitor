@@ -546,6 +546,11 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 		// Operator passes the gate. Skip handleAdminCommand entirely — slash
 		// commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
+		// Operators get /help too; other slash commands stay admin-only.
+		if strings.TrimSpace(m.Text) == "/help" {
+			r.handleHelpCommand(ctx, m)
+			return
+		}
 	} else if r.handleAdminCommand(ctx, m) {
 		// Slash-style admin commands run BEFORE topic resolution: /this_is
 		// is useful precisely when the topic is unbound (resolveTopicKind

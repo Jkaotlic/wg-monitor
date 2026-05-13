@@ -50,6 +50,9 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	case "/panel":
 		r.adminPanelOpen(ctx, m)
 		return true
+	case "/help":
+		r.handleHelpCommand(ctx, m)
+		return true
 	case "/topic_help":
 		r.adminTopicHelp(ctx, m)
 		return true
