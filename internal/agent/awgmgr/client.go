@@ -180,9 +180,36 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("awgmgr read diagnostics/result: %w", err)
 	}
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("awgmgr diagnostics/result: HTTP %d: %s", resp.StatusCode, snippet(body))
+		return "", fmt.Errorf("HTTP_%d: awgmgr diagnostics/result: %s", resp.StatusCode, snippet(body))
 	}
 	return string(body), nil
+}
+
+// DiagRun POSTs /api/diagnostics/run to trigger a fresh diagnostic
+// pass. awg-manager 2.8.2 returns {success:true,data:{status:"running"}}
+// on accept; the actual report arrives later via DiagResult. The call
+// is idempotent — posting again during an in-flight run returns the
+// same body without re-starting.
+func (c *Client) DiagRun(ctx context.Context) error {
+	start := time.Now()
+	const path = "/api/diagnostics/run"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
+		return fmt.Errorf("HTTP_REFUSED: awgmgr POST diagnostics/run: %w", err)
+	}
+	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP_%d: awgmgr diagnostics/run: %s", resp.StatusCode, snippet(body))
+	}
+	return nil
 }
 
 // ImportConf calls POST /api/import/conf — passes raw .conf text, awg-manager
