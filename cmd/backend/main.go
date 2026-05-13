@@ -62,6 +62,7 @@ func main() {
 	// picker. Non-fatal — the bot keeps working if TG refuses.
 	smcCtx, smcCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := tgClient.SetMyCommands(smcCtx, []tg.BotCommand{
+		{Command: "help", Description: "Справка по командам и кнопкам"},
 		{Command: "panel", Description: "Открыть панель управления"},
 		{Command: "ensure_topics", Description: "Создать темы для всех роутеров"},
 		{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
