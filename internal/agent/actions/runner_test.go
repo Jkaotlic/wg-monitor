@@ -449,3 +449,135 @@ func equalStrSlice(a, b []string) bool {
 	}
 	return true
 }
+
+// --- Task 5: diag_now auto-trigger + poll loop tests ---
+
+// awgmgrFakeState backs a per-path fake server for diag_now auto-trigger
+// tests. Each call counts toward resultHits / runHits; the bodies are
+// supplied by callbacks so each test customises behaviour over hits.
+type awgmgrFakeState struct {
+	resultHits int
+	runHits    int
+	resultBody func(hit int) (status int, body string)
+	runBody    func(hit int) (status int, body string)
+}
+
+func awgmgrFakeMulti(t *testing.T, state *awgmgrFakeState) *awgmgr.Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/diagnostics/result":
+			state.resultHits++
+			s, b := state.resultBody(state.resultHits)
+			w.WriteHeader(s)
+			_, _ = w.Write([]byte(b))
+		case "/api/diagnostics/run":
+			state.runHits++
+			s, b := state.runBody(state.runHits)
+			w.WriteHeader(s)
+			_, _ = w.Write([]byte(b))
+		default:
+			t.Errorf("unexpected path: %q", r.URL.Path)
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return &awgmgr.Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
+}
+
+// newRunnerForTest constructs a Runner with the given awgmgr client and
+// poll-tuning fields set for fast unit-test execution.
+func newRunnerForTest(t *testing.T, cli *awgmgr.Client, pollEvery time.Duration, pollMax int) *Runner {
+	t.Helper()
+	return &Runner{
+		AwgClient:     cli,
+		Now:           mockNow(),
+		DiagPollEvery: pollEvery,
+		DiagPollMax:   pollMax,
+	}
+}
+
+func TestRunner_DiagNow_NoReport_TriggersAndPolls(t *testing.T) {
+	state := &awgmgrFakeState{
+		resultBody: func(hit int) (int, string) {
+			if hit < 3 {
+				return 400, `{"error":true,"code":"NO_REPORT"}`
+			}
+			return 200, `{"system":{"appVersion":"2.8.2"}}`
+		},
+		runBody: func(_ int) (int, string) {
+			return 200, `{"success":true,"data":{"status":"running"}}`
+		},
+	}
+	cli := awgmgrFakeMulti(t, state)
+	r := newRunnerForTest(t, cli, 10*time.Millisecond, 12)
+
+	res, err := r.DiagNow(context.Background())
+	if err != nil {
+		t.Fatalf("DiagNow: %v", err)
+	}
+	if !strings.Contains(res, "2.8.2") {
+		t.Errorf("expected final result body, got: %q", res)
+	}
+	if state.runHits != 1 {
+		t.Errorf("expected exactly 1 run call, got %d", state.runHits)
+	}
+	if state.resultHits < 3 {
+		t.Errorf("expected at least 3 result polls, got %d", state.resultHits)
+	}
+}
+
+func TestRunner_DiagNow_ImmediateOK_NoTrigger(t *testing.T) {
+	state := &awgmgrFakeState{
+		resultBody: func(_ int) (int, string) {
+			return 200, `{"system":{"appVersion":"2.8.2"}}`
+		},
+		runBody: func(_ int) (int, string) {
+			t.Errorf("DiagRun should NOT be called when result is immediately OK")
+			return 200, ""
+		},
+	}
+	cli := awgmgrFakeMulti(t, state)
+	r := newRunnerForTest(t, cli, 10*time.Millisecond, 12)
+
+	if _, err := r.DiagNow(context.Background()); err != nil {
+		t.Fatalf("DiagNow: %v", err)
+	}
+	if state.runHits != 0 {
+		t.Errorf("expected 0 run calls, got %d", state.runHits)
+	}
+}
+
+func TestRunner_DiagNow_NoReport_TimeoutEmitsTypedToken(t *testing.T) {
+	state := &awgmgrFakeState{
+		resultBody: func(_ int) (int, string) {
+			return 400, `{"code":"NO_REPORT"}` // never resolves
+		},
+		runBody: func(_ int) (int, string) {
+			return 200, `{"success":true,"data":{"status":"running"}}`
+		},
+	}
+	cli := awgmgrFakeMulti(t, state)
+	r := newRunnerForTest(t, cli, 5*time.Millisecond, 3) // tight cap
+	_, err := r.DiagNow(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "DIAG_TIMEOUT") {
+		t.Errorf("expected DIAG_TIMEOUT, got: %v", err)
+	}
+}
+
+func TestRunner_DiagNow_NoReport_RunFails_BubblesError(t *testing.T) {
+	state := &awgmgrFakeState{
+		resultBody: func(_ int) (int, string) {
+			return 400, `{"code":"NO_REPORT"}`
+		},
+		runBody: func(_ int) (int, string) {
+			return 503, `{"error":true,"message":"awgmgr restarting"}`
+		},
+	}
+	cli := awgmgrFakeMulti(t, state)
+	r := newRunnerForTest(t, cli, 5*time.Millisecond, 12)
+	_, err := r.DiagNow(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "HTTP_503") {
+		t.Errorf("expected HTTP_503 bubble, got: %v", err)
+	}
+}

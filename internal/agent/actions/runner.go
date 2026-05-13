@@ -27,6 +27,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -52,7 +53,62 @@ type Runner struct {
 	Now                  func() time.Time
 	AllowRouterReboot    bool // gates `service_restart router`
 	AllowFirmwareInstall bool // gates `firmware_install`
-	routeMu              sync.Mutex // serialises concurrent route_rebind calls
+	// DiagPollEvery is the interval between DiagResult polls after a DiagRun
+	// is triggered by a NO_REPORT response. Zero defaults to 3s.
+	DiagPollEvery time.Duration
+	// DiagPollMax is the maximum number of poll iterations before DiagNow
+	// returns a DIAG_TIMEOUT error. Zero defaults to 12 (= 36s budget).
+	DiagPollMax   int
+	routeMu       sync.Mutex // serialises concurrent route_rebind calls
+}
+
+// DiagNow fetches the awg-manager diagnostic report. If awg-manager
+// reports NO_REPORT, DiagNow auto-triggers a fresh run via DiagRun and
+// polls DiagResult every r.DiagPollEvery for up to r.DiagPollMax
+// iterations. Final outcomes:
+//   - immediate 200               → return body, nil
+//   - NO_REPORT → run → poll-succeeds → return body, nil
+//   - NO_REPORT → run-error       → return "", HTTP_NNN error
+//   - NO_REPORT → run → poll-never-resolves → return "", DIAG_TIMEOUT error
+//   - other GET error             → return "", that error (typed prefix preserved)
+func (r *Runner) DiagNow(ctx context.Context) (string, error) {
+	body, err := r.AwgClient.DiagResult(ctx)
+	if err == nil {
+		return body, nil
+	}
+	if !isNoReport(err) {
+		return "", err
+	}
+	if runErr := r.AwgClient.DiagRun(ctx); runErr != nil {
+		return "", runErr
+	}
+	every := r.DiagPollEvery
+	if every <= 0 {
+		every = 3 * time.Second
+	}
+	max := r.DiagPollMax
+	if max <= 0 {
+		max = 12
+	}
+	for i := 0; i < max; i++ {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-time.After(every):
+		}
+		body, err := r.AwgClient.DiagResult(ctx)
+		if err == nil {
+			return body, nil
+		}
+		if !isNoReport(err) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("DIAG_TIMEOUT: triggered but no result after %d iterations", max)
+}
+
+func isNoReport(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "NO_REPORT")
 }
 
 func (r *Runner) now() time.Time {
@@ -101,7 +157,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
 		}
-		body, err := r.AwgClient.DiagResult(ctx)
+		body, err := r.DiagNow(ctx)
 		if err != nil {
 			return "err", err.Error(), payload
 		}
