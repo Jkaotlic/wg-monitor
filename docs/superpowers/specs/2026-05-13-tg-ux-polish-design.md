@@ -457,3 +457,36 @@ backend-first then agents (the wizard's existing flow does this).
   `Users()` repo) to keep DB access concentrated. Default fallback
   hint includes raw — clarified that raw is trimmed to 200 chars and
   sanitised.
+
+## Status
+
+Implemented on 2026-05-13 via subagent-driven execution of
+[2026-05-13-tg-ux-polish.md](../plans/2026-05-13-tg-ux-polish.md), 15 tasks,
+commits `6823e5b..2eacdcf` on `main`. Full test suite (21 packages) green;
+`go vet ./...` clean. Outstanding: manual smoke on testkeen (see plan Task 15
+Step 3 checklist) before tagging `v0.12.0-rc5`.
+
+Final method name landed as `Users().HasAnyOperatorOrOwnerBinding` (the
+ambiguity note above used `userHasAnyOperatorOrOwnerBinding` as a working
+name).
+
+Minor implementation deviations from the original spec, captured here so the
+plan and spec stay self-consistent:
+
+- `Card.Badge` was set to `""` (empty) for actions whose label already
+  carries a verb-emoji (`pingcheck_now`, `restart_tunnel`, `diag_now` success).
+  The original spec implied a non-empty badge everywhere; doing so caused
+  doubled-emoji output (`"📊 📊 Диагностика: ..."`) and was reverted to empty.
+- The diag success Card hint changed from "Полный JSON-отчёт — кнопка ниже"
+  to "Полный JSON-отчёт доступен по кнопке ниже." (minor wording).
+- `helpOperatorBody` reworded to avoid the literal substring `/panel` (the
+  operator test asserts the absence of `/panel` in operator-rendered help to
+  prevent admins reading "operators see /panel"-style text).
+- `TGNotifier.NotifyCommandResult` interface gained a `userID int64`
+  parameter (5th position) because `cmdpkg.MessageRef` does not carry
+  `UserID`; callers in `handler.go`, the integration-test fake
+  (`recordingNotifier`) and the unit-test fake (`relayCapture`) were
+  updated accordingly.
+- `MaintPanelKeyboard` last row was split (was `[🔄 Проверить апдейты]
+  [✖ Закрыть]`, now three rows: updates, ℹ help, close) so the help row
+  inserts cleanly.
