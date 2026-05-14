@@ -584,11 +584,17 @@ func TestRunner_DiagNow_NoReport_RunFails_BubblesError(t *testing.T) {
 
 func TestRunner_PingCheckStatus_Dispatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/pingcheck/status" {
-			t.Errorf("path: %q", r.URL.Path)
+		switch r.URL.Path {
+		case "/api/pingcheck/status":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":true,"tunnels":[]}}`))
+		case "/api/tunnels/all":
+			// Non-fatal for enrichment; 500 exercises the graceful-degrade path.
+			w.WriteHeader(500)
+		default:
+			t.Errorf("unexpected path: %q", r.URL.Path)
+			w.WriteHeader(404)
 		}
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":true,"tunnels":[]}}`))
 	}))
 	defer srv.Close()
 	r := &Runner{AwgClient: awgmgr.New(srv.URL), Now: time.Now}

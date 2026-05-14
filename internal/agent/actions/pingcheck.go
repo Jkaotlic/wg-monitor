@@ -17,13 +17,33 @@ import (
 )
 
 // PingCheckStatusJSON returns the awg-mgr /api/pingcheck/status body
-// re-serialised as a JSON envelope. We re-marshal so the backend
-// always sees a stable shape (envelope shape is owned by awg-mgr; we
-// just pass it through).
+// re-serialised as a JSON envelope, enriched with ndmsName resolved from
+// /api/tunnels/all. We re-marshal so the backend always sees a stable shape
+// (envelope shape is owned by awg-mgr; we just pass it through).
 func PingCheckStatusJSON(ctx context.Context, c *awgmgr.Client) (string, error) {
 	st, err := c.PingCheckStatus(ctx)
 	if err != nil {
 		return "", err
+	}
+	// Resolve tunnel_id → ndms_name from /api/tunnels/all so the backend
+	// can render toggle buttons. Failure to fetch tunnels/all is non-fatal
+	// — pingcheck panel still renders, just without toggle capability.
+	if all, terr := c.TunnelsAll(ctx); terr == nil {
+		ndmsByID := make(map[string]string, len(all.Tunnels)+len(all.External)+len(all.System))
+		for _, t := range all.Tunnels {
+			ndmsByID[t.ID] = t.NDMSName
+		}
+		for _, t := range all.External {
+			ndmsByID[t.ID] = t.NDMSName
+		}
+		for _, t := range all.System {
+			ndmsByID[t.ID] = t.NDMSName
+		}
+		for i := range st.Tunnels {
+			if name, ok := ndmsByID[st.Tunnels[i].TunnelID]; ok {
+				st.Tunnels[i].NDMSName = name
+			}
+		}
 	}
 	b, err := json.Marshal(st)
 	if err != nil {
