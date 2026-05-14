@@ -180,7 +180,7 @@ func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 
 func (u *UsersRepo) GetAll() ([]User, error) {
 	rows, err := u.d.db.Query(
-		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version FROM users ORDER BY id`,
+		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		var lastDepVer sql.NullString
 		if err := rows.Scan(
 			&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
-			&threadID, &tgUserID, &lastSeen,
+			&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
 			&sshHost, &sshPort, &sshUser, &arch, &lastDepVer,
 		); err != nil {
 			return nil, err

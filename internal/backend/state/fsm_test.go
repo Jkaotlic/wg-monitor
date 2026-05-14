@@ -7,6 +7,48 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/db"
 )
 
+// Regression: shallow copy in Apply used to alias *time.Time pointer fields
+// between next and prev. Today no transition mutates the pointee in place,
+// but a defensive deep-copy was added so future refactors can't silently
+// corrupt prev via next. Verify the deep-copy holds.
+func TestFSM_Apply_DeepCopiesPointerFields(t *testing.T) {
+	hs := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	la := time.Date(2026, 5, 1, 10, 5, 0, 0, time.UTC)
+	si := time.Date(2026, 5, 1, 11, 0, 0, 0, time.UTC)
+	au := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	var mid int64 = 42
+	prev := db.IncidentState{
+		CurrentStatus:  "hard",
+		HardSince:      &hs,
+		LastAlertAt:    &la,
+		SilencedUntil:  &si,
+		AckedUntil:     &au,
+		LastAlertMsgID: &mid,
+	}
+	tr := Apply(prev, "fail", time.Now(), Thresholds{Fail: 3, Recovery: 2})
+	if tr.Next.HardSince == prev.HardSince {
+		t.Errorf("HardSince pointer aliased (same address as prev)")
+	}
+	if tr.Next.LastAlertAt == prev.LastAlertAt {
+		t.Errorf("LastAlertAt pointer aliased")
+	}
+	if tr.Next.SilencedUntil == prev.SilencedUntil {
+		t.Errorf("SilencedUntil pointer aliased")
+	}
+	if tr.Next.AckedUntil == prev.AckedUntil {
+		t.Errorf("AckedUntil pointer aliased")
+	}
+	if tr.Next.LastAlertMsgID == prev.LastAlertMsgID {
+		t.Errorf("LastAlertMsgID pointer aliased")
+	}
+	// Mutating next.HardSince must not affect prev.HardSince.
+	future := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
+	*tr.Next.HardSince = future
+	if prev.HardSince.Equal(future) {
+		t.Errorf("prev.HardSince got mutated via aliased pointer")
+	}
+}
+
 func TestFSM_OkOk_NoOp(t *testing.T) {
 	prev := db.IncidentState{CurrentStatus: "ok"}
 	tr := Apply(prev, "ok", time.Now(), Thresholds{Fail: 3, Recovery: 2})

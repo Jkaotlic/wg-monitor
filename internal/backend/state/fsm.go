@@ -28,13 +28,42 @@ func (k Kind) String() string {
 	return [...]string{"noop", "soft", "soft_flap", "hard", "recovery"}[k]
 }
 
+// copyTimePtr / copyInt64Ptr return a fresh *T with the same value, so a
+// caller mutating *p won't poke holes in the original. Cheap (~16 bytes
+// alloc per non-nil pointer) and only runs on FSM transitions.
+func copyTimePtr(p *time.Time) *time.Time {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
+func copyInt64Ptr(p *int64) *int64 {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 type Transition struct {
 	Kind Kind
 	Next db.IncidentState
 }
 
 func Apply(prev db.IncidentState, incoming string, now time.Time, th Thresholds) Transition {
+	// Shallow copy aliases the *time.Time / *int64 fields between next and
+	// prev. Today no transition mutates the pointee in place (we always assign
+	// a fresh address), so the aliasing is benign — but it's brittle: any
+	// future "in-place tweak HardSince" refactor would silently corrupt prev.
+	// Defensive deep copy keeps next independent.
 	next := prev
+	next.HardSince = copyTimePtr(prev.HardSince)
+	next.LastAlertAt = copyTimePtr(prev.LastAlertAt)
+	next.SilencedUntil = copyTimePtr(prev.SilencedUntil)
+	next.AckedUntil = copyTimePtr(prev.AckedUntil)
+	next.LastAlertMsgID = copyInt64Ptr(prev.LastAlertMsgID)
 	switch {
 	case prev.CurrentStatus == "ok" && incoming == "ok":
 		next.ConsecutiveOKs = prev.ConsecutiveOKs + 1

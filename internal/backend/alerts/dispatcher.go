@@ -118,7 +118,20 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		next.LastAlertMsgID = &mid
 		now := time.Now()
 		next.LastAlertAt = &now
-		return di.d.State().Save(userID, checkName, next)
+		if err := di.d.State().Save(userID, checkName, next); err != nil {
+			// Full Save failed (DB momentarily locked / disk error). The HARD
+			// row was persisted earlier (line 75), so the FSM is correct, but
+			// LastAlertAt is still NULL — the realert poller would now fire
+			// on every tick instead of every RealertEvery. Targeted UPDATE
+			// just for last_alert_at + last_alert_msg_id is a smaller
+			// transaction more likely to succeed in this window.
+			slog.Error("HARD save failed; falling back to SetLastAlert",
+				"nickname", nickname, "check", checkName, "err", err)
+			if fbErr := di.d.State().SetLastAlert(userID, checkName, mid, now); fbErr != nil {
+				return fmt.Errorf("HARD save fallback %s/%s: %w (orig: %v)", nickname, checkName, fbErr, err)
+			}
+		}
+		return nil
 	case state.Recovery:
 		// Same ordering invariant как Hard: state-Save до TG-send. Если
 		// TG отвалится, recovery фактически уже сохранён в FSM; следующий
@@ -147,6 +160,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			CheckName:   checkName,
 			HardSince:   hardSince,
 			RecoveredAt: time.Now(),
+			Check:       check,
 		})
 		sendRecovery := func(tid int64) (int64, error) {
 			return di.tg.SendMessage(ctx, di.cfg.ChatID, &tid, text, "", prev.LastAlertMsgID)

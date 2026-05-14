@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -68,6 +69,33 @@ func TestClient_SendReport_ErrorsOn5xx(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "502") {
 		t.Errorf("err should mention 502: %v", err)
+	}
+}
+
+func TestClient_AuthRejection_ReturnsTypedError(t *testing.T) {
+	// 401/403 must surface as ErrUnauthorized so the cmdloop / reporter can
+	// distinguish a rotated token from a transient 5xx and back off.
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte("invalid token"))
+		}))
+		c := NewClient(srv.URL, "stale", "0.1.0", 2*time.Second)
+		err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
+		if err == nil {
+			t.Fatalf("status=%d: expected error", status)
+		}
+		if !errors.Is(err, ErrUnauthorized) {
+			t.Errorf("status=%d: err must wrap ErrUnauthorized, got %v", status, err)
+		}
+		// Same expectation for PollCommand and PostResult.
+		if _, perr := c.PollCommand(context.Background(), 1); !errors.Is(perr, ErrUnauthorized) {
+			t.Errorf("status=%d: PollCommand must surface ErrUnauthorized, got %v", status, perr)
+		}
+		if rerr := c.PostResult(context.Background(), wire.CommandResult{ID: "x", Status: "ok"}); !errors.Is(rerr, ErrUnauthorized) {
+			t.Errorf("status=%d: PostResult must surface ErrUnauthorized, got %v", status, rerr)
+		}
+		srv.Close()
 	}
 }
 

@@ -39,6 +39,11 @@ type RecoveryArgs struct {
 	CheckName   string
 	HardSince   time.Time
 	RecoveredAt time.Time
+	// Check carries the LAST KNOWN event payload (status==ok recovery event).
+	// Optional — empty Details degrades the recovery message to the bare
+	// one-liner. For tunnel_* checks this lets us name the tunnel and echo
+	// how many DNS/Static rules just came back online.
+	Check wire.Check
 }
 
 // FormatHard renders a HARD alert as three sections — «что не работает /
@@ -73,14 +78,37 @@ func FormatHard(a HardArgs) string {
 }
 
 // FormatRecovery renders a recovery message in the same human tone as
-// FormatHard — single short line, no AI-style sections.
+// FormatHard — short, no AI-style sections. For tunnel_* checks the
+// previously-known Details (tunnel name, linked routes count) are echoed
+// so the operator sees what specifically came back, not just "что-то".
 func FormatRecovery(a RecoveryArgs) string {
 	d := a.RecoveredAt.Sub(a.HardSince).Round(time.Minute)
-	headline := recoveryHeadline(a.CheckName, nil)
-	return fmt.Sprintf(
-		"🟢 [%s] — %s\nПростой: %s",
-		a.Nickname, headline, durFmt(d),
-	)
+	headline := recoveryHeadline(a.CheckName, a.Check.Details)
+	var b strings.Builder
+	fmt.Fprintf(&b, "🟢 [%s] — %s\nПростой: %s", a.Nickname, headline, durFmt(d))
+	if strings.HasPrefix(a.CheckName, "tunnel_") {
+		writeTunnelRecoveryFooter(&b, a.Check.Details)
+	}
+	return b.String()
+}
+
+// writeTunnelRecoveryFooter appends a one-line summary of what rides this
+// tunnel — same Details keys as the HARD-side blast-radius line. Silent
+// when both counts are zero (or the agent didn't report them).
+func writeTunnelRecoveryFooter(b *strings.Builder, d map[string]any) {
+	rDNS, _ := intOrZero(d, "routes_dns")
+	rStatic, _ := intOrZero(d, "routes_static")
+	if rDNS == 0 && rStatic == 0 {
+		return
+	}
+	var parts []string
+	if rDNS > 0 {
+		parts = append(parts, fmt.Sprintf("%d DNS", rDNS))
+	}
+	if rStatic > 0 {
+		parts = append(parts, fmt.Sprintf("%d Static", rStatic))
+	}
+	fmt.Fprintf(b, "\nВернулись правила: %s", strings.Join(parts, ", "))
 }
 
 // FormatRouterOffline renders a router-offline message (heartbeat watcher).
@@ -292,6 +320,7 @@ func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 	if conflict, ok := boolOrFalse(d, "address_conflict"); ok && conflict {
 		b.WriteString("  ⚠ конфликт адресов на интерфейсе\n")
 	}
+	writeTunnelLinkedRoutes(b, d)
 	be := strOrEmpty(d, "backend")
 	awgVer := strOrEmpty(d, "awg_version")
 	mtu, _ := intOrZero(d, "mtu")
@@ -308,6 +337,35 @@ func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 		}
 		fmt.Fprintf(b, "  Параметры: %s\n", strings.Join(parts, " · "))
 	}
+}
+
+// writeTunnelLinkedRoutes renders the "Связано правил:" line when the agent
+// reported how many DNS / Static rules ride this tunnel. Silent when both
+// counts are zero or the agent is pre-rc6 (no fields). Helps the operator
+// see the blast radius — especially when a default-route tunnel with many
+// fall-through HR-Neo rules dies and DNS resolution stalls for everything.
+func writeTunnelLinkedRoutes(b *strings.Builder, d map[string]any) {
+	rDNS, _ := intOrZero(d, "routes_dns")
+	rHR, _ := intOrZero(d, "routes_dns_hr")
+	rStatic, _ := intOrZero(d, "routes_static")
+	if rDNS == 0 && rStatic == 0 {
+		return
+	}
+	var parts []string
+	if rDNS > 0 {
+		switch {
+		case rHR > 0 && rHR == rDNS:
+			parts = append(parts, fmt.Sprintf("%d DNS (HR-Neo)", rDNS))
+		case rHR > 0:
+			parts = append(parts, fmt.Sprintf("%d DNS (HR-Neo: %d)", rDNS, rHR))
+		default:
+			parts = append(parts, fmt.Sprintf("%d DNS", rDNS))
+		}
+	}
+	if rStatic > 0 {
+		parts = append(parts, fmt.Sprintf("%d Static", rStatic))
+	}
+	fmt.Fprintf(b, "  Связано правил: %s\n", strings.Join(parts, ", "))
 }
 
 func writeDNSWhatBroke(b *strings.Builder, d map[string]any) {
@@ -678,16 +736,22 @@ func humaniseNetErr(s string) string {
 		return "timeout"
 	case strings.Contains(low, "connection refused"):
 		return "refused"
+	case strings.Contains(low, "connection reset"):
+		return "соединение сброшено"
+	case strings.Contains(low, "broken pipe"), strings.Contains(low, "epipe"):
+		return "канал порван"
 	case strings.Contains(low, "no route to host"):
 		return "нет маршрута"
 	case strings.Contains(low, "network is unreachable"):
 		return "сеть недоступна"
-	case strings.Contains(low, "no such host"):
+	case strings.Contains(low, "no such host"), strings.Contains(low, "nxdomain"):
 		return "имя не резолвится"
 	case strings.Contains(low, "tls"):
 		return "TLS-ошибка"
 	case strings.Contains(low, "context deadline"):
 		return "таймаут"
+	case strings.Contains(low, "context canceled"):
+		return "отменено"
 	}
 	const max = 60
 	if len(s) > max {
@@ -850,6 +914,8 @@ func boolOrFalse(d map[string]any, key string) (bool, bool) {
 
 // pluralServers returns "1 сервер" / "2 сервера" / "5 серверов" — Russian
 // plural form so headlines read naturally instead of "5 серверов" for one.
+// Russian one/few/many: 1, 21, 31… → "сервер"; 2-4, 22-24… → "сервера";
+// 5-20, 25-30… → "серверов"; 11-14 → "серверов" (special case).
 func pluralServers(n int) string {
 	mod10 := n % 10
 	mod100 := n % 100
@@ -857,9 +923,9 @@ func pluralServers(n int) string {
 	case mod100 >= 11 && mod100 <= 14:
 		return fmt.Sprintf("%d серверов", n)
 	case mod10 == 1:
-		return fmt.Sprintf("%d сервера", n) // "не отвечает 1 из 1 сервера"
+		return fmt.Sprintf("%d сервер", n)
 	case mod10 >= 2 && mod10 <= 4:
-		return fmt.Sprintf("%d серверов", n)
+		return fmt.Sprintf("%d сервера", n)
 	}
 	return fmt.Sprintf("%d серверов", n)
 }
