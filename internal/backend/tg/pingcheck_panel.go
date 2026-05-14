@@ -82,11 +82,12 @@ func formatCount(n int64) string {
 
 // PingCheckPanelKeyboard builds the inline keyboard for the PingCheck
 // Panel. callback_data shapes:
-//   pingcheck_toggle:<userID>:<tunnel_id>:<ndms_name>:<0|1>   ← per-tunnel
-//   pingcheck_now:<userID>:_menu                              ← global "check now"
-//   pingcheck_open:<userID>:_panel_                           ← refresh self
-//   routes_close:<userID>:_panel_                             ← close (reuse pattern)
-//   panel:0:help:pingcheck                                    ← help screen
+//
+//	pingcheck_toggle:<userID>:<tunnel_id>:<ndms_name>:<0|1>   ← per-tunnel
+//	pingcheck_now:<userID>:_menu                              ← global "check now"
+//	pingcheck_open:<userID>:_panel_                           ← refresh self
+//	routes_close:<userID>:_panel_                             ← close (reuse pattern)
+//	panel:0:help:pingcheck                                    ← help screen
 //
 // Toggle icon meaning: shown icon = action that *would* happen on tap.
 // Enabled tunnel → ⏸ button (disable on tap); disabled tunnel → ▶ button
