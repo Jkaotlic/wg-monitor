@@ -35,10 +35,10 @@ type Tunnel struct {
 }
 
 type PingCheckBrief struct {
-	Status         string `json:"status"`
-	RestartCount   int    `json:"restartCount"`
-	FailCount      int    `json:"failCount"`
-	FailThreshold  int    `json:"failThreshold"`
+	Status        string `json:"status"`
+	RestartCount  int    `json:"restartCount"`
+	FailCount     int    `json:"failCount"`
+	FailThreshold int    `json:"failThreshold"`
 }
 
 type TunnelsAll struct {
@@ -49,19 +49,24 @@ type TunnelsAll struct {
 
 // PingCheckTunnel mirrors /api/pingcheck/status .data.tunnels[].
 type PingCheckTunnel struct {
-	TunnelID       string     `json:"tunnelId"`
-	TunnelName     string     `json:"tunnelName"`
-	Enabled        bool       `json:"enabled"`
-	Backend        string     `json:"backend"`
-	Status         string     `json:"status"`
-	Method         string     `json:"method"`
-	LastCheck      nullableTime `json:"lastCheck"`
-	LastLatency    int        `json:"lastLatency"`
-	FailCount      int        `json:"failCount"`
-	SuccessCount   int64      `json:"successCount"`
-	FailThreshold  int        `json:"failThreshold"`
-	RestartCount   int        `json:"restartCount"`
-	TunnelRunning  bool       `json:"tunnelRunning"`
+	TunnelID      string       `json:"tunnelId"`
+	TunnelName    string       `json:"tunnelName"`
+	Enabled       bool         `json:"enabled"`
+	Backend       string       `json:"backend"`
+	Status        string       `json:"status"`
+	Method        string       `json:"method"`
+	LastCheck     nullableTime `json:"lastCheck"`
+	LastLatency   int          `json:"lastLatency"`
+	FailCount     int          `json:"failCount"`
+	SuccessCount  int64        `json:"successCount"`
+	FailThreshold int          `json:"failThreshold"`
+	RestartCount  int          `json:"restartCount"`
+	TunnelRunning bool         `json:"tunnelRunning"`
+	// NDMSName is the Keenetic interface name (e.g. "Wireguard0"),
+	// resolved by the agent from /api/tunnels/all. Empty if the
+	// tunnel id can't be matched (rare — would mean awg-mgr is
+	// returning pingcheck status for a tunnel it doesn't know about).
+	NDMSName string `json:"ndmsName"`
 }
 
 type PingCheckStatus struct {

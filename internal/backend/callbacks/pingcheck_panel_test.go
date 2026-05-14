@@ -37,7 +37,7 @@ func TestPingCheckPanelNotifier_Status_OK(t *testing.T) {
 	tgFake := &fakePingCheckTG{}
 	n := &PingCheckPanelNotifier{TG: tgFake, DB: d}
 
-	body := `{"enabled":true,"tunnels":[{"tunnelId":"awg10","tunnelName":"amst","enabled":true,"status":"alive","lastLatency":82,"failCount":0,"successCount":417,"failThreshold":3,"restartCount":0,"tunnelRunning":true}]}`
+	body := `{"enabled":true,"tunnels":[{"tunnelId":"awg10","tunnelName":"amst","ndmsName":"Wireguard0","enabled":true,"status":"alive","lastLatency":82,"failCount":0,"successCount":417,"failThreshold":3,"restartCount":0,"tunnelRunning":true}]}`
 	res := wire.CommandResult{Status: "ok", Output: body}
 	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "pingcheck_status"}
 
@@ -51,6 +51,20 @@ func TestPingCheckPanelNotifier_Status_OK(t *testing.T) {
 		if !strings.Contains(tgFake.lastText, want) {
 			t.Errorf("missing %q in:\n%s", want, tgFake.lastText)
 		}
+	}
+
+	// Verify toggle button cb_data has the resolved NDMSName (not empty).
+	hasGoodNDMS := false
+	for _, row := range tgFake.lastKb.InlineKeyboard {
+		for _, b := range row {
+			if strings.Contains(b.CallbackData, "pingcheck_toggle:") &&
+				strings.Contains(b.CallbackData, ":Wireguard0:") {
+				hasGoodNDMS = true
+			}
+		}
+	}
+	if !hasGoodNDMS {
+		t.Errorf("toggle cb_data should include resolved NDMSName 'Wireguard0'; got kb=%+v", tgFake.lastKb)
 	}
 }
 

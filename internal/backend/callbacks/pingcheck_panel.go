@@ -106,10 +106,9 @@ func (n *PingCheckPanelNotifier) renderErr(ctx context.Context, ref cmdpkg.Messa
 
 // decodePingCheckStatus converts the awg-mgr passthrough JSON into the
 // renderer entry shape. Sorted by tunnel name for stable order.
-//
-// TODO(NDMS-resolve): tunnels[].ndms_name is not in /api/pingcheck/status.
-// Toggle keyboard needs it; piggybacks on a second roundtrip or cached
-// /api/tunnels/all snapshot in Task 9. For now NDMSName is empty.
+// NDMSName is resolved by the agent via /api/tunnels/all before the JSON
+// is passed through; if absent the toggle button will have an empty segment
+// (caught upstream by the agent enrichment step).
 func decodePingCheckStatus(body string) ([]tg.PingCheckPanelEntry, bool, error) {
 	var st awgmgr.PingCheckStatus
 	if err := json.Unmarshal([]byte(body), &st); err != nil {
@@ -120,6 +119,7 @@ func decodePingCheckStatus(body string) ([]tg.PingCheckPanelEntry, bool, error) 
 		entries = append(entries, tg.PingCheckPanelEntry{
 			TunnelID:         t.TunnelID,
 			Name:             t.TunnelName,
+			NDMSName:         t.NDMSName,
 			Status:           t.Status,
 			PerTunnelEnabled: t.Enabled,
 			LastLatencyMs:    t.LastLatency,

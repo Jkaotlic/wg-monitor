@@ -91,6 +91,23 @@ var cannedPingCheckStatus = `{
 	}
 }`
 
+// cannedTunnelsAll is the JSON envelope the fake awg-manager returns for
+// GET /api/tunnels/all. Provides the ndmsName mapping used by PingCheckStatusJSON.
+var cannedTunnelsAll = `{
+	"success": true,
+	"data": {
+		"external": [],
+		"system":   [],
+		"tunnels": [
+			{
+				"id":       "awg10",
+				"ndmsName": "Wireguard0",
+				"name":     "amst"
+			}
+		]
+	}
+}`
+
 // TestIntegration_PingCheckPanel_OpenRoundtrip verifies the complete flow:
 //
 //  1. Router has SetPingCheck wired so pingcheck_open enqueues a pingcheck_status cmd.
@@ -114,6 +131,10 @@ func TestIntegration_PingCheckPanel_OpenRoundtrip(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(200)
 			_, _ = io.WriteString(w, cannedPingCheckStatus)
+		case "/api/tunnels/all":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			_, _ = io.WriteString(w, cannedTunnelsAll)
 		default:
 			t.Errorf("unexpected awg-manager path: %q", r.URL.Path)
 			w.WriteHeader(404)
