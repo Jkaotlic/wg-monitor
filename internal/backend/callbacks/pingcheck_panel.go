@@ -9,9 +9,12 @@ package callbacks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -131,3 +134,138 @@ func decodePingCheckStatus(body string) ([]tg.PingCheckPanelEntry, bool, error) 
 	})
 	return entries, st.Enabled, nil
 }
+
+// pingcheckInflightStore guards against double-tap toggle. Per (userID,
+// tunnelID) → claimed-until timestamp. 5-second window: long enough for
+// the agent roundtrip + auto-refresh, short enough that no operator
+// notices it during normal use.
+type pingcheckInflightStore struct {
+	mu sync.Mutex
+	m  map[pingcheckInflightKey]time.Time
+}
+
+type pingcheckInflightKey struct {
+	UserID   int64
+	TunnelID string
+}
+
+func newPingCheckInflightStore() *pingcheckInflightStore {
+	return &pingcheckInflightStore{m: make(map[pingcheckInflightKey]time.Time)}
+}
+
+// tryClaim returns true iff the slot was free; stores expiry on success.
+// Lazy eviction on read.
+func (s *pingcheckInflightStore) tryClaim(userID int64, tunnelID string, ttl time.Duration) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k := pingcheckInflightKey{userID, tunnelID}
+	now := time.Now()
+	if until, ok := s.m[k]; ok {
+		if now.Before(until) {
+			return false
+		}
+	}
+	s.m[k] = now.Add(ttl)
+	return true
+}
+
+const pingcheckInflightTTL = 5 * time.Second
+
+// PingCheckOpenAction enqueues a pingcheck_status command on every
+// pingcheck_open / refresh tap.
+type PingCheckOpenAction struct {
+	sink  CommandEnqueuer
+	idGen func() string
+}
+
+func NewPingCheckOpenAction(sink CommandEnqueuer, idGen func() string) *PingCheckOpenAction {
+	if idGen == nil {
+		idGen = defaultCmdID
+	}
+	return &PingCheckOpenAction{sink: sink, idGen: idGen}
+}
+
+func (a *PingCheckOpenAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	if a.sink == nil {
+		return "", errors.New("command channel disabled")
+	}
+	cmd := wire.Command{
+		ID:       a.idGen(),
+		Action:   "pingcheck_status",
+		Args:     map[string]any{},
+		IssuedAt: time.Now().UTC(),
+	}
+	ref := cmdpkg.MessageRef{
+		ChatID:    q.Message.Chat.ID,
+		MessageID: q.Message.MessageID,
+		ThreadID:  q.Message.MessageThreadID,
+		Action:    "pingcheck_status",
+	}
+	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+		return "", fmt.Errorf("enqueue pingcheck_status: %w", err)
+	}
+	return "📡 обновляю…", nil
+}
+
+// PingCheckToggleAction enqueues pingcheck_toggle followed by an
+// auto-refresh pingcheck_status. Dup-protected via inflight store.
+type PingCheckToggleAction struct {
+	sink     CommandEnqueuer
+	inflight *pingcheckInflightStore
+	idGen    func() string
+}
+
+func NewPingCheckToggleAction(sink CommandEnqueuer, inflight *pingcheckInflightStore, idGen func() string) *PingCheckToggleAction {
+	if idGen == nil {
+		idGen = defaultCmdID
+	}
+	return &PingCheckToggleAction{sink: sink, inflight: inflight, idGen: idGen}
+}
+
+func (a *PingCheckToggleAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	if a.sink == nil {
+		return "", errors.New("command channel disabled")
+	}
+	if !a.inflight.tryClaim(args.UserID, args.PingCheckTunnelID, pingcheckInflightTTL) {
+		return "", errors.New("⏳ команда уже выполняется")
+	}
+	ref := cmdpkg.MessageRef{
+		ChatID:    q.Message.Chat.ID,
+		MessageID: q.Message.MessageID,
+		ThreadID:  q.Message.MessageThreadID,
+	}
+
+	toggleCmd := wire.Command{
+		ID:     a.idGen(),
+		Action: "pingcheck_toggle",
+		Args: map[string]any{
+			"tunnel_id": args.PingCheckTunnelID,
+			"ndms_name": args.NDMSName,
+			"enable":    args.PingCheckEnable,
+		},
+		IssuedAt: time.Now().UTC(),
+	}
+	toggleRef := ref
+	toggleRef.Action = "pingcheck_toggle"
+	if err := a.sink.EnqueueWithRef(args.UserID, toggleCmd, toggleRef); err != nil {
+		return "", fmt.Errorf("enqueue pingcheck_toggle: %w", err)
+	}
+
+	// Auto-refresh: agent FIFO ensures order — toggle runs first, then status.
+	statusCmd := wire.Command{
+		ID:       a.idGen(),
+		Action:   "pingcheck_status",
+		Args:     map[string]any{},
+		IssuedAt: time.Now().UTC(),
+	}
+	statusRef := ref
+	statusRef.Action = "pingcheck_status"
+	if err := a.sink.EnqueueWithRef(args.UserID, statusCmd, statusRef); err != nil {
+		return "", fmt.Errorf("enqueue auto-refresh: %w", err)
+	}
+	return "📡 переключаю…", nil
+}
+
+// Compile-time interface guards.
+var _ Action = (*PingCheckOpenAction)(nil)
+var _ Action = (*PingCheckToggleAction)(nil)

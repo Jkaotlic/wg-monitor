@@ -3,7 +3,9 @@ package callbacks
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
@@ -69,5 +71,103 @@ func TestPingCheckPanelNotifier_Status_AgentErr(t *testing.T) {
 	}
 	if !strings.Contains(tgFake.lastText, "агент не ответил") {
 		t.Errorf("expected err banner, got: %s", tgFake.lastText)
+	}
+}
+
+type fakePingCheckEnqueuer struct {
+	mu       sync.Mutex
+	commands []wire.Command
+	refs     []cmdpkg.MessageRef
+}
+
+func (f *fakePingCheckEnqueuer) Enqueue(userID int64, cmd wire.Command) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands = append(f.commands, cmd)
+	f.refs = append(f.refs, cmdpkg.MessageRef{})
+	return nil
+}
+func (f *fakePingCheckEnqueuer) EnqueueWithRef(userID int64, cmd wire.Command, ref cmdpkg.MessageRef) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commands = append(f.commands, cmd)
+	f.refs = append(f.refs, ref)
+	return nil
+}
+
+func TestPingCheckOpen_EnqueuesStatus(t *testing.T) {
+	sink := &fakePingCheckEnqueuer{}
+	a := NewPingCheckOpenAction(sink, defaultCmdID)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "pingcheck_open", UserID: 7, IsPanel: true}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if len(sink.commands) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.commands))
+	}
+	if sink.commands[0].Action != "pingcheck_status" {
+		t.Errorf("got action %q", sink.commands[0].Action)
+	}
+	if sink.refs[0].Action != "pingcheck_status" {
+		t.Errorf("ref must carry action for notifier dispatch")
+	}
+}
+
+func TestPingCheckToggle_EnqueuesAndRefreshes(t *testing.T) {
+	sink := &fakePingCheckEnqueuer{}
+	store := newPingCheckInflightStore()
+	a := NewPingCheckToggleAction(sink, store, defaultCmdID)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "pingcheck_toggle", UserID: 7, PingCheckTunnelID: "awg10", NDMSName: "Wireguard0", PingCheckEnable: false}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	// One toggle + one auto-refresh
+	if len(sink.commands) != 2 {
+		t.Fatalf("expected 2 enqueues (toggle + status), got %d", len(sink.commands))
+	}
+	if sink.commands[0].Action != "pingcheck_toggle" {
+		t.Errorf("first should be toggle, got %q", sink.commands[0].Action)
+	}
+	if sink.commands[1].Action != "pingcheck_status" {
+		t.Errorf("second should be status auto-refresh, got %q", sink.commands[1].Action)
+	}
+	// Toggle args carry tunnel_id, ndms_name, enable
+	got := sink.commands[0].Args
+	if got["tunnel_id"] != "awg10" || got["ndms_name"] != "Wireguard0" || got["enable"] != false {
+		t.Errorf("toggle args wrong: %+v", got)
+	}
+}
+
+func TestPingCheckToggle_DupTapBlocked(t *testing.T) {
+	sink := &fakePingCheckEnqueuer{}
+	store := newPingCheckInflightStore()
+	a := NewPingCheckToggleAction(sink, store, defaultCmdID)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "pingcheck_toggle", UserID: 7, PingCheckTunnelID: "awg10", NDMSName: "Wireguard0", PingCheckEnable: false}
+	_, _ = a.Apply(context.Background(), q, args)
+	// Immediate second tap → dup
+	_, err := a.Apply(context.Background(), q, args)
+	if err == nil || !strings.Contains(err.Error(), "уже выполняется") {
+		t.Fatalf("expected dup err, got %v", err)
+	}
+	// First tap = 2 enqueues; second tap should add nothing.
+	if len(sink.commands) != 2 {
+		t.Errorf("dup must not enqueue; got %d total", len(sink.commands))
+	}
+}
+
+func TestPingCheckInflightStore_TTLEvicts(t *testing.T) {
+	s := newPingCheckInflightStore()
+	if !s.tryClaim(7, "awg10", 10*time.Millisecond) {
+		t.Fatal("first claim must succeed")
+	}
+	if s.tryClaim(7, "awg10", 10*time.Millisecond) {
+		t.Fatal("second claim within TTL must fail")
+	}
+	time.Sleep(20 * time.Millisecond)
+	if !s.tryClaim(7, "awg10", 10*time.Millisecond) {
+		t.Fatal("after TTL the slot must be free again")
 	}
 }
