@@ -58,6 +58,15 @@ type Args struct {
 	// DiagRawToken is the 8-hex token of a cached diag JSON body retrieved
 	// by the "📄 Полный отчёт" button under a diag result.
 	DiagRawToken string
+	// PingCheckTunnelID is the awg-mgr tunnel id ("awg10") in
+	// pingcheck_toggle callbacks. Empty for any other action.
+	PingCheckTunnelID string
+	// PingCheckEnable is the bool transported in the 5th colon-segment
+	// of pingcheck_toggle ("0" → false, "1" → true).
+	PingCheckEnable bool
+	// DiagTestID is the short slug ("mtu", "dns_leak", ...) identifying
+	// which test was tapped on a diag drill-down. Set for diag_test action.
+	DiagTestID string
 	// PanelScreen identifies the panel-hub screen for callbacks where
 	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
 	// "awaken_confirm" | "awaken_do" | "close".
@@ -110,6 +119,10 @@ var validActions = map[string]bool{
 	"maint_fw_install": true, "maint_fw_confirm": true,
 	// diag_raw: fetch cached raw diag JSON body for "📄 Полный отчёт" button.
 	"diag_raw": true,
+	// pingcheck panel: monitor + per-tunnel watchdog toggle.
+	"pingcheck_open": true, "pingcheck_toggle": true,
+	// diag drill-down: tap a failing test in a diag summary.
+	"diag_test": true,
 	// compat-mode inline button: encodes the per-topic reply-keyboard label
 	// as an inline-keyboard tap (TG Desktop forum-topic workaround). The
 	// short code lives in CheckName and is mapped back to the original
@@ -238,6 +251,31 @@ func Parse(data string) (Args, error) {
 			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)
 		}
 		a.DiagRawToken = parts[3]
+	case "pingcheck_toggle":
+		if len(parts) < 5 {
+			return Args{}, fmt.Errorf("pingcheck_toggle requires tunnel_id, ndms_name, enable: %q", data)
+		}
+		// parts[2] is CheckName (already set above); for this action it
+		// carries the awg-mgr tunnel id.
+		a.PingCheckTunnelID = parts[2]
+		if !ndmsNameRe.MatchString(parts[3]) {
+			return Args{}, fmt.Errorf("pingcheck_toggle: ndms_name %q must match ^[A-Za-z0-9_-]{1,32}$", parts[3])
+		}
+		a.NDMSName = parts[3]
+		switch parts[4] {
+		case "0":
+			a.PingCheckEnable = false
+		case "1":
+			a.PingCheckEnable = true
+		default:
+			return Args{}, fmt.Errorf("pingcheck_toggle: enable must be 0 or 1, got %q", parts[4])
+		}
+	case "diag_test":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("diag_test requires cache_token and test_id: %q", data)
+		}
+		a.DiagRawToken = parts[2]
+		a.DiagTestID = parts[3]
 	}
 	if action == "panel" {
 		screen := parts[2]
@@ -254,7 +292,7 @@ func Parse(data string) (Args, error) {
 			if len(parts) < 4 || parts[3] == "" {
 				return Args{}, fmt.Errorf("panel %s requires kind: %q", screen, data)
 			}
-			validKinds := map[string]bool{"maint": true, "routes": true, "status": true}
+			validKinds := map[string]bool{"maint": true, "routes": true, "status": true, "pingcheck": true}
 			if !validKinds[parts[3]] {
 				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
 			}
@@ -266,7 +304,7 @@ func Parse(data string) (Args, error) {
 			}
 			validHelpScreens := map[string]bool{
 				"maint": true, "routes": true, "tunnels": true,
-				"access": true, "diag": true, "status": true,
+				"access": true, "diag": true, "status": true, "pingcheck": true,
 			}
 			if !validHelpScreens[parts[3]] {
 				return Args{}, fmt.Errorf("panel help: unknown screen %q", parts[3])
