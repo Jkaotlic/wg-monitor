@@ -465,3 +465,78 @@ func TestParse_PanelHelp_MissingScreen(t *testing.T) {
 		t.Error("expected error on missing help screen arg")
 	}
 }
+
+func TestParse_PingCheckOpen(t *testing.T) {
+	a, err := Parse("pingcheck_open:42:_panel_")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "pingcheck_open" || a.UserID != 42 || !a.IsPanel {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PingCheckToggle_OK(t *testing.T) {
+	a, err := Parse("pingcheck_toggle:42:awg10:Wireguard0:0")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "pingcheck_toggle" || a.UserID != 42 ||
+		a.PingCheckTunnelID != "awg10" || a.NDMSName != "Wireguard0" || a.PingCheckEnable != false {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PingCheckToggle_RejectsBadNDMS(t *testing.T) {
+	_, err := Parse("pingcheck_toggle:42:awg10:bad name with spaces:1")
+	if err == nil {
+		t.Error("expected validation err on space-containing ndms_name")
+	}
+}
+
+func TestParse_DiagTest(t *testing.T) {
+	a, err := Parse("diag_test:42:abcd1234:mtu")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "diag_test" || a.DiagRawToken != "abcd1234" || a.DiagTestID != "mtu" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelKindPingCheck(t *testing.T) {
+	a, err := Parse("panel:0:kind:pingcheck")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.PanelKind != "pingcheck" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelHelpPingCheck(t *testing.T) {
+	a, err := Parse("panel:0:help:pingcheck")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.PanelKind != "pingcheck" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_DiagBack(t *testing.T) {
+	a, err := Parse("diag_back:42:_panel_:abcd1234")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "diag_back" || a.DiagRawToken != "abcd1234" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_DiagBack_RequiresToken(t *testing.T) {
+	_, err := Parse("diag_back:42:_panel_:")
+	if err == nil {
+		t.Error("expected err on empty token")
+	}
+}

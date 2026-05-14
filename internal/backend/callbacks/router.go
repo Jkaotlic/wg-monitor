@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/alerts"
+	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/internal/backend/upstream"
@@ -116,6 +116,15 @@ type Router struct {
 	// inline-button taps can fetch the body without re-running the diagnostic.
 	// Shared with the Notifier via DiagCache(). All in-memory; lost on restart.
 	diagCache *diagCache
+
+	// PingCheck panel plumbing.
+	pingcheckOpenAct   Action
+	pingcheckToggleAct Action
+	pingcheckInflight  *pingcheckInflightStore
+
+	// diag drill-down (C-drilldown).
+	diagDrillAct Action
+	diagBackAct  Action
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -347,6 +356,14 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.rebindConfirmAction != nil {
 			action = r.rebindConfirmAction
 		}
+	case "pingcheck_open":
+		if r.pingcheckOpenAct != nil {
+			action = r.pingcheckOpenAct
+		}
+	case "pingcheck_toggle":
+		if r.pingcheckToggleAct != nil {
+			action = r.pingcheckToggleAct
+		}
 	case "maint_open":
 		r.handleMaintOpen(ctx, q, args)
 		return
@@ -383,6 +400,14 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 			slog.Warn("diag_raw send failed", "err", err)
 		}
 		return
+	case "diag_test":
+		if r.diagDrillAct != nil {
+			action = r.diagDrillAct
+		}
+	case "diag_back":
+		if r.diagBackAct != nil {
+			action = r.diagBackAct
+		}
 	case "opkg_disable":
 		if r.opkgRepairAction == nil {
 			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ремонт фидов не настроен")
@@ -1369,4 +1394,25 @@ func (r *Router) NewMaintNotifier(tgClient MaintEditTG, up *upstream.Cache) *Mai
 		Audit:    r.auditCache,
 		DB:       r.d,
 	}
+}
+
+// SetPingCheck wires the PingCheck panel actions. Called from cmd/backend/main.go
+// at startup. inflight is shared by Open/Toggle so dup-protection works.
+func (r *Router) SetPingCheck(sink CommandEnqueuer) {
+	r.pingcheckInflight = newPingCheckInflightStore()
+	r.pingcheckOpenAct = NewPingCheckOpenAction(sink, defaultCmdID)
+	r.pingcheckToggleAct = NewPingCheckToggleAction(sink, r.pingcheckInflight, defaultCmdID)
+}
+
+// SetDiagDrillDown wires the diag drill-down action. Called from
+// cmd/backend/main.go at startup. Reuses the existing diagCache.
+func (r *Router) SetDiagDrillDown() {
+	r.diagDrillAct = NewDiagTestExpandAction(r.diagCache, r.tg)
+	r.diagBackAct = NewDiagBackAction(r.diagCache, r.tg)
+}
+
+// NewPingCheckNotifier returns a PingCheckPanelNotifier wired against this
+// router's TG client and DB. Pass the returned value into handler.Deps.PingCheckNotifier.
+func (r *Router) NewPingCheckNotifier() *PingCheckPanelNotifier {
+	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d}
 }

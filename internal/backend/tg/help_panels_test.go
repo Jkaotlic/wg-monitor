@@ -24,6 +24,15 @@ func TestHelpForScreen_UnknownReturnsGeneric(t *testing.T) {
 	}
 }
 
+func TestHelpForScreen_PingCheck(t *testing.T) {
+	got := HelpForScreen("pingcheck")
+	for _, want := range []string{"PingCheck", "watchdog", "Restart×"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in help body", want)
+		}
+	}
+}
+
 func TestHelpRowFor_Maint(t *testing.T) {
 	row := HelpRowFor("maint")
 	if len(row) != 1 {

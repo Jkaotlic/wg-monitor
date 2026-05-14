@@ -91,3 +91,68 @@ func TestParseDiagReport_GeneratedAtFormatted(t *testing.T) {
 		t.Errorf("generatedAt should be reformatted, not raw RFC3339: %s", joined)
 	}
 }
+
+func TestParseDiagTests_PerTunnelFailures(t *testing.T) {
+	const raw = `{
+		"version": "1.0",
+		"tunnels": {
+			"awg10": {
+				"mtu":  {"status":"fail","current":1280,"expected":1380,"reason":"path-mtu=1280"},
+				"endpoint": {"status":"ok","resolved":"1.2.3.4"},
+				"dnsLeak":  {"status":"skip","reason":"public DNS"}
+			},
+			"awg11": {
+				"mtu":  {"status":"fail","current":1280,"expected":1380,"reason":"same"}
+			}
+		}
+	}`
+	tests := ParseDiagTests(raw)
+	// Find MTU
+	var mtu *TestDetail
+	for i := range tests {
+		if tests[i].ID == "mtu" {
+			mtu = &tests[i]
+			break
+		}
+	}
+	if mtu == nil {
+		t.Fatal("MTU test not found")
+	}
+	if mtu.Label == "" {
+		t.Error("Label should be human-readable")
+	}
+	if mtu.Status != "fail" {
+		t.Errorf("MTU aggregate status should be fail, got %q", mtu.Status)
+	}
+	if len(mtu.PerTunnel) != 2 {
+		t.Errorf("MTU should have 2 per-tunnel entries, got %d", len(mtu.PerTunnel))
+	}
+	// awg10 detail must include reason
+	var awg10 *PerTunnelDetail
+	for i := range mtu.PerTunnel {
+		if mtu.PerTunnel[i].TunnelLabel == "awg10" {
+			awg10 = &mtu.PerTunnel[i]
+		}
+	}
+	if awg10 == nil || awg10.Reason == "" || awg10.Reason != "path-mtu=1280" {
+		t.Errorf("awg10 reason wrong: %+v", awg10)
+	}
+	if awg10.KeyValues["current"] != "1280" || awg10.KeyValues["expected"] != "1380" {
+		t.Errorf("awg10 KeyValues wrong: %+v", awg10.KeyValues)
+	}
+}
+
+func TestParseDiagTests_LegacyJSONNoExtraFields(t *testing.T) {
+	const raw = `{"version":"1.0","system":{"appVersion":"2.8.2"}}`
+	tests := ParseDiagTests(raw)
+	if len(tests) != 0 {
+		t.Errorf("legacy JSON without per-tunnel sections should yield zero tests, got %d", len(tests))
+	}
+}
+
+func TestParseDiagTests_GarbageJSON(t *testing.T) {
+	tests := ParseDiagTests("not even json")
+	if tests != nil {
+		t.Errorf("garbage should return nil, not panic")
+	}
+}

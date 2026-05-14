@@ -34,6 +34,9 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 			},
 			{
 				{Text: "📊 Status", CallbackData: "panel:0:kind:status"},
+				{Text: "📡 PingCheck", CallbackData: "panel:0:kind:pingcheck"},
+			},
+			{
 				{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
 			},
 			{
@@ -98,7 +101,7 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 		MessageThreadID: &threadID,
 	}
 	publishErr := r.panelPublish(ctx, synth, u, args.PanelKind)
-	kindLabel := map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status"}[args.PanelKind]
+	kindLabel := map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status", "pingcheck": "PingCheck"}[args.PanelKind]
 	var resultText string
 	switch {
 	case publishErr == nil:
@@ -124,7 +127,7 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 // rather than returning them), we do a cheap probe SendMessage first;
 // the panel will then overwrite/replace it normally.
 func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, kind string) error {
-	probeMsg := fmt.Sprintf("🎛 %s готовится…", map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status"}[kind])
+	probeMsg := fmt.Sprintf("🎛 %s готовится…", map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status", "pingcheck": "PingCheck"}[kind])
 	if _, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, probeMsg, "", nil); err != nil {
 		return err
 	}
@@ -135,6 +138,8 @@ func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, ki
 		r.openRoutesPanelMessage(ctx, m, u)
 	case "status":
 		r.dispatchSmartReply(ctx, m, u)
+	case "pingcheck":
+		r.openPingCheckPanelMessage(ctx, m, u)
 	default:
 		return fmt.Errorf("unknown panel kind: %q", kind)
 	}
