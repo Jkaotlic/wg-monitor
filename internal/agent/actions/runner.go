@@ -9,6 +9,9 @@
 //     live upgrade; partial-update failures continue and surface failed feeds)
 //   - opkg_feed_disable → OpkgRunner.DisableFeed (comment matching feed in
 //     opkg config + auto-retry SmartUpgrade)
+//   - pingcheck_status → awgmgr.PingCheckStatus → JSON passthrough
+//   - pingcheck_toggle → awg-mgr POST /api/pingcheck/toggle (primary)
+//     with ndmc CLI fallback (interface <ndms_name> ping-check)
 //   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
 //     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
 //     ndmc CLI is the authoritative path. NDMSName must be supplied in
@@ -193,6 +196,32 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	case "check_direct":
 		s, o := CheckDirect(ctx)
 		return s, o, payload
+	case "pingcheck_status":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		body, err := PingCheckStatusJSON(ctx, r.AwgClient)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", body, payload
+	case "pingcheck_toggle":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		tid, _ := cmd.Args["tunnel_id"].(string)
+		ndms, _ := cmd.Args["ndms_name"].(string)
+		enable, _ := cmd.Args["enable"].(bool)
+		if tid == "" || ndms == "" {
+			return "err", "pingcheck_toggle: tunnel_id and ndms_name are required", payload
+		}
+		if err := PingCheckToggle(ctx, r.AwgClient, r.Exec, tid, ndms, enable); err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", fmt.Sprintf("pingcheck %s for %s", boolEnableLabel(enable), tid), payload
 	case "tunnel_enable", "tunnel_disable":
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
@@ -330,4 +359,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	default:
 		return "err", "unknown action: " + cmd.Action, payload
 	}
+}
+
+func boolEnableLabel(enable bool) string {
+	if enable {
+		return "enabled"
+	}
+	return "disabled"
 }

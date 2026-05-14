@@ -581,3 +581,50 @@ func TestRunner_DiagNow_NoReport_RunFails_BubblesError(t *testing.T) {
 		t.Errorf("expected HTTP_503 bubble, got: %v", err)
 	}
 }
+
+func TestRunner_PingCheckStatus_Dispatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pingcheck/status" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":true,"tunnels":[]}}`))
+	}))
+	defer srv.Close()
+	r := &Runner{AwgClient: awgmgr.New(srv.URL), Now: time.Now}
+	res := r.Execute(context.Background(), wire.Command{ID: "x", Action: "pingcheck_status"})
+	if res.Status != "ok" {
+		t.Fatalf("status: %s output=%s", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, "tunnels") {
+		t.Errorf("expected tunnels in output: %s", res.Output)
+	}
+}
+
+func TestRunner_PingCheckToggle_Dispatch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	exec := ExecFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Errorf("primary should win, ndmc not called")
+		return nil, nil
+	})
+	r := &Runner{AwgClient: awgmgr.New(srv.URL), Exec: exec, Now: time.Now}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "y", Action: "pingcheck_toggle",
+		Args: map[string]any{"tunnel_id": "awg10", "ndms_name": "Wireguard0", "enable": false},
+	})
+	if res.Status != "ok" {
+		t.Fatalf("status: %s output=%s", res.Status, res.Output)
+	}
+}
+
+func TestRunner_PingCheckToggle_MissingArgs(t *testing.T) {
+	r := &Runner{AwgClient: awgmgr.New("http://unused"), Exec: ExecFunc(func(ctx context.Context, name string, a ...string) ([]byte, error) { return nil, nil }), Now: time.Now}
+	res := r.Execute(context.Background(), wire.Command{ID: "z", Action: "pingcheck_toggle", Args: map[string]any{}})
+	if res.Status != "err" {
+		t.Errorf("expected err on missing args, got %s", res.Status)
+	}
+}
