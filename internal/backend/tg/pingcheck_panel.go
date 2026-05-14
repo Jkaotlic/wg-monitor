@@ -79,3 +79,55 @@ func formatCount(n int64) string {
 	}
 	return fmt.Sprintf("%.1fk", float64(n)/1000)
 }
+
+// PingCheckPanelKeyboard builds the inline keyboard for the PingCheck
+// Panel. callback_data shapes:
+//   pingcheck_toggle:<userID>:<tunnel_id>:<ndms_name>:<0|1>   ← per-tunnel
+//   pingcheck_now:<userID>:_menu                              ← global "check now"
+//   pingcheck_open:<userID>:_panel_                           ← refresh self
+//   routes_close:<userID>:_panel_                             ← close (reuse pattern)
+//   panel:0:help:pingcheck                                    ← help screen
+//
+// Toggle icon meaning: shown icon = action that *would* happen on tap.
+// Enabled tunnel → ⏸ button (disable on tap); disabled tunnel → ▶ button
+// (enable on tap).
+const pingcheckMaxPerRow = 8
+
+func PingCheckPanelKeyboard(userID int64, entries []PingCheckPanelEntry) InlineKeyboardMarkup {
+	rows := [][]InlineKeyboardButton{}
+
+	var row []InlineKeyboardButton
+	for _, e := range entries {
+		var icon, flag string
+		if e.PerTunnelEnabled {
+			icon, flag = "⏸", "0"
+		} else {
+			icon, flag = "▶", "1"
+		}
+		label := e.Name
+		if label == "" {
+			label = e.TunnelID
+		}
+		row = append(row, InlineKeyboardButton{
+			Text:         fmt.Sprintf("%s %s", icon, label),
+			CallbackData: fmt.Sprintf("pingcheck_toggle:%d:%s:%s:%s", userID, e.TunnelID, e.NDMSName, flag),
+		})
+		if len(row) >= pingcheckMaxPerRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+
+	rows = append(rows, []InlineKeyboardButton{
+		{Text: "▶ Проверить сейчас", CallbackData: fmt.Sprintf("pingcheck_now:%d:_menu", userID)},
+		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+	})
+	rows = append(rows, []InlineKeyboardButton{
+		{Text: "ℹ Помощь", CallbackData: "panel:0:help:pingcheck"},
+		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
+	})
+	return InlineKeyboardMarkup{InlineKeyboard: rows}
+}
