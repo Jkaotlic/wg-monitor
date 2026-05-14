@@ -205,7 +205,10 @@ func (c *Client) DiagRun(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	body, rerr := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if rerr != nil && resp.StatusCode != 200 {
+		return fmt.Errorf("HTTP_%d: awgmgr diagnostics/run: read body: %w", resp.StatusCode, rerr)
+	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("HTTP_%d: awgmgr diagnostics/run: %s", resp.StatusCode, snippet(body))
 	}
