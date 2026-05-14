@@ -134,6 +134,7 @@ func main() {
 	notifier.DiagCache = cb.DiagCache()
 	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)
 	cb.SetPingCheck(cmdQueue)
+	cb.SetDiagDrillDown()
 	pingcheckNotifier := cb.NewPingCheckNotifier()
 
 	// OPKG feed repair plumbing — store holds tokens for pending 🔧 button taps;
