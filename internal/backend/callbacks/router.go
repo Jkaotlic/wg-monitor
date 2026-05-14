@@ -124,6 +124,7 @@ type Router struct {
 
 	// diag drill-down (C-drilldown).
 	diagDrillAct Action
+	diagBackAct  Action
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -402,6 +403,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "diag_test":
 		if r.diagDrillAct != nil {
 			action = r.diagDrillAct
+		}
+	case "diag_back":
+		if r.diagBackAct != nil {
+			action = r.diagBackAct
 		}
 	case "opkg_disable":
 		if r.opkgRepairAction == nil {
@@ -1403,6 +1408,7 @@ func (r *Router) SetPingCheck(sink CommandEnqueuer) {
 // cmd/backend/main.go at startup. Reuses the existing diagCache.
 func (r *Router) SetDiagDrillDown() {
 	r.diagDrillAct = NewDiagTestExpandAction(r.diagCache, r.tg)
+	r.diagBackAct = NewDiagBackAction(r.diagCache, r.tg)
 }
 
 // NewPingCheckNotifier returns a PingCheckPanelNotifier wired against this

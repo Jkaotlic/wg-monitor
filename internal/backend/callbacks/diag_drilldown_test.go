@@ -88,3 +88,36 @@ func hasInKb(kb *tg.InlineKeyboardMarkup, want string) bool {
 	}
 	return false
 }
+
+func TestDiagBack_CacheHit_RendersSummary(t *testing.T) {
+	dc := newDiagCache()
+	body := `{"version":"1.0","generatedAt":"2026-05-14T12:00:00Z","durationMs":2559,"system":{"appVersion":"2.8.2","backend":"nativewg","totalMemoryMB":256}}`
+	tok := dc.Put(body, 5*time.Minute)
+	tgFake := &fakeDiagTG{}
+	a := NewDiagBackAction(dc, tgFake)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "diag_back", UserID: 7, DiagRawToken: tok}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(tgFake.lastText, "Диагностика") {
+		t.Errorf("expected Диагностика in summary, got: %s", tgFake.lastText)
+	}
+	if !strings.Contains(tgFake.lastText, "2.8.2") {
+		t.Errorf("expected appVersion in details, got: %s", tgFake.lastText)
+	}
+}
+
+func TestDiagBack_CacheMiss(t *testing.T) {
+	dc := newDiagCache()
+	tgFake := &fakeDiagTG{}
+	a := NewDiagBackAction(dc, tgFake)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "diag_back", UserID: 7, DiagRawToken: "deadbeef"}
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if !strings.Contains(tgFake.lastText, "устарела") {
+		t.Errorf("expected stale message, got: %s", tgFake.lastText)
+	}
+}
