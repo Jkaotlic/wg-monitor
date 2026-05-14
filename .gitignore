@@ -36,3 +36,6 @@ cmd/deploy/wizard.toml
 # Locally built deploy binaries
 dist/wg-monitor-deploy*
 bin/wg-monitor-deploy*
+
+# Local API probe captures (curl dumps from awg-mgr during dev)
+.probe_*.json
