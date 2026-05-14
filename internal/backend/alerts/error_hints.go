@@ -15,6 +15,36 @@ import (
 // branch is the safety net. Typed tokens are uppercase by contract.
 func HintFor(action, statusOrRaw string) (summary, hint string) {
 	s := statusOrRaw
+
+	// PingCheck-specific hints (action-aware)
+	if action == "pingcheck_status" {
+		switch {
+		case strings.Contains(s, "HTTP_REFUSED"):
+			return "awg-manager недоступен",
+				"Проверь что сервис awg-manager работает: `/opt/etc/init.d/S99awg-manager status`"
+		case strings.Contains(s, "HTTP_5"):
+			return "awg-manager отдал серверную ошибку",
+				"Логи: `/opt/var/log/awg-manager.log`"
+		case s == "":
+			return "не удалось прочитать состояние PingCheck",
+				"Попробуй ещё раз через 5 сек."
+		}
+	}
+	if action == "pingcheck_toggle" {
+		switch {
+		case strings.Contains(s, "HTTP_REFUSED"):
+			return "awg-manager и ndmc недоступны",
+				"Проверь сервис awg-manager и доступ к ndmc."
+		case strings.Contains(s, "interface unknown"):
+			return "NDMS не знает интерфейс",
+				"NDMS не знает интерфейс. Проверь имя интерфейса в awg-mgr → `ndmc -c \"show interface\"`."
+		case s == "":
+			return "переключение не применилось",
+				"См. raw error выше для подробностей."
+		}
+	}
+
+	// Generic hints (action-independent)
 	switch {
 	case strings.Contains(s, "NO_REPORT") || strings.Contains(s, "no report available"):
 		return "отчёт ещё не сформирован",

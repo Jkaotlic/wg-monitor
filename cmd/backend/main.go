@@ -133,6 +133,9 @@ func main() {
 	cb.SetUpstream(upCache)
 	notifier.DiagCache = cb.DiagCache()
 	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)
+	cb.SetPingCheck(cmdQueue)
+	cb.SetDiagDrillDown()
+	pingcheckNotifier := cb.NewPingCheckNotifier()
 
 	// OPKG feed repair plumbing — store holds tokens for pending 🔧 button taps;
 	// action consumes them and enqueues opkg_feed_disable commands. Notifier
@@ -146,17 +149,18 @@ func main() {
 	defer cancel()
 
 	mux := backend.NewMux(backend.Deps{
-		Logger:         logger,
-		DB:             d,
-		Dispatcher:     disp,
-		Resumer:        watcher,
-		CommandSink:    cmdQueue,
-		TGNotifier:     notifier,
-		RoutesNotifier: routesNotifier,
-		MaintNotifier:  maintNotifier,
-		OpkgNotifier:   opkgNotifier,
-		UI:             cfg.UI,
-		Thresholds:     state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		Logger:            logger,
+		DB:                d,
+		Dispatcher:        disp,
+		Resumer:           watcher,
+		CommandSink:       cmdQueue,
+		TGNotifier:        notifier,
+		RoutesNotifier:    routesNotifier,
+		MaintNotifier:     maintNotifier,
+		OpkgNotifier:      opkgNotifier,
+		PingCheckNotifier: pingcheckNotifier,
+		UI:                cfg.UI,
+		Thresholds:        state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 		// Wire the server-shutdown ctx so cmd-result relay goroutines respect
 		// SIGTERM and don't outlive srv.Shutdown (BUG-15).
 		ShutdownCtx: ctx,

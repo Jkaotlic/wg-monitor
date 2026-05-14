@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	maxReportBytes  = 64 * 1024
-	maxResultBytes  = 16 * 1024
-	defaultCmdWait  = 30 * time.Second
-	maxCmdWait      = 60 * time.Second
+	maxReportBytes = 64 * 1024
+	maxResultBytes = 16 * 1024
+	defaultCmdWait = 30 * time.Second
+	maxCmdWait     = 60 * time.Second
 )
 
 // Version is set by main.Version via SetVersion at startup so /healthz can
@@ -171,18 +171,25 @@ type OpkgNotifier interface {
 	NotifyOpkgResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64, maxChars int) error
 }
 
+// PingCheckNotifier is the subset used by cmdResultHandler when ref.Action is
+// pingcheck_status or pingcheck_toggle. Implemented by callbacks.PingCheckPanelNotifier.
+type PingCheckNotifier interface {
+	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
+}
+
 type Deps struct {
-	Logger         *slog.Logger
-	DB             *db.DB
-	Dispatcher     Dispatcher
-	Resumer        Resumer
-	CommandSink    CommandSink
-	TGNotifier     TGNotifier
-	RoutesNotifier RoutesNotifier // nil-safe (handler skips if nil)
-	MaintNotifier  MaintNotifier  // nil-safe (handler skips if nil)
-	OpkgNotifier   OpkgNotifier   // nil-safe (handler falls back to TGNotifier if nil)
-	UI             UIConfig
-	Thresholds     state.Thresholds
+	Logger            *slog.Logger
+	DB                *db.DB
+	Dispatcher        Dispatcher
+	Resumer           Resumer
+	CommandSink       CommandSink
+	TGNotifier        TGNotifier
+	RoutesNotifier    RoutesNotifier    // nil-safe (handler skips if nil)
+	MaintNotifier     MaintNotifier     // nil-safe (handler skips if nil)
+	OpkgNotifier      OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
+	PingCheckNotifier PingCheckNotifier // nil-safe (handler skips if nil)
+	UI                UIConfig
+	Thresholds        state.Thresholds
 	// ShutdownCtx, when non-nil, parents the relay goroutines spawned by
 	// cmdResultHandler so SIGTERM cancels in-flight TG sends instead of letting
 	// them outlive srv.Shutdown (BUG-15). Nil falls back to context.Background
@@ -578,6 +585,20 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					}(ref, res)
 				} else {
 					d.Logger.Warn("maint notifier not configured; result not relayed",
+						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
+				}
+			case "pingcheck_status", "pingcheck_toggle":
+				if d.PingCheckNotifier != nil {
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
+						defer cancel()
+						if err := d.PingCheckNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
+							incTGError()
+							d.Logger.Warn("pingcheck notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
+						}
+					}(ref, res)
+				} else {
+					d.Logger.Warn("pingcheck notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			case "opkg_upgrade", "opkg_feed_disable":

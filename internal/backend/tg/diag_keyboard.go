@@ -30,3 +30,47 @@ func DiagResultKeyboard(status string, userID int64, rawToken string) InlineKeyb
 		},
 	}}
 }
+
+// DiagFailingTest carries the minimum needed to render a drill-down button.
+type DiagFailingTest struct {
+	ID    string // slug — fits in callback_data
+	Label string // human RU label, may be long
+}
+
+// DiagResultKeyboardWithTests is the failing-test-aware successor to
+// DiagResultKeyboard. When failing is non-empty AND status == "ok",
+// prepends a row of per-test drill-down buttons. status / userID /
+// rawToken behave as in the original.
+func DiagResultKeyboardWithTests(status string, userID int64, rawToken string, failing []DiagFailingTest) InlineKeyboardMarkup {
+	rows := [][]InlineKeyboardButton{}
+	const maxPerRow = 8
+	if len(failing) > 0 && status == "ok" {
+		var row []InlineKeyboardButton
+		for _, f := range failing {
+			row = append(row, InlineKeyboardButton{
+				Text:         "❌ " + truncRunes(f.Label, 16),
+				CallbackData: fmt.Sprintf("diag_test:%d:%s:%s", userID, rawToken, f.ID),
+			})
+			if len(row) >= maxPerRow {
+				rows = append(rows, row)
+				row = nil
+			}
+		}
+		if len(row) > 0 {
+			rows = append(rows, row)
+		}
+	}
+	// Append the original layout
+	orig := DiagResultKeyboard(status, userID, rawToken)
+	rows = append(rows, orig.InlineKeyboard...)
+	return InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+// truncRunes caps a string at n runes, suffixing "…" if truncated.
+func truncRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
+}
