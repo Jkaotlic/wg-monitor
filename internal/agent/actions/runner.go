@@ -144,7 +144,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err := r.AwgClient.RestartAll(ctx); err != nil {
 			return "err", err.Error(), payload
 		}
-		return "ok", "all tunnels restarted (awg-manager)", payload
+		return "ok", "все туннели перезапущены", payload
 	case "pingcheck_now":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

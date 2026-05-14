@@ -8,6 +8,63 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
+func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
+	t.Run("default tunnel with HR-Neo fall-through", func(t *testing.T) {
+		got := FormatHard(HardArgs{
+			Nickname: "vasya", CheckName: "tunnel_awg11",
+			HardSince: time.Now(),
+			Check: wire.Check{
+				Name: "tunnel_awg11", Status: "fail",
+				Details: map[string]any{
+					"tunnel_name":   "primary",
+					"interface":     "nwg1",
+					"routes_dns":    48,
+					"routes_dns_hr": 48,
+					"routes_static": 3,
+				},
+			},
+		})
+		if !strings.Contains(got, "Связано правил: 48 DNS (HR-Neo), 3 Static") {
+			t.Fatalf("missing linked-routes line:\n%s", got)
+		}
+	})
+	t.Run("mixed HR-Neo and ndms DNS", func(t *testing.T) {
+		got := FormatHard(HardArgs{
+			Nickname: "vasya", CheckName: "tunnel_awg11",
+			HardSince: time.Now(),
+			Check: wire.Check{
+				Details: map[string]any{"routes_dns": 10, "routes_dns_hr": 7, "routes_static": 0},
+			},
+		})
+		if !strings.Contains(got, "Связано правил: 10 DNS (HR-Neo: 7)") {
+			t.Fatalf("missing mixed-HR line:\n%s", got)
+		}
+		if strings.Contains(got, "Static") {
+			t.Fatalf("Static must be omitted when zero:\n%s", got)
+		}
+	})
+	t.Run("zero routes omits the line entirely", func(t *testing.T) {
+		got := FormatHard(HardArgs{
+			Nickname: "vasya", CheckName: "tunnel_awg11",
+			HardSince: time.Now(),
+			Check:     wire.Check{Details: map[string]any{"tunnel_name": "primary"}},
+		})
+		if strings.Contains(got, "Связано правил:") {
+			t.Fatalf("line must be absent when fields missing:\n%s", got)
+		}
+	})
+	t.Run("only static routes", func(t *testing.T) {
+		got := FormatHard(HardArgs{
+			Nickname: "vasya", CheckName: "tunnel_awg11",
+			HardSince: time.Now(),
+			Check:     wire.Check{Details: map[string]any{"routes_static": 4}},
+		})
+		if !strings.Contains(got, "Связано правил: 4 Static") {
+			t.Fatalf("missing static-only line:\n%s", got)
+		}
+	})
+}
+
 func TestFormatHardGenericFallback(t *testing.T) {
 	hardSince := time.Date(2026, 4, 26, 20, 3, 0, 0, time.UTC)
 	got := FormatHard(HardArgs{
@@ -225,6 +282,46 @@ func TestFormatRecovery(t *testing.T) {
 	}
 }
 
+func TestFormatRecovery_TunnelEchoesLinkedRoutesAndName(t *testing.T) {
+	since := time.Date(2026, 4, 26, 20, 3, 0, 0, time.UTC)
+	got := FormatRecovery(RecoveryArgs{
+		Nickname:    "vasya",
+		CheckName:   "tunnel_awg11",
+		HardSince:   since,
+		RecoveredAt: since.Add(12 * time.Minute),
+		Check: wire.Check{
+			Status: "ok",
+			Details: map[string]any{
+				"tunnel_name":   "primary",
+				"interface":     "nwg1",
+				"routes_dns":    48,
+				"routes_static": 3,
+			},
+		},
+	})
+	if !strings.Contains(got, "primary") {
+		t.Errorf("recovery should mention tunnel name: %s", got)
+	}
+	if !strings.Contains(got, "Вернулись правила: 48 DNS, 3 Static") {
+		t.Errorf("recovery footer with linked routes missing: %s", got)
+	}
+}
+
+func TestFormatRecovery_TunnelWithoutDetails_StillRendersBare(t *testing.T) {
+	got := FormatRecovery(RecoveryArgs{
+		Nickname:    "vasya",
+		CheckName:   "tunnel_awg11",
+		HardSince:   time.Now(),
+		RecoveredAt: time.Now(),
+	})
+	if !strings.Contains(got, "снова на связи") {
+		t.Errorf("bare recovery line missing: %s", got)
+	}
+	if strings.Contains(got, "Вернулись правила") {
+		t.Errorf("footer must be absent when no details: %s", got)
+	}
+}
+
 func TestFormatRouterOffline(t *testing.T) {
 	got := FormatRouterOffline("vasya", 11*time.Minute)
 	for _, want := range []string{"vasya", "Роутер не на связи", "Что не работает:", "Что я думаю:", "Что делать:", "11m"} {
@@ -245,6 +342,48 @@ func TestFormatRealert(t *testing.T) {
 	for _, want := range []string{"🔁", "vasya", "Всё ещё:", "напомню снова через", "#2"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in: %q", want, msg)
+		}
+	}
+}
+
+func TestPluralServers(t *testing.T) {
+	cases := []struct {
+		n    int
+		want string
+	}{
+		{1, "1 сервер"},
+		{2, "2 сервера"},
+		{4, "4 сервера"},
+		{5, "5 серверов"},
+		{11, "11 серверов"},
+		{14, "14 серверов"},
+		{21, "21 сервер"},
+		{22, "22 сервера"},
+		{25, "25 серверов"},
+		{100, "100 серверов"},
+		{101, "101 сервер"},
+	}
+	for _, c := range cases {
+		if got := pluralServers(c.n); got != c.want {
+			t.Errorf("pluralServers(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
+}
+
+func TestHumaniseNetErr_CoversCommonErrors(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"read tcp 1.2.3.4:80->5.6.7.8:443: connection reset by peer", "соединение сброшено"},
+		{"write: broken pipe", "канал порван"},
+		{"write: EPIPE", "канал порван"},
+		{"lookup foo.bar: NXDOMAIN", "имя не резолвится"},
+		{"context canceled", "отменено"},
+	}
+	for _, c := range cases {
+		if got := humaniseNetErr(c.in); got != c.want {
+			t.Errorf("humaniseNetErr(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

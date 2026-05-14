@@ -4,14 +4,35 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
+
+// ErrUnauthorized is returned by client methods when the backend rejects the
+// bearer token with HTTP 401 or 403. Distinguished from transient 5xx so a
+// caller (cmdloop, reporter) can back off / surface a fatal-config error
+// instead of retrying forever. We can't TG-alert from the agent itself, but
+// a distinctive log line lets the operator spot a rotated token in journald.
+var ErrUnauthorized = errors.New("backend rejected token (401/403)")
+
+// authFailed returns ErrUnauthorized wrapped with the response preview if the
+// status code is 401 or 403, otherwise nil. Centralises the policy so every
+// HTTP method handles it consistently.
+func authFailed(status int, body []byte, path string) error {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return nil
+	}
+	slog.Error("agent auth rejected by backend — token likely rotated or revoked; will keep retrying but cannot recover without redeploy",
+		"path", path, "status", status, "preview", string(body))
+	return fmt.Errorf("%w: %s status=%d: %s", ErrUnauthorized, path, status, string(body))
+}
 
 // Client разделяет два HTTP-клиента: short для report/result (быстрый
 // timeout — если backend жив, ответ должен прийти моментально) и longPoll
@@ -65,6 +86,9 @@ func (c *Client) SendReport(ctx context.Context, report wire.Report) error {
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if e := authFailed(resp.StatusCode, preview, req.URL.Path); e != nil {
+			return e
+		}
 		return fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body) // drain for keep-alive
@@ -95,6 +119,9 @@ func (c *Client) PollCommand(ctx context.Context, waitSec int) (*wire.Command, e
 	}
 	if resp.StatusCode/100 != 2 {
 		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if e := authFailed(resp.StatusCode, preview, req.URL.Path); e != nil {
+			return nil, e
+		}
 		return nil, fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
@@ -129,6 +156,9 @@ func (c *Client) PostResult(ctx context.Context, result wire.CommandResult) erro
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		if e := authFailed(resp.StatusCode, preview, req.URL.Path); e != nil {
+			return e
+		}
 		return fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)

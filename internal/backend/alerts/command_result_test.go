@@ -94,6 +94,49 @@ func TestFormatCommandResult_RestartTunnelOK(t *testing.T) {
 	}
 }
 
+func TestFormatCommandResult_TunnelEnable_CleanSummary(t *testing.T) {
+	// Agent emits "interface <ndms> -> up\n<ndmc raw stdout>". Backend must
+	// strip the engineer-speak first line and drop the ndmc noise entirely.
+	r := wire.CommandResult{
+		Status: "ok",
+		Output: "interface Wireguard1 -> up\nNetwork::Interface::Base: \"Wireguard1\": interface is up.\n",
+	}
+	chunks := FormatCommandResult("tunnel_enable", r, 3500)
+	body := chunks[0]
+	if !strings.Contains(body, "Wireguard1 → включён") {
+		t.Errorf("clean summary missing: %s", body)
+	}
+	if strings.Contains(body, "->") {
+		t.Errorf("engineer-speak arrow leaked: %s", body)
+	}
+	if strings.Contains(body, "Network::Interface") {
+		t.Errorf("ndmc raw stdout must be hidden: %s", body)
+	}
+	if strings.Contains(body, "\n\n") {
+		t.Errorf("toggle result should be single-line, found paragraph break: %s", body)
+	}
+}
+
+func TestFormatCommandResult_TunnelDisable_Verb(t *testing.T) {
+	r := wire.CommandResult{Status: "ok", Output: "interface Wireguard0 -> down\nstopped\n"}
+	chunks := FormatCommandResult("tunnel_disable", r, 3500)
+	if !strings.Contains(chunks[0], "Wireguard0 → выключен") {
+		t.Errorf("disable verb missing: %s", chunks[0])
+	}
+}
+
+func TestFormatCommandResult_TunnelEnable_UnknownOutput_VerbOnly(t *testing.T) {
+	// Agent prefix changes or empty output → degrade to verb-only summary.
+	r := wire.CommandResult{Status: "ok", Output: ""}
+	chunks := FormatCommandResult("tunnel_enable", r, 3500)
+	if !strings.Contains(chunks[0], "включён") {
+		t.Errorf("verb-only fallback missing: %s", chunks[0])
+	}
+	if strings.Contains(chunks[0], "→") {
+		t.Errorf("no arrow when ndms unknown: %s", chunks[0])
+	}
+}
+
 func TestFormatCommandResult_OpkgPaginated(t *testing.T) {
 	body := strings.Repeat("X", 12000)
 	r := wire.CommandResult{Status: "ok", Output: body}
@@ -144,6 +187,26 @@ func itoa1(n int) string { // local int→str without importing strconv into the
 		n /= 10
 	}
 	return string(b)
+}
+
+func TestFormatCommandResult_DiagFallback_NeutralisesEmbeddedTripleBacktick(t *testing.T) {
+	// Adversarial: raw body itself contains ``` which would terminate our
+	// outer code-fence and leak the tail as plain text + broken Markdown.
+	r := wire.CommandResult{
+		Status: "ok",
+		Output: "weird body with ``` literal backticks ``` inside — not JSON",
+	}
+	chunks := FormatCommandResult("diag_now", r, 3500)
+	body := chunks[0]
+	if strings.Contains(body, "```\nweird body with ```") {
+		t.Errorf("unescaped inner ``` would break TG fence:\n%s", body)
+	}
+	if !strings.Contains(body, "'''") {
+		t.Errorf("expected inner ``` to be replaced with ''':\n%s", body)
+	}
+	if !strings.Contains(body, "literal backticks") {
+		t.Errorf("body content must be preserved:\n%s", body)
+	}
 }
 
 func TestFormatCommandResult_HardCapAt4096(t *testing.T) {

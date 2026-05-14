@@ -171,7 +171,15 @@ func (w *Watcher) scan(ctx context.Context) {
 			latest = lp
 		}
 		if latest.IsZero() {
-			continue
+			// User never reported (agent stuck during install, never deployed,
+			// or was just added). Treat CreatedAt as the "earliest possible
+			// heartbeat" so the downstream stale check still gives a grace
+			// window equal to staleFor(u) — without this, a freshly-added
+			// router that fails to start would silently stay invisible.
+			if u.CreatedAt.IsZero() {
+				continue
+			}
+			latest = u.CreatedAt
 		}
 		// Refresh `now` per-user so a long scan loop doesn't render stale durations (BUG-19).
 		now := w.now()
@@ -180,6 +188,14 @@ func (w *Watcher) scan(ctx context.Context) {
 		if stale < threshold {
 			w.mu.Lock()
 			delete(w.notified, u.ID)
+			// Eager-expire resumed entries for fresh users too. Previously
+			// only the stale branch could evict, so a router that boots
+			// (MarkResumed), reports normally, then stays online forever
+			// kept its resumed entry forever. For long-running fleets the
+			// map grew unbounded.
+			if rt, ok := w.resumed[u.ID]; ok && now.Sub(rt) >= w.cfg.ResumeGrace {
+				delete(w.resumed, u.ID)
+			}
 			w.mu.Unlock()
 			continue
 		}

@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -41,7 +42,23 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 			Summary: fmt.Sprintf("%s (за %dмс)", summary, r.DurationMs),
 		}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
-	case "restart_tunnel", "tunnel_enable", "tunnel_disable":
+	case "tunnel_enable", "tunnel_disable":
+		// Agent emits "interface <ndms> -> <up|down>\n<ndmc stdout>" — ndmc
+		// stdout is noisy (NDMS::* internal logs) and the "interface X -> up"
+		// line is engineer-speak. Lift only the ndms name and render a clean
+		// Russian one-liner; drop the rest.
+		ndms := parseInterfaceLine(r.Output)
+		verb := "включён"
+		if action == "tunnel_disable" {
+			verb = "выключен"
+		}
+		summary := verb
+		if ndms != "" {
+			summary = ndms + " → " + verb
+		}
+		card := Card{Badge: "", Label: label, Summary: summary}
+		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
+	case "restart_tunnel":
 		card := Card{Badge: "", Label: label, Summary: strings.TrimSpace(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "check_via_tunnel", "check_direct":
@@ -65,11 +82,17 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 func formatDiagSuccess(label, body string, maxChars int) []string {
 	summary, bullets, fallback := ParseDiagReport(body)
 	if fallback {
-		full := fmt.Sprintf("%s:\n\n```\n%s\n```", label, body)
+		// Sanitize: raw body could itself contain literal triple-backticks
+		// (awg-manager error messages occasionally embed code snippets). If
+		// we wrap such a body in our own fence verbatim, TG MarkdownV2 sees
+		// the inner ``` as a fence-terminator and the rest leaks as plain
+		// text — partial code-snippet formatting + broken safety wrapping.
+		safe := strings.ReplaceAll(body, "```", "'''")
+		full := fmt.Sprintf("%s:\n\n```\n%s\n```", label, safe)
 		if len(full) <= maxChars {
 			return []string{full}
 		}
-		return paginate(label+":", body, maxChars)
+		return paginate(label+":", safe, maxChars)
 	}
 	card := Card{
 		Badge:   "",
@@ -116,6 +139,31 @@ func paginate(header, body string, maxChars int) []string {
 		out[i] = rendered
 	}
 	return out
+}
+
+// parseInterfaceLine extracts the ndms name from the agent's tunnel toggle
+// output. The first line follows the shape "interface <ndms> -> <state>" —
+// anything else (blank, ndmc-only) yields "". Defensive: we never panic on
+// unexpected agent output, we just degrade to a verb-only summary.
+func parseInterfaceLine(output string) string {
+	first := output
+	if i := strings.IndexByte(output, '\n'); i >= 0 {
+		first = output[:i]
+	}
+	first = strings.TrimSpace(first)
+	const prefix = "interface "
+	if !strings.HasPrefix(first, prefix) {
+		if first != "" {
+			slog.Debug("parseInterfaceLine: unexpected agent output shape; degrading to verb-only summary", "first_line", first)
+		}
+		return ""
+	}
+	rest := first[len(prefix):]
+	if i := strings.Index(rest, " -> "); i >= 0 {
+		return strings.TrimSpace(rest[:i])
+	}
+	slog.Debug("parseInterfaceLine: prefix matched but separator missing", "first_line", first)
+	return ""
 }
 
 func commandLabelHuman(action string) string {

@@ -175,6 +175,78 @@ func TestWatcherSuppressesOfflineAfterResume(t *testing.T) {
 	}
 }
 
+// Regression: full lifecycle — never-reported user → events arrive → events
+// stop again → second OFFLINE must fire. Earlier the cooldown/dedup logic
+// was hand-traced for each branch in isolation; this exercises the full
+// state-machine across the IsZero fallback path.
+func TestWatcherLifecycle_NeverReported_ThenReports_ThenSilent(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "5050505050505050505050505050505050505050505050505050505050505050"
+	uid, _ := d.Users().Insert("loop", tok, "1.1.1.1", "awg0")
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{
+		StaleAfterStatic: 5 * time.Minute,
+		RenotifyEvery:    6 * time.Hour,
+		ScanEvery:        time.Hour,
+	})
+	t0 := time.Now().UTC()
+
+	// Phase 1: 30 min past CreatedAt, no events → first OFFLINE fires.
+	driveScan(w, t0.Add(30*time.Minute))
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("phase 1 expected 1 OFFLINE (never reported), got %d", got)
+	}
+
+	// Phase 2: agent finally reports. notified[] cleared, no further alerts.
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", t0.Add(35*time.Minute))
+	driveScan(w, t0.Add(36*time.Minute))
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("phase 2 events arrived, expected no new alerts, got %d", got)
+	}
+
+	// Phase 3: agent goes silent for >threshold; second OFFLINE must fire.
+	driveScan(w, t0.Add(45*time.Minute))
+	if got := len(off.snapshot()); got != 2 {
+		t.Fatalf("phase 3 expected 2nd OFFLINE after silence, got %d", got)
+	}
+}
+
+// Regression: a user added but whose agent never sends a heartbeat must not
+// stay invisible forever. The watcher should treat User.CreatedAt as the
+// "earliest possible heartbeat" so the same stale threshold gives a grace
+// window for fresh deploys, then surface OFFLINE if still nothing arrives.
+func TestWatcherFires_NeverReported_PastGrace(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "3030303030303030303030303030303030303030303030303030303030303030"
+	_, _ = d.Users().Insert("ghost", tok, "1.1.1.1", "awg0")
+	// No events inserted — agent never started.
+	now := time.Now().UTC()
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfterStatic: 5 * time.Minute, ScanEvery: time.Hour})
+	// Pin the clock 30 minutes after Insert — past the 5-min static threshold.
+	driveScan(w, now.Add(30*time.Minute))
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("expected OFFLINE for never-reported user past grace, got %d calls", got)
+	}
+}
+
+func TestWatcherSilent_NeverReported_InsideGrace(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "4040404040404040404040404040404040404040404040404040404040404040"
+	_, _ = d.Users().Insert("fresh", tok, "1.1.1.1", "awg0")
+	now := time.Now().UTC()
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfterStatic: 5 * time.Minute, ScanEvery: time.Hour})
+	// Scan at +2 min — still inside onboarding grace window.
+	driveScan(w, now.Add(2*time.Minute))
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("freshly-added user inside grace must not alert, got %d", got)
+	}
+}
+
 func TestWatcherRefiresAfterCooldown(t *testing.T) {
 	// Covers the 6h re-notify branch deterministically without sleeping for hours.
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))

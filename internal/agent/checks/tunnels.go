@@ -49,25 +49,105 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		}
 	}
 
+	// Best-effort: tally per-iface route counts so HARD alerts can show
+	// the blast radius ("this tunnel carries N DNS rules"). Fall-through
+	// HR-Neo rules (routes=nil, hydraroute backend) are credited to the
+	// default-route tunnel — mirrors what RouteRebind would migrate.
+	// Any list error → empty map → alert silently omits the line.
+	routeCounts := tallyRouteCounts(ctx, t.Client, tunnels.Tunnels)
+
 	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
 	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
 	// On error (above) we emit "tunnels=fail"; on success here we emit
 	// "tunnels=ok" so the FSM can transition out of HARD when awg-manager
 	// recovers — without this, an old "tunnels=fail" incident has no recovery
 	// path because the success branch only emits per-tunnel checks.
+	enabledCount := 0
+	for _, tu := range tunnels.Tunnels {
+		if tu.Enabled {
+			enabledCount++
+		}
+	}
 	out = append(out, OK("tunnels", start, map[string]any{
-		"tunnel_count": len(tunnels.Tunnels),
+		"tunnel_count":         len(tunnels.Tunnels),
+		"tunnel_count_enabled": enabledCount,
 	}))
 	for _, tu := range tunnels.Tunnels {
 		if tu.Type != "" && tu.Type != "awg" && tu.Type != "wg" {
 			continue
 		}
-		out = append(out, evalTunnel(tu, pcByID[tu.ID], start, maxAge))
+		out = append(out, evalTunnel(tu, pcByID[tu.ID], routeCounts[tu.InterfaceName], start, maxAge))
 	}
 	return out
 }
 
-func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, start time.Time, maxAge time.Duration) wire.Check {
+// routeCounts is the per-iface tally embedded in tunnel_* check details.
+// Zero value means "no rules attached" — the formatter omits the line.
+type routeCounts struct {
+	DNS    int // total DNS rules pointing at this iface (explicit + fall-through credit)
+	DNSHR  int // subset of DNS that are HR-Neo (backend=hydraroute)
+	Static int // static-IP rules pointing at this iface
+}
+
+// tallyRouteCounts queries dns-routes + static-routes and returns counts per
+// interface name (e.g. "nwg1"). Fall-through HR-Neo rules (routes=nil,
+// hrPolicyName set) are credited to the default-route tunnel. Either list
+// failing returns an empty map — degraded, not fatal.
+func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel) map[string]routeCounts {
+	dns, err := c.ListDNSRoutes(ctx)
+	if err != nil {
+		return nil
+	}
+	statics, err := c.ListStaticRoutes(ctx)
+	if err != nil {
+		return nil
+	}
+	defaultIface := ""
+	for _, tu := range tunnels {
+		if tu.DefaultRoute && tu.InterfaceName != "" {
+			defaultIface = tu.InterfaceName
+			break
+		}
+	}
+	out := map[string]routeCounts{}
+	bump := func(iface string, dns, hr, stat int) {
+		if iface == "" {
+			return
+		}
+		c := out[iface]
+		c.DNS += dns
+		c.DNSHR += hr
+		c.Static += stat
+		out[iface] = c
+	}
+	for _, r := range dns {
+		isHR := r.Backend == "hydraroute"
+		hr := 0
+		if isHR {
+			hr = 1
+		}
+		if len(r.Routes) > 0 {
+			// Credit primary route only — mirrors route_status.buildRouteSnapshot.
+			// awg-mgr 2.8.1+ introduced automatic failover where a rule can
+			// list a backup route after the primary. The blast-radius signal
+			// we want here is "if THIS iface dies, how many rules are
+			// initially affected?", which is the primary route's count. A
+			// follow-up could track failover separately.
+			bump(r.Routes[0].Interface, 1, hr, 0)
+			continue
+		}
+		// Fall-through HR-Neo rule → follows global policy → default tunnel.
+		if isHR && r.HRPolicyName != "" && defaultIface != "" {
+			bump(defaultIface, 1, 1, 0)
+		}
+	}
+	for _, r := range statics {
+		bump(r.TunnelID, 0, 0, 1)
+	}
+	return out
+}
+
+func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration) wire.Check {
 	name := tunnelCheckPrefix + tu.ID
 	details := map[string]any{
 		"tunnel_id":            tu.ID,
@@ -93,6 +173,11 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, start time.Time, ma
 	}
 	if t := tu.StartedAt.Time(); t != nil {
 		details["started_at"] = t.UTC().Format(time.RFC3339)
+	}
+	if rc.DNS > 0 || rc.Static > 0 {
+		details["routes_dns"] = rc.DNS
+		details["routes_dns_hr"] = rc.DNSHR
+		details["routes_static"] = rc.Static
 	}
 	// pingCheck data: prefer the dedicated /api/pingcheck/status (richer)
 	// over the brief object embedded in /api/tunnels/all.

@@ -206,4 +206,38 @@ func TestBumpLastAlertAtUpdatesHard(t *testing.T) {
 	}
 }
 
+func TestSetLastAlert_UpdatesHardOnly(t *testing.T) {
+	d := newTestDB(t)
+	uid, _ := d.Users().Insert("u3", "h3", "1.1.1.3", "nwg2")
+
+	hardSince := time.Now().Add(-3 * time.Hour)
+	_ = d.State().Save(uid, "tunnel_awg11", IncidentState{
+		UserID: uid, CheckName: "tunnel_awg11", CurrentStatus: "hard",
+		HardSince: &hardSince,
+	})
+
+	now := time.Now()
+	if err := d.State().SetLastAlert(uid, "tunnel_awg11", 42, now); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := d.State().Get(uid, "tunnel_awg11")
+	if st.LastAlertMsgID == nil || *st.LastAlertMsgID != 42 {
+		t.Errorf("LastAlertMsgID: %v want 42", st.LastAlertMsgID)
+	}
+	if st.LastAlertAt == nil || time.Since(*st.LastAlertAt) > time.Second {
+		t.Errorf("LastAlertAt not bumped: %v", st.LastAlertAt)
+	}
+	// Recovered incident → no-op (mirrors BumpLastAlertAt safety).
+	_ = d.State().Save(uid, "tunnel_awg11", IncidentState{
+		UserID: uid, CheckName: "tunnel_awg11", CurrentStatus: "ok",
+	})
+	if err := d.State().SetLastAlert(uid, "tunnel_awg11", 99, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	st2, _ := d.State().Get(uid, "tunnel_awg11")
+	if st2.LastAlertMsgID != nil && *st2.LastAlertMsgID == 99 {
+		t.Errorf("SetLastAlert should be no-op on recovered status, got msg_id=%d", *st2.LastAlertMsgID)
+	}
+}
+
 func ptrTime(t time.Time) *time.Time { return &t }
