@@ -40,6 +40,8 @@ var validCommandActions = map[string]bool{
 	"restart_tunnel":    true,
 	"diag_now":          true,
 	"pingcheck_now":     true,
+	"pingcheck_status":  true,
+	"pingcheck_toggle":  true,
 	"opkg_upgrade":      true,
 	"opkg_feed_disable": true,
 	"force_recheck":     true,
