@@ -45,7 +45,16 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		if result.Status == "ok" && n.DiagCache != nil {
 			token = n.DiagCache.Put(result.Output, 5*time.Minute)
 		}
-		kb := tg.DiagResultKeyboard(result.Status, userID, token)
+		var failing []tg.DiagFailingTest
+		if result.Status == "ok" {
+			tests := alerts.ParseDiagTests(result.Output)
+			for _, t := range tests {
+				if t.Status == "fail" {
+					failing = append(failing, tg.DiagFailingTest{ID: t.ID, Label: t.Label})
+				}
+			}
+		}
+		kb := tg.DiagResultKeyboardWithTests(result.Status, userID, token, failing)
 		diagMarkup = &kb
 	}
 
