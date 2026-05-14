@@ -72,3 +72,16 @@ func SendWelcome(ctx context.Context, tg WelcomeSender, chatID, threadID int64, 
 	_, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, markup)
 	return err
 }
+
+// RepushKeyboard re-attaches the reply-keyboard to an existing per_router
+// topic by sending a short confirmation message that carries the markup.
+// Used by the /keyboard slash command: TG can drop a topic's persistent
+// keyboard if the operator deletes the bot's last message in the topic,
+// and this is the explicit recovery path.
+func RepushKeyboard(ctx context.Context, tg WelcomeSender, chatID, threadID int64, nickname string, markup any) error {
+	text := "🪄 Кнопки восстановлены — " + nickname + ".\n" +
+		"Если они опять пропадут, тапни /keyboard внутри этого топика."
+	t := threadID
+	_, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, markup)
+	return err
+}
