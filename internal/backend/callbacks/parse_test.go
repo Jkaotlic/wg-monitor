@@ -523,3 +523,20 @@ func TestParse_PanelHelpPingCheck(t *testing.T) {
 		t.Errorf("got %+v", a)
 	}
 }
+
+func TestParse_DiagBack(t *testing.T) {
+	a, err := Parse("diag_back:42:_panel_:abcd1234")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "diag_back" || a.DiagRawToken != "abcd1234" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_DiagBack_RequiresToken(t *testing.T) {
+	_, err := Parse("diag_back:42:_panel_:")
+	if err == nil {
+		t.Error("expected err on empty token")
+	}
+}

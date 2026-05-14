@@ -49,7 +49,7 @@ func (a *DiagTestExpandAction) Apply(ctx context.Context, q *tg.CallbackQuery, a
 	}
 	text := renderTestDetail(*det)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "« К сводке", CallbackData: fmt.Sprintf("diag_raw:%d:_panel_:%s", args.UserID, args.DiagRawToken)},
+		{Text: "« К сводке", CallbackData: fmt.Sprintf("diag_back:%d:_panel_:%s", args.UserID, args.DiagRawToken)},
 		{Text: "📄 Полный отчёт", CallbackData: fmt.Sprintf("diag_raw:%d:_panel_:%s", args.UserID, args.DiagRawToken)},
 	}}}
 	return "", a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
@@ -111,3 +111,57 @@ func iconForStatus(s string) string {
 }
 
 var _ Action = (*DiagTestExpandAction)(nil)
+
+// DiagBackAction renders the original parsed diag summary in place,
+// from the same cached raw JSON used by drill-down. Used as the
+// « К сводке button in test-detail screens; complements diag_raw
+// (which sends raw JSON as a new message).
+type DiagBackAction struct {
+	cache *diagCache
+	tg    diagDrillDownTG
+}
+
+// NewDiagBackAction constructs a DiagBackAction backed by the given
+// diagCache and TG edit client.
+func NewDiagBackAction(cache *diagCache, tgClient diagDrillDownTG) *DiagBackAction {
+	return &DiagBackAction{cache: cache, tg: tgClient}
+}
+
+// Apply implements Action. Fetches cached raw JSON and re-renders the
+// parsed summary by EditMessageText (in-place, no new message).
+func (a *DiagBackAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
+	body, ok := a.cache.Get(args.DiagRawToken)
+	if !ok {
+		text := "⏱ Сводка устарела (5 мин TTL). Запусти свежий diag."
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "🔁 Diag", CallbackData: fmt.Sprintf("diag_now:%d:_menu", args.UserID)},
+		}}}
+		return "", a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	}
+	// Re-render the parsed summary via the existing diag-report parser.
+	summary, bullets, rawFallback := alerts.ParseDiagReport(body)
+	var text string
+	if rawFallback {
+		text = "📊 Диагностика\n\n(не удалось распарсить — нажми «📄 Полный отчёт»)"
+	} else {
+		card := alerts.Card{
+			Badge:   "✅",
+			Label:   "Диагностика",
+			Summary: summary,
+			Details: strings.Join(bullets, "\n"),
+		}
+		text = card.Render(alerts.CardOpts{MaxBytes: 3500})
+	}
+	// Build the same keyboard as the original (with failing-test buttons).
+	tests := alerts.ParseDiagTests(body)
+	var failing []tg.DiagFailingTest
+	for _, t := range tests {
+		if t.Status == "fail" {
+			failing = append(failing, tg.DiagFailingTest{ID: t.ID, Label: t.Label})
+		}
+	}
+	kb := tg.DiagResultKeyboardWithTests("ok", args.UserID, args.DiagRawToken, failing)
+	return "", a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+}
+
+var _ Action = (*DiagBackAction)(nil)

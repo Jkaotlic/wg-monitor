@@ -21,7 +21,7 @@ var ndmsNameRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 
 // Args is the parsed shape of a callback_data string.
 type Args struct {
-	Action    string        // "silence" | "ack" | "mute" | "history" | command-channel actions
+	Action    string // "silence" | "ack" | "mute" | "history" | command-channel actions
 	UserID    int64
 	CheckName string
 	TTL       time.Duration // only set for silence
@@ -119,6 +119,8 @@ var validActions = map[string]bool{
 	"maint_fw_install": true, "maint_fw_confirm": true,
 	// diag_raw: fetch cached raw diag JSON body for "📄 Полный отчёт" button.
 	"diag_raw": true,
+	// diag_back: re-render parsed diag summary inline ("« К сводке" button).
+	"diag_back": true,
 	// pingcheck panel: monitor + per-tunnel watchdog toggle.
 	"pingcheck_open": true, "pingcheck_toggle": true,
 	// diag drill-down: tap a failing test in a diag summary.
@@ -249,6 +251,11 @@ func Parse(data string) (Args, error) {
 	case "diag_raw":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)
+		}
+		a.DiagRawToken = parts[3]
+	case "diag_back":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("diag_back requires cache_token: %q", data)
 		}
 		a.DiagRawToken = parts[3]
 	case "pingcheck_toggle":
