@@ -99,3 +99,17 @@ func TestHintFor_DefaultFallbackSanitizesCodeFence(t *testing.T) {
 		t.Errorf("default hint must strip triple-backticks to avoid fence break: %q", hint)
 	}
 }
+
+func TestHintFor_PingCheck(t *testing.T) {
+	cases := []struct{ action, err, wantHas string }{
+		{"pingcheck_status", "HTTP_REFUSED: dial", "S99awg-manager"},
+		{"pingcheck_status", "HTTP_500: oops", "awg-manager.log"},
+		{"pingcheck_toggle", "interface unknown from ndmc", "NDMS"},
+	}
+	for _, c := range cases {
+		_, hint := HintFor(c.action, c.err)
+		if !strings.Contains(hint, c.wantHas) {
+			t.Errorf("%s/%q: hint missing %q; got %q", c.action, c.err, c.wantHas, hint)
+		}
+	}
+}
