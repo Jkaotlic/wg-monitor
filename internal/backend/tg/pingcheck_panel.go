@@ -1,0 +1,81 @@
+package tg
+
+import (
+	"fmt"
+	"strings"
+)
+
+// PingCheckPanelEntry — one row for the PingCheck Panel renderer.
+//
+// PerTunnelEnabled mirrors awg-mgr's per-tunnel watchdog flag (independent
+// of the tunnel's own enabled flag). Status comes from awg-mgr
+// ("alive"/"dead"/empty); LastLatencyMs == 0 renders as "---".
+type PingCheckPanelEntry struct {
+	TunnelID         string // "awg10" — used in callback_data for toggle
+	Name             string // "amst" — display label
+	NDMSName         string // "Wireguard0" — packed into toggle callback_data
+	Status           string // "alive" | "dead" | ""
+	PerTunnelEnabled bool   // false → ⏸ icon, watchdog suspended for this tunnel
+	LastLatencyMs    int    // 0 → "---"
+	SuccessCount     int64
+	FailCount        int
+	FailThreshold    int
+	RestartCount     int
+}
+
+// PingCheckPanelText renders the message body. globalEnabled is the
+// /api/pingcheck/status .data.enabled flag — false → grey banner.
+func PingCheckPanelText(nickname string, globalEnabled bool, entries []PingCheckPanelEntry) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "📡 PingCheck — %s\n", nickname)
+	if len(entries) == 0 {
+		b.WriteString("\nТуннелей не обнаружено — PingCheck не отчитался.")
+		return b.String()
+	}
+	b.WriteString("\n")
+	for _, e := range entries {
+		b.WriteString(formatPingCheckRow(e))
+		b.WriteString("\n")
+	}
+	b.WriteString("\nГлобально: ")
+	if globalEnabled {
+		b.WriteString("✅ enabled")
+	} else {
+		b.WriteString("⏸ disabled")
+	}
+	return b.String()
+}
+
+func formatPingCheckRow(e PingCheckPanelEntry) string {
+	icon := "❓"
+	switch {
+	case !e.PerTunnelEnabled:
+		icon = "⏸"
+	case e.Status == "alive":
+		icon = "🟢"
+	case e.Status == "dead":
+		icon = "🔴"
+	}
+	lat := "---"
+	if e.LastLatencyMs > 0 {
+		lat = fmt.Sprintf("%dms", e.LastLatencyMs)
+	}
+	warn := ""
+	if e.RestartCount > 5 {
+		warn = " ⚠"
+	}
+	name := e.Name
+	if name == "" {
+		name = e.TunnelID
+	}
+	return fmt.Sprintf("%s %s  %s  ✓%s  ✗%d/%d   restart×%d%s",
+		icon, name, lat, formatCount(e.SuccessCount), e.FailCount, e.FailThreshold, e.RestartCount, warn)
+}
+
+// formatCount renders 0..9999 as plain int; >=10000 as "12.5k" (one decimal).
+func formatCount(n int64) string {
+	if n < 10000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
+}
