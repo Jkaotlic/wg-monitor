@@ -56,8 +56,36 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	case "/topic_help":
 		r.adminTopicHelp(ctx, m)
 		return true
+	case "/keyboard":
+		r.handleKeyboardCommand(ctx, m)
+		return true
 	}
 	return false
+}
+
+// handleKeyboardCommand re-attaches the reply-keyboard to the current
+// per_router topic. Available to BOTH the admin (via handleAdminCommand)
+// and to whitelisted operators of the topic's router (via the operator-
+// gate branch in HandleMessage). TG drops the persistent keyboard from
+// a topic if the operator deletes the bot's last message; this is the
+// explicit recovery path. Reply goes into the same topic so the markup
+// re-installs immediately.
+func (r *Router) handleKeyboardCommand(ctx context.Context, m *tg.Message) {
+	if m.MessageThreadID == nil {
+		r.adminReply(ctx, m, "/keyboard нужно писать ВНУТРИ топика конкретного роутера.")
+		return
+	}
+	u, err := r.d.Users().GetByThreadID(*m.MessageThreadID)
+	if err != nil {
+		r.adminReply(ctx, m, "В этом топике не привязан ни один роутер. Сначала /this_is <nickname> (только для админа).")
+		return
+	}
+	if err := alerts.RepushKeyboard(ctx, r.tg, m.Chat.ID, *m.MessageThreadID, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); err != nil {
+		slog.Warn("repush keyboard failed", "user", u.Nickname, "err", err)
+		sum, hint := alerts.HintFor("keyboard_repush", err.Error())
+		card := alerts.Card{Badge: "❌", Label: "Не удалось восстановить кнопки", Summary: sum, Hint: hint}
+		r.adminReply(ctx, m, card.Render(alerts.CardOpts{MaxBytes: 3500}))
+	}
 }
 
 func (r *Router) adminReply(ctx context.Context, m *tg.Message, text string) {
