@@ -39,6 +39,12 @@ func PingCheckStatusJSON(ctx context.Context, c *awgmgr.Client) (string, error) 
 // tunnelID is the awg-mgr id ("awg10"); ndmsName is the Keenetic
 // interface name ("Wireguard0"). Both are needed because the two
 // paths address the tunnel differently.
+//
+// Trust boundary: ndmsName is interpolated into the ndmc command string
+// unsanitised. The backend's callbacks/parse.go enforces the regex
+// ^[A-Za-z0-9_-]{1,32}$ on this value before it reaches the wire (SEC-02);
+// agent-level callers must preserve that validation. Same pattern as
+// runner.go::tunnel_enable.
 func PingCheckToggle(ctx context.Context, c *awgmgr.Client, exec ExecFunc, tunnelID, ndmsName string, enable bool) error {
 	primaryErr := primaryPingCheckToggle(ctx, c, tunnelID, enable)
 	if primaryErr == nil {
