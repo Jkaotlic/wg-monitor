@@ -74,6 +74,36 @@ func TestUpdateDNSRoute_SendsFullBody(t *testing.T) {
 	}
 }
 
+// Regression for a 2026-05-13 prod incident: HR-Neo IDs routinely contain
+// spaces+colons (e.g. "hr:CIDR: iplist: Telegram.org"). Without URL-encoding
+// the request gets rejected with HTTP 400 by the HTTP parser before reaching
+// awg-manager — the rebind result was 6 ok / 6 FAIL where every failure was
+// an ID with a space.
+func TestUpdateDNSRoute_EscapesSpacesAndColonsInID(t *testing.T) {
+	var gotRawQuery, gotDecodedID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRawQuery = r.URL.RawQuery
+		gotDecodedID = r.URL.Query().Get("id")
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := DNSRoute{
+		ID: "hr:CIDR: iplist: Telegram.org", Name: "Telegram",
+		Backend: "hydraroute", HRPolicyName: "HydraRoute",
+		Routes:  []DNSRouteEntry{{Interface: "nwg0", TunnelID: "nwg0"}},
+	}
+	if err := c.UpdateDNSRoute(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotRawQuery, " ") {
+		t.Errorf("raw query must not contain unencoded space: %q", gotRawQuery)
+	}
+	if gotDecodedID != "hr:CIDR: iplist: Telegram.org" {
+		t.Errorf("decoded id mismatch: %q", gotDecodedID)
+	}
+}
+
 func TestListStaticRoutes_HappyPath(t *testing.T) {
 	const payload = `{"success":true,"data":[
 		{"id":"s1","name":"work","tunnelID":"nwg1","subnets":["10.0.0.0/8"],"fallback":"auto","enabled":true}

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -26,12 +27,16 @@ func (c *Client) ListDNSRoutes(ctx context.Context) ([]DNSRoute, error) {
 // UpdateDNSRoute calls POST /api/dns-routes/update?id=<id> with the full
 // rule object as the body. awg-manager treats the call as full-replace —
 // the rule must be sent verbatim with only the desired fields modified.
+//
+// HR-Neo rule IDs routinely contain spaces and colons (e.g. "hr:CIDR: iplist:
+// Telegram.org") — must be percent-encoded in the query, otherwise the HTTP
+// parser rejects the request with HTTP 400 before awg-manager sees it.
 func (c *Client) UpdateDNSRoute(ctx context.Context, rule DNSRoute) error {
 	body, err := json.Marshal(rule)
 	if err != nil {
 		return err
 	}
-	return c.postJSON(ctx, "/api/dns-routes/update?id="+rule.ID, body, nil)
+	return c.postJSON(ctx, "/api/dns-routes/update?id="+url.QueryEscape(rule.ID), body, nil)
 }
 
 // ListStaticRoutes returns /api/static-routes/list .data.

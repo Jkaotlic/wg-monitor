@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -182,7 +181,7 @@ func TestRouteRebind_DNSPartialFail(t *testing.T) {
 	mock := newRebindMock(t)
 	mock.hrInstalled = false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/dns-routes/update" && strings.Contains(r.URL.RawQuery, "id=ndms:Yandex") {
+		if r.URL.Path == "/api/dns-routes/update" && r.URL.Query().Get("id") == "ndms:Yandex" {
 			http.Error(w, "boom", 500)
 			return
 		}
