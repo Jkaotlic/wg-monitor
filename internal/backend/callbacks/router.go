@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
@@ -116,6 +116,11 @@ type Router struct {
 	// inline-button taps can fetch the body without re-running the diagnostic.
 	// Shared with the Notifier via DiagCache(). All in-memory; lost on restart.
 	diagCache *diagCache
+
+	// PingCheck panel plumbing.
+	pingcheckOpenAct   Action
+	pingcheckToggleAct Action
+	pingcheckInflight  *pingcheckInflightStore
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -346,6 +351,14 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "routes_confirm":
 		if r.rebindConfirmAction != nil {
 			action = r.rebindConfirmAction
+		}
+	case "pingcheck_open":
+		if r.pingcheckOpenAct != nil {
+			action = r.pingcheckOpenAct
+		}
+	case "pingcheck_toggle":
+		if r.pingcheckToggleAct != nil {
+			action = r.pingcheckToggleAct
 		}
 	case "maint_open":
 		r.handleMaintOpen(ctx, q, args)
@@ -1369,4 +1382,18 @@ func (r *Router) NewMaintNotifier(tgClient MaintEditTG, up *upstream.Cache) *Mai
 		Audit:    r.auditCache,
 		DB:       r.d,
 	}
+}
+
+// SetPingCheck wires the PingCheck panel actions. Called from cmd/backend/main.go
+// at startup. inflight is shared by Open/Toggle so dup-protection works.
+func (r *Router) SetPingCheck(sink CommandEnqueuer) {
+	r.pingcheckInflight = newPingCheckInflightStore()
+	r.pingcheckOpenAct = NewPingCheckOpenAction(sink, defaultCmdID)
+	r.pingcheckToggleAct = NewPingCheckToggleAction(sink, r.pingcheckInflight, defaultCmdID)
+}
+
+// NewPingCheckNotifier returns a PingCheckPanelNotifier wired against this
+// router's TG client and DB. Pass the returned value into handler.Deps.PingCheckNotifier.
+func (r *Router) NewPingCheckNotifier() *PingCheckPanelNotifier {
+	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d}
 }

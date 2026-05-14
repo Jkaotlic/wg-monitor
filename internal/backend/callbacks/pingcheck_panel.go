@@ -266,6 +266,38 @@ func (a *PingCheckToggleAction) Apply(ctx context.Context, q *tg.CallbackQuery, 
 	return "📡 переключаю…", nil
 }
 
+// openPingCheckPanelMessage publishes an empty "loading…" PingCheck panel
+// into the user's per-router topic and immediately enqueues the first
+// pingcheck_status. The notifier replaces the placeholder when the
+// agent answers.
+func (r *Router) openPingCheckPanelMessage(ctx context.Context, m *tg.Message, u *db.User) {
+	text := fmt.Sprintf("📡 PingCheck — %s\n\nЗагружаю состояние…", u.Nickname)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", u.ID)},
+		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", u.ID)},
+	}}}
+	msgID, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil)
+	if err != nil {
+		return
+	}
+	_ = r.tg.EditMessageText(ctx, m.Chat.ID, msgID, text, "", &kb)
+	cmd := wire.Command{
+		ID:       defaultCmdID(),
+		Action:   "pingcheck_status",
+		Args:     map[string]any{},
+		IssuedAt: time.Now().UTC(),
+	}
+	ref := cmdpkg.MessageRef{
+		ChatID:    m.Chat.ID,
+		MessageID: msgID,
+		ThreadID:  m.MessageThreadID,
+		Action:    "pingcheck_status",
+	}
+	if r.cmdSink != nil {
+		_ = r.cmdSink.EnqueueWithRef(u.ID, cmd, ref)
+	}
+}
+
 // Compile-time interface guards.
 var _ Action = (*PingCheckOpenAction)(nil)
 var _ Action = (*PingCheckToggleAction)(nil)
