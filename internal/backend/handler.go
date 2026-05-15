@@ -148,6 +148,8 @@ type CommandSink interface {
 	Dequeue(ctx context.Context, userID int64, holdTimeout time.Duration) (*wire.Command, bool)
 	RecordResult(userID int64, result wire.CommandResult) error
 	ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.MessageRef, bool)
+	Enqueue(userID int64, cmd wire.Command) error
+	AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool)
 }
 
 // TGNotifier posts command-result text back to the originating TG message.
@@ -267,6 +269,8 @@ func NewMux(d Deps) http.Handler {
 		wizAuth := WizardAuthMiddleware(d.WizardToken, d.Logger)
 		mux.Handle("GET /v1/wizard/agents", reqID(wizAuth(wizardListAgentsHandler(d))))
 		mux.Handle("PUT /v1/wizard/agents/{nickname}", reqID(wizAuth(wizardPutAgentHandler(d))))
+		mux.Handle("POST /v1/wizard/agents/{nickname}/deploy", reqID(wizAuth(wizardDeployHandler(d))))
+		mux.Handle("GET /v1/wizard/cmd/{cmd_id}", reqID(wizAuth(wizardCmdResultHandler(d))))
 	}
 	return mux
 }
@@ -444,6 +448,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 				"check_count", len(rep.Checks), "checks", checkSummary(rep.Checks),
 				"req_id", RequestIDFromContext(r.Context()),
 			)
+		}
+		// Pull-based self_update needs the agent's reported version visible
+		// to the wizard so it can poll for the post-swap flip. The UPDATE is
+		// guarded by a value-changed predicate so the common case (steady
+		// state, same version every minute) skips the writer-mutex hit.
+		if rep.AgentVersion != "" {
+			if err := d.DB.Users().UpdateLastSeenAgentVersion(uid, rep.AgentVersion); err != nil {
+				d.Logger.Warn("update last_deployed_version from heartbeat", "nickname", nick, "err", err)
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 	}
