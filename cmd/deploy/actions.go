@@ -437,6 +437,29 @@ func userOrDefault(u, def string) string {
 	return u
 }
 
+// coldInstallIdentityGate is the Layer-2 cold-install confirm: prompt operator
+// to confirm the physical box matches the nickname they're about to
+// install under. Bypassed when:
+//   - ExpectedMAC already pinned (re-install or update — verifyExpectedMAC
+//     and Layer-1 path-discovery already covered identity)
+//   - WG_YES_TO_ALL=1 (scripted runs)
+// Returns true to proceed with install, false to bail. The `ask` callback
+// is the prompt function — injected for test isolation; production uses Ask.
+func coldInstallIdentityGate(ag *AgentState, hostname, mac, arch string, ask func(prompt, def string) string) bool {
+	if ag.ExpectedMAC != "" {
+		return true
+	}
+	if os.Getenv("WG_YES_TO_ALL") == "1" {
+		return true
+	}
+	msg := fmt.Sprintf(
+		"Это правильный роутер для install под nickname=%q? (hostname=%q mac=%s arch=%s) [y/N]",
+		ag.Nickname, hostname, mac, arch,
+	)
+	ans := strings.ToLower(strings.TrimSpace(ask(msg, "")))
+	return ans == "y" || ans == "yes" || ans == "д" || ans == "да"
+}
+
 func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
 	rel, err := dl.GetLatestRelease()
 	if err != nil {
@@ -583,6 +606,11 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		mac = "?"
 	}
 	PrintInfo(fmt.Sprintf("hostname=%q  mac=%s", hostname, mac))
+
+	if !coldInstallIdentityGate(ag, hostname, mac, "?", Ask) {
+		PrintFail("install отменён оператором")
+		return fmt.Errorf("install cancelled — identity not confirmed")
+	}
 
 	// Capture normalised MAC for future verifyExpectedMAC calls. On first
 	// install this is the moment we declare "this physical NIC = this

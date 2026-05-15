@@ -59,3 +59,51 @@ func TestActionUpdateAgent_DoesNotBailWhenDeployedBefore(t *testing.T) {
 	}()
 	_ = actionUpdateAgent(state, nil, nil, "testkeen")
 }
+
+// TestColdInstallGate_DefaultDeniesOnEmpty covers the Layer-2 confirm-gate:
+// cold install (ExpectedMAC == "") with default-N answer (operator pressed
+// Enter) must bail before any write.
+func TestColdInstallGate_DefaultDeniesOnEmpty(t *testing.T) {
+	ag := &AgentState{Nickname: "smith", ExpectedMAC: ""}
+	allowed := coldInstallIdentityGate(ag, "keenetic", "aabbccddeeff", "arm64",
+		func(string, string) string { return "" })
+	if allowed {
+		t.Fatal("default empty answer must deny; got allow")
+	}
+}
+
+func TestColdInstallGate_AllowsExplicitYes(t *testing.T) {
+	ag := &AgentState{Nickname: "smith", ExpectedMAC: ""}
+	allowed := coldInstallIdentityGate(ag, "keenetic", "aabbccddeeff", "arm64",
+		func(string, string) string { return "y" })
+	if !allowed {
+		t.Fatal("explicit y must allow")
+	}
+}
+
+func TestColdInstallGate_SkipsWhenMACAlreadyPinned(t *testing.T) {
+	ag := &AgentState{Nickname: "smith", ExpectedMAC: "aabbccddeeff"}
+	called := false
+	allowed := coldInstallIdentityGate(ag, "keenetic", "aabbccddeeff", "arm64",
+		func(string, string) string { called = true; return "" })
+	if !allowed {
+		t.Fatal("with ExpectedMAC pinned, gate is bypassed (Layer 1 + verifyExpectedMAC do the job)")
+	}
+	if called {
+		t.Fatal("ask should not be called when gate is bypassed")
+	}
+}
+
+func TestColdInstallGate_BypassedByYesToAll(t *testing.T) {
+	t.Setenv("WG_YES_TO_ALL", "1")
+	ag := &AgentState{Nickname: "smith", ExpectedMAC: ""}
+	called := false
+	allowed := coldInstallIdentityGate(ag, "keenetic", "aabbccddeeff", "arm64",
+		func(string, string) string { called = true; return "" })
+	if !allowed {
+		t.Fatal("WG_YES_TO_ALL=1 must allow")
+	}
+	if called {
+		t.Fatal("ask should not be called under WG_YES_TO_ALL")
+	}
+}
