@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -105,5 +106,59 @@ func TestColdInstallGate_BypassedByYesToAll(t *testing.T) {
 	}
 	if called {
 		t.Fatal("ask should not be called under WG_YES_TO_ALL")
+	}
+}
+
+// These tests exercise the pure-logic helper diagnosisFromReport, not
+// diagnoseUnreachable itself (latter does I/O).
+
+func TestDiagnosisFromReport_NoP2P(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:222", Candidates: []PathCandidate{
+		{Iface: "Ethernet", Kind: PathLAN, Err: errors.New("i/o timeout")},
+	}}
+	msg := diagnosisFromReport(rep, "")
+	if !strings.Contains(msg, "VPN/SSTP") {
+		t.Errorf("want hint about VPN/SSTP, got %q", msg)
+	}
+}
+
+func TestDiagnosisFromReport_P2PUpButTimeouts(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:222", Candidates: []PathCandidate{
+		{Iface: "tun0", Kind: PathP2P, Err: errors.New("i/o timeout")},
+	}}
+	msg := diagnosisFromReport(rep, "")
+	if !strings.Contains(msg, "tun0") || !strings.Contains(msg, "не маршрутизирует") {
+		t.Errorf("want hint blaming the SSTP server, got %q", msg)
+	}
+}
+
+func TestDiagnosisFromReport_RefusedHint(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:222", Candidates: []PathCandidate{
+		{Iface: "Ethernet", Kind: PathLAN, Err: errors.New("dial tcp: connection refused")},
+	}}
+	msg := diagnosisFromReport(rep, "")
+	if !strings.Contains(msg, "порт закрыт") && !strings.Contains(msg, "refused") {
+		t.Errorf("want refused-specific hint, got %q", msg)
+	}
+}
+
+func TestDiagnosisFromReport_FreshHeartbeatBlamesPath(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:222", Candidates: []PathCandidate{
+		{Iface: "Ethernet", Kind: PathLAN, Err: errors.New("i/o timeout")},
+		{Iface: "tun0", Kind: PathP2P, Err: errors.New("i/o timeout")},
+	}}
+	msg := diagnosisFromReport(rep, "fresh ~47s")
+	if !strings.Contains(msg, "fresh") || !strings.Contains(msg, "сетевом пути") {
+		t.Errorf("want fresh-heartbeat hint, got %q", msg)
+	}
+}
+
+func TestDiagnosisFromReport_StaleHeartbeatBlamesRouter(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:222", Candidates: []PathCandidate{
+		{Iface: "tun0", Kind: PathP2P, Err: errors.New("i/o timeout")},
+	}}
+	msg := diagnosisFromReport(rep, "stale 14m")
+	if !strings.Contains(msg, "stale") || !strings.Contains(msg, "выключен") {
+		t.Errorf("want stale-heartbeat hint, got %q", msg)
 	}
 }
