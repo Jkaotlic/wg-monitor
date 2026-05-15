@@ -63,11 +63,78 @@ func runPathDiscoveryStep(host string, port int, preferred string, prober Prober
 	return rep, cleanup, chosenName, nil
 }
 
-// diagnoseUnreachable handles the "Layer 1 found no responding path" case.
-// Stub for Phase B; Phase D (Task 12) replaces the body.
+// diagnoseUnreachable handles "Layer 1 found no responding path". Fetches
+// VPS heartbeat for the agent (if state allows), classifies the candidate
+// failure modes, prints a one-shot diagnostic, returns a generic err so
+// the caller doesn't fall into SSH-retry loop.
 func diagnoseUnreachable(state *State, ag *AgentState, rep *PathReport, secrets *SecretStore) error {
-	PrintFail(fmt.Sprintf("роутер %s:%d недоступен ни через один из проверенных путей", ag.Host, ag.Port))
+	hb := ""
+	if state.Backend.Domain != "" {
+		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
+			if c := NewVPSClient(state.Backend.Domain, tok); c != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				hb = c.HeartbeatStatus(ctx, ag.Nickname)
+				cancel()
+			}
+		}
+	}
+	PrintFail(diagnosisFromReport(rep, hb))
 	return fmt.Errorf("router %s unreachable", ag.Host)
+}
+
+// diagnosisFromReport is the pure-logic core: takes a PathReport with no
+// chosen candidate and an optional heartbeat status, returns a multi-line
+// operator-readable diagnostic. Heartbeat empty → that branch silently
+// dropped. Tested without I/O.
+func diagnosisFromReport(rep *PathReport, hb string) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("роутер %s недоступен ни через один из проверенных путей.\n", rep.Target))
+
+	var hasP2PUp bool
+	var refusedSeen, timeoutSeen bool
+	for _, c := range rep.Candidates {
+		if c.Kind == PathP2P {
+			hasP2PUp = true
+		}
+		if c.Err != nil {
+			s := strings.ToLower(c.Err.Error())
+			switch {
+			case strings.Contains(s, "refused"):
+				refusedSeen = true
+			case strings.Contains(s, "timeout"), strings.Contains(s, "deadline"):
+				timeoutSeen = true
+			}
+		}
+	}
+
+	switch {
+	case !hasP2PUp:
+		sb.WriteString("  • у тебя нет ни одного UP VPN/SSTP интерфейса. Если ожидал, что роутер через тоннель — подними сначала клиент.\n")
+	case timeoutSeen:
+		var p2pName string
+		for _, c := range rep.Candidates {
+			if c.Kind == PathP2P {
+				p2pName = c.Iface
+				break
+			}
+		}
+		sb.WriteString(fmt.Sprintf("  • %s up, но через него target не отвечает. Возможно сервер не маршрутизирует target, или удалённый firewall блокирует :222.\n", p2pName))
+	}
+
+	if refusedSeen {
+		sb.WriteString("  • один из путей: порт закрыт (connection refused). SSH либо не на :222, либо firewall.\n")
+	}
+
+	switch {
+	case strings.HasPrefix(hb, "fresh"):
+		sb.WriteString(fmt.Sprintf("  • VPS heartbeat %s — роутер жив на сети, проблема в сетевом пути ОТ ТЕБЯ. Проверь активный SSTP/VPN.\n", hb))
+	case strings.HasPrefix(hb, "stale"):
+		sb.WriteString(fmt.Sprintf("  • VPS heartbeat %s — роутер давно не отчитывался, возможно выключен или агент упал.\n", hb))
+	case hb == "never":
+		sb.WriteString("  • VPS heartbeat: never — впервые ставим, нужен out-of-band доступ.\n")
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // ensureWizardToken returns a 64-hex token from the SecretStore, generating
