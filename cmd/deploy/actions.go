@@ -57,6 +57,9 @@ func runPathDiscoveryStep(host string, port int, preferred string, prober Prober
 	chosenName := ""
 	if rep.Chosen != nil {
 		chosenName = rep.Chosen.Iface
+		// TODO(rc6): wire preferred fast-path — when preferred matches one of
+		// the responding candidates, skip the full enumeration on subsequent
+		// runs. Currently always does full probe; cache is write-only.
 		_ = preferred
 		PrintOK("использую " + chosenName + " (" + rep.Chosen.LocalIP + ", " + fmt.Sprint(rep.Chosen.Latency.Milliseconds()) + "мс)")
 	}
