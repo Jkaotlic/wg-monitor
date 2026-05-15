@@ -57,22 +57,26 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 				return actionAddRouter(state, secrets, dl)
 			})
 		case "4":
-			actionDoctor(state, secrets) //nolint:errcheck
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionUninstallAgent(state, secrets, askUninstallTarget(state))
+			})
 		case "5":
+			actionDoctor(state, secrets) //nolint:errcheck
+		case "6":
 			runActionAndSave(state, statePath, secrets, func() error {
 				return actionSyncVPS(state, secrets)
 			})
-		case "6":
+		case "7":
 			openInEditor(statePath)
 			if reloaded, err := LoadState(statePath); err == nil {
 				*state = *reloaded
 			}
-		case "7":
+		case "8":
 			ForgetKnownHostInteractive(state) //nolint:errcheck
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–7 или Q.")
+			PrintFail("Не понял. Введи 1–8 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -105,10 +109,11 @@ func printMenuItems(state *State) {
 		fmt.Println("  [2] Обновить компоненты        " + Colorize("(проверка релиза + выбор что обновить)", ColorDim))
 	}
 	fmt.Println("  [3] Установить агента          " + Colorize("(новый или ре-установка существующего)", ColorDim))
-	fmt.Println("  [4] Проверить состояние        " + Colorize("(Doctor: local + VPS + каждый агент)", ColorDim))
-	fmt.Println("  [5] Синхронизация с VPS        " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
-	fmt.Println("  [6] Открыть wizard.toml в редакторе")
-	fmt.Println("  [7] Забыть known_hosts alias   " + Colorize("(если физически заменил роутер)", ColorDim))
+	fmt.Println("  [4] Удалить агента             " + Colorize("(снести агент с роутера)", ColorDim))
+	fmt.Println("  [5] Проверить состояние        " + Colorize("(Doctor: local + VPS + каждый агент)", ColorDim))
+	fmt.Println("  [6] Синхронизация с VPS        " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
+	fmt.Println("  [7] Открыть wizard.toml в редакторе")
+	fmt.Println("  [8] Забыть known_hosts alias   " + Colorize("(если физически заменил роутер)", ColorDim))
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }
@@ -137,4 +142,30 @@ func openInEditor(path string) {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Run() //nolint:errcheck
+}
+
+// askUninstallTarget builds the UninstallTarget the operator wants to
+// clean. Two paths:
+//   1. They pick a nickname from state.Agents — we use its known SSH coords.
+//   2. They pick "другой" → manual host/port/user — typical "I accidentally
+//      installed on a router not in wizard.toml" scenario.
+func askUninstallTarget(state *State) UninstallTarget {
+	if len(state.Agents) == 0 {
+		PrintInfo("в wizard.toml нет агентов — введи параметры роутера руками")
+		return UninstallTarget{}
+	}
+	fmt.Println("Выбери роутер для удаления агента:")
+	for i, a := range state.Agents {
+		fmt.Printf("  [%d] %s (%s:%d)\n", i+1, a.Nickname, a.Host, a.Port)
+	}
+	fmt.Printf("  [%d] другой (ввести host/port/user руками)\n", len(state.Agents)+1)
+	idx := parseIntOr(Ask("номер", "1"), 1)
+	if idx < 1 || idx > len(state.Agents)+1 {
+		idx = 1
+	}
+	if idx == len(state.Agents)+1 {
+		return UninstallTarget{}
+	}
+	a := state.Agents[idx-1]
+	return UninstallTarget{Nickname: a.Nickname, Host: a.Host, Port: a.Port, User: a.User}
 }
