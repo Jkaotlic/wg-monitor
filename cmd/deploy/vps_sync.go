@@ -16,15 +16,16 @@ import (
 
 // RemoteAgent mirrors the GET /v1/wizard/agents JSON shape.
 type RemoteAgent struct {
-	Nickname            string `json:"nickname"`
-	Kind                string `json:"kind"`
-	ThreadID            int64  `json:"thread_id"`
-	SSHHost             string `json:"ssh_host"`
-	SSHPort             int64  `json:"ssh_port"`
-	SSHUser             string `json:"ssh_user"`
-	Arch                string `json:"arch"`
-	LastDeployedVersion string `json:"last_deployed_version"`
-	HasTopic            bool   `json:"has_topic"`
+	Nickname            string     `json:"nickname"`
+	Kind                string     `json:"kind"`
+	ThreadID            int64      `json:"thread_id"`
+	SSHHost             string     `json:"ssh_host"`
+	SSHPort             int64      `json:"ssh_port"`
+	SSHUser             string     `json:"ssh_user"`
+	Arch                string     `json:"arch"`
+	LastDeployedVersion string     `json:"last_deployed_version"`
+	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
+	HasTopic            bool       `json:"has_topic"`
 }
 
 type wizardAgentListWire struct {
@@ -285,4 +286,43 @@ func AgentStateToRemote(a AgentState) RemoteAgent {
 		Arch:                arch,
 		LastDeployedVersion: a.LastDeployedVersion,
 	}
+}
+
+// HeartbeatStatus fetches /v1/wizard/agents, finds the named agent and
+// returns a human-readable freshness tag. Used by diagnoseUnreachable to
+// help operator tell "router offline" from "wizard can't see router (but
+// VPS can)". Empty string on any error — caller silently skips this hint.
+func (c *VPSClient) HeartbeatStatus(ctx context.Context, nickname string) string {
+	agents, err := c.ListAgents(ctx)
+	if err != nil {
+		return ""
+	}
+	for _, a := range agents {
+		if a.Nickname == nickname {
+			return formatHeartbeatStatus(a.LastSeenAt, time.Now())
+		}
+	}
+	return ""
+}
+
+// formatHeartbeatStatus renders a *time.Time relative to now as one of:
+//   "fresh ~30s" / "fresh ~5m" / "stale 14m" / "stale 2h" / "never".
+// "fresh" cutoff is 5 minutes — anything older is "stale". Nil → "never".
+// Pure function, no clock dependency — caller passes "now" for testability.
+func formatHeartbeatStatus(t *time.Time, now time.Time) string {
+	if t == nil {
+		return "never"
+	}
+	age := now.Sub(*t)
+	const freshCutoff = 5 * time.Minute
+	if age < freshCutoff {
+		if age < time.Minute {
+			return fmt.Sprintf("fresh ~%ds", int(age.Seconds()))
+		}
+		return fmt.Sprintf("fresh ~%dm", int(age.Minutes()))
+	}
+	if age < time.Hour {
+		return fmt.Sprintf("stale %dm", int(age.Minutes()))
+	}
+	return fmt.Sprintf("stale %dh", int(age.Hours()))
 }
