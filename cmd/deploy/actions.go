@@ -687,6 +687,57 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		ag.ExpectedMAC = normalised
 	}
 
+	// Layer-4 inline-suggest: if chosen path already has our nickname installed
+	// AND there were other responding candidates from Layer 1, probe them too
+	// to catch double-deploy ("operator installed on local box by mistake, then
+	// installed on remote box too"). Cheap path: skip when chosen path is the
+	// only responder, OR when existingNick is empty (clean box).
+	if existingNick != "" && rep2.Multiple {
+		nicks := map[string]string{rep2.Chosen.Iface: existingNick}
+		for _, c := range rep2.Candidates {
+			if c.Iface == rep2.Chosen.Iface || !c.Responded() {
+				continue
+			}
+			tok, addErr := NewRealProber().AddRoute(ag.Host, c.Index)
+			if addErr != nil {
+				continue
+			}
+			otherSSH, sshErr := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
+			if sshErr == nil {
+				nicks[c.Iface] = stepReadExistingAgentNickname(otherSSH)
+				otherSSH.Close()
+			}
+			_ = NewRealProber().DelRoute(tok)
+		}
+		if detectDoubleDeploy(rep2, nicks, ag.Nickname) {
+			PrintWarn(fmt.Sprintf("⚠ агент %q стоит на ДВУХ роутерах одновременно — это ошибочный двойной деплой", ag.Nickname))
+			for iface, nick := range nicks {
+				if nick == ag.Nickname {
+					PrintWarn("  • " + iface)
+				}
+			}
+			ans := strings.ToLower(strings.TrimSpace(Ask(
+				"снять с локального (не-выбранного) пути и продолжить install на выбранном? [y/N]", "")))
+			if ans == "y" || ans == "yes" || ans == "д" || ans == "да" {
+				for _, c := range rep2.Candidates {
+					if c.Iface == rep2.Chosen.Iface {
+						continue
+					}
+					if nicks[c.Iface] == ag.Nickname {
+						PrintInfo("снимаю агента через " + c.Iface)
+						tok, _ := NewRealProber().AddRoute(ag.Host, c.Index)
+						if err := actionUninstallAgent(state, secrets, UninstallTarget{
+							Nickname: ag.Nickname, Host: ag.Host, Port: ag.Port, User: ag.User,
+						}); err != nil {
+							PrintWarn("uninstall на " + c.Iface + ": " + err.Error())
+						}
+						_ = NewRealProber().DelRoute(tok)
+					}
+				}
+			}
+		}
+	}
+
 	switch {
 	case existingNick == "":
 		PrintInfo("существующий агент: (нет, чистый роутер)")
@@ -1337,6 +1388,27 @@ func pushToVPSBestEffort(state *State, secrets *SecretStore, a AgentState) {
 		return
 	}
 	PrintOK("VPS sync: " + a.Nickname)
+}
+
+// detectDoubleDeploy returns true when ≥2 reachable candidates have the
+// same `target` nickname installed on them — the canonical signature of
+// "operator deployed to wrong box, then deployed to right box too".
+// `existingNicks` is keyed by candidate iface name; values come from
+// stepReadExistingAgentNickname run over SSH on each candidate.
+func detectDoubleDeploy(rep *PathReport, existingNicks map[string]string, target string) bool {
+	if rep == nil || target == "" {
+		return false
+	}
+	count := 0
+	for _, c := range rep.Candidates {
+		if !c.Responded() {
+			continue
+		}
+		if existingNicks[c.Iface] == target {
+			count++
+		}
+	}
+	return count >= 2
 }
 
 // cleanupAgentPaths returns the ordered list of shell commands the
