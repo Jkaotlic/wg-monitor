@@ -14,6 +14,13 @@ type OfflineSender interface {
 	SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error
 }
 
+// SleepNotifier is called once when a mobile user crosses MobileSleepAfter
+// without heartbeats and MobileLifecycle is enabled. Unlike OfflineSender,
+// it must NOT renotify — the watcher self-dedupes via sleepNotified.
+type SleepNotifier interface {
+	SendSleeping(ctx context.Context, userID int64, nickname string, lastSeen time.Time) error
+}
+
 // Config controls per-user heartbeat staleness detection.
 //
 // StaleAfterStatic / StaleAfterMobile pick the threshold based on user.Kind.
@@ -37,7 +44,9 @@ type OfflineSender interface {
 type Config struct {
 	StaleAfter       time.Duration // deprecated, see StaleAfter{Static,Mobile}
 	StaleAfterStatic time.Duration
-	StaleAfterMobile time.Duration
+	StaleAfterMobile time.Duration // applied only when MobileLifecycle == false
+	MobileSleepAfter time.Duration // NEW: threshold for mobile sleep-info when MobileLifecycle == true
+	MobileLifecycle  bool          // NEW: true = wake/sleep flow, false = legacy HARD-OFFLINE
 	ResumeGrace      time.Duration
 	ScanEvery        time.Duration
 	RenotifyEvery    time.Duration
@@ -46,6 +55,7 @@ type Config struct {
 const (
 	defaultStaleAfterStatic = 5 * time.Minute
 	defaultStaleAfterMobile = 60 * time.Minute
+	defaultMobileSleepAfter = 5 * time.Minute // NEW
 	defaultResumeGrace      = 90 * time.Second
 	defaultScanEvery        = 30 * time.Second
 	defaultRenotifyEvery    = 6 * time.Hour
@@ -53,6 +63,14 @@ const (
 
 func (c Config) staleFor(u db.User) time.Duration {
 	if u.IsMobile() {
+		if c.MobileLifecycle {
+			switch {
+			case c.MobileSleepAfter > 0:
+				return c.MobileSleepAfter
+			default:
+				return defaultMobileSleepAfter
+			}
+		}
 		switch {
 		case c.StaleAfterMobile > 0:
 			return c.StaleAfterMobile
@@ -73,13 +91,15 @@ func (c Config) staleFor(u db.User) time.Duration {
 }
 
 type Watcher struct {
-	d        *db.DB
-	off      OfflineSender
-	cfg      Config
-	notified map[int64]time.Time
-	resumed  map[int64]time.Time
-	mu       sync.Mutex
-	wg       sync.WaitGroup
+	d             *db.DB
+	off           OfflineSender
+	sleep         SleepNotifier
+	cfg           Config
+	notified      map[int64]time.Time
+	sleepNotified map[int64]time.Time
+	resumed       map[int64]time.Time
+	mu            sync.Mutex
+	wg            sync.WaitGroup
 	// now is set once at construction (or by SetNow before Run starts) and
 	// read concurrently from scan/MarkResumed. Tests inject a deterministic
 	// clock; production keeps time.Now. The pointer write is single-shot;
@@ -99,11 +119,24 @@ func NewWatcher(d *db.DB, off OfflineSender, cfg Config) *Watcher {
 	}
 	return &Watcher{
 		d: d, off: off, cfg: cfg,
-		notified: map[int64]time.Time{},
-		resumed:  map[int64]time.Time{},
-		now:      time.Now,
+		notified:      map[int64]time.Time{},
+		sleepNotified: map[int64]time.Time{},
+		resumed:       map[int64]time.Time{},
+		now:           time.Now,
 	}
 }
+
+// SetSleepNotifier wires the mobile-lifecycle one-shot sleep notifier. Must
+// be called BEFORE Run. Nil disables the sleep-info path even if MobileLifecycle
+// is true; the watcher then silently drops mobile staleness in that mode
+// (acceptable: static users still get full coverage).
+func (w *Watcher) SetSleepNotifier(s SleepNotifier) {
+	w.sleep = s
+}
+
+// ScanForTest exposes scan() to integration tests in sibling packages
+// (cmd/backend/...). Not used by production code.
+func (w *Watcher) ScanForTest(ctx context.Context) { w.scan(ctx) }
 
 // SetNow overrides the wall-clock seam for deterministic tests. Production
 // callers must not use this; it must be called BEFORE Run starts so the
@@ -188,6 +221,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		if stale < threshold {
 			w.mu.Lock()
 			delete(w.notified, u.ID)
+			delete(w.sleepNotified, u.ID)
 			// Eager-expire resumed entries for fresh users too. Previously
 			// only the stale branch could evict, so a router that boots
 			// (MarkResumed), reports normally, then stays online forever
@@ -209,6 +243,31 @@ func (w *Watcher) scan(ctx context.Context) {
 			// Mark expired — drop it so the map doesn't grow unbounded.
 			delete(w.resumed, u.ID)
 		}
+		w.mu.Unlock()
+
+		// Mobile lifecycle: one-shot sleep info, no HARD, no renotify.
+		if u.IsMobile() && w.cfg.MobileLifecycle {
+			w.mu.Lock()
+			_, already := w.sleepNotified[u.ID]
+			if !already {
+				w.sleepNotified[u.ID] = now
+			}
+			w.mu.Unlock()
+			if already || w.sleep == nil {
+				continue
+			}
+			if err := w.sleep.SendSleeping(ctx, u.ID, u.Nickname, latest); err != nil {
+				slog.Warn("heartbeat: send sleeping failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+				// Reset so a future scan retries the one-shot.
+				w.mu.Lock()
+				delete(w.sleepNotified, u.ID)
+				w.mu.Unlock()
+			}
+			continue
+		}
+
+		// Legacy HARD-OFFLINE path (static + mobile with MobileLifecycle=false).
+		w.mu.Lock()
 		last, sent := w.notified[u.ID]
 		notify := !sent || now.Sub(last) > w.cfg.RenotifyEvery
 		if notify {
