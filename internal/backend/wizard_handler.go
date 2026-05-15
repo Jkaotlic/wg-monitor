@@ -53,15 +53,16 @@ func WizardAuthMiddleware(expected string, logger *slog.Logger) func(http.Handle
 // emitted as empty/zero values (omitempty would hide them — we want explicit
 // nulls visible so the wizard knows "not yet pushed").
 type wizardAgent struct {
-	Nickname            string `json:"nickname"`
-	Kind                string `json:"kind"`
-	ThreadID            int64  `json:"thread_id"`
-	SSHHost             string `json:"ssh_host"`
-	SSHPort             int64  `json:"ssh_port"`
-	SSHUser             string `json:"ssh_user"`
-	Arch                string `json:"arch"`
-	LastDeployedVersion string `json:"last_deployed_version"`
-	HasTopic            bool   `json:"has_topic"`
+	Nickname            string     `json:"nickname"`
+	Kind                string     `json:"kind"`
+	ThreadID            int64      `json:"thread_id"`
+	SSHHost             string     `json:"ssh_host"`
+	SSHPort             int64      `json:"ssh_port"`
+	SSHUser             string     `json:"ssh_user"`
+	Arch                string     `json:"arch"`
+	LastDeployedVersion string     `json:"last_deployed_version"`
+	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
+	HasTopic            bool       `json:"has_topic"`
 }
 
 type wizardAgentList struct {
@@ -105,6 +106,10 @@ func wizardListAgentsHandler(d Deps) http.HandlerFunc {
 			}
 			if u.LastDeployedVersion != nil {
 				a.LastDeployedVersion = *u.LastDeployedVersion
+			}
+			if u.LastSeenAt != nil {
+				ts := *u.LastSeenAt
+				a.LastSeenAt = &ts
 			}
 			out.Agents = append(out.Agents, a)
 		}
