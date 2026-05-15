@@ -2,7 +2,9 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestMergeAgents_EmptyLocal_AllAdded(t *testing.T) {
@@ -49,5 +51,28 @@ func TestMergeAgents_LocalOnlyKept(t *testing.T) {
 	merged, _, _ := MergeAgents(local, remote)
 	if len(merged) != 1 || merged[0].Nickname != "ghost" {
 		t.Fatalf("local-only dropped: %+v", merged)
+	}
+}
+
+func TestHeartbeatStatus_Fresh(t *testing.T) {
+	ts := time.Now().Add(-30 * time.Second)
+	s := formatHeartbeatStatus(&ts, time.Now())
+	if !strings.Contains(s, "30") || !strings.Contains(s, "fresh") {
+		t.Errorf("want 'fresh ~30s', got %q", s)
+	}
+}
+
+func TestHeartbeatStatus_Stale(t *testing.T) {
+	ts := time.Now().Add(-14 * time.Minute)
+	s := formatHeartbeatStatus(&ts, time.Now())
+	if !strings.Contains(s, "stale") || !strings.Contains(s, "14") {
+		t.Errorf("want 'stale 14m', got %q", s)
+	}
+}
+
+func TestHeartbeatStatus_Never(t *testing.T) {
+	s := formatHeartbeatStatus(nil, time.Now())
+	if s != "never" {
+		t.Errorf("want 'never', got %q", s)
 	}
 }
