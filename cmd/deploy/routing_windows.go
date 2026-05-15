@@ -8,36 +8,37 @@ import (
 	"strings"
 )
 
-// addHostRouteThroughInterface installs a /32 host route for targetIP
-// pinned to the given Windows interface index. Uses the legacy `route ADD`
-// CLI (works without ICACLS-tier admin rights on most Windows 11 installs
-// when the operator is in the Network Configuration Operators group; falls
-// back with a clear error otherwise — wizard surfaces and asks the
-// operator to relaunch elevated). Metric 1 = highest priority, beats the
-// /24 entries from both LAN and SSTP.
+// addTempHostRoute installs a /32 host route for targetIP pinned to the
+// Windows interface at ifIndex. Uses the legacy `route ADD` CLI (works
+// without ICACLS-tier admin rights on most Windows 11 installs when the
+// operator is in Network Configuration Operators group; otherwise falls
+// back with an access-denied error — wizard surfaces and continues with
+// default-route probe). Metric 1 beats /24 entries from both LAN and SSTP.
 //
-// Returns a rollback function that deletes the same route; the caller defers
-// it so the routing table is left clean whether deploy succeeded or not.
-// Best-effort rollback: prints a warning + manual command if delete fails,
-// rather than returning an error (we don't want to mask the deploy result).
-func addHostRouteThroughInterface(targetIP string, ifIndex int) (func(), error) {
+// Returns RouteToken which the caller passes to delTempHostRoute to undo.
+// We return the token rather than a closure so a single defer can iterate
+// over multiple tokens collected during multi-iface probing.
+func addTempHostRoute(targetIP string, ifIndex int) (RouteToken, error) {
 	addCmd := exec.Command("route", "ADD", targetIP, "MASK", "255.255.255.255", "0.0.0.0", "IF", fmt.Sprint(ifIndex), "METRIC", "1")
 	out, err := addCmd.CombinedOutput()
 	if err != nil {
-		// Windows `route ADD` prints "The requested operation requires
-		// elevation." on a non-admin shell. Pass it through so the
-		// operator sees the actual reason.
-		return nil, fmt.Errorf("route ADD %s/32 IF %d: %v: %s",
+		return RouteToken{}, fmt.Errorf("route ADD %s/32 IF %d: %v: %s",
 			targetIP, ifIndex, err, strings.TrimSpace(string(out)))
 	}
-	rollback := func() {
-		delCmd := exec.Command("route", "DELETE", targetIP)
-		if dout, derr := delCmd.CombinedOutput(); derr != nil {
-			PrintWarn(fmt.Sprintf("не смог снять /32 маршрут на %s: %v: %s — удали руками: route DELETE %s",
-				targetIP, derr, strings.TrimSpace(string(dout)), targetIP))
-			return
-		}
-		PrintInfo(fmt.Sprintf("временный /32-маршрут к %s снят", targetIP))
+	return RouteToken{TargetIP: targetIP, IfIndex: ifIndex}, nil
+}
+
+// delTempHostRoute removes the route that addTempHostRoute installed.
+// `route DELETE` doesn't take an IF param — IP alone identifies the route
+// added at METRIC 1 above. Errors print a warning + manual hint and
+// return nil — we don't want a cleanup failure to mask the deploy result.
+func delTempHostRoute(t RouteToken) error {
+	delCmd := exec.Command("route", "DELETE", t.TargetIP)
+	if out, err := delCmd.CombinedOutput(); err != nil {
+		PrintWarn(fmt.Sprintf("не смог снять /32 маршрут на %s: %v: %s — удали руками: route DELETE %s",
+			t.TargetIP, err, strings.TrimSpace(string(out)), t.TargetIP))
+		return nil
 	}
-	return rollback, nil
+	PrintInfo(fmt.Sprintf("временный /32-маршрут к %s снят", t.TargetIP))
+	return nil
 }
