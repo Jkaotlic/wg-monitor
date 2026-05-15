@@ -108,6 +108,48 @@ func main() {
 		runCLIAction("update-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag) })
 	case "add-router":
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
+	case "uninstall-agent":
+		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
+		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
+		// not in wizard.toml — typical "accidentally installed on local box")
+		target := UninstallTarget{Port: 222, User: "root"}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--agent":
+				if i+1 < len(args) {
+					target.Nickname = args[i+1]
+					i++
+				}
+			case "--host":
+				if i+1 < len(args) {
+					target.Host = args[i+1]
+					i++
+				}
+			case "--port":
+				if i+1 < len(args) {
+					var p int
+					fmt.Sscanf(args[i+1], "%d", &p)
+					if p > 0 {
+						target.Port = p
+					}
+					i++
+				}
+			case "--user":
+				if i+1 < len(args) {
+					target.User = args[i+1]
+					i++
+				}
+			}
+		}
+		if target.Nickname == "" && target.Host == "" {
+			fmt.Fprintln(os.Stderr, "uninstall-agent: укажи --agent <nickname> или --host <ip> [--port N] [--user U]")
+			os.Exit(2)
+		}
+		if target.Nickname != "" && state.FindAgent(target.Nickname) == nil {
+			fmt.Fprintf(os.Stderr, "uninstall-agent: agent %q не найден в wizard.toml\n", target.Nickname)
+			os.Exit(2)
+		}
+		runCLIAction("uninstall-agent", func() error { return actionUninstallAgent(state, secrets, target) })
 	case "doctor":
 		if err := actionDoctor(state, secrets); err != nil {
 			os.Exit(1)
