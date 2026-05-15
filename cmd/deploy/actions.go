@@ -1338,3 +1338,157 @@ func pushToVPSBestEffort(state *State, secrets *SecretStore, a AgentState) {
 	}
 	PrintOK("VPS sync: " + a.Nickname)
 }
+
+// cleanupAgentPaths returns the ordered list of shell commands the
+// uninstall flow runs to remove every artefact of a wg-monitor agent
+// install from a Keenetic router. Pure (no side effects), tested
+// directly. Order matters — stop the daemon BEFORE removing its binary,
+// or busybox init may re-spawn it mid-rm.
+func cleanupAgentPaths() []string {
+	return []string{
+		"/opt/etc/init.d/S99wg-monitor stop 2>/dev/null; true",
+		"killall -9 wg-monitor 2>/dev/null; true",
+		"sleep 1",
+		"rm -f /opt/bin/wg-monitor /opt/bin/wg-monitor.bak /opt/bin/wg-monitor.new",
+		"rm -rf /opt/etc/wg-monitor",
+		"rm -f /opt/etc/init.d/S99wg-monitor",
+		"rm -rf /opt/var/wg-monitor",
+	}
+}
+
+// UninstallTarget describes which router to clean. EITHER the named agent
+// is resolved from state.Agents, OR explicit Host/Port/User are provided
+// (operator uninstalling from a router that's not in wizard.toml — typical
+// "I accidentally installed on local box" scenario).
+type UninstallTarget struct {
+	Nickname string // optional
+	Host     string
+	Port     int
+	User     string
+}
+
+// actionUninstallAgent removes a wg-monitor agent from a router after
+// double confirmation. Does NOT touch the VPS users-table — the token
+// stays valid so re-install on the correct box proceeds normally.
+//
+// Optionally also clears ExpectedMAC + PreferredIface in wizard.toml so
+// the next install-agent under the same nickname can pin a fresh box.
+func actionUninstallAgent(state *State, secrets *SecretStore, target UninstallTarget) error {
+	host, port, user := target.Host, target.Port, target.User
+	var ag *AgentState
+	if target.Nickname != "" {
+		ag = state.FindAgent(target.Nickname)
+		if ag != nil {
+			if host == "" {
+				host = ag.Host
+			}
+			if port == 0 {
+				port = ag.Port
+			}
+			if user == "" {
+				user = ag.User
+			}
+		}
+	}
+	if host == "" {
+		host = orDefault(Ask("Хост роутера", "192.168.0.1"), "192.168.0.1")
+	}
+	if port == 0 {
+		port = parseIntOr(Ask("SSH port", "222"), 222)
+	}
+	if user == "" {
+		user = orDefault(Ask("SSH user", "root"), "root")
+	}
+
+	rep, cleanup, _, err := runPathDiscoveryStep(host, port, "", NewRealProber())
+	defer cleanup()
+	if err != nil {
+		PrintFail("path discovery: " + err.Error())
+		return err
+	}
+	if rep.Chosen == nil {
+		PrintFail("роутер недоступен — нечего сносить")
+		return fmt.Errorf("router %s unreachable", host)
+	}
+
+	envName := ""
+	if ag != nil {
+		envName = "WG_KEENETIC_PASS_" + strings.ToUpper(ag.Nickname)
+	}
+	pass := ""
+	if envName != "" {
+		pass = secrets.GetNonInteractive(envName)
+	}
+	if pass == "" {
+		pass = AskSecret("пароль root для " + host)
+	}
+	if pass == "" {
+		return fmt.Errorf("missing password")
+	}
+
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+	alias := host
+	if ag != nil {
+		alias = ag.Nickname
+	}
+	s, err := ConnectSSH(host, port, user, pass, kh, alias)
+	if err != nil {
+		PrintFail("SSH: " + err.Error())
+		return err
+	}
+	defer s.Close()
+
+	hostname := strings.TrimSpace(stepReadOrEmpty(s, "cat /proc/sys/kernel/hostname 2>/dev/null || uname -n"))
+	mac := extractMAC(stepDetectPrimaryMAC(s))
+	existingNick := stepReadExistingAgentNickname(s)
+	if hostname == "" {
+		hostname = "?"
+	}
+	if mac == "" {
+		mac = "?"
+	}
+	PrintInfo(fmt.Sprintf("на этом роутере: hostname=%q mac=%s agent_nickname=%q", hostname, mac, existingNick))
+	if existingNick == "" {
+		PrintWarn("на роутере нет /opt/etc/wg-monitor/config.yaml — возможно агента уже нет, но пройду по cleanup-списку")
+	}
+
+	ans := strings.ToLower(strings.TrimSpace(Ask(
+		fmt.Sprintf("Снести агента с этого роутера (%s, %s)? [y/N]", hostname, mac), "")))
+	if ans != "y" && ans != "yes" && ans != "д" && ans != "да" {
+		PrintInfo("отмена")
+		return nil
+	}
+
+	steps := cleanupAgentPaths()
+	for i, cmd := range steps {
+		PrintStep(i+1, len(steps), cmd)
+		if _, _, _, err := s.Run(cmd); err != nil {
+			PrintWarn(fmt.Sprintf("step %d failed (продолжаю): %v", i+1, err))
+		}
+	}
+
+	if out, _, _, _ := s.Run("pidof wg-monitor"); strings.TrimSpace(out) != "" {
+		PrintWarn("pidof wg-monitor всё ещё что-то возвращает (PID " + strings.TrimSpace(out) + ") — проверь вручную")
+	} else {
+		PrintOK("процесс wg-monitor не запущен")
+	}
+	if _, _, rc, _ := s.Run("test -f /opt/bin/wg-monitor"); rc == 0 {
+		PrintWarn("/opt/bin/wg-monitor всё ещё на месте — что-то пошло не так")
+	} else {
+		PrintOK("/opt/bin/wg-monitor удалён")
+	}
+
+	if ag != nil && (ag.ExpectedMAC != "" || ag.PreferredIface != "") {
+		ans := strings.ToLower(strings.TrimSpace(Ask(
+			"Сбросить expected_mac/preferred_iface для "+ag.Nickname+" в wizard.toml? [y/N]", "")))
+		if ans == "y" || ans == "yes" || ans == "д" || ans == "да" {
+			ag.ExpectedMAC = ""
+			ag.PreferredIface = ""
+			PrintOK("wizard.toml: expected_mac и preferred_iface сброшены для " + ag.Nickname)
+		}
+	}
+	return nil
+}
