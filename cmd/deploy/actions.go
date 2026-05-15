@@ -16,6 +16,60 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
+// runPathDiscoveryStep is the operator-facing wrapper around
+// stepFindReachablePath. Prints the candidate table, handles the
+// multi-responder prompt, returns the cleanup func + chosen iface name
+// (saved to wizard.toml as PreferredIface on success). Returns nil err +
+// "" iface to signal "no path found" — caller delegates to
+// diagnoseUnreachable for the cascade.
+func runPathDiscoveryStep(host string, port int, preferred string, prober Prober) (*PathReport, func(), string, error) {
+	target := fmt.Sprintf("%s:%d", host, port)
+	PrintInfo("ищу " + target + " через все доступные интерфейсы (5с)...")
+	rep, cleanup, err := stepFindReachablePath(prober, target, 5*time.Second)
+	if err != nil {
+		return nil, cleanup, "", err
+	}
+	fmt.Print(describePath(rep))
+	if rep.Chosen == nil {
+		return rep, cleanup, "", nil
+	}
+	if rep.Multiple && os.Getenv("WG_YES_TO_ALL") != "1" {
+		fmt.Println("Несколько путей отвечают. Кого выбираешь?")
+		responders := make([]PathCandidate, 0, len(rep.Candidates))
+		for _, c := range rep.Candidates {
+			if c.Responded() {
+				responders = append(responders, c)
+			}
+		}
+		for i, c := range responders {
+			marker := "  "
+			if rep.Chosen != nil && c.Iface == rep.Chosen.Iface {
+				marker = "→ "
+			}
+			fmt.Printf("%s[%d] %s (%s, %dмс) [%s]\n", marker, i+1, c.Iface, c.LocalIP, c.Latency.Milliseconds(), c.Kind.String())
+		}
+		idx := parseIntOr(Ask("номер пути [1]", "1"), 1)
+		if idx < 1 || idx > len(responders) {
+			idx = 1
+		}
+		rep.Chosen = &responders[idx-1]
+	}
+	chosenName := ""
+	if rep.Chosen != nil {
+		chosenName = rep.Chosen.Iface
+		_ = preferred
+		PrintOK("использую " + chosenName + " (" + rep.Chosen.LocalIP + ", " + fmt.Sprint(rep.Chosen.Latency.Milliseconds()) + "мс)")
+	}
+	return rep, cleanup, chosenName, nil
+}
+
+// diagnoseUnreachable handles the "Layer 1 found no responding path" case.
+// Stub for Phase B; Phase D (Task 12) replaces the body.
+func diagnoseUnreachable(state *State, ag *AgentState, rep *PathReport, secrets *SecretStore) error {
+	PrintFail(fmt.Sprintf("роутер %s:%d недоступен ни через один из проверенных путей", ag.Host, ag.Port))
+	return fmt.Errorf("router %s unreachable", ag.Host)
+}
+
 // ensureWizardToken returns a 64-hex token from the SecretStore, generating
 // + persisting one if absent. Cached under key WIZARD_TOKEN.
 func ensureWizardToken(secrets *SecretStore) (string, error) {
@@ -263,12 +317,18 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		return err
 	}
 
-	// Pre-flight: detect operator-side routing collision (own LAN + SSTP both
-	// in target's /24 — classic 192.168.31.x scenario) and pin a /32 host
-	// route via the SSTP iface for the duration of this deploy. Defer rolls
-	// it back whether deploy succeeded or not, so the operator's routing
-	// table is left as we found it.
-	defer setupRouteFix(ag.Host)()
+	rep, cleanup, iface, perr := runPathDiscoveryStep(ag.Host, portOrDefault(ag.Port, 222), ag.PreferredIface, NewRealProber())
+	defer cleanup()
+	if perr != nil {
+		PrintFail("path discovery: " + perr.Error())
+		return perr
+	}
+	if rep.Chosen == nil {
+		return diagnoseUnreachable(state, ag, rep, secrets)
+	}
+	if iface != "" && iface != ag.PreferredIface {
+		ag.PreferredIface = iface
+	}
 
 	PrintStep(1, 4, fmt.Sprintf("SSH к роутеру %s (%s:%d)", ag.Nickname, ag.Host, portOrDefault(ag.Port, 222)))
 	s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh, ag.Nickname)
@@ -457,11 +517,18 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		return err
 	}
 
-	// Pre-flight: same routing-collision auto-fix as actionUpdateAgent. For
-	// a re-install (existingNick == ag.Nickname later in step 2) this also
-	// gets the operator a clean route; for a true cold install (new router)
-	// this is what makes /opt/bin upload actually traverse SSTP.
-	defer setupRouteFix(ag.Host)()
+	rep2, cleanup2, iface2, perr2 := runPathDiscoveryStep(ag.Host, ag.Port, ag.PreferredIface, NewRealProber())
+	defer cleanup2()
+	if perr2 != nil {
+		PrintFail("path discovery: " + perr2.Error())
+		return perr2
+	}
+	if rep2.Chosen == nil {
+		return diagnoseUnreachable(state, ag, rep2, secrets)
+	}
+	if iface2 != "" && iface2 != ag.PreferredIface {
+		ag.PreferredIface = iface2
+	}
 
 	PrintStep(1, 8, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
 	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
