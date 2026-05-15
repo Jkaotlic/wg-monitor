@@ -276,3 +276,161 @@ func TestWatcherRefiresAfterCooldown(t *testing.T) {
 		t.Fatalf("scan past cooldown: expected 2 calls, got %d", got)
 	}
 }
+
+type fakeSleep struct {
+	mu    sync.Mutex
+	calls []sleepRec
+}
+
+type sleepRec struct {
+	userID   int64
+	nick     string
+	lastSeen time.Time
+}
+
+func (f *fakeSleep) SendSleeping(_ context.Context, uid int64, nick string, ls time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, sleepRec{uid, nick, ls})
+	return nil
+}
+
+func (f *fakeSleep) snapshot() []sleepRec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]sleepRec, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+func TestWatcherMobileLifecycle_SleepInfoAfter5Min(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00aa00"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-6*time.Minute))
+
+	off := &fakeOffline{}
+	sleep := &fakeSleep{}
+	w := NewWatcher(d, off, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w.SetSleepNotifier(sleep)
+
+	driveScan(w, now)
+
+	if got := len(sleep.snapshot()); got != 1 {
+		t.Fatalf("sleep notifier: want 1 call, got %d", got)
+	}
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("offline notifier: want 0 calls, got %d", got)
+	}
+}
+
+func TestWatcherMobileLifecycle_NoRenotifyOnRepeatScan(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00bb00"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-6*time.Minute))
+
+	sleep := &fakeSleep{}
+	w := NewWatcher(d, &fakeOffline{}, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w.SetSleepNotifier(sleep)
+
+	driveScan(w, now)
+	driveScan(w, now.Add(30*time.Second))
+	driveScan(w, now.Add(2*time.Minute))
+
+	if got := len(sleep.snapshot()); got != 1 {
+		t.Fatalf("repeat scans must not refire sleep notification; got %d", got)
+	}
+}
+
+func TestWatcherMobileLifecycle_ResumeClearsSleepFlag(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00cc00"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-6*time.Minute))
+
+	sleep := &fakeSleep{}
+	w := NewWatcher(d, &fakeOffline{}, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w.SetSleepNotifier(sleep)
+
+	driveScan(w, now) // fires sleep #1
+	// agent comes back: fresh heartbeat
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(time.Minute))
+	driveScan(w, now.Add(time.Minute+1*time.Second)) // fresh, clears sleepNotified
+	// goes silent again
+	driveScan(w, now.Add(7*time.Minute)) // should fire sleep #2
+
+	if got := len(sleep.snapshot()); got != 2 {
+		t.Fatalf("expected sleep to refire after a fresh report round; got %d", got)
+	}
+}
+
+func TestWatcherMobileLifecycle_FreshUserNoSleepInfo(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00dd00"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	now := time.Now().UTC()
+	// Fresh user inserted 2min ago, no events: latest will fall back to CreatedAt.
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-2*time.Minute))
+
+	sleep := &fakeSleep{}
+	w := NewWatcher(d, &fakeOffline{}, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w.SetSleepNotifier(sleep)
+
+	driveScan(w, now)
+
+	if got := len(sleep.snapshot()); got != 0 {
+		t.Fatalf("fresh mobile user must not fire sleep info; got %d", got)
+	}
+}
+
+func TestWatcherStaticUnaffectedByMobileLifecycle(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00"
+	uid, _ := d.Users().Insert("homerouter", tok, "1.1.1.1", "awg0")
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-10*time.Minute))
+
+	off := &fakeOffline{}
+	sleep := &fakeSleep{}
+	w := NewWatcher(d, off, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		StaleAfterStatic: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w.SetSleepNotifier(sleep)
+
+	driveScan(w, now)
+
+	if got := len(off.snapshot()); got != 1 {
+		t.Fatalf("static must hit SendOffline once; got %d", got)
+	}
+	if got := len(sleep.snapshot()); got != 0 {
+		t.Fatalf("static must NOT hit SendSleeping; got %d", got)
+	}
+}
