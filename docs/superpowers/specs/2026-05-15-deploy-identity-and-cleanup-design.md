@@ -123,6 +123,9 @@ func stepFindReachablePath(target string, port int) (*PathReport, func(), error)
         > Кто из них правильный? [1=SSTP-Client (~140мс) / 2=Ethernet (~5мс)]
       На выбор P2P — установить /32. На выбор LAN — без /32 (default route и
       так туда идёт).
+      При `WG_YES_TO_ALL=1` промпт пропускается, auto-pick = первый P2P из
+      списка (зеркалит rc3 поведение для скриптовых прогонов). Если P2P нет,
+      auto-pick — default route ответивший.
 
    c. Никто не ответил:
       → передаём управление в Layer 3 cascade.
@@ -134,8 +137,8 @@ func stepFindReachablePath(target string, port int) (*PathReport, func(), error)
 ### Платформенная реализация
 
 **Windows** (`routing_windows.go`):
-- `addTempHostRoute(ip, ifIdx)`: `route ADD <ip> MASK 255.255.255.255 0.0.0.0 IF <ifIdx> METRIC 1`
-- `delTempHostRoute(ip)`: `route DELETE <ip>`
+- `addTempHostRoute(ip, ifIdx) (token, error)`: `route ADD <ip> MASK 255.255.255.255 0.0.0.0 IF <ifIdx> METRIC 1`. Возвращает opaque `token` (struct `{ip, ifIdx}`) который надо передать в delete.
+- `delTempHostRoute(token)`: `route DELETE <ip>` (используя ip из token'а). Тем самым cleanup знает что именно удалять, даже если probe пробовал несколько iface'ов с одним target.
 - Требует прав администратора. Если `addTempHostRoute` падает с access denied — печатаем «запусти wizard от Администратора, без этого не могу гарантировать через какой путь пойдёт SSH» и пробуем default-route без force.
 
 **Linux** (`routing_unix.go`, build tag `linux`):
