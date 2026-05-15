@@ -108,6 +108,7 @@ func TestWatcherMobileUsesLongerGrace(t *testing.T) {
 	w := NewWatcher(d, off, Config{
 		StaleAfterStatic: 5 * time.Minute,
 		StaleAfterMobile: 60 * time.Minute,
+		MobileLifecycle:  false, // explicitly legacy: this test asserts the StaleAfterMobile path
 		ScanEvery:        time.Hour,
 	})
 
@@ -131,6 +132,7 @@ func TestWatcherMobileFiresAfterMobileThreshold(t *testing.T) {
 	w := NewWatcher(d, off, Config{
 		StaleAfterStatic: 5 * time.Minute,
 		StaleAfterMobile: 60 * time.Minute,
+		MobileLifecycle:  false, // explicitly legacy: this test asserts the StaleAfterMobile path
 		ScanEvery:        time.Hour,
 	})
 
