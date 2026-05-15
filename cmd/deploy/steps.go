@@ -460,6 +460,57 @@ func stepDetectPrimaryMAC(s *SSH) string {
 	return stepReadOrEmpty(s, cmd)
 }
 
+// extractMAC pulls the MAC half out of the "iface=mac" form returned by
+// stepDetectPrimaryMAC, normalises to lowercase with no separators so two
+// captures of the same physical NIC compare equal regardless of how the
+// raw read formatted them (colons vs dashes vs raw hex). Empty input → "".
+func extractMAC(out string) string {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return ""
+	}
+	if idx := strings.Index(out, "="); idx >= 0 {
+		out = out[idx+1:]
+	}
+	out = strings.TrimSpace(out)
+	out = strings.ReplaceAll(out, ":", "")
+	out = strings.ReplaceAll(out, "-", "")
+	return strings.ToLower(out)
+}
+
+// verifyExpectedMAC reads the router's primary MAC over the live SSH
+// session and compares it (after normalisation) to the value pinned in
+// wizard.toml at install time. Returns nil when the values match or when
+// no MAC is pinned (back-compat for agents added before this feature).
+// Returns an error with an actionable hint on mismatch — caller must
+// abort BEFORE any write op.
+//
+// Empty router-side MAC (busybox without /sys/class/net/*/address) is
+// treated as "can't verify" → nil, like no-pin. We don't want a dropbear
+// quirk on one model to brick deploys; the known_hosts alias TOFU plus
+// stepReadExistingAgentNickname still catch the most common wrong-router
+// scenarios.
+func verifyExpectedMAC(s *SSH, expected string) error {
+	if expected == "" {
+		return nil
+	}
+	raw := stepDetectPrimaryMAC(s)
+	actual := extractMAC(raw)
+	if actual == "" {
+		PrintWarn("не смог прочитать MAC роутера (busybox без /sys/class/net?) — пропускаю проверку")
+		return nil
+	}
+	want := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(expected, ":", ""), "-", ""))
+	if actual != want {
+		return fmt.Errorf(
+			"MAC роутера %s, ожидаю %s — это другое физическое устройство. "+
+				"Возможные причины: (a) активен не тот SSTP; (b) клиент заменил Keenetic — обнови expected_mac в wizard.toml вручную",
+			actual, want)
+	}
+	PrintOK("MAC совпадает с pinned (" + actual + ")")
+	return nil
+}
+
 // stepReadExistingAgentNickname returns the `agent.nickname` value found in
 // /opt/etc/wg-monitor/config.yaml on the router, or "" if the file doesn't
 // exist or has no nickname line. Used as a pre-flight guard against

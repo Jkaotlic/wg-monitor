@@ -43,6 +43,12 @@ type AgentState struct {
 	Kind                string `toml:"kind,omitempty"` // "static" (default) or "mobile" — пробрасывается в DB и решает StaleAfterMobileSec в backend
 	LastDeploy          string `toml:"last_deploy"`
 	LastDeployedVersion string `toml:"last_deployed_version"`
+	// ExpectedMAC pins the physical identity of the router so a fresh
+	// install-agent against a wrong host (operator forgot to switch SSTP,
+	// or another router took 192.168.0.1 on the same LAN) bails BEFORE
+	// touching /opt. Captured automatically on first successful install,
+	// verified before every subsequent SSH-write op. Lowercase, no colons.
+	ExpectedMAC string `toml:"expected_mac,omitempty"`
 }
 
 // LoadState reads wizard.toml from path. Missing file → returns default state, no error.
