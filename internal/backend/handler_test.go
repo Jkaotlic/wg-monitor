@@ -212,6 +212,13 @@ func (f *fakeCmdSink) ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.Messa
 	return r, true
 }
 
+// Enqueue / AwaitResult are not exercised by the handler tests in this file;
+// they exist to satisfy the CommandSink interface so test wiring compiles.
+func (f *fakeCmdSink) Enqueue(userID int64, cmd wire.Command) error { return nil }
+func (f *fakeCmdSink) AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool) {
+	return nil, false
+}
+
 type relayCapture struct {
 	mu      sync.Mutex
 	chunks  []string

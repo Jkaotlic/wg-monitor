@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 // actionUpdateComponents replaces the old "[2] Обновить бэкенд" and
@@ -253,12 +256,135 @@ func confirmTargetContext(t updateTarget, currentIP string) bool {
 	return resp == "y" || resp == "yes" || resp == "д" || resp == "да"
 }
 
-// runOneUpdate dispatches the right per-component install action.
+// runOneUpdate dispatches the right per-component install action. Agents
+// with a known-good prior deploy go through the pull-based self_update
+// path via VPS (no SSH required), eliminating the 192.168.31.1 LAN-IP
+// collision that plagues the SSH route. Cold installs (no prior version
+// recorded) and any pull-flow failure fall back to the SSH path —
+// actionUpdateAgent is also the recovery tool when self_update bricks
+// an agent.
 func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTarget) error {
-	if t.IsAgent {
-		return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
+	if !t.IsAgent {
+		return actionUpdateBackend(state, secrets, dl)
 	}
-	return actionUpdateBackend(state, secrets, dl)
+	if os.Getenv("WG_NO_PULL") != "1" && canPullDeploy(state, secrets, t) {
+		PrintInfo(fmt.Sprintf("pull-flow через VPS (без SSH) для %s → %s", t.AgentNickname, t.LatestVersion))
+		if err := runPullDeploy(state, secrets, t); err == nil {
+			return nil
+		} else {
+			PrintWarn("pull-flow failed: " + err.Error())
+			if !askYesNo("Откатиться на SSH-путь?", true) {
+				return err
+			}
+		}
+	}
+	return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
+}
+
+// canPullDeploy reports whether the wizard has everything it needs to run
+// the VPS-mediated self_update flow for this target: a backend domain, a
+// wizard token in the secret store, and a recorded LastDeployedVersion
+// (proves the agent has been deployed at least once and the long-poll
+// channel is alive). A fresh agent with no version recorded must go
+// through the SSH cold-install path.
+func canPullDeploy(state *State, secrets *SecretStore, t updateTarget) bool {
+	if state.Backend.Domain == "" {
+		return false
+	}
+	if t.InstalledVersion == "" {
+		return false
+	}
+	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
+	return tok != ""
+}
+
+// runPullDeploy drives the pull-based update for a single agent. It enqueues
+// a self_update command on the VPS, waits for the agent's CommandResult
+// (verify+swap-schedule ack), then polls /v1/wizard/agents up to 2 minutes
+// for the heartbeat-side version flip that confirms the new binary is
+// actually running. Returns an error on any failure of those three legs.
+func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
+	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
+	c := NewVPSClient(state.Backend.Domain, tok)
+	if c == nil {
+		return fmt.Errorf("VPSClient unavailable")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	cmdID, err := c.Deploy(ctx, t.AgentNickname, t.LatestVersion)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("enqueue deploy: %w", err)
+	}
+	PrintOK(fmt.Sprintf("команда отправлена (cmd_id=%s) — жду ack от агента", cmdID[:12]))
+
+	// Phase 1: agent CommandResult. Verify+schedule typically completes in
+	// 5-30s (download ~12MB on a Keenetic over the operator's link). Allow
+	// up to 90s via two 45-second long-polls.
+	deadline := time.Now().Add(90 * time.Second)
+	var res *wire.CommandResult
+	for time.Now().Before(deadline) {
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), 50*time.Second)
+		r, err := c.AwaitCommandResult(pollCtx, t.AgentNickname, cmdID, 45)
+		pollCancel()
+		if err != nil {
+			return fmt.Errorf("await result: %w", err)
+		}
+		if r != nil {
+			res = r
+			break
+		}
+	}
+	if res == nil {
+		return fmt.Errorf("агент не подтвердил команду за 90с (агент офлайн? long-poll залип?)")
+	}
+	if res.Status != "ok" {
+		return fmt.Errorf("агент вернул %s: %s", res.Status, res.Output)
+	}
+	PrintOK("агент подтвердил " + strings.TrimSpace(res.Output))
+
+	// Phase 2: heartbeat version-flip. Swap script needs ~5s; first
+	// heartbeat after restart is config-driven (default 60s). Give 2
+	// minutes total — enough for slow MIPS reboots without being so long
+	// that operator-time gets wasted on bricked agents.
+	PrintInfo("жду подтверждения новой версии через heartbeat (до 2 минут)")
+	flipDeadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(flipDeadline) {
+		time.Sleep(5 * time.Second)
+		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		remotes, err := c.ListAgents(listCtx)
+		listCancel()
+		if err != nil {
+			PrintWarn("VPS list failed: " + err.Error())
+			continue
+		}
+		for _, r := range remotes {
+			if r.Nickname == t.AgentNickname && r.LastDeployedVersion == t.LatestVersion {
+				PrintOK(fmt.Sprintf("✅ %s → %s подтверждён heartbeat'ом", t.AgentNickname, t.LatestVersion))
+				if a := state.FindAgent(t.AgentNickname); a != nil {
+					a.LastDeploy = time.Now().UTC().Format(time.RFC3339)
+					a.LastDeployedVersion = t.LatestVersion
+				}
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("новая версия не подтверждена heartbeat'ом за 2 минуты — проверь TG-топик / SSH")
+}
+
+// askYesNo prints `prompt [Y/n]: ` (capitalised default) and returns true
+// for empty/y/yes, false for n/no. Wizard-style fallback prompt used after
+// recoverable failures.
+func askYesNo(prompt string, defaultYes bool) bool {
+	hint := "[Y/n]"
+	if !defaultYes {
+		hint = "[y/N]"
+	}
+	resp := strings.ToLower(strings.TrimSpace(Ask(prompt+" "+hint, "")))
+	if resp == "" {
+		return defaultYes
+	}
+	return resp == "y" || resp == "yes" || resp == "д" || resp == "да"
 }
 
 // currentPublicIP returns the operator's outbound IPv4 as seen by a public

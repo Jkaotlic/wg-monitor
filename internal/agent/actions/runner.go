@@ -356,6 +356,16 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "self_update":
+		version, _ := cmd.Args["version"].(string)
+		if version == "" {
+			return "err", "self_update: version is required", payload
+		}
+		out, err := SelfUpdate(ctx, version)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	default:
 		return "err", "unknown action: " + cmd.Action, payload
 	}

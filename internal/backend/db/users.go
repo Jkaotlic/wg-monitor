@@ -320,6 +320,25 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	return nil
 }
 
+// UpdateLastSeenAgentVersion advances users.last_deployed_version to the
+// version reported by the running agent in its latest heartbeat. The WHERE
+// clause skips the write when the value is already current — important
+// because /v1/report fires every 60s per agent and SQLite is single-writer.
+func (u *UsersRepo) UpdateLastSeenAgentVersion(id int64, version string) error {
+	if version == "" {
+		return nil
+	}
+	_, err := u.d.db.Exec(
+		`UPDATE users SET last_deployed_version = ?
+		 WHERE id = ? AND COALESCE(last_deployed_version, '') != ?`,
+		version, id, version,
+	)
+	if err != nil {
+		return fmt.Errorf("users.UpdateLastSeenAgentVersion: %w", err)
+	}
+	return nil
+}
+
 // HasAnyOperatorOrOwnerBinding reports whether the given Telegram
 // user id is bound to any router as owner (users.telegram_user_id)
 // or listed in any router_operators row. Used by /help to pick

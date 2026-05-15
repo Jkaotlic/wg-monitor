@@ -56,6 +56,7 @@ var validCommandActions = map[string]bool{
 	"firmware_status":   true,
 	"firmware_install":  true,
 	"version_audit":     true,
+	"self_update":       true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

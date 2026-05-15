@@ -5,10 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 // RemoteAgent mirrors the GET /v1/wizard/agents JSON shape.
@@ -165,6 +168,104 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 		}
 	}
 	return
+}
+
+// Deploy enqueues a self_update command for the named agent and returns the
+// backend-assigned command ID. The ID is used by AwaitCommandResult to fetch
+// the agent's response once it completes. Network/HTTP errors propagate; a
+// non-202 response is wrapped with the status code so the caller can show it
+// to the operator. Default timeout matches the rest of VPSClient (~10s);
+// callers needing more provide a longer-lived ctx.
+func (c *VPSClient) Deploy(ctx context.Context, nickname, targetVersion string) (string, error) {
+	if nickname == "" {
+		return "", fmt.Errorf("nickname required")
+	}
+	if targetVersion == "" {
+		return "", fmt.Errorf("target_version required")
+	}
+	body, err := json.Marshal(struct {
+		TargetVersion string `json:"target_version"`
+	}{targetVersion})
+	if err != nil {
+		return "", err
+	}
+	u := c.BaseURL + "/v1/wizard/agents/" + url.PathEscape(nickname) + "/deploy"
+	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return "", fmt.Errorf("POST /v1/wizard/agents/%s/deploy: HTTP %d: %s",
+			nickname, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if out.CmdID == "" {
+		return "", fmt.Errorf("backend returned empty cmd_id")
+	}
+	return out.CmdID, nil
+}
+
+// AwaitCommandResult long-polls /v1/wizard/cmd/{id} until the agent posts
+// a CommandResult, the per-call wait_sec elapses, or ctx is cancelled. The
+// backend caps wait_sec at 60; callers needing longer waits invoke us
+// repeatedly inside a deadline-bounded loop. Returns (nil, nil) on the
+// 404 "result_not_ready" path so callers can distinguish "not done yet"
+// from a real failure.
+func (c *VPSClient) AwaitCommandResult(ctx context.Context, nickname, cmdID string, waitSec int) (*wire.CommandResult, error) {
+	if cmdID == "" {
+		return nil, fmt.Errorf("cmd_id required")
+	}
+	if waitSec <= 0 {
+		waitSec = 30
+	}
+	if waitSec > 60 {
+		waitSec = 60
+	}
+	u := c.BaseURL + "/v1/wizard/cmd/" + url.PathEscape(cmdID) +
+		"?nickname=" + url.QueryEscape(nickname) +
+		"&wait_sec=" + fmt.Sprint(waitSec)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+
+	// Use a per-call client so the wait_sec long-poll isn't cut off by the
+	// VPSClient.HTTP default 10s timeout.
+	cli := &http.Client{Timeout: time.Duration(waitSec+5) * time.Second}
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		// "result_not_ready" — distinguishable from real 404 by the body
+		// shape, but we don't need to inspect it; the caller polls again.
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("GET /v1/wizard/cmd/%s: HTTP %d: %s",
+			cmdID, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out wire.CommandResult
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 // AgentStateToRemote converts a wizard-local AgentState to the RemoteAgent
