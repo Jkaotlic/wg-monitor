@@ -37,7 +37,9 @@ type OfflineSender interface {
 type Config struct {
 	StaleAfter       time.Duration // deprecated, see StaleAfter{Static,Mobile}
 	StaleAfterStatic time.Duration
-	StaleAfterMobile time.Duration
+	StaleAfterMobile time.Duration // applied only when MobileLifecycle == false
+	MobileSleepAfter time.Duration // NEW: threshold for mobile sleep-info when MobileLifecycle == true
+	MobileLifecycle  bool          // NEW: true = wake/sleep flow, false = legacy HARD-OFFLINE
 	ResumeGrace      time.Duration
 	ScanEvery        time.Duration
 	RenotifyEvery    time.Duration
@@ -46,6 +48,7 @@ type Config struct {
 const (
 	defaultStaleAfterStatic = 5 * time.Minute
 	defaultStaleAfterMobile = 60 * time.Minute
+	defaultMobileSleepAfter = 5 * time.Minute // NEW
 	defaultResumeGrace      = 90 * time.Second
 	defaultScanEvery        = 30 * time.Second
 	defaultRenotifyEvery    = 6 * time.Hour
@@ -53,6 +56,14 @@ const (
 
 func (c Config) staleFor(u db.User) time.Duration {
 	if u.IsMobile() {
+		if c.MobileLifecycle {
+			switch {
+			case c.MobileSleepAfter > 0:
+				return c.MobileSleepAfter
+			default:
+				return defaultMobileSleepAfter
+			}
+		}
 		switch {
 		case c.StaleAfterMobile > 0:
 			return c.StaleAfterMobile
