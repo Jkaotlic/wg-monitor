@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -71,7 +72,10 @@ type fakeProber struct {
 	dials     map[string]fakeDialResult   // key → result
 	addCalls  []int
 	delCalls  []RouteToken
-	mu        sync.Mutex
+	// gidIfIdx maps goroutine ID to the most recent ifIdx that goroutine added.
+	// Dial reads this to pick the correct dial result for that goroutine's route.
+	gidIfIdx sync.Map // map[uint64]int
+	mu       sync.Mutex
 }
 
 type fakeDialResult struct {
@@ -80,15 +84,35 @@ type fakeDialResult struct {
 	latency time.Duration
 }
 
+// goid returns a stable opaque ID for the current goroutine using runtime.Stack.
+// Used only in test fakes to track goroutine-local state. Do NOT use in production.
+func goid() uint64 {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	s := string(buf[:n])
+	// Stack format: "goroutine N [status]:\n..."
+	const prefix = "goroutine "
+	if !strings.HasPrefix(s, prefix) {
+		return 0
+	}
+	rest := s[len(prefix):]
+	var id uint64
+	for i := 0; i < len(rest) && rest[i] >= '0' && rest[i] <= '9'; i++ {
+		id = id*10 + uint64(rest[i]-'0')
+	}
+	return id
+}
+
 func (f *fakeProber) Interfaces() ([]net.Interface, error) { return f.ifaces, nil }
 
 func (f *fakeProber) AddRoute(ip string, ifIdx int) (RouteToken, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.addCalls = append(f.addCalls, ifIdx)
+	f.mu.Unlock()
 	if err, ok := f.addRoutes[ifIdx]; ok && err != nil {
 		return RouteToken{}, err
 	}
+	f.gidIfIdx.Store(goid(), ifIdx)
 	return RouteToken{TargetIP: ip, IfIndex: ifIdx}, nil
 }
 
@@ -100,13 +124,11 @@ func (f *fakeProber) DelRoute(t RouteToken) error {
 }
 
 func (f *fakeProber) Dial(target string, timeout time.Duration) (string, error) {
-	f.mu.Lock()
 	key := "default"
-	if len(f.addCalls) > 0 {
-		key = fmt.Sprintf("ifIdx=%d", f.addCalls[len(f.addCalls)-1])
+	if v, ok := f.gidIfIdx.Load(goid()); ok {
+		key = fmt.Sprintf("ifIdx=%d", v.(int))
 	}
 	res := f.dials[key]
-	f.mu.Unlock()
 	if res.latency > 0 {
 		time.Sleep(res.latency)
 	}
