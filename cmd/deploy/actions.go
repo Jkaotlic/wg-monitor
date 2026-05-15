@@ -263,6 +263,13 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		return err
 	}
 
+	// Pre-flight: detect operator-side routing collision (own LAN + SSTP both
+	// in target's /24 — classic 192.168.31.x scenario) and pin a /32 host
+	// route via the SSTP iface for the duration of this deploy. Defer rolls
+	// it back whether deploy succeeded or not, so the operator's routing
+	// table is left as we found it.
+	defer setupRouteFix(ag.Host)()
+
 	PrintStep(1, 4, fmt.Sprintf("SSH к роутеру %s (%s:%d)", ag.Nickname, ag.Host, portOrDefault(ag.Port, 222)))
 	s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh, ag.Nickname)
 	if err != nil {
@@ -302,6 +309,16 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 				"  Возможно, /opt был вайпнут или агент ставился без wizard'а. Запусти [3] Установить агента.",
 			ag.Nickname, ag.LastDeployedVersion))
 		return fmt.Errorf("S99wg-monitor missing on %s — use [3] install-agent", ag.Nickname)
+	}
+
+	// MAC-pin guard: captured at first install (see actionInstallAgent step 2).
+	// On mismatch we bail BEFORE any write — catches "operator switched SSTP
+	// to the wrong tunnel" where the LAN-IP collides but the physical NIC
+	// behind it is different. Bypassed (with warning) only when the pin is
+	// unreadable — busybox without /sys/class/net.
+	if err := verifyExpectedMAC(s, ag.ExpectedMAC); err != nil {
+		PrintFail(err.Error())
+		return err
 	}
 
 	// Нормализация SSH-полей после успешного подключения. До этой точки оператор
@@ -440,6 +457,12 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		return err
 	}
 
+	// Pre-flight: same routing-collision auto-fix as actionUpdateAgent. For
+	// a re-install (existingNick == ag.Nickname later in step 2) this also
+	// gets the operator a clean route; for a true cold install (new router)
+	// this is what makes /opt/bin upload actually traverse SSTP.
+	defer setupRouteFix(ag.Host)()
+
 	PrintStep(1, 8, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
 	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
 	if err != nil {
@@ -474,6 +497,16 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	mac := stepDetectPrimaryMAC(s)
 	existingNick := stepReadExistingAgentNickname(s)
 
+	// MAC-pin guard for re-install: if state already has an expected_mac
+	// for this nickname (someone ran install once before), refuse to
+	// overwrite when the connected box's MAC differs — same physical
+	// identity protection as actionUpdateAgent. Bypass on first install
+	// (ExpectedMAC == "") and on unreadable MAC (busybox quirk).
+	if err := verifyExpectedMAC(s, ag.ExpectedMAC); err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+
 	// Всегда печатаем — оператор видит к чему реально подключились,
 	// даже если все поля пустые (тогда видна аномалия).
 	if hostname == "" {
@@ -483,6 +516,14 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		mac = "?"
 	}
 	PrintInfo(fmt.Sprintf("hostname=%q  mac=%s", hostname, mac))
+
+	// Capture normalised MAC for future verifyExpectedMAC calls. On first
+	// install this is the moment we declare "this physical NIC = this
+	// nickname"; subsequent SSH-write ops cross-check against it. Empty
+	// readback (mac == "?") leaves the pin unset and re-pins on next run.
+	if normalised := extractMAC(mac); normalised != "" {
+		ag.ExpectedMAC = normalised
+	}
 
 	switch {
 	case existingNick == "":
