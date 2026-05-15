@@ -517,7 +517,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		return err
 	}
 
-	rep2, cleanup2, iface2, perr2 := runPathDiscoveryStep(ag.Host, ag.Port, ag.PreferredIface, NewRealProber())
+	rep2, cleanup2, iface2, perr2 := runPathDiscoveryStep(ag.Host, portOrDefault(ag.Port, 222), ag.PreferredIface, NewRealProber())
 	defer cleanup2()
 	if perr2 != nil {
 		PrintFail("path discovery: " + perr2.Error())
