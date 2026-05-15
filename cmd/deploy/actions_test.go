@@ -162,3 +162,42 @@ func TestDiagnosisFromReport_StaleHeartbeatBlamesRouter(t *testing.T) {
 		t.Errorf("want stale-heartbeat hint, got %q", msg)
 	}
 }
+
+// cleanupAgentPaths is the deterministic command-builder for the uninstall
+// sequence — we test that the right paths show up rather than running them
+// against a real SSH.
+func TestCleanupAgentPaths_AllArtifacts(t *testing.T) {
+	cmds := cleanupAgentPaths()
+	wantFragments := []string{
+		"S99wg-monitor stop",
+		"killall -9 wg-monitor",
+		"/opt/bin/wg-monitor",
+		"/opt/bin/wg-monitor.bak",
+		"/opt/bin/wg-monitor.new",
+		"/opt/etc/wg-monitor",
+		"/opt/etc/init.d/S99wg-monitor",
+		"/opt/var/wg-monitor",
+	}
+	joined := strings.Join(cmds, "\n")
+	for _, w := range wantFragments {
+		if !strings.Contains(joined, w) {
+			t.Errorf("cleanup commands missing %q. Full:\n%s", w, joined)
+		}
+	}
+}
+
+func TestCleanupAgentPaths_StopBeforeRemove(t *testing.T) {
+	cmds := cleanupAgentPaths()
+	stopIdx, rmIdx := -1, -1
+	for i, c := range cmds {
+		if strings.Contains(c, "stop") && stopIdx == -1 {
+			stopIdx = i
+		}
+		if strings.Contains(c, "rm -f /opt/bin/wg-monitor") && rmIdx == -1 {
+			rmIdx = i
+		}
+	}
+	if stopIdx == -1 || rmIdx == -1 || stopIdx > rmIdx {
+		t.Errorf("expected stop (idx=%d) before rm (idx=%d)", stopIdx, rmIdx)
+	}
+}
