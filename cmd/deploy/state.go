@@ -49,6 +49,13 @@ type AgentState struct {
 	// touching /opt. Captured automatically on first successful install,
 	// verified before every subsequent SSH-write op. Lowercase, no colons.
 	ExpectedMAC string `toml:"expected_mac,omitempty"`
+	// PreferredIface caches the network interface name (as reported by
+	// net.Interface.Name — e.g. "Ethernet 2" on Windows, "tun0" on linux)
+	// that successfully reached this router on the previous deploy. Layer-1
+	// path discovery tries it first on subsequent runs; on failure it falls
+	// back to full enumeration and overwrites the cache. Empty = no cache,
+	// do full enumeration.
+	PreferredIface string `toml:"preferred_iface,omitempty"`
 }
 
 // LoadState reads wizard.toml from path. Missing file → returns default state, no error.
