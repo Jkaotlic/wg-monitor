@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Regression guard for the de4ddy scenario: an agent that ended up in
@@ -199,5 +200,39 @@ func TestCleanupAgentPaths_StopBeforeRemove(t *testing.T) {
 	}
 	if stopIdx == -1 || rmIdx == -1 || stopIdx > rmIdx {
 		t.Errorf("expected stop (idx=%d) before rm (idx=%d)", stopIdx, rmIdx)
+	}
+}
+
+func TestDoubleDeployHint_TriggersWhenSameNicknameOnTwoBoxes(t *testing.T) {
+	rep := &PathReport{
+		Candidates: []PathCandidate{
+			{Iface: "Ethernet", Kind: PathLAN, Latency: 5 * time.Millisecond},
+			{Iface: "tun0", Kind: PathP2P, Latency: 142 * time.Millisecond},
+		},
+	}
+	nicks := map[string]string{
+		"Ethernet": "smith",
+		"tun0":     "smith",
+	}
+	hit := detectDoubleDeploy(rep, nicks, "smith")
+	if !hit {
+		t.Fatal("want detectDoubleDeploy=true when both boxes have same nickname")
+	}
+}
+
+func TestDoubleDeployHint_NoHitWhenOnlyOneBoxHasAgent(t *testing.T) {
+	rep := &PathReport{
+		Candidates: []PathCandidate{
+			{Iface: "Ethernet", Kind: PathLAN, Latency: 5 * time.Millisecond},
+			{Iface: "tun0", Kind: PathP2P, Latency: 142 * time.Millisecond},
+		},
+	}
+	nicks := map[string]string{
+		"Ethernet": "",
+		"tun0":     "smith",
+	}
+	hit := detectDoubleDeploy(rep, nicks, "smith")
+	if hit {
+		t.Fatal("want detectDoubleDeploy=false when only target box has the agent")
 	}
 }
