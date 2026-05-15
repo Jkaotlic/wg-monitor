@@ -75,11 +75,13 @@ type WizardConfig struct {
 }
 
 type HeartbeatConfig struct {
-	StaleAfterSec       int `yaml:"stale_after_sec"`         // legacy, applied to static if mobile_sec absent
-	StaleAfterStaticSec int `yaml:"stale_after_static_sec"`  // override for static (home/office) routers
-	StaleAfterMobileSec int `yaml:"stale_after_mobile_sec"`  // override for mobile (4G in-vehicle) routers
-	ResumeGraceSec      int `yaml:"resume_grace_sec"`        // suppress OFFLINE this long after Report.Resumed=true
-	ScanIntervalSec     int `yaml:"scan_interval_sec"`
+	StaleAfterSec       int   `yaml:"stale_after_sec"`         // legacy, applied to static if mobile_sec absent
+	StaleAfterStaticSec int   `yaml:"stale_after_static_sec"`  // override for static (home/office) routers
+	StaleAfterMobileSec int   `yaml:"stale_after_mobile_sec"`  // legacy: applied only if mobile_lifecycle=false
+	ResumeGraceSec      int   `yaml:"resume_grace_sec"`        // suppress OFFLINE this long after Report.Resumed=true
+	ScanIntervalSec     int   `yaml:"scan_interval_sec"`
+	MobileLifecycle     *bool `yaml:"mobile_lifecycle"`        // NEW: default true. Wake-card on Resumed=true + one-shot sleep-info instead of HARD-OFFLINE.
+	MobileSleepAfterSec int   `yaml:"mobile_sleep_after_sec"`  // NEW: default 300. After this many seconds of mobile silence, send one "🌙 вышел из сети" info-card.
 }
 
 type StateConfig struct {
@@ -171,6 +173,13 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Heartbeat.ScanIntervalSec == 0 {
 		cfg.Heartbeat.ScanIntervalSec = 30
+	}
+	if cfg.Heartbeat.MobileSleepAfterSec == 0 {
+		cfg.Heartbeat.MobileSleepAfterSec = 300
+	}
+	if cfg.Heartbeat.MobileLifecycle == nil {
+		t := true
+		cfg.Heartbeat.MobileLifecycle = &t
 	}
 	if cfg.State.FailThreshold == 0 {
 		cfg.State.FailThreshold = 3
