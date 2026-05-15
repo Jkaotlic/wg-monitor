@@ -188,3 +188,41 @@ func TestWizardPut_400OnEmptyRequiredFields(t *testing.T) {
 		})
 	}
 }
+
+func TestWizardList_IncludesLastSeenAt(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	id, err := d.Users().Insert("smith", "raw-token-xx", "0.0.0.0", "awg0")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := d.Users().UpdateLastSeen(id); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	h := wizardListAgentsHandler(Deps{DB: d})
+	req := httptest.NewRequest("GET", "/v1/wizard/agents", nil)
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status: %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Agents []struct {
+			Nickname   string  `json:"nickname"`
+			LastSeenAt *string `json:"last_seen_at,omitempty"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Agents) != 1 || got.Agents[0].Nickname != "smith" {
+		t.Fatalf("agents: %+v", got.Agents)
+	}
+	if got.Agents[0].LastSeenAt == nil {
+		t.Fatal("expected non-nil last_seen_at after UpdateLastSeen")
+	}
+}
