@@ -79,16 +79,24 @@ func main() {
 		RecoveryThreshold: cfg.State.RecoveryThreshold,
 	})
 
+	mobileLifecycle := cfg.Heartbeat.MobileLifecycle == nil || *cfg.Heartbeat.MobileLifecycle
 	watcher := heartbeat.NewWatcher(d, disp, heartbeat.Config{
 		StaleAfter:       time.Duration(cfg.Heartbeat.StaleAfterSec) * time.Second,
 		StaleAfterStatic: time.Duration(cfg.Heartbeat.StaleAfterStaticSec) * time.Second,
 		StaleAfterMobile: time.Duration(cfg.Heartbeat.StaleAfterMobileSec) * time.Second,
+		MobileSleepAfter: time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
+		MobileLifecycle:  mobileLifecycle,
 		ResumeGrace:      time.Duration(cfg.Heartbeat.ResumeGraceSec) * time.Second,
 		ScanEvery:        time.Duration(cfg.Heartbeat.ScanIntervalSec) * time.Second,
-		// Reuse the realert cadence so operators tuning RealertEverySec see a
-		// matching ROUTER-OFFLINE re-notify cadence (LOGIC-03).
-		RenotifyEvery: time.Duration(cfg.State.RealertEverySec) * time.Second,
+		RenotifyEvery:    time.Duration(cfg.State.RealertEverySec) * time.Second,
 	})
+
+	// Mobile-lifecycle notifiers: wake-card on Resumed=true, one-shot sleep-info
+	// after MobileSleepAfter silence. Both no-op for static users / when
+	// telegram_thread_id is NULL.
+	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.ChatID)
+	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.ChatID)
+	watcher.SetSleepNotifier(sleepNotifier)
 
 	cmdQueue := cmd.New()
 	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
@@ -159,6 +167,7 @@ func main() {
 		MaintNotifier:     maintNotifier,
 		OpkgNotifier:      opkgNotifier,
 		PingCheckNotifier: pingcheckNotifier,
+		WakeNotifier:      wakeNotifier,
 		UI:                cfg.UI,
 		Thresholds:        state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 		// Wire the server-shutdown ctx so cmd-result relay goroutines respect

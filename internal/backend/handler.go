@@ -135,6 +135,13 @@ type Resumer interface {
 	MarkResumed(userID int64)
 }
 
+// WakeNotifier is fired from /v1/report when an agent's Report carries
+// Resumed=true AND the user is kind=mobile. It renders the adaptive 🚗
+// card and posts to the router's TG-topic. nil-safe (handler skips).
+type WakeNotifier interface {
+	SendWake(ctx context.Context, userID int64, nickname string, checks []wire.Check) error
+}
+
 // CommandSink is the subset of cmd.Queue used by the HTTP handlers.
 // Decoupled so tests can swap in a fake.
 type CommandSink interface {
@@ -188,6 +195,7 @@ type Deps struct {
 	MaintNotifier     MaintNotifier     // nil-safe (handler skips if nil)
 	OpkgNotifier      OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
 	PingCheckNotifier PingCheckNotifier // nil-safe (handler skips if nil)
+	WakeNotifier      WakeNotifier      // nil-safe (handler skips if nil or user is static)
 	UI                UIConfig
 	Thresholds        state.Thresholds
 	// ShutdownCtx, when non-nil, parents the relay goroutines spawned by
@@ -293,8 +301,23 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// Tell the watcher BEFORE running the FSM so a near-simultaneous
 		// scan-tick won't fire a spurious OFFLINE while we ingest the
 		// freshly-collected checks.
-		if rep.Resumed && d.Resumer != nil {
-			d.Resumer.MarkResumed(uid)
+		if rep.Resumed {
+			if d.Resumer != nil {
+				d.Resumer.MarkResumed(uid)
+			}
+			if d.WakeNotifier != nil {
+				if u, err := d.DB.Users().GetByID(uid); err == nil && u != nil && u.IsMobile() {
+					checks := append([]wire.Check(nil), rep.Checks...)
+					nickname := nick
+					go func() {
+						bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						if err := d.WakeNotifier.SendWake(bg, uid, nickname, checks); err != nil {
+							d.Logger.Warn("wake notifier", "nickname", nickname, "err", err)
+						}
+					}()
+				}
+			}
 		}
 		ts := rep.Timestamp
 		if ts.IsZero() {

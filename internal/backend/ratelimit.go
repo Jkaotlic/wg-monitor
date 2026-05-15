@@ -18,8 +18,8 @@ import (
 type userRateLimiter struct {
 	mu      sync.Mutex
 	buckets map[int64]*tokenBucket
-	rate    float64       // tokens per second
-	burst   float64       // bucket capacity
+	rate    float64 // tokens per second
+	burst   float64 // bucket capacity
 	now     func() time.Time
 }
 

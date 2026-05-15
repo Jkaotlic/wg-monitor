@@ -348,11 +348,11 @@ func TestCmdGet_ReturnsQueuedCommand(t *testing.T) {
 	want := &wire.Command{ID: "abc", Action: "diag_now", IssuedAt: time.Now().UTC()}
 	sink := &fakeCmdSink{dequeueRet: want}
 	mux := NewMux(Deps{
-		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:         d,
-		Dispatcher: &fakeDisp{},
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
 		CommandSink: sink,
-		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -782,6 +782,134 @@ func TestCmdResult_OpkgFallsBackToTGNotifier_WhenNoOpkgNotifier(t *testing.T) {
 	got := waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond)
 	if got != 1 {
 		t.Errorf("TGNotifier fallback: expected 1 chunk, got %d", got)
+	}
+}
+
+type fakeWakeNotifier struct {
+	mu    sync.Mutex
+	calls []wakeRec
+}
+
+type wakeRec struct {
+	userID   int64
+	nickname string
+	checks   []wire.Check
+}
+
+func (f *fakeWakeNotifier) SendWake(_ context.Context, uid int64, nick string, checks []wire.Check) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, wakeRec{uid, nick, append([]wire.Check(nil), checks...)})
+	return nil
+}
+
+func (f *fakeWakeNotifier) snapshot() []wakeRec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]wakeRec, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+func TestHandleReport_MobileResumed_TriggersWakeCard(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "abab00abab00abab00abab00abab00abab00abab00abab00abab00abab00abab"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+
+	wake := &fakeWakeNotifier{}
+	disp := &fakeDisp{}
+	resumer := &fakeResumer{}
+	h := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   disp,
+		Resumer:      resumer,
+		WakeNotifier: wake,
+	})
+
+	body := []byte(`{"ts":"2026-05-15T14:30:00Z","agent_version":"t","resumed":true,"checks":[{"name":"tunnels","status":"ok"}]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	// SendWake is fired in a goroutine; give it a moment.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(wake.snapshot()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	calls := wake.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 wake call, got %d", len(calls))
+	}
+	if calls[0].userID != uid || calls[0].nickname != "client-h" {
+		t.Errorf("call mismatch: %+v", calls[0])
+	}
+}
+
+func TestHandleReport_StaticResumed_NoWakeCard(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "bcbc00bcbc00bcbc00bcbc00bcbc00bcbc00bcbc00bcbc00bcbc00bcbc00bcbc"
+	d.Users().Insert("homestat", tok, "1.1.1.1", "awg0")
+
+	wake := &fakeWakeNotifier{}
+	h := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   &fakeDisp{},
+		Resumer:      &fakeResumer{},
+		WakeNotifier: wake,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:30:00Z","agent_version":"t","resumed":true,"checks":[]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := len(wake.snapshot()); got != 0 {
+		t.Errorf("static user must not fire wake card, got %d", got)
+	}
+}
+
+func TestHandleReport_MobileNotResumed_NoWakeCard(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd"
+	d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+
+	wake := &fakeWakeNotifier{}
+	h := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   &fakeDisp{},
+		Resumer:      &fakeResumer{},
+		WakeNotifier: wake,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:30:00Z","agent_version":"t","resumed":false,"checks":[]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := len(wake.snapshot()); got != 0 {
+		t.Errorf("non-resumed mobile must not fire wake card, got %d", got)
 	}
 }
 
