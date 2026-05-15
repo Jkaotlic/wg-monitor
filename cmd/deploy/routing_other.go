@@ -1,14 +1,13 @@
-//go:build !windows
+//go:build !windows && !linux && !darwin
 
 package main
 
 import "fmt"
 
-// addHostRouteThroughInterface on non-Windows is a no-op stub that returns
-// an error pointing the operator at the manual `ip route add ... metric 1`
-// command. Detection still runs and prints a warning — the auto-fix is
-// Windows-only for now because that's where the wizard ships and where
-// operators actually hit the 192.168.31.x SSTP-vs-LAN collision in practice.
+// addHostRouteThroughInterface is a no-op stub for OSes we don't have a
+// route-add command line for (BSDs other than darwin, plan9, etc).
+// Operator gets a clear error pointing at manual remediation. Cross-build
+// catches anyone who tries to ship a wizard there before we plug it in.
 func addHostRouteThroughInterface(targetIP string, ifIndex int) (func(), error) {
-	return nil, fmt.Errorf("auto route fix only supported on Windows; run manually: ip route add %s/32 dev <sstp-iface> metric 1", targetIP)
+	return nil, fmt.Errorf("auto route fix not implemented for this OS; add /32 host route via your SSTP/VPN iface manually for %s", targetIP)
 }
