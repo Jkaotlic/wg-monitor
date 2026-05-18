@@ -25,18 +25,23 @@ func (r *Router) adminPanelOpen(ctx context.Context, m *tg.Message) {
 // panelHomeMessage builds the (text, inline-kb) for the hub Home screen.
 // Pure function — easy to test.
 func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
-	text := "🎛 Панель управления\n\nЧто открыть?"
+	text := "🎛 Панель управления\n\nЧто открыть?\n\nРоутер: выбери раздел, затем конкретный роутер.\nФлот: массовая проверка, топики и доступы."
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
-				{Text: "🛠 Maintenance", CallbackData: "panel:0:kind:maint"},
-				{Text: "📦 Routes", CallbackData: "panel:0:kind:routes"},
-			},
-			{
 				{Text: "📊 Status", CallbackData: "panel:0:kind:status"},
-				{Text: "📡 PingCheck", CallbackData: "panel:0:kind:pingcheck"},
+				{Text: "🩺 Проверка", CallbackData: "panel:0:kind:doctor"},
 			},
 			{
+				{Text: "🎛 Туннели", CallbackData: "panel:0:kind:tunnels"},
+				{Text: "🛣 Маршруты", CallbackData: "panel:0:kind:routes"},
+			},
+			{
+				{Text: "📡 PingCheck", CallbackData: "panel:0:kind:pingcheck"},
+				{Text: "🛠 Обслуживание", CallbackData: "panel:0:kind:maint"},
+			},
+			{
+				{Text: "🩺 Все роутеры", CallbackData: "panel:0:doctor_all"},
 				{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
 			},
 			{
@@ -71,6 +76,8 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 		r.panelAwakenConfirm(ctx, q)
 	case "awaken_do":
 		r.panelAwakenDo(ctx, q)
+	case "doctor_all":
+		r.panelDoctorAll(ctx, q)
 	case "help":
 		r.panelHandleHelp(ctx, q, args)
 	default:
@@ -101,7 +108,7 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 		MessageThreadID: &threadID,
 	}
 	publishErr := r.panelPublish(ctx, synth, u, args.PanelKind)
-	kindLabel := map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status", "pingcheck": "PingCheck"}[args.PanelKind]
+	kindLabel := panelKindLabel(args.PanelKind)
 	var resultText string
 	switch {
 	case publishErr == nil:
@@ -127,8 +134,9 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 // rather than returning them), we do a cheap probe SendMessage first;
 // the panel will then overwrite/replace it normally.
 func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, kind string) error {
-	probeMsg := fmt.Sprintf("🎛 %s готовится…", map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status", "pingcheck": "PingCheck"}[kind])
-	if _, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, probeMsg, "", nil); err != nil {
+	probeMsg := fmt.Sprintf("🎛 %s готовится…", panelKindLabel(kind))
+	probeMID, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, probeMsg, "", nil)
+	if err != nil {
 		return err
 	}
 	switch kind {
@@ -136,14 +144,80 @@ func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, ki
 		r.openMaintPanelMessage(ctx, m, u)
 	case "routes":
 		r.openRoutesPanelMessage(ctx, m, u)
+	case "tunnels":
+		text, kb := r.buildTunnelsPanel(u)
+		if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb); err != nil {
+			return err
+		}
 	case "status":
 		r.dispatchSmartReply(ctx, m, u)
 	case "pingcheck":
 		r.openPingCheckPanelMessage(ctx, m, u)
+	case "doctor":
+		if r.command == nil {
+			return fmt.Errorf("command action is not configured")
+		}
+		return r.command.DispatchFromMessage(ctx, "router_doctor", u.ID, m.Chat.ID, probeMID, m.MessageThreadID)
 	default:
 		return fmt.Errorf("unknown panel kind: %q", kind)
 	}
 	return nil
+}
+
+func (r *Router) panelDoctorAll(ctx context.Context, q *tg.CallbackQuery) {
+	users, err := r.d.Users().GetAll()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось прочитать роутеры")
+		return
+	}
+	if r.command == nil || r.cmdSink == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command channel не настроен")
+		return
+	}
+	var queued, noTopic int
+	var failLines []string
+	for _, u := range users {
+		if u.TelegramThreadID == nil {
+			noTopic++
+			continue
+		}
+		ackText := "⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…"
+		ackMID, sendErr := r.tg.SendMessageWithReplyKeyboard(ctx, q.Message.Chat.ID, u.TelegramThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+		if sendErr != nil {
+			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, sendErr))
+			continue
+		}
+		if err := r.command.DispatchFromMessage(ctx, "router_doctor", u.ID, q.Message.Chat.ID, ackMID, u.TelegramThreadID); err != nil {
+			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, err))
+			continue
+		}
+		queued++
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "🎛 Панель управления\n\n🩺 Проверка всех роутеров\n\n✅ Поставлено в очередь: %d", queued)
+	if noTopic > 0 {
+		fmt.Fprintf(&b, "\n⚠ Без топика: %d", noTopic)
+	}
+	if len(failLines) > 0 {
+		fmt.Fprintf(&b, "\n❌ Ошибок: %d", len(failLines))
+		for _, line := range failLines {
+			b.WriteString("\n  ")
+			b.WriteString(line)
+		}
+	}
+	if queued > 0 {
+		b.WriteString("\n\nРезультаты придут ответами в соответствующие топики.")
+	}
+	text := b.String()
+	if len(text) > 4096 {
+		text = text[:4093] + "..."
+	}
+	kb := panelResultKb()
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("panel doctor all result edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
 func panelResultKb() tg.InlineKeyboardMarkup {
@@ -176,7 +250,7 @@ func (r *Router) panelHandleHelp(ctx context.Context, q *tg.CallbackQuery, args 
 	body := tg.HelpForScreen(args.PanelKind)
 	var backCB string
 	switch args.PanelKind {
-	case "maint", "routes", "status":
+	case "maint", "routes", "tunnels", "status", "pingcheck", "doctor":
 		backCB = "panel:0:kind:" + args.PanelKind
 	default:
 		backCB = "panel:0:home"
@@ -295,7 +369,7 @@ func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, k
 		slog.Warn("panel kind pick: users list failed", "err", err)
 		return
 	}
-	kindLabel := map[string]string{"maint": "Maintenance", "routes": "Routes", "status": "Status"}[kind]
+	kindLabel := panelKindLabel(kind)
 	if kindLabel == "" {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown kind")
 		return
@@ -334,4 +408,23 @@ func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, k
 		slog.Warn("panel kind pick edit failed", "err", err)
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func panelKindLabel(kind string) string {
+	switch kind {
+	case "status":
+		return "Status"
+	case "doctor":
+		return "Проверка"
+	case "tunnels":
+		return "Туннели"
+	case "routes":
+		return "Маршруты"
+	case "pingcheck":
+		return "PingCheck"
+	case "maint":
+		return "Обслуживание"
+	default:
+		return ""
+	}
 }

@@ -303,6 +303,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		r.handleAccessCallback(ctx, q, args)
 		return
 	}
+	if args.Action == "panel" && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
+		return
+	}
 	if !r.aclAllow(ctx, q, args) {
 		return
 	}
@@ -317,7 +321,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.mute
 	case "history":
 		action = r.history
-	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade",
+	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor",
 		"tunnel_enable", "tunnel_disable":
 		action = r.command
 	case "tunnel_import_replace", "tunnel_import_add":
@@ -641,6 +645,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	case "⬆ Обновить пакеты":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
 			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
+	case "🩺 Проверка", "🩺 Домашний роутер":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
+			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
 	case "📋 Список юзеров":
 		r.dispatchListUsers(ctx, m, kind)
 	case "📊 Здоровье флота":

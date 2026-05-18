@@ -178,3 +178,42 @@ func TestClient_DiagResult_TypedNoReportOnHTTP400(t *testing.T) {
 		t.Errorf("expected HTTP_400 prefix, got: %v", err)
 	}
 }
+
+func TestClient_UsesSessionCookieWhenCredentialsConfigured(t *testing.T) {
+	var loginHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginHits++
+			if r.Method != http.MethodPost {
+				t.Errorf("login method: %s", r.Method)
+			}
+			http.SetCookie(w, &http.Cookie{Name: "awg_session", Value: "session-1", Path: "/"})
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		case "/api/tunnels/all":
+			ck, err := r.Cookie("awg_session")
+			if err != nil || ck.Value != "session-1" {
+				t.Fatalf("missing session cookie: %v / %#v", err, ck)
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	c.SetCredentials("admin", "secret")
+	if _, err := c.TunnelsAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if loginHits != 1 {
+		t.Fatalf("login hits: got %d want 1", loginHits)
+	}
+	if _, err := c.TunnelsAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if loginHits != 1 {
+		t.Fatalf("session should be reused, login hits=%d", loginHits)
+	}
+}

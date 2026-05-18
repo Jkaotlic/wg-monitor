@@ -20,6 +20,15 @@ func main() {
 		UseColor = false
 	}
 
+	args := flag.Args()
+	if len(args) > 0 {
+		switch args[0] {
+		case "help", "-h", "--help":
+			printUsage()
+			return
+		}
+	}
+
 	statePath := *configPath
 	if statePath == "" {
 		// cwd-fallback first, for repo-local dev
@@ -49,7 +58,6 @@ func main() {
 	secrets := NewSecretStore()
 	dl := NewDownloader()
 
-	args := flag.Args()
 	if len(args) == 0 {
 		RunMenu(state, statePath, secrets, dl)
 		return
@@ -77,6 +85,8 @@ func main() {
 		runCLIAction("install-backend", func() error { return actionInstallBackend(state, secrets, dl) })
 	case "update-backend":
 		runCLIAction("update-backend", func() error { return actionUpdateBackend(state, secrets, dl) })
+	case "update-components", "update-all":
+		runCLIAction("update-components", func() error { return actionUpdateComponents(state, secrets, dl) })
 	case "install-agent":
 		nick := ""
 		for i := 1; i < len(args); i++ {
@@ -85,7 +95,7 @@ func main() {
 			}
 		}
 		// Если оператор передал --agent foo, foo должен уже быть в state
-		// (создан через [4] add-router). Иначе actionInstallAgent сейчас
+		// (создан через [3] add-router). Иначе actionInstallAgent сейчас
 		// молча промптит nickname — что в неинтерактивном CLI повисает.
 		if nick != "" && state.FindAgent(nick) == nil {
 			fmt.Fprintf(os.Stderr,
@@ -108,6 +118,8 @@ func main() {
 		runCLIAction("update-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag) })
 	case "add-router":
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
+	case "sync-vps", "sync":
+		runCLIAction("sync-vps", func() error { return actionSyncVPS(state, secrets) })
 	case "uninstall-agent":
 		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
 		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
@@ -150,8 +162,45 @@ func main() {
 			os.Exit(2)
 		}
 		runCLIAction("uninstall-agent", func() error { return actionUninstallAgent(state, secrets, target) })
+	case "repair-agent-token", "restore-agent-token":
+		agentFlag := ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--agent":
+				if i+1 < len(args) {
+					agentFlag = args[i+1]
+					i++
+				}
+			default:
+				fmt.Fprintf(os.Stderr, "%s: unknown option %s\n", args[0], args[i])
+				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy repair-agent-token [--agent <nick>]")
+				os.Exit(2)
+			}
+		}
+		runCLIAction("repair-agent-token", func() error { return actionRepairAgentToken(state, secrets, dl, agentFlag) })
+	case "netfix", "route-fix":
+		opts, err := parseNetfixArgs(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "netfix:", err)
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy netfix [--agent <nick> | --host <ip> [--port N]] [--apply]")
+			os.Exit(2)
+		}
+		if err := actionNetfix(state, opts); err != nil {
+			os.Exit(1)
+		}
 	case "doctor":
-		if err := actionDoctor(state, secrets); err != nil {
+		opts := doctorOptions{}
+		for _, arg := range args[1:] {
+			switch arg {
+			case "--deep":
+				opts.Deep = true
+			default:
+				fmt.Fprintf(os.Stderr, "doctor: unknown option %s\n", arg)
+				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy doctor [--deep]")
+				os.Exit(2)
+			}
+		}
+		if err := actionDoctor(state, secrets, opts); err != nil {
 			os.Exit(1)
 		}
 	case "known-hosts":
@@ -188,18 +237,31 @@ func main() {
 			os.Exit(2)
 		}
 	case "secrets":
-		// secrets export <file.tgz> | secrets import <file.tgz> [--force]
-		if len(args) < 3 {
-			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy secrets export <file.tgz> | secrets import <file.tgz> [--force]")
+		// secrets status | secrets export <file.tgz> | secrets import <file.tgz> [--force]
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy secrets status | secrets export <file.tgz> | secrets import <file.tgz> [--force]")
 			os.Exit(2)
 		}
 		switch args[1] {
+		case "status":
+			if err := actionSecretsStatus(state, secrets); err != nil {
+				fmt.Fprintln(os.Stderr, "status:", err)
+				os.Exit(1)
+			}
 		case "export":
+			if len(args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy secrets export <file.tgz>")
+				os.Exit(2)
+			}
 			if err := ExportSecrets(args[2], statePath); err != nil {
 				fmt.Fprintln(os.Stderr, "export:", err)
 				os.Exit(1)
 			}
 		case "import":
+			if len(args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy secrets import <file.tgz> [--force]")
+				os.Exit(2)
+			}
 			force := false
 			for i := 3; i < len(args); i++ {
 				if args[i] == "--force" {
@@ -211,11 +273,47 @@ func main() {
 				os.Exit(1)
 			}
 		default:
-			fmt.Fprintln(os.Stderr, "secrets: expected 'export' or 'import'")
+			fmt.Fprintln(os.Stderr, "secrets: expected 'status', 'export' or 'import'")
 			os.Exit(2)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown subcommand: %s\n\n", args[0])
+		printUsage()
 		os.Exit(2)
 	}
+}
+
+func usageText() string {
+	return `wg-monitor-deploy [--config wizard.toml] [--no-color] <command>
+
+Commands:
+  install-backend              first install or reinstall backend on VPS
+  update-components, update-all
+                               check latest release and update selected backend/agents
+  update-backend               update only backend
+  add-router                   create router in backend DB, create TG topic, install agent
+  install-agent --agent <nick> install/reinstall an existing router agent
+  update-agent [--agent <nick>]
+                               update one agent or choose interactively
+  uninstall-agent --agent <nick>
+  uninstall-agent --host <ip> [--port N] [--user U]
+                               remove agent from a known or manually specified router
+  repair-agent-token [--agent <nick>]
+                               rotate lost agent token, reinstall router config
+  netfix [--agent <nick> | --host <ip> [--port N]] [--apply]
+                               show/apply a /32 route through VPN/WireGuard
+  doctor [--deep]              local + VPS + agent health check
+  sync-vps, sync               pull router list/deploy metadata from backend
+  known-hosts [list|forget [alias]]
+  secrets status               show which required secrets are available
+  secrets export <file.tgz>
+  secrets import <file.tgz> [--force]
+  help                         show this help
+
+Without a command, the interactive wizard menu opens.
+`
+}
+
+func printUsage() {
+	fmt.Fprint(os.Stdout, usageText())
 }

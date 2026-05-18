@@ -71,8 +71,8 @@ type Args struct {
 	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
 	// "awaken_confirm" | "awaken_do" | "close".
 	PanelScreen string
-	// PanelKind is the panel type ("maint" | "routes" | "status") for
-	// the "kind" and "push" screens.
+	// PanelKind is the panel type ("maint" | "routes" | "tunnels" | "status")
+	// for the "kind" and "push" screens.
 	PanelKind string
 	// AccessScreen identifies the access:* admin-panel screen for callbacks
 	// where Action == "access". One of: "home" | "router" | "add" |
@@ -101,6 +101,7 @@ var validActions = map[string]bool{
 	// command-channel actions: enqueue a wire.Command for the agent.
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
 	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true,
+	"router_doctor": true,
 	"tunnel_enable": true, "tunnel_disable": true,
 	"check_via_tunnel": true, "check_direct": true,
 	// backend-only callback (no agent action): re-render Tunnels-panel inline.
@@ -142,7 +143,7 @@ func IsCommandAction(a string) bool {
 	switch a {
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck",
 		"opkg_upgrade", "tunnel_enable", "tunnel_disable",
-		"check_via_tunnel", "check_direct":
+		"check_via_tunnel", "check_direct", "router_doctor":
 		return true
 	}
 	return false
@@ -289,7 +290,7 @@ func Parse(data string) (Args, error) {
 		validPanelScreens := map[string]bool{
 			"home": true, "kind": true, "push": true, "no_topic": true,
 			"awaken_confirm": true, "awaken_do": true, "close": true,
-			"help": true,
+			"help": true, "doctor_all": true,
 		}
 		if !validPanelScreens[screen] {
 			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)
@@ -299,7 +300,7 @@ func Parse(data string) (Args, error) {
 			if len(parts) < 4 || parts[3] == "" {
 				return Args{}, fmt.Errorf("panel %s requires kind: %q", screen, data)
 			}
-			validKinds := map[string]bool{"maint": true, "routes": true, "status": true, "pingcheck": true}
+			validKinds := map[string]bool{"maint": true, "routes": true, "tunnels": true, "status": true, "pingcheck": true, "doctor": true}
 			if !validKinds[parts[3]] {
 				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
 			}
@@ -311,7 +312,7 @@ func Parse(data string) (Args, error) {
 			}
 			validHelpScreens := map[string]bool{
 				"maint": true, "routes": true, "tunnels": true,
-				"access": true, "diag": true, "status": true, "pingcheck": true,
+				"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
 			}
 			if !validHelpScreens[parts[3]] {
 				return Args{}, fmt.Errorf("panel help: unknown screen %q", parts[3])

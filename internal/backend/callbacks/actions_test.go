@@ -51,9 +51,9 @@ func TestActionSilenceWritesUntil(t *testing.T) {
 }
 
 type fakeEnqueuer struct {
-	calls   []enqueueCall
-	refs    []enqueueRefCall
-	err     error
+	calls []enqueueCall
+	refs  []enqueueRefCall
+	err   error
 }
 
 type enqueueCall struct {
@@ -112,7 +112,7 @@ func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
 	}
 }
 
-func TestCommandAction_AllFiveActions(t *testing.T) {
+func TestCommandAction_CommandActions(t *testing.T) {
 	cases := []struct {
 		action  string
 		wantSub string
@@ -122,6 +122,7 @@ func TestCommandAction_AllFiveActions(t *testing.T) {
 		{"pingcheck_now", "Pingcheck"},
 		{"force_recheck", "Force recheck"},
 		{"opkg_upgrade", "Opkg"},
+		{"router_doctor", "Проверка"},
 	}
 	for _, c := range cases {
 		sink := &fakeEnqueuer{}

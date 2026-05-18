@@ -43,6 +43,22 @@ func HelpForScreen(screen string) string {
 		return `📊 Status — справка
 
 Публикует smart-reply (📊 Что происходит?) в топик каждого роутера. Useful когда нужно одним тапом получить срез по всем роутерам.`
+	case "doctor":
+		return `🩺 Проверка — что это
+
+Read-only doctor запускается агентом прямо на выбранном роутере. Это важно, когда ноутбук не в домашней LAN или есть конфликт подсетей: проверка не ломится с твоего ПК, а смотрит состояние изнутри роутера.
+
+Что проверяет:
+  ✅ awg-manager API и версию
+  ✅ активный backend: NativeWG / Kernel / HydraRoute-Neo
+  ✅ managed-туннели и defaultRoute
+  ✅ PingCheck watchdog и статусы alive/dead
+  ✅ процессы wg-monitor и awg-manager
+  ✅ default route роутера
+
+Команда ничего не меняет: не рестартит сервисы, не трогает маршруты и не включает/выключает туннели.
+
+В админской панели кнопка «🩺 Все роутеры» ставит такую же read-only проверку в очередь по всем роутерным топикам.`
 	case "pingcheck":
 		return `📡 PingCheck — что это
 PingCheck — это watchdog awg-manager. Раз в N секунд он пингует целевой

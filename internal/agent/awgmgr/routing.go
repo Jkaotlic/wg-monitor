@@ -97,14 +97,7 @@ func (c *Client) HydraRouteControl(ctx context.Context, action string) error {
 // avoid disturbing the existing helper.
 func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any) error {
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(body), "application/json")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr POST %s: %w", path, err)

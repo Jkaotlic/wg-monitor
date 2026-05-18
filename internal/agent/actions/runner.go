@@ -21,6 +21,7 @@
 //   - firmware_status  → ndmc components list parsed into wire.FirmwareStatus
 //   - firmware_install → ndmc components commit (gated on AllowFirmwareInstall)
 //   - version_audit    → composite of awgmgr SystemInfo + opkg + components list
+//   - router_doctor    → read-only router health snapshot for Telegram
 //
 // Every action returns a wire.CommandResult with the original Command.ID
 // preserved so the backend can correlate outcome with the TG callback.
@@ -61,8 +62,8 @@ type Runner struct {
 	DiagPollEvery time.Duration
 	// DiagPollMax is the maximum number of poll iterations before DiagNow
 	// returns a DIAG_TIMEOUT error. Zero defaults to 12 (= 36s budget).
-	DiagPollMax   int
-	routeMu       sync.Mutex // serialises concurrent route_rebind calls
+	DiagPollMax int
+	routeMu     sync.Mutex // serialises concurrent route_rebind calls
 }
 
 // DiagNow fetches the awg-manager diagnostic report. If awg-manager
@@ -330,6 +331,10 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "encode version_audit: " + err.Error(), payload
 		}
 		return "ok", out, payload
+
+	case "router_doctor":
+		s, o := RouterDoctor(ctx, r.AwgClient, r.Exec)
+		return s, o, payload
 
 	case "route_status":
 		if r.AwgClient == nil {

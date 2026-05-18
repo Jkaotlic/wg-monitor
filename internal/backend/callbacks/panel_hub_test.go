@@ -40,7 +40,7 @@ func TestPanelHome_RendersHubMessage(t *testing.T) {
 		t.Fatalf("markup not InlineKeyboardMarkup: %T", got.markup)
 	}
 	flatTexts := flattenKbTexts(kb)
-	for _, want := range []string{"🛠 Maintenance", "📦 Routes", "📊 Status", "🪄 Оживить топики", "✖ Закрыть"} {
+	for _, want := range []string{"📊 Status", "🩺 Проверка", "🎛 Туннели", "🛣 Маршруты", "📡 PingCheck", "🛠 Обслуживание", "🩺 Все роутеры", "🪄 Оживить топики", "✖ Закрыть"} {
 		if !containsStr(flatTexts, want) {
 			t.Errorf("hub kb missing %q (have %v)", want, flatTexts)
 		}
@@ -86,7 +86,7 @@ func TestPanelKindPick_ListsRoutersWithThreadFlag(t *testing.T) {
 	q := &tg.CallbackQuery{
 		ID:   "cb-1",
 		From: tg.User{ID: 12345},
-		Data: "panel:0:kind:maint",
+		Data: "panel:0:kind:tunnels",
 		Message: tg.Message{
 			Chat:      tg.Chat{ID: -100},
 			MessageID: 70,
@@ -99,8 +99,8 @@ func TestPanelKindPick_ListsRoutersWithThreadFlag(t *testing.T) {
 		t.Fatalf("want 1 edit, got %d", len(f.edits))
 	}
 	got := f.edits[0]
-	if !strings.Contains(got, "Maintenance") {
-		t.Errorf("kind pick header missing 'Maintenance': %s", got)
+	if !strings.Contains(got, "Туннели") {
+		t.Errorf("kind pick header missing 'Туннели': %s", got)
 	}
 	for _, want := range []string{"betak", "vasya", "gamma"} {
 		if !strings.Contains(got, want) {
@@ -221,6 +221,77 @@ func TestPanelPush_StaleTopicSurfacesError(t *testing.T) {
 	}
 	if !stale {
 		t.Errorf("expected stale-topic error in hub edit; got %v", f.edits)
+	}
+}
+
+func TestPanelCallback_NonAdminRejected(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID:   "cb-panel-non-admin",
+		From: tg.User{ID: 200},
+		Data: "panel:0:home",
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: -100},
+			MessageID: 77,
+		},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "админа") {
+		t.Fatalf("want admin-only answer, got %+v", f.answers)
+	}
+	if len(f.edits) != 0 || len(f.rkSends) != 0 {
+		t.Fatalf("non-admin panel callback must not mutate UI; edits=%v sends=%v", f.edits, f.rkSends)
+	}
+}
+
+func TestPanelDoctorAll_EnqueuesRoutersWithTopics(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 101); err != nil {
+		t.Fatal(err)
+	}
+	uid2, err := d.Users().Insert("betak", "tb", "2.2.2.2", "nwg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uid2, 202); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Users().Insert("gamma", "tc", "3.3.3.3", "nwg1"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID:   "cb-doctor-all",
+		From: tg.User{ID: 42},
+		Data: "panel:0:doctor_all",
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: -100},
+			MessageID: 78,
+		},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 2 {
+		t.Fatalf("want 2 queued doctor commands, got %d (%+v)", len(sink.calls), sink.calls)
+	}
+	for _, call := range sink.calls {
+		if call.action != "router_doctor" {
+			t.Errorf("queued action=%q, want router_doctor", call.action)
+		}
+	}
+	if len(f.rkSends) != 2 {
+		t.Fatalf("want 2 ack messages in router topics, got %d", len(f.rkSends))
+	}
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Поставлено в очередь: 2") || !strings.Contains(f.edits[0], "Без топика: 1") {
+		t.Fatalf("bad result edit: %v", f.edits)
 	}
 }
 

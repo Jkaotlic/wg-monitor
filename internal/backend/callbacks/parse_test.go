@@ -71,7 +71,7 @@ func TestParseHistory(t *testing.T) {
 }
 
 func TestParseCommandActions(t *testing.T) {
-	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade"} {
+	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor"} {
 		data := action + ":42:tunnel_amnezia_for_awg2"
 		a, err := Parse(data)
 		if err != nil {
@@ -257,6 +257,16 @@ func TestParse_PanelPush(t *testing.T) {
 	}
 }
 
+func TestParse_PanelKindTunnels(t *testing.T) {
+	a, err := Parse("panel:0:kind:tunnels")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "kind" || a.PanelKind != "tunnels" {
+		t.Errorf("got %+v", a)
+	}
+}
+
 func TestParse_PanelNoTopic(t *testing.T) {
 	a, err := Parse("panel:7:no_topic")
 	if err != nil {
@@ -293,6 +303,16 @@ func TestParse_PanelClose(t *testing.T) {
 		t.Fatalf("parse failed: %v", err)
 	}
 	if a.PanelScreen != "close" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelDoctorAll(t *testing.T) {
+	a, err := Parse("panel:0:doctor_all")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "doctor_all" {
 		t.Errorf("got %+v", a)
 	}
 }
@@ -514,12 +534,32 @@ func TestParse_PanelKindPingCheck(t *testing.T) {
 	}
 }
 
+func TestParse_PanelKindDoctor(t *testing.T) {
+	a, err := Parse("panel:0:kind:doctor")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.PanelKind != "doctor" {
+		t.Errorf("got %+v", a)
+	}
+}
+
 func TestParse_PanelHelpPingCheck(t *testing.T) {
 	a, err := Parse("panel:0:help:pingcheck")
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if a.PanelKind != "pingcheck" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_PanelHelpDoctor(t *testing.T) {
+	a, err := Parse("panel:0:help:doctor")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.PanelKind != "doctor" {
 		t.Errorf("got %+v", a)
 	}
 }

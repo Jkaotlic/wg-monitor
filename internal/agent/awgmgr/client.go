@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -18,8 +19,13 @@ const (
 )
 
 type Client struct {
-	BaseURL string
-	HTTP    *http.Client
+	BaseURL  string
+	HTTP     *http.Client
+	Login    string
+	Password string
+
+	mu            sync.Mutex
+	sessionCookie *http.Cookie
 }
 
 func New(baseURL string) *Client {
@@ -32,15 +38,99 @@ func New(baseURL string) *Client {
 	}
 }
 
-func (c *Client) get(ctx context.Context, path string, out any) error {
-	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+func (c *Client) SetCredentials(login, password string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Login = login
+	c.Password = password
+	c.sessionCookie = nil
+}
+
+func (c *Client) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
+	if err := c.ensureSession(ctx); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	if ck := c.cookie(); ck != nil {
+		req.AddCookie(ck)
+	}
+	return c.HTTP.Do(req)
+}
+
+func (c *Client) cookie() *http.Cookie {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.sessionCookie == nil {
+		return nil
+	}
+	cp := *c.sessionCookie
+	return &cp
+}
+
+func (c *Client) ensureSession(ctx context.Context) error {
+	c.mu.Lock()
+	needLogin := (c.Login != "" || c.Password != "") && c.sessionCookie == nil
+	login := c.Login
+	password := c.Password
+	c.mu.Unlock()
+	if !needLogin {
+		return nil
+	}
+	body, err := json.Marshal(struct {
+		Login    string `json:"login"`
+		Password string `json:"password"`
+	}{Login: login, Password: password})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/api/auth/login", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("awgmgr auth login: %w", err)
+	}
+	defer resp.Body.Close()
+	rbody, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return fmt.Errorf("awgmgr auth login read: %w", err)
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("awgmgr auth login: HTTP %d: %s", resp.StatusCode, snippet(rbody))
+	}
+	var env Envelope[json.RawMessage]
+	if len(rbody) > 0 {
+		if err := json.Unmarshal(rbody, &env); err == nil && !env.Success {
+			return fmt.Errorf("awgmgr auth login: success=false")
+		}
+	}
+	for _, ck := range resp.Cookies() {
+		if ck.Name == "awg_session" && ck.Value != "" {
+			c.mu.Lock()
+			cp := *ck
+			c.sessionCookie = &cp
+			c.mu.Unlock()
+			return nil
+		}
+	}
+	return fmt.Errorf("awgmgr auth login: missing awg_session cookie")
+}
+
+func (c *Client) get(ctx context.Context, path string, out any) error {
+	start := time.Now()
+	resp, err := c.do(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr GET %s: %w", path, err)
@@ -62,13 +152,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 
 func (c *Client) post(ctx context.Context, path string, body io.Reader, out any) error {
 	start := time.Now()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, body)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(ctx, http.MethodPost, path, body, "")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("awgmgr POST %s: %w", path, err)
@@ -162,13 +246,7 @@ func (c *Client) PingCheckNow(ctx context.Context) error {
 func (c *Client) DiagResult(ctx context.Context) (string, error) {
 	start := time.Now()
 	const path = "/api/diagnostics/result"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "GET", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return "", fmt.Errorf("awgmgr GET diagnostics/result: %w", err)
@@ -193,12 +271,7 @@ func (c *Client) DiagResult(ctx context.Context) (string, error) {
 func (c *Client) DiagRun(ctx context.Context) error {
 	start := time.Now()
 	const path = "/api/diagnostics/run"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	resp, err := c.HTTP.Do(req)
+	resp, err := c.do(ctx, http.MethodPost, path, nil, "")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return fmt.Errorf("HTTP_REFUSED: awgmgr POST diagnostics/run: %w", err)
@@ -229,14 +302,7 @@ func (c *Client) ImportConf(ctx context.Context, rawConf, name, backend string) 
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(httpReq)
+	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(body), "application/json")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return nil, fmt.Errorf("awgmgr POST /api/import/conf: %w", err)
@@ -292,14 +358,7 @@ func (c *Client) confPost(ctx context.Context, path, rawConf, name string) (*Tun
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-	httpReq.Header.Set("Accept", "application/json")
-	httpReq.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(httpReq)
+	resp, err := c.do(ctx, http.MethodPost, path, bytes.NewReader(body), "application/json")
 	if err != nil {
 		slog.Warn("awgmgr request failed", "method", "POST", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
 		return nil, fmt.Errorf("awgmgr POST %s: %w", path, err)

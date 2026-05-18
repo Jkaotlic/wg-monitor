@@ -37,9 +37,9 @@ func (k PathKind) String() string {
 // PathCandidate captures one probe attempt: which iface, what came back.
 // Err == nil → reachable; Err != nil → failed (Latency is meaningless then).
 type PathCandidate struct {
-	Iface   string        // net.Interface.Name
-	Index   int           // OS iface index — passed to addTempHostRoute
-	LocalIP string        // address bound on the iface, "" if multiple
+	Iface   string // net.Interface.Name
+	Index   int    // OS iface index — passed to addTempHostRoute
+	LocalIP string // address bound on the iface, "" if multiple
 	Kind    PathKind
 	Latency time.Duration // TCP handshake latency
 	Err     error
@@ -149,14 +149,42 @@ func (*realProber) Dial(target string, timeout time.Duration) (string, error) {
 // actions in production. Tests construct their own implementation.
 func NewRealProber() Prober { return &realProber{} }
 
-// classifyIface returns PathP2P when iface has FlagPointToPoint set
-// (SSTP / WG / OpenVPN / PPP), else PathLAN. Interfaces flagged neither
-// UP nor loopback are filtered by callers — this function only classifies.
+// classifyIface returns PathP2P for tunnel-like interfaces (SSTP / WG /
+// OpenVPN / PPP), else PathLAN. Windows WireGuard/Wintun adapters often do
+// not expose FlagPointToPoint through Go's net.Interface, so we also use a
+// conservative name heuristic.
 func classifyIface(iface net.Interface) PathKind {
 	if iface.Flags&net.FlagPointToPoint != 0 {
 		return PathP2P
 	}
+	if isTunnelIfaceName(iface.Name) {
+		return PathP2P
+	}
 	return PathLAN
+}
+
+func isTunnelIfaceName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"wireguard",
+		"wintun",
+		"tailscale",
+		"zerotier",
+		"openvpn",
+		"tap-windows",
+		"sstp",
+		"vpn",
+		"wg-",
+		"wg_",
+	} {
+		if strings.Contains(name, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // firstIPv4 returns the first IPv4 address configured on iface as a plain
@@ -240,51 +268,60 @@ func stepFindReachablePath(p Prober, target string, totalTimeout time.Duration) 
 	}
 
 	results := make([]PathCandidate, len(probes))
-	var wg sync.WaitGroup
-	for i, pr := range probes {
-		wg.Add(1)
-		go func(i int, pr probe) {
-			defer wg.Done()
-			c := PathCandidate{
-				Iface: "default",
-				Kind:  PathLAN,
-			}
-			if pr.force {
-				c.Iface = pr.iface.Name
-				c.Index = pr.iface.Index
-				c.Kind = pr.kind
-				c.LocalIP = firstIPv4(pr.iface)
-				tok, addErr := p.AddRoute(ip, pr.iface.Index)
-				if addErr != nil {
-					c.Err = fmt.Errorf("addRoute %s via %s: %w", ip, pr.iface.Name, addErr)
-					results[i] = c
-					return
-				}
-				addTok(tok)
-			}
-			start := time.Now()
-			localIP, dialErr := p.Dial(target, perProbe)
-			c.Latency = time.Since(start)
-			if dialErr != nil {
-				c.Err = dialErr
+	runProbe := func(i int, pr probe) {
+		c := PathCandidate{
+			Iface: "default",
+			Kind:  PathLAN,
+		}
+		if pr.force {
+			c.Iface = pr.iface.Name
+			c.Index = pr.iface.Index
+			c.Kind = pr.kind
+			c.LocalIP = firstIPv4(pr.iface)
+			tok, addErr := p.AddRoute(ip, pr.iface.Index)
+			if addErr != nil {
+				c.Err = fmt.Errorf("addRoute %s via %s: %w", ip, pr.iface.Name, addErr)
 				results[i] = c
 				return
 			}
-			c.Err = nil
-			if !pr.force {
-				c.LocalIP = localIP
-				// Resolve which iface localIP belongs to so operator sees
-				// "default route → Ethernet 5".
-				if name, idx := resolveIfaceForLocalIP(ifaces, localIP); name != "" {
-					c.Iface = name
-					c.Index = idx
-					c.Kind = classifyIfaceByIndex(ifaces, idx)
+			defer func() {
+				if err := p.DelRoute(tok); err != nil {
+					addTok(tok)
 				}
-			}
+			}()
+		}
+		start := time.Now()
+		localIP, dialErr := p.Dial(target, perProbe)
+		c.Latency = time.Since(start)
+		if dialErr != nil {
+			c.Err = dialErr
 			results[i] = c
-		}(i, pr)
+			return
+		}
+		c.Err = nil
+		if !pr.force {
+			c.LocalIP = localIP
+			// Resolve which iface localIP belongs to so operator sees
+			// "default route → Ethernet 5".
+			if name, idx := resolveIfaceForLocalIP(ifaces, localIP); name != "" {
+				c.Iface = name
+				c.Index = idx
+				c.Kind = classifyIfaceByIndex(ifaces, idx)
+			}
+		}
+		results[i] = c
 	}
-	wg.Wait()
+
+	// The default-route probe does not mutate global routing state and can run
+	// alone. Forced probes must be sequential: every AddRoute changes the same
+	// host /32 route, so overlapping probes can make one candidate's Dial use
+	// another candidate's route.
+	if len(probes) > 0 {
+		runProbe(0, probes[0])
+	}
+	for i := 1; i < len(probes); i++ {
+		runProbe(i, probes[i])
+	}
 
 	cleanup := func() {
 		mu.Lock()
@@ -312,6 +349,19 @@ func stepFindReachablePath(p Prober, target string, totalTimeout time.Duration) 
 	})
 	rep.Decide()
 	return rep, cleanup, nil
+}
+
+func preferChosenCandidate(r *PathReport, preferred string) bool {
+	if r == nil || strings.TrimSpace(preferred) == "" {
+		return false
+	}
+	for i := range r.Candidates {
+		if r.Candidates[i].Iface == preferred && r.Candidates[i].Responded() {
+			r.Chosen = &r.Candidates[i]
+			return true
+		}
+	}
+	return false
 }
 
 // resolveIfaceForLocalIP scans ifaces, finds the one that owns localIP,
@@ -386,6 +436,8 @@ func trimDialErr(err error) string {
 	}
 	s := strings.ToLower(err.Error())
 	switch {
+	case strings.Contains(s, "route add") && (strings.Contains(s, "requires elevation") || strings.Contains(s, "access denied")):
+		return "route needs admin"
 	case strings.Contains(s, "i/o timeout") || errors.Is(err, context.DeadlineExceeded):
 		return "timeout"
 	case strings.Contains(s, "refused"):

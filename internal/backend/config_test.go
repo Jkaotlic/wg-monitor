@@ -101,6 +101,9 @@ telegram:
 	if c.UI.DiagMaxChars != 3500 {
 		t.Errorf("DiagMaxChars default = %d, want 3500", c.UI.DiagMaxChars)
 	}
+	if c.UI.CompatInlineKeyboard == nil || !*c.UI.CompatInlineKeyboard {
+		t.Errorf("CompatInlineKeyboard should default true")
+	}
 }
 
 // TestConfigUIRespectsExplicitFalse is a regression test for I-1 (T11 follow-up):
@@ -121,6 +124,7 @@ telegram:
 ui:
   delete_user_command_messages: false
   smart_reply_with_keyboard: false
+  compat_inline_keyboard: false
 `)
 	c, err := LoadConfig(cfgPath)
 	if err != nil {
@@ -133,6 +137,10 @@ ui:
 	if c.UI.SmartReplyWithKeyboard == nil || *c.UI.SmartReplyWithKeyboard {
 		t.Errorf("SmartReplyWithKeyboard: explicit false should be honoured, got %v",
 			c.UI.SmartReplyWithKeyboard)
+	}
+	if c.UI.CompatInlineKeyboard == nil || *c.UI.CompatInlineKeyboard {
+		t.Errorf("CompatInlineKeyboard: explicit false should be honoured, got %v",
+			c.UI.CompatInlineKeyboard)
 	}
 }
 

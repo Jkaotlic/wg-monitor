@@ -61,7 +61,7 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	case "restart_tunnel":
 		card := Card{Badge: "", Label: label, Summary: strings.TrimSpace(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
-	case "check_via_tunnel", "check_direct":
+	case "check_via_tunnel", "check_direct", "router_doctor":
 		return []string{strings.TrimSpace(r.Output)}
 	case "opkg_upgrade":
 		full := fmt.Sprintf("%s:\n\n%s", label, r.Output)
@@ -182,6 +182,8 @@ func commandLabelHuman(action string) string {
 		return "🌍 Через тоннель"
 	case "check_direct":
 		return "🇷🇺 Напрямую"
+	case "router_doctor":
+		return "🩺 Проверка роутера"
 	case "tunnel_enable":
 		return "▶ Включить туннель"
 	case "tunnel_disable":

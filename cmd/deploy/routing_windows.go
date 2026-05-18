@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 )
@@ -41,4 +42,29 @@ func delTempHostRoute(t RouteToken) error {
 	}
 	PrintInfo(fmt.Sprintf("временный /32-маршрут к %s снят", t.TargetIP))
 	return nil
+}
+
+func manualRouteCommands(targetIP string, iface net.Interface) (add, del string) {
+	return fmt.Sprintf("route ADD %s MASK 255.255.255.255 0.0.0.0 IF %d METRIC 1", targetIP, iface.Index),
+		fmt.Sprintf("route DELETE %s", targetIP)
+}
+
+func manualRouteHint(targetIP string, c PathCandidate) string {
+	if c.Index == 0 {
+		return fmt.Sprintf(
+			"  • Windows видит VPN-интерфейс %s, но не знает его IF index. Запусти netfix --agent <nick>, чтобы wizard перечислил доступные интерфейсы.\n",
+			c.Iface,
+		)
+	}
+	add := fmt.Sprintf("route ADD %s MASK 255.255.255.255 0.0.0.0 IF %d METRIC 1", targetIP, c.Index)
+	del := fmt.Sprintf("route DELETE %s", targetIP)
+	return fmt.Sprintf(
+		"  • Windows видит VPN-интерфейс %s, но не дала wizard'у поставить временный /32 маршрут без админских прав.\n"+
+			"    Быстрый фикс: открой PowerShell от имени администратора и выполни:\n"+
+			"      %s\n"+
+			"    Потом повтори wizard-команду. После работы можно снять маршрут:\n"+
+			"      %s\n"+
+			"    Долгий фикс: добавь в WireGuard AllowedIPs точный адрес %s/32.\n",
+		c.Iface, add, del, targetIP,
+	)
 }

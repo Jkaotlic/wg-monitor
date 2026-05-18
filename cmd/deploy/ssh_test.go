@@ -132,6 +132,36 @@ func TestKnownHosts_AliasMismatchStillCaught(t *testing.T) {
 	}
 }
 
+func TestKnownHosts_ReplaceHostKey(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "known_hosts")
+	kh, err := NewKnownHosts(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1, err := genTestSigner()
+	if err != nil {
+		t.Skip()
+	}
+	s2, err := genTestSigner()
+	if err != nil {
+		t.Skip()
+	}
+	cb := kh.HostKeyCallbackFor("router_alice")
+	if err := cb("192.168.0.1:22", nil, s1.PublicKey()); err != nil {
+		t.Fatalf("first connect: %v", err)
+	}
+	if err := kh.ReplaceHostKey("router_alice", s2.PublicKey()); err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if err := cb("192.168.0.1:22", nil, s2.PublicKey()); err != nil {
+		t.Fatalf("new key should match after replace: %v", err)
+	}
+	if err := cb("192.168.0.1:22", nil, s1.PublicKey()); err == nil {
+		t.Fatal("old key should fail after replace")
+	}
+}
+
 func genTestSigner() (ssh.Signer, error) {
 	// Generate ephemeral ed25519 key for tests.
 	// (Implementation in ssh.go must export this helper, or use real ssh.NewSignerFromKey.)

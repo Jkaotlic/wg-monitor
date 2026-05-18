@@ -110,10 +110,9 @@ type UIConfig struct {
 	DiagMaxChars int `yaml:"diag_max_chars"`
 	// CompatInlineKeyboard — replace the persistent ReplyKeyboardMarkup with
 	// equivalent inline buttons attached to every bot reply. Workaround for
-	// TG Desktop dropping the bottom-keyboard panel in forum topics; also
-	// useful for users who never installed the mobile client. Default false
-	// (mobile users get the proper bottom panel as before).
-	CompatInlineKeyboard bool `yaml:"compat_inline_keyboard"`
+	// TG Desktop dropping the bottom-keyboard panel in forum topics. Pointer
+	// type so omitted YAML defaults to true while explicit false is honoured.
+	CompatInlineKeyboard *bool `yaml:"compat_inline_keyboard"`
 }
 
 func LoadConfig(path string) (*Config, error) {
@@ -217,6 +216,10 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.UI.DiagMaxChars == 0 {
 		cfg.UI.DiagMaxChars = 3500
+	}
+	if cfg.UI.CompatInlineKeyboard == nil {
+		v := true
+		cfg.UI.CompatInlineKeyboard = &v
 	}
 	if cfg.Upstream.CacheTTL == 0 {
 		cfg.Upstream.CacheTTL = 12 * time.Hour

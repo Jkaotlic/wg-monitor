@@ -206,6 +206,40 @@ agent: { nickname: testkeen }
 	}
 }
 
+func TestLoadConfig_AwgManagerURLAliasAndPasswordFile(t *testing.T) {
+	dir := t.TempDir()
+	passPath := filepath.Join(dir, "awgmgr.pass")
+	if err := os.WriteFile(passPath, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "c.yaml")
+	body := `
+backend: { url: https://x.example, token: 0123456789abcdef0123456789abcdef0123456789abcdef }
+agent: { nickname: testkeen }
+awg_manager:
+  url: http://127.0.0.1:3333
+  login: admin
+  password_file: ` + passPath + `
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.AwgManager.URL() != "http://127.0.0.1:3333" {
+		t.Fatalf("URL alias not honored: %q", cfg.AwgManager.URL())
+	}
+	got, err := cfg.AwgManager.PasswordValue()
+	if err != nil {
+		t.Fatalf("PasswordValue: %v", err)
+	}
+	if got != "secret" {
+		t.Fatalf("password: %q", got)
+	}
+}
+
 func TestLoadConfigDNSDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "c.yaml")

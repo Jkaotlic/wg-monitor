@@ -153,6 +153,70 @@ func TestRunner_UnknownAction(t *testing.T) {
 	}
 }
 
+func TestRunner_RouterDoctor_OK(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/info", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"version":"2.10.6","activeBackend":"nativewg","routerIP":"192.168.0.1","firmwareVersion":"5.00.C.11.0-0","totalMemoryMB":489,"singbox":{"installed":true,"version":"1.13.8"}}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"awg11","name":"amnezia","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg1"}]}}`))
+	})
+	mux.HandleFunc("/api/pingcheck/status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":true,"tunnels":[{"tunnelId":"awg11","tunnelName":"amnezia","status":"alive"}]}}`))
+	})
+	cli := awgmgrFake(t, mux)
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "pidof":
+			return []byte("123\n"), nil
+		case "ip":
+			return []byte("1.1.1.1 via 10.0.0.1 dev nwg1 src 10.8.1.2\n"), nil
+		default:
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+	}
+	r := Runner{AwgClient: cli, Exec: exec, Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{ID: "doctor", Action: "router_doctor"})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	for _, want := range []string{"awg-manager API", "2.10.6", "tunnels", "pingcheck", "wg-monitor agent"} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("output missing %q:\n%s", want, res.Output)
+		}
+	}
+}
+
+func TestRunner_RouterDoctor_FailsWhenProcessMissing(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/info", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"version":"2.10.6"}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"awg11","status":"running"}]}}`))
+	})
+	mux.HandleFunc("/api/pingcheck/status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":false,"tunnels":[]}}`))
+	})
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "pidof" && len(args) > 0 && args[0] == "awg-manager" {
+			return nil, fmt.Errorf("not found")
+		}
+		if name == "pidof" {
+			return []byte("123\n"), nil
+		}
+		return []byte("default via 192.168.0.1 dev br0\n"), nil
+	}
+	r := Runner{AwgClient: awgmgrFake(t, mux), Exec: exec, Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{ID: "doctor", Action: "router_doctor"})
+	if res.Status != "err" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, "awg-manager daemon") || !strings.Contains(res.Output, "not running") {
+		t.Errorf("missing process failure:\n%s", res.Output)
+	}
+}
+
 type stubOpkg struct {
 	calls     int
 	retStatus string

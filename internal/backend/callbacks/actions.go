@@ -189,7 +189,7 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	return "", nil
 }
 
-// ----- CommandAction (covers all 5 command-channel actions) -----
+// ----- CommandAction (covers command-channel actions) -----
 
 type CommandAction struct {
 	sink  CommandEnqueuer
@@ -281,6 +281,7 @@ var commandLabels = map[string]string{
 	"diag_now":       "📊 Diag",
 	"pingcheck_now":  "▶ Pingcheck",
 	"force_recheck":  "🔁 Force recheck",
+	"router_doctor":  "🩺 Проверка",
 	"opkg_upgrade":   "⬆ Opkg upgrade",
 	"tunnel_enable":  "▶ Включить",
 	"tunnel_disable": "⏸ Выключить",
@@ -348,8 +349,8 @@ func makeRebindToken() string {
 // Stored in Router.pending keyed by userID; consumed by ImportAction.
 type pendingUpload struct {
 	ConfB64       string
-	Name          string    // empty = still waiting for admin to type tunnel name
-	SuggestedName string    // sanitized from filename, shown in "how to name?" prompt
+	Name          string // empty = still waiting for admin to type tunnel name
+	SuggestedName string // sanitized from filename, shown in "how to name?" prompt
 	ThreadID      *int64
 	Token         string    // 8-hex random, embedded in callback_data
 	ExpiresAt     time.Time // 5 min from upload

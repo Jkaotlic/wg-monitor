@@ -135,5 +135,5 @@ func Confirm(prompt string, defaultYes bool) bool {
 	if line == "" {
 		return defaultYes
 	}
-	return line == "y" || line == "yes"
+	return line == "y" || line == "yes" || line == "д" || line == "да"
 }
