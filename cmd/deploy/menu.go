@@ -61,7 +61,7 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 				return actionUninstallAgent(state, secrets, askUninstallTarget(state))
 			})
 		case "5":
-			actionDoctor(state, secrets) //nolint:errcheck
+			actionDoctor(state, secrets, doctorOptions{}) //nolint:errcheck
 		case "6":
 			runActionAndSave(state, statePath, secrets, func() error {
 				return actionSyncVPS(state, secrets)
@@ -73,10 +73,18 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 			}
 		case "8":
 			ForgetKnownHostInteractive(state) //nolint:errcheck
+		case "9":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionRepairAgentToken(state, secrets, dl, "")
+			})
+		case "10":
+			if err := actionNetfix(state, netfixOptions{}); err != nil {
+				PrintFail("netfix failed: " + err.Error())
+			}
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–8 или Q.")
+			PrintFail("Не понял. Введи 1–10 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -108,12 +116,14 @@ func printMenuItems(state *State) {
 	} else {
 		fmt.Println("  [2] Обновить компоненты        " + Colorize("(проверка релиза + выбор что обновить)", ColorDim))
 	}
-	fmt.Println("  [3] Установить агента          " + Colorize("(новый или ре-установка существующего)", ColorDim))
+	fmt.Println("  [3] Добавить/установить роутер " + Colorize("(DB + TG-топик + агент на роутер)", ColorDim))
 	fmt.Println("  [4] Удалить агента             " + Colorize("(снести агент с роутера)", ColorDim))
 	fmt.Println("  [5] Проверить состояние        " + Colorize("(Doctor: local + VPS + каждый агент)", ColorDim))
 	fmt.Println("  [6] Синхронизация с VPS        " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
 	fmt.Println("  [7] Открыть wizard.toml в редакторе")
 	fmt.Println("  [8] Забыть known_hosts alias   " + Colorize("(если физически заменил роутер)", ColorDim))
+	fmt.Println("  [9] Восстановить токен агента " + Colorize("(новый token_hash + переустановка config.yaml)", ColorDim))
+	fmt.Println("  [10] Netfix маршрута          " + Colorize("(подсказать/применить /32 route через VPN)", ColorDim))
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }
@@ -146,9 +156,9 @@ func openInEditor(path string) {
 
 // askUninstallTarget builds the UninstallTarget the operator wants to
 // clean. Two paths:
-//   1. They pick a nickname from state.Agents — we use its known SSH coords.
-//   2. They pick "другой" → manual host/port/user — typical "I accidentally
-//      installed on a router not in wizard.toml" scenario.
+//  1. They pick a nickname from state.Agents — we use its known SSH coords.
+//  2. They pick "другой" → manual host/port/user — typical "I accidentally
+//     installed on a router not in wizard.toml" scenario.
 func askUninstallTarget(state *State) UninstallTarget {
 	if len(state.Agents) == 0 {
 		PrintInfo("в wizard.toml нет агентов — введи параметры роутера руками")

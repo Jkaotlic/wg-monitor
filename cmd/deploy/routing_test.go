@@ -66,16 +66,69 @@ func TestPathKind_Distinct(t *testing.T) {
 	}
 }
 
+func TestClassifyIface_WindowsWireGuardName(t *testing.T) {
+	got := classifyIface(net.Interface{
+		Index: 46,
+		Name:  "wg-srv_legion_laptop",
+		Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast,
+	})
+	if got != PathP2P {
+		t.Fatalf("Windows WireGuard interface name should be P2P, got %s", got)
+	}
+}
+
+func TestClassifyIface_EthernetName(t *testing.T) {
+	got := classifyIface(net.Interface{
+		Index: 20,
+		Name:  "Ethernet",
+		Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast,
+	})
+	if got != PathLAN {
+		t.Fatalf("Ethernet should be LAN, got %s", got)
+	}
+}
+
 type fakeProber struct {
 	ifaces    []net.Interface
-	addRoutes map[int]error               // ifIdx → error (nil → success)
-	dials     map[string]fakeDialResult   // key → result
+	addRoutes map[int]error             // ifIdx → error (nil → success)
+	dials     map[string]fakeDialResult // key → result
 	addCalls  []int
 	delCalls  []RouteToken
 	// gidIfIdx maps goroutine ID to the most recent ifIdx that goroutine added.
 	// Dial reads this to pick the correct dial result for that goroutine's route.
 	gidIfIdx sync.Map // map[uint64]int
 	mu       sync.Mutex
+}
+
+type exclusiveRouteProber struct {
+	fakeProber
+	active int
+}
+
+func (f *exclusiveRouteProber) AddRoute(ip string, ifIdx int) (RouteToken, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active > 0 {
+		return RouteToken{}, fmt.Errorf("route for another interface still active")
+	}
+	f.active++
+	f.addCalls = append(f.addCalls, ifIdx)
+	if err, ok := f.addRoutes[ifIdx]; ok && err != nil {
+		f.active--
+		return RouteToken{}, err
+	}
+	f.gidIfIdx.Store(goid(), ifIdx)
+	return RouteToken{TargetIP: ip, IfIndex: ifIdx}, nil
+}
+
+func (f *exclusiveRouteProber) DelRoute(t RouteToken) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active > 0 {
+		f.active--
+	}
+	f.delCalls = append(f.delCalls, t)
+	return nil
 }
 
 type fakeDialResult struct {
@@ -193,12 +246,56 @@ func TestStepFindReachablePath_NoResponse(t *testing.T) {
 	}
 }
 
+func TestStepFindReachablePath_ForcedRoutesDoNotOverlap(t *testing.T) {
+	f := &exclusiveRouteProber{
+		fakeProber: fakeProber{
+			ifaces: []net.Interface{
+				mockIface(2, "SSTP-A", true, "10.0.0.5"),
+				mockIface(3, "SSTP-B", true, "10.1.0.5"),
+			},
+			dials: map[string]fakeDialResult{
+				"default": {err: errors.New("i/o timeout")},
+				"ifIdx=2": {localIP: "10.0.0.5", latency: 5 * time.Millisecond},
+				"ifIdx=3": {localIP: "10.1.0.5", latency: 5 * time.Millisecond},
+			},
+		},
+	}
+	rep, cleanup, err := stepFindReachablePath(f, "192.168.31.1:222", 5*time.Second)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var responders int
+	for _, c := range rep.Candidates {
+		if c.Responded() && c.Iface != "default" {
+			responders++
+		}
+	}
+	if responders != 2 {
+		t.Fatalf("forced routes must be probed one-at-a-time so both can respond; got %d responders: %+v", responders, rep.Candidates)
+	}
+}
+
 func TestStepFindReachablePath_InvalidTarget(t *testing.T) {
 	f := &fakeProber{}
 	_, cleanup, err := stepFindReachablePath(f, "not-an-ip:222", 5*time.Second)
 	defer cleanup()
 	if err == nil {
 		t.Fatal("want error for non-IP target")
+	}
+}
+
+func TestPreferChosenCandidate_UsesPreferredResponder(t *testing.T) {
+	rep := &PathReport{
+		Candidates: []PathCandidate{
+			{Iface: "SSTP-A", Kind: PathP2P, Latency: 5 * time.Millisecond},
+			{Iface: "SSTP-B", Kind: PathP2P, Latency: 50 * time.Millisecond},
+		},
+	}
+	rep.Decide()
+	preferChosenCandidate(rep, "SSTP-B")
+	if rep.Chosen == nil || rep.Chosen.Iface != "SSTP-B" {
+		t.Fatalf("want preferred responder SSTP-B, got %+v", rep.Chosen)
 	}
 }
 
@@ -216,6 +313,13 @@ func TestDescribePath_Renders(t *testing.T) {
 	}
 	if !strings.Contains(out, "Ethernet") || !strings.Contains(out, "timeout") {
 		t.Errorf("missing LAN fail row: %q", out)
+	}
+}
+
+func TestTrimDialErr_RouteNeedsAdmin(t *testing.T) {
+	got := trimDialErr(errors.New("route ADD 192.168.31.1/32 IF 46: The requested operation requires elevation."))
+	if got != "route needs admin" {
+		t.Fatalf("got %q, want route needs admin", got)
 	}
 }
 

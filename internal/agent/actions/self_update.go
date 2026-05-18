@@ -19,6 +19,8 @@ import (
 // can rebuild with a different default. Tag is appended at call time.
 var SelfUpdateRepoBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
 
+const maxSelfUpdateArtifactSize = 64 << 20
+
 // SelfUpdate downloads the agent binary for the given release tag, verifies
 // its SHA-256 against checksums.txt from the same release, writes it to
 // /opt/bin/wg-monitor.new, and spawns a detached shell script that swaps the
@@ -116,7 +118,14 @@ func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSelfUpdateArtifactSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxSelfUpdateArtifactSize {
+		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxSelfUpdateArtifactSize)
+	}
+	return body, nil
 }
 
 // parseChecksum picks the SHA-256 hex for asset `name` from a checksums.txt
@@ -161,5 +170,12 @@ cp -p ` + binPath + ` ` + binPath + `.bak 2>/dev/null
 mv ` + binPath + `.new ` + binPath + `
 chmod 755 ` + binPath + `
 /opt/etc/init.d/S99wg-monitor start
+sleep 2
+if ! pgrep -x wg-monitor >/dev/null 2>&1; then
+	/opt/etc/init.d/S99wg-monitor stop 2>/dev/null
+	mv ` + binPath + `.bak ` + binPath + `
+	chmod 755 ` + binPath + `
+	/opt/etc/init.d/S99wg-monitor start
+fi
 `
 }

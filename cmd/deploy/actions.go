@@ -3,13 +3,17 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,7 +37,11 @@ func runPathDiscoveryStep(host string, port int, preferred string, prober Prober
 	if rep.Chosen == nil {
 		return rep, cleanup, "", nil
 	}
-	if rep.Multiple && os.Getenv("WG_YES_TO_ALL") != "1" {
+	preferredHit := preferred != "" && preferChosenCandidate(rep, preferred)
+	if preferredHit {
+		PrintInfo("preferred_iface " + preferred + " отвечает — использую его")
+	}
+	if rep.Multiple && !preferredHit && os.Getenv("WG_YES_TO_ALL") != "1" {
 		fmt.Println("Несколько путей отвечают. Кого выбираешь?")
 		responders := make([]PathCandidate, 0, len(rep.Candidates))
 		for _, c := range rep.Candidates {
@@ -66,11 +74,82 @@ func runPathDiscoveryStep(host string, port int, preferred string, prober Prober
 	return rep, cleanup, chosenName, nil
 }
 
+func runPathDiscoveryStepWithNetfix(state *State, ag *AgentState, secrets *SecretStore) (*PathReport, func(), string, error) {
+	port := portOrDefault(ag.Port, 222)
+	rep, cleanup, iface, err := runPathDiscoveryStep(ag.Host, port, ag.PreferredIface, NewRealProber())
+	if err != nil || rep == nil || rep.Chosen != nil {
+		return rep, cleanup, iface, err
+	}
+
+	cand, ok := routeFixCandidate(rep)
+	if !ok || os.Getenv("WG_YES_TO_ALL") == "1" {
+		return rep, cleanup, iface, nil
+	}
+
+	targetIP, _, splitErr := net.SplitHostPort(rep.Target)
+	if splitErr != nil {
+		return rep, cleanup, iface, nil
+	}
+	fmt.Print(manualRouteHint(targetIP, cand))
+	if !Confirm("Применить netfix сейчас и повторить поиск пути?", false) {
+		return rep, cleanup, iface, nil
+	}
+
+	cleanup()
+	cleanup = func() {}
+	tok, addErr := addTempHostRoute(targetIP, cand.Index)
+	if addErr != nil {
+		PrintFail("netfix: " + addErr.Error())
+		return rep, cleanup, iface, nil
+	}
+	routeCleanup := func() {
+		_ = delTempHostRoute(tok)
+	}
+	PrintOK("netfix: /32 route добавлен, повторяю поиск пути")
+
+	rep2, cleanup2, iface2, err2 := runPathDiscoveryStep(ag.Host, port, ag.PreferredIface, NewRealProber())
+	combinedCleanup := func() {
+		cleanup2()
+		routeCleanup()
+	}
+	if err2 != nil || rep2 == nil || rep2.Chosen == nil {
+		if rep2 != nil {
+			PrintFail(diagnosisFromReport(rep2, heartbeatForAgent(state, ag, secrets)))
+		}
+		return rep2, combinedCleanup, iface2, err2
+	}
+	return rep2, combinedCleanup, iface2, nil
+}
+
+func routeFixCandidate(rep *PathReport) (PathCandidate, bool) {
+	if rep == nil {
+		return PathCandidate{}, false
+	}
+	for _, c := range rep.Candidates {
+		if c.Kind != PathP2P || c.Index == 0 || c.Err == nil {
+			continue
+		}
+		errText := strings.ToLower(c.Err.Error())
+		if strings.Contains(errText, "route add") &&
+			(strings.Contains(errText, "requires elevation") ||
+				strings.Contains(errText, "access denied") ||
+				strings.Contains(errText, "forbidden")) {
+			return c, true
+		}
+	}
+	return PathCandidate{}, false
+}
+
 // diagnoseUnreachable handles "Layer 1 found no responding path". Fetches
 // VPS heartbeat for the agent (if state allows), classifies the candidate
 // failure modes, prints a one-shot diagnostic, returns a generic err so
 // the caller doesn't fall into SSH-retry loop.
 func diagnoseUnreachable(state *State, ag *AgentState, rep *PathReport, secrets *SecretStore) error {
+	PrintFail(diagnosisFromReport(rep, heartbeatForAgent(state, ag, secrets)))
+	return fmt.Errorf("router %s unreachable", ag.Host)
+}
+
+func heartbeatForAgent(state *State, ag *AgentState, secrets *SecretStore) string {
 	hb := ""
 	if state.Backend.Domain != "" {
 		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
@@ -81,8 +160,7 @@ func diagnoseUnreachable(state *State, ag *AgentState, rep *PathReport, secrets 
 			}
 		}
 	}
-	PrintFail(diagnosisFromReport(rep, hb))
-	return fmt.Errorf("router %s unreachable", ag.Host)
+	return hb
 }
 
 // diagnosisFromReport is the pure-logic core: takes a PathReport with no
@@ -108,6 +186,9 @@ func diagnosisFromReport(rep *PathReport, hb string) string {
 				timeoutSeen = true
 			}
 		}
+	}
+	if hint := routeElevationHint(rep); hint != "" {
+		sb.WriteString(hint)
 	}
 
 	switch {
@@ -138,6 +219,32 @@ func diagnosisFromReport(rep *PathReport, hb string) string {
 	}
 
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+func routeElevationHint(rep *PathReport) string {
+	if rep == nil {
+		return ""
+	}
+	targetIP, _, err := net.SplitHostPort(rep.Target)
+	if err != nil || targetIP == "" {
+		return ""
+	}
+	for _, c := range rep.Candidates {
+		if c.Kind != PathP2P || c.Index == 0 || c.Err == nil {
+			continue
+		}
+		errText := strings.ToLower(c.Err.Error())
+		if !strings.Contains(errText, "route add") {
+			continue
+		}
+		if !strings.Contains(errText, "requires elevation") &&
+			!strings.Contains(errText, "access denied") &&
+			!strings.Contains(errText, "forbidden") {
+			continue
+		}
+		return manualRouteHint(targetIP, c)
+	}
+	return ""
 }
 
 // ensureWizardToken returns a 64-hex token from the SecretStore, generating
@@ -295,7 +402,7 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 // probeWizardEndpoint GETs /v1/wizard/agents with NO Authorization header.
 // A correctly-wired backend returns 401 (endpoint registered, auth required).
 // Anything else — 404 in particular — means the wizard.token_file in
-// backend.yaml is empty/unreadable/missing, and the deploy wizard's [5] sync
+// backend.yaml is empty/unreadable/missing, and the deploy wizard's [6] sync
 // won't work. Best-effort: prints a colored line; never returns an error so
 // it can't block the deploy flow.
 func probeWizardEndpoint(url string) {
@@ -312,7 +419,7 @@ func probeWizardEndpoint(url string) {
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
-		PrintOK("wizard endpoint: 401 (auth required, ready for [5] Sync)")
+		PrintOK("wizard endpoint: 401 (auth required, ready for [6] Sync)")
 	case http.StatusNotFound:
 		PrintWarn("wizard endpoint: 404 — /v1/wizard/* НЕ зарегистрирован")
 		PrintInfo("  Возможные причины:")
@@ -348,14 +455,14 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 
 	// Update-flow только подменяет бинарь — init-скрипт, config.yaml, директории
 	// и токен заводит actionInstallAgent. Если последний install ещё не
-	// случался ([5] VPS Sync даёт запись с пустыми SSH-полями и пустой версией,
+	// случался ([6] VPS Sync даёт запись с пустыми SSH-полями и пустой версией,
 	// или сюда вручную добавили [[agents]] блок), update сломает роутер: стопнет
 	// агента и попытается стартануть несуществующий S99-скрипт. Bail заранее,
 	// до prompt'а пароля.
 	if ag.LastDeployedVersion == "" {
 		PrintFail(fmt.Sprintf(
 			"%s ещё ни разу не устанавливался (last_deployed_version пуст в wizard.toml).\n"+
-				"  Это update-flow, он только подменяет бинарь. Для первого install запусти [3] Установить агента.",
+				"  Это update-flow, он только подменяет бинарь. Для первого install запусти [3] Добавить/установить роутер.",
 			ag.Nickname))
 		return fmt.Errorf("agent %s never deployed — use [3] install-agent first", ag.Nickname)
 	}
@@ -387,7 +494,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		return err
 	}
 
-	rep, cleanup, iface, perr := runPathDiscoveryStep(ag.Host, portOrDefault(ag.Port, 222), ag.PreferredIface, NewRealProber())
+	rep, cleanup, iface, perr := runPathDiscoveryStepWithNetfix(state, ag, secrets)
 	defer cleanup()
 	if perr != nil {
 		PrintFail("path discovery: " + perr.Error())
@@ -401,7 +508,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	}
 
 	PrintStep(1, 4, fmt.Sprintf("SSH к роутеру %s (%s:%d)", ag.Nickname, ag.Host, portOrDefault(ag.Port, 222)))
-	s, err := ConnectSSH(ag.Host, portOrDefault(ag.Port, 222), userOrDefault(ag.User, "root"), pass, kh, ag.Nickname)
+	s, err := connectAgentSSHManaged(state, ag, pass, kh, "update-agent")
 	if err != nil {
 		// SSH-fail retry: оператор мог переехать роутером (новый IP / port
 		// forward / ротированный пароль). Один re-prompt host/port/user/
@@ -419,7 +526,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 				PrintWarn("не смог обновить пароль в disk-кэше: " + err.Error())
 			}
 		}
-		s, err = ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
+		s, err = connectAgentSSHManaged(state, ag, pass, kh, "update-agent")
 		if err != nil {
 			return err
 		}
@@ -428,6 +535,9 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	if err := stepCheckSSH(s, ag.Host); err != nil {
 		return err
 	}
+	hostname := strings.TrimSpace(stepReadOrEmpty(s, "cat /proc/sys/kernel/hostname 2>/dev/null || uname -n"))
+	mac := stepDetectPrimaryMAC(s)
+	existingNick := stepReadExistingAgentNickname(s)
 
 	// Defence-in-depth: state может врать (last_deployed_version выставлен
 	// руками, или /opt был вайпнут после reset). Если init-скрипта нет, не
@@ -436,7 +546,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	if _, _, rc, _ := s.Run("test -x /opt/etc/init.d/S99wg-monitor"); rc != 0 {
 		PrintFail(fmt.Sprintf(
 			"на %s нет /opt/etc/init.d/S99wg-monitor — агент не установлен на роутере, хотя в wizard.toml last_deployed_version=%q.\n"+
-				"  Возможно, /opt был вайпнут или агент ставился без wizard'а. Запусти [3] Установить агента.",
+				"  Возможно, /opt был вайпнут или агент ставился без wizard'а. Запусти [3] Добавить/установить роутер.",
 			ag.Nickname, ag.LastDeployedVersion))
 		return fmt.Errorf("S99wg-monitor missing on %s — use [3] install-agent", ag.Nickname)
 	}
@@ -450,10 +560,13 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		PrintFail(err.Error())
 		return err
 	}
+	if !confirmAmbiguousTarget(state, ag, hostname, mac, existingNick, "update-agent", Ask) {
+		return fmt.Errorf("ambiguous target confirmation failed")
+	}
 
 	// Нормализация SSH-полей после успешного подключения. До этой точки оператор
 	// мог иметь ag.User=="" / ag.Port==0 (например, агент попал в state через
-	// [5] VPS Sync, где remote SSHUser=NULL и MergeAgents оставляет local пустым).
+	// [6] VPS Sync, где remote SSHUser=NULL и MergeAgents оставляет local пустым).
 	// SSH мы устанавливали через `userOrDefault(ag.User, "root")` — фактически
 	// "root", но это значение не возвращалось обратно в state. Дальше
 	// pushToVPSBestEffort шлёт ag.* в PUT /v1/wizard/agents/<nick>, бэкенд
@@ -513,6 +626,7 @@ func userOrDefault(u, def string) string {
 //   - ExpectedMAC already pinned (re-install or update — verifyExpectedMAC
 //     and Layer-1 path-discovery already covered identity)
 //   - WG_YES_TO_ALL=1 (scripted runs)
+//
 // Returns true to proceed with install, false to bail. The `ask` callback
 // is the prompt function — injected for test isolation; production uses Ask.
 func coldInstallIdentityGate(ag *AgentState, hostname, mac, arch string, ask func(prompt, def string) string) bool {
@@ -528,6 +642,102 @@ func coldInstallIdentityGate(ag *AgentState, hostname, mac, arch string, ask fun
 	)
 	ans := strings.ToLower(strings.TrimSpace(ask(msg, "")))
 	return ans == "y" || ans == "yes" || ans == "д" || ans == "да"
+}
+
+func confirmAmbiguousTarget(state *State, ag *AgentState, hostname, mac, existingNick, op string, ask func(prompt, def string) string) bool {
+	peers := agentsWithSameTarget(state, ag)
+	if len(peers) < 2 || os.Getenv("WG_YES_TO_ALL") == "1" {
+		return true
+	}
+
+	target := agentTargetKey(*ag)
+	PrintWarn(fmt.Sprintf("double-check: target %s общий для нескольких агентов: %s", target, strings.Join(peers, ", ")))
+	PrintInfo(fmt.Sprintf("подключились как %s к hostname=%q mac=%s existing_agent=%q", ag.Nickname, emptyAsQuestion(hostname), emptyAsQuestion(mac), existingNick))
+	if ag.ExpectedMAC != "" {
+		PrintInfo("ожидаемый pinned MAC для " + ag.Nickname + ": " + ag.ExpectedMAC)
+	} else {
+		PrintWarn("у " + ag.Nickname + " ещё нет expected_mac в wizard.toml — нужен ручной double-check")
+	}
+	answer := strings.TrimSpace(ask("Чтобы продолжить "+op+" для "+ag.Nickname+", введи nickname", ""))
+	if answer != ag.Nickname {
+		PrintFail("double-check не пройден: введено " + strconv.Quote(answer) + ", ожидалось " + strconv.Quote(ag.Nickname))
+		return false
+	}
+	PrintOK("double-check: подтверждён " + ag.Nickname)
+	return true
+}
+
+func connectAgentSSHManaged(state *State, ag *AgentState, pass string, kh *KnownHosts, op string) (*SSH, error) {
+	port := portOrDefault(ag.Port, 222)
+	user := userOrDefault(ag.User, "root")
+	s, err := ConnectSSH(ag.Host, port, user, pass, kh, ag.Nickname)
+	if !isHostKeyChangedErr(err) {
+		return s, err
+	}
+
+	PrintWarn("SSH host key для " + ag.Nickname + " изменился. Запускаю managed double-check вместо ручного known-hosts forget.")
+	probe, pub, probeErr := ConnectSSHInsecureCaptureKey(ag.Host, port, user, pass)
+	if probeErr != nil {
+		return nil, fmt.Errorf("host-key double-check probe failed: %w", probeErr)
+	}
+	defer probe.Close()
+
+	hostname := strings.TrimSpace(stepReadOrEmpty(probe, "cat /proc/sys/kernel/hostname 2>/dev/null || uname -n"))
+	mac := stepDetectPrimaryMAC(probe)
+	existingNick := stepReadExistingAgentNickname(probe)
+	PrintInfo(fmt.Sprintf("double-check probe: hostname=%q mac=%s existing_agent=%q", emptyAsQuestion(hostname), emptyAsQuestion(mac), existingNick))
+
+	if ag.ExpectedMAC != "" {
+		actual := extractMAC(mac)
+		want := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(ag.ExpectedMAC, ":", ""), "-", ""))
+		if actual == "" {
+			return nil, fmt.Errorf("host key changed and expected_mac is pinned, but router MAC is unreadable")
+		}
+		if actual != want {
+			return nil, fmt.Errorf("host key changed and MAC mismatch: got %s, expected %s", actual, want)
+		}
+		PrintOK("host-key double-check: MAC совпадает с pinned")
+	}
+	if existingNick != "" && existingNick != ag.Nickname {
+		return nil, fmt.Errorf("host key changed, but router already hosts agent %q, expected %q", existingNick, ag.Nickname)
+	}
+	if !confirmAmbiguousTarget(state, ag, hostname, mac, existingNick, op+" host-key rotation", Ask) {
+		return nil, fmt.Errorf("host-key rotation cancelled")
+	}
+	if ag.ExpectedMAC == "" && existingNick == "" {
+		PrintWarn("нет ни expected_mac, ни existing agent.nickname — принимаю новый host key только по ручному double-check")
+	}
+	if err := kh.ReplaceHostKey(ag.Nickname, pub); err != nil {
+		return nil, fmt.Errorf("replace known_hosts for %s: %w", ag.Nickname, err)
+	}
+	PrintOK("known_hosts обновлён для " + ag.Nickname)
+	return ConnectSSH(ag.Host, port, user, pass, kh, ag.Nickname)
+}
+
+func agentsWithSameTarget(state *State, ag *AgentState) []string {
+	if state == nil || ag == nil {
+		return nil
+	}
+	key := agentTargetKey(*ag)
+	var names []string
+	for _, other := range state.Agents {
+		if agentTargetKey(other) == key {
+			names = append(names, other.Nickname)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func agentTargetKey(ag AgentState) string {
+	return fmt.Sprintf("%s:%d", strings.TrimSpace(ag.Host), portOrDefault(ag.Port, 222))
+}
+
+func emptyAsQuestion(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "?"
+	}
+	return s
 }
 
 func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
@@ -551,7 +761,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 			return fmt.Errorf("nickname required")
 		}
 		// Повторный FindAgent после prompt'а: если оператор только что
-		// ввёл nickname агента, добавленного через [4] — переиспользуем
+		// ввёл nickname агента, добавленного через [3] — переиспользуем
 		// существующий entry вместо создания дубликата в state.Agents.
 		ag = state.FindAgent(nick)
 		if ag == nil {
@@ -562,7 +772,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 
 	// Каждый Ask условный — поле уже могли заполнить в state (через
 	// actionAddRouter, или вручную в wizard.toml, или прошлый прогон).
-	// Цель — нулевые prompt'ы на повторных запусках и при вызове из [4].
+	// Цель — нулевые prompt'ы на повторных запусках и при вызове из [3].
 	if ag.Host == "" {
 		ag.Host = orDefault(Ask("Хост роутера", "192.168.31.1"), "192.168.31.1")
 	}
@@ -590,7 +800,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	}
 
 	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
-	// env (выставляет [4] в текущем процессе) + disk-кэш (выставляет [4]
+	// env (выставляет [3] в текущем процессе) + disk-кэш (выставляет [3]
 	// между сессиями). Случайно сгенерить новый токен здесь нельзя —
 	// раскорреляция с DB (token_hash на VPS не совпадёт) → backend
 	// будет отвергать heartbeat'ы агента молча.
@@ -599,10 +809,10 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		PrintFail(fmt.Sprintf(
 			"токен %s не найден ни в env, ни в disk-кэше.\n"+
 				"  Это значит, что %s ещё не зарегистрирован в DB на VPS.\n"+
-				"  Запусти [4] Добавить новый роутер — wizard сам создаст user'а через wg-monitor-cli\n"+
-				"  и сохранит raw-токен в disk-кэш. После этого можно использовать [3] для переустановки.",
+				"  Запусти [3] Добавить/установить роутер — wizard сам создаст user'а через wg-monitor-cli\n"+
+				"  и сохранит raw-токен в disk-кэш. После этого можно использовать install-agent --agent "+ag.Nickname+" для переустановки.",
 			tokenEnv, ag.Nickname))
-		return fmt.Errorf("agent token for %s not in cache; use [4] Add Router first", ag.Nickname)
+		return fmt.Errorf("agent token for %s not in cache; use [3] add/install router first", ag.Nickname)
 	}
 
 	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
@@ -610,7 +820,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 		return err
 	}
 
-	rep2, cleanup2, iface2, perr2 := runPathDiscoveryStep(ag.Host, portOrDefault(ag.Port, 222), ag.PreferredIface, NewRealProber())
+	rep2, cleanup2, iface2, perr2 := runPathDiscoveryStepWithNetfix(state, ag, secrets)
 	defer cleanup2()
 	if perr2 != nil {
 		PrintFail("path discovery: " + perr2.Error())
@@ -624,7 +834,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	}
 
 	PrintStep(1, 8, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
-	s, err := ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
+	s, err := connectAgentSSHManaged(state, ag, pass, kh, "install-agent")
 	if err != nil {
 		// Single retry: дефолты (192.168.31.1:222 root) подходят к
 		// Keenetic из коробки, но если у оператора другой роутер /
@@ -645,7 +855,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 				PrintWarn("не смог обновить пароль в disk-кэше: " + err.Error())
 			}
 		}
-		s, err = ConnectSSH(ag.Host, ag.Port, ag.User, pass, kh, ag.Nickname)
+		s, err = connectAgentSSHManaged(state, ag, pass, kh, "install-agent")
 		if err != nil {
 			return err
 		}
@@ -680,6 +890,9 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 	if !coldInstallIdentityGate(ag, hostname, mac, "?", Ask) {
 		PrintFail("install отменён оператором")
 		return fmt.Errorf("install cancelled — identity not confirmed")
+	}
+	if !confirmAmbiguousTarget(state, ag, hostname, mac, existingNick, "install-agent", Ask) {
+		return fmt.Errorf("ambiguous target confirmation failed")
 	}
 
 	// Capture normalised MAC for future verifyExpectedMAC calls. On first
@@ -1052,7 +1265,7 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		PrintFail(fmt.Sprintf(
 			"%s уже в DB на VPS, но raw-токен утерян (token_hash необратим). Удали запись:\n"+
 				"  ssh root@%s sqlite3 /var/lib/wg-monitor/state.db \"DELETE FROM users WHERE nickname='%s';\"\n"+
-				"и запусти [4] заново.",
+				"и запусти [3] заново.",
 			nick, state.Backend.Host, nick))
 		return fmt.Errorf("user exists in DB but token unknown")
 	default:
@@ -1139,6 +1352,98 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	return actionInstallAgent(state, secrets, dl, nick)
 }
 
+func actionRepairAgentToken(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
+	if state.Backend.Host == "" {
+		return fmt.Errorf("no backend configured")
+	}
+	ag, err := chooseAgentForAction(state, nickname, "восстановления токена")
+	if err != nil {
+		return err
+	}
+	if !cliNicknameRe.MatchString(ag.Nickname) {
+		return fmt.Errorf("nickname %q does not match %s", ag.Nickname, cliNicknameRe.String())
+	}
+
+	if os.Getenv("WG_YES_TO_ALL") != "1" {
+		PrintWarn("Будет создан новый agent token. Старый токен перестанет подходить после обновления token_hash на VPS.")
+		ans := strings.ToLower(strings.TrimSpace(Ask("продолжить восстановление токена для "+ag.Nickname+"? [y/N]", "n")))
+		if ans != "y" && ans != "yes" && ans != "д" && ans != "да" {
+			return fmt.Errorf("repair-agent-token cancelled")
+		}
+	}
+
+	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
+	if pass == "" {
+		return fmt.Errorf("missing VPS password")
+	}
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+
+	PrintStep(1, 4, "VPS: проверить запись "+ag.Nickname+" в users DB")
+	bs, err := ConnectSSH(state.Backend.Host, portOrDefault(state.Backend.Port, 22), userOrDefault(state.Backend.User, "root"), pass, kh, "backend")
+	if err != nil {
+		return err
+	}
+	exists, err := vpsUserExists(bs, ag.Nickname)
+	bs.Close()
+	if err != nil {
+		return fmt.Errorf("check users table: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("agent %s is not in VPS users DB; run add-router first", ag.Nickname)
+	}
+	PrintOK("users DB: " + ag.Nickname + " найден")
+
+	PrintStep(2, 4, "Сгенерировать новый raw-token")
+	rawToken, err := generateAgentRawToken()
+	if err != nil {
+		return err
+	}
+	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
+	oldEnv, hadOldEnv := os.LookupEnv(tokenEnv)
+	os.Setenv(tokenEnv, rawToken)
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		if hadOldEnv {
+			os.Setenv(tokenEnv, oldEnv)
+		} else {
+			os.Unsetenv(tokenEnv)
+		}
+	}()
+	PrintOK(tokenEnv + " подготовлен в памяти процесса")
+
+	PrintStep(3, 4, "Переустановить конфиг агента на роутере")
+	if err := actionInstallAgent(state, secrets, dl, ag.Nickname); err != nil {
+		return fmt.Errorf("install agent with new token: %w", err)
+	}
+
+	PrintStep(4, 4, "VPS: обновить token_hash и сохранить raw-token")
+	bs, err = ConnectSSH(state.Backend.Host, portOrDefault(state.Backend.Port, 22), userOrDefault(state.Backend.User, "root"), pass, kh, "backend")
+	if err != nil {
+		return err
+	}
+	defer bs.Close()
+	if err := vpsUpdateAgentTokenHash(bs, ag.Nickname, hashAgentRawToken(rawToken)); err != nil {
+		return err
+	}
+	if err := secrets.Set(tokenEnv, rawToken); err != nil {
+		if errors.Is(err, ErrCacheDisabled) {
+			PrintWarn("WG_NO_SECRET_CACHE=1 — raw-token не сохранён на диск. Сохрани вручную:")
+			fmt.Printf("    %s=%s\n", tokenEnv, rawToken)
+		} else {
+			return fmt.Errorf("save %s: %w", tokenEnv, err)
+		}
+	}
+	committed = true
+	PrintOK("token_hash на VPS и " + tokenEnv + " в локальном кэше синхронизированы")
+	return nil
+}
+
 // cliNicknameRe mirrors wg-monitor-cli's own regex (cmd/wg-monitor-cli/main.go).
 // The CLI rejects anything else, so we validate up-front to avoid a confusing
 // error after the nickname is already collected.
@@ -1172,6 +1477,76 @@ func vpsUserExists(bs *SSH, nick string) (bool, error) {
 	return strings.TrimSpace(out) == "1", nil
 }
 
+func generateAgentRawToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("rand: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+func hashAgentRawToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+func buildUpdateAgentTokenHashSQL(nick, tokenHash string) string {
+	sqlNick := strings.ReplaceAll(nick, "'", "''")
+	sqlHash := strings.ReplaceAll(tokenHash, "'", "''")
+	return fmt.Sprintf("UPDATE users SET token_hash = '%s' WHERE nickname = '%s'; SELECT changes();", sqlHash, sqlNick)
+}
+
+func vpsUpdateAgentTokenHash(bs *SSH, nick, tokenHash string) error {
+	if !cliNicknameRe.MatchString(nick) {
+		return fmt.Errorf("invalid nickname %q", nick)
+	}
+	if len(tokenHash) != 64 {
+		return fmt.Errorf("invalid token hash length for %s", nick)
+	}
+	cmd := fmt.Sprintf(
+		`sqlite3 /var/lib/wg-monitor/state.db %s`,
+		shellSingleQuote(buildUpdateAgentTokenHashSQL(nick, tokenHash)),
+	)
+	out, stderr, rc, err := bs.Run(cmd)
+	if err != nil {
+		return fmt.Errorf("ssh transport: %w", err)
+	}
+	if rc != 0 {
+		return fmt.Errorf("sqlite3 update token_hash rc=%d stderr=%q", rc, strings.TrimSpace(stderr))
+	}
+	lines := nonEmptyLines(out)
+	if len(lines) == 0 || strings.TrimSpace(lines[len(lines)-1]) != "1" {
+		return fmt.Errorf("sqlite3 update token_hash affected %q rows", strings.TrimSpace(out))
+	}
+	PrintOK("users DB: token_hash обновлён для " + nick)
+	return nil
+}
+
+func chooseAgentForAction(state *State, nickname, label string) (*AgentState, error) {
+	if nickname != "" {
+		ag := state.FindAgent(nickname)
+		if ag == nil {
+			return nil, fmt.Errorf("agent %q not found in wizard.toml", nickname)
+		}
+		return ag, nil
+	}
+	switch len(state.Agents) {
+	case 0:
+		return nil, fmt.Errorf("no agents in wizard.toml")
+	case 1:
+		return &state.Agents[0], nil
+	}
+	fmt.Println("Выбери роутер для " + label + ":")
+	for i, ag := range state.Agents {
+		fmt.Printf("  [%d] %s (%s:%d)\n", i+1, ag.Nickname, ag.Host, portOrDefault(ag.Port, 222))
+	}
+	idx := parseIntOr(Ask("номер", "1"), 1)
+	if idx < 1 || idx > len(state.Agents) {
+		idx = 1
+	}
+	return &state.Agents[idx-1], nil
+}
+
 // vpsAddUser invokes /usr/local/bin/wg-monitor-cli add-user on the VPS and
 // extracts the raw token from its stdout. The CLI prints exactly one
 // "Token (raw, save now — only shown once): <hex>\n" line — see
@@ -1189,7 +1564,7 @@ func vpsAddUser(bs *SSH, nick, kind string) (string, error) {
 	if _, _, rc, _ := bs.Run("test -x /usr/local/bin/wg-monitor-cli"); rc != 0 {
 		return "", fmt.Errorf(
 			"/usr/local/bin/wg-monitor-cli не установлен на VPS — на этом VPS он добавлялся вручную. " +
-				"Поставь его вручную (scp wg-monitor-cli-linux-amd64 → /usr/local/bin/wg-monitor-cli, chmod +x) и повтори [4].")
+				"Поставь его вручную (scp wg-monitor-cli-linux-amd64 → /usr/local/bin/wg-monitor-cli, chmod +x) и повтори [3].")
 	}
 	cmd := fmt.Sprintf(
 		`/usr/local/bin/wg-monitor-cli add-user --nickname=%s --awg-iface=awg0 --expected-exit-ip=0.0.0.0 --kind=%s`,

@@ -76,14 +76,35 @@ func (a AgentConfig) Interval() time.Duration {
 // listens by default on Keenetic. Users with a non-default port should
 // override base_url; otherwise the field can be omitted entirely.
 type AwgManagerConfig struct {
-	BaseURL string `yaml:"base_url"`
+	BaseURL      string `yaml:"base_url"`
+	URLAlias     string `yaml:"url"`
+	Login        string `yaml:"login"`
+	Password     string `yaml:"password"`
+	PasswordFile string `yaml:"password_file"`
 }
 
 func (a AwgManagerConfig) URL() string {
 	if a.BaseURL != "" {
 		return a.BaseURL
 	}
+	if a.URLAlias != "" {
+		return a.URLAlias
+	}
 	return "http://127.0.0.1:2222"
+}
+
+func (a AwgManagerConfig) PasswordValue() (string, error) {
+	if a.Password != "" {
+		return a.Password, nil
+	}
+	if a.PasswordFile == "" {
+		return "", nil
+	}
+	body, err := os.ReadFile(a.PasswordFile)
+	if err != nil {
+		return "", fmt.Errorf("read awg_manager.password_file: %w", err)
+	}
+	return strings.TrimSpace(string(body)), nil
 }
 
 // StateConfig: where the reporter persists last_report_at across restarts.

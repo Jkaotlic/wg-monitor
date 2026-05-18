@@ -83,15 +83,15 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 // updateTarget describes one row in the update table and is consumed by the
 // runner to dispatch the right install action.
 type updateTarget struct {
-	Label             string // e.g. "backend (vps.example.com)" or "agent testkeen"
-	IsAgent           bool   // false → backend, true → an agent
-	AgentNickname     string // populated when IsAgent
-	Host              string
-	Port              int
-	InstalledVersion  string // last deployed version recorded in wizard.toml
-	LatestVersion     string // GitHub latest tag
-	LastDeploy        string
-	NeedsUpdate       bool
+	Label            string // e.g. "backend (vps.example.com)" or "agent testkeen"
+	IsAgent          bool   // false → backend, true → an agent
+	AgentNickname    string // populated when IsAgent
+	Host             string
+	Port             int
+	InstalledVersion string // last deployed version recorded in wizard.toml
+	LatestVersion    string // GitHub latest tag
+	LastDeploy       string
+	NeedsUpdate      bool
 }
 
 func buildUpdateTargets(state *State, latest string) []updateTarget {
@@ -298,6 +298,13 @@ func canPullDeploy(state *State, secrets *SecretStore, t updateTarget) bool {
 	return tok != ""
 }
 
+func shortCommandID(id string) string {
+	if len(id) <= 12 {
+		return id
+	}
+	return id[:12]
+}
+
 // runPullDeploy drives the pull-based update for a single agent. It enqueues
 // a self_update command on the VPS, waits for the agent's CommandResult
 // (verify+swap-schedule ack), then polls /v1/wizard/agents up to 2 minutes
@@ -316,7 +323,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	if err != nil {
 		return fmt.Errorf("enqueue deploy: %w", err)
 	}
-	PrintOK(fmt.Sprintf("команда отправлена (cmd_id=%s) — жду ack от агента", cmdID[:12]))
+	PrintOK(fmt.Sprintf("команда отправлена (cmd_id=%s) — жду ack от агента", shortCommandID(cmdID)))
 
 	// Phase 1: agent CommandResult. Verify+schedule typically completes in
 	// 5-30s (download ~12MB on a Keenetic over the operator's link). Allow

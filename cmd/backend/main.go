@@ -104,7 +104,7 @@ func main() {
 		DeleteUserCommandMessages: cfg.UI.DeleteUserCommandMessages != nil && *cfg.UI.DeleteUserCommandMessages,
 		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
 		DiagMaxChars:              cfg.UI.DiagMaxChars,
-		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard,
+		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard != nil && *cfg.UI.CompatInlineKeyboard,
 	}
 	disp.WelcomeKeyboard = func() any {
 		return uiSnap.KeyboardForTopic("per_router")

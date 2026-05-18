@@ -7,7 +7,12 @@ agent:
   interval_sec: 60
 
 awg_manager:
-  url: http://127.0.0.1:2222
+  base_url: http://127.0.0.1:2222
+  # awg-manager 2.10+ documents cookie auth for most /api endpoints.
+  # Leave login/password empty for local installations without auth; set them
+  # (or password_file) if your awg-manager requires a session.
+  # login: admin
+  # password_file: /opt/etc/wg-monitor/awg-manager-password.txt
 
 checks:
   dns:

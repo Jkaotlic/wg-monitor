@@ -134,3 +134,29 @@ func looksLikePermissionDenied(out []byte, err error) bool {
 		strings.Contains(s, "you must be root") ||
 		strings.Contains(s, "rtnetlink answers: operation not permitted")
 }
+
+func manualRouteCommands(targetIP string, iface net.Interface) (add, del string) {
+	binary, addArgs, delArgs, manualHint := unixRouteCmds(runtime.GOOS, targetIP, iface.Name)
+	if binary == "" {
+		return manualHint, fmt.Sprintf("remove the host route for %s via your OS routing tool", targetIP)
+	}
+	return strings.TrimSpace("sudo " + binary + " " + strings.Join(addArgs, " ")),
+		strings.TrimSpace("sudo " + binary + " " + strings.Join(delArgs, " "))
+}
+
+func manualRouteHint(targetIP string, c PathCandidate) string {
+	if c.Iface == "" {
+		return fmt.Sprintf("  • Добавь /32 host-route к %s через VPN-интерфейс.\n", targetIP)
+	}
+	iface := net.Interface{Name: c.Iface, Index: c.Index}
+	add, del := manualRouteCommands(targetIP, iface)
+	return fmt.Sprintf(
+		"  • Wizard видит VPN-интерфейс %s, но не смог сам поставить /32 маршрут.\n"+
+			"    Быстрый фикс:\n"+
+			"      %s\n"+
+			"    После работы можно снять маршрут:\n"+
+			"      %s\n"+
+			"    Долгий фикс: добавь в WireGuard AllowedIPs точный адрес %s/32.\n",
+		c.Iface, add, del, targetIP,
+	)
+}

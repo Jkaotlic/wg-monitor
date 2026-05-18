@@ -57,6 +57,7 @@ var validCommandActions = map[string]bool{
 	"firmware_install":  true,
 	"version_audit":     true,
 	"self_update":       true,
+	"router_doctor":     true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

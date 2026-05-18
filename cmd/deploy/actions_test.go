@@ -110,6 +110,66 @@ func TestColdInstallGate_BypassedByYesToAll(t *testing.T) {
 	}
 }
 
+func TestAgentsWithSameTargetUsesHostPort(t *testing.T) {
+	state := &State{Agents: []AgentState{
+		{Nickname: "alyaba", Host: "192.168.31.1", Port: 222},
+		{Nickname: "de4ddy", Host: "192.168.31.1", Port: 222},
+		{Nickname: "other", Host: "192.168.31.1", Port: 22},
+	}}
+	got := agentsWithSameTarget(state, &state.Agents[0])
+	if strings.Join(got, ",") != "alyaba,de4ddy" {
+		t.Fatalf("unexpected peers: %v", got)
+	}
+}
+
+func TestConfirmAmbiguousTargetRequiresNickname(t *testing.T) {
+	state := &State{Agents: []AgentState{
+		{Nickname: "alyaba", Host: "192.168.31.1", Port: 222},
+		{Nickname: "de4ddy", Host: "192.168.31.1", Port: 222},
+	}}
+	ok := confirmAmbiguousTarget(state, &state.Agents[0], "keenetic", "eth0=aabbccddeeff", "", "test-op",
+		func(string, string) string { return "de4ddy" })
+	if ok {
+		t.Fatal("wrong nickname must fail")
+	}
+	ok = confirmAmbiguousTarget(state, &state.Agents[0], "keenetic", "eth0=aabbccddeeff", "", "test-op",
+		func(string, string) string { return "alyaba" })
+	if !ok {
+		t.Fatal("exact nickname must pass")
+	}
+}
+
+func TestConfirmAmbiguousTargetSkipsUniqueTarget(t *testing.T) {
+	state := &State{Agents: []AgentState{{Nickname: "alyaba", Host: "192.168.31.1", Port: 222}}}
+	called := false
+	ok := confirmAmbiguousTarget(state, &state.Agents[0], "", "", "", "test-op",
+		func(string, string) string { called = true; return "" })
+	if !ok {
+		t.Fatal("unique target should pass")
+	}
+	if called {
+		t.Fatal("unique target should not prompt")
+	}
+}
+
+func TestHashAgentRawTokenMatchesBackendHashShape(t *testing.T) {
+	got := hashAgentRawToken("abc")
+	want := "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	if got != want {
+		t.Fatalf("hashAgentRawToken mismatch: got %s want %s", got, want)
+	}
+}
+
+func TestBuildUpdateAgentTokenHashSQLEscapesNickname(t *testing.T) {
+	got := buildUpdateAgentTokenHashSQL("o'hara", "abc")
+	if !strings.Contains(got, "nickname = 'o''hara'") {
+		t.Fatalf("SQL did not escape nickname: %s", got)
+	}
+	if !strings.Contains(got, "SELECT changes();") {
+		t.Fatalf("SQL must report affected rows: %s", got)
+	}
+}
+
 // These tests exercise the pure-logic helper diagnosisFromReport, not
 // diagnoseUnreachable itself (latter does I/O).
 
@@ -120,6 +180,46 @@ func TestDiagnosisFromReport_NoP2P(t *testing.T) {
 	msg := diagnosisFromReport(rep, "")
 	if !strings.Contains(msg, "VPN/SSTP") {
 		t.Errorf("want hint about VPN/SSTP, got %q", msg)
+	}
+}
+
+func TestDiagnosisFromReport_RouteElevationHint(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:22", Candidates: []PathCandidate{
+		{
+			Iface: "wg-srv_legion_laptop",
+			Index: 46,
+			Kind:  PathP2P,
+			Err:   errors.New("addRoute 192.168.31.1 via wg-srv_legion_laptop: route ADD 192.168.31.1/32 IF 46: exit status 1: The requested operation requires elevation."),
+		},
+	}}
+	msg := diagnosisFromReport(rep, "")
+	for _, want := range []string{
+		"PowerShell от имени администратора",
+		"route ADD 192.168.31.1 MASK 255.255.255.255 0.0.0.0 IF 46 METRIC 1",
+		"AllowedIPs",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("missing %q in diagnosis:\n%s", want, msg)
+		}
+	}
+}
+
+func TestRouteFixCandidateDetectsElevation(t *testing.T) {
+	rep := &PathReport{Target: "192.168.31.1:22", Candidates: []PathCandidate{
+		{Iface: "Ethernet", Index: 20, Kind: PathLAN, Err: errors.New("timeout")},
+		{
+			Iface: "wg-home",
+			Index: 46,
+			Kind:  PathP2P,
+			Err:   errors.New("route ADD 192.168.31.1/32 IF 46: The requested operation requires elevation."),
+		},
+	}}
+	got, ok := routeFixCandidate(rep)
+	if !ok {
+		t.Fatal("expected route fix candidate")
+	}
+	if got.Iface != "wg-home" || got.Index != 46 {
+		t.Fatalf("unexpected candidate: %+v", got)
 	}
 }
 

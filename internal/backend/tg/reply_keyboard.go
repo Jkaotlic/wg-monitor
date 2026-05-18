@@ -98,14 +98,14 @@ func keyboardRowsForKind(kind string) [][]string {
 	switch kind {
 	case "per_router":
 		return [][]string{
-			{"📊 Что происходит?", "🎛 Туннели"},
+			{"📊 Что происходит?", "🩺 Проверка"},
+			{"🎛 Туннели", "🛣 Маршруты"},
 			{"🌍 Через тоннель?", "🇷🇺 Напрямую?"},
-			{"🛣 Маршруты", "⬆ Обновить пакеты"},
-			{"🛠 Обслуживание"},
+			{"🛠 Обслуживание", "⬆ Обновить пакеты"},
 		}
 	case "summary", "systemic":
 		return [][]string{
-			{"📋 Список юзеров", "📊 Здоровье флота"},
+			{"📊 Здоровье флота", "📋 Список юзеров"},
 		}
 	}
 	return nil
@@ -121,6 +121,8 @@ var compatBtnCodes = map[string]string{
 	"🛣 Маршруты":        "routes",
 	"⬆ Обновить пакеты": "opkg_upgrade",
 	"🛠 Обслуживание":    "maint",
+	"🩺 Проверка":        "router_doctor",
+	"🩺 Домашний роутер": "router_doctor",
 	"📋 Список юзеров":   "list_users",
 	"📊 Здоровье флота":  "fleet_health",
 }

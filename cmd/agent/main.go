@@ -49,12 +49,20 @@ func main() {
 
 	client := agent.NewClient(cfg.Backend.URL, cfg.Backend.Token, Version, 10*time.Second)
 	awgClient := awgmgr.New(cfg.AwgManager.URL())
+	awgPassword, err := cfg.AwgManager.PasswordValue()
+	if err != nil {
+		logger.Error("config load", "err", err, "path", *configPath)
+		os.Exit(2)
+	}
+	if cfg.AwgManager.Login != "" || awgPassword != "" {
+		awgClient.SetCredentials(cfg.AwgManager.Login, awgPassword)
+	}
 
 	// Single-Check probes
 	singleChecks := []checks.Check{
 		checks.AwgManagerCheck{Client: awgClient},
 		checks.HydraRouteCheck{Client: awgClient},
-		buildDNSCheck(cfg, logger),
+		buildDNSCheck(cfg, awgClient, logger),
 	}
 	if cfg.ExternalReach.Enabled {
 		if er := buildExternalReachCheck(cfg, awgClient, logger); er != nil {
@@ -108,7 +116,7 @@ func main() {
 	logger.Info("stopped")
 }
 
-func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
+func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) checks.Check {
 	dc := cfg.Checks.DNS
 
 	var endpoints []keenetic.DNSEndpoint
@@ -147,7 +155,7 @@ func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
 
 	mapCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ifaceMap, err := keenetic.FetchIfaceMap(mapCtx, keenetic.IfaceMapOptions{AwgManagerURL: cfg.AwgManager.URL()})
+	ifaceMap, err := fetchIfaceMap(mapCtx, awgClient)
 	if err != nil {
 		logger.Warn("iface map unavailable; plain DNS will use default routing", "err", err)
 		ifaceMap = nil
@@ -163,6 +171,20 @@ func buildDNSCheck(cfg *agent.Config, logger *slog.Logger) checks.Check {
 		IfaceMap:        ifaceMap,
 		RKNTestDomains:  dc.RKNTestDomains,
 	}
+}
+
+func fetchIfaceMap(ctx context.Context, awgClient *awgmgr.Client) (map[string]string, error) {
+	ta, err := awgClient.TunnelsAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]string, len(ta.Tunnels))
+	for _, t := range ta.Tunnels {
+		if t.NDMSName != "" && t.InterfaceName != "" {
+			m[t.NDMSName] = t.InterfaceName
+		}
+	}
+	return m, nil
 }
 
 // pickDefaultRouteIface returns the linux iface name (e.g. "nwg1") of the

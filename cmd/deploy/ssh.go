@@ -47,6 +47,29 @@ func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, al
 	return &SSH{client: c, host: addr}, nil
 }
 
+func ConnectSSHInsecureCaptureKey(host string, port int, user, password string) (*SSH, ssh.PublicKey, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	var seen ssh.PublicKey
+	cfg := &ssh.ClientConfig{
+		User: user,
+		Auth: []ssh.AuthMethod{ssh.Password(password)},
+		HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+			seen = key
+			return nil
+		},
+		Timeout: 10 * time.Second,
+	}
+	c, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		return nil, nil, diagnoseSSHErr(addr, err)
+	}
+	return &SSH{client: c, host: addr}, seen, nil
+}
+
+func isHostKeyChangedErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HOST KEY CHANGED")
+}
+
 // diagnoseSSHErr wraps a transport-level SSH error with a Russian operator
 // hint matched against well-known failure substrings. The original err is
 // preserved via %w so callers can still errors.As / errors.Is on it.
@@ -337,6 +360,24 @@ func (k *KnownHosts) HostKeyCallbackFor(alias string) ssh.HostKeyCallback {
 	return func(_ string, remote net.Addr, key ssh.PublicKey) error {
 		return k.checkOrAppend(alias, remote, key)
 	}
+}
+
+func (k *KnownHosts) ReplaceHostKey(alias string, pub ssh.PublicKey) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+
+	hostKey := normaliseHostKey(alias)
+	if _, err := ForgetKnownHost(k.path, stripPort(hostKey)); err != nil {
+		return err
+	}
+	line := knownhosts.Line([]string{hostKey}, pub)
+	f, err := os.OpenFile(k.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(line + "\n")
+	return err
 }
 
 // checkOrAppend is the shared TOFU body:

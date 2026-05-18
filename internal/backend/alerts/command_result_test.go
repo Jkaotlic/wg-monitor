@@ -163,6 +163,14 @@ func TestFormatCommandResult_ErrorBadge(t *testing.T) {
 	}
 }
 
+func TestFormatCommandResult_RouterDoctorPlainText(t *testing.T) {
+	r := wire.CommandResult{Status: "ok", Output: "🩺 Проверка роутера\n✅ awg-manager API"}
+	chunks := FormatCommandResult("router_doctor", r, 3500)
+	if len(chunks) != 1 || !strings.Contains(chunks[0], "awg-manager API") {
+		t.Fatalf("unexpected chunks: %#v", chunks)
+	}
+}
+
 func TestFormatCommandResult_LockedAndTimeout(t *testing.T) {
 	for _, st := range []string{"locked", "timeout"} {
 		r := wire.CommandResult{Status: st, Output: ""}

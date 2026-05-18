@@ -112,6 +112,16 @@ func (s *SecretStore) GetNonInteractive(envVar string) string {
 	return s.disk[envVar]
 }
 
+func (s *SecretStore) SourceNonInteractive(envVar string) SecretSource {
+	if v := os.Getenv(envVar); v != "" {
+		return SourceEnv
+	}
+	if v := s.disk[envVar]; v != "" {
+		return SourceDisk
+	}
+	return SourceMissing
+}
+
 // Set persists a secret to the on-disk cache and the in-memory map. Used
 // for values the wizard generates itself (e.g. agent enrollment tokens) so
 // future sessions find them without re-prompting. When the cache is disabled
@@ -283,4 +293,99 @@ func stringsMinus(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+type secretStatusRow struct {
+	Name     string
+	Label    string
+	Required bool
+}
+
+func actionSecretsStatus(state *State, secrets *SecretStore) error {
+	fmt.Println(Colorize("=== Secrets cache ===", ColorBold))
+	if path := secretsCachePath(); path == "" {
+		PrintWarn("disk cache disabled by WG_NO_SECRET_CACHE=1")
+	} else if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			PrintWarn("secrets.env missing: " + path)
+		} else {
+			PrintWarn("secrets.env stat failed: " + err.Error())
+		}
+	} else {
+		PrintOK("secrets.env: " + path)
+	}
+
+	rows := secretStatusRows(state)
+	if len(rows) == 0 {
+		PrintInfo("no routers/backend configured yet")
+		return nil
+	}
+
+	fmt.Println()
+	fmt.Println(Colorize("=== Required values ===", ColorBold))
+	missingRequired := 0
+	missingOptional := 0
+	for _, row := range rows {
+		src := secrets.SourceNonInteractive(row.Name)
+		status := src.String()
+		msg := fmt.Sprintf("%-32s %-12s %s", row.Name, status, row.Label)
+		if src == SourceMissing {
+			if row.Required {
+				missingRequired++
+				PrintFail(msg)
+			} else {
+				missingOptional++
+				PrintWarn(msg)
+			}
+			continue
+		}
+		PrintOK(msg)
+	}
+
+	fmt.Println()
+	switch {
+	case missingRequired > 0:
+		PrintFail(fmt.Sprintf("secrets status: %d required missing, %d optional missing", missingRequired, missingOptional))
+	case missingOptional > 0:
+		PrintWarn(fmt.Sprintf("secrets status: required OK, %d optional missing", missingOptional))
+	default:
+		PrintOK("secrets status: all known values are present")
+	}
+	return nil
+}
+
+func secretStatusRows(state *State) []secretStatusRow {
+	var rows []secretStatusRow
+	seen := map[string]bool{}
+	add := func(name, label string, required bool) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		rows = append(rows, secretStatusRow{Name: name, Label: label, Required: required})
+	}
+
+	if state.Backend.Host != "" {
+		add("WG_VPS_PASS", "VPS SSH password", true)
+		add("WG_BOT_TOKEN", "Telegram bot token", false)
+	}
+	if state.Backend.Domain != "" || len(state.Agents) > 0 {
+		add("WIZARD_TOKEN", "wizard API token", true)
+	}
+	if len(state.Agents) > 0 {
+		add("WG_KEENETIC_PASS", "fallback router SSH password", false)
+	}
+	for _, ag := range state.Agents {
+		suffix := strings.ToUpper(ag.Nickname)
+		add("WG_AGENT_TOKEN_"+suffix, "agent token for "+ag.Nickname, true)
+		add("WG_KEENETIC_PASS_"+suffix, "router SSH password for "+ag.Nickname, false)
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].Required != rows[j].Required {
+			return rows[i].Required
+		}
+		return rows[i].Name < rows[j].Name
+	})
+	return rows
 }
