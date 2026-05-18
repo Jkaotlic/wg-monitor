@@ -47,6 +47,11 @@ type Args struct {
 	// RebindSrcID / RebindDstID parsed from routes_pick / routes_confirm.
 	RebindSrcID string
 	RebindDstID string
+	// Route add/delete wizard tokens and short fields.
+	RouteKind         string
+	RouteDraftToken   string
+	RouteConfirmToken string
+	RouteToken        string
 	// MaintName is the target of a maint_restart / maint_confirm callback:
 	// "hrneo" | "awgmgr" | "router" | "firmware". Set by Parse for those actions.
 	MaintName string
@@ -113,6 +118,10 @@ var validActions = map[string]bool{
 	"routes_open": true, "routes_router": true, "routes_rebind": true,
 	"routes_pick": true, "routes_confirm": true, "routes_refresh": true,
 	"routes_back": true, "routes_close": true,
+	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
+	"routes_add_confirm": true, "routes_add_cancel": true,
+	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
+	"routes_hrneo": true,
 	// maintenance panel actions: open/close panel, restart services, firmware update.
 	"maint_open": true, "maint_close": true,
 	"maint_restart": true, "maint_confirm": true,
@@ -207,6 +216,9 @@ func Parse(data string) (Args, error) {
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
 		}
+		if parts[2] != panelSentinel {
+			return Args{}, fmt.Errorf("%s requires %q sentinel, not tunnel name: %q", action, panelSentinel, data)
+		}
 		a.ImportToken = parts[3]
 	}
 	switch action {
@@ -227,6 +239,44 @@ func Parse(data string) (Args, error) {
 		a.RebindSrcID = parts[2]
 		a.RebindDstID = parts[3]
 		a.RebindToken = parts[4]
+	case "routes_add_type":
+		if len(parts) < 4 || (parts[3] != "dns" && parts[3] != "static") {
+			return Args{}, fmt.Errorf("routes_add_type requires dns|static: %q", data)
+		}
+		a.RouteKind = parts[3]
+	case "routes_add_tunnel":
+		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+			return Args{}, fmt.Errorf("routes_add_tunnel requires draft token and tunnel id: %q", data)
+		}
+		a.RouteDraftToken = parts[3]
+		a.RebindDstID = parts[4]
+	case "routes_add_confirm":
+		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+			return Args{}, fmt.Errorf("routes_add_confirm requires draft and confirm tokens: %q", data)
+		}
+		a.RouteDraftToken = parts[3]
+		a.RouteConfirmToken = parts[4]
+	case "routes_add_cancel":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("routes_add_cancel requires draft token: %q", data)
+		}
+		a.RouteDraftToken = parts[3]
+	case "routes_del":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("routes_del requires route token: %q", data)
+		}
+		a.RouteToken = parts[3]
+	case "routes_del_confirm":
+		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+			return Args{}, fmt.Errorf("routes_del_confirm requires draft and confirm tokens: %q", data)
+		}
+		a.RouteDraftToken = parts[3]
+		a.RouteConfirmToken = parts[4]
+	case "routes_del_cancel":
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("routes_del_cancel requires draft token: %q", data)
+		}
+		a.RouteDraftToken = parts[3]
 	case "maint_restart":
 		if len(parts) < 3 || parts[2] == "" || parts[2] == panelSentinel {
 			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr|router): %q", data)

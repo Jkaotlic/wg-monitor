@@ -77,23 +77,33 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 	}
 	for _, r := range dns {
 		isHR := r.Backend == "hydraroute"
+		ruleBind := ""
 		if len(r.Routes) > 0 {
 			iface := r.Routes[0].Interface
+			ruleBind = iface
 			if id, ok := byIface[iface]; ok {
 				creditDNS(id, isHR)
 			} else {
 				creditOther(isHR, false)
 			}
-			continue
-		}
-		// Fall-through rule.
-		if isHR && r.HRPolicyName != "" && defaultIface != "" {
-			if id, ok := byIface[defaultIface]; ok {
-				creditDNS(id, true)
-				continue
+		} else {
+			// Fall-through rule.
+			if isHR && r.HRPolicyName != "" && defaultIface != "" {
+				ruleBind = defaultIface
+				if id, ok := byIface[defaultIface]; ok {
+					creditDNS(id, true)
+				} else {
+					creditOther(isHR, false)
+				}
+			} else {
+				creditOther(isHR, false)
 			}
 		}
-		creditOther(isHR, false)
+		targets := append([]string{}, r.Domains...)
+		targets = append(targets, r.ManualDomains...)
+		snap.Rules = append(snap.Rules, normalizeRouteRuleSummary(wire.RouteRuleSummary{
+			ID: r.ID, Name: r.Name, Kind: "dns", Backend: r.Backend, Enabled: r.Enabled, Bind: ruleBind, Targets: rawTargets(targets),
+		}))
 	}
 	for _, r := range statics {
 		if id, ok := byIface[r.TunnelID]; ok {
@@ -103,6 +113,9 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		} else {
 			snap.Other.Static++
 		}
+		snap.Rules = append(snap.Rules, normalizeRouteRuleSummary(wire.RouteRuleSummary{
+			ID: r.ID, Name: r.Name, Kind: "static", Enabled: r.Enabled, Bind: r.TunnelID, Targets: rawTargets(r.Subnets),
+		}))
 	}
 	return snap
 }

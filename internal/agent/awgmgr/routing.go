@@ -39,6 +39,22 @@ func (c *Client) UpdateDNSRoute(ctx context.Context, rule DNSRoute) error {
 	return c.postJSON(ctx, "/api/dns-routes/update?id="+url.QueryEscape(rule.ID), body, nil)
 }
 
+// CreateDNSRoute calls POST /api/dns-routes/create with the rule object as
+// the body.
+func (c *Client) CreateDNSRoute(ctx context.Context, rule DNSRoute) error {
+	body, err := json.Marshal(rule)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/dns-routes/create", body, nil)
+}
+
+// DeleteDNSRoute calls POST /api/dns-routes/delete?id=<id>. DNS route IDs can
+// contain spaces and colons, so the query value must be percent-encoded.
+func (c *Client) DeleteDNSRoute(ctx context.Context, id string) error {
+	return c.postJSON(ctx, "/api/dns-routes/delete?id="+url.QueryEscape(id), nil, nil)
+}
+
 // ListStaticRoutes returns /api/static-routes/list .data.
 func (c *Client) ListStaticRoutes(ctx context.Context) ([]StaticRoute, error) {
 	var env Envelope[[]StaticRoute]
@@ -59,6 +75,26 @@ func (c *Client) UpdateStaticRoute(ctx context.Context, rule StaticRoute) error 
 		return err
 	}
 	return c.postJSON(ctx, "/api/static-routes/update", body, nil)
+}
+
+// CreateStaticRoute calls POST /api/static-routes/create with the rule object
+// as the body.
+func (c *Client) CreateStaticRoute(ctx context.Context, rule StaticRoute) error {
+	body, err := json.Marshal(rule)
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/static-routes/create", body, nil)
+}
+
+// DeleteStaticRoute calls POST /api/static-routes/delete. Like static update,
+// awg-manager expects the route id in the JSON body, not in the URL.
+func (c *Client) DeleteStaticRoute(ctx context.Context, id string) error {
+	body, err := json.Marshal(StaticRoute{ID: id})
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/static-routes/delete", body, nil)
 }
 
 // RoutingTunnels returns /api/routing/tunnels .data — the catalogue of all

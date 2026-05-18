@@ -109,7 +109,7 @@ func TestParseMalformed(t *testing.T) {
 }
 
 func TestParse_TunnelImportReplace(t *testing.T) {
-	args, err := Parse("tunnel_import_replace:42:awg11:a1b2c3d4")
+	args, err := Parse("tunnel_import_replace:42:_panel_:a1b2c3d4")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,8 +119,11 @@ func TestParse_TunnelImportReplace(t *testing.T) {
 	if args.UserID != 42 {
 		t.Errorf("uid: %d", args.UserID)
 	}
-	if args.CheckName != "awg11" {
+	if args.CheckName != panelSentinel {
 		t.Errorf("check: %q", args.CheckName)
+	}
+	if !args.IsPanel {
+		t.Error("expected import callback to be panel scoped")
 	}
 	if args.ImportToken != "a1b2c3d4" {
 		t.Errorf("token: %q", args.ImportToken)
@@ -128,19 +131,36 @@ func TestParse_TunnelImportReplace(t *testing.T) {
 }
 
 func TestParse_TunnelImportAdd(t *testing.T) {
-	args, err := Parse("tunnel_import_add:7:new-tun:deadbeef")
+	args, err := Parse("tunnel_import_add:7:_panel_:deadbeef")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if args.Action != "tunnel_import_add" || args.ImportToken != "deadbeef" {
+	if args.Action != "tunnel_import_add" || args.CheckName != panelSentinel || !args.IsPanel || args.ImportToken != "deadbeef" {
 		t.Errorf("args: %+v", args)
 	}
 }
 
 func TestParse_TunnelImportMissingToken(t *testing.T) {
-	_, err := Parse("tunnel_import_replace:42:awg11")
+	_, err := Parse("tunnel_import_replace:42:_panel_")
 	if err == nil {
 		t.Error("expected error for missing token")
+	}
+}
+
+func TestParse_TunnelImportRejectsNameInCallbackData(t *testing.T) {
+	_, err := Parse("tunnel_import_replace:42:long-tunnel-name:a1b2c3d4")
+	if err == nil {
+		t.Error("expected error when import callback carries tunnel name instead of panel sentinel")
+	}
+}
+
+func TestParse_TunnelImportTokenOnlyShapeFitsTelegramLimit(t *testing.T) {
+	data := "tunnel_import_replace:9223372036854775807:_panel_:deadbeef"
+	if len(data) > 64 {
+		t.Fatalf("callback_data length=%d, want <=64: %s", len(data), data)
+	}
+	if _, err := Parse(data); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -181,6 +201,33 @@ func TestParse_RoutesConfirm_MissingToken(t *testing.T) {
 	_, err := Parse("routes_confirm:42:t1:t2")
 	if err == nil {
 		t.Errorf("expected error for missing token")
+	}
+}
+
+func TestParse_RouteAddDeletePreviewCallbacks(t *testing.T) {
+	cases := []struct {
+		data         string
+		action       string
+		draftToken   string
+		confirmToken string
+		routeToken   string
+	}{
+		{"routes_add_confirm:42:_panel_:draft1:confirm1", "routes_add_confirm", "draft1", "confirm1", ""},
+		{"routes_add_cancel:42:_panel_:draft1", "routes_add_cancel", "draft1", "", ""},
+		{"routes_del:42:_panel_:rt1", "routes_del", "", "", "rt1"},
+		{"routes_del_confirm:42:_panel_:draft2:confirm2", "routes_del_confirm", "draft2", "confirm2", ""},
+		{"routes_del_cancel:42:_panel_:draft2", "routes_del_cancel", "draft2", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.data, func(t *testing.T) {
+			got, err := Parse(tc.data)
+			if err != nil {
+				t.Fatalf("Parse failed: %v", err)
+			}
+			if got.Action != tc.action || got.RouteDraftToken != tc.draftToken || got.RouteConfirmToken != tc.confirmToken || got.RouteToken != tc.routeToken {
+				t.Fatalf("got %+v", got)
+			}
+		})
 	}
 }
 

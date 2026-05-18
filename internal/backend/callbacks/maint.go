@@ -144,7 +144,7 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 	cmd := wire.Command{ID: a.idGen(), IssuedAt: time.Now().UTC()}
 	cooldownAction := ""
 	switch pm.Name {
-	case "hrneo", "awgmgr":
+	case "hrneo", "hrneo_start", "hrneo_stop", "awgmgr":
 		cmd.Action = "service_restart"
 		cmd.Args = map[string]any{"name": pm.Name}
 	case "router":

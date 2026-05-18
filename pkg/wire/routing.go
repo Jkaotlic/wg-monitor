@@ -39,6 +39,24 @@ type RouteSnapshot struct {
 	Tunnels []TunnelMeta            `json:"tunnels"` // managed tunnels only
 	Counts  map[string]TunnelCounts `json:"counts"`  // key = tunnel id
 	Other   TunnelCounts            `json:"other"`   // sum across WAN/system/external
+	Rules   []RouteRuleSummary      `json:"rules,omitempty"`
+}
+
+type HRNeoRule struct {
+	ID            string   `json:"id"`
+	Name          string   `json:"name"`
+	Enabled       bool     `json:"enabled"`
+	Bind          string   `json:"bind,omitempty"`
+	Mode          string   `json:"mode,omitempty"`
+	PolicyName    string   `json:"policy_name,omitempty"`
+	Domains       []string `json:"domains,omitempty"`
+	ManualDomains []string `json:"manual_domains,omitempty"`
+	Routes        []string `json:"routes,omitempty"`
+}
+
+type HRNeoInventory struct {
+	Status HRStatus    `json:"status"`
+	Rules  []HRNeoRule `json:"rules,omitempty"`
 }
 
 type CategoryResult struct {
@@ -56,4 +74,64 @@ type RouteRebindResult struct {
 	DNS         CategoryResult `json:"dns"`
 	Static      CategoryResult `json:"static"`
 	HRNeo       CategoryResult `json:"hr_neo"`
+}
+
+type RouteTarget struct {
+	Type  string `json:"type"`  // domain | cidr | opaque
+	Value string `json:"value"` // canonical domain or netip prefix
+}
+
+type RouteRuleSummary struct {
+	ID      string        `json:"id"`
+	Name    string        `json:"name"`
+	Kind    string        `json:"kind"` // dns | static
+	Backend string        `json:"backend,omitempty"`
+	Enabled bool          `json:"enabled"`
+	Bind    string        `json:"bind,omitempty"`
+	Targets []RouteTarget `json:"targets,omitempty"`
+}
+
+type RouteOverlap struct {
+	Severity string           `json:"severity"` // block | warn | info
+	Reason   string           `json:"reason"`
+	Existing RouteRuleSummary `json:"existing"`
+	Target   RouteTarget      `json:"target"`
+}
+
+type RouteAddRequest struct {
+	Kind      string   `json:"kind"` // dns | static
+	Name      string   `json:"name"`
+	TunnelID  string   `json:"tunnel_id"`
+	Targets   []string `json:"targets"`
+	UseHRNeo  bool     `json:"use_hr_neo,omitempty"`
+	DraftHash string   `json:"draft_hash,omitempty"`
+}
+
+type RouteAddPlan struct {
+	Request  RouteAddRequest  `json:"request"`
+	Route    RouteRuleSummary `json:"route"`
+	Overlaps []RouteOverlap   `json:"overlaps,omitempty"`
+	CanApply bool             `json:"can_apply"`
+	Hash     string           `json:"hash"`
+}
+
+type RouteDeleteRequest struct {
+	Kind        string `json:"kind"` // dns | static
+	RouteID     string `json:"route_id"`
+	PreviewHash string `json:"preview_hash,omitempty"`
+}
+
+type RouteDeletePlan struct {
+	Route    RouteRuleSummary `json:"route"`
+	Warnings []RouteOverlap   `json:"warnings,omitempty"`
+	CanApply bool             `json:"can_apply"`
+	Hash     string           `json:"hash"`
+}
+
+type RouteApplyResult struct {
+	Action         string `json:"action"` // add | delete
+	Kind           string `json:"kind"`
+	RouteID        string `json:"route_id"`
+	RouteName      string `json:"route_name"`
+	HRNeoRestarted bool   `json:"hr_neo_restarted,omitempty"`
 }

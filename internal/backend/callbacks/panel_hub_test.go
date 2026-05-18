@@ -398,7 +398,7 @@ func TestPanelHub_HelpScreen_EditsBody(t *testing.T) {
 	if len(f.edits) != 1 {
 		t.Fatalf("want 1 edit, got %d", len(f.edits))
 	}
-	if !strings.Contains(f.edits[0], "Restart hrneo") {
-		t.Errorf("maint help body should mention 'Restart hrneo':\n%s", f.edits[0])
+	if !strings.Contains(f.edits[0], "Перезапустить hrneo") {
+		t.Errorf("maint help body should mention 'Перезапустить hrneo':\n%s", f.edits[0])
 	}
 }

@@ -18,7 +18,7 @@ const routesMaxPerRow = 2
 func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🛣 Маршруты — %s\n", nickname)
-	fmt.Fprintf(&b, "   обновлено %s\n\n", time.Now().Format("15:04:05"))
+	fmt.Fprintf(&b, "обновлено: %s\n\n", time.Now().Format("15:04:05"))
 	if snap.HRNeo.Installed {
 		state := "✅ установлен, работает"
 		if !snap.HRNeo.Running {
@@ -34,20 +34,20 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		totalStatic += c.Static
 		totalHR += c.HRNeo
 	}
-	fmt.Fprintf(&b, "DNS routes:        %d правил\n", totalDNS)
-	fmt.Fprintf(&b, "Static IP routes:  %d правил\n", totalStatic)
+	fmt.Fprintf(&b, "DNS routes: %d правил\n", totalDNS)
+	fmt.Fprintf(&b, "Static IP routes: %d правил\n", totalStatic)
 	if snap.HRNeo.Installed {
-		fmt.Fprintf(&b, "  из них HR-Neo:   %d\n", totalHR)
+		fmt.Fprintf(&b, "из них HR-Neo: %d\n", totalHR)
 	}
 	b.WriteString("\nПо туннелям (направленные в туннели):\n")
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
 		visible := c.DNS + c.Static
-		fmt.Fprintf(&b, "  %s (%s) → %d\n", t.Name, t.Iface, visible)
+		fmt.Fprintf(&b, "  • %s (%s): %d правил\n", t.Name, t.Iface, visible)
 	}
 	b.WriteString("\nНе входят в перенос (показано для контроля):\n")
 	wanTotal := snap.Other.DNS + snap.Other.Static
-	fmt.Fprintf(&b, "  WAN/system:   %d правил   ← RU-сервисы\n", wanTotal)
+	fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
 	return b.String()
 }
 
@@ -77,6 +77,16 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 	}
 	if len(row) > 0 {
 		rows = append(rows, row)
+	}
+	rows = append(rows, []InlineKeyboardButton{
+		{Text: "Add route", CallbackData: fmt.Sprintf("routes_add:%d:_panel_", userID)},
+		{Text: "Delete route", CallbackData: fmt.Sprintf("routes_del:%d:_panel_:_list_", userID)},
+	})
+	if snap.HRNeo.Installed {
+		rows = append(rows, []InlineKeyboardButton{{
+			Text:         "HR-Neo rules",
+			CallbackData: fmt.Sprintf("routes_hrneo:%d:_panel_", userID),
+		}})
 	}
 	rows = append(rows, HelpRowFor("routes"))
 	rows = append(rows, []InlineKeyboardButton{
@@ -139,25 +149,25 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 	fmt.Fprintf(&b, "🛣 Превью: %s → %s\n\n", src.Name, dst.Name)
 	fmt.Fprintf(&b, "Будет перенесено (%d):\n", visible)
 	if c.DNS > 0 {
-		fmt.Fprintf(&b, "  • DNS routes:  %d", c.DNS)
+		fmt.Fprintf(&b, "  • DNS routes: %d", c.DNS)
 		if c.HRNeo > 0 {
 			fmt.Fprintf(&b, " (из них HR-Neo: %d)", c.HRNeo)
 		}
 		b.WriteString("\n")
 	}
 	if c.Static > 0 {
-		fmt.Fprintf(&b, "  • Static IP:   %d\n", c.Static)
+		fmt.Fprintf(&b, "  • Static IP: %d\n", c.Static)
 	}
 	b.WriteString("\nНЕ ТРОГАЕМ:\n")
 	wanTotal := snap.Other.DNS + snap.Other.Static
-	fmt.Fprintf(&b, "  • WAN/system:    %d правил   ← RU-сервисы\n", wanTotal)
+	fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
 	for _, t := range snap.Tunnels {
 		if t.ID == srcID {
 			continue
 		}
 		oc := snap.Counts[t.ID]
 		ot := oc.DNS + oc.Static
-		fmt.Fprintf(&b, "  • %s:        %d\n", t.Name, ot)
+		fmt.Fprintf(&b, "  • %s: %d\n", t.Name, ot)
 	}
 	fmt.Fprintf(&b, "\ntoken:%s  истекает через 5 мин\n", token)
 	return b.String()
@@ -180,7 +190,7 @@ func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) strin
 	} else {
 		fmt.Fprintf(&b, "🛣 ⚠ %s → %s — частично\n\n", srcName, dstName)
 	}
-	fmt.Fprintf(&b, "  • DNS routes:  %d ok", res.DNS.OK)
+	fmt.Fprintf(&b, "  • DNS routes: %d ok", res.DNS.OK)
 	if res.DNS.Failed > 0 {
 		fmt.Fprintf(&b, ", %d FAIL", res.DNS.Failed)
 	}
@@ -192,7 +202,7 @@ func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) strin
 		b.WriteString(")")
 	}
 	b.WriteString("\n")
-	fmt.Fprintf(&b, "  • Static IP:   %d ok", res.Static.OK)
+	fmt.Fprintf(&b, "  • Static IP: %d ok", res.Static.OK)
 	if res.Static.Failed > 0 {
 		fmt.Fprintf(&b, ", %d FAIL", res.Static.Failed)
 	}

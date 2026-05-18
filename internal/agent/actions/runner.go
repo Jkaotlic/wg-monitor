@@ -264,6 +264,18 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "exec not configured", payload
 		}
 		switch name {
+		case "hrneo_start":
+			out, err := r.Exec(ctx, "/opt/etc/init.d/S99hrneo", "start")
+			if err != nil {
+				return "err", fmt.Sprintf("S99hrneo start: %v\n%s", err, string(out)), payload
+			}
+			return "ok", "hrneo start sent\n" + string(out), payload
+		case "hrneo_stop":
+			out, err := r.Exec(ctx, "/opt/etc/init.d/S99hrneo", "stop")
+			if err != nil {
+				return "err", fmt.Sprintf("S99hrneo stop: %v\n%s", err, string(out)), payload
+			}
+			return "ok", "hrneo stop sent\n" + string(out), payload
 		case "hrneo":
 			out, err := r.Exec(ctx, "/opt/etc/init.d/S99hrneo", "restart")
 			if err != nil {
@@ -361,6 +373,59 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "route_add_plan":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		req := routeAddRequestFromArgs(cmd.Args)
+		out, err := RouteAddPlanJSON(ctx, r.AwgClient, req)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "route_add":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		req := routeAddRequestFromArgs(cmd.Args)
+		r.routeMu.Lock()
+		defer r.routeMu.Unlock()
+		out, err := RouteAddJSON(ctx, r.AwgClient, req)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "route_delete_plan":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		req := routeDeleteRequestFromArgs(cmd.Args)
+		out, err := RouteDeletePlanJSON(ctx, r.AwgClient, req)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "route_delete":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		req := routeDeleteRequestFromArgs(cmd.Args)
+		r.routeMu.Lock()
+		defer r.routeMu.Unlock()
+		out, err := RouteDeleteJSON(ctx, r.AwgClient, req)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "hrneo_inventory":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		out, err := HRNeoInventoryJSON(ctx, r.AwgClient)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "self_update":
 		version, _ := cmd.Args["version"].(string)
 		if version == "" {
@@ -381,4 +446,40 @@ func boolEnableLabel(enable bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func routeAddRequestFromArgs(args map[string]any) wire.RouteAddRequest {
+	req := wire.RouteAddRequest{}
+	req.Kind, _ = args["kind"].(string)
+	req.Name, _ = args["name"].(string)
+	req.TunnelID, _ = args["tunnel_id"].(string)
+	req.UseHRNeo, _ = args["use_hr_neo"].(bool)
+	req.DraftHash, _ = args["draft_hash"].(string)
+	req.Targets = stringSliceArg(args["targets"])
+	return req
+}
+
+func routeDeleteRequestFromArgs(args map[string]any) wire.RouteDeleteRequest {
+	req := wire.RouteDeleteRequest{}
+	req.Kind, _ = args["kind"].(string)
+	req.RouteID, _ = args["route_id"].(string)
+	req.PreviewHash, _ = args["preview_hash"].(string)
+	return req
+}
+
+func stringSliceArg(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		return x
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, item := range x {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

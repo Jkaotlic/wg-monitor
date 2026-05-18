@@ -125,6 +125,20 @@ func TestFormatCommandResult_TunnelDisable_Verb(t *testing.T) {
 	}
 }
 
+func TestFormatCommandResult_TunnelImportShowsNextStep(t *testing.T) {
+	r := wire.CommandResult{Status: "ok", Output: "✅ Туннель \"newtun\" создан (id=awg99)"}
+	chunks := FormatCommandResult("tunnel_import", r, 3500)
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d", len(chunks))
+	}
+	body := chunks[0]
+	for _, want := range []string{"Импорт конфига", "newtun", "🛣 Маршруты", "перенести правила"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q in:\n%s", want, body)
+		}
+	}
+}
+
 func TestFormatCommandResult_TunnelEnable_UnknownOutput_VerbOnly(t *testing.T) {
 	// Agent prefix changes or empty output → degrade to verb-only summary.
 	r := wire.CommandResult{Status: "ok", Output: ""}

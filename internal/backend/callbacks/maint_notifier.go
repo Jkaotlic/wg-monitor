@@ -129,11 +129,13 @@ func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudi
 	}
 	return tg.MaintPanelArgs{
 		Nickname:                  user.Nickname,
+		HrneoInstalled:            va.HrneoInstalled || va.HrneoVersion != "",
 		HrneoVersion:              va.HrneoVersion,
 		HrneoUptime:               va.HrneoUptime,
-		HrneoRunning:              va.HrneoVersion != "",
+		HrneoRunning:              va.HrneoRunning || (!va.HrneoInstalled && va.HrneoVersion != ""),
 		AwgmgrVersion:             va.AwgmgrVersion,
 		AwgmgrUptime:              va.AwgmgrUptime,
+		AwgmgrRunning:             va.AwgmgrRunning || va.AwgmgrVersion != "",
 		KeeneticOS:                "", // model not in VersionAudit; left empty for now
 		Firmware:                  wire.FirmwareStatus{Current: va.FirmwareCurrent, Available: va.FirmwareAvail},
 		Updates:                   updates,

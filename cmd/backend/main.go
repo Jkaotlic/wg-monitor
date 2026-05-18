@@ -111,12 +111,6 @@ func main() {
 	}
 	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
 	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
-	routesNotifier := &callbacks.RoutesPanelNotifier{
-		TG:    tgClient,
-		Cache: routesCache,
-		DB:    d,
-	}
-
 	// Build upstream version cache from configured GitHub repos. Skip sources
 	// without a configured repo — graceful "no warning" beats fabricated data.
 	var upSources []upstream.Source
@@ -138,6 +132,12 @@ func main() {
 		UI:             uiSnap,
 	})
 	cb.SetRoutesCache(routesCache)
+	routesNotifier := &callbacks.RoutesPanelNotifier{
+		TG:    tgClient,
+		Cache: routesCache,
+		DB:    d,
+		Store: cb.RouteWizardStore(),
+	}
 	cb.SetUpstream(upCache)
 	notifier.DiagCache = cb.DiagCache()
 	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)

@@ -104,6 +104,55 @@ func TestUpdateDNSRoute_EscapesSpacesAndColonsInID(t *testing.T) {
 	}
 }
 
+func TestCreateDNSRoute_SendsCreateBody(t *testing.T) {
+	var got DNSRoute
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns-routes/create" || r.Method != http.MethodPost || r.URL.RawQuery != "" {
+			t.Errorf("expected POST /api/dns-routes/create with no query, got %s %q?%q", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+			t.Errorf("Content-Type: %q", ct)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := DNSRoute{
+		Name: "Telegram", Domains: []string{"telegram.org"}, ManualDomains: []string{"telegram.org"},
+		Routes: []DNSRouteEntry{{Interface: "nwg0", TunnelID: "nwg0", Fallback: "auto"}}, Enabled: true,
+	}
+	if err := c.CreateDNSRoute(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Telegram" || got.Domains[0] != "telegram.org" || got.Routes[0].TunnelID != "nwg0" {
+		t.Errorf("body: %+v", got)
+	}
+}
+
+func TestDeleteDNSRoute_EscapesIDInQuery(t *testing.T) {
+	var gotRawQuery, gotDecodedID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns-routes/delete" || r.Method != http.MethodPost {
+			t.Errorf("expected POST /api/dns-routes/delete, got %s %q", r.Method, r.URL.Path)
+		}
+		gotRawQuery = r.URL.RawQuery
+		gotDecodedID = r.URL.Query().Get("id")
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	if err := c.DeleteDNSRoute(context.Background(), "hr:CIDR: iplist: Telegram.org"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(gotRawQuery, " ") {
+		t.Errorf("raw query must not contain unencoded space: %q", gotRawQuery)
+	}
+	if gotDecodedID != "hr:CIDR: iplist: Telegram.org" {
+		t.Errorf("decoded id mismatch: %q", gotDecodedID)
+	}
+}
+
 func TestListStaticRoutes_HappyPath(t *testing.T) {
 	const payload = `{"success":true,"data":[
 		{"id":"s1","name":"work","tunnelID":"nwg1","subnets":["10.0.0.0/8"],"fallback":"auto","enabled":true}
@@ -141,6 +190,51 @@ func TestUpdateStaticRoute_NoIDInURL_FullBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.ID != "s1" || got.TunnelID != "nwg0" {
+		t.Errorf("body: %+v", got)
+	}
+}
+
+func TestCreateStaticRoute_SendsCreateBody(t *testing.T) {
+	var got StaticRoute
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/static-routes/create" || r.Method != http.MethodPost || r.URL.RawQuery != "" {
+			t.Errorf("expected POST /api/static-routes/create with no query, got %s %q?%q", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+			t.Errorf("Content-Type: %q", ct)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := StaticRoute{Name: "corp", TunnelID: "nwg0", Subnets: []string{"10.0.0.0/8"}, Fallback: "auto", Enabled: true}
+	if err := c.CreateStaticRoute(context.Background(), rule); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "corp" || got.TunnelID != "nwg0" || got.Subnets[0] != "10.0.0.0/8" {
+		t.Errorf("body: %+v", got)
+	}
+}
+
+func TestDeleteStaticRoute_SendsIDInBody(t *testing.T) {
+	var got StaticRoute
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/static-routes/delete" || r.Method != http.MethodPost || r.URL.RawQuery != "" {
+			t.Errorf("expected POST /api/static-routes/delete with no query, got %s %q?%q", r.Method, r.URL.Path, r.URL.RawQuery)
+		}
+		if ct := r.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+			t.Errorf("Content-Type: %q", ct)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	if err := c.DeleteStaticRoute(context.Background(), "static 1"); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "static 1" {
 		t.Errorf("body: %+v", got)
 	}
 }
