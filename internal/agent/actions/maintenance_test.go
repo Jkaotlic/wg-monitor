@@ -159,9 +159,13 @@ func TestInstallFirmware_ExecError(t *testing.T) {
 }
 
 func slicesEq(a, b []string) bool {
-	if len(a) != len(b) { return false }
+	if len(a) != len(b) {
+		return false
+	}
 	for i := range a {
-		if a[i] != b[i] { return false }
+		if a[i] != b[i] {
+			return false
+		}
 	}
 	return true
 }
@@ -176,22 +180,28 @@ type fakeAwgInfo struct {
 }
 
 func (f *fakeAwgInfo) SystemInfo(ctx context.Context) (*awgmgr.SystemInfo, error) {
-	if f.sysErr != nil { return nil, f.sysErr }
+	if f.sysErr != nil {
+		return nil, f.sysErr
+	}
 	return &f.sysInfo, nil
 }
 func (f *fakeAwgInfo) HydraRouteStatus(ctx context.Context) (*awgmgr.HydraRouteStatus, error) {
-	if f.hrErr != nil { return nil, f.hrErr }
+	if f.hrErr != nil {
+		return nil, f.hrErr
+	}
 	return f.hrStat, nil
 }
 
 const opkgInfoHrneoGolden = "Package: hrneo\nVersion: 2.4.0-1\nDepends: libc, ipset, iptables\nStatus: install user installed\n"
-const procUptimeGolden     = "105561.18 193126.14\n"
-const procStatHrneoGolden  = "20604 (hrneo) S 1 20602 1874 0 -1 4194560 62568 896951 0 0 278 1662 453 365 20 0 1 0 4118135 3846144 725\n"
+const procUptimeGolden = "105561.18 193126.14\n"
+const procStatHrneoGolden = "20604 (hrneo) S 1 20602 1874 0 -1 4194560 62568 896951 0 0 278 1662 453 365 20 0 1 0 4118135 3846144 725\n"
 const procStatAwgmgrGolden = "1895 (awg-manager) S 1 1894 1874 0 -1 4194560 50000 800000 0 0 200 1500 400 300 20 0 1 0 700000 3846144 600\n"
 
 func TestParseHrneoOpkg(t *testing.T) {
 	v, err := parseHrneoOpkg(opkgInfoHrneoGolden)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if v != "2.4.0" {
 		t.Errorf("got %q, want 2.4.0 (suffix -1 must be stripped)", v)
 	}
@@ -210,7 +220,7 @@ func TestHumanizeUptime(t *testing.T) {
 		83:                "1м 23с",
 		5*60 + 30:         "5м 30с",
 		3600 + 30*60:      "1ч 30м",
-		25*3600 + 4*3600:  "1д 5ч",      // 29 hours = 1d 5h
+		25*3600 + 4*3600:  "1д 5ч", // 29 hours = 1d 5h
 		3*86400 + 4*3600:  "3д 4ч",
 		7*86400 + 12*3600: "7д 12ч",
 	}
@@ -274,12 +284,33 @@ func TestVersionAudit_AllFields(t *testing.T) {
 		return nil, fmt.Errorf("unexpected exec: %s %v", name, args)
 	}
 	got, err := VersionAudit(context.Background(), awg, exec)
-	if err != nil { t.Fatalf("VersionAudit: %v", err) }
-	if got.AwgmgrVersion != "2.8.2" { t.Errorf("AwgmgrVersion=%q", got.AwgmgrVersion) }
-	if got.HrneoVersion  != "2.4.0" { t.Errorf("HrneoVersion=%q",  got.HrneoVersion) }
-	if got.FirmwareCurrent != "5.00.C.11.0-0" { t.Errorf("FirmwareCurrent=%q", got.FirmwareCurrent) }
-	if got.FirmwareAvail   != "" { t.Errorf("FirmwareAvail=%q, expected empty (no update in golden)", got.FirmwareAvail) }
-	if got.HrneoUptime  != "17ч 53м" { t.Errorf("HrneoUptime=%q",  got.HrneoUptime) }
+	if err != nil {
+		t.Fatalf("VersionAudit: %v", err)
+	}
+	if got.AwgmgrVersion != "2.8.2" {
+		t.Errorf("AwgmgrVersion=%q", got.AwgmgrVersion)
+	}
+	if !got.AwgmgrRunning {
+		t.Error("AwgmgrRunning should be true after successful SystemInfo")
+	}
+	if !got.HrneoInstalled {
+		t.Error("HrneoInstalled should reflect HydraRouteStatus.Installed")
+	}
+	if !got.HrneoRunning {
+		t.Error("HrneoRunning should reflect HydraRouteStatus.Running")
+	}
+	if got.HrneoVersion != "2.4.0" {
+		t.Errorf("HrneoVersion=%q", got.HrneoVersion)
+	}
+	if got.FirmwareCurrent != "5.00.C.11.0-0" {
+		t.Errorf("FirmwareCurrent=%q", got.FirmwareCurrent)
+	}
+	if got.FirmwareAvail != "" {
+		t.Errorf("FirmwareAvail=%q, expected empty (no update in golden)", got.FirmwareAvail)
+	}
+	if got.HrneoUptime != "17ч 53м" {
+		t.Errorf("HrneoUptime=%q", got.HrneoUptime)
+	}
 	if got.AwgmgrUptime != "1д 3ч" {
 		t.Errorf("AwgmgrUptime=%q, want 1д 3ч", got.AwgmgrUptime)
 	}
@@ -292,23 +323,79 @@ func TestVersionAudit_HrneoNotInstalled(t *testing.T) {
 	}
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
 		switch {
-		case name == "ndmc": return []byte(ndmcComponentsListGolden_NoUpdate), nil
-		case name == "cat" && args[0] == "/proc/uptime": return []byte(procUptimeGolden), nil
-		case name == "pidof" && args[0] == "awg-manager": return []byte("1895\n"), nil
-		case name == "cat" && args[0] == "/proc/1895/stat": return []byte(procStatAwgmgrGolden), nil
+		case name == "ndmc":
+			return []byte(ndmcComponentsListGolden_NoUpdate), nil
+		case name == "cat" && args[0] == "/proc/uptime":
+			return []byte(procUptimeGolden), nil
+		case name == "pidof" && args[0] == "awg-manager":
+			return []byte("1895\n"), nil
+		case name == "cat" && args[0] == "/proc/1895/stat":
+			return []byte(procStatAwgmgrGolden), nil
 		}
 		return nil, fmt.Errorf("unexpected: %s %v", name, args)
 	}
 	got, err := VersionAudit(context.Background(), awg, exec)
-	if err != nil { t.Fatalf("VersionAudit: %v", err) }
-	if got.HrneoVersion != "" { t.Errorf("expected empty HrneoVersion when !Installed, got %q", got.HrneoVersion) }
-	if got.HrneoUptime  != "" { t.Errorf("expected empty HrneoUptime when !Installed, got %q",  got.HrneoUptime) }
+	if err != nil {
+		t.Fatalf("VersionAudit: %v", err)
+	}
+	if got.HrneoVersion != "" {
+		t.Errorf("expected empty HrneoVersion when !Installed, got %q", got.HrneoVersion)
+	}
+	if got.HrneoInstalled {
+		t.Error("HrneoInstalled should be false when HydraRouteStatus reports not installed")
+	}
+	if got.HrneoRunning {
+		t.Error("HrneoRunning should be false when HydraRouteStatus reports not running")
+	}
+	if got.HrneoUptime != "" {
+		t.Errorf("expected empty HrneoUptime when !Installed, got %q", got.HrneoUptime)
+	}
+}
+
+func TestVersionAudit_HrneoInstalledButStopped(t *testing.T) {
+	awg := &fakeAwgInfo{
+		sysInfo: awgmgr.SystemInfo{Version: "2.8.2", FirmwareVersion: "5.00.C.11.0-0"},
+		hrStat:  &awgmgr.HydraRouteStatus{Installed: true, Running: false},
+	}
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "ndmc":
+			return []byte(ndmcComponentsListGolden_NoUpdate), nil
+		case name == "opkg" && len(args) == 2 && args[0] == "info" && args[1] == "hrneo":
+			return []byte(opkgInfoHrneoGolden), nil
+		case name == "cat" && args[0] == "/proc/uptime":
+			return []byte(procUptimeGolden), nil
+		case name == "pidof" && args[0] == "awg-manager":
+			return []byte("1895\n"), nil
+		case name == "cat" && args[0] == "/proc/1895/stat":
+			return []byte(procStatAwgmgrGolden), nil
+		}
+		return nil, fmt.Errorf("unexpected: %s %v", name, args)
+	}
+	got, err := VersionAudit(context.Background(), awg, exec)
+	if err != nil {
+		t.Fatalf("VersionAudit: %v", err)
+	}
+	if !got.HrneoInstalled {
+		t.Fatal("HrneoInstalled should be true")
+	}
+	if got.HrneoRunning {
+		t.Fatal("HrneoRunning should be false for a stopped daemon")
+	}
+	if got.HrneoVersion != "2.4.0" {
+		t.Fatalf("HrneoVersion=%q, want 2.4.0", got.HrneoVersion)
+	}
+	if got.HrneoUptime != "" {
+		t.Fatalf("stopped hrneo should not have uptime, got %q", got.HrneoUptime)
+	}
 }
 
 func TestEncodeVersionAudit_RoundTrip(t *testing.T) {
 	in := wire.VersionAudit{AwgmgrVersion: "2.8.2", FirmwareCurrent: "5.0.0", HrneoVersion: "2.4.0"}
 	s, err := EncodeVersionAudit(in)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !strings.Contains(s, `"awgmgr_version":"2.8.2"`) {
 		t.Errorf("encoded missing field: %s", s)
 	}

@@ -176,10 +176,15 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 	}
 	out := wire.VersionAudit{
 		AwgmgrVersion:   sys.Version,
+		AwgmgrRunning:   true,
 		FirmwareCurrent: sys.FirmwareVersion,
 	}
-	if hrErr == nil && hr != nil && hr.Installed && hrneoVer != "" {
-		out.HrneoVersion = hrneoVer
+	if hrErr == nil && hr != nil {
+		out.HrneoInstalled = hr.Installed
+		out.HrneoRunning = hr.Running
+		if hr.Installed && hrneoVer != "" {
+			out.HrneoVersion = hrneoVer
+		}
 	}
 	if fsErr == nil {
 		if fs.Current != "" {
@@ -190,7 +195,7 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 
 	var hrneoUp, awgmgrUp string
 	g2, gctx2 := errgroup.WithContext(ctx)
-	if out.HrneoVersion != "" {
+	if out.HrneoRunning && out.HrneoVersion != "" {
 		g2.Go(func() error {
 			hrneoUp = daemonUptime(gctx2, exec, sysUp, "hrneo")
 			return nil

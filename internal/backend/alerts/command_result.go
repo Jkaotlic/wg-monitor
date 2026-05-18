@@ -61,6 +61,14 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	case "restart_tunnel":
 		card := Card{Badge: "", Label: label, Summary: strings.TrimSpace(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
+	case "tunnel_import":
+		card := Card{
+			Badge:   "",
+			Label:   label,
+			Summary: strings.TrimSpace(r.Output),
+			Hint:    "Если это новый туннель и на старом были правила, открой 🛣 Маршруты, чтобы перенести правила на новый конфиг.",
+		}
+		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "check_via_tunnel", "check_direct", "router_doctor":
 		return []string{strings.TrimSpace(r.Output)}
 	case "opkg_upgrade":
@@ -188,6 +196,8 @@ func commandLabelHuman(action string) string {
 		return "▶ Включить туннель"
 	case "tunnel_disable":
 		return "⏸ Выключить туннель"
+	case "tunnel_import":
+		return "📁 Импорт конфига"
 	}
 	return action
 }

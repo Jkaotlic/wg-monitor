@@ -3,6 +3,7 @@ package callbacks
 import (
 	"context"
 	cryptoRand "crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -92,6 +93,7 @@ type Router struct {
 	pending      map[int64]*pendingUpload
 
 	routesCache         *RoutesCache
+	routeWizard         *RouteWizardStore
 	rebindConfirmAction Action
 	cmdSink             CommandEnqueuer // saved for routes_open/refresh enqueue paths
 	pendingRebindsMu    sync.Mutex
@@ -140,6 +142,10 @@ func (r *Router) SetRoutesCache(c *RoutesCache) {
 	r.routesCache = c
 }
 
+func (r *Router) RouteWizardStore() *RouteWizardStore {
+	return r.routeWizard
+}
+
 // SetOpkgRepair attaches the pendingOpkgRepair store and the OpkgRepairAction
 // handler. Called from cmd/backend at startup; both must be wired together
 // because the handler relay (in backend/handler.go) creates pending entries
@@ -185,6 +191,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	}
 	r.cmdSink = sink
 	r.pendingRebinds = make(map[string]*pendingRebind)
+	r.routeWizard = NewRouteWizardStore(5 * time.Minute)
 	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebind, defaultCmdID)
 	r.pendingMaint = newPendingMaintStore()
 	r.cooldown = newCooldownStore()
@@ -350,6 +357,33 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	case "routes_back":
 		r.handleRoutesOpen(ctx, q, args, false)
+		return
+	case "routes_add":
+		r.handleRoutesAddStart(ctx, q, args)
+		return
+	case "routes_add_type":
+		r.handleRoutesAddType(ctx, q, args)
+		return
+	case "routes_add_tunnel":
+		r.handleRoutesAddTunnel(ctx, q, args)
+		return
+	case "routes_add_confirm":
+		r.handleRoutesAddConfirm(ctx, q, args)
+		return
+	case "routes_add_cancel":
+		r.handleRoutesAddCancel(ctx, q, args)
+		return
+	case "routes_del":
+		r.handleRoutesDelete(ctx, q, args)
+		return
+	case "routes_del_confirm":
+		r.handleRoutesDeleteConfirm(ctx, q, args)
+		return
+	case "routes_del_cancel":
+		r.handleRoutesDeleteCancel(ctx, q, args)
+		return
+	case "routes_hrneo":
+		r.handleRoutesHRNeo(ctx, q, args)
 		return
 	case "routes_close":
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
@@ -653,6 +687,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	case "📊 Здоровье флота":
 		r.dispatchFleetHealth(ctx, m, kind)
 	default:
+		if r.handlePendingRouteReply(ctx, m, user) {
+			return
+		}
 		if r.handlePendingNameReply(ctx, m, user) {
 			return
 		}
@@ -1088,9 +1125,9 @@ func (r *Router) sendImportConfirmation(ctx context.Context, chatID int64, threa
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: fmt.Sprintf("🔄 Заменить %s", name),
-				CallbackData: fmt.Sprintf("tunnel_import_replace:%d:%s:%s", userID, name, token)}},
+				CallbackData: fmt.Sprintf("tunnel_import_replace:%d:%s:%s", userID, panelSentinel, token)}},
 			{{Text: "➕ Добавить как новый",
-				CallbackData: fmt.Sprintf("tunnel_import_add:%d:%s:%s", userID, name, token)}},
+				CallbackData: fmt.Sprintf("tunnel_import_add:%d:%s:%s", userID, panelSentinel, token)}},
 		},
 	}
 	if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID,
@@ -1367,6 +1404,261 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindSrcID, args.RebindDstID, token)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesAddStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	text := "Add route\n\nChoose route type."
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		{{Text: "DNS / HR-Neo", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns", args.UserID)}},
+		{{Text: "Static CIDR", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:static", args.UserID)}},
+		{{Text: "Cancel", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", args.UserID)}},
+	}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routesCache == nil || r.routeWizard == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "routes cache is not ready")
+		return
+	}
+	snap, ok := r.routesCache.Get(user.ID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "refresh routes and try again")
+		return
+	}
+	draft := r.routeWizard.PutAddDraft(RouteAddDraft{
+		UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID,
+		Kind: args.RouteKind, UseHRNeo: args.RouteKind == "dns" && snap.HRNeo.Installed && snap.HRNeo.Running,
+	})
+	rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Tunnels)+1)
+	for _, t := range snap.Tunnels {
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         t.Name,
+			CallbackData: fmt.Sprintf("routes_add_tunnel:%d:_panel_:%s:%s", user.ID, draft.Token, t.ID),
+		}})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{Text: "Cancel", CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draft.Token)}})
+	text := "Add route\n\nChoose destination tunnel."
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesAddTunnel(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routeWizard == nil {
+		return
+	}
+	draft, ok := r.routeWizard.GetAddDraft(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
+		return
+	}
+	draft.TunnelID = args.RebindDstID
+	r.routeWizard.PutAddDraft(draft)
+	text := "Add route\n\nSend route name on the first line and targets on the next lines.\n\nExample:\nmedia\nexample.com\napi.example.com"
+	if draft.Kind == "static" {
+		text = "Add static route\n\nSend route name on the first line and CIDR/IP targets on the next lines.\n\nExample:\ncorp\n10.10.0.0/16\n192.0.2.7"
+	}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", nil)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, user *db.User) bool {
+	if user == nil || r.routeWizard == nil {
+		return false
+	}
+	draft, ok := r.routeWizard.GetOpenAddDraft(user.ID, m.MessageThreadID, user.ID)
+	if !ok || draft.TunnelID == "" {
+		return false
+	}
+	name, targets := parseRouteAddReply(m.Text)
+	if name == "" || len(targets) == 0 {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Need route name on the first line and at least one target below it.", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+		return true
+	}
+	draft.Name = name
+	draft.Targets = targets
+	draft = r.routeWizard.PutAddDraft(draft)
+	if r.cmdSink == nil {
+		return true
+	}
+	ack := "Checking route overlaps..."
+	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, ack, "", nil)
+	if err != nil {
+		mid = m.MessageID
+	}
+	cmd := wire.Command{
+		ID:       fmt.Sprintf("route_add_plan:%s:%s", draft.Token, defaultCmdID()),
+		Action:   "route_add_plan",
+		IssuedAt: time.Now().UTC(),
+		Args: map[string]any{
+			"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
+			"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo,
+		},
+	}
+	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Could not enqueue route preview: "+err.Error(), "", nil)
+	}
+	return true
+}
+
+func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
+		return
+	}
+	draft, ok := r.routeWizard.ConsumeAddConfirm(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "preview expired")
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "route_add", IssuedAt: time.Now().UTC(), Args: map[string]any{
+		"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
+		"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "draft_hash": draft.PreviewHash,
+	}}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		return
+	}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Applying route change...", "", nil)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesAddCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	if r.routeWizard != nil {
+		r.routeWizard.CancelAddDraft(args.UserID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
+	}
+	r.handleRoutesOpen(ctx, q, args, false)
+}
+
+func (r *Router) handleRoutesDelete(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routesCache == nil || r.routeWizard == nil {
+		return
+	}
+	snap, ok := r.routesCache.Get(user.ID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "refresh routes and try again")
+		return
+	}
+	if args.RouteToken == "_list_" {
+		rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Rules)+1)
+		for _, rule := range snap.Rules {
+			token := r.routeWizard.PutRouteToken(RouteToken{UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rule.Kind, RouteID: rule.ID, PreviewHash: routeHash(rule)})
+			label := rule.Name
+			if label == "" {
+				label = rule.ID
+			}
+			rows = append(rows, []tg.InlineKeyboardButton{{Text: label, CallbackData: fmt.Sprintf("routes_del:%d:_panel_:%s", user.ID, token)}})
+		}
+		rows = append(rows, []tg.InlineKeyboardButton{{Text: "Cancel", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", user.ID)}})
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Delete route\n\nChoose one route.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+		return
+	}
+	rt, ok := r.routeWizard.GetRouteToken(user.ID, q.Message.MessageThreadID, user.ID, args.RouteToken)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "route token expired")
+		return
+	}
+	draft := r.routeWizard.PutDeleteDraft(RouteDeleteDraft{UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rt.Kind, RouteID: rt.RouteID, PreviewHash: rt.PreviewHash})
+	cmd := wire.Command{ID: fmt.Sprintf("route_delete_plan:%s:%s", draft.Token, defaultCmdID()), Action: "route_delete_plan", IssuedAt: time.Now().UTC(), Args: map[string]any{
+		"kind": rt.Kind, "route_id": rt.RouteID,
+	}}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		return
+	}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Building delete preview...", "", nil)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
+		return
+	}
+	draft, ok := r.routeWizard.ConsumeDeleteConfirm(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "preview expired")
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "route_delete", IssuedAt: time.Now().UTC(), Args: map[string]any{
+		"kind": draft.Kind, "route_id": draft.RouteID, "preview_hash": draft.PreviewHash,
+	}}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		return
+	}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Deleting route...", "", nil)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesDeleteCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	if r.routeWizard != nil {
+		r.routeWizard.CancelDeleteDraft(args.UserID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
+	}
+	r.handleRoutesOpen(ctx, q, args, false)
+}
+
+func (r *Router) handleRoutesHRNeo(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "hrneo_inventory", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		return
+	}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Loading HR-Neo rules...", "", nil)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func parseRouteAddReply(text string) (string, []string) {
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) == 1 {
+		parts := strings.SplitN(lines[0], ":", 2)
+		if len(parts) == 2 {
+			return strings.TrimSpace(parts[0]), splitRouteTargets(parts[1])
+		}
+		return "", nil
+	}
+	name := strings.TrimSpace(lines[0])
+	targets := splitRouteTargets(strings.Join(lines[1:], "\n"))
+	return name, targets
+}
+
+func splitRouteTargets(text string) []string {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '\n' || r == ',' || r == ';' || r == ' ' || r == '\t'
+	})
+	out := make([]string, 0, len(fields))
+	seen := make(map[string]bool)
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" || seen[field] {
+			continue
+		}
+		seen[field] = true
+		out = append(out, field)
+	}
+	return out
+}
+
+func routeHash(v any) string {
+	b, _ := json.Marshal(v)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 // SetUpstream attaches the upstream version cache used by smart-reply

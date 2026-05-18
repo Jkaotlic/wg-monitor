@@ -35,6 +35,19 @@ func TestRoutesPanelText_HappyPath(t *testing.T) {
 	if !strings.Contains(text, "WAN") {
 		t.Errorf("WAN/Other not shown: %s", text)
 	}
+	if strings.Contains(text, "        ") {
+		t.Errorf("routes text should not rely on wide space padding:\n%s", text)
+	}
+	for _, want := range []string{
+		"DNS routes: 6 правил",
+		"Static IP routes: 3 правил",
+		"amnezia (nwg1): 7 правил",
+		"WAN/system: 2 правил",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
 }
 
 func TestRoutesPanelText_HRNeoAbsent(t *testing.T) {

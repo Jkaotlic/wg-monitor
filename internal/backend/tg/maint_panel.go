@@ -30,11 +30,13 @@ type UpdateLine struct {
 // disable + label swap.
 type MaintPanelArgs struct {
 	Nickname                  string
+	HrneoInstalled            bool
 	HrneoVersion              string
 	HrneoUptime               string
 	HrneoRunning              bool
 	AwgmgrVersion             string
 	AwgmgrUptime              string
+	AwgmgrRunning             bool
 	KeeneticOS                string // model — e.g. "KN-1811"
 	Firmware                  wire.FirmwareStatus
 	Updates                   []UpdateLine
@@ -47,20 +49,38 @@ func MaintPanelText(a MaintPanelArgs) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🛠 Обслуживание — %s\n\n", a.Nickname)
 	b.WriteString("Сервисы:\n")
-	if a.HrneoVersion == "" {
-		b.WriteString("  • HydraRoute-Neo  ⚪ не установлен\n")
+	if !a.HrneoInstalled {
+		b.WriteString("  • HydraRoute-Neo: ⚪ не установлен\n")
 	} else {
-		hrIcon := "❌"
+		hrState := "❌ остановлен"
 		if a.HrneoRunning {
-			hrIcon = "✅"
+			hrState = "✅ работает"
 		}
-		fmt.Fprintf(&b, "  • HydraRoute-Neo  %s running, v%s  uptime %s\n", hrIcon, a.HrneoVersion, a.HrneoUptime)
+		fmt.Fprintf(&b, "  • HydraRoute-Neo: %s", hrState)
+		if a.HrneoVersion != "" {
+			fmt.Fprintf(&b, ", v%s", a.HrneoVersion)
+		}
+		if a.HrneoUptime != "" {
+			fmt.Fprintf(&b, ", uptime %s", a.HrneoUptime)
+		}
+		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "  • awg-manager     ✅ running, v%s  uptime %s\n", a.AwgmgrVersion, a.AwgmgrUptime)
+	awgState := "❌ не отвечает"
+	if a.AwgmgrRunning {
+		awgState = "✅ работает"
+	}
+	fmt.Fprintf(&b, "  • awg-manager: %s", awgState)
+	if a.AwgmgrVersion != "" {
+		fmt.Fprintf(&b, ", v%s", a.AwgmgrVersion)
+	}
+	if a.AwgmgrUptime != "" {
+		fmt.Fprintf(&b, ", uptime %s", a.AwgmgrUptime)
+	}
+	b.WriteString("\n")
 	if a.KeeneticOS != "" {
-		fmt.Fprintf(&b, "  • Keenetic OS     %s, v%s\n", a.KeeneticOS, a.Firmware.Current)
+		fmt.Fprintf(&b, "  • Keenetic OS: %s, v%s\n", a.KeeneticOS, a.Firmware.Current)
 	} else {
-		fmt.Fprintf(&b, "  • Keenetic OS     v%s\n", a.Firmware.Current)
+		fmt.Fprintf(&b, "  • Keenetic OS: v%s\n", a.Firmware.Current)
 	}
 	if len(a.Updates) > 0 {
 		b.WriteString("\n🟡 Доступны обновления:\n")
@@ -73,25 +93,25 @@ func MaintPanelText(a MaintPanelArgs) string {
 
 // MaintPanelKeyboard renders the action grid:
 //
-//	[🔁 Restart hrneo]    [🔁 Restart awg-mgr]
-//	[🔁 Reboot router*]   [📦 Прошивка]
+//	[🔁 Перезапустить hrneo]       [🔁 Перезапустить awg-manager]
+//	[🔁 Перезагрузить роутер*]     [📦 Прошивка]
 //	[🔄 Проверить апдейты] [✖ Закрыть]
 //
 // * If RouterCooldownRemaining > 0, the Reboot button is replaced with a
-// disabled-looking "🕒 Cooldown MM:SS" indicator that re-opens the panel
+// disabled-looking "🕒 Кулдаун MM:SS" indicator that re-opens the panel
 // (no destructive action).
 func MaintPanelKeyboard(userID int64, a MaintPanelArgs) InlineKeyboardMarkup {
 	cd := func(action, arg string) string { return fmt.Sprintf("%s:%d:%s", action, userID, arg) }
-	rebootLabel := "🔁 Reboot router"
+	rebootLabel := "🔁 Перезагрузить роутер"
 	rebootCD := cd("maint_restart", "router")
 	if a.RouterCooldownRemaining > 0 {
-		rebootLabel = "🕒 Cooldown " + fmtCooldown(a.RouterCooldownRemaining)
+		rebootLabel = "🕒 Кулдаун " + fmtCooldown(a.RouterCooldownRemaining)
 		rebootCD = cd("maint_open", "_panel_")
 	}
 	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{
-			{Text: "🔁 Restart hrneo", CallbackData: cd("maint_restart", "hrneo")},
-			{Text: "🔁 Restart awg-mgr", CallbackData: cd("maint_restart", "awgmgr")},
+			{Text: "🔁 Перезапустить hrneo", CallbackData: cd("maint_restart", "hrneo")},
+			{Text: "🔁 Перезапустить awg-manager", CallbackData: cd("maint_restart", "awgmgr")},
 		},
 		{
 			{Text: rebootLabel, CallbackData: rebootCD},
@@ -117,6 +137,14 @@ func RestartConfirmText(name, token string) string {
 		what = "  • DNS-routes на короткое время (~5 сек) перестанут резолвиться по правилам.\n" +
 			"  • Static-routes продолжат работать.\n" +
 			"  • Кратковременная просадка на доменах из ip.list."
+	case "hrneo_start":
+		what = "  • HydraRoute-Neo будет запущен.\n" +
+			"  • DNS/HR-Neo правила начнут применяться после старта демона.\n" +
+			"  • Если сервис уже работает, команда безопасно завершится без лишних изменений."
+	case "hrneo_stop":
+		what = "  • HydraRoute-Neo будет остановлен.\n" +
+			"  • DNS/HR-Neo правила временно перестанут маршрутизировать домены.\n" +
+			"  • Static-routes awg-manager продолжат работать."
 	case "awgmgr":
 		what = "  • Веб-интерфейс awg-manager на ~3-5 сек перестанет отвечать.\n" +
 			"  • Туннели НЕ разрываются — это перезапуск только демона awg-manager.\n" +
@@ -165,7 +193,7 @@ func FirmwareScreenKeyboard(userID int64, fs wire.FirmwareStatus, cdRem time.Dur
 	if fs.Available != "" {
 		var label, data string
 		if cdRem > 0 {
-			label = "🕒 Cooldown " + fmtCooldown(cdRem)
+			label = "🕒 Кулдаун " + fmtCooldown(cdRem)
 			data = cd("maint_fw_open", "_panel_")
 		} else {
 			label = "⬆ Установить и перезагрузить"
@@ -184,7 +212,7 @@ func FirmwareScreenKeyboard(userID int64, fs wire.FirmwareStatus, cdRem time.Dur
 func FirmwareConfirmText(token string) string {
 	return fmt.Sprintf(
 		"📦 Прошивка\n\n⚠️ Установить новую прошивку и перезагрузить роутер?\n\n"+
-			"  • После старта установки роутер уйдёт в reboot (~2-3 мин).\n"+
+			"  • После старта установки роутер уйдёт в перезагрузку (~2-3 мин).\n"+
 			"  • Все туннели разорвутся.\n"+
 			"  • Кулдаун: 5 мин.\n\n"+
 			"Token: %s (TTL 5 мин)",
@@ -205,6 +233,10 @@ func FirmwareConfirmKeyboard(userID int64, token string) InlineKeyboardMarkup {
 func nameToDisplay(name string) string {
 	switch name {
 	case "hrneo":
+		return "HydraRoute-Neo"
+	case "hrneo_start":
+		return "HydraRoute-Neo"
+	case "hrneo_stop":
 		return "HydraRoute-Neo"
 	case "awgmgr":
 		return "awg-manager"

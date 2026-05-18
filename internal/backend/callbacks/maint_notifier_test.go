@@ -60,7 +60,7 @@ func newMaintNotifierTestRig(t *testing.T) (*fakeMaintTG, *MaintPanelNotifier, *
 
 func TestMaintNotifier_VersionAudit_OK_RendersPanel(t *testing.T) {
 	tgFake, n, u, _ := newMaintNotifierTestRig(t)
-	va := wire.VersionAudit{AwgmgrVersion: "2.8.2", FirmwareCurrent: "5.0.0", HrneoVersion: "2.4.0"}
+	va := wire.VersionAudit{AwgmgrVersion: "2.8.2", AwgmgrRunning: true, FirmwareCurrent: "5.0.0", HrneoInstalled: true, HrneoRunning: true, HrneoVersion: "2.4.0"}
 	body, _ := json.Marshal(va)
 	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "version_audit"}
 	err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, u.ID)
@@ -77,6 +77,30 @@ func TestMaintNotifier_VersionAudit_OK_RendersPanel(t *testing.T) {
 	// Audit cache populated
 	if cached, ok := n.Audit.GetVersionAudit(u.ID); !ok || cached.AwgmgrVersion != "2.8.2" {
 		t.Errorf("audit cache not populated: %+v", cached)
+	}
+}
+
+func TestMaintNotifier_VersionAudit_HrneoStopped(t *testing.T) {
+	tgFake, n, u, _ := newMaintNotifierTestRig(t)
+	va := wire.VersionAudit{
+		AwgmgrVersion:   "2.8.2",
+		AwgmgrRunning:   true,
+		FirmwareCurrent: "5.0.0",
+		HrneoInstalled:  true,
+		HrneoRunning:    false,
+		HrneoVersion:    "2.4.0",
+	}
+	body, _ := json.Marshal(va)
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "version_audit"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, u.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := tgFake.lastText()
+	if !strings.Contains(got, "HydraRoute-Neo: ❌ остановлен") {
+		t.Errorf("expected stopped hrneo state, got: %s", got)
+	}
+	if strings.Contains(got, "HydraRoute-Neo: ✅ running") {
+		t.Errorf("must not render stopped hrneo as running, got: %s", got)
 	}
 }
 

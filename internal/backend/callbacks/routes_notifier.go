@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -23,6 +24,7 @@ type RoutesPanelNotifier struct {
 	TG    RoutesEditTG
 	Cache *RoutesCache
 	DB    *db.DB
+	Store *RouteWizardStore
 }
 
 func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error {
@@ -35,6 +37,14 @@ func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpk
 		return n.renderStatus(ctx, ref, res, user)
 	case "route_rebind":
 		return n.renderRebind(ctx, ref, res, user)
+	case "route_add_plan":
+		return n.renderAddPlan(ctx, ref, res, user)
+	case "route_add", "route_delete":
+		return n.renderApply(ctx, ref, res, user)
+	case "route_delete_plan":
+		return n.renderDeletePlan(ctx, ref, res, user)
+	case "hrneo_inventory":
+		return n.renderHRNeoInventory(ctx, ref, res, user)
 	default:
 		return fmt.Errorf("RoutesPanelNotifier: unsupported action %q", ref.Action)
 	}
@@ -59,6 +69,14 @@ func (n *RoutesPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messa
 }
 
 func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		text := fmt.Sprintf("🛣 Маршруты — %s\n⚠ Ошибка переноса маршрутов\n\nОтвет агента:\n%s", user.Nickname, res.Output)
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+			{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+		}}}
+		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	}
 	var rb wire.RouteRebindResult
 	if err := json.Unmarshal([]byte(res.Output), &rb); err != nil {
 		return fmt.Errorf("decode rebind result: %w", err)
@@ -80,4 +98,117 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 	text := tg.RebindResultText(srcName, dstName, rb)
 	kb := tg.RebindResultKeyboard(user.ID, rb.SrcTunnelID, rb.DstTunnelID, totalFailed)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func (n *RoutesPanelNotifier) renderAddPlan(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		return n.renderRouteError(ctx, ref, user, "Add route preview failed", res.Output)
+	}
+	var plan wire.RouteAddPlan
+	if err := json.Unmarshal([]byte(res.Output), &plan); err != nil {
+		return fmt.Errorf("decode route add plan: %w", err)
+	}
+	draftToken := tokenFromCommandID(res.ID)
+	confirmToken := ""
+	if n.Store != nil && draftToken != "" {
+		if d, ok := n.Store.SetAddConfirm(user.ID, ref.ThreadID, user.ID, draftToken, plan.Hash); ok {
+			confirmToken = d.ConfirmToken
+		}
+	}
+	text := tg.RouteAddPreviewText(plan)
+	if confirmToken == "" && plan.CanApply {
+		text += "\nPreview expired. Refresh routes and try again.\n"
+		plan.CanApply = false
+	}
+	kb := tg.RouteAddPreviewKeyboard(user.ID, draftToken, confirmToken, plan)
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func (n *RoutesPanelNotifier) renderDeletePlan(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		return n.renderRouteError(ctx, ref, user, "Delete route preview failed", res.Output)
+	}
+	var plan wire.RouteDeletePlan
+	if err := json.Unmarshal([]byte(res.Output), &plan); err != nil {
+		return fmt.Errorf("decode route delete plan: %w", err)
+	}
+	draftToken := tokenFromCommandID(res.ID)
+	confirmToken := ""
+	if n.Store != nil && draftToken != "" {
+		if d, ok := n.Store.SetDeleteConfirm(user.ID, ref.ThreadID, user.ID, draftToken, plan.Hash); ok {
+			confirmToken = d.ConfirmToken
+		}
+	}
+	text := tg.RouteDeletePreviewText(plan)
+	if confirmToken == "" {
+		text += "\nPreview expired. Refresh routes and try again.\n"
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+			{Text: "Refresh", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+		}}}
+		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	}
+	kb := tg.RouteDeletePreviewKeyboard(user.ID, draftToken, confirmToken)
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func (n *RoutesPanelNotifier) renderApply(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		return n.renderRouteError(ctx, ref, user, "Route change failed", res.Output)
+	}
+	var result wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(res.Output), &result); err != nil {
+		return fmt.Errorf("decode route apply result: %w", err)
+	}
+	if n.Cache != nil {
+		n.Cache.Invalidate(user.ID)
+	}
+	text := tg.RouteApplyResultText(result)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+		{Text: "Refresh", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+	}}}
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func (n *RoutesPanelNotifier) renderHRNeoInventory(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		return n.renderRouteError(ctx, ref, user, "HR-Neo inventory failed", res.Output)
+	}
+	var inv wire.HRNeoInventory
+	if err := json.Unmarshal([]byte(res.Output), &inv); err != nil {
+		return fmt.Errorf("decode hrneo inventory: %w", err)
+	}
+	text := tg.HRNeoInventoryText(user.Nickname, inv)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		{
+			{Text: "Start HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo_start", user.ID)},
+			{Text: "Stop HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo_stop", user.ID)},
+		},
+		{
+			{Text: "Restart HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo", user.ID)},
+		},
+		{
+			{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+			{Text: "Refresh", CallbackData: fmt.Sprintf("routes_hrneo:%d:_panel_", user.ID)},
+		},
+	}}
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func (n *RoutesPanelNotifier) renderRouteError(ctx context.Context, ref cmdpkg.MessageRef, user *db.User, title, body string) error {
+	text := fmt.Sprintf("%s\n\nAgent response:\n%s", title, body)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+		{Text: "Refresh", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+	}}}
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func tokenFromCommandID(id string) string {
+	parts := strings.Split(id, ":")
+	if len(parts) >= 3 {
+		return parts[1]
+	}
+	return ""
 }

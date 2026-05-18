@@ -12,14 +12,16 @@ import (
 
 func TestMaintPanelText_FullState(t *testing.T) {
 	args := MaintPanelArgs{
-		Nickname:      "testkeen",
-		HrneoVersion:  "2.4.0",
-		HrneoUptime:   "3д 4ч",
-		HrneoRunning:  true,
-		AwgmgrVersion: "2.8.2",
-		AwgmgrUptime:  "7д 12ч",
-		KeeneticOS:    "KN-1811",
-		Firmware:      wire.FirmwareStatus{Current: "5.00.C.11.0-0"},
+		Nickname:       "testkeen",
+		HrneoVersion:   "2.4.0",
+		HrneoInstalled: true,
+		HrneoUptime:    "3д 4ч",
+		HrneoRunning:   true,
+		AwgmgrVersion:  "2.8.2",
+		AwgmgrRunning:  true,
+		AwgmgrUptime:   "7д 12ч",
+		KeeneticOS:     "KN-1811",
+		Firmware:       wire.FirmwareStatus{Current: "5.00.C.11.0-0"},
 		Updates: []UpdateLine{
 			{Name: "KeeneticOS", Installed: "5.00.C.11.0-0", Available: "5.00.C.12.0-0"},
 			{Name: "awg-manager", Installed: "2.8.2", Available: "2.9.0"},
@@ -44,8 +46,8 @@ func TestMaintPanelText_FullState(t *testing.T) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
 	}
-	if !strings.Contains(text, "KN-1811, v") {
-		t.Errorf("with non-empty model, expected comma between model and version")
+	if strings.Contains(text, "     ") {
+		t.Errorf("maintenance text should not rely on wide space padding:\n%s", text)
 	}
 }
 
@@ -60,20 +62,22 @@ func TestMaintPanelText_EmptyKeeneticOSHidesComma(t *testing.T) {
 	if strings.Contains(text, ", v5.0.0") {
 		t.Errorf("empty KeeneticOS must not produce leading-comma artifact:\n%s", text)
 	}
-	if !strings.Contains(text, "Keenetic OS     v5.0.0") {
-		t.Errorf("expected 'Keenetic OS     v5.0.0' line, got:\n%s", text)
+	if !strings.Contains(text, "Keenetic OS: v5.0.0") {
+		t.Errorf("expected compact Keenetic OS line, got:\n%s", text)
 	}
 }
 
 func TestMaintPanelText_HrneoNotInstalled(t *testing.T) {
 	args := MaintPanelArgs{
-		Nickname:      "testkeen",
-		HrneoVersion:  "", // empty signals not installed
-		HrneoRunning:  false,
-		AwgmgrVersion: "2.8.2",
-		AwgmgrUptime:  "7д 12ч",
-		KeeneticOS:    "KN-1811",
-		Firmware:      wire.FirmwareStatus{Current: "5.0.0"},
+		Nickname:       "testkeen",
+		HrneoVersion:   "", // empty signals not installed
+		HrneoInstalled: false,
+		HrneoRunning:   false,
+		AwgmgrVersion:  "2.8.2",
+		AwgmgrRunning:  true,
+		AwgmgrUptime:   "7д 12ч",
+		KeeneticOS:     "KN-1811",
+		Firmware:       wire.FirmwareStatus{Current: "5.0.0"},
 	}
 	text := MaintPanelText(args)
 	if !strings.Contains(text, "не установлен") {
@@ -84,27 +88,46 @@ func TestMaintPanelText_HrneoNotInstalled(t *testing.T) {
 	}
 }
 
+func TestMaintPanelText_HrneoInstalledButStopped(t *testing.T) {
+	args := MaintPanelArgs{
+		Nickname:       "testkeen",
+		HrneoInstalled: true,
+		HrneoRunning:   false,
+		HrneoVersion:   "2.4.0",
+		AwgmgrVersion:  "2.8.2",
+		AwgmgrRunning:  true,
+		Firmware:       wire.FirmwareStatus{Current: "5.0.0"},
+	}
+	text := MaintPanelText(args)
+	if !strings.Contains(text, "HydraRoute-Neo: ❌ остановлен, v2.4.0") {
+		t.Errorf("stopped hrneo should render as stopped, got:\n%s", text)
+	}
+	if strings.Contains(text, "HydraRoute-Neo: ✅ running") {
+		t.Errorf("stopped hrneo must not render as running:\n%s", text)
+	}
+}
+
 func TestMaintPanelKeyboard_NormalAndCooldown(t *testing.T) {
-	// No cooldown — reboot button shows "Reboot router"
+	// No cooldown — reboot button shows the destructive action in Russian.
 	args := MaintPanelArgs{Nickname: "x"}
 	kb := MaintPanelKeyboard(42, args)
-	if !findButtonText(kb, "🔁 Restart hrneo") {
+	if !findButtonText(kb, "🔁 Перезапустить hrneo") {
 		t.Error("missing Restart hrneo button")
 	}
-	if !findButtonText(kb, "🔁 Restart awg-mgr") {
+	if !findButtonText(kb, "🔁 Перезапустить awg-manager") {
 		t.Error("missing Restart awg-mgr button")
 	}
-	if !findButtonText(kb, "🔁 Reboot router") {
+	if !findButtonText(kb, "🔁 Перезагрузить роутер") {
 		t.Error("missing Reboot router button (no cooldown)")
 	}
 
-	// With router cooldown — Reboot button replaced with Cooldown indicator
+	// With router cooldown — Reboot button replaced with cooldown indicator.
 	args.RouterCooldownRemaining = 2*time.Minute + 23*time.Second
 	kb = MaintPanelKeyboard(42, args)
-	if findButtonText(kb, "🔁 Reboot router") {
+	if findButtonText(kb, "🔁 Перезагрузить роутер") {
 		t.Error("Reboot router button must NOT show during cooldown")
 	}
-	if !findButtonContains(kb, "Cooldown") {
+	if !findButtonContains(kb, "Кулдаун") {
 		t.Error("Cooldown button must show during cooldown")
 	}
 }
@@ -204,7 +227,7 @@ func TestFirmwareScreenKeyboard_CooldownReplacesInstall(t *testing.T) {
 	if findButtonContains(kb, "Установить") {
 		t.Error("install button must NOT show during cooldown")
 	}
-	if !findButtonContains(kb, "Cooldown") {
+	if !findButtonContains(kb, "Кулдаун") {
 		t.Error("cooldown indicator must show during cooldown")
 	}
 }
@@ -213,7 +236,7 @@ func TestFirmwareScreenKeyboard_CooldownReplacesInstall(t *testing.T) {
 
 func TestFirmwareConfirmText(t *testing.T) {
 	text := FirmwareConfirmText("deadbeef")
-	for _, want := range []string{"⚠️", "Прошивка", "reboot", "Token: deadbeef", "Кулдаун"} {
+	for _, want := range []string{"⚠️", "Прошивка", "перезагрузку", "Token: deadbeef", "Кулдаун"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

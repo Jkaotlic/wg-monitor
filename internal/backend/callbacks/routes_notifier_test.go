@@ -15,9 +15,11 @@ import (
 type fakeEditTG struct {
 	editText string
 	kb       *tg.InlineKeyboardMarkup
+	calls    int
 }
 
 func (f *fakeEditTG) EditMessageText(ctx context.Context, chatID, msgID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) error {
+	f.calls++
 	f.editText = text
 	f.kb = kb
 	return nil
@@ -71,4 +73,49 @@ func TestRoutesPanelNotifier_RebindResult(t *testing.T) {
 	if _, ok := cache.Get(uid); ok {
 		t.Errorf("cache should be invalidated after rebind")
 	}
+}
+
+func TestRoutesPanelNotifier_RebindStatusErrShowsTelegramError(t *testing.T) {
+	cache := &RoutesCache{TTL: time.Minute}
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: cache, DB: d}
+
+	res := wire.CommandResult{Status: "err", Output: "route rebind failed: ip route add: file exists"}
+	ref := cmdpkg.MessageRef{Action: "route_rebind", ChatID: 1, MessageID: 7}
+	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
+		t.Fatal(err)
+	}
+	if tgFake.calls != 1 {
+		t.Fatalf("EditMessageText calls = %d, want 1", tgFake.calls)
+	}
+	if !strings.Contains(tgFake.editText, "Маршруты") {
+		t.Errorf("expected routes title in error text: %s", tgFake.editText)
+	}
+	if !strings.Contains(tgFake.editText, "ошибка") && !strings.Contains(tgFake.editText, "Ошибка") {
+		t.Errorf("expected clear error wording: %s", tgFake.editText)
+	}
+	if !strings.Contains(tgFake.editText, res.Output) {
+		t.Errorf("expected raw agent output in error text: %s", tgFake.editText)
+	}
+	if !keyboardHasCallback(tgFake.kb, "routes_open") {
+		t.Fatalf("expected keyboard to include routes_open: %#v", tgFake.kb)
+	}
+	if !keyboardHasCallback(tgFake.kb, "routes_refresh") {
+		t.Fatalf("expected keyboard to include routes_refresh: %#v", tgFake.kb)
+	}
+}
+
+func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, prefix string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix+":") {
+				return true
+			}
+		}
+	}
+	return false
 }
