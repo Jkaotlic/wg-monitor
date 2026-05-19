@@ -67,7 +67,7 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 			PrintWarn("пропущено: " + t.Label)
 			continue
 		}
-		if t.IsAgent {
+		if shouldProbeReachabilityBeforeUpdate(state, secrets, t) {
 			if !probeReachable(t.Host, t.Port, 3*time.Second) {
 				PrintFail(fmt.Sprintf("%s:%d не отвечает за 3с — проверь SSTP/VPN, либо вручную исправь host/port в wizard.toml", t.Host, t.Port))
 				continue
@@ -78,6 +78,16 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 		}
 	}
 	return nil
+}
+
+func shouldProbeReachabilityBeforeUpdate(state *State, secrets *SecretStore, t updateTarget) bool {
+	if !t.IsAgent {
+		return false
+	}
+	if os.Getenv("WG_NO_PULL") != "1" && canPullDeploy(state, secrets, t) {
+		return false
+	}
+	return true
 }
 
 // updateTarget describes one row in the update table and is consumed by the

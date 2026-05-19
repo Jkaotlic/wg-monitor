@@ -426,6 +426,13 @@ func existingInstallDetected(s *SSH) bool {
 	return err == nil && rc == 0
 }
 
+func backendInstallSwapService(existingInstall bool) string {
+	if existingInstall {
+		return "wg-monitor-backend"
+	}
+	return ""
+}
+
 // readDeployedTelegramMeta extracts chat_id and admin_user_id from the
 // currently-deployed /etc/wg-monitor/backend.yaml on the VPS. Used by
 // install-backend's preflight to show the operator what they're about to

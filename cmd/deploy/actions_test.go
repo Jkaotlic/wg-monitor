@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,36 @@ func TestHashAgentRawTokenMatchesBackendHashShape(t *testing.T) {
 	want := "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	if got != want {
 		t.Fatalf("hashAgentRawToken mismatch: got %s want %s", got, want)
+	}
+}
+
+func TestBackendInstallSwapServiceRestartsExistingInstall(t *testing.T) {
+	if got := backendInstallSwapService(true); got != "wg-monitor-backend" {
+		t.Fatalf("existing backend install should swap through service restart, got %q", got)
+	}
+	if got := backendInstallSwapService(false); got != "" {
+		t.Fatalf("fresh backend install should keep explicit start path, got %q", got)
+	}
+}
+
+func TestStageAgentRawTokenStoresRecoveryTokenWithoutOverwritingCanonical(t *testing.T) {
+	tokenEnv := "WG_AGENT_TOKEN_ALYABA"
+	raw := strings.Repeat("a", 64)
+	t.Setenv("WG_NO_SECRET_CACHE", "1")
+	t.Setenv(tokenEnv, "")
+	store := &SecretStore{disk: map[string]string{tokenEnv: strings.Repeat("b", 64)}}
+
+	if err := stageAgentRawToken(store, tokenEnv, raw); err != nil && !errors.Is(err, ErrCacheDisabled) {
+		t.Fatalf("stageAgentRawToken returned unexpected error: %v", err)
+	}
+	if got := os.Getenv(tokenEnv); got != raw {
+		t.Fatalf("process env token = %q, want staged raw token", got)
+	}
+	if got := store.disk[tokenEnv]; got != strings.Repeat("b", 64) {
+		t.Fatalf("canonical disk token was overwritten: got %q", got)
+	}
+	if got := store.disk[tokenEnv+"_STAGED"]; got != raw {
+		t.Fatalf("staged disk token = %q, want %q", got, raw)
 	}
 }
 
