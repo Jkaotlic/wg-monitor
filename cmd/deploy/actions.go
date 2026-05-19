@@ -1077,7 +1077,8 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	// install-backend перезаписывает backend.yaml, bot-token.txt и unit-файл
 	// — на работающем backend'е без подтверждения это может молча сломать
 	// прод (другой chat_id/admin_user_id, устаревший токен из disk-cache, и т.п.).
-	if existingInstallDetected(s) {
+	existingInstall := existingInstallDetected(s)
+	if existingInstall {
 		existingChat, existingAdmin := readDeployedTelegramMeta(s)
 		PrintWarn("на VPS уже установлен wg-monitor-backend:")
 		PrintInfo(fmt.Sprintf("  существующий chat_id=%d admin_user_id=%d", existingChat, existingAdmin))
@@ -1180,7 +1181,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 
 	PrintStep(11, 14, "Upload + sha + swap")
-	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", ""); err != nil {
+	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", backendInstallSwapService(existingInstall)); err != nil {
 		return err
 	}
 
@@ -1403,7 +1404,14 @@ func actionRepairAgentToken(state *State, secrets *SecretStore, dl *Downloader, 
 	}
 	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
 	oldEnv, hadOldEnv := os.LookupEnv(tokenEnv)
-	os.Setenv(tokenEnv, rawToken)
+	if err := stageAgentRawToken(secrets, tokenEnv, rawToken); err != nil {
+		if errors.Is(err, ErrCacheDisabled) {
+			PrintWarn("WG_NO_SECRET_CACHE=1 — staged raw-token не сохранён на диск. Сохрани вручную для recovery:")
+			fmt.Printf("    %s=%s\n", tokenEnv, rawToken)
+		} else {
+			return fmt.Errorf("stage %s_STAGED: %w", tokenEnv, err)
+		}
+	}
 	committed := false
 	defer func() {
 		if committed {
@@ -1488,6 +1496,14 @@ func generateAgentRawToken() (string, error) {
 func hashAgentRawToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
+}
+
+func stageAgentRawToken(secrets *SecretStore, tokenEnv, rawToken string) error {
+	os.Setenv(tokenEnv, rawToken)
+	if secrets == nil {
+		return nil
+	}
+	return secrets.Set(tokenEnv+"_STAGED", rawToken)
 }
 
 func buildUpdateAgentTokenHashSQL(nick, tokenHash string) string {
