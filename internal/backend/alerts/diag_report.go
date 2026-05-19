@@ -21,6 +21,10 @@ func ParseDiagReport(raw string) (summary string, bullets []string, rawFallback 
 	if err := json.Unmarshal([]byte(raw), &rep); err != nil {
 		return "", nil, true
 	}
+	var generic map[string]any
+	if err := json.Unmarshal([]byte(raw), &generic); err == nil {
+		rep.LogHighlights = extractDiagLogHighlights(generic)
+	}
 	if !rep.hasAnyDocumentedField() {
 		return "", nil, true
 	}
@@ -28,12 +32,13 @@ func ParseDiagReport(raw string) (summary string, bullets []string, rawFallback 
 }
 
 type diagReportV1 struct {
-	Version     string         `json:"version"`
-	GeneratedAt string         `json:"generatedAt"`
-	DurationMs  int64          `json:"durationMs"`
-	System      diagSystem     `json:"system"`
-	WAN         diagWAN        `json:"wan"`
-	Route       map[string]any `json:"route"`
+	Version       string         `json:"version"`
+	GeneratedAt   string         `json:"generatedAt"`
+	DurationMs    int64          `json:"durationMs"`
+	System        diagSystem     `json:"system"`
+	WAN           diagWAN        `json:"wan"`
+	Route         map[string]any `json:"route"`
+	LogHighlights []string       `json:"-"`
 }
 
 type diagSystem struct {
@@ -68,7 +73,13 @@ func (r diagReportV1) hasAnyDocumentedField() bool {
 	if r.System.AppVersion != "" || r.System.Uptime != "" || r.System.TotalMemoryMB != 0 {
 		return true
 	}
+	if r.System.KernelModule.Exists || r.System.KernelModule.Loaded {
+		return true
+	}
 	if len(r.WAN.Interfaces) > 0 {
+		return true
+	}
+	if len(r.LogHighlights) > 0 {
 		return true
 	}
 	return false
@@ -106,10 +117,119 @@ func (r diagReportV1) renderBullets() []string {
 	if r.System.Uptime != "" {
 		out = append(out, "⏱ Uptime: "+r.System.Uptime)
 	}
+	if r.System.KernelModule.Exists || r.System.KernelModule.Loaded {
+		switch {
+		case r.System.KernelModule.Exists && r.System.KernelModule.Loaded:
+			out = append(out, "AWG kernel module: loaded")
+		case r.System.KernelModule.Exists && !r.System.KernelModule.Loaded:
+			out = append(out, "AWG kernel module: exists but not loaded; router reboot may be required after NativeWG module update")
+		default:
+			out = append(out, "AWG kernel module: not found")
+		}
+	}
 	if len(r.WAN.Interfaces) > 0 {
 		out = append(out, "🌐 WAN: "+renderWANInterfaces(r.WAN.Interfaces))
 	}
+	if len(r.LogHighlights) > 0 {
+		out = append(out, "Logs: "+strings.Join(r.LogHighlights, " | "))
+	}
 	return out
+}
+
+func extractDiagLogHighlights(root map[string]any) []string {
+	var candidates []string
+	collectDiagLogCandidates(root, nil, &candidates)
+	seen := map[string]bool{}
+	var out []string
+	for _, line := range candidates {
+		line = compactDiagLine(line)
+		if line == "" || !isDiagInterestingLog(line) || seen[line] {
+			continue
+		}
+		seen[line] = true
+		out = append(out, line)
+		if len(out) >= 3 {
+			break
+		}
+	}
+	return out
+}
+
+func collectDiagLogCandidates(v any, path []string, out *[]string) {
+	if pathContains(path, "singbox") || pathContains(path, "sing-box") {
+		return
+	}
+	inLogPath := pathContains(path, "log")
+	switch x := v.(type) {
+	case string:
+		if inLogPath {
+			*out = append(*out, x)
+		}
+	case []any:
+		for _, item := range x {
+			collectDiagLogCandidates(item, path, out)
+		}
+	case map[string]any:
+		if inLogPath {
+			if line := compactDiagLogObject(x); line != "" {
+				*out = append(*out, line)
+			}
+		}
+		for k, item := range x {
+			collectDiagLogCandidates(item, append(path, k), out)
+		}
+	}
+}
+
+func compactDiagLogObject(m map[string]any) string {
+	msg := firstStringField(m, "message", "msg", "text", "line")
+	if msg == "" {
+		return ""
+	}
+	level := firstStringField(m, "level", "severity")
+	if level == "" {
+		return msg
+	}
+	return level + " " + msg
+}
+
+func firstStringField(m map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if s, ok := m[k].(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func pathContains(path []string, needle string) bool {
+	needle = strings.ToLower(needle)
+	for _, p := range path {
+		if strings.Contains(strings.ToLower(p), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func compactDiagLine(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	const max = 140
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max-1]) + "…"
+	}
+	return s
+}
+
+func isDiagInterestingLog(s string) bool {
+	low := strings.ToLower(s)
+	for _, needle := range []string{"warn", "error", "fail", "panic", "iptables-restore", "amneziawg"} {
+		if strings.Contains(low, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func renderWANInterfaces(ifs map[string]diagInterface) string {

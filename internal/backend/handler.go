@@ -595,7 +595,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
 			incCmdResultRelay()
 			switch ref.Action {
-			case "route_status", "route_rebind", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory":
+			case "route_status", "route_rebind", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory", "hrneo_doctor":
 				if d.RoutesNotifier != nil {
 					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
 						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)

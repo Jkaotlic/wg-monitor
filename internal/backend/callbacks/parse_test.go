@@ -344,6 +344,16 @@ func TestParse_PanelAwakenDo(t *testing.T) {
 	}
 }
 
+func TestParse_PanelMobile(t *testing.T) {
+	a, err := Parse("panel:0:mobile")
+	if err != nil {
+		t.Fatalf("parse failed: %v", err)
+	}
+	if a.PanelScreen != "mobile" {
+		t.Errorf("got %+v", a)
+	}
+}
+
 func TestParse_PanelClose(t *testing.T) {
 	a, err := Parse("panel:0:close")
 	if err != nil {
@@ -539,6 +549,26 @@ func TestParse_PingCheckOpen(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if a.Action != "pingcheck_open" || a.UserID != 42 || !a.IsPanel {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_RoutesSnapshot(t *testing.T) {
+	a, err := Parse("routes_snapshot:42:_panel_")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "routes_snapshot" || a.UserID != 42 || !a.IsPanel {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_RoutesHRNeoDoctor(t *testing.T) {
+	a, err := Parse("routes_hrneo_doctor:42:_panel_")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "routes_hrneo_doctor" || a.UserID != 42 || !a.IsPanel {
 		t.Errorf("got %+v", a)
 	}
 }

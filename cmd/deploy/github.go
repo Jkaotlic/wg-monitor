@@ -74,7 +74,11 @@ func defaultCacheDir() string {
 	if err != nil {
 		cache = os.TempDir()
 	}
-	return filepath.Join(cache, "wg-monitor-deploy")
+	base := filepath.Join(cache, "wg-monitor-deploy")
+	if p := currentProfile(); p != "" && p != "default" {
+		return filepath.Join(base, "profiles", p)
+	}
+	return base
 }
 
 // GetLatestRelease returns the most recent published release, including

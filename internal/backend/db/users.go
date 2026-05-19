@@ -42,6 +42,9 @@ type User struct {
 	SSHUser             *string
 	Arch                *string
 	LastDeployedVersion *string
+	Ring                *string
+	PendingVersion      *string
+	PendingSince        *string
 }
 
 // IsMobile reports whether this user is a mobile (4G in-vehicle) router.
@@ -55,6 +58,13 @@ func (d *DB) Users() *UsersRepo { return &UsersRepo{d: d} }
 func hashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:])
+}
+
+func nullEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // Insert creates a static-kind user (default for fixed home/office routers).
@@ -79,7 +89,7 @@ func (u *UsersRepo) InsertWithKind(nickname, rawToken, expectedExitIP, awgIface,
 
 // userColsFull lists every column read by single-row Get*. GetAll uses a
 // shorter projection (no token_hash, no created_at) and has its own scanner.
-const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version`
+const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since`
 
 type userScanner interface {
 	Scan(dest ...any) error
@@ -95,10 +105,13 @@ func scanUserFull(s userScanner) (*User, error) {
 	var sshUser sql.NullString
 	var arch sql.NullString
 	var lastDepVer sql.NullString
+	var ring sql.NullString
+	var pendingVersion sql.NullString
+	var pendingSince sql.NullString
 	if err := s.Scan(
 		&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
 		&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
-		&sshHost, &sshPort, &sshUser, &arch, &lastDepVer,
+		&sshHost, &sshPort, &sshUser, &arch, &lastDepVer, &ring, &pendingVersion, &pendingSince,
 	); err != nil {
 		return nil, err
 	}
@@ -133,6 +146,18 @@ func scanUserFull(s userScanner) (*User, error) {
 	if lastDepVer.Valid {
 		v := lastDepVer.String
 		got.LastDeployedVersion = &v
+	}
+	if ring.Valid {
+		v := ring.String
+		got.Ring = &v
+	}
+	if pendingVersion.Valid {
+		v := pendingVersion.String
+		got.PendingVersion = &v
+	}
+	if pendingSince.Valid {
+		v := pendingSince.String
+		got.PendingSince = &v
 	}
 	return &got, nil
 }
@@ -180,7 +205,7 @@ func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 
 func (u *UsersRepo) GetAll() ([]User, error) {
 	rows, err := u.d.db.Query(
-		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version FROM users ORDER BY id`,
+		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, err
@@ -197,10 +222,13 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		var sshUser sql.NullString
 		var arch sql.NullString
 		var lastDepVer sql.NullString
+		var ring sql.NullString
+		var pendingVersion sql.NullString
+		var pendingSince sql.NullString
 		if err := rows.Scan(
 			&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
 			&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
-			&sshHost, &sshPort, &sshUser, &arch, &lastDepVer,
+			&sshHost, &sshPort, &sshUser, &arch, &lastDepVer, &ring, &pendingVersion, &pendingSince,
 		); err != nil {
 			return nil, err
 		}
@@ -235,6 +263,18 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		if lastDepVer.Valid {
 			v := lastDepVer.String
 			got.LastDeployedVersion = &v
+		}
+		if ring.Valid {
+			v := ring.String
+			got.Ring = &v
+		}
+		if pendingVersion.Valid {
+			v := pendingVersion.String
+			got.PendingVersion = &v
+		}
+		if pendingSince.Valid {
+			v := pendingSince.String
+			got.PendingSince = &v
 		}
 		out = append(out, got)
 	}
@@ -297,6 +337,9 @@ type DeployInfo struct {
 	SSHUser             string
 	Arch                string
 	LastDeployedVersion string
+	Ring                string
+	PendingVersion      string
+	PendingSince        string
 }
 
 // UpdateDeployInfo upserts the wizard-side deploy fields by nickname. Returns
@@ -304,8 +347,9 @@ type DeployInfo struct {
 // enrollment goes through the existing wg-monitor-cli add-user path).
 func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	res, err := u.d.db.Exec(
-		`UPDATE users SET ssh_host=?, ssh_port=?, ssh_user=?, arch=?, last_deployed_version=? WHERE nickname=?`,
-		info.SSHHost, info.SSHPort, info.SSHUser, info.Arch, info.LastDeployedVersion, nickname,
+		`UPDATE users SET ssh_host=?, ssh_port=?, ssh_user=?, arch=?, last_deployed_version=?, deploy_ring=?, pending_version=?, pending_since=? WHERE nickname=?`,
+		info.SSHHost, info.SSHPort, info.SSHUser, info.Arch, info.LastDeployedVersion,
+		nullEmpty(info.Ring), nullEmpty(info.PendingVersion), nullEmpty(info.PendingSince), nickname,
 	)
 	if err != nil {
 		return fmt.Errorf("users.UpdateDeployInfo: %w", err)

@@ -261,7 +261,7 @@ func TestDaemonUptime_NotRunning(t *testing.T) {
 
 func TestVersionAudit_AllFields(t *testing.T) {
 	awg := &fakeAwgInfo{
-		sysInfo: awgmgr.SystemInfo{Version: "2.8.2", FirmwareVersion: "5.00.C.11.0-0"},
+		sysInfo: awgmgr.SystemInfo{Version: "2.8.2", FirmwareVersion: "5.00.C.11.0-0", ActiveBackend: "native"},
 		hrStat:  &awgmgr.HydraRouteStatus{Installed: true, Running: true},
 	}
 	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -289,6 +289,9 @@ func TestVersionAudit_AllFields(t *testing.T) {
 	}
 	if got.AwgmgrVersion != "2.8.2" {
 		t.Errorf("AwgmgrVersion=%q", got.AwgmgrVersion)
+	}
+	if got.AwgmgrBackend != "native" {
+		t.Errorf("AwgmgrBackend=%q, want native", got.AwgmgrBackend)
 	}
 	if !got.AwgmgrRunning {
 		t.Error("AwgmgrRunning should be true after successful SystemInfo")

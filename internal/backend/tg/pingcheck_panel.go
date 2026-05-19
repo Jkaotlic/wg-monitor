@@ -37,7 +37,7 @@ func PingCheckPanelText(nickname string, globalEnabled bool, entries []PingCheck
 		b.WriteString(formatPingCheckRow(e))
 		b.WriteString("\n")
 	}
-	b.WriteString("\nГлобально: ")
+	b.WriteString("\nМониторинг: ")
 	if globalEnabled {
 		b.WriteString("✅ enabled")
 	} else {

@@ -41,8 +41,11 @@ type AgentState struct {
 	Arch                string `toml:"arch"`
 	ThreadID            int    `toml:"thread_id"`
 	Kind                string `toml:"kind,omitempty"` // "static" (default) or "mobile" — пробрасывается в DB и решает StaleAfterMobileSec в backend
+	Ring                string `toml:"ring,omitempty"` // rollout ring: canary, beta, stable (empty means stable)
 	LastDeploy          string `toml:"last_deploy"`
 	LastDeployedVersion string `toml:"last_deployed_version"`
+	PendingVersion      string `toml:"pending_version,omitempty"`
+	PendingSince        string `toml:"pending_since,omitempty"`
 	// ExpectedMAC pins the physical identity of the router so a fresh
 	// install-agent against a wrong host (operator forgot to switch SSTP,
 	// or another router took 192.168.31.1 on the same LAN) bails BEFORE
@@ -119,6 +122,44 @@ func DefaultStatePath() string {
 		cfg = filepath.Join(os.Getenv("HOME"), ".config")
 	}
 	return filepath.Join(cfg, "wg-monitor-deploy", "wizard.toml")
+}
+
+// ProfileStatePath returns an isolated wizard.toml path for a named rollout
+// profile. The default profile intentionally keeps the historic location.
+func ProfileStatePath(profile string) string {
+	profile = sanitizeProfileName(profile)
+	if profile == "" || profile == "default" {
+		return DefaultStatePath()
+	}
+	if runtime.GOOS == "windows" {
+		appdata := os.Getenv("APPDATA")
+		if appdata == "" {
+			appdata = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
+		}
+		return filepath.Join(appdata, "wg-monitor-deploy", "profiles", profile, "wizard.toml")
+	}
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		cfg = filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return filepath.Join(cfg, "wg-monitor-deploy", "profiles", profile, "wizard.toml")
+}
+
+func sanitizeProfileName(profile string) string {
+	out := ""
+	for _, r := range profile {
+		switch {
+		case r >= 'a' && r <= 'z':
+			out += string(r)
+		case r >= 'A' && r <= 'Z':
+			out += string(r + ('a' - 'A'))
+		case r >= '0' && r <= '9':
+			out += string(r)
+		case r == '-' || r == '_':
+			out += string(r)
+		}
+	}
+	return out
 }
 
 // FindAgent returns a pointer to the agent with the given nickname, or nil.

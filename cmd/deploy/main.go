@@ -9,8 +9,10 @@ import (
 func main() {
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	configPath := flag.String("config", "", "path to wizard.toml (default: platform default)")
+	profile := flag.String("profile", "", "named deploy profile (isolates wizard.toml, cache, lock, and secrets)")
 	noColor := flag.Bool("no-color", false, "disable ANSI colors")
 	flag.Parse()
+	setActiveProfile(*profile)
 
 	if *versionFlag {
 		fmt.Println(Version)
@@ -31,8 +33,10 @@ func main() {
 
 	statePath := *configPath
 	if statePath == "" {
-		// cwd-fallback first, for repo-local dev
-		if _, err := os.Stat("wizard.toml"); err == nil {
+		if *profile != "" {
+			statePath = ProfileStatePath(*profile)
+		} else if _, err := os.Stat("wizard.toml"); err == nil {
+			// cwd-fallback first, for repo-local dev
 			statePath = "wizard.toml"
 		} else {
 			statePath = DefaultStatePath()
@@ -284,7 +288,7 @@ func main() {
 }
 
 func usageText() string {
-	return `wg-monitor-deploy [--config wizard.toml] [--no-color] <command>
+	return `wg-monitor-deploy [--config wizard.toml] [--profile mobile] [--no-color] <command>
 
 Commands:
   install-backend              first install or reinstall backend on VPS

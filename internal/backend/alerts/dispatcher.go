@@ -297,4 +297,3 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	}
 	return tid, nil
 }
-

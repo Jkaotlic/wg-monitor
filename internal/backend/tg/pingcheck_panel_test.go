@@ -38,7 +38,7 @@ func TestPingCheckPanelText_PerTunnelDisabled(t *testing.T) {
 func TestPingCheckPanelText_GloballyDisabled(t *testing.T) {
 	entries := []PingCheckPanelEntry{{TunnelID: "awg10", Name: "amst", Status: "alive", PerTunnelEnabled: true, LastLatencyMs: 50}}
 	got := PingCheckPanelText("router1", false, entries)
-	if !strings.Contains(got, "Глобально: ⏸") {
+	if !strings.Contains(got, "Мониторинг: ⏸") {
 		t.Errorf("must show global disabled banner: %s", got)
 	}
 }

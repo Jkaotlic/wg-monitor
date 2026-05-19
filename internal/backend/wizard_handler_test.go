@@ -84,6 +84,7 @@ func TestWizardList_OneAgent(t *testing.T) {
 	if err := d.Users().UpdateDeployInfo("alyaba", db.DeployInfo{
 		SSHHost: "192.168.1.1", SSHPort: 222, SSHUser: "root",
 		Arch: "mips", LastDeployedVersion: "v0.10.3",
+		Ring: "canary", PendingVersion: "v0.11.0", PendingSince: "2026-05-19T10:00:00Z",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +101,9 @@ func TestWizardList_OneAgent(t *testing.T) {
 	}
 	if len(got.Agents) != 1 || got.Agents[0].Nickname != "alyaba" || got.Agents[0].SSHHost != "192.168.1.1" {
 		t.Fatalf("unexpected: %+v", got)
+	}
+	if got.Agents[0].Ring != "canary" || got.Agents[0].PendingVersion != "v0.11.0" {
+		t.Fatalf("rollout metadata missing: %+v", got.Agents[0])
 	}
 }
 
@@ -133,7 +137,7 @@ func TestWizardPut_204Updates(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := wizardPutAgentHandler(Deps{DB: d})
-	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.10.3"}`
+	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.10.3","ring":"beta","pending_version":"v0.11.0","pending_since":"2026-05-19T10:00:00Z"}`
 	req := httptest.NewRequest("PUT", "/v1/wizard/agents/alyaba", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetPathValue("nickname", "alyaba")
@@ -145,6 +149,9 @@ func TestWizardPut_204Updates(t *testing.T) {
 	u, err := d.Users().GetByNickname("alyaba")
 	if err != nil || u.SSHHost == nil || *u.SSHHost != "10.0.0.1" {
 		t.Fatalf("not persisted: u=%+v err=%v", u, err)
+	}
+	if u.Ring == nil || *u.Ring != "beta" || u.PendingVersion == nil || *u.PendingVersion != "v0.11.0" {
+		t.Fatalf("rollout metadata not persisted: u=%+v", u)
 	}
 }
 

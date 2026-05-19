@@ -121,7 +121,7 @@ var validActions = map[string]bool{
 	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
 	"routes_add_confirm": true, "routes_add_cancel": true,
 	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
-	"routes_hrneo": true,
+	"routes_hrneo": true, "routes_hrneo_doctor": true, "routes_snapshot": true,
 	// maintenance panel actions: open/close panel, restart services, firmware update.
 	"maint_open": true, "maint_close": true,
 	"maint_restart": true, "maint_confirm": true,
@@ -340,7 +340,7 @@ func Parse(data string) (Args, error) {
 		validPanelScreens := map[string]bool{
 			"home": true, "kind": true, "push": true, "no_topic": true,
 			"awaken_confirm": true, "awaken_do": true, "close": true,
-			"help": true, "doctor_all": true,
+			"help": true, "doctor_all": true, "mobile": true,
 		}
 		if !validPanelScreens[screen] {
 			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)

@@ -3,8 +3,8 @@
 package db
 
 import (
-	_ "embed"
 	"database/sql"
+	_ "embed"
 	"fmt"
 	"log/slog"
 	"os"
@@ -70,6 +70,10 @@ func Open(path string) (*DB, error) {
 	if err := migrateWizardSync(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate users wizard sync: %w", err)
+	}
+	if err := migrateMobileRollout(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate mobile rollout: %w", err)
 	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
@@ -153,6 +157,19 @@ func migrateWizardSync(d *sql.DB) error {
 	}
 	return addColumnIfMissing(d, "users", "last_deployed_version",
 		`ALTER TABLE users ADD COLUMN last_deployed_version TEXT`)
+}
+
+func migrateMobileRollout(d *sql.DB) error {
+	if err := addColumnIfMissing(d, "users", "deploy_ring",
+		`ALTER TABLE users ADD COLUMN deploy_ring TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "pending_version",
+		`ALTER TABLE users ADD COLUMN pending_version TEXT`); err != nil {
+		return err
+	}
+	return addColumnIfMissing(d, "users", "pending_since",
+		`ALTER TABLE users ADD COLUMN pending_since TEXT`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {

@@ -61,6 +61,9 @@ type wizardAgent struct {
 	SSHUser             string     `json:"ssh_user"`
 	Arch                string     `json:"arch"`
 	LastDeployedVersion string     `json:"last_deployed_version"`
+	Ring                string     `json:"ring"`
+	PendingVersion      string     `json:"pending_version"`
+	PendingSince        string     `json:"pending_since"`
 	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
 	HasTopic            bool       `json:"has_topic"`
 }
@@ -107,6 +110,15 @@ func wizardListAgentsHandler(d Deps) http.HandlerFunc {
 			if u.LastDeployedVersion != nil {
 				a.LastDeployedVersion = *u.LastDeployedVersion
 			}
+			if u.Ring != nil {
+				a.Ring = *u.Ring
+			}
+			if u.PendingVersion != nil {
+				a.PendingVersion = *u.PendingVersion
+			}
+			if u.PendingSince != nil {
+				a.PendingSince = *u.PendingSince
+			}
 			if u.LastSeenAt != nil {
 				ts := *u.LastSeenAt
 				a.LastSeenAt = &ts
@@ -124,6 +136,9 @@ type wizardPutAgentReq struct {
 	SSHUser             string `json:"ssh_user"`
 	Arch                string `json:"arch"`
 	LastDeployedVersion string `json:"last_deployed_version"`
+	Ring                string `json:"ring"`
+	PendingVersion      string `json:"pending_version"`
+	PendingSince        string `json:"pending_since"`
 }
 
 // wizardPutAgentHandler upserts deploy metadata into an existing users row.
@@ -158,6 +173,9 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			SSHUser:             req.SSHUser,
 			Arch:                req.Arch,
 			LastDeployedVersion: req.LastDeployedVersion,
+			Ring:                req.Ring,
+			PendingVersion:      req.PendingVersion,
+			PendingSince:        req.PendingSince,
 		})
 		if err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {

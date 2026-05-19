@@ -84,6 +84,55 @@ func TestParseDiagReport_SkipsMissingFieldsGracefully(t *testing.T) {
 	}
 }
 
+func TestParseDiagReport_ProgramLogsHighlightsWarnings(t *testing.T) {
+	const raw = `{
+		"version": "1.0",
+		"system": {"appVersion": "2.10.7"},
+		"programLogs": [
+			"INFO health check ok",
+			"WARN iptables-restore: line 12 failed",
+			"ERROR AmneziaWG params save failed"
+		],
+		"singboxLogs": [
+			"ERROR sing-box noise ignored because fleet does not use sing-box"
+		]
+	}`
+	_, bullets, fallback := ParseDiagReport(raw)
+	if fallback {
+		t.Fatalf("expected structured report, got fallback")
+	}
+	joined := strings.Join(bullets, "\n")
+	for _, want := range []string{"iptables-restore", "AmneziaWG params"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("logs summary missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "sing-box noise") {
+		t.Errorf("sing-box logs must be ignored for this bot:\n%s", joined)
+	}
+}
+
+func TestParseDiagReport_KernelModuleNotLoadedHintsReboot(t *testing.T) {
+	const raw = `{
+		"version": "1.0",
+		"system": {
+			"appVersion": "2.10.7",
+			"backend": "native",
+			"kernelModule": {"exists": true, "loaded": false}
+		}
+	}`
+	_, bullets, fallback := ParseDiagReport(raw)
+	if fallback {
+		t.Fatalf("expected structured report, got fallback")
+	}
+	joined := strings.Join(bullets, "\n")
+	for _, want := range []string{"kernel module", "reboot"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("kernel-module hint missing %q:\n%s", want, joined)
+		}
+	}
+}
+
 func TestParseDiagReport_GeneratedAtFormatted(t *testing.T) {
 	_, bullets, _ := ParseDiagReport(fixtureDiagSuccess)
 	joined := strings.Join(bullets, "\n")

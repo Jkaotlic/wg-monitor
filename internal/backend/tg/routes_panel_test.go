@@ -93,6 +93,68 @@ func TestRoutesPanelKeyboard_RebindOnlyForNonZero(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelKeyboard_HasDoctorAndSnapshot(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		HRNeo:   wire.HRStatus{Installed: true, Running: true},
+		Tunnels: []wire.TunnelMeta{{ID: "t1", Name: "amnezia", Iface: "nwg1"}},
+		Counts:  map[string]wire.TunnelCounts{"t1": {DNS: 1}},
+	}
+	kb := RoutesPanelKeyboard(42, snap)
+	for _, want := range []string{"routes_hrneo_doctor:42:_panel_", "routes_snapshot:42:_panel_"} {
+		if !routesKeyboardHasCallback(kb, want) {
+			t.Errorf("missing callback %q in %+v", want, kb)
+		}
+	}
+}
+
+func TestRouteExplainText_DomainSuffixMatchesHRNeo(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{{ID: "awg1", Name: "amnezia", Iface: "nwg1"}},
+		Rules: []wire.RouteRuleSummary{{
+			ID: "r1", Name: "YouTube", Kind: "dns", Backend: "hydraroute", Enabled: true, Bind: "nwg1",
+			Targets: []wire.RouteTarget{{Type: "domain", Value: "youtube.com"}},
+		}},
+	}
+	text := RouteExplainText("testkeen", "music.youtube.com", snap)
+	for _, want := range []string{"music.youtube.com", "YouTube", "HR-Neo", "amnezia", "nwg1"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRouteExplainText_IPMatchesStaticCIDR(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{{ID: "awg1", Name: "corp", Iface: "nwg2"}},
+		Rules: []wire.RouteRuleSummary{{
+			ID: "s1", Name: "CorpNet", Kind: "static", Enabled: true, Bind: "nwg2",
+			Targets: []wire.RouteTarget{{Type: "cidr", Value: "10.10.0.0/16"}},
+		}},
+	}
+	text := RouteExplainText("testkeen", "10.10.4.5", snap)
+	for _, want := range []string{"10.10.4.5", "CorpNet", "Static", "corp"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
+func TestRouteSnapshotText_IncludesStableSummary(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		HRNeo:   wire.HRStatus{Installed: true, Running: true},
+		Tunnels: []wire.TunnelMeta{{ID: "awg1", Name: "amnezia", Iface: "nwg1"}},
+		Counts:  map[string]wire.TunnelCounts{"awg1": {DNS: 2, Static: 1, HRNeo: 2}},
+		Other:   wire.TunnelCounts{DNS: 1},
+		Rules:   []wire.RouteRuleSummary{{ID: "r1", Name: "YouTube", Kind: "dns"}},
+	}
+	text := RouteSnapshotText("testkeen", snap)
+	for _, want := range []string{"Snapshot", "testkeen", "HR-Neo: installed/running", "rules: 1", "amnezia"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{
@@ -119,4 +181,15 @@ func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 	if !strings.Contains(text, "8a3f") {
 		t.Errorf("token must be in preview: %s", text)
 	}
+}
+
+func routesKeyboardHasCallback(kb InlineKeyboardMarkup, want string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == want {
+				return true
+			}
+		}
+	}
+	return false
 }

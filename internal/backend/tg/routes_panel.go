@@ -2,6 +2,7 @@ package tg
 
 import (
 	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -87,7 +88,15 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 			Text:         "HR-Neo rules",
 			CallbackData: fmt.Sprintf("routes_hrneo:%d:_panel_", userID),
 		}})
+		rows = append(rows, []InlineKeyboardButton{{
+			Text:         "HR-Neo Doctor",
+			CallbackData: fmt.Sprintf("routes_hrneo_doctor:%d:_panel_", userID),
+		}})
 	}
+	rows = append(rows, []InlineKeyboardButton{{
+		Text:         "Snapshot",
+		CallbackData: fmt.Sprintf("routes_snapshot:%d:_panel_", userID),
+	}})
 	rows = append(rows, HelpRowFor("routes"))
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
@@ -127,6 +136,139 @@ func RebindPickKeyboard(userID int64, srcID string, snap wire.RouteSnapshot) (st
 		Text: "← Отмена", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", userID),
 	}})
 	return text, InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func RouteSnapshotText(nickname string, snap wire.RouteSnapshot) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Routes Snapshot - %s\n", nickname)
+	hr := "not installed"
+	if snap.HRNeo.Installed && snap.HRNeo.Running {
+		hr = "installed/running"
+	} else if snap.HRNeo.Installed {
+		hr = "installed/stopped"
+	}
+	fmt.Fprintf(&b, "HR-Neo: %s\n", hr)
+	fmt.Fprintf(&b, "rules: %d\n", len(snap.Rules))
+	fmt.Fprintf(&b, "tunnels: %d\n", len(snap.Tunnels))
+	totalDNS, totalStatic, totalHR := snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo
+	for _, c := range snap.Counts {
+		totalDNS += c.DNS
+		totalStatic += c.Static
+		totalHR += c.HRNeo
+	}
+	fmt.Fprintf(&b, "DNS: %d, static: %d, HR-Neo: %d\n", totalDNS, totalStatic, totalHR)
+	for _, t := range snap.Tunnels {
+		c := snap.Counts[t.ID]
+		fmt.Fprintf(&b, "- %s (%s): dns=%d static=%d hr=%d\n", t.Name, t.Iface, c.DNS, c.Static, c.HRNeo)
+	}
+	if snap.Other.DNS+snap.Other.Static > 0 {
+		fmt.Fprintf(&b, "- WAN/system: dns=%d static=%d hr=%d\n", snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo)
+	}
+	return b.String()
+}
+
+func RouteExplainText(nickname, target string, snap wire.RouteSnapshot) string {
+	target = strings.TrimSpace(target)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Route explain - %s\n", nickname)
+	fmt.Fprintf(&b, "Target: %s\n", fallback(target, "-"))
+	if target == "" {
+		b.WriteString("\nSend a domain, IP, or CIDR target.\n")
+		return b.String()
+	}
+	matches := explainMatches(target, snap)
+	if len(matches) == 0 {
+		b.WriteString("\nNo explicit DNS/HR-Neo/static route matched.\n")
+		b.WriteString("Likely path: default routing or HR-Neo policy/default fall-through.\n")
+		return b.String()
+	}
+	b.WriteString("\nMatched routes:\n")
+	for _, m := range matches {
+		fmt.Fprintf(&b, "- %s [%s]", fallback(m.rule.Name, m.rule.ID), explainKindLabel(m.rule))
+		if m.matched != "" {
+			fmt.Fprintf(&b, " via %s", m.matched)
+		}
+		b.WriteString("\n")
+		fmt.Fprintf(&b, "  target: %s\n", describeBind(m.rule.Bind, snap))
+		if !m.rule.Enabled {
+			b.WriteString("  status: disabled\n")
+		}
+	}
+	return b.String()
+}
+
+type routeExplainMatch struct {
+	rule    wire.RouteRuleSummary
+	matched string
+}
+
+func explainMatches(target string, snap wire.RouteSnapshot) []routeExplainMatch {
+	var out []routeExplainMatch
+	for _, rule := range snap.Rules {
+		for _, rt := range rule.Targets {
+			if routeTargetMatches(target, rt) {
+				out = append(out, routeExplainMatch{rule: rule, matched: rt.Value})
+				break
+			}
+		}
+	}
+	return out
+}
+
+func routeTargetMatches(target string, rt wire.RouteTarget) bool {
+	tv := strings.ToLower(strings.TrimSpace(target))
+	rv := strings.ToLower(strings.TrimSpace(rt.Value))
+	if tv == "" || rv == "" {
+		return false
+	}
+	if tv == rv {
+		return true
+	}
+	if isDomainTarget(rt) {
+		return strings.HasSuffix(tv, "."+rv)
+	}
+	addr, aerr := netip.ParseAddr(tv)
+	prefix, perr := netip.ParsePrefix(rv)
+	if aerr == nil && perr == nil {
+		return prefix.Contains(addr)
+	}
+	return false
+}
+
+func isDomainTarget(rt wire.RouteTarget) bool {
+	if strings.EqualFold(rt.Type, "domain") {
+		return true
+	}
+	v := strings.TrimSpace(rt.Value)
+	if _, err := netip.ParseAddr(v); err == nil {
+		return false
+	}
+	if _, err := netip.ParsePrefix(v); err == nil {
+		return false
+	}
+	return strings.Contains(v, ".")
+}
+
+func explainKindLabel(rule wire.RouteRuleSummary) string {
+	if strings.EqualFold(rule.Backend, "hydraroute") {
+		return "DNS / HR-Neo"
+	}
+	if strings.EqualFold(rule.Kind, "static") {
+		return "Static"
+	}
+	return strings.ToUpper(rule.Kind)
+}
+
+func describeBind(bind string, snap wire.RouteSnapshot) string {
+	if strings.TrimSpace(bind) == "" {
+		return "policy/default"
+	}
+	for _, t := range snap.Tunnels {
+		if bind == t.Iface || bind == t.ID {
+			return fmt.Sprintf("%s (%s)", t.Name, t.Iface)
+		}
+	}
+	return bind
 }
 
 // RebindPreviewText renders Screen 4 with the safety "untouched" block.

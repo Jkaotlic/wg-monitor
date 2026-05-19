@@ -217,6 +217,42 @@ func TestRunner_RouterDoctor_FailsWhenProcessMissing(t *testing.T) {
 	}
 }
 
+func TestRunner_HRNeoDoctor_OK(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"hr:yt","name":"YouTube","enabled":true,"backend":"hydraroute","hrPolicyName":"HydraRoute","domains":["youtube.com"],"manualDomains":["10.10.0.0/16"],"routes":[{"interface":"nwg1","tunnelId":"nwg1"}]}]}`))
+	})
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/opt/etc/init.d/S99hrneo":
+			return []byte("running"), nil
+		case "pidof":
+			return []byte("321\n"), nil
+		case "ipset":
+			return []byte("hrneo_domains\nhrneo_routes\n"), nil
+		case "iptables-save":
+			return []byte("-A PREROUTING -j NFLOG\n"), nil
+		case "opkg":
+			return []byte(opkgInfoHrneoGolden), nil
+		default:
+			return nil, fmt.Errorf("unexpected command %s", name)
+		}
+	}
+	r := Runner{AwgClient: awgmgrFake(t, mux), Exec: exec, Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{ID: "hrdoc", Action: "hrneo_doctor"})
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	for _, want := range []string{"HR-Neo Doctor", "installed/running", "rules: 1", "ipset", "NFLOG", "2.4.0"} {
+		if !strings.Contains(res.Output, want) {
+			t.Errorf("missing %q in:\n%s", want, res.Output)
+		}
+	}
+}
+
 type stubOpkg struct {
 	calls     int
 	retStatus string

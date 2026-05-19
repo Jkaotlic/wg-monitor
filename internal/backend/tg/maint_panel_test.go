@@ -51,6 +51,24 @@ func TestMaintPanelText_FullState(t *testing.T) {
 	}
 }
 
+func TestMaintPanelText_RendersUpdateHint(t *testing.T) {
+	args := MaintPanelArgs{
+		Nickname:      "testkeen",
+		AwgmgrVersion: "2.10.5",
+		AwgmgrRunning: true,
+		Firmware:      wire.FirmwareStatus{Current: "5.0.0"},
+		Updates: []UpdateLine{
+			{Name: "awg-manager", Installed: "2.10.5", Available: "2.10.7", Hint: "NativeWG update may need router reboot"},
+		},
+	}
+	text := MaintPanelText(args)
+	for _, want := range []string{"NativeWG", "router reboot"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("update hint missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestMaintPanelText_EmptyKeeneticOSHidesComma(t *testing.T) {
 	args := MaintPanelArgs{
 		Nickname:      "x",

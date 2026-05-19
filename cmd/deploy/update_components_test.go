@@ -79,3 +79,50 @@ func TestShouldProbeReachabilityBeforeUpdate_SkipsBackend(t *testing.T) {
 		t.Fatal("backend updates should not use the agent LAN TCP preflight")
 	}
 }
+
+func TestBuildUpdateTargetsCarriesMobileRolloutMetadata(t *testing.T) {
+	state := &State{
+		Agents: []AgentState{{
+			Nickname:            "carvan",
+			Kind:                "mobile",
+			Ring:                "canary",
+			LastDeployedVersion: "v0.13.0",
+			PendingVersion:      "v0.14.0-rc1",
+			PendingSince:        "2026-05-19T10:00:00Z",
+		}},
+	}
+	targets := buildUpdateTargets(state, "v0.14.0-rc1")
+	if len(targets) != 1 {
+		t.Fatalf("targets=%d, want 1", len(targets))
+	}
+	got := targets[0]
+	if got.Kind != "mobile" || got.Ring != "canary" || got.PendingVersion != "v0.14.0-rc1" {
+		t.Fatalf("metadata not carried into update target: %+v", got)
+	}
+}
+
+func TestMobilePullAckTimeoutMarksPending(t *testing.T) {
+	state := &State{Agents: []AgentState{{Nickname: "carvan", Kind: "mobile"}}}
+	target := updateTarget{
+		IsAgent:       true,
+		AgentNickname: "carvan",
+		Kind:          "mobile",
+		LatestVersion: "v0.14.0-rc1",
+	}
+	err := markPendingOnMobileAckTimeout(state, target, "2026-05-19T10:00:00Z")
+	if err != nil {
+		t.Fatalf("mobile timeout should become pending, got err=%v", err)
+	}
+	ag := state.FindAgent("carvan")
+	if ag.PendingVersion != "v0.14.0-rc1" || ag.PendingSince != "2026-05-19T10:00:00Z" {
+		t.Fatalf("pending fields not set: %+v", ag)
+	}
+}
+
+func TestStaticPullAckTimeoutRemainsError(t *testing.T) {
+	state := &State{Agents: []AgentState{{Nickname: "home", Kind: "static"}}}
+	target := updateTarget{IsAgent: true, AgentNickname: "home", Kind: "static", LatestVersion: "v0.14.0-rc1"}
+	if err := markPendingOnMobileAckTimeout(state, target, "2026-05-19T10:00:00Z"); err == nil {
+		t.Fatal("static timeout must remain an error")
+	}
+}
