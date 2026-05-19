@@ -53,8 +53,8 @@ func TestClassifyState_DegradedHandshakeBoundary(t *testing.T) {
 		state SmartReplyState
 	}{
 		{0, StateOK},
-		{60, StateOK},   // was Degraded; threshold raised to align with "норма до 180" text
-		{179, StateOK},  // was Degraded; same reason
+		{60, StateOK},  // was Degraded; threshold raised to align with "норма до 180" text
+		{179, StateOK}, // was Degraded; same reason
 		// 180+ matches the "FSM HARD threshold" — when handshake hits this
 		// without an active incident yet (the race between agent tick and FSM
 		// transition), surface as Degraded so the operator sees the early
@@ -182,7 +182,7 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 func TestFormatSmartReply_Hard(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
-		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
+		Tunnels:         []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
 		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-4 * time.Minute), FailCount: 5}},
 	}
 	text, kb := FormatSmartReply(a)
@@ -228,7 +228,7 @@ func TestFormatSmartReply_WithUpdates(t *testing.T) {
 		Tunnels:  nil,
 		Updates: []UpdateAvailable{
 			{Name: "KeeneticOS", Installed: "5.00.C.11.0-0", Available: "5.00.C.12.0-0"},
-			{Name: "awg-manager", Installed: "2.8.2", Available: "2.9.0"},
+			{Name: "awg-manager", Installed: "2.8.2", Available: "2.9.0", Hint: "NativeWG update may need router reboot"},
 		},
 	}
 	text, _ := FormatSmartReply(args)
@@ -236,6 +236,7 @@ func TestFormatSmartReply_WithUpdates(t *testing.T) {
 		"🟡 Доступны обновления:",
 		"KeeneticOS 5.00.C.11.0-0 → 5.00.C.12.0-0",
 		"awg-manager 2.8.2 → 2.9.0",
+		"NativeWG update may need router reboot",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)

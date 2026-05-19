@@ -24,6 +24,9 @@ type RemoteAgent struct {
 	SSHUser             string     `json:"ssh_user"`
 	Arch                string     `json:"arch"`
 	LastDeployedVersion string     `json:"last_deployed_version"`
+	Ring                string     `json:"ring"`
+	PendingVersion      string     `json:"pending_version"`
+	PendingSince        string     `json:"pending_since"`
 	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
 	HasTopic            bool       `json:"has_topic"`
 }
@@ -85,7 +88,10 @@ func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 		SSHUser             string `json:"ssh_user"`
 		Arch                string `json:"arch"`
 		LastDeployedVersion string `json:"last_deployed_version"`
-	}{a.SSHHost, a.SSHPort, a.SSHUser, a.Arch, a.LastDeployedVersion})
+		Ring                string `json:"ring"`
+		PendingVersion      string `json:"pending_version"`
+		PendingSince        string `json:"pending_since"`
+	}{a.SSHHost, a.SSHPort, a.SSHUser, a.Arch, a.LastDeployedVersion, a.Ring, a.PendingVersion, a.PendingSince})
 	if err != nil {
 		return err
 	}
@@ -135,6 +141,9 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 				Kind:                r.Kind,
 				ThreadID:            int(r.ThreadID),
 				LastDeployedVersion: r.LastDeployedVersion,
+				Ring:                r.Ring,
+				PendingVersion:      r.PendingVersion,
+				PendingSince:        r.PendingSince,
 			})
 			added = append(added, r.Nickname)
 			continue
@@ -149,6 +158,15 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 		}
 		if r.LastDeployedVersion != "" {
 			a.LastDeployedVersion = r.LastDeployedVersion
+		}
+		if r.Ring != "" {
+			a.Ring = r.Ring
+		}
+		if r.PendingVersion != "" {
+			a.PendingVersion = r.PendingVersion
+		}
+		if r.PendingSince != "" {
+			a.PendingSince = r.PendingSince
 		}
 		// SSH: remote wins iff remote has value; else preserve local.
 		// Track divergence (both non-empty AND differ) for visibility.
@@ -285,6 +303,9 @@ func AgentStateToRemote(a AgentState) RemoteAgent {
 		SSHUser:             a.User,
 		Arch:                arch,
 		LastDeployedVersion: a.LastDeployedVersion,
+		Ring:                a.Ring,
+		PendingVersion:      a.PendingVersion,
+		PendingSince:        a.PendingSince,
 	}
 }
 
@@ -306,7 +327,9 @@ func (c *VPSClient) HeartbeatStatus(ctx context.Context, nickname string) string
 }
 
 // formatHeartbeatStatus renders a *time.Time relative to now as one of:
-//   "fresh ~30s" / "fresh ~5m" / "stale 14m" / "stale 2h" / "never".
+//
+//	"fresh ~30s" / "fresh ~5m" / "stale 14m" / "stale 2h" / "never".
+//
 // "fresh" cutoff is 5 minutes — anything older is "stale". Nil → "never".
 // Pure function, no clock dependency — caller passes "now" for testability.
 func formatHeartbeatStatus(t *time.Time, now time.Time) string {

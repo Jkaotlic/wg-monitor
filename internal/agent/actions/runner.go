@@ -426,6 +426,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "hrneo_doctor":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		s, out := HRNeoDoctor(ctx, r.AwgClient, r.Exec)
+		return s, out, payload
 	case "self_update":
 		version, _ := cmd.Args["version"].(string)
 		if version == "" {

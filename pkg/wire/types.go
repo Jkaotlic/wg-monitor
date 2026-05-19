@@ -57,6 +57,7 @@ var validCommandActions = map[string]bool{
 	"route_delete_plan": true,
 	"route_delete":      true,
 	"hrneo_inventory":   true,
+	"hrneo_doctor":      true,
 	"service_restart":   true,
 	"firmware_status":   true,
 	"firmware_install":  true,

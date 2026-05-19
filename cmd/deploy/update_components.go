@@ -96,11 +96,15 @@ type updateTarget struct {
 	Label            string // e.g. "backend (vps.example.com)" or "agent testkeen"
 	IsAgent          bool   // false → backend, true → an agent
 	AgentNickname    string // populated when IsAgent
+	Kind             string
+	Ring             string
 	Host             string
 	Port             int
 	InstalledVersion string // last deployed version recorded in wizard.toml
 	LatestVersion    string // GitHub latest tag
 	LastDeploy       string
+	PendingVersion   string
+	PendingSince     string
 	NeedsUpdate      bool
 }
 
@@ -126,11 +130,15 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 			Label:            "agent " + a.Nickname,
 			IsAgent:          true,
 			AgentNickname:    a.Nickname,
+			Kind:             nonEmpty(a.Kind, "static"),
+			Ring:             rolloutRing(a.Ring),
 			Host:             a.Host,
 			Port:             portOrDefault(a.Port, 222),
 			InstalledVersion: a.LastDeployedVersion,
 			LatestVersion:    latest,
 			LastDeploy:       a.LastDeploy,
+			PendingVersion:   a.PendingVersion,
+			PendingSince:     a.PendingSince,
 			NeedsUpdate:      a.LastDeployedVersion != latest,
 		})
 	}
@@ -163,7 +171,14 @@ func printUpdateStatusTable(rows []updateTarget) {
 		default:
 			status = Colorize("[актуально]", ColorGreen)
 		}
-		fmt.Printf("  • %-30s %-15s %s\n", t.Label, installed, status)
+		extra := ""
+		if t.IsAgent {
+			extra = fmt.Sprintf(" kind=%s ring=%s", nonEmpty(t.Kind, "static"), rolloutRing(t.Ring))
+			if t.PendingVersion != "" {
+				extra += " pending=" + t.PendingVersion
+			}
+		}
+		fmt.Printf("  • %-30s %-15s %s%s\n", t.Label, installed, status, extra)
 	}
 	fmt.Println()
 }
@@ -353,6 +368,17 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 		}
 	}
 	if res == nil {
+		if err := markPendingOnMobileAckTimeout(state, t, time.Now().UTC().Format(time.RFC3339)); err == nil {
+			if ag := state.FindAgent(t.AgentNickname); ag != nil {
+				pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				if pushErr := c.PushAgent(pushCtx, AgentStateToRemote(*ag)); pushErr != nil {
+					PrintWarn("VPS pending sync failed: " + pushErr.Error())
+				}
+				pushCancel()
+			}
+			PrintWarn("мобильный агент не подтвердил команду сейчас — пометил обновление как pending до следующего wake")
+			return nil
+		}
 		return fmt.Errorf("агент не подтвердил команду за 90с (агент офлайн? long-poll залип?)")
 	}
 	if res.Status != "ok" {
@@ -381,12 +407,41 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 				if a := state.FindAgent(t.AgentNickname); a != nil {
 					a.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 					a.LastDeployedVersion = t.LatestVersion
+					a.PendingVersion = ""
+					a.PendingSince = ""
+					pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					if pushErr := c.PushAgent(pushCtx, AgentStateToRemote(*a)); pushErr != nil {
+						PrintWarn("VPS version sync failed: " + pushErr.Error())
+					}
+					pushCancel()
 				}
 				return nil
 			}
 		}
 	}
 	return fmt.Errorf("новая версия не подтверждена heartbeat'ом за 2 минуты — проверь TG-топик / SSH")
+}
+
+func rolloutRing(ring string) string {
+	switch strings.ToLower(strings.TrimSpace(ring)) {
+	case "canary", "beta", "stable":
+		return strings.ToLower(strings.TrimSpace(ring))
+	default:
+		return "stable"
+	}
+}
+
+func markPendingOnMobileAckTimeout(state *State, t updateTarget, now string) error {
+	if !t.IsAgent || t.Kind != "mobile" {
+		return fmt.Errorf("non-mobile pull timeout")
+	}
+	ag := state.FindAgent(t.AgentNickname)
+	if ag == nil {
+		return fmt.Errorf("agent %q not found", t.AgentNickname)
+	}
+	ag.PendingVersion = t.LatestVersion
+	ag.PendingSince = now
+	return nil
 }
 
 // askYesNo prints `prompt [Y/n]: ` (capitalised default) and returns true

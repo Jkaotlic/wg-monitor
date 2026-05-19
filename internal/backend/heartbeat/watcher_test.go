@@ -355,6 +355,36 @@ func TestWatcherMobileLifecycle_NoRenotifyOnRepeatScan(t *testing.T) {
 	}
 }
 
+func TestWatcherMobileLifecycle_NoRenotifyAfterWatcherRestart(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00ee00"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-6*time.Minute))
+
+	sleep := &fakeSleep{}
+	w1 := NewWatcher(d, &fakeOffline{}, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w1.SetSleepNotifier(sleep)
+	driveScan(w1, now)
+
+	w2 := NewWatcher(d, &fakeOffline{}, Config{
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        time.Hour,
+	})
+	w2.SetSleepNotifier(sleep)
+	driveScan(w2, now.Add(30*time.Second))
+
+	if got := len(sleep.snapshot()); got != 1 {
+		t.Fatalf("restart must not refire sleep notification for the same stale heartbeat; got %d", got)
+	}
+}
+
 func TestWatcherMobileLifecycle_ResumeClearsSleepFlag(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()

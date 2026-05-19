@@ -122,6 +122,7 @@ func TestIsValidCommandAction(t *testing.T) {
 		"firmware_install": true,
 		"version_audit":    true,
 		"router_doctor":    true,
+		"hrneo_doctor":     true,
 		"":                 false,
 		"reboot":           false,
 		"silence":          false, // not a command-channel action

@@ -21,10 +21,13 @@ func TestMergeAgents_EmptyLocal_AllAdded(t *testing.T) {
 
 func TestMergeAgents_RemoteOverridesLocal(t *testing.T) {
 	local := []AgentState{{Nickname: "client-a", Host: "old", Port: 22, User: "root", Arch: "mips", LastDeployedVersion: "v0.9"}}
-	remote := []RemoteAgent{{Nickname: "client-a", SSHHost: "new", SSHPort: 222, SSHUser: "root", Arch: "mips", LastDeployedVersion: "v0.10.3"}}
+	remote := []RemoteAgent{{Nickname: "client-a", SSHHost: "new", SSHPort: 222, SSHUser: "root", Arch: "mips", LastDeployedVersion: "v0.10.3", Ring: "canary", PendingVersion: "v0.11.0", PendingSince: "2026-05-19T10:00:00Z"}}
 	merged, added, divergent := MergeAgents(local, remote)
 	if len(merged) != 1 || merged[0].Host != "new" || merged[0].Port != 222 || merged[0].LastDeployedVersion != "v0.10.3" {
 		t.Fatalf("merged: %+v", merged)
+	}
+	if merged[0].Ring != "canary" || merged[0].PendingVersion != "v0.11.0" {
+		t.Fatalf("rollout metadata not merged: %+v", merged[0])
 	}
 	if len(added) != 0 {
 		t.Fatalf("want 0 added, got %v", added)

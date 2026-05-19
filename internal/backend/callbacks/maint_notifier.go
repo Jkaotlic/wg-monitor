@@ -125,7 +125,7 @@ func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudi
 	infos := upstream.ComputeUpdates(ctx, up, va)
 	updates := make([]tg.UpdateLine, 0, len(infos))
 	for _, u := range infos {
-		updates = append(updates, tg.UpdateLine{Name: u.Name, Installed: u.Installed, Available: u.Available})
+		updates = append(updates, tg.UpdateLine{Name: u.Name, Installed: u.Installed, Available: u.Available, Hint: u.Hint})
 	}
 	return tg.MaintPanelArgs{
 		Nickname:                  user.Nickname,

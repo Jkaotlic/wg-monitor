@@ -45,6 +45,8 @@ func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpk
 		return n.renderDeletePlan(ctx, ref, res, user)
 	case "hrneo_inventory":
 		return n.renderHRNeoInventory(ctx, ref, res, user)
+	case "hrneo_doctor":
+		return n.renderHRNeoDoctor(ctx, ref, res, user)
 	default:
 		return fmt.Errorf("RoutesPanelNotifier: unsupported action %q", ref.Action)
 	}
@@ -191,6 +193,26 @@ func (n *RoutesPanelNotifier) renderHRNeoInventory(ctx context.Context, ref cmdp
 		{
 			{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
 			{Text: "Refresh", CallbackData: fmt.Sprintf("routes_hrneo:%d:_panel_", user.ID)},
+		},
+	}}
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func (n *RoutesPanelNotifier) renderHRNeoDoctor(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	text := strings.TrimSpace(res.Output)
+	if text == "" {
+		text = "HR-Neo Doctor returned an empty response."
+	}
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		{
+			{Text: "HR-Neo rules", CallbackData: fmt.Sprintf("routes_hrneo:%d:_panel_", user.ID)},
+			{Text: "Refresh doctor", CallbackData: fmt.Sprintf("routes_hrneo_doctor:%d:_panel_", user.ID)},
+		},
+		{
+			{Text: "Restart HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo", user.ID)},
+		},
+		{
+			{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
 		},
 	}}
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)

@@ -22,6 +22,7 @@ type UpdateLine struct {
 	Name      string // e.g. "KeeneticOS"
 	Installed string
 	Available string
+	Hint      string
 }
 
 // MaintPanelArgs is the full set of facts the Status screen renders.
@@ -86,6 +87,9 @@ func MaintPanelText(a MaintPanelArgs) string {
 		b.WriteString("\n🟡 Доступны обновления:\n")
 		for _, u := range a.Updates {
 			fmt.Fprintf(&b, "  • %s %s → %s\n", u.Name, u.Installed, u.Available)
+			if u.Hint != "" {
+				fmt.Fprintf(&b, "    hint: %s\n", u.Hint)
+			}
 		}
 	}
 	return b.String()

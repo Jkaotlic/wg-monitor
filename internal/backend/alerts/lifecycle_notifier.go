@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -14,6 +15,12 @@ import (
 type LifecycleSendTG interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
 }
+
+type lifecycleKeyboardTG interface {
+	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
+}
+
+const mobileWakeCooldown = 5 * time.Minute
 
 // WakeNotifier sends an adaptive 🚗 card to the router's TG-topic when a
 // mobile agent's Report carries Resumed=true.
@@ -37,11 +44,24 @@ func (n *WakeNotifier) SendWake(ctx context.Context, userID int64, nickname stri
 		slog.Debug("wake notifier: no thread, skipping", "user_id", userID, "nickname", nickname)
 		return nil
 	}
+	now := time.Now()
+	if last, ok, err := n.db.KV().GetMobileWakeNotifiedAt(userID); err != nil {
+		slog.Warn("wake notifier: cooldown lookup failed", "user_id", userID, "err", err)
+	} else if ok && now.Sub(last) < mobileWakeCooldown {
+		slog.Debug("wake notifier: cooldown skip", "user_id", userID, "nickname", nickname)
+		return nil
+	}
 	card := RenderWakeReport(nickname, checks)
 	text := card.Render(CardOpts{MaxBytes: 3500})
-	_, err = n.tg.SendMessage(ctx, n.chatID, user.TelegramThreadID, text, "", nil)
+	if ktg, ok := n.tg.(lifecycleKeyboardTG); ok {
+		_, err = ktg.SendMessageWithReplyKeyboard(ctx, n.chatID, user.TelegramThreadID, text, "", nil, mobileWakeKeyboard(userID))
+	} else {
+		_, err = n.tg.SendMessage(ctx, n.chatID, user.TelegramThreadID, text, "", nil)
+	}
 	if err != nil {
 		slog.Warn("wake notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
+	} else if err := n.db.KV().SetMobileWakeNotifiedAt(userID, now); err != nil {
+		slog.Warn("wake notifier: cooldown persist failed", "user_id", userID, "err", err)
 	}
 	return err
 }
@@ -76,4 +96,31 @@ func (n *SleepNotifier) SendSleeping(ctx context.Context, userID int64, nickname
 		slog.Warn("sleep notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
 	}
 	return err
+}
+
+func mobileWakeKeyboard(userID int64) any {
+	return struct {
+		InlineKeyboard [][]struct {
+			Text         string `json:"text"`
+			CallbackData string `json:"callback_data"`
+		} `json:"inline_keyboard"`
+	}{
+		InlineKeyboard: [][]struct {
+			Text         string `json:"text"`
+			CallbackData string `json:"callback_data"`
+		}{
+			{
+				{Text: "Diag", CallbackData: "diag_now:" + formatUserID(userID) + ":_menu"},
+				{Text: "Force recheck", CallbackData: "force_recheck:" + formatUserID(userID) + ":_mobile"},
+			},
+			{
+				{Text: "Routes", CallbackData: "panel:" + formatUserID(userID) + ":push:routes"},
+				{Text: "HR-Neo Doctor", CallbackData: "routes_hrneo_doctor:" + formatUserID(userID)},
+			},
+		},
+	}
+}
+
+func formatUserID(id int64) string {
+	return fmt.Sprintf("%d", id)
 }

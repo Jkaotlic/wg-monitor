@@ -1,6 +1,9 @@
 package upstream
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSoftwareNewerThan(t *testing.T) {
 	cases := []struct {
@@ -27,6 +30,21 @@ func TestSoftwareNewerThan(t *testing.T) {
 				t.Errorf("SoftwareNewerThan(%q,%q)=%v want %v", c.installed, c.candidate, got, c.want)
 			}
 		})
+	}
+}
+
+func TestAwgManagerUpdateHint_NativeBoundaryNeedsReboot(t *testing.T) {
+	hint := AwgManagerUpdateHint("2.10.5", "2.10.7", "native")
+	for _, want := range []string{"NativeWG", "router reboot"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint %q missing %q", hint, want)
+		}
+	}
+}
+
+func TestAwgManagerUpdateHint_SuppressedForKernelBackend(t *testing.T) {
+	if hint := AwgManagerUpdateHint("2.10.5", "2.10.7", "kernel"); hint != "" {
+		t.Fatalf("kernel backend must not get NativeWG reboot hint, got %q", hint)
 	}
 }
 

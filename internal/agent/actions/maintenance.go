@@ -176,6 +176,7 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 	}
 	out := wire.VersionAudit{
 		AwgmgrVersion:   sys.Version,
+		AwgmgrBackend:   sys.ActiveBackend,
 		AwgmgrRunning:   true,
 		FirmwareCurrent: sys.FirmwareVersion,
 	}

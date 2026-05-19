@@ -231,6 +231,11 @@ func (w *Watcher) scan(ctx context.Context) {
 				delete(w.resumed, u.ID)
 			}
 			w.mu.Unlock()
+			if u.IsMobile() && w.cfg.MobileLifecycle {
+				if err := w.d.KV().ClearMobileSleepNotified(u.ID); err != nil {
+					slog.Warn("heartbeat: clear mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+				}
+			}
 			continue
 		}
 		w.mu.Lock()
@@ -253,6 +258,13 @@ func (w *Watcher) scan(ctx context.Context) {
 				w.sleepNotified[u.ID] = now
 			}
 			w.mu.Unlock()
+			if !already {
+				if notifiedAt, ok, err := w.d.KV().GetMobileSleepNotifiedAt(u.ID); err != nil {
+					slog.Warn("heartbeat: read mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+				} else if ok && !notifiedAt.Before(latest) {
+					already = true
+				}
+			}
 			if already || w.sleep == nil {
 				continue
 			}
@@ -262,6 +274,8 @@ func (w *Watcher) scan(ctx context.Context) {
 				w.mu.Lock()
 				delete(w.sleepNotified, u.ID)
 				w.mu.Unlock()
+			} else if err := w.d.KV().SetMobileSleepNotifiedAt(u.ID, latest); err != nil {
+				slog.Warn("heartbeat: persist mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 			}
 			continue
 		}

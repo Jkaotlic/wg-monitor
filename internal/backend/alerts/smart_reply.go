@@ -62,6 +62,7 @@ type UpdateAvailable struct {
 	Name      string // "KeeneticOS" | "awg-manager" | "HydraRoute-Neo"
 	Installed string
 	Available string
+	Hint      string
 }
 
 // SmartReplyArgs is everything FormatSmartReply needs to render a message.
@@ -79,7 +80,7 @@ type SmartReplyArgs struct {
 }
 
 const (
-	smartReplyOfflineThreshold        = 5 * time.Minute
+	smartReplyOfflineThreshold = 5 * time.Minute
 	// smartReplyDegradedHandshakeMinSec must match the "норма до N" value
 	// printed in the StateDegraded message body (see line below). The original
 	// value of 60 conflicted with the rendered "норма до 180" text — it
@@ -232,5 +233,8 @@ func appendUpdatesSection(b *strings.Builder, updates []UpdateAvailable) {
 	b.WriteString("\n\n🟡 Доступны обновления:\n")
 	for _, u := range updates {
 		fmt.Fprintf(b, "  • %s %s → %s\n", u.Name, u.Installed, u.Available)
+		if u.Hint != "" {
+			fmt.Fprintf(b, "    hint: %s\n", u.Hint)
+		}
 	}
 }

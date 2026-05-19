@@ -45,6 +45,7 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 				{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
 			},
 			{
+				{Text: "Mobile", CallbackData: "panel:0:mobile"},
 				{Text: "👥 Доступ", CallbackData: "access:0:home"},
 			},
 			{
@@ -78,6 +79,8 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 		r.panelAwakenDo(ctx, q)
 	case "doctor_all":
 		r.panelDoctorAll(ctx, q)
+	case "mobile":
+		r.panelMobileFleet(ctx, q)
 	case "help":
 		r.panelHandleHelp(ctx, q, args)
 	default:
@@ -229,6 +232,43 @@ func panelResultKb() tg.InlineKeyboardMarkup {
 			},
 		},
 	}
+}
+
+func (r *Router) panelMobileFleet(ctx context.Context, q *tg.CallbackQuery) {
+	users, err := r.d.Users().GetAll()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "read routers failed")
+		return
+	}
+	rows := make([]tg.MobileFleetRow, 0, len(users))
+	for _, u := range users {
+		row := tg.MobileFleetRow{
+			Nickname: u.Nickname,
+			Kind:     u.Kind,
+		}
+		if u.LastSeenAt != nil {
+			ts := *u.LastSeenAt
+			row.LastSeenAt = &ts
+		}
+		if u.LastDeployedVersion != nil {
+			row.LastDeployedVersion = *u.LastDeployedVersion
+		}
+		if u.Ring != nil {
+			row.Ring = *u.Ring
+		}
+		if u.PendingVersion != nil {
+			row.PendingVersion = *u.PendingVersion
+		}
+		rows = append(rows, row)
+	}
+	text := tg.MobileFleetPanelText(rows, time.Now())
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		{{Text: "Back", CallbackData: "panel:0:home"}, {Text: "Close", CallbackData: "panel:0:close"}},
+	}}
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("panel mobile edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
 func (r *Router) panelHandleNoTopic(ctx context.Context, q *tg.CallbackQuery, _ Args) {

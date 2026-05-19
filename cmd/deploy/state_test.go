@@ -68,3 +68,37 @@ func TestLoadState_FutureSchema(t *testing.T) {
 		t.Fatal("expected error for unsupported schema_version")
 	}
 }
+
+func TestProfileStatePathUsesIsolatedConfigDir(t *testing.T) {
+	t.Setenv("APPDATA", filepath.Join(t.TempDir(), "roaming"))
+	got := ProfileStatePath("mobile")
+	want := filepath.Join(os.Getenv("APPDATA"), "wg-monitor-deploy", "profiles", "mobile", "wizard.toml")
+	if got != want {
+		t.Fatalf("ProfileStatePath(mobile)=%q, want %q", got, want)
+	}
+}
+
+func TestAgentStateRoundTripMobileRolloutFields(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wizard.toml")
+	in := &State{
+		SchemaVersion: 1,
+		Agents: []AgentState{{
+			Nickname:       "client-h",
+			Kind:           "mobile",
+			Ring:           "canary",
+			PendingVersion: "v0.14.0-rc1",
+			PendingSince:   "2026-05-19T10:00:00Z",
+		}},
+	}
+	if err := SaveState(path, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(in, out) {
+		t.Fatalf("round-trip mismatch:\nin:  %+v\nout: %+v", in, out)
+	}
+}

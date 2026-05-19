@@ -16,6 +16,7 @@ type UpdateInfo struct {
 	Name      string
 	Installed string
 	Available string
+	Hint      string
 }
 
 // ComputeUpdates produces the soft-warning list comparing a wire.VersionAudit
@@ -30,12 +31,47 @@ func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) []U
 		return out
 	}
 	if v, _ := cache.Latest(ctx, "awgmgr"); v != "" && SoftwareNewerThan(va.AwgmgrVersion, v) {
-		out = append(out, UpdateInfo{Name: "awg-manager", Installed: va.AwgmgrVersion, Available: v})
+		out = append(out, UpdateInfo{
+			Name:      "awg-manager",
+			Installed: va.AwgmgrVersion,
+			Available: v,
+			Hint:      AwgManagerUpdateHint(va.AwgmgrVersion, v, va.AwgmgrBackend),
+		})
 	}
 	if v, _ := cache.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && SoftwareNewerThan(va.HrneoVersion, v) {
 		out = append(out, UpdateInfo{Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v})
 	}
 	return out
+}
+
+// AwgManagerUpdateHint returns release-aware operator notes for awg-manager.
+// The v2.10.6 NativeWG proxy/module update can require a router reboot after
+// upgrading from an older version; kernel-backed fleets do not need this note.
+func AwgManagerUpdateHint(installed, available, backend string) string {
+	if !isNativeWGBackend(backend) {
+		return ""
+	}
+	if !SoftwareNewerThan(installed, available) {
+		return ""
+	}
+	if SoftwareNewerThan(installed, "2.10.6") && softwareAtLeast(available, "2.10.6") {
+		return "NativeWG update crosses 2.10.6; plan a router reboot after upgrade if tunnels do not come back cleanly."
+	}
+	return ""
+}
+
+func isNativeWGBackend(backend string) bool {
+	b := strings.ToLower(strings.TrimSpace(backend))
+	return strings.Contains(b, "native") || strings.Contains(b, "nwg")
+}
+
+func softwareAtLeast(version, floor string) bool {
+	v := normalize(version)
+	f := normalize(floor)
+	if !semver.IsValid(v) || !semver.IsValid(f) {
+		return false
+	}
+	return semver.Compare(v, f) >= 0
 }
 
 // SoftwareNewerThan returns true if `candidate` is strictly newer than

@@ -8,6 +8,7 @@ package wire
 // updates for the smart-reply.
 type VersionAudit struct {
 	AwgmgrVersion   string `json:"awgmgr_version"`
+	AwgmgrBackend   string `json:"awgmgr_backend,omitempty"`
 	AwgmgrRunning   bool   `json:"awgmgr_running,omitempty"`
 	HrneoInstalled  bool   `json:"hrneo_installed,omitempty"`
 	HrneoRunning    bool   `json:"hrneo_running,omitempty"`

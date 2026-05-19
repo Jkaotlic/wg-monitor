@@ -385,6 +385,12 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "routes_hrneo":
 		r.handleRoutesHRNeo(ctx, q, args)
 		return
+	case "routes_hrneo_doctor":
+		r.handleRoutesHRNeoDoctor(ctx, q, args)
+		return
+	case "routes_snapshot":
+		r.handleRoutesSnapshot(ctx, q, args)
+		return
 	case "routes_close":
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
 		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
@@ -690,6 +696,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		if r.handlePendingRouteReply(ctx, m, user) {
 			return
 		}
+		if r.handleRouteExplainReply(ctx, m, kind, user) {
+			return
+		}
 		if r.handlePendingNameReply(ctx, m, user) {
 			return
 		}
@@ -704,6 +713,38 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			slog.Warn("deleteMessage failed (non-fatal)", "err", err, "chat", m.Chat.ID, "msg", m.MessageID)
 		}
 	}
+}
+
+func (r *Router) handleRouteExplainReply(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
+	if kind != "per_router" || user == nil || r.routesCache == nil {
+		return false
+	}
+	target, ok := parseRouteExplainText(m.Text)
+	if !ok {
+		return false
+	}
+	snap, found := r.routesCache.Get(user.ID)
+	if !found {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Refresh routes first, then send: explain example.com", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+		return true
+	}
+	text := tg.RouteExplainText(user.Nickname, target, snap)
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+	return true
+}
+
+func parseRouteExplainText(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	prefixes := []string{"explain ", "route ", "куда "}
+	low := strings.ToLower(text)
+	for _, p := range prefixes {
+		if strings.HasPrefix(low, p) {
+			target := strings.TrimSpace(text[len(p):])
+			return target, target != ""
+		}
+	}
+	return "", false
 }
 
 // resolveTopicKind classifies a thread id into "per_router" / "summary" /
@@ -1624,6 +1665,40 @@ func (r *Router) handleRoutesHRNeo(ctx context.Context, q *tg.CallbackQuery, arg
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
+func (r *Router) handleRoutesHRNeoDoctor(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "hrneo_doctor", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{Action: "hrneo_doctor", ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		return
+	}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Running HR-Neo Doctor...", "", nil)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesSnapshot(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routesCache == nil {
+		return
+	}
+	snap, ok := r.routesCache.Get(user.ID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "refresh routes first")
+		return
+	}
+	text := tg.RouteSnapshotText(user.Nickname, snap)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+		{Text: "Refresh", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
 func parseRouteAddReply(text string) (string, []string) {
 	lines := strings.Split(strings.TrimSpace(text), "\n")
 	if len(lines) == 1 {
@@ -1677,7 +1752,7 @@ func computeUpdates(ctx context.Context, up *upstream.Cache, va wire.VersionAudi
 	}
 	out := make([]alerts.UpdateAvailable, 0, len(infos))
 	for _, u := range infos {
-		out = append(out, alerts.UpdateAvailable{Name: u.Name, Installed: u.Installed, Available: u.Available})
+		out = append(out, alerts.UpdateAvailable{Name: u.Name, Installed: u.Installed, Available: u.Available, Hint: u.Hint})
 	}
 	return out
 }
