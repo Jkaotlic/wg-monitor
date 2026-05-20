@@ -124,6 +124,26 @@ func main() {
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
 	case "sync-vps", "sync":
 		runCLIAction("sync-vps", func() error { return actionSyncVPS(state, secrets) })
+	case "migrate-backend", "migrate-domain":
+		agentFlag := ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--agent":
+				if i+1 < len(args) {
+					agentFlag = args[i+1]
+					i++
+				}
+			default:
+				fmt.Fprintf(os.Stderr, "%s: unknown option %s\n", args[0], args[i])
+				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy migrate-backend [--agent <nick>]")
+				os.Exit(2)
+			}
+		}
+		if agentFlag != "" && state.FindAgent(agentFlag) == nil {
+			fmt.Fprintf(os.Stderr, "migrate-backend: agent %q не найден в wizard.toml\n", agentFlag)
+			os.Exit(2)
+		}
+		runCLIAction("migrate-backend", func() error { return actionMigrateBackend(state, secrets, agentFlag) })
 	case "uninstall-agent":
 		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
 		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
@@ -308,6 +328,8 @@ Commands:
                                show/apply a /32 route through VPN/WireGuard
   doctor [--deep]              local + VPS + agent health check
   sync-vps, sync               pull router list/deploy metadata from backend
+  migrate-backend [--agent <nick>]
+                               restore agent users on the current backend and repoint router configs
   known-hosts [list|forget [alias]]
   secrets status               show which required secrets are available
   secrets export <file.tgz>

@@ -81,10 +81,14 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 			if err := actionNetfix(state, netfixOptions{}); err != nil {
 				PrintFail("netfix failed: " + err.Error())
 			}
+		case "11":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionMigrateBackend(state, secrets, "")
+			})
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–10 или Q.")
+			PrintFail("Не понял. Введи 1–11 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -124,6 +128,7 @@ func printMenuItems(state *State) {
 	fmt.Println("  [8] Забыть known_hosts alias   " + Colorize("(если физически заменил роутер)", ColorDim))
 	fmt.Println("  [9] Восстановить токен агента " + Colorize("(новый token_hash + переустановка config.yaml)", ColorDim))
 	fmt.Println("  [10] Netfix маршрута          " + Colorize("(подсказать/применить /32 route через VPN)", ColorDim))
+	fmt.Println("  [11] Переезд backend/VPS      " + Colorize("(восстановить users DB + перенаправить агентов)", ColorDim))
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }

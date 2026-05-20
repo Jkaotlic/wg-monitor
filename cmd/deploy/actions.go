@@ -1032,6 +1032,7 @@ func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nick
 }
 
 func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) error {
+	previousBackend := state.Backend
 	rel, err := dl.GetLatestRelease()
 	if err != nil {
 		return err
@@ -1211,7 +1212,58 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 
 	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	state.Backend.LastDeployedVersion = rel.TagName
+	if shouldOfferBackendMigration(previousBackend, state.Backend, len(state.Agents)) {
+		PrintWarn(fmt.Sprintf(
+			"Похоже, backend переехал: %s/%s -> %s/%s",
+			emptyAsQuestion(previousBackend.Host), emptyAsQuestion(previousBackend.Domain),
+			emptyAsQuestion(state.Backend.Host), emptyAsQuestion(state.Backend.Domain),
+		))
+		PrintInfo("Миграция восстановит users DB на новом VPS из локальных WG_AGENT_TOKEN_<NICK> и перепишет config.yaml на роутерах.")
+		ans := strings.ToLower(strings.TrimSpace(Ask("Перенести существующих агентов на этот VPS сейчас? [y/N]", "n")))
+		if ans == "y" || ans == "yes" || ans == "д" || ans == "да" {
+			if err := migrateBackendAgents(state, secrets, s, ""); err != nil {
+				return fmt.Errorf("post-install backend migration: %w", err)
+			}
+		}
+	}
 	return nil
+}
+
+func actionMigrateBackend(state *State, secrets *SecretStore, nickname string) error {
+	if state.Backend.Host == "" || state.Backend.Domain == "" {
+		return fmt.Errorf("backend is not configured; run install-backend first")
+	}
+	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
+	if pass == "" {
+		return fmt.Errorf("missing VPS password")
+	}
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+	PrintStep(1, 1, "SSH к новому VPS")
+	bs, err := ConnectSSH(state.Backend.Host, portOrDefault(state.Backend.Port, 22), userOrDefault(state.Backend.User, "root"), pass, kh, "backend")
+	if err != nil {
+		return err
+	}
+	defer bs.Close()
+	return migrateBackendAgents(state, secrets, bs, nickname)
+}
+
+func shouldOfferBackendMigration(oldBackend, newBackend BackendState, agentCount int) bool {
+	if agentCount == 0 {
+		return false
+	}
+	oldHasBackend := strings.TrimSpace(oldBackend.Host) != "" || strings.TrimSpace(oldBackend.Domain) != ""
+	if !oldHasBackend {
+		return false
+	}
+	newHasBackend := strings.TrimSpace(newBackend.Host) != "" && strings.TrimSpace(newBackend.Domain) != ""
+	if !newHasBackend {
+		return false
+	}
+	return strings.TrimSpace(oldBackend.Host) != strings.TrimSpace(newBackend.Host) ||
+		strings.TrimSpace(oldBackend.Domain) != strings.TrimSpace(newBackend.Domain)
 }
 
 func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
@@ -1452,6 +1504,148 @@ func actionRepairAgentToken(state *State, secrets *SecretStore, dl *Downloader, 
 	return nil
 }
 
+func migrateBackendAgents(state *State, secrets *SecretStore, bs *SSH, nickname string) error {
+	targets, err := migrationTargets(state, nickname)
+	if err != nil {
+		return err
+	}
+	newURL := "https://" + strings.TrimSpace(state.Backend.Domain)
+	var failed []string
+	for i := range targets {
+		ag := targets[i]
+		tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
+		rawToken := secrets.GetNonInteractive(tokenEnv)
+		if rawToken == "" {
+			msg := fmt.Sprintf("%s: нет %s в env/disk-cache", ag.Nickname, tokenEnv)
+			PrintWarn(msg)
+			failed = append(failed, msg)
+			continue
+		}
+
+		PrintStep(1, 2, "VPS users DB: "+ag.Nickname)
+		if err := vpsUpsertMigratedUser(bs, ag, hashAgentRawToken(rawToken)); err != nil {
+			msg := fmt.Sprintf("%s: users DB: %v", ag.Nickname, err)
+			PrintWarn(msg)
+			failed = append(failed, msg)
+			continue
+		}
+
+		PrintStep(2, 2, "Router config.yaml: "+ag.Nickname)
+		if err := migrateAgentBackendConfig(state, secrets, &ag, newURL, rawToken); err != nil {
+			msg := fmt.Sprintf("%s: router config: %v", ag.Nickname, err)
+			PrintWarn(msg)
+			failed = append(failed, msg)
+			continue
+		}
+		PrintOK(ag.Nickname + " перенесён на " + newURL)
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("migration incomplete: %s", strings.Join(failed, "; "))
+	}
+	return nil
+}
+
+func migrationTargets(state *State, nickname string) ([]AgentState, error) {
+	if nickname != "" {
+		ag := state.FindAgent(nickname)
+		if ag == nil {
+			return nil, fmt.Errorf("agent %q not found in wizard.toml", nickname)
+		}
+		return []AgentState{*ag}, nil
+	}
+	if len(state.Agents) == 0 {
+		return nil, fmt.Errorf("no agents in wizard.toml")
+	}
+	out := make([]AgentState, len(state.Agents))
+	copy(out, state.Agents)
+	return out, nil
+}
+
+func migrateAgentBackendConfig(state *State, secrets *SecretStore, ag *AgentState, backendURL, rawToken string) error {
+	pass, err := agentRouterPassword(secrets, ag.Nickname)
+	if err != nil {
+		return err
+	}
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+	rep, cleanup, iface, perr := runPathDiscoveryStepWithNetfix(state, ag, secrets)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if perr != nil {
+		return fmt.Errorf("path discovery: %w", perr)
+	}
+	if rep.Chosen == nil {
+		return diagnoseUnreachable(state, ag, rep, secrets)
+	}
+	if iface != "" && iface != ag.PreferredIface {
+		if live := state.FindAgent(ag.Nickname); live != nil {
+			live.PreferredIface = iface
+		}
+		ag.PreferredIface = iface
+	}
+
+	s, err := connectAgentSSHManaged(state, ag, pass, kh, "migrate-backend")
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	if err := verifyExpectedMAC(s, ag.ExpectedMAC); err != nil {
+		return err
+	}
+	existingNick := stepReadExistingAgentNickname(s)
+	if existingNick != "" && existingNick != ag.Nickname {
+		return fmt.Errorf("router already hosts agent %q, refusing to overwrite as %q", existingNick, ag.Nickname)
+	}
+	if _, err := s.MustRun("mkdir -p /opt/etc/wg-monitor"); err != nil {
+		return err
+	}
+	cfg, err := RenderAgentYAML(AgentParams{
+		BackendURL: backendURL,
+		Token:      rawToken,
+		Nickname:   ag.Nickname,
+	})
+	if err != nil {
+		return err
+	}
+	s.Run("cp -p /opt/etc/wg-monitor/config.yaml /opt/etc/wg-monitor/config.yaml.bak-migrate-$(date +%Y%m%d%H%M%S) 2>/dev/null || true")
+	if err := s.UploadStdin("/opt/etc/wg-monitor/config.yaml", cfg); err != nil {
+		return err
+	}
+	if _, err := s.MustRun("chmod 600 /opt/etc/wg-monitor/config.yaml"); err != nil {
+		return err
+	}
+	if _, err := s.MustRun("/opt/etc/init.d/S99wg-monitor restart 2>/dev/null || { /opt/etc/init.d/S99wg-monitor stop 2>/dev/null; /opt/etc/init.d/S99wg-monitor start; }"); err != nil {
+		return err
+	}
+	time.Sleep(2 * time.Second)
+	pid, _ := s.MustRun("pidof wg-monitor")
+	if strings.TrimSpace(pid) == "" {
+		return fmt.Errorf("agent did not start after config rewrite")
+	}
+	PrintOK("wg-monitor запущен (PID " + strings.TrimSpace(pid) + ")")
+	return nil
+}
+
+func agentRouterPassword(secrets *SecretStore, nickname string) (string, error) {
+	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(nickname)
+	home, _ := os.UserHomeDir()
+	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
+	pass, _ := secrets.Get(envName, "пароль root для "+nickname, &MemoryFileLookup{
+		Path:    memFile,
+		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
+	})
+	if pass == "" {
+		pass, _ = secrets.Get("WG_KEENETIC_PASS", "пароль root", nil)
+	}
+	if pass == "" {
+		return "", fmt.Errorf("missing router password for %s", nickname)
+	}
+	return pass, nil
+}
+
 // cliNicknameRe mirrors wg-monitor-cli's own regex (cmd/wg-monitor-cli/main.go).
 // The CLI rejects anything else, so we validate up-front to avoid a confusing
 // error after the nickname is already collected.
@@ -1536,6 +1730,86 @@ func vpsUpdateAgentTokenHash(bs *SSH, nick, tokenHash string) error {
 	}
 	PrintOK("users DB: token_hash обновлён для " + nick)
 	return nil
+}
+
+func vpsUpsertMigratedUser(bs *SSH, ag AgentState, tokenHash string) error {
+	if !cliNicknameRe.MatchString(ag.Nickname) {
+		return fmt.Errorf("invalid nickname %q", ag.Nickname)
+	}
+	if len(tokenHash) != 64 {
+		return fmt.Errorf("invalid token hash length for %s", ag.Nickname)
+	}
+	cmd := fmt.Sprintf(
+		`sqlite3 /var/lib/wg-monitor/state.db %s`,
+		shellSingleQuote(buildMigrateUserUpsertSQL(ag, tokenHash)),
+	)
+	out, stderr, rc, err := bs.Run(cmd)
+	if err != nil {
+		return fmt.Errorf("ssh transport: %w", err)
+	}
+	if rc != 0 {
+		return fmt.Errorf("sqlite3 upsert user rc=%d stderr=%q", rc, strings.TrimSpace(stderr))
+	}
+	lines := nonEmptyLines(out)
+	if len(lines) == 0 || strings.TrimSpace(lines[len(lines)-1]) != "1" {
+		return fmt.Errorf("sqlite3 upsert user affected %q rows", strings.TrimSpace(out))
+	}
+	PrintOK("users DB: " + ag.Nickname + " восстановлен")
+	return nil
+}
+
+func buildMigrateUserUpsertSQL(ag AgentState, tokenHash string) string {
+	kind := strings.TrimSpace(ag.Kind)
+	if kind != "mobile" {
+		kind = "static"
+	}
+	return fmt.Sprintf(
+		`INSERT INTO users(nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since)
+VALUES (%s, %s, '0.0.0.0', 'awg0', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+ON CONFLICT(nickname) DO UPDATE SET
+  token_hash=excluded.token_hash,
+  kind=excluded.kind,
+  telegram_thread_id=COALESCE(excluded.telegram_thread_id, users.telegram_thread_id),
+  ssh_host=excluded.ssh_host,
+  ssh_port=excluded.ssh_port,
+  ssh_user=excluded.ssh_user,
+  arch=excluded.arch,
+  last_deployed_version=excluded.last_deployed_version,
+  deploy_ring=excluded.deploy_ring,
+  pending_version=excluded.pending_version,
+  pending_since=excluded.pending_since;
+SELECT changes();`,
+		sqlString(ag.Nickname),
+		sqlString(tokenHash),
+		sqlString(kind),
+		sqlNullableInt(ag.ThreadID),
+		sqlNullableString(ag.Host),
+		sqlNullableInt(portOrDefault(ag.Port, 222)),
+		sqlNullableString(userOrDefault(ag.User, "root")),
+		sqlNullableString(ag.Arch),
+		sqlNullableString(ag.LastDeployedVersion),
+		sqlNullableString(ag.Ring),
+		sqlNullableString(ag.PendingVersion),
+		sqlNullableString(ag.PendingSince),
+	)
+}
+
+func sqlString(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+}
+
+func sqlNullableString(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "NULL"
+	}
+	return sqlString(s)
+}
+
+func sqlNullableInt(n int) string {
+	if n == 0 {
+		return "NULL"
+	}
+	return fmt.Sprint(n)
 }
 
 func chooseAgentForAction(state *State, nickname, label string) (*AgentState, error) {
