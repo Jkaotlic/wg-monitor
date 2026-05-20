@@ -201,6 +201,59 @@ func TestBuildUpdateAgentTokenHashSQLEscapesNickname(t *testing.T) {
 	}
 }
 
+func TestShouldOfferBackendMigrationAfterHostChange(t *testing.T) {
+	oldBackend := BackendState{Host: "198.51.100.20", Domain: "wg-old.example"}
+	newBackend := BackendState{Host: "198.51.100.21", Domain: "wg-old.example"}
+	if !shouldOfferBackendMigration(oldBackend, newBackend, 2) {
+		t.Fatal("host change with existing agents should offer migration")
+	}
+}
+
+func TestShouldOfferBackendMigrationSkipsFreshInstall(t *testing.T) {
+	oldBackend := BackendState{}
+	newBackend := BackendState{Host: "198.51.100.21", Domain: "wg-new.example"}
+	if shouldOfferBackendMigration(oldBackend, newBackend, 2) {
+		t.Fatal("fresh install without previous backend should not offer migration")
+	}
+	if shouldOfferBackendMigration(BackendState{Host: "old", Domain: "old.example"}, newBackend, 0) {
+		t.Fatal("migration without agents is useless and should not be offered")
+	}
+}
+
+func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T) {
+	ag := AgentState{
+		Nickname:            "testkeen",
+		Host:                "192.168.0.1",
+		Port:                222,
+		User:                "root",
+		Arch:                "mipsle",
+		ThreadID:            123,
+		Kind:                "mobile",
+		Ring:                "canary",
+		LastDeployedVersion: "v0.12.0-rc6",
+	}
+	got := buildMigrateUserUpsertSQL(ag, strings.Repeat("a", 64))
+	for _, want := range []string{
+		"INSERT INTO users",
+		"'testkeen'",
+		"'mobile'",
+		"123",
+		"'192.168.0.1'",
+		"222",
+		"'root'",
+		"'mipsle'",
+		"'v0.12.0-rc6'",
+		"'canary'",
+		"ON CONFLICT(nickname) DO UPDATE SET",
+		"token_hash=excluded.token_hash",
+		"SELECT changes();",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("migration SQL missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // These tests exercise the pure-logic helper diagnosisFromReport, not
 // diagnoseUnreachable itself (latter does I/O).
 

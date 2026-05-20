@@ -3,6 +3,7 @@ package awgmgr
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -217,16 +218,16 @@ func TestCreateStaticRoute_SendsCreateBody(t *testing.T) {
 	}
 }
 
-func TestDeleteStaticRoute_SendsIDInBody(t *testing.T) {
-	var got StaticRoute
+func TestDeleteStaticRoute_SendsIDInQuery(t *testing.T) {
+	var gotBody []byte
+	var gotRawQuery, gotDecodedID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/static-routes/delete" || r.Method != http.MethodPost || r.URL.RawQuery != "" {
-			t.Errorf("expected POST /api/static-routes/delete with no query, got %s %q?%q", r.Method, r.URL.Path, r.URL.RawQuery)
+		if r.URL.Path != "/api/static-routes/delete" || r.Method != http.MethodPost {
+			t.Errorf("expected POST /api/static-routes/delete, got %s %q", r.Method, r.URL.Path)
 		}
-		if ct := r.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
-			t.Errorf("Content-Type: %q", ct)
-		}
-		_ = json.NewDecoder(r.Body).Decode(&got)
+		gotRawQuery = r.URL.RawQuery
+		gotDecodedID = r.URL.Query().Get("id")
+		gotBody, _ = io.ReadAll(r.Body)
 		_, _ = w.Write([]byte(`{"success":true}`))
 	}))
 	defer srv.Close()
@@ -234,8 +235,51 @@ func TestDeleteStaticRoute_SendsIDInBody(t *testing.T) {
 	if err := c.DeleteStaticRoute(context.Background(), "static 1"); err != nil {
 		t.Fatal(err)
 	}
+	if strings.Contains(gotRawQuery, " ") {
+		t.Errorf("raw query must not contain unencoded space: %q", gotRawQuery)
+	}
+	if gotDecodedID != "static 1" {
+		t.Errorf("decoded id mismatch: %q", gotDecodedID)
+	}
+	if len(strings.TrimSpace(string(gotBody))) != 0 {
+		t.Errorf("expected empty body for v2.10 OpenAPI delete shape, got %q", string(gotBody))
+	}
+}
+
+func TestDeleteStaticRoute_FallsBackToLegacyBody(t *testing.T) {
+	var calls int
+	var got StaticRoute
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		switch calls {
+		case 1:
+			if r.URL.Path != "/api/static-routes/delete" || r.URL.Query().Get("id") != "static 1" {
+				t.Errorf("first call should use query id, got %q?%q", r.URL.Path, r.URL.RawQuery)
+			}
+			http.Error(w, `{"error":true,"message":"missing body id"}`, http.StatusBadRequest)
+		case 2:
+			if r.URL.Path != "/api/static-routes/delete" || r.URL.RawQuery != "" {
+				t.Errorf("fallback should use no query, got %q?%q", r.URL.Path, r.URL.RawQuery)
+			}
+			if ct := r.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+				t.Errorf("Content-Type: %q", ct)
+			}
+			_ = json.NewDecoder(r.Body).Decode(&got)
+			_, _ = w.Write([]byte(`{"success":true}`))
+		default:
+			t.Fatalf("unexpected extra call %d", calls)
+		}
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	if err := c.DeleteStaticRoute(context.Background(), "static 1"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d, want 2", calls)
+	}
 	if got.ID != "static 1" {
-		t.Errorf("body: %+v", got)
+		t.Errorf("fallback body: %+v", got)
 	}
 }
 

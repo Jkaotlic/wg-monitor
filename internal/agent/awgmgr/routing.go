@@ -87,14 +87,22 @@ func (c *Client) CreateStaticRoute(ctx context.Context, rule StaticRoute) error 
 	return c.postJSON(ctx, "/api/static-routes/create", body, nil)
 }
 
-// DeleteStaticRoute calls POST /api/static-routes/delete. Like static update,
-// awg-manager expects the route id in the JSON body, not in the URL.
+// DeleteStaticRoute calls POST /api/static-routes/delete?id=<id>. awg-manager
+// v2.10.8 documents the id in query; older builds accepted it in the body.
 func (c *Client) DeleteStaticRoute(ctx context.Context, id string) error {
+	queryErr := c.postJSON(ctx, "/api/static-routes/delete?id="+url.QueryEscape(id), nil, nil)
+	if queryErr == nil {
+		return nil
+	}
 	body, err := json.Marshal(StaticRoute{ID: id})
 	if err != nil {
 		return err
 	}
-	return c.postJSON(ctx, "/api/static-routes/delete", body, nil)
+	bodyErr := c.postJSON(ctx, "/api/static-routes/delete", body, nil)
+	if bodyErr == nil {
+		return nil
+	}
+	return fmt.Errorf("awgmgr static-routes/delete failed with query id: %v; legacy body id: %w", queryErr, bodyErr)
 }
 
 // RoutingTunnels returns /api/routing/tunnels .data — the catalogue of all
