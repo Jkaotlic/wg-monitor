@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -153,6 +155,51 @@ func stepVerifyHTTP(s *SSH, url string) error {
 	}
 	PrintOK(fmt.Sprintf("%s → 200 OK", url))
 	return nil
+}
+
+func stepVerifyBackendHealth(s *SSH, domain string) error {
+	if err := stepVerifyHTTP(s, "http://127.0.0.1:8080/healthz"); err != nil {
+		return err
+	}
+	host := domainHost(domain)
+	if host == "" {
+		return nil
+	}
+	url := "https://" + host + "/healthz"
+	cmd := fmt.Sprintf(
+		"curl -k -sS -o /dev/null -w '%%{http_code}' --resolve %s %s",
+		shellQuote(host+":443:127.0.0.1"),
+		shellQuote(url),
+	)
+	out, err := s.MustRun(cmd)
+	if err != nil {
+		PrintFail(err.Error())
+		return err
+	}
+	code := strings.TrimSpace(out)
+	if code != "200" {
+		PrintFail(fmt.Sprintf("%s via 127.0.0.1 → HTTP %s", url, code))
+		return fmt.Errorf("expected 200 got %s", code)
+	}
+	PrintOK(fmt.Sprintf("%s via 127.0.0.1 → 200 OK", url))
+	return nil
+}
+
+func domainHost(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return ""
+	}
+	if strings.Contains(domain, "://") {
+		if u, err := url.Parse(domain); err == nil {
+			return u.Hostname()
+		}
+	}
+	host := strings.TrimSuffix(domain, "/")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return strings.Trim(host, "[]")
 }
 
 func readFile(path string) ([]byte, error) {

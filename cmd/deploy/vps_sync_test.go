@@ -160,3 +160,20 @@ func TestNewVPSClientWithTimeoutAndDialHostKeepsDomainBaseURL(t *testing.T) {
 		t.Fatal("expected custom transport")
 	}
 }
+
+func TestNewVPSClientForBackendUsesDomainAndHost(t *testing.T) {
+	state := &State{Backend: BackendState{Domain: "wgmonitor.example", Host: "198.51.100.10"}}
+	c := NewVPSClientForBackend(state, "secret", 15*time.Second)
+	if c == nil {
+		t.Fatal("client is nil")
+	}
+	if c.BaseURL != "https://wgmonitor.example" {
+		t.Fatalf("base url=%q", c.BaseURL)
+	}
+	if c.HTTP.Timeout != 15*time.Second {
+		t.Fatalf("timeout=%s, want 15s", c.HTTP.Timeout)
+	}
+	if c.HTTP.Transport == nil {
+		t.Fatal("expected custom transport")
+	}
+}

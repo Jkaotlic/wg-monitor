@@ -505,7 +505,7 @@ func doctorAgentHeartbeat(state *State, ag *AgentState, secrets *SecretStore, t 
 		t.warnf("heartbeat: WIZARD_TOKEN не найден в env/disk — пропускаю last_seen")
 		return
 	}
-	c := NewVPSClient(state.Backend.Domain, tok)
+	c := NewVPSClientForBackend(state, tok, 5*time.Second)
 	if c == nil {
 		t.warnf("heartbeat: wizard client не собрался")
 		return
