@@ -23,6 +23,8 @@ type BackendState struct {
 	Host                string `toml:"host"`
 	Port                int    `toml:"port"`
 	User                string `toml:"user"`
+	SSHAuth             string `toml:"ssh_auth,omitempty"`
+	KeyPath             string `toml:"key_path,omitempty"`
 	Domain              string `toml:"domain"`
 	LastDeploy          string `toml:"last_deploy"`
 	LastDeployedVersion string `toml:"last_deployed_version"`
@@ -46,6 +48,9 @@ type AgentState struct {
 	LastDeployedVersion string `toml:"last_deployed_version"`
 	PendingVersion      string `toml:"pending_version,omitempty"`
 	PendingSince        string `toml:"pending_since,omitempty"`
+	DeployMode          string `toml:"deploy_mode,omitempty"` // "awgm" default supported path, "legacy_ssh" for break-glass recovery
+	AWGMURL             string `toml:"awgm_url,omitempty"`    // public AWG Manager base URL, usually KeenDNS web-app URL
+	AWGMAuth            string `toml:"awgm_auth,omitempty"`   // credential source label only; password lives in SecretStore
 	// ExpectedMAC pins the physical identity of the router so a fresh
 	// install-agent against a wrong host (operator forgot to switch SSTP,
 	// or another router took 192.168.31.1 on the same LAN) bails BEFORE

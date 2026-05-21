@@ -315,21 +315,21 @@ Commands:
   update-components, update-all
                                check latest release and update selected backend/agents
   update-backend               update only backend
-  add-router                   create router in backend DB, create TG topic, install agent
-  install-agent --agent <nick> install/reinstall an existing router agent
+  add-router                   enroll via VPS and install through AWG Manager/KeenDNS
+  install-agent --agent <nick> install/reinstall through AWG Manager/KeenDNS
   update-agent [--agent <nick>]
                                update one agent or choose interactively
   uninstall-agent --agent <nick>
   uninstall-agent --host <ip> [--port N] [--user U]
                                remove agent from a known or manually specified router
   repair-agent-token [--agent <nick>]
-                               rotate lost agent token, reinstall router config
+                               re-enroll via AWG Manager and rotate agent token
   netfix [--agent <nick> | --host <ip> [--port N]] [--apply]
-                               show/apply a /32 route through VPN/WireGuard
+                               legacy recovery only when WG_LEGACY_ROUTER_SSH=1
   doctor [--deep]              local + VPS + agent health check
   sync-vps, sync               pull router list/deploy metadata from backend
   migrate-backend [--agent <nick>]
-                               restore agent users on the current backend and repoint router configs
+                               re-enroll agents on the new VPS through AWG Manager
   known-hosts [list|forget [alias]]
   secrets status               show which required secrets are available
   secrets export <file.tgz>

@@ -85,6 +85,10 @@ func Ask(prompt, defaultVal string) string {
 	return line
 }
 
+func cleanPromptDefaultLeak(s string) string {
+	return strings.TrimRight(strings.TrimSpace(s), "]")
+}
+
 // AskSecret prompts without echoing input.
 func AskSecret(prompt string) string {
 	fmt.Printf("%s: ", prompt)

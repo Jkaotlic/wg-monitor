@@ -331,29 +331,14 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	}
 	PrintOK(fmt.Sprintf("последний релиз: %s", rel.TagName))
 
-	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
-	if pass == "" {
-		PrintFail("пароль обязателен")
-		return fmt.Errorf("missing password")
-	}
-
 	khPath := defaultCacheDir() + "/known_hosts"
 	kh, err := NewKnownHosts(khPath)
 	if err != nil {
 		return err
 	}
 
-	port := state.Backend.Port
-	if port == 0 {
-		port = 22
-	}
-	user := state.Backend.User
-	if user == "" {
-		user = "root"
-	}
-
 	PrintStep(1, 4, "SSH к VPS")
-	s, err := ConnectSSH(state.Backend.Host, port, user, pass, kh, "backend")
+	s, err := connectBackendSSH(state, secrets, kh)
 	if err != nil {
 		PrintFail(err.Error())
 		return err
@@ -741,6 +726,173 @@ func emptyAsQuestion(s string) string {
 }
 
 func actionInstallAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
+	if os.Getenv("WG_LEGACY_ROUTER_SSH") == "1" {
+		return actionInstallAgentLegacySSH(state, secrets, dl, nickname)
+	}
+	return actionInstallAgentAWGM(state, secrets, dl, nickname)
+}
+
+func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
+	if state.Backend.Domain == "" {
+		return fmt.Errorf("backend domain is not configured; run install-backend first")
+	}
+	if dl == nil {
+		dl = NewDownloader()
+	}
+	var ag *AgentState
+	if nickname != "" {
+		ag = state.FindAgent(nickname)
+	}
+	if ag == nil {
+		nick := nickname
+		if nick == "" {
+			nick = Ask("Никнейм роутера (a-z0-9_-, 2-16)", "")
+		}
+		if nick == "" {
+			return fmt.Errorf("nickname required")
+		}
+		state.Agents = append(state.Agents, AgentState{Nickname: nick})
+		ag = &state.Agents[len(state.Agents)-1]
+	}
+	if ag.Kind == "" {
+		ag.Kind = "static"
+	}
+	if ag.AWGMURL == "" {
+		ag.AWGMURL = strings.TrimRight(Ask("AWG Manager URL (KeenDNS, https://...)", ag.AWGMURL), "/")
+	}
+	if ag.AWGMURL == "" {
+		return fmt.Errorf("AWG Manager URL required")
+	}
+	ag.DeployMode = "awgm"
+	if ag.AWGMAuth == "" {
+		ag.AWGMAuth = "router-admin"
+	}
+
+	wizardToken := secrets.GetNonInteractive("WIZARD_TOKEN")
+	if wizardToken == "" {
+		wizardToken, _ = secrets.Get("WIZARD_TOKEN", "wizard API token (из /etc/wg-monitor/wizard-token.txt на VPS)", nil)
+	}
+	if wizardToken == "" {
+		return fmt.Errorf("WIZARD_TOKEN required for AWG Manager enrollment")
+	}
+	vps := NewVPSClient(state.Backend.Domain, wizardToken)
+	if vps == nil {
+		return fmt.Errorf("wizard API client is not configured")
+	}
+
+	PrintStep(1, 5, "VPS: создать/обновить enrollment "+ag.Nickname)
+	enroll, err := vps.CreateEnrollment(context.Background(), EnrollmentRequest{
+		Nickname: ag.Nickname,
+		Kind:     ag.Kind,
+		ThreadID: int64(ag.ThreadID),
+	})
+	if err != nil {
+		return err
+	}
+	tokenEnv := agentTokenEnv(ag.Nickname)
+	if err := secrets.Set(tokenEnv, enroll.RawToken); err != nil {
+		if errors.Is(err, ErrCacheDisabled) {
+			PrintWarn("WG_NO_SECRET_CACHE=1 — raw-token не сохранён на диск. Сохрани вручную:")
+			fmt.Printf("    %s=%s\n", tokenEnv, enroll.RawToken)
+		} else {
+			return fmt.Errorf("save %s: %w", tokenEnv, err)
+		}
+	}
+	_ = os.Setenv(tokenEnv, enroll.RawToken)
+
+	loginEnv := "WG_AWGM_LOGIN_" + strings.ToUpper(ag.Nickname)
+	passEnv := "WG_AWGM_PASS_" + strings.ToUpper(ag.Nickname)
+	login, _ := secrets.Get(loginEnv, "AWG Manager login for "+ag.Nickname, nil)
+	pass, _ := secrets.Get(passEnv, "AWG Manager password for "+ag.Nickname, nil)
+
+	PrintStep(2, 5, "AWG Manager: login + system info")
+	awgm := NewAWGMClient(ag.AWGMURL, login, pass)
+	if err := awgm.Login(context.Background()); err != nil {
+		return err
+	}
+	info, err := awgm.SystemInfo(context.Background())
+	if err != nil {
+		return err
+	}
+	if ag.Arch == "" && info.GoArch != "" {
+		ag.Arch = info.GoArch
+	}
+	if ag.Arch == "" {
+		return fmt.Errorf("AWG Manager did not report goArch; set arch in wizard.toml")
+	}
+
+	PrintStep(3, 5, "GitHub release + bootstrap script")
+	rel, err := dl.GetLatestRelease()
+	if err != nil {
+		return err
+	}
+	assetName := "wg-monitor-agent-linux-" + ag.Arch
+	asset := rel.AssetByName(assetName)
+	if asset == nil {
+		return fmt.Errorf("release %s has no asset %s", rel.TagName, assetName)
+	}
+	sums := rel.AssetByName("checksums.txt")
+	if sums == nil {
+		return fmt.Errorf("release %s has no checksums.txt", rel.TagName)
+	}
+	script, err := RenderAWGMBootstrapScript(AWGMBootstrapParams{
+		Nickname:     ag.Nickname,
+		BackendURL:   enroll.BackendURL,
+		RawToken:     enroll.RawToken,
+		Version:      rel.TagName,
+		DownloadURL:  asset.DownloadURL,
+		ChecksumURL:  sums.DownloadURL,
+		ChecksumName: assetName,
+	})
+	if err != nil {
+		return err
+	}
+
+	PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
+	st, err := awgm.TerminalStatus(context.Background())
+	if err != nil {
+		return err
+	}
+	if st.SessionActive {
+		return fmt.Errorf("AWG Manager terminal already has an active session; close it in the web UI and retry")
+	}
+	if !st.Installed {
+		if err := awgm.TerminalInstall(context.Background()); err != nil {
+			return err
+		}
+	}
+	if !st.Running {
+		if err := awgm.TerminalStart(context.Background()); err != nil {
+			return err
+		}
+	}
+	defer func() {
+		if err := awgm.TerminalStop(context.Background()); err != nil {
+			PrintWarn("AWG Manager terminal stop: " + err.Error())
+		}
+	}()
+	res, err := awgm.RunTerminalScript(context.Background(), script)
+	if err != nil {
+		if strings.TrimSpace(res.Output) != "" {
+			PrintInfo(res.Output)
+		}
+		return err
+	}
+
+	PrintStep(5, 5, "Сохранить локальное состояние")
+	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
+	ag.LastDeployedVersion = rel.TagName
+	if ag.Host == "" && info.RouterIP != "" {
+		ag.Host = info.RouterIP
+	}
+	if ag.AWGMAuth == "" {
+		ag.AWGMAuth = "router-admin"
+	}
+	PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
+	return nil
+}
+
+func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
 	rel, err := dl.GetLatestRelease()
 	if err != nil {
 		return err
@@ -1043,8 +1195,9 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	state.Backend.Host = Ask("VPS host или IP", state.Backend.Host)
 	state.Backend.Port = parseIntOr(Ask("SSH port", strOrDefault(state.Backend.Port, "22")), 22)
 	state.Backend.User = orDefault(Ask("SSH user", strOrDefaultS(state.Backend.User, "root")), "root")
-	state.Backend.Domain = Ask("Домен бэкенда (например wgmon.example.com)", state.Backend.Domain)
-	caddyEmail := Ask("Email для Let's Encrypt", "admin@"+state.Backend.Domain)
+	configureBackendSSHAuth(state)
+	state.Backend.Domain = cleanPromptDefaultLeak(Ask("Домен бэкенда (например wgmon.example.com)", state.Backend.Domain))
+	caddyEmail := cleanPromptDefaultLeak(Ask("Email для Let's Encrypt", "admin@"+state.Backend.Domain))
 
 	if state.Telegram.ChatID == 0 {
 		state.Telegram.ChatID = parseInt64Or(Ask("Telegram chat_id (отрицательное число)", ""), 0)
@@ -1053,10 +1206,9 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		state.Telegram.AdminUserID = parseInt64Or(Ask("Telegram admin user_id (твой User ID)", ""), 0)
 	}
 
-	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
 	botToken, _ := secrets.Get("WG_BOT_TOKEN", "Telegram bot token (1234:ABC...)", nil)
 
-	if pass == "" || botToken == "" || state.Backend.Host == "" || state.Backend.Domain == "" {
+	if botToken == "" || state.Backend.Host == "" || state.Backend.Domain == "" {
 		PrintFail("обязательные поля пустые")
 		return fmt.Errorf("missing required fields")
 	}
@@ -1067,7 +1219,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		return err
 	}
 	PrintStep(1, 14, "SSH к VPS")
-	s, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
+	s, err := connectBackendSSH(state, secrets, kh)
 	if err != nil {
 		PrintFail(err.Error())
 		return err
@@ -1107,13 +1259,16 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	if err != nil {
 		return err
 	}
-	if err := stepUploadFile(s, "/etc/wg-monitor/backend.yaml", yamlBytes, "600"); err != nil {
+	if err := stepUploadFile(s, "/etc/wg-monitor/backend.yaml", yamlBytes, "640"); err != nil {
 		return err
+	}
+	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/backend.yaml"); err != nil {
+		PrintWarn("chown backend.yaml: " + err.Error())
 	}
 
 	PrintStep(5, 14, "bot-token.txt")
-	// Отдельный файл, потому что backend.yaml имеет mode 600 root:wgmonitor —
-	// читаемый отладчиком. Токен бота — нет: только wgmonitor.
+	// Отдельный файл, потому что backend.yaml читаем сервисом wgmonitor,
+	// а bot-token.txt не попадает в YAML и доступен только root + wgmonitor.
 	// Drift detection: если файл уже есть и его содержимое != локальному кэшу,
 	// предупреждаем перед перезаписью. Помогает поймать сценарий "оператор
 	// ротировал токен на VPS вручную, локальный кэш устарел".
@@ -1128,7 +1283,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 			}
 		}
 	}
-	if err := stepUploadFile(s, "/etc/wg-monitor/bot-token.txt", []byte(newBot), "600"); err != nil {
+	if err := stepUploadFile(s, "/etc/wg-monitor/bot-token.txt", []byte(newBot), "640"); err != nil {
 		return err
 	}
 	if _, err := s.MustRun("chown root:wgmonitor /etc/wg-monitor/bot-token.txt"); err != nil {
@@ -1221,6 +1376,9 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintInfo("Миграция восстановит users DB на новом VPS из локальных WG_AGENT_TOKEN_<NICK> и перепишет config.yaml на роутерах.")
 		ans := strings.ToLower(strings.TrimSpace(Ask("Перенести существующих агентов на этот VPS сейчас? [y/N]", "n")))
 		if ans == "y" || ans == "yes" || ans == "д" || ans == "да" {
+			if err := ensureRemoteSQLite3(s); err != nil {
+				return fmt.Errorf("prepare migration: %w", err)
+			}
 			if err := migrateBackendAgents(state, secrets, s, ""); err != nil {
 				return fmt.Errorf("post-install backend migration: %w", err)
 			}
@@ -1233,20 +1391,22 @@ func actionMigrateBackend(state *State, secrets *SecretStore, nickname string) e
 	if state.Backend.Host == "" || state.Backend.Domain == "" {
 		return fmt.Errorf("backend is not configured; run install-backend first")
 	}
-	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
-	if pass == "" {
-		return fmt.Errorf("missing VPS password")
+	if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
+		return migrateBackendAgents(state, secrets, nil, nickname)
 	}
 	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
 	if err != nil {
 		return err
 	}
 	PrintStep(1, 1, "SSH к новому VPS")
-	bs, err := ConnectSSH(state.Backend.Host, portOrDefault(state.Backend.Port, 22), userOrDefault(state.Backend.User, "root"), pass, kh, "backend")
+	bs, err := connectBackendSSH(state, secrets, kh)
 	if err != nil {
 		return err
 	}
 	defer bs.Close()
+	if err := ensureRemoteSQLite3(bs); err != nil {
+		return err
+	}
 	return migrateBackendAgents(state, secrets, bs, nickname)
 }
 
@@ -1271,11 +1431,6 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		PrintFail("сначала install-backend (нужно куда добавлять)")
 		return fmt.Errorf("no backend")
 	}
-
-	// Минимум интерактивности: единственный мандатный prompt — nickname.
-	// Всё остальное wizard вытаскивает из state / secrets-кэша / разумных
-	// дефолтов; password пробуется через env+cache+memory-файл и
-	// запрашивается только если всё пусто.
 	nick := Ask("Никнейм нового роутера (a-z, 2-16)", "")
 	if nick == "" {
 		return fmt.Errorf("nickname required")
@@ -1285,105 +1440,25 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("invalid nickname")
 	}
 
-	// Регистрация в users-table на VPS через wg-monitor-cli.
-	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
-	if pass == "" {
-		return fmt.Errorf("missing VPS password")
-	}
-	kh, _ := NewKnownHosts(defaultCacheDir() + "/known_hosts")
-
-	PrintStep(1, 3, "VPS: зарегистрировать "+nick+" в users DB")
-	bs, err := ConnectSSH(state.Backend.Host, state.Backend.Port, state.Backend.User, pass, kh, "backend")
-	if err != nil {
-		return err
-	}
-	defer bs.Close()
-
-	// Источник истины по агентам — таблица users в /var/lib/wg-monitor/state.db.
-	// CLI сам генерит raw-токен и хэширует в DB; из stdout вытягиваем raw-токен
-	// (последний шанс его увидеть). Идемпотентности на стороне CLI нет: повтор
-	// с тем же nickname упадёт на UNIQUE constraint, и raw мы тогда уже не
-	// получим — поэтому сначала проверяем DB.
-	tokEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(nick)
-	exists, err := vpsUserExists(bs, nick)
-	if err != nil {
-		return fmt.Errorf("check users table: %w", err)
-	}
-	var rawToken string
-	switch {
-	case exists && secrets.GetNonInteractive(tokEnv) != "":
-		PrintInfo(fmt.Sprintf("%s уже в DB на VPS, беру токен из локального disk-кэша", nick))
-		rawToken = secrets.GetNonInteractive(tokEnv)
-	case exists:
-		PrintFail(fmt.Sprintf(
-			"%s уже в DB на VPS, но raw-токен утерян (token_hash необратим). Удали запись:\n"+
-				"  ssh root@%s sqlite3 /var/lib/wg-monitor/state.db \"DELETE FROM users WHERE nickname='%s';\"\n"+
-				"и запусти [3] заново.",
-			nick, state.Backend.Host, nick))
-		return fmt.Errorf("user exists in DB but token unknown")
-	default:
-		// Kind — единственное поле, которое реально влияет на поведение
-		// backend'а (StaleAfterMobileSec для mobile). Берём из state'а
-		// если оператор уже сохранял для этого nickname'а, иначе спрашиваем.
-		// Дефолт "static" — оператор просто давит Enter для домашнего/офисного
-		// роутера, mobile только для in-vehicle 4G.
-		ag := state.FindAgent(nick)
-		kind := "static"
-		if ag != nil && ag.Kind != "" {
-			kind = ag.Kind
-		}
-		kind = strings.ToLower(strings.TrimSpace(orDefault(Ask("Kind (static / mobile)", kind), kind)))
-		if kind != "static" && kind != "mobile" {
-			PrintFail("kind должен быть static или mobile")
-			return fmt.Errorf("invalid kind")
-		}
-		rawToken, err = vpsAddUser(bs, nick, kind)
-		if err != nil {
-			return err
-		}
-		switch err := secrets.Set(tokEnv, rawToken); {
-		case err == nil:
-			PrintOK(fmt.Sprintf("токен %s сохранён в disk-кэш", tokEnv))
-		case errors.Is(err, ErrCacheDisabled):
-			// Disk-кэш выключен — токен живёт только в памяти процесса.
-			// Если оператор Ctrl-C'нёт между этим шагом и установкой агента
-			// на роутер, raw-токен потеряется навсегда (в DB только хэш).
-			// Громкий warning + явная подсказка как сохранить.
-			PrintWarn("WG_NO_SECRET_CACHE=1 — токен не записан на диск, живёт только в памяти текущего процесса")
-			PrintWarn(fmt.Sprintf("СОХРАНИ СЕЙЧАС вручную, иначе при сбое retry потребует DELETE FROM users:"))
-			fmt.Printf("    %s=%s\n", tokEnv, rawToken)
-		default:
-			PrintWarn("не смог сохранить токен в disk-кэш: " + err.Error())
-		}
-		// Сохраняем kind в state — на retry/reinstall не спрашиваем заново.
-		if ag == nil {
-			state.Agents = append(state.Agents, AgentState{Nickname: nick, Kind: kind})
-		} else {
-			ag.Kind = kind
-		}
-	}
-	os.Setenv(tokEnv, rawToken)
-
-	// Запись в wizard.toml. Дефолты подставляем здесь, чтобы actionInstallAgent
-	// ниже по флоу не спрашивал host/port/user — happy path (стандартный
-	// Keenetic) идёт без единого prompt'а кроме nickname'а + kind. SSH-fail
-	// в actionInstallAgent поднимет интерактив только если дефолты не подошли.
 	ag := state.FindAgent(nick)
 	if ag == nil {
 		state.Agents = append(state.Agents, AgentState{Nickname: nick, Kind: "static"})
 		ag = &state.Agents[len(state.Agents)-1]
 	}
-	if ag.Host == "" {
-		ag.Host = "192.168.31.1"
+	kind := strings.ToLower(strings.TrimSpace(orDefault(Ask("Kind (static / mobile)", orDefault(ag.Kind, "static")), orDefault(ag.Kind, "static"))))
+	if kind != "static" && kind != "mobile" {
+		PrintFail("kind должен быть static или mobile")
+		return fmt.Errorf("invalid kind")
 	}
-	if ag.Port == 0 {
-		ag.Port = 222
-	}
-	if ag.User == "" {
-		ag.User = "root"
-	}
+	ag.Kind = kind
 	if ag.Kind == "" {
 		ag.Kind = "static"
+	}
+	ag.DeployMode = "awgm"
+	ag.AWGMAuth = "router-admin"
+	ag.AWGMURL = strings.TrimRight(Ask("AWG Manager URL (KeenDNS, https://...)", ag.AWGMURL), "/")
+	if ag.AWGMURL == "" {
+		return fmt.Errorf("AWG Manager URL required")
 	}
 
 	// Telegram-топик: если ag.ThreadID == 0, пытаемся создать через Bot API.
@@ -1402,7 +1477,7 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 
 	PrintStep(3, 3, "Установить агента на роутер")
-	return actionInstallAgent(state, secrets, dl, nick)
+	return actionInstallAgentAWGM(state, secrets, dl, nick)
 }
 
 func actionRepairAgentToken(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
@@ -1424,19 +1499,23 @@ func actionRepairAgentToken(state *State, secrets *SecretStore, dl *Downloader, 
 			return fmt.Errorf("repair-agent-token cancelled")
 		}
 	}
-
-	pass, _ := secrets.Get("WG_VPS_PASS", "VPS root пароль", nil)
-	if pass == "" {
-		return fmt.Errorf("missing VPS password")
+	if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
+		PrintInfo("repair-agent-token: re-enroll через AWG Manager/KeenDNS")
+		return actionInstallAgentAWGM(state, secrets, dl, ag.Nickname)
 	}
+
 	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
 	if err != nil {
 		return err
 	}
 
 	PrintStep(1, 4, "VPS: проверить запись "+ag.Nickname+" в users DB")
-	bs, err := ConnectSSH(state.Backend.Host, portOrDefault(state.Backend.Port, 22), userOrDefault(state.Backend.User, "root"), pass, kh, "backend")
+	bs, err := connectBackendSSH(state, secrets, kh)
 	if err != nil {
+		return err
+	}
+	if err := ensureRemoteSQLite3(bs); err != nil {
+		bs.Close()
 		return err
 	}
 	exists, err := vpsUserExists(bs, ag.Nickname)
@@ -1483,7 +1562,7 @@ func actionRepairAgentToken(state *State, secrets *SecretStore, dl *Downloader, 
 	}
 
 	PrintStep(4, 4, "VPS: обновить token_hash и сохранить raw-token")
-	bs, err = ConnectSSH(state.Backend.Host, portOrDefault(state.Backend.Port, 22), userOrDefault(state.Backend.User, "root"), pass, kh, "backend")
+	bs, err = connectBackendSSH(state, secrets, kh)
 	if err != nil {
 		return err
 	}
@@ -1513,35 +1592,109 @@ func migrateBackendAgents(state *State, secrets *SecretStore, bs *SSH, nickname 
 	var failed []string
 	for i := range targets {
 		ag := targets[i]
-		tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname)
-		rawToken := secrets.GetNonInteractive(tokenEnv)
-		if rawToken == "" {
-			msg := fmt.Sprintf("%s: нет %s в env/disk-cache", ag.Nickname, tokenEnv)
+		if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
+			PrintStep(1, 1, "Re-enroll через AWG Manager/KeenDNS: "+ag.Nickname)
+			if err := actionInstallAgentAWGM(state, secrets, NewDownloader(), ag.Nickname); err != nil {
+				msg := fmt.Sprintf("%s: awg manager re-enroll: %v", ag.Nickname, err)
+				PrintWarn(msg)
+				failed = append(failed, msg)
+			}
+			continue
+		}
+		allowReEnroll := os.Getenv("WG_YES_TO_ALL") == "1"
+		tokenEnv := agentTokenEnv(ag.Nickname)
+		if secrets.GetNonInteractive(tokenEnv) == "" && !allowReEnroll {
+			PrintWarn(fmt.Sprintf("%s: нет %s в env/disk-cache", ag.Nickname, tokenEnv))
+			PrintWarn("Старый raw-токен восстановить нельзя: в DB хранится только token_hash.")
+			ans := strings.ToLower(strings.TrimSpace(Ask("создать новый токен и переписать config.yaml для "+ag.Nickname+"? [y/N]", "n")))
+			allowReEnroll = ans == "y" || ans == "yes" || ans == "д" || ans == "да"
+		}
+		plan, err := planMigrationToken(secrets, ag, allowReEnroll, generateAgentRawToken)
+		if err != nil {
+			msg := fmt.Sprintf("%s: token: %v", ag.Nickname, err)
 			PrintWarn(msg)
 			failed = append(failed, msg)
 			continue
 		}
 
 		PrintStep(1, 2, "VPS users DB: "+ag.Nickname)
-		if err := vpsUpsertMigratedUser(bs, ag, hashAgentRawToken(rawToken)); err != nil {
+		if err := vpsUpsertMigratedUser(bs, ag, hashAgentRawToken(plan.RawToken)); err != nil {
 			msg := fmt.Sprintf("%s: users DB: %v", ag.Nickname, err)
 			PrintWarn(msg)
 			failed = append(failed, msg)
 			continue
 		}
+		if plan.ReEnroll {
+			os.Setenv(plan.TokenEnv, plan.RawToken)
+			if err := saveReEnrolledAgentToken(secrets, plan); err != nil {
+				msg := fmt.Sprintf("%s: save token: %v", ag.Nickname, err)
+				PrintWarn(msg)
+				failed = append(failed, msg)
+				continue
+			}
+		}
 
 		PrintStep(2, 2, "Router config.yaml: "+ag.Nickname)
-		if err := migrateAgentBackendConfig(state, secrets, &ag, newURL, rawToken); err != nil {
+		if err := migrateAgentBackendConfig(state, secrets, &ag, newURL, plan.RawToken); err != nil {
 			msg := fmt.Sprintf("%s: router config: %v", ag.Nickname, err)
 			PrintWarn(msg)
 			failed = append(failed, msg)
 			continue
 		}
-		PrintOK(ag.Nickname + " перенесён на " + newURL)
+		if plan.ReEnroll {
+			PrintOK(ag.Nickname + " перенесён на " + newURL + " с новым agent token")
+		} else {
+			PrintOK(ag.Nickname + " перенесён на " + newURL)
+		}
 	}
 	if len(failed) > 0 {
 		return fmt.Errorf("migration incomplete: %s", strings.Join(failed, "; "))
 	}
+	return nil
+}
+
+type migrationTokenPlan struct {
+	TokenEnv string
+	RawToken string
+	ReEnroll bool
+}
+
+func agentTokenEnv(nickname string) string {
+	return "WG_AGENT_TOKEN_" + strings.ToUpper(nickname)
+}
+
+func planMigrationToken(secrets *SecretStore, ag AgentState, allowReEnroll bool, generate func() (string, error)) (migrationTokenPlan, error) {
+	tokenEnv := agentTokenEnv(ag.Nickname)
+	rawToken := ""
+	if secrets != nil {
+		rawToken = secrets.GetNonInteractive(tokenEnv)
+	}
+	if rawToken != "" {
+		return migrationTokenPlan{TokenEnv: tokenEnv, RawToken: rawToken}, nil
+	}
+	if !allowReEnroll {
+		return migrationTokenPlan{}, fmt.Errorf("нет %s в env/disk-cache", tokenEnv)
+	}
+	rawToken, err := generate()
+	if err != nil {
+		return migrationTokenPlan{}, err
+	}
+	return migrationTokenPlan{TokenEnv: tokenEnv, RawToken: rawToken, ReEnroll: true}, nil
+}
+
+func saveReEnrolledAgentToken(secrets *SecretStore, plan migrationTokenPlan) error {
+	if secrets == nil {
+		return nil
+	}
+	if err := secrets.Set(plan.TokenEnv, plan.RawToken); err != nil {
+		if errors.Is(err, ErrCacheDisabled) {
+			PrintWarn("WG_NO_SECRET_CACHE=1 — raw-token не сохранён на диск. Сохрани вручную:")
+			fmt.Printf("    %s=%s\n", plan.TokenEnv, plan.RawToken)
+			return nil
+		}
+		return err
+	}
+	PrintOK(plan.TokenEnv + " сохранён в локальный disk-кэш")
 	return nil
 }
 
@@ -1677,6 +1830,23 @@ func vpsUserExists(bs *SSH, nick string) (bool, error) {
 		return false, fmt.Errorf("sqlite3 rc=%d stderr=%q", rc, strings.TrimSpace(stderr))
 	}
 	return strings.TrimSpace(out) == "1", nil
+}
+
+func ensureRemoteSQLite3(bs *SSH) error {
+	if _, _, rc, _ := bs.Run("command -v sqlite3 >/dev/null 2>&1"); rc == 0 {
+		return nil
+	}
+	PrintWarn("sqlite3 не установлен на VPS — ставлю пакет sqlite3 для работы с users DB")
+	cmd := "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y sqlite3"
+	out, stderr, rc, err := bs.Run(cmd)
+	if err != nil {
+		return fmt.Errorf("install sqlite3 ssh transport: %w", err)
+	}
+	if rc != 0 {
+		return fmt.Errorf("install sqlite3 rc=%d stderr=%q stdout=%q", rc, strings.TrimSpace(stderr), strings.TrimSpace(out))
+	}
+	PrintOK("sqlite3 установлен")
+	return nil
 }
 
 func generateAgentRawToken() (string, error) {

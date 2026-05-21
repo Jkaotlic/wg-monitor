@@ -2,6 +2,10 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
@@ -267,6 +271,30 @@ func TestDiagnoseSSHErr_Hints(t *testing.T) {
 func TestDiagnoseSSHErr_Nil(t *testing.T) {
 	if err := diagnoseSSHErr("x:22", nil); err != nil {
 		t.Errorf("expected nil for nil input, got %v", err)
+	}
+}
+
+func TestLoadPrivateKeySignerReadsPEMKey(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "id_ed25519")
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+	if err := os.WriteFile(path, pemBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	signer, err := loadPrivateKeySigner(path, "")
+	if err != nil {
+		t.Fatalf("loadPrivateKeySigner: %v", err)
+	}
+	if signer == nil {
+		t.Fatal("expected signer")
 	}
 }
 

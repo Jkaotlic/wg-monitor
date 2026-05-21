@@ -254,6 +254,47 @@ func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T)
 	}
 }
 
+func TestPlanMigrationTokenUsesCachedToken(t *testing.T) {
+	store := &SecretStore{disk: map[string]string{
+		"WG_AGENT_TOKEN_TESTKEEN": strings.Repeat("a", 64),
+	}}
+	plan, err := planMigrationToken(store, AgentState{Nickname: "testkeen"}, false, func() (string, error) {
+		t.Fatal("generator should not be called when cached token exists")
+		return "", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.RawToken != strings.Repeat("a", 64) || plan.ReEnroll {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+}
+
+func TestPlanMigrationTokenCanReEnrollWhenTokenIsLost(t *testing.T) {
+	store := &SecretStore{disk: map[string]string{}}
+	plan, err := planMigrationToken(store, AgentState{Nickname: "testkeen"}, true, func() (string, error) {
+		return strings.Repeat("b", 64), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.TokenEnv != "WG_AGENT_TOKEN_TESTKEEN" {
+		t.Fatalf("TokenEnv = %q", plan.TokenEnv)
+	}
+	if plan.RawToken != strings.Repeat("b", 64) || !plan.ReEnroll {
+		t.Fatalf("unexpected plan: %+v", plan)
+	}
+}
+
+func TestPlanMigrationTokenFailsWhenTokenIsLostAndReEnrollDisabled(t *testing.T) {
+	_, err := planMigrationToken(&SecretStore{disk: map[string]string{}}, AgentState{Nickname: "testkeen"}, false, func() (string, error) {
+		return strings.Repeat("b", 64), nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "WG_AGENT_TOKEN_TESTKEEN") {
+		t.Fatalf("expected missing-token error, got %v", err)
+	}
+}
+
 // These tests exercise the pure-logic helper diagnosisFromReport, not
 // diagnoseUnreachable itself (latter does I/O).
 

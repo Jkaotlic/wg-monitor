@@ -78,17 +78,31 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 				return actionRepairAgentToken(state, secrets, dl, "")
 			})
 		case "10":
-			if err := actionNetfix(state, netfixOptions{}); err != nil {
-				PrintFail("netfix failed: " + err.Error())
+			if os.Getenv("WG_LEGACY_ROUTER_SSH") == "1" {
+				if err := actionNetfix(state, netfixOptions{}); err != nil {
+					PrintFail("netfix failed: " + err.Error())
+				}
+			} else {
+				runActionAndSave(state, statePath, secrets, func() error {
+					return actionMigrateBackend(state, secrets, "")
+				})
 			}
 		case "11":
+			if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
+				PrintFail("Не понял. Введи 1-10 или Q.")
+				break
+			}
 			runActionAndSave(state, statePath, secrets, func() error {
 				return actionMigrateBackend(state, secrets, "")
 			})
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1–11 или Q.")
+			if os.Getenv("WG_LEGACY_ROUTER_SSH") == "1" {
+				PrintFail("Не понял. Введи 1-11 или Q.")
+			} else {
+				PrintFail("Не понял. Введи 1-10 или Q.")
+			}
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -120,15 +134,19 @@ func printMenuItems(state *State) {
 	} else {
 		fmt.Println("  [2] Обновить компоненты        " + Colorize("(проверка релиза + выбор что обновить)", ColorDim))
 	}
-	fmt.Println("  [3] Добавить/установить роутер " + Colorize("(DB + TG-топик + агент на роутер)", ColorDim))
+	fmt.Println("  [3] Добавить роутер через AWG Manager/KeenDNS " + Colorize("(enrollment на VPS + Entware bootstrap)", ColorDim))
 	fmt.Println("  [4] Удалить агента             " + Colorize("(снести агент с роутера)", ColorDim))
 	fmt.Println("  [5] Проверить состояние        " + Colorize("(Doctor: local + VPS + каждый агент)", ColorDim))
 	fmt.Println("  [6] Синхронизация с VPS        " + Colorize("(подтянуть список роутеров с бэкенда)", ColorDim))
 	fmt.Println("  [7] Открыть wizard.toml в редакторе")
 	fmt.Println("  [8] Забыть known_hosts alias   " + Colorize("(если физически заменил роутер)", ColorDim))
-	fmt.Println("  [9] Восстановить токен агента " + Colorize("(новый token_hash + переустановка config.yaml)", ColorDim))
-	fmt.Println("  [10] Netfix маршрута          " + Colorize("(подсказать/применить /32 route через VPN)", ColorDim))
-	fmt.Println("  [11] Переезд backend/VPS      " + Colorize("(восстановить users DB + перенаправить агентов)", ColorDim))
+	fmt.Println("  [9] Re-enroll через AWG Manager     " + Colorize("(новый agent token + Entware bootstrap)", ColorDim))
+	if os.Getenv("WG_LEGACY_ROUTER_SSH") == "1" {
+		fmt.Println("  [10] Legacy Netfix route        " + Colorize("(только recovery для старого SSH-деплоя)", ColorDim))
+		fmt.Println("  [11] Переезд backend/VPS      " + Colorize("(re-enroll агентов через AWG Manager)", ColorDim))
+	} else {
+		fmt.Println("  [10] Переезд backend/VPS      " + Colorize("(re-enroll агентов через AWG Manager)", ColorDim))
+	}
 	fmt.Println("  [Q] Выход")
 	fmt.Println()
 }

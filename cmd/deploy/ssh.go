@@ -29,6 +29,10 @@ type SSH struct {
 // (e.g. 192.168.31.1 over rotating SSTP tunnels) don't collide. Empty alias
 // falls back to host:port for backward compatibility.
 func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, alias string) (*SSH, error) {
+	return ConnectSSHWithAuth(host, port, user, []ssh.AuthMethod{ssh.Password(password)}, kh, alias)
+}
+
+func ConnectSSHWithAuth(host string, port int, user string, auth []ssh.AuthMethod, kh *KnownHosts, alias string) (*SSH, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	hkcb := kh.HostKeyCallback
 	if alias != "" {
@@ -36,7 +40,7 @@ func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, al
 	}
 	cfg := &ssh.ClientConfig{
 		User:            user,
-		Auth:            []ssh.AuthMethod{ssh.Password(password)},
+		Auth:            auth,
 		HostKeyCallback: hkcb,
 		Timeout:         10 * time.Second,
 	}
@@ -45,6 +49,25 @@ func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, al
 		return nil, diagnoseSSHErr(addr, err)
 	}
 	return &SSH{client: c, host: addr}, nil
+}
+
+func loadPrivateKeySigner(path, passphrase string) (ssh.Signer, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read private key %s: %w", path, err)
+	}
+	if passphrase != "" {
+		signer, err := ssh.ParsePrivateKeyWithPassphrase(data, []byte(passphrase))
+		if err != nil {
+			return nil, fmt.Errorf("parse private key %s: %w", path, err)
+		}
+		return signer, nil
+	}
+	signer, err := ssh.ParsePrivateKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("parse private key %s: %w", path, err)
+	}
+	return signer, nil
 }
 
 func ConnectSSHInsecureCaptureKey(host string, port int, user, password string) (*SSH, ssh.PublicKey, error) {

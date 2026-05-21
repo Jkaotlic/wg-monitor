@@ -268,6 +268,7 @@ func NewMux(d Deps) http.Handler {
 	if d.WizardToken != "" {
 		wizAuth := WizardAuthMiddleware(d.WizardToken, d.Logger)
 		mux.Handle("GET /v1/wizard/agents", reqID(wizAuth(wizardListAgentsHandler(d))))
+		mux.Handle("POST /v1/wizard/enrollments", reqID(wizAuth(wizardEnrollmentHandler(d))))
 		mux.Handle("PUT /v1/wizard/agents/{nickname}", reqID(wizAuth(wizardPutAgentHandler(d))))
 		mux.Handle("POST /v1/wizard/agents/{nickname}/deploy", reqID(wizAuth(wizardDeployHandler(d))))
 		mux.Handle("GET /v1/wizard/cmd/{cmd_id}", reqID(wizAuth(wizardCmdResultHandler(d))))

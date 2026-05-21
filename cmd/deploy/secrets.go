@@ -366,7 +366,11 @@ func secretStatusRows(state *State) []secretStatusRow {
 	}
 
 	if state.Backend.Host != "" {
-		add("WG_VPS_PASS", "VPS SSH password", true)
+		if normalizeBackendSSHAuth(state.Backend.SSHAuth) == backendSSHAuthKey {
+			add("WG_VPS_KEY_PASSPHRASE", "VPS SSH key passphrase", false)
+		} else {
+			add("WG_VPS_PASS", "VPS SSH password", true)
+		}
 		add("WG_BOT_TOKEN", "Telegram bot token", false)
 	}
 	if state.Backend.Domain != "" || len(state.Agents) > 0 {
@@ -378,6 +382,10 @@ func secretStatusRows(state *State) []secretStatusRow {
 	for _, ag := range state.Agents {
 		suffix := strings.ToUpper(ag.Nickname)
 		add("WG_AGENT_TOKEN_"+suffix, "agent token for "+ag.Nickname, true)
+		if strings.EqualFold(ag.DeployMode, "awgm") || ag.AWGMURL != "" {
+			add("WG_AWGM_LOGIN_"+suffix, "AWG Manager login for "+ag.Nickname, true)
+			add("WG_AWGM_PASS_"+suffix, "AWG Manager password for "+ag.Nickname, true)
+		}
 		add("WG_KEENETIC_PASS_"+suffix, "router SSH password for "+ag.Nickname, false)
 	}
 

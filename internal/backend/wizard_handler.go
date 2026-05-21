@@ -72,6 +72,18 @@ type wizardAgentList struct {
 	Agents []wizardAgent `json:"agents"`
 }
 
+type wizardEnrollmentReq struct {
+	Nickname string `json:"nickname"`
+	Kind     string `json:"kind"`
+	ThreadID int64  `json:"thread_id,omitempty"`
+}
+
+type wizardEnrollmentResp struct {
+	Nickname   string `json:"nickname"`
+	BackendURL string `json:"backend_url"`
+	RawToken   string `json:"raw_token"`
+}
+
 // wizardListAgentsHandler returns the full fleet as the wizard sees it.
 // Read-only; safe to call as often as the wizard wants.
 func wizardListAgentsHandler(d Deps) http.HandlerFunc {
@@ -128,6 +140,85 @@ func wizardListAgentsHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(out)
 	}
+}
+
+// wizardEnrollmentHandler creates or rotates the per-agent token that a fresh
+// Entware bootstrap writes to /opt/etc/wg-monitor/config.yaml.
+func wizardEnrollmentHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req wizardEnrollmentReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+			return
+		}
+		req.Nickname = strings.TrimSpace(req.Nickname)
+		if req.Nickname == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
+			return
+		}
+		req.Kind = strings.TrimSpace(req.Kind)
+		if req.Kind == "" {
+			req.Kind = db.KindStatic
+		}
+		if !db.IsValidKind(req.Kind) {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "kind must be static or mobile")
+			return
+		}
+		rawToken, err := newAgentEnrollmentToken()
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "token gen: "+err.Error())
+			return
+		}
+		if _, err := d.DB.Users().UpsertEnrollment(req.Nickname, rawToken, req.Kind, req.ThreadID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(wizardEnrollmentResp{
+			Nickname:   req.Nickname,
+			BackendURL: wizardBackendURL(r),
+			RawToken:   rawToken,
+		})
+	}
+}
+
+func newAgentEnrollmentToken() (string, error) {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b[:]), nil
+}
+
+func wizardBackendURL(r *http.Request) string {
+	proto := firstForwardedValue(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		proto = "https"
+		if r.TLS != nil {
+			proto = "https"
+		}
+	}
+	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	return proto + "://" + host
+}
+
+func firstForwardedValue(v string) string {
+	v = strings.TrimSpace(v)
+	if i := strings.IndexByte(v, ','); i >= 0 {
+		v = strings.TrimSpace(v[:i])
+	}
+	return v
 }
 
 type wizardPutAgentReq struct {

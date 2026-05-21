@@ -21,3 +21,10 @@ func TestColorize_WithColor(t *testing.T) {
 		t.Errorf("expected ANSI green wrapping, got %q", got)
 	}
 }
+
+func TestCleanPromptDefaultLeakTrimsTrailingBracket(t *testing.T) {
+	got := cleanPromptDefaultLeak("wgmonitor.example.com]")
+	if got != "wgmonitor.example.com" {
+		t.Fatalf("got %q", got)
+	}
+}
