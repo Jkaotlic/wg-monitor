@@ -44,7 +44,7 @@ func AcquirePIDLock() (release func(), err error) {
 		_ = f.Close()
 		return func() { _ = os.Remove(path) }, nil
 	}
-	if !os.IsExist(err) {
+	if !lockFileAlreadyExists(path, err) {
 		return nil, err
 	}
 
@@ -71,9 +71,43 @@ func AcquirePIDLock() (release func(), err error) {
 	return forcePIDLockTakeover(path, mypid)
 }
 
+func lockFileAlreadyExists(path string, err error) bool {
+	if os.IsExist(err) {
+		return true
+	}
+	if os.IsPermission(err) {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return true
+		}
+	}
+	return false
+}
+
 func forcePIDLockTakeover(path string, mypid int) (func(), error) {
-	if err := os.WriteFile(path, []byte(fmt.Sprintf("%d\n", mypid)), 0o600); err != nil {
-		return nil, err
+	if err := writePIDLockFile(path, mypid, false); err != nil {
+		if removeErr := os.Remove(path); removeErr != nil {
+			return nil, err
+		}
+		if err := writePIDLockFile(path, mypid, true); err != nil {
+			return nil, err
+		}
 	}
 	return func() { _ = os.Remove(path) }, nil
+}
+
+func writePIDLockFile(path string, mypid int, exclusive bool) error {
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if exclusive {
+		flags |= os.O_EXCL
+	}
+	f, err := os.OpenFile(path, flags, 0o600)
+	if err != nil {
+		return err
+	}
+	_, werr := fmt.Fprintf(f, "%d\n", mypid)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }

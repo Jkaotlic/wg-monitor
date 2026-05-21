@@ -1,0 +1,158 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
+	items := mainMenuItems(false, &State{})
+	if len(items) != 7 {
+		t.Fatalf("len(mainMenuItems)=%d, want 7: %+v", len(items), items)
+	}
+	text := renderMenuItems(items, "Q", "Выход")
+	for _, want := range []string{
+		"[1] VPS / backend",
+		"[2] Обновить компоненты",
+		"[3] Роутеры",
+		"[4] Переезд на новый VPS",
+		"[5] Doctor",
+		"[6] Синхронизация с VPS",
+		"[7] Сервис",
+		"когда нажимать:",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("main menu missing %q:\n%s", want, text)
+		}
+	}
+	for _, oldTopLevel := range []string{
+		"Re-enroll через AWG Manager",
+		"Открыть wizard.toml",
+		"Забыть known_hosts",
+		"Удалить агента",
+	} {
+		if strings.Contains(text, oldTopLevel) {
+			t.Fatalf("old top-level action %q leaked into main menu:\n%s", oldTopLevel, text)
+		}
+	}
+}
+
+func TestRouterMenuGroupsRouterActions(t *testing.T) {
+	text := renderMenuItems(routerMenuItems(), "B", "Назад")
+	for _, want := range []string{
+		"[1] Добавить новый",
+		"[2] Re-enroll / переустановить",
+		"[3] Удалить агента",
+		"[4] Показать роутеры",
+		"AWG Manager/KeenDNS",
+		"новый token",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("router menu missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestServiceMenuHidesLegacyUnlessEnabled(t *testing.T) {
+	plain := renderMenuItems(serviceMenuItems(false), "B", "Назад")
+	if strings.Contains(plain, "Legacy Netfix") {
+		t.Fatalf("legacy item visible without flag:\n%s", plain)
+	}
+	legacy := renderMenuItems(serviceMenuItems(true), "B", "Назад")
+	if !strings.Contains(legacy, "Legacy Netfix") {
+		t.Fatalf("legacy item missing with flag:\n%s", legacy)
+	}
+}
+
+func TestMenuHeaderBoxKeepsVersionInsideBorder(t *testing.T) {
+	line := boxSplit("WG MONITOR // Deploy Console", "v0.13.0-rc-super-long")
+	if got := len([]rune(line)); got != menuBoxInnerWidth+2 {
+		t.Fatalf("boxSplit width=%d, want %d: %q", got, menuBoxInnerWidth+2, line)
+	}
+	if !strings.HasPrefix(line, "║") || !strings.HasSuffix(line, "║") {
+		t.Fatalf("boxSplit lost borders: %q", line)
+	}
+	if !strings.Contains(line, "v0.13.0-rc-super-long") {
+		t.Fatalf("boxSplit lost version: %q", line)
+	}
+}
+
+func TestMenuHeaderBoxTruncatesLongRows(t *testing.T) {
+	line := boxLine("VPS    83.171.224.125  very-long-domain-name-that-would-otherwise-break-the-box.example")
+	if got := len([]rune(line)); got != menuBoxInnerWidth+2 {
+		t.Fatalf("boxLine width=%d, want %d: %q", got, menuBoxInnerWidth+2, line)
+	}
+	if !strings.Contains(line, "...") {
+		t.Fatalf("boxLine did not truncate long content: %q", line)
+	}
+}
+
+func TestStatusRowsKeepDeployVersionAndTime(t *testing.T) {
+	state := &State{
+		Backend: BackendState{
+			Host: "83.171.224.125", Domain: "wgmonitor.example", LastDeployedVersion: "v0.13.0-rc12", LastDeploy: "2026-05-21T12:34:56Z",
+		},
+		Agents: []AgentState{{
+			Nickname: "alyaba", Host: "192.168.31.1", Port: 22, LastDeployedVersion: "v0.13.0-rc12", LastDeploy: "2026-05-21T12:40:00Z",
+		}},
+	}
+
+	rows := menuStatusRows(state)
+	joined := strings.Join(rows, "\n")
+	for _, want := range []string{
+		"VPS    83.171.224.125  wgmonitor.example",
+		"installed v0.13.0-rc12 at 2026-05-21 12:34",
+		"v0.13.0-rc12",
+		"Router 192.168.31.1:22  alyaba",
+		"installed v0.13.0-rc12 at 2026-05-21 12:40",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("status rows missing %q:\n%s", want, joined)
+		}
+	}
+	if got := len(rows); got != 4 {
+		t.Fatalf("len(status rows)=%d, want 4: %#v", got, rows)
+	}
+}
+
+func TestBoxLinesUseTerminalCellWidth(t *testing.T) {
+	line := boxLine("Router 192.168.31.1:222  тестроутер | v0.13.0-rc12 | 2026-05-21 12:40")
+	if got := terminalCells(line); got != menuBoxInnerWidth+2 {
+		t.Fatalf("terminal width=%d, want %d: %q", got, menuBoxInnerWidth+2, line)
+	}
+	if !strings.HasPrefix(line, "║") || !strings.HasSuffix(line, "║") {
+		t.Fatalf("boxLine lost borders: %q", line)
+	}
+}
+
+func TestBoxLinePreservesStatusIndent(t *testing.T) {
+	line := boxLine("       installed v0.13.0-rc12 at 2026-05-21 12:40")
+	if !strings.Contains(line, "║        installed") {
+		t.Fatalf("boxLine stripped status indent: %q", line)
+	}
+}
+
+func TestInstalledStatusRowsAreDetectedForHighlight(t *testing.T) {
+	if !isInstalledStatusRow("       installed v0.13.0-rc12 at 2026-05-21 12:40") {
+		t.Fatal("installed status row should be highlighted")
+	}
+	if isInstalledStatusRow("Router 192.168.31.1:222  testkeen") {
+		t.Fatal("router identity row should not be highlighted")
+	}
+}
+
+func TestShouldWarnStartupSyncOnlyForAuthFailures(t *testing.T) {
+	if !shouldWarnStartupSync(errString("GET /v1/wizard/agents: HTTP 401")) {
+		t.Fatal("expected auth failure to warn")
+	}
+	if shouldWarnStartupSync(errString("context deadline exceeded")) {
+		t.Fatal("startup timeout should silently fall back to local cache")
+	}
+	if shouldWarnStartupSync(errString("lookup wgmonitor.example: no such host")) {
+		t.Fatal("startup DNS flap should silently fall back to local cache")
+	}
+}
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

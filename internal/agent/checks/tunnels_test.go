@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 )
@@ -196,6 +197,40 @@ func TestTunnelsCheck_NoRoutes_OmitsFields(t *testing.T) {
 		}
 		if _, ok := c.Details["routes_static"]; ok {
 			t.Errorf("routes_static should be omitted when zero; got: %v", c.Details["routes_static"])
+		}
+		return
+	}
+	t.Fatalf("tunnel_awg11 check not emitted; got: %+v", out)
+}
+
+func TestTunnelsCheck_PingCheckDisabledDoesNotFailLiveTunnel(t *testing.T) {
+	handshake := time.Now().UTC().Add(-45 * time.Second).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg11","name":"primary","type":"awg","status":"running","enabled":true,"interfaceName":"nwg1","lastHandshake":"` + handshake + `","pingCheck":{"status":"disabled","failCount":0,"failThreshold":3}}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":false,"tunnels":[
+				{"tunnelId":"awg11","tunnelName":"primary","enabled":false,"status":"disabled","method":"icmp","failCount":0,"failThreshold":3,"tunnelRunning":true}
+			]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	chk := TunnelsCheck{Client: awgmgr.New(srv.URL)}
+	out := chk.Run(context.Background(), Deps{})
+	for _, c := range out {
+		if c.Name != "tunnel_awg11" {
+			continue
+		}
+		if c.Status != "ok" {
+			t.Fatalf("pingcheck disabled must not fail a live tunnel: %+v", c)
 		}
 		return
 	}

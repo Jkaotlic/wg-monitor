@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -58,17 +59,39 @@ type VPSClient struct {
 // state is incomplete (no domain or no token) — callers should treat nil
 // as "sync disabled, skip silently".
 func NewVPSClient(domain, token string) *VPSClient {
+	return NewVPSClientWithTimeout(domain, token, 10*time.Second)
+}
+
+func NewVPSClientWithTimeout(domain, token string, timeout time.Duration) *VPSClient {
+	return NewVPSClientWithTimeoutAndDialHost(domain, token, timeout, "")
+}
+
+func NewVPSClientWithTimeoutAndDialHost(domain, token string, timeout time.Duration, dialHost string) *VPSClient {
 	if domain == "" || token == "" {
 		return nil
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
 	}
 	base := domain
 	if !strings.Contains(base, "://") {
 		base = "https://" + base
 	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if dialHost = strings.TrimSpace(dialHost); dialHost != "" {
+		dialer := &net.Dialer{Timeout: timeout}
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return dialer.DialContext(ctx, network, addr)
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(dialHost, port))
+		}
+	}
 	return &VPSClient{
 		BaseURL: strings.TrimRight(base, "/"),
 		Token:   token,
-		HTTP:    &http.Client{Timeout: 10 * time.Second},
+		HTTP:    &http.Client{Timeout: timeout, Transport: transport},
 	}
 }
 
