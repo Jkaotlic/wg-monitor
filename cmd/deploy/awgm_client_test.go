@@ -96,6 +96,28 @@ func TestAWGMClientTerminalBusy(t *testing.T) {
 	}
 }
 
+func TestAWGMTerminalPromptAction(t *testing.T) {
+	tests := []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "login", text: "Keenetic login: ", want: "login"},
+		{name: "password", text: "Password: ", want: "password"},
+		{name: "combined-prefers-password", text: "Keenetic login: root\nPassword: ", want: "password"},
+		{name: "shell-root", text: "root@keenetic:~# ", want: "shell"},
+		{name: "shell-dollar", text: "admin@host:~$ ", want: "shell"},
+		{name: "unknown", text: "Welcome\n", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := awgmTerminalPromptAction(tt.text); got != tt.want {
+				t.Fatalf("awgmTerminalPromptAction(%q) = %q, want %q", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeAWGMURLDefaultsToHTTPS(t *testing.T) {
 	if got := normalizeAWGMURL("awg.test.example/"); got != "https://awg.test.example" {
 		t.Fatalf("normalizeAWGMURL without scheme = %q", got)
