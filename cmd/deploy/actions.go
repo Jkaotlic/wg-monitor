@@ -758,7 +758,9 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		ag.Kind = "static"
 	}
 	if ag.AWGMURL == "" {
-		ag.AWGMURL = strings.TrimRight(Ask("AWG Manager URL (KeenDNS, https://...)", ag.AWGMURL), "/")
+		ag.AWGMURL = normalizeAWGMURL(Ask("AWG Manager URL (KeenDNS, https://...)", ag.AWGMURL))
+	} else {
+		ag.AWGMURL = normalizeAWGMURL(ag.AWGMURL)
 	}
 	if ag.AWGMURL == "" {
 		return fmt.Errorf("AWG Manager URL required")
@@ -1456,7 +1458,7 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 	}
 	ag.DeployMode = "awgm"
 	ag.AWGMAuth = "router-admin"
-	ag.AWGMURL = strings.TrimRight(Ask("AWG Manager URL (KeenDNS, https://...)", ag.AWGMURL), "/")
+	ag.AWGMURL = normalizeAWGMURL(Ask("AWG Manager URL (KeenDNS, https://...)", ag.AWGMURL))
 	if ag.AWGMURL == "" {
 		return fmt.Errorf("AWG Manager URL required")
 	}

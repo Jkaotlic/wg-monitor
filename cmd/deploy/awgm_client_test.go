@@ -58,3 +58,12 @@ func TestAWGMClientTerminalBusy(t *testing.T) {
 		t.Fatalf("expected busy terminal: %+v", st)
 	}
 }
+
+func TestNormalizeAWGMURLDefaultsToHTTPS(t *testing.T) {
+	if got := normalizeAWGMURL("awg.test.example/"); got != "https://awg.test.example" {
+		t.Fatalf("normalizeAWGMURL without scheme = %q", got)
+	}
+	if got := normalizeAWGMURL("http://127.0.0.1:2222/"); got != "http://127.0.0.1:2222" {
+		t.Fatalf("normalizeAWGMURL with scheme = %q", got)
+	}
+}
