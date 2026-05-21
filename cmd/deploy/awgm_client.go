@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -155,6 +157,10 @@ func (c *AWGMClient) TerminalStop(ctx context.Context) error {
 }
 
 func (c *AWGMClient) RunTerminalScript(ctx context.Context, script string) (TerminalRunResult, error) {
+	return c.RunTerminalScriptWithLogin(ctx, script, "", "")
+}
+
+func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, loginUser, loginPassword string) (TerminalRunResult, error) {
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return TerminalRunResult{}, err
 	}
@@ -180,6 +186,11 @@ func (c *AWGMClient) RunTerminalScript(ctx context.Context, script string) (Term
 	}
 	defer ws.Close()
 
+	var out strings.Builder
+	if err := awgmLoginTerminalIfPrompt(ctx, ws, loginUser, loginPassword, &out); err != nil {
+		return TerminalRunResult{Output: out.String()}, err
+	}
+
 	const marker = "__WG_MONITOR_DONE__"
 	payload := "cat >/tmp/wg-monitor-bootstrap.sh <<'WG_MONITOR_BOOTSTRAP'\n" +
 		script + "\nWG_MONITOR_BOOTSTRAP\n" +
@@ -190,7 +201,6 @@ func (c *AWGMClient) RunTerminalScript(ctx context.Context, script string) (Term
 		return TerminalRunResult{}, fmt.Errorf("awgm terminal send: %w", err)
 	}
 
-	var out strings.Builder
 	for {
 		select {
 		case <-ctx.Done():
@@ -211,6 +221,70 @@ func (c *AWGMClient) RunTerminalScript(ctx context.Context, script string) (Term
 			return TerminalRunResult{Output: out.String()}, fmt.Errorf("bootstrap script failed: %s", rcText)
 		}
 	}
+}
+
+func awgmLoginTerminalIfPrompt(ctx context.Context, ws *websocket.Conn, loginUser, loginPassword string, out *strings.Builder) error {
+	deadline := time.Now().Add(6 * time.Second)
+	sentUser := false
+	sentPassword := false
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		_ = ws.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
+		var msg string
+		err := websocket.Message.Receive(ws, &msg)
+		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				if !sentUser && !sentPassword {
+					_ = ws.SetReadDeadline(time.Time{})
+					return nil
+				}
+				continue
+			}
+			return fmt.Errorf("awgm terminal auth receive: %w", err)
+		}
+		text := stripTerminalFramePrefix(msg)
+		if out != nil {
+			out.WriteString(text)
+		}
+		action := awgmTerminalPromptAction(text)
+		if action == "" && out != nil {
+			action = awgmTerminalPromptAction(out.String())
+		}
+		switch action {
+		case "login":
+			if sentUser {
+				continue
+			}
+			if strings.TrimSpace(loginUser) == "" {
+				return fmt.Errorf("awgm terminal asks for login but terminal user is empty")
+			}
+			if err := websocket.Message.Send(ws, "0"+loginUser+"\n"); err != nil {
+				return fmt.Errorf("awgm terminal auth user: %w", err)
+			}
+			sentUser = true
+		case "password":
+			if sentPassword {
+				continue
+			}
+			if loginPassword == "" {
+				return fmt.Errorf("awgm terminal asks for password but router root password is empty")
+			}
+			if err := websocket.Message.Send(ws, "0"+loginPassword+"\n"); err != nil {
+				return fmt.Errorf("awgm terminal auth password: %w", err)
+			}
+			sentPassword = true
+		case "shell":
+			_ = ws.SetReadDeadline(time.Time{})
+			return nil
+		}
+	}
+	_ = ws.SetReadDeadline(time.Time{})
+	return nil
 }
 
 func (c *AWGMClient) get(ctx context.Context, path string, out any) error {
@@ -314,6 +388,20 @@ func stripTerminalFramePrefix(msg string) string {
 		return msg[1:]
 	}
 	return msg
+}
+
+func awgmTerminalPromptAction(text string) string {
+	s := strings.ToLower(strings.TrimSpace(text))
+	switch {
+	case strings.Contains(s, "password:"):
+		return "password"
+	case strings.Contains(s, "login:"):
+		return "login"
+	case strings.HasSuffix(s, "#") || strings.HasSuffix(s, "$"):
+		return "shell"
+	default:
+		return ""
+	}
 }
 
 func awgmSnippet(b []byte) string {

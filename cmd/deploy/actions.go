@@ -806,6 +806,8 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	passEnv := "WG_AWGM_PASS_" + strings.ToUpper(ag.Nickname)
 	login, _ := secrets.Get(loginEnv, "AWG Manager login for "+ag.Nickname, nil)
 	pass, _ := secrets.Get(passEnv, "AWG Manager password for "+ag.Nickname, nil)
+	terminalUser := userOrDefault(ag.User, "root")
+	terminalPass := routerRootPasswordForAgent(secrets, ag.Nickname)
 
 	PrintStep(2, 5, "AWG Manager: login + system info")
 	awgm := NewAWGMClient(ag.AWGMURL, login, pass)
@@ -873,7 +875,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			PrintWarn("AWG Manager terminal stop: " + err.Error())
 		}
 	}()
-	res, err := awgm.RunTerminalScript(context.Background(), script)
+	res, err := awgm.RunTerminalScriptWithLogin(context.Background(), script, terminalUser, terminalPass)
 	if err != nil {
 		if strings.TrimSpace(res.Output) != "" {
 			PrintInfo(res.Output)
@@ -892,6 +894,20 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	}
 	PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
 	return nil
+}
+
+func routerRootPasswordForAgent(secrets *SecretStore, nickname string) string {
+	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(nickname)
+	home, _ := os.UserHomeDir()
+	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
+	pass, _ := secrets.Get(envName, "Entware terminal root password for "+nickname, &MemoryFileLookup{
+		Path:    memFile,
+		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
+	})
+	if pass == "" {
+		pass, _ = secrets.Get("WG_KEENETIC_PASS", "Entware terminal root password", nil)
+	}
+	return pass
 }
 
 func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
