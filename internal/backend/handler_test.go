@@ -550,6 +550,43 @@ func TestCmdResult_DispatchesRoutesNotifier(t *testing.T) {
 	}
 }
 
+func TestCmdResult_AcceptsLargeRouteSnapshot(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	rn := &fakeRoutesNotifier{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "route_status", ChatID: 1, MessageID: 2}}
+	mux := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		Dispatcher:     &fakeDisp{},
+		CommandSink:    sink,
+		RoutesNotifier: rn,
+		Thresholds:     state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	largeSnapshot := `{"tunnels":[],"rules":[{"id":"hr:large","name":"large","kind":"dns","targets":["` +
+		strings.Repeat("example.com,", 3000) + `"]}]}`
+	body, _ := json.Marshal(wire.CommandResult{ID: "x", Status: "ok", Output: largeSnapshot, DurationMs: 1})
+	if len(body) <= 16*1024 {
+		t.Fatalf("test payload=%d, want larger than old 16 KiB limit", len(body))
+	}
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("large route_status result status: %d", resp.StatusCode)
+	}
+}
+
 type fakeMaintNotifier struct {
 	mu     sync.Mutex
 	called int
