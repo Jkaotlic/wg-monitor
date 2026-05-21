@@ -38,6 +38,43 @@ func TestAWGMClientLoginStoresSessionCookie(t *testing.T) {
 	}
 }
 
+func TestAWGMClientSendsBasicAuthToProtectedWebLayer(t *testing.T) {
+	var sawLoginBasic bool
+	var sawInfoBasic bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "admin" || pass != "secret" {
+			w.Header().Set("WWW-Authenticate", `Basic realm="awg"`)
+			http.Error(w, "basic auth required", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/auth/login":
+			sawLoginBasic = true
+			http.SetCookie(w, &http.Cookie{Name: "awg_session", Value: "s1", Path: "/"})
+			_, _ = w.Write([]byte(`{"success":true}`))
+		case "/api/system/info":
+			sawInfoBasic = true
+			_, _ = w.Write([]byte(`{"success":true,"data":{"goArch":"arm64","routerIP":"192.168.1.1"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewAWGMClient(srv.URL, "admin", "secret")
+	c.HTTP = srv.Client()
+	if err := c.Login(context.Background()); err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if _, err := c.SystemInfo(context.Background()); err != nil {
+		t.Fatalf("SystemInfo: %v", err)
+	}
+	if !sawLoginBasic || !sawInfoBasic {
+		t.Fatalf("basic auth not observed on login=%v info=%v", sawLoginBasic, sawInfoBasic)
+	}
+}
+
 func TestAWGMClientTerminalBusy(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/terminal/status" {

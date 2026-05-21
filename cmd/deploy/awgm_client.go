@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -84,6 +85,7 @@ func (c *AWGMClient) Login(ctx context.Context) error {
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	c.setBasicAuth(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("awgm login: %w", err)
@@ -166,6 +168,9 @@ func (c *AWGMClient) RunTerminalScript(ctx context.Context, script string) (Term
 	}
 	cfg.Protocol = []string{"tty"}
 	cfg.Header.Set("X-Requested-With", "XMLHttpRequest")
+	if hdr := c.basicAuthHeader(); hdr != "" {
+		cfg.Header.Set("Authorization", hdr)
+	}
 	if ck := c.cookie(); ck != nil {
 		cfg.Header.Set("Cookie", ck.String())
 	}
@@ -226,6 +231,7 @@ func (c *AWGMClient) doJSON(ctx context.Context, method, path string, body io.Re
 	}
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("Accept", "application/json")
+	c.setBasicAuth(req)
 	if ck := c.cookie(); ck != nil {
 		req.AddCookie(ck)
 	}
@@ -267,6 +273,21 @@ func (c *AWGMClient) cookie() *http.Cookie {
 	}
 	cp := *c.sessionCookie
 	return &cp
+}
+
+func (c *AWGMClient) setBasicAuth(req *http.Request) {
+	if c.LoginID == "" && c.Password == "" {
+		return
+	}
+	req.SetBasicAuth(c.LoginID, c.Password)
+}
+
+func (c *AWGMClient) basicAuthHeader() string {
+	if c.LoginID == "" && c.Password == "" {
+		return ""
+	}
+	token := base64.StdEncoding.EncodeToString([]byte(c.LoginID + ":" + c.Password))
+	return "Basic " + token
 }
 
 func (c *AWGMClient) wsURL(path string) (string, error) {
