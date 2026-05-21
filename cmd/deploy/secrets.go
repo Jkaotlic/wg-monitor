@@ -383,8 +383,9 @@ func secretStatusRows(state *State) []secretStatusRow {
 		suffix := strings.ToUpper(ag.Nickname)
 		add("WG_AGENT_TOKEN_"+suffix, "agent token for "+ag.Nickname, true)
 		if strings.EqualFold(ag.DeployMode, "awgm") || ag.AWGMURL != "" {
-			add("WG_AWGM_LOGIN_"+suffix, "AWG Manager login for "+ag.Nickname, true)
-			add("WG_AWGM_PASS_"+suffix, "AWG Manager password for "+ag.Nickname, true)
+			add("WG_AWGM_API_KEY_"+suffix, "AWG Manager API key for "+ag.Nickname, true)
+			add("WG_AWGM_LOGIN_"+suffix, "AWG Manager login fallback for "+ag.Nickname, false)
+			add("WG_AWGM_PASS_"+suffix, "AWG Manager password fallback for "+ag.Nickname, false)
 		}
 		add("WG_KEENETIC_PASS_"+suffix, "router SSH password for "+ag.Nickname, false)
 	}

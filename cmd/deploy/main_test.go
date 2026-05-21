@@ -52,3 +52,31 @@ func TestSecretStatusRowsIncludeBackendAndAgents(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretStatusRowsPreferAWGMAPIKey(t *testing.T) {
+	rows := secretStatusRows(&State{
+		Agents: []AgentState{{
+			Nickname:   "home",
+			DeployMode: "awgm",
+			AWGMURL:    "https://awg.home.example",
+		}},
+	})
+	got := map[string]bool{}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		got[row.Name] = row.Required
+		seen[row.Name] = true
+	}
+	for name, required := range map[string]bool{
+		"WG_AWGM_API_KEY_HOME": true,
+		"WG_AWGM_LOGIN_HOME":   false,
+		"WG_AWGM_PASS_HOME":    false,
+	} {
+		if !seen[name] {
+			t.Fatalf("%s missing; rows=%+v", name, rows)
+		}
+		if got[name] != required {
+			t.Fatalf("%s required=%v, want %v; rows=%+v", name, got[name], required, rows)
+		}
+	}
+}
