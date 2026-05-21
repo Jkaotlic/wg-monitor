@@ -121,3 +121,42 @@ func TestVPSClientCreateEnrollment(t *testing.T) {
 		t.Fatalf("headers missing: auth=%v json=%v", sawAuth, sawJSON)
 	}
 }
+
+func TestNewVPSClientWithTimeoutAllowsSlowStartupSync(t *testing.T) {
+	c := NewVPSClientWithTimeout("wgmonitor.example", "secret", 25*time.Second)
+	if c == nil {
+		t.Fatal("client is nil")
+	}
+	if c.HTTP.Timeout != 25*time.Second {
+		t.Fatalf("timeout=%s, want 25s", c.HTTP.Timeout)
+	}
+	if c.BaseURL != "https://wgmonitor.example" {
+		t.Fatalf("base url=%q", c.BaseURL)
+	}
+}
+
+func TestNewVPSClientWithTimeoutKeepsDefaultForInvalidTimeout(t *testing.T) {
+	c := NewVPSClientWithTimeout("https://wgmonitor.example/", "secret", 0)
+	if c == nil {
+		t.Fatal("client is nil")
+	}
+	if c.HTTP.Timeout != 10*time.Second {
+		t.Fatalf("timeout=%s, want default 10s", c.HTTP.Timeout)
+	}
+	if c.BaseURL != "https://wgmonitor.example" {
+		t.Fatalf("base url=%q", c.BaseURL)
+	}
+}
+
+func TestNewVPSClientWithTimeoutAndDialHostKeepsDomainBaseURL(t *testing.T) {
+	c := NewVPSClientWithTimeoutAndDialHost("wgmonitor.example", "secret", 22*time.Second, "198.51.100.10")
+	if c == nil {
+		t.Fatal("client is nil")
+	}
+	if c.BaseURL != "https://wgmonitor.example" {
+		t.Fatalf("base url=%q", c.BaseURL)
+	}
+	if c.HTTP.Transport == nil {
+		t.Fatal("expected custom transport")
+	}
+}

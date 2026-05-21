@@ -101,7 +101,7 @@ func ClassifyState(a SmartReplyArgs) SmartReplyState {
 	if a.LastReportAge > smartReplyOfflineThreshold {
 		return StateOffline
 	}
-	if len(a.ActiveIncidents) > 0 {
+	if len(activeIncidentsForDisplay(a)) > 0 {
 		return StateHard
 	}
 	for _, t := range a.Tunnels {
@@ -115,6 +115,56 @@ func ClassifyState(a SmartReplyArgs) SmartReplyState {
 	return StateOK
 }
 
+func activeIncidentsForDisplay(a SmartReplyArgs) []IncidentView {
+	if len(a.ActiveIncidents) == 0 {
+		return nil
+	}
+	out := make([]IncidentView, 0, len(a.ActiveIncidents))
+	for _, inc := range a.ActiveIncidents {
+		if isLegacyPingCheckDisabledFalseIncident(inc, a.Tunnels) {
+			continue
+		}
+		out = append(out, inc)
+	}
+	return out
+}
+
+func isLegacyPingCheckDisabledFalseIncident(inc IncidentView, tunnels []TunnelView) bool {
+	if !strings.HasPrefix(inc.CheckName, "tunnel_") {
+		return false
+	}
+	for _, t := range tunnels {
+		if t.CheckName != inc.CheckName {
+			continue
+		}
+		pc := strings.ToLower(strings.TrimSpace(t.PingStatus))
+		return t.HandshakeAge > 0 &&
+			t.HandshakeAge < smartReplyDegradedHandshakeMinSec &&
+			t.FailCount == 0 &&
+			(pc == "disabled" || pc == "off" || pc == "inactive")
+	}
+	return false
+}
+
+func incidentDisplayName(inc IncidentView, tunnels []TunnelView) string {
+	for _, t := range tunnels {
+		if t.CheckName != inc.CheckName {
+			continue
+		}
+		name := strings.TrimSpace(t.Name)
+		if name == "" {
+			name = strings.TrimSpace(t.Interface)
+		}
+		if name != "" && t.Interface != "" && name != t.Interface {
+			return fmt.Sprintf("%s (%s)", name, t.Interface)
+		}
+		if name != "" {
+			return name
+		}
+	}
+	return inc.CheckName
+}
+
 // FormatSmartReply renders the [📊 Что происходит?] response per spec §5.2.
 // Returns body text plus the inline-button keyboard appropriate to the
 // computed state. The inline keyboard is empty (no rows) only when caller
@@ -124,6 +174,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	state := ClassifyState(a)
 	plainCD := func(action, cn string) string { return fmt.Sprintf("%s:%d:%s", action, a.UserID, cn) }
 	silenceCD := func(cn, ttl string) string { return fmt.Sprintf("silence:%d:%s:%s", a.UserID, cn, ttl) }
+	visibleIncidents := activeIncidentsForDisplay(a)
 
 	var b strings.Builder
 	switch state {
@@ -168,15 +219,15 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 
 	case StateHard:
 		fmt.Fprintf(&b, "🔴 %s — есть проблема.\n\n", a.Nickname)
-		for _, inc := range a.ActiveIncidents {
+		for _, inc := range visibleIncidents {
 			age := time.Since(inc.HardSince).Round(time.Minute)
-			fmt.Fprintf(&b, "%s не отвечает уже %s.\n", inc.CheckName, durFmt(age))
+			fmt.Fprintf(&b, "%s не отвечает уже %s.\n", incidentDisplayName(inc, a.Tunnels), durFmt(age))
 		}
 		b.WriteString("\nЧто можно сделать:")
 		var rows [][]tg.InlineKeyboardButton
 		seen := map[string]bool{}
 		// Buttons per active incident (carries silence button)
-		for _, inc := range a.ActiveIncidents {
+		for _, inc := range visibleIncidents {
 			if !strings.HasPrefix(inc.CheckName, "tunnel_") {
 				continue
 			}

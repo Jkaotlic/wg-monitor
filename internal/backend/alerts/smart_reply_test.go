@@ -132,6 +132,20 @@ func TestClassifyState_HardWinsOverDegradedHandshake(t *testing.T) {
 	}
 }
 
+func TestClassifyState_IgnoresLegacyPingCheckDisabledHard(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 10 * time.Second
+		a.Tunnels = []TunnelView{{
+			Name: "de", CheckName: "tunnel_awg11", Interface: "nwg1",
+			HandshakeAge: 51, PingStatus: "disabled", FailCount: 0, FailThresh: 3,
+		}}
+		a.ActiveIncidents = []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-7 * time.Minute), FailCount: 17}}
+	})
+	if got := ClassifyState(a); got != StateOK {
+		t.Errorf("got %v want ok", got)
+	}
+}
+
 func TestFormatSmartReply_OK(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 23 * time.Second,
@@ -205,6 +219,41 @@ func TestFormatSmartReply_Hard(t *testing.T) {
 	}
 	for k := range want {
 		t.Errorf("Hard missing button: %s", k)
+	}
+}
+
+func TestFormatSmartReply_HardUsesTunnelDisplayName(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels:         []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
+		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-4 * time.Minute), FailCount: 5}},
+	}
+	text, _ := FormatSmartReply(a)
+	if !strings.Contains(text, "amnezia") || strings.Contains(text, "tunnel_awg11") {
+		t.Fatalf("Hard should render tunnel display name, got:\n%s", text)
+	}
+}
+
+func TestFormatSmartReply_DropsOnlyLegacyPingCheckDisabledHard(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "client-a", UserID: 7, LastReportAge: 10 * time.Second,
+		Tunnels: []TunnelView{{
+			Name: "de", CheckName: "tunnel_awg11", Interface: "nwg1",
+			HandshakeAge: 51, PingStatus: "disabled", FailCount: 0, FailThresh: 3,
+		}},
+		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-7 * time.Minute), FailCount: 17}},
+	}
+	text, kb := FormatSmartReply(a)
+	if strings.Contains(text, "tunnel_awg11") {
+		t.Fatalf("legacy false hard should not be shown:\n%s", text)
+	}
+	for _, want := range []string{"client-a", "de", "disabled"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	if len(kb.InlineKeyboard) != 0 {
+		t.Fatalf("false hard should not render incident buttons: %+v", kb)
 	}
 }
 

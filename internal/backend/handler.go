@@ -299,6 +299,9 @@ func reportHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json")
 			return
 		}
+		for i := range rep.Checks {
+			rep.Checks[i] = normalizeReportedCheck(rep.Checks[i])
+		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
 
