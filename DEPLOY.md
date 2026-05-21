@@ -1,72 +1,81 @@
-# Деплой wg-monitor
+# Deploy wg-monitor
 
-Полный деплой делает один интерактивный wizard — `wg-monitor-deploy`. Никаких ручных команд по SSH, никакого Python.
+`wg-monitor-deploy` is the canonical installer and operator wizard. The normal router path is AWG Manager/KeenDNS + Entware bootstrap; direct router SSH is only a break-glass recovery path.
 
-## Что нужно заранее (вручную)
+## Prerequisites
 
-| Компонент | Как получить |
+| Item | Needed for |
 | --- | --- |
-| **VPS** | Linux amd64, минимум 256 МБ RAM, открытый порт 443. Любой провайдер. |
-| **Домен** | Свой домен или DuckDNS, A-запись на IP VPS |
-| **Telegram-бот** | Создать через [@BotFather](https://t.me/BotFather), сохранить токен |
-| **Telegram-группа** | Супергруппа с топиками, бот добавлен админом, для каждого роутера — свой топик |
-| **Telegram IDs** | chat_id, message_thread_id (через `getUpdates`), ваш user_id (через [@userinfobot](https://t.me/userinfobot)) |
-| **Роутер Keenetic** | OS 4/5, [Entware](https://docs.keenetic.com/...) и [awg-manager](https://github.com/hoaxisr/awg-manager) 2.8+ установлены |
+| Linux amd64 VPS | Backend, SQLite state, Caddy/TLS reverse proxy |
+| Domain for VPS | Public HTTPS backend URL |
+| Telegram bot | Alerts and control UI |
+| Telegram forum group | One topic per router |
+| Keenetic router | KeeneticOS 4/5 with Entware installed |
+| AWG Manager | Publicly reachable through KeenDNS or another HTTPS domain |
 
-## Шаги
+## First VPS Install
 
-1. Скачай `wg-monitor-deploy` под свою OS из [Releases](https://github.com/Jkaotlic/wg-monitor/releases/latest):
-   - Windows: `wg-monitor-deploy-windows-amd64.exe`
-   - macOS Apple Silicon: `wg-monitor-deploy-darwin-arm64`
-   - macOS Intel: `wg-monitor-deploy-darwin-amd64`
-   - Linux: `wg-monitor-deploy-linux-amd64`
+1. Download the deploy wizard from <https://github.com/Jkaotlic/wg-monitor/releases>.
+2. Run `wg-monitor-deploy`.
+3. Choose `[1] VPS / backend`.
+4. Enter VPS host, SSH auth, domain, Telegram bot token, chat ID, and admin user ID.
+5. The wizard installs backend service files, config, Caddy route, and backend enrollment API.
 
-2. **macOS** — снять Gatekeeper-карантин:
+After install, the wizard records backend version and deploy time in `wizard.toml`.
 
-   ```bash
-   xattr -d com.apple.quarantine wg-monitor-deploy-darwin-arm64
-   chmod +x wg-monitor-deploy-darwin-arm64
-   ```
+## Add A Router
 
-   **Linux:** `chmod +x wg-monitor-deploy-linux-amd64`
+Use `[3] Routers`, then the add/re-enroll action.
 
-3. Запусти:
+The wizard asks for:
 
-   ```bash
-   ./wg-monitor-deploy
-   ```
+- Router nickname.
+- Telegram topic ID.
+- Public AWG Manager URL.
+- AWG Manager API key, or web login/password fallback.
+- Entware terminal login/password when the terminal bridge needs credentials.
 
-   (или двойной клик на Windows)
+Flow:
 
-4. Выбери в меню `[1] Первичная установка бэкенда`. Wizard проведёт через 12 шагов: спросит домен, токен бота, IDs, пароль root для VPS — и всё развернёт.
+1. Wizard creates or refreshes backend enrollment on VPS.
+2. Wizard authenticates to AWG Manager.
+3. Wizard opens the AWG Manager terminal websocket.
+4. Bootstrap script downloads the matching agent binary from GitHub release.
+5. Agent config and Entware init service are installed.
+6. Backend receives heartbeat and confirms the version.
 
-5. После бэкенда — `[3] Первичная установка агента`. Введи host роутера, его никнейм, awg-iface (`awg0` обычно). Wizard сам определит архитектуру (arm64/mipsle), скачает нужный бинарь и установит как Entware-сервис.
+No SSTP/WireGuard connection from the operator machine to the router LAN is required for this path.
 
-## Обновление
+## Move Old Routers To A New VPS
 
-```bash
-./wg-monitor-deploy update-backend     # без интерактива, по wizard.toml
-./wg-monitor-deploy update-agent
-```
+Use `[4] Move to new VPS`.
 
-Wizard скачивает свежие бинари из последнего GitHub Release.
+This is the recovery path when the old VPS is dead and existing routers must be attached to the replacement backend:
 
-## Файлы
+1. Install backend on the new VPS with `[1]`.
+2. Make sure every old router has AWG Manager reachable through its public domain.
+3. Run `[4]`.
+4. For each router, provide/confirm AWG Manager credentials.
+5. The wizard creates a fresh enrollment and re-runs Entware bootstrap with the new backend URL/token.
 
-- `wizard.toml` — конфиг wizard'а (хосты, домен, никнеймы). Не содержит секретов. По умолчанию: `~/.config/wg-monitor-deploy/wizard.toml` (Linux/macOS) или `%APPDATA%\wg-monitor-deploy\wizard.toml` (Windows).
-- Секреты — через env vars: `WG_VPS_PASS`, `WG_KEENETIC_PASS_<NICKNAME>`, `WG_BOT_TOKEN`. Wizard напомнит после первого ввода.
+If a raw `WG_AGENT_TOKEN_<NICK>` still exists locally, the wizard can preserve it. If not, it safely re-enrolls the agent with a new token and updates the backend hash.
 
-## Подкоманды
+## Update Components
 
-```
-wg-monitor-deploy                    # меню
-wg-monitor-deploy install-backend    # без меню
-wg-monitor-deploy update-backend
-wg-monitor-deploy install-agent [--agent <nickname>]
-wg-monitor-deploy update-agent  [--agent <nickname>]
-wg-monitor-deploy add-router
-wg-monitor-deploy status
-wg-monitor-deploy --version
-wg-monitor-deploy --no-color
-wg-monitor-deploy --config <path>
-```
+Use `[2] Update components`.
+
+The wizard compares `wizard.toml`, backend `/healthz`, and the latest GitHub release. Static agents use the backend-mediated pull-flow where possible, so the operator does not need direct router SSH for normal updates.
+
+## Doctor And Sync
+
+- `[5] Doctor` checks local state, VPS reachability, backend health, and known agents.
+- `[6] Sync from VPS` refreshes local `wizard.toml` from backend state.
+- Startup sync is best-effort and quiet for normal offline/timeouts; only auth problems are shown loudly.
+
+## Local Files
+
+- `wizard.toml` - non-secret local state: backend, routers, versions, deploy timestamps.
+- Local secret store / env vars - passwords, API keys, wizard token, raw agent tokens.
+- `WG_LEGACY_ROUTER_SSH=1` - exposes legacy SSH recovery helpers in the service menu.
+
+Do not commit real `wizard.toml`, tokens, router passwords, or local probe captures.

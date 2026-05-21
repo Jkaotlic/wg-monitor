@@ -1,110 +1,77 @@
 # wg-monitor
 
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev)
-[![AmneziaWG](https://img.shields.io/badge/AmneziaWG-2.8+-blue?logo=wireguard&logoColor=white)](https://github.com/amnezia-vpn/amneziawg-go)
-[![Keenetic](https://img.shields.io/badge/Keenetic-OS5-green)](https://keenetic.com)
-[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?logo=telegram&logoColor=white)](https://core.telegram.org/bots)
-[![Self-hosted](https://img.shields.io/badge/self--hosted-VPS-orange)](https://github.com/Jkaotlic/wg-monitor)
+Self-hosted monitoring and remote-ops for a fleet of **Keenetic + AmneziaWG** routers.
 
-Система мониторинга и удалённого управления флотом **AmneziaWG** на роутерах **Keenetic** через Telegram.
+The system has three moving parts:
 
-Лёгкий Go-агент живёт на каждом роутере и каждую минуту отправляет отчёт на VPS. Бэкенд превращает эти данные в Telegram-уведомления, алерты и позволяет управлять роутерами прямо из чата — без SSH, без web-интерфейса.
+- `wg-monitor-backend` on a Linux VPS, normally behind Caddy/TLS.
+- `wg-monitor-agent` on each Keenetic router in Entware.
+- `wg-monitor-deploy` wizard on the operator machine.
 
-> Self-hosted monitoring and remote-ops system for an **AmneziaWG** fleet on **Keenetic** routers.
-> A lightweight Go agent on each router pushes per-minute health reports to a VPS backend, which drives a Telegram bot — alerts, per-router topic threads, and remote operations without SSH.
+The current deploy path does **not** require the operator to join every router network by SSTP/WireGuard. The wizard reaches the router through public AWG Manager/KeenDNS, opens the AWG Manager terminal bridge, and bootstraps the Entware agent from the GitHub release.
 
----
+## Current Release
 
-## Возможности / Features
+- Latest RC used by the wizard flow: `v0.13.0-rc15`
+- GitHub releases: <https://github.com/Jkaotlic/wg-monitor/releases>
+- Windows wizard asset: `wg-monitor-deploy-windows-amd64.exe`
 
-### 📊 Мониторинг / Monitoring
+## What It Does
 
-| Проверка | Описание |
-| --- | --- |
-| **AWG туннели** | Статус каждого туннеля, время последнего handshake, аномалии трафика |
-| **DNS** | Работоспособность plain/DoT/DoH резолверов через нужный сетевой интерфейс |
-| **HydraRoute** | Состояние службы обхода блокировок |
-| **Внешняя доступность** | HTTP-проверки внешних ресурсов через туннель с `defaultRoute=true` |
-| **RKN-пробы** | Проверка доступности заблокированных доменов по команде из Telegram |
-| **Heartbeat** | Бэкенд детектирует молчащий агент и шлёт алерт «роутер недоступен» |
+- Per-minute agent reports from every router to the VPS backend.
+- Telegram alerts and per-router topics.
+- Telegram control panels for tunnels, routes, diagnostics, maintenance, operators, and package updates.
+- AWG Manager integration for tunnel state, route management, terminal bootstrap, and diagnostics.
+- Backend-mediated agent updates, so deployed agents can update without direct SSH from the operator machine.
+- Safer tunnel health: disabled PingCheck is shown as a warning/unknown signal, not as a hard "tunnel is dead" verdict by itself.
 
-### 🤖 Telegram-операции / Telegram Ops
+## Deploy Model
 
-| Операция | Как работает |
-| --- | --- |
-| **Алерты** | Пороговые fail/recovery уведомления, расписание тишины, повторные алерты |
-| **Панель туннелей** | Inline-кнопки включения/выключения каждого туннеля через Keenetic NDMC |
-| **Импорт конфига** | Отправь `.conf` файл в топик роутера → бот добавит или заменит туннель в awg-manager |
-| **Routes-панель** | «🛣 Маршруты» → массовый перенос DNS + Static IP правил (включая HR-Neo fall-through) с одного туннеля на другой; правила направленные в WAN/системные интерфейсы НИКОГДА не трогаются |
-| **Maintenance-панель** | «🛠 Обслуживание» → перезапуск hrneo / awg-manager / роутера + установка прошивки KeeneticOS из Telegram (через init.d / `ndmc components commit`); confirm-токены 5 мин TTL и 5-мин cooldown для destructive ops. Smart-reply «📊 Что происходит?» дополнительно показывает «🟡 Доступны обновления» если прошивка/awg-manager/hrneo отстают от upstream (GitHub releases, кэш 12ч) |
-| **opkg обновления** | `opkg update` → проверка места → `opkg upgrade` с прогрессом в чате; если один из фидов отдал HTTP error (умер upstream) — обновление продолжается, мёртвый фид показывается с кнопкой «🔧 Отключить» (комментирует строку в `/opt/etc/opkg/*.conf` с timestamped backup, после чего сразу перезапускает upgrade) |
-| **Доступ к роутеру** | `/panel → 👥 Доступ` — per-router whitelist дополнительных TG-операторов (helper, второй администратор и т.п.). Add: forward сообщения от человека ИЛИ числовой TG ID в личку с ботом. Remove: кнопка ✖ возле имени. Owner отвязывается отдельно (вернётся TOFU). Управляет только глобальный admin |
-| **Force recheck** | Кнопка 🔁 — немедленный отчёт без ожидания следующей минуты |
+New and recovered routers are deployed through:
 
-### 📥 Импорт туннелей через Telegram
+1. Public AWG Manager URL, usually KeenDNS, for example `https://awg.example.keenetic.pro`.
+2. AWG Manager API key, or router web login/password as fallback.
+3. Entware terminal user on the router, usually `root`.
+4. Backend enrollment token generated by the VPS.
 
-Самая удобная часть: не нужно заходить на роутер, не нужен web-интерфейс awg-manager.
+The wizard stores non-secret router metadata in `wizard.toml`; secrets live in the local secret store/environment.
 
-1. Экспортируй `.conf` из AmneziaWG-клиента
-2. Перешли файл в **топик нужного роутера** в Telegram
-3. Бот предложит: **🔄 Заменить** существующий туннель с таким именем или **➕ Добавить** новый
-4. После подтверждения агент вызывает awg-manager API (`POST /api/import/conf`), туннель создаётся с тем же бэкендом что и остальные (`nativewg` / `kernel`) и сразу запускается
-5. Если установлен HydraRoute — перезапускается автоматически
+Useful secret names:
 
-Работает с форматами **WireGuard** и **AmneziaWG** (включая поля `Jc`, `Jmin`, `Jmax`, `H1–H4`, `S1–S4` в форматах как одиночных значений, так и диапазонов).
+- `WIZARD_TOKEN` - wizard API token for protected backend deploy endpoints.
+- `WG_AWGM_API_KEY_<NICK>` - AWG Manager API key for a router.
+- `WG_AWGM_LOGIN_<NICK>` / `WG_AWGM_PASS_<NICK>` - AWG Manager web credentials fallback.
+- `WG_ENTWARE_LOGIN_<NICK>` / `WG_ENTWARE_PASS_<NICK>` - terminal credentials for Entware bootstrap.
+- `WG_AGENT_TOKEN_<NICK>` - raw agent token used by that router.
 
----
+## Wizard Menu
 
-## Архитектура / Architecture
+`wg-monitor-deploy` now uses a task-oriented menu:
 
 ```text
-┌──────────────────────────┐       HTTPS/JSON        ┌──────────────────────────┐
-│   Keenetic router         │ ── reports + cmds ────► │   VPS (Go backend)        │
-│                           │                          │                           │
-│  wg-monitor agent (Go)   │                          │  ┌───────────────────┐   │
-│  arm64 / mipsel           │ ◄── long-poll cmds ───  │  │  SQLite state DB  │   │
-│                           │                          │  └───────────────────┘   │
-│  Checks every 60s:        │                          │  ┌───────────────────┐   │
-│  · AWG handshake ages     │                          │  │  Telegram Bot     │   │
-│  · DNS plain/DoT/DoH      │                          │  │  alerts + ops     │   │
-│  · HydraRoute status      │                          │  └───────────────────┘   │
-│  · External reach probes  │                          │                           │
-│  · RKN domain probes      │                          │  Behind Caddy TLS         │
-└──────────────────────────┘                          └──────────────────────────┘
-          │
-          │ awg-manager REST API (127.0.0.1:2222)
-          ▼
-   ┌─────────────┐
-   │ awg-manager │  hoaxisr/awg-manager 2.8+
-   └─────────────┘
+[1] VPS / backend          first install or reinstall backend on VPS
+[2] Update components      update backend and/or agents to the latest release
+[3] Routers                add, re-enroll, reinstall, or remove router agents
+[4] Move to new VPS        re-enroll old routers after backend migration
+[5] Doctor                 local + VPS + agent health checks
+[6] Sync from VPS          refresh local wizard.toml from backend state
+[7] Service                config, secrets, and break-glass legacy tools
 ```
 
----
+The menu header shows every known component with `installed <version> at <time>` so stale local state is visible before you touch anything.
 
-## Сборка / Build
+## Build And Test
 
 ```bash
-make build-host        # текущая ОС — для тестов и разработки
-make build-mipsel      # Keenetic MIPS little-endian softfloat
-make build-aarch64     # Keenetic ARM64 (большинство современных роутеров)
-make pack              # UPX --best на cross-compiled бинарниках
+go test ./...
+go build ./cmd/deploy
+go build ./cmd/backend
+go build ./cmd/agent
 ```
 
-## Компоненты / Components
+The GitHub release workflow publishes Linux/macOS/Windows deploy binaries, backend, CLI, router agent binaries, checksums, and SBOM.
 
-| Компонент | Путь | Цель |
-| --- | --- | --- |
-| Agent | `cmd/agent/` | arm64 / mipsel (Keenetic + Entware) |
-| Backend | `cmd/backend/` | amd64 (VPS, за Caddy) |
-| CLI | `cmd/wg-monitor-cli/` | хост — ручные операции |
-| Протокол | `pkg/wire/` | оба бинарника |
+## More
 
-## Требования / Requirements
-
-- **Роутер:** Keenetic OS 4/5 c Entware, [awg-manager](https://github.com/hoaxisr/awg-manager) 2.8+
-- **VPS:** любой Linux amd64, Caddy или nginx для TLS
-- **Telegram:** токен бота + супергруппа с топиками на каждый роутер (режим forum)
-
-## Деплой / Deployment
-
-Деплой делается интерактивным wizard'ом. Скачай `wg-monitor-deploy` из [Releases](https://github.com/Jkaotlic/wg-monitor/releases/latest), запусти и следуй инструкциям. Подробнее в [DEPLOY.md](DEPLOY.md).
+- Deployment guide: [DEPLOY.md](DEPLOY.md)
+- Release notes: [docs/releases](docs/releases)

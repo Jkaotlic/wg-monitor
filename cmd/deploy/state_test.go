@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -72,12 +73,29 @@ func TestLoadState_FutureSchema(t *testing.T) {
 }
 
 func TestProfileStatePathUsesIsolatedConfigDir(t *testing.T) {
-	t.Setenv("APPDATA", filepath.Join(t.TempDir(), "roaming"))
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		t.Setenv("APPDATA", filepath.Join(dir, "roaming"))
+	} else {
+		t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+		t.Setenv("HOME", filepath.Join(dir, "home"))
+	}
 	got := ProfileStatePath("mobile")
-	want := filepath.Join(os.Getenv("APPDATA"), "wg-monitor-deploy", "profiles", "mobile", "wizard.toml")
+	want := filepath.Join(configRootForTest(), "wg-monitor-deploy", "profiles", "mobile", "wizard.toml")
 	if got != want {
 		t.Fatalf("ProfileStatePath(mobile)=%q, want %q", got, want)
 	}
+}
+
+func configRootForTest() string {
+	if runtime.GOOS == "windows" {
+		return os.Getenv("APPDATA")
+	}
+	cfg, err := os.UserConfigDir()
+	if err != nil {
+		return filepath.Join(os.Getenv("HOME"), ".config")
+	}
+	return cfg
 }
 
 func TestAgentStateRoundTripMobileRolloutFields(t *testing.T) {
