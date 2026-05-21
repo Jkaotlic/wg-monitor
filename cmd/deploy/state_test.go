@@ -14,10 +14,12 @@ func TestStateRoundTrip(t *testing.T) {
 	in := &State{
 		SchemaVersion: 1,
 		Backend: BackendState{
-			Host:   "1.2.3.4",
-			Port:   22,
-			User:   "root",
-			Domain: "example.com",
+			Host:    "1.2.3.4",
+			Port:    22,
+			User:    "root",
+			Domain:  "example.com",
+			SSHAuth: "key",
+			KeyPath: filepath.Join(dir, "id_ed25519"),
 		},
 		Telegram: TelegramState{
 			ChatID:      -1001234567890,
@@ -100,5 +102,32 @@ func TestAgentStateRoundTripMobileRolloutFields(t *testing.T) {
 	}
 	if !reflect.DeepEqual(in, out) {
 		t.Fatalf("round-trip mismatch:\nin:  %+v\nout: %+v", in, out)
+	}
+}
+
+func TestAgentStateRoundTripAWGMDeployFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wizard.toml")
+	in := &State{
+		SchemaVersion: CurrentSchemaVersion,
+		Agents: []AgentState{{
+			Nickname:   "testkeen",
+			DeployMode: "awgm",
+			AWGMURL:    "https://awg.testkeen.keenetic.pro",
+			AWGMAuth:   "router-admin",
+		}},
+	}
+	if err := SaveState(path, in); err != nil {
+		t.Fatal(err)
+	}
+	out, err := LoadState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ag := out.FindAgent("testkeen")
+	if ag == nil {
+		t.Fatal("agent missing")
+	}
+	if ag.DeployMode != "awgm" || ag.AWGMURL != "https://awg.testkeen.keenetic.pro" || ag.AWGMAuth != "router-admin" {
+		t.Fatalf("AWGM fields lost: %+v", ag)
 	}
 }

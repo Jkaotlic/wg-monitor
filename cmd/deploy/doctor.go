@@ -224,9 +224,9 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		return
 	}
 
-	pass := secrets.GetNonInteractive("WG_VPS_PASS")
-	if pass == "" {
-		t.warnf("WG_VPS_PASS неизвестен (env/disk пусты) — пропускаю SSH-проверки")
+	auth, err := backendSSHAuthMethodsNonInteractive(state, secrets)
+	if err != nil {
+		t.warnf("VPS SSH credential неизвестен (" + err.Error() + ") — пропускаю SSH-проверки")
 		fmt.Println()
 		return
 	}
@@ -253,7 +253,7 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		fmt.Println()
 		return
 	}
-	s, err := ConnectSSH(state.Backend.Host, port, user, pass, kh, "backend")
+	s, err := ConnectSSHWithAuth(state.Backend.Host, port, user, auth, kh, "backend")
 	if err != nil {
 		t.failf("SSH к VPS: " + err.Error())
 		fmt.Println()

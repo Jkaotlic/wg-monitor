@@ -124,6 +124,44 @@ func TestInsertWithKindRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestUpsertEnrollmentCreatesUser(t *testing.T) {
+	d := newTestDB(t)
+	uid, err := d.Users().UpsertEnrollment("testkeen", "raw-token-1", KindStatic, 406)
+	if err != nil {
+		t.Fatalf("UpsertEnrollment: %v", err)
+	}
+	u, err := d.Users().GetByNickname("testkeen")
+	if err != nil {
+		t.Fatalf("GetByNickname: %v", err)
+	}
+	if u.ID != uid || u.Kind != KindStatic || u.TelegramThreadID == nil || *u.TelegramThreadID != 406 {
+		t.Fatalf("bad user: %+v", u)
+	}
+	if _, err := d.Users().GetByToken("raw-token-1"); err != nil {
+		t.Fatalf("new token rejected: %v", err)
+	}
+}
+
+func TestUpsertEnrollmentRotatesExistingToken(t *testing.T) {
+	d := newTestDB(t)
+	if _, err := d.Users().InsertWithKind("testkeen", "old-token", "0.0.0.0", "awg0", KindStatic); err != nil {
+		t.Fatalf("InsertWithKind: %v", err)
+	}
+	if _, err := d.Users().UpsertEnrollment("testkeen", "new-token", KindMobile, 0); err != nil {
+		t.Fatalf("UpsertEnrollment: %v", err)
+	}
+	if _, err := d.Users().GetByToken("new-token"); err != nil {
+		t.Fatalf("new token rejected: %v", err)
+	}
+	if _, err := d.Users().GetByToken("old-token"); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("old token still valid: %v", err)
+	}
+	u, _ := d.Users().GetByNickname("testkeen")
+	if u.Kind != KindMobile {
+		t.Fatalf("kind not updated: %s", u.Kind)
+	}
+}
+
 func TestMigrateUserKindIdempotent(t *testing.T) {
 	// Re-opening the same DB file must not error or duplicate-add the column.
 	path := filepath.Join(t.TempDir(), "t.db")

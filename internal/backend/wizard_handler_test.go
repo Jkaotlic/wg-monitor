@@ -233,3 +233,31 @@ func TestWizardList_IncludesLastSeenAt(t *testing.T) {
 		t.Fatal("expected non-nil last_seen_at after UpdateLastSeen")
 	}
 }
+
+func TestWizardEnrollmentCreatesRawTokenAndUser(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	h := wizardEnrollmentHandler(Deps{DB: d})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/enrollments", strings.NewReader(`{"nickname":"testkeen","kind":"static","thread_id":406}`))
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var got wizardEnrollmentResp
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if got.Nickname != "testkeen" || got.RawToken == "" || got.BackendURL == "" {
+		t.Fatalf("bad response: %+v", got)
+	}
+	if _, err := d.Users().GetByToken(got.RawToken); err != nil {
+		t.Fatalf("token not registered: %v", err)
+	}
+}

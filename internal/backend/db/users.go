@@ -87,6 +87,31 @@ func (u *UsersRepo) InsertWithKind(nickname, rawToken, expectedExitIP, awgIface,
 	return res.LastInsertId()
 }
 
+// UpsertEnrollment creates or rotates a router's raw-token enrollment from the
+// trusted deploy wizard. It preserves an existing Telegram topic when threadID
+// is omitted so VPS migrations do not detach already-linked router panels.
+func (u *UsersRepo) UpsertEnrollment(nickname, rawToken, kind string, threadID int64) (int64, error) {
+	if !IsValidKind(kind) {
+		return 0, fmt.Errorf("users.UpsertEnrollment: invalid kind %q (want static|mobile)", kind)
+	}
+	_, err := u.d.db.Exec(`
+INSERT INTO users(nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id)
+VALUES (?, ?, '0.0.0.0', 'awg0', ?, NULLIF(?, 0))
+ON CONFLICT(nickname) DO UPDATE SET
+  token_hash=excluded.token_hash,
+  kind=excluded.kind,
+  telegram_thread_id=COALESCE(excluded.telegram_thread_id, users.telegram_thread_id)
+`, nickname, hashToken(rawToken), kind, threadID)
+	if err != nil {
+		return 0, fmt.Errorf("users.UpsertEnrollment: %w", err)
+	}
+	got, err := u.GetByNickname(nickname)
+	if err != nil {
+		return 0, err
+	}
+	return got.ID, nil
+}
+
 // userColsFull lists every column read by single-row Get*. GetAll uses a
 // shorter projection (no token_hash, no created_at) and has its own scanner.
 const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since`

@@ -35,6 +35,18 @@ type wizardAgentListWire struct {
 	Agents []RemoteAgent `json:"agents"`
 }
 
+type EnrollmentRequest struct {
+	Nickname string `json:"nickname"`
+	Kind     string `json:"kind"`
+	ThreadID int64  `json:"thread_id,omitempty"`
+}
+
+type EnrollmentResponse struct {
+	Nickname   string `json:"nickname"`
+	BackendURL string `json:"backend_url"`
+	RawToken   string `json:"raw_token"`
+}
+
 // VPSClient is a tiny HTTP client for the /v1/wizard/* endpoints.
 type VPSClient struct {
 	BaseURL string // e.g. "https://mon.example.com"
@@ -111,6 +123,37 @@ func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 		return fmt.Errorf("PUT /v1/wizard/agents/%s: HTTP %d", a.Nickname, resp.StatusCode)
 	}
 	return nil
+}
+
+func (c *VPSClient) CreateEnrollment(ctx context.Context, enroll EnrollmentRequest) (*EnrollmentResponse, error) {
+	body, err := json.Marshal(enroll)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/wizard/enrollments", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		return nil, fmt.Errorf("POST /v1/wizard/enrollments: HTTP %d: %s",
+			resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var out EnrollmentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if out.RawToken == "" || out.BackendURL == "" {
+		return nil, fmt.Errorf("backend returned incomplete enrollment")
+	}
+	return &out, nil
 }
 
 // MergeAgents reconciles local state.Agents with the remote view.

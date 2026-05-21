@@ -3,6 +3,8 @@ Description=wg-monitor backend
 Documentation=https://github.com/Jkaotlic/wg-monitor
 After=network-online.target
 Wants=network-online.target
+StartLimitBurst=5
+StartLimitIntervalSec=60
 
 [Service]
 Type=simple
@@ -11,8 +13,6 @@ Group=wgmonitor
 ExecStart=/usr/local/bin/wg-monitor-backend -config /etc/wg-monitor/backend.yaml
 Restart=always
 RestartSec=5
-StartLimitBurst=5
-StartLimitIntervalSec=60
 
 # --- Hardening (DEPLOY-10) ---
 # Pure-Go HTTP+SQLite service: no kernel modules, no /proc/sys writes, no

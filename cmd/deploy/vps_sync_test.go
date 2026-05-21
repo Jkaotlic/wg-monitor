@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -77,5 +80,44 @@ func TestHeartbeatStatus_Never(t *testing.T) {
 	s := formatHeartbeatStatus(nil, time.Now())
 	if s != "never" {
 		t.Errorf("want 'never', got %q", s)
+	}
+}
+
+func TestVPSClientCreateEnrollment(t *testing.T) {
+	var sawAuth, sawJSON bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/wizard/enrollments" {
+			http.NotFound(w, r)
+			return
+		}
+		sawAuth = r.Header.Get("Authorization") == "Bearer wizard-token"
+		sawJSON = strings.HasPrefix(r.Header.Get("Content-Type"), "application/json")
+		var req EnrollmentRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Nickname != "testkeen" || req.Kind != "static" || req.ThreadID != 406 {
+			t.Fatalf("bad request: %+v", req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"nickname":"testkeen","backend_url":"https://wg.example.test","raw_token":"raw-token"}`))
+	}))
+	defer srv.Close()
+
+	c := &VPSClient{BaseURL: srv.URL, Token: "wizard-token", HTTP: srv.Client()}
+	got, err := c.CreateEnrollment(t.Context(), EnrollmentRequest{
+		Nickname: "testkeen",
+		Kind:     "static",
+		ThreadID: 406,
+	})
+	if err != nil {
+		t.Fatalf("CreateEnrollment: %v", err)
+	}
+	if got.Nickname != "testkeen" || got.BackendURL != "https://wg.example.test" || got.RawToken != "raw-token" {
+		t.Fatalf("bad response: %+v", got)
+	}
+	if !sawAuth || !sawJSON {
+		t.Fatalf("headers missing: auth=%v json=%v", sawAuth, sawJSON)
 	}
 }
