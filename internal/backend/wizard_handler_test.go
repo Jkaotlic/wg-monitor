@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -259,5 +260,81 @@ func TestWizardEnrollmentCreatesRawTokenAndUser(t *testing.T) {
 	}
 	if _, err := d.Users().GetByToken(got.RawToken); err != nil {
 		t.Fatalf("token not registered: %v", err)
+	}
+}
+
+func TestWizardDeployUsesBackendReleaseMirror(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 || len(sink.enqueuedUsers) != 1 || sink.enqueuedUsers[0] != userID {
+		t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
+	}
+	cmd := sink.enqueued[0]
+	if cmd.Action != "self_update" || cmd.Args["version"] != "v0.13.0-rc18" {
+		t.Fatalf("bad command: %+v", cmd)
+	}
+	if got := cmd.Args["repo_base"]; got != "https://wg.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%v", got)
+	}
+}
+
+func TestReleaseAssetProxyServesAllowlistedAsset(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("agent-binary"))
+	}))
+	defer upstream.Close()
+
+	oldBase := releaseDownloadBase
+	releaseDownloadBase = upstream.URL
+	t.Cleanup(func() { releaseDownloadBase = oldBase })
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64", nil)
+	req.SetPathValue("version", "v0.13.0-rc18")
+	req.SetPathValue("asset", "wg-monitor-agent-linux-arm64")
+	rec := httptest.NewRecorder()
+	releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Body.String(); got != "agent-binary" {
+		t.Fatalf("body=%q", got)
+	}
+}
+
+func TestReleaseAssetProxyRejectsUnknownAsset(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/../../secret", nil)
+	req.SetPathValue("version", "v0.13.0-rc18")
+	req.SetPathValue("asset", "../../secret")
+	rec := httptest.NewRecorder()
+	releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		body, _ := io.ReadAll(rec.Body)
+		t.Fatalf("status=%d body=%s", rec.Code, string(body))
 	}
 }

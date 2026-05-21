@@ -855,8 +855,8 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		BackendURL:   enroll.BackendURL,
 		RawToken:     enroll.RawToken,
 		Version:      rel.TagName,
-		DownloadURL:  asset.DownloadURL,
-		ChecksumURL:  sums.DownloadURL,
+		DownloadURL:  releaseAssetURLForRouter(state, rel.TagName, assetName, asset.DownloadURL),
+		ChecksumURL:  releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL),
 		ChecksumName: assetName,
 	})
 	if err != nil {

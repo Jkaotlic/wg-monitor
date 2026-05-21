@@ -166,3 +166,19 @@ func TestStaticPullAckTimeoutRemainsError(t *testing.T) {
 		t.Fatal("static timeout must remain an error")
 	}
 }
+
+func TestBackendReleaseAssetURLUsesBackendDomain(t *testing.T) {
+	got := backendReleaseAssetURL(&State{Backend: BackendState{Domain: "wg.example.test"}}, "v0.13.0-rc18", "wg-monitor-agent-linux-arm64")
+	want := "https://wg.example.test/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64"
+	if got != want {
+		t.Fatalf("url=%q want %q", got, want)
+	}
+}
+
+func TestBackendReleaseAssetURLPreservesExplicitScheme(t *testing.T) {
+	got := backendReleaseAssetURL(&State{Backend: BackendState{Domain: "http://127.0.0.1:8080/healthz"}}, "v0.13.0-rc18", "checksums.txt")
+	want := "http://127.0.0.1:8080/v1/releases/download/v0.13.0-rc18/checksums.txt"
+	if got != want {
+		t.Fatalf("url=%q want %q", got, want)
+	}
+}
