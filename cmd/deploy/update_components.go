@@ -342,6 +342,10 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 			return nil
 		} else {
 			PrintWarn("pull-flow failed: " + err.Error())
+			if ag := state.FindAgent(t.AgentNickname); ag != nil && strings.TrimSpace(ag.AWGMURL) != "" {
+				PrintWarn("перехожу на AWG Manager reinstall: старый агент может не уметь backend mirror/self-update")
+				return actionInstallAgentAWGM(state, secrets, dl, t.AgentNickname)
+			}
 			if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
 				return fmt.Errorf("pull-flow failed; SSH fallback скрыт, потому что новый deploy идёт через VPS/AWG Manager: %w", err)
 			}
