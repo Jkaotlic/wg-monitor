@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -376,9 +377,37 @@ func shortCommandID(id string) string {
 	return id[:12]
 }
 
+func backendReleaseAssetURL(state *State, version, asset string) string {
+	if state == nil || strings.TrimSpace(state.Backend.Domain) == "" {
+		return ""
+	}
+	raw := strings.TrimRight(strings.TrimSpace(state.Backend.Domain), "/")
+	scheme := "https"
+	host := raw
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return ""
+		}
+		scheme = u.Scheme
+		host = u.Host
+	} else if i := strings.IndexByte(host, '/'); i >= 0 {
+		host = host[:i]
+	}
+	base := scheme + "://" + host
+	return base + "/v1/releases/download/" + url.PathEscape(version) + "/" + url.PathEscape(asset)
+}
+
+func releaseAssetURLForRouter(state *State, version, asset, fallback string) string {
+	if u := backendReleaseAssetURL(state, version, asset); u != "" {
+		return u
+	}
+	return fallback
+}
+
 // runPullDeploy drives the pull-based update for a single agent. It enqueues
 // a self_update command on the VPS, waits for the agent's CommandResult
-// (verify+swap-schedule ack), then polls /v1/wizard/agents up to 2 minutes
+// (verify+swap-schedule ack), then polls /v1/wizard/agents up to 6 minutes
 // for the heartbeat-side version flip that confirms the new binary is
 // actually running. Returns an error on any failure of those three legs.
 func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
@@ -388,9 +417,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 		return fmt.Errorf("VPSClient unavailable")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	cmdID, err := c.Deploy(ctx, t.AgentNickname, t.LatestVersion)
-	cancel()
+	cmdID, err := deployWithRetry(c, t.AgentNickname, t.LatestVersion)
 	if err != nil {
 		return fmt.Errorf("enqueue deploy: %w", err)
 	}
@@ -432,12 +459,11 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	}
 	PrintOK("агент подтвердил " + strings.TrimSpace(res.Output))
 
-	// Phase 2: heartbeat version-flip. Swap script needs ~5s; first
-	// heartbeat after restart is config-driven (default 60s). Give 2
-	// minutes total — enough for slow MIPS reboots without being so long
-	// that operator-time gets wasted on bricked agents.
-	PrintInfo("жду подтверждения новой версии через heartbeat (до 2 минут)")
-	flipDeadline := time.Now().Add(2 * time.Minute)
+	// Phase 2: heartbeat version-flip. Swap script needs ~5s; the normal
+	// report interval can be several minutes, so give a full six-minute window
+	// before calling the deploy inconclusive.
+	PrintInfo("жду подтверждения новой версии через heartbeat (до 6 минут)")
+	flipDeadline := time.Now().Add(6 * time.Minute)
 	for time.Now().Before(flipDeadline) {
 		time.Sleep(5 * time.Second)
 		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -465,7 +491,25 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 			}
 		}
 	}
-	return fmt.Errorf("новая версия не подтверждена heartbeat'ом за 2 минуты — проверь TG-топик / SSH")
+	return fmt.Errorf("новая версия не подтверждена heartbeat'ом за 6 минут — проверь TG-топик / SSH")
+}
+
+func deployWithRetry(c *VPSClient, nickname, version string) (string, error) {
+	var last error
+	for attempt := 1; attempt <= 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		cmdID, err := c.Deploy(ctx, nickname, version)
+		cancel()
+		if err == nil {
+			return cmdID, nil
+		}
+		last = err
+		if attempt < 3 {
+			PrintWarn(fmt.Sprintf("enqueue deploy timeout/error, retry %d/3 через 2s: %v", attempt+1, err))
+			time.Sleep(2 * time.Second)
+		}
+	}
+	return "", last
 }
 
 func rolloutRing(ring string) string {

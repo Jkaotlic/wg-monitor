@@ -31,7 +31,7 @@ const maxSelfUpdateArtifactSize = 64 << 20
 //
 // On any failure prior to spawning the swap script, the running agent is
 // left untouched on the old binary.
-func SelfUpdate(ctx context.Context, version string) (string, error) {
+func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (string, error) {
 	if version == "" {
 		return "", fmt.Errorf("self_update: version is required")
 	}
@@ -42,8 +42,11 @@ func SelfUpdate(ctx context.Context, version string) (string, error) {
 	}
 
 	assetName := "wg-monitor-agent-linux-" + arch
-	binURL := SelfUpdateRepoBase + "/" + version + "/" + assetName
-	sumsURL := SelfUpdateRepoBase + "/" + version + "/checksums.txt"
+	repoBase := SelfUpdateRepoBase
+	if len(repoBaseOpt) > 0 && strings.TrimSpace(repoBaseOpt[0]) != "" {
+		repoBase = strings.TrimSpace(repoBaseOpt[0])
+	}
+	binURL, sumsURL := selfUpdateURLs(version, assetName, repoBase)
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 
@@ -88,6 +91,11 @@ func SelfUpdate(ctx context.Context, version string) (string, error) {
 	_ = cmd.Wait()
 
 	return fmt.Sprintf("%s verified, swap scheduled in ~3s", version), nil
+}
+
+func selfUpdateURLs(version, assetName, repoBase string) (binURL, sumsURL string) {
+	base := strings.TrimRight(repoBase, "/")
+	return base + "/" + version + "/" + assetName, base + "/" + version + "/checksums.txt"
 }
 
 // detectAgentArch maps GOARCH to the asset suffix produced by the release
@@ -171,7 +179,16 @@ mv ` + binPath + `.new ` + binPath + `
 chmod 755 ` + binPath + `
 /opt/etc/init.d/S99wg-monitor start
 sleep 2
-if ! pgrep -x wg-monitor >/dev/null 2>&1; then
+is_running() {
+	if command -v pidof >/dev/null 2>&1 && pidof wg-monitor >/dev/null 2>&1; then
+		return 0
+	fi
+	if command -v pgrep >/dev/null 2>&1 && pgrep -x wg-monitor >/dev/null 2>&1; then
+		return 0
+	fi
+	ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1
+}
+if ! is_running; then
 	/opt/etc/init.d/S99wg-monitor stop 2>/dev/null
 	mv ` + binPath + `.bak ` + binPath + `
 	chmod 755 ` + binPath + `

@@ -40,7 +40,11 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 
 	required := []string{
 		"/opt/etc/init.d/S99wg-monitor start",
+		"is_running()",
+		"pidof wg-monitor >/dev/null 2>&1",
 		"pgrep -x wg-monitor >/dev/null 2>&1",
+		"ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1",
+		"if ! is_running; then",
 		"mv /opt/bin/wg-monitor.bak /opt/bin/wg-monitor",
 		"/opt/etc/init.d/S99wg-monitor start",
 	}
@@ -51,5 +55,15 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 			t.Fatalf("script missing %q after offset %d:\n%s", want, last, script)
 		}
 		last += idx + len(want)
+	}
+}
+
+func TestSelfUpdateURLsCanUseBackendMirror(t *testing.T) {
+	binURL, sumsURL := selfUpdateURLs("v0.13.0-rc18", "wg-monitor-agent-linux-arm64", "https://wg.example.test/v1/releases/download/")
+	if binURL != "https://wg.example.test/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
+		t.Fatalf("binURL=%q", binURL)
+	}
+	if sumsURL != "https://wg.example.test/v1/releases/download/v0.13.0-rc18/checksums.txt" {
+		t.Fatalf("sumsURL=%q", sumsURL)
 	}
 }

@@ -440,7 +440,8 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if version == "" {
 			return "err", "self_update: version is required", payload
 		}
-		out, err := SelfUpdate(ctx, version)
+		repoBase, _ := cmd.Args["repo_base"].(string)
+		out, err := SelfUpdate(ctx, version, repoBase)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

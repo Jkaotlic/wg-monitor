@@ -257,6 +257,7 @@ func NewMux(d Deps) http.Handler {
 	// its throughput per-token. /v1/cmd long-poll is naturally bounded; result
 	// post is small and infrequent (one per cmd) — leave un-limited.
 	reqID := requestIDMiddleware()
+	mux.Handle("GET /v1/releases/download/{version}/{asset}", reqID(http.HandlerFunc(releaseAssetProxyHandler(d))))
 	mux.Handle("/v1/report", reqID(auth(rate(http.HandlerFunc(reportHandler(d))))))
 	if d.CommandSink != nil {
 		mux.Handle("/v1/cmd", reqID(auth(http.HandlerFunc(cmdGetHandler(d)))))

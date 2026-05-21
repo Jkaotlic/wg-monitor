@@ -282,9 +282,9 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 }
 
 // wizardDeployReq is the body POSTed to /v1/wizard/agents/{nickname}/deploy.
-// target_version must be a published release tag — the agent passes it
-// straight to GitHub Releases, so a typo here surfaces as a 404 download on
-// the router rather than getting validated server-side.
+// target_version must be a published release tag. The backend adds repo_base
+// so agents pull public release assets through the VPS mirror instead of
+// depending on router-side DNS/reachability to GitHub.
 type wizardDeployReq struct {
 	TargetVersion string `json:"target_version"`
 }
@@ -343,9 +343,12 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		cmd := wire.Command{
-			ID:       id,
-			Action:   "self_update",
-			Args:     map[string]any{"version": req.TargetVersion},
+			ID:     id,
+			Action: "self_update",
+			Args: map[string]any{
+				"version":   req.TargetVersion,
+				"repo_base": wizardBackendURL(r) + "/v1/releases/download",
+			},
 			IssuedAt: time.Now().UTC(),
 		}
 		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
