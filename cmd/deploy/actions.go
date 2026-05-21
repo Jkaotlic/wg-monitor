@@ -802,19 +802,31 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	}
 	_ = os.Setenv(tokenEnv, enroll.RawToken)
 
-	loginEnv := "WG_AWGM_LOGIN_" + strings.ToUpper(ag.Nickname)
-	passEnv := "WG_AWGM_PASS_" + strings.ToUpper(ag.Nickname)
-	login, _ := secrets.Get(loginEnv, "AWG Manager login for "+ag.Nickname, nil)
-	pass, _ := secrets.Get(passEnv, "AWG Manager password for "+ag.Nickname, nil)
+	apiKey, login, pass := awgmAuthForAgent(secrets, ag.Nickname)
 	terminalUser := userOrDefault(ag.User, "root")
 	terminalPass := routerRootPasswordForAgent(secrets, ag.Nickname)
 
-	PrintStep(2, 5, "AWG Manager: login + system info")
-	awgm := NewAWGMClient(ag.AWGMURL, login, pass)
+	PrintStep(2, 5, "AWG Manager: auth + system info")
+	awgm := NewAWGMClient(ag.AWGMURL, login, pass).WithAPIKey(apiKey)
 	if err := awgm.Login(context.Background()); err != nil {
 		return err
 	}
 	info, err := awgm.SystemInfo(context.Background())
+	awgmAuthMode := "router-admin"
+	if apiKey != "" {
+		awgmAuthMode = "api-key"
+	}
+	if err != nil && apiKey != "" && isAWGMUnauthorized(err) {
+		PrintWarn("AWG Manager API key получил 401 от web layer; fallback на login/password")
+		apiKey = ""
+		login, pass = awgmLoginPasswordForAgent(secrets, ag.Nickname)
+		awgm = NewAWGMClient(ag.AWGMURL, login, pass)
+		if err := awgm.Login(context.Background()); err != nil {
+			return err
+		}
+		info, err = awgm.SystemInfo(context.Background())
+		awgmAuthMode = "router-admin"
+	}
 	if err != nil {
 		return err
 	}
@@ -853,29 +865,13 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	}
 
 	PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
-	st, err := awgm.TerminalStatus(context.Background())
-	if err != nil {
-		return err
+	var res TerminalRunResult
+	if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+		PrintInfo("public AWG Manager URL detected - running terminal bootstrap from VPS")
+		res, err = runAWGMBootstrapViaVPS(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
+	} else {
+		res, err = runAWGMBootstrapDirect(awgm, script, terminalUser, terminalPass)
 	}
-	if st.SessionActive {
-		return fmt.Errorf("AWG Manager terminal already has an active session; close it in the web UI and retry")
-	}
-	if !st.Installed {
-		if err := awgm.TerminalInstall(context.Background()); err != nil {
-			return err
-		}
-	}
-	if !st.Running {
-		if err := awgm.TerminalStart(context.Background()); err != nil {
-			return err
-		}
-	}
-	defer func() {
-		if err := awgm.TerminalStop(context.Background()); err != nil {
-			PrintWarn("AWG Manager terminal stop: " + err.Error())
-		}
-	}()
-	res, err := awgm.RunTerminalScriptWithLogin(context.Background(), script, terminalUser, terminalPass)
 	if err != nil {
 		if strings.TrimSpace(res.Output) != "" {
 			PrintInfo(res.Output)
@@ -889,11 +885,31 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	if ag.Host == "" && info.RouterIP != "" {
 		ag.Host = info.RouterIP
 	}
-	if ag.AWGMAuth == "" {
-		ag.AWGMAuth = "router-admin"
-	}
+	ag.AWGMAuth = awgmAuthMode
 	PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
 	return nil
+}
+
+func awgmAuthForAgent(secrets *SecretStore, nickname string) (apiKey, login, password string) {
+	suffix := strings.ToUpper(nickname)
+	apiKey, _ = secrets.Get("WG_AWGM_API_KEY_"+suffix, "AWG Manager API key for "+nickname+" (Enter to use login/password)", nil)
+	if apiKey != "" {
+		return apiKey, "", ""
+	}
+	login, password = awgmLoginPasswordForAgent(secrets, nickname)
+	return "", login, password
+}
+
+func awgmLoginPasswordForAgent(secrets *SecretStore, nickname string) (login, password string) {
+	suffix := strings.ToUpper(nickname)
+	login, _ = secrets.Get("WG_AWGM_LOGIN_"+suffix, "AWG Manager login for "+nickname, nil)
+	password, _ = secrets.Get("WG_AWGM_PASS_"+suffix, "AWG Manager password for "+nickname, nil)
+	return login, password
+}
+
+func isAWGMUnauthorized(err error) bool {
+	var httpErr *AWGMHTTPError
+	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized
 }
 
 func routerRootPasswordForAgent(secrets *SecretStore, nickname string) string {

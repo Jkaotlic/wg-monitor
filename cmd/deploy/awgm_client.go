@@ -24,6 +24,7 @@ type AWGMClient struct {
 	BaseURL  string
 	LoginID  string
 	Password string
+	APIKey   string
 	HTTP     *http.Client
 
 	mu            sync.Mutex
@@ -52,6 +53,17 @@ type TerminalRunResult struct {
 	Output string
 }
 
+type AWGMHTTPError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       string
+}
+
+func (e *AWGMHTTPError) Error() string {
+	return fmt.Sprintf("awgm %s %s: HTTP %d: %s", e.Method, e.Path, e.StatusCode, e.Body)
+}
+
 func NewAWGMClient(baseURL, login, password string) *AWGMClient {
 	return &AWGMClient{
 		BaseURL:  normalizeAWGMURL(baseURL),
@@ -59,6 +71,11 @@ func NewAWGMClient(baseURL, login, password string) *AWGMClient {
 		Password: password,
 		HTTP:     &http.Client{Timeout: awgmClientTimeout},
 	}
+}
+
+func (c *AWGMClient) WithAPIKey(apiKey string) *AWGMClient {
+	c.APIKey = strings.TrimSpace(apiKey)
+	return c
 }
 
 func normalizeAWGMURL(raw string) string {
@@ -73,6 +90,9 @@ func normalizeAWGMURL(raw string) string {
 }
 
 func (c *AWGMClient) Login(ctx context.Context) error {
+	if strings.TrimSpace(c.APIKey) != "" {
+		return nil
+	}
 	body, err := json.Marshal(struct {
 		Login    string `json:"login"`
 		Password string `json:"password"`
@@ -87,7 +107,7 @@ func (c *AWGMClient) Login(ctx context.Context) error {
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	c.setBasicAuth(req)
+	c.setAuth(req)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("awgm login: %w", err)
@@ -134,16 +154,16 @@ func (c *AWGMClient) SystemInfo(ctx context.Context) (*AWGMSystemInfo, error) {
 }
 
 func (c *AWGMClient) TerminalInstall(ctx context.Context) error {
-	return c.post(ctx, "/terminal/install", nil)
+	return c.post(ctx, "/api/terminal/install", nil)
 }
 
 func (c *AWGMClient) TerminalStart(ctx context.Context) error {
-	return c.post(ctx, "/terminal/start", nil)
+	return c.post(ctx, "/api/terminal/start", nil)
 }
 
 func (c *AWGMClient) TerminalStatus(ctx context.Context) (*AWGMTerminalStatus, error) {
 	var env awgmEnvelope[AWGMTerminalStatus]
-	if err := c.get(ctx, "/terminal/status", &env); err != nil {
+	if err := c.get(ctx, "/api/terminal/status", &env); err != nil {
 		return nil, err
 	}
 	if !env.Success {
@@ -153,7 +173,7 @@ func (c *AWGMClient) TerminalStatus(ctx context.Context) (*AWGMTerminalStatus, e
 }
 
 func (c *AWGMClient) TerminalStop(ctx context.Context) error {
-	return c.post(ctx, "/terminal/stop", nil)
+	return c.post(ctx, "/api/terminal/stop", nil)
 }
 
 func (c *AWGMClient) RunTerminalScript(ctx context.Context, script string) (TerminalRunResult, error) {
@@ -164,7 +184,7 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 	if err := c.ensureLoggedIn(ctx); err != nil {
 		return TerminalRunResult{}, err
 	}
-	wsURL, err := c.wsURL("/terminal/ws")
+	wsURL, err := c.wsURL("/api/terminal/ws")
 	if err != nil {
 		return TerminalRunResult{}, err
 	}
@@ -172,9 +192,8 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 	if err != nil {
 		return TerminalRunResult{}, err
 	}
-	cfg.Protocol = []string{"tty"}
 	cfg.Header.Set("X-Requested-With", "XMLHttpRequest")
-	if hdr := c.basicAuthHeader(); hdr != "" {
+	if hdr := c.authHeader(); hdr != "" {
 		cfg.Header.Set("Authorization", hdr)
 	}
 	if ck := c.cookie(); ck != nil {
@@ -185,6 +204,12 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 		return TerminalRunResult{}, fmt.Errorf("awgm terminal ws: %w", err)
 	}
 	defer ws.Close()
+	if err := websocket.Message.Send(ws, `{"AuthToken":""}`); err != nil {
+		return TerminalRunResult{}, fmt.Errorf("awgm terminal auth token: %w", err)
+	}
+	if err := awgmTerminalSendResize(ws, 120, 40); err != nil {
+		return TerminalRunResult{}, err
+	}
 
 	var out strings.Builder
 	if err := awgmLoginTerminalIfPrompt(ctx, ws, loginUser, loginPassword, &out); err != nil {
@@ -197,7 +222,7 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 		"sh /tmp/wg-monitor-bootstrap.sh\n" +
 		"rc=$?\n" +
 		"echo " + marker + "$rc\n"
-	if err := websocket.Message.Send(ws, "0"+payload); err != nil {
+	if err := awgmTerminalSendInput(ws, payload); err != nil {
 		return TerminalRunResult{}, fmt.Errorf("awgm terminal send: %w", err)
 	}
 
@@ -207,11 +232,10 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 			return TerminalRunResult{Output: out.String()}, ctx.Err()
 		default:
 		}
-		var msg string
-		if err := websocket.Message.Receive(ws, &msg); err != nil {
+		text, err := awgmTerminalReceiveText(ws)
+		if err != nil {
 			return TerminalRunResult{Output: out.String()}, fmt.Errorf("awgm terminal receive: %w", err)
 		}
-		text := stripTerminalFramePrefix(msg)
 		out.WriteString(text)
 		if i := strings.Index(text, marker); i >= 0 {
 			rcText := strings.TrimSpace(text[i+len(marker):])
@@ -234,8 +258,7 @@ func awgmLoginTerminalIfPrompt(ctx context.Context, ws *websocket.Conn, loginUse
 		default:
 		}
 		_ = ws.SetReadDeadline(time.Now().Add(800 * time.Millisecond))
-		var msg string
-		err := websocket.Message.Receive(ws, &msg)
+		text, err := awgmTerminalReceiveText(ws)
 		if err != nil {
 			var ne net.Error
 			if errors.As(err, &ne) && ne.Timeout() {
@@ -247,7 +270,6 @@ func awgmLoginTerminalIfPrompt(ctx context.Context, ws *websocket.Conn, loginUse
 			}
 			return fmt.Errorf("awgm terminal auth receive: %w", err)
 		}
-		text := stripTerminalFramePrefix(msg)
 		if out != nil {
 			out.WriteString(text)
 		}
@@ -263,7 +285,7 @@ func awgmLoginTerminalIfPrompt(ctx context.Context, ws *websocket.Conn, loginUse
 			if strings.TrimSpace(loginUser) == "" {
 				return fmt.Errorf("awgm terminal asks for login but terminal user is empty")
 			}
-			if err := websocket.Message.Send(ws, "0"+loginUser+"\n"); err != nil {
+			if err := awgmTerminalSendInput(ws, loginUser+"\n"); err != nil {
 				return fmt.Errorf("awgm terminal auth user: %w", err)
 			}
 			sentUser = true
@@ -274,7 +296,7 @@ func awgmLoginTerminalIfPrompt(ctx context.Context, ws *websocket.Conn, loginUse
 			if loginPassword == "" {
 				return fmt.Errorf("awgm terminal asks for password but router root password is empty")
 			}
-			if err := websocket.Message.Send(ws, "0"+loginPassword+"\n"); err != nil {
+			if err := awgmTerminalSendInput(ws, loginPassword+"\n"); err != nil {
 				return fmt.Errorf("awgm terminal auth password: %w", err)
 			}
 			sentPassword = true
@@ -305,7 +327,7 @@ func (c *AWGMClient) doJSON(ctx context.Context, method, path string, body io.Re
 	}
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	req.Header.Set("Accept", "application/json")
-	c.setBasicAuth(req)
+	c.setAuth(req)
 	if ck := c.cookie(); ck != nil {
 		req.AddCookie(ck)
 	}
@@ -319,7 +341,12 @@ func (c *AWGMClient) doJSON(ctx context.Context, method, path string, body io.Re
 		return fmt.Errorf("awgm %s %s read: %w", method, path, err)
 	}
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("awgm %s %s: HTTP %d: %s", method, path, resp.StatusCode, awgmSnippet(rbody))
+		return &AWGMHTTPError{
+			Method:     method,
+			Path:       path,
+			StatusCode: resp.StatusCode,
+			Body:       awgmSnippet(rbody),
+		}
 	}
 	if out != nil && len(rbody) > 0 {
 		if err := json.Unmarshal(rbody, out); err != nil {
@@ -330,6 +357,9 @@ func (c *AWGMClient) doJSON(ctx context.Context, method, path string, body io.Re
 }
 
 func (c *AWGMClient) ensureLoggedIn(ctx context.Context) error {
+	if strings.TrimSpace(c.APIKey) != "" {
+		return nil
+	}
 	if c.LoginID == "" && c.Password == "" {
 		return nil
 	}
@@ -349,14 +379,16 @@ func (c *AWGMClient) cookie() *http.Cookie {
 	return &cp
 }
 
-func (c *AWGMClient) setBasicAuth(req *http.Request) {
-	if c.LoginID == "" && c.Password == "" {
-		return
+func (c *AWGMClient) setAuth(req *http.Request) {
+	if hdr := c.authHeader(); hdr != "" {
+		req.Header.Set("Authorization", hdr)
 	}
-	req.SetBasicAuth(c.LoginID, c.Password)
 }
 
-func (c *AWGMClient) basicAuthHeader() string {
+func (c *AWGMClient) authHeader() string {
+	if key := strings.TrimSpace(c.APIKey); key != "" {
+		return "Bearer " + key
+	}
 	if c.LoginID == "" && c.Password == "" {
 		return ""
 	}
@@ -381,6 +413,27 @@ func (c *AWGMClient) wsURL(path string) (string, error) {
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+func awgmTerminalSendInput(ws *websocket.Conn, text string) error {
+	payload := append([]byte{'0'}, []byte(text)...)
+	return websocket.Message.Send(ws, payload)
+}
+
+func awgmTerminalSendResize(ws *websocket.Conn, cols, rows int) error {
+	payload := append([]byte{'1'}, []byte(fmt.Sprintf(`{"columns":%d,"rows":%d}`, cols, rows))...)
+	if err := websocket.Message.Send(ws, payload); err != nil {
+		return fmt.Errorf("awgm terminal resize: %w", err)
+	}
+	return nil
+}
+
+func awgmTerminalReceiveText(ws *websocket.Conn) (string, error) {
+	var msg []byte
+	if err := websocket.Message.Receive(ws, &msg); err != nil {
+		return "", err
+	}
+	return stripTerminalFramePrefix(string(msg)), nil
 }
 
 func stripTerminalFramePrefix(msg string) string {
