@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -49,6 +50,11 @@ func connectBackendSSH(state *State, secrets *SecretStore, kh *KnownHosts) (*SSH
 		return nil, err
 	}
 	s, err := ConnectSSHWithAuth(state.Backend.Host, port, user, auth, kh, "backend")
+	for attempt := 1; err != nil && isTransientSSHTimeout(err) && attempt < 3; attempt++ {
+		PrintWarn(fmt.Sprintf("VPS SSH timeout, retry %d/3 через %ds", attempt+1, attempt*2))
+		time.Sleep(time.Duration(attempt*2) * time.Second)
+		s, err = ConnectSSHWithAuth(state.Backend.Host, port, user, auth, kh, "backend")
+	}
 	if err == nil {
 		return s, nil
 	}

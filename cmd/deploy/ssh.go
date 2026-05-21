@@ -130,6 +130,14 @@ func diagnoseSSHErr(addr string, err error) error {
 	return fmt.Errorf("ssh %s: %s: %w", addr, hint, err)
 }
 
+func isTransientSSHTimeout(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "i/o timeout") || strings.Contains(lower, "deadline exceeded")
+}
+
 func (s *SSH) Close() error {
 	return s.client.Close()
 }

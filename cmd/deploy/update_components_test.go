@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestShortCommandID(t *testing.T) {
 	tests := []struct {
@@ -98,6 +102,26 @@ func TestBuildUpdateTargetsCarriesMobileRolloutMetadata(t *testing.T) {
 	got := targets[0]
 	if got.Kind != "mobile" || got.Ring != "canary" || got.PendingVersion != "v0.14.0-rc1" {
 		t.Fatalf("metadata not carried into update target: %+v", got)
+	}
+}
+
+func TestRefreshBackendInstalledVersionUsesHealthz(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","version":"v0.13.0-rc12"}`))
+	}))
+	defer srv.Close()
+
+	state := &State{Backend: BackendState{
+		Domain:              srv.URL,
+		LastDeployedVersion: "v0.13.0-rc4",
+	}}
+	refreshBackendInstalledVersion(state)
+	if got := state.Backend.LastDeployedVersion; got != "v0.13.0-rc12" {
+		t.Fatalf("backend version = %q, want live healthz version", got)
 	}
 }
 
