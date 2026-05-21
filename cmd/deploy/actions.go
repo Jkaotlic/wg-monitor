@@ -153,7 +153,7 @@ func heartbeatForAgent(state *State, ag *AgentState, secrets *SecretStore) strin
 	hb := ""
 	if state.Backend.Domain != "" {
 		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
-			if c := NewVPSClient(state.Backend.Domain, tok); c != nil {
+			if c := NewVPSClientForBackend(state, tok, 5*time.Second); c != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				hb = c.HeartbeatStatus(ctx, ag.Nickname)
 				cancel()
@@ -369,8 +369,7 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	if state.Backend.Domain == "" {
 		PrintWarn("домен не задан в wizard.toml — пропускаю /health проверку")
 	} else {
-		url := "https://" + state.Backend.Domain + "/healthz"
-		if err := stepVerifyHTTP(s, url); err != nil {
+		if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
 			return err
 		}
 		// Probe /v1/wizard/agents — expect 401 (endpoint registered + auth
@@ -777,7 +776,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	if wizardToken == "" {
 		return fmt.Errorf("WIZARD_TOKEN required for AWG Manager enrollment")
 	}
-	vps := NewVPSClient(state.Backend.Domain, wizardToken)
+	vps := NewVPSClientForBackend(state, wizardToken, 15*time.Second)
 	if vps == nil {
 		return fmt.Errorf("wizard API client is not configured")
 	}
@@ -1394,8 +1393,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	PrintOK("active")
 
 	PrintStep(14, 14, "Verify /health через домен")
-	url := "https://" + state.Backend.Domain + "/healthz"
-	if err := stepVerifyHTTP(s, url); err != nil {
+	if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
 		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
 	}
 
@@ -2193,7 +2191,7 @@ func actionSyncVPS(state *State, secrets *SecretStore) error {
 	if tok == "" {
 		return fmt.Errorf("WIZARD_TOKEN не задан")
 	}
-	c := NewVPSClient(state.Backend.Domain, tok)
+	c := NewVPSClientForBackend(state, tok, 15*time.Second)
 	if c == nil {
 		return fmt.Errorf("VPSClient init failed (empty domain or token)")
 	}
@@ -2249,7 +2247,7 @@ func pushToVPSBestEffort(state *State, secrets *SecretStore, a AgentState) {
 	if tok == "" {
 		return
 	}
-	c := NewVPSClient(state.Backend.Domain, tok)
+	c := NewVPSClientForBackend(state, tok, 10*time.Second)
 	if c == nil {
 		return
 	}

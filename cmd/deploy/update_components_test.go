@@ -125,6 +125,22 @@ func TestRefreshBackendInstalledVersionUsesHealthz(t *testing.T) {
 	}
 }
 
+func TestDomainHostNormalizesBackendDomain(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"wgmonitor.example", "wgmonitor.example"},
+		{"https://wgmonitor.example/healthz", "wgmonitor.example"},
+		{"wgmonitor.example:443", "wgmonitor.example"},
+	}
+	for _, tt := range tests {
+		if got := domainHost(tt.in); got != tt.want {
+			t.Fatalf("domainHost(%q)=%q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestMobilePullAckTimeoutMarksPending(t *testing.T) {
 	state := &State{Agents: []AgentState{{Nickname: "carvan", Kind: "mobile"}}}
 	target := updateTarget{

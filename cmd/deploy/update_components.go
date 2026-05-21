@@ -151,14 +151,14 @@ func refreshBackendInstalledVersion(state *State) {
 	if state == nil || state.Backend.Domain == "" {
 		return
 	}
-	version := fetchBackendHealthVersion(state.Backend.Domain)
+	version := fetchBackendHealthVersion(state.Backend.Domain, state.Backend.Host)
 	if version == "" {
 		return
 	}
 	state.Backend.LastDeployedVersion = version
 }
 
-func fetchBackendHealthVersion(domain string) string {
+func fetchBackendHealthVersion(domain, dialHost string) string {
 	base := strings.TrimSpace(domain)
 	if base == "" {
 		return ""
@@ -168,6 +168,9 @@ func fetchBackendHealthVersion(domain string) string {
 	}
 	url := strings.TrimRight(base, "/") + "/healthz"
 	cli := &http.Client{Timeout: 3 * time.Second}
+	if strings.TrimSpace(dialHost) != "" {
+		cli = NewVPSClientWithTimeoutAndDialHost(domain, "healthz", 3*time.Second, dialHost).HTTP
+	}
 	resp, err := cli.Get(url)
 	if err != nil {
 		return ""
@@ -338,7 +341,10 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 			return nil
 		} else {
 			PrintWarn("pull-flow failed: " + err.Error())
-			if !askYesNo("Откатиться на SSH-путь?", true) {
+			if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
+				return fmt.Errorf("pull-flow failed; SSH fallback скрыт, потому что новый deploy идёт через VPS/AWG Manager: %w", err)
+			}
+			if !askYesNo("Откатиться на legacy SSH-путь?", false) {
 				return err
 			}
 		}
@@ -377,7 +383,7 @@ func shortCommandID(id string) string {
 // actually running. Returns an error on any failure of those three legs.
 func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
-	c := NewVPSClient(state.Backend.Domain, tok)
+	c := NewVPSClientForBackend(state, tok, 15*time.Second)
 	if c == nil {
 		return fmt.Errorf("VPSClient unavailable")
 	}

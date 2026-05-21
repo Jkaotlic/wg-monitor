@@ -66,6 +66,13 @@ func NewVPSClientWithTimeout(domain, token string, timeout time.Duration) *VPSCl
 	return NewVPSClientWithTimeoutAndDialHost(domain, token, timeout, "")
 }
 
+func NewVPSClientForBackend(state *State, token string, timeout time.Duration) *VPSClient {
+	if state == nil {
+		return nil
+	}
+	return NewVPSClientWithTimeoutAndDialHost(state.Backend.Domain, token, timeout, state.Backend.Host)
+}
+
 func NewVPSClientWithTimeoutAndDialHost(domain, token string, timeout time.Duration, dialHost string) *VPSClient {
 	if domain == "" || token == "" {
 		return nil
