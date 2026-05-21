@@ -274,6 +274,23 @@ func TestDiagnoseSSHErr_Nil(t *testing.T) {
 	}
 }
 
+func TestIsTransientSSHTimeout(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want bool
+	}{
+		{raw: "dial tcp 198.51.100.10:22: i/o timeout", want: true},
+		{raw: "context deadline exceeded", want: true},
+		{raw: "ssh: handshake failed: ssh: unable to authenticate", want: false},
+		{raw: "dial tcp 198.51.100.10:22: connect: connection refused", want: false},
+	}
+	for _, tc := range cases {
+		if got := isTransientSSHTimeout(errors.New(tc.raw)); got != tc.want {
+			t.Fatalf("isTransientSSHTimeout(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
 func TestLoadPrivateKeySignerReadsPEMKey(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

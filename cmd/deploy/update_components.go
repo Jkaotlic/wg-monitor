@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -41,6 +42,7 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 	PrintOK("последний релиз: " + rel.TagName)
 	fmt.Println()
 
+	refreshBackendInstalledVersion(state)
 	targets := buildUpdateTargets(state, rel.TagName)
 	printUpdateStatusTable(targets)
 
@@ -143,6 +145,44 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 		})
 	}
 	return out
+}
+
+func refreshBackendInstalledVersion(state *State) {
+	if state == nil || state.Backend.Domain == "" {
+		return
+	}
+	version := fetchBackendHealthVersion(state.Backend.Domain)
+	if version == "" {
+		return
+	}
+	state.Backend.LastDeployedVersion = version
+}
+
+func fetchBackendHealthVersion(domain string) string {
+	base := strings.TrimSpace(domain)
+	if base == "" {
+		return ""
+	}
+	if !strings.Contains(base, "://") {
+		base = "https://" + base
+	}
+	url := strings.TrimRight(base, "/") + "/healthz"
+	cli := &http.Client{Timeout: 3 * time.Second}
+	resp, err := cli.Get(url)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var out struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out.Version)
 }
 
 func filterOutdated(all []updateTarget) []updateTarget {
