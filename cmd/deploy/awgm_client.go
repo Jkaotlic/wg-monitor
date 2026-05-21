@@ -51,11 +51,22 @@ type TerminalRunResult struct {
 
 func NewAWGMClient(baseURL, login, password string) *AWGMClient {
 	return &AWGMClient{
-		BaseURL:  strings.TrimRight(baseURL, "/"),
+		BaseURL:  normalizeAWGMURL(baseURL),
 		LoginID:  login,
 		Password: password,
 		HTTP:     &http.Client{Timeout: awgmClientTimeout},
 	}
+}
+
+func normalizeAWGMURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	return strings.TrimRight(raw, "/")
 }
 
 func (c *AWGMClient) Login(ctx context.Context) error {
