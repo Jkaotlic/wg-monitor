@@ -18,7 +18,7 @@ import (
 
 const (
 	maxReportBytes = 64 * 1024
-	maxResultBytes = 16 * 1024
+	maxResultBytes = 1024 * 1024
 	defaultCmdWait = 30 * time.Second
 	maxCmdWait     = 60 * time.Second
 )
