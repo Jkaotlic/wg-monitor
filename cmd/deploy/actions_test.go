@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -318,11 +319,18 @@ func TestDiagnosisFromReport_RouteElevationHint(t *testing.T) {
 		},
 	}}
 	msg := diagnosisFromReport(rep, "")
-	for _, want := range []string{
-		"PowerShell от имени администратора",
-		"route ADD 192.168.31.1 MASK 255.255.255.255 0.0.0.0 IF 46 METRIC 1",
-		"AllowedIPs",
-	} {
+	wants := []string{"AllowedIPs"}
+	if runtime.GOOS == "windows" {
+		wants = append(wants,
+			"PowerShell от имени администратора",
+			"route ADD 192.168.31.1 MASK 255.255.255.255 0.0.0.0 IF 46 METRIC 1",
+		)
+	} else {
+		wants = append(wants,
+			"sudo ip route add 192.168.31.1/32 dev wg-srv_legion_laptop metric 1",
+		)
+	}
+	for _, want := range wants {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("missing %q in diagnosis:\n%s", want, msg)
 		}

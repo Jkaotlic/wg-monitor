@@ -12,6 +12,7 @@ wg-monitor
 wg-monitor-backend
 
 # Go test cache
+.gocache/
 *.test
 *.out
 coverage.txt
@@ -36,6 +37,12 @@ cmd/deploy/wizard.toml
 # Locally built deploy binaries
 dist/wg-monitor-deploy*
 bin/wg-monitor-deploy*
+/deploy_*
+/wg-monitor-wizard-*
+/*.exe~
 
 # Local API probe captures (curl dumps from awg-mgr during dev)
 .probe_*.json
+
+# Local reverse-engineering/probe workspaces
+/analysis/
