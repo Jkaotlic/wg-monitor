@@ -157,19 +157,20 @@ func main() {
 	defer cancel()
 
 	mux := backend.NewMux(backend.Deps{
-		Logger:            logger,
-		DB:                d,
-		Dispatcher:        disp,
-		Resumer:           watcher,
-		CommandSink:       cmdQueue,
-		TGNotifier:        notifier,
-		RoutesNotifier:    routesNotifier,
-		MaintNotifier:     maintNotifier,
-		OpkgNotifier:      opkgNotifier,
-		PingCheckNotifier: pingcheckNotifier,
-		WakeNotifier:      wakeNotifier,
-		UI:                cfg.UI,
-		Thresholds:        state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		Logger:              logger,
+		DB:                  d,
+		Dispatcher:          disp,
+		Resumer:             watcher,
+		CommandSink:         cmdQueue,
+		TGNotifier:          notifier,
+		RoutesNotifier:      routesNotifier,
+		MaintNotifier:       maintNotifier,
+		OpkgNotifier:        opkgNotifier,
+		PingCheckNotifier:   pingcheckNotifier,
+		WakeNotifier:        wakeNotifier,
+		UI:                  cfg.UI,
+		Thresholds:          state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		MobileFailThreshold: cfg.State.MobileFailThreshold,
 		// Wire the server-shutdown ctx so cmd-result relay goroutines respect
 		// SIGTERM and don't outlive srv.Shutdown (BUG-15).
 		ShutdownCtx: ctx,
@@ -253,9 +254,10 @@ func main() {
 	}()
 
 	rp := realert.NewPoller(d, tgClient, realert.Config{
-		ChatID:       cfg.Telegram.ChatID,
-		RealertEvery: time.Duration(cfg.State.RealertEverySec) * time.Second,
-		TickEvery:    time.Duration(cfg.State.RealertTickSec) * time.Second,
+		ChatID:             cfg.Telegram.ChatID,
+		RealertEvery:       time.Duration(cfg.State.RealertEverySec) * time.Second,
+		MobileRealertEvery: time.Duration(cfg.State.MobileRealertEverySec) * time.Second,
+		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
 	})
 	go func() {
 		if err := rp.Run(ctx); err != nil {

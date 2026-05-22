@@ -88,6 +88,49 @@ func TestTickStaleHardSendsRealert(t *testing.T) {
 	}
 }
 
+func TestTickMobileHardUsesMobileRealertCadence(t *testing.T) {
+	d, _ := newTestDB(t)
+	uid, err := d.Users().InsertWithKind("car4", "mobiletoken", "1.1.1.1", "nwg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{
+		ChatID:             -100,
+		RealertEvery:       time.Hour,
+		MobileRealertEvery: 6 * time.Hour,
+		TickEvery:          time.Second,
+	})
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	p.SetNow(func() time.Time { return now })
+
+	hardSince := now.Add(-8 * time.Hour)
+	lastAlert := now.Add(-2 * time.Hour)
+	if err := d.State().Save(uid, "awg_handshake", db.IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "hard",
+		ConsecutiveFails: 6, HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.tick(context.Background())
+	if got := f.count(); got != 0 {
+		t.Fatalf("mobile HARD should wait for mobile cadence, sent %d reminders", got)
+	}
+
+	lastAlert = now.Add(-7 * time.Hour)
+	if err := d.State().Save(uid, "awg_handshake", db.IncidentState{
+		UserID: uid, CheckName: "awg_handshake", CurrentStatus: "hard",
+		ConsecutiveFails: 6, HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p.tick(context.Background())
+	if got := f.count(); got != 1 {
+		t.Fatalf("mobile HARD past mobile cadence should send one reminder, got %d", got)
+	}
+}
+
 func TestTickSilencedSkipped(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}

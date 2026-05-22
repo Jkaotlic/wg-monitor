@@ -187,19 +187,20 @@ type PingCheckNotifier interface {
 }
 
 type Deps struct {
-	Logger            *slog.Logger
-	DB                *db.DB
-	Dispatcher        Dispatcher
-	Resumer           Resumer
-	CommandSink       CommandSink
-	TGNotifier        TGNotifier
-	RoutesNotifier    RoutesNotifier    // nil-safe (handler skips if nil)
-	MaintNotifier     MaintNotifier     // nil-safe (handler skips if nil)
-	OpkgNotifier      OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
-	PingCheckNotifier PingCheckNotifier // nil-safe (handler skips if nil)
-	WakeNotifier      WakeNotifier      // nil-safe (handler skips if nil or user is static)
-	UI                UIConfig
-	Thresholds        state.Thresholds
+	Logger              *slog.Logger
+	DB                  *db.DB
+	Dispatcher          Dispatcher
+	Resumer             Resumer
+	CommandSink         CommandSink
+	TGNotifier          TGNotifier
+	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
+	MaintNotifier       MaintNotifier     // nil-safe (handler skips if nil)
+	OpkgNotifier        OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
+	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
+	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
+	UI                  UIConfig
+	Thresholds          state.Thresholds
+	MobileFailThreshold int
 	// ShutdownCtx, when non-nil, parents the relay goroutines spawned by
 	// cmdResultHandler so SIGTERM cancels in-flight TG sends instead of letting
 	// them outlive srv.Shutdown (BUG-15). Nil falls back to context.Background
@@ -277,6 +278,13 @@ func NewMux(d Deps) http.Handler {
 	return mux
 }
 
+func thresholdsForUser(base state.Thresholds, mobileFailThreshold int, u *db.User) state.Thresholds {
+	if u != nil && u.IsMobile() && mobileFailThreshold > base.Fail {
+		base.Fail = mobileFailThreshold
+	}
+	return base
+}
+
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -305,6 +313,8 @@ func reportHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
+		user, _ := d.DB.Users().GetByID(uid)
+		thresholds := thresholdsForUser(d.Thresholds, d.MobileFailThreshold, user)
 
 		// Resumed=true means the agent self-detected a gap (mobile rejoin).
 		// Tell the watcher BEFORE running the FSM so a near-simultaneous
@@ -315,7 +325,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Resumer.MarkResumed(uid)
 			}
 			if d.WakeNotifier != nil {
-				if u, err := d.DB.Users().GetByID(uid); err == nil && u != nil && u.IsMobile() {
+				if user != nil && user.IsMobile() {
 					checks := append([]wire.Check(nil), rep.Checks...)
 					nickname := nick
 					go func() {
@@ -407,7 +417,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Logger.Warn("state.Get", "err", err)
 				continue
 			}
-			tr := state.Apply(prev, c.Status, time.Now(), d.Thresholds)
+			tr := state.Apply(prev, c.Status, time.Now(), thresholds)
 			// FSM transition timeline for post-mortem (OBS-09). Hard/Recovery
 			// stay at Info; SoftFlap is Debug to avoid noise on transient flaps.
 			switch tr.Kind {

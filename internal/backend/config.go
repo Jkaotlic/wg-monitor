@@ -81,15 +81,17 @@ type HeartbeatConfig struct {
 	ResumeGraceSec      int   `yaml:"resume_grace_sec"`       // suppress OFFLINE this long after Report.Resumed=true
 	ScanIntervalSec     int   `yaml:"scan_interval_sec"`
 	MobileLifecycle     *bool `yaml:"mobile_lifecycle"`       // NEW: default true. Wake-card on Resumed=true + one-shot sleep-info instead of HARD-OFFLINE.
-	MobileSleepAfterSec int   `yaml:"mobile_sleep_after_sec"` // NEW: default 300. After this many seconds of mobile silence, send one "🌙 вышел из сети" info-card.
+	MobileSleepAfterSec int   `yaml:"mobile_sleep_after_sec"` // default 1800. After this many seconds of mobile silence, send one sleep info-card.
 }
 
 type StateConfig struct {
-	FailThreshold     int `yaml:"fail_threshold"`
-	RecoveryThreshold int `yaml:"recovery_threshold"`
-	RealertEverySec   int `yaml:"realert_every_sec"`
-	RealertTickSec    int `yaml:"realert_tick_sec"`
-	MuteCutoffHour    int `yaml:"mute_cutoff_hour"`
+	FailThreshold         int `yaml:"fail_threshold"`
+	RecoveryThreshold     int `yaml:"recovery_threshold"`
+	MobileFailThreshold   int `yaml:"mobile_fail_threshold"`
+	RealertEverySec       int `yaml:"realert_every_sec"`
+	MobileRealertEverySec int `yaml:"mobile_realert_every_sec"`
+	RealertTickSec        int `yaml:"realert_tick_sec"`
+	MuteCutoffHour        int `yaml:"mute_cutoff_hour"`
 }
 
 // UIConfig controls v0.6.0 ReplyKeyboard / smart-reply behaviour (spec §8).
@@ -173,12 +175,15 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Heartbeat.ScanIntervalSec == 0 {
 		cfg.Heartbeat.ScanIntervalSec = 30
 	}
-	if cfg.Heartbeat.MobileSleepAfterSec == 0 {
-		cfg.Heartbeat.MobileSleepAfterSec = 300
-	}
 	if cfg.Heartbeat.MobileLifecycle == nil {
 		t := true
 		cfg.Heartbeat.MobileLifecycle = &t
+	}
+	if cfg.Heartbeat.MobileSleepAfterSec == 0 {
+		cfg.Heartbeat.MobileSleepAfterSec = 1800
+	}
+	if cfg.Heartbeat.MobileLifecycle != nil && *cfg.Heartbeat.MobileLifecycle && cfg.Heartbeat.MobileSleepAfterSec < 1800 {
+		cfg.Heartbeat.MobileSleepAfterSec = 1800
 	}
 	if cfg.State.FailThreshold == 0 {
 		cfg.State.FailThreshold = 3
@@ -186,8 +191,14 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.State.RecoveryThreshold == 0 {
 		cfg.State.RecoveryThreshold = 2
 	}
+	if cfg.State.MobileFailThreshold == 0 {
+		cfg.State.MobileFailThreshold = 6
+	}
 	if cfg.State.RealertEverySec == 0 {
 		cfg.State.RealertEverySec = 6 * 3600
+	}
+	if cfg.State.MobileRealertEverySec == 0 {
+		cfg.State.MobileRealertEverySec = 6 * 3600
 	}
 	if cfg.State.RealertTickSec == 0 {
 		cfg.State.RealertTickSec = 300

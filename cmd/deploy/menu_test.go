@@ -65,6 +65,13 @@ func TestServiceMenuHidesLegacyUnlessEnabled(t *testing.T) {
 	}
 }
 
+func TestServiceMenuOffersCurrentVPSAdoption(t *testing.T) {
+	text := renderMenuItems(serviceMenuItems(false), "B", "back")
+	if !strings.Contains(text, "current VPS") && !strings.Contains(text, "текущий VPS") {
+		t.Fatalf("service menu should offer current VPS adoption:\n%s", text)
+	}
+}
+
 func TestMenuHeaderBoxKeepsVersionInsideBorder(t *testing.T) {
 	line := boxSplit("WG MONITOR // Deploy Console", "v0.13.0-rc-super-long")
 	if got := len([]rune(line)); got != menuBoxInnerWidth+2 {

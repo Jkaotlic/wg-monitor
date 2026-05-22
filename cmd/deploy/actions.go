@@ -1464,6 +1464,74 @@ func actionMigrateBackend(state *State, secrets *SecretStore, nickname string) e
 	return migrateBackendAgents(state, secrets, bs, nickname)
 }
 
+func actionAdoptBackend(state *State, secrets *SecretStore) error {
+	PrintInfo("Привязка этого ПК к уже установленному backend на текущем VPS.")
+	PrintInfo("Это заменит локальные координаты VPS, подтянет wizard token по SSH и затем выполнит sync-vps.")
+
+	adopted := state.Backend
+	adopted.Host = strings.TrimSpace(Ask("Current VPS host/IP", adopted.Host))
+	if adopted.Host == "" {
+		return fmt.Errorf("VPS host required")
+	}
+	adopted.Port = parseIntOr(Ask("SSH port", fmt.Sprint(portOrDefault(adopted.Port, 22))), portOrDefault(adopted.Port, 22))
+	adopted.User = orDefault(Ask("SSH user", userOrDefault(adopted.User, "root")), userOrDefault(adopted.User, "root"))
+	adopted.Domain = domainHost(cleanPromptDefaultLeak(Ask("Backend domain (wgmonitor.example)", adopted.Domain)))
+	if adopted.Domain == "" {
+		return fmt.Errorf("backend domain required")
+	}
+	applyAdoptedBackend(state, adopted)
+	configureBackendSSHAuth(state)
+
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+	PrintStep(1, 3, "SSH к текущему VPS")
+	s, err := connectBackendSSH(state, secrets, kh)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	PrintStep(2, 3, "Прочитать wizard token")
+	out, err := s.MustRun("cat /etc/wg-monitor/wizard-token.txt 2>/dev/null")
+	if err != nil {
+		return fmt.Errorf("read /etc/wg-monitor/wizard-token.txt: %w", err)
+	}
+	tok := strings.TrimSpace(out)
+	if tok == "" {
+		return fmt.Errorf("/etc/wg-monitor/wizard-token.txt is empty or missing")
+	}
+	if err := secrets.Set("WIZARD_TOKEN", tok); err != nil {
+		if errors.Is(err, ErrCacheDisabled) {
+			PrintWarn("WIZARD_TOKEN сохранён только в текущем процессе: включён WG_NO_SECRET_CACHE=1")
+		} else {
+			return fmt.Errorf("save WIZARD_TOKEN: %w", err)
+		}
+	}
+	PrintOK("WIZARD_TOKEN подтянут с VPS")
+	if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
+		PrintWarn("health probe не прошёл, но токен уже сохранён: " + err.Error())
+	}
+
+	PrintStep(3, 3, "Синхронизация списка роутеров")
+	return actionSyncVPS(state, secrets)
+}
+
+func applyAdoptedBackend(state *State, adopted BackendState) {
+	old := state.Backend
+	state.Backend.Host = strings.TrimSpace(adopted.Host)
+	state.Backend.Port = portOrDefault(adopted.Port, 22)
+	state.Backend.User = userOrDefault(adopted.User, "root")
+	state.Backend.SSHAuth = normalizeBackendSSHAuth(adopted.SSHAuth)
+	state.Backend.KeyPath = strings.TrimSpace(adopted.KeyPath)
+	state.Backend.Domain = domainHost(adopted.Domain)
+	if state.Backend.Host != old.Host || state.Backend.Domain != old.Domain {
+		state.Backend.LastDeploy = ""
+		state.Backend.LastDeployedVersion = ""
+	}
+}
+
 func shouldOfferBackendMigration(oldBackend, newBackend BackendState, agentCount int) bool {
 	if agentCount == 0 {
 		return false

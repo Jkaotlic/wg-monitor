@@ -125,6 +125,8 @@ func main() {
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
 	case "sync-vps", "sync":
 		runCLIAction("sync-vps", func() error { return actionSyncVPS(state, secrets) })
+	case "adopt-backend", "adopt-vps", "bind-backend":
+		runCLIAction("adopt-backend", func() error { return actionAdoptBackend(state, secrets) })
 	case "migrate-backend", "migrate-domain":
 		agentFlag := ""
 		for i := 1; i < len(args); i++ {
@@ -355,6 +357,7 @@ Commands:
                                legacy recovery only when WG_LEGACY_ROUTER_SSH=1
   doctor [--deep]              local + VPS + agent health check
   sync-vps, sync               pull router list/deploy metadata from backend
+  adopt-backend                bind this PC to an already running current VPS
   migrate-backend [--agent <nick>]
                                re-enroll agents on the new VPS through AWG Manager
   restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]
