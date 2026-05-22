@@ -19,6 +19,7 @@ type awgmRelayConfig struct {
 	TerminalUser     string `json:"terminal_user"`
 	TerminalPassword string `json:"terminal_password"`
 	BootstrapScript  string `json:"bootstrap_script"`
+	Mode             string `json:"mode"`
 }
 
 func runAWGMBootstrapDirect(awgm *AWGMClient, script, terminalUser, terminalPass string) (TerminalRunResult, error) {
@@ -81,6 +82,7 @@ func runAWGMBootstrapViaVPS(state *State, secrets *SecretStore, ag *AgentState, 
 		TerminalUser:     terminalUser,
 		TerminalPassword: terminalPass,
 		BootstrapScript:  script,
+		Mode:             "bootstrap",
 	}
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
@@ -102,6 +104,86 @@ func runAWGMBootstrapViaVPS(state *State, secrets *SecretStore, ag *AgentState, 
 		return TerminalRunResult{Output: out + stderr}, fmt.Errorf("awgm vps relay failed rc=%d", rc)
 	}
 	return TerminalRunResult{Output: out}, nil
+}
+
+func fetchAWGMSystemInfoViaVPS(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass string) (*AWGMSystemInfo, error) {
+	if state == nil || strings.TrimSpace(state.Backend.Host) == "" {
+		return nil, fmt.Errorf("backend SSH host is not configured; install backend first")
+	}
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return nil, err
+	}
+	bs, err := connectBackendSSH(state, secrets, kh)
+	if err != nil {
+		return nil, err
+	}
+	defer bs.Close()
+
+	nick := safeRelayName(ag.Nickname)
+	stamp := time.Now().UTC().Format("20060102150405")
+	base := "/tmp/wg-monitor-awgm-info-" + nick + "-" + stamp
+	scriptPath := base + ".py"
+	configPath := base + ".json"
+	cleanup := "rm -f " + shellSingleQuote(scriptPath) + " " + shellSingleQuote(configPath)
+	defer func() {
+		if _, _, rc, err := bs.Run(cleanup); err != nil || rc != 0 {
+			PrintWarn("AWG Manager VPS info cleanup failed")
+		}
+	}()
+
+	cfg := awgmRelayConfig{
+		BaseURL:  ag.AWGMURL,
+		APIKey:   apiKey,
+		Login:    login,
+		Password: pass,
+		Mode:     "system_info",
+	}
+	cfgBytes, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := bs.UploadStdin(scriptPath, []byte(awgmVPSRelayPython)); err != nil {
+		return nil, fmt.Errorf("upload awgm relay script: %w", err)
+	}
+	if err := bs.UploadStdin(configPath, cfgBytes); err != nil {
+		return nil, fmt.Errorf("upload awgm relay config: %w", err)
+	}
+	cmd := "chmod 700 " + shellSingleQuote(scriptPath) + " && chmod 600 " + shellSingleQuote(configPath) +
+		" && python3 " + shellSingleQuote(scriptPath) + " " + shellSingleQuote(configPath)
+	out, stderr, rc, err := bs.Run(cmd)
+	if err != nil {
+		return nil, fmt.Errorf("awgm vps relay ssh transport: %w", err)
+	}
+	if rc != 0 {
+		msg := strings.TrimSpace(stderr)
+		if msg == "" {
+			msg = strings.TrimSpace(out)
+		}
+		return nil, fmt.Errorf("awgm vps system info failed rc=%d: %s", rc, msg)
+	}
+	return parseAWGMSystemInfoRelayOutput(out)
+}
+
+const awgmRelayJSONMarker = "__WG_MONITOR_JSON__"
+
+func parseAWGMSystemInfoRelayOutput(out string) (*AWGMSystemInfo, error) {
+	idx := strings.LastIndex(out, awgmRelayJSONMarker)
+	if idx < 0 {
+		return nil, fmt.Errorf("awgm vps relay returned no system info marker")
+	}
+	raw := strings.TrimSpace(out[idx+len(awgmRelayJSONMarker):])
+	if nl := strings.IndexByte(raw, '\n'); nl >= 0 {
+		raw = strings.TrimSpace(raw[:nl])
+	}
+	var env awgmEnvelope[AWGMSystemInfo]
+	if err := json.Unmarshal([]byte(raw), &env); err != nil {
+		return nil, fmt.Errorf("awgm vps relay system info decode: %w", err)
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgm vps relay system info: success=false")
+	}
+	return &env.Data, nil
 }
 
 func shouldRunAWGMBootstrapViaVPS(state *State, rawURL string) bool {
@@ -158,6 +240,7 @@ import urllib.parse
 import urllib.request
 
 MARKER = "__WG_MONITOR_DONE__"
+JSON_MARKER = "__WG_MONITOR_JSON__"
 
 class RelayError(Exception):
     pass
@@ -434,6 +517,10 @@ def main():
     sock = None
     try:
         login_if_needed(op, cfg)
+        if cfg.get("mode") == "system_info":
+            env = request(op, cfg, "GET", "/api/system/info")
+            print(JSON_MARKER + json.dumps(env, separators=(",", ":")))
+            return
         ensure_terminal(op, cfg)
         sock = ws_connect(cfg, jar)
         ws_send(sock, 0x1, '{"AuthToken":""}')

@@ -807,23 +807,31 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 
 	PrintStep(2, 5, "AWG Manager: auth + system info")
 	awgm := NewAWGMClient(ag.AWGMURL, login, pass).WithAPIKey(apiKey)
-	if err := awgm.Login(context.Background()); err != nil {
-		return err
-	}
-	info, err := awgm.SystemInfo(context.Background())
+	var info *AWGMSystemInfo
 	awgmAuthMode := "router-admin"
 	if apiKey != "" {
 		awgmAuthMode = "api-key"
+	}
+	if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+		PrintInfo("public AWG Manager URL detected - probing system info from VPS")
+		info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
+	} else {
+		if err = awgm.Login(context.Background()); err == nil {
+			info, err = awgm.SystemInfo(context.Background())
+		}
 	}
 	if err != nil && apiKey != "" && isAWGMUnauthorized(err) {
 		PrintWarn("AWG Manager API key получил 401 от web layer; fallback на login/password")
 		apiKey = ""
 		login, pass = awgmLoginPasswordForAgent(secrets, ag.Nickname)
 		awgm = NewAWGMClient(ag.AWGMURL, login, pass)
-		if err := awgm.Login(context.Background()); err != nil {
-			return err
+		if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+			info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
+		} else {
+			if err = awgm.Login(context.Background()); err == nil {
+				info, err = awgm.SystemInfo(context.Background())
+			}
 		}
-		info, err = awgm.SystemInfo(context.Background())
 		awgmAuthMode = "router-admin"
 	}
 	if err != nil {
@@ -908,7 +916,10 @@ func awgmLoginPasswordForAgent(secrets *SecretStore, nickname string) (login, pa
 
 func isAWGMUnauthorized(err error) bool {
 	var httpErr *AWGMHTTPError
-	return errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized
+	if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusUnauthorized {
+		return true
+	}
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "http 401")
 }
 
 func routerRootPasswordForAgent(secrets *SecretStore, nickname string) string {

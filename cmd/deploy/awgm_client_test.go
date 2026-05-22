@@ -250,3 +250,14 @@ func TestAWGMBootstrapRelayURLDecision(t *testing.T) {
 		t.Fatal("relay should stay disabled without backend SSH host")
 	}
 }
+
+func TestParseAWGMSystemInfoRelayOutput(t *testing.T) {
+	out := "noise\n__WG_MONITOR_JSON__{\"success\":true,\"data\":{\"goArch\":\"arm64\",\"routerIP\":\"192.168.1.1\",\"version\":\"1.2.3\"}}\n"
+	info, err := parseAWGMSystemInfoRelayOutput(out)
+	if err != nil {
+		t.Fatalf("parse relay output: %v", err)
+	}
+	if info.GoArch != "arm64" || info.RouterIP != "192.168.1.1" || info.Version != "1.2.3" {
+		t.Fatalf("bad info: %+v", info)
+	}
+}
