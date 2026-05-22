@@ -309,7 +309,7 @@ func withCurrentVPSAdoption(items []menuItem, legacy bool) []menuItem {
 	return append(items[:2], append([]menuItem{{
 		Key:   "3",
 		Title: "Привязать текущий VPS",
-		Help:  "when to use: this PC has old wizard.toml, but current VPS is already alive",
+		Help:  "когда нажимать: на этом ПК старый wizard.toml, а текущий VPS уже работает",
 	}}, items[2:]...)...)
 }
 

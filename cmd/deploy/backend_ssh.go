@@ -17,20 +17,44 @@ const (
 
 func configureBackendSSHAuth(state *State) {
 	current := normalizeBackendSSHAuth(state.Backend.SSHAuth)
-	answer := strings.ToLower(strings.TrimSpace(Ask("SSH auth для VPS (password/key)", current)))
-	if answer == "p" || answer == "pass" || answer == "пароль" {
-		answer = backendSSHAuthPassword
-	}
-	if answer == "k" || answer == "ssh-key" || answer == "private-key" || answer == "ключ" {
-		answer = backendSSHAuthKey
-	}
-	if answer != backendSSHAuthKey {
+	answer := Ask("SSH auth для VPS (password/key; можно вставить путь к ключу)", current)
+	auth, keyPath, askKeyPath := parseBackendSSHAuthAnswer(answer)
+	if auth != backendSSHAuthKey {
 		state.Backend.SSHAuth = backendSSHAuthPassword
 		state.Backend.KeyPath = ""
 		return
 	}
 	state.Backend.SSHAuth = backendSSHAuthKey
-	state.Backend.KeyPath = expandLocalPath(Ask("SSH private key path", state.Backend.KeyPath))
+	if askKeyPath {
+		keyPath = Ask("SSH private key path", state.Backend.KeyPath)
+	}
+	state.Backend.KeyPath = expandLocalPath(keyPath)
+}
+
+func parseBackendSSHAuthAnswer(raw string) (auth, keyPath string, askKeyPath bool) {
+	answer := strings.TrimSpace(raw)
+	lower := strings.ToLower(answer)
+	switch lower {
+	case "k", "key", "ssh-key", "private-key", "ключ":
+		return backendSSHAuthKey, "", true
+	case "p", "pass", "password", "пароль":
+		return backendSSHAuthPassword, "", false
+	}
+	if looksLikePrivateKeyPath(answer) {
+		return backendSSHAuthKey, expandLocalPath(answer), false
+	}
+	return backendSSHAuthPassword, "", false
+}
+
+func looksLikePrivateKeyPath(answer string) bool {
+	if answer == "" {
+		return false
+	}
+	return strings.ContainsAny(answer, `\/`) ||
+		strings.HasPrefix(answer, "~") ||
+		strings.Contains(answer, ":") ||
+		strings.HasPrefix(answer, "$") ||
+		strings.HasPrefix(answer, "%")
 }
 
 func normalizeBackendSSHAuth(v string) string {
