@@ -298,7 +298,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	slog.Info("callback", "from", q.From.ID, "data", q.Data)
 	args, err := Parse(q.Data)
 	if err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown action")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "неизвестная кнопка")
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
 		return
 	}
@@ -473,7 +473,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
-		msg := "error: " + err.Error()
+		msg := "Ошибка: " + err.Error()
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
@@ -726,7 +726,7 @@ func (r *Router) handleRouteExplainReply(ctx context.Context, m *tg.Message, kin
 	snap, found := r.routesCache.Get(user.ID)
 	if !found {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"Refresh routes first, then send: explain example.com", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+			"Сначала обнови маршруты, потом отправь: explain example.com", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return true
 	}
 	text := tg.RouteExplainText(user.Nickname, target, snap)
@@ -806,7 +806,13 @@ func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, k
 // (so subsequent edits target this MessageID) and enqueues route_status.
 // The cmd-result handler edits when the agent answers.
 func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
-	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
+	loadingText := alerts.Card{
+		Badge:   "⏳",
+		Label:   "🛣 Маршруты",
+		Summary: "читаю правила с роутера",
+		Meta:    []string{alerts.KV("роутер", user.Nickname)},
+		Hint:    "Если экран не обновится, нажми «Обновить».",
+	}.Render(alerts.CardOpts{})
 	// IMPORTANT: send WITHOUT a reply_markup. TG refuses editMessageText on
 	// messages whose reply_markup is a ReplyKeyboardMarkup (only inline-kb
 	// markups are editable). RoutesNotifier needs to edit this message in
@@ -847,7 +853,13 @@ func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user 
 		// editMessageText works against inline-kb markups (unlike reply-kb).
 		mid, err = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
 	} else {
-		loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
+		loadingText := alerts.Card{
+			Badge:   "⏳",
+			Label:   "🛠 Обслуживание",
+			Summary: "читаю версии и состояние сервисов",
+			Meta:    []string{alerts.KV("роутер", user.Nickname)},
+			Hint:    "Если экран не обновится, нажми «Проверить апдейты».",
+		}.Render(alerts.CardOpts{})
 		// IMPORTANT: no reply_markup — see openRoutesPanelMessage for the
 		// editMessageText/ReplyKeyboardMarkup incompatibility.
 		mid, err = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
@@ -1448,11 +1460,11 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 }
 
 func (r *Router) handleRoutesAddStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	text := "Add route\n\nChoose route type."
+	text := "🛣 Добавить маршрут\n\nЧто направляем:\n  • DNS / HR-Neo — домены через выбранный туннель\n  • Static CIDR — IP/подсети через выбранный туннель"
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 		{{Text: "DNS / HR-Neo", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns", args.UserID)}},
 		{{Text: "Static CIDR", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:static", args.UserID)}},
-		{{Text: "Cancel", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", args.UserID)}},
+		{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", args.UserID)}},
 	}}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -1461,12 +1473,12 @@ func (r *Router) handleRoutesAddStart(ctx context.Context, q *tg.CallbackQuery, 
 func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, _ := r.d.Users().GetByID(args.UserID)
 	if user == nil || r.routesCache == nil || r.routeWizard == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "routes cache is not ready")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "маршруты ещё не загружены")
 		return
 	}
 	snap, ok := r.routesCache.Get(user.ID)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "refresh routes and try again")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй снова")
 		return
 	}
 	draft := r.routeWizard.PutAddDraft(RouteAddDraft{
@@ -1480,8 +1492,8 @@ func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, a
 			CallbackData: fmt.Sprintf("routes_add_tunnel:%d:_panel_:%s:%s", user.ID, draft.Token, t.ID),
 		}})
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{{Text: "Cancel", CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draft.Token)}})
-	text := "Add route\n\nChoose destination tunnel."
+	rows = append(rows, []tg.InlineKeyboardButton{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draft.Token)}})
+	text := "🛣 Добавить маршрут\n\nКуда вести трафик:\n  • выбери туннель, через который должны идти эти домены или IP"
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -1499,9 +1511,9 @@ func (r *Router) handleRoutesAddTunnel(ctx context.Context, q *tg.CallbackQuery,
 	}
 	draft.TunnelID = args.RebindDstID
 	r.routeWizard.PutAddDraft(draft)
-	text := "Add route\n\nSend route name on the first line and targets on the next lines.\n\nExample:\nmedia\nexample.com\napi.example.com"
+	text := "🛣 Добавить маршрут\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — домены или IP\n\nПример:\nmedia\nexample.com\napi.example.com"
 	if draft.Kind == "static" {
-		text = "Add static route\n\nSend route name on the first line and CIDR/IP targets on the next lines.\n\nExample:\ncorp\n10.10.0.0/16\n192.0.2.7"
+		text = "🛣 Добавить static route\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — CIDR/IP цели\n\nПример:\ncorp\n10.10.0.0/16\n192.0.2.7"
 	}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", nil)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -1518,7 +1530,7 @@ func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, use
 	name, targets := parseRouteAddReply(m.Text)
 	if name == "" || len(targets) == 0 {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"Need route name on the first line and at least one target below it.", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+			"Не понял маршрут.\n\nФормат:\n  • первая строка — название\n  • ниже хотя бы одна цель: домен, IP или CIDR", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return true
 	}
 	draft.Name = name
@@ -1527,7 +1539,7 @@ func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, use
 	if r.cmdSink == nil {
 		return true
 	}
-	ack := "Checking route overlaps..."
+	ack := "⏳ Проверяю, не конфликтует ли маршрут с уже существующими правилами…"
 	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, ack, "", nil)
 	if err != nil {
 		mid = m.MessageID
@@ -1543,7 +1555,7 @@ func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, use
 	}
 	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Could not enqueue route preview: "+err.Error(), "", nil)
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось поставить проверку маршрута в очередь: "+err.Error(), "", nil)
 	}
 	return true
 }
@@ -1555,7 +1567,7 @@ func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery
 	}
 	draft, ok := r.routeWizard.ConsumeAddConfirm(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "preview expired")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
 		return
 	}
 	cmd := wire.Command{ID: defaultCmdID(), Action: "route_add", IssuedAt: time.Now().UTC(), Args: map[string]any{
@@ -1564,10 +1576,10 @@ func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery
 	}}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Applying route change...", "", nil)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Применяю изменение маршрута…", "", nil)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
@@ -1585,7 +1597,7 @@ func (r *Router) handleRoutesDelete(ctx context.Context, q *tg.CallbackQuery, ar
 	}
 	snap, ok := r.routesCache.Get(user.ID)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "refresh routes and try again")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй снова")
 		return
 	}
 	if args.RouteToken == "_list_" {
@@ -1598,14 +1610,14 @@ func (r *Router) handleRoutesDelete(ctx context.Context, q *tg.CallbackQuery, ar
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{{Text: label, CallbackData: fmt.Sprintf("routes_del:%d:_panel_:%s", user.ID, token)}})
 		}
-		rows = append(rows, []tg.InlineKeyboardButton{{Text: "Cancel", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", user.ID)}})
-		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Delete route\n\nChoose one route.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
+		rows = append(rows, []tg.InlineKeyboardButton{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", user.ID)}})
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "🛣 Удалить маршрут\n\nВыбери одно правило для удаления.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 		return
 	}
 	rt, ok := r.routeWizard.GetRouteToken(user.ID, q.Message.MessageThreadID, user.ID, args.RouteToken)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "route token expired")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "выбор маршрута устарел")
 		return
 	}
 	draft := r.routeWizard.PutDeleteDraft(RouteDeleteDraft{UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rt.Kind, RouteID: rt.RouteID, PreviewHash: rt.PreviewHash})
@@ -1614,10 +1626,10 @@ func (r *Router) handleRoutesDelete(ctx context.Context, q *tg.CallbackQuery, ar
 	}}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Building delete preview...", "", nil)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Готовлю превью удаления…", "", nil)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
@@ -1628,7 +1640,7 @@ func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 	}
 	draft, ok := r.routeWizard.ConsumeDeleteConfirm(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "preview expired")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
 		return
 	}
 	cmd := wire.Command{ID: defaultCmdID(), Action: "route_delete", IssuedAt: time.Now().UTC(), Args: map[string]any{
@@ -1636,10 +1648,10 @@ func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 	}}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Deleting route...", "", nil)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Удаляю маршрут…", "", nil)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
@@ -1658,10 +1670,10 @@ func (r *Router) handleRoutesHRNeo(ctx context.Context, q *tg.CallbackQuery, arg
 	cmd := wire.Command{ID: defaultCmdID(), Action: "hrneo_inventory", IssuedAt: time.Now().UTC()}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Loading HR-Neo rules...", "", nil)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Загружаю HR-Neo правила…", "", nil)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
@@ -1673,10 +1685,10 @@ func (r *Router) handleRoutesHRNeoDoctor(ctx context.Context, q *tg.CallbackQuer
 	cmd := wire.Command{ID: defaultCmdID(), Action: "hrneo_doctor", IssuedAt: time.Now().UTC()}
 	ref := cmdpkg.MessageRef{Action: "hrneo_doctor", ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "enqueue failed")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Running HR-Neo Doctor...", "", nil)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Проверяю HR-Neo…", "", nil)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
@@ -1687,13 +1699,13 @@ func (r *Router) handleRoutesSnapshot(ctx context.Context, q *tg.CallbackQuery, 
 	}
 	snap, ok := r.routesCache.Get(user.ID)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "refresh routes first")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала обнови маршруты")
 		return
 	}
 	text := tg.RouteSnapshotText(user.Nickname, snap)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Routes", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
-		{Text: "Refresh", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
 	}}}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")

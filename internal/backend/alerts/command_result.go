@@ -35,7 +35,7 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	case "diag_now":
 		return formatDiagSuccess(label, r.Output, maxChars)
 	case "pingcheck_now":
-		summary := strings.TrimSpace(r.Output)
+		summary := humanPingcheckResult(r.Output)
 		card := Card{
 			Badge:   "",
 			Label:   label,
@@ -59,7 +59,7 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 		card := Card{Badge: "", Label: label, Summary: summary}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "restart_tunnel":
-		card := Card{Badge: "", Label: label, Summary: strings.TrimSpace(r.Output)}
+		card := Card{Badge: "", Label: label, Summary: humanRestartResult(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "tunnel_import":
 		card := Card{
@@ -70,19 +70,74 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 		}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "check_via_tunnel", "check_direct", "router_doctor":
-		return []string{strings.TrimSpace(r.Output)}
+		return formatPlainCommandOutput(label, "готово", r.Output, maxChars)
 	case "opkg_upgrade":
-		full := fmt.Sprintf("%s:\n\n%s", label, r.Output)
+		full := Card{
+			Badge:   "",
+			Label:   label,
+			Summary: "готово",
+			Details: strings.TrimSpace(r.Output),
+		}.Render(CardOpts{})
 		if len(full) <= maxChars {
 			return []string{full}
 		}
-		return paginate(label+":", r.Output, maxChars)
+		return paginate(label+": лог", r.Output, maxChars)
 	}
-	full := fmt.Sprintf("%s: %s", label, r.Output)
+	full := Card{
+		Badge:   "",
+		Label:   label,
+		Summary: strings.TrimSpace(r.Output),
+	}.Render(CardOpts{})
 	if len(full) <= maxChars {
 		return []string{full}
 	}
 	return paginate(label+":", r.Output, maxChars)
+}
+
+func humanPingcheckResult(output string) string {
+	out := strings.TrimSpace(output)
+	low := strings.ToLower(out)
+	switch {
+	case strings.HasPrefix(low, "alive "):
+		lat := strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(low, "alive"), " "))
+		lat = strings.ReplaceAll(lat, " ms", " мс")
+		return "связь живая, " + lat
+	case low == "alive":
+		return "связь живая"
+	case strings.HasPrefix(low, "dead"):
+		return "связь не проходит"
+	case out == "":
+		return "проверка завершилась без подробностей"
+	default:
+		return out
+	}
+}
+
+func humanRestartResult(output string) string {
+	out := strings.TrimSpace(output)
+	low := strings.ToLower(out)
+	if strings.HasPrefix(low, "restarted ") {
+		return "туннель перезапущен: " + strings.TrimSpace(out[len("restarted "):])
+	}
+	if out == "" {
+		return "команда выполнена"
+	}
+	return out
+}
+
+func formatPlainCommandOutput(label, summary, output string, maxChars int) []string {
+	output = strings.TrimSpace(output)
+	card := Card{
+		Badge:   "",
+		Label:   label,
+		Summary: summary,
+		Details: output,
+	}
+	full := card.Render(CardOpts{})
+	if len(full) <= maxChars {
+		return []string{full}
+	}
+	return paginate(label+":", output, maxChars)
 }
 
 // formatDiagSuccess parses the awg-manager JSON report into a Card.
@@ -107,7 +162,7 @@ func formatDiagSuccess(label, body string, maxChars int) []string {
 		Label:   label,
 		Summary: summary,
 		Details: strings.Join(bullets, "\n"),
-		Hint:    "Полный JSON-отчёт доступен по кнопке ниже.",
+		Hint:    "Полные сырые данные доступны по кнопке ниже.",
 	}
 	return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 }

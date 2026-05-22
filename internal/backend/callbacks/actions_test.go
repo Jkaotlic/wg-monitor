@@ -37,8 +37,8 @@ func TestActionSilenceWritesUntil(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(statusLine, "⏸ Silenced") {
-		t.Errorf("status line should start with '⏸ Silenced', got: %q", statusLine)
+	if !strings.HasPrefix(statusLine, "⏸ Уведомления скрыты") {
+		t.Errorf("status line should start with human silence marker, got: %q", statusLine)
 	}
 	st, _ := d.State().Get(uid, "awg_handshake")
 	if st.SilencedUntil == nil {
@@ -107,7 +107,7 @@ func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
 	if c.userID != 7 || c.cmdID != "fixed-id-1" || c.action != "restart_tunnel" || c.check != "tunnel_amnezia_for_awg2" {
 		t.Errorf("got %+v", c)
 	}
-	if !strings.Contains(statusLine, "Restart") || !strings.Contains(statusLine, "очередь") {
+	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "очередь") {
 		t.Errorf("unexpected status line: %q", statusLine)
 	}
 }
@@ -117,11 +117,11 @@ func TestCommandAction_CommandActions(t *testing.T) {
 		action  string
 		wantSub string
 	}{
-		{"restart_tunnel", "Restart"},
-		{"diag_now", "Diag"},
-		{"pingcheck_now", "Pingcheck"},
-		{"force_recheck", "Force recheck"},
-		{"opkg_upgrade", "Opkg"},
+		{"restart_tunnel", "Перезапуск туннеля"},
+		{"diag_now", "Диагностика"},
+		{"pingcheck_now", "Проверка связи"},
+		{"force_recheck", "Повторная проверка"},
+		{"opkg_upgrade", "opkg"},
 		{"router_doctor", "Проверка"},
 	}
 	for _, c := range cases {
@@ -181,8 +181,8 @@ func TestActionAckSetsAcked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(statusLine, "✅ Ack'ed") {
-		t.Errorf("status line should start with '✅ Ack'ed', got: %q", statusLine)
+	if !strings.HasPrefix(statusLine, "✅ Отмечено") {
+		t.Errorf("status line should start with human ack marker, got: %q", statusLine)
 	}
 	st, _ := d.State().Get(uid, "awg_handshake")
 	if !st.Acked {

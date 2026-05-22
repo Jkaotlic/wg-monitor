@@ -14,18 +14,19 @@ import (
 func RouteAddPreviewText(plan any) string {
 	p := readRouteAddPlan(plan)
 	var b strings.Builder
-	b.WriteString("Routes Preview\n")
-	fmt.Fprintf(&b, "Type: %s\n", addTypeLabel(p))
-	fmt.Fprintf(&b, "Name: %s\n", fallback(p.name, "-"))
-	fmt.Fprintf(&b, "Target: %s\n", fallback(p.bind, "-"))
+	b.WriteString("🛣 Превью маршрута\n\n")
+	b.WriteString("Сводка:\n")
+	fmt.Fprintf(&b, "  • Тип маршрута: %s\n", addTypeLabel(p))
+	fmt.Fprintf(&b, "  • Название: %s\n", fallback(p.name, "-"))
+	fmt.Fprintf(&b, "  • Куда вести: %s\n", fallback(p.bind, "-"))
 	writeTargets(&b, p.targets)
 	writeOverlapSection(&b, "Blocking overlaps:", p.overlaps, "block")
 	writeOverlapSection(&b, "Warnings:", p.overlaps, "warn")
 	writeOverlapSection(&b, "Notes:", p.overlaps, "info")
 	if hasSeverity(p.overlaps, "block") || !p.canApply {
-		b.WriteString("\nNext: choose another tunnel, edit targets, or cancel.\n")
+		b.WriteString("\nДальше:\n  • выбери другой туннель, измени цели или отмени действие\n")
 	} else {
-		b.WriteString("\nNext: confirm to add this route, or cancel.\n")
+		b.WriteString("\nДальше:\n  • подтверди добавление или отмени действие\n")
 	}
 	return b.String()
 }
@@ -37,12 +38,12 @@ func RouteAddPreviewKeyboard(userID int64, draftToken, confirmToken string, plan
 	rows := [][]InlineKeyboardButton{}
 	if p.canApply && !hasSeverity(p.overlaps, "block") {
 		rows = append(rows, []InlineKeyboardButton{{
-			Text:         "Confirm",
+			Text:         "✅ Подтвердить",
 			CallbackData: fmt.Sprintf("routes_add_confirm:%d:_panel_:%s:%s", userID, draftToken, confirmToken),
 		}})
 	}
 	rows = append(rows, []InlineKeyboardButton{{
-		Text:         "Cancel",
+		Text:         "↩ Отмена",
 		CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", userID, draftToken),
 	}})
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
@@ -52,20 +53,21 @@ func RouteAddPreviewKeyboard(userID int64, draftToken, confirmToken string, plan
 func RouteDeletePreviewText(plan any) string {
 	p := readRouteDeletePlan(plan)
 	var b strings.Builder
-	b.WriteString("Delete preview\n")
-	fmt.Fprintf(&b, "Name: %s\n", fallback(p.route.name, "-"))
-	fmt.Fprintf(&b, "Kind: %s\n", fallback(p.route.kind, "-"))
-	fmt.Fprintf(&b, "Backend: %s\n", fallback(p.route.backend, "-"))
-	fmt.Fprintf(&b, "Bind: %s\n", fallback(p.route.bind, "-"))
-	enabled := "no"
+	b.WriteString("🛣 Превью удаления\n\n")
+	b.WriteString("Правило:\n")
+	fmt.Fprintf(&b, "  • Название: %s\n", fallback(p.route.name, "-"))
+	fmt.Fprintf(&b, "  • Тип: %s\n", fallback(p.route.kind, "-"))
+	fmt.Fprintf(&b, "  • Движок: %s\n", fallback(p.route.backend, "-"))
+	fmt.Fprintf(&b, "  • Привязка: %s\n", fallback(p.route.bind, "-"))
+	enabled := "нет"
 	if p.route.enabled {
-		enabled = "yes"
+		enabled = "да"
 	}
-	fmt.Fprintf(&b, "Enabled: %s\n", enabled)
+	fmt.Fprintf(&b, "  • Включено: %s\n", enabled)
 	writeTargets(&b, p.route.targets)
 	writeOverlapSection(&b, "Warnings:", p.warnings, "warn")
 	writeOverlapSection(&b, "Notes:", p.warnings, "info")
-	b.WriteString("\nNext: confirm to delete this single route, or cancel.\n")
+	b.WriteString("\nДальше:\n  • подтверди удаление только этого правила или отмени действие\n")
 	return b.String()
 }
 
@@ -73,11 +75,11 @@ func RouteDeletePreviewText(plan any) string {
 func RouteDeletePreviewKeyboard(userID int64, draftToken, confirmToken string) InlineKeyboardMarkup {
 	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{{
-			Text:         "Confirm delete",
+			Text:         "✅ Удалить",
 			CallbackData: fmt.Sprintf("routes_del_confirm:%d:_panel_:%s:%s", userID, draftToken, confirmToken),
 		}},
 		{{
-			Text:         "Cancel",
+			Text:         "↩ Отмена",
 			CallbackData: fmt.Sprintf("routes_del_cancel:%d:_panel_:%s", userID, draftToken),
 		}},
 	}}
@@ -88,43 +90,56 @@ func RouteApplyResultText(result any) string {
 	v := valueOf(result)
 	action := fallback(stringField(v, "Action"), "route")
 	var b strings.Builder
-	fmt.Fprintf(&b, "Route %s complete\n", action)
-	fmt.Fprintf(&b, "Kind: %s\n", fallback(stringField(v, "Kind"), "-"))
-	fmt.Fprintf(&b, "Name: %s\n", fallback(stringField(v, "RouteName"), "-"))
-	fmt.Fprintf(&b, "ID: %s\n", fallback(stringField(v, "RouteID"), "-"))
+	fmt.Fprintf(&b, "✅ %s\n\n", humanRouteActionDone(action))
+	b.WriteString("Итог:\n")
+	fmt.Fprintf(&b, "  • Тип: %s\n", fallback(stringField(v, "Kind"), "-"))
+	fmt.Fprintf(&b, "  • Название: %s\n", fallback(stringField(v, "RouteName"), "-"))
+	fmt.Fprintf(&b, "  • ID: %s\n", fallback(stringField(v, "RouteID"), "-"))
 	if boolField(v, "HRNeoRestarted") {
-		b.WriteString("HR-Neo restarted: yes\n")
+		b.WriteString("  • HR-Neo перезапущен: да\n")
 	}
 	return b.String()
 }
 
+func humanRouteActionDone(action string) string {
+	switch action {
+	case "add":
+		return "Маршрут добавлен"
+	case "delete":
+		return "Маршрут удалён"
+	}
+	return "Маршрут обновлён"
+}
+
 func HRNeoInventoryText(nickname string, inv wire.HRNeoInventory) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "HR-Neo rules - %s\n", nickname)
-	state := "not installed"
+	fmt.Fprintf(&b, "🛣 HR-Neo правила — %s\n", nickname)
+	state := "не установлен"
 	if inv.Status.Installed && inv.Status.Running {
-		state = "installed, running"
+		state = "установлен и работает"
 	} else if inv.Status.Installed {
-		state = "installed, stopped"
+		state = "установлен, но остановлен"
 	}
-	fmt.Fprintf(&b, "State: %s\n", state)
-	fmt.Fprintf(&b, "Rules: %d\n", len(inv.Rules))
+	fmt.Fprintf(&b, "\nСводка:\n")
+	fmt.Fprintf(&b, "  • State: %s\n", state)
+	fmt.Fprintf(&b, "  • Rules: %d\n", len(inv.Rules))
 	if len(inv.Rules) == 0 {
-		b.WriteString("\nNo HR-Neo routes found.\n")
+		b.WriteString("\nHR-Neo маршрутов не найдено.\n")
 		return b.String()
 	}
+	b.WriteString("\nПравила:\n")
 	for _, rule := range inv.Rules {
-		fmt.Fprintf(&b, "\n- %s\n", fallback(rule.Name, rule.ID))
+		fmt.Fprintf(&b, "  • %s\n", fallback(rule.Name, rule.ID))
 		fmt.Fprintf(&b, "  ID: %s\n", rule.ID)
-		fmt.Fprintf(&b, "  Bind: %s\n", fallback(rule.Bind, "policy/default"))
+		fmt.Fprintf(&b, "  Привязка: %s\n", fallback(rule.Bind, "policy/default"))
 		if rule.PolicyName != "" {
-			fmt.Fprintf(&b, "  Policy: %s\n", rule.PolicyName)
+			fmt.Fprintf(&b, "  Политика: %s\n", rule.PolicyName)
 		}
 		if len(rule.Domains) > 0 {
-			fmt.Fprintf(&b, "  Domains: %s\n", strings.Join(rule.Domains, ", "))
+			fmt.Fprintf(&b, "  Домены: %s\n", strings.Join(rule.Domains, ", "))
 		}
 		if len(rule.ManualDomains) > 0 {
-			fmt.Fprintf(&b, "  Manual: %s\n", strings.Join(rule.ManualDomains, ", "))
+			fmt.Fprintf(&b, "  Вручную: %s\n", strings.Join(rule.ManualDomains, ", "))
 		}
 		if len(rule.Routes) > 0 {
 			fmt.Fprintf(&b, "  CIDR/IP: %s\n", strings.Join(rule.Routes, ", "))
@@ -239,7 +254,7 @@ func addTypeLabel(p routeAddPlanView) string {
 }
 
 func writeTargets(b *strings.Builder, targets []string) {
-	b.WriteString("\nTargets:\n")
+	b.WriteString("\nЧто маршрутизируется:\n")
 	if len(targets) == 0 {
 		b.WriteString("- none\n")
 		return
@@ -269,10 +284,22 @@ func writeOverlapSection(b *strings.Builder, title string, overlaps []routeOverl
 	if len(lines) == 0 {
 		return
 	}
-	fmt.Fprintf(b, "\n%s\n", title)
+	fmt.Fprintf(b, "\n%s\n", humanOverlapTitle(title))
 	for _, line := range lines {
 		fmt.Fprintf(b, "- %s\n", line)
 	}
+}
+
+func humanOverlapTitle(title string) string {
+	switch title {
+	case "Blocking overlaps:":
+		return "Блокирует добавление:"
+	case "Warnings:":
+		return "Предупреждения:"
+	case "Notes:":
+		return "Заметки:"
+	}
+	return title
 }
 
 func hasSeverity(overlaps []routeOverlapView, severity string) bool {

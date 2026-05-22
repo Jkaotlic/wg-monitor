@@ -95,7 +95,7 @@ func NewOpkgRepairAction(sink CommandEnqueuer, store *pendingOpkgRepairStore, id
 
 func (a *OpkgRepairAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
 	if a.sink == nil {
-		return "", errors.New("command channel disabled (no sink configured)")
+		return "", errors.New("командная очередь не подключена; действие не отправлено агенту")
 	}
 	p, ok := a.store.consume(args.UserID, args.OpkgRepairToken)
 	if !ok {

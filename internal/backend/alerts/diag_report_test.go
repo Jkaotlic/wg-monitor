@@ -43,6 +43,16 @@ func TestParseDiagReport_HappyPath(t *testing.T) {
 			t.Errorf("bullets missing %q:\n%s", want, joined)
 		}
 	}
+	for _, want := range []string{"модуль AWG загружен", "память", "аптайм"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ordinary-user wording missing %q:\n%s", want, joined)
+		}
+	}
+	for _, bad := range []string{"kernel module: loaded", "Uptime:", "RAM "} {
+		if strings.Contains(joined, bad) {
+			t.Errorf("technical wording %q should not leak:\n%s", bad, joined)
+		}
+	}
 	if !strings.Contains(joined, "✅") {
 		t.Errorf("bullets should include ✅ for up interface: %s", joined)
 	}
@@ -126,7 +136,7 @@ func TestParseDiagReport_KernelModuleNotLoadedHintsReboot(t *testing.T) {
 		t.Fatalf("expected structured report, got fallback")
 	}
 	joined := strings.Join(bullets, "\n")
-	for _, want := range []string{"kernel module", "reboot"} {
+	for _, want := range []string{"модуль AWG есть, но не загружен", "перезагрузка роутера"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("kernel-module hint missing %q:\n%s", want, joined)
 		}

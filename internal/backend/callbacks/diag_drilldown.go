@@ -56,17 +56,17 @@ func (a *DiagTestExpandAction) Apply(ctx context.Context, q *tg.CallbackQuery, a
 }
 
 func (a *DiagTestExpandAction) editStale(ctx context.Context, q *tg.CallbackQuery, userID int64) error {
-	text := "⏱ Сводка устарела (5 мин TTL). Запусти свежий diag."
+	text := "⏱ Сводка устарела. Запусти свежую диагностику."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🔁 Diag", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
+		{Text: "🔁 Диагностика", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
 	}}}
 	return a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
 
 func (a *DiagTestExpandAction) editNotFound(ctx context.Context, q *tg.CallbackQuery, userID int64) error {
-	text := "❓ Не нашёл этот тест в результатах. Возможно awg-mgr обновился — попробуй свежий diag."
+	text := "❓ Не нашёл этот тест в результатах. Возможно awg-manager обновился — запусти свежую диагностику."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🔁 Diag", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
+		{Text: "🔁 Диагностика", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
 	}}}
 	return a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
@@ -76,7 +76,7 @@ func renderTestDetail(d alerts.TestDetail) string {
 	fmt.Fprintf(&b, "📊 Диагностика / %s\n\n", d.Label)
 	if len(d.PerTunnel) == 0 {
 		// Global test (no per-tunnel breakdown). Render just the aggregate.
-		fmt.Fprintf(&b, "%s статус: %s\n", iconForStatus(d.Status), d.Status)
+		fmt.Fprintf(&b, "%s статус: %s\n", iconForStatus(d.Status), humanDiagStatus(d.Status))
 		return b.String()
 	}
 	for _, p := range d.PerTunnel {
@@ -91,11 +91,24 @@ func renderTestDetail(d alerts.TestDetail) string {
 			fmt.Fprintf(&b, "   %s: %s\n", k, p.KeyValues[k])
 		}
 		if p.Reason != "" {
-			fmt.Fprintf(&b, "   reason: %s\n", p.Reason)
+			fmt.Fprintf(&b, "   причина: %s\n", p.Reason)
 		}
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+func humanDiagStatus(s string) string {
+	switch s {
+	case "ok":
+		return "в норме"
+	case "fail":
+		return "сбой"
+	case "skip":
+		return "пропущено"
+	default:
+		return s
+	}
 }
 
 func iconForStatus(s string) string {
@@ -132,9 +145,9 @@ func NewDiagBackAction(cache *diagCache, tgClient diagDrillDownTG) *DiagBackActi
 func (a *DiagBackAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
 	body, ok := a.cache.Get(args.DiagRawToken)
 	if !ok {
-		text := "⏱ Сводка устарела (5 мин TTL). Запусти свежий diag."
+		text := "⏱ Сводка устарела. Запусти свежую диагностику."
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-			{Text: "🔁 Diag", CallbackData: fmt.Sprintf("diag_now:%d:_menu", args.UserID)},
+			{Text: "🔁 Диагностика", CallbackData: fmt.Sprintf("diag_now:%d:_menu", args.UserID)},
 		}}}
 		return "", a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	}

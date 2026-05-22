@@ -123,11 +123,12 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 	wants := []string{
 		"Туннель amnezia_for_awg2 (nwg0) не на связи",
 		"Что не работает:",
-		"Endpoint 198.51.100.21:37634", "через eth3",
-		"Последний handshake:", "4 мин 37 с",
-		"pingCheck: dead", "3/3 fails",
-		"auto-рестартов: 2",
+		"Сервер туннеля: 198.51.100.21:37634", "провайдерский выход: eth3",
+		"Последний обмен ключами:", "4 мин 37 с",
+		"Проверка связи: падает", "неудачных попыток 3 из 3",
+		"авто-рестартов: 2",
 		"Параметры:", "nativewg", "AWG AWG2.0", "MTU 1280",
+		"Что это ломает:",
 		"Что я думаю:",
 		"Что делать:",
 	}
@@ -156,11 +157,15 @@ func TestFormatHardDNSBody(t *testing.T) {
 		"RKN-блокировка похоже на ВСЕХ",
 		"Что я думаю:",
 		"DoH",
+		"Что это ломает:",
 	}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {
 			t.Errorf("missing %q in:\n%s", w, got)
 		}
+	}
+	if strings.Contains(got, "fail") {
+		t.Errorf("ordinary-user alert should not expose raw fail token:\n%s", got)
 	}
 }
 
@@ -188,8 +193,8 @@ func TestFormatHardDNSPartial(t *testing.T) {
 		"🟡",
 		"DNS-резолвинг частично не работает",
 		"Не отвечают 2 из",
-		"plain 100.64.0.1:53 (Wireguard3) — timeout",
-		"plain 8.8.4.4:53 (Wireguard3) — timeout",
+		"plain 100.64.0.1:53 (Wireguard3) — таймаут",
+		"plain 8.8.4.4:53 (Wireguard3) — таймаут",
 		"RKN-блокировок не видно",
 		"Wireguard3",
 	}
@@ -216,7 +221,8 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 	})
 	wants := []string{
 		"HydraRoute остановлен",
-		"installed=true running=false",
+		"HydraRoute установлен, но сервис остановлен",
+		"Что это ломает:",
 		"демон не запущен",
 		"Перезапустить hrneo",
 	}
@@ -224,6 +230,9 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 		if !strings.Contains(got, w) {
 			t.Errorf("missing %q in:\n%s", w, got)
 		}
+	}
+	if strings.Contains(got, "installed=true") || strings.Contains(got, "running=false") {
+		t.Errorf("technical booleans should not leak to TG alert:\n%s", got)
 	}
 }
 
@@ -404,8 +413,8 @@ func TestHumanAgeSec(t *testing.T) {
 
 func TestHumaniseNetErr(t *testing.T) {
 	cases := map[string]string{
-		"read: read udp 1.1.1.1:1->2.2.2.2:53: i/o timeout": "timeout",
-		"connect: connection refused":                       "refused",
+		"read: read udp 1.1.1.1:1->2.2.2.2:53: i/o timeout": "таймаут",
+		"connect: connection refused":                       "отказ соединения",
 		"dial: no route to host":                            "нет маршрута",
 		"":                                                  "ошибка",
 	}

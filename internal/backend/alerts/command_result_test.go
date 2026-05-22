@@ -81,7 +81,7 @@ func TestFormatCommandResult_PingcheckOneLiner(t *testing.T) {
 	if strings.Count(chunks[0], "\n") > 1 {
 		t.Errorf("pingcheck should be one-liner-ish, got %d newlines:\n%s", strings.Count(chunks[0], "\n"), chunks[0])
 	}
-	if !strings.Contains(chunks[0], "alive 12 ms") || !strings.Contains(chunks[0], "250") {
+	if !strings.Contains(chunks[0], "связь живая, 12 мс") || !strings.Contains(chunks[0], "250") {
 		t.Errorf("missing output or duration: %s", chunks[0])
 	}
 }
@@ -89,7 +89,7 @@ func TestFormatCommandResult_PingcheckOneLiner(t *testing.T) {
 func TestFormatCommandResult_RestartTunnelOK(t *testing.T) {
 	r := wire.CommandResult{Status: "ok", Output: "restarted nwg0"}
 	chunks := FormatCommandResult("restart_tunnel", r, 3500)
-	if !strings.Contains(chunks[0], "🔁") || !strings.Contains(chunks[0], "restarted nwg0") {
+	if !strings.Contains(chunks[0], "🔁") || !strings.Contains(chunks[0], "туннель перезапущен: nwg0") {
 		t.Errorf("bad: %s", chunks[0])
 	}
 }

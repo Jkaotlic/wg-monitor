@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
@@ -56,7 +58,14 @@ func (n *MaintPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpkg
 // upstream.Cache (if wired) + the just-decoded VersionAudit.
 func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
 	if res.Status != "ok" {
-		text := fmt.Sprintf("🛠 Обслуживание — %s\n⚠ агент не ответил\n%s", user.Nickname, res.Output)
+		text := alerts.Card{
+			Badge:   "❌",
+			Label:   "🛠 Обслуживание",
+			Summary: "агент не ответил",
+			Meta:    []string{alerts.KV("роутер", user.Nickname), alerts.KV("команда", "version_audit")},
+			Details: res.Output,
+			Hint:    "Нажми «Повторить» ниже. Если повторно падает — открой проверку роутера.",
+		}.Render(alerts.CardOpts{MaxBytes: 3900})
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: "🔄 Повторить", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)}},
 		}}
@@ -77,7 +86,14 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 // firmware screen.
 func (n *MaintPanelNotifier) renderFirmware(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
 	if res.Status != "ok" {
-		text := fmt.Sprintf("📦 Прошивка — %s\n⚠ агент не ответил\n%s", user.Nickname, res.Output)
+		text := alerts.Card{
+			Badge:   "❌",
+			Label:   "📦 Прошивка",
+			Summary: "агент не ответил",
+			Meta:    []string{alerts.KV("роутер", user.Nickname), alerts.KV("команда", "firmware_status")},
+			Details: res.Output,
+			Hint:    "Вернись назад или перепроверь статус прошивки.",
+		}.Render(alerts.CardOpts{MaxBytes: 3900})
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: "↩ Назад", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)}},
 		}}
@@ -99,13 +115,24 @@ func (n *MaintPanelNotifier) renderFirmware(ctx context.Context, ref cmdpkg.Mess
 // when there's no cached audit (e.g., the user tapped restart before the
 // initial version_audit completed).
 func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
-	banner := "✅ " + res.Output
+	banner := alerts.Card{
+		Badge:   "✅",
+		Label:   "🛠 Обслуживание",
+		Summary: strings.TrimSpace(res.Output),
+		Meta:    []string{alerts.KV("роутер", user.Nickname), alerts.KV("статус", res.Status)},
+	}.Render(alerts.CardOpts{MaxBytes: 900})
 	if res.Status == "err" {
-		banner = "❌ " + res.Output
+		banner = alerts.Card{
+			Badge:   "❌",
+			Label:   "🛠 Обслуживание",
+			Summary: "команда не выполнена",
+			Meta:    []string{alerts.KV("роутер", user.Nickname), alerts.KV("статус", res.Status)},
+			Details: res.Output,
+		}.Render(alerts.CardOpts{MaxBytes: 900})
 	}
 	va, ok := n.Audit.GetVersionAudit(user.ID)
 	if !ok {
-		text := fmt.Sprintf("🛠 Обслуживание — %s\n\n%s", user.Nickname, banner)
+		text := banner
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)}},
 		}}

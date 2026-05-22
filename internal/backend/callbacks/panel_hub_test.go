@@ -40,7 +40,7 @@ func TestPanelHome_RendersHubMessage(t *testing.T) {
 		t.Fatalf("markup not InlineKeyboardMarkup: %T", got.markup)
 	}
 	flatTexts := flattenKbTexts(kb)
-	for _, want := range []string{"📊 Status", "🩺 Проверка", "🎛 Туннели", "🛣 Маршруты", "📡 PingCheck", "🛠 Обслуживание", "🩺 Все роутеры", "🪄 Оживить топики", "✖ Закрыть"} {
+	for _, want := range []string{"📊 Статус", "🩺 Проверка", "🎛 Туннели", "🛣 Маршруты", "📡 PingCheck", "🛠 Обслуживание", "🩺 Все роутеры", "🪄 Оживить топики", "✖ Закрыть"} {
 		if !containsStr(flatTexts, want) {
 			t.Errorf("hub kb missing %q (have %v)", want, flatTexts)
 		}
@@ -292,6 +292,9 @@ func TestPanelDoctorAll_EnqueuesRoutersWithTopics(t *testing.T) {
 	}
 	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Поставлено в очередь: 2") || !strings.Contains(f.edits[0], "Без топика: 1") {
 		t.Fatalf("bad result edit: %v", f.edits)
+	}
+	if !strings.Contains(f.edits[0], "Что будет дальше:") || !strings.Contains(f.edits[0], "Результаты придут") {
+		t.Fatalf("doctor-all result should explain next step, got: %v", f.edits)
 	}
 }
 

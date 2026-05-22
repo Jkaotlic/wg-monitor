@@ -26,7 +26,7 @@ func TestHelpForScreen_UnknownReturnsGeneric(t *testing.T) {
 
 func TestHelpForScreen_PingCheck(t *testing.T) {
 	got := HelpForScreen("pingcheck")
-	for _, want := range []string{"PingCheck", "watchdog", "Restart×"} {
+	for _, want := range []string{"PingCheck", "сторожевой", "restart×"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in help body", want)
 		}
@@ -35,7 +35,7 @@ func TestHelpForScreen_PingCheck(t *testing.T) {
 
 func TestHelpForScreen_Doctor(t *testing.T) {
 	got := HelpForScreen("doctor")
-	for _, want := range []string{"Read-only", "awg-manager", "PingCheck"} {
+	for _, want := range []string{"ничего не меняет", "awg-manager", "PingCheck"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in help body", want)
 		}

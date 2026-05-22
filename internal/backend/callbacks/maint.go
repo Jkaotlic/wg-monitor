@@ -168,7 +168,7 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 		ThreadID:  q.Message.MessageThreadID,
 	}
 	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-		return "", fmt.Errorf("enqueue failed: %w", err)
+		return "", fmt.Errorf("не удалось поставить команду в очередь: %w", err)
 	}
 	if cooldownAction != "" {
 		a.cd.set(args.UserID, cooldownAction, 5*time.Minute)

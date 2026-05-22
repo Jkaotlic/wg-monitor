@@ -172,7 +172,7 @@ func TestMaintPanelKeyboard_CallbackData(t *testing.T) {
 
 func TestRestartConfirmText_Hrneo(t *testing.T) {
 	text := RestartConfirmText("hrneo", "a1b2c3d4")
-	for _, want := range []string{"⚠️", "HydraRoute-Neo", "Token: a1b2c3d4", "TTL 5"} {
+	for _, want := range []string{"⚠️", "HydraRoute-Neo", "Код подтверждения: a1b2c3d4", "живёт 5 мин"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
@@ -254,7 +254,7 @@ func TestFirmwareScreenKeyboard_CooldownReplacesInstall(t *testing.T) {
 
 func TestFirmwareConfirmText(t *testing.T) {
 	text := FirmwareConfirmText("deadbeef")
-	for _, want := range []string{"⚠️", "Прошивка", "перезагрузку", "Token: deadbeef", "Кулдаун"} {
+	for _, want := range []string{"⚠️", "Прошивка", "перезагрузку", "Код подтверждения: deadbeef", "Кулдаун"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

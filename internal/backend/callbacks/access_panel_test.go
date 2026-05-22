@@ -68,7 +68,7 @@ func TestAccessHomeMessage_TwoRouters(t *testing.T) {
 	if !strings.Contains(text, "alpha") || !strings.Contains(text, "beta") {
 		t.Errorf("text should list both routers: %q", text)
 	}
-	if !strings.Contains(text, "owner: 100") || !strings.Contains(text, "2 операт") {
+	if !strings.Contains(text, "владелец: 100") || !strings.Contains(text, "2 операт") {
 		t.Errorf("alpha line should show owner + 2 operators: %q", text)
 	}
 	if !strings.Contains(text, "0 операт") {

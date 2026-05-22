@@ -128,8 +128,8 @@ func TestStage2EndToEnd(t *testing.T) {
 	}
 	if len(edits) != 1 {
 		t.Errorf("expected 1 edit, got %d", len(edits))
-	} else if !strings.Contains(edits[0]["text"].(string), "Silenced") {
-		t.Errorf("edit missing 'Silenced': %v", edits[0]["text"])
+	} else if !strings.Contains(edits[0]["text"].(string), "Уведомления скрыты") {
+		t.Errorf("edit missing silence status: %v", edits[0]["text"])
 	}
 	mu.Unlock()
 
@@ -404,7 +404,7 @@ func (noopTG) SendMessage(_ context.Context, _ int64, _ *int64, _ string, _ stri
 func (noopTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64, _ any) (int64, error) {
 	return 1, nil
 }
-func (noopTG) DeleteMessage(_ context.Context, _, _ int64) error                              { return nil }
+func (noopTG) DeleteMessage(_ context.Context, _, _ int64) error        { return nil }
 func (noopTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
 func (noopTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
 	return nil
@@ -442,7 +442,7 @@ func (c *capturingTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _
 	c.sent = append(c.sent, tgSentMsg{text: text, markup: markup})
 	return int64(len(c.sent)), nil
 }
-func (c *capturingTG) DeleteMessage(_ context.Context, _, _ int64) error { return nil }
+func (c *capturingTG) DeleteMessage(_ context.Context, _, _ int64) error        { return nil }
 func (c *capturingTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
 func (c *capturingTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
 	return nil

@@ -25,11 +25,11 @@ func (r *Router) adminPanelOpen(ctx context.Context, m *tg.Message) {
 // panelHomeMessage builds the (text, inline-kb) for the hub Home screen.
 // Pure function — easy to test.
 func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
-	text := "🎛 Панель управления\n\nЧто открыть?\n\nРоутер: выбери раздел, затем конкретный роутер.\nФлот: массовая проверка, топики и доступы."
+	text := "🎛 Панель управления\n\nЧто открыть?\n\nРоутер:\n  • выбери раздел\n  • затем конкретный роутер\n\nФлот:\n  • массовая проверка\n  • топики и доступы"
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
-				{Text: "📊 Status", CallbackData: "panel:0:kind:status"},
+				{Text: "📊 Статус", CallbackData: "panel:0:kind:status"},
 				{Text: "🩺 Проверка", CallbackData: "panel:0:kind:doctor"},
 			},
 			{
@@ -45,7 +45,7 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 				{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
 			},
 			{
-				{Text: "Mobile", CallbackData: "panel:0:mobile"},
+				{Text: "🚗 Мобильные", CallbackData: "panel:0:mobile"},
 				{Text: "👥 Доступ", CallbackData: "access:0:home"},
 			},
 			{
@@ -84,7 +84,7 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 	case "help":
 		r.panelHandleHelp(ctx, q, args)
 	default:
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "screen TBA")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "экран ещё не готов")
 	}
 }
 
@@ -115,9 +115,20 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 	var resultText string
 	switch {
 	case publishErr == nil:
-		resultText = fmt.Sprintf("🎛 Панель управления\n\n✅ %s отправлен в топик @%s.", kindLabel, u.Nickname)
+		resultText = alerts.Card{
+			Badge:   "✅",
+			Label:   "🎛 Панель управления",
+			Summary: "панель отправлена",
+			Meta:    []string{alerts.KV("раздел", kindLabel), alerts.KV("роутер", "@"+u.Nickname)},
+		}.Render(alerts.CardOpts{})
 	case tg.IsTopicNotFound(publishErr):
-		resultText = fmt.Sprintf("🎛 Панель управления\n\n❌ Топик роутера @%s похоже удалён. Сделай /recreate_topic внутри его топика или /ensure_topics.", u.Nickname)
+		resultText = alerts.Card{
+			Badge:   "❌",
+			Label:   "🎛 Панель управления",
+			Summary: "топик роутера похоже удалён",
+			Meta:    []string{alerts.KV("роутер", "@"+u.Nickname)},
+			Hint:    "Сделай /recreate_topic внутри его топика или /ensure_topics.",
+		}.Render(alerts.CardOpts{})
 	default:
 		sum, hint := alerts.HintFor("panel_push", publishErr.Error())
 		card := alerts.Card{Badge: "❌", Label: fmt.Sprintf("Не удалось опубликовать %s в @%s", kindLabel, u.Nickname), Summary: sum, Hint: hint}
@@ -198,19 +209,20 @@ func (r *Router) panelDoctorAll(ctx context.Context, q *tg.CallbackQuery) {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "🎛 Панель управления\n\n🩺 Проверка всех роутеров\n\n✅ Поставлено в очередь: %d", queued)
+	fmt.Fprintf(&b, "🎛 Панель управления\n\n🩺 Проверка всех роутеров\n\nИтог:\n  • ✅ Поставлено в очередь: %d", queued)
 	if noTopic > 0 {
-		fmt.Fprintf(&b, "\n⚠ Без топика: %d", noTopic)
+		fmt.Fprintf(&b, "\n  • ⚠ Без топика: %d", noTopic)
 	}
 	if len(failLines) > 0 {
-		fmt.Fprintf(&b, "\n❌ Ошибок: %d", len(failLines))
+		fmt.Fprintf(&b, "\n  • ❌ Ошибок: %d", len(failLines))
+		b.WriteString("\n\nОшибки:")
 		for _, line := range failLines {
 			b.WriteString("\n  ")
 			b.WriteString(line)
 		}
 	}
 	if queued > 0 {
-		b.WriteString("\n\nРезультаты придут ответами в соответствующие топики.")
+		b.WriteString("\n\nЧто будет дальше:\n  • Результаты придут ответами в соответствующие топики.")
 	}
 	text := b.String()
 	if len(text) > 4096 {
@@ -237,7 +249,7 @@ func panelResultKb() tg.InlineKeyboardMarkup {
 func (r *Router) panelMobileFleet(ctx context.Context, q *tg.CallbackQuery) {
 	users, err := r.d.Users().GetAll()
 	if err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "read routers failed")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось прочитать роутеры")
 		return
 	}
 	rows := make([]tg.MobileFleetRow, 0, len(users))
@@ -263,7 +275,7 @@ func (r *Router) panelMobileFleet(ctx context.Context, q *tg.CallbackQuery) {
 	}
 	text := tg.MobileFleetPanelText(rows, time.Now())
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-		{{Text: "Back", CallbackData: "panel:0:home"}, {Text: "Close", CallbackData: "panel:0:close"}},
+		{{Text: "« Назад", CallbackData: "panel:0:home"}, {Text: "✖ Закрыть", CallbackData: "panel:0:close"}},
 	}}
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
 		slog.Warn("panel mobile edit failed", "err", err)
@@ -331,7 +343,7 @@ func (r *Router) panelAwakenConfirm(ctx context.Context, q *tg.CallbackQuery) {
 			count++
 		}
 	}
-	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики (отправить приветствие с кнопками во все per_router топики)\n\nБудут затронуты: %d топика", count)
+	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики\n\nЧто будет:\n  • отправим приветствие с кнопками во все per_router топики\n  • Будут затронуты: %d топика", count)
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
@@ -383,7 +395,7 @@ func (r *Router) panelAwakenDo(ctx context.Context, q *tg.CallbackQuery) {
 done:
 	slog.Info("panel awaken", "sent", sent, "failed", failed, "elapsed_ms", time.Since(start).Milliseconds())
 	var b strings.Builder
-	fmt.Fprintf(&b, "🎛 Панель управления\n\n✅ Оживлено: %d топиков, %d ошибок.", sent, failed)
+	fmt.Fprintf(&b, "🎛 Панель управления\n\n🪄 Оживить топики\n\nИтог:\n  • ✅ Оживлено: %d\n  • ❌ Ошибок: %d", sent, failed)
 	for _, line := range failLines {
 		b.WriteString("\n  ")
 		b.WriteString(line)
@@ -411,11 +423,11 @@ func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, k
 	}
 	kindLabel := panelKindLabel(kind)
 	if kindLabel == "" {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown kind")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "неизвестный раздел")
 		return
 	}
 	if len(users) == 0 {
-		text := "🎛 " + kindLabel + " → выбери роутер:\n\nРоутеров нет. Сначала добавь — wizard или CLI `add-user`."
+		text := "🎛 " + kindLabel + "\n\nВыбери роутер:\n  • Роутеров нет\n  • Сначала добавь — wizard или CLI `add-user`"
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: "« Назад", CallbackData: "panel:0:home"}, {Text: "✖ Закрыть", CallbackData: "panel:0:close"}},
 		}}
@@ -438,7 +450,7 @@ func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, k
 			{Text: "⚠ " + u.Nickname + " (нет топика)", CallbackData: fmt.Sprintf("panel:%d:no_topic", u.ID)},
 		})
 	}
-	text := "🎛 " + kindLabel + " → выбери роутер:\n" + strings.Join(userLines, "\n")
+	text := "🎛 " + kindLabel + "\n\nВыбери роутер:\n  • " + strings.Join(userLines, "\n  • ")
 	rows = append(rows, []tg.InlineKeyboardButton{
 		{Text: "« Назад", CallbackData: "panel:0:home"},
 		{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
@@ -453,7 +465,7 @@ func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, k
 func panelKindLabel(kind string) string {
 	switch kind {
 	case "status":
-		return "Status"
+		return "Статус"
 	case "doctor":
 		return "Проверка"
 	case "tunnels":

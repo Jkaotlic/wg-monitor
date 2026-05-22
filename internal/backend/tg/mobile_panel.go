@@ -17,20 +17,20 @@ type MobileFleetRow struct {
 
 func MobileFleetPanelText(rows []MobileFleetRow, now time.Time) string {
 	var b strings.Builder
-	b.WriteString("Mobile fleet\n\n")
+	b.WriteString("📱 Мобильные роутеры\n\n")
 	count := 0
 	for _, r := range rows {
 		if r.Kind != "mobile" {
 			continue
 		}
 		count++
-		state := "never"
+		state := "ещё не отчитывался"
 		if r.LastSeenAt != nil {
 			age := now.Sub(*r.LastSeenAt)
 			if age <= 5*time.Minute {
-				state = "awake"
+				state = "в сети"
 			} else {
-				state = "sleeping " + shortAge(age)
+				state = "спит " + shortAge(age)
 			}
 		}
 		ring := r.Ring
@@ -39,26 +39,26 @@ func MobileFleetPanelText(rows []MobileFleetRow, now time.Time) string {
 		}
 		version := r.LastDeployedVersion
 		if version == "" {
-			version = "unknown"
+			version = "неизвестно"
 		}
-		fmt.Fprintf(&b, "- %s: %s, ring %s, agent %s", r.Nickname, state, ring, version)
+		fmt.Fprintf(&b, "  • %s: %s, канал %s, агент %s", r.Nickname, state, ring, version)
 		if r.PendingVersion != "" {
-			fmt.Fprintf(&b, ", pending %s", r.PendingVersion)
+			fmt.Fprintf(&b, ", ждёт обновление %s", r.PendingVersion)
 		}
 		b.WriteByte('\n')
 	}
 	if count == 0 {
-		b.WriteString("No mobile routers yet.\n")
+		b.WriteString("Мобильных роутеров пока нет.\n")
 	}
 	return b.String()
 }
 
 func shortAge(d time.Duration) string {
 	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
+		return fmt.Sprintf("%dс", int(d.Seconds()))
 	}
 	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
+		return fmt.Sprintf("%dм", int(d.Minutes()))
 	}
-	return fmt.Sprintf("%dh", int(d.Hours()))
+	return fmt.Sprintf("%dч", int(d.Hours()))
 }
