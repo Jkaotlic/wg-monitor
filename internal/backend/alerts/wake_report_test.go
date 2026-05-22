@@ -42,7 +42,7 @@ func TestRenderWakeReport_WithFailures_BulletDetails(t *testing.T) {
 	if !strings.Contains(card.Summary, "проблемы") {
 		t.Errorf("summary must mention проблемы, got %q", card.Summary)
 	}
-	if !strings.Contains(card.Details, "tunnels") || !strings.Contains(card.Details, "dns_via_tunnel") {
+	if !strings.Contains(card.Details, "список туннелей не читается") || !strings.Contains(card.Details, "DNS не отвечает") {
 		t.Errorf("details must list failing checks, got %q", card.Details)
 	}
 	if strings.Contains(card.Details, "external_reach") {

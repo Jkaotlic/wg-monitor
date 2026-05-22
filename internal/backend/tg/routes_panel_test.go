@@ -43,6 +43,7 @@ func TestRoutesPanelText_HappyPath(t *testing.T) {
 		"Static IP routes: 3 правил",
 		"amnezia (nwg1): 7 правил",
 		"WAN/system: 2 правил",
+		"Что видно:",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -148,10 +149,13 @@ func TestRouteSnapshotText_IncludesStableSummary(t *testing.T) {
 		Rules:   []wire.RouteRuleSummary{{ID: "r1", Name: "YouTube", Kind: "dns"}},
 	}
 	text := RouteSnapshotText("testkeen", snap)
-	for _, want := range []string{"Snapshot", "testkeen", "HR-Neo: installed/running", "rules: 1", "amnezia"} {
+	for _, want := range []string{"Снапшот маршрутов", "testkeen", "HR-Neo: установлен и работает", "правил всего: 1", "amnezia"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "installed/running") {
+		t.Errorf("technical HR-Neo state should not leak:\n%s", text)
 	}
 }
 

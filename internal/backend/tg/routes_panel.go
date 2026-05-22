@@ -20,12 +20,13 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🛣 Маршруты — %s\n", nickname)
 	fmt.Fprintf(&b, "обновлено: %s\n\n", time.Now().Format("15:04:05"))
+	b.WriteString("Что видно:\n")
 	if snap.HRNeo.Installed {
 		state := "✅ установлен, работает"
 		if !snap.HRNeo.Running {
 			state = "⚠ установлен, остановлен"
 		}
-		fmt.Fprintf(&b, "HydraRoute Neo: %s\n", state)
+		fmt.Fprintf(&b, "  • HydraRoute Neo: %s\n", state)
 	}
 	totalDNS := snap.Other.DNS
 	totalStatic := snap.Other.Static
@@ -35,18 +36,18 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		totalStatic += c.Static
 		totalHR += c.HRNeo
 	}
-	fmt.Fprintf(&b, "DNS routes: %d правил\n", totalDNS)
-	fmt.Fprintf(&b, "Static IP routes: %d правил\n", totalStatic)
+	fmt.Fprintf(&b, "  • DNS routes: %d правил\n", totalDNS)
+	fmt.Fprintf(&b, "  • Static IP routes: %d правил\n", totalStatic)
 	if snap.HRNeo.Installed {
-		fmt.Fprintf(&b, "из них HR-Neo: %d\n", totalHR)
+		fmt.Fprintf(&b, "  • из них HR-Neo: %d\n", totalHR)
 	}
-	b.WriteString("\nПо туннелям (направленные в туннели):\n")
+	b.WriteString("\nПо туннелям:\n")
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
 		visible := c.DNS + c.Static
 		fmt.Fprintf(&b, "  • %s (%s): %d правил\n", t.Name, t.Iface, visible)
 	}
-	b.WriteString("\nНе входят в перенос (показано для контроля):\n")
+	b.WriteString("\nНе входит в перенос:\n")
 	wanTotal := snap.Other.DNS + snap.Other.Static
 	fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
 	return b.String()
@@ -80,21 +81,21 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 		rows = append(rows, row)
 	}
 	rows = append(rows, []InlineKeyboardButton{
-		{Text: "Add route", CallbackData: fmt.Sprintf("routes_add:%d:_panel_", userID)},
-		{Text: "Delete route", CallbackData: fmt.Sprintf("routes_del:%d:_panel_:_list_", userID)},
+		{Text: "➕ Добавить маршрут", CallbackData: fmt.Sprintf("routes_add:%d:_panel_", userID)},
+		{Text: "🗑 Удалить маршрут", CallbackData: fmt.Sprintf("routes_del:%d:_panel_:_list_", userID)},
 	})
 	if snap.HRNeo.Installed {
 		rows = append(rows, []InlineKeyboardButton{{
-			Text:         "HR-Neo rules",
+			Text:         "HR-Neo правила",
 			CallbackData: fmt.Sprintf("routes_hrneo:%d:_panel_", userID),
 		}})
 		rows = append(rows, []InlineKeyboardButton{{
-			Text:         "HR-Neo Doctor",
+			Text:         "HR-Neo проверка",
 			CallbackData: fmt.Sprintf("routes_hrneo_doctor:%d:_panel_", userID),
 		}})
 	}
 	rows = append(rows, []InlineKeyboardButton{{
-		Text:         "Snapshot",
+		Text:         "Снапшот",
 		CallbackData: fmt.Sprintf("routes_snapshot:%d:_panel_", userID),
 	}})
 	rows = append(rows, HelpRowFor("routes"))
@@ -140,58 +141,73 @@ func RebindPickKeyboard(userID int64, srcID string, snap wire.RouteSnapshot) (st
 
 func RouteSnapshotText(nickname string, snap wire.RouteSnapshot) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Routes Snapshot - %s\n", nickname)
+	fmt.Fprintf(&b, "🛣 Снапшот маршрутов — %s\n", nickname)
 	hr := "not installed"
 	if snap.HRNeo.Installed && snap.HRNeo.Running {
 		hr = "installed/running"
 	} else if snap.HRNeo.Installed {
 		hr = "installed/stopped"
 	}
-	fmt.Fprintf(&b, "HR-Neo: %s\n", hr)
-	fmt.Fprintf(&b, "rules: %d\n", len(snap.Rules))
-	fmt.Fprintf(&b, "tunnels: %d\n", len(snap.Tunnels))
+	fmt.Fprintf(&b, "\nСводка:\n")
+	fmt.Fprintf(&b, "  • HR-Neo: %s\n", humanHRState(hr))
+	fmt.Fprintf(&b, "  • правил всего: %d\n", len(snap.Rules))
+	fmt.Fprintf(&b, "  • туннелей всего: %d\n", len(snap.Tunnels))
 	totalDNS, totalStatic, totalHR := snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo
 	for _, c := range snap.Counts {
 		totalDNS += c.DNS
 		totalStatic += c.Static
 		totalHR += c.HRNeo
 	}
-	fmt.Fprintf(&b, "DNS: %d, static: %d, HR-Neo: %d\n", totalDNS, totalStatic, totalHR)
+	fmt.Fprintf(&b, "  • DNS: %d, static: %d, HR-Neo: %d\n", totalDNS, totalStatic, totalHR)
+	b.WriteString("\nТуннели:\n")
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
-		fmt.Fprintf(&b, "- %s (%s): dns=%d static=%d hr=%d\n", t.Name, t.Iface, c.DNS, c.Static, c.HRNeo)
+		fmt.Fprintf(&b, "  • %s (%s): dns=%d static=%d hr=%d\n", t.Name, t.Iface, c.DNS, c.Static, c.HRNeo)
 	}
 	if snap.Other.DNS+snap.Other.Static > 0 {
-		fmt.Fprintf(&b, "- WAN/system: dns=%d static=%d hr=%d\n", snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo)
+		fmt.Fprintf(&b, "  • WAN/system: dns=%d static=%d hr=%d\n", snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo)
 	}
 	return b.String()
+}
+
+func humanHRState(state string) string {
+	switch state {
+	case "installed/running":
+		return "установлен и работает"
+	case "installed/stopped":
+		return "установлен, но остановлен"
+	case "not installed":
+		return "не установлен"
+	}
+	return state
 }
 
 func RouteExplainText(nickname, target string, snap wire.RouteSnapshot) string {
 	target = strings.TrimSpace(target)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Route explain - %s\n", nickname)
-	fmt.Fprintf(&b, "Target: %s\n", fallback(target, "-"))
+	fmt.Fprintf(&b, "🛣 Разбор маршрута — %s\n", nickname)
+	fmt.Fprintf(&b, "цель: %s\n", fallback(target, "-"))
 	if target == "" {
-		b.WriteString("\nSend a domain, IP, or CIDR target.\n")
+		b.WriteString("\nЧто отправить:\n  • домен\n  • IP\n  • CIDR\n")
 		return b.String()
 	}
 	matches := explainMatches(target, snap)
 	if len(matches) == 0 {
-		b.WriteString("\nNo explicit DNS/HR-Neo/static route matched.\n")
-		b.WriteString("Likely path: default routing or HR-Neo policy/default fall-through.\n")
+		b.WriteString("\nСовпадений нет:\n")
+		b.WriteString("  • explicit DNS/HR-Neo/static route не найден\n")
+		b.WriteString("  • вероятный путь: default routing или HR-Neo policy/default fall-through\n")
 		return b.String()
 	}
-	b.WriteString("\nMatched routes:\n")
+	b.WriteString("\nНайденные правила:\n")
 	for _, m := range matches {
-		fmt.Fprintf(&b, "- %s [%s]", fallback(m.rule.Name, m.rule.ID), explainKindLabel(m.rule))
+		fmt.Fprintf(&b, "  • %s [%s]", fallback(m.rule.Name, m.rule.ID), explainKindLabel(m.rule))
 		if m.matched != "" {
 			fmt.Fprintf(&b, " via %s", m.matched)
 		}
 		b.WriteString("\n")
-		fmt.Fprintf(&b, "  target: %s\n", describeBind(m.rule.Bind, snap))
+		fmt.Fprintf(&b, "  куда ведёт: %s\n", describeBind(m.rule.Bind, snap))
 		if !m.rule.Enabled {
-			b.WriteString("  status: disabled\n")
+			b.WriteString("  статус: выключено\n")
 		}
 	}
 	return b.String()

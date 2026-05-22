@@ -94,7 +94,7 @@ func accessHomeMessage(d *db.DB) (string, tg.InlineKeyboardMarkup) {
 		if u.TelegramUserID != nil {
 			ownerLabel = fmt.Sprintf("%d", *u.TelegramUserID)
 		}
-		btnLabel := fmt.Sprintf("%s — owner: %s | %s",
+		btnLabel := fmt.Sprintf("%s — владелец: %s | %s",
 			u.Nickname, ownerLabel, pluralOperators(len(ops)))
 		rows = append(rows, []tg.InlineKeyboardButton{
 			{Text: btnLabel, CallbackData: fmt.Sprintf("access:0:router:%d", u.ID)},
@@ -123,11 +123,11 @@ func accessRouterMessage(d *db.DB, routerID int64) (string, tg.InlineKeyboardMar
 	fmt.Fprintf(&b, "👥 %s\n\n", u.Nickname)
 	rows := make([][]tg.InlineKeyboardButton, 0, len(ops)+3)
 	if u.TelegramUserID == nil {
-		b.WriteString("Owner: (не привязан, TOFU)\n")
+		b.WriteString("Владелец: не привязан (первый пользователь из своего топика станет владельцем)\n")
 	} else {
-		fmt.Fprintf(&b, "Owner: %d\n", *u.TelegramUserID)
+		fmt.Fprintf(&b, "Владелец: %d\n", *u.TelegramUserID)
 		rows = append(rows, []tg.InlineKeyboardButton{
-			{Text: "✖ Отвязать owner'a", CallbackData: fmt.Sprintf("access:0:unbind_owner:%d", routerID)},
+			{Text: "✖ Отвязать владельца", CallbackData: fmt.Sprintf("access:0:unbind_owner:%d", routerID)},
 		})
 	}
 	b.WriteString("\nОператоры:")
@@ -168,7 +168,7 @@ func (r *Router) handleAccessCallback(ctx context.Context, q *tg.CallbackQuery, 
 	case "cancel_add":
 		r.accessCancelAdd(ctx, q)
 	default:
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "unknown screen")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "неизвестный экран")
 	}
 }
 
@@ -206,7 +206,7 @@ func (r *Router) accessStartAdd(ctx context.Context, q *tg.CallbackQuery, router
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, hint, "", &kb); err != nil {
 		slog.Warn("access add edit failed", "err", err)
 	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "жду forward или ID в личке")
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "жду пересланное сообщение или ID в личке")
 }
 
 func (r *Router) accessRemoveOp(ctx context.Context, q *tg.CallbackQuery, routerID, opTGID int64) {
@@ -220,7 +220,7 @@ func (r *Router) accessRemoveOp(ctx context.Context, q *tg.CallbackQuery, router
 
 func (r *Router) accessUnbindOwner(ctx context.Context, q *tg.CallbackQuery, routerID int64) {
 	if err := r.d.Users().SetTelegramUserID(routerID, 0); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось отвязать owner'a")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось отвязать владельца")
 		slog.Warn("access unbind owner failed", "err", err, "router_id", routerID)
 		return
 	}
@@ -255,13 +255,13 @@ func (r *Router) processAddOperatorMessage(ctx context.Context, m *tg.Message, p
 	}
 	if opTGID == 0 {
 		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, nil,
-			"Не вижу TG user ID — нужно либо forward от человека, либо положительное число. Жду дальше. ✖ Отмена доступна в исходном экране.", "", nil)
+			"Не вижу Telegram ID. Перешли сообщение от человека или пришли его числовой ID. Жду дальше; отмена доступна в исходном экране.", "", nil)
 		return
 	}
 	u, err := r.d.Users().GetByID(p.RouterID)
 	if err != nil || u == nil {
 		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, nil,
-			"Роутер для FSM уже не существует, отменяю.", "", nil)
+			"Роутер для добавления уже не найден, отменяю.", "", nil)
 		r.pendingAddOperator.clear(m.From.ID)
 		return
 	}

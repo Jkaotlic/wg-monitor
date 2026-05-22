@@ -181,12 +181,12 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	case StateOK:
 		fmt.Fprintf(&b, "✅ %s — всё работает.\n\n", a.Nickname)
 		for _, t := range a.Tunnels {
-			line := fmt.Sprintf("Туннель %s: handshake %s назад", t.Name, humanAgeSec(t.HandshakeAge))
+			line := fmt.Sprintf("Туннель %s: последний обмен ключами %s назад", t.Name, humanAgeSec(t.HandshakeAge))
 			if t.PingStatus != "" {
-				line += fmt.Sprintf(", ping %s", t.PingStatus)
+				line += fmt.Sprintf(", проверка связи: %s", humanPingStatus(t.PingStatus))
 			}
 			if t.Latency > 0 {
-				line += fmt.Sprintf(" (%d ms)", t.Latency)
+				line += fmt.Sprintf(" (%d мс)", t.Latency)
 			}
 			b.WriteString(line + ".\n")
 		}
@@ -197,9 +197,9 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	case StateDegraded:
 		fmt.Fprintf(&b, "⚠️ %s — есть подозрения.\n\n", a.Nickname)
 		for _, t := range a.Tunnels {
-			fmt.Fprintf(&b, "Туннель %s: handshake %d сек назад (норма до 180).\n", t.Name, t.HandshakeAge)
+			fmt.Fprintf(&b, "Туннель %s: обмена ключами не было %d сек (норма до 180).\n", t.Name, t.HandshakeAge)
 			if t.FailCount > 0 {
-				fmt.Fprintf(&b, "Ping: %d неудачи подряд из %d.\n", t.FailCount, t.FailThresh)
+				fmt.Fprintf(&b, "Проверка связи: %d неудачи подряд из %d.\n", t.FailCount, t.FailThresh)
 			}
 		}
 		b.WriteString("Роутер пока не считает это сбоем, но подозрительно.\n\nДействия:")
@@ -285,7 +285,7 @@ func appendUpdatesSection(b *strings.Builder, updates []UpdateAvailable) {
 	for _, u := range updates {
 		fmt.Fprintf(b, "  • %s %s → %s\n", u.Name, u.Installed, u.Available)
 		if u.Hint != "" {
-			fmt.Fprintf(b, "    hint: %s\n", u.Hint)
+			fmt.Fprintf(b, "    подсказка: %s\n", u.Hint)
 		}
 	}
 }

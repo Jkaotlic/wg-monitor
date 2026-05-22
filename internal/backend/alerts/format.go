@@ -50,31 +50,51 @@ type RecoveryArgs struct {
 // что я думаю / что делать». Returns plain text (no MarkdownV2 — too many
 // escaping landmines in dynamic strings like endpoint hostnames).
 func FormatHard(a HardArgs) string {
-	var b strings.Builder
 	mobileBadge := ""
 	if a.IsMobile {
-		mobileBadge = "📱 "
+		mobileBadge = "📱"
 	}
 	severity := categorySeverity(a.CheckName, a.Check.Details, a.Neighbors)
 	headline := categoryHeadline(a.CheckName, a.Check.Details)
-	fmt.Fprintf(&b, "%s %s[%s] — %s\n", severity, mobileBadge, a.Nickname, headline)
 
-	b.WriteString("\nЧто не работает:\n")
-	writeWhatBroke(&b, a.CheckName, a.Check.Details)
+	sections := []CardSection{{
+		Title: "Что не работает",
+		Lines: linesFromWriter(func(b *strings.Builder) {
+			writeWhatBroke(b, a.CheckName, a.Check.Details)
+		}),
+	}}
+	if impact := impactFor(a.CheckName, a.Check.Details); impact != "" {
+		sections = append(sections, CardSection{Title: "Что это ломает", Lines: []string{impact}})
+	}
 
 	if h := diagnose(a.CheckName, a.Check.Details, a.Neighbors); h != "" {
-		b.WriteString("\nЧто я думаю:\n")
-		writeWrapped(&b, h)
+		sections = append(sections, CardSection{Title: "Что я думаю", Lines: []string{h}})
 	}
 
 	if adv := suggestAction(a.CheckName, a.Check.Details, a.Neighbors); adv != "" {
-		b.WriteString("\nЧто делать:\n")
-		writeWrapped(&b, adv)
+		sections = append(sections, CardSection{Title: "Что делать", Lines: []string{adv}})
 	}
 
-	fmt.Fprintf(&b, "\n%d fails · с %s",
-		a.ConsecFails, a.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"))
-	return b.String()
+	meta := []string{
+		KV("проверка", a.CheckName),
+	}
+	if a.ConsecFails > 0 {
+		meta = append(meta, fmt.Sprintf("%d fails", a.ConsecFails))
+	}
+	if !a.HardSince.IsZero() {
+		meta = append(meta, "с "+a.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"))
+	}
+	label := fmt.Sprintf("[%s]", a.Nickname)
+	if mobileBadge != "" {
+		label = mobileBadge + " " + label
+	}
+	return Card{
+		Badge:    severity,
+		Label:    label,
+		Summary:  headline,
+		Meta:     meta,
+		Sections: sections,
+	}.Render(CardOpts{})
 }
 
 // FormatRecovery renders a recovery message in the same human tone as
@@ -84,12 +104,23 @@ func FormatHard(a HardArgs) string {
 func FormatRecovery(a RecoveryArgs) string {
 	d := a.RecoveredAt.Sub(a.HardSince).Round(time.Minute)
 	headline := recoveryHeadline(a.CheckName, a.Check.Details)
-	var b strings.Builder
-	fmt.Fprintf(&b, "🟢 [%s] — %s\nПростой: %s", a.Nickname, headline, durFmt(d))
+	lines := []string{fmt.Sprintf("Простой: %s", durFmt(d))}
 	if strings.HasPrefix(a.CheckName, "tunnel_") {
-		writeTunnelRecoveryFooter(&b, a.Check.Details)
+		lines = append(lines, linesFromWriter(func(b *strings.Builder) {
+			writeTunnelRecoveryFooter(b, a.Check.Details)
+		})...)
 	}
-	return b.String()
+	meta := []string{KV("проверка", a.CheckName)}
+	if !a.RecoveredAt.IsZero() {
+		meta = append(meta, KV("когда", a.RecoveredAt.In(mscLoc()).Format("02.01 15:04 МСК")))
+	}
+	return Card{
+		Badge:    "🟢",
+		Label:    fmt.Sprintf("[%s]", a.Nickname),
+		Summary:  headline,
+		Meta:     meta,
+		Sections: []CardSection{{Title: "Итог", Lines: lines}},
+	}.Render(CardOpts{})
 }
 
 // writeTunnelRecoveryFooter appends a one-line summary of what rides this
@@ -114,13 +145,17 @@ func writeTunnelRecoveryFooter(b *strings.Builder, d map[string]any) {
 // FormatRouterOffline renders a router-offline message (heartbeat watcher).
 // Includes a short hint at what to check first.
 func FormatRouterOffline(nickname string, since time.Duration) string {
-	return fmt.Sprintf(
-		"🔴 [%s] — Роутер не на связи\n\n"+
-			"Что не работает:\n  Нет heartbeat'ов %s.\n\n"+
-			"Что я думаю:\n  Либо роутер выключен/перезагружается, либо у него отвалился WAN, либо упал агент wg-monitor.\n\n"+
-			"Что делать:\n  Проверь питание роутера, потом WAN/4G. Если железо живо — зайди по SSH и глянь /opt/etc/init.d/S99wg-monitor status.",
-		nickname, durFmt(since.Round(time.Minute)),
-	)
+	return Card{
+		Badge:   "🔴",
+		Label:   fmt.Sprintf("[%s]", nickname),
+		Summary: "Роутер не на связи",
+		Meta:    []string{KV("нет heartbeat", durFmt(since.Round(time.Minute)))},
+		Sections: []CardSection{
+			{Title: "Что не работает", Lines: []string{"Нет heartbeat'ов " + durFmt(since.Round(time.Minute))}},
+			{Title: "Что я думаю", Lines: []string{"Либо роутер выключен/перезагружается, либо у него отвалился WAN, либо упал агент wg-monitor."}},
+			{Title: "Что делать", Lines: []string{"Проверь питание роутера, потом WAN/4G. Если железо живо — зайди по SSH и глянь /opt/etc/init.d/S99wg-monitor status."}},
+		},
+	}.Render(CardOpts{})
 }
 
 // RealertArgs feeds FormatRealert. Check carries the LAST KNOWN payload from
@@ -140,17 +175,20 @@ type RealertArgs struct {
 // "что делать" sections — the operator already saw them in the original
 // HARD alert. Just rolls forward the time + repeats the broken-stuff list.
 func FormatRealert(args RealertArgs) string {
-	var b strings.Builder
 	mobileBadge := ""
 	if args.IsMobile {
-		mobileBadge = "📱 "
+		mobileBadge = "📱"
 	}
 	headline := categoryHeadline(args.CheckName, args.Check.Details)
-	fmt.Fprintf(&b, "🔁 %s[%s] — Всё ещё: %s\n", mobileBadge, args.Nickname, headline)
 
+	var sections []CardSection
 	if args.Check.Name != "" {
-		b.WriteString("\nЧто не работает:\n")
-		writeWhatBroke(&b, args.CheckName, args.Check.Details)
+		sections = append(sections, CardSection{
+			Title: "Что не работает",
+			Lines: linesFromWriter(func(b *strings.Builder) {
+				writeWhatBroke(b, args.CheckName, args.Check.Details)
+			}),
+		})
 	}
 
 	age := time.Since(args.HardSince).Round(time.Minute)
@@ -158,13 +196,39 @@ func FormatRealert(args RealertArgs) string {
 	if cadence <= 0 {
 		cadence = 6 * time.Hour
 	}
-	fmt.Fprintf(&b, "\nс %s (%s назад) · напомню снова через %s · #%d",
-		args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
-		durFmt(age),
-		shortDur(cadence),
-		args.RealertCount,
-	)
-	return b.String()
+	label := fmt.Sprintf("[%s]", args.Nickname)
+	if mobileBadge != "" {
+		label = mobileBadge + " " + label
+	}
+	return Card{
+		Badge:   "🔁",
+		Label:   label,
+		Summary: "Всё ещё: " + headline,
+		Meta: []string{
+			KV("проверка", args.CheckName),
+			"с " + args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
+			durFmt(age) + " назад",
+			"напомню снова через " + shortDur(cadence),
+			fmt.Sprintf("#%d", args.RealertCount),
+		},
+		Sections: sections,
+	}.Render(CardOpts{})
+}
+
+func linesFromWriter(write func(*strings.Builder)) []string {
+	var b strings.Builder
+	write(&b)
+	var out []string
+	for _, line := range strings.Split(b.String(), "\n") {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "• ")
+		line = strings.TrimPrefix(line, "- ")
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // categorySeverity returns 🔴 / 🟡 based on how broken things actually are.
@@ -291,27 +355,27 @@ func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any) {
 func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 	if ep := strOrEmpty(d, "endpoint"); ep != "" {
 		if isp := strOrEmpty(d, "isp_interface"); isp != "" {
-			fmt.Fprintf(b, "  Endpoint %s (через %s)\n", ep, isp)
+			fmt.Fprintf(b, "  Сервер туннеля: %s (провайдерский выход: %s)\n", ep, isp)
 		} else {
-			fmt.Fprintf(b, "  Endpoint %s\n", ep)
+			fmt.Fprintf(b, "  Сервер туннеля: %s\n", ep)
 		}
 	}
 	if age, ok := intOrZero(d, "handshake_age_sec"); ok {
-		fmt.Fprintf(b, "  Последний handshake: %s назад\n", humanAgeSec(age))
+		fmt.Fprintf(b, "  Последний обмен ключами: %s назад\n", humanAgeSec(age))
 	} else {
-		b.WriteString("  Handshake — ни разу не было\n")
+		b.WriteString("  Туннель ни разу не установил связь\n")
 	}
 	if pc := strOrEmpty(d, "ping_check_status"); pc != "" {
 		fc, _ := intOrZero(d, "ping_check_fail_count")
 		ft, _ := intOrZero(d, "ping_check_fail_threshold")
 		var extras []string
 		if rc, _ := intOrZero(d, "ping_check_restart_count"); rc > 0 {
-			extras = append(extras, fmt.Sprintf("auto-рестартов: %d", rc))
+			extras = append(extras, fmt.Sprintf("авто-рестартов: %d", rc))
 		}
 		if lat, ok := intOrZero(d, "ping_check_last_latency_ms"); ok && lat > 0 {
-			extras = append(extras, fmt.Sprintf("last %dms", lat))
+			extras = append(extras, fmt.Sprintf("последний ping %d мс", lat))
 		}
-		fmt.Fprintf(b, "  pingCheck: %s — %d/%d fails", pc, fc, ft)
+		fmt.Fprintf(b, "  Проверка связи: %s — неудачных попыток %d из %d", humanPingStatus(pc), fc, ft)
 		if len(extras) > 0 {
 			fmt.Fprintf(b, " (%s)", strings.Join(extras, " · "))
 		}
@@ -379,7 +443,7 @@ func writeDNSWhatBroke(b *strings.Builder, d map[string]any) {
 		case failed == 0 && rknProbed > 0 && rknSus == rknProbed:
 			fmt.Fprintf(b, "  Серверы отвечают (%d), но похоже трафик подменяется\n", total)
 		case failed == 0:
-			fmt.Fprintf(b, "  Серверы отвечают, но проверка вернула fail (всего %d)\n", total)
+			fmt.Fprintf(b, "  Серверы отвечают, но результат проверки всё равно плохой (всего %d)\n", total)
 		case failed == total:
 			fmt.Fprintf(b, "  Не отвечает ни один из %s\n", pluralServers(total))
 		default:
@@ -421,7 +485,14 @@ func writeDNSWhatBroke(b *strings.Builder, d map[string]any) {
 func writeHydraRouteWhatBroke(b *strings.Builder, d map[string]any) {
 	installed, _ := boolOrFalse(d, "installed")
 	running, _ := boolOrFalse(d, "running")
-	fmt.Fprintf(b, "  HydraRoute · installed=%v running=%v\n", installed, running)
+	switch {
+	case installed && running:
+		b.WriteString("  HydraRoute установлен и запущен, но проверка всё равно видит сбой\n")
+	case installed:
+		b.WriteString("  HydraRoute установлен, но сервис остановлен\n")
+	default:
+		b.WriteString("  HydraRoute не установлен\n")
+	}
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
 		fmt.Fprintf(b, "  Сообщение: %s\n", errStr)
 	}
@@ -482,8 +553,46 @@ func writeGenericWhatBroke(b *strings.Builder, d map[string]any) {
 	if errStr := strOrEmpty(d, "error"); errStr != "" {
 		fmt.Fprintf(b, "  %s\n", errStr)
 	} else {
-		b.WriteString("  Проверка вернула fail без подробностей.\n")
+		b.WriteString("  Проверка сказала, что есть сбой, но агент не прислал подробностей.\n")
 	}
+}
+
+func impactFor(checkName string, d map[string]any) string {
+	switch checkCategory(checkName) {
+	case "dns":
+		return "Домены могут не открываться или уходить не туда: сайты, приложения и правила HR-Neo зависят от DNS."
+	case "tunnel":
+		var parts []string
+		if rDNS, _ := intOrZero(d, "routes_dns"); rDNS > 0 {
+			parts = append(parts, fmt.Sprintf("%d DNS-правил", rDNS))
+		}
+		if rStatic, _ := intOrZero(d, "routes_static"); rStatic > 0 {
+			parts = append(parts, fmt.Sprintf("%d static-маршрутов", rStatic))
+		}
+		if len(parts) > 0 {
+			return "Через этот туннель завязаны " + strings.Join(parts, " и ") + "; они могут не работать до восстановления туннеля."
+		}
+		return "Трафик, который должен идти через этот туннель, может не доходить до нужных сервисов."
+	case "hydraroute":
+		return "DNS/HR-Neo правила могут перестать направлять домены в нужные туннели; часть сайтов пойдёт обычным маршрутом или не откроется."
+	case "awg_manager", "awgmgr_api":
+		return "Бот не может читать список туннелей и управлять ими через awg-manager: диагностика, маршруты и кнопки ремонта могут не сработать."
+	case "external_reach":
+		return "Сервисы снаружи не открываются через выбранный туннель; проблема либо в самом туннеле, либо в маршрутизации через него."
+	}
+	return ""
+}
+
+func humanPingStatus(s string) string {
+	switch s {
+	case "alive", "ok", "running":
+		return "живая"
+	case "dead", "fail", "failed":
+		return "падает"
+	case "disabled":
+		return "выключена"
+	}
+	return s
 }
 
 // diagnose returns a one-paragraph hypothesis about the root cause —
@@ -498,9 +607,9 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 	case "hydraroute":
 		return diagnoseHydraRoute(d)
 	case "awg_manager":
-		return "awg-manager не отвечает на запрос статуса. Обычно это значит что демон упал или сильно загружен — версии и firmware не считываются."
+		return "awg-manager не отвечает на запрос статуса. Обычно это значит, что сервис упал или сильно загружен — версии и прошивка не считываются."
 	case "awgmgr_api":
-		return "Реестр туннелей читается через REST awg-manager. Если он недоступен — либо awg-manager умер, либо HTTP-эндпоинт сменил порт/auth."
+		return "Список туннелей читается через API awg-manager. Если он недоступен — либо awg-manager упал, либо изменился порт или доступ к API."
 	case "external_reach":
 		return diagnoseExternalReach(d, ns)
 	}
@@ -511,7 +620,7 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 	rknSus, _ := intOrZero(d, "rkn_suspect")
 	rknProbed, _ := intOrZero(d, "rkn_probed")
 	if rknProbed > 0 && rknSus == rknProbed {
-		return "На всех проверенных endpoint'ах ответы похожи на RKN-блокировку. DNS-серверы живы, но трафик подменяется по дороге — нужен DoH или другой апстрим."
+		return "На всех проверенных серверах ответы похожи на RKN-блокировку. DNS-серверы живы, но трафик подменяется по дороге — нужен DoH или другой апстрим."
 	}
 
 	failed := mapsSlice(d, "endpoints_detail")
@@ -571,17 +680,17 @@ func diagnoseTunnel(d map[string]any, ns []NeighborSummary) string {
 	}
 	switch {
 	case !hasAge:
-		parts = append(parts, "Handshake'а не было ни разу с момента старта — туннель так и не поднялся. Чаще всего это неправильный endpoint, AWG-параметры или закрытый порт у провайдера.")
+		parts = append(parts, "Обмена ключами не было ни разу с момента старта — туннель так и не поднялся. Чаще всего это неправильный адрес сервера, AWG-параметры или закрытый порт у провайдера.")
 	case age > 600:
-		parts = append(parts, fmt.Sprintf("Handshake'а нет уже %s — туннель явно лежит, не просто моргнул.", humanAgeSec(age)))
+		parts = append(parts, fmt.Sprintf("Обмена ключами нет уже %s — туннель явно лежит, не просто моргнул.", humanAgeSec(age)))
 	case age > 180:
-		parts = append(parts, "Handshake устарел, но не катастрофически. Возможно провайдер режет UDP, либо peer временно недоступен.")
+		parts = append(parts, "Обмен ключами устарел, но не катастрофически. Возможно провайдер режет UDP, либо сервер туннеля временно недоступен.")
 	}
 	if pc == "dead" {
-		parts = append(parts, "pingCheck показывает dead — пакеты не доходят даже после auto-рестартов.")
+		parts = append(parts, "Проверка связи показывает сбой — пакеты не доходят даже после авто-рестартов.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && neighborsAlive(ns) {
-		parts = append(parts, "Соседние тоннели живы, так что WAN/роутер целы. Проблема локальная — этот peer/endpoint.")
+		parts = append(parts, "Соседние тоннели живы, так что WAN/роутер целы. Проблема локальная — этот сервер туннеля или его настройки.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && !neighborsAlive(ns) {
 		parts = append(parts, "Соседние тоннели тоже не на связи. Похоже на проблему уровнем выше — WAN, провайдер или сам роутер.")
@@ -669,7 +778,7 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 			"Сначала проверь WAN: 🌍 Через тоннель? и 🇷🇺 Напрямую?. Если связь есть только напрямую — туннели лежат, начни с %s.",
 			iface)
 	}
-	return "Подожди минуту — иногда апстримы временно отвечают timeout. Если не вернётся — открой 📊 Что происходит? и глянь общую картину по роутеру."
+	return "Подожди минуту — иногда апстримы временно отвечают таймаутом. Если не вернётся — открой 📊 Что происходит? и глянь общую картину по роутеру."
 }
 
 func adviseTunnel(d map[string]any, _ []NeighborSummary) string {
@@ -679,7 +788,7 @@ func adviseTunnel(d map[string]any, _ []NeighborSummary) string {
 		return "Открой 🎛 Туннели, найди этот тоннель и проверь его адрес. Скорее всего он совпадает с другим интерфейсом — поменяй на свободную /24."
 	}
 	if !hasAge {
-		return "Тыкни «📊 Диагностика» — она покажет endpoint, AWG-параметры и попытается поднять. Если endpoint правильный, но handshake не идёт — провайдер режет UDP."
+		return "Тыкни «📊 Диагностика» — она покажет сервер туннеля, AWG-параметры и попытается поднять связь. Если сервер правильный, но обмен ключами не идёт — провайдер может резать UDP."
 	}
 	if age > 600 {
 		return "Жми «🔁 Перезапуск туннеля» — обычно помогает. Если нет — «📊 Диагностика», там увидишь конкретный сбой."
@@ -696,7 +805,7 @@ func adviseHydraRoute(d map[string]any) string {
 	case !running:
 		return "Открой 🛠 Обслуживание и нажми «Перезапустить hrneo»."
 	}
-	return "Проверь правила hrneo (🛣 Маршруты) — возможно одно из них ссылается на удалённый туннель."
+	return "Проверь правила HR-Neo (🛣 Маршруты) — возможно одно из них ссылается на удалённый туннель."
 }
 
 func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
@@ -704,7 +813,7 @@ func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
 	failed := mapsSlice(d, "targets_failed")
 	total, _ := intOrZero(d, "targets_total")
 	if total > 0 && len(failed) == total && iface != "" {
-		return fmt.Sprintf("Туннель %s не пропускает наружу. Тыкни «🔁 Перезапуск туннеля» в его alert'е, либо открой 🎛 Туннели и сделай force handshake.", iface)
+		return fmt.Sprintf("Туннель %s не пропускает наружу. Нажми «🔁 Перезапуск туннеля» в его сообщении или открой 🎛 Туннели и перезапусти его оттуда.", iface)
 	}
 	if len(ns) > 0 && !neighborsAlive(ns) {
 		return "Сначала проверь WAN: 🇷🇺 Напрямую? — если и без тоннеля наружу не выходит, проблема у провайдера."
@@ -733,9 +842,9 @@ func humaniseNetErr(s string) string {
 	low := strings.ToLower(s)
 	switch {
 	case strings.Contains(low, "i/o timeout"), strings.Contains(low, "timeout"):
-		return "timeout"
+		return "таймаут"
 	case strings.Contains(low, "connection refused"):
-		return "refused"
+		return "отказ соединения"
 	case strings.Contains(low, "connection reset"):
 		return "соединение сброшено"
 	case strings.Contains(low, "broken pipe"), strings.Contains(low, "epipe"):

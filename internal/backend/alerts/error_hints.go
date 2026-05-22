@@ -40,7 +40,7 @@ func HintFor(action, statusOrRaw string) (summary, hint string) {
 				"NDMS не знает интерфейс. Проверь имя интерфейса в awg-mgr → `ndmc -c \"show interface\"`."
 		case s == "":
 			return "переключение не применилось",
-				"См. raw error выше для подробностей."
+				"Посмотри текст ошибки выше или повтори действие после обновления панели."
 		}
 	}
 

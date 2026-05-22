@@ -93,8 +93,9 @@ func (n *PingCheckPanelNotifier) renderErr(ctx context.Context, ref cmdpkg.Messa
 	summary, hint := alerts.HintFor("pingcheck_status", errOut)
 	card := alerts.Card{
 		Badge:   "❌",
-		Label:   fmt.Sprintf("📡 PingCheck — %s — агент не ответил", user.Nickname),
+		Label:   "📡 PingCheck",
 		Summary: summary,
+		Meta:    []string{alerts.KV("роутер", user.Nickname), "агент не ответил"},
 		Hint:    hint,
 	}
 	body := card.Render(alerts.CardOpts{MaxBytes: 3500})
@@ -187,7 +188,7 @@ func NewPingCheckOpenAction(sink CommandEnqueuer, idGen func() string) *PingChec
 
 func (a *PingCheckOpenAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
 	if a.sink == nil {
-		return "", errors.New("command channel disabled")
+		return "", errors.New("командная очередь не подключена; действие не отправлено агенту")
 	}
 	cmd := wire.Command{
 		ID:       a.idGen(),
@@ -224,7 +225,7 @@ func NewPingCheckToggleAction(sink CommandEnqueuer, inflight *pingcheckInflightS
 
 func (a *PingCheckToggleAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
 	if a.sink == nil {
-		return "", errors.New("command channel disabled")
+		return "", errors.New("командная очередь не подключена; действие не отправлено агенту")
 	}
 	if !a.inflight.tryClaim(args.UserID, args.PingCheckTunnelID, pingcheckInflightTTL) {
 		return "", errors.New("⏳ команда уже выполняется")
@@ -271,7 +272,12 @@ func (a *PingCheckToggleAction) Apply(ctx context.Context, q *tg.CallbackQuery, 
 // pingcheck_status. The notifier replaces the placeholder when the
 // agent answers.
 func (r *Router) openPingCheckPanelMessage(ctx context.Context, m *tg.Message, u *db.User) {
-	text := fmt.Sprintf("📡 PingCheck — %s\n\nЗагружаю состояние…", u.Nickname)
+	text := alerts.Card{
+		Badge:   "⏳",
+		Label:   "📡 PingCheck",
+		Summary: "загружаю состояние",
+		Meta:    []string{alerts.KV("роутер", u.Nickname)},
+	}.Render(alerts.CardOpts{})
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", u.ID)},
 		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", u.ID)},

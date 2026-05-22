@@ -110,12 +110,12 @@ func mobileWakeKeyboard(userID int64) any {
 			CallbackData string `json:"callback_data"`
 		}{
 			{
-				{Text: "Diag", CallbackData: "diag_now:" + formatUserID(userID) + ":_menu"},
-				{Text: "Force recheck", CallbackData: "force_recheck:" + formatUserID(userID) + ":_mobile"},
+				{Text: "Диагностика", CallbackData: "diag_now:" + formatUserID(userID) + ":_menu"},
+				{Text: "Повторить проверку", CallbackData: "force_recheck:" + formatUserID(userID) + ":_mobile"},
 			},
 			{
-				{Text: "Routes", CallbackData: "panel:" + formatUserID(userID) + ":push:routes"},
-				{Text: "HR-Neo Doctor", CallbackData: "routes_hrneo_doctor:" + formatUserID(userID)},
+				{Text: "🛣 Маршруты", CallbackData: "panel:" + formatUserID(userID) + ":push:routes"},
+				{Text: "HR-Neo проверка", CallbackData: "routes_hrneo_doctor:" + formatUserID(userID)},
 			},
 		},
 	}

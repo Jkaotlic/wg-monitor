@@ -152,7 +152,7 @@ func TestFormatSmartReply_OK(t *testing.T) {
 		Tunnels: []TunnelView{{Name: "amnezia", HandshakeAge: 47, PingStatus: "ok", Latency: 12}},
 	}
 	text, kb := FormatSmartReply(a)
-	for _, want := range []string{"✅", "vasya", "всё работает", "amnezia", "47с", "12 ms", "23с"} {
+	for _, want := range []string{"✅", "vasya", "всё работает", "amnezia", "47с", "12 мс", "23с"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("OK template missing %q in:\n%s", want, text)
 		}
@@ -247,7 +247,7 @@ func TestFormatSmartReply_DropsOnlyLegacyPingCheckDisabledHard(t *testing.T) {
 	if strings.Contains(text, "tunnel_awg11") {
 		t.Fatalf("legacy false hard should not be shown:\n%s", text)
 	}
-	for _, want := range []string{"alyaba", "de", "disabled"} {
+	for _, want := range []string{"alyaba", "de", "выключена"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

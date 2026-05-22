@@ -105,26 +105,26 @@ func (r diagReportV1) renderBullets() []string {
 			parts = append(parts, "awg-manager "+r.System.AppVersion)
 		}
 		if r.System.Backend != "" {
-			parts = append(parts, "backend "+r.System.Backend)
+			parts = append(parts, "движок "+r.System.Backend)
 		}
 		if r.System.TotalMemoryMB > 0 {
-			parts = append(parts, fmt.Sprintf("RAM %d MB", r.System.TotalMemoryMB))
+			parts = append(parts, fmt.Sprintf("память %d MB", r.System.TotalMemoryMB))
 		}
 		if len(parts) > 0 {
 			out = append(out, "⚙ "+strings.Join(parts, ", "))
 		}
 	}
 	if r.System.Uptime != "" {
-		out = append(out, "⏱ Uptime: "+r.System.Uptime)
+		out = append(out, "⏱ аптайм: "+r.System.Uptime)
 	}
 	if r.System.KernelModule.Exists || r.System.KernelModule.Loaded {
 		switch {
 		case r.System.KernelModule.Exists && r.System.KernelModule.Loaded:
-			out = append(out, "AWG kernel module: loaded")
+			out = append(out, "✅ модуль AWG загружен")
 		case r.System.KernelModule.Exists && !r.System.KernelModule.Loaded:
-			out = append(out, "AWG kernel module: exists but not loaded; router reboot may be required after NativeWG module update")
+			out = append(out, "⚠ модуль AWG есть, но не загружен; после обновления NativeWG может понадобиться перезагрузка роутера")
 		default:
-			out = append(out, "AWG kernel module: not found")
+			out = append(out, "❌ модуль AWG не найден")
 		}
 	}
 	if len(r.WAN.Interfaces) > 0 {
@@ -273,15 +273,15 @@ type PerTunnelDetail struct {
 // Slugs are stable across awg-mgr versions; labels track the screenshots.
 var testSlugLabels = map[string]string{
 	"mtu":               "MTU интерфейса",
-	"dns_leak":          "DNS leak проверка",
-	"dnsLeak":           "DNS leak проверка",
-	"host_route":        "Host route до endpoint",
-	"hostRoute":         "Host route до endpoint",
+	"dns_leak":          "Проверка утечки DNS",
+	"dnsLeak":           "Проверка утечки DNS",
+	"host_route":        "Маршрут до сервера туннеля",
+	"hostRoute":         "Маршрут до сервера туннеля",
 	"iptables":          "Правила iptables",
-	"endpoint":          "Резолв endpoint",
-	"endpoint_ping":     "Ping endpoint",
-	"endpointPing":      "Ping endpoint",
-	"handshake":         "Handshake свежий",
+	"endpoint":          "Резолв сервера туннеля",
+	"endpoint_ping":     "Ping сервера туннеля",
+	"endpointPing":      "Ping сервера туннеля",
+	"handshake":         "Обмен ключами свежий",
 	"tunnel_conn":       "Связность через туннель",
 	"tunnelConn":        "Связность через туннель",
 	"awg_proxy":         "AWG Proxy статус",
@@ -289,8 +289,8 @@ var testSlugLabels = map[string]string{
 	"pingcheck":         "PingCheck статус",
 	"validate_cfg":      "Валидация конфига",
 	"validateCfg":       "Валидация конфига",
-	"state_consistency": "Консистентность state",
-	"stateConsistency":  "Консистентность state",
+	"state_consistency": "Согласованность состояния",
+	"stateConsistency":  "Согласованность состояния",
 }
 
 // ParseDiagTests extracts per-test details from the awg-mgr diag JSON.

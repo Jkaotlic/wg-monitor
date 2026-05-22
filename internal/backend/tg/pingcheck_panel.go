@@ -32,17 +32,19 @@ func PingCheckPanelText(nickname string, globalEnabled bool, entries []PingCheck
 		b.WriteString("\nТуннелей не обнаружено — PingCheck не отчитался.")
 		return b.String()
 	}
-	b.WriteString("\n")
+	b.WriteString("\nТуннели:\n")
 	for _, e := range entries {
+		b.WriteString("  • ")
 		b.WriteString(formatPingCheckRow(e))
 		b.WriteString("\n")
 	}
-	b.WriteString("\nМониторинг: ")
+	b.WriteString("\nСостояние:\n  • Мониторинг: ")
 	if globalEnabled {
-		b.WriteString("✅ enabled")
+		b.WriteString("✅ включён")
 	} else {
-		b.WriteString("⏸ disabled")
+		b.WriteString("⏸ выключен")
 	}
+	b.WriteString("\n  • ✓ — успешные проверки, ✗ — ошибки подряд, restart — автоперезапуски")
 	return b.String()
 }
 

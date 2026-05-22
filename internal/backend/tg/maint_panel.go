@@ -62,7 +62,7 @@ func MaintPanelText(a MaintPanelArgs) string {
 			fmt.Fprintf(&b, ", v%s", a.HrneoVersion)
 		}
 		if a.HrneoUptime != "" {
-			fmt.Fprintf(&b, ", uptime %s", a.HrneoUptime)
+			fmt.Fprintf(&b, ", работает %s", a.HrneoUptime)
 		}
 		b.WriteString("\n")
 	}
@@ -75,7 +75,7 @@ func MaintPanelText(a MaintPanelArgs) string {
 		fmt.Fprintf(&b, ", v%s", a.AwgmgrVersion)
 	}
 	if a.AwgmgrUptime != "" {
-		fmt.Fprintf(&b, ", uptime %s", a.AwgmgrUptime)
+		fmt.Fprintf(&b, ", работает %s", a.AwgmgrUptime)
 	}
 	b.WriteString("\n")
 	if a.KeeneticOS != "" {
@@ -88,7 +88,7 @@ func MaintPanelText(a MaintPanelArgs) string {
 		for _, u := range a.Updates {
 			fmt.Fprintf(&b, "  • %s %s → %s\n", u.Name, u.Installed, u.Available)
 			if u.Hint != "" {
-				fmt.Fprintf(&b, "    hint: %s\n", u.Hint)
+				fmt.Fprintf(&b, "    подсказка: %s\n", u.Hint)
 			}
 		}
 	}
@@ -159,7 +159,7 @@ func RestartConfirmText(name, token string) string {
 			"  • Алерты придут сразу после reboot — это нормально.\n" +
 			"  • Кулдаун: 5 мин (повторное нажатие заблокировано)."
 	}
-	return fmt.Sprintf("🛠 Обслуживание\n\n⚠️ Перезапустить %s?\n\nЧто произойдёт:\n%s\n\nToken: %s (TTL 5 мин)",
+	return fmt.Sprintf("🛠 Обслуживание\n\n⚠️ Перезапустить %s?\n\nЧто произойдёт:\n%s\n\nКод подтверждения: %s (живёт 5 мин)",
 		display, what, token)
 }
 
@@ -219,7 +219,7 @@ func FirmwareConfirmText(token string) string {
 			"  • После старта установки роутер уйдёт в перезагрузку (~2-3 мин).\n"+
 			"  • Все туннели разорвутся.\n"+
 			"  • Кулдаун: 5 мин.\n\n"+
-			"Token: %s (TTL 5 мин)",
+			"Код подтверждения: %s (живёт 5 мин)",
 		token)
 }
 

@@ -33,12 +33,35 @@ func RenderWakeReport(nickname string, checks []wire.Check) Card {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "• %s", name)
+		fmt.Fprintf(&b, "• %s", wakeCheckLabel(name))
 	}
 	return Card{
 		Badge:   "🚗⚠",
 		Summary: fmt.Sprintf("%s в сети, есть проблемы", nickname),
 		Details: b.String(),
-		Hint:    "Открой /panel или нажми 📊 Что происходит?",
+		Hint:    "Нажми 📊 Что происходит? или открой /panel — там будет видно, что именно упало и какие кнопки ремонта доступны.",
+	}
+}
+
+func wakeCheckLabel(name string) string {
+	switch name {
+	case "tunnels":
+		return "список туннелей не читается"
+	case "dns_via_tunnel":
+		return "DNS не отвечает"
+	}
+	switch checkCategory(name) {
+	case "tunnel":
+		return "туннель не на связи"
+	case "dns":
+		return "DNS не отвечает"
+	case "hydraroute":
+		return "HydraRoute не работает"
+	case "awg_manager", "awgmgr_api":
+		return "awg-manager не отвечает"
+	case "external_reach":
+		return "внешние сервисы не открываются через туннель"
+	default:
+		return name
 	}
 }

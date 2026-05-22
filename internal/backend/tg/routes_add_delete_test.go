@@ -64,14 +64,15 @@ func TestRouteAddPreviewTextAllowed(t *testing.T) {
 	}
 	text := RouteAddPreviewText(plan)
 	for _, want := range []string{
-		"Preview",
-		"Type: DNS / HR-Neo",
-		"Name: media",
-		"Target: awg10",
-		"Targets:",
+		"Превью маршрута",
+		"Тип маршрута: DNS / HR-Neo",
+		"Название: media",
+		"Куда вести: awg10",
+		"Что маршрутизируется:",
 		"- example.com",
 		"- api.example.com",
-		"Next: confirm to add this route, or cancel.",
+		"Дальше:",
+		"подтверди добавление",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
@@ -79,6 +80,11 @@ func TestRouteAddPreviewTextAllowed(t *testing.T) {
 	}
 	if strings.Contains(text, "Blocking overlaps:") {
 		t.Fatalf("allowed preview should not render blocking section:\n%s", text)
+	}
+	for _, bad := range []string{"Type:", "Target:", "Targets:", "Next:"} {
+		if strings.Contains(text, bad) {
+			t.Fatalf("technical English label %q should not leak:\n%s", bad, text)
+		}
 	}
 	if strings.Contains(text, "        ") {
 		t.Fatalf("preview should not rely on wide spacing:\n%s", text)
@@ -96,7 +102,7 @@ func TestRouteAddPreviewKeyboardHidesConfirmWhenBlocked(t *testing.T) {
 		CanApply: false,
 	}
 	text := RouteAddPreviewText(plan)
-	if !strings.Contains(text, "Blocking overlaps:") {
+	if !strings.Contains(text, "Блокирует добавление:") {
 		t.Fatalf("blocked preview should render blocking section:\n%s", text)
 	}
 	kb := RouteAddPreviewKeyboard(42, "draft1", "confirm1", plan)
@@ -125,13 +131,13 @@ func TestRouteDeletePreviewTextAndKeyboard(t *testing.T) {
 	}
 	text := RouteDeletePreviewText(plan)
 	for _, want := range []string{
-		"Delete preview",
-		"Kind: static",
-		"Backend: awg-manager",
-		"Bind: wan",
-		"Targets:",
+		"Превью удаления",
+		"Тип: static",
+		"Движок: awg-manager",
+		"Привязка: wan",
+		"Что маршрутизируется:",
 		"- 0.0.0.0/0",
-		"Warnings:",
+		"Предупреждения:",
 		"- default-route-like target",
 	} {
 		if !strings.Contains(text, want) {
@@ -162,7 +168,7 @@ func TestRouteApplyResultText(t *testing.T) {
 		HRNeoRestarted: true,
 	}
 	text := RouteApplyResultText(res)
-	for _, want := range []string{"Route add complete", "Kind: dns", "Name: media", "ID: r1", "HR-Neo restarted: yes"} {
+	for _, want := range []string{"Маршрут добавлен", "Тип: dns", "Название: media", "ID: r1", "HR-Neo перезапущен"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}

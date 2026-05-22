@@ -14,16 +14,16 @@ import (
 )
 
 type fakeRouterTG struct {
-	mu              sync.Mutex
-	answers         []string
-	edits           []string
-	sentMsgs        []string
-	topicCalls      []fakeTopicCallRouter
-	nextTopicID     int64
-	topicErr        error
-	sendErr         error
-	answerErr       error
-	editErr         error
+	mu          sync.Mutex
+	answers     []string
+	edits       []string
+	sentMsgs    []string
+	topicCalls  []fakeTopicCallRouter
+	nextTopicID int64
+	topicErr    error
+	sendErr     error
+	answerErr   error
+	editErr     error
 }
 
 type fakeTopicCallRouter struct {
@@ -46,17 +46,20 @@ func (f *fakeRouterTG) CreateForumTopic(ctx context.Context, chatID int64, name 
 }
 
 func (f *fakeRouterTG) SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error) {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.sentMsgs = append(f.sentMsgs, text)
 	return 1, f.sendErr
 }
 func (f *fakeRouterTG) AnswerCallbackQuery(ctx context.Context, id, text string) error {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.answers = append(f.answers, text)
 	return f.answerErr
 }
 func (f *fakeRouterTG) EditMessageText(ctx context.Context, chatID, messageID int64, text, parseMode string, markup *tg.InlineKeyboardMarkup) error {
-	f.mu.Lock(); defer f.mu.Unlock()
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.edits = append(f.edits, text)
 	return f.editErr
 }
@@ -86,11 +89,13 @@ func TestRouterDispatchesSilence(t *testing.T) {
 	}
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.answers) != 1 { t.Errorf("expected 1 answer, got %d", len(f.answers)) }
+	if len(f.answers) != 1 {
+		t.Errorf("expected 1 answer, got %d", len(f.answers))
+	}
 	if len(f.edits) != 1 {
 		t.Errorf("expected 1 edit, got %d", len(f.edits))
-	} else if !strings.Contains(f.edits[0], "Silenced") {
-		t.Errorf("edit text missing 'Silenced': %q", f.edits[0])
+	} else if !strings.Contains(f.edits[0], "Уведомления скрыты") {
+		t.Errorf("edit text missing silence status: %q", f.edits[0])
 	}
 }
 
@@ -156,8 +161,8 @@ func TestRouterUnknownAction(t *testing.T) {
 	if len(f.answers) != 1 {
 		t.Fatal("expected answerCallback")
 	}
-	if !strings.Contains(strings.ToLower(f.answers[0]), "unknown") {
-		t.Errorf("expected 'unknown' in answer, got %q", f.answers[0])
+	if !strings.Contains(f.answers[0], "неизвестная") {
+		t.Errorf("expected unknown-button toast, got %q", f.answers[0])
 	}
 }
 
@@ -222,8 +227,8 @@ func TestRouterCommandActionWithoutSinkRejects(t *testing.T) {
 	if len(f.answers) != 1 {
 		t.Fatal("expected answerCallback")
 	}
-	if !strings.Contains(strings.ToLower(f.answers[0]), "error") {
-		t.Errorf("expected 'error' toast when sink is nil, got %q", f.answers[0])
+	if !strings.Contains(f.answers[0], "Ошибка") {
+		t.Errorf("expected error toast when sink is nil, got %q", f.answers[0])
 	}
 }
 
@@ -239,9 +244,11 @@ func TestRouterActionErrorReportedAsToast(t *testing.T) {
 		Data:    "ack:" + itoa(uid) + ":awg_handshake",
 	}
 	r.HandleCallback(context.Background(), q)
-	if len(f.answers) != 1 { t.Fatal("expected answer") }
-	if !strings.Contains(f.answers[0], "error") {
-		t.Errorf("expected 'error' in answer, got %q", f.answers[0])
+	if len(f.answers) != 1 {
+		t.Fatal("expected answer")
+	}
+	if !strings.Contains(f.answers[0], "Ошибка") {
+		t.Errorf("expected error in answer, got %q", f.answers[0])
 	}
 	if len(f.edits) != 0 {
 		t.Error("on error, should NOT edit")
@@ -359,7 +366,7 @@ func TestRouterDispatchSmartReply_RendersOK(t *testing.T) {
 		t.Fatalf("want 1 send, got %d", len(f.rkSends))
 	}
 	body := f.rkSends[0].text
-	for _, want := range []string{"✅", "vasya", "amnezia", "12с", "15 ms"} {
+	for _, want := range []string{"✅", "vasya", "amnezia", "12с", "15 мс"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}

@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
 	"github.com/anex/wg-monitor/internal/backend/tg"
@@ -45,7 +45,7 @@ func (a *SilenceAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("⏸ Silenced до %s МСК (admin)",
+	return fmt.Sprintf("⏸ Уведомления скрыты до %s МСК (админ)",
 		until.In(moscowLoc()).Format("15:04")), nil
 }
 
@@ -72,7 +72,7 @@ func (a *AckAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return "✅ Ack'ed (до восстановления)", nil
+	return "✅ Отмечено: вижу проблему, напомню после восстановления", nil
 }
 
 // ----- Mute -----
@@ -98,7 +98,7 @@ func (a *MuteAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) 
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("🔇 Muted до %02d:00 МСК (%s)",
+	return fmt.Sprintf("🔇 Тихий режим до %02d:00 МСК (%s)",
 		a.cutoffHour, until.Format("02 Jan")), nil
 }
 
@@ -147,7 +147,7 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 			if e.Status == "fail" {
 				icon = "❌"
 			}
-			lines = append(lines, fmt.Sprintf("%s %s %s", e.TS.In(moscowLoc()).Format("15:04"), icon, e.Status))
+			lines = append(lines, fmt.Sprintf("%s %s %s", e.TS.In(moscowLoc()).Format("15:04"), icon, humanEventStatus(e.Status)))
 			prev = e.Status
 		}
 	}
@@ -163,23 +163,30 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		nickname = user.Nickname
 		threadID = user.TelegramThreadID
 	}
-	header := fmt.Sprintf("📋 История [%s] / %s — 24ч", nickname, args.CheckName)
-
-	var body string
+	var historyLines []string
 	if len(lines) == 0 {
-		body = "(нет событий за период)"
+		historyLines = []string{"нет событий за период"}
 	} else {
 		truncated := false
 		if len(lines) > historyMaxTransitions {
 			lines = lines[len(lines)-historyMaxTransitions:]
 			truncated = true
 		}
-		body = strings.Join(lines, "\n")
 		if truncated {
-			body = "... (older entries truncated)\n" + body
+			historyLines = append(historyLines, "показаны только последние события")
 		}
+		historyLines = append(historyLines, lines...)
 	}
-	text := header + "\n" + body
+	text := alerts.Card{
+		Badge:   "📋",
+		Label:   "История",
+		Summary: "последние 24ч",
+		Meta:    []string{alerts.KV("роутер", nickname), alerts.KV("проверка", args.CheckName)},
+		Sections: []alerts.CardSection{{
+			Title: "События",
+			Lines: historyLines,
+		}},
+	}.Render(alerts.CardOpts{MaxBytes: 3500})
 
 	_, err = a.tg.SendMessage(ctx, a.chatID, threadID, text, "", nil)
 	if err != nil {
@@ -213,7 +220,7 @@ func defaultCmdID() string {
 
 func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
 	if a.sink == nil {
-		return "", errors.New("command channel disabled (no sink configured)")
+		return "", errors.New("командная очередь не подключена; действие не отправлено агенту")
 	}
 	cmdArgs := map[string]any{"check_name": args.CheckName}
 	if args.NDMSName != "" {
@@ -249,7 +256,7 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 // CommandResult will reply to the user's text message via Notifier.
 func (a *CommandAction) DispatchFromMessage(_ context.Context, action string, userID int64, chatID, messageID int64, threadID *int64) error {
 	if a.sink == nil {
-		return errors.New("command channel disabled (no sink configured)")
+		return errors.New("командная очередь не подключена; действие не отправлено агенту")
 	}
 	cmd := wire.Command{
 		ID:       a.idGen(),
@@ -277,14 +284,25 @@ func formatQueuedStatus(action string) string {
 }
 
 var commandLabels = map[string]string{
-	"restart_tunnel": "🔁 Restart",
-	"diag_now":       "📊 Diag",
-	"pingcheck_now":  "▶ Pingcheck",
-	"force_recheck":  "🔁 Force recheck",
+	"restart_tunnel": "🔁 Перезапуск туннеля",
+	"diag_now":       "📊 Диагностика",
+	"pingcheck_now":  "▶ Проверка связи",
+	"force_recheck":  "🔁 Повторная проверка",
 	"router_doctor":  "🩺 Проверка",
-	"opkg_upgrade":   "⬆ Opkg upgrade",
+	"opkg_upgrade":   "⬆ Обновление opkg",
 	"tunnel_enable":  "▶ Включить",
 	"tunnel_disable": "⏸ Выключить",
+}
+
+func humanEventStatus(status string) string {
+	switch status {
+	case "ok":
+		return "в норме"
+	case "fail":
+		return "сбой"
+	default:
+		return status
+	}
 }
 
 // pendingRebind holds a scheduled rebind awaiting Confirm. Stored in
@@ -316,7 +334,7 @@ func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, ar
 		return "", errors.New("сессия истекла или не найдена; открой панель заново")
 	}
 	if pr.SrcID != args.RebindSrcID || pr.DstID != args.RebindDstID {
-		return "", errors.New("параметры rebind не совпадают с подтверждением")
+		return "", errors.New("параметры переноса правил не совпадают с подтверждением")
 	}
 	cmd := wire.Command{
 		ID:     a.idGen(),
@@ -333,7 +351,7 @@ func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, ar
 		ThreadID:  q.Message.MessageThreadID,
 	}
 	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-		return "", fmt.Errorf("enqueue route_rebind: %w", err)
+		return "", fmt.Errorf("не удалось поставить перенос правил в очередь: %w", err)
 	}
 	return "🛣 запускаем перенос…", nil
 }
@@ -392,5 +410,5 @@ func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args
 	if replace {
 		verb = "замена"
 	}
-	return fmt.Sprintf("📤 Import (%s %q) поставлен в очередь", verb, up.Name), nil
+	return fmt.Sprintf("📤 Импорт туннеля (%s %q) поставлен в очередь", verb, up.Name), nil
 }

@@ -13,7 +13,7 @@ func TestMobileFleetPanelText(t *testing.T) {
 		{Nickname: "home", Kind: "static"},
 	}, last.Add(2*time.Minute))
 
-	for _, want := range []string{"Mobile fleet", "carvan", "awake", "canary", "pending v0.14.0-rc1"} {
+	for _, want := range []string{"Мобильные роутеры", "carvan", "в сети", "canary", "ждёт обновление v0.14.0-rc1"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("MobileFleetPanelText missing %q:\n%s", want, text)
 		}

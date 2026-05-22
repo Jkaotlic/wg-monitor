@@ -36,12 +36,13 @@ func TunnelsPanelText(nickname string, entries []TunnelPanelEntry) string {
 		b.WriteString("\n(туннелей не обнаружено — агент ещё не отчитался)")
 		return b.String()
 	}
-	b.WriteString("\n")
+	b.WriteString("\nСписок:\n")
 	for _, e := range entries {
+		b.WriteString("  • ")
 		b.WriteString(formatTunnelRow(e))
 		b.WriteString("\n")
 	}
-	b.WriteString("\nКнопки переключают вкл/выкл; «🔁 Перезагрузить» — рестартит awg-manager целиком.")
+	b.WriteString("\nДействия:\n  • кнопки переключают вкл/выкл\n  • «🔁 Перезагрузить» рестартит awg-manager целиком")
 	return b.String()
 }
 
@@ -54,12 +55,12 @@ func formatTunnelRow(e TunnelPanelEntry) string {
 		state = "выключен"
 	case e.Status != "" && e.Status != "running":
 		icon = "🔴"
-		state = e.Status
+		state = humanTunnelStatus(e.Status)
 	case e.HandshakeAge > 0:
-		state = "handshake " + humanAgeShort(e.HandshakeAge)
+		state = "обмен ключами " + humanAgeShort(e.HandshakeAge)
 	case e.HandshakeAge == 0:
 		icon = "🔴"
-		state = "ни одного handshake"
+		state = "обмена ключами ещё не было"
 	}
 	label := e.Name
 	if label == "" {
@@ -72,6 +73,19 @@ func formatTunnelRow(e TunnelPanelEntry) string {
 		return fmt.Sprintf("%s %s · %s", icon, label, state)
 	}
 	return fmt.Sprintf("%s %s", icon, label)
+}
+
+func humanTunnelStatus(status string) string {
+	switch status {
+	case "disabled":
+		return "выключен"
+	case "stopped":
+		return "остановлен"
+	case "dead", "fail", "failed":
+		return "не на связи"
+	default:
+		return status
+	}
 }
 
 func humanAgeShort(s int) string {
@@ -89,16 +103,18 @@ func humanAgeShort(s int) string {
 // TunnelsPanelKeyboard builds the inline keyboard for the Tunnels Panel.
 //
 // Layout:
-//   Row 1: per-tunnel toggle buttons — "[⏸ awg]" if currently enabled,
-//          "[▶ awg2]" if currently disabled. Up to 8 in one row (TG limit).
-//          Wraps to a new row beyond that.
-//   Row N+1: [🔁 Перезагрузить awg-mgr] [🔄 Обновить]
+//
+//	Row 1: per-tunnel toggle buttons — "[⏸ awg]" if currently enabled,
+//	       "[▶ awg2]" if currently disabled. Up to 8 in one row (TG limit).
+//	       Wraps to a new row beyond that.
+//	Row N+1: [🔁 Перезагрузить awg-mgr] [🔄 Обновить]
 //
 // callback_data shape:
-//   tunnel_enable:<userID>:<check_name>:<ndms_name>     ← short tunnel name in label
-//   tunnel_disable:<userID>:<check_name>:<ndms_name>
-//   restart_tunnel:<userID>:_panel_                     ← global restart-all
-//   tunnels_refresh:<userID>:_panel_                    ← re-render
+//
+//	tunnel_enable:<userID>:<check_name>:<ndms_name>     ← short tunnel name in label
+//	tunnel_disable:<userID>:<check_name>:<ndms_name>
+//	restart_tunnel:<userID>:_panel_                     ← global restart-all
+//	tunnels_refresh:<userID>:_panel_                    ← re-render
 //
 // We pack ndms_name as a 4th colon-segment so the parser splits cleanly. The
 // existing Parse splits on ":" and reads parts[0..2]; we extend Args.NDMSName

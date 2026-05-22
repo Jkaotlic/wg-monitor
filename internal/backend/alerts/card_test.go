@@ -69,6 +69,31 @@ func TestCard_FullQuadOrdering(t *testing.T) {
 	}
 }
 
+func TestCard_MetaAndSectionsRenderAsReadableBlocks(t *testing.T) {
+	c := Card{
+		Badge:   "🔴",
+		Label:   "Алерт",
+		Summary: "туннель не на связи",
+		Meta:    []string{KV("роутер", "vasya"), KV("проверка", "tunnel_awg11"), ""},
+		Sections: []CardSection{
+			{Title: "Что не работает", Lines: []string{"Endpoint 1.2.3.4:51820", "handshake 4м назад"}},
+			{Title: "Что делать", Lines: []string{"нажми диагностику"}},
+		},
+		Hint: "кнопки ниже",
+	}
+	got := c.Render(CardOpts{})
+	for _, want := range []string{
+		"🔴 Алерт: туннель не на связи\nроутер: vasya · проверка: tunnel_awg11",
+		"Что не работает:\n  • Endpoint 1.2.3.4:51820\n  • handshake 4м назад",
+		"Что делать:\n  • нажми диагностику",
+		"\n\n💡 кнопки ниже",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestCard_MaxBytesTruncatesWithEllipsis(t *testing.T) {
 	long := strings.Repeat("Я", 5000)
 	c := Card{Badge: "📊", Label: "Диагностика", Summary: "raw", Details: long}
