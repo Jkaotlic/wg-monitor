@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,8 +24,9 @@ import (
 // match the canonical upstream so a fresh `go build ./cmd/deploy` from
 // the upstream tree without ldflags still works.
 var (
-	RepoOwner = "Jkaotlic"
-	RepoName  = "wg-monitor"
+	RepoOwner     = "Jkaotlic"
+	RepoName      = "wg-monitor"
+	GitHubAPIBase = "https://api.github.com"
 )
 
 type Release struct {
@@ -88,10 +90,12 @@ func defaultCacheDir() string {
 // rc or not. So we hit /releases (which lists all, newest first) and
 // take element 0.
 func (d *Downloader) GetLatestRelease() (*Release, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases?per_page=1", RepoOwner, RepoName)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=5", strings.TrimRight(GitHubAPIBase, "/"), RepoOwner, RepoName)
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
 	resp, err := d.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GitHub API: %w", err)
@@ -113,7 +117,90 @@ func (d *Downloader) GetLatestRelease() (*Release, error) {
 		return nil, fmt.Errorf("no releases published yet for %s/%s", RepoOwner, RepoName)
 	}
 	rel := list[0]
+	if shouldPreferRunningRelease(rel.TagName, Version) {
+		if current, err := d.getReleaseByTag(Version); err == nil {
+			return current, nil
+		}
+	}
 	return &rel, nil
+}
+
+func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s",
+		strings.TrimRight(GitHubAPIBase, "/"), RepoOwner, RepoName, tag)
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	resp, err := d.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GitHub API tag %s: %w", tag, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("GitHub API tag %s HTTP %d: %s", tag, resp.StatusCode, string(body))
+	}
+	var rel Release
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, fmt.Errorf("decode release %s: %w", tag, err)
+	}
+	if rel.TagName == "" {
+		return nil, fmt.Errorf("release %s has empty tag_name", tag)
+	}
+	return &rel, nil
+}
+
+func shouldPreferRunningRelease(latestTag, runningTag string) bool {
+	if !strings.HasPrefix(runningTag, "v") {
+		return false
+	}
+	return compareReleaseTags(runningTag, latestTag) > 0
+}
+
+func compareReleaseTags(a, b string) int {
+	av, aok := parseReleaseTagRank(a)
+	bv, bok := parseReleaseTagRank(b)
+	if !aok || !bok {
+		return strings.Compare(a, b)
+	}
+	for i := range av {
+		if av[i] > bv[i] {
+			return 1
+		}
+		if av[i] < bv[i] {
+			return -1
+		}
+	}
+	return 0
+}
+
+func parseReleaseTagRank(tag string) ([4]int, bool) {
+	var rank [4]int
+	tag = strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	main, rcRaw, hasRC := strings.Cut(tag, "-rc")
+	parts := strings.Split(main, ".")
+	if len(parts) != 3 {
+		return rank, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return rank, false
+		}
+		rank[i] = n
+	}
+	if !hasRC {
+		rank[3] = 1 << 30
+		return rank, true
+	}
+	rc, err := strconv.Atoi(rcRaw)
+	if err != nil {
+		return rank, false
+	}
+	rank[3] = rc
+	return rank, true
 }
 
 // GetAsset downloads and caches an asset, verifying its sha256 against checksumsURL.

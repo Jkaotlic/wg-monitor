@@ -106,3 +106,35 @@ func TestDownloadAsset_BadSha(t *testing.T) {
 		t.Errorf("expected no leftover files in cache, got %v", entries)
 	}
 }
+
+func TestGetLatestReleaseDoesNotDowngradeBelowRunningVersion(t *testing.T) {
+	oldVersion := Version
+	oldAPI := GitHubAPIBase
+	Version = "v0.13.0-rc21"
+	t.Cleanup(func() {
+		Version = oldVersion
+		GitHubAPIBase = oldAPI
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Jkaotlic/wg-monitor/releases":
+			_, _ = w.Write([]byte(`[{"tag_name":"v0.13.0-rc20","assets":[]}]`))
+		case "/repos/Jkaotlic/wg-monitor/releases/tags/v0.13.0-rc21":
+			_, _ = w.Write([]byte(`{"tag_name":"v0.13.0-rc21","assets":[{"name":"checksums.txt","browser_download_url":"https://example.test/checksums.txt"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	GitHubAPIBase = srv.URL
+
+	dl := &Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()}
+	rel, err := dl.GetLatestRelease()
+	if err != nil {
+		t.Fatalf("GetLatestRelease: %v", err)
+	}
+	if rel.TagName != "v0.13.0-rc21" {
+		t.Fatalf("latest tag=%q, want running version v0.13.0-rc21", rel.TagName)
+	}
+}
