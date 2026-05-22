@@ -260,13 +260,13 @@ func printMenuItems(state *State) {
 }
 
 func mainMenuItems(_ bool, state *State) []menuItem {
-	updateHelp := "когда нажимать: когда вышел новый release/RC или нужно обновить backend/агентов"
+	updateHelp := "когда нажимать: проверить актуальность backend/агентов и обновить только то, что реально устарело"
 	if state.Backend.Host == "" && len(state.Agents) == 0 {
 		updateHelp = "когда нажимать: позже; сначала поставь VPS и добавь хотя бы один роутер"
 	}
 	items := []menuItem{
 		{Key: "1", Title: "VPS / backend", Help: "когда нажимать: первый запуск или полная переустановка backend на VPS"},
-		{Key: "2", Title: "Обновить компоненты", Help: updateHelp},
+		{Key: "2", Title: "Проверить / обновить", Help: updateHelp},
 		{Key: "3", Title: "Роутеры", Help: "когда нажимать: добавить, переустановить, re-enroll или удалить агент на роутере"},
 		{Key: "4", Title: "Переезд на новый VPS", Help: "когда нажимать: backend уже новый, надо перепривязать старые роутеры через AWG Manager"},
 		{Key: "5", Title: "Doctor", Help: "когда нажимать: что-то не работает или нужно быстро проверить VPS и всех агентов"},

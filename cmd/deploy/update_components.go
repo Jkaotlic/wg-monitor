@@ -20,15 +20,16 @@ import (
 // "[4] Обновить агента" menu items with one flow:
 //
 //  1. Probe the latest GitHub release.
-//  2. Show a per-component status table (backend + every agent), marking
+//  2. Refresh installed versions from live backend/VPS endpoints.
+//  3. Show a per-component status table (backend + every agent), marking
 //     outdated rows.
-//  3. Ask which to update.
-//  4. For each chosen target, render an explicit context block (alias,
+//  4. Ask which to update.
+//  5. For each chosen target, render an explicit context block (alias,
 //     address, last deploy, current public IP of the operator — to spot
 //     "wrong SSTP active") and require an explicit y/N before any SSH.
-//  5. TCP-probe the target before SSH and abort early when unreachable
+//  6. TCP-probe the target before SSH and abort early when unreachable
 //     ("VPN не подключён?").
-//  6. Delegate to the existing actionUpdateBackend / actionUpdateAgent.
+//  7. Delegate to the existing actionUpdateBackend / actionUpdateAgent.
 func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) error {
 	if state.Backend.Host == "" && len(state.Agents) == 0 {
 		PrintFail("wizard.toml пуст — сначала установи бэкенд и/или агенты")
@@ -43,7 +44,7 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 	PrintOK("последний релиз: " + rel.TagName)
 	fmt.Println()
 
-	refreshBackendInstalledVersion(state)
+	refreshInstalledComponentState(state, secrets)
 	targets := buildUpdateTargets(state, rel.TagName)
 	printUpdateStatusTable(targets)
 
@@ -108,6 +109,7 @@ type updateTarget struct {
 	LastDeploy       string
 	PendingVersion   string
 	PendingSince     string
+	PendingCurrent   bool
 	NeedsUpdate      bool
 }
 
@@ -129,6 +131,7 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 		})
 	}
 	for _, a := range state.Agents {
+		pendingCurrent := a.PendingVersion != "" && a.PendingVersion == latest
 		out = append(out, updateTarget{
 			Label:            "agent " + a.Nickname,
 			IsAgent:          true,
@@ -142,10 +145,57 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 			LastDeploy:       a.LastDeploy,
 			PendingVersion:   a.PendingVersion,
 			PendingSince:     a.PendingSince,
-			NeedsUpdate:      a.LastDeployedVersion != latest,
+			PendingCurrent:   pendingCurrent,
+			NeedsUpdate:      a.LastDeployedVersion != latest && !pendingCurrent,
 		})
 	}
 	return out
+}
+
+type updateRefreshSummary struct {
+	VPSChecked     bool
+	BackendVersion string
+	AgentsAdded    []string
+	AgentsDiverged []string
+	VPSError       error
+}
+
+func refreshInstalledComponentState(state *State, secrets *SecretStore) updateRefreshSummary {
+	var summary updateRefreshSummary
+	if state == nil {
+		return summary
+	}
+	refreshBackendInstalledVersion(state)
+	summary.BackendVersion = state.Backend.LastDeployedVersion
+
+	token := ""
+	if secrets != nil {
+		token = secrets.GetNonInteractive("WIZARD_TOKEN")
+	}
+	c := NewVPSClientForBackend(state, token, 5*time.Second)
+	if c == nil {
+		return summary
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	remote, err := c.ListAgents(ctx)
+	if err != nil {
+		summary.VPSError = err
+		PrintWarn("VPS sync перед проверкой обновлений не прошёл: " + err.Error())
+		return summary
+	}
+	merged, added, divergent := MergeAgents(state.Agents, remote)
+	state.Agents = merged
+	summary.VPSChecked = true
+	summary.AgentsAdded = added
+	summary.AgentsDiverged = divergent
+	if len(added) > 0 {
+		PrintInfo(fmt.Sprintf("VPS sync: добавлено из backend: %s", strings.Join(added, ", ")))
+	}
+	if len(divergent) > 0 {
+		PrintWarn(fmt.Sprintf("VPS sync: SSH-адреса отличаются от локальных для: %s", strings.Join(divergent, ", ")))
+	}
+	return summary
 }
 
 func refreshBackendInstalledVersion(state *State) {
@@ -208,6 +258,8 @@ func printUpdateStatusTable(rows []updateTarget) {
 		}
 		var status string
 		switch {
+		case t.PendingCurrent:
+			status = Colorize("[ждёт wake → "+t.PendingVersion+"]", ColorYellow)
 		case t.NeedsUpdate && t.InstalledVersion == "":
 			status = Colorize("[версия неизвестна]", ColorYellow)
 		case t.NeedsUpdate:
