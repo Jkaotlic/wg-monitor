@@ -23,6 +23,14 @@
 
 After install, the wizard records backend version and deploy time in `wizard.toml`.
 
+The backend install also enables `wg-monitor-backup.timer`. Every day at
+05:00 Europe/Moscow it sends the admin user a private Telegram document with a
+small recovery bundle: SQLite `state.db`, rendered `backend.yaml`, agent
+inventory CSV, and a manifest. Bot and wizard token files are not copied into
+the archive. If the bundle grows past the Telegram upload safety limit, the bot
+sends a warning and leaves the archive on the VPS under
+`/var/lib/wg-monitor/backups/`.
+
 ## Add A Router
 
 Use `[3] Routers`, then the add/re-enroll action.
@@ -59,6 +67,27 @@ This is the recovery path when the old VPS is dead and existing routers must be 
 5. The wizard creates a fresh enrollment and re-runs Entware bootstrap with the new backend URL/token.
 
 If a raw `WG_AGENT_TOKEN_<NICK>` still exists locally, the wizard can preserve it. If not, it safely re-enrolls the agent with a new token and updates the backend hash.
+
+## Restore From Telegram Backup
+
+Use `[7] Restore / Disaster Recovery` or:
+
+```bash
+wg-monitor-deploy restore-backup <archive.tgz> --dry-run
+wg-monitor-deploy restore-backup <archive.tgz> --to-current-vps
+wg-monitor-deploy restore-backup <archive.tgz> --to-new-vps
+```
+
+Dry-run extracts the archive locally and shows the manifest, backend version,
+SQLite size, and agent count. Restore mode uploads `state.db` and
+`backend.yaml`, makes timestamped backups of any existing VPS files, checks
+SQLite integrity, restores ownership/modes, starts `wg-monitor-backend`, and
+refreshes the daily Telegram backup timer.
+
+`--to-new-vps` bootstraps the new host first: `wgmonitor` user, systemd units,
+backend binary from the current release, Caddy route, bot token from the local
+secret store, wizard token, and the backup timer. If the backend domain changes,
+use `[4] Move to new VPS` afterwards to rewrite agents through AWG Manager.
 
 ## Update Components
 

@@ -480,6 +480,10 @@ func backendInstallSwapService(existingInstall bool) string {
 	return ""
 }
 
+func backendBackupEnableCommand() string {
+	return "systemctl daemon-reload && systemctl enable --now wg-monitor-backup.timer"
+}
+
 // readDeployedTelegramMeta extracts chat_id and admin_user_id from the
 // currently-deployed /etc/wg-monitor/backend.yaml on the VPS. Used by
 // install-backend's preflight to show the operator what they're about to

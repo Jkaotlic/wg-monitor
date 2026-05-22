@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -144,6 +145,32 @@ func main() {
 			os.Exit(2)
 		}
 		runCLIAction("migrate-backend", func() error { return actionMigrateBackend(state, secrets, agentFlag) })
+	case "restore-backup":
+		opts := RestoreBackupOptions{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--dry-run", "--inspect":
+				opts.DryRun = true
+				opts.Mode = "dry-run"
+			case "--to-current-vps":
+				opts.Mode = "current"
+			case "--to-new-vps":
+				opts.Mode = "new"
+			default:
+				if strings.HasPrefix(args[i], "--") {
+					fmt.Fprintf(os.Stderr, "restore-backup: unknown option %s\n", args[i])
+					fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]")
+					os.Exit(2)
+				}
+				if opts.ArchivePath == "" {
+					opts.ArchivePath = args[i]
+				} else {
+					fmt.Fprintf(os.Stderr, "restore-backup: extra argument %s\n", args[i])
+					os.Exit(2)
+				}
+			}
+		}
+		runCLIAction("restore-backup", func() error { return actionRestoreBackup(state, secrets, dl, opts) })
 	case "uninstall-agent":
 		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
 		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
@@ -330,6 +357,8 @@ Commands:
   sync-vps, sync               pull router list/deploy metadata from backend
   migrate-backend [--agent <nick>]
                                re-enroll agents on the new VPS through AWG Manager
+  restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]
+                               inspect or restore a Telegram recovery bundle
   known-hosts [list|forget [alias]]
   secrets status               show which required secrets are available
   secrets export <file.tgz>

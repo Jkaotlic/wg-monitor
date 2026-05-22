@@ -67,12 +67,16 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 				return actionSyncVPS(state, secrets)
 			})
 		case "7":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionRestoreBackup(state, secrets, dl, RestoreBackupOptions{})
+			})
+		case "8":
 			runServiceMenu(state, statePath, secrets)
 			continue
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1-7 или Q.")
+			PrintFail("Не понял. Введи 1-8 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -260,7 +264,7 @@ func mainMenuItems(_ bool, state *State) []menuItem {
 	if state.Backend.Host == "" && len(state.Agents) == 0 {
 		updateHelp = "когда нажимать: позже; сначала поставь VPS и добавь хотя бы один роутер"
 	}
-	return []menuItem{
+	items := []menuItem{
 		{Key: "1", Title: "VPS / backend", Help: "когда нажимать: первый запуск или полная переустановка backend на VPS"},
 		{Key: "2", Title: "Обновить компоненты", Help: updateHelp},
 		{Key: "3", Title: "Роутеры", Help: "когда нажимать: добавить, переустановить, re-enroll или удалить агент на роутере"},
@@ -269,6 +273,13 @@ func mainMenuItems(_ bool, state *State) []menuItem {
 		{Key: "6", Title: "Синхронизация с VPS", Help: "когда нажимать: wizard.toml пустой/старый, надо подтянуть список роутеров с backend"},
 		{Key: "7", Title: "Сервис", Help: "когда нажимать: ручная правка wizard.toml, known_hosts, legacy recovery"},
 	}
+	items = append(items[:6], append([]menuItem{{
+		Key:   "7",
+		Title: "Restore / Disaster Recovery",
+		Help:  "when to use: TG backup archive restore to current VPS or bootstrap a new VPS",
+	}}, items[6:]...)...)
+	items[7].Key = "8"
+	return items
 }
 
 func routerMenuItems() []menuItem {

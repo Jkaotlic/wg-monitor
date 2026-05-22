@@ -78,7 +78,13 @@ func TestRenderCaddyfile(t *testing.T) {
 }
 
 func TestStaticTemplates(t *testing.T) {
-	for _, name := range []string{"S99wg-monitor", "wg-monitor-backend.service"} {
+	for _, name := range []string{
+		"S99wg-monitor",
+		"wg-monitor-backend.service",
+		"wg-monitor-backup.service",
+		"wg-monitor-backup.timer",
+		"wg-monitor-backup-telegram.sh",
+	} {
 		got, err := ReadStaticTemplate(name)
 		if err != nil {
 			t.Errorf("ReadStaticTemplate(%q): %v", name, err)
@@ -86,5 +92,57 @@ func TestStaticTemplates(t *testing.T) {
 		if len(got) == 0 {
 			t.Errorf("empty %s", name)
 		}
+	}
+}
+
+func TestBackupTimerRunsDailyAtFiveMoscow(t *testing.T) {
+	got, err := ReadStaticTemplate("wg-monitor-backup.timer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	for _, want := range []string{
+		"OnCalendar=*-*-* 05:00:00 Europe/Moscow",
+		"Persistent=true",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("backup timer missing %q\nfull:\n%s", want, s)
+		}
+	}
+}
+
+func TestBackupServiceSendsTelegramBundle(t *testing.T) {
+	service, err := ReadStaticTemplate("wg-monitor-backup.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := string(service)
+	for _, want := range []string{
+		"ExecStart=/usr/local/lib/wg-monitor/wg-monitor-backup-telegram.sh",
+		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+	} {
+		if !strings.Contains(svc, want) {
+			t.Errorf("backup service missing %q\nfull:\n%s", want, svc)
+		}
+	}
+
+	script, err := ReadStaticTemplate("wg-monitor-backup-telegram.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh := string(script)
+	for _, want := range []string{
+		`VACUUM INTO`,
+		`admin_user_id:`,
+		`sendDocument`,
+		`document=@"$archive"`,
+		`backup too large`,
+	} {
+		if !strings.Contains(sh, want) {
+			t.Errorf("backup script missing %q\nfull:\n%s", want, sh)
+		}
+	}
+	if strings.Contains(sh, "cp \"$TOKEN_FILE\"") || strings.Contains(sh, "bot-token.txt\" \"$tmpdir") {
+		t.Fatalf("backup script must not copy the bot token into the archive:\n%s", sh)
 	}
 }
