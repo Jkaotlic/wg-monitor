@@ -153,8 +153,8 @@ func heartbeatForAgent(state *State, ag *AgentState, secrets *SecretStore) strin
 	hb := ""
 	if state.Backend.Domain != "" {
 		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
-			if c := NewVPSClientForBackend(state, tok, 5*time.Second); c != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if c := NewResilientVPSClientForBackend(state, secrets, tok, 5*time.Second); c != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				hb = c.HeartbeatStatus(ctx, ag.Nickname)
 				cancel()
 			}
@@ -776,7 +776,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	if wizardToken == "" {
 		return fmt.Errorf("WIZARD_TOKEN required for AWG Manager enrollment")
 	}
-	vps := NewVPSClientForBackend(state, wizardToken, 15*time.Second)
+	vps := NewResilientVPSClientForBackend(state, secrets, wizardToken, 15*time.Second)
 	if vps == nil {
 		return fmt.Errorf("wizard API client is not configured")
 	}
@@ -2254,11 +2254,11 @@ func actionSyncVPS(state *State, secrets *SecretStore) error {
 	if tok == "" {
 		return fmt.Errorf("WIZARD_TOKEN не задан")
 	}
-	c := NewVPSClientForBackend(state, tok, 15*time.Second)
+	c := NewResilientVPSClientForBackend(state, secrets, tok, 8*time.Second)
 	if c == nil {
 		return fmt.Errorf("VPSClient init failed (empty domain or token)")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	remote, err := c.ListAgents(ctx)
 	if err != nil {
@@ -2310,11 +2310,11 @@ func pushToVPSBestEffort(state *State, secrets *SecretStore, a AgentState) {
 	if tok == "" {
 		return
 	}
-	c := NewVPSClientForBackend(state, tok, 10*time.Second)
+	c := NewResilientVPSClientForBackend(state, secrets, tok, 8*time.Second)
 	if c == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	if err := c.PushAgent(ctx, AgentStateToRemote(a)); err != nil {
 		PrintWarn(fmt.Sprintf("VPS sync push failed for %s: %v (deploy itself succeeded)", a.Nickname, err))

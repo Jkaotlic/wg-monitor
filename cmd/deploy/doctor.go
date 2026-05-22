@@ -505,12 +505,12 @@ func doctorAgentHeartbeat(state *State, ag *AgentState, secrets *SecretStore, t 
 		t.warnf("heartbeat: WIZARD_TOKEN не найден в env/disk — пропускаю last_seen")
 		return
 	}
-	c := NewVPSClientForBackend(state, tok, 5*time.Second)
+	c := NewResilientVPSClientForBackend(state, secrets, tok, 5*time.Second)
 	if c == nil {
 		t.warnf("heartbeat: wizard client не собрался")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	hb := c.HeartbeatStatus(ctx, ag.Nickname)
 	cancel()
 	switch {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -138,6 +139,85 @@ func TestVPSClientCreateEnrollment(t *testing.T) {
 	if !sawAuth || !sawJSON {
 		t.Fatalf("headers missing: auth=%v json=%v", sawAuth, sawJSON)
 	}
+}
+
+func TestVPSClientCreateEnrollmentFallsBackToSSHOnTransportError(t *testing.T) {
+	var fallbackCalled bool
+	c := &VPSClient{
+		BaseURL: "https://wg.example.test",
+		Token:   "wizard-token",
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return nil, context.DeadlineExceeded
+		})},
+		Fallback: wizardAPIFallbackFunc(func(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error) {
+			fallbackCalled = true
+			if method != http.MethodPost {
+				t.Fatalf("method=%s, want POST", method)
+			}
+			if path != "/v1/wizard/enrollments" {
+				t.Fatalf("path=%s, want /v1/wizard/enrollments", path)
+			}
+			var req EnrollmentRequest
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Fatalf("decode fallback body: %v", err)
+			}
+			if req.Nickname != "router4car4" || req.Kind != "mobile" || req.ThreadID != 1126 {
+				t.Fatalf("bad fallback request: %+v", req)
+			}
+			return http.StatusCreated, []byte(`{"nickname":"router4car4","backend_url":"https://wg.example.test","raw_token":"raw-token"}`), nil
+		}),
+	}
+
+	got, err := c.CreateEnrollment(t.Context(), EnrollmentRequest{
+		Nickname: "router4car4",
+		Kind:     "mobile",
+		ThreadID: 1126,
+	})
+	if err != nil {
+		t.Fatalf("CreateEnrollment: %v", err)
+	}
+	if !fallbackCalled {
+		t.Fatal("fallback was not called")
+	}
+	if got.RawToken != "raw-token" {
+		t.Fatalf("raw token=%q", got.RawToken)
+	}
+}
+
+func TestVPSClientDoesNotFallbackOnHTTPErrorStatus(t *testing.T) {
+	var fallbackCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":"bad token"}`))
+	}))
+	defer srv.Close()
+
+	c := &VPSClient{
+		BaseURL: srv.URL,
+		Token:   "wrong-token",
+		HTTP:    srv.Client(),
+		Fallback: wizardAPIFallbackFunc(func(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error) {
+			fallbackCalled = true
+			return http.StatusOK, []byte(`{"agents":[]}`), nil
+		}),
+	}
+
+	_, err := c.ListAgents(t.Context())
+	if err == nil {
+		t.Fatal("ListAgents succeeded unexpectedly")
+	}
+	if fallbackCalled {
+		t.Fatal("fallback must not run for backend HTTP errors")
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("error=%v, want HTTP 401", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
 }
 
 func TestNewVPSClientWithTimeoutAllowsSlowStartupSync(t *testing.T) {

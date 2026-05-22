@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +56,18 @@ type VPSClient struct {
 	BaseURL string // e.g. "https://mon.example.com"
 	Token   string
 	HTTP    *http.Client
+
+	Fallback wizardAPIFallback
+}
+
+type wizardAPIFallback interface {
+	DoWizardAPI(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error)
+}
+
+type wizardAPIFallbackFunc func(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error)
+
+func (f wizardAPIFallbackFunc) DoWizardAPI(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error) {
+	return f(ctx, method, path, body, timeout)
 }
 
 // NewVPSClient assembles a client from wizard state. Returns nil if the
@@ -71,6 +86,15 @@ func NewVPSClientForBackend(state *State, token string, timeout time.Duration) *
 		return nil
 	}
 	return NewVPSClientWithTimeoutAndDialHost(state.Backend.Domain, token, timeout, state.Backend.Host)
+}
+
+func NewResilientVPSClientForBackend(state *State, secrets *SecretStore, token string, timeout time.Duration) *VPSClient {
+	c := NewVPSClientForBackend(state, token, timeout)
+	if c == nil || state == nil || secrets == nil || strings.TrimSpace(state.Backend.Host) == "" {
+		return c
+	}
+	c.Fallback = &wizardAPISSHFallback{state: state, secrets: secrets, token: token}
+	return c
 }
 
 func NewVPSClientWithTimeoutAndDialHost(domain, token string, timeout time.Duration, dialHost string) *VPSClient {
@@ -103,21 +127,15 @@ func NewVPSClientWithTimeoutAndDialHost(domain, token string, timeout time.Durat
 }
 
 func (c *VPSClient) ListAgents(ctx context.Context) ([]RemoteAgent, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.BaseURL+"/v1/wizard/agents", nil)
+	status, raw, err := c.doWizardAPI(ctx, http.MethodGet, "/v1/wizard/agents", nil, "", 0)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("GET /v1/wizard/agents: HTTP %d", resp.StatusCode)
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("GET /v1/wizard/agents: HTTP %d", status)
 	}
 	var out wizardAgentListWire
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	return out.Agents, nil
@@ -137,20 +155,13 @@ func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 	if err != nil {
 		return err
 	}
-	u := c.BaseURL + "/v1/wizard/agents/" + url.PathEscape(a.Nickname)
-	req, err := http.NewRequestWithContext(ctx, "PUT", u, bytes.NewReader(body))
+	path := "/v1/wizard/agents/" + url.PathEscape(a.Nickname)
+	status, _, err := c.doWizardAPI(ctx, http.MethodPut, path, body, "application/json", 0)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 204 {
-		return fmt.Errorf("PUT /v1/wizard/agents/%s: HTTP %d", a.Nickname, resp.StatusCode)
+	if status != http.StatusNoContent {
+		return fmt.Errorf("PUT /v1/wizard/agents/%s: HTTP %d", a.Nickname, status)
 	}
 	return nil
 }
@@ -160,24 +171,16 @@ func (c *VPSClient) CreateEnrollment(ctx context.Context, enroll EnrollmentReque
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/wizard/enrollments", bytes.NewReader(body))
+	status, raw, err := c.doWizardAPI(ctx, http.MethodPost, "/v1/wizard/enrollments", body, "application/json", 0)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusCreated {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if status != http.StatusCreated {
 		return nil, fmt.Errorf("POST /v1/wizard/enrollments: HTTP %d: %s",
-			resp.StatusCode, strings.TrimSpace(string(raw)))
+			status, trimWizardBody(raw))
 	}
 	var out EnrollmentResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	if out.RawToken == "" || out.BackendURL == "" {
@@ -277,27 +280,19 @@ func (c *VPSClient) Deploy(ctx context.Context, nickname, targetVersion string) 
 	if err != nil {
 		return "", err
 	}
-	u := c.BaseURL + "/v1/wizard/agents/" + url.PathEscape(nickname) + "/deploy"
-	req, err := http.NewRequestWithContext(ctx, "POST", u, bytes.NewReader(body))
+	path := "/v1/wizard/agents/" + url.PathEscape(nickname) + "/deploy"
+	status, raw, err := c.doWizardAPI(ctx, http.MethodPost, path, body, "application/json", 0)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusAccepted {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if status != http.StatusAccepted {
 		return "", fmt.Errorf("POST /v1/wizard/agents/%s/deploy: HTTP %d: %s",
-			nickname, resp.StatusCode, strings.TrimSpace(string(raw)))
+			nickname, status, trimWizardBody(raw))
 	}
 	var out struct {
 		CmdID string `json:"cmd_id"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return "", err
 	}
 	if out.CmdID == "" {
@@ -322,38 +317,235 @@ func (c *VPSClient) AwaitCommandResult(ctx context.Context, nickname, cmdID stri
 	if waitSec > 60 {
 		waitSec = 60
 	}
-	u := c.BaseURL + "/v1/wizard/cmd/" + url.PathEscape(cmdID) +
+	path := "/v1/wizard/cmd/" + url.PathEscape(cmdID) +
 		"?nickname=" + url.QueryEscape(nickname) +
 		"&wait_sec=" + fmt.Sprint(waitSec)
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	status, raw, err := c.doWizardAPI(ctx, http.MethodGet, path, nil, "", time.Duration(waitSec+5)*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
-
-	// Use a per-call client so the wait_sec long-poll isn't cut off by the
-	// VPSClient.HTTP default 10s timeout.
-	cli := &http.Client{Timeout: time.Duration(waitSec+5) * time.Second}
-	resp, err := cli.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
+	if status == http.StatusNotFound {
 		// "result_not_ready" — distinguishable from real 404 by the body
 		// shape, but we don't need to inspect it; the caller polls again.
 		return nil, nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if status != http.StatusOK {
 		return nil, fmt.Errorf("GET /v1/wizard/cmd/%s: HTTP %d: %s",
-			cmdID, resp.StatusCode, strings.TrimSpace(string(raw)))
+			cmdID, status, trimWizardBody(raw))
 	}
 	var out wire.CommandResult
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
+}
+
+func (c *VPSClient) doWizardAPI(ctx context.Context, method, path string, body []byte, contentType string, timeout time.Duration) (int, []byte, error) {
+	status, raw, err := c.doWizardHTTP(ctx, method, path, body, contentType, timeout)
+	if err == nil {
+		return status, raw, nil
+	}
+	if ctx.Err() != nil {
+		return 0, nil, err
+	}
+	if c.Fallback == nil || !isWizardTransportErr(err) {
+		return 0, nil, err
+	}
+	PrintWarn("wizard API по HTTPS не отвечает, пробую запасной путь через SSH на VPS")
+	return c.Fallback.DoWizardAPI(ctx, method, path, body, timeout)
+}
+
+func (c *VPSClient) doWizardHTTP(ctx context.Context, method, path string, body []byte, contentType string, timeout time.Duration) (int, []byte, error) {
+	if c == nil {
+		return 0, nil, fmt.Errorf("VPS client is nil")
+	}
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
+	if err != nil {
+		return 0, nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := c.httpClientFor(timeout).Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, raw, nil
+}
+
+func (c *VPSClient) httpClientFor(timeout time.Duration) *http.Client {
+	if c.HTTP == nil {
+		if timeout <= 0 {
+			timeout = 10 * time.Second
+		}
+		return &http.Client{Timeout: timeout}
+	}
+	if timeout <= 0 || timeout == c.HTTP.Timeout {
+		return c.HTTP
+	}
+	return &http.Client{
+		Timeout:       timeout,
+		Transport:     c.HTTP.Transport,
+		CheckRedirect: c.HTTP.CheckRedirect,
+		Jar:           c.HTTP.Jar,
+	}
+}
+
+func isWizardTransportErr(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"timeout",
+		"deadline exceeded",
+		"connection refused",
+		"connection reset",
+		"connection aborted",
+		"no such host",
+		"server misbehaving",
+		"tls handshake timeout",
+		"network is unreachable",
+		"no route to host",
+		"unexpected eof",
+		"eof",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+type wizardAPISSHFallback struct {
+	state   *State
+	secrets *SecretStore
+	token   string
+}
+
+func (f *wizardAPISSHFallback) DoWizardAPI(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error) {
+	if f == nil || f.state == nil || f.secrets == nil {
+		return 0, nil, fmt.Errorf("SSH fallback is not configured")
+	}
+	if ctx.Err() != nil {
+		return 0, nil, ctx.Err()
+	}
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return 0, nil, err
+	}
+	auth, err := backendSSHAuthMethodsNonInteractive(f.state, f.secrets)
+	if err != nil {
+		return 0, nil, err
+	}
+	port := portOrDefault(f.state.Backend.Port, 22)
+	user := userOrDefault(f.state.Backend.User, "root")
+	var s *SSH
+	for attempt := 1; attempt <= 3; attempt++ {
+		if ctx.Err() != nil {
+			return 0, nil, ctx.Err()
+		}
+		s, err = ConnectSSHWithAuth(f.state.Backend.Host, port, user, auth, kh, "backend")
+		if err == nil || !isTransientSSHTimeout(err) || attempt == 3 {
+			break
+		}
+		time.Sleep(time.Duration(attempt*2) * time.Second)
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("SSH fallback to VPS: %w", err)
+	}
+	defer s.Close()
+
+	cmd := buildWizardAPICurlCommand(method, path, f.token, body, timeout)
+	out, serr, rc, err := s.Run(cmd)
+	if err != nil {
+		return 0, nil, fmt.Errorf("SSH fallback transport: %w", err)
+	}
+	if rc != 0 {
+		msg := strings.TrimSpace(serr)
+		if msg == "" {
+			msg = trimWizardBody([]byte(out))
+		}
+		return 0, nil, fmt.Errorf("SSH fallback curl failed rc=%d: %s", rc, msg)
+	}
+	status, raw, err := parseWizardAPISSHOutput(out)
+	if err != nil {
+		return 0, nil, err
+	}
+	return status, raw, nil
+}
+
+const wizardAPIStatusPrefix = "__WG_WIZARD_HTTP_STATUS__"
+
+func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout time.Duration) string {
+	secs := int((timeout + time.Second - 1) / time.Second)
+	if secs < 5 {
+		secs = 5
+	}
+	if secs > 90 {
+		secs = 90
+	}
+	url := "http://127.0.0.1:8080" + path
+	common := "curl -sS --max-time " + strconv.Itoa(secs) +
+		" -o \"$tmp\" -w '%{http_code}'" +
+		" -X " + shellSingleQuote(method) +
+		" -H " + shellSingleQuote("Authorization: Bearer "+token)
+	if body != nil {
+		common += " -H " + shellSingleQuote("Content-Type: application/json")
+	}
+	common += " " + shellSingleQuote(url)
+
+	cmd := "tmp=$(mktemp /tmp/wg-wizard-api.XXXXXX) || exit 90; trap 'rm -f \"$tmp\"' EXIT; "
+	if body != nil {
+		cmd += "code=$(printf %s " + shellSingleQuote(base64.StdEncoding.EncodeToString(body)) +
+			" | base64 -d | " + common + " --data-binary @-); "
+	} else {
+		cmd += "code=$(" + common + "); "
+	}
+	cmd += "rc=$?; printf '%s%s\\n' " + shellSingleQuote(wizardAPIStatusPrefix) + " \"$code\"; cat \"$tmp\"; exit \"$rc\""
+	return cmd
+}
+
+func parseWizardAPISSHOutput(out string) (int, []byte, error) {
+	line, rest, ok := strings.Cut(out, "\n")
+	if !ok {
+		return 0, nil, fmt.Errorf("SSH fallback returned malformed response")
+	}
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, wizardAPIStatusPrefix) {
+		return 0, nil, fmt.Errorf("SSH fallback returned malformed status")
+	}
+	statusRaw := strings.TrimPrefix(line, wizardAPIStatusPrefix)
+	status, err := strconv.Atoi(statusRaw)
+	if err != nil || status < 100 || status > 599 {
+		return 0, nil, fmt.Errorf("SSH fallback returned invalid HTTP status %q", statusRaw)
+	}
+	return status, []byte(rest), nil
+}
+
+func trimWizardBody(raw []byte) string {
+	s := strings.TrimSpace(string(raw))
+	if len(s) > 1024 {
+		return s[:1024] + "..."
+	}
+	return s
 }
 
 // AgentStateToRemote converts a wizard-local AgentState to the RemoteAgent

@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -38,13 +40,13 @@ var targetsDirect = []connectivityTarget{
 }
 
 // CheckViaTunnel runs the "🌍 Через тоннель?" probe: HTTP HEAD to each
-// blocked-in-RU service through the defaultRoute=true WG iface, plus a
-// cdn-cgi/trace lookup to surface the egress IP we get *through* the
-// tunnel. Result is a human-readable multi-line report.
+// blocked-in-RU service through the iface that actually carries the matching
+// HR-Neo route, falling back to defaultRoute=true when no explicit route
+// matches. It also does a cdn-cgi/trace lookup to surface the egress IP.
 func CheckViaTunnel(ctx context.Context, c *awgmgr.Client) (status, output string) {
-	iface, ifaceLabel := pickDefaultTunnelIface(ctx, c)
+	iface, ifaceLabel := pickConnectivityTunnelIface(ctx, c, targetsViaTunnel)
 	if iface == "" {
-		return "err", "не нашёл defaultRoute=true туннель в awg-manager — нечего проверять"
+		return "err", "не нашёл подходящий HR-Neo/defaultRoute туннель в awg-manager — нечего проверять"
 	}
 	httpc := ifaceBoundClient(iface, 6*time.Second)
 
@@ -161,9 +163,11 @@ func fetchExitIP(ctx context.Context, httpc *http.Client, timeout time.Duration)
 	return "", fmt.Errorf("no ip= line in trace response")
 }
 
-// pickDefaultTunnelIface returns (linuxIface, prettyLabel) for the
-// defaultRoute=true tunnel, or ("", "") if none.
-func pickDefaultTunnelIface(ctx context.Context, c *awgmgr.Client) (string, string) {
+// pickConnectivityTunnelIface returns (linuxIface, prettyLabel) for the
+// tunnel that should carry the connectivity probe. HR-Neo route bindings are
+// authoritative: when a target domain is explicitly routed through nwg2, we
+// must test nwg2 even if another tunnel is marked defaultRoute=true.
+func pickConnectivityTunnelIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget) (string, string) {
 	if c == nil {
 		return "", ""
 	}
@@ -173,16 +177,105 @@ func pickDefaultTunnelIface(ctx context.Context, c *awgmgr.Client) (string, stri
 	if err != nil {
 		return "", ""
 	}
+	labels := map[string]string{}
+	defaultIface := ""
 	for _, t := range ta.Tunnels {
-		if t.DefaultRoute && t.Enabled && t.InterfaceName != "" {
-			label := t.Name
-			if label == "" {
-				label = t.InterfaceName
-			}
-			return t.InterfaceName, label
+		if !t.Enabled || t.InterfaceName == "" {
+			continue
+		}
+		labels[t.InterfaceName] = nonEmptyString(t.Name, t.InterfaceName)
+		if t.DefaultRoute && defaultIface == "" {
+			defaultIface = t.InterfaceName
 		}
 	}
+	if iface := pickHydraRouteIface(ctx, c, targets, labels); iface != "" {
+		return iface, nonEmptyString(labels[iface], iface)
+	}
+	if defaultIface != "" {
+		return defaultIface, nonEmptyString(labels[defaultIface], defaultIface)
+	}
 	return "", ""
+}
+
+// pickDefaultTunnelIface is kept for older tests/callers; new connectivity
+// checks should use pickConnectivityTunnelIface.
+func pickDefaultTunnelIface(ctx context.Context, c *awgmgr.Client) (string, string) {
+	return pickConnectivityTunnelIface(ctx, c, nil)
+}
+
+func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget, knownIfaces map[string]string) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	routes, err := c.ListDNSRoutes(cctx)
+	if err != nil {
+		return ""
+	}
+	for _, target := range targets {
+		host := connectivityTargetHost(target.URL)
+		if host == "" {
+			continue
+		}
+		for _, route := range routes {
+			if route.Backend != "hydraroute" || !route.Enabled || len(route.Routes) == 0 {
+				continue
+			}
+			if !hydraRouteMatchesHost(route, host) {
+				continue
+			}
+			iface := strings.TrimSpace(route.Routes[0].Interface)
+			if iface == "" {
+				iface = strings.TrimSpace(route.Routes[0].TunnelID)
+			}
+			if iface == "" {
+				continue
+			}
+			if len(knownIfaces) == 0 || knownIfaces[iface] != "" {
+				return iface
+			}
+		}
+	}
+	return ""
+}
+
+func hydraRouteMatchesHost(route awgmgr.DNSRoute, host string) bool {
+	for _, target := range append(append([]string{}, route.Domains...), route.ManualDomains...) {
+		if routeTargetMatchesHost(host, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func routeTargetMatchesHost(host, target string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	target = strings.ToLower(strings.TrimSpace(target))
+	if host == "" || target == "" {
+		return false
+	}
+	if host == target || strings.HasSuffix(host, "."+target) {
+		return true
+	}
+	addr, aerr := netip.ParseAddr(host)
+	prefix, perr := netip.ParsePrefix(target)
+	return aerr == nil && perr == nil && prefix.Contains(addr)
+}
+
+func connectivityTargetHost(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(u.Hostname())
+}
+
+func nonEmptyString(v, fallback string) string {
+	if strings.TrimSpace(v) != "" {
+		return v
+	}
+	return fallback
 }
 
 // ifaceBoundClient builds an HTTP client whose dialer pins traffic to the
