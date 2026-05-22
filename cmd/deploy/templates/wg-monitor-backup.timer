@@ -1,12 +1,11 @@
 [Unit]
-Description=Daily wg-monitor state.db backup
+Description=Daily wg-monitor Telegram backup
 Documentation=https://github.com/anex/wg-monitor
 
 [Timer]
-# 03:30 UTC каждый день — нагрузка минимальна, retention.PruneBefore
-# к этому времени успевает закончиться (default scan на старте часа).
-OnCalendar=*-*-* 03:30:00 UTC
-# Если VPS был выключен в момент срабатывания — догнать при старте.
+# Send the recovery bundle to the admin's private Telegram chat every morning.
+OnCalendar=*-*-* 05:00:00 Europe/Moscow
+# Catch up after VPS downtime.
 Persistent=true
 RandomizedDelaySec=300
 

@@ -171,6 +171,18 @@ func TestBackendInstallSwapServiceRestartsExistingInstall(t *testing.T) {
 	}
 }
 
+func TestBackendBackupEnableCommandStartsTimer(t *testing.T) {
+	got := backendBackupEnableCommand()
+	for _, want := range []string{
+		"systemctl daemon-reload",
+		"systemctl enable --now wg-monitor-backup.timer",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("backup enable command missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestStageAgentRawTokenStoresRecoveryTokenWithoutOverwritingCanonical(t *testing.T) {
 	tokenEnv := "WG_AGENT_TOKEN_ALYABA"
 	raw := strings.Repeat("a", 64)

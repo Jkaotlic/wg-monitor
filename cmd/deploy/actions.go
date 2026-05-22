@@ -1251,7 +1251,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	if err != nil {
 		return err
 	}
-	PrintStep(1, 14, "SSH к VPS")
+	PrintStep(1, 15, "SSH к VPS")
 	s, err := connectBackendSSH(state, secrets, kh)
 	if err != nil {
 		PrintFail(err.Error())
@@ -1275,16 +1275,16 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		}
 	}
 
-	PrintStep(2, 14, "User wgmonitor")
+	PrintStep(2, 15, "User wgmonitor")
 	if err := stepEnsureUser(s, "wgmonitor"); err != nil {
 		return err
 	}
 
-	PrintStep(3, 14, "Директории")
+	PrintStep(3, 15, "Директории")
 	stepEnsureDir(s, "/etc/wg-monitor", "")
 	stepEnsureDir(s, "/var/lib/wg-monitor", "wgmonitor:wgmonitor")
 
-	PrintStep(4, 14, "backend.yaml")
+	PrintStep(4, 15, "backend.yaml")
 	yamlBytes, err := RenderBackendYAML(BackendParams{
 		ChatID:      state.Telegram.ChatID,
 		AdminUserID: state.Telegram.AdminUserID,
@@ -1299,7 +1299,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintWarn("chown backend.yaml: " + err.Error())
 	}
 
-	PrintStep(5, 14, "bot-token.txt")
+	PrintStep(5, 15, "bot-token.txt")
 	// Отдельный файл, потому что backend.yaml читаем сервисом wgmonitor,
 	// а bot-token.txt не попадает в YAML и доступен только root + wgmonitor.
 	// Drift detection: если файл уже есть и его содержимое != локальному кэшу,
@@ -1323,7 +1323,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintWarn("chown bot-token.txt: " + err.Error())
 	}
 
-	PrintStep(6, 14, "wizard-token.txt")
+	PrintStep(6, 15, "wizard-token.txt")
 	// Idempotent helper handles both upload (mode 640 root:wgmonitor) and
 	// the backend.yaml wizard:-block. The template already includes the
 	// block, so the probe inside the helper will skip the append step.
@@ -1331,7 +1331,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		return fmt.Errorf("wizard setup: %w", err)
 	}
 
-	PrintStep(7, 14, "systemd unit")
+	PrintStep(7, 15, "systemd unit")
 	unit, err := ReadStaticTemplate("wg-monitor-backend.service")
 	if err != nil {
 		return err
@@ -1344,12 +1344,17 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("daemon-reload + enable")
 
-	PrintStep(8, 14, "Caddy")
+	PrintStep(8, 15, "daily Telegram backup")
+	if err := stepInstallBackendBackup(s); err != nil {
+		return err
+	}
+
+	PrintStep(9, 15, "Caddy")
 	if err := stepInstallCaddy(s); err != nil {
 		return err
 	}
 
-	PrintStep(9, 14, "Caddyfile")
+	PrintStep(10, 15, "Caddyfile")
 	cf, err := RenderCaddyfile(CaddyParams{Domain: state.Backend.Domain, Email: caddyEmail})
 	if err != nil {
 		return err
@@ -1363,18 +1368,18 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 		PrintOK("caddy reloaded")
 	}
 
-	PrintStep(10, 14, "Скачать backend бинарь")
+	PrintStep(11, 15, "Скачать backend бинарь")
 	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
 	if err != nil {
 		return err
 	}
 
-	PrintStep(11, 14, "Upload + sha + swap")
+	PrintStep(12, 15, "Upload + sha + swap")
 	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", backendInstallSwapService(existingInstall)); err != nil {
 		return err
 	}
 
-	PrintStep(12, 14, "Start service")
+	PrintStep(13, 15, "Start service")
 	if _, err := s.MustRun("systemctl start wg-monitor-backend"); err != nil {
 		return err
 	}
@@ -1382,7 +1387,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 
 	time.Sleep(3 * time.Second)
 
-	PrintStep(13, 14, "Verify systemctl is-active")
+	PrintStep(14, 15, "Verify systemctl is-active")
 	out, _ := s.MustRun("systemctl is-active wg-monitor-backend")
 	if strings.TrimSpace(out) != "active" {
 		PrintFail("сервис не active. Логи:")
@@ -1392,7 +1397,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("active")
 
-	PrintStep(14, 14, "Verify /health через домен")
+	PrintStep(15, 15, "Verify /health через домен")
 	if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
 		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
 	}
@@ -1878,6 +1883,64 @@ func ensureRemoteSQLite3(bs *SSH) error {
 		return fmt.Errorf("install sqlite3 rc=%d stderr=%q stdout=%q", rc, strings.TrimSpace(stderr), strings.TrimSpace(out))
 	}
 	PrintOK("sqlite3 установлен")
+	return nil
+}
+
+func ensureRemoteAPTCommand(bs *SSH, cmdName, pkgName string) error {
+	if _, _, rc, _ := bs.Run("command -v " + cmdName + " >/dev/null 2>&1"); rc == 0 {
+		return nil
+	}
+	PrintWarn(cmdName + " not installed on VPS; installing package " + pkgName)
+	cmd := "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y " + pkgName
+	out, stderr, rc, err := bs.Run(cmd)
+	if err != nil {
+		return fmt.Errorf("install %s ssh transport: %w", pkgName, err)
+	}
+	if rc != 0 {
+		return fmt.Errorf("install %s rc=%d stderr=%q stdout=%q", pkgName, rc, strings.TrimSpace(stderr), strings.TrimSpace(out))
+	}
+	PrintOK(pkgName + " installed")
+	return nil
+}
+
+func stepInstallBackendBackup(s *SSH) error {
+	if err := ensureRemoteSQLite3(s); err != nil {
+		return err
+	}
+	if err := ensureRemoteAPTCommand(s, "curl", "curl"); err != nil {
+		return err
+	}
+
+	stepEnsureDir(s, "/usr/local/lib/wg-monitor", "root:root")
+
+	script, err := ReadStaticTemplate("wg-monitor-backup-telegram.sh")
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(s, "/usr/local/lib/wg-monitor/wg-monitor-backup-telegram.sh", script, "755"); err != nil {
+		return err
+	}
+
+	service, err := ReadStaticTemplate("wg-monitor-backup.service")
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backup.service", service, "644"); err != nil {
+		return err
+	}
+
+	timer, err := ReadStaticTemplate("wg-monitor-backup.timer")
+	if err != nil {
+		return err
+	}
+	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backup.timer", timer, "644"); err != nil {
+		return err
+	}
+
+	if _, err := s.MustRun(backendBackupEnableCommand()); err != nil {
+		return err
+	}
+	PrintOK("wg-monitor-backup.timer enabled")
 	return nil
 }
 

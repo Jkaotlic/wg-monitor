@@ -55,7 +55,9 @@ Useful secret names:
 [4] Move to new VPS        re-enroll old routers after backend migration
 [5] Doctor                 local + VPS + agent health checks
 [6] Sync from VPS          refresh local wizard.toml from backend state
-[7] Service                config, secrets, and break-glass legacy tools
+[7] Restore / Disaster Recovery
+                            inspect a TG backup or restore it to current/new VPS
+[8] Service                config, secrets, and break-glass legacy tools
 ```
 
 The menu header shows every known component with `installed <version> at <time>` so stale local state is visible before you touch anything.

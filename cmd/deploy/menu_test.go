@@ -7,8 +7,8 @@ import (
 
 func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
 	items := mainMenuItems(false, &State{})
-	if len(items) != 7 {
-		t.Fatalf("len(mainMenuItems)=%d, want 7: %+v", len(items), items)
+	if len(items) != 8 {
+		t.Fatalf("len(mainMenuItems)=%d, want 8: %+v", len(items), items)
 	}
 	text := renderMenuItems(items, "Q", "Выход")
 	for _, want := range []string{
@@ -18,7 +18,8 @@ func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
 		"[4] Переезд на новый VPS",
 		"[5] Doctor",
 		"[6] Синхронизация с VPS",
-		"[7] Сервис",
+		"[7] Restore / Disaster Recovery",
+		"[8] Сервис",
 		"когда нажимать:",
 	} {
 		if !strings.Contains(text, want) {
