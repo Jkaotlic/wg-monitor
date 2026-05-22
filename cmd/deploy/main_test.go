@@ -10,6 +10,7 @@ func TestUsageTextMentionsMenuAndCLIParity(t *testing.T) {
 	for _, want := range []string{
 		"update-components",
 		"sync-vps",
+		"adopt-backend",
 		"add-router",
 		"repair-agent-token",
 		"netfix",

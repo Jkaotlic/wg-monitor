@@ -24,12 +24,16 @@ import (
 type fakeDisp struct {
 	mu    sync.Mutex
 	calls []state.Kind
+	db    *db.DB
 }
 
-func (f *fakeDisp) Handle(_ context.Context, _ int64, _, _ string, tr state.Transition, _ wire.Check) error {
+func (f *fakeDisp) Handle(_ context.Context, uid int64, _, check string, tr state.Transition, _ wire.Check) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, tr.Kind)
+	if f.db != nil {
+		return f.db.State().Save(uid, check, tr.Next)
+	}
 	return nil
 }
 
@@ -50,7 +54,7 @@ func TestReportPersistsEventsAndDispatches(t *testing.T) {
 	tok := "0000000000000000000000000000000000000000000000000000000000000000"
 	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
 
-	disp := &fakeDisp{}
+	disp := &fakeDisp{db: d}
 	mux := NewMux(Deps{
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DB:         d,
@@ -91,6 +95,61 @@ func TestReportPersistsEventsAndDispatches(t *testing.T) {
 	latest, _ := d.Events().LatestPerUser(uid)
 	if latest.IsZero() {
 		t.Fatal("event not persisted")
+	}
+}
+
+func TestReportMobileUsesHigherFailThreshold(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "abababababababababababababababababababababababababababababababab"
+	_, _ = d.Users().InsertWithKind("car4", tok, "1.1.1.1", "awg0", db.KindMobile)
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:                  d,
+		Dispatcher:          disp,
+		Thresholds:          state.Thresholds{Fail: 2, Recovery: 2},
+		MobileFailThreshold: 6,
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	postFail := func(i int) {
+		t.Helper()
+		body, _ := json.Marshal(wire.Report{
+			Timestamp:    time.Now().UTC().Add(time.Duration(i) * time.Second),
+			AgentVersion: "test",
+			Checks:       []wire.Check{{Name: "awg_handshake", Status: "fail"}},
+		})
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("report %d status: %d", i, resp.StatusCode)
+		}
+	}
+
+	for i := 1; i <= 5; i++ {
+		postFail(i)
+	}
+	disp.mu.Lock()
+	for _, kind := range disp.calls {
+		if kind == state.Hard {
+			t.Fatalf("mobile agent hardened before mobile threshold: calls=%v", disp.calls)
+		}
+	}
+	disp.mu.Unlock()
+
+	postFail(6)
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	if got := disp.calls[len(disp.calls)-1]; got != state.Hard {
+		t.Fatalf("6th mobile failure should harden, got %v (calls=%v)", got, disp.calls)
 	}
 }
 

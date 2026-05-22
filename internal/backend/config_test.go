@@ -268,8 +268,14 @@ telegram:
 	if cfg.Heartbeat.MobileLifecycle == nil || *cfg.Heartbeat.MobileLifecycle != true {
 		t.Errorf("MobileLifecycle: want true, got %v", cfg.Heartbeat.MobileLifecycle)
 	}
-	if cfg.Heartbeat.MobileSleepAfterSec != 300 {
-		t.Errorf("MobileSleepAfterSec: want 300, got %d", cfg.Heartbeat.MobileSleepAfterSec)
+	if cfg.Heartbeat.MobileSleepAfterSec != 1800 {
+		t.Errorf("MobileSleepAfterSec: want 1800, got %d", cfg.Heartbeat.MobileSleepAfterSec)
+	}
+	if cfg.State.MobileFailThreshold != 6 {
+		t.Errorf("MobileFailThreshold: want 6, got %d", cfg.State.MobileFailThreshold)
+	}
+	if cfg.State.MobileRealertEverySec != 21600 {
+		t.Errorf("MobileRealertEverySec: want 21600, got %d", cfg.State.MobileRealertEverySec)
 	}
 }
 
@@ -294,5 +300,26 @@ heartbeat:
 	}
 	if cfg.Heartbeat.MobileSleepAfterSec != 600 {
 		t.Errorf("MobileSleepAfterSec: want 600, got %d", cfg.Heartbeat.MobileSleepAfterSec)
+	}
+}
+
+func TestLoadConfig_MobileLifecycleClampsAggressiveSleep(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "TOKEN")
+	cfgPath := writeFile(t, dir, "cfg.yaml", `db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: 1
+  admin_user_id: 2
+heartbeat:
+  mobile_lifecycle: true
+  mobile_sleep_after_sec: 300
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Heartbeat.MobileSleepAfterSec != 1800 {
+		t.Errorf("MobileSleepAfterSec: want clamp to 1800, got %d", cfg.Heartbeat.MobileSleepAfterSec)
 	}
 }

@@ -299,7 +299,18 @@ func serviceMenuItems(legacy bool) []menuItem {
 	if legacy {
 		items = append(items, menuItem{Key: "3", Title: "Legacy Netfix route", Help: "когда нажимать: только старый SSH-деплой и recovery маршрута"})
 	}
-	return items
+	return withCurrentVPSAdoption(items, legacy)
+}
+
+func withCurrentVPSAdoption(items []menuItem, legacy bool) []menuItem {
+	if legacy && len(items) > 0 {
+		items[len(items)-1].Key = "4"
+	}
+	return append(items[:2], append([]menuItem{{
+		Key:   "3",
+		Title: "Привязать текущий VPS",
+		Help:  "when to use: this PC has old wizard.toml, but current VPS is already alive",
+	}}, items[2:]...)...)
 }
 
 func renderMenuItems(items []menuItem, exitKey, exitTitle string) string {
@@ -352,7 +363,7 @@ func runRouterMenu(state *State, statePath string, secrets *SecretStore, dl *Dow
 	}
 }
 
-func runServiceMenu(state *State, statePath string, _ *SecretStore) {
+func runServiceMenu(state *State, statePath string, secrets *SecretStore) {
 	legacy := os.Getenv("WG_LEGACY_ROUTER_SSH") == "1"
 	for {
 		fmt.Println()
@@ -367,8 +378,12 @@ func runServiceMenu(state *State, statePath string, _ *SecretStore) {
 		case "2":
 			ForgetKnownHostInteractive(state) //nolint:errcheck
 		case "3":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionAdoptBackend(state, secrets)
+			})
+		case "4":
 			if !legacy {
-				PrintFail("Не понял. Введи 1-2 или B.")
+				PrintFail("Не понял. Введи 1-3 или B.")
 				break
 			}
 			if err := actionNetfix(state, netfixOptions{}); err != nil {
@@ -377,9 +392,9 @@ func runServiceMenu(state *State, statePath string, _ *SecretStore) {
 		case "B", "Q", "":
 			return
 		default:
-			limit := "2"
+			limit := "3"
 			if legacy {
-				limit = "3"
+				limit = "4"
 			}
 			PrintFail("Не понял. Введи 1-" + limit + " или B.")
 		}

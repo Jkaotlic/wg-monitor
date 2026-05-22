@@ -233,6 +233,34 @@ func TestShouldOfferBackendMigrationSkipsFreshInstall(t *testing.T) {
 	}
 }
 
+func TestApplyAdoptedBackendReplacesStaleBackend(t *testing.T) {
+	st := &State{
+		Backend: BackendState{
+			Host:   "old-vps",
+			Port:   2222,
+			User:   "admin",
+			Domain: "old.example",
+		},
+	}
+	applyAdoptedBackend(st, BackendState{
+		Host:    "83.171.224.125",
+		Port:    22,
+		User:    "root",
+		SSHAuth: backendSSHAuthKey,
+		KeyPath: `C:\Users\User\.ssh\id_ed25519`,
+		Domain:  "wgmonitor.example",
+	})
+	if st.Backend.Host != "83.171.224.125" || st.Backend.Domain != "wgmonitor.example" {
+		t.Fatalf("backend not replaced: %+v", st.Backend)
+	}
+	if st.Backend.Port != 22 || st.Backend.User != "root" {
+		t.Fatalf("backend ssh coords not adopted: %+v", st.Backend)
+	}
+	if st.Backend.SSHAuth != backendSSHAuthKey || st.Backend.KeyPath == "" {
+		t.Fatalf("backend ssh auth not adopted: %+v", st.Backend)
+	}
+}
+
 func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T) {
 	ag := AgentState{
 		Nickname:            "testkeen",

@@ -22,9 +22,10 @@ type TGSender interface {
 }
 
 type Config struct {
-	ChatID       int64
-	RealertEvery time.Duration // default 6h
-	TickEvery    time.Duration // default 5min
+	ChatID             int64
+	RealertEvery       time.Duration // default 6h
+	MobileRealertEvery time.Duration // default 6h
+	TickEvery          time.Duration // default 5min
 }
 
 const (
@@ -48,6 +49,9 @@ type Poller struct {
 func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 	if cfg.RealertEvery <= 0 {
 		cfg.RealertEvery = defaultRealertEvery
+	}
+	if cfg.MobileRealertEvery <= 0 {
+		cfg.MobileRealertEvery = defaultRealertEvery
 	}
 	if cfg.TickEvery <= 0 {
 		cfg.TickEvery = defaultTickEvery
@@ -178,7 +182,14 @@ func (p *Poller) tick(ctx context.Context) {
 			slog.Warn("realert: HardSince nil despite hard status", "user_id", sh.UserID, "check", sh.CheckName)
 			continue
 		}
-		count := int(now.Sub(*st.HardSince) / p.cfg.RealertEvery)
+		cadence := p.cfg.RealertEvery
+		if u.IsMobile() {
+			cadence = p.cfg.MobileRealertEvery
+		}
+		if st.LastAlertAt != nil && now.Sub(*st.LastAlertAt) < cadence {
+			continue
+		}
+		count := int(now.Sub(*st.HardSince) / cadence)
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
 		neighbors := p.neighborSummaries(sh.UserID, sh.CheckName)
 		text := alerts.FormatRealert(alerts.RealertArgs{
@@ -189,7 +200,7 @@ func (p *Poller) tick(ctx context.Context) {
 			IsMobile:     u.IsMobile(),
 			Check:        check,
 			Neighbors:    neighbors,
-			RealertEvery: p.cfg.RealertEvery,
+			RealertEvery: cadence,
 		})
 		_, err = p.tg.SendMessage(ctx, p.cfg.ChatID, u.TelegramThreadID, text, "", nil)
 		if err != nil {
