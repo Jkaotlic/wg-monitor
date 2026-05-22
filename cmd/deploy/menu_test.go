@@ -13,7 +13,7 @@ func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
 	text := renderMenuItems(items, "Q", "Выход")
 	for _, want := range []string{
 		"[1] VPS / backend",
-		"[2] Обновить компоненты",
+		"[2] Проверить / обновить",
 		"[3] Роутеры",
 		"[4] Переезд на новый VPS",
 		"[5] Doctor",

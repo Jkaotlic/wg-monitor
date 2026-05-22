@@ -105,6 +105,32 @@ func TestBuildUpdateTargetsCarriesMobileRolloutMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildUpdateTargetsTreatsLatestPendingAsWaiting(t *testing.T) {
+	state := &State{
+		Agents: []AgentState{{
+			Nickname:            "carvan",
+			Kind:                "mobile",
+			LastDeployedVersion: "v0.13.0",
+			PendingVersion:      "v0.14.0-rc1",
+			PendingSince:        "2026-05-19T10:00:00Z",
+		}},
+	}
+
+	targets := buildUpdateTargets(state, "v0.14.0-rc1")
+	if len(targets) != 1 {
+		t.Fatalf("targets=%d, want 1", len(targets))
+	}
+	if targets[0].NeedsUpdate {
+		t.Fatalf("pending latest mobile agent must not be queued for another update: %+v", targets[0])
+	}
+	if !targets[0].PendingCurrent {
+		t.Fatalf("pending latest mobile agent must be marked as waiting for wake: %+v", targets[0])
+	}
+	if got := filterOutdated(targets); len(got) != 0 {
+		t.Fatalf("outdated=%d, want 0 for latest pending agent: %+v", len(got), got)
+	}
+}
+
 func TestRefreshBackendInstalledVersionUsesHealthz(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/healthz" {
@@ -122,6 +148,57 @@ func TestRefreshBackendInstalledVersionUsesHealthz(t *testing.T) {
 	refreshBackendInstalledVersion(state)
 	if got := state.Backend.LastDeployedVersion; got != "v0.13.0-rc12" {
 		t.Fatalf("backend version = %q, want live healthz version", got)
+	}
+}
+
+func TestRefreshInstalledComponentStateMergesLiveBackendAndAgents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/healthz":
+			_, _ = w.Write([]byte(`{"status":"ok","version":"v0.14.0-rc1"}`))
+		case "/v1/wizard/agents":
+			if got := r.Header.Get("Authorization"); got != "Bearer tok" {
+				t.Fatalf("Authorization=%q, want Bearer tok", got)
+			}
+			_, _ = w.Write([]byte(`{"agents":[{"nickname":"carvan","kind":"mobile","thread_id":42,"ssh_host":"10.0.0.2","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.14.0-rc1","ring":"canary"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	state := &State{
+		Backend: BackendState{Domain: srv.URL, LastDeployedVersion: "v0.13.0"},
+		Agents: []AgentState{{
+			Nickname:            "carvan",
+			Kind:                "mobile",
+			LastDeployedVersion: "v0.13.0",
+			PendingVersion:      "v0.14.0-rc1",
+			PendingSince:        "2026-05-19T10:00:00Z",
+		}},
+	}
+	secrets := &SecretStore{disk: map[string]string{"WIZARD_TOKEN": "tok"}}
+
+	summary := refreshInstalledComponentState(state, secrets)
+
+	if !summary.VPSChecked {
+		t.Fatalf("VPS sync was not marked checked: %+v", summary)
+	}
+	if got := state.Backend.LastDeployedVersion; got != "v0.14.0-rc1" {
+		t.Fatalf("backend version=%q, want live healthz version", got)
+	}
+	agent := state.FindAgent("carvan")
+	if agent == nil {
+		t.Fatal("agent carvan missing after refresh")
+	}
+	if agent.LastDeployedVersion != "v0.14.0-rc1" {
+		t.Fatalf("agent version=%q, want live VPS version", agent.LastDeployedVersion)
+	}
+	if agent.PendingVersion != "" || agent.PendingSince != "" {
+		t.Fatalf("remote empty pending must clear local pending state: %+v", agent)
+	}
+	if agent.Host != "10.0.0.2" || agent.ThreadID != 42 || agent.Ring != "canary" {
+		t.Fatalf("agent live metadata not merged: %+v", agent)
 	}
 }
 

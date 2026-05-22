@@ -235,12 +235,8 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 		if r.Ring != "" {
 			a.Ring = r.Ring
 		}
-		if r.PendingVersion != "" {
-			a.PendingVersion = r.PendingVersion
-		}
-		if r.PendingSince != "" {
-			a.PendingSince = r.PendingSince
-		}
+		a.PendingVersion = r.PendingVersion
+		a.PendingSince = r.PendingSince
 		// SSH: remote wins iff remote has value; else preserve local.
 		// Track divergence (both non-empty AND differ) for visibility.
 		if r.SSHHost != "" {

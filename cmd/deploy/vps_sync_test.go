@@ -40,6 +40,24 @@ func TestMergeAgents_RemoteOverridesLocal(t *testing.T) {
 	}
 }
 
+func TestMergeAgents_RemoteClearsPendingState(t *testing.T) {
+	local := []AgentState{{
+		Nickname:            "carvan",
+		LastDeployedVersion: "v0.13.0",
+		PendingVersion:      "v0.14.0-rc1",
+		PendingSince:        "2026-05-19T10:00:00Z",
+	}}
+	remote := []RemoteAgent{{
+		Nickname:            "carvan",
+		LastDeployedVersion: "v0.14.0-rc1",
+	}}
+
+	merged, _, _ := MergeAgents(local, remote)
+	if merged[0].PendingVersion != "" || merged[0].PendingSince != "" {
+		t.Fatalf("remote empty pending must clear stale local pending: %+v", merged[0])
+	}
+}
+
 func TestMergeAgents_RemoteNullPreservesLocalSSH(t *testing.T) {
 	// Remote has no SSH (NULLs from DB), local has it. Local wins for SSH
 	// because remote NULLs are "unknown" not "delete".
