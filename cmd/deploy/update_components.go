@@ -172,11 +172,11 @@ func refreshInstalledComponentState(state *State, secrets *SecretStore) updateRe
 	if secrets != nil {
 		token = secrets.GetNonInteractive("WIZARD_TOKEN")
 	}
-	c := NewVPSClientForBackend(state, token, 5*time.Second)
+	c := NewResilientVPSClientForBackend(state, secrets, token, 5*time.Second)
 	if c == nil {
 		return summary
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	remote, err := c.ListAgents(ctx)
 	if err != nil {
@@ -468,7 +468,7 @@ func releaseAssetURLForRouter(state *State, version, asset, fallback string) str
 // actually running. Returns an error on any failure of those three legs.
 func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
-	c := NewVPSClientForBackend(state, tok, 15*time.Second)
+	c := NewResilientVPSClientForBackend(state, secrets, tok, 8*time.Second)
 	if c == nil {
 		return fmt.Errorf("VPSClient unavailable")
 	}
@@ -485,7 +485,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	deadline := time.Now().Add(90 * time.Second)
 	var res *wire.CommandResult
 	for time.Now().Before(deadline) {
-		pollCtx, pollCancel := context.WithTimeout(context.Background(), 50*time.Second)
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), 65*time.Second)
 		r, err := c.AwaitCommandResult(pollCtx, t.AgentNickname, cmdID, 45)
 		pollCancel()
 		if err != nil {
@@ -499,7 +499,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	if res == nil {
 		if err := markPendingOnMobileAckTimeout(state, t, time.Now().UTC().Format(time.RFC3339)); err == nil {
 			if ag := state.FindAgent(t.AgentNickname); ag != nil {
-				pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 				if pushErr := c.PushAgent(pushCtx, AgentStateToRemote(*ag)); pushErr != nil {
 					PrintWarn("VPS pending sync failed: " + pushErr.Error())
 				}
@@ -522,7 +522,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	flipDeadline := time.Now().Add(6 * time.Minute)
 	for time.Now().Before(flipDeadline) {
 		time.Sleep(5 * time.Second)
-		listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		listCtx, listCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		remotes, err := c.ListAgents(listCtx)
 		listCancel()
 		if err != nil {
@@ -537,7 +537,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 					a.LastDeployedVersion = t.LatestVersion
 					a.PendingVersion = ""
 					a.PendingSince = ""
-					pushCtx, pushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
 					if pushErr := c.PushAgent(pushCtx, AgentStateToRemote(*a)); pushErr != nil {
 						PrintWarn("VPS version sync failed: " + pushErr.Error())
 					}
@@ -553,7 +553,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 func deployWithRetry(c *VPSClient, nickname, version string) (string, error) {
 	var last error
 	for attempt := 1; attempt <= 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		cmdID, err := c.Deploy(ctx, nickname, version)
 		cancel()
 		if err == nil {
