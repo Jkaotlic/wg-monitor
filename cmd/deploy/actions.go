@@ -835,6 +835,9 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		awgmAuthMode = "router-admin"
 	}
 	if err != nil {
+		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
+			return schedErr
+		}
 		return err
 	}
 	if ag.Arch == "" && info.GoArch != "" {
@@ -882,6 +885,9 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	if err != nil {
 		if strings.TrimSpace(res.Output) != "" {
 			PrintInfo(res.Output)
+		}
+		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
+			return schedErr
 		}
 		return err
 	}
