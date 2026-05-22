@@ -20,6 +20,16 @@ type awgmRelayConfig struct {
 	TerminalPassword string `json:"terminal_password"`
 	BootstrapScript  string `json:"bootstrap_script"`
 	Mode             string `json:"mode"`
+	Nickname         string `json:"nickname,omitempty"`
+	Kind             string `json:"kind,omitempty"`
+	ThreadID         int64  `json:"thread_id,omitempty"`
+	BackendURL       string `json:"backend_url,omitempty"`
+	WizardToken      string `json:"wizard_token,omitempty"`
+	TargetVersion    string `json:"target_version,omitempty"`
+	ReleaseBase      string `json:"release_base,omitempty"`
+	InitScript       string `json:"init_script,omitempty"`
+	ExpiresAtUnix    int64  `json:"expires_at_unix,omitempty"`
+	RawToken         string `json:"raw_token,omitempty"`
 }
 
 func runAWGMBootstrapDirect(awgm *AWGMClient, script, terminalUser, terminalPass string) (TerminalRunResult, error) {
@@ -449,6 +459,205 @@ def prompt_action(text):
         return "shell"
     return ""
 
+def sh_quote(s):
+    s = "" if s is None else str(s)
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+def yaml_quote(s):
+    return json.dumps("" if s is None else str(s), ensure_ascii=False)
+
+def local_wizard_request(cfg, method, path, body=None):
+    data = None
+    headers = {
+        "Accept": "application/json",
+        "Authorization": "Bearer " + (cfg.get("wizard_token") or ""),
+    }
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request("http://127.0.0.1:8080" + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read(1024 * 1024)
+    except urllib.error.HTTPError as e:
+        raw = e.read(65536)
+        raise RelayError("local wizard %s %s: HTTP %d: %s" % (method, path, e.code, raw.decode("utf-8", "replace")))
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8"))
+
+def build_agent_config(cfg, backend_url, raw_token):
+    return "\n".join([
+        "backend:",
+        "  url: " + yaml_quote(backend_url),
+        "  token: " + yaml_quote(raw_token),
+        "",
+        "agent:",
+        "  nickname: " + yaml_quote(cfg.get("nickname") or ""),
+        "  interval_sec: 60",
+        "",
+        "awg_manager:",
+        "  base_url: http://127.0.0.1:2222",
+        "",
+        "checks:",
+        "  dns:",
+        "    auto_discover: true",
+        "    test_domain: \"example.com\"",
+        "    fail_threshold: 2",
+        "",
+        "state:",
+        "  path: /opt/var/wg-monitor/state.json",
+        "",
+        "maintenance:",
+        "  allow_router_reboot: true",
+        "  allow_firmware_install: true",
+        "",
+    ])
+
+def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch):
+    nickname = cfg.get("nickname") or ""
+    version = cfg.get("target_version") or ""
+    release_base = (cfg.get("release_base") or "").rstrip("/")
+    asset = "wg-monitor-agent-linux-" + arch
+    agent_config = build_agent_config(cfg, backend_url, raw_token).rstrip()
+    init_script = (cfg.get("init_script") or "").rstrip()
+    download_url = release_base + "/" + version + "/" + asset
+    checksum_url = release_base + "/" + version + "/checksums.txt"
+    return """#!/bin/sh
+set -eu
+
+NICKNAME=%s
+VERSION=%s
+DOWNLOAD_URL=%s
+CHECKSUM_URL=%s
+CHECKSUM_NAME=%s
+CONFIG=/opt/etc/wg-monitor/config.yaml
+BIN=/opt/bin/wg-monitor
+INIT=/opt/etc/init.d/S99wg-monitor
+TMP_BIN=/opt/tmp/wg-monitor.new
+TMP_SUMS=/opt/tmp/wg-monitor-checksums.txt
+
+if [ ! -d /opt ]; then
+    echo "Entware /opt is not mounted"
+    exit 10
+fi
+
+mkdir -p /opt/etc/wg-monitor /opt/var/wg-monitor /opt/var/run /opt/tmp /opt/bin /opt/etc/init.d
+
+if [ -f "$CONFIG" ] && ! grep -q "^[[:space:]]*nickname:[[:space:]]*$NICKNAME[[:space:]]*$" "$CONFIG"; then
+    echo "Refusing to overwrite $CONFIG: existing agent.nickname is not $NICKNAME"
+    exit 11
+fi
+
+fetch() {
+    url=$1
+    dst=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$dst"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$dst"
+    else
+        echo "curl/wget not found"
+        exit 12
+    fi
+}
+
+echo "Installing wg-monitor $VERSION for $NICKNAME"
+fetch "$DOWNLOAD_URL" "$TMP_BIN"
+fetch "$CHECKSUM_URL" "$TMP_SUMS"
+
+want=$(awk -v name="$CHECKSUM_NAME" '$2 == name {print $1}' "$TMP_SUMS" | head -n 1)
+if [ -z "$want" ]; then
+    echo "checksum for $CHECKSUM_NAME not found"
+    exit 13
+fi
+got=$(sha256sum "$TMP_BIN" | awk '{print $1}')
+if [ "$got" != "$want" ]; then
+    echo "checksum mismatch for $CHECKSUM_NAME"
+    exit 14
+fi
+
+cat >"$CONFIG.tmp" <<'WG_MONITOR_AGENT_CONFIG'
+%s
+WG_MONITOR_AGENT_CONFIG
+mv "$CONFIG.tmp" "$CONFIG"
+chmod 600 "$CONFIG"
+
+cat >"$INIT.tmp" <<'WG_MONITOR_INIT'
+%s
+WG_MONITOR_INIT
+mv "$INIT.tmp" "$INIT"
+chmod 755 "$INIT"
+
+chmod 755 "$TMP_BIN"
+mv "$TMP_BIN" "$BIN"
+
+"$INIT" restart || "$INIT" start
+echo "wg-monitor bootstrap complete for $NICKNAME"
+""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(checksum_url), sh_quote(asset), agent_config, init_script)
+
+def run_deferred_bootstrap(cfg, cfg_path):
+    expires = int(cfg.get("expires_at_unix") or 0)
+    if expires and time.time() > expires:
+        print("deferred AWGM job expired for " + (cfg.get("nickname") or "unknown"))
+        os.remove(cfg_path)
+        return
+    op, jar = opener()
+    login_if_needed(op, cfg)
+    env = request(op, cfg, "GET", "/api/system/info")
+    data = env.get("data") or {}
+    arch = (data.get("goArch") or "").strip()
+    if not arch:
+        raise RelayError("AWG Manager system_info did not report goArch")
+    nick = cfg.get("nickname") or ""
+    enroll = local_wizard_request(cfg, "POST", "/v1/wizard/enrollments", {
+        "nickname": nick,
+        "kind": cfg.get("kind") or "static",
+        "thread_id": int(cfg.get("thread_id") or 0),
+    })
+    raw_token = enroll.get("raw_token") or ""
+    backend_url = enroll.get("backend_url") or cfg.get("backend_url") or ""
+    if not raw_token or not backend_url:
+        raise RelayError("local wizard enrollment returned incomplete payload")
+    script = build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch)
+    ensure_terminal(op, cfg)
+    sock = None
+    try:
+        sock = ws_connect(cfg, jar)
+        ws_send(sock, 0x1, '{"AuthToken":""}')
+        send_resize(sock)
+        login_terminal(sock, cfg)
+        run_bootstrap(sock, {**cfg, "bootstrap_script": script})
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        try:
+            request(op, cfg, "POST", "/api/terminal/stop")
+        except Exception as e:
+            print("WARN terminal stop failed: %s" % e, file=sys.stderr)
+    local_wizard_request(cfg, "PUT", "/v1/wizard/agents/" + urllib.parse.quote(nick, safe=""), {
+        "ssh_host": data.get("routerIP") or "0.0.0.0",
+        "ssh_port": 222,
+        "ssh_user": cfg.get("terminal_user") or "root",
+        "arch": arch,
+        "last_deployed_version": cfg.get("target_version") or "",
+        "ring": "stable",
+        "pending_version": "",
+        "pending_since": "",
+    })
+    token_path = cfg_path + ".token"
+    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("WG_AGENT_TOKEN_%s=%s\n" % (nick.upper(), raw_token))
+    done_path = cfg_path + ".done"
+    fd = os.open(done_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("ok %s %s\n" % (nick, cfg.get("target_version") or ""))
+    os.remove(sys.argv[1])
+
 def login_terminal(sock, cfg):
     out = ""
     sent_user = False
@@ -513,6 +722,9 @@ def run_bootstrap(sock, cfg):
 
 def main():
     cfg = load_config(sys.argv[1])
+    if cfg.get("mode") == "deferred_bootstrap":
+        run_deferred_bootstrap(cfg, sys.argv[1])
+        return
     op, jar = opener()
     sock = None
     try:
