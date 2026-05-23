@@ -81,16 +81,43 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 		return "", fmt.Errorf("write %s: %w", scriptPath, err)
 	}
 
-	// Detached: nohup + & so the script outlives the SIGTERM we'll receive
-	// when it kills the running agent. setsid keeps it free of our pgrp.
-	cmd := exec.Command("sh", "-c", "nohup sh "+scriptPath+" >/dev/null 2>&1 &")
-	if err := cmd.Start(); err != nil {
+	if err := launchSelfUpdateSwap(scriptPath); err != nil {
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("spawn swap script: %w", err)
+		return "", err
 	}
-	_ = cmd.Wait()
 
 	return fmt.Sprintf("%s verified, swap scheduled in ~3s", version), nil
+}
+
+func launchSelfUpdateSwap(scriptPath string) error {
+	logPath := "/opt/var/wg-monitor/self-update-swap.log"
+	_ = os.MkdirAll("/opt/var/wg-monitor", 0o755)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		logFile = nil
+	} else {
+		defer logFile.Close()
+	}
+
+	cmd := selfUpdateSwapCommand(scriptPath)
+	if logFile != nil {
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	} else {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("spawn swap script: %w", err)
+	}
+	if err := cmd.Process.Release(); err != nil {
+		return fmt.Errorf("release swap script: %w", err)
+	}
+	return nil
+}
+
+func selfUpdateSwapCommand(scriptPath string) *exec.Cmd {
+	return exec.Command("sh", scriptPath)
 }
 
 func selfUpdateURLs(version, assetName, repoBase string) (binURL, sumsURL string) {

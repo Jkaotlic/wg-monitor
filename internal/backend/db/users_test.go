@@ -273,3 +273,73 @@ func TestUsers_HasAnyOperatorOrOwnerBinding(t *testing.T) {
 		t.Error("operator 300 should have a binding")
 	}
 }
+
+func TestUpdateLastSeenAgentVersionClearsMatchingPendingDeploy(t *testing.T) {
+	d := newTestDB(t)
+	id, err := d.Users().Insert("alyaba", "tok", "1.1.1.1", "awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateDeployInfo("alyaba", DeployInfo{
+		SSHHost:             "192.168.31.1",
+		SSHPort:             22,
+		SSHUser:             "root",
+		Arch:                "arm64",
+		LastDeployedVersion: "v0.13.0-rc14",
+		Ring:                "stable",
+		PendingVersion:      "v0.13.0-rc31",
+		PendingSince:        "2026-05-23T09:45:11Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Users().UpdateLastSeenAgentVersion(id, "v0.13.0-rc31"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByNickname("alyaba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastDeployedVersion == nil || *got.LastDeployedVersion != "v0.13.0-rc31" {
+		t.Fatalf("last_deployed_version=%v", got.LastDeployedVersion)
+	}
+	if got.PendingVersion != nil || got.PendingSince != nil {
+		t.Fatalf("pending not cleared: version=%v since=%v", got.PendingVersion, got.PendingSince)
+	}
+}
+
+func TestUpdateLastSeenAgentVersionKeepsDifferentPendingDeploy(t *testing.T) {
+	d := newTestDB(t)
+	id, err := d.Users().Insert("alyaba", "tok", "1.1.1.1", "awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateDeployInfo("alyaba", DeployInfo{
+		SSHHost:             "192.168.31.1",
+		SSHPort:             22,
+		SSHUser:             "root",
+		Arch:                "arm64",
+		LastDeployedVersion: "v0.13.0-rc31",
+		Ring:                "stable",
+		PendingVersion:      "v0.13.0-rc32",
+		PendingSince:        "2026-05-23T10:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Users().UpdateLastSeenAgentVersion(id, "v0.13.0-rc31"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByNickname("alyaba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PendingVersion == nil || *got.PendingVersion != "v0.13.0-rc32" {
+		t.Fatalf("pending_version=%v", got.PendingVersion)
+	}
+	if got.PendingSince == nil || *got.PendingSince != "2026-05-23T10:00:00Z" {
+		t.Fatalf("pending_since=%v", got.PendingSince)
+	}
+}
