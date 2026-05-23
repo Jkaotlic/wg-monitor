@@ -375,6 +375,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var dupes int
+		dispatchChecks := make([]wire.Check, 0, len(rep.Checks))
 		for _, c := range rep.Checks {
 			detailsJSON := normaliseDetailsJSON(c.Details)
 			res, err := insertStmt.ExecContext(r.Context(), uid, c.Name, c.Status, detailsJSON, ts)
@@ -387,6 +388,8 @@ func reportHandler(d Deps) http.HandlerFunc {
 			}
 			if n, _ := res.RowsAffected(); n == 0 {
 				dupes++
+			} else {
+				dispatchChecks = append(dispatchChecks, c)
 			}
 		}
 		insertStmt.Close()
@@ -408,8 +411,25 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// внутри Dispatcher.Handle (single-statement, атомарная per check).
 		// Если dispatch падает (TG 5xx), state уже сохранён до TG-send
 		// после rc19 fix BUG-02 — следующий report не дублирует alert.
-		for _, c := range rep.Checks {
+		for _, c := range dispatchChecks {
 			if c.Name == "agent_heartbeat" {
+				continue
+			}
+			latest, ok, err := d.DB.Events().LatestEvent(uid, c.Name)
+			if err != nil {
+				d.Logger.Warn("latest event check", "nickname", nick, "check", c.Name, "err", err)
+				continue
+			}
+			if !ok || !latest.TS.Equal(ts.UTC()) {
+				var latestTS time.Time
+				if ok {
+					latestTS = latest.TS
+				}
+				d.Logger.Info("skip stale report event",
+					"nickname", nick, "check", c.Name,
+					"report_ts", ts.UTC(), "latest_ts", latestTS,
+					"req_id", RequestIDFromContext(r.Context()),
+				)
 				continue
 			}
 			prev, err := d.DB.State().Get(uid, c.Name)
