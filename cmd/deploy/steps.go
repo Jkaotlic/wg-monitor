@@ -140,15 +140,31 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	return nil
 }
 
-// stepVerifyHTTP: curl URL, expect 200.
+// stepVerifyHTTP: curl URL, expect 200. Backend restarts can return
+// connection-refused for a short window after systemctl start succeeds, so
+// give the listener a few seconds before surfacing the failure.
 func stepVerifyHTTP(s *SSH, url string) error {
 	cmd := fmt.Sprintf("curl -sS -o /dev/null -w '%%{http_code}' %s", url)
-	out, err := s.MustRun(cmd)
-	if err != nil {
-		PrintFail(err.Error())
-		return err
+	deadline := time.Now().Add(12 * time.Second)
+	var lastOut string
+	var lastErr error
+	for {
+		out, err := s.MustRun(cmd)
+		lastOut, lastErr = out, err
+		if err == nil && strings.TrimSpace(out) == "200" {
+			PrintOK(fmt.Sprintf("%s → 200 OK", url))
+			return nil
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	code := strings.TrimSpace(out)
+	if lastErr != nil {
+		PrintFail(lastErr.Error())
+		return lastErr
+	}
+	code := strings.TrimSpace(lastOut)
 	if code != "200" {
 		PrintFail(fmt.Sprintf("%s → HTTP %s", url, code))
 		return fmt.Errorf("expected 200 got %s", code)

@@ -3,7 +3,9 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestShortCommandID(t *testing.T) {
@@ -241,6 +243,68 @@ func TestStaticPullAckTimeoutRemainsError(t *testing.T) {
 	target := updateTarget{IsAgent: true, AgentNickname: "home", Kind: "static", LatestVersion: "v0.14.0-rc1"}
 	if err := markPendingOnMobileAckTimeout(state, target, "2026-05-19T10:00:00Z"); err == nil {
 		t.Fatal("static timeout must remain an error")
+	}
+}
+
+func TestPullDeployReadinessRejectsStaleStaticBeforeEnqueue(t *testing.T) {
+	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
+	now := lastSeen.Add(8 * time.Minute)
+
+	err := pullDeployReadinessFromAgents([]RemoteAgent{{
+		Nickname:   "testkeen",
+		LastSeenAt: &lastSeen,
+	}}, updateTarget{IsAgent: true, AgentNickname: "testkeen", Kind: "static"}, now)
+
+	if err == nil {
+		t.Fatal("stale static agent must not be enqueued for pull deploy")
+	}
+	for _, want := range []string{"VPS heartbeat stale 8m", "не забирает команды", "repair-agent-token"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("err %q does not contain %q", err.Error(), want)
+		}
+	}
+}
+
+func TestPullDeployReadinessAllowsFreshStatic(t *testing.T) {
+	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
+	now := lastSeen.Add(30 * time.Second)
+
+	err := pullDeployReadinessFromAgents([]RemoteAgent{{
+		Nickname:   "testkeen",
+		LastSeenAt: &lastSeen,
+	}}, updateTarget{IsAgent: true, AgentNickname: "testkeen", Kind: "static"}, now)
+
+	if err != nil {
+		t.Fatalf("fresh static agent should be pull-ready, got %v", err)
+	}
+}
+
+func TestPullDeployReadinessAllowsStaleMobilePendingPath(t *testing.T) {
+	err := pullDeployReadinessFromAgents(nil, updateTarget{IsAgent: true, AgentNickname: "client-h", Kind: "mobile"}, time.Now())
+	if err != nil {
+		t.Fatalf("mobile agents may be sleeping and should use pending path, got %v", err)
+	}
+}
+
+func TestPullDeployNoAckHintCallsOutStaleHeartbeatAndTokenRepair(t *testing.T) {
+	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
+	now := lastSeen.Add(17 * time.Minute)
+	hint := pullDeployNoAckHintFromAgents([]RemoteAgent{{
+		Nickname:   "testkeen",
+		LastSeenAt: &lastSeen,
+	}}, updateTarget{AgentNickname: "testkeen"}, now)
+
+	for _, want := range []string{"VPS heartbeat stale 17m", "token", "repair-agent-token", "testkeen"} {
+		if !strings.Contains(hint, want) {
+			t.Fatalf("hint %q does not contain %q", hint, want)
+		}
+	}
+}
+
+func TestPullDeployNoAckHintExplainsMissingAgent(t *testing.T) {
+	hint := pullDeployNoAckHintFromAgents(nil, updateTarget{AgentNickname: "ghost"}, time.Now())
+	if !strings.Contains(hint, "ghost") || !strings.Contains(hint, "не найден") || !strings.Contains(hint, "sync-vps") {
+		t.Fatalf("unexpected missing-agent hint: %q", hint)
 	}
 }
 
