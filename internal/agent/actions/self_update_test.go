@@ -58,6 +58,17 @@ func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing
 	}
 }
 
+func TestSelfUpdateSwapCommandDoesNotRequireNohup(t *testing.T) {
+	cmd := selfUpdateSwapCommand("/tmp/wg-monitor-swap.sh")
+	got := strings.Join(cmd.Args, " ")
+	if strings.Contains(got, "nohup") {
+		t.Fatalf("swap command must not depend on nohup: %q", got)
+	}
+	if got != "sh /tmp/wg-monitor-swap.sh" {
+		t.Fatalf("swap command=%q", got)
+	}
+}
+
 func TestSelfUpdateURLsCanUseBackendMirror(t *testing.T) {
 	binURL, sumsURL := selfUpdateURLs("v0.13.0-rc18", "wg-monitor-agent-linux-arm64", "https://wg.example.test/v1/releases/download/")
 	if binURL != "https://wg.example.test/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {

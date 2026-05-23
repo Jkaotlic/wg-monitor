@@ -390,17 +390,24 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 }
 
 // UpdateLastSeenAgentVersion advances users.last_deployed_version to the
-// version reported by the running agent in its latest heartbeat. The WHERE
-// clause skips the write when the value is already current — important
-// because /v1/report fires every 60s per agent and SQLite is single-writer.
+// version reported by the running agent in its latest heartbeat. If the
+// heartbeat matches a pending wizard deploy, it also clears the pending marker
+// so a delayed post-update heartbeat does not leave the wizard stuck forever.
+// The WHERE clause skips the write when no visible deploy state changes,
+// important because /v1/report fires every 60s per agent and SQLite is
+// single-writer.
 func (u *UsersRepo) UpdateLastSeenAgentVersion(id int64, version string) error {
 	if version == "" {
 		return nil
 	}
 	_, err := u.d.db.Exec(
-		`UPDATE users SET last_deployed_version = ?
-		 WHERE id = ? AND COALESCE(last_deployed_version, '') != ?`,
-		version, id, version,
+		`UPDATE users
+		    SET last_deployed_version = ?,
+		        pending_since = CASE WHEN pending_version = ? THEN NULL ELSE pending_since END,
+		        pending_version = CASE WHEN pending_version = ? THEN NULL ELSE pending_version END
+		  WHERE id = ?
+		    AND (COALESCE(last_deployed_version, '') != ? OR pending_version = ?)`,
+		version, version, version, id, version, version,
 	)
 	if err != nil {
 		return fmt.Errorf("users.UpdateLastSeenAgentVersion: %w", err)
