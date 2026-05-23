@@ -27,7 +27,9 @@ func MobileFleetPanelText(rows []MobileFleetRow, now time.Time) string {
 		state := "ещё не отчитывался"
 		if r.LastSeenAt != nil {
 			age := now.Sub(*r.LastSeenAt)
-			if age <= 5*time.Minute {
+			if age < -2*time.Minute {
+				state = "clock-skew " + shortAge(-age)
+			} else if age <= 5*time.Minute {
 				state = "в сети"
 			} else {
 				state = "спит " + shortAge(age)

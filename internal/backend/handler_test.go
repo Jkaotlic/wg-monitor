@@ -168,6 +168,106 @@ func TestReportSkipsFSMForOutOfOrderTunnelOK(t *testing.T) {
 	}
 }
 
+func TestReportDoesNotRegressLastSeenOrVersionFromOldReport(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2121212121212121212121212121212121212121212121212121212121212121"
+	uid, _ := d.Users().Insert("testkeen", tok, "1.1.1.1", "awg0")
+
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{db: d},
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	post := func(ts time.Time, version string) {
+		t.Helper()
+		body, _ := json.Marshal(wire.Report{
+			Timestamp:    ts,
+			AgentVersion: version,
+			Checks:       []wire.Check{{Name: "agent_heartbeat", Status: "ok"}},
+		})
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status: %d", resp.StatusCode)
+		}
+	}
+
+	fresh := time.Now().UTC().Truncate(time.Second)
+	old := fresh.Add(-10 * time.Minute)
+	post(fresh, "v0.13.0-rc30")
+	post(old, "v0.13.0-rc14")
+
+	got, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastSeenAt == nil || got.LastSeenAt.UTC().Before(fresh) {
+		t.Fatalf("old report regressed last_seen_at: got %v want >= %v", got.LastSeenAt, fresh)
+	}
+	if got.LastDeployedVersion == nil || *got.LastDeployedVersion != "v0.13.0-rc30" {
+		t.Fatalf("old report regressed version: got %v", got.LastDeployedVersion)
+	}
+}
+
+func TestReportClampsFutureTimestamp(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2222222222222222222222222222222222222222222222222222222222222222"
+	uid, _ := d.Users().Insert("futurebox", tok, "1.1.1.1", "awg0")
+
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{db: d},
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	before := time.Now().UTC()
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    before.Add(24 * time.Hour),
+		AgentVersion: "test",
+		Checks:       []wire.Check{{Name: "agent_heartbeat", Status: "ok"}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+	after := time.Now().UTC().Add(2 * time.Second)
+
+	latest, ok, err := d.Events().LatestEvent(uid, "agent_heartbeat")
+	if err != nil || !ok {
+		t.Fatalf("latest heartbeat: ok=%v err=%v", ok, err)
+	}
+	if latest.TS.After(after) {
+		t.Fatalf("future report timestamp was stored as latest event: got %v, after=%v", latest.TS, after)
+	}
+	got, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastSeenAt == nil || got.LastSeenAt.After(after) {
+		t.Fatalf("future report timestamp leaked into last_seen_at: got %v, after=%v", got.LastSeenAt, after)
+	}
+}
+
 func TestReportMobileUsesHigherFailThreshold(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
