@@ -355,6 +355,39 @@ func TestShouldFallbackToAWGMReinstallAllowsLegacyAgentFailure(t *testing.T) {
 	}
 }
 
+func TestNeedsBootstrapForSelfUpdateNohupBugBeforeRC32(t *testing.T) {
+	if !needsBootstrapForSelfUpdateNohupBug(updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "client-a",
+		InstalledVersion: "v0.13.0-rc31",
+		LatestVersion:    "v0.13.0-rc32",
+	}) {
+		t.Fatal("agent below rc32 must not use its broken self_update to reach rc32")
+	}
+}
+
+func TestNeedsBootstrapForSelfUpdateNohupBugAllowsFixedAgents(t *testing.T) {
+	if needsBootstrapForSelfUpdateNohupBug(updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "client-a",
+		InstalledVersion: "v0.13.0-rc32",
+		LatestVersion:    "v0.13.0-rc33",
+	}) {
+		t.Fatal("rc32+ agents have the fixed swap launcher and can use pull-flow")
+	}
+}
+
+func TestNeedsBootstrapForSelfUpdateNohupBugIgnoresOlderTargets(t *testing.T) {
+	if needsBootstrapForSelfUpdateNohupBug(updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "client-a",
+		InstalledVersion: "v0.13.0-rc14",
+		LatestVersion:    "v0.13.0-rc31",
+	}) {
+		t.Fatal("guard should only activate when the target contains the rc32 fix")
+	}
+}
+
 func TestBackendReleaseAssetURLUsesBackendDomain(t *testing.T) {
 	got := backendReleaseAssetURL(&State{Backend: BackendState{Domain: "wg.example.test"}}, "v0.13.0-rc18", "wg-monitor-agent-linux-arm64")
 	want := "https://wg.example.test/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64"

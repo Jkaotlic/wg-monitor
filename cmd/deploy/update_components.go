@@ -388,6 +388,14 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 	if !t.IsAgent {
 		return actionUpdateBackend(state, secrets, dl)
 	}
+	if os.Getenv("WG_ALLOW_BROKEN_SELF_UPDATE") != "1" && needsBootstrapForSelfUpdateNohupBug(t) {
+		ag := state.FindAgent(t.AgentNickname)
+		if ag != nil && strings.TrimSpace(ag.AWGMURL) != "" {
+			PrintWarn(fmt.Sprintf("%s стоит на %s: self_update до v0.13.0-rc32 может подтвердить ACK, но не выполнить swap на Keenetic без nohup; перехожу на AWG Manager reinstall/bootstrap", t.AgentNickname, t.InstalledVersion))
+			return actionInstallAgentAWGM(state, secrets, dl, t.AgentNickname)
+		}
+		return fmt.Errorf("%s стоит на %s: pull-flow небезопасен из-за старого self_update/nohup. Запусти [3] Роутеры → Re-enroll / переустановить или заполни AWG Manager URL для bootstrap", t.AgentNickname, t.InstalledVersion)
+	}
 	if os.Getenv("WG_NO_PULL") != "1" && canPullDeploy(state, secrets, t) {
 		PrintInfo(fmt.Sprintf("pull-flow через VPS (без SSH) для %s → %s", t.AgentNickname, t.LatestVersion))
 		if err := runPullDeploy(state, secrets, t); err == nil {
@@ -407,6 +415,18 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 		}
 	}
 	return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
+}
+
+const selfUpdateNohupFixVersion = "v0.13.0-rc32"
+
+func needsBootstrapForSelfUpdateNohupBug(t updateTarget) bool {
+	if !t.IsAgent || t.InstalledVersion == "" {
+		return false
+	}
+	if compareReleaseTags(t.LatestVersion, selfUpdateNohupFixVersion) < 0 {
+		return false
+	}
+	return compareReleaseTags(t.InstalledVersion, selfUpdateNohupFixVersion) < 0
 }
 
 func shouldFallbackToAWGMReinstall(err error) bool {
