@@ -247,6 +247,21 @@ func TestStaticPullAckTimeoutRemainsError(t *testing.T) {
 	}
 }
 
+func TestPullDeployHeartbeatTimeoutMarksPendingAfterAck(t *testing.T) {
+	state := &State{Agents: []AgentState{{Nickname: "home", Kind: "static", LastDeployedVersion: "v0.13.0-rc14"}}}
+	target := updateTarget{IsAgent: true, AgentNickname: "home", Kind: "static", LatestVersion: "v0.13.0-rc27"}
+	if err := markPendingOnHeartbeatTimeout(state, target, "2026-05-23T09:00:00Z"); err != nil {
+		t.Fatalf("post-ack heartbeat timeout should become pending, got err=%v", err)
+	}
+	ag := state.FindAgent("home")
+	if ag.PendingVersion != "v0.13.0-rc27" || ag.PendingSince != "2026-05-23T09:00:00Z" {
+		t.Fatalf("pending fields not set: %+v", ag)
+	}
+	if ag.LastDeployedVersion != "v0.13.0-rc14" {
+		t.Fatalf("last confirmed version must stay old until heartbeat flip, got %+v", ag)
+	}
+}
+
 func TestPullDeployReadinessRejectsStaleStaticBeforeEnqueue(t *testing.T) {
 	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
 	now := lastSeen.Add(8 * time.Minute)

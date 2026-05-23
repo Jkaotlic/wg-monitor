@@ -539,11 +539,16 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	}
 	PrintOK("агент подтвердил " + strings.TrimSpace(res.Output))
 
-	// Phase 2: heartbeat version-flip. Swap script needs ~5s; the normal
-	// report interval can be several minutes, so give a full six-minute window
-	// before calling the deploy inconclusive.
-	PrintInfo("жду подтверждения новой версии через heartbeat (до 6 минут)")
-	flipDeadline := time.Now().Add(6 * time.Minute)
+	// Phase 2: heartbeat version-flip. After a successful ACK the new process
+	// should report immediately on start. Keep this wait short so one router
+	// with a slow/missing heartbeat does not stall a whole bulk update; if the
+	// flip does not arrive, record pending_version and let sync/doctor confirm
+	// it later.
+	heartbeatWait := pullDeployHeartbeatWait(t)
+	PrintInfo(fmt.Sprintf("жду подтверждения новой версии через heartbeat (до %s)", formatDurationRU(heartbeatWait)))
+	flipStarted := time.Now()
+	nextProgress := flipStarted.Add(15 * time.Second)
+	flipDeadline := flipStarted.Add(heartbeatWait)
 	for time.Now().Before(flipDeadline) {
 		time.Sleep(5 * time.Second)
 		listCtx, listCancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -570,8 +575,24 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 				return nil
 			}
 		}
+		if now := time.Now(); !now.Before(nextProgress) {
+			PrintInfo(fmt.Sprintf("heartbeat ещё не показал %s на %s, жду...", t.LatestVersion, t.AgentNickname))
+			nextProgress = now.Add(15 * time.Second)
+		}
 	}
-	return fmt.Errorf("новая версия не подтверждена heartbeat'ом за 6 минут — проверь TG-топик / SSH")
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := markPendingOnHeartbeatTimeout(state, t, now); err != nil {
+		return err
+	}
+	if ag := state.FindAgent(t.AgentNickname); ag != nil {
+		pushCtx, pushCancel := context.WithTimeout(context.Background(), 25*time.Second)
+		if pushErr := c.PushAgent(pushCtx, AgentStateToRemote(*ag)); pushErr != nil {
+			PrintWarn("VPS pending sync failed: " + pushErr.Error())
+		}
+		pushCancel()
+	}
+	PrintWarn(fmt.Sprintf("ACK получен, но heartbeat ещё не подтвердил %s — пометил как pending и продолжаю; проверь позже через sync/doctor", t.LatestVersion))
+	return nil
 }
 
 func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
@@ -585,6 +606,36 @@ func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
 		return fmt.Errorf("pull deploy preflight: не удалось проверить VPS heartbeat: %w", err)
 	}
 	return pullDeployReadinessFromAgents(agents, t, time.Now())
+}
+
+func pullDeployHeartbeatWait(t updateTarget) time.Duration {
+	if strings.EqualFold(t.Kind, "mobile") {
+		return 90 * time.Second
+	}
+	return 90 * time.Second
+}
+
+func markPendingOnHeartbeatTimeout(state *State, t updateTarget, since string) error {
+	if state == nil {
+		return fmt.Errorf("state unavailable")
+	}
+	ag := state.FindAgent(t.AgentNickname)
+	if ag == nil {
+		return fmt.Errorf("agent %s not found in local state", t.AgentNickname)
+	}
+	ag.PendingVersion = t.LatestVersion
+	ag.PendingSince = since
+	return nil
+}
+
+func formatDurationRU(d time.Duration) string {
+	if d%time.Minute == 0 {
+		return fmt.Sprintf("%d мин", int(d/time.Minute))
+	}
+	if d > time.Minute {
+		return fmt.Sprintf("%dс", int(d/time.Second))
+	}
+	return fmt.Sprintf("%dс", int(d/time.Second))
 }
 
 func pullDeployReadinessFromAgents(agents []RemoteAgent, t updateTarget, now time.Time) error {
