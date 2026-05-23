@@ -514,10 +514,19 @@ def build_agent_config(cfg, backend_url, raw_token):
         "",
     ])
 
+def normalize_arch(arch):
+    arch = (arch or "").strip().lower()
+    if arch in ("aarch64", "arm64"):
+        return "arm64"
+    if arch in ("mips", "mipsel", "mipsle"):
+        return "mipsle"
+    raise RelayError("unsupported arch: " + arch + " (supported: aarch64/arm64, mips/mipsel/mipsle)")
+
 def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch):
     nickname = cfg.get("nickname") or ""
     version = cfg.get("target_version") or ""
     release_base = (cfg.get("release_base") or "").rstrip("/")
+    arch = normalize_arch(arch)
     asset = "wg-monitor-agent-linux-" + arch
     agent_config = build_agent_config(cfg, backend_url, raw_token).rstrip()
     init_script = (cfg.get("init_script") or "").rstrip()

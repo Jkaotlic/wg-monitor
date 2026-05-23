@@ -63,6 +63,8 @@ func TestAWGMRelayPythonSupportsDeferredBootstrap(t *testing.T) {
 	for _, want := range []string{
 		`cfg.get("mode") == "deferred_bootstrap"`,
 		`/v1/wizard/enrollments`,
+		`normalize_arch`,
+		`("aarch64", "arm64")`,
 		`127.0.0.1:8080`,
 		`os.remove(sys.argv[1])`,
 	} {

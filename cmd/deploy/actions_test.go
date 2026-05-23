@@ -220,6 +220,16 @@ func TestAWGMEnrollmentCanCreateDirectForNewAgent(t *testing.T) {
 	}
 }
 
+func TestNormalizeKeeneticArchMapsAarch64ToReleaseAssetArch(t *testing.T) {
+	got, err := normalizeKeeneticArch("aarch64")
+	if err != nil {
+		t.Fatalf("normalizeKeeneticArch returned error: %v", err)
+	}
+	if got != "arm64" {
+		t.Fatalf("aarch64 must map to release asset arch arm64, got %q", got)
+	}
+}
+
 func TestBuildUpdateAgentTokenHashSQLEscapesNickname(t *testing.T) {
 	got := buildUpdateAgentTokenHashSQL("o'hara", "abc")
 	if !strings.Contains(got, "nickname = 'o''hara'") {
