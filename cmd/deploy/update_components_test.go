@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -274,7 +275,7 @@ func TestPullDeployReadinessRejectsStaleStaticBeforeEnqueue(t *testing.T) {
 	if err == nil {
 		t.Fatal("stale static agent must not be enqueued for pull deploy")
 	}
-	for _, want := range []string{"VPS heartbeat stale 8m", "не забирает команды", "repair-agent-token"} {
+	for _, want := range []string{"VPS heartbeat stale 8m", "не забирает команды", "wizard предложит re-enroll"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("err %q does not contain %q", err.Error(), want)
 		}
@@ -341,7 +342,7 @@ func TestPullDeployNoAckHintCallsOutStaleHeartbeatAndTokenRepair(t *testing.T) {
 		LastSeenAt: &lastSeen,
 	}}, updateTarget{AgentNickname: "testkeen"}, now)
 
-	for _, want := range []string{"VPS heartbeat stale 17m", "token", "repair-agent-token", "testkeen"} {
+	for _, want := range []string{"VPS heartbeat stale 17m", "token", "wizard предложит re-enroll"} {
 		if !strings.Contains(hint, want) {
 			t.Fatalf("hint %q does not contain %q", hint, want)
 		}
@@ -350,7 +351,7 @@ func TestPullDeployNoAckHintCallsOutStaleHeartbeatAndTokenRepair(t *testing.T) {
 
 func TestPullDeployNoAckHintExplainsMissingAgent(t *testing.T) {
 	hint := pullDeployNoAckHintFromAgents(nil, updateTarget{AgentNickname: "ghost"}, time.Now())
-	if !strings.Contains(hint, "ghost") || !strings.Contains(hint, "не найден") || !strings.Contains(hint, "sync-vps") {
+	if !strings.Contains(hint, "ghost") || !strings.Contains(hint, "не найден") || !strings.Contains(hint, "AWG Manager URL здесь") {
 		t.Fatalf("unexpected missing-agent hint: %q", hint)
 	}
 }
@@ -366,6 +367,20 @@ func TestShouldFallbackToAWGMReinstallAllowsLegacyAgentFailure(t *testing.T) {
 	err := fmt.Errorf("self_update unsupported by old agent")
 	if !shouldFallbackToAWGMReinstall(err) {
 		t.Fatal("non token-corrupt pull failure should still be eligible for AWG reinstall")
+	}
+}
+
+func TestShouldOfferAWGMReenrollFromPullErrorDetectsRepairHints(t *testing.T) {
+	err := fmt.Errorf("агент не подтвердил команду; если в backend journal есть token-not-found, запусти `repair-agent-token --agent client-a`")
+	if !shouldOfferAWGMReenrollFromPullError(err) {
+		t.Fatal("repair/token hints from [2] should offer inline AWG Manager re-enroll")
+	}
+}
+
+func TestShouldOfferAWGMReenrollFromPullErrorIgnoresGenericTimeout(t *testing.T) {
+	err := fmt.Errorf("await result: context deadline exceeded")
+	if shouldOfferAWGMReenrollFromPullError(err) {
+		t.Fatal("generic transport timeout should not become token re-enroll")
 	}
 }
 
@@ -399,6 +414,100 @@ func TestNeedsBootstrapForSelfUpdateNohupBugIgnoresOlderTargets(t *testing.T) {
 		LatestVersion:    "v0.13.0-rc31",
 	}) {
 		t.Fatal("guard should only activate when the target contains the rc32 fix")
+	}
+}
+
+func TestRunOneUpdatePromptsAWGMURLForBrokenSelfUpdateAgent(t *testing.T) {
+	state := &State{
+		Backend: BackendState{Domain: "wg.example.test"},
+		Agents: []AgentState{{
+			Nickname:            "client-a",
+			LastDeployedVersion: "v0.13.0-rc31",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "client-a",
+		InstalledVersion: "v0.13.0-rc31",
+		LatestVersion:    "v0.13.0-rc34",
+	}
+	restore := withTestStdin(t, "client-a.keenetic.example\n")
+	defer restore()
+	oldInstall := installAgentAWGMForUpdate
+	defer func() { installAgentAWGMForUpdate = oldInstall }()
+	called := false
+	installAgentAWGMForUpdate = func(gotState *State, _ *SecretStore, _ *Downloader, nickname string) error {
+		called = true
+		if gotState != state || nickname != "client-a" {
+			t.Fatalf("unexpected install call state=%p nickname=%q", gotState, nickname)
+		}
+		ag := gotState.FindAgent("client-a")
+		if ag == nil || ag.AWGMURL != "https://client-a.keenetic.example" || ag.DeployMode != "awgm" || ag.AWGMAuth != "router-admin" {
+			t.Fatalf("AWGM recovery data not filled: %+v", ag)
+		}
+		return nil
+	}
+
+	if err := runOneUpdate(state, &SecretStore{disk: map[string]string{}}, nil, target); err != nil {
+		t.Fatalf("runOneUpdate returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected AWG Manager reinstall to be called")
+	}
+}
+
+func TestRunOneUpdatePromptsAWGMURLForNeverDeployedAgent(t *testing.T) {
+	state := &State{
+		Backend: BackendState{Domain: "wg.example.test"},
+		Agents:  []AgentState{{Nickname: "client-b"}},
+	}
+	target := updateTarget{
+		IsAgent:       true,
+		AgentNickname: "client-b",
+		LatestVersion: "v0.13.0-rc34",
+	}
+	restore := withTestStdin(t, "client-b.keenetic.example\n")
+	defer restore()
+	oldInstall := installAgentAWGMForUpdate
+	defer func() { installAgentAWGMForUpdate = oldInstall }()
+	called := false
+	installAgentAWGMForUpdate = func(gotState *State, _ *SecretStore, _ *Downloader, nickname string) error {
+		called = true
+		if nickname != "client-b" {
+			t.Fatalf("nickname=%q, want client-b", nickname)
+		}
+		ag := gotState.FindAgent("client-b")
+		if ag == nil || ag.AWGMURL != "https://client-b.keenetic.example" {
+			t.Fatalf("AWGM URL was not prompted/persisted: %+v", ag)
+		}
+		return nil
+	}
+
+	if err := runOneUpdate(state, &SecretStore{disk: map[string]string{}}, nil, target); err != nil {
+		t.Fatalf("runOneUpdate returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected AWG Manager install to be called")
+	}
+}
+
+func withTestStdin(t *testing.T, input string) func() {
+	t.Helper()
+	old := os.Stdin
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.WriteString(input); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = r
+	return func() {
+		os.Stdin = old
+		_ = r.Close()
 	}
 }
 

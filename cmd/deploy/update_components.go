@@ -380,21 +380,22 @@ func confirmTargetContext(t updateTarget, currentIP string) bool {
 // runOneUpdate dispatches the right per-component install action. Agents
 // with a known-good prior deploy go through the pull-based self_update
 // path via VPS (no SSH required), eliminating the 192.168.0.1 LAN-IP
-// collision that plagues the SSH route. Cold installs (no prior version
-// recorded) and any pull-flow failure fall back to the SSH path —
-// actionUpdateAgent is also the recovery tool when self_update bricks
-// an agent.
+// collision that plagues the SSH route. Cold installs, pre-rc32 agents, and
+// recoverable pull-flow failures stay in this menu: the wizard asks for any
+// missing AWG Manager/KeenDNS data and runs the existing bootstrap/re-enroll
+// flow. Legacy SSH is break-glass only.
+var installAgentAWGMForUpdate = actionInstallAgentAWGM
+
 func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTarget) error {
 	if !t.IsAgent {
 		return actionUpdateBackend(state, secrets, dl)
 	}
 	if os.Getenv("WG_ALLOW_BROKEN_SELF_UPDATE") != "1" && needsBootstrapForSelfUpdateNohupBug(t) {
-		ag := state.FindAgent(t.AgentNickname)
-		if ag != nil && strings.TrimSpace(ag.AWGMURL) != "" {
-			PrintWarn(fmt.Sprintf("%s стоит на %s: self_update до v0.13.0-rc32 может подтвердить ACK, но не выполнить swap на Keenetic без nohup; перехожу на AWG Manager reinstall/bootstrap", t.AgentNickname, t.InstalledVersion))
-			return actionInstallAgentAWGM(state, secrets, dl, t.AgentNickname)
+		if handled, err := recoverAgentUpdateViaAWGM(state, secrets, dl, t,
+			fmt.Sprintf("%s стоит на %s: self_update до v0.13.0-rc32 может подтвердить ACK, но не выполнить swap на Keenetic без nohup", t.AgentNickname, t.InstalledVersion)); handled {
+			return err
 		}
-		return fmt.Errorf("%s стоит на %s: pull-flow небезопасен из-за старого self_update/nohup. Запусти [3] Роутеры → Re-enroll / переустановить или заполни AWG Manager URL для bootstrap", t.AgentNickname, t.InstalledVersion)
+		return fmt.Errorf("%s стоит на %s: pull-flow небезопасен из-за старого self_update/nohup, а локального agent state нет", t.AgentNickname, t.InstalledVersion)
 	}
 	if os.Getenv("WG_NO_PULL") != "1" && canPullDeploy(state, secrets, t) {
 		PrintInfo(fmt.Sprintf("pull-flow через VPS (без SSH) для %s → %s", t.AgentNickname, t.LatestVersion))
@@ -402,9 +403,17 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 			return nil
 		} else {
 			PrintWarn("pull-flow failed: " + err.Error())
-			if ag := state.FindAgent(t.AgentNickname); ag != nil && strings.TrimSpace(ag.AWGMURL) != "" && shouldFallbackToAWGMReinstall(err) {
-				PrintWarn("перехожу на AWG Manager reinstall: старый агент может не уметь backend mirror/self-update")
-				return actionInstallAgentAWGM(state, secrets, dl, t.AgentNickname)
+			if shouldFallbackToAWGMReinstall(err) {
+				if handled, recoverErr := recoverAgentUpdateViaAWGM(state, secrets, dl, t,
+					"старый агент может не уметь backend mirror/self-update"); handled {
+					return recoverErr
+				}
+			}
+			if shouldOfferAWGMReenrollFromPullError(err) && askYesNo("Сделать re-enroll через AWG Manager сейчас?", true) {
+				if handled, recoverErr := recoverAgentUpdateViaAWGM(state, secrets, dl, t,
+					"pull-flow выглядит как рассинхрон agent token/cmdloop"); handled {
+					return recoverErr
+				}
 			}
 			if os.Getenv("WG_LEGACY_ROUTER_SSH") != "1" {
 				return fmt.Errorf("pull-flow failed; SSH fallback скрыт, потому что новый deploy идёт через VPS/AWG Manager: %w", err)
@@ -414,7 +423,42 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 			}
 		}
 	}
+	if strings.TrimSpace(t.InstalledVersion) == "" {
+		if handled, err := recoverAgentUpdateViaAWGM(state, secrets, dl, t,
+			fmt.Sprintf("%s ещё не имеет подтверждённой установленной версии; нужен bootstrap/install вместо binary-swap update", t.AgentNickname)); handled {
+			return err
+		}
+	}
 	return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
+}
+
+func recoverAgentUpdateViaAWGM(state *State, secrets *SecretStore, dl *Downloader, t updateTarget, reason string) (bool, error) {
+	if state == nil || !t.IsAgent {
+		return false, nil
+	}
+	ag := state.FindAgent(t.AgentNickname)
+	if ag == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(reason) != "" {
+		PrintWarn(reason)
+	}
+	if strings.TrimSpace(ag.AWGMURL) == "" {
+		PrintInfo("Для продолжения нужен AWG Manager/KeenDNS URL. Введи его здесь, и wizard продолжит без перехода в другой пункт меню.")
+		if os.Getenv("WG_YES_TO_ALL") != "1" {
+			ag.AWGMURL = normalizeAWGMURL(Ask("AWG Manager URL для "+ag.Nickname+" (KeenDNS, https://...; Enter — отмена)", ag.AWGMURL))
+		}
+	}
+	ag.AWGMURL = normalizeAWGMURL(ag.AWGMURL)
+	if ag.AWGMURL == "" {
+		return true, fmt.Errorf("%s: AWG Manager URL required for bootstrap/reinstall", ag.Nickname)
+	}
+	ag.DeployMode = "awgm"
+	if strings.TrimSpace(ag.AWGMAuth) == "" {
+		ag.AWGMAuth = "router-admin"
+	}
+	PrintWarn("перехожу на AWG Manager reinstall/bootstrap: " + ag.Nickname)
+	return true, installAgentAWGMForUpdate(state, secrets, dl, ag.Nickname)
 }
 
 const selfUpdateNohupFixVersion = "v0.13.0-rc32"
@@ -427,6 +471,24 @@ func needsBootstrapForSelfUpdateNohupBug(t updateTarget) bool {
 		return false
 	}
 	return compareReleaseTags(t.InstalledVersion, selfUpdateNohupFixVersion) < 0
+}
+
+func shouldOfferAWGMReenrollFromPullError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"repair-agent-token",
+		"token-not-found",
+		"token-corrupt",
+		"рассинхрон",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func shouldFallbackToAWGMReinstall(err error) bool {
@@ -741,14 +803,14 @@ func pullDeployNoAckHintFromAgents(agents []RemoteAgent, t updateTarget, now tim
 		hb := formatHeartbeatStatus(a.LastSeenAt, now)
 		switch {
 		case hb == "never" || strings.HasPrefix(hb, "stale"):
-			return fmt.Sprintf("; VPS heartbeat %s — агент не забирает команды, состояние похоже на token-corrupt/рассинхрон. Частая причина: на роутере старый/чужой agent token (backend пишет token-not-found). Запусти `repair-agent-token --agent %s` или [3] Роутеры → re-enroll", hb, nick)
+			return fmt.Sprintf("; VPS heartbeat %s — агент не забирает команды, состояние похоже на token-corrupt/рассинхрон. Частая причина: на роутере старый/чужой agent token (backend пишет token-not-found); wizard предложит re-enroll через AWG Manager прямо здесь", hb)
 		case strings.HasPrefix(hb, "fresh"):
-			return fmt.Sprintf("; VPS heartbeat %s, но команда не завершилась — проверь cmdloop на агенте; если в backend journal есть token-not-found, запусти `repair-agent-token --agent %s`", hb, nick)
+			return fmt.Sprintf("; VPS heartbeat %s, но команда не завершилась — проверь cmdloop на агенте; если в backend journal есть token-not-found, wizard предложит re-enroll через AWG Manager прямо здесь", hb)
 		default:
-			return fmt.Sprintf("; VPS heartbeat %s — проверь agent service и `repair-agent-token --agent %s`", hb, nick)
+			return fmt.Sprintf("; VPS heartbeat %s — проверь agent service; при token/cmdloop рассинхроне wizard предложит re-enroll через AWG Manager прямо здесь", hb)
 		}
 	}
-	return fmt.Sprintf("; агент %s не найден в /v1/wizard/agents — сначала запусти `sync-vps`, затем repair-agent-token/re-enroll при необходимости", nick)
+	return fmt.Sprintf("; агент %s не найден в /v1/wizard/agents — обнови состояние из VPS или введи AWG Manager URL здесь, если нужен bootstrap/re-enroll", nick)
 }
 
 // askYesNo prints `prompt [Y/n]: ` (capitalised default) and returns true
