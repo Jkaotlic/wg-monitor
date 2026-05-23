@@ -281,6 +281,20 @@ func TestPullDeployReadinessRejectsStaleStaticBeforeEnqueue(t *testing.T) {
 	}
 }
 
+func TestPullDeployReadinessClassifiesStaleStaticAsDeferredCandidate(t *testing.T) {
+	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
+	now := lastSeen.Add(8 * time.Minute)
+
+	err := pullDeployReadinessFromAgents([]RemoteAgent{{
+		Nickname:   "testkeen",
+		LastSeenAt: &lastSeen,
+	}}, updateTarget{IsAgent: true, AgentNickname: "testkeen", Kind: "static"}, now)
+
+	if !canDeferAgentUpdateAfterReadinessError(err) {
+		t.Fatalf("stale static pull preflight should be eligible for VPS deferred update, got %v", err)
+	}
+}
+
 func TestPullDeployReadinessAllowsFreshStatic(t *testing.T) {
 	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
 	now := lastSeen.Add(30 * time.Second)
