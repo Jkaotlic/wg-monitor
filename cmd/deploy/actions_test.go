@@ -204,6 +204,22 @@ func TestStageAgentRawTokenStoresRecoveryTokenWithoutOverwritingCanonical(t *tes
 	}
 }
 
+func TestAWGMEnrollmentUsesTwoPhaseForExistingAgent(t *testing.T) {
+	store := &SecretStore{disk: map[string]string{"WG_AGENT_TOKEN_TESTKEEN": strings.Repeat("b", 64)}}
+	ag := &AgentState{Nickname: "testkeen", LastDeployedVersion: "v0.13.0-rc14"}
+	if !awgmEnrollmentNeedsTwoPhase(store, ag) {
+		t.Fatal("existing agent with prior deploy/raw token must use two-phase token rotation")
+	}
+}
+
+func TestAWGMEnrollmentCanCreateDirectForNewAgent(t *testing.T) {
+	store := &SecretStore{disk: map[string]string{}}
+	ag := &AgentState{Nickname: "newone"}
+	if awgmEnrollmentNeedsTwoPhase(store, ag) {
+		t.Fatal("brand-new agent may use normal enrollment because no live client can be stranded")
+	}
+}
+
 func TestBuildUpdateAgentTokenHashSQLEscapesNickname(t *testing.T) {
 	got := buildUpdateAgentTokenHashSQL("o'hara", "abc")
 	if !strings.Contains(got, "nickname = 'o''hara'") {

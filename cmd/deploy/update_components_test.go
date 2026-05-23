@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -305,6 +306,20 @@ func TestPullDeployNoAckHintExplainsMissingAgent(t *testing.T) {
 	hint := pullDeployNoAckHintFromAgents(nil, updateTarget{AgentNickname: "ghost"}, time.Now())
 	if !strings.Contains(hint, "ghost") || !strings.Contains(hint, "не найден") || !strings.Contains(hint, "sync-vps") {
 		t.Fatalf("unexpected missing-agent hint: %q", hint)
+	}
+}
+
+func TestShouldFallbackToAWGMReinstallBlocksTokenCorruptPullFailure(t *testing.T) {
+	err := fmt.Errorf("pull deploy preflight: VPS heartbeat stale 14h - token-corrupt/rassync")
+	if shouldFallbackToAWGMReinstall(err) {
+		t.Fatal("token-corrupt/stale pull failure must not auto re-enroll through AWG Manager")
+	}
+}
+
+func TestShouldFallbackToAWGMReinstallAllowsLegacyAgentFailure(t *testing.T) {
+	err := fmt.Errorf("self_update unsupported by old agent")
+	if !shouldFallbackToAWGMReinstall(err) {
+		t.Fatal("non token-corrupt pull failure should still be eligible for AWG reinstall")
 	}
 }
 

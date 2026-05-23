@@ -101,6 +101,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if strings.HasPrefix(checkName, "tunnel_") {
 			opts = append(opts, tg.WithTunnelActions())
 		}
+		if checkName == "hydraroute" {
+			opts = append(opts, tg.WithHydraRouteActions())
+		}
 		if args.IsMobile && checkName == "agent_heartbeat" {
 			opts = append(opts, tg.WithMobileActions())
 		}

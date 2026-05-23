@@ -504,6 +504,21 @@ func TestRouterHandleMessage_MaintButton_WrongTopic(t *testing.T) {
 	}
 }
 
+func TestCollectTunnelViewsDropsStaleEvents(t *testing.T) {
+	d, uid := newTestDB(t)
+	r := NewRouterWithSink(d, &fakeRouterTG{}, nil, Config{})
+	if err := d.Events().Insert(uid, "tunnel_old", "ok", `{"tunnel_name":"old","interface":"nwg1"}`, time.Now().Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_fresh", "ok", `{"tunnel_name":"fresh","interface":"nwg2"}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	views := r.collectTunnelViews(uid)
+	if len(views) != 1 || views[0].Name != "fresh" {
+		t.Fatalf("want only fresh tunnel view, got %+v", views)
+	}
+}
+
 // seedUser creates a user and returns their ID. Mirrors newTestDB but for
 // routers that already have a DB.
 func seedUser(t *testing.T, d *db.DB, nick string) int64 {

@@ -16,8 +16,9 @@ type InlineKeyboardMarkup struct {
 type KeyboardOption func(*kbOpts)
 
 type kbOpts struct {
-	tunnelActions bool
-	mobileActions bool
+	tunnelActions     bool
+	mobileActions     bool
+	hydraRouteActions bool
 }
 
 // WithTunnelActions appends a row [🔁 Restart][📊 Diag][▶ Pingcheck] —
@@ -30,6 +31,10 @@ func WithTunnelActions() KeyboardOption {
 // for kind=mobile users so admin can force the agent to send-now after a 4G gap.
 func WithMobileActions() KeyboardOption {
 	return func(o *kbOpts) { o.mobileActions = true }
+}
+
+func WithHydraRouteActions() KeyboardOption {
+	return func(o *kbOpts) { o.hydraRouteActions = true }
 }
 
 // HardAlertKeyboard returns the inline keyboard layout under each HARD alert.
@@ -68,6 +73,12 @@ func HardAlertKeyboard(userID int64, checkName string, opts ...KeyboardOption) I
 	if o.mobileActions {
 		rows = append(rows, []InlineKeyboardButton{
 			{Text: "🔄 Дай отчёт сейчас", CallbackData: plainCD("force_recheck")},
+		})
+	}
+	if o.hydraRouteActions {
+		rows = append(rows, []InlineKeyboardButton{
+			{Text: "▶ Запустить HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo_start", userID)},
+			{Text: "🔁 Перезапустить HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo", userID)},
 		})
 	}
 	return InlineKeyboardMarkup{InlineKeyboard: rows}

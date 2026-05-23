@@ -370,6 +370,10 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 		PrintWarn("домен не задан в wizard.toml — пропускаю /health проверку")
 	} else {
 		if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
+			PrintWarn("healthcheck failed after backend swap; rolling back to previous binary")
+			if rbErr := stepRollbackRemoteBinary(s, "/usr/local/bin/wg-monitor-backend", "wg-monitor-backend"); rbErr != nil {
+				PrintWarn("rollback after failed healthcheck also failed: " + rbErr.Error())
+			}
 			return err
 		}
 		// Probe /v1/wizard/agents — expect 401 (endpoint registered + auth
@@ -781,25 +785,108 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		return fmt.Errorf("wizard API client is not configured")
 	}
 
-	PrintStep(1, 5, "VPS: создать/обновить enrollment "+ag.Nickname)
-	enroll, err := vps.CreateEnrollment(context.Background(), EnrollmentRequest{
-		Nickname: ag.Nickname,
-		Kind:     ag.Kind,
-		ThreadID: int64(ag.ThreadID),
-	})
-	if err != nil {
-		return err
-	}
 	tokenEnv := agentTokenEnv(ag.Nickname)
-	if err := secrets.Set(tokenEnv, enroll.RawToken); err != nil {
-		if errors.Is(err, ErrCacheDisabled) {
-			PrintWarn("WG_NO_SECRET_CACHE=1 — raw-token не сохранён на диск. Сохрани вручную:")
-			fmt.Printf("    %s=%s\n", tokenEnv, enroll.RawToken)
-		} else {
-			return fmt.Errorf("save %s: %w", tokenEnv, err)
+	var backendURL, rawToken string
+	var commitToken func() error
+	var rollbackToken func()
+	var err error
+	if awgmEnrollmentNeedsTwoPhase(secrets, ag) {
+		PrintStep(1, 5, "VPS: подготовить staged enrollment "+ag.Nickname)
+		kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+		if err != nil {
+			return err
 		}
+		bs, err := connectBackendSSH(state, secrets, kh)
+		if err != nil {
+			return err
+		}
+		if err := ensureRemoteSQLite3(bs); err != nil {
+			bs.Close()
+			return err
+		}
+		exists, err := vpsUserExists(bs, ag.Nickname)
+		bs.Close()
+		if err != nil {
+			return fmt.Errorf("check users table: %w", err)
+		}
+		if !exists {
+			return fmt.Errorf("agent %s is not in VPS users DB; refusing unsafe token rotation", ag.Nickname)
+		}
+		rawToken, err = generateAgentRawToken()
+		if err != nil {
+			return err
+		}
+		oldEnv, hadOldEnv := os.LookupEnv(tokenEnv)
+		if err := stageAgentRawToken(secrets, tokenEnv, rawToken); err != nil {
+			if errors.Is(err, ErrCacheDisabled) {
+				PrintWarn("WG_NO_SECRET_CACHE=1 — staged raw-token не сохранён на диск. Сохрани вручную для recovery:")
+				fmt.Printf("    %s=%s\n", tokenEnv, rawToken)
+			} else {
+				return fmt.Errorf("stage %s_STAGED: %w", tokenEnv, err)
+			}
+		}
+		committed := false
+		rollbackToken = func() {
+			if committed {
+				return
+			}
+			if hadOldEnv {
+				os.Setenv(tokenEnv, oldEnv)
+			} else {
+				os.Unsetenv(tokenEnv)
+			}
+		}
+		defer func() {
+			if rollbackToken != nil {
+				rollbackToken()
+			}
+		}()
+		backendURL = backendURLForAgent(state)
+		if backendURL == "" {
+			return fmt.Errorf("backend domain required for staged AWGM enrollment")
+		}
+		commitToken = func() error {
+			bs, err := connectBackendSSH(state, secrets, kh)
+			if err != nil {
+				return err
+			}
+			defer bs.Close()
+			if err := vpsUpdateAgentTokenHash(bs, ag.Nickname, hashAgentRawToken(rawToken)); err != nil {
+				return err
+			}
+			if err := secrets.Set(tokenEnv, rawToken); err != nil {
+				if errors.Is(err, ErrCacheDisabled) {
+					PrintWarn("WG_NO_SECRET_CACHE=1 — raw-token не сохранён на диск. Сохрани вручную:")
+					fmt.Printf("    %s=%s\n", tokenEnv, rawToken)
+				} else {
+					return fmt.Errorf("save %s: %w", tokenEnv, err)
+				}
+			}
+			committed = true
+			return nil
+		}
+	} else {
+		PrintStep(1, 5, "VPS: создать enrollment "+ag.Nickname)
+		enroll, err := vps.CreateEnrollment(context.Background(), EnrollmentRequest{
+			Nickname: ag.Nickname,
+			Kind:     ag.Kind,
+			ThreadID: int64(ag.ThreadID),
+		})
+		if err != nil {
+			return err
+		}
+		rawToken = enroll.RawToken
+		backendURL = enroll.BackendURL
+		if err := secrets.Set(tokenEnv, rawToken); err != nil {
+			if errors.Is(err, ErrCacheDisabled) {
+				PrintWarn("WG_NO_SECRET_CACHE=1 — raw-token не сохранён на диск. Сохрани вручную:")
+				fmt.Printf("    %s=%s\n", tokenEnv, rawToken)
+			} else {
+				return fmt.Errorf("save %s: %w", tokenEnv, err)
+			}
+		}
+		_ = os.Setenv(tokenEnv, rawToken)
 	}
-	_ = os.Setenv(tokenEnv, enroll.RawToken)
 
 	apiKey, login, pass := awgmAuthForAgent(secrets, ag.Nickname)
 	terminalUser := userOrDefault(ag.User, "root")
@@ -835,6 +922,9 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		awgmAuthMode = "router-admin"
 	}
 	if err != nil {
+		if commitToken != nil {
+			return fmt.Errorf("AWG Manager preflight failed before staged token commit; deferred deploy disabled to avoid token split: %w", err)
+		}
 		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
 			return schedErr
 		}
@@ -863,8 +953,8 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	}
 	script, err := RenderAWGMBootstrapScript(AWGMBootstrapParams{
 		Nickname:     ag.Nickname,
-		BackendURL:   enroll.BackendURL,
-		RawToken:     enroll.RawToken,
+		BackendURL:   backendURL,
+		RawToken:     rawToken,
 		Version:      rel.TagName,
 		DownloadURL:  releaseAssetURLForRouter(state, rel.TagName, assetName, asset.DownloadURL),
 		ChecksumURL:  releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL),
@@ -886,13 +976,21 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		if strings.TrimSpace(res.Output) != "" {
 			PrintInfo(res.Output)
 		}
+		if commitToken != nil {
+			return fmt.Errorf("AWG Manager bootstrap failed before staged token commit; backend token left unchanged: %w", err)
+		}
 		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
 			return schedErr
 		}
 		return err
 	}
 
-	PrintStep(5, 5, "Сохранить локальное состояние")
+	PrintStep(5, 5, "Commit token + сохранить локальное состояние")
+	if commitToken != nil {
+		if err := commitToken(); err != nil {
+			return fmt.Errorf("commit staged token: %w", err)
+		}
+	}
 	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
 	ag.LastDeployedVersion = rel.TagName
 	if ag.Host == "" && info.RouterIP != "" {
@@ -901,6 +999,33 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	ag.AWGMAuth = awgmAuthMode
 	PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
 	return nil
+}
+
+func awgmEnrollmentNeedsTwoPhase(secrets *SecretStore, ag *AgentState) bool {
+	if ag == nil || strings.TrimSpace(ag.Nickname) == "" {
+		return false
+	}
+	if strings.TrimSpace(ag.LastDeployedVersion) != "" {
+		return true
+	}
+	if secrets != nil && strings.TrimSpace(secrets.GetNonInteractive(agentTokenEnv(ag.Nickname))) != "" {
+		return true
+	}
+	return false
+}
+
+func backendURLForAgent(state *State) string {
+	if state == nil {
+		return ""
+	}
+	domain := strings.TrimRight(strings.TrimSpace(state.Backend.Domain), "/")
+	if domain == "" {
+		return ""
+	}
+	if strings.Contains(domain, "://") {
+		return domain
+	}
+	return "https://" + domain
 }
 
 func awgmAuthForAgent(secrets *SecretStore, nickname string) (apiKey, login, password string) {

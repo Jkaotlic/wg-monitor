@@ -103,6 +103,26 @@ func TestHardAlertKeyboardWithMobileActions(t *testing.T) {
 	}
 }
 
+func TestHardAlertKeyboardWithHydraRouteActions(t *testing.T) {
+	kb := HardAlertKeyboard(42, "hydraroute", WithHydraRouteActions())
+	if len(kb.InlineKeyboard) != 3 {
+		t.Fatalf("expected 3 rows with hydraroute actions, got %d", len(kb.InlineKeyboard))
+	}
+	want := map[string]bool{
+		"maint_restart:42:hrneo_start": true,
+		"maint_restart:42:hrneo":       true,
+	}
+	for _, btn := range kb.InlineKeyboard[2] {
+		if !want[btn.CallbackData] {
+			t.Errorf("unexpected hydraroute-action callback: %q", btn.CallbackData)
+		}
+		delete(want, btn.CallbackData)
+	}
+	for k := range want {
+		t.Errorf("missing hydraroute-action button: %q", k)
+	}
+}
+
 func TestHardAlertKeyboardCombinedTunnelAndMobile(t *testing.T) {
 	kb := HardAlertKeyboard(42, "tunnel_amnezia_for_awg2", WithTunnelActions(), WithMobileActions())
 	if len(kb.InlineKeyboard) != 4 {

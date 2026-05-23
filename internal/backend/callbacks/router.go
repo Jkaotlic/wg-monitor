@@ -984,7 +984,7 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 // collectTunnelViews builds []alerts.TunnelView from the latest per-tunnel
 // event for this user.
 func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
-	rows, err := r.d.Events().LatestEventsByPrefix(userID, "tunnel_")
+	rows, err := r.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", time.Now().Add(-3*time.Minute))
 	if err != nil {
 		slog.Warn("collectTunnelViews: query failed", "err", err, "user", userID)
 		return nil

@@ -51,7 +51,7 @@ type Queue struct {
 	// origins maps (userID → cmd.ID → originEntry). Populated by
 	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
 	origins map[int64]map[string]originEntry
-	signal  *sync.Cond // signals on Enqueue and RecordResult
+	signal  *sync.Cond   // signals on Enqueue and RecordResult
 	logger  *slog.Logger // optional; nil → slog.Default()
 }
 
@@ -76,6 +76,25 @@ func New() *Queue {
 	}
 	q.signal = sync.NewCond(&q.mu)
 	return q
+}
+
+func defaultCommandTTL(action string) time.Duration {
+	switch action {
+	case "self_update":
+		return 30 * time.Minute
+	case "firmware_install", "service_restart":
+		return 10 * time.Minute
+	default:
+		return 15 * time.Minute
+	}
+}
+
+func commandExpired(cmd wire.Command, now time.Time) bool {
+	return !cmd.ExpiresAt.IsZero() && !now.Before(cmd.ExpiresAt)
+}
+
+func supersedesPending(action string) bool {
+	return action == "self_update"
 }
 
 // EnqueueWithRef is Enqueue + records MessageRef (with ref.Action populated
@@ -141,7 +160,22 @@ func (q *Queue) Enqueue(userID int64, cmd wire.Command) error {
 		q.log().Warn("queue enqueue rejected", "reason", "invalid-action", "user_id", userID, "action", cmd.Action)
 		return errors.New("invalid command action: " + cmd.Action)
 	}
+	if cmd.IssuedAt.IsZero() {
+		cmd.IssuedAt = time.Now().UTC()
+	}
+	if cmd.ExpiresAt.IsZero() {
+		cmd.ExpiresAt = cmd.IssuedAt.Add(defaultCommandTTL(cmd.Action))
+	}
 	q.mu.Lock()
+	if supersedesPending(cmd.Action) {
+		filtered := q.pending[userID][:0]
+		for _, existing := range q.pending[userID] {
+			if existing.Action != cmd.Action {
+				filtered = append(filtered, existing)
+			}
+		}
+		q.pending[userID] = filtered
+	}
 	q.pending[userID] = append(q.pending[userID], cmd)
 	pendingLen := len(q.pending[userID])
 	q.mu.Unlock()
@@ -195,6 +229,16 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 				delete(q.pending, userID)
 			} else {
 				q.pending[userID] = tail
+			}
+			if commandExpired(head, time.Now()) {
+				q.log().Warn("queue drop expired command", "user_id", userID, "cmd_id", head.ID, "action", head.Action)
+				if bucket, ok := q.origins[userID]; ok {
+					delete(bucket, head.ID)
+					if len(bucket) == 0 {
+						delete(q.origins, userID)
+					}
+				}
+				continue
 			}
 			return &head, true
 		}

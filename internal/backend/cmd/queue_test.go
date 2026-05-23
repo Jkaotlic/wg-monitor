@@ -102,6 +102,46 @@ func TestQueue_FIFO(t *testing.T) {
 	}
 }
 
+func TestQueue_DequeueSkipsExpiredCommands(t *testing.T) {
+	q := New()
+	expired := mkCmd("old", "diag_now")
+	expired.ExpiresAt = time.Now().Add(-time.Second)
+	fresh := mkCmd("fresh", "diag_now")
+	fresh.ExpiresAt = time.Now().Add(time.Minute)
+
+	if err := q.Enqueue(7, expired); err != nil {
+		t.Fatalf("enqueue expired: %v", err)
+	}
+	if err := q.Enqueue(7, fresh); err != nil {
+		t.Fatalf("enqueue fresh: %v", err)
+	}
+
+	got, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond)
+	if !ok || got == nil || got.ID != "fresh" {
+		t.Fatalf("want fresh command after expired skip, got %+v ok=%v", got, ok)
+	}
+}
+
+func TestQueue_EnqueueSupersedesSelfUpdate(t *testing.T) {
+	q := New()
+	first := mkCmd("old-update", "self_update")
+	second := mkCmd("new-update", "self_update")
+	if err := q.Enqueue(7, first); err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	if err := q.Enqueue(7, second); err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+
+	got, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond)
+	if !ok || got == nil || got.ID != "new-update" {
+		t.Fatalf("self_update should keep latest only, got %+v ok=%v", got, ok)
+	}
+	if got, ok = q.Dequeue(context.Background(), 7, 10*time.Millisecond); ok || got != nil {
+		t.Fatalf("old self_update should be removed, got %+v ok=%v", got, ok)
+	}
+}
+
 func TestQueue_MultiUserIsolation(t *testing.T) {
 	q := New()
 	_ = q.Enqueue(1, mkCmd("u1-cmd", "diag_now"))
