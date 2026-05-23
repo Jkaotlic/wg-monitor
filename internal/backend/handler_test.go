@@ -98,6 +98,76 @@ func TestReportPersistsEventsAndDispatches(t *testing.T) {
 	}
 }
 
+func TestReportSkipsFSMForOutOfOrderTunnelOK(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2020202020202020202020202020202020202020202020202020202020202020"
+	uid, _ := d.Users().Insert("alyaba", tok, "1.1.1.1", "awg0")
+
+	fresh := time.Now().UTC().Truncate(time.Second)
+	old := fresh.Add(-5 * time.Minute)
+	hardSince := fresh.Add(-15 * time.Minute)
+	if err := d.State().Save(uid, "tunnel_awg11", db.IncidentState{
+		CurrentStatus:    "hard",
+		ConsecutiveFails: 4,
+		ConsecutiveOKs:   1,
+		HardSince:        &hardSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_awg11", "fail", `{"tunnel_name":"de","interface":"nwg1","status":"starting"}`, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    old,
+		AgentVersion: "test",
+		Checks: []wire.Check{{
+			Name:   "tunnel_awg11",
+			Status: "ok",
+			Details: map[string]any{
+				"tunnel_name": "de",
+				"interface":   "nwg1",
+				"status":      "running",
+			},
+		}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	disp.mu.Lock()
+	if len(disp.calls) != 0 {
+		t.Fatalf("stale report must not dispatch FSM, calls=%v", disp.calls)
+	}
+	disp.mu.Unlock()
+
+	got, err := d.State().Get(uid, "tunnel_awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "hard" || got.ConsecutiveOKs != 1 {
+		t.Fatalf("stale OK changed state: status=%q oks=%d", got.CurrentStatus, got.ConsecutiveOKs)
+	}
+}
+
 func TestReportMobileUsesHigherFailThreshold(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
