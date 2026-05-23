@@ -30,10 +30,11 @@ type Check struct {
 // ID back via /v1/cmd/result so the backend can correlate outcome with the
 // original TG callback that enqueued it.
 type Command struct {
-	ID       string         `json:"id"`
-	Action   string         `json:"action"`
-	Args     map[string]any `json:"args,omitempty"`
-	IssuedAt time.Time      `json:"issued_at"`
+	ID        string         `json:"id"`
+	Action    string         `json:"action"`
+	Args      map[string]any `json:"args,omitempty"`
+	IssuedAt  time.Time      `json:"issued_at"`
+	ExpiresAt time.Time      `json:"expires_at,omitempty"`
 }
 
 var validCommandActions = map[string]bool{

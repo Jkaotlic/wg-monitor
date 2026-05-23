@@ -2,6 +2,8 @@ package backend
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -26,16 +28,22 @@ type UserLookup interface {
 // для brute-force / случайно-неверных токенов. logger опциональный (nil
 // допустим — middleware работает без аудит-лога, для тестов).
 func AuthMiddleware(lookup UserLookup, logger *slog.Logger) func(http.Handler) http.Handler {
-	logUnauthorized := func(r *http.Request, reason string, presentedLen int) {
+	logUnauthorized := func(r *http.Request, reason string, presented string) {
 		if logger == nil {
 			return
+		}
+		hashPrefix := ""
+		if presented != "" {
+			sum := sha256.Sum256([]byte(presented))
+			hashPrefix = hex.EncodeToString(sum[:])[:12]
 		}
 		logger.Warn("auth: unauthorized",
 			"reason", reason,
 			"remote", r.RemoteAddr,
 			"path", r.URL.Path,
 			"method", r.Method,
-			"presented_len", presentedLen,
+			"presented_len", len(presented),
+			"presented_hash_prefix", hashPrefix,
 		)
 	}
 	return func(next http.Handler) http.Handler {
@@ -43,14 +51,14 @@ func AuthMiddleware(lookup UserLookup, logger *slog.Logger) func(http.Handler) h
 			hdr := r.Header.Get("Authorization")
 			const prefix = "Bearer "
 			if !strings.HasPrefix(hdr, prefix) {
-				logUnauthorized(r, "missing-bearer", 0)
+				logUnauthorized(r, "missing-bearer", "")
 				incAuthReject()
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
 			presented := strings.TrimPrefix(hdr, prefix)
 			if presented == "" || strings.HasPrefix(presented, " ") {
-				logUnauthorized(r, "empty-token", 0)
+				logUnauthorized(r, "empty-token", "")
 				incAuthReject()
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -58,7 +66,7 @@ func AuthMiddleware(lookup UserLookup, logger *slog.Logger) func(http.Handler) h
 			u, err := lookup.GetByToken(presented)
 			if err != nil {
 				if errors.Is(err, db.ErrUserNotFound) {
-					logUnauthorized(r, "token-not-found", len(presented))
+					logUnauthorized(r, "token-not-found", presented)
 					incAuthReject()
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return

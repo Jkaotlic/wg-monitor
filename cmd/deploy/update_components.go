@@ -394,7 +394,7 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 			return nil
 		} else {
 			PrintWarn("pull-flow failed: " + err.Error())
-			if ag := state.FindAgent(t.AgentNickname); ag != nil && strings.TrimSpace(ag.AWGMURL) != "" {
+			if ag := state.FindAgent(t.AgentNickname); ag != nil && strings.TrimSpace(ag.AWGMURL) != "" && shouldFallbackToAWGMReinstall(err) {
 				PrintWarn("перехожу на AWG Manager reinstall: старый агент может не уметь backend mirror/self-update")
 				return actionInstallAgentAWGM(state, secrets, dl, t.AgentNickname)
 			}
@@ -407,6 +407,27 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 		}
 	}
 	return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
+}
+
+func shouldFallbackToAWGMReinstall(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"pull deploy preflight",
+		"token-corrupt",
+		"rassync",
+		"рассинхрон",
+		"stale",
+		"heartbeat never",
+		"не забирает команды",
+	} {
+		if strings.Contains(msg, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 // canPullDeploy reports whether the wizard has everything it needs to run
