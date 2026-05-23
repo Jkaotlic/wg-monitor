@@ -514,6 +514,9 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 		return fmt.Errorf("VPSClient unavailable")
 	}
 	if err := ensurePullDeployReady(c, t); err != nil {
+		if scheduled, scheduleErr := scheduleDeferredAgentUpdateIfWanted(state, secrets, c, t, err); scheduled {
+			return scheduleErr
+		}
 		return err
 	}
 
