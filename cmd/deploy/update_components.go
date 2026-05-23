@@ -472,6 +472,9 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	if c == nil {
 		return fmt.Errorf("VPSClient unavailable")
 	}
+	if err := ensurePullDeployReady(c, t); err != nil {
+		return err
+	}
 
 	cmdID, err := deployWithRetry(c, t.AgentNickname, t.LatestVersion)
 	if err != nil {
@@ -508,7 +511,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 			PrintWarn("мобильный агент не подтвердил команду сейчас — пометил обновление как pending до следующего wake")
 			return nil
 		}
-		return fmt.Errorf("агент не подтвердил команду за 90с (агент офлайн? long-poll залип?)")
+		return fmt.Errorf("агент не подтвердил команду за 90с%s", pullDeployNoAckHint(c, t))
 	}
 	if res.Status != "ok" {
 		return fmt.Errorf("агент вернул %s: %s", res.Status, res.Output)
@@ -550,6 +553,37 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	return fmt.Errorf("новая версия не подтверждена heartbeat'ом за 6 минут — проверь TG-топик / SSH")
 }
 
+func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
+	if c == nil || strings.EqualFold(t.Kind, "mobile") {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	agents, err := c.ListAgents(ctx)
+	if err != nil {
+		return fmt.Errorf("pull deploy preflight: не удалось проверить VPS heartbeat: %w", err)
+	}
+	return pullDeployReadinessFromAgents(agents, t, time.Now())
+}
+
+func pullDeployReadinessFromAgents(agents []RemoteAgent, t updateTarget, now time.Time) error {
+	if strings.EqualFold(t.Kind, "mobile") {
+		return nil
+	}
+	nick := strings.TrimSpace(t.AgentNickname)
+	for _, a := range agents {
+		if a.Nickname != nick {
+			continue
+		}
+		hb := formatHeartbeatStatus(a.LastSeenAt, now)
+		if strings.HasPrefix(hb, "fresh") {
+			return nil
+		}
+		return fmt.Errorf("pull deploy preflight: %s", strings.TrimPrefix(pullDeployNoAckHintFromAgents(agents, t, now), "; "))
+	}
+	return fmt.Errorf("pull deploy preflight: %s", strings.TrimPrefix(pullDeployNoAckHintFromAgents(agents, t, now), "; "))
+}
+
 func deployWithRetry(c *VPSClient, nickname, version string) (string, error) {
 	var last error
 	for attempt := 1; attempt <= 3; attempt++ {
@@ -588,6 +622,38 @@ func markPendingOnMobileAckTimeout(state *State, t updateTarget, now string) err
 	ag.PendingVersion = t.LatestVersion
 	ag.PendingSince = now
 	return nil
+}
+
+func pullDeployNoAckHint(c *VPSClient, t updateTarget) string {
+	if c == nil {
+		return " (VPSClient unavailable)"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	agents, err := c.ListAgents(ctx)
+	if err != nil {
+		return "; не удалось перечитать VPS heartbeat: " + err.Error()
+	}
+	return pullDeployNoAckHintFromAgents(agents, t, time.Now())
+}
+
+func pullDeployNoAckHintFromAgents(agents []RemoteAgent, t updateTarget, now time.Time) string {
+	nick := strings.TrimSpace(t.AgentNickname)
+	for _, a := range agents {
+		if a.Nickname != nick {
+			continue
+		}
+		hb := formatHeartbeatStatus(a.LastSeenAt, now)
+		switch {
+		case hb == "never" || strings.HasPrefix(hb, "stale"):
+			return fmt.Sprintf("; VPS heartbeat %s — агент не забирает команды, состояние похоже на token-corrupt/рассинхрон. Частая причина: на роутере старый/чужой agent token (backend пишет token-not-found). Запусти `repair-agent-token --agent %s` или [3] Роутеры → re-enroll", hb, nick)
+		case strings.HasPrefix(hb, "fresh"):
+			return fmt.Sprintf("; VPS heartbeat %s, но команда не завершилась — проверь cmdloop на агенте; если в backend journal есть token-not-found, запусти `repair-agent-token --agent %s`", hb, nick)
+		default:
+			return fmt.Sprintf("; VPS heartbeat %s — проверь agent service и `repair-agent-token --agent %s`", hb, nick)
+		}
+	}
+	return fmt.Sprintf("; агент %s не найден в /v1/wizard/agents — сначала запусти `sync-vps`, затем repair-agent-token/re-enroll при необходимости", nick)
 }
 
 // askYesNo prints `prompt [Y/n]: ` (capitalised default) and returns true
