@@ -28,6 +28,8 @@ type Config struct {
 	RecoveryThreshold int
 }
 
+const NeighborFreshWindow = 5 * time.Minute
+
 type Dispatcher struct {
 	d   *db.DB
 	tg  TGSender
@@ -183,7 +185,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 // not the load-bearing payload, and we'd rather send a slightly thinner
 // alert than no alert at all.
 func (di *Dispatcher) collectNeighbors(userID int64, excludeCheck string) []NeighborSummary {
-	rows, err := di.d.Events().LatestEventsByPrefix(userID, "tunnel_")
+	rows, err := di.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", time.Now().Add(-NeighborFreshWindow))
 	if err != nil {
 		slog.Warn("collectNeighbors: events lookup failed", "user_id", userID, "err", err)
 		return nil

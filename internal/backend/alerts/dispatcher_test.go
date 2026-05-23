@@ -447,6 +447,30 @@ func TestBuildNeighborSummaries_Empty(t *testing.T) {
 	}
 }
 
+func TestCollectNeighbors_OmitsStaleTunnelRows(t *testing.T) {
+	d := newDB(t)
+	uid, err := d.Users().Insert("vasya", "tok", "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := d.Events().Insert(uid, "tunnel_fresh", "ok", `{"tunnel_name":"fresh","interface":"nwg0"}`, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_old", "ok", `{"tunnel_name":"old","interface":"nwg1"}`, now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	disp := NewDispatcher(d, &fakeTG{}, Config{})
+	got := disp.collectNeighbors(uid, "tunnel_failed")
+	if len(got) != 1 {
+		t.Fatalf("want only fresh neighbor, got %+v", got)
+	}
+	if got[0].CheckName != "tunnel_fresh" {
+		t.Fatalf("stale neighbor leaked into alert context: %+v", got)
+	}
+}
+
 func TestEnsureTopic_SendsWelcomeOnFreshCreate(t *testing.T) {
 	d := newDB(t)
 	tok := "0000000000000000000000000000000000000000000000000000000000000000"

@@ -12,6 +12,7 @@ import (
 
 const (
 	defaultHandshakeMaxAge = 180 * time.Second
+	maxHandshakeFutureSkew = 2 * time.Minute
 	tunnelCheckPrefix      = "tunnel_"
 )
 
@@ -222,7 +223,9 @@ func tunnelFailReasons(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, maxAge time.
 	}
 	if t := tu.LastHandshake.Time(); t == nil {
 		reasons = append(reasons, "no handshake ever")
-	} else if age := time.Since(*t); age > maxAge {
+	} else if age := time.Since(*t); age < -maxHandshakeFutureSkew {
+		reasons = append(reasons, fmt.Sprintf("handshake timestamp in future (%ds)", int((-age).Seconds())))
+	} else if age > maxAge {
 		reasons = append(reasons, fmt.Sprintf("handshake stale (%ds > %ds)", int(age.Seconds()), int(maxAge.Seconds())))
 	}
 	if pc.TunnelID != "" {

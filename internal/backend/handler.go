@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	maxReportBytes = 64 * 1024
-	maxResultBytes = 1024 * 1024
-	defaultCmdWait = 30 * time.Second
-	maxCmdWait     = 60 * time.Second
+	maxReportBytes      = 64 * 1024
+	maxResultBytes      = 1024 * 1024
+	defaultCmdWait      = 30 * time.Second
+	maxCmdWait          = 60 * time.Second
+	maxReportFutureSkew = 2 * time.Minute
 )
 
 // Version is set by main.Version via SetVersion at startup so /healthz can
@@ -88,6 +89,25 @@ func normaliseDetailsJSON(details map[string]any) string {
 		return ""
 	}
 	return string(b)
+}
+
+func normaliseReportTimestamp(ts, receivedAt time.Time) time.Time {
+	now := receivedAt.UTC()
+	if ts.IsZero() {
+		return now
+	}
+	ts = ts.UTC()
+	if ts.After(now.Add(maxReportFutureSkew)) {
+		return now
+	}
+	return ts
+}
+
+func reportFreshForUser(user *db.User, ts time.Time) bool {
+	if user == nil || user.LastSeenAt == nil {
+		return true
+	}
+	return !ts.UTC().Before(user.LastSeenAt.UTC())
 }
 
 // relayParent returns the parent context for cmdResultHandler relay goroutines:
@@ -315,12 +335,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 		nick := NicknameFromContext(r.Context())
 		user, _ := d.DB.Users().GetByID(uid)
 		thresholds := thresholdsForUser(d.Thresholds, d.MobileFailThreshold, user)
+		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
+		reportIsFresh := reportFreshForUser(user, ts)
 
 		// Resumed=true means the agent self-detected a gap (mobile rejoin).
 		// Tell the watcher BEFORE running the FSM so a near-simultaneous
 		// scan-tick won't fire a spurious OFFLINE while we ingest the
 		// freshly-collected checks.
-		if rep.Resumed {
+		if rep.Resumed && reportIsFresh {
 			if d.Resumer != nil {
 				d.Resumer.MarkResumed(uid)
 			}
@@ -338,10 +360,6 @@ func reportHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
-		ts := rep.Timestamp
-		if ts.IsZero() {
-			ts = time.Now().UTC()
-		}
 
 		// Ingest всех событий + UpdateLastSeen — одной транзакцией. Раньше
 		// был N+1 без atomicity: краш или ctx.Cancel в середине цикла
@@ -357,7 +375,8 @@ func reportHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		if _, err := tx.ExecContext(r.Context(),
-			"UPDATE users SET last_seen_at = ? WHERE id = ?", ts, uid); err != nil {
+			`UPDATE users SET last_seen_at = ?
+			   WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)`, ts, uid, ts); err != nil {
 			tx.Rollback()
 			d.Logger.Warn("update last_seen", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "update last_seen")
@@ -413,6 +432,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// после rc19 fix BUG-02 — следующий report не дублирует alert.
 		for _, c := range dispatchChecks {
 			if c.Name == "agent_heartbeat" {
+				continue
+			}
+			if !reportIsFresh {
+				d.Logger.Info("skip stale user report event",
+					"nickname", nick, "check", c.Name,
+					"report_ts", ts.UTC(),
+					"req_id", RequestIDFromContext(r.Context()),
+				)
 				continue
 			}
 			latest, ok, err := d.DB.Events().LatestEvent(uid, c.Name)
@@ -488,7 +515,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// to the wizard so it can poll for the post-swap flip. The UPDATE is
 		// guarded by a value-changed predicate so the common case (steady
 		// state, same version every minute) skips the writer-mutex hit.
-		if rep.AgentVersion != "" {
+		if rep.AgentVersion != "" && reportIsFresh {
 			if err := d.DB.Users().UpdateLastSeenAgentVersion(uid, rep.AgentVersion); err != nil {
 				d.Logger.Warn("update last_deployed_version from heartbeat", "nickname", nick, "err", err)
 			}

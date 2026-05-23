@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,6 +232,41 @@ func TestTunnelsCheck_PingCheckDisabledDoesNotFailLiveTunnel(t *testing.T) {
 		}
 		if c.Status != "ok" {
 			t.Fatalf("pingcheck disabled must not fail a live tunnel: %+v", c)
+		}
+		return
+	}
+	t.Fatalf("tunnel_awg11 check not emitted; got: %+v", out)
+}
+
+func TestTunnelsCheck_FutureHandshakeDoesNotReportOK(t *testing.T) {
+	handshake := time.Now().UTC().Add(30 * time.Minute).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg11","name":"primary","type":"awg","status":"running","enabled":true,"interfaceName":"nwg1","lastHandshake":"` + handshake + `"}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	chk := TunnelsCheck{Client: awgmgr.New(srv.URL)}
+	out := chk.Run(context.Background(), Deps{})
+	for _, c := range out {
+		if c.Name != "tunnel_awg11" {
+			continue
+		}
+		if c.Status != "fail" {
+			t.Fatalf("future handshake must not be reported as OK: %+v", c)
+		}
+		if errText, _ := c.Details["error"].(string); !strings.Contains(errText, "future") {
+			t.Fatalf("future handshake failure should explain skew, details=%+v", c.Details)
 		}
 		return
 	}

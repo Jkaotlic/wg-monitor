@@ -599,6 +599,13 @@ func formatHeartbeatStatus(t *time.Time, now time.Time) string {
 	}
 	age := now.Sub(*t)
 	const freshCutoff = 5 * time.Minute
+	const futureSkewCutoff = 2 * time.Minute
+	if age < -futureSkewCutoff {
+		return fmt.Sprintf("clock-skew future %dm", int((-age).Minutes()))
+	}
+	if age < 0 {
+		age = 0
+	}
 	if age < freshCutoff {
 		if age < time.Minute {
 			return fmt.Sprintf("fresh ~%ds", int(age.Seconds()))

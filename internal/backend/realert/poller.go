@@ -138,7 +138,7 @@ func (p *Poller) neighborSummaries(userID int64, checkName string) []alerts.Neig
 	if !strings.HasPrefix(checkName, "tunnel_") {
 		return nil
 	}
-	rows, err := p.d.Events().LatestEventsByPrefix(userID, "tunnel_")
+	rows, err := p.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", p.now().Add(-alerts.NeighborFreshWindow))
 	if err != nil {
 		slog.Warn("realert: neighborSummaries events lookup failed", "user_id", userID, "err", err)
 		return nil

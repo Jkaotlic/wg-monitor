@@ -295,6 +295,23 @@ func TestPullDeployReadinessAllowsFreshStatic(t *testing.T) {
 	}
 }
 
+func TestPullDeployReadinessRejectsFutureHeartbeat(t *testing.T) {
+	now := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
+	future := now.Add(30 * time.Minute)
+
+	err := pullDeployReadinessFromAgents([]RemoteAgent{{
+		Nickname:   "testkeen",
+		LastSeenAt: &future,
+	}}, updateTarget{IsAgent: true, AgentNickname: "testkeen", Kind: "static"}, now)
+
+	if err == nil {
+		t.Fatal("future heartbeat must not be treated as fresh")
+	}
+	if strings.Contains(err.Error(), "fresh ~-") {
+		t.Fatalf("future heartbeat rendered as fresh: %q", err.Error())
+	}
+}
+
 func TestPullDeployReadinessAllowsStaleMobilePendingPath(t *testing.T) {
 	err := pullDeployReadinessFromAgents(nil, updateTarget{IsAgent: true, AgentNickname: "client-h", Kind: "mobile"}, time.Now())
 	if err != nil {

@@ -22,3 +22,18 @@ func TestMobileFleetPanelText(t *testing.T) {
 		t.Fatalf("static routers must not appear in mobile panel:\n%s", text)
 	}
 }
+
+func TestMobileFleetPanelText_FutureLastSeenIsClockSkew(t *testing.T) {
+	now := time.Date(2026, 5, 19, 10, 0, 0, 0, time.UTC)
+	future := now.Add(30 * time.Minute)
+	text := MobileFleetPanelText([]MobileFleetRow{
+		{Nickname: "client-h", Kind: "mobile", LastSeenAt: &future},
+	}, now)
+
+	if strings.Contains(text, "Ð² ÑÐµÑ‚Ð¸") {
+		t.Fatalf("future last_seen must not render as online:\n%s", text)
+	}
+	if !strings.Contains(text, "clock") {
+		t.Fatalf("future last_seen should be explicit clock skew:\n%s", text)
+	}
+}
