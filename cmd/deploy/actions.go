@@ -931,11 +931,20 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		return err
 	}
 	if ag.Arch == "" && info.GoArch != "" {
-		ag.Arch = info.GoArch
+		arch, err := normalizeKeeneticArch(info.GoArch)
+		if err != nil {
+			return err
+		}
+		ag.Arch = arch
 	}
 	if ag.Arch == "" {
 		return fmt.Errorf("AWG Manager did not report goArch; set arch in wizard.toml")
 	}
+	normalizedArch, err := normalizeKeeneticArch(ag.Arch)
+	if err != nil {
+		return err
+	}
+	ag.Arch = normalizedArch
 
 	PrintStep(3, 5, "GitHub release + bootstrap script")
 	rel, err := dl.GetLatestRelease()
@@ -1026,6 +1035,17 @@ func backendURLForAgent(state *State) string {
 		return domain
 	}
 	return "https://" + domain
+}
+
+func normalizeKeeneticArch(arch string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(arch)) {
+	case "aarch64", "arm64":
+		return "arm64", nil
+	case "mips", "mipsel", "mipsle":
+		return "mipsle", nil
+	default:
+		return "", fmt.Errorf("unsupported arch: %s (supported: aarch64/arm64, mips/mipsel/mipsle)", arch)
+	}
 }
 
 func awgmAuthForAgent(secrets *SecretStore, nickname string) (apiKey, login, password string) {
