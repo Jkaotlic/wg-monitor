@@ -278,11 +278,6 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
 			return
 		}
-		if req.SSHHost == "" || req.SSHPort == 0 || req.SSHUser == "" || req.Arch == "" {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
-				"ssh_host, ssh_port, ssh_user, arch are required")
-			return
-		}
 		err := d.DB.Users().UpdateDeployInfo(nickname, db.DeployInfo{
 			SSHHost:             req.SSHHost,
 			SSHPort:             req.SSHPort,

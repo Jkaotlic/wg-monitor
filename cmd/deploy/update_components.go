@@ -91,7 +91,24 @@ func shouldProbeReachabilityBeforeUpdate(state *State, secrets *SecretStore, t u
 	if os.Getenv("WG_NO_PULL") != "1" && canPullDeploy(state, secrets, t) {
 		return false
 	}
+	if shouldRecoverViaAWGMBeforeLocalProbe(state, t) {
+		return false
+	}
 	return true
+}
+
+func shouldRecoverViaAWGMBeforeLocalProbe(state *State, t updateTarget) bool {
+	if state == nil || !t.IsAgent {
+		return false
+	}
+	if strings.TrimSpace(t.InstalledVersion) == "" || needsBootstrapForSelfUpdateNohupBug(t) {
+		return true
+	}
+	ag := state.FindAgent(t.AgentNickname)
+	if ag == nil {
+		return false
+	}
+	return strings.TrimSpace(ag.AWGMURL) != "" || strings.EqualFold(strings.TrimSpace(ag.DeployMode), "awgm")
 }
 
 // updateTarget describes one row in the update table and is consumed by the

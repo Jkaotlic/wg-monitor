@@ -157,7 +157,8 @@ func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *Age
 		return fmt.Errorf("upload deferred awgm runner: %w", err)
 	}
 	jobPath := deferredAWGMJobDir + "/" + safeRelayName(ag.Nickname) + ".json"
-	if err := bs.UploadStdin(jobPath, cfgBytes); err != nil {
+	tmpJobPath := jobPath + ".tmp"
+	if err := bs.UploadStdin(tmpJobPath, cfgBytes); err != nil {
 		return fmt.Errorf("upload deferred awgm job: %w", err)
 	}
 	if err := bs.UploadStdin("/etc/systemd/system/wg-monitor-deferred-awgm.service", []byte(renderDeferredAWGMService())); err != nil {
@@ -167,7 +168,8 @@ func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *Age
 		return fmt.Errorf("upload deferred awgm timer: %w", err)
 	}
 	chmod := "chmod 700 " + shellSingleQuote(deferredAWGMRelayPath) + " " + shellSingleQuote(deferredAWGMRunnerPath) +
-		" && chmod 600 " + shellSingleQuote(jobPath) +
+		" && chmod 600 " + shellSingleQuote(tmpJobPath) +
+		" && mv -f " + shellSingleQuote(tmpJobPath) + " " + shellSingleQuote(jobPath) +
 		" && chmod 644 /etc/systemd/system/wg-monitor-deferred-awgm.service /etc/systemd/system/wg-monitor-deferred-awgm.timer" +
 		" && systemctl daemon-reload && systemctl enable --now wg-monitor-deferred-awgm.timer && systemctl start wg-monitor-deferred-awgm.service"
 	if _, err := bs.MustRun(chmod); err != nil {
@@ -184,6 +186,7 @@ func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *
 	}
 	PrintWarn("AWG Manager сейчас недоступен с VPS: " + shortAWGMErrorForOperator(cause))
 	PrintInfo("Можно поставить отложенный деплой: VPS будет сам проверять AWG Manager и установит агента, когда роутер проснётся.")
+	PrintInfo("Для одного router nickname хранится один job; повторная постановка обновит/заменит предыдущую.")
 	if os.Getenv("WG_YES_TO_ALL") != "1" && !Confirm("Поставить отложенный деплой на VPS?", true) {
 		return false, nil
 	}

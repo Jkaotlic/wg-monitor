@@ -411,8 +411,10 @@ func (u *UsersRepo) GetByThreadID(threadID int64) (*User, error) {
 }
 
 // DeployInfo carries the wizard-side metadata pushed via
-// PUT /v1/wizard/agents/{nickname}. All fields required; empty strings or
-// zero port are rejected by the handler before reaching here.
+// PUT /v1/wizard/agents/{nickname}. SSH identity fields are partial-update:
+// empty strings or zero port preserve existing DB values. This lets AWGM-only
+// routers sync version/pending metadata even when direct SSH coordinates are
+// unknown or intentionally unused.
 type DeployInfo struct {
 	SSHHost             string
 	SSHPort             int64
@@ -434,8 +436,16 @@ type DeployInfo struct {
 // enrollment goes through the existing wg-monitor-cli add-user path).
 func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	res, err := u.d.db.Exec(
-		`UPDATE users SET ssh_host=?, ssh_port=?, ssh_user=?, arch=?, last_deployed_version=?, deploy_ring=?, pending_version=?, pending_since=?, last_deploy=?, deploy_mode=?, awgm_url=?, awgm_auth=?, expected_mac=? WHERE nickname=?`,
-		info.SSHHost, info.SSHPort, info.SSHUser, info.Arch, info.LastDeployedVersion,
+		`UPDATE users SET
+		    ssh_host=CASE WHEN ? = '' THEN ssh_host ELSE ? END,
+		    ssh_port=CASE WHEN ? = 0 THEN ssh_port ELSE ? END,
+		    ssh_user=CASE WHEN ? = '' THEN ssh_user ELSE ? END,
+		    arch=CASE WHEN ? = '' THEN arch ELSE ? END,
+		    last_deployed_version=?, deploy_ring=?, pending_version=?, pending_since=?,
+		    last_deploy=?, deploy_mode=?, awgm_url=?, awgm_auth=?, expected_mac=?
+		  WHERE nickname=?`,
+		info.SSHHost, info.SSHHost, info.SSHPort, info.SSHPort,
+		info.SSHUser, info.SSHUser, info.Arch, info.Arch, info.LastDeployedVersion,
 		nullEmpty(info.Ring), nullEmpty(info.PendingVersion), nullEmpty(info.PendingSince),
 		nullEmpty(info.LastDeploy), nullEmpty(info.DeployMode), nullEmpty(info.AWGMURL),
 		nullEmpty(info.AWGMAuth), nullEmpty(info.ExpectedMAC), nickname,

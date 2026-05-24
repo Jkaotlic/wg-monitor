@@ -81,6 +81,28 @@ func TestShouldProbeReachabilityBeforeUpdate_ProbesAgentWhenPullUnavailable(t *t
 	}
 }
 
+func TestShouldProbeReachabilityBeforeUpdate_SkipsAWGMBootstrapCandidate(t *testing.T) {
+	state := &State{
+		Backend: BackendState{Domain: "wg.example.test"},
+		Agents: []AgentState{{
+			Nickname: "caredns-oldcar",
+			AWGMURL:  "https://awg.caredns.example",
+		}},
+	}
+	secrets := &SecretStore{disk: map[string]string{}}
+	target := updateTarget{
+		IsAgent:       true,
+		AgentNickname: "caredns-oldcar",
+		Host:          "",
+		Port:          222,
+		LatestVersion: "v0.13.0-rc40",
+	}
+
+	if shouldProbeReachabilityBeforeUpdate(state, secrets, target) {
+		t.Fatal("AWG Manager bootstrap candidates must not fail on local :222 TCP preflight")
+	}
+}
+
 func TestShouldProbeReachabilityBeforeUpdate_SkipsBackend(t *testing.T) {
 	target := updateTarget{IsAgent: false, Host: "203.0.113.10", Port: 22}
 	if shouldProbeReachabilityBeforeUpdate(&State{}, &SecretStore{}, target) {
