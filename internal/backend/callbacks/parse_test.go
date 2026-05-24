@@ -641,6 +641,18 @@ func TestParse_PanelHelpDoctor(t *testing.T) {
 	}
 }
 
+func TestParse_PanelHelpOperatorAndPremium(t *testing.T) {
+	for _, screen := range []string{"operator", "premium", "alerts", "fleet", "mobile"} {
+		a, err := Parse("panel:0:help:" + screen)
+		if err != nil {
+			t.Fatalf("%s: unexpected: %v", screen, err)
+		}
+		if a.PanelScreen != "help" || a.PanelKind != screen {
+			t.Errorf("%s: got %+v", screen, a)
+		}
+	}
+}
+
 func TestParse_DiagBack(t *testing.T) {
 	a, err := Parse("diag_back:42:_panel_:abcd1234")
 	if err != nil {

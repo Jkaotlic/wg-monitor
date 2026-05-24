@@ -6,7 +6,10 @@ import (
 )
 
 func TestHelpForScreen_KnownScreens(t *testing.T) {
-	for _, screen := range []string{"maint", "routes", "tunnels", "access", "diag", "status", "doctor"} {
+	for _, screen := range []string{
+		"operator", "alerts", "fleet", "premium", "mobile",
+		"maint", "routes", "tunnels", "access", "diag", "status", "doctor", "pingcheck",
+	} {
 		body := HelpForScreen(screen)
 		if body == "" {
 			t.Errorf("screen %q: empty help body", screen)
@@ -38,6 +41,24 @@ func TestHelpForScreen_Doctor(t *testing.T) {
 	for _, want := range []string{"ничего не меняет", "awg-manager", "PingCheck"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in help body", want)
+		}
+	}
+}
+
+func TestHelpForScreen_OperatorOverview(t *testing.T) {
+	got := HelpForScreen("operator")
+	for _, want := range []string{"Operator", "queue", "Premium", "self_update", "help:premium"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in operator help body:\n%s", want, got)
+		}
+	}
+}
+
+func TestHelpForScreen_Premium(t *testing.T) {
+	got := HelpForScreen("premium")
+	for _, want := range []string{"Amnezia Premium", "HideMy.name", ".conf", "AmneziaWG 2.0", "secret"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in premium help body:\n%s", want, got)
 		}
 	}
 }

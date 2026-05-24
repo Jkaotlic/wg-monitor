@@ -60,7 +60,7 @@ func hideMyCodeListView(user *db.User, codes hideMyCodes) (string, tg.InlineKeyb
 	text := "HideMy.name - " + user.Nickname + "\n\n"
 	if len(codes.Codes) == 0 {
 		text += "Кодов пока нет.\n\nПришли сюда цифровой HideMy.name access code: я проверю его, сохраню за этим топиком и удалю сообщение с кодом."
-		return text, tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+		return text, tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{premiumHelpRow()}}
 	}
 	text += fmt.Sprintf("Сохранено кодов: %d\nПришли ещё один цифровой код, чтобы добавить его в этот топик.", len(codes.Codes))
 	rows := make([][]tg.InlineKeyboardButton, 0, len(codes.Codes)+1)
@@ -81,6 +81,7 @@ func hideMyCodeListView(user *db.User, codes hideMyCodes) (string, tg.InlineKeyb
 		Text:         "Обновить список",
 		CallbackData: fmt.Sprintf("hmn_refresh:%d:_panel_", user.ID),
 	}})
+	rows = append(rows, premiumHelpRow())
 	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -140,6 +141,7 @@ func (r *Router) hideMyServerListView(ctx context.Context, user *db.User, codeID
 		{Text: "К списку кодов", CallbackData: fmt.Sprintf("hmn_refresh:%d:_panel_", user.ID)},
 		{Text: "Удалить код", CallbackData: fmt.Sprintf("hmn_delete:%d:_panel_:%s", user.ID, stored.ID)},
 	})
+	rows = append(rows, premiumHelpRow())
 	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}, nil
 }
 

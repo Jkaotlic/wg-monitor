@@ -54,6 +54,9 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 				{Text: "👥 Доступ", CallbackData: "access:0:home"},
 			},
 			{
+				{Text: "ℹ Помощь оператору", CallbackData: "panel:0:help:operator"},
+			},
+			{
 				{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
 			},
 		},
