@@ -182,7 +182,7 @@ func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *
 	if !shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) || !isAWGMTransientUnavailable(cause) {
 		return false, nil
 	}
-	PrintWarn("AWG Manager сейчас недоступен с VPS: " + cause.Error())
+	PrintWarn("AWG Manager сейчас недоступен с VPS: " + shortAWGMErrorForOperator(cause))
 	PrintInfo("Можно поставить отложенный деплой: VPS будет сам проверять AWG Manager и установит агента, когда роутер проснётся.")
 	if os.Getenv("WG_YES_TO_ALL") != "1" && !Confirm("Поставить отложенный деплой на VPS?", true) {
 		return false, nil
@@ -216,6 +216,12 @@ func isAWGMTransientUnavailable(err error) bool {
 		return false
 	}
 	for _, needle := range []string{
+		"http 502",
+		"http 503",
+		"http 504",
+		"bad gateway",
+		"service unavailable",
+		"gateway timeout",
 		"timeout",
 		"deadline exceeded",
 		"connection refused",

@@ -65,3 +65,11 @@ func TestChooseAWGMFailureActionAllowsDeferredDeploy(t *testing.T) {
 		t.Fatalf("action=%q, want defer", got)
 	}
 }
+
+func TestShortAWGMErrorForOperatorTruncatesHTML(t *testing.T) {
+	err := fmt.Errorf("awgm POST /api/auth/login: HTTP 503: <!DOCTYPE html><html><body><noscript>503</noscript></body></html>")
+	got := shortAWGMErrorForOperator(err)
+	if got != "awgm POST /api/auth/login: HTTP 503" {
+		t.Fatalf("short error=%q", got)
+	}
+}
