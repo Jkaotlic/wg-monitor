@@ -170,14 +170,9 @@ func TestWizardPut_204Updates(t *testing.T) {
 	}
 }
 
-// Locks in the contract that wizard MUST satisfy: any of ssh_host/ssh_port/
-// ssh_user/arch missing → 400. Real-world trigger: client-a/client-i entered
-// wizard.toml via [5] VPS Sync with ssh_user="" (remote DB had NULL), the
-// update flow connected via userOrDefault("root") but never wrote that
-// back to ag.User, so post-deploy push sent ssh_user="" → 400. The wizard
-// fix backfills ag.User/ag.Port after a successful SSH; this guard ensures
-// the backend's rejection contract doesn't drift.
-func TestWizardPut_400OnEmptyRequiredFields(t *testing.T) {
+// Version and pending metadata must sync even when an AWGM-only router has no
+// usable direct SSH coordinates in wizard.toml.
+func TestWizardPut_204AllowsVersionSyncWithMissingSSHFields(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
 	if err != nil {
@@ -187,27 +182,34 @@ func TestWizardPut_400OnEmptyRequiredFields(t *testing.T) {
 	if _, err := d.Users().Insert("client-a", "tok", "1.2.3.4", "awg0"); err != nil {
 		t.Fatal(err)
 	}
-	cases := []struct {
-		name string
-		body string
-	}{
-		{"empty ssh_user", `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"","arch":"arm64"}`},
-		{"empty ssh_host", `{"ssh_host":"","ssh_port":222,"ssh_user":"root","arch":"arm64"}`},
-		{"zero ssh_port", `{"ssh_host":"10.0.0.1","ssh_port":0,"ssh_user":"root","arch":"arm64"}`},
-		{"empty arch", `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":""}`},
+	if err := d.Users().UpdateDeployInfo("client-a", db.DeployInfo{
+		SSHHost: "10.0.0.1",
+		SSHPort: 222,
+		SSHUser: "root",
+		Arch:    "arm64",
+	}); err != nil {
+		t.Fatal(err)
 	}
 	h := wizardPutAgentHandler(Deps{DB: d})
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			req := httptest.NewRequest("PUT", "/v1/wizard/agents/client-a", strings.NewReader(c.body))
-			req.Header.Set("Content-Type", "application/json")
-			req.SetPathValue("nickname", "client-a")
-			rec := httptest.NewRecorder()
-			h(rec, req)
-			if rec.Code != http.StatusBadRequest {
-				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
-			}
-		})
+	body := `{"ssh_host":"","ssh_port":0,"ssh_user":"","arch":"","last_deployed_version":"v0.13.0-rc40","pending_version":"","pending_since":"","last_deploy":"2026-05-24T12:40:00Z"}`
+	req := httptest.NewRequest("PUT", "/v1/wizard/agents/client-a", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "client-a")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("client-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.LastDeployedVersion == nil || *u.LastDeployedVersion != "v0.13.0-rc40" {
+		t.Fatalf("version metadata not updated: %+v", u)
+	}
+	if u.SSHHost == nil || *u.SSHHost != "10.0.0.1" || u.SSHPort == nil || *u.SSHPort != 222 ||
+		u.SSHUser == nil || *u.SSHUser != "root" || u.Arch == nil || *u.Arch != "arm64" {
+		t.Fatalf("missing SSH fields should preserve existing deploy identity: %+v", u)
 	}
 }
 

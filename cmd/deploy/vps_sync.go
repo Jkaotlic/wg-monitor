@@ -169,12 +169,12 @@ func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 		return err
 	}
 	path := "/v1/wizard/agents/" + url.PathEscape(a.Nickname)
-	status, _, err := c.doWizardAPI(ctx, http.MethodPut, path, body, "application/json", 0)
+	status, raw, err := c.doWizardAPI(ctx, http.MethodPut, path, body, "application/json", 0)
 	if err != nil {
 		return err
 	}
 	if status != http.StatusNoContent {
-		return fmt.Errorf("PUT /v1/wizard/agents/%s: HTTP %d", a.Nickname, status)
+		return fmt.Errorf("PUT /v1/wizard/agents/%s: HTTP %d: %s", a.Nickname, status, trimWizardBody(raw))
 	}
 	return nil
 }

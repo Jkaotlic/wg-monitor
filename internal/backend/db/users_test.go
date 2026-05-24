@@ -376,3 +376,43 @@ func TestUpdateDeployInfoRoundTripsPortableWizardMetadata(t *testing.T) {
 		t.Fatalf("portable wizard metadata did not round-trip: %+v", got)
 	}
 }
+
+func TestUpdateDeployInfoPreservesDeployIdentityWhenMissing(t *testing.T) {
+	d := newTestDB(t)
+	if _, err := d.Users().Insert("client-b", "tok", "1.1.1.1", "awg11"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateDeployInfo("client-b", DeployInfo{
+		SSHHost:             "192.168.1.1",
+		SSHPort:             222,
+		SSHUser:             "root",
+		Arch:                "arm64",
+		LastDeployedVersion: "v0.13.0-rc39",
+		PendingVersion:      "v0.13.0-rc40",
+		PendingSince:        "2026-05-24T12:30:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.Users().UpdateDeployInfo("client-b", DeployInfo{
+		LastDeployedVersion: "v0.13.0-rc40",
+		LastDeploy:          "2026-05-24T12:40:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByNickname("client-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SSHHost == nil || *got.SSHHost != "192.168.1.1" || got.SSHPort == nil || *got.SSHPort != 222 ||
+		got.SSHUser == nil || *got.SSHUser != "root" || got.Arch == nil || *got.Arch != "arm64" {
+		t.Fatalf("deploy identity not preserved: %+v", got)
+	}
+	if got.LastDeployedVersion == nil || *got.LastDeployedVersion != "v0.13.0-rc40" {
+		t.Fatalf("last_deployed_version not updated: %+v", got)
+	}
+	if got.PendingVersion != nil || got.PendingSince != nil {
+		t.Fatalf("empty pending fields should clear pending deploy: %+v", got)
+	}
+}
