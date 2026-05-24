@@ -98,8 +98,9 @@ The wizard compares `wizard.toml`, backend `/healthz`, and the latest GitHub rel
 ## Doctor And Sync
 
 - `[5] Doctor` checks local state, VPS reachability, backend health, and known agents.
-- `[6] Sync from VPS` refreshes local `wizard.toml` from backend state.
+- `[6] Sync from VPS` refreshes local `wizard.toml` from backend state, including portable non-secret agent metadata: SSH deploy coordinates, arch, versions, rollout/pending state, last deploy time, deploy mode, AWG Manager URL/auth mode, and `expected_mac`.
 - Startup sync is best-effort and quiet for normal offline/timeouts; only auth problems are shown loudly.
+- Sync deliberately does not copy passwords, AWG Manager API keys, raw agent tokens, SSH private-key paths, or `preferred_iface`; those remain local or backup/recovery-only.
 
 ## Local Files
 

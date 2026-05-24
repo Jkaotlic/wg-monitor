@@ -12,7 +12,7 @@ The current deploy path does **not** require the operator to join every router n
 
 ## Current Release
 
-- Latest RC used by the wizard flow: `v0.13.0-rc25`
+- Latest RC used by the wizard flow: `v0.13.0-rc36`
 - GitHub releases: <https://github.com/Jkaotlic/wg-monitor/releases>
 - Windows wizard asset: `wg-monitor-deploy-windows-amd64.exe`
 
@@ -61,6 +61,8 @@ Useful secret names:
 ```
 
 The menu header shows every known component with `installed <version> at <time>` so stale local state is visible before you touch anything.
+
+`[6] Sync from VPS` restores the portable, non-secret router metadata needed on another operator PC: SSH deploy coordinates, architecture, versions, rollout/pending state, last deploy time, AWG Manager URL/auth mode, deploy mode, and router `expected_mac`. Machine-local interface cache and secrets stay local.
 
 ## Build And Test
 

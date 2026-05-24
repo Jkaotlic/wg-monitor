@@ -14,7 +14,7 @@ import (
 func TestMergeAgents_EmptyLocal_AllAdded(t *testing.T) {
 	local := []AgentState{}
 	remote := []RemoteAgent{{Nickname: "client-a", SSHHost: "10.0.0.1", SSHPort: 222, SSHUser: "root", Arch: "mips", LastDeployedVersion: "v0.10.3"}}
-	merged, added, _ := MergeAgents(local, remote)
+	merged, added, _, _ := MergeAgents(local, remote)
 	if len(merged) != 1 || merged[0].Nickname != "client-a" || merged[0].Host != "10.0.0.1" {
 		t.Fatalf("merged: %+v", merged)
 	}
@@ -26,7 +26,7 @@ func TestMergeAgents_EmptyLocal_AllAdded(t *testing.T) {
 func TestMergeAgents_RemoteOverridesLocal(t *testing.T) {
 	local := []AgentState{{Nickname: "client-a", Host: "old", Port: 22, User: "root", Arch: "mips", LastDeployedVersion: "v0.9"}}
 	remote := []RemoteAgent{{Nickname: "client-a", SSHHost: "new", SSHPort: 222, SSHUser: "root", Arch: "mips", LastDeployedVersion: "v0.10.3", Ring: "canary", PendingVersion: "v0.11.0", PendingSince: "2026-05-19T10:00:00Z"}}
-	merged, added, divergent := MergeAgents(local, remote)
+	merged, added, divergent, _ := MergeAgents(local, remote)
 	if len(merged) != 1 || merged[0].Host != "new" || merged[0].Port != 222 || merged[0].LastDeployedVersion != "v0.10.3" {
 		t.Fatalf("merged: %+v", merged)
 	}
@@ -53,7 +53,7 @@ func TestMergeAgents_RemoteClearsPendingState(t *testing.T) {
 		LastDeployedVersion: "v0.14.0-rc1",
 	}}
 
-	merged, _, _ := MergeAgents(local, remote)
+	merged, _, _, _ := MergeAgents(local, remote)
 	if merged[0].PendingVersion != "" || merged[0].PendingSince != "" {
 		t.Fatalf("remote empty pending must clear stale local pending: %+v", merged[0])
 	}
@@ -64,7 +64,7 @@ func TestMergeAgents_RemoteNullPreservesLocalSSH(t *testing.T) {
 	// because remote NULLs are "unknown" not "delete".
 	local := []AgentState{{Nickname: "client-a", Host: "192.168.1.1", Port: 222, User: "root", Arch: "mips", LastDeployedVersion: "v0.10.3"}}
 	remote := []RemoteAgent{{Nickname: "client-a"}} // all empty
-	merged, _, _ := MergeAgents(local, remote)
+	merged, _, _, _ := MergeAgents(local, remote)
 	if merged[0].Host != "192.168.1.1" || merged[0].Port != 222 {
 		t.Fatalf("local SSH lost: %+v", merged[0])
 	}
@@ -73,9 +73,51 @@ func TestMergeAgents_RemoteNullPreservesLocalSSH(t *testing.T) {
 func TestMergeAgents_LocalOnlyKept(t *testing.T) {
 	local := []AgentState{{Nickname: "ghost", Host: "1.1.1.1", Port: 22, User: "root", Arch: "mips"}}
 	remote := []RemoteAgent{}
-	merged, _, _ := MergeAgents(local, remote)
+	merged, _, _, _ := MergeAgents(local, remote)
 	if len(merged) != 1 || merged[0].Nickname != "ghost" {
 		t.Fatalf("local-only dropped: %+v", merged)
+	}
+}
+
+func TestMergeAgents_PullsPortableAWGMMetadata(t *testing.T) {
+	local := []AgentState{{
+		Nickname:       "client-a",
+		PreferredIface: "SSTP client-a",
+	}}
+	remote := []RemoteAgent{{
+		Nickname:    "client-a",
+		LastDeploy:  "2026-05-24T10:20:30Z",
+		DeployMode:  "awgm",
+		AWGMURL:     "https://client-a.keenetic.example",
+		AWGMAuth:    "api-key",
+		ExpectedMAC: "aabbccddeeff",
+	}}
+
+	merged, _, _, macConflicts := MergeAgents(local, remote)
+	got := merged[0]
+	if got.LastDeploy != "2026-05-24T10:20:30Z" || got.DeployMode != "awgm" ||
+		got.AWGMURL != "https://client-a.keenetic.example" || got.AWGMAuth != "api-key" ||
+		got.ExpectedMAC != "aabbccddeeff" {
+		t.Fatalf("portable metadata not merged: %+v", got)
+	}
+	if got.PreferredIface != "SSTP client-a" {
+		t.Fatalf("machine-local preferred_iface must be preserved locally: %+v", got)
+	}
+	if len(macConflicts) != 0 {
+		t.Fatalf("unexpected mac conflicts: %v", macConflicts)
+	}
+}
+
+func TestMergeAgents_PreservesLocalExpectedMACOnRemoteConflict(t *testing.T) {
+	local := []AgentState{{Nickname: "client-a", ExpectedMAC: "111111111111"}}
+	remote := []RemoteAgent{{Nickname: "client-a", ExpectedMAC: "222222222222"}}
+
+	merged, _, _, macConflicts := MergeAgents(local, remote)
+	if merged[0].ExpectedMAC != "111111111111" {
+		t.Fatalf("local expected_mac overwritten: %+v", merged[0])
+	}
+	if !reflect.DeepEqual(macConflicts, []string{"client-a"}) {
+		t.Fatalf("mac conflicts=%v, want client-a", macConflicts)
 	}
 }
 

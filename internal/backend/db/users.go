@@ -45,6 +45,11 @@ type User struct {
 	Ring                *string
 	PendingVersion      *string
 	PendingSince        *string
+	LastDeploy          *string
+	DeployMode          *string
+	AWGMURL             *string
+	AWGMAuth            *string
+	ExpectedMAC         *string
 }
 
 // IsMobile reports whether this user is a mobile (4G in-vehicle) router.
@@ -114,7 +119,7 @@ ON CONFLICT(nickname) DO UPDATE SET
 
 // userColsFull lists every column read by single-row Get*. GetAll uses a
 // shorter projection (no token_hash, no created_at) and has its own scanner.
-const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since`
+const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac`
 
 type userScanner interface {
 	Scan(dest ...any) error
@@ -133,10 +138,16 @@ func scanUserFull(s userScanner) (*User, error) {
 	var ring sql.NullString
 	var pendingVersion sql.NullString
 	var pendingSince sql.NullString
+	var lastDeploy sql.NullString
+	var deployMode sql.NullString
+	var awgmURL sql.NullString
+	var awgmAuth sql.NullString
+	var expectedMAC sql.NullString
 	if err := s.Scan(
 		&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
 		&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
 		&sshHost, &sshPort, &sshUser, &arch, &lastDepVer, &ring, &pendingVersion, &pendingSince,
+		&lastDeploy, &deployMode, &awgmURL, &awgmAuth, &expectedMAC,
 	); err != nil {
 		return nil, err
 	}
@@ -184,6 +195,26 @@ func scanUserFull(s userScanner) (*User, error) {
 		v := pendingSince.String
 		got.PendingSince = &v
 	}
+	if lastDeploy.Valid {
+		v := lastDeploy.String
+		got.LastDeploy = &v
+	}
+	if deployMode.Valid {
+		v := deployMode.String
+		got.DeployMode = &v
+	}
+	if awgmURL.Valid {
+		v := awgmURL.String
+		got.AWGMURL = &v
+	}
+	if awgmAuth.Valid {
+		v := awgmAuth.String
+		got.AWGMAuth = &v
+	}
+	if expectedMAC.Valid {
+		v := expectedMAC.String
+		got.ExpectedMAC = &v
+	}
 	return &got, nil
 }
 
@@ -230,7 +261,7 @@ func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 
 func (u *UsersRepo) GetAll() ([]User, error) {
 	rows, err := u.d.db.Query(
-		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since FROM users ORDER BY id`,
+		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, err
@@ -250,10 +281,16 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		var ring sql.NullString
 		var pendingVersion sql.NullString
 		var pendingSince sql.NullString
+		var lastDeploy sql.NullString
+		var deployMode sql.NullString
+		var awgmURL sql.NullString
+		var awgmAuth sql.NullString
+		var expectedMAC sql.NullString
 		if err := rows.Scan(
 			&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
 			&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
 			&sshHost, &sshPort, &sshUser, &arch, &lastDepVer, &ring, &pendingVersion, &pendingSince,
+			&lastDeploy, &deployMode, &awgmURL, &awgmAuth, &expectedMAC,
 		); err != nil {
 			return nil, err
 		}
@@ -300,6 +337,26 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		if pendingSince.Valid {
 			v := pendingSince.String
 			got.PendingSince = &v
+		}
+		if lastDeploy.Valid {
+			v := lastDeploy.String
+			got.LastDeploy = &v
+		}
+		if deployMode.Valid {
+			v := deployMode.String
+			got.DeployMode = &v
+		}
+		if awgmURL.Valid {
+			v := awgmURL.String
+			got.AWGMURL = &v
+		}
+		if awgmAuth.Valid {
+			v := awgmAuth.String
+			got.AWGMAuth = &v
+		}
+		if expectedMAC.Valid {
+			v := expectedMAC.String
+			got.ExpectedMAC = &v
 		}
 		out = append(out, got)
 	}
@@ -365,6 +422,11 @@ type DeployInfo struct {
 	Ring                string
 	PendingVersion      string
 	PendingSince        string
+	LastDeploy          string
+	DeployMode          string
+	AWGMURL             string
+	AWGMAuth            string
+	ExpectedMAC         string
 }
 
 // UpdateDeployInfo upserts the wizard-side deploy fields by nickname. Returns
@@ -372,9 +434,11 @@ type DeployInfo struct {
 // enrollment goes through the existing wg-monitor-cli add-user path).
 func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	res, err := u.d.db.Exec(
-		`UPDATE users SET ssh_host=?, ssh_port=?, ssh_user=?, arch=?, last_deployed_version=?, deploy_ring=?, pending_version=?, pending_since=? WHERE nickname=?`,
+		`UPDATE users SET ssh_host=?, ssh_port=?, ssh_user=?, arch=?, last_deployed_version=?, deploy_ring=?, pending_version=?, pending_since=?, last_deploy=?, deploy_mode=?, awgm_url=?, awgm_auth=?, expected_mac=? WHERE nickname=?`,
 		info.SSHHost, info.SSHPort, info.SSHUser, info.Arch, info.LastDeployedVersion,
-		nullEmpty(info.Ring), nullEmpty(info.PendingVersion), nullEmpty(info.PendingSince), nickname,
+		nullEmpty(info.Ring), nullEmpty(info.PendingVersion), nullEmpty(info.PendingSince),
+		nullEmpty(info.LastDeploy), nullEmpty(info.DeployMode), nullEmpty(info.AWGMURL),
+		nullEmpty(info.AWGMAuth), nullEmpty(info.ExpectedMAC), nickname,
 	)
 	if err != nil {
 		return fmt.Errorf("users.UpdateDeployInfo: %w", err)

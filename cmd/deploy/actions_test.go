@@ -298,6 +298,11 @@ func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T)
 		Kind:                "mobile",
 		Ring:                "canary",
 		LastDeployedVersion: "v0.12.0-rc6",
+		LastDeploy:          "2026-05-24T10:20:30Z",
+		DeployMode:          "awgm",
+		AWGMURL:             "https://testkeen.keenetic.pro",
+		AWGMAuth:            "api-key",
+		ExpectedMAC:         "aabbccddeeff",
 	}
 	got := buildMigrateUserUpsertSQL(ag, strings.Repeat("a", 64))
 	for _, want := range []string{
@@ -311,8 +316,14 @@ func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T)
 		"'mipsle'",
 		"'v0.12.0-rc6'",
 		"'canary'",
+		"'2026-05-24T10:20:30Z'",
+		"'awgm'",
+		"'https://testkeen.keenetic.pro'",
+		"'api-key'",
+		"'aabbccddeeff'",
 		"ON CONFLICT(nickname) DO UPDATE SET",
 		"token_hash=excluded.token_hash",
+		"expected_mac=excluded.expected_mac",
 		"SELECT changes();",
 	} {
 		if !strings.Contains(got, want) {
