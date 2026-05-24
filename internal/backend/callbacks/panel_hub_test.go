@@ -37,7 +37,7 @@ func TestPanelHome_RendersHubMessage(t *testing.T) {
 		t.Fatalf("markup not InlineKeyboardMarkup: %T", got.markup)
 	}
 	flatCallbacks := flattenKbCallbacks(kb)
-	for _, want := range []string{"panel:0:audit_all", "panel:0:update_all_confirm", "panel:0:kind:status", "panel:0:kind:doctor", "panel:0:kind:tunnels", "panel:0:kind:routes", "panel:0:kind:pingcheck", "panel:0:kind:maint", "panel:0:doctor_all", "panel:0:awaken_confirm", "panel:0:close"} {
+	for _, want := range []string{"panel:0:audit_all", "panel:0:update_all_confirm", "panel:0:kind:status", "panel:0:kind:doctor", "panel:0:kind:tunnels", "panel:0:kind:routes", "panel:0:kind:pingcheck", "panel:0:kind:maint", "panel:0:doctor_all", "panel:0:awaken_confirm", "panel:0:help:operator", "panel:0:close"} {
 		if !containsStr(flatCallbacks, want) {
 			t.Errorf("hub kb missing callback %q (have %v)", want, flatCallbacks)
 		}
@@ -245,6 +245,20 @@ func TestPanelCallback_NonAdminRejected(t *testing.T) {
 	}
 }
 
+func TestPanelHelp_NonAdminAllowed(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	q := &tg.CallbackQuery{ID: "cb-panel-help", From: tg.User{ID: 200}, Data: "panel:0:help:premium", Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 77}}
+	r.HandleCallback(context.Background(), q)
+	if len(f.edits) != 1 {
+		t.Fatalf("non-admin help should render, edits=%v answers=%v", f.edits, f.answers)
+	}
+	if !strings.Contains(f.edits[0], "HideMy.name") {
+		t.Fatalf("premium help body not rendered: %s", f.edits[0])
+	}
+}
+
 func TestPanelDoctorAll_EnqueuesAggregateBatch(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 101); err != nil {
@@ -413,5 +427,19 @@ func TestPanelHub_HelpScreen_EditsBody(t *testing.T) {
 	}
 	if !strings.Contains(f.edits[0], "hrneo") {
 		t.Errorf("maint help body should mention hrneo:\n%s", f.edits[0])
+	}
+}
+
+func TestPanelHub_OperatorHelpScreen_EditsBody(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	q := &tg.CallbackQuery{ID: "cbk", From: tg.User{ID: 12345}, Message: tg.Message{MessageID: 1, Chat: tg.Chat{ID: -100}}, Data: "panel:0:help:operator"}
+	r.HandleCallback(context.Background(), q)
+	if len(f.edits) != 1 {
+		t.Fatalf("want 1 edit, got %d", len(f.edits))
+	}
+	if !strings.Contains(f.edits[0], "Operator") || !strings.Contains(f.edits[0], "Premium") {
+		t.Errorf("operator help body should be the full operator guide:\n%s", f.edits[0])
 	}
 }

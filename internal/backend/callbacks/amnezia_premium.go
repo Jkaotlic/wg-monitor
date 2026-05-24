@@ -18,6 +18,13 @@ import (
 
 const amneziaCountryPageSize = 10
 
+func premiumHelpRow() []tg.InlineKeyboardButton {
+	return []tg.InlineKeyboardButton{{
+		Text:         "ℹ Помощь",
+		CallbackData: "panel:0:help:premium",
+	}}
+}
+
 func (r *Router) handleAmneziaKeyMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
 	key := strings.TrimSpace(m.Text)
 	if !strings.HasPrefix(key, "vpn://") {
@@ -81,7 +88,7 @@ func amneziaKeyListView(user *db.User, keys amneziaRouterKeys) (string, tg.Inlin
 	text := "Amnezia Premium - " + user.Nickname + "\n\n"
 	if len(keys.Keys) == 0 {
 		text += "Ключей пока нет.\n\nПришли сюда vpn:// ключ Amnezia Premium: я проверю его, сохраню за этим топиком и удалю сообщение с ключом."
-		return text, tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+		return text, tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{premiumHelpRow()}}
 	}
 	text += fmt.Sprintf("Сохранено ключей: %d\nОткрой ключ, затем нажми \"Выгрузить .conf\" и выбери страну. Пришли ещё один vpn:// ключ, чтобы добавить его в этот топик.", len(keys.Keys))
 	rows := make([][]tg.InlineKeyboardButton, 0, len(keys.Keys)+1)
@@ -102,6 +109,7 @@ func amneziaKeyListView(user *db.User, keys amneziaRouterKeys) (string, tg.Inlin
 		Text:         "Обновить список",
 		CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", user.ID),
 	}})
+	rows = append(rows, premiumHelpRow())
 	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -120,6 +128,7 @@ func amneziaKeyboard(userID int64, keyID string, info *amnezia.AccountInfo) tg.I
 		Text:         "Удалить ключ",
 		CallbackData: fmt.Sprintf("amz_delete:%d:_panel_:%s", userID, keyID),
 	}})
+	rows = append(rows, premiumHelpRow())
 	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
@@ -172,6 +181,7 @@ func amneziaCountriesView(user *db.User, stored amneziaStoredKey, info *amnezia.
 		Text:         "К кабинету",
 		CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_:%s", user.ID, stored.ID),
 	}})
+	rows = append(rows, premiumHelpRow())
 	text := fmt.Sprintf("Amnezia Premium - %s / %s\n\nВыбери страну для .conf. Пометка \"есть\" значит country config уже выпускался и будет выгружен повторно.\nСтраница: %d/%d", user.Nickname, stored.Label, page+1, pages)
 	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }

@@ -384,6 +384,7 @@ func Parse(data string) (Args, error) {
 				return Args{}, fmt.Errorf("panel help requires screen: %q", data)
 			}
 			validHelpScreens := map[string]bool{
+				"operator": true, "alerts": true, "fleet": true, "premium": true, "mobile": true,
 				"maint": true, "routes": true, "tunnels": true,
 				"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
 			}

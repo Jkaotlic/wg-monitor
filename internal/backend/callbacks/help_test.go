@@ -19,7 +19,7 @@ func TestHelp_AdminGetsFullBody(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	body := f.sentMsgs[0]
-	for _, want := range []string{"Алерты", "Кнопки в топике", "Админ-команды", "/panel"} {
+	for _, want := range []string{"Алерты", "Кнопки в топике", "Админ-команды", "/panel", "Amnezia Premium", "HideMy.name", ".conf"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("admin /help missing %q in body:\n%s", want, body)
 		}
@@ -44,11 +44,13 @@ func TestHelp_OperatorGetsOperatorBody(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	body := f.sentMsgs[0]
-	if strings.Contains(body, "/panel") || strings.Contains(body, "Админ-команды") {
+	if strings.Contains(body, "/panel —") || strings.Contains(body, "Админ-команды") {
 		t.Errorf("operator help must NOT include admin section:\n%s", body)
 	}
-	if !strings.Contains(body, "Кнопки в топике") {
-		t.Errorf("operator help must include 'Кнопки в топике':\n%s", body)
+	for _, want := range []string{"Кнопки в топике", "очередь", "Amnezia Premium", "HideMy.name"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("operator help missing %q:\n%s", want, body)
+		}
 	}
 }
 
