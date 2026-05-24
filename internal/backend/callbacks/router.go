@@ -48,6 +48,8 @@ type Config struct {
 	UI                 UIConfigSnapshot
 	AmneziaBaseURL     string
 	AmneziaSecretsPath string
+	HideMyBaseURL      string
+	HideMySecretsPath  string
 }
 
 // UIConfigSnapshot mirrors backend.UIConfig (avoid an import cycle).
@@ -358,11 +360,41 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "amz_refresh":
 		r.handleAmneziaRefresh(ctx, q, args)
 		return
+	case "amz_open":
+		r.handleAmneziaOpen(ctx, q, args)
+		return
+	case "amz_delete":
+		r.handleAmneziaDeleteAsk(ctx, q, args)
+		return
+	case "amz_delete_confirm":
+		r.handleAmneziaDeleteConfirm(ctx, q, args)
+		return
 	case "amz_dl":
 		r.handleAmneziaDownloadAsk(ctx, q, args)
 		return
 	case "amz_dl_confirm":
 		r.handleAmneziaDownloadConfirm(ctx, q, args)
+		return
+	case "hmn_refresh":
+		r.handleHideMyRefresh(ctx, q, args)
+		return
+	case "hmn_open":
+		r.handleHideMyOpen(ctx, q, args)
+		return
+	case "hmn_page":
+		r.handleHideMyPage(ctx, q, args)
+		return
+	case "hmn_delete":
+		r.handleHideMyDeleteAsk(ctx, q, args)
+		return
+	case "hmn_delete_confirm":
+		r.handleHideMyDeleteConfirm(ctx, q, args)
+		return
+	case "hmn_dl":
+		r.handleHideMyDownloadAsk(ctx, q, args)
+		return
+	case "hmn_dl_confirm":
+		r.handleHideMyDownloadConfirm(ctx, q, args)
 		return
 	case "routes_rebind":
 		r.handleRoutesRebindStart(ctx, q, args)
@@ -662,6 +694,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if r.handleAmneziaKeyMessage(ctx, m, kind, user) {
 		return
 	}
+	if r.handleHideMyCodeMessage(ctx, m, kind, user) {
+		return
+	}
 	switch m.Text {
 	case "📊 Что происходит?":
 		if kind == "per_router" && user != nil {
@@ -694,6 +729,13 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"Amnezia Premium работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+	case "HideMy.name":
+		if kind == "per_router" && user != nil {
+			r.sendHideMyPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"HideMy.name работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🛠 Обслуживание":
 		if kind == "per_router" && user != nil {

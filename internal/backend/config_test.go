@@ -45,6 +45,12 @@ telegram:
 	if cfg.Amnezia.SecretsPath != "/var/lib/wg-monitor/amnezia-premium.json" {
 		t.Fatalf("amnezia secrets default: %q", cfg.Amnezia.SecretsPath)
 	}
+	if cfg.HideMy.BaseURL != "https://hide-my-name.cloud" {
+		t.Fatalf("hidemy base default: %q", cfg.HideMy.BaseURL)
+	}
+	if cfg.HideMy.SecretsPath != "/var/lib/wg-monitor/hidemyname.json" {
+		t.Fatalf("hidemy secrets default: %q", cfg.HideMy.SecretsPath)
+	}
 }
 
 func TestLoadConfigRejectsMissingChatID(t *testing.T) {

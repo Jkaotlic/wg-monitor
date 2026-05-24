@@ -22,12 +22,21 @@ type Config struct {
 	Retention RetentionConfig `yaml:"retention"`
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
 	Amnezia   AmneziaConfig   `yaml:"amnezia_premium"`
+	HideMy    HideMyConfig    `yaml:"hidemyname"`
 }
 
 // AmneziaConfig wires the optional Amnezia Premium cabinet helper.
 // SecretsPath intentionally lives outside state.db so Telegram DB backups do
 // not carry vpn:// subscription keys.
 type AmneziaConfig struct {
+	BaseURL     string `yaml:"base_url"`
+	SecretsPath string `yaml:"secrets_path"`
+}
+
+// HideMyConfig wires the optional HideMy.name access-code helper.
+// SecretsPath intentionally lives outside state.db so Telegram DB backups do
+// not carry provider access codes.
+type HideMyConfig struct {
 	BaseURL     string `yaml:"base_url"`
 	SecretsPath string `yaml:"secrets_path"`
 }
@@ -263,6 +272,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Amnezia.SecretsPath == "" {
 		cfg.Amnezia.SecretsPath = "/var/lib/wg-monitor/amnezia-premium.json"
+	}
+	if cfg.HideMy.BaseURL == "" {
+		cfg.HideMy.BaseURL = "https://hide-my-name.cloud"
+	}
+	if cfg.HideMy.SecretsPath == "" {
+		cfg.HideMy.SecretsPath = "/var/lib/wg-monitor/hidemyname.json"
 	}
 	return &cfg, nil
 }

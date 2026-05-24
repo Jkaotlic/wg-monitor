@@ -133,6 +133,8 @@ func main() {
 		UI:                 uiSnap,
 		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
 		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,
+		HideMyBaseURL:      cfg.HideMy.BaseURL,
+		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
 	cb.SetRoutesCache(routesCache)
 	routesNotifier := &callbacks.RoutesPanelNotifier{
