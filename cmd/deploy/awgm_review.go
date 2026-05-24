@@ -191,7 +191,7 @@ func chooseAWGMFailureAction(err error, canDefer bool) awgmFailureAction {
 		}
 		return awgmFailureCancel
 	}
-	PrintWarn("AWG Manager шаг не прошёл: " + err.Error())
+	PrintWarn("AWG Manager шаг не прошёл: " + shortAWGMErrorForOperator(err))
 	prompt := "Что сделать? [e] исправить данные / [r] повторить / [c] отмена"
 	def := "e"
 	if canDefer {
@@ -213,4 +213,20 @@ func chooseAWGMFailureAction(err error, canDefer bool) awgmFailureAction {
 		}
 		PrintWarn("не понял выбор: " + choice)
 	}
+}
+
+func shortAWGMErrorForOperator(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.TrimSpace(err.Error())
+	if idx := strings.Index(strings.ToLower(msg), "<!doctype html"); idx >= 0 {
+		msg = strings.TrimSpace(msg[:idx])
+	}
+	msg = strings.TrimRight(msg, " :\r\n\t")
+	const max = 360
+	if len(msg) > max {
+		msg = strings.TrimSpace(msg[:max]) + "..."
+	}
+	return msg
 }

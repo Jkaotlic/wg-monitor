@@ -66,6 +66,7 @@ func TestAWGMTransientUnavailableMatchesRouterWakeFailures(t *testing.T) {
 	for _, msg := range []string{
 		"awgm vps relay failed rc=1: websocket closed",
 		`awgm vps system info failed rc=1: <urlopen error [Errno -2] Name or service not known>`,
+		`awgm POST /api/auth/login: HTTP 503: <!DOCTYPE html><html><body><noscript>503</noscript></body></html>`,
 	} {
 		if !isAWGMTransientUnavailable(fmt.Errorf("%s", msg)) {
 			t.Fatalf("expected transient AWGM failure for %q", msg)
