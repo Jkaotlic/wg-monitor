@@ -270,6 +270,11 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
+	docWarn := ""
+	filename := "hidemy_" + safeConfigSlug(server.Name) + ".conf"
+	if err := r.sendConfigDocument(ctx, q.Message.Chat.ID, q.Message.MessageThreadID, filename, conf, "HideMy.name AmneziaWG 2.0 "+server.Name); err != nil {
+		docWarn = "\n\nФайл в чат не отправился: " + shortToast(err)
+	}
 	cmd := wire.Command{
 		ID:     defaultCmdID(),
 		Action: "tunnel_import",
@@ -285,8 +290,8 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выпущен, импорт в очереди")
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "HideMy.name AmneziaWG 2.0 config выпущен. Импорт туннеля поставлен в очередь роутера.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выгружен, импорт в очереди")
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "HideMy.name AmneziaWG 2.0 config выгружен в топик. Импорт туннеля поставлен в очередь роутера."+docWarn, "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "К серверам", CallbackData: fmt.Sprintf("hmn_open:%d:_panel_:%s", user.ID, args.HideMyCodeID)},
 	}}})
 }

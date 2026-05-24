@@ -363,6 +363,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "amz_open":
 		r.handleAmneziaOpen(ctx, q, args)
 		return
+	case "amz_countries":
+		r.handleAmneziaCountries(ctx, q, args)
+		return
 	case "amz_delete":
 		r.handleAmneziaDeleteAsk(ctx, q, args)
 		return

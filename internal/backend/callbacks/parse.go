@@ -94,6 +94,8 @@ type Args struct {
 	// AmneziaCountryCode is the lower-case country code for Amnezia Premium
 	// config issuance callbacks.
 	AmneziaCountryCode string
+	// AmneziaPage is the zero-based country-list page.
+	AmneziaPage int
 	// HideMyCodeID identifies one stored HideMy.name access code in the topic.
 	HideMyCodeID string
 	// HideMyServerID identifies one server from HideMy.name serverlist.
@@ -156,7 +158,7 @@ var validActions = map[string]bool{
 	// admin access-control panel — per-router operator whitelist.
 	"access": true,
 	// Amnezia Premium cabinet.
-	"amz_refresh": true, "amz_open": true, "amz_delete": true,
+	"amz_refresh": true, "amz_open": true, "amz_countries": true, "amz_delete": true,
 	"amz_delete_confirm": true, "amz_dl": true, "amz_dl_confirm": true,
 	// HideMy.name access-code cabinet.
 	"hmn_refresh": true, "hmn_open": true, "hmn_page": true,
@@ -446,6 +448,19 @@ func Parse(data string) (Args, error) {
 				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
 			}
 			a.AmneziaKeyID = parts[3]
+		case "amz_countries":
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+				return Args{}, fmt.Errorf("%s requires key id and page: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
+			}
+			page, err := strconv.Atoi(parts[4])
+			if err != nil || page < 0 {
+				return Args{}, fmt.Errorf("%s: bad page %q", action, parts[4])
+			}
+			a.AmneziaKeyID = parts[3]
+			a.AmneziaPage = page
 		case "amz_dl", "amz_dl_confirm":
 			if len(parts) == 4 && parts[3] != "" {
 				if !callbackCodeRe.MatchString(parts[3]) {

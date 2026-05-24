@@ -45,6 +45,34 @@ func TestClientServerListFiltersWireGuardServers(t *testing.T) {
 	}
 }
 
+func TestParseServerListAcceptsObjectMap(t *testing.T) {
+	servers, err := parseServerList([]byte(`{
+		"de1":{"name_en":"Germany","services":{"wg":{"ip":"198.51.100.10"}}},
+		"nl1":{"name_en":"Netherlands","services":{"wg":{"ip":"198.51.100.20"}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 2 {
+		t.Fatalf("servers = %+v", servers)
+	}
+	if servers[0].Name != "Germany" || servers[1].Name != "Netherlands" {
+		t.Fatalf("servers = %+v", servers)
+	}
+}
+
+func TestParseServerListAcceptsEnvelope(t *testing.T) {
+	servers, err := parseServerList([]byte(`{"data":[
+		{"name_en":"Germany","services":{"wg":{"ip":"198.51.100.10"}}}
+	]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(servers) != 1 || servers[0].Name != "Germany" {
+		t.Fatalf("servers = %+v", servers)
+	}
+}
+
 func TestClientDownloadAmneziaWG20Config(t *testing.T) {
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
