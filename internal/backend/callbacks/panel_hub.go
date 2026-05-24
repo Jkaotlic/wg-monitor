@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
@@ -28,6 +29,10 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 	text := "🎛 Панель управления\n\nЧто открыть?\n\nРоутер:\n  • выбери раздел\n  • затем конкретный роутер\n\nФлот:\n  • массовая проверка\n  • топики и доступы"
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "🔎 Аудит всех", CallbackData: "panel:0:audit_all"},
+				{Text: "⬆ Обновить все", CallbackData: "panel:0:update_all_confirm"},
+			},
 			{
 				{Text: "📊 Статус", CallbackData: "panel:0:kind:status"},
 				{Text: "🩺 Проверка", CallbackData: "panel:0:kind:doctor"},
@@ -78,7 +83,13 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 	case "awaken_do":
 		r.panelAwakenDo(ctx, q)
 	case "doctor_all":
-		r.panelDoctorAll(ctx, q)
+		r.startFleetCommand(ctx, q, "Router check", "router_doctor", nil)
+	case "audit_all":
+		r.panelAuditAll(ctx, q)
+	case "update_all_confirm":
+		r.panelUpdateAllConfirm(ctx, q)
+	case "update_all_do":
+		r.panelUpdateAllDo(ctx, q)
 	case "mobile":
 		r.panelMobileFleet(ctx, q)
 	case "help":
@@ -231,6 +242,81 @@ func (r *Router) panelDoctorAll(ctx context.Context, q *tg.CallbackQuery) {
 	kb := panelResultKb()
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
 		slog.Warn("panel doctor all result edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) panelAuditAll(ctx context.Context, q *tg.CallbackQuery) {
+	r.startFleetCommand(ctx, q, "Version audit", "version_audit", nil)
+}
+
+func (r *Router) panelUpdateAllConfirm(ctx context.Context, q *tg.CallbackQuery) {
+	version := strings.TrimSpace(r.cfg.BackendVersion)
+	if version == "" || version == "dev" || version == "unknown" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "backend version is unknown")
+		return
+	}
+	text := fmt.Sprintf("Fleet: update all routers\n\nTarget: %s\n\nOnly agents with confirmed self_update fix (>= v0.13.0-rc32) will be queued. Older agents will be skipped in the report.", version)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+		{{Text: "Подтвердить", CallbackData: "panel:0:update_all_do"}, {Text: "Назад", CallbackData: "panel:0:home"}},
+	}}
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		slog.Warn("panel update all confirm edit failed", "err", err)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) panelUpdateAllDo(ctx context.Context, q *tg.CallbackQuery) {
+	version := strings.TrimSpace(r.cfg.BackendVersion)
+	r.startFleetCommand(ctx, q, "Self-update to "+version, "self_update", map[string]any{"version": version})
+}
+
+func (r *Router) startFleetCommand(ctx context.Context, q *tg.CallbackQuery, title, action string, args map[string]any) {
+	users, err := r.d.Users().GetAll()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "failed to read routers")
+		return
+	}
+	if r.cmdSink == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command channel is not configured")
+		return
+	}
+	batch := &fleetBatch{
+		ID:        newFleetBatchID(),
+		Title:     title,
+		Action:    action,
+		ChatID:    q.Message.Chat.ID,
+		MessageID: q.Message.MessageID,
+		ThreadID:  q.Message.MessageThreadID,
+		CreatedAt: time.Now(),
+		Items:     make(map[string]*fleetBatchItem),
+	}
+	for _, u := range users {
+		item := &fleetBatchItem{Nick: u.Nickname, Status: "queued", Summary: "queued"}
+		batch.Items[u.Nickname] = item
+		batch.Order = append(batch.Order, u.Nickname)
+		if action == "self_update" {
+			installed := ""
+			if u.LastDeployedVersion != nil {
+				installed = *u.LastDeployedVersion
+			}
+			if !isSafeSelfUpdateVersion(installed) {
+				item.Status = "skipped"
+				item.Summary = "installed version is too old for safe self_update: " + installed
+				continue
+			}
+		}
+		cmd := fleetCommand(action, args)
+		ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, BulkID: batch.ID, BulkNick: u.Nickname}
+		if err := r.cmdSink.EnqueueWithRef(u.ID, cmd, ref); err != nil {
+			item.Status = "failed"
+			item.Summary = err.Error()
+		}
+	}
+	r.fleetBatches.start(batch)
+	kb := panelResultKb()
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, batch.render(), "", &kb); err != nil {
+		slog.Warn("panel fleet command edit failed", "err", err, "action", action)
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }

@@ -85,13 +85,15 @@ type HeartbeatConfig struct {
 }
 
 type StateConfig struct {
-	FailThreshold         int `yaml:"fail_threshold"`
-	RecoveryThreshold     int `yaml:"recovery_threshold"`
-	MobileFailThreshold   int `yaml:"mobile_fail_threshold"`
-	RealertEverySec       int `yaml:"realert_every_sec"`
-	MobileRealertEverySec int `yaml:"mobile_realert_every_sec"`
-	RealertTickSec        int `yaml:"realert_tick_sec"`
-	MuteCutoffHour        int `yaml:"mute_cutoff_hour"`
+	FailThreshold          int `yaml:"fail_threshold"`
+	RecoveryThreshold      int `yaml:"recovery_threshold"`
+	MobileFailThreshold    int `yaml:"mobile_fail_threshold"`
+	NoisyFailThreshold     int `yaml:"noisy_fail_threshold"`
+	NoisyRecoveryThreshold int `yaml:"noisy_recovery_threshold"`
+	RealertEverySec        int `yaml:"realert_every_sec"`
+	MobileRealertEverySec  int `yaml:"mobile_realert_every_sec"`
+	RealertTickSec         int `yaml:"realert_tick_sec"`
+	MuteCutoffHour         int `yaml:"mute_cutoff_hour"`
 }
 
 // UIConfig controls v0.6.0 ReplyKeyboard / smart-reply behaviour (spec §8).
@@ -193,6 +195,12 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.State.MobileFailThreshold == 0 {
 		cfg.State.MobileFailThreshold = 6
+	}
+	if cfg.State.NoisyFailThreshold == 0 {
+		cfg.State.NoisyFailThreshold = 6
+	}
+	if cfg.State.NoisyRecoveryThreshold == 0 {
+		cfg.State.NoisyRecoveryThreshold = 3
 	}
 	if cfg.State.RealertEverySec == 0 {
 		cfg.State.RealertEverySec = 6 * 3600

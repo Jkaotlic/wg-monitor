@@ -396,6 +396,64 @@ func TestReportNotResumedSkipsResumer(t *testing.T) {
 	}
 }
 
+func TestReportNoisyDNSUsesHigherFailThreshold(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "3131313131313131313131313131313131313131313131313131313131313131"
+	_, _ = d.Users().Insert("dnsbox", tok, "1.1.1.1", "awg0")
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+		AlertPolicy: AlertPolicy{
+			NoisyFailThreshold:     6,
+			NoisyRecoveryThreshold: 3,
+		},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	postDNS := func(t *testing.T) {
+		t.Helper()
+		body, _ := json.Marshal(wire.Report{
+			Timestamp:    time.Now().UTC(),
+			AgentVersion: "test",
+			Checks:       []wire.Check{{Name: "dns", Status: "fail"}},
+		})
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status: %d", resp.StatusCode)
+		}
+	}
+
+	for i := 0; i < 5; i++ {
+		postDNS(t)
+	}
+	disp.mu.Lock()
+	for i, got := range disp.calls {
+		if got == state.Hard {
+			t.Fatalf("dns failure #%d became hard before noisy threshold: calls=%v", i+1, disp.calls)
+		}
+	}
+	disp.mu.Unlock()
+
+	postDNS(t)
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	if got := disp.calls[len(disp.calls)-1]; got != state.Hard {
+		t.Fatalf("6th dns failure should become hard; last=%v calls=%v", got, disp.calls)
+	}
+}
+
 type fakeCmdSink struct {
 	mu            sync.Mutex
 	dequeueRet    *wire.Command
@@ -834,6 +892,68 @@ func (f *fakeMaintNotifier) NotifyCommandResult(_ context.Context, ref cmdpkg.Me
 	f.called++
 	f.action = ref.Action
 	return nil
+}
+
+type fakeBulkNotifier struct {
+	mu     sync.Mutex
+	called int
+	bulkID string
+	action string
+}
+
+func (f *fakeBulkNotifier) NotifyBulkCommandResult(_ context.Context, ref cmdpkg.MessageRef, _ wire.CommandResult, _ int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.called++
+	f.bulkID = ref.BulkID
+	f.action = ref.Action
+	return nil
+}
+
+func TestCmdResult_DispatchesBulkNotifier(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01"
+	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+	bn := &fakeBulkNotifier{}
+	rc := &relayCapture{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "router_doctor", ChatID: 1, MessageID: 2, BulkID: "fleet-1", BulkNick: "vasya"}}
+	mux := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   &fakeDisp{},
+		CommandSink:  sink,
+		TGNotifier:   rc,
+		BulkNotifier: bn,
+		Thresholds:   state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "bulk-cmd", Status: "ok", Output: "doctor ok", DurationMs: 1})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	got := waitForRelay(t, func() int {
+		bn.mu.Lock()
+		defer bn.mu.Unlock()
+		return bn.called
+	}, 1, 500*time.Millisecond)
+	if got != 1 {
+		t.Fatalf("BulkNotifier called %d times, want 1", got)
+	}
+	if len(rc.snapshot().chunks) != 0 {
+		t.Fatalf("bulk result should suppress generic relay, got %+v", rc.snapshot().chunks)
+	}
 }
 
 func testCmdResultDispatchesMaintNotifier(t *testing.T, action string) {
