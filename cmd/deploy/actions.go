@@ -891,123 +891,160 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 	apiKey, login, pass := awgmAuthForAgent(secrets, ag.Nickname)
 	terminalUser := userOrDefault(ag.User, "root")
 	terminalPass := routerRootPasswordForAgent(secrets, ag.Nickname)
+	inputs := awgmInstallInputs{
+		APIKey:           apiKey,
+		Login:            login,
+		Password:         pass,
+		TerminalUser:     terminalUser,
+		TerminalPassword: terminalPass,
+	}
 
-	PrintStep(2, 5, "AWG Manager: auth + system info")
-	awgm := NewAWGMClient(ag.AWGMURL, login, pass).WithAPIKey(apiKey)
-	var info *AWGMSystemInfo
-	awgmAuthMode := "router-admin"
-	if apiKey != "" {
-		awgmAuthMode = "api-key"
-	}
-	if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
-		PrintInfo("public AWG Manager URL detected - probing system info from VPS")
-		info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
-	} else {
-		if err = awgm.Login(context.Background()); err == nil {
-			info, err = awgm.SystemInfo(context.Background())
+	for {
+		if !confirmAWGMInstallInputs(state, secrets, ag, &inputs) {
+			return fmt.Errorf("AWG Manager install cancelled")
 		}
-	}
-	if err != nil && apiKey != "" && isAWGMUnauthorized(err) {
-		PrintWarn("AWG Manager API key получил 401 от web layer; fallback на login/password")
-		apiKey = ""
-		login, pass = awgmLoginPasswordForAgent(secrets, ag.Nickname)
-		awgm = NewAWGMClient(ag.AWGMURL, login, pass)
+		apiKey = inputs.APIKey
+		login = inputs.Login
+		pass = inputs.Password
+		terminalUser = userOrDefault(inputs.TerminalUser, "root")
+		terminalPass = inputs.TerminalPassword
+
+		PrintStep(2, 5, "AWG Manager: auth + system info")
+		awgm := NewAWGMClient(ag.AWGMURL, login, pass).WithAPIKey(apiKey)
+		var info *AWGMSystemInfo
+		awgmAuthMode := "router-admin"
+		if apiKey != "" {
+			awgmAuthMode = "api-key"
+		}
 		if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+			PrintInfo("public AWG Manager URL detected - probing system info from VPS")
 			info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
 		} else {
 			if err = awgm.Login(context.Background()); err == nil {
 				info, err = awgm.SystemInfo(context.Background())
 			}
 		}
-		awgmAuthMode = "router-admin"
-	}
-	if err != nil {
-		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
-			return schedErr
+		if err != nil && apiKey != "" && isAWGMUnauthorized(err) {
+			PrintWarn("AWG Manager API key получил 401 от web layer; fallback на login/password")
+			apiKey = ""
+			inputs.APIKey = ""
+			login, pass = awgmLoginPasswordForAgent(secrets, ag.Nickname)
+			inputs.Login = login
+			inputs.Password = pass
+			awgm = NewAWGMClient(ag.AWGMURL, login, pass)
+			if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+				info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
+			} else {
+				if err = awgm.Login(context.Background()); err == nil {
+					info, err = awgm.SystemInfo(context.Background())
+				}
+			}
+			awgmAuthMode = "router-admin"
 		}
-		if commitToken != nil {
-			return fmt.Errorf("AWG Manager preflight failed before staged token commit; backend token left unchanged: %w", err)
+		if err != nil {
+			canDefer := shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) && isAWGMTransientUnavailable(err)
+			switch chooseAWGMFailureAction(err, canDefer) {
+			case awgmFailureEdit, awgmFailureRetry:
+				continue
+			case awgmFailureDefer:
+				if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
+					return schedErr
+				}
+			case awgmFailureCancel:
+				return fmt.Errorf("AWG Manager preflight cancelled: %w", err)
+			}
+			if commitToken != nil {
+				return fmt.Errorf("AWG Manager preflight failed before staged token commit; backend token left unchanged: %w", err)
+			}
+			return err
 		}
-		return err
-	}
-	if ag.Arch == "" && info.GoArch != "" {
-		arch, err := normalizeKeeneticArch(info.GoArch)
+		if ag.Arch == "" && info.GoArch != "" {
+			arch, err := normalizeKeeneticArch(info.GoArch)
+			if err != nil {
+				return err
+			}
+			ag.Arch = arch
+		}
+		if ag.Arch == "" {
+			return fmt.Errorf("AWG Manager did not report goArch; set arch in wizard.toml")
+		}
+		normalizedArch, err := normalizeKeeneticArch(ag.Arch)
 		if err != nil {
 			return err
 		}
-		ag.Arch = arch
-	}
-	if ag.Arch == "" {
-		return fmt.Errorf("AWG Manager did not report goArch; set arch in wizard.toml")
-	}
-	normalizedArch, err := normalizeKeeneticArch(ag.Arch)
-	if err != nil {
-		return err
-	}
-	ag.Arch = normalizedArch
+		ag.Arch = normalizedArch
 
-	PrintStep(3, 5, "GitHub release + bootstrap script")
-	rel, err := dl.GetLatestRelease()
-	if err != nil {
-		return err
-	}
-	assetName := "wg-monitor-agent-linux-" + ag.Arch
-	asset := rel.AssetByName(assetName)
-	if asset == nil {
-		return fmt.Errorf("release %s has no asset %s", rel.TagName, assetName)
-	}
-	sums := rel.AssetByName("checksums.txt")
-	if sums == nil {
-		return fmt.Errorf("release %s has no checksums.txt", rel.TagName)
-	}
-	script, err := RenderAWGMBootstrapScript(AWGMBootstrapParams{
-		Nickname:     ag.Nickname,
-		BackendURL:   backendURL,
-		RawToken:     rawToken,
-		Version:      rel.TagName,
-		DownloadURL:  releaseAssetURLForRouter(state, rel.TagName, assetName, asset.DownloadURL),
-		ChecksumURL:  releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL),
-		ChecksumName: assetName,
-	})
-	if err != nil {
-		return err
-	}
+		PrintStep(3, 5, "GitHub release + bootstrap script")
+		rel, err := dl.GetLatestRelease()
+		if err != nil {
+			return err
+		}
+		assetName := "wg-monitor-agent-linux-" + ag.Arch
+		asset := rel.AssetByName(assetName)
+		if asset == nil {
+			return fmt.Errorf("release %s has no asset %s", rel.TagName, assetName)
+		}
+		sums := rel.AssetByName("checksums.txt")
+		if sums == nil {
+			return fmt.Errorf("release %s has no checksums.txt", rel.TagName)
+		}
+		script, err := RenderAWGMBootstrapScript(AWGMBootstrapParams{
+			Nickname:     ag.Nickname,
+			BackendURL:   backendURL,
+			RawToken:     rawToken,
+			Version:      rel.TagName,
+			DownloadURL:  releaseAssetURLForRouter(state, rel.TagName, assetName, asset.DownloadURL),
+			ChecksumURL:  releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL),
+			ChecksumName: assetName,
+		})
+		if err != nil {
+			return err
+		}
 
-	PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
-	var res TerminalRunResult
-	if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
-		PrintInfo("public AWG Manager URL detected - running terminal bootstrap from VPS")
-		res, err = runAWGMBootstrapViaVPS(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
-	} else {
-		res, err = runAWGMBootstrapDirect(awgm, script, terminalUser, terminalPass)
-	}
-	if err != nil {
-		if strings.TrimSpace(res.Output) != "" {
-			PrintInfo(res.Output)
+		PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
+		var res TerminalRunResult
+		if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+			PrintInfo("public AWG Manager URL detected - running terminal bootstrap from VPS")
+			res, err = runAWGMBootstrapViaVPS(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
+		} else {
+			res, err = runAWGMBootstrapDirect(awgm, script, terminalUser, terminalPass)
 		}
-		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
-			return schedErr
+		if err != nil {
+			if strings.TrimSpace(res.Output) != "" {
+				PrintInfo(res.Output)
+			}
+			canDefer := shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) && isAWGMTransientUnavailable(err)
+			switch chooseAWGMFailureAction(err, canDefer) {
+			case awgmFailureEdit, awgmFailureRetry:
+				continue
+			case awgmFailureDefer:
+				if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
+					return schedErr
+				}
+			case awgmFailureCancel:
+				return fmt.Errorf("AWG Manager bootstrap cancelled: %w", err)
+			}
+			if commitToken != nil {
+				return fmt.Errorf("AWG Manager bootstrap failed before staged token commit; backend token left unchanged: %w", err)
+			}
+			return err
 		}
+
+		PrintStep(5, 5, "Commit token + сохранить локальное состояние")
 		if commitToken != nil {
-			return fmt.Errorf("AWG Manager bootstrap failed before staged token commit; backend token left unchanged: %w", err)
+			if err := commitToken(); err != nil {
+				return fmt.Errorf("commit staged token: %w", err)
+			}
 		}
-		return err
-	}
-
-	PrintStep(5, 5, "Commit token + сохранить локальное состояние")
-	if commitToken != nil {
-		if err := commitToken(); err != nil {
-			return fmt.Errorf("commit staged token: %w", err)
+		ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
+		ag.LastDeployedVersion = rel.TagName
+		if ag.Host == "" && info.RouterIP != "" {
+			ag.Host = info.RouterIP
 		}
+		ag.AWGMAuth = awgmAuthMode
+		PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
+		return nil
 	}
-	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
-	ag.LastDeployedVersion = rel.TagName
-	if ag.Host == "" && info.RouterIP != "" {
-		ag.Host = info.RouterIP
-	}
-	ag.AWGMAuth = awgmAuthMode
-	PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
-	return nil
 }
 
 func awgmEnrollmentNeedsTwoPhase(secrets *SecretStore, ag *AgentState) bool {
