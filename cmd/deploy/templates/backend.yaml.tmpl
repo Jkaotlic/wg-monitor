@@ -45,6 +45,13 @@ retention:
   vacuum_interval: 168h
   wal_checkpoint_every: 1h
 
+# Amnezia Premium cabinet helper. vpn:// keys are stored outside state.db so
+# the Telegram backup archive does not include subscription secrets.
+amnezia_premium:
+  secrets_path: /var/lib/wg-monitor/amnezia-premium.json
+  # base_url may be left empty: backend resolves the official CP mirror.
+  base_url: ""
+
 # UI tweaks. compat_inline_keyboard duplicates the per-topic ReplyKeyboardMarkup
 # as inline buttons under bot replies. This is the default because TG Desktop
 # often drops bottom ReplyKeyboard buttons inside forum topics; inline buttons

@@ -21,6 +21,15 @@ type Config struct {
 	Upstream  UpstreamConfig  `yaml:"upstream"`
 	Retention RetentionConfig `yaml:"retention"`
 	RateLimit RateLimitConfig `yaml:"rate_limit"`
+	Amnezia   AmneziaConfig   `yaml:"amnezia_premium"`
+}
+
+// AmneziaConfig wires the optional Amnezia Premium cabinet helper.
+// SecretsPath intentionally lives outside state.db so Telegram DB backups do
+// not carry vpn:// subscription keys.
+type AmneziaConfig struct {
+	BaseURL     string `yaml:"base_url"`
+	SecretsPath string `yaml:"secrets_path"`
 }
 
 // RateLimitConfig governs per-userID throttling on /v1/report (API-06).
@@ -251,6 +260,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Retention.WALCheckpointEvery == 0 {
 		cfg.Retention.WALCheckpointEvery = 1 * time.Hour
+	}
+	if cfg.Amnezia.SecretsPath == "" {
+		cfg.Amnezia.SecretsPath = "/var/lib/wg-monitor/amnezia-premium.json"
 	}
 	return &cfg, nil
 }

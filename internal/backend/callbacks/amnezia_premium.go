@@ -1,0 +1,207 @@
+package callbacks
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/amnezia"
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
+)
+
+func (r *Router) handleAmneziaKeyMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
+	key := strings.TrimSpace(m.Text)
+	if !strings.HasPrefix(key, "vpn://") {
+		return false
+	}
+	if kind != "per_router" || user == nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Amnezia Premium key нужно прислать в топик конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		return true
+	}
+	client := amnezia.New(r.cfg.AmneziaBaseURL)
+	if err := client.Login(ctx, key); err != nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Не удалось проверить Amnezia Premium key: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		return true
+	}
+	info, err := client.AccountInfo(ctx)
+	if err != nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Ключ принят, но кабинет не ответил: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		return true
+	}
+	if err := r.setAmneziaKey(user.ID, key); err != nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Не удалось сохранить Amnezia Premium key: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		return true
+	}
+	if m.MessageID != 0 {
+		_ = r.tg.DeleteMessage(ctx, m.Chat.ID, m.MessageID)
+	}
+	r.sendAmneziaAccount(ctx, m.Chat.ID, m.MessageThreadID, nil, user, info)
+	return true
+}
+
+func (r *Router) sendAmneziaPremiumPanel(ctx context.Context, chatID int64, threadID *int64, replyTo *int64, user *db.User) {
+	key, err := r.getAmneziaKey(user.ID)
+	if err != nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, "Не удалось прочитать Amnezia key: "+err.Error(), "", replyTo, r.cfg.UI.KeyboardForTopic("per_router"))
+		return
+	}
+	if key == "" {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, "Пришли сюда vpn:// ключ Amnezia Premium, я сохраню его за этим роутером и удалю сообщение с ключом.", "", replyTo, r.cfg.UI.KeyboardForTopic("per_router"))
+		return
+	}
+	info, err := r.fetchAmneziaAccount(ctx, key)
+	if err != nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, "Amnezia Premium не ответила: "+err.Error(), "", replyTo, r.cfg.UI.KeyboardForTopic("per_router"))
+		return
+	}
+	r.sendAmneziaAccount(ctx, chatID, threadID, replyTo, user, info)
+}
+
+func (r *Router) fetchAmneziaAccount(ctx context.Context, key string) (*amnezia.AccountInfo, error) {
+	client := amnezia.New(r.cfg.AmneziaBaseURL)
+	if err := client.Login(ctx, key); err != nil {
+		return nil, err
+	}
+	return client.AccountInfo(ctx)
+}
+
+func (r *Router) sendAmneziaAccount(ctx context.Context, chatID int64, threadID *int64, replyTo *int64, user *db.User, info *amnezia.AccountInfo) {
+	text := amnezia.FormatAccountSummary(user.Nickname, info)
+	kb := amneziaKeyboard(user.ID, info)
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, text, "", replyTo, &kb)
+}
+
+func amneziaKeyboard(userID int64, info *amnezia.AccountInfo) tg.InlineKeyboardMarkup {
+	rows := [][]tg.InlineKeyboardButton{{
+		{Text: "Обновить", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", userID)},
+	}}
+	if info == nil || info.ActiveDeviceCount >= info.MaxDeviceCount {
+		return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+	}
+	free := amnezia.FreeCountries(info)
+	for i := 0; i < len(free) && i < 10; i += 2 {
+		row := []tg.InlineKeyboardButton{amneziaCountryButton(userID, free[i])}
+		if i+1 < len(free) && i+1 < 10 {
+			row = append(row, amneziaCountryButton(userID, free[i+1]))
+		}
+		rows = append(rows, row)
+	}
+	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func amneziaCountryButton(userID int64, c amnezia.Country) tg.InlineKeyboardButton {
+	label := strings.ToUpper(c.Code)
+	if c.Name != "" {
+		label = c.Name
+	}
+	return tg.InlineKeyboardButton{
+		Text:         "Выпустить " + label,
+		CallbackData: fmt.Sprintf("amz_dl:%d:_panel_:%s", userID, strings.ToLower(c.Code)),
+	}
+}
+
+func (r *Router) handleAmneziaRefresh(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	key, _ := r.getAmneziaKey(user.ID)
+	if key == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не сохранён")
+		return
+	}
+	info, err := r.fetchAmneziaAccount(ctx, key)
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ошибка Amnezia")
+		return
+	}
+	kb := amneziaKeyboard(user.ID, info)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, amnezia.FormatAccountSummary(user.Nickname, info), "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновлено")
+}
+
+func (r *Router) handleAmneziaDownloadAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	text := fmt.Sprintf("Выпустить новый Amnezia .conf для %s?\n\nЭто займёт один слот подписки и затем поставит импорт туннеля в очередь роутера.", strings.ToUpper(args.AmneziaCountryCode))
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("amz_dl_confirm:%d:_panel_:%s", args.UserID, args.AmneziaCountryCode)},
+	}, {
+		{Text: "Назад", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", args.UserID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	if r.cmdSink == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command queue не подключена")
+		return
+	}
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	key, _ := r.getAmneziaKey(user.ID)
+	if key == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не сохранён")
+		return
+	}
+	conf, err := r.downloadAmneziaConfig(ctx, key, args.AmneziaCountryCode)
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	cmd := wire.Command{
+		ID:     defaultCmdID(),
+		Action: "tunnel_import",
+		Args: map[string]any{
+			"conf":    base64.StdEncoding.EncodeToString(conf),
+			"name":    "amnezia_" + args.AmneziaCountryCode,
+			"replace": false,
+		},
+		IssuedAt: time.Now().UTC(),
+	}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "tunnel_import"}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выпущен, импорт в очереди")
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Amnezia config выпущен. Импорт туннеля поставлен в очередь роутера.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Обновить кабинет", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", user.ID)},
+	}}})
+}
+
+func (r *Router) downloadAmneziaConfig(ctx context.Context, key, country string) ([]byte, error) {
+	client := amnezia.New(r.cfg.AmneziaBaseURL)
+	if err := client.Login(ctx, key); err != nil {
+		return nil, err
+	}
+	conf, err := client.DownloadConfig(ctx, country)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(string(conf), "[Interface]") {
+		return nil, errors.New("downloaded config does not look like WireGuard conf")
+	}
+	return conf, nil
+}
+
+func shortToast(err error) string {
+	msg := err.Error()
+	if len(msg) > 180 {
+		return msg[:180]
+	}
+	return msg
+}

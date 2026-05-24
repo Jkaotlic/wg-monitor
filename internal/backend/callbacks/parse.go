@@ -89,6 +89,9 @@ type Args struct {
 	AccessRouterID int64
 	// AccessOperatorTGID is the target operator's TG user ID for remove_op.
 	AccessOperatorTGID int64
+	// AmneziaCountryCode is the lower-case country code for Amnezia Premium
+	// config issuance callbacks.
+	AmneziaCountryCode string
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -144,7 +147,11 @@ var validActions = map[string]bool{
 	"panel": true,
 	// admin access-control panel — per-router operator whitelist.
 	"access": true,
+	// Amnezia Premium cabinet.
+	"amz_refresh": true, "amz_dl": true, "amz_dl_confirm": true,
 }
+
+var callbackCodeRe = regexp.MustCompile(`^[A-Za-z0-9_-]{2,16}$`)
 
 // IsCommandAction reports whether action is dispatched via the cmd queue
 // (vs. local DB-only actions like silence/ack/mute/history).
@@ -407,6 +414,17 @@ func Parse(data string) (Args, error) {
 			}
 			a.AccessRouterID = rid
 			a.AccessOperatorTGID = tgid
+		}
+	}
+	if strings.HasPrefix(action, "amz_") {
+		if action == "amz_dl" || action == "amz_dl_confirm" {
+			if len(parts) < 4 || parts[3] == "" {
+				return Args{}, fmt.Errorf("%s requires country code: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad country code %q", action, parts[3])
+			}
+			a.AmneziaCountryCode = strings.ToLower(parts[3])
 		}
 	}
 	return a, nil
