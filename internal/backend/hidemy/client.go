@@ -2,6 +2,7 @@ package hidemy
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -127,8 +128,31 @@ type rawServer struct {
 
 func parseServerList(body []byte) ([]Server, error) {
 	var raw []rawServer
-	if err := jsonUnmarshal(body, &raw); err != nil {
-		return nil, fmt.Errorf("hidemy serverlist decode: %w", err)
+	if err := json.Unmarshal(body, &raw); err != nil {
+		var mapped map[string]rawServer
+		if mapErr := json.Unmarshal(body, &mapped); mapErr == nil && len(mapped) > 0 {
+			raw = make([]rawServer, 0, len(mapped))
+			for _, server := range mapped {
+				raw = append(raw, server)
+			}
+		} else {
+			var env struct {
+				Data    []rawServer          `json:"data"`
+				Servers []rawServer          `json:"servers"`
+				MapData map[string]rawServer `json:"-"`
+			}
+			if envErr := json.Unmarshal(body, &env); envErr != nil {
+				return nil, fmt.Errorf("hidemy serverlist decode: %w", err)
+			}
+			switch {
+			case len(env.Data) > 0:
+				raw = env.Data
+			case len(env.Servers) > 0:
+				raw = env.Servers
+			default:
+				return nil, fmt.Errorf("hidemy serverlist decode: %w", err)
+			}
+		}
 	}
 	out := make([]Server, 0, len(raw))
 	for _, s := range raw {

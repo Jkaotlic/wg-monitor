@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
+
+const amneziaCountryPageSize = 10
 
 func (r *Router) handleAmneziaKeyMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
 	key := strings.TrimSpace(m.Text)
@@ -80,7 +83,7 @@ func amneziaKeyListView(user *db.User, keys amneziaRouterKeys) (string, tg.Inlin
 		text += "Ключей пока нет.\n\nПришли сюда vpn:// ключ Amnezia Premium: я проверю его, сохраню за этим топиком и удалю сообщение с ключом."
 		return text, tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
 	}
-	text += fmt.Sprintf("Сохранено ключей: %d\nПришли ещё один vpn:// ключ, чтобы добавить его в этот топик.", len(keys.Keys))
+	text += fmt.Sprintf("Сохранено ключей: %d\nОткрой ключ, затем нажми \"Выгрузить .conf\" и выбери страну. Пришли ещё один vpn:// ключ, чтобы добавить его в этот топик.", len(keys.Keys))
 	rows := make([][]tg.InlineKeyboardButton, 0, len(keys.Keys)+1)
 	for _, key := range keys.Keys {
 		label := key.Label
@@ -106,21 +109,71 @@ func amneziaKeyboard(userID int64, keyID string, info *amnezia.AccountInfo) tg.I
 	rows := [][]tg.InlineKeyboardButton{{
 		{Text: "Обновить", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_:%s", userID, keyID)},
 		{Text: "К списку", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", userID)},
-	}, {
-		{Text: "Удалить ключ", CallbackData: fmt.Sprintf("amz_delete:%d:_panel_:%s", userID, keyID)},
 	}}
-	if info == nil || info.ActiveDeviceCount >= info.MaxDeviceCount {
-		return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+	if info != nil && len(info.AvailableCountries) > 0 {
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         "Выгрузить .conf",
+			CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", userID, keyID),
+		}})
 	}
-	free := amnezia.FreeCountries(info)
-	for i := 0; i < len(free) && i < 10; i += 2 {
-		row := []tg.InlineKeyboardButton{amneziaCountryButtonForKey(userID, keyID, free[i])}
-		if i+1 < len(free) && i+1 < 10 {
-			row = append(row, amneziaCountryButtonForKey(userID, keyID, free[i+1]))
-		}
-		rows = append(rows, row)
-	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "Удалить ключ",
+		CallbackData: fmt.Sprintf("amz_delete:%d:_panel_:%s", userID, keyID),
+	}})
 	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func amneziaCountriesView(user *db.User, stored amneziaStoredKey, info *amnezia.AccountInfo, page int) (string, tg.InlineKeyboardMarkup) {
+	rows := [][]tg.InlineKeyboardButton{}
+	if info == nil || len(info.AvailableCountries) == 0 {
+		return "Amnezia Premium: нет доступных стран для .conf", tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+	}
+	countries := append([]amnezia.Country(nil), info.AvailableCountries...)
+	sort.Slice(countries, func(i, j int) bool {
+		return strings.ToLower(countries[i].Code) < strings.ToLower(countries[j].Code)
+	})
+	if page < 0 {
+		page = 0
+	}
+	pages := (len(countries) + amneziaCountryPageSize - 1) / amneziaCountryPageSize
+	if pages == 0 {
+		pages = 1
+	}
+	if page >= pages {
+		page = pages - 1
+	}
+	issued := amneziaIssuedCountrySet(info)
+	start := page * amneziaCountryPageSize
+	end := start + amneziaCountryPageSize
+	if end > len(countries) {
+		end = len(countries)
+	}
+	for _, country := range countries[start:end] {
+		label := amneziaCountryLabel(country)
+		if issued[strings.ToLower(country.Code)] {
+			label += " (есть)"
+		}
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         label,
+			CallbackData: fmt.Sprintf("amz_dl:%d:_panel_:%s:%s", user.ID, stored.ID, strings.ToLower(country.Code)),
+		}})
+	}
+	nav := []tg.InlineKeyboardButton{}
+	if page > 0 {
+		nav = append(nav, tg.InlineKeyboardButton{Text: "Назад", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:%d", user.ID, stored.ID, page-1)})
+	}
+	if page+1 < pages {
+		nav = append(nav, tg.InlineKeyboardButton{Text: "Дальше", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:%d", user.ID, stored.ID, page+1)})
+	}
+	if len(nav) > 0 {
+		rows = append(rows, nav)
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "К кабинету",
+		CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_:%s", user.ID, stored.ID),
+	}})
+	text := fmt.Sprintf("Amnezia Premium - %s / %s\n\nВыбери страну для .conf. Пометка \"есть\" значит country config уже выпускался и будет выгружен повторно.\nСтраница: %d/%d", user.Nickname, stored.Label, page+1, pages)
+	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func amneziaCountryButton(userID int64, c amnezia.Country) tg.InlineKeyboardButton {
@@ -128,10 +181,7 @@ func amneziaCountryButton(userID int64, c amnezia.Country) tg.InlineKeyboardButt
 }
 
 func amneziaCountryButtonForKey(userID int64, keyID string, c amnezia.Country) tg.InlineKeyboardButton {
-	label := strings.ToUpper(c.Code)
-	if c.Name != "" {
-		label = c.Name
-	}
+	label := amneziaCountryLabel(c)
 	if keyID == "" {
 		keyID = "active"
 	}
@@ -139,6 +189,27 @@ func amneziaCountryButtonForKey(userID int64, keyID string, c amnezia.Country) t
 		Text:         "Выпустить " + label,
 		CallbackData: fmt.Sprintf("amz_dl:%d:_panel_:%s:%s", userID, keyID, strings.ToLower(c.Code)),
 	}
+}
+
+func amneziaCountryLabel(c amnezia.Country) string {
+	label := strings.ToUpper(c.Code)
+	if c.Name != "" {
+		label = c.Name
+	}
+	return label
+}
+
+func amneziaIssuedCountrySet(info *amnezia.AccountInfo) map[string]bool {
+	issued := map[string]bool{}
+	if info == nil {
+		return issued
+	}
+	for _, item := range info.IssuedConfigs {
+		if item.SourceType == "country_config" {
+			issued[strings.ToLower(item.CountryCode)] = true
+		}
+	}
+	return issued
 }
 
 func (r *Router) handleAmneziaRefresh(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -196,6 +267,28 @@ func (r *Router) handleAmneziaOpen(ctx context.Context, q *tg.CallbackQuery, arg
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
+func (r *Router) handleAmneziaCountries(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	key, _ := r.getAmneziaKeyByID(user.ID, args.AmneziaKeyID)
+	if key == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не сохранён")
+		return
+	}
+	info, err := r.fetchAmneziaAccount(ctx, key)
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ошибка Amnezia")
+		return
+	}
+	stored, _ := r.amneziaStoredKey(user.ID, args.AmneziaKeyID)
+	text, kb := amneziaCountriesView(user, stored, info, args.AmneziaPage)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
 func (r *Router) handleAmneziaDeleteAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
@@ -246,11 +339,25 @@ func (r *Router) handleAmneziaDownloadAsk(ctx context.Context, q *tg.CallbackQue
 		}
 		args.AmneziaKeyID = stored.ID
 	}
-	text := fmt.Sprintf("Выпустить новый Amnezia .conf для %s?\n\nЭто займёт один слот подписки и затем поставит импорт туннеля в очередь роутера.", strings.ToUpper(args.AmneziaCountryCode))
+	key, _ := r.getAmneziaKeyByID(args.UserID, args.AmneziaKeyID)
+	info, err := r.fetchAmneziaAccount(ctx, key)
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ошибка Amnezia")
+		return
+	}
+	issued := amneziaIssuedCountrySet(info)[strings.ToLower(args.AmneziaCountryCode)]
+	if !issued && info.ActiveDeviceCount >= info.MaxDeviceCount {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "свободных слотов нет")
+		return
+	}
+	text := fmt.Sprintf("Выгрузить Amnezia .conf для %s?\n\nФайл придёт в этот топик, а импорт туннеля встанет в очередь роутера.", strings.ToUpper(args.AmneziaCountryCode))
+	if !issued {
+		text += "\n\nЭто новый country config, он может занять слот подписки."
+	}
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("amz_dl_confirm:%d:_panel_:%s:%s", args.UserID, args.AmneziaKeyID, args.AmneziaCountryCode)},
 	}, {
-		{Text: "Назад", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_:%s", args.UserID, args.AmneziaKeyID)},
+		{Text: "Назад", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", args.UserID, args.AmneziaKeyID)},
 	}}}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -281,6 +388,10 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
+	docWarn := ""
+	if err := r.sendConfigDocument(ctx, q.Message.Chat.ID, q.Message.MessageThreadID, "amnezia_"+safeConfigSlug(args.AmneziaCountryCode)+".conf", conf, "Amnezia Premium "+strings.ToUpper(args.AmneziaCountryCode)); err != nil {
+		docWarn = "\n\nФайл в чат не отправился: " + shortToast(err)
+	}
 	cmd := wire.Command{
 		ID:     defaultCmdID(),
 		Action: "tunnel_import",
@@ -296,9 +407,9 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выпущен, импорт в очереди")
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Amnezia config выпущен. Импорт туннеля поставлен в очередь роутера.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Обновить кабинет", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_:%s", user.ID, args.AmneziaKeyID)},
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выгружен, импорт в очереди")
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Amnezia config выгружен в топик. Импорт туннеля поставлен в очередь роутера."+docWarn, "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "К странам", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", user.ID, args.AmneziaKeyID)},
 	}}})
 }
 

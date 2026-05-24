@@ -13,7 +13,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -227,6 +229,56 @@ func (c *Client) SendMessageWithReplyKeyboard(ctx context.Context, chatID int64,
 	var out sendMessageResult
 	if err := c.call(ctx, "sendMessage", body, &out); err != nil {
 		return 0, err
+	}
+	return out.MessageID, nil
+}
+
+// SendDocument uploads a small in-memory document to a chat/topic.
+func (c *Client) SendDocument(ctx context.Context, chatID int64, threadID *int64, filename string, data []byte, caption string) (int64, error) {
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("chat_id", strconv.FormatInt(chatID, 10))
+	if threadID != nil {
+		_ = mw.WriteField("message_thread_id", strconv.FormatInt(*threadID, 10))
+	}
+	if caption != "" {
+		_ = mw.WriteField("caption", caption)
+	}
+	part, err := mw.CreateFormFile("document", filename)
+	if err != nil {
+		return 0, fmt.Errorf("tg sendDocument: create form file: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return 0, fmt.Errorf("tg sendDocument: write file: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return 0, fmt.Errorf("tg sendDocument: close multipart: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+c.Token+"/sendDocument", &body)
+	if err != nil {
+		return 0, fmt.Errorf("tg sendDocument: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		safe := redactURLError(err)
+		c.warn("sendDocument", "transport error", "err", safe)
+		return 0, fmt.Errorf("tg sendDocument: %s", safe)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	var ar apiResp
+	if err := json.Unmarshal(raw, &ar); err != nil {
+		c.warn("sendDocument", "bad response", "status", resp.StatusCode, "body_len", len(raw))
+		return 0, fmt.Errorf("tg sendDocument: bad response (status %d): %s", resp.StatusCode, string(raw))
+	}
+	if !ar.OK {
+		c.warn("sendDocument", "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
+		return 0, &APIError{Method: "sendDocument", Description: ar.Description, Code: ar.ErrorCode}
+	}
+	var out sendMessageResult
+	if err := json.Unmarshal(ar.Result, &out); err != nil {
+		return 0, fmt.Errorf("tg sendDocument: decode result: %w", err)
 	}
 	return out.MessageID, nil
 }

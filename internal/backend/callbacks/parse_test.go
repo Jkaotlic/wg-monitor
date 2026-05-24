@@ -702,6 +702,16 @@ func TestParse_AmneziaKeyActions(t *testing.T) {
 	}
 }
 
+func TestParse_AmneziaCountriesPage(t *testing.T) {
+	a, err := Parse("amz_countries:42:_panel_:keyabc:2")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "amz_countries" || a.AmneziaKeyID != "keyabc" || a.AmneziaPage != 2 {
+		t.Errorf("got %+v", a)
+	}
+}
+
 func TestParse_HideMyDownload(t *testing.T) {
 	a, err := Parse("hmn_dl:42:_panel_:codeabc:srv123")
 	if err != nil {

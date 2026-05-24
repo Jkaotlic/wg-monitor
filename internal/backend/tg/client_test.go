@@ -88,8 +88,12 @@ func TestSendMessageWithKeyboard(t *testing.T) {
 	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
 	kb := HardAlertKeyboard(1, "x")
 	mid, err := c.SendMessageWithKeyboard(context.Background(), 100, nil, "hi", "", nil, &kb)
-	if err != nil { t.Fatal(err) }
-	if mid != 777 { t.Errorf("got mid=%d, want 777", mid) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mid != 777 {
+		t.Errorf("got mid=%d, want 777", mid)
+	}
 	if captured["reply_markup"] == nil {
 		t.Errorf("expected reply_markup in body, got %+v", captured)
 	}
@@ -129,7 +133,9 @@ func TestEditMessageTextWithEmptyMarkupRemovesKeyboard(t *testing.T) {
 	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
 	empty := InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{}}
 	err := c.EditMessageText(context.Background(), 100, 5, "new text", "", &empty)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	rm, ok := captured["reply_markup"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected reply_markup map, got %T", captured["reply_markup"])
@@ -150,7 +156,9 @@ func TestEditMessageTextWithNilMarkupOmitsField(t *testing.T) {
 	defer srv.Close()
 	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
 	err := c.EditMessageText(context.Background(), 100, 5, "new", "", nil)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, present := captured["reply_markup"]; present {
 		t.Errorf("nil markup should omit reply_markup field, got %v", captured)
 	}
@@ -205,6 +213,48 @@ func TestSendMessageWithReplyKeyboard_AcceptsInlineMarkup(t *testing.T) {
 	rm, ok := got["reply_markup"].(map[string]any)
 	if !ok || rm["inline_keyboard"] == nil {
 		t.Errorf("inline_keyboard not propagated: %+v", got)
+	}
+}
+
+func TestSendDocumentUploadsMultipart(t *testing.T) {
+	var gotPath string
+	var gotFields = map[string]string{}
+	var gotFile string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		for k, v := range r.MultipartForm.Value {
+			if len(v) > 0 {
+				gotFields[k] = v[0]
+			}
+		}
+		files := r.MultipartForm.File["document"]
+		if len(files) != 1 {
+			t.Fatalf("document files = %d", len(files))
+		}
+		gotFile = files[0].Filename
+		w.Write([]byte(`{"ok":true,"result":{"message_id":9}}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	threadID := int64(11)
+	mid, err := c.SendDocument(context.Background(), -100, &threadID, "x.conf", []byte("[Interface]\n"), "caption")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+	if mid != 9 {
+		t.Fatalf("mid=%d", mid)
+	}
+	if gotPath != "/bottok/sendDocument" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotFields["chat_id"] != "-100" || gotFields["message_thread_id"] != "11" || gotFields["caption"] != "caption" {
+		t.Fatalf("fields = %+v", gotFields)
+	}
+	if gotFile != "x.conf" {
+		t.Fatalf("file = %q", gotFile)
 	}
 }
 
