@@ -42,6 +42,9 @@ telegram:
 	if cfg.Heartbeat.StaleAfterSec != 300 {
 		t.Fatalf("hb default: %d", cfg.Heartbeat.StaleAfterSec)
 	}
+	if cfg.Amnezia.SecretsPath != "/var/lib/wg-monitor/amnezia-premium.json" {
+		t.Fatalf("amnezia secrets default: %q", cfg.Amnezia.SecretsPath)
+	}
 }
 
 func TestLoadConfigRejectsMissingChatID(t *testing.T) {

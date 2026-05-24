@@ -657,3 +657,19 @@ func TestParse_DiagBack_RequiresToken(t *testing.T) {
 		t.Error("expected err on empty token")
 	}
 }
+
+func TestParse_AmneziaDownload(t *testing.T) {
+	a, err := Parse("amz_dl:42:_panel_:DE")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "amz_dl" || !a.IsPanel || a.AmneziaCountryCode != "de" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_AmneziaDownloadRejectsBadCountry(t *testing.T) {
+	if _, err := Parse("amz_dl_confirm:42:_panel_:bad country"); err == nil {
+		t.Error("expected err on bad country code")
+	}
+}

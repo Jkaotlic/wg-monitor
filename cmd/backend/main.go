@@ -126,11 +126,13 @@ func main() {
 	// MaintNotifier from it (its internal cooldown + audit cache stores
 	// must be shared between handlers and notifier).
 	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
-		ChatID:         cfg.Telegram.ChatID,
-		AdminUserID:    cfg.Telegram.AdminUserID,
-		MuteCutoffHour: cfg.State.MuteCutoffHour,
-		BackendVersion: Version,
-		UI:             uiSnap,
+		ChatID:             cfg.Telegram.ChatID,
+		AdminUserID:        cfg.Telegram.AdminUserID,
+		MuteCutoffHour:     cfg.State.MuteCutoffHour,
+		BackendVersion:     Version,
+		UI:                 uiSnap,
+		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
+		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,
 	})
 	cb.SetRoutesCache(routesCache)
 	routesNotifier := &callbacks.RoutesPanelNotifier{

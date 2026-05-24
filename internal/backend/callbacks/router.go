@@ -41,11 +41,13 @@ type TGClient interface {
 }
 
 type Config struct {
-	ChatID         int64
-	AdminUserID    int64
-	MuteCutoffHour int
-	BackendVersion string
-	UI             UIConfigSnapshot
+	ChatID             int64
+	AdminUserID        int64
+	MuteCutoffHour     int
+	BackendVersion     string
+	UI                 UIConfigSnapshot
+	AmneziaBaseURL     string
+	AmneziaSecretsPath string
 }
 
 // UIConfigSnapshot mirrors backend.UIConfig (avoid an import cycle).
@@ -353,6 +355,15 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "routes_open", "routes_refresh":
 		r.handleRoutesOpen(ctx, q, args, args.Action == "routes_refresh")
 		return
+	case "amz_refresh":
+		r.handleAmneziaRefresh(ctx, q, args)
+		return
+	case "amz_dl":
+		r.handleAmneziaDownloadAsk(ctx, q, args)
+		return
+	case "amz_dl_confirm":
+		r.handleAmneziaDownloadConfirm(ctx, q, args)
+		return
 	case "routes_rebind":
 		r.handleRoutesRebindStart(ctx, q, args)
 		return
@@ -648,6 +659,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		r.handleDocumentUpload(ctx, m, kind, user)
 		return
 	}
+	if r.handleAmneziaKeyMessage(ctx, m, kind, user) {
+		return
+	}
 	switch m.Text {
 	case "📊 Что происходит?":
 		if kind == "per_router" && user != nil {
@@ -673,6 +687,13 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+	case "Amnezia Premium":
+		if kind == "per_router" && user != nil {
+			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"Amnezia Premium работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🛠 Обслуживание":
 		if kind == "per_router" && user != nil {
