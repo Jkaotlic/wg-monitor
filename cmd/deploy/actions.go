@@ -922,11 +922,11 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		awgmAuthMode = "router-admin"
 	}
 	if err != nil {
-		if commitToken != nil {
-			return fmt.Errorf("AWG Manager preflight failed before staged token commit; deferred deploy disabled to avoid token split: %w", err)
-		}
 		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
 			return schedErr
+		}
+		if commitToken != nil {
+			return fmt.Errorf("AWG Manager preflight failed before staged token commit; backend token left unchanged: %w", err)
 		}
 		return err
 	}
@@ -985,11 +985,11 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		if strings.TrimSpace(res.Output) != "" {
 			PrintInfo(res.Output)
 		}
-		if commitToken != nil {
-			return fmt.Errorf("AWG Manager bootstrap failed before staged token commit; backend token left unchanged: %w", err)
-		}
 		if scheduled, schedErr := scheduleDeferredAWGMDeployIfWanted(state, secrets, dl, ag, apiKey, login, pass, terminalUser, terminalPass, wizardToken, awgmAuthMode, err); scheduled {
 			return schedErr
+		}
+		if commitToken != nil {
+			return fmt.Errorf("AWG Manager bootstrap failed before staged token commit; backend token left unchanged: %w", err)
 		}
 		return err
 	}

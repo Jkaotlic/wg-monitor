@@ -176,6 +176,8 @@ func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *Age
 	return nil
 }
 
+var installDeferredAWGMDeployViaVPSFunc = installDeferredAWGMDeployViaVPS
+
 func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *Downloader, ag *AgentState, apiKey, login, pass, terminalUser, terminalPass, wizardToken, authMode string, cause error) (bool, error) {
 	if !shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) || !isAWGMTransientUnavailable(cause) {
 		return false, nil
@@ -192,7 +194,7 @@ func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *
 	if err != nil {
 		return true, fmt.Errorf("latest release for deferred deploy: %w", err)
 	}
-	if err := installDeferredAWGMDeployViaVPS(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, rel, wizardToken); err != nil {
+	if err := installDeferredAWGMDeployViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, rel, wizardToken); err != nil {
 		return true, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -219,11 +221,15 @@ func isAWGMTransientUnavailable(err error) bool {
 		"connection refused",
 		"connection reset",
 		"connection aborted",
+		"websocket closed",
+		"name or service not known",
 		"no such host",
 		"network is unreachable",
 		"no route to host",
 		"tls handshake timeout",
 		"temporary failure",
+		"temporary failure in name resolution",
+		"urlopen error",
 		"failed rc=75",
 	} {
 		if strings.Contains(s, needle) {

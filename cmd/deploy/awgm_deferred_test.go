@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -56,6 +59,82 @@ func TestRenderDeferredAWGMRunnerScriptScansQueue(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("runner script missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestAWGMTransientUnavailableMatchesRouterWakeFailures(t *testing.T) {
+	for _, msg := range []string{
+		"awgm vps relay failed rc=1: websocket closed",
+		`awgm vps system info failed rc=1: <urlopen error [Errno -2] Name or service not known>`,
+	} {
+		if !isAWGMTransientUnavailable(fmt.Errorf("%s", msg)) {
+			t.Fatalf("expected transient AWGM failure for %q", msg)
+		}
+	}
+}
+
+func TestScheduleDeferredAWGMDeploySupportsExistingAgentReenroll(t *testing.T) {
+	oldInstall := installDeferredAWGMDeployViaVPSFunc
+	defer func() { installDeferredAWGMDeployViaVPSFunc = oldInstall }()
+
+	called := false
+	installDeferredAWGMDeployViaVPSFunc = func(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass, terminalUser, terminalPass string, rel *Release, wizardToken string) error {
+		called = true
+		if ag.Nickname != "puzirek" || ag.LastDeployedVersion != "v0.13.0-rc14" {
+			t.Fatalf("existing agent identity lost: %+v", ag)
+		}
+		if rel == nil || rel.TagName != "v0.13.0-rc37" {
+			t.Fatalf("release=%+v, want rc37", rel)
+		}
+		if wizardToken != "wizard-token" {
+			t.Fatalf("wizardToken=%q", wizardToken)
+		}
+		return nil
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[{"tag_name":"v0.13.0-rc37"}]`))
+	}))
+	defer srv.Close()
+
+	oldAPI := GitHubAPIBase
+	GitHubAPIBase = srv.URL
+	defer func() { GitHubAPIBase = oldAPI }()
+
+	state := &State{Backend: BackendState{
+		Host:   "83.171.224.125",
+		Domain: "wg.example.test",
+	}}
+	ag := &AgentState{
+		Nickname:            "puzirek",
+		Kind:                "static",
+		AWGMURL:             "https://awg.puzirek.example.test",
+		LastDeployedVersion: "v0.13.0-rc14",
+	}
+	t.Setenv("WG_YES_TO_ALL", "1")
+
+	scheduled, err := scheduleDeferredAWGMDeployIfWanted(
+		state,
+		&SecretStore{},
+		&Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()},
+		ag,
+		"",
+		"admin",
+		"pass",
+		"root",
+		"root-pass",
+		"wizard-token",
+		"router-admin",
+		fmt.Errorf("awgm vps relay failed rc=1: websocket closed"),
+	)
+	if err != nil {
+		t.Fatalf("scheduleDeferredAWGMDeployIfWanted: %v", err)
+	}
+	if !scheduled || !called {
+		t.Fatalf("deferred AWGM deploy not scheduled: scheduled=%v called=%v", scheduled, called)
+	}
+	if ag.PendingVersion != "v0.13.0-rc37" || ag.DeployMode != "awgm" || ag.AWGMAuth != "router-admin" {
+		t.Fatalf("agent pending state not recorded: %+v", ag)
 	}
 }
 
