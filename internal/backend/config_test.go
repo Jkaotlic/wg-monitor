@@ -36,6 +36,9 @@ telegram:
 	if cfg.State.FailThreshold != 3 || cfg.State.RecoveryThreshold != 2 {
 		t.Fatalf("state defaults: %+v", cfg.State)
 	}
+	if cfg.State.NoisyFailThreshold != 6 || cfg.State.NoisyRecoveryThreshold != 3 {
+		t.Fatalf("noisy state defaults: %+v", cfg.State)
+	}
 	if cfg.Heartbeat.StaleAfterSec != 300 {
 		t.Fatalf("hb default: %d", cfg.Heartbeat.StaleAfterSec)
 	}

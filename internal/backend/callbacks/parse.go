@@ -340,7 +340,8 @@ func Parse(data string) (Args, error) {
 		validPanelScreens := map[string]bool{
 			"home": true, "kind": true, "push": true, "no_topic": true,
 			"awaken_confirm": true, "awaken_do": true, "close": true,
-			"help": true, "doctor_all": true, "mobile": true,
+			"help": true, "doctor_all": true, "audit_all": true,
+			"update_all_confirm": true, "update_all_do": true, "mobile": true,
 		}
 		if !validPanelScreens[screen] {
 			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)

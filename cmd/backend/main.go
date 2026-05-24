@@ -129,6 +129,7 @@ func main() {
 		ChatID:         cfg.Telegram.ChatID,
 		AdminUserID:    cfg.Telegram.AdminUserID,
 		MuteCutoffHour: cfg.State.MuteCutoffHour,
+		BackendVersion: Version,
 		UI:             uiSnap,
 	})
 	cb.SetRoutesCache(routesCache)
@@ -165,11 +166,13 @@ func main() {
 		TGNotifier:          notifier,
 		RoutesNotifier:      routesNotifier,
 		MaintNotifier:       maintNotifier,
+		BulkNotifier:        cb,
 		OpkgNotifier:        opkgNotifier,
 		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,
 		UI:                  cfg.UI,
 		Thresholds:          state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
+		AlertPolicy:         backend.AlertPolicy{NoisyFailThreshold: cfg.State.NoisyFailThreshold, NoisyRecoveryThreshold: cfg.State.NoisyRecoveryThreshold},
 		MobileFailThreshold: cfg.State.MobileFailThreshold,
 		// Wire the server-shutdown ctx so cmd-result relay goroutines respect
 		// SIGTERM and don't outlive srv.Shutdown (BUG-15).

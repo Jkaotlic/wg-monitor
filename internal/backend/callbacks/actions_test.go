@@ -68,6 +68,7 @@ type enqueueRefCall struct {
 	cmdID     string
 	chatID    int64
 	messageID int64
+	bulkID    string
 }
 
 func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
@@ -86,7 +87,7 @@ func (f *fakeEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref cmdpk
 		return err
 	}
 	f.refs = append(f.refs, enqueueRefCall{
-		userID: userID, cmdID: cmd.ID, chatID: ref.ChatID, messageID: ref.MessageID,
+		userID: userID, cmdID: cmd.ID, chatID: ref.ChatID, messageID: ref.MessageID, bulkID: ref.BulkID,
 	})
 	return nil
 }

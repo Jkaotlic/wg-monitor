@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
@@ -191,6 +192,11 @@ type MaintNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
+// BulkNotifier updates one aggregate admin report for fleet-wide commands.
+type BulkNotifier interface {
+	NotifyBulkCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
+}
+
 // OpkgNotifier is the subset used by cmdResultHandler when ref.Action is
 // opkg_upgrade or opkg_feed_disable. Implemented by callbacks.Notifier via
 // the NotifyOpkgResult method. Receives userID so it can register pending
@@ -215,11 +221,13 @@ type Deps struct {
 	TGNotifier          TGNotifier
 	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
 	MaintNotifier       MaintNotifier     // nil-safe (handler skips if nil)
+	BulkNotifier        BulkNotifier      // nil-safe (handler falls back to per-command relays)
 	OpkgNotifier        OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
 	UI                  UIConfig
 	Thresholds          state.Thresholds
+	AlertPolicy         AlertPolicy
 	MobileFailThreshold int
 	// ShutdownCtx, when non-nil, parents the relay goroutines spawned by
 	// cmdResultHandler so SIGTERM cancels in-flight TG sends instead of letting
@@ -235,6 +243,11 @@ type Deps struct {
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken string
+}
+
+type AlertPolicy struct {
+	NoisyFailThreshold     int
+	NoisyRecoveryThreshold int
 }
 
 func NewMux(d Deps) http.Handler {
@@ -303,6 +316,29 @@ func thresholdsForUser(base state.Thresholds, mobileFailThreshold int, u *db.Use
 		base.Fail = mobileFailThreshold
 	}
 	return base
+}
+
+func thresholdsForCheck(base state.Thresholds, policy AlertPolicy, checkName string) state.Thresholds {
+	if !isNoisyCheck(checkName) {
+		return base
+	}
+	if policy.NoisyFailThreshold > base.Fail {
+		base.Fail = policy.NoisyFailThreshold
+	}
+	if policy.NoisyRecoveryThreshold > base.Recovery {
+		base.Recovery = policy.NoisyRecoveryThreshold
+	}
+	return base
+}
+
+func isNoisyCheck(checkName string) bool {
+	name := strings.ToLower(strings.TrimSpace(checkName))
+	switch name {
+	case "dns", "external_reach":
+		return true
+	default:
+		return strings.HasPrefix(name, "dns_") || strings.Contains(name, "wifi")
+	}
 }
 
 func reportHandler(d Deps) http.HandlerFunc {
@@ -464,7 +500,8 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Logger.Warn("state.Get", "err", err)
 				continue
 			}
-			tr := state.Apply(prev, c.Status, time.Now(), thresholds)
+			checkThresholds := thresholdsForCheck(thresholds, d.AlertPolicy, c.Name)
+			tr := state.Apply(prev, c.Status, time.Now(), checkThresholds)
 			// FSM transition timeline for post-mortem (OBS-09). Hard/Recovery
 			// stay at Info; SoftFlap is Debug to avoid noise on transient flaps.
 			switch tr.Kind {
@@ -656,6 +693,22 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		// agent's POST on TG network latency.
 		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
 			incCmdResultRelay()
+			if ref.BulkID != "" {
+				if d.BulkNotifier != nil {
+					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
+						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
+						defer cancel()
+						if err := d.BulkNotifier.NotifyBulkCommandResult(ctx, ref, res, uid); err != nil {
+							incTGError()
+							d.Logger.Warn("bulk notifier failed", "cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "err", err)
+						}
+					}(ref, res)
+				} else {
+					d.Logger.Warn("bulk notifier not configured; result not relayed",
+						"cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "nickname", nick)
+				}
+				goto resultLogged
+			}
 			switch ref.Action {
 			case "route_status", "route_rebind", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory", "hrneo_doctor":
 				if d.RoutesNotifier != nil {
@@ -751,6 +804,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
+	resultLogged:
 		d.Logger.Info("cmd result",
 			"nickname", nick, "cmd_id", res.ID, "status", res.Status,
 			"duration_ms", res.DurationMs,

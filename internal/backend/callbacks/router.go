@@ -44,6 +44,7 @@ type Config struct {
 	ChatID         int64
 	AdminUserID    int64
 	MuteCutoffHour int
+	BackendVersion string
 	UI             UIConfigSnapshot
 }
 
@@ -127,6 +128,8 @@ type Router struct {
 	// diag drill-down (C-drilldown).
 	diagDrillAct Action
 	diagBackAct  Action
+
+	fleetBatches *fleetBatchStore
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -199,6 +202,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
 	r.pendingAddOperator = newPendingAddOperatorStore()
 	r.diagCache = newDiagCache()
+	r.fleetBatches = newFleetBatchStore()
 	return r
 }
 
@@ -290,7 +294,7 @@ func newImportToken() string {
 // log every callback's from.id for audit so post-hoc you can see who pushed
 // what — important since opkg_upgrade is enabled in the menu.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
-	if r.cfg.ChatID != 0 && q.Message.Chat.ID != r.cfg.ChatID {
+	if r.cfg.ChatID != 0 && q.Message.Chat.ID != r.cfg.ChatID && !(r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "wrong chat")
 		slog.Warn("rejected callback (chat-id)", "from", q.From.ID, "chat", q.Message.Chat.ID, "data", q.Data)
 		return
@@ -595,7 +599,8 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			return
 		}
 	}
-	if r.cfg.ChatID != 0 && m.Chat.ID != r.cfg.ChatID {
+	adminDM := r.cfg.AdminUserID != 0 && m.From.ID == r.cfg.AdminUserID && m.Chat.ID == m.From.ID
+	if r.cfg.ChatID != 0 && m.Chat.ID != r.cfg.ChatID && !adminDM {
 		return
 	}
 	isAdmin := r.cfg.AdminUserID == 0 || m.From.ID == r.cfg.AdminUserID
