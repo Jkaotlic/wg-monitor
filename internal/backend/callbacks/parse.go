@@ -89,9 +89,17 @@ type Args struct {
 	AccessRouterID int64
 	// AccessOperatorTGID is the target operator's TG user ID for remove_op.
 	AccessOperatorTGID int64
+	// AmneziaKeyID identifies one stored Premium key inside the router topic.
+	AmneziaKeyID string
 	// AmneziaCountryCode is the lower-case country code for Amnezia Premium
 	// config issuance callbacks.
 	AmneziaCountryCode string
+	// HideMyCodeID identifies one stored HideMy.name access code in the topic.
+	HideMyCodeID string
+	// HideMyServerID identifies one server from HideMy.name serverlist.
+	HideMyServerID string
+	// HideMyPage is the zero-based server-list page.
+	HideMyPage int
 }
 
 // menuSuffix is appended to CheckName in control-panel callback_data so the
@@ -148,7 +156,12 @@ var validActions = map[string]bool{
 	// admin access-control panel — per-router operator whitelist.
 	"access": true,
 	// Amnezia Premium cabinet.
-	"amz_refresh": true, "amz_dl": true, "amz_dl_confirm": true,
+	"amz_refresh": true, "amz_open": true, "amz_delete": true,
+	"amz_delete_confirm": true, "amz_dl": true, "amz_dl_confirm": true,
+	// HideMy.name access-code cabinet.
+	"hmn_refresh": true, "hmn_open": true, "hmn_page": true,
+	"hmn_delete": true, "hmn_delete_confirm": true, "hmn_dl": true,
+	"hmn_dl_confirm": true,
 }
 
 var callbackCodeRe = regexp.MustCompile(`^[A-Za-z0-9_-]{2,16}$`)
@@ -417,14 +430,80 @@ func Parse(data string) (Args, error) {
 		}
 	}
 	if strings.HasPrefix(action, "amz_") {
-		if action == "amz_dl" || action == "amz_dl_confirm" {
+		switch action {
+		case "amz_refresh":
+			if len(parts) >= 4 && parts[3] != "" {
+				if !callbackCodeRe.MatchString(parts[3]) {
+					return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
+				}
+				a.AmneziaKeyID = parts[3]
+			}
+		case "amz_open", "amz_delete", "amz_delete_confirm":
 			if len(parts) < 4 || parts[3] == "" {
+				return Args{}, fmt.Errorf("%s requires key id: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
+			}
+			a.AmneziaKeyID = parts[3]
+		case "amz_dl", "amz_dl_confirm":
+			if len(parts) == 4 && parts[3] != "" {
+				if !callbackCodeRe.MatchString(parts[3]) {
+					return Args{}, fmt.Errorf("%s: bad country code %q", action, parts[3])
+				}
+				a.AmneziaCountryCode = strings.ToLower(parts[3])
+				return a, nil
+			}
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 				return Args{}, fmt.Errorf("%s requires country code: %q", action, data)
 			}
 			if !callbackCodeRe.MatchString(parts[3]) {
-				return Args{}, fmt.Errorf("%s: bad country code %q", action, parts[3])
+				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
 			}
-			a.AmneziaCountryCode = strings.ToLower(parts[3])
+			if !callbackCodeRe.MatchString(parts[4]) {
+				return Args{}, fmt.Errorf("%s: bad country code %q", action, parts[4])
+			}
+			a.AmneziaKeyID = parts[3]
+			a.AmneziaCountryCode = strings.ToLower(parts[4])
+		}
+	}
+	if strings.HasPrefix(action, "hmn_") {
+		switch action {
+		case "hmn_refresh":
+			// No extra fields: return to the stored-code list.
+		case "hmn_open", "hmn_delete", "hmn_delete_confirm":
+			if len(parts) < 4 || parts[3] == "" {
+				return Args{}, fmt.Errorf("%s requires code id: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad code id %q", action, parts[3])
+			}
+			a.HideMyCodeID = parts[3]
+		case "hmn_page":
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+				return Args{}, fmt.Errorf("%s requires code id and page: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad code id %q", action, parts[3])
+			}
+			page, err := strconv.Atoi(parts[4])
+			if err != nil || page < 0 {
+				return Args{}, fmt.Errorf("%s: bad page %q", action, parts[4])
+			}
+			a.HideMyCodeID = parts[3]
+			a.HideMyPage = page
+		case "hmn_dl", "hmn_dl_confirm":
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+				return Args{}, fmt.Errorf("%s requires code id and server id: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad code id %q", action, parts[3])
+			}
+			if !callbackCodeRe.MatchString(parts[4]) {
+				return Args{}, fmt.Errorf("%s: bad server id %q", action, parts[4])
+			}
+			a.HideMyCodeID = parts[3]
+			a.HideMyServerID = parts[4]
 		}
 	}
 	return a, nil

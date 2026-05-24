@@ -169,3 +169,21 @@ func TestHardAlertKeyboardCommandActionsRespect64ByteLimit(t *testing.T) {
 		}
 	}
 }
+
+func TestPerRouterKeyboardContainsHideMyName(t *testing.T) {
+	kb := ReplyKeyboardForTopic("per_router").(*ReplyKeyboardMarkup)
+	found := false
+	for _, row := range kb.Keyboard {
+		for _, btn := range row {
+			if btn.Text == "HideMy.name" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("HideMy.name button not found")
+	}
+	if got := CompatBtnTextByCode("hidemyname"); got != "HideMy.name" {
+		t.Fatalf("compat reverse = %q", got)
+	}
+}

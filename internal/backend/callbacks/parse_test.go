@@ -659,17 +659,77 @@ func TestParse_DiagBack_RequiresToken(t *testing.T) {
 }
 
 func TestParse_AmneziaDownload(t *testing.T) {
-	a, err := Parse("amz_dl:42:_panel_:DE")
+	a, err := Parse("amz_dl:42:_panel_:keyabc:DE")
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	if a.Action != "amz_dl" || !a.IsPanel || a.AmneziaCountryCode != "de" {
+	if a.Action != "amz_dl" || !a.IsPanel || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
 		t.Errorf("got %+v", a)
 	}
 }
 
 func TestParse_AmneziaDownloadRejectsBadCountry(t *testing.T) {
-	if _, err := Parse("amz_dl_confirm:42:_panel_:bad country"); err == nil {
+	if _, err := Parse("amz_dl_confirm:42:_panel_:keyabc:bad country"); err == nil {
 		t.Error("expected err on bad country code")
+	}
+}
+
+func TestParse_AmneziaDownloadLegacyActiveKey(t *testing.T) {
+	a, err := Parse("amz_dl:42:_panel_:DE")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.AmneziaKeyID != "" || a.AmneziaCountryCode != "de" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_AmneziaKeyActions(t *testing.T) {
+	for _, data := range []string{
+		"amz_open:42:_panel_:keyabc",
+		"amz_delete:42:_panel_:keyabc",
+		"amz_delete_confirm:42:_panel_:keyabc",
+	} {
+		t.Run(data, func(t *testing.T) {
+			a, err := Parse(data)
+			if err != nil {
+				t.Fatalf("unexpected: %v", err)
+			}
+			if a.AmneziaKeyID != "keyabc" {
+				t.Fatalf("key id = %q", a.AmneziaKeyID)
+			}
+		})
+	}
+}
+
+func TestParse_HideMyDownload(t *testing.T) {
+	a, err := Parse("hmn_dl:42:_panel_:codeabc:srv123")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "hmn_dl" || !a.IsPanel || a.HideMyCodeID != "codeabc" || a.HideMyServerID != "srv123" {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_HideMyPage(t *testing.T) {
+	a, err := Parse("hmn_page:42:_panel_:codeabc:2")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.HideMyCodeID != "codeabc" || a.HideMyPage != 2 {
+		t.Errorf("got %+v", a)
+	}
+}
+
+func TestParse_HideMyActionsRequireCodeID(t *testing.T) {
+	for _, data := range []string{
+		"hmn_open:42:_panel_",
+		"hmn_delete:42:_panel_:bad code",
+		"hmn_dl_confirm:42:_panel_:codeabc:bad server",
+	} {
+		if _, err := Parse(data); err == nil {
+			t.Fatalf("expected error for %q", data)
+		}
 	}
 }

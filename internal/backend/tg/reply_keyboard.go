@@ -100,7 +100,7 @@ func keyboardRowsForKind(kind string) [][]string {
 		return [][]string{
 			{"📊 Что происходит?", "🩺 Проверка"},
 			{"🎛 Туннели", "🛣 Маршруты"},
-			{"Amnezia Premium"},
+			{"Amnezia Premium", "HideMy.name"},
 			{"🌍 Через тоннель?", "🇷🇺 Напрямую?"},
 			{"🛠 Обслуживание", "⬆ Обновить пакеты"},
 		}
@@ -118,6 +118,7 @@ var compatBtnCodes = map[string]string{
 	"📊 Что происходит?": "smart_reply",
 	"🎛 Туннели":         "tunnels",
 	"Amnezia Premium":   "amnezia_premium",
+	"HideMy.name":       "hidemyname",
 	"🌍 Через тоннель?":  "via_tunnel",
 	"🇷🇺 Напрямую?":      "direct",
 	"🛣 Маршруты":        "routes",
