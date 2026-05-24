@@ -2259,8 +2259,8 @@ func buildMigrateUserUpsertSQL(ag AgentState, tokenHash string) string {
 		kind = "static"
 	}
 	return fmt.Sprintf(
-		`INSERT INTO users(nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since)
-VALUES (%s, %s, '0.0.0.0', 'awg0', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+		`INSERT INTO users(nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac)
+VALUES (%s, %s, '0.0.0.0', 'awg0', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT(nickname) DO UPDATE SET
   token_hash=excluded.token_hash,
   kind=excluded.kind,
@@ -2272,7 +2272,12 @@ ON CONFLICT(nickname) DO UPDATE SET
   last_deployed_version=excluded.last_deployed_version,
   deploy_ring=excluded.deploy_ring,
   pending_version=excluded.pending_version,
-  pending_since=excluded.pending_since;
+  pending_since=excluded.pending_since,
+  last_deploy=excluded.last_deploy,
+  deploy_mode=excluded.deploy_mode,
+  awgm_url=excluded.awgm_url,
+  awgm_auth=excluded.awgm_auth,
+  expected_mac=excluded.expected_mac;
 SELECT changes();`,
 		sqlString(ag.Nickname),
 		sqlString(tokenHash),
@@ -2286,6 +2291,11 @@ SELECT changes();`,
 		sqlNullableString(ag.Ring),
 		sqlNullableString(ag.PendingVersion),
 		sqlNullableString(ag.PendingSince),
+		sqlNullableString(ag.LastDeploy),
+		sqlNullableString(ag.DeployMode),
+		sqlNullableString(ag.AWGMURL),
+		sqlNullableString(ag.AWGMAuth),
+		sqlNullableString(ag.ExpectedMAC),
 	)
 }
 
@@ -2494,7 +2504,7 @@ func actionSyncVPS(state *State, secrets *SecretStore) error {
 	if err != nil {
 		return fmt.Errorf("VPS unreachable or auth failed: %w", err)
 	}
-	merged, added, divergent := MergeAgents(state.Agents, remote)
+	merged, added, divergent, macConflicts := MergeAgents(state.Agents, remote)
 	state.Agents = merged
 	PrintOK(fmt.Sprintf("Получено с VPS: %d роутеров", len(remote)))
 	if len(added) > 0 {
@@ -2507,6 +2517,12 @@ func actionSyncVPS(state *State, secrets *SecretStore) error {
 		PrintWarn("SSH-координаты разошлись (VPS-значение применено):")
 		for _, n := range divergent {
 			PrintWarn("  ~ " + n)
+		}
+	}
+	if len(macConflicts) > 0 {
+		PrintWarn("expected_mac отличается на VPS; локальный pin сохранён:")
+		for _, n := range macConflicts {
+			PrintWarn("  ! " + n)
 		}
 	}
 	// Local-only detection: nicknames present locally but not in remote.

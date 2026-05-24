@@ -64,6 +64,11 @@ type wizardAgent struct {
 	Ring                string     `json:"ring"`
 	PendingVersion      string     `json:"pending_version"`
 	PendingSince        string     `json:"pending_since"`
+	LastDeploy          string     `json:"last_deploy"`
+	DeployMode          string     `json:"deploy_mode"`
+	AWGMURL             string     `json:"awgm_url"`
+	AWGMAuth            string     `json:"awgm_auth"`
+	ExpectedMAC         string     `json:"expected_mac"`
 	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
 	HasTopic            bool       `json:"has_topic"`
 }
@@ -130,6 +135,21 @@ func wizardListAgentsHandler(d Deps) http.HandlerFunc {
 			}
 			if u.PendingSince != nil {
 				a.PendingSince = *u.PendingSince
+			}
+			if u.LastDeploy != nil {
+				a.LastDeploy = *u.LastDeploy
+			}
+			if u.DeployMode != nil {
+				a.DeployMode = *u.DeployMode
+			}
+			if u.AWGMURL != nil {
+				a.AWGMURL = *u.AWGMURL
+			}
+			if u.AWGMAuth != nil {
+				a.AWGMAuth = *u.AWGMAuth
+			}
+			if u.ExpectedMAC != nil {
+				a.ExpectedMAC = *u.ExpectedMAC
 			}
 			if u.LastSeenAt != nil {
 				ts := *u.LastSeenAt
@@ -230,6 +250,11 @@ type wizardPutAgentReq struct {
 	Ring                string `json:"ring"`
 	PendingVersion      string `json:"pending_version"`
 	PendingSince        string `json:"pending_since"`
+	LastDeploy          string `json:"last_deploy"`
+	DeployMode          string `json:"deploy_mode"`
+	AWGMURL             string `json:"awgm_url"`
+	AWGMAuth            string `json:"awgm_auth"`
+	ExpectedMAC         string `json:"expected_mac"`
 }
 
 // wizardPutAgentHandler upserts deploy metadata into an existing users row.
@@ -267,6 +292,11 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			Ring:                req.Ring,
 			PendingVersion:      req.PendingVersion,
 			PendingSince:        req.PendingSince,
+			LastDeploy:          req.LastDeploy,
+			DeployMode:          req.DeployMode,
+			AWGMURL:             req.AWGMURL,
+			AWGMAuth:            req.AWGMAuth,
+			ExpectedMAC:         req.ExpectedMAC,
 		})
 		if err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {

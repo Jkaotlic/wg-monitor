@@ -27,7 +27,7 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 	if state.Backend.Domain != "" {
 		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
 			if remote, err := startupListAgents(state.Backend.Domain, state.Backend.Host, tok); err == nil {
-				merged, added, _ := MergeAgents(state.Agents, remote)
+				merged, added, _, _ := MergeAgents(state.Agents, remote)
 				state.Agents = merged
 				if len(added) > 0 {
 					PrintInfo(fmt.Sprintf("VPS sync на старте: добавлено %d новых роутеров (%s)", len(added), strings.Join(added, ", ")))

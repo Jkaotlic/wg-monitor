@@ -343,3 +343,36 @@ func TestUpdateLastSeenAgentVersionKeepsDifferentPendingDeploy(t *testing.T) {
 		t.Fatalf("pending_since=%v", got.PendingSince)
 	}
 }
+
+func TestUpdateDeployInfoRoundTripsPortableWizardMetadata(t *testing.T) {
+	d := newTestDB(t)
+	if _, err := d.Users().Insert("alyaba", "tok", "1.1.1.1", "awg11"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateDeployInfo("alyaba", DeployInfo{
+		SSHHost:             "192.168.31.1",
+		SSHPort:             22,
+		SSHUser:             "root",
+		Arch:                "arm64",
+		LastDeployedVersion: "v0.13.0-rc36",
+		LastDeploy:          "2026-05-24T10:20:30Z",
+		DeployMode:          "awgm",
+		AWGMURL:             "https://alyaba.keenetic.pro",
+		AWGMAuth:            "api-key",
+		ExpectedMAC:         "aabbccddeeff",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByNickname("alyaba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastDeploy == nil || *got.LastDeploy != "2026-05-24T10:20:30Z" ||
+		got.DeployMode == nil || *got.DeployMode != "awgm" ||
+		got.AWGMURL == nil || *got.AWGMURL != "https://alyaba.keenetic.pro" ||
+		got.AWGMAuth == nil || *got.AWGMAuth != "api-key" ||
+		got.ExpectedMAC == nil || *got.ExpectedMAC != "aabbccddeeff" {
+		t.Fatalf("portable wizard metadata did not round-trip: %+v", got)
+	}
+}

@@ -86,6 +86,9 @@ func TestWizardList_OneAgent(t *testing.T) {
 		SSHHost: "192.168.1.1", SSHPort: 222, SSHUser: "root",
 		Arch: "mips", LastDeployedVersion: "v0.10.3",
 		Ring: "canary", PendingVersion: "v0.11.0", PendingSince: "2026-05-19T10:00:00Z",
+		LastDeploy: "2026-05-24T10:20:30Z", DeployMode: "awgm",
+		AWGMURL: "https://alyaba.keenetic.pro", AWGMAuth: "api-key",
+		ExpectedMAC: "aabbccddeeff",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +108,11 @@ func TestWizardList_OneAgent(t *testing.T) {
 	}
 	if got.Agents[0].Ring != "canary" || got.Agents[0].PendingVersion != "v0.11.0" {
 		t.Fatalf("rollout metadata missing: %+v", got.Agents[0])
+	}
+	if got.Agents[0].DeployMode != "awgm" || got.Agents[0].AWGMURL != "https://alyaba.keenetic.pro" ||
+		got.Agents[0].AWGMAuth != "api-key" || got.Agents[0].ExpectedMAC != "aabbccddeeff" ||
+		got.Agents[0].LastDeploy != "2026-05-24T10:20:30Z" {
+		t.Fatalf("portable wizard metadata missing: %+v", got.Agents[0])
 	}
 }
 
@@ -138,7 +146,7 @@ func TestWizardPut_204Updates(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := wizardPutAgentHandler(Deps{DB: d})
-	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.10.3","ring":"beta","pending_version":"v0.11.0","pending_since":"2026-05-19T10:00:00Z"}`
+	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.10.3","ring":"beta","pending_version":"v0.11.0","pending_since":"2026-05-19T10:00:00Z","last_deploy":"2026-05-24T10:20:30Z","deploy_mode":"awgm","awgm_url":"https://alyaba.keenetic.pro","awgm_auth":"api-key","expected_mac":"aabbccddeeff"}`
 	req := httptest.NewRequest("PUT", "/v1/wizard/agents/alyaba", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetPathValue("nickname", "alyaba")
@@ -153,6 +161,12 @@ func TestWizardPut_204Updates(t *testing.T) {
 	}
 	if u.Ring == nil || *u.Ring != "beta" || u.PendingVersion == nil || *u.PendingVersion != "v0.11.0" {
 		t.Fatalf("rollout metadata not persisted: u=%+v", u)
+	}
+	if u.DeployMode == nil || *u.DeployMode != "awgm" || u.AWGMURL == nil ||
+		*u.AWGMURL != "https://alyaba.keenetic.pro" || u.AWGMAuth == nil ||
+		*u.AWGMAuth != "api-key" || u.ExpectedMAC == nil || *u.ExpectedMAC != "aabbccddeeff" ||
+		u.LastDeploy == nil || *u.LastDeploy != "2026-05-24T10:20:30Z" {
+		t.Fatalf("portable wizard metadata not persisted: u=%+v", u)
 	}
 }
 

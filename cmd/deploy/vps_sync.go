@@ -31,6 +31,11 @@ type RemoteAgent struct {
 	Ring                string     `json:"ring"`
 	PendingVersion      string     `json:"pending_version"`
 	PendingSince        string     `json:"pending_since"`
+	LastDeploy          string     `json:"last_deploy"`
+	DeployMode          string     `json:"deploy_mode"`
+	AWGMURL             string     `json:"awgm_url"`
+	AWGMAuth            string     `json:"awgm_auth"`
+	ExpectedMAC         string     `json:"expected_mac"`
 	LastSeenAt          *time.Time `json:"last_seen_at,omitempty"`
 	HasTopic            bool       `json:"has_topic"`
 }
@@ -151,7 +156,15 @@ func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 		Ring                string `json:"ring"`
 		PendingVersion      string `json:"pending_version"`
 		PendingSince        string `json:"pending_since"`
-	}{a.SSHHost, a.SSHPort, a.SSHUser, a.Arch, a.LastDeployedVersion, a.Ring, a.PendingVersion, a.PendingSince})
+		LastDeploy          string `json:"last_deploy"`
+		DeployMode          string `json:"deploy_mode"`
+		AWGMURL             string `json:"awgm_url"`
+		AWGMAuth            string `json:"awgm_auth"`
+		ExpectedMAC         string `json:"expected_mac"`
+	}{
+		a.SSHHost, a.SSHPort, a.SSHUser, a.Arch, a.LastDeployedVersion, a.Ring, a.PendingVersion, a.PendingSince,
+		a.LastDeploy, a.DeployMode, a.AWGMURL, a.AWGMAuth, a.ExpectedMAC,
+	})
 	if err != nil {
 		return err
 	}
@@ -199,7 +212,7 @@ func (c *VPSClient) CreateEnrollment(ctx context.Context, enroll EnrollmentReque
 //   - local-only entries → kept as-is (warn separately upstream)
 //   - SSH-divergence (both have non-empty SSH but differ) → divergent slice
 //     surfaced for logging; merged takes remote
-func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState, added []string, divergent []string) {
+func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState, added []string, divergent []string, macConflicts []string) {
 	byNick := make(map[string]int, len(local))
 	for i, a := range local {
 		byNick[a.Nickname] = i
@@ -220,6 +233,11 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 				Ring:                r.Ring,
 				PendingVersion:      r.PendingVersion,
 				PendingSince:        r.PendingSince,
+				LastDeploy:          r.LastDeploy,
+				DeployMode:          r.DeployMode,
+				AWGMURL:             normalizeAWGMURL(r.AWGMURL),
+				AWGMAuth:            r.AWGMAuth,
+				ExpectedMAC:         normalizeMACPin(r.ExpectedMAC),
 			})
 			added = append(added, r.Nickname)
 			continue
@@ -240,6 +258,28 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 		}
 		a.PendingVersion = r.PendingVersion
 		a.PendingSince = r.PendingSince
+		if r.LastDeploy != "" {
+			a.LastDeploy = r.LastDeploy
+		}
+		if r.DeployMode != "" {
+			a.DeployMode = r.DeployMode
+		}
+		if r.AWGMURL != "" {
+			a.AWGMURL = normalizeAWGMURL(r.AWGMURL)
+		}
+		if r.AWGMAuth != "" {
+			a.AWGMAuth = r.AWGMAuth
+		}
+		if r.ExpectedMAC != "" {
+			remoteMAC := normalizeMACPin(r.ExpectedMAC)
+			localMAC := normalizeMACPin(a.ExpectedMAC)
+			if localMAC == "" {
+				a.ExpectedMAC = remoteMAC
+			} else if remoteMAC != "" && localMAC != remoteMAC {
+				a.ExpectedMAC = localMAC
+				macConflicts = append(macConflicts, r.Nickname)
+			}
+		}
 		// SSH: remote wins iff remote has value; else preserve local.
 		// Track divergence (both non-empty AND differ) for visibility.
 		if r.SSHHost != "" {
@@ -259,6 +299,13 @@ func MergeAgents(local []AgentState, remote []RemoteAgent) (merged []AgentState,
 		}
 	}
 	return
+}
+
+func normalizeMACPin(s string) string {
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.ReplaceAll(s, ":", "")
+	s = strings.ReplaceAll(s, "-", "")
+	return s
 }
 
 // Deploy enqueues a self_update command for the named agent and returns the
@@ -567,6 +614,11 @@ func AgentStateToRemote(a AgentState) RemoteAgent {
 		Ring:                a.Ring,
 		PendingVersion:      a.PendingVersion,
 		PendingSince:        a.PendingSince,
+		LastDeploy:          a.LastDeploy,
+		DeployMode:          a.DeployMode,
+		AWGMURL:             normalizeAWGMURL(a.AWGMURL),
+		AWGMAuth:            a.AWGMAuth,
+		ExpectedMAC:         normalizeMACPin(a.ExpectedMAC),
 	}
 }
 

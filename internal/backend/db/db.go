@@ -75,6 +75,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate mobile rollout: %w", err)
 	}
+	if err := migrateWizardPortableMetadata(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users wizard portable metadata: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -170,6 +174,27 @@ func migrateMobileRollout(d *sql.DB) error {
 	}
 	return addColumnIfMissing(d, "users", "pending_since",
 		`ALTER TABLE users ADD COLUMN pending_since TEXT`)
+}
+
+func migrateWizardPortableMetadata(d *sql.DB) error {
+	if err := addColumnIfMissing(d, "users", "last_deploy",
+		`ALTER TABLE users ADD COLUMN last_deploy TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "deploy_mode",
+		`ALTER TABLE users ADD COLUMN deploy_mode TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "awgm_url",
+		`ALTER TABLE users ADD COLUMN awgm_url TEXT`); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(d, "users", "awgm_auth",
+		`ALTER TABLE users ADD COLUMN awgm_auth TEXT`); err != nil {
+		return err
+	}
+	return addColumnIfMissing(d, "users", "expected_mac",
+		`ALTER TABLE users ADD COLUMN expected_mac TEXT`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {

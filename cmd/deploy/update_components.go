@@ -153,11 +153,12 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 }
 
 type updateRefreshSummary struct {
-	VPSChecked     bool
-	BackendVersion string
-	AgentsAdded    []string
-	AgentsDiverged []string
-	VPSError       error
+	VPSChecked         bool
+	BackendVersion     string
+	AgentsAdded        []string
+	AgentsDiverged     []string
+	AgentsMACConflicts []string
+	VPSError           error
 }
 
 func refreshInstalledComponentState(state *State, secrets *SecretStore) updateRefreshSummary {
@@ -184,16 +185,20 @@ func refreshInstalledComponentState(state *State, secrets *SecretStore) updateRe
 		PrintWarn("VPS sync перед проверкой обновлений не прошёл: " + err.Error())
 		return summary
 	}
-	merged, added, divergent := MergeAgents(state.Agents, remote)
+	merged, added, divergent, macConflicts := MergeAgents(state.Agents, remote)
 	state.Agents = merged
 	summary.VPSChecked = true
 	summary.AgentsAdded = added
 	summary.AgentsDiverged = divergent
+	summary.AgentsMACConflicts = macConflicts
 	if len(added) > 0 {
 		PrintInfo(fmt.Sprintf("VPS sync: добавлено из backend: %s", strings.Join(added, ", ")))
 	}
 	if len(divergent) > 0 {
 		PrintWarn(fmt.Sprintf("VPS sync: SSH-адреса отличаются от локальных для: %s", strings.Join(divergent, ", ")))
+	}
+	if len(macConflicts) > 0 {
+		PrintWarn(fmt.Sprintf("VPS sync: expected_mac отличается на VPS; локальный pin сохранён для: %s", strings.Join(macConflicts, ", ")))
 	}
 	return summary
 }
