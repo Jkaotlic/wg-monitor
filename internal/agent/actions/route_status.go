@@ -16,18 +16,23 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	var (
 		hr      *awgmgr.HydraRouteStatus
 		tunnels *awgmgr.TunnelsAll
+		routing []awgmgr.RoutingTunnel
 		dns     []awgmgr.DNSRoute
 		statics []awgmgr.StaticRoute
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { hr, err = c.HydraRouteStatus(gctx); return })
 	g.Go(func() (err error) { tunnels, err = c.TunnelsAll(gctx); return })
+	g.Go(func() error {
+		routing, _ = c.RoutingTunnels(gctx)
+		return nil
+	})
 	g.Go(func() (err error) { dns, err = c.ListDNSRoutes(gctx); return })
 	g.Go(func() (err error) { statics, err = c.ListStaticRoutes(gctx); return })
 	if err := g.Wait(); err != nil {
 		return "", err
 	}
-	snap := buildRouteSnapshot(hr, tunnels, dns, statics)
+	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics)
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return "", err
@@ -35,27 +40,43 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	return string(b), nil
 }
 
-// buildRouteSnapshot is the pure aggregation function — easy to test.
-func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute) wire.RouteSnapshot {
+// buildRouteSnapshot is the pure aggregation function: easy to test.
+func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute) wire.RouteSnapshot {
 	snap := wire.RouteSnapshot{Counts: make(map[string]wire.TunnelCounts)}
 	if hr != nil {
 		snap.HRNeo = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
 	}
-	byIface := make(map[string]string) // iface → tunnel id
+	byIface := make(map[string]string)
 	defaultIface := ""
 	if tunnels != nil {
 		for _, t := range tunnels.Tunnels {
-			snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
-				ID: t.ID, Name: t.Name, Iface: t.InterfaceName,
-				Enabled: t.Enabled, DefaultRoute: t.DefaultRoute,
-			})
-			if t.InterfaceName != "" {
-				byIface[t.InterfaceName] = t.ID
+			ep := managedRouteEndpoint(t)
+			if ep.Iface == "" {
+				continue
 			}
-			if t.DefaultRoute && defaultIface == "" {
-				defaultIface = t.InterfaceName
+			snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
+				ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
+				Enabled: ep.Enabled, Available: ep.Available, DefaultRoute: ep.DefaultRoute,
+			})
+			byIface[ep.Iface] = ep.ID
+			if ep.DefaultRoute && defaultIface == "" {
+				defaultIface = ep.Iface
 			}
 		}
+	}
+	for _, t := range routing {
+		ep := ndmsRouteEndpoint(t)
+		if ep.Iface == "" {
+			continue
+		}
+		if _, exists := byIface[ep.Iface]; exists {
+			continue
+		}
+		snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
+			ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
+			Enabled: ep.Enabled, Available: ep.Available,
+		})
+		byIface[ep.Iface] = ep.ID
 	}
 	creditDNS := func(tid string, isHRNeo bool) {
 		c := snap.Counts[tid]
@@ -79,7 +100,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		isHR := r.Backend == "hydraroute"
 		ruleBind := ""
 		if len(r.Routes) > 0 {
-			iface := r.Routes[0].Interface
+			iface := firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
 			ruleBind = iface
 			if id, ok := byIface[iface]; ok {
 				creditDNS(id, isHR)
@@ -87,7 +108,6 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				creditOther(isHR, false)
 			}
 		} else {
-			// Fall-through rule.
 			if isHR && r.HRPolicyName != "" && defaultIface != "" {
 				ruleBind = defaultIface
 				if id, ok := byIface[defaultIface]; ok {

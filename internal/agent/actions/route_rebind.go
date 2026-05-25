@@ -22,18 +22,18 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 		b, _ := json.Marshal(res)
 		return string(b), nil
 	}
-	src, err := getTunnel(ctx, c, srcID)
+	src, err := resolveRouteEndpoint(ctx, c, srcID)
 	if err != nil {
 		return "", fmt.Errorf("resolve src: %w", err)
 	}
-	dst, err := getTunnel(ctx, c, dstID)
+	dst, err := resolveRouteEndpoint(ctx, c, dstID)
 	if err != nil {
 		return "", fmt.Errorf("resolve dst: %w", err)
 	}
-	if src.InterfaceName == "" || dst.InterfaceName == "" {
-		return "", fmt.Errorf("src/dst missing interfaceName: src=%+v dst=%+v", src, dst)
+	if src.Iface == "" || dst.Iface == "" {
+		return "", fmt.Errorf("src/dst missing iface: src=%+v dst=%+v", src, dst)
 	}
-	srcIface, dstIface := src.InterfaceName, dst.InterfaceName
+	srcIface, dstIface := src.Iface, dst.Iface
 	srcIsDefaultRoute := src.DefaultRoute
 
 	hrTouched := false

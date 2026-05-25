@@ -1536,7 +1536,8 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 func (r *Router) handleRoutesAddStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	text := "🛣 Добавить маршрут\n\nЧто направляем:\n  • DNS / HR-Neo — домены через выбранный туннель\n  • Static CIDR — IP/подсети через выбранный туннель"
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-		{{Text: "DNS / HR-Neo", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns", args.UserID)}},
+		{{Text: "DNS (NDMS)", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns", args.UserID)}},
+		{{Text: "DNS / HR-Neo", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns_hr", args.UserID)}},
 		{{Text: "Static CIDR", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:static", args.UserID)}},
 		{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", args.UserID)}},
 	}}
@@ -1557,7 +1558,7 @@ func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, a
 	}
 	draft := r.routeWizard.PutAddDraft(RouteAddDraft{
 		UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID,
-		Kind: args.RouteKind, UseHRNeo: args.RouteKind == "dns" && snap.HRNeo.Installed && snap.HRNeo.Running,
+		Kind: args.RouteKind, UseHRNeo: args.RouteUseHRNeo && snap.HRNeo.Installed && snap.HRNeo.Running,
 	})
 	rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Tunnels)+1)
 	for _, t := range snap.Tunnels {

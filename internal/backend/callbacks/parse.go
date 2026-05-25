@@ -49,6 +49,7 @@ type Args struct {
 	RebindDstID string
 	// Route add/delete wizard tokens and short fields.
 	RouteKind         string
+	RouteUseHRNeo     bool
 	RouteDraftToken   string
 	RouteConfirmToken string
 	RouteToken        string
@@ -263,10 +264,20 @@ func Parse(data string) (Args, error) {
 		a.RebindDstID = parts[3]
 		a.RebindToken = parts[4]
 	case "routes_add_type":
-		if len(parts) < 4 || (parts[3] != "dns" && parts[3] != "static") {
-			return Args{}, fmt.Errorf("routes_add_type requires dns|static: %q", data)
+		if len(parts) < 4 {
+			return Args{}, fmt.Errorf("routes_add_type requires dns|dns_hr|static: %q", data)
 		}
-		a.RouteKind = parts[3]
+		switch parts[3] {
+		case "dns":
+			a.RouteKind = "dns"
+		case "dns_hr":
+			a.RouteKind = "dns"
+			a.RouteUseHRNeo = true
+		case "static":
+			a.RouteKind = "static"
+		default:
+			return Args{}, fmt.Errorf("routes_add_type requires dns|dns_hr|static: %q", data)
+		}
 	case "routes_add_tunnel":
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_add_tunnel requires draft token and tunnel id: %q", data)

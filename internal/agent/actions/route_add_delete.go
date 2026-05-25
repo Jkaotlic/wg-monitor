@@ -37,9 +37,9 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 	if !plan.CanApply {
 		return "", fmt.Errorf("route_add: blocking overlap found")
 	}
-	t, err := getTunnel(ctx, c, req.TunnelID)
+	t, err := resolveRouteEndpoint(ctx, c, req.TunnelID)
 	if err != nil {
-		return "", fmt.Errorf("resolve tunnel: %w", err)
+		return "", fmt.Errorf("resolve route target: %w", err)
 	}
 	hrTouched := false
 	routeID := plan.Route.ID
@@ -51,7 +51,7 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 			ManualDomains: req.Targets,
 			Enabled:       true,
 			Backend:       "ndms",
-			Routes:        []awgmgr.DNSRouteEntry{{Interface: t.InterfaceName, TunnelID: t.InterfaceName, Fallback: "auto"}},
+			Routes:        []awgmgr.DNSRouteEntry{{Interface: t.Iface, TunnelID: t.Iface, Fallback: "auto"}},
 		}
 		if req.UseHRNeo {
 			rule.Backend = "hydraroute"
@@ -63,7 +63,7 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 			return "", err
 		}
 	case "static":
-		rule := awgmgr.StaticRoute{Name: req.Name, TunnelID: t.InterfaceName, Subnets: req.Targets, Fallback: "auto", Enabled: true}
+		rule := awgmgr.StaticRoute{Name: req.Name, TunnelID: t.Iface, Subnets: req.Targets, Fallback: "auto", Enabled: true}
 		if err := c.CreateStaticRoute(ctx, rule); err != nil {
 			return "", err
 		}
@@ -145,9 +145,9 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 			}
 		}
 	}
-	t, err := getTunnel(ctx, c, req.TunnelID)
+	t, err := resolveRouteEndpoint(ctx, c, req.TunnelID)
 	if err != nil {
-		return wire.RouteAddPlan{}, fmt.Errorf("resolve tunnel: %w", err)
+		return wire.RouteAddPlan{}, fmt.Errorf("resolve route target: %w", err)
 	}
 	existing, err := liveRouteSummaries(ctx, c)
 	if err != nil {
@@ -158,7 +158,7 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 		Name:    req.Name,
 		Kind:    req.Kind,
 		Enabled: true,
-		Bind:    t.InterfaceName,
+		Bind:    t.Iface,
 		Targets: rawTargets(req.Targets),
 	}
 	if req.Kind == "dns" {

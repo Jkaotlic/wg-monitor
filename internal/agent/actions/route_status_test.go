@@ -29,6 +29,13 @@ func fakeAwgmgrStatus(t *testing.T, hrInstalled bool) *httptest.Server {
 			{"id":"t2","name":"newtun","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false}
 		],"external":[],"system":[]}}`))
 	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"t1","name":"amnezia","iface":"nwg1","type":"managed","status":"running","available":true},
+			{"id":"t2","name":"newtun","iface":"nwg0","type":"managed","status":"running","available":true},
+			{"id":"wan-eth3","name":"ISP","iface":"eth3","type":"wan","status":"up","available":true}
+		]}`))
+	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
 		// 4 rules: 2 explicit on nwg1 (one hr, one ndms), 1 on nwg0, 1 on WAN (eth3)
 		_, _ = w.Write([]byte(`{"success":true,"data":[
@@ -62,7 +69,7 @@ func TestRouteStatus_HappyPath(t *testing.T) {
 	if !snap.HRNeo.Installed || !snap.HRNeo.Running {
 		t.Errorf("HR-Neo: %+v", snap.HRNeo)
 	}
-	if len(snap.Tunnels) != 2 {
+	if len(snap.Tunnels) != 3 {
 		t.Errorf("tunnels: %d", len(snap.Tunnels))
 	}
 	if snap.Counts["t1"].DNS != 2 || snap.Counts["t1"].Static != 1 || snap.Counts["t1"].HRNeo != 1 {
@@ -71,7 +78,10 @@ func TestRouteStatus_HappyPath(t *testing.T) {
 	if snap.Counts["t2"].DNS != 1 || snap.Counts["t2"].Static != 0 || snap.Counts["t2"].HRNeo != 1 {
 		t.Errorf("t2 counts: %+v", snap.Counts["t2"])
 	}
-	if snap.Other.DNS != 1 || snap.Other.Static != 1 {
+	if snap.Counts["eth3"].DNS != 1 || snap.Counts["eth3"].Static != 1 || snap.Counts["eth3"].HRNeo != 1 {
+		t.Errorf("eth3 counts: %+v", snap.Counts["eth3"])
+	}
+	if snap.Other.DNS != 0 || snap.Other.Static != 0 {
 		t.Errorf("other counts: %+v", snap.Other)
 	}
 	t1, t2 := snap.Tunnels[0], snap.Tunnels[1]
