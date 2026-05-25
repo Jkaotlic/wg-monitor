@@ -121,14 +121,15 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 		},
 	})
 	wants := []string{
+		"🟡",
 		"Туннель amnezia_for_awg2 (nwg0) не на связи",
-		"Что не работает:",
+		"На что обратить внимание:",
 		"Сервер туннеля: 198.51.100.21:37634", "провайдерский выход: eth3",
 		"Последний обмен ключами:", "4 мин 37 с",
 		"Проверка связи: падает", "неудачных попыток 3 из 3",
 		"авто-рестартов: 2",
 		"Параметры:", "nativewg", "AWG AWG2.0", "MTU 1280",
-		"Что это ломает:",
+		"Что может пострадать:",
 		"Что я думаю:",
 		"Что делать:",
 	}
@@ -192,6 +193,8 @@ func TestFormatHardDNSPartial(t *testing.T) {
 	wants := []string{
 		"🟡",
 		"DNS-резолвинг частично не работает",
+		"На что обратить внимание:",
+		"Что может пострадать:",
 		"Не отвечают 2 из",
 		"plain 100.64.0.1:53 (Wireguard3) — таймаут",
 		"plain 8.8.4.4:53 (Wireguard3) — таймаут",
@@ -209,6 +212,43 @@ func TestFormatHardDNSPartial(t *testing.T) {
 	}
 }
 
+func TestFormatHardExternalReachSeverity(t *testing.T) {
+	partial := FormatHard(HardArgs{
+		Nickname:  "vasya",
+		CheckName: "external_reach",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "external_reach", Status: "fail", Details: map[string]any{
+			"targets_total": 3,
+			"targets_failed": []any{
+				map[string]any{"name": "youtube", "err": "i/o timeout"},
+			},
+			"targets_ok": []any{"telegram", "github"},
+		}},
+	})
+	for _, want := range []string{"🟡", "На что обратить внимание:", "Что может пострадать:"} {
+		if !strings.Contains(partial, want) {
+			t.Fatalf("partial external reach should be advisory, missing %q in:\n%s", want, partial)
+		}
+	}
+
+	total := FormatHard(HardArgs{
+		Nickname:  "vasya",
+		CheckName: "external_reach",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "external_reach", Status: "fail", Details: map[string]any{
+			"targets_total": 2,
+			"targets_failed": []any{
+				map[string]any{"name": "youtube", "err": "i/o timeout"},
+				map[string]any{"name": "telegram", "err": "no route to host"},
+			},
+			"via_interface": "nwg0",
+		}},
+	})
+	if !strings.Contains(total, "🔴") || !strings.Contains(total, "Что не работает:") {
+		t.Fatalf("full external reach outage should stay critical:\n%s", total)
+	}
+}
+
 func TestFormatHardHydraRouteBody(t *testing.T) {
 	got := FormatHard(HardArgs{
 		Nickname:  "vasya",
@@ -220,9 +260,11 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 		}},
 	})
 	wants := []string{
+		"🟡",
 		"HydraRoute остановлен",
+		"На что обратить внимание:",
 		"HydraRoute установлен, но сервис остановлен",
-		"Что это ломает:",
+		"Что может пострадать:",
 		"демон не запущен",
 		"Перезапустить hrneo",
 	}
@@ -233,6 +275,31 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 	}
 	if strings.Contains(got, "installed=true") || strings.Contains(got, "running=false") {
 		t.Errorf("technical booleans should not leak to TG alert:\n%s", got)
+	}
+}
+
+func TestFormatHardAwgManagerControlPlane(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname:  "vasya",
+		CheckName: "awg_manager",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "awg_manager", Status: "fail", Details: map[string]any{
+			"base_url": "http://127.0.0.1:2222",
+			"error":    "connection refused",
+		}},
+	})
+	for _, want := range []string{
+		"🔴",
+		"awg-manager не отвечает",
+		"бот не может управлять тоннелями",
+		"Перезапустить awg-manager",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "VPN умер") || strings.Contains(got, "всё не работает") {
+		t.Fatalf("awg-manager alert must not sound like total VPN outage:\n%s", got)
 	}
 }
 
@@ -256,6 +323,9 @@ func TestFormatHardWithNeighborsInfluencesDiagnosis(t *testing.T) {
 	if !strings.Contains(got, "Соседние тоннели живы") {
 		t.Errorf("missing neighbors-alive hypothesis:\n%s", got)
 	}
+	if !strings.Contains(got, "🟡") {
+		t.Errorf("single-tunnel degradation with alive neighbors should be advisory:\n%s", got)
+	}
 
 	// Мёртвые соседи → диагноз указывает на WAN/провайдера.
 	got2 := FormatHard(HardArgs{
@@ -273,6 +343,9 @@ func TestFormatHardWithNeighborsInfluencesDiagnosis(t *testing.T) {
 	})
 	if !strings.Contains(got2, "WAN") && !strings.Contains(got2, "провайдер") {
 		t.Errorf("missing WAN/provider hypothesis:\n%s", got2)
+	}
+	if !strings.Contains(got2, "🔴") {
+		t.Errorf("multi-tunnel outage should stay red:\n%s", got2)
 	}
 }
 
@@ -351,6 +424,24 @@ func TestFormatRealert(t *testing.T) {
 	for _, want := range []string{"🔁", "vasya", "Всё ещё:", "напомню снова через", "#2"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("missing %q in: %q", want, msg)
+		}
+	}
+}
+
+func TestFormatRealertKeepsAdvisoryToneAndAction(t *testing.T) {
+	hardSince := time.Date(2026, 4, 28, 9, 3, 0, 0, time.UTC)
+	msg := FormatRealert(RealertArgs{
+		Nickname:     "vasya",
+		CheckName:    "hydraroute",
+		HardSince:    hardSince,
+		RealertCount: 1,
+		Check: wire.Check{Name: "hydraroute", Status: "fail", Details: map[string]any{
+			"installed": true, "running": false,
+		}},
+	})
+	for _, want := range []string{"🟡", "Всё ещё требует внимания:", "На что обратить внимание:", "Что делать:", "Перезапустить hrneo"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("missing advisory realert part %q in:\n%s", want, msg)
 		}
 	}
 }
