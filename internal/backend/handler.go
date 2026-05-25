@@ -341,6 +341,19 @@ func isNoisyCheck(checkName string) bool {
 	}
 }
 
+func suppressMobileResumeStartupFailure(u *db.User, resumed bool, c wire.Check) bool {
+	if u == nil || !u.IsMobile() || !resumed || c.Status != "fail" {
+		return false
+	}
+	name := strings.ToLower(strings.TrimSpace(c.Name))
+	switch name {
+	case "dns", "hydraroute", "awg_manager", "tunnels", "external_reach":
+		return true
+	default:
+		return strings.HasPrefix(name, "dns_") || strings.HasPrefix(name, "tunnel_")
+	}
+}
+
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -491,6 +504,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Logger.Info("skip stale report event",
 					"nickname", nick, "check", c.Name,
 					"report_ts", ts.UTC(), "latest_ts", latestTS,
+					"req_id", RequestIDFromContext(r.Context()),
+				)
+				continue
+			}
+			if suppressMobileResumeStartupFailure(user, rep.Resumed, c) {
+				d.Logger.Info("skip mobile resume startup failure",
+					"nickname", nick, "check", c.Name,
 					"req_id", RequestIDFromContext(r.Context()),
 				)
 				continue

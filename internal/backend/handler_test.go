@@ -323,6 +323,67 @@ func TestReportMobileUsesHigherFailThreshold(t *testing.T) {
 	}
 }
 
+func TestReportMobileResumedSuppressesStartupCheckFailures(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "acacacacacacacacacacacacacacacacacacacacacacacacacacacacacacacac"
+	uid, _ := d.Users().InsertWithKind("car4", tok, "1.1.1.1", "nwg0", db.KindMobile)
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: 2, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC(),
+		AgentVersion: "test",
+		Resumed:      true,
+		Checks: []wire.Check{
+			{Name: "tunnel_awg13", Status: "fail"},
+			{Name: "dns", Status: "fail"},
+			{Name: "hydraroute", Status: "fail"},
+			{Name: "awg_manager", Status: "fail"},
+			{Name: "tunnels", Status: "fail"},
+			{Name: "awg_handshake", Status: "fail"},
+		},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	disp.mu.Lock()
+	gotCalls := append([]state.Kind(nil), disp.calls...)
+	disp.mu.Unlock()
+	if len(gotCalls) != 1 || gotCalls[0] != state.Soft {
+		t.Fatalf("only non-startup check should dispatch on mobile resume, got %v", gotCalls)
+	}
+
+	for _, check := range []string{"tunnel_awg13", "dns", "hydraroute", "awg_manager", "tunnels"} {
+		st, err := d.State().Get(uid, check)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.ConsecutiveFails != 0 || st.CurrentStatus != "ok" {
+			t.Fatalf("startup check %s changed FSM state on resumed report: %+v", check, st)
+		}
+	}
+	if _, ok, err := d.Events().LatestEvent(uid, "hydraroute"); err != nil || !ok {
+		t.Fatalf("suppressed startup check must still persist event, ok=%v err=%v", ok, err)
+	}
+}
+
 func TestReportResumedCallsResumer(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
@@ -416,10 +477,13 @@ func TestReportNoisyDNSUsesHigherFailThreshold(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
+	baseTS := time.Now().UTC()
+	var dnsSeq int
 	postDNS := func(t *testing.T) {
 		t.Helper()
+		dnsSeq++
 		body, _ := json.Marshal(wire.Report{
-			Timestamp:    time.Now().UTC(),
+			Timestamp:    baseTS.Add(time.Duration(dnsSeq) * time.Second),
 			AgentVersion: "test",
 			Checks:       []wire.Check{{Name: "dns", Status: "fail"}},
 		})

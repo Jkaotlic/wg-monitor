@@ -35,11 +35,41 @@ func RenderWakeReport(nickname string, checks []wire.Check) Card {
 		}
 		fmt.Fprintf(&b, "• %s", wakeCheckLabel(name))
 	}
+	if allWarmupFailures(failed) {
+		return Card{
+			Badge:   "🚗⏳",
+			Summary: fmt.Sprintf("%s в сети, сервисы ещё поднимаются", nickname),
+			Details: b.String(),
+			Hint:    "Подожди 1-2 минуты и нажми «Повторить проверку». Если снова останется жёлтым — открой диагностику, она покажет конкретный сервис.",
+		}
+	}
 	return Card{
 		Badge:   "🚗⚠",
 		Summary: fmt.Sprintf("%s в сети, есть проблемы", nickname),
 		Details: b.String(),
 		Hint:    "Нажми 📊 Что происходит? или открой /panel — там будет видно, что именно упало и какие кнопки ремонта доступны.",
+	}
+}
+
+func allWarmupFailures(names []string) bool {
+	if len(names) == 0 {
+		return false
+	}
+	for _, name := range names {
+		if !isWarmupCheck(name) {
+			return false
+		}
+	}
+	return true
+}
+
+func isWarmupCheck(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "dns", "dns_via_tunnel", "hydraroute", "awg_manager", "tunnels", "external_reach":
+		return true
+	default:
+		return strings.HasPrefix(name, "dns_") || strings.HasPrefix(name, "tunnel_")
 	}
 }
 

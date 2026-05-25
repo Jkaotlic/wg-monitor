@@ -54,17 +54,17 @@ func FormatHard(a HardArgs) string {
 	if a.IsMobile {
 		mobileBadge = "📱"
 	}
-	severity := categorySeverity(a.CheckName, a.Check.Details, a.Neighbors)
+	tone := toneFor(a.CheckName, a.Check.Details, a.Neighbors)
 	headline := categoryHeadline(a.CheckName, a.Check.Details)
 
 	sections := []CardSection{{
-		Title: "Что не работает",
+		Title: tone.ProblemTitle,
 		Lines: linesFromWriter(func(b *strings.Builder) {
 			writeWhatBroke(b, a.CheckName, a.Check.Details)
 		}),
 	}}
 	if impact := impactFor(a.CheckName, a.Check.Details); impact != "" {
-		sections = append(sections, CardSection{Title: "Что это ломает", Lines: []string{impact}})
+		sections = append(sections, CardSection{Title: tone.ImpactTitle, Lines: []string{impact}})
 	}
 
 	if h := diagnose(a.CheckName, a.Check.Details, a.Neighbors); h != "" {
@@ -89,7 +89,7 @@ func FormatHard(a HardArgs) string {
 		label = mobileBadge + " " + label
 	}
 	return Card{
-		Badge:    severity,
+		Badge:    tone.Badge,
 		Label:    label,
 		Summary:  headline,
 		Meta:     meta,
@@ -179,16 +179,23 @@ func FormatRealert(args RealertArgs) string {
 	if args.IsMobile {
 		mobileBadge = "📱"
 	}
+	tone := toneFor(args.CheckName, args.Check.Details, args.Neighbors)
 	headline := categoryHeadline(args.CheckName, args.Check.Details)
 
 	var sections []CardSection
 	if args.Check.Name != "" {
 		sections = append(sections, CardSection{
-			Title: "Что не работает",
+			Title: tone.ProblemTitle,
 			Lines: linesFromWriter(func(b *strings.Builder) {
 				writeWhatBroke(b, args.CheckName, args.Check.Details)
 			}),
 		})
+		if impact := impactFor(args.CheckName, args.Check.Details); impact != "" {
+			sections = append(sections, CardSection{Title: tone.ImpactTitle, Lines: []string{impact}})
+		}
+		if adv := suggestAction(args.CheckName, args.Check.Details, args.Neighbors); adv != "" {
+			sections = append(sections, CardSection{Title: "Что делать", Lines: []string{adv}})
+		}
 	}
 
 	age := time.Since(args.HardSince).Round(time.Minute)
@@ -201,9 +208,9 @@ func FormatRealert(args RealertArgs) string {
 		label = mobileBadge + " " + label
 	}
 	return Card{
-		Badge:   "🔁",
+		Badge:   "🔁" + tone.Badge,
 		Label:   label,
-		Summary: "Всё ещё: " + headline,
+		Summary: tone.RealertPrefix + headline,
 		Meta: []string{
 			KV("проверка", args.CheckName),
 			"с " + args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
@@ -213,6 +220,31 @@ func FormatRealert(args RealertArgs) string {
 		},
 		Sections: sections,
 	}.Render(CardOpts{})
+}
+
+type alertTone struct {
+	Badge         string
+	ProblemTitle  string
+	ImpactTitle   string
+	RealertPrefix string
+}
+
+func toneFor(checkName string, d map[string]any, ns []NeighborSummary) alertTone {
+	badge := categorySeverity(checkName, d, ns)
+	if badge == "🟡" {
+		return alertTone{
+			Badge:         badge,
+			ProblemTitle:  "На что обратить внимание",
+			ImpactTitle:   "Что может пострадать",
+			RealertPrefix: "Всё ещё требует внимания: ",
+		}
+	}
+	return alertTone{
+		Badge:         badge,
+		ProblemTitle:  "Что не работает",
+		ImpactTitle:   "Что это ломает",
+		RealertPrefix: "Всё ещё: ",
+	}
 }
 
 func linesFromWriter(write func(*strings.Builder)) []string {
@@ -234,8 +266,13 @@ func linesFromWriter(write func(*strings.Builder)) []string {
 // categorySeverity returns 🔴 / 🟡 based on how broken things actually are.
 // FSM already decided this is HARD; severity is a visual hint about scale,
 // not a gate on alerting.
-func categorySeverity(checkName string, d map[string]any, _ []NeighborSummary) string {
+func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
+	case "tunnel":
+		if len(ns) > 0 && !neighborsAlive(ns) {
+			return "🔴"
+		}
+		return "🟡"
 	case "dns":
 		total, _ := intOrZero(d, "endpoints")
 		failed, _ := intOrZero(d, "failed_count")
@@ -244,8 +281,14 @@ func categorySeverity(checkName string, d map[string]any, _ []NeighborSummary) s
 		if rknProbed > 0 && rknSus == rknProbed {
 			return "🔴"
 		}
-		if total >= 3 && failed*2 < total {
-			return "🟡" // меньше половины серверов упало — частичный сбой
+		if total > 0 && failed > 0 && failed < total {
+			return "🟡" // часть серверов жива — деградация, не полный отказ
+		}
+	case "hydraroute":
+		installed, _ := boolOrFalse(d, "installed")
+		running, _ := boolOrFalse(d, "running")
+		if installed && !running {
+			return "🟡"
 		}
 	case "external_reach":
 		total, _ := intOrZero(d, "targets_total")
@@ -292,7 +335,7 @@ func categoryHeadline(checkName string, d map[string]any) string {
 		}
 		return "HydraRoute даёт сбой"
 	case "awg_manager":
-		return "Состояние awg-manager не читается"
+		return "awg-manager не отвечает"
 	case "awgmgr_api":
 		return "Реестр туннелей awg-manager недоступен"
 	case "external_reach":
@@ -576,7 +619,7 @@ func impactFor(checkName string, d map[string]any) string {
 	case "hydraroute":
 		return "DNS/HR-Neo правила могут перестать направлять домены в нужные туннели; часть сайтов пойдёт обычным маршрутом или не откроется."
 	case "awg_manager", "awgmgr_api":
-		return "Бот не может читать список туннелей и управлять ими через awg-manager: диагностика, маршруты и кнопки ремонта могут не сработать."
+		return "бот не может управлять тоннелями через awg-manager: диагностика, маршруты и кнопки ремонта могут не сработать."
 	case "external_reach":
 		return "Сервисы снаружи не открываются через выбранный туннель; проблема либо в самом туннеле, либо в маршрутизации через него."
 	}
