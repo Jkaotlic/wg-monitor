@@ -230,6 +230,53 @@ func TestNormalizeKeeneticArchMapsAarch64ToReleaseAssetArch(t *testing.T) {
 	}
 }
 
+func TestApplyAWGMDeploySuccessDoesNotPersistPublicRouterLANIP(t *testing.T) {
+	ag := &AgentState{
+		Nickname:   "del",
+		DeployMode: "awgm",
+		AWGMURL:    "https://awg.delrp.example",
+	}
+	applyAWGMDeploySuccess(ag, &AWGMSystemInfo{RouterIP: "192.168.31.1"}, "v0.13.0-rc45", "router-admin", true, time.Unix(1779693600, 0).UTC())
+
+	if ag.Host != "" || ag.Port != 0 || ag.User != "" {
+		t.Fatalf("public AWGM install must not store private SSH endpoint, got host=%q port=%d user=%q", ag.Host, ag.Port, ag.User)
+	}
+	if ag.LastDeployedVersion != "v0.13.0-rc45" || ag.LastDeploy == "" || ag.AWGMAuth != "router-admin" {
+		t.Fatalf("deploy metadata not applied: %+v", ag)
+	}
+}
+
+func TestApplyAWGMDeploySuccessKeepsLocalRouterIPForDirectAWGM(t *testing.T) {
+	ag := &AgentState{Nickname: "lab", DeployMode: "awgm", AWGMURL: "http://127.0.0.1:2222"}
+	applyAWGMDeploySuccess(ag, &AWGMSystemInfo{RouterIP: "192.168.88.1"}, "v0.13.0-rc45", "api-key", false, time.Unix(1779693600, 0).UTC())
+
+	if ag.Host != "192.168.88.1" {
+		t.Fatalf("direct/local AWGM should preserve discovered router IP, got %q", ag.Host)
+	}
+	if ag.AWGMAuth != "api-key" || ag.LastDeployedVersion != "v0.13.0-rc45" {
+		t.Fatalf("deploy metadata not applied: %+v", ag)
+	}
+}
+
+func TestDoctorCanSkipDirectSSHForAWGMOnlyAgent(t *testing.T) {
+	ag := &AgentState{Nickname: "del", DeployMode: "awgm", AWGMURL: "https://awg.delrp.example"}
+	if !doctorShouldSkipDirectSSH(ag) {
+		t.Fatal("AWGM-only agent without SSH coords should skip direct SSH doctor")
+	}
+	ag.Host = "192.168.31.1"
+	if doctorShouldSkipDirectSSH(ag) {
+		t.Fatal("agent with explicit SSH host should still run direct SSH doctor")
+	}
+}
+
+func TestDoctorFormatLastSeenParsesGoSQLiteTimestamp(t *testing.T) {
+	raw := time.Now().UTC().Add(-30 * time.Second).Format("2006-01-02 15:04:05.999999999 -0700 MST")
+	got := doctorFormatLastSeen(raw)
+	if !strings.HasPrefix(got, "fresh") {
+		t.Fatalf("doctor must parse Go timestamp stored by sqlite driver, got %q from %q", got, raw)
+	}
+}
+
 func TestBuildUpdateAgentTokenHashSQLEscapesNickname(t *testing.T) {
 	got := buildUpdateAgentTokenHashSQL("o'hara", "abc")
 	if !strings.Contains(got, "nickname = 'o''hara'") {
