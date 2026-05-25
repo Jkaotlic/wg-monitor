@@ -543,23 +543,14 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	}
 	if args.IsPanel {
-		// Tunnels-Panel callbacks: surface confirmation via toast, then
-		// refresh the panel inline so the toggle state updates without
-		// the operator re-tapping "🔄 Обновить". (We can't read the new
-		// awg-manager state instantly — the toggle ran async via cmd-queue
-		// — but refreshing pulls the freshest event row from DB; the next
-		// agent tick (~60s) will reflect the actual change.)
+		// Tunnels-Panel callbacks enqueue async agent work. Keep the current
+		// panel in place here; the command-result path edits it after the agent
+		// has forced a fresh report, avoiding a stale pre-command snapshot.
 		toast := statusLine
 		if len(toast) > 190 {
 			toast = toast[:190]
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
-		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
-			text, kb := r.buildTunnelsPanel(u)
-			if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
-				slog.Warn("panel refresh after action failed", "err", err)
-			}
-		}
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -987,6 +978,18 @@ func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup)
 		})
 	}
 	return tg.TunnelsPanelText(u.Nickname, entries), tg.TunnelsPanelKeyboard(u.ID, entries)
+}
+
+func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeyboardMarkup, bool) {
+	u, err := r.d.Users().GetByID(userID)
+	if err != nil || u == nil {
+		if err != nil {
+			slog.Warn("BuildTunnelsPanelByUserID: user lookup failed", "err", err, "user", userID)
+		}
+		return "", tg.InlineKeyboardMarkup{}, false
+	}
+	text, kb := r.buildTunnelsPanel(u)
+	return text, kb, true
 }
 
 // dispatchHelp sends the static help text for the topic kind.

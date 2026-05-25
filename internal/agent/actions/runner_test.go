@@ -122,6 +122,59 @@ func TestRunner_ForceRecheck_NilCallbackErrs(t *testing.T) {
 	}
 }
 
+func TestRunner_TunnelToggle_ForcesFreshReportAfterSuccess(t *testing.T) {
+	var forced int
+	var seen []string
+	r := Runner{
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			seen = append(seen, append([]string{name}, args...)...)
+			return []byte("ok"), nil
+		},
+		ForceRecheck: func(ctx context.Context) { forced++ },
+		Now:          mockNow(),
+	}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "toggle",
+		Action: "tunnel_disable",
+		Args:   map[string]any{"ndms_name": "Wireguard3"},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if forced != 1 {
+		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
+	}
+	if got := strings.Join(seen, " "); !strings.Contains(got, "interface Wireguard3 down") {
+		t.Fatalf("exec = %q", got)
+	}
+}
+
+func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
+	var forced int
+	r := Runner{
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			return []byte("ndmc failed"), errors.New("exit status 122")
+		},
+		ForceRecheck: func(ctx context.Context) { forced++ },
+		Now:          mockNow(),
+	}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "toggle",
+		Action: "tunnel_enable",
+		Args:   map[string]any{"ndms_name": "Wireguard0"},
+	})
+
+	if res.Status != "err" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if forced != 0 {
+		t.Fatalf("ForceRecheck calls = %d, want 0", forced)
+	}
+}
+
 func TestRunner_OpkgUpgrade_NilRunnerErrs(t *testing.T) {
 	r := Runner{Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c5", Action: "opkg_upgrade"})
@@ -336,6 +389,54 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "awg11") {
 		t.Errorf("output missing tunnel name: %q", res.Output)
+	}
+}
+
+func TestRunner_TunnelImport_ReplaceFallsBackToMatchingAddress(t *testing.T) {
+	tunnelsAllResp := `{"success":true,"data":{"tunnels":[{"id":"legacy-nl","name":"nl","address":"10.99.0.2/32","defaultRoute":true,"enabled":false}],"external":[],"system":[]}}`
+	replaceResp := `{"success":true,"data":{"id":"legacy-nl","name":"amnezia_nl","type":"awg","status":"running","enabled":true,"defaultRoute":true}}`
+	hydroResp := `{"success":true,"data":{"installed":false,"running":false}}`
+	var replacedID string
+	var imported bool
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(tunnelsAllResp))
+	})
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		replacedID = r.URL.Query().Get("id")
+		w.Write([]byte(replaceResp))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		imported = true
+		w.WriteHeader(http.StatusTeapot)
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(hydroResp))
+	})
+
+	r := Runner{
+		AwgClient: awgmgrFake(t, mux),
+		Exec:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Now:       mockNow(),
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "imp-address",
+		Action: "tunnel_import",
+		Args:   map[string]any{"conf": testConfB64, "name": "amnezia_nl", "replace": true},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if replacedID != "legacy-nl" {
+		t.Fatalf("replace id = %q, want legacy-nl", replacedID)
+	}
+	if imported {
+		t.Fatal("ImportConf should not be called when address fallback matches")
 	}
 }
 

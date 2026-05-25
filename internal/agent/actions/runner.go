@@ -239,6 +239,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s %s: %v\n%s", ndms, state, err, string(out)), payload
 		}
+		if r.ForceRecheck != nil {
+			r.ForceRecheck(ctx)
+		}
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out)), payload
 	case "tunnel_import":
 		if r.AwgClient == nil {

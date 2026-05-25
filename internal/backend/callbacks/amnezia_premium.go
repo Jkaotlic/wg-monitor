@@ -408,7 +408,7 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 		Args: map[string]any{
 			"conf":    base64.StdEncoding.EncodeToString(conf),
 			"name":    "amnezia_" + args.AmneziaCountryCode,
-			"replace": false,
+			"replace": true,
 		},
 		IssuedAt: time.Now().UTC(),
 	}

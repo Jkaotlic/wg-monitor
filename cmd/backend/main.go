@@ -137,6 +137,7 @@ func main() {
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
 	cb.SetRoutesCache(routesCache)
+	notifier.TunnelsPanelBuilder = cb.BuildTunnelsPanelByUserID
 	routesNotifier := &callbacks.RoutesPanelNotifier{
 		TG:    tgClient,
 		Cache: routesCache,

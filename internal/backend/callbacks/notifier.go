@@ -17,9 +17,10 @@ import (
 // (ref.MessageID); subsequent chunks chain to the previous chunk so a paginated
 // diag stays threaded together rather than scattered across the topic.
 type Notifier struct {
-	TG        TGClient
-	UI        UIConfigSnapshot
-	DiagCache *diagCache // staged by NotifyCommandResult when action=="diag_now" + Status=="ok"
+	TG                  TGClient
+	UI                  UIConfigSnapshot
+	DiagCache           *diagCache // staged by NotifyCommandResult when action=="diag_now" + Status=="ok"
+	TunnelsPanelBuilder func(userID int64) (string, tg.InlineKeyboardMarkup, bool)
 }
 
 func NewNotifier(c TGClient) *Notifier { return &Notifier{TG: c} }
@@ -73,7 +74,21 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		}
 		prev = mid
 	}
+	if isTunnelPanelMutatingAction(action) && result.Status == "ok" && ref.MessageID != 0 && n.TunnelsPanelBuilder != nil {
+		if text, kb, ok := n.TunnelsPanelBuilder(userID); ok {
+			_ = n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+		}
+	}
 	return nil
+}
+
+func isTunnelPanelMutatingAction(action string) bool {
+	switch action {
+	case "tunnel_enable", "tunnel_disable", "tunnel_import":
+		return true
+	default:
+		return false
+	}
 }
 
 // OpkgResultNotifier implements backend.OpkgNotifier. It sends the
