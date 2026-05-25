@@ -713,6 +713,16 @@ func TestParse_AmneziaDownloadLegacyActiveKey(t *testing.T) {
 	}
 }
 
+func TestParse_SelfHostedAmneziaID(t *testing.T) {
+	a, err := Parse("amz_selfhosted_confirm:42:_panel_:home")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "amz_selfhosted_confirm" || !a.IsPanel || a.SelfHostedAmneziaID != "home" {
+		t.Fatalf("got %+v", a)
+	}
+}
+
 func TestParse_AmneziaKeyActions(t *testing.T) {
 	for _, data := range []string{
 		"amz_open:42:_panel_:keyabc",

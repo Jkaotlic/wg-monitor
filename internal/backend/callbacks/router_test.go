@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -18,6 +19,7 @@ type fakeRouterTG struct {
 	answers     []string
 	edits       []string
 	sentMsgs    []string
+	sentMarkups []any
 	topicCalls  []fakeTopicCallRouter
 	nextTopicID int64
 	topicErr    error
@@ -70,11 +72,14 @@ func (f *fakeRouterTG) SendMessageWithReplyKeyboard(ctx context.Context, chatID 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sentMsgs = append(f.sentMsgs, text)
+	f.sentMarkups = append(f.sentMarkups, markup)
 	return 1, nil
 }
 func (f *fakeRouterTG) DeleteMessage(ctx context.Context, chatID, messageID int64) error { return nil }
 func (f *fakeRouterTG) GetFile(_ context.Context, _ string) (string, error)              { return "", nil }
 func (f *fakeRouterTG) DownloadFile(_ context.Context, _ string) ([]byte, error)         { return nil, nil }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 func TestRouterDispatchesSilence(t *testing.T) {
 	d, uid := newTestDB(t)
@@ -143,6 +148,92 @@ func TestRouterAllowsNonAdminInRightChat(t *testing.T) {
 
 	if len(f.edits) != 1 {
 		t.Errorf("expected 1 edit (action applied), got %d", len(f.edits))
+	}
+}
+
+func TestRouterRejectsOperatorSelfHostedAmneziaIssue(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.RouterOperators().Add(uid, 555, 12345); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567,
+		},
+	})
+
+	q := &tg.CallbackQuery{
+		ID:      "selfhosted-op",
+		From:    tg.User{ID: 555},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_selfhosted_issue:" + itoa(uid) + ":_panel_",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "админа") {
+		t.Fatalf("answers = %+v, want admin-only rejection", f.answers)
+	}
+	if len(f.edits) != 0 {
+		t.Fatalf("operator should not see self-hosted confirm edit: %+v", f.edits)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("operator should not enqueue anything: %+v", sink.calls)
+	}
+}
+
+func TestAdminSelfHostedCommandAddsProviderAndPanelShowsIt(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID: 1,
+		Chat:      tg.Chat{ID: -100},
+		From:      tg.User{ID: 12345},
+		Text:      "/selfhosted add home vpn.example.com 47567 Home VPS",
+	})
+	if len(f.sentMsgs) == 0 || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], "home") {
+		t.Fatalf("admin reply missing added provider: %+v", f.sentMsgs)
+	}
+
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       2,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 12345},
+		MessageThreadID: ptrInt64(11),
+		Text:            "Amnezia Premium",
+	})
+	if len(f.sentMarkups) == 0 {
+		t.Fatal("expected Amnezia panel markup")
+	}
+	kb, ok := f.sentMarkups[len(f.sentMarkups)-1].(*tg.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("markup type = %T", f.sentMarkups[len(f.sentMarkups)-1])
+	}
+	var found bool
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.Contains(btn.Text, "Home VPS") && btn.CallbackData == "amz_selfhosted_issue:"+itoa(uid)+":_panel_:home" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("self-hosted button not found in %+v", kb.InlineKeyboard)
 	}
 }
 

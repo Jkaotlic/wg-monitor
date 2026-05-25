@@ -12,7 +12,7 @@ The current deploy path does **not** require the operator to join every router n
 
 ## Current Release
 
-- Latest RC used by the wizard flow: `v0.13.0-rc36`
+- Latest RC used by the wizard flow: `v0.13.0-rc49`
 - GitHub releases: <https://github.com/Jkaotlic/wg-monitor/releases>
 - Windows wizard asset: `wg-monitor-deploy-windows-amd64.exe`
 

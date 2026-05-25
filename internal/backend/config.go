@@ -6,23 +6,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	Listen    string          `yaml:"listen"`
-	LogLevel  string          `yaml:"log_level"`
-	DBPath    string          `yaml:"db_path"`
-	Telegram  TelegramConfig  `yaml:"telegram"`
-	Wizard    WizardConfig    `yaml:"wizard"`
-	Heartbeat HeartbeatConfig `yaml:"heartbeat"`
-	State     StateConfig     `yaml:"state"`
-	UI        UIConfig        `yaml:"ui"`
-	Upstream  UpstreamConfig  `yaml:"upstream"`
-	Retention RetentionConfig `yaml:"retention"`
-	RateLimit RateLimitConfig `yaml:"rate_limit"`
-	Amnezia   AmneziaConfig   `yaml:"amnezia_premium"`
-	HideMy    HideMyConfig    `yaml:"hidemyname"`
+	Listen            string                   `yaml:"listen"`
+	LogLevel          string                   `yaml:"log_level"`
+	DBPath            string                   `yaml:"db_path"`
+	Telegram          TelegramConfig           `yaml:"telegram"`
+	Wizard            WizardConfig             `yaml:"wizard"`
+	Heartbeat         HeartbeatConfig          `yaml:"heartbeat"`
+	State             StateConfig              `yaml:"state"`
+	UI                UIConfig                 `yaml:"ui"`
+	Upstream          UpstreamConfig           `yaml:"upstream"`
+	Retention         RetentionConfig          `yaml:"retention"`
+	RateLimit         RateLimitConfig          `yaml:"rate_limit"`
+	Amnezia           AmneziaConfig            `yaml:"amnezia_premium"`
+	SelfHostedAmnezia selfhostedamnezia.Config `yaml:"amnezia_selfhosted"`
+	HideMy            HideMyConfig             `yaml:"hidemyname"`
 }
 
 // AmneziaConfig wires the optional Amnezia Premium cabinet helper.
@@ -272,6 +274,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.Amnezia.SecretsPath == "" {
 		cfg.Amnezia.SecretsPath = "/var/lib/wg-monitor/amnezia-premium.json"
+	}
+	if cfg.SelfHostedAmnezia.StorePath == "" {
+		cfg.SelfHostedAmnezia.StorePath = selfhostedamnezia.DefaultStorePath
 	}
 	if cfg.HideMy.BaseURL == "" {
 		cfg.HideMy.BaseURL = "https://hide-my-name.cloud"

@@ -20,6 +20,7 @@ import (
 //	/ensure_topics                 — create forum topics for every router missing one
 //	/recreate_topic                — rebuild the topic of the current per_router topic
 //	/this_is <nickname>            — bind THIS topic's thread_id to <nickname>
+//	/selfhosted                    — list/add/update self-hosted Amnezia VPS entries
 //	/topic_help                    — print the admin cheat-sheet
 func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	text := strings.TrimSpace(m.Text)
@@ -49,6 +50,9 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 		return true
 	case "/panel":
 		r.adminPanelOpen(ctx, m)
+		return true
+	case "/selfhosted":
+		r.adminSelfHostedAmnezia(ctx, m, arg)
 		return true
 	case "/help":
 		r.handleHelpCommand(ctx, m)

@@ -67,6 +67,7 @@ func (r *Router) sendAmneziaPremiumPanel(ctx context.Context, chatID int64, thre
 		return
 	}
 	text, kb := amneziaKeyListView(user, keys)
+	r.addSelfHostedAmneziaRow(&kb, user.ID)
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, text, "", replyTo, &kb)
 }
 
@@ -81,6 +82,7 @@ func (r *Router) fetchAmneziaAccount(ctx context.Context, key string) (*amnezia.
 func (r *Router) sendAmneziaAccount(ctx context.Context, chatID int64, threadID *int64, replyTo *int64, user *db.User, key amneziaStoredKey, info *amnezia.AccountInfo) {
 	text := amnezia.FormatAccountSummary(user.Nickname+" / "+key.Label, info)
 	kb := amneziaKeyboard(user.ID, key.ID, info)
+	r.addSelfHostedAmneziaRow(&kb, user.ID)
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, text, "", replyTo, &kb)
 }
 
@@ -235,6 +237,7 @@ func (r *Router) handleAmneziaRefresh(ctx context.Context, q *tg.CallbackQuery, 
 			return
 		}
 		text, kb := amneziaKeyListView(user, keys)
+		r.addSelfHostedAmneziaRow(&kb, user.ID)
 		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновлено")
 		return
@@ -251,6 +254,7 @@ func (r *Router) handleAmneziaRefresh(ctx context.Context, q *tg.CallbackQuery, 
 	}
 	stored, _ := r.amneziaStoredKey(user.ID, args.AmneziaKeyID)
 	kb := amneziaKeyboard(user.ID, args.AmneziaKeyID, info)
+	r.addSelfHostedAmneziaRow(&kb, user.ID)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, amnezia.FormatAccountSummary(user.Nickname+" / "+stored.Label, info), "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновлено")
 }
@@ -273,6 +277,7 @@ func (r *Router) handleAmneziaOpen(ctx context.Context, q *tg.CallbackQuery, arg
 	}
 	stored, _ := r.amneziaStoredKey(user.ID, args.AmneziaKeyID)
 	kb := amneziaKeyboard(user.ID, args.AmneziaKeyID, info)
+	r.addSelfHostedAmneziaRow(&kb, user.ID)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, amnezia.FormatAccountSummary(user.Nickname+" / "+stored.Label, info), "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
@@ -336,6 +341,7 @@ func (r *Router) handleAmneziaDeleteConfirm(ctx context.Context, q *tg.CallbackQ
 		return
 	}
 	text, kb := amneziaKeyListView(user, keys)
+	r.addSelfHostedAmneziaRow(&kb, user.ID)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ удалён")
 }
