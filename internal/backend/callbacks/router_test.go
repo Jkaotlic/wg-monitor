@@ -18,6 +18,7 @@ type fakeRouterTG struct {
 	mu          sync.Mutex
 	answers     []string
 	edits       []string
+	editMarkups []*tg.InlineKeyboardMarkup
 	sentMsgs    []string
 	sentMarkups []any
 	topicCalls  []fakeTopicCallRouter
@@ -63,6 +64,7 @@ func (f *fakeRouterTG) EditMessageText(ctx context.Context, chatID, messageID in
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.edits = append(f.edits, text)
+	f.editMarkups = append(f.editMarkups, markup)
 	return f.editErr
 }
 func (f *fakeRouterTG) GetUpdates(ctx context.Context, offset int64, timeoutSec int) ([]tg.Update, error) {
@@ -235,6 +237,100 @@ func TestAdminSelfHostedCommandAddsProviderAndPanelShowsIt(t *testing.T) {
 	if !found {
 		t.Fatalf("self-hosted button not found in %+v", kb.InlineKeyboard)
 	}
+}
+
+func TestAdminAmneziaPanelShowsSelfHostedManageButtonBeforeProviders(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: t.TempDir() + "/selfhosted.json",
+		},
+	})
+
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       1,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 12345},
+		MessageThreadID: ptrInt64(11),
+		Text:            "Amnezia Premium",
+	})
+
+	if len(f.sentMarkups) == 0 {
+		t.Fatal("expected Amnezia panel markup")
+	}
+	kb, ok := f.sentMarkups[len(f.sentMarkups)-1].(*tg.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("markup type = %T", f.sentMarkups[len(f.sentMarkups)-1])
+	}
+	if !keyboardContainsCallback(kb, "amz_selfhosted_manage:"+itoa(uid)+":_panel_") {
+		t.Fatalf("self-hosted manage button not found in %+v", kb.InlineKeyboard)
+	}
+}
+
+func TestAdminSelfHostedPanelAddsProviderFromButtonFlow(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-add",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: ptrInt64(11)},
+		Data:    "amz_selfhosted_add:" + itoa(uid) + ":_panel_",
+	})
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       8,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 12345},
+		MessageThreadID: ptrInt64(11),
+		Text:            "home vpn.example.com 47567 Home VPS",
+	})
+
+	store, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, ok := store.Get("home")
+	if !ok || !inst.Enabled || inst.EndpointHost != "vpn.example.com" || inst.EndpointPort != 47567 {
+		t.Fatalf("bad stored instance: %+v ok=%v", inst, ok)
+	}
+	if len(f.editMarkups) == 0 {
+		t.Fatal("expected prompt/panel edits")
+	}
+	got := f.editMarkups[len(f.editMarkups)-1]
+	if !keyboardContainsCallback(got, "amz_selfhosted_issue:"+itoa(uid)+":_panel_:home") {
+		t.Fatalf("stored provider issue button not found in %+v", got.InlineKeyboard)
+	}
+}
+
+func keyboardContainsCallback(kb *tg.InlineKeyboardMarkup, callback string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == callback {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestRouterUnknownAction(t *testing.T) {

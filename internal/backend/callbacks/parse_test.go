@@ -723,6 +723,24 @@ func TestParse_SelfHostedAmneziaID(t *testing.T) {
 	}
 }
 
+func TestParse_SelfHostedAmneziaManageAndToggle(t *testing.T) {
+	a, err := Parse("amz_selfhosted_manage:42:_panel_")
+	if err != nil {
+		t.Fatalf("manage unexpected: %v", err)
+	}
+	if a.Action != "amz_selfhosted_manage" || !a.IsPanel {
+		t.Fatalf("manage got %+v", a)
+	}
+
+	a, err = Parse("amz_selfhosted_toggle:42:_panel_:home:0")
+	if err != nil {
+		t.Fatalf("toggle unexpected: %v", err)
+	}
+	if a.SelfHostedAmneziaID != "home" || a.SelfHostedAmneziaEnabled {
+		t.Fatalf("toggle got %+v", a)
+	}
+}
+
 func TestParse_AmneziaKeyActions(t *testing.T) {
 	for _, data := range []string{
 		"amz_open:42:_panel_:keyabc",

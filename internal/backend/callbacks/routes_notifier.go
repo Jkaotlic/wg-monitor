@@ -103,6 +103,9 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 	}
 	// Resolve human names BEFORE invalidation (cache holds the pre-rebind snapshot).
 	srcName, dstName := rb.SrcTunnelID, rb.DstTunnelID
+	if rb.SrcTunnelID == wire.RouteOtherID {
+		srcName = "WAN/system"
+	}
 	if snap, ok := n.Cache.Get(user.ID); ok {
 		for _, t := range snap.Tunnels {
 			if t.ID == rb.SrcTunnelID {

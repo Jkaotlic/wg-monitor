@@ -80,6 +80,12 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 	if len(row) > 0 {
 		rows = append(rows, row)
 	}
+	if snap.Other.DNS+snap.Other.Static > 0 {
+		rows = append(rows, []InlineKeyboardButton{{
+			Text:         "🔄 WAN/system",
+			CallbackData: fmt.Sprintf("routes_rebind:%d:%s", userID, wire.RouteOtherID),
+		}})
+	}
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "➕ Добавить маршрут", CallbackData: fmt.Sprintf("routes_add:%d:_panel_", userID)},
 		{Text: "🗑 Удалить маршрут", CallbackData: fmt.Sprintf("routes_del:%d:_panel_:_list_", userID)},
@@ -115,10 +121,20 @@ func RebindPickKeyboard(userID int64, srcID string, snap wire.RouteSnapshot) (st
 			break
 		}
 	}
-	if src == nil {
+	srcName := ""
+	srcIface := ""
+	if srcID == wire.RouteOtherID {
+		srcName = "WAN/system"
+	} else if src != nil {
+		srcName = src.Name
+		srcIface = src.Iface
+	} else {
 		return "источник недоступен", InlineKeyboardMarkup{}
 	}
-	text := fmt.Sprintf("🛣 Перенос с %s (%s) → куда?\n\nДоступные:", src.Name, src.Iface)
+	if srcIface != "" {
+		srcName = fmt.Sprintf("%s (%s)", srcName, srcIface)
+	}
+	text := fmt.Sprintf("🛣 Перенос с %s → куда?\n\nДоступные:", srcName)
 	rows := [][]InlineKeyboardButton{}
 	for _, t := range snap.Tunnels {
 		if t.ID == srcID {
@@ -298,13 +314,21 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 			dst = &snap.Tunnels[i]
 		}
 	}
-	if src == nil || dst == nil {
+	if (src == nil && srcID != wire.RouteOtherID) || dst == nil {
 		return "источник или назначение недоступны"
 	}
+	srcName := ""
+	if src != nil {
+		srcName = src.Name
+	}
 	c := snap.Counts[srcID]
+	if srcID == wire.RouteOtherID {
+		srcName = "WAN/system"
+		c = snap.Other
+	}
 	visible := c.DNS + c.Static
 	var b strings.Builder
-	fmt.Fprintf(&b, "🛣 Превью: %s → %s\n\n", src.Name, dst.Name)
+	fmt.Fprintf(&b, "🛣 Превью: %s → %s\n\n", srcName, dst.Name)
 	fmt.Fprintf(&b, "Будет перенесено (%d):\n", visible)
 	if c.DNS > 0 {
 		fmt.Fprintf(&b, "  • DNS routes: %d", c.DNS)
@@ -317,8 +341,10 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 		fmt.Fprintf(&b, "  • Static IP: %d\n", c.Static)
 	}
 	b.WriteString("\nНЕ ТРОГАЕМ:\n")
-	wanTotal := snap.Other.DNS + snap.Other.Static
-	fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
+	if srcID != wire.RouteOtherID {
+		wanTotal := snap.Other.DNS + snap.Other.Static
+		fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
+	}
 	for _, t := range snap.Tunnels {
 		if t.ID == srcID {
 			continue

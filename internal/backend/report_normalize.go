@@ -45,6 +45,17 @@ func isLegacyPingCheckDisabledFalseFail(c wire.Check) bool {
 	return ok && age <= tunnelHandshakeHealthyMaxAgeSec
 }
 
+func isDisabledTunnelOK(c wire.Check) bool {
+	if !strings.HasPrefix(c.Name, "tunnel_") || strings.ToLower(strings.TrimSpace(c.Status)) != "ok" {
+		return false
+	}
+	if c.Details == nil {
+		return false
+	}
+	enabled, ok := boolDetail(c.Details, "enabled")
+	return ok && !enabled
+}
+
 func cloneDetails(in map[string]any) map[string]any {
 	out := make(map[string]any, len(in)+1)
 	for k, v := range in {

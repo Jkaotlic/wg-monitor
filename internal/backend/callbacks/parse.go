@@ -99,6 +99,8 @@ type Args struct {
 	AmneziaPage int
 	// SelfHostedAmneziaID identifies one backend-managed self-hosted VPS.
 	SelfHostedAmneziaID string
+	// SelfHostedAmneziaEnabled is the target enabled state for self-hosted VPS toggles.
+	SelfHostedAmneziaEnabled bool
 	// HideMyCodeID identifies one stored HideMy.name access code in the topic.
 	HideMyCodeID string
 	// HideMyServerID identifies one server from HideMy.name serverlist.
@@ -164,6 +166,9 @@ var validActions = map[string]bool{
 	"amz_refresh": true, "amz_open": true, "amz_countries": true, "amz_delete": true,
 	"amz_delete_confirm": true, "amz_dl": true, "amz_dl_confirm": true,
 	"amz_selfhosted_issue": true, "amz_selfhosted_confirm": true,
+	"amz_selfhosted_manage": true, "amz_selfhosted_add": true,
+	"amz_selfhosted_edit": true, "amz_selfhosted_toggle": true,
+	"amz_selfhosted_delete": true, "amz_selfhosted_cancel": true,
 	// HideMy.name access-code cabinet.
 	"hmn_refresh": true, "hmn_open": true, "hmn_page": true,
 	"hmn_delete": true, "hmn_delete_confirm": true, "hmn_dl": true,
@@ -496,12 +501,30 @@ func Parse(data string) (Args, error) {
 			}
 			a.AmneziaKeyID = parts[3]
 			a.AmneziaCountryCode = strings.ToLower(parts[4])
-		case "amz_selfhosted_issue", "amz_selfhosted_confirm":
+		case "amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_cancel":
+			// No extra fields.
+		case "amz_selfhosted_issue", "amz_selfhosted_confirm", "amz_selfhosted_edit", "amz_selfhosted_delete":
 			if len(parts) >= 4 && parts[3] != "" {
 				if !callbackCodeRe.MatchString(parts[3]) {
 					return Args{}, fmt.Errorf("%s: bad self-hosted id %q", action, parts[3])
 				}
 				a.SelfHostedAmneziaID = strings.ToLower(parts[3])
+			}
+		case "amz_selfhosted_toggle":
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+				return Args{}, fmt.Errorf("%s requires self-hosted id and target state: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad self-hosted id %q", action, parts[3])
+			}
+			a.SelfHostedAmneziaID = strings.ToLower(parts[3])
+			switch parts[4] {
+			case "0":
+				a.SelfHostedAmneziaEnabled = false
+			case "1":
+				a.SelfHostedAmneziaEnabled = true
+			default:
+				return Args{}, fmt.Errorf("%s: target state must be 0 or 1, got %q", action, parts[4])
 			}
 		}
 	}

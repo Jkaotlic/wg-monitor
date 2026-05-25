@@ -3,6 +3,8 @@
 // no wire envelope additions are required besides the action names.
 package wire
 
+const RouteOtherID = "__other__"
+
 type HRStatus struct {
 	Installed bool `json:"installed"`
 	Running   bool `json:"running"`
