@@ -40,6 +40,10 @@ type TunnelView struct {
 	Name         string // pretty (e.g. "amnezia")
 	CheckName    string // FSM key (e.g. "tunnel_awg11")
 	Interface    string // "nwg1"
+	Enabled      bool
+	HasEnabled   bool
+	Status       string
+	HasHandshake bool
 	HandshakeAge int    // seconds, 0 if unknown
 	PingStatus   string // "ok"|"degraded"|"dead"|""
 	Latency      int    // last latency ms (0 if unknown)
@@ -105,14 +109,49 @@ func ClassifyState(a SmartReplyArgs) SmartReplyState {
 		return StateHard
 	}
 	for _, t := range a.Tunnels {
-		if t.HandshakeAge >= smartReplyDegradedHandshakeMinSec {
-			return StateDegraded
-		}
-		if t.FailCount > 0 && (t.FailThresh == 0 || t.FailCount < t.FailThresh) {
+		if tunnelNeedsAttention(t) {
 			return StateDegraded
 		}
 	}
 	return StateOK
+}
+
+func tunnelNeedsAttention(t TunnelView) bool {
+	if !tunnelEnabled(t) {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(t.Status))
+	if status != "" && status != "running" {
+		return true
+	}
+	if !tunnelHasHandshake(t) && (t.HasEnabled || status != "") {
+		return true
+	}
+	if t.HandshakeAge >= smartReplyDegradedHandshakeMinSec {
+		return true
+	}
+	return t.FailCount > 0 && (t.FailThresh == 0 || t.FailCount < t.FailThresh)
+}
+
+func tunnelHasHandshake(t TunnelView) bool {
+	return t.HasHandshake || t.HandshakeAge > 0
+}
+
+func tunnelEnabled(t TunnelView) bool {
+	return !t.HasEnabled || t.Enabled
+}
+
+func degradedTunnels(a SmartReplyArgs) []TunnelView {
+	out := make([]TunnelView, 0, len(a.Tunnels))
+	for _, t := range a.Tunnels {
+		if tunnelNeedsAttention(t) {
+			out = append(out, t)
+		}
+	}
+	if len(out) == 0 {
+		return a.Tunnels
+	}
+	return out
 }
 
 func activeIncidentsForDisplay(a SmartReplyArgs) []IncidentView {
@@ -181,6 +220,10 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	case StateOK:
 		fmt.Fprintf(&b, "✅ %s — всё работает.\n\n", a.Nickname)
 		for _, t := range a.Tunnels {
+			if !tunnelEnabled(t) {
+				fmt.Fprintf(&b, "Туннель %s: выключен.\n", t.Name)
+				continue
+			}
 			line := fmt.Sprintf("Туннель %s: последний обмен ключами %s назад", t.Name, humanAgeSec(t.HandshakeAge))
 			if t.PingStatus != "" {
 				line += fmt.Sprintf(", проверка связи: %s", humanPingStatus(t.PingStatus))
@@ -196,17 +239,31 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 
 	case StateDegraded:
 		fmt.Fprintf(&b, "⚠️ %s — есть подозрения.\n\n", a.Nickname)
-		for _, t := range a.Tunnels {
-			fmt.Fprintf(&b, "Туннель %s: обмена ключами не было %d сек (норма до 180).\n", t.Name, t.HandshakeAge)
+		problems := degradedTunnels(a)
+		for _, t := range problems {
+			fmt.Fprintf(&b, "Туннель %s: ", t.Name)
+			status := strings.TrimSpace(t.Status)
+			switch {
+			case status != "" && !strings.EqualFold(status, "running"):
+				fmt.Fprintf(&b, "состояние %s", status)
+				if !tunnelHasHandshake(t) {
+					b.WriteString(", обмена ключами ещё не было")
+				}
+				b.WriteString(".\n")
+			case !tunnelHasHandshake(t):
+				b.WriteString("обмена ключами ещё не было.\n")
+			default:
+				fmt.Fprintf(&b, "обмена ключами не было %d сек (норма до 180).\n", t.HandshakeAge)
+			}
 			if t.FailCount > 0 {
 				fmt.Fprintf(&b, "Проверка связи: %d неудачи подряд из %d.\n", t.FailCount, t.FailThresh)
 			}
 		}
-		b.WriteString("Роутер пока не считает это сбоем, но подозрительно.\n\nДействия:")
+		b.WriteString("Сейчас это не показываем как красный алерт, но внимание нужно.\n\nДействия:")
 		var rows [][]tg.InlineKeyboardButton
-		for _, t := range a.Tunnels {
+		for _, t := range problems {
 			label := "🔁 Перезапустить туннель"
-			if len(a.Tunnels) > 1 {
+			if len(problems) > 1 {
 				label = "🔁 Перезапуск " + t.Name
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{

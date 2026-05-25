@@ -1119,10 +1119,22 @@ func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 		if row.DetailsJSON != "" {
 			_ = json.Unmarshal([]byte(row.DetailsJSON), &det)
 		}
+		enabled := true
+		hasEnabled := false
+		if v, ok := det["enabled"].(bool); ok {
+			enabled = v
+			hasEnabled = true
+		}
+		_, hasAge := det["handshake_age_sec"]
+		_, hasLastHandshake := det["last_handshake"]
 		out = append(out, alerts.TunnelView{
 			Name:         strOrEmpty(det, "tunnel_name"),
 			CheckName:    row.CheckName,
 			Interface:    strOrEmpty(det, "interface"),
+			Enabled:      enabled,
+			HasEnabled:   hasEnabled,
+			Status:       strOrEmpty(det, "status"),
+			HasHandshake: hasAge || hasLastHandshake,
 			HandshakeAge: intOrZero(det, "handshake_age_sec"),
 			PingStatus:   strOrEmpty(det, "ping_check_status"),
 			Latency:      intOrZero(det, "ping_check_last_latency_ms"),
@@ -1137,7 +1149,7 @@ func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 // current_status='hard' for this user. Routed via StateRepo so the SQL stays
 // in one place (LOGIC-07).
 func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
-	rows, err := r.d.State().ActiveHardForUser(userID, time.Now())
+	rows, err := r.d.State().ActiveHardForUserStatus(userID)
 	if err != nil {
 		slog.Warn("collectActiveIncidents: query failed", "err", err, "user", userID)
 		return nil
@@ -1606,9 +1618,13 @@ func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, a
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй снова")
 		return
 	}
+	if args.RouteUseHRNeo && !(snap.HRNeo.Installed && snap.HRNeo.Running) {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "HR-Neo не работает; выбери DNS (NDMS) или запусти HR-Neo")
+		return
+	}
 	draft := r.routeWizard.PutAddDraft(RouteAddDraft{
 		UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID,
-		Kind: args.RouteKind, UseHRNeo: args.RouteUseHRNeo && snap.HRNeo.Installed && snap.HRNeo.Running,
+		Kind: args.RouteKind, UseHRNeo: args.RouteUseHRNeo,
 	})
 	rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Tunnels)+1)
 	for _, t := range snap.Tunnels {

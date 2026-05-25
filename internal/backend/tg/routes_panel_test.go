@@ -42,7 +42,7 @@ func TestRoutesPanelText_HappyPath(t *testing.T) {
 		"DNS routes: 6 правил",
 		"Static IP routes: 3 правил",
 		"amnezia (nwg1): 7 правил",
-		"WAN/system: 2 правил",
+		"DNS routes: 1 правил ← WAN/system",
 		"Что видно:",
 	} {
 		if !strings.Contains(text, want) {
@@ -110,6 +110,9 @@ func TestRoutesPanelKeyboard_CanRebindWANSystemDNS(t *testing.T) {
 	if !routesKeyboardHasCallback(kb, "routes_rebind:42:__other__") {
 		t.Fatalf("WAN/system DNS rebind button missing: %+v", kb.InlineKeyboard)
 	}
+	if !routesKeyboardHasText(kb, "DNS routes") {
+		t.Fatalf("WAN/system DNS source should be labelled as DNS routes: %+v", kb.InlineKeyboard)
+	}
 }
 
 func TestRebindPickKeyboard_AllowsWANSystemSource(t *testing.T) {
@@ -121,7 +124,7 @@ func TestRebindPickKeyboard_AllowsWANSystemSource(t *testing.T) {
 		Other: wire.TunnelCounts{DNS: 10},
 	}
 	text, kb := RebindPickKeyboard(42, "__other__", snap)
-	if !strings.Contains(text, "WAN/system") {
+	if !strings.Contains(text, "DNS routes") || !strings.Contains(text, "WAN/system") {
 		t.Fatalf("source label missing: %s", text)
 	}
 	if !routesKeyboardHasCallback(kb, "routes_pick:42:__other__:t1") {
@@ -226,6 +229,17 @@ func routesKeyboardHasCallback(kb InlineKeyboardMarkup, want string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {
 			if btn.CallbackData == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func routesKeyboardHasText(kb InlineKeyboardMarkup, want string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.Contains(btn.Text, want) {
 				return true
 			}
 		}

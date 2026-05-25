@@ -588,7 +588,7 @@ func TestRouterDispatchSmartReply_RendersOK(t *testing.T) {
 	}
 }
 
-func TestRouterDispatchSmartReply_SilencedIncidentDropsFromHard(t *testing.T) {
+func TestRouterDispatchSmartReply_SilencedIncidentStillShownInManualStatus(t *testing.T) {
 	d, uid := newTestDB(t)
 	_ = d.Users().UpdateThreadID(uid, 11)
 	now := time.Now().UTC()
@@ -614,12 +614,38 @@ func TestRouterDispatchSmartReply_SilencedIncidentDropsFromHard(t *testing.T) {
 		t.Fatalf("want 1 send, got %d", len(f.rkSends))
 	}
 	body := f.rkSends[0].text
-	// Silenced incident must drop from Hard view — expect OK template (✅) not 🔴.
-	if strings.Contains(body, "🔴") {
-		t.Errorf("silenced incident should NOT trigger Hard template: %s", body)
+	if !strings.Contains(body, "🔴") {
+		t.Errorf("manual status should show silenced active HARD incident, got: %s", body)
 	}
-	if !strings.Contains(body, "✅") {
-		t.Errorf("expected OK template (✅) when only incident is silenced, got: %s", body)
+}
+
+func TestRouterDispatchSmartReply_AckedIncidentStillShownInManualStatus(t *testing.T) {
+	d, uid := newTestDB(t)
+	_ = d.Users().UpdateThreadID(uid, 11)
+	now := time.Now().UTC()
+	_ = d.Events().Insert(uid, "dns", "fail", `{"error":"timeout"}`, now)
+	_, err := d.SQL().Exec(
+		`INSERT INTO incident_state(user_id, check_name, current_status, consecutive_fails, hard_since, acked)
+		 VALUES (?, 'dns', 'hard', 6, ?, 1)`,
+		uid, now.Add(-3*time.Minute),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	msg := &tg.Message{
+		MessageID: 42, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 12345},
+		MessageThreadID: &tid, Text: "📊 Что происходит?",
+	}
+	r.HandleMessage(context.Background(), msg)
+	if len(f.rkSends) != 1 {
+		t.Fatalf("want 1 send, got %d", len(f.rkSends))
+	}
+	body := f.rkSends[0].text
+	if !strings.Contains(body, "🔴") || !strings.Contains(body, "dns") {
+		t.Fatalf("manual status should show acked active HARD incident, got:\n%s", body)
 	}
 }
 
@@ -1106,6 +1132,38 @@ func TestACL_UnboundOutsideOwnTopic_AllowsWithoutBind(t *testing.T) {
 	}
 	if len(f.edits) != 1 {
 		t.Fatalf("unbound-allow path: expected 1 edit, got %d", len(f.edits))
+	}
+}
+
+func TestRouterRoutesAddType_HRNeoUnavailableDoesNotSilentlyDowngradeToNDMS(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	cache := &RoutesCache{TTL: time.Hour}
+	cache.Put(uid, wire.RouteSnapshot{
+		HRNeo: wire.HRStatus{Installed: true, Running: false},
+		Tunnels: []wire.TunnelMeta{{
+			ID: "eth3", Name: "WAN", Iface: "eth3", Enabled: true, Available: true,
+		}},
+	})
+	r.SetRoutesCache(cache)
+
+	tid := int64(11)
+	q := &tg.CallbackQuery{
+		ID:   "cb-routes-add-hr",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_add_type:%d:_panel_:dns_hr", uid),
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "HR-Neo") {
+		t.Fatalf("expected HR-Neo unavailable answer, got answers=%v", f.answers)
+	}
+	if len(f.edits) != 0 {
+		t.Fatalf("must not advance wizard and silently create NDMS draft, edits=%v", f.edits)
 	}
 }
 

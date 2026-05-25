@@ -276,6 +276,57 @@ func TestRouteRebind_CanMoveWANSystemDNSWithoutExplicitRoute(t *testing.T) {
 	}
 }
 
+func TestRouteRebind_CanMoveOtherExplicitWANSystemRoutes(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "ndms:OtherDNS", Backend: "ndms", Routes: []awgmgr.DNSRouteEntry{{Interface: "cdc_br0", TunnelID: "cdc_br0"}}},
+		{ID: "ndms:Managed", Backend: "ndms", Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg1", TunnelID: "nwg1"}}},
+	}
+	mock.staticRules = []awgmgr.StaticRoute{
+		{ID: "s-other", Name: "lte", TunnelID: "cdc_br0", Subnets: []string{"198.51.100.0/24"}, Enabled: true},
+		{ID: "s-managed", Name: "work", TunnelID: "nwg1", Subnets: []string{"10.0.0.0/8"}, Enabled: true},
+	}
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, wire.RouteOtherID, "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 1 || res.Static.OK != 1 {
+		t.Fatalf("counts = dns=%+v static=%+v, want one explicit Other DNS+static moved", res.DNS, res.Static)
+	}
+	for _, r := range mock.dnsRules {
+		switch r.ID {
+		case "ndms:OtherDNS":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+				t.Fatalf("explicit Other DNS route was not moved to nwg0: %+v", r)
+			}
+		case "ndms:Managed":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg1" {
+				t.Fatalf("managed DNS route mutated: %+v", r)
+			}
+		}
+	}
+	for _, r := range mock.staticRules {
+		switch r.ID {
+		case "s-other":
+			if r.TunnelID != "nwg0" {
+				t.Fatalf("explicit Other static route was not moved to nwg0: %+v", r)
+			}
+		case "s-managed":
+			if r.TunnelID != "nwg1" {
+				t.Fatalf("managed static route mutated: %+v", r)
+			}
+		}
+	}
+}
+
 func TestRouteRebind_DNSPartialFail(t *testing.T) {
 	mock := newRebindMock(t)
 	mock.hrInstalled = false

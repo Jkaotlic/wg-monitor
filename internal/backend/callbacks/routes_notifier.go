@@ -104,7 +104,7 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 	// Resolve human names BEFORE invalidation (cache holds the pre-rebind snapshot).
 	srcName, dstName := rb.SrcTunnelID, rb.DstTunnelID
 	if rb.SrcTunnelID == wire.RouteOtherID {
-		srcName = "WAN/system"
+		srcName = routeOtherRebindName(rb)
 	}
 	if snap, ok := n.Cache.Get(user.ID); ok {
 		for _, t := range snap.Tunnels {
@@ -121,6 +121,21 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 	text := tg.RebindResultText(srcName, dstName, rb)
 	kb := tg.RebindResultKeyboard(user.ID, rb.SrcTunnelID, rb.DstTunnelID, totalFailed)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func routeOtherRebindName(rb wire.RouteRebindResult) string {
+	dns := rb.DNS.OK + rb.DNS.Failed
+	static := rb.Static.OK + rb.Static.Failed
+	switch {
+	case dns > 0 && static == 0:
+		return "DNS routes (WAN/system)"
+	case static > 0 && dns == 0:
+		return "Static IP routes (WAN/system)"
+	case dns+static > 0:
+		return "DNS/Static routes (WAN/system)"
+	default:
+		return "WAN/system"
+	}
 }
 
 func (n *RoutesPanelNotifier) renderAddPlan(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {

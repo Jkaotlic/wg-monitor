@@ -185,6 +185,18 @@ func TestFormatCommandResult_RouterDoctorPlainText(t *testing.T) {
 	}
 }
 
+func TestFormatCommandResult_RouterDoctorErrKeepsDetails(t *testing.T) {
+	r := wire.CommandResult{Status: "err", Output: "doctor\nOK awg-manager API\nFAIL tunnels: 0/4 running"}
+	chunks := FormatCommandResult("router_doctor", r, 3500)
+	body := chunks[0]
+	if !strings.Contains(body, "FAIL tunnels") {
+		t.Fatalf("router doctor error must preserve agent output, got:\n%s", body)
+	}
+	if strings.Contains(body, "Деталь") {
+		t.Fatalf("router doctor error must not be collapsed to generic hint:\n%s", body)
+	}
+}
+
 func TestFormatCommandResult_LockedAndTimeout(t *testing.T) {
 	for _, st := range []string{"locked", "timeout"} {
 		r := wire.CommandResult{Status: st, Output: ""}
