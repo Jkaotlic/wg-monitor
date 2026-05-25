@@ -116,6 +116,39 @@ func parseInterfaceField(iface *awgmgr.InterfaceConfig, key, val string) error {
 	return nil
 }
 
+func parseWGConfAddress(data string) string {
+	section := ""
+	scanner := bufio.NewScanner(strings.NewReader(data))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(line[1 : len(line)-1])
+			continue
+		}
+		if section != "interface" {
+			continue
+		}
+		kv := strings.SplitN(line, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(kv[0]), "Address") {
+			return normalizeWGAddress(strings.TrimSpace(kv[1]))
+		}
+	}
+	return ""
+}
+
+func normalizeWGAddress(s string) string {
+	if i := strings.IndexByte(s, ','); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
+}
+
 func parsePeerField(peer *awgmgr.PeerConfig, key, val string) error {
 	switch key {
 	case "PublicKey":
@@ -181,6 +214,15 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 			if t.Name == name {
 				oldID = t.ID
 				break
+			}
+		}
+		if oldID == "" {
+			confAddress := parseWGConfAddress(rawConf)
+			for _, t := range all.Tunnels {
+				if confAddress != "" && normalizeWGAddress(t.Address) == confAddress {
+					oldID = t.ID
+					break
+				}
 			}
 		}
 		if oldID != "" {

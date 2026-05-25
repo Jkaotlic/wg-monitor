@@ -283,7 +283,7 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 		Args: map[string]any{
 			"conf":    base64.StdEncoding.EncodeToString(conf),
 			"name":    "hidemy_" + args.HideMyServerID,
-			"replace": false,
+			"replace": true,
 		},
 		IssuedAt: time.Now().UTC(),
 	}

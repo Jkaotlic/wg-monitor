@@ -233,6 +233,7 @@ func Parse(data string) (Args, error) {
 			return Args{}, fmt.Errorf("%s: ndms_name %q must match ^[A-Za-z0-9_-]{1,32}$", action, parts[3])
 		}
 		a.NDMSName = parts[3]
+		a.IsPanel = true
 	}
 	if action == "tunnel_import_replace" || action == "tunnel_import_add" {
 		if len(parts) < 4 || parts[3] == "" {

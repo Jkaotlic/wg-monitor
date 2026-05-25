@@ -212,6 +212,34 @@ func TestRouterDispatchesCommandAction(t *testing.T) {
 	}
 }
 
+func TestRouterPanelCommandDoesNotEditStaleSnapshot(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-toggle",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "tunnel_disable:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if sink.calls[0].action != "tunnel_disable" {
+		t.Fatalf("action = %q, want tunnel_disable", sink.calls[0].action)
+	}
+	if len(f.answers) != 1 {
+		t.Fatalf("expected answer toast, got %d", len(f.answers))
+	}
+	if len(f.edits) != 0 {
+		t.Fatalf("panel callback should not edit stale DB snapshot, got edits=%v", f.edits)
+	}
+}
+
 func TestRouterCommandActionWithoutSinkRejects(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
