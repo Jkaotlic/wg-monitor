@@ -60,6 +60,13 @@ func (m *rebindMock) handler() http.Handler {
 			http.Error(w, "not found", 404)
 		}
 	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"t1","name":"awg11","iface":"nwg1","type":"managed","status":"running","available":true},
+			{"id":"t2","name":"awg13","iface":"nwg0","type":"managed","status":"running","available":true},
+			{"id":"wan-eth3","name":"ISP","iface":"eth3","type":"wan","status":"up","available":true}
+		]}`))
+	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -174,6 +181,50 @@ func TestRouteRebind_SrcEqDst(t *testing.T) {
 	_ = json.Unmarshal([]byte(out), &res)
 	if res.DNS.OK+res.Static.OK+res.HRNeo.OK != 0 {
 		t.Errorf("src==dst should be no-op, got %+v", res)
+	}
+}
+
+func TestRouteRebind_CanMoveWANToManagedTunnel(t *testing.T) {
+	mock := newRebindMock(t)
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "eth3", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 1 || res.Static.OK != 1 || res.HRNeo.OK != 1 {
+		t.Fatalf("counts = dns=%+v static=%+v hr=%+v, want one WAN DNS+static moved", res.DNS, res.Static, res.HRNeo)
+	}
+
+	for _, r := range mock.dnsRules {
+		switch r.ID {
+		case "hr:Sber":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+				t.Fatalf("WAN DNS rule was not moved to nwg0: %+v", r)
+			}
+		case "hr:Vk", "ndms:Yandex":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg1" {
+				t.Fatalf("non-WAN DNS rule mutated: %+v", r)
+			}
+		}
+	}
+	for _, r := range mock.staticRules {
+		switch r.ID {
+		case "s2":
+			if r.TunnelID != "nwg0" {
+				t.Fatalf("WAN static rule was not moved to nwg0: %+v", r)
+			}
+		case "s1":
+			if r.TunnelID != "nwg1" {
+				t.Fatalf("non-WAN static rule mutated: %+v", r)
+			}
+		}
 	}
 }
 

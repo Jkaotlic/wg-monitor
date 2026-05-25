@@ -231,6 +231,23 @@ func TestParse_RouteAddDeletePreviewCallbacks(t *testing.T) {
 	}
 }
 
+func TestParse_RouteAddTypeDistinguishesNDMSAndHRNeo(t *testing.T) {
+	ndms, err := Parse("routes_add_type:42:_panel_:dns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ndms.RouteKind != "dns" || ndms.RouteUseHRNeo {
+		t.Fatalf("ndms args = %+v, want dns without HR-Neo", ndms)
+	}
+	hr, err := Parse("routes_add_type:42:_panel_:dns_hr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hr.RouteKind != "dns" || !hr.RouteUseHRNeo {
+		t.Fatalf("hr args = %+v, want dns with HR-Neo", hr)
+	}
+}
+
 func TestParse_MaintActions(t *testing.T) {
 	cases := []struct {
 		data    string

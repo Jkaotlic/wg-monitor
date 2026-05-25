@@ -12,10 +12,12 @@ type HRStatus struct {
 // `Iface` is the canonical bind value (matches awgmgr.Tunnel.InterfaceName
 // for managed tunnels) and is used by the renderer to label rows.
 type TunnelMeta struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Iface   string `json:"iface"`
-	Enabled bool   `json:"enabled"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Iface     string `json:"iface"`
+	Type      string `json:"type,omitempty"`
+	Enabled   bool   `json:"enabled"`
+	Available bool   `json:"available,omitempty"`
 	// DefaultRoute marks managed tunnels with `defaultRoute=true`. Used as
 	// the heuristic for the global HR-Neo policy default during rebind
 	// fall-through conversion.
@@ -36,9 +38,9 @@ type TunnelCounts struct {
 // RouteSnapshot is the payload of a successful route_status CommandResult.
 type RouteSnapshot struct {
 	HRNeo   HRStatus                `json:"hr_neo"`
-	Tunnels []TunnelMeta            `json:"tunnels"` // managed tunnels only
-	Counts  map[string]TunnelCounts `json:"counts"`  // key = tunnel id
-	Other   TunnelCounts            `json:"other"`   // sum across WAN/system/external
+	Tunnels []TunnelMeta            `json:"tunnels"` // routable managed/NDMS targets
+	Counts  map[string]TunnelCounts `json:"counts"`  // key = target id
+	Other   TunnelCounts            `json:"other"`   // sum across unknown/unmatched binds
 	Rules   []RouteRuleSummary      `json:"rules,omitempty"`
 }
 
