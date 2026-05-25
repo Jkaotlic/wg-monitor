@@ -75,10 +75,13 @@ func TestRenderWakeReport_SkipsAgentHeartbeat(t *testing.T) {
 		{Name: "agent_heartbeat", Status: "fail"}, // pathological but should be ignored
 	}
 	card := RenderWakeReport("carvan", checks)
-	if card.Badge != "🚗" {
-		t.Errorf("agent_heartbeat fail must not flip badge; got %q", card.Badge)
+	if card.Badge != "🚗⏳" {
+		t.Errorf("agent_heartbeat-only report should wait for health checks; got %q", card.Badge)
 	}
 	if card.Details != "" {
 		t.Errorf("agent_heartbeat fail must not enter details; got %q", card.Details)
+	}
+	if !strings.Contains(card.Summary, "жду проверки сервисов") {
+		t.Errorf("heartbeat-only summary should not claim all-ok: %q", card.Summary)
 	}
 }

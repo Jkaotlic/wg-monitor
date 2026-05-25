@@ -51,3 +51,36 @@ func TestNormalizeReportedCheckKeepsRealTunnelFailure(t *testing.T) {
 		t.Fatalf("Status=%q, want fail; check=%+v", got.Status, got)
 	}
 }
+
+func TestNormalizeReportedCheckCoercesDisabledTunnelFail(t *testing.T) {
+	in := wire.Check{
+		Name:   "tunnel_awg12",
+		Status: "fail",
+		Details: map[string]any{
+			"status":  "disabled",
+			"enabled": false,
+			"error":   "status=disabled; no handshake ever",
+		},
+	}
+	got := normalizeReportedCheck(in)
+	if got.Status != "ok" {
+		t.Fatalf("Status=%q, want ok; check=%+v", got.Status, got)
+	}
+	if errText, _ := got.Details["error"].(string); errText != "" {
+		t.Fatalf("disabled tunnel error should be cleared, got %q", errText)
+	}
+}
+
+func TestIsDisabledTunnelOKAcceptsStatusWithDisabledNote(t *testing.T) {
+	c := wire.Check{
+		Name:   "tunnel_awg12",
+		Status: "ok",
+		Details: map[string]any{
+			"status": "stopped",
+			"note":   "tunnel disabled in config",
+		},
+	}
+	if !isDisabledTunnelOK(c) {
+		t.Fatalf("disabled-looking tunnel should be silently cleared: %+v", c)
+	}
+}

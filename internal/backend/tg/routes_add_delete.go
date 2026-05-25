@@ -245,7 +245,7 @@ func addTypeLabel(p routeAddPlanView) string {
 		if p.useHRNeo {
 			return "DNS / HR-Neo"
 		}
-		return "DNS"
+		return "DNS / NDMS"
 	case "static":
 		return "Static CIDR"
 	default:

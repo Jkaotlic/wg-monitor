@@ -47,9 +47,15 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		visible := c.DNS + c.Static
 		fmt.Fprintf(&b, "  • %s (%s): %d правил\n", t.Name, t.Iface, visible)
 	}
-	b.WriteString("\nНе входит в перенос:\n")
-	wanTotal := snap.Other.DNS + snap.Other.Static
-	fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
+	if snap.Other.DNS+snap.Other.Static > 0 {
+		b.WriteString("\nБез привязки к туннелю:\n")
+		if snap.Other.DNS > 0 {
+			fmt.Fprintf(&b, "  • DNS routes: %d правил ← WAN/system\n", snap.Other.DNS)
+		}
+		if snap.Other.Static > 0 {
+			fmt.Fprintf(&b, "  • Static IP routes: %d правил ← WAN/system\n", snap.Other.Static)
+		}
+	}
 	return b.String()
 }
 
@@ -82,7 +88,7 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 	}
 	if snap.Other.DNS+snap.Other.Static > 0 {
 		rows = append(rows, []InlineKeyboardButton{{
-			Text:         "🔄 WAN/system",
+			Text:         "🔄 " + routeOtherSourceLabel(snap.Other),
 			CallbackData: fmt.Sprintf("routes_rebind:%d:%s", userID, wire.RouteOtherID),
 		}})
 	}
@@ -124,7 +130,7 @@ func RebindPickKeyboard(userID int64, srcID string, snap wire.RouteSnapshot) (st
 	srcName := ""
 	srcIface := ""
 	if srcID == wire.RouteOtherID {
-		srcName = "WAN/system"
+		srcName = routeOtherSourceLabel(snap.Other)
 	} else if src != nil {
 		srcName = src.Name
 		srcIface = src.Iface
@@ -323,7 +329,7 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 	}
 	c := snap.Counts[srcID]
 	if srcID == wire.RouteOtherID {
-		srcName = "WAN/system"
+		srcName = routeOtherSourceLabel(snap.Other)
 		c = snap.Other
 	}
 	visible := c.DNS + c.Static
@@ -343,7 +349,9 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 	b.WriteString("\nНЕ ТРОГАЕМ:\n")
 	if srcID != wire.RouteOtherID {
 		wanTotal := snap.Other.DNS + snap.Other.Static
-		fmt.Fprintf(&b, "  • WAN/system: %d правил ← RU-сервисы\n", wanTotal)
+		if wanTotal > 0 {
+			fmt.Fprintf(&b, "  • %s: %d правил\n", routeOtherSourceLabel(snap.Other), wanTotal)
+		}
 	}
 	for _, t := range snap.Tunnels {
 		if t.ID == srcID {
@@ -413,4 +421,17 @@ func RebindResultKeyboard(userID int64, srcID, dstID string, totalFailed int) In
 		{Text: "Закрыть", CallbackData: "routes_close:0:_panel_"},
 	})
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func routeOtherSourceLabel(c wire.TunnelCounts) string {
+	switch {
+	case c.DNS > 0 && c.Static == 0:
+		return "DNS routes (WAN/system)"
+	case c.Static > 0 && c.DNS == 0:
+		return "Static IP routes (WAN/system)"
+	case c.DNS+c.Static > 0:
+		return "DNS/Static routes (WAN/system)"
+	default:
+		return "WAN/system"
+	}
 }

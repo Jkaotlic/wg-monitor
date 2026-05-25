@@ -175,7 +175,9 @@ func (s *StateRepo) AllActiveHard() ([]ActiveIncidentRow, error) {
 }
 
 // ActiveHardForUser returns hard, non-silenced, non-acked incidents for a
-// single user — feeds the smart-reply panel. Mirrors StaleHards' silenced_until
+// single user. Use this only for push-facing views that should respect
+// silencing/ack. Manual status must use ActiveHardForUserStatus so operators
+// still see the real active HARD state. Mirrors StaleHards' silenced_until
 // handling: pass time.Now().UTC() so SQL serialisation matches the column
 // format (see StaleHards comment for the lexicographic-compare gotcha).
 func (s *StateRepo) ActiveHardForUser(userID int64, now time.Time) ([]ActiveIncidentRow, error) {
@@ -188,6 +190,36 @@ func (s *StateRepo) ActiveHardForUser(userID int64, now time.Time) ([]ActiveInci
 		    AND acked = 0
 		  ORDER BY hard_since`,
 		userID, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveIncidentRow
+	for rows.Next() {
+		var r ActiveIncidentRow
+		var hs sql.NullTime
+		if err := rows.Scan(&r.UserID, &r.CheckName, &hs, &r.FailCount); err != nil {
+			return nil, err
+		}
+		if hs.Valid {
+			r.HardSince = hs.Time
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// ActiveHardForUserStatus returns every active HARD row for the manual
+// "what is happening?" status view. Unlike StaleHards/ActiveHardForUser it
+// intentionally includes silenced and acked incidents: those flags suppress
+// push reminders, but a user-requested status must still show the real state.
+func (s *StateRepo) ActiveHardForUserStatus(userID int64) ([]ActiveIncidentRow, error) {
+	rows, err := s.d.db.Query(
+		`SELECT user_id, check_name, hard_since, consecutive_fails
+		   FROM incident_state
+		  WHERE user_id = ? AND current_status = 'hard'
+		  ORDER BY hard_since`,
+		userID)
 	if err != nil {
 		return nil, err
 	}

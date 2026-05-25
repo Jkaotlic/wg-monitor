@@ -46,9 +46,9 @@ CREATE TABLE IF NOT EXISTS incident_state (
     PRIMARY KEY (user_id, check_name),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
--- StaleHards / AllActiveHard / collectActiveIncidents все фильтруют
+-- StaleHards / AllActiveHard / ActiveHardForUserStatus все фильтруют
 -- current_status='hard'. Без индекса каждый realert tick (раз в TickEverySec,
--- по умолчанию каждые 60s) и каждый клик в Fleet-Health делают full scan.
+-- по умолчанию каждые 60s), ручной статус и каждый клик в Fleet-Health делают full scan.
 CREATE INDEX IF NOT EXISTS idx_incident_state_hard ON incident_state(user_id, check_name) WHERE current_status = 'hard';
 
 CREATE TABLE IF NOT EXISTS daily_soft_flaps (

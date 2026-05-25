@@ -20,6 +20,10 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	}
 	label := commandLabelHuman(action)
 
+	if action == "router_doctor" && r.Status != "ok" && strings.TrimSpace(r.Output) != "" {
+		return formatPlainCommandOutput(label, "есть проблемы", r.Output, maxChars)
+	}
+
 	if r.Status != "ok" {
 		token := strings.ToUpper(r.Status) // "ERR" / "LOCKED" / "TIMEOUT"
 		hintInput := token

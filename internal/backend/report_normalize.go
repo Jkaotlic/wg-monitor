@@ -9,6 +9,14 @@ import (
 const tunnelHandshakeHealthyMaxAgeSec = 180
 
 func normalizeReportedCheck(c wire.Check) wire.Check {
+	if isDisabledTunnelReport(c) && c.Status != "ok" {
+		c.Status = "ok"
+		d := cloneDetails(c.Details)
+		delete(d, "error")
+		d["note"] = "tunnel disabled in config"
+		c.Details = d
+		return c
+	}
 	if !isLegacyPingCheckDisabledFalseFail(c) {
 		return c
 	}
@@ -49,11 +57,25 @@ func isDisabledTunnelOK(c wire.Check) bool {
 	if !strings.HasPrefix(c.Name, "tunnel_") || strings.ToLower(strings.TrimSpace(c.Status)) != "ok" {
 		return false
 	}
-	if c.Details == nil {
+	return isDisabledTunnelReport(c)
+}
+
+func isDisabledTunnelReport(c wire.Check) bool {
+	if !strings.HasPrefix(c.Name, "tunnel_") || c.Details == nil {
 		return false
 	}
 	enabled, ok := boolDetail(c.Details, "enabled")
-	return ok && !enabled
+	if ok && !enabled {
+		return true
+	}
+	status := strings.ToLower(strings.TrimSpace(stringDetail(c.Details, "status")))
+	if status == "disabled" || status == "stopped" {
+		note := strings.ToLower(strings.TrimSpace(stringDetail(c.Details, "note")))
+		if strings.Contains(note, "disabled") {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneDetails(in map[string]any) map[string]any {

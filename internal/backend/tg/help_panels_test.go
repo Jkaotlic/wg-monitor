@@ -63,6 +63,18 @@ func TestHelpForScreen_Premium(t *testing.T) {
 	}
 }
 
+func TestHelpForScreen_RoutesMatchesWANSystemRebind(t *testing.T) {
+	got := HelpForScreen("routes")
+	for _, want := range []string{"NDMS", "HydraRoute-Neo", "WAN/system", "отдельной кнопкой", "preview"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in routes help body:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "не трогаются") {
+		t.Errorf("routes help must not say WAN/system is untouchable anymore:\n%s", got)
+	}
+}
+
 func TestHelpRowFor_Maint(t *testing.T) {
 	row := HelpRowFor("maint")
 	if len(row) != 1 {

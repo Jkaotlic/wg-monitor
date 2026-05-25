@@ -91,6 +91,24 @@ func TestRouteAddPreviewTextAllowed(t *testing.T) {
 	}
 }
 
+func TestRouteAddPreviewTextShowsNDMSDNSBackend(t *testing.T) {
+	plan := routeAddPlanFixture{
+		Request: routeAddRequestFixture{
+			Kind:     "dns",
+			Name:     "media",
+			TunnelID: "eth3",
+			Targets:  []string{"example.com"},
+			UseHRNeo: false,
+		},
+		CanApply: true,
+		Hash:     "h1",
+	}
+	text := RouteAddPreviewText(plan)
+	if !strings.Contains(text, "Тип маршрута: DNS / NDMS") {
+		t.Fatalf("NDMS DNS preview should name backend, got:\n%s", text)
+	}
+}
+
 func TestRouteAddPreviewKeyboardHidesConfirmWhenBlocked(t *testing.T) {
 	plan := routeAddPlanFixture{
 		Request: routeAddRequestFixture{Kind: "static", Name: "corp", TunnelID: "awg11"},

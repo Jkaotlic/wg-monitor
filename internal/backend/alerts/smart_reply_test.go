@@ -95,6 +95,33 @@ func TestClassifyState_OKBaseline(t *testing.T) {
 	}
 }
 
+func TestClassifyState_DegradedWhenEnabledTunnelStartingWithoutHandshake(t *testing.T) {
+	a := mkArgs(t, func(a *SmartReplyArgs) {
+		a.LastReportAge = 5 * time.Second
+		a.Tunnels = []TunnelView{{Name: "amnezia_nl", Enabled: true, HasEnabled: true, Status: "starting", PingStatus: "disabled"}}
+	})
+	if got := ClassifyState(a); got != StateDegraded {
+		t.Errorf("got %v want degraded", got)
+	}
+}
+
+func TestFormatSmartReply_DisabledTunnelDoesNotPretendHandshakeIsFresh(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "del", UserID: 7, LastReportAge: 23 * time.Second,
+		Tunnels: []TunnelView{
+			{Name: "nl", Enabled: false, HasEnabled: true, Status: "disabled"},
+			{Name: "amnezia_nl", Enabled: true, HasEnabled: true, Status: "running", HasHandshake: true, HandshakeAge: 3, PingStatus: "disabled"},
+		},
+	}
+	text, _ := FormatSmartReply(a)
+	if !strings.Contains(text, "nl") || !strings.Contains(text, "выключ") {
+		t.Fatalf("disabled tunnel should be rendered as disabled, got:\n%s", text)
+	}
+	if strings.Contains(text, "Туннель nl: последний обмен") {
+		t.Fatalf("disabled tunnel must not claim fresh handshake:\n%s", text)
+	}
+}
+
 func TestClassifyState_MobileLongerStaleWindow(t *testing.T) {
 	// Mobile users have a 60-min OFFLINE grace window in heartbeat config,
 	// but for smart-reply context we still want to surface "offline" as soon
