@@ -19,6 +19,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/internal/backend/upstream"
 	"github.com/anex/wg-monitor/pkg/wire"
@@ -48,6 +49,7 @@ type Config struct {
 	UI                 UIConfigSnapshot
 	AmneziaBaseURL     string
 	AmneziaSecretsPath string
+	SelfHostedAmnezia  selfhostedamnezia.Config
 	HideMyBaseURL      string
 	HideMySecretsPath  string
 }
@@ -322,6 +324,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
 		return
 	}
+	if isSelfHostedAmneziaAction(args.Action) && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
+		return
+	}
 	if !r.aclAllow(ctx, q, args) {
 		return
 	}
@@ -377,6 +383,12 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	case "amz_dl_confirm":
 		r.handleAmneziaDownloadConfirm(ctx, q, args)
+		return
+	case "amz_selfhosted_issue":
+		r.handleSelfHostedAmneziaIssue(ctx, q, args)
+		return
+	case "amz_selfhosted_confirm":
+		r.handleSelfHostedAmneziaConfirm(ctx, q, args)
 		return
 	case "hmn_refresh":
 		r.handleHideMyRefresh(ctx, q, args)
@@ -563,6 +575,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, newText, "", &empty); err != nil {
 		slog.Warn("editMessageText failed (state already updated)", "err", err)
 	}
+}
+
+func isSelfHostedAmneziaAction(action string) bool {
+	return action == "amz_selfhosted_issue" || action == "amz_selfhosted_confirm"
 }
 
 // aclAllow gates a callback by owner identity. Returns true to proceed,

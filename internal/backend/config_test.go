@@ -45,6 +45,9 @@ telegram:
 	if cfg.Amnezia.SecretsPath != "/var/lib/wg-monitor/amnezia-premium.json" {
 		t.Fatalf("amnezia secrets default: %q", cfg.Amnezia.SecretsPath)
 	}
+	if cfg.SelfHostedAmnezia.StorePath != "/var/lib/wg-monitor/amnezia-selfhosted.json" {
+		t.Fatalf("self-hosted amnezia store default: %q", cfg.SelfHostedAmnezia.StorePath)
+	}
 	if cfg.HideMy.BaseURL != "https://hide-my-name.cloud" {
 		t.Fatalf("hidemy base default: %q", cfg.HideMy.BaseURL)
 	}
