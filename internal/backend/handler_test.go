@@ -168,6 +168,73 @@ func TestReportSkipsFSMForOutOfOrderTunnelOK(t *testing.T) {
 	}
 }
 
+func TestReportSilentlyClearsHardTunnelWhenDisabled(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "3030303030303030303030303030303030303030303030303030303030303030"
+	uid, _ := d.Users().Insert("del", tok, "1.1.1.1", "awg0")
+
+	hardSince := time.Now().UTC().Add(-5 * time.Hour)
+	if err := d.State().Save(uid, "tunnel_awg12", db.IncidentState{
+		CurrentStatus:    "hard",
+		ConsecutiveFails: 7,
+		ConsecutiveOKs:   1,
+		HardSince:        &hardSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: disp,
+		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC().Truncate(time.Second),
+		AgentVersion: "test",
+		Checks: []wire.Check{{
+			Name:   "tunnel_awg12",
+			Status: "ok",
+			Details: map[string]any{
+				"tunnel_name": "ch",
+				"interface":   "nwg2",
+				"enabled":     false,
+				"status":      "stopped",
+				"note":        "tunnel disabled in config",
+			},
+		}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	disp.mu.Lock()
+	if len(disp.calls) != 0 {
+		t.Fatalf("disabled tunnel must not dispatch recovery, calls=%v", disp.calls)
+	}
+	disp.mu.Unlock()
+
+	got, err := d.State().Get(uid, "tunnel_awg12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "ok" || got.HardSince != nil || got.ConsecutiveFails != 0 {
+		t.Fatalf("disabled tunnel should silently clear hard state, got %+v", got)
+	}
+}
+
 func TestReportDoesNotRegressLastSeenOrVersionFromOldReport(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()

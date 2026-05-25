@@ -119,7 +119,8 @@ type Router struct {
 	opkgRepairAction  Action
 
 	// Access-control panel plumbing. All in-memory; lost on restart.
-	pendingAddOperator *pendingAddOperatorStore
+	pendingAddOperator       *pendingAddOperatorStore
+	pendingSelfHostedAmnezia *pendingSelfHostedAmneziaStore
 
 	// diagCache stores raw diag_now result bodies so "📄 Полный отчёт"
 	// inline-button taps can fetch the body without re-running the diagnostic.
@@ -207,6 +208,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.auditCache = newSimpleAuditCache()
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
 	r.pendingAddOperator = newPendingAddOperatorStore()
+	r.pendingSelfHostedAmnezia = newPendingSelfHostedAmneziaStore()
 	r.diagCache = newDiagCache()
 	r.fleetBatches = newFleetBatchStore()
 	return r
@@ -389,6 +391,24 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	case "amz_selfhosted_confirm":
 		r.handleSelfHostedAmneziaConfirm(ctx, q, args)
+		return
+	case "amz_selfhosted_manage":
+		r.handleSelfHostedAmneziaManage(ctx, q, args)
+		return
+	case "amz_selfhosted_add":
+		r.handleSelfHostedAmneziaStartAdd(ctx, q, args)
+		return
+	case "amz_selfhosted_edit":
+		r.handleSelfHostedAmneziaStartEdit(ctx, q, args)
+		return
+	case "amz_selfhosted_toggle":
+		r.handleSelfHostedAmneziaToggle(ctx, q, args)
+		return
+	case "amz_selfhosted_delete":
+		r.handleSelfHostedAmneziaDelete(ctx, q, args)
+		return
+	case "amz_selfhosted_cancel":
+		r.handleSelfHostedAmneziaCancel(ctx, q, args)
 		return
 	case "hmn_refresh":
 		r.handleHideMyRefresh(ctx, q, args)
@@ -578,7 +598,18 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 }
 
 func isSelfHostedAmneziaAction(action string) bool {
-	return action == "amz_selfhosted_issue" || action == "amz_selfhosted_confirm"
+	switch action {
+	case "amz_selfhosted_issue", "amz_selfhosted_confirm",
+		"amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_edit",
+		"amz_selfhosted_toggle", "amz_selfhosted_delete", "amz_selfhosted_cancel":
+		return true
+	default:
+		return false
+	}
+}
+
+func (r *Router) isAdminTG(userID int64) bool {
+	return r.cfg.AdminUserID == 0 || userID == r.cfg.AdminUserID
 }
 
 // aclAllow gates a callback by owner identity. Returns true to proceed,
@@ -695,6 +726,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 		return
 	}
+	if isAdmin && r.handlePendingSelfHostedAmneziaMessage(ctx, m) {
+		return
+	}
 	kind, user := r.resolveTopicKind(m.MessageThreadID)
 	// Document handler — before text switch.
 	if m.Document != nil {
@@ -735,7 +769,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 	case "Amnezia Premium":
 		if kind == "per_router" && user != nil {
-			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
+			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user, m.From.ID)
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"Amnezia Premium работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))

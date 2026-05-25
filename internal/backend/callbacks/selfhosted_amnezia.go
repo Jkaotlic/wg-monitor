@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
@@ -14,13 +16,65 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-func (r *Router) addSelfHostedAmneziaRow(kb *tg.InlineKeyboardMarkup, userID int64) {
+type pendingSelfHostedAmnezia struct {
+	AdminUserID     int64
+	ChatID          int64
+	ThreadID        *int64
+	PromptMessageID int64
+	Mode            string
+	InstanceID      string
+	ExpiresAt       time.Time
+}
+
+type pendingSelfHostedAmneziaStore struct {
+	mu sync.Mutex
+	m  map[int64]*pendingSelfHostedAmnezia
+}
+
+func newPendingSelfHostedAmneziaStore() *pendingSelfHostedAmneziaStore {
+	return &pendingSelfHostedAmneziaStore{m: make(map[int64]*pendingSelfHostedAmnezia)}
+}
+
+func (s *pendingSelfHostedAmneziaStore) put(p *pendingSelfHostedAmnezia) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[p.AdminUserID] = p
+}
+
+func (s *pendingSelfHostedAmneziaStore) get(adminID int64) (*pendingSelfHostedAmnezia, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.m[adminID]
+	if !ok {
+		return nil, false
+	}
+	if time.Now().After(p.ExpiresAt) {
+		delete(s.m, adminID)
+		return nil, false
+	}
+	return p, true
+}
+
+func (s *pendingSelfHostedAmneziaStore) clear(adminID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, adminID)
+}
+
+func (r *Router) addSelfHostedAmneziaRow(kb *tg.InlineKeyboardMarkup, userID int64, admin bool) {
 	if kb == nil {
+		return
+	}
+	if !admin {
 		return
 	}
 	store, err := r.loadSelfHostedAmneziaStore()
 	if err != nil {
 		slog.Warn("self-hosted Amnezia store read failed", "err", err)
+		kb.InlineKeyboard = append(kb.InlineKeyboard, []tg.InlineKeyboardButton{{
+			Text:         "⚙ Self-hosted Amnezia",
+			CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", userID),
+		}})
 		return
 	}
 	for _, inst := range store.EnabledInstances() {
@@ -29,6 +83,220 @@ func (r *Router) addSelfHostedAmneziaRow(kb *tg.InlineKeyboardMarkup, userID int
 			CallbackData: fmt.Sprintf("amz_selfhosted_issue:%d:_panel_:%s", userID, inst.ID),
 		}})
 	}
+	kb.InlineKeyboard = append(kb.InlineKeyboard, []tg.InlineKeyboardButton{{
+		Text:         "⚙ Self-hosted Amnezia",
+		CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", userID),
+	}})
+}
+
+func (r *Router) handleSelfHostedAmneziaManage(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	text, kb := r.selfHostedAmneziaManageView(args.UserID)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleSelfHostedAmneziaStartAdd(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	r.pendingSelfHostedAmnezia.put(&pendingSelfHostedAmnezia{
+		AdminUserID:     q.From.ID,
+		ChatID:          q.Message.Chat.ID,
+		ThreadID:        cloneInt64Ptr(q.Message.MessageThreadID),
+		PromptMessageID: q.Message.MessageID,
+		Mode:            "add",
+		ExpiresAt:       time.Now().Add(5 * time.Minute),
+	})
+	text := "➕ Добавить self-hosted Amnezia VPS\n\nОтветь одним сообщением:\n<id> <endpoint_host> <endpoint_port> [label]\n\nПример:\nhome vpn.example.com 47567 Home VPS\n\n/cancel — отмена. Жду 5 минут."
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Отмена", CallbackData: fmt.Sprintf("amz_selfhosted_cancel:%d:_panel_", args.UserID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "жду параметры")
+}
+
+func (r *Router) handleSelfHostedAmneziaStartEdit(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	inst, _, ok := r.selfHostedAmneziaStoredInstance(args.SelfHostedAmneziaID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS не найден")
+		return
+	}
+	r.pendingSelfHostedAmnezia.put(&pendingSelfHostedAmnezia{
+		AdminUserID:     q.From.ID,
+		ChatID:          q.Message.Chat.ID,
+		ThreadID:        cloneInt64Ptr(q.Message.MessageThreadID),
+		PromptMessageID: q.Message.MessageID,
+		Mode:            "edit",
+		InstanceID:      inst.ID,
+		ExpiresAt:       time.Now().Add(5 * time.Minute),
+	})
+	text := fmt.Sprintf("✏️ Изменить self-hosted VPS %s\n\nОтветь одним сообщением key=value:\nhost=vpn.example.com port=47567 label=Home-VPS dns=1.1.1.1,8.8.8.8\n\nМожно менять отдельные поля: host, port, label, dns, container, interface, config_path, clients_path, server_public_key_path, preshared_key_path.\n\n/cancel — отмена. Жду 5 минут.", inst.ID)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Отмена", CallbackData: fmt.Sprintf("amz_selfhosted_cancel:%d:_panel_", args.UserID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "жду изменения")
+}
+
+func (r *Router) handleSelfHostedAmneziaToggle(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	store, err := r.loadSelfHostedAmneziaStore()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	if !store.SetEnabled(args.SelfHostedAmneziaID, args.SelfHostedAmneziaEnabled) {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS не найден")
+		return
+	}
+	if err := r.saveSelfHostedAmneziaStore(store); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	r.handleSelfHostedAmneziaManage(ctx, q, args)
+}
+
+func (r *Router) handleSelfHostedAmneziaDelete(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	store, err := r.loadSelfHostedAmneziaStore()
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	if !store.Delete(args.SelfHostedAmneziaID) {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS не найден")
+		return
+	}
+	if err := r.saveSelfHostedAmneziaStore(store); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	r.handleSelfHostedAmneziaManage(ctx, q, args)
+}
+
+func (r *Router) handleSelfHostedAmneziaCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	r.pendingSelfHostedAmnezia.clear(q.From.ID)
+	r.handleSelfHostedAmneziaManage(ctx, q, args)
+}
+
+func (r *Router) selfHostedAmneziaManageView(userID int64) (string, tg.InlineKeyboardMarkup) {
+	store, err := r.loadSelfHostedAmneziaStore()
+	if err != nil {
+		text := "⚙ Self-hosted Amnezia\n\nНе удалось прочитать storage: " + err.Error()
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{{Text: "➕ Добавить VPS", CallbackData: fmt.Sprintf("amz_selfhosted_add:%d:_panel_", userID)}},
+			{{Text: "Назад", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", userID)}},
+		}}
+		return text, kb
+	}
+	var b strings.Builder
+	b.WriteString("⚙ Self-hosted Amnezia\n\n")
+	rows := make([][]tg.InlineKeyboardButton, 0, len(store.Instances)*2+2)
+	if len(store.Instances) == 0 {
+		b.WriteString("VPS ещё не добавлены. Нажми «Добавить VPS» и пришли host/port.")
+	} else {
+		b.WriteString("VPS:\n")
+	}
+	for _, inst := range store.Instances {
+		state := "off"
+		nextState := "1"
+		toggleText := "Включить"
+		if inst.Enabled {
+			state = "on"
+			nextState = "0"
+			toggleText = "Выключить"
+		}
+		fmt.Fprintf(&b, "  • %s [%s] %s:%d", inst.ID, state, inst.EndpointHost, inst.EndpointPort)
+		if strings.TrimSpace(inst.Label) != "" && inst.Label != inst.ID {
+			fmt.Fprintf(&b, " — %s", inst.Label)
+		}
+		b.WriteByte('\n')
+		row := []tg.InlineKeyboardButton{{
+			Text:         "✏️ " + inst.ID,
+			CallbackData: fmt.Sprintf("amz_selfhosted_edit:%d:_panel_:%s", userID, inst.ID),
+		}, {
+			Text:         toggleText,
+			CallbackData: fmt.Sprintf("amz_selfhosted_toggle:%d:_panel_:%s:%s", userID, inst.ID, nextState),
+		}}
+		if inst.Enabled {
+			row = append(row, tg.InlineKeyboardButton{
+				Text:         ".conf",
+				CallbackData: fmt.Sprintf("amz_selfhosted_issue:%d:_panel_:%s", userID, inst.ID),
+			})
+		}
+		row = append(row, tg.InlineKeyboardButton{
+			Text:         "Удалить",
+			CallbackData: fmt.Sprintf("amz_selfhosted_delete:%d:_panel_:%s", userID, inst.ID),
+		})
+		rows = append(rows, row)
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "➕ Добавить VPS",
+		CallbackData: fmt.Sprintf("amz_selfhosted_add:%d:_panel_", userID),
+	}})
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "Назад",
+		CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", userID),
+	}})
+	return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func (r *Router) handlePendingSelfHostedAmneziaMessage(ctx context.Context, m *tg.Message) bool {
+	if r.pendingSelfHostedAmnezia == nil {
+		return false
+	}
+	p, ok := r.pendingSelfHostedAmnezia.get(m.From.ID)
+	if !ok || p.ChatID != m.Chat.ID || !sameThread(p.ThreadID, m.MessageThreadID) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(m.Text), "/cancel") || strings.EqualFold(strings.TrimSpace(m.Text), "cancel") {
+		r.pendingSelfHostedAmnezia.clear(m.From.ID)
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Self-hosted Amnezia: отменено.", "", nil)
+		return true
+	}
+	store, err := r.loadSelfHostedAmneziaStore()
+	if err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось прочитать storage: "+err.Error(), "", nil)
+		return true
+	}
+	switch p.Mode {
+	case "add":
+		inst, err := parseSelfHostedAddMessage(m.Text)
+		if err != nil {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, err.Error(), "", nil)
+			return true
+		}
+		if err := store.Upsert(inst); err != nil {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось сохранить VPS: "+err.Error(), "", nil)
+			return true
+		}
+	case "edit":
+		inst, ok := store.Get(p.InstanceID)
+		if !ok {
+			r.pendingSelfHostedAmnezia.clear(m.From.ID)
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Self-hosted VPS уже не найден, отменяю.", "", nil)
+			return true
+		}
+		if err := applySelfHostedKVLine(&inst, m.Text); err != nil {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, err.Error(), "", nil)
+			return true
+		}
+		if err := store.Upsert(inst); err != nil {
+			_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось обновить VPS: "+err.Error(), "", nil)
+			return true
+		}
+	default:
+		return false
+	}
+	if err := r.saveSelfHostedAmneziaStore(store); err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось записать storage: "+err.Error(), "", nil)
+		return true
+	}
+	r.pendingSelfHostedAmnezia.clear(m.From.ID)
+	text, kb := r.selfHostedAmneziaManageView(0)
+	if _, user := r.resolveTopicKind(m.MessageThreadID); user != nil {
+		text, kb = r.selfHostedAmneziaManageView(user.ID)
+	}
+	if p.PromptMessageID != 0 {
+		_ = r.tg.EditMessageText(ctx, p.ChatID, p.PromptMessageID, text, "", &kb)
+	}
+	_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Self-hosted Amnezia: сохранено.", "", nil)
+	return true
 }
 
 func (r *Router) handleSelfHostedAmneziaIssue(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -117,11 +385,7 @@ func (r *Router) saveSelfHostedAmneziaStore(store selfhostedamnezia.Store) error
 }
 
 func (r *Router) selfHostedAmneziaInstance(id string) (selfhostedamnezia.Instance, selfhostedamnezia.Config, error) {
-	store, err := r.loadSelfHostedAmneziaStore()
-	if err != nil {
-		return selfhostedamnezia.Instance{}, selfhostedamnezia.Config{}, err
-	}
-	inst, ok := store.Get(id)
+	inst, _, ok := r.selfHostedAmneziaStoredInstance(id)
 	if !ok || !inst.Enabled {
 		return selfhostedamnezia.Instance{}, selfhostedamnezia.Config{}, fmt.Errorf("self-hosted Amnezia instance not found")
 	}
@@ -130,6 +394,57 @@ func (r *Router) selfHostedAmneziaInstance(id string) (selfhostedamnezia.Instanc
 		return selfhostedamnezia.Instance{}, selfhostedamnezia.Config{}, fmt.Errorf("self-hosted Amnezia instance is not ready")
 	}
 	return inst, cfg, nil
+}
+
+func (r *Router) selfHostedAmneziaStoredInstance(id string) (selfhostedamnezia.Instance, selfhostedamnezia.Store, bool) {
+	store, err := r.loadSelfHostedAmneziaStore()
+	if err != nil {
+		return selfhostedamnezia.Instance{}, selfhostedamnezia.Store{}, false
+	}
+	inst, ok := store.Get(id)
+	return inst, store, ok
+}
+
+func parseSelfHostedAddMessage(text string) (selfhostedamnezia.Instance, error) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 3 {
+		return selfhostedamnezia.Instance{}, fmt.Errorf("Формат: <id> <endpoint_host> <endpoint_port> [label]\nПример: home vpn.example.com 47567 Home VPS")
+	}
+	port, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return selfhostedamnezia.Instance{}, fmt.Errorf("endpoint_port должен быть числом")
+	}
+	return selfhostedamnezia.Instance{
+		ID:           fields[0],
+		EndpointHost: fields[1],
+		EndpointPort: port,
+		Label:        strings.Join(fields[3:], " "),
+	}, nil
+}
+
+func applySelfHostedKVLine(inst *selfhostedamnezia.Instance, text string) error {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return fmt.Errorf("Пришли key=value, например: host=vpn.example.com port=47567 label=Home")
+	}
+	for _, raw := range fields {
+		key, val, ok := strings.Cut(raw, "=")
+		if !ok {
+			return fmt.Errorf("Ожидал key=value, получил: %s", raw)
+		}
+		if err := applySelfHostedField(inst, strings.ToLower(strings.TrimSpace(key)), strings.TrimSpace(val)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cloneInt64Ptr(v *int64) *int64 {
+	if v == nil {
+		return nil
+	}
+	c := *v
+	return &c
 }
 
 func safeSelfHostedTunnelName(s string) string {

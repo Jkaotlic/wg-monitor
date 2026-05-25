@@ -520,6 +520,24 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Logger.Warn("state.Get", "err", err)
 				continue
 			}
+			if isDisabledTunnelOK(c) && prev.CurrentStatus != "" && prev.CurrentStatus != "ok" {
+				next := prev
+				next.CurrentStatus = "ok"
+				next.ConsecutiveFails = 0
+				next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
+				next.HardSince = nil
+				next.Acked = false
+				if err := d.DB.State().Save(uid, c.Name, next); err != nil {
+					d.Logger.Warn("state.Save disabled tunnel clear", "nickname", nick, "check", c.Name, "err", err)
+				} else {
+					d.Logger.Info("silently cleared disabled tunnel incident",
+						"nickname", nick, "check", c.Name,
+						"prev_status", prev.CurrentStatus,
+						"req_id", RequestIDFromContext(r.Context()),
+					)
+				}
+				continue
+			}
 			checkThresholds := thresholdsForCheck(thresholds, d.AlertPolicy, c.Name)
 			tr := state.Apply(prev, c.Status, time.Now(), checkThresholds)
 			// FSM transition timeline for post-mortem (OBS-09). Hard/Recovery

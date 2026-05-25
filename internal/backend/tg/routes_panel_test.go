@@ -94,6 +94,41 @@ func TestRoutesPanelKeyboard_RebindOnlyForNonZero(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelKeyboard_CanRebindWANSystemDNS(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{
+			{ID: "t1", Name: "amnezia", Iface: "nwg1", Enabled: true},
+			{ID: "eth3", Name: "Ethernet", Iface: "eth3", Type: "wan", Enabled: true},
+		},
+		Counts: map[string]wire.TunnelCounts{
+			"t1":   {},
+			"eth3": {},
+		},
+		Other: wire.TunnelCounts{DNS: 10},
+	}
+	kb := RoutesPanelKeyboard(42, snap)
+	if !routesKeyboardHasCallback(kb, "routes_rebind:42:__other__") {
+		t.Fatalf("WAN/system DNS rebind button missing: %+v", kb.InlineKeyboard)
+	}
+}
+
+func TestRebindPickKeyboard_AllowsWANSystemSource(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{
+			{ID: "t1", Name: "amnezia", Iface: "nwg1", Enabled: true},
+			{ID: "eth3", Name: "Ethernet", Iface: "eth3", Type: "wan", Enabled: true},
+		},
+		Other: wire.TunnelCounts{DNS: 10},
+	}
+	text, kb := RebindPickKeyboard(42, "__other__", snap)
+	if !strings.Contains(text, "WAN/system") {
+		t.Fatalf("source label missing: %s", text)
+	}
+	if !routesKeyboardHasCallback(kb, "routes_pick:42:__other__:t1") {
+		t.Fatalf("managed destination missing: %+v", kb.InlineKeyboard)
+	}
+}
+
 func TestRoutesPanelKeyboard_HasDoctorAndSnapshot(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		HRNeo:   wire.HRStatus{Installed: true, Running: true},
