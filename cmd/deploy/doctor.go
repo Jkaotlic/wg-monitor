@@ -332,7 +332,7 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 	// users DB ↔ wizard.toml agents reconciliation. The DB is the source
 	// of truth — populated by wg-monitor-cli add-user (called from the
 	// wizard's [3] Add/install Router action).
-	dbOut, _, rc2, err2 := s.Run(`sqlite3 /var/lib/wg-monitor/state.db "SELECT nickname || '|' || COALESCE(strftime('%Y-%m-%dT%H:%M:%SZ', last_seen_at), '') FROM users;"`)
+	dbOut, _, rc2, err2 := s.Run(`sqlite3 /var/lib/wg-monitor/state.db "SELECT nickname || '|' || COALESCE(last_seen_at, '') FROM users;"`)
 	if err2 != nil || rc2 != 0 {
 		t.failf("чтение users из /var/lib/wg-monitor/state.db не удалось")
 	} else {
@@ -412,6 +412,12 @@ func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTa
 		}
 	}
 
+	if doctorShouldSkipDirectSSH(ag) {
+		t.warnf("direct SSH skipped: AWG Manager/KeenDNS deploy has no verified operator-side SSH coordinates")
+		fmt.Println()
+		return
+	}
+
 	// TCP probe (3s)
 	if !doctorAgentReachable(ag, port, t, opts) {
 		t.failf(fmt.Sprintf("TCP %s:%d не отвечает за 3с (VPN отключён?)", ag.Host, port))
@@ -471,6 +477,13 @@ func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTa
 	doctorAgentLogsViaSSH(s, t)
 
 	fmt.Println()
+}
+
+func doctorShouldSkipDirectSSH(ag *AgentState) bool {
+	if ag == nil || strings.TrimSpace(ag.Host) != "" {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(ag.DeployMode), "awgm") || strings.TrimSpace(ag.AWGMURL) != ""
 }
 
 func doctorAgentReachable(ag *AgentState, port int, t *doctorTally, opts doctorOptions) bool {
@@ -652,11 +665,18 @@ func doctorFormatLastSeen(raw string) string {
 	if raw == "" {
 		return "never"
 	}
-	ts, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return "unparseable " + raw
+	for _, layout := range []string{
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05.999999999 -0700 MST",
+		"2006-01-02 15:04:05.999999 -0700 MST",
+		"2006-01-02 15:04:05 -0700 MST",
+	} {
+		ts, err := time.Parse(layout, raw)
+		if err == nil {
+			return formatHeartbeatStatus(&ts, time.Now())
+		}
 	}
-	return formatHeartbeatStatus(&ts, time.Now())
+	return "unparseable " + raw
 }
 
 func doctorOneLine(s string) string {

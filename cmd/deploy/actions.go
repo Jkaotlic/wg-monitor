@@ -1036,14 +1036,25 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 				return fmt.Errorf("commit staged token: %w", err)
 			}
 		}
-		ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
-		ag.LastDeployedVersion = rel.TagName
-		if ag.Host == "" && info.RouterIP != "" {
-			ag.Host = info.RouterIP
-		}
-		ag.AWGMAuth = awgmAuthMode
+		applyAWGMDeploySuccess(ag, info, rel.TagName, awgmAuthMode, shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL), time.Now().UTC())
+		pushToVPSBestEffort(state, secrets, *ag)
 		PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
 		return nil
+	}
+}
+
+func applyAWGMDeploySuccess(ag *AgentState, info *AWGMSystemInfo, version, authMode string, publicAWGMViaVPS bool, now time.Time) {
+	if ag == nil {
+		return
+	}
+	ag.LastDeploy = now.UTC().Format(time.RFC3339)
+	ag.LastDeployedVersion = version
+	ag.AWGMAuth = authMode
+	if publicAWGMViaVPS {
+		return
+	}
+	if ag.Host == "" && info != nil && info.RouterIP != "" {
+		ag.Host = info.RouterIP
 	}
 }
 
