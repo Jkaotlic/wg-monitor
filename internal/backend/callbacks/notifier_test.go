@@ -5,19 +5,14 @@ import (
 	"testing"
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-func TestNotifier_TunnelResultRefreshesOriginPanel(t *testing.T) {
+func TestNotifier_TunnelResultQueuesLivePanelRefresh(t *testing.T) {
 	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
 	n := NewNotifier(f)
-	n.TunnelsPanelBuilder = func(userID int64) (string, tg.InlineKeyboardMarkup, bool) {
-		if userID != 42 {
-			t.Fatalf("userID = %d, want 42", userID)
-		}
-		return "fresh panel", tg.InlineKeyboardMarkup{}, true
-	}
+	n.TunnelsRefreshSink = sink
 
 	err := n.NotifyCommandResult(context.Background(),
 		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnel_disable"},
@@ -32,7 +27,13 @@ func TestNotifier_TunnelResultRefreshesOriginPanel(t *testing.T) {
 	if len(f.sentMsgs) != 1 {
 		t.Fatalf("sent messages = %d, want 1", len(f.sentMsgs))
 	}
-	if len(f.edits) != 1 || f.edits[0] != "fresh panel" {
-		t.Fatalf("edits = %#v, want fresh panel edit", f.edits)
+	if len(f.edits) != 0 {
+		t.Fatalf("must not render stale event-based panel after mutation, edits = %#v", f.edits)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+		t.Fatalf("expected live tunnels_status refresh, got %+v", sink.calls)
+	}
+	if len(sink.refs) != 1 || sink.refs[0].chatID != 100 || sink.refs[0].messageID != 200 {
+		t.Fatalf("refresh should target the original panel ref, got %+v", sink.refs)
 	}
 }

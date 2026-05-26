@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -56,7 +57,11 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 			}
 			snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
 				ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
-				Enabled: ep.Enabled, Available: ep.Available, DefaultRoute: ep.DefaultRoute,
+				NDMSName: t.NDMSName, Enabled: ep.Enabled, Available: ep.Available,
+				Status: t.Status, DefaultRoute: ep.DefaultRoute,
+				HasHandshake: t.LastHandshake.Time() != nil,
+				HandshakeAge: handshakeAgeSeconds(t.LastHandshake.Time()),
+				PingStatus:   t.PingCheck.Status, PingFails: t.PingCheck.FailCount, PingFailMax: t.PingCheck.FailThreshold,
 			})
 			for _, alias := range ep.Aliases {
 				byIface[alias] = ep.ID
@@ -142,4 +147,11 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		}))
 	}
 	return snap
+}
+
+func handshakeAgeSeconds(t *time.Time) int {
+	if t == nil {
+		return 0
+	}
+	return int(time.Since(*t).Seconds())
 }

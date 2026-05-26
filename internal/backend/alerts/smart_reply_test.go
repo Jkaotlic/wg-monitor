@@ -279,6 +279,8 @@ func TestFormatSmartReply_HardDNSShowsHumanIncidentDetails(t *testing.T) {
 		"2 из 4 DNS-серверов не отвечают",
 		"Germany backup (Wireguard3 / nwg3)",
 		"RKN-блокировок не видно",
+		"Открой 🎛 Туннели",
+		"затем 🛣 Маршруты",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)

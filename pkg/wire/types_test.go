@@ -123,6 +123,7 @@ func TestIsValidCommandAction(t *testing.T) {
 		"version_audit":    true,
 		"router_doctor":    true,
 		"tunnel_delete":    true,
+		"tunnels_status":   true,
 		"hrneo_doctor":     true,
 		"":                 false,
 		"reboot":           false,

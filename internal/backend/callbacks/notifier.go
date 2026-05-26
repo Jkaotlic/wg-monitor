@@ -21,6 +21,7 @@ type Notifier struct {
 	UI                  UIConfigSnapshot
 	DiagCache           *diagCache // staged by NotifyCommandResult when action=="diag_now" + Status=="ok"
 	TunnelsPanelBuilder func(userID int64) (string, tg.InlineKeyboardMarkup, bool)
+	TunnelsRefreshSink  CommandEnqueuer
 }
 
 func NewNotifier(c TGClient) *Notifier { return &Notifier{TG: c} }
@@ -74,9 +75,14 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		}
 		prev = mid
 	}
-	if isTunnelPanelMutatingAction(action) && result.Status == "ok" && ref.MessageID != 0 && n.TunnelsPanelBuilder != nil {
-		if text, kb, ok := n.TunnelsPanelBuilder(userID); ok {
-			_ = n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	if isTunnelPanelMutatingAction(action) && result.Status == "ok" && ref.MessageID != 0 {
+		if n.TunnelsRefreshSink != nil {
+			cmd := wire.Command{ID: defaultCmdID(), Action: "tunnels_status", IssuedAt: time.Now().UTC()}
+			_ = n.TunnelsRefreshSink.EnqueueWithRef(userID, cmd, ref)
+		} else if n.TunnelsPanelBuilder != nil {
+			if text, kb, ok := n.TunnelsPanelBuilder(userID); ok {
+				_ = n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+			}
 		}
 	}
 	return nil

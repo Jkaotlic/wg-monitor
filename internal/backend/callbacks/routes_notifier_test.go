@@ -45,6 +45,29 @@ func TestRoutesPanelNotifier_StatusOK(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelNotifier_TunnelsStatusOKRendersTunnelsPanel(t *testing.T) {
+	d, uid := newTestDB(t)
+	tgFake := &fakeEditTG{}
+	cache := &RoutesCache{TTL: time.Minute}
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: cache, DB: d}
+	snap := wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0",
+		Enabled: true, Status: "running", HasHandshake: true, HandshakeAge: 12,
+	}}}
+	body, _ := json.Marshal(snap)
+
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnels_status"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, uid); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(tgFake.editText, "Туннели") || !strings.Contains(tgFake.editText, "live (nwg0)") {
+		t.Fatalf("expected tunnels panel text, got %q", tgFake.editText)
+	}
+	if !keyboardHasCallback(tgFake.kb, "tunnel_disable") {
+		t.Fatalf("expected live tunnel toggle callback, got %#v", tgFake.kb)
+	}
+}
+
 func TestRoutesPanelNotifier_RebindResult(t *testing.T) {
 	cache := &RoutesCache{TTL: time.Minute}
 	// Pre-populate cache so the renderer can resolve src/dst names.

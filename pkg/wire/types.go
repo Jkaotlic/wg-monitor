@@ -53,6 +53,7 @@ var validCommandActions = map[string]bool{
 	"check_direct":      true,
 	"tunnel_import":     true,
 	"route_status":      true,
+	"tunnels_status":    true,
 	"route_rebind":      true,
 	"route_add_plan":    true,
 	"route_add":         true,
