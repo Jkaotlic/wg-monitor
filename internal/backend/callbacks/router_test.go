@@ -644,7 +644,7 @@ func TestRouterDispatchSmartReply_AckedIncidentStillShownInManualStatus(t *testi
 		t.Fatalf("want 1 send, got %d", len(f.rkSends))
 	}
 	body := f.rkSends[0].text
-	if !strings.Contains(body, "🔴") || !strings.Contains(body, "dns") {
+	if !strings.Contains(body, "🔴") || !strings.Contains(body, "DNS-") {
 		t.Fatalf("manual status should show acked active HARD incident, got:\n%s", body)
 	}
 }

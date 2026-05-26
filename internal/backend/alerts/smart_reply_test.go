@@ -249,6 +249,53 @@ func TestFormatSmartReply_Hard(t *testing.T) {
 	}
 }
 
+func TestFormatSmartReply_HardDNSShowsHumanIncidentDetails(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname: "del", UserID: 7, LastReportAge: 20 * time.Second,
+		Tunnels: []TunnelView{
+			{Name: "Germany backup", CheckName: "tunnel_awg13", NDMSName: "Wireguard3", Interface: "nwg3", HandshakeAge: 12, PingStatus: "ok"},
+		},
+		ActiveIncidents: []IncidentView{{
+			CheckName: "dns",
+			HardSince: time.Now().Add(-20 * time.Hour),
+			FailCount: 20,
+			Details: map[string]any{
+				"endpoints":    4,
+				"failed_count": 2,
+				"endpoints_detail": []any{
+					map[string]any{"reachable": false, "type": "plain", "target": "100.64.0.1:53", "ndms_name": "Wireguard3", "err": "network is unreachable"},
+					map[string]any{"reachable": false, "type": "plain", "target": "8.8.4.4:53", "ndms_name": "Wireguard3", "err": "network is unreachable"},
+				},
+				"rkn_probed": 2, "rkn_suspect": 0,
+			},
+		}},
+	}
+
+	text, kb := FormatSmartReply(a)
+	for _, want := range []string{
+		"DNS-резолвинг частично не работает",
+		"2 из 4 DNS-серверов не отвечают",
+		"Germany backup (Wireguard3 / nwg3)",
+		"RKN-блокировок не видно",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q in:\n%s", want, text)
+		}
+	}
+	wantButton := "silence:7:dns:1h"
+	found := false
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			if b.CallbackData == wantButton {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("DNS smart-reply should include silence button %s, kb=%+v", wantButton, kb)
+	}
+}
+
 func TestFormatSmartReply_HardUsesTunnelDisplayName(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,

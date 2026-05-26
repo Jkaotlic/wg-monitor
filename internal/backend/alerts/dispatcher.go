@@ -89,10 +89,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		} else {
 			slog.Warn("dispatch HARD: user lookup failed; mobile-badge omitted", "user_id", userID, "err", err)
 		}
-		// Tunnel checks get neighbour context: list other tunnel_* siblings
-		// so the operator can see at a glance whether this is one tunnel
-		// flapping or the whole router being unreachable.
-		if strings.HasPrefix(checkName, "tunnel_") {
+		// Tunnel and DNS checks get tunnel context so the operator can see
+		// whether this is one tunnel flapping or the whole router/WAN.
+		if strings.HasPrefix(checkName, "tunnel_") || checkName == "dns" {
 			args.Neighbors = di.collectNeighbors(userID, checkName)
 		}
 		text := FormatHard(args)
@@ -208,6 +207,7 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 			var details map[string]any
 			if err := json.Unmarshal([]byte(r.DetailsJSON), &details); err == nil {
 				ns.TunnelName, _ = details["tunnel_name"].(string)
+				ns.NDMSName, _ = details["ndms_name"].(string)
 				ns.Interface, _ = details["interface"].(string)
 				if pcStatus, ok := details["ping_check_status"].(string); ok && pcStatus != "" {
 					ns.Status = pcStatus

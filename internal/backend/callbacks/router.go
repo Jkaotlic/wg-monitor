@@ -1131,6 +1131,7 @@ func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
 		out = append(out, alerts.TunnelView{
 			Name:         strOrEmpty(det, "tunnel_name"),
 			CheckName:    row.CheckName,
+			NDMSName:     strOrEmpty(det, "ndms_name"),
 			Interface:    strOrEmpty(det, "interface"),
 			Enabled:      enabled,
 			HasEnabled:   hasEnabled,
@@ -1157,10 +1158,15 @@ func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
 	}
 	out := make([]alerts.IncidentView, 0, len(rows))
 	for _, row := range rows {
+		var details map[string]any
+		if ev, ok, err := r.d.Events().LatestEvent(userID, row.CheckName); err == nil && ok && ev.DetailsJSON != "" {
+			_ = json.Unmarshal([]byte(ev.DetailsJSON), &details)
+		}
 		out = append(out, alerts.IncidentView{
 			CheckName: row.CheckName,
 			HardSince: row.HardSince,
 			FailCount: row.FailCount,
+			Details:   details,
 		})
 	}
 	return out

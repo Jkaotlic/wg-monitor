@@ -14,11 +14,13 @@ import (
 
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 type TGSender interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
+	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
 }
 
 type Config struct {
@@ -135,7 +137,7 @@ func (p *Poller) lastKnownCheck(userID int64, checkName string) wire.Check {
 // Returns nil for non-tunnel checks. Now shares projection logic with the
 // dispatcher via alerts.BuildNeighborSummaries (LOGIC-08).
 func (p *Poller) neighborSummaries(userID int64, checkName string) []alerts.NeighborSummary {
-	if !strings.HasPrefix(checkName, "tunnel_") {
+	if !strings.HasPrefix(checkName, "tunnel_") && checkName != "dns" {
 		return nil
 	}
 	rows, err := p.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", p.now().Add(-alerts.NeighborFreshWindow))
@@ -202,7 +204,8 @@ func (p *Poller) tick(ctx context.Context) {
 			Neighbors:    neighbors,
 			RealertEvery: cadence,
 		})
-		_, err = p.tg.SendMessage(ctx, p.cfg.ChatID, u.TelegramThreadID, text, "", nil)
+		kb := tg.HardAlertKeyboard(sh.UserID, sh.CheckName)
+		_, err = p.tg.SendMessageWithKeyboard(ctx, p.cfg.ChatID, u.TelegramThreadID, text, "", nil, &kb)
 		if err != nil {
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
