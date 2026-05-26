@@ -187,3 +187,42 @@ func TestRouteStatus_CreditsNDMSNameBoundRulesToManagedTunnel(t *testing.T) {
 		t.Fatalf("NDMS-name managed binds must not fall into Other: %+v", snap.Other)
 	}
 }
+
+func TestRouteStatus_DoesNotCreditHRNeoDirectProviderPolicyToDefaultTunnel(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"t1","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:ProviderDirect","backend":"hydraroute","hrRouteMode":"direct","hrPolicyName":"Provider","routes":null},
+			{"id":"hr:ProxyDefault","backend":"hydraroute","hrRouteMode":"proxy","hrPolicyName":"HydraRoute","routes":null}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteStatus(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(out), &snap); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if snap.Counts["t1"].DNS != 1 || snap.Counts["t1"].HRNeo != 1 {
+		t.Fatalf("default tunnel counts: %+v, want only proxy/default HR-Neo credited", snap.Counts["t1"])
+	}
+	if snap.Other.DNS != 1 || snap.Other.HRNeo != 1 {
+		t.Fatalf("direct provider policy should stay in Other/policy bucket, got %+v", snap.Other)
+	}
+}

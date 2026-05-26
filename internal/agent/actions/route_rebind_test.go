@@ -332,6 +332,44 @@ func TestRouteRebind_CanMoveNDMSNameBoundRules(t *testing.T) {
 	}
 }
 
+func TestRouteRebind_DoesNotMoveHRNeoDirectProviderPolicy(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "hr:ProviderDirect", Backend: "hydraroute", HRRouteMode: "direct", HRPolicyName: "Provider", Routes: nil},
+		{ID: "hr:ProxyDefault", Backend: "hydraroute", HRRouteMode: "proxy", HRPolicyName: "HydraRoute", Routes: nil},
+		{ID: "hr:Explicit", Backend: "hydraroute", HRRouteMode: "policy", HRPolicyName: "HydraRoute", Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg1", TunnelID: "nwg1"}}},
+	}
+	mock.staticRules = nil
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "t1", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 2 || res.HRNeo.OK != 2 {
+		t.Fatalf("counts = dns=%+v hr=%+v, want only proxy/default + explicit HR-Neo moved", res.DNS, res.HRNeo)
+	}
+
+	for _, r := range mock.dnsRules {
+		switch r.ID {
+		case "hr:ProviderDirect":
+			if r.Routes != nil {
+				t.Fatalf("direct provider HR-Neo policy must stay fall-through/direct, got %+v", r)
+			}
+		case "hr:ProxyDefault", "hr:Explicit":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+				t.Fatalf("movable HR-Neo rule was not moved to nwg0: %+v", r)
+			}
+		}
+	}
+}
+
 func TestRouteRebind_CanMoveOtherExplicitWANSystemRoutes(t *testing.T) {
 	mock := newRebindMock(t)
 	mock.dnsRules = []awgmgr.DNSRoute{

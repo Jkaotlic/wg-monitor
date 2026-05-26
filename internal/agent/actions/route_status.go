@@ -112,7 +112,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				creditOther(isHR, false)
 			}
 		} else {
-			if isHR && r.HRPolicyName != "" && defaultIface != "" {
+			if isMovableHRNeoFallthrough(r) && defaultIface != "" {
 				ruleBind = defaultIface
 				if id, ok := byIface[defaultIface]; ok {
 					creditDNS(id, true)
