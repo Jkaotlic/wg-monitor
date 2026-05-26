@@ -276,6 +276,62 @@ func TestRouteRebind_CanMoveWANSystemDNSWithoutExplicitRoute(t *testing.T) {
 	}
 }
 
+func TestRouteRebind_CanMoveNDMSNameBoundRules(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "ndms:Legacy", Backend: "ndms", Routes: []awgmgr.DNSRouteEntry{{Interface: "Wireguard1", TunnelID: "Wireguard1"}}},
+		{ID: "hr:Legacy", Backend: "hydraroute", HRPolicyName: "HydraRoute", Routes: []awgmgr.DNSRouteEntry{{Interface: "Wireguard1", TunnelID: "Wireguard1"}}},
+		{ID: "ndms:Other", Backend: "ndms", Routes: []awgmgr.DNSRouteEntry{{Interface: "Wireguard0", TunnelID: "Wireguard0"}}},
+	}
+	mock.staticRules = []awgmgr.StaticRoute{
+		{ID: "s-legacy", Name: "legacy", TunnelID: "Wireguard1", Subnets: []string{"10.10.0.0/16"}, Enabled: true},
+		{ID: "s-other", Name: "other", TunnelID: "Wireguard0", Subnets: []string{"10.20.0.0/16"}, Enabled: true},
+	}
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "t1", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 2 || res.Static.OK != 1 || res.HRNeo.OK != 1 {
+		t.Fatalf("counts = dns=%+v static=%+v hr=%+v, want NDMS-name DNS/static moved", res.DNS, res.Static, res.HRNeo)
+	}
+
+	for _, r := range mock.dnsRules {
+		switch r.ID {
+		case "ndms:Legacy", "hr:Legacy":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+				t.Fatalf("NDMS-name DNS rule was not moved to nwg0: %+v", r)
+			}
+		case "ndms:Other":
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "Wireguard0" || r.Routes[0].TunnelID != "Wireguard0" {
+				t.Fatalf("destination-side NDMS-name DNS rule mutated: %+v", r)
+			}
+		}
+	}
+	for _, r := range mock.staticRules {
+		switch r.ID {
+		case "s-legacy":
+			if r.TunnelID != "nwg0" {
+				t.Fatalf("NDMS-name static rule was not moved to nwg0: %+v", r)
+			}
+		case "s-other":
+			if r.TunnelID != "Wireguard0" {
+				t.Fatalf("destination-side NDMS-name static rule mutated: %+v", r)
+			}
+		}
+	}
+	if mock.hrControlCalls.Load() != 1 {
+		t.Fatalf("HR-Neo should restart once after HR rule moved, got %d", mock.hrControlCalls.Load())
+	}
+}
+
 func TestRouteRebind_CanMoveOtherExplicitWANSystemRoutes(t *testing.T) {
 	mock := newRebindMock(t)
 	mock.dnsRules = []awgmgr.DNSRoute{

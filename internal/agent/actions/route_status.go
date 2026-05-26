@@ -58,7 +58,9 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
 				Enabled: ep.Enabled, Available: ep.Available, DefaultRoute: ep.DefaultRoute,
 			})
-			byIface[ep.Iface] = ep.ID
+			for _, alias := range ep.Aliases {
+				byIface[alias] = ep.ID
+			}
 			if ep.DefaultRoute && defaultIface == "" {
 				defaultIface = ep.Iface
 			}
@@ -69,14 +71,16 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		if ep.Iface == "" {
 			continue
 		}
-		if _, exists := byIface[ep.Iface]; exists {
+		if routeAnyAliasMapped(ep, byIface) {
 			continue
 		}
 		snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
 			ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
 			Enabled: ep.Enabled, Available: ep.Available,
 		})
-		byIface[ep.Iface] = ep.ID
+		for _, alias := range ep.Aliases {
+			byIface[alias] = ep.ID
+		}
 	}
 	creditDNS := func(tid string, isHRNeo bool) {
 		c := snap.Counts[tid]

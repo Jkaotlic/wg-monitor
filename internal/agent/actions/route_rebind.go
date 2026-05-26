@@ -39,7 +39,8 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 	if (!srcIsOther && src.Iface == "") || dst.Iface == "" {
 		return "", fmt.Errorf("src/dst missing iface: src=%+v dst=%+v", src, dst)
 	}
-	srcIface, dstIface := src.Iface, dst.Iface
+	dstIface := dst.Iface
+	srcAliases := routeAliasSet(src.Aliases)
 	srcIsDefaultRoute := src.DefaultRoute
 	defaultIface := ""
 	knownIfaces := map[string]bool{}
@@ -51,8 +52,8 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 	}
 
 	hrTouched := false
-	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcIface, dstIface, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces)
-	res.Static = rebindStatic(ctx, c, srcIface, dstIface, srcIsOther, knownIfaces)
+	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces)
+	res.Static = rebindStatic(ctx, c, srcAliases, dstIface, srcIsOther, knownIfaces)
 
 	if err := c.RoutingRefresh(ctx); err != nil {
 		appendErr(&res.Static, "routing/refresh: "+err.Error())
@@ -96,7 +97,9 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 		if ep.Iface == "" {
 			continue
 		}
-		known[ep.Iface] = true
+		for _, alias := range ep.Aliases {
+			known[alias] = true
+		}
 		if ep.DefaultRoute && defaultIface == "" {
 			defaultIface = ep.Iface
 		}
@@ -105,7 +108,9 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 		for _, t := range routing {
 			ep := ndmsRouteEndpoint(t)
 			if ep.Iface != "" {
-				known[ep.Iface] = true
+				for _, alias := range ep.Aliases {
+					known[alias] = true
+				}
 			}
 		}
 	}
@@ -118,7 +123,7 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 //
 // Returns: total category result, the HRNeo sub-count (subset of total),
 // and whether any hydraroute rule was actually written.
-func rebindDNS(ctx context.Context, c *awgmgr.Client, srcIface, dstIface string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
+func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
 	all, err := c.ListDNSRoutes(ctx)
 	if err != nil {
 		total.Failed = 1
@@ -127,7 +132,7 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcIface, dstIface string,
 	}
 	for _, r := range all {
 		isHR := r.Backend == "hydraroute"
-		newRoutes, didChange := rewriteRoutes(r.Routes, srcIface, dstIface)
+		newRoutes, didChange := rewriteRoutes(r.Routes, srcAliases, dstIface)
 		if !didChange && srcIsOther {
 			newRoutes, didChange = rewriteOtherRoutes(r.Routes, dstIface, knownIfaces)
 		}
@@ -163,10 +168,10 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcIface, dstIface string,
 	return
 }
 
-// rewriteRoutes returns a copy of routes with every entry whose interface ==
-// srcIface remapped to dstIface (both interface and tunnelId). The boolean
-// indicates whether any entry was rewritten.
-func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcIface, dstIface string) ([]awgmgr.DNSRouteEntry, bool) {
+// rewriteRoutes returns a copy of routes with every entry whose interface or
+// tunnelId matches any source alias remapped to dstIface. The boolean indicates
+// whether any entry was rewritten.
+func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcAliases map[string]bool, dstIface string) ([]awgmgr.DNSRouteEntry, bool) {
 	if len(routes) == 0 {
 		return routes, false
 	}
@@ -174,7 +179,7 @@ func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcIface, dstIface string) ([]
 	changed := false
 	for i, e := range routes {
 		out[i] = e
-		if e.Interface == srcIface || e.TunnelID == srcIface {
+		if routeBindMatches(e.Interface, srcAliases) || routeBindMatches(e.TunnelID, srcAliases) {
 			out[i].Interface = dstIface
 			out[i].TunnelID = dstIface
 			changed = true
@@ -205,7 +210,7 @@ func routeBindIsOther(bind string, knownIfaces map[string]bool) bool {
 	return bind == "" || !knownIfaces[bind]
 }
 
-func rebindStatic(ctx context.Context, c *awgmgr.Client, srcIface, dstIface string, srcIsOther bool, knownIfaces map[string]bool) wire.CategoryResult {
+func rebindStatic(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface string, srcIsOther bool, knownIfaces map[string]bool) wire.CategoryResult {
 	var res wire.CategoryResult
 	all, err := c.ListStaticRoutes(ctx)
 	if err != nil {
@@ -218,7 +223,7 @@ func rebindStatic(ctx context.Context, c *awgmgr.Client, srcIface, dstIface stri
 			if !routeBindIsOther(r.TunnelID, knownIfaces) {
 				continue
 			}
-		} else if r.TunnelID != srcIface {
+		} else if !routeBindMatches(r.TunnelID, srcAliases) {
 			continue
 		}
 		updated := r
