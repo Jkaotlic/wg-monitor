@@ -47,6 +47,26 @@ func TestHintFor_AwgmgrUnauthorized(t *testing.T) {
 	}
 }
 
+func TestHintForSelfUpdateDNSFailure(t *testing.T) {
+	sum, hint := HintFor("self_update", `download wg-monitor-agent-linux-arm64: Get "https://wgmonitor.example/v1/releases/download/v/x": dial tcp: lookup wgmonitor.example on 127.0.0.1:53: i/o timeout`)
+	if !strings.Contains(sum, "DNS") {
+		t.Fatalf("summary should mention DNS, got %q", sum)
+	}
+	if !strings.Contains(hint, "fallback") && !strings.Contains(hint, "IP") {
+		t.Fatalf("hint should explain pinned-IP fallback, got %q", hint)
+	}
+}
+
+func TestHintForSelfUpdateTokenMismatch(t *testing.T) {
+	sum, hint := HintFor("self_update", "token-not-found")
+	if !strings.Contains(sum, "токен") {
+		t.Fatalf("summary should mention token, got %q", sum)
+	}
+	if !strings.Contains(hint, "repair-agent-token") {
+		t.Fatalf("hint should point to repair-agent-token, got %q", hint)
+	}
+}
+
 func TestHintFor_ConnectionRefused(t *testing.T) {
 	_, hint := HintFor("restart_tunnel", "dial tcp 127.0.0.1:2222: connection refused")
 	if !strings.Contains(hint, "2222") {

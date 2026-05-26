@@ -43,6 +43,17 @@ func HintFor(action, statusOrRaw string) (summary, hint string) {
 				"Посмотри текст ошибки выше или повтори действие после обновления панели."
 		}
 	}
+	if action == "self_update" {
+		lower := strings.ToLower(s)
+		switch {
+		case strings.Contains(lower, "token-not-found") || strings.Contains(lower, "401") || strings.Contains(lower, "unauthorized"):
+			return "токен агента не совпадает с backend",
+				"Сделай re-enroll: `wg-monitor-deploy repair-agent-token --agent <nick>`. После этого обновление снова пойдёт через queue."
+		case strings.Contains(lower, "lookup ") || strings.Contains(lower, "127.0.0.1:53") || strings.Contains(lower, "no such host") || strings.Contains(lower, "server misbehaving"):
+			return "DNS на роутере сорвал скачивание обновления",
+				"Новая версия агента попробует обычный HTTPS, а при DNS-сбое повторит скачивание через IP backend с тем же TLS/Host. Если это старый агент, поставь обновление через AWG Manager один раз."
+		}
+	}
 
 	// Generic hints (action-independent)
 	switch {

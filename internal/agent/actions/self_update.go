@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -49,12 +51,17 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	binURL, sumsURL := selfUpdateURLs(version, assetName, repoBase)
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
+	var fallbackClient *http.Client
+	var fallbackLabel string
+	if len(repoBaseOpt) > 1 && strings.TrimSpace(repoBaseOpt[1]) != "" {
+		fallbackClient, fallbackLabel = httpClientForPinnedRepoHost(repoBase, strings.TrimSpace(repoBaseOpt[1]), 60, nil)
+	}
 
-	binBytes, err := httpGet(ctx, httpClient, binURL)
+	binBytes, err := httpGetWithFallback(ctx, httpClient, fallbackClient, binURL, fallbackLabel)
 	if err != nil {
 		return "", fmt.Errorf("download %s: %w", assetName, err)
 	}
-	sumsBody, err := httpGet(ctx, httpClient, sumsURL)
+	sumsBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL, fallbackLabel)
 	if err != nil {
 		return "", fmt.Errorf("download checksums.txt: %w", err)
 	}
@@ -161,6 +168,77 @@ func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
 		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxSelfUpdateArtifactSize)
 	}
 	return body, nil
+}
+
+func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, url, fallbackLabel string) ([]byte, error) {
+	body, err := httpGet(ctx, primary, url)
+	if err == nil {
+		return body, nil
+	}
+	if fallback == nil || strings.TrimSpace(fallbackLabel) == "" || !isSelfUpdateTransportError(err) {
+		return nil, err
+	}
+	body, fallbackErr := httpGet(ctx, fallback, url)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+	}
+	return body, nil
+}
+
+func isSelfUpdateTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"lookup ",
+		"no such host",
+		"server misbehaving",
+		"temporary failure",
+		"i/o timeout",
+		"timeout",
+		"deadline exceeded",
+		"network is unreachable",
+		"no route to host",
+		"connection refused",
+		"connection reset",
+		"connection aborted",
+		"tls handshake timeout",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func httpClientForPinnedRepoHost(repoBase, resolveIP string, timeoutSec int, dial func(network, addr string) (net.Conn, error)) (*http.Client, string) {
+	ip := strings.TrimSpace(resolveIP)
+	if net.ParseIP(ip) == nil {
+		return nil, ""
+	}
+	u, err := url.Parse(strings.TrimSpace(repoBase))
+	if err != nil || u.Hostname() == "" {
+		return nil, ""
+	}
+	repoHost := strings.ToLower(u.Hostname())
+	if timeoutSec <= 0 {
+		timeoutSec = 60
+	}
+	dialer := &net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil || !strings.EqualFold(host, repoHost) {
+			return dialer.DialContext(ctx, network, addr)
+		}
+		pinnedAddr := net.JoinHostPort(ip, port)
+		if dial == nil {
+			return dialer.DialContext(ctx, network, pinnedAddr)
+		}
+		return dial(network, pinnedAddr)
+	}
+	return &http.Client{Timeout: time.Duration(timeoutSec) * time.Second, Transport: transport}, ip
 }
 
 // parseChecksum picks the SHA-256 hex for asset `name` from a checksums.txt
