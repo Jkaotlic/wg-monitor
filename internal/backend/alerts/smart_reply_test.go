@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 func TestSmartReplyStateValues(t *testing.T) {
@@ -294,6 +296,42 @@ func TestFormatSmartReply_HardDNSShowsHumanIncidentDetails(t *testing.T) {
 	if !found {
 		t.Fatalf("DNS smart-reply should include silence button %s, kb=%+v", wantButton, kb)
 	}
+}
+
+func TestFormatSmartReply_HardHydraRouteIncludesSilence(t *testing.T) {
+	a := SmartReplyArgs{
+		Nickname:      "del",
+		UserID:        7,
+		LastReportAge: 20 * time.Second,
+		ActiveIncidents: []IncidentView{{
+			CheckName: "hydraroute",
+			HardSince: time.Now().Add(-10 * time.Minute),
+			FailCount: 5,
+			Details: map[string]any{
+				"installed": true,
+				"running":   false,
+			},
+		}},
+	}
+
+	text, kb := FormatSmartReply(a)
+	if !strings.Contains(text, "HydraRoute") {
+		t.Fatalf("smart reply should explain HydraRoute incident, got:\n%s", text)
+	}
+	if !hasSmartReplyCallback(kb, "silence:7:hydraroute:1h") {
+		t.Fatalf("HydraRoute smart reply should include silence button, kb=%+v", kb)
+	}
+}
+
+func hasSmartReplyCallback(kb tg.InlineKeyboardMarkup, want string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestFormatSmartReply_HardUsesTunnelDisplayName(t *testing.T) {

@@ -345,8 +345,11 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "history":
 		action = r.history
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor",
-		"tunnel_enable", "tunnel_disable":
+		"tunnel_enable", "tunnel_disable", "tunnel_delete":
 		action = r.command
+	case "tunnel_delete_ask":
+		r.handleTunnelDeleteAsk(ctx, q, args)
+		return
 	case "tunnel_import_replace", "tunnel_import_add":
 		if r.importAction != nil {
 			action = r.importAction
@@ -1029,6 +1032,18 @@ func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup)
 		})
 	}
 	return tg.TunnelsPanelText(u.Nickname, entries), tg.TunnelsPanelKeyboard(u.ID, entries)
+}
+
+func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	entry := tg.TunnelPanelEntry{
+		Name:      strings.TrimPrefix(args.CheckName, "tunnel_"),
+		CheckName: args.CheckName,
+		NDMSName:  args.NDMSName,
+	}
+	text := tg.TunnelDeleteConfirmText(entry)
+	kb := tg.TunnelDeleteConfirmKeyboard(args.UserID, entry)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
 func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeyboardMarkup, bool) {

@@ -16,6 +16,7 @@
 //     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
 //     ndmc CLI is the authoritative path. NDMSName must be supplied in
 //     cmd.Args["ndms_name"] by the backend.)
+//   - tunnel_delete → awg-manager POST /api/tunnels/delete?id=<tunnel_id>
 //   - service_restart  → init.d for hrneo/awg-mgr; ndmc system reboot for router
 //     (router gated on AllowRouterReboot config flag)
 //   - firmware_status  → ndmc components list parsed into wire.FirmwareStatus
@@ -243,6 +244,25 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			r.ForceRecheck(ctx)
 		}
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out)), payload
+	case "tunnel_delete":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		tunnelID, _ := cmd.Args["tunnel_id"].(string)
+		if tunnelID == "" {
+			checkName, _ := cmd.Args["check_name"].(string)
+			tunnelID = tunnelIDFromCheckName(checkName)
+		}
+		if tunnelID == "" {
+			return "err", "tunnel_delete: tunnel_id missing in args", payload
+		}
+		if err := r.AwgClient.DeleteTunnel(ctx, tunnelID); err != nil {
+			return "err", err.Error(), payload
+		}
+		if r.ForceRecheck != nil {
+			r.ForceRecheck(ctx)
+		}
+		return "ok", fmt.Sprintf("tunnel %s deleted", tunnelID), payload
 	case "tunnel_import":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -452,6 +472,14 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	default:
 		return "err", "unknown action: " + cmd.Action, payload
 	}
+}
+
+func tunnelIDFromCheckName(checkName string) string {
+	checkName = strings.TrimSpace(checkName)
+	if !strings.HasPrefix(checkName, "tunnel_") {
+		return ""
+	}
+	return strings.TrimPrefix(checkName, "tunnel_")
 }
 
 func boolEnableLabel(enable bool) string {

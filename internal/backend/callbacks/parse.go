@@ -126,6 +126,7 @@ var validActions = map[string]bool{
 	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true,
 	"router_doctor": true,
 	"tunnel_enable": true, "tunnel_disable": true,
+	"tunnel_delete_ask": true, "tunnel_delete": true,
 	"check_via_tunnel": true, "check_direct": true,
 	// backend-only callback (no agent action): re-render Tunnels-panel inline.
 	"tunnels_refresh": true,
@@ -182,7 +183,7 @@ var callbackCodeRe = regexp.MustCompile(`^[A-Za-z0-9_-]{2,16}$`)
 func IsCommandAction(a string) bool {
 	switch a {
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck",
-		"opkg_upgrade", "tunnel_enable", "tunnel_disable",
+		"opkg_upgrade", "tunnel_enable", "tunnel_disable", "tunnel_delete",
 		"check_via_tunnel", "check_direct", "router_doctor":
 		return true
 	}
@@ -228,7 +229,7 @@ func Parse(data string) (Args, error) {
 		}
 		a.TTL = ttl
 	}
-	if action == "tunnel_enable" || action == "tunnel_disable" {
+	if action == "tunnel_enable" || action == "tunnel_disable" || action == "tunnel_delete_ask" || action == "tunnel_delete" {
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
 		}

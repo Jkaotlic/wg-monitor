@@ -107,12 +107,14 @@ func humanAgeShort(s int) string {
 //	Row 1: per-tunnel toggle buttons — "[⏸ awg]" if currently enabled,
 //	       "[▶ awg2]" if currently disabled. Up to 8 in one row (TG limit).
 //	       Wraps to a new row beyond that.
-//	Row N+1: [🔁 Перезагрузить awg-mgr] [🔄 Обновить]
+//	Row N+1: per-tunnel delete buttons.
+//	Row N+2: [🔁 Перезагрузить awg-mgr] [🔄 Обновить]
 //
 // callback_data shape:
 //
 //	tunnel_enable:<userID>:<check_name>:<ndms_name>     ← short tunnel name in label
 //	tunnel_disable:<userID>:<check_name>:<ndms_name>
+//	tunnel_delete_ask:<userID>:<check_name>:<ndms_name> ← opens confirm screen
 //	restart_tunnel:<userID>:_panel_                     ← global restart-all
 //	tunnels_refresh:<userID>:_panel_                    ← re-render
 //
@@ -149,6 +151,24 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 		rows = append(rows, row)
 	}
 
+	// Delete row(s). Deletion is destructive, so these buttons open a confirm
+	// screen instead of enqueueing the agent command directly.
+	row = nil
+	for _, e := range entries {
+		label := shortTunnelLabel(e.Name, e.CheckName)
+		row = append(row, InlineKeyboardButton{
+			Text:         fmt.Sprintf("🗑 %s", label),
+			CallbackData: fmt.Sprintf("tunnel_delete_ask:%d:%s:%s", userID, e.CheckName, e.NDMSName),
+		})
+		if len(row) >= tunnelsMaxPerRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+
 	// Global controls.
 	rows = append(rows, HelpRowFor("tunnels"))
 	rows = append(rows, []InlineKeyboardButton{
@@ -156,6 +176,30 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 	})
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func TunnelDeleteConfirmText(e TunnelPanelEntry) string {
+	label := e.Name
+	if label == "" {
+		label = e.CheckName
+	}
+	if e.NDMSName != "" {
+		label = fmt.Sprintf("%s (%s)", label, e.NDMSName)
+	}
+	return fmt.Sprintf("🗑 Удалить тоннель %s?\n\nЭто удалит конфиг из awg-manager на роутере. Если на него завязаны маршруты, их нужно будет перенести отдельно.", label)
+}
+
+func TunnelDeleteConfirmKeyboard(userID int64, e TunnelPanelEntry) InlineKeyboardMarkup {
+	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+		{{
+			Text:         "🗑 Да, удалить",
+			CallbackData: fmt.Sprintf("tunnel_delete:%d:%s:%s", userID, e.CheckName, e.NDMSName),
+		}},
+		{{
+			Text:         "↩ Назад",
+			CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID),
+		}},
+	}}
 }
 
 // shortTunnelLabel picks a compact label for the toggle button: prefer the

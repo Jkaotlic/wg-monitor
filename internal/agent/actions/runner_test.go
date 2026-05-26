@@ -175,6 +175,40 @@ func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
 	}
 }
 
+func TestRunner_TunnelDelete_DeletesByCheckNameAndForcesFreshReport(t *testing.T) {
+	var deletedID string
+	var forced int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
+		deletedID = r.URL.Query().Get("id")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+
+	r := Runner{
+		AwgClient: awgmgrFake(t, mux),
+		ForceRecheck: func(ctx context.Context) {
+			forced++
+		},
+		Now: mockNow(),
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "del1",
+		Action: "tunnel_delete",
+		Args:   map[string]any{"check_name": "tunnel_awg13", "ndms_name": "Wireguard3"},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if deletedID != "awg13" {
+		t.Fatalf("deleted id = %q, want awg13", deletedID)
+	}
+	if forced != 1 {
+		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
+	}
+}
+
 func TestRunner_OpkgUpgrade_NilRunnerErrs(t *testing.T) {
 	r := Runner{Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c5", Action: "opkg_upgrade"})

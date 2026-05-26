@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -226,6 +227,9 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if args.NDMSName != "" {
 		cmdArgs["ndms_name"] = args.NDMSName
 	}
+	if args.Action == "tunnel_delete" && strings.HasPrefix(args.CheckName, "tunnel_") {
+		cmdArgs["tunnel_id"] = strings.TrimPrefix(args.CheckName, "tunnel_")
+	}
 	cmd := wire.Command{
 		ID:       a.idGen(),
 		Action:   args.Action,
@@ -292,6 +296,7 @@ var commandLabels = map[string]string{
 	"opkg_upgrade":   "⬆ Обновление opkg",
 	"tunnel_enable":  "▶ Включить",
 	"tunnel_disable": "⏸ Выключить",
+	"tunnel_delete":  "🗑 Удалить",
 }
 
 func humanEventStatus(status string) string {
