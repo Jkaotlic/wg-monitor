@@ -592,6 +592,7 @@ type fakeCmdSink struct {
 	results       []wire.CommandResult
 	resultErr     error
 	originRef     *cmdpkg.MessageRef // returned once by ConsumeOriginRef when set
+	commands      map[string]wire.Command
 	enqueued      []wire.Command
 	enqueuedUsers []int64
 }
@@ -630,6 +631,16 @@ func (f *fakeCmdSink) ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.Messa
 	r := *f.originRef
 	f.originRef = nil // consume
 	return r, true
+}
+
+func (f *fakeCmdSink) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.commands == nil {
+		return wire.Command{}, false
+	}
+	c, ok := f.commands[cmdID]
+	return c, ok
 }
 
 func (f *fakeCmdSink) Enqueue(userID int64, cmd wire.Command) error {
@@ -1315,6 +1326,55 @@ func TestCmdResult_OpkgFallsBackToTGNotifier_WhenNoOpkgNotifier(t *testing.T) {
 	}
 }
 
+func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail.db"))
+	defer d.Close()
+	tok := "eded00eded00eded00eded00eded00eded00eded00eded00eded00eded00eded"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	deploy := &fakeDeployNotifier{}
+	sink := &fakeCmdSink{commands: map[string]wire.Command{
+		"cmd1": {
+			ID:     "cmd1",
+			Action: "self_update",
+			Args:   map[string]any{"version": "v0.13.0-rc53"},
+		},
+	}}
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		CommandSink:    sink,
+		DeployNotifier: deploy,
+	})
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "cmd1", Status: "err", Output: "download checksums.txt: HTTP 502"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(deploy.snapshot()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	calls := deploy.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 deploy failure notification, got %d", len(calls))
+	}
+	if calls[0].userID != uid || calls[0].nickname != "carvan" || calls[0].target != "v0.13.0-rc53" || calls[0].status != "err" {
+		t.Fatalf("call mismatch: %+v", calls[0])
+	}
+	if !strings.Contains(calls[0].output, "HTTP 502") {
+		t.Fatalf("output missing failure details: %+v", calls[0])
+	}
+}
+
 type fakeWakeNotifier struct {
 	mu    sync.Mutex
 	calls []wakeRec
@@ -1337,6 +1397,34 @@ func (f *fakeWakeNotifier) snapshot() []wakeRec {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	out := make([]wakeRec, len(f.calls))
+	copy(out, f.calls)
+	return out
+}
+
+type fakeDeployNotifier struct {
+	mu    sync.Mutex
+	calls []deployRec
+}
+
+type deployRec struct {
+	userID   int64
+	nickname string
+	target   string
+	status   string
+	output   string
+}
+
+func (f *fakeDeployNotifier) SendDeferredUpdate(ctx context.Context, userID int64, nickname, targetVersion, status, output string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, deployRec{userID, nickname, targetVersion, status, output})
+	return nil
+}
+
+func (f *fakeDeployNotifier) snapshot() []deployRec {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]deployRec, len(f.calls))
 	copy(out, f.calls)
 	return out
 }
@@ -1379,6 +1467,51 @@ func TestHandleReport_MobileResumed_TriggersWakeCard(t *testing.T) {
 	calls := wake.snapshot()
 	if len(calls) != 1 {
 		t.Fatalf("want 1 wake call, got %d", len(calls))
+	}
+	if calls[0].userID != uid || calls[0].nickname != "carvan" {
+		t.Errorf("call mismatch: %+v", calls[0])
+	}
+}
+
+func TestHandleReport_MobileFreshAfterSleep_TriggersWakeCardWithoutResumed(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "dada00dada00dada00dada00dada00dada00dada00dada00dada00dada00dada"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	lastSeen := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, lastSeen, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	wake := &fakeWakeNotifier{}
+	h := NewMux(Deps{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:              d,
+		Dispatcher:      &fakeDisp{},
+		Resumer:         &fakeResumer{},
+		WakeNotifier:    wake,
+		MobileWakeAfter: 5 * time.Minute,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:07:00Z","agent_version":"t","checks":[{"name":"tunnels","status":"ok"}]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(wake.snapshot()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	calls := wake.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 wake call after stale heartbeat gap, got %d", len(calls))
 	}
 	if calls[0].userID != uid || calls[0].nickname != "carvan" {
 		t.Errorf("call mismatch: %+v", calls[0])
@@ -1440,6 +1573,52 @@ func TestHandleReport_MobileNotResumed_NoWakeCard(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if got := len(wake.snapshot()); got != 0 {
 		t.Errorf("non-resumed mobile must not fire wake card, got %d", got)
+	}
+}
+
+func TestHandleReport_PendingSelfUpdateSuccess_NotifiesTopic(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "efef00efef00efef00efef00efef00efef00efef00efef00efef00efef00efef"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().UpdateDeployInfo("carvan", db.DeployInfo{
+		LastDeployedVersion: "v0.13.0-rc52",
+		PendingVersion:      "v0.13.0-rc53",
+		PendingSince:        "2026-05-15T14:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	deploy := &fakeDeployNotifier{}
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		Dispatcher:     &fakeDisp{},
+		DeployNotifier: deploy,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:07:00Z","agent_version":"v0.13.0-rc53","checks":[{"name":"agent_heartbeat","status":"ok"}]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(deploy.snapshot()) == 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	calls := deploy.snapshot()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 deploy success notification, got %d", len(calls))
+	}
+	if calls[0].userID != uid || calls[0].nickname != "carvan" || calls[0].target != "v0.13.0-rc53" || calls[0].status != "ok" {
+		t.Fatalf("call mismatch: %+v", calls[0])
 	}
 }
 

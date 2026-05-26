@@ -471,10 +471,30 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 // important because /v1/report fires every 60s per agent and SQLite is
 // single-writer.
 func (u *UsersRepo) UpdateLastSeenAgentVersion(id int64, version string) error {
+	_, err := u.UpdateLastSeenAgentVersionResult(id, version)
+	return err
+}
+
+// AgentVersionUpdate describes the visible deploy-state change caused by an
+// agent heartbeat. PendingCleared is true only for the first heartbeat that
+// confirms a previously pending target version.
+type AgentVersionUpdate struct {
+	Version        string
+	PendingCleared bool
+}
+
+func (u *UsersRepo) UpdateLastSeenAgentVersionResult(id int64, version string) (AgentVersionUpdate, error) {
 	if version == "" {
-		return nil
+		return AgentVersionUpdate{}, nil
 	}
-	_, err := u.d.db.Exec(
+	var pending sql.NullString
+	if err := u.d.db.QueryRow(`SELECT pending_version FROM users WHERE id = ?`, id).Scan(&pending); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return AgentVersionUpdate{}, ErrUserNotFound
+		}
+		return AgentVersionUpdate{}, fmt.Errorf("users.UpdateLastSeenAgentVersionResult select: %w", err)
+	}
+	res, err := u.d.db.Exec(
 		`UPDATE users
 		    SET last_deployed_version = ?,
 		        pending_since = CASE WHEN pending_version = ? THEN NULL ELSE pending_since END,
@@ -484,9 +504,16 @@ func (u *UsersRepo) UpdateLastSeenAgentVersion(id int64, version string) error {
 		version, version, version, id, version, version,
 	)
 	if err != nil {
-		return fmt.Errorf("users.UpdateLastSeenAgentVersion: %w", err)
+		return AgentVersionUpdate{}, fmt.Errorf("users.UpdateLastSeenAgentVersion: %w", err)
 	}
-	return nil
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return AgentVersionUpdate{}, fmt.Errorf("users.UpdateLastSeenAgentVersion rows: %w", err)
+	}
+	return AgentVersionUpdate{
+		Version:        version,
+		PendingCleared: changed > 0 && pending.Valid && pending.String == version,
+	}, nil
 }
 
 // HasAnyOperatorOrOwnerBinding reports whether the given Telegram

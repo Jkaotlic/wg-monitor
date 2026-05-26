@@ -142,6 +142,31 @@ func TestQueue_EnqueueSupersedesSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestQueue_CommandByIDReturnsDequeuedCommand(t *testing.T) {
+	q := New()
+	cmd := wire.Command{
+		ID:     "update-1",
+		Action: "self_update",
+		Args:   map[string]any{"version": "v0.13.0-rc53"},
+	}
+	if err := q.Enqueue(7, cmd); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, ok := q.CommandByID(7, "update-1"); ok {
+		t.Fatal("command must not be visible before agent dequeues it")
+	}
+	if _, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond); !ok {
+		t.Fatal("dequeue failed")
+	}
+	got, ok := q.CommandByID(7, "update-1")
+	if !ok {
+		t.Fatal("command not found after dequeue")
+	}
+	if got.Action != "self_update" || got.Args["version"] != "v0.13.0-rc53" {
+		t.Fatalf("bad command: %+v", got)
+	}
+}
+
 func TestQueue_MultiUserIsolation(t *testing.T) {
 	q := New()
 	_ = q.Enqueue(1, mkCmd("u1-cmd", "diag_now"))

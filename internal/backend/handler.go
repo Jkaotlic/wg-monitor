@@ -111,6 +111,28 @@ func reportFreshForUser(user *db.User, ts time.Time) bool {
 	return !ts.UTC().Before(user.LastSeenAt.UTC())
 }
 
+func mobileWakeAfter(d Deps) time.Duration {
+	if d.MobileWakeAfter > 0 {
+		return d.MobileWakeAfter
+	}
+	return 5 * time.Minute
+}
+
+func shouldNotifyMobileWake(user *db.User, ts time.Time, resumed bool, threshold time.Duration) bool {
+	if user == nil || !user.IsMobile() {
+		return false
+	}
+	if resumed {
+		return true
+	}
+	if user.LastSeenAt == nil {
+		return false
+	}
+	last := user.LastSeenAt.UTC()
+	ts = ts.UTC()
+	return ts.After(last) && ts.Sub(last) >= threshold
+}
+
 // relayParent returns the parent context for cmdResultHandler relay goroutines:
 // d.ShutdownCtx if wired, else context.Background. Wired path lets srv.Shutdown
 // signal in-flight TG sends instead of letting them outlive the server.
@@ -163,12 +185,19 @@ type WakeNotifier interface {
 	SendWake(ctx context.Context, userID int64, nickname string, checks []wire.Check) error
 }
 
+// DeployNotifier emits topic-level outcomes for backend/VPS-mediated agent
+// updates that do not have an originating Telegram message to reply to.
+type DeployNotifier interface {
+	SendDeferredUpdate(ctx context.Context, userID int64, nickname, targetVersion, status, output string) error
+}
+
 // CommandSink is the subset of cmd.Queue used by the HTTP handlers.
 // Decoupled so tests can swap in a fake.
 type CommandSink interface {
 	Dequeue(ctx context.Context, userID int64, holdTimeout time.Duration) (*wire.Command, bool)
 	RecordResult(userID int64, result wire.CommandResult) error
 	ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.MessageRef, bool)
+	CommandByID(userID int64, cmdID string) (wire.Command, bool)
 	Enqueue(userID int64, cmd wire.Command) error
 	AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool)
 }
@@ -225,6 +254,7 @@ type Deps struct {
 	OpkgNotifier        OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
+	DeployNotifier      DeployNotifier    // nil-safe (handler skips deferred update notices)
 	UI                  UIConfig
 	Thresholds          state.Thresholds
 	AlertPolicy         AlertPolicy
@@ -240,6 +270,7 @@ type Deps struct {
 	// limit only the write path.
 	ReportRatePerSec float64
 	ReportBurst      int
+	MobileWakeAfter  time.Duration
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken string
@@ -354,6 +385,18 @@ func suppressMobileResumeStartupFailure(u *db.User, resumed bool, c wire.Check) 
 	}
 }
 
+func commandVersionArg(cmd wire.Command) string {
+	if cmd.Args == nil {
+		return ""
+	}
+	switch v := cmd.Args["version"].(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return ""
+	}
+}
+
 func reportHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -387,26 +430,24 @@ func reportHandler(d Deps) http.HandlerFunc {
 		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
 		reportIsFresh := reportFreshForUser(user, ts)
 
-		// Resumed=true means the agent self-detected a gap (mobile rejoin).
-		// Tell the watcher BEFORE running the FSM so a near-simultaneous
-		// scan-tick won't fire a spurious OFFLINE while we ingest the
-		// freshly-collected checks.
-		if rep.Resumed && reportIsFresh {
+		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, rep.Resumed, mobileWakeAfter(d))
+		// Resumed=true means the agent self-detected a gap. A clean agent
+		// restart after sleep may not set Resumed, so also use the backend's
+		// last_seen gap for the operator-facing wake card.
+		if notifyWake {
 			if d.Resumer != nil {
 				d.Resumer.MarkResumed(uid)
 			}
 			if d.WakeNotifier != nil {
-				if user != nil && user.IsMobile() {
-					checks := append([]wire.Check(nil), rep.Checks...)
-					nickname := nick
-					go func() {
-						bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						defer cancel()
-						if err := d.WakeNotifier.SendWake(bg, uid, nickname, checks); err != nil {
-							d.Logger.Warn("wake notifier", "nickname", nickname, "err", err)
-						}
-					}()
-				}
+				checks := append([]wire.Check(nil), rep.Checks...)
+				nickname := nick
+				go func() {
+					bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					if err := d.WakeNotifier.SendWake(bg, uid, nickname, checks); err != nil {
+						d.Logger.Warn("wake notifier", "nickname", nickname, "err", err)
+					}
+				}()
 			}
 		}
 
@@ -591,8 +632,19 @@ func reportHandler(d Deps) http.HandlerFunc {
 		// guarded by a value-changed predicate so the common case (steady
 		// state, same version every minute) skips the writer-mutex hit.
 		if rep.AgentVersion != "" && reportIsFresh {
-			if err := d.DB.Users().UpdateLastSeenAgentVersion(uid, rep.AgentVersion); err != nil {
+			update, err := d.DB.Users().UpdateLastSeenAgentVersionResult(uid, rep.AgentVersion)
+			if err != nil {
 				d.Logger.Warn("update last_deployed_version from heartbeat", "nickname", nick, "err", err)
+			} else if update.PendingCleared && d.DeployNotifier != nil {
+				version := update.Version
+				nickname := nick
+				go func() {
+					bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					if err := d.DeployNotifier.SendDeferredUpdate(bg, uid, nickname, version, "ok", "heartbeat confirmed new agent version"); err != nil {
+						d.Logger.Warn("deploy notifier success", "nickname", nickname, "version", version, "err", err)
+					}
+				}()
 			}
 		}
 		w.WriteHeader(http.StatusOK)
@@ -840,6 +892,21 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					d.Logger.Warn("tg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
+			}
+		} else if d.DeployNotifier != nil {
+			if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
+				target := commandVersionArg(cmd)
+				output := res.Output
+				nickname := nick
+				status := res.Status
+				go func() {
+					ctx, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
+					defer cancel()
+					if err := d.DeployNotifier.SendDeferredUpdate(ctx, uid, nickname, target, status, output); err != nil {
+						incTGError()
+						d.Logger.Warn("deploy notifier failed", "cmd_id", res.ID, "action", cmd.Action, "err", err)
+					}
+				}()
 			}
 		}
 	resultLogged:
