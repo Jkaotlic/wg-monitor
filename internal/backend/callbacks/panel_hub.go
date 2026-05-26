@@ -173,10 +173,7 @@ func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, ki
 	case "routes":
 		r.openRoutesPanelMessage(ctx, m, u)
 	case "tunnels":
-		text, kb := r.buildTunnelsPanel(u)
-		if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb); err != nil {
-			return err
-		}
+		r.openTunnelsPanelMessage(ctx, m, u)
 	case "status":
 		r.dispatchSmartReply(ctx, m, u)
 	case "pingcheck":

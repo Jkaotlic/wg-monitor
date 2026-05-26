@@ -231,6 +231,36 @@ func TestPanelPush_StaleTopicSurfacesError(t *testing.T) {
 	}
 }
 
+func TestPanelPush_TunnelsUsesLiveRefresh(t *testing.T) {
+	d, uid := newTestDB(t)
+	const targetThread = int64(4242)
+	if err := d.Users().UpdateThreadID(uid, targetThread); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_deleted", "ok", `{"tunnel_name":"deleted","interface":"nwg9"}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:      "cb-push-tunnels",
+		From:    tg.User{ID: 12345},
+		Data:    fmt.Sprintf("panel:%d:push:tunnels", uid),
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 75},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+		t.Fatalf("panel push tunnels should enqueue live tunnels_status, got %+v", sink.calls)
+	}
+	if len(f.rkSends) != 0 {
+		t.Fatalf("panel push tunnels must not render event-history panel, got rkSends=%+v", f.rkSends)
+	}
+}
+
 func TestPanelCallback_NonAdminRejected(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTGFull{}

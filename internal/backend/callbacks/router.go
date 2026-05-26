@@ -346,6 +346,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.history
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor",
 		"tunnel_enable", "tunnel_disable", "tunnel_delete":
+		if r.guardStaleTunnelPanelAction(ctx, q, args) {
+			return
+		}
 		action = r.command
 	case "tunnel_delete_ask":
 		r.handleTunnelDeleteAsk(ctx, q, args)
@@ -1093,10 +1096,9 @@ func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user 
 	}
 }
 
-// buildTunnelsPanel queries the user's latest per-tunnel events and renders
-// (text, inline-keyboard) for the Tunnels Panel. Used both by initial dispatch
-// (tap on "🎛 Туннели" reply-keyboard button) and by the tunnels_refresh
-// callback after a toggle action.
+// buildTunnelsPanel renders from the live route/tunnel snapshot cache when
+// available. The event-history branch is only a legacy fallback for callers
+// that cannot enqueue a fresh tunnels_status command.
 func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup) {
 	if r.routesCache != nil {
 		if snap, ok := r.routesCache.Get(u.ID); ok {
@@ -1140,6 +1142,27 @@ func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup)
 }
 
 func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	if r.routesCache != nil {
+		if snap, ok := r.routesCache.Get(args.UserID); ok {
+			if entry, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName); found {
+				text := tg.TunnelDeleteConfirmText(entry)
+				kb := tg.TunnelDeleteConfirmKeyboard(args.UserID, entry)
+				_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+				_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+				return
+			}
+			if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
+				r.refreshTunnelsPanelCallback(ctx, q, u)
+			}
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "тоннеля уже нет; обновляю список")
+			return
+		}
+	}
+	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil && r.cmdSink != nil {
+		r.refreshTunnelsPanelCallback(ctx, q, u)
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала обновляю живой список")
+		return
+	}
 	entry := tg.TunnelPanelEntry{
 		Name:      strings.TrimPrefix(args.CheckName, "tunnel_"),
 		CheckName: args.CheckName,
@@ -1149,6 +1172,34 @@ func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery,
 	kb := tg.TunnelDeleteConfirmKeyboard(args.UserID, entry)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) guardStaleTunnelPanelAction(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
+	switch args.Action {
+	case "tunnel_enable", "tunnel_disable", "tunnel_delete":
+	default:
+		return false
+	}
+	if r.routesCache == nil {
+		return false
+	}
+	snap, ok := r.routesCache.Get(args.UserID)
+	if !ok {
+		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil && r.cmdSink != nil {
+			r.refreshTunnelsPanelCallback(ctx, q, u)
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала обновляю живой список")
+			return true
+		}
+		return false
+	}
+	if _, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName); found {
+		return false
+	}
+	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
+		r.refreshTunnelsPanelCallback(ctx, q, u)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "тоннеля уже нет; обновляю список")
+	return true
 }
 
 func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeyboardMarkup, bool) {
@@ -1226,9 +1277,15 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 	}
 }
 
-// collectTunnelViews builds []alerts.TunnelView from the latest per-tunnel
-// event for this user.
+// collectTunnelViews builds []alerts.TunnelView for smart-reply. Prefer the
+// live route/tunnel snapshot cache so deleted tunnels do not stay visible in
+// manual status; fall back to recent events when no live snapshot exists yet.
 func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
+	if r.routesCache != nil {
+		if snap, ok := r.routesCache.Get(userID); ok {
+			return tunnelViewsFromRouteSnapshot(snap)
+		}
+	}
 	rows, err := r.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", time.Now().Add(-3*time.Minute))
 	if err != nil {
 		slog.Warn("collectTunnelViews: query failed", "err", err, "user", userID)
@@ -1276,8 +1333,17 @@ func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
 		slog.Warn("collectActiveIncidents: query failed", "err", err, "user", userID)
 		return nil
 	}
+	var liveTunnelChecks map[string]bool
+	if r.routesCache != nil {
+		if snap, ok := r.routesCache.Get(userID); ok {
+			liveTunnelChecks = tunnelCheckNamesFromRouteSnapshot(snap)
+		}
+	}
 	out := make([]alerts.IncidentView, 0, len(rows))
 	for _, row := range rows {
+		if liveTunnelChecks != nil && strings.HasPrefix(row.CheckName, "tunnel_") && !liveTunnelChecks[row.CheckName] {
+			continue
+		}
 		var details map[string]any
 		if ev, ok, err := r.d.Events().LatestEvent(userID, row.CheckName); err == nil && ok && ev.DetailsJSON != "" {
 			_ = json.Unmarshal([]byte(ev.DetailsJSON), &details)

@@ -441,10 +441,42 @@ func TestRouterPanelCommandDoesNotEditStaleSnapshot(t *testing.T) {
 	}
 }
 
+func TestRouterTunnelToggleStaleButtonRefreshesInsteadOfCommand(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0", Enabled: true,
+	}}})
+	r.SetRoutesCache(cache)
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-toggle-stale",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "tunnel_disable:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+		t.Fatalf("stale toggle should enqueue only live refresh, got %+v", sink.calls)
+	}
+	if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
+		t.Fatalf("stale toggle should refresh panel, edits=%v", f.edits)
+	}
+}
+
 func TestRouterTunnelDeleteAskRendersConfirm(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
 	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "awg13", Name: "de", Iface: "nwg3", NDMSName: "Wireguard3", Enabled: true,
+	}}})
+	r.SetRoutesCache(cache)
 
 	q := &tg.CallbackQuery{
 		ID:      "cbk-delete-ask",
@@ -459,6 +491,33 @@ func TestRouterTunnelDeleteAskRendersConfirm(t *testing.T) {
 	}
 	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_awg13:Wireguard3") {
 		t.Fatalf("confirm markup missing tunnel_delete callback: %+v", f.editMarkups)
+	}
+}
+
+func TestRouterTunnelDeleteAskStaleButtonRefreshesInsteadOfConfirm(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0", Enabled: true,
+	}}})
+	r.SetRoutesCache(cache)
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-delete-stale",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "tunnel_delete_ask:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 || strings.Contains(f.edits[0], "Удалить тоннель") {
+		t.Fatalf("stale delete button must refresh panel instead of confirm, edits=%v", f.edits)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+		t.Fatalf("stale delete button should enqueue live refresh, got %+v", sink.calls)
 	}
 }
 
@@ -792,6 +851,52 @@ func TestCollectTunnelViewsDropsStaleEvents(t *testing.T) {
 	views := r.collectTunnelViews(uid)
 	if len(views) != 1 || views[0].Name != "fresh" {
 		t.Fatalf("want only fresh tunnel view, got %+v", views)
+	}
+}
+
+func TestCollectTunnelViewsPrefersLiveRouteSnapshot(t *testing.T) {
+	d, uid := newTestDB(t)
+	r := NewRouterWithSink(d, &fakeRouterTG{}, nil, Config{})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0",
+		Enabled: true, Status: "running", HasHandshake: true, HandshakeAge: 8,
+		PingStatus: "ok", PingFails: 0, PingFailMax: 3,
+	}}})
+	r.SetRoutesCache(cache)
+	if err := d.Events().Insert(uid, "tunnel_deleted", "ok", `{"tunnel_name":"deleted","interface":"nwg9"}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	views := r.collectTunnelViews(uid)
+	if len(views) != 1 || views[0].Name != "live" || views[0].CheckName != "tunnel_awg10" {
+		t.Fatalf("want live cache tunnel only, got %+v", views)
+	}
+}
+
+func TestCollectActiveIncidentsDropsDeletedTunnelWhenLiveSnapshotExists(t *testing.T) {
+	d, uid := newTestDB(t)
+	r := NewRouterWithSink(d, &fakeRouterTG{}, nil, Config{})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0", Enabled: true,
+	}}})
+	r.SetRoutesCache(cache)
+	hs := time.Now().Add(-10 * time.Minute)
+	if err := d.State().Save(uid, "tunnel_awg13", db.IncidentState{
+		UserID: uid, CheckName: "tunnel_awg13", CurrentStatus: "hard", ConsecutiveFails: 5, HardSince: &hs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard", ConsecutiveFails: 5, HardSince: &hs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	incidents := r.collectActiveIncidents(uid)
+	if len(incidents) != 1 || incidents[0].CheckName != "dns" {
+		t.Fatalf("want only non-tunnel incident after live cache excludes deleted tunnel, got %+v", incidents)
 	}
 }
 
