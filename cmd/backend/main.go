@@ -96,6 +96,7 @@ func main() {
 	// telegram_thread_id is NULL.
 	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.ChatID)
 	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.ChatID)
+	deployNotifier := alerts.NewDeployNotifier(d, tgClient, cfg.Telegram.ChatID)
 	watcher.SetSleepNotifier(sleepNotifier)
 
 	cmdQueue := cmd.New()
@@ -176,6 +177,7 @@ func main() {
 		OpkgNotifier:        opkgNotifier,
 		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,
+		DeployNotifier:      deployNotifier,
 		UI:                  cfg.UI,
 		Thresholds:          state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 		AlertPolicy:         backend.AlertPolicy{NoisyFailThreshold: cfg.State.NoisyFailThreshold, NoisyRecoveryThreshold: cfg.State.NoisyRecoveryThreshold},
@@ -188,6 +190,7 @@ func main() {
 		// throttling automatically.
 		ReportRatePerSec: cfg.RateLimit.ReportPerSec,
 		ReportBurst:      cfg.RateLimit.ReportBurst,
+		MobileWakeAfter:  time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
 		WizardToken:      cfg.Wizard.Token,
 	})
 	srv := &http.Server{

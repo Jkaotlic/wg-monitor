@@ -43,6 +43,11 @@ type originEntry struct {
 	enqueuedAt time.Time
 }
 
+type commandEntry struct {
+	cmd      wire.Command
+	issuedAt time.Time
+}
+
 // Queue is per-user FIFO queues plus a per-(user,id) result map plus a
 // per-(user,id) origin map. Concurrent-safe. Single mutex is fine —
 // operations are short and the fleet is ~10 users, not 10k.
@@ -50,6 +55,7 @@ type Queue struct {
 	mu      sync.Mutex
 	pending map[int64][]wire.Command // userID → FIFO
 	results map[int64]map[string]resultEntry
+	issued  map[int64]map[string]commandEntry
 	// origins maps (userID → cmd.ID → originEntry). Populated by
 	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
 	origins map[int64]map[string]originEntry
@@ -74,6 +80,7 @@ func New() *Queue {
 	q := &Queue{
 		pending: make(map[int64][]wire.Command),
 		results: make(map[int64]map[string]resultEntry),
+		issued:  make(map[int64]map[string]commandEntry),
 		origins: make(map[int64]map[string]originEntry),
 	}
 	q.signal = sync.NewCond(&q.mu)
@@ -242,6 +249,12 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 				}
 				continue
 			}
+			bucket, ok := q.issued[userID]
+			if !ok {
+				bucket = make(map[string]commandEntry)
+				q.issued[userID] = bucket
+			}
+			bucket[head.ID] = commandEntry{cmd: head, issuedAt: time.Now()}
 			return &head, true
 		}
 		if ctx.Err() != nil || !time.Now().Before(deadline) {
@@ -278,6 +291,23 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	q.signal.Broadcast()
 	q.log().Debug("queue record result", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
 	return nil
+}
+
+// CommandByID returns the command last dequeued for (userID, id). It lets the
+// result handler recover action/args for commands enqueued without a Telegram
+// origin ref, such as VPS deferred self_update jobs.
+func (q *Queue) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	bucket, ok := q.issued[userID]
+	if !ok {
+		return wire.Command{}, false
+	}
+	entry, ok := bucket[cmdID]
+	if !ok {
+		return wire.Command{}, false
+	}
+	return entry.cmd, true
 }
 
 // AwaitResult blocks until RecordResult lands a matching (userID,id) entry,
@@ -346,6 +376,16 @@ func (q *Queue) Sweep(ttl time.Duration) (origins, results int) {
 		}
 		if len(bucket) == 0 {
 			delete(q.results, uid)
+		}
+	}
+	for uid, bucket := range q.issued {
+		for id, e := range bucket {
+			if e.issuedAt.Before(cutoff) {
+				delete(bucket, id)
+			}
+		}
+		if len(bucket) == 0 {
+			delete(q.issued, uid)
 		}
 	}
 	return origins, results
