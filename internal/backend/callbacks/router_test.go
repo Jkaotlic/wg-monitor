@@ -1421,6 +1421,95 @@ func TestRouterHandleMessage_OperatorBlocked_AdminSlashCommand(t *testing.T) {
 	}
 }
 
+func TestRouterHandleMessage_OperatorStatusSlash_InOwnTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "/status@wgmonitor_bot",
+	})
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("operator /status should render smart reply, got %d sends", len(f.sentMsgs))
+	}
+	if !strings.Contains(f.sentMsgs[0], "ещё не отчитывался") {
+		t.Fatalf("operator /status should use smart reply path, got %q", f.sentMsgs[0])
+	}
+}
+
+func TestRouterHandleMessage_OperatorTunnelsSlash_InOwnTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "/tunnels",
+	})
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("operator /tunnels should send loading panel, got %d sends", len(f.sentMsgs))
+	}
+	if !strings.Contains(f.sentMsgs[0], "Туннели") || !strings.Contains(f.sentMsgs[0], "читаю") {
+		t.Fatalf("operator /tunnels should use live loading path, got %q", f.sentMsgs[0])
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+		t.Fatalf("operator /tunnels should enqueue tunnels_status, got %+v", sink.calls)
+	}
+}
+
+func TestRouterHandleMessage_OperatorRoutesSlash_InOwnTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "/routes",
+	})
+
+	if len(f.sentMsgs) != 1 || !strings.Contains(f.sentMsgs[0], "Маршруты") {
+		t.Fatalf("operator /routes should render routes loading message, got %#v", f.sentMsgs)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_status" {
+		t.Fatalf("operator /routes should enqueue route_status, got %+v", sink.calls)
+	}
+}
+
 func TestRouterHandleMessage_OperatorKeyboardCommandWithBotSuffix(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 55); err != nil {

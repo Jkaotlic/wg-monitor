@@ -355,15 +355,12 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 			action = r.importAction
 		}
 	case "tunnels_refresh":
-		// Local-only callback: re-render the Tunnels Panel inline.
-		// Look up the user owning this thread (panel was sent from per_router topic).
+		// Re-read the live list from the agent. Event history is only a
+		// fallback; a deleted tunnel must not linger after refresh.
 		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
-			text, kb := r.buildTunnelsPanel(u)
-			if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
-				slog.Warn("tunnels_refresh: edit failed", "err", err)
-			}
+			r.refreshTunnelsPanelCallback(ctx, q, u)
 		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновлено")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновляю")
 		return
 	case "routes_open", "routes_refresh":
 		r.handleRoutesOpen(ctx, q, args, args.Action == "routes_refresh")
@@ -707,14 +704,16 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 		// Operator passes the gate. Skip handleAdminCommand entirely — slash
 		// commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
-		// Operators get /help and /keyboard — both are personal-recovery
-		// actions scoped to their own topic, not fleet-wide management.
+		// Operators get safe router-scoped slash commands, plus /help and
+		// /keyboard as personal-recovery actions scoped to their own topic.
 		if cmd, _, ok := parseSlashCommand(m.Text); ok {
 			switch cmd {
 			case "/help":
 				r.handleHelpCommand(ctx, m)
 			case "/keyboard":
 				r.handleKeyboardCommand(ctx, m)
+			case "/status", "/check", "/tunnels", "/routes", "/via", "/direct", "/maint", "/upgrade":
+				r.handleRouterSlashCommand(ctx, m, kind, user)
 			}
 			return
 		}
@@ -745,6 +744,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if r.handleHideMyCodeMessage(ctx, m, kind, user) {
 		return
 	}
+	if r.handleRouterSlashCommand(ctx, m, kind, user) {
+		return
+	}
 	switch m.Text {
 	case "📊 Что происходит?":
 		if kind == "per_router" && user != nil {
@@ -755,11 +757,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 	case "🎛 Туннели":
 		if kind == "per_router" && user != nil {
-			text, kb := r.buildTunnelsPanel(user)
-			_, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
-			if err != nil {
-				slog.Warn("tunnels-panel send failed", "err", err, "user", user.Nickname)
-			}
+			r.openTunnelsPanelMessage(ctx, m, user)
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
@@ -829,6 +827,64 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			slog.Warn("deleteMessage failed (non-fatal)", "err", err, "chat", m.Chat.ID, "msg", m.MessageID)
 		}
 	}
+}
+
+func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
+	cmd, _, ok := parseSlashCommand(m.Text)
+	if !ok {
+		return false
+	}
+	switch cmd {
+	case "/status":
+		if kind == "per_router" && user != nil {
+			r.dispatchSmartReply(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+		return true
+	case "/tunnels":
+		if kind == "per_router" && user != nil {
+			r.openTunnelsPanelMessage(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+		return true
+	case "/routes":
+		if kind == "per_router" && user != nil {
+			r.openRoutesPanelMessage(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+		return true
+	case "/maint":
+		if kind == "per_router" && user != nil {
+			r.openMaintPanelMessage(ctx, m, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+		return true
+	case "/check":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
+			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
+		return true
+	case "/via":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
+			"⏳ Проверяю YouTube/Telegram/Instagram через туннель…")
+		return true
+	case "/direct":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
+			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
+		return true
+	case "/upgrade":
+		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
+			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
+		return true
+	}
+	return false
 }
 
 func (r *Router) handleRouteExplainReply(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
@@ -918,6 +974,49 @@ func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, k
 	}
 }
 
+func (r *Router) openTunnelsPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
+	loadingText := alerts.Card{
+		Badge:   "⏳",
+		Label:   "🎛 Туннели",
+		Summary: "читаю живой список с роутера",
+		Meta:    []string{alerts.KV("роутер", user.Nickname)},
+		Hint:    "Если экран не обновится, нажми «Обновить».",
+	}.Render(alerts.CardOpts{})
+	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
+	if err != nil {
+		slog.Warn("tunnels panel send failed", "err", err)
+		return
+	}
+	if r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "tunnels_status", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		slog.Warn("tunnels_status enqueue failed", "err", err)
+	}
+}
+
+func (r *Router) refreshTunnelsPanelCallback(ctx context.Context, q *tg.CallbackQuery, user *db.User) {
+	loadingText := alerts.Card{
+		Badge:   "⏳",
+		Label:   "🎛 Туннели",
+		Summary: "обновляю живой список с роутера",
+		Meta:    []string{alerts.KV("роутер", user.Nickname)},
+	}.Render(alerts.CardOpts{})
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", nil); err != nil {
+		slog.Warn("tunnels refresh edit failed", "err", err)
+	}
+	if r.cmdSink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "tunnels_status", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		slog.Warn("tunnels_status enqueue failed", "err", err)
+	}
+}
+
 // openRoutesPanelMessage sends the initial Routes panel as a fresh message
 // (so subsequent edits target this MessageID) and enqueues route_status.
 // The cmd-result handler edits when the agent answers.
@@ -999,6 +1098,12 @@ func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user 
 // (tap on "🎛 Туннели" reply-keyboard button) and by the tunnels_refresh
 // callback after a toggle action.
 func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup) {
+	if r.routesCache != nil {
+		if snap, ok := r.routesCache.Get(u.ID); ok {
+			entries := tunnelEntriesFromRouteSnapshot(snap)
+			return tg.TunnelsPanelText(u.Nickname, entries), tg.TunnelsPanelKeyboard(u.ID, entries)
+		}
+	}
 	// Stale-entity elision: only show tunnels whose latest event is at most
 	// 3 agent cycles old (~3 min). When awg-manager removes a tunnel, the
 	// agent stops emitting events for it; without this filter the dead

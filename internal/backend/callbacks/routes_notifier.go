@@ -36,6 +36,8 @@ func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpk
 	switch ref.Action {
 	case "route_status":
 		return n.renderStatus(ctx, ref, res, user)
+	case "tunnels_status":
+		return n.renderTunnelsStatus(ctx, ref, res, user)
 	case "route_rebind":
 		return n.renderRebind(ctx, ref, res, user)
 	case "route_add_plan":
@@ -51,6 +53,33 @@ func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpk
 	default:
 		return fmt.Errorf("RoutesPanelNotifier: unsupported action %q", ref.Action)
 	}
+}
+
+func (n *RoutesPanelNotifier) renderTunnelsStatus(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		text := alerts.Card{
+			Badge:   "❌",
+			Label:   "🎛 Туннели",
+			Summary: "не смог прочитать живой список с роутера",
+			Meta:    []string{alerts.KV("роутер", user.Nickname), alerts.KV("команда", "tunnels_status")},
+			Details: res.Output,
+			Hint:    "Нажми «Обновить». Если повторяется — проверь awg-manager или запусти /check.",
+		}.Render(alerts.CardOpts{MaxBytes: 3900})
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", user.ID)}},
+		}}
+		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
+		return fmt.Errorf("decode tunnels snapshot: %w", err)
+	}
+	if n.Cache != nil {
+		n.Cache.Put(user.ID, snap)
+	}
+	text := tg.TunnelsPanelText(user.Nickname, tunnelEntriesFromRouteSnapshot(snap))
+	kb := tg.TunnelsPanelKeyboard(user.ID, tunnelEntriesFromRouteSnapshot(snap))
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 }
 
 func (n *RoutesPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {

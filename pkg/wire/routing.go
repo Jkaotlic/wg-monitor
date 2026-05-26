@@ -17,9 +17,18 @@ type TunnelMeta struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	Iface     string `json:"iface"`
+	NDMSName  string `json:"ndms_name,omitempty"`
 	Type      string `json:"type,omitempty"`
 	Enabled   bool   `json:"enabled"`
 	Available bool   `json:"available,omitempty"`
+	Status    string `json:"status,omitempty"`
+	// HasHandshake distinguishes a real zero-second handshake from an older
+	// agent/snapshot that did not report handshake data.
+	HasHandshake bool   `json:"has_handshake,omitempty"`
+	HandshakeAge int    `json:"handshake_age_sec,omitempty"`
+	PingStatus   string `json:"ping_status,omitempty"`
+	PingFails    int    `json:"ping_fails,omitempty"`
+	PingFailMax  int    `json:"ping_fail_max,omitempty"`
 	// DefaultRoute marks managed tunnels with `defaultRoute=true`. Used as
 	// the heuristic for the global HR-Neo policy default during rebind
 	// fall-through conversion.

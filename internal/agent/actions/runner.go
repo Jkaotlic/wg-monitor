@@ -371,7 +371,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		s, o := RouterDoctor(ctx, r.AwgClient, r.Exec)
 		return s, o, payload
 
-	case "route_status":
+	case "route_status", "tunnels_status":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
 		}

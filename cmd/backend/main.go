@@ -26,6 +26,26 @@ import (
 
 var Version = "0.8.0-tunnel-import"
 
+func telegramCommandMenu() []tg.BotCommand {
+	return []tg.BotCommand{
+		{Command: "status", Description: "Что происходит с этим роутером"},
+		{Command: "check", Description: "Проверить роутер изнутри"},
+		{Command: "tunnels", Description: "Открыть туннели"},
+		{Command: "routes", Description: "Открыть маршруты"},
+		{Command: "via", Description: "Проверить связь через туннель"},
+		{Command: "direct", Description: "Проверить прямую связь"},
+		{Command: "maint", Description: "Открыть обслуживание"},
+		{Command: "upgrade", Description: "Обновить пакеты Entware"},
+		{Command: "keyboard", Description: "Восстановить кнопки в этом топике"},
+		{Command: "help", Description: "Справка по командам и кнопкам"},
+		{Command: "panel", Description: "Открыть панель управления"},
+		{Command: "ensure_topics", Description: "Создать темы для всех роутеров"},
+		{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
+		{Command: "this_is", Description: "Привязать этот топик к роутеру"},
+		{Command: "topic_help", Description: "Шпаргалка по управлению темами"},
+	}
+}
+
 func main() {
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -61,15 +81,7 @@ func main() {
 	// Register slash-command menu so TG clients show the commands in the
 	// picker. Non-fatal — the bot keeps working if TG refuses.
 	smcCtx, smcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := tgClient.SetMyCommands(smcCtx, []tg.BotCommand{
-		{Command: "help", Description: "Справка по командам и кнопкам"},
-		{Command: "keyboard", Description: "Восстановить кнопки в этом топике"},
-		{Command: "panel", Description: "Открыть панель управления"},
-		{Command: "ensure_topics", Description: "Создать темы для всех роутеров"},
-		{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
-		{Command: "this_is", Description: "Привязать этот топик к роутеру (укажи nickname)"},
-		{Command: "topic_help", Description: "Шпаргалка по управлению темами"},
-	}); err != nil {
+	if err := tgClient.SetMyCommands(smcCtx, telegramCommandMenu()); err != nil {
 		logger.Warn("setMyCommands failed (non-fatal)", "err", err)
 	}
 	smcCancel()
@@ -139,7 +151,7 @@ func main() {
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
 	cb.SetRoutesCache(routesCache)
-	notifier.TunnelsPanelBuilder = cb.BuildTunnelsPanelByUserID
+	notifier.TunnelsRefreshSink = cmdQueue
 	routesNotifier := &callbacks.RoutesPanelNotifier{
 		TG:    tgClient,
 		Cache: routesCache,

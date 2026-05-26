@@ -8,6 +8,7 @@ func HelpForScreen(screen string) string {
 		return `ℹ Operator guide
 
 Главное правило: работай в топике нужного роутера. Кнопки там уже привязаны к этому роутеру.
+Если нижние кнопки пропали, используй slash-команды: /status, /check, /tunnels, /routes, /via, /direct, /maint, /upgrade, /keyboard.
 
 Как читать статусы:
   ✅ ok - работает

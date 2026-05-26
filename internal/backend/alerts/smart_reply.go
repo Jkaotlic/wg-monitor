@@ -294,6 +294,9 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 			fmt.Fprintf(&b, "%s не отвечает уже %s.\n", incidentDisplayName(inc, a.Tunnels), durFmt(age))
 		}
 		b.WriteString("\nЧто можно сделать:")
+		for _, line := range smartReplyActionHints(visibleIncidents) {
+			b.WriteString("\n  • " + line)
+		}
 		var rows [][]tg.InlineKeyboardButton
 		seen := map[string]bool{}
 		// Buttons per active incident (carries silence button)
@@ -373,6 +376,35 @@ func dnsSmartReplyLines(d map[string]any, ns []NeighborSummary) []string {
 			lines = append(lines, "RKN-блокировок не видно.")
 		} else {
 			lines = append(lines, fmt.Sprintf("RKN-подозрение на %d из %d проверок.", rknSus, rknProbed))
+		}
+	}
+	return lines
+}
+
+func smartReplyActionHints(incidents []IncidentView) []string {
+	if len(incidents) == 0 {
+		return []string{"Запусти 🩺 Проверку, чтобы обновить диагностику перед ручными правками."}
+	}
+	seen := map[string]bool{}
+	var lines []string
+	add := func(s string) {
+		if s == "" || seen[s] {
+			return
+		}
+		seen[s] = true
+		lines = append(lines, s)
+	}
+	for _, inc := range incidents {
+		switch {
+		case checkCategory(inc.CheckName) == "dns":
+			add("Открой 🎛 Туннели и проверь живой туннель/интерфейс из строки выше.")
+			add("Если туннель выключен или удалён, затем 🛣 Маршруты: перенеси DNS/HR-Neo правила на живой туннель.")
+		case strings.HasPrefix(inc.CheckName, "tunnel_"):
+			add("Для туннеля ниже можно запустить перезапуск или диагностику; если он больше не нужен — открой 🎛 Туннели.")
+		case inc.CheckName == "hydraroute":
+			add("Открой 🛣 Маршруты: проверь HR-Neo и правила, которые завязаны на него.")
+		default:
+			add("Запусти 🩺 Проверку, чтобы обновить диагностику перед ручными правками.")
 		}
 	}
 	return lines
