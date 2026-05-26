@@ -1386,6 +1386,35 @@ func TestRouterHandleMessage_OperatorBlocked_AdminSlashCommand(t *testing.T) {
 	}
 }
 
+func TestRouterHandleMessage_OperatorKeyboardCommandWithBotSuffix(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTGFull{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	msg := &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "/keyboard@wgmonitor_bot",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.rkSends) != 1 {
+		t.Fatalf("operator /keyboard@botname should re-push keyboard, got %d sends", len(f.rkSends))
+	}
+	if f.rkSends[0].thread == nil || *f.rkSends[0].thread != tid {
+		t.Fatalf("keyboard must be sent to the operator's router topic, got %+v", f.rkSends[0].thread)
+	}
+}
+
 func TestRouter_DiagRaw_ServesCachedBody(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
