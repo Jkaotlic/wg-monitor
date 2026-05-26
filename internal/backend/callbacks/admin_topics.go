@@ -23,20 +23,9 @@ import (
 //	/selfhosted                    — list/add/update self-hosted Amnezia VPS entries
 //	/topic_help                    — print the admin cheat-sheet
 func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
-	text := strings.TrimSpace(m.Text)
-	if !strings.HasPrefix(text, "/") {
+	cmd, arg, ok := parseSlashCommand(m.Text)
+	if !ok {
 		return false
-	}
-	parts := strings.SplitN(text, " ", 2)
-	cmd := parts[0]
-	// Strip "@botname" suffix that TG appends when the user picks the
-	// command from the command menu inside a group.
-	if at := strings.Index(cmd, "@"); at >= 0 {
-		cmd = cmd[:at]
-	}
-	arg := ""
-	if len(parts) > 1 {
-		arg = strings.TrimSpace(parts[1])
 	}
 	switch cmd {
 	case "/ensure_topics":
@@ -65,6 +54,23 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 		return true
 	}
 	return false
+}
+
+func parseSlashCommand(text string) (cmd, arg string, ok bool) {
+	text = strings.TrimSpace(text)
+	if !strings.HasPrefix(text, "/") {
+		return "", "", false
+	}
+	parts := strings.SplitN(text, " ", 2)
+	cmd = parts[0]
+	// TG appends "@botname" when a command is picked in a group.
+	if at := strings.Index(cmd, "@"); at >= 0 {
+		cmd = cmd[:at]
+	}
+	if len(parts) > 1 {
+		arg = strings.TrimSpace(parts[1])
+	}
+	return cmd, arg, true
 }
 
 // handleKeyboardCommand re-attaches the reply-keyboard to the current

@@ -706,12 +706,13 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		// commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
 		// Operators get /help and /keyboard — both are personal-recovery
 		// actions scoped to their own topic, not fleet-wide management.
-		switch strings.TrimSpace(m.Text) {
-		case "/help":
-			r.handleHelpCommand(ctx, m)
-			return
-		case "/keyboard":
-			r.handleKeyboardCommand(ctx, m)
+		if cmd, _, ok := parseSlashCommand(m.Text); ok {
+			switch cmd {
+			case "/help":
+				r.handleHelpCommand(ctx, m)
+			case "/keyboard":
+				r.handleKeyboardCommand(ctx, m)
+			}
 			return
 		}
 	} else if r.handleAdminCommand(ctx, m) {
