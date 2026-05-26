@@ -24,6 +24,11 @@ func TestRenderAWGMBootstrapScriptContainsInstallPaths(t *testing.T) {
 			t.Fatalf("script missing %q:\n%s", want, script)
 		}
 	}
+	for _, want := range []string{"existing_nickname", `sed 's/^"//; s/"$//'`, `sed "s/^'//; s/'$//"`} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("script missing quoted nickname guard %q:\n%s", want, script)
+		}
+	}
 	if strings.Contains(script, "echo "+rawToken) {
 		t.Fatal("script prints raw token")
 	}

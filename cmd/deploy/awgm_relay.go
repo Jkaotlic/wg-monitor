@@ -553,9 +553,15 @@ fi
 
 mkdir -p /opt/etc/wg-monitor /opt/var/wg-monitor /opt/var/run /opt/tmp /opt/bin /opt/etc/init.d
 
-if [ -f "$CONFIG" ] && ! grep -q "^[[:space:]]*nickname:[[:space:]]*$NICKNAME[[:space:]]*$" "$CONFIG"; then
-    echo "Refusing to overwrite $CONFIG: existing agent.nickname is not $NICKNAME"
-    exit 11
+if [ -f "$CONFIG" ]; then
+    existing_nickname=$(
+        sed -n 's/^[[:space:]]*nickname:[[:space:]]*//p' "$CONFIG" | head -n 1 |
+            sed 's/[[:space:]]*$//' | sed 's/^"//; s/"$//' | sed "s/^'//; s/'$//"
+    )
+    if [ "$existing_nickname" != "$NICKNAME" ]; then
+        echo "Refusing to overwrite $CONFIG: existing agent.nickname (${existing_nickname:-missing}) is not $NICKNAME"
+        exit 11
+    fi
 fi
 
 fetch() {

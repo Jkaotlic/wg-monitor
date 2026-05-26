@@ -232,9 +232,11 @@ func TestNormalizeKeeneticArchMapsAarch64ToReleaseAssetArch(t *testing.T) {
 
 func TestApplyAWGMDeploySuccessDoesNotPersistPublicRouterLANIP(t *testing.T) {
 	ag := &AgentState{
-		Nickname:   "del",
-		DeployMode: "awgm",
-		AWGMURL:    "https://awg.delrp.example",
+		Nickname:       "del",
+		DeployMode:     "awgm",
+		AWGMURL:        "https://awg.delrp.example",
+		PendingVersion: "v0.13.0-rc44",
+		PendingSince:   "2026-05-26T12:00:00Z",
 	}
 	applyAWGMDeploySuccess(ag, &AWGMSystemInfo{RouterIP: "192.168.31.1"}, "v0.13.0-rc45", "router-admin", true, time.Unix(1779693600, 0).UTC())
 
@@ -243,6 +245,9 @@ func TestApplyAWGMDeploySuccessDoesNotPersistPublicRouterLANIP(t *testing.T) {
 	}
 	if ag.LastDeployedVersion != "v0.13.0-rc45" || ag.LastDeploy == "" || ag.AWGMAuth != "router-admin" {
 		t.Fatalf("deploy metadata not applied: %+v", ag)
+	}
+	if ag.PendingVersion != "" || ag.PendingSince != "" {
+		t.Fatalf("successful AWGM install must clear stale pending state: %+v", ag)
 	}
 }
 
