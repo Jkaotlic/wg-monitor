@@ -62,6 +62,15 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 		}
 		card := Card{Badge: "", Label: label, Summary: summary}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
+	case "tunnel_delete":
+		tunnelID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Output), "tunnel "))
+		tunnelID = strings.TrimSuffix(tunnelID, " deleted")
+		summary := "тоннель удалён"
+		if tunnelID != "" && tunnelID != r.Output {
+			summary = tunnelID + " → удалён"
+		}
+		card := Card{Badge: "", Label: label, Summary: summary}
+		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "restart_tunnel":
 		card := Card{Badge: "", Label: label, Summary: humanRestartResult(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
@@ -255,6 +264,8 @@ func commandLabelHuman(action string) string {
 		return "▶ Включить туннель"
 	case "tunnel_disable":
 		return "⏸ Выключить туннель"
+	case "tunnel_delete":
+		return "🗑 Удалить туннель"
 	case "tunnel_import":
 		return "📁 Импорт конфига"
 	}

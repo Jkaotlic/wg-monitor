@@ -84,7 +84,7 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 
 func isTunnelPanelMutatingAction(action string) bool {
 	switch action {
-	case "tunnel_enable", "tunnel_disable", "tunnel_import":
+	case "tunnel_enable", "tunnel_disable", "tunnel_delete", "tunnel_import":
 		return true
 	default:
 		return false

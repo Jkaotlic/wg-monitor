@@ -83,6 +83,20 @@ func (f *fakeRouterTG) DownloadFile(_ context.Context, _ string) ([]byte, error)
 
 func ptrInt64(v int64) *int64 { return &v }
 
+func markupHasCallback(kb *tg.InlineKeyboardMarkup, want string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestRouterDispatchesSilence(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -424,6 +438,27 @@ func TestRouterPanelCommandDoesNotEditStaleSnapshot(t *testing.T) {
 	}
 	if len(f.edits) != 0 {
 		t.Fatalf("panel callback should not edit stale DB snapshot, got edits=%v", f.edits)
+	}
+}
+
+func TestRouterTunnelDeleteAskRendersConfirm(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "tunnel_delete_ask:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Удалить тоннель") {
+		t.Fatalf("expected delete confirmation edit, got %v", f.edits)
+	}
+	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_awg13:Wireguard3") {
+		t.Fatalf("confirm markup missing tunnel_delete callback: %+v", f.editMarkups)
 	}
 }
 

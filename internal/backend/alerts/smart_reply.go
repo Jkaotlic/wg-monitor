@@ -188,6 +188,9 @@ func isLegacyPingCheckDisabledFalseIncident(inc IncidentView, tunnels []TunnelVi
 }
 
 func incidentDisplayName(inc IncidentView, tunnels []TunnelView) string {
+	if !strings.HasPrefix(inc.CheckName, "tunnel_") {
+		return categoryHeadline(inc.CheckName, inc.Details)
+	}
 	for _, t := range tunnels {
 		if t.CheckName != inc.CheckName {
 			continue

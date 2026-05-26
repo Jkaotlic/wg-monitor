@@ -92,6 +92,19 @@ func TestParseCommandActions(t *testing.T) {
 	}
 }
 
+func TestParseTunnelDeleteCallbacks(t *testing.T) {
+	for _, action := range []string{"tunnel_delete_ask", "tunnel_delete"} {
+		data := action + ":42:tunnel_awg13:Wireguard3"
+		a, err := Parse(data)
+		if err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		if a.Action != action || a.UserID != 42 || a.CheckName != "tunnel_awg13" || a.NDMSName != "Wireguard3" || !a.IsPanel {
+			t.Fatalf("%s: got %+v", data, a)
+		}
+	}
+}
+
 func TestParseMalformed(t *testing.T) {
 	cases := []string{
 		"",
