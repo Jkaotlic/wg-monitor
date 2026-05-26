@@ -136,12 +136,12 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 		if !didChange && srcIsOther {
 			newRoutes, didChange = rewriteOtherRoutes(r.Routes, dstIface, knownIfaces)
 		}
-		if !didChange && srcIsOther && len(r.Routes) == 0 && !(isHR && r.HRPolicyName != "" && defaultIface != "") {
+		if !didChange && srcIsOther && len(r.Routes) == 0 && !(isMovableHRNeoFallthrough(r) && defaultIface != "") {
 			newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
 			didChange = true
 		}
 		if !didChange {
-			if r.Routes == nil && isHR && r.HRPolicyName != "" && srcIsDefaultRoute {
+			if isMovableHRNeoFallthrough(r) && srcIsDefaultRoute {
 				newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
 				didChange = true
 			}
@@ -166,6 +166,28 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 		}
 	}
 	return
+}
+
+func isMovableHRNeoFallthrough(r awgmgr.DNSRoute) bool {
+	if r.Routes != nil || r.Backend != "hydraroute" || strings.TrimSpace(r.HRPolicyName) == "" {
+		return false
+	}
+	return !isDirectProviderHRNeoPolicy(r)
+}
+
+func isDirectProviderHRNeoPolicy(r awgmgr.DNSRoute) bool {
+	mode := strings.ToLower(strings.TrimSpace(r.HRRouteMode))
+	switch mode {
+	case "direct", "provider", "wan", "isp":
+		return true
+	}
+	policy := strings.ToLower(strings.TrimSpace(r.HRPolicyName))
+	for _, marker := range []string{"direct", "provider", "wan", "isp", "провайдер", "напрям"} {
+		if strings.Contains(policy, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // rewriteRoutes returns a copy of routes with every entry whose interface or
