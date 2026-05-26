@@ -29,6 +29,7 @@ type HardArgs struct {
 type NeighborSummary struct {
 	CheckName    string // e.g. "tunnel_awg11"
 	TunnelName   string // pretty name from Details
+	NDMSName     string // Keenetic interface name, e.g. "Wireguard3"
 	Interface    string // "nwg1"
 	Status       string // "alive" / "dead" / "ok" / "fail"
 	HandshakeAge int    // seconds, 0 if unknown
@@ -60,7 +61,7 @@ func FormatHard(a HardArgs) string {
 	sections := []CardSection{{
 		Title: tone.ProblemTitle,
 		Lines: linesFromWriter(func(b *strings.Builder) {
-			writeWhatBroke(b, a.CheckName, a.Check.Details)
+			writeWhatBroke(b, a.CheckName, a.Check.Details, a.Neighbors)
 		}),
 	}}
 	if impact := impactFor(a.CheckName, a.Check.Details); impact != "" {
@@ -187,7 +188,7 @@ func FormatRealert(args RealertArgs) string {
 		sections = append(sections, CardSection{
 			Title: tone.ProblemTitle,
 			Lines: linesFromWriter(func(b *strings.Builder) {
-				writeWhatBroke(b, args.CheckName, args.Check.Details)
+				writeWhatBroke(b, args.CheckName, args.Check.Details, args.Neighbors)
 			}),
 		})
 		if impact := impactFor(args.CheckName, args.Check.Details); impact != "" {
@@ -376,12 +377,12 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 // writeWhatBroke writes the "что не работает" body for a check category.
 // Translates raw Go errors into human labels (timeout/refused/no-route/etc.)
 // and drops internal IPs/socket pairs that operators flagged as noise.
-func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any) {
+func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns []NeighborSummary) {
 	switch checkCategory(checkName) {
 	case "tunnel":
 		writeTunnelWhatBroke(b, d)
 	case "dns":
-		writeDNSWhatBroke(b, d)
+		writeDNSWhatBroke(b, d, ns)
 	case "hydraroute":
 		writeHydraRouteWhatBroke(b, d)
 	case "awg_manager":
@@ -475,7 +476,7 @@ func writeTunnelLinkedRoutes(b *strings.Builder, d map[string]any) {
 	fmt.Fprintf(b, "  Связано правил: %s\n", strings.Join(parts, ", "))
 }
 
-func writeDNSWhatBroke(b *strings.Builder, d map[string]any) {
+func writeDNSWhatBroke(b *strings.Builder, d map[string]any, ns []NeighborSummary) {
 	total, _ := intOrZero(d, "endpoints")
 	failed, _ := intOrZero(d, "failed_count")
 	rknSus, _ := intOrZero(d, "rkn_suspect")
@@ -508,7 +509,7 @@ func writeDNSWhatBroke(b *strings.Builder, d map[string]any) {
 				label = tp + " " + label
 			}
 			if ndms != "" {
-				label += " (" + ndms + ")"
+				label += " через " + humanTunnelLabelByNDMS(ndms, ns)
 			}
 			fmt.Fprintf(b, "    • %s — %s\n", label, humaniseNetErr(errStr))
 		}
@@ -600,6 +601,57 @@ func writeGenericWhatBroke(b *strings.Builder, d map[string]any) {
 	}
 }
 
+func humanTunnelLabelByNDMS(ndms string, ns []NeighborSummary) string {
+	if ndms == "" {
+		return ""
+	}
+	for _, n := range ns {
+		if n.NDMSName != ndms && n.Interface != ndms {
+			continue
+		}
+		return humanTunnelLabel(n)
+	}
+	return ndms
+}
+
+func humanTunnelLabel(n NeighborSummary) string {
+	name := strings.TrimSpace(n.TunnelName)
+	ndms := strings.TrimSpace(n.NDMSName)
+	if ndms == "" {
+		ndms = strings.TrimSpace(n.Interface)
+	}
+	if name == "" {
+		return ndms
+	}
+	var refs []string
+	if ndms != "" && ndms != name {
+		refs = append(refs, ndms)
+	}
+	if n.Interface != "" && n.Interface != name && n.Interface != ndms {
+		refs = append(refs, n.Interface)
+	}
+	if len(refs) == 0 {
+		return name
+	}
+	return fmt.Sprintf("%s (%s)", name, strings.Join(refs, " / "))
+}
+
+func humanTunnelNameByNDMS(ndms string, ns []NeighborSummary) string {
+	if ndms == "" {
+		return ""
+	}
+	for _, n := range ns {
+		if n.NDMSName != ndms && n.Interface != ndms {
+			continue
+		}
+		if strings.TrimSpace(n.TunnelName) != "" {
+			return strings.TrimSpace(n.TunnelName)
+		}
+		return humanTunnelLabel(n)
+	}
+	return ndms
+}
+
 func impactFor(checkName string, d map[string]any) string {
 	switch checkCategory(checkName) {
 	case "dns":
@@ -680,6 +732,25 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 	}
 	total, _ := intOrZero(d, "endpoints")
 	failedCount, _ := intOrZero(d, "failed_count")
+	if len(failedIfaces) == 1 && failedCount > 0 {
+		var ndms string
+		for k := range failedIfaces {
+			ndms = k
+		}
+		label := humanTunnelLabelByNDMS(ndms, ns)
+		name := humanTunnelNameByNDMS(ndms, ns)
+		prefix := "Все упавшие DNS-серверы"
+		if failedCount == 2 {
+			prefix = "Оба упавших DNS-сервера"
+		}
+		if neighborsAlive(ns) && len(ns) > 0 {
+			return fmt.Sprintf("%s идут через %s. Остальные туннели выглядят живыми, значит это не общий WAN. Скорее всего деградировал именно %s: DNS просто первым это заметил.", prefix, label, name)
+		}
+		if !neighborsAlive(ns) && len(ns) > 0 {
+			return fmt.Sprintf("%s идут через %s, и соседние туннели тоже не на связи. Похоже на проблему уровнем выше: WAN, провайдер или сам роутер.", prefix, label)
+		}
+		return fmt.Sprintf("%s идут через %s. Похоже на сбой этого маршрута или туннеля, а не самого DNS.", prefix, label)
+	}
 
 	// Если все упавшие endpoint'ы прибиты к одному ndms_name (= один тоннель/интерфейс),
 	// а соседи живы — диагноз не про DNS, а про этот туннель.
@@ -812,6 +883,12 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 		for k := range failedIfaces {
 			iface = k
 		}
+		label := humanTunnelLabelByNDMS(iface, ns)
+		name := humanTunnelNameByNDMS(iface, ns)
+		if neighborsAlive(ns) {
+			return fmt.Sprintf("Открой 🎛 Туннели и проверь %s. Если он есть в списке, начни с перезапуска или диагностики именно этого туннеля.", label)
+		}
+		return fmt.Sprintf("Сначала проверь WAN: 🌍 Через тоннель? и 🇷🇺 Напрямую?. Если связь есть только напрямую, начни с %s.", name)
 		if neighborsAlive(ns) {
 			return fmt.Sprintf(
 				"Открой alert по %s (или 🎛 Туннели) и нажми «Перезапуск туннеля». Если %s не висит в общем списке — возможно его удалили из awg-manager.",

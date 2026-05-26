@@ -39,6 +39,7 @@ func (s SmartReplyState) String() string {
 type TunnelView struct {
 	Name         string // pretty (e.g. "amnezia")
 	CheckName    string // FSM key (e.g. "tunnel_awg11")
+	NDMSName     string // Keenetic interface name, e.g. "Wireguard3"
 	Interface    string // "nwg1"
 	Enabled      bool
 	HasEnabled   bool
@@ -57,6 +58,7 @@ type IncidentView struct {
 	CheckName string
 	HardSince time.Time
 	FailCount int // consecutive_fails at HARD time
+	Details   map[string]any
 }
 
 // UpdateAvailable is one row in the optional "🟡 Доступны обновления:"
@@ -276,8 +278,16 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 
 	case StateHard:
 		fmt.Fprintf(&b, "🔴 %s — есть проблема.\n\n", a.Nickname)
+		neighbors := tunnelViewsAsNeighbors(a.Tunnels)
 		for _, inc := range visibleIncidents {
 			age := time.Since(inc.HardSince).Round(time.Minute)
+			if checkCategory(inc.CheckName) == "dns" && len(inc.Details) > 0 {
+				fmt.Fprintf(&b, "%s уже %s.\n", categoryHeadline(inc.CheckName, inc.Details), durFmt(age))
+				for _, line := range dnsSmartReplyLines(inc.Details, neighbors) {
+					b.WriteString(line + "\n")
+				}
+				continue
+			}
 			fmt.Fprintf(&b, "%s не отвечает уже %s.\n", incidentDisplayName(inc, a.Tunnels), durFmt(age))
 		}
 		b.WriteString("\nЧто можно сделать:")
@@ -286,6 +296,10 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		// Buttons per active incident (carries silence button)
 		for _, inc := range visibleIncidents {
 			if !strings.HasPrefix(inc.CheckName, "tunnel_") {
+				rows = append(rows, []tg.InlineKeyboardButton{
+					{Text: "⏸ Тише на час", CallbackData: silenceCD(inc.CheckName, "1h")},
+					{Text: "📋 История", CallbackData: plainCD("history", inc.CheckName)},
+				})
 				continue
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{
@@ -322,6 +336,68 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		return b.String(), tg.InlineKeyboardMarkup{}
 	}
 	return "", tg.InlineKeyboardMarkup{}
+}
+
+func tunnelViewsAsNeighbors(tunnels []TunnelView) []NeighborSummary {
+	out := make([]NeighborSummary, 0, len(tunnels))
+	for _, t := range tunnels {
+		out = append(out, NeighborSummary{
+			CheckName:    t.CheckName,
+			TunnelName:   t.Name,
+			NDMSName:     t.NDMSName,
+			Interface:    t.Interface,
+			Status:       t.PingStatus,
+			HandshakeAge: t.HandshakeAge,
+		})
+	}
+	return out
+}
+
+func dnsSmartReplyLines(d map[string]any, ns []NeighborSummary) []string {
+	total, _ := intOrZero(d, "endpoints")
+	failed, _ := intOrZero(d, "failed_count")
+	var lines []string
+	if total > 0 && failed > 0 {
+		lines = append(lines, fmt.Sprintf("%d из %d DNS-серверов не отвечают.", failed, total))
+	}
+	if label := singleFailedDNSTunnelLabel(d, ns); label != "" {
+		lines = append(lines, "Падают через: "+label+".")
+	}
+	rknProbed, _ := intOrZero(d, "rkn_probed")
+	rknSus, _ := intOrZero(d, "rkn_suspect")
+	if rknProbed > 0 {
+		if rknSus == 0 {
+			lines = append(lines, "RKN-блокировок не видно.")
+		} else {
+			lines = append(lines, fmt.Sprintf("RKN-подозрение на %d из %d проверок.", rknSus, rknProbed))
+		}
+	}
+	return lines
+}
+
+func singleFailedDNSTunnelLabel(d map[string]any, ns []NeighborSummary) string {
+	var ndms string
+	for _, ep := range mapsSlice(d, "endpoints_detail") {
+		reachable, _ := ep["reachable"].(bool)
+		if reachable {
+			continue
+		}
+		cur, _ := ep["ndms_name"].(string)
+		if cur == "" {
+			continue
+		}
+		if ndms == "" {
+			ndms = cur
+			continue
+		}
+		if ndms != cur {
+			return ""
+		}
+	}
+	if ndms == "" {
+		return ""
+	}
+	return humanTunnelLabelByNDMS(ndms, ns)
 }
 
 // humanAgeDur is the time.Duration counterpart to humanAgeSec.

@@ -170,8 +170,8 @@ func TestStage2EndToEnd(t *testing.T) {
 	if !strings.Contains(last["text"].(string), "Всё ещё:") {
 		t.Errorf("realert text missing realert marker: %v", last["text"])
 	}
-	if last["reply_markup"] != nil {
-		t.Errorf("realert must not have keyboard")
+	if last["reply_markup"] == nil {
+		t.Errorf("realert must include silence/ack keyboard")
 	}
 	mu.Unlock()
 }

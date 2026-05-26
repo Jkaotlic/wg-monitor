@@ -196,8 +196,8 @@ func TestFormatHardDNSPartial(t *testing.T) {
 		"На что обратить внимание:",
 		"Что может пострадать:",
 		"Не отвечают 2 из",
-		"plain 100.64.0.1:53 (Wireguard3) — таймаут",
-		"plain 8.8.4.4:53 (Wireguard3) — таймаут",
+		"plain 100.64.0.1:53 через Wireguard3 — таймаут",
+		"plain 8.8.4.4:53 через Wireguard3 — таймаут",
 		"RKN-блокировок не видно",
 		"Wireguard3",
 	}
@@ -209,6 +209,39 @@ func TestFormatHardDNSPartial(t *testing.T) {
 	// raw Go socket pair must NOT leak through
 	if strings.Contains(got, "->100.64.0.1:53") {
 		t.Errorf("raw socket pair leaked:\n%s", got)
+	}
+}
+
+func TestFormatHardDNSPartialUsesHumanTunnelContext(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname:  "del",
+		CheckName: "dns",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "dns", Status: "fail", Details: map[string]any{
+			"endpoints":    4,
+			"failed_count": 2,
+			"endpoints_detail": []any{
+				map[string]any{"reachable": false, "type": "plain", "target": "100.64.0.1:53", "ndms_name": "Wireguard3", "err": "network is unreachable"},
+				map[string]any{"reachable": false, "type": "plain", "target": "8.8.4.4:53", "ndms_name": "Wireguard3", "err": "network is unreachable"},
+			},
+			"rkn_probed": 2, "rkn_suspect": 0,
+		}},
+		Neighbors: []NeighborSummary{
+			{CheckName: "tunnel_awg13", TunnelName: "Germany backup", NDMSName: "Wireguard3", Interface: "nwg3", Status: "alive", HandshakeAge: 12},
+			{CheckName: "tunnel_awg14", TunnelName: "US main", NDMSName: "Wireguard4", Interface: "nwg4", Status: "alive", HandshakeAge: 8},
+		},
+	})
+	for _, want := range []string{
+		"plain 100.64.0.1:53 через Germany backup (Wireguard3 / nwg3) — сеть недоступна",
+		"Оба упавших DNS-сервера идут через Germany backup",
+		"Остальные туннели выглядят живыми",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "начни с Wireguard3") {
+		t.Fatalf("advice should use human tunnel name, got:\n%s", got)
 	}
 }
 

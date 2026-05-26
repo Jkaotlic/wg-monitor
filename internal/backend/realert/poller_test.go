@@ -3,24 +3,35 @@ package realert
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 type fakeTG struct {
-	mu      sync.Mutex
-	sent    []string
-	sendErr error
+	mu        sync.Mutex
+	sent      []string
+	keyboards []*tg.InlineKeyboardMarkup
+	sendErr   error
 }
 
 func (f *fakeTG) SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, text)
+	return 99, f.sendErr
+}
+
+func (f *fakeTG) SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sent = append(f.sent, text)
+	f.keyboards = append(f.keyboards, kb)
 	return 99, f.sendErr
 }
 
@@ -44,6 +55,8 @@ func newTestDB(t *testing.T) (*db.DB, int64) {
 	}
 	return d, uid
 }
+
+func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
 func TestTickEmptyNoCalls(t *testing.T) {
 	d, _ := newTestDB(t)
@@ -85,6 +98,46 @@ func TestTickStaleHardSendsRealert(t *testing.T) {
 	st, _ := d.State().Get(uid, "awg_handshake")
 	if st.LastAlertAt == nil || time.Since(*st.LastAlertAt) > time.Minute {
 		t.Errorf("LastAlertAt should be updated to recent, got %v", st.LastAlertAt)
+	}
+}
+
+func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	p.SetNow(func() time.Time { return now })
+	hardSince := now.Add(-3 * time.Hour)
+	lastAlert := now.Add(-2 * time.Hour)
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
+		ConsecutiveFails: 20, HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "dns", "fail", `{"endpoints":4,"failed_count":2}`, now.Add(-30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	p.tick(context.Background())
+
+	if len(f.keyboards) != 1 || f.keyboards[0] == nil {
+		t.Fatalf("expected realert inline keyboard, got %+v", f.keyboards)
+	}
+	want := map[string]bool{
+		"silence:" + itoa(uid) + ":dns:1h":  true,
+		"silence:" + itoa(uid) + ":dns:4h":  true,
+		"silence:" + itoa(uid) + ":dns:24h": true,
+		"ack:" + itoa(uid) + ":dns":         true,
+	}
+	for _, row := range f.keyboards[0].InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for cb := range want {
+		t.Errorf("missing realert button %s in %+v", cb, f.keyboards[0])
 	}
 }
 
@@ -273,6 +326,23 @@ func TestNeighborSummaries_NonTunnelReturnsNil(t *testing.T) {
 	}
 	if got := p.neighborSummaries(uid, "agent_heartbeat"); got != nil {
 		t.Fatalf("non-tunnel check should return nil, got %v", got)
+	}
+}
+
+func TestNeighborSummaries_DNSGetsTunnelContext(t *testing.T) {
+	d, uid := newTestDB(t)
+	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	now := time.Now().UTC()
+	if err := d.Events().Insert(uid, "tunnel_awg13", "ok", `{"tunnel_name":"Germany backup","ndms_name":"Wireguard3","interface":"nwg3","handshake_age_sec":12}`, now); err != nil {
+		t.Fatal(err)
+	}
+
+	got := p.neighborSummaries(uid, "dns")
+	if len(got) != 1 {
+		t.Fatalf("dns should receive tunnel context, got %+v", got)
+	}
+	if got[0].TunnelName != "Germany backup" || got[0].NDMSName != "Wireguard3" || got[0].Interface != "nwg3" {
+		t.Fatalf("bad dns tunnel context: %+v", got[0])
 	}
 }
 
