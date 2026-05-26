@@ -1049,6 +1049,8 @@ func applyAWGMDeploySuccess(ag *AgentState, info *AWGMSystemInfo, version, authM
 	}
 	ag.LastDeploy = now.UTC().Format(time.RFC3339)
 	ag.LastDeployedVersion = version
+	ag.PendingVersion = ""
+	ag.PendingSince = ""
 	ag.AWGMAuth = authMode
 	if publicAWGMViaVPS {
 		return
