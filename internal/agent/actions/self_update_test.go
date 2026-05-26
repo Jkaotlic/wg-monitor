@@ -2,7 +2,9 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -78,3 +80,64 @@ func TestSelfUpdateURLsCanUseBackendMirror(t *testing.T) {
 		t.Fatalf("sumsURL=%q", sumsURL)
 	}
 }
+
+func TestHTTPGetWithFallbackRetriesNetworkFailureOnly(t *testing.T) {
+	primary := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New(`dial tcp: lookup wgmonitor.example.com on 127.0.0.1:53: i/o timeout`)
+	})}
+	fallbackHit := false
+	fallback := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		fallbackHit = true
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("ok")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	body, err := httpGetWithFallback(context.Background(), primary, fallback, "https://wg.example.test/file", "198.51.100.10")
+	if err != nil {
+		t.Fatalf("httpGetWithFallback: %v", err)
+	}
+	if string(body) != "ok" || !fallbackHit {
+		t.Fatalf("fallback not used correctly: body=%q hit=%v", body, fallbackHit)
+	}
+}
+
+func TestHTTPGetWithFallbackDoesNotRetryHTTPFailure(t *testing.T) {
+	primary := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(strings.NewReader("missing")),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	fallback := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("fallback must not run for HTTP errors")
+		return nil, nil
+	})}
+
+	_, err := httpGetWithFallback(context.Background(), primary, fallback, "https://wg.example.test/file", "198.51.100.10")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("expected original HTTP 404, got %v", err)
+	}
+}
+
+func TestHTTPClientForPinnedRepoHostDialsResolvedIPForSameHost(t *testing.T) {
+	var dialAddr string
+	c, label := httpClientForPinnedRepoHost("https://wgmonitor.example.com/v1/releases/download", "198.51.100.10", 5, func(network, addr string) (net.Conn, error) {
+		dialAddr = addr
+		return nil, errors.New("stop after dial capture")
+	})
+	if c == nil || label != "198.51.100.10" {
+		t.Fatalf("client=%v label=%q", c, label)
+	}
+	_, _ = httpGet(context.Background(), c, "https://wgmonitor.example.com/v1/releases/download/v/tag")
+	if dialAddr != "198.51.100.10:443" {
+		t.Fatalf("dialAddr=%q", dialAddr)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

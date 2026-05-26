@@ -314,6 +314,56 @@ func TestWizardDeployUsesBackendReleaseMirror(t *testing.T) {
 	}
 }
 
+func TestWizardDeployAddsRepoResolveIPWhenDomainResolves(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	oldLookup := lookupHostForRepoResolve
+	lookupHostForRepoResolve = func(host string) ([]string, error) {
+		if host != "wg.example.test" {
+			t.Fatalf("lookup host=%q", host)
+		}
+		return []string{"127.0.0.1", "10.0.0.1", "198.51.100.10"}, nil
+	}
+	t.Cleanup(func() { lookupHostForRepoResolve = oldLookup })
+
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := sink.enqueued[0].Args["repo_resolve_ip"]; got != "198.51.100.10" {
+		t.Fatalf("repo_resolve_ip=%v", got)
+	}
+}
+
+func TestWizardRepoResolveIPSkipsPrivateResults(t *testing.T) {
+	oldLookup := lookupHostForRepoResolve
+	lookupHostForRepoResolve = func(string) ([]string, error) {
+		return []string{"127.0.0.1", "192.168.1.1", "::1"}, nil
+	}
+	t.Cleanup(func() { lookupHostForRepoResolve = oldLookup })
+
+	req := httptest.NewRequest(http.MethodPost, "/x", nil)
+	req.Host = "wg.example.test"
+	if got := wizardRepoResolveIP(req); got != "" {
+		t.Fatalf("private-only resolve must be skipped, got %q", got)
+	}
+}
+
 func TestReleaseAssetProxyServesAllowlistedAsset(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -233,6 +234,38 @@ func wizardBackendURL(r *http.Request) string {
 	return proto + "://" + host
 }
 
+var lookupHostForRepoResolve = net.LookupHost
+
+func wizardRepoResolveIP(r *http.Request) string {
+	host := wizardBackendHost(r)
+	if host == "" {
+		return ""
+	}
+	ips, err := lookupHostForRepoResolve(host)
+	if err != nil {
+		return ""
+	}
+	for _, raw := range ips {
+		ip := net.ParseIP(strings.TrimSpace(raw))
+		if ip == nil || ip.To4() == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		return ip.String()
+	}
+	return ""
+}
+
+func wizardBackendHost(r *http.Request) string {
+	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	if host == "" {
+		host = r.Host
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return strings.Trim(h, "[]")
+	}
+	return strings.Trim(host, "[]")
+}
+
 func firstForwardedValue(v string) string {
 	v = strings.TrimSpace(v)
 	if i := strings.IndexByte(v, ','); i >= 0 {
@@ -375,6 +408,9 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 				"repo_base": wizardBackendURL(r) + "/v1/releases/download",
 			},
 			IssuedAt: time.Now().UTC(),
+		}
+		if ip := wizardRepoResolveIP(r); ip != "" {
+			cmd.Args["repo_resolve_ip"] = ip
 		}
 		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
