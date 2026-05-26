@@ -12,6 +12,7 @@ type routeEndpoint struct {
 	ID           string
 	Name         string
 	Iface        string
+	Aliases      []string
 	Type         string
 	Enabled      bool
 	Available    bool
@@ -23,6 +24,7 @@ func managedRouteEndpoint(t awgmgr.Tunnel) routeEndpoint {
 		ID:           t.ID,
 		Name:         firstNonEmptyRoute(t.Name, t.InterfaceName, t.ID),
 		Iface:        t.InterfaceName,
+		Aliases:      routeAliases(t.InterfaceName, t.NDMSName, t.ID),
 		Type:         "managed",
 		Enabled:      t.Enabled,
 		Available:    t.Enabled,
@@ -36,6 +38,7 @@ func ndmsRouteEndpoint(t awgmgr.RoutingTunnel) routeEndpoint {
 		ID:        iface,
 		Name:      firstNonEmptyRoute(t.Name, iface, t.ID),
 		Iface:     iface,
+		Aliases:   routeAliases(iface, t.ID),
 		Type:      firstNonEmptyRoute(t.Type, "ndms"),
 		Enabled:   t.Available || routingStatusEnabled(t.Status),
 		Available: t.Available,
@@ -77,4 +80,52 @@ func resolveRouteEndpoint(ctx context.Context, c *awgmgr.Client, id string) (rou
 		}
 	}
 	return routeEndpoint{}, fmt.Errorf("route target %q not found", id)
+}
+
+func routeAliases(values ...string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
+}
+
+func routeAliasSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out[v] = true
+		}
+	}
+	return out
+}
+
+func routeBindMatches(bind string, aliases map[string]bool) bool {
+	bind = strings.TrimSpace(bind)
+	return bind != "" && aliases[bind]
+}
+
+func routeAnyAliasKnown(ep routeEndpoint, known map[string]bool) bool {
+	for _, alias := range ep.Aliases {
+		if known[alias] {
+			return true
+		}
+	}
+	return false
+}
+
+func routeAnyAliasMapped(ep routeEndpoint, known map[string]string) bool {
+	for _, alias := range ep.Aliases {
+		if _, ok := known[alias]; ok {
+			return true
+		}
+	}
+	return false
 }
