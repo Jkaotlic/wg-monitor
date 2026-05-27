@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/backend/alerts"
 	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
@@ -912,18 +913,22 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		PrintStep(2, 5, "AWG Manager: auth + system info")
 		awgm := NewAWGMClient(ag.AWGMURL, login, pass).WithAPIKey(apiKey)
 		var info *AWGMSystemInfo
+		useVPSBootstrap := shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL)
 		awgmAuthMode := "router-admin"
 		if apiKey != "" {
 			awgmAuthMode = "api-key"
 		}
-		if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
-			PrintInfo("public AWG Manager URL detected - probing system info from VPS")
-			info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
-		} else {
-			if err = awgm.Login(context.Background()); err == nil {
-				info, err = awgm.SystemInfo(context.Background())
+		probeDirect := func() (*AWGMSystemInfo, error) {
+			if err = awgm.Login(context.Background()); err != nil {
+				return nil, err
 			}
+			return awgm.SystemInfo(context.Background())
 		}
+		probeVPS := func() (*AWGMSystemInfo, error) {
+			PrintInfo("public AWG Manager URL detected - probing system info from VPS")
+			return fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
+		}
+		info, useVPSBootstrap, err = probeAWGMSystemInfoWithDirectFallback(useVPSBootstrap, probeVPS, probeDirect)
 		if err != nil && apiKey != "" && isAWGMUnauthorized(err) {
 			PrintWarn("AWG Manager API key получил 401 от web layer; fallback на login/password")
 			apiKey = ""
@@ -932,13 +937,18 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			inputs.Login = login
 			inputs.Password = pass
 			awgm = NewAWGMClient(ag.AWGMURL, login, pass)
-			if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
-				info, err = fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
-			} else {
-				if err = awgm.Login(context.Background()); err == nil {
-					info, err = awgm.SystemInfo(context.Background())
+			useVPSBootstrap = shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL)
+			probeDirect = func() (*AWGMSystemInfo, error) {
+				if err = awgm.Login(context.Background()); err != nil {
+					return nil, err
 				}
+				return awgm.SystemInfo(context.Background())
 			}
+			probeVPS = func() (*AWGMSystemInfo, error) {
+				PrintInfo("public AWG Manager URL detected - probing system info from VPS")
+				return fetchAWGMSystemInfoViaVPS(state, secrets, ag, apiKey, login, pass)
+			}
+			info, useVPSBootstrap, err = probeAWGMSystemInfoWithDirectFallback(useVPSBootstrap, probeVPS, probeDirect)
 			awgmAuthMode = "router-admin"
 		}
 		if err != nil {
@@ -1003,7 +1013,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 
 		PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
 		var res TerminalRunResult
-		if shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) {
+		if useVPSBootstrap {
 			PrintInfo("public AWG Manager URL detected - running terminal bootstrap from VPS")
 			res, err = runAWGMBootstrapViaVPS(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
 		} else {
@@ -1013,7 +1023,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			if strings.TrimSpace(res.Output) != "" {
 				PrintInfo(res.Output)
 			}
-			canDefer := shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL) && isAWGMTransientUnavailable(err)
+			canDefer := useVPSBootstrap && isAWGMTransientUnavailable(err)
 			switch chooseAWGMFailureAction(err, canDefer) {
 			case awgmFailureEdit, awgmFailureRetry:
 				continue
@@ -1036,10 +1046,22 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 				return fmt.Errorf("commit staged token: %w", err)
 			}
 		}
-		applyAWGMDeploySuccess(ag, info, rel.TagName, awgmAuthMode, shouldRunAWGMBootstrapViaVPS(state, ag.AWGMURL), time.Now().UTC())
+		applyAWGMDeploySuccess(ag, info, rel.TagName, awgmAuthMode, useVPSBootstrap, time.Now().UTC())
+		ensureTopicAfterSuccessfulInstall(state, secrets, ag)
 		pushToVPSBestEffort(state, secrets, *ag)
 		PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
 		return nil
+	}
+}
+
+var autoCreateForumTopicFunc = autoCreateForumTopic
+
+func ensureTopicAfterSuccessfulInstall(state *State, secrets *SecretStore, ag *AgentState) {
+	if ag == nil || ag.ThreadID != 0 {
+		return
+	}
+	if tid := autoCreateForumTopicFunc(state, secrets, ag.Nickname); tid > 0 {
+		ag.ThreadID = tid
 	}
 }
 
@@ -2478,6 +2500,9 @@ func autoCreateForumTopic(state *State, secrets *SecretStore, nick string) int {
 	if err != nil {
 		PrintWarn("createForumTopic не удался (" + err.Error() + ") — спрошу thread_id вручную")
 		return 0
+	}
+	if err := alerts.SendWelcome(ctx, cli, state.Telegram.ChatID, id, nick, tg.ReplyKeyboardForTopic("per_router")); err != nil {
+		PrintWarn("welcome в новый топик не ушёл (" + err.Error() + ") — топик всё равно создан")
 	}
 	PrintOK(fmt.Sprintf("создан топик thread_id=%d", id))
 	return int(id)

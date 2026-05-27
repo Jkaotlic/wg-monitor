@@ -62,6 +62,23 @@ func TestRenderDeferredAWGMRunnerScriptScansQueue(t *testing.T) {
 	}
 }
 
+func TestRenderDeferredAWGMRunnerScriptIgnoresArchivedArtifacts(t *testing.T) {
+	got := renderDeferredAWGMRunnerScript()
+	if !strings.Contains(got, "for cfg in /var/lib/wg-monitor/deferred-awgm/*.json; do") {
+		t.Fatalf("runner must only scan active *.json jobs:\n%s", got)
+	}
+	for _, unwanted := range []string{
+		"*.done",
+		"*.bak",
+		"*.token",
+		"*.json.*",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("runner should not retry archived artifact glob %q:\n%s", unwanted, got)
+		}
+	}
+}
+
 func TestAWGMTransientUnavailableMatchesRouterWakeFailures(t *testing.T) {
 	for _, msg := range []string{
 		"awgm vps relay failed rc=1: websocket closed",
@@ -139,6 +156,105 @@ func TestScheduleDeferredAWGMDeploySupportsExistingAgentReenroll(t *testing.T) {
 	}
 }
 
+func TestAWGMRelayPythonDeferredBootstrapCleanupPaths(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not on PATH")
+	}
+	dir := t.TempDir()
+	relayPath := filepath.Join(dir, "awgm-relay.py")
+	if err := os.WriteFile(relayPath, []byte(awgmVPSRelayPython), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	harnessPath := filepath.Join(dir, "harness.py")
+	harness := fmt.Sprintf(`
+import importlib.util
+import json
+import os
+import sys
+import time
+
+relay_path = %q
+work_dir = %q
+spec = importlib.util.spec_from_file_location("relay_under_test", relay_path)
+relay = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(relay)
+
+def write_job(name, data):
+    path = os.path.join(work_dir, name)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    return path
+
+expired = write_job("expired.json", {
+    "nickname": "expired",
+    "target_version": "v0.13.0-rc57",
+    "expires_at_unix": int(time.time()) - 10,
+})
+relay.run_deferred_bootstrap(json.load(open(expired, encoding="utf-8")), expired)
+assert not os.path.exists(expired), "expired job remained active"
+
+login_calls = []
+def fail_login(*args, **kwargs):
+    login_calls.append(True)
+    raise AssertionError("satisfied job reached AWG Manager login")
+relay.login_if_needed = fail_login
+relay.opener = lambda: (object(), object())
+relay.local_wizard_request = lambda cfg, method, path, body=None: {
+    "agents": [{
+        "nickname": "caredns-oldcar",
+        "last_deployed_version": "v0.13.0-rc57",
+        "pending_version": "",
+        "pending_since": "",
+    }]
+}
+satisfied = write_job("satisfied.json", {
+    "nickname": "caredns-oldcar",
+    "target_version": "v0.13.0-rc57",
+    "expires_at_unix": int(time.time()) + 3600,
+    "wizard_token": "secret-token",
+})
+relay.run_deferred_bootstrap(json.load(open(satisfied, encoding="utf-8")), satisfied)
+assert not os.path.exists(satisfied), "satisfied job remained active"
+assert login_calls == [], "satisfied job tried AWG Manager"
+
+relay.login_if_needed = lambda op, cfg: None
+relay.request = lambda op, cfg, method, path: {"data": {"goArch": "mips", "routerIP": "10.0.0.1"}}
+relay.ensure_terminal = lambda op, cfg: None
+class Sock:
+    def close(self): pass
+relay.ws_connect = lambda cfg, jar: Sock()
+relay.ws_send = lambda *args, **kwargs: None
+relay.send_resize = lambda *args, **kwargs: None
+relay.login_terminal = lambda sock, cfg: ""
+relay.run_bootstrap = lambda sock, cfg: None
+relay.local_wizard_request = lambda cfg, method, path, body=None: (
+    {"raw_token": "raw-token", "backend_url": "https://wg.example.test"}
+    if method == "POST" else {}
+)
+success = write_job("success.json", {
+    "nickname": "fresh",
+    "kind": "static",
+    "target_version": "v0.13.0-rc57",
+    "release_base": "https://wg.example.test/v1/releases/download",
+    "expires_at_unix": int(time.time()) + 3600,
+    "wizard_token": "secret-token",
+    "init_script": "#!/bin/sh\nexit 0",
+})
+relay.run_deferred_bootstrap(json.load(open(success, encoding="utf-8")), success)
+assert not os.path.exists(success), "successful job remained active"
+assert os.path.exists(success + ".done"), "successful job did not write done artifact"
+assert not (success + ".done").endswith(".json"), "done artifact must not be active *.json"
+`, relayPath, dir)
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(python, harnessPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("deferred bootstrap cleanup harness failed: %v\n%s", err, out)
+	}
+}
+
 func TestAWGMRelayPythonSupportsDeferredBootstrap(t *testing.T) {
 	for _, want := range []string{
 		`cfg.get("mode") == "deferred_bootstrap"`,
@@ -146,7 +262,7 @@ func TestAWGMRelayPythonSupportsDeferredBootstrap(t *testing.T) {
 		`normalize_arch`,
 		`("aarch64", "arm64")`,
 		`127.0.0.1:8080`,
-		`os.remove(sys.argv[1])`,
+		`os.remove(cfg_path)`,
 	} {
 		if !strings.Contains(awgmVPSRelayPython, want) {
 			t.Fatalf("relay python missing %q", want)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -173,6 +174,49 @@ func fetchAWGMSystemInfoViaVPS(state *State, secrets *SecretStore, ag *AgentStat
 		return nil, fmt.Errorf("awgm vps system info failed rc=%d: %s", rc, msg)
 	}
 	return parseAWGMSystemInfoRelayOutput(out)
+}
+
+type awgmSystemInfoProbe func() (*AWGMSystemInfo, error)
+
+func probeAWGMSystemInfoWithDirectFallback(viaVPS bool, vpsProbe, directProbe awgmSystemInfoProbe) (*AWGMSystemInfo, bool, error) {
+	if !viaVPS {
+		info, err := directProbe()
+		return info, false, err
+	}
+	info, err := vpsProbe()
+	if err == nil {
+		return info, true, nil
+	}
+	if !shouldTryDirectAWGMPreflightFallback(err) {
+		return nil, true, err
+	}
+	PrintWarn("AWG Manager VPS relay preflight failed at the web edge (" + shortAWGMErrorForOperator(err) + "); trying direct from this operator PC before defer/cancel")
+	info, directErr := directProbe()
+	if directErr != nil {
+		return nil, true, directErr
+	}
+	PrintOK("AWG Manager direct preflight from operator PC succeeded; terminal bootstrap will use direct path")
+	return info, false, nil
+}
+
+func shouldTryDirectAWGMPreflightFallback(err error) bool {
+	if err == nil || isAWGMUnauthorized(err) {
+		return false
+	}
+	var httpErr *AWGMHTTPError
+	if errors.As(err, &httpErr) {
+		switch httpErr.StatusCode {
+		case 403, 502, 503, 504:
+			return true
+		}
+	}
+	s := strings.ToLower(err.Error())
+	for _, needle := range []string{"http 403", "http 502", "http 503", "http 504"} {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return isAWGMTransientUnavailable(err)
 }
 
 const awgmRelayJSONMarker = "__WG_MONITOR_JSON__"
@@ -486,6 +530,26 @@ def local_wizard_request(cfg, method, path, body=None):
         return {}
     return json.loads(raw.decode("utf-8"))
 
+def find_local_wizard_agent(cfg, nick):
+    if not nick:
+        return None
+    payload = local_wizard_request(cfg, "GET", "/v1/wizard/agents")
+    agents = payload.get("agents") if isinstance(payload, dict) else None
+    if not isinstance(agents, list):
+        return None
+    for item in agents:
+        if isinstance(item, dict) and item.get("nickname") == nick:
+            return item
+    return None
+
+def deferred_job_already_satisfied(cfg, agent):
+    if not isinstance(agent, dict):
+        return False
+    target = cfg.get("target_version") or ""
+    if not target or agent.get("last_deployed_version") != target:
+        return False
+    return not (agent.get("pending_version") or agent.get("pending_since"))
+
 def build_agent_config(cfg, backend_url, raw_token):
     return "\n".join([
         "backend:",
@@ -617,6 +681,16 @@ def run_deferred_bootstrap(cfg, cfg_path):
         print("deferred AWGM job expired for " + (cfg.get("nickname") or "unknown"))
         os.remove(cfg_path)
         return
+    nick = cfg.get("nickname") or ""
+    try:
+        agent = find_local_wizard_agent(cfg, nick)
+    except Exception as e:
+        print("WARN deferred AWGM satisfied check failed for %s: %s" % (nick or "unknown", e), file=sys.stderr)
+        agent = None
+    if deferred_job_already_satisfied(cfg, agent):
+        print("deferred AWGM job already satisfied for %s at %s, removing" % (nick or "unknown", cfg.get("target_version") or "unknown"))
+        os.remove(cfg_path)
+        return
     op, jar = opener()
     login_if_needed(op, cfg)
     env = request(op, cfg, "GET", "/api/system/info")
@@ -624,7 +698,6 @@ def run_deferred_bootstrap(cfg, cfg_path):
     arch = (data.get("goArch") or "").strip()
     if not arch:
         raise RelayError("AWG Manager system_info did not report goArch")
-    nick = cfg.get("nickname") or ""
     enroll = local_wizard_request(cfg, "POST", "/v1/wizard/enrollments", {
         "nickname": nick,
         "kind": cfg.get("kind") or "static",
@@ -671,7 +744,7 @@ def run_deferred_bootstrap(cfg, cfg_path):
     fd = os.open(done_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("ok %s %s\n" % (nick, cfg.get("target_version") or ""))
-    os.remove(sys.argv[1])
+    os.remove(cfg_path)
 
 def login_terminal(sock, cfg):
     out = ""

@@ -263,6 +263,45 @@ func TestApplyAWGMDeploySuccessKeepsLocalRouterIPForDirectAWGM(t *testing.T) {
 	}
 }
 
+func TestEnsureTopicAfterSuccessfulInstallCreatesMissingTopic(t *testing.T) {
+	oldCreate := autoCreateForumTopicFunc
+	defer func() { autoCreateForumTopicFunc = oldCreate }()
+	calls := 0
+	autoCreateForumTopicFunc = func(_ *State, _ *SecretStore, nick string) int {
+		calls++
+		if nick != "caredns-oldcar" {
+			t.Fatalf("nickname=%q", nick)
+		}
+		return 1931
+	}
+	ag := &AgentState{Nickname: "caredns-oldcar"}
+
+	ensureTopicAfterSuccessfulInstall(&State{}, &SecretStore{}, ag)
+
+	if calls != 1 {
+		t.Fatalf("topic create calls=%d", calls)
+	}
+	if ag.ThreadID != 1931 {
+		t.Fatalf("ThreadID=%d", ag.ThreadID)
+	}
+}
+
+func TestEnsureTopicAfterSuccessfulInstallKeepsExistingTopic(t *testing.T) {
+	oldCreate := autoCreateForumTopicFunc
+	defer func() { autoCreateForumTopicFunc = oldCreate }()
+	autoCreateForumTopicFunc = func(*State, *SecretStore, string) int {
+		t.Fatal("must not create a topic when ThreadID is already set")
+		return 0
+	}
+	ag := &AgentState{Nickname: "testkeen", ThreadID: 406}
+
+	ensureTopicAfterSuccessfulInstall(&State{}, &SecretStore{}, ag)
+
+	if ag.ThreadID != 406 {
+		t.Fatalf("ThreadID=%d", ag.ThreadID)
+	}
+}
+
 func TestDoctorCanSkipDirectSSHForAWGMOnlyAgent(t *testing.T) {
 	ag := &AgentState{Nickname: "del", DeployMode: "awgm", AWGMURL: "https://awg.delrp.example"}
 	if !doctorShouldSkipDirectSSH(ag) {
