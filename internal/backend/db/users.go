@@ -463,6 +463,26 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 	return nil
 }
 
+// MarkPendingDeploy records a wizard-enqueued target version that has not yet
+// been confirmed by the agent heartbeat.
+func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince string) error {
+	res, err := u.d.db.Exec(
+		`UPDATE users SET pending_version = ?, pending_since = ? WHERE id = ?`,
+		targetVersion, pendingSince, id,
+	)
+	if err != nil {
+		return fmt.Errorf("users.MarkPendingDeploy: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrUserNotFound
+	}
+	return nil
+}
+
 // UpdateLastSeenAgentVersion advances users.last_deployed_version to the
 // version reported by the running agent in its latest heartbeat. If the
 // heartbeat matches a pending wizard deploy, it also clears the pending marker

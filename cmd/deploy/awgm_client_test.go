@@ -251,6 +251,52 @@ func TestAWGMBootstrapRelayURLDecision(t *testing.T) {
 	}
 }
 
+func TestAWGMPreflightFallbackAllowsDirectForVPSWebEdgeErrors(t *testing.T) {
+	for _, msg := range []string{
+		"awgm vps system info failed rc=1: awgm GET /api/system/info: HTTP 403: forbidden",
+		"awgm vps system info failed rc=1: awgm POST /api/auth/login: HTTP 502: bad gateway",
+		"awgm vps relay ssh transport: context deadline exceeded",
+	} {
+		if !shouldTryDirectAWGMPreflightFallback(errString(msg)) {
+			t.Fatalf("expected direct fallback for %q", msg)
+		}
+	}
+}
+
+func TestAWGMPreflightFallbackRejectsUnauthorized(t *testing.T) {
+	for _, msg := range []string{
+		"awgm vps system info failed rc=1: awgm GET /api/system/info: HTTP 401: unauthorized",
+		"awgm vps system info failed rc=1: unauthorized",
+	} {
+		if shouldTryDirectAWGMPreflightFallback(errString(msg)) {
+			t.Fatalf("401/unauthorized must not fall back silently: %q", msg)
+		}
+	}
+}
+
+func TestAWGMPreflightDirectFallbackSwitchesBootstrapPath(t *testing.T) {
+	var vpsCalls, directCalls int
+	info, useVPSBootstrap, err := probeAWGMSystemInfoWithDirectFallback(true, func() (*AWGMSystemInfo, error) {
+		vpsCalls++
+		return nil, errString("awgm vps system info failed rc=1: awgm GET /api/system/info: HTTP 403: forbidden")
+	}, func() (*AWGMSystemInfo, error) {
+		directCalls++
+		return &AWGMSystemInfo{GoArch: "arm64", RouterIP: "192.168.0.1"}, nil
+	})
+	if err != nil {
+		t.Fatalf("probeAWGMSystemInfoWithDirectFallback: %v", err)
+	}
+	if info == nil || info.GoArch != "arm64" {
+		t.Fatalf("fallback info not returned: %+v", info)
+	}
+	if vpsCalls != 1 || directCalls != 1 {
+		t.Fatalf("probe counts vps=%d direct=%d, want 1/1", vpsCalls, directCalls)
+	}
+	if useVPSBootstrap {
+		t.Fatal("successful direct fallback must make terminal bootstrap use direct path")
+	}
+}
+
 func TestParseAWGMSystemInfoRelayOutput(t *testing.T) {
 	out := "noise\n__WG_MONITOR_JSON__{\"success\":true,\"data\":{\"goArch\":\"arm64\",\"routerIP\":\"192.168.1.1\",\"version\":\"1.2.3\"}}\n"
 	info, err := parseAWGMSystemInfoRelayOutput(out)

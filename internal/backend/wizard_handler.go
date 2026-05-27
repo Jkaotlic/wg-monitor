@@ -400,6 +400,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
 			return
 		}
+		issuedAt := time.Now().UTC()
 		cmd := wire.Command{
 			ID:     id,
 			Action: "self_update",
@@ -407,13 +408,17 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 				"version":   req.TargetVersion,
 				"repo_base": wizardBackendURL(r) + "/v1/releases/download",
 			},
-			IssuedAt: time.Now().UTC(),
+			IssuedAt: issuedAt,
 		}
 		if ip := wizardRepoResolveIP(r); ip != "" {
 			cmd.Args["repo_resolve_ip"] = ip
 		}
 		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
+			return
+		}
+		if err := d.DB.Users().MarkPendingDeploy(u.ID, req.TargetVersion, issuedAt.Format(time.RFC3339)); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
 		}
 		if d.Logger != nil {

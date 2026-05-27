@@ -1,14 +1,19 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 func TestWizardAuth_MissingHeader_401(t *testing.T) {
@@ -314,6 +319,84 @@ func TestWizardDeployUsesBackendReleaseMirror(t *testing.T) {
 	}
 }
 
+func TestWizardDeployMarksPendingVersionVisibleToWizard(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &fakeCmdSink{}
+	deploy := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	deploy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	list := wizardListAgentsHandler(Deps{DB: d})
+	req = httptest.NewRequest(http.MethodGet, "/v1/wizard/agents", nil)
+	rec = httptest.NewRecorder()
+	list.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got wizardAgentList
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if len(got.Agents) != 1 {
+		t.Fatalf("agents=%+v", got.Agents)
+	}
+	if got.Agents[0].PendingVersion != "v0.13.0-rc18" {
+		t.Fatalf("pending_version=%q", got.Agents[0].PendingVersion)
+	}
+	if got.Agents[0].PendingSince == "" {
+		t.Fatalf("pending_since empty: %+v", got.Agents[0])
+	}
+	if _, err := time.Parse(time.RFC3339, got.Agents[0].PendingSince); err != nil {
+		t.Fatalf("pending_since is not RFC3339: %q err=%v", got.Agents[0].PendingSince, err)
+	}
+}
+
+func TestWizardDeployDoesNotMarkPendingWhenEnqueueFails(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: failingEnqueueSink{err: errors.New("queue closed")}})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("testkeen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("pending set despite enqueue failure: %+v", u)
+	}
+}
+
 func TestWizardDeployAddsRepoResolveIPWhenDomainResolves(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
@@ -348,6 +431,30 @@ func TestWizardDeployAddsRepoResolveIPWhenDomainResolves(t *testing.T) {
 	if got := sink.enqueued[0].Args["repo_resolve_ip"]; got != "198.51.100.10" {
 		t.Fatalf("repo_resolve_ip=%v", got)
 	}
+}
+
+type failingEnqueueSink struct {
+	err error
+}
+
+func (s failingEnqueueSink) Dequeue(context.Context, int64, time.Duration) (*wire.Command, bool) {
+	return nil, false
+}
+
+func (s failingEnqueueSink) RecordResult(int64, wire.CommandResult) error { return nil }
+
+func (s failingEnqueueSink) ConsumeOriginRef(int64, string) (cmd.MessageRef, bool) {
+	return cmd.MessageRef{}, false
+}
+
+func (s failingEnqueueSink) CommandByID(int64, string) (wire.Command, bool) {
+	return wire.Command{}, false
+}
+
+func (s failingEnqueueSink) Enqueue(int64, wire.Command) error { return s.err }
+
+func (s failingEnqueueSink) AwaitResult(context.Context, int64, string, time.Duration) (*wire.CommandResult, bool) {
+	return nil, false
 }
 
 func TestWizardRepoResolveIPSkipsPrivateResults(t *testing.T) {
