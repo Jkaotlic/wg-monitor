@@ -85,6 +85,19 @@ func hideMyCodeListView(user *db.User, codes hideMyCodes) (string, tg.InlineKeyb
 	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
+func hideMyImportQueuedView(userID int64, codeID, docWarn string) (string, tg.InlineKeyboardMarkup) {
+	text := "HideMy.name AmneziaWG 2.0 config выгружен в топик. Импорт туннеля поставлен в очередь роутера." + docWarn +
+		"\n\nДальше:\n1. Нажми «Проверить тоннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+	}, {
+		{Text: "🌐 К серверам", CallbackData: fmt.Sprintf("hmn_open:%d:_panel_:%s", userID, codeID)},
+	}}}
+	return text, kb
+}
+
 func (r *Router) sendHideMyCodePanel(ctx context.Context, chatID int64, threadID *int64, replyTo *int64, user *db.User, codeID string, page int) {
 	text, kb, err := r.hideMyServerListView(ctx, user, codeID, page)
 	if err != nil {
@@ -293,9 +306,8 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выгружен, импорт в очереди")
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "HideMy.name AmneziaWG 2.0 config выгружен в топик. Импорт туннеля поставлен в очередь роутера."+docWarn, "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "К серверам", CallbackData: fmt.Sprintf("hmn_open:%d:_panel_:%s", user.ID, args.HideMyCodeID)},
-	}}})
+	text, kb := hideMyImportQueuedView(user.ID, args.HideMyCodeID, docWarn)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
 
 func (r *Router) hideMyServerByID(ctx context.Context, accessCode, serverID string) (hidemy.Server, error) {
