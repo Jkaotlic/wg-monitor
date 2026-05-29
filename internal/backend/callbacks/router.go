@@ -628,11 +628,12 @@ func (r *Router) isAdminTG(userID int64) bool {
 //	O != nil && *O == F                     → allow (rightful owner)
 //	O != nil && *O != F                     → reject ("это не твой роутер")
 //	O == nil && M != nil && T != nil && *M == *T  → TOFU bind F → SetTelegramUserID, allow
-//	O == nil (otherwise)                    → allow (unbound, backwards-compat)
+//	O == nil && T != nil                    → reject (known router topic mismatch)
+//	O == nil && T == nil                    → allow (unbound legacy, backwards-compat)
 //
-// The unbound-allow branch lets existing deployments keep working until
-// the first owner action in the owner's topic auto-binds them. After that
-// non-owner taps are rejected.
+// The legacy unbound-allow branch only applies before a router topic is known.
+// Once TelegramThreadID is set, callbacks must come from that topic so stale
+// buttons in foreign topics cannot control the wrong router.
 func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
 	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
 		return true
@@ -666,6 +667,13 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		} else {
 			slog.Info("acl: TOFU bound router owner", "router_user_id", user.ID, "tg_user_id", q.From.ID)
 		}
+		return true
+	}
+	if user.TelegramThreadID != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не топик этого роутера")
+		slog.Warn("acl: rejected (foreign topic before owner bind)",
+			"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "owner_thread", *user.TelegramThreadID, "data", q.Data)
+		return false
 	}
 	return true
 }
