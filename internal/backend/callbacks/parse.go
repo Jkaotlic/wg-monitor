@@ -134,7 +134,7 @@ var validActions = map[string]bool{
 	"tunnel_import_replace": true,
 	"tunnel_import_add":     true,
 	// routes panel actions: browse, rebind, and confirm route changes.
-	"routes_open": true, "routes_router": true, "routes_rebind": true,
+	"routes_open": true, "routes_rebind": true,
 	"routes_pick": true, "routes_confirm": true, "routes_refresh": true,
 	"routes_back": true, "routes_close": true,
 	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
