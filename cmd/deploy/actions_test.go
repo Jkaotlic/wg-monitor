@@ -314,6 +314,16 @@ func TestDoctorCanSkipDirectSSHForAWGMOnlyAgent(t *testing.T) {
 	}
 }
 
+func TestDoctorDirectSSHSkipWarningNamesAWGMPath(t *testing.T) {
+	ag := &AgentState{Nickname: "bronya", DeployMode: "awgm", AWGMURL: "https://awg.bronya.example"}
+	got := doctorDirectSSHSkipWarning(ag)
+	for _, want := range []string{"bronya", "AWGM", "локальный SSH endpoint", "sync-vps"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("skip warning missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestDoctorWarnsForDeployedAgentMissingDeployMetadata(t *testing.T) {
 	ag := &AgentState{
 		Nickname:            "bronya",
@@ -322,11 +332,11 @@ func TestDoctorWarnsForDeployedAgentMissingDeployMetadata(t *testing.T) {
 	}
 	got := doctorDeployMetadataWarning(ag)
 	for _, want := range []string{
-		"deploy metadata incomplete",
+		"metadata-gap",
 		"bronya",
 		"sync-vps",
 		"re-enroll",
-		"token",
+		"token отдельно не крути",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("metadata warning missing %q:\n%s", want, got)

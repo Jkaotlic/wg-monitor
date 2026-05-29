@@ -419,7 +419,7 @@ func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTa
 	}
 
 	if doctorShouldSkipDirectSSH(ag) {
-		t.warnf("direct SSH skipped: AWG Manager/KeenDNS deploy has no verified operator-side SSH coordinates")
+		t.warnf(doctorDirectSSHSkipWarning(ag))
 		fmt.Println()
 		return
 	}
@@ -492,12 +492,23 @@ func doctorShouldSkipDirectSSH(ag *AgentState) bool {
 	return strings.EqualFold(strings.TrimSpace(ag.DeployMode), "awgm") || strings.TrimSpace(ag.AWGMURL) != ""
 }
 
+func doctorDirectSSHSkipWarning(ag *AgentState) string {
+	if ag == nil {
+		return "direct SSH пропущен: агент не задан"
+	}
+	return fmt.Sprintf(
+		"direct SSH пропущен для %s (%s): это AWG Manager/KeenDNS deploy, локальный SSH endpoint не проверен. Для свежих координат запусти sync-vps; для ремонта используй re-enroll через AWG Manager.",
+		ag.Nickname,
+		agentStatusEndpointLabel(*ag),
+	)
+}
+
 func doctorDeployMetadataWarning(ag *AgentState) string {
 	if !agentHasDeployMetadataGap(ag) {
 		return ""
 	}
 	return fmt.Sprintf(
-		"deploy metadata incomplete for %s: backend/local state has version %s but no SSH coords or AWG Manager URL. Run sync-vps first; if backend is still blank, use re-enroll via AWG Manager to repair metadata. Do not rotate token only for this warning.",
+		"metadata-gap для %s: версия %s есть, но нет SSH координат и AWG Manager URL. Сначала запусти sync-vps; если backend тоже пустой, сделай re-enroll через AWG Manager. token отдельно не крути — это не чинит deploy metadata.",
 		ag.Nickname,
 		ag.LastDeployedVersion,
 	)

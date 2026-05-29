@@ -219,6 +219,21 @@ func TestAgentChoiceLabelUsesReadableEndpoint(t *testing.T) {
 	}
 }
 
+func TestKnownRouterLineUsesReadableAWGMAndSSHLabels(t *testing.T) {
+	line := knownRouterLine(1, AgentState{
+		Nickname:            "bronya",
+		LastDeployedVersion: "v0.13.0-rc61",
+	})
+	for _, want := range []string{"[1] bronya", "mode=metadata-gap", "awgm=-", "ssh=-"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("known router line missing %q:\n%s", want, line)
+		}
+	}
+	if strings.Contains(line, "-:0") {
+		t.Fatalf("known router line leaked unreadable empty endpoint:\n%s", line)
+	}
+}
+
 func TestKnownRoutersMetadataGapHintExplainsSafeNextStep(t *testing.T) {
 	state := &State{Agents: []AgentState{{
 		Nickname:            "bronya",
