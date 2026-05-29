@@ -63,12 +63,21 @@ func AcquirePIDLock() (release func(), err error) {
 		return func() { _ = os.Remove(path) }, nil
 	}
 	if pidIsLive(other) {
-		return nil, fmt.Errorf("%w (PID %d). Lock file: %s. "+
-			"Если ты уверен что тот процесс мёртв (Task Manager / ps -ef показывает иначе), удали файл вручную.",
-			ErrAnotherWizardRunning, other, path)
+		return nil, formatPIDLockHeldError(other, path)
 	}
 	// Dead PID — steal.
 	return forcePIDLockTakeover(path, mypid)
+}
+
+func formatPIDLockHeldError(pid int, path string) error {
+	return fmt.Errorf("%w (PID %d). Lock file: %s.\n"+
+		"Проверь владельца lock:\n"+
+		"  Windows: Get-Process -Id %d | Select-Object Id,ProcessName,Path\n"+
+		"  Linux/macOS: ps -p %d -o pid,comm,args\n"+
+		"Если это не deploy wizard или PID уже мертв, удали lock только если проверка выше это подтвердила:\n"+
+		"  Windows: Remove-Item -LiteralPath %q\n"+
+		"  Linux/macOS: rm %q",
+		ErrAnotherWizardRunning, pid, path, pid, pid, path, path)
 }
 
 func lockFileAlreadyExists(path string, err error) bool {
