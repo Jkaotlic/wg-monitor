@@ -129,6 +129,40 @@ func TestRoutesPanelNotifier_RebindStatusErrShowsTelegramError(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelNotifier_RouteStatusErrorOffersRecoveryActions(t *testing.T) {
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: &RoutesCache{TTL: time.Minute}, DB: d}
+
+	ref := cmdpkg.MessageRef{Action: "route_status", ChatID: 1, MessageID: 7}
+	res := wire.CommandResult{Status: "err", Output: "awg-manager timeout"}
+	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"routes_refresh", "routes_hrneo_doctor", "router_doctor", "maint_open"} {
+		if !keyboardHasCallback(tgFake.kb, want) {
+			t.Fatalf("route status error keyboard missing %q: %#v", want, tgFake.kb)
+		}
+	}
+}
+
+func TestRoutesPanelNotifier_RouteChangeErrorOffersRecoveryActions(t *testing.T) {
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: &RoutesCache{TTL: time.Minute}, DB: d}
+
+	ref := cmdpkg.MessageRef{Action: "route_add_plan", ChatID: 1, MessageID: 7}
+	res := wire.CommandResult{Status: "err", Output: "invalid route target"}
+	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"routes_open", "routes_refresh", "router_doctor", "maint_open"} {
+		if !keyboardHasCallback(tgFake.kb, want) {
+			t.Fatalf("route change error keyboard missing %q: %#v", want, tgFake.kb)
+		}
+	}
+}
+
 func TestRoutesPanelNotifier_ApplyResultOffersSnapshot(t *testing.T) {
 	tgFake := &fakeEditTG{}
 	d, uid := newTestDB(t)

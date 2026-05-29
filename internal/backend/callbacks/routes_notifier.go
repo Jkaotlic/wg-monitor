@@ -92,9 +92,7 @@ func (n *RoutesPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messa
 			Details: res.Output,
 			Hint:    "Нажми «Обновить». Если повторяется — открой HR-Neo проверку или проверку роутера.",
 		}.Render(alerts.CardOpts{MaxBytes: 3900})
-		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-			{{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)}},
-		}}
+		kb := routeStatusErrorKeyboard(user.ID)
 		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 	}
 	var snap wire.RouteSnapshot
@@ -120,10 +118,7 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 			}},
 			Hint: "Операция идемпотентна: можно вернуться к маршрутам, обновить снапшот и повторить.",
 		}.Render(alerts.CardOpts{MaxBytes: 3900})
-		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-			{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
-			{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
-		}}}
+		kb := routeErrorRecoveryKeyboard(user.ID)
 		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
 	}
 	var rb wire.RouteRebindResult
@@ -314,11 +309,29 @@ func (n *RoutesPanelNotifier) renderRouteError(ctx context.Context, ref cmdpkg.M
 		}},
 		Hint: "Вернись к маршрутам, обнови снапшот и повтори действие.",
 	}.Render(alerts.CardOpts{MaxBytes: 3900})
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
-		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
-	}}}
+	kb := routeErrorRecoveryKeyboard(user.ID)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func routeStatusErrorKeyboard(userID int64) tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "HR-Neo проверка", CallbackData: fmt.Sprintf("routes_hrneo_doctor:%d:_panel_", userID)},
+		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+	}, {
+		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
+	}}}
+}
+
+func routeErrorRecoveryKeyboard(userID int64) tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
+	}}}
 }
 
 func humanRouteErrorTitle(title string) string {
