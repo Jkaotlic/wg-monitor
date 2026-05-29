@@ -231,11 +231,17 @@ func (n *RoutesPanelNotifier) renderApply(ctx context.Context, ref cmdpkg.Messag
 		n.Cache.Invalidate(user.ID)
 	}
 	text := tg.RouteApplyResultText(result)
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
-		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
-	}}}
+	kb := routeApplyResultKeyboard(user.ID)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func routeApplyResultKeyboard(userID int64) tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "📄 Снапшот маршрутов", CallbackData: fmt.Sprintf("routes_snapshot:%d:_panel_", userID)},
+	}}}
 }
 
 func (n *RoutesPanelNotifier) renderHRNeoInventory(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
