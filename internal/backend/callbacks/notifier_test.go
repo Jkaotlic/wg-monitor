@@ -128,3 +128,33 @@ func TestNotifier_PingCheckResultOffersNextActions(t *testing.T) {
 		}
 	}
 }
+
+func TestOpkgResultNotifier_UpgradeSuccessOffersNextActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewOpkgResultNotifier(f, UIConfigSnapshot{}, nil, func() string { return "deadbeef" })
+
+	err := n.NotifyOpkgResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "opkg_upgrade"},
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "opkg upgrade ok"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sentMarkups) != 1 {
+		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("opkg upgrade result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"maint_open:42:_panel_",
+		"router_doctor:42:_menu",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("opkg upgrade result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
