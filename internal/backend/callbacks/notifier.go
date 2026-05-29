@@ -100,6 +100,14 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 func commandResultNextActionKeyboard(action, status string, userID int64) *tg.InlineKeyboardMarkup {
 	if status != "ok" {
 		switch action {
+		case "tunnel_import":
+			return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+				{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+			}, {
+				{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+			}, {
+				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
+			}}}
 		case "router_doctor":
 			return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 				{Text: "🩺 Повторить проверку", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
