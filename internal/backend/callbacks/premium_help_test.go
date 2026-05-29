@@ -1,6 +1,7 @@
 package callbacks
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/anex/wg-monitor/internal/backend/amnezia"
@@ -27,6 +28,33 @@ func TestAmneziaPremiumKeyboardsIncludeHelp(t *testing.T) {
 	_, countriesKB := amneziaCountriesView(user, amneziaStoredKey{ID: "key1", Label: "Key #1"}, &amnezia.AccountInfo{AvailableCountries: []amnezia.Country{{Code: "de", Name: "Germany"}}}, 0)
 	if !containsStr(flattenKbCallbacks(&countriesKB), "panel:0:help:premium") {
 		t.Fatalf("amnezia countries should expose premium help: %+v", countriesKB)
+	}
+}
+
+func TestAmneziaImportQueuedViewOffersNextActions(t *testing.T) {
+	text, kb := amneziaImportQueuedView(7, "key1", "\n\nФайл в чат не отправился: boom")
+	if !strings.Contains(text, "Импорт туннеля поставлен в очередь") {
+		t.Fatalf("queued view should explain import queue, got %q", text)
+	}
+	if !strings.Contains(text, "Проверить тоннели") {
+		t.Fatalf("queued view should suggest tunnel check, got %q", text)
+	}
+	if !strings.Contains(text, "Маршруты") {
+		t.Fatalf("queued view should suggest route transfer, got %q", text)
+	}
+	if !strings.Contains(text, "Файл в чат не отправился: boom") {
+		t.Fatalf("queued view should preserve document warning, got %q", text)
+	}
+
+	callbacks := flattenKbCallbacks(&kb)
+	for _, want := range []string{
+		"tunnels_refresh:7:_panel_",
+		"routes_open:7:_panel_",
+		"amz_countries:7:_panel_:key1:0",
+	} {
+		if !containsStr(callbacks, want) {
+			t.Fatalf("queued view missing callback %q (have %v)", want, callbacks)
+		}
 	}
 }
 

@@ -134,6 +134,19 @@ func amneziaKeyboard(userID int64, keyID string, info *amnezia.AccountInfo) tg.I
 	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
+func amneziaImportQueuedView(userID int64, keyID, docWarn string) (string, tg.InlineKeyboardMarkup) {
+	text := "Amnezia config выгружен в топик. Импорт туннеля поставлен в очередь роутера." + docWarn +
+		"\n\nДальше:\n1. Нажми «Проверить тоннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+	}, {
+		{Text: "🌍 К странам", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", userID, keyID)},
+	}}}
+	return text, kb
+}
+
 func amneziaCountriesView(user *db.User, stored amneziaStoredKey, info *amnezia.AccountInfo, page int) (string, tg.InlineKeyboardMarkup) {
 	rows := [][]tg.InlineKeyboardButton{}
 	if info == nil || len(info.AvailableCountries) == 0 {
@@ -424,9 +437,8 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выгружен, импорт в очереди")
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Amnezia config выгружен в топик. Импорт туннеля поставлен в очередь роутера."+docWarn, "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "К странам", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", user.ID, args.AmneziaKeyID)},
-	}}})
+	text, kb := amneziaImportQueuedView(user.ID, args.AmneziaKeyID, docWarn)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
 
 func (r *Router) downloadAmneziaConfig(ctx context.Context, key, country string) ([]byte, error) {
