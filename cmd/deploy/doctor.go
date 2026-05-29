@@ -412,6 +412,12 @@ func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTa
 		}
 	}
 
+	if msg := doctorDeployMetadataWarning(ag); msg != "" {
+		t.warnf(msg)
+		fmt.Println()
+		return
+	}
+
 	if doctorShouldSkipDirectSSH(ag) {
 		t.warnf("direct SSH skipped: AWG Manager/KeenDNS deploy has no verified operator-side SSH coordinates")
 		fmt.Println()
@@ -484,6 +490,17 @@ func doctorShouldSkipDirectSSH(ag *AgentState) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(ag.DeployMode), "awgm") || strings.TrimSpace(ag.AWGMURL) != ""
+}
+
+func doctorDeployMetadataWarning(ag *AgentState) string {
+	if !agentHasDeployMetadataGap(ag) {
+		return ""
+	}
+	return fmt.Sprintf(
+		"deploy metadata incomplete for %s: backend/local state has version %s but no SSH coords or AWG Manager URL. Run sync-vps first; if backend is still blank, use re-enroll via AWG Manager to repair metadata. Do not rotate token only for this warning.",
+		ag.Nickname,
+		ag.LastDeployedVersion,
+	)
 }
 
 func doctorAgentReachable(ag *AgentState, port int, t *doctorTally, opts doctorOptions) bool {

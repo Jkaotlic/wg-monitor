@@ -117,6 +117,9 @@ func runAWGMBootstrapViaVPS(state *State, secrets *SecretStore, ag *AgentState, 
 	return TerminalRunResult{Output: out}, nil
 }
 
+var runAWGMBootstrapDirectFunc = runAWGMBootstrapDirect
+var runAWGMBootstrapViaVPSFunc = runAWGMBootstrapViaVPS
+
 func fetchAWGMSystemInfoViaVPS(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass string) (*AWGMSystemInfo, error) {
 	if state == nil || strings.TrimSpace(state.Backend.Host) == "" {
 		return nil, fmt.Errorf("backend SSH host is not configured; install backend first")
@@ -280,13 +283,16 @@ func safeRelayName(name string) string {
 
 const awgmVPSRelayPython = `#!/usr/bin/env python3
 import base64
+import hashlib
 import http.cookiejar
 import json
 import os
 import re
+import secrets
 import socket
 import ssl
 import struct
+import subprocess
 import sys
 import time
 import urllib.error
@@ -586,7 +592,7 @@ def normalize_arch(arch):
         return "mipsle"
     raise RelayError("unsupported arch: " + arch + " (supported: aarch64/arm64, mips/mipsel/mipsle)")
 
-def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch):
+def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_start=False):
     nickname = cfg.get("nickname") or ""
     version = cfg.get("target_version") or ""
     release_base = (cfg.get("release_base") or "").rstrip("/")
@@ -596,6 +602,10 @@ def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch):
     init_script = (cfg.get("init_script") or "").rstrip()
     download_url = release_base + "/" + version + "/" + asset
     checksum_url = release_base + "/" + version + "/checksums.txt"
+    if defer_start:
+        start_block = 'echo "wg-monitor bootstrap staged; service start deferred until backend token commit"'
+    else:
+        start_block = '"$INIT" restart || "$INIT" start\necho "wg-monitor bootstrap complete for $NICKNAME"'
     return """#!/bin/sh
 set -eu
 
@@ -671,9 +681,43 @@ chmod 755 "$INIT"
 chmod 755 "$TMP_BIN"
 mv "$TMP_BIN" "$BIN"
 
+%s
+""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(checksum_url), sh_quote(asset), agent_config, init_script, start_block)
+
+def build_deferred_start_script(nickname):
+    return """#!/bin/sh
+set -eu
+NICKNAME=%s
+INIT=/opt/etc/init.d/S99wg-monitor
 "$INIT" restart || "$INIT" start
-echo "wg-monitor bootstrap complete for $NICKNAME"
-""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(checksum_url), sh_quote(asset), agent_config, init_script)
+echo "wg-monitor service started for $NICKNAME"
+""" % sh_quote(nickname)
+
+def deferred_agent_needs_two_phase(agent):
+    if not isinstance(agent, dict):
+        return False
+    return bool((agent.get("nickname") or "").strip())
+
+def new_deferred_agent_raw_token():
+    return secrets.token_hex(32)
+
+def hash_deferred_agent_raw_token(raw_token):
+    return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+
+def sql_quote(s):
+    return "'" + str(s).replace("'", "''") + "'"
+
+def commit_existing_agent_token_hash(cfg, nick, raw_token):
+    db_path = cfg.get("state_db") or "/var/lib/wg-monitor/state.db"
+    sql = (
+        "UPDATE users SET token_hash=%s WHERE nickname=%s; SELECT changes();"
+        % (sql_quote(hash_deferred_agent_raw_token(raw_token)), sql_quote(nick))
+    )
+    res = subprocess.run(["sqlite3", db_path, sql], text=True, capture_output=True)
+    if res.returncode != 0:
+        raise RelayError("sqlite3 update token_hash failed rc=%d: %s" % (res.returncode, (res.stderr or res.stdout).strip()))
+    if res.stdout.strip() != "1":
+        raise RelayError("agent %s is not in VPS users DB; refusing unsafe token rotation" % nick)
 
 def run_deferred_bootstrap(cfg, cfg_path):
     expires = int(cfg.get("expires_at_unix") or 0)
@@ -698,16 +742,21 @@ def run_deferred_bootstrap(cfg, cfg_path):
     arch = (data.get("goArch") or "").strip()
     if not arch:
         raise RelayError("AWG Manager system_info did not report goArch")
-    enroll = local_wizard_request(cfg, "POST", "/v1/wizard/enrollments", {
-        "nickname": nick,
-        "kind": cfg.get("kind") or "static",
-        "thread_id": int(cfg.get("thread_id") or 0),
-    })
-    raw_token = enroll.get("raw_token") or ""
-    backend_url = enroll.get("backend_url") or cfg.get("backend_url") or ""
+    two_phase = deferred_agent_needs_two_phase(agent)
+    if two_phase:
+        raw_token = new_deferred_agent_raw_token()
+        backend_url = cfg.get("backend_url") or ""
+    else:
+        enroll = local_wizard_request(cfg, "POST", "/v1/wizard/enrollments", {
+            "nickname": nick,
+            "kind": cfg.get("kind") or "static",
+            "thread_id": int(cfg.get("thread_id") or 0),
+        })
+        raw_token = enroll.get("raw_token") or ""
+        backend_url = enroll.get("backend_url") or cfg.get("backend_url") or ""
     if not raw_token or not backend_url:
         raise RelayError("local wizard enrollment returned incomplete payload")
-    script = build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch)
+    script = build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_start=two_phase)
     ensure_terminal(op, cfg)
     sock = None
     try:
@@ -716,6 +765,9 @@ def run_deferred_bootstrap(cfg, cfg_path):
         send_resize(sock)
         login_terminal(sock, cfg)
         run_bootstrap(sock, {**cfg, "bootstrap_script": script})
+        if two_phase:
+            commit_existing_agent_token_hash(cfg, nick, raw_token)
+            run_bootstrap(sock, {**cfg, "bootstrap_script": build_deferred_start_script(nick)})
     finally:
         if sock is not None:
             try:
@@ -735,6 +787,10 @@ def run_deferred_bootstrap(cfg, cfg_path):
         "ring": "stable",
         "pending_version": "",
         "pending_since": "",
+        "last_deploy": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "deploy_mode": "awgm",
+        "awgm_url": cfg.get("base_url") or "",
+        "awgm_auth": "api-key" if cfg.get("api_key") else "router-admin",
     })
     token_path = cfg_path + ".token"
     fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

@@ -73,5 +73,4 @@ chmod 755 "$INIT"
 chmod 755 "$TMP_BIN"
 mv "$TMP_BIN" "$BIN"
 
-"$INIT" restart || "$INIT" start
-echo "wg-monitor bootstrap complete for $NICKNAME"
+{{.StartBlock}}
