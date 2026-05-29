@@ -72,3 +72,59 @@ func TestNotifier_TunnelImportResultOffersNextActions(t *testing.T) {
 		}
 	}
 }
+
+func TestNotifier_RestartTunnelResultOffersNextActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "restart_tunnel"},
+		"restart_tunnel",
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "restart queued"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("restart result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"tunnels_refresh:42:_panel_",
+		"pingcheck_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("restart result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
+func TestNotifier_PingCheckResultOffersNextActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "pingcheck_now"},
+		"pingcheck_now",
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "pingcheck ok"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("pingcheck result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"pingcheck_open:42:_panel_",
+		"diag_now:42:_menu",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("pingcheck result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
