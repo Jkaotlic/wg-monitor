@@ -264,6 +264,82 @@ func TestApplyAWGMDeploySuccessKeepsLocalRouterIPForDirectAWGM(t *testing.T) {
 	}
 }
 
+func TestAWGMInstallCompletionSummaryConfirmsFreshHeartbeatAndAuth(t *testing.T) {
+	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	lastSeen := now.Add(-30 * time.Second)
+	report := awgmInstallCompletionSummary(awgmInstallCompletionEvidence{
+		Nickname:       "bronya",
+		Version:        "v0.13.0-rc59",
+		MinHeartbeatAt: now.Add(-1 * time.Minute),
+		Remote: &RemoteAgent{
+			Nickname:            "bronya",
+			LastDeployedVersion: "v0.13.0-rc59",
+			LastSeenAt:          &lastSeen,
+		},
+		Auth: awgmAuthProbeOK,
+		Now:  now,
+	})
+
+	if !report.Confirmed {
+		t.Fatalf("fresh heartbeat + valid auth should be confirmed: %+v", report)
+	}
+	for _, want := range []string{"backend-confirmed", "bronya", "v0.13.0-rc59", "heartbeat fresh", "auth-probe"} {
+		if !strings.Contains(report.Message, want) {
+			t.Fatalf("confirmed summary missing %q:\n%s", want, report.Message)
+		}
+	}
+}
+
+func TestAWGMInstallCompletionSummaryRejectsPreInstallHeartbeat(t *testing.T) {
+	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	installStarted := now.Add(-20 * time.Second)
+	lastSeenBeforeInstall := installStarted.Add(-10 * time.Second)
+	report := awgmInstallCompletionSummary(awgmInstallCompletionEvidence{
+		Nickname:       "bronya",
+		Version:        "v0.13.0-rc59",
+		MinHeartbeatAt: installStarted,
+		Remote: &RemoteAgent{
+			Nickname:            "bronya",
+			LastDeployedVersion: "v0.13.0-rc59",
+			LastSeenAt:          &lastSeenBeforeInstall,
+		},
+		Auth: awgmAuthProbeOK,
+		Now:  now,
+	})
+
+	if report.Confirmed {
+		t.Fatalf("fresh-but-pre-install heartbeat must not confirm a new bootstrap: %+v", report)
+	}
+	for _, want := range []string{"pending", "heartbeat before install"} {
+		if !strings.Contains(report.Message, want) {
+			t.Fatalf("pre-install pending summary missing %q:\n%s", want, report.Message)
+		}
+	}
+}
+
+func TestAWGMInstallCompletionSummaryStaysPendingWithoutHeartbeatOrAuth(t *testing.T) {
+	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
+	report := awgmInstallCompletionSummary(awgmInstallCompletionEvidence{
+		Nickname: "bronya",
+		Version:  "v0.13.0-rc59",
+		Remote: &RemoteAgent{
+			Nickname:            "bronya",
+			LastDeployedVersion: "v0.13.0-rc59",
+		},
+		Auth: awgmAuthProbeFail,
+		Now:  now,
+	})
+
+	if report.Confirmed {
+		t.Fatalf("missing heartbeat + failed auth must stay pending: %+v", report)
+	}
+	for _, want := range []string{"pending", "heartbeat never", "auth-probe failed", "doctor", "token_hash"} {
+		if !strings.Contains(report.Message, want) {
+			t.Fatalf("pending summary missing %q:\n%s", want, report.Message)
+		}
+	}
+}
+
 func TestEnsureTopicAfterSuccessfulInstallCreatesMissingTopic(t *testing.T) {
 	oldCreate := autoCreateForumTopicFunc
 	defer func() { autoCreateForumTopicFunc = oldCreate }()
