@@ -254,6 +254,40 @@ func TestNotifier_ConnectivityResultOffersNextActions(t *testing.T) {
 	}
 }
 
+func TestNotifier_ConnectivityErrorOffersRecoveryActions(t *testing.T) {
+	for _, action := range []string{"check_via_tunnel", "check_direct"} {
+		t.Run(action, func(t *testing.T) {
+			f := &fakeRouterTG{}
+			n := NewNotifier(f)
+
+			err := n.NotifyCommandResult(context.Background(),
+				cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: action},
+				action,
+				wire.CommandResult{ID: "cmd1", Status: "err", Output: "connection refused"},
+				42,
+				3500,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+			if !ok || kb == nil {
+				t.Fatalf("%s error should carry inline recovery keyboard, got %T", action, f.sentMarkups[0])
+			}
+			for _, want := range []string{
+				"pingcheck_open:42:_panel_",
+				"router_doctor:42:_menu",
+				"routes_open:42:_panel_",
+				"maint_open:42:_panel_",
+			} {
+				if !containsStr(flattenKbCallbacks(kb), want) {
+					t.Fatalf("%s error keyboard missing %q: %+v", action, want, kb.InlineKeyboard)
+				}
+			}
+		})
+	}
+}
+
 func TestNotifier_ForceRecheckResultOffersNextActions(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewNotifier(f)

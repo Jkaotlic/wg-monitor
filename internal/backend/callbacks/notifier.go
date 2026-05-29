@@ -110,6 +110,16 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 			}, {
 				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 			}}}
+		case "check_via_tunnel", "check_direct":
+			return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+				{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+			}, {
+				{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+			}, {
+				{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+			}, {
+				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
+			}}}
 		}
 		return nil
 	}
