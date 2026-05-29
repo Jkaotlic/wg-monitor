@@ -168,6 +168,18 @@ func TestMaintPanelKeyboard_CallbackData(t *testing.T) {
 	}
 }
 
+func TestMaintPanelKeyboard_OffersPostActionChecks(t *testing.T) {
+	kb := MaintPanelKeyboard(42, MaintPanelArgs{Nickname: "x"})
+	for _, want := range []string{
+		"router_doctor:42:_menu",
+		"tunnels_refresh:42:_panel_",
+	} {
+		if !findCallbackData(kb, want) {
+			t.Errorf("maintenance panel should offer post-action check %q", want)
+		}
+	}
+}
+
 // --- RestartConfirmText / RestartConfirmKeyboard ---
 
 func TestRestartConfirmText_Hrneo(t *testing.T) {
