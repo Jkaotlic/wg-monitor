@@ -191,6 +191,36 @@ func TestNotifier_RouterDoctorResultOffersNextActions(t *testing.T) {
 	}
 }
 
+func TestNotifier_RouterDoctorErrorOffersRecoveryActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "router_doctor"},
+		"router_doctor",
+		wire.CommandResult{ID: "cmd1", Status: "err", Output: "awg-manager refused"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("router doctor error should carry inline recovery keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"router_doctor:42:_menu",
+		"tunnels_refresh:42:_panel_",
+		"routes_open:42:_panel_",
+		"maint_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("router doctor error keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
 func TestNotifier_ConnectivityResultOffersNextActions(t *testing.T) {
 	for _, action := range []string{"check_via_tunnel", "check_direct"} {
 		t.Run(action, func(t *testing.T) {
