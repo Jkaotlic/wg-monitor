@@ -70,3 +70,30 @@ func TestHideMyPremiumCodeListIncludesHelp(t *testing.T) {
 		t.Fatalf("hidemy list should expose premium help: %+v", listKB)
 	}
 }
+
+func TestHideMyImportQueuedViewOffersNextActions(t *testing.T) {
+	text, kb := hideMyImportQueuedView(7, "code1", "\n\nФайл в чат не отправился: boom")
+	if !strings.Contains(text, "Импорт туннеля поставлен в очередь") {
+		t.Fatalf("queued view should explain import queue, got %q", text)
+	}
+	if !strings.Contains(text, "Проверить тоннели") {
+		t.Fatalf("queued view should suggest tunnel check, got %q", text)
+	}
+	if !strings.Contains(text, "Маршруты") {
+		t.Fatalf("queued view should suggest route transfer, got %q", text)
+	}
+	if !strings.Contains(text, "Файл в чат не отправился: boom") {
+		t.Fatalf("queued view should preserve document warning, got %q", text)
+	}
+
+	callbacks := flattenKbCallbacks(&kb)
+	for _, want := range []string{
+		"tunnels_refresh:7:_panel_",
+		"routes_open:7:_panel_",
+		"hmn_open:7:_panel_:code1",
+	} {
+		if !containsStr(callbacks, want) {
+			t.Fatalf("queued view missing callback %q (have %v)", want, callbacks)
+		}
+	}
+}
