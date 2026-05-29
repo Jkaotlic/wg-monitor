@@ -320,6 +320,22 @@ func (r *Router) handleSelfHostedAmneziaIssue(ctx context.Context, q *tg.Callbac
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
+func selfHostedAmneziaImportQueuedView(userID int64, label, issuedName, address, docWarn string) (string, tg.InlineKeyboardMarkup) {
+	text := fmt.Sprintf("Self-hosted Amnezia config выпущен через %s для %s (%s). Импорт туннеля поставлен в очередь роутера.", label, issuedName, address)
+	if strings.TrimSpace(docWarn) != "" {
+		text += docWarn
+	}
+	text += "\n\nДальше:\n1. Нажми «Проверить тоннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+	}, {
+		{Text: "🔐 К Amnezia", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", userID)},
+	}}}
+	return text, kb
+}
+
 func (r *Router) handleSelfHostedAmneziaConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	if r.cmdSink == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command queue не подключена")
@@ -365,14 +381,9 @@ func (r *Router) handleSelfHostedAmneziaConfirm(ctx context.Context, q *tg.Callb
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
-	msg := fmt.Sprintf("Self-hosted Amnezia config выпущен через %s для %s (%s). Импорт туннеля поставлен в очередь роутера.", inst.Label, issued.Name, issued.Address)
-	if strings.TrimSpace(docWarn) != "" {
-		msg += docWarn
-	}
+	msg, kb := selfHostedAmneziaImportQueuedView(user.ID, inst.Label, issued.Name, issued.Address, docWarn)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выпущен, импорт в очереди")
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, msg, "", &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "К Amnezia", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", user.ID)},
-	}}})
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, msg, "", &kb)
 }
 
 func (r *Router) loadSelfHostedAmneziaStore() (selfhostedamnezia.Store, error) {
