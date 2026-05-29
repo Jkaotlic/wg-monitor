@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -481,6 +482,56 @@ func TestPlanMigrationTokenFailsWhenTokenIsLostAndReEnrollDisabled(t *testing.T)
 	})
 	if err == nil || !strings.Contains(err.Error(), "WG_AGENT_TOKEN_TESTKEEN") {
 		t.Fatalf("expected missing-token error, got %v", err)
+	}
+}
+
+func TestRunPathDiscoveryStepUsesPreferredIfaceFastPath(t *testing.T) {
+	f := &fakeProber{
+		ifaces: []net.Interface{
+			mockIface(2, "SSTP-A", true, "10.0.0.5"),
+			mockIface(3, "SSTP-B", true, "10.1.0.5"),
+		},
+		dials: map[string]fakeDialResult{
+			"default": {err: errors.New("i/o timeout")},
+			"ifIdx=2": {err: errors.New("i/o timeout")},
+			"ifIdx=3": {localIP: "10.1.0.5", latency: 5 * time.Millisecond},
+		},
+	}
+	rep, cleanup, iface, err := runPathDiscoveryStep("192.168.31.1", 222, "SSTP-B", f)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if iface != "SSTP-B" || rep.Chosen == nil || rep.Chosen.Iface != "SSTP-B" {
+		t.Fatalf("preferred fast path should choose SSTP-B, iface=%q chosen=%+v", iface, rep.Chosen)
+	}
+	if len(f.addCalls) != 1 || f.addCalls[0] != 3 {
+		t.Fatalf("preferred fast path should only probe ifIdx=3 before success, addCalls=%v", f.addCalls)
+	}
+}
+
+func TestRunPathDiscoveryStepFallsBackWhenPreferredIfaceFails(t *testing.T) {
+	f := &fakeProber{
+		ifaces: []net.Interface{
+			mockIface(2, "SSTP-A", true, "10.0.0.5"),
+			mockIface(3, "SSTP-B", true, "10.1.0.5"),
+		},
+		dials: map[string]fakeDialResult{
+			"default": {err: errors.New("i/o timeout")},
+			"ifIdx=2": {localIP: "10.0.0.5", latency: 5 * time.Millisecond},
+			"ifIdx=3": {err: errors.New("i/o timeout")},
+		},
+	}
+	rep, cleanup, iface, err := runPathDiscoveryStep("192.168.31.1", 222, "SSTP-B", f)
+	defer cleanup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if iface != "SSTP-A" || rep.Chosen == nil || rep.Chosen.Iface != "SSTP-A" {
+		t.Fatalf("full discovery fallback should choose SSTP-A, iface=%q chosen=%+v", iface, rep.Chosen)
+	}
+	if len(f.addCalls) < 3 || f.addCalls[0] != 3 || f.addCalls[1] != 2 || f.addCalls[2] != 3 {
+		t.Fatalf("fallback should probe preferred first, then full P2P list; addCalls=%v", f.addCalls)
 	}
 }
 

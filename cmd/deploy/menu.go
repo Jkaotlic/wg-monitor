@@ -136,11 +136,7 @@ func menuStatusRows(state *State) []string {
 	}
 	for _, a := range state.Agents {
 		rows = append(rows,
-			fmt.Sprintf("Router %s:%d  %s",
-				emptyDash(a.Host),
-				a.Port,
-				a.Nickname,
-			),
+			fmt.Sprintf("Router %s  %s", agentStatusEndpointLabel(a), a.Nickname),
 			fmt.Sprintf("       installed %s at %s",
 				emptyDash(a.LastDeployedVersion),
 				formatDeployTime(a.LastDeploy),
@@ -411,13 +407,12 @@ func printKnownRouters(state *State) {
 	fmt.Println(Colorize("Роутеры в локальном wizard.toml:", ColorBold))
 	for i, a := range state.Agents {
 		mode := agentDeployModeLabel(a)
-		fmt.Printf("  [%d] %s  mode=%s  awgm=%s  ssh=%s:%d  version=%s\n",
+		fmt.Printf("  [%d] %s  mode=%s  awgm=%s  ssh=%s  version=%s\n",
 			i+1,
 			a.Nickname,
 			mode,
 			a.AWGMURL,
-			emptyDash(a.Host),
-			a.Port,
+			agentSSHEndpointLabel(a),
 			emptyDash(a.LastDeployedVersion),
 		)
 	}
@@ -435,6 +430,31 @@ func agentDeployModeLabel(a AgentState) string {
 		return "legacy-ssh"
 	}
 	return mode
+}
+
+func agentStatusEndpointLabel(a AgentState) string {
+	if strings.TrimSpace(a.Host) != "" {
+		return agentSSHEndpointLabel(a)
+	}
+	if strings.EqualFold(strings.TrimSpace(a.DeployMode), "awgm") || strings.TrimSpace(a.AWGMURL) != "" {
+		return "AWGM"
+	}
+	if agentHasDeployMetadataGap(&a) {
+		return "metadata-gap"
+	}
+	return "-"
+}
+
+func agentSSHEndpointLabel(a AgentState) string {
+	host := strings.TrimSpace(a.Host)
+	if host == "" {
+		return "-"
+	}
+	return fmt.Sprintf("%s:%d", host, portOrDefault(a.Port, 222))
+}
+
+func agentChoiceLabel(a AgentState) string {
+	return fmt.Sprintf("%s (%s)", a.Nickname, agentStatusEndpointLabel(a))
 }
 
 func agentHasDeployMetadataGap(ag *AgentState) bool {
@@ -508,7 +528,7 @@ func askUninstallTarget(state *State) UninstallTarget {
 	}
 	fmt.Println("Выбери роутер для удаления агента:")
 	for i, a := range state.Agents {
-		fmt.Printf("  [%d] %s (%s:%d)\n", i+1, a.Nickname, a.Host, a.Port)
+		fmt.Printf("  [%d] %s\n", i+1, agentChoiceLabel(a))
 	}
 	fmt.Printf("  [%d] другой (ввести host/port/user руками)\n", len(state.Agents)+1)
 	idx := parseIntOr(Ask("номер", "1"), 1)

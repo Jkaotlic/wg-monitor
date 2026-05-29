@@ -123,6 +123,33 @@ func TestStatusRowsKeepDeployVersionAndTime(t *testing.T) {
 	}
 }
 
+func TestStatusRowsUseReadableEndpointForAWGMOnlyRouters(t *testing.T) {
+	state := &State{Agents: []AgentState{{
+		Nickname:            "bronya",
+		DeployMode:          "awgm",
+		AWGMURL:             "https://awg.bronya.example.test",
+		LastDeployedVersion: "v0.13.0-rc60",
+	}}}
+	rows := strings.Join(menuStatusRows(state), "\n")
+	if !strings.Contains(rows, "Router AWGM  bronya") {
+		t.Fatalf("AWGM-only status row should not render -:0:\n%s", rows)
+	}
+	if strings.Contains(rows, "-:0") {
+		t.Fatalf("status rows leaked empty SSH endpoint:\n%s", rows)
+	}
+}
+
+func TestStatusRowsUseReadableEndpointForMetadataGapRouters(t *testing.T) {
+	state := &State{Agents: []AgentState{{
+		Nickname:            "bronya",
+		LastDeployedVersion: "v0.13.0-rc60",
+	}}}
+	rows := strings.Join(menuStatusRows(state), "\n")
+	if !strings.Contains(rows, "Router metadata-gap  bronya") {
+		t.Fatalf("metadata-gap status row should name the state instead of -:0:\n%s", rows)
+	}
+}
+
 func TestAgentDeployModeLabelShowsMetadataGapInsteadOfLegacy(t *testing.T) {
 	ag := AgentState{
 		Nickname:            "bronya",
@@ -139,6 +166,56 @@ func TestAgentDeployModeLabelShowsMetadataGapInsteadOfLegacy(t *testing.T) {
 	ag.DeployMode = "awgm"
 	if got := agentDeployModeLabel(ag); got != "awgm" {
 		t.Fatalf("explicit mode should win, got %q", got)
+	}
+}
+
+func TestAgentSSHEndpointLabelHidesEmptyPort(t *testing.T) {
+	if got := agentSSHEndpointLabel(AgentState{}); got != "-" {
+		t.Fatalf("empty SSH endpoint=%q, want -", got)
+	}
+	if got := agentSSHEndpointLabel(AgentState{Host: "192.168.31.1", Port: 222}); got != "192.168.31.1:222" {
+		t.Fatalf("SSH endpoint=%q", got)
+	}
+}
+
+func TestAgentChoiceLabelUsesReadableEndpoint(t *testing.T) {
+	cases := []struct {
+		name string
+		ag   AgentState
+		want string
+	}{
+		{
+			name: "metadata gap",
+			ag: AgentState{
+				Nickname:            "bronya",
+				LastDeployedVersion: "v0.13.0-rc60",
+			},
+			want: "bronya (metadata-gap)",
+		},
+		{
+			name: "awgm only",
+			ag: AgentState{
+				Nickname:   "alyaba",
+				DeployMode: "awgm",
+				AWGMURL:    "https://awg.alyaba.example.test",
+			},
+			want: "alyaba (AWGM)",
+		},
+		{
+			name: "ssh",
+			ag:   AgentState{Nickname: "testkeen", Host: "192.168.31.1", Port: 222},
+			want: "testkeen (192.168.31.1:222)",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentChoiceLabel(tt.ag); got != tt.want {
+				t.Fatalf("agentChoiceLabel=%q, want %q", got, tt.want)
+			}
+			if strings.Contains(agentChoiceLabel(tt.ag), ":0") {
+				t.Fatalf("choice label leaked :0: %q", agentChoiceLabel(tt.ag))
+			}
+		})
 	}
 }
 

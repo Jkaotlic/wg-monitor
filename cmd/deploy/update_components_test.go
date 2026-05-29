@@ -103,6 +103,28 @@ func TestShouldProbeReachabilityBeforeUpdate_SkipsAWGMBootstrapCandidate(t *test
 	}
 }
 
+func TestShouldProbeReachabilityBeforeUpdate_SkipsNoHostMetadataGap(t *testing.T) {
+	state := &State{
+		Backend: BackendState{Domain: "wg.example.test"},
+		Agents: []AgentState{{
+			Nickname:            "bronya",
+			LastDeployedVersion: "v0.13.0-rc59",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "bronya",
+		Host:             "",
+		Port:             222,
+		InstalledVersion: "v0.13.0-rc59",
+		LatestVersion:    "v0.13.0-rc60",
+	}
+
+	if shouldProbeReachabilityBeforeUpdate(state, &SecretStore{disk: map[string]string{}}, target) {
+		t.Fatal("no-host metadata-gap must reach runOneUpdate's actionable guard, not local :222 TCP preflight")
+	}
+}
+
 func TestShouldProbeReachabilityBeforeUpdate_SkipsBackend(t *testing.T) {
 	target := updateTarget{IsAgent: false, Host: "203.0.113.10", Port: 22}
 	if shouldProbeReachabilityBeforeUpdate(&State{}, &SecretStore{}, target) {
@@ -128,6 +150,149 @@ func TestBuildUpdateTargetsCarriesMobileRolloutMetadata(t *testing.T) {
 	got := targets[0]
 	if got.Kind != "mobile" || got.Ring != "canary" || got.PendingVersion != "v0.14.0-rc1" {
 		t.Fatalf("metadata not carried into update target: %+v", got)
+	}
+}
+
+func TestBuildUpdateTargetsUsesReadableEndpointMetadata(t *testing.T) {
+	state := &State{Agents: []AgentState{
+		{
+			Nickname:            "bronya",
+			LastDeployedVersion: "v0.13.0-rc59",
+		},
+		{
+			Nickname:   "alyaba",
+			DeployMode: "awgm",
+			AWGMURL:    "https://awg.alyaba.example.test",
+		},
+		{
+			Nickname: "testkeen",
+			Host:     "192.168.31.1",
+			Port:     222,
+		},
+	}}
+
+	targets := buildUpdateTargets(state, "v0.13.0-rc60")
+	if len(targets) != 3 {
+		t.Fatalf("targets=%d, want 3", len(targets))
+	}
+	assertTargetDisplay := func(idx int, endpoint, network string) {
+		t.Helper()
+		if got := updateTargetEndpointLabel(targets[idx]); got != endpoint {
+			t.Fatalf("target %d endpoint=%q, want %q", idx, got, endpoint)
+		}
+		if strings.Contains(updateTargetEndpointLabel(targets[idx]), ":0") {
+			t.Fatalf("target %d leaked :0 endpoint: %+v", idx, targets[idx])
+		}
+		if got := updateTargetNetworkLabel(targets[idx]); !strings.Contains(got, network) {
+			t.Fatalf("target %d network=%q, want contains %q", idx, got, network)
+		}
+	}
+	assertTargetDisplay(0, "metadata-gap", "metadata-gap")
+	assertTargetDisplay(1, "AWGM", "AWG Manager")
+	assertTargetDisplay(2, "192.168.31.1:222", "LAN")
+}
+
+func TestUpdateTargetExtraLabelShowsEndpoint(t *testing.T) {
+	cases := []struct {
+		name string
+		t    updateTarget
+		want []string
+	}{
+		{
+			name: "metadata gap",
+			t: updateTarget{
+				IsAgent:         true,
+				DisplayEndpoint: "metadata-gap",
+				Kind:            "static",
+				Ring:            "stable",
+			},
+			want: []string{"endpoint=metadata-gap", "kind=static", "ring=stable"},
+		},
+		{
+			name: "awgm",
+			t: updateTarget{
+				IsAgent:         true,
+				DisplayEndpoint: "AWGM",
+				Kind:            "mobile",
+				Ring:            "canary",
+				PendingVersion:  "v0.13.0-rc61",
+			},
+			want: []string{"endpoint=AWGM", "kind=mobile", "ring=canary", "pending=v0.13.0-rc61"},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := updateTargetExtraLabel(tt.t)
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("extra label missing %q: %q", want, got)
+				}
+			}
+			if strings.Contains(got, ":0") {
+				t.Fatalf("extra label leaked :0: %q", got)
+			}
+		})
+	}
+}
+
+func TestUpdateTargetReachabilityFailureMessageUsesEndpointLabel(t *testing.T) {
+	target := updateTarget{
+		Host:            "192.168.31.1",
+		Port:            0,
+		DisplayEndpoint: "bronya-vpn:222",
+	}
+	got := updateTargetReachabilityFailureMessage(target)
+	if !strings.Contains(got, "bronya-vpn:222") {
+		t.Fatalf("failure message should use display endpoint, got %q", got)
+	}
+	if strings.Contains(got, ":0") || strings.Contains(got, "192.168.31.1:0") {
+		t.Fatalf("failure message leaked raw host/port: %q", got)
+	}
+}
+
+func TestUpdateTargetChoiceLabelShowsEndpoint(t *testing.T) {
+	cases := []struct {
+		name string
+		t    updateTarget
+		want string
+	}{
+		{
+			name: "backend",
+			t: updateTarget{
+				Label:           "backend (wg.example.test)",
+				DisplayEndpoint: "203.0.113.10:22",
+			},
+			want: "backend (wg.example.test)",
+		},
+		{
+			name: "awgm agent",
+			t: updateTarget{
+				Label:           "agent alyaba",
+				IsAgent:         true,
+				DisplayEndpoint: "AWGM",
+			},
+			want: "agent alyaba (AWGM)",
+		},
+		{
+			name: "metadata gap agent",
+			t: updateTarget{
+				Label:           "agent bronya",
+				IsAgent:         true,
+				DisplayEndpoint: "metadata-gap",
+			},
+			want: "agent bronya (metadata-gap)",
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := updateTargetChoiceLabel(tt.t)
+			if got != tt.want {
+				t.Fatalf("choice label=%q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, ":0") {
+				t.Fatalf("choice label leaked :0: %q", got)
+			}
+		})
 	}
 }
 
@@ -510,6 +675,69 @@ func TestRunOneUpdatePromptsAWGMURLForNeverDeployedAgent(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected AWG Manager install to be called")
+	}
+}
+
+func TestRunOneUpdateUsesAWGMForAgentWithoutSSHHost(t *testing.T) {
+	state := &State{
+		Backend: BackendState{Domain: "wg.example.test"},
+		Agents: []AgentState{{
+			Nickname:            "alyaba",
+			DeployMode:          "awgm",
+			AWGMURL:             "https://awg.alyaba.example.test",
+			LastDeployedVersion: "v0.13.0-rc59",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "alyaba",
+		InstalledVersion: "v0.13.0-rc59",
+		LatestVersion:    "v0.13.0-rc60",
+		DisplayEndpoint:  "AWGM",
+	}
+	oldInstall := installAgentAWGMForUpdate
+	defer func() { installAgentAWGMForUpdate = oldInstall }()
+	called := false
+	installAgentAWGMForUpdate = func(_ *State, _ *SecretStore, _ *Downloader, nickname string) error {
+		called = true
+		if nickname != "alyaba" {
+			t.Fatalf("nickname=%q, want alyaba", nickname)
+		}
+		return nil
+	}
+
+	if err := runOneUpdate(state, &SecretStore{disk: map[string]string{}}, nil, target); err != nil {
+		t.Fatalf("runOneUpdate returned error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected AWG Manager reinstall/bootstrap instead of legacy SSH update")
+	}
+}
+
+func TestRunOneUpdateRejectsMetadataGapBeforeLegacySSH(t *testing.T) {
+	state := &State{
+		Backend: BackendState{Domain: "wg.example.test"},
+		Agents: []AgentState{{
+			Nickname:            "bronya",
+			LastDeployedVersion: "v0.13.0-rc59",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "bronya",
+		InstalledVersion: "v0.13.0-rc59",
+		LatestVersion:    "v0.13.0-rc60",
+		DisplayEndpoint:  "metadata-gap",
+	}
+
+	err := runOneUpdate(state, &SecretStore{disk: map[string]string{}}, nil, target)
+	if err == nil {
+		t.Fatal("metadata-gap update must stop before legacy SSH")
+	}
+	for _, want := range []string{"metadata-gap", "sync-vps", "re-enroll", "AWG Manager"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("metadata-gap error missing %q: %v", want, err)
+		}
 	}
 }
 
