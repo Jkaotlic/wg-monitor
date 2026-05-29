@@ -1299,10 +1299,10 @@ func TestACL_TOFUBindFromOwnerTopic(t *testing.T) {
 	}
 }
 
-// ACL: unbound router, callback NOT from owner's own topic — allow without
-// binding (backwards-compat path; protects against random members
-// auto-claiming routers by tapping in foreign topics).
-func TestACL_UnboundOutsideOwnTopic_AllowsWithoutBind(t *testing.T) {
+// ACL: unbound router with a known topic, callback NOT from that topic —
+// reject. Otherwise inline buttons from stale/foreign topic messages become
+// global controls for the wrong router before TOFU owner binding happens.
+func TestACL_UnboundWithKnownTopicRejectsForeignTopicCallback(t *testing.T) {
 	d, uid := newTestDB(t)
 	const ownThread = int64(4242)
 	const otherThread = int64(9999)
@@ -1326,8 +1326,11 @@ func TestACL_UnboundOutsideOwnTopic_AllowsWithoutBind(t *testing.T) {
 	if u.TelegramUserID != nil {
 		t.Fatalf("must NOT bind when callback not in owner's topic, got %v", u.TelegramUserID)
 	}
-	if len(f.edits) != 1 {
-		t.Fatalf("unbound-allow path: expected 1 edit, got %d", len(f.edits))
+	if len(f.edits) != 0 {
+		t.Fatalf("foreign-topic callback must not apply action, edits=%v", f.edits)
+	}
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "топик этого роутера") {
+		t.Fatalf("expected foreign-topic rejection toast, got %v", f.answers)
 	}
 }
 
