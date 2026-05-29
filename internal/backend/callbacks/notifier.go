@@ -59,6 +59,10 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		kb := tg.DiagResultKeyboardWithTests(result.Status, userID, token, failing)
 		diagMarkup = &kb
 	}
+	var tunnelImportMarkup *tg.InlineKeyboardMarkup
+	if action == "tunnel_import" && result.Status == "ok" {
+		tunnelImportMarkup = tunnelImportResultKeyboard(userID)
+	}
 
 	prev := ref.MessageID
 	for i, c := range chunks {
@@ -66,6 +70,8 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		var markup any
 		if i == 0 && diagMarkup != nil {
 			markup = diagMarkup
+		} else if i == 0 && tunnelImportMarkup != nil {
+			markup = tunnelImportMarkup
 		} else {
 			markup = n.UI.KeyboardForTopic("per_router")
 		}
@@ -86,6 +92,14 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		}
 	}
 	return nil
+}
+
+func tunnelImportResultKeyboard(userID int64) *tg.InlineKeyboardMarkup {
+	return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+	}}}
 }
 
 func isTunnelPanelMutatingAction(action string) bool {
