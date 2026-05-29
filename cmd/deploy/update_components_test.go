@@ -192,6 +192,46 @@ func TestBuildUpdateTargetsUsesReadableEndpointMetadata(t *testing.T) {
 	assertTargetDisplay(2, "192.168.31.1:222", "LAN")
 }
 
+func TestBuildUpdateTargetsBlocksMetadataGapFromUpdateQueue(t *testing.T) {
+	state := &State{Agents: []AgentState{{
+		Nickname:            "bronya",
+		LastDeployedVersion: "v0.13.0-rc59",
+	}}}
+	targets := buildUpdateTargets(state, "v0.13.0-rc62")
+	if len(targets) != 1 {
+		t.Fatalf("targets=%d, want 1", len(targets))
+	}
+	got := targets[0]
+	if got.NeedsUpdate {
+		t.Fatalf("metadata-gap target must not be queued as directly updatable: %+v", got)
+	}
+	if got.UpdateBlockedReason == "" {
+		t.Fatalf("metadata-gap target should explain repair path: %+v", got)
+	}
+	for _, want := range []string{"metadata-gap", "sync-vps", "re-enroll"} {
+		if !strings.Contains(got.UpdateBlockedReason, want) {
+			t.Fatalf("blocked reason missing %q: %q", want, got.UpdateBlockedReason)
+		}
+	}
+	if got := filterOutdated(targets); len(got) != 0 {
+		t.Fatalf("metadata-gap target must not appear in outdated update queue: %+v", got)
+	}
+	if status := updateTargetStatusLabel(targets[0]); !strings.Contains(status, "repair metadata") {
+		t.Fatalf("metadata-gap status should point to repair, got %q", status)
+	}
+}
+
+func TestFilterUpdateBlockedKeepsRepairNeededTargetsVisible(t *testing.T) {
+	targets := []updateTarget{
+		{Label: "agent bronya", IsAgent: true, UpdateBlockedReason: "metadata-gap: сначала sync-vps"},
+		{Label: "agent ok", IsAgent: true, NeedsUpdate: false},
+	}
+	blocked := filterUpdateBlocked(targets)
+	if len(blocked) != 1 || blocked[0].Label != "agent bronya" {
+		t.Fatalf("blocked targets=%+v", blocked)
+	}
+}
+
 func TestUpdateTargetExtraLabelShowsEndpoint(t *testing.T) {
 	cases := []struct {
 		name string

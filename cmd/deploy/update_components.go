@@ -50,6 +50,10 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 
 	outdated := filterOutdated(targets)
 	if len(outdated) == 0 {
+		if blocked := filterUpdateBlocked(targets); len(blocked) > 0 {
+			PrintWarn(fmt.Sprintf("есть %d компонент(а) с repair metadata — сначала sync-vps / re-enroll, потом обновление", len(blocked)))
+			return nil
+		}
 		PrintOK("всё актуально, обновлять нечего")
 		return nil
 	}
@@ -117,22 +121,23 @@ func shouldRecoverViaAWGMBeforeLocalProbe(state *State, t updateTarget) bool {
 // updateTarget describes one row in the update table and is consumed by the
 // runner to dispatch the right install action.
 type updateTarget struct {
-	Label            string // e.g. "backend (vps.example.com)" or "agent testkeen"
-	IsAgent          bool   // false → backend, true → an agent
-	AgentNickname    string // populated when IsAgent
-	Kind             string
-	Ring             string
-	Host             string
-	Port             int
-	DisplayEndpoint  string
-	NetworkLabel     string
-	InstalledVersion string // last deployed version recorded in wizard.toml
-	LatestVersion    string // GitHub latest tag
-	LastDeploy       string
-	PendingVersion   string
-	PendingSince     string
-	PendingCurrent   bool
-	NeedsUpdate      bool
+	Label               string // e.g. "backend (vps.example.com)" or "agent testkeen"
+	IsAgent             bool   // false → backend, true → an agent
+	AgentNickname       string // populated when IsAgent
+	Kind                string
+	Ring                string
+	Host                string
+	Port                int
+	DisplayEndpoint     string
+	NetworkLabel        string
+	InstalledVersion    string // last deployed version recorded in wizard.toml
+	LatestVersion       string // GitHub latest tag
+	LastDeploy          string
+	PendingVersion      string
+	PendingSince        string
+	PendingCurrent      bool
+	NeedsUpdate         bool
+	UpdateBlockedReason string
 }
 
 func buildUpdateTargets(state *State, latest string) []updateTarget {
@@ -156,26 +161,35 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 	}
 	for _, a := range state.Agents {
 		pendingCurrent := a.PendingVersion != "" && a.PendingVersion == latest
+		blockedReason := agentUpdateBlockedReason(a)
 		out = append(out, updateTarget{
-			Label:            "agent " + a.Nickname,
-			IsAgent:          true,
-			AgentNickname:    a.Nickname,
-			Kind:             nonEmpty(a.Kind, "static"),
-			Ring:             rolloutRing(a.Ring),
-			Host:             a.Host,
-			Port:             portOrDefault(a.Port, 222),
-			DisplayEndpoint:  agentStatusEndpointLabel(a),
-			NetworkLabel:     agentUpdateNetworkLabel(a),
-			InstalledVersion: a.LastDeployedVersion,
-			LatestVersion:    latest,
-			LastDeploy:       a.LastDeploy,
-			PendingVersion:   a.PendingVersion,
-			PendingSince:     a.PendingSince,
-			PendingCurrent:   pendingCurrent,
-			NeedsUpdate:      a.LastDeployedVersion != latest && !pendingCurrent,
+			Label:               "agent " + a.Nickname,
+			IsAgent:             true,
+			AgentNickname:       a.Nickname,
+			Kind:                nonEmpty(a.Kind, "static"),
+			Ring:                rolloutRing(a.Ring),
+			Host:                a.Host,
+			Port:                portOrDefault(a.Port, 222),
+			DisplayEndpoint:     agentStatusEndpointLabel(a),
+			NetworkLabel:        agentUpdateNetworkLabel(a),
+			InstalledVersion:    a.LastDeployedVersion,
+			LatestVersion:       latest,
+			LastDeploy:          a.LastDeploy,
+			PendingVersion:      a.PendingVersion,
+			PendingSince:        a.PendingSince,
+			PendingCurrent:      pendingCurrent,
+			NeedsUpdate:         a.LastDeployedVersion != latest && !pendingCurrent && blockedReason == "",
+			UpdateBlockedReason: blockedReason,
 		})
 	}
 	return out
+}
+
+func agentUpdateBlockedReason(a AgentState) string {
+	if !agentHasDeployMetadataGap(&a) {
+		return ""
+	}
+	return "metadata-gap: сначала sync-vps; если backend тоже пустой — re-enroll через AWG Manager"
 }
 
 func agentUpdateNetworkLabel(a AgentState) string {
@@ -293,6 +307,16 @@ func filterOutdated(all []updateTarget) []updateTarget {
 	return out
 }
 
+func filterUpdateBlocked(all []updateTarget) []updateTarget {
+	var out []updateTarget
+	for _, t := range all {
+		if t.UpdateBlockedReason != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
 func printUpdateStatusTable(rows []updateTarget) {
 	fmt.Println(Colorize("Состояние компонентов:", ColorBold))
 	for _, t := range rows {
@@ -300,24 +324,28 @@ func printUpdateStatusTable(rows []updateTarget) {
 		if installed == "" {
 			installed = "(неизвестно)"
 		}
-		var status string
-		switch {
-		case t.PendingCurrent:
-			status = Colorize("[ждёт wake → "+t.PendingVersion+"]", ColorYellow)
-		case t.NeedsUpdate && t.InstalledVersion == "":
-			status = Colorize("[версия неизвестна]", ColorYellow)
-		case t.NeedsUpdate:
-			status = Colorize("[обновить → "+t.LatestVersion+"]", ColorYellow)
-		default:
-			status = Colorize("[актуально]", ColorGreen)
-		}
 		extra := ""
 		if t.IsAgent {
 			extra = updateTargetExtraLabel(t)
 		}
-		fmt.Printf("  • %-30s %-15s %s%s\n", t.Label, installed, status, extra)
+		fmt.Printf("  • %-30s %-15s %s%s\n", t.Label, installed, updateTargetStatusLabel(t), extra)
 	}
 	fmt.Println()
+}
+
+func updateTargetStatusLabel(t updateTarget) string {
+	switch {
+	case t.UpdateBlockedReason != "":
+		return Colorize("[нужен repair metadata]", ColorYellow)
+	case t.PendingCurrent:
+		return Colorize("[ждёт wake → "+t.PendingVersion+"]", ColorYellow)
+	case t.NeedsUpdate && t.InstalledVersion == "":
+		return Colorize("[версия неизвестна]", ColorYellow)
+	case t.NeedsUpdate:
+		return Colorize("[обновить → "+t.LatestVersion+"]", ColorYellow)
+	default:
+		return Colorize("[актуально]", ColorGreen)
+	}
 }
 
 func updateTargetExtraLabel(t updateTarget) string {
@@ -331,6 +359,9 @@ func updateTargetExtraLabel(t updateTarget) string {
 	}
 	if t.PendingVersion != "" {
 		parts = append(parts, "pending="+t.PendingVersion)
+	}
+	if t.UpdateBlockedReason != "" {
+		parts = append(parts, "blocked=metadata-gap")
 	}
 	return " " + strings.Join(parts, " ")
 }
