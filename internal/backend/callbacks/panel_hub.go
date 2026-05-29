@@ -386,6 +386,18 @@ func (r *Router) panelEditToHome(ctx context.Context, q *tg.CallbackQuery) {
 // ✖ Закрыть clears the keyboard.
 func (r *Router) panelHandleHelp(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	body := tg.HelpForScreen(args.PanelKind)
+	if !r.isAdminTG(q.From.ID) {
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
+			{
+				{Text: "✖ Закрыть", CallbackData: "close_panel:0:_panel_"},
+			},
+		}}
+		if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, body, "", &kb); err != nil {
+			slog.Warn("panel help edit failed", "err", err)
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+		return
+	}
 	var backCB string
 	switch args.PanelKind {
 	case "maint", "routes", "tunnels", "status", "pingcheck", "doctor":
