@@ -181,6 +181,40 @@ func fetchAWGMSystemInfoViaVPS(state *State, secrets *SecretStore, ag *AgentStat
 
 type awgmSystemInfoProbe func() (*AWGMSystemInfo, error)
 
+type awgmBootstrapRun func() (TerminalRunResult, error)
+
+func runAWGMBootstrapWithDirectFallback(viaVPS bool, vpsRun, directRun awgmBootstrapRun) (TerminalRunResult, bool, error) {
+	if !viaVPS {
+		res, err := directRun()
+		return res, false, err
+	}
+	res, err := vpsRun()
+	if err == nil {
+		return res, true, nil
+	}
+	if !shouldTryDirectAWGMBootstrapFallback(err) {
+		return res, true, err
+	}
+	PrintWarn("AWG Manager VPS relay terminal bootstrap failed at the web edge (" + shortAWGMErrorForOperator(err) + "); trying direct from this operator PC before defer/cancel")
+	directRes, directErr := directRun()
+	if directErr != nil {
+		return directRes, true, directErr
+	}
+	PrintOK("AWG Manager direct terminal bootstrap from operator PC succeeded")
+	return directRes, false, nil
+}
+
+func shouldTryDirectAWGMBootstrapFallback(err error) bool {
+	if err == nil || isAWGMUnauthorized(err) {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	if strings.Contains(s, "bootstrap script failed") {
+		return false
+	}
+	return shouldTryDirectAWGMPreflightFallback(err)
+}
+
 func probeAWGMSystemInfoWithDirectFallback(viaVPS bool, vpsProbe, directProbe awgmSystemInfoProbe) (*AWGMSystemInfo, bool, error) {
 	if !viaVPS {
 		info, err := directProbe()
