@@ -224,6 +224,35 @@ func TestNotifier_ConnectivityResultOffersNextActions(t *testing.T) {
 	}
 }
 
+func TestNotifier_ForceRecheckResultOffersNextActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "force_recheck"},
+		"force_recheck",
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "report sent"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("force_recheck result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"router_doctor:42:_menu",
+		"tunnels_refresh:42:_panel_",
+		"routes_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("force_recheck result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
 func TestOpkgResultNotifier_UpgradeSuccessOffersNextActions(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewOpkgResultNotifier(f, UIConfigSnapshot{}, nil, func() string { return "deadbeef" })
