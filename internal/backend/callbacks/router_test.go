@@ -1720,6 +1720,22 @@ func TestRouter_DiagRaw_ServesCachedBody(t *testing.T) {
 	if !strings.Contains(f.sentMsgs[0], "RAW_BODY") {
 		t.Errorf("raw body missing from sent message: %s", f.sentMsgs[0])
 	}
+	if len(f.sentMarkups) != 1 {
+		t.Fatalf("raw report should include next-action keyboard, got %d markups", len(f.sentMarkups))
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("raw report keyboard should be inline, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"diag_back:" + itoa(uid) + ":_panel_:" + tok,
+		"diag_now:" + itoa(uid) + ":_menu",
+		"router_doctor:" + itoa(uid) + ":_menu",
+	} {
+		if !markupHasCallback(kb, want) {
+			t.Fatalf("raw report keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
 }
 
 func TestRouter_DiagRaw_ExpiredTokenAnswersToast(t *testing.T) {
