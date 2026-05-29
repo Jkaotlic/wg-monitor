@@ -86,6 +86,11 @@ func TestPingCheckPanelNotifier_Status_AgentErr(t *testing.T) {
 	if !strings.Contains(tgFake.lastText, "агент не ответил") {
 		t.Errorf("expected err banner, got: %s", tgFake.lastText)
 	}
+	for _, want := range []string{"pingcheck_open", "router_doctor", "tunnels_refresh", "routes_open", "maint_open"} {
+		if !keyboardHasCallback(tgFake.lastKb, want) {
+			t.Fatalf("pingcheck status error keyboard missing %q: %#v", want, tgFake.lastKb)
+		}
+	}
 }
 
 type fakePingCheckEnqueuer struct {

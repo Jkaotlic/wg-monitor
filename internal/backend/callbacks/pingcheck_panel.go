@@ -99,10 +99,20 @@ func (n *PingCheckPanelNotifier) renderErr(ctx context.Context, ref cmdpkg.Messa
 		Hint:    hint,
 	}
 	body := card.Render(alerts.CardOpts{MaxBytes: 3500})
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🔄 Повторить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", user.ID)},
-	}}}
+	kb := pingcheckErrorRecoveryKeyboard(user.ID)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, body, "", &kb)
+}
+
+func pingcheckErrorRecoveryKeyboard(userID int64) tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🔄 Повторить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+	}, {
+		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+		{Text: "🎛 Тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+	}, {
+		{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
+	}}}
 }
 
 // decodePingCheckStatus converts the awg-mgr passthrough JSON into the
