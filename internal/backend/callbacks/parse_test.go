@@ -113,6 +113,7 @@ func TestParseMalformed(t *testing.T) {
 		"silence:42:awg",
 		"silence:42:awg:invalid",
 		"unknown:42:awg",
+		"routes_router:42:_panel_",
 	}
 	for _, c := range cases {
 		if _, err := Parse(c); err == nil {
