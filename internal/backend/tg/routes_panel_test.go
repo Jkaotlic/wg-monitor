@@ -146,6 +146,13 @@ func TestRoutesPanelKeyboard_HasDoctorAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestRebindResultKeyboard_OffersTunnelCheck(t *testing.T) {
+	kb := RebindResultKeyboard(42, "old", "new", 0)
+	if !routesKeyboardHasCallback(kb, "tunnels_refresh:42:_panel_") {
+		t.Fatalf("rebind result should offer tunnel check next-action: %+v", kb.InlineKeyboard)
+	}
+}
+
 func TestRouteExplainText_DomainSuffixMatchesHRNeo(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{{ID: "awg1", Name: "amnezia", Iface: "nwg1"}},
