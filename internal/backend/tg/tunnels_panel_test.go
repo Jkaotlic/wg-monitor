@@ -16,6 +16,20 @@ func TestTunnelsPanelKeyboardAddsDeleteAskButton(t *testing.T) {
 	}
 }
 
+func TestTunnelsPanelKeyboardOffersRoutesAfterStatusCheck(t *testing.T) {
+	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
+		Name:      "amnezia_live",
+		CheckName: "tunnel_awg13",
+		NDMSName:  "Wireguard3",
+		Enabled:   true,
+		Status:    "running",
+	}})
+
+	if !hasTunnelPanelCallback(kb, "routes_open:42:_panel_") {
+		t.Fatalf("missing routes next-action button: %+v", kb)
+	}
+}
+
 func hasTunnelPanelCallback(kb InlineKeyboardMarkup, want string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {
