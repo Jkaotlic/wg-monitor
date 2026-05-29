@@ -1042,6 +1042,62 @@ func TestRouterHandleCallback_MaintFwOpen_NoCacheTriggersFwCheck(t *testing.T) {
 	}
 }
 
+func TestRouterHandleCallback_MaintOpen_EnqueueFailRestoresRecoveryKeyboard(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := makeCBQ(fmt.Sprintf("maint_open:%d:_panel_", uid))
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) < 2 {
+		t.Fatalf("expected loading and recovery edits, got %d: %v", len(f.edits), f.edits)
+	}
+	lastText := f.edits[len(f.edits)-1]
+	if !strings.Contains(lastText, "Обслуживание") && !strings.Contains(lastText, "ÐžÐ±ÑÐ»ÑƒÐ¶Ð¸Ð²Ð°Ð½Ð¸Ðµ") {
+		t.Fatalf("recovery edit should mention maintenance, got %q", lastText)
+	}
+	lastKB := f.editMarkups[len(f.editMarkups)-1]
+	for _, want := range []string{
+		fmt.Sprintf("maint_open:%d:_panel_", uid),
+		fmt.Sprintf("router_doctor:%d:_menu", uid),
+		fmt.Sprintf("tunnels_refresh:%d:_panel_", uid),
+	} {
+		if !markupHasCallback(lastKB, want) {
+			t.Fatalf("recovery keyboard missing %q: %+v", want, lastKB)
+		}
+	}
+}
+
+func TestRouterHandleCallback_MaintFwCheck_EnqueueFailRestoresRecoveryKeyboard(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := makeCBQ(fmt.Sprintf("maint_fw_check:%d:_panel_", uid))
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) < 2 {
+		t.Fatalf("expected loading and recovery edits, got %d: %v", len(f.edits), f.edits)
+	}
+	lastText := f.edits[len(f.edits)-1]
+	if !strings.Contains(lastText, "Прошивка") && !strings.Contains(lastText, "ÐŸÑ€Ð¾ÑˆÐ¸Ð²ÐºÐ°") {
+		t.Fatalf("recovery edit should mention firmware, got %q", lastText)
+	}
+	lastKB := f.editMarkups[len(f.editMarkups)-1]
+	for _, want := range []string{
+		fmt.Sprintf("maint_fw_check:%d:_panel_", uid),
+		fmt.Sprintf("maint_open:%d:_panel_", uid),
+		fmt.Sprintf("router_doctor:%d:_menu", uid),
+	} {
+		if !markupHasCallback(lastKB, want) {
+			t.Fatalf("firmware recovery keyboard missing %q: %+v", want, lastKB)
+		}
+	}
+}
+
 func allTexts(ss []rkSend) []string {
 	out := make([]string, len(ss))
 	for i, s := range ss {
