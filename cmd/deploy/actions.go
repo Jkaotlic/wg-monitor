@@ -29,6 +29,19 @@ import (
 // diagnoseUnreachable for the cascade.
 func runPathDiscoveryStep(host string, port int, preferred string, prober Prober) (*PathReport, func(), string, error) {
 	target := fmt.Sprintf("%s:%d", host, port)
+	if strings.TrimSpace(preferred) != "" {
+		rep, cleanup, attempted, err := probePreferredIfaceFastPath(prober, target, preferred, 3*time.Second)
+		if err != nil {
+			return nil, cleanup, "", err
+		}
+		if attempted && rep != nil && rep.Chosen != nil {
+			PrintOK(fmt.Sprintf("preferred_iface %s отвечает — использую быстрый путь (%dмс)", rep.Chosen.Iface, rep.Chosen.Latency.Milliseconds()))
+			return rep, cleanup, rep.Chosen.Iface, nil
+		}
+		if attempted && rep != nil && len(rep.Candidates) > 0 {
+			PrintWarn("preferred_iface " + preferred + " не ответил быстро — запускаю полный поиск пути")
+		}
+	}
 	PrintInfo("ищу " + target + " через все доступные интерфейсы (5с)...")
 	rep, cleanup, err := stepFindReachablePath(prober, target, 5*time.Second)
 	if err != nil {
@@ -66,13 +79,86 @@ func runPathDiscoveryStep(host string, port int, preferred string, prober Prober
 	chosenName := ""
 	if rep.Chosen != nil {
 		chosenName = rep.Chosen.Iface
-		// TODO(rc6): wire preferred fast-path — when preferred matches one of
-		// the responding candidates, skip the full enumeration on subsequent
-		// runs. Currently always does full probe; cache is write-only.
-		_ = preferred
 		PrintOK("использую " + chosenName + " (" + rep.Chosen.LocalIP + ", " + fmt.Sprint(rep.Chosen.Latency.Milliseconds()) + "мс)")
 	}
 	return rep, cleanup, chosenName, nil
+}
+
+func probePreferredIfaceFastPath(p Prober, target, preferred string, timeout time.Duration) (*PathReport, func(), bool, error) {
+	cleanup := func() {}
+	preferred = strings.TrimSpace(preferred)
+	if preferred == "" {
+		return nil, cleanup, false, nil
+	}
+	ip, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return nil, cleanup, false, fmt.Errorf("target %q: %w", target, err)
+	}
+	if net.ParseIP(ip) == nil {
+		return nil, cleanup, false, fmt.Errorf("target host %q is not an IPv4 literal", ip)
+	}
+	ifaces, err := p.Interfaces()
+	if err != nil {
+		return nil, cleanup, false, fmt.Errorf("enumerate interfaces: %w", err)
+	}
+	var preferredIface *net.Interface
+	for i := range ifaces {
+		if ifaces[i].Name == preferred {
+			preferredIface = &ifaces[i]
+			break
+		}
+	}
+	if preferredIface == nil || preferredIface.Flags&net.FlagUp == 0 || preferredIface.Flags&net.FlagLoopback != 0 {
+		return nil, cleanup, false, nil
+	}
+
+	c := PathCandidate{
+		Iface:   preferredIface.Name,
+		Index:   preferredIface.Index,
+		LocalIP: firstIPv4(*preferredIface),
+		Kind:    classifyIface(*preferredIface),
+	}
+	var tok RouteToken
+	var forced bool
+	if c.Kind == PathP2P {
+		forced = true
+		var addErr error
+		tok, addErr = p.AddRoute(ip, preferredIface.Index)
+		if addErr != nil {
+			c.Err = fmt.Errorf("addRoute %s via %s: %w", ip, preferredIface.Name, addErr)
+			rep := &PathReport{Target: target, Candidates: []PathCandidate{c}}
+			rep.Decide()
+			return rep, cleanup, true, nil
+		}
+		cleanup = func() {
+			if err := p.DelRoute(tok); err != nil {
+				PrintWarn(fmt.Sprintf("cleanup route %s: %v", tok.TargetIP, err))
+			}
+		}
+	}
+
+	start := time.Now()
+	localIP, dialErr := p.Dial(target, timeout)
+	c.Latency = time.Since(start)
+	c.Err = dialErr
+	if dialErr == nil && !forced {
+		c.LocalIP = localIP
+		if name, idx := resolveIfaceForLocalIP(ifaces, localIP); name != "" {
+			c.Iface = name
+			c.Index = idx
+			c.Kind = classifyIfaceByIndex(ifaces, idx)
+		}
+		if c.Iface != preferred {
+			c.Err = fmt.Errorf("preferred iface %s not used by default route (used %s)", preferred, c.Iface)
+		}
+	}
+	if forced {
+		cleanup()
+		cleanup = func() {}
+	}
+	rep := &PathReport{Target: target, Candidates: []PathCandidate{c}}
+	rep.Decide()
+	return rep, cleanup, true, nil
 }
 
 func runPathDiscoveryStepWithNetfix(state *State, ag *AgentState, secrets *SecretStore) (*PathReport, func(), string, error) {
@@ -496,7 +582,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 		ag.PreferredIface = iface
 	}
 
-	PrintStep(1, 4, fmt.Sprintf("SSH к роутеру %s (%s:%d)", ag.Nickname, ag.Host, portOrDefault(ag.Port, 222)))
+	PrintStep(1, 4, fmt.Sprintf("SSH к роутеру %s (%s)", ag.Nickname, agentSSHEndpointLabel(*ag)))
 	s, err := connectAgentSSHManaged(state, ag, pass, kh, "update-agent")
 	if err != nil {
 		// SSH-fail retry: оператор мог переехать роутером (новый IP / port
@@ -1272,7 +1358,7 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 		ag.PreferredIface = iface2
 	}
 
-	PrintStep(1, 8, fmt.Sprintf("SSH к роутеру %s:%d (%s)", ag.Host, ag.Port, ag.User))
+	PrintStep(1, 8, fmt.Sprintf("SSH к роутеру %s (%s)", agentSSHEndpointLabel(*ag), ag.User))
 	s, err := connectAgentSSHManaged(state, ag, pass, kh, "install-agent")
 	if err != nil {
 		// Single retry: дефолты (192.168.0.1:222 root) подходят к
@@ -2425,7 +2511,7 @@ func chooseAgentForAction(state *State, nickname, label string) (*AgentState, er
 	}
 	fmt.Println("Выбери роутер для " + label + ":")
 	for i, ag := range state.Agents {
-		fmt.Printf("  [%d] %s (%s:%d)\n", i+1, ag.Nickname, ag.Host, portOrDefault(ag.Port, 222))
+		fmt.Printf("  [%d] %s\n", i+1, agentChoiceLabel(ag))
 	}
 	idx := parseIntOr(Ask("номер", "1"), 1)
 	if idx < 1 || idx > len(state.Agents) {

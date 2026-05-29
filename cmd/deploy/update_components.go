@@ -73,7 +73,7 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 		}
 		if shouldProbeReachabilityBeforeUpdate(state, secrets, t) {
 			if !probeReachable(t.Host, t.Port, 3*time.Second) {
-				PrintFail(fmt.Sprintf("%s:%d не отвечает за 3с — проверь SSTP/VPN, либо вручную исправь host/port в wizard.toml", t.Host, t.Port))
+				PrintFail(updateTargetReachabilityFailureMessage(t))
 				continue
 			}
 		}
@@ -86,6 +86,9 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 
 func shouldProbeReachabilityBeforeUpdate(state *State, secrets *SecretStore, t updateTarget) bool {
 	if !t.IsAgent {
+		return false
+	}
+	if strings.TrimSpace(t.Host) == "" {
 		return false
 	}
 	if os.Getenv("WG_NO_PULL") != "1" && canPullDeploy(state, secrets, t) {
@@ -121,6 +124,8 @@ type updateTarget struct {
 	Ring             string
 	Host             string
 	Port             int
+	DisplayEndpoint  string
+	NetworkLabel     string
 	InstalledVersion string // last deployed version recorded in wizard.toml
 	LatestVersion    string // GitHub latest tag
 	LastDeploy       string
@@ -141,6 +146,8 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 			Label:            "backend (" + nonEmpty(state.Backend.Domain, state.Backend.Host) + ")",
 			Host:             state.Backend.Host,
 			Port:             port,
+			DisplayEndpoint:  fmt.Sprintf("%s:%d", state.Backend.Host, port),
+			NetworkLabel:     "Интернет (публичный VPS)",
 			InstalledVersion: state.Backend.LastDeployedVersion,
 			LatestVersion:    latest,
 			LastDeploy:       state.Backend.LastDeploy,
@@ -157,6 +164,8 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 			Ring:             rolloutRing(a.Ring),
 			Host:             a.Host,
 			Port:             portOrDefault(a.Port, 222),
+			DisplayEndpoint:  agentStatusEndpointLabel(a),
+			NetworkLabel:     agentUpdateNetworkLabel(a),
 			InstalledVersion: a.LastDeployedVersion,
 			LatestVersion:    latest,
 			LastDeploy:       a.LastDeploy,
@@ -167,6 +176,19 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 		})
 	}
 	return out
+}
+
+func agentUpdateNetworkLabel(a AgentState) string {
+	if strings.TrimSpace(a.Host) != "" {
+		return "LAN (требуется активный SSTP/VPN до клиента)"
+	}
+	if strings.EqualFold(strings.TrimSpace(a.DeployMode), "awgm") || strings.TrimSpace(a.AWGMURL) != "" {
+		return "AWG Manager / VPS pull-flow (локальный SSH endpoint не нужен)"
+	}
+	if agentHasDeployMetadataGap(&a) {
+		return "metadata-gap (сначала sync-vps; если backend пустой — re-enroll через AWG Manager)"
+	}
+	return "локальный SSH endpoint неизвестен"
 }
 
 type updateRefreshSummary struct {
@@ -291,14 +313,26 @@ func printUpdateStatusTable(rows []updateTarget) {
 		}
 		extra := ""
 		if t.IsAgent {
-			extra = fmt.Sprintf(" kind=%s ring=%s", nonEmpty(t.Kind, "static"), rolloutRing(t.Ring))
-			if t.PendingVersion != "" {
-				extra += " pending=" + t.PendingVersion
-			}
+			extra = updateTargetExtraLabel(t)
 		}
 		fmt.Printf("  • %-30s %-15s %s%s\n", t.Label, installed, status, extra)
 	}
 	fmt.Println()
+}
+
+func updateTargetExtraLabel(t updateTarget) string {
+	if !t.IsAgent {
+		return ""
+	}
+	parts := []string{
+		"endpoint=" + updateTargetEndpointLabel(t),
+		"kind=" + nonEmpty(t.Kind, "static"),
+		"ring=" + rolloutRing(t.Ring),
+	}
+	if t.PendingVersion != "" {
+		parts = append(parts, "pending="+t.PendingVersion)
+	}
+	return " " + strings.Join(parts, " ")
 }
 
 // askUpdateChoice presents:
@@ -336,7 +370,7 @@ func askUpdateChoice(all []updateTarget, outdated []updateTarget) []updateTarget
 	fmt.Println(Colorize("Что обновить?", ColorBold))
 	fmt.Printf("  [a] всё, что устарело (%d)\n", len(outdated))
 	for _, o := range opts {
-		fmt.Printf("  [%s] %s\n", o.key, o.t.Label)
+		fmt.Printf("  [%s] %s\n", o.key, updateTargetChoiceLabel(*o.t))
 	}
 	fmt.Println("  [Enter] ничего, выход")
 	fmt.Print("> ")
@@ -369,6 +403,13 @@ func askUpdateChoice(all []updateTarget, outdated []updateTarget) []updateTarget
 	return picked
 }
 
+func updateTargetChoiceLabel(t updateTarget) string {
+	if !t.IsAgent {
+		return t.Label
+	}
+	return fmt.Sprintf("%s (%s)", t.Label, updateTargetEndpointLabel(t))
+}
+
 // confirmTargetContext renders a one-screen summary of WHERE we're about to
 // SSH and WHAT we'll change, then asks for explicit y/N. The aim is to make
 // "забыл переключить SSTP, сейчас засунем агента клиента А на роутер
@@ -376,12 +417,8 @@ func askUpdateChoice(all []updateTarget, outdated []updateTarget) []updateTarget
 func confirmTargetContext(t updateTarget, currentIP string) bool {
 	fmt.Println(Colorize("─────────────────────────────────────────────", ColorCyan))
 	fmt.Printf("%s %s\n", Colorize("Цель:", ColorBold), t.Label)
-	fmt.Printf("  Адрес       : %s:%d\n", t.Host, t.Port)
-	if t.IsAgent {
-		fmt.Println("  Сеть        : LAN (требуется активный SSTP/VPN до клиента)")
-	} else {
-		fmt.Println("  Сеть        : Интернет (публичный VPS)")
-	}
+	fmt.Printf("  Адрес       : %s\n", updateTargetEndpointLabel(t))
+	fmt.Printf("  Сеть        : %s\n", updateTargetNetworkLabel(t))
 	fmt.Printf("  Установлено : %s\n", nonEmpty(t.InstalledVersion, "(неизвестно)"))
 	fmt.Printf("  Будет       : %s\n", t.LatestVersion)
 	fmt.Printf("  Last deploy : %s\n", nonEmpty(t.LastDeploy, "—"))
@@ -397,6 +434,30 @@ func confirmTargetContext(t updateTarget, currentIP string) bool {
 	}
 	resp := strings.ToLower(strings.TrimSpace(Ask("Подтвердить и продолжить? [y/N]", "")))
 	return resp == "y" || resp == "yes" || resp == "д" || resp == "да"
+}
+
+func updateTargetEndpointLabel(t updateTarget) string {
+	if strings.TrimSpace(t.DisplayEndpoint) != "" {
+		return t.DisplayEndpoint
+	}
+	if strings.TrimSpace(t.Host) == "" {
+		return "-"
+	}
+	return fmt.Sprintf("%s:%d", strings.TrimSpace(t.Host), portOrDefault(t.Port, 222))
+}
+
+func updateTargetNetworkLabel(t updateTarget) string {
+	if strings.TrimSpace(t.NetworkLabel) != "" {
+		return t.NetworkLabel
+	}
+	if t.IsAgent {
+		return "LAN (требуется активный SSTP/VPN до клиента)"
+	}
+	return "Интернет (публичный VPS)"
+}
+
+func updateTargetReachabilityFailureMessage(t updateTarget) string {
+	return fmt.Sprintf("%s не отвечает за 3с — проверь SSTP/VPN, либо вручную исправь host/port в wizard.toml", updateTargetEndpointLabel(t))
 }
 
 // runOneUpdate dispatches the right per-component install action. Agents
@@ -450,6 +511,16 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 			fmt.Sprintf("%s ещё не имеет подтверждённой установленной версии; нужен bootstrap/install вместо binary-swap update", t.AgentNickname)); handled {
 			return err
 		}
+	}
+	if strings.TrimSpace(t.Host) == "" {
+		if ag := state.FindAgent(t.AgentNickname); ag != nil &&
+			(strings.TrimSpace(ag.AWGMURL) != "" || strings.EqualFold(strings.TrimSpace(ag.DeployMode), "awgm")) {
+			if handled, err := recoverAgentUpdateViaAWGM(state, secrets, dl, t,
+				fmt.Sprintf("%s не имеет локального SSH endpoint; обновление должно идти через AWG Manager/VPS flow", t.AgentNickname)); handled {
+				return err
+			}
+		}
+		return fmt.Errorf("%s metadata-gap: нет SSH endpoint и нет AWG Manager URL. Сначала sync-vps; если backend тоже пустой, сделай re-enroll через AWG Manager", t.AgentNickname)
 	}
 	return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
 }

@@ -173,6 +173,7 @@ func (f *fakeProber) DelRoute(t RouteToken) error {
 	f.mu.Lock()
 	f.delCalls = append(f.delCalls, t)
 	f.mu.Unlock()
+	f.gidIfIdx.Delete(goid())
 	return nil
 }
 
