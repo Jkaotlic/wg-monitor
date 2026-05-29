@@ -1098,6 +1098,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			return err
 		}
 
+		minHeartbeatAt := time.Now().UTC()
 		PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
 		var res TerminalRunResult
 		res, useVPSBootstrap, err = runAWGMBootstrapWithDirectFallback(useVPSBootstrap, func() (TerminalRunResult, error) {
@@ -1144,7 +1145,14 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		applyAWGMDeploySuccess(ag, info, rel.TagName, awgmAuthMode, useVPSBootstrap, time.Now().UTC())
 		ensureTopicAfterSuccessfulInstall(state, secrets, ag)
 		pushToVPSBestEffort(state, secrets, *ag)
-		PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
+		completionCtx, completionCancel := context.WithTimeout(context.Background(), 25*time.Second)
+		report := reportAWGMInstallCompletion(completionCtx, vps, state, ag, rel.TagName, backendURL, rawToken, minHeartbeatAt)
+		completionCancel()
+		if report.Confirmed {
+			PrintOK(report.Message)
+		} else {
+			PrintWarn(report.Message)
+		}
 		return nil
 	}
 }
