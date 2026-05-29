@@ -406,19 +406,22 @@ func printKnownRouters(state *State) {
 	}
 	fmt.Println(Colorize("Роутеры в локальном wizard.toml:", ColorBold))
 	for i, a := range state.Agents {
-		mode := agentDeployModeLabel(a)
-		fmt.Printf("  [%d] %s  mode=%s  awgm=%s  ssh=%s  version=%s\n",
-			i+1,
-			a.Nickname,
-			mode,
-			a.AWGMURL,
-			agentSSHEndpointLabel(a),
-			emptyDash(a.LastDeployedVersion),
-		)
+		fmt.Println(knownRouterLine(i+1, a))
 	}
 	if hint := knownRoutersMetadataGapHint(state); hint != "" {
 		PrintWarn(hint)
 	}
+}
+
+func knownRouterLine(index int, a AgentState) string {
+	return fmt.Sprintf("  [%d] %s  mode=%s  awgm=%s  ssh=%s  version=%s",
+		index,
+		a.Nickname,
+		agentDeployModeLabel(a),
+		emptyDash(a.AWGMURL),
+		agentSSHEndpointLabel(a),
+		emptyDash(a.LastDeployedVersion),
+	)
 }
 
 func agentDeployModeLabel(a AgentState) string {
