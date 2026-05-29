@@ -73,6 +73,38 @@ func TestNotifier_TunnelImportResultOffersNextActions(t *testing.T) {
 	}
 }
 
+func TestNotifier_TunnelImportErrorOffersRecoveryActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnel_import"},
+		"tunnel_import",
+		wire.CommandResult{ID: "cmd1", Status: "err", Output: "awg-manager refused import"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sentMarkups) != 1 {
+		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("tunnel import error should carry inline recovery keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"tunnels_refresh:42:_panel_",
+		"router_doctor:42:_menu",
+		"maint_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("tunnel import error keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
 func TestNotifier_RestartTunnelResultOffersNextActions(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewNotifier(f)
