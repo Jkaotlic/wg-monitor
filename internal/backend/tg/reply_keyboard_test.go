@@ -104,6 +104,32 @@ func TestReplyKeyboard_PerRouter_HasMaintButton(t *testing.T) {
 	}
 }
 
+func TestReplyKeyboard_PerRouter_PremiumButtonsAreActionLabeled(t *testing.T) {
+	kb := ReplyKeyboardForTopic("per_router").(*ReplyKeyboardMarkup)
+	for _, want := range []string{"🔐 Amnezia Premium", "🔑 HideMy.name"} {
+		if !replyKeyboardHasText(kb, want) {
+			t.Fatalf("per-router keyboard missing premium action label %q: %+v", want, kb.Keyboard)
+		}
+	}
+	if got := CompatBtnTextByCode("amnezia_premium"); got != "🔐 Amnezia Premium" {
+		t.Fatalf("compat amnezia label = %q", got)
+	}
+	if got := CompatBtnTextByCode("hidemyname"); got != "🔑 HideMy.name" {
+		t.Fatalf("compat hidemy label = %q", got)
+	}
+}
+
+func replyKeyboardHasText(kb *ReplyKeyboardMarkup, text string) bool {
+	for _, row := range kb.Keyboard {
+		for _, b := range row {
+			if b.Text == text {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (func() bool {
 		for i := 0; i+len(needle) <= len(haystack); i++ {

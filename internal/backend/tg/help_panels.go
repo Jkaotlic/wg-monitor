@@ -29,7 +29,7 @@ func HelpForScreen(screen string) string {
   🛣 Маршруты - DNS/Static правила и перенос между туннелями
   🛠 Обслуживание - версии, рестарты, прошивка, opkg
   📡 PingCheck - сторожевой ping и авто-рестарт туннеля
-  Amnezia Premium / HideMy.name - ключи, коды, выгрузка .conf и импорт
+  🔐 Amnezia Premium / 🔑 HideMy.name - ключи, коды, выгрузка .conf и импорт
 
 Флот:
   self_update и массовые проверки запускает только админ. Успех обновления считается по heartbeat с новой версией, а не по самому факту нажатия.

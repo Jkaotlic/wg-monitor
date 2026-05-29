@@ -772,14 +772,14 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
-	case "Amnezia Premium":
+	case "🔐 Amnezia Premium", "Amnezia Premium":
 		if kind == "per_router" && user != nil {
 			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user, m.From.ID)
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"Amnezia Premium работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
-	case "HideMy.name":
+	case "🔑 HideMy.name", "HideMy.name":
 		if kind == "per_router" && user != nil {
 			r.sendHideMyPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
 		} else {
