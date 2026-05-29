@@ -251,7 +251,7 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
 		return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
 	}
-	return formatQueuedStatus(args.Action), nil
+	return formatQueuedStatus(args.Action, args.CheckName), nil
 }
 
 // DispatchFromMessage enqueues a command originating from a *text* message
@@ -279,7 +279,10 @@ func (a *CommandAction) DispatchFromMessage(_ context.Context, action string, us
 
 // formatQueuedStatus is the user-facing label appended to the alert message
 // after a command-channel button is tapped. Plain action names map to icons.
-func formatQueuedStatus(action string) string {
+func formatQueuedStatus(action, checkName string) string {
+	if action == "restart_tunnel" && checkName == panelSentinel {
+		return "📤 🔁 Перезапуск awg-manager поставлено в очередь"
+	}
 	label := commandLabels[action]
 	if label == "" {
 		label = action

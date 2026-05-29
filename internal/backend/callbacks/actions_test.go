@@ -113,6 +113,23 @@ func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
 	}
 }
 
+func TestCommandAction_RestartPanelLabelsAwgManager(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := NewCommandAction(sink, func() string { return "fixed-id-1" })
+	statusLine, err := a.Apply(context.Background(), nil, Args{
+		Action: "restart_tunnel", UserID: 7, CheckName: panelSentinel,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusLine, "awg-manager") {
+		t.Fatalf("panel restart should name awg-manager, got %q", statusLine)
+	}
+	if strings.Contains(statusLine, "Перезапуск туннеля") {
+		t.Fatalf("panel restart must not look like a per-tunnel restart: %q", statusLine)
+	}
+}
+
 func TestCommandAction_CommandActions(t *testing.T) {
 	cases := []struct {
 		action  string
