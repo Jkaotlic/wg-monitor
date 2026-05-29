@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
+	"github.com/anex/wg-monitor/internal/backend/tg"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
@@ -35,5 +36,39 @@ func TestNotifier_TunnelResultQueuesLivePanelRefresh(t *testing.T) {
 	}
 	if len(sink.refs) != 1 || sink.refs[0].chatID != 100 || sink.refs[0].messageID != 200 {
 		t.Fatalf("refresh should target the original panel ref, got %+v", sink.refs)
+	}
+}
+
+func TestNotifier_TunnelImportResultOffersNextActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnel_import"},
+		"tunnel_import",
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: `✅ Туннель "newtun" создан (id=awg99)`},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(f.sentMsgs))
+	}
+	if len(f.sentMarkups) != 1 {
+		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("tunnel import result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"tunnels_refresh:42:_panel_",
+		"routes_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("tunnel import result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
 	}
 }
