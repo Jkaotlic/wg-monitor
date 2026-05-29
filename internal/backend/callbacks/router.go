@@ -1216,12 +1216,30 @@ func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeybo
 
 // dispatchHelp sends the static help text for the topic kind.
 func (r *Router) dispatchHelp(ctx context.Context, m *tg.Message, kind string) {
-	body := "Кнопки внизу:\n" +
-		"📊 Что происходит? — состояние роутера прямо сейчас.\n" +
-		"🆘 Помощь — этот текст.\n\n" +
-		"В топиках Сводки/Системного:\n" +
-		"📋 Список юзеров, 📊 Здоровье флота — операторские команды."
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, body, "", nil, r.cfg.UI.KeyboardForTopic(kind))
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, topicHelpBody(kind), "", nil, r.cfg.UI.KeyboardForTopic(kind))
+}
+
+func topicHelpBody(kind string) string {
+	switch kind {
+	case "per_router":
+		return "Кнопки внизу:\n" +
+			"📊 Что происходит? — короткая сводка и безопасный следующий шаг.\n" +
+			"🩺 Проверка — doctor изнутри роутера, без изменений.\n" +
+			"🎛 Туннели — живой статус, включить/выключить, awg-manager.\n" +
+			"🛣 Маршруты — DNS/static правила, перенос и снапшот.\n" +
+			"🔐 Amnezia Premium — кабинеты и выгрузка .conf.\n" +
+			"🔑 HideMy.name — серверы и выгрузка AmneziaWG .conf.\n" +
+			"🌍 Через тоннель? / 🇷🇺 Напрямую? — проверки связности.\n" +
+			"🛠 Обслуживание / ⬆ Обновить пакеты — сервисные действия.\n\n" +
+			"Если кнопка меняет состояние, бот поставит команду в очередь. Жди результат в этом топике и используй кнопки под результатом."
+	case "summary", "systemic":
+		return "Кнопки внизу:\n" +
+			"📊 Здоровье флота — общая картина по роутерам.\n" +
+			"📋 Список юзеров — список роутеров и привязанных топиков.\n\n" +
+			"Управляющие действия по конкретному роутеру запускай в его топике."
+	default:
+		return "Кнопки внизу зависят от топика. В топике роутера используй /help или кнопку «📊 Что происходит?» как старт."
+	}
 }
 
 // dispatchSmartReply renders the [📊 Что происходит?] response (spec §5.2,
