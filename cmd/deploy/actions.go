@@ -1100,12 +1100,12 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 
 		PrintStep(4, 5, "AWG Manager terminal: bootstrap Entware")
 		var res TerminalRunResult
-		if useVPSBootstrap {
+		res, useVPSBootstrap, err = runAWGMBootstrapWithDirectFallback(useVPSBootstrap, func() (TerminalRunResult, error) {
 			PrintInfo("public AWG Manager URL detected - running terminal bootstrap from VPS")
-			res, err = runAWGMBootstrapViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
-		} else {
-			res, err = runAWGMBootstrapDirectFunc(awgm, script, terminalUser, terminalPass)
-		}
+			return runAWGMBootstrapViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
+		}, func() (TerminalRunResult, error) {
+			return runAWGMBootstrapDirectFunc(awgm, script, terminalUser, terminalPass)
+		})
 		if err != nil {
 			if strings.TrimSpace(res.Output) != "" {
 				PrintInfo(res.Output)
