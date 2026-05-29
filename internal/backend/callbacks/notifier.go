@@ -164,7 +164,7 @@ func (n *OpkgResultNotifier) NotifyOpkgResult(ctx context.Context, ref cmdpkg.Me
 	if len(chunks) == 0 {
 		return nil
 	}
-	markup := n.buildOpkgMarkup(res, userID)
+	markup := n.buildOpkgMarkup(ref.Action, res, userID)
 	prev := ref.MessageID
 	for i, chunk := range chunks {
 		replyTo := prev
@@ -184,30 +184,43 @@ func (n *OpkgResultNotifier) NotifyOpkgResult(ctx context.Context, ref cmdpkg.Me
 	return nil
 }
 
-// buildOpkgMarkup decodes FailedFeeds from the payload and returns an
-// InlineKeyboardMarkup with one 🔧 button per URL, or nil when empty.
-func (n *OpkgResultNotifier) buildOpkgMarkup(res wire.CommandResult, userID int64) *tg.InlineKeyboardMarkup {
-	if len(res.Payload) == 0 {
-		return nil
-	}
-	var payload wire.OpkgUpgradeResult
-	if err := json.Unmarshal(res.Payload, &payload); err != nil {
-		return nil
-	}
-	if len(payload.FailedFeeds) == 0 {
-		return nil
-	}
+// buildOpkgMarkup decodes FailedFeeds from the payload and returns inline
+// follow-up controls for the opkg result.
+func (n *OpkgResultNotifier) buildOpkgMarkup(action string, res wire.CommandResult, userID int64) *tg.InlineKeyboardMarkup {
 	var rows [][]tg.InlineKeyboardButton
-	for _, rawURL := range payload.FailedFeeds {
-		token := n.TokenGen()
-		normalized := notifierNormalizeFeedURL(rawURL)
-		n.Store.PutForRender(userID, normalized, token, 5*time.Minute)
-		host := notifierHostFromURL(rawURL)
-		btn := tg.InlineKeyboardButton{
-			Text:         fmt.Sprintf("🔧 Отключить мёртвый фид (%s)", host),
-			CallbackData: fmt.Sprintf("opkg_disable:%d:_menu:%s", userID, token),
+
+	if len(res.Payload) > 0 {
+		var payload wire.OpkgUpgradeResult
+		if err := json.Unmarshal(res.Payload, &payload); err == nil {
+			for _, rawURL := range payload.FailedFeeds {
+				if n.Store == nil {
+					continue
+				}
+				token := n.TokenGen()
+				normalized := notifierNormalizeFeedURL(rawURL)
+				n.Store.PutForRender(userID, normalized, token, 5*time.Minute)
+				host := notifierHostFromURL(rawURL)
+				btn := tg.InlineKeyboardButton{
+					Text:         fmt.Sprintf("🔧 Отключить мёртвый фид (%s)", host),
+					CallbackData: fmt.Sprintf("opkg_disable:%d:_menu:%s", userID, token),
+				}
+				rows = append(rows, []tg.InlineKeyboardButton{btn})
+			}
 		}
-		rows = append(rows, []tg.InlineKeyboardButton{btn})
+	}
+
+	if action == "opkg_upgrade" && res.Status == "ok" {
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         "🛠 Обслуживание",
+			CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID),
+		}, {
+			Text:         "🩺 Проверка",
+			CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID),
+		}})
+	}
+
+	if len(rows) == 0 {
+		return nil
 	}
 	return &tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
