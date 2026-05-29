@@ -280,7 +280,7 @@ func (r *Router) openPingCheckPanelMessage(ctx context.Context, m *tg.Message, u
 	}.Render(alerts.CardOpts{})
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", u.ID)},
-		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", u.ID)},
+		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("close_panel:%d:_panel_", u.ID)},
 	}}}
 	msgID, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil)
 	if err != nil {

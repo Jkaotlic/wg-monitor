@@ -88,7 +88,7 @@ func formatCount(n int64) string {
 //	pingcheck_toggle:<userID>:<tunnel_id>:<ndms_name>:<0|1>   ← per-tunnel
 //	pingcheck_now:<userID>:_menu                              ← global "check now"
 //	pingcheck_open:<userID>:_panel_                           ← refresh self
-//	routes_close:<userID>:_panel_                             ← close (reuse pattern)
+//	close_panel:<userID>:_panel_                              ← close panel
 //	panel:0:help:pingcheck                                    ← help screen
 //
 // Toggle icon meaning: shown icon = action that *would* happen on tap.
@@ -130,7 +130,7 @@ func PingCheckPanelKeyboard(userID int64, entries []PingCheckPanelEntry) InlineK
 	})
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "ℹ Помощь", CallbackData: "panel:0:help:pingcheck"},
-		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
+		{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("close_panel:%d:_panel_", userID)},
 	})
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
 }

@@ -93,7 +93,7 @@ func TestPingCheckPanelKeyboard_GlobalControls(t *testing.T) {
 			flat = append(flat, b.CallbackData)
 		}
 	}
-	for _, want := range []string{"pingcheck_now:42:_menu", "pingcheck_open:42:_panel_", "panel:0:help:pingcheck", "routes_close:42:_panel_"} {
+	for _, want := range []string{"pingcheck_now:42:_menu", "pingcheck_open:42:_panel_", "panel:0:help:pingcheck", "close_panel:42:_panel_"} {
 		found := false
 		for _, c := range flat {
 			if c == want {
@@ -103,6 +103,11 @@ func TestPingCheckPanelKeyboard_GlobalControls(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("missing callback_data %q; got %v", want, flat)
+		}
+	}
+	for _, c := range flat {
+		if c == "routes_close:42:_panel_" {
+			t.Fatalf("pingcheck keyboard should not reuse routes_close; got %v", flat)
 		}
 	}
 }

@@ -136,7 +136,7 @@ var validActions = map[string]bool{
 	// routes panel actions: browse, rebind, and confirm route changes.
 	"routes_open": true, "routes_rebind": true,
 	"routes_pick": true, "routes_confirm": true, "routes_refresh": true,
-	"routes_back": true, "routes_close": true,
+	"routes_back": true, "routes_close": true, "close_panel": true,
 	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
 	"routes_add_confirm": true, "routes_add_cancel": true,
 	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
