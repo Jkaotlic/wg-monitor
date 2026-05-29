@@ -114,6 +114,14 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 		}, {
 			{Text: "📊 Диагностика", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
 		}}}
+	case "router_doctor":
+		return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		}, {
+			{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+		}, {
+			{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
+		}}}
 	default:
 		return nil
 	}

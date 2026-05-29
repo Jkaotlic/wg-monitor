@@ -129,6 +129,35 @@ func TestNotifier_PingCheckResultOffersNextActions(t *testing.T) {
 	}
 }
 
+func TestNotifier_RouterDoctorResultOffersNextActions(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewNotifier(f)
+
+	err := n.NotifyCommandResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "router_doctor"},
+		"router_doctor",
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "doctor ok"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("router doctor result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"tunnels_refresh:42:_panel_",
+		"routes_open:42:_panel_",
+		"maint_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("router doctor result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
 func TestOpkgResultNotifier_UpgradeSuccessOffersNextActions(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewOpkgResultNotifier(f, UIConfigSnapshot{}, nil, func() string { return "deadbeef" })
