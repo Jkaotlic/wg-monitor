@@ -1684,6 +1684,7 @@ func (r *Router) handleMaintOpen(ctx context.Context, q *tg.CallbackQuery, args 
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", &loadingKB)
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось запросить статус")
+		r.renderMaintQueueError(ctx, q, user, "🛠 Обслуживание", "maint_open", err)
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
@@ -1748,9 +1749,31 @@ func (r *Router) handleMaintFwCheck(ctx context.Context, q *tg.CallbackQuery, ar
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loading, "", &empty)
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось")
+		r.renderMaintQueueError(ctx, q, user, "📦 Прошивка", "maint_fw_check", err)
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) renderMaintQueueError(ctx context.Context, q *tg.CallbackQuery, user *db.User, label, retryAction string, err error) {
+	text := alerts.Card{
+		Badge:   "❌",
+		Label:   label,
+		Summary: "не получилось поставить команду в очередь",
+		Meta:    []string{alerts.KV("роутер", user.Nickname)},
+		Details: shortToast(err),
+		Hint:    "Повтори запрос. Если очередь снова недоступна, открой проверку роутера или список тоннелей.",
+	}.Render(alerts.CardOpts{MaxBytes: 3900})
+	retryCallback := fmt.Sprintf("%s:%d:_panel_", retryAction, user.ID)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🔄 Повторить", CallbackData: retryCallback},
+	}, {
+		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", user.ID)},
+		{Text: "🎛 Тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", user.ID)},
+	}, {
+		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
 
 // handleMaintFwInstall renders the firmware install confirm screen.
