@@ -476,7 +476,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "routes_snapshot":
 		r.handleRoutesSnapshot(ctx, q, args)
 		return
-	case "routes_close":
+	case "routes_close", "close_panel":
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
 		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
 		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, q.Message.Text, "", &empty)

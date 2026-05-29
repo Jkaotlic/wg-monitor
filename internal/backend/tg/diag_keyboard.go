@@ -16,7 +16,7 @@ func DiagResultKeyboard(status string, userID int64, rawToken string) InlineKeyb
 				{Text: "🔁 Перезапустить", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
 			},
 			{
-				{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
+				{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("close_panel:%d:_panel_", userID)},
 			},
 		}}
 	}
@@ -26,7 +26,7 @@ func DiagResultKeyboard(status string, userID int64, rawToken string) InlineKeyb
 			{Text: "ℹ Помощь", CallbackData: "panel:0:help:diag"},
 		},
 		{
-			{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
+			{Text: "✖ Закрыть", CallbackData: fmt.Sprintf("close_panel:%d:_panel_", userID)},
 		},
 	}}
 }

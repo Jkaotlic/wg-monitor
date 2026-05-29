@@ -14,6 +14,12 @@ func TestDiagResultKeyboard_OK_PrimaryRaw(t *testing.T) {
 	if !strings.Contains(flat, "diag_now:42:_menu") {
 		t.Errorf("missing rerun callback: %s", flat)
 	}
+	if !strings.Contains(flat, "close_panel:42:_panel_") {
+		t.Errorf("missing close callback: %s", flat)
+	}
+	if strings.Contains(flat, "routes_close") {
+		t.Errorf("diag keyboard should not reuse routes_close: %s", flat)
+	}
 }
 
 func TestDiagResultKeyboard_Err_HasHelpAndRetry(t *testing.T) {
