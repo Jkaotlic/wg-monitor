@@ -251,6 +251,16 @@ func (n *OpkgResultNotifier) buildOpkgMarkup(action string, res wire.CommandResu
 		}})
 	}
 
+	if action == "opkg_feed_disable" && res.Status == "ok" {
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         "⬆ Повторить обновление",
+			CallbackData: fmt.Sprintf("opkg_upgrade:%d:_menu", userID),
+		}, {
+			Text:         "🛠 Обслуживание",
+			CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID),
+		}})
+	}
+
 	if len(rows) == 0 {
 		return nil
 	}

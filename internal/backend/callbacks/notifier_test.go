@@ -282,3 +282,33 @@ func TestOpkgResultNotifier_UpgradeSuccessOffersNextActions(t *testing.T) {
 		}
 	}
 }
+
+func TestOpkgResultNotifier_FeedDisableSuccessOffersRetryAndMaintenance(t *testing.T) {
+	f := &fakeRouterTG{}
+	n := NewOpkgResultNotifier(f, UIConfigSnapshot{}, nil, func() string { return "deadbeef" })
+
+	err := n.NotifyOpkgResult(context.Background(),
+		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "opkg_feed_disable"},
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "feed disabled"},
+		42,
+		3500,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.sentMarkups) != 1 {
+		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok || kb == nil {
+		t.Fatalf("opkg feed disable result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	}
+	for _, want := range []string{
+		"opkg_upgrade:42:_menu",
+		"maint_open:42:_panel_",
+	} {
+		if !containsStr(flattenKbCallbacks(kb), want) {
+			t.Fatalf("opkg feed disable result keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
