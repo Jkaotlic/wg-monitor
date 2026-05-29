@@ -29,6 +29,15 @@ func NewDiagTestExpandAction(cache *diagCache, tgClient diagDrillDownTG) *DiagTe
 	return &DiagTestExpandAction{cache: cache, tg: tgClient}
 }
 
+func diagRawKeyboard(userID int64, rawToken string) tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "« К сводке", CallbackData: fmt.Sprintf("diag_back:%d:_panel_:%s", userID, rawToken)},
+		{Text: "🔁 Диагностика", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
+	}, {
+		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+	}}}
+}
+
 // Apply implements Action. It looks up the cached diag body, finds the
 // matching test detail, and edits the message with a per-tunnel breakdown.
 func (a *DiagTestExpandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {

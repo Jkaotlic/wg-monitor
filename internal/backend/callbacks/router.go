@@ -525,7 +525,8 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 		full := "📄 Полный отчёт диагностики:\n\n```\n" + body + "\n```"
-		if _, err := r.tg.SendMessage(ctx, q.Message.Chat.ID, q.Message.MessageThreadID, full, "", nil); err != nil {
+		kb := diagRawKeyboard(args.UserID, args.DiagRawToken)
+		if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, q.Message.Chat.ID, q.Message.MessageThreadID, full, "", nil, &kb); err != nil {
 			slog.Warn("diag_raw send failed", "err", err)
 		}
 		return
