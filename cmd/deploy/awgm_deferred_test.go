@@ -227,11 +227,21 @@ relay.ws_connect = lambda cfg, jar: Sock()
 relay.ws_send = lambda *args, **kwargs: None
 relay.send_resize = lambda *args, **kwargs: None
 relay.login_terminal = lambda sock, cfg: ""
-relay.run_bootstrap = lambda sock, cfg: None
-relay.local_wizard_request = lambda cfg, method, path, body=None: (
-    {"raw_token": "raw-token", "backend_url": "https://wg.example.test"}
-    if method == "POST" else {}
-)
+success_bootstrapped = {"done": False}
+relay.run_bootstrap = lambda sock, cfg: success_bootstrapped.update(done=True)
+relay.deferred_agent_token_valid = lambda cfg, raw_token: True
+def success_wizard(cfg, method, path, body=None):
+    if method == "POST" and path == "/v1/wizard/enrollments":
+        return {"raw_token": "raw-token", "backend_url": "https://wg.example.test"}
+    if method == "GET" and path == "/v1/wizard/agents" and success_bootstrapped["done"]:
+        return {"agents": [{
+            "nickname": "fresh",
+            "last_deployed_version": "v0.13.0-rc57",
+            "pending_version": "",
+            "last_seen_at": time.strftime("%%Y-%%m-%%dT%%H:%%M:%%SZ", time.gmtime()),
+        }]}
+    return {}
+relay.local_wizard_request = success_wizard
 success = write_job("success.json", {
     "nickname": "fresh",
     "kind": "static",
@@ -240,6 +250,7 @@ success = write_job("success.json", {
     "expires_at_unix": int(time.time()) + 3600,
     "wizard_token": "secret-token",
     "init_script": "#!/bin/sh\nexit 0",
+    "confirm_timeout_sec": 0,
 })
 relay.run_deferred_bootstrap(json.load(open(success, encoding="utf-8")), success)
 assert not os.path.exists(success), "successful job remained active"
@@ -293,6 +304,7 @@ with open(job_path, "w", encoding="utf-8") as f:
         "terminal_user": "root",
         "terminal_password": "keenetic",
         "init_script": "#!/bin/sh\nexit 0",
+        "confirm_timeout_sec": 0,
     }, f)
 
 events = []
@@ -311,6 +323,14 @@ relay.login_terminal = lambda sock, cfg: ""
 def fake_wizard(cfg, method, path, body=None):
     events.append("wizard:%%s:%%s" %% (method, path))
     if method == "GET" and path == "/v1/wizard/agents":
+        if "start" in events:
+            return {"agents": [{
+                "nickname": "client-g",
+                "kind": "mobile",
+                "last_deployed_version": "v0.13.0-rc60",
+                "pending_version": "",
+                "last_seen_at": time.strftime("%%Y-%%m-%%dT%%H:%%M:%%SZ", time.gmtime()),
+            }]}
         return {"agents": [{
             "nickname": "client-g",
             "kind": "mobile",
@@ -327,6 +347,7 @@ relay.local_wizard_request = fake_wizard
 def fake_commit(cfg, nick, raw_token):
     events.append("commit:%%s" %% nick)
 relay.commit_existing_agent_token_hash = fake_commit
+relay.deferred_agent_token_valid = lambda cfg, raw_token: True
 
 def fake_bootstrap(sock, cfg):
     script = cfg.get("bootstrap_script") or ""
@@ -350,6 +371,7 @@ assert events == [
     "bootstrap",
     "commit:client-g",
     "start",
+    "wizard:GET:/v1/wizard/agents",
     "wizard:PUT:/v1/wizard/agents/client-g",
 ], events
 assert not os.path.exists(job_path), "successful existing-agent job remained active"
@@ -365,6 +387,88 @@ assert put_body["last_deploy"], put_body
 	cmd := exec.Command(python, harnessPath)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("deferred existing-agent harness failed: %v\n%s", err, out)
+	}
+}
+
+func TestAWGMRelayPythonDeferredBootstrapDoesNotCompleteWithoutFreshBackendHeartbeat(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not on PATH")
+	}
+	dir := t.TempDir()
+	relayPath := filepath.Join(dir, "awgm-relay.py")
+	if err := os.WriteFile(relayPath, []byte(awgmVPSRelayPython), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	harnessPath := filepath.Join(dir, "harness.py")
+	harness := fmt.Sprintf(`
+import importlib.util
+import json
+import os
+import time
+
+relay_path = %q
+work_dir = %q
+spec = importlib.util.spec_from_file_location("relay_under_test", relay_path)
+relay = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(relay)
+
+job_path = os.path.join(work_dir, "client-g.json")
+with open(job_path, "w", encoding="utf-8") as f:
+    json.dump({
+        "nickname": "client-g",
+        "kind": "mobile",
+        "base_url": "https://awg.client-g.example.test",
+        "target_version": "v0.13.0-rc60",
+        "backend_url": "https://wg.example.test",
+        "release_base": "https://wg.example.test/v1/releases/download",
+        "expires_at_unix": int(time.time()) + 3600,
+        "wizard_token": "secret-token",
+        "terminal_user": "root",
+        "terminal_password": "keenetic",
+        "init_script": "#!/bin/sh\nexit 0",
+        "confirm_timeout_sec": 0,
+    }, f)
+
+events = []
+relay.opener = lambda: (object(), object())
+relay.login_if_needed = lambda op, cfg: None
+relay.request = lambda op, cfg, method, path: {"data": {"goArch": "mips", "routerIP": "10.0.0.1"}}
+relay.ensure_terminal = lambda op, cfg: None
+class Sock:
+    def close(self): pass
+relay.ws_connect = lambda cfg, jar: Sock()
+relay.ws_send = lambda *args, **kwargs: None
+relay.send_resize = lambda *args, **kwargs: None
+relay.login_terminal = lambda sock, cfg: ""
+relay.run_bootstrap = lambda sock, cfg: events.append("bootstrap")
+relay.commit_existing_agent_token_hash = lambda cfg, nick, raw_token: events.append("commit")
+
+def fake_wizard(cfg, method, path, body=None):
+    events.append("wizard:%%s:%%s" %% (method, path))
+    if method == "GET" and path == "/v1/wizard/agents":
+        return {"agents": [{
+            "nickname": "client-g",
+            "kind": "mobile",
+            "last_deployed_version": "v0.13.0-rc60",
+            "pending_version": "v0.13.0-rc60",
+        }]}
+    if method == "PUT" and path == "/v1/wizard/agents/client-g":
+        raise AssertionError("deferred bootstrap must not clear pending before fresh heartbeat")
+    return {}
+relay.local_wizard_request = fake_wizard
+relay.deferred_agent_token_valid = lambda cfg, raw_token: True
+
+relay.run_deferred_bootstrap(json.load(open(job_path, encoding="utf-8")), job_path)
+assert os.path.exists(job_path), "job must remain active until backend heartbeat confirms"
+assert not os.path.exists(job_path + ".done"), "job without fresh backend heartbeat must not write done"
+`, relayPath, dir)
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(python, harnessPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("deferred stale-heartbeat harness failed: %v\n%s", err, out)
 	}
 }
 

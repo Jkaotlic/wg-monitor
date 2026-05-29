@@ -317,6 +317,7 @@ func safeRelayName(name string) string {
 
 const awgmVPSRelayPython = `#!/usr/bin/env python3
 import base64
+import datetime
 import hashlib
 import http.cookiejar
 import json
@@ -335,6 +336,10 @@ import urllib.request
 
 MARKER = "__WG_MONITOR_DONE__"
 JSON_MARKER = "__WG_MONITOR_JSON__"
+DEFERRED_CONFIRM_TIMEOUT_SECONDS = 180
+DEFERRED_CONFIRM_POLL_SECONDS = 5
+DEFERRED_HEARTBEAT_FRESH_SECONDS = 300
+DEFERRED_HEARTBEAT_FUTURE_SKEW_SECONDS = 120
 
 class RelayError(Exception):
     pass
@@ -590,6 +595,80 @@ def deferred_job_already_satisfied(cfg, agent):
         return False
     return not (agent.get("pending_version") or agent.get("pending_since"))
 
+def parse_wizard_time(value):
+    if not value:
+        return None
+    value = str(value).replace("Z", "+00:00")
+    try:
+        parsed = datetime.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+def deferred_agent_token_valid(cfg, raw_token):
+    raw_token = (raw_token or "").strip()
+    backend_url = (cfg.get("backend_url") or "").strip()
+    if not raw_token or not backend_url:
+        return False
+    if "://" not in backend_url:
+        backend_url = "https://" + backend_url
+    url = backend_url.rstrip("/") + "/v1/cmd?wait=0"
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "Authorization": "Bearer " + raw_token,
+    }, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status in (200, 204)
+    except urllib.error.HTTPError as e:
+        return e.code in (200, 204)
+    except Exception as e:
+        print("WARN deferred AWGM auth-probe failed for %s: %s" % (cfg.get("nickname") or "unknown", e), file=sys.stderr)
+        return False
+
+def deferred_bootstrap_confirmation(cfg, nick, target, raw_token, min_heartbeat_unix):
+    try:
+        agent = find_local_wizard_agent(cfg, nick)
+    except Exception as e:
+        return False, "wizard list failed: " + str(e)
+    if not isinstance(agent, dict):
+        return False, "backend agent not found"
+    reasons = []
+    if (agent.get("last_deployed_version") or "") != target:
+        reasons.append("backend version %r != %r" % (agent.get("last_deployed_version") or "", target))
+    ts = parse_wizard_time(agent.get("last_seen_at"))
+    if ts is None:
+        reasons.append("heartbeat never")
+    else:
+        now = datetime.datetime.now(datetime.timezone.utc)
+        age = (now - ts).total_seconds()
+        if age > DEFERRED_HEARTBEAT_FRESH_SECONDS:
+            reasons.append("heartbeat stale %.0fs" % age)
+        if age < -DEFERRED_HEARTBEAT_FUTURE_SKEW_SECONDS:
+            reasons.append("heartbeat from the future")
+        if min_heartbeat_unix and ts.timestamp() < (float(min_heartbeat_unix) - 2):
+            reasons.append("heartbeat before install")
+    if not deferred_agent_token_valid(cfg, raw_token):
+        reasons.append("auth-probe failed")
+    if reasons:
+        return False, "; ".join(reasons)
+    return True, "backend-confirmed"
+
+def wait_deferred_bootstrap_confirmation(cfg, nick, target, raw_token, min_heartbeat_unix):
+    timeout = int(cfg.get("confirm_timeout_sec") if cfg.get("confirm_timeout_sec") is not None else DEFERRED_CONFIRM_TIMEOUT_SECONDS)
+    deadline = time.time() + max(0, timeout)
+    while True:
+        ok, reason = deferred_bootstrap_confirmation(cfg, nick, target, raw_token, min_heartbeat_unix)
+        if ok:
+            return True, reason
+        if time.time() >= deadline:
+            return False, reason
+        print("deferred AWGM waiting for backend confirmation for %s: %s" % (nick or "unknown", reason))
+        sleep_for = min(DEFERRED_CONFIRM_POLL_SECONDS, max(0.1, deadline - time.time()))
+        time.sleep(sleep_for)
+
 def build_agent_config(cfg, backend_url, raw_token):
     return "\n".join([
         "backend:",
@@ -793,6 +872,7 @@ def run_deferred_bootstrap(cfg, cfg_path):
     script = build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_start=two_phase)
     ensure_terminal(op, cfg)
     sock = None
+    bootstrap_started_at = time.time()
     try:
         sock = ws_connect(cfg, jar)
         ws_send(sock, 0x1, '{"AuthToken":""}')
@@ -812,6 +892,14 @@ def run_deferred_bootstrap(cfg, cfg_path):
             request(op, cfg, "POST", "/api/terminal/stop")
         except Exception as e:
             print("WARN terminal stop failed: %s" % e, file=sys.stderr)
+    token_path = cfg_path + ".token"
+    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write("WG_AGENT_TOKEN_%s=%s\n" % (nick.upper(), raw_token))
+    confirmed, confirm_reason = wait_deferred_bootstrap_confirmation(cfg, nick, cfg.get("target_version") or "", raw_token, bootstrap_started_at)
+    if not confirmed:
+        print("deferred AWGM job pending for %s: %s" % (nick or "unknown", confirm_reason), file=sys.stderr)
+        return
     local_wizard_request(cfg, "PUT", "/v1/wizard/agents/" + urllib.parse.quote(nick, safe=""), {
         "ssh_host": data.get("routerIP") or "0.0.0.0",
         "ssh_port": 222,
@@ -826,14 +914,10 @@ def run_deferred_bootstrap(cfg, cfg_path):
         "awgm_url": cfg.get("base_url") or "",
         "awgm_auth": "api-key" if cfg.get("api_key") else "router-admin",
     })
-    token_path = cfg_path + ".token"
-    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("WG_AGENT_TOKEN_%s=%s\n" % (nick.upper(), raw_token))
     done_path = cfg_path + ".done"
     fd = os.open(done_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("ok %s %s\n" % (nick, cfg.get("target_version") or ""))
+        f.write("ok %s %s %s\n" % (nick, cfg.get("target_version") or "", confirm_reason))
     os.remove(cfg_path)
 
 def login_terminal(sock, cfg):
