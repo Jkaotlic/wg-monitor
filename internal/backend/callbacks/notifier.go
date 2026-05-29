@@ -63,6 +63,7 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 	if action == "tunnel_import" && result.Status == "ok" {
 		tunnelImportMarkup = tunnelImportResultKeyboard(userID)
 	}
+	resultMarkup := commandResultNextActionKeyboard(action, result.Status, userID)
 
 	prev := ref.MessageID
 	for i, c := range chunks {
@@ -72,6 +73,8 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 			markup = diagMarkup
 		} else if i == 0 && tunnelImportMarkup != nil {
 			markup = tunnelImportMarkup
+		} else if i == 0 && resultMarkup != nil {
+			markup = resultMarkup
 		} else {
 			markup = n.UI.KeyboardForTopic("per_router")
 		}
@@ -92,6 +95,28 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 		}
 	}
 	return nil
+}
+
+func commandResultNextActionKeyboard(action, status string, userID int64) *tg.InlineKeyboardMarkup {
+	if status != "ok" {
+		return nil
+	}
+	switch action {
+	case "restart_tunnel":
+		return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		}, {
+			{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+		}}}
+	case "pingcheck_now":
+		return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+		}, {
+			{Text: "📊 Диагностика", CallbackData: fmt.Sprintf("diag_now:%d:_menu", userID)},
+		}}}
+	default:
+		return nil
+	}
 }
 
 func tunnelImportResultKeyboard(userID int64) *tg.InlineKeyboardMarkup {
