@@ -108,13 +108,14 @@ func humanAgeShort(s int) string {
 //	       "[▶ awg2]" if currently disabled. Up to 8 in one row (TG limit).
 //	       Wraps to a new row beyond that.
 //	Row N+1: per-tunnel delete buttons.
-//	Row N+2: [🔁 Перезагрузить awg-mgr] [🔄 Обновить]
+//	Row N+2: [🛣 Маршруты / перенос] [🔁 Перезагрузить awg-mgr] [🔄 Обновить]
 //
 // callback_data shape:
 //
 //	tunnel_enable:<userID>:<check_name>:<ndms_name>     ← short tunnel name in label
 //	tunnel_disable:<userID>:<check_name>:<ndms_name>
 //	tunnel_delete_ask:<userID>:<check_name>:<ndms_name> ← opens confirm screen
+//	routes_open:<userID>:_panel_                        ← open route transfer panel
 //	restart_tunnel:<userID>:_panel_                     ← global restart-all
 //	tunnels_refresh:<userID>:_panel_                    ← re-render
 //
@@ -172,6 +173,7 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 	// Global controls.
 	rows = append(rows, HelpRowFor("tunnels"))
 	rows = append(rows, []InlineKeyboardButton{
+		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
 		{Text: "🔁 Перезагрузить awg-mgr", CallbackData: fmt.Sprintf("restart_tunnel:%d:_panel_", userID)},
 		{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 	})
