@@ -108,6 +108,14 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 		}, {
 			{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
 		}}}
+	case "tunnel_enable", "tunnel_disable", "tunnel_delete":
+		return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		}, {
+			{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
+		}, {
+			{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+		}}}
 	case "pingcheck_now":
 		return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 			{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},

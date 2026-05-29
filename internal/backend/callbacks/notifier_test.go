@@ -101,6 +101,39 @@ func TestNotifier_RestartTunnelResultOffersNextActions(t *testing.T) {
 	}
 }
 
+func TestNotifier_TunnelMutationResultOffersNextActions(t *testing.T) {
+	for _, action := range []string{"tunnel_enable", "tunnel_disable", "tunnel_delete"} {
+		t.Run(action, func(t *testing.T) {
+			f := &fakeRouterTG{}
+			n := NewNotifier(f)
+
+			err := n.NotifyCommandResult(context.Background(),
+				cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: action},
+				action,
+				wire.CommandResult{ID: "cmd1", Status: "ok", Output: "tunnel mutation ok"},
+				42,
+				3500,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+			if !ok || kb == nil {
+				t.Fatalf("%s result should carry inline next-action keyboard, got %T", action, f.sentMarkups[0])
+			}
+			for _, want := range []string{
+				"tunnels_refresh:42:_panel_",
+				"routes_open:42:_panel_",
+				"pingcheck_open:42:_panel_",
+			} {
+				if !containsStr(flattenKbCallbacks(kb), want) {
+					t.Fatalf("%s result keyboard missing %q: %+v", action, want, kb.InlineKeyboard)
+				}
+			}
+		})
+	}
+}
+
 func TestNotifier_PingCheckResultOffersNextActions(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewNotifier(f)
