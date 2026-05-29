@@ -129,6 +129,31 @@ func TestRoutesPanelNotifier_RebindStatusErrShowsTelegramError(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelNotifier_ApplyResultOffersSnapshot(t *testing.T) {
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: &RoutesCache{TTL: time.Minute}, DB: d}
+	body, _ := json.Marshal(wire.RouteApplyResult{
+		Action:    "add",
+		Kind:      "dns",
+		RouteID:   "r1",
+		RouteName: "YouTube",
+	})
+	ref := cmdpkg.MessageRef{Action: "route_add", ChatID: 1, MessageID: 7}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, uid); err != nil {
+		t.Fatal(err)
+	}
+	if !keyboardHasCallback(tgFake.kb, "routes_open") {
+		t.Fatalf("expected keyboard to include routes_open: %#v", tgFake.kb)
+	}
+	if !keyboardHasCallback(tgFake.kb, "routes_refresh") {
+		t.Fatalf("expected keyboard to include routes_refresh: %#v", tgFake.kb)
+	}
+	if !keyboardHasCallback(tgFake.kb, "routes_snapshot") {
+		t.Fatalf("expected keyboard to include routes_snapshot: %#v", tgFake.kb)
+	}
+}
+
 func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, prefix string) bool {
 	if kb == nil {
 		return false
