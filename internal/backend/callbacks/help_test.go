@@ -67,3 +67,40 @@ func TestHelp_StrangerDoesNotSeeAdminBody(t *testing.T) {
 		}
 	}
 }
+
+func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
+	body := topicHelpBody("per_router")
+	if strings.Contains(body, "🆘 Помощь") {
+		t.Fatalf("per-router topic help must not mention the removed reply button:\n%s", body)
+	}
+	for _, want := range []string{
+		"📊 Что происходит?",
+		"🩺 Проверка",
+		"🎛 Туннели",
+		"🛣 Маршруты",
+		"🔐 Amnezia Premium",
+		"🔑 HideMy.name",
+		"🌍 Через тоннель?",
+		"🇷🇺 Напрямую?",
+		"🛠 Обслуживание",
+		"⬆ Обновить пакеты",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("per-router topic help missing visible button %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestTopicHelpBody_SummaryMatchesVisibleReplyKeyboard(t *testing.T) {
+	for _, kind := range []string{"summary", "systemic"} {
+		body := topicHelpBody(kind)
+		if strings.Contains(body, "🆘 Помощь") {
+			t.Fatalf("%s topic help must not mention the removed reply button:\n%s", kind, body)
+		}
+		for _, want := range []string{"📊 Здоровье флота", "📋 Список юзеров"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s topic help missing visible button %q:\n%s", kind, want, body)
+			}
+		}
+	}
+}
