@@ -123,6 +123,48 @@ func TestStatusRowsKeepDeployVersionAndTime(t *testing.T) {
 	}
 }
 
+func TestAgentDeployModeLabelShowsMetadataGapInsteadOfLegacy(t *testing.T) {
+	ag := AgentState{
+		Nickname:            "client-g",
+		LastDeployedVersion: "v0.13.0-rc59",
+	}
+	if got := agentDeployModeLabel(ag); got != "metadata-gap" {
+		t.Fatalf("mode label=%q, want metadata-gap", got)
+	}
+	ag.Host = "192.168.0.1"
+	if got := agentDeployModeLabel(ag); got != "legacy-ssh" {
+		t.Fatalf("agent with SSH coords should stay legacy-ssh, got %q", got)
+	}
+	ag.Host = ""
+	ag.DeployMode = "awgm"
+	if got := agentDeployModeLabel(ag); got != "awgm" {
+		t.Fatalf("explicit mode should win, got %q", got)
+	}
+}
+
+func TestKnownRoutersMetadataGapHintExplainsSafeNextStep(t *testing.T) {
+	state := &State{Agents: []AgentState{{
+		Nickname:            "client-g",
+		LastDeployedVersion: "v0.13.0-rc59",
+	}}}
+	got := knownRoutersMetadataGapHint(state)
+	for _, want := range []string{
+		"metadata-gap",
+		"client-g",
+		"sync-vps",
+		"re-enroll",
+		"token",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metadata-gap hint missing %q:\n%s", want, got)
+		}
+	}
+	state.Agents[0].AWGMURL = "https://awg.client-g.example.test"
+	if got := knownRoutersMetadataGapHint(state); got != "" {
+		t.Fatalf("complete AWGM metadata should not warn, got %q", got)
+	}
+}
+
 func TestBoxLinesUseTerminalCellWidth(t *testing.T) {
 	line := boxLine("Router 192.168.0.1:222  тестроутер | v0.13.0-rc12 | 2026-05-21 12:40")
 	if got := terminalCells(line); got != menuBoxInnerWidth+2 {

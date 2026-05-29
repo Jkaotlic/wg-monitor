@@ -1006,6 +1006,7 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			DownloadURL:  releaseAssetURLForRouter(state, rel.TagName, assetName, asset.DownloadURL),
 			ChecksumURL:  releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL),
 			ChecksumName: assetName,
+			DeferStart:   commitToken != nil,
 		})
 		if err != nil {
 			return err
@@ -1015,9 +1016,9 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		var res TerminalRunResult
 		if useVPSBootstrap {
 			PrintInfo("public AWG Manager URL detected - running terminal bootstrap from VPS")
-			res, err = runAWGMBootstrapViaVPS(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
+			res, err = runAWGMBootstrapViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, script)
 		} else {
-			res, err = runAWGMBootstrapDirect(awgm, script, terminalUser, terminalPass)
+			res, err = runAWGMBootstrapDirectFunc(awgm, script, terminalUser, terminalPass)
 		}
 		if err != nil {
 			if strings.TrimSpace(res.Output) != "" {
@@ -1045,6 +1046,14 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			if err := commitToken(); err != nil {
 				return fmt.Errorf("commit staged token: %w", err)
 			}
+			PrintInfo("staged token committed - starting agent service")
+			res, err = runAWGMStartAfterTokenCommit(useVPSBootstrap, state, secrets, ag, awgm, apiKey, login, pass, terminalUser, terminalPass)
+			if err != nil {
+				if strings.TrimSpace(res.Output) != "" {
+					PrintInfo(res.Output)
+				}
+				return fmt.Errorf("start agent after token commit: %w", err)
+			}
 		}
 		applyAWGMDeploySuccess(ag, info, rel.TagName, awgmAuthMode, useVPSBootstrap, time.Now().UTC())
 		ensureTopicAfterSuccessfulInstall(state, secrets, ag)
@@ -1052,6 +1061,17 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		PrintOK("агент установлен через AWG Manager/KeenDNS: " + ag.Nickname)
 		return nil
 	}
+}
+
+func runAWGMStartAfterTokenCommit(useVPSBootstrap bool, state *State, secrets *SecretStore, ag *AgentState, awgm *AWGMClient, apiKey, login, pass, terminalUser, terminalPass string) (TerminalRunResult, error) {
+	if ag == nil {
+		return TerminalRunResult{}, fmt.Errorf("agent required")
+	}
+	startScript := RenderAWGMStartScript(ag.Nickname)
+	if useVPSBootstrap {
+		return runAWGMBootstrapViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, startScript)
+	}
+	return runAWGMBootstrapDirectFunc(awgm, startScript, terminalUser, terminalPass)
 }
 
 var autoCreateForumTopicFunc = autoCreateForumTopic

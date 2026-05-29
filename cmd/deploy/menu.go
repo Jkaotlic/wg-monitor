@@ -410,10 +410,7 @@ func printKnownRouters(state *State) {
 	}
 	fmt.Println(Colorize("Роутеры в локальном wizard.toml:", ColorBold))
 	for i, a := range state.Agents {
-		mode := a.DeployMode
-		if mode == "" {
-			mode = "legacy-ssh"
-		}
+		mode := agentDeployModeLabel(a)
 		fmt.Printf("  [%d] %s  mode=%s  awgm=%s  ssh=%s:%d  version=%s\n",
 			i+1,
 			a.Nickname,
@@ -424,6 +421,46 @@ func printKnownRouters(state *State) {
 			emptyDash(a.LastDeployedVersion),
 		)
 	}
+	if hint := knownRoutersMetadataGapHint(state); hint != "" {
+		PrintWarn(hint)
+	}
+}
+
+func agentDeployModeLabel(a AgentState) string {
+	if agentHasDeployMetadataGap(&a) {
+		return "metadata-gap"
+	}
+	mode := strings.TrimSpace(a.DeployMode)
+	if mode == "" {
+		return "legacy-ssh"
+	}
+	return mode
+}
+
+func agentHasDeployMetadataGap(ag *AgentState) bool {
+	if ag == nil {
+		return false
+	}
+	return strings.TrimSpace(ag.LastDeployedVersion) != "" &&
+		strings.TrimSpace(ag.DeployMode) == "" &&
+		strings.TrimSpace(ag.AWGMURL) == "" &&
+		strings.TrimSpace(ag.Host) == ""
+}
+
+func knownRoutersMetadataGapHint(state *State) string {
+	if state == nil {
+		return ""
+	}
+	var names []string
+	for i := range state.Agents {
+		if agentHasDeployMetadataGap(&state.Agents[i]) {
+			names = append(names, state.Agents[i].Nickname)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("metadata-gap (%s): версия есть, но нет AWG Manager URL/SSH deploy metadata. Сначала sync-vps; если backend тоже пустой, re-enroll через AWG Manager. Отдельно token не крути.", strings.Join(names, ", "))
 }
 
 func emptyDash(s string) string {

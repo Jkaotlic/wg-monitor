@@ -255,6 +255,119 @@ assert not (success + ".done").endswith(".json"), "done artifact must not be act
 	}
 }
 
+func TestAWGMRelayPythonDefersExistingAgentTokenCommitUntilBootstrapSucceeds(t *testing.T) {
+	python, err := exec.LookPath("python")
+	if err != nil {
+		t.Skip("python not on PATH")
+	}
+	dir := t.TempDir()
+	relayPath := filepath.Join(dir, "awgm-relay.py")
+	if err := os.WriteFile(relayPath, []byte(awgmVPSRelayPython), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	harnessPath := filepath.Join(dir, "harness.py")
+	harness := fmt.Sprintf(`
+import importlib.util
+import json
+import os
+import sys
+import time
+
+relay_path = %q
+work_dir = %q
+spec = importlib.util.spec_from_file_location("relay_under_test", relay_path)
+relay = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(relay)
+
+job_path = os.path.join(work_dir, "existing.json")
+with open(job_path, "w", encoding="utf-8") as f:
+    json.dump({
+        "nickname": "client-g",
+        "kind": "mobile",
+        "base_url": "https://awg.client-g.example.test",
+        "target_version": "v0.13.0-rc60",
+        "backend_url": "https://wg.example.test",
+        "release_base": "https://wg.example.test/v1/releases/download",
+        "expires_at_unix": int(time.time()) + 3600,
+        "wizard_token": "secret-token",
+        "terminal_user": "root",
+        "terminal_password": "keenetic",
+        "init_script": "#!/bin/sh\nexit 0",
+    }, f)
+
+events = []
+put_body = {}
+relay.opener = lambda: (object(), object())
+relay.login_if_needed = lambda op, cfg: None
+relay.request = lambda op, cfg, method, path: {"data": {"goArch": "mips", "routerIP": "10.0.0.1"}}
+relay.ensure_terminal = lambda op, cfg: None
+class Sock:
+    def close(self): pass
+relay.ws_connect = lambda cfg, jar: Sock()
+relay.ws_send = lambda *args, **kwargs: None
+relay.send_resize = lambda *args, **kwargs: None
+relay.login_terminal = lambda sock, cfg: ""
+
+def fake_wizard(cfg, method, path, body=None):
+    events.append("wizard:%%s:%%s" %% (method, path))
+    if method == "GET" and path == "/v1/wizard/agents":
+        return {"agents": [{
+            "nickname": "client-g",
+            "kind": "mobile",
+            "last_deployed_version": "",
+            "pending_version": "v0.13.0-rc60",
+        }]}
+    if method == "POST" and path == "/v1/wizard/enrollments":
+        return {"raw_token": "early-token", "backend_url": "https://wg.example.test"}
+    if method == "PUT" and path == "/v1/wizard/agents/client-g":
+        put_body.update(body or {})
+    return {}
+relay.local_wizard_request = fake_wizard
+
+def fake_commit(cfg, nick, raw_token):
+    events.append("commit:%%s" %% nick)
+relay.commit_existing_agent_token_hash = fake_commit
+
+def fake_bootstrap(sock, cfg):
+    script = cfg.get("bootstrap_script") or ""
+    if "DOWNLOAD_URL=" in script:
+        if any(e.startswith("wizard:POST:/v1/wizard/enrollments") for e in events):
+            raise AssertionError("existing deferred bootstrap rotated token before install succeeded")
+        if '"$INIT" restart || "$INIT" start' in script:
+            raise AssertionError("existing deferred bootstrap started service before token hash commit")
+        events.append("bootstrap")
+        return
+    if '"$INIT" restart || "$INIT" start' not in script:
+        raise AssertionError("post-commit start script did not restart service")
+    if "commit:client-g" not in events:
+        raise AssertionError("service started before token hash commit")
+    events.append("start")
+relay.run_bootstrap = fake_bootstrap
+
+relay.run_deferred_bootstrap(json.load(open(job_path, encoding="utf-8")), job_path)
+assert events == [
+    "wizard:GET:/v1/wizard/agents",
+    "bootstrap",
+    "commit:client-g",
+    "start",
+    "wizard:PUT:/v1/wizard/agents/client-g",
+], events
+assert not os.path.exists(job_path), "successful existing-agent job remained active"
+assert os.path.exists(job_path + ".done"), "successful existing-agent job did not write done artifact"
+assert put_body["deploy_mode"] == "awgm", put_body
+assert put_body["awgm_url"] == "https://awg.client-g.example.test", put_body
+assert put_body["awgm_auth"] == "router-admin", put_body
+assert put_body["last_deploy"], put_body
+`, relayPath, dir)
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(python, harnessPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("deferred existing-agent harness failed: %v\n%s", err, out)
+	}
+}
+
 func TestAWGMRelayPythonSupportsDeferredBootstrap(t *testing.T) {
 	for _, want := range []string{
 		`cfg.get("mode") == "deferred_bootstrap"`,
@@ -263,10 +376,15 @@ func TestAWGMRelayPythonSupportsDeferredBootstrap(t *testing.T) {
 		`("aarch64", "arm64")`,
 		`127.0.0.1:8080`,
 		`os.remove(cfg_path)`,
+		`subprocess.run`,
+		`SELECT changes();`,
 	} {
 		if !strings.Contains(awgmVPSRelayPython, want) {
 			t.Fatalf("relay python missing %q", want)
 		}
+	}
+	if strings.Contains(awgmVPSRelayPython, "import sqlite3") {
+		t.Fatal("relay should use sqlite3 CLI, not Python sqlite3 module")
 	}
 }
 

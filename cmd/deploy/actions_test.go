@@ -313,6 +313,26 @@ func TestDoctorCanSkipDirectSSHForAWGMOnlyAgent(t *testing.T) {
 	}
 }
 
+func TestDoctorWarnsForDeployedAgentMissingDeployMetadata(t *testing.T) {
+	ag := &AgentState{
+		Nickname:            "client-g",
+		Kind:                "mobile",
+		LastDeployedVersion: "v0.13.0-rc59",
+	}
+	got := doctorDeployMetadataWarning(ag)
+	for _, want := range []string{
+		"deploy metadata incomplete",
+		"client-g",
+		"sync-vps",
+		"re-enroll",
+		"token",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metadata warning missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestDoctorFormatLastSeenParsesGoSQLiteTimestamp(t *testing.T) {
 	raw := time.Now().UTC().Add(-30 * time.Second).Format("2006-01-02 15:04:05.999999999 -0700 MST")
 	got := doctorFormatLastSeen(raw)

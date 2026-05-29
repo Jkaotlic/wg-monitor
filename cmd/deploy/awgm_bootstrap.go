@@ -13,6 +13,7 @@ type AWGMBootstrapParams struct {
 	DownloadURL  string
 	ChecksumURL  string
 	ChecksumName string
+	DeferStart   bool
 }
 
 type awgmBootstrapTemplateParams struct {
@@ -23,6 +24,7 @@ type awgmBootstrapTemplateParams struct {
 	ChecksumNameQ string
 	AgentConfig   string
 	InitScript    string
+	StartBlock    string
 }
 
 func RenderAWGMBootstrapScript(p AWGMBootstrapParams) (string, error) {
@@ -52,11 +54,29 @@ func RenderAWGMBootstrapScript(p AWGMBootstrapParams) (string, error) {
 		ChecksumNameQ: shellQuote(p.ChecksumName),
 		AgentConfig:   strings.TrimRight(string(agentYAML), "\n"),
 		InitScript:    strings.TrimRight(string(initScript), "\n"),
+		StartBlock:    awgmBootstrapStartBlock(!p.DeferStart),
 	})
 	if err != nil {
 		return "", err
 	}
 	return string(raw), nil
+}
+
+func awgmBootstrapStartBlock(start bool) string {
+	if !start {
+		return `echo "wg-monitor bootstrap staged; service start deferred until backend token commit"`
+	}
+	return awgmServiceStartBlock("wg-monitor bootstrap complete for $NICKNAME")
+}
+
+func RenderAWGMStartScript(nickname string) string {
+	return "#!/bin/sh\nset -eu\nINIT=/opt/etc/init.d/S99wg-monitor\n" +
+		awgmServiceStartBlock("wg-monitor service started for "+shellQuote(nickname)) + "\n"
+}
+
+func awgmServiceStartBlock(message string) string {
+	return `"$INIT" restart || "$INIT" start
+echo ` + message
 }
 
 func shellQuote(s string) string {
