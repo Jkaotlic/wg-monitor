@@ -58,29 +58,24 @@ type WelcomeSender interface {
 }
 
 // SendWelcome posts the first-contact message into a freshly-created
-// per_router topic so the reply-keyboard buttons attach immediately (TG
-// only re-installs the persistent keyboard on bot-originated messages —
-// an empty topic has none until something arrives).
-//
-// markup must be the value returned by callbacks/UIConfigSnapshot.KeyboardForTopic("per_router")
-// so the same compat-inline / reply-kb switch the rest of the app uses
-// is honoured here. Pass nil to skip the keyboard entirely (not recommended).
+// per_router topic so operators immediately see the topic menu. Callers
+// usually pass tg.OperatorMenuInlineKeyboardForTopic("per_router") so the
+// controls stay visible even when Telegram drops the bottom reply keyboard.
 func SendWelcome(ctx context.Context, tg WelcomeSender, chatID, threadID int64, nickname string, markup any) error {
-	text := "👋 Топик роутера " + nickname + " готов.\n\n" +
-		"Кнопки внизу — то, что я умею. Тапни 📊 чтобы посмотреть статус прямо сейчас."
+	text := "👋 Меню роутера " + nickname + " готово.\n\n" +
+		"Вот кнопки под этим сообщением — основные действия для топика. Ими можно пользоваться сразу, без slash-команд.\n" +
+		"Начни с 📊 статуса или 🩺 проверки."
 	t := threadID
 	_, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, markup)
 	return err
 }
 
-// RepushKeyboard re-attaches the reply-keyboard to an existing per_router
-// topic by sending a short confirmation message that carries the markup.
-// Used by the /keyboard slash command: TG can drop a topic's persistent
-// keyboard if the operator deletes the bot's last message in the topic,
-// and this is the explicit recovery path.
+// RepushKeyboard posts a fresh visible menu into an existing per_router
+// topic. Used by /keyboard and admin recovery flows when Telegram clients
+// hide or drop their local bottom keyboard state.
 func RepushKeyboard(ctx context.Context, tg WelcomeSender, chatID, threadID int64, nickname string, markup any) error {
-	text := "🪄 Кнопки восстановлены — " + nickname + ".\n" +
-		"Если они опять пропадут, тапни /keyboard внутри этого топика."
+	text := "🪄 Меню роутера " + nickname + " обновлено.\n\n" +
+		"Вот кнопки под этим сообщением снова доступны для работы в этом топике."
 	t := threadID
 	_, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, markup)
 	return err

@@ -2651,7 +2651,7 @@ func autoCreateForumTopic(state *State, secrets *SecretStore, nick string) int {
 		PrintWarn("createForumTopic не удался (" + err.Error() + ") — спрошу thread_id вручную")
 		return 0
 	}
-	if err := alerts.SendWelcome(ctx, cli, state.Telegram.ChatID, id, nick, tg.ReplyKeyboardForTopic("per_router")); err != nil {
+	if err := alerts.SendWelcome(ctx, cli, state.Telegram.ChatID, id, nick, tg.OperatorMenuInlineKeyboardForTopic("per_router")); err != nil {
 		PrintWarn("welcome в новый топик не ушёл (" + err.Error() + ") — топик всё равно создан")
 	}
 	PrintOK(fmt.Sprintf("создан топик thread_id=%d", id))

@@ -43,6 +43,19 @@ func TestSendWelcome_IncludesNickname(t *testing.T) {
 	}
 }
 
+func TestSendWelcome_PresentsVisibleOperatorMenu(t *testing.T) {
+	f := &fakeWelcomeSender{}
+	if err := SendWelcome(context.Background(), f, -100, 555, "testkeen", "stub-kb"); err != nil {
+		t.Fatalf("SendWelcome: %v", err)
+	}
+	got := f.calls[0].text
+	for _, want := range []string{"Меню роутера", "кнопки под этим сообщением", "без slash-команд"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("welcome text should explain visible menu %q, got: %s", want, got)
+		}
+	}
+}
+
 func TestSendWelcome_AttachesProvidedMarkup(t *testing.T) {
 	f := &fakeWelcomeSender{}
 	mark := "my-keyboard"
@@ -51,5 +64,21 @@ func TestSendWelcome_AttachesProvidedMarkup(t *testing.T) {
 	}
 	if f.calls[0].markup != mark {
 		t.Errorf("markup not propagated: %v", f.calls[0].markup)
+	}
+}
+
+func TestRepushKeyboard_PresentsMenuWithoutSlashFallback(t *testing.T) {
+	f := &fakeWelcomeSender{}
+	if err := RepushKeyboard(context.Background(), f, -100, 555, "del", "stub-kb"); err != nil {
+		t.Fatalf("RepushKeyboard: %v", err)
+	}
+	got := f.calls[0].text
+	for _, want := range []string{"Меню роутера", "del", "кнопки под этим сообщением"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("repush text should expose menu %q, got: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "/keyboard") || strings.Contains(got, "slash") {
+		t.Fatalf("repush text must not rely on operators guessing slash commands: %s", got)
 	}
 }

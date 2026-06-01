@@ -185,7 +185,7 @@ func TestAdminTopicHelp(t *testing.T) {
 
 // TestAdminEnsureTopics_SendsWelcomeForFreshTopic: after /ensure_topics
 // creates a topic, the freshly-created per_router topic gets a welcome
-// message so reply-keyboard buttons attach immediately.
+// message with the visible inline operator menu.
 func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
 	d, _ := newTestDB(t) // vasya has no topic by default
 	f := &fakeRouterTGFull{}
@@ -200,7 +200,11 @@ func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
 	// Welcome lands in rkSends (SendMessageWithReplyKeyboard) — not sentMsgs.
 	var welcomeCount int
 	for _, s := range f.rkSends {
-		if strings.HasPrefix(s.text, "👋 Топик роутера vasya") {
+		if strings.HasPrefix(s.text, "👋 Меню роутера vasya") {
+			kb, ok := s.markup.(*tg.InlineKeyboardMarkup)
+			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") {
+				t.Fatalf("welcome must carry visible operator menu, markup=%T %+v", s.markup, s.markup)
+			}
 			welcomeCount++
 		}
 	}
@@ -210,8 +214,8 @@ func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
 }
 
 // TestAdminRecreateTopic_SendsWelcomeAfterRebuild: after /recreate_topic,
-// the new per_router topic gets a welcome message so reply-keyboard
-// buttons attach immediately to the new thread.
+// the new per_router topic gets a welcome message with the visible inline
+// operator menu attached to the new thread.
 func TestAdminRecreateTopic_SendsWelcomeAfterRebuild(t *testing.T) {
 	d, uid := newTestDB(t)
 	const oldThread = int64(7777)
@@ -230,7 +234,11 @@ func TestAdminRecreateTopic_SendsWelcomeAfterRebuild(t *testing.T) {
 
 	var welcomeCount int
 	for _, s := range f.rkSends {
-		if strings.HasPrefix(s.text, "👋 Топик роутера vasya") {
+		if strings.HasPrefix(s.text, "👋 Меню роутера vasya") {
+			kb, ok := s.markup.(*tg.InlineKeyboardMarkup)
+			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
+				t.Fatalf("welcome must carry visible operator menu, markup=%T %+v", s.markup, s.markup)
+			}
 			welcomeCount++
 		}
 	}

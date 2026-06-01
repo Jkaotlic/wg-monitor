@@ -435,7 +435,7 @@ func (r *Router) panelClose(ctx context.Context, q *tg.CallbackQuery) {
 
 // panelAwakenConfirm renders the "Оживить топики" confirmation screen
 // showing the count of routers that have a topic and will receive a
-// welcome message. Two-button kb: Подтвердить (panel:0:awaken_do) /
+// visible menu card. Two-button kb: Подтвердить (panel:0:awaken_do) /
 // « Назад (panel:0:home).
 func (r *Router) panelAwakenConfirm(ctx context.Context, q *tg.CallbackQuery) {
 	users, err := r.d.Users().GetAll()
@@ -449,7 +449,7 @@ func (r *Router) panelAwakenConfirm(ctx context.Context, q *tg.CallbackQuery) {
 			count++
 		}
 	}
-	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики\n\nЧто будет:\n  • отправим приветствие с кнопками во все per_router топики\n  • Будут затронуты: %d топика", count)
+	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики\n\nЧто будет:\n  • отправим видимое меню роутера во все per_router топики\n  • Будут затронуты: %d топика", count)
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
@@ -491,7 +491,7 @@ func (r *Router) panelAwakenDo(ctx context.Context, q *tg.CallbackQuery) {
 			}
 		}
 		first = false
-		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, *u.TelegramThreadID, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, *u.TelegramThreadID, u.Nickname, tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
 			failed++
 			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, werr))
 			continue

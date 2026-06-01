@@ -119,10 +119,53 @@ func TestReplyKeyboard_PerRouter_PremiumButtonsAreActionLabeled(t *testing.T) {
 	}
 }
 
+func TestOperatorMenuInlineKeyboardForTopic_PerRouter(t *testing.T) {
+	kb := OperatorMenuInlineKeyboardForTopic("per_router")
+	if kb == nil {
+		t.Fatal("operator menu keyboard is nil")
+	}
+	for _, want := range []struct {
+		text string
+		cb   string
+	}{
+		{"📊 Что происходит?", "compat_btn:0:smart_reply"},
+		{"🩺 Проверка", "compat_btn:0:router_doctor"},
+		{"🎛 Туннели", "compat_btn:0:tunnels"},
+		{"🛣 Маршруты", "compat_btn:0:routes"},
+		{"🔐 Amnezia Premium", "compat_btn:0:amnezia_premium"},
+		{"🔑 HideMy.name", "compat_btn:0:hidemyname"},
+		{"🌍 Через тоннель?", "compat_btn:0:via_tunnel"},
+		{"🇷🇺 Напрямую?", "compat_btn:0:direct"},
+		{"🛠 Обслуживание", "compat_btn:0:maint"},
+		{"⬆ Обновить пакеты", "compat_btn:0:opkg_upgrade"},
+	} {
+		if !inlineKeyboardHasButton(kb, want.text, want.cb) {
+			t.Fatalf("operator menu missing %q/%q: %+v", want.text, want.cb, kb.InlineKeyboard)
+		}
+	}
+}
+
+func TestOperatorMenuInlineKeyboardForTopic_UnknownNil(t *testing.T) {
+	if kb := OperatorMenuInlineKeyboardForTopic("unknown"); kb != nil {
+		t.Fatalf("unknown topic should not get operator menu: %+v", kb)
+	}
+}
+
 func replyKeyboardHasText(kb *ReplyKeyboardMarkup, text string) bool {
 	for _, row := range kb.Keyboard {
 		for _, b := range row {
 			if b.Text == text {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func inlineKeyboardHasButton(kb *InlineKeyboardMarkup, text, callback string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			if b.Text == text && b.CallbackData == callback {
 				return true
 			}
 		}

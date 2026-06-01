@@ -2989,6 +2989,10 @@ func TestRouterHandleMessage_OperatorKeyboardCommandWithBotSuffix(t *testing.T) 
 	if f.rkSends[0].thread == nil || *f.rkSends[0].thread != tid {
 		t.Fatalf("keyboard must be sent to the operator's router topic, got %+v", f.rkSends[0].thread)
 	}
+	kb, ok := f.rkSends[0].markup.(*tg.InlineKeyboardMarkup)
+	if !ok || !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") || !keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
+		t.Fatalf("/keyboard must send the full visible operator menu, markup=%T %+v", f.rkSends[0].markup, f.rkSends[0].markup)
+	}
 }
 
 func TestRouter_DiagRaw_ServesCachedBody(t *testing.T) {
