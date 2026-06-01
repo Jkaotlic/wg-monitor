@@ -148,8 +148,14 @@ func TestRoutesPanelKeyboard_HasDoctorAndSnapshot(t *testing.T) {
 
 func TestRebindResultKeyboard_OffersTunnelCheck(t *testing.T) {
 	kb := RebindResultKeyboard(42, "old", "new", 0)
-	if !routesKeyboardHasCallback(kb, "tunnels_refresh:42:_panel_") {
-		t.Fatalf("rebind result should offer tunnel check next-action: %+v", kb.InlineKeyboard)
+	for _, want := range []string{
+		"tunnels_refresh:42:_panel_",
+		"pingcheck_open:42:_panel_",
+		"router_doctor:42:_menu",
+	} {
+		if !routesKeyboardHasCallback(kb, want) {
+			t.Fatalf("rebind result should offer post-route verification %q: %+v", want, kb.InlineKeyboard)
+		}
 	}
 }
 
