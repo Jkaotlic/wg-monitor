@@ -208,6 +208,20 @@ func TestRestartConfirmKeyboard(t *testing.T) {
 	}
 }
 
+func TestOpkgUpgradeConfirmText_UsesRussianCopy(t *testing.T) {
+	text := OpkgUpgradeConfirmText("a1b2c3d4")
+	for _, forbidden := range []string{"Maintenance", "Confirm opkg upgrade", "What happens", "Confirmation code"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("opkg upgrade confirmation still contains English copy %q in:\n%s", forbidden, text)
+		}
+	}
+	for _, want := range []string{"Обслуживание", "Запустить opkg upgrade", "Что произойдет", "Код подтверждения: a1b2c3d4"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("opkg upgrade confirmation missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 // --- FirmwareScreenText / FirmwareScreenKeyboard ---
 
 func TestFirmwareScreenText_NoUpdate(t *testing.T) {

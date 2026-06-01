@@ -87,10 +87,16 @@ func TestFormatCommandResult_PingcheckOneLiner(t *testing.T) {
 }
 
 func TestFormatCommandResult_RestartTunnelOK(t *testing.T) {
-	r := wire.CommandResult{Status: "ok", Output: "restarted nwg0"}
+	r := wire.CommandResult{Status: "ok", Output: "все тоннели перезапущены"}
 	chunks := FormatCommandResult("restart_tunnel", r, 3500)
-	if !strings.Contains(chunks[0], "🔁") || !strings.Contains(chunks[0], "туннель перезапущен: nwg0") {
-		t.Errorf("bad: %s", chunks[0])
+	if !strings.Contains(chunks[0], "Перезапуск awg-manager") {
+		t.Fatalf("global restart_tunnel should be labelled as awg-manager restart, got:\n%s", chunks[0])
+	}
+	if strings.Contains(chunks[0], "Перезапуск туннеля") || strings.Contains(chunks[0], "туннель перезапущен") {
+		t.Fatalf("global restart_tunnel must not look like a per-tunnel restart, got:\n%s", chunks[0])
+	}
+	if !strings.Contains(chunks[0], "все тоннели перезапущены") {
+		t.Errorf("global restart output should be preserved, got:\n%s", chunks[0])
 	}
 }
 

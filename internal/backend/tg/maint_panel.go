@@ -177,7 +177,7 @@ func RestartConfirmKeyboard(userID int64, name, token string) InlineKeyboardMark
 }
 
 func OpkgUpgradeConfirmText(token string) string {
-	return fmt.Sprintf("Maintenance\n\nConfirm opkg upgrade?\n\nWhat happens:\n  - agent runs opkg update, checks /opt free space, then runs opkg upgrade.\n  - package updates can restart Entware services or briefly affect router-side tooling.\n  - if feeds are broken, the result will offer feed repair actions.\n\nConfirmation code: %s (valid for 5 min)", token)
+	return fmt.Sprintf("🛠 Обслуживание\n\n⚠️ Запустить opkg upgrade?\n\nЧто произойдет:\n  • агент выполнит opkg update, проверит свободное место в /opt и запустит opkg upgrade.\n  • обновление пакетов может перезапустить Entware-сервисы или кратко задеть роутерные утилиты.\n  • если фиды сломаны, результат предложит действия для ремонта фидов.\n\nКод подтверждения: %s (живёт 5 мин)", token)
 }
 
 // FirmwareScreenText shows current + available firmware. When Available is

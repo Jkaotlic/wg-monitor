@@ -136,11 +136,11 @@ func (r *Router) handleOpkgDisableAsk(ctx context.Context, q *tg.CallbackQuery, 
 	if !ok {
 		return false
 	}
-	text := fmt.Sprintf("Disable opkg feed?\n\nFeed:\n%s\n\nThe agent will comment this feed out and run opkg update.", p.URL)
+	text := fmt.Sprintf("Отключить opkg-фид?\n\nФид:\n%s\n\nАгент закомментирует этот фид и запустит opkg update.", p.URL)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Yes, disable feed", CallbackData: fmt.Sprintf("opkg_disable_confirm:%d:_menu:%s", args.UserID, args.OpkgRepairToken)},
+		{Text: "✅ Да, отключить фид", CallbackData: fmt.Sprintf("opkg_disable_confirm:%d:_menu:%s", args.UserID, args.OpkgRepairToken)},
 	}, {
-		{Text: "Cancel", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", args.UserID)},
+		{Text: "↩ Отмена", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", args.UserID)},
 	}}}
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, err.Error())

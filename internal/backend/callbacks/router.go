@@ -121,6 +121,7 @@ type Router struct {
 	// Access-control panel plumbing. All in-memory; lost on restart.
 	pendingAddOperator       *pendingAddOperatorStore
 	pendingSelfHostedAmnezia *pendingSelfHostedAmneziaStore
+	pendingConfirms          *pendingConfirmStore
 
 	// diagCache stores raw diag_now result bodies so "📄 Полный отчёт"
 	// inline-button taps can fetch the body without re-running the diagnostic.
@@ -209,6 +210,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
 	r.pendingAddOperator = newPendingAddOperatorStore()
 	r.pendingSelfHostedAmnezia = newPendingSelfHostedAmneziaStore()
+	r.pendingConfirms = newPendingConfirmStore()
 	r.diagCache = newDiagCache()
 	r.fleetBatches = newFleetBatchStore()
 	return r
@@ -668,15 +670,15 @@ func (r *Router) isAdminTG(userID int64) bool {
 //	users.GetByID(R) fails or returns nil   → allow + warn (don't break on DB hiccup)
 //	T != nil && (M == nil || *M != *T)      → reject (known router topic mismatch)
 //	F == AdminUserID                        → allow (admin override inside correct topic)
+//	O != nil && T == nil && F != admin      → reject (router topic not created/recorded yet)
 //	O != nil && *O == F                     → allow (rightful owner in topic)
 //	O != nil && *O != F                     → reject ("это не твой роутер")
 //	O == nil && M != nil && T != nil && *M == *T  → TOFU bind F → SetTelegramUserID, allow
-//	O == nil && T == nil                    → allow (unbound legacy, backwards-compat)
 //
-// The legacy unbound-allow branch only applies before a router topic is known.
-// Once TelegramThreadID is set, non-admin callbacks must come from that topic
-// so stale buttons in foreign topics cannot control the wrong router or send
-// command results/config documents to the wrong thread.
+// Non-admin router-scoped callbacks require a recorded per-router topic before
+// owner/operator checks are honored. Admin remains the bootstrap escape hatch:
+// a new router can still be diagnosed or wired up before the topic is recorded,
+// but bound owners/operators cannot run controls from the summary/main group.
 func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
 	if args.UserID == 0 {
 		if args.Action == "routes_close" {
@@ -686,7 +688,7 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 	}
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "Ошибка: router not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "Ошибка: роутер не найден")
 		slog.Warn("acl: user lookup failed, rejecting", "router_user_id", args.UserID, "err", err)
 		return false
 	}
@@ -702,10 +704,16 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 	}
 	if user.TelegramUserID != nil {
 		if *user.TelegramUserID == q.From.ID {
+			if r.rejectBeforeRouterTopicExists(ctx, q, args, user) {
+				return false
+			}
 			return true
 		}
 		// Owner mismatch — try the operator whitelist before rejecting.
 		if r.d.RouterOperators().HasAccess(user.ID, q.From.ID) {
+			if r.rejectBeforeRouterTopicExists(ctx, q, args, user) {
+				return false
+			}
 			return true
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
@@ -723,10 +731,24 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		}
 		return true
 	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router is not bound to this topic")
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не привязан к этому топику")
 	slog.Warn("acl: rejected unbound router outside bound topic",
 		"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "data", q.Data)
 	return false
+}
+
+func (r *Router) rejectBeforeRouterTopicExists(ctx context.Context, q *tg.CallbackQuery, args Args, user *db.User) bool {
+	if user == nil || user.TelegramThreadID != nil || !routerTopicRequiredBeforeNonAdminCallback(args.Action) {
+		return false
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала создай топик роутера")
+	slog.Warn("acl: rejected before router topic exists",
+		"from", q.From.ID, "router_user_id", args.UserID, "data", q.Data)
+	return true
+}
+
+func routerTopicRequiredBeforeNonAdminCallback(action string) bool {
+	return action != "" && action != "history"
 }
 
 func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
@@ -891,9 +913,13 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
 			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
 	case "📋 Список юзеров":
-		r.dispatchListUsers(ctx, m, kind)
+		if isAdmin && isFleetTopic(kind) {
+			r.dispatchListUsers(ctx, m, kind)
+		}
 	case "📊 Здоровье флота":
-		r.dispatchFleetHealth(ctx, m, kind)
+		if isAdmin && isFleetTopic(kind) {
+			r.dispatchFleetHealth(ctx, m, kind)
+		}
 	default:
 		if r.handlePendingRouteReply(ctx, m, user) {
 			return
@@ -973,6 +999,10 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 		return true
 	}
 	return false
+}
+
+func isFleetTopic(kind string) bool {
+	return kind == "summary" || kind == "systemic"
 }
 
 func (r *Router) handleRouteExplainReply(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
@@ -1234,6 +1264,10 @@ func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery,
 	if r.routesCache != nil {
 		if snap, ok := r.routesCache.Get(args.UserID); ok {
 			if entry, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName); found {
+				if tunnelPanelActionIsStale(args, entry) {
+					r.refreshStaleTunnelPanelAction(ctx, q, args, "список устарел; обновляю")
+					return
+				}
 				text := tg.TunnelDeleteConfirmText(entry)
 				kb := tg.TunnelDeleteConfirmKeyboard(args.UserID, entry)
 				_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
@@ -1281,14 +1315,61 @@ func (r *Router) guardStaleTunnelPanelAction(ctx context.Context, q *tg.Callback
 		}
 		return false
 	}
-	if _, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName); found {
+	entry, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName)
+	if found && !tunnelPanelActionIsStale(args, entry) {
 		return false
+	}
+	if found {
+		r.refreshStaleTunnelPanelAction(ctx, q, args, "список устарел; обновляю")
+		return true
 	}
 	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
 		r.refreshTunnelsPanelCallback(ctx, q, u)
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "тоннеля уже нет; обновляю список")
 	return true
+}
+
+func (r *Router) refreshStaleTunnelPanelAction(ctx context.Context, q *tg.CallbackQuery, args Args, toast string) {
+	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
+		r.refreshTunnelsPanelCallback(ctx, q, u)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
+}
+
+func (r *Router) putPendingConfirm(q *tg.CallbackQuery, userID int64, action, target string) string {
+	token := makeMaintToken()
+	r.pendingConfirms.put(&pendingConfirm{
+		UserID:    userID,
+		ActorTGID: q.From.ID,
+		ThreadID:  cloneInt64Ptr(q.Message.MessageThreadID),
+		Action:    action,
+		Target:    target,
+		Token:     token,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	return token
+}
+
+func (r *Router) consumePendingConfirm(ctx context.Context, q *tg.CallbackQuery, args Args, target string) bool {
+	if _, ok := r.pendingConfirms.consume(args.UserID, q.From.ID, q.Message.MessageThreadID, args.Action, target, args.ConfirmToken); ok {
+		return true
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "подтверждение устарело")
+	return false
+}
+
+func tunnelPanelActionIsStale(args Args, entry tg.TunnelPanelEntry) bool {
+	if strings.TrimSpace(args.NDMSName) != strings.TrimSpace(entry.NDMSName) {
+		return true
+	}
+	switch args.Action {
+	case "tunnel_disable":
+		return !entry.Enabled
+	case "tunnel_enable":
+		return entry.Enabled
+	}
+	return false
 }
 
 func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeyboardMarkup, bool) {
@@ -1711,7 +1792,7 @@ func (r *Router) consumePendingRebindForActor(userID, actorTGID int64, token str
 func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args Args, force bool) {
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "user not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
 	if !force && r.routesCache != nil {
@@ -1766,7 +1847,7 @@ func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuer
 func (r *Router) handleMaintOpen(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "user not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
 	if r.cmdSink == nil {
@@ -1814,7 +1895,7 @@ func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, ar
 func (r *Router) handleOpkgUpgradeAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, _ := r.d.Users().GetByID(args.UserID)
 	if user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
 	tok := makeMaintToken()

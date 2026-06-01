@@ -741,6 +741,14 @@ func TestParse_AmneziaDownload(t *testing.T) {
 	if a.Action != "amz_dl" || !a.IsPanel || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
 		t.Errorf("got %+v", a)
 	}
+
+	a, err = Parse("amz_dl_confirm:42:_panel_:keyabc:DE:tok123")
+	if err != nil {
+		t.Fatalf("confirm with token unexpected: %v", err)
+	}
+	if a.Action != "amz_dl_confirm" || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" || a.ConfirmToken != "tok123" {
+		t.Errorf("confirm got %+v", a)
+	}
 }
 
 func TestParse_AmneziaDownloadRejectsBadCountry(t *testing.T) {
@@ -775,6 +783,14 @@ func TestParse_AmneziaRevokeCountry(t *testing.T) {
 	if a.Action != "amz_revoke_confirm" || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
 		t.Errorf("confirm got %+v", a)
 	}
+
+	a, err = Parse("amz_revoke_confirm:42:_panel_:keyabc:DE:tok123")
+	if err != nil {
+		t.Fatalf("confirm with token unexpected: %v", err)
+	}
+	if a.ConfirmToken != "tok123" {
+		t.Errorf("confirm token = %q", a.ConfirmToken)
+	}
 }
 
 func TestParse_SelfHostedAmneziaID(t *testing.T) {
@@ -784,6 +800,22 @@ func TestParse_SelfHostedAmneziaID(t *testing.T) {
 	}
 	if a.Action != "amz_selfhosted_confirm" || !a.IsPanel || a.SelfHostedAmneziaID != "home" {
 		t.Fatalf("got %+v", a)
+	}
+
+	a, err = Parse("amz_selfhosted_confirm:42:_panel_:home:tok123")
+	if err != nil {
+		t.Fatalf("with token unexpected: %v", err)
+	}
+	if a.ConfirmToken != "tok123" {
+		t.Fatalf("confirm token = %q", a.ConfirmToken)
+	}
+
+	a, err = Parse("amz_selfhosted_delete_confirm:42:_panel_:home:tok456")
+	if err != nil {
+		t.Fatalf("delete confirm with token unexpected: %v", err)
+	}
+	if a.Action != "amz_selfhosted_delete_confirm" || a.SelfHostedAmneziaID != "home" || a.ConfirmToken != "tok456" {
+		t.Fatalf("delete confirm got %+v", a)
 	}
 }
 
@@ -821,6 +853,14 @@ func TestParse_AmneziaKeyActions(t *testing.T) {
 			}
 		})
 	}
+
+	a, err := Parse("amz_delete_confirm:42:_panel_:keyabc:tok123")
+	if err != nil {
+		t.Fatalf("delete confirm with token unexpected: %v", err)
+	}
+	if a.Action != "amz_delete_confirm" || a.AmneziaKeyID != "keyabc" || a.ConfirmToken != "tok123" {
+		t.Fatalf("delete confirm got %+v", a)
+	}
 }
 
 func TestParse_AmneziaCountriesPage(t *testing.T) {
@@ -840,6 +880,24 @@ func TestParse_HideMyDownload(t *testing.T) {
 	}
 	if a.Action != "hmn_dl" || !a.IsPanel || a.HideMyCodeID != "codeabc" || a.HideMyServerID != "srv123" {
 		t.Errorf("got %+v", a)
+	}
+
+	a, err = Parse("hmn_dl_confirm:42:_panel_:codeabc:srv123:tok123")
+	if err != nil {
+		t.Fatalf("confirm with token unexpected: %v", err)
+	}
+	if a.HideMyCodeID != "codeabc" || a.HideMyServerID != "srv123" || a.ConfirmToken != "tok123" {
+		t.Errorf("confirm got %+v", a)
+	}
+}
+
+func TestParse_HideMyDeleteConfirmToken(t *testing.T) {
+	a, err := Parse("hmn_delete_confirm:42:_panel_:codeabc:tok123")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "hmn_delete_confirm" || a.HideMyCodeID != "codeabc" || a.ConfirmToken != "tok123" {
+		t.Fatalf("got %+v", a)
 	}
 }
 

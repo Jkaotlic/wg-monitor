@@ -205,8 +205,9 @@ func (r *Router) handleHideMyDeleteAsk(ctx context.Context, q *tg.CallbackQuery,
 		return
 	}
 	text := fmt.Sprintf("Удалить %s из HideMy.name этого топика?\n\nЯ удалю только сохранение в боте.", stored.Label)
+	tok := r.putPendingConfirm(q, user.ID, "hmn_delete_confirm", args.HideMyCodeID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Да, удалить", CallbackData: fmt.Sprintf("hmn_delete_confirm:%d:_panel_:%s", user.ID, args.HideMyCodeID)},
+		{Text: "Да, удалить", CallbackData: fmt.Sprintf("hmn_delete_confirm:%d:_panel_:%s:%s", user.ID, args.HideMyCodeID, tok)},
 	}, {
 		{Text: "Назад", CallbackData: fmt.Sprintf("hmn_refresh:%d:_panel_", user.ID)},
 	}}}
@@ -218,6 +219,9 @@ func (r *Router) handleHideMyDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if !r.consumePendingConfirm(ctx, q, args, args.HideMyCodeID) {
 		return
 	}
 	if err := r.deleteHideMyCode(user.ID, args.HideMyCodeID); err != nil {
@@ -251,8 +255,9 @@ func (r *Router) handleHideMyDownloadAsk(ctx context.Context, q *tg.CallbackQuer
 		return
 	}
 	text := fmt.Sprintf("Выпустить HideMy.name AmneziaWG 2.0 .conf для %s?\n\nПосле скачивания я поставлю импорт туннеля в очередь роутера.", server.Name)
+	tok := r.putPendingConfirm(q, user.ID, "hmn_dl_confirm", args.HideMyCodeID+":"+args.HideMyServerID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("hmn_dl_confirm:%d:_panel_:%s:%s", user.ID, args.HideMyCodeID, args.HideMyServerID)},
+		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("hmn_dl_confirm:%d:_panel_:%s:%s:%s", user.ID, args.HideMyCodeID, args.HideMyServerID, tok)},
 	}, {
 		{Text: "Назад", CallbackData: fmt.Sprintf("hmn_open:%d:_panel_:%s", user.ID, args.HideMyCodeID)},
 	}}}
@@ -268,6 +273,9 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if !r.consumePendingConfirm(ctx, q, args, args.HideMyCodeID+":"+args.HideMyServerID) {
 		return
 	}
 	stored, ok := r.hideMyStoredCode(user.ID, args.HideMyCodeID)

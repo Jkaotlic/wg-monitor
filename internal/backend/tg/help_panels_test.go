@@ -75,6 +75,15 @@ func TestHelpForScreen_RoutesMatchesWANSystemRebind(t *testing.T) {
 	}
 }
 
+func TestHelpForScreen_TunnelsDistinguishesRestartButtons(t *testing.T) {
+	got := HelpForScreen("tunnels")
+	for _, want := range []string{"🔁 <имя>", "конкретный тоннель", "выкл→вкл", "🔁 awg-mgr", "менеджер awg-manager"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tunnels help should explain restart distinction, missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 func TestHelpRowFor_Maint(t *testing.T) {
 	row := HelpRowFor("maint")
 	if len(row) != 1 {

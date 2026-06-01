@@ -216,14 +216,14 @@ func (r *Router) accessStartAdd(ctx context.Context, q *tg.CallbackQuery, router
 func (r *Router) accessRemoveOpAsk(ctx context.Context, q *tg.CallbackQuery, routerID, opTGID int64) {
 	u, err := r.d.Users().GetByID(routerID)
 	if err != nil || u == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	text := fmt.Sprintf("Remove operator %d from %s?\n\nThe user will lose access to this router topic controls. Existing command history is not changed.", opTGID, u.Nickname)
+	text := fmt.Sprintf("Удалить оператора %d из %s?\n\nПользователь потеряет доступ к кнопкам этого топика. История команд не изменится.", opTGID, u.Nickname)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Yes, remove", CallbackData: fmt.Sprintf("access:0:remove_op_confirm:%d:%d", routerID, opTGID)},
+		{Text: "✅ Да, удалить", CallbackData: fmt.Sprintf("access:0:remove_op_confirm:%d:%d", routerID, opTGID)},
 	}, {
-		{Text: "Back", CallbackData: fmt.Sprintf("access:0:router:%d", routerID)},
+		{Text: "↩ Назад", CallbackData: fmt.Sprintf("access:0:router:%d", routerID)},
 	}}}
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
 		slog.Warn("access remove op confirm edit failed", "err", err)
@@ -234,18 +234,18 @@ func (r *Router) accessRemoveOpAsk(ctx context.Context, q *tg.CallbackQuery, rou
 func (r *Router) accessUnbindOwnerAsk(ctx context.Context, q *tg.CallbackQuery, routerID int64) {
 	u, err := r.d.Users().GetByID(routerID)
 	if err != nil || u == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
 	owner := int64(0)
 	if u.TelegramUserID != nil {
 		owner = *u.TelegramUserID
 	}
-	text := fmt.Sprintf("Unbind owner %d from %s?\n\nThe next trusted user who taps from this router topic can become owner again via TOFU binding.", owner, u.Nickname)
+	text := fmt.Sprintf("Отвязать владельца %d от %s?\n\nСледующий доверенный пользователь из топика сможет снова стать владельцем через TOFU-привязку.", owner, u.Nickname)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Yes, unbind", CallbackData: fmt.Sprintf("access:0:unbind_owner_confirm:%d", routerID)},
+		{Text: "✅ Да, отвязать", CallbackData: fmt.Sprintf("access:0:unbind_owner_confirm:%d", routerID)},
 	}, {
-		{Text: "Back", CallbackData: fmt.Sprintf("access:0:router:%d", routerID)},
+		{Text: "↩ Назад", CallbackData: fmt.Sprintf("access:0:router:%d", routerID)},
 	}}}
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
 		slog.Warn("access unbind owner confirm edit failed", "err", err)
