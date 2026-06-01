@@ -17,9 +17,10 @@ import (
 const perCheckTimeout = 10 * time.Second
 
 // ResumedThreshold: a gap longer than this between successful reports flags
-// the next report as Resumed=true. Mobile routers (in cars) pause for
-// minutes; we want any pause longer than ~5min treated as "back online".
-const ResumedThreshold = 5 * time.Minute
+// the next report as Resumed=true. Mobile routers (in cars) can miss a few
+// regular 60s ticks while moving between cells; treat only a sleep-scale gap
+// as "back online".
+const ResumedThreshold = 30 * time.Minute
 
 type Sender interface {
 	SendReport(ctx context.Context, r wire.Report) error

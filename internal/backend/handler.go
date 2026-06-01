@@ -122,9 +122,6 @@ func shouldNotifyMobileWake(user *db.User, ts time.Time, resumed bool, threshold
 	if user == nil || !user.IsMobile() {
 		return false
 	}
-	if resumed {
-		return true
-	}
 	if user.LastSeenAt == nil {
 		return false
 	}
@@ -385,6 +382,59 @@ func suppressMobileResumeStartupFailure(u *db.User, resumed bool, c wire.Check) 
 	}
 }
 
+func clearMissingTunnelHards(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool) {
+	if !reportIsFresh || d.DB == nil {
+		return
+	}
+	inventoryOK := false
+	liveTunnelChecks := map[string]bool{}
+	for _, c := range checks {
+		name := strings.TrimSpace(c.Name)
+		if name == "tunnels" && strings.ToLower(strings.TrimSpace(c.Status)) == "ok" {
+			inventoryOK = true
+			continue
+		}
+		if strings.HasPrefix(name, "tunnel_") {
+			liveTunnelChecks[name] = true
+		}
+	}
+	if !inventoryOK {
+		return
+	}
+	rows, err := d.DB.State().ActiveHardForUserStatus(userID)
+	if err != nil {
+		d.Logger.Warn("clear missing tunnel hards: list active hard", "nickname", nickname, "err", err)
+		return
+	}
+	for _, row := range rows {
+		if !strings.HasPrefix(row.CheckName, "tunnel_") || liveTunnelChecks[row.CheckName] {
+			continue
+		}
+		prev, err := d.DB.State().Get(userID, row.CheckName)
+		if err != nil {
+			d.Logger.Warn("clear missing tunnel hard: state get", "nickname", nickname, "check", row.CheckName, "err", err)
+			continue
+		}
+		if prev.CurrentStatus != "hard" {
+			continue
+		}
+		next := prev
+		next.CurrentStatus = "ok"
+		next.ConsecutiveFails = 0
+		next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
+		next.HardSince = nil
+		next.Acked = false
+		if err := d.DB.State().Save(userID, row.CheckName, next); err != nil {
+			d.Logger.Warn("clear missing tunnel hard: state save", "nickname", nickname, "check", row.CheckName, "err", err)
+			continue
+		}
+		d.Logger.Info("cleared missing tunnel hard",
+			"nickname", nickname, "check", row.CheckName,
+			"live_tunnel_checks", len(liveTunnelChecks),
+		)
+	}
+}
+
 func commandVersionArg(cmd wire.Command) string {
 	if cmd.Args == nil {
 		return ""
@@ -430,14 +480,14 @@ func reportHandler(d Deps) http.HandlerFunc {
 		ts := normaliseReportTimestamp(rep.Timestamp, time.Now())
 		reportIsFresh := reportFreshForUser(user, ts)
 
+		if reportIsFresh && rep.Resumed && d.Resumer != nil {
+			d.Resumer.MarkResumed(uid)
+		}
 		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, rep.Resumed, mobileWakeAfter(d))
-		// Resumed=true means the agent self-detected a gap. A clean agent
-		// restart after sleep may not set Resumed, so also use the backend's
-		// last_seen gap for the operator-facing wake card.
+		// The operator-facing wake card uses the backend-observed last_seen
+		// gap. Older agents can over-report Resumed=true after short mobile
+		// jitter; a clean agent restart after real sleep may not set Resumed.
 		if notifyWake {
-			if d.Resumer != nil {
-				d.Resumer.MarkResumed(uid)
-			}
 			if d.WakeNotifier != nil {
 				checks := append([]wire.Check(nil), rep.Checks...)
 				nickname := nick
@@ -601,6 +651,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
 			}
 		}
+		clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
 		// OBS-14: full check-summary INFO sampled to 1-in-10 reports + every
 		// resumed marker. Per-check status changes already emit dedicated
 		// FSM-transition logs (OBS-09); spamming Info every 60s for every
