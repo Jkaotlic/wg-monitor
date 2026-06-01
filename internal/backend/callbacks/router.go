@@ -389,6 +389,12 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "amz_dl_confirm":
 		r.handleAmneziaDownloadConfirm(ctx, q, args)
 		return
+	case "amz_revoke":
+		r.handleAmneziaRevokeAsk(ctx, q, args)
+		return
+	case "amz_revoke_confirm":
+		r.handleAmneziaRevokeConfirm(ctx, q, args)
+		return
 	case "amz_selfhosted_issue":
 		r.handleSelfHostedAmneziaIssue(ctx, q, args)
 		return

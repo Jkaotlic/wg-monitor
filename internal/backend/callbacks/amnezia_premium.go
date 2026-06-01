@@ -147,6 +147,35 @@ func amneziaImportQueuedView(userID int64, keyID, docWarn string) (string, tg.In
 	return text, kb
 }
 
+func amneziaFullSlotsView(user *db.User, keyID, requestedCountry string, info *amnezia.AccountInfo) (string, tg.InlineKeyboardMarkup) {
+	text := fmt.Sprintf("Слоты Amnezia Premium заняты: %d/%d.\n\nЧтобы выпустить .conf для %s, сначала освободи один старый country config или вернись к списку стран.",
+		info.ActiveDeviceCount, info.MaxDeviceCount, strings.ToUpper(requestedCountry))
+	rows := [][]tg.InlineKeyboardButton{}
+	for _, issued := range info.IssuedConfigs {
+		if issued.SourceType != "country_config" || strings.TrimSpace(issued.CountryCode) == "" {
+			continue
+		}
+		country := strings.ToLower(issued.CountryCode)
+		label := strings.ToUpper(country)
+		if issued.CountryName != "" {
+			label = issued.CountryName
+		}
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         "🧹 Освободить " + label,
+			CallbackData: fmt.Sprintf("amz_revoke:%d:_panel_:%s:%s", user.ID, keyID, country),
+		}})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "🌍 К странам",
+		CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", user.ID, keyID),
+	}, {
+		Text:         "Обновить",
+		CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_:%s", user.ID, keyID),
+	}})
+	rows = append(rows, premiumHelpRow())
+	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
 func amneziaCountriesView(user *db.User, stored amneziaStoredKey, info *amnezia.AccountInfo, page int) (string, tg.InlineKeyboardMarkup) {
 	rows := [][]tg.InlineKeyboardButton{}
 	if info == nil || len(info.AvailableCountries) == 0 {
@@ -376,6 +405,13 @@ func (r *Router) handleAmneziaDownloadAsk(ctx context.Context, q *tg.CallbackQue
 	}
 	issued := amneziaIssuedCountrySet(info)[strings.ToLower(args.AmneziaCountryCode)]
 	if !issued && info.ActiveDeviceCount >= info.MaxDeviceCount {
+		user, err := r.d.Users().GetByID(args.UserID)
+		if err != nil || user == nil {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+			return
+		}
+		text, kb := amneziaFullSlotsView(user, args.AmneziaKeyID, args.AmneziaCountryCode, info)
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "свободных слотов нет")
 		return
 	}
@@ -441,6 +477,55 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
 
+func (r *Router) handleAmneziaRevokeAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	stored, ok := r.amneziaStoredKey(user.ID, args.AmneziaKeyID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не найден")
+		return
+	}
+	country := strings.ToUpper(args.AmneziaCountryCode)
+	text := fmt.Sprintf("Освободить слот Amnezia Premium?\n\nЯ отзову country config %s из кабинета %s. Premium key не удаляется; после освобождения можно снова выбрать страну и выпустить новый .conf.", country, stored.Label)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Да, освободить " + country, CallbackData: fmt.Sprintf("amz_revoke_confirm:%d:_panel_:%s:%s", user.ID, args.AmneziaKeyID, args.AmneziaCountryCode)},
+	}, {
+		{Text: "Назад", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", user.ID, args.AmneziaKeyID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleAmneziaRevokeConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, err := r.d.Users().GetByID(args.UserID)
+	if err != nil || user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	key, _ := r.getAmneziaKeyByID(user.ID, args.AmneziaKeyID)
+	if key == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не сохранён")
+		return
+	}
+	if err := r.revokeAmneziaCountryConfig(ctx, key, args.AmneziaCountryCode); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
+	}
+	info, err := r.fetchAmneziaAccount(ctx, key)
+	if err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "слот освобождён, но кабинет не обновился")
+		return
+	}
+	stored, _ := r.amneziaStoredKey(user.ID, args.AmneziaKeyID)
+	text, kb := amneziaCountriesView(user, stored, info, 0)
+	text = "Слот освобождён: " + strings.ToUpper(args.AmneziaCountryCode) + ".\n\n" + text
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "слот освобождён")
+}
+
 func (r *Router) downloadAmneziaConfig(ctx context.Context, key, country string) ([]byte, error) {
 	client := amnezia.New(r.cfg.AmneziaBaseURL)
 	if err := client.Login(ctx, key); err != nil {
@@ -454,6 +539,14 @@ func (r *Router) downloadAmneziaConfig(ctx context.Context, key, country string)
 		return nil, errors.New("downloaded config does not look like WireGuard conf")
 	}
 	return conf, nil
+}
+
+func (r *Router) revokeAmneziaCountryConfig(ctx context.Context, key, country string) error {
+	client := amnezia.New(r.cfg.AmneziaBaseURL)
+	if err := client.Login(ctx, key); err != nil {
+		return err
+	}
+	return client.RevokeCountryConfig(ctx, country)
 }
 
 func shortToast(err error) string {

@@ -728,6 +728,24 @@ func TestParse_AmneziaDownloadLegacyActiveKey(t *testing.T) {
 	}
 }
 
+func TestParse_AmneziaRevokeCountry(t *testing.T) {
+	a, err := Parse("amz_revoke:42:_panel_:keyabc:DE")
+	if err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+	if a.Action != "amz_revoke" || !a.IsPanel || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
+		t.Errorf("got %+v", a)
+	}
+
+	a, err = Parse("amz_revoke_confirm:42:_panel_:keyabc:DE")
+	if err != nil {
+		t.Fatalf("confirm unexpected: %v", err)
+	}
+	if a.Action != "amz_revoke_confirm" || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
+		t.Errorf("confirm got %+v", a)
+	}
+}
+
 func TestParse_SelfHostedAmneziaID(t *testing.T) {
 	a, err := Parse("amz_selfhosted_confirm:42:_panel_:home")
 	if err != nil {
