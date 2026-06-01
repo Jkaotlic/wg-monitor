@@ -275,6 +275,8 @@ func firstForwardedValue(v string) string {
 }
 
 type wizardPutAgentReq struct {
+	Kind                string `json:"kind"`
+	ThreadID            int64  `json:"thread_id"`
 	SSHHost             string `json:"ssh_host"`
 	SSHPort             int64  `json:"ssh_port"`
 	SSHUser             string `json:"ssh_user"`
@@ -311,7 +313,14 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
 			return
 		}
+		req.Kind = strings.TrimSpace(req.Kind)
+		if req.Kind != "" && !db.IsValidKind(req.Kind) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_kind", "kind must be static or mobile")
+			return
+		}
 		err := d.DB.Users().UpdateDeployInfo(nickname, db.DeployInfo{
+			Kind:                req.Kind,
+			ThreadID:            req.ThreadID,
 			SSHHost:             req.SSHHost,
 			SSHPort:             req.SSHPort,
 			SSHUser:             req.SSHUser,

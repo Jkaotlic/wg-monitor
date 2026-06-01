@@ -226,6 +226,38 @@ func TestVPSClientCreateEnrollmentFallsBackToSSHOnTransportError(t *testing.T) {
 	}
 }
 
+func TestVPSClientPushAgentCarriesKindAndThread(t *testing.T) {
+	var req RemoteAgent
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/wizard/agents/client-g" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPut {
+			t.Fatalf("method=%s, want PUT", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := &VPSClient{BaseURL: srv.URL, Token: "wizard-token", HTTP: srv.Client()}
+	err := c.PushAgent(t.Context(), RemoteAgent{
+		Nickname: "client-g",
+		Kind:     "mobile",
+		ThreadID: 406,
+		Arch:     "mipsle",
+	})
+	if err != nil {
+		t.Fatalf("PushAgent: %v", err)
+	}
+	if req.Kind != "mobile" || req.ThreadID != 406 {
+		t.Fatalf("PushAgent lost kind/thread metadata: %+v", req)
+	}
+}
+
 func TestVPSClientDoesNotFallbackOnHTTPErrorStatus(t *testing.T) {
 	var fallbackCalled bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
