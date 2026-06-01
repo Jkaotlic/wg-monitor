@@ -110,6 +110,29 @@ func TestReporterMarksResumedAfterGap(t *testing.T) {
 	}
 }
 
+func TestReporterDoesNotMarkResumedAfterShortMobileJitter(t *testing.T) {
+	s := &fakeSender{}
+	r := NewReporter(ReporterConfig{
+		Sender:   s,
+		Version:  "test",
+		Interval: time.Hour,
+	})
+	r.lastReportAt = time.Now().Add(-6 * time.Minute)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.n != 1 {
+		t.Fatalf("expected exactly one send, got %d", s.n)
+	}
+	if s.last.Resumed {
+		t.Fatalf("short mobile jitter must not be Resumed=true: %+v", s.last)
+	}
+}
+
 func TestReporterFreshStartIsNotResumed(t *testing.T) {
 	s := &fakeSender{}
 	r := NewReporter(ReporterConfig{

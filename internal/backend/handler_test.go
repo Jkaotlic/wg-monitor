@@ -1434,6 +1434,10 @@ func TestHandleReport_MobileResumed_TriggersWakeCard(t *testing.T) {
 	defer d.Close()
 	tok := "abab00abab00abab00abab00abab00abab00abab00abab00abab00abab00abab"
 	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	lastSeen := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, lastSeen, uid); err != nil {
+		t.Fatal(err)
+	}
 
 	wake := &fakeWakeNotifier{}
 	disp := &fakeDisp{}
@@ -1446,7 +1450,7 @@ func TestHandleReport_MobileResumed_TriggersWakeCard(t *testing.T) {
 		WakeNotifier: wake,
 	})
 
-	body := []byte(`{"ts":"2026-05-15T14:30:00Z","agent_version":"t","resumed":true,"checks":[{"name":"tunnels","status":"ok"}]}`)
+	body := []byte(`{"ts":"2026-05-15T14:31:00Z","agent_version":"t","resumed":true,"checks":[{"name":"tunnels","status":"ok"}]}`)
 	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
@@ -1470,6 +1474,40 @@ func TestHandleReport_MobileResumed_TriggersWakeCard(t *testing.T) {
 	}
 	if calls[0].userID != uid || calls[0].nickname != "client-h" {
 		t.Errorf("call mismatch: %+v", calls[0])
+	}
+}
+
+func TestHandleReport_MobileNoisyResumedInsideWakeThreshold_NoWakeCard(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "abab11abab11abab11abab11abab11abab11abab11abab11abab11abab11abab"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	lastSeen := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, lastSeen, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	wake := &fakeWakeNotifier{}
+	h := NewMux(Deps{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:              d,
+		Dispatcher:      &fakeDisp{},
+		Resumer:         &fakeResumer{},
+		WakeNotifier:    wake,
+		MobileWakeAfter: 30 * time.Minute,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:06:00Z","agent_version":"t","resumed":true,"checks":[{"name":"tunnels","status":"ok"}]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	time.Sleep(150 * time.Millisecond)
+	if got := len(wake.snapshot()); got != 0 {
+		t.Fatalf("short mobile gap with noisy resumed must not wake, got %d calls", got)
 	}
 }
 
@@ -1515,6 +1553,49 @@ func TestHandleReport_MobileFreshAfterSleep_TriggersWakeCardWithoutResumed(t *te
 	}
 	if calls[0].userID != uid || calls[0].nickname != "client-h" {
 		t.Errorf("call mismatch: %+v", calls[0])
+	}
+}
+
+func TestHandleReport_ClearsHardForTunnelMissingFromFreshInventory(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "acac00acac00acac00acac00acac00acac00acac00acac00acac00acac00acac"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	hs := time.Date(2026, 5, 15, 13, 0, 0, 0, time.UTC)
+	if err := d.State().Save(uid, "tunnel_awg11", db.IncidentState{
+		UserID: uid, CheckName: "tunnel_awg11", CurrentStatus: "hard",
+		ConsecutiveFails: 12, HardSince: &hs, LastAlertAt: &hs,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+		Thresholds: state.Thresholds{Fail: 2, Recovery: 2},
+	})
+	body := []byte(`{"ts":"2026-05-15T14:00:00Z","agent_version":"t","checks":[` +
+		`{"name":"tunnels","status":"ok","details":{"tunnel_count":2}},` +
+		`{"name":"tunnel_awg10","status":"ok"},` +
+		`{"name":"tunnel_awg12","status":"ok"},` +
+		`{"name":"agent_heartbeat","status":"ok"}` +
+		`]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	got, err := d.State().Get(uid, "tunnel_awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CurrentStatus != "ok" || got.ConsecutiveFails != 0 || got.HardSince != nil {
+		t.Fatalf("missing tunnel hard must be cleared after fresh inventory: %+v", got)
 	}
 }
 
