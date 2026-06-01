@@ -91,6 +91,31 @@ func CompatInlineKeyboardForTopic(kind string) *InlineKeyboardMarkup {
 	return &InlineKeyboardMarkup{InlineKeyboard: out}
 }
 
+// OperatorMenuInlineKeyboardForTopic returns the full always-visible menu for
+// router topics. It keeps the same labels and compat_btn actions as the
+// bottom reply keyboard, so operators see the familiar button set while the
+// callback router can dispatch taps through the existing safe text-command
+// path. Unlike ReplyKeyboardMarkup, this menu is attached to the message
+// itself and does not depend on Telegram keeping a bottom keyboard visible.
+func OperatorMenuInlineKeyboardForTopic(kind string) *InlineKeyboardMarkup {
+	rows := operatorMenuRowsForKind(kind)
+	if rows == nil {
+		return nil
+	}
+	out := make([][]InlineKeyboardButton, 0, len(rows))
+	for _, row := range rows {
+		btns := make([]InlineKeyboardButton, 0, len(row))
+		for _, btn := range row {
+			btns = append(btns, InlineKeyboardButton{
+				Text:         btn.text,
+				CallbackData: "compat_btn:0:" + btn.code,
+			})
+		}
+		out = append(out, btns)
+	}
+	return &InlineKeyboardMarkup{InlineKeyboard: out}
+}
+
 // keyboardRowsForKind is the single source of truth for the per-topic button
 // layout — both the reply-keyboard and the compat inline-keyboard derive
 // from these rows so they stay byte-identical to the user.
@@ -107,6 +132,29 @@ func keyboardRowsForKind(kind string) [][]string {
 	case "summary", "systemic":
 		return [][]string{
 			{"📊 Здоровье флота", "📋 Список юзеров"},
+		}
+	}
+	return nil
+}
+
+type operatorMenuButton struct {
+	text string
+	code string
+}
+
+func operatorMenuRowsForKind(kind string) [][]operatorMenuButton {
+	switch kind {
+	case "per_router":
+		return [][]operatorMenuButton{
+			{{text: "📊 Что происходит?", code: "smart_reply"}, {text: "🩺 Проверка", code: "router_doctor"}},
+			{{text: "🎛 Туннели", code: "tunnels"}, {text: "🛣 Маршруты", code: "routes"}},
+			{{text: "🔐 Amnezia Premium", code: "amnezia_premium"}, {text: "🔑 HideMy.name", code: "hidemyname"}},
+			{{text: "🌍 Через тоннель?", code: "via_tunnel"}, {text: "🇷🇺 Напрямую?", code: "direct"}},
+			{{text: "🛠 Обслуживание", code: "maint"}, {text: "⬆ Обновить пакеты", code: "opkg_upgrade"}},
+		}
+	case "summary", "systemic":
+		return [][]operatorMenuButton{
+			{{text: "📊 Флот", code: "fleet_health"}, {text: "📋 Юзеры", code: "list_users"}},
 		}
 	}
 	return nil

@@ -120,7 +120,7 @@ func main() {
 		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard != nil && *cfg.UI.CompatInlineKeyboard,
 	}
 	disp.WelcomeKeyboard = func() any {
-		return uiSnap.KeyboardForTopic("per_router")
+		return tg.OperatorMenuInlineKeyboardForTopic("per_router")
 	}
 	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
 	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}

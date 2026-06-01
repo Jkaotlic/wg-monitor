@@ -72,7 +72,7 @@ func cmdEnsureTopics(args []string) {
 		Sleep:           time.Duration(*sleepMs) * time.Millisecond,
 		Creator:         tgClient,
 		Welcomer:        tgClient,
-		WelcomeKeyboard: func() any { return tg.ReplyKeyboardForTopic("per_router") },
+		WelcomeKeyboard: func() any { return tg.OperatorMenuInlineKeyboardForTopic("per_router") },
 		Out:             os.Stdout,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
@@ -147,7 +147,7 @@ func runEnsureTopics(ctx context.Context, o ensureTopicsOpts) error {
 		} else {
 			fmt.Fprintf(o.Out, "+ created %s — topic id=%d\n", u.Nickname, tid)
 		}
-		// Send welcome so reply-keyboard attaches to the new topic.
+		// Send welcome so the topic gets a visible operator menu immediately.
 		// Non-fatal: log to stdout and continue.
 		if o.Welcomer != nil && o.WelcomeKeyboard != nil {
 			if werr := alerts.SendWelcome(ctx, o.Welcomer, o.ChatID, tid, u.Nickname, o.WelcomeKeyboard()); werr != nil {

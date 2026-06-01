@@ -54,6 +54,18 @@ func TestHelpForScreen_OperatorOverview(t *testing.T) {
 	}
 }
 
+func TestHelpForScreen_OperatorMenuDoesNotRelyOnSlashDiscovery(t *testing.T) {
+	got := HelpForScreen("operator")
+	for _, want := range []string{"меню под сообщениями", "Оживить топики"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("operator help should point to visible menu %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Если нижние кнопки пропали, используй slash-команды") {
+		t.Fatalf("operator help must not depend on slash-command discovery:\n%s", got)
+	}
+}
+
 func TestHelpForScreen_Premium(t *testing.T) {
 	got := HelpForScreen("premium")
 	for _, want := range []string{"Amnezia Premium", "HideMy.name", ".conf", "AmneziaWG 2.0", "secret"} {

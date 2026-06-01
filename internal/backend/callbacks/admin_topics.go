@@ -90,7 +90,7 @@ func (r *Router) handleKeyboardCommand(ctx context.Context, m *tg.Message) {
 		r.adminReply(ctx, m, "В этом топике не привязан ни один роутер. Сначала /this_is <nickname> (только для админа).")
 		return
 	}
-	if err := alerts.RepushKeyboard(ctx, r.tg, m.Chat.ID, *m.MessageThreadID, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); err != nil {
+	if err := alerts.RepushKeyboard(ctx, r.tg, m.Chat.ID, *m.MessageThreadID, u.Nickname, tg.OperatorMenuInlineKeyboardForTopic("per_router")); err != nil {
 		slog.Warn("repush keyboard failed", "user", u.Nickname, "err", err)
 		sum, hint := alerts.HintFor("keyboard_repush", err.Error())
 		card := alerts.Card{Badge: "❌", Label: "Не удалось восстановить кнопки", Summary: sum, Hint: hint}
@@ -136,7 +136,7 @@ func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 		}
 		// Welcome: best-effort, non-fatal. Skip if it fails — fresh topic
 		// is still usable; the reply-kb will attach on the next bot message.
-		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
 			slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
 		}
 		fmt.Fprintf(&b, "✅ %s — thread_id=%d\n", u.Nickname, tid)
@@ -174,7 +174,7 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 	}
 	// Welcome: always fires on rebuild (new thread_id = new topic) so the
 	// reply-keyboard attaches to the fresh thread. Non-fatal.
-	if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, r.cfg.UI.KeyboardForTopic("per_router")); werr != nil {
+	if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
 		slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
 	}
 	r.adminReply(ctx, m, fmt.Sprintf(
