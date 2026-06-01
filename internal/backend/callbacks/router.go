@@ -625,15 +625,16 @@ func (r *Router) isAdminTG(userID int64) bool {
 //	F == AdminUserID                        → allow (admin override)
 //	R == 0                                  → allow (no router target encoded)
 //	users.GetByID(R) fails or returns nil   → allow + warn (don't break on DB hiccup)
-//	O != nil && *O == F                     → allow (rightful owner)
+//	T != nil && (M == nil || *M != *T)      → reject (known router topic mismatch)
+//	O != nil && *O == F                     → allow (rightful owner in topic)
 //	O != nil && *O != F                     → reject ("это не твой роутер")
 //	O == nil && M != nil && T != nil && *M == *T  → TOFU bind F → SetTelegramUserID, allow
-//	O == nil && T != nil                    → reject (known router topic mismatch)
 //	O == nil && T == nil                    → allow (unbound legacy, backwards-compat)
 //
 // The legacy unbound-allow branch only applies before a router topic is known.
-// Once TelegramThreadID is set, callbacks must come from that topic so stale
-// buttons in foreign topics cannot control the wrong router.
+// Once TelegramThreadID is set, non-admin callbacks must come from that topic
+// so stale buttons in foreign topics cannot control the wrong router or send
+// command results/config documents to the wrong thread.
 func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
 	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
 		return true
@@ -645,6 +646,13 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 	if err != nil || user == nil {
 		slog.Warn("acl: user lookup failed, allowing", "router_user_id", args.UserID, "err", err)
 		return true
+	}
+	if user.TelegramThreadID != nil &&
+		(q.Message.MessageThreadID == nil || *q.Message.MessageThreadID != *user.TelegramThreadID) {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не топик этого роутера")
+		slog.Warn("acl: rejected (foreign topic)",
+			"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "owner_thread", *user.TelegramThreadID, "data", q.Data)
+		return false
 	}
 	if user.TelegramUserID != nil {
 		if *user.TelegramUserID == q.From.ID {
@@ -668,12 +676,6 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 			slog.Info("acl: TOFU bound router owner", "router_user_id", user.ID, "tg_user_id", q.From.ID)
 		}
 		return true
-	}
-	if user.TelegramThreadID != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не топик этого роутера")
-		slog.Warn("acl: rejected (foreign topic before owner bind)",
-			"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "owner_thread", *user.TelegramThreadID, "data", q.Data)
-		return false
 	}
 	return true
 }
