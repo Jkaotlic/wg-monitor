@@ -235,6 +235,11 @@ func routeApplyResultKeyboard(userID int64) tg.InlineKeyboardMarkup {
 		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
 		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
 	}, {
+		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
+	}, {
+		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
+	}, {
 		{Text: "📄 Снапшот маршрутов", CallbackData: fmt.Sprintf("routes_snapshot:%d:_panel_", userID)},
 	}}}
 }
