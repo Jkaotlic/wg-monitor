@@ -186,7 +186,7 @@ func TestHandleAccessCallback_AdminOpensHome(t *testing.T) {
 	}
 }
 
-func TestHandleAccessCallback_RemoveOp(t *testing.T) {
+func TestHandleAccessCallback_RemoveOpRequiresConfirm(t *testing.T) {
 	d, _ := newTestDB(t)
 	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
 	_ = d.RouterOperators().Add(uid, 555, 999)
@@ -201,15 +201,23 @@ func TestHandleAccessCallback_RemoveOp(t *testing.T) {
 	r.HandleCallback(context.Background(), q)
 
 	ops, _ := d.RouterOperators().List(uid)
-	if len(ops) != 0 {
-		t.Errorf("operator should have been removed, got %+v", ops)
+	if len(ops) != 1 {
+		t.Fatalf("first tap must not remove operator, got %+v", ops)
 	}
-	if len(tgFake.edits) != 1 {
-		t.Fatalf("expected edit-in-place, got %d edits", len(tgFake.edits))
+	if len(tgFake.editMarkups) != 1 || !markupHasCallback(tgFake.editMarkups[0], fmt.Sprintf("access:0:remove_op_confirm:%d:555", uid)) {
+		t.Fatalf("expected remove confirm callback, markups=%+v", tgFake.editMarkups)
+	}
+
+	q.Data = fmt.Sprintf("access:0:remove_op_confirm:%d:555", uid)
+	r.HandleCallback(context.Background(), q)
+
+	ops, _ = d.RouterOperators().List(uid)
+	if len(ops) != 0 {
+		t.Errorf("operator should have been removed after confirm, got %+v", ops)
 	}
 }
 
-func TestHandleAccessCallback_UnbindOwner(t *testing.T) {
+func TestHandleAccessCallback_UnbindOwnerRequiresConfirm(t *testing.T) {
 	d, _ := newTestDB(t)
 	uid, _ := d.Users().Insert("foo", "tok", "5.5.5.5", "awg11")
 	_ = d.Users().SetTelegramUserID(uid, 777)
@@ -224,8 +232,19 @@ func TestHandleAccessCallback_UnbindOwner(t *testing.T) {
 	r.HandleCallback(context.Background(), q)
 
 	u, _ := d.Users().GetByID(uid)
+	if u.TelegramUserID == nil || *u.TelegramUserID != 777 {
+		t.Fatalf("first tap must not unbind owner, got %+v", u.TelegramUserID)
+	}
+	if len(tgFake.editMarkups) != 1 || !markupHasCallback(tgFake.editMarkups[0], fmt.Sprintf("access:0:unbind_owner_confirm:%d", uid)) {
+		t.Fatalf("expected unbind confirm callback, markups=%+v", tgFake.editMarkups)
+	}
+
+	q.Data = fmt.Sprintf("access:0:unbind_owner_confirm:%d", uid)
+	r.HandleCallback(context.Background(), q)
+
+	u, _ = d.Users().GetByID(uid)
 	if u.TelegramUserID != nil {
-		t.Errorf("owner should be unbound, still %v", *u.TelegramUserID)
+		t.Errorf("owner should be unbound after confirm, still %v", *u.TelegramUserID)
 	}
 }
 

@@ -82,11 +82,12 @@ type Args struct {
 	PanelKind string
 	// AccessScreen identifies the access:* admin-panel screen for callbacks
 	// where Action == "access". One of: "home" | "router" | "add" |
-	// "remove_op" | "unbind_owner" | "cancel_add".
+	// "remove_op" | "remove_op_confirm" | "unbind_owner" |
+	// "unbind_owner_confirm" | "cancel_add".
 	AccessScreen string
 	// AccessRouterID is the users.id of the router whose access list is
 	// being viewed/modified. Set for "router" / "add" / "remove_op" /
-	// "unbind_owner" screens.
+	// "remove_op_confirm" / "unbind_owner" / "unbind_owner_confirm" screens.
 	AccessRouterID int64
 	// AccessOperatorTGID is the target operator's TG user ID for remove_op.
 	AccessOperatorTGID int64
@@ -123,9 +124,9 @@ var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
 	// command-channel actions: enqueue a wire.Command for the agent.
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
-	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true,
+	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true, "opkg_disable_confirm": true,
 	"router_doctor": true,
-	"tunnel_enable": true, "tunnel_disable": true,
+	"tunnel_enable": true, "tunnel_disable": true, "tunnel_restart": true,
 	"tunnel_delete_ask": true, "tunnel_delete": true,
 	"check_via_tunnel": true, "check_direct": true,
 	// backend-only callback (no agent action): re-render Tunnels-panel inline.
@@ -170,7 +171,8 @@ var validActions = map[string]bool{
 	"amz_selfhosted_issue": true, "amz_selfhosted_confirm": true,
 	"amz_selfhosted_manage": true, "amz_selfhosted_add": true,
 	"amz_selfhosted_edit": true, "amz_selfhosted_toggle": true,
-	"amz_selfhosted_delete": true, "amz_selfhosted_cancel": true,
+	"amz_selfhosted_delete": true, "amz_selfhosted_delete_confirm": true,
+	"amz_selfhosted_cancel": true,
 	// HideMy.name access-code cabinet.
 	"hmn_refresh": true, "hmn_open": true, "hmn_page": true,
 	"hmn_delete": true, "hmn_delete_confirm": true, "hmn_dl": true,
@@ -184,7 +186,7 @@ var callbackCodeRe = regexp.MustCompile(`^[A-Za-z0-9_-]{2,16}$`)
 func IsCommandAction(a string) bool {
 	switch a {
 	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck",
-		"opkg_upgrade", "tunnel_enable", "tunnel_disable", "tunnel_delete",
+		"opkg_upgrade", "tunnel_enable", "tunnel_disable", "tunnel_restart", "tunnel_delete",
 		"check_via_tunnel", "check_direct", "router_doctor":
 		return true
 	}
@@ -230,7 +232,7 @@ func Parse(data string) (Args, error) {
 		}
 		a.TTL = ttl
 	}
-	if action == "tunnel_enable" || action == "tunnel_disable" || action == "tunnel_delete_ask" || action == "tunnel_delete" {
+	if action == "tunnel_enable" || action == "tunnel_disable" || action == "tunnel_restart" || action == "tunnel_delete_ask" || action == "tunnel_delete" {
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
 		}
@@ -344,9 +346,9 @@ func Parse(data string) (Args, error) {
 		}
 		a.MaintName = "firmware"
 		a.MaintToken = parts[3]
-	case "opkg_disable":
+	case "opkg_disable", "opkg_disable_confirm":
 		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("opkg_disable requires token: %q", data)
+			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
 		}
 		a.OpkgRepairToken = parts[3]
 	case "diag_raw":
@@ -427,7 +429,8 @@ func Parse(data string) (Args, error) {
 		screen := parts[2]
 		validAccessScreens := map[string]bool{
 			"home": true, "router": true, "add": true,
-			"remove_op": true, "unbind_owner": true,
+			"remove_op": true, "remove_op_confirm": true,
+			"unbind_owner": true, "unbind_owner_confirm": true,
 			"cancel_add": true,
 		}
 		if !validAccessScreens[screen] {
@@ -435,7 +438,7 @@ func Parse(data string) (Args, error) {
 		}
 		a.AccessScreen = screen
 		switch screen {
-		case "router", "add", "unbind_owner":
+		case "router", "add", "unbind_owner", "unbind_owner_confirm":
 			if len(parts) < 4 || parts[3] == "" {
 				return Args{}, fmt.Errorf("access %s requires router id: %q", screen, data)
 			}
@@ -444,17 +447,17 @@ func Parse(data string) (Args, error) {
 				return Args{}, fmt.Errorf("access %s: bad router id %q", screen, parts[3])
 			}
 			a.AccessRouterID = rid
-		case "remove_op":
+		case "remove_op", "remove_op_confirm":
 			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-				return Args{}, fmt.Errorf("access remove_op requires router id and tg id: %q", data)
+				return Args{}, fmt.Errorf("access %s requires router id and tg id: %q", screen, data)
 			}
 			rid, err := strconv.ParseInt(parts[3], 10, 64)
 			if err != nil {
-				return Args{}, fmt.Errorf("access remove_op: bad router id %q", parts[3])
+				return Args{}, fmt.Errorf("access %s: bad router id %q", screen, parts[3])
 			}
 			tgid, err := strconv.ParseInt(parts[4], 10, 64)
 			if err != nil {
-				return Args{}, fmt.Errorf("access remove_op: bad tg id %q", parts[4])
+				return Args{}, fmt.Errorf("access %s: bad tg id %q", screen, parts[4])
 			}
 			a.AccessRouterID = rid
 			a.AccessOperatorTGID = tgid
@@ -523,7 +526,7 @@ func Parse(data string) (Args, error) {
 			a.AmneziaCountryCode = strings.ToLower(parts[4])
 		case "amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_cancel":
 			// No extra fields.
-		case "amz_selfhosted_issue", "amz_selfhosted_confirm", "amz_selfhosted_edit", "amz_selfhosted_delete":
+		case "amz_selfhosted_issue", "amz_selfhosted_confirm", "amz_selfhosted_edit", "amz_selfhosted_delete", "amz_selfhosted_delete_confirm":
 			if len(parts) >= 4 && parts[3] != "" {
 				if !callbackCodeRe.MatchString(parts[3]) {
 					return Args{}, fmt.Errorf("%s: bad self-hosted id %q", action, parts[3])

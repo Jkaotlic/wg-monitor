@@ -18,6 +18,7 @@ const (
 type awgmInstallCompletionEvidence struct {
 	Nickname       string
 	Version        string
+	LocalAction    string
 	MinHeartbeatAt time.Time
 	Remote         *RemoteAgent
 	ListErr        error
@@ -31,7 +32,11 @@ type awgmInstallCompletionReport struct {
 }
 
 func reportAWGMInstallCompletion(ctx context.Context, vps *VPSClient, state *State, ag *AgentState, version, backendURL, rawToken string, minHeartbeatAt time.Time) awgmInstallCompletionReport {
-	e := awgmInstallCompletionEvidence{Version: version, MinHeartbeatAt: minHeartbeatAt, Auth: awgmInstallAuthProbeStatus(state, backendURL, rawToken), Now: time.Now()}
+	return reportAgentInstallCompletion(ctx, vps, state, ag, version, backendURL, rawToken, minHeartbeatAt, "local AWG bootstrap")
+}
+
+func reportAgentInstallCompletion(ctx context.Context, vps *VPSClient, state *State, ag *AgentState, version, backendURL, rawToken string, minHeartbeatAt time.Time, localAction string) awgmInstallCompletionReport {
+	e := awgmInstallCompletionEvidence{Version: version, LocalAction: strings.TrimSpace(localAction), MinHeartbeatAt: minHeartbeatAt, Auth: awgmInstallAuthProbeStatus(state, backendURL, rawToken), Now: time.Now()}
 	if ag != nil {
 		e.Nickname = ag.Nickname
 	}
@@ -89,6 +94,10 @@ func awgmInstallCompletionSummary(e awgmInstallCompletionEvidence) awgmInstallCo
 	if e.Now.IsZero() {
 		e.Now = time.Now()
 	}
+	localAction := strings.TrimSpace(e.LocalAction)
+	if localAction == "" {
+		localAction = "local install"
+	}
 	heartbeat := "heartbeat unknown"
 	version := strings.TrimSpace(e.Version)
 	remoteVersion := ""
@@ -134,7 +143,8 @@ func awgmInstallCompletionSummary(e awgmInstallCompletionEvidence) awgmInstallCo
 	}
 	return awgmInstallCompletionReport{
 		Message: fmt.Sprintf(
-			"pending: local AWG bootstrap finished for %s %s, but backend confirmation is incomplete (%s). Run doctor; if auth-probe stays failed, check token_hash.",
+			"pending: %s finished for %s %s, but backend confirmation is incomplete (%s). Run doctor; if auth-probe stays failed, check token_hash.",
+			localAction,
 			e.Nickname,
 			version,
 			strings.Join(reasons, "; "),

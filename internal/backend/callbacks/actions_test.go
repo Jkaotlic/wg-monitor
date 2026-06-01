@@ -61,6 +61,7 @@ type enqueueCall struct {
 	cmdID  string
 	action string
 	check  string
+	ndms   string
 }
 
 type enqueueRefCall struct {
@@ -76,8 +77,9 @@ func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 		return f.err
 	}
 	check, _ := cmd.Args["check_name"].(string)
+	ndms, _ := cmd.Args["ndms_name"].(string)
 	f.calls = append(f.calls, enqueueCall{
-		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check,
+		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms,
 	})
 	return nil
 }
@@ -127,6 +129,27 @@ func TestCommandAction_RestartPanelLabelsAwgManager(t *testing.T) {
 	}
 	if strings.Contains(statusLine, "Перезапуск туннеля") {
 		t.Fatalf("panel restart must not look like a per-tunnel restart: %q", statusLine)
+	}
+}
+
+func TestCommandAction_TunnelRestartEnqueuesWithNDMS(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := NewCommandAction(sink, func() string { return "fixed-id-2" })
+	statusLine, err := a.Apply(context.Background(), nil, Args{
+		Action: "tunnel_restart", UserID: 7, CheckName: "tunnel_awg13", NDMSName: "Wireguard3",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	c := sink.calls[0]
+	if c.userID != 7 || c.cmdID != "fixed-id-2" || c.action != "tunnel_restart" || c.check != "tunnel_awg13" || c.ndms != "Wireguard3" {
+		t.Fatalf("got %+v", c)
+	}
+	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "очередь") {
+		t.Errorf("unexpected status line: %q", statusLine)
 	}
 }
 
@@ -430,7 +453,7 @@ func (f *fakeRebindEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref
 
 func TestRebindConfirmAction_TokenMissing(t *testing.T) {
 	a := &RebindConfirmAction{
-		consumeFn: func(int64, string) (*pendingRebind, bool) { return nil, false },
+		consumeFn: func(int64, int64, string) (*pendingRebind, bool) { return nil, false },
 		idGen:     func() string { return "id1" },
 	}
 	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: 1}}}
@@ -449,8 +472,8 @@ func TestRebindConfirmAction_HappyPath(t *testing.T) {
 	consumed := false
 	sink := &fakeRebindEnqueuer{}
 	a := &RebindConfirmAction{
-		consumeFn: func(uid int64, token string) (*pendingRebind, bool) {
-			if uid == 42 && token == "tok1" && !consumed {
+		consumeFn: func(uid, actorTGID int64, token string) (*pendingRebind, bool) {
+			if uid == 42 && actorTGID == 99 && token == "tok1" && !consumed {
 				consumed = true
 				return pr, true
 			}
@@ -459,7 +482,7 @@ func TestRebindConfirmAction_HappyPath(t *testing.T) {
 		idGen: func() string { return "id1" },
 		sink:  sink,
 	}
-	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: 1}, MessageID: 7}}
+	q := &tg.CallbackQuery{From: tg.User{ID: 99}, Message: tg.Message{Chat: tg.Chat{ID: 1}, MessageID: 7}}
 	_, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"})
 	if err != nil {
 		t.Fatal(err)

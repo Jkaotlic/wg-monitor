@@ -1142,19 +1142,26 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 				return fmt.Errorf("start agent after token commit: %w", err)
 			}
 		}
-		applyAWGMDeploySuccess(ag, info, rel.TagName, awgmAuthMode, useVPSBootstrap, time.Now().UTC())
-		ensureTopicAfterSuccessfulInstall(state, secrets, ag)
-		pushToVPSBestEffort(state, secrets, *ag)
 		completionCtx, completionCancel := context.WithTimeout(context.Background(), 25*time.Second)
 		report := reportAWGMInstallCompletion(completionCtx, vps, state, ag, rel.TagName, backendURL, rawToken, minHeartbeatAt)
 		completionCancel()
-		if report.Confirmed {
-			PrintOK(report.Message)
-		} else {
+		if err := applyAWGMDeploySuccessIfConfirmed(report, ag, info, rel.TagName, awgmAuthMode, useVPSBootstrap, time.Now().UTC()); err != nil {
 			PrintWarn(report.Message)
+			return err
 		}
+		ensureTopicAfterSuccessfulInstall(state, secrets, ag)
+		pushToVPSBestEffort(state, secrets, *ag)
+		PrintOK(report.Message)
 		return nil
 	}
+}
+
+func applyAWGMDeploySuccessIfConfirmed(report awgmInstallCompletionReport, ag *AgentState, info *AWGMSystemInfo, version, authMode string, publicAWGMViaVPS bool, now time.Time) error {
+	if !report.Confirmed {
+		return errors.New(report.Message)
+	}
+	applyAWGMDeploySuccess(ag, info, version, authMode, publicAWGMViaVPS, now)
+	return nil
 }
 
 func runAWGMStartAfterTokenCommit(useVPSBootstrap bool, state *State, secrets *SecretStore, ag *AgentState, awgm *AWGMClient, apiKey, login, pass, terminalUser, terminalPass string) (TerminalRunResult, error) {
@@ -1346,6 +1353,14 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 				"  и сохранит raw-токен в disk-кэш. После этого можно использовать install-agent --agent "+ag.Nickname+" для переустановки.",
 			tokenEnv, ag.Nickname))
 		return fmt.Errorf("agent token for %s not in cache; use [3] add/install router first", ag.Nickname)
+	}
+	wizardToken := secrets.GetNonInteractive("WIZARD_TOKEN")
+	if wizardToken == "" {
+		return fmt.Errorf("WIZARD_TOKEN required for backend-confirmed legacy SSH install")
+	}
+	vps := NewResilientVPSClientForBackend(state, secrets, wizardToken, 15*time.Second)
+	if vps == nil {
+		return fmt.Errorf("wizard API client is not configured")
 	}
 
 	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
@@ -1551,16 +1566,35 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 	}
 
 	PrintStep(8, 8, "Upload + start")
+	minHeartbeatAt := time.Now().UTC()
 	if err := stepUploadAgentBinary(s, localPath, "/opt/bin/wg-monitor"); err != nil {
 		return err
 	}
 
-	ag.LastDeploy = time.Now().UTC().Format(time.RFC3339)
-	ag.LastDeployedVersion = rel.TagName
+	completionCtx, completionCancel := context.WithTimeout(context.Background(), 25*time.Second)
+	report := reportAgentInstallCompletion(completionCtx, vps, state, ag, rel.TagName, backendURLForAgent(state), tok, minHeartbeatAt, "legacy SSH install")
+	completionCancel()
+	if err := applyLegacySSHDeploySuccessIfConfirmed(report, ag, rel.TagName, time.Now().UTC()); err != nil {
+		PrintWarn(report.Message)
+		return err
+	}
+	ensureTopicAfterSuccessfulInstall(state, secrets, ag)
 	// Best-effort sync push so other wizard PCs see this deploy.
 	if a := state.FindAgent(ag.Nickname); a != nil {
 		pushToVPSBestEffort(state, secrets, *a)
 	}
+	PrintOK(report.Message)
+	return nil
+}
+
+func applyLegacySSHDeploySuccessIfConfirmed(report awgmInstallCompletionReport, ag *AgentState, version string, now time.Time) error {
+	if !report.Confirmed {
+		return errors.New(report.Message)
+	}
+	ag.LastDeploy = now.UTC().Format(time.RFC3339)
+	ag.LastDeployedVersion = version
+	ag.PendingVersion = ""
+	ag.PendingSince = ""
 	return nil
 }
 

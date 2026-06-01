@@ -65,16 +65,15 @@ func (r *Router) addSelfHostedAmneziaRow(kb *tg.InlineKeyboardMarkup, userID int
 	if kb == nil {
 		return
 	}
-	if !admin {
-		return
-	}
 	store, err := r.loadSelfHostedAmneziaStore()
 	if err != nil {
 		slog.Warn("self-hosted Amnezia store read failed", "err", err)
-		kb.InlineKeyboard = append(kb.InlineKeyboard, []tg.InlineKeyboardButton{{
-			Text:         "⚙ Self-hosted Amnezia",
-			CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", userID),
-		}})
+		if admin {
+			kb.InlineKeyboard = append(kb.InlineKeyboard, []tg.InlineKeyboardButton{{
+				Text:         "⚙ Self-hosted Amnezia",
+				CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", userID),
+			}})
+		}
 		return
 	}
 	for _, inst := range store.EnabledInstances() {
@@ -83,10 +82,12 @@ func (r *Router) addSelfHostedAmneziaRow(kb *tg.InlineKeyboardMarkup, userID int
 			CallbackData: fmt.Sprintf("amz_selfhosted_issue:%d:_panel_:%s", userID, inst.ID),
 		}})
 	}
-	kb.InlineKeyboard = append(kb.InlineKeyboard, []tg.InlineKeyboardButton{{
-		Text:         "⚙ Self-hosted Amnezia",
-		CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", userID),
-	}})
+	if admin {
+		kb.InlineKeyboard = append(kb.InlineKeyboard, []tg.InlineKeyboardButton{{
+			Text:         "⚙ Self-hosted Amnezia",
+			CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", userID),
+		}})
+	}
 }
 
 func (r *Router) handleSelfHostedAmneziaManage(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -153,6 +154,26 @@ func (r *Router) handleSelfHostedAmneziaToggle(ctx context.Context, q *tg.Callba
 }
 
 func (r *Router) handleSelfHostedAmneziaDelete(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	inst, _, ok := r.selfHostedAmneziaStoredInstance(args.SelfHostedAmneziaID)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS not found")
+		return
+	}
+	label := inst.Label
+	if strings.TrimSpace(label) == "" {
+		label = inst.ID
+	}
+	text := fmt.Sprintf("Delete self-hosted Amnezia VPS %s?\n\nThis removes the provider from the bot cabinet. It does not touch already issued configs and does not change the VPS.", label)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Yes, delete", CallbackData: fmt.Sprintf("amz_selfhosted_delete_confirm:%d:_panel_:%s", args.UserID, inst.ID)},
+	}, {
+		{Text: "Back", CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", args.UserID)},
+	}}}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleSelfHostedAmneziaDeleteConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	store, err := r.loadSelfHostedAmneziaStore()
 	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))

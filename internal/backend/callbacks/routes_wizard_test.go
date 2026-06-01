@@ -41,6 +41,42 @@ func TestRouteWizardStoreAddDraftTTLAndScope(t *testing.T) {
 	}
 }
 
+func TestRouteWizardStoreAddConfirmRejectsWrongActorWithoutConsuming(t *testing.T) {
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	threadID := int64(77)
+	store := NewRouteWizardStore(5 * time.Minute)
+	store.Now = func() time.Time { return now }
+	store.TokenFunc = fixedTokens("draft1", "confirm1")
+
+	draft := store.PutAddDraft(RouteAddDraft{
+		UserID:    42,
+		ActorTGID: 111,
+		ThreadID:  &threadID,
+		RouterID:  9,
+		Kind:      "dns",
+		Name:      "media",
+		TunnelID:  "awg10",
+		Targets:   []string{"example.com"},
+	})
+	if _, ok := store.GetAddDraftForActor(42, 222, &threadID, 9, draft.Token); ok {
+		t.Fatal("wrong actor should not resolve add draft")
+	}
+	confirmed, ok := store.SetAddConfirm(42, &threadID, 9, draft.Token, "hash1")
+	if !ok {
+		t.Fatal("expected confirm token")
+	}
+	if _, ok := store.ConsumeAddConfirmForActor(42, 222, &threadID, 9, draft.Token, confirmed.ConfirmToken); ok {
+		t.Fatal("wrong actor should not consume add confirm")
+	}
+	got, ok := store.ConsumeAddConfirmForActor(42, 111, &threadID, 9, draft.Token, confirmed.ConfirmToken)
+	if !ok {
+		t.Fatal("right actor should still consume add confirm")
+	}
+	if got.Name != "media" {
+		t.Fatalf("Name=%q want media", got.Name)
+	}
+}
+
 func TestRouteWizardStoreDeleteDraftConfirmIsSingleUse(t *testing.T) {
 	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	store := NewRouteWizardStore(5 * time.Minute)
@@ -69,6 +105,36 @@ func TestRouteWizardStoreDeleteDraftConfirmIsSingleUse(t *testing.T) {
 	}
 	if _, ok := store.ConsumeDeleteConfirm(42, nil, 9, draft.Token, "confirm1"); ok {
 		t.Fatal("confirm should be single-use")
+	}
+}
+
+func TestRouteWizardStoreDeleteConfirmRejectsWrongActorWithoutConsuming(t *testing.T) {
+	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
+	store := NewRouteWizardStore(5 * time.Minute)
+	store.Now = func() time.Time { return now }
+	store.TokenFunc = fixedTokens("draft1", "confirm1")
+
+	draft := store.PutDeleteDraft(RouteDeleteDraft{
+		UserID:      42,
+		ActorTGID:   111,
+		RouterID:    9,
+		Kind:        "static",
+		RouteID:     "r1",
+		PreviewHash: "hash1",
+	})
+	confirmed, ok := store.SetDeleteConfirm(42, nil, 9, draft.Token, "hash1")
+	if !ok {
+		t.Fatal("expected confirm token")
+	}
+	if _, ok := store.ConsumeDeleteConfirmForActor(42, 222, nil, 9, draft.Token, confirmed.ConfirmToken); ok {
+		t.Fatal("wrong actor should not consume delete confirm")
+	}
+	got, ok := store.ConsumeDeleteConfirmForActor(42, 111, nil, 9, draft.Token, confirmed.ConfirmToken)
+	if !ok {
+		t.Fatal("right actor should still consume delete confirm")
+	}
+	if got.RouteID != "r1" {
+		t.Fatalf("RouteID=%q want r1", got.RouteID)
 	}
 }
 

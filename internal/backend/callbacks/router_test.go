@@ -168,19 +168,45 @@ func TestRouterRejectsWrongChat(t *testing.T) {
 // product change). Verifies the policy reversal explicitly.
 func TestRouterAllowsNonAdminInRightChat(t *testing.T) {
 	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 77); err != nil {
+		t.Fatal(err)
+	}
 	f := &fakeRouterTG{}
 	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
 
+	tid := int64(77)
 	q := &tg.CallbackQuery{
 		ID:      "cbk-anon",
 		From:    tg.User{ID: 99999}, // not admin
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴"},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "🔴"},
 		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
 	}
 	r.HandleCallback(context.Background(), q)
 
 	if len(f.edits) != 1 {
 		t.Errorf("expected 1 edit (action applied), got %d", len(f.edits))
+	}
+}
+
+func TestRouterHandleCallback_MissingRouterDoesNotEnqueueCommand(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-missing-router",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "diag_now:999999:_menu",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 0 {
+		t.Fatalf("missing router callback must not enqueue command, got %+v", sink.calls)
+	}
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "router") {
+		t.Fatalf("missing router should be answered to operator, got answers=%v", f.answers)
 	}
 }
 
@@ -211,37 +237,46 @@ func TestRouterRejectsLegacyRoutesCloseFromNonOwnerInRouterTopic(t *testing.T) {
 	}
 }
 
-func TestRouterRejectsOperatorSelfHostedAmneziaIssue(t *testing.T) {
+func TestRouterAllowsOperatorSelfHostedAmneziaIssue(t *testing.T) {
 	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.RouterOperators().Add(uid, 555, 12345); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeRouterTG{}
 	sink := &fakeEnqueuer{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	store := selfhostedamnezia.Store{Version: 1}
+	if err := store.Upsert(selfhostedamnezia.Instance{ID: "home", Label: "Home VPS", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567}); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfhostedamnezia.SaveStore(storePath, store); err != nil {
+		t.Fatal(err)
+	}
 	r := NewRouterWithSink(d, f, sink, Config{
 		ChatID:      -100,
 		AdminUserID: 12345,
 		SelfHostedAmnezia: selfhostedamnezia.Config{
-			Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567,
+			StorePath: storePath,
 		},
 	})
 
+	tid := int64(11)
 	q := &tg.CallbackQuery{
 		ID:      "selfhosted-op",
 		From:    tg.User{ID: 555},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
-		Data:    "amz_selfhosted_issue:" + itoa(uid) + ":_panel_",
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid},
+		Data:    "amz_selfhosted_issue:" + itoa(uid) + ":_panel_:home",
 	}
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "админа") {
-		t.Fatalf("answers = %+v, want admin-only rejection", f.answers)
-	}
-	if len(f.edits) != 0 {
-		t.Fatalf("operator should not see self-hosted confirm edit: %+v", f.edits)
+	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], "amz_selfhosted_confirm:"+itoa(uid)+":_panel_:home") {
+		t.Fatalf("operator should see self-hosted issue confirm, markups=%+v answers=%+v", f.editMarkups, f.answers)
 	}
 	if len(sink.calls) != 0 {
-		t.Fatalf("operator should not enqueue anything: %+v", sink.calls)
+		t.Fatalf("first issue tap must not enqueue anything before confirm: %+v", sink.calls)
 	}
 }
 
@@ -331,6 +366,54 @@ func TestAdminAmneziaPanelShowsSelfHostedManageButtonBeforeProviders(t *testing.
 	}
 }
 
+func TestOperatorAmneziaPanelShowsSelfHostedIssueWithoutManage(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(uid, 555, 12345); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	store := selfhostedamnezia.Store{Version: 1}
+	if err := store.Upsert(selfhostedamnezia.Instance{ID: "home", Label: "Home VPS", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567}); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfhostedamnezia.SaveStore(storePath, store); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       1,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 555},
+		MessageThreadID: ptrInt64(11),
+		Text:            "Amnezia Premium",
+	})
+
+	if len(f.sentMarkups) == 0 {
+		t.Fatal("expected Amnezia panel markup")
+	}
+	kb, ok := f.sentMarkups[len(f.sentMarkups)-1].(*tg.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("markup type = %T", f.sentMarkups[len(f.sentMarkups)-1])
+	}
+	if !keyboardContainsCallback(kb, "amz_selfhosted_issue:"+itoa(uid)+":_panel_:home") {
+		t.Fatalf("operator self-hosted issue button not found in %+v", kb.InlineKeyboard)
+	}
+	if keyboardContainsCallback(kb, "amz_selfhosted_manage:"+itoa(uid)+":_panel_") {
+		t.Fatalf("operator must not see self-hosted manage button: %+v", kb.InlineKeyboard)
+	}
+}
+
 func TestAdminSelfHostedPanelAddsProviderFromButtonFlow(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
@@ -374,6 +457,87 @@ func TestAdminSelfHostedPanelAddsProviderFromButtonFlow(t *testing.T) {
 	got := f.editMarkups[len(f.editMarkups)-1]
 	if !keyboardContainsCallback(got, "amz_selfhosted_issue:"+itoa(uid)+":_panel_:home") {
 		t.Fatalf("stored provider issue button not found in %+v", got.InlineKeyboard)
+	}
+}
+
+func TestSelfHostedAmneziaManageView_DeleteUsesAskCallback(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	store := selfhostedamnezia.Store{Version: 1}
+	if err := store.Upsert(selfhostedamnezia.Instance{ID: "home", Label: "Home VPS", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567}); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfhostedamnezia.SaveStore(storePath, store); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	_, kb := r.selfHostedAmneziaManageView(uid)
+	if !keyboardContainsCallback(&kb, "amz_selfhosted_delete:"+itoa(uid)+":_panel_:home") {
+		t.Fatalf("delete button should open confirm screen, got %+v", kb.InlineKeyboard)
+	}
+	if keyboardContainsCallback(&kb, "amz_selfhosted_delete_confirm:"+itoa(uid)+":_panel_:home") {
+		t.Fatalf("manage view must not expose one-tap delete-confirm callback: %+v", kb.InlineKeyboard)
+	}
+}
+
+func TestSelfHostedAmneziaDeleteRequiresConfirm(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	store := selfhostedamnezia.Store{Version: 1}
+	if err := store.Upsert(selfhostedamnezia.Instance{ID: "home", Label: "Home VPS", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567}); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfhostedamnezia.SaveStore(storePath, store); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_selfhosted_delete:" + itoa(uid) + ":_panel_:home",
+	})
+
+	afterAsk, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := afterAsk.Get("home"); !ok {
+		t.Fatalf("first delete tap must not delete instance")
+	}
+	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], "amz_selfhosted_delete_confirm:"+itoa(uid)+":_panel_:home") {
+		t.Fatalf("first delete tap should render confirm callback, markups=%+v", f.editMarkups)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-delete-confirm",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_selfhosted_delete_confirm:" + itoa(uid) + ":_panel_:home",
+	})
+
+	afterConfirm, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := afterConfirm.Get("home"); ok {
+		t.Fatalf("confirm delete should remove instance")
 	}
 }
 
@@ -587,6 +751,31 @@ func TestRouterRestartTunnelRequiresAwgManagerConfirm(t *testing.T) {
 	}
 }
 
+func TestRouterOpkgUpgradeRequiresConfirm(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-opkg-upgrade",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "opkg_upgrade:" + itoa(uid) + ":_menu",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 0 {
+		t.Fatalf("opkg_upgrade callback must require confirmation before enqueue, got %+v", sink.calls)
+	}
+	if len(f.edits) != 1 {
+		t.Fatalf("expected opkg confirmation edit, got %v", f.edits)
+	}
+	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("maint_confirm:%d:opkg_upgrade:", uid)) {
+		t.Fatalf("confirm markup missing opkg_upgrade maint_confirm callback: %+v", f.editMarkups)
+	}
+}
+
 func TestRouterDispatchesInlineCheckViaTunnel(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -628,6 +817,34 @@ func TestRouterPanelCommandDoesNotEditStaleSnapshot(t *testing.T) {
 	}
 	if sink.calls[0].action != "tunnel_disable" {
 		t.Fatalf("action = %q, want tunnel_disable", sink.calls[0].action)
+	}
+	if len(f.answers) != 1 {
+		t.Fatalf("expected answer toast, got %d", len(f.answers))
+	}
+	if len(f.edits) != 0 {
+		t.Fatalf("panel callback should not edit stale DB snapshot, got edits=%v", f.edits)
+	}
+}
+
+func TestRouterPanelTunnelRestartEnqueuesWithNDMS(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-restart-tunnel",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "tunnel_restart:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if sink.calls[0].action != "tunnel_restart" || sink.calls[0].ndms != "Wireguard3" {
+		t.Fatalf("call = %+v, want action=tunnel_restart ndms=Wireguard3", sink.calls[0])
 	}
 	if len(f.answers) != 1 {
 		t.Fatalf("expected answer toast, got %d", len(f.answers))
@@ -1569,6 +1786,51 @@ func TestACL_UnboundWithKnownTopicRejectsForeignTopicCallback(t *testing.T) {
 	}
 }
 
+func TestACL_UnboundWithoutTopicRejectsCallback(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-unbound-no-topic",
+		From:    tg.User{ID: 77777},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "diag_now:" + itoa(uid) + ":_menu",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 0 {
+		t.Fatalf("unbound router without topic must not enqueue command, got %+v", sink.calls)
+	}
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "not bound") {
+		t.Fatalf("expected unbound-topic rejection toast, got %v", f.answers)
+	}
+}
+
+func TestRouterConsumePendingRebindWrongActorRejectedWithoutConsuming(t *testing.T) {
+	r := &Router{}
+	r.putPendingRebind(&pendingRebind{
+		UserID:    42,
+		ActorTGID: 111,
+		SrcID:     "old",
+		DstID:     "new",
+		Token:     "tok1",
+		ExpiresAt: time.Now().Add(time.Minute),
+	})
+
+	if _, ok := r.consumePendingRebindForActor(42, 222, "tok1"); ok {
+		t.Fatal("wrong actor should not consume pending rebind")
+	}
+	got, ok := r.consumePendingRebindForActor(42, 111, "tok1")
+	if !ok {
+		t.Fatal("right actor should still consume pending rebind")
+	}
+	if got.SrcID != "old" || got.DstID != "new" {
+		t.Fatalf("bad pending rebind: %+v", got)
+	}
+}
+
 func TestACL_AdminCannotUseRouterScopedCallbackFromForeignTopic(t *testing.T) {
 	d, uid := newTestDB(t)
 	const ownThread = int64(4242)
@@ -1662,10 +1924,10 @@ func TestRouterRoutesRollback_RendersReverseConfirmWithoutCache(t *testing.T) {
 	}
 }
 
-// TestRouter_OpkgDisable_DispatchesEnqueue verifies the full dispatch path for
-// the opkg_disable callback: SetOpkgRepair wires the action, a tap by the
-// admin on a valid token enqueues opkg_feed_disable and returns a toast.
-func TestRouter_OpkgDisable_DispatchesEnqueue(t *testing.T) {
+// TestRouter_OpkgDisable_RequiresConfirm verifies the full dispatch path for
+// opkg_disable: the first tap renders a confirm screen, and only the confirm
+// callback consumes the token and enqueues opkg_feed_disable.
+func TestRouter_OpkgDisable_RequiresConfirm(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
 	sink := &fakeEnqueuer{}
@@ -1691,6 +1953,17 @@ func TestRouter_OpkgDisable_DispatchesEnqueue(t *testing.T) {
 	}
 	r.HandleCallback(context.Background(), q)
 
+	if len(sink.calls) != 0 {
+		t.Fatalf("first opkg_disable tap must not enqueue before confirm, got %+v", sink.calls)
+	}
+	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], fmt.Sprintf("opkg_disable_confirm:%d:_menu:tok1", uid)) {
+		t.Fatalf("first opkg_disable tap should render confirm callback, markups=%+v answers=%+v", f.editMarkups, f.answers)
+	}
+
+	q.ID = "q1-confirm"
+	q.Data = fmt.Sprintf("opkg_disable_confirm:%d:_menu:tok1", uid)
+	r.HandleCallback(context.Background(), q)
+
 	// The action must have enqueued exactly one opkg_feed_disable command.
 	if len(sink.calls) != 1 {
 		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
@@ -1702,14 +1975,15 @@ func TestRouter_OpkgDisable_DispatchesEnqueue(t *testing.T) {
 		t.Errorf("enqueued userID=%d, want %d", sink.calls[0].userID, uid)
 	}
 	// IsMenu path: AnswerCallbackQuery with the status toast; no EditMessageText.
-	if len(f.answers) != 1 {
-		t.Fatalf("expected 1 AnswerCallbackQuery, got %d", len(f.answers))
+	if len(f.answers) != 2 {
+		t.Fatalf("expected 2 AnswerCallbackQuery calls, got %d", len(f.answers))
 	}
+	f.answers = f.answers[1:]
 	if !strings.Contains(f.answers[0], "фид") {
 		t.Errorf("toast should mention фид, got %q", f.answers[0])
 	}
-	if len(f.edits) != 0 {
-		t.Errorf("opkg_disable(_menu) must NOT edit the message, got %d edits", len(f.edits))
+	if len(f.edits) != 1 {
+		t.Errorf("opkg_disable should edit once for the confirm screen, got %d edits", len(f.edits))
 	}
 }
 
@@ -2010,6 +2284,42 @@ func TestRouterHandleMessage_OperatorRoutesSlash_InOwnTopic(t *testing.T) {
 	}
 	if len(sink.calls) != 1 || sink.calls[0].action != "route_status" {
 		t.Fatalf("operator /routes should enqueue route_status, got %+v", sink.calls)
+	}
+}
+
+func TestRouterHandleMessage_OperatorUpgradeSlashRequiresConfirm(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 42)
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	tid := int64(55)
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       99,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: &tid,
+		Text:            "/upgrade",
+	})
+
+	if len(sink.calls) != 0 {
+		t.Fatalf("operator /upgrade must require confirmation before enqueue, got %+v", sink.calls)
+	}
+	if len(f.sentMarkups) != 1 {
+		t.Fatalf("operator /upgrade should render opkg confirmation, markups=%d msgs=%+v", len(f.sentMarkups), f.sentMsgs)
+	}
+	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("markup type = %T", f.sentMarkups[0])
+	}
+	if !markupHasCallbackPrefix(kb, fmt.Sprintf("maint_confirm:%d:opkg_upgrade:", uid)) {
+		t.Fatalf("operator /upgrade confirmation missing maint_confirm callback: %+v", kb.InlineKeyboard)
 	}
 }
 

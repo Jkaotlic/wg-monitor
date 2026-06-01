@@ -92,8 +92,8 @@ func TestParseCommandActions(t *testing.T) {
 	}
 }
 
-func TestParseTunnelDeleteCallbacks(t *testing.T) {
-	for _, action := range []string{"tunnel_delete_ask", "tunnel_delete"} {
+func TestParseTunnelPanelCallbacks(t *testing.T) {
+	for _, action := range []string{"tunnel_restart", "tunnel_delete_ask", "tunnel_delete"} {
 		data := action + ":42:tunnel_awg13:Wireguard3"
 		a, err := Parse(data)
 		if err != nil {
@@ -455,6 +455,16 @@ func TestParse_OpkgDisable_NoTokenSegment(t *testing.T) {
 	}
 }
 
+func TestParse_OpkgDisableConfirm(t *testing.T) {
+	a, err := Parse("opkg_disable_confirm:12345:_menu:abcd1234")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.Action != "opkg_disable_confirm" || a.UserID != 12345 || a.OpkgRepairToken != "abcd1234" {
+		t.Fatalf("got %+v", a)
+	}
+}
+
 func TestParse_Access_Home(t *testing.T) {
 	a, err := Parse("access:0:home")
 	if err != nil {
@@ -495,12 +505,32 @@ func TestParse_Access_RemoveOp(t *testing.T) {
 	}
 }
 
+func TestParse_Access_RemoveOpConfirm(t *testing.T) {
+	a, err := Parse("access:0:remove_op_confirm:42:1234567890")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.AccessScreen != "remove_op_confirm" || a.AccessRouterID != 42 || a.AccessOperatorTGID != 1234567890 {
+		t.Errorf("a=%+v", a)
+	}
+}
+
 func TestParse_Access_UnbindOwner(t *testing.T) {
 	a, err := Parse("access:0:unbind_owner:42")
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if a.AccessScreen != "unbind_owner" || a.AccessRouterID != 42 {
+		t.Errorf("a=%+v", a)
+	}
+}
+
+func TestParse_Access_UnbindOwnerConfirm(t *testing.T) {
+	a, err := Parse("access:0:unbind_owner_confirm:42")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if a.AccessScreen != "unbind_owner_confirm" || a.AccessRouterID != 42 {
 		t.Errorf("a=%+v", a)
 	}
 }

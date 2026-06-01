@@ -47,6 +47,81 @@ func TestShortCommandID(t *testing.T) {
 	}
 }
 
+func TestActionUpdateComponentsReturnsErrorWhenSelectedUpdateFails(t *testing.T) {
+	oldAPI := GitHubAPIBase
+	oldChoose := askUpdateChoiceFunc
+	oldCurrentIP := currentPublicIPFunc
+	oldConfirm := confirmTargetContextFunc
+	oldProbe := probeReachableFunc
+	oldRun := runOneUpdateFunc
+	defer func() {
+		GitHubAPIBase = oldAPI
+		askUpdateChoiceFunc = oldChoose
+		currentPublicIPFunc = oldCurrentIP
+		confirmTargetContextFunc = oldConfirm
+		probeReachableFunc = oldProbe
+		runOneUpdateFunc = oldRun
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Jkaotlic/wg-monitor/releases":
+			_, _ = w.Write([]byte(`[{"tag_name":"v0.13.0-rc99"}]`))
+		case "/healthz":
+			http.NotFound(w, r)
+		default:
+			t.Fatalf("unexpected request %s", r.URL.String())
+		}
+	}))
+	defer srv.Close()
+	GitHubAPIBase = srv.URL
+
+	askUpdateChoiceFunc = func(_ []updateTarget, outdated []updateTarget) []updateTarget {
+		if len(outdated) != 1 {
+			t.Fatalf("outdated targets=%d, want 1: %+v", len(outdated), outdated)
+		}
+		return outdated
+	}
+	currentPublicIPFunc = func() string { return "203.0.113.10" }
+	confirmTargetContextFunc = func(target updateTarget, pubIP string) bool {
+		if !strings.HasPrefix(target.Label, "backend ") {
+			t.Fatalf("selected target=%+v, want backend", target)
+		}
+		if pubIP != "203.0.113.10" {
+			t.Fatalf("pubIP=%q", pubIP)
+		}
+		return true
+	}
+	probeReachableFunc = func(string, int, time.Duration) bool {
+		t.Fatal("backend target must not run agent reachability probe")
+		return false
+	}
+	runOneUpdateFunc = func(_ *State, _ *SecretStore, _ *Downloader, target updateTarget) error {
+		if !strings.HasPrefix(target.Label, "backend ") {
+			t.Fatalf("run target=%+v, want backend", target)
+		}
+		return fmt.Errorf("backend swap failed")
+	}
+
+	state := &State{Backend: BackendState{
+		Host:                "203.0.113.22",
+		Domain:              srv.URL,
+		LastDeployedVersion: "v0.13.0-rc1",
+	}}
+	err := actionUpdateComponents(state, &SecretStore{disk: map[string]string{}}, &Downloader{
+		HTTP:     srv.Client(),
+		CacheDir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("selected component failure must make update-components return non-nil")
+	}
+	for _, want := range []string{"backend", "backend swap failed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
+	}
+}
+
 func TestShouldProbeReachabilityBeforeUpdate_SkipsPullEligibleAgent(t *testing.T) {
 	state := &State{Backend: BackendState{Domain: "wg.example.test"}}
 	secrets := &SecretStore{disk: map[string]string{"WIZARD_TOKEN": "tok"}}
@@ -467,6 +542,60 @@ func TestMobilePullAckTimeoutMarksPending(t *testing.T) {
 	}
 }
 
+func TestRunPullDeployMobileAckTimeoutReturnsPendingError(t *testing.T) {
+	oldAckTimeout := pullDeployAckTimeout
+	defer func() { pullDeployAckTimeout = oldAckTimeout }()
+	pullDeployAckTimeout = 0
+
+	var pushed bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/wizard/agents/carvan/deploy":
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"cmd_id":"cmd-1"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/wizard/agents/carvan":
+			pushed = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	state := &State{
+		Backend: BackendState{Domain: srv.URL},
+		Agents: []AgentState{{
+			Nickname:            "carvan",
+			Kind:                "mobile",
+			LastDeployedVersion: "v0.13.0",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "carvan",
+		Kind:             "mobile",
+		InstalledVersion: "v0.13.0",
+		LatestVersion:    "v0.14.0-rc1",
+	}
+
+	err := runPullDeploy(state, &SecretStore{disk: map[string]string{"WIZARD_TOKEN": "tok"}}, target)
+	if err == nil {
+		t.Fatal("ACK timeout must return a pending/timeout error, not green")
+	}
+	for _, want := range []string{"pending", "ACK", "timeout"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("ACK timeout error missing %q: %v", want, err)
+		}
+	}
+	ag := state.FindAgent("carvan")
+	if ag.PendingVersion != "v0.14.0-rc1" || ag.PendingSince == "" {
+		t.Fatalf("pending fields not preserved: %+v", ag)
+	}
+	if !pushed {
+		t.Fatal("pending state should still be pushed to VPS best-effort")
+	}
+}
+
 func TestStaticPullAckTimeoutRemainsError(t *testing.T) {
 	state := &State{Agents: []AgentState{{Nickname: "home", Kind: "static"}}}
 	target := updateTarget{IsAgent: true, AgentNickname: "home", Kind: "static", LatestVersion: "v0.14.0-rc1"}
@@ -487,6 +616,68 @@ func TestPullDeployHeartbeatTimeoutMarksPendingAfterAck(t *testing.T) {
 	}
 	if ag.LastDeployedVersion != "v0.13.0-rc14" {
 		t.Fatalf("last confirmed version must stay old until heartbeat flip, got %+v", ag)
+	}
+}
+
+func TestRunPullDeployHeartbeatTimeoutReturnsPendingErrorAfterAck(t *testing.T) {
+	oldHeartbeatTimeout := pullDeployHeartbeatTimeout
+	defer func() { pullDeployHeartbeatTimeout = oldHeartbeatTimeout }()
+	pullDeployHeartbeatTimeout = 0
+
+	lastSeen := time.Now().UTC()
+	var pushed bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/wizard/agents":
+			_, _ = fmt.Fprintf(w, `{"agents":[{"nickname":"home","last_seen_at":%q}]}`, lastSeen.Format(time.RFC3339Nano))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/wizard/agents/home/deploy":
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"cmd_id":"cmd-2"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/wizard/cmd/cmd-2":
+			_, _ = w.Write([]byte(`{"id":"cmd-2","status":"ok","output":"scheduled"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/wizard/agents/home":
+			pushed = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	state := &State{
+		Backend: BackendState{Domain: srv.URL},
+		Agents: []AgentState{{
+			Nickname:            "home",
+			Kind:                "static",
+			LastDeployedVersion: "v0.13.0-rc14",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "home",
+		Kind:             "static",
+		InstalledVersion: "v0.13.0-rc14",
+		LatestVersion:    "v0.13.0-rc27",
+	}
+
+	err := runPullDeploy(state, &SecretStore{disk: map[string]string{"WIZARD_TOKEN": "tok"}}, target)
+	if err == nil {
+		t.Fatal("heartbeat timeout after ACK must return a pending/timeout error, not green")
+	}
+	for _, want := range []string{"pending", "heartbeat", "timeout"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("heartbeat timeout error missing %q: %v", want, err)
+		}
+	}
+	ag := state.FindAgent("home")
+	if ag.PendingVersion != "v0.13.0-rc27" || ag.PendingSince == "" {
+		t.Fatalf("pending fields not preserved: %+v", ag)
+	}
+	if ag.LastDeployedVersion != "v0.13.0-rc14" {
+		t.Fatalf("last confirmed version must stay old until heartbeat flip, got %+v", ag)
+	}
+	if !pushed {
+		t.Fatal("pending state should still be pushed to VPS best-effort")
 	}
 }
 

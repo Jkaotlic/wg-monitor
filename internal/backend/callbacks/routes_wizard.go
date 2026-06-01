@@ -10,6 +10,7 @@ import (
 // RouteAddDraft is the backend-local state for the add-route wizard.
 type RouteAddDraft struct {
 	UserID       int64
+	ActorTGID    int64
 	ThreadID     *int64
 	RouterID     int64
 	Kind         string
@@ -26,6 +27,7 @@ type RouteAddDraft struct {
 // RouteDeleteDraft is the backend-local state for one pending delete.
 type RouteDeleteDraft struct {
 	UserID       int64
+	ActorTGID    int64
 	ThreadID     *int64
 	RouterID     int64
 	Kind         string
@@ -76,10 +78,14 @@ func (s *RouteWizardStore) PutAddDraft(d RouteAddDraft) RouteAddDraft {
 }
 
 func (s *RouteWizardStore) GetAddDraft(userID int64, threadID *int64, routerID int64, token string) (RouteAddDraft, bool) {
+	return s.GetAddDraftForActor(userID, 0, threadID, routerID, token)
+}
+
+func (s *RouteWizardStore) GetAddDraftForActor(userID, actorTGID int64, threadID *int64, routerID int64, token string) (RouteAddDraft, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.addDrafts[token]
-	if !ok || !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
+	if !ok || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
 		if ok && s.expiredLocked(d.ExpiresAt) {
 			delete(s.addDrafts, token)
 		}
@@ -89,10 +95,14 @@ func (s *RouteWizardStore) GetAddDraft(userID int64, threadID *int64, routerID i
 }
 
 func (s *RouteWizardStore) GetOpenAddDraft(userID int64, threadID *int64, routerID int64) (RouteAddDraft, bool) {
+	return s.GetOpenAddDraftForActor(userID, 0, threadID, routerID)
+}
+
+func (s *RouteWizardStore) GetOpenAddDraftForActor(userID, actorTGID int64, threadID *int64, routerID int64) (RouteAddDraft, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for token, d := range s.addDrafts {
-		if !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) {
+		if !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) {
 			continue
 		}
 		if s.expiredLocked(d.ExpiresAt) {
@@ -107,10 +117,14 @@ func (s *RouteWizardStore) GetOpenAddDraft(userID int64, threadID *int64, router
 }
 
 func (s *RouteWizardStore) CancelAddDraft(userID int64, threadID *int64, routerID int64, token string) bool {
+	return s.CancelAddDraftForActor(userID, 0, threadID, routerID, token)
+}
+
+func (s *RouteWizardStore) CancelAddDraftForActor(userID, actorTGID int64, threadID *int64, routerID int64, token string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.addDrafts[token]
-	if !ok || !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) {
+	if !ok || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) {
 		return false
 	}
 	delete(s.addDrafts, token)
@@ -131,10 +145,14 @@ func (s *RouteWizardStore) SetAddConfirm(userID int64, threadID *int64, routerID
 }
 
 func (s *RouteWizardStore) ConsumeAddConfirm(userID int64, threadID *int64, routerID int64, token, confirmToken string) (RouteAddDraft, bool) {
+	return s.ConsumeAddConfirmForActor(userID, 0, threadID, routerID, token, confirmToken)
+}
+
+func (s *RouteWizardStore) ConsumeAddConfirmForActor(userID, actorTGID int64, threadID *int64, routerID int64, token, confirmToken string) (RouteAddDraft, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.addDrafts[token]
-	if !ok || d.ConfirmToken != confirmToken || !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
+	if !ok || d.ConfirmToken != confirmToken || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
 		return RouteAddDraft{}, false
 	}
 	delete(s.addDrafts, token)
@@ -167,10 +185,14 @@ func (s *RouteWizardStore) GetDeleteDraft(userID int64, threadID *int64, routerI
 }
 
 func (s *RouteWizardStore) CancelDeleteDraft(userID int64, threadID *int64, routerID int64, token string) bool {
+	return s.CancelDeleteDraftForActor(userID, 0, threadID, routerID, token)
+}
+
+func (s *RouteWizardStore) CancelDeleteDraftForActor(userID, actorTGID int64, threadID *int64, routerID int64, token string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.delDrafts[token]
-	if !ok || !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) {
+	if !ok || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) {
 		return false
 	}
 	delete(s.delDrafts, token)
@@ -191,10 +213,14 @@ func (s *RouteWizardStore) SetDeleteConfirm(userID int64, threadID *int64, route
 }
 
 func (s *RouteWizardStore) ConsumeDeleteConfirm(userID int64, threadID *int64, routerID int64, token, confirmToken string) (RouteDeleteDraft, bool) {
+	return s.ConsumeDeleteConfirmForActor(userID, 0, threadID, routerID, token, confirmToken)
+}
+
+func (s *RouteWizardStore) ConsumeDeleteConfirmForActor(userID, actorTGID int64, threadID *int64, routerID int64, token, confirmToken string) (RouteDeleteDraft, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	d, ok := s.delDrafts[token]
-	if !ok || d.ConfirmToken != confirmToken || !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
+	if !ok || d.ConfirmToken != confirmToken || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
 		return RouteDeleteDraft{}, false
 	}
 	delete(s.delDrafts, token)
@@ -240,6 +266,13 @@ func (s *RouteWizardStore) initLocked() {
 
 func (s *RouteWizardStore) addScopeMatchesLocked(storedUser int64, storedThread *int64, storedRouter int64, userID int64, threadID *int64, routerID int64) bool {
 	return storedUser == userID && storedRouter == routerID && sameThread(storedThread, threadID)
+}
+
+func (s *RouteWizardStore) addScopeMatchesActorLocked(storedUser, storedActor int64, storedThread *int64, storedRouter, userID, actorTGID int64, threadID *int64, routerID int64) bool {
+	if !s.addScopeMatchesLocked(storedUser, storedThread, storedRouter, userID, threadID, routerID) {
+		return false
+	}
+	return storedActor == 0 || storedActor == actorTGID
 }
 
 func (s *RouteWizardStore) expiredLocked(expiresAt time.Time) bool {

@@ -69,6 +69,16 @@ func (s *pendingOpkgRepairStore) consume(userID int64, token string) (*pendingOp
 	return p, true
 }
 
+func (s *pendingOpkgRepairStore) get(userID int64, token string) (*pendingOpkgRepair, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.m[token]
+	if !ok || p.UserID != userID || time.Now().After(p.ExpiresAt) {
+		return nil, false
+	}
+	return p, true
+}
+
 // makeOpkgRepairToken returns 8 lowercase hex characters seeded from crypto/rand.
 // Same shape as makeMaintToken and makeRebindToken.
 func makeOpkgRepairToken() string {
@@ -116,6 +126,28 @@ func (a *OpkgRepairAction) Apply(ctx context.Context, q *tg.CallbackQuery, args 
 		return "", fmt.Errorf("enqueue opkg_feed_disable: %w", err)
 	}
 	return "🔧 отключаем фид…", nil
+}
+
+func (r *Router) handleOpkgDisableAsk(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
+	if r.pendingOpkgRepair == nil {
+		return false
+	}
+	p, ok := r.pendingOpkgRepair.get(args.UserID, args.OpkgRepairToken)
+	if !ok {
+		return false
+	}
+	text := fmt.Sprintf("Disable opkg feed?\n\nFeed:\n%s\n\nThe agent will comment this feed out and run opkg update.", p.URL)
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "Yes, disable feed", CallbackData: fmt.Sprintf("opkg_disable_confirm:%d:_menu:%s", args.UserID, args.OpkgRepairToken)},
+	}, {
+		{Text: "Cancel", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", args.UserID)},
+	}}}
+	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, err.Error())
+		return true
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+	return true
 }
 
 // ensure OpkgRepairAction satisfies Action at compile time.

@@ -48,6 +48,7 @@ var validCommandActions = map[string]bool{
 	"force_recheck":     true,
 	"tunnel_enable":     true,
 	"tunnel_disable":    true,
+	"tunnel_restart":    true,
 	"tunnel_delete":     true,
 	"check_via_tunnel":  true,
 	"check_direct":      true,

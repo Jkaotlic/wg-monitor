@@ -17,15 +17,16 @@ import (
 )
 
 // probeAgentTokenValid GETs /v1/cmd with the supplied raw token and reports
-// whether the response status is anything other than 401 — that's the only
-// signal that confirms the disk-cached token still matches the SHA-256 hash
-// stored in the users-table on the VPS. Used by doctorAgent for the auth-probe
-// check (a green doctor without this is a false positive — see DOC-01).
+// whether the backend returned an expected success status. Redirects, auth
+// failures, and server errors are not proof that the token matches token_hash.
 func probeAgentTokenValid(url, rawToken string) bool {
 	cli := &http.Client{
 		Timeout: 8 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12},
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
 		},
 	}
 	req, err := http.NewRequest("GET", url, nil)
@@ -40,7 +41,7 @@ func probeAgentTokenValid(url, rawToken string) bool {
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-	return resp.StatusCode != http.StatusUnauthorized
+	return resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent
 }
 
 // doctorTally is the running counter the per-section helpers feed into.
@@ -409,23 +410,8 @@ func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTa
 
 	port := portOrDefault(ag.Port, 222)
 	user := userOrDefault(ag.User, "root")
-	doctorAgentHeartbeat(state, ag, secrets, t)
-
-	// Auth-probe: проверяем что raw-токен в disk-кэше всё ещё совпадает с
-	// token_hash в DB — единственный способ убедиться, что агент сможет
-	// аутентифицироваться. "doctor зелёный" без этой проверки = ложное
-	// успокоение.
-	if state.Backend.Domain != "" {
-		tok := secrets.GetNonInteractive("WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname))
-		switch {
-		case tok == "":
-			t.warnf("auth-probe пропущен: токен не в disk-кэше (запусти [3] на этом ПК или импортируй secrets backup)")
-		case probeAgentTokenValid("https://"+state.Backend.Domain+"/v1/cmd?wait=0", tok):
-			t.ok("auth-probe: токен валиден")
-		default:
-			t.failf("auth-probe: backend ответил 401 — disk-cache токен НЕ совпадает с token_hash в DB")
-		}
-	}
+	heartbeatFresh := doctorAgentHeartbeat(state, ag, secrets, t)
+	authProbe := doctorAgentAuthProbe(state, ag, secrets, t)
 
 	if msg := doctorDeployMetadataWarning(ag); msg != "" {
 		t.warnf(msg)
@@ -434,6 +420,9 @@ func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTa
 	}
 
 	if doctorShouldSkipDirectSSH(ag) {
+		if !doctorAWGMOnlySkipIsBackendConfirmed(heartbeatFresh, authProbe) {
+			t.failf("AWGM-only doctor: нельзя считать агент проверенным без fresh heartbeat и валидного auth-probe")
+		}
 		t.warnf(doctorDirectSSHSkipWarning(ag))
 		fmt.Println()
 		return
@@ -551,20 +540,20 @@ func doctorAgentReachable(ag *AgentState, port int, t *doctorTally, opts doctorO
 	return true
 }
 
-func doctorAgentHeartbeat(state *State, ag *AgentState, secrets *SecretStore, t *doctorTally) {
+func doctorAgentHeartbeat(state *State, ag *AgentState, secrets *SecretStore, t *doctorTally) bool {
 	if state.Backend.Domain == "" {
 		t.warnf("heartbeat: backend.domain не задан — пропускаю last_seen")
-		return
+		return false
 	}
 	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
 	if tok == "" {
 		t.warnf("heartbeat: WIZARD_TOKEN не найден в env/disk — пропускаю last_seen")
-		return
+		return false
 	}
 	c := NewResilientVPSClientForBackend(state, secrets, tok, 5*time.Second)
 	if c == nil {
 		t.warnf("heartbeat: wizard client не собрался")
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	hb := c.HeartbeatStatus(ctx, ag.Nickname)
@@ -574,11 +563,39 @@ func doctorAgentHeartbeat(state *State, ag *AgentState, secrets *SecretStore, t 
 		t.warnf("heartbeat: не удалось прочитать /v1/wizard/agents")
 	case strings.HasPrefix(hb, "fresh"):
 		t.ok("heartbeat: " + hb)
+		return true
 	case hb == "never":
 		t.warnf("heartbeat: never")
 	default:
 		t.warnf("heartbeat: " + hb)
 	}
+	return false
+}
+
+func doctorAgentAuthProbe(state *State, ag *AgentState, secrets *SecretStore, t *doctorTally) awgmAuthProbeStatus {
+	// Auth-probe: проверяем что raw-токен в disk-кэше всё ещё совпадает с
+	// token_hash в DB — единственный способ убедиться, что агент сможет
+	// аутентифицироваться. "doctor зелёный" без этой проверки = ложное
+	// успокоение.
+	if state.Backend.Domain == "" {
+		return awgmAuthProbeSkipped
+	}
+	tok := secrets.GetNonInteractive("WG_AGENT_TOKEN_" + strings.ToUpper(ag.Nickname))
+	switch {
+	case tok == "":
+		t.warnf("auth-probe пропущен: токен не в disk-кэше (запусти [3] на этом ПК или импортируй secrets backup)")
+		return awgmAuthProbeSkipped
+	case probeAgentTokenValid("https://"+state.Backend.Domain+"/v1/cmd?wait=0", tok):
+		t.ok("auth-probe: токен валиден")
+		return awgmAuthProbeOK
+	default:
+		t.failf("auth-probe: backend ответил 401 — disk-cache токен НЕ совпадает с token_hash в DB")
+		return awgmAuthProbeFail
+	}
+}
+
+func doctorAWGMOnlySkipIsBackendConfirmed(heartbeatFresh bool, authProbe awgmAuthProbeStatus) bool {
+	return heartbeatFresh && authProbe == awgmAuthProbeOK
 }
 
 func doctorAwgManagerViaSSH(s *SSH, t *doctorTally) {
