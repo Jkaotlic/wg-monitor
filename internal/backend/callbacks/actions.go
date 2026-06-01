@@ -386,12 +386,12 @@ type pendingUpload struct {
 // It looks up the pending conf upload, then enqueues a tunnel_import wire.Command.
 type ImportAction struct {
 	sink      CommandEnqueuer
-	consumeFn func(userID int64, token string) (*pendingUpload, bool)
+	consumeFn func(userID int64, token string, threadID *int64) (*pendingUpload, bool)
 	idGen     func() string
 }
 
 func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	up, ok := a.consumeFn(args.UserID, args.ImportToken)
+	up, ok := a.consumeFn(args.UserID, args.ImportToken, q.Message.MessageThreadID)
 	if !ok {
 		return "", fmt.Errorf("загрузка истекла или не найдена; отправь конфиг заново")
 	}

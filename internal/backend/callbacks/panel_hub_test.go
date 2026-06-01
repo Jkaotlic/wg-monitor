@@ -209,6 +209,45 @@ func TestPanelPush_StatusSendsSmartReplyToTargetThread(t *testing.T) {
 	}
 }
 
+func TestPanelPush_FromAdminDMSendsSmartReplyToGroupTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	const targetThread = int64(4242)
+	if err := d.Users().UpdateThreadID(uid, targetThread); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_amnezia_for_awg", "ok", `{"tunnel_name":"amnezia_for_awg","status":"ok"}`, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	q := &tg.CallbackQuery{
+		ID:   "cb-push-dm",
+		From: tg.User{ID: 12345},
+		Data: fmt.Sprintf("panel:%d:push:status", uid),
+		Message: tg.Message{
+			Chat:      tg.Chat{ID: 12345},
+			MessageID: 75,
+		},
+	}
+
+	r.HandleCallback(context.Background(), q)
+
+	var landedInGroupTopic bool
+	for _, s := range f.rkSends {
+		if s.chatID == -100 && s.thread != nil && *s.thread == targetThread && strings.Contains(s.text, "vasya") {
+			landedInGroupTopic = true
+			break
+		}
+	}
+	if !landedInGroupTopic {
+		t.Fatalf("admin DM panel push must publish to configured group topic; rkSends=%+v", f.rkSends)
+	}
+	if len(f.edits) == 0 {
+		t.Fatalf("expected admin DM hub edit with result")
+	}
+}
+
 func TestPanelPush_StaleTopicSurfacesError(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 555); err != nil {

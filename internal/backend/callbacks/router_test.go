@@ -1508,6 +1508,33 @@ func TestACL_UnboundWithKnownTopicRejectsForeignTopicCallback(t *testing.T) {
 	}
 }
 
+func TestACL_AdminCannotUseRouterScopedCallbackFromForeignTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	const ownThread = int64(4242)
+	const otherThread = int64(9999)
+	if err := d.Users().UpdateThreadID(uid, ownThread); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := otherThread
+	q := &tg.CallbackQuery{
+		ID:      "cbk-admin-foreign-topic",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 0 {
+		t.Fatalf("admin foreign-topic callback must not apply action, edits=%v", f.edits)
+	}
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "топик этого роутера") {
+		t.Fatalf("expected foreign-topic rejection toast, got %v", f.answers)
+	}
+}
+
 func TestRouterRoutesAddType_HRNeoUnavailableDoesNotSilentlyDowngradeToNDMS(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
