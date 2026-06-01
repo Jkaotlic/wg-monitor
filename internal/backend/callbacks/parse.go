@@ -166,6 +166,7 @@ var validActions = map[string]bool{
 	// Amnezia Premium cabinet.
 	"amz_refresh": true, "amz_open": true, "amz_countries": true, "amz_delete": true,
 	"amz_delete_confirm": true, "amz_dl": true, "amz_dl_confirm": true,
+	"amz_revoke": true, "amz_revoke_confirm": true,
 	"amz_selfhosted_issue": true, "amz_selfhosted_confirm": true,
 	"amz_selfhosted_manage": true, "amz_selfhosted_add": true,
 	"amz_selfhosted_edit": true, "amz_selfhosted_toggle": true,
@@ -493,6 +494,18 @@ func Parse(data string) (Args, error) {
 			}
 			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 				return Args{}, fmt.Errorf("%s requires country code: %q", action, data)
+			}
+			if !callbackCodeRe.MatchString(parts[3]) {
+				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
+			}
+			if !callbackCodeRe.MatchString(parts[4]) {
+				return Args{}, fmt.Errorf("%s: bad country code %q", action, parts[4])
+			}
+			a.AmneziaKeyID = parts[3]
+			a.AmneziaCountryCode = strings.ToLower(parts[4])
+		case "amz_revoke", "amz_revoke_confirm":
+			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+				return Args{}, fmt.Errorf("%s requires key id and country code: %q", action, data)
 			}
 			if !callbackCodeRe.MatchString(parts[3]) {
 				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])

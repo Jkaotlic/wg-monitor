@@ -3,6 +3,9 @@ package callbacks
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -330,6 +333,111 @@ func TestAdminSelfHostedPanelAddsProviderFromButtonFlow(t *testing.T) {
 	got := f.editMarkups[len(f.editMarkups)-1]
 	if !keyboardContainsCallback(got, "amz_selfhosted_issue:"+itoa(uid)+":_panel_:home") {
 		t.Fatalf("stored provider issue button not found in %+v", got.InlineKeyboard)
+	}
+}
+
+func TestAmneziaDownloadAskFullSlotsOffersRecoveryActions(t *testing.T) {
+	d, uid := newTestDB(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"subscription_status":"active","active_device_count":2,"max_device_count":2,"available_countries":[{"server_country_code":"de","server_country_name":"Germany"},{"server_country_code":"nl","server_country_name":"Netherlands"}],"issued_configs":[{"source_type":"country_config","server_country_code":"de","server_country_name":"Germany"}]}}`))
+		default:
+			t.Fatalf("unexpected Amnezia path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaBaseURL:     srv.URL,
+		AmneziaSecretsPath: t.TempDir() + "/amnezia-premium.json",
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q := &tg.CallbackQuery{
+		ID:      "cb-amz-full",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_dl:" + itoa(uid) + ":_panel_:" + stored.ID + ":nl",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("full slots should render durable recovery UI, edits=%d answers=%v", len(f.edits), f.answers)
+	}
+	if !strings.Contains(strings.ToLower(f.edits[0]), "слоты amnezia premium заняты") {
+		t.Fatalf("full slots text not rendered: %s", f.edits[0])
+	}
+	kb := f.editMarkups[0]
+	for _, want := range []string{
+		"amz_revoke:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
+		"amz_countries:" + itoa(uid) + ":_panel_:" + stored.ID + ":0",
+		"amz_refresh:" + itoa(uid) + ":_panel_:" + stored.ID,
+	} {
+		if !markupHasCallback(kb, want) {
+			t.Fatalf("full slots keyboard missing %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
+func TestAmneziaRevokeConfirmFreesCountrySlot(t *testing.T) {
+	d, uid := newTestDB(t)
+	var revokeBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/revoke-country-config":
+			body, _ := io.ReadAll(r.Body)
+			revokeBody = string(body)
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"subscription_status":"active","active_device_count":1,"max_device_count":2,"available_countries":[{"server_country_code":"de","server_country_name":"Germany"},{"server_country_code":"nl","server_country_name":"Netherlands"}],"issued_configs":[]}}`))
+		default:
+			t.Fatalf("unexpected Amnezia path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaBaseURL:     srv.URL,
+		AmneziaSecretsPath: t.TempDir() + "/amnezia-premium.json",
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	q := &tg.CallbackQuery{
+		ID:      "cb-amz-revoke-confirm",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_revoke_confirm:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if revokeBody != `{"countryCode":"de"}` {
+		t.Fatalf("bad revoke payload: %q", revokeBody)
+	}
+	if len(f.edits) != 1 {
+		t.Fatalf("revoke should refresh visible Amnezia UI, edits=%d answers=%v", len(f.edits), f.answers)
+	}
+	if !strings.Contains(strings.ToLower(f.edits[0]), "слот освобождён") {
+		t.Fatalf("revoke success text not rendered: %s", f.edits[0])
+	}
+	if !markupHasCallback(f.editMarkups[0], "amz_dl:"+itoa(uid)+":_panel_:"+stored.ID+":nl") {
+		t.Fatalf("revoke success keyboard should show country choices again: %+v", f.editMarkups[0].InlineKeyboard)
 	}
 }
 
