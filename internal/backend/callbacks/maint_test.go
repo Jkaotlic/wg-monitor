@@ -78,6 +78,23 @@ func TestPendingMaintStore_WrongUserRejected(t *testing.T) {
 	}
 }
 
+func TestPendingMaintStore_WrongActorRejectedWithoutConsuming(t *testing.T) {
+	store := newPendingMaintStore()
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, ActorTGID: 111, Name: "router", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+
+	if _, ok := store.consumeForActor(1, 222, tok); ok {
+		t.Fatal("consume with wrong actor should fail")
+	}
+	got, ok := store.consumeForActor(1, 111, tok)
+	if !ok {
+		t.Fatal("right actor should still be able to consume after wrong actor tap")
+	}
+	if got.ActorTGID != 111 {
+		t.Fatalf("ActorTGID=%d want 111", got.ActorTGID)
+	}
+}
+
 func TestPendingMaintStore_UnknownTokenRejected(t *testing.T) {
 	store := newPendingMaintStore()
 	if _, ok := store.consume(1, "deadbeef"); ok {
@@ -228,6 +245,33 @@ func TestMaintConfirmAction_Firmware_AppliesCooldown(t *testing.T) {
 	// firmware_install does not need a `name` arg
 	if cd.remaining(1, "firmware_install") <= 0 {
 		t.Error("firmware should set firmware_install cooldown")
+	}
+}
+
+func TestMaintConfirmAction_OpkgUpgrade(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, Name: "opkg_upgrade", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-opkg" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "opkg_upgrade", MaintToken: tok}
+	status, err := a.Apply(context.Background(), q, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(status, "opkg_upgrade") {
+		t.Fatalf("status should mention opkg_upgrade, got %q", status)
+	}
+	if len(sink.enq) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.enq))
+	}
+	if sink.enq[0].Cmd.Action != "opkg_upgrade" {
+		t.Fatalf("Action=%q want opkg_upgrade", sink.enq[0].Cmd.Action)
+	}
+	if sink.enq[0].Cmd.Args != nil {
+		t.Fatalf("opkg_upgrade should not need args, got %+v", sink.enq[0].Cmd.Args)
 	}
 }
 

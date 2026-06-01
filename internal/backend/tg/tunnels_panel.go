@@ -42,7 +42,7 @@ func TunnelsPanelText(nickname string, entries []TunnelPanelEntry) string {
 		b.WriteString(formatTunnelRow(e))
 		b.WriteString("\n")
 	}
-	b.WriteString("\nДействия:\n  • кнопки переключают вкл/выкл\n  • «🔁 Перезагрузить» рестартит awg-manager целиком")
+	b.WriteString("\nДействия:\n  • кнопки переключают вкл/выкл\n  • ряд 🔁 с именами туннелей делает выкл→вкл одного туннеля\n  • «🔁 Перезагрузить awg-mgr» рестартит awg-manager целиком")
 	return b.String()
 }
 
@@ -142,6 +142,24 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 		row = append(row, InlineKeyboardButton{
 			Text:         fmt.Sprintf("%s %s", icon, label),
 			CallbackData: fmt.Sprintf("%s:%d:%s:%s", action, userID, e.CheckName, e.NDMSName),
+		})
+		if len(row) >= tunnelsMaxPerRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+
+	// Restart row(s). This restarts one selected interface (down -> up), not
+	// the global awg-manager daemon.
+	row = nil
+	for _, e := range entries {
+		label := shortTunnelLabel(e.Name, e.CheckName)
+		row = append(row, InlineKeyboardButton{
+			Text:         fmt.Sprintf("🔁 %s", label),
+			CallbackData: fmt.Sprintf("tunnel_restart:%d:%s:%s", userID, e.CheckName, e.NDMSName),
 		})
 		if len(row) >= tunnelsMaxPerRow {
 			rows = append(rows, row)

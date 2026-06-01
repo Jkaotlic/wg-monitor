@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"runtime"
 	"strings"
@@ -264,6 +266,90 @@ func TestApplyAWGMDeploySuccessKeepsLocalRouterIPForDirectAWGM(t *testing.T) {
 	}
 }
 
+func TestApplyAWGMDeploySuccessIfConfirmedRejectsPendingBackendConfirmation(t *testing.T) {
+	ag := &AgentState{
+		Nickname:            "client-g",
+		DeployMode:          "awgm",
+		AWGMURL:             "https://awg.client-g.example",
+		LastDeployedVersion: "",
+		PendingVersion:      "v0.13.0-rc58",
+	}
+	err := applyAWGMDeploySuccessIfConfirmed(awgmInstallCompletionReport{
+		Confirmed: false,
+		Message:   "pending: backend confirmation is incomplete",
+	}, ag, &AWGMSystemInfo{RouterIP: "192.168.0.1"}, "v0.13.0-rc59", "api-key", true, time.Unix(1779693600, 0).UTC())
+
+	if err == nil {
+		t.Fatal("pending backend confirmation must fail the AWGM install")
+	}
+	if ag.LastDeployedVersion != "" {
+		t.Fatalf("pending confirmation must not mark local deploy success: %+v", ag)
+	}
+	if ag.PendingVersion != "v0.13.0-rc58" {
+		t.Fatalf("pending marker should be preserved until backend confirms: %+v", ag)
+	}
+}
+
+func TestApplyAWGMDeploySuccessIfConfirmedAppliesMetadata(t *testing.T) {
+	ag := &AgentState{Nickname: "client-g", DeployMode: "awgm", AWGMURL: "https://awg.client-g.example"}
+	err := applyAWGMDeploySuccessIfConfirmed(awgmInstallCompletionReport{
+		Confirmed: true,
+		Message:   "backend-confirmed",
+	}, ag, &AWGMSystemInfo{RouterIP: "192.168.0.1"}, "v0.13.0-rc59", "api-key", true, time.Unix(1779693600, 0).UTC())
+
+	if err != nil {
+		t.Fatalf("confirmed install should apply metadata: %v", err)
+	}
+	if ag.LastDeployedVersion != "v0.13.0-rc59" || ag.AWGMAuth != "api-key" {
+		t.Fatalf("confirmed install did not apply deploy metadata: %+v", ag)
+	}
+}
+
+func TestApplyLegacySSHDeploySuccessIfConfirmedRejectsPendingBackendConfirmation(t *testing.T) {
+	ag := &AgentState{
+		Nickname:            "client-g",
+		LastDeployedVersion: "",
+		PendingVersion:      "v0.13.0-rc58",
+		PendingSince:        "2026-06-01T10:00:00Z",
+	}
+	err := applyLegacySSHDeploySuccessIfConfirmed(awgmInstallCompletionReport{
+		Confirmed: false,
+		Message:   "pending: backend confirmation is incomplete",
+	}, ag, "v0.13.0-rc59", time.Unix(1779693600, 0).UTC())
+
+	if err == nil {
+		t.Fatal("pending backend confirmation must fail the legacy SSH install")
+	}
+	if ag.LastDeployedVersion != "" {
+		t.Fatalf("pending confirmation must not mark local deploy success: %+v", ag)
+	}
+	if ag.PendingVersion != "v0.13.0-rc58" || ag.PendingSince == "" {
+		t.Fatalf("pending marker should be preserved until backend confirms: %+v", ag)
+	}
+}
+
+func TestApplyLegacySSHDeploySuccessIfConfirmedAppliesMetadata(t *testing.T) {
+	ag := &AgentState{
+		Nickname:       "client-g",
+		PendingVersion: "v0.13.0-rc59",
+		PendingSince:   "2026-06-01T10:00:00Z",
+	}
+	err := applyLegacySSHDeploySuccessIfConfirmed(awgmInstallCompletionReport{
+		Confirmed: true,
+		Message:   "backend-confirmed",
+	}, ag, "v0.13.0-rc59", time.Unix(1779693600, 0).UTC())
+
+	if err != nil {
+		t.Fatalf("confirmed install should apply metadata: %v", err)
+	}
+	if ag.LastDeployedVersion != "v0.13.0-rc59" || ag.LastDeploy == "" {
+		t.Fatalf("confirmed install did not apply deploy metadata: %+v", ag)
+	}
+	if ag.PendingVersion != "" || ag.PendingSince != "" {
+		t.Fatalf("confirmed install should clear pending metadata: %+v", ag)
+	}
+}
+
 func TestAWGMInstallCompletionSummaryConfirmsFreshHeartbeatAndAuth(t *testing.T) {
 	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 	lastSeen := now.Add(-30 * time.Second)
@@ -320,8 +406,9 @@ func TestAWGMInstallCompletionSummaryRejectsPreInstallHeartbeat(t *testing.T) {
 func TestAWGMInstallCompletionSummaryStaysPendingWithoutHeartbeatOrAuth(t *testing.T) {
 	now := time.Date(2026, 5, 29, 12, 0, 0, 0, time.UTC)
 	report := awgmInstallCompletionSummary(awgmInstallCompletionEvidence{
-		Nickname: "client-g",
-		Version:  "v0.13.0-rc59",
+		Nickname:    "client-g",
+		Version:     "v0.13.0-rc59",
+		LocalAction: "legacy SSH install",
 		Remote: &RemoteAgent{
 			Nickname:            "client-g",
 			LastDeployedVersion: "v0.13.0-rc59",
@@ -333,7 +420,7 @@ func TestAWGMInstallCompletionSummaryStaysPendingWithoutHeartbeatOrAuth(t *testi
 	if report.Confirmed {
 		t.Fatalf("missing heartbeat + failed auth must stay pending: %+v", report)
 	}
-	for _, want := range []string{"pending", "heartbeat never", "auth-probe failed", "doctor", "token_hash"} {
+	for _, want := range []string{"pending", "legacy SSH install", "heartbeat never", "auth-probe failed", "doctor", "token_hash"} {
 		if !strings.Contains(report.Message, want) {
 			t.Fatalf("pending summary missing %q:\n%s", want, report.Message)
 		}
@@ -400,6 +487,27 @@ func TestDoctorDirectSSHSkipWarningNamesAWGMPath(t *testing.T) {
 	}
 }
 
+func TestDoctorAWGMOnlySkipRequiresBackendConfirmation(t *testing.T) {
+	if !doctorAWGMOnlySkipIsBackendConfirmed(true, awgmAuthProbeOK) {
+		t.Fatal("fresh heartbeat + valid auth-probe should allow AWGM-only SSH skip")
+	}
+	for _, tc := range []struct {
+		name      string
+		heartbeat bool
+		auth      awgmAuthProbeStatus
+	}{
+		{name: "stale heartbeat", heartbeat: false, auth: awgmAuthProbeOK},
+		{name: "auth skipped", heartbeat: true, auth: awgmAuthProbeSkipped},
+		{name: "auth failed", heartbeat: true, auth: awgmAuthProbeFail},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if doctorAWGMOnlySkipIsBackendConfirmed(tc.heartbeat, tc.auth) {
+				t.Fatalf("must not allow AWGM-only SSH skip for %+v", tc)
+			}
+		})
+	}
+}
+
 func TestDoctorWarnsForDeployedAgentMissingDeployMetadata(t *testing.T) {
 	ag := &AgentState{
 		Nickname:            "client-g",
@@ -441,6 +549,53 @@ func TestDoctorMissingRequiredSecretsUsesDeployReadyRows(t *testing.T) {
 		if !containsString(missing, want) {
 			t.Fatalf("missing required secret %s in %v", want, missing)
 		}
+	}
+}
+
+func TestProbeAgentTokenValidAcceptsOnlyExpectedSuccessStatuses(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		want   bool
+	}{
+		{name: "ok", status: http.StatusOK, want: true},
+		{name: "no content", status: http.StatusNoContent, want: true},
+		{name: "unauthorized", status: http.StatusUnauthorized, want: false},
+		{name: "forbidden", status: http.StatusForbidden, want: false},
+		{name: "server error", status: http.StatusInternalServerError, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.Header.Get("Authorization"); got != "Bearer raw-token" {
+					t.Fatalf("Authorization=%q", got)
+				}
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			if got := probeAgentTokenValid(srv.URL, "raw-token"); got != tt.want {
+				t.Fatalf("probeAgentTokenValid(status=%d)=%v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestProbeAgentTokenValidRejectsRedirectEvenWhenTargetWouldSucceed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/cmd":
+			http.Redirect(w, r, "/ok", http.StatusFound)
+		case "/ok":
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	if probeAgentTokenValid(srv.URL+"/v1/cmd", "raw-token") {
+		t.Fatal("auth-probe must reject redirects instead of following them to a green status")
 	}
 }
 

@@ -186,7 +186,7 @@ func TestRoutesPanelNotifier_ApplyResultOffersSnapshot(t *testing.T) {
 	if !keyboardHasCallback(tgFake.kb, "routes_snapshot") {
 		t.Fatalf("expected keyboard to include routes_snapshot: %#v", tgFake.kb)
 	}
-	for _, want := range []string{"tunnels_refresh", "pingcheck_open", "router_doctor"} {
+	for _, want := range []string{"tunnels_refresh", "check_via_tunnel", "pingcheck_open", "router_doctor"} {
 		if !keyboardHasCallback(tgFake.kb, want) {
 			t.Fatalf("route apply result keyboard should include post-route verification %q: %#v", want, tgFake.kb)
 		}

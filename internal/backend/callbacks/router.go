@@ -202,7 +202,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.cmdSink = sink
 	r.pendingRebinds = make(map[string]*pendingRebind)
 	r.routeWizard = NewRouteWizardStore(5 * time.Minute)
-	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebind, defaultCmdID)
+	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, defaultCmdID)
 	r.pendingMaint = newPendingMaintStore()
 	r.cooldown = newCooldownStore()
 	r.auditCache = newSimpleAuditCache()
@@ -330,7 +330,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		r.handlePanelCallback(ctx, q, args)
 		return
 	}
-	if isSelfHostedAmneziaAction(args.Action) && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
+	if isSelfHostedAmneziaAdminAction(args.Action) && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
 		return
 	}
@@ -352,12 +352,15 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		args.MaintName = "awgmgr"
 		r.handleMaintRestart(ctx, q, args)
 		return
-	case "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor",
-		"tunnel_enable", "tunnel_disable", "tunnel_delete", "check_via_tunnel", "check_direct":
+	case "diag_now", "pingcheck_now", "force_recheck", "router_doctor",
+		"tunnel_enable", "tunnel_disable", "tunnel_restart", "tunnel_delete", "check_via_tunnel", "check_direct":
 		if r.guardStaleTunnelPanelAction(ctx, q, args) {
 			return
 		}
 		action = r.command
+	case "opkg_upgrade":
+		r.handleOpkgUpgradeAsk(ctx, q, args)
+		return
 	case "tunnel_delete_ask":
 		r.handleTunnelDeleteAsk(ctx, q, args)
 		return
@@ -423,6 +426,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	case "amz_selfhosted_delete":
 		r.handleSelfHostedAmneziaDelete(ctx, q, args)
+		return
+	case "amz_selfhosted_delete_confirm":
+		r.handleSelfHostedAmneziaDeleteConfirm(ctx, q, args)
 		return
 	case "amz_selfhosted_cancel":
 		r.handleSelfHostedAmneziaCancel(ctx, q, args)
@@ -560,6 +566,16 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ремонт фидов не настроен")
 			return
 		}
+		if r.handleOpkgDisableAsk(ctx, q, args) {
+			return
+		}
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "opkg repair session expired")
+		return
+	case "opkg_disable_confirm":
+		if r.opkgRepairAction == nil {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "opkg repair is not configured")
+			return
+		}
 		status, err := r.opkgRepairAction.Apply(ctx, q, args)
 		if err != nil {
 			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, err.Error())
@@ -619,7 +635,19 @@ func isSelfHostedAmneziaAction(action string) bool {
 	switch action {
 	case "amz_selfhosted_issue", "amz_selfhosted_confirm",
 		"amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_edit",
-		"amz_selfhosted_toggle", "amz_selfhosted_delete", "amz_selfhosted_cancel":
+		"amz_selfhosted_toggle", "amz_selfhosted_delete", "amz_selfhosted_delete_confirm",
+		"amz_selfhosted_cancel":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSelfHostedAmneziaAdminAction(action string) bool {
+	switch action {
+	case "amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_edit",
+		"amz_selfhosted_toggle", "amz_selfhosted_delete", "amz_selfhosted_delete_confirm",
+		"amz_selfhosted_cancel":
 		return true
 	default:
 		return false
@@ -658,8 +686,9 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 	}
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
-		slog.Warn("acl: user lookup failed, allowing", "router_user_id", args.UserID, "err", err)
-		return true
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "Ошибка: router not found")
+		slog.Warn("acl: user lookup failed, rejecting", "router_user_id", args.UserID, "err", err)
+		return false
 	}
 	if user.TelegramThreadID != nil &&
 		(q.Message.MessageThreadID == nil || *q.Message.MessageThreadID != *user.TelegramThreadID) {
@@ -694,7 +723,10 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		}
 		return true
 	}
-	return true
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router is not bound to this topic")
+	slog.Warn("acl: rejected unbound router outside bound topic",
+		"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "data", q.Data)
+	return false
 }
 
 func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
@@ -1010,6 +1042,10 @@ func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
 // "message to be replied not found (code=400)" and the operator never sees
 // the result. The ack message stays in the chat, so anchoring on it is safe.
 func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, kind string, user *db.User, action, ackText string) {
+	if action == "opkg_upgrade" {
+		r.handleOpkgUpgradeMessage(ctx, m, kind, user)
+		return
+	}
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
@@ -1229,7 +1265,7 @@ func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery,
 
 func (r *Router) guardStaleTunnelPanelAction(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
 	switch args.Action {
-	case "tunnel_enable", "tunnel_disable", "tunnel_delete":
+	case "tunnel_enable", "tunnel_disable", "tunnel_restart", "tunnel_delete":
 	default:
 		return false
 	}
@@ -1641,6 +1677,10 @@ func (r *Router) putPendingRebind(pr *pendingRebind) {
 }
 
 func (r *Router) consumePendingRebind(userID int64, token string) (*pendingRebind, bool) {
+	return r.consumePendingRebindForActor(userID, 0, token)
+}
+
+func (r *Router) consumePendingRebindForActor(userID, actorTGID int64, token string) (*pendingRebind, bool) {
 	r.pendingRebindsMu.Lock()
 	defer r.pendingRebindsMu.Unlock()
 	pr, ok := r.pendingRebinds[token]
@@ -1650,6 +1690,9 @@ func (r *Router) consumePendingRebind(userID int64, token string) (*pendingRebin
 	// Don't delete on UserID mismatch — другой member чата не должен
 	// иметь возможности DoS'нуть owner'у его подтверждение (BUG-04).
 	if pr.UserID != userID {
+		return nil, false
+	}
+	if pr.ActorTGID != 0 && pr.ActorTGID != actorTGID {
 		return nil, false
 	}
 	if time.Now().After(pr.ExpiresAt) {
@@ -1759,13 +1802,46 @@ func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, ar
 	}
 	tok := makeMaintToken()
 	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, Name: args.MaintName, Token: tok,
+		UserID: user.ID, ActorTGID: q.From.ID, Name: args.MaintName, Token: tok,
 		ExpiresAt: time.Now().Add(5 * time.Minute),
 	})
 	text := tg.RestartConfirmText(args.MaintName, tok)
 	kb := tg.RestartConfirmKeyboard(user.ID, args.MaintName, tok)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleOpkgUpgradeAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router not found")
+		return
+	}
+	tok := makeMaintToken()
+	r.pendingMaint.put(&pendingMaint{
+		UserID: user.ID, ActorTGID: q.From.ID, Name: "opkg_upgrade", Token: tok,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	text := tg.OpkgUpgradeConfirmText(tok)
+	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleOpkgUpgradeMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) {
+	if kind != "per_router" || user == nil {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"ÑÑ‚Ð° ÐºÐ¾Ð¼Ð°Ð½Ð´Ð° Ñ€Ð°Ð±Ð¾Ñ‚Ð°ÐµÑ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð² Ñ‚Ð¾Ð¿Ð¸ÐºÐµ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ñ.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		return
+	}
+	tok := makeMaintToken()
+	r.pendingMaint.put(&pendingMaint{
+		UserID: user.ID, ActorTGID: m.From.ID, Name: "opkg_upgrade", Token: tok,
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	text := tg.OpkgUpgradeConfirmText(tok)
+	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
+	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
 }
 
 // handleMaintFwOpen renders the firmware screen using cached FirmwareStatus
@@ -1842,7 +1918,7 @@ func (r *Router) handleMaintFwInstall(ctx context.Context, q *tg.CallbackQuery, 
 	}
 	tok := makeMaintToken()
 	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, Name: "firmware", Token: tok,
+		UserID: user.ID, ActorTGID: q.From.ID, Name: "firmware", Token: tok,
 		ExpiresAt: time.Now().Add(5 * time.Minute),
 	})
 	text := tg.FirmwareConfirmText(tok)
@@ -1873,7 +1949,7 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 	}
 	token := makeRebindToken()
 	r.putPendingRebind(&pendingRebind{
-		UserID: user.ID, SrcID: args.RebindSrcID, DstID: args.RebindDstID,
+		UserID: user.ID, ActorTGID: q.From.ID, SrcID: args.RebindSrcID, DstID: args.RebindDstID,
 		Token: token, ExpiresAt: time.Now().Add(5 * time.Minute),
 	})
 	text := tg.RebindPreviewText(snap, args.RebindSrcID, args.RebindDstID, token)
@@ -1897,10 +1973,11 @@ func (r *Router) handleRoutesRollback(ctx context.Context, q *tg.CallbackQuery, 
 	}
 	token := makeRebindToken()
 	r.putPendingRebind(&pendingRebind{
-		UserID: user.ID,
-		SrcID:  args.RebindDstID,
-		DstID:  args.RebindSrcID,
-		Token:  token, ExpiresAt: time.Now().Add(5 * time.Minute),
+		UserID:    user.ID,
+		ActorTGID: q.From.ID,
+		SrcID:     args.RebindDstID,
+		DstID:     args.RebindSrcID,
+		Token:     token, ExpiresAt: time.Now().Add(5 * time.Minute),
 	})
 	text := tg.RebindRollbackConfirmText(args.RebindSrcID, args.RebindDstID, token)
 	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindDstID, args.RebindSrcID, token)
@@ -1936,7 +2013,7 @@ func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, a
 		return
 	}
 	draft := r.routeWizard.PutAddDraft(RouteAddDraft{
-		UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID,
+		UserID: user.ID, ActorTGID: q.From.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID,
 		Kind: args.RouteKind, UseHRNeo: args.RouteUseHRNeo,
 	})
 	rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Tunnels)+1)
@@ -1958,7 +2035,7 @@ func (r *Router) handleRoutesAddTunnel(ctx context.Context, q *tg.CallbackQuery,
 	if user == nil || r.routeWizard == nil {
 		return
 	}
-	draft, ok := r.routeWizard.GetAddDraft(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
+	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
 	if !ok {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
 		return
@@ -1977,7 +2054,7 @@ func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, use
 	if user == nil || r.routeWizard == nil {
 		return false
 	}
-	draft, ok := r.routeWizard.GetOpenAddDraft(user.ID, m.MessageThreadID, user.ID)
+	draft, ok := r.routeWizard.GetOpenAddDraftForActor(user.ID, m.From.ID, m.MessageThreadID, user.ID)
 	if !ok || draft.TunnelID == "" {
 		return false
 	}
@@ -2019,7 +2096,7 @@ func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery
 	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
 		return
 	}
-	draft, ok := r.routeWizard.ConsumeAddConfirm(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
+	draft, ok := r.routeWizard.ConsumeAddConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
 	if !ok {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
 		return
@@ -2039,7 +2116,7 @@ func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery
 
 func (r *Router) handleRoutesAddCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	if r.routeWizard != nil {
-		r.routeWizard.CancelAddDraft(args.UserID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
+		r.routeWizard.CancelAddDraftForActor(args.UserID, q.From.ID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
 	}
 	r.handleRoutesOpen(ctx, q, args, false)
 }
@@ -2074,7 +2151,7 @@ func (r *Router) handleRoutesDelete(ctx context.Context, q *tg.CallbackQuery, ar
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "выбор маршрута устарел")
 		return
 	}
-	draft := r.routeWizard.PutDeleteDraft(RouteDeleteDraft{UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rt.Kind, RouteID: rt.RouteID, PreviewHash: rt.PreviewHash})
+	draft := r.routeWizard.PutDeleteDraft(RouteDeleteDraft{UserID: user.ID, ActorTGID: q.From.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rt.Kind, RouteID: rt.RouteID, PreviewHash: rt.PreviewHash})
 	cmd := wire.Command{ID: fmt.Sprintf("route_delete_plan:%s:%s", draft.Token, defaultCmdID()), Action: "route_delete_plan", IssuedAt: time.Now().UTC(), Args: map[string]any{
 		"kind": rt.Kind, "route_id": rt.RouteID,
 	}}
@@ -2092,7 +2169,7 @@ func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
 		return
 	}
-	draft, ok := r.routeWizard.ConsumeDeleteConfirm(user.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
+	draft, ok := r.routeWizard.ConsumeDeleteConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
 	if !ok {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
 		return
@@ -2111,7 +2188,7 @@ func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 
 func (r *Router) handleRoutesDeleteCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	if r.routeWizard != nil {
-		r.routeWizard.CancelDeleteDraft(args.UserID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
+		r.routeWizard.CancelDeleteDraftForActor(args.UserID, q.From.ID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
 	}
 	r.handleRoutesOpen(ctx, q, args, false)
 }

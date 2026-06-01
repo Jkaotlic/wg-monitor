@@ -65,7 +65,9 @@ func TestNotifier_TunnelImportResultOffersNextActions(t *testing.T) {
 	}
 	for _, want := range []string{
 		"tunnels_refresh:42:_panel_",
+		"check_via_tunnel:42:_panel_",
 		"routes_open:42:_panel_",
+		"pingcheck_open:42:_panel_",
 	} {
 		if !containsStr(flattenKbCallbacks(kb), want) {
 			t.Fatalf("tunnel import result keyboard missing %q: %+v", want, kb.InlineKeyboard)
@@ -340,6 +342,7 @@ func TestNotifier_ConnectivityResultOffersNextActions(t *testing.T) {
 			}
 			for _, want := range []string{
 				"pingcheck_open:42:_panel_",
+				"tunnels_refresh:42:_panel_",
 				"router_doctor:42:_menu",
 				"routes_open:42:_panel_",
 			} {
@@ -373,6 +376,7 @@ func TestNotifier_ConnectivityErrorOffersRecoveryActions(t *testing.T) {
 			}
 			for _, want := range []string{
 				"pingcheck_open:42:_panel_",
+				"tunnels_refresh:42:_panel_",
 				"router_doctor:42:_menu",
 				"routes_open:42:_panel_",
 				"maint_open:42:_panel_",

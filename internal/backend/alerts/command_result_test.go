@@ -94,6 +94,17 @@ func TestFormatCommandResult_RestartTunnelOK(t *testing.T) {
 	}
 }
 
+func TestFormatCommandResult_TunnelRestartOK(t *testing.T) {
+	r := wire.CommandResult{Status: "ok", Output: "restarted Wireguard3\n-- down --\nok\n-- up --\nok"}
+	chunks := FormatCommandResult("tunnel_restart", r, 3500)
+	if !strings.Contains(chunks[0], "туннель перезапущен: Wireguard3") {
+		t.Errorf("bad: %s", chunks[0])
+	}
+	if strings.Contains(chunks[0], "-- down --") {
+		t.Errorf("restart summary should hide ndmc transcript: %s", chunks[0])
+	}
+}
+
 func TestFormatCommandResult_TunnelEnable_CleanSummary(t *testing.T) {
 	// Agent emits "interface <ndms> -> up\n<ndmc raw stdout>". Backend must
 	// strip the engineer-speak first line and drop the ndmc noise entirely.

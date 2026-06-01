@@ -175,6 +175,42 @@ func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
 	}
 }
 
+func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
+	var forced int
+	var commands []string
+	r := Runner{
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			return []byte("ok"), nil
+		},
+		ForceRecheck: func(ctx context.Context) { forced++ },
+		Now:          mockNow(),
+	}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "restart",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"ndms_name": "Wireguard3"},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{
+		"ndmc -c interface Wireguard3 down",
+		"ndmc -c interface Wireguard3 up",
+	}
+	if strings.Join(commands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("commands:\n%v\nwant:\n%v", commands, want)
+	}
+	if forced != 1 {
+		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
+	}
+	if !strings.Contains(res.Output, "Wireguard3") || !strings.Contains(res.Output, "restarted") {
+		t.Fatalf("unexpected output: %q", res.Output)
+	}
+}
+
 func TestRunner_TunnelDelete_DeletesByCheckNameAndForcesFreshReport(t *testing.T) {
 	var deletedID string
 	var forced int

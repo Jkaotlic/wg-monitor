@@ -71,7 +71,7 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 		}
 		card := Card{Badge: "", Label: label, Summary: summary}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
-	case "restart_tunnel":
+	case "restart_tunnel", "tunnel_restart":
 		card := Card{Badge: "", Label: label, Summary: humanRestartResult(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "tunnel_import":
@@ -130,7 +130,11 @@ func humanRestartResult(output string) string {
 	out := strings.TrimSpace(output)
 	low := strings.ToLower(out)
 	if strings.HasPrefix(low, "restarted ") {
-		return "туннель перезапущен: " + strings.TrimSpace(out[len("restarted "):])
+		target := strings.TrimSpace(out[len("restarted "):])
+		if i := strings.IndexByte(target, '\n'); i >= 0 {
+			target = strings.TrimSpace(target[:i])
+		}
+		return "туннель перезапущен: " + target
 	}
 	if out == "" {
 		return "команда выполнена"
@@ -249,6 +253,8 @@ func commandLabelHuman(action string) string {
 	case "pingcheck_now":
 		return "▶ Тест связи"
 	case "restart_tunnel":
+		return "🔁 Перезапуск туннеля"
+	case "tunnel_restart":
 		return "🔁 Перезапуск туннеля"
 	case "opkg_upgrade":
 		return "⬆ Обновление пакетов"

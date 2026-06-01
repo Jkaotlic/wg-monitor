@@ -283,6 +283,9 @@ func formatQueuedStatus(action, checkName string) string {
 	if action == "restart_tunnel" && checkName == panelSentinel {
 		return "📤 🔁 Перезапуск awg-manager поставлено в очередь"
 	}
+	if action == "tunnel_restart" {
+		return "📤 🔁 Перезапуск туннеля поставлено в очередь"
+	}
 	label := commandLabels[action]
 	if label == "" {
 		label = action
@@ -318,6 +321,7 @@ func humanEventStatus(status string) string {
 // Mirrors pendingUpload in lifetime semantics: token+TTL, single use.
 type pendingRebind struct {
 	UserID    int64
+	ActorTGID int64
 	SrcID     string
 	DstID     string
 	Token     string
@@ -328,16 +332,16 @@ type pendingRebind struct {
 // consumes the pendingRebind by token and enqueues a route_rebind wire.Command.
 type RebindConfirmAction struct {
 	sink      CommandEnqueuer
-	consumeFn func(userID int64, token string) (*pendingRebind, bool)
+	consumeFn func(userID, actorTGID int64, token string) (*pendingRebind, bool)
 	idGen     func() string
 }
 
-func NewRebindConfirmAction(sink CommandEnqueuer, consume func(int64, string) (*pendingRebind, bool), idGen func() string) *RebindConfirmAction {
+func NewRebindConfirmAction(sink CommandEnqueuer, consume func(int64, int64, string) (*pendingRebind, bool), idGen func() string) *RebindConfirmAction {
 	return &RebindConfirmAction{sink: sink, consumeFn: consume, idGen: idGen}
 }
 
 func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	pr, ok := a.consumeFn(args.UserID, args.RebindToken)
+	pr, ok := a.consumeFn(args.UserID, q.From.ID, args.RebindToken)
 	if !ok {
 		return "", errors.New("сессия истекла или не найдена; открой панель заново")
 	}

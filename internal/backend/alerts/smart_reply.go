@@ -217,6 +217,20 @@ func incidentDisplayName(inc IncidentView, tunnels []TunnelView) string {
 func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	state := ClassifyState(a)
 	plainCD := func(action, cn string) string { return fmt.Sprintf("%s:%d:%s", action, a.UserID, cn) }
+	tunnelCD := func(action string, t TunnelView) string {
+		if strings.TrimSpace(t.NDMSName) == "" {
+			return plainCD("restart_tunnel", t.CheckName)
+		}
+		return fmt.Sprintf("%s:%d:%s:%s", action, a.UserID, t.CheckName, t.NDMSName)
+	}
+	incidentTunnelCD := func(action, checkName string) string {
+		for _, t := range a.Tunnels {
+			if t.CheckName == checkName {
+				return tunnelCD(action, t)
+			}
+		}
+		return plainCD("restart_tunnel", checkName)
+	}
 	silenceCD := func(cn, ttl string) string { return fmt.Sprintf("silence:%d:%s:%s", a.UserID, cn, ttl) }
 	visibleIncidents := activeIncidentsForDisplay(a)
 
@@ -272,7 +286,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				label = "🔁 Перезапуск " + t.Name
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{
-				{Text: label, CallbackData: plainCD("restart_tunnel", t.CheckName)},
+				{Text: label, CallbackData: tunnelCD("tunnel_restart", t)},
 				{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)},
 			})
 		}
@@ -309,7 +323,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				continue
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{
-				{Text: "🔁 Перезапустить туннель", CallbackData: plainCD("restart_tunnel", inc.CheckName)},
+				{Text: "🔁 Перезапустить туннель", CallbackData: incidentTunnelCD("tunnel_restart", inc.CheckName)},
 				{Text: "📊 Запустить диагностику", CallbackData: plainCD("diag_now", inc.CheckName)},
 			})
 			rows = append(rows, []tg.InlineKeyboardButton{
@@ -326,7 +340,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				continue
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{
-				{Text: "🔁 Перезапуск " + t.Name, CallbackData: plainCD("restart_tunnel", t.CheckName)},
+				{Text: "🔁 Перезапуск " + t.Name, CallbackData: tunnelCD("tunnel_restart", t)},
 			})
 		}
 		appendUpdatesSection(&b, a.Updates)

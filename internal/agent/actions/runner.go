@@ -244,6 +244,26 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			r.ForceRecheck(ctx)
 		}
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out)), payload
+	case "tunnel_restart":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		ndms, _ := cmd.Args["ndms_name"].(string)
+		if ndms == "" {
+			return "err", "tunnel_restart: ndms_name missing in args", payload
+		}
+		outDown, err := r.Exec(ctx, "ndmc", "-c", fmt.Sprintf("interface %s down", ndms))
+		if err != nil {
+			return "err", fmt.Sprintf("ndmc interface %s down: %v\n%s", ndms, err, string(outDown)), payload
+		}
+		outUp, err := r.Exec(ctx, "ndmc", "-c", fmt.Sprintf("interface %s up", ndms))
+		if err != nil {
+			return "err", fmt.Sprintf("ndmc interface %s up: %v\n%s", ndms, err, string(outUp)), payload
+		}
+		if r.ForceRecheck != nil {
+			r.ForceRecheck(ctx)
+		}
+		return "ok", fmt.Sprintf("restarted %s\n-- down --\n%s\n-- up --\n%s", ndms, string(outDown), string(outUp)), payload
 	case "tunnel_delete":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

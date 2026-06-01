@@ -19,6 +19,7 @@ import (
 // the store — replay is impossible.
 type pendingMaint struct {
 	UserID    int64
+	ActorTGID int64
 	Name      string // "hrneo" | "awgmgr" | "router" | "firmware"
 	Token     string
 	ExpiresAt time.Time
@@ -50,6 +51,10 @@ func (s *pendingMaintStore) put(p *pendingMaint) {
 // maintenance-операцию (BUG-04). Удаляем только при success или истечении
 // expiry.
 func (s *pendingMaintStore) consume(userID int64, token string) (*pendingMaint, bool) {
+	return s.consumeForActor(userID, 0, token)
+}
+
+func (s *pendingMaintStore) consumeForActor(userID, actorTGID int64, token string) (*pendingMaint, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p, ok := s.m[token]
@@ -58,6 +63,9 @@ func (s *pendingMaintStore) consume(userID int64, token string) (*pendingMaint, 
 	}
 	if p.UserID != userID {
 		// чужой member тапнул кнопку — игнорируем, токен оставляем для owner'а.
+		return nil, false
+	}
+	if p.ActorTGID != 0 && p.ActorTGID != actorTGID {
 		return nil, false
 	}
 	if time.Now().After(p.ExpiresAt) {
@@ -137,7 +145,7 @@ func NewMaintConfirmAction(sink CommandEnqueuer, store *pendingMaintStore, cd *c
 }
 
 func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	pm, ok := a.store.consume(args.UserID, args.MaintToken)
+	pm, ok := a.store.consumeForActor(args.UserID, q.From.ID, args.MaintToken)
 	if !ok {
 		return "", fmt.Errorf("token expired or unknown")
 	}
@@ -147,6 +155,8 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 	case "hrneo", "hrneo_start", "hrneo_stop", "awgmgr":
 		cmd.Action = "service_restart"
 		cmd.Args = map[string]any{"name": pm.Name}
+	case "opkg_upgrade":
+		cmd.Action = "opkg_upgrade"
 	case "router":
 		cmd.Action = "service_restart"
 		cmd.Args = map[string]any{"name": "router"}

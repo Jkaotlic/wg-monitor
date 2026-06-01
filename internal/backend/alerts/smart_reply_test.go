@@ -196,7 +196,7 @@ func TestFormatSmartReply_OK(t *testing.T) {
 func TestFormatSmartReply_Degraded(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
-		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 142, PingStatus: "ok", FailCount: 3, FailThresh: 5}},
+		Tunnels: []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", NDMSName: "Wireguard3", HandshakeAge: 142, PingStatus: "ok", FailCount: 3, FailThresh: 5}},
 	}
 	text, kb := FormatSmartReply(a)
 	for _, want := range []string{"⚠️", "подозрения", "amnezia", "142", "3", "5"} {
@@ -209,8 +209,8 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 		t.Fatalf("Degraded keyboard rows: %d, want ≥1", len(kb.InlineKeyboard))
 	}
 	want := map[string]bool{
-		"restart_tunnel:7:tunnel_awg11": true,
-		"pingcheck_now:7:tunnel_awg11":  true,
+		"tunnel_restart:7:tunnel_awg11:Wireguard3": true,
+		"pingcheck_now:7:tunnel_awg11":             true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
@@ -225,7 +225,7 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 func TestFormatSmartReply_Hard(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
-		Tunnels:         []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
+		Tunnels:         []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", NDMSName: "Wireguard3", HandshakeAge: 250, PingStatus: "dead"}},
 		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-4 * time.Minute), FailCount: 5}},
 	}
 	text, kb := FormatSmartReply(a)
@@ -237,9 +237,9 @@ func TestFormatSmartReply_Hard(t *testing.T) {
 	// inline kb must contain restart + diag + silence (details/last_report
 	// buttons were removed in 2026-05-06 — no working handler).
 	want := map[string]bool{
-		"restart_tunnel:7:tunnel_awg11": true,
-		"diag_now:7:tunnel_awg11":       true,
-		"silence:7:tunnel_awg11:1h":     true,
+		"tunnel_restart:7:tunnel_awg11:Wireguard3": true,
+		"diag_now:7:tunnel_awg11":                  true,
+		"silence:7:tunnel_awg11:1h":                true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
@@ -423,16 +423,16 @@ func TestFormatSmartReply_MultiTunnelHardSplit(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
 		Tunnels: []TunnelView{
-			{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"},
-			{Name: "secondary", CheckName: "tunnel_awg12", HandshakeAge: 200, PingStatus: "dead"},
+			{Name: "amnezia", CheckName: "tunnel_awg11", NDMSName: "Wireguard1", HandshakeAge: 250, PingStatus: "dead"},
+			{Name: "secondary", CheckName: "tunnel_awg12", NDMSName: "Wireguard2", HandshakeAge: 200, PingStatus: "dead"},
 		},
 		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-2 * time.Minute), FailCount: 5}},
 	}
 	_, kb := FormatSmartReply(a)
 	// must have at least one row per tunnel for restart
 	want := map[string]bool{
-		"restart_tunnel:7:tunnel_awg11": true,
-		"restart_tunnel:7:tunnel_awg12": true,
+		"tunnel_restart:7:tunnel_awg11:Wireguard1": true,
+		"tunnel_restart:7:tunnel_awg12:Wireguard2": true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,18 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
+)
+
+var (
+	askUpdateChoiceFunc      = askUpdateChoice
+	currentPublicIPFunc      = currentPublicIP
+	confirmTargetContextFunc = confirmTargetContext
+	probeReachableFunc       = probeReachable
+	runOneUpdateFunc         = runOneUpdate
+
+	pullDeployAckTimeout       = 90 * time.Second
+	pullDeployCommandWaitSec   = 45
+	pullDeployHeartbeatTimeout = 90 * time.Second
 )
 
 // actionUpdateComponents replaces the old "[2] Обновить бэкенд" and
@@ -58,32 +71,39 @@ func actionUpdateComponents(state *State, secrets *SecretStore, dl *Downloader) 
 		return nil
 	}
 
-	choice := askUpdateChoice(targets, outdated)
+	choice := askUpdateChoiceFunc(targets, outdated)
 	if len(choice) == 0 {
 		PrintInfo("ничего не выбрано — выход")
 		return nil
 	}
 
-	pubIP := currentPublicIP()
+	pubIP := currentPublicIPFunc()
 	if pubIP == "" {
 		PrintWarn("не смог определить твой внешний IP — индикатор активного SSTP недоступен")
 	}
 
+	var failures []error
 	for _, t := range choice {
 		fmt.Println()
-		if !confirmTargetContext(t, pubIP) {
+		if !confirmTargetContextFunc(t, pubIP) {
 			PrintWarn("пропущено: " + t.Label)
 			continue
 		}
 		if shouldProbeReachabilityBeforeUpdate(state, secrets, t) {
-			if !probeReachable(t.Host, t.Port, 3*time.Second) {
-				PrintFail(updateTargetReachabilityFailureMessage(t))
+			if !probeReachableFunc(t.Host, t.Port, 3*time.Second) {
+				msg := updateTargetReachabilityFailureMessage(t)
+				PrintFail(msg)
+				failures = append(failures, fmt.Errorf("%s: %s", t.Label, msg))
 				continue
 			}
 		}
-		if err := runOneUpdate(state, secrets, dl, t); err != nil {
+		if err := runOneUpdateFunc(state, secrets, dl, t); err != nil {
 			PrintFail(t.Label + ": " + err.Error())
+			failures = append(failures, fmt.Errorf("%s: %w", t.Label, err))
 		}
+	}
+	if len(failures) > 0 {
+		return fmt.Errorf("update-components failed: %w", errors.Join(failures...))
 	}
 	return nil
 }
@@ -627,6 +647,7 @@ func shouldFallbackToAWGMReinstall(err error) bool {
 		"рассинхрон",
 		"stale",
 		"heartbeat never",
+		"pull deploy pending",
 		"не забирает команды",
 	} {
 		if strings.Contains(msg, marker) {
@@ -715,11 +736,15 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	// Phase 1: agent CommandResult. Verify+schedule typically completes in
 	// 5-30s (download ~12MB on a Keenetic over the operator's link). Allow
 	// up to 90s via two 45-second long-polls.
-	deadline := time.Now().Add(90 * time.Second)
+	deadline := time.Now().Add(pullDeployAckTimeout)
 	var res *wire.CommandResult
 	for time.Now().Before(deadline) {
-		pollCtx, pollCancel := context.WithTimeout(context.Background(), 65*time.Second)
-		r, err := c.AwaitCommandResult(pollCtx, t.AgentNickname, cmdID, 45)
+		waitSec := pullDeployCommandWaitSec
+		if waitSec <= 0 {
+			waitSec = 1
+		}
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), time.Duration(waitSec+20)*time.Second)
+		r, err := c.AwaitCommandResult(pollCtx, t.AgentNickname, cmdID, waitSec)
 		pollCancel()
 		if err != nil {
 			return fmt.Errorf("await result: %w", err)
@@ -739,7 +764,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 				pushCancel()
 			}
 			PrintWarn("мобильный агент не подтвердил команду сейчас — пометил обновление как pending до следующего wake")
-			return nil
+			return pullDeployPendingAckTimeoutError(t, pullDeployAckTimeout)
 		}
 		return fmt.Errorf("агент не подтвердил команду за 90с%s", pullDeployNoAckHint(c, t))
 	}
@@ -801,7 +826,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 		pushCancel()
 	}
 	PrintWarn(fmt.Sprintf("ACK получен, но heartbeat ещё не подтвердил %s — пометил как pending и продолжаю; проверь позже через sync/doctor", t.LatestVersion))
-	return nil
+	return pullDeployPendingHeartbeatTimeoutError(t, heartbeatWait)
 }
 
 func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
@@ -818,10 +843,20 @@ func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
 }
 
 func pullDeployHeartbeatWait(t updateTarget) time.Duration {
-	if strings.EqualFold(t.Kind, "mobile") {
-		return 90 * time.Second
+	if pullDeployHeartbeatTimeout < 0 {
+		return 0
 	}
-	return 90 * time.Second
+	return pullDeployHeartbeatTimeout
+}
+
+func pullDeployPendingAckTimeoutError(t updateTarget, wait time.Duration) error {
+	return fmt.Errorf("pull deploy pending: %s ACK timeout after %s; marked %s pending until next wake",
+		t.AgentNickname, formatDurationRU(wait), t.LatestVersion)
+}
+
+func pullDeployPendingHeartbeatTimeoutError(t updateTarget, wait time.Duration) error {
+	return fmt.Errorf("pull deploy pending: %s heartbeat timeout after %s; marked %s pending until sync/doctor confirms it",
+		t.AgentNickname, formatDurationRU(wait), t.LatestVersion)
 }
 
 func markPendingOnHeartbeatTimeout(state *State, t updateTarget, since string) error {
