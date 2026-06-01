@@ -205,8 +205,11 @@ func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *
 	ag.AWGMAuth = authMode
 	ag.PendingVersion = rel.TagName
 	ag.PendingSince = now
+	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(strings.TrimSpace(ag.Nickname))
+	tokenFile := deferredAWGMJobDir + "/" + safeRelayName(ag.Nickname) + ".json.token"
 	PrintOK("отложенный деплой поставлен на VPS: " + ag.Nickname + " → " + rel.TagName)
 	PrintInfo("статус на VPS: systemctl status wg-monitor-deferred-awgm.timer; job лежит в " + deferredAWGMJobDir)
+	PrintInfo("после успеха runner оставит " + tokenFile + " (" + tokenEnv + "); импортируй его в локальные deploy secrets перед doctor/auth-probe на этом ПК")
 	return true, nil
 }
 

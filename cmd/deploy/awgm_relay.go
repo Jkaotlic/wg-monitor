@@ -892,10 +892,11 @@ def run_deferred_bootstrap(cfg, cfg_path):
             request(op, cfg, "POST", "/api/terminal/stop")
         except Exception as e:
             print("WARN terminal stop failed: %s" % e, file=sys.stderr)
+    token_env = "WG_AGENT_TOKEN_%s" % nick.upper()
     token_path = cfg_path + ".token"
     fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write("WG_AGENT_TOKEN_%s=%s\n" % (nick.upper(), raw_token))
+        f.write("%s=%s\n" % (token_env, raw_token))
     confirmed, confirm_reason = wait_deferred_bootstrap_confirmation(cfg, nick, cfg.get("target_version") or "", raw_token, bootstrap_started_at)
     if not confirmed:
         print("deferred AWGM job pending for %s: %s" % (nick or "unknown", confirm_reason), file=sys.stderr)
@@ -918,6 +919,9 @@ def run_deferred_bootstrap(cfg, cfg_path):
     fd = os.open(done_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("ok %s %s %s\n" % (nick, cfg.get("target_version") or "", confirm_reason))
+        f.write("token_env=%s\n" % token_env)
+        f.write("token_file=%s\n" % token_path)
+        f.write("next=import token_file into local deploy secrets before local doctor/auth-probe\n")
     os.remove(cfg_path)
 
 def login_terminal(sock, cfg):

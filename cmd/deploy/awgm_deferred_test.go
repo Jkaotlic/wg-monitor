@@ -348,6 +348,7 @@ def fake_commit(cfg, nick, raw_token):
     events.append("commit:%%s" %% nick)
 relay.commit_existing_agent_token_hash = fake_commit
 relay.deferred_agent_token_valid = lambda cfg, raw_token: True
+relay.new_deferred_agent_raw_token = lambda: "existing-token"
 
 def fake_bootstrap(sock, cfg):
     script = cfg.get("bootstrap_script") or ""
@@ -376,6 +377,14 @@ assert events == [
 ], events
 assert not os.path.exists(job_path), "successful existing-agent job remained active"
 assert os.path.exists(job_path + ".done"), "successful existing-agent job did not write done artifact"
+done = open(job_path + ".done", encoding="utf-8").read()
+assert "token_env=WG_AGENT_TOKEN_BRONYA" in done, done
+assert ("token_file=" + job_path + ".token") in done, done
+assert "local deploy secrets" in done, done
+assert "doctor/auth-probe" in done, done
+assert "existing-token" not in done, done
+token = open(job_path + ".token", encoding="utf-8").read()
+assert token == "WG_AGENT_TOKEN_BRONYA=existing-token\n", token
 assert put_body["deploy_mode"] == "awgm", put_body
 assert put_body["awgm_url"] == "https://awg.bronya.example.test", put_body
 assert put_body["awgm_auth"] == "router-admin", put_body
