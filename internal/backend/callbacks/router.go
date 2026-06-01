@@ -709,23 +709,25 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	}
 	isAdmin := r.cfg.AdminUserID == 0 || m.From.ID == r.cfg.AdminUserID
 	if !isAdmin {
-		// Non-admin path: operators get owner-parity but ONLY in their own
-		// router's per_router topic. resolveTopicKind classifies by thread
-		// id; if the topic is unknown / summary / systemic, drop. If the
-		// operator isn't whitelisted on that router, drop. The downstream
+		// Non-admin path: owners and operators get owner-parity but ONLY in
+		// their own router's per_router topic. resolveTopicKind classifies by
+		// thread id; if the topic is unknown / summary / systemic, drop. If the
+		// sender is neither the bound owner nor an operator, drop. The downstream
 		// switch re-runs resolveTopicKind, which is cheap — keeping the
 		// existing flow untouched simplifies the diff.
 		kind, user := r.resolveTopicKind(m.MessageThreadID)
 		if kind != "per_router" || user == nil {
 			return
 		}
-		if !r.d.RouterOperators().HasAccess(user.ID, m.From.ID) {
+		isOwner := user.TelegramUserID != nil && *user.TelegramUserID == m.From.ID
+		isOperator := r.d.RouterOperators().HasAccess(user.ID, m.From.ID)
+		if !isOwner && !isOperator {
 			return
 		}
-		// Operator passes the gate. Skip handleAdminCommand entirely — slash
-		// commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
-		// Operators get safe router-scoped slash commands, plus /help and
-		// /keyboard as personal-recovery actions scoped to their own topic.
+		// The router actor passes the gate. Skip handleAdminCommand entirely —
+		// slash commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
+		// Owners/operators get safe router-scoped slash commands, plus /help
+		// and /keyboard as personal-recovery actions scoped to their own topic.
 		if cmd, _, ok := parseSlashCommand(m.Text); ok {
 			switch cmd {
 			case "/help":
