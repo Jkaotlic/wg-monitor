@@ -646,6 +646,9 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		return true
 	}
 	if args.UserID == 0 {
+		if args.Action == "routes_close" {
+			return r.aclAllowLegacyRoutesClose(ctx, q, args)
+		}
 		return true
 	}
 	user, err := r.d.Users().GetByID(args.UserID)
@@ -684,6 +687,29 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		return true
 	}
 	return true
+}
+
+func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
+	if q.Message.MessageThreadID == nil {
+		return true
+	}
+	user, err := r.d.Users().GetByThreadID(*q.Message.MessageThreadID)
+	if err != nil {
+		if !errors.Is(err, db.ErrUserNotFound) {
+			slog.Warn("acl: legacy routes close topic lookup failed, allowing", "thread", *q.Message.MessageThreadID, "err", err)
+		}
+		return true
+	}
+	if user.TelegramUserID != nil && *user.TelegramUserID == q.From.ID {
+		return true
+	}
+	if r.d.RouterOperators().HasAccess(user.ID, q.From.ID) {
+		return true
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
+	slog.Warn("acl: rejected legacy untargeted routes close",
+		"from", q.From.ID, "router_user_id", user.ID, "thread", *q.Message.MessageThreadID, "data", q.Data, "action", args.Action)
+	return false
 }
 
 // HandleMessage dispatches an incoming text Message: chat/admin gate, topic

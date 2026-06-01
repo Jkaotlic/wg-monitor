@@ -146,6 +146,16 @@ func TestRoutesPanelKeyboard_HasDoctorAndSnapshot(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelKeyboard_CloseIsRouterScoped(t *testing.T) {
+	kb := RoutesPanelKeyboard(42, wire.RouteSnapshot{})
+	if !routesKeyboardHasCallback(kb, "routes_close:42:_panel_") {
+		t.Fatalf("routes panel close must carry router user id: %+v", kb.InlineKeyboard)
+	}
+	if routesKeyboardHasCallback(kb, "routes_close:0:_panel_") {
+		t.Fatalf("routes panel close must not be globally closable: %+v", kb.InlineKeyboard)
+	}
+}
+
 func TestRebindResultKeyboard_OffersTunnelCheck(t *testing.T) {
 	kb := RebindResultKeyboard(42, "old", "new", 0)
 	for _, want := range []string{
@@ -156,6 +166,16 @@ func TestRebindResultKeyboard_OffersTunnelCheck(t *testing.T) {
 		if !routesKeyboardHasCallback(kb, want) {
 			t.Fatalf("rebind result should offer post-route verification %q: %+v", want, kb.InlineKeyboard)
 		}
+	}
+}
+
+func TestRebindResultKeyboard_CloseIsRouterScoped(t *testing.T) {
+	kb := RebindResultKeyboard(42, "old", "new", 1)
+	if !routesKeyboardHasCallback(kb, "routes_close:42:_panel_") {
+		t.Fatalf("rebind result close must carry router user id: %+v", kb.InlineKeyboard)
+	}
+	if routesKeyboardHasCallback(kb, "routes_close:0:_panel_") {
+		t.Fatalf("rebind result close must not be globally closable: %+v", kb.InlineKeyboard)
 	}
 }
 
