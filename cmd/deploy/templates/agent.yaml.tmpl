@@ -20,6 +20,11 @@ checks:
     test_domain: "example.com"
     fail_threshold: 2
 
+external_reach:
+  enabled: true
+  bind_to_default: true
+  fail_threshold: 2
+
 state:
   path: /opt/var/wg-monitor/state.json
 

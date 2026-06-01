@@ -139,7 +139,7 @@ func TestHardAlertKeyboardHumanisedLabels(t *testing.T) {
 		"ack:42:tunnel_amnezia":            "✅ Понял",
 		"history:42:tunnel_amnezia":        "📋 История за 24ч",
 		"mute:42:tunnel_amnezia":           "🔇 Тихо до утра",
-		"restart_tunnel:42:tunnel_amnezia": "🔁 Перезапуск туннеля",
+		"restart_tunnel:42:tunnel_amnezia": "🔁 Перезапуск awg-manager",
 		"diag_now:42:tunnel_amnezia":       "📊 Диагностика",
 		"pingcheck_now:42:tunnel_amnezia":  "▶ Тест связи",
 		"force_recheck:42:tunnel_amnezia":  "🔄 Дай отчёт сейчас",

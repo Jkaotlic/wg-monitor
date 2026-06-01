@@ -28,6 +28,12 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		}
 		fmt.Fprintf(&b, "  • HydraRoute Neo: %s\n", state)
 	}
+	if len(snap.Warnings) > 0 {
+		b.WriteString("  • ⚠ снапшот неполный:\n")
+		for _, w := range snap.Warnings {
+			fmt.Fprintf(&b, "    - %s\n", w)
+		}
+	}
 	totalDNS := snap.Other.DNS
 	totalStatic := snap.Other.Static
 	totalHR := snap.Other.HRNeo
@@ -400,24 +406,36 @@ func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) strin
 	}
 	b.WriteString("\n")
 	if totalFailed > 0 {
-		b.WriteString("\nОперация идемпотентна — можно повторить.\n")
+		b.WriteString("\nОперация идемпотентна, но снапшот уже устарел. Обнови маршруты и повтори перенос из свежего состояния.\n")
 		for _, e := range append(append([]string{}, res.DNS.Errors...), res.Static.Errors...) {
 			fmt.Fprintf(&b, "  • %s\n", e)
 		}
+	} else {
+		b.WriteString("\nДальше: проверь маршруты. Если трафик ушёл не туда, откати перенос обратной кнопкой.\n")
 	}
 	return b.String()
 }
 
-// RebindResultKeyboard for Screen 5. Shows [Repeat] only on partial fail.
+func RebindRollbackConfirmText(srcID, dstID, token string) string {
+	return fmt.Sprintf("🛣 ↩ Откат переноса маршрутов\n\nБудет выполнен обратный перенос: %s → %s.\n\nЭто изменит DNS/static rules на роутере. Подтверди только если проверка маршрутов показала проблему.\n\ntoken:%s  истекает через 5 мин\n", dstID, srcID, token)
+}
+
+// RebindResultKeyboard for Screen 5.
 func RebindResultKeyboard(userID int64, srcID, dstID string, totalFailed int) InlineKeyboardMarkup {
 	rows := [][]InlineKeyboardButton{}
 	if totalFailed > 0 {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "🔁 Повторить", CallbackData: fmt.Sprintf("routes_pick:%d:%s:%s", userID, srcID, dstID)},
+			{Text: "🔄 Обновить маршруты", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
+		})
+	} else {
+		rows = append(rows, []InlineKeyboardButton{
+			{Text: "✅ Проверить маршруты", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
+			{Text: "↩ Откатить", CallbackData: fmt.Sprintf("routes_rollback:%d:%s:%s", userID, srcID, dstID)},
 		})
 	}
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		{Text: "🌍 Проверить выход", CallbackData: fmt.Sprintf("check_via_tunnel:%d:_panel_", userID)},
 		{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
 	})
 	rows = append(rows, []InlineKeyboardButton{

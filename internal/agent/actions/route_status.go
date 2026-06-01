@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -15,17 +16,18 @@ import (
 // string suitable for wire.CommandResult.Output.
 func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	var (
-		hr      *awgmgr.HydraRouteStatus
-		tunnels *awgmgr.TunnelsAll
-		routing []awgmgr.RoutingTunnel
-		dns     []awgmgr.DNSRoute
-		statics []awgmgr.StaticRoute
+		hr         *awgmgr.HydraRouteStatus
+		tunnels    *awgmgr.TunnelsAll
+		routing    []awgmgr.RoutingTunnel
+		routingErr error
+		dns        []awgmgr.DNSRoute
+		statics    []awgmgr.StaticRoute
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { hr, err = c.HydraRouteStatus(gctx); return })
 	g.Go(func() (err error) { tunnels, err = c.TunnelsAll(gctx); return })
 	g.Go(func() error {
-		routing, _ = c.RoutingTunnels(gctx)
+		routing, routingErr = c.RoutingTunnels(gctx)
 		return nil
 	})
 	g.Go(func() (err error) { dns, err = c.ListDNSRoutes(gctx); return })
@@ -34,6 +36,9 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 		return "", err
 	}
 	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics)
+	if routingErr != nil {
+		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/tunnels failed: %v", routingErr))
+	}
 	b, err := json.Marshal(snap)
 	if err != nil {
 		return "", err

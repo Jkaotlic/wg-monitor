@@ -216,27 +216,15 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 	backendSrv := httptest.NewServer(mux)
 	defer backendSrv.Close()
 
-	var restartHits int
-	awgFake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/control/restart-all" {
-			restartHits++
-			w.WriteHeader(200)
-			_, _ = w.Write([]byte(`{"success":true}`))
-			return
-		}
-		w.WriteHeader(404)
-	}))
-	defer awgFake.Close()
-
 	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
 		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
 	})
 
 	q := &tg.CallbackQuery{
-		ID:      "cbk-restart",
+		ID:      "cbk-force-recheck",
 		From:    tg.User{ID: 555},
 		Message: tg.Message{MessageID: 4242, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
-		Data:    fmt.Sprintf("restart_tunnel:%d:tunnel_amnezia_for_awg2", uid),
+		Data:    fmt.Sprintf("force_recheck:%d:agent_heartbeat", uid),
 	}
 	router.HandleCallback(context.Background(), q)
 
@@ -246,19 +234,20 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 		t.Fatalf("PollCommand: %v", err)
 	}
 	if cmd == nil {
-		t.Fatal("PollCommand returned nil — queue should have a restart_tunnel command")
+		t.Fatal("PollCommand returned nil — queue should have a force_recheck command")
 	}
-	if cmd.Action != "restart_tunnel" {
-		t.Errorf("got action %q want restart_tunnel", cmd.Action)
+	if cmd.Action != "force_recheck" {
+		t.Errorf("got action %q want force_recheck", cmd.Action)
 	}
 
-	runner := &actions.Runner{AwgClient: awgmgr.New(awgFake.URL)}
+	var rechecked bool
+	runner := &actions.Runner{ForceRecheck: func(context.Context) { rechecked = true }}
 	res := runner.Execute(context.Background(), *cmd)
 	if res.Status != "ok" {
 		t.Errorf("expected ok status, got %q output=%q", res.Status, res.Output)
 	}
-	if restartHits != 1 {
-		t.Errorf("expected awg-manager RestartAll hit once, got %d", restartHits)
+	if !rechecked {
+		t.Error("expected ForceRecheck callback to run")
 	}
 
 	if err := agentClient.PostResult(context.Background(), res); err != nil {

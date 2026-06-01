@@ -190,6 +190,7 @@ func TestParse_RoutesActions(t *testing.T) {
 		{"routes_rebind:42:t1", "routes_rebind", "", false},
 		{"routes_pick:42:t1:t2", "routes_pick", "", false},
 		{"routes_confirm:42:t1:t2:abc12345", "routes_confirm", "abc12345", false},
+		{"routes_rollback:42:t1:t2", "routes_rollback", "", false},
 		{"routes_close:0:_panel_", "routes_close", "", true},
 		{"close_panel:42:_panel_", "close_panel", "", true},
 		{"routes_back:42:_panel_", "routes_back", "", true},

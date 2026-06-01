@@ -100,6 +100,20 @@ func markupHasCallback(kb *tg.InlineKeyboardMarkup, want string) bool {
 	return false
 }
 
+func markupHasCallbackPrefix(kb *tg.InlineKeyboardMarkup, wantPrefix string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, wantPrefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestRouterDispatchesSilence(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -530,6 +544,31 @@ func TestRouterDispatchesCommandAction(t *testing.T) {
 	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
 
 	q := &tg.CallbackQuery{
+		ID:      "cbk-diag",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
+		Data:    "diag_now:" + itoa(uid) + ":tunnel_amnezia_for_awg2",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if sink.calls[0].action != "diag_now" || sink.calls[0].userID != uid {
+		t.Errorf("got %+v", sink.calls[0])
+	}
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "очередь") {
+		t.Errorf("expected edit containing 'очередь', got %v", f.edits)
+	}
+}
+
+func TestRouterRestartTunnelRequiresAwgManagerConfirm(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
 		ID:      "cbk-restart",
 		From:    tg.User{ID: 12345},
 		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
@@ -537,14 +576,36 @@ func TestRouterDispatchesCommandAction(t *testing.T) {
 	}
 	r.HandleCallback(context.Background(), q)
 
+	if len(sink.calls) != 0 {
+		t.Fatalf("restart_tunnel callback must require confirmation before enqueue, got %+v", sink.calls)
+	}
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "awg-manager") {
+		t.Fatalf("expected awg-manager confirmation edit, got %v", f.edits)
+	}
+	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("maint_confirm:%d:awgmgr:", uid)) {
+		t.Fatalf("confirm markup missing awgmgr maint_confirm callback: %+v", f.editMarkups)
+	}
+}
+
+func TestRouterDispatchesInlineCheckViaTunnel(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-check-via-tunnel",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "check_via_tunnel:" + itoa(uid) + ":_panel_",
+	}
+	r.HandleCallback(context.Background(), q)
+
 	if len(sink.calls) != 1 {
 		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
 	}
-	if sink.calls[0].action != "restart_tunnel" || sink.calls[0].userID != uid {
-		t.Errorf("got %+v", sink.calls[0])
-	}
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "очередь") {
-		t.Errorf("expected edit containing 'очередь', got %v", f.edits)
+	if sink.calls[0].action != "check_via_tunnel" || sink.calls[0].userID != uid {
+		t.Fatalf("got %+v", sink.calls[0])
 	}
 }
 
@@ -1564,6 +1625,40 @@ func TestRouterRoutesAddType_HRNeoUnavailableDoesNotSilentlyDowngradeToNDMS(t *t
 	}
 	if len(f.edits) != 0 {
 		t.Fatalf("must not advance wizard and silently create NDMS draft, edits=%v", f.edits)
+	}
+}
+
+func TestRouterRoutesRollback_RendersReverseConfirmWithoutCache(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	tid := int64(11)
+	q := &tg.CallbackQuery{
+		ID:   "cb-routes-rollback",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_rollback:%d:old:new", uid),
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("rollback should render confirmation edit, got edits=%v", f.edits)
+	}
+	if !strings.Contains(f.edits[0], "new") || !strings.Contains(f.edits[0], "old") {
+		t.Fatalf("rollback confirm text should mention reverse direction, got %q", f.edits[0])
+	}
+	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_confirm:%d:new:old:", uid)) {
+		t.Fatalf("rollback confirm should point to reverse routes_confirm, markup=%#v", f.editMarkups)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("rollback must require explicit confirmation before enqueue, got calls=%+v", sink.calls)
 	}
 }
 

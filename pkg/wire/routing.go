@@ -53,6 +53,9 @@ type RouteSnapshot struct {
 	Counts  map[string]TunnelCounts `json:"counts"`  // key = target id
 	Other   TunnelCounts            `json:"other"`   // sum across unknown/unmatched binds
 	Rules   []RouteRuleSummary      `json:"rules,omitempty"`
+	// Warnings names non-fatal data source failures. UI must treat the
+	// snapshot as partial when present.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type HRNeoRule struct {

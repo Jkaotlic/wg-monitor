@@ -325,6 +325,7 @@ func actionSecretsStatus(state *State, secrets *SecretStore) error {
 	fmt.Println(Colorize("=== Required values ===", ColorBold))
 	missingRequired := 0
 	missingOptional := 0
+	missingRequiredNames := []string{}
 	for _, row := range rows {
 		src := secrets.SourceNonInteractive(row.Name)
 		status := src.String()
@@ -332,6 +333,7 @@ func actionSecretsStatus(state *State, secrets *SecretStore) error {
 		if src == SourceMissing {
 			if row.Required {
 				missingRequired++
+				missingRequiredNames = append(missingRequiredNames, row.Name)
 				PrintFail(msg)
 			} else {
 				missingOptional++
@@ -346,6 +348,7 @@ func actionSecretsStatus(state *State, secrets *SecretStore) error {
 	switch {
 	case missingRequired > 0:
 		PrintFail(fmt.Sprintf("secrets status: %d required missing, %d optional missing", missingRequired, missingOptional))
+		return fmt.Errorf("required secrets missing: %s", strings.Join(missingRequiredNames, ", "))
 	case missingOptional > 0:
 		PrintWarn(fmt.Sprintf("secrets status: required OK, %d optional missing", missingOptional))
 	default:
@@ -371,7 +374,7 @@ func secretStatusRows(state *State) []secretStatusRow {
 		} else {
 			add("WG_VPS_PASS", "VPS SSH password", true)
 		}
-		add("WG_BOT_TOKEN", "Telegram bot token", false)
+		add("WG_BOT_TOKEN", "Telegram bot token", true)
 	}
 	if state.Backend.Domain != "" || len(state.Agents) > 0 {
 		add("WIZARD_TOKEN", "wizard API token", true)

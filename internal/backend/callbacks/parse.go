@@ -135,7 +135,7 @@ var validActions = map[string]bool{
 	"tunnel_import_add":     true,
 	// routes panel actions: browse, rebind, and confirm route changes.
 	"routes_open": true, "routes_rebind": true,
-	"routes_pick": true, "routes_confirm": true, "routes_refresh": true,
+	"routes_pick": true, "routes_confirm": true, "routes_rollback": true, "routes_refresh": true,
 	"routes_back": true, "routes_close": true, "close_panel": true,
 	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
 	"routes_add_confirm": true, "routes_add_cancel": true,
@@ -263,6 +263,12 @@ func Parse(data string) (Args, error) {
 	case "routes_pick":
 		if len(parts) < 4 {
 			return Args{}, fmt.Errorf("routes_pick requires src and dst: %q", data)
+		}
+		a.RebindSrcID = parts[2]
+		a.RebindDstID = parts[3]
+	case "routes_rollback":
+		if len(parts) < 4 {
+			return Args{}, fmt.Errorf("routes_rollback requires src and dst: %q", data)
 		}
 		a.RebindSrcID = parts[2]
 		a.RebindDstID = parts[3]
