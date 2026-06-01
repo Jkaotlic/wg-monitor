@@ -315,7 +315,7 @@ func TestImportAction_Apply_Replace(t *testing.T) {
 	sink := &fakeEnqueuer{}
 	a := &ImportAction{
 		sink: sink,
-		consumeFn: func(uid int64, token string) (*pendingUpload, bool) {
+		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) {
 			if uid == 42 && token == "tok1" {
 				up := pending[uid]
 				delete(pending, uid)
@@ -360,13 +360,52 @@ func TestImportAction_Apply_Expired(t *testing.T) {
 	sink := &fakeEnqueuer{}
 	a := &ImportAction{
 		sink:      sink,
-		consumeFn: func(uid int64, token string) (*pendingUpload, bool) { return nil, false },
+		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) { return nil, false },
 		idGen:     func() string { return "x" },
 	}
 	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: -100}}}
 	_, err := a.Apply(context.Background(), q, Args{Action: "tunnel_import_replace", UserID: 99})
 	if err == nil || !strings.Contains(err.Error(), "истекла") {
 		t.Errorf("expected expiry error, got %v", err)
+	}
+}
+
+func TestImportAction_Apply_ForeignThreadDoesNotConsume(t *testing.T) {
+	ownThread := int64(11)
+	foreignThread := int64(22)
+	pending := map[int64]*pendingUpload{
+		42: {ConfB64: "abc", Name: "awg11", Token: "tok1", ThreadID: &ownThread, ExpiresAt: time.Now().Add(time.Minute)},
+	}
+	sink := &fakeEnqueuer{}
+	a := &ImportAction{
+		sink: sink,
+		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) {
+			up, ok := pending[uid]
+			if !ok || up.Token != token || !sameThread(up.ThreadID, threadID) {
+				return nil, false
+			}
+			delete(pending, uid)
+			return up, true
+		},
+		idGen: func() string { return "fixed-id" },
+	}
+	q := &tg.CallbackQuery{
+		ID:      "cbq-foreign-thread",
+		From:    tg.User{ID: 42},
+		Message: tg.Message{MessageID: 10, Chat: tg.Chat{ID: -100}, MessageThreadID: &foreignThread},
+		Data:    "tunnel_import_replace:42:_panel_:tok1",
+	}
+
+	_, err := a.Apply(context.Background(), q, Args{Action: "tunnel_import_replace", UserID: 42, CheckName: "_panel_", ImportToken: "tok1"})
+
+	if err == nil {
+		t.Fatal("expected foreign-thread import to be rejected")
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending upload must remain for original topic, pending=%v", pending)
+	}
+	if len(sink.calls) != 0 || len(sink.refs) != 0 {
+		t.Fatalf("foreign-thread import must not enqueue, calls=%v refs=%v", sink.calls, sink.refs)
 	}
 }
 

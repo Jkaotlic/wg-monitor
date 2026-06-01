@@ -187,11 +187,11 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	}
 	r.importAction = &ImportAction{
 		sink: sink,
-		consumeFn: func(userID int64, token string) (*pendingUpload, bool) {
+		consumeFn: func(userID int64, token string, threadID *int64) (*pendingUpload, bool) {
 			r.pendingMu.Lock()
 			defer r.pendingMu.Unlock()
 			up, ok := r.pending[userID]
-			if !ok || up.Token != token || time.Now().After(up.ExpiresAt) || up.Name == "" {
+			if !ok || up.Token != token || time.Now().After(up.ExpiresAt) || up.Name == "" || !sameThread(up.ThreadID, threadID) {
 				return nil, false
 			}
 			delete(r.pending, userID)
@@ -324,6 +324,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	}
 	if args.Action == "panel" && args.PanelScreen != "help" && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
+		return
+	}
+	if args.Action == "panel" {
+		r.handlePanelCallback(ctx, q, args)
 		return
 	}
 	if isSelfHostedAmneziaAction(args.Action) && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
@@ -556,9 +560,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, status)
 		return
-	case "panel":
-		r.handlePanelCallback(ctx, q, args)
-		return
 	case "compat_btn":
 		r.handleCompatBtn(ctx, q, args)
 		return
@@ -628,10 +629,10 @@ func (r *Router) isAdminTG(userID int64) bool {
 // Decision table (q.From.ID = F, args.UserID = R, user.TelegramUserID = O,
 // user.TelegramThreadID = T, q.Message.MessageThreadID = M):
 //
-//	F == AdminUserID                        → allow (admin override)
 //	R == 0                                  → allow (no router target encoded)
 //	users.GetByID(R) fails or returns nil   → allow + warn (don't break on DB hiccup)
 //	T != nil && (M == nil || *M != *T)      → reject (known router topic mismatch)
+//	F == AdminUserID                        → allow (admin override inside correct topic)
 //	O != nil && *O == F                     → allow (rightful owner in topic)
 //	O != nil && *O != F                     → reject ("это не твой роутер")
 //	O == nil && M != nil && T != nil && *M == *T  → TOFU bind F → SetTelegramUserID, allow
@@ -642,9 +643,6 @@ func (r *Router) isAdminTG(userID int64) bool {
 // so stale buttons in foreign topics cannot control the wrong router or send
 // command results/config documents to the wrong thread.
 func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
-	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
-		return true
-	}
 	if args.UserID == 0 {
 		if args.Action == "routes_close" {
 			return r.aclAllowLegacyRoutesClose(ctx, q, args)
@@ -662,6 +660,9 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		slog.Warn("acl: rejected (foreign topic)",
 			"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "owner_thread", *user.TelegramThreadID, "data", q.Data)
 		return false
+	}
+	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
+		return true
 	}
 	if user.TelegramUserID != nil {
 		if *user.TelegramUserID == q.From.ID {

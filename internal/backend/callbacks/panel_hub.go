@@ -65,7 +65,7 @@ func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 }
 
 // handlePanelCallback is the top-level dispatcher for panel:* callbacks.
-// Routed from Router.HandleCallback after aclAllow. Each screen runs as
+// Routed from Router.HandleCallback after the panel admin gate. Each screen runs as
 // an EditMessageText on the hub message; new messages (panel publication
 // into per_router topic) are sent separately and don't touch the hub.
 func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -118,9 +118,13 @@ func (r *Router) panelHandlePush(ctx context.Context, q *tg.CallbackQuery, args 
 		return
 	}
 	threadID := *u.TelegramThreadID
+	targetChat := q.Message.Chat
+	if r.cfg.ChatID != 0 {
+		targetChat.ID = r.cfg.ChatID
+	}
 	synth := &tg.Message{
 		MessageID:       0, // sentinel: skip user-message deletion
-		Chat:            q.Message.Chat,
+		Chat:            targetChat,
 		From:            q.From,
 		MessageThreadID: &threadID,
 	}
@@ -201,18 +205,22 @@ func (r *Router) panelDoctorAll(ctx context.Context, q *tg.CallbackQuery) {
 	}
 	var queued, noTopic int
 	var failLines []string
+	targetChatID := q.Message.Chat.ID
+	if r.cfg.ChatID != 0 {
+		targetChatID = r.cfg.ChatID
+	}
 	for _, u := range users {
 		if u.TelegramThreadID == nil {
 			noTopic++
 			continue
 		}
 		ackText := "⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…"
-		ackMID, sendErr := r.tg.SendMessageWithReplyKeyboard(ctx, q.Message.Chat.ID, u.TelegramThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+		ackMID, sendErr := r.tg.SendMessageWithReplyKeyboard(ctx, targetChatID, u.TelegramThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		if sendErr != nil {
 			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, sendErr))
 			continue
 		}
-		if err := r.command.DispatchFromMessage(ctx, "router_doctor", u.ID, q.Message.Chat.ID, ackMID, u.TelegramThreadID); err != nil {
+		if err := r.command.DispatchFromMessage(ctx, "router_doctor", u.ID, targetChatID, ackMID, u.TelegramThreadID); err != nil {
 			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, err))
 			continue
 		}

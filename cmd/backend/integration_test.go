@@ -109,14 +109,23 @@ func TestStage2EndToEnd(t *testing.T) {
 	}
 	hardText := sentMsgs[0]["text"].(string)
 	mu.Unlock()
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TelegramThreadID == nil {
+		t.Fatal("HARD alert should bind/create router topic before callback")
+	}
 
 	// 5. Simulate callback Silence(1h).
 	q := &tg.CallbackQuery{
 		ID:   "cbk-1",
 		From: tg.User{ID: 555},
 		Message: tg.Message{
-			MessageID: 1001, Chat: tg.Chat{ID: -100},
-			Text: hardText,
+			MessageID:       1001,
+			Chat:            tg.Chat{ID: -100},
+			MessageThreadID: u.TelegramThreadID,
+			Text:            hardText,
 		},
 		Data: fmt.Sprintf("silence:%d:awg_handshake:1h", uid),
 	}
