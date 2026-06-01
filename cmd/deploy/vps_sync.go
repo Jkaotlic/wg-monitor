@@ -148,6 +148,8 @@ func (c *VPSClient) ListAgents(ctx context.Context) ([]RemoteAgent, error) {
 
 func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 	body, err := json.Marshal(struct {
+		Kind                string `json:"kind"`
+		ThreadID            int64  `json:"thread_id"`
 		SSHHost             string `json:"ssh_host"`
 		SSHPort             int64  `json:"ssh_port"`
 		SSHUser             string `json:"ssh_user"`
@@ -162,6 +164,7 @@ func (c *VPSClient) PushAgent(ctx context.Context, a RemoteAgent) error {
 		AWGMAuth            string `json:"awgm_auth"`
 		ExpectedMAC         string `json:"expected_mac"`
 	}{
+		a.Kind, a.ThreadID,
 		a.SSHHost, a.SSHPort, a.SSHUser, a.Arch, a.LastDeployedVersion, a.Ring, a.PendingVersion, a.PendingSince,
 		a.LastDeploy, a.DeployMode, a.AWGMURL, a.AWGMAuth, a.ExpectedMAC,
 	})
@@ -606,6 +609,8 @@ func AgentStateToRemote(a AgentState) RemoteAgent {
 	}
 	return RemoteAgent{
 		Nickname:            a.Nickname,
+		Kind:                a.Kind,
+		ThreadID:            int64(a.ThreadID),
 		SSHHost:             a.Host,
 		SSHPort:             int64(a.Port),
 		SSHUser:             a.User,

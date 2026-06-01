@@ -175,6 +175,38 @@ func TestWizardPut_204Updates(t *testing.T) {
 	}
 }
 
+func TestWizardPut_204UpdatesKindAndThread(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("bronya", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	h := wizardPutAgentHandler(Deps{DB: d})
+	body := `{"kind":"mobile","thread_id":406}`
+	req := httptest.NewRequest("PUT", "/v1/wizard/agents/bronya", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "bronya")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("want 204, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("bronya")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != db.KindMobile {
+		t.Fatalf("kind not persisted: %+v", u)
+	}
+	if u.TelegramThreadID == nil || *u.TelegramThreadID != 406 {
+		t.Fatalf("thread id not persisted: %+v", u)
+	}
+}
+
 // Version and pending metadata must sync even when an AWGM-only router has no
 // usable direct SSH coordinates in wizard.toml.
 func TestWizardPut_204AllowsVersionSyncWithMissingSSHFields(t *testing.T) {

@@ -416,6 +416,8 @@ func (u *UsersRepo) GetByThreadID(threadID int64) (*User, error) {
 // routers sync version/pending metadata even when direct SSH coordinates are
 // unknown or intentionally unused.
 type DeployInfo struct {
+	Kind                string
+	ThreadID            int64
 	SSHHost             string
 	SSHPort             int64
 	SSHUser             string
@@ -435,8 +437,13 @@ type DeployInfo struct {
 // ErrUserNotFound when no row matches (we do NOT auto-create — agent
 // enrollment goes through the existing wg-monitor-cli add-user path).
 func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
+	if info.Kind != "" && !IsValidKind(info.Kind) {
+		return fmt.Errorf("users.UpdateDeployInfo: invalid kind %q (want static|mobile)", info.Kind)
+	}
 	res, err := u.d.db.Exec(
 		`UPDATE users SET
+		    kind=CASE WHEN ? = '' THEN kind ELSE ? END,
+		    telegram_thread_id=CASE WHEN ? = 0 THEN telegram_thread_id ELSE ? END,
 		    ssh_host=CASE WHEN ? = '' THEN ssh_host ELSE ? END,
 		    ssh_port=CASE WHEN ? = 0 THEN ssh_port ELSE ? END,
 		    ssh_user=CASE WHEN ? = '' THEN ssh_user ELSE ? END,
@@ -444,6 +451,7 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 		    last_deployed_version=?, deploy_ring=?, pending_version=?, pending_since=?,
 		    last_deploy=?, deploy_mode=?, awgm_url=?, awgm_auth=?, expected_mac=?
 		  WHERE nickname=?`,
+		info.Kind, info.Kind, info.ThreadID, info.ThreadID,
 		info.SSHHost, info.SSHHost, info.SSHPort, info.SSHPort,
 		info.SSHUser, info.SSHUser, info.Arch, info.Arch, info.LastDeployedVersion,
 		nullEmpty(info.Ring), nullEmpty(info.PendingVersion), nullEmpty(info.PendingSince),
