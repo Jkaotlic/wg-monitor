@@ -1242,6 +1242,45 @@ func TestACL_AllowsBoundOwner(t *testing.T) {
 	}
 }
 
+func TestACL_BoundOperatorRejectsForeignTopicCallback(t *testing.T) {
+	d, uid := newTestDB(t)
+	const owner = int64(11111)
+	const operator = int64(22222)
+	const routerThread = int64(4242)
+	const foreignThread = int64(9999)
+	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uid, routerThread); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(uid, operator, 12345); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := foreignThread
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-bound-operator-foreign-topic",
+		From:    tg.User{ID: operator},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "diag"},
+		Data:    "diag_now:" + itoa(uid) + ":_menu",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 0 {
+		t.Fatalf("foreign-topic operator callback must not enqueue command, got %+v", sink.calls)
+	}
+	if len(f.edits) != 0 {
+		t.Fatalf("foreign-topic operator callback must not edit UI, edits=%v", f.edits)
+	}
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "топик этого роутера") {
+		t.Fatalf("expected foreign-topic rejection toast, got %v", f.answers)
+	}
+}
+
 // ACL gate: admin override — admin can tap regardless of owner binding.
 func TestACL_AdminBypassesOwnerCheck(t *testing.T) {
 	d, uid := newTestDB(t)
