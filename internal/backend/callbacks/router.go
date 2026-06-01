@@ -348,8 +348,12 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.mute
 	case "history":
 		action = r.history
-	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor",
-		"tunnel_enable", "tunnel_disable", "tunnel_delete":
+	case "restart_tunnel":
+		args.MaintName = "awgmgr"
+		r.handleMaintRestart(ctx, q, args)
+		return
+	case "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor",
+		"tunnel_enable", "tunnel_disable", "tunnel_delete", "check_via_tunnel", "check_direct":
 		if r.guardStaleTunnelPanelAction(ctx, q, args) {
 			return
 		}
@@ -449,6 +453,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	case "routes_pick":
 		r.handleRoutesRebindPick(ctx, q, args)
+		return
+	case "routes_rollback":
+		r.handleRoutesRollback(ctx, q, args)
 		return
 	case "routes_back":
 		r.handleRoutesOpen(ctx, q, args, false)
@@ -1871,6 +1878,32 @@ func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery
 	})
 	text := tg.RebindPreviewText(snap, args.RebindSrcID, args.RebindDstID, token)
 	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindSrcID, args.RebindDstID, token)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesRollback(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil {
+		return
+	}
+	if args.RebindSrcID == "" || args.RebindDstID == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "rollback parameters missing")
+		return
+	}
+	if args.RebindSrcID == args.RebindDstID {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "src == dst — нечего откатывать")
+		return
+	}
+	token := makeRebindToken()
+	r.putPendingRebind(&pendingRebind{
+		UserID: user.ID,
+		SrcID:  args.RebindDstID,
+		DstID:  args.RebindSrcID,
+		Token:  token, ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	text := tg.RebindRollbackConfirmText(args.RebindSrcID, args.RebindDstID, token)
+	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindDstID, args.RebindSrcID, token)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }

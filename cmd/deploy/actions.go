@@ -463,10 +463,9 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 			}
 			return err
 		}
-		// Probe /v1/wizard/agents — expect 401 (endpoint registered + auth
-		// required). 404 means the token file is unreadable by wgmonitor or
-		// the wizard:-block in backend.yaml didn't parse — actionable hint.
-		probeWizardEndpoint("https://" + state.Backend.Domain + "/v1/wizard/agents")
+		if err := checkWizardEndpoint("https://" + state.Backend.Domain + "/v1/wizard/agents"); err != nil {
+			return err
+		}
 	}
 
 	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
@@ -474,35 +473,36 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	return nil
 }
 
-// probeWizardEndpoint GETs /v1/wizard/agents with NO Authorization header.
+// checkWizardEndpoint GETs /v1/wizard/agents with NO Authorization header.
 // A correctly-wired backend returns 401 (endpoint registered, auth required).
 // Anything else — 404 in particular — means the wizard.token_file in
 // backend.yaml is empty/unreadable/missing, and the deploy wizard's [6] sync
-// won't work. Best-effort: prints a colored line; never returns an error so
-// it can't block the deploy flow.
-func probeWizardEndpoint(url string) {
+// won't work.
+func checkWizardEndpoint(url string) error {
 	cli := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return
+		return err
 	}
 	resp, err := cli.Do(req)
 	if err != nil {
-		PrintWarn("wizard endpoint probe failed: " + err.Error())
-		return
+		return fmt.Errorf("wizard endpoint probe failed: %w", err)
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusUnauthorized:
 		PrintOK("wizard endpoint: 401 (auth required, ready for [6] Sync)")
+		return nil
 	case http.StatusNotFound:
 		PrintWarn("wizard endpoint: 404 — /v1/wizard/* НЕ зарегистрирован")
 		PrintInfo("  Возможные причины:")
 		PrintInfo("  • /etc/wg-monitor/wizard-token.txt не читается процессом wgmonitor (проверь права)")
 		PrintInfo("  • wizard:-блок в backend.yaml отсутствует или некорректен")
 		PrintInfo("  • journalctl -u wg-monitor-backend -n 20 покажет точную причину")
+		return fmt.Errorf("wizard endpoint not registered: HTTP 404")
 	default:
 		PrintWarn(fmt.Sprintf("wizard endpoint: HTTP %d (ожидался 401)", resp.StatusCode))
+		return fmt.Errorf("wizard endpoint returned HTTP %d, expected 401", resp.StatusCode)
 	}
 }
 
@@ -1748,6 +1748,8 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	PrintStep(15, 15, "Verify /health через домен")
 	if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
 		PrintWarn("health check не прошёл — возможно DNS ещё не прогрелся, проверь руками")
+	} else if err := checkWizardEndpoint("https://" + state.Backend.Domain + "/v1/wizard/agents"); err != nil {
+		return err
 	}
 
 	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)

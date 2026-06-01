@@ -162,6 +162,11 @@ func doctorLocalState(state *State, secrets *SecretStore, t *doctorTally) {
 			}
 		}
 	}
+	if missing := doctorMissingRequiredSecrets(state, secrets); len(missing) > 0 {
+		t.failf("required secrets missing: " + strings.Join(missing, ", "))
+	} else {
+		t.ok("required secrets: OK")
+	}
 
 	doctorSharedPrivateHostHints(state, t)
 
@@ -194,6 +199,16 @@ func doctorLocalState(state *State, secrets *SecretStore, t *doctorTally) {
 		}
 	}
 	fmt.Println()
+}
+
+func doctorMissingRequiredSecrets(state *State, secrets *SecretStore) []string {
+	var missing []string
+	for _, row := range secretStatusRows(state) {
+		if row.Required && secrets.SourceNonInteractive(row.Name) == SourceMissing {
+			missing = append(missing, row.Name)
+		}
+	}
+	return missing
 }
 
 func doctorSharedPrivateHostHints(state *State, t *doctorTally) {

@@ -21,8 +21,8 @@ type kbOpts struct {
 	hydraRouteActions bool
 }
 
-// WithTunnelActions appends a row [🔁 Restart][📊 Diag][▶ Pingcheck] —
-// only meaningful for tunnel_* checks where awg-manager can act on a tunnel.
+// WithTunnelActions appends a row [🔁 Restart awg-manager][📊 Diag][▶ Pingcheck].
+// The restart_tunnel wire action restarts awg-manager, not a single tunnel.
 func WithTunnelActions() KeyboardOption {
 	return func(o *kbOpts) { o.tunnelActions = true }
 }
@@ -65,7 +65,7 @@ func HardAlertKeyboard(userID int64, checkName string, opts ...KeyboardOption) I
 	}
 	if o.tunnelActions {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "🔁 Перезапуск туннеля", CallbackData: plainCD("restart_tunnel")},
+			{Text: "🔁 Перезапуск awg-manager", CallbackData: plainCD("restart_tunnel")},
 			{Text: "📊 Диагностика", CallbackData: plainCD("diag_now")},
 			{Text: "▶ Тест связи", CallbackData: plainCD("pingcheck_now")},
 		})

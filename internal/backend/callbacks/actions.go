@@ -291,7 +291,7 @@ func formatQueuedStatus(action, checkName string) string {
 }
 
 var commandLabels = map[string]string{
-	"restart_tunnel": "🔁 Перезапуск туннеля",
+	"restart_tunnel": "🔁 Перезапуск awg-manager",
 	"diag_now":       "📊 Диагностика",
 	"pingcheck_now":  "▶ Проверка связи",
 	"force_recheck":  "🔁 Повторная проверка",

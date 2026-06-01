@@ -428,6 +428,31 @@ func TestDoctorFormatLastSeenParsesGoSQLiteTimestamp(t *testing.T) {
 	}
 }
 
+func TestDoctorMissingRequiredSecretsUsesDeployReadyRows(t *testing.T) {
+	t.Setenv("WG_NO_SECRET_CACHE", "1")
+	for _, name := range []string{"WG_VPS_PASS", "WG_BOT_TOKEN", "WIZARD_TOKEN", "WG_AGENT_TOKEN_HOME"} {
+		t.Setenv(name, "")
+	}
+	missing := doctorMissingRequiredSecrets(&State{
+		Backend: BackendState{Host: "vps.example", Domain: "bot.example"},
+		Agents:  []AgentState{{Nickname: "home"}},
+	}, NewSecretStore())
+	for _, want := range []string{"WG_VPS_PASS", "WG_BOT_TOKEN", "WIZARD_TOKEN", "WG_AGENT_TOKEN_HOME"} {
+		if !containsString(missing, want) {
+			t.Fatalf("missing required secret %s in %v", want, missing)
+		}
+	}
+}
+
+func containsString(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildUpdateAgentTokenHashSQLEscapesNickname(t *testing.T) {
 	got := buildUpdateAgentTokenHashSQL("o'hara", "abc")
 	if !strings.Contains(got, "nickname = 'o''hara'") {

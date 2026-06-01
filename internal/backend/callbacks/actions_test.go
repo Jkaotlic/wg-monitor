@@ -108,7 +108,7 @@ func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
 	if c.userID != 7 || c.cmdID != "fixed-id-1" || c.action != "restart_tunnel" || c.check != "tunnel_amnezia_for_awg2" {
 		t.Errorf("got %+v", c)
 	}
-	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "очередь") {
+	if !strings.Contains(statusLine, "Перезапуск awg-manager") || !strings.Contains(statusLine, "очередь") {
 		t.Errorf("unexpected status line: %q", statusLine)
 	}
 }
@@ -135,7 +135,7 @@ func TestCommandAction_CommandActions(t *testing.T) {
 		action  string
 		wantSub string
 	}{
-		{"restart_tunnel", "Перезапуск туннеля"},
+		{"restart_tunnel", "Перезапуск awg-manager"},
 		{"diag_now", "Диагностика"},
 		{"pingcheck_now", "Проверка связи"},
 		{"force_recheck", "Повторная проверка"},

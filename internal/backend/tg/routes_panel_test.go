@@ -62,6 +62,15 @@ func TestRoutesPanelText_HRNeoAbsent(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelTextShowsSnapshotWarnings(t *testing.T) {
+	text := RoutesPanelText("testkeen", wire.RouteSnapshot{
+		Warnings: []string{"/api/routing/tunnels failed: HTTP 502"},
+	})
+	if !strings.Contains(text, "неполный") || !strings.Contains(text, "/api/routing/tunnels") {
+		t.Fatalf("route warnings should be visible in panel:\n%s", text)
+	}
+}
+
 func TestRoutesPanelKeyboard_RebindOnlyForNonZero(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{
@@ -166,6 +175,29 @@ func TestRebindResultKeyboard_OffersTunnelCheck(t *testing.T) {
 		if !routesKeyboardHasCallback(kb, want) {
 			t.Fatalf("rebind result should offer post-route verification %q: %+v", want, kb.InlineKeyboard)
 		}
+	}
+}
+
+func TestRebindResultKeyboard_OffersRouteVerifyAndRollback(t *testing.T) {
+	kb := RebindResultKeyboard(42, "old", "new", 0)
+	for _, want := range []string{
+		"routes_refresh:42:_panel_",
+		"routes_rollback:42:old:new",
+		"check_via_tunnel:42:_panel_",
+	} {
+		if !routesKeyboardHasCallback(kb, want) {
+			t.Fatalf("rebind result should offer %q: %+v", want, kb.InlineKeyboard)
+		}
+	}
+}
+
+func TestRebindResultKeyboard_PartialFailRefreshesFreshRoutes(t *testing.T) {
+	kb := RebindResultKeyboard(42, "old", "new", 1)
+	if !routesKeyboardHasCallback(kb, "routes_refresh:42:_panel_") {
+		t.Fatalf("partial rebind result should refresh routes before retry: %+v", kb.InlineKeyboard)
+	}
+	if routesKeyboardHasCallback(kb, "routes_pick:42:old:new") {
+		t.Fatalf("partial rebind result must not use stale route cache retry: %+v", kb.InlineKeyboard)
 	}
 }
 

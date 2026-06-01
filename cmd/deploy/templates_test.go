@@ -47,6 +47,9 @@ func TestRenderAgentYAML(t *testing.T) {
 		"url: https://example.com",
 		`token: "feedface"`,
 		"nickname: router1",
+		"external_reach:",
+		"enabled: true",
+		"bind_to_default: true",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered yaml missing %q", want)
