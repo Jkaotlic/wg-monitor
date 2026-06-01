@@ -156,24 +156,28 @@ func (r *Router) handleSelfHostedAmneziaToggle(ctx context.Context, q *tg.Callba
 func (r *Router) handleSelfHostedAmneziaDelete(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	inst, _, ok := r.selfHostedAmneziaStoredInstance(args.SelfHostedAmneziaID)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS не найден")
 		return
 	}
 	label := inst.Label
 	if strings.TrimSpace(label) == "" {
 		label = inst.ID
 	}
-	text := fmt.Sprintf("Delete self-hosted Amnezia VPS %s?\n\nThis removes the provider from the bot cabinet. It does not touch already issued configs and does not change the VPS.", label)
+	text := fmt.Sprintf("Удалить self-hosted Amnezia VPS %s?\n\nЭто уберёт провайдера из кабинета бота. Уже выпущенные конфиги, клиенты и сам VPS не изменятся.", label)
+	tok := r.putPendingConfirm(q, args.UserID, "amz_selfhosted_delete_confirm", inst.ID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Yes, delete", CallbackData: fmt.Sprintf("amz_selfhosted_delete_confirm:%d:_panel_:%s", args.UserID, inst.ID)},
+		{Text: "✅ Да, удалить", CallbackData: fmt.Sprintf("amz_selfhosted_delete_confirm:%d:_panel_:%s:%s", args.UserID, inst.ID, tok)},
 	}, {
-		{Text: "Back", CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", args.UserID)},
+		{Text: "↩ Назад", CallbackData: fmt.Sprintf("amz_selfhosted_manage:%d:_panel_", args.UserID)},
 	}}}
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
 func (r *Router) handleSelfHostedAmneziaDeleteConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	if !r.consumePendingConfirm(ctx, q, args, args.SelfHostedAmneziaID) {
+		return
+	}
 	store, err := r.loadSelfHostedAmneziaStore()
 	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
@@ -323,7 +327,7 @@ func (r *Router) handlePendingSelfHostedAmneziaMessage(ctx context.Context, m *t
 func (r *Router) handleSelfHostedAmneziaIssue(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
 	inst, _, err := r.selfHostedAmneziaInstance(args.SelfHostedAmneziaID)
@@ -332,8 +336,9 @@ func (r *Router) handleSelfHostedAmneziaIssue(ctx context.Context, q *tg.Callbac
 		return
 	}
 	text := fmt.Sprintf("Выпустить self-hosted Amnezia .conf для %s через %s?\n\nЯ создам нового клиента на VPS, отправлю .conf в этот топик и поставлю импорт туннеля в очередь роутера.", user.Nickname, inst.Label)
+	tok := r.putPendingConfirm(q, user.ID, "amz_selfhosted_confirm", inst.ID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("amz_selfhosted_confirm:%d:_panel_:%s", user.ID, inst.ID)},
+		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("amz_selfhosted_confirm:%d:_panel_:%s:%s", user.ID, inst.ID, tok)},
 	}, {
 		{Text: "Назад", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", user.ID)},
 	}}}
@@ -364,7 +369,10 @@ func (r *Router) handleSelfHostedAmneziaConfirm(ctx context.Context, q *tg.Callb
 	}
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "router not found")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if !r.consumePendingConfirm(ctx, q, args, args.SelfHostedAmneziaID) {
 		return
 	}
 	inst, cfg, err := r.selfHostedAmneziaInstance(args.SelfHostedAmneziaID)

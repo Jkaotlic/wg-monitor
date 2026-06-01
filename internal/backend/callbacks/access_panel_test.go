@@ -207,6 +207,10 @@ func TestHandleAccessCallback_RemoveOpRequiresConfirm(t *testing.T) {
 	if len(tgFake.editMarkups) != 1 || !markupHasCallback(tgFake.editMarkups[0], fmt.Sprintf("access:0:remove_op_confirm:%d:555", uid)) {
 		t.Fatalf("expected remove confirm callback, markups=%+v", tgFake.editMarkups)
 	}
+	assertNoEnglishDangerCopy(t, tgFake.edits[0]+"\n"+markupButtonTexts(tgFake.editMarkups[0]))
+	if !strings.Contains(tgFake.edits[0], "Удалить оператора") || !strings.Contains(markupButtonTexts(tgFake.editMarkups[0]), "Да, удалить") {
+		t.Fatalf("remove confirmation should use Russian admin copy, text=%q buttons=%q", tgFake.edits[0], markupButtonTexts(tgFake.editMarkups[0]))
+	}
 
 	q.Data = fmt.Sprintf("access:0:remove_op_confirm:%d:555", uid)
 	r.HandleCallback(context.Background(), q)
@@ -237,6 +241,10 @@ func TestHandleAccessCallback_UnbindOwnerRequiresConfirm(t *testing.T) {
 	}
 	if len(tgFake.editMarkups) != 1 || !markupHasCallback(tgFake.editMarkups[0], fmt.Sprintf("access:0:unbind_owner_confirm:%d", uid)) {
 		t.Fatalf("expected unbind confirm callback, markups=%+v", tgFake.editMarkups)
+	}
+	assertNoEnglishDangerCopy(t, tgFake.edits[0]+"\n"+markupButtonTexts(tgFake.editMarkups[0]))
+	if !strings.Contains(tgFake.edits[0], "Отвязать владельца") || !strings.Contains(markupButtonTexts(tgFake.editMarkups[0]), "Да, отвязать") {
+		t.Fatalf("unbind confirmation should use Russian admin copy, text=%q buttons=%q", tgFake.edits[0], markupButtonTexts(tgFake.editMarkups[0]))
 	}
 
 	q.Data = fmt.Sprintf("access:0:unbind_owner_confirm:%d", uid)

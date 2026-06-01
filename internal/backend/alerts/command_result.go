@@ -253,7 +253,7 @@ func commandLabelHuman(action string) string {
 	case "pingcheck_now":
 		return "▶ Тест связи"
 	case "restart_tunnel":
-		return "🔁 Перезапуск туннеля"
+		return "🔁 Перезапуск awg-manager"
 	case "tunnel_restart":
 		return "🔁 Перезапуск туннеля"
 	case "opkg_upgrade":

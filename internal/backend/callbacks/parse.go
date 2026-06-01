@@ -102,6 +102,9 @@ type Args struct {
 	SelfHostedAmneziaID string
 	// SelfHostedAmneziaEnabled is the target enabled state for self-hosted VPS toggles.
 	SelfHostedAmneziaEnabled bool
+	// ConfirmToken is the short, actor-scoped token appended to dangerous
+	// premium/self-hosted confirm callbacks.
+	ConfirmToken string
 	// HideMyCodeID identifies one stored HideMy.name access code in the topic.
 	HideMyCodeID string
 	// HideMyServerID identifies one server from HideMy.name serverlist.
@@ -480,6 +483,11 @@ func Parse(data string) (Args, error) {
 				return Args{}, fmt.Errorf("%s: bad key id %q", action, parts[3])
 			}
 			a.AmneziaKeyID = parts[3]
+			if action == "amz_delete_confirm" {
+				if err := setOptionalConfirmToken(&a, parts, 4, action); err != nil {
+					return Args{}, err
+				}
+			}
 		case "amz_countries":
 			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 				return Args{}, fmt.Errorf("%s requires key id and page: %q", action, data)
@@ -512,6 +520,11 @@ func Parse(data string) (Args, error) {
 			}
 			a.AmneziaKeyID = parts[3]
 			a.AmneziaCountryCode = strings.ToLower(parts[4])
+			if action == "amz_dl_confirm" {
+				if err := setOptionalConfirmToken(&a, parts, 5, action); err != nil {
+					return Args{}, err
+				}
+			}
 		case "amz_revoke", "amz_revoke_confirm":
 			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 				return Args{}, fmt.Errorf("%s requires key id and country code: %q", action, data)
@@ -524,6 +537,11 @@ func Parse(data string) (Args, error) {
 			}
 			a.AmneziaKeyID = parts[3]
 			a.AmneziaCountryCode = strings.ToLower(parts[4])
+			if action == "amz_revoke_confirm" {
+				if err := setOptionalConfirmToken(&a, parts, 5, action); err != nil {
+					return Args{}, err
+				}
+			}
 		case "amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_cancel":
 			// No extra fields.
 		case "amz_selfhosted_issue", "amz_selfhosted_confirm", "amz_selfhosted_edit", "amz_selfhosted_delete", "amz_selfhosted_delete_confirm":
@@ -532,6 +550,11 @@ func Parse(data string) (Args, error) {
 					return Args{}, fmt.Errorf("%s: bad self-hosted id %q", action, parts[3])
 				}
 				a.SelfHostedAmneziaID = strings.ToLower(parts[3])
+			}
+			if action == "amz_selfhosted_confirm" || action == "amz_selfhosted_delete_confirm" {
+				if err := setOptionalConfirmToken(&a, parts, 4, action); err != nil {
+					return Args{}, err
+				}
 			}
 		case "amz_selfhosted_toggle":
 			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
@@ -563,6 +586,11 @@ func Parse(data string) (Args, error) {
 				return Args{}, fmt.Errorf("%s: bad code id %q", action, parts[3])
 			}
 			a.HideMyCodeID = parts[3]
+			if action == "hmn_delete_confirm" {
+				if err := setOptionalConfirmToken(&a, parts, 4, action); err != nil {
+					return Args{}, err
+				}
+			}
 		case "hmn_page":
 			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 				return Args{}, fmt.Errorf("%s requires code id and page: %q", action, data)
@@ -588,9 +616,28 @@ func Parse(data string) (Args, error) {
 			}
 			a.HideMyCodeID = parts[3]
 			a.HideMyServerID = parts[4]
+			if action == "hmn_dl_confirm" {
+				if err := setOptionalConfirmToken(&a, parts, 5, action); err != nil {
+					return Args{}, err
+				}
+			}
 		}
 	}
 	return a, nil
+}
+
+func setOptionalConfirmToken(a *Args, parts []string, idx int, action string) error {
+	if len(parts) <= idx {
+		return nil
+	}
+	if parts[idx] == "" {
+		return fmt.Errorf("%s: empty confirm token", action)
+	}
+	if !callbackCodeRe.MatchString(parts[idx]) {
+		return fmt.Errorf("%s: bad confirm token %q", action, parts[idx])
+	}
+	a.ConfirmToken = parts[idx]
+	return nil
 }
 
 func parseTTL(s string) (time.Duration, error) {

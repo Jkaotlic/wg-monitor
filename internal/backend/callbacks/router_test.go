@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -114,6 +115,22 @@ func markupHasCallbackPrefix(kb *tg.InlineKeyboardMarkup, wantPrefix string) boo
 	return false
 }
 
+func firstCallbackWithPrefix(t *testing.T, kb *tg.InlineKeyboardMarkup, wantPrefix string) string {
+	t.Helper()
+	if kb == nil {
+		t.Fatalf("nil keyboard, want callback prefix %q", wantPrefix)
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, wantPrefix) {
+				return btn.CallbackData
+			}
+		}
+	}
+	t.Fatalf("keyboard missing callback prefix %q: %+v", wantPrefix, kb.InlineKeyboard)
+	return ""
+}
+
 func TestRouterDispatchesSilence(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -205,8 +222,80 @@ func TestRouterHandleCallback_MissingRouterDoesNotEnqueueCommand(t *testing.T) {
 	if len(sink.calls) != 0 {
 		t.Fatalf("missing router callback must not enqueue command, got %+v", sink.calls)
 	}
-	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "router") {
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "роутер") {
 		t.Fatalf("missing router should be answered to operator, got answers=%v", f.answers)
+	}
+}
+
+func TestACL_RejectsOwnerOperatorCommandCallbacksBeforeRouterTopic(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		actor int64
+		setup func(t *testing.T, d *db.DB, uid int64)
+	}{
+		{
+			name:  "owner",
+			actor: 555,
+			setup: func(t *testing.T, d *db.DB, uid int64) {
+				t.Helper()
+				if err := d.Users().SetTelegramUserID(uid, 555); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:  "operator",
+			actor: 777,
+			setup: func(t *testing.T, d *db.DB, uid int64) {
+				t.Helper()
+				if err := d.Users().SetTelegramUserID(uid, 555); err != nil {
+					t.Fatal(err)
+				}
+				if err := d.RouterOperators().Add(uid, 777, 12345); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			tc.setup(t, d, uid)
+			f := &fakeRouterTG{}
+			sink := &fakeEnqueuer{}
+			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+			r.HandleCallback(context.Background(), &tg.CallbackQuery{
+				ID:      "diag-before-topic",
+				From:    tg.User{ID: tc.actor},
+				Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+				Data:    "diag_now:" + itoa(uid) + ":_menu",
+			})
+
+			if len(sink.calls) != 0 {
+				t.Fatalf("non-admin %s must not enqueue command before router topic exists: %+v", tc.name, sink.calls)
+			}
+			if len(f.answers) != 1 || !strings.Contains(f.answers[0], "топик") {
+				t.Fatalf("expected topic rejection toast, got answers=%v", f.answers)
+			}
+		})
+	}
+}
+
+func TestACL_AllowsAdminCommandCallbackBeforeRouterTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "diag-admin-before-topic",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "diag_now:" + itoa(uid) + ":_menu",
+	})
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "diag_now" {
+		t.Fatalf("admin bootstrap callback should still enqueue command, got %+v", sink.calls)
 	}
 }
 
@@ -272,11 +361,18 @@ func TestRouterAllowsOperatorSelfHostedAmneziaIssue(t *testing.T) {
 	}
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], "amz_selfhosted_confirm:"+itoa(uid)+":_panel_:home") {
+	if len(f.editMarkups) != 1 {
 		t.Fatalf("operator should see self-hosted issue confirm, markups=%+v answers=%+v", f.editMarkups, f.answers)
 	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_selfhosted_confirm:"+itoa(uid)+":_panel_:home:")
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-op-wrong-actor",
+		From:    tg.User{ID: 777},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid},
+		Data:    confirmData,
+	})
 	if len(sink.calls) != 0 {
-		t.Fatalf("first issue tap must not enqueue anything before confirm: %+v", sink.calls)
+		t.Fatalf("first issue tap and wrong actor confirm must not enqueue anything: %+v", sink.calls)
 	}
 }
 
@@ -521,15 +617,38 @@ func TestSelfHostedAmneziaDeleteRequiresConfirm(t *testing.T) {
 	if _, ok := afterAsk.Get("home"); !ok {
 		t.Fatalf("first delete tap must not delete instance")
 	}
-	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], "amz_selfhosted_delete_confirm:"+itoa(uid)+":_panel_:home") {
+	if len(f.editMarkups) != 1 {
 		t.Fatalf("first delete tap should render confirm callback, markups=%+v", f.editMarkups)
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_selfhosted_delete_confirm:"+itoa(uid)+":_panel_:home:")
+	if confirmData == "amz_selfhosted_delete_confirm:"+itoa(uid)+":_panel_:home" {
+		t.Fatalf("self-hosted delete confirm callback must carry a token")
+	}
+	assertNoEnglishDangerCopy(t, f.edits[0]+"\n"+markupButtonTexts(f.editMarkups[0]))
+	if !strings.Contains(f.edits[0], "Удалить self-hosted Amnezia VPS") || !strings.Contains(markupButtonTexts(f.editMarkups[0]), "Да, удалить") {
+		t.Fatalf("self-hosted delete confirmation should use Russian copy, text=%q buttons=%q", f.edits[0], markupButtonTexts(f.editMarkups[0]))
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-delete-confirm-wrong-actor",
+		From:    tg.User{ID: 999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	afterWrongActor, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := afterWrongActor.Get("home"); !ok {
+		t.Fatalf("wrong actor must not consume self-hosted delete confirm")
 	}
 
 	r.HandleCallback(context.Background(), &tg.CallbackQuery{
 		ID:      "selfhosted-delete-confirm",
 		From:    tg.User{ID: 12345},
 		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
-		Data:    "amz_selfhosted_delete_confirm:" + itoa(uid) + ":_panel_:home",
+		Data:    confirmData,
 	})
 
 	afterConfirm, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
@@ -624,25 +743,310 @@ func TestAmneziaRevokeConfirmFreesCountrySlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	q := &tg.CallbackQuery{
+	ask := &tg.CallbackQuery{
+		ID:      "cb-amz-revoke-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_revoke:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
+	}
+	r.HandleCallback(context.Background(), ask)
+	if revokeBody != "" {
+		t.Fatalf("ask must not call revoke API, got %q", revokeBody)
+	}
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("revoke ask should render confirmation markup, got %d", len(f.editMarkups))
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_revoke_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":de:")
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "cb-amz-revoke-confirm-wrong-actor",
+		From:    tg.User{ID: 999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if revokeBody != "" {
+		t.Fatalf("wrong actor must not call revoke API, got %q", revokeBody)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
 		ID:      "cb-amz-revoke-confirm",
 		From:    tg.User{ID: 12345},
 		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
-		Data:    "amz_revoke_confirm:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
-	}
-	r.HandleCallback(context.Background(), q)
+		Data:    confirmData,
+	})
 
 	if revokeBody != `{"countryCode":"de"}` {
 		t.Fatalf("bad revoke payload: %q", revokeBody)
 	}
-	if len(f.edits) != 1 {
+	if len(f.edits) != 2 {
 		t.Fatalf("revoke should refresh visible Amnezia UI, edits=%d answers=%v", len(f.edits), f.answers)
 	}
-	if !strings.Contains(strings.ToLower(f.edits[0]), "слот освобождён") {
-		t.Fatalf("revoke success text not rendered: %s", f.edits[0])
+	if !strings.Contains(strings.ToLower(f.edits[1]), "слот освобождён") {
+		t.Fatalf("revoke success text not rendered: %s", f.edits[1])
 	}
-	if !markupHasCallback(f.editMarkups[0], "amz_dl:"+itoa(uid)+":_panel_:"+stored.ID+":nl") {
-		t.Fatalf("revoke success keyboard should show country choices again: %+v", f.editMarkups[0].InlineKeyboard)
+	if !markupHasCallback(f.editMarkups[1], "amz_dl:"+itoa(uid)+":_panel_:"+stored.ID+":nl") {
+		t.Fatalf("revoke success keyboard should show country choices again: %+v", f.editMarkups[1].InlineKeyboard)
+	}
+}
+
+func TestAmneziaDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaSecretsPath: t.TempDir() + "/amnezia-premium.json",
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_delete:" + itoa(uid) + ":_panel_:" + stored.ID,
+	})
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("delete ask should render confirmation markup, got %d", len(f.editMarkups))
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_delete_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":")
+	legacyConfirm := "amz_delete_confirm:" + itoa(uid) + ":_panel_:" + stored.ID
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-confirm-legacy",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    legacyConfirm,
+	})
+	if _, ok := r.amneziaStoredKey(uid, stored.ID); !ok {
+		t.Fatal("legacy tokenless confirm must not delete Amnezia key")
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-confirm-wrong-actor",
+		From:    tg.User{ID: 999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if _, ok := r.amneziaStoredKey(uid, stored.ID); !ok {
+		t.Fatal("wrong actor must not delete Amnezia key")
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-confirm",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if _, ok := r.amneziaStoredKey(uid, stored.ID); ok {
+		t.Fatal("correct actor confirm should delete Amnezia key")
+	}
+}
+
+func TestAmneziaDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
+	d, uid := newTestDB(t)
+	var downloadCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"subscription_status":"active","active_device_count":0,"max_device_count":2,"available_countries":[{"server_country_code":"de","server_country_name":"Germany"}],"issued_configs":[]}}`))
+		case "/api/download-config":
+			downloadCalls++
+			_, _ = w.Write([]byte("[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = test\n"))
+		default:
+			t.Fatalf("unexpected Amnezia path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaBaseURL:     srv.URL,
+		AmneziaSecretsPath: t.TempDir() + "/amnezia-premium.json",
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-download-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_dl:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
+	})
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("download ask should render confirmation markup, got %d", len(f.editMarkups))
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_dl_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":de:")
+	legacyConfirm := "amz_dl_confirm:" + itoa(uid) + ":_panel_:" + stored.ID + ":de"
+
+	for _, tc := range []struct {
+		id     string
+		actor  int64
+		data   string
+		reason string
+	}{
+		{id: "amz-download-confirm-legacy", actor: 12345, data: legacyConfirm, reason: "tokenless legacy confirm"},
+		{id: "amz-download-confirm-wrong-actor", actor: 999, data: confirmData, reason: "wrong actor"},
+	} {
+		r.HandleCallback(context.Background(), &tg.CallbackQuery{
+			ID:      tc.id,
+			From:    tg.User{ID: tc.actor},
+			Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+			Data:    tc.data,
+		})
+		if len(sink.calls) != 0 || downloadCalls != 0 {
+			t.Fatalf("%s must not download/enqueue, calls=%+v downloadCalls=%d", tc.reason, sink.calls, downloadCalls)
+		}
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-download-confirm",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if downloadCalls != 1 {
+		t.Fatalf("correct actor confirm should download once, got %d", downloadCalls)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
+		t.Fatalf("correct actor confirm should enqueue tunnel_import, calls=%+v", sink.calls)
+	}
+}
+
+func TestHideMyDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{
+		ChatID:            -100,
+		AdminUserID:       12345,
+		HideMySecretsPath: t.TempDir() + "/hidemy.json",
+	})
+	stored, err := r.addHideMyCode(uid, "1234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "hmn_delete:" + itoa(uid) + ":_panel_:" + stored.ID,
+	})
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("delete ask should render confirmation markup, got %d", len(f.editMarkups))
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "hmn_delete_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":")
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-delete-confirm-wrong-actor",
+		From:    tg.User{ID: 999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if _, ok := r.hideMyStoredCode(uid, stored.ID); !ok {
+		t.Fatalf("wrong actor must not delete HideMy code")
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-delete-confirm",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if _, ok := r.hideMyStoredCode(uid, stored.ID); ok {
+		t.Fatalf("correct actor confirm should delete HideMy code")
+	}
+}
+
+func TestHideMyDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
+	d, uid := newTestDB(t)
+	const serverIP = "198.51.100.10"
+	serverID := hidemy.ServerID(serverIP)
+	var configCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/serverlist.php":
+			if r.URL.Query().Get("out") != "js" {
+				t.Fatalf("bad serverlist query: %s", r.URL.RawQuery)
+			}
+			if _, ok := r.URL.Query()["wg"]; !ok {
+				t.Fatalf("serverlist query missing wg flag: %s", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`[{"name_en":"Netherlands","services":{"wg":{"ip":"` + serverIP + `"}}}]`))
+		case "/api/vpn_get_config_wg.php":
+			configCalls++
+			_, _ = w.Write([]byte("[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = test\n"))
+		default:
+			t.Fatalf("unexpected HideMy path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:            -100,
+		AdminUserID:       12345,
+		HideMyBaseURL:     srv.URL,
+		HideMySecretsPath: t.TempDir() + "/hidemy.json",
+	})
+	stored, err := r.addHideMyCode(uid, "1234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-download-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "hmn_dl:" + itoa(uid) + ":_panel_:" + stored.ID + ":" + serverID,
+	})
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("download ask should render confirmation markup, got %d", len(f.editMarkups))
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "hmn_dl_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":"+serverID+":")
+	legacyConfirm := "hmn_dl_confirm:" + itoa(uid) + ":_panel_:" + stored.ID + ":" + serverID
+
+	for _, tc := range []struct {
+		id     string
+		actor  int64
+		data   string
+		reason string
+	}{
+		{id: "hmn-download-confirm-legacy", actor: 12345, data: legacyConfirm, reason: "tokenless legacy confirm"},
+		{id: "hmn-download-confirm-wrong-actor", actor: 999, data: confirmData, reason: "wrong actor"},
+	} {
+		r.HandleCallback(context.Background(), &tg.CallbackQuery{
+			ID:      tc.id,
+			From:    tg.User{ID: tc.actor},
+			Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+			Data:    tc.data,
+		})
+		if len(sink.calls) != 0 || configCalls != 0 {
+			t.Fatalf("%s must not download/enqueue, calls=%+v configCalls=%d", tc.reason, sink.calls, configCalls)
+		}
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-download-confirm",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if configCalls != 1 {
+		t.Fatalf("correct actor confirm should download once, got %d", configCalls)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
+		t.Fatalf("correct actor confirm should enqueue tunnel_import, calls=%+v", sink.calls)
 	}
 }
 
@@ -658,6 +1062,58 @@ func keyboardContainsCallback(kb *tg.InlineKeyboardMarkup, callback string) bool
 		}
 	}
 	return false
+}
+
+func markupButtonTexts(kb *tg.InlineKeyboardMarkup) string {
+	if kb == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if b.Len() > 0 {
+				b.WriteString("\n")
+			}
+			b.WriteString(btn.Text)
+		}
+	}
+	return b.String()
+}
+
+func assertNoEnglishDangerCopy(t *testing.T, text string) {
+	t.Helper()
+	for _, forbidden := range []string{
+		"Yes, ",
+		"Back",
+		"Cancel",
+		"Confirm ",
+		"What happens",
+		"Maintenance",
+		"Delete self-hosted",
+		"Disable opkg feed",
+		"Remove operator",
+		"Unbind owner",
+		"The user will",
+		"The agent will",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("danger confirmation still contains English copy %q in:\n%s", forbidden, text)
+		}
+	}
+}
+
+func assertNoEnglishUserFacingCopy(t *testing.T, text string) {
+	t.Helper()
+	for _, forbidden := range []string{
+		"router not found",
+		"user not found",
+		"router is not bound",
+		"command sink",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("user-facing copy still contains English %q in:\n%s", forbidden, text)
+		}
+	}
 }
 
 func TestRouterUnknownAction(t *testing.T) {
@@ -878,6 +1334,75 @@ func TestRouterTunnelToggleStaleButtonRefreshesInsteadOfCommand(t *testing.T) {
 	}
 	if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
 		t.Fatalf("stale toggle should refresh panel, edits=%v", f.edits)
+	}
+}
+
+func TestRouterTunnelPanelActionStaleNDMSRefreshesInsteadOfCommand(t *testing.T) {
+	for _, action := range []string{"tunnel_disable", "tunnel_restart", "tunnel_delete"} {
+		t.Run(action, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			f := &fakeRouterTG{}
+			sink := &fakeEnqueuer{}
+			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+			cache := &RoutesCache{TTL: time.Minute}
+			cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+				ID: "awg13", Name: "de", Iface: "nwg9", NDMSName: "Wireguard9", Enabled: true,
+			}}})
+			r.SetRoutesCache(cache)
+
+			q := &tg.CallbackQuery{
+				ID:      "cbk-stale-ndms",
+				From:    tg.User{ID: 12345},
+				Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+				Data:    action + ":" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+			}
+			r.HandleCallback(context.Background(), q)
+
+			if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+				t.Fatalf("stale %s should enqueue only live refresh, got %+v", action, sink.calls)
+			}
+			if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
+				t.Fatalf("stale %s should refresh panel, edits=%v", action, f.edits)
+			}
+		})
+	}
+}
+
+func TestRouterTunnelToggleStaleEnabledStateRefreshesInsteadOfCommand(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		action         string
+		currentEnabled bool
+	}{
+		{name: "disable already disabled", action: "tunnel_disable", currentEnabled: false},
+		{name: "enable already enabled", action: "tunnel_enable", currentEnabled: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			f := &fakeRouterTG{}
+			sink := &fakeEnqueuer{}
+			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+			cache := &RoutesCache{TTL: time.Minute}
+			cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+				ID: "awg13", Name: "de", Iface: "nwg3", NDMSName: "Wireguard3", Enabled: tc.currentEnabled,
+			}}})
+			r.SetRoutesCache(cache)
+
+			q := &tg.CallbackQuery{
+				ID:      "cbk-stale-enabled",
+				From:    tg.User{ID: 12345},
+				Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+				Data:    tc.action + ":" + itoa(uid) + ":tunnel_awg13:Wireguard3",
+			}
+			r.HandleCallback(context.Background(), q)
+
+			if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
+				t.Fatalf("stale %s should enqueue only live refresh, got %+v", tc.action, sink.calls)
+			}
+			if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
+				t.Fatalf("stale %s should refresh panel, edits=%v", tc.action, f.edits)
+			}
+		})
 	}
 }
 
@@ -1632,20 +2157,26 @@ func TestACL_RejectsNonOwner(t *testing.T) {
 	}
 }
 
-// ACL gate: bound owner can tap callbacks targeting their own router.
+// ACL gate: bound owner can tap callbacks targeting their own router from the
+// recorded per-router topic.
 func TestACL_AllowsBoundOwner(t *testing.T) {
 	d, uid := newTestDB(t)
 	const owner = int64(11111)
+	const thread = int64(4242)
 	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(uid, thread); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeRouterTG{}
 	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
 
+	tid := thread
 	q := &tg.CallbackQuery{
 		ID:      "cbk-acl-2",
 		From:    tg.User{ID: owner},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴"},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "🔴"},
 		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
 	}
 	r.HandleCallback(context.Background(), q)
@@ -1803,7 +2334,7 @@ func TestACL_UnboundWithoutTopicRejectsCallback(t *testing.T) {
 	if len(sink.calls) != 0 {
 		t.Fatalf("unbound router without topic must not enqueue command, got %+v", sink.calls)
 	}
-	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "not bound") {
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "не привязан") {
 		t.Fatalf("expected unbound-topic rejection toast, got %v", f.answers)
 	}
 }
@@ -1959,6 +2490,10 @@ func TestRouter_OpkgDisable_RequiresConfirm(t *testing.T) {
 	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], fmt.Sprintf("opkg_disable_confirm:%d:_menu:tok1", uid)) {
 		t.Fatalf("first opkg_disable tap should render confirm callback, markups=%+v answers=%+v", f.editMarkups, f.answers)
 	}
+	assertNoEnglishDangerCopy(t, f.edits[0]+"\n"+markupButtonTexts(f.editMarkups[0]))
+	if !strings.Contains(f.edits[0], "Отключить opkg-фид") || !strings.Contains(markupButtonTexts(f.editMarkups[0]), "Да, отключить фид") {
+		t.Fatalf("opkg disable confirmation should use Russian copy, text=%q buttons=%q", f.edits[0], markupButtonTexts(f.editMarkups[0]))
+	}
 
 	q.ID = "q1-confirm"
 	q.Data = fmt.Sprintf("opkg_disable_confirm:%d:_menu:tok1", uid)
@@ -2008,6 +2543,80 @@ func TestRouter_OpkgDisable_NilAction(t *testing.T) {
 	}
 	if !strings.Contains(f.answers[0], "не настроен") {
 		t.Errorf("expected 'не настроен' toast when action is nil, got %q", f.answers[0])
+	}
+}
+
+func TestCallbackUserFacingNotFoundToastsAreRussian(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345})
+
+	cases := []struct {
+		name string
+		run  func(*tg.CallbackQuery, Args)
+		args Args
+	}{
+		{
+			name: "acl missing router",
+			run: func(q *tg.CallbackQuery, args Args) {
+				r.aclAllow(context.Background(), q, args)
+			},
+			args: Args{UserID: 999999},
+		},
+		{
+			name: "routes open missing user",
+			run: func(q *tg.CallbackQuery, args Args) {
+				r.handleRoutesOpen(context.Background(), q, args, false)
+			},
+			args: Args{UserID: 999999},
+		},
+		{
+			name: "maint open missing user",
+			run: func(q *tg.CallbackQuery, args Args) {
+				r.handleMaintOpen(context.Background(), q, args)
+			},
+			args: Args{UserID: 999999},
+		},
+		{
+			name: "opkg upgrade missing user",
+			run: func(q *tg.CallbackQuery, args Args) {
+				r.handleOpkgUpgradeAsk(context.Background(), q, args)
+			},
+			args: Args{UserID: 999999},
+		},
+		{
+			name: "selfhosted issue missing user",
+			run: func(q *tg.CallbackQuery, args Args) {
+				r.handleSelfHostedAmneziaIssue(context.Background(), q, args)
+			},
+			args: Args{UserID: 999999, SelfHostedAmneziaID: "home"},
+		},
+		{
+			name: "selfhosted confirm missing user",
+			run: func(q *tg.CallbackQuery, args Args) {
+				r.handleSelfHostedAmneziaConfirm(context.Background(), q, args)
+			},
+			args: Args{UserID: 999999, SelfHostedAmneziaID: "home"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f.answers = nil
+			q := &tg.CallbackQuery{
+				ID:      "q-" + tc.name,
+				From:    tg.User{ID: 12345},
+				Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 1},
+			}
+			tc.run(q, tc.args)
+			if len(f.answers) != 1 {
+				t.Fatalf("expected one toast, got %d: %+v", len(f.answers), f.answers)
+			}
+			assertNoEnglishUserFacingCopy(t, f.answers[0])
+			if !strings.Contains(f.answers[0], "роутер") {
+				t.Fatalf("toast should explain missing router in Russian, got %q", f.answers[0])
+			}
+		})
 	}
 }
 
@@ -2195,6 +2804,36 @@ func TestRouterHandleMessage_OperatorBlocked_AdminSlashCommand(t *testing.T) {
 
 	if len(f.sentMsgs) != 0 {
 		t.Errorf("operator slash command must be dropped, got sentMsgs=%v", f.sentMsgs)
+	}
+}
+
+func TestRouterHandleMessage_OperatorFleetButtonsBlockedInOwnTopic(t *testing.T) {
+	for _, text := range []string{"📋 Список юзеров", "📊 Здоровье флота"} {
+		t.Run(text, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+				t.Fatal(err)
+			}
+			_ = d.Users().SetTelegramUserID(uid, 100)
+			_ = d.RouterOperators().Add(uid, 200, 42)
+
+			f := &fakeRouterTG{}
+			sink := &fakeEnqueuer{}
+			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+			tid := int64(55)
+			r.HandleMessage(context.Background(), &tg.Message{
+				MessageID:       99,
+				Chat:            tg.Chat{ID: -100},
+				From:            tg.User{ID: 200},
+				MessageThreadID: &tid,
+				Text:            text,
+			})
+
+			if len(f.sentMsgs) != 0 || len(sink.calls) != 0 {
+				t.Fatalf("operator must not access fleet-wide button %q from router topic; sent=%v calls=%+v", text, f.sentMsgs, sink.calls)
+			}
+		})
 	}
 }
 

@@ -358,8 +358,9 @@ func (r *Router) handleAmneziaDeleteAsk(ctx context.Context, q *tg.CallbackQuery
 		return
 	}
 	text := fmt.Sprintf("Удалить %s из Amnezia Premium этого топика?\n\nСам Premium key в Amnezia не перевыпускается, я удалю только сохранение в боте.", stored.Label)
+	tok := r.putPendingConfirm(q, user.ID, "amz_delete_confirm", args.AmneziaKeyID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Да, удалить", CallbackData: fmt.Sprintf("amz_delete_confirm:%d:_panel_:%s", user.ID, args.AmneziaKeyID)},
+		{Text: "Да, удалить", CallbackData: fmt.Sprintf("amz_delete_confirm:%d:_panel_:%s:%s", user.ID, args.AmneziaKeyID, tok)},
 	}, {
 		{Text: "Назад", CallbackData: fmt.Sprintf("amz_refresh:%d:_panel_", user.ID)},
 	}}}
@@ -371,6 +372,9 @@ func (r *Router) handleAmneziaDeleteConfirm(ctx context.Context, q *tg.CallbackQ
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if !r.consumePendingConfirm(ctx, q, args, args.AmneziaKeyID) {
 		return
 	}
 	if err := r.deleteAmneziaKey(user.ID, args.AmneziaKeyID); err != nil {
@@ -419,8 +423,9 @@ func (r *Router) handleAmneziaDownloadAsk(ctx context.Context, q *tg.CallbackQue
 	if !issued {
 		text += "\n\nЭто новый country config, он может занять слот подписки."
 	}
+	tok := r.putPendingConfirm(q, args.UserID, "amz_dl_confirm", args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode))
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("amz_dl_confirm:%d:_panel_:%s:%s", args.UserID, args.AmneziaKeyID, args.AmneziaCountryCode)},
+		{Text: "Да, выпустить", CallbackData: fmt.Sprintf("amz_dl_confirm:%d:_panel_:%s:%s:%s", args.UserID, args.AmneziaKeyID, args.AmneziaCountryCode, tok)},
 	}, {
 		{Text: "Назад", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", args.UserID, args.AmneziaKeyID)},
 	}}}
@@ -436,6 +441,9 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if !r.consumePendingConfirm(ctx, q, args, args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode)) {
 		return
 	}
 	key, _ := r.getAmneziaKeyByID(user.ID, args.AmneziaKeyID)
@@ -490,8 +498,9 @@ func (r *Router) handleAmneziaRevokeAsk(ctx context.Context, q *tg.CallbackQuery
 	}
 	country := strings.ToUpper(args.AmneziaCountryCode)
 	text := fmt.Sprintf("Освободить слот Amnezia Premium?\n\nЯ отзову country config %s из кабинета %s. Premium key не удаляется; после освобождения можно снова выбрать страну и выпустить новый .conf.", country, stored.Label)
+	tok := r.putPendingConfirm(q, user.ID, "amz_revoke_confirm", args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode))
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "Да, освободить " + country, CallbackData: fmt.Sprintf("amz_revoke_confirm:%d:_panel_:%s:%s", user.ID, args.AmneziaKeyID, args.AmneziaCountryCode)},
+		{Text: "Да, освободить " + country, CallbackData: fmt.Sprintf("amz_revoke_confirm:%d:_panel_:%s:%s:%s", user.ID, args.AmneziaKeyID, args.AmneziaCountryCode, tok)},
 	}, {
 		{Text: "Назад", CallbackData: fmt.Sprintf("amz_countries:%d:_panel_:%s:0", user.ID, args.AmneziaKeyID)},
 	}}}
@@ -503,6 +512,9 @@ func (r *Router) handleAmneziaRevokeConfirm(ctx context.Context, q *tg.CallbackQ
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
+		return
+	}
+	if !r.consumePendingConfirm(ctx, q, args, args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode)) {
 		return
 	}
 	key, _ := r.getAmneziaKeyByID(user.ID, args.AmneziaKeyID)
