@@ -65,7 +65,7 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 //
 //	routes_rebind:<userID>:<src_tunnel_id>
 //	routes_refresh:<userID>:_panel_
-//	routes_close:0:_panel_
+//	routes_close:<userID>:_panel_
 func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMarkup {
 	rows := [][]InlineKeyboardButton{}
 	var row []InlineKeyboardButton
@@ -113,7 +113,7 @@ func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMa
 	rows = append(rows, HelpRowFor("routes"))
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
-		{Text: "Закрыть", CallbackData: "routes_close:0:_panel_"},
+		{Text: "Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
 	})
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
 }
@@ -425,7 +425,7 @@ func RebindResultKeyboard(userID int64, srcID, dstID string, totalFailed int) In
 	})
 	rows = append(rows, []InlineKeyboardButton{
 		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
-		{Text: "Закрыть", CallbackData: "routes_close:0:_panel_"},
+		{Text: "Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
 	})
 	return InlineKeyboardMarkup{InlineKeyboard: rows}
 }

@@ -26,6 +26,7 @@ type deferredAWGMConfigParams struct {
 	WizardToken      string
 	Release          *Release
 	ExpiresAt        time.Time
+	RecoveryHint     string
 }
 
 func buildDeferredAWGMConfig(p deferredAWGMConfigParams) (awgmRelayConfig, error) {
@@ -64,7 +65,52 @@ func buildDeferredAWGMConfig(p deferredAWGMConfigParams) (awgmRelayConfig, error
 		ReleaseBase:      backendURL + "/v1/releases/download",
 		InitScript:       strings.TrimRight(string(initScript), "\n"),
 		ExpiresAtUnix:    p.ExpiresAt.Unix(),
+		RecoveryHint:     p.RecoveryHint,
 	}, nil
+}
+
+func deferredAWGMTokenEnv(nickname string) string {
+	return "WG_AGENT_TOKEN_" + strings.ToUpper(strings.TrimSpace(nickname))
+}
+
+func deferredAWGMTokenFile(nickname string) string {
+	return deferredAWGMJobDir + "/" + safeRelayName(nickname) + ".json.token"
+}
+
+func deferredAWGMRecoveryHint(state *State, ag *AgentState, tokenFile, tokenEnv string) string {
+	host := "<vps-host>"
+	port := 22
+	user := "root"
+	if state != nil {
+		if strings.TrimSpace(state.Backend.Host) != "" {
+			host = strings.TrimSpace(state.Backend.Host)
+		}
+		port = portOrDefault(state.Backend.Port, 22)
+		user = userOrDefault(state.Backend.User, "root")
+	}
+	if tokenEnv == "" && ag != nil {
+		tokenEnv = deferredAWGMTokenEnv(ag.Nickname)
+	}
+	secretPath := secretsCachePath()
+	if strings.TrimSpace(secretPath) == "" {
+		secretPath = "<local secrets.env>"
+	}
+	copyCmd := fmt.Sprintf("ssh -p %d %s@%s \"cat %s\" | Add-Content -Encoding ascii \"%s\"",
+		port, user, host, tokenFile, secretPath)
+	return strings.Join([]string{
+		"recovery: импортируй " + tokenEnv + " из deferred AWG token artifact",
+		"PowerShell: " + copyCmd,
+		"Then: wg-monitor-deploy sync-vps",
+		"Then: wg-monitor-deploy doctor",
+	}, "\n")
+}
+
+func printDeferredAWGMRecoveryHint(hint string) {
+	for _, line := range strings.Split(hint, "\n") {
+		if strings.TrimSpace(line) != "" {
+			PrintInfo(line)
+		}
+	}
 }
 
 func renderDeferredAWGMRunnerScript() string {
@@ -117,6 +163,8 @@ func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *Age
 		return fmt.Errorf("backend SSH host is not configured; install backend first")
 	}
 	backendURL := strings.TrimRight("https://"+strings.TrimSpace(state.Backend.Domain), "/")
+	tokenEnv := deferredAWGMTokenEnv(ag.Nickname)
+	tokenFile := deferredAWGMTokenFile(ag.Nickname)
 	cfg, err := buildDeferredAWGMConfig(deferredAWGMConfigParams{
 		Agent:            *ag,
 		APIKey:           apiKey,
@@ -128,6 +176,7 @@ func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *Age
 		WizardToken:      wizardToken,
 		Release:          rel,
 		ExpiresAt:        time.Now().UTC().Add(7 * 24 * time.Hour),
+		RecoveryHint:     deferredAWGMRecoveryHint(state, ag, tokenFile, tokenEnv),
 	})
 	if err != nil {
 		return err
@@ -205,11 +254,12 @@ func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *
 	ag.AWGMAuth = authMode
 	ag.PendingVersion = rel.TagName
 	ag.PendingSince = now
-	tokenEnv := "WG_AGENT_TOKEN_" + strings.ToUpper(strings.TrimSpace(ag.Nickname))
-	tokenFile := deferredAWGMJobDir + "/" + safeRelayName(ag.Nickname) + ".json.token"
+	tokenEnv := deferredAWGMTokenEnv(ag.Nickname)
+	tokenFile := deferredAWGMTokenFile(ag.Nickname)
 	PrintOK("отложенный деплой поставлен на VPS: " + ag.Nickname + " → " + rel.TagName)
 	PrintInfo("статус на VPS: systemctl status wg-monitor-deferred-awgm.timer; job лежит в " + deferredAWGMJobDir)
-	PrintInfo("после успеха runner оставит " + tokenFile + " (" + tokenEnv + "); импортируй его в локальные deploy secrets перед doctor/auth-probe на этом ПК")
+	PrintInfo("после успеха runner оставит " + tokenFile + " (" + tokenEnv + ")")
+	printDeferredAWGMRecoveryHint(deferredAWGMRecoveryHint(state, ag, tokenFile, tokenEnv))
 	return true, nil
 }
 

@@ -31,6 +31,7 @@ type awgmRelayConfig struct {
 	InitScript       string `json:"init_script,omitempty"`
 	ExpiresAtUnix    int64  `json:"expires_at_unix,omitempty"`
 	RawToken         string `json:"raw_token,omitempty"`
+	RecoveryHint     string `json:"recovery_hint,omitempty"`
 }
 
 func runAWGMBootstrapDirect(awgm *AWGMClient, script, terminalUser, terminalPass string) (TerminalRunResult, error) {
@@ -922,6 +923,11 @@ def run_deferred_bootstrap(cfg, cfg_path):
         f.write("token_env=%s\n" % token_env)
         f.write("token_file=%s\n" % token_path)
         f.write("next=import token_file into local deploy secrets before local doctor/auth-probe\n")
+        recovery_hint = (cfg.get("recovery_hint") or "").strip()
+        if recovery_hint:
+            f.write("recovery_hint=<<EOF\n")
+            f.write(recovery_hint + "\n")
+            f.write("EOF\n")
     os.remove(cfg_path)
 
 def login_terminal(sock, cfg):

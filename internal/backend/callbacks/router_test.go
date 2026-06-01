@@ -170,6 +170,33 @@ func TestRouterAllowsNonAdminInRightChat(t *testing.T) {
 	}
 }
 
+func TestRouterRejectsLegacyRoutesCloseFromNonOwnerInRouterTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 77); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, 111); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+	q := &tg.CallbackQuery{
+		ID:      "routes-close-legacy",
+		From:    tg.User{ID: 999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: ptrInt64(77), Text: "routes panel"},
+		Data:    "routes_close:0:_panel_",
+	}
+
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 0 {
+		t.Fatalf("legacy routes_close:0 must not let non-owner close router panel, edits=%v", f.edits)
+	}
+	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "роутер") {
+		t.Fatalf("expected router ACL rejection toast, answers=%v", f.answers)
+	}
+}
+
 func TestRouterRejectsOperatorSelfHostedAmneziaIssue(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.RouterOperators().Add(uid, 555, 12345); err != nil {

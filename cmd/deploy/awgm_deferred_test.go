@@ -49,6 +49,27 @@ func TestBuildDeferredAWGMConfigDefersEnrollmentUntilWake(t *testing.T) {
 	}
 }
 
+func TestBuildDeferredAWGMConfigCarriesRecoveryHint(t *testing.T) {
+	cfg, err := buildDeferredAWGMConfig(deferredAWGMConfigParams{
+		Agent: AgentState{
+			Nickname: "client-g",
+			Kind:     "mobile",
+			AWGMURL:  "https://awg.client-g.example.test",
+		},
+		BackendURL:   "https://wg.example.test",
+		WizardToken:  "wizard-token",
+		Release:      &Release{TagName: "v0.13.0-rc60"},
+		ExpiresAt:    time.Unix(2000, 0).UTC(),
+		RecoveryHint: "PowerShell: ssh ... | Add-Content ...\nThen: wg-monitor-deploy doctor",
+	})
+	if err != nil {
+		t.Fatalf("buildDeferredAWGMConfig: %v", err)
+	}
+	if !strings.Contains(cfg.RecoveryHint, "Add-Content") || !strings.Contains(cfg.RecoveryHint, "doctor") {
+		t.Fatalf("recovery hint not carried into deferred job config: %+v", cfg)
+	}
+}
+
 func TestRenderDeferredAWGMRunnerScriptScansQueue(t *testing.T) {
 	got := renderDeferredAWGMRunnerScript()
 	for _, want := range []string{
@@ -75,6 +96,28 @@ func TestRenderDeferredAWGMRunnerScriptIgnoresArchivedArtifacts(t *testing.T) {
 	} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("runner should not retry archived artifact glob %q:\n%s", unwanted, got)
+		}
+	}
+}
+
+func TestDeferredAWGMRecoveryHintGivesCopyPastePath(t *testing.T) {
+	secPath := filepath.Join(t.TempDir(), "secrets.env")
+	t.Setenv("WG_SECRETS_FILE", secPath)
+
+	got := deferredAWGMRecoveryHint(
+		&State{Backend: BackendState{Host: "198.51.100.10", Port: 2202, User: "deployer"}},
+		&AgentState{Nickname: "client-g"},
+		"/var/lib/wg-monitor/deferred-awgm/client-g.json.token",
+		"WG_AGENT_TOKEN_BRONYA",
+	)
+	for _, want := range []string{
+		"WG_AGENT_TOKEN_BRONYA",
+		"ssh -p 2202 deployer@198.51.100.10 \"cat /var/lib/wg-monitor/deferred-awgm/client-g.json.token\" | Add-Content -Encoding ascii \"" + secPath + "\"",
+		"wg-monitor-deploy sync-vps",
+		"wg-monitor-deploy doctor",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("recovery hint missing %q:\n%s", want, got)
 		}
 	}
 }
@@ -304,6 +347,7 @@ with open(job_path, "w", encoding="utf-8") as f:
         "terminal_user": "root",
         "terminal_password": "keenetic",
         "init_script": "#!/bin/sh\nexit 0",
+        "recovery_hint": "copy with ssh\nthen run sync-vps\nthen run doctor",
         "confirm_timeout_sec": 0,
     }, f)
 
@@ -382,6 +426,9 @@ assert "token_env=WG_AGENT_TOKEN_BRONYA" in done, done
 assert ("token_file=" + job_path + ".token") in done, done
 assert "local deploy secrets" in done, done
 assert "doctor/auth-probe" in done, done
+assert "copy with ssh" in done, done
+assert "then run sync-vps" in done, done
+assert "then run doctor" in done, done
 assert "existing-token" not in done, done
 token = open(job_path + ".token", encoding="utf-8").read()
 assert token == "WG_AGENT_TOKEN_BRONYA=existing-token\n", token
