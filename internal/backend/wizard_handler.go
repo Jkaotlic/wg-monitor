@@ -266,6 +266,23 @@ func wizardBackendHost(r *http.Request) string {
 	return strings.Trim(host, "[]")
 }
 
+func wizardDeployBackendURL(r *http.Request) (string, bool) {
+	host := wizardBackendHost(r)
+	if isLoopbackHost(host) {
+		return "", false
+	}
+	return wizardBackendURL(r), true
+}
+
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func firstForwardedValue(v string) string {
 	v = strings.TrimSpace(v)
 	if i := strings.IndexByte(v, ','); i >= 0 {
@@ -393,6 +410,12 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "target_version required")
 			return
 		}
+		repoBaseURL, ok := wizardDeployBackendURL(r)
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
+				"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL")
+			return
+		}
 
 		u, err := d.DB.Users().GetByNickname(nickname)
 		if err != nil {
@@ -415,7 +438,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			Action: "self_update",
 			Args: map[string]any{
 				"version":   req.TargetVersion,
-				"repo_base": wizardBackendURL(r) + "/v1/releases/download",
+				"repo_base": repoBaseURL + "/v1/releases/download",
 			},
 			IssuedAt: issuedAt,
 		}

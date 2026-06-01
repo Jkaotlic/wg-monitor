@@ -351,6 +351,69 @@ func TestWizardDeployUsesBackendReleaseMirror(t *testing.T) {
 	}
 }
 
+func TestWizardDeployUsesForwardedPublicHostForLocalCalls(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "wg.example.test")
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := sink.enqueued[0].Args["repo_base"]; got != "https://wg.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%v", got)
+	}
+}
+
+func TestWizardDeployRejectsLoopbackRepoBase(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "127.0.0.1:8080"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("unexpected enqueue: %+v", sink.enqueued)
+	}
+	u, err := d.Users().GetByNickname("testkeen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("pending set despite rejected deploy: %+v", u)
+	}
+}
+
 func TestWizardDeployMarksPendingVersionVisibleToWizard(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
