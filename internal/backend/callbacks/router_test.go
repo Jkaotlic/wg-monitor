@@ -1663,6 +1663,49 @@ func TestRouterHandleMessage_OperatorReplyKeyboard_InOwnTopic(t *testing.T) {
 	}
 }
 
+func TestRouterHandleMessage_BoundOwnerCanOpenPremiumCabinets_InOwnTopic(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "amnezia", text: "Amnezia Premium", want: "Amnezia Premium"},
+		{name: "hidemy", text: "HideMy.name", want: "HideMy.name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Users().SetTelegramUserID(uid, 200); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeRouterTG{}
+			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+
+			tid := int64(55)
+			msg := &tg.Message{
+				MessageID:       99,
+				Chat:            tg.Chat{ID: -100},
+				From:            tg.User{ID: 200},
+				MessageThreadID: &tid,
+				Text:            tc.text,
+			}
+			r.HandleMessage(context.Background(), msg)
+
+			if len(f.sentMsgs) != 1 {
+				t.Fatalf("bound owner should open %s cabinet; sentMsgs=%d %v", tc.text, len(f.sentMsgs), f.sentMsgs)
+			}
+			if !strings.Contains(f.sentMsgs[0], tc.want) {
+				t.Fatalf("cabinet text missing %q: %q", tc.want, f.sentMsgs[0])
+			}
+			if len(f.sentMarkups) != 1 {
+				t.Fatalf("cabinet should include markup, got %d markups", len(f.sentMarkups))
+			}
+		})
+	}
+}
+
 // Operator for router A taps the reply-keyboard in router B's topic. Must
 // be dropped — operators only have access to their own router's topic.
 func TestRouterHandleMessage_OperatorBlocked_DifferentRouterTopic(t *testing.T) {
