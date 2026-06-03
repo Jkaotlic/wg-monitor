@@ -436,7 +436,7 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	}
 
 	PrintStep(2, 4, "Скачать бэкенд бинарь")
-	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
+	localPath, err := stepDownloadBackendAsset(s, dl, rel)
 	if err != nil {
 		return err
 	}
@@ -448,7 +448,9 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	if err := stepEnsureWizardSetup(s, secrets); err != nil {
 		PrintWarn("wizard setup пропущен: " + err.Error())
 	}
-	if err := stepUploadAndSwap(s, localPath, "/usr/local/bin/wg-monitor-backend", "wg-monitor-backend"); err != nil {
+	swapPlan := detectBackendSwapPlan(s)
+	PrintInfo("backend runtime: " + nonEmpty(swapPlan.Name, swapPlan.RemotePath))
+	if err := stepUploadBackendAndRestart(s, localPath, swapPlan); err != nil {
 		return err
 	}
 
@@ -458,7 +460,7 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	} else {
 		if err := stepVerifyBackendHealth(s, state.Backend.Domain); err != nil {
 			PrintWarn("healthcheck failed after backend swap; rolling back to previous binary")
-			if rbErr := stepRollbackRemoteBinary(s, "/usr/local/bin/wg-monitor-backend", "wg-monitor-backend"); rbErr != nil {
+			if rbErr := stepRollbackBackendBinary(s, swapPlan); rbErr != nil {
 				PrintWarn("rollback after failed healthcheck also failed: " + rbErr.Error())
 			}
 			return err
@@ -1751,7 +1753,7 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 
 	PrintStep(11, 15, "Скачать backend бинарь")
-	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
+	localPath, err := stepDownloadBackendAsset(s, dl, rel)
 	if err != nil {
 		return err
 	}

@@ -227,6 +227,7 @@ func httpClientForPinnedRepoHost(repoBase, resolveIP string, timeoutSec int, dia
 	}
 	dialer := &net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil || !strings.EqualFold(host, repoHost) {

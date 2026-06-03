@@ -18,6 +18,7 @@ jobs:
           - { os: ubuntu-latest, goos: darwin,  goarch: arm64, name: wg-monitor-deploy-darwin-arm64,      pkg: ./cmd/deploy }
           # Backend
           - { os: ubuntu-latest, goos: linux, goarch: amd64, name: wg-monitor-backend-linux-amd64, pkg: ./cmd/backend }
+          - { os: ubuntu-latest, goos: linux, goarch: arm64, name: wg-monitor-backend-linux-arm64, pkg: ./cmd/backend }
           # Onboarding CLI (runs on the VPS, called by wizard's [4] Add Router via SSH)
           - { os: ubuntu-latest, goos: linux, goarch: amd64, name: wg-monitor-cli-linux-amd64,    pkg: ./cmd/wg-monitor-cli }
           # Agent (UPX-packed)
