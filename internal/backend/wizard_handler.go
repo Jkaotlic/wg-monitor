@@ -377,6 +377,29 @@ type wizardDeployResp struct {
 	CmdID string `json:"cmd_id"`
 }
 
+type wizardCommandReq struct {
+	Action string         `json:"action"`
+	Args   map[string]any `json:"args"`
+}
+
+type wizardMaintenanceReq struct {
+	Name string `json:"name"`
+}
+
+var wizardCommandAllowlist = map[string]bool{
+	"diag_now":         true,
+	"force_recheck":    true,
+	"pingcheck_now":    true,
+	"pingcheck_status": true,
+	"router_doctor":    true,
+	"route_status":     true,
+	"tunnels_status":   true,
+	"tunnel_enable":    true,
+	"tunnel_disable":   true,
+	"tunnel_restart":   true,
+	"service_restart":  true,
+}
+
 // wizardDeployHandler enqueues a self_update command for an agent through
 // the existing /v1/cmd long-poll channel. Returns 202 with the command ID
 // the wizard then polls via /v1/wizard/cmd/{id}?nickname=. Does not block
@@ -461,6 +484,114 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: id})
 	}
+}
+
+// wizardMaintenanceHandler enqueues a small allowlist of maintenance commands
+// for emergency recovery when the operator cannot reach the router directly.
+func wizardMaintenanceHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if d.CommandSink == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "command sink not configured")
+			return
+		}
+		nickname := r.PathValue("nickname")
+		if nickname == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req wizardMaintenanceReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+			return
+		}
+		req.Name = strings.TrimSpace(req.Name)
+		if req.Name != "awgmgr" {
+			writeJSONError(w, http.StatusBadRequest, "unsupported_maintenance",
+				"name must be awgmgr")
+			return
+		}
+		enqueueWizardAgentCommand(w, d, nickname, "service_restart", map[string]any{"name": req.Name})
+	}
+}
+
+// wizardCommandHandler enqueues an allowlisted operational command for an
+// already enrolled agent. It is intentionally narrower than the agent's full
+// command surface: destructive firmware installs, route mutation, token
+// rotation, and self-update stay on their dedicated audited flows.
+func wizardCommandHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if d.CommandSink == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "command sink not configured")
+			return
+		}
+		nickname := r.PathValue("nickname")
+		if nickname == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req wizardCommandReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+			return
+		}
+		req.Action = strings.TrimSpace(req.Action)
+		if !wizardCommandAllowlist[req.Action] || !wire.IsValidCommandAction(req.Action) {
+			writeJSONError(w, http.StatusBadRequest, "unsupported_command", "action is not allowed for wizard command dispatch")
+			return
+		}
+		enqueueWizardAgentCommand(w, d, nickname, req.Action, req.Args)
+	}
+}
+
+func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action string, args map[string]any) {
+	u, err := d.DB.Users().GetByNickname(nickname)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return
+	}
+	if u == nil {
+		writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
+		return
+	}
+	id, err := newCmdID()
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
+		return
+	}
+	if args == nil {
+		args = map[string]any{}
+	}
+	cmd := wire.Command{
+		ID:       id,
+		Action:   action,
+		Args:     args,
+		IssuedAt: time.Now().UTC(),
+	}
+	if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
+		return
+	}
+	if d.Logger != nil {
+		d.Logger.Info("wizard command enqueued",
+			"nickname", nickname, "user_id", u.ID, "cmd_id", id, "action", action)
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: id})
 }
 
 // wizardCmdResultHandler returns the agent's CommandResult for a previously

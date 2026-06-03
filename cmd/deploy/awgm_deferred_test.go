@@ -134,6 +134,41 @@ func TestAWGMTransientUnavailableMatchesRouterWakeFailures(t *testing.T) {
 	}
 }
 
+func TestDeferredAWGMFailureClassificationSeparatesDNSAndTLS(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  string
+		want string
+	}{
+		{name: "dns", msg: "urlopen error [Errno -2] Name or service not known", want: "dns_error"},
+		{name: "tls", msg: "x509: certificate is valid for *.ddns.example, not awg.client-e.example", want: "tls_error"},
+		{name: "auth", msg: "awgm POST /api/auth/login: HTTP 401: unauthorized", want: "auth_error"},
+		{name: "offline", msg: "awgm GET /api/system/info: HTTP 503: service unavailable", want: "offline"},
+		{name: "unknown", msg: "unexpected relay failure", want: "pending"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := classifyDeferredAWGMFailure(tt.msg); got != tt.want {
+				t.Fatalf("classifyDeferredAWGMFailure(%q) = %q, want %q", tt.msg, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRenderDeferredAWGMStatusSummarizesJobs(t *testing.T) {
+	rows := []deferredAWGMStatusRow{
+		{Nickname: "client-e", State: "tls_error", TargetVersion: "v0.13.0-rc72", Reason: "certificate is valid for *.ddns.example"},
+		{Nickname: "client-g", State: "dns_error", TargetVersion: "v0.13.0-rc72", Reason: "Name or service not known"},
+		{Nickname: "client-b", State: "patched", TargetVersion: "v0.13.0-rc72", Reason: "ok client-b"},
+	}
+	got := renderDeferredAWGMStatus(rows)
+	for _, want := range []string{"client-e", "tls_error", "client-g", "dns_error", "client-b", "patched", "v0.13.0-rc72"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("status output missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestScheduleDeferredAWGMDeploySupportsExistingAgentReenroll(t *testing.T) {
 	oldInstall := installDeferredAWGMDeployViaVPSFunc
 	defer func() { installDeferredAWGMDeployViaVPSFunc = oldInstall }()

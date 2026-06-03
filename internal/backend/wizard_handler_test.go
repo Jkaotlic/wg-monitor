@@ -492,6 +492,72 @@ func TestWizardDeployDoesNotMarkPendingWhenEnqueueFails(t *testing.T) {
 	}
 }
 
+func TestWizardCommandDispatchEnqueuesSafeAgentCommand(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("client-b", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &fakeCmdSink{}
+	h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/client-b/commands", strings.NewReader(`{"action":"tunnel_restart","args":{"ndms_name":"Wireguard1"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "client-b")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 || sink.enqueuedUsers[0] != userID {
+		t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
+	}
+	cmd := sink.enqueued[0]
+	if cmd.Action != "tunnel_restart" || cmd.Args["ndms_name"] != "Wireguard1" {
+		t.Fatalf("bad command: %+v", cmd)
+	}
+	var got wizardDeployResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if got.CmdID == "" {
+		t.Fatalf("empty command id in response: %+v", got)
+	}
+}
+
+func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("client-b", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &fakeCmdSink{}
+	h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/client-b/commands", strings.NewReader(`{"action":"firmware_install"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "client-b")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("unsafe command was enqueued: %+v", sink.enqueued)
+	}
+}
+
 func TestWizardDeployAddsRepoResolveIPWhenDomainResolves(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)

@@ -125,10 +125,163 @@ RELAY=/usr/local/lib/wg-monitor/awgm-relay.py
 
 for cfg in /var/lib/wg-monitor/deferred-awgm/*.json; do
     [ -e "$cfg" ] || exit 0
-    timeout 20m python3 "$RELAY" "$cfg" || echo "wg-monitor deferred AWGM job failed rc=$? cfg=$cfg"
+    tmp="$cfg.last.tmp"
+    if timeout 20m python3 "$RELAY" "$cfg" >"$tmp" 2>&1; then
+        rm -f "$tmp" "$cfg.last"
+    else
+        rc=$?
+        mv -f "$tmp" "$cfg.last"
+        echo "wg-monitor deferred AWGM job failed rc=$rc cfg=$cfg"
+    fi
 done
 exit 0
 `
+}
+
+type deferredAWGMStatusRow struct {
+	Nickname      string `json:"nickname"`
+	State         string `json:"state"`
+	TargetVersion string `json:"target_version"`
+	BaseURL       string `json:"base_url"`
+	Reason        string `json:"reason"`
+	Path          string `json:"path"`
+}
+
+func classifyDeferredAWGMFailure(reason string) string {
+	s := strings.ToLower(strings.TrimSpace(reason))
+	switch {
+	case s == "":
+		return "pending"
+	case strings.Contains(s, "certificate is valid for") ||
+		strings.Contains(s, "x509:") ||
+		strings.Contains(s, "hostname") && strings.Contains(s, "certificate") ||
+		strings.Contains(s, "tls"):
+		return "tls_error"
+	case strings.Contains(s, "name or service not known") ||
+		strings.Contains(s, "no such host") ||
+		strings.Contains(s, "nxdomain") ||
+		strings.Contains(s, "temporary failure in name resolution"):
+		return "dns_error"
+	case strings.Contains(s, "http 401") ||
+		strings.Contains(s, "unauthorized") ||
+		strings.Contains(s, "http 403") ||
+		strings.Contains(s, "forbidden"):
+		return "auth_error"
+	case strings.Contains(s, "http 502") ||
+		strings.Contains(s, "http 503") ||
+		strings.Contains(s, "http 504") ||
+		strings.Contains(s, "service unavailable") ||
+		strings.Contains(s, "gateway timeout") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "connection reset"):
+		return "offline"
+	default:
+		return "pending"
+	}
+}
+
+func renderDeferredAWGMStatus(rows []deferredAWGMStatusRow) string {
+	if len(rows) == 0 {
+		return "no deferred AWGM jobs found"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-20s %-14s %-16s %s\n", "nickname", "state", "target", "reason")
+	for _, row := range rows {
+		reason := strings.TrimSpace(row.Reason)
+		if reason == "" {
+			reason = "-"
+		}
+		fmt.Fprintf(&b, "%-20s %-14s %-16s %s\n",
+			emptyDash(row.Nickname),
+			emptyDash(row.State),
+			emptyDash(row.TargetVersion),
+			reason,
+		)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func actionDeferredAWGMStatus(state *State, secrets *SecretStore) error {
+	if state == nil || strings.TrimSpace(state.Backend.Host) == "" {
+		return fmt.Errorf("backend SSH host is not configured")
+	}
+	kh, err := NewKnownHosts(defaultCacheDir() + "/known_hosts")
+	if err != nil {
+		return err
+	}
+	bs, err := connectBackendSSH(state, secrets, kh)
+	if err != nil {
+		return err
+	}
+	defer bs.Close()
+	out, err := bs.MustRun(deferredAWGMStatusRemoteScript())
+	if err != nil {
+		return err
+	}
+	var rows []deferredAWGMStatusRow
+	if err := json.Unmarshal([]byte(out), &rows); err != nil {
+		return fmt.Errorf("parse deferred AWGM status: %w: %s", err, out)
+	}
+	for i := range rows {
+		if rows[i].State == "" || rows[i].State == "pending" {
+			rows[i].State = classifyDeferredAWGMFailure(rows[i].Reason)
+		}
+	}
+	fmt.Println(renderDeferredAWGMStatus(rows))
+	return nil
+}
+
+func deferredAWGMStatusRemoteScript() string {
+	return `python3 - <<'PY'
+import glob
+import json
+import os
+
+job_dir = "/var/lib/wg-monitor/deferred-awgm"
+rows = []
+
+def first_line(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    return line[:500]
+    except OSError:
+        return ""
+    return ""
+
+for path in sorted(glob.glob(os.path.join(job_dir, "*.json"))):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except Exception as e:
+        cfg = {}
+        reason = "job json parse failed: %s" % e
+    else:
+        reason = first_line(path + ".last")
+    rows.append({
+        "nickname": cfg.get("nickname") or os.path.basename(path).removesuffix(".json"),
+        "state": "pending",
+        "target_version": cfg.get("target_version") or "",
+        "base_url": cfg.get("base_url") or "",
+        "reason": reason,
+        "path": path,
+    })
+
+for path in sorted(glob.glob(os.path.join(job_dir, "*.json.done"))):
+    rows.append({
+        "nickname": os.path.basename(path).removesuffix(".json.done"),
+        "state": "patched",
+        "target_version": "",
+        "base_url": "",
+        "reason": first_line(path),
+        "path": path,
+    })
+
+print(json.dumps(rows, ensure_ascii=False))
+PY`
 }
 
 func renderDeferredAWGMService() string {

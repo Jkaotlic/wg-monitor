@@ -2,14 +2,37 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 
 	"golang.org/x/net/websocket"
 )
+
+func TestNewAWGMClientInsecureTLSIsExplicitOptIn(t *testing.T) {
+	t.Setenv("AWGM_INSECURE_TLS", "")
+	strict := NewAWGMClient("https://awg.example", "", "")
+	if strict.HTTP.Transport != nil {
+		t.Fatalf("strict client transport = %#v, want default nil transport", strict.HTTP.Transport)
+	}
+
+	t.Setenv("AWGM_INSECURE_TLS", "1")
+	insecure := NewAWGMClient("https://awg.example", "", "")
+	tr, ok := insecure.HTTP.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport = %T, want *http.Transport", insecure.HTTP.Transport)
+	}
+	if tr.TLSClientConfig == nil || !tr.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("insecure TLS opt-in not reflected in transport config: %#v", tr.TLSClientConfig)
+	}
+	if _, ok := any(tr.TLSClientConfig).(*tls.Config); !ok {
+		t.Fatalf("TLSClientConfig = %T, want *tls.Config", tr.TLSClientConfig)
+	}
+}
 
 func TestAWGMClientLoginStoresSessionCookie(t *testing.T) {
 	var sawCookie bool
@@ -215,6 +238,18 @@ func TestAWGMTerminalPromptAction(t *testing.T) {
 				t.Fatalf("awgmTerminalPromptAction(%q) = %q, want %q", tt.text, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAWGMTerminalMarkerUsesLastOccurrenceInEchoedChunk(t *testing.T) {
+	const marker = "__WG_MONITOR_DONE__"
+	text := "cat <<EOF\necho " + marker + "$rc\nEOF\nreal output\n" + marker + "1\n"
+	done, err := awgmTerminalDoneFromChunk(text, marker)
+	if !done {
+		t.Fatal("expected marker to be found")
+	}
+	if err == nil || !strings.Contains(err.Error(), "bootstrap script failed: 1") {
+		t.Fatalf("error = %v, want rc=1 from last marker occurrence", err)
 	}
 }
 

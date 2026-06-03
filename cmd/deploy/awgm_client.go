@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -65,11 +67,17 @@ func (e *AWGMHTTPError) Error() string {
 }
 
 func NewAWGMClient(baseURL, login, password string) *AWGMClient {
+	httpClient := &http.Client{Timeout: awgmClientTimeout}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("AWGM_INSECURE_TLS")), "1") {
+		httpClient.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
 	return &AWGMClient{
 		BaseURL:  normalizeAWGMURL(baseURL),
 		LoginID:  login,
 		Password: password,
-		HTTP:     &http.Client{Timeout: awgmClientTimeout},
+		HTTP:     httpClient,
 	}
 }
 
@@ -237,14 +245,22 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 			return TerminalRunResult{Output: out.String()}, fmt.Errorf("awgm terminal receive: %w", err)
 		}
 		out.WriteString(text)
-		if i := strings.Index(text, marker); i >= 0 {
-			rcText := strings.TrimSpace(text[i+len(marker):])
-			if rcText == "" || rcText[0] == '0' {
-				return TerminalRunResult{Output: out.String()}, nil
-			}
-			return TerminalRunResult{Output: out.String()}, fmt.Errorf("bootstrap script failed: %s", rcText)
+		done, err := awgmTerminalDoneFromChunk(text, marker)
+		if done {
+			return TerminalRunResult{Output: out.String()}, err
 		}
 	}
+}
+
+func awgmTerminalDoneFromChunk(text, marker string) (bool, error) {
+	if i := strings.LastIndex(text, marker); i >= 0 {
+		rcText := strings.TrimSpace(text[i+len(marker):])
+		if rcText == "" || rcText[0] == '0' {
+			return true, nil
+		}
+		return true, fmt.Errorf("bootstrap script failed: %s", rcText)
+	}
+	return false, nil
 }
 
 func awgmLoginTerminalIfPrompt(ctx context.Context, ws *websocket.Conn, loginUser, loginPassword string, out *strings.Builder) error {
