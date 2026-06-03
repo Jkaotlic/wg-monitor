@@ -173,6 +173,12 @@ func main() {
 			}
 		}
 		runCLIAction("restore-backup", func() error { return actionRestoreBackup(state, secrets, dl, opts) })
+	case "deferred":
+		if len(args) != 2 || args[1] != "status" {
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy deferred status")
+			os.Exit(2)
+		}
+		runCLIAction("deferred status", func() error { return actionDeferredAWGMStatus(state, secrets) })
 	case "uninstall-agent":
 		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
 		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
@@ -362,6 +368,7 @@ Commands:
                                re-enroll agents on the new VPS through AWG Manager
   restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]
                                inspect or restore a Telegram recovery bundle
+  deferred status              summarize deferred AWG Manager jobs on backend
   known-hosts [list|forget [alias]]
   secrets status               show which required secrets are available
   secrets export <file.tgz>
