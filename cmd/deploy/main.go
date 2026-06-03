@@ -4,10 +4,19 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 func main() {
+	if filepath.Base(os.Args[0]) == "awgm-url-patch" {
+		if err := actionAWGMURLPatch(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "awgm-url-patch:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	versionFlag := flag.Bool("version", false, "print version and exit")
 	configPath := flag.String("config", "", "path to wizard.toml (default: platform default)")
 	profile := flag.String("profile", "", "named deploy profile (isolates wizard.toml, cache, lock, and secrets)")
@@ -28,6 +37,12 @@ func main() {
 		switch args[0] {
 		case "help", "-h", "--help":
 			printUsage()
+			return
+		case "awgm-url-patch":
+			if err := actionAWGMURLPatch(args[1:]); err != nil {
+				fmt.Fprintln(os.Stderr, "awgm-url-patch:", err)
+				os.Exit(1)
+			}
 			return
 		}
 	}
@@ -369,6 +384,7 @@ Commands:
   restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]
                                inspect or restore a Telegram recovery bundle
   deferred status              summarize deferred AWG Manager jobs on backend
+  awgm-url-patch               emergency AWG Manager backend URL retarget helper
   known-hosts [list|forget [alias]]
   secrets status               show which required secrets are available
   secrets export <file.tgz>

@@ -13,6 +13,7 @@ jobs:
         include:
           # Wizard binaries
           - { os: ubuntu-latest, goos: linux,   goarch: amd64, name: wg-monitor-deploy-linux-amd64,       pkg: ./cmd/deploy }
+          - { os: ubuntu-latest, goos: linux,   goarch: arm64, name: wg-monitor-deploy-linux-arm64,       pkg: ./cmd/deploy }
           - { os: ubuntu-latest, goos: windows, goarch: amd64, name: wg-monitor-deploy-windows-amd64.exe, pkg: ./cmd/deploy }
           - { os: ubuntu-latest, goos: darwin,  goarch: amd64, name: wg-monitor-deploy-darwin-amd64,      pkg: ./cmd/deploy }
           - { os: ubuntu-latest, goos: darwin,  goarch: arm64, name: wg-monitor-deploy-darwin-arm64,      pkg: ./cmd/deploy }
