@@ -391,7 +391,7 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 	}
 
 	PrintStep(8, 12, "Upload backend binary")
-	localPath, err := stepDownloadAsset(dl, rel, "wg-monitor-backend-linux-amd64")
+	localPath, err := stepDownloadBackendAsset(s, dl, rel)
 	if err != nil {
 		return err
 	}

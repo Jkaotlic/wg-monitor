@@ -233,6 +233,24 @@ func TestNormalizeKeeneticArchMapsAarch64ToReleaseAssetArch(t *testing.T) {
 	}
 }
 
+func TestBackendReleaseAssetNameMapsHostArch(t *testing.T) {
+	tests := map[string]string{
+		"x86_64":  "wg-monitor-backend-linux-amd64",
+		"amd64":   "wg-monitor-backend-linux-amd64",
+		"aarch64": "wg-monitor-backend-linux-arm64",
+		"arm64":   "wg-monitor-backend-linux-arm64",
+	}
+	for in, want := range tests {
+		got, err := backendReleaseAssetName(in)
+		if err != nil {
+			t.Fatalf("backendReleaseAssetName(%q): %v", in, err)
+		}
+		if got != want {
+			t.Fatalf("backendReleaseAssetName(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestApplyAWGMDeploySuccessDoesNotPersistPublicRouterLANIP(t *testing.T) {
 	ag := &AgentState{
 		Nickname:       "del",
