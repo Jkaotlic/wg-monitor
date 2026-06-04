@@ -95,6 +95,24 @@ Use `[2] Update components`.
 
 The wizard compares `wizard.toml`, backend `/healthz`, and the latest GitHub release. Static agents use the backend-mediated pull-flow where possible, so the operator does not need direct router SSH for normal updates.
 
+## Telegram Menu Operations
+
+English:
+
+- The backend registers two command surfaces at startup: the default operator command set and a scoped admin command set.
+- The default operator scope intentionally excludes admin-only commands, so operators on desktop clients see only topic-safe actions.
+- The visible router-topic menu is generated from the same menu registry as reply keyboards, compat inline keyboards, slash commands, and operator help.
+- `/menu` and `/keyboard` re-send the current visible menu in the active router topic.
+- Admins can open `/panel` and use "Revive topics" to re-send the current menu to every router topic that has a Telegram thread ID. The result screen reports sent, failed, and skipped-no-topic counts.
+
+Русский:
+
+- Backend при старте регистрирует две поверхности команд: обычную операторскую и scoped admin-команды.
+- В default scope нет админских команд, поэтому операторы в desktop-клиентах видят только безопасные действия текущего топика.
+- Видимое меню топика строится из общего registry: из него же собираются reply keyboard, compat inline keyboard, slash-команды и операторская справка.
+- `/menu` и `/keyboard` заново присылают актуальное меню в текущий топик роутера.
+- Админ может открыть `/panel` и нажать "Оживить топики": бот переотправит актуальное меню во все топики роутеров с Telegram thread ID и покажет счётчики отправлено / ошибок / без топика.
+
 ## Doctor And Sync
 
 - `[5] Doctor` checks local state, VPS reachability, backend health, and known agents.
