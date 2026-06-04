@@ -12,7 +12,7 @@ The current deploy path does **not** require the operator to join every router n
 
 ## Current Release
 
-- Latest RC used by the wizard flow: `v0.13.0-rc67`
+- Latest RC used by the wizard flow: `v0.13.0-rc75`
 - GitHub releases: <https://github.com/Jkaotlic/wg-monitor/releases>
 - Windows wizard asset: `wg-monitor-deploy-windows-amd64.exe`
 
@@ -20,10 +20,29 @@ The current deploy path does **not** require the operator to join every router n
 
 - Per-minute agent reports from every router to the VPS backend.
 - Telegram alerts and per-router topics.
-- Telegram control panels for tunnels, routes, diagnostics, maintenance, operators, and package updates.
+- Telegram control panels for tunnels, routes, diagnostics, maintenance, operators, Premium cabinets, and package updates.
 - AWG Manager integration for tunnel state, route management, terminal bootstrap, and diagnostics.
 - Backend-mediated agent updates, so deployed agents can update without direct SSH from the operator machine.
 - Safer tunnel health: disabled PingCheck is shown as a warning/unknown signal, not as a hard "tunnel is dead" verdict by itself.
+- Dynamic route and tunnel panels: route changes enqueue live refreshes, and stale cached panels are shown only as temporary "refreshing" screens.
+
+## Telegram Bot UX
+
+English:
+
+- Router topics have an always-visible inline menu. It does not depend on Telegram Desktop showing slash commands correctly.
+- Operators can recover the menu in their current router topic with `/menu` or `/keyboard`.
+- The operator command list includes `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, and `/help`.
+- Admin commands are registered in admin scopes only: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, and `/selfhosted`.
+- `/panel` contains the fleet hub, mass checks, update-all, access management, operator help, and "revive topics" action that re-sends the current visible menu to all router topics.
+
+Русский:
+
+- В топиках роутеров есть постоянное видимое inline-меню; оно не зависит от того, показывает ли Telegram Desktop slash-команды.
+- Оператор может вернуть меню в текущем топике командами `/menu` или `/keyboard`.
+- В операторском меню есть `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, `/help`.
+- Админские команды регистрируются отдельно, только для admin scope: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, `/selfhosted`.
+- В `/panel` живут хаб флота, массовые проверки, update-all, доступы, справка оператора и "оживить топики" - массовая переотправка актуального меню во все топики роутеров.
 
 ## Deploy Model
 
