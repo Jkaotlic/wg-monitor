@@ -341,8 +341,17 @@ type BotCommand struct {
 	Description string `json:"description"`
 }
 
+// BotCommandScope mirrors the TG Bot API BotCommandScope union for the scope
+// types this bot needs: default, chat, and chat_member.
+type BotCommandScope struct {
+	Type   string `json:"type"`
+	ChatID int64  `json:"chat_id,omitempty"`
+	UserID int64  `json:"user_id,omitempty"`
+}
+
 type setMyCommandsReq struct {
-	Commands []BotCommand `json:"commands"`
+	Commands []BotCommand     `json:"commands"`
+	Scope    *BotCommandScope `json:"scope,omitempty"`
 }
 
 // SetMyCommands registers the bot's slash-command menu so TG clients show
@@ -351,6 +360,11 @@ type setMyCommandsReq struct {
 // without the menu hint).
 func (c *Client) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
 	body, _ := json.Marshal(setMyCommandsReq{Commands: cmds})
+	return c.call(ctx, "setMyCommands", body, nil)
+}
+
+func (c *Client) SetMyCommandsWithScope(ctx context.Context, cmds []BotCommand, scope BotCommandScope) error {
+	body, _ := json.Marshal(setMyCommandsReq{Commands: cmds, Scope: &scope})
 	return c.call(ctx, "setMyCommands", body, nil)
 }
 

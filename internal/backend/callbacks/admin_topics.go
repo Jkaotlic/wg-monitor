@@ -49,7 +49,7 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	case "/topic_help":
 		r.adminTopicHelp(ctx, m)
 		return true
-	case "/keyboard":
+	case "/menu", "/keyboard":
 		r.handleKeyboardCommand(ctx, m)
 		return true
 	}

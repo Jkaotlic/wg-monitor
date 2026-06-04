@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
@@ -30,6 +32,7 @@ type MaintPanelNotifier struct {
 	Cooldown *cooldownStore    // for cooldown-aware re-render after restart/install
 	Audit    *simpleAuditCache // updated with each version_audit / firmware_status
 	DB       *db.DB
+	Sink     CommandEnqueuer
 }
 
 // NotifyCommandResult dispatches by ref.Action. Returns nil for unsupported
@@ -136,12 +139,31 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{{Text: "🔄 Обновить", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)}},
 		}}
-		return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+		if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
+			return err
+		}
+		n.enqueueFreshVersionAudit(user.ID, ref, res)
+		return nil
 	}
 	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
 	text := banner + "\n\n" + tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
-	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
+		return err
+	}
+	n.enqueueFreshVersionAudit(user.ID, ref, res)
+	return nil
+}
+
+func (n *MaintPanelNotifier) enqueueFreshVersionAudit(userID int64, ref cmdpkg.MessageRef, res wire.CommandResult) {
+	if n.Sink == nil || res.Status != "ok" {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "version_audit", IssuedAt: time.Now().UTC()}
+	nextRef := cmdpkg.MessageRef{ChatID: ref.ChatID, MessageID: ref.MessageID, ThreadID: ref.ThreadID}
+	if err := n.Sink.EnqueueWithRef(userID, cmd, nextRef); err != nil {
+		slog.Warn("maint notifier refresh enqueue failed", "err", err, "user_id", userID)
+	}
 }
 
 // buildMaintPanelArgs assembles the renderer args from the cached

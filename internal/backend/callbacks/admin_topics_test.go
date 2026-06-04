@@ -265,6 +265,38 @@ func TestAdminCommand_TolerateBotnameSuffix(t *testing.T) {
 	}
 }
 
+func TestMenuCommand_ToleratesBotnameSuffixAndRepushesKeyboard(t *testing.T) {
+	d, uid := newTestDB(t)
+	const threadID = int64(7777)
+	if err := d.Users().UpdateThreadID(uid, threadID); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Users().SetTelegramUserID(uid, 200)
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	msg := &tg.Message{
+		MessageID:       58,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 200},
+		MessageThreadID: ptrInt64(threadID),
+		Text:            "/menu@wgmonitor_bot",
+	}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.rkSends) != 1 {
+		t.Fatalf("expected /menu to repush visible keyboard, got %d sends", len(f.rkSends))
+	}
+	kb, ok := f.rkSends[0].markup.(*tg.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("/menu should send visible inline menu, markup=%T", f.rkSends[0].markup)
+	}
+	if !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") ||
+		!keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
+		t.Fatalf("/menu visible menu missing premium buttons: %+v", kb.InlineKeyboard)
+	}
+}
+
 // TestAdmin_EnsureTopics_FailsRendersHint: when the DB is closed before
 // /ensure_topics runs, the error reply must contain both the ❌ badge and
 // the 💡 hint block (Card shape, not a raw Go error string).

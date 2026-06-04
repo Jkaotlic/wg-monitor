@@ -47,7 +47,7 @@ func TestHelp_OperatorGetsOperatorBody(t *testing.T) {
 	if strings.Contains(body, "/panel —") || strings.Contains(body, "Админ-команды") {
 		t.Errorf("operator help must NOT include admin section:\n%s", body)
 	}
-	for _, want := range []string{"Кнопки в топике", "очередь", "Amnezia Premium", "HideMy.name"} {
+	for _, want := range []string{"Кнопки в топике", "очередь", "/menu", "/amnezia", "/hidemy", "Amnezia Premium", "HideMy.name"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("operator help missing %q:\n%s", want, body)
 		}

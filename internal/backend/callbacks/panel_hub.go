@@ -27,41 +27,7 @@ func (r *Router) adminPanelOpen(ctx context.Context, m *tg.Message) {
 // Pure function — easy to test.
 func panelHomeMessage() (string, tg.InlineKeyboardMarkup) {
 	text := "🎛 Панель управления\n\nЧто открыть?\n\nРоутер:\n  • выбери раздел\n  • затем конкретный роутер\n\nФлот:\n  • массовая проверка\n  • топики и доступы"
-	kb := tg.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tg.InlineKeyboardButton{
-			{
-				{Text: "🔎 Аудит всех", CallbackData: "panel:0:audit_all"},
-				{Text: "⬆ Обновить все", CallbackData: "panel:0:update_all_confirm"},
-			},
-			{
-				{Text: "📊 Статус", CallbackData: "panel:0:kind:status"},
-				{Text: "🩺 Проверка", CallbackData: "panel:0:kind:doctor"},
-			},
-			{
-				{Text: "🎛 Туннели", CallbackData: "panel:0:kind:tunnels"},
-				{Text: "🛣 Маршруты", CallbackData: "panel:0:kind:routes"},
-			},
-			{
-				{Text: "📡 PingCheck", CallbackData: "panel:0:kind:pingcheck"},
-				{Text: "🛠 Обслуживание", CallbackData: "panel:0:kind:maint"},
-			},
-			{
-				{Text: "🩺 Все роутеры", CallbackData: "panel:0:doctor_all"},
-				{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
-			},
-			{
-				{Text: "🚗 Мобильные", CallbackData: "panel:0:mobile"},
-				{Text: "👥 Доступ", CallbackData: "access:0:home"},
-			},
-			{
-				{Text: "ℹ Помощь оператору", CallbackData: "panel:0:help:operator"},
-			},
-			{
-				{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
-			},
-		},
-	}
-	return text, kb
+	return text, tg.AdminPanelHomeKeyboard()
 }
 
 // handlePanelCallback is the top-level dispatcher for panel:* callbacks.
@@ -443,13 +409,15 @@ func (r *Router) panelAwakenConfirm(ctx context.Context, q *tg.CallbackQuery) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось прочитать роутеров")
 		return
 	}
-	var count int
+	var count, skippedNoTopic int
 	for _, u := range users {
 		if u.TelegramThreadID != nil {
 			count++
+		} else {
+			skippedNoTopic++
 		}
 	}
-	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики\n\nЧто будет:\n  • отправим видимое меню роутера во все per_router топики\n  • Будут затронуты: %d топика", count)
+	text := fmt.Sprintf("🎛 Панель управления\n\n🪄 Оживить топики\n\nЧто будет:\n  • отправим видимое меню роутера во все per_router топики\n  • Будут затронуты: %d топика\n  • Без топика: %d", count, skippedNoTopic)
 	kb := tg.InlineKeyboardMarkup{
 		InlineKeyboard: [][]tg.InlineKeyboardButton{
 			{
@@ -471,12 +439,13 @@ func (r *Router) panelAwakenDo(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	}
 	start := time.Now()
-	var sent, failed int
+	var sent, failed, skippedNoTopic int
 	var failLines []string
 	const sleep = 200 * time.Millisecond
 	first := true
 	for _, u := range users {
 		if u.TelegramThreadID == nil {
+			skippedNoTopic++
 			continue
 		}
 		if !first {
@@ -499,9 +468,9 @@ func (r *Router) panelAwakenDo(ctx context.Context, q *tg.CallbackQuery) {
 		sent++
 	}
 done:
-	slog.Info("panel awaken", "sent", sent, "failed", failed, "elapsed_ms", time.Since(start).Milliseconds())
+	slog.Info("panel awaken", "sent", sent, "failed", failed, "skipped_no_topic", skippedNoTopic, "elapsed_ms", time.Since(start).Milliseconds())
 	var b strings.Builder
-	fmt.Fprintf(&b, "🎛 Панель управления\n\n🪄 Оживить топики\n\nИтог:\n  • ✅ Оживлено: %d\n  • ❌ Ошибок: %d", sent, failed)
+	fmt.Fprintf(&b, "🎛 Панель управления\n\n🪄 Оживить топики\n\nИтог:\n  • ✅ Оживлено: %d\n  • ❌ Ошибок: %d\n  • Без топика: %d", sent, failed, skippedNoTopic)
 	for _, line := range failLines {
 		b.WriteString("\n  ")
 		b.WriteString(line)
@@ -569,20 +538,5 @@ func (r *Router) panelEditToKindPick(ctx context.Context, q *tg.CallbackQuery, k
 }
 
 func panelKindLabel(kind string) string {
-	switch kind {
-	case "status":
-		return "Статус"
-	case "doctor":
-		return "Проверка"
-	case "tunnels":
-		return "Туннели"
-	case "routes":
-		return "Маршруты"
-	case "pingcheck":
-		return "PingCheck"
-	case "maint":
-		return "Обслуживание"
-	default:
-		return ""
-	}
+	return tg.AdminPanelKindLabel(kind)
 }

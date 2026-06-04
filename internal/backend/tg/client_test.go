@@ -367,6 +367,42 @@ func TestSetMyCommands_PostsExpectedPayload(t *testing.T) {
 	}
 }
 
+func TestSetMyCommandsWithScope_PostsScopePayload(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/setMyCommands") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{
+		BaseURL: ts.URL + "/bot",
+		Token:   "T",
+		HTTP:    ts.Client(),
+	}
+	cmds := []BotCommand{{Command: "panel", Description: "admin panel"}}
+	scope := BotCommandScope{Type: "chat_member", ChatID: -100, UserID: 12345}
+	if err := c.SetMyCommandsWithScope(context.Background(), cmds, scope); err != nil {
+		t.Fatalf("SetMyCommandsWithScope: %v", err)
+	}
+	var got struct {
+		Commands []BotCommand    `json:"commands"`
+		Scope    BotCommandScope `json:"scope"`
+	}
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("unmarshal body: %v\nbody: %s", err, gotBody)
+	}
+	if len(got.Commands) != 1 || got.Commands[0].Command != "panel" {
+		t.Fatalf("commands = %+v", got.Commands)
+	}
+	if got.Scope.Type != "chat_member" || got.Scope.ChatID != -100 || got.Scope.UserID != 12345 {
+		t.Fatalf("scope = %+v", got.Scope)
+	}
+}
+
 func TestGetUpdates_ParseDocument(t *testing.T) {
 	resp := `{"ok":true,"result":[{"update_id":1,"message":{"message_id":10,"from":{"id":99},"chat":{"id":-100},"message_thread_id":5,"document":{"file_id":"fid1","file_name":"awg11.conf","file_size":512}}}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

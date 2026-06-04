@@ -333,8 +333,8 @@ func (c *Client) StartTunnel(ctx context.Context, tunnelID string) error {
 
 // ReplaceConf calls POST /api/tunnels/replace?id=<tunnelID> — replaces an
 // existing tunnel's config in-place. Returns the updated Tunnel.
-func (c *Client) ReplaceConf(ctx context.Context, tunnelID, rawConf, name string) (*Tunnel, error) {
-	return c.confPost(ctx, "/api/tunnels/replace?id="+url.QueryEscape(tunnelID), rawConf, name)
+func (c *Client) ReplaceConf(ctx context.Context, tunnelID, rawConf, name, backend string) (*Tunnel, error) {
+	return c.confPost(ctx, "/api/tunnels/replace?id="+url.QueryEscape(tunnelID), rawConf, name, backend)
 }
 
 // DeleteTunnel calls POST /api/tunnels/delete?id=<tunnelID>.
@@ -349,12 +349,13 @@ func (c *Client) GetEnv(ctx context.Context, path string, out any) error {
 	return c.get(ctx, path, out)
 }
 
-func (c *Client) confPost(ctx context.Context, path, rawConf, name string) (*Tunnel, error) {
+func (c *Client) confPost(ctx context.Context, path, rawConf, name, backend string) (*Tunnel, error) {
 	start := time.Now()
 	body, err := json.Marshal(struct {
 		Content string `json:"content"`
 		Name    string `json:"name"`
-	}{Content: rawConf, Name: name})
+		Backend string `json:"backend,omitempty"`
+	}{Content: rawConf, Name: name, Backend: backend})
 	if err != nil {
 		return nil, err
 	}

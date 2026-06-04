@@ -920,6 +920,9 @@ func TestAmneziaDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
 	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
 		t.Fatalf("correct actor confirm should enqueue tunnel_import, calls=%+v", sink.calls)
 	}
+	if sink.calls[0].backend != "nativewg" {
+		t.Fatalf("Amnezia Premium import must request nativewg backend, got %+v", sink.calls[0])
+	}
 }
 
 func TestHideMyDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
@@ -1047,6 +1050,9 @@ func TestHideMyDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
 	}
 	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
 		t.Fatalf("correct actor confirm should enqueue tunnel_import, calls=%+v", sink.calls)
+	}
+	if sink.calls[0].backend != "nativewg" {
+		t.Fatalf("HideMy import must request nativewg backend, got %+v", sink.calls[0])
 	}
 }
 
@@ -2455,6 +2461,45 @@ func TestRouterRoutesRollback_RendersReverseConfirmWithoutCache(t *testing.T) {
 	}
 }
 
+func TestRouterRoutesOpen_UsesCachedSnapshotOnlyWhileRefreshingLiveStatus(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{{ID: "old", Name: "old-tunnel", Iface: "nwg-old"}},
+		Counts:  map[string]wire.TunnelCounts{"old": {DNS: 1}},
+	})
+	r.SetRoutesCache(cache)
+
+	tid := int64(11)
+	q := &tg.CallbackQuery{
+		ID:   "cb-routes-open",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_open:%d:_panel_", uid),
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) == 0 || !strings.Contains(f.edits[0], "old-tunnel") {
+		t.Fatalf("cached snapshot should render as temporary panel, edits=%v", f.edits)
+	}
+	if !strings.Contains(f.edits[0], "обнов") {
+		t.Fatalf("temporary cached panel should say it is refreshing live data, got %q", f.edits[0])
+	}
+	if len(f.editMarkups) == 0 || markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_rebind:%d:", uid)) ||
+		markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_add:%d:", uid)) ||
+		markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_del:%d:", uid)) {
+		t.Fatalf("temporary cached panel must not expose route mutation buttons, markup=%#v", f.editMarkups)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_status" {
+		t.Fatalf("routes_open must enqueue live route_status even with cache, got %+v", sink.calls)
+	}
+}
+
 // TestRouter_OpkgDisable_RequiresConfirm verifies the full dispatch path for
 // opkg_disable: the first tap renders a confirm screen, and only the confirm
 // callback consumes the token and enqueues opkg_feed_disable.
@@ -2733,6 +2778,46 @@ func TestRouterHandleMessage_BoundOwnerCanOpenPremiumCabinets_InOwnTopic(t *test
 			}
 			if len(f.sentMarkups) != 1 {
 				t.Fatalf("cabinet should include markup, got %d markups", len(f.sentMarkups))
+			}
+		})
+	}
+}
+
+func TestRouterHandleMessage_BoundOwnerCanOpenPremiumCabinets_WithSlashCommands(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "amnezia", text: "/amnezia", want: "Amnezia Premium"},
+		{name: "hidemy", text: "/hidemy", want: "HideMy.name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, uid := newTestDB(t)
+			if err := d.Users().UpdateThreadID(uid, 55); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Users().SetTelegramUserID(uid, 200); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeRouterTG{}
+			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+
+			tid := int64(55)
+			msg := &tg.Message{
+				MessageID:       99,
+				Chat:            tg.Chat{ID: -100},
+				From:            tg.User{ID: 200},
+				MessageThreadID: &tid,
+				Text:            tc.text,
+			}
+			r.HandleMessage(context.Background(), msg)
+
+			if len(f.sentMsgs) != 1 {
+				t.Fatalf("bound owner should open %s cabinet; sentMsgs=%d %v", tc.text, len(f.sentMsgs), f.sentMsgs)
+			}
+			if !strings.Contains(f.sentMsgs[0], tc.want) {
+				t.Fatalf("cabinet text missing %q: %q", tc.want, f.sentMsgs[0])
 			}
 		})
 	}

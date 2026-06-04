@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
@@ -26,6 +28,7 @@ type RoutesPanelNotifier struct {
 	Cache *RoutesCache
 	DB    *db.DB
 	Store *RouteWizardStore
+	Sink  CommandEnqueuer
 }
 
 func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error {
@@ -144,7 +147,11 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 	totalFailed := rb.DNS.Failed + rb.Static.Failed
 	text := tg.RebindResultText(srcName, dstName, rb)
 	kb := tg.RebindResultKeyboard(user.ID, rb.SrcTunnelID, rb.DstTunnelID, totalFailed)
-	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
+		return err
+	}
+	n.enqueueFreshRouteStatus(user.ID, ref)
+	return nil
 }
 
 func routeOtherRebindName(rb wire.RouteRebindResult) string {
@@ -227,7 +234,22 @@ func (n *RoutesPanelNotifier) renderApply(ctx context.Context, ref cmdpkg.Messag
 	}
 	text := tg.RouteApplyResultText(result)
 	kb := routeApplyResultKeyboard(user.ID)
-	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
+		return err
+	}
+	n.enqueueFreshRouteStatus(user.ID, ref)
+	return nil
+}
+
+func (n *RoutesPanelNotifier) enqueueFreshRouteStatus(userID int64, ref cmdpkg.MessageRef) {
+	if n.Sink == nil {
+		return
+	}
+	cmd := wire.Command{ID: defaultCmdID(), Action: "route_status", IssuedAt: time.Now().UTC()}
+	nextRef := cmdpkg.MessageRef{ChatID: ref.ChatID, MessageID: ref.MessageID, ThreadID: ref.ThreadID}
+	if err := n.Sink.EnqueueWithRef(userID, cmd, nextRef); err != nil {
+		slog.Warn("routes notifier refresh enqueue failed", "err", err, "user_id", userID)
+	}
 }
 
 func routeApplyResultKeyboard(userID int64) tg.InlineKeyboardMarkup {

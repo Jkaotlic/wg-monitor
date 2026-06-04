@@ -305,6 +305,7 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 			"conf":    base64.StdEncoding.EncodeToString(conf),
 			"name":    "hidemy_" + args.HideMyServerID,
 			"replace": true,
+			"backend": "nativewg",
 		},
 		IssuedAt: time.Now().UTC(),
 	}

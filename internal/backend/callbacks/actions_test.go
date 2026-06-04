@@ -57,11 +57,12 @@ type fakeEnqueuer struct {
 }
 
 type enqueueCall struct {
-	userID int64
-	cmdID  string
-	action string
-	check  string
-	ndms   string
+	userID  int64
+	cmdID   string
+	action  string
+	check   string
+	ndms    string
+	backend string
 }
 
 type enqueueRefCall struct {
@@ -78,8 +79,9 @@ func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 	}
 	check, _ := cmd.Args["check_name"].(string)
 	ndms, _ := cmd.Args["ndms_name"].(string)
+	backend, _ := cmd.Args["backend"].(string)
 	f.calls = append(f.calls, enqueueCall{
-		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms,
+		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms, backend: backend,
 	})
 	return nil
 }

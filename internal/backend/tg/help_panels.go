@@ -34,7 +34,7 @@ func HelpForScreen(screen string) string {
 Флот:
   self_update и массовые проверки запускает только админ. Успех обновления считается по heartbeat с новой версией, а не по самому факту нажатия.
 
-Подробности: help:premium, help:tunnels, help:routes, help:maint, help:pingcheck.`
+Подробности: help:premium, help:tunnels, help:routes, help:maint, help:pingcheck.` + "\n\nАктуальное меню из registry:\n" + OperatorMenuHelpText()
 	case "premium":
 		return `ℹ Premium cabinets
 
