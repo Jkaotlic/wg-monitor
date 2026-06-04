@@ -76,6 +76,9 @@ func main() {
 	if err := tgClient.SetMyCommands(smcCtx, telegramOperatorCommandMenu()); err != nil {
 		logger.Warn("setMyCommands operator failed (non-fatal)", "err", err)
 	}
+	if err := tgClient.SetCommandsMenuButton(smcCtx); err != nil {
+		logger.Warn("setChatMenuButton commands failed (non-fatal)", "err", err)
+	}
 	adminCommands := telegramAdminCommandMenu()
 	if cfg.Telegram.AdminUserID != 0 {
 		if err := tgClient.SetMyCommandsWithScope(smcCtx, adminCommands, tg.BotCommandScope{
@@ -128,6 +131,9 @@ func main() {
 		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard != nil && *cfg.UI.CompatInlineKeyboard,
 	}
 	disp.WelcomeKeyboard = func() any {
+		return tg.ReplyKeyboardForTopic("per_router")
+	}
+	disp.WelcomeVisibleKeyboard = func() any {
 		return tg.OperatorMenuInlineKeyboardForTopic("per_router")
 	}
 	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)

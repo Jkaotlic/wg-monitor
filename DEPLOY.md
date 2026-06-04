@@ -100,10 +100,11 @@ The wizard compares `wizard.toml`, backend `/healthz`, and the latest GitHub rel
 English:
 
 - The backend registers two command surfaces at startup: the default operator command set and a scoped admin command set.
+- The backend also sets the bot chat menu button to Telegram's `commands` menu, so clients show the blue `Menu` button next to the input bar when supported.
 - The default operator scope intentionally excludes admin-only commands, so operators on desktop clients see only topic-safe actions.
-- The visible router-topic menu is generated from the same menu registry as reply keyboards, compat inline keyboards, slash commands, and operator help.
-- `/menu` and `/keyboard` re-send the current visible menu in the active router topic.
-- Admins can open `/panel` and use "Revive topics" to re-send the current menu to every router topic that has a Telegram thread ID. The result screen reports sent, failed, and skipped-no-topic counts.
+- Router-topic menus are generated from the same menu registry as reply keyboards, compat inline keyboards, slash commands, and operator help.
+- `/menu` and `/keyboard` re-send both menu surfaces in the active router topic: first the bottom reply keyboard, then the visible inline fallback.
+- Admins can open `/panel` and use "Revive topics" to re-send both menu surfaces to every router topic that has a Telegram thread ID. The result screen reports sent, failed, and skipped-no-topic counts.
 
 Русский:
 

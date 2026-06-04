@@ -198,18 +198,24 @@ func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
 	r.HandleMessage(context.Background(), msg)
 
 	// Welcome lands in rkSends (SendMessageWithReplyKeyboard) — not sentMsgs.
-	var welcomeCount int
+	var bottomCount, visibleCount int
 	for _, s := range f.rkSends {
 		if strings.HasPrefix(s.text, "👋 Меню роутера vasya") {
+			if _, ok := s.markup.(*tg.ReplyKeyboardMarkup); !ok {
+				t.Fatalf("welcome must first carry bottom reply keyboard, markup=%T %+v", s.markup, s.markup)
+			}
+			bottomCount++
+		}
+		if strings.HasPrefix(s.text, "📌 Видимое меню роутера vasya") {
 			kb, ok := s.markup.(*tg.InlineKeyboardMarkup)
 			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") {
-				t.Fatalf("welcome must carry visible operator menu, markup=%T %+v", s.markup, s.markup)
+				t.Fatalf("welcome must also carry visible operator menu, markup=%T %+v", s.markup, s.markup)
 			}
-			welcomeCount++
+			visibleCount++
 		}
 	}
-	if welcomeCount != 1 {
-		t.Fatalf("want 1 welcome rkSend for vasya, got %d (all rkSends: %d)", welcomeCount, len(f.rkSends))
+	if bottomCount != 1 || visibleCount != 1 {
+		t.Fatalf("want bottom+visible welcome for vasya, got bottom=%d visible=%d (all rkSends: %d)", bottomCount, visibleCount, len(f.rkSends))
 	}
 }
 
@@ -232,18 +238,24 @@ func TestAdminRecreateTopic_SendsWelcomeAfterRebuild(t *testing.T) {
 	}
 	r.HandleMessage(context.Background(), msg)
 
-	var welcomeCount int
+	var bottomCount, visibleCount int
 	for _, s := range f.rkSends {
 		if strings.HasPrefix(s.text, "👋 Меню роутера vasya") {
+			if _, ok := s.markup.(*tg.ReplyKeyboardMarkup); !ok {
+				t.Fatalf("welcome must first carry bottom reply keyboard, markup=%T %+v", s.markup, s.markup)
+			}
+			bottomCount++
+		}
+		if strings.HasPrefix(s.text, "📌 Видимое меню роутера vasya") {
 			kb, ok := s.markup.(*tg.InlineKeyboardMarkup)
 			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
-				t.Fatalf("welcome must carry visible operator menu, markup=%T %+v", s.markup, s.markup)
+				t.Fatalf("welcome must also carry visible operator menu, markup=%T %+v", s.markup, s.markup)
 			}
-			welcomeCount++
+			visibleCount++
 		}
 	}
-	if welcomeCount != 1 {
-		t.Fatalf("want 1 welcome rkSend for vasya, got %d (rkSends: %d)", welcomeCount, len(f.rkSends))
+	if bottomCount != 1 || visibleCount != 1 {
+		t.Fatalf("want bottom+visible welcome for vasya, got bottom=%d visible=%d (rkSends: %d)", bottomCount, visibleCount, len(f.rkSends))
 	}
 }
 
@@ -284,12 +296,15 @@ func TestMenuCommand_ToleratesBotnameSuffixAndRepushesKeyboard(t *testing.T) {
 	}
 	r.HandleMessage(context.Background(), msg)
 
-	if len(f.rkSends) != 1 {
-		t.Fatalf("expected /menu to repush visible keyboard, got %d sends", len(f.rkSends))
+	if len(f.rkSends) != 2 {
+		t.Fatalf("expected /menu to repush bottom keyboard plus visible menu, got %d sends", len(f.rkSends))
 	}
-	kb, ok := f.rkSends[0].markup.(*tg.InlineKeyboardMarkup)
+	if _, ok := f.rkSends[0].markup.(*tg.ReplyKeyboardMarkup); !ok {
+		t.Fatalf("/menu first send should attach bottom reply keyboard, markup=%T", f.rkSends[0].markup)
+	}
+	kb, ok := f.rkSends[1].markup.(*tg.InlineKeyboardMarkup)
 	if !ok {
-		t.Fatalf("/menu should send visible inline menu, markup=%T", f.rkSends[0].markup)
+		t.Fatalf("/menu second send should attach visible inline menu, markup=%T", f.rkSends[1].markup)
 	}
 	if !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") ||
 		!keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {

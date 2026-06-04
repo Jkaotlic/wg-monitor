@@ -403,6 +403,34 @@ func TestSetMyCommandsWithScope_PostsScopePayload(t *testing.T) {
 	}
 }
 
+func TestSetCommandsMenuButton_PostsCommandsButton(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/setChatMenuButton") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{BaseURL: ts.URL + "/bot", Token: "T", HTTP: ts.Client()}
+	if err := c.SetCommandsMenuButton(context.Background()); err != nil {
+		t.Fatalf("SetCommandsMenuButton: %v", err)
+	}
+	var got struct {
+		MenuButton struct {
+			Type string `json:"type"`
+		} `json:"menu_button"`
+	}
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("unmarshal body: %v\nbody: %s", err, gotBody)
+	}
+	if got.MenuButton.Type != "commands" {
+		t.Fatalf("menu_button.type = %q, want commands", got.MenuButton.Type)
+	}
+}
+
 func TestGetUpdates_ParseDocument(t *testing.T) {
 	resp := `{"ok":true,"result":[{"update_id":1,"message":{"message_id":10,"from":{"id":99},"chat":{"id":-100},"message_thread_id":5,"document":{"file_id":"fid1","file_name":"awg11.conf","file_size":512}}}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

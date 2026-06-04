@@ -82,3 +82,24 @@ func TestRepushKeyboard_PresentsMenuWithoutSlashFallback(t *testing.T) {
 		t.Fatalf("repush text must not rely on operators guessing slash commands: %s", got)
 	}
 }
+
+func TestRepushRoleMenu_SendsBottomKeyboardThenVisibleInlineMenu(t *testing.T) {
+	f := &fakeWelcomeSender{}
+	bottom := "bottom-reply-keyboard"
+	visible := "visible-inline-menu"
+	if err := RepushRoleMenu(context.Background(), f, -100, 555, "del", bottom, visible); err != nil {
+		t.Fatalf("RepushRoleMenu: %v", err)
+	}
+	if len(f.calls) != 2 {
+		t.Fatalf("want bottom + visible sends, got %d", len(f.calls))
+	}
+	if f.calls[0].markup != bottom {
+		t.Fatalf("first send should attach bottom reply keyboard, got %+v", f.calls[0].markup)
+	}
+	if f.calls[1].markup != visible {
+		t.Fatalf("second send should attach visible inline menu, got %+v", f.calls[1].markup)
+	}
+	if !strings.Contains(strings.ToLower(f.calls[0].text), "нижняя") && !strings.Contains(f.calls[0].text, "Ð½Ð¸Ð¶Ð½ÑÑ") {
+		t.Fatalf("first text should explain bottom keyboard recovery, got: %s", f.calls[0].text)
+	}
+}

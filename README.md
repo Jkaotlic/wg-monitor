@@ -30,8 +30,9 @@ The current deploy path does **not** require the operator to join every router n
 
 English:
 
-- Router topics have an always-visible inline menu. It does not depend on Telegram Desktop showing slash commands correctly.
-- Operators can recover the menu in their current router topic with `/menu` or `/keyboard`.
+- Router topics get both a bottom reply keyboard and an always-visible inline fallback menu. This keeps mobile and desktop clients usable even when Telegram hides one of the surfaces.
+- The bot startup also sets Telegram's blue `Menu` button to the command picker, so role-scoped slash commands are discoverable from the input bar.
+- Operators can recover both menu surfaces in their current router topic with `/menu` or `/keyboard`.
 - The operator command list includes `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, and `/help`.
 - Admin commands are registered in admin scopes only: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, and `/selfhosted`.
 - `/panel` contains the fleet hub, mass checks, update-all, access management, operator help, and "revive topics" action that re-sends the current visible menu to all router topics.

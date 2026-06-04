@@ -460,7 +460,7 @@ func (r *Router) panelAwakenDo(ctx context.Context, q *tg.CallbackQuery) {
 			}
 		}
 		first = false
-		if werr := alerts.SendWelcome(ctx, r.tg, r.cfg.ChatID, *u.TelegramThreadID, u.Nickname, tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
+		if werr := alerts.SendWelcomeRoleMenu(ctx, r.tg, r.cfg.ChatID, *u.TelegramThreadID, u.Nickname, tg.ReplyKeyboardForTopic("per_router"), tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
 			failed++
 			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, werr))
 			continue
