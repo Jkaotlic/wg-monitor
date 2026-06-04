@@ -520,8 +520,8 @@ func TestPanelAwakenDo_SendsWelcomeOnlyToUsersWithThread(t *testing.T) {
 	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
 	q := &tg.CallbackQuery{ID: "cb-aw-do", From: tg.User{ID: 12345}, Data: "panel:0:awaken_do", Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 81}}
 	r.HandleCallback(context.Background(), q)
-	if len(f.rkSends) != 2 {
-		t.Errorf("want 2 welcomes (vasya+betak), got %d", len(f.rkSends))
+	if len(f.rkSends) != 4 {
+		t.Errorf("want 4 welcome sends (bottom+visible for vasya+betak), got %d", len(f.rkSends))
 	}
 	if len(f.edits) == 0 || !strings.Contains(f.edits[len(f.edits)-1], "2") {
 		t.Errorf("expected hub result mentioning count 2, got: %v", f.edits)

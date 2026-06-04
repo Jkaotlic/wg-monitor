@@ -70,6 +70,25 @@ func SendWelcome(ctx context.Context, tg WelcomeSender, chatID, threadID int64, 
 	return err
 }
 
+func SendWelcomeRoleMenu(ctx context.Context, tg WelcomeSender, chatID, threadID int64, nickname string, bottomMarkup, visibleMarkup any) error {
+	t := threadID
+	if bottomMarkup != nil {
+		text := "👋 Меню роутера " + nickname + " готово.\n\n" +
+			"Нижняя клавиатура обновлена: это основные действия для роли в этом топике."
+		if _, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, bottomMarkup); err != nil {
+			return err
+		}
+	}
+	if visibleMarkup != nil {
+		text := "📌 Видимое меню роутера " + nickname + "\n\n" +
+			"Эти кнопки остаются под сообщением как fallback, если клиент Telegram спрячет нижнюю клавиатуру."
+		if _, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, visibleMarkup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RepushKeyboard posts a fresh visible menu into an existing per_router
 // topic. Used by /keyboard and admin recovery flows when Telegram clients
 // hide or drop their local bottom keyboard state.
@@ -79,4 +98,23 @@ func RepushKeyboard(ctx context.Context, tg WelcomeSender, chatID, threadID int6
 	t := threadID
 	_, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, markup)
 	return err
+}
+
+func RepushRoleMenu(ctx context.Context, tg WelcomeSender, chatID, threadID int64, nickname string, bottomMarkup, visibleMarkup any) error {
+	t := threadID
+	if bottomMarkup != nil {
+		text := "🪄 Меню роутера " + nickname + " обновлено.\n\n" +
+			"Нижняя клавиатура снова привязана к этому топику."
+		if _, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, bottomMarkup); err != nil {
+			return err
+		}
+	}
+	if visibleMarkup != nil {
+		text := "📌 Видимое меню роутера " + nickname + "\n\n" +
+			"Полный набор кнопок под этим сообщением доступен как запасной вариант для Desktop и мобильных клиентов."
+		if _, err := tg.SendMessageWithReplyKeyboard(ctx, chatID, &t, text, "", nil, visibleMarkup); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -3068,15 +3068,20 @@ func TestRouterHandleMessage_OperatorKeyboardCommandWithBotSuffix(t *testing.T) 
 	}
 	r.HandleMessage(context.Background(), msg)
 
-	if len(f.rkSends) != 1 {
-		t.Fatalf("operator /keyboard@botname should re-push keyboard, got %d sends", len(f.rkSends))
+	if len(f.rkSends) != 2 {
+		t.Fatalf("operator /keyboard@botname should re-push bottom and visible menus, got %d sends", len(f.rkSends))
 	}
-	if f.rkSends[0].thread == nil || *f.rkSends[0].thread != tid {
-		t.Fatalf("keyboard must be sent to the operator's router topic, got %+v", f.rkSends[0].thread)
+	for i, sent := range f.rkSends {
+		if sent.thread == nil || *sent.thread != tid {
+			t.Fatalf("keyboard #%d must be sent to the operator's router topic, got %+v", i, sent.thread)
+		}
 	}
-	kb, ok := f.rkSends[0].markup.(*tg.InlineKeyboardMarkup)
+	if _, ok := f.rkSends[0].markup.(*tg.ReplyKeyboardMarkup); !ok {
+		t.Fatalf("/keyboard must first bind the bottom reply keyboard, markup=%T %+v", f.rkSends[0].markup, f.rkSends[0].markup)
+	}
+	kb, ok := f.rkSends[1].markup.(*tg.InlineKeyboardMarkup)
 	if !ok || !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") || !keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
-		t.Fatalf("/keyboard must send the full visible operator menu, markup=%T %+v", f.rkSends[0].markup, f.rkSends[0].markup)
+		t.Fatalf("/keyboard must also send the full visible operator menu, markup=%T %+v", f.rkSends[1].markup, f.rkSends[1].markup)
 	}
 }
 

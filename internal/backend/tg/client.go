@@ -354,6 +354,14 @@ type setMyCommandsReq struct {
 	Scope    *BotCommandScope `json:"scope,omitempty"`
 }
 
+type setChatMenuButtonReq struct {
+	MenuButton menuButton `json:"menu_button"`
+}
+
+type menuButton struct {
+	Type string `json:"type"`
+}
+
 // SetMyCommands registers the bot's slash-command menu so TG clients show
 // the commands in the command picker. Idempotent — TG replaces the previous
 // list each call. Errors are non-fatal at call sites (the bot keeps working
@@ -366,6 +374,11 @@ func (c *Client) SetMyCommands(ctx context.Context, cmds []BotCommand) error {
 func (c *Client) SetMyCommandsWithScope(ctx context.Context, cmds []BotCommand, scope BotCommandScope) error {
 	body, _ := json.Marshal(setMyCommandsReq{Commands: cmds, Scope: &scope})
 	return c.call(ctx, "setMyCommands", body, nil)
+}
+
+func (c *Client) SetCommandsMenuButton(ctx context.Context) error {
+	body, _ := json.Marshal(setChatMenuButtonReq{MenuButton: menuButton{Type: "commands"}})
+	return c.call(ctx, "setChatMenuButton", body, nil)
 }
 
 func (c *Client) call(ctx context.Context, method string, body []byte, dst any) error {

@@ -41,6 +41,10 @@ type Dispatcher struct {
 	// import the callbacks UI snapshot to avoid a cycle). Nil disables
 	// welcome — used only by tests or admin-disabled flows.
 	WelcomeKeyboard func() any
+	// WelcomeVisibleKeyboard returns the inline visible menu that is posted
+	// after the bottom reply keyboard. Nil keeps the legacy one-message
+	// welcome for tests and compatibility callers.
+	WelcomeVisibleKeyboard func() any
 }
 
 func NewDispatcher(d *db.DB, tg TGSender, cfg Config) *Dispatcher {
@@ -295,7 +299,11 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	// Fresh create — send welcome so reply-keyboard attaches to the topic.
 	// Non-fatal: log and continue if welcome fails. The topic is usable
 	// without it (it appears on first alert).
-	if di.WelcomeKeyboard != nil {
+	if di.WelcomeKeyboard != nil && di.WelcomeVisibleKeyboard != nil {
+		if werr := SendWelcomeRoleMenu(ctx, di.tg, di.cfg.ChatID, tid, nickname, di.WelcomeKeyboard(), di.WelcomeVisibleKeyboard()); werr != nil {
+			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
+		}
+	} else if di.WelcomeKeyboard != nil {
 		if werr := SendWelcome(ctx, di.tg, di.cfg.ChatID, tid, nickname, di.WelcomeKeyboard()); werr != nil {
 			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
 		}
