@@ -222,6 +222,96 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 	}
 }
 
+func TestFormatSmartReply_DoesNotFallbackTunnelRestartToAwgManagerRestart(t *testing.T) {
+	cases := []struct {
+		name string
+		args SmartReplyArgs
+	}{
+		{
+			name: "degraded",
+			args: SmartReplyArgs{
+				Nickname:      "vasya",
+				UserID:        7,
+				LastReportAge: 10 * time.Second,
+				Tunnels: []TunnelView{{
+					Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 200, PingStatus: "ok",
+				}},
+			},
+		},
+		{
+			name: "hard",
+			args: SmartReplyArgs{
+				Nickname:      "vasya",
+				UserID:        7,
+				LastReportAge: 10 * time.Second,
+				Tunnels:       []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
+				ActiveIncidents: []IncidentView{{
+					CheckName: "tunnel_awg11",
+					HardSince: time.Now().Add(-4 * time.Minute),
+					FailCount: 5,
+				}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, kb := FormatSmartReply(tc.args)
+			if hasSmartReplyCallbackPrefix(kb, "restart_tunnel:") {
+				t.Fatalf("missing NDMSName must not fallback to awg-manager restart, kb=%+v", kb)
+			}
+			if hasSmartReplyButtonText(kb, "Перезапустить туннель") {
+				t.Fatalf("missing NDMSName must not render per-tunnel restart button, kb=%+v", kb)
+			}
+			if !hasSmartReplyCallbackPrefix(kb, "tunnels_refresh:") {
+				t.Fatalf("missing NDMSName should offer live tunnels panel instead, kb=%+v", kb)
+			}
+		})
+	}
+}
+
+func TestFormatSmartReply_TunnelProblemSeparatesFreshBackendFromTunnelFault(t *testing.T) {
+	cases := []struct {
+		name string
+		args SmartReplyArgs
+	}{
+		{
+			name: "degraded",
+			args: SmartReplyArgs{
+				Nickname:      "client-b",
+				UserID:        7,
+				LastReportAge: 20 * time.Second,
+				Tunnels: []TunnelView{{
+					Name: "awg11", CheckName: "tunnel_awg11", NDMSName: "Wireguard1",
+					Enabled: true, HasEnabled: true, Status: "starting",
+				}},
+			},
+		},
+		{
+			name: "hard",
+			args: SmartReplyArgs{
+				Nickname:      "client-b",
+				UserID:        7,
+				LastReportAge: 20 * time.Second,
+				Tunnels: []TunnelView{{
+					Name: "awg11", CheckName: "tunnel_awg11", NDMSName: "Wireguard1",
+					HandshakeAge: 250, PingStatus: "dead",
+				}},
+				ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-4 * time.Minute), FailCount: 5}},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			text, _ := FormatSmartReply(tc.args)
+			for _, want := range []string{"Агент жив", "backend получает отчёты", "проблема ниже"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("smart reply should separate backend health from tunnel fault, missing %q in:\n%s", want, text)
+				}
+			}
+		})
+	}
+}
+
 func TestFormatSmartReply_Hard(t *testing.T) {
 	a := SmartReplyArgs{
 		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
@@ -329,6 +419,28 @@ func hasSmartReplyCallback(kb tg.InlineKeyboardMarkup, want string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {
 			if btn.CallbackData == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasSmartReplyCallbackPrefix(kb tg.InlineKeyboardMarkup, prefix string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasSmartReplyButtonText(kb tg.InlineKeyboardMarkup, needle string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.Contains(btn.Text, needle) {
 				return true
 			}
 		}

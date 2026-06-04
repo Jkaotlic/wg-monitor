@@ -27,23 +27,15 @@ import (
 var Version = "0.8.0-tunnel-import"
 
 func telegramCommandMenu() []tg.BotCommand {
-	return []tg.BotCommand{
-		{Command: "status", Description: "Что происходит с этим роутером"},
-		{Command: "check", Description: "Проверить роутер изнутри"},
-		{Command: "tunnels", Description: "Открыть туннели"},
-		{Command: "routes", Description: "Открыть маршруты"},
-		{Command: "via", Description: "Проверить связь через туннель"},
-		{Command: "direct", Description: "Проверить прямую связь"},
-		{Command: "maint", Description: "Открыть обслуживание"},
-		{Command: "upgrade", Description: "Обновить пакеты Entware"},
-		{Command: "keyboard", Description: "Восстановить кнопки в этом топике"},
-		{Command: "help", Description: "Справка по командам и кнопкам"},
-		{Command: "panel", Description: "Открыть панель управления"},
-		{Command: "ensure_topics", Description: "Создать темы для всех роутеров"},
-		{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
-		{Command: "this_is", Description: "Привязать этот топик к роутеру"},
-		{Command: "topic_help", Description: "Шпаргалка по управлению темами"},
-	}
+	return telegramOperatorCommandMenu()
+}
+
+func telegramOperatorCommandMenu() []tg.BotCommand {
+	return tg.OperatorBotCommands()
+}
+
+func telegramAdminCommandMenu() []tg.BotCommand {
+	return tg.AdminBotCommands()
 }
 
 func main() {
@@ -78,11 +70,27 @@ func main() {
 		LongPollHTTP: &http.Client{Timeout: 90 * time.Second},
 		Logger:       logger.With("component", "tg"),
 	}
-	// Register slash-command menu so TG clients show the commands in the
-	// picker. Non-fatal — the bot keeps working if TG refuses.
+	// Register scoped slash-command menus so operators see router commands by
+	// default while the admin gets fleet/topic-management commands.
 	smcCtx, smcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := tgClient.SetMyCommands(smcCtx, telegramCommandMenu()); err != nil {
-		logger.Warn("setMyCommands failed (non-fatal)", "err", err)
+	if err := tgClient.SetMyCommands(smcCtx, telegramOperatorCommandMenu()); err != nil {
+		logger.Warn("setMyCommands operator failed (non-fatal)", "err", err)
+	}
+	adminCommands := telegramAdminCommandMenu()
+	if cfg.Telegram.AdminUserID != 0 {
+		if err := tgClient.SetMyCommandsWithScope(smcCtx, adminCommands, tg.BotCommandScope{
+			Type:   "chat_member",
+			ChatID: cfg.Telegram.ChatID,
+			UserID: cfg.Telegram.AdminUserID,
+		}); err != nil {
+			logger.Warn("setMyCommands admin group scope failed (non-fatal)", "err", err)
+		}
+		if err := tgClient.SetMyCommandsWithScope(smcCtx, adminCommands, tg.BotCommandScope{
+			Type:   "chat",
+			ChatID: cfg.Telegram.AdminUserID,
+		}); err != nil {
+			logger.Warn("setMyCommands admin private scope failed (non-fatal)", "err", err)
+		}
 	}
 	smcCancel()
 	disp := alerts.NewDispatcher(d, tgClient, alerts.Config{
@@ -157,6 +165,7 @@ func main() {
 		Cache: routesCache,
 		DB:    d,
 		Store: cb.RouteWizardStore(),
+		Sink:  cmdQueue,
 	}
 	cb.SetUpstream(upCache)
 	notifier.DiagCache = cb.DiagCache()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +42,14 @@ func TestPanelHome_RendersHubMessage(t *testing.T) {
 		if !containsStr(flatCallbacks, want) {
 			t.Errorf("hub kb missing callback %q (have %v)", want, flatCallbacks)
 		}
+	}
+}
+
+func TestPanelHome_UsesRegistryKeyboard(t *testing.T) {
+	_, got := panelHomeMessage()
+	want := tg.AdminPanelHomeKeyboard()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("panel home keyboard must come from registry\nwant: %+v\ngot:  %+v", want, got)
 	}
 }
 
@@ -490,6 +499,9 @@ func TestPanelAwakenConfirm_ShowsCountOfTopics(t *testing.T) {
 	if !strings.Contains(f.edits[0], "2") {
 		t.Errorf("expected affected topic count, got %q", f.edits[0])
 	}
+	if !strings.Contains(f.edits[0], "Без топика: 1") {
+		t.Errorf("expected skipped no-topic count, got %q", f.edits[0])
+	}
 }
 
 func TestPanelAwakenDo_SendsWelcomeOnlyToUsersWithThread(t *testing.T) {
@@ -513,6 +525,9 @@ func TestPanelAwakenDo_SendsWelcomeOnlyToUsersWithThread(t *testing.T) {
 	}
 	if len(f.edits) == 0 || !strings.Contains(f.edits[len(f.edits)-1], "2") {
 		t.Errorf("expected hub result mentioning count 2, got: %v", f.edits)
+	}
+	if len(f.edits) == 0 || !strings.Contains(f.edits[len(f.edits)-1], "Без топика: 1") {
+		t.Errorf("expected hub result mentioning skipped no-topic count, got: %v", f.edits)
 	}
 }
 

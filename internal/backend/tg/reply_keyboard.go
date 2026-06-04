@@ -122,17 +122,9 @@ func OperatorMenuInlineKeyboardForTopic(kind string) *InlineKeyboardMarkup {
 func keyboardRowsForKind(kind string) [][]string {
 	switch kind {
 	case "per_router":
-		return [][]string{
-			{"📊 Что происходит?", "🩺 Проверка"},
-			{"🎛 Туннели", "🛣 Маршруты"},
-			{"🔐 Amnezia Premium", "🔑 HideMy.name"},
-			{"🌍 Через тоннель?", "🇷🇺 Напрямую?"},
-			{"🛠 Обслуживание", "⬆ Обновить пакеты"},
-		}
+		return labelRows(routerMenuItems, 2)
 	case "summary", "systemic":
-		return [][]string{
-			{"📊 Здоровье флота", "📋 Список юзеров"},
-		}
+		return labelRows(fleetMenuItems, 2)
 	}
 	return nil
 }
@@ -145,17 +137,9 @@ type operatorMenuButton struct {
 func operatorMenuRowsForKind(kind string) [][]operatorMenuButton {
 	switch kind {
 	case "per_router":
-		return [][]operatorMenuButton{
-			{{text: "📊 Что происходит?", code: "smart_reply"}, {text: "🩺 Проверка", code: "router_doctor"}},
-			{{text: "🎛 Туннели", code: "tunnels"}, {text: "🛣 Маршруты", code: "routes"}},
-			{{text: "🔐 Amnezia Premium", code: "amnezia_premium"}, {text: "🔑 HideMy.name", code: "hidemyname"}},
-			{{text: "🌍 Через тоннель?", code: "via_tunnel"}, {text: "🇷🇺 Напрямую?", code: "direct"}},
-			{{text: "🛠 Обслуживание", code: "maint"}, {text: "⬆ Обновить пакеты", code: "opkg_upgrade"}},
-		}
+		return buttonRows(routerMenuItems, 2)
 	case "summary", "systemic":
-		return [][]operatorMenuButton{
-			{{text: "📊 Флот", code: "fleet_health"}, {text: "📋 Юзеры", code: "list_users"}},
-		}
+		return buttonRows(fleetMenuItems, 2)
 	}
 	return nil
 }
@@ -163,19 +147,15 @@ func operatorMenuRowsForKind(kind string) [][]operatorMenuButton {
 // compatBtnCodes maps a button label to a stable short code used in
 // callback_data (TG limit 64 bytes). Reverse lookup via CompatBtnTextByCode.
 var compatBtnCodes = map[string]string{
-	"📊 Что происходит?": "smart_reply",
-	"🎛 Туннели":         "tunnels",
-	"🔐 Amnezia Premium": "amnezia_premium",
-	"🔑 HideMy.name":     "hidemyname",
-	"🌍 Через тоннель?":  "via_tunnel",
-	"🇷🇺 Напрямую?":      "direct",
-	"🛣 Маршруты":        "routes",
-	"⬆ Обновить пакеты": "opkg_upgrade",
-	"🛠 Обслуживание":    "maint",
-	"🩺 Проверка":        "router_doctor",
 	"🩺 Домашний роутер": "router_doctor",
-	"📋 Список юзеров":   "list_users",
-	"📊 Здоровье флота":  "fleet_health",
+}
+
+func init() {
+	for _, item := range append(cloneMenuItems(routerMenuItems), fleetMenuItems...) {
+		if item.Label != "" && item.Code != "" {
+			compatBtnCodes[item.Label] = item.Code
+		}
+	}
 }
 
 func compatBtnCodeFor(label string) (string, bool) {
@@ -188,10 +168,53 @@ func compatBtnCodeFor(label string) (string, bool) {
 // it can be dispatched through handleNonCommandMessage as if the user had
 // typed the text.
 func CompatBtnTextByCode(code string) string {
+	for _, item := range append(cloneMenuItems(routerMenuItems), fleetMenuItems...) {
+		if item.Code == code {
+			return item.Label
+		}
+	}
 	for label, c := range compatBtnCodes {
 		if c == code {
 			return label
 		}
 	}
 	return ""
+}
+
+func labelRows(items []BotMenuItem, perRow int) [][]string {
+	var rows [][]string
+	var row []string
+	for _, item := range items {
+		if item.Label == "" {
+			continue
+		}
+		row = append(row, item.Label)
+		if len(row) >= perRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func buttonRows(items []BotMenuItem, perRow int) [][]operatorMenuButton {
+	var rows [][]operatorMenuButton
+	var row []operatorMenuButton
+	for _, item := range items {
+		if item.Label == "" || item.Code == "" {
+			continue
+		}
+		row = append(row, operatorMenuButton{text: item.Label, code: item.Code})
+		if len(row) >= perRow {
+			rows = append(rows, row)
+			row = nil
+		}
+	}
+	if len(row) > 0 {
+		rows = append(rows, row)
+	}
+	return rows
 }

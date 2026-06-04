@@ -172,6 +172,25 @@ func TestMaintNotifier_ServiceRestart_RendersBannerWithCachedAudit(t *testing.T)
 	}
 }
 
+func TestMaintNotifier_ServiceRestart_EnqueuesFreshVersionAudit(t *testing.T) {
+	_, n, u, _ := newMaintNotifierTestRig(t)
+	n.Audit.PutVersionAudit(u.ID, wire.VersionAudit{AwgmgrVersion: "2.8.2", FirmwareCurrent: "5.0.0"})
+	sink := &fakeEnqueuer{}
+	n.Sink = sink
+
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, ThreadID: ptrInt64(300), Action: "service_restart"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: "hrneo restart sent"}, u.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "version_audit" {
+		t.Fatalf("successful maintenance action should enqueue fresh version_audit, got %+v", sink.calls)
+	}
+	if len(sink.refs) != 1 || sink.refs[0].chatID != 100 || sink.refs[0].messageID != 200 {
+		t.Fatalf("fresh version_audit should target same panel message, refs=%+v", sink.refs)
+	}
+}
+
 func TestMaintNotifier_ServiceRestart_NoCachedAudit_MinimalText(t *testing.T) {
 	tgFake, n, u, _ := newMaintNotifierTestRig(t)
 	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "service_restart"}

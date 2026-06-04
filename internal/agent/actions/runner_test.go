@@ -177,14 +177,18 @@ func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
 
 func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
 	var forced int
-	var commands []string
+	var steps []string
 	r := Runner{
 		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
-			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			steps = append(steps, strings.Join(append([]string{name}, args...), " "))
 			return []byte("ok"), nil
 		},
 		ForceRecheck: func(ctx context.Context) { forced++ },
-		Now:          mockNow(),
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			steps = append(steps, "sleep "+d.String())
+			return nil
+		},
+		Now: mockNow(),
 	}
 
 	res := r.Execute(context.Background(), wire.Command{
@@ -198,16 +202,47 @@ func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
 	}
 	want := []string{
 		"ndmc -c interface Wireguard3 down",
+		"sleep 1s",
 		"ndmc -c interface Wireguard3 up",
 	}
-	if strings.Join(commands, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("commands:\n%v\nwant:\n%v", commands, want)
+	if strings.Join(steps, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("steps:\n%v\nwant:\n%v", steps, want)
 	}
 	if forced != 1 {
 		t.Fatalf("ForceRecheck calls = %d, want 1", forced)
 	}
 	if !strings.Contains(res.Output, "Wireguard3") || !strings.Contains(res.Output, "restarted") {
 		t.Fatalf("unexpected output: %q", res.Output)
+	}
+}
+
+func TestRunner_TunnelRestart_DoesNotBringUpAfterInterruptedSettleDelay(t *testing.T) {
+	var forced int
+	var commands []string
+	r := Runner{
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+			return []byte("ok"), nil
+		},
+		Sleep:        func(ctx context.Context, d time.Duration) error { return context.Canceled },
+		ForceRecheck: func(ctx context.Context) { forced++ },
+		Now:          mockNow(),
+	}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "restart-cancel",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"ndms_name": "Wireguard3"},
+	})
+
+	if res.Status != "err" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if strings.Join(commands, "\n") != "ndmc -c interface Wireguard3 down" {
+		t.Fatalf("commands = %+v, want only down", commands)
+	}
+	if forced != 0 {
+		t.Fatalf("ForceRecheck calls = %d, want 0", forced)
 	}
 }
 
@@ -439,6 +474,15 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 		if r.URL.Query().Get("id") != "old-id" {
 			t.Errorf("replace: wrong id %q", r.URL.Query().Get("id"))
 		}
+		var body struct {
+			Backend string `json:"backend"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Backend != "nativewg" {
+			t.Fatalf("replace must request nativewg backend, got %q", body.Backend)
+		}
 		w.Write([]byte(replaceResp))
 	})
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
@@ -507,6 +551,48 @@ func TestRunner_TunnelImport_ReplaceFallsBackToMatchingAddress(t *testing.T) {
 	}
 	if imported {
 		t.Fatal("ImportConf should not be called when address fallback matches")
+	}
+}
+
+func TestRunner_TunnelImport_CreatesProviderConfigsWithNativeWGBackend(t *testing.T) {
+	var importBackend string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old","name":"old","backend":"kernel"}],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Backend string `json:"backend"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		importBackend = body.Backend
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"new-id","name":"amnezia_nl","type":"awg","status":"running","enabled":false,"defaultRoute":true}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":false,"running":false}}`))
+	})
+
+	r := Runner{
+		AwgClient: awgmgrFake(t, mux),
+		Exec:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Now:       mockNow(),
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "imp-nativewg",
+		Action: "tunnel_import",
+		Args:   map[string]any{"conf": testConfB64, "name": "amnezia_nl", "replace": false},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if importBackend != "nativewg" {
+		t.Fatalf("provider config imports must request nativewg backend, got %q", importBackend)
 	}
 }
 

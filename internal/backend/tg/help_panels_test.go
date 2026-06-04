@@ -66,6 +66,18 @@ func TestHelpForScreen_OperatorMenuDoesNotRelyOnSlashDiscovery(t *testing.T) {
 	}
 }
 
+func TestHelpForScreen_OperatorIncludesRegistryMenuItems(t *testing.T) {
+	got := HelpForScreen("operator")
+	for _, item := range RouterMenuItems() {
+		if item.Label == "" {
+			continue
+		}
+		if !strings.Contains(got, item.Label) {
+			t.Fatalf("operator help missing registry menu item %q:\n%s", item.Label, got)
+		}
+	}
+}
+
 func TestHelpForScreen_Premium(t *testing.T) {
 	got := HelpForScreen("premium")
 	for _, want := range []string{"Amnezia Premium", "HideMy.name", ".conf", "AmneziaWG 2.0", "secret"} {

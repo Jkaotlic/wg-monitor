@@ -130,6 +130,9 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 	// Toggle row(s).
 	var row []InlineKeyboardButton
 	for _, e := range entries {
+		if strings.TrimSpace(e.NDMSName) == "" {
+			continue
+		}
 		var icon, action string
 		if e.Enabled {
 			icon = "⏸"
@@ -156,6 +159,9 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 	// the global awg-manager daemon.
 	row = nil
 	for _, e := range entries {
+		if strings.TrimSpace(e.NDMSName) == "" {
+			continue
+		}
 		label := shortTunnelLabel(e.Name, e.CheckName)
 		row = append(row, InlineKeyboardButton{
 			Text:         fmt.Sprintf("🔁 %s", label),
@@ -174,6 +180,9 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 	// screen instead of enqueueing the agent command directly.
 	row = nil
 	for _, e := range entries {
+		if strings.TrimSpace(e.NDMSName) == "" {
+			continue
+		}
 		label := shortTunnelLabel(e.Name, e.CheckName)
 		row = append(row, InlineKeyboardButton{
 			Text:         fmt.Sprintf("🗑 %s", label),

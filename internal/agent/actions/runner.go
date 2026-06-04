@@ -13,6 +13,7 @@
 //   - pingcheck_toggle → awg-mgr POST /api/pingcheck/toggle (primary)
 //     with ndmc CLI fallback (interface <ndms_name> ping-check)
 //   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
+//   - tunnel_restart → ndmc down, short settle delay, then ndmc up
 //     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
 //     ndmc CLI is the authoritative path. NDMSName must be supplied in
 //     cmd.Args["ndms_name"] by the backend.)
@@ -56,6 +57,7 @@ type Runner struct {
 	Opkg                 OpkgExecutor
 	Exec                 ExecFunc // for tunnel_enable/disable via ndmc
 	Now                  func() time.Time
+	Sleep                func(ctx context.Context, d time.Duration) error
 	AllowRouterReboot    bool // gates `service_restart router`
 	AllowFirmwareInstall bool // gates `firmware_install`
 	// DiagPollEvery is the interval between DiagResult polls after a DiagRun
@@ -121,6 +123,20 @@ func (r *Runner) now() time.Time {
 		return time.Now()
 	}
 	return r.Now()
+}
+
+func (r *Runner) sleep(ctx context.Context, d time.Duration) error {
+	if r.Sleep != nil {
+		return r.Sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResult {
@@ -256,6 +272,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s down: %v\n%s", ndms, err, string(outDown)), payload
 		}
+		if err := r.sleep(ctx, time.Second); err != nil {
+			return "err", fmt.Sprintf("wait after interface %s down: %v", ndms, err), payload
+		}
 		outUp, err := r.Exec(ctx, "ndmc", "-c", fmt.Sprintf("interface %s up", ndms))
 		if err != nil {
 			return "err", fmt.Sprintf("ndmc interface %s up: %v\n%s", ndms, err, string(outUp)), payload
@@ -293,10 +312,11 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		confB64, _ := cmd.Args["conf"].(string)
 		name, _ := cmd.Args["name"].(string)
 		replace, _ := cmd.Args["replace"].(bool)
+		backend, _ := cmd.Args["backend"].(string)
 		if confB64 == "" || name == "" {
 			return "err", "tunnel_import: conf and name are required", payload
 		}
-		out, err := ImportTunnel(ctx, r.AwgClient, r.Exec, confB64, name, replace)
+		out, err := ImportTunnel(ctx, r.AwgClient, r.Exec, confB64, name, replace, backend)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

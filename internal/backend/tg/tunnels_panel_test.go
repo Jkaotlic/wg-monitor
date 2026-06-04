@@ -1,6 +1,9 @@
 package tg
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTunnelsPanelKeyboardAddsDeleteAskButton(t *testing.T) {
 	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
@@ -33,6 +36,32 @@ func TestTunnelsPanelKeyboardAddsPerTunnelRestartButton(t *testing.T) {
 	}
 }
 
+func TestTunnelsPanelKeyboardSkipsUnsafeButtonsWithoutNDMSName(t *testing.T) {
+	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
+		Name:      "amnezia_dead",
+		CheckName: "tunnel_awg13",
+		Enabled:   true,
+		Status:    "dead",
+	}})
+
+	for _, prefix := range []string{
+		"tunnel_disable:42:tunnel_awg13:",
+		"tunnel_enable:42:tunnel_awg13:",
+		"tunnel_restart:42:tunnel_awg13:",
+		"tunnel_delete_ask:42:tunnel_awg13:",
+	} {
+		if hasTunnelPanelCallbackPrefix(kb, prefix) {
+			t.Fatalf("unsafe per-tunnel callback %q should be hidden without NDMSName: %+v", prefix, kb)
+		}
+	}
+	if !hasTunnelPanelCallback(kb, "restart_tunnel:42:_panel_") {
+		t.Fatalf("global awg-manager restart should stay available: %+v", kb)
+	}
+	if !hasTunnelPanelCallback(kb, "tunnels_refresh:42:_panel_") {
+		t.Fatalf("refresh should stay available: %+v", kb)
+	}
+}
+
 func TestTunnelsPanelKeyboardOffersRoutesAfterStatusCheck(t *testing.T) {
 	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
 		Name:      "amnezia_live",
@@ -51,6 +80,17 @@ func hasTunnelPanelCallback(kb InlineKeyboardMarkup, want string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {
 			if btn.CallbackData == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasTunnelPanelCallbackPrefix(kb InlineKeyboardMarkup, prefix string) bool {
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix) {
 				return true
 			}
 		}

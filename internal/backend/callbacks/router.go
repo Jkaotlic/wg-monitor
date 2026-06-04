@@ -820,9 +820,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			switch cmd {
 			case "/help":
 				r.handleHelpCommand(ctx, m)
-			case "/keyboard":
+			case "/menu", "/keyboard":
 				r.handleKeyboardCommand(ctx, m)
-			case "/status", "/check", "/tunnels", "/routes", "/via", "/direct", "/maint", "/upgrade":
+			case "/status", "/check", "/tunnels", "/routes", "/amnezia", "/hidemy", "/via", "/direct", "/maint", "/upgrade":
 				r.handleRouterSlashCommand(ctx, m, kind, user)
 			}
 			return
@@ -971,6 +971,22 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+		return true
+	case "/amnezia":
+		if kind == "per_router" && user != nil {
+			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user, m.From.ID)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"Amnezia Premium работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+		}
+		return true
+	case "/hidemy":
+		if kind == "per_router" && user != nil {
+			r.sendHideMyPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
+		} else {
+			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+				"HideMy.name работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 		return true
 	case "/maint":
@@ -1786,9 +1802,9 @@ func (r *Router) consumePendingRebindForActor(userID, actorTGID int64, token str
 
 // ----- routes handlers -----
 
-// handleRoutesOpen renders Screen 2. Cache lookup unless force=true.
-// On miss, enqueues route_status; the result handler (RoutesPanelNotifier
-// in M7.4) edits the panel when the agent answers.
+// handleRoutesOpen renders Screen 2 and always enqueues route_status so the
+// panel is replaced by live AWG Manager state when the agent answers. A recent
+// cache is only a temporary panel while the fresh read is in flight.
 func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args Args, force bool) {
 	user, err := r.d.Users().GetByID(args.UserID)
 	if err != nil || user == nil {
@@ -1797,11 +1813,9 @@ func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args
 	}
 	if !force && r.routesCache != nil {
 		if snap, ok := r.routesCache.Get(user.ID); ok {
-			text := tg.RoutesPanelText(user.Nickname, snap)
-			kb := tg.RoutesPanelKeyboard(user.ID, snap)
+			text := "🔄 обновляю живые данные с роутера...\n\n" + tg.RoutesPanelText(user.Nickname, snap)
+			kb := routesRefreshingKeyboard(user.ID)
 			_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-			return
 		}
 	}
 	if r.cmdSink == nil {
@@ -1819,6 +1833,13 @@ func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args
 		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func routesRefreshingKeyboard(userID int64) tg.InlineKeyboardMarkup {
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
+		{Text: "Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
+	}}}
 }
 
 func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -2391,6 +2412,7 @@ func (r *Router) NewMaintNotifier(tgClient MaintEditTG, up *upstream.Cache) *Mai
 		Cooldown: r.cooldown,
 		Audit:    r.auditCache,
 		DB:       r.d,
+		Sink:     r.cmdSink,
 	}
 }
 

@@ -218,18 +218,16 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	state := ClassifyState(a)
 	plainCD := func(action, cn string) string { return fmt.Sprintf("%s:%d:%s", action, a.UserID, cn) }
 	tunnelCD := func(action string, t TunnelView) string {
-		if strings.TrimSpace(t.NDMSName) == "" {
-			return plainCD("restart_tunnel", t.CheckName)
-		}
 		return fmt.Sprintf("%s:%d:%s:%s", action, a.UserID, t.CheckName, t.NDMSName)
 	}
-	incidentTunnelCD := func(action, checkName string) string {
+	tunnelsPanelCD := func() string { return fmt.Sprintf("tunnels_refresh:%d:_panel_", a.UserID) }
+	incidentTunnel := func(checkName string) (TunnelView, bool) {
 		for _, t := range a.Tunnels {
 			if t.CheckName == checkName {
-				return tunnelCD(action, t)
+				return t, true
 			}
 		}
-		return plainCD("restart_tunnel", checkName)
+		return TunnelView{}, false
 	}
 	silenceCD := func(cn, ttl string) string { return fmt.Sprintf("silence:%d:%s:%s", a.UserID, cn, ttl) }
 	visibleIncidents := activeIncidentsForDisplay(a)
@@ -258,6 +256,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 
 	case StateDegraded:
 		fmt.Fprintf(&b, "⚠️ %s — есть подозрения.\n\n", a.Nickname)
+		appendFreshBackendBoundary(&b, a)
 		problems := degradedTunnels(a)
 		for _, t := range problems {
 			fmt.Fprintf(&b, "Туннель %s: ", t.Name)
@@ -281,20 +280,26 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		b.WriteString("Сейчас это не показываем как красный алерт, но внимание нужно.\n\nДействия:")
 		var rows [][]tg.InlineKeyboardButton
 		for _, t := range problems {
-			label := "🔁 Перезапустить туннель"
-			if len(problems) > 1 {
-				label = "🔁 Перезапуск " + t.Name
+			row := []tg.InlineKeyboardButton{}
+			if strings.TrimSpace(t.NDMSName) != "" {
+				label := "🔁 Перезапустить туннель"
+				if len(problems) > 1 {
+					label = "🔁 Перезапуск " + t.Name
+				}
+				row = append(row, tg.InlineKeyboardButton{Text: label, CallbackData: tunnelCD("tunnel_restart", t)})
 			}
-			rows = append(rows, []tg.InlineKeyboardButton{
-				{Text: label, CallbackData: tunnelCD("tunnel_restart", t)},
-				{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)},
-			})
+			row = append(row, tg.InlineKeyboardButton{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)})
+			if strings.TrimSpace(t.NDMSName) == "" {
+				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Тоннели", CallbackData: tunnelsPanelCD()})
+			}
+			rows = append(rows, row)
 		}
 		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
 	case StateHard:
 		fmt.Fprintf(&b, "🔴 %s — есть проблема.\n\n", a.Nickname)
+		appendFreshBackendBoundary(&b, a)
 		neighbors := tunnelViewsAsNeighbors(a.Tunnels)
 		for _, inc := range visibleIncidents {
 			age := time.Since(inc.HardSince).Round(time.Minute)
@@ -322,10 +327,15 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				})
 				continue
 			}
-			rows = append(rows, []tg.InlineKeyboardButton{
-				{Text: "🔁 Перезапустить туннель", CallbackData: incidentTunnelCD("tunnel_restart", inc.CheckName)},
-				{Text: "📊 Запустить диагностику", CallbackData: plainCD("diag_now", inc.CheckName)},
-			})
+			row := []tg.InlineKeyboardButton{}
+			if t, ok := incidentTunnel(inc.CheckName); ok && strings.TrimSpace(t.NDMSName) != "" {
+				row = append(row, tg.InlineKeyboardButton{Text: "🔁 Перезапустить туннель", CallbackData: tunnelCD("tunnel_restart", t)})
+			}
+			row = append(row, tg.InlineKeyboardButton{Text: "📊 Запустить диагностику", CallbackData: plainCD("diag_now", inc.CheckName)})
+			if len(row) == 1 {
+				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Тоннели", CallbackData: tunnelsPanelCD()})
+			}
+			rows = append(rows, row)
 			rows = append(rows, []tg.InlineKeyboardButton{
 				{Text: "⏸ Замолчать на час", CallbackData: silenceCD(inc.CheckName, "1h")},
 			})
@@ -336,7 +346,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		// while at least one other has a HARD — the user expects a restart
 		// button for ALL tunnels they can see).
 		for _, t := range a.Tunnels {
-			if seen[t.CheckName] || t.CheckName == "" {
+			if seen[t.CheckName] || t.CheckName == "" || strings.TrimSpace(t.NDMSName) == "" {
 				continue
 			}
 			rows = append(rows, []tg.InlineKeyboardButton{
@@ -356,6 +366,13 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		return b.String(), tg.InlineKeyboardMarkup{}
 	}
 	return "", tg.InlineKeyboardMarkup{}
+}
+
+func appendFreshBackendBoundary(b *strings.Builder, a SmartReplyArgs) {
+	if a.LastReportAge > smartReplyOfflineThreshold {
+		return
+	}
+	fmt.Fprintf(b, "Агент жив: backend получает отчёты (%s назад); проблема ниже — в тоннеле, DNS или маршрутизации.\n", humanAgeDur(a.LastReportAge))
 }
 
 func tunnelViewsAsNeighbors(tunnels []TunnelView) []NeighborSummary {

@@ -15,6 +15,8 @@ import (
 
 var validNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
+const defaultImportBackend = "nativewg"
+
 func isValidTunnelName(s string) bool { return validNameRe.MatchString(s) }
 
 func sanitizeTunnelName(s string) string {
@@ -167,14 +169,23 @@ func parsePeerField(peer *awgmgr.PeerConfig, key, val string) error {
 	return nil
 }
 
-// preferredBackend returns the backend used by the first existing tunnel so new
-// tunnels match. Falls back to "" (awg-manager picks its active backend).
-func preferredBackend(ctx context.Context, client *awgmgr.Client) string {
+// preferredBackend returns the backend for newly imported provider configs.
+// Amnezia/HideMy configs must be created through NativeWG; inheriting "kernel"
+// from an older tunnel makes fresh imports come up with the wrong engine.
+func preferredBackend(ctx context.Context, client *awgmgr.Client, requested string) string {
+	if requested = strings.TrimSpace(strings.ToLower(requested)); requested != "" {
+		return requested
+	}
 	all, err := client.TunnelsAll(ctx)
 	if err != nil || len(all.Tunnels) == 0 {
-		return ""
+		return defaultImportBackend
 	}
-	return all.Tunnels[0].Backend
+	for _, t := range all.Tunnels {
+		if strings.EqualFold(strings.TrimSpace(t.Backend), defaultImportBackend) {
+			return defaultImportBackend
+		}
+	}
+	return defaultImportBackend
 }
 
 // ImportTunnel is the agent-side handler for the tunnel_import wire.Command.
@@ -182,7 +193,7 @@ func preferredBackend(ctx context.Context, client *awgmgr.Client) string {
 // replace=true  → find existing tunnel by name and use ReplaceConf API (atomic).
 // replace=false → ImportConf (creates new tunnel, enabled=false).
 // Restarts HydraRoute daemon if installed.
-func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, confB64, name string, replace bool) (string, error) {
+func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, confB64, name string, replace bool, requestedBackend string) (string, error) {
 	slog.Info("tunnel import", "name", name, "replace", replace)
 	confData, err := base64.StdEncoding.DecodeString(confB64)
 	if err != nil {
@@ -199,7 +210,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 
 	// Determine preferred backend from existing tunnels so the new tunnel
 	// uses the same backend (e.g. nativewg) rather than the system default.
-	backend := preferredBackend(ctx, client)
+	backend := preferredBackend(ctx, client, requestedBackend)
 
 	var result strings.Builder
 	var newID string
@@ -226,7 +237,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 			}
 		}
 		if oldID != "" {
-			newTun, err := client.ReplaceConf(ctx, oldID, rawConf, name)
+			newTun, err := client.ReplaceConf(ctx, oldID, rawConf, name, backend)
 			if err != nil {
 				slog.Warn("tunnel import failed", "name", name, "stage", "replace", "old_id", oldID, "err", err)
 				return "", fmt.Errorf("replace tunnel: %w", err)
