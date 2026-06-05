@@ -51,3 +51,26 @@ func TestPickConnectivityTunnelIfaceFallsBackToDefaultRoute(t *testing.T) {
 		t.Fatalf("iface=%q label=%q, want nwg1/old-default", iface, label)
 	}
 }
+
+func TestPickConnectivityTunnelIfaceSkipsStoppedDefaultRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"stopped","name":"amnezia_sg","interfaceName":"opkgtun10","enabled":true,"status":"stopped","defaultRoute":true}
+		]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:youtube","name":"YouTube","enabled":true,"backend":"hydraroute","domains":["youtube.com"],"routes":[{"interface":"opkgtun10","tunnelId":"awg10"}]}
+		]}`))
+	})
+	c := awgmgrFake(t, mux)
+
+	iface, label := pickConnectivityTunnelIface(context.Background(), c, []connectivityTarget{
+		{Name: "YouTube", URL: "https://www.youtube.com/generate_204"},
+	})
+
+	if iface != "" || label != "" {
+		t.Fatalf("iface=%q label=%q, want no usable stopped tunnel", iface, label)
+	}
+}
