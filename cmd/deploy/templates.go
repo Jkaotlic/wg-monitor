@@ -43,6 +43,7 @@ type BackupServiceParams struct {
 	ReadWritePath   string
 	SendTelegram    bool
 	ProtectHomeMode string
+	OmitUserGroup   bool
 }
 
 func renderTemplate(name string, data any) ([]byte, error) {

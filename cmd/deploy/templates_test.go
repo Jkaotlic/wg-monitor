@@ -145,14 +145,13 @@ func TestRenderBackupServiceSupportsDockerLayout(t *testing.T) {
 		ReadWritePath:   "/home/anex/wg-monitor",
 		SendTelegram:    true,
 		ProtectHomeMode: "read-only",
+		OmitUserGroup:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc := string(got)
 	for _, want := range []string{
-		"User=anex",
-		"Group=anex",
 		"ExecStart=/home/anex/wg-monitor/bin/wg-monitor-backend backup",
 		"--layout-root /home/anex/wg-monitor",
 		"ReadWritePaths=/home/anex/wg-monitor",
@@ -160,6 +159,11 @@ func TestRenderBackupServiceSupportsDockerLayout(t *testing.T) {
 	} {
 		if !strings.Contains(svc, want) {
 			t.Errorf("docker backup service missing %q\nfull:\n%s", want, svc)
+		}
+	}
+	for _, bad := range []string{"User=anex", "Group=anex"} {
+		if strings.Contains(svc, bad) {
+			t.Errorf("docker user backup service must omit %q\nfull:\n%s", bad, svc)
 		}
 	}
 }
