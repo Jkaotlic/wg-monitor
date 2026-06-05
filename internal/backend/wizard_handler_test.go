@@ -562,6 +562,42 @@ func TestWizardCommandDispatchEnqueuesSafeAgentCommand(t *testing.T) {
 	}
 }
 
+func TestWizardCommandDispatchAllowsConnectivityChecks(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("gachimikhail", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, action := range []string{"check_via_tunnel", "check_direct"} {
+		t.Run(action, func(t *testing.T) {
+			sink := &fakeCmdSink{}
+			h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
+			req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/gachimikhail/commands",
+				strings.NewReader(`{"action":"`+action+`"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetPathValue("nickname", "gachimikhail")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(sink.enqueued) != 1 || sink.enqueuedUsers[0] != userID {
+				t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
+			}
+			if sink.enqueued[0].Action != action {
+				t.Fatalf("action=%q, want %q", sink.enqueued[0].Action, action)
+			}
+		})
+	}
+}
+
 func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)

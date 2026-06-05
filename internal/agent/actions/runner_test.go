@@ -480,8 +480,8 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Backend != "nativewg" {
-			t.Fatalf("replace must request nativewg backend, got %q", body.Backend)
+		if body.Backend != "nativeWG" {
+			t.Fatalf("replace must request nativeWG backend, got %q", body.Backend)
 		}
 		w.Write([]byte(replaceResp))
 	})
@@ -591,8 +591,8 @@ func TestRunner_TunnelImport_CreatesProviderConfigsWithNativeWGBackend(t *testin
 	if res.Status != "ok" {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
-	if importBackend != "nativewg" {
-		t.Fatalf("provider config imports must request nativewg backend, got %q", importBackend)
+	if importBackend != "nativeWG" {
+		t.Fatalf("provider config imports must request nativeWG backend, got %q", importBackend)
 	}
 }
 

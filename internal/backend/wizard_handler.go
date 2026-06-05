@@ -398,6 +398,8 @@ type wizardMaintenanceReq struct {
 var wizardCommandAllowlist = map[string]bool{
 	"diag_now":         true,
 	"force_recheck":    true,
+	"check_via_tunnel": true,
+	"check_direct":     true,
 	"pingcheck_now":    true,
 	"pingcheck_status": true,
 	"router_doctor":    true,

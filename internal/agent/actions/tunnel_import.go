@@ -15,7 +15,7 @@ import (
 
 var validNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
-const defaultImportBackend = "nativewg"
+const defaultImportBackend = "nativeWG"
 
 func isValidTunnelName(s string) bool { return validNameRe.MatchString(s) }
 
@@ -173,7 +173,7 @@ func parsePeerField(peer *awgmgr.PeerConfig, key, val string) error {
 // Amnezia/HideMy configs must be created through NativeWG; inheriting "kernel"
 // from an older tunnel makes fresh imports come up with the wrong engine.
 func preferredBackend(ctx context.Context, client *awgmgr.Client, requested string) string {
-	if requested = strings.TrimSpace(strings.ToLower(requested)); requested != "" {
+	if requested = normalizeImportBackend(requested); requested != "" {
 		return requested
 	}
 	all, err := client.TunnelsAll(ctx)
@@ -181,11 +181,22 @@ func preferredBackend(ctx context.Context, client *awgmgr.Client, requested stri
 		return defaultImportBackend
 	}
 	for _, t := range all.Tunnels {
-		if strings.EqualFold(strings.TrimSpace(t.Backend), defaultImportBackend) {
+		if normalizeImportBackend(t.Backend) == defaultImportBackend {
 			return defaultImportBackend
 		}
 	}
 	return defaultImportBackend
+}
+
+func normalizeImportBackend(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return ""
+	case "nativewg", "native_wg", "native-wg":
+		return defaultImportBackend
+	default:
+		return strings.TrimSpace(s)
+	}
 }
 
 // ImportTunnel is the agent-side handler for the tunnel_import wire.Command.
