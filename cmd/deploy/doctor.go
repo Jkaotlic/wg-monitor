@@ -96,7 +96,7 @@ func dialableTCPFrom(host string, port int, timeout time.Duration, sourceBind st
 	if host == "" || port == 0 {
 		return false
 	}
-	addr := fmt.Sprintf("%s:%d", host, port)
+	addr := net.JoinHostPort(host, fmt.Sprint(port))
 	sourceBind = strings.TrimSpace(sourceBind)
 	var d net.Dialer
 	d.Timeout = timeout
