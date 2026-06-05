@@ -194,7 +194,9 @@ func fetchIfaceMap(ctx context.Context, awgClient *awgmgr.Client) (map[string]st
 func pickDefaultRouteIface(ctx context.Context, c *awgmgr.Client, logger *slog.Logger) string {
 	ta, err := c.TunnelsAll(ctx)
 	if err != nil {
-		logger.Warn("external_reach: cannot pick default-route iface", "err", err)
+		if logger != nil {
+			logger.Warn("external_reach: cannot pick default-route iface", "err", err)
+		}
 		return ""
 	}
 	for _, t := range ta.Tunnels {
@@ -230,9 +232,20 @@ func buildExternalReachCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger
 					DialContext: checks.IfaceDialer(viaIface).DialContext,
 				},
 			}
-			logger.Info("external_reach iface-bound", "iface", viaIface, "targets", len(targets))
+			if logger != nil {
+				logger.Info("external_reach iface-bound", "iface", viaIface, "targets", len(targets))
+			}
 		} else {
-			logger.Warn("external_reach: no defaultRoute tunnel found, using system route")
+			if logger != nil {
+				logger.Warn("external_reach: no defaultRoute tunnel found")
+			}
+			return checks.ExternalReachCheck{
+				Targets:         targets,
+				FailThreshold:   pc.FailThreshold,
+				PerProbeTimeout: 5 * time.Second,
+				ConfigReason:    "no_default_route_tunnel",
+				ConfigError:     "no enabled defaultRoute tunnel found in awg-manager; external_reach is configured to bind to a tunnel and will not probe through system WAN",
+			}
 		}
 	}
 

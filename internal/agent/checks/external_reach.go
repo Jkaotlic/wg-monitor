@@ -31,12 +31,24 @@ type ExternalReachCheck struct {
 	HTTPClient      *http.Client  // iface-bound by caller; fallback to http.DefaultClient
 	PerProbeTimeout time.Duration // default 5s
 	ViaInterface    string        // informational; surfaced in Details for the renderer
+	ConfigReason    string
+	ConfigError     string
 }
 
 func (ExternalReachCheck) Name() string { return "external_reach" }
 
 func (c ExternalReachCheck) Run(ctx context.Context, _ Deps) wire.Check {
 	start := time.Now()
+	if c.ConfigError != "" {
+		reason := c.ConfigReason
+		if reason == "" {
+			reason = "config_error"
+		}
+		return Fail(c.Name(), start, c.ConfigError, map[string]any{
+			"reason": reason,
+			"error":  c.ConfigError,
+		})
+	}
 	if c.PerProbeTimeout <= 0 {
 		c.PerProbeTimeout = 5 * time.Second
 	}

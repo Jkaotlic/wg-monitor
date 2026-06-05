@@ -376,6 +376,9 @@ func TestImportAction_Apply_Replace(t *testing.T) {
 	if lastCall.action != "tunnel_import" {
 		t.Errorf("cmd action: %q", lastCall.action)
 	}
+	if lastCall.backend != "nativeWG" {
+		t.Errorf("cmd backend: %q, want nativeWG", lastCall.backend)
+	}
 	if len(pending) != 0 {
 		t.Error("pending should be consumed")
 	}

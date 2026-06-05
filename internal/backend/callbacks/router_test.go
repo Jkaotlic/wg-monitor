@@ -920,8 +920,8 @@ func TestAmneziaDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
 	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
 		t.Fatalf("correct actor confirm should enqueue tunnel_import, calls=%+v", sink.calls)
 	}
-	if sink.calls[0].backend != "nativewg" {
-		t.Fatalf("Amnezia Premium import must request nativewg backend, got %+v", sink.calls[0])
+	if sink.calls[0].backend != "nativeWG" {
+		t.Fatalf("Amnezia Premium import must request nativeWG backend, got %+v", sink.calls[0])
 	}
 }
 
@@ -1051,8 +1051,8 @@ func TestHideMyDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
 	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
 		t.Fatalf("correct actor confirm should enqueue tunnel_import, calls=%+v", sink.calls)
 	}
-	if sink.calls[0].backend != "nativewg" {
-		t.Fatalf("HideMy import must request nativewg backend, got %+v", sink.calls[0])
+	if sink.calls[0].backend != "nativeWG" {
+		t.Fatalf("HideMy import must request nativeWG backend, got %+v", sink.calls[0])
 	}
 }
 

@@ -472,7 +472,7 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 			"conf":    base64.StdEncoding.EncodeToString(conf),
 			"name":    "amnezia_" + args.AmneziaCountryCode,
 			"replace": true,
-			"backend": "nativewg",
+			"backend": "nativeWG",
 		},
 		IssuedAt: time.Now().UTC(),
 	}

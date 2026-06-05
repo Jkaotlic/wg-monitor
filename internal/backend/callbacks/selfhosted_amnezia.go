@@ -402,7 +402,7 @@ func (r *Router) handleSelfHostedAmneziaConfirm(ctx context.Context, q *tg.Callb
 			"conf":    base64.StdEncoding.EncodeToString(issued.Config),
 			"name":    tunnelName,
 			"replace": true,
-			"backend": "nativewg",
+			"backend": "nativeWG",
 		},
 		IssuedAt: time.Now().UTC(),
 	}

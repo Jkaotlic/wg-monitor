@@ -2,6 +2,7 @@ package awgmgr
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -63,11 +64,20 @@ func TestClient_ImportConf_OK(t *testing.T) {
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("Content-Type: %s", r.Header.Get("Content-Type"))
 		}
+		var body struct {
+			Backend string `json:"backend"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Backend != "nativeWG" {
+			t.Fatalf("backend=%q, want nativeWG", body.Backend)
+		}
 		w.Write([]byte(want))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg", "nativewg")
+	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg", "nativeWG")
 	if err != nil {
 		t.Fatal(err)
 	}
