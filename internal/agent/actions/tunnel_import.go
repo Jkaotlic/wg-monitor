@@ -16,7 +16,7 @@ import (
 
 var validNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
-const defaultImportBackend = "nativeWG"
+const defaultImportBackend = "nativewg"
 
 var importVerifyDelays = []time.Duration{
 	3 * time.Second,
@@ -395,7 +395,7 @@ func findTunnelByID(ctx context.Context, client *awgmgr.Client, tunnelID string)
 }
 
 func tunnelLooksStarted(tu awgmgr.Tunnel) bool {
-	return tu.Enabled && tu.Status == "running" && tu.LastHandshake.Time() != nil
+	return tu.Enabled && tu.Status == "running"
 }
 
 func handshakeLabel(tu awgmgr.Tunnel) string {

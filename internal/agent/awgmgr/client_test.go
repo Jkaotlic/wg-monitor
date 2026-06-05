@@ -70,14 +70,14 @@ func TestClient_ImportConf_OK(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Backend != "nativeWG" {
-			t.Fatalf("backend=%q, want nativeWG", body.Backend)
+		if body.Backend != "nativewg" {
+			t.Fatalf("backend=%q, want nativewg", body.Backend)
 		}
 		w.Write([]byte(want))
 	}))
 	defer srv.Close()
 	c := New(srv.URL)
-	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg", "nativeWG")
+	tun, err := c.ImportConf(context.Background(), "[Interface]\nPrivateKey=x\n", "sg", "nativewg")
 	if err != nil {
 		t.Fatal(err)
 	}

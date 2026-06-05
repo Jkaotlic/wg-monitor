@@ -413,7 +413,7 @@ func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args
 			"conf":    up.ConfB64,
 			"name":    up.Name,
 			"replace": replace,
-			"backend": "nativeWG",
+			"backend": "nativewg",
 		},
 		IssuedAt: time.Now().UTC(),
 	}
