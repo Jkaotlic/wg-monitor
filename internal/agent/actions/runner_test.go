@@ -596,6 +596,64 @@ func TestRunner_TunnelImport_CreatesProviderConfigsWithNativeWGBackend(t *testin
 	}
 }
 
+func TestRunner_TunnelImport_RecreatesKernelTunnelAsNativeWG(t *testing.T) {
+	var deletedID string
+	var importBackend string
+	var replaceCalled bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-kernel","name":"amnezia_nl","backend":"kernel","enabled":true}],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		replaceCalled = true
+		w.WriteHeader(http.StatusTeapot)
+	})
+	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
+		deletedID = r.URL.Query().Get("id")
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Backend string `json:"backend"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		importBackend = body.Backend
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"new-native","name":"amnezia_nl","type":"awg","status":"running","enabled":false,"defaultRoute":true,"backend":"nativeWG"}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":false,"running":false}}`))
+	})
+
+	r := Runner{
+		AwgClient: awgmgrFake(t, mux),
+		Exec:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Now:       mockNow(),
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "imp-kernel-nativewg",
+		Action: "tunnel_import",
+		Args:   map[string]any{"conf": testConfB64, "name": "amnezia_nl", "replace": true, "backend": "nativeWG"},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if replaceCalled {
+		t.Fatal("kernel tunnel must not be replaced in-place")
+	}
+	if deletedID != "old-kernel" {
+		t.Fatalf("deleted id=%q, want old-kernel", deletedID)
+	}
+	if importBackend != "nativeWG" {
+		t.Fatalf("recreated tunnel backend=%q, want nativeWG", importBackend)
+	}
+}
+
 func TestRunner_TunnelImport_MissingArgs(t *testing.T) {
 	r := Runner{AwgClient: awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})), Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{
