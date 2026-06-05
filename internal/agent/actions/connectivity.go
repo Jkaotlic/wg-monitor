@@ -180,7 +180,7 @@ func pickConnectivityTunnelIface(ctx context.Context, c *awgmgr.Client, targets 
 	labels := map[string]string{}
 	defaultIface := ""
 	for _, t := range ta.Tunnels {
-		if !t.Enabled || t.InterfaceName == "" {
+		if !connectivityTunnelUsable(t) {
 			continue
 		}
 		labels[t.InterfaceName] = nonEmptyString(t.Name, t.InterfaceName)
@@ -195,6 +195,14 @@ func pickConnectivityTunnelIface(ctx context.Context, c *awgmgr.Client, targets 
 		return defaultIface, nonEmptyString(labels[defaultIface], defaultIface)
 	}
 	return "", ""
+}
+
+func connectivityTunnelUsable(t awgmgr.Tunnel) bool {
+	if !t.Enabled || strings.TrimSpace(t.InterfaceName) == "" {
+		return false
+	}
+	status := strings.TrimSpace(t.Status)
+	return status == "" || routingStatusEnabled(status)
 }
 
 // pickDefaultTunnelIface is kept for older tests/callers; new connectivity
@@ -232,7 +240,7 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 			if iface == "" {
 				continue
 			}
-			if len(knownIfaces) == 0 || knownIfaces[iface] != "" {
+			if knownIfaces[iface] != "" {
 				return iface
 			}
 		}
