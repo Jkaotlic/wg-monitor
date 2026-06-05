@@ -118,6 +118,16 @@ func isNoReport(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "NO_REPORT")
 }
 
+func tunnelNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "http 404") ||
+		strings.Contains(msg, "not_found") ||
+		strings.Contains(msg, "not found")
+}
+
 func (r *Runner) now() time.Time {
 	if r.Now == nil {
 		return time.Now()
@@ -295,8 +305,30 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if tunnelID == "" {
 			return "err", "tunnel_delete: tunnel_id missing in args", payload
 		}
+		if existing, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
+			if strings.EqualFold(strings.TrimSpace(existing.Status), "running") {
+				if err := r.AwgClient.StopTunnel(ctx, tunnelID); err != nil {
+					return "err", fmt.Sprintf("stop tunnel %s before delete: %v", tunnelID, err), payload
+				}
+			}
+			if existing.DefaultRoute {
+				if err := r.AwgClient.ToggleDefaultRoute(ctx, tunnelID); err != nil {
+					return "err", fmt.Sprintf("toggle default-route off for %s before delete: %v", tunnelID, err), payload
+				}
+			}
+			if existing.Enabled {
+				if err := r.AwgClient.ToggleEnabled(ctx, tunnelID); err != nil {
+					return "err", fmt.Sprintf("toggle enabled off for %s before delete: %v", tunnelID, err), payload
+				}
+			}
+		}
 		if err := r.AwgClient.DeleteTunnel(ctx, tunnelID); err != nil {
 			return "err", err.Error(), payload
+		}
+		if _, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
+			return "err", fmt.Sprintf("tunnel_delete: %s still exists after delete", tunnelID), payload
+		} else if !tunnelNotFoundError(err) {
+			return "err", fmt.Sprintf("verify delete %s: %v", tunnelID, err), payload
 		}
 		if r.ForceRecheck != nil {
 			r.ForceRecheck(ctx)

@@ -280,6 +280,71 @@ func TestRunner_TunnelDelete_DeletesByCheckNameAndForcesFreshReport(t *testing.T
 	}
 }
 
+func TestRunner_TunnelDelete_DisablesDefaultRouteBeforeDeleteAndVerifiesGone(t *testing.T) {
+	var calls []string
+	getCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != "awg10" {
+			t.Fatalf("get id=%q", r.URL.Query().Get("id"))
+		}
+		getCalls++
+		if getCalls == 1 {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"stopped","enabled":true,"defaultRoute":true,"interfaceName":"opkgtun10"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"code":"NOT_FOUND"}`))
+	})
+	for _, path := range []string{"/api/control/toggle-default-route", "/api/control/toggle-enabled", "/api/tunnels/delete"} {
+		path := path
+		mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, path+"?id="+r.URL.Query().Get("id"))
+			_, _ = w.Write([]byte(`{"success":true}`))
+		})
+	}
+
+	r := Runner{AwgClient: awgmgrFake(t, mux), Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "del1",
+		Action: "tunnel_delete",
+		Args:   map[string]any{"tunnel_id": "awg10"},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{
+		"/api/control/toggle-default-route?id=awg10",
+		"/api/control/toggle-enabled?id=awg10",
+		"/api/tunnels/delete?id=awg10",
+	}
+	if strings.Join(calls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls=\n%s\nwant=\n%s", strings.Join(calls, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestRunner_TunnelDelete_ErrsWhenTunnelStillExists(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"stopped","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10"}}`))
+	})
+	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+
+	r := Runner{AwgClient: awgmgrFake(t, mux), Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "del1",
+		Action: "tunnel_delete",
+		Args:   map[string]any{"tunnel_id": "awg10"},
+	})
+
+	if res.Status != "err" || !strings.Contains(res.Output, "still exists") {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
 func TestRunner_OpkgUpgrade_NilRunnerErrs(t *testing.T) {
 	r := Runner{Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c5", Action: "opkg_upgrade"})

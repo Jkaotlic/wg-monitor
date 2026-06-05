@@ -135,6 +135,37 @@ func TestClient_DeleteTunnel_404(t *testing.T) {
 	}
 }
 
+func TestClient_TunnelControlEndpoints(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method: %s", r.Method)
+		}
+		got = append(got, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	ctx := context.Background()
+	if err := c.StopTunnel(ctx, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ToggleEnabled(ctx, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.ToggleDefaultRoute(ctx, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"/api/control/stop?id=abc123",
+		"/api/control/toggle-enabled?id=abc123",
+		"/api/control/toggle-default-route?id=abc123",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("calls=\n%s\nwant=\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestClient_DiagRun_HappyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/diagnostics/run" {
