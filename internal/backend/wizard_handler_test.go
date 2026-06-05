@@ -380,6 +380,37 @@ func TestWizardDeployUsesForwardedPublicHostForLocalCalls(t *testing.T) {
 	}
 }
 
+func TestWizardDeployPublicHostHeaderOverridesPrivateProxyHost(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc80"}`))
+	req.Host = "192.168.0.87"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "192.168.0.87")
+	req.Header.Set("X-WG-Public-Proto", "https")
+	req.Header.Set("X-WG-Public-Host", "wg.example.test")
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := sink.enqueued[0].Args["repo_base"]; got != "https://wg.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%v", got)
+	}
+}
+
 func TestWizardDeployRejectsLoopbackRepoBase(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)

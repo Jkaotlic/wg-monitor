@@ -220,14 +220,20 @@ func newAgentEnrollmentToken() (string, error) {
 }
 
 func wizardBackendURL(r *http.Request) string {
-	proto := firstForwardedValue(r.Header.Get("X-Forwarded-Proto"))
+	proto := firstForwardedValue(r.Header.Get("X-WG-Public-Proto"))
+	if proto == "" {
+		proto = firstForwardedValue(r.Header.Get("X-Forwarded-Proto"))
+	}
 	if proto == "" {
 		proto = "https"
 		if r.TLS != nil {
 			proto = "https"
 		}
 	}
-	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	host := firstForwardedValue(r.Header.Get("X-WG-Public-Host"))
+	if host == "" {
+		host = firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	}
 	if host == "" {
 		host = r.Host
 	}
@@ -256,7 +262,10 @@ func wizardRepoResolveIP(r *http.Request) string {
 }
 
 func wizardBackendHost(r *http.Request) string {
-	host := firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	host := firstForwardedValue(r.Header.Get("X-WG-Public-Host"))
+	if host == "" {
+		host = firstForwardedValue(r.Header.Get("X-Forwarded-Host"))
+	}
 	if host == "" {
 		host = r.Host
 	}

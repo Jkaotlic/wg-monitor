@@ -380,4 +380,7 @@ func TestBuildWizardAPICurlCommandSetsForwardedPublicHost(t *testing.T) {
 	if !strings.Contains(cmd, "X-Forwarded-Host: wgmonitor.example") {
 		t.Fatalf("missing forwarded host header: %s", cmd)
 	}
+	if !strings.Contains(cmd, "X-WG-Public-Host: wgmonitor.example") {
+		t.Fatalf("missing public host header: %s", cmd)
+	}
 }
