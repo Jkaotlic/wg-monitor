@@ -128,6 +128,51 @@ func tunnelNotFoundError(err error) bool {
 		strings.Contains(msg, "not found")
 }
 
+func legacyAWGTunnelID(id string) bool {
+	if !strings.HasPrefix(id, "awg") || len(id) == len("awg") {
+		return false
+	}
+	for _, r := range strings.TrimPrefix(id, "awg") {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func legacyAWGDeleteFallbackAllowed(t *awgmgr.Tunnel) bool {
+	if t == nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(t.Status))
+	return legacyAWGTunnelID(t.ID) &&
+		strings.TrimSpace(t.Backend) == "" &&
+		!t.Enabled &&
+		(status == "disabled" || status == "stopped")
+}
+
+func forgetLegacyAWGTunnel(ctx context.Context, exec ExecFunc, tunnelID string) error {
+	if exec == nil {
+		return fmt.Errorf("exec not configured")
+	}
+	if !legacyAWGTunnelID(tunnelID) {
+		return fmt.Errorf("unsafe legacy tunnel id %q", tunnelID)
+	}
+	paths := []string{
+		"/opt/etc/awg-manager/tunnels/" + tunnelID + ".json",
+		"/opt/etc/awg-manager/" + tunnelID + ".conf",
+	}
+	for _, path := range paths {
+		if out, err := exec(ctx, "rm", "-f", path); err != nil {
+			return fmt.Errorf("rm %s: %v\n%s", path, err, string(out))
+		}
+	}
+	if out, err := exec(ctx, "/opt/etc/init.d/S99awg-manager", "restart"); err != nil {
+		return fmt.Errorf("S99awg-manager restart: %v\n%s", err, string(out))
+	}
+	return nil
+}
+
 func (r *Runner) now() time.Time {
 	if r.Now == nil {
 		return time.Now()
@@ -325,8 +370,21 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err := r.AwgClient.DeleteTunnel(ctx, tunnelID); err != nil {
 			return "err", err.Error(), payload
 		}
-		if _, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
-			return "err", fmt.Sprintf("tunnel_delete: %s still exists after delete", tunnelID), payload
+		if remaining, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
+			if !legacyAWGDeleteFallbackAllowed(remaining) {
+				return "err", fmt.Sprintf("tunnel_delete: %s still exists after delete", tunnelID), payload
+			}
+			if err := forgetLegacyAWGTunnel(ctx, r.Exec, tunnelID); err != nil {
+				return "err", fmt.Sprintf("legacy cleanup %s: %v", tunnelID, err), payload
+			}
+			if err := r.sleep(ctx, 2*time.Second); err != nil {
+				return "err", fmt.Sprintf("legacy cleanup wait %s: %v", tunnelID, err), payload
+			}
+			if _, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
+				return "err", fmt.Sprintf("tunnel_delete: %s still exists after legacy cleanup", tunnelID), payload
+			} else if !tunnelNotFoundError(err) {
+				return "err", fmt.Sprintf("verify legacy cleanup %s: %v", tunnelID, err), payload
+			}
 		} else if !tunnelNotFoundError(err) {
 			return "err", fmt.Sprintf("verify delete %s: %v", tunnelID, err), payload
 		}

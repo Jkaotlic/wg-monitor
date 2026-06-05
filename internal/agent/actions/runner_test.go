@@ -327,7 +327,7 @@ func TestRunner_TunnelDelete_DisablesDefaultRouteBeforeDeleteAndVerifiesGone(t *
 func TestRunner_TunnelDelete_ErrsWhenTunnelStillExists(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"stopped","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10"}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"stopped","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10","backend":"kernel"}}`))
 	})
 	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true}`))
@@ -342,6 +342,51 @@ func TestRunner_TunnelDelete_ErrsWhenTunnelStillExists(t *testing.T) {
 
 	if res.Status != "err" || !strings.Contains(res.Output, "still exists") {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+}
+
+func TestRunner_TunnelDelete_ForgetsLegacyDisabledTunnel(t *testing.T) {
+	getCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != "awg10" {
+			t.Fatalf("get id=%q", r.URL.Query().Get("id"))
+		}
+		getCalls++
+		if getCalls < 3 {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"disabled","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"code":"NOT_FOUND"}`))
+	})
+	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	var execCalls []string
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		execCalls = append(execCalls, strings.Join(append([]string{name}, args...), " "))
+		return []byte("ok"), nil
+	}
+	sleep := func(context.Context, time.Duration) error { return nil }
+
+	r := Runner{AwgClient: awgmgrFake(t, mux), Exec: exec, Sleep: sleep, Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "del1",
+		Action: "tunnel_delete",
+		Args:   map[string]any{"tunnel_id": "awg10"},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	want := []string{
+		"rm -f /opt/etc/awg-manager/tunnels/awg10.json",
+		"rm -f /opt/etc/awg-manager/awg10.conf",
+		"/opt/etc/init.d/S99awg-manager restart",
+	}
+	if strings.Join(execCalls, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("exec=\n%s\nwant=\n%s", strings.Join(execCalls, "\n"), strings.Join(want, "\n"))
 	}
 }
 
