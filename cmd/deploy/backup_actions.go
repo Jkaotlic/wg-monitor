@@ -25,6 +25,8 @@ type backupRemoteLayout struct {
 	LayoutRoot      string
 	ReadWritePath   string
 	ProtectHomeMode string
+	UnitDir         string
+	UserSystemd     bool
 }
 
 func backupLayoutForState(state *State) backupRemoteLayout {
@@ -34,6 +36,10 @@ func backupLayoutForState(state *State) backupRemoteLayout {
 	}
 	if state != nil && strings.TrimSpace(state.Backend.SourceBind) != "" {
 		base := backendDockerBase(user)
+		home := "/home/" + user
+		if user == "root" {
+			home = "/root"
+		}
 		return backupRemoteLayout{
 			User:            user,
 			Group:           user,
@@ -45,6 +51,8 @@ func backupLayoutForState(state *State) backupRemoteLayout {
 			LayoutRoot:      base,
 			ReadWritePath:   base,
 			ProtectHomeMode: "read-only",
+			UnitDir:         home + "/.config/systemd/user",
+			UserSystemd:     user != "root",
 		}
 	}
 	return backupRemoteLayout{
@@ -57,6 +65,7 @@ func backupLayoutForState(state *State) backupRemoteLayout {
 		OutDir:          "/var/lib/wg-monitor/backups",
 		ReadWritePath:   "/var/lib/wg-monitor",
 		ProtectHomeMode: "true",
+		UnitDir:         "/etc/systemd/system",
 	}
 }
 
@@ -70,9 +79,9 @@ func actionBackupStatus(state *State, secrets *SecretStore) error {
 		label string
 		cmd   string
 	}{
-		{"timer enabled", "systemctl is-enabled wg-monitor-backup.timer 2>/dev/null || true"},
-		{"timer active", "systemctl is-active wg-monitor-backup.timer 2>/dev/null || true"},
-		{"service last", "systemctl show wg-monitor-backup.service -p Result -p ExecMainStatus --value 2>/dev/null || true"},
+		{"timer enabled", backupSystemctl(layout, "is-enabled wg-monitor-backup.timer 2>/dev/null || true")},
+		{"timer active", backupSystemctl(layout, "is-active wg-monitor-backup.timer 2>/dev/null || true")},
+		{"service last", backupSystemctl(layout, "show wg-monitor-backup.service -p Result -p ExecMainStatus --value 2>/dev/null || true")},
 		{"passphrase", "test -s " + shellSingleQuote(layout.PassphrasePath) + " && echo present || echo missing"},
 		{"operator vault", "test -s " + shellSingleQuote(layout.OperatorVault) + " && echo present || echo missing"},
 		{"latest backup", "ls -1t " + shellSingleQuote(layout.OutDir) + "/wg-monitor-full-backup-*.tgz.enc 2>/dev/null | head -1 || true"},
@@ -107,7 +116,7 @@ func actionBackupRun(state *State, secrets *SecretStore) error {
 		return err
 	}
 	defer s.Close()
-	if _, err := s.MustRun("systemctl start wg-monitor-backup.service"); err != nil {
+	if _, err := s.MustRun(backupSystemctl(backupLayoutForState(state), "start wg-monitor-backup.service")); err != nil {
 		return err
 	}
 	PrintOK("wg-monitor-backup.service started")
@@ -176,7 +185,7 @@ func installBackupOnBackend(state *State, secrets *SecretStore, s *SSH, layout b
 	if err := uploadBackupPassphrase(s, layout, pass); err != nil {
 		return err
 	}
-	for _, dir := range []string{path.Dir(layout.PassphrasePath), path.Dir(layout.OperatorVault), layout.OutDir} {
+	for _, dir := range []string{path.Dir(layout.PassphrasePath), path.Dir(layout.OperatorVault), layout.OutDir, layout.UnitDir} {
 		if err := stepEnsureDir(s, shellSingleQuote(dir), ""); err != nil {
 			return err
 		}
@@ -197,22 +206,33 @@ func installBackupOnBackend(state *State, secrets *SecretStore, s *SSH, layout b
 	if err != nil {
 		return err
 	}
-	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backup.service", service, "644"); err != nil {
+	if err := stepUploadFile(s, path.Join(layout.UnitDir, "wg-monitor-backup.service"), service, "644"); err != nil {
 		return err
 	}
 	timer, err := ReadStaticTemplate("wg-monitor-backup.timer")
 	if err != nil {
 		return err
 	}
-	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backup.timer", timer, "644"); err != nil {
+	if err := stepUploadFile(s, path.Join(layout.UnitDir, "wg-monitor-backup.timer"), timer, "644"); err != nil {
 		return err
 	}
-	if _, err := s.MustRun(backendBackupEnableCommand()); err != nil {
+	if layout.UserSystemd {
+		_, _ = s.MustRun("loginctl enable-linger " + shellSingleQuote(layout.User) + " 2>/dev/null || true")
+	}
+	if _, err := s.MustRun(backupSystemctl(layout, "daemon-reload") + " && " + backupSystemctl(layout, "enable --now wg-monitor-backup.timer")); err != nil {
 		return err
 	}
 	PrintOK("encrypted nightly backup enabled")
 	_ = state
 	return nil
+}
+
+func backupSystemctl(layout backupRemoteLayout, args string) string {
+	args = strings.TrimSpace(args)
+	if layout.UserSystemd {
+		return "uid=$(id -u); export XDG_RUNTIME_DIR=/run/user/$uid; systemctl --user " + args
+	}
+	return "systemctl " + args
 }
 
 func uploadBackupPassphrase(s *SSH, layout backupRemoteLayout, pass string) error {
