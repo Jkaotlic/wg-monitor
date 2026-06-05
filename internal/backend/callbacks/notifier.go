@@ -65,6 +65,27 @@ func (n *Notifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRe
 	}
 	resultMarkup := commandResultNextActionKeyboard(action, result.Status, userID)
 
+	if action == "tunnel_import" && ref.MessageID != 0 {
+		var markup *tg.InlineKeyboardMarkup
+		if tunnelImportMarkup != nil {
+			markup = tunnelImportMarkup
+		} else {
+			markup = resultMarkup
+		}
+		if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, chunks[0], "", markup); err != nil {
+			return err
+		}
+		prev := ref.MessageID
+		for _, c := range chunks[1:] {
+			mid, err := n.TG.SendMessageWithReplyKeyboard(ctx, ref.ChatID, ref.ThreadID, c, "", &prev, n.UI.KeyboardForTopic("per_router"))
+			if err != nil {
+				return err
+			}
+			prev = mid
+		}
+		return nil
+	}
+
 	prev := ref.MessageID
 	for i, c := range chunks {
 		replyTo := prev

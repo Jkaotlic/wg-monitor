@@ -491,7 +491,7 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 	cli := awgmgrFake(t, mux)
 	r := Runner{AwgClient: cli, Exec: func(_ context.Context, _ string, _ ...string) ([]byte, error) {
 		return nil, nil
-	}, Now: mockNow()}
+	}, Sleep: func(context.Context, time.Duration) error { return nil }, Now: mockNow()}
 
 	res := r.Execute(context.Background(), wire.Command{
 		ID:     "imp1",
@@ -503,6 +503,67 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "awg11") {
 		t.Errorf("output missing tunnel name: %q", res.Output)
+	}
+}
+
+func TestRunner_TunnelImport_WaitsForRunningHandshake(t *testing.T) {
+	var startCalls int
+	var sleepCalls int
+	var allCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		allCalls++
+		switch {
+		case allCalls <= 2:
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","defaultRoute":true,"enabled":true}],"external":[],"system":[]}}`))
+		case allCalls == 3:
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","type":"awg","status":"starting","enabled":true,"defaultRoute":true,"interfaceName":"nwg1"}],"external":[],"system":[]}}`))
+		default:
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg1","lastHandshake":"2026-04-29T12:00:00Z"}],"external":[],"system":[]}}`))
+		}
+	})
+	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"old-id","name":"awg11","type":"awg","status":"starting","enabled":true,"defaultRoute":true}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		startCalls++
+		if r.URL.Query().Get("id") != "old-id" {
+			t.Errorf("start id=%q, want old-id", r.URL.Query().Get("id"))
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":false,"running":false}}`))
+	})
+
+	r := Runner{
+		AwgClient: awgmgrFake(t, mux),
+		Exec:      func(ctx context.Context, name string, args ...string) ([]byte, error) { return []byte("ok"), nil },
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			sleepCalls++
+			return nil
+		},
+		Now: mockNow(),
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "imp-verify",
+		Action: "tunnel_import",
+		Args:   map[string]any{"conf": testConfB64, "name": "awg11", "replace": true},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if startCalls != 1 {
+		t.Fatalf("start calls=%d, want 1", startCalls)
+	}
+	if sleepCalls == 0 {
+		t.Fatal("expected import verification to wait before final status")
+	}
+	for _, want := range []string{"status=running", "handshake"} {
+		if !strings.Contains(res.Output, want) {
+			t.Fatalf("output missing %q:\n%s", want, res.Output)
+		}
 	}
 }
 
@@ -535,6 +596,7 @@ func TestRunner_TunnelImport_ReplaceFallsBackToMatchingAddress(t *testing.T) {
 	r := Runner{
 		AwgClient: awgmgrFake(t, mux),
 		Exec:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Sleep:     func(context.Context, time.Duration) error { return nil },
 		Now:       mockNow(),
 	}
 	res := r.Execute(context.Background(), wire.Command{
@@ -580,6 +642,7 @@ func TestRunner_TunnelImport_CreatesProviderConfigsWithNativeWGBackend(t *testin
 	r := Runner{
 		AwgClient: awgmgrFake(t, mux),
 		Exec:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Sleep:     func(context.Context, time.Duration) error { return nil },
 		Now:       mockNow(),
 	}
 	res := r.Execute(context.Background(), wire.Command{
@@ -632,6 +695,7 @@ func TestRunner_TunnelImport_RecreatesKernelTunnelAsNativeWG(t *testing.T) {
 	r := Runner{
 		AwgClient: awgmgrFake(t, mux),
 		Exec:      func(context.Context, string, ...string) ([]byte, error) { return nil, nil },
+		Sleep:     func(context.Context, time.Duration) error { return nil },
 		Now:       mockNow(),
 	}
 	res := r.Execute(context.Background(), wire.Command{

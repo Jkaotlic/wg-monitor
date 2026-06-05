@@ -2,6 +2,7 @@ package callbacks
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
@@ -53,15 +54,21 @@ func TestNotifier_TunnelImportResultOffersNextActions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.sentMsgs) != 1 {
-		t.Fatalf("sent messages = %d, want 1", len(f.sentMsgs))
+	if len(f.sentMsgs) != 0 {
+		t.Fatalf("sent messages = %d, want 0; tunnel import result should edit the checking message", len(f.sentMsgs))
 	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
+	if len(f.edits) != 1 {
+		t.Fatalf("edits = %d, want 1", len(f.edits))
 	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("tunnel import result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	if !strings.Contains(f.edits[0], "newtun") {
+		t.Fatalf("edited result should mention imported tunnel, got %q", f.edits[0])
+	}
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("edit markups = %d, want 1", len(f.editMarkups))
+	}
+	kb := f.editMarkups[0]
+	if kb == nil {
+		t.Fatal("tunnel import result edit should carry inline next-action keyboard")
 	}
 	for _, want := range []string{
 		"tunnels_refresh:42:_panel_",
@@ -154,12 +161,15 @@ func TestNotifier_TunnelImportErrorOffersRecoveryActions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
+	if len(f.sentMsgs) != 0 {
+		t.Fatalf("sent messages = %d, want 0; tunnel import error should edit the checking message", len(f.sentMsgs))
 	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("tunnel import error should carry inline recovery keyboard, got %T", f.sentMarkups[0])
+	if len(f.edits) != 1 {
+		t.Fatalf("edits = %d, want 1", len(f.edits))
+	}
+	kb := f.editMarkups[0]
+	if kb == nil {
+		t.Fatal("tunnel import error edit should carry inline recovery keyboard")
 	}
 	for _, want := range []string{
 		"tunnels_refresh:42:_panel_",
