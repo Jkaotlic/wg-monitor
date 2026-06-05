@@ -331,6 +331,21 @@ func (c *Client) StartTunnel(ctx context.Context, tunnelID string) error {
 	return c.post(ctx, "/api/control/start?id="+url.QueryEscape(tunnelID), nil, nil)
 }
 
+// StopTunnel calls POST /api/control/stop?id=<tunnelID>.
+func (c *Client) StopTunnel(ctx context.Context, tunnelID string) error {
+	return c.post(ctx, "/api/control/stop?id="+url.QueryEscape(tunnelID), nil, nil)
+}
+
+// ToggleEnabled calls POST /api/control/toggle-enabled?id=<tunnelID>.
+func (c *Client) ToggleEnabled(ctx context.Context, tunnelID string) error {
+	return c.post(ctx, "/api/control/toggle-enabled?id="+url.QueryEscape(tunnelID), nil, nil)
+}
+
+// ToggleDefaultRoute calls POST /api/control/toggle-default-route?id=<tunnelID>.
+func (c *Client) ToggleDefaultRoute(ctx context.Context, tunnelID string) error {
+	return c.post(ctx, "/api/control/toggle-default-route?id="+url.QueryEscape(tunnelID), nil, nil)
+}
+
 // ReplaceConf calls POST /api/tunnels/replace?id=<tunnelID> — replaces an
 // existing tunnel's config in-place. Returns the updated Tunnel.
 func (c *Client) ReplaceConf(ctx context.Context, tunnelID, rawConf, name, backend string) (*Tunnel, error) {
