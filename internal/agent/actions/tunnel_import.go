@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 )
@@ -16,6 +17,13 @@ import (
 var validNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
 const defaultImportBackend = "nativeWG"
+
+var importVerifyDelays = []time.Duration{
+	3 * time.Second,
+	10 * time.Second,
+	20 * time.Second,
+	30 * time.Second,
+}
 
 func isValidTunnelName(s string) bool { return validNameRe.MatchString(s) }
 
@@ -219,7 +227,7 @@ func tunnelBackend(t awgmgr.Tunnel) string {
 // replace=true  → find existing tunnel by name and use ReplaceConf API (atomic).
 // replace=false → ImportConf (creates new tunnel, enabled=false).
 // Restarts HydraRoute daemon if installed.
-func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, confB64, name string, replace bool, requestedBackend string) (string, error) {
+func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sleep func(context.Context, time.Duration) error, confB64, name string, replace bool, requestedBackend string) (string, error) {
 	slog.Info("tunnel import", "name", name, "replace", replace)
 	confData, err := base64.StdEncoding.DecodeString(confB64)
 	if err != nil {
@@ -308,6 +316,10 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 		fmt.Fprintf(&result, "\n⚠️ Запустить туннель не удалось: %v", err)
 	}
 
+	if line := verifyImportedTunnel(ctx, client, sleep, newID); line != "" {
+		fmt.Fprintf(&result, "\n%s", line)
+	}
+
 	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {
 		out, execErr := exec(ctx, "/opt/etc/init.d/S99hrneo", "restart")
 		if execErr != nil {
@@ -320,4 +332,97 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 
 	slog.Info("tunnel import ok", "name", name, "id", newID, "replace", replace)
 	return result.String(), nil
+}
+
+func verifyImportedTunnel(ctx context.Context, client *awgmgr.Client, sleep func(context.Context, time.Duration) error, tunnelID string) string {
+	if tunnelID == "" {
+		return "⚠️ Проверка запуска: awg-manager не вернул id туннеля"
+	}
+	var last *awgmgr.Tunnel
+	var lastErr error
+	for i, delay := range importVerifyDelays {
+		if err := sleepForImportVerify(ctx, sleep, delay); err != nil {
+			return fmt.Sprintf("⚠️ Проверка запуска прервана: %v", err)
+		}
+		tu, err := findTunnelByID(ctx, client, tunnelID)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		last = tu
+		if tunnelLooksStarted(*tu) {
+			return fmt.Sprintf("✅ Проверка запуска: status=running, handshake=%s, iface=%s", handshakeLabel(*tu), tu.InterfaceName)
+		}
+		if i == 1 && tu.Enabled && tu.Status != "running" {
+			_ = client.StartTunnel(ctx, tunnelID)
+		}
+	}
+	if last != nil {
+		return fmt.Sprintf("⚠️ Проверка запуска: туннель импортирован, но пока не ожил (%s)", tunnelStartSummary(*last))
+	}
+	if lastErr != nil {
+		return fmt.Sprintf("⚠️ Проверка запуска: не удалось перечитать туннель после импорта: %v", lastErr)
+	}
+	return "⚠️ Проверка запуска: туннель не найден после импорта"
+}
+
+func sleepForImportVerify(ctx context.Context, sleep func(context.Context, time.Duration) error, d time.Duration) error {
+	if sleep != nil {
+		return sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func findTunnelByID(ctx context.Context, client *awgmgr.Client, tunnelID string) (*awgmgr.Tunnel, error) {
+	all, err := client.TunnelsAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, tu := range all.Tunnels {
+		if tu.ID == tunnelID {
+			tu := tu
+			return &tu, nil
+		}
+	}
+	return nil, fmt.Errorf("tunnel %s not found", tunnelID)
+}
+
+func tunnelLooksStarted(tu awgmgr.Tunnel) bool {
+	return tu.Enabled && tu.Status == "running" && tu.LastHandshake.Time() != nil
+}
+
+func handshakeLabel(tu awgmgr.Tunnel) string {
+	if t := tu.LastHandshake.Time(); t != nil {
+		return t.UTC().Format(time.RFC3339)
+	}
+	return "none"
+}
+
+func tunnelStartSummary(tu awgmgr.Tunnel) string {
+	parts := []string{
+		"id=" + tu.ID,
+		"status=" + strings.TrimSpace(tu.Status),
+		fmt.Sprintf("enabled=%t", tu.Enabled),
+		"handshake=" + handshakeLabel(tu),
+	}
+	if tu.InterfaceName != "" {
+		parts = append(parts, "iface="+tu.InterfaceName)
+	}
+	if tu.Backend != "" {
+		parts = append(parts, "backend="+tu.Backend)
+	}
+	if tu.HasAddressConflict {
+		parts = append(parts, "address_conflict=true")
+	}
+	if tu.RxBytes > 0 || tu.TxBytes > 0 {
+		parts = append(parts, fmt.Sprintf("rx=%d tx=%d", tu.RxBytes, tu.TxBytes))
+	}
+	return strings.Join(parts, ", ")
 }

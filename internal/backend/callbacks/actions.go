@@ -429,5 +429,5 @@ func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args
 	if replace {
 		verb = "замена"
 	}
-	return fmt.Sprintf("📤 Импорт туннеля (%s %q) поставлен в очередь", verb, up.Name), nil
+	return fmt.Sprintf("⏳ Конфиг принят (%s %q), проверяю, поднимется ли туннель…", verb, up.Name), nil
 }
