@@ -28,6 +28,7 @@ type backupRemoteLayout struct {
 	UnitDir         string
 	UserSystemd     bool
 	OmitUserGroup   bool
+	OmitHardening   bool
 }
 
 func backupLayoutForState(state *State) backupRemoteLayout {
@@ -55,6 +56,7 @@ func backupLayoutForState(state *State) backupRemoteLayout {
 			UnitDir:         home + "/.config/systemd/user",
 			UserSystemd:     user != "root",
 			OmitUserGroup:   user != "root",
+			OmitHardening:   user != "root",
 		}
 	}
 	return backupRemoteLayout{
@@ -205,6 +207,7 @@ func installBackupOnBackend(state *State, secrets *SecretStore, s *SSH, layout b
 		SendTelegram:    true,
 		ProtectHomeMode: layout.ProtectHomeMode,
 		OmitUserGroup:   layout.OmitUserGroup,
+		OmitHardening:   layout.OmitHardening,
 	})
 	if err != nil {
 		return err
