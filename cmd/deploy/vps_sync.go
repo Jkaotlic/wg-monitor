@@ -536,7 +536,7 @@ func (f *wizardAPISSHFallback) DoWizardAPI(ctx context.Context, method, path str
 	}
 	defer s.Close()
 
-	cmd := buildWizardAPICurlCommand(method, path, f.token, body, timeout)
+	cmd := buildWizardAPICurlCommand(method, path, f.token, body, timeout, f.state.Backend.Domain)
 	out, serr, rc, err := s.Run(cmd)
 	if err != nil {
 		return 0, nil, fmt.Errorf("SSH fallback transport: %w", err)
@@ -557,7 +557,7 @@ func (f *wizardAPISSHFallback) DoWizardAPI(ctx context.Context, method, path str
 
 const wizardAPIStatusPrefix = "__WG_WIZARD_HTTP_STATUS__"
 
-func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout time.Duration) string {
+func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout time.Duration, publicDomain string) string {
 	secs := int((timeout + time.Second - 1) / time.Second)
 	if secs < 5 {
 		secs = 5
@@ -570,6 +570,10 @@ func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout 
 		" -o \"$tmp\" -w '%{http_code}'" +
 		" -X " + shellSingleQuote(method) +
 		" -H " + shellSingleQuote("Authorization: Bearer "+token)
+	if host := publicForwardedHost(publicDomain); host != "" {
+		common += " -H " + shellSingleQuote("X-Forwarded-Proto: https") +
+			" -H " + shellSingleQuote("X-Forwarded-Host: "+host)
+	}
 	if body != nil {
 		common += " -H " + shellSingleQuote("Content-Type: application/json")
 	}
@@ -584,6 +588,24 @@ func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout 
 	}
 	cmd += "rc=$?; printf '%s%s\\n' " + shellSingleQuote(wizardAPIStatusPrefix) + " \"$code\"; cat \"$tmp\"; exit \"$rc\""
 	return cmd
+}
+
+func publicForwardedHost(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return ""
+	}
+	if !strings.Contains(domain, "://") {
+		if i := strings.IndexByte(domain, '/'); i >= 0 {
+			domain = domain[:i]
+		}
+		return strings.Trim(domain, "[]")
+	}
+	u, err := url.Parse(domain)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	return u.Host
 }
 
 func parseWizardAPISSHOutput(out string) (int, []byte, error) {

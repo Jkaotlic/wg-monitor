@@ -364,3 +364,20 @@ func TestNewVPSClientForBackendDoesNotPinAPIToSourceBoundSSHHost(t *testing.T) {
 		t.Fatalf("backendAPIDialHost=%q, want empty", got)
 	}
 }
+
+func TestBuildWizardAPICurlCommandSetsForwardedPublicHost(t *testing.T) {
+	cmd := buildWizardAPICurlCommand(
+		http.MethodPost,
+		"/v1/wizard/agents/testkeen/deploy",
+		"tok",
+		[]byte(`{"target_version":"v0.13.0-rc79"}`),
+		5*time.Second,
+		"https://wgmonitor.example/path",
+	)
+	if !strings.Contains(cmd, "X-Forwarded-Proto: https") {
+		t.Fatalf("missing forwarded proto header: %s", cmd)
+	}
+	if !strings.Contains(cmd, "X-Forwarded-Host: wgmonitor.example") {
+		t.Fatalf("missing forwarded host header: %s", cmd)
+	}
+}
