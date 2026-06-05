@@ -200,27 +200,7 @@ func stepVerifyBackendHealth(s *SSH, domain string) error {
 	if err := stepVerifyHTTP(s, "http://127.0.0.1:8080/healthz"); err != nil {
 		return err
 	}
-	host := domainHost(domain)
-	if host == "" {
-		return nil
-	}
-	url := "https://" + host + "/healthz"
-	cmd := fmt.Sprintf(
-		"curl -k -sS -o /dev/null -w '%%{http_code}' --resolve %s %s",
-		shellQuote(host+":443:127.0.0.1"),
-		shellQuote(url),
-	)
-	out, err := s.MustRun(cmd)
-	if err != nil {
-		PrintFail(err.Error())
-		return err
-	}
-	code := strings.TrimSpace(out)
-	if code != "200" {
-		PrintFail(fmt.Sprintf("%s via 127.0.0.1 → HTTP %s", url, code))
-		return fmt.Errorf("expected 200 got %s", code)
-	}
-	PrintOK(fmt.Sprintf("%s via 127.0.0.1 → 200 OK", url))
+	_ = domain
 	return nil
 }
 

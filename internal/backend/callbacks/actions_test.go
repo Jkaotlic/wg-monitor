@@ -62,6 +62,7 @@ type enqueueCall struct {
 	action  string
 	check   string
 	ndms    string
+	tunnel  string
 	backend string
 }
 
@@ -79,9 +80,10 @@ func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 	}
 	check, _ := cmd.Args["check_name"].(string)
 	ndms, _ := cmd.Args["ndms_name"].(string)
+	tunnel, _ := cmd.Args["tunnel_id"].(string)
 	backend, _ := cmd.Args["backend"].(string)
 	f.calls = append(f.calls, enqueueCall{
-		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms, backend: backend,
+		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms, tunnel: tunnel, backend: backend,
 	})
 	return nil
 }
@@ -152,6 +154,23 @@ func TestCommandAction_TunnelRestartEnqueuesWithNDMS(t *testing.T) {
 	}
 	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "очередь") {
 		t.Errorf("unexpected status line: %q", statusLine)
+	}
+}
+
+func TestCommandAction_TunnelDeleteUsesExplicitTunnelID(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := NewCommandAction(sink, func() string { return "fixed-del" })
+	_, err := a.Apply(context.Background(), nil, Args{
+		Action: "tunnel_delete", UserID: 7, CheckName: "tunnel_opkgtun10", TunnelID: "kernel-real-id",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if got := sink.calls[0].tunnel; got != "kernel-real-id" {
+		t.Fatalf("tunnel_id=%q, want explicit kernel-real-id; call=%+v", got, sink.calls[0])
 	}
 }
 

@@ -39,7 +39,7 @@ var targetsDirect = []connectivityTarget{
 	{Name: "Mail.ru", URL: "https://mail.ru/"},
 }
 
-// CheckViaTunnel runs the "🌍 Через тоннель?" probe: HTTP HEAD to each
+// CheckViaTunnel runs the "🌍 Через туннель?" probe: HTTP HEAD to each
 // blocked-in-RU service through the iface that actually carries the matching
 // HR-Neo route, falling back to defaultRoute=true when no explicit route
 // matches. It also does a cdn-cgi/trace lookup to surface the egress IP.
@@ -54,7 +54,7 @@ func CheckViaTunnel(ctx context.Context, c *awgmgr.Client) (status, output strin
 	results := probeAll(ctx, httpc, targetsViaTunnel, 5*time.Second)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "🌍 Через тоннель (%s):\n", ifaceLabel)
+	fmt.Fprintf(&b, "🌍 Через туннель (%s):\n", ifaceLabel)
 	if traceErr != nil {
 		fmt.Fprintf(&b, "Exit IP: ❓ не удалось определить (%s)\n", traceErr.Error())
 	} else {

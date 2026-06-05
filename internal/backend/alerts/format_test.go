@@ -324,7 +324,7 @@ func TestFormatHardAwgManagerControlPlane(t *testing.T) {
 	for _, want := range []string{
 		"🔴",
 		"awg-manager не отвечает",
-		"бот не может управлять тоннелями",
+		"бот не может управлять туннелями",
 		"Перезапустить awg-manager",
 	} {
 		if !strings.Contains(got, want) {
@@ -353,7 +353,7 @@ func TestFormatHardWithNeighborsInfluencesDiagnosis(t *testing.T) {
 			{CheckName: "tunnel_awg12", TunnelName: "backup", Interface: "nwg1", Status: "alive", HandshakeAge: 12},
 		},
 	})
-	if !strings.Contains(got, "Соседние тоннели живы") {
+	if !strings.Contains(got, "Соседние туннели живы") {
 		t.Errorf("missing neighbors-alive hypothesis:\n%s", got)
 	}
 	if !strings.Contains(got, "🟡") {

@@ -280,7 +280,7 @@ func diagnosisFromReport(rep *PathReport, hb string) string {
 
 	switch {
 	case !hasP2PUp:
-		sb.WriteString("  • у тебя нет ни одного UP VPN/SSTP интерфейса. Если ожидал, что роутер через тоннель — подними сначала клиент.\n")
+		sb.WriteString("  • у тебя нет ни одного UP VPN/SSTP интерфейса. Если ожидал, что роутер через туннель — подними сначала клиент.\n")
 	case timeoutSeen:
 		var p2pName string
 		for _, c := range rep.Candidates {

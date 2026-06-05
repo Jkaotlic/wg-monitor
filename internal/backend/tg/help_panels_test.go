@@ -101,7 +101,7 @@ func TestHelpForScreen_RoutesMatchesWANSystemRebind(t *testing.T) {
 
 func TestHelpForScreen_TunnelsDistinguishesRestartButtons(t *testing.T) {
 	got := HelpForScreen("tunnels")
-	for _, want := range []string{"🔁 <имя>", "конкретный тоннель", "выкл→вкл", "🔁 awg-mgr", "менеджер awg-manager"} {
+	for _, want := range []string{"🔁 <имя>", "конкретный туннель", "выкл→вкл", "🔁 awg-mgr", "менеджер awg-manager"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("tunnels help should explain restart distinction, missing %q in:\n%s", want, got)
 		}

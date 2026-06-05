@@ -434,7 +434,7 @@ func RebindResultKeyboard(userID int64, srcID, dstID string, totalFailed int) In
 		})
 	}
 	rows = append(rows, []InlineKeyboardButton{
-		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 		{Text: "🌍 Проверить выход", CallbackData: fmt.Sprintf("check_via_tunnel:%d:_panel_", userID)},
 		{Text: "🛡 PingCheck", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
 	})

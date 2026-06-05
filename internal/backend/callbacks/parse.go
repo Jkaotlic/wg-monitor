@@ -35,6 +35,8 @@ type Args struct {
 	// 4th colon-segment of tunnel_enable/disable callbacks. Empty for any
 	// other action — the agent's runner needs it to call ndmc.
 	NDMSName string
+	// TunnelID is the awg-manager id transported by tunnel panel callbacks.
+	TunnelID string
 	// IsPanel marks callbacks originating from the Tunnels Panel (CheckName
 	// ends in "_panel_"). The router uses this to refresh the panel inline
 	// instead of editing the original alert message.
@@ -236,7 +238,14 @@ func Parse(data string) (Args, error) {
 		a.TTL = ttl
 	}
 	if action == "tunnel_enable" || action == "tunnel_disable" || action == "tunnel_restart" || action == "tunnel_delete_ask" || action == "tunnel_delete" {
+		if len(parts) >= 5 {
+			a.TunnelID = strings.TrimSpace(parts[4])
+		}
 		if len(parts) < 4 || parts[3] == "" {
+			if (action == "tunnel_delete_ask" || action == "tunnel_delete") && a.TunnelID != "" {
+				a.IsPanel = true
+				return a, nil
+			}
 			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
 		}
 		// Whitelist NDMS interface names: alphanumerics + underscore/hyphen.

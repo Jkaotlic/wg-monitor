@@ -87,9 +87,9 @@ func hideMyCodeListView(user *db.User, codes hideMyCodes) (string, tg.InlineKeyb
 
 func hideMyImportQueuedView(userID int64, codeID, docWarn string) (string, tg.InlineKeyboardMarkup) {
 	text := "HideMy.name AmneziaWG 2.0 config выгружен в топик. Импорт туннеля поставлен в очередь роутера." + docWarn +
-		"\n\nДальше:\n1. Нажми «Проверить тоннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
+		"\n\nДальше:\n1. Нажми «Проверить туннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 	}, {
 		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
 	}, {

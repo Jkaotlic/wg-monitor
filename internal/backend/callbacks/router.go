@@ -900,9 +900,9 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
-	case "🌍 Через тоннель?":
+	case "🌍 Через туннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
-			"⏳ Проверяю YouTube/Telegram/Instagram через тоннель…")
+			"⏳ Проверяю YouTube/Telegram/Instagram через туннель…")
 	case "🇷🇺 Напрямую?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
 			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
@@ -1264,6 +1264,7 @@ func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup)
 			enabled = v
 		}
 		entries = append(entries, tg.TunnelPanelEntry{
+			TunnelID:     strOrEmpty(det, "tunnel_id"),
 			Name:         strOrEmpty(det, "tunnel_name"),
 			CheckName:    row.CheckName,
 			Interface:    strOrEmpty(det, "interface"),
@@ -1293,7 +1294,7 @@ func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery,
 			if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
 				r.refreshTunnelsPanelCallback(ctx, q, u)
 			}
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "тоннеля уже нет; обновляю список")
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "туннеля уже нет; обновляю список")
 			return
 		}
 	}
@@ -1303,6 +1304,7 @@ func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery,
 		return
 	}
 	entry := tg.TunnelPanelEntry{
+		TunnelID:  args.TunnelID,
 		Name:      strings.TrimPrefix(args.CheckName, "tunnel_"),
 		CheckName: args.CheckName,
 		NDMSName:  args.NDMSName,
@@ -1342,7 +1344,7 @@ func (r *Router) guardStaleTunnelPanelAction(ctx context.Context, q *tg.Callback
 	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
 		r.refreshTunnelsPanelCallback(ctx, q, u)
 	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "тоннеля уже нет; обновляю список")
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "туннеля уже нет; обновляю список")
 	return true
 }
 
@@ -1376,7 +1378,17 @@ func (r *Router) consumePendingConfirm(ctx context.Context, q *tg.CallbackQuery,
 }
 
 func tunnelPanelActionIsStale(args Args, entry tg.TunnelPanelEntry) bool {
-	if strings.TrimSpace(args.NDMSName) != strings.TrimSpace(entry.NDMSName) {
+	if args.Action == "tunnel_delete" || args.Action == "tunnel_delete_ask" {
+		argsTunnelID := strings.TrimSpace(args.TunnelID)
+		entryTunnelID := strings.TrimSpace(entry.TunnelID)
+		if argsTunnelID != "" && entryTunnelID != "" && argsTunnelID != entryTunnelID {
+			return true
+		}
+		if strings.TrimSpace(args.NDMSName) != "" && strings.TrimSpace(entry.NDMSName) != "" &&
+			strings.TrimSpace(args.NDMSName) != strings.TrimSpace(entry.NDMSName) {
+			return true
+		}
+	} else if strings.TrimSpace(args.NDMSName) != strings.TrimSpace(entry.NDMSName) {
 		return true
 	}
 	switch args.Action {
@@ -1415,7 +1427,7 @@ func topicHelpBody(kind string) string {
 			"🛣 Маршруты — DNS/static правила, перенос и снапшот.\n" +
 			"🔐 Amnezia Premium — кабинеты и выгрузка .conf.\n" +
 			"🔑 HideMy.name — серверы и выгрузка AmneziaWG .conf.\n" +
-			"🌍 Через тоннель? / 🇷🇺 Напрямую? — проверки связности.\n" +
+			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n" +
 			"🛠 Обслуживание / ⬆ Обновить пакеты — сервисные действия.\n\n" +
 			"Если кнопка меняет состояние, бот поставит команду в очередь. Жди результат в этом топике и используй кнопки под результатом."
 	case "summary", "systemic":
@@ -1993,14 +2005,14 @@ func (r *Router) renderMaintQueueError(ctx context.Context, q *tg.CallbackQuery,
 		Summary: "не получилось поставить команду в очередь",
 		Meta:    []string{alerts.KV("роутер", user.Nickname)},
 		Details: shortToast(err),
-		Hint:    "Повтори запрос. Если очередь снова недоступна, открой проверку роутера или список тоннелей.",
+		Hint:    "Повтори запрос. Если очередь снова недоступна, открой проверку роутера или список туннелей.",
 	}.Render(alerts.CardOpts{MaxBytes: 3900})
 	retryCallback := fmt.Sprintf("%s:%d:_panel_", retryAction, user.ID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "🔄 Повторить", CallbackData: retryCallback},
 	}, {
 		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", user.ID)},
-		{Text: "🎛 Тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", user.ID)},
+		{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", user.ID)},
 	}, {
 		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)},
 	}}}

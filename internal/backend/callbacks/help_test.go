@@ -80,7 +80,7 @@ func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
 		"🛣 Маршруты",
 		"🔐 Amnezia Premium",
 		"🔑 HideMy.name",
-		"🌍 Через тоннель?",
+		"🌍 Через туннель?",
 		"🇷🇺 Напрямую?",
 		"🛠 Обслуживание",
 		"⬆ Обновить пакеты",
