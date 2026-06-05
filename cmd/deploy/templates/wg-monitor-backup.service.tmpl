@@ -4,15 +4,15 @@ Documentation=https://github.com/anex/wg-monitor
 
 [Service]
 Type=oneshot
-User=wgmonitor
-Group=wgmonitor
-ExecStart=/usr/local/bin/wg-monitor-backend backup --config /etc/wg-monitor/backend.yaml --passphrase-file /etc/wg-monitor/backup-passphrase.txt --operator-vault /var/lib/wg-monitor/operator-secrets.tgz.enc --out-dir /var/lib/wg-monitor/backups --send-telegram
+User={{.User}}
+Group={{.Group}}
+ExecStart={{.BinaryPath}} backup --config {{.ConfigPath}} --passphrase-file {{.PassphrasePath}} --operator-vault {{.OperatorVault}} --out-dir {{.OutDir}}{{if .LayoutRoot}} --layout-root {{.LayoutRoot}}{{end}}{{if .SendTelegram}} --send-telegram{{end}}
 
 # Hardening mirrors the backend service, with network enabled for Telegram API.
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/wg-monitor
+ProtectHome={{.ProtectHomeMode}}
+ReadWritePaths={{.ReadWritePath}}
 PrivateTmp=true
 PrivateDevices=true
 ProtectKernelTunables=true

@@ -86,7 +86,6 @@ func TestStaticTemplates(t *testing.T) {
 		"wg-monitor-backend.service",
 		"wg-monitor-backup.service",
 		"wg-monitor-backup.timer",
-		"wg-monitor-backup-telegram.sh",
 	} {
 		got, err := ReadStaticTemplate(name)
 		if err != nil {
@@ -121,31 +120,46 @@ func TestBackupServiceSendsTelegramBundle(t *testing.T) {
 	}
 	svc := string(service)
 	for _, want := range []string{
-		"ExecStart=/usr/local/lib/wg-monitor/wg-monitor-backup-telegram.sh",
+		"ExecStart=/usr/local/bin/wg-monitor-backend backup",
+		"--passphrase-file /etc/wg-monitor/backup-passphrase.txt",
+		"--operator-vault /var/lib/wg-monitor/operator-secrets.tgz.enc",
+		"--send-telegram",
 		"RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
 	} {
 		if !strings.Contains(svc, want) {
 			t.Errorf("backup service missing %q\nfull:\n%s", want, svc)
 		}
 	}
+}
 
-	script, err := ReadStaticTemplate("wg-monitor-backup-telegram.sh")
+func TestRenderBackupServiceSupportsDockerLayout(t *testing.T) {
+	got, err := RenderBackupService(BackupServiceParams{
+		User:            "anex",
+		Group:           "anex",
+		BinaryPath:      "/home/anex/wg-monitor/bin/wg-monitor-backend",
+		ConfigPath:      "/home/anex/wg-monitor/config/backend.yaml",
+		PassphrasePath:  "/home/anex/wg-monitor/secrets/backup-passphrase.txt",
+		OperatorVault:   "/home/anex/wg-monitor/secrets/operator-secrets.tgz.enc",
+		OutDir:          "/home/anex/wg-monitor/data/backups",
+		LayoutRoot:      "/home/anex/wg-monitor",
+		ReadWritePath:   "/home/anex/wg-monitor",
+		SendTelegram:    true,
+		ProtectHomeMode: "read-only",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	sh := string(script)
+	svc := string(got)
 	for _, want := range []string{
-		`VACUUM INTO`,
-		`admin_user_id:`,
-		`sendDocument`,
-		`document=@"$archive"`,
-		`backup too large`,
+		"User=anex",
+		"Group=anex",
+		"ExecStart=/home/anex/wg-monitor/bin/wg-monitor-backend backup",
+		"--layout-root /home/anex/wg-monitor",
+		"ReadWritePaths=/home/anex/wg-monitor",
+		"ProtectHome=read-only",
 	} {
-		if !strings.Contains(sh, want) {
-			t.Errorf("backup script missing %q\nfull:\n%s", want, sh)
+		if !strings.Contains(svc, want) {
+			t.Errorf("docker backup service missing %q\nfull:\n%s", want, svc)
 		}
-	}
-	if strings.Contains(sh, "cp \"$TOKEN_FILE\"") || strings.Contains(sh, "bot-token.txt\" \"$tmpdir") {
-		t.Fatalf("backup script must not copy the bot token into the archive:\n%s", sh)
 	}
 }

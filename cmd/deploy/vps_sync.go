@@ -90,7 +90,20 @@ func NewVPSClientForBackend(state *State, token string, timeout time.Duration) *
 	if state == nil {
 		return nil
 	}
-	return NewVPSClientWithTimeoutAndDialHost(state.Backend.Domain, token, timeout, state.Backend.Host)
+	return NewVPSClientWithTimeoutAndDialHost(state.Backend.Domain, token, timeout, backendAPIDialHost(state))
+}
+
+func backendAPIDialHost(state *State) string {
+	if state == nil {
+		return ""
+	}
+	if host := strings.TrimSpace(state.Backend.APIDialHost); host != "" {
+		return host
+	}
+	if strings.TrimSpace(state.Backend.SourceBind) != "" {
+		return ""
+	}
+	return strings.TrimSpace(state.Backend.Host)
 }
 
 func NewResilientVPSClientForBackend(state *State, secrets *SecretStore, token string, timeout time.Duration) *VPSClient {
@@ -512,7 +525,7 @@ func (f *wizardAPISSHFallback) DoWizardAPI(ctx context.Context, method, path str
 		if ctx.Err() != nil {
 			return 0, nil, ctx.Err()
 		}
-		s, err = ConnectSSHWithAuth(f.state.Backend.Host, port, user, auth, kh, "backend")
+		s, err = ConnectSSHWithAuthSource(f.state.Backend.Host, port, user, auth, kh, "backend", f.state.Backend.SourceBind)
 		if err == nil || !isTransientSSHTimeout(err) || attempt == 3 {
 			break
 		}

@@ -73,11 +73,11 @@ func connectBackendSSH(state *State, secrets *SecretStore, kh *KnownHosts) (*SSH
 	if err != nil {
 		return nil, err
 	}
-	s, err := ConnectSSHWithAuth(state.Backend.Host, port, user, auth, kh, "backend")
+	s, err := ConnectSSHWithAuthSource(state.Backend.Host, port, user, auth, kh, "backend", state.Backend.SourceBind)
 	for attempt := 1; err != nil && isTransientSSHTimeout(err) && attempt < 3; attempt++ {
 		PrintWarn(fmt.Sprintf("VPS SSH timeout, retry %d/3 через %ds", attempt+1, attempt*2))
 		time.Sleep(time.Duration(attempt*2) * time.Second)
-		s, err = ConnectSSHWithAuth(state.Backend.Host, port, user, auth, kh, "backend")
+		s, err = ConnectSSHWithAuthSource(state.Backend.Host, port, user, auth, kh, "backend", state.Backend.SourceBind)
 	}
 	if err == nil {
 		return s, nil
@@ -95,7 +95,7 @@ func connectBackendSSH(state *State, secrets *SecretStore, kh *KnownHosts) (*SSH
 	if setErr := secrets.Set("WG_VPS_PASS", fresh); setErr != nil && !strings.Contains(setErr.Error(), "disabled") {
 		PrintWarn("не смог сохранить новый WG_VPS_PASS: " + setErr.Error())
 	}
-	return ConnectSSHWithAuth(state.Backend.Host, port, user, []ssh.AuthMethod{ssh.Password(fresh)}, kh, "backend")
+	return ConnectSSHWithAuthSource(state.Backend.Host, port, user, []ssh.AuthMethod{ssh.Password(fresh)}, kh, "backend", state.Backend.SourceBind)
 }
 
 func backendSSHAuthMethods(state *State, secrets *SecretStore, interactive bool) ([]ssh.AuthMethod, SecretSource, error) {

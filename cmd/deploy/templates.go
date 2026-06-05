@@ -31,6 +31,20 @@ type CaddyParams struct {
 	Email  string
 }
 
+type BackupServiceParams struct {
+	User            string
+	Group           string
+	BinaryPath      string
+	ConfigPath      string
+	PassphrasePath  string
+	OperatorVault   string
+	OutDir          string
+	LayoutRoot      string
+	ReadWritePath   string
+	SendTelegram    bool
+	ProtectHomeMode string
+}
+
 func renderTemplate(name string, data any) ([]byte, error) {
 	raw, err := templatesFS.ReadFile("templates/" + name)
 	if err != nil {
@@ -57,6 +71,37 @@ func RenderAgentYAML(p AgentParams) ([]byte, error) {
 
 func RenderCaddyfile(p CaddyParams) ([]byte, error) {
 	return renderTemplate("Caddyfile.tmpl", p)
+}
+
+func RenderBackupService(p BackupServiceParams) ([]byte, error) {
+	if p.User == "" {
+		p.User = "wgmonitor"
+	}
+	if p.Group == "" {
+		p.Group = p.User
+	}
+	if p.BinaryPath == "" {
+		p.BinaryPath = "/usr/local/bin/wg-monitor-backend"
+	}
+	if p.ConfigPath == "" {
+		p.ConfigPath = "/etc/wg-monitor/backend.yaml"
+	}
+	if p.PassphrasePath == "" {
+		p.PassphrasePath = "/etc/wg-monitor/backup-passphrase.txt"
+	}
+	if p.OperatorVault == "" {
+		p.OperatorVault = "/var/lib/wg-monitor/operator-secrets.tgz.enc"
+	}
+	if p.OutDir == "" {
+		p.OutDir = "/var/lib/wg-monitor/backups"
+	}
+	if p.ReadWritePath == "" {
+		p.ReadWritePath = "/var/lib/wg-monitor"
+	}
+	if p.ProtectHomeMode == "" {
+		p.ProtectHomeMode = "true"
+	}
+	return renderTemplate("wg-monitor-backup.service.tmpl", p)
 }
 
 // ReadStaticTemplate returns an embedded file verbatim (no template processing).

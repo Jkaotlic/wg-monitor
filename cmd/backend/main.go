@@ -39,6 +39,14 @@ func telegramAdminCommandMenu() []tg.BotCommand {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "backup" {
+		if err := runBackupCommand(os.Args[2:]); err != nil {
+			slog.Error("backup", "err", err)
+			os.Exit(2)
+		}
+		return
+	}
+
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()

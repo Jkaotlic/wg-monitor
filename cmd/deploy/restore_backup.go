@@ -370,9 +370,15 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 		return err
 	}
 
-	PrintStep(6, 12, "daily Telegram backup")
-	if err := stepInstallBackendBackup(s); err != nil {
+	PrintStep(6, 12, "encrypted nightly backup")
+	if _, _, err := ensureBackupPassphrase(secrets, false); err != nil {
 		return err
+	}
+	if err := installBackupOnBackend(state, secrets, s, backupLayoutForState(state)); err != nil {
+		return err
+	}
+	if err := pushBackupSecretsToBackend(state, secrets, s, backupLayoutForState(state), ""); err != nil {
+		PrintWarn("operator secrets vault not uploaded: " + err.Error())
 	}
 
 	PrintStep(7, 12, "Caddy")

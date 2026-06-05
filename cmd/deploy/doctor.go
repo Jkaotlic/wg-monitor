@@ -89,10 +89,25 @@ type doctorTunnelsEnvelope struct {
 // dialableTCP is a private clone of probeReachable from update_components.go.
 // Inlined to keep doctor.go independent of files owned by parallel work.
 func dialableTCP(host string, port int, timeout time.Duration) bool {
+	return dialableTCPFrom(host, port, timeout, "")
+}
+
+func dialableTCPFrom(host string, port int, timeout time.Duration, sourceBind string) bool {
 	if host == "" || port == 0 {
 		return false
 	}
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", host, port), timeout)
+	addr := fmt.Sprintf("%s:%d", host, port)
+	sourceBind = strings.TrimSpace(sourceBind)
+	var d net.Dialer
+	d.Timeout = timeout
+	if sourceBind != "" {
+		ip := net.ParseIP(sourceBind)
+		if ip == nil {
+			return false
+		}
+		d.LocalAddr = &net.TCPAddr{IP: ip}
+	}
+	conn, err := d.Dial("tcp", addr)
 	if err != nil {
 		return false
 	}
@@ -256,7 +271,7 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		user = "root"
 	}
 
-	if !dialableTCP(state.Backend.Host, port, 3*time.Second) {
+	if !dialableTCPFrom(state.Backend.Host, port, 3*time.Second, state.Backend.SourceBind) {
 		t.failf(fmt.Sprintf("TCP %s:%d не отвечает за 3с", state.Backend.Host, port))
 		fmt.Println()
 		return
@@ -269,7 +284,7 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		fmt.Println()
 		return
 	}
-	s, err := ConnectSSHWithAuth(state.Backend.Host, port, user, auth, kh, "backend")
+	s, err := ConnectSSHWithAuthSource(state.Backend.Host, port, user, auth, kh, "backend", state.Backend.SourceBind)
 	if err != nil {
 		t.failf("SSH к VPS: " + err.Error())
 		fmt.Println()
@@ -278,16 +293,36 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 	defer s.Close()
 	t.ok("SSH к VPS установлен")
 
-	// systemctl is-active
+	yamlPath := "/etc/wg-monitor/backend.yaml"
+	dbPath := "/var/lib/wg-monitor/state.db"
+	checkConfigFilesInContainer := false
+
+	// systemctl is-active, with a Docker-layout fallback for home/Pi backends.
 	if out, _, _, err := s.Run("systemctl is-active wg-monitor-backend"); err == nil {
 		svcState := strings.TrimSpace(out)
 		if svcState == "active" {
 			t.ok("systemctl is-active: active")
 		} else {
-			t.failf("systemctl is-active: " + svcState)
+			if dockerBackendRunning(s) {
+				t.ok("docker container wg-monitor-backend: running")
+				base := backendDockerBase(user)
+				yamlPath = base + "/config/backend.yaml"
+				dbPath = base + "/data/state.db"
+				checkConfigFilesInContainer = true
+			} else {
+				t.failf("systemctl is-active: " + svcState)
+			}
 		}
 	} else {
-		t.failf("systemctl is-active failed: " + err.Error())
+		if dockerBackendRunning(s) {
+			t.ok("docker container wg-monitor-backend: running")
+			base := backendDockerBase(user)
+			yamlPath = base + "/config/backend.yaml"
+			dbPath = base + "/data/state.db"
+			checkConfigFilesInContainer = true
+		} else {
+			t.failf("systemctl is-active failed: " + err.Error())
+		}
 	}
 
 	// /healthz
@@ -317,9 +352,9 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 
 	// backend.yaml parses + has loader-required fields. Agents/users
 	// coverage is checked separately against the DB below.
-	yamlOut, _, rc, err := s.Run("cat /etc/wg-monitor/backend.yaml")
+	yamlOut, _, rc, err := s.Run("cat " + shellSingleQuote(yamlPath))
 	if err != nil || rc != 0 {
-		t.failf("чтение /etc/wg-monitor/backend.yaml не удалось")
+		t.failf("чтение " + yamlPath + " не удалось")
 	} else {
 		var by doctorBackendYAML
 		if perr := yaml.Unmarshal([]byte(yamlOut), &by); perr != nil {
@@ -336,7 +371,11 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 				t.failf("backend.yaml: telegram.admin_user_id == 0")
 			}
 			if by.Telegram.BotTokenFile != "" {
-				if out, _, rc, _ := s.Run("test -f " + shellSingleQuote(by.Telegram.BotTokenFile)); rc != 0 {
+				checkCmd := "test -f " + shellSingleQuote(by.Telegram.BotTokenFile)
+				if checkConfigFilesInContainer {
+					checkCmd = "docker exec wg-monitor-backend test -f " + shellSingleQuote(by.Telegram.BotTokenFile)
+				}
+				if out, _, rc, _ := s.Run(checkCmd); rc != 0 {
 					t.failf("backend.yaml ссылается на " + by.Telegram.BotTokenFile + ", но файла нет на VPS: " + strings.TrimSpace(out))
 				} else {
 					t.ok(by.Telegram.BotTokenFile + " существует")
@@ -348,12 +387,19 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 	// users DB ↔ wizard.toml agents reconciliation. The DB is the source
 	// of truth — populated by wg-monitor-cli add-user (called from the
 	// wizard's [3] Add/install Router action).
-	dbOut, _, rc2, err2 := s.Run(`sqlite3 /var/lib/wg-monitor/state.db "SELECT nickname || '|' || COALESCE(last_seen_at, '') FROM users;"`)
+	dbOut, _, rc2, err2 := s.Run(`sqlite3 ` + shellSingleQuote(dbPath) + ` "SELECT nickname || '|' || COALESCE(last_seen_at, '') FROM users;"`)
+	have := map[string]bool{}
+	lastSeen := map[string]string{}
 	if err2 != nil || rc2 != 0 {
-		t.failf("чтение users из /var/lib/wg-monitor/state.db не удалось")
+		apiHave, apiLastSeen, apiErr := doctorRemoteUsersViaAPI(state, secrets)
+		if apiErr != nil {
+			t.failf("чтение users из " + dbPath + " не удалось; wizard API fallback: " + apiErr.Error())
+		} else {
+			have = apiHave
+			lastSeen = apiLastSeen
+			t.ok(fmt.Sprintf("users через wizard API: %d", len(have)))
+		}
 	} else {
-		have := map[string]bool{}
-		lastSeen := map[string]string{}
 		for _, line := range strings.Split(dbOut, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -366,6 +412,8 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 			}
 		}
 		t.ok(fmt.Sprintf("users в DB: %d", len(have)))
+	}
+	if len(have) > 0 {
 		for _, ag := range state.Agents {
 			if have[ag.Nickname] {
 				hb := doctorFormatLastSeen(lastSeen[ag.Nickname])
@@ -396,13 +444,55 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 	}
 
 	// DB file size
-	if out, _, rc, err := s.Run("stat -c %s /var/lib/wg-monitor/state.db 2>/dev/null"); err == nil && rc == 0 && strings.TrimSpace(out) != "" {
+	if out, _, rc, err := s.Run("stat -c %s " + shellSingleQuote(dbPath) + " 2>/dev/null"); err == nil && rc == 0 && strings.TrimSpace(out) != "" {
 		t.ok("state.db size: " + strings.TrimSpace(out) + " bytes")
 	} else {
 		t.warnf("state.db не найден или stat не сработал")
 	}
 
 	fmt.Println()
+}
+
+func dockerBackendRunning(s *SSH) bool {
+	out, _, rc, err := s.Run("docker inspect -f '{{.State.Running}}' wg-monitor-backend 2>/dev/null")
+	return err == nil && rc == 0 && strings.TrimSpace(out) == "true"
+}
+
+func backendDockerBase(user string) string {
+	user = strings.TrimSpace(user)
+	if user == "" || user == "root" {
+		return "/root/wg-monitor"
+	}
+	return "/home/" + user + "/wg-monitor"
+}
+
+func doctorRemoteUsersViaAPI(state *State, secrets *SecretStore) (map[string]bool, map[string]string, error) {
+	token := secrets.GetNonInteractive("WIZARD_TOKEN")
+	if token == "" {
+		return nil, nil, fmt.Errorf("WIZARD_TOKEN missing")
+	}
+	c := NewVPSClientForBackend(state, token, 8*time.Second)
+	if c == nil {
+		return nil, nil, fmt.Errorf("VPSClient unavailable")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	remote, err := c.ListAgents(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	have := make(map[string]bool, len(remote))
+	lastSeen := make(map[string]string, len(remote))
+	for _, ag := range remote {
+		if ag.Nickname == "" {
+			continue
+		}
+		have[ag.Nickname] = true
+		if ag.LastSeenAt != nil {
+			lastSeen[ag.Nickname] = ag.LastSeenAt.Format(time.RFC3339)
+		}
+	}
+	return have, lastSeen, nil
 }
 
 func doctorAgent(state *State, ag *AgentState, secrets *SecretStore, t *doctorTally, opts doctorOptions) {

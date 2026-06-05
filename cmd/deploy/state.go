@@ -23,6 +23,8 @@ type BackendState struct {
 	Host                string `toml:"host"`
 	Port                int    `toml:"port"`
 	User                string `toml:"user"`
+	SourceBind          string `toml:"source_bind,omitempty"`
+	APIDialHost         string `toml:"api_dial_host,omitempty"`
 	SSHAuth             string `toml:"ssh_auth,omitempty"`
 	KeyPath             string `toml:"key_path,omitempty"`
 	Domain              string `toml:"domain"`

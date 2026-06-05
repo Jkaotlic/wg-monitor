@@ -375,6 +375,7 @@ func secretStatusRows(state *State) []secretStatusRow {
 			add("WG_VPS_PASS", "VPS SSH password", true)
 		}
 		add("WG_BOT_TOKEN", "Telegram bot token", true)
+		add(backupPassphraseEnv, "encrypted backup recovery password", true)
 	}
 	if state.Backend.Domain != "" || len(state.Agents) > 0 {
 		add("WIZARD_TOKEN", "wizard API token", true)

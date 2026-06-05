@@ -349,3 +349,18 @@ func TestNewVPSClientForBackendUsesDomainAndHost(t *testing.T) {
 		t.Fatal("expected custom transport")
 	}
 }
+
+func TestNewVPSClientForBackendDoesNotPinAPIToSourceBoundSSHHost(t *testing.T) {
+	state := &State{Backend: BackendState{
+		Domain:     "wgmonitor.example",
+		Host:       "192.168.31.87",
+		SourceBind: "172.16.6.9",
+	}}
+	c := NewVPSClientForBackend(state, "secret", 15*time.Second)
+	if c == nil {
+		t.Fatal("client is nil")
+	}
+	if got := backendAPIDialHost(state); got != "" {
+		t.Fatalf("backendAPIDialHost=%q, want empty", got)
+	}
+}

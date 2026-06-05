@@ -7,8 +7,8 @@ import (
 
 func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
 	items := mainMenuItems(false, &State{})
-	if len(items) != 8 {
-		t.Fatalf("len(mainMenuItems)=%d, want 8: %+v", len(items), items)
+	if len(items) != 9 {
+		t.Fatalf("len(mainMenuItems)=%d, want 9: %+v", len(items), items)
 	}
 	text := renderMenuItems(items, "Q", "Выход")
 	for _, want := range []string{
@@ -18,8 +18,9 @@ func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
 		"[4] Переезд на новый VPS",
 		"[5] Doctor",
 		"[6] Синхронизация с VPS",
-		"[7] Restore / Disaster Recovery",
-		"[8] Сервис",
+		"[7] Backups",
+		"[8] Restore / Disaster Recovery",
+		"[9] Сервис",
 		"когда нажимать:",
 	} {
 		if !strings.Contains(text, want) {
@@ -34,6 +35,22 @@ func TestMainMenuIsTaskOrientedAndHasHelp(t *testing.T) {
 	} {
 		if strings.Contains(text, oldTopLevel) {
 			t.Fatalf("old top-level action %q leaked into main menu:\n%s", oldTopLevel, text)
+		}
+	}
+}
+
+func TestBackupMenuGroupsBackupActions(t *testing.T) {
+	text := renderMenuItems(backupMenuItems(), "B", "back")
+	for _, want := range []string{
+		"[1] Status",
+		"[2] Enable / reinstall nightly",
+		"[3] Run backup now",
+		"[4] Push wizard secrets",
+		"[5] Show / rotate password",
+		"[6] Restore encrypted backup",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("backup menu missing %q:\n%s", want, text)
 		}
 	}
 }

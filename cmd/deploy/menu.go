@@ -26,7 +26,7 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 	// what's actually on VPS. Silent on first-run / offline / missing token.
 	if state.Backend.Domain != "" {
 		if tok := secrets.GetNonInteractive("WIZARD_TOKEN"); tok != "" {
-			if remote, err := startupListAgents(state.Backend.Domain, state.Backend.Host, tok); err == nil {
+			if remote, err := startupListAgents(state.Backend.Domain, backendAPIDialHost(state), tok); err == nil {
 				merged, added, _, _ := MergeAgents(state.Agents, remote)
 				state.Agents = merged
 				if len(added) > 0 {
@@ -67,16 +67,19 @@ func RunMenu(state *State, statePath string, secrets *SecretStore, dl *Downloade
 				return actionSyncVPS(state, secrets)
 			})
 		case "7":
+			runBackupMenu(state, statePath, secrets)
+			continue
+		case "8":
 			runActionAndSave(state, statePath, secrets, func() error {
 				return actionRestoreBackup(state, secrets, dl, RestoreBackupOptions{})
 			})
-		case "8":
+		case "9":
 			runServiceMenu(state, statePath, secrets)
 			continue
 		case "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1-8 или Q.")
+			PrintFail("Не понял. Введи 1-9 или Q.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в меню", "")
@@ -267,15 +270,27 @@ func mainMenuItems(_ bool, state *State) []menuItem {
 		{Key: "4", Title: "Переезд на новый VPS", Help: "когда нажимать: backend уже новый, надо перепривязать старые роутеры через AWG Manager"},
 		{Key: "5", Title: "Doctor", Help: "когда нажимать: что-то не работает или нужно быстро проверить VPS и всех агентов"},
 		{Key: "6", Title: "Синхронизация с VPS", Help: "когда нажимать: wizard.toml пустой/старый, надо подтянуть список роутеров с backend"},
-		{Key: "7", Title: "Сервис", Help: "когда нажимать: ручная правка wizard.toml, known_hosts, legacy recovery"},
+		{Key: "7", Title: "Backups", Help: "when to use: encrypted nightly backups, password, secrets vault, restore"},
+		{Key: "8", Title: "Сервис", Help: "когда нажимать: ручная правка wizard.toml, known_hosts, legacy recovery"},
 	}
-	items = append(items[:6], append([]menuItem{{
-		Key:   "7",
+	items = append(items[:7], append([]menuItem{{
+		Key:   "8",
 		Title: "Restore / Disaster Recovery",
 		Help:  "when to use: TG backup archive restore to current VPS or bootstrap a new VPS",
-	}}, items[6:]...)...)
-	items[7].Key = "8"
+	}}, items[7:]...)...)
+	items[8].Key = "9"
 	return items
+}
+
+func backupMenuItems() []menuItem {
+	return []menuItem{
+		{Key: "1", Title: "Status", Help: "when to use: check timer/service, last encrypted backup, password and operator vault"},
+		{Key: "2", Title: "Enable / reinstall nightly", Help: "when to use: install or repair the automatic encrypted Telegram backup"},
+		{Key: "3", Title: "Run backup now", Help: "when to use: send an encrypted full backup immediately"},
+		{Key: "4", Title: "Push wizard secrets", Help: "when to use: upload encrypted local secrets.env + wizard.toml vault to backend"},
+		{Key: "5", Title: "Show / rotate password", Help: "when to use: create, upload, or display the recovery password"},
+		{Key: "6", Title: "Restore encrypted backup", Help: "when to use: import a password-protected full backup archive"},
+	}
 }
 
 func routerMenuItems() []menuItem {
@@ -356,6 +371,44 @@ func runRouterMenu(state *State, statePath string, secrets *SecretStore, dl *Dow
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в раздел Роутеры", "")
+	}
+}
+
+func runBackupMenu(state *State, statePath string, secrets *SecretStore) {
+	for {
+		fmt.Println()
+		fmt.Println(Colorize("Backups", ColorBold))
+		fmt.Print(renderMenuItems(backupMenuItems(), "B", "Назад"))
+		switch readMenuChoice() {
+		case "1":
+			actionBackupStatus(state, secrets) //nolint:errcheck
+		case "2":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionBackupInstall(state, secrets)
+			})
+		case "3":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionBackupRun(state, secrets)
+			})
+		case "4":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionBackupPushSecrets(state, secrets, statePath)
+			})
+		case "5":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionBackupPassword(state, secrets, true)
+			})
+		case "6":
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionBackupRestore(state, secrets, "")
+			})
+		case "B", "Q", "":
+			return
+		default:
+			PrintFail("Не понял. Введи 1-6 или B.")
+		}
+		fmt.Println()
+		Ask("[Enter] чтобы вернуться в Backups", "")
 	}
 }
 

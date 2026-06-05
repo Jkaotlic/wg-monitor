@@ -665,12 +665,13 @@ func TestApplyAdoptedBackendReplacesStaleBackend(t *testing.T) {
 		},
 	}
 	applyAdoptedBackend(st, BackendState{
-		Host:    "83.171.224.125",
-		Port:    22,
-		User:    "root",
-		SSHAuth: backendSSHAuthKey,
-		KeyPath: `C:\Users\User\.ssh\id_ed25519`,
-		Domain:  "wgmonitor.example",
+		Host:       "83.171.224.125",
+		Port:       22,
+		User:       "root",
+		SourceBind: "172.16.6.9",
+		SSHAuth:    backendSSHAuthKey,
+		KeyPath:    `C:\Users\User\.ssh\id_ed25519`,
+		Domain:     "wgmonitor.example",
 	})
 	if st.Backend.Host != "83.171.224.125" || st.Backend.Domain != "wgmonitor.example" {
 		t.Fatalf("backend not replaced: %+v", st.Backend)
@@ -680,6 +681,9 @@ func TestApplyAdoptedBackendReplacesStaleBackend(t *testing.T) {
 	}
 	if st.Backend.SSHAuth != backendSSHAuthKey || st.Backend.KeyPath == "" {
 		t.Fatalf("backend ssh auth not adopted: %+v", st.Backend)
+	}
+	if st.Backend.SourceBind != "172.16.6.9" {
+		t.Fatalf("backend source_bind not adopted: %+v", st.Backend)
 	}
 }
 

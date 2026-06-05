@@ -15,12 +15,14 @@ func TestStateRoundTrip(t *testing.T) {
 	in := &State{
 		SchemaVersion: 1,
 		Backend: BackendState{
-			Host:    "1.2.3.4",
-			Port:    22,
-			User:    "root",
-			Domain:  "example.com",
-			SSHAuth: "key",
-			KeyPath: filepath.Join(dir, "id_ed25519"),
+			Host:        "1.2.3.4",
+			Port:        22,
+			User:        "root",
+			SourceBind:  "172.16.6.9",
+			APIDialHost: "10.0.0.5",
+			Domain:      "example.com",
+			SSHAuth:     "key",
+			KeyPath:     filepath.Join(dir, "id_ed25519"),
 		},
 		Telegram: TelegramState{
 			ChatID:      -1001234567890,
