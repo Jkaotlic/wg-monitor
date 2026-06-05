@@ -405,9 +405,11 @@ var wizardCommandAllowlist = map[string]bool{
 	"router_doctor":    true,
 	"route_status":     true,
 	"tunnels_status":   true,
+	"route_rebind":     true,
 	"tunnel_enable":    true,
 	"tunnel_disable":   true,
 	"tunnel_restart":   true,
+	"tunnel_delete":    true,
 	"service_restart":  true,
 }
 

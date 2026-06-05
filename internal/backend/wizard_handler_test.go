@@ -598,6 +598,65 @@ func TestWizardCommandDispatchAllowsConnectivityChecks(t *testing.T) {
 	}
 }
 
+func TestWizardCommandDispatchAllowsRouteAndTunnelCleanup(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("del", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		body   string
+		action string
+		want   map[string]any
+	}{
+		{
+			name:   "route rebind",
+			body:   `{"action":"route_rebind","args":{"src_tunnel_id":"awg10","dst_tunnel_id":"awg13"}}`,
+			action: "route_rebind",
+			want:   map[string]any{"src_tunnel_id": "awg10", "dst_tunnel_id": "awg13"},
+		},
+		{
+			name:   "tunnel delete",
+			body:   `{"action":"tunnel_delete","args":{"tunnel_id":"awg10"}}`,
+			action: "tunnel_delete",
+			want:   map[string]any{"tunnel_id": "awg10"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &fakeCmdSink{}
+			h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
+			req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/del/commands", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetPathValue("nickname", "del")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusAccepted {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(sink.enqueued) != 1 || sink.enqueuedUsers[0] != userID {
+				t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
+			}
+			cmd := sink.enqueued[0]
+			if cmd.Action != tc.action {
+				t.Fatalf("action=%q, want %q", cmd.Action, tc.action)
+			}
+			for key, want := range tc.want {
+				if got := cmd.Args[key]; got != want {
+					t.Fatalf("arg %s=%v, want %v; cmd=%+v", key, got, want, cmd)
+				}
+			}
+		})
+	}
+}
+
 func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
