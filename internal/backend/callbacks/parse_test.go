@@ -94,12 +94,25 @@ func TestParseCommandActions(t *testing.T) {
 
 func TestParseTunnelPanelCallbacks(t *testing.T) {
 	for _, action := range []string{"tunnel_restart", "tunnel_delete_ask", "tunnel_delete"} {
-		data := action + ":42:tunnel_awg13:Wireguard3"
+		data := action + ":42:tunnel_awg13:Wireguard3:awg13"
 		a, err := Parse(data)
 		if err != nil {
 			t.Fatalf("%s: %v", data, err)
 		}
-		if a.Action != action || a.UserID != 42 || a.CheckName != "tunnel_awg13" || a.NDMSName != "Wireguard3" || !a.IsPanel {
+		if a.Action != action || a.UserID != 42 || a.CheckName != "tunnel_awg13" || a.NDMSName != "Wireguard3" || a.TunnelID != "awg13" || !a.IsPanel {
+			t.Fatalf("%s: got %+v", data, a)
+		}
+	}
+}
+
+func TestParseTunnelDeleteAllowsTunnelIDWithoutNDMSName(t *testing.T) {
+	for _, action := range []string{"tunnel_delete_ask", "tunnel_delete"} {
+		data := action + ":42:tunnel_kernel-10::kernel-10"
+		a, err := Parse(data)
+		if err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		if a.Action != action || a.UserID != 42 || a.CheckName != "tunnel_kernel-10" || a.NDMSName != "" || a.TunnelID != "kernel-10" || !a.IsPanel {
 			t.Fatalf("%s: got %+v", data, a)
 		}
 	}

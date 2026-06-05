@@ -26,7 +26,7 @@ var routerMenuItems = []BotMenuItem{
 	{Code: "routes", Label: "🛣 Маршруты", Command: "routes", Description: "Открыть маршруты"},
 	{Code: "amnezia_premium", Label: "🔐 Amnezia Premium", Command: "amnezia", Description: "Кабинет Amnezia Premium"},
 	{Code: "hidemyname", Label: "🔑 HideMy.name", Command: "hidemy", Description: "Кабинет HideMy.name"},
-	{Code: "via_tunnel", Label: "🌍 Через тоннель?", Command: "via", Description: "Проверить связь через туннель"},
+	{Code: "via_tunnel", Label: "🌍 Через туннель?", Command: "via", Description: "Проверить связь через туннель"},
 	{Code: "direct", Label: "🇷🇺 Напрямую?", Command: "direct", Description: "Проверить прямую связь"},
 	{Code: "maint", Label: "🛠 Обслуживание", Command: "maint", Description: "Открыть обслуживание"},
 	{Code: "opkg_upgrade", Label: "⬆ Обновить пакеты", Command: "upgrade", Description: "Обновить пакеты Entware"},

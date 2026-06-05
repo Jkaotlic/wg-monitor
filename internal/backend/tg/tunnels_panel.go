@@ -17,6 +17,7 @@ import (
 // agent needs it for `ndmc -c "interface <NDMSName> up|down"` — there's no
 // per-tunnel start endpoint in awg-manager.
 type TunnelPanelEntry struct {
+	TunnelID     string // awg-manager id, used by delete endpoint
 	Name         string // "amnezia_for_awg"
 	CheckName    string // "tunnel_awg11"
 	Interface    string // "nwg1"
@@ -180,13 +181,14 @@ func TunnelsPanelKeyboard(userID int64, entries []TunnelPanelEntry) InlineKeyboa
 	// screen instead of enqueueing the agent command directly.
 	row = nil
 	for _, e := range entries {
-		if strings.TrimSpace(e.NDMSName) == "" {
+		tunnelID := firstNonEmptyTunnelID(e.TunnelID, strings.TrimPrefix(e.CheckName, "tunnel_"))
+		if tunnelID == "" && strings.TrimSpace(e.CheckName) == "" {
 			continue
 		}
 		label := shortTunnelLabel(e.Name, e.CheckName)
 		row = append(row, InlineKeyboardButton{
 			Text:         fmt.Sprintf("🗑 %s", label),
-			CallbackData: fmt.Sprintf("tunnel_delete_ask:%d:%s:%s", userID, e.CheckName, e.NDMSName),
+			CallbackData: fmt.Sprintf("tunnel_delete_ask:%d:%s:%s:%s", userID, e.CheckName, e.NDMSName, tunnelID),
 		})
 		if len(row) >= tunnelsMaxPerRow {
 			rows = append(rows, row)
@@ -215,20 +217,29 @@ func TunnelDeleteConfirmText(e TunnelPanelEntry) string {
 	if e.NDMSName != "" {
 		label = fmt.Sprintf("%s (%s)", label, e.NDMSName)
 	}
-	return fmt.Sprintf("🗑 Удалить тоннель %s?\n\nЭто удалит конфиг из awg-manager на роутере. Если на него завязаны маршруты, их нужно будет перенести отдельно.", label)
+	return fmt.Sprintf("🗑 Удалить туннель %s?\n\nЭто удалит конфиг из awg-manager на роутере. Если на него завязаны маршруты, их нужно будет перенести отдельно.", label)
 }
 
 func TunnelDeleteConfirmKeyboard(userID int64, e TunnelPanelEntry) InlineKeyboardMarkup {
 	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
 		{{
 			Text:         "🗑 Да, удалить",
-			CallbackData: fmt.Sprintf("tunnel_delete:%d:%s:%s", userID, e.CheckName, e.NDMSName),
+			CallbackData: fmt.Sprintf("tunnel_delete:%d:%s:%s:%s", userID, e.CheckName, e.NDMSName, firstNonEmptyTunnelID(e.TunnelID, strings.TrimPrefix(e.CheckName, "tunnel_"))),
 		}},
 		{{
 			Text:         "↩ Назад",
 			CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID),
 		}},
 	}}
+}
+
+func firstNonEmptyTunnelID(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // shortTunnelLabel picks a compact label for the toggle button: prefer the

@@ -351,9 +351,9 @@ func selfHostedAmneziaImportQueuedView(userID int64, label, issuedName, address,
 	if strings.TrimSpace(docWarn) != "" {
 		text += docWarn
 	}
-	text += "\n\nДальше:\n1. Нажми «Проверить тоннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
+	text += "\n\nДальше:\n1. Нажми «Проверить туннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🎛 Проверить тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+		{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 	}, {
 		{Text: "🛣 Маршруты / перенос", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
 	}, {

@@ -126,7 +126,7 @@ func MaintPanelKeyboard(userID int64, a MaintPanelArgs) InlineKeyboardMarkup {
 		},
 		{
 			{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
-			{Text: "🎛 Тоннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
+			{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 		},
 		HelpRowFor("maint"),
 		{

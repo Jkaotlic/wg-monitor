@@ -1430,11 +1430,37 @@ func TestRouterTunnelDeleteAskRendersConfirm(t *testing.T) {
 	}
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Удалить тоннель") {
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Удалить туннель") {
 		t.Fatalf("expected delete confirmation edit, got %v", f.edits)
 	}
-	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_awg13:Wireguard3") {
+	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_awg13:Wireguard3:awg13") {
 		t.Fatalf("confirm markup missing tunnel_delete callback: %+v", f.editMarkups)
+	}
+}
+
+func TestRouterTunnelDeleteAskRendersConfirmWithoutNDMSName(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+	cache := &RoutesCache{TTL: time.Minute}
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
+		ID: "kernel-real-id", Name: "kernel", Iface: "opkgtun10", Enabled: true,
+	}}})
+	r.SetRoutesCache(cache)
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-delete-ask-kernel",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+		Data:    "tunnel_delete_ask:" + itoa(uid) + ":tunnel_kernel-real-id::kernel-real-id",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "kernel") {
+		t.Fatalf("expected delete confirmation edit, got %v", f.edits)
+	}
+	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_kernel-real-id::kernel-real-id") {
+		t.Fatalf("confirm markup missing explicit tunnel_id callback: %+v", f.editMarkups)
 	}
 }
 
@@ -1457,7 +1483,7 @@ func TestRouterTunnelDeleteAskStaleButtonRefreshesInsteadOfConfirm(t *testing.T)
 	}
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.edits) != 1 || strings.Contains(f.edits[0], "Удалить тоннель") {
+	if len(f.edits) != 1 || strings.Contains(f.edits[0], "Удалить туннель") {
 		t.Fatalf("stale delete button must refresh panel instead of confirm, edits=%v", f.edits)
 	}
 	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
@@ -3082,6 +3108,39 @@ func TestRouterHandleMessage_OperatorKeyboardCommandWithBotSuffix(t *testing.T) 
 	kb, ok := f.rkSends[1].markup.(*tg.InlineKeyboardMarkup)
 	if !ok || !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") || !keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
 		t.Fatalf("/keyboard must also send the full visible operator menu, markup=%T %+v", f.rkSends[1].markup, f.rkSends[1].markup)
+	}
+}
+
+func TestRouterCompatViaTunnelDispatchesViaTunnelCheck(t *testing.T) {
+	d, uid := newTestDB(t)
+	tid := int64(55)
+	if err := d.Users().UpdateThreadID(uid, tid); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, 100); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(uid, 200, 42); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
+
+	q := &tg.CallbackQuery{
+		ID:      "compat-via",
+		From:    tg.User{ID: 200},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "menu"},
+		Data:    "compat_btn:0:via_tunnel",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected one command, got %+v", sink.calls)
+	}
+	if sink.calls[0].userID != uid || sink.calls[0].action != "check_via_tunnel" {
+		t.Fatalf("compat via_tunnel dispatched wrong command: %+v", sink.calls[0])
 	}
 }
 

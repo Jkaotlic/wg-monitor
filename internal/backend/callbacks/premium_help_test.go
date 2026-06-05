@@ -53,7 +53,7 @@ func TestAmneziaImportQueuedViewOffersNextActions(t *testing.T) {
 	if !strings.Contains(text, "Импорт туннеля поставлен в очередь") {
 		t.Fatalf("queued view should explain import queue, got %q", text)
 	}
-	if !strings.Contains(text, "Проверить тоннели") {
+	if !strings.Contains(text, "Проверить туннели") {
 		t.Fatalf("queued view should suggest tunnel check, got %q", text)
 	}
 	if !strings.Contains(text, "Маршруты") {
@@ -93,7 +93,7 @@ func TestHideMyImportQueuedViewOffersNextActions(t *testing.T) {
 	if !strings.Contains(text, "Импорт туннеля поставлен в очередь") {
 		t.Fatalf("queued view should explain import queue, got %q", text)
 	}
-	if !strings.Contains(text, "Проверить тоннели") {
+	if !strings.Contains(text, "Проверить туннели") {
 		t.Fatalf("queued view should suggest tunnel check, got %q", text)
 	}
 	if !strings.Contains(text, "Маршруты") {
@@ -123,7 +123,7 @@ func TestSelfHostedAmneziaImportQueuedViewOffersNextActions(t *testing.T) {
 	if !strings.Contains(text, "Импорт туннеля поставлен в очередь") {
 		t.Fatalf("queued view should explain import queue, got %q", text)
 	}
-	if !strings.Contains(text, "Проверить тоннели") {
+	if !strings.Contains(text, "Проверить туннели") {
 		t.Fatalf("queued view should suggest tunnel check, got %q", text)
 	}
 	if !strings.Contains(text, "Маршруты") {

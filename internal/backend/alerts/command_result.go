@@ -65,7 +65,7 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	case "tunnel_delete":
 		tunnelID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(r.Output), "tunnel "))
 		tunnelID = strings.TrimSuffix(tunnelID, " deleted")
-		summary := "тоннель удалён"
+		summary := "туннель удалён"
 		if tunnelID != "" && tunnelID != r.Output {
 			summary = tunnelID + " → удалён"
 		}
@@ -261,7 +261,7 @@ func commandLabelHuman(action string) string {
 	case "force_recheck":
 		return "🔁 Force recheck"
 	case "check_via_tunnel":
-		return "🌍 Через тоннель"
+		return "🌍 Через туннель"
 	case "check_direct":
 		return "🇷🇺 Напрямую"
 	case "router_doctor":

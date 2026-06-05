@@ -15,7 +15,7 @@ import (
 //
 // Neighbors is optional context — short summaries of OTHER tunnels of the
 // same user. Used both as a source of correlation hints in the diagnose
-// helper and as a "других тоннелей" hint in the advice line.
+// helper and as a "других туннелей" hint in the advice line.
 type HardArgs struct {
 	Nickname    string
 	CheckName   string
@@ -345,7 +345,7 @@ func categoryHeadline(checkName string, d map[string]any) string {
 		if total > 0 && len(failed) > 0 && len(failed) < total {
 			return "Часть внешних сервисов недоступна"
 		}
-		return "Внешние сервисы недоступны через тоннель"
+		return "Внешние сервисы недоступны через туннель"
 	}
 	return "Проверка " + checkName + " падает"
 }
@@ -671,7 +671,7 @@ func impactFor(checkName string, d map[string]any) string {
 	case "hydraroute":
 		return "DNS/HR-Neo правила могут перестать направлять домены в нужные туннели; часть сайтов пойдёт обычным маршрутом или не откроется."
 	case "awg_manager", "awgmgr_api":
-		return "бот не может управлять тоннелями через awg-manager: диагностика, маршруты и кнопки ремонта могут не сработать."
+		return "бот не может управлять туннелями через awg-manager: диагностика, маршруты и кнопки ремонта могут не сработать."
 	case "external_reach":
 		return "Сервисы снаружи не открываются через выбранный туннель; проблема либо в самом туннеле, либо в маршрутизации через него."
 	}
@@ -752,7 +752,7 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 		return fmt.Sprintf("%s идут через %s. Похоже на сбой этого маршрута или туннеля, а не самого DNS.", prefix, label)
 	}
 
-	// Если все упавшие endpoint'ы прибиты к одному ndms_name (= один тоннель/интерфейс),
+	// Если все упавшие endpoint'ы прибиты к одному ndms_name (= один туннель/интерфейс),
 	// а соседи живы — диагноз не про DNS, а про этот туннель.
 	if len(failedIfaces) == 1 && failedCount > 0 {
 		var iface string
@@ -761,16 +761,16 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 		}
 		if neighborsAlive(ns) && len(ns) > 0 {
 			return fmt.Sprintf(
-				"Все упавшие DNS-серверы идут через один интерфейс — %s. Соседние тоннели живы, так что это не WAN. Скорее всего деградировал именно %s — DNS просто первый это заметил.",
+				"Все упавшие DNS-серверы идут через один интерфейс — %s. Соседние туннели живы, так что это не WAN. Скорее всего деградировал именно %s — DNS просто первый это заметил.",
 				iface, iface)
 		}
 		if !neighborsAlive(ns) && len(ns) > 0 {
 			return fmt.Sprintf(
-				"Упавшие DNS-серверы идут через %s, и соседние тоннели тоже не на связи. Похоже на проблему уровнем выше — WAN или провайдер.",
+				"Упавшие DNS-серверы идут через %s, и соседние туннели тоже не на связи. Похоже на проблему уровнем выше — WAN или провайдер.",
 				iface)
 		}
 		return fmt.Sprintf(
-			"Все упавшие DNS-серверы идут через один интерфейс — %s. Похоже на сбой именно этого тоннеля, не самого DNS.",
+			"Все упавшие DNS-серверы идут через один интерфейс — %s. Похоже на сбой именно этого туннеля, не самого DNS.",
 			iface)
 	}
 
@@ -804,10 +804,10 @@ func diagnoseTunnel(d map[string]any, ns []NeighborSummary) string {
 		parts = append(parts, "Проверка связи показывает сбой — пакеты не доходят даже после авто-рестартов.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && neighborsAlive(ns) {
-		parts = append(parts, "Соседние тоннели живы, так что WAN/роутер целы. Проблема локальная — этот сервер туннеля или его настройки.")
+		parts = append(parts, "Соседние туннели живы, так что WAN/роутер целы. Проблема локальная — этот сервер туннеля или его настройки.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && !neighborsAlive(ns) {
-		parts = append(parts, "Соседние тоннели тоже не на связи. Похоже на проблему уровнем выше — WAN, провайдер или сам роутер.")
+		parts = append(parts, "Соседние туннели тоже не на связи. Похоже на проблему уровнем выше — WAN, провайдер или сам роутер.")
 	}
 	return strings.Join(parts, " ")
 }
@@ -821,7 +821,7 @@ func diagnoseHydraRoute(d map[string]any) string {
 	case !running:
 		return "HydraRoute установлен, но демон не запущен. Видимо он упал или был остановлен вручную."
 	}
-	return "HydraRoute запущен, но проверка возвращает ошибку. Скорее всего сбой в конфиге — какое-то правило ссылается на несуществующий тоннель."
+	return "HydraRoute запущен, но проверка возвращает ошибку. Скорее всего сбой в конфиге — какое-то правило ссылается на несуществующий туннель."
 }
 
 func diagnoseExternalReach(d map[string]any, ns []NeighborSummary) string {
@@ -835,7 +835,7 @@ func diagnoseExternalReach(d map[string]any, ns []NeighborSummary) string {
 		return "Часть целей живы, часть нет — это похоже на блокировку конкретных сервисов, а не общий сбой связи."
 	}
 	if len(ns) > 0 && !neighborsAlive(ns) {
-		return "Соседние тоннели тоже не на связи — похоже WAN или провайдер."
+		return "Соседние туннели тоже не на связи — похоже WAN или провайдер."
 	}
 	return ""
 }
@@ -888,7 +888,7 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 		if neighborsAlive(ns) {
 			return fmt.Sprintf("Открой 🎛 Туннели и проверь %s. Если он есть в списке, начни с перезапуска или диагностики именно этого туннеля.", label)
 		}
-		return fmt.Sprintf("Сначала проверь WAN: 🌍 Через тоннель? и 🇷🇺 Напрямую?. Если связь есть только напрямую, начни с %s.", name)
+		return fmt.Sprintf("Сначала проверь WAN: 🌍 Через туннель? и 🇷🇺 Напрямую?. Если связь есть только напрямую, начни с %s.", name)
 	}
 	return "Подожди минуту — иногда апстримы временно отвечают таймаутом. Если не вернётся — открой 📊 Что происходит? и глянь общую картину по роутеру."
 }
@@ -897,7 +897,7 @@ func adviseTunnel(d map[string]any, _ []NeighborSummary) string {
 	age, hasAge := intOrZero(d, "handshake_age_sec")
 	conflict, hasConflict := boolOrFalse(d, "address_conflict")
 	if hasConflict && conflict {
-		return "Открой 🎛 Туннели, найди этот тоннель и проверь его адрес. Скорее всего он совпадает с другим интерфейсом — поменяй на свободную /24."
+		return "Открой 🎛 Туннели, найди этот туннель и проверь его адрес. Скорее всего он совпадает с другим интерфейсом — поменяй на свободную /24."
 	}
 	if !hasAge {
 		return "Тыкни «📊 Диагностика» — она покажет сервер туннеля, AWG-параметры и попытается поднять связь. Если сервер правильный, но обмен ключами не идёт — провайдер может резать UDP."
@@ -928,7 +928,7 @@ func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
 		return fmt.Sprintf("Туннель %s не пропускает наружу. Нажми «🔁 Перезапуск туннеля» в его сообщении или открой 🎛 Туннели и перезапусти его оттуда.", iface)
 	}
 	if len(ns) > 0 && !neighborsAlive(ns) {
-		return "Сначала проверь WAN: 🇷🇺 Напрямую? — если и без тоннеля наружу не выходит, проблема у провайдера."
+		return "Сначала проверь WAN: 🇷🇺 Напрямую? — если и без туннеля наружу не выходит, проблема у провайдера."
 	}
 	return "Открой 🎛 Туннели и проверь, через какой интерфейс уходит трафик до этих целей."
 }

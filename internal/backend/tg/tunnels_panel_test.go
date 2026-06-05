@@ -7,6 +7,7 @@ import (
 
 func TestTunnelsPanelKeyboardAddsDeleteAskButton(t *testing.T) {
 	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
+		TunnelID:  "awg13",
 		Name:      "amnezia_dead",
 		CheckName: "tunnel_awg13",
 		NDMSName:  "Wireguard3",
@@ -14,13 +15,28 @@ func TestTunnelsPanelKeyboardAddsDeleteAskButton(t *testing.T) {
 		Status:    "dead",
 	}})
 
-	if !hasTunnelPanelCallback(kb, "tunnel_delete_ask:42:tunnel_awg13:Wireguard3") {
+	if !hasTunnelPanelCallback(kb, "tunnel_delete_ask:42:tunnel_awg13:Wireguard3:awg13") {
 		t.Fatalf("missing delete ask button: %+v", kb)
+	}
+}
+
+func TestTunnelsPanelKeyboardAddsDeleteAskButtonWithoutNDMSName(t *testing.T) {
+	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
+		TunnelID:  "kernel-10",
+		Name:      "kernel_tunnel",
+		CheckName: "tunnel_kernel-10",
+		Enabled:   true,
+		Status:    "running",
+	}})
+
+	if !hasTunnelPanelCallback(kb, "tunnel_delete_ask:42:tunnel_kernel-10::kernel-10") {
+		t.Fatalf("missing delete ask button for tunnel without NDMSName: %+v", kb)
 	}
 }
 
 func TestTunnelsPanelKeyboardAddsPerTunnelRestartButton(t *testing.T) {
 	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
+		TunnelID:  "awg13",
 		Name:      "amnezia_dead",
 		CheckName: "tunnel_awg13",
 		NDMSName:  "Wireguard3",
@@ -38,6 +54,7 @@ func TestTunnelsPanelKeyboardAddsPerTunnelRestartButton(t *testing.T) {
 
 func TestTunnelsPanelKeyboardSkipsUnsafeButtonsWithoutNDMSName(t *testing.T) {
 	kb := TunnelsPanelKeyboard(42, []TunnelPanelEntry{{
+		TunnelID:  "awg13",
 		Name:      "amnezia_dead",
 		CheckName: "tunnel_awg13",
 		Enabled:   true,
@@ -48,7 +65,6 @@ func TestTunnelsPanelKeyboardSkipsUnsafeButtonsWithoutNDMSName(t *testing.T) {
 		"tunnel_disable:42:tunnel_awg13:",
 		"tunnel_enable:42:tunnel_awg13:",
 		"tunnel_restart:42:tunnel_awg13:",
-		"tunnel_delete_ask:42:tunnel_awg13:",
 	} {
 		if hasTunnelPanelCallbackPrefix(kb, prefix) {
 			t.Fatalf("unsafe per-tunnel callback %q should be hidden without NDMSName: %+v", prefix, kb)

@@ -227,8 +227,14 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if args.NDMSName != "" {
 		cmdArgs["ndms_name"] = args.NDMSName
 	}
-	if args.Action == "tunnel_delete" && strings.HasPrefix(args.CheckName, "tunnel_") {
-		cmdArgs["tunnel_id"] = strings.TrimPrefix(args.CheckName, "tunnel_")
+	if args.Action == "tunnel_delete" {
+		tunnelID := strings.TrimSpace(args.TunnelID)
+		if tunnelID == "" && strings.HasPrefix(args.CheckName, "tunnel_") {
+			tunnelID = strings.TrimPrefix(args.CheckName, "tunnel_")
+		}
+		if tunnelID != "" {
+			cmdArgs["tunnel_id"] = tunnelID
+		}
 	}
 	cmd := wire.Command{
 		ID:       a.idGen(),
@@ -256,7 +262,7 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 
 // DispatchFromMessage enqueues a command originating from a *text* message
 // (not an inline-button callback). Used by the router for ReplyKeyboard
-// taps like "🌍 Через тоннель?" / "🇷🇺 Напрямую?". The agent's
+// taps like "🌍 Через туннель?" / "🇷🇺 Напрямую?". The agent's
 // CommandResult will reply to the user's text message via Notifier.
 func (a *CommandAction) DispatchFromMessage(_ context.Context, action string, userID int64, chatID, messageID int64, threadID *int64) error {
 	if a.sink == nil {

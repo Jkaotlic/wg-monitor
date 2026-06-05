@@ -290,7 +290,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 			}
 			row = append(row, tg.InlineKeyboardButton{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)})
 			if strings.TrimSpace(t.NDMSName) == "" {
-				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Тоннели", CallbackData: tunnelsPanelCD()})
+				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Туннели", CallbackData: tunnelsPanelCD()})
 			}
 			rows = append(rows, row)
 		}
@@ -333,7 +333,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 			}
 			row = append(row, tg.InlineKeyboardButton{Text: "📊 Запустить диагностику", CallbackData: plainCD("diag_now", inc.CheckName)})
 			if len(row) == 1 {
-				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Тоннели", CallbackData: tunnelsPanelCD()})
+				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Туннели", CallbackData: tunnelsPanelCD()})
 			}
 			rows = append(rows, row)
 			rows = append(rows, []tg.InlineKeyboardButton{
@@ -372,7 +372,7 @@ func appendFreshBackendBoundary(b *strings.Builder, a SmartReplyArgs) {
 	if a.LastReportAge > smartReplyOfflineThreshold {
 		return
 	}
-	fmt.Fprintf(b, "Агент жив: backend получает отчёты (%s назад); проблема ниже — в тоннеле, DNS или маршрутизации.\n", humanAgeDur(a.LastReportAge))
+	fmt.Fprintf(b, "Агент жив: backend получает отчёты (%s назад); проблема ниже — в туннеле, DNS или маршрутизации.\n", humanAgeDur(a.LastReportAge))
 }
 
 func tunnelViewsAsNeighbors(tunnels []TunnelView) []NeighborSummary {

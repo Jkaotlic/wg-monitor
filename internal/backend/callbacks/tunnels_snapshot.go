@@ -23,6 +23,7 @@ func tunnelEntriesFromRouteSnapshot(snap wire.RouteSnapshot) []tg.TunnelPanelEnt
 			checkName = "tunnel_" + checkName
 		}
 		entries = append(entries, tg.TunnelPanelEntry{
+			TunnelID:     id,
 			Name:         t.Name,
 			CheckName:    checkName,
 			Interface:    t.Iface,
