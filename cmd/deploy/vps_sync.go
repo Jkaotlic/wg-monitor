@@ -431,6 +431,10 @@ func (c *VPSClient) doWizardHTTP(ctx context.Context, method, path string, body 
 		return 0, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.Token)
+	if host := publicForwardedHost(c.BaseURL); host != "" {
+		req.Header.Set("X-WG-Public-Proto", "https")
+		req.Header.Set("X-WG-Public-Host", host)
+	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -572,7 +576,9 @@ func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout 
 		" -H " + shellSingleQuote("Authorization: Bearer "+token)
 	if host := publicForwardedHost(publicDomain); host != "" {
 		common += " -H " + shellSingleQuote("X-Forwarded-Proto: https") +
-			" -H " + shellSingleQuote("X-Forwarded-Host: "+host)
+			" -H " + shellSingleQuote("X-Forwarded-Host: "+host) +
+			" -H " + shellSingleQuote("X-WG-Public-Proto: https") +
+			" -H " + shellSingleQuote("X-WG-Public-Host: "+host)
 	}
 	if body != nil {
 		common += " -H " + shellSingleQuote("Content-Type: application/json")
