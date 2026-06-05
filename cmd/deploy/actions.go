@@ -1728,9 +1728,15 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	}
 	PrintOK("daemon-reload + enable")
 
-	PrintStep(8, 15, "daily Telegram backup")
-	if err := stepInstallBackendBackup(s); err != nil {
+	PrintStep(8, 15, "encrypted nightly backup")
+	if _, _, err := ensureBackupPassphrase(secrets, false); err != nil {
 		return err
+	}
+	if err := installBackupOnBackend(state, secrets, s, backupLayoutForState(state)); err != nil {
+		return err
+	}
+	if err := pushBackupSecretsToBackend(state, secrets, s, backupLayoutForState(state), ""); err != nil {
+		PrintWarn("operator secrets vault not uploaded: " + err.Error())
 	}
 
 	PrintStep(9, 15, "Caddy")
@@ -1844,6 +1850,7 @@ func actionAdoptBackend(state *State, secrets *SecretStore) error {
 	}
 	adopted.Port = parseIntOr(Ask("SSH port", fmt.Sprint(portOrDefault(adopted.Port, 22))), portOrDefault(adopted.Port, 22))
 	adopted.User = orDefault(Ask("SSH user", userOrDefault(adopted.User, "root")), userOrDefault(adopted.User, "root"))
+	adopted.SourceBind = strings.TrimSpace(Ask("SSH source bind (empty for normal VPS)", adopted.SourceBind))
 	adopted.Domain = domainHost(cleanPromptDefaultLeak(Ask("Backend domain (wgmonitor.example)", adopted.Domain)))
 	if adopted.Domain == "" {
 		return fmt.Errorf("backend domain required")
@@ -1892,6 +1899,7 @@ func applyAdoptedBackend(state *State, adopted BackendState) {
 	state.Backend.Host = strings.TrimSpace(adopted.Host)
 	state.Backend.Port = portOrDefault(adopted.Port, 22)
 	state.Backend.User = userOrDefault(adopted.User, "root")
+	state.Backend.SourceBind = strings.TrimSpace(adopted.SourceBind)
 	state.Backend.SSHAuth = normalizeBackendSSHAuth(adopted.SSHAuth)
 	state.Backend.KeyPath = strings.TrimSpace(adopted.KeyPath)
 	state.Backend.Domain = domainHost(adopted.Domain)
@@ -2354,47 +2362,6 @@ func ensureRemoteAPTCommand(bs *SSH, cmdName, pkgName string) error {
 		return fmt.Errorf("install %s rc=%d stderr=%q stdout=%q", pkgName, rc, strings.TrimSpace(stderr), strings.TrimSpace(out))
 	}
 	PrintOK(pkgName + " installed")
-	return nil
-}
-
-func stepInstallBackendBackup(s *SSH) error {
-	if err := ensureRemoteSQLite3(s); err != nil {
-		return err
-	}
-	if err := ensureRemoteAPTCommand(s, "curl", "curl"); err != nil {
-		return err
-	}
-
-	stepEnsureDir(s, "/usr/local/lib/wg-monitor", "root:root")
-
-	script, err := ReadStaticTemplate("wg-monitor-backup-telegram.sh")
-	if err != nil {
-		return err
-	}
-	if err := stepUploadFile(s, "/usr/local/lib/wg-monitor/wg-monitor-backup-telegram.sh", script, "755"); err != nil {
-		return err
-	}
-
-	service, err := ReadStaticTemplate("wg-monitor-backup.service")
-	if err != nil {
-		return err
-	}
-	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backup.service", service, "644"); err != nil {
-		return err
-	}
-
-	timer, err := ReadStaticTemplate("wg-monitor-backup.timer")
-	if err != nil {
-		return err
-	}
-	if err := stepUploadFile(s, "/etc/systemd/system/wg-monitor-backup.timer", timer, "644"); err != nil {
-		return err
-	}
-
-	if _, err := s.MustRun(backendBackupEnableCommand()); err != nil {
-		return err
-	}
-	PrintOK("wg-monitor-backup.timer enabled")
 	return nil
 }
 

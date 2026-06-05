@@ -12,7 +12,7 @@ The current deploy path does **not** require the operator to join every router n
 
 ## Current Release
 
-- Latest RC used by the wizard flow: `v0.13.0-rc75`
+- Latest RC used by the wizard flow: `v0.13.0-rc77`
 - GitHub releases: <https://github.com/Jkaotlic/wg-monitor/releases>
 - Windows wizard asset: `wg-monitor-deploy-windows-amd64.exe`
 
@@ -63,6 +63,7 @@ Useful secret names:
 - `WG_AWGM_LOGIN_<NICK>` / `WG_AWGM_PASS_<NICK>` - AWG Manager web credentials fallback.
 - `WG_ENTWARE_LOGIN_<NICK>` / `WG_ENTWARE_PASS_<NICK>` - terminal credentials for Entware bootstrap.
 - `WG_AGENT_TOKEN_<NICK>` - raw agent token used by that router.
+- `WG_BACKUP_PASSPHRASE` - generated recovery password for encrypted nightly full backups.
 
 ## Wizard Menu
 
@@ -75,14 +76,33 @@ Useful secret names:
 [4] Move to new VPS        re-enroll old routers after backend migration
 [5] Doctor                 local + VPS + agent health checks
 [6] Sync from VPS          refresh local wizard.toml from backend state
-[7] Restore / Disaster Recovery
+[7] Backups                encrypted nightly backups, password, secrets vault
+[8] Restore / Disaster Recovery
                             inspect a TG backup or restore it to current/new VPS
-[8] Service                config, secrets, and break-glass legacy tools
+[9] Service                config, secrets, and break-glass legacy tools
 ```
 
 The menu header shows every known component with `installed <version> at <time>` so stale local state is visible before you touch anything.
 
 `[6] Sync from VPS` restores the portable, non-secret router metadata needed on another operator PC: SSH deploy coordinates, architecture, versions, rollout/pending state, last deploy time, AWG Manager URL/auth mode, deploy mode, and router `expected_mac`. Machine-local interface cache and secrets stay local.
+
+## Encrypted Backups
+
+English:
+
+- `[7] Backups` installs or repairs a nightly encrypted full backup timer on the backend.
+- The backend sends only password-protected `.tgz.enc` archives to Telegram.
+- The archive includes backend recovery data and an encrypted operator vault; raw deploy secrets are not stored on the backend in plaintext.
+- The wizard generates `WG_BACKUP_PASSPHRASE`, saves it locally, uploads the backend passphrase file with tight permissions, and can show it once for password-manager storage.
+- CLI equivalents: `wg-monitor-deploy backup status`, `backup install`, `backup run`, `backup push-secrets`, `backup password`, and `backup restore <archive>`.
+
+Russian:
+
+- `[7] Backups` ставит или чинит ночной парольный full backup на backend.
+- В Telegram уходит только зашифрованный `.tgz.enc` архив.
+- Внутри есть данные восстановления backend и зашифрованный operator vault; deploy-секреты не лежат на backend открытым текстом.
+- Wizard генерирует `WG_BACKUP_PASSPHRASE`, хранит его локально, загружает файл пароля на backend с строгими правами и может показать пароль для сохранения в password manager.
+- Те же действия доступны через CLI: `wg-monitor-deploy backup status`, `backup install`, `backup run`, `backup push-secrets`, `backup password`, `backup restore <archive>`.
 
 ## Build And Test
 

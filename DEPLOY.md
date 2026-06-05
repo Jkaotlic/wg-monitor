@@ -23,13 +23,17 @@
 
 After install, the wizard records backend version and deploy time in `wizard.toml`.
 
-The backend install also enables `wg-monitor-backup.timer`. Every day at
-05:00 Europe/Moscow it sends the admin user a private Telegram document with a
-small recovery bundle: SQLite `state.db`, rendered `backend.yaml`, agent
-inventory CSV, and a manifest. Bot and wizard token files are not copied into
-the archive. If the bundle grows past the Telegram upload safety limit, the bot
-sends a warning and leaves the archive on the VPS under
-`/var/lib/wg-monitor/backups/`.
+The backend install also enables `wg-monitor-backup.timer`. Every night it sends
+the admin user a private Telegram document with an encrypted full backup
+(`.tgz.enc`). The encrypted archive contains SQLite `state.db`, rendered
+`backend.yaml`, bot and wizard token files, agent inventory CSV, a manifest, and
+an encrypted operator vault when the wizard has pushed one. Raw deploy secrets
+are not stored on the backend in plaintext; the vault is encrypted with the same
+backup password.
+
+The wizard generates `WG_BACKUP_PASSPHRASE`, saves it in the local secret store,
+uploads it to the backend as `backup-passphrase.txt` with strict permissions, and
+shows it to the operator for password-manager storage.
 
 ## Add A Router
 
@@ -88,6 +92,27 @@ refreshes the daily Telegram backup timer.
 backend binary from the current release, Caddy route, bot token from the local
 secret store, wizard token, and the backup timer. If the backend domain changes,
 use `[4] Move to new VPS` afterwards to rewrite agents through AWG Manager.
+
+## Encrypted Nightly Backups
+
+Use `[7] Backups` or:
+
+```bash
+wg-monitor-deploy backup status
+wg-monitor-deploy backup install
+wg-monitor-deploy backup run
+wg-monitor-deploy backup push-secrets
+wg-monitor-deploy backup password
+wg-monitor-deploy backup restore <archive.tgz.enc>
+```
+
+`backup install` installs or repairs the backend timer/service and makes sure a
+password exists locally and on the backend. `backup run` starts the backup job
+immediately. `backup push-secrets` encrypts local `secrets.env` plus
+`wizard.toml` into `operator-secrets.tgz.enc` and uploads only that encrypted
+vault to the backend.
+
+Legacy unencrypted `.tgz` archives are still handled by `restore-backup`.
 
 ## Update Components
 

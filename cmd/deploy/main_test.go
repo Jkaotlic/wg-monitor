@@ -17,6 +17,7 @@ func TestUsageTextMentionsMenuAndCLIParity(t *testing.T) {
 		"repair-agent-token",
 		"netfix",
 		"doctor [--deep]",
+		"backup status",
 		"secrets status",
 		"Without a command",
 	} {
@@ -43,6 +44,7 @@ func TestSecretStatusRowsIncludeBackendAndAgents(t *testing.T) {
 		"WG_AGENT_TOKEN_HOME":     true,
 		"WG_AGENT_TOKEN_OFFICE":   true,
 		"WG_BOT_TOKEN":            true,
+		"WG_BACKUP_PASSPHRASE":    true,
 		"WG_KEENETIC_PASS":        false,
 		"WG_KEENETIC_PASS_HOME":   false,
 		"WG_KEENETIC_PASS_OFFICE": false,

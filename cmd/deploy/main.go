@@ -96,6 +96,8 @@ func main() {
 		}
 		PrintSecretsSaveAdvice(secrets)
 		if actErr != nil {
+			fmt.Fprintln(os.Stderr, name+":", actErr)
+			releaseLock()
 			os.Exit(1)
 		}
 	}
@@ -194,6 +196,35 @@ func main() {
 			os.Exit(2)
 		}
 		runCLIAction("deferred status", func() error { return actionDeferredAWGMStatus(state, secrets) })
+	case "backup":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy backup status|install|run|push-secrets|password|restore <archive>")
+			os.Exit(2)
+		}
+		switch args[1] {
+		case "status":
+			if err := actionBackupStatus(state, secrets); err != nil {
+				fmt.Fprintln(os.Stderr, "backup status:", err)
+				os.Exit(1)
+			}
+		case "install":
+			runCLIAction("backup install", func() error { return actionBackupInstall(state, secrets) })
+		case "run":
+			runCLIAction("backup run", func() error { return actionBackupRun(state, secrets) })
+		case "push-secrets":
+			runCLIAction("backup push-secrets", func() error { return actionBackupPushSecrets(state, secrets, statePath) })
+		case "password":
+			runCLIAction("backup password", func() error { return actionBackupPassword(state, secrets, true) })
+		case "restore":
+			if len(args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy backup restore <archive>")
+				os.Exit(2)
+			}
+			runCLIAction("backup restore", func() error { return actionBackupRestore(state, secrets, args[2]) })
+		default:
+			fmt.Fprintln(os.Stderr, "backup: expected status, install, run, push-secrets, password or restore")
+			os.Exit(2)
+		}
 	case "uninstall-agent":
 		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
 		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
@@ -383,6 +414,8 @@ Commands:
                                re-enroll agents on the new VPS through AWG Manager
   restore-backup <archive.tgz> [--dry-run|--to-current-vps|--to-new-vps]
                                inspect or restore a Telegram recovery bundle
+  backup status|install|run|push-secrets|password|restore <archive>
+                               manage encrypted nightly full backups
   deferred status              summarize deferred AWG Manager jobs on backend
   awgm-url-patch               emergency AWG Manager backend URL retarget helper
   known-hosts [list|forget [alias]]

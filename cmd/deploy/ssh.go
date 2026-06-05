@@ -33,6 +33,10 @@ func ConnectSSH(host string, port int, user, password string, kh *KnownHosts, al
 }
 
 func ConnectSSHWithAuth(host string, port int, user string, auth []ssh.AuthMethod, kh *KnownHosts, alias string) (*SSH, error) {
+	return ConnectSSHWithAuthSource(host, port, user, auth, kh, alias, "")
+}
+
+func ConnectSSHWithAuthSource(host string, port int, user string, auth []ssh.AuthMethod, kh *KnownHosts, alias, sourceBind string) (*SSH, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 	hkcb := kh.HostKeyCallback
 	if alias != "" {
@@ -44,11 +48,36 @@ func ConnectSSHWithAuth(host string, port int, user string, auth []ssh.AuthMetho
 		HostKeyCallback: hkcb,
 		Timeout:         10 * time.Second,
 	}
-	c, err := ssh.Dial("tcp", addr, cfg)
+	c, err := dialSSH("tcp", addr, cfg, sourceBind)
 	if err != nil {
 		return nil, diagnoseSSHErr(addr, err)
 	}
 	return &SSH{client: c, host: addr}, nil
+}
+
+func dialSSH(network, addr string, cfg *ssh.ClientConfig, sourceBind string) (*ssh.Client, error) {
+	sourceBind = strings.TrimSpace(sourceBind)
+	if sourceBind == "" {
+		return ssh.Dial(network, addr, cfg)
+	}
+	ip := net.ParseIP(sourceBind)
+	if ip == nil {
+		return nil, fmt.Errorf("invalid source_bind %q", sourceBind)
+	}
+	d := net.Dialer{
+		Timeout:   cfg.Timeout,
+		LocalAddr: &net.TCPAddr{IP: ip},
+	}
+	conn, err := d.Dial(network, addr)
+	if err != nil {
+		return nil, err
+	}
+	c, chans, reqs, err := ssh.NewClientConn(conn, addr, cfg)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return ssh.NewClient(c, chans, reqs), nil
 }
 
 func loadPrivateKeySigner(path, passphrase string) (ssh.Signer, error) {
