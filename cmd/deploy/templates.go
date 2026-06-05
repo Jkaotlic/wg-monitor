@@ -44,6 +44,7 @@ type BackupServiceParams struct {
 	SendTelegram    bool
 	ProtectHomeMode string
 	OmitUserGroup   bool
+	OmitHardening   bool
 }
 
 func renderTemplate(name string, data any) ([]byte, error) {

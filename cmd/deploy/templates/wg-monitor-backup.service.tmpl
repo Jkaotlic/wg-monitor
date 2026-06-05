@@ -10,6 +10,7 @@ Group={{.Group}}
 {{end}}
 ExecStart={{.BinaryPath}} backup --config {{.ConfigPath}} --passphrase-file {{.PassphrasePath}} --operator-vault {{.OperatorVault}} --out-dir {{.OutDir}}{{if .LayoutRoot}} --layout-root {{.LayoutRoot}}{{end}}{{if .SendTelegram}} --send-telegram{{end}}
 
+{{if not .OmitHardening}}
 # Hardening mirrors the backend service, with network enabled for Telegram API.
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -26,3 +27,4 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 LockPersonality=true
 MemoryDenyWriteExecute=true
+{{end}}
