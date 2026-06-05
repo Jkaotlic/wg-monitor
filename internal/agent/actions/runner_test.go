@@ -327,7 +327,7 @@ func TestRunner_TunnelDelete_DisablesDefaultRouteBeforeDeleteAndVerifiesGone(t *
 func TestRunner_TunnelDelete_ErrsWhenTunnelStillExists(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"stopped","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10","backend":"kernel"}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"stopped","enabled":false,"defaultRoute":false,"interfaceName":"nwg0","backend":"nativewg"}}`))
 	})
 	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true}`))
