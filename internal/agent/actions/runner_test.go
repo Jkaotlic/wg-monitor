@@ -480,8 +480,8 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body.Backend != "nativeWG" {
-			t.Fatalf("replace must request nativeWG backend, got %q", body.Backend)
+		if body.Backend != "nativewg" {
+			t.Fatalf("replace must request nativewg backend, got %q", body.Backend)
 		}
 		w.Write([]byte(replaceResp))
 	})
@@ -506,7 +506,7 @@ func TestRunner_TunnelImport_CreateAndReplace(t *testing.T) {
 	}
 }
 
-func TestRunner_TunnelImport_WaitsForRunningHandshake(t *testing.T) {
+func TestRunner_TunnelImport_TreatsRunningWithoutHandshakeAsStarted(t *testing.T) {
 	var startCalls int
 	var sleepCalls int
 	var allCalls int
@@ -516,10 +516,8 @@ func TestRunner_TunnelImport_WaitsForRunningHandshake(t *testing.T) {
 		switch {
 		case allCalls <= 2:
 			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","defaultRoute":true,"enabled":true}],"external":[],"system":[]}}`))
-		case allCalls == 3:
-			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","type":"awg","status":"starting","enabled":true,"defaultRoute":true,"interfaceName":"nwg1"}],"external":[],"system":[]}}`))
 		default:
-			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg1","lastHandshake":"2026-04-29T12:00:00Z"}],"external":[],"system":[]}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"old-id","name":"awg11","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg1"}],"external":[],"system":[]}}`))
 		}
 	})
 	mux.HandleFunc("/api/tunnels/replace", func(w http.ResponseWriter, r *http.Request) {
@@ -560,7 +558,7 @@ func TestRunner_TunnelImport_WaitsForRunningHandshake(t *testing.T) {
 	if sleepCalls == 0 {
 		t.Fatal("expected import verification to wait before final status")
 	}
-	for _, want := range []string{"status=running", "handshake"} {
+	for _, want := range []string{"status=running", "handshake=none"} {
 		if !strings.Contains(res.Output, want) {
 			t.Fatalf("output missing %q:\n%s", want, res.Output)
 		}
@@ -654,8 +652,8 @@ func TestRunner_TunnelImport_CreatesProviderConfigsWithNativeWGBackend(t *testin
 	if res.Status != "ok" {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
-	if importBackend != "nativeWG" {
-		t.Fatalf("provider config imports must request nativeWG backend, got %q", importBackend)
+	if importBackend != "nativewg" {
+		t.Fatalf("provider config imports must request nativewg backend, got %q", importBackend)
 	}
 }
 
@@ -683,7 +681,7 @@ func TestRunner_TunnelImport_RecreatesKernelTunnelAsNativeWG(t *testing.T) {
 			t.Fatal(err)
 		}
 		importBackend = body.Backend
-		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"new-native","name":"amnezia_nl","type":"awg","status":"running","enabled":false,"defaultRoute":true,"backend":"nativeWG"}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"new-native","name":"amnezia_nl","type":"awg","status":"running","enabled":false,"defaultRoute":true,"backend":"nativewg"}}`))
 	})
 	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
@@ -701,7 +699,7 @@ func TestRunner_TunnelImport_RecreatesKernelTunnelAsNativeWG(t *testing.T) {
 	res := r.Execute(context.Background(), wire.Command{
 		ID:     "imp-kernel-nativewg",
 		Action: "tunnel_import",
-		Args:   map[string]any{"conf": testConfB64, "name": "amnezia_nl", "replace": true, "backend": "nativeWG"},
+		Args:   map[string]any{"conf": testConfB64, "name": "amnezia_nl", "replace": true, "backend": "nativewg"},
 	})
 
 	if res.Status != "ok" {
@@ -713,8 +711,8 @@ func TestRunner_TunnelImport_RecreatesKernelTunnelAsNativeWG(t *testing.T) {
 	if deletedID != "old-kernel" {
 		t.Fatalf("deleted id=%q, want old-kernel", deletedID)
 	}
-	if importBackend != "nativeWG" {
-		t.Fatalf("recreated tunnel backend=%q, want nativeWG", importBackend)
+	if importBackend != "nativewg" {
+		t.Fatalf("recreated tunnel backend=%q, want nativewg", importBackend)
 	}
 }
 
