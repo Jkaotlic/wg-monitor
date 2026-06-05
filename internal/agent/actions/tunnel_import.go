@@ -199,6 +199,21 @@ func normalizeImportBackend(s string) string {
 	}
 }
 
+func shouldRecreateTunnelForBackend(t awgmgr.Tunnel, requestedBackend string) bool {
+	if normalizeImportBackend(requestedBackend) != defaultImportBackend {
+		return false
+	}
+	oldBackend := normalizeImportBackend(tunnelBackend(t))
+	return oldBackend != "" && oldBackend != defaultImportBackend
+}
+
+func tunnelBackend(t awgmgr.Tunnel) string {
+	if strings.TrimSpace(t.Backend) != "" {
+		return t.Backend
+	}
+	return t.BackendType
+}
+
 // ImportTunnel is the agent-side handler for the tunnel_import wire.Command.
 // confB64 is base64-encoded .conf content.
 // replace=true  → find existing tunnel by name and use ReplaceConf API (atomic).
@@ -231,26 +246,40 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, con
 			slog.Warn("tunnel import failed", "name", name, "stage", "list", "err", err)
 			return "", fmt.Errorf("list tunnels: %w", err)
 		}
-		var oldID string
+		var oldTunnel *awgmgr.Tunnel
 		for _, t := range all.Tunnels {
 			if t.Name == name {
-				oldID = t.ID
+				t := t
+				oldTunnel = &t
 				break
 			}
 		}
-		if oldID == "" {
+		if oldTunnel == nil {
 			confAddress := parseWGConfAddress(rawConf)
 			for _, t := range all.Tunnels {
 				if confAddress != "" && normalizeWGAddress(t.Address) == confAddress {
-					oldID = t.ID
+					t := t
+					oldTunnel = &t
 					break
 				}
 			}
 		}
-		if oldID != "" {
-			newTun, err := client.ReplaceConf(ctx, oldID, rawConf, name, backend)
+		if oldTunnel != nil && shouldRecreateTunnelForBackend(*oldTunnel, backend) {
+			if err := client.DeleteTunnel(ctx, oldTunnel.ID); err != nil {
+				slog.Warn("tunnel import failed", "name", name, "stage", "delete-old-backend", "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
+				return "", fmt.Errorf("delete old tunnel before nativeWG recreate: %w", err)
+			}
+			newTun, err := client.ImportConf(ctx, rawConf, name, backend)
 			if err != nil {
-				slog.Warn("tunnel import failed", "name", name, "stage", "replace", "old_id", oldID, "err", err)
+				slog.Warn("tunnel import failed", "name", name, "stage", "recreate-nativewg", "old_id", oldTunnel.ID, "old_backend", tunnelBackend(*oldTunnel), "err", err)
+				return "", fmt.Errorf("recreate tunnel as nativeWG: %w", err)
+			}
+			newID = newTun.ID
+			fmt.Fprintf(&result, "✅ Туннель %q пересоздан в nativeWG (id=%s)", name, newTun.ID)
+		} else if oldTunnel != nil {
+			newTun, err := client.ReplaceConf(ctx, oldTunnel.ID, rawConf, name, backend)
+			if err != nil {
+				slog.Warn("tunnel import failed", "name", name, "stage", "replace", "old_id", oldTunnel.ID, "err", err)
 				return "", fmt.Errorf("replace tunnel: %w", err)
 			}
 			newID = newTun.ID
