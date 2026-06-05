@@ -145,10 +145,13 @@ func legacyAWGDeleteFallbackAllowed(t *awgmgr.Tunnel) bool {
 		return false
 	}
 	status := strings.ToLower(strings.TrimSpace(t.Status))
+	iface := strings.ToLower(strings.TrimSpace(t.InterfaceName))
+	backend := strings.ToLower(strings.TrimSpace(t.Backend))
 	return legacyAWGTunnelID(t.ID) &&
-		strings.TrimSpace(t.Backend) == "" &&
 		!t.Enabled &&
-		(status == "disabled" || status == "stopped")
+		(status == "disabled" || status == "stopped") &&
+		strings.HasPrefix(iface, "opkgtun") &&
+		backend != "nativewg"
 }
 
 func forgetLegacyAWGTunnel(ctx context.Context, exec ExecFunc, tunnelID string) error {
