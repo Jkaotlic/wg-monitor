@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -188,11 +189,22 @@ func fetchIfaceMap(ctx context.Context, awgClient *awgmgr.Client) (map[string]st
 	}
 	m := make(map[string]string, len(ta.Tunnels))
 	for _, t := range ta.Tunnels {
-		if t.NDMSName != "" && t.InterfaceName != "" {
+		if t.NDMSName != "" && t.InterfaceName != "" && dnsIfaceMapTunnelUsable(t) {
 			m[t.NDMSName] = t.InterfaceName
 		}
 	}
 	return m, nil
+}
+
+func dnsIfaceMapTunnelUsable(t awgmgr.Tunnel) bool {
+	if !t.Enabled {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(t.Status))
+	if status == "" {
+		status = strings.ToLower(strings.TrimSpace(t.State))
+	}
+	return status == "" || status == "running" || status == "connected"
 }
 
 // pickDefaultRouteIface returns the linux iface name (e.g. "nwg1") of the

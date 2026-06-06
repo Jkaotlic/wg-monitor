@@ -78,6 +78,33 @@ func TestTallyRouteCounts_NoDefaultRoute_FallThroughDropped(t *testing.T) {
 	}
 }
 
+func TestTallyRouteCounts_DoesNotCreditFallThroughToStartingDefaultTunnel(t *testing.T) {
+	tunnels := []awgmgr.Tunnel{
+		{ID: "awg10", InterfaceName: "nwg1", DefaultRoute: true, Enabled: true, Status: "starting"},
+		{ID: "awg11", InterfaceName: "nwg5", DefaultRoute: true, Enabled: true, Status: "running"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dns-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"hr:AI","routes":null,"backend":"hydraroute","hrPolicyName":"HydraRoute"}
+			]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		}
+	}))
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	got := tallyRouteCounts(context.Background(), c, tunnels)
+	if c := got["nwg1"]; c.DNS != 0 || c.DNSHR != 0 {
+		t.Fatalf("starting default tunnel must not receive HR fall-through counts: %+v", c)
+	}
+	if c := got["nwg5"]; c.DNS != 1 || c.DNSHR != 1 {
+		t.Fatalf("running default tunnel should receive HR fall-through counts: %+v", c)
+	}
+}
+
 func TestTallyRouteCounts_ListError_ReturnsNil(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(500)
@@ -88,6 +115,42 @@ func TestTallyRouteCounts_ListError_ReturnsNil(t *testing.T) {
 	if got != nil {
 		t.Errorf("want nil on list error; got %+v", got)
 	}
+}
+
+func TestTunnelsCheck_UnusedTunnelWithPingCheckDisabledDoesNotFailOnNoHandshake(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"unused","type":"awg","status":"starting","enabled":true,"defaultRoute":true,"interfaceName":"nwg1"}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"tunnelId":"awg10","status":"disabled","method":"icmp","failCount":0,"failThreshold":3}
+			]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	chk := TunnelsCheck{Client: awgmgr.New(srv.URL)}
+	out := chk.Run(context.Background(), Deps{})
+	for _, c := range out {
+		if c.Name != "tunnel_awg10" {
+			continue
+		}
+		if c.Status != "ok" {
+			t.Fatalf("unused tunnel with pingCheck disabled must not fail: %+v", c)
+		}
+		if c.Details["note"] == "" {
+			t.Fatalf("suppressed tunnel should explain why: %+v", c.Details)
+		}
+		return
+	}
+	t.Fatalf("tunnel_awg10 check not emitted; got: %+v", out)
 }
 
 func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {

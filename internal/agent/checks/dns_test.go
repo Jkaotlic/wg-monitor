@@ -169,6 +169,34 @@ func TestDNS_RefreshesIfaceMapOnEachRun(t *testing.T) {
 	}
 }
 
+func TestDNS_SkipsNDMSEndpointWhenRefreshedIfaceMapDoesNotContainTunnel(t *testing.T) {
+	server, stop := startMockUDPDNS(t, [4]byte{1, 2, 3, 4})
+	defer stop()
+	host, port := splitHostPort(t, server)
+
+	chk := DNS{
+		Endpoints: []keenetic.DNSEndpoint{
+			{Type: "plain", Host: host, Port: port, NDMSName: "Wireguard5"},
+			{Type: "plain", Host: "127.0.0.1", Port: 1, NDMSName: "Wireguard1"},
+		},
+		TestDomain:      "example.com",
+		FailThreshold:   1,
+		PerProbeTimeout: 100 * time.Millisecond,
+		IfaceDialFn:     func(_ string) *net.Dialer { return &net.Dialer{} },
+		IfaceMapProvider: func(context.Context) (map[string]string, error) {
+			return map[string]string{"Wireguard5": "nwg5"}, nil
+		},
+	}
+
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "ok" {
+		t.Fatalf("stale missing NDMS endpoint should be skipped, got %+v", got)
+	}
+	if got.Details["skipped_count"] != 1 {
+		t.Fatalf("skipped_count=%v details=%+v", got.Details["skipped_count"], got.Details)
+	}
+}
+
 func splitHostPort(t *testing.T, hp string) (string, int) {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(hp)

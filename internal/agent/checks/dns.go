@@ -78,9 +78,11 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 			endpoints = append(endpoints, discovered...)
 		}
 	}
+	ifaceMapFresh := false
 	if c.IfaceMapProvider != nil {
 		if ifaceMap, err := c.IfaceMapProvider(ctx); err == nil {
 			c.IfaceMap = ifaceMap
+			ifaceMapFresh = true
 		}
 	}
 
@@ -95,21 +97,32 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	}
 
 	type epResult struct {
-		Type      string         `json:"type"`
-		Target    string         `json:"target"`
-		NDMSName  string         `json:"ndms_name,omitempty"`
-		Reachable bool           `json:"reachable"`
-		Err       string         `json:"err,omitempty"`
-		RKN       map[string]any `json:"rkn,omitempty"`
-		RKNStatus string         `json:"rkn_status,omitempty"` // clean | suspect | n/a
+		Type       string         `json:"type"`
+		Target     string         `json:"target"`
+		NDMSName   string         `json:"ndms_name,omitempty"`
+		Skipped    bool           `json:"skipped,omitempty"`
+		SkipReason string         `json:"skip_reason,omitempty"`
+		Reachable  bool           `json:"reachable"`
+		Err        string         `json:"err,omitempty"`
+		RKN        map[string]any `json:"rkn,omitempty"`
+		RKNStatus  string         `json:"rkn_status,omitempty"` // clean | suspect | n/a
 	}
 
 	var results []epResult
 	failedCount := 0
+	skippedCount := 0
 	rknBlockedCount := 0
 	rknProbedCount := 0
 	for _, ep := range endpoints {
 		r := epResult{Type: ep.Type, Target: epTarget(ep), NDMSName: ep.NDMSName}
+		if c.shouldSkipNDMSEndpoint(ep, ifaceMapFresh) {
+			r.Skipped = true
+			r.SkipReason = "ndms interface is not present in current awg-manager tunnel map"
+			r.RKNStatus = "n/a"
+			skippedCount++
+			results = append(results, r)
+			continue
+		}
 		if err := c.probeOne(ctx, ep, c.TestDomain, httpc); err != nil {
 			r.Reachable = false
 			r.Err = err.Error()
@@ -134,6 +147,7 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	details := map[string]any{
 		"endpoints":        len(endpoints),
 		"failed_count":     failedCount,
+		"skipped_count":    skippedCount,
 		"rkn_probed":       rknProbedCount,
 		"rkn_suspect":      rknBlockedCount,
 		"rkn_test_domains": rknDomains,
@@ -262,4 +276,11 @@ func (c DNS) resolveIface(ndms string) string {
 		return ""
 	}
 	return c.IfaceMap[ndms]
+}
+
+func (c DNS) shouldSkipNDMSEndpoint(ep keenetic.DNSEndpoint, ifaceMapFresh bool) bool {
+	if !ifaceMapFresh || ep.NDMSName == "" {
+		return false
+	}
+	return c.resolveIface(ep.NDMSName) == ""
 }

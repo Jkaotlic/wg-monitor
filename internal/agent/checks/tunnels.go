@@ -105,7 +105,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 	}
 	defaultIface := ""
 	for _, tu := range tunnels {
-		if tu.DefaultRoute && tu.Enabled && tu.InterfaceName != "" {
+		if tu.DefaultRoute && tunnelRouteFallbackUsable(tu) {
 			defaultIface = tu.InterfaceName
 			break
 		}
@@ -216,7 +216,54 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	if len(reasons) == 0 {
 		return OK(name, start, details)
 	}
+	if suppressUnusedTunnelFailure(tu, pc, rc, reasons) {
+		details["note"] = "tunnel has no DNS/static routes and pingCheck is disabled"
+		return OK(name, start, details)
+	}
 	return Fail(name, start, strings.Join(reasons, "; "), details)
+}
+
+func tunnelRouteFallbackUsable(tu awgmgr.Tunnel) bool {
+	if !tu.Enabled || strings.TrimSpace(tu.InterfaceName) == "" {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(firstNonEmptyTunnel(tu.Status, tu.State)))
+	return status == "" || status == "running" || status == "connected"
+}
+
+func suppressUnusedTunnelFailure(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, reasons []string) bool {
+	if rc.DNS != 0 || rc.Static != 0 {
+		return false
+	}
+	if !pingCheckDisabled(tu, pc) {
+		return false
+	}
+	for _, reason := range reasons {
+		switch {
+		case strings.HasPrefix(reason, "status="), strings.HasPrefix(reason, "no handshake"), strings.HasPrefix(reason, "handshake stale"):
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func pingCheckDisabled(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel) bool {
+	status := tu.PingCheck.Status
+	if pc.TunnelID != "" {
+		status = pc.Status
+	}
+	return strings.EqualFold(strings.TrimSpace(status), "disabled")
+}
+
+func firstNonEmptyTunnel(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func tunnelFailReasons(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, maxAge time.Duration) []string {
