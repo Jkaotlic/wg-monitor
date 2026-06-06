@@ -105,7 +105,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 	}
 	defaultIface := ""
 	for _, tu := range tunnels {
-		if tu.DefaultRoute && tu.InterfaceName != "" {
+		if tu.DefaultRoute && tu.Enabled && tu.InterfaceName != "" {
 			defaultIface = tu.InterfaceName
 			break
 		}

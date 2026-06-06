@@ -71,7 +71,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 			for _, alias := range ep.Aliases {
 				byIface[alias] = ep.ID
 			}
-			if ep.DefaultRoute && defaultIface == "" {
+			if ep.DefaultRoute && ep.Enabled && defaultIface == "" {
 				defaultIface = ep.Iface
 			}
 		}

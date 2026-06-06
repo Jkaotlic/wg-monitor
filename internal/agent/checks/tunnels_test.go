@@ -14,8 +14,8 @@ import (
 
 func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 	tunnels := []awgmgr.Tunnel{
-		{ID: "awg11", InterfaceName: "nwg1", DefaultRoute: true},
-		{ID: "awg12", InterfaceName: "nwg0", DefaultRoute: false},
+		{ID: "awg11", InterfaceName: "nwg1", DefaultRoute: true, Enabled: true},
+		{ID: "awg12", InterfaceName: "nwg0", DefaultRoute: false, Enabled: true},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -58,7 +58,7 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 
 func TestTallyRouteCounts_NoDefaultRoute_FallThroughDropped(t *testing.T) {
 	tunnels := []awgmgr.Tunnel{
-		{ID: "awg11", InterfaceName: "nwg1", DefaultRoute: false},
+		{ID: "awg11", InterfaceName: "nwg1", DefaultRoute: true, Enabled: false},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -74,7 +74,7 @@ func TestTallyRouteCounts_NoDefaultRoute_FallThroughDropped(t *testing.T) {
 	c := awgmgr.New(srv.URL)
 	got := tallyRouteCounts(context.Background(), c, tunnels)
 	if len(got) != 0 {
-		t.Errorf("want empty (no default iface, fall-through dropped); got %+v", got)
+		t.Errorf("want empty (disabled default iface, fall-through dropped); got %+v", got)
 	}
 }
 
