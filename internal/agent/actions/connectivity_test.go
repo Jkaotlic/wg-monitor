@@ -126,3 +126,27 @@ func TestCheckViaTunnelExplainsUnavailableHydraRouteBinding(t *testing.T) {
 		}
 	}
 }
+
+func TestPickConnectivityTunnelIfaceMatchesHydraRouteGeositeTarget(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg10","name":"amnezia_nl","interfaceName":"nwg1","enabled":true,"status":"starting","defaultRoute":true},
+			{"id":"awg11","name":"amnezia_for_awg222","interfaceName":"nwg5","enabled":true,"status":"running","defaultRoute":true}
+		]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:YOUTUBE","name":"YOUTUBE","enabled":true,"backend":"hydraroute","domains":["geosite:YOUTUBE"],"routes":[{"interface":"","tunnelId":"nwg1"}]}
+		]}`))
+	})
+	c := awgmgrFake(t, mux)
+
+	iface, label := pickConnectivityTunnelIface(context.Background(), c, []connectivityTarget{
+		{Name: "YouTube", URL: "https://www.youtube.com/generate_204"},
+	})
+
+	if iface != "" || label != "" {
+		t.Fatalf("iface=%q label=%q, want no fallback when geosite:YOUTUBE points to unavailable nwg1", iface, label)
+	}
+}

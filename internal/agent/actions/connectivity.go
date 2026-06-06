@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/internal/agent/checks"
@@ -240,7 +241,7 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 			if !strings.EqualFold(route.Backend, "hydraroute") || !route.Enabled || len(route.Routes) == 0 {
 				continue
 			}
-			if !hydraRouteMatchesHost(route, host) {
+			if !hydraRouteMatchesConnectivityTarget(route, target, host) {
 				continue
 			}
 			iface := firstNonEmptyConnectivityRoute(route.Routes[0].Interface, route.Routes[0].TunnelID)
@@ -255,6 +256,93 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 		}
 	}
 	return "", ""
+}
+
+func hydraRouteMatchesConnectivityTarget(route awgmgr.DNSRoute, target connectivityTarget, host string) bool {
+	if hydraRouteMatchesHost(route, host) {
+		return true
+	}
+	aliases := connectivityTargetRouteAliases(target)
+	if len(aliases) == 0 {
+		return false
+	}
+	values := []string{route.ID, route.Name}
+	values = append(values, route.Domains...)
+	values = append(values, route.ManualDomains...)
+	for _, value := range values {
+		if connectivityRouteTokenMatches(value, aliases) {
+			return true
+		}
+	}
+	return false
+}
+
+func connectivityTargetRouteAliases(target connectivityTarget) []string {
+	name := normalizeConnectivityRouteToken(target.Name)
+	switch name {
+	case "youtube":
+		return []string{"youtube"}
+	case "telegram":
+		return []string{"telegram"}
+	case "instagram":
+		return []string{"instagram", "meta"}
+	}
+	if name != "" {
+		return []string{name}
+	}
+	host := connectivityTargetHost(target.URL)
+	if host == "" {
+		return nil
+	}
+	parts := strings.Split(strings.ToLower(host), ".")
+	if len(parts) == 0 {
+		return nil
+	}
+	return []string{normalizeConnectivityRouteToken(parts[0])}
+}
+
+func connectivityRouteTokenMatches(value string, aliases []string) bool {
+	token := normalizeConnectivityRouteToken(value)
+	if token == "" {
+		return false
+	}
+	fields := strings.Fields(token)
+	for _, alias := range aliases {
+		alias = normalizeConnectivityRouteToken(alias)
+		if alias == "" {
+			continue
+		}
+		if token == alias {
+			return true
+		}
+		for _, field := range fields {
+			if field == alias {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func normalizeConnectivityRouteToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if i := strings.LastIndex(value, ":"); i >= 0 {
+		value = value[i+1:]
+	}
+	var b strings.Builder
+	lastSpace := false
+	for _, r := range value {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if !lastSpace {
+			b.WriteByte(' ')
+			lastSpace = true
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func firstNonEmptyConnectivityRoute(values ...string) string {
