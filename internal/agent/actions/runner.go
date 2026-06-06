@@ -186,7 +186,7 @@ func forgetLegacyAWGTunnel(ctx context.Context, exec ExecFunc, tunnelID string) 
 	return nil
 }
 
-func (r Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string) error {
+func (r *Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string) error {
 	if err := forgetLegacyAWGTunnel(ctx, r.Exec, tunnelID); err != nil {
 		return err
 	}
