@@ -113,25 +113,29 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 	for _, r := range dns {
 		isHR := r.Backend == "hydraroute"
 		ruleBind := ""
-		if len(r.Routes) > 0 {
-			iface := firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
-			ruleBind = iface
-			if id, ok := byIface[iface]; ok {
-				creditDNS(id, isHR)
-			} else {
-				creditOther(isHR, false)
-			}
-		} else {
-			if isMovableHRNeoFallthrough(r) && defaultIface != "" {
-				ruleBind = defaultIface
-				if id, ok := byIface[defaultIface]; ok {
-					creditDNS(id, true)
+		if r.Enabled {
+			if len(r.Routes) > 0 {
+				iface := firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
+				ruleBind = iface
+				if id, ok := byIface[iface]; ok {
+					creditDNS(id, isHR)
 				} else {
 					creditOther(isHR, false)
 				}
 			} else {
-				creditOther(isHR, false)
+				if isMovableHRNeoFallthrough(r) && defaultIface != "" {
+					ruleBind = defaultIface
+					if id, ok := byIface[defaultIface]; ok {
+						creditDNS(id, true)
+					} else {
+						creditOther(isHR, false)
+					}
+				} else {
+					creditOther(isHR, false)
+				}
 			}
+		} else if len(r.Routes) > 0 {
+			ruleBind = firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
 		}
 		targets := append([]string{}, r.Domains...)
 		targets = append(targets, r.ManualDomains...)
@@ -140,12 +144,14 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		}))
 	}
 	for _, r := range statics {
-		if id, ok := byIface[r.TunnelID]; ok {
-			c := snap.Counts[id]
-			c.Static++
-			snap.Counts[id] = c
-		} else {
-			snap.Other.Static++
+		if r.Enabled {
+			if id, ok := byIface[r.TunnelID]; ok {
+				c := snap.Counts[id]
+				c.Static++
+				snap.Counts[id] = c
+			} else {
+				snap.Other.Static++
+			}
 		}
 		snap.Rules = append(snap.Rules, normalizeRouteRuleSummary(wire.RouteRuleSummary{
 			ID: r.ID, Name: r.Name, Kind: "static", Enabled: r.Enabled, Bind: r.TunnelID, Targets: rawTargets(r.Subnets),

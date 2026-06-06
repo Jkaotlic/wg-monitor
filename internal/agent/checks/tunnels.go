@@ -122,6 +122,9 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		out[iface] = c
 	}
 	for _, r := range dns {
+		if !r.Enabled {
+			continue
+		}
 		isHR := r.Backend == "hydraroute"
 		hr := 0
 		if isHR {
@@ -143,6 +146,9 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		}
 	}
 	for _, r := range statics {
+		if !r.Enabled {
+			continue
+		}
 		bump(r.TunnelID, 0, 0, 1)
 	}
 	return out

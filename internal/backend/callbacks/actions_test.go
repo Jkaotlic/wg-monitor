@@ -64,6 +64,7 @@ type enqueueCall struct {
 	ndms    string
 	tunnel  string
 	backend string
+	force   bool
 }
 
 type enqueueRefCall struct {
@@ -82,8 +83,9 @@ func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 	ndms, _ := cmd.Args["ndms_name"].(string)
 	tunnel, _ := cmd.Args["tunnel_id"].(string)
 	backend, _ := cmd.Args["backend"].(string)
+	force, _ := cmd.Args["force_legacy_cleanup"].(bool)
 	f.calls = append(f.calls, enqueueCall{
-		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms, tunnel: tunnel, backend: backend,
+		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms, tunnel: tunnel, backend: backend, force: force,
 	})
 	return nil
 }
@@ -171,6 +173,26 @@ func TestCommandAction_TunnelDeleteUsesExplicitTunnelID(t *testing.T) {
 	}
 	if got := sink.calls[0].tunnel; got != "kernel-real-id" {
 		t.Fatalf("tunnel_id=%q, want explicit kernel-real-id; call=%+v", got, sink.calls[0])
+	}
+	if sink.calls[0].force {
+		t.Fatalf("kernel tunnel must not request legacy cleanup: %+v", sink.calls[0])
+	}
+}
+
+func TestCommandAction_TunnelDeleteForcesLegacyAWGCleanup(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := NewCommandAction(sink, func() string { return "fixed-del-awg" })
+	_, err := a.Apply(context.Background(), nil, Args{
+		Action: "tunnel_delete", UserID: 7, CheckName: "tunnel_awg10", TunnelID: "awg10",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
+	}
+	if !sink.calls[0].force {
+		t.Fatalf("legacy awg delete should request force cleanup: %+v", sink.calls[0])
 	}
 }
 

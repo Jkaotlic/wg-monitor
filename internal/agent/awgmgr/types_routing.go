@@ -1,5 +1,7 @@
 package awgmgr
 
+import "encoding/json"
+
 // DNSRouteEntry is one element of DNSRoute.Routes — explicit tunnel binding.
 // `Interface` and `TunnelID` carry the same value (the iface from
 // /api/routing/tunnels, e.g. "nwg1", "eth3"). awg-manager UI sets both.
@@ -24,9 +26,26 @@ type DNSRoute struct {
 	Enabled       bool            `json:"enabled"`
 	CreatedAt     string          `json:"createdAt"`
 	UpdatedAt     string          `json:"updatedAt"`
-	Backend       string          `json:"backend"`            // "hydraroute" | "ndms" — engine, not tunnel
+	Backend       string          `json:"backend"` // "hydraroute" | "ndms" — engine, not tunnel
 	HRRouteMode   string          `json:"hrRouteMode,omitempty"`
 	HRPolicyName  string          `json:"hrPolicyName,omitempty"`
+}
+
+func (r *DNSRoute) UnmarshalJSON(data []byte) error {
+	type alias DNSRoute
+	var raw struct {
+		alias
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = DNSRoute(raw.alias)
+	r.Enabled = true
+	if raw.Enabled != nil {
+		r.Enabled = *raw.Enabled
+	}
+	return nil
 }
 
 // StaticRoute mirrors one entry of /api/static-routes/list .data[].
@@ -38,6 +57,23 @@ type StaticRoute struct {
 	Subnets  []string `json:"subnets"`
 	Fallback string   `json:"fallback,omitempty"`
 	Enabled  bool     `json:"enabled"`
+}
+
+func (r *StaticRoute) UnmarshalJSON(data []byte) error {
+	type alias StaticRoute
+	var raw struct {
+		alias
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*r = StaticRoute(raw.alias)
+	r.Enabled = true
+	if raw.Enabled != nil {
+		r.Enabled = *raw.Enabled
+	}
+	return nil
 }
 
 // RoutingTunnel mirrors one entry of /api/routing/tunnels .data[].

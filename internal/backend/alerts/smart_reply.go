@@ -189,7 +189,7 @@ func isLegacyPingCheckDisabledFalseIncident(inc IncidentView, tunnels []TunnelVi
 
 func incidentDisplayName(inc IncidentView, tunnels []TunnelView) string {
 	if !strings.HasPrefix(inc.CheckName, "tunnel_") {
-		return categoryHeadline(inc.CheckName, inc.Details)
+		return categoryHeadline(inc.CheckName, inc.Details, nil)
 	}
 	for _, t := range tunnels {
 		if t.CheckName != inc.CheckName {
@@ -304,7 +304,7 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		for _, inc := range visibleIncidents {
 			age := time.Since(inc.HardSince).Round(time.Minute)
 			if checkCategory(inc.CheckName) == "dns" && len(inc.Details) > 0 {
-				fmt.Fprintf(&b, "%s уже %s.\n", categoryHeadline(inc.CheckName, inc.Details), durFmt(age))
+				fmt.Fprintf(&b, "%s уже %s.\n", categoryHeadline(inc.CheckName, inc.Details, neighbors), durFmt(age))
 				for _, line := range dnsSmartReplyLines(inc.Details, neighbors) {
 					b.WriteString(line + "\n")
 				}

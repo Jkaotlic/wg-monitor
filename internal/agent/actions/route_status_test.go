@@ -38,18 +38,20 @@ func fakeAwgmgrStatus(t *testing.T, hrInstalled bool) *httptest.Server {
 		]}`))
 	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
-		// 4 rules: 2 explicit on nwg1 (one hr, one ndms), 1 on nwg0, 1 on WAN (eth3)
+		// 4 enabled rules plus disabled noise that must stay out of counts.
 		_, _ = w.Write([]byte(`{"success":true,"data":[
 			{"id":"hr:Vk","backend":"hydraroute","routes":[{"interface":"nwg1","tunnelId":"nwg1"}]},
 			{"id":"ndms:Yandex","backend":"ndms","routes":[{"interface":"nwg1","tunnelId":"nwg1"}]},
 			{"id":"hr:Cn","backend":"hydraroute","routes":[{"interface":"nwg0","tunnelId":"nwg0"}]},
-			{"id":"hr:Sber","backend":"hydraroute","routes":[{"interface":"eth3","tunnelId":"eth3"}]}
+			{"id":"hr:Sber","backend":"hydraroute","routes":[{"interface":"eth3","tunnelId":"eth3"}]},
+			{"id":"hr:Disabled","backend":"hydraroute","enabled":false,"routes":[{"interface":"nwg1","tunnelId":"nwg1"}]}
 		]}`))
 	})
 	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":[
 			{"id":"s1","tunnelID":"nwg1"},
-			{"id":"s2","tunnelID":"eth3"}
+			{"id":"s2","tunnelID":"eth3"},
+			{"id":"s-disabled","tunnelID":"nwg1","enabled":false}
 		]}`))
 	})
 	return httptest.NewServer(mux)
@@ -84,6 +86,15 @@ func TestRouteStatus_HappyPath(t *testing.T) {
 	}
 	if snap.Other.DNS != 0 || snap.Other.Static != 0 {
 		t.Errorf("other counts: %+v", snap.Other)
+	}
+	var sawDisabled bool
+	for _, r := range snap.Rules {
+		if r.ID == "hr:Disabled" && !r.Enabled {
+			sawDisabled = true
+		}
+	}
+	if !sawDisabled {
+		t.Fatalf("disabled route should remain visible in rules: %+v", snap.Rules)
 	}
 	t1, t2 := snap.Tunnels[0], snap.Tunnels[1]
 	if !t1.DefaultRoute || t2.DefaultRoute {
@@ -155,7 +166,8 @@ func TestRouteStatus_FallthroughRulesAreCounted(t *testing.T) {
 		_, _ = w.Write([]byte(`{"success":true,"data":[
 			{"id":"hr:A","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"},
 			{"id":"hr:B","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"},
-			{"id":"hr:C","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"}
+			{"id":"hr:C","backend":"hydraroute","routes":null,"hrPolicyName":"HydraRoute"},
+			{"id":"hr:D-disabled","backend":"hydraroute","enabled":false,"routes":null,"hrPolicyName":"HydraRoute"}
 		]}`))
 	})
 	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {

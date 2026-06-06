@@ -245,6 +245,40 @@ func TestFormatHardDNSPartialUsesHumanTunnelContext(t *testing.T) {
 	}
 }
 
+func TestFormatHardDNSAllFailedWithAliveNeighborsIsAdvisory(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname:  "testkeen",
+		CheckName: "dns",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "dns", Status: "fail", Details: map[string]any{
+			"endpoints":    2,
+			"failed_count": 2,
+			"endpoints_detail": []any{
+				map[string]any{"reachable": false, "type": "plain", "target": "100.64.0.1:53", "ndms_name": "Wireguard0", "err": "i/o timeout"},
+				map[string]any{"reachable": false, "type": "plain", "target": "8.8.8.8:53", "ndms_name": "Wireguard0", "err": "i/o timeout"},
+			},
+		}},
+		Neighbors: []NeighborSummary{
+			{CheckName: "tunnel_awg11", TunnelName: "working backup", NDMSName: "Wireguard5", Interface: "nwg5", Status: "alive", HandshakeAge: 30},
+			{CheckName: "tunnel_awg12", TunnelName: "working nl", NDMSName: "Wireguard3", Interface: "nwg3", Status: "alive", HandshakeAge: 90},
+		},
+	})
+	for _, want := range []string{
+		"🟡",
+		"DNS-резолвинг деградирует",
+		"На что обратить внимание:",
+		"Остальные туннели выглядят живыми",
+		"это не общий WAN",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "🔴") || strings.Contains(got, "нет связи наружу") {
+		t.Fatalf("alive neighbor DNS alert must not look like total WAN outage:\n%s", got)
+	}
+}
+
 func TestFormatHardExternalReachSeverity(t *testing.T) {
 	partial := FormatHard(HardArgs{
 		Nickname:  "vasya",
