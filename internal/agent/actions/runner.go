@@ -360,6 +360,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			checkName, _ := cmd.Args["check_name"].(string)
 			tunnelID = tunnelIDFromCheckName(checkName)
 		}
+		forceLegacyCleanup, _ := cmd.Args["force_legacy_cleanup"].(bool)
 		if tunnelID == "" {
 			return "err", "tunnel_delete: tunnel_id missing in args", payload
 		}
@@ -384,7 +385,10 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		if remaining, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
-			if !legacyAWGDeleteFallbackAllowed(remaining) {
+			forcedLegacy := forceLegacyCleanup &&
+				legacyAWGTunnelID(tunnelID) &&
+				!strings.EqualFold(strings.TrimSpace(remaining.Backend), "nativewg")
+			if !legacyAWGDeleteFallbackAllowed(remaining) && !forcedLegacy {
 				return "err", fmt.Sprintf("tunnel_delete: %s still exists after delete", tunnelID), payload
 			}
 			if err := forgetLegacyAWGTunnel(ctx, r.Exec, tunnelID); err != nil {
