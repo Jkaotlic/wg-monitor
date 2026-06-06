@@ -56,7 +56,7 @@ func FormatHard(a HardArgs) string {
 		mobileBadge = "📱"
 	}
 	tone := toneFor(a.CheckName, a.Check.Details, a.Neighbors)
-	headline := categoryHeadline(a.CheckName, a.Check.Details)
+	headline := categoryHeadline(a.CheckName, a.Check.Details, a.Neighbors)
 
 	sections := []CardSection{{
 		Title: tone.ProblemTitle,
@@ -181,7 +181,7 @@ func FormatRealert(args RealertArgs) string {
 		mobileBadge = "📱"
 	}
 	tone := toneFor(args.CheckName, args.Check.Details, args.Neighbors)
-	headline := categoryHeadline(args.CheckName, args.Check.Details)
+	headline := categoryHeadline(args.CheckName, args.Check.Details, args.Neighbors)
 
 	var sections []CardSection
 	if args.Check.Name != "" {
@@ -285,6 +285,9 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 		if total > 0 && failed > 0 && failed < total {
 			return "🟡" // часть серверов жива — деградация, не полный отказ
 		}
+		if total > 0 && failed == total && len(ns) > 0 && neighborsAlive(ns) {
+			return "🟡"
+		}
 	case "hydraroute":
 		installed, _ := boolOrFalse(d, "installed")
 		running, _ := boolOrFalse(d, "running")
@@ -304,7 +307,7 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 // categoryHeadline returns the human-readable problem statement for the
 // header — e.g. "DNS работает частично" / "Туннель amnezia_for_awg не на
 // связи". Replaces the old "<check name> — DOWN" pattern.
-func categoryHeadline(checkName string, d map[string]any) string {
+func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
 		tname, _ := d["tunnel_name"].(string)
@@ -323,6 +326,9 @@ func categoryHeadline(checkName string, d map[string]any) string {
 		failed, _ := intOrZero(d, "failed_count")
 		if total > 0 && failed > 0 && failed < total {
 			return "DNS-резолвинг частично не работает"
+		}
+		if total > 0 && failed == total && len(ns) > 0 && neighborsAlive(ns) {
+			return "DNS-резолвинг деградирует"
 		}
 		return "DNS-резолвинг не работает"
 	case "hydraroute":
@@ -778,6 +784,9 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 		return "Лежит часть серверов, остальные отвечают. Резолв в целом работает — это деградация, не полный отказ."
 	}
 	if failedCount == total && total > 0 {
+		if len(ns) > 0 && neighborsAlive(ns) {
+			return "DNS endpoint'ы не ответили, но соседние туннели живы. Это похоже на локальную проблему DNS-апстрима, выключенного/старого правила или привязки маршрута, а не на общий обрыв WAN."
+		}
 		return "Не отвечает ни один сервер. Либо у роутера нет связи наружу, либо DNS-апстримы разом легли (что бывает редко)."
 	}
 	return ""

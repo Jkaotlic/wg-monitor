@@ -25,13 +25,15 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 				{"id":"hr:AI","routes":null,"backend":"hydraroute","hrPolicyName":"HydraRoute"},
 				{"id":"hr:Sber","routes":null,"backend":"hydraroute","hrPolicyName":"HydraRoute"},
 				{"id":"ndms:WAN","routes":[{"interface":"eth3","tunnelId":"eth3"}],"backend":"ndms"},
-				{"id":"hr:Explicit-default","routes":[{"interface":"nwg1","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"}
+				{"id":"hr:Explicit-default","routes":[{"interface":"nwg1","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"},
+				{"id":"hr:Disabled","enabled":false,"routes":[{"interface":"nwg1","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"}
 			]}`))
 		case "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[
 				{"id":"s1","tunnelID":"nwg0","subnets":["10.0.0.0/24"]},
 				{"id":"s2","tunnelID":"nwg0","subnets":["10.0.1.0/24"]},
-				{"id":"s3","tunnelID":"nwg1","subnets":["10.0.2.0/24"]}
+				{"id":"s3","tunnelID":"nwg1","subnets":["10.0.2.0/24"]},
+				{"id":"s-disabled","tunnelID":"nwg1","enabled":false,"subnets":["10.0.3.0/24"]}
 			]}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
@@ -106,10 +108,14 @@ func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {
 		case "/api/dns-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[
 				{"id":"hr:1","routes":null,"backend":"hydraroute","hrPolicyName":"HydraRoute"},
-				{"id":"hr:2","routes":[{"interface":"nwg1","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"}
+				{"id":"hr:2","routes":[{"interface":"nwg1","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"},
+				{"id":"hr:disabled","enabled":false,"routes":[{"interface":"nwg1","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"}
 			]}`))
 		case "/api/static-routes/list":
-			_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"s1","tunnelID":"nwg1"}]}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"s1","tunnelID":"nwg1"},
+				{"id":"s-disabled","tunnelID":"nwg1","enabled":false}
+			]}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}

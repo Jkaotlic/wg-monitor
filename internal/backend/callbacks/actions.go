@@ -234,6 +234,9 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		}
 		if tunnelID != "" {
 			cmdArgs["tunnel_id"] = tunnelID
+			if legacyAWGCallbackTunnelID(tunnelID) {
+				cmdArgs["force_legacy_cleanup"] = true
+			}
 		}
 	}
 	cmd := wire.Command{
@@ -258,6 +261,19 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
 	}
 	return formatQueuedStatus(args.Action, args.CheckName), nil
+}
+
+func legacyAWGCallbackTunnelID(id string) bool {
+	id = strings.TrimSpace(id)
+	if !strings.HasPrefix(id, "awg") || len(id) == len("awg") {
+		return false
+	}
+	for _, r := range id[len("awg"):] {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // DispatchFromMessage enqueues a command originating from a *text* message
