@@ -434,6 +434,54 @@ func TestRunner_TunnelDelete_ForceLegacyCleanup(t *testing.T) {
 	}
 }
 
+func TestRunner_TunnelDelete_ForceLegacyCleanupAfterReferencedError(t *testing.T) {
+	getCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		getCalls++
+		if getCalls == 1 {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","enabled":false,"status":"disabled","interfaceName":"nwg0"}}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false,"code":"NOT_FOUND"}`))
+	})
+	mux.HandleFunc("/api/tunnels/delete", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"tunnel_referenced","details":{"tunnelId":"awg10"}}`))
+	})
+	var execCalls []string
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		execCalls = append(execCalls, strings.Join(append([]string{name}, args...), " "))
+		return []byte("ok"), nil
+	}
+
+	r := Runner{
+		AwgClient: awgmgrFake(t, mux),
+		Exec:      exec,
+		Sleep:     func(context.Context, time.Duration) error { return nil },
+		Now:       mockNow(),
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "del1",
+		Action: "tunnel_delete",
+		Args: map[string]any{
+			"tunnel_id":            "awg10",
+			"force_legacy_cleanup": true,
+		},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%q", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, "tunnel_referenced") {
+		t.Fatalf("output should retain awgmgr reason, got %q", res.Output)
+	}
+	if len(execCalls) != 3 || !strings.Contains(execCalls[0], "/opt/etc/awg-manager/tunnels/awg10.json") {
+		t.Fatalf("exec calls=%v", execCalls)
+	}
+}
+
 func TestRunner_OpkgUpgrade_NilRunnerErrs(t *testing.T) {
 	r := Runner{Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c5", Action: "opkg_upgrade"})

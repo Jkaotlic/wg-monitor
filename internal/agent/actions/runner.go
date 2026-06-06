@@ -186,6 +186,21 @@ func forgetLegacyAWGTunnel(ctx context.Context, exec ExecFunc, tunnelID string) 
 	return nil
 }
 
+func (r Runner) forceForgetLegacyAWGTunnel(ctx context.Context, tunnelID string) error {
+	if err := forgetLegacyAWGTunnel(ctx, r.Exec, tunnelID); err != nil {
+		return err
+	}
+	if err := r.sleep(ctx, 2*time.Second); err != nil {
+		return fmt.Errorf("legacy cleanup wait %s: %v", tunnelID, err)
+	}
+	if _, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
+		return fmt.Errorf("tunnel_delete: %s still exists after legacy cleanup", tunnelID)
+	} else if !tunnelNotFoundError(err) {
+		return fmt.Errorf("verify legacy cleanup %s: %v", tunnelID, err)
+	}
+	return nil
+}
+
 func (r *Runner) now() time.Time {
 	if r.Now == nil {
 		return time.Now()
@@ -381,24 +396,25 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 				}
 			}
 		}
+		forcedLegacy := forceLegacyCleanup && legacyAWGTunnelID(tunnelID)
 		if err := r.AwgClient.DeleteTunnel(ctx, tunnelID); err != nil {
+			if forcedLegacy {
+				if cleanupErr := r.forceForgetLegacyAWGTunnel(ctx, tunnelID); cleanupErr != nil {
+					return "err", fmt.Sprintf("legacy cleanup %s after delete error %v: %v", tunnelID, err, cleanupErr), payload
+				}
+				if r.ForceRecheck != nil {
+					r.ForceRecheck(ctx)
+				}
+				return "ok", fmt.Sprintf("tunnel %s deleted with legacy cleanup after awgmgr delete error: %v", tunnelID, err), payload
+			}
 			return "err", err.Error(), payload
 		}
 		if remaining, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
-			forcedLegacy := forceLegacyCleanup && legacyAWGTunnelID(tunnelID)
 			if !legacyAWGDeleteFallbackAllowed(remaining) && !forcedLegacy {
 				return "err", fmt.Sprintf("tunnel_delete: %s still exists after delete", tunnelID), payload
 			}
-			if err := forgetLegacyAWGTunnel(ctx, r.Exec, tunnelID); err != nil {
+			if err := r.forceForgetLegacyAWGTunnel(ctx, tunnelID); err != nil {
 				return "err", fmt.Sprintf("legacy cleanup %s: %v", tunnelID, err), payload
-			}
-			if err := r.sleep(ctx, 2*time.Second); err != nil {
-				return "err", fmt.Sprintf("legacy cleanup wait %s: %v", tunnelID, err), payload
-			}
-			if _, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
-				return "err", fmt.Sprintf("tunnel_delete: %s still exists after legacy cleanup", tunnelID), payload
-			} else if !tunnelNotFoundError(err) {
-				return "err", fmt.Sprintf("verify legacy cleanup %s: %v", tunnelID, err), payload
 			}
 		} else if !tunnelNotFoundError(err) {
 			return "err", fmt.Sprintf("verify delete %s: %v", tunnelID, err), payload
