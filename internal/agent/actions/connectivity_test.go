@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -72,5 +73,56 @@ func TestPickConnectivityTunnelIfaceSkipsStoppedDefaultRoute(t *testing.T) {
 
 	if iface != "" || label != "" {
 		t.Fatalf("iface=%q label=%q, want no usable stopped tunnel", iface, label)
+	}
+}
+
+func TestPickConnectivityTunnelIfaceDoesNotFallbackWhenMatchingHydraRouteUsesUnavailableIface(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg10","name":"amnezia_nl","interfaceName":"nwg1","enabled":true,"status":"starting","defaultRoute":true},
+			{"id":"awg11","name":"amnezia_for_awg222","interfaceName":"nwg5","enabled":true,"status":"running","defaultRoute":true}
+		]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:youtube","name":"YouTube","enabled":true,"backend":"hydraroute","domains":["youtube.com"],"routes":[{"interface":"","tunnelId":"nwg1"}]}
+		]}`))
+	})
+	c := awgmgrFake(t, mux)
+
+	iface, label := pickConnectivityTunnelIface(context.Background(), c, []connectivityTarget{
+		{Name: "YouTube", URL: "https://www.youtube.com/generate_204"},
+	})
+
+	if iface != "" || label != "" {
+		t.Fatalf("iface=%q label=%q, want no fallback when matching HR route points to unavailable nwg1", iface, label)
+	}
+}
+
+func TestCheckViaTunnelExplainsUnavailableHydraRouteBinding(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg10","name":"amnezia_nl","interfaceName":"nwg1","enabled":true,"status":"starting","defaultRoute":true},
+			{"id":"awg11","name":"amnezia_for_awg222","interfaceName":"nwg5","enabled":true,"status":"running","defaultRoute":true}
+		]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:youtube","name":"YouTube","enabled":true,"backend":"hydraroute","domains":["youtube.com"],"routes":[{"interface":"","tunnelId":"nwg1"}]}
+		]}`))
+	})
+	c := awgmgrFake(t, mux)
+
+	status, output := CheckViaTunnel(context.Background(), c)
+
+	if status != "err" {
+		t.Fatalf("status=%q, want err; output=%q", status, output)
+	}
+	for _, want := range []string{"HR-Neo", "YouTube", "nwg1", "ложный OK"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("output=%q, want substring %q", output, want)
+		}
 	}
 }
