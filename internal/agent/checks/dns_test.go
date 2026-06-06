@@ -107,6 +107,68 @@ func TestDNS_NoEndpoints_ReturnsOK(t *testing.T) {
 	}
 }
 
+func TestDNS_RefreshesDiscoveredEndpointsOnEachRun(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.URL.Query().Get("dns")
+		query, _ := base64.RawURLEncoding.DecodeString(raw)
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(buildDoHResponse(t, query, dnsmessage.RCodeSuccess, [4]byte{1, 2, 3, 4}, true))
+	}))
+	defer srv.Close()
+
+	calls := 0
+	chk := DNS{
+		EndpointProvider: func(context.Context) ([]keenetic.DNSEndpoint, error) {
+			calls++
+			return []keenetic.DNSEndpoint{{Type: "doh", URL: srv.URL}}, nil
+		},
+		TestDomain:    "example.com",
+		FailThreshold: 1,
+		HTTPClient:    srv.Client(),
+	}
+
+	for i := 0; i < 2; i++ {
+		got := chk.Run(context.Background(), Deps{})
+		if got.Status != "ok" {
+			t.Fatalf("run %d got %+v", i+1, got)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("endpoint provider calls = %d, want 2", calls)
+	}
+}
+
+func TestDNS_RefreshesIfaceMapOnEachRun(t *testing.T) {
+	server, stop := startMockUDPDNS(t, [4]byte{1, 2, 3, 4})
+	defer stop()
+	host, port := splitHostPort(t, server)
+
+	var dialedIface string
+	chk := DNS{
+		Endpoints: []keenetic.DNSEndpoint{
+			{Type: "plain", Host: host, Port: port, NDMSName: "Wireguard5"},
+		},
+		TestDomain:    "example.com",
+		FailThreshold: 1,
+		IfaceDialFn: func(iface string) *net.Dialer {
+			dialedIface = iface
+			return &net.Dialer{}
+		},
+		IfaceMap: map[string]string{"Wireguard5": "stale0"},
+		IfaceMapProvider: func(context.Context) (map[string]string, error) {
+			return map[string]string{"Wireguard5": "nwg5"}, nil
+		},
+	}
+
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "ok" {
+		t.Fatalf("got %+v", got)
+	}
+	if dialedIface != "nwg5" {
+		t.Fatalf("dialed iface = %q, want refreshed nwg5", dialedIface)
+	}
+}
+
 func splitHostPort(t *testing.T, hp string) (string, int) {
 	t.Helper()
 	host, portStr, err := net.SplitHostPort(hp)

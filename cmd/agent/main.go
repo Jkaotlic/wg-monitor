@@ -120,17 +120,21 @@ func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Log
 	dc := cfg.Checks.DNS
 
 	var endpoints []keenetic.DNSEndpoint
+	var endpointProvider func(context.Context) ([]keenetic.DNSEndpoint, error)
 	if dc.AutoDiscover {
 		runner := checks.OSExec{}
 		ndmc := keenetic.NDMC{Runner: runner}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		rc, err := ndmc.Show(ctx, "running-config")
-		cancel()
-		if err != nil {
-			logger.Warn("dns auto-discover skipped", "err", err)
-		} else {
-			endpoints = append(endpoints, keenetic.ParseDNSEndpoints(rc)...)
-			logger.Info("dns auto-discovered", "count", len(endpoints))
+		endpointProvider = func(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			rc, err := ndmc.Show(ctx, "running-config")
+			if err != nil {
+				if logger != nil {
+					logger.Warn("dns auto-discover skipped", "err", err)
+				}
+				return nil, err
+			}
+			return keenetic.ParseDNSEndpoints(rc), nil
 		}
 	}
 
@@ -153,23 +157,27 @@ func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Log
 		endpoints = append(endpoints, ep)
 	}
 
-	mapCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	ifaceMap, err := fetchIfaceMap(mapCtx, awgClient)
-	if err != nil {
-		logger.Warn("iface map unavailable; plain DNS will use default routing", "err", err)
-		ifaceMap = nil
-	}
-
 	return checks.DNS{
-		Endpoints:       endpoints,
-		TestDomain:      dc.TestDomain,
-		FailThreshold:   dc.FailThreshold,
-		IfaceDialFn:     checks.IfaceDialer,
-		HTTPClient:      &http.Client{Timeout: 5 * time.Second},
-		PerProbeTimeout: 3 * time.Second,
-		IfaceMap:        ifaceMap,
-		RKNTestDomains:  dc.RKNTestDomains,
+		Endpoints:        endpoints,
+		EndpointProvider: endpointProvider,
+		TestDomain:       dc.TestDomain,
+		FailThreshold:    dc.FailThreshold,
+		IfaceDialFn:      checks.IfaceDialer,
+		HTTPClient:       &http.Client{Timeout: 5 * time.Second},
+		PerProbeTimeout:  3 * time.Second,
+		IfaceMapProvider: func(ctx context.Context) (map[string]string, error) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			ifaceMap, err := fetchIfaceMap(ctx, awgClient)
+			if err != nil {
+				if logger != nil {
+					logger.Warn("iface map unavailable; plain DNS will use default routing", "err", err)
+				}
+				return nil, err
+			}
+			return ifaceMap, nil
+		},
+		RKNTestDomains: dc.RKNTestDomains,
 	}
 }
 

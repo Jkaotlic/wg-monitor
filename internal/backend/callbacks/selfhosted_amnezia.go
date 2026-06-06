@@ -351,6 +351,7 @@ func selfHostedAmneziaImportQueuedView(userID int64, label, issuedName, address,
 	if strings.TrimSpace(docWarn) != "" {
 		text += docWarn
 	}
+	text += "\n\nСейчас агент импортирует конфиг, запускает туннель и ждёт status/handshake. Проверка может занять до 10 секунд; финальное сообщение заменит эту карточку."
 	text += "\n\nДальше:\n1. Нажми «Проверить туннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},

@@ -19,30 +19,32 @@ var DefaultRKNTestDomains = []string{"rutracker.org", "lostfilm.tv", "linkedin.c
 
 // spoofIPs is the set of A-records ISPs commonly return for blocked domains.
 var spoofIPs = map[string]struct{}{
-	"0.0.0.0":      {},
-	"127.0.0.1":    {},
-	"127.0.0.10":   {},
+	"0.0.0.0":         {},
+	"127.0.0.1":       {},
+	"127.0.0.10":      {},
 	"255.255.255.255": {},
 }
 
 // DNS probes every configured/discovered DNS endpoint for two things:
-//   1. Reachability — does the resolver answer a basic A-query for TestDomain?
-//   2. RKN-cleanliness — for endpoints that ARE reachable, do the RKN-test
-//      domains return plausible (non-spoofed) IPs?
+//  1. Reachability — does the resolver answer a basic A-query for TestDomain?
+//  2. RKN-cleanliness — for endpoints that ARE reachable, do the RKN-test
+//     domains return plausible (non-spoofed) IPs?
 //
 // Check FAILs when:
 //   - >= FailThreshold endpoints are unreachable, OR
 //   - all reachable endpoints are RKN-suspect (every one returns spoofed
 //     answers for >=2 of the 3 RKN-test domains).
 type DNS struct {
-	Endpoints       []keenetic.DNSEndpoint
-	TestDomain      string
-	FailThreshold   int
-	IfaceDialFn     func(iface string) *net.Dialer
-	HTTPClient      *http.Client
-	PerProbeTimeout time.Duration
-	IfaceMap        map[string]string
-	RKNTestDomains  []string // empty → DefaultRKNTestDomains
+	Endpoints        []keenetic.DNSEndpoint
+	EndpointProvider func(context.Context) ([]keenetic.DNSEndpoint, error)
+	TestDomain       string
+	FailThreshold    int
+	IfaceDialFn      func(iface string) *net.Dialer
+	HTTPClient       *http.Client
+	PerProbeTimeout  time.Duration
+	IfaceMap         map[string]string
+	IfaceMapProvider func(context.Context) (map[string]string, error)
+	RKNTestDomains   []string // empty → DefaultRKNTestDomains
 }
 
 func (DNS) Name() string { return "dns" }
@@ -66,10 +68,30 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	// stay focused on basic reachability.
 	rknDomains := c.RKNTestDomains
 
-	if len(c.Endpoints) == 0 {
-		return OK(c.Name(), start, map[string]any{
+	endpoints := append([]keenetic.DNSEndpoint(nil), c.Endpoints...)
+	var endpointProviderErr error
+	if c.EndpointProvider != nil {
+		discovered, err := c.EndpointProvider(ctx)
+		if err != nil {
+			endpointProviderErr = err
+		} else {
+			endpoints = append(endpoints, discovered...)
+		}
+	}
+	if c.IfaceMapProvider != nil {
+		if ifaceMap, err := c.IfaceMapProvider(ctx); err == nil {
+			c.IfaceMap = ifaceMap
+		}
+	}
+
+	if len(endpoints) == 0 {
+		details := map[string]any{
 			"endpoints": 0, "note": "no DNS endpoints discovered/configured",
-		})
+		}
+		if endpointProviderErr != nil {
+			details["discovery_error"] = endpointProviderErr.Error()
+		}
+		return OK(c.Name(), start, details)
 	}
 
 	type epResult struct {
@@ -86,7 +108,7 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	failedCount := 0
 	rknBlockedCount := 0
 	rknProbedCount := 0
-	for _, ep := range c.Endpoints {
+	for _, ep := range endpoints {
 		r := epResult{Type: ep.Type, Target: epTarget(ep), NDMSName: ep.NDMSName}
 		if err := c.probeOne(ctx, ep, c.TestDomain, httpc); err != nil {
 			r.Reachable = false
@@ -110,16 +132,19 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	}
 
 	details := map[string]any{
-		"endpoints":         len(c.Endpoints),
-		"failed_count":      failedCount,
-		"rkn_probed":        rknProbedCount,
-		"rkn_suspect":       rknBlockedCount,
-		"rkn_test_domains":  rknDomains,
-		"endpoints_detail":  results,
+		"endpoints":        len(endpoints),
+		"failed_count":     failedCount,
+		"rkn_probed":       rknProbedCount,
+		"rkn_suspect":      rknBlockedCount,
+		"rkn_test_domains": rknDomains,
+		"endpoints_detail": results,
+	}
+	if endpointProviderErr != nil {
+		details["discovery_error"] = endpointProviderErr.Error()
 	}
 	if failedCount >= threshold {
 		return Fail(c.Name(), start,
-			fmt.Sprintf("%d/%d endpoints unreachable", failedCount, len(c.Endpoints)),
+			fmt.Sprintf("%d/%d endpoints unreachable", failedCount, len(endpoints)),
 			details)
 	}
 	if rknProbedCount > 0 && rknBlockedCount == rknProbedCount {

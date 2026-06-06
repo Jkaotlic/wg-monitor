@@ -19,10 +19,9 @@ var validNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 const defaultImportBackend = "nativewg"
 
 var importVerifyDelays = []time.Duration{
+	1 * time.Second,
 	3 * time.Second,
-	10 * time.Second,
-	20 * time.Second,
-	30 * time.Second,
+	6 * time.Second,
 }
 
 func isValidTunnelName(s string) bool { return validNameRe.MatchString(s) }
