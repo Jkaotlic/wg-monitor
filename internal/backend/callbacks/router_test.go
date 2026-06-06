@@ -3224,3 +3224,37 @@ func TestRouterHandleMessage_OperatorBlocked_OutsideRouterTopic(t *testing.T) {
 		t.Errorf("operator outside per_router topic must be dropped, got %v", f.sentMsgs)
 	}
 }
+
+func TestImportQueuedViewsExplainLongImportCheck(t *testing.T) {
+	tests := []struct {
+		name string
+		view func() (string, tg.InlineKeyboardMarkup)
+	}{
+		{name: "amnezia", view: func() (string, tg.InlineKeyboardMarkup) {
+			return amneziaImportQueuedView(42, "key1", "")
+		}},
+		{name: "hidemy", view: func() (string, tg.InlineKeyboardMarkup) {
+			return hideMyImportQueuedView(42, "code1", "")
+		}},
+		{name: "selfhosted", view: func() (string, tg.InlineKeyboardMarkup) {
+			return selfHostedAmneziaImportQueuedView(42, "vps", "issued", "10.0.0.2", "")
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			text, kb := tc.view()
+			buttons := markupButtonTexts(&kb)
+			for _, want := range []string{
+				"импортирует конфиг",
+				"запускает туннель",
+				"до 10 секунд",
+				"финальное сообщение",
+				"Проверить туннели",
+			} {
+				if !strings.Contains(text, want) && !strings.Contains(buttons, want) {
+					t.Fatalf("queued import view missing %q; text=%q buttons=%q", want, text, buttons)
+				}
+			}
+		})
+	}
+}

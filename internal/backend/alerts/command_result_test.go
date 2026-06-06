@@ -143,13 +143,13 @@ func TestFormatCommandResult_TunnelDisable_Verb(t *testing.T) {
 }
 
 func TestFormatCommandResult_TunnelImportShowsNextStep(t *testing.T) {
-	r := wire.CommandResult{Status: "ok", Output: "✅ Туннель \"newtun\" создан (id=awg99)"}
+	r := wire.CommandResult{Status: "ok", Output: "✅ Туннель \"newtun\" создан (id=awg99)\n⚠️ Проверка запуска: туннель импортирован, но пока не ожил (id=awg99, status=stopped, enabled=true, handshake=none)", DurationMs: 65709}
 	chunks := FormatCommandResult("tunnel_import", r, 3500)
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d", len(chunks))
 	}
 	body := chunks[0]
-	for _, want := range []string{"Импорт конфига", "newtun", "🛣 Маршруты", "перенести правила"} {
+	for _, want := range []string{"Импорт конфига", "newtun", "за 1м 06с", "Проверка запуска", "handshake=none", "🛣 Маршруты", "перенести правила"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}

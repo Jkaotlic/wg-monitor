@@ -418,6 +418,9 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 		return fmt.Errorf("tg %s: bad response (status %d): %s", method, resp.StatusCode, string(raw))
 	}
 	if !ar.OK {
+		if isMessageNotModified(method, ar.ErrorCode, ar.Description) {
+			return nil
+		}
 		c.warn(method, "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
 		return &APIError{Method: method, Description: ar.Description, Code: ar.ErrorCode}
 	}
@@ -438,6 +441,13 @@ func (c *Client) warn(method, msg string, attrs ...any) {
 		return
 	}
 	c.Logger.Warn("tg "+method+": "+msg, attrs...)
+}
+
+func isMessageNotModified(method string, code int, description string) bool {
+	if method != "editMessageText" || code != 400 {
+		return false
+	}
+	return strings.Contains(strings.ToLower(description), "message is not modified")
 }
 
 // redactURLError replaces the embedded URL in `*url.Error.Error()` with one

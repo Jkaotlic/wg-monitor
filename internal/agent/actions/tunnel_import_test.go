@@ -3,6 +3,7 @@ package actions
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 const awgConf = `
@@ -129,5 +130,22 @@ func TestIsValidTunnelName(t *testing.T) {
 		if isValidTunnelName(v) {
 			t.Errorf("%q should be invalid", v)
 		}
+	}
+}
+
+func TestImportVerifyDelaysUseShortBudget(t *testing.T) {
+	want := []time.Duration{time.Second, 3 * time.Second, 6 * time.Second}
+	if len(importVerifyDelays) != len(want) {
+		t.Fatalf("delay count = %d, want %d: %v", len(importVerifyDelays), len(want), importVerifyDelays)
+	}
+	var total time.Duration
+	for i := range want {
+		if importVerifyDelays[i] != want[i] {
+			t.Fatalf("delay[%d] = %s, want %s", i, importVerifyDelays[i], want[i])
+		}
+		total += importVerifyDelays[i]
+	}
+	if total > 10*time.Second {
+		t.Fatalf("total verify budget = %s, want <= 10s", total)
 	}
 }

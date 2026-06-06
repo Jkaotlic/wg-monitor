@@ -445,5 +445,5 @@ func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args
 	if replace {
 		verb = "замена"
 	}
-	return fmt.Sprintf("⏳ Конфиг принят (%s %q), проверяю, поднимется ли туннель…", verb, up.Name), nil
+	return fmt.Sprintf("⏳ Конфиг принят (%s %q). Агент импортирует конфиг и запускает туннель; проверяю status/handshake, это может занять до 10 секунд.", verb, up.Name), nil
 }

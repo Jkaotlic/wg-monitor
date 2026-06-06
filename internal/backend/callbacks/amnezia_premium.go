@@ -136,6 +136,7 @@ func amneziaKeyboard(userID int64, keyID string, info *amnezia.AccountInfo) tg.I
 
 func amneziaImportQueuedView(userID int64, keyID, docWarn string) (string, tg.InlineKeyboardMarkup) {
 	text := "Amnezia config выгружен в топик. Импорт туннеля поставлен в очередь роутера." + docWarn +
+		"\n\nСейчас агент импортирует конфиг, запускает туннель и ждёт status/handshake. Проверка может занять до 10 секунд; финальное сообщение заменит эту карточку." +
 		"\n\nДальше:\n1. Нажми «Проверить туннели» и дождись живого списка.\n2. Если правила были на старом туннеле, открой «Маршруты / перенос»."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},

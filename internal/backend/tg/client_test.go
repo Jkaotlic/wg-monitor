@@ -164,6 +164,22 @@ func TestEditMessageTextWithNilMarkupOmitsField(t *testing.T) {
 	}
 }
 
+func TestEditMessageTextIgnoresMessageNotModified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/editMessageText") {
+			t.Fatalf("path: %s", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message"}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
+	if err := c.EditMessageText(context.Background(), 100, 5, "same", "", nil); err != nil {
+		t.Fatalf("message-not-modified edit should be a no-op, got %v", err)
+	}
+}
+
 func TestSendMessageWithReplyKeyboard_AcceptsReplyMarkup(t *testing.T) {
 	var got map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

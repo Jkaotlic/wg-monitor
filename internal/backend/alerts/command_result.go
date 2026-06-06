@@ -75,10 +75,15 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 		card := Card{Badge: "", Label: label, Summary: humanRestartResult(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "tunnel_import":
+		summary := "готово"
+		if r.DurationMs > 0 {
+			summary = "готово за " + commandResultDuration(r.DurationMs)
+		}
 		card := Card{
 			Badge:   "",
 			Label:   label,
-			Summary: strings.TrimSpace(r.Output),
+			Summary: summary,
+			Details: strings.TrimSpace(r.Output),
 			Hint:    "Если это новый туннель и на старом были правила, открой 🛣 Маршруты, чтобы перенести правила на новый конфиг.",
 		}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
@@ -276,4 +281,15 @@ func commandLabelHuman(action string) string {
 		return "📁 Импорт конфига"
 	}
 	return action
+}
+
+func commandResultDuration(ms int64) string {
+	if ms < 1000 {
+		return fmt.Sprintf("%dмс", ms)
+	}
+	sec := (ms + 500) / 1000
+	if sec < 60 {
+		return fmt.Sprintf("%dс", sec)
+	}
+	return fmt.Sprintf("%dм %02dс", sec/60, sec%60)
 }
