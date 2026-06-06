@@ -184,6 +184,44 @@ func TestRouteStatus_FallthroughRulesAreCounted(t *testing.T) {
 	}
 }
 
+func TestRouteStatus_DoesNotCreditFallthroughToDisabledDefaultTunnel(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg10","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":false,"defaultRoute":true}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:ProxyDefault","backend":"hydraroute","enabled":true,"routes":null,"hrPolicyName":"HydraRoute"}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteStatus(context.Background(), c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(out), &snap); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if got := snap.Counts["awg10"]; got.DNS != 0 || got.HRNeo != 0 {
+		t.Fatalf("disabled default tunnel must not receive fallthrough counts: %+v", got)
+	}
+	if snap.Other.DNS != 1 || snap.Other.HRNeo != 1 {
+		t.Fatalf("enabled fallthrough rule should stay in Other when default tunnel is disabled: %+v", snap.Other)
+	}
+}
+
 func TestRouteStatus_CreditsNDMSNameBoundRulesToManagedTunnel(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
