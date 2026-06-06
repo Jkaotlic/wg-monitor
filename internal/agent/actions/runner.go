@@ -385,9 +385,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		if remaining, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
-			forcedLegacy := forceLegacyCleanup &&
-				legacyAWGTunnelID(tunnelID) &&
-				!strings.EqualFold(strings.TrimSpace(remaining.Backend), "nativewg")
+			forcedLegacy := forceLegacyCleanup && legacyAWGTunnelID(tunnelID)
 			if !legacyAWGDeleteFallbackAllowed(remaining) && !forcedLegacy {
 				return "err", fmt.Sprintf("tunnel_delete: %s still exists after delete", tunnelID), payload
 			}
