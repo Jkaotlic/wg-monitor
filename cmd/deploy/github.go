@@ -90,7 +90,7 @@ func defaultCacheDir() string {
 // rc or not. So we hit /releases (which lists all, newest first) and
 // take element 0.
 func (d *Downloader) GetLatestRelease() (*Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=5", strings.TrimRight(GitHubAPIBase, "/"), RepoOwner, RepoName)
+	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100", strings.TrimRight(GitHubAPIBase, "/"), RepoOwner, RepoName)
 	req, _ := http.NewRequest("GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
@@ -116,13 +116,23 @@ func (d *Downloader) GetLatestRelease() (*Release, error) {
 	if len(list) == 0 {
 		return nil, fmt.Errorf("no releases published yet for %s/%s", RepoOwner, RepoName)
 	}
-	rel := list[0]
+	rel := newestReleaseByTag(list)
 	if shouldPreferRunningRelease(rel.TagName, Version) {
 		if current, err := d.getReleaseByTag(Version); err == nil {
 			return current, nil
 		}
 	}
 	return &rel, nil
+}
+
+func newestReleaseByTag(list []Release) Release {
+	best := list[0]
+	for _, rel := range list[1:] {
+		if compareReleaseTags(rel.TagName, best.TagName) > 0 {
+			best = rel
+		}
+	}
+	return best
 }
 
 func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {
