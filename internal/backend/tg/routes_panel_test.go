@@ -249,13 +249,19 @@ func TestRouteSnapshotText_IncludesStableSummary(t *testing.T) {
 		Tunnels: []wire.TunnelMeta{{ID: "awg1", Name: "amnezia", Iface: "nwg1"}},
 		Counts:  map[string]wire.TunnelCounts{"awg1": {DNS: 2, Static: 1, HRNeo: 2}},
 		Other:   wire.TunnelCounts{DNS: 1},
-		Rules:   []wire.RouteRuleSummary{{ID: "r1", Name: "YouTube", Kind: "dns"}},
+		Rules: []wire.RouteRuleSummary{
+			{ID: "r1", Name: "YouTube", Kind: "dns", Enabled: true},
+			{ID: "ndms:old", Name: "Old NDMS", Kind: "dns", Backend: "ndms", Enabled: false},
+		},
 	}
 	text := RouteSnapshotText("testkeen", snap)
-	for _, want := range []string{"Снапшот маршрутов", "testkeen", "HR-Neo: установлен и работает", "правил всего: 1", "amnezia"} {
+	for _, want := range []string{"Снапшот маршрутов", "testkeen", "HR-Neo: установлен и работает", "правил активных: 1", "выключено: 1", "amnezia"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "правил всего: 2") {
+		t.Errorf("disabled rules must not look active in summary:\n%s", text)
 	}
 	if strings.Contains(text, "installed/running") {
 		t.Errorf("technical HR-Neo state should not leak:\n%s", text)

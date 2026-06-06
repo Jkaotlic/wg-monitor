@@ -125,7 +125,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		if !r.Enabled {
 			continue
 		}
-		isHR := r.Backend == "hydraroute"
+		isHR := strings.EqualFold(r.Backend, "hydraroute")
 		hr := 0
 		if isHR {
 			hr = 1
@@ -137,7 +137,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 			// we want here is "if THIS iface dies, how many rules are
 			// initially affected?", which is the primary route's count. A
 			// follow-up could track failover separately.
-			bump(r.Routes[0].Interface, 1, hr, 0)
+			bump(firstNonEmptyTunnel(r.Routes[0].Interface, r.Routes[0].TunnelID), 1, hr, 0)
 			continue
 		}
 		// Fall-through HR-Neo rule → follows global policy → default tunnel.
@@ -260,7 +260,7 @@ func pingCheckDisabled(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel) bool {
 func firstNonEmptyTunnel(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
-			return v
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

@@ -44,8 +44,11 @@ var targetsDirect = []connectivityTarget{
 // HR-Neo route, falling back to defaultRoute=true when no explicit route
 // matches. It also does a cdn-cgi/trace lookup to surface the egress IP.
 func CheckViaTunnel(ctx context.Context, c *awgmgr.Client) (status, output string) {
-	iface, ifaceLabel := pickConnectivityTunnelIface(ctx, c, targetsViaTunnel)
+	iface, ifaceLabel, pickErr := pickConnectivityTunnelIfaceDetailed(ctx, c, targetsViaTunnel)
 	if iface == "" {
+		if pickErr != "" {
+			return "err", pickErr
+		}
 		return "err", "не нашёл подходящий HR-Neo/defaultRoute туннель в awg-manager — нечего проверять"
 	}
 	httpc := ifaceBoundClient(iface, 6*time.Second)
@@ -168,14 +171,19 @@ func fetchExitIP(ctx context.Context, httpc *http.Client, timeout time.Duration)
 // authoritative: when a target domain is explicitly routed through nwg2, we
 // must test nwg2 even if another tunnel is marked defaultRoute=true.
 func pickConnectivityTunnelIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget) (string, string) {
+	iface, label, _ := pickConnectivityTunnelIfaceDetailed(ctx, c, targets)
+	return iface, label
+}
+
+func pickConnectivityTunnelIfaceDetailed(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget) (string, string, string) {
 	if c == nil {
-		return "", ""
+		return "", "", ""
 	}
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	ta, err := c.TunnelsAll(cctx)
 	if err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	labels := map[string]string{}
 	defaultIface := ""
@@ -188,13 +196,15 @@ func pickConnectivityTunnelIface(ctx context.Context, c *awgmgr.Client, targets 
 			defaultIface = t.InterfaceName
 		}
 	}
-	if iface := pickHydraRouteIface(ctx, c, targets, labels); iface != "" {
-		return iface, nonEmptyString(labels[iface], iface)
+	if iface, blockReason := pickHydraRouteIface(ctx, c, targets, labels); iface != "" {
+		return iface, nonEmptyString(labels[iface], iface), ""
+	} else if blockReason != "" {
+		return "", "", blockReason
 	}
 	if defaultIface != "" {
-		return defaultIface, nonEmptyString(labels[defaultIface], defaultIface)
+		return defaultIface, nonEmptyString(labels[defaultIface], defaultIface), ""
 	}
-	return "", ""
+	return "", "", ""
 }
 
 func connectivityTunnelUsable(t awgmgr.Tunnel) bool {
@@ -211,15 +221,15 @@ func pickDefaultTunnelIface(ctx context.Context, c *awgmgr.Client) (string, stri
 	return pickConnectivityTunnelIface(ctx, c, nil)
 }
 
-func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget, knownIfaces map[string]string) string {
+func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget, knownIfaces map[string]string) (string, string) {
 	if len(targets) == 0 {
-		return ""
+		return "", ""
 	}
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	routes, err := c.ListDNSRoutes(cctx)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	for _, target := range targets {
 		host := connectivityTargetHost(target.URL)
@@ -227,22 +237,30 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 			continue
 		}
 		for _, route := range routes {
-			if route.Backend != "hydraroute" || !route.Enabled || len(route.Routes) == 0 {
+			if !strings.EqualFold(route.Backend, "hydraroute") || !route.Enabled || len(route.Routes) == 0 {
 				continue
 			}
 			if !hydraRouteMatchesHost(route, host) {
 				continue
 			}
-			iface := strings.TrimSpace(route.Routes[0].Interface)
-			if iface == "" {
-				iface = strings.TrimSpace(route.Routes[0].TunnelID)
-			}
+			iface := firstNonEmptyConnectivityRoute(route.Routes[0].Interface, route.Routes[0].TunnelID)
 			if iface == "" {
 				continue
 			}
 			if knownIfaces[iface] != "" {
-				return iface
+				return iface, ""
 			}
+			routeName := nonEmptyString(route.Name, route.ID)
+			return "", fmt.Sprintf("HR-Neo правило %q для %s привязано к %s, но этот туннель сейчас не запущен/не пригоден; fallback на другой туннель отключён, чтобы не показать ложный OK", routeName, target.Name, iface)
+		}
+	}
+	return "", ""
+}
+
+func firstNonEmptyConnectivityRoute(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
 		}
 	}
 	return ""

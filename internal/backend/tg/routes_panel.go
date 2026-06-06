@@ -178,7 +178,12 @@ func RouteSnapshotText(nickname string, snap wire.RouteSnapshot) string {
 	}
 	fmt.Fprintf(&b, "\nСводка:\n")
 	fmt.Fprintf(&b, "  • HR-Neo: %s\n", humanHRState(hr))
-	fmt.Fprintf(&b, "  • правил всего: %d\n", len(snap.Rules))
+	activeRules, disabledRules := routeRuleActivityCounts(snap.Rules)
+	if disabledRules > 0 {
+		fmt.Fprintf(&b, "  • правил активных: %d (выключено: %d)\n", activeRules, disabledRules)
+	} else {
+		fmt.Fprintf(&b, "  • правил активных: %d\n", activeRules)
+	}
 	fmt.Fprintf(&b, "  • туннелей всего: %d\n", len(snap.Tunnels))
 	totalDNS, totalStatic, totalHR := snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo
 	for _, c := range snap.Counts {
@@ -196,6 +201,17 @@ func RouteSnapshotText(nickname string, snap wire.RouteSnapshot) string {
 		fmt.Fprintf(&b, "  • WAN/system: dns=%d static=%d hr=%d\n", snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo)
 	}
 	return b.String()
+}
+
+func routeRuleActivityCounts(rules []wire.RouteRuleSummary) (active, disabled int) {
+	for _, rule := range rules {
+		if rule.Enabled {
+			active++
+		} else {
+			disabled++
+		}
+	}
+	return active, disabled
 }
 
 func humanHRState(state string) string {

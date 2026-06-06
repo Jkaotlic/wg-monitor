@@ -105,6 +105,35 @@ func TestTallyRouteCounts_DoesNotCreditFallThroughToStartingDefaultTunnel(t *tes
 	}
 }
 
+func TestTallyRouteCounts_ExplicitRouteUsesTunnelIDWhenInterfaceMissing(t *testing.T) {
+	tunnels := []awgmgr.Tunnel{
+		{ID: "awg10", InterfaceName: "nwg1", DefaultRoute: true, Enabled: true, Status: "starting"},
+		{ID: "awg11", InterfaceName: "nwg5", DefaultRoute: true, Enabled: true, Status: "running"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dns-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"hr:YouTube","routes":[{"interface":"","tunnelId":"nwg1"}],"backend":"hydraroute","hrPolicyName":"HydraRoute"}
+			]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	got := tallyRouteCounts(context.Background(), c, tunnels)
+	if c := got["nwg1"]; c.DNS != 1 || c.DNSHR != 1 {
+		t.Fatalf("explicit HR route should be credited by tunnelId fallback: %+v", c)
+	}
+	if c := got["nwg5"]; c.DNS != 0 || c.DNSHR != 0 {
+		t.Fatalf("explicit HR route must not be moved to running fallback tunnel: %+v", c)
+	}
+}
+
 func TestTallyRouteCounts_ListError_ReturnsNil(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(500)
