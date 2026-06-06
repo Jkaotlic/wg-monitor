@@ -144,7 +144,7 @@ func legacyAWGDeleteFallbackAllowed(t *awgmgr.Tunnel) bool {
 	if t == nil {
 		return false
 	}
-	status := strings.ToLower(strings.TrimSpace(t.Status))
+	status := tunnelRuntimeState(t)
 	iface := strings.ToLower(strings.TrimSpace(t.InterfaceName))
 	backend := strings.ToLower(strings.TrimSpace(t.Backend))
 	return legacyAWGTunnelID(t.ID) &&
@@ -152,6 +152,16 @@ func legacyAWGDeleteFallbackAllowed(t *awgmgr.Tunnel) bool {
 		(status == "disabled" || status == "stopped") &&
 		strings.HasPrefix(iface, "opkgtun") &&
 		backend != "nativewg"
+}
+
+func tunnelRuntimeState(t *awgmgr.Tunnel) string {
+	if t == nil {
+		return ""
+	}
+	if status := strings.ToLower(strings.TrimSpace(t.Status)); status != "" {
+		return status
+	}
+	return strings.ToLower(strings.TrimSpace(t.State))
 }
 
 func forgetLegacyAWGTunnel(ctx context.Context, exec ExecFunc, tunnelID string) error {
@@ -354,7 +364,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "tunnel_delete: tunnel_id missing in args", payload
 		}
 		if existing, err := getTunnel(ctx, r.AwgClient, tunnelID); err == nil {
-			if strings.EqualFold(strings.TrimSpace(existing.Status), "running") {
+			if tunnelRuntimeState(existing) == "running" || tunnelRuntimeState(existing) == "connected" {
 				if err := r.AwgClient.StopTunnel(ctx, tunnelID); err != nil {
 					return "err", fmt.Sprintf("stop tunnel %s before delete: %v", tunnelID, err), payload
 				}

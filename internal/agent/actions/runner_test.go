@@ -354,7 +354,7 @@ func TestRunner_TunnelDelete_ForgetsLegacyDisabledTunnel(t *testing.T) {
 		}
 		getCalls++
 		if getCalls < 3 {
-			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","status":"disabled","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10"}}`))
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"old","state":"disabled","enabled":false,"defaultRoute":false,"interfaceName":"opkgtun10","backend":"kernel"}}`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

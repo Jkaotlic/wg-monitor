@@ -15,6 +15,7 @@ type Tunnel struct {
 	Name                 string         `json:"name"`
 	Type                 string         `json:"type"`
 	Status               string         `json:"status"`
+	State                string         `json:"state"`
 	Enabled              bool           `json:"enabled"`
 	DefaultRoute         bool           `json:"defaultRoute"`
 	ResolvedISPInterface string         `json:"resolvedIspInterface"`
