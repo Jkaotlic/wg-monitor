@@ -567,6 +567,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "route_templates":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		out, err := RouteTemplatesJSON(ctx, r.AwgClient)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "route_add":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -657,6 +666,7 @@ func routeAddRequestFromArgs(args map[string]any) wire.RouteAddRequest {
 	req.Name, _ = args["name"].(string)
 	req.TunnelID, _ = args["tunnel_id"].(string)
 	req.UseHRNeo, _ = args["use_hr_neo"].(bool)
+	req.TemplateID, _ = args["template_id"].(string)
 	req.DraftHash, _ = args["draft_hash"].(string)
 	req.Targets = stringSliceArg(args["targets"])
 	return req

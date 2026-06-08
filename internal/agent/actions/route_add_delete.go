@@ -31,6 +31,7 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 	if err != nil {
 		return "", err
 	}
+	req = plan.Request
 	if req.DraftHash != "" && req.DraftHash != plan.Hash {
 		return "", fmt.Errorf("route_add: preview changed, refresh and try again")
 	}
@@ -76,6 +77,44 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 	}
 	res := wire.RouteApplyResult{Action: "add", Kind: req.Kind, RouteID: routeID, RouteName: req.Name, HRNeoRestarted: hrRestarted}
 	b, err := json.Marshal(res)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func RouteTemplatesJSON(ctx context.Context, c *awgmgr.Client) (string, error) {
+	if c == nil {
+		return "", fmt.Errorf("route_templates: awg-manager client is required")
+	}
+	presets, err := c.Presets(ctx)
+	if err != nil {
+		return "", fmt.Errorf("route_templates: presets: %w", err)
+	}
+	templates := wire.RouteTemplates{Templates: make([]wire.RouteTemplate, 0, len(presets))}
+	for _, preset := range presets {
+		id := strings.TrimSpace(preset.ID)
+		if id == "" {
+			continue
+		}
+		dns := cleanRouteTargets(preset.Engines.DNS.Domains)
+		hr := cleanRouteTargets(preset.Engines.HydraRoute.GeoTags)
+		if len(dns) == 0 && len(hr) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(preset.Name)
+		if name == "" {
+			name = id
+		}
+		templates.Templates = append(templates.Templates, wire.RouteTemplate{
+			ID:       id,
+			Name:     name,
+			Category: strings.TrimSpace(preset.Category),
+			DNS:      dns,
+			HRNeo:    hr,
+		})
+	}
+	b, err := json.Marshal(templates)
 	if err != nil {
 		return "", err
 	}
@@ -131,7 +170,15 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 	req.Kind = strings.ToLower(strings.TrimSpace(req.Kind))
 	req.Name = strings.TrimSpace(req.Name)
 	req.TunnelID = strings.TrimSpace(req.TunnelID)
+	req.TemplateID = strings.TrimSpace(req.TemplateID)
 	req.Targets = cleanRouteTargets(req.Targets)
+	if req.TemplateID != "" {
+		var err error
+		req, err = materializeRouteTemplate(ctx, c, req)
+		if err != nil {
+			return wire.RouteAddPlan{}, err
+		}
+	}
 	if req.Kind != "dns" && req.Kind != "static" {
 		return wire.RouteAddPlan{}, fmt.Errorf("route_add_plan: kind must be dns or static")
 	}
@@ -179,6 +226,42 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 	plan := wire.RouteAddPlan{Request: req, Route: route, Overlaps: overlaps, CanApply: canApply}
 	plan.Hash = routeHash(plan.Route)
 	return plan, nil
+}
+
+func materializeRouteTemplate(ctx context.Context, c *awgmgr.Client, req wire.RouteAddRequest) (wire.RouteAddRequest, error) {
+	if c == nil {
+		return req, fmt.Errorf("route_add_plan: awg-manager client is required for template %q", req.TemplateID)
+	}
+	presets, err := c.Presets(ctx)
+	if err != nil {
+		return req, fmt.Errorf("route_add_plan: presets: %w", err)
+	}
+	var preset *awgmgr.Preset
+	for i := range presets {
+		if strings.EqualFold(strings.TrimSpace(presets[i].ID), req.TemplateID) {
+			preset = &presets[i]
+			break
+		}
+	}
+	if preset == nil {
+		return req, fmt.Errorf("route_add_plan: template %q not found", req.TemplateID)
+	}
+	if req.Kind == "" {
+		req.Kind = "dns"
+	}
+	if req.Name == "" {
+		req.Name = strings.TrimSpace(preset.Name)
+		if req.Name == "" {
+			req.Name = preset.ID
+		}
+	}
+	targets := append([]string{}, req.Targets...)
+	targets = append(targets, preset.Engines.DNS.Domains...)
+	if req.UseHRNeo {
+		targets = append(targets, preset.Engines.HydraRoute.GeoTags...)
+	}
+	req.Targets = cleanRouteTargets(targets)
+	return req, nil
 }
 
 func buildRouteDeletePlan(ctx context.Context, c *awgmgr.Client, req wire.RouteDeleteRequest) (wire.RouteDeletePlan, error) {

@@ -312,3 +312,44 @@ func TestRouteStatus_DoesNotCreditHRNeoDirectProviderPolicyToDefaultTunnel(t *te
 		t.Fatalf("direct provider policy should stay in Other/policy bucket, got %+v", snap.Other)
 	}
 }
+
+func TestRouteStatus_CreditsHRNeoPolicyInterfaceToNamedTunnel(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"t1","name":"first-default","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true},
+			{"id":"t2","name":"actual-policy","interfaceName":"nwg5","ndmsName":"Wireguard5","enabled":true,"defaultRoute":true}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:YOUTUBE","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute","hrPolicyInterfaces":["Wireguard5"]}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteStatus(context.Background(), awgmgr.New(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(out), &snap); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if snap.Counts["t1"].DNS != 0 || snap.Counts["t1"].HRNeo != 0 {
+		t.Fatalf("first default route must not receive policy-interface rule: %+v", snap.Counts["t1"])
+	}
+	if snap.Counts["t2"].DNS != 1 || snap.Counts["t2"].HRNeo != 1 {
+		t.Fatalf("policy-interface rule should be credited to t2: %+v", snap.Counts["t2"])
+	}
+}

@@ -18,17 +18,18 @@ type DNSRouteEntry struct {
 // All fields are preserved verbatim on update (awg-manager treats update
 // as full-replace) — never drop unknown fields.
 type DNSRoute struct {
-	ID            string          `json:"id"`
-	Name          string          `json:"name"`
-	Domains       []string        `json:"domains"`
-	ManualDomains []string        `json:"manualDomains"`
-	Routes        []DNSRouteEntry `json:"routes"`
-	Enabled       bool            `json:"enabled"`
-	CreatedAt     string          `json:"createdAt"`
-	UpdatedAt     string          `json:"updatedAt"`
-	Backend       string          `json:"backend"` // "hydraroute" | "ndms" — engine, not tunnel
-	HRRouteMode   string          `json:"hrRouteMode,omitempty"`
-	HRPolicyName  string          `json:"hrPolicyName,omitempty"`
+	ID                 string          `json:"id"`
+	Name               string          `json:"name"`
+	Domains            []string        `json:"domains"`
+	ManualDomains      []string        `json:"manualDomains"`
+	Routes             []DNSRouteEntry `json:"routes"`
+	Enabled            bool            `json:"enabled"`
+	CreatedAt          string          `json:"createdAt"`
+	UpdatedAt          string          `json:"updatedAt"`
+	Backend            string          `json:"backend"` // "hydraroute" | "ndms" — engine, not tunnel
+	HRRouteMode        string          `json:"hrRouteMode,omitempty"`
+	HRPolicyName       string          `json:"hrPolicyName,omitempty"`
+	HRPolicyInterfaces []string        `json:"hrPolicyInterfaces,omitempty"`
 }
 
 func (r *DNSRoute) UnmarshalJSON(data []byte) error {
@@ -85,4 +86,28 @@ type RoutingTunnel struct {
 	Type      string `json:"type"`   // "managed" | "system" | "wan"
 	Status    string `json:"status"` // "running" | "up" | "down" | …
 	Available bool   `json:"available"`
+}
+
+type PresetsListResponse struct {
+	Presets []Preset `json:"presets"`
+}
+
+type Preset struct {
+	ID       string        `json:"id"`
+	Name     string        `json:"name"`
+	Category string        `json:"category"`
+	Engines  PresetEngines `json:"engines"`
+}
+
+type PresetEngines struct {
+	DNS        PresetDNSEngine        `json:"dns"`
+	HydraRoute PresetHydraRouteEngine `json:"hydraroute"`
+}
+
+type PresetDNSEngine struct {
+	Domains []string `json:"domains"`
+}
+
+type PresetHydraRouteEngine struct {
+	GeoTags []string `json:"geoTags"`
 }

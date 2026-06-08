@@ -65,6 +65,7 @@ type enqueueCall struct {
 	tunnel  string
 	backend string
 	force   bool
+	args    map[string]any
 }
 
 type enqueueRefCall struct {
@@ -86,6 +87,7 @@ func (f *fakeEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 	force, _ := cmd.Args["force_legacy_cleanup"].(bool)
 	f.calls = append(f.calls, enqueueCall{
 		userID: userID, cmdID: cmd.ID, action: cmd.Action, check: check, ndms: ndms, tunnel: tunnel, backend: backend, force: force,
+		args: cmd.Args,
 	})
 	return nil
 }

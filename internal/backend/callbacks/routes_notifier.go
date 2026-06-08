@@ -43,6 +43,8 @@ func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpk
 		return n.renderTunnelsStatus(ctx, ref, res, user)
 	case "route_rebind":
 		return n.renderRebind(ctx, ref, res, user)
+	case "route_templates":
+		return n.renderTemplates(ctx, ref, res, user)
 	case "route_add_plan":
 		return n.renderAddPlan(ctx, ref, res, user)
 	case "route_add", "route_delete":
@@ -167,6 +169,104 @@ func routeOtherRebindName(rb wire.RouteRebindResult) string {
 	default:
 		return "WAN/system"
 	}
+}
+
+func (n *RoutesPanelNotifier) renderTemplates(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
+	if res.Status != "ok" {
+		return n.renderRouteError(ctx, ref, user, "Route templates failed", res.Output)
+	}
+	var catalog wire.RouteTemplates
+	if err := json.Unmarshal([]byte(res.Output), &catalog); err != nil {
+		return fmt.Errorf("decode route templates: %w", err)
+	}
+	draftToken := tokenFromCommandID(res.ID)
+	if n.Store == nil || draftToken == "" {
+		return n.renderStaleTemplates(ctx, ref, user, "Превью устарело: начни добавление маршрута заново.")
+	}
+	draft, ok := n.Store.GetAddDraft(user.ID, ref.ThreadID, user.ID, draftToken)
+	if !ok || draft.TunnelID == "" {
+		return n.renderStaleTemplates(ctx, ref, user, "Черновик маршрута устарел: начни добавление заново.")
+	}
+	rows := make([][]tg.InlineKeyboardButton, 0, len(catalog.Templates)+1)
+	lines := []string{"📚 AWG Manager templates", "", "Выбери шаблон, дальше покажу обычное preview перед применением."}
+	shown := 0
+	for _, tpl := range catalog.Templates {
+		targets := routeTemplateTargetsForDraft(tpl, draft)
+		if len(targets) == 0 {
+			continue
+		}
+		token := n.Store.PutTemplateToken(RouteTemplateToken{
+			UserID: user.ID, ActorTGID: draft.ActorTGID, ThreadID: ref.ThreadID, RouterID: user.ID,
+			DraftToken: draftToken, TemplateID: tpl.ID, TemplateName: routeTemplateDisplayName(tpl),
+		})
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         routeTemplateButtonText(tpl, len(targets)),
+			CallbackData: fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:%s", user.ID, draftToken, token),
+		}})
+		lines = append(lines, fmt.Sprintf("• %s — %d targets", routeTemplateDisplayName(tpl), len(targets)))
+		shown++
+		if shown >= 20 {
+			lines = append(lines, "• ...")
+			break
+		}
+	}
+	if shown == 0 {
+		return n.renderStaleTemplates(ctx, ref, user, "В AWG Manager нет подходящих шаблонов для выбранного типа маршрута.")
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "↩ Отмена",
+		CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draftToken),
+	}})
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, strings.Join(lines, "\n"), "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
+}
+
+func (n *RoutesPanelNotifier) renderStaleTemplates(ctx context.Context, ref cmdpkg.MessageRef, user *db.User, text string) error {
+	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+	}}}
+	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+func routeTemplateTargetsForDraft(tpl wire.RouteTemplate, draft RouteAddDraft) []string {
+	targets := append([]string{}, tpl.DNS...)
+	if draft.UseHRNeo {
+		targets = append(targets, tpl.HRNeo...)
+	}
+	return cleanTemplateTargetList(targets)
+}
+
+func cleanTemplateTargetList(values []string) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
+func routeTemplateButtonText(tpl wire.RouteTemplate, targets int) string {
+	name := routeTemplateDisplayName(tpl)
+	if targets > 0 {
+		name = fmt.Sprintf("%s (%d)", name, targets)
+	}
+	runes := []rune(name)
+	if len(runes) <= 64 {
+		return name
+	}
+	return string(runes[:61]) + "..."
+}
+
+func routeTemplateDisplayName(tpl wire.RouteTemplate) string {
+	if strings.TrimSpace(tpl.Name) != "" {
+		return strings.TrimSpace(tpl.Name)
+	}
+	return strings.TrimSpace(tpl.ID)
 }
 
 func (n *RoutesPanelNotifier) renderAddPlan(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {

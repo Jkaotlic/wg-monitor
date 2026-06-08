@@ -163,6 +163,43 @@ func TestRouteWizardStoreRouteTokens(t *testing.T) {
 	}
 }
 
+func TestRouteWizardStoreTemplateTokensAreActorScoped(t *testing.T) {
+	threadID := int64(77)
+	store := NewRouteWizardStore(time.Minute)
+	store.TokenFunc = fixedTokens("tpl1")
+	token := store.PutTemplateToken(RouteTemplateToken{
+		UserID:       42,
+		ActorTGID:    111,
+		ThreadID:     &threadID,
+		RouterID:     9,
+		DraftToken:   "draft1",
+		TemplateID:   "youtube",
+		TemplateName: "YouTube",
+	})
+	if token != "tpl1" {
+		t.Fatalf("token = %q, want tpl1", token)
+	}
+	if _, ok := store.GetTemplateTokenForActor(42, 222, &threadID, 9, "draft1", "tpl1"); ok {
+		t.Fatal("wrong actor should not resolve template token")
+	}
+	got, ok := store.GetTemplateTokenForActor(42, 111, &threadID, 9, "draft1", "tpl1")
+	if !ok {
+		t.Fatal("expected template token")
+	}
+	if got.TemplateID != "youtube" || got.TemplateName != "YouTube" {
+		t.Fatalf("bad template token: %+v", got)
+	}
+}
+
+func TestParseRouteTemplateReply(t *testing.T) {
+	if got := parseRouteTemplateReply("template:youtube"); got != "youtube" {
+		t.Fatalf("template parse = %q, want youtube", got)
+	}
+	if got := parseRouteTemplateReply("media\nexample.com"); got != "" {
+		t.Fatalf("multi-line manual route must not parse as template: %q", got)
+	}
+}
+
 func fixedTokens(tokens ...string) func() string {
 	i := 0
 	return func() string {

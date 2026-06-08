@@ -124,6 +124,15 @@ func (c *Client) RoutingRefresh(ctx context.Context) error {
 	return c.post(ctx, "/api/routing/refresh", nil, nil)
 }
 
+// Presets returns the unified AWG Manager presets catalogue from /api/presets.
+func (c *Client) Presets(ctx context.Context) ([]Preset, error) {
+	var env PresetsListResponse
+	if err := c.get(ctx, "/api/presets", &env); err != nil {
+		return nil, err
+	}
+	return env.Presets, nil
+}
+
 // HydraRouteControl posts {"action":"<action>"} to /api/system/hydraroute-control.
 // action ∈ {"start","stop","restart"}. Called after rebinding any rule with
 // backend=="hydraroute" so the daemon reloads.

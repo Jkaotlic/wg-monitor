@@ -8,16 +8,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"golang.org/x/crypto/curve25519"
+	"golang.org/x/crypto/ssh"
 )
 
 type Config struct {
@@ -32,6 +35,10 @@ type Config struct {
 	ServerPubPath string   `yaml:"server_public_key_path"`
 	PSKPath       string   `yaml:"preshared_key_path"`
 	DNS           []string `yaml:"dns"`
+	SSHHost       string   `yaml:"ssh_host"`
+	SSHPort       int      `yaml:"ssh_port"`
+	SSHUser       string   `yaml:"ssh_user"`
+	SSHPassword   string   `yaml:"ssh_password"`
 }
 
 type Instance struct {
@@ -47,6 +54,10 @@ type Instance struct {
 	ServerPubPath string   `json:"server_public_key_path,omitempty"`
 	PSKPath       string   `json:"preshared_key_path,omitempty"`
 	DNS           []string `json:"dns,omitempty"`
+	SSHHost       string   `json:"ssh_host,omitempty"`
+	SSHPort       int      `json:"ssh_port,omitempty"`
+	SSHUser       string   `json:"ssh_user,omitempty"`
+	SSHPassword   string   `json:"ssh_password,omitempty"`
 }
 
 type Store struct {
@@ -80,6 +91,15 @@ func (c Config) withDefaults() Config {
 	}
 	if len(c.DNS) == 0 {
 		c.DNS = []string{"1.1.1.1"}
+	}
+	c.SSHHost = strings.TrimSpace(c.SSHHost)
+	if c.SSHHost != "" {
+		if c.SSHPort == 0 {
+			c.SSHPort = 22
+		}
+		if strings.TrimSpace(c.SSHUser) == "" {
+			c.SSHUser = "root"
+		}
 	}
 	return c
 }
@@ -121,6 +141,18 @@ func (c Config) ProviderConfig(inst Instance) Config {
 	if len(inst.DNS) > 0 {
 		out.DNS = append([]string{}, inst.DNS...)
 	}
+	if inst.SSHHost != "" {
+		out.SSHHost = inst.SSHHost
+	}
+	if inst.SSHPort != 0 {
+		out.SSHPort = inst.SSHPort
+	}
+	if inst.SSHUser != "" {
+		out.SSHUser = inst.SSHUser
+	}
+	if inst.SSHPassword != "" {
+		out.SSHPassword = inst.SSHPassword
+	}
 	return out.withDefaults()
 }
 
@@ -142,6 +174,10 @@ func (c Config) LegacyInstance() (Instance, bool) {
 		ServerPubPath: cfg.ServerPubPath,
 		PSKPath:       cfg.PSKPath,
 		DNS:           append([]string{}, cfg.DNS...),
+		SSHHost:       cfg.SSHHost,
+		SSHPort:       cfg.SSHPort,
+		SSHUser:       cfg.SSHUser,
+		SSHPassword:   cfg.SSHPassword,
 	}, true
 }
 
@@ -235,6 +271,23 @@ func (s *Store) Upsert(inst Instance) error {
 	}
 	for i, dns := range inst.DNS {
 		inst.DNS[i] = strings.TrimSpace(dns)
+	}
+	inst.SSHHost = strings.TrimSpace(inst.SSHHost)
+	inst.SSHUser = strings.TrimSpace(inst.SSHUser)
+	inst.SSHPassword = strings.TrimSpace(inst.SSHPassword)
+	if inst.SSHHost != "" {
+		if inst.SSHPort == 0 {
+			inst.SSHPort = 22
+		}
+		if inst.SSHPort < 1 || inst.SSHPort > 65535 {
+			return errors.New("ssh_port must be 1..65535")
+		}
+		if inst.SSHUser == "" {
+			inst.SSHUser = "root"
+		}
+		if inst.SSHPassword == "" {
+			return errors.New("ssh_password is required when ssh_host is set")
+		}
 	}
 	s.normalize()
 	for i := range s.Instances {
@@ -341,6 +394,17 @@ func (s *Store) normalize() {
 		if inst.EndpointHost == "" || inst.EndpointPort <= 0 {
 			continue
 		}
+		inst.SSHHost = strings.TrimSpace(inst.SSHHost)
+		inst.SSHUser = strings.TrimSpace(inst.SSHUser)
+		inst.SSHPassword = strings.TrimSpace(inst.SSHPassword)
+		if inst.SSHHost != "" {
+			if inst.SSHPort == 0 {
+				inst.SSHPort = 22
+			}
+			if inst.SSHUser == "" {
+				inst.SSHUser = "root"
+			}
+		}
 		if inst.ID == s.ActiveID && inst.Enabled {
 			activeSeen = true
 		}
@@ -394,6 +458,18 @@ func mergeInstance(old, next Instance) Instance {
 	if len(next.DNS) == 0 {
 		next.DNS = old.DNS
 	}
+	if next.SSHHost == "" {
+		next.SSHHost = old.SSHHost
+	}
+	if next.SSHPort == 0 {
+		next.SSHPort = old.SSHPort
+	}
+	if next.SSHUser == "" {
+		next.SSHUser = old.SSHUser
+	}
+	if next.SSHPassword == "" {
+		next.SSHPassword = old.SSHPassword
+	}
 	return next
 }
 
@@ -424,6 +500,86 @@ func (r DockerRunner) Run(ctx context.Context, args []string, stdin []byte) ([]b
 	return out, nil
 }
 
+type RemoteDockerRunner struct {
+	Host      string
+	Port      int
+	User      string
+	Password  string
+	Container string
+}
+
+func (r RemoteDockerRunner) Run(ctx context.Context, args []string, stdin []byte) ([]byte, error) {
+	port := r.Port
+	if port == 0 {
+		port = 22
+	}
+	user := strings.TrimSpace(r.User)
+	if user == "" {
+		user = "root"
+	}
+	addr := net.JoinHostPort(strings.TrimSpace(r.Host), strconv.Itoa(port))
+	rawConn, err := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("ssh dial %s: %w", addr, err)
+	}
+	cfg := &ssh.ClientConfig{
+		User:            user,
+		Auth:            []ssh.AuthMethod{ssh.Password(r.Password)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         15 * time.Second,
+	}
+	conn, chans, reqs, err := ssh.NewClientConn(rawConn, addr, cfg)
+	if err != nil {
+		_ = rawConn.Close()
+		return nil, fmt.Errorf("ssh auth %s: %w", addr, err)
+	}
+	client := ssh.NewClient(conn, chans, reqs)
+	defer client.Close()
+	session, err := client.NewSession()
+	if err != nil {
+		return nil, fmt.Errorf("ssh session %s: %w", addr, err)
+	}
+	defer session.Close()
+	if stdin != nil {
+		session.Stdin = bytes.NewReader(stdin)
+	}
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+	cmd := "docker exec -i " + shellQuote(r.Container) + " " + shellJoin(args)
+	if err := session.Run(cmd); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return stdout.Bytes(), fmt.Errorf("remote docker %s: %s", strings.Join(args, " "), msg)
+	}
+	return stdout.Bytes(), nil
+}
+
+func runnerForConfig(cfg Config) Runner {
+	cfg = cfg.withDefaults()
+	if cfg.SSHHost != "" && cfg.SSHPassword != "" {
+		return RemoteDockerRunner{
+			Host: cfg.SSHHost, Port: cfg.SSHPort, User: cfg.SSHUser,
+			Password: cfg.SSHPassword, Container: cfg.Container,
+		}
+	}
+	return DockerRunner{Container: cfg.Container}
+}
+
+func shellJoin(args []string) string {
+	parts := make([]string, 0, len(args))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
 type IssuedConfig struct {
 	Name       string
 	Address    string
@@ -438,7 +594,7 @@ func Issue(ctx context.Context, cfg Config, name string) (IssuedConfig, error) {
 	if !cfg.Ready() {
 		return IssuedConfig{}, errors.New("self-hosted Amnezia is not configured")
 	}
-	return IssueWithRunner(ctx, cfg, DockerRunner{Container: cfg.Container}, name, time.Now())
+	return IssueWithRunner(ctx, cfg, runnerForConfig(cfg), name, time.Now())
 }
 
 func IssueWithRunner(ctx context.Context, cfg Config, runner Runner, name string, now time.Time) (IssuedConfig, error) {

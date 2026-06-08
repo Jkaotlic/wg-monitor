@@ -141,7 +141,7 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 			didChange = true
 		}
 		if !didChange {
-			if isMovableHRNeoFallthrough(r) && srcIsDefaultRoute {
+			if isMovableHRNeoFallthrough(r) && srcIsDefaultRoute && hrNeoPolicyFallthroughMatchesSource(r, srcAliases) {
 				newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
 				didChange = true
 			}
@@ -173,6 +173,18 @@ func isMovableHRNeoFallthrough(r awgmgr.DNSRoute) bool {
 		return false
 	}
 	return !isDirectProviderHRNeoPolicy(r)
+}
+
+func hrNeoPolicyFallthroughMatchesSource(r awgmgr.DNSRoute, srcAliases map[string]bool) bool {
+	if len(r.HRPolicyInterfaces) == 0 {
+		return true
+	}
+	for _, bind := range r.HRPolicyInterfaces {
+		if routeBindMatches(bind, srcAliases) {
+			return true
+		}
+	}
+	return false
 }
 
 func isDirectProviderHRNeoPolicy(r awgmgr.DNSRoute) bool {

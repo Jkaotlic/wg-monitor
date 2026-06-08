@@ -18,6 +18,7 @@ type RouteAddDraft struct {
 	TunnelID     string
 	Targets      []string
 	UseHRNeo     bool
+	TemplateID   string
 	Token        string
 	ConfirmToken string
 	PreviewHash  string
@@ -50,15 +51,31 @@ type RouteToken struct {
 	ExpiresAt   time.Time
 }
 
+// RouteTemplateToken maps short Telegram callback_data tokens to full AWG
+// Manager template IDs. Template IDs are kept out of callback_data because
+// they can be long and are not under backend control.
+type RouteTemplateToken struct {
+	UserID       int64
+	ActorTGID    int64
+	ThreadID     *int64
+	RouterID     int64
+	DraftToken   string
+	TemplateID   string
+	TemplateName string
+	Token        string
+	ExpiresAt    time.Time
+}
+
 type RouteWizardStore struct {
 	TTL       time.Duration
 	Now       func() time.Time
 	TokenFunc func() string
 
-	mu          sync.Mutex
-	addDrafts   map[string]RouteAddDraft
-	delDrafts   map[string]RouteDeleteDraft
-	routeTokens map[string]RouteToken
+	mu             sync.Mutex
+	addDrafts      map[string]RouteAddDraft
+	delDrafts      map[string]RouteDeleteDraft
+	routeTokens    map[string]RouteToken
+	templateTokens map[string]RouteTemplateToken
 }
 
 func NewRouteWizardStore(ttl time.Duration) *RouteWizardStore {
@@ -78,7 +95,16 @@ func (s *RouteWizardStore) PutAddDraft(d RouteAddDraft) RouteAddDraft {
 }
 
 func (s *RouteWizardStore) GetAddDraft(userID int64, threadID *int64, routerID int64, token string) (RouteAddDraft, bool) {
-	return s.GetAddDraftForActor(userID, 0, threadID, routerID, token)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.addDrafts[token]
+	if !ok || !s.addScopeMatchesLocked(d.UserID, d.ThreadID, d.RouterID, userID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
+		if ok && s.expiredLocked(d.ExpiresAt) {
+			delete(s.addDrafts, token)
+		}
+		return RouteAddDraft{}, false
+	}
+	return d, true
 }
 
 func (s *RouteWizardStore) GetAddDraftForActor(userID, actorTGID int64, threadID *int64, routerID int64, token string) (RouteAddDraft, bool) {
@@ -252,6 +278,31 @@ func (s *RouteWizardStore) GetRouteToken(userID int64, threadID *int64, routerID
 	return rt, true
 }
 
+func (s *RouteWizardStore) PutTemplateToken(tt RouteTemplateToken) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	if tt.Token == "" {
+		tt.Token = s.tokenLocked()
+	}
+	tt.ExpiresAt = s.expiresAtLocked()
+	s.templateTokens[tt.Token] = tt
+	return tt.Token
+}
+
+func (s *RouteWizardStore) GetTemplateTokenForActor(userID, actorTGID int64, threadID *int64, routerID int64, draftToken, token string) (RouteTemplateToken, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tt, ok := s.templateTokens[token]
+	if !ok || tt.DraftToken != draftToken || !s.addScopeMatchesActorLocked(tt.UserID, tt.ActorTGID, tt.ThreadID, tt.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(tt.ExpiresAt) {
+		if ok && s.expiredLocked(tt.ExpiresAt) {
+			delete(s.templateTokens, token)
+		}
+		return RouteTemplateToken{}, false
+	}
+	return tt, true
+}
+
 func (s *RouteWizardStore) initLocked() {
 	if s.addDrafts == nil {
 		s.addDrafts = make(map[string]RouteAddDraft)
@@ -261,6 +312,9 @@ func (s *RouteWizardStore) initLocked() {
 	}
 	if s.routeTokens == nil {
 		s.routeTokens = make(map[string]RouteToken)
+	}
+	if s.templateTokens == nil {
+		s.templateTokens = make(map[string]RouteTemplateToken)
 	}
 }
 

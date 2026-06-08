@@ -192,6 +192,43 @@ func TestRoutesPanelNotifier_RouteChangeErrorOffersRecoveryActions(t *testing.T)
 	}
 }
 
+func TestRoutesPanelNotifier_RouteTemplatesRendersTemplateButtons(t *testing.T) {
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	threadID := int64(11)
+	store := NewRouteWizardStore(time.Minute)
+	store.TokenFunc = fixedTokens("tpl1", "tpl2")
+	draft := store.PutAddDraft(RouteAddDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &threadID, RouterID: uid,
+		Kind: "dns", TunnelID: "awg11", UseHRNeo: true,
+	})
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: &RoutesCache{TTL: time.Minute}, DB: d, Store: store}
+	templates := wire.RouteTemplates{Templates: []wire.RouteTemplate{
+		{ID: "youtube", Name: "YouTube", DNS: []string{"youtube.com"}, HRNeo: []string{"geosite:YOUTUBE"}},
+		{ID: "telegram", Name: "Telegram", HRNeo: []string{"geosite:TELEGRAM"}},
+	}}
+	body, _ := json.Marshal(templates)
+
+	ref := cmdpkg.MessageRef{Action: "route_templates", ChatID: 1, MessageID: 7, ThreadID: &threadID}
+	res := wire.CommandResult{ID: "route_templates:" + draft.Token + ":cmd1", Status: "ok", Output: string(body)}
+	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(tgFake.editText, "YouTube") || !strings.Contains(tgFake.editText, "Telegram") {
+		t.Fatalf("expected template names in panel, got %q", tgFake.editText)
+	}
+	cb := firstRouteCallbackWithPrefix(t, tgFake.kb, "routes_tpl_pick:"+itoa(uid)+":_panel_:"+draft.Token+":")
+	args, err := Parse(cb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok, ok := store.GetTemplateTokenForActor(uid, 12345, &threadID, uid, draft.Token, args.RouteTemplateToken)
+	if !ok || tok.TemplateID != "youtube" {
+		t.Fatalf("expected first button token to resolve youtube, got %+v ok=%v", tok, ok)
+	}
+}
+
 func TestRoutesPanelNotifier_ApplyResultOffersSnapshot(t *testing.T) {
 	tgFake := &fakeEditTG{}
 	d, uid := newTestDB(t)
@@ -220,6 +257,22 @@ func TestRoutesPanelNotifier_ApplyResultOffersSnapshot(t *testing.T) {
 			t.Fatalf("route apply result keyboard should include post-route verification %q: %#v", want, tgFake.kb)
 		}
 	}
+}
+
+func firstRouteCallbackWithPrefix(t *testing.T, kb *tg.InlineKeyboardMarkup, prefix string) string {
+	t.Helper()
+	if kb == nil {
+		t.Fatalf("nil keyboard, want callback prefix %q", prefix)
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix) {
+				return btn.CallbackData
+			}
+		}
+	}
+	t.Fatalf("keyboard missing callback prefix %q: %+v", prefix, kb.InlineKeyboard)
+	return ""
 }
 
 func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, prefix string) bool {

@@ -494,6 +494,12 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "routes_add_tunnel":
 		r.handleRoutesAddTunnel(ctx, q, args)
 		return
+	case "routes_tpl_load":
+		r.handleRoutesTemplateLoad(ctx, q, args)
+		return
+	case "routes_tpl_pick":
+		r.handleRoutesTemplatePick(ctx, q, args)
+		return
 	case "routes_add_confirm":
 		r.handleRoutesAddConfirm(ctx, q, args)
 		return
@@ -2179,11 +2185,76 @@ func (r *Router) handleRoutesAddTunnel(ctx context.Context, q *tg.CallbackQuery,
 	}
 	draft.TunnelID = args.RebindDstID
 	r.routeWizard.PutAddDraft(draft)
-	text := "🛣 Добавить маршрут\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — домены или IP\n\nПример:\nmedia\nexample.com\napi.example.com"
+	text := "🛣 Добавить маршрут\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — домены или IP\n\nМожно также выбрать готовый шаблон AWG Manager кнопкой ниже.\n\nПример:\nmedia\nexample.com\napi.example.com"
 	if draft.Kind == "static" {
 		text = "🛣 Добавить static route\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — CIDR/IP цели\n\nПример:\ncorp\n10.10.0.0/16\n192.0.2.7"
 	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", nil)
+	kb := routeAddInputKeyboard(user.ID, draft)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func routeAddInputKeyboard(userID int64, draft RouteAddDraft) tg.InlineKeyboardMarkup {
+	rows := [][]tg.InlineKeyboardButton{}
+	if draft.Kind == "dns" {
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         "📚 AWG Manager templates",
+			CallbackData: fmt.Sprintf("routes_tpl_load:%d:_panel_:%s", userID, draft.Token),
+		}})
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "↩ Отмена",
+		CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", userID, draft.Token),
+	}})
+	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func (r *Router) handleRoutesTemplateLoad(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
+		return
+	}
+	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
+	if !ok || draft.TunnelID == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
+		return
+	}
+	if draft.Kind != "dns" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "templates are available for DNS routes")
+		return
+	}
+	cmd := wire.Command{ID: fmt.Sprintf("route_templates:%s:%s", draft.Token, defaultCmdID()), Action: "route_templates", IssuedAt: time.Now().UTC()}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "route_templates"}
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Loading AWG Manager templates...", "", nil)
+	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Не удалось поставить загрузку шаблонов в очередь: "+err.Error(), "", nil)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesTemplatePick(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
+		return
+	}
+	tpl, ok := r.routeWizard.GetTemplateTokenForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteTemplateToken)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "template expired")
+		return
+	}
+	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
+	if !ok || draft.TunnelID == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
+		return
+	}
+	draft.TemplateID = tpl.TemplateID
+	draft.Name = ""
+	draft.Targets = nil
+	draft = r.routeWizard.PutAddDraft(draft)
+	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Готовлю preview шаблона "+tpl.TemplateName+"...", "", nil)
+	if err := r.enqueueRouteAddPlan(user, q.Message.Chat.ID, q.Message.MessageID, q.Message.MessageThreadID, draft); err != nil {
+		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Не удалось поставить проверку маршрута в очередь: "+err.Error(), "", nil)
+	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
@@ -2195,14 +2266,19 @@ func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, use
 	if !ok || draft.TunnelID == "" {
 		return false
 	}
-	name, targets := parseRouteAddReply(m.Text)
-	if name == "" || len(targets) == 0 {
+	templateID := parseRouteTemplateReply(m.Text)
+	name, targets := "", []string(nil)
+	if templateID == "" {
+		name, targets = parseRouteAddReply(m.Text)
+	}
+	if templateID == "" && (name == "" || len(targets) == 0) {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"Не понял маршрут.\n\nФормат:\n  • первая строка — название\n  • ниже хотя бы одна цель: домен, IP или CIDR", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+			"Не понял маршрут.\n\nФормат:\n  • первая строка — название\n  • ниже хотя бы одна цель: домен, IP или CIDR\n\nДля готового правила выбери шаблон AWG Manager кнопкой в мастере.", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return true
 	}
 	draft.Name = name
 	draft.Targets = targets
+	draft.TemplateID = templateID
 	draft = r.routeWizard.PutAddDraft(draft)
 	if r.cmdSink == nil {
 		return true
@@ -2212,20 +2288,27 @@ func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, use
 	if err != nil {
 		mid = m.MessageID
 	}
+	if err := r.enqueueRouteAddPlan(user, m.Chat.ID, mid, m.MessageThreadID, draft); err != nil {
+		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось поставить проверку маршрута в очередь: "+err.Error(), "", nil)
+	}
+	return true
+}
+
+func (r *Router) enqueueRouteAddPlan(user *db.User, chatID, messageID int64, threadID *int64, draft RouteAddDraft) error {
+	if r.cmdSink == nil {
+		return nil
+	}
 	cmd := wire.Command{
 		ID:       fmt.Sprintf("route_add_plan:%s:%s", draft.Token, defaultCmdID()),
 		Action:   "route_add_plan",
 		IssuedAt: time.Now().UTC(),
 		Args: map[string]any{
 			"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
-			"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo,
+			"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "template_id": draft.TemplateID,
 		},
 	}
-	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось поставить проверку маршрута в очередь: "+err.Error(), "", nil)
-	}
-	return true
+	ref := cmdpkg.MessageRef{ChatID: chatID, MessageID: messageID, ThreadID: threadID, Action: "route_add_plan"}
+	return r.cmdSink.EnqueueWithRef(user.ID, cmd, ref)
 }
 
 func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -2240,7 +2323,7 @@ func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery
 	}
 	cmd := wire.Command{ID: defaultCmdID(), Action: "route_add", IssuedAt: time.Now().UTC(), Args: map[string]any{
 		"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
-		"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "draft_hash": draft.PreviewHash,
+		"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "template_id": draft.TemplateID, "draft_hash": draft.PreviewHash,
 	}}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
@@ -2391,6 +2474,19 @@ func parseRouteAddReply(text string) (string, []string) {
 	name := strings.TrimSpace(lines[0])
 	targets := splitRouteTargets(strings.Join(lines[1:], "\n"))
 	return name, targets
+}
+
+func parseRouteTemplateReply(text string) string {
+	text = strings.TrimSpace(text)
+	if strings.Contains(text, "\n") {
+		return ""
+	}
+	for _, prefix := range []string{"template:", "template=", "шаблон:", "шаблон="} {
+		if v, ok := strings.CutPrefix(strings.ToLower(text), prefix); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func splitRouteTargets(text string) []string {

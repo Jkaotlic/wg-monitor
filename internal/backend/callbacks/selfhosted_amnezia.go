@@ -105,7 +105,7 @@ func (r *Router) handleSelfHostedAmneziaStartAdd(ctx context.Context, q *tg.Call
 		Mode:            "add",
 		ExpiresAt:       time.Now().Add(5 * time.Minute),
 	})
-	text := "➕ Добавить self-hosted Amnezia VPS\n\nОтветь одним сообщением:\n<id> <endpoint_host> <endpoint_port> [label]\n\nПример:\nhome vpn.example.com 47567 Home VPS\n\n/cancel — отмена. Жду 5 минут."
+	text := "➕ Добавить self-hosted Amnezia VPS\n\nОтветь одним сообщением key=value:\nid=home ssh_host=1.2.3.4 ssh_user=root ssh_password=... endpoint_host=vpn.example.com endpoint_port=47567 label=Home-VPS\n\nЕсли backend уже на этом VPS, можно старым коротким форматом:\nhome vpn.example.com 47567 Home VPS\n\n/cancel — отмена. Жду 5 минут."
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "Отмена", CallbackData: fmt.Sprintf("amz_selfhosted_cancel:%d:_panel_", args.UserID)},
 	}}}
@@ -128,7 +128,7 @@ func (r *Router) handleSelfHostedAmneziaStartEdit(ctx context.Context, q *tg.Cal
 		InstanceID:      inst.ID,
 		ExpiresAt:       time.Now().Add(5 * time.Minute),
 	})
-	text := fmt.Sprintf("✏️ Изменить self-hosted VPS %s\n\nОтветь одним сообщением key=value:\nhost=vpn.example.com port=47567 label=Home-VPS dns=1.1.1.1,8.8.8.8\n\nМожно менять отдельные поля: host, port, label, dns, container, interface, config_path, clients_path, server_public_key_path, preshared_key_path.\n\n/cancel — отмена. Жду 5 минут.", inst.ID)
+	text := fmt.Sprintf("✏️ Изменить self-hosted VPS %s\n\nОтветь одним сообщением key=value:\nhost=vpn.example.com port=47567 label=Home-VPS dns=1.1.1.1,8.8.8.8 ssh_host=1.2.3.4 ssh_port=22 ssh_user=root ssh_password=...\n\nМожно менять отдельные поля: host, port, label, dns, ssh_host, ssh_port, ssh_user, ssh_password, container, interface, config_path, clients_path, server_public_key_path, preshared_key_path.\n\n/cancel — отмена. Жду 5 минут.", inst.ID)
 	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 		{Text: "Отмена", CallbackData: fmt.Sprintf("amz_selfhosted_cancel:%d:_panel_", args.UserID)},
 	}}}
@@ -449,8 +449,18 @@ func (r *Router) selfHostedAmneziaStoredInstance(id string) (selfhostedamnezia.I
 
 func parseSelfHostedAddMessage(text string) (selfhostedamnezia.Instance, error) {
 	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) > 0 && strings.Contains(fields[0], "=") {
+		var inst selfhostedamnezia.Instance
+		if err := applySelfHostedKVLine(&inst, text); err != nil {
+			return selfhostedamnezia.Instance{}, err
+		}
+		if strings.TrimSpace(inst.ID) == "" {
+			return selfhostedamnezia.Instance{}, fmt.Errorf("id is required")
+		}
+		return inst, nil
+	}
 	if len(fields) < 3 {
-		return selfhostedamnezia.Instance{}, fmt.Errorf("Формат: <id> <endpoint_host> <endpoint_port> [label]\nПример: home vpn.example.com 47567 Home VPS")
+		return selfhostedamnezia.Instance{}, fmt.Errorf("Формат: id=home ssh_host=1.2.3.4 ssh_user=root ssh_password=... endpoint_host=vpn.example.com endpoint_port=47567 label=Home-VPS\nИли коротко: home vpn.example.com 47567 Home VPS")
 	}
 	port, err := strconv.Atoi(fields[2])
 	if err != nil {
