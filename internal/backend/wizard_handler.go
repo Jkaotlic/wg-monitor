@@ -567,8 +567,12 @@ func writeBackendUpdateRequest(path string, req backendUpdateRequest) error {
 	}
 	body = append(body, '\n')
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+	if err := os.WriteFile(tmp, body, 0o644); err != nil {
 		return fmt.Errorf("backend update queue write: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o644); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("backend update queue chmod: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
