@@ -92,7 +92,7 @@ func TestUpdateDNSRoute_EscapesSpacesAndColonsInID(t *testing.T) {
 	rule := DNSRoute{
 		ID: "hr:CIDR: iplist: Telegram.org", Name: "Telegram",
 		Backend: "hydraroute", HRPolicyName: "HydraRoute",
-		Routes:  []DNSRouteEntry{{Interface: "nwg0", TunnelID: "nwg0"}},
+		Routes: []DNSRouteEntry{{Interface: "nwg0", TunnelID: "nwg0"}},
 	}
 	if err := c.UpdateDNSRoute(context.Background(), rule); err != nil {
 		t.Fatal(err)
@@ -320,6 +320,27 @@ func TestRoutingRefresh_HappyPath(t *testing.T) {
 	}
 	if !called {
 		t.Errorf("/api/routing/refresh not called")
+	}
+}
+
+func TestPresets_AcceptsAWGManagerEnvelope(t *testing.T) {
+	const payload = `{"success":true,"data":{"presets":[
+		{"id":"openai","name":"OpenAI","category":"ai","engines":{"dns":{"domains":["chatgpt.com"]}}}
+	]}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/presets" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).Presets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "openai" || got[0].Engines.DNS.Domains[0] != "chatgpt.com" {
+		t.Fatalf("presets = %+v", got)
 	}
 }
 

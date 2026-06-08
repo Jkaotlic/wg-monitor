@@ -126,11 +126,28 @@ func (c *Client) RoutingRefresh(ctx context.Context) error {
 
 // Presets returns the unified AWG Manager presets catalogue from /api/presets.
 func (c *Client) Presets(ctx context.Context) ([]Preset, error) {
-	var env PresetsListResponse
-	if err := c.get(ctx, "/api/presets", &env); err != nil {
+	var raw json.RawMessage
+	if err := c.get(ctx, "/api/presets", &raw); err != nil {
 		return nil, err
 	}
-	return env.Presets, nil
+	var marker struct {
+		Success *bool `json:"success"`
+	}
+	if err := json.Unmarshal(raw, &marker); err == nil && marker.Success != nil {
+		if !*marker.Success {
+			return nil, fmt.Errorf("awgmgr presets: success=false")
+		}
+		var env Envelope[PresetsListResponse]
+		if err := json.Unmarshal(raw, &env); err != nil {
+			return nil, fmt.Errorf("awgmgr presets: decode envelope: %w", err)
+		}
+		return env.Data.Presets, nil
+	}
+	var direct PresetsListResponse
+	if err := json.Unmarshal(raw, &direct); err != nil {
+		return nil, fmt.Errorf("awgmgr presets: decode: %w", err)
+	}
+	return direct.Presets, nil
 }
 
 // HydraRouteControl posts {"action":"<action>"} to /api/system/hydraroute-control.
