@@ -802,30 +802,34 @@ func TestWizardRepoResolveIPSkipsPrivateResults(t *testing.T) {
 }
 
 func TestReleaseAssetProxyServesAllowlistedAsset(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
-			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, _ = w.Write([]byte("agent-binary"))
-	}))
-	defer upstream.Close()
+	for _, asset := range []string{"wg-monitor-agent-linux-arm64", "wg-monitor-backend-linux-arm64"} {
+		t.Run(asset, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/v0.13.0-rc18/"+asset {
+					t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/octet-stream")
+				_, _ = w.Write([]byte("asset-body"))
+			}))
+			defer upstream.Close()
 
-	oldBase := releaseDownloadBase
-	releaseDownloadBase = upstream.URL
-	t.Cleanup(func() { releaseDownloadBase = oldBase })
+			oldBase := releaseDownloadBase
+			releaseDownloadBase = upstream.URL
+			t.Cleanup(func() { releaseDownloadBase = oldBase })
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64", nil)
-	req.SetPathValue("version", "v0.13.0-rc18")
-	req.SetPathValue("asset", "wg-monitor-agent-linux-arm64")
-	rec := httptest.NewRecorder()
-	releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
+			req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/"+asset, nil)
+			req.SetPathValue("version", "v0.13.0-rc18")
+			req.SetPathValue("asset", asset)
+			rec := httptest.NewRecorder()
+			releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if got := rec.Body.String(); got != "agent-binary" {
-		t.Fatalf("body=%q", got)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Body.String(); got != "asset-body" {
+				t.Fatalf("body=%q", got)
+			}
+		})
 	}
 }
 

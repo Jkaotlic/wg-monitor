@@ -57,7 +57,11 @@ const maxSelfUpdateProxyBytes = 64 << 20
 
 func isAllowedReleaseAsset(asset string) bool {
 	switch asset {
-	case "checksums.txt", "wg-monitor-agent-linux-arm64", "wg-monitor-agent-linux-mipsle":
+	case "checksums.txt",
+		"wg-monitor-agent-linux-arm64",
+		"wg-monitor-agent-linux-mipsle",
+		"wg-monitor-backend-linux-amd64",
+		"wg-monitor-backend-linux-arm64":
 		return true
 	default:
 		return false
