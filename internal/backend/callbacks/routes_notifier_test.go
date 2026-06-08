@@ -229,6 +229,45 @@ func TestRoutesPanelNotifier_RouteTemplatesRendersTemplateButtons(t *testing.T) 
 	}
 }
 
+func TestRoutesPanelNotifier_RouteTemplatesPaginatesAllTemplates(t *testing.T) {
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	threadID := int64(11)
+	store := NewRouteWizardStore(time.Minute)
+	store.TokenFunc = fixedTokens("tpl1", "tpl2", "tpl3", "tpl4", "tpl5", "tpl6", "tpl7", "tpl8")
+	draft := store.PutAddDraft(RouteAddDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &threadID, RouterID: uid,
+		Kind: "dns", TunnelID: "awg11",
+	})
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: &RoutesCache{TTL: time.Minute}, DB: d, Store: store}
+	templates := wire.RouteTemplates{Templates: []wire.RouteTemplate{}}
+	for i := 1; i <= 11; i++ {
+		templates.Templates = append(templates.Templates, wire.RouteTemplate{
+			ID: "svc" + itoa(int64(i)), Name: "Service " + itoa(int64(i)), DNS: []string{"svc" + itoa(int64(i)) + ".example"},
+		})
+	}
+	body, _ := json.Marshal(templates)
+
+	ref := cmdpkg.MessageRef{Action: "route_templates", ChatID: 1, MessageID: 7, ThreadID: &threadID}
+	res := wire.CommandResult{ID: "route_templates:" + draft.Token + ":cmd1", Status: "ok", Output: string(body)}
+	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(tgFake.editText, "Страница: 1/2") {
+		t.Fatalf("expected page counter, got %q", tgFake.editText)
+	}
+	if strings.Contains(tgFake.editText, "Service 9") {
+		t.Fatalf("page 1 should not render service 9 yet: %q", tgFake.editText)
+	}
+	if !keyboardHasCallback(tgFake.kb, "routes_tpl_page") {
+		t.Fatalf("expected next-page button, got %#v", tgFake.kb)
+	}
+	if countRouteCallbacksWithPrefix(tgFake.kb, "routes_tpl_pick") != routeTemplatesPageSize {
+		t.Fatalf("expected %d template buttons on page 1, got %#v", routeTemplatesPageSize, tgFake.kb)
+	}
+}
+
 func TestRoutesPanelNotifier_ApplyResultOffersSnapshot(t *testing.T) {
 	tgFake := &fakeEditTG{}
 	d, uid := newTestDB(t)
@@ -273,6 +312,21 @@ func firstRouteCallbackWithPrefix(t *testing.T, kb *tg.InlineKeyboardMarkup, pre
 	}
 	t.Fatalf("keyboard missing callback prefix %q: %+v", prefix, kb.InlineKeyboard)
 	return ""
+}
+
+func countRouteCallbacksWithPrefix(kb *tg.InlineKeyboardMarkup, prefix string) int {
+	if kb == nil {
+		return 0
+	}
+	n := 0
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix+":") {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, prefix string) bool {

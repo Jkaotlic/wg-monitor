@@ -215,6 +215,50 @@ func TestRouteAddJSON_AWGTemplateHRNeoBindsSelectedRoutingInterface(t *testing.T
 	}
 }
 
+func TestRouteAddJSON_RefreshesAndUsesRoutingIfaceForCreate(t *testing.T) {
+	var created awgmgr.DNSRoute
+	refreshed := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg12","name":"stale","interfaceName":"nwg3","enabled":true}}`))
+	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"awg12","name":"fresh","iface":"nwg5","type":"managed","status":"running","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/create", func(w http.ResponseWriter, r *http.Request) {
+		if !refreshed {
+			t.Fatalf("route_add must refresh AWG Manager routing before create")
+		}
+		if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+			t.Fatalf("decode create body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		refreshed = true
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := awgmgr.New(srv.URL)
+	req := wire.RouteAddRequest{Kind: "dns", Name: "OpenAI", TunnelID: "awg12", Targets: []string{"chatgpt.com"}}
+	if _, err := RouteAddJSON(context.Background(), c, req); err != nil {
+		t.Fatalf("RouteAddJSON: %v", err)
+	}
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg5" || created.Routes[0].TunnelID != "nwg5" {
+		t.Fatalf("created route used stale iface, got %+v", created)
+	}
+}
+
 func TestRouteTemplatesJSONListsAWGManagerPresets(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/presets", func(w http.ResponseWriter, r *http.Request) {

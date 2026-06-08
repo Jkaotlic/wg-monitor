@@ -2671,6 +2671,48 @@ func TestRouterRoutesTemplatePickEnqueuesPreviewFromButton(t *testing.T) {
 	}
 }
 
+func TestRouterRoutesTemplatePageRendersStoredCatalog(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	store := r.RouteWizardStore()
+	store.TokenFunc = fixedTokens("draft1")
+	draft := store.PutAddDraft(RouteAddDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		Kind: "dns", TunnelID: "awg11",
+	})
+	templates := []wire.RouteTemplate{}
+	for i := 1; i <= 11; i++ {
+		templates = append(templates, wire.RouteTemplate{
+			ID: "svc" + itoa(int64(i)), Name: "Service " + itoa(int64(i)), DNS: []string{"svc.example"},
+		})
+	}
+	store.PutTemplateCatalog(RouteTemplateCatalog{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		DraftToken: draft.Token, Templates: templates,
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:   "cb-page-tpl",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_tpl_page:%d:_panel_:%s:1", uid, draft.Token),
+	})
+
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Service 9") || strings.Contains(f.edits[0], "- Service 1 -") {
+		t.Fatalf("expected second template page, edits=%q", f.edits)
+	}
+	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:", uid, draft.Token)) {
+		t.Fatalf("expected pick buttons on stored catalog page, markups=%#v", f.editMarkups)
+	}
+	if len(f.answers) != 1 {
+		t.Fatalf("expected callback answer, got %v", f.answers)
+	}
+}
+
 func TestRouterRoutesRollback_RendersReverseConfirmWithoutCache(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 11); err != nil {

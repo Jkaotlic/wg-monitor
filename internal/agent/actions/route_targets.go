@@ -59,25 +59,35 @@ func resolveRouteEndpoint(ctx context.Context, c *awgmgr.Client, id string) (rou
 	if id == "" {
 		return routeEndpoint{}, fmt.Errorf("empty route target id")
 	}
-	if t, err := getTunnel(ctx, c, id); err == nil {
+	routing, err := c.RoutingTunnels(ctx)
+	if err == nil {
+		for _, t := range routing {
+			ep := ndmsRouteEndpoint(t)
+			if ep.Iface == "" {
+				continue
+			}
+			if id == ep.ID || id == ep.Iface || id == t.ID {
+				if mt, getErr := getTunnel(ctx, c, t.ID); getErr == nil {
+					managed := managedRouteEndpoint(*mt)
+					ep.Name = firstNonEmptyRoute(managed.Name, ep.Name)
+					ep.Aliases = routeAliases(append(ep.Aliases, managed.Aliases...)...)
+					ep.Enabled = ep.Enabled || managed.Enabled
+					ep.Available = ep.Available || managed.Available
+					ep.DefaultRoute = managed.DefaultRoute
+				}
+				return ep, nil
+			}
+		}
+	}
+	if t, getErr := getTunnel(ctx, c, id); getErr == nil {
 		ep := managedRouteEndpoint(*t)
 		if ep.Iface == "" {
 			return routeEndpoint{}, fmt.Errorf("managed tunnel %s missing interfaceName", id)
 		}
 		return ep, nil
 	}
-	routing, err := c.RoutingTunnels(ctx)
 	if err != nil {
 		return routeEndpoint{}, err
-	}
-	for _, t := range routing {
-		ep := ndmsRouteEndpoint(t)
-		if ep.Iface == "" {
-			continue
-		}
-		if id == ep.ID || id == ep.Iface || id == t.ID {
-			return ep, nil
-		}
 	}
 	return routeEndpoint{}, fmt.Errorf("route target %q not found", id)
 }
