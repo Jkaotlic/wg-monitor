@@ -3,20 +3,30 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestRenderBackendYAML(t *testing.T) {
 	got, err := RenderBackendYAML(BackendParams{
-		ChatID:      -1001,
-		AdminUserID: 42,
+		ChatID:       -1001,
+		ExtraChatIDs: []int64{-1002, -1003},
+		AdminUserID:  42,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(got)
+	var parsed map[string]any
+	if err := yaml.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("rendered yaml must parse: %v\n%s", err, s)
+	}
 	for _, want := range []string{
 		`bot_token_file: /etc/wg-monitor/bot-token.txt`,
 		`chat_id: -1001`,
+		`extra_chat_ids:`,
+		`- -1002`,
+		`- -1003`,
 		`admin_user_id: 42`,
 	} {
 		if !strings.Contains(s, want) {
@@ -29,6 +39,51 @@ func TestRenderBackendYAML(t *testing.T) {
 	for _, dont := range []string{"agents:", `bot_token:`} {
 		if strings.Contains(s, dont) {
 			t.Errorf("rendered yaml unexpectedly contains %q\nfull:\n%s", dont, s)
+		}
+	}
+}
+
+func TestEnsureYAMLTelegramExtraChatID(t *testing.T) {
+	raw := []byte("listen: 127.0.0.1:8080\ntelegram:\n  chat_id: -1001\n  extra_chat_ids: []\n  admin_user_id: 42\n")
+	updated, changed, err := ensureYAMLTelegramExtraChatID(raw, -1002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("expected yaml to change")
+	}
+	s := string(updated)
+	for _, want := range []string{
+		"telegram:",
+		"chat_id: -1001",
+		"extra_chat_ids:",
+		"- -1002",
+		"admin_user_id: 42",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("patched yaml missing %q\n%s", want, s)
+		}
+	}
+	again, changed, err := ensureYAMLTelegramExtraChatID(updated, -1002)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed {
+		t.Fatalf("second patch should be idempotent:\n%s", string(again))
+	}
+}
+
+func TestExtractThreadIDFromEnsureTopicsOutput(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want int
+	}{
+		{out: "+ created client-g - chat_id=-1002 topic id=777\n", want: 777},
+		{out: "= skip client-g - already has topic id=888 (use --force to rebuild)\n", want: 888},
+		{out: "Done: 0 created, 0 skipped, 0 failed\n", want: 0},
+	} {
+		if got := extractThreadIDFromEnsureTopicsOutput(tc.out); got != tc.want {
+			t.Fatalf("extractThreadIDFromEnsureTopicsOutput(%q)=%d, want %d", tc.out, got, tc.want)
 		}
 	}
 }

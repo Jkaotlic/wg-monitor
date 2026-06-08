@@ -12,7 +12,14 @@ telegram:
   chat_id: {{.ChatID}}
   # Additional operator supergroups allowed to use the same bot. Routers must
   # be bound to one of these chats with `wg-monitor-cli bind-topic --chat-id`.
+{{if .ExtraChatIDs}}
+  extra_chat_ids:
+{{range .ExtraChatIDs}}
+    - {{.}}
+{{end}}
+{{else}}
   extra_chat_ids: []
+{{end}}
   admin_user_id: {{.AdminUserID}}
 
 state:

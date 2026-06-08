@@ -16,8 +16,9 @@ var templatesFS embed.FS
 // in the SQLite DB and are added via `wg-monitor-cli add-user` on the VPS,
 // not via this template.
 type BackendParams struct {
-	ChatID      int64
-	AdminUserID int64
+	ChatID       int64
+	ExtraChatIDs []int64
+	AdminUserID  int64
 }
 
 type AgentParams struct {
