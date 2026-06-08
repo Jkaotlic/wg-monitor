@@ -127,7 +127,9 @@ func (p *Poller) lastKnownCheck(userID int64, checkName string) wire.Check {
 	}
 	c := wire.Check{Name: row.CheckName, Status: row.Status}
 	if row.DetailsJSON != "" {
-		_ = json.Unmarshal([]byte(row.DetailsJSON), &c.Details)
+		if err := json.Unmarshal([]byte(row.DetailsJSON), &c.Details); err != nil {
+			slog.Warn("realert: details_json unmarshal failed", "user_id", userID, "check", checkName, "err", err)
+		}
 	}
 	return c
 }

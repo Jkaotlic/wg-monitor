@@ -550,6 +550,8 @@ func TestRunPullDeployMobileAckTimeoutReturnsPendingError(t *testing.T) {
 	var pushed bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/wizard/agents":
+			_, _ = w.Write([]byte(`{"agents":[{"nickname":"client-h","kind":"mobile","last_seen_at":"2026-05-23T06:39:00Z"}]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/wizard/agents/client-h/deploy":
 			w.WriteHeader(http.StatusAccepted)
 			_, _ = w.Write([]byte(`{"cmd_id":"cmd-1"}`))
@@ -593,6 +595,72 @@ func TestRunPullDeployMobileAckTimeoutReturnsPendingError(t *testing.T) {
 	}
 	if !pushed {
 		t.Fatal("pending state should still be pushed to VPS best-effort")
+	}
+}
+
+func TestRunPullDeployRetriesTransientLongPollError(t *testing.T) {
+	oldAckTimeout := pullDeployAckTimeout
+	oldHeartbeatTimeout := pullDeployHeartbeatTimeout
+	defer func() {
+		pullDeployAckTimeout = oldAckTimeout
+		pullDeployHeartbeatTimeout = oldHeartbeatTimeout
+	}()
+	pullDeployAckTimeout = 2 * time.Second
+	pullDeployHeartbeatTimeout = 0
+
+	cmdPolls := 0
+	var pushed bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/wizard/agents":
+			_, _ = fmt.Fprintf(w, `{"agents":[{"nickname":"home","kind":"static","last_seen_at":%q}]}`, time.Now().UTC().Format(time.RFC3339Nano))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/wizard/agents/home/deploy":
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"cmd_id":"cmd-retry"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/wizard/cmd/cmd-retry":
+			cmdPolls++
+			if cmdPolls == 1 {
+				http.Error(w, "temporary gateway", http.StatusBadGateway)
+				return
+			}
+			_, _ = w.Write([]byte(`{"id":"cmd-retry","status":"ok","output":"scheduled"}`))
+		case r.Method == http.MethodPut && r.URL.Path == "/v1/wizard/agents/home":
+			pushed = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer srv.Close()
+
+	state := &State{
+		Backend: BackendState{Domain: srv.URL},
+		Agents: []AgentState{{
+			Nickname:            "home",
+			Kind:                "static",
+			LastDeployedVersion: "v0.13.0-rc14",
+		}},
+	}
+	target := updateTarget{
+		IsAgent:          true,
+		AgentNickname:    "home",
+		Kind:             "static",
+		InstalledVersion: "v0.13.0-rc14",
+		LatestVersion:    "v0.13.0-rc27",
+	}
+
+	err := runPullDeploy(state, &SecretStore{disk: map[string]string{"WIZARD_TOKEN": "tok"}}, target)
+	if err == nil {
+		t.Fatal("heartbeat timeout after ACK must still report pending")
+	}
+	if strings.Contains(err.Error(), "await result") {
+		t.Fatalf("transient long-poll error should be retried, got %v", err)
+	}
+	if cmdPolls != 2 {
+		t.Fatalf("cmd polls=%d, want retry after transient long-poll error", cmdPolls)
+	}
+	if !pushed {
+		t.Fatal("pending state should still be pushed after ACK")
 	}
 }
 
@@ -746,9 +814,25 @@ func TestPullDeployReadinessRejectsFutureHeartbeat(t *testing.T) {
 }
 
 func TestPullDeployReadinessAllowsStaleMobilePendingPath(t *testing.T) {
-	err := pullDeployReadinessFromAgents(nil, updateTarget{IsAgent: true, AgentNickname: "client-h", Kind: "mobile"}, time.Now())
+	lastSeen := time.Date(2026, 5, 23, 6, 39, 0, 0, time.UTC)
+	now := lastSeen.Add(8 * time.Hour)
+	target := updateTarget{IsAgent: true, AgentNickname: "client-h", Kind: "mobile"}
+
+	err := pullDeployReadinessFromAgents([]RemoteAgent{{
+		Nickname:   "client-h",
+		LastSeenAt: &lastSeen,
+	}}, target, now)
 	if err != nil {
 		t.Fatalf("mobile agents may be sleeping and should use pending path, got %v", err)
+	}
+	warn := pullDeployMobileReadinessWarningFromAgents([]RemoteAgent{{
+		Nickname:   "client-h",
+		LastSeenAt: &lastSeen,
+	}}, target, now)
+	for _, want := range []string{"mobile", "client-h", "stale 8h"} {
+		if !strings.Contains(warn, want) {
+			t.Fatalf("mobile readiness warning missing %q: %q", want, warn)
+		}
 	}
 }
 
@@ -771,6 +855,15 @@ func TestPullDeployNoAckHintExplainsMissingAgent(t *testing.T) {
 	hint := pullDeployNoAckHintFromAgents(nil, updateTarget{AgentNickname: "ghost"}, time.Now())
 	if !strings.Contains(hint, "ghost") || !strings.Contains(hint, "не найден") || !strings.Contains(hint, "AWG Manager URL здесь") {
 		t.Fatalf("unexpected missing-agent hint: %q", hint)
+	}
+}
+
+func TestFormatDurationRUShowsMinutesAndSeconds(t *testing.T) {
+	if got := formatDurationRU(90 * time.Second); got != "1м 30с" {
+		t.Fatalf("formatDurationRU(90s)=%q, want 1м 30с", got)
+	}
+	if got := formatDurationRU(2 * time.Minute); got != "2 мин" {
+		t.Fatalf("formatDurationRU(2m)=%q, want 2 мин", got)
 	}
 }
 

@@ -1,8 +1,10 @@
 package realert
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -138,6 +140,28 @@ func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 	}
 	for cb := range want {
 		t.Errorf("missing realert button %s in %+v", cb, f.keyboards[0])
+	}
+}
+
+func TestLastKnownCheckLogsMalformedDetailsJSON(t *testing.T) {
+	d, uid := newTestDB(t)
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	if err := d.Events().Insert(uid, "dns", "fail", `{"broken":`, now); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100})
+	got := p.lastKnownCheck(uid, "dns")
+
+	if got.Name != "dns" || got.Status != "fail" {
+		t.Fatalf("lastKnownCheck returned wrong check: %+v", got)
+	}
+	if !strings.Contains(logs.String(), "details_json unmarshal failed") {
+		t.Fatalf("malformed details_json should be logged, got logs: %s", logs.String())
 	}
 }
 

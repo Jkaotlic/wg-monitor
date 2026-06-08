@@ -365,12 +365,23 @@ func sendTelegramDocument(ctx context.Context, token string, chatID int64, path,
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	resp, err := (&http.Client{Timeout: 120 * time.Second}).Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("%s", redactTelegramBotToken(err.Error(), token))
 	}
 	defer resp.Body.Close()
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("telegram sendDocument HTTP %d", resp.StatusCode)
+		msg := strings.TrimSpace(string(errBody))
+		if msg == "" {
+			return fmt.Errorf("telegram sendDocument HTTP %d", resp.StatusCode)
+		}
+		return fmt.Errorf("telegram sendDocument HTTP %d: %s", resp.StatusCode, msg)
 	}
 	return nil
+}
+
+func redactTelegramBotToken(msg, token string) string {
+	if token == "" {
+		return msg
+	}
+	return strings.ReplaceAll(msg, "bot"+token, "bot<redacted>")
 }

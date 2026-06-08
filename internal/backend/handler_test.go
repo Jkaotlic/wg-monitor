@@ -1569,10 +1569,11 @@ func TestHandleReport_ClearsHardForTunnelMissingFromFreshInventory(t *testing.T)
 		t.Fatal(err)
 	}
 
+	disp := &fakeDisp{db: d}
 	h := NewMux(Deps{
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DB:         d,
-		Dispatcher: &fakeDisp{},
+		Dispatcher: disp,
 		Thresholds: state.Thresholds{Fail: 2, Recovery: 2},
 	})
 	body := []byte(`{"ts":"2026-05-15T14:00:00Z","agent_version":"t","checks":[` +
@@ -1596,6 +1597,78 @@ func TestHandleReport_ClearsHardForTunnelMissingFromFreshInventory(t *testing.T)
 	}
 	if got.CurrentStatus != "ok" || got.ConsecutiveFails != 0 || got.HardSince != nil {
 		t.Fatalf("missing tunnel hard must be cleared after fresh inventory: %+v", got)
+	}
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	foundRecovery := false
+	for _, call := range disp.calls {
+		if call == state.Recovery {
+			foundRecovery = true
+			break
+		}
+	}
+	if !foundRecovery {
+		t.Fatalf("missing tunnel hard must go through dispatcher recovery, calls=%v", disp.calls)
+	}
+}
+
+type contextWakeNotifier struct {
+	mu     sync.Mutex
+	ctxErr error
+}
+
+func (f *contextWakeNotifier) SendWake(ctx context.Context, _ int64, _ string, _ []wire.Check) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ctxErr = ctx.Err()
+	return nil
+}
+
+func (f *contextWakeNotifier) snapshot() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ctxErr
+}
+
+func TestHandleReport_WakeNotifierUsesShutdownContext(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
+	defer d.Close()
+	tok := "eded11eded11eded11eded11eded11eded11eded11eded11eded11eded11eded"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	lastSeen := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, lastSeen, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	shutdownCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	wake := &contextWakeNotifier{}
+	h := NewMux(Deps{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:              d,
+		Dispatcher:      &fakeDisp{},
+		WakeNotifier:    wake,
+		ShutdownCtx:     shutdownCtx,
+		MobileWakeAfter: 5 * time.Minute,
+	})
+	body := []byte(`{"ts":"2026-05-15T14:07:00Z","agent_version":"t","checks":[{"name":"tunnels","status":"ok"}]}`)
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if wake.snapshot() != nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := wake.snapshot(); got != context.Canceled {
+		t.Fatalf("wake notifier context err=%v, want context.Canceled", got)
 	}
 }
 

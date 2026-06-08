@@ -112,6 +112,20 @@ func TestRunBackupCommandResolvesDockerLayoutRoot(t *testing.T) {
 	}
 }
 
+func TestRedactTelegramBotTokenFromTransportError(t *testing.T) {
+	token := "123456:ABC-very-secret"
+	errText := `Post "https://api.telegram.org/bot123456:ABC-very-secret/sendDocument": dial tcp: timeout`
+
+	got := redactTelegramBotToken(errText, token)
+
+	if strings.Contains(got, token) {
+		t.Fatalf("redacted error still contains bot token: %q", got)
+	}
+	if !strings.Contains(got, "bot<redacted>/sendDocument") {
+		t.Fatalf("redacted error should preserve endpoint shape, got %q", got)
+	}
+}
+
 func initBackupTestDB(t *testing.T, path string) {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)

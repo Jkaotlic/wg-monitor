@@ -197,11 +197,31 @@ func stepVerifyHTTP(s *SSH, url string) error {
 }
 
 func stepVerifyBackendHealth(s *SSH, domain string) error {
-	if err := stepVerifyHTTP(s, "http://127.0.0.1:8080/healthz"); err != nil {
+	if err := stepVerifyHTTP(s, backendHealthURL(domain)); err != nil {
 		return err
 	}
-	_ = domain
 	return nil
+}
+
+func backendHealthURL(domain string) string {
+	host := domainHost(domain)
+	if isLoopbackDeployHost(host) {
+		base := strings.TrimRight(strings.TrimSpace(domain), "/")
+		if !strings.Contains(base, "://") {
+			base = "http://" + base
+		}
+		return base + "/healthz"
+	}
+	return "http://127.0.0.1:8080/healthz"
+}
+
+func isLoopbackDeployHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func domainHost(domain string) string {

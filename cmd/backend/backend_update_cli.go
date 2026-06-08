@@ -149,6 +149,7 @@ func swapBackendBinary(path string, body []byte) error {
 	}
 	tmp := path + ".new"
 	bak := path + ".bak"
+	_ = os.Remove(tmp)
 	if err := os.WriteFile(tmp, body, 0o755); err != nil {
 		return err
 	}
@@ -166,7 +167,6 @@ func swapBackendBinary(path string, body []byte) error {
 		}
 		return err
 	}
-	_ = os.Chmod(path, 0o755)
 	return nil
 }
 

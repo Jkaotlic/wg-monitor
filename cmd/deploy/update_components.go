@@ -738,6 +738,7 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	// up to 90s via two 45-second long-polls.
 	deadline := time.Now().Add(pullDeployAckTimeout)
 	var res *wire.CommandResult
+	var lastPollErr error
 	for time.Now().Before(deadline) {
 		waitSec := pullDeployCommandWaitSec
 		if waitSec <= 0 {
@@ -747,7 +748,9 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 		r, err := c.AwaitCommandResult(pollCtx, t.AgentNickname, cmdID, waitSec)
 		pollCancel()
 		if err != nil {
-			return fmt.Errorf("await result: %w", err)
+			lastPollErr = err
+			PrintWarn(fmt.Sprintf("long-poll result error, retry until ACK deadline: %v", err))
+			continue
 		}
 		if r != nil {
 			res = r
@@ -766,7 +769,10 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 			PrintWarn("мобильный агент не подтвердил команду сейчас — пометил обновление как pending до следующего wake")
 			return pullDeployPendingAckTimeoutError(t, pullDeployAckTimeout)
 		}
-		return fmt.Errorf("агент не подтвердил команду за 90с%s", pullDeployNoAckHint(c, t))
+		if lastPollErr != nil {
+			return fmt.Errorf("агент не подтвердил команду за %s; последняя ошибка long-poll: %w%s", formatDurationRU(pullDeployAckTimeout), lastPollErr, pullDeployNoAckHint(c, t))
+		}
+		return fmt.Errorf("агент не подтвердил команду за %s%s", formatDurationRU(pullDeployAckTimeout), pullDeployNoAckHint(c, t))
 	}
 	if res.Status != "ok" {
 		return fmt.Errorf("агент вернул %s: %s", res.Status, res.Output)
@@ -830,13 +836,17 @@ func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 }
 
 func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
-	if c == nil || strings.EqualFold(t.Kind, "mobile") {
+	if c == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	agents, err := c.ListAgents(ctx)
 	if err != nil {
+		if strings.EqualFold(t.Kind, "mobile") {
+			PrintWarn("mobile pull deploy readiness check unavailable; deploy will enqueue and may stay pending until next wake: " + err.Error())
+			return nil
+		}
 		return fmt.Errorf("pull deploy preflight: не удалось проверить VPS heartbeat: %w", err)
 	}
 	return pullDeployReadinessFromAgents(agents, t, time.Now())
@@ -873,6 +883,11 @@ func markPendingOnHeartbeatTimeout(state *State, t updateTarget, since string) e
 }
 
 func formatDurationRU(d time.Duration) string {
+	if d > time.Minute && d%time.Minute != 0 {
+		minutes := int(d / time.Minute)
+		seconds := int((d % time.Minute) / time.Second)
+		return fmt.Sprintf("%dм %dс", minutes, seconds)
+	}
 	if d%time.Minute == 0 {
 		return fmt.Sprintf("%d мин", int(d/time.Minute))
 	}
@@ -884,6 +899,9 @@ func formatDurationRU(d time.Duration) string {
 
 func pullDeployReadinessFromAgents(agents []RemoteAgent, t updateTarget, now time.Time) error {
 	if strings.EqualFold(t.Kind, "mobile") {
+		if warn := pullDeployMobileReadinessWarningFromAgents(agents, t, now); warn != "" {
+			PrintWarn(warn)
+		}
 		return nil
 	}
 	nick := strings.TrimSpace(t.AgentNickname)
@@ -898,6 +916,21 @@ func pullDeployReadinessFromAgents(agents []RemoteAgent, t updateTarget, now tim
 		return fmt.Errorf("pull deploy preflight: %s", strings.TrimPrefix(pullDeployNoAckHintFromAgents(agents, t, now), "; "))
 	}
 	return fmt.Errorf("pull deploy preflight: %s", strings.TrimPrefix(pullDeployNoAckHintFromAgents(agents, t, now), "; "))
+}
+
+func pullDeployMobileReadinessWarningFromAgents(agents []RemoteAgent, t updateTarget, now time.Time) string {
+	nick := strings.TrimSpace(t.AgentNickname)
+	for _, a := range agents {
+		if a.Nickname != nick {
+			continue
+		}
+		hb := formatHeartbeatStatus(a.LastSeenAt, now)
+		if strings.HasPrefix(hb, "fresh") {
+			return ""
+		}
+		return fmt.Sprintf("mobile agent %s VPS heartbeat %s; deploy will enqueue and may stay pending until next wake", nick, hb)
+	}
+	return fmt.Sprintf("mobile agent %s is missing from VPS heartbeat list; deploy will enqueue and may stay pending until next wake", nick)
 }
 
 func deployWithRetry(c *VPSClient, nickname, version string) (string, error) {

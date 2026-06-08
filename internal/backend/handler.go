@@ -118,7 +118,7 @@ func mobileWakeAfter(d Deps) time.Duration {
 	return 5 * time.Minute
 }
 
-func shouldNotifyMobileWake(user *db.User, ts time.Time, resumed bool, threshold time.Duration) bool {
+func shouldNotifyMobileWake(user *db.User, ts time.Time, threshold time.Duration) bool {
 	if user == nil || !user.IsMobile() {
 		return false
 	}
@@ -428,7 +428,20 @@ func clearMissingTunnelHards(d Deps, userID int64, nickname string, checks []wir
 		next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
 		next.HardSince = nil
 		next.Acked = false
-		if err := d.DB.State().Save(userID, row.CheckName, next); err != nil {
+		check := wire.Check{
+			Name:   row.CheckName,
+			Status: "ok",
+			Details: map[string]any{
+				"reason": "missing_from_fresh_tunnel_inventory",
+			},
+		}
+		tr := state.Transition{Kind: state.Recovery, Next: next}
+		if d.Dispatcher != nil {
+			if err := d.Dispatcher.Handle(relayParent(d), userID, nickname, row.CheckName, tr, check); err != nil {
+				d.Logger.Warn("clear missing tunnel hard: dispatch recovery", "nickname", nickname, "check", row.CheckName, "err", err)
+				continue
+			}
+		} else if err := d.DB.State().Save(userID, row.CheckName, next); err != nil {
 			d.Logger.Warn("clear missing tunnel hard: state save", "nickname", nickname, "check", row.CheckName, "err", err)
 			continue
 		}
@@ -487,7 +500,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 		if reportIsFresh && rep.Resumed && d.Resumer != nil {
 			d.Resumer.MarkResumed(uid)
 		}
-		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, rep.Resumed, mobileWakeAfter(d))
+		notifyWake := reportIsFresh && shouldNotifyMobileWake(user, ts, mobileWakeAfter(d))
 		// The operator-facing wake card uses the backend-observed last_seen
 		// gap. Older agents can over-report Resumed=true after short mobile
 		// jitter; a clean agent restart after real sleep may not set Resumed.
@@ -496,7 +509,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 				checks := append([]wire.Check(nil), rep.Checks...)
 				nickname := nick
 				go func() {
-					bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					bg, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
 					defer cancel()
 					if err := d.WakeNotifier.SendWake(bg, uid, nickname, checks); err != nil {
 						d.Logger.Warn("wake notifier", "nickname", nickname, "err", err)
@@ -694,7 +707,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 				version := update.Version
 				nickname := nick
 				go func() {
-					bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					bg, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
 					defer cancel()
 					if err := d.DeployNotifier.SendDeferredUpdate(bg, uid, nickname, version, "ok", "heartbeat confirmed new agent version"); err != nil {
 						d.Logger.Warn("deploy notifier success", "nickname", nickname, "version", version, "err", err)

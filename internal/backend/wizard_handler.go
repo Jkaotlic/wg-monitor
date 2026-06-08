@@ -20,6 +20,21 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
+const wizardMaxJSONBodyBytes = 64 << 10
+
+func decodeWizardJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, wizardMaxJSONBodyBytes))
+	if err := dec.Decode(dst); err != nil {
+		if strings.Contains(err.Error(), "http: request body too large") {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+			return false
+		}
+		writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		return false
+	}
+	return true
+}
+
 // WizardAuthMiddleware gates /v1/wizard/* endpoints with a constant-time
 // compare against the loaded wizard token. Empty `expected` is a bug —
 // callers must check cfg.Wizard.Token != "" BEFORE wiring this middleware
@@ -178,8 +193,7 @@ func wizardEnrollmentHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var req wizardEnrollmentReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
 		req.Nickname = strings.TrimSpace(req.Nickname)
@@ -229,8 +243,8 @@ func wizardBackendURL(r *http.Request) string {
 	}
 	if proto == "" {
 		proto = "https"
-		if r.TLS != nil {
-			proto = "https"
+		if r.TLS == nil && isLoopbackHost(wizardBackendHost(r)) {
+			proto = "http"
 		}
 	}
 	host := firstForwardedValue(r.Header.Get("X-WG-Public-Host"))
@@ -338,8 +352,7 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var req wizardPutAgentReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
 		req.Kind = strings.TrimSpace(req.Kind)
@@ -448,8 +461,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var req wizardDeployReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
 		if req.TargetVersion == "" {
@@ -523,8 +535,7 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var req backendUpdateRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
 		req.TargetVersion = strings.TrimSpace(req.TargetVersion)
@@ -602,8 +613,7 @@ func wizardMaintenanceHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var req wizardMaintenanceReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
 		req.Name = strings.TrimSpace(req.Name)
@@ -639,8 +649,7 @@ func wizardCommandHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		var req wizardCommandReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
 		req.Action = strings.TrimSpace(req.Action)

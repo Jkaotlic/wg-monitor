@@ -1530,9 +1530,9 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 			"на роутере уже установлен агент под именем %q — НЕ перезаписываю под %q. "+
 				"Возможные причины: (a) ты случайно цепляешься не к тому роутеру (VPN не активен?); "+
 				"(b) хочешь честно переименовать — тогда сначала убери его на VPS "+
-				"(sqlite3 /var/lib/wg-monitor/state.db \"DELETE FROM users WHERE nickname='%s';\") "+
+				"(%s) "+
 				"и удали /opt/etc/wg-monitor/config.yaml на роутере.",
-			existingNick, ag.Nickname, existingNick))
+			existingNick, ag.Nickname, sqliteDeleteUserCommand(existingNick)))
 		return fmt.Errorf("router already hosts agent %q, refusing to overwrite", existingNick)
 	}
 
@@ -1603,6 +1603,11 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 	}
 	PrintOK(report.Message)
 	return nil
+}
+
+func sqliteDeleteUserCommand(nickname string) string {
+	escaped := strings.ReplaceAll(nickname, "'", "''")
+	return fmt.Sprintf(`sqlite3 /var/lib/wg-monitor/state.db "PRAGMA foreign_keys=ON; DELETE FROM users WHERE nickname='%s';"`, escaped)
 }
 
 func applyLegacySSHDeploySuccessIfConfirmed(report awgmInstallCompletionReport, ag *AgentState, version string, now time.Time) error {

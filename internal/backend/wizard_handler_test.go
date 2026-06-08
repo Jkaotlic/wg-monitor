@@ -97,6 +97,37 @@ func TestWizardBackendDeploy_WritesPendingUpdate(t *testing.T) {
 	}
 }
 
+func TestWizardEnrollmentRejectsOversizedJSONBody(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{DB: d, WizardToken: "secret"})
+	body := `{"nickname":"` + strings.Repeat("a", 70*1024) + `","kind":"static"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/enrollments", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("want 413 for oversized wizard body, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWizardBackendURLDefaultsToHTTPWithoutTLS(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/v1/wizard/backend/deploy", nil)
+
+	got := wizardBackendURL(req)
+
+	if got != "http://127.0.0.1:8080" {
+		t.Fatalf("wizardBackendURL without forwarded proto/TLS=%q, want http://127.0.0.1:8080", got)
+	}
+}
+
 func TestWizardList_Empty(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
