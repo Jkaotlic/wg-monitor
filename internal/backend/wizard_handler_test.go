@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -86,6 +87,13 @@ func TestWizardBackendDeploy_WritesPendingUpdate(t *testing.T) {
 	}
 	if got.RepoBase != "https://wgmonitor.example.test/v1/releases/download" {
 		t.Fatalf("repo_base=%q", got.RepoBase)
+	}
+	info, err := os.Stat(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != 0o644 {
+		t.Fatalf("pending mode=%#o, want 0644", got)
 	}
 }
 
