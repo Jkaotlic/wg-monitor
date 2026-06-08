@@ -716,7 +716,7 @@ func releaseAssetURLForRouter(state *State, version, asset, fallback string) str
 // actually running. Returns an error on any failure of those three legs.
 func runPullDeploy(state *State, secrets *SecretStore, t updateTarget) error {
 	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
-	c := NewResilientVPSClientForBackend(state, secrets, tok, 8*time.Second)
+	c := NewResilientVPSClientForBackend(state, secrets, tok, 20*time.Second)
 	if c == nil {
 		return fmt.Errorf("VPSClient unavailable")
 	}
@@ -833,7 +833,7 @@ func ensurePullDeployReady(c *VPSClient, t updateTarget) error {
 	if c == nil || strings.EqualFold(t.Kind, "mobile") {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	agents, err := c.ListAgents(ctx)
 	if err != nil {

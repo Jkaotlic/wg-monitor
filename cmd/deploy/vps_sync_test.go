@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -254,6 +255,49 @@ func TestVPSClientCreateEnrollmentFallsBackToSSHOnTransportError(t *testing.T) {
 	}
 	if got.RawToken != "raw-token" {
 		t.Fatalf("raw token=%q", got.RawToken)
+	}
+}
+
+func TestVPSClientRetriesHTTPSBeforeFallback(t *testing.T) {
+	oldSleep := wizardHTTPRetrySleep
+	wizardHTTPRetrySleep = func(time.Duration) {}
+	defer func() { wizardHTTPRetrySleep = oldSleep }()
+
+	var attempts int
+	var fallbackCalled bool
+	c := &VPSClient{
+		BaseURL: "https://wg.example.test",
+		Token:   "wizard-token",
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			attempts++
+			if attempts < 3 {
+				return nil, context.DeadlineExceeded
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"agents":[]}`)),
+				Request:    r,
+			}, nil
+		})},
+		Fallback: wizardAPIFallbackFunc(func(ctx context.Context, method, path string, body []byte, timeout time.Duration) (int, []byte, error) {
+			fallbackCalled = true
+			return http.StatusOK, []byte(`{"agents":[]}`), nil
+		}),
+	}
+
+	agents, err := c.ListAgents(t.Context())
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Fatalf("agents=%+v, want empty", agents)
+	}
+	if attempts != 3 {
+		t.Fatalf("attempts=%d, want 3", attempts)
+	}
+	if fallbackCalled {
+		t.Fatal("fallback must wait until HTTPS retries are exhausted")
 	}
 }
 

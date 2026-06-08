@@ -75,6 +75,8 @@ func (f wizardAPIFallbackFunc) DoWizardAPI(ctx context.Context, method, path str
 	return f(ctx, method, path, body, timeout)
 }
 
+var wizardHTTPRetrySleep = time.Sleep
+
 // NewVPSClient assembles a client from wizard state. Returns nil if the
 // state is incomplete (no domain or no token) — callers should treat nil
 // as "sync disabled, skip silently".
@@ -419,9 +421,19 @@ func (c *VPSClient) AwaitCommandResult(ctx context.Context, nickname, cmdID stri
 }
 
 func (c *VPSClient) doWizardAPI(ctx context.Context, method, path string, body []byte, contentType string, timeout time.Duration) (int, []byte, error) {
-	status, raw, err := c.doWizardHTTP(ctx, method, path, body, contentType, timeout)
-	if err == nil {
-		return status, raw, nil
+	var status int
+	var raw []byte
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		status, raw, err = c.doWizardHTTP(ctx, method, path, body, contentType, timeout)
+		if err == nil {
+			return status, raw, nil
+		}
+		if ctx.Err() != nil || !isWizardTransportErr(err) || attempt == 3 {
+			break
+		}
+		PrintWarn(fmt.Sprintf("wizard API HTTPS timeout/error, retry %d/3 через %s: %v", attempt+1, time.Duration(attempt)*time.Second, err))
+		wizardHTTPRetrySleep(time.Duration(attempt) * time.Second)
 	}
 	if ctx.Err() != nil {
 		return 0, nil, err
