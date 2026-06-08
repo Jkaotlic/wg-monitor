@@ -38,6 +38,9 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 	if !plan.CanApply {
 		return "", fmt.Errorf("route_add: blocking overlap found")
 	}
+	if err := c.RoutingRefresh(ctx); err != nil {
+		return "", fmt.Errorf("route_add: refresh routing before create: %w", err)
+	}
 	t, err := resolveRouteEndpoint(ctx, c, req.TunnelID)
 	if err != nil {
 		return "", fmt.Errorf("resolve route target: %w", err)

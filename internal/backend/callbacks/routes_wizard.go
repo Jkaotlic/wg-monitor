@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"sync"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // RouteAddDraft is the backend-local state for the add-route wizard.
@@ -66,16 +68,27 @@ type RouteTemplateToken struct {
 	ExpiresAt    time.Time
 }
 
+type RouteTemplateCatalog struct {
+	UserID     int64
+	ActorTGID  int64
+	ThreadID   *int64
+	RouterID   int64
+	DraftToken string
+	Templates  []wire.RouteTemplate
+	ExpiresAt  time.Time
+}
+
 type RouteWizardStore struct {
 	TTL       time.Duration
 	Now       func() time.Time
 	TokenFunc func() string
 
-	mu             sync.Mutex
-	addDrafts      map[string]RouteAddDraft
-	delDrafts      map[string]RouteDeleteDraft
-	routeTokens    map[string]RouteToken
-	templateTokens map[string]RouteTemplateToken
+	mu               sync.Mutex
+	addDrafts        map[string]RouteAddDraft
+	delDrafts        map[string]RouteDeleteDraft
+	routeTokens      map[string]RouteToken
+	templateTokens   map[string]RouteTemplateToken
+	templateCatalogs map[string]RouteTemplateCatalog
 }
 
 func NewRouteWizardStore(ttl time.Duration) *RouteWizardStore {
@@ -303,6 +316,29 @@ func (s *RouteWizardStore) GetTemplateTokenForActor(userID, actorTGID int64, thr
 	return tt, true
 }
 
+func (s *RouteWizardStore) PutTemplateCatalog(c RouteTemplateCatalog) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.initLocked()
+	c.ExpiresAt = s.expiresAtLocked()
+	c.Templates = append([]wire.RouteTemplate(nil), c.Templates...)
+	s.templateCatalogs[c.DraftToken] = c
+}
+
+func (s *RouteWizardStore) GetTemplateCatalogForActor(userID, actorTGID int64, threadID *int64, routerID int64, draftToken string) (RouteTemplateCatalog, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, ok := s.templateCatalogs[draftToken]
+	if !ok || !s.addScopeMatchesActorLocked(c.UserID, c.ActorTGID, c.ThreadID, c.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(c.ExpiresAt) {
+		if ok && s.expiredLocked(c.ExpiresAt) {
+			delete(s.templateCatalogs, draftToken)
+		}
+		return RouteTemplateCatalog{}, false
+	}
+	c.Templates = append([]wire.RouteTemplate(nil), c.Templates...)
+	return c, true
+}
+
 func (s *RouteWizardStore) initLocked() {
 	if s.addDrafts == nil {
 		s.addDrafts = make(map[string]RouteAddDraft)
@@ -315,6 +351,9 @@ func (s *RouteWizardStore) initLocked() {
 	}
 	if s.templateTokens == nil {
 		s.templateTokens = make(map[string]RouteTemplateToken)
+	}
+	if s.templateCatalogs == nil {
+		s.templateCatalogs = make(map[string]RouteTemplateCatalog)
 	}
 }
 

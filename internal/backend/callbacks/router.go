@@ -497,6 +497,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "routes_tpl_load":
 		r.handleRoutesTemplateLoad(ctx, q, args)
 		return
+	case "routes_tpl_page":
+		r.handleRoutesTemplatePage(ctx, q, args)
+		return
 	case "routes_tpl_pick":
 		r.handleRoutesTemplatePick(ctx, q, args)
 		return
@@ -2228,6 +2231,29 @@ func (r *Router) handleRoutesTemplateLoad(ctx context.Context, q *tg.CallbackQue
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Loading AWG Manager templates...", "", nil)
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
 		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Не удалось поставить загрузку шаблонов в очередь: "+err.Error(), "", nil)
+	}
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
+}
+
+func (r *Router) handleRoutesTemplatePage(ctx context.Context, q *tg.CallbackQuery, args Args) {
+	user, _ := r.d.Users().GetByID(args.UserID)
+	if user == nil || r.routeWizard == nil {
+		return
+	}
+	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
+	if !ok || draft.TunnelID == "" {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
+		return
+	}
+	catalog, ok := r.routeWizard.GetTemplateCatalogForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
+	if !ok {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "templates expired")
+		return
+	}
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "route_templates"}
+	if err := renderRouteTemplatesPage(ctx, r.tg, r.routeWizard, ref, user, draft, args.RouteDraftToken, catalog.Templates, args.RouteTemplatePage); err != nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
+		return
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }

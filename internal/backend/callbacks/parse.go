@@ -56,6 +56,7 @@ type Args struct {
 	RouteConfirmToken  string
 	RouteToken         string
 	RouteTemplateToken string
+	RouteTemplatePage  int
 	// MaintName is the target of a maint_restart / maint_confirm callback:
 	// "hrneo" | "awgmgr" | "router" | "firmware". Set by Parse for those actions.
 	MaintName string
@@ -145,7 +146,7 @@ var validActions = map[string]bool{
 	"routes_pick": true, "routes_confirm": true, "routes_rollback": true, "routes_refresh": true,
 	"routes_back": true, "routes_close": true, "close_panel": true,
 	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
-	"routes_tpl_load": true, "routes_tpl_pick": true,
+	"routes_tpl_load": true, "routes_tpl_pick": true, "routes_tpl_page": true,
 	"routes_add_confirm": true, "routes_add_cancel": true,
 	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
 	"routes_hrneo": true, "routes_hrneo_doctor": true, "routes_snapshot": true,
@@ -327,6 +328,16 @@ func Parse(data string) (Args, error) {
 		}
 		a.RouteDraftToken = parts[3]
 		a.RouteTemplateToken = parts[4]
+	case "routes_tpl_page":
+		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
+			return Args{}, fmt.Errorf("routes_tpl_page requires draft token and page: %q", data)
+		}
+		page, err := strconv.Atoi(parts[4])
+		if err != nil || page < 0 {
+			return Args{}, fmt.Errorf("routes_tpl_page: bad page %q", parts[4])
+		}
+		a.RouteDraftToken = parts[3]
+		a.RouteTemplatePage = page
 	case "routes_add_confirm":
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_add_confirm requires draft and confirm tokens: %q", data)

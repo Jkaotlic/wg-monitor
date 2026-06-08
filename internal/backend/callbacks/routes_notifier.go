@@ -31,6 +31,8 @@ type RoutesPanelNotifier struct {
 	Sink  CommandEnqueuer
 }
 
+const routeTemplatesPageSize = 8
+
 func (n *RoutesPanelNotifier) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error {
 	user, err := n.DB.Users().GetByID(userID)
 	if err != nil || user == nil {
@@ -187,37 +189,14 @@ func (n *RoutesPanelNotifier) renderTemplates(ctx context.Context, ref cmdpkg.Me
 	if !ok || draft.TunnelID == "" {
 		return n.renderStaleTemplates(ctx, ref, user, "Черновик маршрута устарел: начни добавление заново.")
 	}
-	rows := make([][]tg.InlineKeyboardButton, 0, len(catalog.Templates)+1)
-	lines := []string{"📚 AWG Manager templates", "", "Выбери шаблон, дальше покажу обычное preview перед применением."}
-	shown := 0
-	for _, tpl := range catalog.Templates {
-		targets := routeTemplateTargetsForDraft(tpl, draft)
-		if len(targets) == 0 {
-			continue
-		}
-		token := n.Store.PutTemplateToken(RouteTemplateToken{
-			UserID: user.ID, ActorTGID: draft.ActorTGID, ThreadID: ref.ThreadID, RouterID: user.ID,
-			DraftToken: draftToken, TemplateID: tpl.ID, TemplateName: routeTemplateDisplayName(tpl),
-		})
-		rows = append(rows, []tg.InlineKeyboardButton{{
-			Text:         routeTemplateButtonText(tpl, len(targets)),
-			CallbackData: fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:%s", user.ID, draftToken, token),
-		}})
-		lines = append(lines, fmt.Sprintf("• %s — %d targets", routeTemplateDisplayName(tpl), len(targets)))
-		shown++
-		if shown >= 20 {
-			lines = append(lines, "• ...")
-			break
-		}
-	}
-	if shown == 0 {
+	if len(routeTemplateOptionsForDraft(catalog.Templates, draft)) == 0 {
 		return n.renderStaleTemplates(ctx, ref, user, "В AWG Manager нет подходящих шаблонов для выбранного типа маршрута.")
 	}
-	rows = append(rows, []tg.InlineKeyboardButton{{
-		Text:         "↩ Отмена",
-		CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draftToken),
-	}})
-	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, strings.Join(lines, "\n"), "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
+	n.Store.PutTemplateCatalog(RouteTemplateCatalog{
+		UserID: user.ID, ActorTGID: draft.ActorTGID, ThreadID: ref.ThreadID, RouterID: user.ID,
+		DraftToken: draftToken, Templates: catalog.Templates,
+	})
+	return renderRouteTemplatesPage(ctx, n.TG, n.Store, ref, user, draft, draftToken, catalog.Templates, 0)
 }
 
 func (n *RoutesPanelNotifier) renderStaleTemplates(ctx context.Context, ref cmdpkg.MessageRef, user *db.User, text string) error {
@@ -226,6 +205,91 @@ func (n *RoutesPanelNotifier) renderStaleTemplates(ctx context.Context, ref cmdp
 		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
 	}}}
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+type routeTemplateOption struct {
+	Template wire.RouteTemplate
+	Targets  []string
+}
+
+func renderRouteTemplatesPage(ctx context.Context, editor RoutesEditTG, store *RouteWizardStore, ref cmdpkg.MessageRef, user *db.User, draft RouteAddDraft, draftToken string, templates []wire.RouteTemplate, page int) error {
+	options := routeTemplateOptionsForDraft(templates, draft)
+	if len(options) == 0 {
+		text := "В AWG Manager нет подходящих шаблонов для выбранного типа маршрута."
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+			{Text: "К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
+			{Text: "Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
+		}}}
+		return editor.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+	}
+	pages := (len(options) + routeTemplatesPageSize - 1) / routeTemplatesPageSize
+	if pages <= 0 {
+		pages = 1
+	}
+	if page < 0 {
+		page = 0
+	}
+	if page >= pages {
+		page = pages - 1
+	}
+	start := page * routeTemplatesPageSize
+	end := start + routeTemplatesPageSize
+	if end > len(options) {
+		end = len(options)
+	}
+	rows := make([][]tg.InlineKeyboardButton, 0, routeTemplatesPageSize+3)
+	lines := []string{
+		"AWG Manager templates",
+		"",
+		fmt.Sprintf("Всего: %d. Страница: %d/%d.", len(options), page+1, pages),
+		"Выбери шаблон: дальше покажу preview и кнопку применения.",
+		"",
+	}
+	for _, opt := range options[start:end] {
+		tpl := opt.Template
+		token := store.PutTemplateToken(RouteTemplateToken{
+			UserID: user.ID, ActorTGID: draft.ActorTGID, ThreadID: ref.ThreadID, RouterID: user.ID,
+			DraftToken: draftToken, TemplateID: tpl.ID, TemplateName: routeTemplateDisplayName(tpl),
+		})
+		rows = append(rows, []tg.InlineKeyboardButton{{
+			Text:         routeTemplateButtonText(tpl, len(opt.Targets)),
+			CallbackData: fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:%s", user.ID, draftToken, token),
+		}})
+		lines = append(lines, fmt.Sprintf("- %s - %d targets", routeTemplateDisplayName(tpl), len(opt.Targets)))
+	}
+	if pages > 1 {
+		nav := []tg.InlineKeyboardButton{}
+		if page > 0 {
+			nav = append(nav, tg.InlineKeyboardButton{Text: "Назад", CallbackData: fmt.Sprintf("routes_tpl_page:%d:_panel_:%s:%d", user.ID, draftToken, page-1)})
+		}
+		if page+1 < pages {
+			nav = append(nav, tg.InlineKeyboardButton{Text: "Дальше", CallbackData: fmt.Sprintf("routes_tpl_page:%d:_panel_:%s:%d", user.ID, draftToken, page+1)})
+		}
+		if len(nav) > 0 {
+			rows = append(rows, nav)
+		}
+	}
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "Обновить шаблоны",
+		CallbackData: fmt.Sprintf("routes_tpl_load:%d:_panel_:%s", user.ID, draftToken),
+	}})
+	rows = append(rows, []tg.InlineKeyboardButton{{
+		Text:         "Отмена",
+		CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draftToken),
+	}})
+	return editor.EditMessageText(ctx, ref.ChatID, ref.MessageID, strings.Join(lines, "\n"), "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
+}
+
+func routeTemplateOptionsForDraft(templates []wire.RouteTemplate, draft RouteAddDraft) []routeTemplateOption {
+	out := make([]routeTemplateOption, 0, len(templates))
+	for _, tpl := range templates {
+		targets := routeTemplateTargetsForDraft(tpl, draft)
+		if len(targets) == 0 {
+			continue
+		}
+		out = append(out, routeTemplateOption{Template: tpl, Targets: targets})
+	}
+	return out
 }
 
 func routeTemplateTargetsForDraft(tpl wire.RouteTemplate, draft RouteAddDraft) []string {

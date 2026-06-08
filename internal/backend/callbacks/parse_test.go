@@ -86,6 +86,14 @@ func TestParseRouteTemplateCallbacks(t *testing.T) {
 	if pick.Action != "routes_tpl_pick" || pick.RouteDraftToken != "draft1" || pick.RouteTemplateToken != "tpl1" || !pick.IsPanel {
 		t.Fatalf("bad template pick args: %+v", pick)
 	}
+
+	page, err := Parse("routes_tpl_page:42:_panel_:draft1:2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Action != "routes_tpl_page" || page.RouteDraftToken != "draft1" || page.RouteTemplatePage != 2 || !page.IsPanel {
+		t.Fatalf("bad template page args: %+v", page)
+	}
 }
 
 func TestParseCommandActions(t *testing.T) {
