@@ -1,6 +1,7 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
 	"sync"
@@ -175,6 +176,54 @@ func TestMigrateUserKindIdempotent(t *testing.T) {
 		t.Fatalf("re-open: %v", err)
 	}
 	d2.Close()
+}
+
+func TestOpenMigratesLegacyDBWithoutTelegramChatID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = raw.Exec(`
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nickname TEXT UNIQUE NOT NULL,
+    token_hash TEXT NOT NULL,
+    expected_exit_ip TEXT NOT NULL,
+    awg_iface TEXT NOT NULL,
+    telegram_thread_id INTEGER,
+    telegram_user_id INTEGER,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP
+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open legacy DB: %v", err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("legacy", "tok", "1.1.1.1", "nwg0"); err != nil {
+		t.Fatalf("insert after migration: %v", err)
+	}
+	var n int
+	if err := d.SQL().QueryRow(`SELECT count(*) FROM pragma_table_info('users') WHERE name='telegram_chat_id'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("telegram_chat_id column count=%d, want 1", n)
+	}
+	if err := d.SQL().QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_users_chat_thread_id'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("idx_users_chat_thread_id count=%d, want 1", n)
+	}
 }
 
 func TestGetAllUsers(t *testing.T) {
