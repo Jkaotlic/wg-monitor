@@ -68,7 +68,7 @@ func (e *AWGMHTTPError) Error() string {
 
 func NewAWGMClient(baseURL, login, password string) *AWGMClient {
 	httpClient := &http.Client{Timeout: awgmClientTimeout}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("AWGM_INSECURE_TLS")), "1") {
+	if awgmInsecureTLS() {
 		httpClient.Transport = &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
@@ -201,6 +201,7 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 		return TerminalRunResult{}, err
 	}
 	cfg.Header.Set("X-Requested-With", "XMLHttpRequest")
+	applyAWGMWebsocketTLSConfig(cfg)
 	if hdr := c.authHeader(); hdr != "" {
 		cfg.Header.Set("Authorization", hdr)
 	}
@@ -250,6 +251,17 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 			return TerminalRunResult{Output: out.String()}, err
 		}
 	}
+}
+
+func awgmInsecureTLS() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("AWGM_INSECURE_TLS")), "1")
+}
+
+func applyAWGMWebsocketTLSConfig(cfg *websocket.Config) {
+	if cfg == nil || !awgmInsecureTLS() {
+		return
+	}
+	cfg.TlsConfig = &tls.Config{InsecureSkipVerify: true}
 }
 
 func awgmTerminalDoneFromChunk(text, marker string) (bool, error) {

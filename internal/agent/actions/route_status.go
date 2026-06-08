@@ -81,7 +81,21 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		if ep.Iface == "" {
 			continue
 		}
-		if routeAnyAliasMapped(ep, byIface) {
+		if id, ok := routeMappedID(ep, byIface); ok {
+			for _, alias := range ep.Aliases {
+				byIface[alias] = id
+			}
+			for i := range snap.Tunnels {
+				if snap.Tunnels[i].ID == id {
+					snap.Tunnels[i].Iface = ep.Iface
+					snap.Tunnels[i].Available = snap.Tunnels[i].Available || ep.Available
+					snap.Tunnels[i].Enabled = snap.Tunnels[i].Enabled || ep.Enabled
+					if snap.Tunnels[i].Status == "" {
+						snap.Tunnels[i].Status = t.Status
+					}
+					break
+				}
+			}
 			continue
 		}
 		snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{

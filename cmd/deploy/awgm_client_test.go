@@ -34,6 +34,28 @@ func TestNewAWGMClientInsecureTLSIsExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestAWGMClientInsecureTLSAppliesToWebsocketConfig(t *testing.T) {
+	t.Setenv("AWGM_INSECURE_TLS", "")
+	strict, err := websocket.NewConfig("wss://awg.example/api/terminal/ws", "https://awg.example")
+	if err != nil {
+		t.Fatalf("NewConfig strict: %v", err)
+	}
+	applyAWGMWebsocketTLSConfig(strict)
+	if strict.TlsConfig != nil {
+		t.Fatalf("strict websocket TLS config = %#v, want nil", strict.TlsConfig)
+	}
+
+	t.Setenv("AWGM_INSECURE_TLS", "1")
+	insecure, err := websocket.NewConfig("wss://awg.example/api/terminal/ws", "https://awg.example")
+	if err != nil {
+		t.Fatalf("NewConfig insecure: %v", err)
+	}
+	applyAWGMWebsocketTLSConfig(insecure)
+	if insecure.TlsConfig == nil || !insecure.TlsConfig.InsecureSkipVerify {
+		t.Fatalf("insecure websocket TLS config = %#v, want InsecureSkipVerify", insecure.TlsConfig)
+	}
+}
+
 func TestAWGMClientLoginStoresSessionCookie(t *testing.T) {
 	var sawCookie bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

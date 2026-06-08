@@ -242,7 +242,15 @@ func (r *Router) panelUpdateAllConfirm(ctx context.Context, q *tg.CallbackQuery)
 
 func (r *Router) panelUpdateAllDo(ctx context.Context, q *tg.CallbackQuery) {
 	version := strings.TrimSpace(r.cfg.BackendVersion)
-	r.startFleetCommand(ctx, q, "Self-update to "+version, "self_update", map[string]any{"version": version})
+	r.startFleetCommand(ctx, q, "Self-update to "+version, "self_update", r.selfUpdateArgs(version))
+}
+
+func (r *Router) selfUpdateArgs(version string) map[string]any {
+	args := map[string]any{"version": version}
+	if base := strings.TrimRight(strings.TrimSpace(r.cfg.PublicBaseURL), "/"); base != "" {
+		args["repo_base"] = base + "/v1/releases/download"
+	}
+	return args
 }
 
 func (r *Router) startFleetCommand(ctx context.Context, q *tg.CallbackQuery, title, action string, args map[string]any) {

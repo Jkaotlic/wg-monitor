@@ -69,11 +69,7 @@ func resolveRouteEndpoint(ctx context.Context, c *awgmgr.Client, id string) (rou
 			if id == ep.ID || id == ep.Iface || id == t.ID {
 				if mt, getErr := getTunnel(ctx, c, t.ID); getErr == nil {
 					managed := managedRouteEndpoint(*mt)
-					ep.Name = firstNonEmptyRoute(managed.Name, ep.Name)
-					ep.Aliases = routeAliases(append(ep.Aliases, managed.Aliases...)...)
-					ep.Enabled = ep.Enabled || managed.Enabled
-					ep.Available = ep.Available || managed.Available
-					ep.DefaultRoute = managed.DefaultRoute
+					ep = mergeRouteEndpoints(ep, managed)
 				}
 				return ep, nil
 			}
@@ -84,12 +80,45 @@ func resolveRouteEndpoint(ctx context.Context, c *awgmgr.Client, id string) (rou
 		if ep.Iface == "" {
 			return routeEndpoint{}, fmt.Errorf("managed tunnel %s missing interfaceName", id)
 		}
+		if err == nil {
+			if routingEP, ok := findRoutingEndpointForManaged(routing, ep); ok {
+				return mergeRouteEndpoints(routingEP, ep), nil
+			}
+		}
 		return ep, nil
 	}
 	if err != nil {
 		return routeEndpoint{}, err
 	}
 	return routeEndpoint{}, fmt.Errorf("route target %q not found", id)
+}
+
+func findRoutingEndpointForManaged(routing []awgmgr.RoutingTunnel, managed routeEndpoint) (routeEndpoint, bool) {
+	managedAliases := routeAliasSet(managed.Aliases)
+	for _, t := range routing {
+		ep := ndmsRouteEndpoint(t)
+		if ep.Iface == "" {
+			continue
+		}
+		for _, alias := range ep.Aliases {
+			if routeBindMatches(alias, managedAliases) {
+				return ep, true
+			}
+		}
+	}
+	return routeEndpoint{}, false
+}
+
+func mergeRouteEndpoints(routing, managed routeEndpoint) routeEndpoint {
+	out := routing
+	out.ID = managed.ID
+	out.Name = firstNonEmptyRoute(managed.Name, routing.Name)
+	out.Aliases = routeAliases(append(routing.Aliases, managed.Aliases...)...)
+	out.Type = firstNonEmptyRoute(managed.Type, routing.Type)
+	out.Enabled = routing.Enabled || managed.Enabled
+	out.Available = routing.Available || managed.Available
+	out.DefaultRoute = managed.DefaultRoute
+	return out
 }
 
 func routeAliases(values ...string) []string {
@@ -132,10 +161,15 @@ func routeAnyAliasKnown(ep routeEndpoint, known map[string]bool) bool {
 }
 
 func routeAnyAliasMapped(ep routeEndpoint, known map[string]string) bool {
+	_, ok := routeMappedID(ep, known)
+	return ok
+}
+
+func routeMappedID(ep routeEndpoint, known map[string]string) (string, bool) {
 	for _, alias := range ep.Aliases {
-		if _, ok := known[alias]; ok {
-			return true
+		if id, ok := known[alias]; ok {
+			return id, true
 		}
 	}
-	return false
+	return "", false
 }

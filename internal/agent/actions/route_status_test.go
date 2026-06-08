@@ -274,6 +274,50 @@ func TestRouteStatus_CreditsNDMSNameBoundRulesToManagedTunnel(t *testing.T) {
 	}
 }
 
+func TestRouteStatus_CreditsFreshRoutingIfaceToManagedTunnelWhenRoutingIDDiffers(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg12","name":"Primary","interfaceName":"stale-nwg3","ndmsName":"Wireguard3","enabled":true,"defaultRoute":false}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"Wireguard3","name":"Primary","iface":"nwg5","type":"managed","status":"running","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:Fresh","backend":"hydraroute","routes":[{"interface":"nwg5","tunnelId":"nwg5"}]}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"s-fresh","tunnelID":"nwg5"}
+		]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteStatus(context.Background(), awgmgr.New(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(out), &snap); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if snap.Counts["awg12"].DNS != 1 || snap.Counts["awg12"].Static != 1 || snap.Counts["awg12"].HRNeo != 1 {
+		t.Fatalf("fresh routing iface should be credited to managed tunnel: counts=%+v other=%+v tunnels=%+v", snap.Counts["awg12"], snap.Other, snap.Tunnels)
+	}
+	if snap.Other.DNS != 0 || snap.Other.Static != 0 {
+		t.Fatalf("fresh managed iface must not fall into Other: %+v", snap.Other)
+	}
+}
+
 func TestRouteStatus_DoesNotCreditHRNeoDirectProviderPolicyToDefaultTunnel(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {

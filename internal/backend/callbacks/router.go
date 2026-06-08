@@ -47,6 +47,7 @@ type Config struct {
 	AdminUserID        int64
 	MuteCutoffHour     int
 	BackendVersion     string
+	PublicBaseURL      string
 	UI                 UIConfigSnapshot
 	AmneziaBaseURL     string
 	AmneziaSecretsPath string

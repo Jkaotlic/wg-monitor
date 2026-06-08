@@ -173,6 +173,7 @@ func main() {
 		AdminUserID:        cfg.Telegram.AdminUserID,
 		MuteCutoffHour:     cfg.State.MuteCutoffHour,
 		BackendVersion:     Version,
+		PublicBaseURL:      cfg.PublicBaseURL,
 		UI:                 uiSnap,
 		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
 		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,

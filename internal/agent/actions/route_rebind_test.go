@@ -336,6 +336,53 @@ func TestRouteRebind_CanMoveNDMSNameBoundRules(t *testing.T) {
 	}
 }
 
+func TestRouteRebind_UsesRoutingIfaceWhenRoutingIDDiffersFromTunnelID(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "hr:Fresh", Backend: "hydraroute", HRPolicyName: "HydraRoute", Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg5", TunnelID: "nwg5"}}},
+	}
+	mock.staticRules = []awgmgr.StaticRoute{
+		{ID: "s-fresh", Name: "fresh", TunnelID: "nwg5", Subnets: []string{"10.10.0.0/16"}, Enabled: true},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/get":
+			switch r.URL.Query().Get("id") {
+			case "awg12":
+				_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg12","name":"Primary","interfaceName":"stale-nwg3","ndmsName":"Wireguard3","enabled":true,"defaultRoute":false}}`))
+				return
+			case "t2":
+				_, _ = w.Write([]byte(`{"success":true,"data":{"id":"t2","name":"dst","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false}}`))
+				return
+			}
+		case "/api/routing/tunnels":
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"Wireguard3","name":"Primary","iface":"nwg5","type":"managed","status":"running","available":true},
+				{"id":"t2","name":"dst","iface":"nwg0","type":"managed","status":"running","available":true}
+			]}`))
+			return
+		}
+		mock.handler().ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "awg12", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 1 || res.Static.OK != 1 || res.HRNeo.OK != 1 {
+		t.Fatalf("counts = dns=%+v static=%+v hr=%+v, want nwg5-bound rules moved", res.DNS, res.Static, res.HRNeo)
+	}
+	if mock.dnsRules[0].Routes[0].Interface != "nwg0" || mock.staticRules[0].TunnelID != "nwg0" {
+		t.Fatalf("rules were not rebound to nwg0: dns=%+v static=%+v", mock.dnsRules[0], mock.staticRules[0])
+	}
+}
+
 func TestRouteRebind_DoesNotMoveHRNeoDirectProviderPolicy(t *testing.T) {
 	mock := newRebindMock(t)
 	mock.dnsRules = []awgmgr.DNSRoute{
