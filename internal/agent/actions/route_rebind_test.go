@@ -56,6 +56,8 @@ func (m *rebindMock) handler() http.Handler {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"t1","name":"awg11","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true}}`))
 		case "t2":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"t2","name":"awg13","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false}}`))
+		case "t3":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"t3","name":"actual-policy","interfaceName":"nwg5","ndmsName":"Wireguard5","enabled":true,"defaultRoute":true}}`))
 		default:
 			http.Error(w, "not found", 404)
 		}
@@ -63,13 +65,15 @@ func (m *rebindMock) handler() http.Handler {
 	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
 			{"id":"t1","name":"awg11","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true},
-			{"id":"t2","name":"awg13","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false}
+			{"id":"t2","name":"awg13","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":false},
+			{"id":"t3","name":"actual-policy","interfaceName":"nwg5","ndmsName":"Wireguard5","enabled":true,"defaultRoute":true}
 		],"external":[],"system":[]}}`))
 	})
 	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":[
 			{"id":"t1","name":"awg11","iface":"nwg1","type":"managed","status":"running","available":true},
 			{"id":"t2","name":"awg13","iface":"nwg0","type":"managed","status":"running","available":true},
+			{"id":"t3","name":"actual-policy","iface":"nwg5","type":"managed","status":"running","available":true},
 			{"id":"wan-eth3","name":"ISP","iface":"eth3","type":"wan","status":"up","available":true}
 		]}`))
 	})
@@ -367,6 +371,32 @@ func TestRouteRebind_DoesNotMoveHRNeoDirectProviderPolicy(t *testing.T) {
 				t.Fatalf("movable HR-Neo rule was not moved to nwg0: %+v", r)
 			}
 		}
+	}
+}
+
+func TestRouteRebind_DoesNotMoveHRNeoPolicyBoundToDifferentInterface(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "hr:PolicyActual", Backend: "hydraroute", HRRouteMode: "policy", HRPolicyName: "HydraRoute", HRPolicyInterfaces: []string{"Wireguard5"}, Routes: nil},
+	}
+	mock.staticRules = nil
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "t1", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 0 || res.HRNeo.OK != 0 {
+		t.Fatalf("foreign policy-interface rule must not move: dns=%+v hr=%+v", res.DNS, res.HRNeo)
+	}
+	if len(mock.dnsRules[0].Routes) != 0 {
+		t.Fatalf("foreign policy-interface fallthrough should remain fallthrough: %+v", mock.dnsRules[0])
 	}
 }
 

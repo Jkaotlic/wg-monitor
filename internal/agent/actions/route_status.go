@@ -123,9 +123,9 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 					creditOther(isHR, false)
 				}
 			} else {
-				if isMovableHRNeoFallthrough(r) && defaultIface != "" {
-					ruleBind = defaultIface
-					if id, ok := byIface[defaultIface]; ok {
+				if isMovableHRNeoFallthrough(r) && (defaultIface != "" || len(r.HRPolicyInterfaces) > 0) {
+					ruleBind = routePolicyBind(r, defaultIface, byIface)
+					if id, ok := byIface[ruleBind]; ok {
 						creditDNS(id, true)
 					} else {
 						creditOther(isHR, false)
@@ -158,6 +158,19 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		}))
 	}
 	return snap
+}
+
+func routePolicyBind(r awgmgr.DNSRoute, fallbackIface string, byIface map[string]string) string {
+	for _, bind := range r.HRPolicyInterfaces {
+		bind = firstNonEmptyRoute(bind)
+		if bind == "" {
+			continue
+		}
+		if _, ok := byIface[bind]; ok {
+			return bind
+		}
+	}
+	return fallbackIface
 }
 
 func handshakeAgeSeconds(t *time.Time) int {

@@ -70,6 +70,24 @@ func TestParseHistory(t *testing.T) {
 	}
 }
 
+func TestParseRouteTemplateCallbacks(t *testing.T) {
+	load, err := Parse("routes_tpl_load:42:_panel_:draft1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if load.Action != "routes_tpl_load" || load.UserID != 42 || load.RouteDraftToken != "draft1" || !load.IsPanel {
+		t.Fatalf("bad template load args: %+v", load)
+	}
+
+	pick, err := Parse("routes_tpl_pick:42:_panel_:draft1:tpl1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pick.Action != "routes_tpl_pick" || pick.RouteDraftToken != "draft1" || pick.RouteTemplateToken != "tpl1" || !pick.IsPanel {
+		t.Fatalf("bad template pick args: %+v", pick)
+	}
+}
+
 func TestParseCommandActions(t *testing.T) {
 	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor"} {
 		data := action + ":42:tunnel_amnezia_for_awg2"

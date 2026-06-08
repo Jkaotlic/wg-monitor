@@ -599,6 +599,9 @@ func TestAdminSelfHostedPanelAddsProviderFromButtonFlow(t *testing.T) {
 		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: ptrInt64(11)},
 		Data:    "amz_selfhosted_add:" + itoa(uid) + ":_panel_",
 	})
+	if len(f.edits) == 0 || !strings.Contains(f.edits[len(f.edits)-1], "ssh_password") {
+		t.Fatalf("self-hosted add prompt should ask for ssh_password, edits=%q", f.edits)
+	}
 	r.HandleMessage(context.Background(), &tg.Message{
 		MessageID:       8,
 		Chat:            tg.Chat{ID: -100},
@@ -621,6 +624,48 @@ func TestAdminSelfHostedPanelAddsProviderFromButtonFlow(t *testing.T) {
 	got := f.editMarkups[len(f.editMarkups)-1]
 	if !keyboardContainsCallback(got, "amz_selfhosted_issue:"+itoa(uid)+":_panel_:home") {
 		t.Fatalf("stored provider issue button not found in %+v", got.InlineKeyboard)
+	}
+}
+
+func TestAdminSelfHostedPanelAddsProviderFromKVFlowWithSSHPassword(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-add-kv",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: ptrInt64(11)},
+		Data:    "amz_selfhosted_add:" + itoa(uid) + ":_panel_",
+	})
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       8,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 12345},
+		MessageThreadID: ptrInt64(11),
+		Text:            "id=home ssh_host=10.10.10.2 ssh_port=2222 ssh_user=root ssh_password=secret-pass endpoint_host=vpn.example.com endpoint_port=47567 label=Home-VPS",
+	})
+
+	store, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, ok := store.Get("home")
+	if !ok {
+		t.Fatalf("stored provider not found: %+v", store.Instances)
+	}
+	if inst.SSHHost != "10.10.10.2" || inst.SSHPort != 2222 || inst.SSHUser != "root" || inst.SSHPassword != "secret-pass" {
+		t.Fatalf("SSH fields not stored: %+v", inst)
 	}
 }
 
@@ -2518,6 +2563,111 @@ func TestRouterRoutesAddType_HRNeoUnavailableDoesNotSilentlyDowngradeToNDMS(t *t
 	}
 	if len(f.edits) != 0 {
 		t.Fatalf("must not advance wizard and silently create NDMS draft, edits=%v", f.edits)
+	}
+}
+
+func TestRouterRoutesAddTunnelOffersAWGManagerTemplatesButton(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+	cache := &RoutesCache{TTL: time.Hour}
+	cache.Put(uid, wire.RouteSnapshot{
+		HRNeo: wire.HRStatus{Installed: true, Running: true},
+		Tunnels: []wire.TunnelMeta{{
+			ID: "awg11", Name: "exit", Iface: "nwg5", Enabled: true, Available: true,
+		}},
+	})
+	r.SetRoutesCache(cache)
+
+	tid := int64(11)
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:   "cb-add-type",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_add_type:%d:_panel_:dns_hr", uid),
+	})
+	tunnelCallback := firstCallbackWithPrefix(t, f.editMarkups[0], fmt.Sprintf("routes_add_tunnel:%d:_panel_:", uid))
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:   "cb-add-tunnel",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: tunnelCallback,
+	})
+
+	if len(f.editMarkups) < 2 || !markupHasCallbackPrefix(f.editMarkups[1], fmt.Sprintf("routes_tpl_load:%d:_panel_:", uid)) {
+		t.Fatalf("expected template load button after tunnel pick, markups=%#v", f.editMarkups)
+	}
+	if strings.Contains(f.edits[len(f.edits)-1], "template:") {
+		t.Fatalf("operator-facing prompt must not ask for raw template:id, got %q", f.edits[len(f.edits)-1])
+	}
+}
+
+func TestRouterRoutesTemplateLoadEnqueuesCatalogCommand(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	draft := r.RouteWizardStore().PutAddDraft(RouteAddDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		Kind: "dns", TunnelID: "awg11", UseHRNeo: true,
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:   "cb-load-tpl",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_tpl_load:%d:_panel_:%s", uid, draft.Token),
+	})
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_templates" {
+		t.Fatalf("expected route_templates enqueue, got %+v", sink.calls)
+	}
+	if len(f.edits) != 1 || !strings.Contains(strings.ToLower(f.edits[0]), "template") {
+		t.Fatalf("expected loading edit for templates, got %v", f.edits)
+	}
+}
+
+func TestRouterRoutesTemplatePickEnqueuesPreviewFromButton(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	draft := r.RouteWizardStore().PutAddDraft(RouteAddDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		Kind: "dns", TunnelID: "awg11", UseHRNeo: true,
+	})
+	tplToken := r.RouteWizardStore().PutTemplateToken(RouteTemplateToken{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		DraftToken: draft.Token, TemplateID: "youtube", TemplateName: "YouTube",
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:   "cb-pick-tpl",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:%s", uid, draft.Token, tplToken),
+	})
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_add_plan" {
+		t.Fatalf("expected route_add_plan enqueue, got %+v", sink.calls)
+	}
+	if got, _ := sink.calls[0].args["template_id"].(string); got != "youtube" {
+		t.Fatalf("template_id = %q, want youtube; args=%+v", got, sink.calls[0].args)
+	}
+	if got, _ := sink.calls[0].args["tunnel_id"].(string); got != "awg11" {
+		t.Fatalf("tunnel_id = %q, want awg11; args=%+v", got, sink.calls[0].args)
 	}
 }
 

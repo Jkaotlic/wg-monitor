@@ -187,6 +187,7 @@ func pickConnectivityTunnelIfaceDetailed(ctx context.Context, c *awgmgr.Client, 
 		return "", "", ""
 	}
 	labels := map[string]string{}
+	ifaceByAlias := map[string]string{}
 	defaultIface := ""
 	policyDefaultIface := ""
 	for _, t := range ta.Tunnels {
@@ -198,11 +199,14 @@ func pickConnectivityTunnelIfaceDetailed(ctx context.Context, c *awgmgr.Client, 
 		}
 		iface := strings.TrimSpace(t.InterfaceName)
 		labels[iface] = nonEmptyString(t.Name, iface)
+		for _, alias := range routeAliases(t.InterfaceName, t.NDMSName, t.ID) {
+			ifaceByAlias[alias] = iface
+		}
 		if t.DefaultRoute && defaultIface == "" {
 			defaultIface = iface
 		}
 	}
-	if iface, blockReason := pickHydraRouteIface(ctx, c, targets, labels, policyDefaultIface); iface != "" {
+	if iface, blockReason := pickHydraRouteIface(ctx, c, targets, labels, ifaceByAlias, policyDefaultIface); iface != "" {
 		return iface, nonEmptyString(labels[iface], iface), ""
 	} else if blockReason != "" {
 		return "", "", blockReason
@@ -227,7 +231,7 @@ func pickDefaultTunnelIface(ctx context.Context, c *awgmgr.Client) (string, stri
 	return pickConnectivityTunnelIface(ctx, c, nil)
 }
 
-func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget, knownIfaces map[string]string, policyDefaultIface string) (string, string) {
+func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget, labels map[string]string, ifaceByAlias map[string]string, policyDefaultIface string) (string, string) {
 	if len(targets) == 0 {
 		return "", ""
 	}
@@ -251,14 +255,18 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 			}
 			iface := ""
 			if len(route.Routes) > 0 {
-				iface = firstNonEmptyConnectivityRoute(route.Routes[0].Interface, route.Routes[0].TunnelID)
+				bind := firstNonEmptyConnectivityRoute(route.Routes[0].Interface, route.Routes[0].TunnelID)
+				iface = connectivityIfaceForBind(bind, ifaceByAlias)
 			} else if hydraRouteUsesPolicyDefault(route) {
-				iface = strings.TrimSpace(policyDefaultIface)
+				iface = pickHydraRoutePolicyIface(route, ifaceByAlias)
+				if iface == "" {
+					iface = strings.TrimSpace(policyDefaultIface)
+				}
 			}
 			if iface == "" {
 				continue
 			}
-			if knownIfaces[iface] != "" {
+			if labels[iface] != "" {
 				return iface, ""
 			}
 			routeName := nonEmptyString(route.Name, route.ID)
@@ -266,6 +274,26 @@ func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connec
 		}
 	}
 	return "", ""
+}
+
+func pickHydraRoutePolicyIface(route awgmgr.DNSRoute, ifaceByAlias map[string]string) string {
+	for _, bind := range route.HRPolicyInterfaces {
+		if iface := connectivityIfaceForBind(bind, ifaceByAlias); iface != "" {
+			return iface
+		}
+	}
+	return ""
+}
+
+func connectivityIfaceForBind(bind string, ifaceByAlias map[string]string) string {
+	bind = strings.TrimSpace(bind)
+	if bind == "" {
+		return ""
+	}
+	if iface, ok := ifaceByAlias[bind]; ok {
+		return iface
+	}
+	return bind
 }
 
 func hydraRouteUsesPolicyDefault(route awgmgr.DNSRoute) bool {

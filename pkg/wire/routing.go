@@ -115,12 +115,13 @@ type RouteOverlap struct {
 }
 
 type RouteAddRequest struct {
-	Kind      string   `json:"kind"` // dns | static
-	Name      string   `json:"name"`
-	TunnelID  string   `json:"tunnel_id"`
-	Targets   []string `json:"targets"`
-	UseHRNeo  bool     `json:"use_hr_neo,omitempty"`
-	DraftHash string   `json:"draft_hash,omitempty"`
+	Kind       string   `json:"kind"` // dns | static
+	Name       string   `json:"name"`
+	TunnelID   string   `json:"tunnel_id"`
+	Targets    []string `json:"targets"`
+	UseHRNeo   bool     `json:"use_hr_neo,omitempty"`
+	TemplateID string   `json:"template_id,omitempty"`
+	DraftHash  string   `json:"draft_hash,omitempty"`
 }
 
 type RouteAddPlan struct {
@@ -129,6 +130,18 @@ type RouteAddPlan struct {
 	Overlaps []RouteOverlap   `json:"overlaps,omitempty"`
 	CanApply bool             `json:"can_apply"`
 	Hash     string           `json:"hash"`
+}
+
+type RouteTemplate struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Category string   `json:"category,omitempty"`
+	DNS      []string `json:"dns,omitempty"`
+	HRNeo    []string `json:"hr_neo,omitempty"`
+}
+
+type RouteTemplates struct {
+	Templates []RouteTemplate `json:"templates"`
 }
 
 type RouteDeleteRequest struct {

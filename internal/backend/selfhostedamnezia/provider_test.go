@@ -159,6 +159,60 @@ func TestStoreUpsertRoundTripAndProviderConfig(t *testing.T) {
 	}
 }
 
+func TestStoreUpsertRoundTripAndProviderConfigWithSSHPassword(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "selfhosted.json")
+	store, err := LoadStore(path, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := Instance{
+		ID:           "home",
+		Label:        "Home VPS",
+		EndpointHost: "vpn.example.com",
+		EndpointPort: 47567,
+		SSHHost:      "10.10.10.2",
+		SSHPort:      2222,
+		SSHUser:      "root",
+		SSHPassword:  "secret-pass",
+	}
+	if err := store.Upsert(inst); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveStore(path, store); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := LoadStore(path, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loaded.Get("home")
+	if !ok {
+		t.Fatalf("home instance not found: %+v", loaded.Instances)
+	}
+	if got.SSHHost != "10.10.10.2" || got.SSHPort != 2222 || got.SSHUser != "root" || got.SSHPassword != "secret-pass" {
+		t.Fatalf("SSH fields were not preserved: %+v", got)
+	}
+	cfg := Config{}.ProviderConfig(got)
+	if cfg.SSHHost != "10.10.10.2" || cfg.SSHPort != 2222 || cfg.SSHUser != "root" || cfg.SSHPassword != "secret-pass" {
+		t.Fatalf("ProviderConfig did not inherit SSH fields: %+v", cfg)
+	}
+	if !cfg.Ready() {
+		t.Fatalf("provider config should be ready with SSH-backed VPS: %+v", cfg)
+	}
+}
+
+func TestRunnerForConfigUsesRemoteDockerWhenSSHPasswordConfigured(t *testing.T) {
+	cfg := Config{Container: "amnezia-awg2", SSHHost: "10.10.10.2", SSHPort: 2222, SSHUser: "root", SSHPassword: "secret-pass"}
+	r := runnerForConfig(cfg)
+	remote, ok := r.(RemoteDockerRunner)
+	if !ok {
+		t.Fatalf("runner type = %T, want RemoteDockerRunner", r)
+	}
+	if remote.Host != "10.10.10.2" || remote.Port != 2222 || remote.User != "root" || remote.Password != "secret-pass" || remote.Container != "amnezia-awg2" {
+		t.Fatalf("bad remote runner: %+v", remote)
+	}
+}
+
 func hasCall(calls [][]string, parts ...string) bool {
 	for _, call := range calls {
 		if len(call) < len(parts) {

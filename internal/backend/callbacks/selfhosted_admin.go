@@ -59,8 +59,30 @@ func (r *Router) selfHostedAmneziaListText() string {
 }
 
 func (r *Router) adminSelfHostedAdd(ctx context.Context, m *tg.Message, fields []string) {
+	if len(fields) > 0 && strings.Contains(fields[0], "=") {
+		inst, err := parseSelfHostedAddMessage(strings.Join(fields, " "))
+		if err != nil {
+			r.adminReply(ctx, m, err.Error())
+			return
+		}
+		store, err := r.loadSelfHostedAmneziaStore()
+		if err != nil {
+			r.adminReply(ctx, m, "Failed to read self-hosted storage: "+err.Error())
+			return
+		}
+		if err := store.Upsert(inst); err != nil {
+			r.adminReply(ctx, m, "Failed to save self-hosted VPS: "+err.Error())
+			return
+		}
+		if err := r.saveSelfHostedAmneziaStore(store); err != nil {
+			r.adminReply(ctx, m, "Failed to write self-hosted storage: "+err.Error())
+			return
+		}
+		r.adminReply(ctx, m, fmt.Sprintf("Self-hosted Amnezia VPS %q saved.", strings.ToLower(inst.ID)))
+		return
+	}
 	if len(fields) < 3 {
-		r.adminReply(ctx, m, "Usage: /selfhosted add <id> <endpoint_host> <endpoint_port> [label]")
+		r.adminReply(ctx, m, "Usage: /selfhosted add id=<id> ssh_host=<host> ssh_user=root ssh_password=<pass> endpoint_host=<host> endpoint_port=<port> label=<label>")
 		return
 	}
 	port, err := strconv.Atoi(fields[2])
@@ -176,6 +198,8 @@ func (r *Router) adminSelfHostedEnable(ctx context.Context, m *tg.Message, field
 
 func applySelfHostedField(inst *selfhostedamnezia.Instance, key, val string) error {
 	switch key {
+	case "id":
+		inst.ID = val
 	case "label":
 		inst.Label = val
 	case "host", "endpoint_host":
@@ -204,6 +228,22 @@ func applySelfHostedField(inst *selfhostedamnezia.Instance, key, val string) err
 			return nil
 		}
 		inst.DNS = strings.Split(val, ",")
+	case "ssh_host":
+		inst.SSHHost = val
+	case "ssh_port":
+		if val == "" {
+			inst.SSHPort = 0
+			return nil
+		}
+		port, err := strconv.Atoi(val)
+		if err != nil {
+			return fmt.Errorf("ssh_port must be a number")
+		}
+		inst.SSHPort = port
+	case "ssh_user":
+		inst.SSHUser = val
+	case "ssh_password", "password":
+		inst.SSHPassword = val
 	default:
 		return fmt.Errorf("unknown field %q", key)
 	}
@@ -213,8 +253,9 @@ func applySelfHostedField(inst *selfhostedamnezia.Instance, key, val string) err
 func selfHostedUsage() string {
 	return strings.Join([]string{
 		"Commands:",
+		"  /selfhosted add id=<id> ssh_host=<host> ssh_user=root ssh_password=<pass> endpoint_host=<host> endpoint_port=<port> label=<label>",
 		"  /selfhosted add <id> <endpoint_host> <endpoint_port> [label]",
-		"  /selfhosted set <id> host=<host> port=<port> label=<label> dns=1.1.1.1,8.8.8.8",
+		"  /selfhosted set <id> host=<host> port=<port> label=<label> dns=1.1.1.1,8.8.8.8 ssh_password=<pass>",
 		"  /selfhosted enable <id>",
 		"  /selfhosted disable <id>",
 		"  /selfhosted delete <id>",

@@ -174,3 +174,27 @@ func TestPickConnectivityTunnelIfaceDoesNotFallbackWhenMatchingHydraRoutePolicyU
 		t.Fatalf("iface=%q label=%q, want no fallback when matching HR policy follows unavailable nwg1", iface, label)
 	}
 }
+
+func TestPickConnectivityTunnelIfaceUsesHydraRoutePolicyInterfaceInsteadOfFirstDefaultRoute(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg10","name":"first-default","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"status":"running","defaultRoute":true},
+			{"id":"awg11","name":"actual-policy","interfaceName":"nwg5","ndmsName":"Wireguard5","enabled":true,"status":"running","defaultRoute":true}
+		]}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:YOUTUBE","name":"YOUTUBE","enabled":true,"backend":"hydraroute","domains":["geosite:YOUTUBE"],"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute","hrPolicyInterfaces":["Wireguard5"]}
+		]}`))
+	})
+	c := awgmgrFake(t, mux)
+
+	iface, label := pickConnectivityTunnelIface(context.Background(), c, []connectivityTarget{
+		{Name: "YouTube", URL: "https://www.youtube.com/generate_204"},
+	})
+
+	if iface != "nwg5" || label != "actual-policy" {
+		t.Fatalf("iface=%q label=%q, want nwg5/actual-policy", iface, label)
+	}
+}
