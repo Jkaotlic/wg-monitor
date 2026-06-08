@@ -996,3 +996,15 @@ func TestDoubleDeployHint_NoHitWhenOnlyOneBoxHasAgent(t *testing.T) {
 		t.Fatal("want detectDoubleDeploy=false when only target box has the agent")
 	}
 }
+
+func TestSQLiteDeleteUserCommandEnablesForeignKeys(t *testing.T) {
+	got := sqliteDeleteUserCommand("o'hare")
+	for _, want := range []string{
+		"PRAGMA foreign_keys=ON;",
+		"DELETE FROM users WHERE nickname='o''hare';",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("delete command missing %q: %s", want, got)
+		}
+	}
+}

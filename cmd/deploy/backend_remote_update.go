@@ -134,7 +134,7 @@ Description=wg-monitor remote backend update poller
 
 [Timer]
 OnBootSec=30s
-OnUnitActiveSec=20s
+OnUnitActiveSec=2min
 AccuracySec=5s
 Unit=%s
 
