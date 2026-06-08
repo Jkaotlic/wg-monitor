@@ -85,7 +85,7 @@ func (r *Router) handleKeyboardCommand(ctx context.Context, m *tg.Message) {
 		r.adminReply(ctx, m, "/keyboard нужно писать ВНУТРИ топика конкретного роутера.")
 		return
 	}
-	u, err := r.d.Users().GetByThreadID(*m.MessageThreadID)
+	u, err := r.d.Users().GetByChatThreadID(m.Chat.ID, *m.MessageThreadID, r.cfg.ChatID)
 	if err != nil {
 		r.adminReply(ctx, m, "В этом топике не привязан ни один роутер. Сначала /this_is <nickname> (только для админа).")
 		return
@@ -128,7 +128,7 @@ func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 			skipped++
 			continue
 		}
-		tid, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, false)
+		ref, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, false)
 		if err != nil {
 			fmt.Fprintf(&b, "❌ %s — %v\n", u.Nickname, err)
 			failed++
@@ -136,10 +136,10 @@ func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 		}
 		// Welcome: best-effort, non-fatal. Skip if it fails — fresh topic
 		// is still usable; the reply-kb will attach on the next bot message.
-		if werr := alerts.SendWelcomeRoleMenu(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, tg.ReplyKeyboardForTopic("per_router"), tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
+		if werr := alerts.SendWelcomeRoleMenu(ctx, r.tg, ref.ChatID, ref.ThreadID, u.Nickname, tg.ReplyKeyboardForTopic("per_router"), tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
 			slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
 		}
-		fmt.Fprintf(&b, "✅ %s — thread_id=%d\n", u.Nickname, tid)
+		fmt.Fprintf(&b, "✅ %s — chat_id=%d thread_id=%d\n", u.Nickname, ref.ChatID, ref.ThreadID)
 		created++
 	}
 	fmt.Fprintf(&b, "\nИтого: %d создано, %d пропущено (уже есть), %d ошибок", created, skipped, failed)
@@ -156,7 +156,7 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 		r.adminReply(ctx, m, "/recreate_topic нужно писать ВНУТРИ топика конкретного роутера.")
 		return
 	}
-	u, err := r.d.Users().GetByThreadID(*m.MessageThreadID)
+	u, err := r.d.Users().GetByChatThreadID(m.Chat.ID, *m.MessageThreadID, r.cfg.ChatID)
 	if err != nil {
 		r.adminReply(ctx, m, "В этом топике не привязан ни один роутер. Сначала /this_is <nickname>.")
 		return
@@ -165,7 +165,7 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 	if u.TelegramThreadID != nil {
 		oldID = *u.TelegramThreadID
 	}
-	tid, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, true)
+	ref, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, true)
 	if err != nil {
 		sum, hint := alerts.HintFor("admin_recreate_topic", err.Error())
 		card := alerts.Card{Badge: "❌", Label: "Не удалось пересоздать топик", Summary: sum, Hint: hint}
@@ -174,12 +174,12 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 	}
 	// Welcome: always fires on rebuild (new thread_id = new topic) so the
 	// reply-keyboard attaches to the fresh thread. Non-fatal.
-	if werr := alerts.SendWelcomeRoleMenu(ctx, r.tg, r.cfg.ChatID, tid, u.Nickname, tg.ReplyKeyboardForTopic("per_router"), tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
+	if werr := alerts.SendWelcomeRoleMenu(ctx, r.tg, ref.ChatID, ref.ThreadID, u.Nickname, tg.ReplyKeyboardForTopic("per_router"), tg.OperatorMenuInlineKeyboardForTopic("per_router")); werr != nil {
 		slog.Warn("welcome send failed (non-fatal)", "user", u.Nickname, "err", werr)
 	}
 	r.adminReply(ctx, m, fmt.Sprintf(
 		"🔄 Тема для %s пересоздана.\n  Старая thread_id=%d (осталась в TG, можешь удалить руками)\n  Новая thread_id=%d — алерты пойдут туда.",
-		u.Nickname, oldID, tid))
+		u.Nickname, oldID, ref.ThreadID))
 }
 
 // adminThisIs binds the calling message's MessageThreadID to the router
@@ -201,7 +201,7 @@ func (r *Router) adminThisIs(ctx context.Context, m *tg.Message, arg string) {
 		r.adminReply(ctx, m, fmt.Sprintf("Роутер %q не найден. Доступные — /list_users или CLI list-users.", nick))
 		return
 	}
-	if err := r.d.Users().UpdateThreadID(u.ID, *m.MessageThreadID); err != nil {
+	if err := r.d.Users().UpdateTelegramTopic(u.ID, m.Chat.ID, *m.MessageThreadID); err != nil {
 		sum, hint := alerts.HintFor("admin_this_is", err.Error())
 		card := alerts.Card{Badge: "❌", Label: "Не удалось сохранить привязку", Summary: sum, Hint: hint}
 		r.adminReply(ctx, m, card.Render(alerts.CardOpts{MaxBytes: 3500}))

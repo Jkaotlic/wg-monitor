@@ -10,6 +10,9 @@ db_path: /var/lib/wg-monitor/state.db
 telegram:
   bot_token_file: /etc/wg-monitor/bot-token.txt
   chat_id: {{.ChatID}}
+  # Additional operator supergroups allowed to use the same bot. Routers must
+  # be bound to one of these chats with `wg-monitor-cli bind-topic --chat-id`.
+  extra_chat_ids: []
   admin_user_id: {{.AdminUserID}}
 
 state:

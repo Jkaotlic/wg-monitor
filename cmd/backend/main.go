@@ -162,6 +162,7 @@ func main() {
 	// must be shared between handlers and notifier).
 	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
 		ChatID:             cfg.Telegram.ChatID,
+		ExtraChatIDs:       cfg.Telegram.ExtraChatIDs,
 		AdminUserID:        cfg.Telegram.AdminUserID,
 		MuteCutoffHour:     cfg.State.MuteCutoffHour,
 		BackendVersion:     Version,

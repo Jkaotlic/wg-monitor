@@ -298,6 +298,41 @@ func TestEnsureTopics_SendsWelcomeForNewTopic(t *testing.T) {
 	}
 }
 
+func TestEnsureTopics_UsesRouterTelegramChatID(t *testing.T) {
+	dbPath, ids := newEnsureTestDB(t, "tenant")
+	d, _ := db.Open(dbPath)
+	if err := d.Users().UpdateTelegramTopic(ids[0], -200, 0); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	fc := &fakeTopicCreator{}
+	var out bytes.Buffer
+	err := runEnsureTopics(context.Background(), ensureTopicsOpts{
+		DBPath:          dbPath,
+		ChatID:          -100,
+		Creator:         fc,
+		Welcomer:        fc,
+		WelcomeKeyboard: func() any { return "stub-kb" },
+		Out:             &out,
+	})
+	if err != nil {
+		t.Fatalf("run: %v\noutput:\n%s", err, out.String())
+	}
+	if len(fc.calls) != 1 || fc.calls[0].ChatID != -200 {
+		t.Fatalf("topic calls=%+v, want one call to -200", fc.calls)
+	}
+	if len(fc.welcomeSends) != 1 || fc.welcomeSends[0].ChatID != -200 {
+		t.Fatalf("welcome sends=%+v, want one send to -200", fc.welcomeSends)
+	}
+	d2, _ := db.Open(dbPath)
+	defer d2.Close()
+	u, _ := d2.Users().GetByNickname("tenant")
+	if u.TelegramChatID == nil || *u.TelegramChatID != -200 || u.TelegramThreadID == nil || *u.TelegramThreadID != 5001 {
+		t.Fatalf("topic binding not persisted: %+v", u)
+	}
+}
+
 // TestEnsureTopics_NoWelcomeForSkippedUser: a user that already has a
 // topic is skipped — no welcome should be sent for them.
 func TestEnsureTopics_NoWelcomeForSkippedUser(t *testing.T) {

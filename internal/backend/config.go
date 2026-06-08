@@ -78,10 +78,11 @@ type RetentionConfig struct {
 }
 
 type TelegramConfig struct {
-	BotTokenFile string `yaml:"bot_token_file"`
-	BotToken     string `yaml:"-"`
-	ChatID       int64  `yaml:"chat_id"`
-	AdminUserID  int64  `yaml:"admin_user_id"`
+	BotTokenFile string  `yaml:"bot_token_file"`
+	BotToken     string  `yaml:"-"`
+	ChatID       int64   `yaml:"chat_id"`
+	ExtraChatIDs []int64 `yaml:"extra_chat_ids"`
+	AdminUserID  int64   `yaml:"admin_user_id"`
 }
 
 // WizardConfig wires the optional /v1/wizard/* endpoints. When TokenFile

@@ -43,6 +43,7 @@ type TGClient interface {
 
 type Config struct {
 	ChatID             int64
+	ExtraChatIDs       []int64
 	AdminUserID        int64
 	MuteCutoffHour     int
 	BackendVersion     string
@@ -155,6 +156,21 @@ func (r *Router) SetRoutesCache(c *RoutesCache) {
 
 func (r *Router) RouteWizardStore() *RouteWizardStore {
 	return r.routeWizard
+}
+
+func (r *Router) chatAllowed(chatID int64) bool {
+	if r.cfg.ChatID == 0 {
+		return true
+	}
+	if chatID == r.cfg.ChatID {
+		return true
+	}
+	for _, extra := range r.cfg.ExtraChatIDs {
+		if chatID == extra {
+			return true
+		}
+	}
+	return false
 }
 
 // SetOpkgRepair attaches the pendingOpkgRepair store and the OpkgRepairAction
@@ -304,7 +320,8 @@ func newImportToken() string {
 // log every callback's from.id for audit so post-hoc you can see who pushed
 // what — important since opkg_upgrade is enabled in the menu.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
-	if r.cfg.ChatID != 0 && q.Message.Chat.ID != r.cfg.ChatID && !(r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))) {
+	adminPrivatePanel := r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))
+	if !r.chatAllowed(q.Message.Chat.ID) && !adminPrivatePanel {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "wrong chat")
 		slog.Warn("rejected callback (chat-id)", "from", q.From.ID, "chat", q.Message.Chat.ID, "data", q.Data)
 		return
@@ -699,6 +716,12 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 			"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "owner_thread", *user.TelegramThreadID, "data", q.Data)
 		return false
 	}
+	if user.TelegramThreadID != nil && q.Message.Chat.ID != user.EffectiveTelegramChatID(r.cfg.ChatID) {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ÑÑ‚Ð¾ Ð½Ðµ Ñ‡Ð°Ñ‚ ÑÑ‚Ð¾Ð³Ð¾ Ñ€Ð¾ÑƒÑ‚ÐµÑ€Ð°")
+		slog.Warn("acl: rejected (foreign chat)",
+			"from", q.From.ID, "router_user_id", args.UserID, "chat", q.Message.Chat.ID, "owner_chat", user.EffectiveTelegramChatID(r.cfg.ChatID), "data", q.Data)
+		return false
+	}
 	if r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID {
 		return true
 	}
@@ -755,7 +778,7 @@ func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQu
 	if q.Message.MessageThreadID == nil {
 		return true
 	}
-	user, err := r.d.Users().GetByThreadID(*q.Message.MessageThreadID)
+	user, err := r.d.Users().GetByChatThreadID(q.Message.Chat.ID, *q.Message.MessageThreadID, r.cfg.ChatID)
 	if err != nil {
 		if !errors.Is(err, db.ErrUserNotFound) {
 			slog.Warn("acl: legacy routes close topic lookup failed, allowing", "thread", *q.Message.MessageThreadID, "err", err)
@@ -792,7 +815,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 	}
 	adminDM := r.cfg.AdminUserID != 0 && m.From.ID == r.cfg.AdminUserID && m.Chat.ID == m.From.ID
-	if r.cfg.ChatID != 0 && m.Chat.ID != r.cfg.ChatID && !adminDM {
+	if !r.chatAllowed(m.Chat.ID) && !adminDM {
 		return
 	}
 	isAdmin := r.cfg.AdminUserID == 0 || m.From.ID == r.cfg.AdminUserID
@@ -803,7 +826,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		// sender is neither the bound owner nor an operator, drop. The downstream
 		// switch re-runs resolveTopicKind, which is cheap — keeping the
 		// existing flow untouched simplifies the diff.
-		kind, user := r.resolveTopicKind(m.MessageThreadID)
+		kind, user := r.resolveTopicKind(m.Chat.ID, m.MessageThreadID)
 		if kind != "per_router" || user == nil {
 			return
 		}
@@ -842,7 +865,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if isAdmin && r.handlePendingSelfHostedAmneziaMessage(ctx, m) {
 		return
 	}
-	kind, user := r.resolveTopicKind(m.MessageThreadID)
+	kind, user := r.resolveTopicKind(m.Chat.ID, m.MessageThreadID)
 	// Document handler — before text switch.
 	if m.Document != nil {
 		r.handleDocumentUpload(ctx, m, kind, user)
@@ -1055,14 +1078,14 @@ func parseRouteExplainText(text string) (string, bool) {
 
 // resolveTopicKind classifies a thread id into "per_router" / "summary" /
 // "systemic" / "unknown" using db.Users + db.KV operations-topic IDs.
-func (r *Router) resolveTopicKind(threadID *int64) (string, *db.User) {
+func (r *Router) resolveTopicKind(chatID int64, threadID *int64) (string, *db.User) {
 	if threadID == nil || *threadID == 0 {
 		return "unknown", nil
 	}
-	if u, err := r.d.Users().GetByThreadID(*threadID); err == nil {
+	if u, err := r.d.Users().GetByChatThreadID(chatID, *threadID, r.cfg.ChatID); err == nil {
 		return "per_router", u
 	} else if !errors.Is(err, db.ErrUserNotFound) {
-		slog.Warn("resolveTopicKind: users lookup failed", "thread", *threadID, "err", err)
+		slog.Warn("resolveTopicKind: users lookup failed", "chat", chatID, "thread", *threadID, "err", err)
 	}
 	if id, ok, err := r.d.KV().GetTopicID("summary"); err != nil {
 		slog.Warn("resolveTopicKind: kv summary lookup failed", "err", err)

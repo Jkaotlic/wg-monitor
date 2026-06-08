@@ -314,7 +314,7 @@ func (r *Router) handlePendingSelfHostedAmneziaMessage(ctx context.Context, m *t
 	}
 	r.pendingSelfHostedAmnezia.clear(m.From.ID)
 	text, kb := r.selfHostedAmneziaManageView(0)
-	if _, user := r.resolveTopicKind(m.MessageThreadID); user != nil {
+	if _, user := r.resolveTopicKind(m.Chat.ID, m.MessageThreadID); user != nil {
 		text, kb = r.selfHostedAmneziaManageView(user.ID)
 	}
 	if p.PromptMessageID != 0 {

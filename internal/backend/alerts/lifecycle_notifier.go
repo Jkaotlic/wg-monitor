@@ -53,10 +53,11 @@ func (n *WakeNotifier) SendWake(ctx context.Context, userID int64, nickname stri
 	}
 	card := RenderWakeReport(nickname, checks)
 	text := card.Render(CardOpts{MaxBytes: 3500})
+	chatID := user.EffectiveTelegramChatID(n.chatID)
 	if ktg, ok := n.tg.(lifecycleKeyboardTG); ok {
-		_, err = ktg.SendMessageWithReplyKeyboard(ctx, n.chatID, user.TelegramThreadID, text, "", nil, mobileWakeKeyboard(userID))
+		_, err = ktg.SendMessageWithReplyKeyboard(ctx, chatID, user.TelegramThreadID, text, "", nil, mobileWakeKeyboard(userID))
 	} else {
-		_, err = n.tg.SendMessage(ctx, n.chatID, user.TelegramThreadID, text, "", nil)
+		_, err = n.tg.SendMessage(ctx, chatID, user.TelegramThreadID, text, "", nil)
 	}
 	if err != nil {
 		slog.Warn("wake notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
@@ -91,7 +92,7 @@ func (n *SleepNotifier) SendSleeping(ctx context.Context, userID int64, nickname
 	}
 	card := RenderSleepInfo(nickname, lastSeen)
 	text := card.Render(CardOpts{MaxBytes: 800})
-	_, err = n.tg.SendMessage(ctx, n.chatID, user.TelegramThreadID, text, "", nil)
+	_, err = n.tg.SendMessage(ctx, user.EffectiveTelegramChatID(n.chatID), user.TelegramThreadID, text, "", nil)
 	if err != nil {
 		slog.Warn("sleep notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
 	}

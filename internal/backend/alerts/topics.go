@@ -18,6 +18,11 @@ type TopicCreator interface {
 // create path — keeps every topic in the chat visually consistent.
 const TopicIconOrange = 0xFF8C00
 
+type TopicRef struct {
+	ChatID   int64
+	ThreadID int64
+}
+
 // EnsureTopicForUser is the single source of truth for "make sure this
 // user has a forum topic in TG, persist its id." Behaviour:
 //
@@ -32,22 +37,24 @@ const TopicIconOrange = 0xFF8C00
 // same user (e.g. Dispatcher under alert pressure) must serialize
 // themselves. CLI and Router admin commands call from single-threaded
 // paths and need no extra lock.
-func EnsureTopicForUser(ctx context.Context, tg TopicCreator, d *db.DB, chatID, userID int64, force bool) (int64, error) {
+func EnsureTopicForUser(ctx context.Context, tg TopicCreator, d *db.DB, chatID, userID int64, force bool) (TopicRef, error) {
 	u, err := d.Users().GetByID(userID)
 	if err != nil {
-		return 0, fmt.Errorf("ensure topic: %w", err)
+		return TopicRef{}, fmt.Errorf("ensure topic: %w", err)
 	}
+	effectiveChatID := u.EffectiveTelegramChatID(chatID)
 	if !force && u.TelegramThreadID != nil {
-		return *u.TelegramThreadID, nil
+		return TopicRef{ChatID: effectiveChatID, ThreadID: *u.TelegramThreadID}, nil
 	}
+	chatID = effectiveChatID
 	tid, err := tg.CreateForumTopic(ctx, chatID, "👤 "+u.Nickname, TopicIconOrange)
 	if err != nil {
-		return 0, fmt.Errorf("ensure topic: createForumTopic for %s: %w", u.Nickname, err)
+		return TopicRef{}, fmt.Errorf("ensure topic: createForumTopic for %s: %w", u.Nickname, err)
 	}
-	if err := d.Users().UpdateThreadID(userID, tid); err != nil {
-		return 0, fmt.Errorf("ensure topic: persist thread id for %s: %w", u.Nickname, err)
+	if err := d.Users().UpdateTelegramTopic(userID, effectiveChatID, tid); err != nil {
+		return TopicRef{}, fmt.Errorf("ensure topic: persist topic binding for %s: %w", u.Nickname, err)
 	}
-	return tid, nil
+	return TopicRef{ChatID: effectiveChatID, ThreadID: tid}, nil
 }
 
 // WelcomeSender is the slice of *tg.Client used by SendWelcome. Narrow

@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     expected_exit_ip TEXT NOT NULL,
     awg_iface TEXT NOT NULL,
     telegram_thread_id INTEGER,
+    telegram_chat_id INTEGER,
     telegram_user_id INTEGER,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_seen_at TIMESTAMP
@@ -15,6 +16,7 @@ CREATE INDEX IF NOT EXISTS idx_users_token_hash ON users(token_hash);
 -- (GetByThreadID). Without it the lookup is a full table scan per
 -- inbound message.
 CREATE INDEX IF NOT EXISTS idx_users_thread_id ON users(telegram_thread_id) WHERE telegram_thread_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_chat_thread_id ON users(telegram_chat_id, telegram_thread_id) WHERE telegram_thread_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

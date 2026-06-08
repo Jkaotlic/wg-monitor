@@ -205,6 +205,74 @@ func TestRouterAllowsNonAdminInRightChat(t *testing.T) {
 	}
 }
 
+func TestRouterRejectsSameThreadFromWrongChat(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 77); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, ExtraChatIDs: []int64{-200}, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := int64(77)
+	q := &tg.CallbackQuery{
+		ID:      "cbk-wrong-chat",
+		From:    tg.User{ID: 99999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "panel"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 0 {
+		t.Fatalf("wrong chat must not apply router action, edits=%v", f.edits)
+	}
+	if len(f.answers) != 1 {
+		t.Fatalf("expected rejection answer, got %v", f.answers)
+	}
+}
+
+func TestRouterAllowsSecondaryConfiguredGroupTopic(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 77); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, ExtraChatIDs: []int64{-200}, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := int64(77)
+	q := &tg.CallbackQuery{
+		ID:      "cbk-secondary-chat",
+		From:    tg.User{ID: 99999},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -200}, MessageThreadID: &tid, Text: "panel"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(f.edits) != 1 {
+		t.Fatalf("secondary group action should apply once, got edits=%v answers=%v", f.edits, f.answers)
+	}
+}
+
+func TestRouterRejectsUnconfiguredGroup(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 77); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, ExtraChatIDs: []int64{-200}, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := int64(77)
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "cbk-unconfigured-chat",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -300}, MessageThreadID: &tid, Text: "panel"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	})
+
+	if len(f.edits) != 0 || len(f.answers) != 1 {
+		t.Fatalf("unconfigured group should be ignored, edits=%v answers=%v", f.edits, f.answers)
+	}
+}
+
 func TestRouterHandleCallback_MissingRouterDoesNotEnqueueCommand(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTG{}
