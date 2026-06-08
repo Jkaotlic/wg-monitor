@@ -69,3 +69,7 @@ ui:
 # endpoints are NOT registered (fail-closed).
 wizard:
   token_file: /etc/wg-monitor/wizard-token.txt
+  # The public wizard endpoint writes backend self-update requests here.
+  # A host-side wg-monitor-backend-update.timer consumes the file and restarts
+  # the backend locally, so future backend updates do not require SSH reachability.
+  backend_update_file: /var/lib/wg-monitor/backend-update.json

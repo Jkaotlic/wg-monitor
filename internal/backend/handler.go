@@ -270,7 +270,8 @@ type Deps struct {
 	MobileWakeAfter  time.Duration
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
-	WizardToken string
+	WizardToken       string
+	BackendUpdatePath string
 }
 
 type AlertPolicy struct {
@@ -334,6 +335,7 @@ func NewMux(d Deps) http.Handler {
 		mux.Handle("POST /v1/wizard/enrollments", reqID(wizAuth(wizardEnrollmentHandler(d))))
 		mux.Handle("PUT /v1/wizard/agents/{nickname}", reqID(wizAuth(wizardPutAgentHandler(d))))
 		mux.Handle("POST /v1/wizard/agents/{nickname}/deploy", reqID(wizAuth(wizardDeployHandler(d))))
+		mux.Handle("POST /v1/wizard/backend/deploy", reqID(wizAuth(wizardBackendDeployHandler(d))))
 		mux.Handle("POST /v1/wizard/agents/{nickname}/commands", reqID(wizAuth(wizardCommandHandler(d))))
 		mux.Handle("POST /v1/wizard/agents/{nickname}/maintenance", reqID(wizAuth(wizardMaintenanceHandler(d))))
 		mux.Handle("GET /v1/wizard/cmd/{cmd_id}", reqID(wizAuth(wizardCmdResultHandler(d))))

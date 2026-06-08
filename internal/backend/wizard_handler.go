@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -386,6 +389,13 @@ type wizardDeployResp struct {
 	CmdID string `json:"cmd_id"`
 }
 
+type backendUpdateRequest struct {
+	TargetVersion string `json:"target_version"`
+	RepoBase      string `json:"repo_base"`
+	RepoResolveIP string `json:"repo_resolve_ip,omitempty"`
+	RequestedAt   string `json:"requested_at"`
+}
+
 type wizardCommandReq struct {
 	Action string         `json:"action"`
 	Args   map[string]any `json:"args"`
@@ -497,6 +507,74 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: id})
 	}
+}
+
+func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if strings.TrimSpace(d.BackendUpdatePath) == "" {
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "backend update queue not configured")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req backendUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+			return
+		}
+		req.TargetVersion = strings.TrimSpace(req.TargetVersion)
+		if req.TargetVersion == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "target_version required")
+			return
+		}
+		repoBaseURL, ok := wizardDeployBackendURL(r)
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
+				"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL")
+			return
+		}
+		req.RepoBase = repoBaseURL + "/v1/releases/download"
+		req.RepoResolveIP = wizardRepoResolveIP(r)
+		req.RequestedAt = time.Now().UTC().Format(time.RFC3339)
+		if err := writeBackendUpdateRequest(d.BackendUpdatePath, req); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		if d.Logger != nil {
+			d.Logger.Info("wizard backend deploy queued",
+				"target_version", req.TargetVersion, "path", d.BackendUpdatePath)
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(struct {
+			Accepted bool `json:"accepted"`
+		}{Accepted: true})
+	}
+}
+
+func writeBackendUpdateRequest(path string, req backendUpdateRequest) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("backend update queue mkdir: %w", err)
+	}
+	body, err := json.MarshalIndent(req, "", "  ")
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return fmt.Errorf("backend update queue write: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("backend update queue rename: %w", err)
+	}
+	return nil
 }
 
 // wizardMaintenanceHandler enqueues a small allowlist of maintenance commands

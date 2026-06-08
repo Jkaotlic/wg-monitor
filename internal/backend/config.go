@@ -3,6 +3,7 @@ package backend
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -90,7 +91,8 @@ type TelegramConfig struct {
 // registered (fail-closed). To enable: put a 64-hex token (any opaque
 // secret really) into the file, mode 0600 root:wgmonitor.
 type WizardConfig struct {
-	TokenFile string `yaml:"token_file"`
+	TokenFile         string `yaml:"token_file"`
+	BackendUpdateFile string `yaml:"backend_update_file"`
 	// Token is loaded from TokenFile at config-load time. Empty → feature off.
 	Token string `yaml:"-"`
 }
@@ -286,4 +288,17 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.HideMy.SecretsPath = "/var/lib/wg-monitor/hidemyname.json"
 	}
 	return &cfg, nil
+}
+
+func DefaultBackendUpdatePath(cfg *Config) string {
+	if cfg == nil {
+		return ""
+	}
+	if strings.TrimSpace(cfg.Wizard.BackendUpdateFile) != "" {
+		return strings.TrimSpace(cfg.Wizard.BackendUpdateFile)
+	}
+	if strings.TrimSpace(cfg.DBPath) == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(cfg.DBPath), "backend-update.json")
 }

@@ -46,6 +46,13 @@ func main() {
 		}
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "backend-update-runner" {
+		if err := runBackendUpdateRunnerCommand(os.Args[2:]); err != nil {
+			slog.Error("backend-update-runner", "err", err)
+			os.Exit(2)
+		}
+		return
+	}
 
 	cfgPath := flag.String("config", "/etc/wg-monitor/backend.yaml", "path to backend config yaml")
 	showVersion := flag.Bool("version", false, "print version and exit")
@@ -224,10 +231,11 @@ func main() {
 		// Per-token rate limit on /v1/report (API-06). Defaults applied in
 		// LoadConfig so production yaml without rate_limit section gets sane
 		// throttling automatically.
-		ReportRatePerSec: cfg.RateLimit.ReportPerSec,
-		ReportBurst:      cfg.RateLimit.ReportBurst,
-		MobileWakeAfter:  time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
-		WizardToken:      cfg.Wizard.Token,
+		ReportRatePerSec:  cfg.RateLimit.ReportPerSec,
+		ReportBurst:       cfg.RateLimit.ReportBurst,
+		MobileWakeAfter:   time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
+		WizardToken:       cfg.Wizard.Token,
+		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,

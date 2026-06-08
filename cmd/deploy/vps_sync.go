@@ -100,10 +100,7 @@ func backendAPIDialHost(state *State) string {
 	if host := strings.TrimSpace(state.Backend.APIDialHost); host != "" {
 		return host
 	}
-	if strings.TrimSpace(state.Backend.SourceBind) != "" {
-		return ""
-	}
-	return strings.TrimSpace(state.Backend.Host)
+	return ""
 }
 
 func NewResilientVPSClientForBackend(state *State, secrets *SecretStore, token string, timeout time.Duration) *VPSClient {
@@ -216,6 +213,23 @@ func (c *VPSClient) CreateEnrollment(ctx context.Context, enroll EnrollmentReque
 		return nil, fmt.Errorf("backend returned incomplete enrollment")
 	}
 	return &out, nil
+}
+
+func (c *VPSClient) DeployBackend(ctx context.Context, targetVersion string) error {
+	body, err := json.Marshal(struct {
+		TargetVersion string `json:"target_version"`
+	}{TargetVersion: targetVersion})
+	if err != nil {
+		return err
+	}
+	status, raw, err := c.doWizardAPI(ctx, http.MethodPost, "/v1/wizard/backend/deploy", body, "application/json", 0)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusAccepted {
+		return fmt.Errorf("POST /v1/wizard/backend/deploy: HTTP %d: %s", status, trimWizardBody(raw))
+	}
+	return nil
 }
 
 // MergeAgents reconciles local state.Agents with the remote view.
