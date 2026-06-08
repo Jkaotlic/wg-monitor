@@ -62,6 +62,7 @@ func TestRouterMenuGroupsRouterActions(t *testing.T) {
 		"[2] Re-enroll / переустановить",
 		"[3] Удалить агента",
 		"[4] Показать роутеры",
+		"[5] Telegram group/topic",
 		"AWG Manager/KeenDNS",
 		"новый token",
 	} {

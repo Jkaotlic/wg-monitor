@@ -33,8 +33,9 @@ type BackendState struct {
 }
 
 type TelegramState struct {
-	ChatID      int64 `toml:"chat_id"`
-	AdminUserID int64 `toml:"admin_user_id"`
+	ChatID       int64   `toml:"chat_id"`
+	ExtraChatIDs []int64 `toml:"extra_chat_ids,omitempty"`
+	AdminUserID  int64   `toml:"admin_user_id"`
 }
 
 type AgentState struct {

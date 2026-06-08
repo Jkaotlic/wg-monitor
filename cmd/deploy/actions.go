@@ -1691,8 +1691,9 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 
 	PrintStep(4, 15, "backend.yaml")
 	yamlBytes, err := RenderBackendYAML(BackendParams{
-		ChatID:      state.Telegram.ChatID,
-		AdminUserID: state.Telegram.AdminUserID,
+		ChatID:       state.Telegram.ChatID,
+		ExtraChatIDs: normalizeExtraChatIDs(state.Telegram.ExtraChatIDs, state.Telegram.ChatID),
+		AdminUserID:  state.Telegram.AdminUserID,
 	})
 	if err != nil {
 		return err
