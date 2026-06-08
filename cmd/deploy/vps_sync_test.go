@@ -23,6 +23,37 @@ func TestMergeAgents_EmptyLocal_AllAdded(t *testing.T) {
 	}
 }
 
+func TestVPSClientDeployBackendPostsWizardEndpoint(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody struct {
+		TargetVersion string `json:"target_version"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	defer srv.Close()
+
+	c := &VPSClient{BaseURL: srv.URL, Token: "secret", HTTP: srv.Client()}
+	if err := c.DeployBackend(context.Background(), "v0.13.0-rc109"); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/v1/wizard/backend/deploy" {
+		t.Fatalf("path=%s", gotPath)
+	}
+	if gotAuth != "Bearer secret" {
+		t.Fatalf("auth=%q", gotAuth)
+	}
+	if gotBody.TargetVersion != "v0.13.0-rc109" {
+		t.Fatalf("target_version=%q", gotBody.TargetVersion)
+	}
+}
+
 func TestMergeAgents_RemoteOverridesLocal(t *testing.T) {
 	local := []AgentState{{Nickname: "alyaba", Host: "old", Port: 22, User: "root", Arch: "mips", LastDeployedVersion: "v0.9"}}
 	remote := []RemoteAgent{{Nickname: "alyaba", SSHHost: "new", SSHPort: 222, SSHUser: "root", Arch: "mips", LastDeployedVersion: "v0.10.3", Ring: "canary", PendingVersion: "v0.11.0", PendingSince: "2026-05-19T10:00:00Z"}}
@@ -347,6 +378,16 @@ func TestNewVPSClientForBackendUsesDomainAndHost(t *testing.T) {
 	}
 	if c.HTTP.Transport == nil {
 		t.Fatal("expected custom transport")
+	}
+	if got := backendAPIDialHost(state); got != "" {
+		t.Fatalf("backendAPIDialHost=%q, want empty unless api_dial_host is explicit", got)
+	}
+}
+
+func TestNewVPSClientForBackendUsesExplicitAPIDialHostOnly(t *testing.T) {
+	state := &State{Backend: BackendState{Domain: "wgmonitor.example", Host: "192.168.31.87", APIDialHost: "10.0.0.5"}}
+	if got := backendAPIDialHost(state); got != "10.0.0.5" {
+		t.Fatalf("backendAPIDialHost=%q, want explicit api_dial_host", got)
 	}
 }
 

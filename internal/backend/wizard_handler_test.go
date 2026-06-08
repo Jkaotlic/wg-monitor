@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,39 @@ func TestWizardAuth_RightToken_200(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != 200 {
 		t.Fatalf("want 200, got %d", rec.Code)
+	}
+}
+
+func TestWizardBackendDeploy_WritesPendingUpdate(t *testing.T) {
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "backend-update.json")
+	h := NewMux(Deps{WizardToken: "secret", BackendUpdatePath: pending})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/backend/deploy",
+		strings.NewReader(`{"target_version":"v0.13.0-rc109"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "wgmonitor.example.test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, err := os.ReadFile(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got backendUpdateRequest
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetVersion != "v0.13.0-rc109" {
+		t.Fatalf("target_version=%q", got.TargetVersion)
+	}
+	if got.RepoBase != "https://wgmonitor.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%q", got.RepoBase)
 	}
 }
 

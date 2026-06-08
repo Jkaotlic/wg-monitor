@@ -418,6 +418,17 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	}
 	PrintOK(fmt.Sprintf("последний релиз: %s", rel.TagName))
 
+	if handled, remoteErr := tryWizardBackendUpdate(state, secrets, rel.TagName); handled {
+		if remoteErr == nil {
+			PrintOK("backend updated through HTTPS wizard runner")
+			state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
+			state.Backend.LastDeployedVersion = rel.TagName
+			return nil
+		}
+		PrintWarn("HTTPS wizard backend update failed: " + remoteErr.Error())
+		PrintWarn("falling back to SSH backend update")
+	}
+
 	khPath := defaultCacheDir() + "/known_hosts"
 	kh, err := NewKnownHosts(khPath)
 	if err != nil {
@@ -468,6 +479,11 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 		if err := checkWizardEndpoint("https://" + state.Backend.Domain + "/v1/wizard/agents"); err != nil {
 			return err
 		}
+	}
+	if err := installBackendUpdateRunner(s, state, swapPlan); err != nil {
+		PrintWarn("remote backend update runner install skipped: " + err.Error())
+	} else {
+		PrintOK("remote backend update runner installed")
 	}
 
 	state.Backend.LastDeploy = time.Now().UTC().Format(time.RFC3339)
