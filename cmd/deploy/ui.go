@@ -7,6 +7,20 @@ import (
 	"strings"
 )
 
+var (
+	stdinReaderFile = os.Stdin
+	stdinReader     = bufio.NewReader(os.Stdin)
+)
+
+func readStdinLine() string {
+	if stdinReaderFile != os.Stdin {
+		stdinReaderFile = os.Stdin
+		stdinReader = bufio.NewReader(os.Stdin)
+	}
+	line, _ := stdinReader.ReadString('\n')
+	return line
+}
+
 // ANSI color codes.
 const (
 	ColorReset  = "\033[0m"
@@ -76,8 +90,7 @@ func Ask(prompt, defaultVal string) string {
 	} else {
 		fmt.Printf("%s: ", prompt)
 	}
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
+	line := readStdinLine()
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return defaultVal
@@ -108,8 +121,7 @@ func AskChoice(prompt string, options []ChoiceOption) string {
 	}
 	for {
 		fmt.Print(prompt + " > ")
-		r := bufio.NewReader(os.Stdin)
-		line, _ := r.ReadString('\n')
+		line := readStdinLine()
 		line = strings.TrimSpace(strings.ToUpper(line))
 		for _, o := range options {
 			if line == strings.ToUpper(o.Key) {
@@ -133,8 +145,7 @@ func Confirm(prompt string, defaultYes bool) bool {
 		suffix = "[Y/n]"
 	}
 	fmt.Printf("%s %s: ", prompt, suffix)
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
+	line := readStdinLine()
 	line = strings.TrimSpace(strings.ToLower(line))
 	if line == "" {
 		return defaultYes

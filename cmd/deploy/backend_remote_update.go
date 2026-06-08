@@ -18,11 +18,11 @@ func tryWizardBackendUpdate(state *State, secrets *SecretStore, version string) 
 	if strings.TrimSpace(tok) == "" {
 		return false, nil
 	}
-	client := NewVPSClientForBackend(state, tok, 15*time.Second)
+	client := NewVPSClientForBackend(state, tok, 30*time.Second)
 	if client == nil {
 		return false, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	if err := client.DeployBackend(ctx, version); err != nil {
 		msg := err.Error()
