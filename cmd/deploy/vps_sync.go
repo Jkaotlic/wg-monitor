@@ -124,6 +124,7 @@ func NewVPSClientWithTimeoutAndDialHost(domain, token string, timeout time.Durat
 		base = "https://" + base
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	if dialHost = strings.TrimSpace(dialHost); dialHost != "" {
 		dialer := &net.Dialer{Timeout: timeout}
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
