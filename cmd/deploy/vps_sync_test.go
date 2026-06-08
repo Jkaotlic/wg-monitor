@@ -379,6 +379,9 @@ func TestNewVPSClientForBackendUsesDomainAndHost(t *testing.T) {
 	if c.HTTP.Transport == nil {
 		t.Fatal("expected custom transport")
 	}
+	if tr, ok := c.HTTP.Transport.(*http.Transport); !ok || tr.Proxy != nil {
+		t.Fatalf("wizard API transport must ignore local proxy env, got %#v", c.HTTP.Transport)
+	}
 	if got := backendAPIDialHost(state); got != "" {
 		t.Fatalf("backendAPIDialHost=%q, want empty unless api_dial_host is explicit", got)
 	}
