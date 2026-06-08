@@ -27,6 +27,7 @@ type User struct {
 	AWGIface         string
 	Kind             string
 	TelegramThreadID *int64
+	TelegramChatID   *int64
 	// TelegramUserID is the numeric Telegram user id of the router's owner,
 	// captured either via CLI bind-tg-user or via TOFU on the first action
 	// in the owner's per-router topic. NULL until bound; callbacks router
@@ -55,6 +56,15 @@ type User struct {
 // IsMobile reports whether this user is a mobile (4G in-vehicle) router.
 // Used by the heartbeat watcher to apply a longer grace window.
 func (u User) IsMobile() bool { return u.Kind == KindMobile }
+
+// EffectiveTelegramChatID returns the router's owning operator group. NULL or
+// zero keeps backward-compatible routing through the primary configured chat.
+func (u User) EffectiveTelegramChatID(defaultChatID int64) int64 {
+	if u.TelegramChatID != nil && *u.TelegramChatID != 0 {
+		return *u.TelegramChatID
+	}
+	return defaultChatID
+}
 
 type UsersRepo struct{ d *DB }
 
@@ -119,7 +129,7 @@ ON CONFLICT(nickname) DO UPDATE SET
 
 // userColsFull lists every column read by single-row Get*. GetAll uses a
 // shorter projection (no token_hash, no created_at) and has its own scanner.
-const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac`
+const userColsFull = `id, nickname, token_hash, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_chat_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac`
 
 type userScanner interface {
 	Scan(dest ...any) error
@@ -128,6 +138,7 @@ type userScanner interface {
 func scanUserFull(s userScanner) (*User, error) {
 	var got User
 	var threadID sql.NullInt64
+	var tgChatID sql.NullInt64
 	var tgUserID sql.NullInt64
 	var lastSeen sql.NullTime
 	var sshHost sql.NullString
@@ -145,7 +156,7 @@ func scanUserFull(s userScanner) (*User, error) {
 	var expectedMAC sql.NullString
 	if err := s.Scan(
 		&got.ID, &got.Nickname, &got.TokenHash, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
-		&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
+		&threadID, &tgChatID, &tgUserID, &got.CreatedAt, &lastSeen,
 		&sshHost, &sshPort, &sshUser, &arch, &lastDepVer, &ring, &pendingVersion, &pendingSince,
 		&lastDeploy, &deployMode, &awgmURL, &awgmAuth, &expectedMAC,
 	); err != nil {
@@ -154,6 +165,10 @@ func scanUserFull(s userScanner) (*User, error) {
 	if threadID.Valid {
 		v := threadID.Int64
 		got.TelegramThreadID = &v
+	}
+	if tgChatID.Valid {
+		v := tgChatID.Int64
+		got.TelegramChatID = &v
 	}
 	if tgUserID.Valid {
 		v := tgUserID.Int64
@@ -261,7 +276,7 @@ func (u *UsersRepo) GetByNickname(nickname string) (*User, error) {
 
 func (u *UsersRepo) GetAll() ([]User, error) {
 	rows, err := u.d.db.Query(
-		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac FROM users ORDER BY id`,
+		`SELECT id, nickname, expected_exit_ip, awg_iface, kind, telegram_thread_id, telegram_chat_id, telegram_user_id, created_at, last_seen_at, ssh_host, ssh_port, ssh_user, arch, last_deployed_version, deploy_ring, pending_version, pending_since, last_deploy, deploy_mode, awgm_url, awgm_auth, expected_mac FROM users ORDER BY id`,
 	)
 	if err != nil {
 		return nil, err
@@ -271,6 +286,7 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 	for rows.Next() {
 		var got User
 		var threadID sql.NullInt64
+		var tgChatID sql.NullInt64
 		var tgUserID sql.NullInt64
 		var lastSeen sql.NullTime
 		var sshHost sql.NullString
@@ -288,7 +304,7 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		var expectedMAC sql.NullString
 		if err := rows.Scan(
 			&got.ID, &got.Nickname, &got.ExpectedExitIP, &got.AWGIface, &got.Kind,
-			&threadID, &tgUserID, &got.CreatedAt, &lastSeen,
+			&threadID, &tgChatID, &tgUserID, &got.CreatedAt, &lastSeen,
 			&sshHost, &sshPort, &sshUser, &arch, &lastDepVer, &ring, &pendingVersion, &pendingSince,
 			&lastDeploy, &deployMode, &awgmURL, &awgmAuth, &expectedMAC,
 		); err != nil {
@@ -297,6 +313,10 @@ func (u *UsersRepo) GetAll() ([]User, error) {
 		if threadID.Valid {
 			v := threadID.Int64
 			got.TelegramThreadID = &v
+		}
+		if tgChatID.Valid {
+			v := tgChatID.Int64
+			got.TelegramChatID = &v
 		}
 		if tgUserID.Valid {
 			v := tgUserID.Int64
@@ -373,6 +393,25 @@ func (u *UsersRepo) UpdateThreadID(id, threadID int64) error {
 	return err
 }
 
+// UpdateTelegramTopic binds a router topic to an operator group. chatID=0 keeps
+// the topic on the primary configured group for backward-compatible callers.
+func (u *UsersRepo) UpdateTelegramTopic(id, chatID, threadID int64) error {
+	if threadID == 0 {
+		if chatID == 0 {
+			_, err := u.d.db.Exec(`UPDATE users SET telegram_chat_id = NULL, telegram_thread_id = NULL WHERE id = ?`, id)
+			return err
+		}
+		_, err := u.d.db.Exec(`UPDATE users SET telegram_chat_id = ?, telegram_thread_id = NULL WHERE id = ?`, chatID, id)
+		return err
+	}
+	if chatID == 0 {
+		_, err := u.d.db.Exec(`UPDATE users SET telegram_chat_id = NULL, telegram_thread_id = ? WHERE id = ?`, threadID, id)
+		return err
+	}
+	_, err := u.d.db.Exec(`UPDATE users SET telegram_chat_id = ?, telegram_thread_id = ? WHERE id = ?`, chatID, threadID, id)
+	return err
+}
+
 // SetTelegramUserID binds the router to a specific Telegram user id.
 // Used by the callbacks router (TOFU on first owner action) and the
 // `bind-tg-user` CLI. Pass 0 to clear the binding.
@@ -400,6 +439,25 @@ func (u *UsersRepo) ClearThreadID(id int64) error {
 // ErrUserNotFound when no user owns this topic.
 func (u *UsersRepo) GetByThreadID(threadID int64) (*User, error) {
 	row := u.d.db.QueryRow(`SELECT `+userColsFull+` FROM users WHERE telegram_thread_id = ?`, threadID)
+	got, err := scanUserFull(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+	return got, nil
+}
+
+// GetByChatThreadID looks up a router by the Telegram group and forum topic.
+// Rows with NULL telegram_chat_id are treated as belonging to defaultChatID.
+func (u *UsersRepo) GetByChatThreadID(chatID, threadID, defaultChatID int64) (*User, error) {
+	row := u.d.db.QueryRow(
+		`SELECT `+userColsFull+` FROM users
+		  WHERE telegram_thread_id = ?
+		    AND (telegram_chat_id = ? OR (telegram_chat_id IS NULL AND ? = ?))`,
+		threadID, chatID, chatID, defaultChatID,
+	)
 	got, err := scanUserFull(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

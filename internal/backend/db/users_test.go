@@ -222,6 +222,54 @@ func TestUsersGetByThreadID_Miss(t *testing.T) {
 	}
 }
 
+func TestUsersGetByChatThreadIDUsesDefaultChatForLegacyRows(t *testing.T) {
+	d := openTempDB(t)
+	id, err := d.Users().Insert("legacy", "tok", "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(id, 4242); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByChatThreadID(-100, 4242, -100)
+	if err != nil {
+		t.Fatalf("GetByChatThreadID primary: %v", err)
+	}
+	if got.ID != id || got.Nickname != "legacy" {
+		t.Fatalf("got id=%d nick=%s want id=%d nick=legacy", got.ID, got.Nickname, id)
+	}
+	if got.EffectiveTelegramChatID(-100) != -100 {
+		t.Fatalf("effective chat=%d, want -100", got.EffectiveTelegramChatID(-100))
+	}
+
+	if _, err := d.Users().GetByChatThreadID(-200, 4242, -100); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("wrong chat lookup err=%v, want ErrUserNotFound", err)
+	}
+}
+
+func TestUsersTopicBindingIncludesTelegramChatID(t *testing.T) {
+	d := openTempDB(t)
+	id, err := d.Users().Insert("tenant", "tok", "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateTelegramTopic(id, -200, 4242); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByChatThreadID(-200, 4242, -100)
+	if err != nil {
+		t.Fatalf("GetByChatThreadID secondary: %v", err)
+	}
+	if got.ID != id || got.EffectiveTelegramChatID(-100) != -200 {
+		t.Fatalf("got user=%+v effective_chat=%d", got, got.EffectiveTelegramChatID(-100))
+	}
+	if _, err := d.Users().GetByChatThreadID(-100, 4242, -100); !errors.Is(err, ErrUserNotFound) {
+		t.Fatalf("primary chat lookup err=%v, want ErrUserNotFound", err)
+	}
+}
+
 func TestUsersGetByThreadID_NoRaceOnConcurrentInsert(t *testing.T) {
 	d := openTempDB(t)
 	var wg sync.WaitGroup

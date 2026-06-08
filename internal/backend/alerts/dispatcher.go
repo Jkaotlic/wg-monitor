@@ -73,7 +73,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// успехе TG-send. Если TG упал — FSM корректно в HARD, но
 		// LastAlertAt=NULL значит realert poller его не подхватит до
 		// следующего ручного refresh / OK-репорта.
-		threadID, err := di.ensureTopic(ctx, userID, nickname)
+		topicRef, err := di.ensureTopic(ctx, userID, nickname)
 		if err != nil {
 			return fmt.Errorf("ensure topic for %s/%s: %w", nickname, checkName, err)
 		}
@@ -113,10 +113,11 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			opts = append(opts, tg.WithMobileActions())
 		}
 		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
-		sendHard := func(tid int64) (int64, error) {
-			return di.tg.SendMessageWithKeyboard(ctx, di.cfg.ChatID, &tid, text, "", nil, &kb)
+		sendHard := func(ref TopicRef) (int64, error) {
+			tid := ref.ThreadID
+			return di.tg.SendMessageWithKeyboard(ctx, ref.ChatID, &tid, text, "", nil, &kb)
 		}
-		mid, err := sendHard(threadID)
+		mid, err := sendHard(topicRef)
 		if err != nil {
 			mid, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendHard)
 		}
@@ -144,7 +145,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// Same ordering invariant как Hard: state-Save до TG-send. Если
 		// TG отвалится, recovery фактически уже сохранён в FSM; следующий
 		// OK-репорт превратится в Noop (state==ok), не в дубль Recovery.
-		threadID, err := di.ensureTopic(ctx, userID, nickname)
+		topicRef, err := di.ensureTopic(ctx, userID, nickname)
 		if err != nil {
 			return fmt.Errorf("ensure topic for recovery %s/%s: %w", nickname, checkName, err)
 		}
@@ -170,10 +171,11 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			RecoveredAt: time.Now(),
 			Check:       check,
 		})
-		sendRecovery := func(tid int64) (int64, error) {
-			return di.tg.SendMessage(ctx, di.cfg.ChatID, &tid, text, "", prev.LastAlertMsgID)
+		sendRecovery := func(ref TopicRef) (int64, error) {
+			tid := ref.ThreadID
+			return di.tg.SendMessage(ctx, ref.ChatID, &tid, text, "", prev.LastAlertMsgID)
 		}
-		if _, err := sendRecovery(threadID); err != nil {
+		if _, err := sendRecovery(topicRef); err != nil {
 			if _, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendRecovery); err != nil {
 				return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 			}
@@ -228,15 +230,16 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 
 // SendOffline sends a ROUTER OFFLINE notice (used by the heartbeat watcher).
 func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error {
-	threadID, err := di.ensureTopic(ctx, userID, nickname)
+	topicRef, err := di.ensureTopic(ctx, userID, nickname)
 	if err != nil {
 		return err
 	}
 	text := FormatRouterOffline(nickname, since)
-	sendOffline := func(tid int64) (int64, error) {
-		return di.tg.SendMessage(ctx, di.cfg.ChatID, &tid, text, "", nil)
+	sendOffline := func(ref TopicRef) (int64, error) {
+		tid := ref.ThreadID
+		return di.tg.SendMessage(ctx, ref.ChatID, &tid, text, "", nil)
 	}
-	if _, err = sendOffline(threadID); err != nil {
+	if _, err = sendOffline(topicRef); err != nil {
 		_, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendOffline)
 	}
 	return err
@@ -254,7 +257,7 @@ func (di *Dispatcher) retryOnStaleTopic(
 	userID int64,
 	nickname string,
 	initialErr error,
-	send func(threadID int64) (int64, error),
+	send func(ref TopicRef) (int64, error),
 ) (int64, error) {
 	if !tg.IsTopicNotFound(initialErr) {
 		return 0, initialErr
@@ -264,11 +267,11 @@ func (di *Dispatcher) retryOnStaleTopic(
 	if err := di.d.Users().ClearThreadID(userID); err != nil {
 		return 0, fmt.Errorf("self-heal clear thread id: %w (orig: %v)", err, initialErr)
 	}
-	newID, err := di.ensureTopic(ctx, userID, nickname)
+	ref, err := di.ensureTopic(ctx, userID, nickname)
 	if err != nil {
 		return 0, fmt.Errorf("self-heal recreate topic: %w (orig: %v)", err, initialErr)
 	}
-	return send(newID)
+	return send(ref)
 }
 
 // ensureTopic returns a forum_topic id for `nickname`, creating one if
@@ -276,13 +279,13 @@ func (di *Dispatcher) retryOnStaleTopic(
 // mutex and double-checks before delegating to EnsureTopicForUser so
 // concurrent alerts for the same user don't race to create duplicate
 // topics in TG.
-func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname string) (int64, error) {
+func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname string) (TopicRef, error) {
 	u, err := di.d.Users().GetByNickname(nickname)
 	if err != nil {
-		return 0, err
+		return TopicRef{}, err
 	}
 	if u.TelegramThreadID != nil {
-		return *u.TelegramThreadID, nil
+		return TopicRef{ChatID: u.EffectiveTelegramChatID(di.cfg.ChatID), ThreadID: *u.TelegramThreadID}, nil
 	}
 	di.mu.Lock()
 	defer di.mu.Unlock()
@@ -290,23 +293,23 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	// topic while we waited.
 	u2, err := di.d.Users().GetByID(u.ID)
 	if err == nil && u2 != nil && u2.TelegramThreadID != nil {
-		return *u2.TelegramThreadID, nil
+		return TopicRef{ChatID: u2.EffectiveTelegramChatID(di.cfg.ChatID), ThreadID: *u2.TelegramThreadID}, nil
 	}
-	tid, err := EnsureTopicForUser(ctx, di.tg, di.d, di.cfg.ChatID, u.ID, false)
+	ref, err := EnsureTopicForUser(ctx, di.tg, di.d, di.cfg.ChatID, u.ID, false)
 	if err != nil {
-		return 0, err
+		return TopicRef{}, err
 	}
 	// Fresh create — send welcome so reply-keyboard attaches to the topic.
 	// Non-fatal: log and continue if welcome fails. The topic is usable
 	// without it (it appears on first alert).
 	if di.WelcomeKeyboard != nil && di.WelcomeVisibleKeyboard != nil {
-		if werr := SendWelcomeRoleMenu(ctx, di.tg, di.cfg.ChatID, tid, nickname, di.WelcomeKeyboard(), di.WelcomeVisibleKeyboard()); werr != nil {
+		if werr := SendWelcomeRoleMenu(ctx, di.tg, ref.ChatID, ref.ThreadID, nickname, di.WelcomeKeyboard(), di.WelcomeVisibleKeyboard()); werr != nil {
 			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
 		}
 	} else if di.WelcomeKeyboard != nil {
-		if werr := SendWelcome(ctx, di.tg, di.cfg.ChatID, tid, nickname, di.WelcomeKeyboard()); werr != nil {
+		if werr := SendWelcome(ctx, di.tg, ref.ChatID, ref.ThreadID, nickname, di.WelcomeKeyboard()); werr != nil {
 			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
 		}
 	}
-	return tid, nil
+	return ref, nil
 }

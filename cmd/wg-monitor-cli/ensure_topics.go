@@ -136,21 +136,21 @@ func runEnsureTopics(ctx context.Context, o ensureTopicsOpts) error {
 		if u.TelegramThreadID != nil {
 			oldID = *u.TelegramThreadID
 		}
-		tid, err := alerts.EnsureTopicForUser(ctx, o.Creator, d, o.ChatID, u.ID, o.Force)
+		ref, err := alerts.EnsureTopicForUser(ctx, o.Creator, d, o.ChatID, u.ID, o.Force)
 		if err != nil {
 			fmt.Fprintf(o.Out, "! fail %s — %v\n", u.Nickname, err)
 			failed++
 			continue
 		}
-		if oldID != 0 && tid != oldID {
-			fmt.Fprintf(o.Out, "+ rebuilt %s — old topic id=%d → new topic id=%d (old topic left intact in TG)\n", u.Nickname, oldID, tid)
+		if oldID != 0 && ref.ThreadID != oldID {
+			fmt.Fprintf(o.Out, "+ rebuilt %s — old topic id=%d → new topic id=%d (chat_id=%d, old topic left intact in TG)\n", u.Nickname, oldID, ref.ThreadID, ref.ChatID)
 		} else {
-			fmt.Fprintf(o.Out, "+ created %s — topic id=%d\n", u.Nickname, tid)
+			fmt.Fprintf(o.Out, "+ created %s — chat_id=%d topic id=%d\n", u.Nickname, ref.ChatID, ref.ThreadID)
 		}
 		// Send welcome so the topic gets a visible operator menu immediately.
 		// Non-fatal: log to stdout and continue.
 		if o.Welcomer != nil && o.WelcomeKeyboard != nil {
-			if werr := alerts.SendWelcome(ctx, o.Welcomer, o.ChatID, tid, u.Nickname, o.WelcomeKeyboard()); werr != nil {
+			if werr := alerts.SendWelcome(ctx, o.Welcomer, ref.ChatID, ref.ThreadID, u.Nickname, o.WelcomeKeyboard()); werr != nil {
 				fmt.Fprintf(o.Out, "  (welcome send failed for %s: %v)\n", u.Nickname, werr)
 			}
 		}

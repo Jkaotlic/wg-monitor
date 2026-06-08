@@ -179,12 +179,12 @@ checks:
 			Token:   cfg.Telegram.BotToken,
 			HTTP:    &http.Client{Timeout: 30 * time.Second},
 		}
-		tid, terr := alerts.EnsureTopicForUser(context.Background(), tgClient, d, cfg.Telegram.ChatID, id, false)
+		ref, terr := alerts.EnsureTopicForUser(context.Background(), tgClient, d, cfg.Telegram.ChatID, id, false)
 		if terr != nil {
 			fmt.Fprintf(o.Out, "\n! --ensure-topic: createForumTopic failed: %v\n  (You can retry with: wg-monitor-cli ensure-topics --config=%s --nickname=%s)\n", terr, o.ConfigPath, o.Nickname)
 			return nil
 		}
-		fmt.Fprintf(o.Out, "\nTelegram topic created: thread_id=%d\n", tid)
+		fmt.Fprintf(o.Out, "\nTelegram topic created: chat_id=%d thread_id=%d\n", ref.ChatID, ref.ThreadID)
 		return nil
 	}
 	fmt.Fprintf(o.Out, "\nThe Telegram topic for this user will be created automatically on the first HARD alert.\n  (Tip: create it now with `wg-monitor-cli ensure-topics --config=PATH --nickname=%s`)\n", o.Nickname)

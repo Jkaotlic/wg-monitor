@@ -34,7 +34,7 @@ func (n *DeployNotifier) SendDeferredUpdate(ctx context.Context, userID int64, n
 	}
 	card := RenderDeferredUpdate(nickname, targetVersion, status, output)
 	text := card.Render(CardOpts{MaxBytes: 1200})
-	_, err = n.tg.SendMessage(ctx, n.chatID, user.TelegramThreadID, text, "", nil)
+	_, err = n.tg.SendMessage(ctx, user.EffectiveTelegramChatID(n.chatID), user.TelegramThreadID, text, "", nil)
 	if err != nil {
 		slog.Warn("deploy notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
 	}

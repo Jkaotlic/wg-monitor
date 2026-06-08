@@ -67,6 +67,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate users.telegram_user_id: %w", err)
 	}
+	if err := migrateTelegramChatID(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users.telegram_chat_id: %w", err)
+	}
 	if err := migrateWizardSync(d); err != nil {
 		d.Close()
 		return nil, fmt.Errorf("migrate users wizard sync: %w", err)
@@ -136,6 +140,17 @@ func migrateUserKind(d *sql.DB) error {
 func migrateTelegramUserID(d *sql.DB) error {
 	return addColumnIfMissing(d, "users", "telegram_user_id",
 		`ALTER TABLE users ADD COLUMN telegram_user_id INTEGER`)
+}
+
+// migrateTelegramChatID adds users.telegram_chat_id for multi-operator-group
+// routing. NULL preserves the historic primary telegram.chat_id behaviour.
+func migrateTelegramChatID(d *sql.DB) error {
+	if err := addColumnIfMissing(d, "users", "telegram_chat_id",
+		`ALTER TABLE users ADD COLUMN telegram_chat_id INTEGER`); err != nil {
+		return err
+	}
+	_, err := d.Exec(`CREATE INDEX IF NOT EXISTS idx_users_chat_thread_id ON users(telegram_chat_id, telegram_thread_id) WHERE telegram_thread_id IS NOT NULL`)
+	return err
 }
 
 // migrateWizardSync adds five nullable columns used by the wizard sync

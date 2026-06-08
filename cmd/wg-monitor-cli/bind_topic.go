@@ -12,6 +12,7 @@ import (
 type bindTopicOpts struct {
 	DBPath   string
 	Nickname string
+	ChatID   int64
 	ThreadID int64
 	Clear    bool
 	Out      io.Writer
@@ -21,10 +22,11 @@ func cmdBindTopic(args []string) {
 	fs := flag.NewFlagSet("bind-topic", flag.ExitOnError)
 	dbPath := fs.String("db", "/var/lib/wg-monitor/state.db", "path to SQLite DB")
 	nick := fs.String("nickname", "", "router nickname to bind a topic to")
+	chat := fs.Int64("chat-id", 0, "Telegram supergroup chat_id that owns this router topic (0 = primary backend telegram.chat_id)")
 	thread := fs.Int64("thread-id", 0, "existing TG forum-topic message_thread_id to associate with this router")
 	clear := fs.Bool("clear", false, "clear the existing topic binding (next HARD alert will create a fresh one)")
 	_ = fs.Parse(args)
-	if err := runBindTopic(bindTopicOpts{DBPath: *dbPath, Nickname: *nick, ThreadID: *thread, Clear: *clear, Out: os.Stdout}); err != nil {
+	if err := runBindTopic(bindTopicOpts{DBPath: *dbPath, Nickname: *nick, ChatID: *chat, ThreadID: *thread, Clear: *clear, Out: os.Stdout}); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
@@ -38,8 +40,11 @@ func runBindTopic(o bindTopicOpts) error {
 	if o.Nickname == "" {
 		return fmt.Errorf("--nickname is required")
 	}
-	if !o.Clear && o.ThreadID <= 0 {
+	if !o.Clear && o.ThreadID < 0 {
 		return fmt.Errorf("--thread-id must be a positive integer (or use --clear)")
+	}
+	if !o.Clear && o.ThreadID == 0 && o.ChatID == 0 {
+		return fmt.Errorf("--thread-id must be a positive integer, or pass --chat-id to assign a group without an existing topic")
 	}
 	d, err := db.Open(o.DBPath)
 	if err != nil {
@@ -57,8 +62,16 @@ func runBindTopic(o bindTopicOpts) error {
 		fmt.Fprintf(o.Out, "OK — cleared topic binding for %s (next HARD alert will create a fresh one).\n", o.Nickname)
 		return nil
 	}
-	if err := d.Users().UpdateThreadID(u.ID, o.ThreadID); err != nil {
-		return fmt.Errorf("set thread id: %w", err)
+	if err := d.Users().UpdateTelegramTopic(u.ID, o.ChatID, o.ThreadID); err != nil {
+		return fmt.Errorf("set topic binding: %w", err)
+	}
+	if o.ChatID != 0 && o.ThreadID == 0 {
+		fmt.Fprintf(o.Out, "OK â€” assigned %s to chat_id=%d; topic id cleared and will be created by ensure-topics or the next HARD alert.\n", o.Nickname, o.ChatID)
+		return nil
+	}
+	if o.ChatID != 0 {
+		fmt.Fprintf(o.Out, "OK â€” bound %s to topic chat_id=%d thread_id=%d.\n", o.Nickname, o.ChatID, o.ThreadID)
+		return nil
 	}
 	fmt.Fprintf(o.Out, "OK — bound %s to topic thread_id=%d.\n", o.Nickname, o.ThreadID)
 	return nil

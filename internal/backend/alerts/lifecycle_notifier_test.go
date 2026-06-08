@@ -54,6 +54,28 @@ func TestWakeNotifier_SendsToRouterTopic(t *testing.T) {
 	}
 }
 
+func TestWakeNotifier_UsesRouterTelegramChatID(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
+	uid, _ := d.Users().InsertWithKind("tenantcar", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 555); err != nil {
+		t.Fatal(err)
+	}
+
+	tg := &fakeSendTG{}
+	wn := NewWakeNotifier(d, tg, -100)
+	if err := wn.SendWake(context.Background(), uid, "tenantcar", []wire.Check{{Name: "tunnels", Status: "ok"}}); err != nil {
+		t.Fatal(err)
+	}
+	if tg.chatID != -200 {
+		t.Errorf("chatID: want -200, got %d", tg.chatID)
+	}
+	if tg.threadID == nil || *tg.threadID != 555 {
+		t.Errorf("threadID: want 555, got %v", tg.threadID)
+	}
+}
+
 func TestSleepNotifier_SendsToRouterTopic(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()

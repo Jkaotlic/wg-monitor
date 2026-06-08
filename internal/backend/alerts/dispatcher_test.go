@@ -23,6 +23,7 @@ type fakeTG struct {
 	sent             []sentMsg
 	sentWithKeyboard []sentKBMsg
 	welcomeSends     []welcomeSend
+	topicCalls       []topicCall
 	topicID          int64
 	topicErr         error
 	// sendErrOnce, when non-nil, is returned by the next Send*; it is then
@@ -54,6 +55,11 @@ type welcomeSend struct {
 	markup   any
 }
 
+type topicCall struct {
+	chatID int64
+	name   string
+}
+
 func (f *fakeTG) SendMessage(_ context.Context, chatID int64, threadID *int64, text, _ string, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -78,13 +84,14 @@ func (f *fakeTG) SendMessageWithKeyboard(_ context.Context, chatID int64, thread
 	return int64(len(f.sentWithKeyboard) + 1000), nil
 }
 
-func (f *fakeTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
+func (f *fakeTG) CreateForumTopic(_ context.Context, chatID int64, name string, _ int) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.topicErr != nil {
 		return 0, f.topicErr
 	}
 	f.topicCallCount++
+	f.topicCalls = append(f.topicCalls, topicCall{chatID: chatID, name: name})
 	if f.topicID == 0 {
 		return 4242, nil
 	}
@@ -246,6 +253,72 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 				t.Errorf("button %q callback_data missing checkName: %s", btn.Text, btn.CallbackData)
 			}
 		}
+	}
+}
+
+func TestDispatcherHardUsesRouterTelegramChatID(t *testing.T) {
+	d := newDB(t)
+	uid, err := d.Users().Insert("tenant", "tok", "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 555); err != nil {
+		t.Fatal(err)
+	}
+	ftg := &fakeTG{}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+	}
+	if err := disp.Handle(context.Background(), uid, "tenant", "awg_handshake", tr, chk("awg_handshake", "fail", nil)); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+
+	if len(ftg.sentWithKeyboard) != 1 {
+		t.Fatalf("sentWithKeyboard=%d, want 1", len(ftg.sentWithKeyboard))
+	}
+	if ftg.sentWithKeyboard[0].chatID != -200 {
+		t.Fatalf("chatID=%d, want -200", ftg.sentWithKeyboard[0].chatID)
+	}
+	if tid := ftg.sentWithKeyboard[0].threadID; tid == nil || *tid != 555 {
+		t.Fatalf("threadID=%v, want 555", tid)
+	}
+}
+
+func TestEnsureTopicCreatesInRouterTelegramChatID(t *testing.T) {
+	d := newDB(t)
+	uid, err := d.Users().Insert("tenant", "tok", "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 0); err != nil {
+		t.Fatal(err)
+	}
+	ftg := &fakeTG{topicID: 9999}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
+	disp.WelcomeKeyboard = func() any { return "stub-kb" }
+
+	ref, err := disp.ensureTopic(context.Background(), uid, "tenant")
+	if err != nil {
+		t.Fatalf("ensureTopic: %v", err)
+	}
+	if ref.ChatID != -200 || ref.ThreadID != 9999 {
+		t.Fatalf("ref=%+v, want chat=-200 thread=9999", ref)
+	}
+	if len(ftg.topicCalls) != 1 || ftg.topicCalls[0].chatID != -200 {
+		t.Fatalf("topic calls=%+v, want one call to -200", ftg.topicCalls)
+	}
+	if len(ftg.welcomeSends) != 1 || ftg.welcomeSends[0].chatID != -200 {
+		t.Fatalf("welcome sends=%+v, want chat -200", ftg.welcomeSends)
+	}
+	got, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TelegramChatID == nil || *got.TelegramChatID != -200 || got.TelegramThreadID == nil || *got.TelegramThreadID != 9999 {
+		t.Fatalf("topic binding not persisted: %+v", got)
 	}
 }
 
@@ -482,12 +555,12 @@ func TestEnsureTopic_SendsWelcomeOnFreshCreate(t *testing.T) {
 	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
 	disp.WelcomeKeyboard = func() any { return "stub-kb" }
 
-	tid, err := disp.ensureTopic(context.Background(), uid, "vasya")
+	ref, err := disp.ensureTopic(context.Background(), uid, "vasya")
 	if err != nil {
 		t.Fatalf("ensureTopic fresh: %v", err)
 	}
-	if tid != 9999 {
-		t.Errorf("want tid 9999, got %d", tid)
+	if ref.ChatID != -100 || ref.ThreadID != 9999 {
+		t.Errorf("want chat -100 tid 9999, got %+v", ref)
 	}
 	if len(ftg.welcomeSends) != 1 {
 		t.Fatalf("want 1 welcome send on fresh create, got %d", len(ftg.welcomeSends))
