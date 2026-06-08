@@ -474,6 +474,37 @@ func TestPanelUpdateAll_SkipsAgentsBelowSafeSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestPanelUpdateAll_UsesBackendReleaseMirror(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateLastSeenAgentVersion(uid, "v0.13.0-rc32"); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTGFull{}
+	sink := &fakeEnqueuer{}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:         -100,
+		AdminUserID:    42,
+		BackendVersion: "v0.13.0-rc40",
+		PublicBaseURL:  "https://wg.example.test/",
+	})
+
+	q := &tg.CallbackQuery{
+		ID:      "cb-update-all",
+		From:    tg.User{ID: 42},
+		Data:    "panel:0:update_all_do",
+		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 79},
+	}
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 {
+		t.Fatalf("want one self_update queued, got %d (%+v)", len(sink.calls), sink.calls)
+	}
+	if got := sink.calls[0].args["repo_base"]; got != "https://wg.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%v, want backend release mirror", got)
+	}
+}
+
 func TestPanelAwakenConfirm_ShowsCountOfTopics(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 100); err != nil {

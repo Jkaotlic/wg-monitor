@@ -9,9 +9,10 @@ import (
 
 func TestRenderBackendYAML(t *testing.T) {
 	got, err := RenderBackendYAML(BackendParams{
-		ChatID:       -1001,
-		ExtraChatIDs: []int64{-1002, -1003},
-		AdminUserID:  42,
+		PublicBaseURL: "https://wg.example.test",
+		ChatID:        -1001,
+		ExtraChatIDs:  []int64{-1002, -1003},
+		AdminUserID:   42,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -23,6 +24,7 @@ func TestRenderBackendYAML(t *testing.T) {
 	}
 	for _, want := range []string{
 		`bot_token_file: /etc/wg-monitor/bot-token.txt`,
+		`public_base_url: "https://wg.example.test"`,
 		`chat_id: -1001`,
 		`extra_chat_ids:`,
 		`- -1002`,

@@ -213,6 +213,9 @@ func shouldTryDirectAWGMBootstrapFallback(err error) bool {
 	if strings.Contains(s, "bootstrap script failed") {
 		return false
 	}
+	if strings.Contains(s, "awgm vps relay failed") {
+		return true
+	}
 	return shouldTryDirectAWGMPreflightFallback(err)
 }
 

@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Listen            string                   `yaml:"listen"`
 	LogLevel          string                   `yaml:"log_level"`
+	PublicBaseURL     string                   `yaml:"public_base_url"`
 	DBPath            string                   `yaml:"db_path"`
 	Telegram          TelegramConfig           `yaml:"telegram"`
 	Wizard            WizardConfig             `yaml:"wizard"`
@@ -157,6 +158,7 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
 	}
+	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
 	if cfg.DBPath == "" {
 		return nil, fmt.Errorf("db_path is required")
 	}

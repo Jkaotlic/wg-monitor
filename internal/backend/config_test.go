@@ -56,6 +56,26 @@ telegram:
 	}
 }
 
+func TestLoadConfigTrimsPublicBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "secret-bot-token-xyz")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+public_base_url: " https://wg.example.test/ "
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PublicBaseURL != "https://wg.example.test" {
+		t.Fatalf("PublicBaseURL = %q, want trimmed URL", cfg.PublicBaseURL)
+	}
+}
+
 func TestLoadConfigRejectsMissingChatID(t *testing.T) {
 	dir := t.TempDir()
 	tokPath := writeFile(t, dir, "tok", "x")
