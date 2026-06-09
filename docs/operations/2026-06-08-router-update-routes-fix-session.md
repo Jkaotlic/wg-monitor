@@ -108,10 +108,12 @@ Agent rollout:
   `del`, `gachimikhail`, `snekhaev`.
 - Pending `v0.13.0-rc117` for sleeping/offline routers: `router4car4`,
   `caredns-oldcar`, `bronya`.
-- `snekhaev` is bound to the extra Telegram chat `-1003935409340`.
-  The old thread `5` no longer existed, causing Telegram `message thread not found`;
-  a new topic was created and verified:
-  `telegram_chat_id=-1003935409340`, `telegram_thread_id=81`.
+- Correction: `snekhaev` belongs in the separate Telegram group `Home_group`
+  (`telegram_chat_id=-1003935409340`), not in the primary `Status_Group`
+  (`telegram.chat_id=-1003651873378`).
+- The accidental primary `Status_Group` topic was deleted. A new `Home_group`
+  topic was created and verified:
+  `telegram_chat_id=-1003935409340`, `telegram_thread_id=100`.
 - Live `route_status` smoke checks returned `status=ok` for:
   - `testkeen` (primary chat)
-  - `snekhaev` (extra chat)
+  - `snekhaev` (`Home_group`)
