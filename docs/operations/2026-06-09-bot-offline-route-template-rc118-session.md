@@ -110,3 +110,28 @@ For the reported symptoms, the live boundary is now:
 - Offline heartbeat alert controls are fixed by the backend update to rc118.
 - The reported template-route failure on `testkeen` is fixed by the verified
   `testkeen` agent update to rc118.
+
+## Full Fleet Follow-Up
+
+After the initial `testkeen` rollout, the operator asked to update everywhere.
+Explicit `v0.13.0-rc118` self-update commands were queued for every router not
+already current, using public release mirror headers:
+
+- `X-WG-Public-Proto: https`
+- `X-WG-Public-Host: wgmonitor.example.com`
+
+Live result:
+
+- Current `v0.13.0-rc118`: `testkeen`, `client-a`, `client-i`, `del`, `client-b`,
+  `client-c`.
+- Pending `v0.13.0-rc118` until next wake/heartbeat: `gachimikhail`,
+  `client-e`, `client-f-old`, `client-g`.
+
+Notes:
+
+- `client-c` first hit a transient public mirror DNS/TLS timeout, then succeeded
+  on retry and confirmed rc118 by heartbeat.
+- `gachimikhail` was still last seen at `2026-06-09T05:21:40Z`, so the update is
+  queued as pending and will complete only when the agent comes back.
+- The older mobile/offline routers (`client-e`, `client-f-old`, `client-g`)
+  likewise have rc118 pending.
