@@ -64,3 +64,49 @@ Before release continuation, public backend health was:
 `{"status":"ok","version":"v0.13.0-rc117"}`
 
 Next expected RC: `v0.13.0-rc118`.
+
+## Release And Live Rollout
+
+Published release:
+
+- Tag: `v0.13.0-rc118`
+- Commit: `80da3ab5` - `fix(bot): silence offline alerts and route templates`
+- GitHub Actions release run: `27206714519` - success
+- GitHub release: `draft=false`, `prerelease=true`
+- Verified assets include `checksums.txt`, `wg-monitor-backend-linux-arm64`,
+  and `wg-monitor-agent-linux-mipsle`.
+- Public release mirror verified:
+  - `/v1/releases/download/v0.13.0-rc118/checksums.txt` -> HTTP 200
+  - `/v1/releases/download/v0.13.0-rc118/wg-monitor-agent-linux-mipsle` -> HTTP 200
+
+Backend rollout:
+
+- `POST /v1/wizard/backend/deploy` with target `v0.13.0-rc118` returned
+  HTTP 202 and `{"accepted":true}`.
+- Pi backend update runner completed with:
+  `{"target_version":"v0.13.0-rc118","status":"ok"}`.
+- Public `/healthz` after update:
+  `{"status":"ok","version":"v0.13.0-rc118"}`.
+
+Agent rollout:
+
+- `testkeen` self-update to `v0.13.0-rc118` was verified by command ACK and
+  follow-up heartbeat.
+- The first direct self-update attempt omitted the public-host headers, so the
+  agent tried `https://192.168.31.87/v1/releases/download/...` and failed with
+  connection refused. Re-enqueueing with:
+  - `X-WG-Public-Proto: https`
+  - `X-WG-Public-Host: wgmonitor.anexaev.crazedns.ru`
+  produced the correct public release mirror and succeeded.
+- Live agent table after rollout:
+  - `testkeen`: `v0.13.0-rc118`, current.
+  - `de4ddy`, `alyaba`, `puzirek`, `del`, `gachimikhail`, `snekhaev`:
+    still `v0.13.0-rc117`.
+  - `router4car4`, `caredns-oldcar`, `bronya`: still pending older rc117
+    mobile/offline updates.
+
+For the reported symptoms, the live boundary is now:
+
+- Offline heartbeat alert controls are fixed by the backend update to rc118.
+- The reported template-route failure on `testkeen` is fixed by the verified
+  `testkeen` agent update to rc118.
