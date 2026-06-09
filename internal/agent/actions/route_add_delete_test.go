@@ -153,7 +153,7 @@ func TestRouteAddJSON_AWGTemplateNDMSBindsSelectedRoutingInterface(t *testing.T)
 	if created.Backend != "ndms" || created.HRPolicyName != "" || len(created.ManualDomains) != 1 {
 		t.Fatalf("created route should be NDMS-only DNS template, got %+v", created)
 	}
-	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg-right" || created.Routes[0].TunnelID != "nwg-right" {
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg-right" || created.Routes[0].TunnelID != "right" {
 		t.Fatalf("created NDMS template route bound to wrong iface: %+v", created)
 	}
 }
@@ -210,7 +210,7 @@ func TestRouteAddJSON_AWGTemplateHRNeoBindsSelectedRoutingInterface(t *testing.T
 	if created.Backend != "hydraroute" || created.HRPolicyName != "HydraRoute" || created.HRRouteMode != "proxy" || len(created.ManualDomains) != 2 {
 		t.Fatalf("created route should be HR-Neo template, got %+v", created)
 	}
-	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg-right" || created.Routes[0].TunnelID != "nwg-right" {
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg-right" || created.Routes[0].TunnelID != "right" {
 		t.Fatalf("created HR-Neo template route bound to wrong iface: %+v", created)
 	}
 }
@@ -254,7 +254,7 @@ func TestRouteAddJSON_RefreshesAndUsesRoutingIfaceForCreate(t *testing.T) {
 	if _, err := RouteAddJSON(context.Background(), c, req); err != nil {
 		t.Fatalf("RouteAddJSON: %v", err)
 	}
-	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg5" || created.Routes[0].TunnelID != "nwg5" {
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg5" || created.Routes[0].TunnelID != "awg12" {
 		t.Fatalf("created route used stale iface, got %+v", created)
 	}
 }
@@ -302,8 +302,63 @@ func TestRouteAddJSON_RefreshesRoutingIfaceWhenRoutingIDDiffersFromTunnelID(t *t
 	if _, err := RouteAddJSON(context.Background(), c, req); err != nil {
 		t.Fatalf("RouteAddJSON: %v", err)
 	}
-	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg5" || created.Routes[0].TunnelID != "nwg5" {
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg5" || created.Routes[0].TunnelID != "Wireguard3" {
 		t.Fatalf("created route used stale tunnel iface instead of routing iface: %+v", created)
+	}
+}
+
+func TestRouteAddJSON_ManagedCreateUsesFreshIfaceAndStableTunnelID(t *testing.T) {
+	var created awgmgr.DNSRoute
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != "awg12" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg12","name":"Primary","interfaceName":"nwg3","ndmsName":"Wireguard3","enabled":true}}`))
+	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"Wireguard3","name":"Primary","iface":"nwg5","type":"managed","status":"running","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/presets", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"presets":[{"id":"youtube","name":"YouTube","engines":{"dns":{"domains":["youtube.com"]}}}]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/create", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+			t.Fatalf("decode create body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := awgmgr.New(srv.URL)
+	req := wire.RouteAddRequest{Kind: "dns", TunnelID: "awg12", TemplateID: "youtube"}
+	if _, err := RouteAddJSON(context.Background(), c, req); err != nil {
+		t.Fatalf("RouteAddJSON: %v", err)
+	}
+	if len(created.Routes) != 1 {
+		t.Fatalf("expected one route entry, got %+v", created)
+	}
+	if created.Routes[0].Interface != "nwg5" {
+		t.Fatalf("route interface = %q, want fresh iface nwg5", created.Routes[0].Interface)
+	}
+	if created.Routes[0].TunnelID == "nwg3" || created.Routes[0].TunnelID == "nwg5" {
+		t.Fatalf("route tunnelId must be stable managed id, not iface: %+v", created.Routes[0])
+	}
+	if created.Routes[0].TunnelID != "Wireguard3" {
+		t.Fatalf("route tunnelId = %q, want Wireguard3", created.Routes[0].TunnelID)
 	}
 }
 

@@ -234,15 +234,34 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	hardSince := now.Add(-since)
 	text := FormatRouterOffline(nickname, since)
+	opts := []tg.KeyboardOption{}
+	if u, err := di.d.Users().GetByID(userID); err == nil && u != nil && u.IsMobile() {
+		opts = append(opts, tg.WithMobileActions())
+	}
+	kb := tg.HardAlertKeyboard(userID, "agent_heartbeat", opts...)
 	sendOffline := func(ref TopicRef) (int64, error) {
 		tid := ref.ThreadID
-		return di.tg.SendMessage(ctx, ref.ChatID, &tid, text, "", nil)
+		return di.tg.SendMessageWithKeyboard(ctx, ref.ChatID, &tid, text, "", nil, &kb)
 	}
-	if _, err = sendOffline(topicRef); err != nil {
-		_, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendOffline)
+	mid, err := sendOffline(topicRef)
+	if err != nil {
+		mid, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendOffline)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return di.d.State().Save(userID, "agent_heartbeat", db.IncidentState{
+		UserID:           userID,
+		CheckName:        "agent_heartbeat",
+		ConsecutiveFails: 1,
+		CurrentStatus:    "hard",
+		HardSince:        &hardSince,
+		LastAlertMsgID:   &mid,
+		LastAlertAt:      &now,
+	})
 }
 
 // retryOnStaleTopic handles the case where SendMessage* failed because TG

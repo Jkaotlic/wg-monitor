@@ -49,13 +49,14 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 	routeID := plan.Route.ID
 	switch strings.ToLower(req.Kind) {
 	case "dns":
+		dnsBindID := routeDNSBindID(t)
 		rule := awgmgr.DNSRoute{
 			Name:          req.Name,
 			Domains:       req.Targets,
 			ManualDomains: req.Targets,
 			Enabled:       true,
 			Backend:       "ndms",
-			Routes:        []awgmgr.DNSRouteEntry{{Interface: t.Iface, TunnelID: t.Iface, Fallback: "auto"}},
+			Routes:        []awgmgr.DNSRouteEntry{{Interface: t.Iface, TunnelID: dnsBindID, Fallback: "auto"}},
 		}
 		if req.UseHRNeo {
 			rule.Backend = "hydraroute"

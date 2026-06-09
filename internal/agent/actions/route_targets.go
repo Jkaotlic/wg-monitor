@@ -12,6 +12,7 @@ type routeEndpoint struct {
 	ID           string
 	Name         string
 	Iface        string
+	BindID       string
 	Aliases      []string
 	Type         string
 	Enabled      bool
@@ -24,6 +25,7 @@ func managedRouteEndpoint(t awgmgr.Tunnel) routeEndpoint {
 		ID:           t.ID,
 		Name:         firstNonEmptyRoute(t.Name, t.InterfaceName, t.ID),
 		Iface:        t.InterfaceName,
+		BindID:       firstNonEmptyRoute(t.NDMSName, t.ID, t.InterfaceName),
 		Aliases:      routeAliases(t.InterfaceName, t.NDMSName, t.ID),
 		Type:         "managed",
 		Enabled:      t.Enabled,
@@ -34,12 +36,18 @@ func managedRouteEndpoint(t awgmgr.Tunnel) routeEndpoint {
 
 func ndmsRouteEndpoint(t awgmgr.RoutingTunnel) routeEndpoint {
 	iface := firstNonEmptyRoute(t.Iface, t.ID)
+	typ := firstNonEmptyRoute(t.Type, "ndms")
+	bindID := iface
+	if strings.EqualFold(typ, "managed") {
+		bindID = firstNonEmptyRoute(t.ID, iface)
+	}
 	return routeEndpoint{
 		ID:        iface,
 		Name:      firstNonEmptyRoute(t.Name, iface, t.ID),
 		Iface:     iface,
+		BindID:    bindID,
 		Aliases:   routeAliases(iface, t.ID),
-		Type:      firstNonEmptyRoute(t.Type, "ndms"),
+		Type:      typ,
 		Enabled:   t.Available || routingStatusEnabled(t.Status),
 		Available: t.Available,
 	}
@@ -113,12 +121,20 @@ func mergeRouteEndpoints(routing, managed routeEndpoint) routeEndpoint {
 	out := routing
 	out.ID = managed.ID
 	out.Name = firstNonEmptyRoute(managed.Name, routing.Name)
+	out.BindID = firstNonEmptyRoute(routing.BindID, managed.BindID, routing.Iface, managed.Iface)
 	out.Aliases = routeAliases(append(routing.Aliases, managed.Aliases...)...)
 	out.Type = firstNonEmptyRoute(managed.Type, routing.Type)
 	out.Enabled = routing.Enabled || managed.Enabled
 	out.Available = routing.Available || managed.Available
 	out.DefaultRoute = managed.DefaultRoute
 	return out
+}
+
+func routeDNSBindID(ep routeEndpoint) string {
+	if strings.EqualFold(ep.Type, "managed") {
+		return firstNonEmptyRoute(ep.BindID, ep.Iface)
+	}
+	return ep.Iface
 }
 
 func routeAliases(values ...string) []string {
