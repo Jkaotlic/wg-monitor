@@ -75,4 +75,43 @@ binary-only backend self-update will not rewrite an existing `backend.yaml`.
 
 ## Release Continuation
 
-The intended release target for this continuation is `v0.13.0-rc117`.
+Released and deployed target: `v0.13.0-rc117`.
+
+Commit:
+
+- `97e2fa0` - `fix(routes): repair bot updates and route rebinding`
+
+Release verification:
+
+- GitHub Actions release run `27157523905`: success.
+- GitHub release `v0.13.0-rc117`: `draft=false`, `prerelease=true`.
+- Release assets verified: `checksums.txt`, `wg-monitor-backend-linux-arm64`,
+  `wg-monitor-agent-linux-mipsle`.
+- Backend public release mirror verified with GET:
+  - `/v1/releases/download/v0.13.0-rc117/checksums.txt` -> HTTP 200
+  - `/v1/releases/download/v0.13.0-rc117/wg-monitor-agent-linux-mipsle` -> HTTP 200
+
+Live backend rollout:
+
+- Pi host: `raspberrypi4` at `192.168.0.87`.
+- Config patched with:
+  `public_base_url: https://wgmonitor.example.com`
+- Config backup:
+  `/home/user/wg-monitor/config/backend.yaml.bak-20260609-065612`
+- Backend update runner completed with `0/SUCCESS`.
+- Public `/healthz` after update:
+  `{"status":"ok","version":"v0.13.0-rc117"}`
+
+Agent rollout:
+
+- Online/current after heartbeat: `testkeen`, `client-i`, `client-a`, `client-b`,
+  `del`, `gachimikhail`, `client-c`.
+- Pending `v0.13.0-rc117` for sleeping/offline routers: `client-e`,
+  `client-f-old`, `client-g`.
+- `client-c` is bound to the extra Telegram chat `-1003935409340`.
+  The old thread `5` no longer existed, causing Telegram `message thread not found`;
+  a new topic was created and verified:
+  `telegram_chat_id=-1003935409340`, `telegram_thread_id=81`.
+- Live `route_status` smoke checks returned `status=ok` for:
+  - `testkeen` (primary chat)
+  - `client-c` (extra chat)
