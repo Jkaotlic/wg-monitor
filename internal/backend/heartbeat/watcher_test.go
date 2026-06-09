@@ -277,6 +277,68 @@ func TestWatcherRefiresAfterCooldown(t *testing.T) {
 	}
 }
 
+func TestWatcherSkipsOfflineWhenAgentHeartbeatSilenced(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2121212121212121212121212121212121212121212121212121212121212121"
+	uid, _ := d.Users().Insert("quiet", tok, "1.1.1.1", "awg0")
+	t0 := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", t0.Add(-10*time.Minute))
+	silencedUntil := t0.Add(24 * time.Hour)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
+		UserID:        uid,
+		CheckName:     "agent_heartbeat",
+		CurrentStatus: "hard",
+		HardSince:     &t0,
+		LastAlertAt:   &t0,
+		SilencedUntil: &silencedUntil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+
+	driveScan(w, t0.Add(7*time.Hour))
+
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("silenced agent_heartbeat must not send offline notice, got %d", got)
+	}
+}
+
+func TestWatcherClearsOfflineHardWhenHeartbeatFresh(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "2222222222222222222222222222222222222222222222222222222222222222"
+	uid, _ := d.Users().Insert("back", tok, "1.1.1.1", "awg0")
+	t0 := time.Now().UTC()
+	hardSince := t0.Add(-10 * time.Minute)
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", t0)
+	if err := d.State().Save(uid, "agent_heartbeat", db.IncidentState{
+		UserID:           uid,
+		CheckName:        "agent_heartbeat",
+		CurrentStatus:    "hard",
+		ConsecutiveFails: 1,
+		HardSince:        &hardSince,
+		LastAlertAt:      &hardSince,
+		Acked:            true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWatcher(d, &fakeOffline{}, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+
+	driveScan(w, t0.Add(time.Minute))
+
+	st, err := d.State().Get(uid, "agent_heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.CurrentStatus != "ok" || st.HardSince != nil || st.LastAlertAt != nil || st.Acked {
+		t.Fatalf("fresh heartbeat must clear offline hard state, got %+v", st)
+	}
+}
+
 type fakeSleep struct {
 	mu    sync.Mutex
 	calls []sleepRec

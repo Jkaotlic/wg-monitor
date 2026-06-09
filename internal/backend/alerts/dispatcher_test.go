@@ -3,6 +3,7 @@ package alerts
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -362,9 +363,25 @@ func TestDispatcherRecoveryZeroesAcked(t *testing.T) {
 
 func ptrT(t time.Time) *time.Time { return &t }
 
+func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, callback string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == callback {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
 // TestSendOffline_HappyPath: heartbeat watcher invokes SendOffline; topic
-// must resolve via ensureTopic and a non-keyboard SendMessage fires with
-// the OFFLINE text shape (TEST-04).
+// must resolve via ensureTopic and a keyboard message fires with the OFFLINE
+// text shape plus silence controls.
 func TestSendOffline_HappyPath(t *testing.T) {
 	d := newDB(t)
 	tok := "5555555555555555555555555555555555555555555555555555555555555555"
@@ -375,14 +392,25 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	if err := disp.SendOffline(context.Background(), uid, "dora", 12*time.Minute); err != nil {
 		t.Fatalf("SendOffline: %v", err)
 	}
-	if len(ftg.sent) != 1 {
-		t.Fatalf("expected 1 plain SendMessage, got %d", len(ftg.sent))
+	if len(ftg.sentWithKeyboard) != 1 {
+		t.Fatalf("expected 1 keyboard message, got %d", len(ftg.sentWithKeyboard))
 	}
-	if !strings.Contains(ftg.sent[0].text, "Роутер не на связи") {
-		t.Fatalf("text missing offline headline: %q", ftg.sent[0].text)
+	if len(ftg.sent) != 0 {
+		t.Fatalf("plain SendMessage should not be called for offline, got %d", len(ftg.sent))
 	}
-	if ftg.sent[0].thread == nil || *ftg.sent[0].thread != 8888 {
-		t.Fatalf("thread mismatch: %v", ftg.sent[0].thread)
+	if !strings.Contains(ftg.sentWithKeyboard[0].text, "Роутер не на связи") {
+		t.Fatalf("text missing offline headline: %q", ftg.sentWithKeyboard[0].text)
+	}
+	if ftg.sentWithKeyboard[0].threadID == nil || *ftg.sentWithKeyboard[0].threadID != 8888 {
+		t.Fatalf("thread mismatch: %v", ftg.sentWithKeyboard[0].threadID)
+	}
+	kb := ftg.sentWithKeyboard[0].keyboard
+	if kb == nil {
+		t.Fatal("offline keyboard is nil")
+	}
+	if !keyboardHasCallback(kb, "silence:"+itoa(uid)+":agent_heartbeat:24h") ||
+		!keyboardHasCallback(kb, "mute:"+itoa(uid)+":agent_heartbeat") {
+		t.Fatalf("offline keyboard missing silence/mute controls: %#v", kb)
 	}
 }
 

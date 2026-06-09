@@ -231,6 +231,7 @@ func (w *Watcher) scan(ctx context.Context) {
 				delete(w.resumed, u.ID)
 			}
 			w.mu.Unlock()
+			w.clearOfflineStateIfHard(u.ID)
 			if u.IsMobile() && w.cfg.MobileLifecycle {
 				if err := w.d.KV().ClearMobileSleepNotified(u.ID); err != nil {
 					slog.Warn("heartbeat: clear mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
@@ -281,6 +282,9 @@ func (w *Watcher) scan(ctx context.Context) {
 		}
 
 		// Legacy HARD-OFFLINE path (static + mobile with MobileLifecycle=false).
+		if w.offlineNotificationsSuppressed(u.ID, now) {
+			continue
+		}
 		w.mu.Lock()
 		last, sent := w.notified[u.ID]
 		notify := !sent || now.Sub(last) > w.cfg.RenotifyEvery
@@ -294,5 +298,39 @@ func (w *Watcher) scan(ctx context.Context) {
 		if err := w.off.SendOffline(ctx, u.ID, u.Nickname, stale); err != nil {
 			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 		}
+	}
+}
+
+func (w *Watcher) offlineNotificationsSuppressed(userID int64, now time.Time) bool {
+	st, err := w.d.State().Get(userID, "agent_heartbeat")
+	if err != nil {
+		slog.Warn("heartbeat: read offline silence state failed", "user_id", userID, "err", err)
+		return false
+	}
+	if st.Acked {
+		return true
+	}
+	return st.SilencedUntil != nil && st.SilencedUntil.After(now.UTC())
+}
+
+func (w *Watcher) clearOfflineStateIfHard(userID int64) {
+	st, err := w.d.State().Get(userID, "agent_heartbeat")
+	if err != nil {
+		slog.Warn("heartbeat: read offline recovery state failed", "user_id", userID, "err", err)
+		return
+	}
+	if st.CurrentStatus != "hard" {
+		return
+	}
+	st.CurrentStatus = "ok"
+	st.ConsecutiveFails = 0
+	st.ConsecutiveOKs = 1
+	st.HardSince = nil
+	st.LastAlertMsgID = nil
+	st.LastAlertAt = nil
+	st.Acked = false
+	st.AckedUntil = nil
+	if err := w.d.State().Save(userID, "agent_heartbeat", st); err != nil {
+		slog.Warn("heartbeat: clear offline recovery state failed", "user_id", userID, "err", err)
 	}
 }
