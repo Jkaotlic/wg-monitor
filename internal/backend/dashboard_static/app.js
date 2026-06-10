@@ -3,25 +3,42 @@
     summary: null,
     filter: "all",
     query: "",
-    deployAgent: null
+    selected: null,
+    deployAgent: null,
+    buttonStates: new Map()
   };
 
   const els = {
+    addAgentBtn: document.getElementById("addAgentBtn"),
     refreshBtn: document.getElementById("refreshBtn"),
     logoutBtn: document.getElementById("logoutBtn"),
     authDot: document.getElementById("authDot"),
     authState: document.getElementById("authState"),
+    summaryText: document.getElementById("summaryText"),
     kpiAgents: document.getElementById("kpiAgents"),
     kpiOnline: document.getElementById("kpiOnline"),
     kpiAlerts: document.getElementById("kpiAlerts"),
     kpiDeploys: document.getElementById("kpiDeploys"),
     kpiVersion: document.getElementById("kpiVersion"),
+    kpiOnlineText: document.getElementById("kpiOnlineText"),
+    kpiAlertsText: document.getElementById("kpiAlertsText"),
+    kpiDeploysText: document.getElementById("kpiDeploysText"),
     agentsBody: document.getElementById("agentsBody"),
     searchInput: document.getElementById("searchInput"),
+    agentDrawer: document.getElementById("agentDrawer"),
     deployModal: document.getElementById("deployModal"),
     deployTitle: document.getElementById("deployTitle"),
     deployVersionInput: document.getElementById("deployVersionInput"),
     confirmDeployBtn: document.getElementById("confirmDeployBtn"),
+    addAgentModal: document.getElementById("addAgentModal"),
+    newAgentNickname: document.getElementById("newAgentNickname"),
+    newAgentKind: document.getElementById("newAgentKind"),
+    newAgentGroup: document.getElementById("newAgentGroup"),
+    customGroupField: document.getElementById("customGroupField"),
+    newAgentCustomGroup: document.getElementById("newAgentCustomGroup"),
+    newAgentThread: document.getElementById("newAgentThread"),
+    createAgentBtn: document.getElementById("createAgentBtn"),
+    addAgentError: document.getElementById("addAgentError"),
     resultDrawer: document.getElementById("resultDrawer"),
     drawerTitle: document.getElementById("drawerTitle"),
     resultOutput: document.getElementById("resultOutput"),
@@ -34,11 +51,28 @@
     els.authState.textContent = ok ? "unlocked" : "locked";
   }
 
+  function setButtonState(button, value) {
+    if (!button) return;
+    button.dataset.state = value || "idle";
+    button.disabled = value === "waiting";
+  }
+
+  function setActionState(nickname, action, value) {
+    state.buttonStates.set(nickname + ":" + action, value);
+    document.querySelectorAll(`[data-agent="${cssEscape(nickname)}"][data-command="${cssEscape(action)}"], [data-agent="${cssEscape(nickname)}"][data-maint="${cssEscape(action)}"]`).forEach((button) => {
+      setButtonState(button, value);
+    });
+  }
+
+  function buttonState(nickname, action) {
+    return state.buttonStates.get(nickname + ":" + action) || "idle";
+  }
+
   function toast(text) {
     els.toast.textContent = text;
     els.toast.classList.remove("hidden");
     window.clearTimeout(toast.timer);
-    toast.timer = window.setTimeout(() => els.toast.classList.add("hidden"), 3000);
+    toast.timer = window.setTimeout(() => els.toast.classList.add("hidden"), 3200);
   }
 
   async function api(path, options) {
@@ -60,13 +94,17 @@
   }
 
   async function refresh() {
+    setButtonState(els.refreshBtn, "waiting");
     try {
       const summary = await api("/v1/dashboard/summary");
       state.summary = summary;
       setAuth(true);
+      setButtonState(els.refreshBtn, "ok");
       render();
+      window.setTimeout(() => setButtonState(els.refreshBtn, "idle"), 700);
     } catch (err) {
       setAuth(false);
+      setButtonState(els.refreshBtn, "error");
       renderError(err.message);
     }
   }
@@ -77,27 +115,52 @@
       renderEmpty("No data");
       return;
     }
-    els.kpiAgents.textContent = summary.totals.agents;
-    els.kpiOnline.textContent = summary.totals.online;
-    els.kpiAlerts.textContent = summary.totals.alerts;
-    els.kpiDeploys.textContent = summary.totals.pending_deploys;
+    const totals = summary.totals || {};
+    els.kpiAgents.textContent = totals.agents || 0;
+    els.kpiOnline.textContent = totals.online || 0;
+    els.kpiAlerts.textContent = totals.alerts || 0;
+    els.kpiDeploys.textContent = totals.pending_deploys || 0;
     els.kpiVersion.textContent = summary.version || "version unknown";
+    els.kpiOnlineText.textContent = (totals.online || 0) === 1 ? "1 agent reporting" : (totals.online || 0) + " agents reporting";
+    els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
+    els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
+    els.summaryText.textContent = summarySentence(summary);
+    renderGroupOptions();
 
-    const agents = (summary.agents || []).filter((agent) => {
-      const query = state.query.toLowerCase();
-      const matchesQuery = !query || [agent.nickname, agent.kind, agent.agent_version, agent.expected_exit_ip]
-        .join(" ")
-        .toLowerCase()
-        .includes(query);
-      const matchesFilter = state.filter === "all" || agent.status === state.filter;
-      return matchesQuery && matchesFilter;
-    });
-
+    const agents = visibleAgents(summary);
     if (!agents.length) {
       renderEmpty("No matching agents");
+      renderSelectedDrawer();
       return;
     }
     els.agentsBody.innerHTML = agents.map(agentRow).join("");
+    renderSelectedDrawer();
+  }
+
+  function visibleAgents(summary) {
+    return (summary.agents || []).filter((agent) => {
+      const query = state.query.toLowerCase();
+      const searchable = [
+        agent.nickname,
+        agent.kind,
+        agent.agent_version,
+        agent.expected_exit_ip,
+        agent.awg_iface,
+        agent.awgm_url,
+        groupLabel(agent.telegram_chat_id)
+      ].join(" ").toLowerCase();
+      const matchesQuery = !query || searchable.includes(query);
+      const matchesFilter = state.filter === "all" || agent.status === state.filter;
+      return matchesQuery && matchesFilter;
+    });
+  }
+
+  function summarySentence(summary) {
+    const totals = summary.totals || {};
+    if (totals.alerts > 0) return `Есть ${totals.alerts} hard-инцидент(ов). Открой агента и начни с Diagnostics или Force recheck.`;
+    if (totals.pending_deploys > 0) return `${totals.pending_deploys} deploy ожидает подтверждения от heartbeat.`;
+    if ((totals.offline || 0) > 0) return `${totals.offline} агент(ов) offline или еще ни разу не отчитались.`;
+    return "Флот выглядит спокойно: активных hard-инцидентов нет.";
   }
 
   function renderEmpty(text) {
@@ -110,7 +173,8 @@
     els.kpiAlerts.textContent = "-";
     els.kpiDeploys.textContent = "-";
     els.kpiVersion.textContent = "version unknown";
-    renderEmpty(text || "Request failed");
+    els.summaryText.textContent = text || "Request failed";
+    if (!state.summary) renderEmpty(text || "Request failed");
   }
 
   function agentRow(agent) {
@@ -120,36 +184,51 @@
     const pending = agent.pending_version
       ? `<span class="badge badge-warning">${escapeHTML(agent.pending_version)}</span>`
       : `<span class="badge badge-muted">idle</span>`;
+    const rowClass = agent.pending_version && agent.status !== "alert" ? "status-pending" : "status-" + (agent.status || "offline");
+    const awg = agent.awgm_url
+      ? `<span class="badge badge-info">URL saved</span><div class="cell-note">${escapeHTML(shortURL(agent.awgm_url))}</div>`
+      : `<span class="badge badge-muted">no URL</span><div class="cell-note">быстрый вход недоступен</div>`;
     return `
-      <tr>
-        <td>
+      <tr class="${rowClass}" data-row-agent="${escapeAttr(agent.nickname)}">
+        <td class="agent-cell">
           <div class="agent-main">
             <span class="agent-name">${escapeHTML(agent.nickname)}</span>
             <span class="agent-meta">${escapeHTML(agent.kind || "static")} / ${escapeHTML(agent.awg_iface || "-")} / ${escapeHTML(agent.expected_exit_ip || "-")}</span>
           </div>
         </td>
-        <td>${statusBadge(agent.status)}</td>
-        <td>${escapeHTML(formatLastSeen(agent))}</td>
-        <td>${escapeHTML(agent.agent_version || "-")}</td>
-        <td>${pending}</td>
+        <td>${statusBadge(agent)}<div class="cell-note">${escapeHTML(statusText(agent))}</div></td>
+        <td><span class="badge badge-info">${escapeHTML(agent.agent_version || "-")}</span><div class="cell-note">${pending}</div></td>
+        <td><span class="badge ${agent.has_topic ? "badge-success" : "badge-muted"}">${escapeHTML(groupLabel(agent.telegram_chat_id))}</span><div class="cell-note">${escapeHTML(topicLabel(agent.telegram_thread_id))}</div></td>
+        <td>${awg}</td>
         <td><div class="incident-list">${incidents || '<span class="badge badge-success">clear</span>'}</div></td>
         <td>
           <div class="action-strip">
-            <button class="mini-btn" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diag</button>
-            <button class="mini-btn" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">Check</button>
-            <button class="mini-btn" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
-            <button class="mini-btn danger" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">AWGM</button>
-            <button class="mini-btn primary" data-deploy="${escapeAttr(agent.nickname)}">Deploy</button>
+            <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "diag_now")}" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diag</button>
+            <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">Check</button>
+            <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
+            <button class="mini-btn danger" type="button" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">AWGM</button>
+            <button class="mini-btn primary" type="button" data-deploy="${escapeAttr(agent.nickname)}">Deploy</button>
           </div>
         </td>
       </tr>
     `;
   }
 
-  function statusBadge(status) {
-    if (status === "alert") return '<span class="badge badge-danger">alert</span>';
-    if (status === "online") return '<span class="badge badge-success">online</span>';
+  function statusBadge(agent) {
+    if (agent.status === "alert") return '<span class="badge badge-danger">alert</span>';
+    if (agent.status === "online") return '<span class="badge badge-success">online</span>';
     return '<span class="badge badge-muted">offline</span>';
+  }
+
+  function statusText(agent) {
+    if (agent.status === "alert") {
+      const first = (agent.active_incidents || [])[0];
+      if (first) return `${first.check_name}: ${first.fail_count || 1} fail подряд`;
+      return "есть hard-инцидент";
+    }
+    if (agent.status === "online") return "последний отчет " + formatLastSeen(agent);
+    if (!agent.last_seen_at) return "еще не отчитывался";
+    return "последний отчет " + formatLastSeen(agent);
   }
 
   function formatLastSeen(agent) {
@@ -160,12 +239,108 @@
       const min = Math.round(sec / 60);
       if (min < 90) return min + "m ago";
       const hour = Math.round(min / 60);
-      return hour + "h ago";
+      if (hour < 48) return hour + "h ago";
+      return Math.round(hour / 24) + "d ago";
     }
     return agent.last_seen_at;
   }
 
+  function groupLabel(chatID) {
+    const telegram = state.summary?.telegram || {};
+    if (!chatID || chatID === telegram.primary_chat_id) return `Primary group (${telegram.primary_chat_id || "default"})`;
+    return `Group ${chatID}`;
+  }
+
+  function topicLabel(threadID) {
+    return threadID ? `topic ${threadID}` : "topic не привязан";
+  }
+
+  function shortURL(value) {
+    try {
+      const u = new URL(value);
+      return u.host;
+    } catch (_) {
+      return value;
+    }
+  }
+
+  function renderSelectedDrawer() {
+    const selected = state.selected && (state.summary?.agents || []).find((a) => a.nickname === state.selected);
+    if (!selected) {
+      els.agentDrawer.innerHTML = `<div class="drawer-empty"><span class="ti ti-router"></span><strong>Выбери агента</strong><p>Клик по строке откроет понятную карточку с проверками, Telegram topic и AWG Manager.</p></div>`;
+      return;
+    }
+    const incidents = (selected.active_incidents || []).map((i) => `<span class="badge badge-danger">${escapeHTML(i.check_name)} ${i.fail_count || ""}</span>`).join("") || '<span class="badge badge-success">clear</span>';
+    const awgBlock = selected.awgm_url
+      ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
+      : `<button class="action-btn disabled" type="button" disabled><span class="ti ti-external-link"></span>Open AWG</button><p class="drawer-note">AWG Manager URL не сохранен. Добавь его через deploy sync или awgm-url-patch.</p>`;
+    els.agentDrawer.innerHTML = `
+      <div class="drawer-card">
+        <div>
+          <div class="eyebrow">agent detail</div>
+          <h2>${escapeHTML(selected.nickname)}</h2>
+          <p class="drawer-note">${escapeHTML(statusLongText(selected))}</p>
+        </div>
+        <section class="drawer-section">
+          <h3>Состояние</h3>
+          <div class="incident-list">${incidents}</div>
+          <div class="drawer-list">
+            ${drawerKV("Last seen", formatLastSeen(selected))}
+            ${drawerKV("Version", selected.agent_version || "-")}
+            ${drawerKV("Pending", selected.pending_version || "idle")}
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>Telegram</h3>
+          <p class="drawer-note">${selected.has_topic ? "Topic привязан, уведомления могут идти в отдельную тему." : "Topic не привязан. Уведомления не будут точечно попадать в тему этого роутера."}</p>
+          <div class="drawer-list">
+            ${drawerKV("Group", groupLabel(selected.telegram_chat_id))}
+            ${drawerKV("Topic", topicLabel(selected.telegram_thread_id))}
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>AWG Manager</h3>
+          ${awgBlock}
+          <div class="drawer-list">
+            ${drawerKV("Deploy mode", selected.deploy_mode || "-")}
+            ${drawerKV("AWG URL", selected.awgm_url || "-")}
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>Checks</h3>
+          <div class="drawer-actions">
+            ${drawerCommandButton(selected, "diag_now", "Diagnostics")}
+            ${drawerCommandButton(selected, "force_recheck", "Force recheck")}
+            ${drawerCommandButton(selected, "route_status", "Routes")}
+            ${drawerCommandButton(selected, "tunnels_status", "Tunnels")}
+            ${drawerCommandButton(selected, "pingcheck_status", "PingCheck")}
+            ${drawerCommandButton(selected, "check_direct", "Direct")}
+            ${drawerCommandButton(selected, "check_via_tunnel", "Via tunnel")}
+            <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
+            <button class="action-btn primary" type="button" data-deploy="${escapeAttr(selected.nickname)}"><span class="ti ti-rocket"></span>Deploy</button>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  function statusLongText(agent) {
+    if (agent.status === "alert") return "Есть hard-инцидент. Начни с Diagnostics или Force recheck, затем смотри результат команды.";
+    if (agent.status === "online") return "Агент онлайн: последний отчет " + formatLastSeen(agent) + ". Активных hard-инцидентов нет.";
+    if (!agent.last_seen_at) return "Агент создан, но еще ни разу не прислал отчет.";
+    return "Агент сейчас offline или давно не отчитывался. Последний отчет " + formatLastSeen(agent) + ".";
+  }
+
+  function drawerKV(label, value) {
+    return `<div class="drawer-kv"><span>${escapeHTML(label)}</span><strong>${escapeHTML(value)}</strong></div>`;
+  }
+
+  function drawerCommandButton(agent, action, label) {
+    return `<button class="action-btn" type="button" data-state="${buttonState(agent.nickname, action)}" data-command="${escapeAttr(action)}" data-agent="${escapeAttr(agent.nickname)}">${escapeHTML(label)}</button>`;
+  }
+
   async function enqueueCommand(nickname, action, args) {
+    setActionState(nickname, action, "queued");
     const body = JSON.stringify({ action, args: args || {} });
     const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/commands`, {
       method: "POST",
@@ -173,6 +348,7 @@
       body
     });
     toast(action + " queued");
+    setActionState(nickname, action, "waiting");
     pollResult(nickname, res.cmd_id, action);
   }
 
@@ -185,18 +361,21 @@
   }
 
   async function restartAWGM(nickname) {
+    setActionState(nickname, "awgmgr", "queued");
     const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/maintenance`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "awgmgr" })
     });
     toast("awgmgr restart queued");
-    pollResult(nickname, res.cmd_id, "service_restart");
+    setActionState(nickname, "awgmgr", "waiting");
+    pollResult(nickname, res.cmd_id, "awgmgr");
   }
 
   async function deployAgent() {
     const version = els.deployVersionInput.value.trim();
     if (!version || !state.deployAgent) return;
+    setButtonState(els.confirmDeployBtn, "waiting");
     const nickname = state.deployAgent;
     const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/deploy`, {
       method: "POST",
@@ -209,6 +388,69 @@
     refresh();
   }
 
+  async function createEnrollment() {
+    els.addAgentError.textContent = "";
+    const group = selectedGroup();
+    if (!els.newAgentNickname.value.trim()) {
+      els.addAgentError.textContent = "Nickname required";
+      return;
+    }
+    if (!group.ok) {
+      els.addAgentError.textContent = group.error;
+      return;
+    }
+    setButtonState(els.createAgentBtn, "waiting");
+    try {
+      const payload = {
+        nickname: els.newAgentNickname.value.trim(),
+        kind: els.newAgentKind.value,
+        telegram_chat_id: group.chatID,
+        telegram_thread_id: Number(els.newAgentThread.value || 0),
+        custom_telegram_chat: group.custom
+      };
+      const res = await api("/v1/dashboard/enrollments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      closeAddAgent();
+      toast("enrollment created");
+      showEnrollmentResult(res);
+      await refresh();
+    } catch (err) {
+      els.addAgentError.textContent = err.message;
+      setButtonState(els.createAgentBtn, "error");
+    }
+  }
+
+  function selectedGroup() {
+    const value = els.newAgentGroup.value;
+    if (value === "custom") {
+      const raw = els.newAgentCustomGroup.value.trim();
+      if (!raw) return { ok: false, error: "Custom chat id required" };
+      const chatID = Number(raw);
+      if (!Number.isFinite(chatID) || chatID === 0) return { ok: false, error: "Custom chat id must be non-zero" };
+      return { ok: true, chatID, custom: true };
+    }
+    return { ok: true, chatID: Number(value || 0), custom: false };
+  }
+
+  function showEnrollmentResult(res) {
+    els.drawerTitle.textContent = "Enrollment / " + res.nickname;
+    els.resultOutput.textContent = [
+      res.message || "Agent enrollment created. Save the token now.",
+      "",
+      "nickname: " + res.nickname,
+      "backend_url: " + res.backend_url,
+      "telegram_chat_id: " + res.telegram_chat_id,
+      "telegram_thread_id: " + res.telegram_thread_id,
+      "",
+      "raw_token:",
+      res.raw_token
+    ].join("\n");
+    els.resultDrawer.classList.remove("hidden");
+  }
+
   async function pollResult(nickname, cmdID, title) {
     if (!cmdID) return;
     els.drawerTitle.textContent = title + " / " + nickname;
@@ -218,6 +460,7 @@
       try {
         const res = await api(`/v1/dashboard/commands/${encodeURIComponent(cmdID)}?nickname=${encodeURIComponent(nickname)}&wait_sec=5`);
         els.resultOutput.textContent = JSON.stringify(res, null, 2);
+        setActionState(nickname, title, res.status === "ok" ? "ok" : "error");
         refresh();
         return;
       } catch (err) {
@@ -231,6 +474,7 @@
     state.deployAgent = nickname;
     els.deployTitle.textContent = "Deploy " + nickname;
     els.deployVersionInput.value = "";
+    setButtonState(els.confirmDeployBtn, "idle");
     els.deployModal.classList.remove("hidden");
     els.deployVersionInput.focus();
   }
@@ -238,10 +482,52 @@
   function closeModal() {
     els.deployModal.classList.add("hidden");
     state.deployAgent = null;
+    setButtonState(els.confirmDeployBtn, "idle");
+  }
+
+  function openAddAgent() {
+    els.newAgentNickname.value = "";
+    els.newAgentKind.value = "static";
+    els.newAgentThread.value = "";
+    els.newAgentCustomGroup.value = "";
+    els.addAgentError.textContent = "";
+    setButtonState(els.createAgentBtn, "idle");
+    renderGroupOptions();
+    els.addAgentModal.classList.remove("hidden");
+    els.newAgentNickname.focus();
+  }
+
+  function closeAddAgent() {
+    els.addAgentModal.classList.add("hidden");
+    setButtonState(els.createAgentBtn, "idle");
+  }
+
+  function renderGroupOptions() {
+    const telegram = state.summary?.telegram || {};
+    const current = els.newAgentGroup.value;
+    const options = [`<option value="0">Primary group (${escapeHTML(telegram.primary_chat_id || "default")})</option>`];
+    (telegram.extra_chat_ids || []).forEach((chatID) => {
+      options.push(`<option value="${escapeAttr(chatID)}">Extra group (${escapeHTML(chatID)})</option>`);
+    });
+    options.push('<option value="custom">Custom group...</option>');
+    els.newAgentGroup.innerHTML = options.join("");
+    if ([...els.newAgentGroup.options].some((o) => o.value === current)) {
+      els.newAgentGroup.value = current;
+    }
+    toggleCustomGroup();
+  }
+
+  function toggleCustomGroup() {
+    els.customGroupField.classList.toggle("hidden", els.newAgentGroup.value !== "custom");
   }
 
   function sleep(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+
+  function cssEscape(value) {
+    if (window.CSS && typeof window.CSS.escape === "function") return window.CSS.escape(value);
+    return String(value).replaceAll('"', '\\"');
   }
 
   function escapeHTML(value) {
@@ -258,6 +544,7 @@
   }
 
   els.refreshBtn.addEventListener("click", refresh);
+  els.addAgentBtn.addEventListener("click", openAddAgent);
   els.logoutBtn.addEventListener("click", logout);
   document.querySelector('[data-action="refresh"]').addEventListener("click", refresh);
   els.searchInput.addEventListener("input", (event) => {
@@ -272,16 +559,35 @@
       render();
     });
   });
-  els.agentsBody.addEventListener("click", (event) => {
-    const target = event.target.closest("button");
-    if (!target) return;
-    const nickname = target.dataset.agent || target.dataset.deploy;
-    if (target.dataset.deploy) openDeploy(nickname);
-    if (target.dataset.command) enqueueCommand(nickname, target.dataset.command).catch((err) => toast(err.message));
-    if (target.dataset.maint) restartAWGM(nickname).catch((err) => toast(err.message));
+  document.body.addEventListener("click", (event) => {
+    const button = event.target.closest("button");
+    if (button) {
+      const nickname = button.dataset.agent || button.dataset.deploy;
+      if (button.dataset.deploy) openDeploy(nickname);
+      if (button.dataset.command) enqueueCommand(nickname, button.dataset.command).catch((err) => {
+        setActionState(nickname, button.dataset.command, "error");
+        toast(err.message);
+      });
+      if (button.dataset.maint) restartAWGM(nickname).catch((err) => {
+        setActionState(nickname, "awgmgr", "error");
+        toast(err.message);
+      });
+      return;
+    }
+    const row = event.target.closest("[data-row-agent]");
+    if (row) {
+      state.selected = row.dataset.rowAgent;
+      renderSelectedDrawer();
+    }
   });
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
-  els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => toast(err.message)));
+  document.querySelectorAll("[data-close-add-agent]").forEach((button) => button.addEventListener("click", closeAddAgent));
+  els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => {
+    setButtonState(els.confirmDeployBtn, "error");
+    toast(err.message);
+  }));
+  els.createAgentBtn.addEventListener("click", createEnrollment);
+  els.newAgentGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
 
   refresh();

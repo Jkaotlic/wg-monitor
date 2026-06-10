@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WG Monitor Control</title>
+  <title>WG Monitor Fleet Control</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="./vendor/tabler-lite.css">
   <link rel="stylesheet" href="./vendor/tabler-icons-lite.css">
@@ -16,7 +16,7 @@
         <div class="brand-mark">WG</div>
         <div>
           <div class="brand-title">WG Monitor</div>
-          <div class="brand-subtitle">VPS Control</div>
+          <div class="brand-subtitle">Fleet Control</div>
         </div>
       </div>
       <nav class="nav-stack" aria-label="Dashboard sections">
@@ -33,10 +33,12 @@
       <header class="topbar">
         <div>
           <div class="eyebrow">operator dashboard</div>
-          <h1>WG Monitor Control</h1>
+          <h1>Fleet Control</h1>
+          <p id="summaryText" class="topbar-note">Загружаю состояние флота...</p>
         </div>
         <div class="topbar-actions">
-          <button id="refreshBtn" class="btn btn-primary" type="button"><span class="ti ti-refresh"></span>Refresh</button>
+          <button id="addAgentBtn" class="btn btn-secondary" type="button"><span class="ti ti-plus"></span>Add agent</button>
+          <button id="refreshBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-refresh"></span>Refresh</button>
           <button id="logoutBtn" class="btn btn-ghost" type="button"><span class="ti ti-lock"></span>Log out</button>
         </div>
       </header>
@@ -50,24 +52,24 @@
         <article class="kpi-card good">
           <span class="kpi-label">Online</span>
           <strong id="kpiOnline">-</strong>
-          <small>healthy fleet</small>
+          <small id="kpiOnlineText">reporting recently</small>
         </article>
         <article class="kpi-card bad">
           <span class="kpi-label">Alerts</span>
           <strong id="kpiAlerts">-</strong>
-          <small>hard incidents</small>
+          <small id="kpiAlertsText">hard incidents</small>
         </article>
         <article class="kpi-card warn">
           <span class="kpi-label">Deploys</span>
           <strong id="kpiDeploys">-</strong>
-          <small>pending updates</small>
+          <small id="kpiDeploysText">pending updates</small>
         </article>
       </section>
 
       <section class="toolbar">
         <div class="search-wrap">
           <span class="ti ti-search"></span>
-          <input id="searchInput" type="search" placeholder="Search agents" spellcheck="false">
+          <input id="searchInput" type="search" placeholder="Search agents, IP, group, AWG" spellcheck="false">
         </div>
         <div class="segmented" role="tablist" aria-label="Status filter">
           <button type="button" class="segment active" data-filter="all">All</button>
@@ -83,9 +85,9 @@
             <tr>
               <th>Agent</th>
               <th>Status</th>
-              <th>Last seen</th>
               <th>Version</th>
-              <th>Deploy</th>
+              <th>Telegram</th>
+              <th>AWG Manager</th>
               <th>Incidents</th>
               <th class="actions-col">Actions</th>
             </tr>
@@ -98,6 +100,14 @@
         </table>
       </section>
     </main>
+
+    <aside id="agentDrawer" class="agent-drawer" aria-live="polite">
+      <div class="drawer-empty">
+        <span class="ti ti-router"></span>
+        <strong>Выбери агента</strong>
+        <p>Клик по строке откроет понятную карточку с проверками, Telegram topic и AWG Manager.</p>
+      </div>
+    </aside>
   </div>
 
   <div id="deployModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deployTitle">
@@ -115,7 +125,50 @@
       </label>
       <div class="modal-actions">
         <button class="btn btn-ghost" type="button" data-close-modal>Cancel</button>
-        <button id="confirmDeployBtn" class="btn btn-primary" type="button"><span class="ti ti-rocket"></span>Deploy</button>
+        <button id="confirmDeployBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-rocket"></span>Deploy</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="addAgentModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="addAgentTitle">
+    <div class="modal-panel modal-wide">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">new enrollment</div>
+          <h2 id="addAgentTitle">Add agent</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-add-agent><span class="ti ti-x"></span></button>
+      </div>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>Nickname</span>
+          <input id="newAgentNickname" type="text" placeholder="bronya" autocomplete="off">
+        </label>
+        <label class="form-field">
+          <span>Kind</span>
+          <select id="newAgentKind">
+            <option value="static">static</option>
+            <option value="mobile">mobile</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>Telegram group</span>
+          <select id="newAgentGroup"></select>
+        </label>
+        <label class="form-field hidden" id="customGroupField">
+          <span>Custom chat id</span>
+          <input id="newAgentCustomGroup" type="number" placeholder="-100...">
+        </label>
+        <label class="form-field">
+          <span>Topic id</span>
+          <input id="newAgentThread" type="number" placeholder="0 = no topic yet">
+        </label>
+      </div>
+      <p class="modal-note">Token будет показан один раз. Скопируй его в конфиг агента или deploy flow сразу после создания.</p>
+      <div id="addAgentError" class="form-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" data-close-add-agent>Cancel</button>
+        <button id="createAgentBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-key"></span>Create enrollment</button>
       </div>
     </div>
   </div>

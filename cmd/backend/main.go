@@ -232,12 +232,14 @@ func main() {
 		// Per-token rate limit on /v1/report (API-06). Defaults applied in
 		// LoadConfig so production yaml without rate_limit section gets sane
 		// throttling automatically.
-		ReportRatePerSec:  cfg.RateLimit.ReportPerSec,
-		ReportBurst:       cfg.RateLimit.ReportBurst,
-		MobileWakeAfter:   time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
-		WizardToken:       cfg.Wizard.Token,
-		DashboardToken:    cfg.Dashboard.Token,
-		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
+		ReportRatePerSec:      cfg.RateLimit.ReportPerSec,
+		ReportBurst:           cfg.RateLimit.ReportBurst,
+		MobileWakeAfter:       time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
+		WizardToken:           cfg.Wizard.Token,
+		DashboardToken:        cfg.Dashboard.Token,
+		TelegramPrimaryChatID: cfg.Telegram.ChatID,
+		TelegramExtraChatIDs:  cfg.Telegram.ExtraChatIDs,
+		BackendUpdatePath:     backend.DefaultBackendUpdatePath(cfg),
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,

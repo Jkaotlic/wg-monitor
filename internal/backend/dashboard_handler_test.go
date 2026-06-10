@@ -173,7 +173,7 @@ func TestDashboardStaticRequiresSessionAndServesEmbeddedApp(t *testing.T) {
 	if ct := pageRec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
 		t.Fatalf("page content-type=%q", ct)
 	}
-	if !strings.Contains(pageRec.Body.String(), "WG Monitor Control") {
+	if !strings.Contains(pageRec.Body.String(), "Fleet Control") {
 		t.Fatalf("dashboard html missing app title")
 	}
 
@@ -186,6 +186,51 @@ func TestDashboardStaticRequiresSessionAndServesEmbeddedApp(t *testing.T) {
 	}
 	if strings.Contains(cssRec.Body.String(), "https://") || strings.Contains(cssRec.Body.String(), "http://") {
 		t.Fatalf("dashboard css must not depend on external assets")
+	}
+}
+
+func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
+	h := NewMux(Deps{DashboardToken: "secret"})
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", strings.NewReader(`{"token":"secret"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	h.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login: want 200, got %d body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	cookies := loginRec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("want session cookie, got %+v", cookies)
+	}
+	get := func(path string) string {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(cookies[0])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: want 200, got %d body=%s", path, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+
+	page := get("/dashboard/")
+	js := get("/dashboard/app.js")
+	css := get("/dashboard/app.css")
+
+	for _, want := range []string{"Add agent", "agentDrawer", "addAgentModal"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("dashboard page missing %q", want)
+		}
+	}
+	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments"} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("dashboard js missing %q", want)
+		}
+	}
+	for _, want := range []string{"agent-drawer", "data-state", "action-btn"} {
+		if !strings.Contains(css, want) {
+			t.Fatalf("dashboard css missing %q", want)
+		}
 	}
 }
 
@@ -282,6 +327,204 @@ func TestDashboardSummaryIncludesFleetCounts(t *testing.T) {
 	}
 	if len(got.Agents[1].ActiveIncidents) != 1 || got.Agents[1].ActiveIncidents[0].CheckName != "agent_heartbeat" || got.Agents[1].ActiveIncidents[0].FailCount != 4 {
 		t.Fatalf("incidents=%+v", got.Agents[1].ActiveIncidents)
+	}
+}
+
+func TestDashboardSummaryIncludesTelegramMetadata(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	userID, err := d.Users().InsertWithKind("bronya", "token-a", "1.1.1.1", "awg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateTelegramTopic(userID, -100200, 123); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewMux(Deps{
+		DB:                    d,
+		DashboardToken:        "secret",
+		TelegramPrimaryChatID: -100100,
+		TelegramExtraChatIDs:  []int64{-100200},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Telegram struct {
+			PrimaryChatID int64   `json:"primary_chat_id"`
+			ExtraChatIDs  []int64 `json:"extra_chat_ids"`
+		} `json:"telegram"`
+		Agents []struct {
+			Nickname         string `json:"nickname"`
+			TelegramChatID   int64  `json:"telegram_chat_id"`
+			TelegramThreadID int64  `json:"telegram_thread_id"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Telegram.PrimaryChatID != -100100 {
+		t.Fatalf("primary_chat_id=%d", got.Telegram.PrimaryChatID)
+	}
+	if len(got.Telegram.ExtraChatIDs) != 1 || got.Telegram.ExtraChatIDs[0] != -100200 {
+		t.Fatalf("extra_chat_ids=%v", got.Telegram.ExtraChatIDs)
+	}
+	if len(got.Agents) != 1 {
+		t.Fatalf("agents=%d", len(got.Agents))
+	}
+	if got.Agents[0].Nickname != "bronya" || got.Agents[0].TelegramChatID != -100200 || got.Agents[0].TelegramThreadID != 123 {
+		t.Fatalf("agent metadata=%+v", got.Agents[0])
+	}
+}
+
+func TestDashboardEnrollmentRequiresAuth(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{DB: d, DashboardToken: "secret", TelegramPrimaryChatID: -100100})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments",
+		strings.NewReader(`{"nickname":"bronya","kind":"mobile"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDashboardEnrollmentCreatesAgentAndBindsTopic(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{
+		DB:                    d,
+		DashboardToken:        "secret",
+		TelegramPrimaryChatID: -100100,
+		TelegramExtraChatIDs:  []int64{-100200},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments",
+		strings.NewReader(`{"nickname":"bronya","kind":"mobile","telegram_chat_id":-100200,"telegram_thread_id":222}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "wg.example.test"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Nickname         string `json:"nickname"`
+		BackendURL       string `json:"backend_url"`
+		RawToken         string `json:"raw_token"`
+		TelegramChatID   int64  `json:"telegram_chat_id"`
+		TelegramThreadID int64  `json:"telegram_thread_id"`
+		Message          string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Nickname != "bronya" || got.BackendURL != "https://wg.example.test" || got.RawToken == "" {
+		t.Fatalf("bad enrollment response: %+v", got)
+	}
+	if got.TelegramChatID != -100200 || got.TelegramThreadID != 222 || !strings.Contains(got.Message, "shown once") {
+		t.Fatalf("bad binding response: %+v", got)
+	}
+	u, err := d.Users().GetByNickname("bronya")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != db.KindMobile || u.TelegramChatID == nil || *u.TelegramChatID != -100200 || u.TelegramThreadID == nil || *u.TelegramThreadID != 222 {
+		t.Fatalf("stored user=%+v", u)
+	}
+	if _, err := d.Users().GetByToken(got.RawToken); err != nil {
+		t.Fatalf("raw token should authenticate new agent: %v", err)
+	}
+}
+
+func TestDashboardEnrollmentUsesPrimaryChatForZeroChatID(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{DB: d, DashboardToken: "secret", TelegramPrimaryChatID: -100100})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments",
+		strings.NewReader(`{"nickname":"testkeen","kind":"static","telegram_chat_id":0,"telegram_thread_id":333}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("testkeen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TelegramChatID != nil {
+		t.Fatalf("primary chat should be stored as NULL for backward compatibility, got %v", *u.TelegramChatID)
+	}
+	if u.TelegramThreadID == nil || *u.TelegramThreadID != 333 {
+		t.Fatalf("thread id=%v", u.TelegramThreadID)
+	}
+}
+
+func TestDashboardEnrollmentRejectsInvalidInputs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "invalid nickname", body: `{"nickname":"Bad Name","kind":"static"}`},
+		{name: "invalid kind", body: `{"nickname":"bronya","kind":"fancy"}`},
+		{name: "unknown chat", body: `{"nickname":"bronya","kind":"static","telegram_chat_id":-100999}`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			h := NewMux(Deps{
+				DB:                    d,
+				DashboardToken:        "secret",
+				TelegramPrimaryChatID: -100100,
+				TelegramExtraChatIDs:  []int64{-100200},
+			})
+			req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments", strings.NewReader(tc.body))
+			req.Header.Set("Authorization", "Bearer secret")
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+
+			h.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 
