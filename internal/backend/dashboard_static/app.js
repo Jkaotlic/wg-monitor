@@ -52,7 +52,9 @@
     drawerTitle: document.getElementById("drawerTitle"),
     resultOutput: document.getElementById("resultOutput"),
     closeDrawerBtn: document.getElementById("closeDrawerBtn"),
-    toast: document.getElementById("toast")
+    toast: document.getElementById("toast"),
+    backendUpdateBtn: document.getElementById("backendUpdateBtn"),
+    backendUpdateText: document.getElementById("backendUpdateText")
   };
 
   function setAuth(ok) {
@@ -135,6 +137,11 @@
     els.kpiDeploys.textContent = totals.pending_deploys || 0;
     const latest = latestVersion();
     els.kpiVersion.textContent = latest && latest !== summary.version ? `${summary.version || "backend ?"} -> ${latest}` : (summary.version || "version unknown");
+    const needsUpdate = latest && summary.version && latest !== summary.version;
+    if (els.backendUpdateBtn) {
+      els.backendUpdateBtn.classList.toggle("hidden", !needsUpdate);
+      if (needsUpdate && els.backendUpdateText) els.backendUpdateText.textContent = `Update → ${latest}`;
+    }
     els.kpiOnlineText.textContent = (totals.online || 0) === 1 ? "1 agent reporting" : (totals.online || 0) + " agents reporting";
     els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
@@ -417,6 +424,19 @@
     toast("deploy queued");
     pollResult(nickname, res.cmd_id, "self_update");
     refresh();
+  }
+
+  async function deployBackend() {
+    const version = latestVersion();
+    if (!version) { toast("latest version is not known yet"); return; }
+    setButtonState(els.backendUpdateBtn, "waiting");
+    await api("/v1/dashboard/backend/deploy", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_version: version })
+    });
+    toast("Backend update queued → " + version + ". Перезагружаю страницу через 15 с...");
+    window.setTimeout(() => window.location.reload(), 15000);
   }
 
   async function deployLatest(nickname) {
@@ -745,6 +765,11 @@
   els.createAgentBtn.addEventListener("click", createEnrollment);
   els.newAgentGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
+  els.backendUpdateBtn.addEventListener("click", () => deployBackend().catch((err) => {
+    setButtonState(els.backendUpdateBtn, "error");
+    toast(err.message);
+    window.setTimeout(() => setButtonState(els.backendUpdateBtn, "idle"), 3000);
+  }));
 
   refresh();
 })();
