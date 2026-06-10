@@ -174,6 +174,14 @@ func (s *SSH) Close() error {
 // Run executes a command, returning stdout, stderr, exit code.
 // Does NOT fail on non-zero exit — caller decides.
 func (s *SSH) Run(cmd string) (string, string, int, error) {
+	return s.RunWithStdin(cmd, nil)
+}
+
+// RunWithStdin runs cmd on the remote host, feeding stdin to the session.
+// Use this when secrets must not appear in the shell command string and are
+// instead piped in (e.g. auth headers that would otherwise be visible in
+// /proc/<pid>/cmdline for the full duration of a curl request).
+func (s *SSH) RunWithStdin(cmd string, stdin io.Reader) (string, string, int, error) {
 	sess, err := s.client.NewSession()
 	if err != nil {
 		return "", "", -1, err
@@ -183,6 +191,9 @@ func (s *SSH) Run(cmd string) (string, string, int, error) {
 	var sout, serr safeBuf
 	sess.Stdout = &sout
 	sess.Stderr = &serr
+	if stdin != nil {
+		sess.Stdin = stdin
+	}
 
 	err = sess.Run(cmd)
 	rc := 0

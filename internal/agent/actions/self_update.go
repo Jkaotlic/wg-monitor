@@ -57,28 +57,27 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 		fallbackClient, fallbackLabel = httpClientForPinnedRepoHost(repoBase, strings.TrimSpace(repoBaseOpt[1]), 60, nil)
 	}
 
-	binBytes, err := httpGetWithFallback(ctx, httpClient, fallbackClient, binURL, fallbackLabel)
-	if err != nil {
-		return "", fmt.Errorf("download %s: %w", assetName, err)
-	}
+	// Download checksums.txt first (small file, safe to buffer in memory).
 	sumsBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL, fallbackLabel)
 	if err != nil {
 		return "", fmt.Errorf("download checksums.txt: %w", err)
 	}
-
 	wantSha, ok := parseChecksum(string(sumsBody), assetName)
 	if !ok {
 		return "", fmt.Errorf("checksums.txt: no entry for %s", assetName)
 	}
-	gotSha := sha256Hex(binBytes)
-	if !strings.EqualFold(gotSha, wantSha) {
-		return "", fmt.Errorf("sha256 mismatch: want %s got %s", wantSha[:16], gotSha[:16])
-	}
 
+	// Stream the binary directly to disk — never load 64 MB into RAM.
+	// Critical on MIPSLE routers where total RAM is ≤64 MB.
 	const binPath = "/opt/bin/wg-monitor"
 	tmpPath := binPath + ".new"
-	if err := writeFileAtomic(tmpPath, binBytes, 0o755); err != nil {
-		return "", fmt.Errorf("write %s: %w", tmpPath, err)
+	gotSha, err := httpGetToFileWithFallback(ctx, httpClient, fallbackClient, binURL, fallbackLabel, tmpPath, maxSelfUpdateArtifactSize)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", assetName, err)
+	}
+	if !strings.EqualFold(gotSha, wantSha) {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("sha256 mismatch: want %s got %s", wantSha[:16], gotSha[:16])
 	}
 
 	scriptPath := "/tmp/wg-monitor-swap.sh"
@@ -170,6 +169,52 @@ func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
 	return body, nil
 }
 
+// httpGetToFile streams the response body to dst+".tmp", computing sha256 in
+// the same pass, then atomically renames to dst. Returns the sha256 hex.
+// Avoids loading large binaries into RAM — critical for 64 MB agents on
+// MIPSLE routers with ≤64 MB total memory.
+func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxBytes int64) (sha256hex string, err error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("HTTP %d for %s", resp.StatusCode, rawURL)
+	}
+
+	tmp := dst + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return "", err
+	}
+
+	h := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxBytes+1))
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(tmp)
+		return "", copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(tmp)
+		return "", closeErr
+	}
+	if n > maxBytes {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("response too large: exceeds %d bytes", maxBytes)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, url, fallbackLabel string) ([]byte, error) {
 	body, err := httpGet(ctx, primary, url)
 	if err == nil {
@@ -183,6 +228,21 @@ func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, ur
 		return nil, fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
 	}
 	return body, nil
+}
+
+func httpGetToFileWithFallback(ctx context.Context, primary, fallback *http.Client, rawURL, fallbackLabel, dst string, maxBytes int64) (string, error) {
+	sha, err := httpGetToFile(ctx, primary, rawURL, dst, maxBytes)
+	if err == nil {
+		return sha, nil
+	}
+	if fallback == nil || strings.TrimSpace(fallbackLabel) == "" || !isSelfUpdateTransportError(err) {
+		return "", err
+	}
+	sha, fallbackErr := httpGetToFile(ctx, fallback, rawURL, dst, maxBytes)
+	if fallbackErr != nil {
+		return "", fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+	}
+	return sha, nil
 }
 
 func isSelfUpdateTransportError(err error) bool {
@@ -258,21 +318,6 @@ func parseChecksum(body, name string) (string, bool) {
 	return "", false
 }
 
-func sha256Hex(b []byte) string {
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
-// writeFileAtomic writes to path+".tmp" then renames into place so a crash
-// mid-write doesn't leave a half-written .new binary lurking on disk that
-// the next swap-script run would happily mv into /opt/bin/wg-monitor.
-func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
 
 func selfUpdateSwapScript(binPath string) string {
 	return `#!/bin/sh
@@ -284,7 +329,6 @@ cp -p ` + binPath + ` ` + binPath + `.bak 2>/dev/null
 mv ` + binPath + `.new ` + binPath + `
 chmod 755 ` + binPath + `
 /opt/etc/init.d/S99wg-monitor start
-sleep 2
 is_running() {
 	if command -v pidof >/dev/null 2>&1 && pidof wg-monitor >/dev/null 2>&1; then
 		return 0
@@ -294,7 +338,19 @@ is_running() {
 	fi
 	ps 2>/dev/null | grep '[w]g-monitor' >/dev/null 2>&1
 }
-if ! is_running; then
+# Poll for 60 s (12 × 5 s) to catch crashes that occur after initial startup.
+_ok=0
+_i=0
+while [ $_i -lt 12 ]; do
+	sleep 5
+	if ! is_running; then
+		_ok=0
+		break
+	fi
+	_ok=1
+	_i=$((_i + 1))
+done
+if [ $_ok -eq 0 ]; then
 	/opt/etc/init.d/S99wg-monitor stop 2>/dev/null
 	mv ` + binPath + `.bak ` + binPath + `
 	chmod 755 ` + binPath + `

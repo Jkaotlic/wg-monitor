@@ -10,7 +10,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -568,12 +567,7 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	PrintOK("последний релиз: " + rel.TagName)
 
 	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(ag.Nickname)
-	home, _ := os.UserHomeDir()
-	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
-	pass, _ := secrets.Get(envName, "пароль root для "+ag.Nickname, &MemoryFileLookup{
-		Path:    memFile,
-		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
-	})
+	pass, _ := secrets.Get(envName, "пароль root для "+ag.Nickname, nil)
 	if pass == "" {
 		// Fallback to global WG_KEENETIC_PASS
 		pass, _ = secrets.Get("WG_KEENETIC_PASS", "пароль root", nil)
@@ -1286,12 +1280,7 @@ func isAWGMUnauthorized(err error) bool {
 
 func routerRootPasswordForAgent(secrets *SecretStore, nickname string) string {
 	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(nickname)
-	home, _ := os.UserHomeDir()
-	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
-	pass, _ := secrets.Get(envName, "Entware terminal root password for "+nickname, &MemoryFileLookup{
-		Path:    memFile,
-		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
-	})
+	pass, _ := secrets.Get(envName, "Entware terminal root password for "+nickname, nil)
 	if pass == "" {
 		pass, _ = secrets.Get("WG_KEENETIC_PASS", "Entware terminal root password", nil)
 	}
@@ -1344,12 +1333,7 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 	// telegram_thread_id в users-таблице на первом hard-alert от агента.
 
 	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(ag.Nickname)
-	home, _ := os.UserHomeDir()
-	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
-	pass, _ := secrets.Get(envName, "пароль root для "+ag.Nickname, &MemoryFileLookup{
-		Path:    memFile,
-		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
-	})
+	pass, _ := secrets.Get(envName, "пароль root для "+ag.Nickname, nil)
 	if pass == "" {
 		pass, _ = secrets.Get("WG_KEENETIC_PASS", "пароль root", nil)
 	}
@@ -2306,12 +2290,7 @@ func migrateAgentBackendConfig(state *State, secrets *SecretStore, ag *AgentStat
 
 func agentRouterPassword(secrets *SecretStore, nickname string) (string, error) {
 	envName := "WG_KEENETIC_PASS_" + strings.ToUpper(nickname)
-	home, _ := os.UserHomeDir()
-	memFile := filepath.Join(home, ".claude/projects/c--Users-Anex-Projects-wg-monitor/memory/host_keenetic.md")
-	pass, _ := secrets.Get(envName, "пароль root для "+nickname, &MemoryFileLookup{
-		Path:    memFile,
-		Pattern: `pass\s+([A-Za-z0-9!@#$%^&*_+=\-]+)`,
-	})
+	pass, _ := secrets.Get(envName, "пароль root для "+nickname, nil)
 	if pass == "" {
 		pass, _ = secrets.Get("WG_KEENETIC_PASS", "пароль root", nil)
 	}

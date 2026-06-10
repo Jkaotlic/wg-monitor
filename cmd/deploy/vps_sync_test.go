@@ -457,7 +457,6 @@ func TestBuildWizardAPICurlCommandSetsForwardedPublicHost(t *testing.T) {
 	cmd := buildWizardAPICurlCommand(
 		http.MethodPost,
 		"/v1/wizard/agents/testkeen/deploy",
-		"tok",
 		[]byte(`{"target_version":"v0.13.0-rc79"}`),
 		5*time.Second,
 		"https://wgmonitor.example/path",
@@ -470,5 +469,23 @@ func TestBuildWizardAPICurlCommandSetsForwardedPublicHost(t *testing.T) {
 	}
 	if !strings.Contains(cmd, "X-WG-Public-Host: wgmonitor.example") {
 		t.Fatalf("missing public host header: %s", cmd)
+	}
+}
+
+func TestBuildWizardAPICurlCommandDoesNotEmbedToken(t *testing.T) {
+	// Auth token must come from stdin, not be embedded in the shell script.
+	// Embedding exposes it in /proc/<pid>/cmdline for the full curl duration.
+	cmd := buildWizardAPICurlCommand(
+		http.MethodPost,
+		"/v1/wizard/agents/testkeen/deploy",
+		[]byte(`{"target_version":"v0.13.0-rc79"}`),
+		5*time.Second,
+		"",
+	)
+	if strings.Contains(cmd, "Authorization") {
+		t.Fatalf("auth header embedded in script; must be read from stdin:\n%s", cmd)
+	}
+	if !strings.Contains(cmd, "read -r") {
+		t.Fatalf("script must read auth header from stdin via 'read -r':\n%s", cmd)
 	}
 }
