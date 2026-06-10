@@ -236,6 +236,7 @@ func main() {
 		ReportBurst:       cfg.RateLimit.ReportBurst,
 		MobileWakeAfter:   time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
 		WizardToken:       cfg.Wizard.Token,
+		DashboardToken:    cfg.Dashboard.Token,
 		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
 	})
 	srv := &http.Server{
