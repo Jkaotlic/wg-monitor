@@ -655,6 +655,18 @@ select:focus {
   gap: 12px;
 }
 
+.form-grid-three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.form-section-title {
+  margin: 12px 0 8px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
 .modal-note {
   margin-top: 12px;
   color: var(--muted);
@@ -701,6 +713,85 @@ select:focus {
   color: #ffffff;
 }
 
+.result-output {
+  display: grid;
+  max-height: 440px;
+  overflow: auto;
+  gap: 10px;
+}
+
+.result-section {
+  border: 1px solid #24324a;
+  border-radius: 8px;
+  background: #0b1220;
+  padding: 12px;
+}
+
+.result-section strong {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.result-section p {
+  color: #bdcae2;
+  line-height: 1.45;
+}
+
+.result-error {
+  border-color: #7f1d1d;
+}
+
+.result-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.result-grid div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.result-grid span {
+  color: #93a7c7;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.result-grid strong {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: #eef4ff;
+}
+
+.result-table-wrap {
+  overflow: auto;
+}
+
+.result-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #dbeafe;
+  font-size: 12px;
+}
+
+.result-table th,
+.result-table td {
+  border-bottom: 1px solid #24324a;
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.result-table th {
+  color: #93a7c7;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.raw-output,
 pre {
   max-height: 360px;
   overflow: auto;
@@ -710,6 +801,21 @@ pre {
   color: #dbeafe;
   padding: 14px;
   white-space: pre-wrap;
+}
+
+details.raw-output {
+  border: 1px solid #24324a;
+  padding: 10px 12px;
+}
+
+details.raw-output summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+details.raw-output pre {
+  margin-top: 10px;
+  padding: 0;
 }
 
 .toast {
@@ -790,7 +896,9 @@ pre {
   }
 
   .kpi-grid,
-  .form-grid {
+  .form-grid,
+  .form-grid-three,
+  .result-grid {
     grid-template-columns: 1fr;
   }
 

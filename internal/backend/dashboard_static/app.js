@@ -37,6 +37,15 @@
     customGroupField: document.getElementById("customGroupField"),
     newAgentCustomGroup: document.getElementById("newAgentCustomGroup"),
     newAgentThread: document.getElementById("newAgentThread"),
+    newAgentDeployMode: document.getElementById("newAgentDeployMode"),
+    newAgentArch: document.getElementById("newAgentArch"),
+    newAgentRing: document.getElementById("newAgentRing"),
+    newAgentAWGMURL: document.getElementById("newAgentAWGMURL"),
+    newAgentAWGMAuth: document.getElementById("newAgentAWGMAuth"),
+    newAgentSSHHost: document.getElementById("newAgentSSHHost"),
+    newAgentSSHPort: document.getElementById("newAgentSSHPort"),
+    newAgentSSHUser: document.getElementById("newAgentSSHUser"),
+    newAgentExpectedMAC: document.getElementById("newAgentExpectedMAC"),
     createAgentBtn: document.getElementById("createAgentBtn"),
     addAgentError: document.getElementById("addAgentError"),
     resultDrawer: document.getElementById("resultDrawer"),
@@ -59,7 +68,11 @@
 
   function setActionState(nickname, action, value) {
     state.buttonStates.set(nickname + ":" + action, value);
-    document.querySelectorAll(`[data-agent="${cssEscape(nickname)}"][data-command="${cssEscape(action)}"], [data-agent="${cssEscape(nickname)}"][data-maint="${cssEscape(action)}"]`).forEach((button) => {
+    let selector = `[data-agent="${cssEscape(nickname)}"][data-command="${cssEscape(action)}"], [data-agent="${cssEscape(nickname)}"][data-maint="${cssEscape(action)}"]`;
+    if (action === "self_update") {
+      selector += `, [data-agent="${cssEscape(nickname)}"][data-update-latest]`;
+    }
+    document.querySelectorAll(selector).forEach((button) => {
       setButtonState(button, value);
     });
   }
@@ -120,7 +133,8 @@
     els.kpiOnline.textContent = totals.online || 0;
     els.kpiAlerts.textContent = totals.alerts || 0;
     els.kpiDeploys.textContent = totals.pending_deploys || 0;
-    els.kpiVersion.textContent = summary.version || "version unknown";
+    const latest = latestVersion();
+    els.kpiVersion.textContent = latest && latest !== summary.version ? `${summary.version || "backend ?"} -> ${latest}` : (summary.version || "version unknown");
     els.kpiOnlineText.textContent = (totals.online || 0) === 1 ? "1 agent reporting" : (totals.online || 0) + " agents reporting";
     els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
@@ -153,6 +167,10 @@
       const matchesFilter = state.filter === "all" || agent.status === state.filter;
       return matchesQuery && matchesFilter;
     });
+  }
+
+  function latestVersion() {
+    return state.summary?.latest_version || state.summary?.version || "";
   }
 
   function summarySentence(summary) {
@@ -207,11 +225,23 @@
             <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">Check</button>
             <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
             <button class="mini-btn danger" type="button" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">AWGM</button>
-            <button class="mini-btn primary" type="button" data-deploy="${escapeAttr(agent.nickname)}">Deploy</button>
+            ${latestDeployButton(agent, "mini-btn primary", "Latest")}
+            <button class="mini-btn" type="button" data-deploy="${escapeAttr(agent.nickname)}">Custom</button>
           </div>
         </td>
       </tr>
     `;
+  }
+
+  function latestDeployButton(agent, className, label) {
+    const latest = latestVersion();
+    const current = agent.agent_version || "";
+    const pending = agent.pending_version || "";
+    const disabled = !latest || current === latest || pending === latest;
+    const stateValue = pending === latest ? "waiting" : buttonState(agent.nickname, "self_update");
+    const suffix = latest ? ` ${latest}` : "";
+    const text = pending === latest ? `Pending${suffix}` : (current === latest ? `Latest${suffix}` : label);
+    return `<button class="${escapeAttr(className)}" title="Update to latest${escapeAttr(suffix)}" type="button" data-state="${escapeAttr(stateValue)}" data-update-latest="1" data-agent="${escapeAttr(agent.nickname)}" ${disabled ? "disabled" : ""}>${escapeHTML(text)}</button>`;
   }
 
   function statusBadge(agent) {
@@ -317,7 +347,8 @@
             ${drawerCommandButton(selected, "check_direct", "Direct")}
             ${drawerCommandButton(selected, "check_via_tunnel", "Via tunnel")}
             <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
-            <button class="action-btn primary" type="button" data-deploy="${escapeAttr(selected.nickname)}"><span class="ti ti-rocket"></span>Deploy</button>
+            ${latestDeployButton(selected, "action-btn primary", "Update to latest")}
+            <button class="action-btn" type="button" data-deploy="${escapeAttr(selected.nickname)}"><span class="ti ti-rocket"></span>Custom version</button>
           </div>
         </section>
       </div>
@@ -388,6 +419,24 @@
     refresh();
   }
 
+  async function deployLatest(nickname) {
+    const version = latestVersion();
+    if (!version) {
+      toast("latest version is not known yet");
+      return;
+    }
+    setActionState(nickname, "self_update", "queued");
+    const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/deploy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target_version: version })
+    });
+    toast("latest update queued: " + version);
+    setActionState(nickname, "self_update", "waiting");
+    pollResult(nickname, res.cmd_id, "self_update");
+    refresh();
+  }
+
   async function createEnrollment() {
     els.addAgentError.textContent = "";
     const group = selectedGroup();
@@ -406,7 +455,16 @@
         kind: els.newAgentKind.value,
         telegram_chat_id: group.chatID,
         telegram_thread_id: Number(els.newAgentThread.value || 0),
-        custom_telegram_chat: group.custom
+        custom_telegram_chat: group.custom,
+        deploy_mode: els.newAgentDeployMode.value,
+        awgm_url: els.newAgentAWGMURL.value.trim(),
+        awgm_auth: els.newAgentAWGMAuth.value,
+        ssh_host: els.newAgentSSHHost.value.trim(),
+        ssh_port: Number(els.newAgentSSHPort.value || 0),
+        ssh_user: els.newAgentSSHUser.value.trim(),
+        arch: els.newAgentArch.value,
+        ring: els.newAgentRing.value,
+        expected_mac: els.newAgentExpectedMAC.value.trim()
       };
       const res = await api("/v1/dashboard/enrollments", {
         method: "POST",
@@ -437,34 +495,24 @@
 
   function showEnrollmentResult(res) {
     els.drawerTitle.textContent = "Enrollment / " + res.nickname;
-    els.resultOutput.textContent = [
-      res.message || "Agent enrollment created. Save the token now.",
-      "",
-      "nickname: " + res.nickname,
-      "backend_url: " + res.backend_url,
-      "telegram_chat_id: " + res.telegram_chat_id,
-      "telegram_thread_id: " + res.telegram_thread_id,
-      "",
-      "raw_token:",
-      res.raw_token
-    ].join("\n");
+    setResultHTML(formatEnrollmentResult(res));
     els.resultDrawer.classList.remove("hidden");
   }
 
   async function pollResult(nickname, cmdID, title) {
     if (!cmdID) return;
     els.drawerTitle.textContent = title + " / " + nickname;
-    els.resultOutput.textContent = "waiting for " + cmdID;
+    setResultHTML(`<div class="result-section"><strong>Waiting for agent</strong><p>Command id: ${escapeHTML(cmdID)}</p></div>`);
     els.resultDrawer.classList.remove("hidden");
     for (let i = 0; i < 12; i++) {
       try {
         const res = await api(`/v1/dashboard/commands/${encodeURIComponent(cmdID)}?nickname=${encodeURIComponent(nickname)}&wait_sec=5`);
-        els.resultOutput.textContent = JSON.stringify(res, null, 2);
+        setResultHTML(formatCommandResult(res));
         setActionState(nickname, title, res.status === "ok" ? "ok" : "error");
         refresh();
         return;
       } catch (err) {
-        els.resultOutput.textContent = "waiting for " + cmdID + "\n" + err.message;
+        setResultHTML(`<div class="result-section"><strong>Waiting for agent</strong><p>Command id: ${escapeHTML(cmdID)}</p><p>${escapeHTML(err.message)}</p></div>`);
         await sleep(1200);
       }
     }
@@ -472,8 +520,8 @@
 
   function openDeploy(nickname) {
     state.deployAgent = nickname;
-    els.deployTitle.textContent = "Deploy " + nickname;
-    els.deployVersionInput.value = "";
+    els.deployTitle.textContent = "Custom version / " + nickname;
+    els.deployVersionInput.value = latestVersion();
     setButtonState(els.confirmDeployBtn, "idle");
     els.deployModal.classList.remove("hidden");
     els.deployVersionInput.focus();
@@ -490,6 +538,15 @@
     els.newAgentKind.value = "static";
     els.newAgentThread.value = "";
     els.newAgentCustomGroup.value = "";
+    els.newAgentDeployMode.value = "";
+    els.newAgentArch.value = "";
+    els.newAgentRing.value = "";
+    els.newAgentAWGMURL.value = "";
+    els.newAgentAWGMAuth.value = "";
+    els.newAgentSSHHost.value = "";
+    els.newAgentSSHPort.value = "";
+    els.newAgentSSHUser.value = "";
+    els.newAgentExpectedMAC.value = "";
     els.addAgentError.textContent = "";
     setButtonState(els.createAgentBtn, "idle");
     renderGroupOptions();
@@ -519,6 +576,101 @@
 
   function toggleCustomGroup() {
     els.customGroupField.classList.toggle("hidden", els.newAgentGroup.value !== "custom");
+  }
+
+  function setResultHTML(html) {
+    els.resultOutput.innerHTML = html;
+  }
+
+  function formatEnrollmentResult(res) {
+    return [
+      `<div class="result-section"><strong>${escapeHTML(res.message || "Agent enrollment created. Save the token now.")}</strong></div>`,
+      resultGrid({
+        nickname: res.nickname,
+        backend_url: res.backend_url,
+        telegram_chat_id: res.telegram_chat_id,
+        telegram_thread_id: res.telegram_thread_id || "no topic"
+      }),
+      `<div class="result-section"><strong>Raw token</strong><pre class="raw-output">${escapeHTML(res.raw_token || "")}</pre></div>`,
+      rawDetails(res)
+    ].join("");
+  }
+
+  function formatCommandResult(res) {
+    const sections = [
+      `<div class="result-section"><strong>Status: ${escapeHTML(res.status || "unknown")}</strong><p>${escapeHTML(res.id || "no command id")}${res.duration_ms ? " / " + escapeHTML(res.duration_ms) + "ms" : ""}</p></div>`
+    ];
+    if (res.output) {
+      sections.push(formatOutput(res.output));
+    }
+    if (res.error) {
+      sections.push(`<div class="result-section result-error"><strong>Error</strong><pre class="raw-output">${escapeHTML(res.error)}</pre></div>`);
+    }
+    sections.push(rawDetails(res));
+    return sections.join("");
+  }
+
+  function formatOutput(output) {
+    if (typeof output !== "string") return resultValue("Output", output);
+    const trimmed = output.trim();
+    if (!trimmed) return `<div class="result-section"><strong>Output</strong><p>empty</p></div>`;
+    try {
+      return formatStructuredOutput(JSON.parse(trimmed));
+    } catch (_) {
+      return `<div class="result-section"><strong>Output</strong><pre class="raw-output">${escapeHTML(output)}</pre></div>`;
+    }
+  }
+
+  function formatStructuredOutput(value) {
+    if (Array.isArray(value)) return resultValue("Items", value);
+    if (!value || typeof value !== "object") return resultValue("Output", value);
+    const sections = [];
+    const compact = {};
+    Object.keys(value).forEach((key) => {
+      const item = value[key];
+      if (Array.isArray(item)) {
+        sections.push(resultArray(key, item));
+      } else if (item && typeof item === "object") {
+        sections.push(resultValue(key, item));
+      } else {
+        compact[key] = item;
+      }
+    });
+    if (Object.keys(compact).length) sections.unshift(resultGrid(compact));
+    return sections.join("");
+  }
+
+  function resultGrid(values) {
+    return `<div class="result-section result-grid">${Object.keys(values).map((key) => `
+      <div><span>${escapeHTML(humanLabel(key))}</span><strong>${escapeHTML(displayValue(values[key]))}</strong></div>
+    `).join("")}</div>`;
+  }
+
+  function resultArray(label, rows) {
+    if (!rows.length) return `<div class="result-section"><strong>${escapeHTML(humanLabel(label))}</strong><p>empty</p></div>`;
+    if (rows.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+      const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 8);
+      return `<div class="result-section"><strong>${escapeHTML(humanLabel(label))}</strong><div class="result-table-wrap"><table class="result-table"><thead><tr>${keys.map((key) => `<th>${escapeHTML(humanLabel(key))}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${keys.map((key) => `<td>${escapeHTML(displayValue(row[key]))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+    }
+    return resultValue(label, rows);
+  }
+
+  function resultValue(label, value) {
+    return `<div class="result-section"><strong>${escapeHTML(humanLabel(label))}</strong><pre class="raw-output">${escapeHTML(JSON.stringify(value, null, 2))}</pre></div>`;
+  }
+
+  function rawDetails(value) {
+    return `<details class="raw-output"><summary>Raw JSON</summary><pre>${escapeHTML(JSON.stringify(value, null, 2))}</pre></details>`;
+  }
+
+  function humanLabel(value) {
+    return String(value).replaceAll("_", " ");
+  }
+
+  function displayValue(value) {
+    if (value == null || value === "") return "-";
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
   }
 
   function sleep(ms) {
@@ -564,6 +716,10 @@
     if (button) {
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.deploy) openDeploy(nickname);
+      if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
+        setActionState(nickname, "self_update", "error");
+        toast(err.message);
+      });
       if (button.dataset.command) enqueueCommand(nickname, button.dataset.command).catch((err) => {
         setActionState(nickname, button.dataset.command, "error");
         toast(err.message);

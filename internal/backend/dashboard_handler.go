@@ -1,16 +1,19 @@
 package backend
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -306,12 +309,13 @@ const dashboardLoginHTML = `<!doctype html>
 </html>`
 
 type dashboardSummary struct {
-	Status      string                   `json:"status"`
-	Version     string                   `json:"version"`
-	GeneratedAt string                   `json:"generated_at"`
-	Totals      dashboardSummaryTotals   `json:"totals"`
-	Telegram    dashboardTelegramSummary `json:"telegram"`
-	Agents      []dashboardSummaryAgent  `json:"agents"`
+	Status        string                   `json:"status"`
+	Version       string                   `json:"version"`
+	LatestVersion string                   `json:"latest_version"`
+	GeneratedAt   string                   `json:"generated_at"`
+	Totals        dashboardSummaryTotals   `json:"totals"`
+	Telegram      dashboardTelegramSummary `json:"telegram"`
+	Agents        []dashboardSummaryAgent  `json:"agents"`
 }
 
 type dashboardTelegramSummary struct {
@@ -360,7 +364,7 @@ type dashboardIncident struct {
 }
 
 func dashboardSummaryHandler(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
 		if d.DB == nil {
 			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
 			return
@@ -373,6 +377,14 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "dashboard summary failed")
 			return
 		}
+		latest, err := lookupDashboardLatestVersion(r.Context())
+		if err != nil && d.Logger != nil {
+			d.Logger.Warn("dashboard latest release lookup failed", "err", err)
+		}
+		if latest == "" {
+			latest = serverVersion
+		}
+		resp.LatestVersion = latest
 		resp.Telegram = dashboardTelegramSummary{
 			PrimaryChatID: d.TelegramPrimaryChatID,
 			ExtraChatIDs:  append([]int64(nil), d.TelegramExtraChatIDs...),
@@ -425,6 +437,89 @@ func buildDashboardSummary(database *db.DB, now time.Time) (dashboardSummary, er
 		}
 	}
 	return resp, nil
+}
+
+type dashboardGitHubRelease struct {
+	TagName     string    `json:"tag_name"`
+	PublishedAt time.Time `json:"published_at"`
+	Draft       bool      `json:"draft"`
+}
+
+type dashboardLatestCache struct {
+	version string
+	at      time.Time
+}
+
+const dashboardLatestCacheTTL = 5 * time.Minute
+const dashboardGitHubReleasesURL = "https://api.github.com/repos/Jkaotlic/wg-monitor/releases?per_page=30"
+
+var (
+	lookupDashboardLatestVersion = fetchDashboardLatestVersion
+	dashboardLatestMu            sync.Mutex
+	dashboardLatestCached        dashboardLatestCache
+)
+
+func fetchDashboardLatestVersion(ctx context.Context) (string, error) {
+	dashboardLatestMu.Lock()
+	if dashboardLatestCached.version != "" && time.Since(dashboardLatestCached.at) < dashboardLatestCacheTTL {
+		version := dashboardLatestCached.version
+		dashboardLatestMu.Unlock()
+		return version, nil
+	}
+	dashboardLatestMu.Unlock()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dashboardGitHubReleasesURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "wg-monitor-dashboard/"+serverVersion)
+	client := &http.Client{Timeout: 4 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("github releases: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github releases HTTP %d", resp.StatusCode)
+	}
+	var releases []dashboardGitHubRelease
+	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+		return "", fmt.Errorf("decode github releases: %w", err)
+	}
+	version := dashboardOperatorLatestRelease(releases)
+	if version == "" {
+		return "", errors.New("github releases returned no usable tags")
+	}
+	dashboardLatestMu.Lock()
+	dashboardLatestCached = dashboardLatestCache{version: version, at: time.Now()}
+	dashboardLatestMu.Unlock()
+	return version, nil
+}
+
+func dashboardOperatorLatestRelease(releases []dashboardGitHubRelease) string {
+	var best dashboardGitHubRelease
+	for _, rel := range releases {
+		if rel.Draft || rel.TagName == "" {
+			continue
+		}
+		if best.TagName == "" || dashboardReleaseNewer(rel, best) {
+			best = rel
+		}
+	}
+	return best.TagName
+}
+
+func dashboardReleaseNewer(a, b dashboardGitHubRelease) bool {
+	if !a.PublishedAt.IsZero() || !b.PublishedAt.IsZero() {
+		if a.PublishedAt.After(b.PublishedAt) {
+			return true
+		}
+		if a.PublishedAt.Before(b.PublishedAt) {
+			return false
+		}
+	}
+	return strings.Compare(a.TagName, b.TagName) > 0
 }
 
 func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time) dashboardSummaryAgent {
@@ -482,6 +577,15 @@ type dashboardEnrollmentReq struct {
 	TelegramChatID     int64  `json:"telegram_chat_id"`
 	TelegramThreadID   int64  `json:"telegram_thread_id"`
 	CustomTelegramChat bool   `json:"custom_telegram_chat"`
+	DeployMode         string `json:"deploy_mode"`
+	AWGMURL            string `json:"awgm_url"`
+	AWGMAuth           string `json:"awgm_auth"`
+	SSHHost            string `json:"ssh_host"`
+	SSHPort            int64  `json:"ssh_port"`
+	SSHUser            string `json:"ssh_user"`
+	Arch               string `json:"arch"`
+	Ring               string `json:"ring"`
+	ExpectedMAC        string `json:"expected_mac"`
 }
 
 type dashboardEnrollmentResp struct {
@@ -530,6 +634,12 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
 		}
+		if dashboardEnrollmentHasDeployInfo(req) {
+			if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname, dashboardDeployInfoFromEnrollmentReq(d.DB, enrollment.Nickname, req)); err != nil {
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+				return
+			}
+		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(dashboardEnrollmentResp{
@@ -541,6 +651,66 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 			Message:          "Agent enrollment created. Save the token now; it will not be shown once this panel is closed.",
 		})
 	}
+}
+
+func dashboardEnrollmentHasDeployInfo(req dashboardEnrollmentReq) bool {
+	return req.DeployMode != "" || req.AWGMURL != "" || req.AWGMAuth != "" || req.SSHHost != "" ||
+		req.SSHPort != 0 || req.SSHUser != "" || req.Arch != "" || req.Ring != "" || req.ExpectedMAC != ""
+}
+
+func dashboardDeployInfoFromEnrollmentReq(database *db.DB, nickname string, req dashboardEnrollmentReq) db.DeployInfo {
+	info := db.DeployInfo{
+		Kind:        req.Kind,
+		ThreadID:    req.TelegramThreadID,
+		SSHHost:     strings.TrimSpace(req.SSHHost),
+		SSHPort:     req.SSHPort,
+		SSHUser:     strings.TrimSpace(req.SSHUser),
+		Arch:        strings.TrimSpace(req.Arch),
+		Ring:        strings.TrimSpace(req.Ring),
+		DeployMode:  strings.TrimSpace(req.DeployMode),
+		AWGMURL:     strings.TrimSpace(req.AWGMURL),
+		AWGMAuth:    strings.TrimSpace(req.AWGMAuth),
+		ExpectedMAC: strings.TrimSpace(req.ExpectedMAC),
+	}
+	if database == nil {
+		return info
+	}
+	current, err := database.Users().GetByNickname(nickname)
+	if err != nil {
+		return info
+	}
+	if info.SSHHost == "" {
+		info.SSHHost = stringValue(current.SSHHost)
+	}
+	if info.SSHPort == 0 {
+		info.SSHPort = int64Value(current.SSHPort)
+	}
+	if info.SSHUser == "" {
+		info.SSHUser = stringValue(current.SSHUser)
+	}
+	if info.Arch == "" {
+		info.Arch = stringValue(current.Arch)
+	}
+	info.LastDeployedVersion = stringValue(current.LastDeployedVersion)
+	if info.Ring == "" {
+		info.Ring = stringValue(current.Ring)
+	}
+	info.PendingVersion = stringValue(current.PendingVersion)
+	info.PendingSince = stringValue(current.PendingSince)
+	info.LastDeploy = stringValue(current.LastDeploy)
+	if info.DeployMode == "" {
+		info.DeployMode = stringValue(current.DeployMode)
+	}
+	if info.AWGMURL == "" {
+		info.AWGMURL = stringValue(current.AWGMURL)
+	}
+	if info.AWGMAuth == "" {
+		info.AWGMAuth = stringValue(current.AWGMAuth)
+	}
+	if info.ExpectedMAC == "" {
+		info.ExpectedMAC = stringValue(current.ExpectedMAC)
+	}
+	return info
 }
 
 func dashboardTelegramChatAllowed(d Deps, chatID int64, custom bool) bool {
