@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -425,9 +424,7 @@ func askUpdateChoice(all []updateTarget, outdated []updateTarget) []updateTarget
 	}
 	fmt.Println("  [Enter] ничего, выход")
 	fmt.Print("> ")
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
-	line = strings.ToLower(strings.TrimSpace(line))
+	line := strings.ToLower(strings.TrimSpace(readStdinLine()))
 	if line == "" {
 		return nil
 	}
