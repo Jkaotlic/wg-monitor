@@ -1,0 +1,126 @@
+:root {
+  --tblr-body-bg: #f5f7fb;
+  --tblr-body-color: #172033;
+  --tblr-muted: #667085;
+  --tblr-border-color: #dbe2ee;
+  --tblr-primary: #2563eb;
+  --tblr-primary-dark: #1d4ed8;
+  --tblr-success: #0f9f6e;
+  --tblr-warning: #b7791f;
+  --tblr-danger: #d92d20;
+  --tblr-card-bg: #ffffff;
+  --tblr-shadow: 0 16px 40px rgba(27, 39, 65, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--tblr-body-bg);
+  color: var(--tblr-body-color);
+  font-family: "Segoe UI", "Aptos", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.btn,
+.icon-btn,
+.nav-item,
+.segment {
+  border: 0;
+  cursor: pointer;
+}
+
+.btn {
+  display: inline-flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 0 14px;
+  font-weight: 700;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
+}
+
+.btn:hover,
+.icon-btn:hover,
+.nav-item:hover,
+.segment:hover {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: var(--tblr-primary);
+  color: #ffffff;
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
+}
+
+.btn-primary:hover {
+  background: var(--tblr-primary-dark);
+}
+
+.btn-ghost {
+  background: #eef3fb;
+  color: #20304a;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  color: var(--tblr-muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.table th,
+.table td {
+  border-bottom: 1px solid var(--tblr-border-color);
+  padding: 14px 16px;
+  vertical-align: middle;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.badge-success {
+  background: #dcfce7;
+  color: #067647;
+}
+
+.badge-danger {
+  background: #fee4e2;
+  color: #b42318;
+}
+
+.badge-muted {
+  background: #eef2f6;
+  color: #475467;
+}
+
+.badge-warning {
+  background: #fef0c7;
+  color: #93370d;
+}

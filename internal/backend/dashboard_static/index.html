@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WG Monitor Control</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="./vendor/tabler-lite.css">
+  <link rel="stylesheet" href="./vendor/tabler-icons-lite.css">
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">WG</div>
+        <div>
+          <div class="brand-title">WG Monitor</div>
+          <div class="brand-subtitle">VPS Control</div>
+        </div>
+      </div>
+      <nav class="nav-stack" aria-label="Dashboard sections">
+        <button class="nav-item active" type="button"><span class="ti ti-dashboard"></span>Fleet</button>
+        <button class="nav-item" type="button" data-action="refresh"><span class="ti ti-refresh"></span>Refresh</button>
+      </nav>
+      <div class="sidebar-status">
+        <div class="status-dot" id="authDot"></div>
+        <span id="authState">locked</span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">operator dashboard</div>
+          <h1>WG Monitor Control</h1>
+        </div>
+        <div class="topbar-actions">
+          <label class="token-field">
+            <span>Token</span>
+            <input id="tokenInput" type="password" autocomplete="current-password" spellcheck="false">
+          </label>
+          <button id="saveTokenBtn" class="btn btn-ghost" type="button"><span class="ti ti-lock"></span>Unlock</button>
+          <button id="refreshBtn" class="btn btn-primary" type="button"><span class="ti ti-refresh"></span>Refresh</button>
+        </div>
+      </header>
+
+      <section class="kpi-grid" aria-label="Fleet totals">
+        <article class="kpi-card">
+          <span class="kpi-label">Agents</span>
+          <strong id="kpiAgents">-</strong>
+          <small id="kpiVersion">version unknown</small>
+        </article>
+        <article class="kpi-card good">
+          <span class="kpi-label">Online</span>
+          <strong id="kpiOnline">-</strong>
+          <small>healthy fleet</small>
+        </article>
+        <article class="kpi-card bad">
+          <span class="kpi-label">Alerts</span>
+          <strong id="kpiAlerts">-</strong>
+          <small>hard incidents</small>
+        </article>
+        <article class="kpi-card warn">
+          <span class="kpi-label">Deploys</span>
+          <strong id="kpiDeploys">-</strong>
+          <small>pending updates</small>
+        </article>
+      </section>
+
+      <section class="toolbar">
+        <div class="search-wrap">
+          <span class="ti ti-search"></span>
+          <input id="searchInput" type="search" placeholder="Search agents" spellcheck="false">
+        </div>
+        <div class="segmented" role="tablist" aria-label="Status filter">
+          <button type="button" class="segment active" data-filter="all">All</button>
+          <button type="button" class="segment" data-filter="alert">Alerts</button>
+          <button type="button" class="segment" data-filter="online">Online</button>
+          <button type="button" class="segment" data-filter="offline">Offline</button>
+        </div>
+      </section>
+
+      <section class="table-wrap">
+        <table class="table fleet-table">
+          <thead>
+            <tr>
+              <th>Agent</th>
+              <th>Status</th>
+              <th>Last seen</th>
+              <th>Version</th>
+              <th>Deploy</th>
+              <th>Incidents</th>
+              <th class="actions-col">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="agentsBody">
+            <tr>
+              <td colspan="7" class="empty-cell">Loading...</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <div id="deployModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deployTitle">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">agent deploy</div>
+          <h2 id="deployTitle">Deploy</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-modal><span class="ti ti-x"></span></button>
+      </div>
+      <label class="form-field">
+        <span>Target version</span>
+        <input id="deployVersionInput" type="text" placeholder="v0.13.1">
+      </label>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" data-close-modal>Cancel</button>
+        <button id="confirmDeployBtn" class="btn btn-primary" type="button"><span class="ti ti-rocket"></span>Deploy</button>
+      </div>
+    </div>
+  </div>
+
+  <aside id="resultDrawer" class="result-drawer hidden" aria-live="polite">
+    <div class="drawer-head">
+      <div>
+        <div class="eyebrow">command result</div>
+        <h2 id="drawerTitle">Waiting</h2>
+      </div>
+      <button id="closeDrawerBtn" class="icon-btn" type="button"><span class="ti ti-x"></span></button>
+    </div>
+    <pre id="resultOutput">No command selected.</pre>
+  </aside>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="./app.js"></script>
+</body>
+</html>
