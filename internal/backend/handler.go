@@ -271,6 +271,7 @@ type Deps struct {
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken       string
+	DashboardToken    string
 	BackendUpdatePath string
 }
 
@@ -339,6 +340,9 @@ func NewMux(d Deps) http.Handler {
 		mux.Handle("POST /v1/wizard/agents/{nickname}/commands", reqID(wizAuth(wizardCommandHandler(d))))
 		mux.Handle("POST /v1/wizard/agents/{nickname}/maintenance", reqID(wizAuth(wizardMaintenanceHandler(d))))
 		mux.Handle("GET /v1/wizard/cmd/{cmd_id}", reqID(wizAuth(wizardCmdResultHandler(d))))
+	}
+	if d.DashboardToken != "" {
+		registerDashboardRoutes(mux, d)
 	}
 	return mux
 }
