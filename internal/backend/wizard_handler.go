@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,12 @@ import (
 )
 
 const wizardMaxJSONBodyBytes = 64 << 10
+
+var (
+	enrollmentNicknameRe         = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
+	errEnrollmentInvalidNickname = errors.New("invalid enrollment nickname")
+	errEnrollmentInvalidKind     = errors.New("invalid enrollment kind")
+)
 
 func decodeWizardJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, wizardMaxJSONBodyBytes))
@@ -196,36 +203,49 @@ func wizardEnrollmentHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		req.Nickname = strings.TrimSpace(req.Nickname)
-		if req.Nickname == "" {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
-			return
-		}
-		req.Kind = strings.TrimSpace(req.Kind)
-		if req.Kind == "" {
-			req.Kind = db.KindStatic
-		}
-		if !db.IsValidKind(req.Kind) {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "kind must be static or mobile")
-			return
-		}
-		rawToken, err := newAgentEnrollmentToken()
+		resp, _, err := createAgentEnrollment(d.DB, req.Nickname, req.Kind, req.ThreadID)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "token gen: "+err.Error())
+			switch {
+			case errors.Is(err, errEnrollmentInvalidNickname):
+				writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname must match ^[a-z][a-z0-9_-]{1,15}$")
+			case errors.Is(err, errEnrollmentInvalidKind):
+				writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "kind must be static or mobile")
+			default:
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			}
 			return
 		}
-		if _, err := d.DB.Users().UpsertEnrollment(req.Nickname, rawToken, req.Kind, req.ThreadID); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-			return
-		}
+		resp.BackendURL = wizardBackendURL(r)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(wizardEnrollmentResp{
-			Nickname:   req.Nickname,
-			BackendURL: wizardBackendURL(r),
-			RawToken:   rawToken,
-		})
+		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+func createAgentEnrollment(database *db.DB, nickname, kind string, threadID int64) (wizardEnrollmentResp, int64, error) {
+	nickname = strings.TrimSpace(nickname)
+	if !enrollmentNicknameRe.MatchString(nickname) {
+		return wizardEnrollmentResp{}, 0, errEnrollmentInvalidNickname
+	}
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		kind = db.KindStatic
+	}
+	if !db.IsValidKind(kind) {
+		return wizardEnrollmentResp{}, 0, errEnrollmentInvalidKind
+	}
+	rawToken, err := newAgentEnrollmentToken()
+	if err != nil {
+		return wizardEnrollmentResp{}, 0, fmt.Errorf("token gen: %w", err)
+	}
+	userID, err := database.Users().UpsertEnrollment(nickname, rawToken, kind, threadID)
+	if err != nil {
+		return wizardEnrollmentResp{}, 0, err
+	}
+	return wizardEnrollmentResp{
+		Nickname: nickname,
+		RawToken: rawToken,
+	}, userID, nil
 }
 
 func newAgentEnrollmentToken() (string, error) {

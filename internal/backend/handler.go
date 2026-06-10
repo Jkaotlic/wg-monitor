@@ -270,9 +270,11 @@ type Deps struct {
 	MobileWakeAfter  time.Duration
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
-	WizardToken       string
-	DashboardToken    string
-	BackendUpdatePath string
+	WizardToken           string
+	DashboardToken        string
+	TelegramPrimaryChatID int64
+	TelegramExtraChatIDs  []int64
+	BackendUpdatePath     string
 }
 
 type AlertPolicy struct {

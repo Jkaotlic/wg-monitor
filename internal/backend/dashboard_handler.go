@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -66,6 +67,7 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("POST /v1/dashboard/logout", requestIDMiddleware()(dashboardLogoutHandler()))
 	mux.Handle("GET /dashboard/", requestIDMiddleware()(pageAuth(staticHandler)))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))
+	mux.Handle("POST /v1/dashboard/enrollments", requestIDMiddleware()(dashAuth(dashboardEnrollmentHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy", requestIDMiddleware()(dashAuth(wizardDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/backend/deploy", requestIDMiddleware()(dashAuth(wizardBackendDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/commands", requestIDMiddleware()(dashAuth(wizardCommandHandler(d))))
@@ -304,11 +306,17 @@ const dashboardLoginHTML = `<!doctype html>
 </html>`
 
 type dashboardSummary struct {
-	Status      string                  `json:"status"`
-	Version     string                  `json:"version"`
-	GeneratedAt string                  `json:"generated_at"`
-	Totals      dashboardSummaryTotals  `json:"totals"`
-	Agents      []dashboardSummaryAgent `json:"agents"`
+	Status      string                   `json:"status"`
+	Version     string                   `json:"version"`
+	GeneratedAt string                   `json:"generated_at"`
+	Totals      dashboardSummaryTotals   `json:"totals"`
+	Telegram    dashboardTelegramSummary `json:"telegram"`
+	Agents      []dashboardSummaryAgent  `json:"agents"`
+}
+
+type dashboardTelegramSummary struct {
+	PrimaryChatID int64   `json:"primary_chat_id"`
+	ExtraChatIDs  []int64 `json:"extra_chat_ids"`
 }
 
 type dashboardSummaryTotals struct {
@@ -320,27 +328,29 @@ type dashboardSummaryTotals struct {
 }
 
 type dashboardSummaryAgent struct {
-	ID              int64               `json:"id"`
-	Nickname        string              `json:"nickname"`
-	Kind            string              `json:"kind"`
-	Status          string              `json:"status"`
-	ExpectedExitIP  string              `json:"expected_exit_ip"`
-	AWGIface        string              `json:"awg_iface"`
-	LastSeenAt      *time.Time          `json:"last_seen_at,omitempty"`
-	LastSeenAgeSec  *int64              `json:"last_seen_age_sec,omitempty"`
-	SSHHost         string              `json:"ssh_host"`
-	SSHPort         int64               `json:"ssh_port"`
-	SSHUser         string              `json:"ssh_user"`
-	Arch            string              `json:"arch"`
-	AgentVersion    string              `json:"agent_version"`
-	Ring            string              `json:"ring"`
-	PendingVersion  string              `json:"pending_version"`
-	PendingSince    string              `json:"pending_since"`
-	LastDeploy      string              `json:"last_deploy"`
-	DeployMode      string              `json:"deploy_mode"`
-	AWGMURL         string              `json:"awgm_url"`
-	HasTopic        bool                `json:"has_topic"`
-	ActiveIncidents []dashboardIncident `json:"active_incidents"`
+	ID               int64               `json:"id"`
+	Nickname         string              `json:"nickname"`
+	Kind             string              `json:"kind"`
+	Status           string              `json:"status"`
+	ExpectedExitIP   string              `json:"expected_exit_ip"`
+	AWGIface         string              `json:"awg_iface"`
+	LastSeenAt       *time.Time          `json:"last_seen_at,omitempty"`
+	LastSeenAgeSec   *int64              `json:"last_seen_age_sec,omitempty"`
+	SSHHost          string              `json:"ssh_host"`
+	SSHPort          int64               `json:"ssh_port"`
+	SSHUser          string              `json:"ssh_user"`
+	Arch             string              `json:"arch"`
+	AgentVersion     string              `json:"agent_version"`
+	Ring             string              `json:"ring"`
+	PendingVersion   string              `json:"pending_version"`
+	PendingSince     string              `json:"pending_since"`
+	LastDeploy       string              `json:"last_deploy"`
+	DeployMode       string              `json:"deploy_mode"`
+	AWGMURL          string              `json:"awgm_url"`
+	TelegramChatID   int64               `json:"telegram_chat_id"`
+	TelegramThreadID int64               `json:"telegram_thread_id"`
+	HasTopic         bool                `json:"has_topic"`
+	ActiveIncidents  []dashboardIncident `json:"active_incidents"`
 }
 
 type dashboardIncident struct {
@@ -362,6 +372,10 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			}
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "dashboard summary failed")
 			return
+		}
+		resp.Telegram = dashboardTelegramSummary{
+			PrimaryChatID: d.TelegramPrimaryChatID,
+			ExtraChatIDs:  append([]int64(nil), d.TelegramExtraChatIDs...),
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -430,7 +444,7 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		lastSeenAge = &age
 	}
 
-	return dashboardSummaryAgent{
+	agent := dashboardSummaryAgent{
 		ID:              user.ID,
 		Nickname:        user.Nickname,
 		Kind:            user.Kind,
@@ -453,6 +467,92 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		HasTopic:        user.TelegramThreadID != nil && *user.TelegramThreadID != 0,
 		ActiveIncidents: incidents,
 	}
+	if user.TelegramChatID != nil {
+		agent.TelegramChatID = *user.TelegramChatID
+	}
+	if user.TelegramThreadID != nil {
+		agent.TelegramThreadID = *user.TelegramThreadID
+	}
+	return agent
+}
+
+type dashboardEnrollmentReq struct {
+	Nickname           string `json:"nickname"`
+	Kind               string `json:"kind"`
+	TelegramChatID     int64  `json:"telegram_chat_id"`
+	TelegramThreadID   int64  `json:"telegram_thread_id"`
+	CustomTelegramChat bool   `json:"custom_telegram_chat"`
+}
+
+type dashboardEnrollmentResp struct {
+	Nickname         string `json:"nickname"`
+	BackendURL       string `json:"backend_url"`
+	RawToken         string `json:"raw_token"`
+	TelegramChatID   int64  `json:"telegram_chat_id"`
+	TelegramThreadID int64  `json:"telegram_thread_id"`
+	Message          string `json:"message"`
+}
+
+func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if d.DB == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req dashboardEnrollmentReq
+		if !decodeWizardJSON(w, r, &req) {
+			return
+		}
+		if !dashboardTelegramChatAllowed(d, req.TelegramChatID, req.CustomTelegramChat) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_telegram_chat", "telegram chat is not allowed")
+			return
+		}
+		enrollment, userID, err := createAgentEnrollment(d.DB, req.Nickname, req.Kind, req.TelegramThreadID)
+		if err != nil {
+			switch {
+			case errors.Is(err, errEnrollmentInvalidNickname):
+				writeJSONError(w, http.StatusBadRequest, "invalid_nickname", "nickname must match ^[a-z][a-z0-9_-]{1,15}$")
+			case errors.Is(err, errEnrollmentInvalidKind):
+				writeJSONError(w, http.StatusBadRequest, "invalid_kind", "kind must be static or mobile")
+			default:
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			}
+			return
+		}
+		if err := d.DB.Users().UpdateTelegramTopic(userID, req.TelegramChatID, req.TelegramThreadID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(dashboardEnrollmentResp{
+			Nickname:         enrollment.Nickname,
+			BackendURL:       wizardBackendURL(r),
+			RawToken:         enrollment.RawToken,
+			TelegramChatID:   req.TelegramChatID,
+			TelegramThreadID: req.TelegramThreadID,
+			Message:          "Agent enrollment created. Save the token now; it will not be shown once this panel is closed.",
+		})
+	}
+}
+
+func dashboardTelegramChatAllowed(d Deps, chatID int64, custom bool) bool {
+	if chatID == 0 || chatID == d.TelegramPrimaryChatID {
+		return true
+	}
+	for _, extra := range d.TelegramExtraChatIDs {
+		if chatID == extra {
+			return true
+		}
+	}
+	return custom
 }
 
 func stringValue(v *string) string {
