@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -340,9 +339,7 @@ func renderMenuItems(items []menuItem, exitKey, exitTitle string) string {
 
 func readMenuChoice() string {
 	fmt.Print("> ")
-	r := bufio.NewReader(os.Stdin)
-	line, _ := r.ReadString('\n')
-	return strings.TrimSpace(strings.ToUpper(line))
+	return strings.TrimSpace(strings.ToUpper(readStdinLine()))
 }
 
 func runRouterMenu(state *State, statePath string, secrets *SecretStore, dl *Downloader) {
