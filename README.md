@@ -21,6 +21,7 @@ The current deploy path does **not** require the operator to join every router n
 - Per-minute agent reports from every router to the VPS backend.
 - Telegram alerts and per-router topics.
 - Telegram control panels for tunnels, routes, diagnostics, maintenance, operators, Premium cabinets, and package updates.
+- Optional VPS dashboard at `/dashboard/` for fleet status, safe command dispatch, and backend-mediated deploy actions.
 - AWG Manager integration for tunnel state, route management, terminal bootstrap, and diagnostics.
 - Backend-mediated agent updates, so deployed agents can update without direct SSH from the operator machine.
 - Safer tunnel health: disabled PingCheck is shown as a warning/unknown signal, not as a hard "tunnel is dead" verdict by itself.
@@ -59,6 +60,7 @@ The wizard stores non-secret router metadata in `wizard.toml`; secrets live in t
 Useful secret names:
 
 - `WIZARD_TOKEN` - wizard API token for protected backend deploy endpoints.
+- `DASHBOARD_TOKEN` - optional browser dashboard token; store the deployed value in `/etc/wg-monitor/dashboard-token.txt`, not in `backend.yaml`.
 - `WG_AWGM_API_KEY_<NICK>` - AWG Manager API key for a router.
 - `WG_AWGM_LOGIN_<NICK>` / `WG_AWGM_PASS_<NICK>` - AWG Manager web credentials fallback.
 - `WG_ENTWARE_LOGIN_<NICK>` / `WG_ENTWARE_PASS_<NICK>` - terminal credentials for Entware bootstrap.

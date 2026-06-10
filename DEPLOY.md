@@ -35,6 +35,35 @@ The wizard generates `WG_BACKUP_PASSPHRASE`, saves it in the local secret store,
 uploads it to the backend as `backup-passphrase.txt` with strict permissions, and
 shows it to the operator for password-manager storage.
 
+## VPS Dashboard
+
+`wg-monitor-backend` can serve an optional local-assets dashboard at `/dashboard/`.
+It uses the same backend command queue and deploy endpoints as the wizard:
+fleet summary, safe agent commands, AWG Manager service restart, agent
+self-update, backend-update queueing, and command-result polling.
+
+The dashboard is disabled by default. To enable it on the VPS:
+
+```bash
+sudo install -o wgmonitor -g wgmonitor -m 600 /dev/null /etc/wg-monitor/dashboard-token.txt
+sudo sh -c 'openssl rand -base64 32 > /etc/wg-monitor/dashboard-token.txt'
+sudo chown wgmonitor:wgmonitor /etc/wg-monitor/dashboard-token.txt
+sudo chmod 600 /etc/wg-monitor/dashboard-token.txt
+```
+
+Then set:
+
+```yaml
+dashboard:
+  enabled: true
+  token_file: /etc/wg-monitor/dashboard-token.txt
+```
+
+Restart `wg-monitor-backend` and open `https://<backend-domain>/dashboard/`.
+Paste the token once; the browser stores it locally and sends it as a Bearer
+token to `/v1/dashboard/*`. If `enabled: true` is set but the token file is
+missing or empty, the backend refuses to start.
+
 ## Add A Router
 
 Use `[3] Routers`, then the add/re-enroll action.
