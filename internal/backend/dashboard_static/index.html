@@ -115,7 +115,7 @@
       <div class="modal-head">
         <div>
           <div class="eyebrow">agent deploy</div>
-          <h2 id="deployTitle">Deploy</h2>
+          <h2 id="deployTitle">Custom version</h2>
         </div>
         <button class="icon-btn" type="button" data-close-modal><span class="ti ti-x"></span></button>
       </div>
@@ -139,6 +139,7 @@
         </div>
         <button class="icon-btn" type="button" data-close-add-agent><span class="ti ti-x"></span></button>
       </div>
+      <div class="form-section-title">Identity</div>
       <div class="form-grid">
         <label class="form-field">
           <span>Nickname</span>
@@ -164,7 +165,68 @@
           <input id="newAgentThread" type="number" placeholder="0 = no topic yet">
         </label>
       </div>
-      <p class="modal-note">Token будет показан один раз. Скопируй его в конфиг агента или deploy flow сразу после создания.</p>
+      <div class="form-section-title">Deploy data</div>
+      <div class="form-grid form-grid-three">
+        <label class="form-field">
+          <span>Deploy mode</span>
+          <select id="newAgentDeployMode">
+            <option value="">unknown</option>
+            <option value="pull">pull</option>
+            <option value="ssh">ssh</option>
+            <option value="deferred-awgm">deferred-awgm</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>Router arch</span>
+          <select id="newAgentArch">
+            <option value="">unknown</option>
+            <option value="linux-arm64">linux-arm64</option>
+            <option value="linux-amd64">linux-amd64</option>
+            <option value="linux-mipsle">linux-mipsle</option>
+            <option value="linux-mips">linux-mips</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>Ring</span>
+          <select id="newAgentRing">
+            <option value="">unknown</option>
+            <option value="rc">rc</option>
+            <option value="stable">stable</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>AWG Manager URL</span>
+          <input id="newAgentAWGMURL" type="url" placeholder="https://awg.router.example">
+        </label>
+        <label class="form-field">
+          <span>AWG auth</span>
+          <select id="newAgentAWGMAuth">
+            <option value="">unknown</option>
+            <option value="web">web login</option>
+            <option value="api-key">api key</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>SSH host</span>
+          <input id="newAgentSSHHost" type="text" placeholder="192.168.31.1">
+        </label>
+        <label class="form-field">
+          <span>SSH port</span>
+          <input id="newAgentSSHPort" type="number" min="1" max="65535" placeholder="222">
+        </label>
+        <label class="form-field">
+          <span>SSH user</span>
+          <input id="newAgentSSHUser" type="text" placeholder="root">
+        </label>
+        <label class="form-field">
+          <span>Expected MAC</span>
+          <input id="newAgentExpectedMAC" type="text" placeholder="aa:bb:cc:dd:ee:ff">
+        </label>
+      </div>
+      <p class="modal-note">Token is shown once. Save it with the deploy data before closing this panel.</p>
       <div id="addAgentError" class="form-error"></div>
       <div class="modal-actions">
         <button class="btn btn-ghost" type="button" data-close-add-agent>Cancel</button>
@@ -181,7 +243,7 @@
       </div>
       <button id="closeDrawerBtn" class="icon-btn" type="button"><span class="ti ti-x"></span></button>
     </div>
-    <pre id="resultOutput">No command selected.</pre>
+    <div id="resultOutput" class="result-output">No command selected.</div>
   </aside>
 
   <div id="toast" class="toast hidden"></div>

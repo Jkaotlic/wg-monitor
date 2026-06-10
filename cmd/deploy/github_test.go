@@ -170,3 +170,34 @@ func TestGetLatestReleaseChoosesHighestTagWhenGitHubOrderIsStale(t *testing.T) {
 		t.Fatalf("latest tag=%q, want v0.13.0-rc101", rel.TagName)
 	}
 }
+
+func TestGetLatestReleaseChoosesNewestPublishedRCOverStable(t *testing.T) {
+	oldAPI := GitHubAPIBase
+	t.Cleanup(func() {
+		GitHubAPIBase = oldAPI
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Jkaotlic/wg-monitor/releases":
+			_, _ = w.Write([]byte(`[
+				{"tag_name":"v0.13.0","published_at":"2026-06-08T10:00:00Z","assets":[]},
+				{"tag_name":"v0.13.0-rc119","published_at":"2026-06-10T07:54:00Z","assets":[]},
+				{"tag_name":"v0.13.0-rc120","published_at":"2026-06-10T09:26:00Z","assets":[]}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	GitHubAPIBase = srv.URL
+
+	dl := &Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()}
+	rel, err := dl.GetLatestRelease()
+	if err != nil {
+		t.Fatalf("GetLatestRelease: %v", err)
+	}
+	if rel.TagName != "v0.13.0-rc120" {
+		t.Fatalf("latest tag=%q, want v0.13.0-rc120", rel.TagName)
+	}
+}

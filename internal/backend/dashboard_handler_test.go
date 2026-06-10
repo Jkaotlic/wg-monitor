@@ -217,20 +217,68 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 	js := get("/dashboard/app.js")
 	css := get("/dashboard/app.css")
 
-	for _, want := range []string{"Add agent", "agentDrawer", "addAgentModal"} {
+	for _, want := range []string{"Add agent", "agentDrawer", "addAgentModal", "AWG Manager URL", "Deploy mode", "SSH host", "Router arch"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("dashboard page missing %q", want)
 		}
 	}
-	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments"} {
+	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult"} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("dashboard js missing %q", want)
 		}
 	}
-	for _, want := range []string{"agent-drawer", "data-state", "action-btn"} {
+	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output"} {
 		if !strings.Contains(css, want) {
 			t.Fatalf("dashboard css missing %q", want)
 		}
+	}
+}
+
+func TestDashboardOperatorLatestReleasePrefersNewestPublishedRC(t *testing.T) {
+	releases := []dashboardGitHubRelease{
+		{TagName: "v0.13.0", PublishedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)},
+		{TagName: "v0.13.0-rc119", PublishedAt: time.Date(2026, 6, 10, 7, 54, 0, 0, time.UTC)},
+		{TagName: "v0.13.0-rc120", PublishedAt: time.Date(2026, 6, 10, 9, 26, 0, 0, time.UTC)},
+	}
+
+	got := dashboardOperatorLatestRelease(releases)
+
+	if got != "v0.13.0-rc120" {
+		t.Fatalf("latest=%q, want v0.13.0-rc120", got)
+	}
+}
+
+func TestDashboardSummaryIncludesLatestVersion(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	old := lookupDashboardLatestVersion
+	lookupDashboardLatestVersion = func(context.Context) (string, error) { return "v0.13.0-rc120", nil }
+	t.Cleanup(func() { lookupDashboardLatestVersion = old })
+	h := NewMux(Deps{DB: d, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Version       string `json:"version"`
+		LatestVersion string `json:"latest_version"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.LatestVersion != "v0.13.0-rc120" {
+		t.Fatalf("latest_version=%q", got.LatestVersion)
+	}
+	if got.Version == "" {
+		t.Fatalf("version missing")
 	}
 }
 
@@ -458,6 +506,60 @@ func TestDashboardEnrollmentCreatesAgentAndBindsTopic(t *testing.T) {
 	}
 	if _, err := d.Users().GetByToken(got.RawToken); err != nil {
 		t.Fatalf("raw token should authenticate new agent: %v", err)
+	}
+}
+
+func TestDashboardEnrollmentStoresDeployMetadata(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{
+		DB:                    d,
+		DashboardToken:        "secret",
+		TelegramPrimaryChatID: -100100,
+	})
+	body := `{
+		"nickname":"router5",
+		"kind":"mobile",
+		"telegram_chat_id":0,
+		"telegram_thread_id":555,
+		"deploy_mode":"pull",
+		"awgm_url":"https://awg.router5.example.test",
+		"awgm_auth":"web",
+		"ssh_host":"192.168.31.1",
+		"ssh_port":222,
+		"ssh_user":"root",
+		"arch":"linux-arm64",
+		"ring":"rc",
+		"expected_mac":"aa:bb:cc:dd:ee:ff"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("router5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Kind != db.KindMobile || u.TelegramThreadID == nil || *u.TelegramThreadID != 555 {
+		t.Fatalf("bad core user fields: %+v", u)
+	}
+	if stringValue(u.DeployMode) != "pull" || stringValue(u.AWGMURL) != "https://awg.router5.example.test" || stringValue(u.AWGMAuth) != "web" {
+		t.Fatalf("bad AWGM deploy fields: deploy_mode=%v awgm_url=%v awgm_auth=%v", u.DeployMode, u.AWGMURL, u.AWGMAuth)
+	}
+	if stringValue(u.SSHHost) != "192.168.31.1" || int64Value(u.SSHPort) != 222 || stringValue(u.SSHUser) != "root" {
+		t.Fatalf("bad ssh fields: host=%v port=%v user=%v", u.SSHHost, u.SSHPort, u.SSHUser)
+	}
+	if stringValue(u.Arch) != "linux-arm64" || stringValue(u.Ring) != "rc" || stringValue(u.ExpectedMAC) != "aa:bb:cc:dd:ee:ff" {
+		t.Fatalf("bad router metadata: arch=%v ring=%v mac=%v", u.Arch, u.Ring, u.ExpectedMAC)
 	}
 }
 

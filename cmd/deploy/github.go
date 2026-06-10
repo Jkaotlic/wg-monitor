@@ -128,11 +128,23 @@ func (d *Downloader) GetLatestRelease() (*Release, error) {
 func newestReleaseByTag(list []Release) Release {
 	best := list[0]
 	for _, rel := range list[1:] {
-		if compareReleaseTags(rel.TagName, best.TagName) > 0 {
+		if releaseNewerForOperator(rel, best) {
 			best = rel
 		}
 	}
 	return best
+}
+
+func releaseNewerForOperator(a, b Release) bool {
+	if !a.PublishedAt.IsZero() || !b.PublishedAt.IsZero() {
+		if a.PublishedAt.After(b.PublishedAt) {
+			return true
+		}
+		if a.PublishedAt.Before(b.PublishedAt) {
+			return false
+		}
+	}
+	return compareReleaseTags(a.TagName, b.TagName) > 0
 }
 
 func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {
@@ -165,6 +177,21 @@ func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {
 func shouldPreferRunningRelease(latestTag, runningTag string) bool {
 	if !strings.HasPrefix(runningTag, "v") {
 		return false
+	}
+	latestRank, latestOK := parseReleaseTagRank(latestTag)
+	runningRank, runningOK := parseReleaseTagRank(runningTag)
+	if latestOK && runningOK {
+		for i := 0; i < 3; i++ {
+			if runningRank[i] > latestRank[i] {
+				return true
+			}
+			if runningRank[i] < latestRank[i] {
+				return false
+			}
+		}
+		runningIsRC := strings.Contains(runningTag, "-rc")
+		latestIsRC := strings.Contains(latestTag, "-rc")
+		return runningIsRC && latestIsRC && runningRank[3] > latestRank[3]
 	}
 	return compareReleaseTags(runningTag, latestTag) > 0
 }
