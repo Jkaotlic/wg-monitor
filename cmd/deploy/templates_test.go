@@ -30,6 +30,9 @@ func TestRenderBackendYAML(t *testing.T) {
 		`- -1002`,
 		`- -1003`,
 		`admin_user_id: 42`,
+		`dashboard:`,
+		`enabled: false`,
+		`token_file: /etc/wg-monitor/dashboard-token.txt`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("rendered yaml missing %q\nfull:\n%s", want, s)
