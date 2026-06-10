@@ -567,8 +567,15 @@ func (f *wizardAPISSHFallback) DoWizardAPI(ctx context.Context, method, path str
 	}
 	defer s.Close()
 
-	cmd := buildWizardAPICurlCommand(method, path, f.token, body, timeout, f.state.Backend.Domain)
-	out, serr, rc, err := s.Run(cmd)
+	cmd := buildWizardAPICurlCommand(method, path, body, timeout, f.state.Backend.Domain)
+	// Pass auth header (and optional base64-encoded body) via stdin so the
+	// token never appears in /proc/<pid>/cmdline on the VPS.
+	var stdinBuf bytes.Buffer
+	stdinBuf.WriteString("Authorization: Bearer " + f.token + "\n")
+	if body != nil {
+		stdinBuf.WriteString(base64.StdEncoding.EncodeToString(body) + "\n")
+	}
+	out, serr, rc, err := s.RunWithStdin(cmd, &stdinBuf)
 	if err != nil {
 		return 0, nil, fmt.Errorf("SSH fallback transport: %w", err)
 	}
@@ -588,7 +595,14 @@ func (f *wizardAPISSHFallback) DoWizardAPI(ctx context.Context, method, path str
 
 const wizardAPIStatusPrefix = "__WG_WIZARD_HTTP_STATUS__"
 
-func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout time.Duration, publicDomain string) string {
+// buildWizardAPICurlCommand builds a shell script that runs on the VPS to
+// call the backend wizard API over loopback. The auth token is NOT embedded
+// in the script — it is read from stdin (first line) so it never appears in
+// /proc/<pid>/cmdline for the duration of the curl request. When body is
+// non-nil, the base64-encoded body follows the token line on stdin.
+// The caller must pipe "Authorization: Bearer <token>\n[base64body\n]" to
+// the SSH session stdin before running this script.
+func buildWizardAPICurlCommand(method, path string, body []byte, timeout time.Duration, publicDomain string) string {
 	secs := int((timeout + time.Second - 1) / time.Second)
 	if secs < 5 {
 		secs = 5
@@ -597,10 +611,19 @@ func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout 
 		secs = 90
 	}
 	url := "http://127.0.0.1:8080" + path
+
+	// Preamble: read auth header from stdin into a chmod-600 tmpfile so
+	// curl can use -H @file without the token appearing in curl's argv.
+	preamble := "IFS= read -r _wg_auth_hdr; " +
+		"_wg_hf=$(mktemp) || exit 90; chmod 600 \"$_wg_hf\"; " +
+		"printf '%s\\n' \"$_wg_auth_hdr\" >\"$_wg_hf\"; " +
+		"tmp=$(mktemp /tmp/wg-wizard-api.XXXXXX) || exit 90; " +
+		"trap 'rm -f \"$_wg_hf\" \"$tmp\"' EXIT; "
+
 	common := "curl -sS --max-time " + strconv.Itoa(secs) +
 		" -o \"$tmp\" -w '%{http_code}'" +
 		" -X " + shellSingleQuote(method) +
-		" -H " + shellSingleQuote("Authorization: Bearer "+token)
+		" -H @\"$_wg_hf\""
 	if host := publicForwardedHost(publicDomain); host != "" {
 		common += " -H " + shellSingleQuote("X-Forwarded-Proto: https") +
 			" -H " + shellSingleQuote("X-Forwarded-Host: "+host) +
@@ -612,10 +635,10 @@ func buildWizardAPICurlCommand(method, path, token string, body []byte, timeout 
 	}
 	common += " " + shellSingleQuote(url)
 
-	cmd := "tmp=$(mktemp /tmp/wg-wizard-api.XXXXXX) || exit 90; trap 'rm -f \"$tmp\"' EXIT; "
+	// Body, when present, arrives on stdin after the auth header line.
+	cmd := preamble
 	if body != nil {
-		cmd += "code=$(printf %s " + shellSingleQuote(base64.StdEncoding.EncodeToString(body)) +
-			" | base64 -d | " + common + " --data-binary @-); "
+		cmd += "code=$(cat | base64 -d | " + common + " --data-binary @-); "
 	} else {
 		cmd += "code=$(" + common + "); "
 	}
