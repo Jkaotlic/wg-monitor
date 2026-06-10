@@ -27,6 +27,13 @@ func TestDashboardRoutesAbsentWhenTokenEmpty(t *testing.T) {
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d body=%s", rec.Code, rec.Body.String())
 	}
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	pageRec := httptest.NewRecorder()
+	h.ServeHTTP(pageRec, pageReq)
+	if pageRec.Code != http.StatusNotFound {
+		t.Fatalf("dashboard page: want 404, got %d body=%s", pageRec.Code, pageRec.Body.String())
+	}
 }
 
 func TestDashboardAuth_MissingHeader_401(t *testing.T) {
@@ -93,6 +100,33 @@ func TestDashboardSummaryRouteRequiresBearerToken(t *testing.T) {
 	h.ServeHTTP(ok, okReq)
 	if ok.Code != http.StatusOK {
 		t.Fatalf("authorized: want 200, got %d body=%s", ok.Code, ok.Body.String())
+	}
+}
+
+func TestDashboardStaticServesEmbeddedApp(t *testing.T) {
+	h := NewMux(Deps{DashboardToken: "secret"})
+
+	pageReq := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	pageRec := httptest.NewRecorder()
+	h.ServeHTTP(pageRec, pageReq)
+	if pageRec.Code != http.StatusOK {
+		t.Fatalf("page: want 200, got %d body=%s", pageRec.Code, pageRec.Body.String())
+	}
+	if ct := pageRec.Header().Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("page content-type=%q", ct)
+	}
+	if !strings.Contains(pageRec.Body.String(), "WG Monitor Control") {
+		t.Fatalf("dashboard html missing app title")
+	}
+
+	cssReq := httptest.NewRequest(http.MethodGet, "/dashboard/app.css", nil)
+	cssRec := httptest.NewRecorder()
+	h.ServeHTTP(cssRec, cssReq)
+	if cssRec.Code != http.StatusOK {
+		t.Fatalf("css: want 200, got %d body=%s", cssRec.Code, cssRec.Body.String())
+	}
+	if strings.Contains(cssRec.Body.String(), "https://") || strings.Contains(cssRec.Body.String(), "http://") {
+		t.Fatalf("dashboard css must not depend on external assets")
 	}
 }
 

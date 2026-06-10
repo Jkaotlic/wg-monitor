@@ -1,0 +1,21 @@
+.ti {
+  display: inline-flex;
+  width: 1em;
+  height: 1em;
+  align-items: center;
+  justify-content: center;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.ti-dashboard::before { content: "D"; }
+.ti-refresh::before { content: "R"; }
+.ti-lock::before { content: "K"; }
+.ti-search::before { content: "S"; }
+.ti-x::before { content: "X"; }
+.ti-rocket::before { content: ">"; }
+.ti-terminal::before { content: "$"; }
+.ti-activity::before { content: "~"; }
+.ti-upload::before { content: "^"; }
+.ti-player-play::before { content: ">"; }

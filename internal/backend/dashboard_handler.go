@@ -3,6 +3,7 @@ package backend
 import (
 	"crypto/subtle"
 	"encoding/json"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -43,7 +44,14 @@ func DashboardAuthMiddleware(expected string, logger *slog.Logger) func(http.Han
 }
 
 func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
+	staticFS, err := fs.Sub(dashboardStaticFS, "dashboard_static")
+	if err != nil {
+		panic(err)
+	}
+	staticHandler := http.StripPrefix("/dashboard/", http.FileServer(http.FS(staticFS)))
 	dashAuth := DashboardAuthMiddleware(d.DashboardToken, d.Logger)
+	mux.Handle("GET /dashboard", requestIDMiddleware()(http.RedirectHandler("/dashboard/", http.StatusFound)))
+	mux.Handle("GET /dashboard/", requestIDMiddleware()(staticHandler))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy", requestIDMiddleware()(dashAuth(wizardDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/backend/deploy", requestIDMiddleware()(dashAuth(wizardBackendDeployHandler(d))))
