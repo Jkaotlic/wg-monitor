@@ -29,9 +29,30 @@ Current code already has the right primitives:
 - `internal/backend/db` stores users, deploy metadata, last-seen timestamps, and active incident state.
 - The release/deploy lane already depends on the public backend host headers for backend and agent deploy requests, so dashboard endpoints must preserve the same public-host behavior instead of inventing a new download URL path.
 
+## UI Kit Decision
+
+Use Tabler as the visual baseline for the MVP dashboard.
+
+Why Tabler:
+
+- It is a popular open-source admin dashboard UI kit built on Bootstrap 5.
+- It provides responsive layouts, tables, badges, cards, button groups, dark mode, and a large icon set that fit an operations console.
+- It can be used as static HTML/CSS/JS, which matches the current Go backend and avoids introducing a required Node/Vite/React runtime for the first slice.
+- It looks more modern than classic Bootstrap admin templates while still being practical for dense operational screens.
+
+Alternatives considered:
+
+- AdminLTE: very popular and battle-tested, but its default visual language is more traditional and heavier than the desired modern operator console.
+- CoreUI: strong component library and open-source admin template, but it is more framework-oriented and heavier than needed for a static embedded MVP.
+
+Implementation constraint:
+
+- Do not load Tabler, Bootstrap, icons, or fonts from a CDN at runtime. Vendor the required compiled assets into the backend static bundle, keep license notices, and serve them from `/dashboard/assets/*`.
+- The first implementation may use vanilla JavaScript with Tabler/Bootstrap classes. A frontend framework can be added later only if the UI state becomes too complex for small focused modules.
+
 ## Architecture
 
-The dashboard adds a small backend module under `internal/backend/dashboard` plus a static web app embedded into the backend binary.
+The dashboard adds a small backend module under `internal/backend/dashboard` plus a Tabler-based static web app embedded into the backend binary.
 
 Backend responsibilities:
 
@@ -44,11 +65,12 @@ Backend responsibilities:
 
 Frontend responsibilities:
 
-- Render a dense operator dashboard as the first screen.
+- Render a polished Tabler-based operator dashboard as the first screen.
 - Poll summary data on a short interval.
 - Let the operator select a router and run safe actions.
 - Show command lifecycle: queued, waiting, ok, err, locked, timeout, result output.
 - Keep offline routers, active incidents, pending deploys, and backend health visible at all times.
+- Use attractive, consistent icon buttons, status badges, segmented filters, drawers, toasts, and compact tables instead of bare HTML controls.
 
 The backend remains the source of truth. The browser does not compute router health from raw events; it renders the summary the backend returns.
 
@@ -198,6 +220,17 @@ The dashboard has stronger blast radius than Telegram because it centralizes man
 
 The first screen is the working dashboard, not a landing page.
 
+Visual baseline:
+
+- Base the UI on Tabler's dashboard layout: `.page`, top navbar, `.page-wrapper`, responsive grid, tables, cards where they frame actual widgets, badges, offcanvas/drawer patterns, and Tabler Icons.
+- Default to a refined dark operator theme with a light-mode toggle if cheap to support from Tabler's built-in theming.
+- Use a restrained but distinctive operations palette: deep graphite background, clean white/gray table surfaces, green for healthy, amber for pending/warning, red for hard failures, and cyan/blue only for informational actions.
+- Keep the memorable visual cue as the fleet table: each router row gets a strong status rail or badge stack so an operator can scan the fleet in seconds.
+- Use polished buttons with icons and short labels for actions. Examples: diagnostics, refresh, route status, tunnel status, pingcheck, direct/via checks, AWG Manager restart, deploy.
+- Use icon-only buttons only for universally recognizable controls and add tooltips. Dangerous or deploy actions keep text labels.
+- Use Tabler toasts or alerts for command dispatch feedback and a dedicated command-result panel for command output.
+- Use compact, consistent spacing. The dashboard must feel like a high-quality control room, not a plain generated CRUD table.
+
 Layout:
 
 - Header: backend version, backend health, dashboard connection state, refresh timestamp.
@@ -236,11 +269,12 @@ Backend action:
 
 Visual direction:
 
-- Dense, utilitarian, operations-focused.
+- Beautiful, dense, utilitarian, operations-focused.
 - No marketing hero, no decorative sections, no nested cards.
 - Broken state stays visible.
-- Buttons use icons where the UI stack makes that practical; labels stay short and explicit.
+- Buttons use Tabler Icons where practical; labels stay short and explicit.
 - Text must fit on mobile and desktop.
+- The implementation must be visually checked in a browser before completion. A passing API test is not enough for the UI slice.
 
 ## Data Flow
 
