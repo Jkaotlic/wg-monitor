@@ -18,6 +18,7 @@ type Config struct {
 	DBPath            string                   `yaml:"db_path"`
 	Telegram          TelegramConfig           `yaml:"telegram"`
 	Wizard            WizardConfig             `yaml:"wizard"`
+	Dashboard         DashboardConfig          `yaml:"dashboard"`
 	Heartbeat         HeartbeatConfig          `yaml:"heartbeat"`
 	State             StateConfig              `yaml:"state"`
 	UI                UIConfig                 `yaml:"ui"`
@@ -96,6 +97,15 @@ type WizardConfig struct {
 	BackendUpdateFile string `yaml:"backend_update_file"`
 	// Token is loaded from TokenFile at config-load time. Empty → feature off.
 	Token string `yaml:"-"`
+}
+
+// DashboardConfig wires the optional VPS-side admin dashboard.
+// When Enabled is false, dashboard routes are not registered. When Enabled
+// is true, TokenFile must exist and contain a non-empty token.
+type DashboardConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	TokenFile string `yaml:"token_file"`
+	Token     string `yaml:"-"`
 }
 
 type HeartbeatConfig struct {
@@ -185,6 +195,19 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.Wizard.TokenFile != "" {
 		if b, err := os.ReadFile(cfg.Wizard.TokenFile); err == nil {
 			cfg.Wizard.Token = strings.TrimSpace(string(b))
+		}
+	}
+	if cfg.Dashboard.Enabled {
+		if strings.TrimSpace(cfg.Dashboard.TokenFile) == "" {
+			return nil, fmt.Errorf("dashboard.token_file is required when dashboard.enabled=true")
+		}
+		b, err := os.ReadFile(cfg.Dashboard.TokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read dashboard.token_file: %w", err)
+		}
+		cfg.Dashboard.Token = strings.TrimSpace(string(b))
+		if cfg.Dashboard.Token == "" {
+			return nil, fmt.Errorf("dashboard.token_file is empty")
 		}
 	}
 	if cfg.Heartbeat.StaleAfterSec == 0 {

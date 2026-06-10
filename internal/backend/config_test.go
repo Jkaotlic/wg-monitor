@@ -3,6 +3,7 @@ package backend
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,6 +54,72 @@ telegram:
 	}
 	if cfg.HideMy.SecretsPath != "/var/lib/wg-monitor/hidemyname.json" {
 		t.Fatalf("hidemy secrets default: %q", cfg.HideMy.SecretsPath)
+	}
+}
+
+func TestLoadConfigDashboardDefaultsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "bot-token", "secret-bot-token-xyz")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Dashboard.Enabled {
+		t.Fatal("dashboard must be disabled by default")
+	}
+	if cfg.Dashboard.Token != "" {
+		t.Fatalf("dashboard token must stay empty when disabled, got %q", cfg.Dashboard.Token)
+	}
+}
+
+func TestLoadConfigDashboardLoadsTokenWhenEnabled(t *testing.T) {
+	dir := t.TempDir()
+	botPath := writeFile(t, dir, "bot-token", "secret-bot-token-xyz")
+	dashboardPath := writeFile(t, dir, "dashboard-token", "dashboard-secret\n")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+botPath+`
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+dashboard:
+  enabled: true
+  token_file: `+dashboardPath+`
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Dashboard.Enabled {
+		t.Fatal("dashboard should be enabled")
+	}
+	if cfg.Dashboard.Token != "dashboard-secret" {
+		t.Fatalf("dashboard token=%q", cfg.Dashboard.Token)
+	}
+}
+
+func TestLoadConfigDashboardFailsClosedWhenEnabledWithoutToken(t *testing.T) {
+	dir := t.TempDir()
+	botPath := writeFile(t, dir, "bot-token", "secret-bot-token-xyz")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+botPath+`
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+dashboard:
+  enabled: true
+  token_file: `+filepath.Join(dir, "missing-dashboard-token")+`
+`)
+	if _, err := LoadConfig(cfgPath); err == nil || !strings.Contains(err.Error(), "dashboard.token_file") {
+		t.Fatalf("expected dashboard token_file error, got %v", err)
 	}
 }
 
