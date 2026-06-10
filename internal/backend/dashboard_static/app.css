@@ -241,6 +241,30 @@ h3 {
   background: transparent;
 }
 
+.btn-warn {
+  border-color: rgba(183, 121, 31, 0.4);
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.btn-warn:hover {
+  border-color: var(--amber);
+  background: #fef3c7;
+}
+
+.btn-warn[data-state="waiting"] {
+  border-color: #f6d38f;
+  background: #fff7df;
+  color: #915f00;
+  pointer-events: none;
+}
+
+.btn-warn[data-state="error"] {
+  border-color: #ffbfba;
+  background: #fff1f0;
+  color: #b42318;
+}
+
 .action-btn[data-state="queued"],
 .mini-btn[data-state="queued"] {
   border-color: #b9d4ff;
