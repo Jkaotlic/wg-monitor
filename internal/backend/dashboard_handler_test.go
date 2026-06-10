@@ -80,7 +80,7 @@ func TestDashboardAuth_RightToken_200(t *testing.T) {
 	}
 }
 
-func TestDashboardSummaryRouteRequiresBearerToken(t *testing.T) {
+func TestDashboardSummaryRouteRequiresAuth(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -101,13 +101,71 @@ func TestDashboardSummaryRouteRequiresBearerToken(t *testing.T) {
 	if ok.Code != http.StatusOK {
 		t.Fatalf("authorized: want 200, got %d body=%s", ok.Code, ok.Body.String())
 	}
+
+	login := httptest.NewRecorder()
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", strings.NewReader(`{"token":"secret"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(login, loginReq)
+	if login.Code != http.StatusOK {
+		t.Fatalf("login: want 200, got %d body=%s", login.Code, login.Body.String())
+	}
+	cookies := login.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Name != dashboardSessionCookieName || cookies[0].Value == "" || !cookies[0].HttpOnly {
+		t.Fatalf("bad session cookie: %+v", cookies)
+	}
+	cookieReq := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	cookieReq.AddCookie(cookies[0])
+	cookieResp := httptest.NewRecorder()
+	h.ServeHTTP(cookieResp, cookieReq)
+	if cookieResp.Code != http.StatusOK {
+		t.Fatalf("cookie auth: want 200, got %d body=%s", cookieResp.Code, cookieResp.Body.String())
+	}
 }
 
-func TestDashboardStaticServesEmbeddedApp(t *testing.T) {
+func TestDashboardStaticRequiresSessionAndServesEmbeddedApp(t *testing.T) {
 	h := NewMux(Deps{DashboardToken: "secret"})
 
 	pageReq := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
 	pageRec := httptest.NewRecorder()
+	h.ServeHTTP(pageRec, pageReq)
+	if pageRec.Code != http.StatusFound || pageRec.Header().Get("Location") != "/dashboard/login" {
+		t.Fatalf("unauth page: want 302 to login, got %d location=%q body=%s",
+			pageRec.Code, pageRec.Header().Get("Location"), pageRec.Body.String())
+	}
+
+	loginPageReq := httptest.NewRequest(http.MethodGet, "/dashboard/login", nil)
+	loginPageRec := httptest.NewRecorder()
+	h.ServeHTTP(loginPageRec, loginPageReq)
+	if loginPageRec.Code != http.StatusOK {
+		t.Fatalf("login page: want 200, got %d body=%s", loginPageRec.Code, loginPageRec.Body.String())
+	}
+	if !strings.Contains(loginPageRec.Body.String(), "Dashboard Login") {
+		t.Fatalf("login html missing title")
+	}
+
+	badLoginReq := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", strings.NewReader(`{"token":"wrong"}`))
+	badLoginReq.Header.Set("Content-Type", "application/json")
+	badLoginRec := httptest.NewRecorder()
+	h.ServeHTTP(badLoginRec, badLoginReq)
+	if badLoginRec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad login: want 401, got %d body=%s", badLoginRec.Code, badLoginRec.Body.String())
+	}
+
+	loginReq := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", strings.NewReader(`{"token":"secret"}`))
+	loginReq.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	h.ServeHTTP(loginRec, loginReq)
+	if loginRec.Code != http.StatusOK {
+		t.Fatalf("login: want 200, got %d body=%s", loginRec.Code, loginRec.Body.String())
+	}
+	cookies := loginRec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("want session cookie, got %+v", cookies)
+	}
+
+	pageReq = httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	pageReq.AddCookie(cookies[0])
+	pageRec = httptest.NewRecorder()
 	h.ServeHTTP(pageRec, pageReq)
 	if pageRec.Code != http.StatusOK {
 		t.Fatalf("page: want 200, got %d body=%s", pageRec.Code, pageRec.Body.String())
@@ -120,6 +178,7 @@ func TestDashboardStaticServesEmbeddedApp(t *testing.T) {
 	}
 
 	cssReq := httptest.NewRequest(http.MethodGet, "/dashboard/app.css", nil)
+	cssReq.AddCookie(cookies[0])
 	cssRec := httptest.NewRecorder()
 	h.ServeHTTP(cssRec, cssReq)
 	if cssRec.Code != http.StatusOK {

@@ -1,6 +1,5 @@
 (function () {
   const state = {
-    token: localStorage.getItem("wgDashboardToken") || "",
     summary: null,
     filter: "all",
     query: "",
@@ -8,9 +7,8 @@
   };
 
   const els = {
-    tokenInput: document.getElementById("tokenInput"),
-    saveTokenBtn: document.getElementById("saveTokenBtn"),
     refreshBtn: document.getElementById("refreshBtn"),
+    logoutBtn: document.getElementById("logoutBtn"),
     authDot: document.getElementById("authDot"),
     authState: document.getElementById("authState"),
     kpiAgents: document.getElementById("kpiAgents"),
@@ -31,17 +29,6 @@
     toast: document.getElementById("toast")
   };
 
-  const params = new URLSearchParams(window.location.search);
-  const urlToken = params.get("token");
-  if (urlToken) {
-    state.token = urlToken;
-    localStorage.setItem("wgDashboardToken", urlToken);
-    params.delete("token");
-    const next = window.location.pathname + (params.toString() ? "?" + params.toString() : "");
-    window.history.replaceState({}, "", next);
-  }
-  els.tokenInput.value = state.token;
-
   function setAuth(ok) {
     els.authDot.classList.toggle("ok", ok);
     els.authState.textContent = ok ? "unlocked" : "locked";
@@ -55,16 +42,18 @@
   }
 
   async function api(path, options) {
-    if (!state.token) {
-      throw new Error("token required");
-    }
     const init = Object.assign({ headers: {} }, options || {});
-    init.headers = Object.assign({}, init.headers, { Authorization: "Bearer " + state.token });
+    init.headers = Object.assign({}, init.headers);
+    init.credentials = "same-origin";
     const res = await fetch(path, init);
     const ct = res.headers.get("content-type") || "";
     const body = ct.includes("application/json") ? await res.json() : await res.text();
     if (!res.ok) {
       const message = body && body.message ? body.message : String(body || res.statusText);
+      if (res.status === 401) {
+        window.location.href = "/dashboard/login";
+        return null;
+      }
       throw new Error(message);
     }
     return body;
@@ -187,6 +176,14 @@
     pollResult(nickname, res.cmd_id, action);
   }
 
+  async function logout() {
+    try {
+      await fetch("/v1/dashboard/logout", { method: "POST", credentials: "same-origin" });
+    } finally {
+      window.location.href = "/dashboard/login";
+    }
+  }
+
   async function restartAWGM(nickname) {
     const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/maintenance`, {
       method: "POST",
@@ -260,13 +257,8 @@
     return escapeHTML(value);
   }
 
-  els.saveTokenBtn.addEventListener("click", () => {
-    state.token = els.tokenInput.value.trim();
-    localStorage.setItem("wgDashboardToken", state.token);
-    refresh();
-  });
-
   els.refreshBtn.addEventListener("click", refresh);
+  els.logoutBtn.addEventListener("click", logout);
   document.querySelector('[data-action="refresh"]').addEventListener("click", refresh);
   els.searchInput.addEventListener("input", (event) => {
     state.query = event.target.value;
@@ -292,10 +284,5 @@
   els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => toast(err.message)));
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
 
-  if (state.token) {
-    refresh();
-  } else {
-    setAuth(false);
-    renderError("Token required");
-  }
+  refresh();
 })();
