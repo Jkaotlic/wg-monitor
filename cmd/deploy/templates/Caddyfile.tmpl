@@ -55,6 +55,11 @@
 	reverse_proxy 127.0.0.1:8080 {
 		header_up Host {host}
 		header_up X-Real-IP {remote_host}
+		# Canonical public hostname for backend deploy URL construction.
+		# Prevents LAN/loopback IPs leaking into agent repo_base when
+		# a wizard or dashboard request arrives via an internal address.
+		header_up X-WG-Public-Host {{.Domain}}
+		header_up X-WG-Public-Proto https
 	}
 	request_body {
 		max_size 1MB

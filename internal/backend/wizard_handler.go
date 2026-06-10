@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -277,6 +278,21 @@ func wizardBackendURL(r *http.Request) string {
 	return proto + "://" + host
 }
 
+func configuredPublicBackendURL(publicBaseURL string) (string, bool) {
+	publicBaseURL = strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
+	if publicBaseURL == "" {
+		return "", false
+	}
+	u, err := url.Parse(publicBaseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", false
+	}
+	if isNonPublicHost(hostOnly(u.Host)) {
+		return "", false
+	}
+	return u.Scheme + "://" + u.Host, true
+}
+
 var lookupHostForRepoResolve = net.LookupHost
 
 func wizardRepoResolveIP(r *http.Request) string {
@@ -312,12 +328,45 @@ func wizardBackendHost(r *http.Request) string {
 	return strings.Trim(host, "[]")
 }
 
-func wizardDeployBackendURL(r *http.Request) (string, bool) {
-	host := wizardBackendHost(r)
-	if isLoopbackHost(host) {
+func wizardDeployBackendURL(r *http.Request, publicBaseURL string) (string, bool) {
+	if host := firstForwardedValue(r.Header.Get("X-WG-Public-Host")); host != "" {
+		if !isNonPublicHost(hostOnly(host)) {
+			return wizardBackendURL(r), true
+		}
+		if configured, ok := configuredPublicBackendURL(publicBaseURL); ok {
+			return configured, true
+		}
 		return "", false
 	}
-	return wizardBackendURL(r), true
+	proto := firstForwardedValue(r.Header.Get("X-Forwarded-Proto"))
+	if proto == "" {
+		proto = "https"
+		if r.TLS == nil && isLoopbackHost(wizardBackendHost(r)) {
+			proto = "http"
+		}
+	}
+	for _, rawHost := range []string{
+		firstForwardedValue(r.Header.Get("X-Forwarded-Host")),
+		r.Host,
+	} {
+		host := hostOnly(rawHost)
+		if host == "" || isNonPublicHost(host) {
+			continue
+		}
+		return proto + "://" + rawHost, true
+	}
+	if configured, ok := configuredPublicBackendURL(publicBaseURL); ok {
+		return configured, true
+	}
+	return "", false
+}
+
+func hostOnly(host string) string {
+	host = strings.TrimSpace(host)
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return strings.Trim(h, "[]")
+	}
+	return strings.Trim(host, "[]")
 }
 
 func isLoopbackHost(host string) bool {
@@ -327,6 +376,15 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func isNonPublicHost(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
 }
 
 func firstForwardedValue(v string) string {
@@ -488,7 +546,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "target_version required")
 			return
 		}
-		repoBaseURL, ok := wizardDeployBackendURL(r)
+		repoBaseURL, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
 		if !ok {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
 				"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL")
@@ -563,7 +621,7 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "target_version required")
 			return
 		}
-		repoBaseURL, ok := wizardDeployBackendURL(r)
+		repoBaseURL, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
 		if !ok {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
 				"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL")

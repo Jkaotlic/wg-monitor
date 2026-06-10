@@ -240,6 +240,7 @@ func main() {
 		TelegramPrimaryChatID: cfg.Telegram.ChatID,
 		TelegramExtraChatIDs:  cfg.Telegram.ExtraChatIDs,
 		BackendUpdatePath:     backend.DefaultBackendUpdatePath(cfg),
+		PublicBaseURL:         cfg.PublicBaseURL,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,

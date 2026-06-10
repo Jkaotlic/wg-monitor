@@ -275,6 +275,7 @@ type Deps struct {
 	TelegramPrimaryChatID int64
 	TelegramExtraChatIDs  []int64
 	BackendUpdatePath     string
+	PublicBaseURL         string
 }
 
 type AlertPolicy struct {
