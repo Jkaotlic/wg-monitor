@@ -142,7 +142,9 @@
       els.backendUpdateBtn.classList.toggle("hidden", !needsUpdate);
       if (needsUpdate && els.backendUpdateText) els.backendUpdateText.textContent = `Update → ${latest}`;
     }
-    els.kpiOnlineText.textContent = (totals.online || 0) === 1 ? "1 agent reporting" : (totals.online || 0) + " agents reporting";
+    const sleeping = totals.sleeping || 0;
+    const reporting = (totals.online || 0) === 1 ? "1 agent reporting" : (totals.online || 0) + " agents reporting";
+    els.kpiOnlineText.textContent = sleeping ? `${reporting}, ${sleeping} sleeping` : reporting;
     els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
     els.summaryText.textContent = summarySentence(summary);
@@ -184,6 +186,7 @@
     const totals = summary.totals || {};
     if (totals.alerts > 0) return `Есть ${totals.alerts} hard-инцидент(ов). Открой агента и начни с Diagnostics или Force recheck.`;
     if (totals.pending_deploys > 0) return `${totals.pending_deploys} deploy ожидает подтверждения от heartbeat.`;
+    if ((totals.sleeping || 0) > 0) return `${totals.sleeping} мобильн. агент(ов) sleeping; они не online до свежего отчета.`;
     if ((totals.offline || 0) > 0) return `${totals.offline} агент(ов) offline или еще ни разу не отчитались.`;
     return "Флот выглядит спокойно: активных hard-инцидентов нет.";
   }
@@ -229,7 +232,7 @@
         <td>
           <div class="action-strip">
             <button class="mini-btn" type="button" title="Run diagnostics" data-state="${buttonState(agent.nickname, "diag_now")}" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diagnostics</button>
-            <button class="mini-btn" type="button" title="Force a fresh agent report" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">Recheck</button>
+            <button class="mini-btn" type="button" title="${escapeAttr(recheckTitle(agent))}" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">${escapeHTML(recheckShortLabel(agent))}</button>
             <button class="mini-btn" type="button" title="Show route status" data-state="${buttonState(agent.nickname, "route_status")}" data-command="route_status" data-agent="${escapeAttr(agent.nickname)}">Routes</button>
             <button class="mini-btn" type="button" title="Show tunnel status" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
             <button class="mini-btn danger" type="button" title="Restart AWG Manager" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">Restart AWG</button>
@@ -255,6 +258,7 @@
   function statusBadge(agent) {
     if (agent.status === "alert") return '<span class="badge badge-danger">alert</span>';
     if (agent.status === "online") return '<span class="badge badge-success">online</span>';
+    if (agent.status === "sleeping") return '<span class="badge badge-warning">sleeping</span>';
     return '<span class="badge badge-muted">offline</span>';
   }
 
@@ -265,6 +269,7 @@
       return "есть hard-инцидент";
     }
     if (agent.status === "online") return "последний отчет " + formatLastSeen(agent);
+    if (agent.status === "sleeping") return "мобильный спит; последний отчет " + formatLastSeen(agent);
     if (!agent.last_seen_at) return "еще не отчитывался";
     return "последний отчет " + formatLastSeen(agent);
   }
@@ -348,7 +353,7 @@
           <h3>Checks</h3>
           <div class="drawer-actions">
             ${drawerCommandButton(selected, "diag_now", "Diagnostics")}
-            ${drawerCommandButton(selected, "force_recheck", "Force recheck")}
+            ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
             ${drawerCommandButton(selected, "route_status", "Routes")}
             ${drawerCommandButton(selected, "tunnels_status", "Tunnels")}
             ${drawerCommandButton(selected, "pingcheck_status", "PingCheck")}
@@ -366,8 +371,23 @@
   function statusLongText(agent) {
     if (agent.status === "alert") return "Есть hard-инцидент. Начни с Diagnostics или Force recheck, затем смотри результат команды.";
     if (agent.status === "online") return "Агент онлайн: последний отчет " + formatLastSeen(agent) + ". Активных hard-инцидентов нет.";
+    if (agent.status === "sleeping") return "Мобильный агент давно не присылал отчет и считается sleeping, а не online. Нажми Force recheck, если нужен свежий wake/report.";
     if (!agent.last_seen_at) return "Агент создан, но еще ни разу не прислал отчет.";
     return "Агент сейчас offline или давно не отчитывался. Последний отчет " + formatLastSeen(agent) + ".";
+  }
+
+  function recheckShortLabel(agent) {
+    return agent.kind === "mobile" && agent.status === "sleeping" ? "Wake" : "Recheck";
+  }
+
+  function recheckLongLabel(agent) {
+    return agent.kind === "mobile" && agent.status === "sleeping" ? "Wake / recheck" : "Force recheck";
+  }
+
+  function recheckTitle(agent) {
+    return agent.kind === "mobile" && agent.status === "sleeping"
+      ? "Wake mobile agent and request a fresh report"
+      : "Force a fresh agent report";
   }
 
   function drawerKV(label, value) {

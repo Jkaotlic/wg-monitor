@@ -268,6 +268,10 @@ type Deps struct {
 	ReportRatePerSec float64
 	ReportBurst      int
 	MobileWakeAfter  time.Duration
+	// DashboardStaleAfter* controls operator-console online/sleeping/offline
+	// labels. Zero uses heartbeat defaults: static 5m, mobile 30m.
+	DashboardStaleAfterStatic time.Duration
+	DashboardStaleAfterMobile time.Duration
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken           string

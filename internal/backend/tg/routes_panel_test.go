@@ -62,6 +62,44 @@ func TestRoutesPanelText_HRNeoAbsent(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelTextShowsHRNeoPolicyActiveAndFallback(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		HRNeo: wire.HRStatus{Installed: true, Running: true},
+		Tunnels: []wire.TunnelMeta{
+			{ID: "t1", Name: "NetherlandsAmsterdamH17", Iface: "nwg3", Enabled: true},
+			{ID: "t2", Name: "amnezia_for_awg-nktelecom", Iface: "nwg0", Enabled: true},
+		},
+		Counts: map[string]wire.TunnelCounts{
+			"t1": {},
+			"t2": {},
+		},
+		Policies: []wire.RoutePolicySummary{{
+			Name:  "HydraRoute",
+			DNS:   25,
+			HRNeo: 25,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Name: "NetherlandsAmsterdamH17", Bind: "nwg3", Role: "active", Available: true},
+				{Name: "amnezia_for_awg-nktelecom", Bind: "nwg0", Role: "fallback", Available: true},
+			},
+		}},
+	}
+
+	text := RoutesPanelText("testkeen", snap)
+	for _, want := range []string{
+		"DNS routes: 25",
+		"HR-Neo: 25",
+		"NetherlandsAmsterdamH17 (nwg3): 0",
+		"amnezia_for_awg-nktelecom (nwg0): 0",
+		"HydraRoute: 25",
+		"NetherlandsAmsterdamH17 (nwg3) [сейчас]",
+		"amnezia_for_awg-nktelecom (nwg0) [fallback]",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestRoutesPanelTextShowsSnapshotWarnings(t *testing.T) {
 	text := RoutesPanelText("testkeen", wire.RouteSnapshot{
 		Warnings: []string{"/api/routing/tunnels failed: HTTP 502"},

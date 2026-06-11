@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -124,6 +125,29 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 			}
 		}
 	}
+	creditPolicy := func(r awgmgr.DNSRoute) {
+		name := strings.TrimSpace(r.HRPolicyName)
+		if name == "" {
+			name = defaultHydraRoutePolicyName
+		}
+		ifaces := routePolicyInterfaces(r.HRPolicyInterfaces, byIface, snap.Tunnels)
+		for i := range snap.Policies {
+			if strings.EqualFold(snap.Policies[i].Name, name) {
+				snap.Policies[i].DNS++
+				snap.Policies[i].HRNeo++
+				if len(ifaces) > len(snap.Policies[i].Interfaces) {
+					snap.Policies[i].Interfaces = ifaces
+				}
+				return
+			}
+		}
+		snap.Policies = append(snap.Policies, wire.RoutePolicySummary{
+			Name:       name,
+			Interfaces: ifaces,
+			DNS:        1,
+			HRNeo:      1,
+		})
+	}
 	for _, r := range dns {
 		isHR := r.Backend == "hydraroute"
 		ruleBind := ""
@@ -137,7 +161,10 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 					creditOther(isHR, false)
 				}
 			} else {
-				if isMovableHRNeoFallthrough(r) && (defaultIface != "" || len(r.HRPolicyInterfaces) > 0) {
+				if isMovableHRNeoFallthrough(r) && len(r.HRPolicyInterfaces) > 0 {
+					ruleBind = routePolicyLabel(r)
+					creditPolicy(r)
+				} else if isMovableHRNeoFallthrough(r) && defaultIface != "" {
 					ruleBind = routePolicyBind(r, defaultIface, byIface)
 					if id, ok := byIface[ruleBind]; ok {
 						creditDNS(id, true)
@@ -185,6 +212,70 @@ func routePolicyBind(r awgmgr.DNSRoute, fallbackIface string, byIface map[string
 		}
 	}
 	return fallbackIface
+}
+
+func routePolicyLabel(r awgmgr.DNSRoute) string {
+	name := strings.TrimSpace(r.HRPolicyName)
+	if name == "" {
+		name = defaultHydraRoutePolicyName
+	}
+	return "policy:" + name
+}
+
+func routePolicyInterfaces(binds []string, byIface map[string]string, tunnels []wire.TunnelMeta) []wire.RoutePolicyInterface {
+	out := make([]wire.RoutePolicyInterface, 0, len(binds))
+	seen := map[string]bool{}
+	for _, bind := range binds {
+		bind = strings.TrimSpace(bind)
+		if bind == "" {
+			continue
+		}
+		item := wire.RoutePolicyInterface{Bind: bind}
+		if id, ok := byIface[bind]; ok {
+			if t, ok := routeTunnelByID(tunnels, id); ok {
+				item.Bind = t.Iface
+				item.Name = t.Name
+				item.Available = routeTunnelUsable(t)
+			}
+		}
+		key := strings.ToLower(firstNonEmptyRoute(item.Name, item.Bind))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, item)
+	}
+	activeAssigned := false
+	for i := range out {
+		if out[i].Available && !activeAssigned {
+			out[i].Role = "active"
+			activeAssigned = true
+			continue
+		}
+		if out[i].Available {
+			out[i].Role = "fallback"
+		} else {
+			out[i].Role = "unavailable"
+		}
+	}
+	return out
+}
+
+func routeTunnelByID(tunnels []wire.TunnelMeta, id string) (wire.TunnelMeta, bool) {
+	for _, t := range tunnels {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return wire.TunnelMeta{}, false
+}
+
+func routeTunnelUsable(t wire.TunnelMeta) bool {
+	if !t.Enabled {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(t.Status))
+	return t.Available || status == "" || status == "running" || status == "up"
 }
 
 func handshakeAgeSeconds(t *time.Time) int {

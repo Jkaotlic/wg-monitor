@@ -346,6 +346,7 @@ type dashboardTelegramSummary struct {
 type dashboardSummaryTotals struct {
 	Agents         int `json:"agents"`
 	Online         int `json:"online"`
+	Sleeping       int `json:"sleeping"`
 	Offline        int `json:"offline"`
 	Alerts         int `json:"alerts"`
 	PendingDeploys int `json:"pending_deploys"`
@@ -383,13 +384,43 @@ type dashboardIncident struct {
 	FailCount int    `json:"fail_count"`
 }
 
+type dashboardStatusPolicy struct {
+	StaticStaleAfter   time.Duration
+	MobileStaleAfter   time.Duration
+	MobileOfflineAfter time.Duration
+}
+
+const (
+	defaultDashboardStaticStaleAfter   = 5 * time.Minute
+	defaultDashboardMobileStaleAfter   = 30 * time.Minute
+	defaultDashboardMobileOfflineAfter = 24 * time.Hour
+)
+
+func dashboardStatusPolicyFromDeps(d Deps) dashboardStatusPolicy {
+	p := dashboardStatusPolicy{
+		StaticStaleAfter:   defaultDashboardStaticStaleAfter,
+		MobileStaleAfter:   defaultDashboardMobileStaleAfter,
+		MobileOfflineAfter: defaultDashboardMobileOfflineAfter,
+	}
+	if d.DashboardStaleAfterStatic > 0 {
+		p.StaticStaleAfter = d.DashboardStaleAfterStatic
+	}
+	if d.DashboardStaleAfterMobile > 0 {
+		p.MobileStaleAfter = d.DashboardStaleAfterMobile
+	}
+	if p.MobileOfflineAfter < p.MobileStaleAfter {
+		p.MobileOfflineAfter = p.MobileStaleAfter
+	}
+	return p
+}
+
 func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if d.DB == nil {
 			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
 			return
 		}
-		resp, err := buildDashboardSummary(d.DB, time.Now().UTC())
+		resp, err := buildDashboardSummary(d.DB, time.Now().UTC(), dashboardStatusPolicyFromDeps(d))
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Error("dashboard summary failed", "err", err)
@@ -414,7 +445,7 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-func buildDashboardSummary(database *db.DB, now time.Time) (dashboardSummary, error) {
+func buildDashboardSummary(database *db.DB, now time.Time, policy dashboardStatusPolicy) (dashboardSummary, error) {
 	users, err := database.Users().GetAll()
 	if err != nil {
 		return dashboardSummary{}, err
@@ -441,7 +472,7 @@ func buildDashboardSummary(database *db.DB, now time.Time) (dashboardSummary, er
 		GeneratedAt: now.UTC().Format(time.RFC3339),
 	}
 	for _, user := range users {
-		agent := dashboardAgentFromUser(user, hardsByUser[user.ID], now)
+		agent := dashboardAgentFromUser(user, hardsByUser[user.ID], now, policy)
 		resp.Agents = append(resp.Agents, agent)
 		resp.Totals.Agents++
 		switch agent.Status {
@@ -449,6 +480,8 @@ func buildDashboardSummary(database *db.DB, now time.Time) (dashboardSummary, er
 			resp.Totals.Alerts++
 		case "online":
 			resp.Totals.Online++
+		case "sleeping":
+			resp.Totals.Sleeping++
 		case "offline":
 			resp.Totals.Offline++
 		}
@@ -542,21 +575,28 @@ func dashboardReleaseNewer(a, b dashboardGitHubRelease) bool {
 	return strings.Compare(a.TagName, b.TagName) > 0
 }
 
-func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time) dashboardSummaryAgent {
+func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time, policy dashboardStatusPolicy) dashboardSummaryAgent {
 	status := "online"
+	age := dashboardLastSeenAge(user, now)
 	if len(incidents) > 0 {
 		status = "alert"
-	} else if user.LastSeenAt == nil {
+	} else if age == nil {
+		status = "offline"
+	} else if user.IsMobile() {
+		gap := time.Duration(*age) * time.Second
+		if gap >= policy.MobileOfflineAfter {
+			status = "offline"
+		} else if gap >= policy.MobileStaleAfter {
+			status = "sleeping"
+		}
+	} else if time.Duration(*age)*time.Second >= policy.StaticStaleAfter {
 		status = "offline"
 	}
 
 	var lastSeenAge *int64
-	if user.LastSeenAt != nil {
-		age := int64(now.Sub(user.LastSeenAt.UTC()).Seconds())
-		if age < 0 {
-			age = 0
-		}
-		lastSeenAge = &age
+	if age != nil {
+		v := *age
+		lastSeenAge = &v
 	}
 
 	agent := dashboardSummaryAgent{
@@ -589,6 +629,17 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		agent.TelegramThreadID = *user.TelegramThreadID
 	}
 	return agent
+}
+
+func dashboardLastSeenAge(user db.User, now time.Time) *int64 {
+	if user.LastSeenAt == nil {
+		return nil
+	}
+	age := int64(now.UTC().Sub(user.LastSeenAt.UTC()).Seconds())
+	if age < 0 {
+		age = 0
+	}
+	return &age
 }
 
 type dashboardEnrollmentReq struct {

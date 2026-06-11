@@ -208,6 +208,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	dashboardMobileStaleAfter := cfg.Heartbeat.StaleAfterMobileSec
+	if mobileLifecycle {
+		dashboardMobileStaleAfter = cfg.Heartbeat.MobileSleepAfterSec
+	}
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:              logger,
 		DB:                  d,
@@ -232,15 +237,17 @@ func main() {
 		// Per-token rate limit on /v1/report (API-06). Defaults applied in
 		// LoadConfig so production yaml without rate_limit section gets sane
 		// throttling automatically.
-		ReportRatePerSec:      cfg.RateLimit.ReportPerSec,
-		ReportBurst:           cfg.RateLimit.ReportBurst,
-		MobileWakeAfter:       time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
-		WizardToken:           cfg.Wizard.Token,
-		DashboardToken:        cfg.Dashboard.Token,
-		TelegramPrimaryChatID: cfg.Telegram.ChatID,
-		TelegramExtraChatIDs:  cfg.Telegram.ExtraChatIDs,
-		BackendUpdatePath:     backend.DefaultBackendUpdatePath(cfg),
-		PublicBaseURL:         cfg.PublicBaseURL,
+		ReportRatePerSec:          cfg.RateLimit.ReportPerSec,
+		ReportBurst:               cfg.RateLimit.ReportBurst,
+		MobileWakeAfter:           time.Duration(cfg.Heartbeat.MobileSleepAfterSec) * time.Second,
+		DashboardStaleAfterStatic: time.Duration(cfg.Heartbeat.StaleAfterStaticSec) * time.Second,
+		DashboardStaleAfterMobile: time.Duration(dashboardMobileStaleAfter) * time.Second,
+		WizardToken:               cfg.Wizard.Token,
+		DashboardToken:            cfg.Dashboard.Token,
+		TelegramPrimaryChatID:     cfg.Telegram.ChatID,
+		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
+		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),
+		PublicBaseURL:             cfg.PublicBaseURL,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,

@@ -46,13 +46,28 @@ type TunnelCounts struct {
 	HRNeo  int `json:"hr_neo"`
 }
 
+type RoutePolicyInterface struct {
+	Bind      string `json:"bind"`
+	Name      string `json:"name,omitempty"`
+	Role      string `json:"role,omitempty"` // active | fallback | unavailable
+	Available bool   `json:"available,omitempty"`
+}
+
+type RoutePolicySummary struct {
+	Name       string                 `json:"name"`
+	Interfaces []RoutePolicyInterface `json:"interfaces,omitempty"`
+	DNS        int                    `json:"dns"`
+	HRNeo      int                    `json:"hr_neo"`
+}
+
 // RouteSnapshot is the payload of a successful route_status CommandResult.
 type RouteSnapshot struct {
-	HRNeo   HRStatus                `json:"hr_neo"`
-	Tunnels []TunnelMeta            `json:"tunnels"` // routable managed/NDMS targets
-	Counts  map[string]TunnelCounts `json:"counts"`  // key = target id
-	Other   TunnelCounts            `json:"other"`   // sum across unknown/unmatched binds
-	Rules   []RouteRuleSummary      `json:"rules,omitempty"`
+	HRNeo    HRStatus                `json:"hr_neo"`
+	Tunnels  []TunnelMeta            `json:"tunnels"` // routable managed/NDMS targets
+	Counts   map[string]TunnelCounts `json:"counts"`  // key = target id
+	Other    TunnelCounts            `json:"other"`   // sum across unknown/unmatched binds
+	Policies []RoutePolicySummary    `json:"policies,omitempty"`
+	Rules    []RouteRuleSummary      `json:"rules,omitempty"`
 	// Warnings names non-fatal data source failures. UI must treat the
 	// snapshot as partial when present.
 	Warnings []string `json:"warnings,omitempty"`
