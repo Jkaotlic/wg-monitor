@@ -88,6 +88,8 @@ func main() {
 		Deps:        deps,
 		AwgClient:   awgClient,
 		StatePath:   cfg.State.ResolvedPath(),
+		ConfigPath:  *configPath,
+		BackendURL:  cfg.Backend.URL,
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -109,6 +111,7 @@ func main() {
 		Exec:                 actions.DefaultExec,
 		AllowRouterReboot:    cfg.Maintenance.AllowRouterReboot,
 		AllowFirmwareInstall: cfg.Maintenance.AllowFirmwareInstall,
+		ConfigPath:           *configPath,
 	}
 	loop := cmdloop.New(client, runner, 30)
 	go loop.Run(ctx)

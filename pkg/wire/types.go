@@ -37,6 +37,19 @@ type Command struct {
 	ExpiresAt time.Time      `json:"expires_at,omitempty"`
 }
 
+// ReportResponse is the JSON body the backend MAY return in a 200 response
+// to POST /v1/report. All fields are optional — older backends return an empty
+// body. Agents MUST ignore unknown fields.
+//
+// CanonicalURL: when set, the agent should treat this as the authoritative
+// backend URL. If it differs from the agent's current config, the agent
+// rewrites its config and restarts so future heartbeats go to the right place.
+// Intended for zero-touch domain migrations: keep the old domain alive for one
+// heartbeat window, backend returns the new domain, agents self-migrate.
+type ReportResponse struct {
+	CanonicalURL string `json:"canonical_url,omitempty"`
+}
+
 var validCommandActions = map[string]bool{
 	"restart_tunnel":    true,
 	"diag_now":          true,
@@ -67,8 +80,9 @@ var validCommandActions = map[string]bool{
 	"firmware_status":   true,
 	"firmware_install":  true,
 	"version_audit":     true,
-	"self_update":       true,
-	"router_doctor":     true,
+	"self_update":          true,
+	"router_doctor":        true,
+	"update_backend_url":   true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

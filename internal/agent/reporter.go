@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/anex/wg-monitor/internal/agent/actions"
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 	"github.com/anex/wg-monitor/internal/agent/checks"
 	"github.com/anex/wg-monitor/pkg/wire"
@@ -23,7 +24,15 @@ const perCheckTimeout = 10 * time.Second
 const ResumedThreshold = 30 * time.Minute
 
 type Sender interface {
-	SendReport(ctx context.Context, r wire.Report) error
+	// SendReport posts a heartbeat report and returns the backend's canonical URL
+	// (empty string if the server did not advertise one).
+	SendReport(ctx context.Context, r wire.Report) (string, error)
+}
+
+// reporterMigrateURL is a var so tests can replace it without touching the
+// filesystem or spawning processes.
+var reporterMigrateURL = func(ctx context.Context, newURL, configPath string) (string, error) {
+	return actions.UpdateBackendURL(ctx, newURL, configPath)
 }
 
 type Reporter struct {
@@ -35,6 +44,8 @@ type Reporter struct {
 	deps         checks.Deps
 	awgClient    *awgmgr.Client // optional, used to force fresh pingcheck on resume
 	statePath    string         // persists last_report_at across agent restarts
+	configPath   string         // path to config.yaml; enables auto URL migration
+	backendURL   string         // current configured backend URL for migration comparison
 	mu           sync.Mutex
 	sendOnceMu   sync.Mutex // serialises sendOnce; see sendOnce comment
 	lastReportAt time.Time
@@ -50,6 +61,8 @@ type ReporterConfig struct {
 	Deps        checks.Deps
 	AwgClient   *awgmgr.Client
 	StatePath   string // e.g. /opt/var/wg-monitor/reporter-state.json; "" disables persistence
+	ConfigPath  string // e.g. /opt/etc/wg-monitor/config.yaml; enables auto URL migration
+	BackendURL  string // current backend URL from config; compared against canonical_url
 }
 
 func NewReporter(cfg ReporterConfig) *Reporter {
@@ -65,6 +78,8 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		deps:        cfg.Deps,
 		awgClient:   cfg.AwgClient,
 		statePath:   cfg.StatePath,
+		configPath:  cfg.ConfigPath,
+		backendURL:  cfg.BackendURL,
 	}
 	r.lastReportAt = r.loadLastReportAt()
 	return r
@@ -143,9 +158,17 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 		Checks:       results,
 		Resumed:      resumed,
 	}
-	if err := r.sender.SendReport(ctx, report); err != nil {
+	canonicalURL, err := r.sender.SendReport(ctx, report)
+	if err != nil {
 		slog.Warn("send report failed", "err", err)
 		return
+	}
+	if canonicalURL != "" && canonicalURL != r.backendURL && r.configPath != "" {
+		slog.Info("backend advertised new canonical URL; migrating config",
+			"old_url", r.backendURL, "new_url", canonicalURL)
+		if _, merr := reporterMigrateURL(ctx, canonicalURL, r.configPath); merr != nil {
+			slog.Warn("auto URL migration failed", "err", merr)
+		}
 	}
 	now := time.Now()
 	r.mu.Lock()

@@ -722,7 +722,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 				}()
 			}
 		}
-		w.WriteHeader(http.StatusOK)
+		if d.PublicBaseURL != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(wire.ReportResponse{
+				CanonicalURL: strings.TrimRight(d.PublicBaseURL, "/"),
+			})
+		} else {
+			w.WriteHeader(http.StatusOK)
+		}
 	}
 }
 

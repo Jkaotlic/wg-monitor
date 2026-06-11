@@ -718,6 +718,45 @@ func AgentStateToRemote(a AgentState) RemoteAgent {
 	}
 }
 
+// PushCommand enqueues an allowlisted operational command for the named agent
+// via POST /v1/wizard/agents/{nickname}/commands. Returns the backend-assigned
+// command ID on success (HTTP 202). Use AwaitCommandResult to poll for the
+// agent's response.
+func (c *VPSClient) PushCommand(ctx context.Context, nickname, action string, args map[string]any) (string, error) {
+	if nickname == "" {
+		return "", fmt.Errorf("nickname required")
+	}
+	if action == "" {
+		return "", fmt.Errorf("action required")
+	}
+	body, err := json.Marshal(struct {
+		Action string         `json:"action"`
+		Args   map[string]any `json:"args,omitempty"`
+	}{Action: action, Args: args})
+	if err != nil {
+		return "", err
+	}
+	path := "/v1/wizard/agents/" + url.PathEscape(nickname) + "/commands"
+	status, raw, err := c.doWizardAPI(ctx, http.MethodPost, path, body, "application/json", 0)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusAccepted {
+		return "", fmt.Errorf("POST /v1/wizard/agents/%s/commands: HTTP %d: %s",
+			nickname, status, trimWizardBody(raw))
+	}
+	var out struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return "", err
+	}
+	if out.CmdID == "" {
+		return "", fmt.Errorf("backend returned empty cmd_id")
+	}
+	return out.CmdID, nil
+}
+
 // HeartbeatStatus fetches /v1/wizard/agents, finds the named agent and
 // returns a human-readable freshness tag. Used by diagnoseUnreachable to
 // help operator tell "router offline" from "wizard can't see router (but

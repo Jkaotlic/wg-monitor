@@ -310,7 +310,13 @@ func serviceMenuItems(legacy bool) []menuItem {
 	if legacy {
 		items = append(items, menuItem{Key: "3", Title: "Legacy Netfix route", Help: "когда нажимать: только старый SSH-деплой и recovery маршрута"})
 	}
-	return withCurrentVPSAdoption(items, legacy)
+	items = withCurrentVPSAdoption(items, legacy)
+	items = append(items, menuItem{
+		Key:   fmt.Sprintf("%d", len(items)+1),
+		Title: "Мигрировать backend URL",
+		Help:  "когда нажимать: сменился домен backend; отправляет update_backend_url всем агентам флота",
+	})
+	return items
 }
 
 func withCurrentVPSAdoption(items []menuItem, legacy bool) []menuItem {
@@ -433,19 +439,29 @@ func runServiceMenu(state *State, statePath string, secrets *SecretStore) {
 				return actionAdoptBackend(state, secrets)
 			})
 		case "4":
+			if legacy {
+				if err := actionNetfix(state, netfixOptions{}); err != nil {
+					PrintFail("netfix failed: " + err.Error())
+				}
+			} else {
+				runActionAndSave(state, statePath, secrets, func() error {
+					return actionMigrateBackendURL(state, secrets, "")
+				})
+			}
+		case "5":
 			if !legacy {
-				PrintFail("Не понял. Введи 1-3 или B.")
+				PrintFail("Не понял. Введи 1-4 или B.")
 				break
 			}
-			if err := actionNetfix(state, netfixOptions{}); err != nil {
-				PrintFail("netfix failed: " + err.Error())
-			}
+			runActionAndSave(state, statePath, secrets, func() error {
+				return actionMigrateBackendURL(state, secrets, "")
+			})
 		case "B", "Q", "":
 			return
 		default:
-			limit := "3"
+			limit := "4"
 			if legacy {
-				limit = "4"
+				limit = "5"
 			}
 			PrintFail("Не понял. Введи 1-" + limit + " или B.")
 		}

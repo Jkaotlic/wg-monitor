@@ -67,32 +67,41 @@ func NewClient(baseURL, token, version string, timeout time.Duration) *Client {
 	}
 }
 
-func (c *Client) SendReport(ctx context.Context, report wire.Report) error {
+// SendReport posts a heartbeat report to the backend and returns the canonical
+// backend URL when the server includes one in the response. An empty string
+// means the server did not advertise a canonical URL (older backend or no
+// PublicBaseURL configured). Callers should migrate their config when the
+// returned URL differs from their current configured URL.
+func (c *Client) SendReport(ctx context.Context, report wire.Report) (string, error) {
 	body, err := json.Marshal(report)
 	if err != nil {
-		return fmt.Errorf("marshal report: %w", err)
+		return "", fmt.Errorf("marshal report: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/report", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "wg-monitor/"+c.version)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("post: %w", err)
+		return "", fmt.Errorf("post: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		preview, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		if e := authFailed(resp.StatusCode, preview, req.URL.Path); e != nil {
-			return e
+			return "", e
 		}
-		return fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
+		return "", fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}
-	_, _ = io.Copy(io.Discard, resp.Body) // drain for keep-alive
-	return nil
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	var rr wire.ReportResponse
+	if len(respBody) > 0 {
+		_ = json.Unmarshal(respBody, &rr) // best-effort; older backends return empty body
+	}
+	return rr.CanonicalURL, nil
 }
 
 // PollCommand long-polls /v1/cmd?wait=N. Returns (nil, nil) on 204 (no command
