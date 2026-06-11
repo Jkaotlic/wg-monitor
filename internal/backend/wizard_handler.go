@@ -514,6 +514,11 @@ var wizardCommandAllowlist = map[string]bool{
 	"route_status":       true,
 	"tunnels_status":     true,
 	"route_rebind":       true,
+	"opkg_cron_status":   true,
+	"opkg_cron_install":  true,
+	"opkg_cron_logs":     true,
+	"opkg_cron_remove":   true,
+	"version_audit":      true,
 	"tunnel_enable":      true,
 	"tunnel_disable":     true,
 	"tunnel_restart":     true,
@@ -743,8 +748,74 @@ func wizardCommandHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "unsupported_command", "action is not allowed for wizard command dispatch")
 			return
 		}
-		enqueueWizardAgentCommand(w, d, nickname, req.Action, req.Args)
+		args, ok := sanitizeWizardCommandArgs(w, req.Action, req.Args)
+		if !ok {
+			return
+		}
+		enqueueWizardAgentCommand(w, d, nickname, req.Action, args)
 	}
+}
+
+func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[string]any) (map[string]any, bool) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	switch action {
+	case "opkg_cron_install":
+		schedule, _ := args["schedule"].(string)
+		schedule = strings.TrimSpace(schedule)
+		if schedule == "" {
+			schedule = "04:30"
+		}
+		if !dashboardScheduleLooksSafe(schedule) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_schedule", "schedule must be HH:MM or a five-field cron expression")
+			return nil, false
+		}
+		return map[string]any{"schedule": schedule}, true
+	case "opkg_cron_status", "opkg_cron_logs":
+		lines := 80
+		switch v := args["lines"].(type) {
+		case float64:
+			lines = int(v)
+		case int:
+			lines = v
+		}
+		if lines < 1 {
+			lines = 1
+		}
+		if lines > 300 {
+			lines = 300
+		}
+		return map[string]any{"lines": lines}, true
+	case "opkg_cron_remove", "version_audit":
+		return map[string]any{}, true
+	default:
+		return args, true
+	}
+}
+
+func dashboardScheduleLooksSafe(schedule string) bool {
+	if strings.Count(schedule, ":") == 1 && !strings.Contains(schedule, " ") {
+		parts := strings.Split(schedule, ":")
+		if len(parts) != 2 || len(parts[0]) > 2 || len(parts[1]) != 2 {
+			return false
+		}
+		hour, hErr := strconv.Atoi(parts[0])
+		min, mErr := strconv.Atoi(parts[1])
+		return hErr == nil && mErr == nil && hour >= 0 && hour <= 23 && min >= 0 && min <= 59
+	}
+	fields := strings.Fields(schedule)
+	if len(fields) != 5 {
+		return false
+	}
+	for _, f := range fields {
+		for _, r := range f {
+			if (r < '0' || r > '9') && r != '*' && r != '/' && r != '-' && r != ',' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action string, args map[string]any) {

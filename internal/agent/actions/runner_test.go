@@ -505,6 +505,27 @@ func TestRunner_OpkgUpgrade_DispatchesToOpkg(t *testing.T) {
 	}
 }
 
+func TestRunner_OpkgCronStatusDispatches(t *testing.T) {
+	exec := fakeOpkgCronExec(map[string]fakeExecResult{
+		"df -k /opt": {out: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 200000 100000 75000 60% /opt\n"},
+		"crontab -l": {out: ""},
+	})
+	r := Runner{Now: mockNow(), Exec: exec}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "cron-status",
+		Action: "opkg_cron_status",
+		Args:   map[string]any{"lines": float64(10)},
+	})
+
+	if res.Status != "ok" {
+		t.Fatalf("status=%q output=%s", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, `"script_path"`) || !strings.Contains(res.Output, `"free_kb":75000`) {
+		t.Fatalf("output=%s", res.Output)
+	}
+}
+
 func TestRunner_UnknownAction(t *testing.T) {
 	r := Runner{Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c6", Action: "frobnicate"})

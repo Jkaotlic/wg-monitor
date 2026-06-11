@@ -9,6 +9,7 @@
 //     live upgrade; partial-update failures continue and surface failed feeds)
 //   - opkg_feed_disable → OpkgRunner.DisableFeed (comment matching feed in
 //     opkg config + auto-retry SmartUpgrade)
+//   - opkg_cron_*     → install/status/log/remove managed scheduled opkg script
 //   - pingcheck_status → awgmgr.PingCheckStatus → JSON passthrough
 //   - pingcheck_toggle → awg-mgr POST /api/pingcheck/toggle (primary)
 //     with ndmc CLI fallback (interface <ndms_name> ping-check)
@@ -68,8 +69,8 @@ type Runner struct {
 	DiagPollMax int
 	// ConfigPath is the path to the agent's config.yaml. Required for
 	// update_backend_url to rewrite the URL in-place.
-	ConfigPath  string
-	routeMu     sync.Mutex // serialises concurrent route_rebind calls
+	ConfigPath string
+	routeMu    sync.Mutex // serialises concurrent route_rebind calls
 }
 
 // DiagNow fetches the awg-manager diagnostic report. If awg-manager
@@ -291,6 +292,35 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		s, o, p := r.Opkg.DisableFeed(ctx, url)
 		return s, o, p
+	case "opkg_cron_status", "opkg_cron_install", "opkg_cron_logs", "opkg_cron_remove":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		manager := &OpkgCronManager{Exec: r.Exec, Now: r.Now}
+		lines := intArg(cmd.Args, "lines", 80)
+		var (
+			status wire.OpkgCronStatus
+			err    error
+		)
+		switch cmd.Action {
+		case "opkg_cron_status":
+			status, err = manager.Status(ctx, lines)
+		case "opkg_cron_install":
+			schedule, _ := cmd.Args["schedule"].(string)
+			status, err = manager.Install(ctx, schedule)
+		case "opkg_cron_logs":
+			status, err = manager.Logs(ctx, lines)
+		case "opkg_cron_remove":
+			status, err = manager.Remove(ctx)
+		}
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		b, err := json.Marshal(status)
+		if err != nil {
+			return "err", "encode opkg cron status: " + err.Error(), payload
+		}
+		return "ok", string(b), payload
 	case "check_via_tunnel":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -659,6 +689,31 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	default:
 		return "err", "unknown action: " + cmd.Action, payload
 	}
+}
+
+func intArg(args map[string]any, key string, def int) int {
+	if args == nil {
+		return def
+	}
+	switch v := args[key].(type) {
+	case int:
+		if v > 0 {
+			return v
+		}
+	case int64:
+		if v > 0 {
+			return int(v)
+		}
+	case float64:
+		if v > 0 {
+			return int(v)
+		}
+	case json.Number:
+		if n, err := v.Int64(); err == nil && n > 0 {
+			return int(n)
+		}
+	}
+	return def
 }
 
 func tunnelIDFromCheckName(checkName string) string {

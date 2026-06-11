@@ -668,6 +668,14 @@ select:focus {
   margin-top: 10px;
 }
 
+.drawer-actions-top {
+  margin-top: 10px;
+}
+
+.schedule-field {
+  margin: 10px 0;
+}
+
 .drawer-kv {
   display: flex;
   justify-content: space-between;
