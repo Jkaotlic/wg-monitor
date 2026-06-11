@@ -24,7 +24,7 @@ func TestClient_SendReport_AttachesBearer(t *testing.T) {
 	defer srv.Close()
 	c := NewClient(srv.URL, "tok-abc", "0.1.0", 2*time.Second)
 	rep := wire.Report{Timestamp: time.Now(), AgentVersion: "0.1.0"}
-	if err := c.SendReport(context.Background(), rep); err != nil {
+	if _, err := c.SendReport(context.Background(), rep); err != nil {
 		t.Fatal(err)
 	}
 	if gotAuth != "Bearer tok-abc" {
@@ -45,7 +45,7 @@ func TestClient_SendReport_PostsJSON(t *testing.T) {
 		AgentVersion: "0.1.0",
 		Checks:       []wire.Check{{Name: "agent_heartbeat", Status: "ok", DurationMs: 1}},
 	}
-	if err := c.SendReport(context.Background(), rep); err != nil {
+	if _, err := c.SendReport(context.Background(), rep); err != nil {
 		t.Fatal(err)
 	}
 	var got wire.Report
@@ -63,7 +63,7 @@ func TestClient_SendReport_ErrorsOn5xx(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := NewClient(srv.URL, "t", "0.1.0", 2*time.Second)
-	err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
+	_, err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
 	if err == nil {
 		t.Fatal("expected error on 502, got nil")
 	}
@@ -81,7 +81,7 @@ func TestClient_AuthRejection_ReturnsTypedError(t *testing.T) {
 			_, _ = w.Write([]byte("invalid token"))
 		}))
 		c := NewClient(srv.URL, "stale", "0.1.0", 2*time.Second)
-		err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
+		_, err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
 		if err == nil {
 			t.Fatalf("status=%d: expected error", status)
 		}
@@ -107,7 +107,7 @@ func TestClient_SendReport_ContextCancellation(t *testing.T) {
 	c := NewClient(srv.URL, "t", "0.1.0", 5*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	err := c.SendReport(ctx, wire.Report{Timestamp: time.Now()})
+	_, err := c.SendReport(ctx, wire.Report{Timestamp: time.Now()})
 	if err == nil {
 		t.Fatal("expected error on cancellation")
 	}
@@ -217,11 +217,43 @@ func TestClient_SendReport_RecordsMetrics(t *testing.T) {
 	defer srv.Close()
 	c := NewClient(srv.URL, "t", "0.1.0", 2*time.Second)
 	for i := 0; i < 3; i++ {
-		if err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()}); err != nil {
+		if _, err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if atomic.LoadInt32(&hits) != 3 {
 		t.Errorf("hits: %d want 3", hits)
+	}
+}
+
+func TestClient_SendReport_ReturnsCanonicalURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"canonical_url":"https://new.example.com"}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "t", "0.1.0", 2*time.Second)
+	canonicalURL, err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalURL != "https://new.example.com" {
+		t.Errorf("canonical URL: got %q, want https://new.example.com", canonicalURL)
+	}
+}
+
+func TestClient_SendReport_EmptyBodyReturnsEmptyURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "t", "0.1.0", 2*time.Second)
+	canonicalURL, err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonicalURL != "" {
+		t.Errorf("expected empty canonical URL, got %q", canonicalURL)
 	}
 }

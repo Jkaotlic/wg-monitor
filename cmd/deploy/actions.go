@@ -693,6 +693,74 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	return nil
 }
 
+// actionMigrateBackendURL pushes an update_backend_url command to every
+// enrolled agent in the fleet. It fires-and-forgets: it does not wait for
+// agent confirmation. Intended for domain migrations where the old domain is
+// still reachable — each connected agent rewrites its config and restarts.
+// Any agent that missed the push will self-migrate on the next heartbeat
+// via the canonical_url in the /v1/report response.
+func actionMigrateBackendURL(state *State, secrets *SecretStore, newURL string) error {
+	if state.Backend.Domain == "" {
+		PrintFail("В wizard.toml нет [backend] — сначала запусти install-backend")
+		return fmt.Errorf("no backend configured")
+	}
+
+	newURL = strings.TrimSpace(newURL)
+	if newURL == "" {
+		newURL = Ask("Новый backend URL (https://...)", backendURLForAgent(state))
+	}
+	if newURL == "" {
+		return fmt.Errorf("URL required")
+	}
+	if !strings.HasPrefix(newURL, "https://") {
+		PrintFail("URL должен начинаться с https://")
+		return fmt.Errorf("URL must start with https://")
+	}
+
+	tok := secrets.GetNonInteractive("WIZARD_TOKEN")
+	if tok == "" {
+		PrintFail("WIZARD_TOKEN не найден в секретах — нужен для подключения к VPS")
+		return fmt.Errorf("WIZARD_TOKEN required")
+	}
+	vps := NewResilientVPSClientForBackend(state, secrets, tok, 10*time.Second)
+	if vps == nil {
+		return fmt.Errorf("wizard API client is not configured")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	agents, err := vps.ListAgents(ctx)
+	if err != nil {
+		PrintFail("ListAgents: " + err.Error())
+		return err
+	}
+	if len(agents) == 0 {
+		PrintWarn("Нет агентов в системе")
+		return nil
+	}
+
+	PrintInfo(fmt.Sprintf("Отправляю update_backend_url → %s всем %d агентам...", newURL, len(agents)))
+
+	ok := 0
+	for _, ag := range agents {
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 10*time.Second)
+		cmdID, err := vps.PushCommand(ctx2, ag.Nickname, "update_backend_url", map[string]any{"url": newURL})
+		cancel2()
+		if err != nil {
+			PrintWarn(fmt.Sprintf("  %-20s FAIL: %v", ag.Nickname, err))
+		} else {
+			PrintOK(fmt.Sprintf("  %-20s cmd_id=%s", ag.Nickname, cmdID))
+			ok++
+		}
+	}
+	PrintInfo(fmt.Sprintf("Готово: %d/%d агентов получили команду", ok, len(agents)))
+	if ok < len(agents) {
+		PrintInfo("Offline агенты самомигрируются при следующем heartbeat через canonical_url в /v1/report")
+	}
+	return nil
+}
+
 func portOrDefault(p, def int) int {
 	if p == 0 {
 		return def

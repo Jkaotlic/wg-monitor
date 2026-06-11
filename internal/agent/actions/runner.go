@@ -66,6 +66,9 @@ type Runner struct {
 	// DiagPollMax is the maximum number of poll iterations before DiagNow
 	// returns a DIAG_TIMEOUT error. Zero defaults to 12 (= 36s budget).
 	DiagPollMax int
+	// ConfigPath is the path to the agent's config.yaml. Required for
+	// update_backend_url to rewrite the URL in-place.
+	ConfigPath  string
 	routeMu     sync.Mutex // serialises concurrent route_rebind calls
 }
 
@@ -628,6 +631,19 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		s, out := HRNeoDoctor(ctx, r.AwgClient, r.Exec)
 		return s, out, payload
+	case "update_backend_url":
+		newURL, _ := cmd.Args["url"].(string)
+		if newURL == "" {
+			return "err", "update_backend_url: url arg is required", payload
+		}
+		if r.ConfigPath == "" {
+			return "err", "update_backend_url: config path not set on runner", payload
+		}
+		out, err := UpdateBackendURL(ctx, newURL, r.ConfigPath)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "self_update":
 		version, _ := cmd.Args["version"].(string)
 		if version == "" {

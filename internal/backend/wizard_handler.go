@@ -497,21 +497,22 @@ type wizardMaintenanceReq struct {
 }
 
 var wizardCommandAllowlist = map[string]bool{
-	"diag_now":         true,
-	"force_recheck":    true,
-	"check_via_tunnel": true,
-	"check_direct":     true,
-	"pingcheck_now":    true,
-	"pingcheck_status": true,
-	"router_doctor":    true,
-	"route_status":     true,
-	"tunnels_status":   true,
-	"route_rebind":     true,
-	"tunnel_enable":    true,
-	"tunnel_disable":   true,
-	"tunnel_restart":   true,
-	"tunnel_delete":    true,
-	"service_restart":  true,
+	"diag_now":           true,
+	"force_recheck":      true,
+	"check_via_tunnel":   true,
+	"check_direct":       true,
+	"pingcheck_now":      true,
+	"pingcheck_status":   true,
+	"router_doctor":      true,
+	"route_status":       true,
+	"tunnels_status":     true,
+	"route_rebind":       true,
+	"tunnel_enable":      true,
+	"tunnel_disable":     true,
+	"tunnel_restart":     true,
+	"tunnel_delete":      true,
+	"service_restart":    true,
+	"update_backend_url": true,
 }
 
 // wizardDeployHandler enqueues a self_update command for an agent through

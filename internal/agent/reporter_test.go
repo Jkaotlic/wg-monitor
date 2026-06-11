@@ -36,17 +36,18 @@ func (m *fakeMultiCheck) Run(_ context.Context, _ checks.Deps) []wire.Check {
 }
 
 type fakeSender struct {
-	mu   sync.Mutex
-	last wire.Report
-	n    int
+	mu              sync.Mutex
+	last            wire.Report
+	n               int
+	returnCanonical string
 }
 
-func (s *fakeSender) SendReport(_ context.Context, r wire.Report) error {
+func (s *fakeSender) SendReport(_ context.Context, r wire.Report) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.last = r
 	s.n++
-	return nil
+	return s.returnCanonical, nil
 }
 
 func TestReporterFansOutAcrossChecksAndMultiChecks(t *testing.T) {
@@ -130,6 +131,91 @@ func TestReporterDoesNotMarkResumedAfterShortMobileJitter(t *testing.T) {
 	}
 	if s.last.Resumed {
 		t.Fatalf("short mobile jitter must not be Resumed=true: %+v", s.last)
+	}
+}
+
+func TestReporterMigratesURLOnCanonicalDiff(t *testing.T) {
+	var gotURL, gotConfig string
+	old := reporterMigrateURL
+	reporterMigrateURL = func(_ context.Context, newURL, configPath string) (string, error) {
+		gotURL = newURL
+		gotConfig = configPath
+		return "ok", nil
+	}
+	defer func() { reporterMigrateURL = old }()
+
+	s := &fakeSender{returnCanonical: "https://new.example.com"}
+	r := NewReporter(ReporterConfig{
+		Sender:     s,
+		Version:    "test",
+		Interval:   time.Hour,
+		BackendURL: "https://old.example.com",
+		ConfigPath: "/opt/etc/wg-monitor/config.yaml",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	if gotURL != "https://new.example.com" {
+		t.Errorf("migrate URL: got %q, want https://new.example.com", gotURL)
+	}
+	if gotConfig != "/opt/etc/wg-monitor/config.yaml" {
+		t.Errorf("migrate config: got %q", gotConfig)
+	}
+}
+
+func TestReporterSkipsMigrationWhenCanonicalMatches(t *testing.T) {
+	called := false
+	old := reporterMigrateURL
+	reporterMigrateURL = func(_ context.Context, _, _ string) (string, error) {
+		called = true
+		return "", nil
+	}
+	defer func() { reporterMigrateURL = old }()
+
+	s := &fakeSender{returnCanonical: "https://same.example.com"}
+	r := NewReporter(ReporterConfig{
+		Sender:     s,
+		Version:    "test",
+		Interval:   time.Hour,
+		BackendURL: "https://same.example.com",
+		ConfigPath: "/opt/etc/wg-monitor/config.yaml",
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	if called {
+		t.Error("migration must not be called when canonical URL matches config URL")
+	}
+}
+
+func TestReporterSkipsMigrationWithNoConfigPath(t *testing.T) {
+	called := false
+	old := reporterMigrateURL
+	reporterMigrateURL = func(_ context.Context, _, _ string) (string, error) {
+		called = true
+		return "", nil
+	}
+	defer func() { reporterMigrateURL = old }()
+
+	s := &fakeSender{returnCanonical: "https://new.example.com"}
+	r := NewReporter(ReporterConfig{
+		Sender:     s,
+		Version:    "test",
+		Interval:   time.Hour,
+		BackendURL: "https://old.example.com",
+		// ConfigPath intentionally empty
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go r.Run(ctx)
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	if called {
+		t.Error("migration must not be called when config path is empty")
 	}
 }
 
