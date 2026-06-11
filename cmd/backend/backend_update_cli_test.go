@@ -122,6 +122,52 @@ func TestRunBackendUpdateRunnerRejectsUntrustedRepoBase(t *testing.T) {
 	}
 }
 
+func TestRunBackendUpdateRunnerRequiresSignatureForNewRelease(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "wg-monitor-backend")
+	pending := filepath.Join(dir, "backend-update.json")
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
+	repoBase := releaseorigin.DefaultBackendMirrorBase
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.String() {
+		case repoBase + "/v0.13.0-rc128/checksums.txt":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(strings.Repeat("0", 64) + "  " + asset + "\n")),
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc128","repo_base":%q}`, repoBase)
+	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runBackendUpdateRunnerCommand([]string{
+		"--pending-file", pending,
+		"--binary", current,
+	})
+	if err == nil {
+		t.Fatal("expected missing checksums signature to fail")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("expected signature error, got %v", err)
+	}
+}
+
 type backendUpdateRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f backendUpdateRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

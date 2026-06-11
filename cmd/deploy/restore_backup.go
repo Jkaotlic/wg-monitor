@@ -457,13 +457,13 @@ func applyRestoreBackupOnRemote(s *SSH) error {
 func buildRestoreRemoteScript(stamp string) string {
 	return fmt.Sprintf(`set -eu
 test "$(sqlite3 /tmp/wg-monitor-restore/state.db 'PRAGMA integrity_check;')" = "ok"
+test -s /etc/wg-monitor/bot-token.txt
+test -s /etc/wg-monitor/wizard-token.txt
 systemctl stop wg-monitor-backend 2>/dev/null || true
 if [ -f /var/lib/wg-monitor/state.db ]; then cp -p /var/lib/wg-monitor/state.db /var/lib/wg-monitor/state.db.bak.%[1]s; fi
 if [ -f /etc/wg-monitor/backend.yaml ]; then cp -p /etc/wg-monitor/backend.yaml /etc/wg-monitor/backend.yaml.bak.%[1]s; fi
 install -m 600 -o wgmonitor -g wgmonitor /tmp/wg-monitor-restore/state.db /var/lib/wg-monitor/state.db
 install -m 640 -o root -g wgmonitor /tmp/wg-monitor-restore/backend.yaml /etc/wg-monitor/backend.yaml
-test -s /etc/wg-monitor/bot-token.txt
-test -s /etc/wg-monitor/wizard-token.txt
 systemctl start wg-monitor-backend
 `, stamp)
 }

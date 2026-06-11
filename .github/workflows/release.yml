@@ -118,6 +118,13 @@ jobs:
           sha256sum * > checksums.txt
           cat checksums.txt
 
+      - name: Sign checksums
+        env:
+          WG_MONITOR_RELEASE_SIGNING_SEED_B64: ${{ secrets.WG_MONITOR_RELEASE_SIGNING_SEED_B64 }}
+        run: |
+          test -n "$WG_MONITOR_RELEASE_SIGNING_SEED_B64"
+          go run ./cmd/release-sign -in dist/checksums.txt -out dist/checksums.txt.sig
+
       - name: Create Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v2.0.4
         with:

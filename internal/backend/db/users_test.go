@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -81,6 +82,13 @@ func TestUpdateLastSeenAndThreadID(t *testing.T) {
 	}
 	if u.LastSeenAt == nil {
 		t.Fatal("last_seen_at not set")
+	}
+	var rawLastSeen string
+	if err := d.SQL().QueryRow(`SELECT last_seen_at FROM users WHERE id = ?`, id).Scan(&rawLastSeen); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(rawLastSeen, "T") {
+		t.Fatalf("last_seen_at must be RFC3339-like, got %q", rawLastSeen)
 	}
 }
 

@@ -73,6 +73,19 @@ func TestBuildRestoreRemoteScriptSafetySteps(t *testing.T) {
 	}
 }
 
+func TestBuildRestoreRemoteScriptValidatesTokensBeforeStop(t *testing.T) {
+	script := buildRestoreRemoteScript("20260522T055443Z")
+	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
+	bot := strings.Index(script, "test -s /etc/wg-monitor/bot-token.txt")
+	wizard := strings.Index(script, "test -s /etc/wg-monitor/wizard-token.txt")
+	if stop < 0 || bot < 0 || wizard < 0 {
+		t.Fatalf("restore script missing expected steps:\n%s", script)
+	}
+	if bot > stop || wizard > stop {
+		t.Fatalf("token preflight must run before systemctl stop:\n%s", script)
+	}
+}
+
 func writeRestoreBackupArchive(t *testing.T, files map[string]string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "backup.tgz")

@@ -107,6 +107,33 @@ func TestDownloadAsset_BadSha(t *testing.T) {
 	}
 }
 
+func TestDownloadAssetRequiresSignatureForNewRelease(t *testing.T) {
+	body := []byte("hello world binary")
+	sum := sha256.Sum256(body)
+	checksums := fmt.Sprintf("%s  testbin\n", hex.EncodeToString(sum[:]))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/testbin":
+			_, _ = w.Write(body)
+		case "/checksums.txt":
+			_, _ = w.Write([]byte(checksums))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dl := &Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()}
+	_, err := dl.GetAsset(srv.URL+"/testbin", "testbin", srv.URL+"/checksums.txt", "v0.13.0-rc128")
+	if err == nil {
+		t.Fatal("expected missing checksums signature to fail")
+	}
+	if !strings.Contains(err.Error(), "signature") {
+		t.Fatalf("expected signature error, got %v", err)
+	}
+}
+
 func TestGetLatestReleaseDoesNotDowngradeBelowRunningVersion(t *testing.T) {
 	oldVersion := Version
 	oldAPI := GitHubAPIBase

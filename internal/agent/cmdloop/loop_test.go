@@ -92,7 +92,7 @@ func TestLoop_PollsExecutesPosts(t *testing.T) {
 func TestLoop_NilCommandSkipsPost(t *testing.T) {
 	cl := &fakeClient{
 		pollSeq: []pollResp{
-			{cmd: nil},                                              // 204
+			{cmd: nil}, // 204
 			{cmd: &wire.Command{ID: "c2", Action: "pingcheck_now"}}, // then a real one
 		},
 	}
@@ -135,6 +135,18 @@ func TestLoop_PollErrorBackoffsThenRetries(t *testing.T) {
 	}
 }
 
+func TestLoopBackoffUsesFullJitter(t *testing.T) {
+	l := New(&fakeClient{}, &fakeRunner{}, 1)
+	l.BackoffBase = time.Second
+	l.BackoffMax = 60 * time.Second
+	l.randFloat64 = func() float64 { return 0.5 }
+
+	got := l.backoff(4)
+	if got != 4*time.Second {
+		t.Fatalf("backoff with jitter=%s, want 4s for attempt cap 8s at 0.5", got)
+	}
+}
+
 func TestLoop_PostResultErrorContinues(t *testing.T) {
 	cl := &fakeClient{
 		pollSeq: []pollResp{
@@ -153,6 +165,33 @@ func TestLoop_PostResultErrorContinues(t *testing.T) {
 	defer rn.mu.Unlock()
 	if len(rn.seen) < 2 {
 		t.Errorf("loop should keep running through post errors, seen=%v", rn.seen)
+	}
+}
+
+func TestLoopDeduplicatesCommandIDAndRepostsCachedResult(t *testing.T) {
+	cl := &fakeClient{
+		pollSeq: []pollResp{
+			{cmd: &wire.Command{ID: "same", Action: "route_add"}},
+			{cmd: &wire.Command{ID: "same", Action: "route_add"}},
+		},
+	}
+	rn := &fakeRunner{}
+	l := New(cl, rn, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	l.Run(ctx)
+
+	rn.mu.Lock()
+	seen := len(rn.seen)
+	rn.mu.Unlock()
+	if seen != 1 {
+		t.Fatalf("runner executions=%d, want 1", seen)
+	}
+	cl.mu.Lock()
+	posts := len(cl.posts)
+	cl.mu.Unlock()
+	if posts != 2 {
+		t.Fatalf("posts=%d, want cached result posted twice", posts)
 	}
 }
 

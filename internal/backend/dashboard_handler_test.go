@@ -36,6 +36,32 @@ func TestDashboardRoutesAbsentWhenTokenEmpty(t *testing.T) {
 	}
 }
 
+func TestDashboardSessionCookieHasExpiryAndRejectsExpiredValue(t *testing.T) {
+	oldNow := dashboardNow
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	dashboardNow = func() time.Time { return now }
+	t.Cleanup(func() { dashboardNow = oldNow })
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
+	cookie := dashboardSessionCookie(req, "secret")
+	if !strings.HasPrefix(cookie.Value, "v2:") {
+		t.Fatalf("cookie value=%q, want v2 with expiry", cookie.Value)
+	}
+	if cookie.MaxAge <= 0 {
+		t.Fatalf("cookie MaxAge=%d, want positive expiry", cookie.MaxAge)
+	}
+	authReq := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	authReq.AddCookie(cookie)
+	if !dashboardSessionValid(authReq, "secret") {
+		t.Fatal("fresh session cookie should be valid")
+	}
+
+	dashboardNow = func() time.Time { return now.Add(dashboardSessionTTL + time.Second) }
+	if dashboardSessionValid(authReq, "secret") {
+		t.Fatal("expired session cookie should be rejected")
+	}
+}
+
 func TestDashboardAuth_MissingHeader_401(t *testing.T) {
 	h := DashboardAuthMiddleware("expected-token", nil)(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },

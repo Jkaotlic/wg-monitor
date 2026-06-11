@@ -944,3 +944,9 @@ func TestReleaseAssetProxyRejectsUnknownAsset(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rec.Code, string(body))
 	}
 }
+
+func TestReleaseAssetProxyAllowsChecksumsSignature(t *testing.T) {
+	if !isAllowedReleaseAsset("checksums.txt.sig") {
+		t.Fatal("checksums.txt.sig must be proxy-allowed for signed releases")
+	}
+}

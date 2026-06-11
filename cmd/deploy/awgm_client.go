@@ -70,6 +70,7 @@ func NewAWGMClient(baseURL, login, password string) *AWGMClient {
 	httpClient := &http.Client{Timeout: awgmClientTimeout}
 	if awgmInsecureTLS() {
 		httpClient.Transport = &http.Transport{
+			// #nosec G402 -- explicit AWGM_INSECURE_TLS=1 break-glass mode for self-signed router web UI.
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		}
 	}
@@ -261,6 +262,7 @@ func applyAWGMWebsocketTLSConfig(cfg *websocket.Config) {
 	if cfg == nil || !awgmInsecureTLS() {
 		return
 	}
+	// #nosec G402 -- explicit AWGM_INSECURE_TLS=1 break-glass mode for self-signed router web UI.
 	cfg.TlsConfig = &tls.Config{InsecureSkipVerify: true}
 }
 
