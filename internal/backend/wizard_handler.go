@@ -216,7 +216,7 @@ func wizardEnrollmentHandler(d Deps) http.HandlerFunc {
 			}
 			return
 		}
-		resp.BackendURL = wizardBackendURL(r)
+		resp.BackendURL = wizardEnrollmentBackendURL(r, d.PublicBaseURL)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(resp)
@@ -276,6 +276,13 @@ func wizardBackendURL(r *http.Request) string {
 		host = r.Host
 	}
 	return proto + "://" + host
+}
+
+func wizardEnrollmentBackendURL(r *http.Request, publicBaseURL string) string {
+	if configured, ok := configuredPublicBackendURL(publicBaseURL); ok {
+		return configured
+	}
+	return wizardBackendURL(r)
 }
 
 func configuredPublicBackendURL(publicBaseURL string) (string, bool) {

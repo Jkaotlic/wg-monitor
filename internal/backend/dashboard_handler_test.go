@@ -509,6 +509,41 @@ func TestDashboardEnrollmentCreatesAgentAndBindsTopic(t *testing.T) {
 	}
 }
 
+func TestDashboardEnrollmentUsesConfiguredPublicBaseURLWhenProxyHostIsPrivate(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{
+		DB:                    d,
+		DashboardToken:        "secret",
+		TelegramPrimaryChatID: -100100,
+		PublicBaseURL:         "https://wgmonitor.example.test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments",
+		strings.NewReader(`{"nickname":"testkeen","kind":"static","telegram_chat_id":0,"telegram_thread_id":333}`))
+	req.Host = "192.168.0.87"
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "192.168.0.87")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got dashboardEnrollmentResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.BackendURL != "https://wgmonitor.example.test" {
+		t.Fatalf("backend_url=%q", got.BackendURL)
+	}
+}
+
 func TestDashboardEnrollmentStoresDeployMetadata(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

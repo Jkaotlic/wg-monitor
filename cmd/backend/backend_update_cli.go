@@ -17,7 +17,13 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
+	"github.com/Jkaotlic/wg-monitor/internal/releaseorigin"
 )
+
+var backendUpdateAllowedRepoBases = []string{
+	releaseorigin.DefaultGitHubReleaseBase,
+	releaseorigin.DefaultBackendMirrorBase,
+}
 
 type backendUpdateRunnerOptions struct {
 	ConfigPath  string
@@ -73,6 +79,11 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	req.RepoBase = strings.TrimRight(strings.TrimSpace(req.RepoBase), "/")
 	if req.TargetVersion == "" || req.RepoBase == "" {
 		err := fmt.Errorf("pending update requires target_version and repo_base")
+		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
+		return err
+	}
+	req.RepoBase, err = releaseorigin.ValidateRepoBase(req.RepoBase, backendUpdateAllowedRepoBases)
+	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
