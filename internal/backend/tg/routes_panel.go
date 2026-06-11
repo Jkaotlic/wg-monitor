@@ -42,6 +42,10 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		totalStatic += c.Static
 		totalHR += c.HRNeo
 	}
+	for _, p := range snap.Policies {
+		totalDNS += p.DNS
+		totalHR += p.HRNeo
+	}
 	fmt.Fprintf(&b, "  • DNS routes: %d правил\n", totalDNS)
 	fmt.Fprintf(&b, "  • Static IP routes: %d правил\n", totalStatic)
 	if snap.HRNeo.Installed {
@@ -53,6 +57,16 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		visible := c.DNS + c.Static
 		fmt.Fprintf(&b, "  • %s (%s): %d правил\n", t.Name, t.Iface, visible)
 	}
+	if len(snap.Policies) > 0 {
+		b.WriteString("\nHR-Neo policies:\n")
+		for _, p := range snap.Policies {
+			fmt.Fprintf(&b, "  • %s: %d правил", fallback(p.Name, "policy"), p.DNS)
+			if chain := routePolicyChainLabel(p.Interfaces); chain != "" {
+				fmt.Fprintf(&b, " → %s", chain)
+			}
+			b.WriteByte('\n')
+		}
+	}
 	if snap.Other.DNS+snap.Other.Static > 0 {
 		b.WriteString("\nБез привязки к туннелю:\n")
 		if snap.Other.DNS > 0 {
@@ -63,6 +77,40 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		}
 	}
 	return b.String()
+}
+
+func routePolicyChainLabel(ifaces []wire.RoutePolicyInterface) string {
+	parts := make([]string, 0, len(ifaces))
+	for _, iface := range ifaces {
+		bind := strings.TrimSpace(iface.Bind)
+		name := strings.TrimSpace(iface.Name)
+		label := ""
+		switch {
+		case name != "" && bind != "":
+			label = fmt.Sprintf("%s (%s)", name, bind)
+		case name != "":
+			label = name
+		case bind != "":
+			label = bind
+		}
+		if label != "" {
+			parts = append(parts, label+routePolicyRoleLabel(iface))
+		}
+	}
+	return strings.Join(parts, " > ")
+}
+
+func routePolicyRoleLabel(iface wire.RoutePolicyInterface) string {
+	switch strings.ToLower(strings.TrimSpace(iface.Role)) {
+	case "active":
+		return " [сейчас]"
+	case "fallback":
+		return " [fallback]"
+	case "unavailable":
+		return " [недоступен]"
+	default:
+		return ""
+	}
 }
 
 // RoutesPanelKeyboard builds Screen 2 inline keyboard.
@@ -322,6 +370,17 @@ func explainKindLabel(rule wire.RouteRuleSummary) string {
 func describeBind(bind string, snap wire.RouteSnapshot) string {
 	if strings.TrimSpace(bind) == "" {
 		return "policy/default"
+	}
+	if name, ok := strings.CutPrefix(bind, "policy:"); ok {
+		for _, p := range snap.Policies {
+			if strings.EqualFold(p.Name, name) {
+				if chain := routePolicyChainLabel(p.Interfaces); chain != "" {
+					return fmt.Sprintf("HR-Neo policy %s: %s", fallback(p.Name, "policy"), chain)
+				}
+				return "HR-Neo policy " + fallback(p.Name, "policy")
+			}
+		}
+		return "HR-Neo policy " + fallback(name, "policy")
 	}
 	for _, t := range snap.Tunnels {
 		if bind == t.Iface || bind == t.ID {

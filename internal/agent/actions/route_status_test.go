@@ -357,7 +357,7 @@ func TestRouteStatus_DoesNotCreditHRNeoDirectProviderPolicyToDefaultTunnel(t *te
 	}
 }
 
-func TestRouteStatus_CreditsHRNeoPolicyInterfaceToNamedTunnel(t *testing.T) {
+func TestRouteStatus_ReportsHRNeoPolicyInterfacesWithoutCreditingSingleTunnel(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
@@ -373,7 +373,7 @@ func TestRouteStatus_CreditsHRNeoPolicyInterfaceToNamedTunnel(t *testing.T) {
 	})
 	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"success":true,"data":[
-			{"id":"hr:YOUTUBE","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute","hrPolicyInterfaces":["Wireguard5"]}
+			{"id":"hr:YOUTUBE","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute","hrPolicyInterfaces":["Wireguard5","Wireguard1"]}
 		]}`))
 	})
 	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
@@ -391,9 +391,19 @@ func TestRouteStatus_CreditsHRNeoPolicyInterfaceToNamedTunnel(t *testing.T) {
 		t.Fatalf("output not JSON: %v\n%s", err, out)
 	}
 	if snap.Counts["t1"].DNS != 0 || snap.Counts["t1"].HRNeo != 0 {
-		t.Fatalf("first default route must not receive policy-interface rule: %+v", snap.Counts["t1"])
+		t.Fatalf("default tunnel must not receive policy-interface rule: %+v", snap.Counts["t1"])
 	}
-	if snap.Counts["t2"].DNS != 1 || snap.Counts["t2"].HRNeo != 1 {
-		t.Fatalf("policy-interface rule should be credited to t2: %+v", snap.Counts["t2"])
+	if snap.Counts["t2"].DNS != 0 || snap.Counts["t2"].HRNeo != 0 {
+		t.Fatalf("policy-interface rule must not look bound to one tunnel: %+v", snap.Counts["t2"])
+	}
+	if len(snap.Policies) != 1 {
+		t.Fatalf("policies: %+v", snap.Policies)
+	}
+	p := snap.Policies[0]
+	if p.Name != "HydraRoute" || p.DNS != 1 || p.HRNeo != 1 {
+		t.Fatalf("bad policy summary: %+v", p)
+	}
+	if len(p.Interfaces) != 2 || p.Interfaces[0].Name != "actual-policy" || p.Interfaces[0].Bind != "nwg5" || p.Interfaces[0].Role != "active" || p.Interfaces[1].Name != "first-default" || p.Interfaces[1].Bind != "nwg1" || p.Interfaces[1].Role != "fallback" {
+		t.Fatalf("bad policy interfaces: %+v", p.Interfaces)
 	}
 }

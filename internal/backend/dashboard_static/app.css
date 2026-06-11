@@ -510,6 +510,10 @@ select:focus {
   background: var(--green);
 }
 
+.status-sleeping .agent-cell::before {
+  background: var(--amber);
+}
+
 .status-alert .agent-cell::before {
   background: var(--red);
 }

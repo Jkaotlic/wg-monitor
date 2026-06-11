@@ -243,17 +243,17 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 	js := get("/dashboard/app.js")
 	css := get("/dashboard/app.css")
 
-	for _, want := range []string{"Add agent", "agentDrawer", "addAgentModal", "AWG Manager URL", "Deploy mode", "SSH host", "Router arch"} {
+	for _, want := range []string{"Add agent", "agentDrawer", "addAgentModal", "AWG Manager URL", "Deploy mode", "SSH host", "Router arch", `data-filter="sleeping"`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("dashboard page missing %q", want)
 		}
 	}
-	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult"} {
+	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck"} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("dashboard js missing %q", want)
 		}
 	}
-	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output"} {
+	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output", "status-sleeping"} {
 		if !strings.Contains(css, want) {
 			t.Fatalf("dashboard css missing %q", want)
 		}
@@ -401,6 +401,60 @@ func TestDashboardSummaryIncludesFleetCounts(t *testing.T) {
 	}
 	if len(got.Agents[1].ActiveIncidents) != 1 || got.Agents[1].ActiveIncidents[0].CheckName != "agent_heartbeat" || got.Agents[1].ActiveIncidents[0].FailCount != 4 {
 		t.Fatalf("incidents=%+v", got.Agents[1].ActiveIncidents)
+	}
+}
+
+func TestDashboardSummaryMarksStaleAgentsNotOnline(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	freshMobileID, err := d.Users().InsertWithKind("fresh-car", "token-a", "1.1.1.1", "awg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sleepingMobileID, err := d.Users().InsertWithKind("sleeping-car", "token-b", "2.2.2.2", "awg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldMobileID, err := d.Users().InsertWithKind("old-car", "token-c", "3.3.3.3", "awg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleStaticID, err := d.Users().InsertWithKind("static-stale", "token-d", "4.4.4.4", "awg0", db.KindStatic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	setDashboardTestLastSeen(t, d, freshMobileID, now.Add(-2*time.Minute))
+	setDashboardTestLastSeen(t, d, sleepingMobileID, now.Add(-2*time.Hour))
+	setDashboardTestLastSeen(t, d, oldMobileID, now.Add(-25*time.Hour))
+	setDashboardTestLastSeen(t, d, staleStaticID, now.Add(-6*time.Minute))
+
+	got, err := buildDashboardSummary(d, now, dashboardStatusPolicyFromDeps(Deps{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statuses := map[string]string{}
+	for _, agent := range got.Agents {
+		statuses[agent.Nickname] = agent.Status
+	}
+	if statuses["fresh-car"] != "online" {
+		t.Fatalf("fresh mobile status = %q", statuses["fresh-car"])
+	}
+	if statuses["sleeping-car"] != "sleeping" {
+		t.Fatalf("2h mobile status = %q, want sleeping", statuses["sleeping-car"])
+	}
+	if statuses["old-car"] != "offline" {
+		t.Fatalf("25h mobile status = %q, want offline", statuses["old-car"])
+	}
+	if statuses["static-stale"] != "offline" {
+		t.Fatalf("6m static status = %q, want offline", statuses["static-stale"])
+	}
+	if got.Totals.Online != 1 || got.Totals.Sleeping != 1 || got.Totals.Offline != 2 {
+		t.Fatalf("totals=%+v", got.Totals)
 	}
 }
 
@@ -798,6 +852,14 @@ func TestDashboardCommandResultPollsByNickname(t *testing.T) {
 	}
 	if got.ID != "cmd-1" || got.Status != "ok" || got.Output != "done" {
 		t.Fatalf("result=%+v", got)
+	}
+}
+
+func setDashboardTestLastSeen(t *testing.T, d *db.DB, userID int64, ts time.Time) {
+	t.Helper()
+	_, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, ts.UTC().Format(time.RFC3339Nano), userID)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
