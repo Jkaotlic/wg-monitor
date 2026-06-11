@@ -31,6 +31,19 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 	}
 }
 
+func TestTelegramOperatorCommandMenuOrder(t *testing.T) {
+	cmds := telegramOperatorCommandMenu()
+	want := []string{"status", "check", "tunnels", "routes", "via", "direct", "amnezia", "hidemy", "maint", "upgrade", "menu", "keyboard", "help"}
+	if len(cmds) < len(want) {
+		t.Fatalf("operator command count = %d, want at least %d: %+v", len(cmds), len(want), cmds)
+	}
+	for i, command := range want {
+		if cmds[i].Command != command {
+			t.Fatalf("operator command[%d] = /%s, want /%s; got %+v", i, cmds[i].Command, command, cmds)
+		}
+	}
+}
+
 func TestTelegramOperatorCommandMenuExcludesAdminCommands(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
 	for _, c := range cmds {

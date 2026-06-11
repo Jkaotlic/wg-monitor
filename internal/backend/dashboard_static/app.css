@@ -26,17 +26,23 @@ body {
     linear-gradient(180deg, rgba(14, 116, 144, 0.12), rgba(14, 116, 144, 0) 260px),
     var(--bg-soft);
   color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 14px;
+  line-height: 1.42;
 }
 
 button,
 input,
 select {
   font: inherit;
+  letter-spacing: 0;
+  line-height: 1.2;
 }
 
 button {
   border: 0;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .app-shell {
@@ -203,7 +209,7 @@ h3 {
   background: #ffffff;
   color: #223047;
   padding: 0 12px;
-  font-weight: 850;
+  font-weight: 800;
   text-decoration: none;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 120ms ease, box-shadow 140ms ease;
 }
@@ -424,13 +430,52 @@ select:focus {
 }
 
 .fleet-table {
-  min-width: 1040px;
+  width: 100%;
+  min-width: 1280px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.fleet-table th,
+.fleet-table td {
+  border-bottom: 1px solid #edf2f7;
+  padding: 13px 14px;
+  text-align: left;
+  vertical-align: top;
 }
 
 .fleet-table th {
   color: #69778c;
   font-size: 12px;
   text-transform: uppercase;
+}
+
+.fleet-table th:nth-child(1) {
+  width: 178px;
+}
+
+.fleet-table th:nth-child(2) {
+  width: 150px;
+}
+
+.fleet-table th:nth-child(3) {
+  width: 136px;
+}
+
+.fleet-table th:nth-child(4) {
+  width: 176px;
+}
+
+.fleet-table th:nth-child(5) {
+  width: 170px;
+}
+
+.fleet-table th:nth-child(6) {
+  width: 150px;
+}
+
+.fleet-table th:nth-child(7) {
+  width: 270px;
 }
 
 .fleet-table tr {
@@ -476,6 +521,13 @@ select:focus {
 .agent-main {
   display: grid;
   gap: 4px;
+  min-width: 0;
+}
+
+.agent-name,
+.agent-meta,
+.cell-note {
+  overflow-wrap: anywhere;
 }
 
 .agent-meta,
@@ -522,19 +574,26 @@ select:focus {
 }
 
 .incident-list,
-.action-strip,
 .drawer-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 7px;
 }
 
+.action-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
 .mini-btn {
+  width: 100%;
   min-height: 32px;
   border-radius: 7px;
   background: #f8fafc;
-  padding: 0 10px;
+  padding: 0 8px;
   font-size: 12px;
+  text-align: center;
 }
 
 .mini-btn.primary {
@@ -550,7 +609,7 @@ select:focus {
 }
 
 .actions-col {
-  text-align: right;
+  text-align: left;
 }
 
 .empty-cell {

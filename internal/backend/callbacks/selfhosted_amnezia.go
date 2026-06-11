@@ -448,7 +448,7 @@ func (r *Router) selfHostedAmneziaStoredInstance(id string) (selfhostedamnezia.I
 }
 
 func parseSelfHostedAddMessage(text string) (selfhostedamnezia.Instance, error) {
-	fields := strings.Fields(strings.TrimSpace(text))
+	fields := selfHostedKVFields(text)
 	if len(fields) > 0 && strings.Contains(fields[0], "=") {
 		var inst selfhostedamnezia.Instance
 		if err := applySelfHostedKVLine(&inst, text); err != nil {
@@ -475,7 +475,7 @@ func parseSelfHostedAddMessage(text string) (selfhostedamnezia.Instance, error) 
 }
 
 func applySelfHostedKVLine(inst *selfhostedamnezia.Instance, text string) error {
-	fields := strings.Fields(strings.TrimSpace(text))
+	fields := selfHostedKVFields(text)
 	if len(fields) == 0 {
 		return fmt.Errorf("Пришли key=value, например: host=vpn.example.com port=47567 label=Home")
 	}
@@ -489,6 +489,30 @@ func applySelfHostedKVLine(inst *selfhostedamnezia.Instance, text string) error 
 		}
 	}
 	return nil
+}
+
+func selfHostedKVFields(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if !strings.ContainsAny(text, "\r\n") {
+		return strings.Fields(text)
+	}
+	var fields []string
+	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if ok && strings.TrimSpace(key) != "" && !strings.ContainsAny(strings.TrimSpace(key), " \t") && !strings.Contains(val, "=") {
+			fields = append(fields, line)
+			continue
+		}
+		fields = append(fields, strings.Fields(line)...)
+	}
+	return fields
 }
 
 func cloneInt64Ptr(v *int64) *int64 {

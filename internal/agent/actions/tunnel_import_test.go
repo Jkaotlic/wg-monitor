@@ -1,9 +1,16 @@
 package actions
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 )
 
 const awgConf = `
@@ -147,5 +154,72 @@ func TestImportVerifyDelaysUseShortBudget(t *testing.T) {
 	}
 	if total > 10*time.Second {
 		t.Fatalf("total verify budget = %s, want <= 10s", total)
+	}
+}
+
+func TestImportTunnelAddsLiveTunnelToHydraRoutePolicy(t *testing.T) {
+	var updated awgmgr.DNSRoute
+	updateCalled := false
+	tunnelsCalls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		tunnelsCalls++
+		if tunnelsCalls == 1 {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"tun-new","name":"selfhosted-home","interfaceName":"nwg7","ndmsName":"Wireguard7","enabled":true,"status":"running","backend":"nativewg"}
+		]}}`))
+	})
+	mux.HandleFunc("/api/import/conf", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"tun-new","name":"selfhosted-home","interfaceName":"nwg7","enabled":false}}`))
+	})
+	mux.HandleFunc("/api/control/start", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id") != "tun-new" {
+			t.Fatalf("start id=%q, want tun-new", r.URL.Query().Get("id"))
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:Video","name":"Video","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute","hrPolicyInterfaces":["nwg1"]}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/update", func(w http.ResponseWriter, r *http.Request) {
+		updateCalled = true
+		if r.URL.Query().Get("id") != "hr:Video" {
+			t.Fatalf("update id=%q, want hr:Video", r.URL.Query().Get("id"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+			t.Fatalf("decode update body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var execs []string
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		execs = append(execs, strings.Join(append([]string{name}, args...), " "))
+		return []byte("ok"), nil
+	}
+	noSleep := func(context.Context, time.Duration) error { return nil }
+	conf := base64.StdEncoding.EncodeToString([]byte(awgConf))
+	out, err := ImportTunnel(context.Background(), awgmgr.New(srv.URL), exec, noSleep, conf, "selfhosted-home", false, "nativewg")
+	if err != nil {
+		t.Fatalf("ImportTunnel: %v\n%s", err, out)
+	}
+	if !updateCalled {
+		t.Fatal("expected HydraRoute policy update after live tunnel import")
+	}
+	if got := strings.Join(updated.HRPolicyInterfaces, ","); got != "nwg1,nwg7" {
+		t.Fatalf("policy interfaces = %q, want nwg1,nwg7; updated=%+v", got, updated)
+	}
+	if len(execs) != 1 || execs[0] != "/opt/etc/init.d/S99hrneo restart" {
+		t.Fatalf("expected one HR restart, got %+v", execs)
 	}
 }

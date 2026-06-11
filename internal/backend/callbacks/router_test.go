@@ -669,6 +669,64 @@ func TestAdminSelfHostedPanelAddsProviderFromKVFlowWithSSHPassword(t *testing.T)
 	}
 }
 
+func TestAdminSelfHostedPanelAddsProviderFromMultilineTemplate(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-add-template",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: ptrInt64(11)},
+		Data:    "amz_selfhosted_add:" + itoa(uid) + ":_panel_",
+	})
+	r.HandleMessage(context.Background(), &tg.Message{
+		MessageID:       8,
+		Chat:            tg.Chat{ID: -100},
+		From:            tg.User{ID: 12345},
+		MessageThreadID: ptrInt64(11),
+		Text: strings.Join([]string{
+			"id=home",
+			"label=Home VPS",
+			"endpoint_host=vpn.example.com",
+			"endpoint_port=47567",
+			"ssh_host=10.10.10.2",
+			"ssh_port=2222",
+			"ssh_user=root",
+			"ssh_password=secret-pass",
+			"dns=1.1.1.1,8.8.8.8",
+		}, "\n"),
+	})
+
+	store, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, ok := store.Get("home")
+	if !ok {
+		t.Fatalf("stored provider not found: %+v", store.Instances)
+	}
+	if inst.Label != "Home VPS" || inst.EndpointHost != "vpn.example.com" || inst.EndpointPort != 47567 {
+		t.Fatalf("endpoint/label fields not stored: %+v", inst)
+	}
+	if inst.SSHHost != "10.10.10.2" || inst.SSHPort != 2222 || inst.SSHUser != "root" || inst.SSHPassword != "secret-pass" {
+		t.Fatalf("SSH fields not stored: %+v", inst)
+	}
+	if got := strings.Join(inst.DNS, ","); got != "1.1.1.1,8.8.8.8" {
+		t.Fatalf("dns = %q", got)
+	}
+}
+
 func TestSelfHostedAmneziaManageView_DeleteUsesAskCallback(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}

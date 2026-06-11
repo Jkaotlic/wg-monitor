@@ -228,12 +228,13 @@
         <td><div class="incident-list">${incidents || '<span class="badge badge-success">clear</span>'}</div></td>
         <td>
           <div class="action-strip">
-            <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "diag_now")}" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diag</button>
-            <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">Check</button>
-            <button class="mini-btn" type="button" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
-            <button class="mini-btn danger" type="button" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">AWGM</button>
-            ${latestDeployButton(agent, "mini-btn primary", "Latest")}
-            <button class="mini-btn" type="button" data-deploy="${escapeAttr(agent.nickname)}">Custom</button>
+            <button class="mini-btn" type="button" title="Run diagnostics" data-state="${buttonState(agent.nickname, "diag_now")}" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diagnostics</button>
+            <button class="mini-btn" type="button" title="Force a fresh agent report" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">Recheck</button>
+            <button class="mini-btn" type="button" title="Show route status" data-state="${buttonState(agent.nickname, "route_status")}" data-command="route_status" data-agent="${escapeAttr(agent.nickname)}">Routes</button>
+            <button class="mini-btn" type="button" title="Show tunnel status" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
+            <button class="mini-btn danger" type="button" title="Restart AWG Manager" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">Restart AWG</button>
+            ${latestDeployButton(agent, "mini-btn primary", "Update")}
+            <button class="mini-btn" type="button" title="Deploy a specific version" data-deploy="${escapeAttr(agent.nickname)}">Version</button>
           </div>
         </td>
       </tr>
