@@ -16,6 +16,7 @@ func TestNullableTime_UnmarshalJSON(t *testing.T) {
 		{"null literal", `null`, true, false},
 		{"empty string", `""`, true, false},
 		{"valid RFC3339", `"2026-05-05T13:23:45Z"`, false, false},
+		{"valid RFC3339Nano", `"2026-05-05T13:23:45.123456789Z"`, false, false},
 		{"valid RFC3339 with offset", `"2026-05-05T16:23:45+03:00"`, false, false},
 		{"garbage", `"not a date"`, false, true},
 		{"zero year", `"0001-01-01T00:00:00Z"`, true, false},

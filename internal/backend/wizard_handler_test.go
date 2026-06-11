@@ -118,6 +118,41 @@ func TestWizardEnrollmentRejectsOversizedJSONBody(t *testing.T) {
 	}
 }
 
+func TestWizardEnrollmentUsesConfiguredPublicBaseURLWhenProxyHostIsPrivate(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{
+		DB:            d,
+		WizardToken:   "secret",
+		PublicBaseURL: "https://wgmonitor.example.test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/enrollments",
+		strings.NewReader(`{"nickname":"testkeen","kind":"static"}`))
+	req.Host = "192.168.31.87"
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "192.168.31.87")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("want 201, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got wizardEnrollmentResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.BackendURL != "https://wgmonitor.example.test" {
+		t.Fatalf("backend_url=%q", got.BackendURL)
+	}
+}
+
 func TestWizardBackendURLDefaultsToHTTPWithoutTLS(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:8080/v1/wizard/backend/deploy", nil)
 

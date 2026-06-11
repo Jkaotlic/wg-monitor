@@ -644,7 +644,7 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(dashboardEnrollmentResp{
 			Nickname:         enrollment.Nickname,
-			BackendURL:       wizardBackendURL(r),
+			BackendURL:       wizardEnrollmentBackendURL(r, d.PublicBaseURL),
 			RawToken:         enrollment.RawToken,
 			TelegramChatID:   req.TelegramChatID,
 			TelegramThreadID: req.TelegramThreadID,

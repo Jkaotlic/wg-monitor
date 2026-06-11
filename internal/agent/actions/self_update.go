@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/anex/wg-monitor/internal/releaseorigin"
 )
 
 // SelfUpdateRepoBase is the GitHub Releases base URL the agent pulls from.
@@ -47,6 +49,13 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	repoBase := SelfUpdateRepoBase
 	if len(repoBaseOpt) > 0 && strings.TrimSpace(repoBaseOpt[0]) != "" {
 		repoBase = strings.TrimSpace(repoBaseOpt[0])
+	}
+	repoBase, err = releaseorigin.ValidateRepoBase(repoBase, []string{
+		SelfUpdateRepoBase,
+		releaseorigin.DefaultBackendMirrorBase,
+	})
+	if err != nil {
+		return "", fmt.Errorf("self_update: %w", err)
 	}
 	binURL, sumsURL := selfUpdateURLs(version, assetName, repoBase)
 
@@ -317,7 +326,6 @@ func parseChecksum(body, name string) (string, bool) {
 	}
 	return "", false
 }
-
 
 func selfUpdateSwapScript(binPath string) string {
 	return `#!/bin/sh
