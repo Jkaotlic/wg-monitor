@@ -65,8 +65,8 @@ jobs:
       # Start with a blocking high-severity gate while the historical gosec
       # baseline is triaged. Excluded classes are noisy for this repo today:
       # paths from local CLI/config, controlled command runners, release-proxy
-      # allowlists, and narrow integer casts.
-      - run: gosec -severity high -exclude=G101,G115,G702,G703,G704 ./...
+      # allowlists, and deliberate command dispatch surfaces.
+      - run: gosec -severity high -exclude=G101,G702,G703,G704 ./...
 
   grype:
     name: grype

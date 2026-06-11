@@ -264,8 +264,9 @@ func adaptPunycodeBias(delta, numPoints int, firstTime bool) int {
 }
 
 func encodePunycodeDigit(digit int) rune {
-	if digit < 26 {
-		return rune('a' + digit)
+	const digits = "abcdefghijklmnopqrstuvwxyz0123456789"
+	if digit < 0 || digit >= len(digits) {
+		return '?'
 	}
-	return rune('0' + digit - 26)
+	return rune(digits[digit])
 }

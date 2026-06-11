@@ -21,8 +21,7 @@ type Config struct {
 }
 
 // Policy is the long-running coordinator. Call Run from a goroutine; cancel
-// the context to stop. Each operation runs on its own ticker so a slow
-// VACUUM doesn't delay the next prune.
+// the context to stop. Each operation runs on its own ticker.
 type Policy struct {
 	DB     *db.DB
 	Cfg    Config
@@ -37,12 +36,8 @@ func (p *Policy) now() time.Time {
 	return time.Now()
 }
 
-// Run starts the policy. Three independent tickers fire prune / vacuum /
+// Run starts the policy. Three independent tickers fire prune, vacuum, and
 // checkpoint at their configured intervals. Returns when ctx is cancelled.
-//
-// At startup, all three operations run once after a short delay (5s) so
-// stale data from before the backend started gets cleaned up promptly
-// without colliding with startup load.
 func (p *Policy) Run(ctx context.Context) {
 	startupDelay := 5 * time.Second
 	pruneEvery := 24 * time.Hour
@@ -80,9 +75,6 @@ func (p *Policy) prune(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// daily_soft_flaps shares the same retention horizon as events (DB-08).
-	// Date format 'YYYY-MM-DD' lex-compares correctly so the cutoff in
-	// time.DateOnly is sufficient.
 	flapCutoff := cutoff.UTC().Format(time.DateOnly)
 	flapsDeleted := int64(0)
 	if res, err := p.DB.SQL().ExecContext(ctx, `DELETE FROM daily_soft_flaps WHERE date < ?`, flapCutoff); err != nil {
@@ -90,10 +82,6 @@ func (p *Policy) prune(ctx context.Context) error {
 	} else {
 		flapsDeleted, _ = res.RowsAffected()
 	}
-	// incident_state orphan cleanup (DB-14): rows where the (user_id,check_name)
-	// pair has had no events for >7d are treated as renamed/removed checks.
-	// Recovery semantics already null HardSince and the FSM re-creates rows
-	// on demand, so nuking is safe.
 	orphanCutoff := p.now().Add(-7 * 24 * time.Hour).UTC()
 	orphanDeleted := int64(0)
 	if res, err := p.DB.SQL().ExecContext(ctx,
@@ -114,9 +102,13 @@ func (p *Policy) prune(ctx context.Context) error {
 
 func (p *Policy) vacuum(ctx context.Context) error {
 	start := p.now()
-	if _, err := p.DB.SQL().ExecContext(ctx, "VACUUM"); err != nil {
-		// Surface duration on error too — VACUUM that hangs near busy_timeout
-		// before failing is a meaningful signal for capacity-planning (OBS-17).
+	maint, err := sql.Open("sqlite", "file:"+p.DB.Path()+"?_pragma=busy_timeout(100)")
+	if err != nil {
+		return err
+	}
+	defer maint.Close()
+	maint.SetMaxOpenConns(1)
+	if _, err := maint.ExecContext(ctx, "VACUUM"); err != nil {
 		p.Logger.Warn("retention: VACUUM failed", "duration_ms", p.now().Sub(start).Milliseconds(), "err", err)
 		return err
 	}

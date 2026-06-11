@@ -740,7 +740,12 @@ func ipv4ToUint32(addr netip.Addr) uint32 {
 }
 
 func uint32ToIPv4(v uint32) netip.Addr {
-	return netip.AddrFrom4([4]byte{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)})
+	return netip.AddrFrom4([4]byte{
+		byte((v >> 24) & 0xff),
+		byte((v >> 16) & 0xff),
+		byte((v >> 8) & 0xff),
+		byte(v & 0xff),
+	})
 }
 
 func generateKeypair() (privateKey, publicKey string, err error) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,10 +30,36 @@ func TestFormatPIDLockHeldErrorGivesSafeDiagnostics(t *testing.T) {
 		"Get-Process -Id 1234",
 		"ps -p 1234",
 		"Remove-Item -LiteralPath",
-		"только если",
+		"remove the lock only after confirming",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("lock error missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestAcquirePIDLockFileRejectsSecondHolderInSameProcess(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wizard.pid")
+	release, err := acquirePIDLockFile(path)
+	if err != nil {
+		t.Fatalf("first lock: %v", err)
+	}
+	defer release()
+
+	secondRelease, err := acquirePIDLockFile(path)
+	if err == nil {
+		secondRelease()
+		t.Fatal("second lock succeeded; expected ErrAnotherWizardRunning")
+	}
+	if !errors.Is(err, ErrAnotherWizardRunning) {
+		t.Fatalf("second lock error=%v, want ErrAnotherWizardRunning", err)
+	}
+
+	release()
+	release = func() {}
+	if releaseAgain, err := acquirePIDLockFile(path); err != nil {
+		t.Fatalf("lock after release: %v", err)
+	} else {
+		releaseAgain()
 	}
 }
