@@ -2,9 +2,11 @@ package retention
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,6 +105,43 @@ func TestPolicy_Vacuum_Runs(t *testing.T) {
 	}
 }
 
+func TestPolicy_Vacuum_DoesNotWaitForPrimaryConnection(t *testing.T) {
+	d := newTestDB(t)
+	tx, err := d.SQL().Begin()
+	if err != nil {
+		t.Fatalf("begin primary tx: %v", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
+		`INSERT INTO users (nickname, token_hash, expected_exit_ip, awg_iface) VALUES (?, ?, ?, ?)`,
+		"vacuum-busy",
+		strings.Repeat("b", 64),
+		"10.0.0.2",
+		"awg0",
+	); err != nil {
+		t.Fatalf("hold primary write tx: %v", err)
+	}
+
+	p := &Policy{
+		DB:     d,
+		Cfg:    Config{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	err = p.vacuum(ctx)
+	if err == nil {
+		t.Fatal("vacuum unexpectedly succeeded while primary connection is held")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("vacuum waited for the primary DB connection: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("vacuum waited too long under SQLite write lock: %v (%v)", err, elapsed)
+	}
+}
+
 func TestPolicy_Checkpoint_Runs(t *testing.T) {
 	d := newTestDB(t)
 	p := &Policy{
@@ -118,8 +157,8 @@ func TestPolicy_Checkpoint_Runs(t *testing.T) {
 func TestPolicy_Run_RespectsContextCancel(t *testing.T) {
 	d := newTestDB(t)
 	p := &Policy{
-		DB:  d,
-		Cfg: Config{EventsDays: 30, VacuumInterval: 1 * time.Hour, WALCheckpointEvery: 1 * time.Hour},
+		DB:     d,
+		Cfg:    Config{EventsDays: 30, VacuumInterval: 1 * time.Hour, WALCheckpointEvery: 1 * time.Hour},
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	ctx, cancel := context.WithCancel(context.Background())

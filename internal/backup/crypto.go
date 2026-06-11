@@ -76,7 +76,8 @@ func Encrypt(plain, passphrase []byte, params Params) ([]byte, error) {
 	out := make([]byte, 0, len(encryptedMagic)+4+len(header)+len(plain)+aead.Overhead())
 	out = append(out, encryptedMagic...)
 	var n [4]byte
-	binary.BigEndian.PutUint32(n[:], uint32(len(header)))
+	headerLen := uint32(len(header)) // #nosec G115 -- header length is bounded to 1 MiB above.
+	binary.BigEndian.PutUint32(n[:], headerLen)
 	out = append(out, n[:]...)
 	out = append(out, header...)
 	out = aead.Seal(out, nonce, plain, header)

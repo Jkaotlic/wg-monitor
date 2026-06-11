@@ -16,7 +16,8 @@ import (
 var migrationsSQL string
 
 type DB struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 func Open(path string) (*DB, error) {
@@ -86,7 +87,7 @@ func Open(path string) (*DB, error) {
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
-	return &DB{db: d}, nil
+	return &DB{db: d, path: path}, nil
 }
 
 // migrateEventsUniqueIdx is the API-01 idempotency migration. Without a UNIQUE
@@ -230,3 +231,5 @@ func (d *DB) Close() error { return d.db.Close() }
 // SQL exposes the underlying *sql.DB for tests and ad-hoc queries.
 // Production code should use the typed methods (Users(), Events(), etc.).
 func (d *DB) SQL() *sql.DB { return d.db }
+
+func (d *DB) Path() string { return d.path }

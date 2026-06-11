@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,66 +16,90 @@ func pidLockPath() string {
 }
 
 // ErrAnotherWizardRunning is returned when AcquirePIDLock detects a live
-// wizard process already holding the lock. Caller surfaces a clear "another
-// wizard is running (PID N)" message and aborts.
+// wizard process already holding the lock.
 var ErrAnotherWizardRunning = errors.New("another wizard is already running")
 
-// AcquirePIDLock atomically claims the wizard.pid file. Returns:
-//   - nil + release-fn on success; release-fn deletes the lock file (caller
-//     defers it).
-//   - ErrAnotherWizardRunning when an existing pid file points to a live
-//     process.
-//   - other errors only on filesystem failure (cache dir not writable etc.).
-//
-// Stale lock recovery: if wizard.pid exists but its PID is dead (e.g. previous
-// run was kill-9'd), we steal the lock and write our own PID. This is safe
-// because mid-state writes are atomic (temp+rename) — there's no half-file
-// to clean up.
+// AcquirePIDLock atomically claims the wizard.pid file. The PID file is backed
+// by a non-blocking OS file lock so stale-lock takeover is serialized.
 func AcquirePIDLock() (release func(), err error) {
 	if err := os.MkdirAll(defaultCacheDir(), 0o700); err != nil {
 		return nil, err
 	}
-	path := pidLockPath()
-	mypid := os.Getpid()
+	return acquirePIDLockFile(pidLockPath())
+}
 
-	// Try exclusive create first — happy path on a clean system.
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err == nil {
-		_, _ = fmt.Fprintf(f, "%d\n", mypid)
-		_ = f.Close()
-		return func() { _ = os.Remove(path) }, nil
-	}
-	if !lockFileAlreadyExists(path, err) {
+func acquirePIDLockFile(path string) (release func(), err error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
+	mypid := os.Getpid()
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		if lockFileAlreadyExists(path, err) {
+			data, _ := os.ReadFile(path)
+			if pid, _ := strconv.Atoi(strings.TrimSpace(string(data))); pid > 0 {
+				return nil, formatPIDLockHeldError(pid, path)
+			}
+			return nil, fmt.Errorf("%w. Lock file: %s", ErrAnotherWizardRunning, path)
+		}
+		return nil, err
+	}
+	if err := tryExclusivePIDFileLock(f); err != nil {
+		_ = f.Close()
+		data, _ := os.ReadFile(path)
+		if pid, _ := strconv.Atoi(strings.TrimSpace(string(data))); pid > 0 {
+			return nil, formatPIDLockHeldError(pid, path)
+		}
+		return nil, fmt.Errorf("%w. Lock file: %s", ErrAnotherWizardRunning, path)
+	}
 
-	// File exists — read PID and check liveness.
-	data, rerr := os.ReadFile(path)
-	if rerr != nil {
-		return nil, rerr
+	release = func() {
+		_ = unlockPIDFile(f)
+		_ = f.Close()
+		_ = os.Remove(path)
 	}
-	other, perr := strconv.Atoi(strings.TrimSpace(string(data)))
-	if perr != nil || other <= 0 {
-		// Corrupt PID file — overwrite (no live owner can be there).
-		return forcePIDLockTakeover(path, mypid)
+
+	data, err := readLockedPIDFile(f)
+	if err != nil {
+		release()
+		return nil, err
 	}
-	if other == mypid {
-		// Re-entry — same process; should not happen in practice.
-		return func() { _ = os.Remove(path) }, nil
-	}
-	if pidIsLive(other) {
+	if other, perr := strconv.Atoi(strings.TrimSpace(string(data))); perr == nil && other > 0 && other != mypid && pidIsLive(other) {
+		release()
 		return nil, formatPIDLockHeldError(other, path)
 	}
-	// Dead PID — steal.
-	return forcePIDLockTakeover(path, mypid)
+	if err := f.Truncate(0); err != nil {
+		release()
+		return nil, err
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		release()
+		return nil, err
+	}
+	if _, err := fmt.Fprintf(f, "%d\n", mypid); err != nil {
+		release()
+		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+func readLockedPIDFile(f *os.File) ([]byte, error) {
+	if _, err := f.Seek(0, 0); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(f)
 }
 
 func formatPIDLockHeldError(pid int, path string) error {
 	return fmt.Errorf("%w (PID %d). Lock file: %s.\n"+
-		"Проверь владельца lock:\n"+
+		"Check the lock owner:\n"+
 		"  Windows: Get-Process -Id %d | Select-Object Id,ProcessName,Path\n"+
 		"  Linux/macOS: ps -p %d -o pid,comm,args\n"+
-		"Если это не deploy wizard или PID уже мертв, удали lock только если проверка выше это подтвердила:\n"+
+		"If this is not deploy wizard, or the PID is already dead, remove the lock only after confirming that above:\n"+
 		"  Windows: Remove-Item -LiteralPath %q\n"+
 		"  Linux/macOS: rm %q",
 		ErrAnotherWizardRunning, pid, path, pid, pid, path, path)
@@ -90,33 +115,4 @@ func lockFileAlreadyExists(path string, err error) bool {
 		}
 	}
 	return false
-}
-
-func forcePIDLockTakeover(path string, mypid int) (func(), error) {
-	if err := writePIDLockFile(path, mypid, false); err != nil {
-		if removeErr := os.Remove(path); removeErr != nil {
-			return nil, err
-		}
-		if err := writePIDLockFile(path, mypid, true); err != nil {
-			return nil, err
-		}
-	}
-	return func() { _ = os.Remove(path) }, nil
-}
-
-func writePIDLockFile(path string, mypid int, exclusive bool) error {
-	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
-	if exclusive {
-		flags |= os.O_EXCL
-	}
-	f, err := os.OpenFile(path, flags, 0o600)
-	if err != nil {
-		return err
-	}
-	_, werr := fmt.Fprintf(f, "%d\n", mypid)
-	cerr := f.Close()
-	if werr != nil {
-		return werr
-	}
-	return cerr
 }
