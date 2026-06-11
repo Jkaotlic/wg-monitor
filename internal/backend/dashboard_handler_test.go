@@ -248,12 +248,12 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 			t.Fatalf("dashboard page missing %q", want)
 		}
 	}
-	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck"} {
+	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck", "OPKG cron", "opkg_cron_install", "version_audit"} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("dashboard js missing %q", want)
 		}
 	}
-	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output", "status-sleeping"} {
+	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output", "status-sleeping", "schedule-field"} {
 		if !strings.Contains(css, want) {
 			t.Fatalf("dashboard css missing %q", want)
 		}
@@ -774,6 +774,64 @@ func TestDashboardCommandDispatchEnqueuesSafeAgentCommand(t *testing.T) {
 	cmd := sink.enqueued[0]
 	if cmd.Action != "tunnel_restart" || cmd.Args["ndms_name"] != "Wireguard1" {
 		t.Fatalf("bad command: %+v", cmd)
+	}
+}
+
+func TestDashboardCommandDispatchEnqueuesOpkgCronInstall(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("puzirek", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, CommandSink: sink, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/agents/puzirek/commands",
+		strings.NewReader(`{"action":"opkg_cron_install","args":{"schedule":"04:30","extra":"ignored"}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 || sink.enqueuedUsers[0] != userID {
+		t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
+	}
+	cmd := sink.enqueued[0]
+	if cmd.Action != "opkg_cron_install" || cmd.Args["schedule"] != "04:30" {
+		t.Fatalf("bad command: %+v", cmd)
+	}
+	if _, ok := cmd.Args["extra"]; ok {
+		t.Fatalf("unsafe extra arg leaked: %+v", cmd.Args)
+	}
+}
+
+func TestDashboardCommandDispatchRejectsBadOpkgCronSchedule(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("puzirek", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, CommandSink: &dashboardActionSink{}, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/agents/puzirek/commands",
+		strings.NewReader(`{"action":"opkg_cron_install","args":{"schedule":"04:30; rm -rf /"}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

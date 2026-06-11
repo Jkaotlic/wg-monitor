@@ -28,3 +28,21 @@ type FirmwareStatus struct {
 	Hint      string `json:"hint,omitempty"`
 	Channel   string `json:"channel,omitempty"`
 }
+
+// OpkgCronStatus is returned by opkg_cron_* commands. It is intentionally
+// router-truth shaped: the dashboard renders these fields directly after a
+// fresh command result instead of persisting stale install state in backend DB.
+type OpkgCronStatus struct {
+	Installed   bool   `json:"installed"`
+	Schedule    string `json:"schedule,omitempty"`
+	ScriptPath  string `json:"script_path"`
+	CronPath    string `json:"cron_path,omitempty"`
+	LogPath     string `json:"log_path"`
+	CronService string `json:"cron_service,omitempty"`
+	FreeKB      int64  `json:"free_kb,omitempty"`
+	TotalKB     int64  `json:"total_kb,omitempty"`
+	MinFreeKB   int64  `json:"min_free_kb,omitempty"`
+	LastRun     string `json:"last_run,omitempty"`
+	LastStatus  string `json:"last_status,omitempty"`
+	LogTail     string `json:"log_tail,omitempty"`
+}

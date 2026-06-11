@@ -112,23 +112,27 @@ func TestCommand_JSONFieldNames(t *testing.T) {
 
 func TestIsValidCommandAction(t *testing.T) {
 	cases := map[string]bool{
-		"restart_tunnel":   true,
-		"diag_now":         true,
-		"pingcheck_now":    true,
-		"opkg_upgrade":     true,
-		"force_recheck":    true,
-		"service_restart":  true,
-		"firmware_status":  true,
-		"firmware_install": true,
-		"version_audit":    true,
-		"router_doctor":    true,
-		"tunnel_delete":    true,
-		"tunnel_restart":   true,
-		"tunnels_status":   true,
-		"hrneo_doctor":     true,
-		"":                 false,
-		"reboot":           false,
-		"silence":          false, // not a command-channel action
+		"restart_tunnel":    true,
+		"diag_now":          true,
+		"pingcheck_now":     true,
+		"opkg_upgrade":      true,
+		"opkg_cron_status":  true,
+		"opkg_cron_install": true,
+		"opkg_cron_logs":    true,
+		"opkg_cron_remove":  true,
+		"force_recheck":     true,
+		"service_restart":   true,
+		"firmware_status":   true,
+		"firmware_install":  true,
+		"version_audit":     true,
+		"router_doctor":     true,
+		"tunnel_delete":     true,
+		"tunnel_restart":    true,
+		"tunnels_status":    true,
+		"hrneo_doctor":      true,
+		"":                  false,
+		"reboot":            false,
+		"silence":           false, // not a command-channel action
 	}
 	for in, want := range cases {
 		got := IsValidCommandAction(in)
@@ -230,6 +234,40 @@ func TestOpkgUpgradeResult_OmitsEmptyFailedFeeds(t *testing.T) {
 	b, _ := json.Marshal(in)
 	if strings.Contains(string(b), "failed_feeds") {
 		t.Errorf("empty failed_feeds should be omitted, got %s", b)
+	}
+}
+
+func TestOpkgCronStatus_JSONRoundTrip(t *testing.T) {
+	in := OpkgCronStatus{
+		Installed:   true,
+		Schedule:    "30 4 * * *",
+		ScriptPath:  "/opt/etc/wg-monitor/opkg-auto-upgrade.sh",
+		CronPath:    "/opt/etc/cron.d/wg-monitor-opkg",
+		LogPath:     "/opt/var/log/wg-monitor/opkg-auto-upgrade.log",
+		CronService: "available",
+		FreeKB:      20480,
+		TotalKB:     131072,
+		MinFreeKB:   10240,
+		LastRun:     "2026-06-11T01:30:00Z",
+		LastStatus:  "ok",
+		LogTail:     "opkg upgrade ok",
+	}
+	b, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out OpkgCronStatus
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Schedule != in.Schedule || !out.Installed || out.FreeKB != 20480 || out.LastStatus != "ok" || out.LogTail != in.LogTail {
+		t.Fatalf("roundtrip=%+v", out)
+	}
+	s := string(b)
+	for _, want := range []string{`"installed"`, `"schedule"`, `"script_path"`, `"cron_path"`, `"log_path"`, `"free_kb"`, `"min_free_kb"`, `"last_status"`} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("json missing %s: %s", want, s)
+		}
 	}
 }
 

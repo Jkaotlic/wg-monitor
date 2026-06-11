@@ -5,7 +5,9 @@
     query: "",
     selected: null,
     deployAgent: null,
-    buttonStates: new Map()
+    buttonStates: new Map(),
+    opkgCron: new Map(),
+    versions: new Map()
   };
 
   const els = {
@@ -314,6 +316,8 @@
       return;
     }
     const incidents = (selected.active_incidents || []).map((i) => `<span class="badge badge-danger">${escapeHTML(i.check_name)} ${i.fail_count || ""}</span>`).join("") || '<span class="badge badge-success">clear</span>';
+    const cronStatus = state.opkgCron.get(selected.nickname);
+    const versionStatus = state.versions.get(selected.nickname);
     const awgBlock = selected.awgm_url
       ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
       : `<button class="action-btn disabled" type="button" disabled><span class="ti ti-external-link"></span>Open AWG</button><p class="drawer-note">AWG Manager URL не сохранен. Добавь его через deploy sync или awgm-url-patch.</p>`;
@@ -347,6 +351,12 @@
           <div class="drawer-list">
             ${drawerKV("Deploy mode", selected.deploy_mode || "-")}
             ${drawerKV("AWG URL", selected.awgm_url || "-")}
+            ${versionStatus ? drawerKV("AWG Manager", versionStatus.awgmgr_version || "-") : ""}
+            ${versionStatus ? drawerKV("HR-Neo", versionStatus.hrneo_installed ? (versionStatus.hrneo_version || "installed") : "not installed") : ""}
+            ${versionStatus ? drawerKV("Firmware", versionStatus.firmware_current || "-") : ""}
+          </div>
+          <div class="drawer-actions drawer-actions-top">
+            ${drawerCommandButton(selected, "version_audit", "Versions")}
           </div>
         </section>
         <section class="drawer-section">
@@ -362,6 +372,24 @@
             <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
             ${latestDeployButton(selected, "action-btn primary", "Update to latest")}
             <button class="action-btn" type="button" data-deploy="${escapeAttr(selected.nickname)}"><span class="ti ti-rocket"></span>Custom version</button>
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>OPKG cron</h3>
+          <p class="drawer-note">Managed router-side schedule for opkg update + upgrade with /opt space guard and trimmed logs.</p>
+          <div class="incident-list">
+            ${cronStatus ? opkgCronBadge(cronStatus) : '<span class="badge badge-muted">not checked</span>'}
+            ${cronStatus && cronStatus.schedule ? `<span class="badge badge-info">${escapeHTML(cronStatus.schedule)}</span>` : ""}
+          </div>
+          <label class="form-field schedule-field">
+            <span>Run time</span>
+            <input id="opkgCronSchedule" type="time" value="04:30">
+          </label>
+          <div class="drawer-actions">
+            ${drawerCommandButton(selected, "opkg_cron_status", "Check")}
+            ${drawerCommandButton(selected, "opkg_cron_install", "Install schedule")}
+            ${drawerCommandButton(selected, "opkg_cron_logs", "Logs")}
+            ${drawerCommandButton(selected, "opkg_cron_remove", "Remove")}
           </div>
         </section>
       </div>
@@ -549,6 +577,7 @@
       try {
         const res = await api(`/v1/dashboard/commands/${encodeURIComponent(cmdID)}?nickname=${encodeURIComponent(nickname)}&wait_sec=5`);
         setResultHTML(formatCommandResult(res));
+        rememberCommandResult(nickname, title, res);
         setActionState(nickname, title, res.status === "ok" ? "ok" : "error");
         refresh();
         return;
@@ -651,6 +680,28 @@
     return sections.join("");
   }
 
+  function rememberCommandResult(nickname, action, res) {
+    if (!res || res.status !== "ok" || typeof res.output !== "string") return;
+    let parsed;
+    try {
+      parsed = JSON.parse(res.output);
+    } catch (_) {
+      return;
+    }
+    if (isOpkgCronStatus(parsed)) {
+      state.opkgCron.set(nickname, parsed);
+      renderSelectedDrawer();
+    } else if (isVersionAudit(parsed)) {
+      state.versions.set(nickname, parsed);
+      renderSelectedDrawer();
+    }
+  }
+
+  function opkgCronBadge(value) {
+    if (value.installed) return '<span class="badge badge-success">installed</span>';
+    return '<span class="badge badge-warning">not installed</span>';
+  }
+
   function formatOutput(output) {
     if (typeof output !== "string") return resultValue("Output", output);
     const trimmed = output.trim();
@@ -665,6 +716,8 @@
   function formatStructuredOutput(value) {
     if (Array.isArray(value)) return resultValue("Items", value);
     if (!value || typeof value !== "object") return resultValue("Output", value);
+    if (isOpkgCronStatus(value)) return formatOpkgCronStatus(value);
+    if (isVersionAudit(value)) return formatVersionAudit(value);
     const sections = [];
     const compact = {};
     Object.keys(value).forEach((key) => {
@@ -679,6 +732,56 @@
     });
     if (Object.keys(compact).length) sections.unshift(resultGrid(compact));
     return sections.join("");
+  }
+
+  function isOpkgCronStatus(value) {
+    return Object.prototype.hasOwnProperty.call(value, "installed") &&
+      Object.prototype.hasOwnProperty.call(value, "script_path") &&
+      Object.prototype.hasOwnProperty.call(value, "log_path");
+  }
+
+  function formatOpkgCronStatus(value) {
+    const installed = value.installed ? "installed" : "not installed";
+    const sections = [
+      `<div class="result-section"><strong>OPKG cron: ${escapeHTML(installed)}</strong><p>${escapeHTML(value.schedule || "no schedule")}</p></div>`,
+      resultGrid({
+        free_opt: value.free_kb ? formatKB(value.free_kb) : "-",
+        required_free: value.min_free_kb ? formatKB(value.min_free_kb) : "-",
+        cron: value.cron_service || "-",
+        last_run: value.last_run || "-",
+        last_status: value.last_status || "-"
+      }),
+      resultGrid({
+        script: value.script_path || "-",
+        log: value.log_path || "-"
+      })
+    ];
+    if (value.log_tail) {
+      sections.push(`<div class="result-section"><strong>Log tail</strong><pre class="raw-output">${escapeHTML(value.log_tail)}</pre></div>`);
+    }
+    return sections.join("");
+  }
+
+  function isVersionAudit(value) {
+    return Object.prototype.hasOwnProperty.call(value, "awgmgr_version") ||
+      Object.prototype.hasOwnProperty.call(value, "firmware_current") ||
+      Object.prototype.hasOwnProperty.call(value, "hrneo_installed");
+  }
+
+  function formatVersionAudit(value) {
+    return [
+      `<div class="result-section"><strong>Router versions</strong><p>AWG Manager, HR-Neo and Keenetic firmware from the selected agent.</p></div>`,
+      resultGrid({
+        awg_manager: value.awgmgr_version || "-",
+        awg_backend: value.awgmgr_backend || "-",
+        awg_uptime: value.awgmgr_uptime || "-",
+        hrneo: value.hrneo_installed ? (value.hrneo_version || "installed") : "not installed",
+        hrneo_running: value.hrneo_installed ? displayValue(value.hrneo_running) : "-",
+        hrneo_uptime: value.hrneo_uptime || "-",
+        firmware: value.firmware_current || "-",
+        firmware_available: value.firmware_avail || "-"
+      })
+    ].join("");
   }
 
   function resultGrid(values) {
@@ -712,6 +815,24 @@
     if (value == null || value === "") return "-";
     if (typeof value === "object") return JSON.stringify(value);
     return String(value);
+  }
+
+  function formatKB(value) {
+    const kb = Number(value || 0);
+    if (!Number.isFinite(kb) || kb <= 0) return "-";
+    if (kb >= 1024 * 1024) return (kb / 1024 / 1024).toFixed(1) + " GB";
+    if (kb >= 1024) return Math.round(kb / 1024) + " MB";
+    return Math.round(kb) + " KB";
+  }
+
+  function commandArgs(button) {
+    const action = button.dataset.command;
+    if (action === "opkg_cron_install") {
+      return { schedule: document.getElementById("opkgCronSchedule")?.value || "04:30" };
+    }
+    if (action === "opkg_cron_status") return { lines: 40 };
+    if (action === "opkg_cron_logs") return { lines: 160 };
+    return {};
   }
 
   function sleep(ms) {
@@ -761,7 +882,7 @@
         setActionState(nickname, "self_update", "error");
         toast(err.message);
       });
-      if (button.dataset.command) enqueueCommand(nickname, button.dataset.command).catch((err) => {
+      if (button.dataset.command) enqueueCommand(nickname, button.dataset.command, commandArgs(button)).catch((err) => {
         setActionState(nickname, button.dataset.command, "error");
         toast(err.message);
       });
