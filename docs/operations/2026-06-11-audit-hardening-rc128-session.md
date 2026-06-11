@@ -21,6 +21,7 @@ Source audit: `docs/audit-2026-06-11.md`.
 - Backend rate limiter now applies a global bucket to missing `uid` instead of bypassing.
 - `BE-08` timestamp storage concern is covered by a regression test; current storage already preserves an RFC3339-like value.
 - CI now includes `govulncheck`, a high-severity `gosec` gate with an explicit historical baseline, and a `grype` high-severity scan.
+- First CI `grype` run found `golang.org/x/net v0.54.0` vulnerabilities; `golang.org/x/net` was upgraded to `v0.55.0`.
 
 ## Still intentionally not fully closed
 
@@ -36,4 +37,4 @@ Source audit: `docs/audit-2026-06-11.md`.
 - `govulncheck ./...`
 - Local `gosec` high gate over `go list` package directories: 182 files, 0 issues with the same historical baseline.
 - GitHub secret `WG_MONITOR_RELEASE_SIGNING_SEED_B64` exists.
-- Local `grype` scan could not be completed because this host could not download the Grype vulnerability DB from `grype.anchore.io`.
+- Local `grype` scan could not be completed because this host could not download the Grype vulnerability DB from `grype.anchore.io`; GitHub Actions did download the DB and identified the `x/net` upgrade above.
