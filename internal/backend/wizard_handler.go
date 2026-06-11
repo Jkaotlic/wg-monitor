@@ -504,27 +504,32 @@ type wizardMaintenanceReq struct {
 }
 
 var wizardCommandAllowlist = map[string]bool{
-	"diag_now":           true,
-	"force_recheck":      true,
-	"check_via_tunnel":   true,
-	"check_direct":       true,
-	"pingcheck_now":      true,
-	"pingcheck_status":   true,
-	"router_doctor":      true,
-	"route_status":       true,
-	"tunnels_status":     true,
-	"route_rebind":       true,
-	"opkg_cron_status":   true,
-	"opkg_cron_install":  true,
-	"opkg_cron_logs":     true,
-	"opkg_cron_remove":   true,
-	"version_audit":      true,
-	"tunnel_enable":      true,
-	"tunnel_disable":     true,
-	"tunnel_restart":     true,
-	"tunnel_delete":      true,
-	"service_restart":    true,
-	"update_backend_url": true,
+	"diag_now":              true,
+	"force_recheck":         true,
+	"check_via_tunnel":      true,
+	"check_direct":          true,
+	"pingcheck_now":         true,
+	"pingcheck_status":      true,
+	"router_doctor":         true,
+	"route_status":          true,
+	"tunnels_status":        true,
+	"route_rebind":          true,
+	"opkg_cron_status":      true,
+	"opkg_cron_install":     true,
+	"opkg_cron_logs":        true,
+	"opkg_cron_remove":      true,
+	"entware_clean_status":  true,
+	"entware_clean_install": true,
+	"entware_clean_run":     true,
+	"entware_clean_logs":    true,
+	"entware_clean_remove":  true,
+	"version_audit":         true,
+	"tunnel_enable":         true,
+	"tunnel_disable":        true,
+	"tunnel_restart":        true,
+	"tunnel_delete":         true,
+	"service_restart":       true,
+	"update_backend_url":    true,
 }
 
 // wizardDeployHandler enqueues a self_update command for an agent through
@@ -761,18 +766,22 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "opkg_cron_install":
+	case "opkg_cron_install", "entware_clean_install":
 		schedule, _ := args["schedule"].(string)
 		schedule = strings.TrimSpace(schedule)
 		if schedule == "" {
-			schedule = "04:30"
+			if action == "entware_clean_install" {
+				schedule = "05:15"
+			} else {
+				schedule = "04:30"
+			}
 		}
 		if !dashboardScheduleLooksSafe(schedule) {
 			writeJSONError(w, http.StatusBadRequest, "invalid_schedule", "schedule must be HH:MM or a five-field cron expression")
 			return nil, false
 		}
 		return map[string]any{"schedule": schedule}, true
-	case "opkg_cron_status", "opkg_cron_logs":
+	case "opkg_cron_status", "opkg_cron_logs", "entware_clean_status", "entware_clean_logs":
 		lines := 80
 		switch v := args["lines"].(type) {
 		case float64:
@@ -787,7 +796,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			lines = 300
 		}
 		return map[string]any{"lines": lines}, true
-	case "opkg_cron_remove", "version_audit":
+	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
 	default:
 		return args, true

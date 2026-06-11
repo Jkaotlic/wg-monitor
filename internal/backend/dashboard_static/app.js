@@ -7,6 +7,7 @@
     deployAgent: null,
     buttonStates: new Map(),
     opkgCron: new Map(),
+    entwareClean: new Map(),
     versions: new Map()
   };
 
@@ -317,6 +318,7 @@
     }
     const incidents = (selected.active_incidents || []).map((i) => `<span class="badge badge-danger">${escapeHTML(i.check_name)} ${i.fail_count || ""}</span>`).join("") || '<span class="badge badge-success">clear</span>';
     const cronStatus = state.opkgCron.get(selected.nickname);
+    const cleanStatus = state.entwareClean.get(selected.nickname);
     const versionStatus = state.versions.get(selected.nickname);
     const awgBlock = selected.awgm_url
       ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
@@ -390,6 +392,26 @@
             ${drawerCommandButton(selected, "opkg_cron_install", "Install schedule")}
             ${drawerCommandButton(selected, "opkg_cron_logs", "Logs")}
             ${drawerCommandButton(selected, "opkg_cron_remove", "Remove")}
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>Entware cleanup</h3>
+          <p class="drawer-note">Managed cleanup for Entware temp/cache files with /opt space guard, memory snapshot and trimmed logs.</p>
+          <div class="incident-list">
+            ${cleanStatus ? entwareCleanBadge(cleanStatus) : '<span class="badge badge-muted">not checked</span>'}
+            ${cleanStatus && cleanStatus.schedule ? `<span class="badge badge-info">${escapeHTML(cleanStatus.schedule)}</span>` : ""}
+            ${cleanStatus && cleanStatus.mem_available_kb ? `<span class="badge badge-info">${escapeHTML(formatKB(cleanStatus.mem_available_kb))} free RAM</span>` : ""}
+          </div>
+          <label class="form-field schedule-field">
+            <span>Run time</span>
+            <input id="entwareCleanSchedule" type="time" value="05:15">
+          </label>
+          <div class="drawer-actions">
+            ${drawerCommandButton(selected, "entware_clean_status", "Check")}
+            ${drawerCommandButton(selected, "entware_clean_install", "Install schedule")}
+            ${drawerCommandButton(selected, "entware_clean_run", "Run now")}
+            ${drawerCommandButton(selected, "entware_clean_logs", "Logs")}
+            ${drawerCommandButton(selected, "entware_clean_remove", "Remove")}
           </div>
         </section>
       </div>
@@ -691,6 +713,9 @@
     if (isOpkgCronStatus(parsed)) {
       state.opkgCron.set(nickname, parsed);
       renderSelectedDrawer();
+    } else if (isEntwareCleanStatus(parsed)) {
+      state.entwareClean.set(nickname, parsed);
+      renderSelectedDrawer();
     } else if (isVersionAudit(parsed)) {
       state.versions.set(nickname, parsed);
       renderSelectedDrawer();
@@ -698,6 +723,11 @@
   }
 
   function opkgCronBadge(value) {
+    if (value.installed) return '<span class="badge badge-success">installed</span>';
+    return '<span class="badge badge-warning">not installed</span>';
+  }
+
+  function entwareCleanBadge(value) {
     if (value.installed) return '<span class="badge badge-success">installed</span>';
     return '<span class="badge badge-warning">not installed</span>';
   }
@@ -717,6 +747,7 @@
     if (Array.isArray(value)) return resultValue("Items", value);
     if (!value || typeof value !== "object") return resultValue("Output", value);
     if (isOpkgCronStatus(value)) return formatOpkgCronStatus(value);
+    if (isEntwareCleanStatus(value)) return formatEntwareCleanStatus(value);
     if (isVersionAudit(value)) return formatVersionAudit(value);
     const sections = [];
     const compact = {};
@@ -737,7 +768,8 @@
   function isOpkgCronStatus(value) {
     return Object.prototype.hasOwnProperty.call(value, "installed") &&
       Object.prototype.hasOwnProperty.call(value, "script_path") &&
-      Object.prototype.hasOwnProperty.call(value, "log_path");
+      Object.prototype.hasOwnProperty.call(value, "log_path") &&
+      !Object.prototype.hasOwnProperty.call(value, "mem_available_kb");
   }
 
   function formatOpkgCronStatus(value) {
@@ -747,6 +779,39 @@
       resultGrid({
         free_opt: value.free_kb ? formatKB(value.free_kb) : "-",
         required_free: value.min_free_kb ? formatKB(value.min_free_kb) : "-",
+        cron: value.cron_service || "-",
+        last_run: value.last_run || "-",
+        last_status: value.last_status || "-"
+      }),
+      resultGrid({
+        script: value.script_path || "-",
+        log: value.log_path || "-"
+      })
+    ];
+    if (value.log_tail) {
+      sections.push(`<div class="result-section"><strong>Log tail</strong><pre class="raw-output">${escapeHTML(value.log_tail)}</pre></div>`);
+    }
+    return sections.join("");
+  }
+
+  function isEntwareCleanStatus(value) {
+    return Object.prototype.hasOwnProperty.call(value, "installed") &&
+      Object.prototype.hasOwnProperty.call(value, "script_path") &&
+      Object.prototype.hasOwnProperty.call(value, "log_path") &&
+      Object.prototype.hasOwnProperty.call(value, "mem_available_kb");
+  }
+
+  function formatEntwareCleanStatus(value) {
+    const installed = value.installed ? "installed" : "not installed";
+    const sections = [
+      `<div class="result-section"><strong>Entware cleanup: ${escapeHTML(installed)}</strong><p>${escapeHTML(value.schedule || "no schedule")}</p></div>`,
+      resultGrid({
+        free_opt: value.free_kb ? formatKB(value.free_kb) : "-",
+        required_free: value.min_free_kb ? formatKB(value.min_free_kb) : "-",
+        mem_available: value.mem_available_kb ? formatKB(value.mem_available_kb) : "-",
+        mem_total: value.mem_total_kb ? formatKB(value.mem_total_kb) : "-",
+        drop_cache_below: value.min_mem_available_kb ? formatKB(value.min_mem_available_kb) : "-",
+        last_freed: value.last_freed_kb ? formatKB(value.last_freed_kb) : "-",
         cron: value.cron_service || "-",
         last_run: value.last_run || "-",
         last_status: value.last_status || "-"
@@ -830,8 +895,13 @@
     if (action === "opkg_cron_install") {
       return { schedule: document.getElementById("opkgCronSchedule")?.value || "04:30" };
     }
+    if (action === "entware_clean_install") {
+      return { schedule: document.getElementById("entwareCleanSchedule")?.value || "05:15" };
+    }
     if (action === "opkg_cron_status") return { lines: 40 };
     if (action === "opkg_cron_logs") return { lines: 160 };
+    if (action === "entware_clean_status") return { lines: 40 };
+    if (action === "entware_clean_logs") return { lines: 160 };
     return {};
   }
 
