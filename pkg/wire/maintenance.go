@@ -46,3 +46,25 @@ type OpkgCronStatus struct {
 	LastStatus  string `json:"last_status,omitempty"`
 	LogTail     string `json:"log_tail,omitempty"`
 }
+
+// EntwareCleanStatus is returned by entware_clean_* commands. It mirrors live
+// router state after the managed cleanup script is installed, run, queried, or
+// removed.
+type EntwareCleanStatus struct {
+	Installed         bool   `json:"installed"`
+	Schedule          string `json:"schedule,omitempty"`
+	ScriptPath        string `json:"script_path"`
+	CronPath          string `json:"cron_path,omitempty"`
+	LogPath           string `json:"log_path"`
+	CronService       string `json:"cron_service,omitempty"`
+	FreeKB            int64  `json:"free_kb,omitempty"`
+	TotalKB           int64  `json:"total_kb,omitempty"`
+	MinFreeKB         int64  `json:"min_free_kb,omitempty"`
+	MemAvailableKB    int64  `json:"mem_available_kb,omitempty"`
+	MemTotalKB        int64  `json:"mem_total_kb,omitempty"`
+	MinMemAvailableKB int64  `json:"min_mem_available_kb,omitempty"`
+	LastRun           string `json:"last_run,omitempty"`
+	LastStatus        string `json:"last_status,omitempty"`
+	LastFreedKB       int64  `json:"last_freed_kb,omitempty"`
+	LogTail           string `json:"log_tail,omitempty"`
+}

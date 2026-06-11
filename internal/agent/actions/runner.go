@@ -10,6 +10,7 @@
 //   - opkg_feed_disable → OpkgRunner.DisableFeed (comment matching feed in
 //     opkg config + auto-retry SmartUpgrade)
 //   - opkg_cron_*     → install/status/log/remove managed scheduled opkg script
+//   - entware_clean_* → install/status/run/log/remove managed Entware cleanup
 //   - pingcheck_status → awgmgr.PingCheckStatus → JSON passthrough
 //   - pingcheck_toggle → awg-mgr POST /api/pingcheck/toggle (primary)
 //     with ndmc CLI fallback (interface <ndms_name> ping-check)
@@ -319,6 +320,37 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		b, err := json.Marshal(status)
 		if err != nil {
 			return "err", "encode opkg cron status: " + err.Error(), payload
+		}
+		return "ok", string(b), payload
+	case "entware_clean_status", "entware_clean_install", "entware_clean_run", "entware_clean_logs", "entware_clean_remove":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		manager := &EntwareCleanManager{Exec: r.Exec, Now: r.Now}
+		lines := intArg(cmd.Args, "lines", 80)
+		var (
+			status wire.EntwareCleanStatus
+			err    error
+		)
+		switch cmd.Action {
+		case "entware_clean_status":
+			status, err = manager.Status(ctx, lines)
+		case "entware_clean_install":
+			schedule, _ := cmd.Args["schedule"].(string)
+			status, err = manager.Install(ctx, schedule)
+		case "entware_clean_run":
+			status, err = manager.Run(ctx)
+		case "entware_clean_logs":
+			status, err = manager.Logs(ctx, lines)
+		case "entware_clean_remove":
+			status, err = manager.Remove(ctx)
+		}
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		b, err := json.Marshal(status)
+		if err != nil {
+			return "err", "encode entware cleanup status: " + err.Error(), payload
 		}
 		return "ok", string(b), payload
 	case "check_via_tunnel":
