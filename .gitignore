@@ -13,6 +13,9 @@ wg-monitor-backend
 
 # Go test cache
 .gocache/
+.gomodcache/
+.gopath/
+.tools/
 *.test
 *.out
 coverage.txt

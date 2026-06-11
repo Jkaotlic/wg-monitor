@@ -18,6 +18,7 @@ import (
 
 	"github.com/anex/wg-monitor/internal/backend"
 	"github.com/anex/wg-monitor/internal/releaseorigin"
+	"github.com/anex/wg-monitor/internal/releasesig"
 )
 
 var backendUpdateAllowedRepoBases = []string{
@@ -94,6 +95,19 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
+	}
+	if releasesig.SignatureRequiredForVersion(req.TargetVersion) {
+		sig, err := httpGetBytes(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt.sig")
+		if err != nil {
+			err = fmt.Errorf("download checksums.txt signature: %w", err)
+			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
+			return err
+		}
+		if err := releasesig.VerifyChecksumsSignature(checks, sig); err != nil {
+			err = fmt.Errorf("verify checksums.txt signature: %w", err)
+			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
+			return err
+		}
 	}
 	want, err := checksumForAsset(string(checks), asset)
 	if err != nil {
@@ -184,8 +198,10 @@ func swapBackendBinary(path string, body []byte) error {
 func runRestartCommand(cmd string) error {
 	var c *exec.Cmd
 	if runtime.GOOS == "windows" {
+		// #nosec G204 -- RestartCmd is a trusted local CLI/systemd flag, not network payload.
 		c = exec.Command("cmd", "/C", cmd)
 	} else {
+		// #nosec G204 -- RestartCmd is a trusted local CLI/systemd flag, not network payload.
 		c = exec.Command("sh", "-c", cmd)
 	}
 	out, err := c.CombinedOutput()

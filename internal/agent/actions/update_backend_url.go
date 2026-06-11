@@ -3,9 +3,14 @@ package actions
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // UpdateBackendURL rewrites backend.url in the agent config file and triggers
@@ -16,6 +21,9 @@ import (
 // domain changes; each connected agent self-migrates without manual SSH/AWG
 // Manager intervention.
 func UpdateBackendURL(ctx context.Context, newURL, configPath string) (string, error) {
+	if err := backendURLHealthCheck(ctx, newURL); err != nil {
+		return "", fmt.Errorf("update_backend_url: health check failed: %w", err)
+	}
 	if err := rewriteBackendURL(configPath, newURL); err != nil {
 		return "", err
 	}
@@ -36,16 +44,43 @@ var scheduleURLUpdateRestart = func() {
 	}
 }
 
+var backendURLHealthCheck = func(ctx context.Context, rawURL string) error {
+	normalized, err := validateBackendURL(rawURL)
+	if err != nil {
+		return err
+	}
+	u, err := url.Parse(normalized)
+	if err != nil {
+		return err
+	}
+	u.Path = strings.TrimRight(u.Path, "/") + "/healthz"
+	u.RawQuery = ""
+	u.Fragment = ""
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("GET %s: HTTP %d", u.String(), resp.StatusCode)
+	}
+	return nil
+}
+
 // rewriteBackendURL updates the `url:` line inside the `backend:` section of a
 // YAML config file. It uses line-by-line replacement so comments and formatting
 // in other sections are preserved. The write is atomic (temp file + rename).
 func rewriteBackendURL(configPath, newURL string) error {
-	newURL = strings.TrimSpace(newURL)
-	if newURL == "" {
-		return fmt.Errorf("update_backend_url: new URL is empty")
-	}
-	if !strings.HasPrefix(newURL, "https://") {
-		return fmt.Errorf("update_backend_url: URL must start with https://, got %q", newURL)
+	normalizedURL, err := validateBackendURL(newURL)
+	if err != nil {
+		return err
 	}
 
 	raw, err := os.ReadFile(configPath)
@@ -53,7 +88,7 @@ func rewriteBackendURL(configPath, newURL string) error {
 		return fmt.Errorf("update_backend_url: read config: %w", err)
 	}
 
-	updated, err := substituteBackendURL(string(raw), newURL)
+	updated, err := substituteBackendURL(string(raw), normalizedURL)
 	if err != nil {
 		return err
 	}
@@ -67,6 +102,34 @@ func rewriteBackendURL(configPath, newURL string) error {
 		return fmt.Errorf("update_backend_url: rename: %w", err)
 	}
 	return nil
+}
+
+func validateBackendURL(raw string) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return "", fmt.Errorf("update_backend_url: new URL is empty")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return "", fmt.Errorf("update_backend_url: invalid URL %q", raw)
+	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("update_backend_url: URL must start with https://, got %q", raw)
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" {
+		return "", fmt.Errorf("update_backend_url: backend URL must not use localhost")
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast()) {
+		return "", fmt.Errorf("update_backend_url: backend URL must not use private or loopback IP")
+	}
+	u.Scheme = "https"
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return u.String(), nil
 }
 
 // substituteBackendURL finds the `url:` line inside the `backend:` section and

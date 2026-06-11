@@ -28,6 +28,8 @@ type tokenBucket struct {
 	lastFill time.Time
 }
 
+const unauthenticatedRateLimitUserID int64 = -1
+
 func newUserRateLimiter(perSec float64, burst int) *userRateLimiter {
 	if perSec <= 0 || burst <= 0 {
 		return nil
@@ -82,8 +84,7 @@ func RateLimitMiddleware(l *userRateLimiter, logger *slog.Logger) func(http.Hand
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			uid := UserIDFromContext(r.Context())
 			if uid == 0 {
-				next.ServeHTTP(w, r)
-				return
+				uid = unauthenticatedRateLimitUserID
 			}
 			ok, retry := l.Allow(uid)
 			if !ok {

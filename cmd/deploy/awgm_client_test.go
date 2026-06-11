@@ -56,6 +56,19 @@ func TestAWGMClientInsecureTLSAppliesToWebsocketConfig(t *testing.T) {
 	}
 }
 
+func TestAWGMRelayPythonDoesNotDisableTLSUnconditionally(t *testing.T) {
+	if strings.Contains(awgmVPSRelayPython, "ctx = ssl._create_unverified_context()") {
+		t.Fatal("VPS relay must not disable TLS verification unconditionally")
+	}
+	if !strings.Contains(awgmVPSRelayPython, "if insecure_tls_enabled(cfg):") ||
+		!strings.Contains(awgmVPSRelayPython, "return ssl._create_unverified_context()") {
+		t.Fatal("VPS relay must keep insecure TLS behind an explicit flag")
+	}
+	if !strings.Contains(awgmVPSRelayPython, "ssl.create_default_context()") {
+		t.Fatal("VPS relay must use default TLS verification by default")
+	}
+}
+
 func TestAWGMClientLoginStoresSessionCookie(t *testing.T) {
 	var sawCookie bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

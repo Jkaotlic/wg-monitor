@@ -17,6 +17,7 @@ type awgmRelayConfig struct {
 	APIKey           string `json:"api_key"`
 	Login            string `json:"login"`
 	Password         string `json:"password"`
+	InsecureTLS      bool   `json:"insecure_tls,omitempty"`
 	TerminalUser     string `json:"terminal_user"`
 	TerminalPassword string `json:"terminal_password"`
 	BootstrapScript  string `json:"bootstrap_script"`
@@ -91,6 +92,7 @@ func runAWGMBootstrapViaVPS(state *State, secrets *SecretStore, ag *AgentState, 
 		APIKey:           apiKey,
 		Login:            login,
 		Password:         pass,
+		InsecureTLS:      awgmInsecureTLS(),
 		TerminalUser:     terminalUser,
 		TerminalPassword: terminalPass,
 		BootstrapScript:  script,
@@ -148,11 +150,12 @@ func fetchAWGMSystemInfoViaVPS(state *State, secrets *SecretStore, ag *AgentStat
 	}()
 
 	cfg := awgmRelayConfig{
-		BaseURL:  ag.AWGMURL,
-		APIKey:   apiKey,
-		Login:    login,
-		Password: pass,
-		Mode:     "system_info",
+		BaseURL:     ag.AWGMURL,
+		APIKey:      apiKey,
+		Login:       login,
+		Password:    pass,
+		InsecureTLS: awgmInsecureTLS(),
+		Mode:        "system_info",
 	}
 	cfgBytes, err := json.Marshal(cfg)
 	if err != nil {
@@ -366,9 +369,19 @@ def auth_header(cfg):
     token = base64.b64encode((login + ":" + password).encode("utf-8")).decode("ascii")
     return "Basic " + token
 
+def insecure_tls_enabled(cfg):
+    return bool(cfg.get("insecure_tls")) or os.environ.get("AWGM_INSECURE_TLS", "").strip() == "1"
+
+def tls_context(cfg):
+    if insecure_tls_enabled(cfg):
+        return ssl._create_unverified_context()
+    return ssl.create_default_context()
+
+TLS_CONFIG = {}
+
 def opener():
     jar = http.cookiejar.CookieJar()
-    ctx = ssl._create_unverified_context()
+    ctx = tls_context(TLS_CONFIG)
     return urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar), urllib.request.HTTPSHandler(context=ctx)), jar
 
 def request(op, cfg, method, api_path, body=None):
@@ -451,7 +464,7 @@ def ws_connect(cfg, jar):
     port = target.port or (443 if target.scheme == "wss" else 80)
     raw = socket.create_connection((host, port), timeout=20)
     if target.scheme == "wss":
-        ctx = ssl._create_unverified_context()
+        ctx = tls_context(cfg)
         raw = ctx.wrap_socket(raw, server_hostname=host)
     raw.settimeout(20)
     key = base64.b64encode(os.urandom(16)).decode("ascii")
@@ -837,6 +850,8 @@ def commit_existing_agent_token_hash(cfg, nick, raw_token):
         raise RelayError("agent %s is not in VPS users DB; refusing unsafe token rotation" % nick)
 
 def run_deferred_bootstrap(cfg, cfg_path):
+    global TLS_CONFIG
+    TLS_CONFIG = cfg
     expires = int(cfg.get("expires_at_unix") or 0)
     if expires and time.time() > expires:
         print("deferred AWGM job expired for " + (cfg.get("nickname") or "unknown"))
@@ -996,7 +1011,9 @@ def run_bootstrap(sock, cfg):
     raise RelayError("bootstrap script timeout waiting for marker")
 
 def main():
+    global TLS_CONFIG
     cfg = load_config(sys.argv[1])
+    TLS_CONFIG = cfg
     if cfg.get("mode") == "deferred_bootstrap":
         run_deferred_bootstrap(cfg, sys.argv[1])
         return

@@ -9,6 +9,7 @@ import (
 	"context"
 	"log/slog"
 	"math"
+	"math/rand"
 	"time"
 
 	"github.com/anex/wg-monitor/pkg/wire"
@@ -32,6 +33,15 @@ type Loop struct {
 	WaitSec     int
 	BackoffBase time.Duration
 	BackoffMax  time.Duration
+	randFloat64 func() float64
+	resultCache map[string]cachedResult
+	cacheTTL    time.Duration
+	cacheMax    int
+}
+
+type cachedResult struct {
+	result wire.CommandResult
+	at     time.Time
 }
 
 func New(client BackendClient, runner CommandRunner, waitSec int) *Loop {
@@ -44,6 +54,10 @@ func New(client BackendClient, runner CommandRunner, waitSec int) *Loop {
 		WaitSec:     waitSec,
 		BackoffBase: 1 * time.Second,
 		BackoffMax:  60 * time.Second,
+		randFloat64: rand.Float64,
+		resultCache: make(map[string]cachedResult),
+		cacheTTL:    10 * time.Minute,
+		cacheMax:    128,
 	}
 }
 
@@ -86,11 +100,57 @@ func (l *Loop) Run(ctx context.Context) {
 			continue
 		}
 		slog.Info("cmdloop received command", "cmd_id", cmd.ID, "action", cmd.Action)
+		if cached, ok := l.cachedResult(cmd.ID); ok {
+			if perr := l.client.PostResult(ctx, cached); perr != nil {
+				slog.Warn("cmdloop post cached result failed (continuing)", "cmd_id", cmd.ID, "err", perr)
+			}
+			continue
+		}
 		res := l.runner.Execute(ctx, *cmd)
+		l.rememberResult(cmd.ID, res)
 		if perr := l.client.PostResult(ctx, res); perr != nil {
 			slog.Warn("cmdloop post result failed (continuing)", "cmd_id", cmd.ID, "err", perr)
 		}
 	}
+}
+
+func (l *Loop) cachedResult(id string) (wire.CommandResult, bool) {
+	if id == "" || l.resultCache == nil {
+		return wire.CommandResult{}, false
+	}
+	cached, ok := l.resultCache[id]
+	if !ok {
+		return wire.CommandResult{}, false
+	}
+	if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
+		delete(l.resultCache, id)
+		return wire.CommandResult{}, false
+	}
+	return cached.result, true
+}
+
+func (l *Loop) rememberResult(id string, result wire.CommandResult) {
+	if id == "" {
+		return
+	}
+	if l.resultCache == nil {
+		l.resultCache = make(map[string]cachedResult)
+	}
+	if l.cacheMax <= 0 {
+		l.cacheMax = 128
+	}
+	if len(l.resultCache) >= l.cacheMax {
+		var oldestID string
+		var oldestAt time.Time
+		for id, cached := range l.resultCache {
+			if oldestID == "" || cached.at.Before(oldestAt) {
+				oldestID = id
+				oldestAt = cached.at
+			}
+		}
+		delete(l.resultCache, oldestID)
+	}
+	l.resultCache[id] = cachedResult{result: result, at: time.Now()}
 }
 
 func (l *Loop) backoff(attempt int) time.Duration {
@@ -109,7 +169,15 @@ func (l *Loop) backoff(attempt int) time.Duration {
 	if d > l.BackoffMax || d < 0 {
 		d = l.BackoffMax
 	}
-	return d
+	randFloat64 := l.randFloat64
+	if randFloat64 == nil {
+		randFloat64 = rand.Float64
+	}
+	jittered := time.Duration(randFloat64() * float64(d))
+	if jittered < time.Millisecond {
+		return time.Millisecond
+	}
+	return jittered
 }
 
 // sleepCtx waits d or until ctx done. Returns false if ctx is done first.

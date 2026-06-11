@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/anex/wg-monitor/internal/releaseorigin"
+	"github.com/anex/wg-monitor/internal/releasesig"
 )
 
 // SelfUpdateRepoBase is the GitHub Releases base URL the agent pulls from.
@@ -70,6 +71,15 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	sumsBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL, fallbackLabel)
 	if err != nil {
 		return "", fmt.Errorf("download checksums.txt: %w", err)
+	}
+	if releasesig.SignatureRequiredForVersion(version) {
+		sigBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL+".sig", fallbackLabel)
+		if err != nil {
+			return "", fmt.Errorf("download checksums.txt.sig: %w", err)
+		}
+		if err := releasesig.VerifyChecksumsSignature(sumsBody, sigBody); err != nil {
+			return "", fmt.Errorf("verify checksums.txt signature: %w", err)
+		}
 	}
 	wantSha, ok := parseChecksum(string(sumsBody), assetName)
 	if !ok {

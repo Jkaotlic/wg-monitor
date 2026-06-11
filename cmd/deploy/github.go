@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/anex/wg-monitor/internal/releasesig"
 )
 
 // RepoOwner and RepoName point at the GitHub repository the wizard pulls
@@ -249,7 +251,7 @@ func (d *Downloader) GetAsset(assetURL, assetName, checksumsURL, tag string) (st
 	}
 	target := filepath.Join(tagDir, assetName)
 
-	wantSha, err := d.fetchExpectedSha(checksumsURL, assetName)
+	wantSha, err := d.fetchExpectedSha(checksumsURL, assetName, tag)
 	if err != nil {
 		return "", fmt.Errorf("checksums.txt: %w", err)
 	}
@@ -286,7 +288,7 @@ func (d *Downloader) GetAsset(assetURL, assetName, checksumsURL, tag string) (st
 	return target, nil
 }
 
-func (d *Downloader) fetchExpectedSha(checksumsURL, assetName string) (string, error) {
+func (d *Downloader) fetchExpectedSha(checksumsURL, assetName, tag string) (string, error) {
 	resp, err := d.HTTP.Get(checksumsURL)
 	if err != nil {
 		return "", err
@@ -298,6 +300,23 @@ func (d *Downloader) fetchExpectedSha(checksumsURL, assetName string) (string, e
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
+	}
+	if releasesig.SignatureRequiredForVersion(tag) {
+		sigResp, err := d.HTTP.Get(checksumsURL + ".sig")
+		if err != nil {
+			return "", fmt.Errorf("signature: %w", err)
+		}
+		defer sigResp.Body.Close()
+		if sigResp.StatusCode != 200 {
+			return "", fmt.Errorf("signature: HTTP %d", sigResp.StatusCode)
+		}
+		sig, err := io.ReadAll(sigResp.Body)
+		if err != nil {
+			return "", fmt.Errorf("signature: %w", err)
+		}
+		if err := releasesig.VerifyChecksumsSignature(body, sig); err != nil {
+			return "", fmt.Errorf("signature: %w", err)
+		}
 	}
 	for _, line := range strings.Split(string(body), "\n") {
 		f := strings.Fields(line)

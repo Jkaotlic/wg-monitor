@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,9 @@ import (
 )
 
 const dashboardSessionCookieName = "wg_dashboard_session"
+const dashboardSessionTTL = 12 * time.Hour
+
+var dashboardNow = time.Now
 
 // DashboardAuthMiddleware gates /dashboard and /v1/dashboard/* with the
 // dashboard token loaded at startup. Empty expected tokens must never be wired.
@@ -140,8 +144,9 @@ func dashboardLogoutHandler() http.Handler {
 func dashboardSessionCookie(r *http.Request, token string) *http.Cookie {
 	return &http.Cookie{
 		Name:     dashboardSessionCookieName,
-		Value:    dashboardSessionValue(token),
+		Value:    dashboardSessionValue(token, dashboardNow().Add(dashboardSessionTTL)),
 		Path:     "/",
+		MaxAge:   int(dashboardSessionTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   requestIsHTTPS(r),
 		SameSite: http.SameSiteStrictMode,
@@ -153,14 +158,29 @@ func dashboardSessionValid(r *http.Request, token string) bool {
 	if err != nil || cookie.Value == "" {
 		return false
 	}
-	want := dashboardSessionValue(token)
+	parts := strings.Split(cookie.Value, ":")
+	if len(parts) != 3 || parts[0] != "v2" {
+		return false
+	}
+	expUnix, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return false
+	}
+	expiresAt := time.Unix(expUnix, 0).UTC()
+	if !dashboardNow().Before(expiresAt) {
+		return false
+	}
+	want := dashboardSessionValue(token, expiresAt)
 	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(want)) == 1
 }
 
-func dashboardSessionValue(token string) string {
+func dashboardSessionValue(token string, expiresAt time.Time) string {
+	exp := strconv.FormatInt(expiresAt.Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(token))
 	_, _ = mac.Write([]byte("wg-monitor-dashboard-session-v1"))
-	return "v1:" + hex.EncodeToString(mac.Sum(nil))
+	_, _ = mac.Write([]byte(":"))
+	_, _ = mac.Write([]byte(exp))
+	return "v2:" + exp + ":" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func requestIsHTTPS(r *http.Request) bool {

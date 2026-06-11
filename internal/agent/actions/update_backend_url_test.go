@@ -1,6 +1,8 @@
 package actions
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,6 +88,51 @@ func TestUpdateBackendURLRejectsNonHTTPS(t *testing.T) {
 	err := rewriteBackendURL(cfg, "http://insecure.example.com")
 	if err == nil {
 		t.Fatal("expected error for non-https URL, got nil")
+	}
+}
+
+func TestUpdateBackendURLRejectsPrivateHost(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	_ = os.WriteFile(cfg, []byte("backend:\n  url: https://old.example.com\n"), 0600)
+
+	err := rewriteBackendURL(cfg, "https://192.168.31.87")
+	if err == nil {
+		t.Fatal("expected error for private backend URL")
+	}
+}
+
+func TestUpdateBackendURLHealthCheckFailureDoesNotRewriteOrRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	original := "backend:\n  url: https://old.example.com\n"
+	if err := os.WriteFile(cfg, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	oldCheck := backendURLHealthCheck
+	backendURLHealthCheck = func(context.Context, string) error {
+		return errors.New("health down")
+	}
+	t.Cleanup(func() { backendURLHealthCheck = oldCheck })
+	oldRestart := scheduleURLUpdateRestart
+	restarted := false
+	scheduleURLUpdateRestart = func() { restarted = true }
+	t.Cleanup(func() { scheduleURLUpdateRestart = oldRestart })
+
+	_, err := UpdateBackendURL(context.Background(), "https://new.example.com", cfg)
+	if err == nil {
+		t.Fatal("expected health-check failure")
+	}
+	if restarted {
+		t.Fatal("restart must not be scheduled when health check fails")
+	}
+	got, readErr := os.ReadFile(cfg)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != original {
+		t.Fatalf("config changed despite failed health check:\n%s", string(got))
 	}
 }
 
