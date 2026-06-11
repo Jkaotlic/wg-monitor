@@ -52,6 +52,22 @@ var adminCommandItems = []BotMenuItem{
 	{Command: "selfhosted", Description: "Self-hosted Amnezia VPS"},
 }
 
+var operatorCommandOrder = []string{
+	"status",
+	"check",
+	"tunnels",
+	"routes",
+	"via",
+	"direct",
+	"amnezia",
+	"hidemy",
+	"maint",
+	"upgrade",
+	"menu",
+	"keyboard",
+	"help",
+}
+
 var adminPanelRouterKindItems = []PanelKindItem{
 	{Kind: "status", Label: "📊 Статус"},
 	{Kind: "doctor", Label: "🩺 Проверка"},
@@ -95,13 +111,13 @@ func FleetMenuItems() []BotMenuItem {
 
 func OperatorBotCommands() []BotCommand {
 	items := append(cloneMenuItems(routerMenuItems), utilityCommandItems...)
-	return commandsFromItems(items)
+	return commandsFromItemsInOrder(items, operatorCommandOrder)
 }
 
 func AdminBotCommands() []BotCommand {
 	items := append(cloneMenuItems(routerMenuItems), utilityCommandItems...)
 	items = append(items, adminCommandItems...)
-	return commandsFromItems(items)
+	return commandsFromItemsInOrder(items, append(operatorCommandOrder, "panel", "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted"))
 }
 
 func AdminPanelRouterKindItems() []PanelKindItem {
@@ -148,6 +164,37 @@ func OperatorMenuHelpText() string {
 func commandsFromItems(items []BotMenuItem) []BotCommand {
 	out := make([]BotCommand, 0, len(items))
 	seen := map[string]bool{}
+	for _, item := range items {
+		if item.Command == "" || seen[item.Command] {
+			continue
+		}
+		seen[item.Command] = true
+		out = append(out, BotCommand{Command: item.Command, Description: item.Description})
+	}
+	return out
+}
+
+func commandsFromItemsInOrder(items []BotMenuItem, order []string) []BotCommand {
+	byCommand := make(map[string]BotMenuItem, len(items))
+	for _, item := range items {
+		if item.Command == "" {
+			continue
+		}
+		if _, exists := byCommand[item.Command]; exists {
+			continue
+		}
+		byCommand[item.Command] = item
+	}
+	out := make([]BotCommand, 0, len(byCommand))
+	seen := map[string]bool{}
+	for _, command := range order {
+		item, ok := byCommand[command]
+		if !ok || seen[command] {
+			continue
+		}
+		seen[command] = true
+		out = append(out, BotCommand{Command: item.Command, Description: item.Description})
+	}
 	for _, item := range items {
 		if item.Command == "" || seen[item.Command] {
 			continue

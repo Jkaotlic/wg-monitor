@@ -59,9 +59,7 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 			Routes:        []awgmgr.DNSRouteEntry{{Interface: t.Iface, TunnelID: dnsBindID, Fallback: "auto"}},
 		}
 		if req.UseHRNeo {
-			rule.Backend = "hydraroute"
-			rule.HRPolicyName = "HydraRoute"
-			rule.HRRouteMode = "proxy"
+			rule = hrNeoPolicyRoute(req.Name, req.Targets, t.Iface)
 			hrTouched = true
 		}
 		if err := c.CreateDNSRoute(ctx, rule); err != nil {
