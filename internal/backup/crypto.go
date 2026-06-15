@@ -15,6 +15,13 @@ import (
 
 var encryptedMagic = []byte("WGMONBACKUP1\n")
 
+const (
+	encryptedBackupSaltSize     = 16
+	maxEncryptedBackupKDFTime   = 4
+	maxEncryptedBackupMemoryKiB = 64 * 1024
+	maxEncryptedBackupThreads   = 4
+)
+
 type Params struct {
 	Time      uint32 `json:"time"`
 	MemoryKiB uint32 `json:"memory_kib"`
@@ -106,9 +113,16 @@ func Decrypt(blob, passphrase []byte) ([]byte, error) {
 	if h.KDF != "argon2id" || h.AEAD != "xchacha20poly1305" {
 		return nil, fmt.Errorf("unsupported encrypted backup format kdf=%q aead=%q", h.KDF, h.AEAD)
 	}
+	params := Params{Time: h.Time, MemoryKiB: h.MemoryKiB, Threads: h.Threads}
+	if err := validateDecryptParams(params); err != nil {
+		return nil, err
+	}
 	salt, err := base64.RawStdEncoding.DecodeString(h.Salt)
 	if err != nil {
 		return nil, fmt.Errorf("decode salt: %w", err)
+	}
+	if len(salt) != encryptedBackupSaltSize {
+		return nil, fmt.Errorf("invalid salt size: got %d want %d", len(salt), encryptedBackupSaltSize)
 	}
 	nonce, err := base64.RawStdEncoding.DecodeString(h.Nonce)
 	if err != nil {
@@ -117,7 +131,6 @@ func Decrypt(blob, passphrase []byte) ([]byte, error) {
 	if len(nonce) != chacha20poly1305.NonceSizeX {
 		return nil, errors.New("invalid nonce size")
 	}
-	params := normalizeParams(Params{Time: h.Time, MemoryKiB: h.MemoryKiB, Threads: h.Threads})
 	key := argon2.IDKey(passphrase, salt, params.Time, params.MemoryKiB, params.Threads, chacha20poly1305.KeySize)
 	aead, err := chacha20poly1305.NewX(key)
 	if err != nil {
@@ -132,6 +145,19 @@ func Decrypt(blob, passphrase []byte) ([]byte, error) {
 
 func IsEncrypted(blob []byte) bool {
 	return len(blob) >= len(encryptedMagic) && string(blob[:len(encryptedMagic)]) == string(encryptedMagic)
+}
+
+func validateDecryptParams(p Params) error {
+	if p.Time == 0 || p.Time > maxEncryptedBackupKDFTime {
+		return fmt.Errorf("invalid KDF time: got %d want 1..%d", p.Time, maxEncryptedBackupKDFTime)
+	}
+	if p.MemoryKiB == 0 || p.MemoryKiB > maxEncryptedBackupMemoryKiB {
+		return fmt.Errorf("invalid KDF memory_kib: got %d want 1..%d", p.MemoryKiB, maxEncryptedBackupMemoryKiB)
+	}
+	if p.Threads == 0 || p.Threads > maxEncryptedBackupThreads {
+		return fmt.Errorf("invalid KDF threads: got %d want 1..%d", p.Threads, maxEncryptedBackupThreads)
+	}
+	return nil
 }
 
 func normalizeParams(p Params) Params {

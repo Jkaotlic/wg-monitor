@@ -68,17 +68,34 @@ func extractTarMember(gzBody []byte, name string) ([]byte, error) {
 	}
 	defer gr.Close()
 	tr := tar.NewReader(gr)
+	var found []byte
 	for {
 		h, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return nil, os.ErrNotExist
+			if found == nil {
+				return nil, os.ErrNotExist
+			}
+			return found, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		if filepath.Base(h.Name) != name {
+		memberName := filepath.ToSlash(h.Name)
+		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 			continue
 		}
-		return io.ReadAll(tr)
+		if memberName != name {
+			if filepath.Base(memberName) == name {
+				return nil, fmt.Errorf("backup archive contains unexpected member path %q", h.Name)
+			}
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("backup archive contains duplicate member %q", h.Name)
+		}
+		found, err = io.ReadAll(tr)
+		if err != nil {
+			return nil, err
+		}
 	}
 }

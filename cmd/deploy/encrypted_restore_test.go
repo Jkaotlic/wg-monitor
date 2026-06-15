@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/anex/wg-monitor/internal/backup"
@@ -76,16 +77,53 @@ func TestImportEncryptedFullBackupRejectsWrongPassword(t *testing.T) {
 	}
 }
 
+func TestExtractTarMemberRejectsNestedTargetMember(t *testing.T) {
+	plain := makeTGZForTest(t, map[string]string{
+		"nested/operator-secrets.tgz.enc": "vault",
+	})
+
+	_, err := extractTarMember(plain, "operator-secrets.tgz.enc")
+	if err == nil || !strings.Contains(err.Error(), "unexpected member path") {
+		t.Fatalf("want nested member error, got %v", err)
+	}
+}
+
+func TestExtractTarMemberRejectsDuplicateTargetMember(t *testing.T) {
+	plain := makeTGZForTestEntries(t, []tarEntryForTest{
+		{name: "operator-secrets.tgz.enc", body: "vault"},
+		{name: "operator-secrets.tgz.enc", body: "replacement"},
+	})
+
+	_, err := extractTarMember(plain, "operator-secrets.tgz.enc")
+	if err == nil || !strings.Contains(err.Error(), "duplicate member") {
+		t.Fatalf("want duplicate member error, got %v", err)
+	}
+}
+
 func makeTGZForTest(t *testing.T, members map[string]string) []byte {
+	t.Helper()
+	entries := make([]tarEntryForTest, 0, len(members))
+	for name, body := range members {
+		entries = append(entries, tarEntryForTest{name: name, body: body})
+	}
+	return makeTGZForTestEntries(t, entries)
+}
+
+type tarEntryForTest struct {
+	name string
+	body string
+}
+
+func makeTGZForTestEntries(t *testing.T, entries []tarEntryForTest) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
-	for name, body := range members {
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body))}); err != nil {
+	for _, entry := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.body))}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tw.Write([]byte(body)); err != nil {
+		if _, err := tw.Write([]byte(entry.body)); err != nil {
 			t.Fatal(err)
 		}
 	}
