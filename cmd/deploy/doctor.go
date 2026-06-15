@@ -328,7 +328,7 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 	// /healthz
 	if state.Backend.Domain != "" {
 		url := "https://" + state.Backend.Domain + "/healthz"
-		out, _, _, err := s.Run(fmt.Sprintf("curl -sS -o /dev/null -w '%%{http_code}' %s", url))
+		out, _, _, err := s.Run(curlHTTPCodeCommand(url))
 		if err != nil {
 			t.failf(url + ": " + err.Error())
 		} else if code := strings.TrimSpace(out); code == "200" {
@@ -338,7 +338,7 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 		}
 
 		readyURL := "https://" + state.Backend.Domain + "/readyz"
-		out, _, _, err = s.Run(fmt.Sprintf("curl -sS -o /dev/null -w '%%{http_code}' %s", readyURL))
+		out, _, _, err = s.Run(curlHTTPCodeCommand(readyURL))
 		if err != nil {
 			t.failf(readyURL + ": " + err.Error())
 		} else if code := strings.TrimSpace(out); code == "200" {

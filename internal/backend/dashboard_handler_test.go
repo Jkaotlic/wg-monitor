@@ -288,6 +288,16 @@ func TestDashboardOperatorLatestReleaseOrdersRCNumbersWhenPublishedAtTies(t *tes
 	}
 }
 
+func TestDecodeDashboardLatestReleaseRejectsOversizedGitHubResponse(t *testing.T) {
+	_, err := decodeDashboardLatestRelease(strings.NewReader("[" + strings.Repeat(" ", (1<<20)+1)))
+	if err == nil {
+		t.Fatal("expected oversized GitHub response to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected too large error, got %v", err)
+	}
+}
+
 func TestDashboardSummaryIncludesLatestVersion(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
