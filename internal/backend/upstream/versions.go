@@ -53,6 +53,7 @@ type Cache struct {
 }
 
 const defaultAPI = "https://api.github.com/repos/%s/releases?per_page=1"
+const maxGitHubReleasesBodyBytes = 1 << 20
 
 // NewCache builds a Cache wired to the public GitHub API with a 10s timeout
 // per request. `sources` is the closed set of names Latest will accept.
@@ -148,7 +149,10 @@ func (c *Cache) fetch(ctx context.Context, repo string) (string, error) {
 	if resp.StatusCode/100 != 2 {
 		return "", fmt.Errorf("github %s: HTTP %d", repo, resp.StatusCode)
 	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := readLimited(resp.Body, maxGitHubReleasesBodyBytes)
+	if err != nil {
+		return "", fmt.Errorf("github %s: %w", repo, err)
+	}
 	var arr []struct {
 		TagName string `json:"tag_name"`
 	}
@@ -159,4 +163,15 @@ func (c *Cache) fetch(ctx context.Context, repo string) (string, error) {
 		return "", fmt.Errorf("no releases for %s", repo)
 	}
 	return strings.TrimPrefix(strings.TrimPrefix(arr[0].TagName, "V"), "v"), nil
+}
+
+func readLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("response too large: limit %d bytes", maxBytes)
+	}
+	return body, nil
 }
