@@ -811,9 +811,56 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"ndms_name": ndms}, true
+	case "update_backend_url":
+		rawURL, _ := args["url"].(string)
+		normalized, err := sanitizeWizardBackendURL(rawURL)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_backend_url", err.Error())
+			return nil, false
+		}
+		return map[string]any{"url": normalized}, true
 	default:
 		return args, true
 	}
+}
+
+func sanitizeWizardBackendURL(raw string) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return "", fmt.Errorf("url is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return "", fmt.Errorf("url must be an absolute https URL")
+	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("url must start with https://")
+	}
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if host == "localhost" {
+		return "", fmt.Errorf("url must not use localhost")
+	}
+	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast()) {
+		return "", fmt.Errorf("url must not use private or loopback IP")
+	}
+	u.Scheme = "https"
+	u.Host = normalizedWizardURLHost(u)
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return u.String(), nil
+}
+
+func normalizedWizardURLHost(u *url.URL) string {
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if port := u.Port(); port != "" {
+		return net.JoinHostPort(host, port)
+	}
+	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 func wizardNDMSNameLooksSafe(name string) bool {
