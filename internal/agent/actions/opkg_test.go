@@ -232,6 +232,19 @@ func TestOpkg_SmartUpgrade_TotalUpdateFailure_Errs(t *testing.T) {
 	}
 }
 
+func TestOpkgDfOptRejectsNonNumericFields(t *testing.T) {
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "df" || strings.Join(args, " ") != "-k /opt" {
+			t.Fatalf("unexpected command: %s %s", name, strings.Join(args, " "))
+		}
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/root nope 10 also-nope 20% /opt\n"), nil
+	})
+
+	if _, _, err := o.dfOpt(context.Background()); err == nil {
+		t.Fatal("dfOpt should reject non-numeric total/free fields")
+	}
+}
+
 func TestNormalizeFeedURL(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"https://anonym-tsk.github.io/nfqws-keenetic/all/Packages.gz", "https://anonym-tsk.github.io/nfqws-keenetic/all"},
