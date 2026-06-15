@@ -1445,6 +1445,43 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	}
 }
 
+func TestCmdResult_DuplicateSelfUpdateFailureDoesNotNotifyAgain(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-dup.db"))
+	defer d.Close()
+	tok := "eded11eded11eded11eded11eded11eded11eded11eded11eded11eded11eded"
+	_, _ = d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	deploy := &fakeDeployNotifier{}
+	sink := &fakeCmdSink{
+		resultErr: cmdpkg.ErrDuplicateResult,
+		commands: map[string]wire.Command{
+			"cmd1": {
+				ID:     "cmd1",
+				Action: "self_update",
+				Args:   map[string]any{"version": "v0.13.0-rc53"},
+			},
+		},
+	}
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		CommandSink:    sink,
+		DeployNotifier: deploy,
+	})
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "cmd1", Status: "err", Output: "download checksums.txt: HTTP 502"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if calls := deploy.snapshot(); len(calls) != 0 {
+		t.Fatalf("duplicate result must not notify deferred update again: %+v", calls)
+	}
+}
+
 type fakeWakeNotifier struct {
 	mu    sync.Mutex
 	calls []wakeRec
