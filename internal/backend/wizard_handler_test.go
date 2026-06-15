@@ -801,15 +801,21 @@ func TestWizardCommandDispatchAllowsRouteAndTunnelCleanup(t *testing.T) {
 	}{
 		{
 			name:   "route rebind",
-			body:   `{"action":"route_rebind","args":{"src_tunnel_id":"awg10","dst_tunnel_id":"awg13"}}`,
+			body:   `{"action":"route_rebind","args":{"src_tunnel_id":"awg10","dst_tunnel_id":"awg13","extra":"ignored"}}`,
 			action: "route_rebind",
 			want:   map[string]any{"src_tunnel_id": "awg10", "dst_tunnel_id": "awg13"},
 		},
 		{
 			name:   "tunnel delete",
-			body:   `{"action":"tunnel_delete","args":{"tunnel_id":"awg10"}}`,
+			body:   `{"action":"tunnel_delete","args":{"tunnel_id":"awg10","extra":"ignored"}}`,
 			action: "tunnel_delete",
 			want:   map[string]any{"tunnel_id": "awg10"},
+		},
+		{
+			name:   "route rebind from other",
+			body:   `{"action":"route_rebind","args":{"src_tunnel_id":"` + wire.RouteOtherID + `","dst_tunnel_id":"nwg1"}}`,
+			action: "route_rebind",
+			want:   map[string]any{"src_tunnel_id": wire.RouteOtherID, "dst_tunnel_id": "nwg1"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -836,6 +842,9 @@ func TestWizardCommandDispatchAllowsRouteAndTunnelCleanup(t *testing.T) {
 					t.Fatalf("arg %s=%v, want %v; cmd=%+v", key, got, want, cmd)
 				}
 			}
+			if _, ok := cmd.Args["extra"]; ok {
+				t.Fatalf("unsafe extra arg leaked: %+v", cmd.Args)
+			}
 		})
 	}
 }
@@ -855,6 +864,8 @@ func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
 		`{"action":"firmware_install"}`,
 		`{"action":"service_restart","args":{"name":"router"}}`,
 		`{"action":"tunnel_restart","args":{"ndms_name":"Wireguard1; system reboot"}}`,
+		`{"action":"route_rebind","args":{"src_tunnel_id":"awg10; reboot","dst_tunnel_id":"awg13"}}`,
+		`{"action":"tunnel_delete","args":{"tunnel_id":"../awg10"}}`,
 	} {
 		t.Run(body, func(t *testing.T) {
 			sink := &fakeCmdSink{}
