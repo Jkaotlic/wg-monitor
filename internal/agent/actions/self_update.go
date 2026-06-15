@@ -24,7 +24,11 @@ import (
 // can rebuild with a different default. Tag is appended at call time.
 var SelfUpdateRepoBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
 
-const maxSelfUpdateArtifactSize = 64 << 20
+const (
+	maxSelfUpdateChecksumsSize = 1 << 20
+	maxSelfUpdateSignatureSize = 4 << 10
+	maxSelfUpdateArtifactSize  = 64 << 20
+)
 
 // SelfUpdate downloads the agent binary for the given release tag, verifies
 // its SHA-256 against checksums.txt from the same release, writes it to
@@ -68,12 +72,12 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	}
 
 	// Download checksums.txt first (small file, safe to buffer in memory).
-	sumsBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL, fallbackLabel)
+	sumsBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL, fallbackLabel, maxSelfUpdateChecksumsSize)
 	if err != nil {
 		return "", fmt.Errorf("download checksums.txt: %w", err)
 	}
 	if releasesig.SignatureRequiredForVersion(version) {
-		sigBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL+".sig", fallbackLabel)
+		sigBody, err := httpGetWithFallback(ctx, httpClient, fallbackClient, sumsURL+".sig", fallbackLabel, maxSelfUpdateSignatureSize)
 		if err != nil {
 			return "", fmt.Errorf("download checksums.txt.sig: %w", err)
 		}
@@ -166,6 +170,10 @@ func detectAgentArch() (string, error) {
 }
 
 func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
+	return httpGetLimited(ctx, c, url, maxSelfUpdateArtifactSize)
+}
+
+func httpGetLimited(ctx context.Context, c *http.Client, url string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
@@ -178,12 +186,12 @@ func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("HTTP %d for %s", resp.StatusCode, url)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxSelfUpdateArtifactSize+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(body)) > maxSelfUpdateArtifactSize {
-		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxSelfUpdateArtifactSize)
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("response too large: exceeds %d bytes", maxBytes)
 	}
 	return body, nil
 }
@@ -234,15 +242,19 @@ func httpGetToFile(ctx context.Context, c *http.Client, rawURL, dst string, maxB
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, url, fallbackLabel string) ([]byte, error) {
-	body, err := httpGet(ctx, primary, url)
+func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, url, fallbackLabel string, maxBytes ...int64) ([]byte, error) {
+	limit := int64(maxSelfUpdateArtifactSize)
+	if len(maxBytes) > 0 && maxBytes[0] > 0 {
+		limit = maxBytes[0]
+	}
+	body, err := httpGetLimited(ctx, primary, url, limit)
 	if err == nil {
 		return body, nil
 	}
 	if fallback == nil || strings.TrimSpace(fallbackLabel) == "" || !isSelfUpdateTransportError(err) {
 		return nil, err
 	}
-	body, fallbackErr := httpGet(ctx, fallback, url)
+	body, fallbackErr := httpGetLimited(ctx, fallback, url, limit)
 	if fallbackErr != nil {
 		return nil, fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
 	}

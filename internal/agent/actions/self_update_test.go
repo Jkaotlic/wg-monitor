@@ -26,6 +26,8 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 const expectedMaxSelfUpdateArtifactSize = 64 << 20
+const expectedMaxSelfUpdateChecksumsSize = 1 << 20
+const expectedMaxSelfUpdateSignatureSize = 4 << 10
 
 func TestHTTPGetRejectsOversizedBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -39,6 +41,21 @@ func TestHTTPGetRejectsOversizedBody(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too large") {
 		t.Fatalf("expected size-limit error, got: %v", err)
+	}
+}
+
+func TestHTTPGetLimitedUsesSmallerMetadataLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.CopyN(w, zeroReader{}, expectedMaxSelfUpdateChecksumsSize+1)
+	}))
+	defer srv.Close()
+
+	_, err := httpGetLimited(context.Background(), srv.Client(), srv.URL, expectedMaxSelfUpdateChecksumsSize)
+	if err == nil {
+		t.Fatal("expected oversized metadata response to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "1048576") {
+		t.Fatalf("expected checksum size-limit error, got: %v", err)
 	}
 }
 
