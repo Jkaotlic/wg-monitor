@@ -93,7 +93,7 @@ func extractTarMember(gzBody []byte, name string) ([]byte, error) {
 		if found != nil {
 			return nil, fmt.Errorf("backup archive contains duplicate member %q", h.Name)
 		}
-		found, err = io.ReadAll(tr)
+		found, err = readArchiveMemberLimited(tr, name, maxOperatorVaultBytes)
 		if err != nil {
 			return nil, err
 		}

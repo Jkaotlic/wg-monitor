@@ -137,6 +137,24 @@ func TestImportSecretsRejectsDuplicateArchiveMembers(t *testing.T) {
 	}
 }
 
+func TestImportSecretsRejectsOversizeSecretsMember(t *testing.T) {
+	dir := t.TempDir()
+	secretsPath := filepath.Join(dir, "secrets.env")
+	t.Setenv("WG_SECRETS_FILE", secretsPath)
+	t.Setenv("WG_NO_SECRET_CACHE", "")
+	archive := writeSecretsArchiveForTest(t, []secretsArchiveEntry{
+		{name: "secrets.env", body: strings.Repeat("A", (1<<20)+1)},
+	})
+
+	err := ImportSecrets(archive, filepath.Join(dir, "wizard.toml"), false)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want oversize member error, got %v", err)
+	}
+	if _, statErr := os.Stat(secretsPath); !os.IsNotExist(statErr) {
+		t.Fatalf("oversize import wrote secrets file: %v", statErr)
+	}
+}
+
 func TestExportSecrets_RejectsNonTgzExtension(t *testing.T) {
 	srcDir := t.TempDir()
 	src := filepath.Join(srcDir, "secrets.env")

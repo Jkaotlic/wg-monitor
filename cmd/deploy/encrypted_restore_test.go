@@ -100,6 +100,17 @@ func TestExtractTarMemberRejectsDuplicateTargetMember(t *testing.T) {
 	}
 }
 
+func TestExtractTarMemberRejectsOversizeTargetMember(t *testing.T) {
+	plain := makeTGZForTest(t, map[string]string{
+		"operator-secrets.tgz.enc": strings.Repeat("A", (4<<20)+1),
+	})
+
+	_, err := extractTarMember(plain, "operator-secrets.tgz.enc")
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want oversize member error, got %v", err)
+	}
+}
+
 func makeTGZForTest(t *testing.T, members map[string]string) []byte {
 	t.Helper()
 	entries := make([]tarEntryForTest, 0, len(members))
