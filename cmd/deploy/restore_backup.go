@@ -48,6 +48,8 @@ type restoreBackendConfig struct {
 	} `yaml:"telegram"`
 }
 
+const restoreRemoteDBPath = "/var/lib/wg-monitor/state.db"
+
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-restore-*")
 	if err != nil {
@@ -172,6 +174,9 @@ func validateRestoreBackendYAML(path string) error {
 	}
 	if strings.TrimSpace(cfg.DBPath) == "" {
 		return fmt.Errorf("validate backend.yaml: db_path is required")
+	}
+	if strings.TrimSpace(cfg.DBPath) != restoreRemoteDBPath {
+		return fmt.Errorf("validate backend.yaml: db_path must be %s for this restore flow, got %q", restoreRemoteDBPath, strings.TrimSpace(cfg.DBPath))
 	}
 	if strings.TrimSpace(cfg.Telegram.BotTokenFile) == "" {
 		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file is required")

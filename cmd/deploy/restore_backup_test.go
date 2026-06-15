@@ -138,6 +138,27 @@ func TestInspectRestoreBackupRejectsIncompleteBackendYAML(t *testing.T) {
 	}
 }
 
+func TestInspectRestoreBackupRejectsUnsupportedDBPath(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db": "sqlite bytes",
+		"backend.yaml": `db_path: /custom/state.db
+telegram:
+  bot_token_file: /etc/wg-monitor/bot-token.txt
+  chat_id: -100123
+  admin_user_id: 42
+`,
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "db_path") {
+		t.Fatalf("want db_path validation error, got %v", err)
+	}
+}
+
 func TestBuildRestoreRemoteScriptSafetySteps(t *testing.T) {
 	script := buildRestoreRemoteScript("20260522T055443Z")
 	for _, want := range []string{
