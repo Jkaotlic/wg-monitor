@@ -762,7 +762,7 @@ func TestWizardCommandDispatchAllowsConnectivityChecks(t *testing.T) {
 			sink := &fakeCmdSink{}
 			h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
 			req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/gachimikhail/commands",
-				strings.NewReader(`{"action":"`+action+`"}`))
+				strings.NewReader(`{"action":"`+action+`","args":{"extra":"ignored"}}`))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("nickname", "gachimikhail")
 			rec := httptest.NewRecorder()
@@ -776,6 +776,9 @@ func TestWizardCommandDispatchAllowsConnectivityChecks(t *testing.T) {
 			}
 			if sink.enqueued[0].Action != action {
 				t.Fatalf("action=%q, want %q", sink.enqueued[0].Action, action)
+			}
+			if len(sink.enqueued[0].Args) != 0 {
+				t.Fatalf("no-arg command leaked args: %+v", sink.enqueued[0].Args)
 			}
 		})
 	}

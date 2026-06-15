@@ -777,6 +777,8 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
+	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "route_status", "tunnels_status":
+		return map[string]any{}, true
 	case "opkg_cron_install", "entware_clean_install":
 		schedule, _ := args["schedule"].(string)
 		schedule = strings.TrimSpace(schedule)
