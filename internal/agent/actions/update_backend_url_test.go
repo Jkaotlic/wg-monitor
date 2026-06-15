@@ -102,6 +102,19 @@ func TestUpdateBackendURLRejectsPrivateHost(t *testing.T) {
 	}
 }
 
+func TestUpdateBackendURLRejectsTrailingDotLoopbackHosts(t *testing.T) {
+	for _, raw := range []string{
+		"https://localhost.",
+		"https://127.0.0.1.",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			if _, err := validateBackendURL(raw); err == nil {
+				t.Fatal("expected trailing-dot loopback host to be rejected")
+			}
+		})
+	}
+}
+
 func TestUpdateBackendURLHealthCheckFailureDoesNotRewriteOrRestart(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config.yaml")

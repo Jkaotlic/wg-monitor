@@ -116,7 +116,7 @@ func validateBackendURL(raw string) (string, error) {
 	if u.Scheme != "https" {
 		return "", fmt.Errorf("update_backend_url: URL must start with https://, got %q", raw)
 	}
-	host := strings.ToLower(u.Hostname())
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	if host == "localhost" {
 		return "", fmt.Errorf("update_backend_url: backend URL must not use localhost")
 	}
@@ -124,12 +124,23 @@ func validateBackendURL(raw string) (string, error) {
 		return "", fmt.Errorf("update_backend_url: backend URL must not use private or loopback IP")
 	}
 	u.Scheme = "https"
-	u.Host = strings.ToLower(u.Host)
+	u.Host = normalizedURLHost(u)
 	u.Path = strings.TrimRight(u.Path, "/")
 	u.RawQuery = ""
 	u.Fragment = ""
 	u.User = nil
 	return u.String(), nil
+}
+
+func normalizedURLHost(u *url.URL) string {
+	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
+	if port := u.Port(); port != "" {
+		return net.JoinHostPort(host, port)
+	}
+	if ip := net.ParseIP(host); ip != nil && strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
 }
 
 // substituteBackendURL finds the `url:` line inside the `backend:` section and
