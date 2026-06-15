@@ -17,6 +17,7 @@ import (
 	"github.com/anex/wg-monitor/internal/agent/checks"
 	"github.com/anex/wg-monitor/internal/agent/cmdloop"
 	"github.com/anex/wg-monitor/internal/agent/keenetic"
+	"github.com/anex/wg-monitor/pkg/wire"
 )
 
 // Version is overridable at link time: -ldflags "-X main.Version=0.5.0"
@@ -215,6 +216,9 @@ func dnsIfaceMapTunnelUsable(t awgmgr.Tunnel) bool {
 // awg-manager is unreachable — caller is expected to fall back to the
 // system default route.
 func pickDefaultRouteIface(ctx context.Context, c *awgmgr.Client, logger *slog.Logger) string {
+	if c == nil {
+		return ""
+	}
 	ta, err := c.TunnelsAll(ctx)
 	if err != nil {
 		if logger != nil {
@@ -230,6 +234,52 @@ func pickDefaultRouteIface(ctx context.Context, c *awgmgr.Client, logger *slog.L
 	return ""
 }
 
+var externalReachHTTPClientForIface = func(iface string) *http.Client {
+	return &http.Client{
+		Timeout: 6 * time.Second,
+		Transport: &http.Transport{
+			DialContext: checks.IfaceDialer(iface).DialContext,
+		},
+	}
+}
+
+type defaultRouteExternalReachCheck struct {
+	targets       []checks.ExternalReachTarget
+	failThreshold int
+	awgClient     *awgmgr.Client
+	logger        *slog.Logger
+}
+
+func (c defaultRouteExternalReachCheck) Name() string { return "external_reach" }
+
+func (c defaultRouteExternalReachCheck) Run(ctx context.Context, deps checks.Deps) wire.Check {
+	pickCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	viaIface := pickDefaultRouteIface(pickCtx, c.awgClient, c.logger)
+	cancel()
+	if viaIface == "" {
+		if c.logger != nil {
+			c.logger.Warn("external_reach: no defaultRoute tunnel found")
+		}
+		return checks.ExternalReachCheck{
+			Targets:         c.targets,
+			FailThreshold:   c.failThreshold,
+			PerProbeTimeout: 5 * time.Second,
+			ConfigReason:    "no_default_route_tunnel",
+			ConfigError:     "no enabled defaultRoute tunnel found in awg-manager; external_reach is configured to bind to a tunnel and will not probe through system WAN",
+		}.Run(ctx, deps)
+	}
+	if c.logger != nil {
+		c.logger.Info("external_reach iface-bound", "iface", viaIface, "targets", len(c.targets))
+	}
+	return checks.ExternalReachCheck{
+		Targets:         c.targets,
+		FailThreshold:   c.failThreshold,
+		HTTPClient:      externalReachHTTPClientForIface(viaIface),
+		PerProbeTimeout: 5 * time.Second,
+		ViaInterface:    viaIface,
+	}.Run(ctx, deps)
+}
+
 func buildExternalReachCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) checks.Check {
 	pc := cfg.ExternalReach
 	if len(pc.Targets) == 0 {
@@ -243,32 +293,12 @@ func buildExternalReachCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger
 	}
 
 	httpc := &http.Client{Timeout: 6 * time.Second}
-	viaIface := ""
 	if pc.BindToDefault {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		viaIface = pickDefaultRouteIface(ctx, awgClient, logger)
-		cancel()
-		if viaIface != "" {
-			httpc = &http.Client{
-				Timeout: 6 * time.Second,
-				Transport: &http.Transport{
-					DialContext: checks.IfaceDialer(viaIface).DialContext,
-				},
-			}
-			if logger != nil {
-				logger.Info("external_reach iface-bound", "iface", viaIface, "targets", len(targets))
-			}
-		} else {
-			if logger != nil {
-				logger.Warn("external_reach: no defaultRoute tunnel found")
-			}
-			return checks.ExternalReachCheck{
-				Targets:         targets,
-				FailThreshold:   pc.FailThreshold,
-				PerProbeTimeout: 5 * time.Second,
-				ConfigReason:    "no_default_route_tunnel",
-				ConfigError:     "no enabled defaultRoute tunnel found in awg-manager; external_reach is configured to bind to a tunnel and will not probe through system WAN",
-			}
+		return defaultRouteExternalReachCheck{
+			targets:       targets,
+			failThreshold: pc.FailThreshold,
+			awgClient:     awgClient,
+			logger:        logger,
 		}
 	}
 
@@ -277,6 +307,5 @@ func buildExternalReachCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger
 		FailThreshold:   pc.FailThreshold,
 		HTTPClient:      httpc,
 		PerProbeTimeout: 5 * time.Second,
-		ViaInterface:    viaIface,
 	}
 }
