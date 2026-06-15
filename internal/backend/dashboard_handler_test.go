@@ -274,6 +274,20 @@ func TestDashboardOperatorLatestReleasePrefersNewestPublishedRC(t *testing.T) {
 	}
 }
 
+func TestDashboardOperatorLatestReleaseOrdersRCNumbersWhenPublishedAtTies(t *testing.T) {
+	releases := []dashboardGitHubRelease{
+		{TagName: "v0.13.0-rc99"},
+		{TagName: "v0.13.0-rc120"},
+		{TagName: "v0.13.0-rc7"},
+	}
+
+	got := dashboardOperatorLatestRelease(releases)
+
+	if got != "v0.13.0-rc120" {
+		t.Fatalf("latest=%q, want v0.13.0-rc120", got)
+	}
+}
+
 func TestDashboardSummaryIncludesLatestVersion(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

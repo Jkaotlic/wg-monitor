@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -29,6 +30,34 @@ func TestParseRelease(t *testing.T) {
 	}
 	if a := rel.AssetByName("nope"); a != nil {
 		t.Error("expected nil for missing asset")
+	}
+}
+
+func TestGetLatestReleaseRejectsOversizedReleaseList(t *testing.T) {
+	oldAPI := GitHubAPIBase
+	t.Cleanup(func() {
+		GitHubAPIBase = oldAPI
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Jkaotlic/wg-monitor/releases":
+			_, _ = w.Write([]byte("["))
+			_, _ = io.Copy(w, io.LimitReader(zeroReader{}, (4<<20)+1))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	GitHubAPIBase = srv.URL
+
+	dl := &Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()}
+	_, err := dl.GetLatestRelease()
+	if err == nil {
+		t.Fatal("expected oversized release list to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected too large error, got %v", err)
 	}
 }
 
@@ -104,6 +133,27 @@ func TestDownloadAsset_BadSha(t *testing.T) {
 	entries, _ := filepath.Glob(filepath.Join(cache, "**/testbin"))
 	if len(entries) > 0 {
 		t.Errorf("expected no leftover files in cache, got %v", entries)
+	}
+}
+
+func TestFetchExpectedShaRejectsOversizedChecksums(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/checksums.txt":
+			_, _ = io.Copy(w, io.LimitReader(zeroReader{}, (1<<20)+1))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	dl := &Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()}
+	_, err := dl.fetchExpectedSha(srv.URL+"/checksums.txt", "testbin", "v0.13.0-rc127")
+	if err == nil {
+		t.Fatal("expected oversized checksums.txt to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected too large error, got %v", err)
 	}
 }
 
@@ -227,4 +277,13 @@ func TestGetLatestReleaseChoosesNewestPublishedRCOverStable(t *testing.T) {
 	if rel.TagName != "v0.13.0-rc120" {
 		t.Fatalf("latest tag=%q, want v0.13.0-rc120", rel.TagName)
 	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }
