@@ -1705,6 +1705,8 @@ func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message, kind st
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 }
 
+const maxUploadedTunnelConfigBytes = 50 * 1024
+
 func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind string, user *db.User) {
 	slog.Info("document-upload", "file", m.Document.FileName, "size", m.Document.FileSize, "kind", kind, "has_user", user != nil)
 	if kind != "per_router" || user == nil {
@@ -1712,7 +1714,7 @@ func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind s
 			"конфиги принимаются только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
-	if m.Document.FileSize > 50*1024 {
+	if m.Document.FileSize > maxUploadedTunnelConfigBytes {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"файл слишком большой (максимум 50 КБ для .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return
@@ -1727,6 +1729,11 @@ func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind s
 	if err != nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"не удалось скачать файл: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+		return
+	}
+	if len(data) > maxUploadedTunnelConfigBytes {
+		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
+			"Ñ„Ð°Ð¹Ð» ÑÐ»Ð¸ÑˆÐºÐ¾Ð¼ Ð±Ð¾Ð»ÑŒÑˆÐ¾Ð¹ (Ð¼Ð°ÐºÑÐ¸Ð¼ÑƒÐ¼ 50 ÐšÐ‘ Ð´Ð»Ñ .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return
 	}
 	confB64 := base64.StdEncoding.EncodeToString(data)
