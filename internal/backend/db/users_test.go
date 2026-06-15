@@ -338,6 +338,32 @@ func TestUsersTopicBindingIncludesTelegramChatID(t *testing.T) {
 	}
 }
 
+func TestUsersGetByChatThreadIDPrefersExplicitDefaultChatBinding(t *testing.T) {
+	d := openTempDB(t)
+	legacyID, err := d.Users().Insert("legacy", "tok-legacy", "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateThreadID(legacyID, 4242); err != nil {
+		t.Fatal(err)
+	}
+	explicitID, err := d.Users().Insert("explicit", "tok-explicit", "1.1.1.1", "nwg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateTelegramTopic(explicitID, -100, 4242); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := d.Users().GetByChatThreadID(-100, 4242, -100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != explicitID || got.Nickname != "explicit" {
+		t.Fatalf("got id=%d nick=%s, want explicit id=%d", got.ID, got.Nickname, explicitID)
+	}
+}
+
 func TestUsersGetByThreadID_NoRaceOnConcurrentInsert(t *testing.T) {
 	d := openTempDB(t)
 	var wg sync.WaitGroup

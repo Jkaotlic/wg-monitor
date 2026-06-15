@@ -455,8 +455,10 @@ func (u *UsersRepo) GetByChatThreadID(chatID, threadID, defaultChatID int64) (*U
 	row := u.d.db.QueryRow(
 		`SELECT `+userColsFull+` FROM users
 		  WHERE telegram_thread_id = ?
-		    AND (telegram_chat_id = ? OR (telegram_chat_id IS NULL AND ? = ?))`,
-		threadID, chatID, chatID, defaultChatID,
+		    AND (telegram_chat_id = ? OR (telegram_chat_id IS NULL AND ? = ?))
+		  ORDER BY CASE WHEN telegram_chat_id = ? THEN 0 ELSE 1 END, id
+		  LIMIT 1`,
+		threadID, chatID, chatID, defaultChatID, chatID,
 	)
 	got, err := scanUserFull(row)
 	if err != nil {
