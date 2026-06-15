@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -163,6 +164,31 @@ func TestExportSecrets_RejectsNonTgzExtension(t *testing.T) {
 	t.Setenv("WG_NO_SECRET_CACHE", "")
 	if err := ExportSecrets(filepath.Join(srcDir, "out.zip"), filepath.Join(srcDir, "wizard.toml")); err == nil {
 		t.Fatal("expected error for non-.tgz extension")
+	}
+}
+
+func TestExportSecretsCreatesPrivateExportDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX directory permissions are not reliable on Windows")
+	}
+	srcDir := t.TempDir()
+	src := filepath.Join(srcDir, "secrets.env")
+	if err := os.WriteFile(src, []byte("WG_VPS_PASS=secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WG_SECRETS_FILE", src)
+	t.Setenv("WG_NO_SECRET_CACHE", "")
+
+	exportDir := filepath.Join(t.TempDir(), "operator-export")
+	if err := ExportSecrets(filepath.Join(exportDir, "secrets.tgz"), filepath.Join(srcDir, "wizard.toml")); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	st, err := os.Stat(exportDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm(); got != 0o700 {
+		t.Fatalf("export dir mode=%#o, want 0700", got)
 	}
 }
 

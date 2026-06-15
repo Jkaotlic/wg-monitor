@@ -75,6 +75,28 @@ func TestOpkg_DryRun_Locked_WhenFreshLock(t *testing.T) {
 	}
 }
 
+func TestOpkg_TakeLockRefusesExistingLock(t *testing.T) {
+	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Errorf("opkg should not be invoked when lock acquisition fails")
+		return nil, nil
+	})
+	if err := os.WriteFile(o.LockPath, []byte("pid=other\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := o.takeLock()
+	if err == nil {
+		t.Fatal("expected takeLock to refuse an existing lock")
+	}
+	body, readErr := os.ReadFile(o.LockPath)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(body) != "pid=other\n" {
+		t.Fatalf("existing lock was overwritten: %q", body)
+	}
+}
+
 func TestOpkg_DryRun_StaleLockReleased(t *testing.T) {
 	called := 0
 	o := mkOpkgRunner(t, func(ctx context.Context, name string, args ...string) ([]byte, error) {

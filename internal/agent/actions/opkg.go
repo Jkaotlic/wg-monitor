@@ -31,10 +31,10 @@ func DefaultExec(ctx context.Context, name string, args ...string) ([]byte, erro
 // for the OpkgExecutor interface contract but is no longer wired into the
 // runner dispatch.
 type OpkgRunner struct {
-	LockPath   string
-	LockTTL    time.Duration
-	Exec       ExecFunc
-	Now        func() time.Time
+	LockPath string
+	LockTTL  time.Duration
+	Exec     ExecFunc
+	Now      func() time.Time
 	// ConfigRoot is the absolute directory containing `opkg.conf` and the `opkg/`
 	// subdirectory of per-feed `.conf` files. Defaults to "/opt/etc" when
 	// empty — tests substitute t.TempDir() to point at a sandbox.
@@ -91,6 +91,9 @@ func (o *OpkgRunner) now() time.Time {
 func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult) {
 	if held, age, ok := o.lockHeldFresh(); ok {
 		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held), payload
+	}
+	if err := o.releaseStaleLock(); err != nil {
+		return "err", "clear stale lock: " + err.Error(), payload
 	}
 	if err := o.takeLock(); err != nil {
 		return "err", "acquire lock: " + err.Error(), payload
@@ -411,6 +414,9 @@ func (o *OpkgRunner) DisableFeed(ctx context.Context, rawURL string) (status, ou
 	if held, age, ok := o.lockHeldFresh(); ok {
 		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held), payload
 	}
+	if err := o.releaseStaleLock(); err != nil {
+		return "err", "clear stale lock: " + err.Error(), payload
+	}
 	if err := o.takeLock(); err != nil {
 		return "err", "acquire lock: " + err.Error(), payload
 	}
@@ -492,6 +498,9 @@ func (o *OpkgRunner) DryRun(ctx context.Context) (status, output string) {
 	if held, age, ok := o.lockHeldFresh(); ok {
 		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held)
 	}
+	if err := o.releaseStaleLock(); err != nil {
+		return "err", "clear stale lock: " + err.Error()
+	}
 	if err := o.takeLock(); err != nil {
 		return "err", "acquire lock: " + err.Error()
 	}
@@ -522,11 +531,28 @@ func (o *OpkgRunner) lockHeldFresh() (path string, age time.Duration, ok bool) {
 	return "", age, false
 }
 
+func (o *OpkgRunner) releaseStaleLock() error {
+	st, err := os.Stat(o.LockPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if o.now().Sub(st.ModTime()) < o.LockTTL {
+		return nil
+	}
+	if err := os.Remove(o.LockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
 func (o *OpkgRunner) takeLock() error {
 	if err := os.MkdirAll(parentDir(o.LockPath), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(o.LockPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(o.LockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

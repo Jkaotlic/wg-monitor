@@ -75,7 +75,7 @@ func ExportSecrets(dst string, statePath string) error {
 		stateData = nil
 	}
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
 		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
 	}
 	tmp := dst + ".tmp"

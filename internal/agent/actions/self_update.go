@@ -28,6 +28,7 @@ const (
 	maxSelfUpdateChecksumsSize = 1 << 20
 	maxSelfUpdateSignatureSize = 4 << 10
 	maxSelfUpdateArtifactSize  = 64 << 20
+	selfUpdateStateDir         = "/opt/var/wg-monitor"
 )
 
 // SelfUpdate downloads the agent binary for the given release tag, verifies
@@ -103,9 +104,9 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 		return "", fmt.Errorf("sha256 mismatch: want %s got %s", wantSha[:16], gotSha[:16])
 	}
 
-	scriptPath := "/tmp/wg-monitor-swap.sh"
+	scriptPath := selfUpdateSwapScriptPath()
 	script := selfUpdateSwapScript(binPath)
-	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+	if err := writeSelfUpdateSwapScript(scriptPath, script); err != nil {
 		_ = os.Remove(tmpPath)
 		return "", fmt.Errorf("write %s: %w", scriptPath, err)
 	}
@@ -118,9 +119,24 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	return fmt.Sprintf("%s verified, swap scheduled in ~3s", version), nil
 }
 
+func selfUpdateSwapScriptPath() string {
+	return selfUpdateStateDir + "/self-update-swap.sh"
+}
+
+func writeSelfUpdateSwapScript(path, script string) error {
+	if err := os.MkdirAll(selfUpdateStateDir, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		return err
+	}
+	_ = os.Chmod(path, 0o700)
+	return nil
+}
+
 func launchSelfUpdateSwap(scriptPath string) error {
-	logPath := "/opt/var/wg-monitor/self-update-swap.log"
-	_ = os.MkdirAll("/opt/var/wg-monitor", 0o755)
+	logPath := selfUpdateStateDir + "/self-update-swap.log"
+	_ = os.MkdirAll(selfUpdateStateDir, 0o700)
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		logFile = nil

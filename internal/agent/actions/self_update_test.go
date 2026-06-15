@@ -118,6 +118,16 @@ func TestSelfUpdateSwapCommandDoesNotRequireNohup(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateSwapScriptPathUsesPrivateStateDir(t *testing.T) {
+	got := selfUpdateSwapScriptPath()
+	if strings.HasPrefix(got, "/tmp/") {
+		t.Fatalf("swap script path must not be in world-writable /tmp: %q", got)
+	}
+	if got != "/opt/var/wg-monitor/self-update-swap.sh" {
+		t.Fatalf("swap script path=%q", got)
+	}
+}
+
 func TestSelfUpdateURLsCanUseBackendMirror(t *testing.T) {
 	binURL, sumsURL := selfUpdateURLs("v0.13.0-rc18", "wg-monitor-agent-linux-arm64", "https://wg.example.test/v1/releases/download/")
 	if binURL != "https://wg.example.test/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
