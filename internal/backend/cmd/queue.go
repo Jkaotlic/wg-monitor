@@ -106,23 +106,76 @@ func supersedesPending(action string) bool {
 	return action == "self_update"
 }
 
+func (q *Queue) prepareCommand(userID int64, cmd wire.Command) (wire.Command, error) {
+	if cmd.ID == "" {
+		q.log().Warn("queue enqueue rejected", "reason", "id-empty", "user_id", userID, "action", cmd.Action)
+		return wire.Command{}, errors.New("command id is required")
+	}
+	if !wire.IsValidCommandAction(cmd.Action) {
+		q.log().Warn("queue enqueue rejected", "reason", "invalid-action", "user_id", userID, "action", cmd.Action)
+		return wire.Command{}, errors.New("invalid command action: " + cmd.Action)
+	}
+	if cmd.IssuedAt.IsZero() {
+		cmd.IssuedAt = time.Now().UTC()
+	}
+	if cmd.ExpiresAt.IsZero() {
+		cmd.ExpiresAt = cmd.IssuedAt.Add(defaultCommandTTL(cmd.Action))
+	}
+	return cmd, nil
+}
+
+func (q *Queue) deleteOriginLocked(userID int64, cmdID string) {
+	bucket, ok := q.origins[userID]
+	if !ok {
+		return
+	}
+	delete(bucket, cmdID)
+	if len(bucket) == 0 {
+		delete(q.origins, userID)
+	}
+}
+
+func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) int {
+	if supersedesPending(cmd.Action) {
+		filtered := q.pending[userID][:0]
+		for _, existing := range q.pending[userID] {
+			if existing.Action == cmd.Action {
+				q.deleteOriginLocked(userID, existing.ID)
+				continue
+			}
+			filtered = append(filtered, existing)
+		}
+		if len(filtered) == 0 {
+			delete(q.pending, userID)
+		} else {
+			q.pending[userID] = filtered
+		}
+	}
+	q.pending[userID] = append(q.pending[userID], cmd)
+	return len(q.pending[userID])
+}
+
 // EnqueueWithRef is Enqueue + records MessageRef (with ref.Action populated
 // from cmd.Action) so that when the agent posts CommandResult later, the
 // backend can reply to the original message. Bare Enqueue does not touch
 // origins.
 func (q *Queue) EnqueueWithRef(userID int64, cmd wire.Command, ref MessageRef) error {
-	if err := q.Enqueue(userID, cmd); err != nil {
+	cmd, err := q.prepareCommand(userID, cmd)
+	if err != nil {
 		return err
 	}
 	ref.Action = cmd.Action
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	pendingLen := q.enqueueLocked(userID, cmd)
 	bucket, ok := q.origins[userID]
 	if !ok {
 		bucket = make(map[string]originEntry)
 		q.origins[userID] = bucket
 	}
 	bucket[cmd.ID] = originEntry{ref: ref, enqueuedAt: time.Now()}
+	q.mu.Unlock()
+	q.signal.Broadcast()
+	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
 	return nil
 }
 
@@ -161,32 +214,12 @@ func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) 
 // Enqueue appends cmd to userID's queue and wakes any waiter.
 // Validates ID non-empty and Action whitelist.
 func (q *Queue) Enqueue(userID int64, cmd wire.Command) error {
-	if cmd.ID == "" {
-		q.log().Warn("queue enqueue rejected", "reason", "id-empty", "user_id", userID, "action", cmd.Action)
-		return errors.New("command id is required")
-	}
-	if !wire.IsValidCommandAction(cmd.Action) {
-		q.log().Warn("queue enqueue rejected", "reason", "invalid-action", "user_id", userID, "action", cmd.Action)
-		return errors.New("invalid command action: " + cmd.Action)
-	}
-	if cmd.IssuedAt.IsZero() {
-		cmd.IssuedAt = time.Now().UTC()
-	}
-	if cmd.ExpiresAt.IsZero() {
-		cmd.ExpiresAt = cmd.IssuedAt.Add(defaultCommandTTL(cmd.Action))
+	cmd, err := q.prepareCommand(userID, cmd)
+	if err != nil {
+		return err
 	}
 	q.mu.Lock()
-	if supersedesPending(cmd.Action) {
-		filtered := q.pending[userID][:0]
-		for _, existing := range q.pending[userID] {
-			if existing.Action != cmd.Action {
-				filtered = append(filtered, existing)
-			}
-		}
-		q.pending[userID] = filtered
-	}
-	q.pending[userID] = append(q.pending[userID], cmd)
-	pendingLen := len(q.pending[userID])
+	pendingLen := q.enqueueLocked(userID, cmd)
 	q.mu.Unlock()
 	q.signal.Broadcast()
 	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
@@ -285,6 +318,11 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	if !ok {
 		bucket = make(map[string]resultEntry)
 		q.results[userID] = bucket
+	}
+	if _, exists := bucket[result.ID]; exists {
+		q.mu.Unlock()
+		q.log().Debug("queue duplicate result ignored", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
+		return nil
 	}
 	bucket[result.ID] = resultEntry{result: result, recordedAt: time.Now()}
 	q.mu.Unlock()

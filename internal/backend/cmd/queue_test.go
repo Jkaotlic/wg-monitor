@@ -142,6 +142,25 @@ func TestQueue_EnqueueSupersedesSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestQueue_EnqueueSupersedesSelfUpdateOrigin(t *testing.T) {
+	q := New()
+	first := mkCmd("old-update", "self_update")
+	second := mkCmd("new-update", "self_update")
+	if err := q.EnqueueWithRef(7, first, MessageRef{ChatID: 1, MessageID: 10}); err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	if err := q.EnqueueWithRef(7, second, MessageRef{ChatID: 1, MessageID: 11}); err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+
+	if _, ok := q.OriginRef(7, "old-update"); ok {
+		t.Fatal("superseded self_update must not keep a stale origin ref")
+	}
+	if ref, ok := q.OriginRef(7, "new-update"); !ok || ref.MessageID != 11 {
+		t.Fatalf("new self_update origin missing or wrong: %+v ok=%v", ref, ok)
+	}
+}
+
 func TestQueue_CommandByIDReturnsDequeuedCommand(t *testing.T) {
 	q := New()
 	cmd := wire.Command{
@@ -249,6 +268,23 @@ func TestQueue_RecordResultAcceptsUnknownStatus(t *testing.T) {
 	}
 	if err := q.RecordResult(1, wire.CommandResult{ID: "y", Status: ""}); err == nil {
 		t.Errorf("expected empty status to be rejected")
+	}
+}
+
+func TestQueue_RecordResultKeepsFirstResult(t *testing.T) {
+	q := New()
+	if err := q.RecordResult(1, wire.CommandResult{ID: "cmd1", Status: "err", Output: "first"}); err != nil {
+		t.Fatalf("record first: %v", err)
+	}
+	if err := q.RecordResult(1, wire.CommandResult{ID: "cmd1", Status: "ok", Output: "second"}); err != nil {
+		t.Fatalf("record duplicate: %v", err)
+	}
+	got, ok := q.AwaitResult(context.Background(), 1, "cmd1", 10*time.Millisecond)
+	if !ok || got == nil {
+		t.Fatal("result missing")
+	}
+	if got.Status != "err" || got.Output != "first" {
+		t.Fatalf("duplicate result overwrote first result: %+v", got)
 	}
 }
 
