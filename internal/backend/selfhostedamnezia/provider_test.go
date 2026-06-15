@@ -213,6 +213,16 @@ func TestRunnerForConfigUsesRemoteDockerWhenSSHPasswordConfigured(t *testing.T) 
 	}
 }
 
+func TestWriteAtomicUsesPrivateTempMode(t *testing.T) {
+	r := &fakeRunner{files: map[string][]byte{"/opt/amnezia/awg/awg0.conf": []byte("old")}}
+	if err := writeAtomic(context.Background(), r, "/opt/amnezia/awg/awg0.conf", []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if !hasCall(r.calls, "chmod", "600", "/opt/amnezia/awg/awg0.conf.wgmon.tmp") {
+		t.Fatalf("writeAtomic must chmod temp file 600; calls=%+v", r.calls)
+	}
+}
+
 func hasCall(calls [][]string, parts ...string) bool {
 	for _, call := range calls {
 		if len(call) < len(parts) {

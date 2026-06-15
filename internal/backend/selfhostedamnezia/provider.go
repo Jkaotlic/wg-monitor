@@ -814,7 +814,7 @@ func writeAtomic(ctx context.Context, runner Runner, path string, data []byte) e
 	if _, err := runner.Run(ctx, []string{"sh", "-c", "cat > \"$1\"", "sh", tmp}, data); err != nil {
 		return err
 	}
-	if _, err := runner.Run(ctx, []string{"chmod", "701", tmp}, nil); err != nil {
+	if _, err := runner.Run(ctx, []string{"chmod", "600", tmp}, nil); err != nil {
 		return err
 	}
 	if _, err := runner.Run(ctx, []string{"cp", "-p", path, path + ".wgmon.bak"}, nil); err != nil {
