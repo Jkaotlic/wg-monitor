@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_token_hash ON users(token_hash);
+-- Agent bearer tokens must identify exactly one router. The non-unique lookup
+-- index above is kept for older DBs; this unique index enforces the auth
+-- invariant on every fresh or migrated database.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_users_token_hash ON users(token_hash);
 -- Used by callbacks router on every TG forum-topic message routing
 -- (GetByThreadID). Without it the lookup is a full table scan per
 -- inbound message.
