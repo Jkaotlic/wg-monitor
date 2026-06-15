@@ -65,6 +65,17 @@ func TestInsertDuplicateNickname(t *testing.T) {
 	}
 }
 
+func TestInsertDuplicateTokenRejected(t *testing.T) {
+	d := newTestDB(t)
+	tok := "33333333333333333333333333333333cccccccccccccccccccccccccccccccc"
+	if _, err := d.Users().Insert("alpha", tok, "1.1.1.1", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.Users().Insert("beta", tok, "2.2.2.2", "awg1"); err == nil {
+		t.Fatal("expected duplicate-token error")
+	}
+}
+
 func TestUpdateLastSeenAndThreadID(t *testing.T) {
 	d := newTestDB(t)
 	tok := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
