@@ -60,6 +60,55 @@ func TestImportEncryptedFullBackupImportsOperatorVault(t *testing.T) {
 	}
 }
 
+func TestImportEncryptedFullBackupImportsOperatorVaultFromDockerLayoutBackup(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WG_NO_SECRET_CACHE", "")
+	t.Setenv("LOCALAPPDATA", filepath.Join(dir, "local"))
+	t.Setenv("APPDATA", filepath.Join(dir, "roaming"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(dir, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
+	t.Setenv("HOME", dir)
+
+	operatorPlain := makeTGZForTest(t, map[string]string{
+		"secrets.env": "WIZARD_TOKEN=docker\n",
+		"wizard.toml": "schema_version = 1\n",
+	})
+	operatorEnc, err := backup.Encrypt(operatorPlain, []byte("pass"), backup.TestParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullPlain := makeTGZForTest(t, map[string]string{
+		"state.db": "sqlite bytes",
+		"backend.yaml": `db_path: /data/state.db
+telegram:
+  bot_token_file: /secrets/bot-token.txt
+  chat_id: -100123
+`,
+		"agents.csv":               "nickname,kind\n",
+		"manifest.txt":             "name=wg-monitor-full-backup\nformat=encrypted-full-v1\n",
+		"operator-secrets.tgz.enc": string(operatorEnc),
+	})
+	fullEnc, err := backup.Encrypt(fullPlain, []byte("pass"), backup.TestParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "docker-full.tgz.enc")
+	if err := os.WriteFile(path, fullEnc, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ImportEncryptedFullBackup(path, "pass", true); err != nil {
+		t.Fatal(err)
+	}
+	secBody, err := os.ReadFile(secretsCachePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(secBody); got != "WIZARD_TOKEN=docker\n" {
+		t.Fatalf("secrets mismatch: %q", got)
+	}
+}
+
 func TestImportEncryptedFullBackupRejectsWrongPassword(t *testing.T) {
 	dir := t.TempDir()
 	fullEnc, err := backup.Encrypt(makeTGZForTest(t, map[string]string{

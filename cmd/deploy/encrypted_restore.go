@@ -35,7 +35,7 @@ func ImportEncryptedFullBackup(path, passphrase string, force bool) error {
 	if err := os.WriteFile(legacyPath, plainTGZ, 0o600); err != nil {
 		return err
 	}
-	recovery, cleanup, err := InspectRestoreBackup(legacyPath)
+	recovery, cleanup, err := InspectRestoreBackupForImport(legacyPath)
 	if err != nil {
 		return err
 	}

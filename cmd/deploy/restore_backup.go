@@ -60,6 +60,14 @@ const (
 )
 
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
+	return inspectRestoreBackup(archivePath, validateRestoreBackendYAML)
+}
+
+func InspectRestoreBackupForImport(archivePath string) (*RestoreBackup, func(), error) {
+	return inspectRestoreBackup(archivePath, validateRestoreBackendYAMLForImport)
+}
+
+func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) error) (*RestoreBackup, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-restore-*")
 	if err != nil {
 		return nil, nil, fmt.Errorf("temp dir: %w", err)
@@ -137,9 +145,11 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 			return nil, nil, fmt.Errorf("backup archive missing %s", required)
 		}
 	}
-	if err := validateRestoreBackendYAML(seen["backend.yaml"]); err != nil {
-		cleanup()
-		return nil, nil, err
+	if validateBackendYAML != nil {
+		if err := validateBackendYAML(seen["backend.yaml"]); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
 	}
 
 	manifest, err := readRestoreManifest(seen["manifest.txt"])
@@ -165,21 +175,29 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 	}, cleanup, nil
 }
 
-func validateRestoreBackendYAML(path string) error {
+func readRestoreBackendYAML(path string) (*restoreBackendConfig, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read backend.yaml: %w", err)
+		return nil, fmt.Errorf("read backend.yaml: %w", err)
 	}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(body, &doc); err != nil {
-		return fmt.Errorf("validate backend.yaml: %w", err)
+		return nil, fmt.Errorf("validate backend.yaml: %w", err)
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode || len(doc.Content[0].Content) == 0 {
-		return fmt.Errorf("validate backend.yaml: expected a non-empty YAML mapping")
+		return nil, fmt.Errorf("validate backend.yaml: expected a non-empty YAML mapping")
 	}
 	var cfg restoreBackendConfig
 	if err := yaml.Unmarshal(body, &cfg); err != nil {
-		return fmt.Errorf("validate backend.yaml fields: %w", err)
+		return nil, fmt.Errorf("validate backend.yaml fields: %w", err)
+	}
+	return &cfg, nil
+}
+
+func validateRestoreBackendYAML(path string) error {
+	cfg, err := readRestoreBackendYAML(path)
+	if err != nil {
+		return err
 	}
 	if strings.TrimSpace(cfg.DBPath) == "" {
 		return fmt.Errorf("validate backend.yaml: db_path is required")
@@ -207,6 +225,23 @@ func validateRestoreBackendYAML(path string) error {
 	}
 	if updatePath := strings.TrimSpace(cfg.Wizard.BackendUpdateFile); updatePath != "" && updatePath != restoreRemoteBackendUpdatePath {
 		return fmt.Errorf("validate backend.yaml: wizard.backend_update_file must be empty or %s for this restore flow, got %q", restoreRemoteBackendUpdatePath, updatePath)
+	}
+	return nil
+}
+
+func validateRestoreBackendYAMLForImport(path string) error {
+	cfg, err := readRestoreBackendYAML(path)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.DBPath) == "" {
+		return fmt.Errorf("validate backend.yaml: db_path is required")
+	}
+	if strings.TrimSpace(cfg.Telegram.BotTokenFile) == "" {
+		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file is required")
+	}
+	if cfg.Telegram.ChatID == 0 && cfg.Telegram.AdminUserID == 0 {
+		return fmt.Errorf("validate backend.yaml: telegram.chat_id or telegram.admin_user_id is required")
 	}
 	return nil
 }
