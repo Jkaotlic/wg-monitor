@@ -803,9 +803,30 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "tunnel_enable", "tunnel_disable", "tunnel_restart":
+		ndms, _ := args["ndms_name"].(string)
+		ndms = strings.TrimSpace(ndms)
+		if !wizardNDMSNameLooksSafe(ndms) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_ndms_name", "ndms_name must match ^[A-Za-z0-9_-]{1,32}$")
+			return nil, false
+		}
+		return map[string]any{"ndms_name": ndms}, true
 	default:
 		return args, true
 	}
+}
+
+func wizardNDMSNameLooksSafe(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func dashboardScheduleLooksSafe(schedule string) bool {
