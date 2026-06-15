@@ -22,6 +22,11 @@ import (
 // a distinctive log line lets the operator spot a rotated token in journald.
 var ErrUnauthorized = errors.New("backend rejected token (401/403)")
 
+const (
+	maxReportResponseBytes  = 4 << 10
+	maxCommandResponseBytes = 64 << 10
+)
+
 // authFailed returns ErrUnauthorized wrapped with the response preview if the
 // status code is 401 or 403, otherwise nil. Centralises the policy so every
 // HTTP method handles it consistently.
@@ -96,7 +101,10 @@ func (c *Client) SendReport(ctx context.Context, report wire.Report) (string, er
 		}
 		return "", fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	respBody, err := readResponseLimited(resp.Body, maxReportResponseBytes)
+	if err != nil {
+		return "", fmt.Errorf("read report response: %w", err)
+	}
 	var rr wire.ReportResponse
 	if len(respBody) > 0 {
 		_ = json.Unmarshal(respBody, &rr) // best-effort; older backends return empty body
@@ -133,7 +141,7 @@ func (c *Client) PollCommand(ctx context.Context, waitSec int) (*wire.Command, e
 		}
 		return nil, fmt.Errorf("backend returned %d: %s", resp.StatusCode, string(preview))
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	body, err := readResponseLimited(resp.Body, maxCommandResponseBytes)
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
@@ -172,4 +180,15 @@ func (c *Client) PostResult(ctx context.Context, result wire.CommandResult) erro
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
+}
+
+func readResponseLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("response too large: limit %d bytes", maxBytes)
+	}
+	return body, nil
 }

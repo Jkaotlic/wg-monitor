@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
 	"time"
 )
+
+const maxBackendHealthResponseBytes = 64 << 10
 
 func tryWizardBackendUpdate(state *State, secrets *SecretStore, version string) (bool, error) {
 	if state == nil || secrets == nil || strings.TrimSpace(state.Backend.Domain) == "" {
@@ -49,23 +52,41 @@ func waitBackendVersion(domain, want string, timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil {
-			var got struct {
-				Version string `json:"version"`
-			}
+			version := ""
 			if resp.Body != nil {
-				_ = json.NewDecoder(resp.Body).Decode(&got)
+				got, readErr := decodeBackendHealthVersion(resp.Body)
 				_ = resp.Body.Close()
+				if readErr != nil {
+					last = fmt.Sprintf("HTTP %d healthz read: %v", resp.StatusCode, readErr)
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				version = got
 			}
-			if resp.StatusCode == http.StatusOK && got.Version == want {
+			if resp.StatusCode == http.StatusOK && version == want {
 				return nil
 			}
-			last = fmt.Sprintf("HTTP %d version=%q", resp.StatusCode, got.Version)
+			last = fmt.Sprintf("HTTP %d version=%q", resp.StatusCode, version)
 		} else {
 			last = err.Error()
 		}
 		time.Sleep(3 * time.Second)
 	}
 	return fmt.Errorf("backend did not report %s at %s before timeout; last=%s", want, url, last)
+}
+
+func decodeBackendHealthVersion(r io.Reader) (string, error) {
+	body, err := readAllLimited(r, maxBackendHealthResponseBytes)
+	if err != nil {
+		return "", err
+	}
+	var got struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		return "", err
+	}
+	return got.Version, nil
 }
 
 func installBackendUpdateRunner(s *SSH, state *State, plan backendSwapPlan) error {

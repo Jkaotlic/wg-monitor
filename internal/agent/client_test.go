@@ -154,6 +154,28 @@ func TestClient_PollCommand_200ReturnsCommand(t *testing.T) {
 	}
 }
 
+func TestClient_PollCommand_RejectsOversizeValidPrefix(t *testing.T) {
+	const limit = 64 * 1024
+	prefix := `{"id":"abc","action":"diag_now","pad":"`
+	suffix := `"}`
+	padLen := limit - len(prefix) - len(suffix)
+	if padLen <= 0 {
+		t.Fatalf("bad test fixture pad length: %d", padLen)
+	}
+	body := prefix + strings.Repeat("A", padLen) + suffix + "X"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "tok", "0.1.0", 2*time.Second)
+	_, err := c.PollCommand(context.Background(), 5)
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("want oversize response error, got %v", err)
+	}
+}
+
 func TestClient_PollCommand_5xxErrors(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
