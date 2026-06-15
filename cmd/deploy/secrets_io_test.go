@@ -1,8 +1,11 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +108,35 @@ func TestImportSecrets_RefusesOverwriteWithoutForce(t *testing.T) {
 	}
 }
 
+func TestImportSecretsRejectsNestedArchiveMembers(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WG_SECRETS_FILE", filepath.Join(dir, "secrets.env"))
+	t.Setenv("WG_NO_SECRET_CACHE", "")
+	archive := writeSecretsArchiveForTest(t, []secretsArchiveEntry{
+		{name: "nested/secrets.env", body: "WG_VPS_PASS=fresh\n"},
+	})
+
+	err := ImportSecrets(archive, filepath.Join(dir, "wizard.toml"), false)
+	if err == nil || !strings.Contains(err.Error(), "unexpected archive member path") {
+		t.Fatalf("want nested member error, got %v", err)
+	}
+}
+
+func TestImportSecretsRejectsDuplicateArchiveMembers(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WG_SECRETS_FILE", filepath.Join(dir, "secrets.env"))
+	t.Setenv("WG_NO_SECRET_CACHE", "")
+	archive := writeSecretsArchiveForTest(t, []secretsArchiveEntry{
+		{name: "secrets.env", body: "WG_VPS_PASS=fresh\n"},
+		{name: "secrets.env", body: "WG_VPS_PASS=replace\n"},
+	})
+
+	err := ImportSecrets(archive, filepath.Join(dir, "wizard.toml"), false)
+	if err == nil || !strings.Contains(err.Error(), "duplicate archive member") {
+		t.Fatalf("want duplicate member error, got %v", err)
+	}
+}
+
 func TestExportSecrets_RejectsNonTgzExtension(t *testing.T) {
 	srcDir := t.TempDir()
 	src := filepath.Join(srcDir, "secrets.env")
@@ -114,4 +146,38 @@ func TestExportSecrets_RejectsNonTgzExtension(t *testing.T) {
 	if err := ExportSecrets(filepath.Join(srcDir, "out.zip"), filepath.Join(srcDir, "wizard.toml")); err == nil {
 		t.Fatal("expected error for non-.tgz extension")
 	}
+}
+
+type secretsArchiveEntry struct {
+	name string
+	body string
+}
+
+func writeSecretsArchiveForTest(t *testing.T, entries []secretsArchiveEntry) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "secrets.tgz")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, entry := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(entry.body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -159,27 +159,34 @@ func ImportSecrets(src string, statePath string, force bool) error {
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
 			continue
 		}
-		// Use Base() so a misformed archive that nested files in a directory
-		// still maps onto the expected names.
-		name := filepath.Base(hdr.Name)
-		// Reject path-traversal payloads up front.
-		if strings.Contains(hdr.Name, "..") {
+		name := filepath.ToSlash(hdr.Name)
+		if filepath.IsAbs(hdr.Name) || strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
 			return fmt.Errorf("archive contains suspect path %q", hdr.Name)
 		}
 		switch name {
 		case archiveSecretsName:
+			if secData != nil {
+				return fmt.Errorf("archive contains duplicate archive member %q", hdr.Name)
+			}
 			b, err := io.ReadAll(tr)
 			if err != nil {
 				return fmt.Errorf("read %s in archive: %w", name, err)
 			}
 			secData = b
 		case archiveStateName:
+			if stateData != nil {
+				return fmt.Errorf("archive contains duplicate archive member %q", hdr.Name)
+			}
 			b, err := io.ReadAll(tr)
 			if err != nil {
 				return fmt.Errorf("read %s in archive: %w", name, err)
 			}
 			stateData = b
 		default:
+			switch filepath.Base(name) {
+			case archiveSecretsName, archiveStateName:
+				return fmt.Errorf("archive contains unexpected archive member path %q", hdr.Name)
+			}
 			// Silently ignore other entries; future-proofing for added members.
 		}
 	}
