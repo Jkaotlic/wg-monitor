@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"expvar"
 	"io"
 	"log/slog"
@@ -890,6 +891,13 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
 		if err := d.CommandSink.RecordResult(uid, res); err != nil {
+			if errors.Is(err, cmdpkg.ErrDuplicateResult) {
+				d.Logger.Info("duplicate cmd result ignored",
+					"nickname", nick, "cmd_id", res.ID, "status", res.Status,
+					"req_id", RequestIDFromContext(r.Context()))
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			d.Logger.Warn("cmd result record", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "record failed")
 			return

@@ -33,6 +33,8 @@ type MessageRef struct {
 // resultEntry / originEntry pair their payload with a creation timestamp so
 // the Sweep janitor can evict stale entries (LOGIC-02). Without this both
 // maps grew without bound for the lifetime of the backend process.
+var ErrDuplicateResult = errors.New("duplicate command result")
+
 type resultEntry struct {
 	result     wire.CommandResult
 	recordedAt time.Time
@@ -318,7 +320,7 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	if _, exists := bucket[result.ID]; exists {
 		q.mu.Unlock()
 		q.log().Debug("queue duplicate result ignored", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
-		return nil
+		return ErrDuplicateResult
 	}
 	if issuedBucket, ok := q.issued[userID]; !ok || issuedBucket[result.ID].cmd.ID == "" {
 		q.mu.Unlock()

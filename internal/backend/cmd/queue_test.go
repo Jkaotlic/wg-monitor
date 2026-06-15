@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -291,8 +292,8 @@ func TestQueue_RecordResultKeepsFirstResult(t *testing.T) {
 	if err := q.RecordResult(1, wire.CommandResult{ID: "cmd1", Status: "err", Output: "first"}); err != nil {
 		t.Fatalf("record first: %v", err)
 	}
-	if err := q.RecordResult(1, wire.CommandResult{ID: "cmd1", Status: "ok", Output: "second"}); err != nil {
-		t.Fatalf("record duplicate: %v", err)
+	if err := q.RecordResult(1, wire.CommandResult{ID: "cmd1", Status: "ok", Output: "second"}); !errors.Is(err, ErrDuplicateResult) {
+		t.Fatalf("record duplicate err=%v, want ErrDuplicateResult", err)
 	}
 	got, ok := q.AwaitResult(context.Background(), 1, "cmd1", 10*time.Millisecond)
 	if !ok || got == nil {
