@@ -368,6 +368,39 @@ func TestRouteAddJSON_ManagedCreateUsesFreshIfaceAndStableTunnelID(t *testing.T)
 	}
 }
 
+func TestRouteAddPlanWarnsOnDefaultRouteLikeTarget(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"wan-eth3","name":"ISP","iface":"eth3","type":"wan","status":"up","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	plan, err := buildRouteAddPlan(context.Background(), awgmgr.New(srv.URL), wire.RouteAddRequest{
+		Kind:     "static",
+		Name:     "default",
+		TunnelID: "eth3",
+		Targets:  []string{"0.0.0.0/0"},
+	})
+	if err != nil {
+		t.Fatalf("buildRouteAddPlan: %v", err)
+	}
+	if !plan.CanApply {
+		t.Fatalf("default-route-like warning must not block apply: %+v", plan)
+	}
+	if len(plan.Overlaps) != 1 || plan.Overlaps[0].Severity != "warn" || plan.Overlaps[0].Reason != "default-route-like target" {
+		t.Fatalf("missing default-route-like warning: %+v", plan.Overlaps)
+	}
+}
+
 func TestRouteTemplatesJSONListsAWGManagerPresets(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/presets", func(w http.ResponseWriter, r *http.Request) {

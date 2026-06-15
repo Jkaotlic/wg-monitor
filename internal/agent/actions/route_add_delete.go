@@ -217,6 +217,7 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 		}
 	}
 	overlaps := classifyRouteOverlaps(route, existing)
+	overlaps = append(overlaps, routeAddWarnings(route)...)
 	canApply := true
 	for _, o := range overlaps {
 		if o.Severity == "block" {
@@ -228,6 +229,17 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 	plan := wire.RouteAddPlan{Request: req, Route: route, Overlaps: overlaps, CanApply: canApply}
 	plan.Hash = routeHash(plan.Route)
 	return plan, nil
+}
+
+func routeAddWarnings(route wire.RouteRuleSummary) []wire.RouteOverlap {
+	var out []wire.RouteOverlap
+	normalized := normalizeRouteRuleSummary(route)
+	for _, target := range normalized.Targets {
+		if target.Value == "0.0.0.0/0" || target.Value == "::/0" {
+			out = append(out, wire.RouteOverlap{Severity: "warn", Reason: "default-route-like target", Existing: normalized, Target: target})
+		}
+	}
+	return out
 }
 
 func materializeRouteTemplate(ctx context.Context, c *awgmgr.Client, req wire.RouteAddRequest) (wire.RouteAddRequest, error) {
