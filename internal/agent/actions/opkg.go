@@ -221,8 +221,14 @@ func (o *OpkgRunner) dfOpt(ctx context.Context) (free, total int64, err error) {
 	if len(fields) < 4 {
 		return 0, 0, fmt.Errorf("unexpected df fields: %q", lines[1])
 	}
-	total, _ = strconv.ParseInt(fields[1], 10, 64)
-	free, _ = strconv.ParseInt(fields[3], 10, 64)
+	total, err = strconv.ParseInt(fields[1], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("unexpected df total %q in %q: %w", fields[1], lines[1], err)
+	}
+	free, err = strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		return 0, 0, fmt.Errorf("unexpected df available %q in %q: %w", fields[3], lines[1], err)
+	}
 	return free, total, nil
 }
 
