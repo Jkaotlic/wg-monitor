@@ -3,6 +3,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -43,6 +44,34 @@ func TestRunner_RouteRebind_Dispatch(t *testing.T) {
 	var rb wire.RouteRebindResult
 	if err := json.Unmarshal([]byte(res.Output), &rb); err != nil {
 		t.Errorf("output not JSON: %v", err)
+	}
+}
+
+func TestRunner_RouteRebind_PartialFailureStatus(t *testing.T) {
+	mock := newRebindMock(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/dns-routes/update" && r.URL.Query().Get("id") == "ndms:Yandex" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		mock.handler().ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	r := &Runner{AwgClient: awgmgr.New(srv.URL)}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "x", Action: "route_rebind",
+		Args: map[string]any{"src_tunnel_id": "t1", "dst_tunnel_id": "t2"},
+	})
+	if res.Status != "partial" {
+		t.Fatalf("status=%q, want partial; output: %s", res.Status, res.Output)
+	}
+	var rb wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(res.Output), &rb); err != nil {
+		t.Fatalf("output not JSON: %v", err)
+	}
+	if rb.DNS.Failed == 0 {
+		t.Fatalf("expected DNS failure in payload, got %+v", rb.DNS)
 	}
 }
 
