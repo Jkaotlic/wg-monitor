@@ -534,7 +534,6 @@ var wizardCommandAllowlist = map[string]bool{
 	"tunnel_disable":        true,
 	"tunnel_restart":        true,
 	"tunnel_delete":         true,
-	"service_restart":       true,
 	"update_backend_url":    true,
 }
 

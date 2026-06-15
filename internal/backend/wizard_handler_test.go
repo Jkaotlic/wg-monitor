@@ -838,19 +838,26 @@ func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sink := &fakeCmdSink{}
-	h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
-	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/puzirek/commands", strings.NewReader(`{"action":"firmware_install"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.SetPathValue("nickname", "puzirek")
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
+	for _, body := range []string{
+		`{"action":"firmware_install"}`,
+		`{"action":"service_restart","args":{"name":"router"}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			sink := &fakeCmdSink{}
+			h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
+			req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/puzirek/commands", strings.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.SetPathValue("nickname", "puzirek")
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if len(sink.enqueued) != 0 {
-		t.Fatalf("unsafe command was enqueued: %+v", sink.enqueued)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(sink.enqueued) != 0 {
+				t.Fatalf("unsafe command was enqueued: %+v", sink.enqueued)
+			}
+		})
 	}
 }
 
