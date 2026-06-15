@@ -168,6 +168,8 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 			"old_url", r.backendURL, "new_url", canonicalURL)
 		if _, merr := reporterMigrateURL(ctx, canonicalURL, r.configPath); merr != nil {
 			slog.Warn("auto URL migration failed", "err", merr)
+		} else {
+			r.backendURL = canonicalURL
 		}
 	}
 	now := time.Now()
