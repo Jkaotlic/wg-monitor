@@ -974,8 +974,102 @@ func TestReleaseAssetProxyRejectsOversizedUpstreamContentLength(t *testing.T) {
 	}
 }
 
+func TestReleaseAssetProxyRejectsOversizedChunkedUpstreamBody(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = io.Copy(w, io.LimitReader(zeroReader{}, maxSelfUpdateProxyBytes+1))
+	}))
+	defer upstream.Close()
+
+	oldBase := releaseDownloadBase
+	releaseDownloadBase = upstream.URL
+	t.Cleanup(func() { releaseDownloadBase = oldBase })
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64", nil)
+	req.SetPathValue("version", "v0.13.0-rc18")
+	req.SetPathValue("asset", "wg-monitor-agent-linux-arm64")
+	rec := &countingResponseWriter{header: make(http.Header)}
+	releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
+
+	if rec.code != http.StatusBadGateway {
+		t.Fatalf("status=%d bytes=%d body=%q", rec.code, rec.bytes, rec.body.String())
+	}
+	if rec.bytes > 4096 {
+		t.Fatalf("oversized proxy should fail before streaming asset bytes, wrote %d", rec.bytes)
+	}
+	if !strings.Contains(rec.body.String(), "too large") {
+		t.Fatalf("expected too large error, got %q", rec.body.String())
+	}
+}
+
+func TestReleaseAssetProxyRejectsTruncatedUpstreamBody(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Length", "10")
+		_, _ = w.Write([]byte("short"))
+	}))
+	defer upstream.Close()
+
+	oldBase := releaseDownloadBase
+	releaseDownloadBase = upstream.URL
+	t.Cleanup(func() { releaseDownloadBase = oldBase })
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64", nil)
+	req.SetPathValue("version", "v0.13.0-rc18")
+	req.SetPathValue("asset", "wg-monitor-agent-linux-arm64")
+	rec := httptest.NewRecorder()
+	releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "release fetch") {
+		t.Fatalf("expected release fetch error, got %q", rec.Body.String())
+	}
+}
+
 func TestReleaseAssetProxyAllowsChecksumsSignature(t *testing.T) {
 	if !isAllowedReleaseAsset("checksums.txt.sig") {
 		t.Fatal("checksums.txt.sig must be proxy-allowed for signed releases")
 	}
+}
+
+type countingResponseWriter struct {
+	header http.Header
+	code   int
+	bytes  int64
+	body   strings.Builder
+}
+
+func (w *countingResponseWriter) Header() http.Header { return w.header }
+
+func (w *countingResponseWriter) WriteHeader(code int) { w.code = code }
+
+func (w *countingResponseWriter) Write(p []byte) (int, error) {
+	if w.code == 0 {
+		w.code = http.StatusOK
+	}
+	w.bytes += int64(len(p))
+	if w.body.Len() < 4096 {
+		remain := 4096 - w.body.Len()
+		if len(p) > remain {
+			p = p[:remain]
+		}
+		_, _ = w.body.Write(p)
+	}
+	return len(p), nil
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }

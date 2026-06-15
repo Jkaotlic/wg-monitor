@@ -42,22 +42,26 @@ func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: HTTP "+resp.Status)
 			return
 		}
+		if resp.ContentLength > maxSelfUpdateProxyBytes {
+			writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: response too large")
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxSelfUpdateProxyBytes+1))
+		if err != nil {
+			writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: "+err.Error())
+			return
+		}
+		if int64(len(body)) > maxSelfUpdateProxyBytes {
+			writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: response too large")
+			return
+		}
 		if ct := resp.Header.Get("Content-Type"); ct != "" {
 			w.Header().Set("Content-Type", ct)
 		} else {
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
-		if cl := resp.Header.Get("Content-Length"); cl != "" {
-			n, err := strconv.ParseInt(cl, 10, 64)
-			if err == nil {
-				if n > maxSelfUpdateProxyBytes {
-					writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: response too large")
-					return
-				}
-				w.Header().Set("Content-Length", cl)
-			}
-		}
-		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxSelfUpdateProxyBytes))
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		_, _ = w.Write(body)
 	}
 }
 
