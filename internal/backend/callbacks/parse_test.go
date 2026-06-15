@@ -259,6 +259,21 @@ func TestParse_RoutesConfirm_MissingToken(t *testing.T) {
 	}
 }
 
+func TestParse_RoutesTokensRejectMalformedCodes(t *testing.T) {
+	for _, bad := range []string{
+		"routes_confirm:42:t1:t2:x",
+		"routes_add_confirm:42:_panel_:draft1:bad.token",
+		"routes_add_cancel:42:_panel_:bad/token",
+		"routes_del:42:_panel_:bad.token",
+		"routes_del_confirm:42:_panel_:draft2:bad/token",
+		"routes_del_cancel:42:_panel_:x",
+	} {
+		if _, err := Parse(bad); err == nil {
+			t.Errorf("%q should reject malformed callback token", bad)
+		}
+	}
+}
+
 func TestParse_RouteAddDeletePreviewCallbacks(t *testing.T) {
 	cases := []struct {
 		data         string
@@ -491,6 +506,22 @@ func TestParse_OpkgDisable_NoTokenSegment(t *testing.T) {
 	_, err := Parse("opkg_disable:12345:_menu")
 	if err == nil {
 		t.Error("expected error for missing token segment")
+	}
+}
+
+func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
+	for _, bad := range []string{
+		"maint_confirm:42:hrneo:x",
+		"maint_fw_confirm:42:_panel_:bad.token",
+		"opkg_disable:12345:_menu:bad/token",
+		"opkg_disable_confirm:12345:_menu:x",
+		"diag_raw:42:_panel_:bad.token",
+		"diag_back:42:_panel_:bad/token",
+		"diag_test:bad.token:mtu",
+	} {
+		if _, err := Parse(bad); err == nil {
+			t.Errorf("%q should reject malformed callback token", bad)
+		}
 	}
 }
 

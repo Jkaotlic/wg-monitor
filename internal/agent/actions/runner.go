@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -298,7 +299,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "exec not configured", payload
 		}
 		manager := &OpkgCronManager{Exec: r.Exec, Now: r.Now}
-		lines := intArg(cmd.Args, "lines", 80)
+		lines := logLinesArg(cmd.Args)
 		var (
 			status wire.OpkgCronStatus
 			err    error
@@ -327,7 +328,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", "exec not configured", payload
 		}
 		manager := &EntwareCleanManager{Exec: r.Exec, Now: r.Now}
-		lines := intArg(cmd.Args, "lines", 80)
+		lines := logLinesArg(cmd.Args)
 		var (
 			status wire.EntwareCleanStatus
 			err    error
@@ -732,29 +733,74 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	}
 }
 
-func intArg(args map[string]any, key string, def int) int {
+const (
+	defaultLogTailLines = 80
+	maxLogTailLines     = 300
+)
+
+func logLinesArg(args map[string]any) int {
+	return boundedIntArg(args, "lines", defaultLogTailLines, 1, maxLogTailLines)
+}
+
+func boundedIntArg(args map[string]any, key string, def, min, max int) int {
 	if args == nil {
+		return def
+	}
+	if min > max {
 		return def
 	}
 	switch v := args[key].(type) {
 	case int:
-		if v > 0 {
-			return v
-		}
+		return clampIntArg(v, def, min, max)
 	case int64:
-		if v > 0 {
-			return int(v)
-		}
+		return clampInt64Arg(v, def, min, max)
 	case float64:
-		if v > 0 {
-			return int(v)
-		}
+		return clampFloat64Arg(v, def, min, max)
 	case json.Number:
-		if n, err := v.Int64(); err == nil && n > 0 {
-			return int(n)
+		if n, err := v.Int64(); err == nil {
+			return clampInt64Arg(n, def, min, max)
 		}
 	}
 	return def
+}
+
+func clampIntArg(v, def, min, max int) int {
+	if v < min {
+		return def
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+func clampInt64Arg(v int64, def, min, max int) int {
+	if v < int64(min) {
+		return def
+	}
+	if v > int64(max) {
+		return max
+	}
+	return int(v)
+}
+
+func clampFloat64Arg(v float64, def, min, max int) int {
+	if math.IsNaN(v) {
+		return def
+	}
+	if math.IsInf(v, 1) {
+		return max
+	}
+	if math.IsInf(v, -1) {
+		return def
+	}
+	if v < float64(min) {
+		return def
+	}
+	if v > float64(max) {
+		return max
+	}
+	return int(v)
 }
 
 func tunnelIDFromCheckName(checkName string) string {

@@ -270,6 +270,9 @@ func Parse(data string) (Args, error) {
 		if parts[2] != panelSentinel {
 			return Args{}, fmt.Errorf("%s requires %q sentinel, not tunnel name: %q", action, panelSentinel, data)
 		}
+		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.ImportToken = parts[3]
 	}
 	switch action {
@@ -293,6 +296,9 @@ func Parse(data string) (Args, error) {
 		if len(parts) < 5 || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_confirm requires token: %q", data)
 		}
+		if err := requireCallbackCode(action, "token", parts[4]); err != nil {
+			return Args{}, err
+		}
 		a.RebindSrcID = parts[2]
 		a.RebindDstID = parts[3]
 		a.RebindToken = parts[4]
@@ -315,22 +321,37 @@ func Parse(data string) (Args, error) {
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_add_tunnel requires draft token and tunnel id: %q", data)
 		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.RouteDraftToken = parts[3]
 		a.RebindDstID = parts[4]
 	case "routes_tpl_load":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("routes_tpl_load requires draft token: %q", data)
 		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.RouteDraftToken = parts[3]
 	case "routes_tpl_pick":
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_tpl_pick requires draft and template tokens: %q", data)
+		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
+		}
+		if err := requireCallbackCode(action, "template token", parts[4]); err != nil {
+			return Args{}, err
 		}
 		a.RouteDraftToken = parts[3]
 		a.RouteTemplateToken = parts[4]
 	case "routes_tpl_page":
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_tpl_page requires draft token and page: %q", data)
+		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
 		}
 		page, err := strconv.Atoi(parts[4])
 		if err != nil || page < 0 {
@@ -342,27 +363,48 @@ func Parse(data string) (Args, error) {
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_add_confirm requires draft and confirm tokens: %q", data)
 		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
+		}
+		if err := requireCallbackCode(action, "confirm token", parts[4]); err != nil {
+			return Args{}, err
+		}
 		a.RouteDraftToken = parts[3]
 		a.RouteConfirmToken = parts[4]
 	case "routes_add_cancel":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("routes_add_cancel requires draft token: %q", data)
 		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.RouteDraftToken = parts[3]
 	case "routes_del":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("routes_del requires route token: %q", data)
+		}
+		if err := requireCallbackCode(action, "route token", parts[3]); err != nil {
+			return Args{}, err
 		}
 		a.RouteToken = parts[3]
 	case "routes_del_confirm":
 		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
 			return Args{}, fmt.Errorf("routes_del_confirm requires draft and confirm tokens: %q", data)
 		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
+		}
+		if err := requireCallbackCode(action, "confirm token", parts[4]); err != nil {
+			return Args{}, err
+		}
 		a.RouteDraftToken = parts[3]
 		a.RouteConfirmToken = parts[4]
 	case "routes_del_cancel":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("routes_del_cancel requires draft token: %q", data)
+		}
+		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
+			return Args{}, err
 		}
 		a.RouteDraftToken = parts[3]
 	case "maint_restart":
@@ -374,11 +416,17 @@ func Parse(data string) (Args, error) {
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("maint_confirm requires token: %q", data)
 		}
+		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.MaintName = parts[2]
 		a.MaintToken = parts[3]
 	case "maint_fw_confirm":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("maint_fw_confirm requires token: %q", data)
+		}
+		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
+			return Args{}, err
 		}
 		a.MaintName = "firmware"
 		a.MaintToken = parts[3]
@@ -386,15 +434,24 @@ func Parse(data string) (Args, error) {
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
 		}
+		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.OpkgRepairToken = parts[3]
 	case "diag_raw":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)
 		}
+		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
+			return Args{}, err
+		}
 		a.DiagRawToken = parts[3]
 	case "diag_back":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_back requires cache_token: %q", data)
+		}
+		if err := requireCallbackCode(action, "cache token", parts[3]); err != nil {
+			return Args{}, err
 		}
 		a.DiagRawToken = parts[3]
 	case "pingcheck_toggle":
@@ -419,6 +476,9 @@ func Parse(data string) (Args, error) {
 	case "diag_test":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_test requires cache_token and test_id: %q", data)
+		}
+		if err := requireCallbackCode(action, "cache token", parts[2]); err != nil {
+			return Args{}, err
 		}
 		a.DiagRawToken = parts[2]
 		a.DiagTestID = parts[3]
@@ -670,6 +730,13 @@ func setOptionalConfirmToken(a *Args, parts []string, idx int, action string) er
 		return fmt.Errorf("%s: bad confirm token %q", action, parts[idx])
 	}
 	a.ConfirmToken = parts[idx]
+	return nil
+}
+
+func requireCallbackCode(action, field, value string) error {
+	if !callbackCodeRe.MatchString(value) {
+		return fmt.Errorf("%s: bad %s %q", action, field, value)
+	}
 	return nil
 }
 

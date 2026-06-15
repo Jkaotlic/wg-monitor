@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -567,6 +568,30 @@ func TestRunner_OpkgCronStatusDispatches(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, `"script_path"`) || !strings.Contains(res.Output, `"free_kb":75000`) {
 		t.Fatalf("output=%s", res.Output)
+	}
+}
+
+func TestLogLinesArgBoundsUntrustedNumbers(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		want int
+	}{
+		{name: "default", args: nil, want: 80},
+		{name: "valid float", args: map[string]any{"lines": float64(10)}, want: 10},
+		{name: "negative falls back", args: map[string]any{"lines": float64(-1)}, want: 80},
+		{name: "too large clamps", args: map[string]any{"lines": float64(10_000)}, want: 300},
+		{name: "nan falls back", args: map[string]any{"lines": math.NaN()}, want: 80},
+		{name: "positive infinity clamps", args: map[string]any{"lines": math.Inf(1)}, want: 300},
+		{name: "huge json number clamps without int overflow", args: map[string]any{"lines": json.Number("999999999999999999")}, want: 300},
+		{name: "invalid json number falls back", args: map[string]any{"lines": json.Number("not-a-number")}, want: 80},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := logLinesArg(tt.args); got != tt.want {
+				t.Fatalf("logLinesArg()=%d want %d", got, tt.want)
+			}
+		})
 	}
 }
 
