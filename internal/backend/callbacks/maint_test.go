@@ -2,6 +2,7 @@ package callbacks
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 // fakeSink implements CommandEnqueuer for tests.
 type fakeSink struct {
 	enq []enqueued
+	err error
 }
 
 type enqueued struct {
@@ -22,10 +24,16 @@ type enqueued struct {
 }
 
 func (f *fakeSink) Enqueue(uid int64, cmd wire.Command) error {
+	if f.err != nil {
+		return f.err
+	}
 	f.enq = append(f.enq, enqueued{uid, cmd})
 	return nil
 }
 func (f *fakeSink) EnqueueWithRef(uid int64, cmd wire.Command, _ cmdpkg.MessageRef) error {
+	if f.err != nil {
+		return f.err
+	}
 	f.enq = append(f.enq, enqueued{uid, cmd})
 	return nil
 }
@@ -272,6 +280,31 @@ func TestMaintConfirmAction_OpkgUpgrade(t *testing.T) {
 	}
 	if sink.enq[0].Cmd.Args != nil {
 		t.Fatalf("opkg_upgrade should not need args, got %+v", sink.enq[0].Cmd.Args)
+	}
+}
+
+func TestMaintConfirmAction_EnqueueFailureKeepsToken(t *testing.T) {
+	store := newPendingMaintStore()
+	cd := newCooldownStore()
+	sink := &fakeSink{err: fmt.Errorf("queue down")}
+	tok := makeMaintToken()
+	store.put(&pendingMaint{UserID: 1, ActorTGID: 111, Name: "router", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
+	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-retry" })
+	q := &tg.CallbackQuery{From: tg.User{ID: 111}, Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 7}}
+	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "router", MaintToken: tok}
+
+	if _, err := a.Apply(context.Background(), q, args); err == nil {
+		t.Fatal("expected first enqueue to fail")
+	}
+	sink.err = nil
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("same token should work after transient enqueue failure: %v", err)
+	}
+	if len(sink.enq) != 1 || sink.enq[0].Cmd.Action != "service_restart" {
+		t.Fatalf("expected one queued router restart, got %+v", sink.enq)
+	}
+	if cd.remaining(1, "router_reboot") <= 0 {
+		t.Fatal("successful retry should set router reboot cooldown")
 	}
 }
 

@@ -77,6 +77,30 @@ func (s *pendingMaintStore) consumeForActor(userID, actorTGID int64, token strin
 	return p, true
 }
 
+func (s *pendingMaintStore) applyForActor(userID, actorTGID int64, token string, apply func(*pendingMaint) error) (*pendingMaint, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.m[token]
+	if !ok {
+		return nil, false, nil
+	}
+	if p.UserID != userID {
+		return nil, false, nil
+	}
+	if p.ActorTGID != 0 && p.ActorTGID != actorTGID {
+		return nil, false, nil
+	}
+	if time.Now().After(p.ExpiresAt) {
+		delete(s.m, token)
+		return nil, false, nil
+	}
+	if err := apply(p); err != nil {
+		return p, true, err
+	}
+	delete(s.m, token)
+	return p, true, nil
+}
+
 // makeMaintToken returns 8 lowercase hex characters seeded from crypto/rand.
 // Same shape as the existing routes-rebind tokens.
 func makeMaintToken() string {
@@ -145,45 +169,55 @@ func NewMaintConfirmAction(sink CommandEnqueuer, store *pendingMaintStore, cd *c
 }
 
 func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	pm, ok := a.store.consumeForActor(args.UserID, q.From.ID, args.MaintToken)
+	cooldownAction := ""
+	maintName := ""
+	pm, ok, err := a.store.applyForActor(args.UserID, q.From.ID, args.MaintToken, func(pm *pendingMaint) error {
+		cmd := wire.Command{ID: a.idGen(), IssuedAt: time.Now().UTC()}
+		switch pm.Name {
+		case "hrneo", "hrneo_start", "hrneo_stop", "awgmgr":
+			cmd.Action = "service_restart"
+			cmd.Args = map[string]any{"name": pm.Name}
+		case "opkg_upgrade":
+			cmd.Action = "opkg_upgrade"
+		case "router":
+			cmd.Action = "service_restart"
+			cmd.Args = map[string]any{"name": "router"}
+			cooldownAction = "router_reboot"
+		case "firmware":
+			cmd.Action = "firmware_install"
+			cooldownAction = "firmware_install"
+		default:
+			return fmt.Errorf("unknown maint name: %q", pm.Name)
+		}
+		maintName = pm.Name
+		// EnqueueWithRef (а не голый Enqueue) — иначе ConsumeOriginRef в
+		// handler.go::cmdResultHandler возвращает false, MaintNotifier
+		// .NotifyCommandResult НЕ вызывается, и maint-панель оператора никогда
+		// не обновится после исполнения. Симметричный RebindConfirmAction
+		// делает это правильно — у нас был чистый asymmetry-bug (LOGIC-01).
+		ref := cmdpkg.MessageRef{
+			ChatID:    q.Message.Chat.ID,
+			MessageID: q.Message.MessageID,
+			ThreadID:  q.Message.MessageThreadID,
+		}
+		if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+			return fmt.Errorf("не удалось поставить команду в очередь: %w", err)
+		}
+		return nil
+	})
 	if !ok {
 		return "", fmt.Errorf("token expired or unknown")
 	}
-	cmd := wire.Command{ID: a.idGen(), IssuedAt: time.Now().UTC()}
-	cooldownAction := ""
-	switch pm.Name {
-	case "hrneo", "hrneo_start", "hrneo_stop", "awgmgr":
-		cmd.Action = "service_restart"
-		cmd.Args = map[string]any{"name": pm.Name}
-	case "opkg_upgrade":
-		cmd.Action = "opkg_upgrade"
-	case "router":
-		cmd.Action = "service_restart"
-		cmd.Args = map[string]any{"name": "router"}
-		cooldownAction = "router_reboot"
-	case "firmware":
-		cmd.Action = "firmware_install"
-		cooldownAction = "firmware_install"
-	default:
-		return "", fmt.Errorf("unknown maint name: %q", pm.Name)
+	if err != nil {
+		return "", err
 	}
-	// EnqueueWithRef (а не голый Enqueue) — иначе ConsumeOriginRef в
-	// handler.go::cmdResultHandler возвращает false, MaintNotifier
-	// .NotifyCommandResult НЕ вызывается, и maint-панель оператора никогда
-	// не обновится после исполнения. Симметричный RebindConfirmAction
-	// делает это правильно — у нас был чистый asymmetry-bug (LOGIC-01).
-	ref := cmdpkg.MessageRef{
-		ChatID:    q.Message.Chat.ID,
-		MessageID: q.Message.MessageID,
-		ThreadID:  q.Message.MessageThreadID,
-	}
-	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-		return "", fmt.Errorf("не удалось поставить команду в очередь: %w", err)
+	if maintName == "" && pm != nil {
+		maintName = pm.Name
 	}
 	if cooldownAction != "" {
 		a.cd.set(args.UserID, cooldownAction, 5*time.Minute)
 	}
-	return fmt.Sprintf("✅ запрос отправлен: %s", pm.Name), nil
+	return fmt.Sprintf("✅ запрос отправлен: %s", maintName), nil
 }
 
 // ensure MaintConfirmAction satisfies Action at compile time.
