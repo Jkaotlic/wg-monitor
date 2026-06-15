@@ -384,6 +384,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if tid == "" || ndms == "" {
 			return "err", "pingcheck_toggle: tunnel_id and ndms_name are required", payload
 		}
+		if !safeNDMSName(ndms) {
+			return "err", "pingcheck_toggle: ndms_name must match ^[A-Za-z0-9_-]{1,32}$", payload
+		}
 		if err := PingCheckToggle(ctx, r.AwgClient, r.Exec, tid, ndms, enable); err != nil {
 			return "err", err.Error(), payload
 		}
@@ -395,6 +398,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		ndms, _ := cmd.Args["ndms_name"].(string)
 		if ndms == "" {
 			return "err", "tunnel_enable/disable: ndms_name missing in args", payload
+		}
+		if !safeNDMSName(ndms) {
+			return "err", "tunnel_enable/disable: ndms_name must match ^[A-Za-z0-9_-]{1,32}$", payload
 		}
 		state := "up"
 		if cmd.Action == "tunnel_disable" {
@@ -415,6 +421,9 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		ndms, _ := cmd.Args["ndms_name"].(string)
 		if ndms == "" {
 			return "err", "tunnel_restart: ndms_name missing in args", payload
+		}
+		if !safeNDMSName(ndms) {
+			return "err", "tunnel_restart: ndms_name must match ^[A-Za-z0-9_-]{1,32}$", payload
 		}
 		outDown, err := r.Exec(ctx, "ndmc", "-c", fmt.Sprintf("interface %s down", ndms))
 		if err != nil {
@@ -761,6 +770,19 @@ func boolEnableLabel(enable bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+func safeNDMSName(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for _, r := range name {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func routeAddRequestFromArgs(args map[string]any) wire.RouteAddRequest {
