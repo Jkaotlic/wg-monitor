@@ -631,7 +631,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", err.Error(), payload
 		}
-		return "ok", out, payload
+		return routeRebindCommandStatus(out), out, payload
 	case "route_add_plan":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -731,6 +731,17 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 	default:
 		return "err", "unknown action: " + cmd.Action, payload
 	}
+}
+
+func routeRebindCommandStatus(out string) string {
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		return "ok"
+	}
+	if res.DNS.Failed+res.Static.Failed+res.HRNeo.Failed > 0 {
+		return "partial"
+	}
+	return "ok"
 }
 
 const (
