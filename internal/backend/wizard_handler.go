@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -38,6 +39,11 @@ func decodeWizardJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 			return false
 		}
 		writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: "+err.Error())
+		return false
+	}
+	var extra struct{}
+	if err := dec.Decode(&extra); err != io.EOF {
+		writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "bad json: multiple JSON values")
 		return false
 	}
 	return true
