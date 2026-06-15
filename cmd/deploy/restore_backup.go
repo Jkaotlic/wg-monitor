@@ -46,9 +46,18 @@ type restoreBackendConfig struct {
 		ChatID       int64  `yaml:"chat_id"`
 		AdminUserID  int64  `yaml:"admin_user_id"`
 	} `yaml:"telegram"`
+	Wizard struct {
+		TokenFile         string `yaml:"token_file"`
+		BackendUpdateFile string `yaml:"backend_update_file"`
+	} `yaml:"wizard"`
 }
 
-const restoreRemoteDBPath = "/var/lib/wg-monitor/state.db"
+const (
+	restoreRemoteDBPath            = "/var/lib/wg-monitor/state.db"
+	restoreRemoteBotTokenPath      = "/etc/wg-monitor/bot-token.txt"
+	restoreRemoteWizardTokenPath   = "/etc/wg-monitor/wizard-token.txt"
+	restoreRemoteBackendUpdatePath = "/var/lib/wg-monitor/backend-update.json"
+)
 
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 	tmpDir, err := os.MkdirTemp("", "wg-monitor-restore-*")
@@ -181,11 +190,23 @@ func validateRestoreBackendYAML(path string) error {
 	if strings.TrimSpace(cfg.Telegram.BotTokenFile) == "" {
 		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file is required")
 	}
+	if strings.TrimSpace(cfg.Telegram.BotTokenFile) != restoreRemoteBotTokenPath {
+		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file must be %s for this restore flow, got %q", restoreRemoteBotTokenPath, strings.TrimSpace(cfg.Telegram.BotTokenFile))
+	}
 	if cfg.Telegram.ChatID == 0 {
 		return fmt.Errorf("validate backend.yaml: telegram.chat_id is required")
 	}
 	if cfg.Telegram.AdminUserID == 0 {
 		return fmt.Errorf("validate backend.yaml: telegram.admin_user_id is required")
+	}
+	if strings.TrimSpace(cfg.Wizard.TokenFile) == "" {
+		return fmt.Errorf("validate backend.yaml: wizard.token_file is required")
+	}
+	if strings.TrimSpace(cfg.Wizard.TokenFile) != restoreRemoteWizardTokenPath {
+		return fmt.Errorf("validate backend.yaml: wizard.token_file must be %s for this restore flow, got %q", restoreRemoteWizardTokenPath, strings.TrimSpace(cfg.Wizard.TokenFile))
+	}
+	if updatePath := strings.TrimSpace(cfg.Wizard.BackendUpdateFile); updatePath != "" && updatePath != restoreRemoteBackendUpdatePath {
+		return fmt.Errorf("validate backend.yaml: wizard.backend_update_file must be empty or %s for this restore flow, got %q", restoreRemoteBackendUpdatePath, updatePath)
 	}
 	return nil
 }

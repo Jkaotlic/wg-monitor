@@ -159,6 +159,74 @@ telegram:
 	}
 }
 
+func TestInspectRestoreBackupRejectsUnsupportedBotTokenPath(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db": "sqlite bytes",
+		"backend.yaml": `db_path: /var/lib/wg-monitor/state.db
+telegram:
+  bot_token_file: /custom/bot-token.txt
+  chat_id: -100123
+  admin_user_id: 42
+wizard:
+  token_file: /etc/wg-monitor/wizard-token.txt
+`,
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "telegram.bot_token_file") {
+		t.Fatalf("want bot token path validation error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsMissingWizardTokenPath(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db": "sqlite bytes",
+		"backend.yaml": `db_path: /var/lib/wg-monitor/state.db
+telegram:
+  bot_token_file: /etc/wg-monitor/bot-token.txt
+  chat_id: -100123
+  admin_user_id: 42
+`,
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "wizard.token_file") {
+		t.Fatalf("want wizard token path validation error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsUnsupportedBackendUpdatePath(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db": "sqlite bytes",
+		"backend.yaml": `db_path: /var/lib/wg-monitor/state.db
+telegram:
+  bot_token_file: /etc/wg-monitor/bot-token.txt
+  chat_id: -100123
+  admin_user_id: 42
+wizard:
+  token_file: /etc/wg-monitor/wizard-token.txt
+  backend_update_file: /custom/backend-update.json
+`,
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "wizard.backend_update_file") {
+		t.Fatalf("want backend update path validation error, got %v", err)
+	}
+}
+
 func TestBuildRestoreRemoteScriptSafetySteps(t *testing.T) {
 	script := buildRestoreRemoteScript("20260522T055443Z")
 	for _, want := range []string{
@@ -237,5 +305,8 @@ telegram:
   bot_token_file: /etc/wg-monitor/bot-token.txt
   chat_id: -100123
   admin_user_id: 42
+wizard:
+  token_file: /etc/wg-monitor/wizard-token.txt
+  backend_update_file: /var/lib/wg-monitor/backend-update.json
 `
 }
