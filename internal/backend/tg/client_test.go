@@ -337,6 +337,24 @@ func TestDownloadFile(t *testing.T) {
 	}
 }
 
+func TestDownloadFileRejectsOversizeResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/file/bottok/documents/file123.conf") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		_, _ = io.Copy(w, io.LimitReader(zeroReader{}, maxDownloadFileBytes+1))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	_, err := c.DownloadFile(context.Background(), "documents/file123.conf")
+	if err == nil {
+		t.Fatal("expected oversize error")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSetMyCommands_PostsExpectedPayload(t *testing.T) {
 	var gotBody []byte
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -468,4 +486,13 @@ func TestGetUpdates_ParseDocument(t *testing.T) {
 	if doc.FileID != "fid1" || doc.FileName != "awg11.conf" {
 		t.Errorf("doc: %+v", doc)
 	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }

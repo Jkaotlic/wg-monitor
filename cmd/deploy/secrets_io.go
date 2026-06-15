@@ -43,6 +43,10 @@ func backupBeforeOverwrite(path, stamp string) {
 const (
 	archiveSecretsName = "secrets.env"
 	archiveStateName   = "wizard.toml"
+
+	maxSecretsArchiveMemberBytes = 1 << 20
+	maxStateArchiveMemberBytes   = 1 << 20
+	maxOperatorVaultBytes        = 4 << 20
 )
 
 // ExportSecrets copies the active secrets cache to dst. Includes the
@@ -168,7 +172,7 @@ func ImportSecrets(src string, statePath string, force bool) error {
 			if secData != nil {
 				return fmt.Errorf("archive contains duplicate archive member %q", hdr.Name)
 			}
-			b, err := io.ReadAll(tr)
+			b, err := readArchiveMemberLimited(tr, name, maxSecretsArchiveMemberBytes)
 			if err != nil {
 				return fmt.Errorf("read %s in archive: %w", name, err)
 			}
@@ -177,7 +181,7 @@ func ImportSecrets(src string, statePath string, force bool) error {
 			if stateData != nil {
 				return fmt.Errorf("archive contains duplicate archive member %q", hdr.Name)
 			}
-			b, err := io.ReadAll(tr)
+			b, err := readArchiveMemberLimited(tr, name, maxStateArchiveMemberBytes)
 			if err != nil {
 				return fmt.Errorf("read %s in archive: %w", name, err)
 			}
@@ -242,6 +246,17 @@ func ImportSecrets(src string, statePath string, force bool) error {
 	}
 	PrintOK(fmt.Sprintf("импортировано: %s%s", secPath, stateMsg))
 	return nil
+}
+
+func readArchiveMemberLimited(r io.Reader, name string, maxBytes int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("archive member %q too large: limit %d bytes", name, maxBytes)
+	}
+	return body, nil
 }
 
 func writeTarFile(tw *tar.Writer, name string, data []byte, mode int64) error {

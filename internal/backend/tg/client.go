@@ -52,7 +52,10 @@ func IsTopicNotFound(err error) bool {
 		strings.Contains(d, "topic_deleted")
 }
 
-const DefaultBaseURL = "https://api.telegram.org/bot"
+const (
+	DefaultBaseURL       = "https://api.telegram.org/bot"
+	maxDownloadFileBytes = 20 * 1024 * 1024
+)
 
 type Client struct {
 	BaseURL string // typically https://api.telegram.org/bot — Token is appended
@@ -332,7 +335,14 @@ func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, err
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("tg DownloadFile: HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 20*1024*1024))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadFileBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("tg DownloadFile: read response: %w", err)
+	}
+	if len(data) > maxDownloadFileBytes {
+		return nil, fmt.Errorf("tg DownloadFile: file exceeds %d bytes", maxDownloadFileBytes)
+	}
+	return data, nil
 }
 
 // BotCommand mirrors the TG Bot API BotCommand object used by setMyCommands.
