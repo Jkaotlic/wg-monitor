@@ -841,6 +841,7 @@ func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
 	for _, body := range []string{
 		`{"action":"firmware_install"}`,
 		`{"action":"service_restart","args":{"name":"router"}}`,
+		`{"action":"tunnel_restart","args":{"ndms_name":"Wireguard1; system reboot"}}`,
 	} {
 		t.Run(body, func(t *testing.T) {
 			sink := &fakeCmdSink{}
