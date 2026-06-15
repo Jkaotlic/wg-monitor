@@ -76,6 +76,20 @@ func TestOpkgCronInstallWritesScriptAndManagedCrontab(t *testing.T) {
 	}
 }
 
+func TestNormalizeOpkgCronScheduleRejectsUnsafeFields(t *testing.T) {
+	for _, schedule := range []string{
+		"* * * * ;",
+		"*/5 * * * MON",
+		"* * * * $(reboot)",
+	} {
+		t.Run(schedule, func(t *testing.T) {
+			if _, err := NormalizeOpkgCronSchedule(schedule); err == nil {
+				t.Fatal("expected unsafe schedule to be rejected")
+			}
+		})
+	}
+}
+
 func TestOpkgCronStatusReadsManagedCrontabAndLogTail(t *testing.T) {
 	m := newTestOpkgCronManager(t)
 	if err := os.MkdirAll(filepath.Dir(m.ScriptPath), 0o755); err != nil {

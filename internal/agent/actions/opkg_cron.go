@@ -146,7 +146,25 @@ func NormalizeOpkgCronSchedule(in string) (string, error) {
 	if len(fields) != 5 {
 		return "", fmt.Errorf("invalid schedule %q, want HH:MM or five-field cron", in)
 	}
+	if !cronScheduleFieldsLookSafe(fields) {
+		return "", fmt.Errorf("invalid schedule %q, cron fields may contain only digits, '*', '/', '-' and ','", in)
+	}
 	return strings.Join(fields, " "), nil
+}
+
+func cronScheduleFieldsLookSafe(fields []string) bool {
+	for _, f := range fields {
+		if f == "" {
+			return false
+		}
+		for _, r := range f {
+			if (r >= '0' && r <= '9') || r == '*' || r == '/' || r == '-' || r == ',' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func (m *OpkgCronManager) readCrontab(ctx context.Context) (string, error) {
