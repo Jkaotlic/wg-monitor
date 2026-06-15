@@ -383,7 +383,7 @@ func hostOnly(host string) string {
 }
 
 func isLoopbackHost(host string) bool {
-	host = strings.TrimSpace(strings.ToLower(host))
+	host = normalizePublicCheckHost(host)
 	if host == "" || host == "localhost" {
 		return true
 	}
@@ -392,12 +392,18 @@ func isLoopbackHost(host string) bool {
 }
 
 func isNonPublicHost(host string) bool {
-	host = strings.TrimSpace(strings.ToLower(host))
+	host = normalizePublicCheckHost(host)
 	if host == "" || host == "localhost" {
 		return true
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && (ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified())
+}
+
+func normalizePublicCheckHost(host string) string {
+	host = strings.TrimSpace(strings.ToLower(host))
+	host = strings.TrimRight(host, ".")
+	return strings.Trim(host, "[]")
 }
 
 func firstForwardedValue(v string) string {

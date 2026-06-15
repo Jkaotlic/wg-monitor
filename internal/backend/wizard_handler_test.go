@@ -615,6 +615,19 @@ func TestWizardDeployRejectsLoopbackRepoBase(t *testing.T) {
 	}
 }
 
+func TestPublicHostChecksRejectTrailingDotLocalHosts(t *testing.T) {
+	for _, host := range []string{"localhost.", "127.0.0.1.", "10.0.0.1.", "192.168.31.87."} {
+		if !isNonPublicHost(host) {
+			t.Fatalf("isNonPublicHost(%q)=false, want true", host)
+		}
+	}
+	for _, host := range []string{"localhost.", "127.0.0.1."} {
+		if !isLoopbackHost(host) {
+			t.Fatalf("isLoopbackHost(%q)=false, want true", host)
+		}
+	}
+}
+
 func TestWizardDeployMarksPendingVersionVisibleToWizard(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
