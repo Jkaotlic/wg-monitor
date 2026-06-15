@@ -57,6 +57,39 @@ func TestInspectRestoreBackupRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestInspectRestoreBackupRejectsNestedRestoreMembers(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"nested/state.db": "sqlite bytes",
+		"backend.yaml":    validRestoreBackendYAML(),
+		"manifest.txt":    "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "unexpected restore member") {
+		t.Fatalf("want nested member error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsDuplicateRestoreMembers(t *testing.T) {
+	archive := writeRestoreBackupArchiveEntries(t, []restoreArchiveEntry{
+		{name: "state.db", body: "sqlite bytes"},
+		{name: "backend.yaml", body: validRestoreBackendYAML()},
+		{name: "manifest.txt", body: "name=wg-monitor-backup\n"},
+		{name: "state.db", body: "replacement bytes"},
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "duplicate restore member") {
+		t.Fatalf("want duplicate member error, got %v", err)
+	}
+}
+
 func TestInspectRestoreBackupRejectsInvalidBackendYAML(t *testing.T) {
 	archive := writeRestoreBackupArchive(t, map[string]string{
 		"state.db":     "sqlite bytes",
@@ -136,6 +169,20 @@ func TestBuildRestoreRemoteScriptValidatesTokensBeforeStop(t *testing.T) {
 
 func writeRestoreBackupArchive(t *testing.T, files map[string]string) string {
 	t.Helper()
+	entries := make([]restoreArchiveEntry, 0, len(files))
+	for name, body := range files {
+		entries = append(entries, restoreArchiveEntry{name: name, body: body})
+	}
+	return writeRestoreBackupArchiveEntries(t, entries)
+}
+
+type restoreArchiveEntry struct {
+	name string
+	body string
+}
+
+func writeRestoreBackupArchiveEntries(t *testing.T, entries []restoreArchiveEntry) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "backup.tgz")
 	f, err := os.Create(path)
 	if err != nil {
@@ -143,11 +190,11 @@ func writeRestoreBackupArchive(t *testing.T, files map[string]string) string {
 	}
 	gz := gzip.NewWriter(f)
 	tw := tar.NewWriter(gz)
-	for name, body := range files {
-		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o600, Size: int64(len(body))}); err != nil {
+	for _, entry := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.body))}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tw.Write([]byte(body)); err != nil {
+		if _, err := tw.Write([]byte(entry.body)); err != nil {
 			t.Fatal(err)
 		}
 	}
