@@ -168,8 +168,74 @@ func TestRunBackendUpdateRunnerRequiresSignatureForNewRelease(t *testing.T) {
 	}
 }
 
+func TestRunBackendUpdateRunnerRejectsOversizedAsset(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "wg-monitor-backend")
+	pending := filepath.Join(dir, "backend-update.json")
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
+	repoBase := releaseorigin.DefaultBackendMirrorBase
+	oldClient := http.DefaultClient
+	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+		switch r.URL.String() {
+		case repoBase + "/v0.13.0-rc109/checksums.txt":
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(strings.Repeat("0", 64) + "  " + asset + "\n")),
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		case repoBase + "/v0.13.0-rc109/" + asset:
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(io.LimitReader(zeroReader{}, (64<<20)+1)),
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		}
+	})}
+	t.Cleanup(func() { http.DefaultClient = oldClient })
+	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc109","repo_base":%q}`, repoBase)
+	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runBackendUpdateRunnerCommand([]string{
+		"--pending-file", pending,
+		"--binary", current,
+	})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected oversized asset error, got %v", err)
+	}
+	got, readErr := os.ReadFile(current)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old" {
+		t.Fatalf("binary changed to %q", string(got))
+	}
+}
+
 type backendUpdateRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f backendUpdateRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
 	return f(r)
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }

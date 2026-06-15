@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 type RestoreBackup struct {
@@ -35,6 +37,15 @@ type RestoreBackupOptions struct {
 	ArchivePath string
 	Mode        string
 	DryRun      bool
+}
+
+type restoreBackendConfig struct {
+	DBPath   string `yaml:"db_path"`
+	Telegram struct {
+		BotTokenFile string `yaml:"bot_token_file"`
+		ChatID       int64  `yaml:"chat_id"`
+		AdminUserID  int64  `yaml:"admin_user_id"`
+	} `yaml:"telegram"`
 }
 
 func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
@@ -106,6 +117,10 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 			return nil, nil, fmt.Errorf("backup archive missing %s", required)
 		}
 	}
+	if err := validateRestoreBackendYAML(seen["backend.yaml"]); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
 
 	manifest, err := readRestoreManifest(seen["manifest.txt"])
 	if err != nil {
@@ -128,6 +143,37 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 		Manifest:        manifest,
 		Agents:          agents,
 	}, cleanup, nil
+}
+
+func validateRestoreBackendYAML(path string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read backend.yaml: %w", err)
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(body, &doc); err != nil {
+		return fmt.Errorf("validate backend.yaml: %w", err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode || len(doc.Content[0].Content) == 0 {
+		return fmt.Errorf("validate backend.yaml: expected a non-empty YAML mapping")
+	}
+	var cfg restoreBackendConfig
+	if err := yaml.Unmarshal(body, &cfg); err != nil {
+		return fmt.Errorf("validate backend.yaml fields: %w", err)
+	}
+	if strings.TrimSpace(cfg.DBPath) == "" {
+		return fmt.Errorf("validate backend.yaml: db_path is required")
+	}
+	if strings.TrimSpace(cfg.Telegram.BotTokenFile) == "" {
+		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file is required")
+	}
+	if cfg.Telegram.ChatID == 0 {
+		return fmt.Errorf("validate backend.yaml: telegram.chat_id is required")
+	}
+	if cfg.Telegram.AdminUserID == 0 {
+		return fmt.Errorf("validate backend.yaml: telegram.admin_user_id is required")
+	}
+	return nil
 }
 
 func readRestoreManifest(path string) (map[string]string, error) {

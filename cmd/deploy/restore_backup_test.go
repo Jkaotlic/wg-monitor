@@ -12,7 +12,7 @@ import (
 func TestInspectRestoreBackupReadsManifestAndAgents(t *testing.T) {
 	archive := writeRestoreBackupArchive(t, map[string]string{
 		"state.db":     "sqlite bytes",
-		"backend.yaml": "telegram:\n  admin_user_id: 42\n",
+		"backend.yaml": validRestoreBackendYAML(),
 		"manifest.txt": "name=wg-monitor-backup\ncreated_utc=20260522T055443Z\nbackend_version=v0.13.0-rc15\nhost=old-vps\n",
 		"agents.csv":   "nickname,kind,last_seen_at,last_deployed_version\nalyaba,static,2026-05-22T05:00:00Z,v0.13.0-rc15\n",
 	})
@@ -54,6 +54,54 @@ func TestInspectRestoreBackupRejectsTraversal(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "suspect path") {
 		t.Fatalf("want traversal error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsInvalidBackendYAML(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db":     "sqlite bytes",
+		"backend.yaml": "telegram:\n  chat_id: [broken\n",
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "backend.yaml") {
+		t.Fatalf("want backend.yaml validation error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsEmptyBackendYAML(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db":     "sqlite bytes",
+		"backend.yaml": "\n# empty config\n",
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "backend.yaml") {
+		t.Fatalf("want backend.yaml validation error, got %v", err)
+	}
+}
+
+func TestInspectRestoreBackupRejectsIncompleteBackendYAML(t *testing.T) {
+	archive := writeRestoreBackupArchive(t, map[string]string{
+		"state.db":     "sqlite bytes",
+		"backend.yaml": "telegram:\n  admin_user_id: 42\n",
+		"manifest.txt": "name=wg-monitor-backup\n",
+	})
+
+	_, cleanup, err := InspectRestoreBackup(archive)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err == nil || !strings.Contains(err.Error(), "db_path") {
+		t.Fatalf("want backend.yaml required-field error, got %v", err)
 	}
 }
 
@@ -113,4 +161,13 @@ func writeRestoreBackupArchive(t *testing.T, files map[string]string) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func validRestoreBackendYAML() string {
+	return `db_path: /var/lib/wg-monitor/state.db
+telegram:
+  bot_token_file: /etc/wg-monitor/bot-token.txt
+  chat_id: -100123
+  admin_user_id: 42
+`
 }

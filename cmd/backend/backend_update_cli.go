@@ -26,6 +26,12 @@ var backendUpdateAllowedRepoBases = []string{
 	releaseorigin.DefaultBackendMirrorBase,
 }
 
+const (
+	maxBackendUpdateChecksumsSize = 1 << 20
+	maxBackendUpdateSignatureSize = 4 << 10
+	maxBackendUpdateArtifactSize  = 64 << 20
+)
+
 type backendUpdateRunnerOptions struct {
 	ConfigPath  string
 	PendingFile string
@@ -91,13 +97,13 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	checks, err := httpGetBytes(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt")
+	checks, err := httpGetBytesLimited(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt", maxBackendUpdateChecksumsSize)
 	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	if releasesig.SignatureRequiredForVersion(req.TargetVersion) {
-		sig, err := httpGetBytes(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt.sig")
+		sig, err := httpGetBytesLimited(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt.sig", maxBackendUpdateSignatureSize)
 		if err != nil {
 			err = fmt.Errorf("download checksums.txt signature: %w", err)
 			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
@@ -114,7 +120,7 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
-	bin, err := httpGetBytes(ctx, req.RepoBase+"/"+req.TargetVersion+"/"+asset)
+	bin, err := httpGetBytesLimited(ctx, req.RepoBase+"/"+req.TargetVersion+"/"+asset, maxBackendUpdateArtifactSize)
 	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
@@ -143,6 +149,10 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 }
 
 func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
+	return httpGetBytesLimited(ctx, url, maxBackendUpdateArtifactSize)
+}
+
+func httpGetBytesLimited(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -155,7 +165,14 @@ func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GET %s: HTTP %d", url, resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("GET %s: response too large: exceeds %d bytes", url, maxBytes)
+	}
+	return body, nil
 }
 
 func checksumForAsset(checksums, asset string) (string, error) {
