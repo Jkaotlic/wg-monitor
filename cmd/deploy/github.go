@@ -44,6 +44,14 @@ type Asset struct {
 	Size        int64  `json:"size"`
 }
 
+const (
+	maxGitHubErrorBodyBytes   = 4 << 10
+	maxGitHubReleaseListBytes = 4 << 20
+	maxGitHubReleaseBodyBytes = 1 << 20
+	maxChecksumsBytes         = 1 << 20
+	maxChecksumsSigBytes      = 8 << 10
+)
+
 func (r *Release) AssetByName(name string) *Asset {
 	for i := range r.Assets {
 		if r.Assets[i].Name == name {
@@ -104,10 +112,10 @@ func (d *Downloader) GetLatestRelease() (*Release, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readAllLimited(resp.Body, maxGitHubErrorBodyBytes)
 		return nil, fmt.Errorf("GitHub API %d: %s", resp.StatusCode, string(body))
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, maxGitHubReleaseListBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -163,11 +171,15 @@ func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := readAllLimited(resp.Body, maxGitHubErrorBodyBytes)
 		return nil, fmt.Errorf("GitHub API tag %s HTTP %d: %s", tag, resp.StatusCode, string(body))
 	}
+	body, err := readAllLimited(resp.Body, maxGitHubReleaseBodyBytes)
+	if err != nil {
+		return nil, err
+	}
 	var rel Release
-	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+	if err := json.Unmarshal(body, &rel); err != nil {
 		return nil, fmt.Errorf("decode release %s: %w", tag, err)
 	}
 	if rel.TagName == "" {
@@ -297,7 +309,7 @@ func (d *Downloader) fetchExpectedSha(checksumsURL, assetName, tag string) (stri
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := readAllLimited(resp.Body, maxChecksumsBytes)
 	if err != nil {
 		return "", err
 	}
@@ -310,7 +322,7 @@ func (d *Downloader) fetchExpectedSha(checksumsURL, assetName, tag string) (stri
 		if sigResp.StatusCode != 200 {
 			return "", fmt.Errorf("signature: HTTP %d", sigResp.StatusCode)
 		}
-		sig, err := io.ReadAll(sigResp.Body)
+		sig, err := readAllLimited(sigResp.Body, maxChecksumsSigBytes)
 		if err != nil {
 			return "", fmt.Errorf("signature: %w", err)
 		}
@@ -364,4 +376,15 @@ func (d *Downloader) downloadTo(url, path string) error {
 func hashHex(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > maxBytes {
+		return nil, fmt.Errorf("response too large: limit %d bytes", maxBytes)
+	}
+	return body, nil
 }

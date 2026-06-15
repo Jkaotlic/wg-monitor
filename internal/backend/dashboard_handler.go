@@ -572,7 +572,51 @@ func dashboardReleaseNewer(a, b dashboardGitHubRelease) bool {
 			return false
 		}
 	}
-	return strings.Compare(a.TagName, b.TagName) > 0
+	return compareDashboardReleaseTags(a.TagName, b.TagName) > 0
+}
+
+func compareDashboardReleaseTags(a, b string) int {
+	av, aok := parseDashboardReleaseTagRank(a)
+	bv, bok := parseDashboardReleaseTagRank(b)
+	if !aok || !bok {
+		return strings.Compare(a, b)
+	}
+	for i := range av {
+		if av[i] > bv[i] {
+			return 1
+		}
+		if av[i] < bv[i] {
+			return -1
+		}
+	}
+	return 0
+}
+
+func parseDashboardReleaseTagRank(tag string) ([4]int, bool) {
+	var rank [4]int
+	tag = strings.TrimPrefix(strings.TrimSpace(tag), "v")
+	main, rcRaw, hasRC := strings.Cut(tag, "-rc")
+	parts := strings.Split(main, ".")
+	if len(parts) != 3 {
+		return rank, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			return rank, false
+		}
+		rank[i] = n
+	}
+	if !hasRC {
+		rank[3] = 1 << 30
+		return rank, true
+	}
+	rc, err := strconv.Atoi(rcRaw)
+	if err != nil {
+		return rank, false
+	}
+	rank[3] = rc
+	return rank, true
 }
 
 func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time, policy dashboardStatusPolicy) dashboardSummaryAgent {
