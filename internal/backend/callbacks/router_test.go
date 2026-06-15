@@ -2806,6 +2806,74 @@ func TestRouterRoutesTemplatePageRendersStoredCatalog(t *testing.T) {
 	}
 }
 
+func TestRouterRoutesAddConfirmKeepsDraftWhenEnqueueFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	store := r.RouteWizardStore()
+	store.TokenFunc = fixedTokens("draft1", "confirm1")
+	draft := store.PutAddDraft(RouteAddDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		Kind: "dns", Name: "media", TunnelID: "awg11", Targets: []string{"example.com"},
+	})
+	confirmed, ok := store.SetAddConfirm(uid, &tid, uid, draft.Token, "hash1")
+	if !ok {
+		t.Fatal("expected confirm token")
+	}
+	q := &tg.CallbackQuery{
+		ID:   "cb-route-add-confirm",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_add_confirm:%d:_panel_:%s:%s", uid, draft.Token, confirmed.ConfirmToken),
+	}
+
+	r.HandleCallback(context.Background(), q)
+	sink.err = nil
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_add" {
+		t.Fatalf("same confirm should enqueue after transient failure, calls=%+v answers=%v", sink.calls, f.answers)
+	}
+}
+
+func TestRouterRoutesDeleteConfirmKeepsDraftWhenEnqueueFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
+	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+	tid := int64(11)
+	store := r.RouteWizardStore()
+	store.TokenFunc = fixedTokens("draft1", "confirm1")
+	draft := store.PutDeleteDraft(RouteDeleteDraft{
+		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
+		Kind: "dns", RouteID: "rule1", PreviewHash: "hash1",
+	})
+	confirmed, ok := store.SetDeleteConfirm(uid, &tid, uid, draft.Token, "hash1")
+	if !ok {
+		t.Fatal("expected confirm token")
+	}
+	q := &tg.CallbackQuery{
+		ID:   "cb-route-del-confirm",
+		From: tg.User{ID: 12345},
+		Message: tg.Message{
+			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
+		},
+		Data: fmt.Sprintf("routes_del_confirm:%d:_panel_:%s:%s", uid, draft.Token, confirmed.ConfirmToken),
+	}
+
+	r.HandleCallback(context.Background(), q)
+	sink.err = nil
+	r.HandleCallback(context.Background(), q)
+
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_delete" {
+		t.Fatalf("same confirm should enqueue after transient failure, calls=%+v answers=%v", sink.calls, f.answers)
+	}
+}
+
 func TestRouterRoutesRollback_RendersReverseConfirmWithoutCache(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
