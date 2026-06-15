@@ -165,6 +165,31 @@ func TestReporterMigratesURLOnCanonicalDiff(t *testing.T) {
 	}
 }
 
+func TestReporterDoesNotRepeatSuccessfulCanonicalMigration(t *testing.T) {
+	var calls atomic.Int32
+	old := reporterMigrateURL
+	reporterMigrateURL = func(_ context.Context, _, _ string) (string, error) {
+		calls.Add(1)
+		return "ok", nil
+	}
+	defer func() { reporterMigrateURL = old }()
+
+	s := &fakeSender{returnCanonical: "https://new.example.com"}
+	r := NewReporter(ReporterConfig{
+		Sender:     s,
+		Version:    "test",
+		Interval:   time.Hour,
+		BackendURL: "https://old.example.com",
+		ConfigPath: "/opt/etc/wg-monitor/config.yaml",
+	})
+	r.sendOnce(context.Background())
+	r.sendOnce(context.Background())
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("successful canonical URL migration repeated %d times, want 1", got)
+	}
+}
+
 func TestReporterSkipsMigrationWhenCanonicalMatches(t *testing.T) {
 	called := false
 	old := reporterMigrateURL
