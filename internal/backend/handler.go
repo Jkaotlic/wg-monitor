@@ -42,6 +42,7 @@ const (
 	errCodeMethodNotAll  = "method_not_allowed"
 	errCodeInvalidWait   = "invalid_wait"
 	errCodeUnsupportedCT = "unsupported_content_type"
+	errCodeInvalidReport = "invalid_report"
 	errCodeInternal      = "internal"
 )
 
@@ -109,6 +110,31 @@ func reportFreshForUser(user *db.User, ts time.Time) bool {
 		return true
 	}
 	return !ts.UTC().Before(user.LastSeenAt.UTC())
+}
+
+func canonicalizeReportedChecks(checks []wire.Check) (string, bool) {
+	seen := make(map[string]struct{}, len(checks))
+	for i := range checks {
+		name := strings.TrimSpace(checks[i].Name)
+		status := strings.ToLower(strings.TrimSpace(checks[i].Status))
+		checks[i].Name = name
+		checks[i].Status = status
+		switch {
+		case name == "":
+			return "check name required", false
+		case len(name) > 128:
+			return "check name too long", false
+		case strings.ContainsAny(name, " \t\r\n"):
+			return "check name must not contain whitespace", false
+		case status != "ok" && status != "fail":
+			return "check status must be ok or fail", false
+		}
+		if _, ok := seen[name]; ok {
+			return "duplicate check name", false
+		}
+		seen[name] = struct{}{}
+	}
+	return "", true
 }
 
 func mobileWakeAfter(d Deps) time.Duration {
@@ -500,6 +526,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 		}
 		for i := range rep.Checks {
 			rep.Checks[i] = normalizeReportedCheck(rep.Checks[i])
+		}
+		if msg, ok := canonicalizeReportedChecks(rep.Checks); !ok {
+			writeJSONError(w, http.StatusUnprocessableEntity, errCodeInvalidReport, msg)
+			return
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
