@@ -809,6 +809,16 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "route_rebind":
+		src, _ := args["src_tunnel_id"].(string)
+		dst, _ := args["dst_tunnel_id"].(string)
+		src = strings.TrimSpace(src)
+		dst = strings.TrimSpace(dst)
+		if !wizardRouteTargetIDLooksSafe(src) || !wizardRouteTargetIDLooksSafe(dst) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_route_id", "src_tunnel_id and dst_tunnel_id must be safe route target ids")
+			return nil, false
+		}
+		return map[string]any{"src_tunnel_id": src, "dst_tunnel_id": dst}, true
 	case "tunnel_enable", "tunnel_disable", "tunnel_restart":
 		ndms, _ := args["ndms_name"].(string)
 		ndms = strings.TrimSpace(ndms)
@@ -817,6 +827,34 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"ndms_name": ndms}, true
+	case "tunnel_delete":
+		tunnelID, _ := args["tunnel_id"].(string)
+		checkName, _ := args["check_name"].(string)
+		tunnelID = strings.TrimSpace(tunnelID)
+		checkName = strings.TrimSpace(checkName)
+		out := map[string]any{}
+		if tunnelID != "" {
+			if !wizardRouteTargetIDLooksSafe(tunnelID) {
+				writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe tunnel id")
+				return nil, false
+			}
+			out["tunnel_id"] = tunnelID
+		}
+		if checkName != "" {
+			if !wizardTunnelCheckNameLooksSafe(checkName) {
+				writeJSONError(w, http.StatusBadRequest, "invalid_check_name", "check_name must be tunnel_<safe tunnel id>")
+				return nil, false
+			}
+			out["check_name"] = checkName
+		}
+		if len(out) == 0 {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id or check_name is required")
+			return nil, false
+		}
+		if force, _ := args["force_legacy_cleanup"].(bool); force {
+			out["force_legacy_cleanup"] = true
+		}
+		return out, true
 	case "update_backend_url":
 		rawURL, _ := args["url"].(string)
 		normalized, err := sanitizeWizardBackendURL(rawURL)
@@ -904,6 +942,31 @@ func dashboardScheduleLooksSafe(schedule string) bool {
 		}
 	}
 	return true
+}
+
+func wizardRouteTargetIDLooksSafe(id string) bool {
+	if id == wire.RouteOtherID {
+		return true
+	}
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') ||
+			r == '_' || r == '-' || r == '.' || r == ':' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func wizardTunnelCheckNameLooksSafe(name string) bool {
+	const prefix = "tunnel_"
+	if !strings.HasPrefix(name, prefix) {
+		return false
+	}
+	return wizardRouteTargetIDLooksSafe(strings.TrimPrefix(name, prefix))
 }
 
 func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action string, args map[string]any) {
