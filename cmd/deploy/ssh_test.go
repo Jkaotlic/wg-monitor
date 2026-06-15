@@ -2,15 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -324,6 +327,93 @@ func TestUploadCommandBuildersQuoteRemotePath(t *testing.T) {
 	if got, want := uploadSFTPCommand(remotePath), "dd of='/tmp/wg monitor/file;touch owned' bs=1M status=none"; got != want {
 		t.Fatalf("uploadSFTPCommand=%q want %q", got, want)
 	}
+}
+
+func TestRunWithStdinTimeoutClosesHangingSession(t *testing.T) {
+	addr, stop := startHangingSSHServer(t)
+	defer stop()
+
+	cfg := &ssh.ClientConfig{
+		User:            "test",
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		Timeout:         time.Second,
+	}
+	c, err := ssh.Dial("tcp", addr, cfg)
+	if err != nil {
+		t.Fatalf("dial test ssh server: %v", err)
+	}
+	s := &SSH{client: c, host: addr}
+	defer s.Close()
+
+	start := time.Now()
+	_, _, rc, err := s.runWithStdinTimeout("hang", nil, 50*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected DeadlineExceeded, got %v", err)
+	}
+	if rc != -1 {
+		t.Fatalf("rc=%d, want -1", rc)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("timeout returned too slowly: %s", elapsed)
+	}
+}
+
+func startHangingSSHServer(t *testing.T) (string, func()) {
+	t.Helper()
+	signer, err := genTestSigner()
+	if err != nil {
+		t.Skip("genTestSigner unavailable, skipping")
+	}
+	cfg := &ssh.ServerConfig{NoClientAuth: true}
+	cfg.AddHostKey(signer)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	done := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		serverConn, chans, reqs, err := ssh.NewServerConn(conn, cfg)
+		if err != nil {
+			return
+		}
+		defer serverConn.Close()
+		go ssh.DiscardRequests(reqs)
+		for ch := range chans {
+			if ch.ChannelType() != "session" {
+				_ = ch.Reject(ssh.UnknownChannelType, "session required")
+				continue
+			}
+			channel, requests, err := ch.Accept()
+			if err != nil {
+				continue
+			}
+			go func() {
+				defer channel.Close()
+				for req := range requests {
+					if req.Type != "exec" {
+						_ = req.Reply(false, nil)
+						continue
+					}
+					_ = req.Reply(true, nil)
+					<-done
+					return
+				}
+			}()
+		}
+	}()
+	stop := func() {
+		close(done)
+		_ = ln.Close()
+	}
+	return ln.Addr().String(), stop
 }
 
 // TestProgressDots_SilentBelowThreshold verifies no output is emitted for
