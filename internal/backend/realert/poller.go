@@ -36,11 +36,13 @@ const (
 )
 
 type Poller struct {
-	d   *db.DB
-	tg  TGSender
-	cfg Config
-	wg  sync.WaitGroup
-	now func() time.Time // injectable for tests; defaults to time.Now
+	d              *db.DB
+	tg             TGSender
+	cfg            Config
+	wg             sync.WaitGroup
+	now            func() time.Time // injectable for tests; defaults to time.Now
+	rateLimitMu    sync.Mutex
+	rateLimitedTil time.Time
 	// sendFailCount tracks consecutive TG-send failures per (user,check) so
 	// we don't spam ERROR every tick when TG is sustained-down (OBS-11).
 	// Reset on success.
@@ -87,6 +89,24 @@ func (p *Poller) recordSendOutcome(userID int64, checkName string, ok bool) (log
 		return true, c
 	default:
 		return false, c
+	}
+}
+
+func (p *Poller) rateLimitActive(now time.Time) bool {
+	p.rateLimitMu.Lock()
+	defer p.rateLimitMu.Unlock()
+	return !p.rateLimitedTil.IsZero() && now.Before(p.rateLimitedTil)
+}
+
+func (p *Poller) markRateLimited(now time.Time, delay time.Duration) {
+	if delay <= 0 {
+		return
+	}
+	p.rateLimitMu.Lock()
+	defer p.rateLimitMu.Unlock()
+	until := now.Add(delay)
+	if until.After(p.rateLimitedTil) {
+		p.rateLimitedTil = until
 	}
 }
 
@@ -152,6 +172,9 @@ func (p *Poller) neighborSummaries(userID int64, checkName string) []alerts.Neig
 
 func (p *Poller) tick(ctx context.Context) {
 	now := p.now()
+	if p.rateLimitActive(now) {
+		return
+	}
 	cutoff := now.Add(-p.cfg.RealertEvery)
 	stale, err := p.d.State().StaleHards(cutoff)
 	if err != nil {
@@ -211,6 +234,10 @@ func (p *Poller) tick(ctx context.Context) {
 		if err != nil {
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)
+			}
+			if delay, ok := tg.RateLimitDelay(err); ok {
+				p.markRateLimited(now, delay)
+				return // stop this batch; retry later without advancing LastAlertAt
 			}
 			continue // do not advance LastAlertAt → retry next tick
 		}
