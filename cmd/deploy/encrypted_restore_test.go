@@ -30,7 +30,7 @@ func TestImportEncryptedFullBackupImportsOperatorVault(t *testing.T) {
 	}
 	fullPlain := makeTGZForTest(t, map[string]string{
 		"state.db":                 "sqlite bytes",
-		"backend.yaml":             "db_path: /data/state.db\n",
+		"backend.yaml":             validRestoreBackendYAML(),
 		"agents.csv":               "nickname,kind\n",
 		"manifest.txt":             "name=wg-monitor-full-backup\nformat=encrypted-full-v1\n",
 		"operator-secrets.tgz.enc": string(operatorEnc),
