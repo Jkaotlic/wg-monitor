@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
@@ -22,6 +23,8 @@ type SSH struct {
 	client *ssh.Client
 	host   string
 }
+
+const defaultSSHCommandTimeout = 10 * time.Minute
 
 // ConnectSSH dials host:port. alias is used as the known_hosts lookup key
 // instead of the real address — pass the agent's nickname (or "backend",
@@ -182,6 +185,10 @@ func (s *SSH) Run(cmd string) (string, string, int, error) {
 // instead piped in (e.g. auth headers that would otherwise be visible in
 // /proc/<pid>/cmdline for the full duration of a curl request).
 func (s *SSH) RunWithStdin(cmd string, stdin io.Reader) (string, string, int, error) {
+	return s.runWithStdinTimeout(cmd, stdin, defaultSSHCommandTimeout)
+}
+
+func (s *SSH) runWithStdinTimeout(cmd string, stdin io.Reader, timeout time.Duration) (string, string, int, error) {
 	sess, err := s.client.NewSession()
 	if err != nil {
 		return "", "", -1, err
@@ -195,7 +202,27 @@ func (s *SSH) RunWithStdin(cmd string, stdin io.Reader) (string, string, int, er
 		sess.Stdin = stdin
 	}
 
-	err = sess.Run(cmd)
+	if err := sess.Start(cmd); err != nil {
+		return sout.String(), serr.String(), -1, err
+	}
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- sess.Wait()
+	}()
+
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		select {
+		case err = <-waitCh:
+		case <-timer.C:
+			_ = sess.Close()
+			return sout.String(), serr.String(), -1,
+				fmt.Errorf("ssh command %q timed out after %s: %w", cmd, timeout, context.DeadlineExceeded)
+		}
+	} else {
+		err = <-waitCh
+	}
 	rc := 0
 	if err != nil {
 		var ee *ssh.ExitError
