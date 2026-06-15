@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // APIError is the structured form of a non-OK Telegram Bot API response.
@@ -26,6 +27,7 @@ type APIError struct {
 	Method      string
 	Description string
 	Code        int
+	RetryAfter  time.Duration
 }
 
 func (e *APIError) Error() string {
@@ -52,6 +54,20 @@ func IsTopicNotFound(err error) bool {
 		strings.Contains(d, "topic_deleted")
 }
 
+// RateLimitDelay reports Telegram flood-control / Too Many Requests errors.
+// The Bot API may include parameters.retry_after in seconds; when absent, a
+// zero delay still tells callers to stop the current send batch.
+func RateLimitDelay(err error) (time.Duration, bool) {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return 0, false
+	}
+	if ae.Code != http.StatusTooManyRequests {
+		return 0, false
+	}
+	return ae.RetryAfter, true
+}
+
 const (
 	DefaultBaseURL       = "https://api.telegram.org/bot"
 	maxDownloadFileBytes = 20 * 1024 * 1024
@@ -75,10 +91,22 @@ type Client struct {
 }
 
 type apiResp struct {
-	OK          bool            `json:"ok"`
-	Description string          `json:"description"`
-	ErrorCode   int             `json:"error_code"`
-	Result      json.RawMessage `json:"result"`
+	OK          bool                `json:"ok"`
+	Description string              `json:"description"`
+	ErrorCode   int                 `json:"error_code"`
+	Parameters  *responseParameters `json:"parameters,omitempty"`
+	Result      json.RawMessage     `json:"result"`
+}
+
+type responseParameters struct {
+	RetryAfter int `json:"retry_after,omitempty"`
+}
+
+func (r apiResp) retryAfter() time.Duration {
+	if r.Parameters == nil || r.Parameters.RetryAfter <= 0 {
+		return 0
+	}
+	return time.Duration(r.Parameters.RetryAfter) * time.Second
 }
 
 type sendMessageReq struct {
@@ -277,7 +305,7 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, threadID *int64
 	}
 	if !ar.OK {
 		c.warn("sendDocument", "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
-		return 0, &APIError{Method: "sendDocument", Description: ar.Description, Code: ar.ErrorCode}
+		return 0, &APIError{Method: "sendDocument", Description: ar.Description, Code: ar.ErrorCode, RetryAfter: ar.retryAfter()}
 	}
 	var out sendMessageResult
 	if err := json.Unmarshal(ar.Result, &out); err != nil {
@@ -432,7 +460,7 @@ func (c *Client) callWith(ctx context.Context, httpc *http.Client, method string
 			return nil
 		}
 		c.warn(method, "api error", "tg_code", ar.ErrorCode, "tg_description", ar.Description)
-		return &APIError{Method: method, Description: ar.Description, Code: ar.ErrorCode}
+		return &APIError{Method: method, Description: ar.Description, Code: ar.ErrorCode, RetryAfter: ar.retryAfter()}
 	}
 	if dst != nil {
 		if err := json.Unmarshal(ar.Result, dst); err != nil {

@@ -277,10 +277,70 @@ func TestTickSendErrorPreservesLastAlertAt(t *testing.T) {
 	}
 }
 
-// TEST-03: cover Run() and WaitForExit() — previously 0%.
+func TestTickStopsBatchOnTelegramRateLimit(t *testing.T) {
+	d, uid := newTestDB(t)
+	secondUID, err := d.Users().Insert("petya", "rawtoken2", "1.1.1.2", "nwg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{sendErr: &tg.APIError{
+		Method:      "sendMessage",
+		Code:        429,
+		Description: "Too Many Requests",
+		RetryAfter:  30 * time.Second,
+	}}
+	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
+	p.SetNow(func() time.Time { return now })
+	hardSince := now.Add(-3 * time.Hour)
+	lastAlert := now.Add(-2 * time.Hour)
+	for _, tc := range []struct {
+		userID int64
+		check  string
+	}{
+		{uid, "awg_handshake"},
+		{secondUID, "dns"},
+	} {
+		if err := d.State().Save(tc.userID, tc.check, db.IncidentState{
+			UserID: tc.userID, CheckName: tc.check, CurrentStatus: "hard",
+			HardSince: &hardSince, LastAlertAt: &lastAlert,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	p.tick(context.Background())
+
+	if got := f.count(); got != 1 {
+		t.Fatalf("429 should stop the current reminder batch after one attempt, got %d sends", got)
+	}
+	f.sendErr = nil
+	now = now.Add(10 * time.Second)
+	p.tick(context.Background())
+	if got := f.count(); got != 1 {
+		t.Fatalf("retry_after pause should suppress sends inside the window, got %d sends", got)
+	}
+	for _, tc := range []struct {
+		userID int64
+		check  string
+	}{
+		{uid, "awg_handshake"},
+		{secondUID, "dns"},
+	} {
+		st, err := d.State().Get(tc.userID, tc.check)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.LastAlertAt == nil || !st.LastAlertAt.Equal(lastAlert) {
+			t.Fatalf("%s LastAlertAt advanced despite rate limit: got %v want %v", tc.check, st.LastAlertAt, lastAlert)
+		}
+	}
+}
+
+// TEST-03: cover Run() and WaitForExit() - previously 0%.
 // Run for ~100ms with TickEvery=25ms and verify the goroutine actually fired
-// at least twice through the fake TG sender. Uses a stale-hard fixture so
-// every tick is forced to send.
+// at least once through the fake TG sender.
 func TestPoller_Run_FiresOncePerInterval(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}

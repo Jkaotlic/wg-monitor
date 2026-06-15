@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSendMessageInThread(t *testing.T) {
@@ -71,6 +72,24 @@ func TestApiErrorPropagates(t *testing.T) {
 	_, err := c.SendMessage(context.Background(), -100, nil, "x", "", nil)
 	if err == nil || !strings.Contains(err.Error(), "bot was kicked") {
 		t.Fatalf("err: %v", err)
+	}
+}
+
+func TestApiErrorCarriesRetryAfter(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 17","parameters":{"retry_after":17}}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
+	_, err := c.SendMessage(context.Background(), -100, nil, "x", "", nil)
+	delay, ok := RateLimitDelay(err)
+	if !ok {
+		t.Fatalf("expected rate-limit APIError, got %v", err)
+	}
+	if delay != 17*time.Second {
+		t.Fatalf("retry_after delay = %s, want 17s", delay)
 	}
 }
 
