@@ -1013,6 +1013,12 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		} else if d.DeployNotifier != nil {
 			if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
 				target := commandVersionArg(cmd)
+				if target != "" {
+					if _, err := d.DB.Users().ClearPendingDeployIfMatches(uid, target); err != nil {
+						d.Logger.Warn("clear pending deploy after self_update failure",
+							"nickname", nick, "cmd_id", res.ID, "target_version", target, "err", err)
+					}
+				}
 				output := res.Output
 				nickname := nick
 				status := res.Status

@@ -76,6 +76,45 @@ func TestInsertDuplicateTokenRejected(t *testing.T) {
 	}
 }
 
+func TestClearPendingDeployIfMatches(t *testing.T) {
+	d := newTestDB(t)
+	uid, err := d.Users().Insert("vasya", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdee", "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc150", "2026-06-15T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := d.Users().ClearPendingDeployIfMatches(uid, "v0.13.0-rc149")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared {
+		t.Fatal("mismatched target must not clear pending deploy")
+	}
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc150" {
+		t.Fatalf("pending changed after mismatched clear: %+v", u.PendingVersion)
+	}
+	cleared, err = d.Users().ClearPendingDeployIfMatches(uid, "v0.13.0-rc150")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cleared {
+		t.Fatal("matching target should clear pending deploy")
+	}
+	u, err = d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("pending not cleared: version=%v since=%v", u.PendingVersion, u.PendingSince)
+	}
+}
+
 func TestUpdateLastSeenAndThreadID(t *testing.T) {
 	d := newTestDB(t)
 	tok := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
