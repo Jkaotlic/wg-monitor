@@ -1391,6 +1391,9 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	defer d.Close()
 	tok := "eded00eded00eded00eded00eded00eded00eded00eded00eded00eded00eded"
 	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc53", "2026-06-15T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
 	deploy := &fakeDeployNotifier{}
 	sink := &fakeCmdSink{commands: map[string]wire.Command{
 		"cmd1": {
@@ -1432,6 +1435,13 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	}
 	if !strings.Contains(calls[0].output, "HTTP 502") {
 		t.Fatalf("output missing failure details: %+v", calls[0])
+	}
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("failed self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
 	}
 }
 

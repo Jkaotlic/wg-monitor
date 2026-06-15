@@ -551,6 +551,30 @@ func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince stri
 	return nil
 }
 
+// ClearPendingDeployIfMatches clears a pending deploy marker only when it still
+// points at targetVersion. This keeps a late result from an older self_update
+// attempt from erasing a newer pending target.
+func (u *UsersRepo) ClearPendingDeployIfMatches(id int64, targetVersion string) (bool, error) {
+	if targetVersion == "" {
+		return false, nil
+	}
+	res, err := u.d.db.Exec(
+		`UPDATE users
+		    SET pending_version = NULL,
+		        pending_since = NULL
+		  WHERE id = ? AND pending_version = ?`,
+		id, targetVersion,
+	)
+	if err != nil {
+		return false, fmt.Errorf("users.ClearPendingDeployIfMatches: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // UpdateLastSeenAgentVersion advances users.last_deployed_version to the
 // version reported by the running agent in its latest heartbeat. If the
 // heartbeat matches a pending wizard deploy, it also clears the pending marker
