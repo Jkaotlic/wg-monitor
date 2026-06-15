@@ -357,6 +357,20 @@ func TestQueueConsumeOriginRefDeletes(t *testing.T) {
 	}
 }
 
+func TestQueueConsumeOriginRefRemovesEmptyBucket(t *testing.T) {
+	q := New()
+	cmd := wire.Command{ID: "once", Action: "diag_now", IssuedAt: time.Now()}
+	if err := q.EnqueueWithRef(7, cmd, MessageRef{ChatID: 1, MessageID: 2}); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, ok := q.ConsumeOriginRef(7, "once"); !ok {
+		t.Fatal("origin ref not consumed")
+	}
+	if _, ok := q.origins[7]; ok {
+		t.Fatalf("empty origin bucket should be removed: %+v", q.origins)
+	}
+}
+
 // Race-test: many goroutines enqueueing concurrently — no deadlocks, no data race.
 func TestQueue_ConcurrentEnqueue(t *testing.T) {
 	q := New()
