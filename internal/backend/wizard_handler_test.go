@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -942,6 +943,34 @@ func TestReleaseAssetProxyRejectsUnknownAsset(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		body, _ := io.ReadAll(rec.Body)
 		t.Fatalf("status=%d body=%s", rec.Code, string(body))
+	}
+}
+
+func TestReleaseAssetProxyRejectsOversizedUpstreamContentLength(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0.13.0-rc18/wg-monitor-agent-linux-arm64" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Length", strconv.FormatInt(maxSelfUpdateProxyBytes+1, 10))
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer upstream.Close()
+
+	oldBase := releaseDownloadBase
+	releaseDownloadBase = upstream.URL
+	t.Cleanup(func() { releaseDownloadBase = oldBase })
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/releases/download/v0.13.0-rc18/wg-monitor-agent-linux-arm64", nil)
+	req.SetPathValue("version", "v0.13.0-rc18")
+	req.SetPathValue("asset", "wg-monitor-agent-linux-arm64")
+	rec := httptest.NewRecorder()
+	releaseAssetProxyHandler(Deps{}).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "too large") {
+		t.Fatalf("expected too large error, got %s", rec.Body.String())
 	}
 }
 

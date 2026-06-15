@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -47,7 +48,14 @@ func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/octet-stream")
 		}
 		if cl := resp.Header.Get("Content-Length"); cl != "" {
-			w.Header().Set("Content-Length", cl)
+			n, err := strconv.ParseInt(cl, 10, 64)
+			if err == nil {
+				if n > maxSelfUpdateProxyBytes {
+					writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: response too large")
+					return
+				}
+				w.Header().Set("Content-Length", cl)
+			}
 		}
 		_, _ = io.Copy(w, io.LimitReader(resp.Body, maxSelfUpdateProxyBytes))
 	}
