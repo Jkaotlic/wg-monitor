@@ -88,25 +88,34 @@ func InspectRestoreBackup(archivePath string) (*RestoreBackup, func(), error) {
 			return nil, nil, fmt.Errorf("backup archive contains suspect path %q", hdr.Name)
 		}
 		base := filepath.Base(name)
-		switch base {
+		switch name {
 		case "state.db", "backend.yaml", "manifest.txt", "agents.csv":
-			dst := filepath.Join(tmpDir, base)
+			if seen[name] != "" {
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive contains duplicate restore member %q", hdr.Name)
+			}
+			dst := filepath.Join(tmpDir, name)
 			f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 			if err != nil {
 				cleanup()
-				return nil, nil, fmt.Errorf("create extracted %s: %w", base, err)
+				return nil, nil, fmt.Errorf("create extracted %s: %w", name, err)
 			}
 			if _, err := io.Copy(f, tr); err != nil {
 				f.Close()
 				cleanup()
-				return nil, nil, fmt.Errorf("extract %s: %w", base, err)
+				return nil, nil, fmt.Errorf("extract %s: %w", name, err)
 			}
 			if err := f.Close(); err != nil {
 				cleanup()
-				return nil, nil, fmt.Errorf("close extracted %s: %w", base, err)
+				return nil, nil, fmt.Errorf("close extracted %s: %w", name, err)
 			}
-			seen[base] = dst
+			seen[name] = dst
 		default:
+			switch base {
+			case "state.db", "backend.yaml", "manifest.txt", "agents.csv":
+				cleanup()
+				return nil, nil, fmt.Errorf("backup archive contains unexpected restore member path %q", hdr.Name)
+			}
 			// Ignore future archive members.
 		}
 	}
