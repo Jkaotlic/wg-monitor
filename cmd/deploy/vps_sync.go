@@ -405,9 +405,11 @@ func (c *VPSClient) AwaitCommandResult(ctx context.Context, nickname, cmdID stri
 		return nil, err
 	}
 	if status == http.StatusNotFound {
-		// "result_not_ready" — distinguishable from real 404 by the body
-		// shape, but we don't need to inspect it; the caller polls again.
-		return nil, nil
+		if wizardErrorCode(raw) == "result_not_ready" {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GET /v1/wizard/cmd/%s: HTTP %d: %s",
+			cmdID, status, trimWizardBody(raw))
 	}
 	if status != http.StatusOK {
 		return nil, fmt.Errorf("GET /v1/wizard/cmd/%s: HTTP %d: %s",
@@ -687,6 +689,16 @@ func trimWizardBody(raw []byte) string {
 		return s[:1024] + "..."
 	}
 	return s
+}
+
+func wizardErrorCode(raw []byte) string {
+	var out struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ""
+	}
+	return out.Code
 }
 
 // AgentStateToRemote converts a wizard-local AgentState to the RemoteAgent

@@ -55,6 +55,53 @@ func TestVPSClientDeployBackendPostsWizardEndpoint(t *testing.T) {
 	}
 }
 
+func TestVPSClientAwaitCommandResultTreatsResultNotReadyAsPending(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/wizard/cmd/cmd-1" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"result_not_ready","message":"no result yet"}`))
+	}))
+	defer srv.Close()
+
+	c := &VPSClient{BaseURL: srv.URL, Token: "wizard-token", HTTP: srv.Client()}
+	got, err := c.AwaitCommandResult(t.Context(), "testkeen", "cmd-1", 1)
+	if err != nil {
+		t.Fatalf("AwaitCommandResult: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("got result %+v, want pending nil", got)
+	}
+}
+
+func TestVPSClientAwaitCommandResultReturnsNonPending404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/wizard/cmd/cmd-1" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"user_not_found","message":"nickname not registered"}`))
+	}))
+	defer srv.Close()
+
+	c := &VPSClient{BaseURL: srv.URL, Token: "wizard-token", HTTP: srv.Client()}
+	got, err := c.AwaitCommandResult(t.Context(), "missing", "cmd-1", 1)
+	if err == nil {
+		t.Fatal("AwaitCommandResult succeeded unexpectedly")
+	}
+	if got != nil {
+		t.Fatalf("got result %+v, want nil on error", got)
+	}
+	if !strings.Contains(err.Error(), "HTTP 404") || !strings.Contains(err.Error(), "user_not_found") {
+		t.Fatalf("error does not include backend 404 detail: %v", err)
+	}
+}
+
 func TestMergeAgents_RemoteOverridesLocal(t *testing.T) {
 	local := []AgentState{{Nickname: "client-a", Host: "old", Port: 22, User: "root", Arch: "mips", LastDeployedVersion: "v0.9"}}
 	remote := []RemoteAgent{{Nickname: "client-a", SSHHost: "new", SSHPort: 222, SSHUser: "root", Arch: "mips", LastDeployedVersion: "v0.10.3", Ring: "canary", PendingVersion: "v0.11.0", PendingSince: "2026-05-19T10:00:00Z"}}
