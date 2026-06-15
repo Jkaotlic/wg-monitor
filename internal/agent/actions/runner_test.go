@@ -175,6 +175,26 @@ func TestRunner_TunnelToggle_DoesNotForceFreshReportAfterFailure(t *testing.T) {
 	}
 }
 
+func TestRunner_TunnelToggleRejectsUnsafeNDMSName(t *testing.T) {
+	r := Runner{
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("Exec must not be called for unsafe ndms_name: %s %v", name, args)
+			return nil, nil
+		},
+		Now: mockNow(),
+	}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "toggle-unsafe",
+		Action: "tunnel_enable",
+		Args:   map[string]any{"ndms_name": "Wireguard1; system reboot"},
+	})
+
+	if res.Status != "err" || !strings.Contains(res.Output, "ndms_name") {
+		t.Fatalf("expected ndms_name validation error, got status=%q output=%q", res.Status, res.Output)
+	}
+}
+
 func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
 	var forced int
 	var steps []string
@@ -213,6 +233,30 @@ func TestRunner_TunnelRestart_DownThenUpAndForcesFreshReport(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "Wireguard3") || !strings.Contains(res.Output, "restarted") {
 		t.Fatalf("unexpected output: %q", res.Output)
+	}
+}
+
+func TestRunner_TunnelRestartRejectsUnsafeNDMSName(t *testing.T) {
+	r := Runner{
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			t.Fatalf("Exec must not be called for unsafe ndms_name: %s %v", name, args)
+			return nil, nil
+		},
+		Sleep: func(ctx context.Context, d time.Duration) error {
+			t.Fatalf("Sleep must not be called for unsafe ndms_name")
+			return nil
+		},
+		Now: mockNow(),
+	}
+
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "restart-unsafe",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"ndms_name": "Wireguard1; system reboot"},
+	})
+
+	if res.Status != "err" || !strings.Contains(res.Output, "ndms_name") {
+		t.Fatalf("expected ndms_name validation error, got status=%q output=%q", res.Status, res.Output)
 	}
 }
 
@@ -1332,5 +1376,24 @@ func TestRunner_PingCheckToggle_MissingArgs(t *testing.T) {
 	res := r.Execute(context.Background(), wire.Command{ID: "z", Action: "pingcheck_toggle", Args: map[string]any{}})
 	if res.Status != "err" {
 		t.Errorf("expected err on missing args, got %s", res.Status)
+	}
+}
+
+func TestRunner_PingCheckToggleRejectsUnsafeNDMSName(t *testing.T) {
+	r := &Runner{
+		AwgClient: awgmgr.New("http://unused"),
+		Exec: ExecFunc(func(ctx context.Context, name string, a ...string) ([]byte, error) {
+			t.Fatalf("Exec must not run with unsafe ndms_name: %s %v", name, a)
+			return nil, nil
+		}),
+		Now: time.Now,
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "pingcheck-unsafe",
+		Action: "pingcheck_toggle",
+		Args:   map[string]any{"tunnel_id": "awg10", "ndms_name": "Wireguard0; system reboot", "enable": false},
+	})
+	if res.Status != "err" || !strings.Contains(res.Output, "ndms_name") {
+		t.Fatalf("expected ndms_name validation error, got status=%q output=%q", res.Status, res.Output)
 	}
 }
