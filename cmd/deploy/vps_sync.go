@@ -702,14 +702,9 @@ func wizardErrorCode(raw []byte) string {
 }
 
 // AgentStateToRemote converts a wizard-local AgentState to the RemoteAgent
-// payload the PUT endpoint expects. Empty Arch falls back to amd64 as a
-// last-resort default — the wizard already prompts during install so this
-// rarely triggers.
+// payload the PUT endpoint expects. Empty Arch stays empty so the backend
+// treats it as "unknown" instead of rejecting an unsupported placeholder.
 func AgentStateToRemote(a AgentState) RemoteAgent {
-	arch := a.Arch
-	if arch == "" {
-		arch = "amd64"
-	}
 	return RemoteAgent{
 		Nickname:            a.Nickname,
 		Kind:                a.Kind,
@@ -717,7 +712,7 @@ func AgentStateToRemote(a AgentState) RemoteAgent {
 		SSHHost:             a.Host,
 		SSHPort:             int64(a.Port),
 		SSHUser:             a.User,
-		Arch:                arch,
+		Arch:                a.Arch,
 		LastDeployedVersion: a.LastDeployedVersion,
 		Ring:                a.Ring,
 		PendingVersion:      a.PendingVersion,

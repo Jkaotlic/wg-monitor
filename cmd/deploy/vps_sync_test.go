@@ -380,6 +380,13 @@ func TestVPSClientPushAgentCarriesKindAndThread(t *testing.T) {
 	}
 }
 
+func TestAgentStateToRemotePreservesEmptyArch(t *testing.T) {
+	got := AgentStateToRemote(AgentState{Nickname: "noarch"})
+	if got.Arch != "" {
+		t.Fatalf("empty local arch must stay empty for backend PUT, got %q", got.Arch)
+	}
+}
+
 func TestVPSClientDoesNotFallbackOnHTTPErrorStatus(t *testing.T) {
 	var fallbackCalled bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
