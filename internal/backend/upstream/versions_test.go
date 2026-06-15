@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,6 +84,23 @@ func TestCache_EmptyReleasesArray(t *testing.T) {
 	c.api = srv.URL + "/repos/%s/releases?per_page=1"
 	if _, err := c.Latest(context.Background(), "x"); err == nil {
 		t.Error("expected error for empty releases array")
+	}
+}
+
+func TestCache_RejectsOversizedGitHubResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("["))
+		_, _ = w.Write([]byte(strings.Repeat(" ", (1<<20)+1)))
+	}))
+	defer srv.Close()
+	c := NewCache(1*time.Hour, []Source{{Name: "x", GitHubRepo: "a/b"}})
+	c.api = srv.URL + "/repos/%s/releases?per_page=1"
+	_, err := c.Latest(context.Background(), "x")
+	if err == nil {
+		t.Fatal("expected oversized response to fail")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("expected too large error, got %v", err)
 	}
 }
 
