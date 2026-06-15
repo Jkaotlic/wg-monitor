@@ -106,8 +106,10 @@ func (c *Client) SendReport(ctx context.Context, report wire.Report) (string, er
 		return "", fmt.Errorf("read report response: %w", err)
 	}
 	var rr wire.ReportResponse
-	if len(respBody) > 0 {
-		_ = json.Unmarshal(respBody, &rr) // best-effort; older backends return empty body
+	if len(bytes.TrimSpace(respBody)) > 0 {
+		if err := json.Unmarshal(respBody, &rr); err != nil {
+			return "", fmt.Errorf("decode report response: %w", err)
+		}
 	}
 	return rr.CanonicalURL, nil
 }

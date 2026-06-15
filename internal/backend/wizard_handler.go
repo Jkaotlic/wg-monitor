@@ -458,7 +458,13 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, "invalid_kind", "kind must be static or mobile")
 			return
 		}
-		err := d.DB.Users().UpdateDeployInfo(nickname, db.DeployInfo{
+		arch, err := normalizeAgentDeployArch(req.Arch)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_arch", err.Error())
+			return
+		}
+		req.Arch = arch
+		err = d.DB.Users().UpdateDeployInfo(nickname, db.DeployInfo{
 			Kind:                req.Kind,
 			ThreadID:            req.ThreadID,
 			SSHHost:             req.SSHHost,
