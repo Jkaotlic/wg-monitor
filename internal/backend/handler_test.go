@@ -98,6 +98,66 @@ func TestReportPersistsEventsAndDispatches(t *testing.T) {
 	}
 }
 
+func TestReportRejectsInvalidChecksBeforePersisting(t *testing.T) {
+	cases := []struct {
+		name   string
+		checks []wire.Check
+	}{
+		{
+			name:   "empty check name",
+			checks: []wire.Check{{Name: "", Status: "ok"}},
+		},
+		{
+			name:   "whitespace check name",
+			checks: []wire.Check{{Name: "bad name", Status: "ok"}},
+		},
+		{
+			name:   "unknown status",
+			checks: []wire.Check{{Name: "dns", Status: "warn"}},
+		},
+		{
+			name: "duplicate check name",
+			checks: []wire.Check{
+				{Name: "dns", Status: "ok"},
+				{Name: "dns", Status: "fail"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+			defer d.Close()
+			tok := "0101010101010101010101010101010101010101010101010101010101010101"
+			uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+
+			mux := NewMux(Deps{
+				Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+				DB:         d,
+				Dispatcher: &fakeDisp{db: d},
+				Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
+			})
+			body, _ := json.Marshal(wire.Report{
+				Timestamp:    time.Now().UTC(),
+				AgentVersion: "test",
+				Checks:       tc.checks,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/v1/report", bytes.NewReader(body))
+			req.Header.Set("Authorization", "Bearer "+tok)
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			if w.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+			}
+			if got, err := d.Events().LatestPerUser(uid); err != nil {
+				t.Fatal(err)
+			} else if !got.IsZero() {
+				t.Fatalf("invalid report persisted event at %v", got)
+			}
+		})
+	}
+}
+
 func TestReportSkipsFSMForOutOfOrderTunnelOK(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
