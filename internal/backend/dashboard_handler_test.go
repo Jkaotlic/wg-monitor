@@ -894,6 +894,68 @@ func TestDashboardCommandDispatchRejectsBadOpkgCronSchedule(t *testing.T) {
 	}
 }
 
+func TestDashboardCommandDispatchRejectsUnsafeBackendURLUpdate(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("puzirek", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, CommandSink: sink, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/agents/puzirek/commands",
+		strings.NewReader(`{"action":"update_backend_url","args":{"url":"https://localhost."}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("unsafe backend URL update was enqueued: %+v", sink.enqueued)
+	}
+}
+
+func TestDashboardCommandDispatchNormalizesBackendURLUpdate(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("puzirek", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, CommandSink: sink, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/agents/puzirek/commands",
+		strings.NewReader(`{"action":"update_backend_url","args":{"url":"https://User:Pass@WG.Example.Test/path/?debug=1#frag","extra":"ignored"}}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 || sink.enqueuedUsers[0] != userID {
+		t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
+	}
+	cmd := sink.enqueued[0]
+	if cmd.Action != "update_backend_url" || cmd.Args["url"] != "https://wg.example.test/path" {
+		t.Fatalf("bad command: %+v", cmd)
+	}
+	if _, ok := cmd.Args["extra"]; ok {
+		t.Fatalf("unsafe extra arg leaked: %+v", cmd.Args)
+	}
+}
+
 func TestDashboardDeployEnqueuesSelfUpdateAndMarksPending(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
