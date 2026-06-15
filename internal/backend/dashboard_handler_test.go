@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -697,8 +698,35 @@ func TestDashboardEnrollmentStoresDeployMetadata(t *testing.T) {
 	if stringValue(u.SSHHost) != "192.168.31.1" || int64Value(u.SSHPort) != 222 || stringValue(u.SSHUser) != "root" {
 		t.Fatalf("bad ssh fields: host=%v port=%v user=%v", u.SSHHost, u.SSHPort, u.SSHUser)
 	}
-	if stringValue(u.Arch) != "linux-arm64" || stringValue(u.Ring) != "rc" || stringValue(u.ExpectedMAC) != "aa:bb:cc:dd:ee:ff" {
+	if stringValue(u.Arch) != "arm64" || stringValue(u.Ring) != "rc" || stringValue(u.ExpectedMAC) != "aa:bb:cc:dd:ee:ff" {
 		t.Fatalf("bad router metadata: arch=%v ring=%v mac=%v", u.Arch, u.Ring, u.ExpectedMAC)
+	}
+}
+
+func TestDashboardEnrollmentRejectsUnsupportedArch(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{
+		DB:                    d,
+		DashboardToken:        "secret",
+		TelegramPrimaryChatID: -100100,
+	})
+	body := `{"nickname":"router5","kind":"mobile","telegram_chat_id":0,"arch":"linux-amd64"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if u, err := d.Users().GetByNickname("router5"); !errors.Is(err, db.ErrUserNotFound) || u != nil {
+		t.Fatalf("invalid arch must not create user: u=%+v err=%v", u, err)
 	}
 }
 

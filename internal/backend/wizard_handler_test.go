@@ -283,7 +283,7 @@ func TestWizardPut_204Updates(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := wizardPutAgentHandler(Deps{DB: d})
-	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"mips","last_deployed_version":"v0.10.3","ring":"beta","pending_version":"v0.11.0","pending_since":"2026-05-19T10:00:00Z","last_deploy":"2026-05-24T10:20:30Z","deploy_mode":"awgm","awgm_url":"https://alyaba.keenetic.pro","awgm_auth":"api-key","expected_mac":"aabbccddeeff"}`
+	body := `{"ssh_host":"10.0.0.1","ssh_port":222,"ssh_user":"root","arch":"linux-mips","last_deployed_version":"v0.10.3","ring":"beta","pending_version":"v0.11.0","pending_since":"2026-05-19T10:00:00Z","last_deploy":"2026-05-24T10:20:30Z","deploy_mode":"awgm","awgm_url":"https://alyaba.keenetic.pro","awgm_auth":"api-key","expected_mac":"aabbccddeeff"}`
 	req := httptest.NewRequest("PUT", "/v1/wizard/agents/alyaba", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetPathValue("nickname", "alyaba")
@@ -298,6 +298,9 @@ func TestWizardPut_204Updates(t *testing.T) {
 	}
 	if u.Ring == nil || *u.Ring != "beta" || u.PendingVersion == nil || *u.PendingVersion != "v0.11.0" {
 		t.Fatalf("rollout metadata not persisted: u=%+v", u)
+	}
+	if u.Arch == nil || *u.Arch != "mipsle" {
+		t.Fatalf("arch not normalized: u=%+v", u)
 	}
 	if u.DeployMode == nil || *u.DeployMode != "awgm" || u.AWGMURL == nil ||
 		*u.AWGMURL != "https://alyaba.keenetic.pro" || u.AWGMAuth == nil ||
@@ -336,6 +339,35 @@ func TestWizardPut_204UpdatesKindAndThread(t *testing.T) {
 	}
 	if u.TelegramThreadID == nil || *u.TelegramThreadID != 406 {
 		t.Fatalf("thread id not persisted: %+v", u)
+	}
+}
+
+func TestWizardPut_RejectsUnsupportedArch(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("alyaba", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	h := wizardPutAgentHandler(Deps{DB: d})
+	body := `{"arch":"linux-amd64"}`
+	req := httptest.NewRequest("PUT", "/v1/wizard/agents/alyaba", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "alyaba")
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("alyaba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Arch != nil {
+		t.Fatalf("invalid arch must not be persisted: %+v", u)
 	}
 }
 

@@ -279,3 +279,20 @@ func TestClient_SendReport_EmptyBodyReturnsEmptyURL(t *testing.T) {
 		t.Errorf("expected empty canonical URL, got %q", canonicalURL)
 	}
 }
+
+func TestClient_SendReport_ErrorsOnMalformedResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"canonical_url":`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "t", "0.1.0", 2*time.Second)
+	_, err := c.SendReport(context.Background(), wire.Report{Timestamp: time.Now()})
+	if err == nil {
+		t.Fatal("expected malformed report response error, got nil")
+	}
+	if !strings.Contains(err.Error(), "decode report response") {
+		t.Fatalf("error should identify report response decode, got %v", err)
+	}
+}

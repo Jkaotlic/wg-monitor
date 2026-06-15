@@ -746,6 +746,12 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
+		arch, err := normalizeAgentDeployArch(req.Arch)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_arch", err.Error())
+			return
+		}
+		req.Arch = arch
 		if !dashboardTelegramChatAllowed(d, req.TelegramChatID, req.CustomTelegramChat) {
 			writeJSONError(w, http.StatusBadRequest, "invalid_telegram_chat", "telegram chat is not allowed")
 			return
