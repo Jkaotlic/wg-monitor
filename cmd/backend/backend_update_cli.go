@@ -8,7 +8,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,6 +22,8 @@ import (
 	"github.com/anex/wg-monitor/internal/releaseorigin"
 	"github.com/anex/wg-monitor/internal/releasesig"
 )
+
+var newBackendUpdatePinnedHTTPClient = backendUpdatePinnedHTTPClient
 
 var backendUpdateAllowedRepoBases = []string{
 	releaseorigin.DefaultGitHubReleaseBase,
@@ -97,13 +101,19 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	checks, err := httpGetBytesLimited(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt", maxBackendUpdateChecksumsSize)
+	primaryClient := http.DefaultClient
+	var fallbackClient *http.Client
+	var fallbackLabel string
+	if strings.TrimSpace(req.RepoResolveIP) != "" {
+		fallbackClient, fallbackLabel = newBackendUpdatePinnedHTTPClient(req.RepoBase, strings.TrimSpace(req.RepoResolveIP), 90, nil)
+	}
+	checks, err := httpGetBytesLimitedWithFallback(ctx, primaryClient, fallbackClient, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt", fallbackLabel, maxBackendUpdateChecksumsSize)
 	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
 	if releasesig.SignatureRequiredForVersion(req.TargetVersion) {
-		sig, err := httpGetBytesLimited(ctx, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt.sig", maxBackendUpdateSignatureSize)
+		sig, err := httpGetBytesLimitedWithFallback(ctx, primaryClient, fallbackClient, req.RepoBase+"/"+req.TargetVersion+"/checksums.txt.sig", fallbackLabel, maxBackendUpdateSignatureSize)
 		if err != nil {
 			err = fmt.Errorf("download checksums.txt signature: %w", err)
 			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
@@ -120,7 +130,7 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
-	bin, err := httpGetBytesLimited(ctx, req.RepoBase+"/"+req.TargetVersion+"/"+asset, maxBackendUpdateArtifactSize)
+	bin, err := httpGetBytesLimitedWithFallback(ctx, primaryClient, fallbackClient, req.RepoBase+"/"+req.TargetVersion+"/"+asset, fallbackLabel, maxBackendUpdateArtifactSize)
 	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
@@ -153,11 +163,15 @@ func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
 }
 
 func httpGetBytesLimited(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
+	return httpGetBytesLimitedWithClient(ctx, http.DefaultClient, url, maxBytes)
+}
+
+func httpGetBytesLimitedWithClient(ctx context.Context, c *http.Client, url string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -173,6 +187,78 @@ func httpGetBytesLimited(ctx context.Context, url string, maxBytes int64) ([]byt
 		return nil, fmt.Errorf("GET %s: response too large: exceeds %d bytes", url, maxBytes)
 	}
 	return body, nil
+}
+
+func httpGetBytesLimitedWithFallback(ctx context.Context, primary, fallback *http.Client, url, fallbackLabel string, maxBytes int64) ([]byte, error) {
+	body, err := httpGetBytesLimitedWithClient(ctx, primary, url, maxBytes)
+	if err == nil {
+		return body, nil
+	}
+	if fallback == nil || strings.TrimSpace(fallbackLabel) == "" || !backendUpdateTransportError(err) {
+		return nil, err
+	}
+	body, fallbackErr := httpGetBytesLimitedWithClient(ctx, fallback, url, maxBytes)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+	}
+	return body, nil
+}
+
+func backendUpdateTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	for _, needle := range []string{
+		"lookup ",
+		"no such host",
+		"server misbehaving",
+		"temporary failure",
+		"i/o timeout",
+		"timeout",
+		"deadline exceeded",
+		"network is unreachable",
+		"no route to host",
+		"connection refused",
+		"connection reset",
+		"connection aborted",
+		"tls handshake timeout",
+	} {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func backendUpdatePinnedHTTPClient(repoBase, resolveIP string, timeoutSec int, dial func(network, addr string) (net.Conn, error)) (*http.Client, string) {
+	ip := strings.TrimSpace(resolveIP)
+	if net.ParseIP(ip) == nil {
+		return nil, ""
+	}
+	u, err := url.Parse(strings.TrimSpace(repoBase))
+	if err != nil || u.Hostname() == "" {
+		return nil, ""
+	}
+	repoHost := strings.ToLower(u.Hostname())
+	if timeoutSec <= 0 {
+		timeoutSec = 90
+	}
+	dialer := &net.Dialer{Timeout: time.Duration(timeoutSec) * time.Second}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil || !strings.EqualFold(host, repoHost) {
+			return dialer.DialContext(ctx, network, addr)
+		}
+		pinnedAddr := net.JoinHostPort(ip, port)
+		if dial == nil {
+			return dialer.DialContext(ctx, network, pinnedAddr)
+		}
+		return dial(network, pinnedAddr)
+	}
+	return &http.Client{Timeout: time.Duration(timeoutSec) * time.Second, Transport: transport}, ip
 }
 
 func checksumForAsset(checksums, asset string) (string, error) {
