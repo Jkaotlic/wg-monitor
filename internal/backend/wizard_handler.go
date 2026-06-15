@@ -619,12 +619,16 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 		if ip := wizardRepoResolveIP(r); ip != "" {
 			cmd.Args["repo_resolve_ip"] = ip
 		}
-		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
-			return
-		}
 		if err := d.DB.Users().MarkPendingDeploy(u.ID, req.TargetVersion, issuedAt.Format(time.RFC3339)); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
+			if _, clearErr := d.DB.Users().ClearPendingDeployIfMatches(u.ID, req.TargetVersion); clearErr != nil && d.Logger != nil {
+				d.Logger.Warn("rollback pending deploy after enqueue failure",
+					"nickname", nickname, "user_id", u.ID, "target_version", req.TargetVersion, "err", clearErr)
+			}
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
 			return
 		}
 		if d.Logger != nil {

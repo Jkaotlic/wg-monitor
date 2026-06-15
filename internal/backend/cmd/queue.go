@@ -209,6 +209,9 @@ func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) 
 	r, ok := bucket[cmdID]
 	if ok {
 		delete(bucket, cmdID)
+		if len(bucket) == 0 {
+			delete(q.origins, userID)
+		}
 	}
 	return r.ref, ok
 }

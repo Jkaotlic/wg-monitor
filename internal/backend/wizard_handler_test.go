@@ -760,6 +760,36 @@ func TestWizardDeployDoesNotMarkPendingWhenEnqueueFails(t *testing.T) {
 	}
 }
 
+func TestWizardDeployDoesNotEnqueueWhenPendingUpdateFails(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec("PRAGMA query_only = ON"); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("pending update failed but command was enqueued: %+v", sink.enqueued)
+	}
+}
+
 func TestWizardCommandDispatchEnqueuesSafeAgentCommand(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
