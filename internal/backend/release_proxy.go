@@ -4,15 +4,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/anex/wg-monitor/internal/releaseorigin"
 )
 
 var releaseDownloadBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
-
-var releaseTagRE = regexp.MustCompile(`^v[0-9][0-9A-Za-z._-]*$`)
 
 func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -22,7 +21,8 @@ func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 		}
 		version := strings.TrimSpace(r.PathValue("version"))
 		asset := strings.TrimSpace(r.PathValue("asset"))
-		if !releaseTagRE.MatchString(version) || !isAllowedReleaseAsset(asset) {
+		version, tagErr := releaseorigin.ValidateReleaseTag(version)
+		if tagErr != nil || !isAllowedReleaseAsset(asset) {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "invalid release asset")
 			return
 		}

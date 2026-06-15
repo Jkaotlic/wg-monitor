@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
@@ -11,6 +12,19 @@ const (
 	DefaultGitHubReleaseBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
 	DefaultBackendMirrorBase = "https://wgmonitor.anexaev.crazedns.ru/v1/releases/download"
 )
+
+var releaseTagRE = regexp.MustCompile(`^v[0-9][0-9A-Za-z._-]*$`)
+
+// ValidateReleaseTag normalizes a release tag used as a download URL path
+// segment. It intentionally accepts the project's v-prefixed semver/RC tags
+// while rejecting separators, query delimiters, and unversioned strings.
+func ValidateReleaseTag(raw string) (string, error) {
+	tag := strings.TrimSpace(raw)
+	if !releaseTagRE.MatchString(tag) {
+		return "", fmt.Errorf("target_version %q is not a valid release tag", raw)
+	}
+	return tag, nil
+}
 
 // ValidateRepoBase normalizes repo_base and requires an exact match against a
 // compile-time allowlist. Callers may pass a test-only allowlist, but

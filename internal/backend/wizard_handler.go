@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/releaseorigin"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
 
@@ -571,10 +572,12 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		if req.TargetVersion == "" {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "target_version required")
+		targetVersion, err := releaseorigin.ValidateReleaseTag(req.TargetVersion)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, err.Error())
 			return
 		}
+		req.TargetVersion = targetVersion
 		repoBaseURL, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
 		if !ok {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
@@ -645,11 +648,12 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		req.TargetVersion = strings.TrimSpace(req.TargetVersion)
-		if req.TargetVersion == "" {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "target_version required")
+		targetVersion, err := releaseorigin.ValidateReleaseTag(req.TargetVersion)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, err.Error())
 			return
 		}
+		req.TargetVersion = targetVersion
 		repoBaseURL, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
 		if !ok {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,

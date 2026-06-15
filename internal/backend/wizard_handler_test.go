@@ -98,6 +98,28 @@ func TestWizardBackendDeploy_WritesPendingUpdate(t *testing.T) {
 	}
 }
 
+func TestWizardBackendDeployRejectsUnsafeReleaseTag(t *testing.T) {
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "backend-update.json")
+	h := NewMux(Deps{WizardToken: "secret", BackendUpdatePath: pending})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/backend/deploy",
+		strings.NewReader(`{"target_version":"v0.13.0/../../bad"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "wgmonitor.example.test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatalf("unsafe backend update should not write pending file, err=%v", err)
+	}
+}
+
 func TestWizardEnrollmentRejectsOversizedJSONBody(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
@@ -922,6 +944,34 @@ func TestWizardDeployAddsRepoResolveIPWhenDomainResolves(t *testing.T) {
 	}
 	if got := sink.enqueued[0].Args["repo_resolve_ip"]; got != "83.171.224.125" {
 		t.Fatalf("repo_resolve_ip=%v", got)
+	}
+}
+
+func TestWizardDeployRejectsUnsafeReleaseTag(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0/../../bad"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("unsafe deploy should not enqueue command: %+v", sink.enqueued)
 	}
 }
 

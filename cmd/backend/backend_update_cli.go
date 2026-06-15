@@ -88,8 +88,18 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	}
 	req.TargetVersion = strings.TrimSpace(req.TargetVersion)
 	req.RepoBase = strings.TrimRight(strings.TrimSpace(req.RepoBase), "/")
-	if req.TargetVersion == "" || req.RepoBase == "" {
-		err := fmt.Errorf("pending update requires target_version and repo_base")
+	if req.TargetVersion == "" {
+		err := fmt.Errorf("pending update requires target_version")
+		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
+		return err
+	}
+	if req.RepoBase == "" {
+		err := fmt.Errorf("pending update requires repo_base")
+		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
+		return err
+	}
+	req.TargetVersion, err = releaseorigin.ValidateReleaseTag(req.TargetVersion)
+	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
