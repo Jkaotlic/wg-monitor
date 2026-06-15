@@ -31,6 +31,8 @@ type fakeRouterTG struct {
 	sendErr     error
 	answerErr   error
 	editErr     error
+	filePath    string
+	fileData    []byte
 }
 
 type fakeTopicCallRouter struct {
@@ -82,10 +84,43 @@ func (f *fakeRouterTG) SendMessageWithReplyKeyboard(ctx context.Context, chatID 
 	return 1, nil
 }
 func (f *fakeRouterTG) DeleteMessage(ctx context.Context, chatID, messageID int64) error { return nil }
-func (f *fakeRouterTG) GetFile(_ context.Context, _ string) (string, error)              { return "", nil }
-func (f *fakeRouterTG) DownloadFile(_ context.Context, _ string) ([]byte, error)         { return nil, nil }
+func (f *fakeRouterTG) GetFile(_ context.Context, _ string) (string, error)              { return f.filePath, nil }
+func (f *fakeRouterTG) DownloadFile(_ context.Context, _ string) ([]byte, error) {
+	return f.fileData, nil
+}
 
 func ptrInt64(v int64) *int64 { return &v }
+
+func TestHandleDocumentUploadRejectsOversizeDownloadedBody(t *testing.T) {
+	f := &fakeRouterTG{
+		filePath: "documents/huge.conf",
+		fileData: []byte(strings.Repeat("A", (50*1024)+1)),
+	}
+	r := &Router{
+		tg:      f,
+		pending: make(map[int64]*pendingUpload),
+	}
+	threadID := int64(11)
+	user := &db.User{ID: 7, Nickname: "testkeen"}
+	msg := &tg.Message{
+		Chat:            tg.Chat{ID: -100},
+		MessageThreadID: &threadID,
+		Document: &tg.Document{
+			FileID:   "file-1",
+			FileName: "huge.conf",
+			FileSize: 1,
+		},
+	}
+
+	r.handleDocumentUpload(context.Background(), msg, "per_router", user)
+
+	if len(r.pending) != 0 {
+		t.Fatalf("oversize downloaded body stored as pending upload: %+v", r.pending)
+	}
+	if len(f.sentMsgs) == 0 || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], "50") || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], ".conf") {
+		t.Fatalf("expected oversize warning, got messages=%q", f.sentMsgs)
+	}
+}
 
 func markupHasCallback(kb *tg.InlineKeyboardMarkup, want string) bool {
 	if kb == nil {
