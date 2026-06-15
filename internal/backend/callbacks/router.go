@@ -2350,17 +2350,19 @@ func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery
 	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
 		return
 	}
-	draft, ok := r.routeWizard.ConsumeAddConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	ok, err := r.routeWizard.ApplyAddConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken, func(draft RouteAddDraft) error {
+		cmd := wire.Command{ID: defaultCmdID(), Action: "route_add", IssuedAt: time.Now().UTC(), Args: map[string]any{
+			"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
+			"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "template_id": draft.TemplateID, "draft_hash": draft.PreviewHash,
+		}}
+		return r.cmdSink.EnqueueWithRef(user.ID, cmd, ref)
+	})
 	if !ok {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
 		return
 	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "route_add", IssuedAt: time.Now().UTC(), Args: map[string]any{
-		"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
-		"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "template_id": draft.TemplateID, "draft_hash": draft.PreviewHash,
-	}}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}
@@ -2423,16 +2425,18 @@ func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
 		return
 	}
-	draft, ok := r.routeWizard.ConsumeDeleteConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken)
+	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
+	ok, err := r.routeWizard.ApplyDeleteConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken, func(draft RouteDeleteDraft) error {
+		cmd := wire.Command{ID: defaultCmdID(), Action: "route_delete", IssuedAt: time.Now().UTC(), Args: map[string]any{
+			"kind": draft.Kind, "route_id": draft.RouteID, "preview_hash": draft.PreviewHash,
+		}}
+		return r.cmdSink.EnqueueWithRef(user.ID, cmd, ref)
+	})
 	if !ok {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
 		return
 	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "route_delete", IssuedAt: time.Now().UTC(), Args: map[string]any{
-		"kind": draft.Kind, "route_id": draft.RouteID, "preview_hash": draft.PreviewHash,
-	}}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
 		return
 	}

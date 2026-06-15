@@ -198,6 +198,20 @@ func (s *RouteWizardStore) ConsumeAddConfirmForActor(userID, actorTGID int64, th
 	return d, true
 }
 
+func (s *RouteWizardStore) ApplyAddConfirmForActor(userID, actorTGID int64, threadID *int64, routerID int64, token, confirmToken string, apply func(RouteAddDraft) error) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.addDrafts[token]
+	if !ok || d.ConfirmToken != confirmToken || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
+		return false, nil
+	}
+	if err := apply(d); err != nil {
+		return true, err
+	}
+	delete(s.addDrafts, token)
+	return true, nil
+}
+
 func (s *RouteWizardStore) PutDeleteDraft(d RouteDeleteDraft) RouteDeleteDraft {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -264,6 +278,20 @@ func (s *RouteWizardStore) ConsumeDeleteConfirmForActor(userID, actorTGID int64,
 	}
 	delete(s.delDrafts, token)
 	return d, true
+}
+
+func (s *RouteWizardStore) ApplyDeleteConfirmForActor(userID, actorTGID int64, threadID *int64, routerID int64, token, confirmToken string, apply func(RouteDeleteDraft) error) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.delDrafts[token]
+	if !ok || d.ConfirmToken != confirmToken || !s.addScopeMatchesActorLocked(d.UserID, d.ActorTGID, d.ThreadID, d.RouterID, userID, actorTGID, threadID, routerID) || s.expiredLocked(d.ExpiresAt) {
+		return false, nil
+	}
+	if err := apply(d); err != nil {
+		return true, err
+	}
+	delete(s.delDrafts, token)
+	return true, nil
 }
 
 func (s *RouteWizardStore) PutRouteToken(rt RouteToken) string {
