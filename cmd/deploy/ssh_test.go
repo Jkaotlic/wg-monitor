@@ -315,6 +315,17 @@ func TestLoadPrivateKeySignerReadsPEMKey(t *testing.T) {
 	}
 }
 
+func TestUploadCommandBuildersQuoteRemotePath(t *testing.T) {
+	remotePath := "/tmp/wg monitor/file;touch owned"
+
+	if got, want := uploadStdinCommand(remotePath), "cat > '/tmp/wg monitor/file;touch owned'"; got != want {
+		t.Fatalf("uploadStdinCommand=%q want %q", got, want)
+	}
+	if got, want := uploadSFTPCommand(remotePath), "dd of='/tmp/wg monitor/file;touch owned' bs=1M status=none"; got != want {
+		t.Fatalf("uploadSFTPCommand=%q want %q", got, want)
+	}
+}
+
 // TestProgressDots_SilentBelowThreshold verifies no output is emitted for
 // tiny payloads (< 256 KiB), matching the small-config-upload case.
 func TestProgressDots_SilentBelowThreshold(t *testing.T) {

@@ -284,7 +284,7 @@ func stepUploadFile(s *SSH, remotePath string, data []byte, mode string) error {
 		PrintFail("upload: " + err.Error())
 		return err
 	}
-	if _, err := s.MustRun("chmod " + mode + " " + remotePath); err != nil {
+	if _, err := s.MustRun("chmod " + mode + " " + shellSingleQuote(remotePath)); err != nil {
 		PrintFail(err.Error())
 		return err
 	}

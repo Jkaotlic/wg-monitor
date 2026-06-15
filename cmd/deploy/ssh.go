@@ -233,7 +233,7 @@ func (s *SSH) UploadStdin(remotePath string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := sess.Start(fmt.Sprintf("cat > %s", remotePath)); err != nil {
+	if err := sess.Start(uploadStdinCommand(remotePath)); err != nil {
 		return err
 	}
 	prog := newProgressDots(len(data), os.Stderr)
@@ -270,7 +270,7 @@ func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := sess.Start(fmt.Sprintf("dd of=%s bs=1M status=none", remotePath)); err != nil {
+	if err := sess.Start(uploadSFTPCommand(remotePath)); err != nil {
 		return err
 	}
 	prog := newProgressDots(len(data), os.Stderr)
@@ -285,6 +285,14 @@ func (s *SSH) UploadSFTP(remotePath string, data []byte) error {
 	prog.finish()
 	stdin.Close()
 	return sess.Wait()
+}
+
+func uploadStdinCommand(remotePath string) string {
+	return "cat > " + shellSingleQuote(remotePath)
+}
+
+func uploadSFTPCommand(remotePath string) string {
+	return "dd of=" + shellSingleQuote(remotePath) + " bs=1M status=none"
 }
 
 // progressDots prints one '.' to its writer per 1 MiB consumed, and a
