@@ -314,15 +314,20 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 		return errors.New("result status is required")
 	}
 	q.mu.Lock()
-	bucket, ok := q.results[userID]
-	if !ok {
-		bucket = make(map[string]resultEntry)
-		q.results[userID] = bucket
-	}
+	bucket := q.results[userID]
 	if _, exists := bucket[result.ID]; exists {
 		q.mu.Unlock()
 		q.log().Debug("queue duplicate result ignored", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
 		return nil
+	}
+	if issuedBucket, ok := q.issued[userID]; !ok || issuedBucket[result.ID].cmd.ID == "" {
+		q.mu.Unlock()
+		q.log().Warn("queue record result rejected", "reason", "cmd-not-issued", "user_id", userID, "cmd_id", result.ID)
+		return errors.New("command result does not match an issued command")
+	}
+	if bucket == nil {
+		bucket = make(map[string]resultEntry)
+		q.results[userID] = bucket
 	}
 	bucket[result.ID] = resultEntry{result: result, recordedAt: time.Now()}
 	q.mu.Unlock()

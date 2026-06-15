@@ -219,6 +219,7 @@ func TestQueue_EnqueueRejectsInvalidAction(t *testing.T) {
 
 func TestQueue_RecordAndAwaitResult(t *testing.T) {
 	q := New()
+	issueCommandForTest(t, q, 7, wire.Command{ID: "c1", Action: "diag_now"})
 	res := wire.CommandResult{ID: "c1", Status: "ok", DurationMs: 12}
 	if err := q.RecordResult(7, res); err != nil {
 		t.Fatalf("record: %v", err)
@@ -231,6 +232,7 @@ func TestQueue_RecordAndAwaitResult(t *testing.T) {
 
 func TestQueue_AwaitResultWaitsForLateRecord(t *testing.T) {
 	q := New()
+	issueCommandForTest(t, q, 7, wire.Command{ID: "late", Action: "diag_now"})
 	var got *wire.CommandResult
 	var ok bool
 	done := make(chan struct{})
@@ -258,11 +260,23 @@ func TestQueue_AwaitResultTimeout(t *testing.T) {
 	}
 }
 
+func TestQueue_RecordResultRejectsUnissuedCommand(t *testing.T) {
+	q := New()
+	err := q.RecordResult(7, wire.CommandResult{ID: "ghost", Status: "ok"})
+	if err == nil {
+		t.Fatal("expected unissued command result to be rejected")
+	}
+	if got, ok := q.AwaitResult(context.Background(), 7, "ghost", 10*time.Millisecond); ok || got != nil {
+		t.Fatalf("unissued result should not be awaitable, got=%+v ok=%v", got, ok)
+	}
+}
+
 // TestQueue_RecordResultAcceptsUnknownStatus pins forward-compat: queue
 // stores results with unknown statuses (logging is the caller's concern).
 // Empty status remains a hard error (real client bug, not schema evolution).
 func TestQueue_RecordResultAcceptsUnknownStatus(t *testing.T) {
 	q := New()
+	issueCommandForTest(t, q, 1, wire.Command{ID: "x", Action: "diag_now"})
 	if err := q.RecordResult(1, wire.CommandResult{ID: "x", Status: "weird"}); err != nil {
 		t.Errorf("expected unknown status to be accepted, got %v", err)
 	}
@@ -273,6 +287,7 @@ func TestQueue_RecordResultAcceptsUnknownStatus(t *testing.T) {
 
 func TestQueue_RecordResultKeepsFirstResult(t *testing.T) {
 	q := New()
+	issueCommandForTest(t, q, 1, wire.Command{ID: "cmd1", Action: "diag_now"})
 	if err := q.RecordResult(1, wire.CommandResult{ID: "cmd1", Status: "err", Output: "first"}); err != nil {
 		t.Fatalf("record first: %v", err)
 	}
@@ -285,6 +300,17 @@ func TestQueue_RecordResultKeepsFirstResult(t *testing.T) {
 	}
 	if got.Status != "err" || got.Output != "first" {
 		t.Fatalf("duplicate result overwrote first result: %+v", got)
+	}
+}
+
+func issueCommandForTest(t *testing.T, q *Queue, userID int64, cmd wire.Command) {
+	t.Helper()
+	if err := q.Enqueue(userID, cmd); err != nil {
+		t.Fatalf("enqueue issued command: %v", err)
+	}
+	got, ok := q.Dequeue(context.Background(), userID, time.Second)
+	if !ok || got == nil || got.ID != cmd.ID {
+		t.Fatalf("dequeue issued command got=%+v ok=%v", got, ok)
 	}
 }
 
