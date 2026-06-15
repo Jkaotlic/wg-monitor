@@ -167,7 +167,7 @@ func stepRollbackRemoteBinary(s *SSH, remotePath, service string) error {
 // connection-refused for a short window after systemctl start succeeds, so
 // give the listener a few seconds before surfacing the failure.
 func stepVerifyHTTP(s *SSH, url string) error {
-	cmd := fmt.Sprintf("curl -sS -o /dev/null -w '%%{http_code}' %s", url)
+	cmd := curlHTTPCodeCommand(url)
 	deadline := time.Now().Add(12 * time.Second)
 	var lastOut string
 	var lastErr error
@@ -194,6 +194,10 @@ func stepVerifyHTTP(s *SSH, url string) error {
 	}
 	PrintOK(fmt.Sprintf("%s → 200 OK", url))
 	return nil
+}
+
+func curlHTTPCodeCommand(url string) string {
+	return "curl -sS -o /dev/null -w '%{http_code}' " + shellSingleQuote(url)
 }
 
 func stepVerifyBackendHealth(s *SSH, domain string) error {

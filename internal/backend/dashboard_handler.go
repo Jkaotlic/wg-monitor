@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -505,6 +506,7 @@ type dashboardLatestCache struct {
 
 const dashboardLatestCacheTTL = 5 * time.Minute
 const dashboardGitHubReleasesURL = "https://api.github.com/repos/Jkaotlic/wg-monitor/releases?per_page=30"
+const maxDashboardGitHubReleaseListBytes = 1 << 20
 
 var (
 	lookupDashboardLatestVersion = fetchDashboardLatestVersion
@@ -536,17 +538,32 @@ func fetchDashboardLatestVersion(ctx context.Context) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("github releases HTTP %d", resp.StatusCode)
 	}
+	version, err := decodeDashboardLatestRelease(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	dashboardLatestMu.Lock()
+	dashboardLatestCached = dashboardLatestCache{version: version, at: time.Now()}
+	dashboardLatestMu.Unlock()
+	return version, nil
+}
+
+func decodeDashboardLatestRelease(r io.Reader) (string, error) {
+	body, err := io.ReadAll(io.LimitReader(r, maxDashboardGitHubReleaseListBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(body) > maxDashboardGitHubReleaseListBytes {
+		return "", fmt.Errorf("github releases response too large: limit %d bytes", maxDashboardGitHubReleaseListBytes)
+	}
 	var releases []dashboardGitHubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+	if err := json.Unmarshal(body, &releases); err != nil {
 		return "", fmt.Errorf("decode github releases: %w", err)
 	}
 	version := dashboardOperatorLatestRelease(releases)
 	if version == "" {
 		return "", errors.New("github releases returned no usable tags")
 	}
-	dashboardLatestMu.Lock()
-	dashboardLatestCached = dashboardLatestCache{version: version, at: time.Now()}
-	dashboardLatestMu.Unlock()
 	return version, nil
 }
 
