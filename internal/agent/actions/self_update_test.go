@@ -59,6 +59,16 @@ func TestHTTPGetLimitedUsesSmallerMetadataLimit(t *testing.T) {
 	}
 }
 
+func TestSelfUpdateRejectsUnsafeReleaseTag(t *testing.T) {
+	_, err := SelfUpdate(context.Background(), "v0.13.0/../../bad")
+	if err == nil {
+		t.Fatal("expected unsafe release tag to fail")
+	}
+	if !strings.Contains(err.Error(), "version") {
+		t.Fatalf("expected version validation error, got %v", err)
+	}
+}
+
 func TestSelfUpdateSwapScriptRollsBackWhenNewBinaryDoesNotStayRunning(t *testing.T) {
 	script := selfUpdateSwapScript("/opt/bin/wg-monitor")
 

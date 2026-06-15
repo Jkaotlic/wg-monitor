@@ -214,6 +214,44 @@ func TestRunBackendUpdateRunnerRejectsUntrustedRepoBase(t *testing.T) {
 	}
 }
 
+func TestRunBackendUpdateRunnerRejectsUnsafeReleaseTag(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "wg-monitor-backend")
+	pending := filepath.Join(dir, "backend-update.json")
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"target_version":"v0.13.0/../../bad","repo_base":%q}`, releaseorigin.DefaultBackendMirrorBase)
+	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runBackendUpdateRunnerCommand([]string{
+		"--pending-file", pending,
+		"--binary", current,
+	})
+	if err == nil {
+		t.Fatal("expected unsafe target_version to fail")
+	}
+	if !strings.Contains(err.Error(), "target_version") {
+		t.Fatalf("expected target_version validation error, got %v", err)
+	}
+	got, readErr := os.ReadFile(current)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old" {
+		t.Fatalf("binary changed to %q", string(got))
+	}
+	logBody, readErr := os.ReadFile(pending + ".last")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(logBody), "err") || !strings.Contains(string(logBody), "target_version") {
+		t.Fatalf("last status=%s", string(logBody))
+	}
+}
+
 func TestRunBackendUpdateRunnerRequiresSignatureForNewRelease(t *testing.T) {
 	dir := t.TempDir()
 	current := filepath.Join(dir, "wg-monitor-backend")

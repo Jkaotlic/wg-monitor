@@ -42,9 +42,11 @@ const (
 // On any failure prior to spawning the swap script, the running agent is
 // left untouched on the old binary.
 func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (string, error) {
-	if version == "" {
-		return "", fmt.Errorf("self_update: version is required")
+	validVersion, err := releaseorigin.ValidateReleaseTag(version)
+	if err != nil {
+		return "", fmt.Errorf("self_update: %w", err)
 	}
+	version = validVersion
 
 	arch, err := detectAgentArch()
 	if err != nil {

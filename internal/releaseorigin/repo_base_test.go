@@ -61,3 +61,20 @@ func TestValidateRepoBaseRejectsUntrustedOrigins(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateReleaseTag(t *testing.T) {
+	for _, in := range []string{"v0.13.0", "v0.13.0-rc132", "v1.2.3-hotfix_1"} {
+		got, err := ValidateReleaseTag(" " + in + " ")
+		if err != nil {
+			t.Fatalf("ValidateReleaseTag(%q): %v", in, err)
+		}
+		if got != in {
+			t.Fatalf("ValidateReleaseTag(%q)=%q", in, got)
+		}
+	}
+	for _, bad := range []string{"", "0.13.0", "v", "v/../../x", "v0.13.0/evil", "v0.13.0?x=1", " v0.13.0 rc "} {
+		if _, err := ValidateReleaseTag(bad); err == nil {
+			t.Fatalf("ValidateReleaseTag(%q) unexpectedly succeeded", bad)
+		}
+	}
+}
