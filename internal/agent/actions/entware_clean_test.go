@@ -72,6 +72,20 @@ func TestEntwareCleanInstallWritesSafeScriptAndManagedCrontab(t *testing.T) {
 	}
 }
 
+func TestNormalizeEntwareCleanScheduleRejectsUnsafeFields(t *testing.T) {
+	for _, schedule := range []string{
+		"* * * * ;",
+		"*/5 * * * MON",
+		"* * * * $(reboot)",
+	} {
+		t.Run(schedule, func(t *testing.T) {
+			if _, err := NormalizeEntwareCleanSchedule(schedule); err == nil {
+				t.Fatal("expected unsafe schedule to be rejected")
+			}
+		})
+	}
+}
+
 func TestEntwareCleanStatusReadsManagedCrontabMemoryAndLogTail(t *testing.T) {
 	m := newTestEntwareCleanManager(t)
 	if err := os.MkdirAll(filepath.Dir(m.ScriptPath), 0o755); err != nil {
