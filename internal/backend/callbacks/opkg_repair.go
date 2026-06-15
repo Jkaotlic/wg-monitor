@@ -69,6 +69,27 @@ func (s *pendingOpkgRepairStore) consume(userID int64, token string) (*pendingOp
 	return p, true
 }
 
+func (s *pendingOpkgRepairStore) apply(userID int64, token string, apply func(*pendingOpkgRepair) error) (*pendingOpkgRepair, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.m[token]
+	if !ok {
+		return nil, false, nil
+	}
+	if p.UserID != userID {
+		return nil, false, nil
+	}
+	if time.Now().After(p.ExpiresAt) {
+		delete(s.m, token)
+		return nil, false, nil
+	}
+	if err := apply(p); err != nil {
+		return p, true, err
+	}
+	delete(s.m, token)
+	return p, true, nil
+}
+
 func (s *pendingOpkgRepairStore) get(userID int64, token string) (*pendingOpkgRepair, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -107,23 +128,28 @@ func (a *OpkgRepairAction) Apply(ctx context.Context, q *tg.CallbackQuery, args 
 	if a.sink == nil {
 		return "", errors.New("командная очередь не подключена; действие не отправлено агенту")
 	}
-	p, ok := a.store.consume(args.UserID, args.OpkgRepairToken)
+	_, ok, err := a.store.apply(args.UserID, args.OpkgRepairToken, func(p *pendingOpkgRepair) error {
+		cmd := wire.Command{
+			ID:       a.idGen(),
+			Action:   "opkg_feed_disable",
+			Args:     map[string]any{"url": p.URL},
+			IssuedAt: time.Now().UTC(),
+		}
+		ref := cmdpkg.MessageRef{
+			ChatID:    q.Message.Chat.ID,
+			MessageID: q.Message.MessageID,
+			ThreadID:  q.Message.MessageThreadID,
+		}
+		if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+			return fmt.Errorf("enqueue opkg_feed_disable: %w", err)
+		}
+		return nil
+	})
 	if !ok {
 		return "", errors.New("сессия истекла или не найдена; запусти проверку обновлений заново")
 	}
-	cmd := wire.Command{
-		ID:       a.idGen(),
-		Action:   "opkg_feed_disable",
-		Args:     map[string]any{"url": p.URL},
-		IssuedAt: time.Now().UTC(),
-	}
-	ref := cmdpkg.MessageRef{
-		ChatID:    q.Message.Chat.ID,
-		MessageID: q.Message.MessageID,
-		ThreadID:  q.Message.MessageThreadID,
-	}
-	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-		return "", fmt.Errorf("enqueue opkg_feed_disable: %w", err)
+	if err != nil {
+		return "", err
 	}
 	return "🔧 отключаем фид…", nil
 }

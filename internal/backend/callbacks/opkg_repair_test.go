@@ -1,8 +1,12 @@
 package callbacks
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/anex/wg-monitor/internal/backend/tg"
 )
 
 func TestPendingOpkgRepair_PutConsume(t *testing.T) {
@@ -68,5 +72,28 @@ func TestMakeOpkgRepairToken_Format(t *testing.T) {
 		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
 			t.Errorf("non-hex char %q in token %q", r, tok)
 		}
+	}
+}
+
+func TestOpkgRepairAction_EnqueueFailureKeepsToken(t *testing.T) {
+	store := newPendingOpkgRepairStore()
+	store.put(&pendingOpkgRepair{
+		UserID: 42, URL: "https://repo.example/entware",
+		Token: "tok1", ExpiresAt: time.Now().Add(5 * time.Minute),
+	})
+	sink := &fakeSink{err: fmt.Errorf("queue down")}
+	action := NewOpkgRepairAction(sink, store, func() string { return "cmd-opkg-disable" })
+	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 7}}
+	args := Args{UserID: 42, OpkgRepairToken: "tok1"}
+
+	if _, err := action.Apply(context.Background(), q, args); err == nil {
+		t.Fatal("expected first enqueue to fail")
+	}
+	sink.err = nil
+	if _, err := action.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("same token should work after transient enqueue failure: %v", err)
+	}
+	if len(sink.enq) != 1 || sink.enq[0].Cmd.Action != "opkg_feed_disable" {
+		t.Fatalf("expected one opkg_feed_disable command, got %+v", sink.enq)
 	}
 }
