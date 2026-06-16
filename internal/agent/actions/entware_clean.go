@@ -296,16 +296,10 @@ func (m *EntwareCleanManager) dfOpt(ctx context.Context) (free, total int64, err
 	if err != nil {
 		return 0, 0, fmt.Errorf("df /opt: %w\n%s", err, string(out))
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) < 2 {
-		return 0, 0, fmt.Errorf("unexpected df output: %s", string(out))
+	free, total, err = parseDfOptOutput(out)
+	if err != nil {
+		return 0, 0, err
 	}
-	fields := strings.Fields(lines[1])
-	if len(fields) < 4 {
-		return 0, 0, fmt.Errorf("unexpected df fields: %q", lines[1])
-	}
-	total, _ = strconv.ParseInt(fields[1], 10, 64)
-	free, _ = strconv.ParseInt(fields[3], 10, 64)
 	return free, total, nil
 }
 

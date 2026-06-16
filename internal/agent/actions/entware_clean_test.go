@@ -118,6 +118,17 @@ func TestEntwareCleanStatusReadsManagedCrontabMemoryAndLogTail(t *testing.T) {
 	}
 }
 
+func TestEntwareCleanDfOptRejectsNonNumericFields(t *testing.T) {
+	m := newTestEntwareCleanManager(t)
+	m.Exec = fakeOpkgCronExec(map[string]fakeExecResult{
+		"df -k /opt": {out: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 nope 100000 also-nope 60% /opt\n"},
+	})
+
+	if _, _, err := m.dfOpt(context.Background()); err == nil {
+		t.Fatal("dfOpt should reject non-numeric total/free fields")
+	}
+}
+
 func TestEntwareCleanRunInvokesManagedScriptAndReturnsStatus(t *testing.T) {
 	m := newTestEntwareCleanManager(t)
 	if err := os.MkdirAll(filepath.Dir(m.ScriptPath), 0o755); err != nil {

@@ -212,6 +212,10 @@ func (o *OpkgRunner) dfOpt(ctx context.Context) (free, total int64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	return parseDfOptOutput(out)
+}
+
+func parseDfOptOutput(out []byte) (free, total int64, err error) {
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) < 2 {
 		return 0, 0, fmt.Errorf("unexpected df output: %s", string(out))
