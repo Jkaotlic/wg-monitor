@@ -171,6 +171,34 @@ func TestQueue_EnqueueSupersedesSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestQueue_EnqueueNotifiesSupersededSelfUpdate(t *testing.T) {
+	q := New()
+	first := mkCmd("old-update", "self_update")
+	first.Args = map[string]any{"version": "v0.13.0-rc200"}
+	second := mkCmd("new-update", "self_update")
+	seen := make(chan wire.Command, 1)
+	q.SetExpiredCommandHandler(func(userID int64, cmd wire.Command) {
+		if userID == 7 {
+			seen <- cmd
+		}
+	})
+	if err := q.Enqueue(7, first); err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	if err := q.Enqueue(7, second); err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+
+	select {
+	case got := <-seen:
+		if got.ID != "old-update" || got.Action != "self_update" || got.Args["version"] != "v0.13.0-rc200" {
+			t.Fatalf("unexpected superseded command: %+v", got)
+		}
+	default:
+		t.Fatal("superseded self_update should notify drop handler")
+	}
+}
+
 func TestQueue_EnqueueSupersedesSelfUpdateOrigin(t *testing.T) {
 	q := New()
 	first := mkCmd("old-update", "self_update")

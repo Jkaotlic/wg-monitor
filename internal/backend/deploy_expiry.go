@@ -12,6 +12,8 @@ type expiredCommandHandlerSetter interface {
 	SetExpiredCommandHandler(cmdpkg.ExpiredCommandHandler)
 }
 
+// AttachDeployExpiryHandler clears deploy-pending state when a self_update is
+// dropped before the agent can report a result (TTL expiry or queue supersede).
 func AttachDeployExpiryHandler(q expiredCommandHandlerSetter, d *db.DB, logger *slog.Logger) {
 	if q == nil || d == nil {
 		return
@@ -27,13 +29,13 @@ func AttachDeployExpiryHandler(q expiredCommandHandlerSetter, d *db.DB, logger *
 		cleared, err := d.Users().ClearPendingDeployIfMatches(userID, target)
 		if err != nil {
 			if logger != nil {
-				logger.Warn("clear pending deploy after expired self_update",
+				logger.Warn("clear pending deploy after dropped self_update",
 					"user_id", userID, "cmd_id", cmd.ID, "target_version", target, "err", err)
 			}
 			return
 		}
 		if cleared && logger != nil {
-			logger.Info("cleared pending deploy after expired self_update",
+			logger.Info("cleared pending deploy after dropped self_update",
 				"user_id", userID, "cmd_id", cmd.ID, "target_version", target)
 		}
 	})

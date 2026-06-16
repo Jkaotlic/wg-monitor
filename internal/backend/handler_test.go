@@ -1477,6 +1477,43 @@ func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 	}
 }
 
+func TestSupersededSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-superseded.db"))
+	defer d.Close()
+	tok := "eded33eded33eded33eded33eded33eded33eded33eded33eded33eded33eded"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc200", "2026-06-15T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	q := cmdpkg.New()
+	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	oldUpdate := wire.Command{
+		ID:       "cmd-old",
+		Action:   "self_update",
+		Args:     map[string]any{"version": "v0.13.0-rc200"},
+		IssuedAt: time.Now().UTC(),
+	}
+	newUpdate := wire.Command{
+		ID:       "cmd-new",
+		Action:   "self_update",
+		Args:     map[string]any{"version": "v0.13.0-rc201"},
+		IssuedAt: time.Now().UTC(),
+	}
+	if err := q.Enqueue(uid, oldUpdate); err != nil {
+		t.Fatalf("enqueue old self_update: %v", err)
+	}
+	if err := q.Enqueue(uid, newUpdate); err != nil {
+		t.Fatalf("enqueue new self_update: %v", err)
+	}
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("superseded self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	}
+}
+
 func TestCmdResult_DuplicateSelfUpdateFailureDoesNotNotifyAgain(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-dup.db"))
 	defer d.Close()
