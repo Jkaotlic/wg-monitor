@@ -898,6 +898,13 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				w.WriteHeader(http.StatusOK)
 				return
 			}
+			if errors.Is(err, cmdpkg.ErrUnissuedResult) {
+				d.Logger.Info("stale cmd result ignored",
+					"nickname", nick, "cmd_id", res.ID, "status", res.Status,
+					"req_id", RequestIDFromContext(r.Context()))
+				w.WriteHeader(http.StatusOK)
+				return
+			}
 			d.Logger.Warn("cmd result record", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "record failed")
 			return
