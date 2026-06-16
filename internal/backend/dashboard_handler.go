@@ -618,8 +618,8 @@ func parseDashboardReleaseTagRank(tag string) ([4]int, bool) {
 		return rank, false
 	}
 	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
+		n, ok := parseDashboardReleaseRankNumber(p)
+		if !ok {
 			return rank, false
 		}
 		rank[i] = n
@@ -628,12 +628,25 @@ func parseDashboardReleaseTagRank(tag string) ([4]int, bool) {
 		rank[3] = 1 << 30
 		return rank, true
 	}
-	rc, err := strconv.Atoi(rcRaw)
-	if err != nil {
+	rc, ok := parseDashboardReleaseRankNumber(rcRaw)
+	if !ok {
 		return rank, false
 	}
 	rank[3] = rc
 	return rank, true
+}
+
+func parseDashboardReleaseRankNumber(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
 }
 
 func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now time.Time, policy dashboardStatusPolicy) dashboardSummaryAgent {
