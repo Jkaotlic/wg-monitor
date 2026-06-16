@@ -220,7 +220,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.cmdSink = sink
 	r.pendingRebinds = make(map[string]*pendingRebind)
 	r.routeWizard = NewRouteWizardStore(5 * time.Minute)
-	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, defaultCmdID)
+	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, r.putPendingRebind, defaultCmdID)
 	r.pendingMaint = newPendingMaintStore()
 	r.cooldown = newCooldownStore()
 	r.auditCache = newSimpleAuditCache()

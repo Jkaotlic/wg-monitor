@@ -2,6 +2,7 @@ package callbacks
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -488,6 +489,7 @@ func TestImportAction_Apply_ForeignThreadDoesNotConsume(t *testing.T) {
 type fakeRebindEnqueuer struct {
 	lastAction string
 	lastArgs   map[string]any
+	err        error
 }
 
 func (f *fakeRebindEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
@@ -497,6 +499,9 @@ func (f *fakeRebindEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
 }
 
 func (f *fakeRebindEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref cmdpkg.MessageRef) error {
+	if f.err != nil {
+		return f.err
+	}
 	f.lastAction = cmd.Action
 	f.lastArgs = cmd.Args
 	return nil
@@ -543,5 +548,42 @@ func TestRebindConfirmAction_HappyPath(t *testing.T) {
 	}
 	if sink.lastArgs["src_tunnel_id"] != "t1" || sink.lastArgs["dst_tunnel_id"] != "t2" {
 		t.Errorf("args: %+v", sink.lastArgs)
+	}
+}
+
+func TestRebindConfirmAction_EnqueueFailureKeepsToken(t *testing.T) {
+	pr := &pendingRebind{
+		SrcID: "t1", DstID: "t2",
+		Token:     "tok1",
+		ExpiresAt: time.Now().Add(time.Minute),
+	}
+	pending := pr
+	sink := &fakeRebindEnqueuer{err: errors.New("queue down")}
+	a := &RebindConfirmAction{
+		consumeFn: func(uid, actorTGID int64, token string) (*pendingRebind, bool) {
+			if uid == 42 && actorTGID == 99 && token == "tok1" && pending != nil {
+				got := pending
+				pending = nil
+				return got, true
+			}
+			return nil, false
+		},
+		restoreFn: func(pr *pendingRebind) {
+			pending = pr
+		},
+		idGen: func() string { return "id1" },
+		sink:  sink,
+	}
+	q := &tg.CallbackQuery{From: tg.User{ID: 99}, Message: tg.Message{Chat: tg.Chat{ID: 1}, MessageID: 7}}
+
+	if _, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"}); err == nil {
+		t.Fatal("expected enqueue error")
+	}
+	sink.err = nil
+	if _, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"}); err != nil {
+		t.Fatalf("second confirm should retry after enqueue failure: %v", err)
+	}
+	if sink.lastAction != "route_rebind" {
+		t.Fatalf("lastAction=%q", sink.lastAction)
 	}
 }
