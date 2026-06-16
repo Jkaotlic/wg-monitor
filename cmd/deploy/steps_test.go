@@ -22,3 +22,17 @@ func TestCurlHTTPCodeCommandQuotesURLForRemoteShell(t *testing.T) {
 		t.Fatalf("curl command=%q, want %q", got, want)
 	}
 }
+
+func TestParseDeployedTelegramMetaReadsYAMLScalars(t *testing.T) {
+	chatID, adminID := parseDeployedTelegramMeta("telegram:\n  chat_id: -100123 # primary\n  admin_user_id: 42\n")
+	if chatID != -100123 || adminID != 42 {
+		t.Fatalf("telegram meta = %d/%d", chatID, adminID)
+	}
+}
+
+func TestParseDeployedTelegramMetaRejectsMalformedScalars(t *testing.T) {
+	chatID, adminID := parseDeployedTelegramMeta("telegram:\n  chat_id: -100abc\n  admin_user_id: 42\n")
+	if chatID != 0 || adminID != 0 {
+		t.Fatalf("malformed telegram meta should not be partially parsed, got %d/%d", chatID, adminID)
+	}
+}
