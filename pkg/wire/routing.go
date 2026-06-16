@@ -178,4 +178,5 @@ type RouteApplyResult struct {
 	RouteID        string `json:"route_id"`
 	RouteName      string `json:"route_name"`
 	HRNeoRestarted bool   `json:"hr_neo_restarted,omitempty"`
+	Warning        string `json:"warning,omitempty"`
 }

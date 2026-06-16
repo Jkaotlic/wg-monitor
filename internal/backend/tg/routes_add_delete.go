@@ -98,6 +98,9 @@ func RouteApplyResultText(result any) string {
 	if boolField(v, "HRNeoRestarted") {
 		b.WriteString("  • HR-Neo перезапущен: да\n")
 	}
+	if warning := stringField(v, "Warning"); warning != "" {
+		fmt.Fprintf(&b, "  • Предупреждение: %s\n", warning)
+	}
 	return b.String()
 }
 
