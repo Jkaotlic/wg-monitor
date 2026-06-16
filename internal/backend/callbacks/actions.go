@@ -355,11 +355,12 @@ type pendingRebind struct {
 type RebindConfirmAction struct {
 	sink      CommandEnqueuer
 	consumeFn func(userID, actorTGID int64, token string) (*pendingRebind, bool)
+	restoreFn func(*pendingRebind)
 	idGen     func() string
 }
 
-func NewRebindConfirmAction(sink CommandEnqueuer, consume func(int64, int64, string) (*pendingRebind, bool), idGen func() string) *RebindConfirmAction {
-	return &RebindConfirmAction{sink: sink, consumeFn: consume, idGen: idGen}
+func NewRebindConfirmAction(sink CommandEnqueuer, consume func(int64, int64, string) (*pendingRebind, bool), restore func(*pendingRebind), idGen func() string) *RebindConfirmAction {
+	return &RebindConfirmAction{sink: sink, consumeFn: consume, restoreFn: restore, idGen: idGen}
 }
 
 func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
@@ -368,6 +369,7 @@ func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, ar
 		return "", errors.New("сессия истекла или не найдена; открой панель заново")
 	}
 	if pr.SrcID != args.RebindSrcID || pr.DstID != args.RebindDstID {
+		a.restorePendingRebind(pr)
 		return "", errors.New("параметры переноса правил не совпадают с подтверждением")
 	}
 	cmd := wire.Command{
@@ -385,9 +387,16 @@ func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, ar
 		ThreadID:  q.Message.MessageThreadID,
 	}
 	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+		a.restorePendingRebind(pr)
 		return "", fmt.Errorf("не удалось поставить перенос правил в очередь: %w", err)
 	}
 	return "🛣 запускаем перенос…", nil
+}
+
+func (a *RebindConfirmAction) restorePendingRebind(pr *pendingRebind) {
+	if a.restoreFn != nil && pr != nil {
+		a.restoreFn(pr)
+	}
 }
 
 // makeRebindToken returns 8 hex chars cryptographically random.
