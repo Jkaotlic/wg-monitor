@@ -123,6 +123,34 @@ func TestQueue_DequeueSkipsExpiredCommands(t *testing.T) {
 	}
 }
 
+func TestQueue_DequeueNotifiesExpiredCommands(t *testing.T) {
+	q := New()
+	expired := mkCmd("expired-update", "self_update")
+	expired.Args = map[string]any{"version": "v0.13.0-rc200"}
+	expired.ExpiresAt = time.Now().Add(-time.Second)
+	seen := make(chan wire.Command, 1)
+	q.SetExpiredCommandHandler(func(userID int64, cmd wire.Command) {
+		if userID == 7 {
+			seen <- cmd
+		}
+	})
+	if err := q.Enqueue(7, expired); err != nil {
+		t.Fatalf("enqueue expired: %v", err)
+	}
+
+	if got, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond); ok || got != nil {
+		t.Fatalf("expired command must not be issued, got %+v ok=%v", got, ok)
+	}
+	select {
+	case got := <-seen:
+		if got.ID != "expired-update" || got.Action != "self_update" || got.Args["version"] != "v0.13.0-rc200" {
+			t.Fatalf("unexpected expired command: %+v", got)
+		}
+	default:
+		t.Fatal("expired command handler was not called")
+	}
+}
+
 func TestQueue_EnqueueSupersedesSelfUpdate(t *testing.T) {
 	q := New()
 	first := mkCmd("old-update", "self_update")

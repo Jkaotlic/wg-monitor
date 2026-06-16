@@ -51,6 +51,8 @@ type commandEntry struct {
 	issuedAt time.Time
 }
 
+type ExpiredCommandHandler func(userID int64, cmd wire.Command)
+
 // Queue is per-user FIFO queues plus a per-(user,id) result map plus a
 // per-(user,id) origin map. Concurrent-safe. Single mutex is fine —
 // operations are short and the fleet is ~10 users, not 10k.
@@ -62,7 +64,8 @@ type Queue struct {
 	// origins maps (userID → cmd.ID → originEntry). Populated by
 	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
 	origins map[int64]map[string]originEntry
-	signal  *sync.Cond   // signals on Enqueue and RecordResult
+	signal  *sync.Cond // signals on Enqueue and RecordResult
+	onDrop  ExpiredCommandHandler
 	logger  *slog.Logger // optional; nil → slog.Default()
 }
 
@@ -70,6 +73,12 @@ type Queue struct {
 // the JSON-handler with `component=cmd_queue` (OBS-08). Tests skip this.
 func (q *Queue) SetLogger(l *slog.Logger) {
 	q.logger = l
+}
+
+func (q *Queue) SetExpiredCommandHandler(h ExpiredCommandHandler) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.onDrop = h
 }
 
 func (q *Queue) log() *slog.Logger {
@@ -285,6 +294,11 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 					if len(bucket) == 0 {
 						delete(q.origins, userID)
 					}
+				}
+				if h := q.onDrop; h != nil {
+					q.mu.Unlock()
+					h(userID, head)
+					q.mu.Lock()
 				}
 				continue
 			}
