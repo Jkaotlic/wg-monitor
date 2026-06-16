@@ -67,8 +67,7 @@ func rcNumber(version, prefix string) (int, bool) {
 	if !strings.HasPrefix(version, prefix) {
 		return 0, false
 	}
-	n, err := strconv.Atoi(strings.TrimPrefix(version, prefix))
-	return n, err == nil
+	return parseReleaseRankNumber(strings.TrimPrefix(version, prefix))
 }
 
 func releaseRank(version string) ([4]int, bool) {
@@ -80,8 +79,8 @@ func releaseRank(version string) ([4]int, bool) {
 		return rank, false
 	}
 	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil {
+		n, ok := parseReleaseRankNumber(p)
+		if !ok {
 			return rank, false
 		}
 		rank[i] = n
@@ -90,12 +89,25 @@ func releaseRank(version string) ([4]int, bool) {
 		rank[3] = 1 << 30
 		return rank, true
 	}
-	rc, err := strconv.Atoi(rcRaw)
-	if err != nil {
+	rc, ok := parseReleaseRankNumber(rcRaw)
+	if !ok {
 		return rank, false
 	}
 	rank[3] = rc
 	return rank, true
+}
+
+func parseReleaseRankNumber(s string) (int, bool) {
+	if s == "" {
+		return 0, false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
 }
 
 func compareRank(a, b [4]int) int {

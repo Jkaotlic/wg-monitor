@@ -279,6 +279,22 @@ func TestGetLatestReleaseChoosesNewestPublishedRCOverStable(t *testing.T) {
 	}
 }
 
+func TestParseReleaseTagRankRejectsSignedComponents(t *testing.T) {
+	cases := []string{
+		"v0.13.0-rc-1",
+		"v0.13.0-rc+1",
+		"v0.-1.0",
+		"v+0.13.0",
+	}
+	for _, tag := range cases {
+		t.Run(tag, func(t *testing.T) {
+			if _, ok := parseReleaseTagRank(tag); ok {
+				t.Fatalf("parseReleaseTagRank(%q) ok=true, want false", tag)
+			}
+		})
+	}
+}
+
 type zeroReader struct{}
 
 func (zeroReader) Read(p []byte) (int, error) {
