@@ -34,6 +34,7 @@ type MessageRef struct {
 // the Sweep janitor can evict stale entries (LOGIC-02). Without this both
 // maps grew without bound for the lifetime of the backend process.
 var ErrDuplicateResult = errors.New("duplicate command result")
+var ErrUnissuedResult = errors.New("command result does not match an issued command")
 
 type resultEntry struct {
 	result     wire.CommandResult
@@ -328,7 +329,7 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	if issuedBucket, ok := q.issued[userID]; !ok || issuedBucket[result.ID].cmd.ID == "" {
 		q.mu.Unlock()
 		q.log().Warn("queue record result rejected", "reason", "cmd-not-issued", "user_id", userID, "cmd_id", result.ID)
-		return errors.New("command result does not match an issued command")
+		return ErrUnissuedResult
 	}
 	if bucket == nil {
 		bucket = make(map[string]resultEntry)

@@ -1482,6 +1482,34 @@ func TestCmdResult_DuplicateSelfUpdateFailureDoesNotNotifyAgain(t *testing.T) {
 	}
 }
 
+func TestCmdResult_UnissuedResultACKsWithoutNotify(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-unissued-result.db"))
+	defer d.Close()
+	tok := "eded11eded11eded11eded11eded11eded11eded11eded11eded11eded11eded"
+	_, _ = d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	deploy := &fakeDeployNotifier{}
+	sink := &fakeCmdSink{resultErr: cmdpkg.ErrUnissuedResult}
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		CommandSink:    sink,
+		DeployNotifier: deploy,
+	})
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "cmd-after-restart", Status: "err", Output: "late result"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if calls := deploy.snapshot(); len(calls) != 0 {
+		t.Fatalf("unissued stale result must not notify deferred update: %+v", calls)
+	}
+}
+
 type fakeWakeNotifier struct {
 	mu    sync.Mutex
 	calls []wakeRec

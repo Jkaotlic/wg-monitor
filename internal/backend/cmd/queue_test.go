@@ -264,8 +264,8 @@ func TestQueue_AwaitResultTimeout(t *testing.T) {
 func TestQueue_RecordResultRejectsUnissuedCommand(t *testing.T) {
 	q := New()
 	err := q.RecordResult(7, wire.CommandResult{ID: "ghost", Status: "ok"})
-	if err == nil {
-		t.Fatal("expected unissued command result to be rejected")
+	if !errors.Is(err, ErrUnissuedResult) {
+		t.Fatalf("record unissued err=%v, want ErrUnissuedResult", err)
 	}
 	if got, ok := q.AwaitResult(context.Background(), 7, "ghost", 10*time.Millisecond); ok || got != nil {
 		t.Fatalf("unissued result should not be awaitable, got=%+v ok=%v", got, ok)
