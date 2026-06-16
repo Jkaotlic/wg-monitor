@@ -14,8 +14,8 @@ func TestRenderAWGMBootstrapScriptContainsInstallPaths(t *testing.T) {
 		RawToken:     rawToken,
 		Version:      "v0.13.0-rc10",
 		DownloadURL:  "https://example.test/wg-monitor-linux-arm64",
-		ChecksumURL:  "https://example.test/checksums.txt",
 		ChecksumName: "wg-monitor-linux-arm64",
+		ExpectedSHA:  strings.Repeat("b", 64),
 	})
 	if err != nil {
 		t.Fatalf("RenderAWGMBootstrapScript: %v", err)
@@ -36,6 +36,12 @@ func TestRenderAWGMBootstrapScriptContainsInstallPaths(t *testing.T) {
 	if strings.Contains(script, "echo "+rawToken) {
 		t.Fatal("script prints raw token")
 	}
+	if strings.Contains(script, "CHECKSUM_URL=") || strings.Contains(script, "TMP_SUMS=") {
+		t.Fatalf("bootstrap script must use pinned expected sha, not unsigned checksums.txt:\n%s", script)
+	}
+	if !strings.Contains(script, "EXPECTED_SHA='"+strings.Repeat("b", 64)+"'") {
+		t.Fatalf("bootstrap script missing expected sha:\n%s", script)
+	}
 }
 
 func TestRenderAWGMBootstrapScriptCanDeferServiceStart(t *testing.T) {
@@ -45,8 +51,8 @@ func TestRenderAWGMBootstrapScriptCanDeferServiceStart(t *testing.T) {
 		RawToken:     strings.Repeat("a", 64),
 		Version:      "v0.13.0-rc59",
 		DownloadURL:  "https://example.test/wg-monitor-linux-arm64",
-		ChecksumURL:  "https://example.test/checksums.txt",
 		ChecksumName: "wg-monitor-linux-arm64",
+		ExpectedSHA:  strings.Repeat("c", 64),
 		DeferStart:   true,
 	})
 	if err != nil {

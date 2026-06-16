@@ -29,6 +29,7 @@ type awgmRelayConfig struct {
 	WizardToken      string `json:"wizard_token,omitempty"`
 	TargetVersion    string `json:"target_version,omitempty"`
 	ReleaseBase      string `json:"release_base,omitempty"`
+	ExpectedSHA      string `json:"expected_sha,omitempty"`
 	InitScript       string `json:"init_script,omitempty"`
 	ExpiresAtUnix    int64  `json:"expires_at_unix,omitempty"`
 	RawToken         string `json:"raw_token,omitempty"`
@@ -726,12 +727,14 @@ def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_sta
     nickname = cfg.get("nickname") or ""
     version = cfg.get("target_version") or ""
     release_base = (cfg.get("release_base") or "").rstrip("/")
+    expected_sha = (cfg.get("expected_sha") or "").strip()
+    if not expected_sha:
+        raise RelayError("expected_sha required for deferred bootstrap")
     arch = normalize_arch(arch)
     asset = "wg-monitor-agent-linux-" + arch
     agent_config = build_agent_config(cfg, backend_url, raw_token).rstrip()
     init_script = (cfg.get("init_script") or "").rstrip()
     download_url = release_base + "/" + version + "/" + asset
-    checksum_url = release_base + "/" + version + "/checksums.txt"
     if defer_start:
         start_block = 'echo "wg-monitor bootstrap staged; service start deferred until backend token commit"'
     else:
@@ -742,13 +745,12 @@ set -eu
 NICKNAME=%s
 VERSION=%s
 DOWNLOAD_URL=%s
-CHECKSUM_URL=%s
 CHECKSUM_NAME=%s
+EXPECTED_SHA=%s
 CONFIG=/opt/etc/wg-monitor/config.yaml
 BIN=/opt/bin/wg-monitor
 INIT=/opt/etc/init.d/S99wg-monitor
 TMP_BIN=/opt/tmp/wg-monitor.new
-TMP_SUMS=/opt/tmp/wg-monitor-checksums.txt
 
 if [ ! -d /opt ]; then
     echo "Entware /opt is not mounted"
@@ -783,15 +785,9 @@ fetch() {
 
 echo "Installing wg-monitor $VERSION for $NICKNAME"
 fetch "$DOWNLOAD_URL" "$TMP_BIN"
-fetch "$CHECKSUM_URL" "$TMP_SUMS"
 
-want=$(awk -v name="$CHECKSUM_NAME" '$2 == name {print $1}' "$TMP_SUMS" | head -n 1)
-if [ -z "$want" ]; then
-    echo "checksum for $CHECKSUM_NAME not found"
-    exit 13
-fi
 got=$(sha256sum "$TMP_BIN" | awk '{print $1}')
-if [ "$got" != "$want" ]; then
+if [ "$got" != "$EXPECTED_SHA" ]; then
     echo "checksum mismatch for $CHECKSUM_NAME"
     exit 14
 fi
@@ -812,7 +808,7 @@ chmod 755 "$TMP_BIN"
 mv "$TMP_BIN" "$BIN"
 
 %s
-""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(checksum_url), sh_quote(asset), agent_config, init_script, start_block)
+""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(asset), sh_quote(expected_sha), agent_config, init_script, start_block)
 
 def build_deferred_start_script(nickname):
     return """#!/bin/sh
