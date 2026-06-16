@@ -1445,6 +1445,38 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	}
 }
 
+func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-expired.db"))
+	defer d.Close()
+	tok := "eded22eded22eded22eded22eded22eded22eded22eded22eded22eded22eded"
+	uid, _ := d.Users().InsertWithKind("carvan", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc200", "2026-06-15T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	q := cmdpkg.New()
+	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	expired := wire.Command{
+		ID:        "cmd-expired",
+		Action:    "self_update",
+		Args:      map[string]any{"version": "v0.13.0-rc200"},
+		IssuedAt:  time.Now().Add(-time.Hour),
+		ExpiresAt: time.Now().Add(-time.Second),
+	}
+	if err := q.Enqueue(uid, expired); err != nil {
+		t.Fatalf("enqueue expired self_update: %v", err)
+	}
+	if got, ok := q.Dequeue(context.Background(), uid, 10*time.Millisecond); ok || got != nil {
+		t.Fatalf("expired self_update must not be issued, got %+v ok=%v", got, ok)
+	}
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("expired self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	}
+}
+
 func TestCmdResult_DuplicateSelfUpdateFailureDoesNotNotifyAgain(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-dup.db"))
 	defer d.Close()

@@ -139,6 +139,7 @@ func main() {
 
 	cmdQueue := cmd.New()
 	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
+	backend.AttachDeployExpiryHandler(cmdQueue, d, logger)
 	uiSnap := callbacks.UIConfigSnapshot{
 		DeleteUserCommandMessages: cfg.UI.DeleteUserCommandMessages != nil && *cfg.UI.DeleteUserCommandMessages,
 		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
