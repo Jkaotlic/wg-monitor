@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -431,10 +432,11 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 
 	// Disk free on /
 	if out, _, rc, err := s.Run("df -B1 / | awk 'NR==2 {print $4}'"); err == nil && rc == 0 {
-		var free int64
-		fmt.Sscanf(strings.TrimSpace(out), "%d", &free)
+		free, parseErr := doctorParseDiskFreeBytes(out)
 		const oneGiB = int64(1) << 30
-		if free > oneGiB {
+		if parseErr != nil {
+			t.warnf("df / parse failed: " + parseErr.Error())
+		} else if free > oneGiB {
 			t.ok(fmt.Sprintf("disk free /: %.2f GiB", float64(free)/float64(oneGiB)))
 		} else {
 			t.failf(fmt.Sprintf("disk free / < 1 GiB (%.2f GiB)", float64(free)/float64(oneGiB)))
@@ -451,6 +453,21 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 	}
 
 	fmt.Println()
+}
+
+func doctorParseDiskFreeBytes(out string) (int64, error) {
+	raw := strings.TrimSpace(out)
+	if raw == "" {
+		return 0, fmt.Errorf("empty df output")
+	}
+	free, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid free bytes %q: %w", raw, err)
+	}
+	if free < 0 {
+		return 0, fmt.Errorf("invalid negative free bytes %d", free)
+	}
+	return free, nil
 }
 
 func dockerBackendRunning(s *SSH) bool {
