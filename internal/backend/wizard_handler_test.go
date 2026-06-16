@@ -101,6 +101,58 @@ func TestWizardBackendDeploy_WritesPendingUpdate(t *testing.T) {
 	}
 }
 
+func TestWizardBackendDeployResolveIPUsesConfiguredPublicBaseURLWhenProxyHostIsPrivate(t *testing.T) {
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "backend-update.json")
+	oldLookup := lookupHostForRepoResolve
+	var lookedHost string
+	lookupHostForRepoResolve = func(host string) ([]string, error) {
+		lookedHost = host
+		if host == "wgmonitor.example.test" {
+			return []string{"198.51.100.10"}, nil
+		}
+		return []string{"192.168.0.87"}, nil
+	}
+	t.Cleanup(func() { lookupHostForRepoResolve = oldLookup })
+
+	h := NewMux(Deps{
+		WizardToken:       "secret",
+		BackendUpdatePath: pending,
+		PublicBaseURL:     "https://wgmonitor.example.test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/backend/deploy",
+		strings.NewReader(`{"target_version":"v0.13.0-rc109"}`))
+	req.Host = "192.168.0.87"
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "192.168.0.87")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, err := os.ReadFile(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got backendUpdateRequest
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if lookedHost != "wgmonitor.example.test" {
+		t.Fatalf("resolved host=%q", lookedHost)
+	}
+	if got.RepoBase != "https://wgmonitor.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%q", got.RepoBase)
+	}
+	if got.RepoResolveIP != "198.51.100.10" {
+		t.Fatalf("repo_resolve_ip=%q", got.RepoResolveIP)
+	}
+}
+
 func TestWizardBackendDeployRejectsUnsafeReleaseTag(t *testing.T) {
 	dir := t.TempDir()
 	pending := filepath.Join(dir, "backend-update.json")
@@ -667,6 +719,53 @@ func TestWizardDeployUsesConfiguredPublicBaseURLWhenProxyHostIsPrivate(t *testin
 	}
 	if got := sink.enqueued[0].Args["repo_base"]; got != "https://wgmonitor.example.test/v1/releases/download" {
 		t.Fatalf("repo_base=%v", got)
+	}
+}
+
+func TestWizardDeployResolveIPUsesConfiguredPublicBaseURLWhenProxyHostIsPrivate(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	oldLookup := lookupHostForRepoResolve
+	var lookedHost string
+	lookupHostForRepoResolve = func(host string) ([]string, error) {
+		lookedHost = host
+		if host == "wgmonitor.example.test" {
+			return []string{"198.51.100.10"}, nil
+		}
+		return []string{"192.168.0.87"}, nil
+	}
+	t.Cleanup(func() { lookupHostForRepoResolve = oldLookup })
+
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{
+		DB:            d,
+		CommandSink:   sink,
+		PublicBaseURL: "https://wgmonitor.example.test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc121"}`))
+	req.Host = "192.168.0.87"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "192.168.0.87")
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if lookedHost != "wgmonitor.example.test" {
+		t.Fatalf("resolved host=%q", lookedHost)
+	}
+	if got := sink.enqueued[0].Args["repo_resolve_ip"]; got != "198.51.100.10" {
+		t.Fatalf("repo_resolve_ip=%v", got)
 	}
 }
 
