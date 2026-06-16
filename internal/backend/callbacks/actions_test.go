@@ -484,6 +484,51 @@ func TestImportAction_Apply_ForeignThreadDoesNotConsume(t *testing.T) {
 	}
 }
 
+func TestImportAction_Apply_EnqueueFailureKeepsPendingUpload(t *testing.T) {
+	pending := map[int64]*pendingUpload{
+		42: {ConfB64: "abc", Name: "awg11", Token: "tok1", ExpiresAt: time.Now().Add(time.Minute)},
+	}
+	sink := &fakeEnqueuer{err: errors.New("queue down")}
+	a := &ImportAction{
+		sink: sink,
+		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) {
+			if uid == 42 && token == "tok1" {
+				up := pending[uid]
+				delete(pending, uid)
+				return up, true
+			}
+			return nil, false
+		},
+		restoreFn: func(uid int64, up *pendingUpload) {
+			pending[uid] = up
+		},
+		idGen: func() string { return "fixed-id" },
+	}
+	q := &tg.CallbackQuery{
+		ID:      "cbq-retry",
+		From:    tg.User{ID: 42},
+		Message: tg.Message{MessageID: 10, Chat: tg.Chat{ID: -100}},
+	}
+	args := Args{Action: "tunnel_import_replace", UserID: 42, ImportToken: "tok1"}
+
+	if _, err := a.Apply(context.Background(), q, args); err == nil {
+		t.Fatal("expected enqueue error")
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending upload should be restored after enqueue failure, pending=%v", pending)
+	}
+	sink.err = nil
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("retry should enqueue after queue recovers: %v", err)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
+		t.Fatalf("retry should enqueue tunnel_import, calls=%+v", sink.calls)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending upload should be consumed after successful retry, pending=%v", pending)
+	}
+}
+
 // fakeRebindEnqueuer is a minimal CommandEnqueuer that records the last
 // enqueued action and args. Used by RebindConfirmAction tests only.
 type fakeRebindEnqueuer struct {
