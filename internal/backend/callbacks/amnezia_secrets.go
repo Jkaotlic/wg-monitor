@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-const defaultAmneziaSecretsPath = "/var/lib/wg-monitor/amnezia-premium.json"
+const defaultAmneziaSecretsPath = "/var/lib/wg-monitor/amnezia-premium.json" // #nosec G101 -- filesystem path for the secret store, not credential material.
 
 type amneziaSecretFile struct {
 	Version int                          `json:"version"`

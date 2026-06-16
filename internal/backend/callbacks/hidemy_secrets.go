@@ -12,7 +12,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backend/hidemy"
 )
 
-const defaultHideMySecretsPath = "/var/lib/wg-monitor/hidemyname.json"
+const defaultHideMySecretsPath = "/var/lib/wg-monitor/hidemyname.json" // #nosec G101 -- filesystem path for the secret store, not credential material.
 
 type hideMySecretFile struct {
 	Version int                    `json:"version"`

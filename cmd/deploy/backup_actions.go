@@ -12,7 +12,7 @@ import (
 	"github.com/anex/wg-monitor/internal/backup"
 )
 
-const backupPassphraseEnv = "WG_BACKUP_PASSPHRASE"
+const backupPassphraseEnv = "WG_BACKUP_PASSPHRASE" // #nosec G101 -- environment variable name, not passphrase material.
 
 type backupRemoteLayout struct {
 	User            string
@@ -59,7 +59,7 @@ func backupLayoutForState(state *State) backupRemoteLayout {
 			OmitHardening:   user != "root",
 		}
 	}
-	return backupRemoteLayout{
+	return backupRemoteLayout{ // #nosec G101 -- layout contains filesystem paths for secret files, not secret values.
 		User:            "wgmonitor",
 		Group:           "wgmonitor",
 		BinaryPath:      "/usr/local/bin/wg-monitor-backend",

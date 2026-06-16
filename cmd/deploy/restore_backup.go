@@ -54,8 +54,8 @@ type restoreBackendConfig struct {
 
 const (
 	restoreRemoteDBPath            = "/var/lib/wg-monitor/state.db"
-	restoreRemoteBotTokenPath      = "/etc/wg-monitor/bot-token.txt"
-	restoreRemoteWizardTokenPath   = "/etc/wg-monitor/wizard-token.txt"
+	restoreRemoteBotTokenPath      = "/etc/wg-monitor/bot-token.txt"    // #nosec G101 -- filesystem path for restored token file, not token material.
+	restoreRemoteWizardTokenPath   = "/etc/wg-monitor/wizard-token.txt" // #nosec G101 -- filesystem path for restored token file, not token material.
 	restoreRemoteBackendUpdatePath = "/var/lib/wg-monitor/backend-update.json"
 )
 

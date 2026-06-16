@@ -63,10 +63,10 @@ jobs:
           cache: true
       - run: go install github.com/securego/gosec/v2/cmd/gosec@latest
       # Start with a blocking high-severity gate while the historical gosec
-      # baseline is triaged. Excluded classes are noisy for this repo today:
-      # paths from local CLI/config, controlled command runners, release-proxy
-      # allowlists, and deliberate command dispatch surfaces.
-      - run: gosec -severity high -exclude=G101,G702,G703,G704 ./...
+      # baseline is triaged. Excluded taint classes are noisy for controlled
+      # command runners, release-proxy allowlists, and deliberate command
+      # dispatch surfaces; G101 stays enabled and false positives are annotated.
+      - run: gosec -severity high -exclude=G702,G703,G704 -exclude-dir=.gomodcache -exclude-dir=.gopath -exclude-dir=.gocache ./...
 
   grype:
     name: grype
