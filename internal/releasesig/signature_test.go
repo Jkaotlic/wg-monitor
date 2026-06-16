@@ -50,11 +50,31 @@ func TestSignatureRequiredForVersion(t *testing.T) {
 		{"v0.13.1", true},
 		{"v1.0.0", true},
 		{"", true},
+		{"v0.13.0-rc-1", true},
+		{"v0.13.0-rc+1", true},
+		{"v0.-1.0", true},
+		{"v+0.13.0", true},
 	}
 	for _, c := range cases {
 		t.Run(c.version, func(t *testing.T) {
 			if got := SignatureRequiredForVersion(c.version); got != c.want {
 				t.Fatalf("SignatureRequiredForVersion(%q)=%v, want %v", c.version, got, c.want)
+			}
+		})
+	}
+}
+
+func TestReleaseRankRejectsSignedComponents(t *testing.T) {
+	cases := []string{
+		"v0.13.0-rc-1",
+		"v0.13.0-rc+1",
+		"v0.-1.0",
+		"v+0.13.0",
+	}
+	for _, version := range cases {
+		t.Run(version, func(t *testing.T) {
+			if _, ok := releaseRank(version); ok {
+				t.Fatalf("releaseRank(%q) ok=true, want false", version)
 			}
 		})
 	}
