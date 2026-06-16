@@ -41,6 +41,7 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 		return "", fmt.Errorf("src/dst missing iface: src=%+v dst=%+v", src, dst)
 	}
 	dstIface := dst.Iface
+	dstDNSBindID := routeDNSBindID(dst)
 	srcAliases := routeAliasSet(src.Aliases)
 	srcIsDefaultRoute := src.DefaultRoute
 	defaultIface := ""
@@ -53,7 +54,7 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 	}
 
 	hrTouched := false
-	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces)
+	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, dstDNSBindID, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces)
 	res.Static = rebindStatic(ctx, c, srcAliases, dstIface, srcIsOther, knownIfaces)
 
 	if err := c.RoutingRefresh(ctx); err != nil {
@@ -124,7 +125,7 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 //
 // Returns: total category result, the HRNeo sub-count (subset of total),
 // and whether any hydraroute rule was actually written.
-func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
+func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface, dstDNSBindID string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
 	all, err := c.ListDNSRoutes(ctx)
 	if err != nil {
 		total.Failed = 1
@@ -134,12 +135,12 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 	for _, r := range all {
 		isHR := isHydraRouteBackend(r)
 		updated := r
-		newRoutes, didChange := rewriteRoutes(r.Routes, srcAliases, dstIface)
+		newRoutes, didChange := rewriteRoutes(r.Routes, srcAliases, dstIface, dstDNSBindID)
 		if !didChange && srcIsOther {
-			newRoutes, didChange = rewriteOtherRoutes(r.Routes, dstIface, knownIfaces)
+			newRoutes, didChange = rewriteOtherRoutes(r.Routes, dstIface, dstDNSBindID, knownIfaces)
 		}
 		if !didChange && srcIsOther && len(r.Routes) == 0 && !(isMovableHRNeoFallthrough(r) && defaultIface != "") {
-			newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
+			newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstDNSBindID, Fallback: "auto"}}
 			didChange = true
 		}
 		if !didChange && !srcIsOther {
@@ -243,7 +244,7 @@ func isDirectProviderHRNeoPolicy(r awgmgr.DNSRoute) bool {
 // rewriteRoutes returns a copy of routes with every entry whose interface or
 // tunnelId matches any source alias remapped to dstIface. The boolean indicates
 // whether any entry was rewritten.
-func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcAliases map[string]bool, dstIface string) ([]awgmgr.DNSRouteEntry, bool) {
+func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcAliases map[string]bool, dstIface, dstDNSBindID string) ([]awgmgr.DNSRouteEntry, bool) {
 	if len(routes) == 0 {
 		return routes, false
 	}
@@ -253,14 +254,14 @@ func rewriteRoutes(routes []awgmgr.DNSRouteEntry, srcAliases map[string]bool, ds
 		out[i] = e
 		if routeBindMatches(e.Interface, srcAliases) || routeBindMatches(e.TunnelID, srcAliases) {
 			out[i].Interface = dstIface
-			out[i].TunnelID = dstIface
+			out[i].TunnelID = dstDNSBindID
 			changed = true
 		}
 	}
 	return out, changed
 }
 
-func rewriteOtherRoutes(routes []awgmgr.DNSRouteEntry, dstIface string, knownIfaces map[string]bool) ([]awgmgr.DNSRouteEntry, bool) {
+func rewriteOtherRoutes(routes []awgmgr.DNSRouteEntry, dstIface, dstDNSBindID string, knownIfaces map[string]bool) ([]awgmgr.DNSRouteEntry, bool) {
 	if len(routes) == 0 {
 		return routes, false
 	}
@@ -270,7 +271,7 @@ func rewriteOtherRoutes(routes []awgmgr.DNSRouteEntry, dstIface string, knownIfa
 		out[i] = e
 		if routeBindIsOther(firstNonEmptyRoute(e.Interface, e.TunnelID), knownIfaces) {
 			out[i].Interface = dstIface
-			out[i].TunnelID = dstIface
+			out[i].TunnelID = dstDNSBindID
 			changed = true
 		}
 	}
