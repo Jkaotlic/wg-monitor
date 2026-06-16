@@ -621,6 +621,11 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		r.handleCompatBtn(ctx, q, args)
 		return
 	}
+	if action == nil {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "action is not configured")
+		slog.Warn("callback action not configured", "action", args.Action)
+		return
+	}
 	statusLine, err := action.Apply(ctx, q, args)
 	if err != nil {
 		msg := "Ошибка: " + err.Error()

@@ -3417,6 +3417,33 @@ func TestRouter_OpkgDisable_NilAction(t *testing.T) {
 	}
 }
 
+func TestRouterOptionalPanelActionsNilActionToast(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouterWithSink(d, f, nil, Config{ChatID: -100, AdminUserID: 12345})
+
+	for _, data := range []string{
+		fmt.Sprintf("pingcheck_open:%d:_panel_", uid),
+		fmt.Sprintf("diag_test:%d:abcd1234:mtu", uid),
+	} {
+		t.Run(data, func(t *testing.T) {
+			f.answers = nil
+			r.HandleCallback(context.Background(), &tg.CallbackQuery{
+				ID:      "optional-action",
+				From:    tg.User{ID: 12345},
+				Data:    data,
+				Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 1},
+			})
+			if len(f.answers) != 1 {
+				t.Fatalf("expected 1 AnswerCallbackQuery, got %d", len(f.answers))
+			}
+			if !strings.Contains(f.answers[0], "not configured") {
+				t.Fatalf("expected not configured toast, got %q", f.answers[0])
+			}
+		})
+	}
+}
+
 func TestCallbackUserFacingNotFoundToastsAreRussian(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTG{}
