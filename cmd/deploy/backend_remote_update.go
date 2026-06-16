@@ -34,10 +34,29 @@ func tryWizardBackendUpdate(state *State, secrets *SecretStore, version string) 
 		}
 		return true, err
 	}
-	if err := waitBackendVersion(state.Backend.Domain, version, 4*time.Minute); err != nil {
+	if err := waitBackendVersionForState(state, version, 4*time.Minute); err != nil {
 		return true, err
 	}
 	return true, nil
+}
+
+func waitBackendVersionForState(state *State, want string, timeout time.Duration) error {
+	base, client, err := backendHealthClientForState(state, 8*time.Second)
+	if err != nil {
+		return err
+	}
+	return waitBackendVersionWithClient(client, base, want, timeout)
+}
+
+func backendHealthClientForState(state *State, requestTimeout time.Duration) (string, *http.Client, error) {
+	if state == nil || strings.TrimSpace(state.Backend.Domain) == "" {
+		return "", nil, fmt.Errorf("backend domain is required")
+	}
+	c := NewVPSClientWithTimeoutAndDialHost(state.Backend.Domain, "healthz", requestTimeout, backendAPIDialHost(state))
+	if c == nil || c.HTTP == nil {
+		return "", nil, fmt.Errorf("backend health client is not configured")
+	}
+	return c.BaseURL, c.HTTP, nil
 }
 
 func waitBackendVersion(domain, want string, timeout time.Duration) error {
@@ -45,10 +64,14 @@ func waitBackendVersion(domain, want string, timeout time.Duration) error {
 	if !strings.Contains(base, "://") {
 		base = "https://" + base
 	}
-	url := base + "/healthz"
+	client := &http.Client{Timeout: 8 * time.Second}
+	return waitBackendVersionWithClient(client, base, want, timeout)
+}
+
+func waitBackendVersionWithClient(client *http.Client, base, want string, timeout time.Duration) error {
+	url := strings.TrimRight(base, "/") + "/healthz"
 	deadline := time.Now().Add(timeout)
 	var last string
-	client := &http.Client{Timeout: 8 * time.Second}
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil {
