@@ -146,6 +146,9 @@ func newestReleaseByTag(list []Release) Release {
 }
 
 func releaseNewerForOperator(a, b Release) bool {
+	if sameRCSeries(a.TagName, b.TagName) {
+		return compareReleaseTags(a.TagName, b.TagName) > 0
+	}
 	if !a.PublishedAt.IsZero() || !b.PublishedAt.IsZero() {
 		if a.PublishedAt.After(b.PublishedAt) {
 			return true
@@ -155,6 +158,20 @@ func releaseNewerForOperator(a, b Release) bool {
 		}
 	}
 	return compareReleaseTags(a.TagName, b.TagName) > 0
+}
+
+func sameRCSeries(a, b string) bool {
+	ar, aok := parseReleaseTagRank(a)
+	br, bok := parseReleaseTagRank(b)
+	if !aok || !bok || !strings.Contains(a, "-rc") || !strings.Contains(b, "-rc") {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if ar[i] != br[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {

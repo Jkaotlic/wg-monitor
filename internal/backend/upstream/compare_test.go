@@ -72,6 +72,7 @@ func TestFirmwareNewerThan(t *testing.T) {
 		// Empty fallthroughs
 		{"empty installed", "", "5.0.1", false},
 		{"empty candidate", "4.2.6", "", false},
+		{"overflowing installed segment does not look older", "5.999999999999999999999999999999", "5.1", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -79,5 +80,11 @@ func TestFirmwareNewerThan(t *testing.T) {
 				t.Errorf("FirmwareNewerThan(%q,%q)=%v want %v", c.installed, c.candidate, got, c.want)
 			}
 		})
+	}
+}
+
+func TestParsePosIntRejectsOverflow(t *testing.T) {
+	if n, err := parsePosInt("9223372036854775808"); err == nil {
+		t.Fatalf("parsePosInt overflow returned n=%d nil error, want error", n)
 	}
 }

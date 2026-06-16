@@ -174,9 +174,15 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any
 	}
 	defer resp.Body.Close()
 	slog.Debug("awgmgr", "method", "POST", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
-	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("awgmgr read %s: %w", path, err)
+	}
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(rb))
+	}
+	if err := rejectFailureEnvelope(path, rb); err != nil {
+		return err
 	}
 	if out != nil && len(rb) > 0 {
 		if err := json.Unmarshal(rb, out); err != nil {

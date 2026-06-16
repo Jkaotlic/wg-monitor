@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"golang.org/x/mod/semver"
@@ -152,14 +153,12 @@ func parsePosInt(s string) (int, error) {
 	if s == "" {
 		return 0, errNotPosInt
 	}
-	n := 0
 	for _, r := range s {
 		if r < '0' || r > '9' {
 			return 0, errNotPosInt
 		}
-		n = n*10 + int(r-'0')
 	}
-	return n, nil
+	return strconv.Atoi(s)
 }
 
 var errNotPosInt = newErr("not a positive integer")

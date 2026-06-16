@@ -279,6 +279,36 @@ func TestGetLatestReleaseChoosesNewestPublishedRCOverStable(t *testing.T) {
 	}
 }
 
+func TestGetLatestReleaseDoesNotChooseLowerPublishedLater(t *testing.T) {
+	oldAPI := GitHubAPIBase
+	t.Cleanup(func() {
+		GitHubAPIBase = oldAPI
+	})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/Jkaotlic/wg-monitor/releases":
+			_, _ = w.Write([]byte(`[
+				{"tag_name":"v0.13.0-rc132","published_at":"2026-06-11T10:00:00Z","assets":[]},
+				{"tag_name":"v0.13.0-rc131","published_at":"2026-06-12T10:00:00Z","assets":[]}
+			]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	GitHubAPIBase = srv.URL
+
+	dl := &Downloader{HTTP: srv.Client(), CacheDir: t.TempDir()}
+	rel, err := dl.GetLatestRelease()
+	if err != nil {
+		t.Fatalf("GetLatestRelease: %v", err)
+	}
+	if rel.TagName != "v0.13.0-rc132" {
+		t.Fatalf("latest tag=%q, want v0.13.0-rc132", rel.TagName)
+	}
+}
+
 func TestParseReleaseTagRankRejectsSignedComponents(t *testing.T) {
 	cases := []string{
 		"v0.13.0-rc-1",
