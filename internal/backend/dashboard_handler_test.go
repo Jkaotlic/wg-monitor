@@ -289,6 +289,22 @@ func TestDashboardOperatorLatestReleaseOrdersRCNumbersWhenPublishedAtTies(t *tes
 	}
 }
 
+func TestParseDashboardReleaseTagRankRejectsSignedComponents(t *testing.T) {
+	cases := []string{
+		"v0.13.0-rc-1",
+		"v0.13.0-rc+1",
+		"v0.-1.0",
+		"v+0.13.0",
+	}
+	for _, tag := range cases {
+		t.Run(tag, func(t *testing.T) {
+			if _, ok := parseDashboardReleaseTagRank(tag); ok {
+				t.Fatalf("parseDashboardReleaseTagRank(%q) ok=true, want false", tag)
+			}
+		})
+	}
+}
+
 func TestDecodeDashboardLatestReleaseRejectsOversizedGitHubResponse(t *testing.T) {
 	_, err := decodeDashboardLatestRelease(strings.NewReader("[" + strings.Repeat(" ", (1<<20)+1)))
 	if err == nil {
