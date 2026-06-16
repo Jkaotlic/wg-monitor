@@ -377,17 +377,20 @@ func (r *Router) handleSelfHostedAmneziaConfirm(ctx context.Context, q *tg.Callb
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	if !r.consumePendingConfirm(ctx, q, args, args.SelfHostedAmneziaID) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.SelfHostedAmneziaID)
+	if !ok {
 		return
 	}
 	inst, cfg, err := r.selfHostedAmneziaInstance(args.SelfHostedAmneziaID)
 	if err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted Amnezia не настроен")
 		return
 	}
 	clientName := "wgmon-" + user.Nickname + "-" + time.Now().Format("20060102-150405")
 	issued, err := selfhostedamnezia.Issue(ctx, cfg, clientName)
 	if err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}

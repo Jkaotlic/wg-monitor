@@ -922,6 +922,54 @@ func TestSelfHostedAmneziaDeleteConfirmKeepsTokenWhenStoreLoadFails(t *testing.T
 	}
 }
 
+func TestSelfHostedAmneziaIssueConfirmKeepsTokenWhenInstanceLoadFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	store := selfhostedamnezia.Store{Version: 1}
+	if err := store.Upsert(selfhostedamnezia.Instance{ID: "home", Label: "Home VPS", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567}); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfhostedamnezia.SaveStore(storePath, store); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-issue-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_selfhosted_issue:" + itoa(uid) + ":_panel_:home",
+	})
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("issue ask should render confirm callback, markups=%+v answers=%+v", f.editMarkups, f.answers)
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_selfhosted_confirm:"+itoa(uid)+":_panel_:home:")
+	confirmArgs, err := Parse(confirmData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.cfg.SelfHostedAmnezia.StorePath = t.TempDir()
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-issue-confirm-load-fails",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	if _, ok := r.pendingConfirms.consume(uid, 12345, nil, "amz_selfhosted_confirm", "home", confirmArgs.ConfirmToken); !ok {
+		t.Fatalf("failed issue confirm should keep token retryable")
+	}
+}
+
 func TestAmneziaDownloadAskFullSlotsOffersRecoveryActions(t *testing.T) {
 	d, uid := newTestDB(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
