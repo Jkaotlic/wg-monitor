@@ -222,10 +222,12 @@ func (r *Router) handleHideMyDeleteConfirm(ctx context.Context, q *tg.CallbackQu
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	if !r.consumePendingConfirm(ctx, q, args, args.HideMyCodeID) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.HideMyCodeID)
+	if !ok {
 		return
 	}
 	if err := r.deleteHideMyCode(user.ID, args.HideMyCodeID); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}

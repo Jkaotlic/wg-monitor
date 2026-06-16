@@ -375,10 +375,12 @@ func (r *Router) handleAmneziaDeleteConfirm(ctx context.Context, q *tg.CallbackQ
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	if !r.consumePendingConfirm(ctx, q, args, args.AmneziaKeyID) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.AmneziaKeyID)
+	if !ok {
 		return
 	}
 	if err := r.deleteAmneziaKey(user.ID, args.AmneziaKeyID); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
@@ -520,15 +522,18 @@ func (r *Router) handleAmneziaRevokeConfirm(ctx context.Context, q *tg.CallbackQ
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	if !r.consumePendingConfirm(ctx, q, args, args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode)) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode))
+	if !ok {
 		return
 	}
 	key, _ := r.getAmneziaKeyByID(user.ID, args.AmneziaKeyID)
 	if key == "" {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не сохранён")
 		return
 	}
 	if err := r.revokeAmneziaCountryConfig(ctx, key, args.AmneziaCountryCode); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}

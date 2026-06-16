@@ -1051,6 +1051,69 @@ func TestAmneziaRevokeConfirmFreesCountrySlot(t *testing.T) {
 	}
 }
 
+func TestAmneziaRevokeConfirmKeepsTokenWhenAPIRevokeFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	var revokeCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/revoke-country-config":
+			revokeCalls++
+			if revokeCalls == 1 {
+				http.Error(w, "premium temporarily unavailable", http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"subscription_status":"active","active_device_count":1,"max_device_count":2,"available_countries":[{"server_country_code":"de","server_country_name":"Germany"},{"server_country_code":"nl","server_country_name":"Netherlands"}],"issued_configs":[]}}`))
+		default:
+			t.Fatalf("unexpected Amnezia path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaBaseURL:     srv.URL,
+		AmneziaSecretsPath: t.TempDir() + "/amnezia-premium.json",
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "cb-amz-revoke-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_revoke:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
+	})
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_revoke_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":de:")
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "cb-amz-revoke-confirm-fails",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "cb-amz-revoke-confirm-retry",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	if revokeCalls != 2 {
+		t.Fatalf("retry should re-use confirm token and call revoke twice, got %d calls", revokeCalls)
+	}
+	if len(f.editMarkups) < 2 || !markupHasCallback(f.editMarkups[len(f.editMarkups)-1], "amz_dl:"+itoa(uid)+":_panel_:"+stored.ID+":nl") {
+		t.Fatalf("retry should refresh success UI with country choices, markups=%+v answers=%v", f.editMarkups, f.answers)
+	}
+}
+
 func TestAmneziaDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -1104,6 +1167,48 @@ func TestAmneziaDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
 	})
 	if _, ok := r.amneziaStoredKey(uid, stored.ID); ok {
 		t.Fatal("correct actor confirm should delete Amnezia key")
+	}
+}
+
+func TestAmneziaDeleteConfirmKeepsTokenWhenSecretsReadFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	secretsPath := t.TempDir() + "/amnezia-premium.json"
+	r := NewRouter(d, f, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaSecretsPath: secretsPath,
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_delete:" + itoa(uid) + ":_panel_:" + stored.ID,
+	})
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_delete_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":")
+
+	r.cfg.AmneziaSecretsPath = t.TempDir()
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-confirm-read-fails",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	r.cfg.AmneziaSecretsPath = secretsPath
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-delete-confirm-retry",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if _, ok := r.amneziaStoredKey(uid, stored.ID); ok {
+		t.Fatal("retrying same confirm after transient secrets read failure should delete Amnezia key")
 	}
 }
 
@@ -1293,6 +1398,48 @@ func TestHideMyDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
 	})
 	if _, ok := r.hideMyStoredCode(uid, stored.ID); ok {
 		t.Fatalf("correct actor confirm should delete HideMy code")
+	}
+}
+
+func TestHideMyDeleteConfirmKeepsTokenWhenSecretsReadFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	secretsPath := t.TempDir() + "/hidemy.json"
+	r := NewRouter(d, f, Config{
+		ChatID:            -100,
+		AdminUserID:       12345,
+		HideMySecretsPath: secretsPath,
+	})
+	stored, err := r.addHideMyCode(uid, "1234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "hmn_delete:" + itoa(uid) + ":_panel_:" + stored.ID,
+	})
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "hmn_delete_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":")
+
+	r.cfg.HideMySecretsPath = t.TempDir()
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-delete-confirm-read-fails",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	r.cfg.HideMySecretsPath = secretsPath
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-delete-confirm-retry",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if _, ok := r.hideMyStoredCode(uid, stored.ID); ok {
+		t.Fatalf("retrying same confirm after transient secrets read failure should delete HideMy code")
 	}
 }
 
