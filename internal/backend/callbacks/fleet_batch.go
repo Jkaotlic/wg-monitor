@@ -3,6 +3,7 @@ package callbacks
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -168,43 +169,55 @@ func fleetCommand(action string, args map[string]any) wire.Command {
 
 func isSafeSelfUpdateVersion(version string) bool {
 	if !strings.Contains(version, "-rc") {
-		return compareReleaseTagsLocal(version, "v0.13.0") >= 0
+		cmp, ok := compareReleaseTagsLocal(version, "v0.13.0")
+		return ok && cmp >= 0
 	}
-	return compareReleaseTagsLocal(version, "v0.13.0-rc32") >= 0
+	cmp, ok := compareReleaseTagsLocal(version, "v0.13.0-rc32")
+	return ok && cmp >= 0
 }
 
-func compareReleaseTagsLocal(a, b string) int {
-	aa := releaseTagParts(a)
-	bb := releaseTagParts(b)
-	for i := 0; i < len(aa) || i < len(bb); i++ {
-		var av, bv int
-		if i < len(aa) {
-			av = aa[i]
+func compareReleaseTagsLocal(a, b string) (int, bool) {
+	aa, aok := releaseTagRankLocal(a)
+	bb, bok := releaseTagRankLocal(b)
+	if !aok || !bok {
+		return 0, false
+	}
+	for i := range aa {
+		if aa[i] < bb[i] {
+			return -1, true
 		}
-		if i < len(bb) {
-			bv = bb[i]
-		}
-		if av < bv {
-			return -1
-		}
-		if av > bv {
-			return 1
+		if aa[i] > bb[i] {
+			return 1, true
 		}
 	}
-	return 0
+	return 0, true
 }
 
-func releaseTagParts(v string) []int {
+func releaseTagRankLocal(v string) ([4]int, bool) {
+	var rank [4]int
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
-	v = strings.ReplaceAll(v, "-rc", ".")
-	fields := strings.FieldsFunc(v, func(r rune) bool { return r == '.' || r == '-' || r == '_' })
-	out := make([]int, 0, len(fields))
-	for _, f := range fields {
-		var n int
-		_, _ = fmt.Sscanf(f, "%d", &n)
-		out = append(out, n)
+	main, rcRaw, hasRC := strings.Cut(v, "-rc")
+	parts := strings.Split(main, ".")
+	if len(parts) != 3 {
+		return rank, false
 	}
-	return out
+	for i, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return rank, false
+		}
+		rank[i] = n
+	}
+	if !hasRC {
+		rank[3] = 1 << 30
+		return rank, true
+	}
+	rc, err := strconv.Atoi(rcRaw)
+	if err != nil {
+		return rank, false
+	}
+	rank[3] = rc
+	return rank, true
 }
 
 var _ interface {
