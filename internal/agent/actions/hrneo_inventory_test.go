@@ -36,7 +36,7 @@ func TestBuildHRNeoInventory_FiltersHydraRouteRules(t *testing.T) {
 			ID:           "hr:Fallthrough",
 			Name:         "Fallthrough",
 			Enabled:      false,
-			Backend:      "hydraroute",
+			Backend:      "HydraRoute ",
 			HRPolicyName: "Default",
 			Domains:      []string{"telegram.org"},
 		},

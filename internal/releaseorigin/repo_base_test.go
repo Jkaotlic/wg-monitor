@@ -46,8 +46,11 @@ func TestValidateRepoBaseRejectsUntrustedOrigins(t *testing.T) {
 		"https://github.com/Jkaotlic/wg-monitor/releases",
 		"https://github.com/Jkaotlic/wg-monitor/releases/download-extra",
 		"https://127.0.0.1/v1/releases/download",
+		"https://127.0.0.1./v1/releases/download",
 		"https://192.168.0.87/v1/releases/download",
+		"https://192.168.0.87./v1/releases/download",
 		"https://localhost/v1/releases/download",
+		"https://localhost./v1/releases/download",
 		"not a url",
 	}
 	for _, in := range cases {
@@ -88,6 +91,12 @@ func TestValidateRepoBaseForBackendURLRejectsForeignBackendMirror(t *testing.T) 
 func TestBackendMirrorBaseForBackendURLRejectsPrivateBackend(t *testing.T) {
 	if _, err := BackendMirrorBaseForBackendURL("https://192.168.0.87"); err == nil {
 		t.Fatal("private backend mirror unexpectedly allowed")
+	}
+	if _, err := BackendMirrorBaseForBackendURL("https://192.168.0.87."); err == nil {
+		t.Fatal("trailing-dot private backend mirror unexpectedly allowed")
+	}
+	if _, err := ValidateRepoBaseForBackendURL("https://192.168.0.87./v1/releases/download", nil, "https://192.168.0.87."); err == nil {
+		t.Fatal("trailing-dot private repo_base unexpectedly allowed through trusted backend")
 	}
 }
 

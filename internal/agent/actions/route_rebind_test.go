@@ -413,7 +413,11 @@ func TestRouteRebind_DoesNotMoveHRNeoDirectProviderPolicy(t *testing.T) {
 			if r.Routes != nil {
 				t.Fatalf("direct provider HR-Neo policy must stay fall-through/direct, got %+v", r)
 			}
-		case "hr:ProxyDefault", "hr:Explicit":
+		case "hr:ProxyDefault":
+			if r.Routes != nil || len(r.HRPolicyInterfaces) != 1 || r.HRPolicyInterfaces[0] != "nwg0" {
+				t.Fatalf("movable HR-Neo policy was not rebound to nwg0: %+v", r)
+			}
+		case "hr:Explicit":
 			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
 				t.Fatalf("movable HR-Neo rule was not moved to nwg0: %+v", r)
 			}
@@ -444,6 +448,69 @@ func TestRouteRebind_DoesNotMoveHRNeoPolicyBoundToDifferentInterface(t *testing.
 	}
 	if len(mock.dnsRules[0].Routes) != 0 {
 		t.Fatalf("foreign policy-interface fallthrough should remain fallthrough: %+v", mock.dnsRules[0])
+	}
+}
+
+func TestRouteRebind_MovesHRNeoPolicyInterfaceWithoutConvertingToExplicitRoute(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "hr:PolicyActual", Backend: "HydraRoute", HRRouteMode: "policy", HRPolicyName: "HydraRoute", HRPolicyInterfaces: []string{"Wireguard1"}, Routes: nil},
+	}
+	mock.staticRules = nil
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "t1", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 1 || res.HRNeo.OK != 1 {
+		t.Fatalf("counts = dns=%+v hr=%+v, want one HR-Neo policy moved", res.DNS, res.HRNeo)
+	}
+	got := mock.dnsRules[0]
+	if got.Routes != nil {
+		t.Fatalf("HR-Neo policy rebind must keep routes=nil, got explicit routes: %+v", got.Routes)
+	}
+	if len(got.HRPolicyInterfaces) != 1 || got.HRPolicyInterfaces[0] != "nwg0" {
+		t.Fatalf("HR-Neo policy interfaces = %+v, want [nwg0]", got.HRPolicyInterfaces)
+	}
+	if mock.hrControlCalls.Load() != 1 {
+		t.Fatalf("HR-Neo should restart once after policy move, got %d", mock.hrControlCalls.Load())
+	}
+}
+
+func TestRouteRebind_DefaultHRNeoPolicyFallsThroughToDestinationPolicyInterface(t *testing.T) {
+	mock := newRebindMock(t)
+	mock.dnsRules = []awgmgr.DNSRoute{
+		{ID: "hr:DefaultPolicy", Backend: "hydraroute", HRRouteMode: "policy", HRPolicyName: "HydraRoute", Routes: nil},
+	}
+	mock.staticRules = nil
+	srv := httptest.NewServer(mock.handler())
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	out, err := RouteRebind(context.Background(), c, "t1", "t2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res wire.RouteRebindResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if res.DNS.OK != 1 || res.HRNeo.OK != 1 {
+		t.Fatalf("counts = dns=%+v hr=%+v, want one HR-Neo default policy moved", res.DNS, res.HRNeo)
+	}
+	got := mock.dnsRules[0]
+	if got.Routes != nil {
+		t.Fatalf("HR-Neo default policy rebind must keep routes=nil, got explicit routes: %+v", got.Routes)
+	}
+	if len(got.HRPolicyInterfaces) != 1 || got.HRPolicyInterfaces[0] != "nwg0" {
+		t.Fatalf("HR-Neo default policy interfaces = %+v, want [nwg0]", got.HRPolicyInterfaces)
 	}
 }
 

@@ -693,7 +693,7 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		PendingSince:    stringValue(user.PendingSince),
 		LastDeploy:      stringValue(user.LastDeploy),
 		DeployMode:      stringValue(user.DeployMode),
-		AWGMURL:         stringValue(user.AWGMURL),
+		AWGMURL:         safeDashboardAWGMURL(stringValue(user.AWGMURL)),
 		HasTopic:        user.TelegramThreadID != nil && *user.TelegramThreadID != 0,
 		ActiveIncidents: incidents,
 	}
@@ -704,6 +704,14 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		agent.TelegramThreadID = *user.TelegramThreadID
 	}
 	return agent
+}
+
+func safeDashboardAWGMURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if err := validateDashboardAWGMURL(raw); err != nil {
+		return ""
+	}
+	return raw
 }
 
 func dashboardLastSeenAge(user db.User, now time.Time) *int64 {

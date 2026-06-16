@@ -48,22 +48,46 @@ func (c *Client) SetCredentials(login, password string) {
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body io.Reader, contentType string) (*http.Response, error) {
-	if err := c.ensureSession(ctx); err != nil {
-		return nil, err
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = io.ReadAll(body)
+		if err != nil {
+			return nil, err
+		}
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, body)
-	if err != nil {
-		return nil, err
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := c.ensureSession(ctx); err != nil {
+			return nil, err
+		}
+		reqBody := io.Reader(nil)
+		if bodyBytes != nil {
+			reqBody = bytes.NewReader(bodyBytes)
+		}
+		req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		req.Header.Set("Accept", "application/json")
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		if ck := c.cookie(); ck != nil {
+			req.AddCookie(ck)
+		}
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		if attempt == 0 && awgmgrAuthExpiredStatus(resp.StatusCode) && c.credentialsConfigured() {
+			_ = resp.Body.Close()
+			c.clearSession()
+			continue
+		}
+		return resp, nil
 	}
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Accept", "application/json")
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	if ck := c.cookie(); ck != nil {
-		req.AddCookie(ck)
-	}
-	return c.HTTP.Do(req)
+	return nil, fmt.Errorf("awgmgr %s %s: auth retry exhausted", method, path)
 }
 
 func (c *Client) cookie() *http.Cookie {
@@ -74,6 +98,22 @@ func (c *Client) cookie() *http.Cookie {
 	}
 	cp := *c.sessionCookie
 	return &cp
+}
+
+func (c *Client) clearSession() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessionCookie = nil
+}
+
+func (c *Client) credentialsConfigured() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Login != "" || c.Password != ""
+}
+
+func awgmgrAuthExpiredStatus(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden
 }
 
 func (c *Client) ensureSession(ctx context.Context) error {

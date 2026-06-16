@@ -102,6 +102,43 @@ func TestRouteStatus_HappyPath(t *testing.T) {
 	}
 }
 
+func TestRouteStatus_CreditsHydraRouteBackendCaseInsensitively(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"t1","name":"amnezia","interfaceName":"nwg1","ndmsName":"Wireguard1","enabled":true,"defaultRoute":true}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:MixedCase","backend":"HydraRoute ","enabled":true,"routes":[{"interface":"nwg1","tunnelId":"nwg1"}]}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteStatus(context.Background(), awgmgr.New(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(out), &snap); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if snap.Counts["t1"].DNS != 1 || snap.Counts["t1"].HRNeo != 1 {
+		t.Fatalf("mixed-case HydraRoute backend should count as HR-Neo, got %+v", snap.Counts["t1"])
+	}
+}
+
 func TestRouteStatus_HRNeoAbsent(t *testing.T) {
 	srv := fakeAwgmgrStatus(t, false)
 	defer srv.Close()
