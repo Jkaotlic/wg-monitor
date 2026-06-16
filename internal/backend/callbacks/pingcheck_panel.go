@@ -180,6 +180,12 @@ func (s *pingcheckInflightStore) tryClaim(userID int64, tunnelID string, ttl tim
 	return true
 }
 
+func (s *pingcheckInflightStore) release(userID int64, tunnelID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.m, pingcheckInflightKey{userID, tunnelID})
+}
+
 const pingcheckInflightTTL = 5 * time.Second
 
 // PingCheckOpenAction enqueues a pingcheck_status command on every
@@ -259,6 +265,7 @@ func (a *PingCheckToggleAction) Apply(ctx context.Context, q *tg.CallbackQuery, 
 	toggleRef := ref
 	toggleRef.Action = "pingcheck_toggle"
 	if err := a.sink.EnqueueWithRef(args.UserID, toggleCmd, toggleRef); err != nil {
+		a.inflight.release(args.UserID, args.PingCheckTunnelID)
 		return "", fmt.Errorf("enqueue pingcheck_toggle: %w", err)
 	}
 
@@ -272,7 +279,7 @@ func (a *PingCheckToggleAction) Apply(ctx context.Context, q *tg.CallbackQuery, 
 	statusRef := ref
 	statusRef.Action = "pingcheck_status"
 	if err := a.sink.EnqueueWithRef(args.UserID, statusCmd, statusRef); err != nil {
-		return "", fmt.Errorf("enqueue auto-refresh: %w", err)
+		return "📡 переключаю…", nil
 	}
 	return "📡 переключаю…", nil
 }

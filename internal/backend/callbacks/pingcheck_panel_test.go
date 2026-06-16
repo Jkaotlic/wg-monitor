@@ -2,6 +2,7 @@ package callbacks
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -97,11 +98,18 @@ type fakePingCheckEnqueuer struct {
 	mu       sync.Mutex
 	commands []wire.Command
 	refs     []cmdpkg.MessageRef
+	calls    int
+	errOn    int
+	err      error
 }
 
 func (f *fakePingCheckEnqueuer) Enqueue(userID int64, cmd wire.Command) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
+	if f.errOn > 0 && f.calls == f.errOn {
+		return f.err
+	}
 	f.commands = append(f.commands, cmd)
 	f.refs = append(f.refs, cmdpkg.MessageRef{})
 	return nil
@@ -109,6 +117,10 @@ func (f *fakePingCheckEnqueuer) Enqueue(userID int64, cmd wire.Command) error {
 func (f *fakePingCheckEnqueuer) EnqueueWithRef(userID int64, cmd wire.Command, ref cmdpkg.MessageRef) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
+	if f.errOn > 0 && f.calls == f.errOn {
+		return f.err
+	}
 	f.commands = append(f.commands, cmd)
 	f.refs = append(f.refs, ref)
 	return nil
@@ -156,6 +168,40 @@ func TestPingCheckToggle_EnqueuesAndRefreshes(t *testing.T) {
 	got := sink.commands[0].Args
 	if got["tunnel_id"] != "awg10" || got["ndms_name"] != "Wireguard0" || got["enable"] != false {
 		t.Errorf("toggle args wrong: %+v", got)
+	}
+}
+
+func TestPingCheckToggle_AutoRefreshFailureDoesNotFailQueuedToggle(t *testing.T) {
+	sink := &fakePingCheckEnqueuer{errOn: 2, err: errors.New("queue full")}
+	store := newPingCheckInflightStore()
+	a := NewPingCheckToggleAction(sink, store, defaultCmdID)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "pingcheck_toggle", UserID: 7, PingCheckTunnelID: "awg10", NDMSName: "Wireguard0", PingCheckEnable: false}
+
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("toggle already queued; auto-refresh failure should not fail Apply: %v", err)
+	}
+	if len(sink.commands) != 1 || sink.commands[0].Action != "pingcheck_toggle" {
+		t.Fatalf("expected only queued toggle after refresh enqueue fails, commands=%+v", sink.commands)
+	}
+}
+
+func TestPingCheckToggle_PrimaryEnqueueFailureReleasesInflight(t *testing.T) {
+	sink := &fakePingCheckEnqueuer{errOn: 1, err: errors.New("queue full")}
+	store := newPingCheckInflightStore()
+	a := NewPingCheckToggleAction(sink, store, defaultCmdID)
+	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
+	args := Args{Action: "pingcheck_toggle", UserID: 7, PingCheckTunnelID: "awg10", NDMSName: "Wireguard0", PingCheckEnable: false}
+
+	if _, err := a.Apply(context.Background(), q, args); err == nil {
+		t.Fatalf("first toggle enqueue should fail")
+	}
+	sink.errOn = 0
+	if _, err := a.Apply(context.Background(), q, args); err != nil {
+		t.Fatalf("retry after primary enqueue failure should not be blocked by stale inflight: %v", err)
+	}
+	if len(sink.commands) != 2 || sink.commands[0].Action != "pingcheck_toggle" || sink.commands[1].Action != "pingcheck_status" {
+		t.Fatalf("retry should enqueue toggle and refresh, commands=%+v", sink.commands)
 	}
 }
 
