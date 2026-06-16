@@ -310,8 +310,23 @@ func configuredPublicBackendURL(publicBaseURL string) (string, bool) {
 var lookupHostForRepoResolve = net.LookupHost
 
 func wizardRepoResolveIP(r *http.Request) string {
-	host := wizardBackendHost(r)
+	return wizardRepoResolveIPForHost(wizardBackendHost(r))
+}
+
+func wizardRepoResolveIPForBackendURL(r *http.Request, backendURL string) string {
+	host := ""
+	if u, err := url.Parse(strings.TrimSpace(backendURL)); err == nil && u.Host != "" {
+		host = hostOnly(u.Host)
+	}
 	if host == "" {
+		host = wizardBackendHost(r)
+	}
+	return wizardRepoResolveIPForHost(host)
+}
+
+func wizardRepoResolveIPForHost(host string) string {
+	host = hostOnly(host)
+	if host == "" || isNonPublicHost(host) {
 		return ""
 	}
 	ips, err := lookupHostForRepoResolve(host)
@@ -621,7 +636,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			},
 			IssuedAt: issuedAt,
 		}
-		if ip := wizardRepoResolveIP(r); ip != "" {
+		if ip := wizardRepoResolveIPForBackendURL(r, repoBaseURL); ip != "" {
 			cmd.Args["repo_resolve_ip"] = ip
 		}
 		if err := d.DB.Users().MarkPendingDeploy(u.ID, req.TargetVersion, issuedAt.Format(time.RFC3339)); err != nil {
@@ -676,7 +691,7 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		req.RepoBase = repoBaseURL + "/v1/releases/download"
-		req.RepoResolveIP = wizardRepoResolveIP(r)
+		req.RepoResolveIP = wizardRepoResolveIPForBackendURL(r, repoBaseURL)
 		req.TrustedBackendURL = repoBaseURL
 		req.RequestedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := writeBackendUpdateRequest(d.BackendUpdatePath, req); err != nil {
