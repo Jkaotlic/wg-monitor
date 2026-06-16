@@ -91,6 +91,23 @@ dns-proxy
 	}
 }
 
+func TestParseDNSEndpoints_IgnoresDoTWithInvalidPort(t *testing.T) {
+	cfg := `
+dns-proxy
+    rebind-protect auto
+    tls upstream 1.1.1.1:99999 dnss
+    tls upstream dns.example.test:853 dnss
+!
+`
+	eps := ParseDNSEndpoints(cfg)
+	if len(eps) != 1 {
+		t.Fatalf("want only valid DoT endpoint, got %+v", eps)
+	}
+	if eps[0].Host != "dns.example.test" || eps[0].Port != 853 {
+		t.Fatalf("valid DoT endpoint not preserved: %+v", eps[0])
+	}
+}
+
 func TestParseDNSEndpoints_IgnoresMalformed(t *testing.T) {
 	cfg := `
 ip name-server                          ` + // garbage line, missing fields
