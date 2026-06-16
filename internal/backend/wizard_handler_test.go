@@ -89,6 +89,9 @@ func TestWizardBackendDeploy_WritesPendingUpdate(t *testing.T) {
 	if got.RepoBase != "https://wgmonitor.example.test/v1/releases/download" {
 		t.Fatalf("repo_base=%q", got.RepoBase)
 	}
+	if got.TrustedBackendURL != "https://wgmonitor.example.test" {
+		t.Fatalf("trusted_backend_url=%q", got.TrustedBackendURL)
+	}
 	info, err := os.Stat(pending)
 	if err != nil {
 		t.Fatal(err)

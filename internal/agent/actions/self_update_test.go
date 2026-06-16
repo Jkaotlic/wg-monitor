@@ -148,6 +148,32 @@ func TestSelfUpdateURLsCanUseBackendMirror(t *testing.T) {
 	}
 }
 
+func TestValidateSelfUpdateRepoBaseAllowsConfiguredBackendMirror(t *testing.T) {
+	got, err := validateSelfUpdateRepoBase("https://wg.example.test/v1/releases/download", "https://wg.example.test")
+	if err != nil {
+		t.Fatalf("validateSelfUpdateRepoBase: %v", err)
+	}
+	if got != "https://wg.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%q", got)
+	}
+}
+
+func TestValidateSelfUpdateRepoBaseRejectsForeignBackendMirror(t *testing.T) {
+	if _, err := validateSelfUpdateRepoBase("https://evil.example/v1/releases/download", "https://wg.example.test"); err == nil {
+		t.Fatal("foreign backend mirror unexpectedly allowed")
+	}
+}
+
+func TestValidateSelfUpdateRepoBaseAllowsCanonicalBackendMirrorWithoutBackendURL(t *testing.T) {
+	got, err := validateSelfUpdateRepoBase("https://wgmonitor.anexaev.crazedns.ru/v1/releases/download", "")
+	if err != nil {
+		t.Fatalf("validateSelfUpdateRepoBase: %v", err)
+	}
+	if got != "https://wgmonitor.anexaev.crazedns.ru/v1/releases/download" {
+		t.Fatalf("repo_base=%q", got)
+	}
+}
+
 func TestHTTPGetWithFallbackRetriesNetworkFailureOnly(t *testing.T) {
 	primary := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return nil, errors.New(`dial tcp: lookup wgmonitor.jkaotlic.duckdns.org on 127.0.0.1:53: i/o timeout`)

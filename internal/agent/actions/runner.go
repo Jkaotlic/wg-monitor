@@ -72,6 +72,9 @@ type Runner struct {
 	// ConfigPath is the path to the agent's config.yaml. Required for
 	// update_backend_url to rewrite the URL in-place.
 	ConfigPath string
+	// BackendURL is the trusted command-plane origin from the agent config.
+	// self_update may use its same-origin /v1/releases/download mirror.
+	BackendURL string
 	routeMu    sync.Mutex // serialises concurrent route_rebind calls
 }
 
@@ -723,7 +726,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		repoBase, _ := cmd.Args["repo_base"].(string)
 		repoResolveIP, _ := cmd.Args["repo_resolve_ip"].(string)
-		out, err := SelfUpdate(ctx, version, repoBase, repoResolveIP)
+		out, err := SelfUpdate(ctx, version, repoBase, repoResolveIP, r.BackendURL)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

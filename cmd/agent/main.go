@@ -113,6 +113,7 @@ func main() {
 		AllowRouterReboot:    cfg.Maintenance.AllowRouterReboot,
 		AllowFirmwareInstall: cfg.Maintenance.AllowFirmwareInstall,
 		ConfigPath:           *configPath,
+		BackendURL:           cfg.Backend.URL,
 	}
 	loop := cmdloop.New(client, runner, 30)
 	go loop.Run(ctx)

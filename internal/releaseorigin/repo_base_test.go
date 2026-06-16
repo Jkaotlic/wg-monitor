@@ -42,6 +42,7 @@ func TestValidateRepoBaseRejectsUntrustedOrigins(t *testing.T) {
 	cases := []string{
 		"http://evil.example/releases/download",
 		"https://evil.example/releases/download",
+		"https://evil.example/v1/releases/download",
 		"https://github.com/Jkaotlic/wg-monitor/releases",
 		"https://github.com/Jkaotlic/wg-monitor/releases/download-extra",
 		"https://127.0.0.1/v1/releases/download",
@@ -59,6 +60,34 @@ func TestValidateRepoBaseRejectsUntrustedOrigins(t *testing.T) {
 				t.Fatalf("error should mention repo_base, got %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateRepoBaseForBackendURLAllowsTrustedBackendMirror(t *testing.T) {
+	allowed := []string{DefaultGitHubReleaseBase, DefaultBackendMirrorBase}
+	got, err := ValidateRepoBaseForBackendURL("https://wg.example.test/v1/releases/download/", allowed, "https://wg.example.test")
+	if err != nil {
+		t.Fatalf("ValidateRepoBaseForBackendURL: %v", err)
+	}
+	if got != "https://wg.example.test/v1/releases/download" {
+		t.Fatalf("repo_base=%q", got)
+	}
+}
+
+func TestValidateRepoBaseForBackendURLRejectsForeignBackendMirror(t *testing.T) {
+	allowed := []string{DefaultGitHubReleaseBase, DefaultBackendMirrorBase}
+	_, err := ValidateRepoBaseForBackendURL("https://evil.example/v1/releases/download", allowed, "https://wg.example.test")
+	if err == nil {
+		t.Fatal("foreign backend mirror unexpectedly allowed")
+	}
+	if !strings.Contains(err.Error(), "repo_base") {
+		t.Fatalf("error should mention repo_base, got %v", err)
+	}
+}
+
+func TestBackendMirrorBaseForBackendURLRejectsPrivateBackend(t *testing.T) {
+	if _, err := BackendMirrorBaseForBackendURL("https://192.168.31.87"); err == nil {
+		t.Fatal("private backend mirror unexpectedly allowed")
 	}
 }
 

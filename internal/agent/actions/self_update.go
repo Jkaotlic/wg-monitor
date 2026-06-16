@@ -58,10 +58,11 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	if len(repoBaseOpt) > 0 && strings.TrimSpace(repoBaseOpt[0]) != "" {
 		repoBase = strings.TrimSpace(repoBaseOpt[0])
 	}
-	repoBase, err = releaseorigin.ValidateRepoBase(repoBase, []string{
-		SelfUpdateRepoBase,
-		releaseorigin.DefaultBackendMirrorBase,
-	})
+	trustedBackendURL := ""
+	if len(repoBaseOpt) > 2 {
+		trustedBackendURL = strings.TrimSpace(repoBaseOpt[2])
+	}
+	repoBase, err = validateSelfUpdateRepoBase(repoBase, trustedBackendURL)
 	if err != nil {
 		return "", fmt.Errorf("self_update: %w", err)
 	}
@@ -119,6 +120,13 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	}
 
 	return fmt.Sprintf("%s verified, swap scheduled in ~3s", version), nil
+}
+
+func validateSelfUpdateRepoBase(repoBase, trustedBackendURL string) (string, error) {
+	return releaseorigin.ValidateRepoBaseForBackendURL(repoBase, []string{
+		SelfUpdateRepoBase,
+		releaseorigin.DefaultBackendMirrorBase,
+	}, trustedBackendURL)
 }
 
 func selfUpdateSwapScriptPath() string {

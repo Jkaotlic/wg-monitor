@@ -44,10 +44,11 @@ type backendUpdateRunnerOptions struct {
 }
 
 type backendUpdatePending struct {
-	TargetVersion string `json:"target_version"`
-	RepoBase      string `json:"repo_base"`
-	RepoResolveIP string `json:"repo_resolve_ip,omitempty"`
-	RequestedAt   string `json:"requested_at"`
+	TargetVersion     string `json:"target_version"`
+	RepoBase          string `json:"repo_base"`
+	RepoResolveIP     string `json:"repo_resolve_ip,omitempty"`
+	TrustedBackendURL string `json:"trusted_backend_url,omitempty"`
+	RequestedAt       string `json:"requested_at"`
 }
 
 func runBackendUpdateRunnerCommand(args []string) error {
@@ -103,7 +104,7 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
 	}
-	req.RepoBase, err = releaseorigin.ValidateRepoBase(req.RepoBase, backendUpdateAllowedRepoBases)
+	req.RepoBase, err = releaseorigin.ValidateRepoBaseForBackendURL(req.RepoBase, backendUpdateAllowedRepoBases, backendUpdateTrustedURL(opts.ConfigPath, req.TrustedBackendURL))
 	if err != nil {
 		_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 		return err
@@ -166,6 +167,17 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 		return err
 	}
 	return writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "ok", "")
+}
+
+func backendUpdateTrustedURL(configPath, pendingTrustedURL string) string {
+	if trusted := strings.TrimSpace(pendingTrustedURL); trusted != "" {
+		return trusted
+	}
+	cfg, err := backend.LoadConfig(configPath)
+	if err != nil || cfg == nil {
+		return ""
+	}
+	return cfg.PublicBaseURL
 }
 
 func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
