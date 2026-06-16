@@ -276,21 +276,25 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	if !r.consumePendingConfirm(ctx, q, args, args.HideMyCodeID+":"+args.HideMyServerID) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.HideMyCodeID+":"+args.HideMyServerID)
+	if !ok {
 		return
 	}
 	stored, ok := r.hideMyStoredCode(user.ID, args.HideMyCodeID)
 	if !ok {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "код не сохранён")
 		return
 	}
 	server, err := r.hideMyServerByID(ctx, stored.AccessCode, args.HideMyServerID)
 	if err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
 	conf, err := r.downloadHideMyConfig(ctx, stored.AccessCode, server.IP)
 	if err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
@@ -312,6 +316,7 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 	}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "tunnel_import"}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}

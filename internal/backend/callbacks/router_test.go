@@ -1131,6 +1131,70 @@ func TestAmneziaDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
 	}
 }
 
+func TestAmneziaDownloadConfirmKeepsTokenWhenEnqueueFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	var downloadCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"subscription_status":"active","active_device_count":0,"max_device_count":2,"available_countries":[{"server_country_code":"de","server_country_name":"Germany"}],"issued_configs":[]}}`))
+		case "/api/download-config":
+			downloadCalls++
+			_, _ = w.Write([]byte("[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = test\n"))
+		default:
+			t.Fatalf("unexpected Amnezia path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:             -100,
+		AdminUserID:        12345,
+		AmneziaBaseURL:     srv.URL,
+		AmneziaSecretsPath: t.TempDir() + "/amnezia-premium.json",
+	})
+	stored, err := r.addAmneziaKey(uid, "vpn://premium-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-download-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_dl:" + itoa(uid) + ":_panel_:" + stored.ID + ":de",
+	})
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_dl_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":de:")
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-download-confirm-fail",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if downloadCalls != 1 || len(sink.calls) != 0 {
+		t.Fatalf("first confirm should download then fail enqueue, downloadCalls=%d calls=%+v", downloadCalls, sink.calls)
+	}
+
+	sink.err = nil
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "amz-download-confirm-retry",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if downloadCalls != 2 {
+		t.Fatalf("retry should re-use confirm token and download again, got %d downloads", downloadCalls)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
+		t.Fatalf("retry should enqueue tunnel_import, calls=%+v", sink.calls)
+	}
+}
+
 func TestHideMyDeleteConfirmIsActorScopedAndSingleUse(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -1259,6 +1323,70 @@ func TestHideMyDownloadConfirmRequiresTokenBeforeEnqueue(t *testing.T) {
 	}
 	if sink.calls[0].backend != "nativewg" {
 		t.Fatalf("HideMy import must request nativewg backend, got %+v", sink.calls[0])
+	}
+}
+
+func TestHideMyDownloadConfirmKeepsTokenWhenEnqueueFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	const serverIP = "198.51.100.10"
+	serverID := hidemy.ServerID(serverIP)
+	var configCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/serverlist.php":
+			_, _ = w.Write([]byte(`[{"name_en":"Netherlands","services":{"wg":{"ip":"` + serverIP + `"}}}]`))
+		case "/api/vpn_get_config_wg.php":
+			configCalls++
+			_, _ = w.Write([]byte("[Interface]\nPrivateKey = test\n[Peer]\nPublicKey = test\n"))
+		default:
+			t.Fatalf("unexpected HideMy path %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	f := &fakeRouterTG{}
+	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
+	r := NewRouterWithSink(d, f, sink, Config{
+		ChatID:            -100,
+		AdminUserID:       12345,
+		HideMyBaseURL:     srv.URL,
+		HideMySecretsPath: t.TempDir() + "/hidemy.json",
+	})
+	stored, err := r.addHideMyCode(uid, "1234567890")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-download-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "hmn_dl:" + itoa(uid) + ":_panel_:" + stored.ID + ":" + serverID,
+	})
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "hmn_dl_confirm:"+itoa(uid)+":_panel_:"+stored.ID+":"+serverID+":")
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-download-confirm-fail",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if configCalls != 1 || len(sink.calls) != 0 {
+		t.Fatalf("first confirm should download then fail enqueue, configCalls=%d calls=%+v", configCalls, sink.calls)
+	}
+
+	sink.err = nil
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "hmn-download-confirm-retry",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+	if configCalls != 2 {
+		t.Fatalf("retry should re-use confirm token and download again, got %d downloads", configCalls)
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
+		t.Fatalf("retry should enqueue tunnel_import, calls=%+v", sink.calls)
 	}
 }
 

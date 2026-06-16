@@ -444,11 +444,13 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
 		return
 	}
-	if !r.consumePendingConfirm(ctx, q, args, args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode)) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.AmneziaKeyID+":"+strings.ToLower(args.AmneziaCountryCode))
+	if !ok {
 		return
 	}
 	key, _ := r.getAmneziaKeyByID(user.ID, args.AmneziaKeyID)
 	if key == "" {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ключ не сохранён")
 		return
 	}
@@ -459,6 +461,7 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 	}
 	conf, err := r.downloadAmneziaConfig(ctx, key, args.AmneziaCountryCode)
 	if err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
@@ -479,6 +482,7 @@ func (r *Router) handleAmneziaDownloadConfirm(ctx context.Context, q *tg.Callbac
 	}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "tunnel_import"}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
