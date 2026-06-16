@@ -23,7 +23,10 @@ import (
 	"github.com/anex/wg-monitor/internal/releasesig"
 )
 
-var newBackendUpdatePinnedHTTPClient = backendUpdatePinnedHTTPClient
+var (
+	newBackendUpdatePrimaryHTTPClient = backendUpdatePrimaryHTTPClient
+	newBackendUpdatePinnedHTTPClient  = backendUpdatePinnedHTTPClient
+)
 
 var backendUpdateAllowedRepoBases = []string{
 	releaseorigin.DefaultGitHubReleaseBase,
@@ -112,7 +115,7 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	primaryClient := http.DefaultClient
+	primaryClient := newBackendUpdatePrimaryHTTPClient(90)
 	var fallbackClient *http.Client
 	var fallbackLabel string
 	if strings.TrimSpace(req.RepoResolveIP) != "" {
@@ -185,7 +188,7 @@ func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
 }
 
 func httpGetBytesLimited(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
-	return httpGetBytesLimitedWithClient(ctx, http.DefaultClient, url, maxBytes)
+	return httpGetBytesLimitedWithClient(ctx, newBackendUpdatePrimaryHTTPClient(90), url, maxBytes)
 }
 
 func httpGetBytesLimitedWithClient(ctx context.Context, c *http.Client, url string, maxBytes int64) ([]byte, error) {
@@ -251,6 +254,15 @@ func backendUpdateTransportError(err error) bool {
 		}
 	}
 	return false
+}
+
+func backendUpdatePrimaryHTTPClient(timeoutSec int) *http.Client {
+	if timeoutSec <= 0 {
+		timeoutSec = 90
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	return &http.Client{Timeout: time.Duration(timeoutSec) * time.Second, Transport: transport}
 }
 
 func backendUpdatePinnedHTTPClient(repoBase, resolveIP string, timeoutSec int, dial func(network, addr string) (net.Conn, error)) (*http.Client, string) {

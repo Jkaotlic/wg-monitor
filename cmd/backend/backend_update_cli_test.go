@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/releaseorigin"
 )
@@ -30,8 +31,7 @@ func TestRunBackendUpdateRunnerSwapsBinaryAndClearsPending(t *testing.T) {
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	sum := sha256.Sum256(newBody)
 	repoBase := releaseorigin.DefaultBackendMirrorBase
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		var body []byte
 		switch r.URL.String() {
 		case repoBase + "/v0.13.0-rc109/" + asset:
@@ -52,8 +52,7 @@ func TestRunBackendUpdateRunnerSwapsBinaryAndClearsPending(t *testing.T) {
 			Header:     make(http.Header),
 			Request:    r,
 		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+	})
 	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc109","repo_base":%q}`, repoBase)
 	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -99,11 +98,9 @@ func TestRunBackendUpdateRunnerUsesRepoResolveIPFallback(t *testing.T) {
 	sum := sha256.Sum256(newBody)
 	repoBase := releaseorigin.DefaultBackendMirrorBase
 
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(*http.Request) (*http.Response, error) {
+	withBackendUpdateHTTPClient(t, func(*http.Request) (*http.Response, error) {
 		return nil, errors.New("dial tcp: lookup wgmonitor.anexaev.crazedns.ru: no such host")
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+	})
 
 	oldPinned := newBackendUpdatePinnedHTTPClient
 	newBackendUpdatePinnedHTTPClient = func(gotRepoBase, gotResolveIP string, timeoutSec int, dial func(network, addr string) (net.Conn, error)) (*http.Client, string) {
@@ -172,8 +169,7 @@ func TestRunBackendUpdateRunnerAllowsTrustedBackendMirror(t *testing.T) {
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	sum := sha256.Sum256(newBody)
 	repoBase := "https://wg.example.test/v1/releases/download"
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		var body []byte
 		switch r.URL.String() {
 		case repoBase + "/v0.13.0-rc109/" + asset:
@@ -194,8 +190,7 @@ func TestRunBackendUpdateRunnerAllowsTrustedBackendMirror(t *testing.T) {
 			Header:     make(http.Header),
 			Request:    r,
 		}, nil
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+	})
 	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc109","repo_base":%q,"trusted_backend_url":"https://wg.example.test"}`, repoBase)
 	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -228,6 +223,27 @@ func TestBackendUpdatePinnedHTTPClientDialsResolvedIPForRepoHost(t *testing.T) {
 	_, _ = httpGetBytesLimitedWithClient(context.Background(), c, releaseorigin.DefaultBackendMirrorBase+"/v/tag/checksums.txt", 1024)
 	if dialAddr != "83.171.224.125:443" {
 		t.Fatalf("dialAddr=%q", dialAddr)
+	}
+}
+
+func TestBackendUpdatePrimaryHTTPClientIgnoresEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:1")
+
+	c := backendUpdatePrimaryHTTPClient(7)
+	if c.Timeout != 7*time.Second {
+		t.Fatalf("timeout=%v", c.Timeout)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type=%T", c.Transport)
+	}
+	if tr.Proxy != nil {
+		req, err := http.NewRequest(http.MethodGet, releaseorigin.DefaultBackendMirrorBase+"/v/tag/checksums.txt", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		proxyURL, proxyErr := tr.Proxy(req)
+		t.Fatalf("primary backend update client must not use environment proxy, proxy=%v err=%v", proxyURL, proxyErr)
 	}
 }
 
@@ -347,8 +363,7 @@ func TestRunBackendUpdateRunnerRequiresSignatureForNewRelease(t *testing.T) {
 	}
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	repoBase := releaseorigin.DefaultBackendMirrorBase
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
 		case repoBase + "/v0.13.0-rc128/checksums.txt":
 			return &http.Response{
@@ -365,8 +380,7 @@ func TestRunBackendUpdateRunnerRequiresSignatureForNewRelease(t *testing.T) {
 				Request:    r,
 			}, nil
 		}
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+	})
 	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc128","repo_base":%q}`, repoBase)
 	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -393,8 +407,7 @@ func TestRunBackendUpdateRunnerRejectsOversizedAsset(t *testing.T) {
 	}
 	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
 	repoBase := releaseorigin.DefaultBackendMirrorBase
-	oldClient := http.DefaultClient
-	http.DefaultClient = &http.Client{Transport: backendUpdateRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
 		case repoBase + "/v0.13.0-rc109/checksums.txt":
 			return &http.Response{
@@ -418,8 +431,7 @@ func TestRunBackendUpdateRunnerRejectsOversizedAsset(t *testing.T) {
 				Request:    r,
 			}, nil
 		}
-	})}
-	t.Cleanup(func() { http.DefaultClient = oldClient })
+	})
 	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc109","repo_base":%q}`, repoBase)
 	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -439,6 +451,18 @@ func TestRunBackendUpdateRunnerRejectsOversizedAsset(t *testing.T) {
 	if string(got) != "old" {
 		t.Fatalf("binary changed to %q", string(got))
 	}
+}
+
+func withBackendUpdateHTTPClient(t *testing.T, rt backendUpdateRoundTripFunc) {
+	t.Helper()
+	old := newBackendUpdatePrimaryHTTPClient
+	newBackendUpdatePrimaryHTTPClient = func(timeoutSec int) *http.Client {
+		if timeoutSec != 90 {
+			t.Fatalf("timeoutSec=%d", timeoutSec)
+		}
+		return &http.Client{Transport: rt}
+	}
+	t.Cleanup(func() { newBackendUpdatePrimaryHTTPClient = old })
 }
 
 type backendUpdateRoundTripFunc func(*http.Request) (*http.Response, error)
