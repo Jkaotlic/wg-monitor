@@ -21,6 +21,12 @@ func TestParseNetfixArgsRejectsAgentAndHost(t *testing.T) {
 	}
 }
 
+func TestParseNetfixArgsRejectsInvalidPort(t *testing.T) {
+	if _, err := parseNetfixArgs([]string{"netfix", "--host", "192.168.31.1", "--port", "abc"}); err == nil {
+		t.Fatal("expected invalid port error")
+	}
+}
+
 func TestNetfixTargetFromAgent(t *testing.T) {
 	state := &State{Agents: []AgentState{{Nickname: "alyaba", Host: "192.168.31.1", Port: 22}}}
 	host, port, label, err := netfixTarget(state, netfixOptions{Agent: "alyaba"})

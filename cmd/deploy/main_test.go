@@ -104,6 +104,18 @@ func TestSecretStatusRowsPreferAWGMAPIKey(t *testing.T) {
 	}
 }
 
+func TestParsePositivePortRejectsInvalidPort(t *testing.T) {
+	if _, err := parsePositivePort("abc"); err == nil {
+		t.Fatal("expected invalid port error")
+	}
+	if _, err := parsePositivePort("0"); err == nil {
+		t.Fatal("expected zero port error")
+	}
+	if got, err := parsePositivePort("222"); err != nil || got != 222 {
+		t.Fatalf("parsePositivePort valid got=%d err=%v", got, err)
+	}
+}
+
 func TestCheckWizardEndpointAcceptsUnauthorized(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/wizard/agents" {
