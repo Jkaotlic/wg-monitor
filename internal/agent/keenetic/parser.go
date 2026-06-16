@@ -67,7 +67,10 @@ func ParseDNSEndpoints(cfg string) []DNSEndpoint {
 			continue
 		}
 		if m := reDoT.FindStringSubmatch(trimmed); m != nil {
-			port, _ := strconv.Atoi(m[2])
+			port, err := strconv.Atoi(m[2])
+			if err != nil || port < 1 || port > 65535 {
+				continue
+			}
 			out = append(out, DNSEndpoint{Type: "dot", Host: m[1], Port: port})
 		}
 	}
