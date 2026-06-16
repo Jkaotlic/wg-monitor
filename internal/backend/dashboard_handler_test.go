@@ -289,6 +289,19 @@ func TestDashboardOperatorLatestReleaseOrdersRCNumbersWhenPublishedAtTies(t *tes
 	}
 }
 
+func TestDashboardOperatorLatestReleaseDoesNotChooseLowerPublishedLater(t *testing.T) {
+	releases := []dashboardGitHubRelease{
+		{TagName: "v0.13.0-rc132", PublishedAt: time.Date(2026, 6, 11, 10, 0, 0, 0, time.UTC)},
+		{TagName: "v0.13.0-rc131", PublishedAt: time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)},
+	}
+
+	got := dashboardOperatorLatestRelease(releases)
+
+	if got != "v0.13.0-rc132" {
+		t.Fatalf("latest=%q, want v0.13.0-rc132", got)
+	}
+}
+
 func TestParseDashboardReleaseTagRankRejectsSignedComponents(t *testing.T) {
 	cases := []string{
 		"v0.13.0-rc-1",

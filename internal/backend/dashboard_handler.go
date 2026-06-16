@@ -582,6 +582,9 @@ func dashboardOperatorLatestRelease(releases []dashboardGitHubRelease) string {
 }
 
 func dashboardReleaseNewer(a, b dashboardGitHubRelease) bool {
+	if sameDashboardRCSeries(a.TagName, b.TagName) {
+		return compareDashboardReleaseTags(a.TagName, b.TagName) > 0
+	}
 	if !a.PublishedAt.IsZero() || !b.PublishedAt.IsZero() {
 		if a.PublishedAt.After(b.PublishedAt) {
 			return true
@@ -591,6 +594,20 @@ func dashboardReleaseNewer(a, b dashboardGitHubRelease) bool {
 		}
 	}
 	return compareDashboardReleaseTags(a.TagName, b.TagName) > 0
+}
+
+func sameDashboardRCSeries(a, b string) bool {
+	ar, aok := parseDashboardReleaseTagRank(a)
+	br, bok := parseDashboardReleaseTagRank(b)
+	if !aok || !bok || !strings.Contains(a, "-rc") || !strings.Contains(b, "-rc") {
+		return false
+	}
+	for i := 0; i < 3; i++ {
+		if ar[i] != br[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func compareDashboardReleaseTags(a, b string) int {
