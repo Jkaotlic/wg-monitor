@@ -30,6 +30,15 @@ func (s *pendingConfirmStore) put(p *pendingConfirm) {
 	s.m[p.Token] = p
 }
 
+func (s *pendingConfirmStore) restore(p *pendingConfirm) {
+	if s == nil || p == nil || p.Token == "" || time.Now().After(p.ExpiresAt) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.m[p.Token] = p
+}
+
 func (s *pendingConfirmStore) consume(userID, actorTGID int64, threadID *int64, action, target, token string) (*pendingConfirm, bool) {
 	if s == nil || token == "" {
 		return nil, false
@@ -53,4 +62,3 @@ func (s *pendingConfirmStore) consume(userID, actorTGID int64, threadID *int64, 
 	delete(s.m, token)
 	return p, true
 }
-

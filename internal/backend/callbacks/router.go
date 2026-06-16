@@ -1403,11 +1403,20 @@ func (r *Router) putPendingConfirm(q *tg.CallbackQuery, userID int64, action, ta
 }
 
 func (r *Router) consumePendingConfirm(ctx context.Context, q *tg.CallbackQuery, args Args, target string) bool {
-	if _, ok := r.pendingConfirms.consume(args.UserID, q.From.ID, q.Message.MessageThreadID, args.Action, target, args.ConfirmToken); ok {
-		return true
+	_, ok := r.takePendingConfirm(ctx, q, args, target)
+	return ok
+}
+
+func (r *Router) takePendingConfirm(ctx context.Context, q *tg.CallbackQuery, args Args, target string) (*pendingConfirm, bool) {
+	if p, ok := r.pendingConfirms.consume(args.UserID, q.From.ID, q.Message.MessageThreadID, args.Action, target, args.ConfirmToken); ok {
+		return p, true
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "подтверждение устарело")
-	return false
+	return nil, false
+}
+
+func (r *Router) restorePendingConfirm(p *pendingConfirm) {
+	r.pendingConfirms.restore(p)
 }
 
 func tunnelPanelActionIsStale(args Args, entry tg.TunnelPanelEntry) bool {
