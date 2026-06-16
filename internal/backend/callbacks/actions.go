@@ -422,6 +422,7 @@ type pendingUpload struct {
 type ImportAction struct {
 	sink      CommandEnqueuer
 	consumeFn func(userID int64, token string, threadID *int64) (*pendingUpload, bool)
+	restoreFn func(userID int64, up *pendingUpload)
 	idGen     func() string
 }
 
@@ -448,6 +449,7 @@ func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args
 		ThreadID:  q.Message.MessageThreadID,
 	}
 	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
+		a.restorePendingUpload(args.UserID, up)
 		return "", fmt.Errorf("enqueue tunnel_import: %w", err)
 	}
 	verb := "добавление"

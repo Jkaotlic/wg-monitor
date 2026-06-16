@@ -215,6 +215,11 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 			delete(r.pending, userID)
 			return up, true
 		},
+		restoreFn: func(userID int64, up *pendingUpload) {
+			r.pendingMu.Lock()
+			defer r.pendingMu.Unlock()
+			r.pending[userID] = up
+		},
 		idGen: defaultCmdID,
 	}
 	r.cmdSink = sink
