@@ -434,7 +434,12 @@ func (o *OpkgRunner) DisableFeed(ctx context.Context, rawURL string) (status, ou
 	stamp := o.now().UTC().Format(time.RFC3339)
 	backupSuffix := o.now().UTC().Format("20060102-150405")
 
-	var changedFiles []string
+	type feedDisablePlan struct {
+		path    string
+		oldBody []byte
+		newBody []byte
+	}
+	var plans []feedDisablePlan
 	for _, path := range o.opkgConfPaths() {
 		body, err := os.ReadFile(path)
 		if err != nil {
@@ -448,22 +453,26 @@ func (o *OpkgRunner) DisableFeed(ctx context.Context, rawURL string) (status, ou
 		if !hit {
 			continue
 		}
-		if err := backupAndWrite(path, body, newBody, backupSuffix); err != nil {
-			o.releaseLock()
-			return "err", fmt.Sprintf("rewrite %s: %v", path, err), payload
-		}
-		changedFiles = append(changedFiles, path)
+		plans = append(plans, feedDisablePlan{path: path, oldBody: body, newBody: newBody})
 	}
 
-	o.releaseLock()
-
-	if len(changedFiles) == 0 {
+	if len(plans) == 0 {
+		o.releaseLock()
 		return "ok", fmt.Sprintf("🔧 Фид %s уже отключён или не найден в opkg-конфигах.", url), payload
 	}
 
-	prefix := fmt.Sprintf("🔧 Отключён фид %s в %s (backup suffix: %s)\n\n",
-		url, strings.Join(changedFiles, ", "), backupSuffix)
+	changedFiles := make([]string, 0, len(plans))
+	for _, plan := range plans {
+		if err := backupAndWrite(plan.path, plan.oldBody, plan.newBody, backupSuffix); err != nil {
+			o.releaseLock()
+			return "err", fmt.Sprintf("rewrite %s: %v", plan.path, err), payload
+		}
+		changedFiles = append(changedFiles, plan.path)
+	}
+	o.releaseLock()
 
+	prefix := fmt.Sprintf("\U0001F527 \u041e\u0442\u043a\u043b\u044e\u0447\u0451\u043d \u0444\u0438\u0434 %s \u0432 %s (backup suffix: %s)\n\n",
+		url, strings.Join(changedFiles, ", "), backupSuffix)
 	s, smartOut, p := o.SmartUpgrade(ctx)
 	combined := prefix + smartOut
 	p.Output = combined

@@ -419,6 +419,37 @@ func TestOpkg_DisableFeed_MultiFeedFile(t *testing.T) {
 	}
 }
 
+func TestOpkg_DisableFeed_DoesNotRewriteAnyFileWhenLaterConfigReadFails(t *testing.T) {
+	root := t.TempDir()
+	confPath := filepath.Join(root, "opkg.conf")
+	original := "src/gz nfqws https://anonym-tsk.github.io/nfqws-keenetic/all\n"
+	writeFile(t, confPath, original)
+	if err := os.MkdirAll(filepath.Join(root, "opkg", "bad.conf"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	o := mkOpkgRunnerWithRoot(t, root, func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatalf("opkg should not run after config read failure: %s %v", name, args)
+		return nil, nil
+	})
+
+	status, output, _ := o.DisableFeed(context.Background(), "https://anonym-tsk.github.io/nfqws-keenetic/all")
+	if status != "err" || !strings.Contains(output, "read") {
+		t.Fatalf("status=%q output=%q, want read error", status, output)
+	}
+	body, err := os.ReadFile(confPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != original {
+		t.Fatalf("opkg.conf was partially rewritten after later read failure:\n%s", body)
+	}
+	matches, _ := filepath.Glob(confPath + ".bak.*")
+	if len(matches) != 0 {
+		t.Fatalf("no backup should be created when planning fails, got %v", matches)
+	}
+}
+
 func TestOpkg_DisableFeed_Idempotent(t *testing.T) {
 	root := t.TempDir()
 	confPath := filepath.Join(root, "opkg", "nfqws.conf")
