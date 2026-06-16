@@ -416,6 +416,7 @@ func (r *Router) handleSelfHostedAmneziaConfirm(ctx context.Context, q *tg.Callb
 	}
 	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "tunnel_import"}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}

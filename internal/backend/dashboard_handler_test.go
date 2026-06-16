@@ -249,7 +249,7 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 			t.Fatalf("dashboard page missing %q", want)
 		}
 	}
-	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck", "OPKG cron", "opkg_cron_install", "Entware cleanup", "entware_clean_install", "formatEntwareCleanStatus", "version_audit"} {
+	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck", "OPKG cron", "opkg_cron_install", "Entware cleanup", "entware_clean_install", "formatEntwareCleanStatus", "version_audit", "Pending ${pending}", "Timed out waiting for agent"} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("dashboard js missing %q", want)
 		}
@@ -719,6 +719,29 @@ func TestDashboardEnrollmentStoresDeployMetadata(t *testing.T) {
 	}
 }
 
+func TestDashboardEnrollmentRejectsUnsafeAWGMURL(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{DB: d, DashboardToken: "secret", TelegramPrimaryChatID: -100100})
+	body := `{"nickname":"router5","kind":"mobile","telegram_chat_id":0,"awgm_url":"javascript:alert(1)"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/enrollments", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if _, err := d.Users().GetByNickname("router5"); err == nil {
+		t.Fatal("unsafe awgm_url enrollment should not create user")
+	}
+}
+
 func TestDashboardEnrollmentRejectsUnsupportedArch(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -1037,6 +1060,46 @@ func TestDashboardDeployEnqueuesSelfUpdateAndMarksPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.1" {
+		t.Fatalf("pending_version=%v", u.PendingVersion)
+	}
+}
+
+func TestDashboardDeployRejectsWhenAnotherVersionIsPending(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(userID, "v0.13.0-rc120", "2026-06-10T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, CommandSink: sink, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/agents/testkeen/deploy",
+		strings.NewReader(`{"target_version":"v0.13.0-rc132"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "wg.example.test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("pending deploy should not enqueue another command: %+v", sink.enqueued)
+	}
+	u, err := d.Users().GetByNickname("testkeen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc120" {
 		t.Fatalf("pending_version=%v", u.PendingVersion)
 	}
 }

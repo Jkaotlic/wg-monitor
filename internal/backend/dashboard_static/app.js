@@ -251,10 +251,10 @@
     const latest = latestVersion();
     const current = agent.agent_version || "";
     const pending = agent.pending_version || "";
-    const disabled = !latest || current === latest || pending === latest;
-    const stateValue = pending === latest ? "waiting" : buttonState(agent.nickname, "self_update");
+    const disabled = !latest || current === latest || Boolean(pending);
+    const stateValue = pending ? "waiting" : buttonState(agent.nickname, "self_update");
     const suffix = latest ? ` ${latest}` : "";
-    const text = pending === latest ? `Pending${suffix}` : (current === latest ? `Latest${suffix}` : label);
+    const text = pending ? `Pending ${pending}` : (current === latest ? `Latest${suffix}` : label);
     return `<button class="${escapeAttr(className)}" title="Update to latest${escapeAttr(suffix)}" type="button" data-state="${escapeAttr(stateValue)}" data-update-latest="1" data-agent="${escapeAttr(agent.nickname)}" ${disabled ? "disabled" : ""}>${escapeHTML(text)}</button>`;
   }
 
@@ -608,6 +608,9 @@
         await sleep(1200);
       }
     }
+    setResultHTML(`<div class="result-section"><strong>Timed out waiting for agent</strong><p>Command id: ${escapeHTML(cmdID)}</p><p>No command result arrived after repeated polling.</p></div>`);
+    setActionState(nickname, title, "error");
+    refresh();
   }
 
   function openDeploy(nickname) {

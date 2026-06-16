@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -765,6 +766,10 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		req.Arch = arch
+		if err := validateDashboardAWGMURL(req.AWGMURL); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_awgm_url", err.Error())
+			return
+		}
 		if !dashboardTelegramChatAllowed(d, req.TelegramChatID, req.CustomTelegramChat) {
 			writeJSONError(w, http.StatusBadRequest, "invalid_telegram_chat", "telegram chat is not allowed")
 			return
@@ -802,6 +807,21 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 			Message:          "Agent enrollment created. Save the token now; it will not be shown once this panel is closed.",
 		})
 	}
+}
+
+func validateDashboardAWGMURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("AWG Manager URL must be an absolute http(s) URL")
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("AWG Manager URL scheme must be http or https")
+	}
+	return nil
 }
 
 func dashboardEnrollmentHasDeployInfo(req dashboardEnrollmentReq) bool {
