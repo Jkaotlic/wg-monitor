@@ -100,6 +100,59 @@ func TestRoutesPanelTextShowsHRNeoPolicyActiveAndFallback(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelKeyboard_CanRebindHRNeoPolicyInterface(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		HRNeo: wire.HRStatus{Installed: true, Running: true},
+		Tunnels: []wire.TunnelMeta{
+			{ID: "t1", Name: "policy-primary", Iface: "nwg3", Enabled: true},
+			{ID: "t2", Name: "policy-dst", Iface: "nwg0", Enabled: true},
+		},
+		Counts: map[string]wire.TunnelCounts{
+			"t1": {},
+			"t2": {},
+		},
+		Policies: []wire.RoutePolicySummary{{
+			Name:  "HydraRoute",
+			DNS:   25,
+			HRNeo: 25,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Name: "policy-primary", Bind: "nwg3", Role: "active", Available: true},
+				{Name: "policy-dst", Bind: "nwg0", Role: "fallback", Available: true},
+			},
+		}},
+	}
+
+	kb := RoutesPanelKeyboard(42, snap)
+	if !routesKeyboardHasCallback(kb, "routes_rebind:42:t1") {
+		t.Fatalf("HR-Neo policy source should have a rebind button: %+v", kb.InlineKeyboard)
+	}
+}
+
+func TestRebindPreviewText_CountsHRNeoPolicyInterfaceMoves(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		HRNeo: wire.HRStatus{Installed: true, Running: true},
+		Tunnels: []wire.TunnelMeta{
+			{ID: "t1", Name: "policy-primary", Iface: "nwg3", Enabled: true},
+			{ID: "t2", Name: "policy-dst", Iface: "nwg0", Enabled: true},
+		},
+		Counts: map[string]wire.TunnelCounts{
+			"t1": {},
+			"t2": {},
+		},
+		Policies: []wire.RoutePolicySummary{{
+			Name:       "HydraRoute",
+			DNS:        25,
+			HRNeo:      25,
+			Interfaces: []wire.RoutePolicyInterface{{Name: "policy-primary", Bind: "nwg3", Role: "active", Available: true}},
+		}},
+	}
+
+	text := RebindPreviewText(snap, "t1", "t2", "tok")
+	if !strings.Contains(text, "25") || !strings.Contains(text, "HR-Neo") {
+		t.Fatalf("preview should count HR-Neo policy routes, got:\n%s", text)
+	}
+}
+
 func TestRoutesPanelTextShowsSnapshotWarnings(t *testing.T) {
 	text := RoutesPanelText("testkeen", wire.RouteSnapshot{
 		Warnings: []string{"/api/routing/tunnels failed: HTTP 502"},
