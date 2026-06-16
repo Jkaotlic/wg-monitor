@@ -68,7 +68,12 @@
   function setButtonState(button, value) {
     if (!button) return;
     button.dataset.state = value || "idle";
-    button.disabled = value === "waiting";
+    button.disabled = value === "queued" || value === "waiting";
+  }
+
+  function isButtonBusy(button) {
+    if (!button) return false;
+    return button.disabled || button.dataset.state === "queued" || button.dataset.state === "waiting";
   }
 
   function setActionState(nickname, action, value) {
@@ -106,7 +111,10 @@
         window.location.href = "/dashboard/login";
         return null;
       }
-      throw new Error(message);
+      const error = new Error(message);
+      error.status = res.status;
+      error.code = body && body.code;
+      throw error;
     }
     return body;
   }
@@ -604,6 +612,12 @@
         refresh();
         return;
       } catch (err) {
+        if (!(err.status === 404 && err.code === "result_not_ready")) {
+          setResultHTML(`<div class="result-section"><strong>Command result failed</strong><p>Command id: ${escapeHTML(cmdID)}</p><p>${escapeHTML(err.message)}</p></div>`);
+          setActionState(nickname, title, "error");
+          refresh();
+          return;
+        }
         setResultHTML(`<div class="result-section"><strong>Waiting for agent</strong><p>Command id: ${escapeHTML(cmdID)}</p><p>${escapeHTML(err.message)}</p></div>`);
         await sleep(1200);
       }
@@ -949,6 +963,7 @@
   document.body.addEventListener("click", (event) => {
     const button = event.target.closest("button");
     if (button) {
+      if (isButtonBusy(button)) return;
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.deploy) openDeploy(nickname);
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {

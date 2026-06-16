@@ -261,6 +261,43 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 	}
 }
 
+func TestDashboardStaticGuardsQueuedActionButtons(t *testing.T) {
+	jsBytes, err := dashboardStaticFS.ReadFile("dashboard_static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(jsBytes)
+
+	for _, want := range []string{
+		`value === "queued" || value === "waiting"`,
+		`function isButtonBusy(button)`,
+		`if (isButtonBusy(button)) return;`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("dashboard app.js missing queued-action guard %q", want)
+		}
+	}
+}
+
+func TestDashboardStaticPollsOnlyResultNotReady(t *testing.T) {
+	jsBytes, err := dashboardStaticFS.ReadFile("dashboard_static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(jsBytes)
+
+	for _, want := range []string{
+		`error.status = res.status`,
+		`error.code = body && body.code`,
+		`err.status === 404 && err.code === "result_not_ready"`,
+		`Command result failed`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("dashboard app.js missing result polling guard %q", want)
+		}
+	}
+}
+
 func TestDashboardOperatorLatestReleasePrefersNewestPublishedRC(t *testing.T) {
 	releases := []dashboardGitHubRelease{
 		{TagName: "v0.13.0", PublishedAt: time.Date(2026, 6, 8, 10, 0, 0, 0, time.UTC)},
