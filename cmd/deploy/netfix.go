@@ -150,7 +150,11 @@ func parseNetfixArgs(args []string) (netfixOptions, error) {
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("--port requires value")
 			}
-			fmt.Sscanf(args[i+1], "%d", &opts.Port)
+			port, err := parsePositivePort(args[i+1])
+			if err != nil {
+				return opts, fmt.Errorf("--port must be a positive integer")
+			}
+			opts.Port = port
 			i++
 		case "--apply":
 			opts.Apply = true

@@ -2700,11 +2700,10 @@ func autoCreateForumTopic(state *State, secrets *SecretStore, nick string) int {
 // --- helpers ---
 
 func parseIntOr(s string, def int) int {
-	if s == "" {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
 		return def
 	}
-	var n int
-	fmt.Sscanf(s, "%d", &n)
 	if n == 0 {
 		return def
 	}
@@ -2712,11 +2711,13 @@ func parseIntOr(s string, def int) int {
 }
 
 func parseInt64Or(s string, def int64) int64 {
-	if s == "" {
+	n, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil {
 		return def
 	}
-	var n int64
-	fmt.Sscanf(s, "%d", &n)
+	if n == 0 {
+		return def
+	}
 	return n
 }
 

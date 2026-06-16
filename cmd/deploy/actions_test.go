@@ -79,6 +79,18 @@ func TestColdInstallGate_DefaultDeniesOnEmpty(t *testing.T) {
 	}
 }
 
+func TestParseInt64OrFallsBackOnInvalidOrZero(t *testing.T) {
+	const def int64 = -1001234567890
+	for _, in := range []string{"", "abc", "0"} {
+		if got := parseInt64Or(in, def); got != def {
+			t.Fatalf("parseInt64Or(%q, %d)=%d, want default", in, def, got)
+		}
+	}
+	if got := parseInt64Or("-1009876543210", def); got != -1009876543210 {
+		t.Fatalf("parseInt64Or valid chat id=%d", got)
+	}
+}
+
 func TestColdInstallGate_AllowsExplicitYes(t *testing.T) {
 	ag := &AgentState{Nickname: "smith", ExpectedMAC: ""}
 	allowed := coldInstallIdentityGate(ag, "keenetic", "aabbccddeeff", "arm64",

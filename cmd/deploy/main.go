@@ -264,11 +264,12 @@ func main() {
 				}
 			case "--port":
 				if i+1 < len(args) {
-					var p int
-					fmt.Sscanf(args[i+1], "%d", &p)
-					if p > 0 {
-						target.Port = p
+					p, err := parsePositivePort(args[i+1])
+					if err != nil {
+						fmt.Fprintln(os.Stderr, "uninstall-agent: --port must be a positive integer")
+						os.Exit(2)
 					}
+					target.Port = p
 					i++
 				}
 			case "--user":
