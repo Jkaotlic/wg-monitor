@@ -249,35 +249,12 @@ func main() {
 		// uninstall-agent --agent <nick>          (looks up SSH coords in state.Agents)
 		// uninstall-agent --host <ip> [--port N] [--user U]  (manual, for routers
 		// not in wizard.toml — typical "accidentally installed on local box")
-		target := UninstallTarget{Port: 222, User: "root"}
-		for i := 1; i < len(args); i++ {
-			switch args[i] {
-			case "--agent":
-				if i+1 < len(args) {
-					target.Nickname = args[i+1]
-					i++
-				}
-			case "--host":
-				if i+1 < len(args) {
-					target.Host = args[i+1]
-					i++
-				}
-			case "--port":
-				if i+1 < len(args) {
-					p, err := parsePositivePort(args[i+1])
-					if err != nil {
-						fmt.Fprintln(os.Stderr, "uninstall-agent: --port must be a positive integer")
-						os.Exit(2)
-					}
-					target.Port = p
-					i++
-				}
-			case "--user":
-				if i+1 < len(args) {
-					target.User = args[i+1]
-					i++
-				}
-			}
+		target, err := parseUninstallAgentArgs(args)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "uninstall-agent:", err)
+			fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy uninstall-agent --agent <nick>")
+			fmt.Fprintln(os.Stderr, "   or: wg-monitor-deploy uninstall-agent --host <ip> [--port N] [--user U]")
+			os.Exit(2)
 		}
 		if target.Nickname == "" && target.Host == "" {
 			fmt.Fprintln(os.Stderr, "uninstall-agent: укажи --agent <nickname> или --host <ip> [--port N] [--user U]")
@@ -407,6 +384,54 @@ func main() {
 		printUsage()
 		os.Exit(2)
 	}
+}
+
+func parseUninstallAgentArgs(args []string) (UninstallTarget, error) {
+	target := UninstallTarget{Port: 222, User: "root"}
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		switch arg {
+		case "--agent":
+			value, ok := nextCLIValue(args, &i)
+			if !ok {
+				return target, fmt.Errorf("--agent requires a value")
+			}
+			target.Nickname = value
+		case "--host":
+			value, ok := nextCLIValue(args, &i)
+			if !ok {
+				return target, fmt.Errorf("--host requires a value")
+			}
+			target.Host = value
+		case "--port":
+			value, ok := nextCLIValue(args, &i)
+			if !ok {
+				return target, fmt.Errorf("--port requires a value")
+			}
+			p, err := parsePositivePort(value)
+			if err != nil {
+				return target, fmt.Errorf("--port must be a positive integer")
+			}
+			target.Port = p
+		case "--user":
+			value, ok := nextCLIValue(args, &i)
+			if !ok {
+				return target, fmt.Errorf("--user requires a value")
+			}
+			target.User = value
+		default:
+			return target, fmt.Errorf("unknown option %s", arg)
+		}
+	}
+	return target, nil
+}
+
+func nextCLIValue(args []string, i *int) (string, bool) {
+	if *i+1 >= len(args) || strings.HasPrefix(args[*i+1], "--") {
+		return "", false
+	}
+	*i = *i + 1
+	return args[*i], true
 }
 
 func usageText() string {

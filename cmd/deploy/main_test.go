@@ -116,6 +116,38 @@ func TestParsePositivePortRejectsInvalidPort(t *testing.T) {
 	}
 }
 
+func TestParseUninstallAgentArgsRejectsUnknownAndMissingValues(t *testing.T) {
+	tests := [][]string{
+		{"uninstall-agent", "--bogus"},
+		{"uninstall-agent", "--agent"},
+		{"uninstall-agent", "--host", "--port", "222"},
+		{"uninstall-agent", "--port", "abc"},
+		{"uninstall-agent", "--user", "--host"},
+	}
+	for _, args := range tests {
+		if _, err := parseUninstallAgentArgs(args); err == nil {
+			t.Fatalf("parseUninstallAgentArgs(%v) succeeded unexpectedly", args)
+		}
+	}
+}
+
+func TestParseUninstallAgentArgsAcceptsAgentAndManualTarget(t *testing.T) {
+	byAgent, err := parseUninstallAgentArgs([]string{"uninstall-agent", "--agent", "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byAgent.Nickname != "home" || byAgent.Port != 222 || byAgent.User != "root" {
+		t.Fatalf("byAgent=%+v", byAgent)
+	}
+	manual, err := parseUninstallAgentArgs([]string{"uninstall-agent", "--host", "192.0.2.10", "--port", "2202", "--user", "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manual.Host != "192.0.2.10" || manual.Port != 2202 || manual.User != "admin" {
+		t.Fatalf("manual=%+v", manual)
+	}
+}
+
 func TestCheckWizardEndpointAcceptsUnauthorized(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/wizard/agents" {
