@@ -3,6 +3,7 @@ package cmdloop
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -192,6 +193,45 @@ func TestLoopDeduplicatesCommandIDAndRepostsCachedResult(t *testing.T) {
 	cl.mu.Unlock()
 	if posts != 2 {
 		t.Fatalf("posts=%d, want cached result posted twice", posts)
+	}
+}
+
+func TestLoopPersistsCommandResultAndRepostsAfterRestart(t *testing.T) {
+	cachePath := filepath.Join(t.TempDir(), "cmd-results.json")
+	cmd := &wire.Command{ID: "same-after-restart", Action: "route_delete"}
+	firstClient := &fakeClient{
+		pollSeq: []pollResp{{cmd: cmd}},
+		postErr: errors.New("backend temporarily unavailable"),
+	}
+	firstRunner := &fakeRunner{}
+	firstLoop := New(firstClient, firstRunner, 1)
+	firstLoop.SetResultCachePath(cachePath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	firstLoop.Run(ctx)
+	cancel()
+
+	secondClient := &fakeClient{
+		pollSeq: []pollResp{{cmd: cmd}},
+	}
+	secondRunner := &fakeRunner{}
+	secondLoop := New(secondClient, secondRunner, 1)
+	secondLoop.SetResultCachePath(cachePath)
+
+	ctx, cancel = context.WithTimeout(context.Background(), 200*time.Millisecond)
+	secondLoop.Run(ctx)
+	cancel()
+
+	secondRunner.mu.Lock()
+	seen := len(secondRunner.seen)
+	secondRunner.mu.Unlock()
+	if seen != 0 {
+		t.Fatalf("persisted command result should prevent re-execution after restart, executions=%d", seen)
+	}
+	secondClient.mu.Lock()
+	defer secondClient.mu.Unlock()
+	if len(secondClient.posts) != 1 || secondClient.posts[0].ID != cmd.ID {
+		t.Fatalf("cached result reposts=%+v", secondClient.posts)
 	}
 }
 

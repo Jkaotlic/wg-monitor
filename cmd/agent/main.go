@@ -116,6 +116,7 @@ func main() {
 		BackendURL:           cfg.Backend.URL,
 	}
 	loop := cmdloop.New(client, runner, 30)
+	loop.SetResultCachePath(cfg.State.CommandResultPath())
 	go loop.Run(ctx)
 
 	rep.Run(ctx)

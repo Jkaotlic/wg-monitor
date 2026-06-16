@@ -7,9 +7,13 @@ package cmdloop
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -37,11 +41,22 @@ type Loop struct {
 	resultCache map[string]cachedResult
 	cacheTTL    time.Duration
 	cacheMax    int
+	cachePath   string
 }
 
 type cachedResult struct {
 	result wire.CommandResult
 	at     time.Time
+}
+
+type resultCacheFile struct {
+	Results []cachedResultEntry `json:"results"`
+}
+
+type cachedResultEntry struct {
+	ID     string             `json:"id"`
+	Result wire.CommandResult `json:"result"`
+	At     time.Time          `json:"at"`
 }
 
 func New(client BackendClient, runner CommandRunner, waitSec int) *Loop {
@@ -59,6 +74,14 @@ func New(client BackendClient, runner CommandRunner, waitSec int) *Loop {
 		cacheTTL:    10 * time.Minute,
 		cacheMax:    128,
 	}
+}
+
+func (l *Loop) SetResultCachePath(path string) {
+	l.cachePath = strings.TrimSpace(path)
+	if l.cachePath == "" {
+		return
+	}
+	l.loadResultCache()
 }
 
 func (l *Loop) Run(ctx context.Context) {
@@ -124,6 +147,7 @@ func (l *Loop) cachedResult(id string) (wire.CommandResult, bool) {
 	}
 	if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
 		delete(l.resultCache, id)
+		l.persistResultCache()
 		return wire.CommandResult{}, false
 	}
 	return cached.result, true
@@ -151,6 +175,70 @@ func (l *Loop) rememberResult(id string, result wire.CommandResult) {
 		delete(l.resultCache, oldestID)
 	}
 	l.resultCache[id] = cachedResult{result: result, at: time.Now()}
+	l.persistResultCache()
+}
+
+func (l *Loop) loadResultCache() {
+	body, err := os.ReadFile(l.cachePath)
+	if os.IsNotExist(err) {
+		return
+	}
+	if err != nil {
+		slog.Warn("cmdloop result cache read failed", "path", l.cachePath, "err", err)
+		return
+	}
+	var file resultCacheFile
+	if err := json.Unmarshal(body, &file); err != nil {
+		slog.Warn("cmdloop result cache corrupt; ignoring", "path", l.cachePath, "err", err)
+		return
+	}
+	if l.resultCache == nil {
+		l.resultCache = make(map[string]cachedResult)
+	}
+	for _, entry := range file.Results {
+		if strings.TrimSpace(entry.ID) == "" {
+			continue
+		}
+		if l.cacheTTL > 0 && time.Since(entry.At) > l.cacheTTL {
+			continue
+		}
+		l.resultCache[entry.ID] = cachedResult{result: entry.Result, at: entry.At}
+	}
+}
+
+func (l *Loop) persistResultCache() {
+	if l.cachePath == "" || len(l.resultCache) == 0 {
+		return
+	}
+	entries := make([]cachedResultEntry, 0, len(l.resultCache))
+	for id, cached := range l.resultCache {
+		if id == "" {
+			continue
+		}
+		if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
+			continue
+		}
+		entries = append(entries, cachedResultEntry{ID: id, Result: cached.result, At: cached.at})
+	}
+	body, err := json.MarshalIndent(resultCacheFile{Results: entries}, "", "  ")
+	if err != nil {
+		slog.Warn("cmdloop result cache marshal failed", "path", l.cachePath, "err", err)
+		return
+	}
+	body = append(body, '\n')
+	if err := os.MkdirAll(filepath.Dir(l.cachePath), 0o755); err != nil {
+		slog.Warn("cmdloop result cache mkdir failed", "path", l.cachePath, "err", err)
+		return
+	}
+	tmp := l.cachePath + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		slog.Warn("cmdloop result cache write failed", "path", tmp, "err", err)
+		return
+	}
+	if err := os.Rename(tmp, l.cachePath); err != nil {
+		slog.Warn("cmdloop result cache rename failed", "path", l.cachePath, "err", err)
+		_ = os.Remove(tmp)
+	}
 }
 
 func (l *Loop) backoff(attempt int) time.Duration {
