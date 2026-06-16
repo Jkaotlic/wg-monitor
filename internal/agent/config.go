@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -118,6 +119,10 @@ func (s StateConfig) ResolvedPath() string {
 		return s.Path
 	}
 	return "/opt/var/wg-monitor/reporter-state.json"
+}
+
+func (s StateConfig) CommandResultPath() string {
+	return filepath.Join(filepath.Dir(s.ResolvedPath()), "cmd-results.json")
 }
 
 type ChecksConfig struct {
