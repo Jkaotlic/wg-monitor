@@ -866,6 +866,62 @@ func TestSelfHostedAmneziaDeleteRequiresConfirm(t *testing.T) {
 	}
 }
 
+func TestSelfHostedAmneziaDeleteConfirmKeepsTokenWhenStoreLoadFails(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeRouterTG{}
+	storePath := t.TempDir() + "/selfhosted.json"
+	store := selfhostedamnezia.Store{Version: 1}
+	if err := store.Upsert(selfhostedamnezia.Instance{ID: "home", Label: "Home VPS", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567}); err != nil {
+		t.Fatal(err)
+	}
+	if err := selfhostedamnezia.SaveStore(storePath, store); err != nil {
+		t.Fatal(err)
+	}
+	r := NewRouter(d, f, Config{
+		ChatID:      -100,
+		AdminUserID: 12345,
+		SelfHostedAmnezia: selfhostedamnezia.Config{
+			StorePath: storePath,
+		},
+	})
+
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-delete-ask",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    "amz_selfhosted_delete:" + itoa(uid) + ":_panel_:home",
+	})
+	if len(f.editMarkups) != 1 {
+		t.Fatalf("delete ask should render confirm callback, markups=%+v answers=%+v", f.editMarkups, f.answers)
+	}
+	confirmData := firstCallbackWithPrefix(t, f.editMarkups[0], "amz_selfhosted_delete_confirm:"+itoa(uid)+":_panel_:home:")
+
+	badStorePath := t.TempDir()
+	r.cfg.SelfHostedAmnezia.StorePath = badStorePath
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-delete-confirm-load-fails",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	r.cfg.SelfHostedAmnezia.StorePath = storePath
+	r.HandleCallback(context.Background(), &tg.CallbackQuery{
+		ID:      "selfhosted-delete-confirm-retry",
+		From:    tg.User{ID: 12345},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}},
+		Data:    confirmData,
+	})
+
+	afterRetry, err := selfhostedamnezia.LoadStore(storePath, selfhostedamnezia.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := afterRetry.Get("home"); ok {
+		t.Fatalf("retrying same confirm after transient store load failure should remove instance")
+	}
+}
+
 func TestAmneziaDownloadAskFullSlotsOffersRecoveryActions(t *testing.T) {
 	d, uid := newTestDB(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

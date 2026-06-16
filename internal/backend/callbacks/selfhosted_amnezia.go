@@ -175,19 +175,23 @@ func (r *Router) handleSelfHostedAmneziaDelete(ctx context.Context, q *tg.Callba
 }
 
 func (r *Router) handleSelfHostedAmneziaDeleteConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	if !r.consumePendingConfirm(ctx, q, args, args.SelfHostedAmneziaID) {
+	confirm, ok := r.takePendingConfirm(ctx, q, args, args.SelfHostedAmneziaID)
+	if !ok {
 		return
 	}
 	store, err := r.loadSelfHostedAmneziaStore()
 	if err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
 	if !store.Delete(args.SelfHostedAmneziaID) {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "self-hosted VPS не найден")
 		return
 	}
 	if err := r.saveSelfHostedAmneziaStore(store); err != nil {
+		r.restorePendingConfirm(confirm)
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
 		return
 	}
