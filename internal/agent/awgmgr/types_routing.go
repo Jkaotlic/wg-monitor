@@ -3,8 +3,10 @@ package awgmgr
 import "encoding/json"
 
 // DNSRouteEntry is one element of DNSRoute.Routes — explicit tunnel binding.
-// `Interface` and `TunnelID` carry the same value (the iface from
-// /api/routing/tunnels, e.g. "nwg1", "eth3"). awg-manager UI sets both.
+// `Interface` is the fresh kernel iface from /api/routing/tunnels (e.g.
+// "nwg1", "eth3"). For managed tunnels `TunnelID` must use the stable
+// AWG Manager routing/NDMS id when available; iface-only tunnelId values can
+// be rejected by AWG Manager even when Interface itself is correct.
 type DNSRouteEntry struct {
 	Interface string `json:"interface"`
 	TunnelID  string `json:"tunnelId"`

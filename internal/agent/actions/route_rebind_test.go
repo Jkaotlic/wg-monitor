@@ -215,7 +215,7 @@ func TestRouteRebind_CanMoveWANToManagedTunnel(t *testing.T) {
 	for _, r := range mock.dnsRules {
 		switch r.ID {
 		case "hr:Sber":
-			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "t2" {
 				t.Fatalf("WAN DNS rule was not moved to nwg0: %+v", r)
 			}
 		case "hr:Vk", "ndms:Yandex":
@@ -265,7 +265,7 @@ func TestRouteRebind_CanMoveWANSystemDNSWithoutExplicitRoute(t *testing.T) {
 	for _, r := range mock.dnsRules {
 		switch r.ID {
 		case "ndms:Ru":
-			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "t2" {
 				t.Fatalf("unbound DNS rule was not moved to nwg0: %+v", r)
 			}
 		case "hr:Fallthru":
@@ -310,7 +310,7 @@ func TestRouteRebind_CanMoveNDMSNameBoundRules(t *testing.T) {
 	for _, r := range mock.dnsRules {
 		switch r.ID {
 		case "ndms:Legacy", "hr:Legacy":
-			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "t2" {
 				t.Fatalf("NDMS-name DNS rule was not moved to nwg0: %+v", r)
 			}
 		case "ndms:Other":
@@ -378,8 +378,8 @@ func TestRouteRebind_UsesRoutingIfaceWhenRoutingIDDiffersFromTunnelID(t *testing
 	if res.DNS.OK != 1 || res.Static.OK != 1 || res.HRNeo.OK != 1 {
 		t.Fatalf("counts = dns=%+v static=%+v hr=%+v, want nwg5-bound rules moved", res.DNS, res.Static, res.HRNeo)
 	}
-	if mock.dnsRules[0].Routes[0].Interface != "nwg0" || mock.staticRules[0].TunnelID != "nwg0" {
-		t.Fatalf("rules were not rebound to nwg0: dns=%+v static=%+v", mock.dnsRules[0], mock.staticRules[0])
+	if mock.dnsRules[0].Routes[0].Interface != "nwg0" || mock.dnsRules[0].Routes[0].TunnelID != "t2" || mock.staticRules[0].TunnelID != "nwg0" {
+		t.Fatalf("rules were not rebound with fresh iface and stable DNS tunnelId: dns=%+v static=%+v", mock.dnsRules[0], mock.staticRules[0])
 	}
 }
 
@@ -418,7 +418,7 @@ func TestRouteRebind_DoesNotMoveHRNeoDirectProviderPolicy(t *testing.T) {
 				t.Fatalf("movable HR-Neo policy was not rebound to nwg0: %+v", r)
 			}
 		case "hr:Explicit":
-			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "t2" {
 				t.Fatalf("movable HR-Neo rule was not moved to nwg0: %+v", r)
 			}
 		}
@@ -542,7 +542,7 @@ func TestRouteRebind_CanMoveOtherExplicitWANSystemRoutes(t *testing.T) {
 	for _, r := range mock.dnsRules {
 		switch r.ID {
 		case "ndms:OtherDNS":
-			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "nwg0" {
+			if len(r.Routes) != 1 || r.Routes[0].Interface != "nwg0" || r.Routes[0].TunnelID != "t2" {
 				t.Fatalf("explicit Other DNS route was not moved to nwg0: %+v", r)
 			}
 		case "ndms:Managed":

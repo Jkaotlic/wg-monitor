@@ -240,10 +240,13 @@ DNS and static routes both bind to an interface by its **kernel device name** (`
 - system tunnels: `Wireguard0`, `Wireguard2`, …
 - WAN: `eth3`, `apcli0`, …
 
-For a managed tunnel, the iface value matches `Tunnel.interfaceName` from `/api/tunnels/all`. So the rebind logic uses:
+For a managed tunnel, the route interface value is the fresh `iface` from
+`/api/routing/tunnels`. DNS entries also need the stable AWG Manager
+routing/NDMS bind id in `tunnelId` when available. So the rebind logic uses:
 ```go
-srcIface := src.InterfaceName  // e.g. "nwg1" for awg11
-dstIface := dst.InterfaceName  // e.g. "nwg0" for awg12
+srcIface := src.Iface               // e.g. "nwg1" for awg11
+dstIface := dst.Iface               // e.g. "nwg0" for awg12
+dstDNSBindID := routeDNSBindID(dst) // e.g. "Wireguard3" or "awg12"
 ```
 
 A rule "belongs to src" iff its bind field equals `srcIface`. WAN-targeted rules (e.g. `iface == "eth3"`) NEVER match — guaranteed by interface uniqueness on the router.
@@ -253,13 +256,18 @@ A rule "belongs to src" iff its bind field equals `srcIface`. WAN-targeted rules
 ```json
 {
   "id": "hr:Vk",
-  "routes": [{"interface": "nwg1", "tunnelId": "nwg1", "fallback": "auto"}],
+  "routes": [{"interface": "nwg1", "tunnelId": "Wireguard1", "fallback": "auto"}],
   "backend": "hydraroute" | "ndms",
   "hrPolicyName": "HydraRoute"
 }
 ```
 
-`routes[i].interface` and `routes[i].tunnelId` always carry the same value. A rule with `routes: null` falls through to its global engine policy (HR-Neo's `policyOrder[0]` = `"HydraRoute"` policy whose default tunnel is set in `ip route table 4096`, NOT manageable via API).
+`routes[i].interface` carries the kernel iface. For managed tunnels,
+`routes[i].tunnelId` must carry the stable AWG Manager routing/NDMS id when
+available; iface-only values such as `nwg0` can be rejected by AWG Manager. A
+rule with `routes: null` falls through to its global engine policy (HR-Neo's
+`policyOrder[0]` = `"HydraRoute"` policy whose default tunnel is set in
+`ip route table 4096`, NOT manageable via API).
 
 #### Static rule binding
 
@@ -287,12 +295,12 @@ if rule.routes != null:
     for entry in rule.routes:
         if entry.interface == srcIface:
             entry.interface = dstIface
-            entry.tunnelId  = dstIface
+            entry.tunnelId  = dstDNSBindID
             mark rule as touched
 elif convertFallthroughEnabled and rule.routes == null
                                 and rule.backend == "hydraroute"
                                 and globalHRPolicyDefault == srcIface:
-    rule.routes = [{interface: dstIface, tunnelId: dstIface, fallback: "auto"}]
+    rule.routes = [{interface: dstIface, tunnelId: dstDNSBindID, fallback: "auto"}]
     mark rule as touched
 
 if rule was touched:
@@ -439,7 +447,7 @@ Acceptance is conditional on step 8 passing.
 
 ## 10. Resolved Questions (post-probes 2026-05-08)
 
-1. **Bind field for DNS rules** — `routes[i].interface` and `routes[i].tunnelId` (same value, both fields). Fall-through if `routes==null`.
+1. **Bind field for DNS rules** — `routes[i].interface` is the kernel iface; `routes[i].tunnelId` is the stable AWG Manager routing/NDMS id for managed tunnels. Fall-through if `routes==null`.
 2. **Bind field for static rules** — `tunnelID` (capital D — note the casing difference from DNS).
 3. **Bind value form** — the `iface` from `/api/routing/tunnels`, equal to `Tunnel.interfaceName` for managed tunnels (`nwg0`, `nwg1`, …); WAN/system have their own `iface` (`eth3`, `Wireguard2`, …).
 4. **Update endpoint shape** — DNS uses `POST /api/dns-routes/update?id=<id>` body=full rule. Static uses `POST /api/static-routes/update` (no id in URL) body=full rule (id inside body).
