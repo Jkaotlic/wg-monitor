@@ -51,6 +51,8 @@ type commandEntry struct {
 	issuedAt time.Time
 }
 
+// ExpiredCommandHandler observes commands dropped before issue, either because
+// their TTL expired at dequeue time or because a newer command superseded them.
 type ExpiredCommandHandler func(userID int64, cmd wire.Command)
 
 // Queue is per-user FIFO queues plus a per-(user,id) result map plus a
@@ -147,12 +149,14 @@ func (q *Queue) deleteOriginLocked(userID int64, cmdID string) {
 	}
 }
 
-func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) int {
+func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) (int, []wire.Command) {
+	var dropped []wire.Command
 	if supersedesPending(cmd.Action) {
 		filtered := q.pending[userID][:0]
 		for _, existing := range q.pending[userID] {
 			if existing.Action == cmd.Action {
 				q.deleteOriginLocked(userID, existing.ID)
+				dropped = append(dropped, existing)
 				continue
 			}
 			filtered = append(filtered, existing)
@@ -164,7 +168,16 @@ func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) int {
 		}
 	}
 	q.pending[userID] = append(q.pending[userID], cmd)
-	return len(q.pending[userID])
+	return len(q.pending[userID]), dropped
+}
+
+func notifyDroppedCommands(userID int64, h ExpiredCommandHandler, dropped []wire.Command) {
+	if h == nil {
+		return
+	}
+	for _, cmd := range dropped {
+		h(userID, cmd)
+	}
 }
 
 // EnqueueWithRef is Enqueue + records MessageRef (with ref.Action populated
@@ -178,15 +191,17 @@ func (q *Queue) EnqueueWithRef(userID int64, cmd wire.Command, ref MessageRef) e
 	}
 	ref.Action = cmd.Action
 	q.mu.Lock()
-	pendingLen := q.enqueueLocked(userID, cmd)
+	pendingLen, dropped := q.enqueueLocked(userID, cmd)
 	bucket, ok := q.origins[userID]
 	if !ok {
 		bucket = make(map[string]originEntry)
 		q.origins[userID] = bucket
 	}
 	bucket[cmd.ID] = originEntry{ref: ref, enqueuedAt: time.Now()}
+	onDrop := q.onDrop
 	q.mu.Unlock()
 	q.signal.Broadcast()
+	notifyDroppedCommands(userID, onDrop, dropped)
 	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
 	return nil
 }
@@ -234,9 +249,11 @@ func (q *Queue) Enqueue(userID int64, cmd wire.Command) error {
 		return err
 	}
 	q.mu.Lock()
-	pendingLen := q.enqueueLocked(userID, cmd)
+	pendingLen, dropped := q.enqueueLocked(userID, cmd)
+	onDrop := q.onDrop
 	q.mu.Unlock()
 	q.signal.Broadcast()
+	notifyDroppedCommands(userID, onDrop, dropped)
 	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
 	return nil
 }
