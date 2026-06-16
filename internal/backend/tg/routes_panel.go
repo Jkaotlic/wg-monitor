@@ -51,11 +51,16 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 	if snap.HRNeo.Installed {
 		fmt.Fprintf(&b, "  • из них HR-Neo: %d\n", totalHR)
 	}
+	policyDNS := routePolicyDNSByTunnelID(snap)
 	b.WriteString("\nПо туннелям:\n")
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
 		visible := c.DNS + c.Static
-		fmt.Fprintf(&b, "  • %s (%s): %d правил\n", t.Name, t.Iface, visible)
+		fmt.Fprintf(&b, "  • %s (%s): %d правил", t.Name, t.Iface, visible)
+		if policyDNS[t.ID] > 0 {
+			fmt.Fprintf(&b, " (+%d HR-Neo policy)", policyDNS[t.ID])
+		}
+		b.WriteByte('\n')
 	}
 	if len(snap.Policies) > 0 {
 		b.WriteString("\nHR-Neo policies:\n")
@@ -77,6 +82,46 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 		}
 	}
 	return b.String()
+}
+
+func routePolicyDNSByTunnelID(snap wire.RouteSnapshot) map[string]int {
+	out := map[string]int{}
+	if len(snap.Policies) == 0 || len(snap.Tunnels) == 0 {
+		return out
+	}
+	byBind := map[string]string{}
+	byName := map[string]string{}
+	for _, t := range snap.Tunnels {
+		if bind := strings.TrimSpace(t.Iface); bind != "" {
+			byBind[strings.ToLower(bind)] = t.ID
+		}
+		if name := strings.TrimSpace(t.Name); name != "" {
+			byName[strings.ToLower(name)] = t.ID
+		}
+	}
+	for _, p := range snap.Policies {
+		if p.DNS == 0 {
+			continue
+		}
+		seen := map[string]bool{}
+		for _, iface := range p.Interfaces {
+			tid := ""
+			if bind := strings.TrimSpace(iface.Bind); bind != "" {
+				tid = byBind[strings.ToLower(bind)]
+			}
+			if tid == "" {
+				if name := strings.TrimSpace(iface.Name); name != "" {
+					tid = byName[strings.ToLower(name)]
+				}
+			}
+			if tid == "" || seen[tid] {
+				continue
+			}
+			seen[tid] = true
+			out[tid] += p.DNS
+		}
+	}
+	return out
 }
 
 func routePolicyChainLabel(ifaces []wire.RoutePolicyInterface) string {
@@ -123,9 +168,10 @@ func routePolicyRoleLabel(iface wire.RoutePolicyInterface) string {
 func RoutesPanelKeyboard(userID int64, snap wire.RouteSnapshot) InlineKeyboardMarkup {
 	rows := [][]InlineKeyboardButton{}
 	var row []InlineKeyboardButton
+	policyDNS := routePolicyDNSByTunnelID(snap)
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
-		if c.DNS+c.Static == 0 {
+		if c.DNS+c.Static+policyDNS[t.ID] == 0 {
 			continue
 		}
 		row = append(row, InlineKeyboardButton{
@@ -413,14 +459,18 @@ func RebindPreviewText(snap wire.RouteSnapshot, srcID, dstID, token string) stri
 		srcName = routeOtherSourceLabel(snap.Other)
 		c = snap.Other
 	}
-	visible := c.DNS + c.Static
+	policyDNS := 0
+	if srcID != wire.RouteOtherID {
+		policyDNS = routePolicyDNSByTunnelID(snap)[srcID]
+	}
+	visible := c.DNS + c.Static + policyDNS
 	var b strings.Builder
 	fmt.Fprintf(&b, "🛣 Превью: %s → %s\n\n", srcName, dst.Name)
 	fmt.Fprintf(&b, "Будет перенесено (%d):\n", visible)
-	if c.DNS > 0 {
-		fmt.Fprintf(&b, "  • DNS routes: %d", c.DNS)
-		if c.HRNeo > 0 {
-			fmt.Fprintf(&b, " (из них HR-Neo: %d)", c.HRNeo)
+	if c.DNS+policyDNS > 0 {
+		fmt.Fprintf(&b, "  • DNS routes: %d", c.DNS+policyDNS)
+		if c.HRNeo+policyDNS > 0 {
+			fmt.Fprintf(&b, " (из них HR-Neo: %d)", c.HRNeo+policyDNS)
 		}
 		b.WriteString("\n")
 	}
