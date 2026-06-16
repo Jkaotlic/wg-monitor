@@ -288,6 +288,17 @@ func TestAWGMTerminalMarkerUsesLastOccurrenceInEchoedChunk(t *testing.T) {
 	}
 }
 
+func TestAWGMTerminalMarkerRequiresExactZeroExitCode(t *testing.T) {
+	const marker = "__WG_MONITOR_DONE__"
+	done, err := awgmTerminalDoneFromChunk("real output\n"+marker+"01\n", marker)
+	if !done {
+		t.Fatal("expected marker to be found")
+	}
+	if err == nil || !strings.Contains(err.Error(), "bootstrap script failed: 01") {
+		t.Fatalf("error = %v, want rc=01 failure", err)
+	}
+}
+
 func TestNormalizeAWGMURLDefaultsToHTTPS(t *testing.T) {
 	if got := normalizeAWGMURL("awg.test.example/"); got != "https://awg.test.example" {
 		t.Fatalf("normalizeAWGMURL without scheme = %q", got)

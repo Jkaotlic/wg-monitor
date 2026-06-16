@@ -269,7 +269,8 @@ func applyAWGMWebsocketTLSConfig(cfg *websocket.Config) {
 func awgmTerminalDoneFromChunk(text, marker string) (bool, error) {
 	if i := strings.LastIndex(text, marker); i >= 0 {
 		rcText := strings.TrimSpace(text[i+len(marker):])
-		if rcText == "" || rcText[0] == '0' {
+		rcFields := strings.Fields(rcText)
+		if rcText == "" || len(rcFields) > 0 && rcFields[0] == "0" {
 			return true, nil
 		}
 		return true, fmt.Errorf("bootstrap script failed: %s", rcText)
