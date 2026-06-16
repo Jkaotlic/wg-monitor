@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // stepCheckSSH connects and reports OK/fail.
@@ -536,15 +538,20 @@ func readDeployedTelegramMeta(s *SSH) (chatID, adminUserID int64) {
 	if !ok {
 		return 0, 0
 	}
-	for _, raw := range strings.Split(out, "\n") {
-		line := strings.TrimSpace(raw)
-		if rest, ok := strings.CutPrefix(line, "chat_id:"); ok {
-			fmt.Sscanf(strings.TrimSpace(rest), "%d", &chatID)
-		} else if rest, ok := strings.CutPrefix(line, "admin_user_id:"); ok {
-			fmt.Sscanf(strings.TrimSpace(rest), "%d", &adminUserID)
-		}
+	return parseDeployedTelegramMeta(out)
+}
+
+func parseDeployedTelegramMeta(raw string) (chatID, adminUserID int64) {
+	var cfg struct {
+		Telegram struct {
+			ChatID      int64 `yaml:"chat_id"`
+			AdminUserID int64 `yaml:"admin_user_id"`
+		} `yaml:"telegram"`
 	}
-	return chatID, adminUserID
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		return 0, 0
+	}
+	return cfg.Telegram.ChatID, cfg.Telegram.AdminUserID
 }
 
 // stepDetectPrimaryMAC reads the MAC of the first non-loopback ethernet
