@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -620,6 +621,27 @@ func TestRunPullDeployMobileAckTimeoutReturnsPendingError(t *testing.T) {
 	}
 	if !pushed {
 		t.Fatal("pending state should still be pushed to VPS best-effort")
+	}
+}
+
+func TestDeployWithRetryDoesNotReplayTransportError(t *testing.T) {
+	attempts := 0
+	c := &VPSClient{
+		BaseURL: "https://wg.example.test",
+		Token:   "wizard-token",
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			attempts++
+			return nil, context.DeadlineExceeded
+		})},
+	}
+
+	_, err := deployWithRetry(c, "home", "v0.13.0-rc132")
+
+	if err == nil {
+		t.Fatal("deployWithRetry succeeded unexpectedly")
+	}
+	if attempts != 1 {
+		t.Fatalf("deploy transport error should not be replayed, attempts=%d", attempts)
 	}
 }
 

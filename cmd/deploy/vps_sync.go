@@ -361,7 +361,7 @@ func (c *VPSClient) Deploy(ctx context.Context, nickname, targetVersion string) 
 		return "", err
 	}
 	path := "/v1/wizard/agents/" + url.PathEscape(nickname) + "/deploy"
-	status, raw, err := c.doWizardAPI(ctx, http.MethodPost, path, body, "application/json", 0)
+	status, raw, err := c.doWizardHTTP(ctx, http.MethodPost, path, body, "application/json", 0)
 	if err != nil {
 		return "", err
 	}
