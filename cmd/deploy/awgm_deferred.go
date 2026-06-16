@@ -25,6 +25,7 @@ type deferredAWGMConfigParams struct {
 	BackendURL       string
 	WizardToken      string
 	Release          *Release
+	ExpectedSHA      string
 	ExpiresAt        time.Time
 	RecoveryHint     string
 }
@@ -39,6 +40,9 @@ func buildDeferredAWGMConfig(p deferredAWGMConfigParams) (awgmRelayConfig, error
 	backendURL := strings.TrimRight(strings.TrimSpace(p.BackendURL), "/")
 	if backendURL == "" || strings.TrimSpace(p.WizardToken) == "" {
 		return awgmRelayConfig{}, fmt.Errorf("backend URL and wizard token are required")
+	}
+	if strings.TrimSpace(p.ExpectedSHA) == "" {
+		return awgmRelayConfig{}, fmt.Errorf("expected sha required")
 	}
 	kind := strings.TrimSpace(p.Agent.Kind)
 	if kind == "" {
@@ -63,6 +67,7 @@ func buildDeferredAWGMConfig(p deferredAWGMConfigParams) (awgmRelayConfig, error
 		WizardToken:      p.WizardToken,
 		TargetVersion:    p.Release.TagName,
 		ReleaseBase:      backendURL + "/v1/releases/download",
+		ExpectedSHA:      strings.TrimSpace(p.ExpectedSHA),
 		InitScript:       strings.TrimRight(string(initScript), "\n"),
 		ExpiresAtUnix:    p.ExpiresAt.Unix(),
 		RecoveryHint:     p.RecoveryHint,
@@ -311,7 +316,7 @@ WantedBy=timers.target
 `
 }
 
-func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass, terminalUser, terminalPass string, rel *Release, wizardToken string) error {
+func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass, terminalUser, terminalPass string, rel *Release, wizardToken, expectedSHA string) error {
 	if state == nil || ag == nil || strings.TrimSpace(state.Backend.Host) == "" {
 		return fmt.Errorf("backend SSH host is not configured; install backend first")
 	}
@@ -328,6 +333,7 @@ func installDeferredAWGMDeployViaVPS(state *State, secrets *SecretStore, ag *Age
 		BackendURL:       backendURL,
 		WizardToken:      wizardToken,
 		Release:          rel,
+		ExpectedSHA:      expectedSHA,
 		ExpiresAt:        time.Now().UTC().Add(7 * 24 * time.Hour),
 		RecoveryHint:     deferredAWGMRecoveryHint(state, ag, tokenFile, tokenEnv),
 	})
@@ -399,7 +405,21 @@ func scheduleDeferredAWGMDeployIfWanted(state *State, secrets *SecretStore, dl *
 	if err != nil {
 		return true, fmt.Errorf("latest release for deferred deploy: %w", err)
 	}
-	if err := installDeferredAWGMDeployViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, rel, wizardToken); err != nil {
+	arch, err := normalizeKeeneticArch(ag.Arch)
+	if err != nil {
+		return true, err
+	}
+	assetName := "wg-monitor-agent-linux-" + arch
+	sums := rel.AssetByName("checksums.txt")
+	if sums == nil {
+		return true, fmt.Errorf("release %s has no checksums.txt", rel.TagName)
+	}
+	checksumURL := releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL)
+	expectedSHA, err := dl.fetchExpectedSha(checksumURL, assetName, rel.TagName)
+	if err != nil {
+		return true, fmt.Errorf("verify release checksums for %s: %w", assetName, err)
+	}
+	if err := installDeferredAWGMDeployViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, rel, wizardToken, expectedSHA); err != nil {
 		return true, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)

@@ -11,8 +11,8 @@ type AWGMBootstrapParams struct {
 	RawToken     string
 	Version      string
 	DownloadURL  string
-	ChecksumURL  string
 	ChecksumName string
+	ExpectedSHA  string
 	DeferStart   bool
 }
 
@@ -20,8 +20,8 @@ type awgmBootstrapTemplateParams struct {
 	NicknameQ     string
 	VersionQ      string
 	DownloadURLQ  string
-	ChecksumURLQ  string
 	ChecksumNameQ string
+	ExpectedSHAQ  string
 	AgentConfig   string
 	InitScript    string
 	StartBlock    string
@@ -31,8 +31,8 @@ func RenderAWGMBootstrapScript(p AWGMBootstrapParams) (string, error) {
 	if p.Nickname == "" || p.BackendURL == "" || p.RawToken == "" {
 		return "", fmt.Errorf("nickname, backend url, and raw token are required")
 	}
-	if p.DownloadURL == "" || p.ChecksumURL == "" || p.ChecksumName == "" {
-		return "", fmt.Errorf("download url, checksum url, and checksum name are required")
+	if p.DownloadURL == "" || p.ChecksumName == "" || p.ExpectedSHA == "" {
+		return "", fmt.Errorf("download url, checksum name, and expected sha are required")
 	}
 	agentYAML, err := RenderAgentYAML(AgentParams{
 		BackendURL: p.BackendURL,
@@ -50,8 +50,8 @@ func RenderAWGMBootstrapScript(p AWGMBootstrapParams) (string, error) {
 		NicknameQ:     shellQuote(p.Nickname),
 		VersionQ:      shellQuote(p.Version),
 		DownloadURLQ:  shellQuote(p.DownloadURL),
-		ChecksumURLQ:  shellQuote(p.ChecksumURL),
 		ChecksumNameQ: shellQuote(p.ChecksumName),
+		ExpectedSHAQ:  shellQuote(p.ExpectedSHA),
 		AgentConfig:   strings.TrimRight(string(agentYAML), "\n"),
 		InitScript:    strings.TrimRight(string(initScript), "\n"),
 		StartBlock:    awgmBootstrapStartBlock(!p.DeferStart),

@@ -7,7 +7,29 @@ on:
       - 'v*'
 
 jobs:
+  preflight:
+    name: release preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - run: go vet ./...
+      - run: go test ./... -count=1 -timeout 180s
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+      - run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - run: gosec -severity high -exclude=G101,G702,G703,G704 ./...
+      - run: go install github.com/anchore/grype/cmd/grype@latest
+      - run: grype dir:. --fail-on high
+
   build:
+    needs: preflight
     strategy:
       matrix:
         include:
@@ -75,7 +97,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [preflight, build]
     runs-on: ubuntu-latest
     permissions:
       contents: write

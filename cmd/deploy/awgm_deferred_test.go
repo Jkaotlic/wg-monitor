@@ -27,6 +27,7 @@ func TestBuildDeferredAWGMConfigDefersEnrollmentUntilWake(t *testing.T) {
 		BackendURL:       "https://wg.example.test",
 		WizardToken:      "wizard-token",
 		Release:          rel,
+		ExpectedSHA:      strings.Repeat("d", 64),
 		ExpiresAt:        time.Unix(2000, 0).UTC(),
 	})
 	if err != nil {
@@ -47,6 +48,9 @@ func TestBuildDeferredAWGMConfigDefersEnrollmentUntilWake(t *testing.T) {
 	if cfg.ReleaseBase != "https://wg.example.test/v1/releases/download" {
 		t.Fatalf("ReleaseBase=%q", cfg.ReleaseBase)
 	}
+	if cfg.ExpectedSHA != strings.Repeat("d", 64) {
+		t.Fatalf("ExpectedSHA=%q", cfg.ExpectedSHA)
+	}
 }
 
 func TestBuildDeferredAWGMConfigCarriesRecoveryHint(t *testing.T) {
@@ -59,6 +63,7 @@ func TestBuildDeferredAWGMConfigCarriesRecoveryHint(t *testing.T) {
 		BackendURL:   "https://wg.example.test",
 		WizardToken:  "wizard-token",
 		Release:      &Release{TagName: "v0.13.0-rc60"},
+		ExpectedSHA:  strings.Repeat("f", 64),
 		ExpiresAt:    time.Unix(2000, 0).UTC(),
 		RecoveryHint: "PowerShell: ssh ... | Add-Content ...\nThen: wg-monitor-deploy doctor",
 	})
@@ -174,7 +179,7 @@ func TestScheduleDeferredAWGMDeploySupportsExistingAgentReenroll(t *testing.T) {
 	defer func() { installDeferredAWGMDeployViaVPSFunc = oldInstall }()
 
 	called := false
-	installDeferredAWGMDeployViaVPSFunc = func(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass, terminalUser, terminalPass string, rel *Release, wizardToken string) error {
+	installDeferredAWGMDeployViaVPSFunc = func(state *State, secrets *SecretStore, ag *AgentState, apiKey, login, pass, terminalUser, terminalPass string, rel *Release, wizardToken, expectedSHA string) error {
 		called = true
 		if ag.Nickname != "client-b" || ag.LastDeployedVersion != "v0.13.0-rc14" {
 			t.Fatalf("existing agent identity lost: %+v", ag)
@@ -185,13 +190,25 @@ func TestScheduleDeferredAWGMDeploySupportsExistingAgentReenroll(t *testing.T) {
 		if wizardToken != "wizard-token" {
 			t.Fatalf("wizardToken=%q", wizardToken)
 		}
+		if expectedSHA != strings.Repeat("e", 64) {
+			t.Fatalf("expectedSHA=%q", expectedSHA)
+		}
 		return nil
 	}
 
+	base := ""
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`[{"tag_name":"v0.13.0-rc37"}]`))
+		switch r.URL.Path {
+		case "/repos/Jkaotlic/wg-monitor/releases":
+			_, _ = w.Write([]byte(`[{"tag_name":"v0.13.0-rc37","assets":[{"name":"checksums.txt","browser_download_url":"` + base + `/checksums.txt"}]}]`))
+		case "/checksums.txt", "/v1/releases/download/v0.13.0-rc37/checksums.txt":
+			_, _ = w.Write([]byte(strings.Repeat("e", 64) + "  wg-monitor-agent-linux-arm64\n"))
+		default:
+			http.NotFound(w, r)
+		}
 	}))
 	defer srv.Close()
+	base = srv.URL
 
 	oldAPI := GitHubAPIBase
 	GitHubAPIBase = srv.URL
@@ -199,12 +216,13 @@ func TestScheduleDeferredAWGMDeploySupportsExistingAgentReenroll(t *testing.T) {
 
 	state := &State{Backend: BackendState{
 		Host:   "198.51.100.10",
-		Domain: "wg.example.test",
+		Domain: base,
 	}}
 	ag := &AgentState{
 		Nickname:            "client-b",
 		Kind:                "static",
 		AWGMURL:             "https://awg.client-b.example.test",
+		Arch:                "arm64",
 		LastDeployedVersion: "v0.13.0-rc14",
 	}
 	t.Setenv("WG_YES_TO_ALL", "1")
@@ -325,6 +343,7 @@ success = write_job("success.json", {
     "kind": "static",
     "target_version": "v0.13.0-rc57",
     "release_base": "https://wg.example.test/v1/releases/download",
+    "expected_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "expires_at_unix": int(time.time()) + 3600,
     "wizard_token": "secret-token",
     "init_script": "#!/bin/sh\nexit 0",
@@ -377,6 +396,7 @@ with open(job_path, "w", encoding="utf-8") as f:
         "target_version": "v0.13.0-rc60",
         "backend_url": "https://wg.example.test",
         "release_base": "https://wg.example.test/v1/releases/download",
+        "expected_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         "expires_at_unix": int(time.time()) + 3600,
         "wizard_token": "secret-token",
         "terminal_user": "root",
@@ -513,6 +533,7 @@ with open(job_path, "w", encoding="utf-8") as f:
         "target_version": "v0.13.0-rc60",
         "backend_url": "https://wg.example.test",
         "release_base": "https://wg.example.test/v1/releases/download",
+        "expected_sha": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         "expires_at_unix": int(time.time()) + 3600,
         "wizard_token": "secret-token",
         "terminal_user": "root",

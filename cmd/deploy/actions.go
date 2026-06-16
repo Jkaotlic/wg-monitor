@@ -1164,14 +1164,19 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 		if sums == nil {
 			return fmt.Errorf("release %s has no checksums.txt", rel.TagName)
 		}
+		checksumURL := releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL)
+		expectedSHA, err := dl.fetchExpectedSha(checksumURL, assetName, rel.TagName)
+		if err != nil {
+			return fmt.Errorf("verify release checksums for %s: %w", assetName, err)
+		}
 		script, err := RenderAWGMBootstrapScript(AWGMBootstrapParams{
 			Nickname:     ag.Nickname,
 			BackendURL:   backendURL,
 			RawToken:     rawToken,
 			Version:      rel.TagName,
 			DownloadURL:  releaseAssetURLForRouter(state, rel.TagName, assetName, asset.DownloadURL),
-			ChecksumURL:  releaseAssetURLForRouter(state, rel.TagName, "checksums.txt", sums.DownloadURL),
 			ChecksumName: assetName,
+			ExpectedSHA:  expectedSHA,
 			DeferStart:   commitToken != nil,
 		})
 		if err != nil {
