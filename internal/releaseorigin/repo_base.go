@@ -11,6 +11,7 @@ import (
 const (
 	DefaultGitHubReleaseBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
 	DefaultBackendMirrorBase = "https://wgmonitor.example.com/v1/releases/download"
+	BackendMirrorPath        = "/v1/releases/download"
 )
 
 var releaseTagRE = regexp.MustCompile(`^v[0-9][0-9A-Za-z._-]*$`)
@@ -27,23 +28,56 @@ func ValidateReleaseTag(raw string) (string, error) {
 }
 
 // ValidateRepoBase normalizes repo_base and requires an exact match against a
-// compile-time allowlist. Callers may pass a test-only allowlist, but
-// production should use only the canonical GitHub origin and backend mirror.
+// compile-time allowlist. Callers may pass a test-only allowlist.
 func ValidateRepoBase(raw string, allowedBases []string) (string, error) {
 	base, err := normalizeRepoBase(raw)
 	if err != nil {
 		return "", err
 	}
+	if repoBaseAllowed(base, allowedBases) {
+		return base, nil
+	}
+	return "", fmt.Errorf("repo_base %q is not an allowed release origin", raw)
+}
+
+// ValidateRepoBaseForBackendURL additionally permits the release mirror served
+// by the trusted backend origin that delivered the command/update request.
+func ValidateRepoBaseForBackendURL(raw string, allowedBases []string, backendURL string) (string, error) {
+	base, err := normalizeRepoBase(raw)
+	if err != nil {
+		return "", err
+	}
+	if repoBaseAllowed(base, allowedBases) {
+		return base, nil
+	}
+	if mirror, err := BackendMirrorBaseForBackendURL(backendURL); err == nil && base == mirror {
+		return base, nil
+	}
+	return "", fmt.Errorf("repo_base %q is not an allowed release origin", raw)
+}
+
+// BackendMirrorBaseForBackendURL derives the release mirror repo_base from a
+// trusted backend origin. Any path on backendURL is ignored because backend
+// routes are served from the origin root.
+func BackendMirrorBaseForBackendURL(raw string) (string, error) {
+	origin, err := normalizeBackendOrigin(raw)
+	if err != nil {
+		return "", err
+	}
+	return origin + BackendMirrorPath, nil
+}
+
+func repoBaseAllowed(base string, allowedBases []string) bool {
 	for _, allowed := range allowedBases {
 		normalized, err := normalizeRepoBase(allowed)
 		if err != nil {
 			continue
 		}
 		if base == normalized {
-			return base, nil
+			return true
 		}
 	}
-	return "", fmt.Errorf("repo_base %q is not an allowed release origin", raw)
+	return false
 }
 
 func normalizeRepoBase(raw string) (string, error) {
@@ -72,6 +106,37 @@ func normalizeRepoBase(raw string) (string, error) {
 	u.Host = strings.ToLower(u.Host)
 	u.Path = strings.TrimRight(u.Path, "/")
 	return u.String(), nil
+}
+
+func normalizeBackendOrigin(raw string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(raw), "/")
+	if base == "" {
+		return "", fmt.Errorf("backend URL is required")
+	}
+	u, err := url.Parse(base)
+	if err != nil || !u.IsAbs() || u.Host == "" {
+		return "", fmt.Errorf("backend URL %q is not an absolute URL", raw)
+	}
+	if u.Scheme != "https" {
+		return "", fmt.Errorf("backend URL %q must use https", raw)
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+		return "", fmt.Errorf("backend URL %q must not include credentials, query, or fragment", raw)
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" {
+		return "", fmt.Errorf("backend URL %q must not use localhost", raw)
+	}
+	if ip := net.ParseIP(host); ip != nil && privateOrLoopbackIP(ip) {
+		return "", fmt.Errorf("backend URL %q must not use a private or loopback IP", raw)
+	}
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Path = ""
+	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
+	return strings.TrimRight(u.String(), "/"), nil
 }
 
 func privateOrLoopbackIP(ip net.IP) bool {

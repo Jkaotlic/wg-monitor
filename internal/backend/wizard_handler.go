@@ -507,10 +507,11 @@ type wizardDeployResp struct {
 }
 
 type backendUpdateRequest struct {
-	TargetVersion string `json:"target_version"`
-	RepoBase      string `json:"repo_base"`
-	RepoResolveIP string `json:"repo_resolve_ip,omitempty"`
-	RequestedAt   string `json:"requested_at"`
+	TargetVersion     string `json:"target_version"`
+	RepoBase          string `json:"repo_base"`
+	RepoResolveIP     string `json:"repo_resolve_ip,omitempty"`
+	TrustedBackendURL string `json:"trusted_backend_url,omitempty"`
+	RequestedAt       string `json:"requested_at"`
 }
 
 type wizardCommandReq struct {
@@ -676,6 +677,7 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 		}
 		req.RepoBase = repoBaseURL + "/v1/releases/download"
 		req.RepoResolveIP = wizardRepoResolveIP(r)
+		req.TrustedBackendURL = repoBaseURL
 		req.RequestedAt = time.Now().UTC().Format(time.RFC3339)
 		if err := writeBackendUpdateRequest(d.BackendUpdatePath, req); err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
