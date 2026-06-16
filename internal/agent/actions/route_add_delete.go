@@ -74,10 +74,11 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 		return "", fmt.Errorf("route_add: unknown kind %q", req.Kind)
 	}
 	hrRestarted, refreshErr := refreshRoutingAndMaybeHR(ctx, c, hrTouched)
+	warning := ""
 	if refreshErr != nil {
-		return "", refreshErr
+		warning = "route_add applied, but post-change refresh failed: " + refreshErr.Error()
 	}
-	res := wire.RouteApplyResult{Action: "add", Kind: req.Kind, RouteID: routeID, RouteName: req.Name, HRNeoRestarted: hrRestarted}
+	res := wire.RouteApplyResult{Action: "add", Kind: req.Kind, RouteID: routeID, RouteName: req.Name, HRNeoRestarted: hrRestarted, Warning: warning}
 	b, err := json.Marshal(res)
 	if err != nil {
 		return "", err
@@ -157,10 +158,11 @@ func RouteDeleteJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteDelete
 		return "", fmt.Errorf("route_delete: unknown kind %q", req.Kind)
 	}
 	hrRestarted, refreshErr := refreshRoutingAndMaybeHR(ctx, c, hrTouched)
+	warning := ""
 	if refreshErr != nil {
-		return "", refreshErr
+		warning = "route_delete applied, but post-change refresh failed: " + refreshErr.Error()
 	}
-	res := wire.RouteApplyResult{Action: "delete", Kind: req.Kind, RouteID: plan.Route.ID, RouteName: plan.Route.Name, HRNeoRestarted: hrRestarted}
+	res := wire.RouteApplyResult{Action: "delete", Kind: req.Kind, RouteID: plan.Route.ID, RouteName: plan.Route.Name, HRNeoRestarted: hrRestarted, Warning: warning}
 	b, err := json.Marshal(res)
 	if err != nil {
 		return "", err

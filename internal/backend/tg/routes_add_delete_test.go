@@ -178,18 +178,23 @@ func TestRouteApplyResultText(t *testing.T) {
 		RouteID        string
 		RouteName      string
 		HRNeoRestarted bool
+		Warning        string
 	}{
 		Action:         "add",
 		Kind:           "dns",
 		RouteID:        "r1",
 		RouteName:      "media",
 		HRNeoRestarted: true,
+		Warning:        "route_add applied, but post-change refresh failed: refresh failed",
 	}
 	text := RouteApplyResultText(res)
 	for _, want := range []string{"Маршрут добавлен", "Тип: dns", "Название: media", "ID: r1", "HR-Neo перезапущен"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing %q in:\n%s", want, text)
 		}
+	}
+	if !strings.Contains(text, "Предупреждение: route_add applied") {
+		t.Fatalf("missing warning in:\n%s", text)
 	}
 }
 

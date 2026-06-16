@@ -56,6 +56,85 @@ func TestRouteAddJSON_CanTargetNDMSRoutingTunnel(t *testing.T) {
 	}
 }
 
+func TestRouteAddJSON_ReturnsWarningWhenPostCreateRefreshFails(t *testing.T) {
+	var created bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"wan-eth3","name":"ISP","iface":"eth3","type":"wan","status":"up","available":true}]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/create", func(w http.ResponseWriter, r *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	refreshCalls := 0
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		refreshCalls++
+		if refreshCalls == 1 {
+			_, _ = w.Write([]byte(`{"success":true}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":false,"message":"refresh failed"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteAddJSON(context.Background(), awgmgr.New(srv.URL), wire.RouteAddRequest{Kind: "dns", Name: "ru", TunnelID: "eth3", Targets: []string{"gosuslugi.ru"}})
+	if err != nil {
+		t.Fatalf("RouteAddJSON should return partial result after mutation, got err=%v", err)
+	}
+	if !created {
+		t.Fatal("route was not created")
+	}
+	var res wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != "add" || res.Warning == "" {
+		t.Fatalf("missing partial add warning: %+v", res)
+	}
+}
+
+func TestRouteDeleteJSON_ReturnsWarningWhenPostDeleteRefreshFails(t *testing.T) {
+	var deleted bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"dns1","name":"YouTube","domains":["youtube.com"],"manualDomains":["youtube.com"],"enabled":true,"backend":"ndms","routes":[{"interface":"nwg5","tunnelId":"Wireguard3"}]}]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/delete", func(w http.ResponseWriter, r *http.Request) {
+		deleted = true
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":false,"message":"refresh failed"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteDeleteJSON(context.Background(), awgmgr.New(srv.URL), wire.RouteDeleteRequest{Kind: "dns", RouteID: "dns1"})
+	if err != nil {
+		t.Fatalf("RouteDeleteJSON should return partial result after mutation, got err=%v", err)
+	}
+	if !deleted {
+		t.Fatal("route was not deleted")
+	}
+	var res wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Action != "delete" || res.Warning == "" {
+		t.Fatalf("missing partial delete warning: %+v", res)
+	}
+}
+
 func TestRouteAddJSON_CanApplyAWGManagerPreset(t *testing.T) {
 	var created awgmgr.DNSRoute
 	mux := http.NewServeMux()
