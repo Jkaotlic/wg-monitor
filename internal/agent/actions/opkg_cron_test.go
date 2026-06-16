@@ -120,6 +120,17 @@ func TestOpkgCronStatusReadsManagedCrontabAndLogTail(t *testing.T) {
 	}
 }
 
+func TestOpkgCronDfOptRejectsNonNumericFields(t *testing.T) {
+	m := newTestOpkgCronManager(t)
+	m.Exec = fakeOpkgCronExec(map[string]fakeExecResult{
+		"df -k /opt": {out: "Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 nope 100000 also-nope 60% /opt\n"},
+	})
+
+	if _, _, err := m.dfOpt(context.Background()); err == nil {
+		t.Fatal("dfOpt should reject non-numeric total/free fields")
+	}
+}
+
 func TestOpkgCronRemoveDropsManagedCrontabAndFiles(t *testing.T) {
 	m := newTestOpkgCronManager(t)
 	if err := os.MkdirAll(filepath.Dir(m.ScriptPath), 0o755); err != nil {
