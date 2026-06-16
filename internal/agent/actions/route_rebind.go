@@ -15,9 +15,10 @@ import (
 // dst's iface. WAN/system rules are preserved during normal tunnel-to-tunnel
 // moves, and are moved only when srcID is wire.RouteOtherID.
 //
-// Fall-through DNS rules (routes==null) with backend="hydraroute" are
-// converted to explicit routes pointing at dst when src is the default-route
-// managed tunnel. This matches the awg-manager UI's own behaviour.
+// Fall-through HR-Neo DNS policy rules (routes==null, backend="hydraroute")
+// stay policy-backed and are rebound by hrPolicyInterfaces. Legacy rules
+// without hrPolicyInterfaces are attached to dst when src is the default-route
+// managed tunnel.
 func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (string, error) {
 	res := wire.RouteRebindResult{SrcTunnelID: srcID, DstTunnelID: dstID}
 	if srcID == dstID {
@@ -118,8 +119,8 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 }
 
 // rebindDNS walks all DNS rules, swaps explicit routes from src to dst, and
-// (when src is the default-route managed tunnel) converts hydraroute
-// fall-through rules to explicit routes pointing at dst.
+// (when src is the default-route managed tunnel) attaches HR-Neo fall-through
+// policy rules to dst via hrPolicyInterfaces.
 //
 // Returns: total category result, the HRNeo sub-count (subset of total),
 // and whether any hydraroute rule was actually written.
@@ -131,7 +132,8 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 		return
 	}
 	for _, r := range all {
-		isHR := r.Backend == "hydraroute"
+		isHR := isHydraRouteBackend(r)
+		updated := r
 		newRoutes, didChange := rewriteRoutes(r.Routes, srcAliases, dstIface)
 		if !didChange && srcIsOther {
 			newRoutes, didChange = rewriteOtherRoutes(r.Routes, dstIface, knownIfaces)
@@ -140,16 +142,16 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 			newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
 			didChange = true
 		}
-		if !didChange {
-			if isMovableHRNeoFallthrough(r) && srcIsDefaultRoute && hrNeoPolicyFallthroughMatchesSource(r, srcAliases) {
-				newRoutes = []awgmgr.DNSRouteEntry{{Interface: dstIface, TunnelID: dstIface, Fallback: "auto"}}
+		if !didChange && !srcIsOther {
+			if newPolicyIfaces, changed := rebindHRNeoPolicyInterfaces(r, srcAliases, dstIface, srcIsDefaultRoute); changed {
+				updated.HRPolicyInterfaces = newPolicyIfaces
+				ensureHRNeoPolicyDefaults(&updated)
 				didChange = true
 			}
 		}
 		if !didChange {
 			continue
 		}
-		updated := r
 		updated.Routes = newRoutes
 		if err := c.UpdateDNSRoute(ctx, updated); err != nil {
 			total.Failed++
@@ -169,22 +171,58 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 }
 
 func isMovableHRNeoFallthrough(r awgmgr.DNSRoute) bool {
-	if r.Routes != nil || r.Backend != "hydraroute" || strings.TrimSpace(r.HRPolicyName) == "" {
+	if r.Routes != nil || !isHydraRouteBackend(r) || strings.TrimSpace(r.HRPolicyName) == "" {
 		return false
 	}
 	return !isDirectProviderHRNeoPolicy(r)
 }
 
-func hrNeoPolicyFallthroughMatchesSource(r awgmgr.DNSRoute, srcAliases map[string]bool) bool {
+func isHydraRouteBackend(r awgmgr.DNSRoute) bool {
+	return strings.EqualFold(strings.TrimSpace(r.Backend), "hydraroute")
+}
+
+func rebindHRNeoPolicyInterfaces(r awgmgr.DNSRoute, srcAliases map[string]bool, dstIface string, srcIsDefaultRoute bool) ([]string, bool) {
+	if !isMovableHRNeoFallthrough(r) {
+		return nil, false
+	}
 	if len(r.HRPolicyInterfaces) == 0 {
-		return true
-	}
-	for _, bind := range r.HRPolicyInterfaces {
-		if routeBindMatches(bind, srcAliases) {
-			return true
+		if !srcIsDefaultRoute {
+			return nil, false
 		}
+		return []string{dstIface}, true
 	}
-	return false
+	out := make([]string, 0, len(r.HRPolicyInterfaces))
+	seen := map[string]bool{}
+	changed := false
+	for _, bind := range r.HRPolicyInterfaces {
+		bind = strings.TrimSpace(bind)
+		if bind == "" {
+			continue
+		}
+		if routeBindMatches(bind, srcAliases) {
+			bind = dstIface
+			changed = true
+		}
+		key := strings.ToLower(bind)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, bind)
+	}
+	if !changed {
+		return nil, false
+	}
+	return out, true
+}
+
+func ensureHRNeoPolicyDefaults(r *awgmgr.DNSRoute) {
+	if strings.TrimSpace(r.HRPolicyName) == "" {
+		r.HRPolicyName = defaultHydraRoutePolicyName
+	}
+	if strings.TrimSpace(r.HRRouteMode) == "" {
+		r.HRRouteMode = "policy"
+	}
 }
 
 func isDirectProviderHRNeoPolicy(r awgmgr.DNSRoute) bool {

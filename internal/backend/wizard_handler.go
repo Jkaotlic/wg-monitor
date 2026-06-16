@@ -479,6 +479,10 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		req.Arch = arch
+		if err := validateDashboardAWGMURL(req.AWGMURL); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_awgm_url", err.Error())
+			return
+		}
 		err = d.DB.Users().UpdateDeployInfo(nickname, db.DeployInfo{
 			Kind:                req.Kind,
 			ThreadID:            req.ThreadID,

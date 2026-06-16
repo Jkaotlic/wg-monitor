@@ -149,7 +149,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		})
 	}
 	for _, r := range dns {
-		isHR := r.Backend == "hydraroute"
+		isHR := isHydraRouteBackend(r)
 		ruleBind := ""
 		if r.Enabled {
 			if len(r.Routes) > 0 {

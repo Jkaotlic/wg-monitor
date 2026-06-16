@@ -445,6 +445,31 @@ func TestDashboardSummaryIncludesFleetCounts(t *testing.T) {
 	}
 }
 
+func TestDashboardSummaryOmitsUnsafeStoredAWGMURL(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("alyaba", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateDeployInfo("alyaba", db.DeployInfo{AWGMURL: "javascript:alert(1)"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := buildDashboardSummary(d, time.Now().UTC(), dashboardStatusPolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents) != 1 {
+		t.Fatalf("agents len=%d", len(got.Agents))
+	}
+	if got.Agents[0].AWGMURL != "" {
+		t.Fatalf("unsafe awgm_url leaked into dashboard summary: %q", got.Agents[0].AWGMURL)
+	}
+}
+
 func TestDashboardSummaryMarksStaleAgentsNotOnline(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {

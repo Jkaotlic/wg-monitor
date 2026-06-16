@@ -3,6 +3,7 @@ package awgmgr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -256,5 +257,53 @@ func TestClient_UsesSessionCookieWhenCredentialsConfigured(t *testing.T) {
 	}
 	if loginHits != 1 {
 		t.Fatalf("session should be reused, login hits=%d", loginHits)
+	}
+}
+
+func TestClient_RelogsInWhenSessionExpires(t *testing.T) {
+	var loginHits int
+	var tunnelHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginHits++
+			http.SetCookie(w, &http.Cookie{Name: "awg_session", Value: fmt.Sprintf("session-%d", loginHits), Path: "/"})
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		case "/api/tunnels/all":
+			tunnelHits++
+			ck, err := r.Cookie("awg_session")
+			if err != nil {
+				t.Fatalf("missing session cookie: %v", err)
+			}
+			switch {
+			case tunnelHits == 1 && ck.Value == "session-1":
+				_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+			case tunnelHits == 2 && ck.Value == "session-1":
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`expired`))
+			case tunnelHits == 3 && ck.Value == "session-2":
+				_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+			default:
+				t.Fatalf("unexpected tunnel request hit=%d cookie=%q", tunnelHits, ck.Value)
+			}
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	c.SetCredentials("admin", "secret")
+	if _, err := c.TunnelsAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.TunnelsAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if loginHits != 2 {
+		t.Fatalf("login hits: got %d want 2", loginHits)
+	}
+	if tunnelHits != 3 {
+		t.Fatalf("tunnel hits: got %d want 3", tunnelHits)
 	}
 }

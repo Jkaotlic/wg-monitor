@@ -38,7 +38,7 @@ func buildHRNeoInventory(hr *awgmgr.HydraRouteStatus, dns []awgmgr.DNSRoute) wir
 		inv.Status = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
 	}
 	for _, route := range dns {
-		if route.Backend != "hydraroute" {
+		if !isHydraRouteBackend(route) {
 			continue
 		}
 		rule := wire.HRNeoRule{

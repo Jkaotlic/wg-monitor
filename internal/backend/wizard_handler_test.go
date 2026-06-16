@@ -426,6 +426,37 @@ func TestWizardPut_RejectsUnsupportedArch(t *testing.T) {
 	}
 }
 
+func TestWizardPut_RejectsUnsafeAWGMURL(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("alyaba", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	h := wizardPutAgentHandler(Deps{DB: d})
+	body := `{"awgm_url":"javascript:alert(1)"}`
+	req := httptest.NewRequest("PUT", "/v1/wizard/agents/alyaba", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "alyaba")
+	rec := httptest.NewRecorder()
+
+	h(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	u, err := d.Users().GetByNickname("alyaba")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.AWGMURL != nil {
+		t.Fatalf("unsafe awgm_url must not be persisted: %+v", u)
+	}
+}
+
 // Version and pending metadata must sync even when an AWGM-only router has no
 // usable direct SSH coordinates in wizard.toml.
 func TestWizardPut_204AllowsVersionSyncWithMissingSSHFields(t *testing.T) {

@@ -95,7 +95,7 @@ func normalizeRepoBase(raw string) (string, error) {
 	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return "", fmt.Errorf("repo_base %q must not include credentials, query, or fragment", raw)
 	}
-	host := strings.ToLower(u.Hostname())
+	host := normalizeURLHostname(u.Hostname())
 	if host == "localhost" {
 		return "", fmt.Errorf("repo_base %q must not use localhost", raw)
 	}
@@ -123,7 +123,7 @@ func normalizeBackendOrigin(raw string) (string, error) {
 	if u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return "", fmt.Errorf("backend URL %q must not include credentials, query, or fragment", raw)
 	}
-	host := strings.ToLower(u.Hostname())
+	host := normalizeURLHostname(u.Hostname())
 	if host == "localhost" {
 		return "", fmt.Errorf("backend URL %q must not use localhost", raw)
 	}
@@ -141,4 +141,8 @@ func normalizeBackendOrigin(raw string) (string, error) {
 
 func privateOrLoopbackIP(ip net.IP) bool {
 	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+func normalizeURLHostname(host string) string {
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(host)), ".")
 }
