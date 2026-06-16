@@ -228,6 +228,31 @@ func TestBuildUpdateTargetsCarriesMobileRolloutMetadata(t *testing.T) {
 	}
 }
 
+func TestBuildUpdateTargetsDoesNotFlagDowngrade(t *testing.T) {
+	state := &State{
+		Backend: BackendState{
+			Host:                "vps.example.test",
+			LastDeployedVersion: "v0.13.0-rc132",
+		},
+		Agents: []AgentState{{
+			Nickname:            "testkeen",
+			Host:                "192.0.2.10",
+			LastDeployedVersion: "v0.13.0-rc132",
+		}},
+	}
+
+	targets := buildUpdateTargets(state, "v0.13.0-rc131")
+
+	if len(targets) != 2 {
+		t.Fatalf("targets=%d, want 2", len(targets))
+	}
+	for _, target := range targets {
+		if target.NeedsUpdate {
+			t.Fatalf("%s should not be marked for downgrade: %+v", target.Label, target)
+		}
+	}
+}
+
 func TestBuildUpdateTargetsUsesReadableEndpointMetadata(t *testing.T) {
 	state := &State{Agents: []AgentState{
 		{

@@ -113,6 +113,29 @@ func TestPingCheckToggle_PrimaryFailsFallbackOK(t *testing.T) {
 	}
 }
 
+func TestPingCheckToggle_PrimarySuccessFalseFallsBack(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":false,"message":"denied"}`))
+	}))
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+	var ndmcCalled bool
+	exec := ExecFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		ndmcCalled = true
+		return []byte("ok"), nil
+	})
+
+	err := PingCheckToggle(context.Background(), c, exec, "awg10", "Wireguard0", true)
+
+	if err != nil {
+		t.Fatalf("expected ndmc fallback to recover, got %v", err)
+	}
+	if !ndmcCalled {
+		t.Fatal("expected ndmc fallback after success=false envelope")
+	}
+}
+
 func TestPingCheckToggle_BothFail(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(500)

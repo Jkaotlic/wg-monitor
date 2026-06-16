@@ -131,6 +131,28 @@ func TestCreateDNSRoute_SendsCreateBody(t *testing.T) {
 	}
 }
 
+func TestCreateDNSRouteRejectsSuccessFalseEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns-routes/create" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":false,"message":"denied"}`))
+	}))
+	defer srv.Close()
+	c := New(srv.URL)
+	rule := DNSRoute{Name: "Telegram"}
+
+	err := c.CreateDNSRoute(context.Background(), rule)
+
+	if err == nil {
+		t.Fatal("expected success=false envelope to fail")
+	}
+	if !strings.Contains(err.Error(), "success=false") || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("error = %v, want success=false with message", err)
+	}
+}
+
 func TestDeleteDNSRoute_EscapesIDInQuery(t *testing.T) {
 	var gotRawQuery, gotDecodedID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

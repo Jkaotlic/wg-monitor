@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
 )
@@ -103,6 +104,17 @@ func primaryPingCheckToggle(ctx context.Context, c *awgmgr.Client, tunnelID stri
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("HTTP_%d: %s", resp.StatusCode, string(body))
+	}
+	var env struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &env); err == nil && env.Success != nil && !*env.Success {
+		msg := strings.TrimSpace(env.Message)
+		if msg == "" {
+			msg = string(body)
+		}
+		return fmt.Errorf("HTTP_SUCCESS_FALSE: %s", msg)
 	}
 	return nil
 }

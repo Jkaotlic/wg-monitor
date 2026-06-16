@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -166,12 +167,41 @@ func (c *Client) post(ctx context.Context, path string, body io.Reader, out any)
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(rbody))
 	}
+	if err := rejectFailureEnvelope(path, rbody); err != nil {
+		return err
+	}
 	if out != nil && len(rbody) > 0 {
 		if err := json.Unmarshal(rbody, out); err != nil {
 			return fmt.Errorf("awgmgr %s: decode: %w", path, err)
 		}
 	}
 	return nil
+}
+
+func rejectFailureEnvelope(path string, body []byte) error {
+	if len(body) == 0 {
+		return nil
+	}
+	var env struct {
+		Success *bool  `json:"success"`
+		Message string `json:"message"`
+		Error   any    `json:"error"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil || env.Success == nil || *env.Success {
+		return nil
+	}
+	detail := strings.TrimSpace(env.Message)
+	if detail == "" && env.Code != "" {
+		detail = strings.TrimSpace(env.Code)
+	}
+	if detail == "" && env.Error != nil {
+		detail = fmt.Sprintf("%v", env.Error)
+	}
+	if detail == "" {
+		detail = snippet(body)
+	}
+	return fmt.Errorf("awgmgr %s: success=false: %s", path, detail)
 }
 
 func snippet(b []byte) string {

@@ -175,7 +175,7 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 			InstalledVersion: state.Backend.LastDeployedVersion,
 			LatestVersion:    latest,
 			LastDeploy:       state.Backend.LastDeploy,
-			NeedsUpdate:      state.Backend.LastDeployedVersion != latest,
+			NeedsUpdate:      releaseUpdateAvailable(state.Backend.LastDeployedVersion, latest),
 		})
 	}
 	for _, a := range state.Agents {
@@ -197,11 +197,23 @@ func buildUpdateTargets(state *State, latest string) []updateTarget {
 			PendingVersion:      a.PendingVersion,
 			PendingSince:        a.PendingSince,
 			PendingCurrent:      pendingCurrent,
-			NeedsUpdate:         a.LastDeployedVersion != latest && !pendingCurrent && blockedReason == "",
+			NeedsUpdate:         releaseUpdateAvailable(a.LastDeployedVersion, latest) && !pendingCurrent && blockedReason == "",
 			UpdateBlockedReason: blockedReason,
 		})
 	}
 	return out
+}
+
+func releaseUpdateAvailable(installed, latest string) bool {
+	installed = strings.TrimSpace(installed)
+	latest = strings.TrimSpace(latest)
+	if latest == "" {
+		return false
+	}
+	if installed == "" {
+		return true
+	}
+	return compareReleaseTags(latest, installed) > 0
 }
 
 func agentUpdateBlockedReason(a AgentState) string {
