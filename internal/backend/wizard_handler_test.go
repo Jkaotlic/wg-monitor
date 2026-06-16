@@ -515,6 +515,38 @@ func TestWizardDeployUsesBackendReleaseMirror(t *testing.T) {
 	}
 }
 
+func TestWizardDeployRejectsAnyAlreadyPendingDeploy(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(userID, "v0.13.0-rc18", "2026-06-10T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc18"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("pending deploy replay should not enqueue another command: %+v", sink.enqueued)
+	}
+}
+
 func TestWizardDeployRejectsTrailingJSON(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)

@@ -943,21 +943,13 @@ func pullDeployMobileReadinessWarningFromAgents(agents []RemoteAgent, t updateTa
 }
 
 func deployWithRetry(c *VPSClient, nickname, version string) (string, error) {
-	var last error
-	for attempt := 1; attempt <= 3; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		cmdID, err := c.Deploy(ctx, nickname, version)
-		cancel()
-		if err == nil {
-			return cmdID, nil
-		}
-		last = err
-		if attempt < 3 {
-			PrintWarn(fmt.Sprintf("enqueue deploy timeout/error, retry %d/3 через 2s: %v", attempt+1, err))
-			time.Sleep(2 * time.Second)
-		}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	cmdID, err := c.Deploy(ctx, nickname, version)
+	if err != nil {
+		return "", err
 	}
-	return "", last
+	return cmdID, nil
 }
 
 func rolloutRing(ring string) string {

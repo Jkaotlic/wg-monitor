@@ -600,7 +600,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		if pending := strings.TrimSpace(stringValue(u.PendingVersion)); pending != "" && pending != req.TargetVersion {
+		if pending := strings.TrimSpace(stringValue(u.PendingVersion)); pending != "" {
 			writeJSONError(w, http.StatusConflict, "deploy_pending", "agent already has pending deploy "+pending)
 			return
 		}
