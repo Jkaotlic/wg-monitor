@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/anex/wg-monitor/internal/agent/awgmgr"
@@ -100,6 +101,49 @@ func TestRouteAddJSON_ReturnsWarningWhenPostCreateRefreshFails(t *testing.T) {
 	}
 }
 
+func TestRouteAddJSON_ReconcilesAppliedCreateError(t *testing.T) {
+	var dnsRules []awgmgr.DNSRoute
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"wan-eth3","name":"ISP","iface":"eth3","type":"wan","status":"up","available":true}]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": dnsRules})
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/create", func(w http.ResponseWriter, r *http.Request) {
+		var created awgmgr.DNSRoute
+		if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+			t.Fatalf("decode create body: %v", err)
+		}
+		created.ID = "dns:ru"
+		dnsRules = append(dnsRules, created)
+		http.Error(w, "response lost after create", http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteAddJSON(context.Background(), awgmgr.New(srv.URL), wire.RouteAddRequest{Kind: "dns", Name: "ru", TunnelID: "eth3", Targets: []string{"gosuslugi.ru"}})
+	if err != nil {
+		t.Fatalf("RouteAddJSON should reconcile applied create, got err=%v", err)
+	}
+	var res wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Warning == "" || !strings.Contains(res.Warning, "create response failed") {
+		t.Fatalf("expected reconciliation warning, got %+v", res)
+	}
+	if res.RouteID != "dns:ru" {
+		t.Fatalf("route id = %q, want reconciled AWG route id", res.RouteID)
+	}
+}
+
 func TestRouteDeleteJSON_ReturnsWarningWhenPostDeleteRefreshFails(t *testing.T) {
 	var deleted bool
 	mux := http.NewServeMux()
@@ -132,6 +176,41 @@ func TestRouteDeleteJSON_ReturnsWarningWhenPostDeleteRefreshFails(t *testing.T) 
 	}
 	if res.Action != "delete" || res.Warning == "" {
 		t.Fatalf("missing partial delete warning: %+v", res)
+	}
+}
+
+func TestRouteDeleteJSON_ReconcilesAppliedDeleteError(t *testing.T) {
+	dnsRules := []awgmgr.DNSRoute{{
+		ID: "dns1", Name: "YouTube", Domains: []string{"youtube.com"}, ManualDomains: []string{"youtube.com"},
+		Enabled: true, Backend: "ndms", Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg5", TunnelID: "Wireguard3"}},
+	}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": dnsRules})
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/delete", func(w http.ResponseWriter, r *http.Request) {
+		dnsRules = nil
+		http.Error(w, "response lost after delete", http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteDeleteJSON(context.Background(), awgmgr.New(srv.URL), wire.RouteDeleteRequest{Kind: "dns", RouteID: "dns1"})
+	if err != nil {
+		t.Fatalf("RouteDeleteJSON should reconcile applied delete, got err=%v", err)
+	}
+	var res wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Warning == "" || !strings.Contains(res.Warning, "delete response failed") {
+		t.Fatalf("expected reconciliation warning, got %+v", res)
 	}
 }
 

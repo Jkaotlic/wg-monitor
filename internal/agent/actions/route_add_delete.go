@@ -46,6 +46,7 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 		return "", fmt.Errorf("resolve route target: %w", err)
 	}
 	hrTouched := false
+	createReconciled := false
 	routeID := plan.Route.ID
 	switch strings.ToLower(req.Kind) {
 	case "dns":
@@ -63,20 +64,35 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 			hrTouched = true
 		}
 		if err := c.CreateDNSRoute(ctx, rule); err != nil {
-			return "", err
+			reconciled, ok := reconcileAppliedRouteAdd(ctx, c, plan.Route)
+			if !ok {
+				return "", err
+			}
+			createReconciled = true
+			routeID = reconciled.ID
+			plan.Route = reconciled
 		}
 	case "static":
 		rule := awgmgr.StaticRoute{Name: req.Name, TunnelID: t.Iface, Subnets: req.Targets, Fallback: "auto", Enabled: true}
 		if err := c.CreateStaticRoute(ctx, rule); err != nil {
-			return "", err
+			reconciled, ok := reconcileAppliedRouteAdd(ctx, c, plan.Route)
+			if !ok {
+				return "", err
+			}
+			createReconciled = true
+			routeID = reconciled.ID
+			plan.Route = reconciled
 		}
 	default:
 		return "", fmt.Errorf("route_add: unknown kind %q", req.Kind)
 	}
 	hrRestarted, refreshErr := refreshRoutingAndMaybeHR(ctx, c, hrTouched)
 	warning := ""
+	if createReconciled {
+		warning = "route_add applied, but create response failed; reconciled from live route list"
+	}
 	if refreshErr != nil {
-		warning = "route_add applied, but post-change refresh failed: " + refreshErr.Error()
+		warning = appendRouteWarning(warning, "route_add applied, but post-change refresh failed: "+refreshErr.Error())
 	}
 	res := wire.RouteApplyResult{Action: "add", Kind: req.Kind, RouteID: routeID, RouteName: req.Name, HRNeoRestarted: hrRestarted, Warning: warning}
 	b, err := json.Marshal(res)
@@ -145,22 +161,32 @@ func RouteDeleteJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteDelete
 		return "", fmt.Errorf("route_delete: preview changed, refresh and try again")
 	}
 	hrTouched := strings.EqualFold(plan.Route.Backend, "hydraroute")
+	deleteReconciled := false
 	switch strings.ToLower(req.Kind) {
 	case "dns":
 		if err := c.DeleteDNSRoute(ctx, req.RouteID); err != nil {
-			return "", err
+			if !reconcileAppliedRouteDelete(ctx, c, req.Kind, req.RouteID) {
+				return "", err
+			}
+			deleteReconciled = true
 		}
 	case "static":
 		if err := c.DeleteStaticRoute(ctx, req.RouteID); err != nil {
-			return "", err
+			if !reconcileAppliedRouteDelete(ctx, c, req.Kind, req.RouteID) {
+				return "", err
+			}
+			deleteReconciled = true
 		}
 	default:
 		return "", fmt.Errorf("route_delete: unknown kind %q", req.Kind)
 	}
 	hrRestarted, refreshErr := refreshRoutingAndMaybeHR(ctx, c, hrTouched)
 	warning := ""
+	if deleteReconciled {
+		warning = "route_delete applied, but delete response failed; reconciled from live route list"
+	}
 	if refreshErr != nil {
-		warning = "route_delete applied, but post-change refresh failed: " + refreshErr.Error()
+		warning = appendRouteWarning(warning, "route_delete applied, but post-change refresh failed: "+refreshErr.Error())
 	}
 	res := wire.RouteApplyResult{Action: "delete", Kind: req.Kind, RouteID: plan.Route.ID, RouteName: plan.Route.Name, HRNeoRestarted: hrRestarted, Warning: warning}
 	b, err := json.Marshal(res)
@@ -304,6 +330,61 @@ func buildRouteDeletePlan(ctx context.Context, c *awgmgr.Client, req wire.RouteD
 	return wire.RouteDeletePlan{}, fmt.Errorf("route_delete_plan: route %s/%s not found", req.Kind, req.RouteID)
 }
 
+func reconcileAppliedRouteAdd(ctx context.Context, c *awgmgr.Client, expected wire.RouteRuleSummary) (wire.RouteRuleSummary, bool) {
+	rules, err := liveRouteSummaries(ctx, c)
+	if err != nil {
+		return wire.RouteRuleSummary{}, false
+	}
+	expected = normalizeRouteRuleSummary(expected)
+	for _, rule := range rules {
+		rule = normalizeRouteRuleSummary(rule)
+		if rule.Kind != expected.Kind || rule.Name != expected.Name || rule.Bind != expected.Bind || rule.Backend != expected.Backend {
+			continue
+		}
+		if !routeTargetSetsEqual(rule.Targets, expected.Targets) {
+			continue
+		}
+		return rule, true
+	}
+	return wire.RouteRuleSummary{}, false
+}
+
+func reconcileAppliedRouteDelete(ctx context.Context, c *awgmgr.Client, kind, routeID string) bool {
+	rules, err := liveRouteSummaries(ctx, c)
+	if err != nil {
+		return false
+	}
+	for _, rule := range rules {
+		if rule.Kind == kind && rule.ID == routeID {
+			return false
+		}
+	}
+	return true
+}
+
+func routeTargetSetsEqual(a, b []wire.RouteTarget) bool {
+	aset := routeTargetSet(a)
+	bset := routeTargetSet(b)
+	if len(aset) != len(bset) {
+		return false
+	}
+	for key := range aset {
+		if !bset[key] {
+			return false
+		}
+	}
+	return true
+}
+
+func routeTargetSet(values []wire.RouteTarget) map[string]bool {
+	out := make(map[string]bool, len(values))
+	for _, value := range values {
+		normalized := normalizeRouteTarget(value.Value)
+		out[normalized.Type+"\x00"+normalized.Value] = true
+	}
+	return out
+}
+
 func liveRouteSummaries(ctx context.Context, c *awgmgr.Client) ([]wire.RouteRuleSummary, error) {
 	var (
 		dns     []awgmgr.DNSRoute
@@ -320,6 +401,8 @@ func liveRouteSummaries(ctx context.Context, c *awgmgr.Client) ([]wire.RouteRule
 		bind := ""
 		if len(r.Routes) > 0 {
 			bind = firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
+		} else if ifaces := cleanRoutePolicyInterfaces(r.HRPolicyInterfaces); len(ifaces) > 0 {
+			bind = strings.Join(ifaces, ", ")
 		}
 		targets := append([]string{}, r.Domains...)
 		targets = append(targets, r.ManualDomains...)
@@ -399,6 +482,18 @@ func routeHash(v any) string {
 	b, _ := json.Marshal(v)
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:8])
+}
+
+func appendRouteWarning(existing, next string) string {
+	existing = strings.TrimSpace(existing)
+	next = strings.TrimSpace(next)
+	if existing == "" {
+		return next
+	}
+	if next == "" {
+		return existing
+	}
+	return existing + "; " + next
 }
 
 func firstNonEmptyRoute(values ...string) string {

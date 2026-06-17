@@ -325,6 +325,27 @@ func TestDeleteStaticRoute_FallsBackToLegacyBody(t *testing.T) {
 	}
 }
 
+func TestDeleteStaticRoute_DoesNotFallbackAfterServerError(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/api/static-routes/delete" || r.Method != http.MethodPost {
+			t.Errorf("expected POST /api/static-routes/delete, got %s %q", r.Method, r.URL.Path)
+		}
+		http.Error(w, "response lost after delete", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	err := New(srv.URL).DeleteStaticRoute(context.Background(), "static 1")
+
+	if err == nil {
+		t.Fatal("expected delete error")
+	}
+	if calls != 1 {
+		t.Fatalf("server-error delete must not retry legacy fallback, calls=%d", calls)
+	}
+}
+
 func TestRoutingTunnels_HappyPath(t *testing.T) {
 	const payload = `{"success":true,"data":[
 		{"id":"awg11","name":"amnezia_for_awg","iface":"nwg1","type":"managed","status":"running","available":true},

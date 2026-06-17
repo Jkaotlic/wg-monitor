@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -94,6 +95,9 @@ func (c *Client) DeleteStaticRoute(ctx context.Context, id string) error {
 	if queryErr == nil {
 		return nil
 	}
+	if !isLegacyStaticDeleteFallbackError(queryErr) {
+		return queryErr
+	}
 	body, err := json.Marshal(StaticRoute{ID: id})
 	if err != nil {
 		return err
@@ -103,6 +107,14 @@ func (c *Client) DeleteStaticRoute(ctx context.Context, id string) error {
 		return nil
 	}
 	return fmt.Errorf("awgmgr static-routes/delete failed with query id: %v; legacy body id: %w", queryErr, bodyErr)
+}
+
+func isLegacyStaticDeleteFallbackError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "HTTP 400") || strings.Contains(msg, "HTTP 404")
 }
 
 // RoutingTunnels returns /api/routing/tunnels .data — the catalogue of all
