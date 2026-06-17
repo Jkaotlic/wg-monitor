@@ -147,6 +147,34 @@ func TestDispatcherCreatesTopicLazily(t *testing.T) {
 	}
 }
 
+func TestDispatcherHardPersistsStateWhenTopicCreateFails(t *testing.T) {
+	d := newDB(t)
+	tok := "9999000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("topicfail", tok, "1.1.1.1", "awg0")
+	tg := &fakeTG{topicErr: errStub("telegram rate limited")}
+	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+
+	hardSince := time.Now().Add(-2 * time.Minute).UTC()
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: &hardSince},
+	}
+	err := disp.Handle(context.Background(), uid, "topicfail", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"}))
+	if err == nil {
+		t.Fatal("expected topic create error")
+	}
+	saved, getErr := d.State().Get(uid, "awg_handshake")
+	if getErr != nil {
+		t.Fatalf("hard state should be saved even when Telegram topic creation fails: %v", getErr)
+	}
+	if saved.CurrentStatus != "hard" || saved.ConsecutiveFails != 3 {
+		t.Fatalf("hard state not persisted: %+v", saved)
+	}
+	if saved.LastAlertAt != nil || saved.LastAlertMsgID != nil {
+		t.Fatalf("failed Telegram send must not mark alert as sent: %+v", saved)
+	}
+}
+
 func TestDispatcherRecoveryRepliesToHardMessage(t *testing.T) {
 	d := newDB(t)
 	tok := "1111111111111111111111111111111111111111111111111111111111111111"

@@ -73,13 +73,13 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// успехе TG-send. Если TG упал — FSM корректно в HARD, но
 		// LastAlertAt=NULL значит realert poller его не подхватит до
 		// следующего ручного refresh / OK-репорта.
-		topicRef, err := di.ensureTopic(ctx, userID, nickname)
-		if err != nil {
-			return fmt.Errorf("ensure topic for %s/%s: %w", nickname, checkName, err)
-		}
 		next := tr.Next
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
 			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
+		}
+		topicRef, err := di.ensureTopic(ctx, userID, nickname)
+		if err != nil {
+			return fmt.Errorf("ensure topic for %s/%s: %w", nickname, checkName, err)
 		}
 		args := HardArgs{
 			Nickname:    nickname,
