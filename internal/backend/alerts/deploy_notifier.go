@@ -62,7 +62,7 @@ func RenderDeferredUpdate(nickname, targetVersion, status, output string) Card {
 		Summary: fmt.Sprintf("%s: отложенное обновление агента не применилось", nickname),
 		Meta:    []string{KV("цель", targetVersion), KV("статус", strings.TrimSpace(status))},
 		Details: truncateDeployOutput(output, 700),
-		Hint:    "VPS оставит задачу в ожидании и попробует снова, когда агент снова будет на связи.",
+		Hint:    "pending очищен для этой версии: можно повторить update после проверки детали выше. Если снова падает — запусти проверку роутера или обнови агент вручную.",
 	}
 }
 
