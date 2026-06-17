@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,6 +254,19 @@ func TestBuildRestoreRemoteScriptValidatesTokensBeforeStop(t *testing.T) {
 	}
 	if bot > stop || wizard > stop {
 		t.Fatalf("token preflight must run before systemctl stop:\n%s", script)
+	}
+}
+
+func TestRestoredBackendVerificationFailsOnHealthError(t *testing.T) {
+	err := restoredBackendVerificationResult("active\n", nil, "wg.example.test", errors.New("health failed"))
+	if err == nil || !strings.Contains(err.Error(), "health failed") {
+		t.Fatalf("want health failure, got %v", err)
+	}
+}
+
+func TestRestoredBackendVerificationAllowsEmptyDomain(t *testing.T) {
+	if err := restoredBackendVerificationResult("active\n", nil, "", errors.New("health skipped")); err != nil {
+		t.Fatalf("empty domain should skip health check, got %v", err)
 	}
 }
 

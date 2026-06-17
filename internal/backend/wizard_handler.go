@@ -570,6 +570,23 @@ var wizardCommandAllowlist = map[string]bool{
 	"update_backend_url":    true,
 }
 
+var dashboardCommandAllowlist = map[string]bool{
+	"diag_now":              true,
+	"force_recheck":         true,
+	"route_status":          true,
+	"tunnels_status":        true,
+	"opkg_cron_status":      true,
+	"opkg_cron_install":     true,
+	"opkg_cron_logs":        true,
+	"opkg_cron_remove":      true,
+	"entware_clean_status":  true,
+	"entware_clean_install": true,
+	"entware_clean_run":     true,
+	"entware_clean_logs":    true,
+	"entware_clean_remove":  true,
+	"version_audit":         true,
+}
+
 // wizardDeployHandler enqueues a self_update command for an agent through
 // the existing /v1/cmd long-poll channel. Returns 202 with the command ID
 // the wizard then polls via /v1/wizard/cmd/{id}?nickname=. Does not block
@@ -644,6 +661,10 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			cmd.Args["repo_resolve_ip"] = ip
 		}
 		if err := d.DB.Users().MarkPendingDeploy(u.ID, req.TargetVersion, issuedAt.Format(time.RFC3339)); err != nil {
+			if errors.Is(err, db.ErrDeployPending) {
+				writeJSONError(w, http.StatusConflict, "deploy_pending", "agent already has pending deploy")
+				return
+			}
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
 		}
@@ -777,6 +798,14 @@ func wizardMaintenanceHandler(d Deps) http.HandlerFunc {
 // command surface: destructive firmware installs, route mutation, token
 // rotation, and self-update stay on their dedicated audited flows.
 func wizardCommandHandler(d Deps) http.HandlerFunc {
+	return commandHandlerWithAllowlist(d, wizardCommandAllowlist)
+}
+
+func dashboardCommandHandler(d Deps) http.HandlerFunc {
+	return commandHandlerWithAllowlist(d, dashboardCommandAllowlist)
+}
+
+func commandHandlerWithAllowlist(d Deps, allowlist map[string]bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
@@ -799,7 +828,7 @@ func wizardCommandHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		req.Action = strings.TrimSpace(req.Action)
-		if !wizardCommandAllowlist[req.Action] || !wire.IsValidCommandAction(req.Action) {
+		if !allowlist[req.Action] || !wire.IsValidCommandAction(req.Action) {
 			writeJSONError(w, http.StatusBadRequest, "unsupported_command", "action is not allowed for wizard command dispatch")
 			return
 		}

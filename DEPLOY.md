@@ -60,9 +60,12 @@ dashboard:
 ```
 
 Restart `wg-monitor-backend` and open `https://<backend-domain>/dashboard/`.
-Paste the token once; the browser stores it locally and sends it as a Bearer
-token to `/v1/dashboard/*`. If `enabled: true` is set but the token file is
-missing or empty, the backend refuses to start.
+Open `/dashboard/login` and paste the token there. The backend validates it and
+sets an `HttpOnly`, `SameSite=Strict` `wg_dashboard_session` cookie; the browser
+does not store the dashboard token in local storage. The JSON dashboard API also
+continues to accept `Authorization: Bearer <token>` for scripted operator calls.
+If `enabled: true` is set but the token file is missing or empty, the backend
+refuses to start.
 
 ## Add A Router
 

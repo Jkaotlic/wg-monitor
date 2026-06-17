@@ -162,6 +162,9 @@ func runBackendUpdateRunner(opts backendUpdateRunnerOptions) error {
 	}
 	if strings.TrimSpace(opts.RestartCmd) != "" {
 		if err := runRestartCommand(opts.RestartCmd); err != nil {
+			if rbErr := rollbackBackendBinary(opts.BinaryPath); rbErr != nil {
+				err = fmt.Errorf("%w; rollback failed: %v", err, rbErr)
+			}
 			_ = writeBackendUpdateStatus(opts.PendingFile, req.TargetVersion, "err", err.Error())
 			return err
 		}
@@ -329,6 +332,31 @@ func swapBackendBinary(path string, body []byte) error {
 		}
 		return err
 	}
+	return nil
+}
+
+func rollbackBackendBinary(path string) error {
+	bak := path + ".bak"
+	if _, err := os.Stat(bak); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	tmp := path + ".failed"
+	_ = os.Remove(tmp)
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Rename(path, tmp); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(bak, path); err != nil {
+		if _, statErr := os.Stat(tmp); statErr == nil {
+			_ = os.Rename(tmp, path)
+		}
+		return err
+	}
+	_ = os.Remove(tmp)
 	return nil
 }
 

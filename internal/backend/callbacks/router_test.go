@@ -2902,6 +2902,37 @@ func TestACL_TOFUBindFromOwnerTopic(t *testing.T) {
 // ACL: unbound router with a known topic, callback NOT from that topic —
 // reject. Otherwise inline buttons from stale/foreign topic messages become
 // global controls for the wrong router before TOFU owner binding happens.
+func TestACL_TOFUBindFailureRejectsCallback(t *testing.T) {
+	d, uid := newTestDB(t)
+	d.SQL().SetMaxOpenConns(1)
+	const thread = int64(4242)
+	const newOwner = int64(99999)
+	if err := d.Users().UpdateThreadID(uid, thread); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec("PRAGMA query_only = ON"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = d.SQL().Exec("PRAGMA query_only = OFF") })
+
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	tid := thread
+	q := &tg.CallbackQuery{
+		ID:      "cbk-acl-tofu-fail",
+		From:    tg.User{ID: newOwner},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid, Text: "offline"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	if r.aclAllow(context.Background(), q, Args{UserID: uid}) {
+		t.Fatal("TOFU bind failure must reject callback")
+	}
+	if len(f.answers) == 0 {
+		t.Fatalf("TOFU bind failure should answer callback with an error")
+	}
+}
+
 func TestACL_UnboundWithKnownTopicRejectsForeignTopicCallback(t *testing.T) {
 	d, uid := newTestDB(t)
 	const ownThread = int64(4242)

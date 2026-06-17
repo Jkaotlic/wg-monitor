@@ -426,12 +426,16 @@ func (c *VPSClient) doWizardAPI(ctx context.Context, method, path string, body [
 	var status int
 	var raw []byte
 	var err error
-	for attempt := 1; attempt <= 3; attempt++ {
+	maxAttempts := 3
+	if !wizardAPITransportReplayAllowed(method) {
+		maxAttempts = 1
+	}
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		status, raw, err = c.doWizardHTTP(ctx, method, path, body, contentType, timeout)
 		if err == nil {
 			return status, raw, nil
 		}
-		if ctx.Err() != nil || !isWizardTransportErr(err) || attempt == 3 {
+		if ctx.Err() != nil || !isWizardTransportErr(err) || attempt == maxAttempts {
 			break
 		}
 		PrintWarn(fmt.Sprintf("wizard API HTTPS timeout/error, retry %d/3 через %s: %v", attempt+1, time.Duration(attempt)*time.Second, err))
@@ -440,11 +444,20 @@ func (c *VPSClient) doWizardAPI(ctx context.Context, method, path string, body [
 	if ctx.Err() != nil {
 		return 0, nil, err
 	}
-	if c.Fallback == nil || !isWizardTransportErr(err) {
+	if c.Fallback == nil || !isWizardTransportErr(err) || !wizardAPITransportReplayAllowed(method) {
 		return 0, nil, err
 	}
 	PrintWarn("wizard API по HTTPS не отвечает, пробую запасной путь через SSH на VPS")
 	return c.Fallback.DoWizardAPI(ctx, method, path, body, timeout)
+}
+
+func wizardAPITransportReplayAllowed(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *VPSClient) doWizardHTTP(ctx context.Context, method, path string, body []byte, contentType string, timeout time.Duration) (int, []byte, error) {
