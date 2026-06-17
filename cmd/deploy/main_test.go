@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -73,6 +74,13 @@ func TestActionSecretsStatusReturnsErrorWhenRequiredSecretsMissing(t *testing.T)
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error should mention %s, got %v", want, err)
 		}
+	}
+}
+
+func TestCLIActionResultFailsWhenSaveStateFails(t *testing.T) {
+	err := cliActionResult("sync-vps", nil, errors.New("permission denied"))
+	if err == nil || !strings.Contains(err.Error(), "save state") {
+		t.Fatalf("save failure should make CLI action fail, got %v", err)
 	}
 }
 

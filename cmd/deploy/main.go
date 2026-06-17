@@ -91,12 +91,13 @@ func main() {
 	// но финальный exit-код приходит из original action error.
 	runCLIAction := func(name string, fn func() error) {
 		actErr := fn()
-		if saveErr := SaveState(statePath, state); saveErr != nil {
+		saveErr := SaveState(statePath, state)
+		if saveErr != nil {
 			fmt.Fprintln(os.Stderr, name+": save state:", saveErr)
 		}
 		PrintSecretsSaveAdvice(secrets)
-		if actErr != nil {
-			fmt.Fprintln(os.Stderr, name+":", actErr)
+		if err := cliActionResult(name, actErr, saveErr); err != nil {
+			fmt.Fprintln(os.Stderr, name+":", err)
 			releaseLock()
 			os.Exit(1)
 		}
@@ -478,4 +479,14 @@ Without a command, the interactive wizard menu opens.
 
 func printUsage() {
 	fmt.Fprint(os.Stdout, usageText())
+}
+
+func cliActionResult(name string, actErr, saveErr error) error {
+	if actErr != nil {
+		return actErr
+	}
+	if saveErr != nil {
+		return fmt.Errorf("save state: %w", saveErr)
+	}
+	return nil
 }

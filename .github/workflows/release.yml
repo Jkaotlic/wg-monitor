@@ -1,7 +1,12 @@
 name: Release
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish, for example v0.13.0-rc133'
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
@@ -81,7 +86,7 @@ jobs:
           mkdir -p dist
           go build -trimpath \
             -ldflags "-s -w \
-              -X main.Version=${{ github.ref_name }} \
+              -X main.Version=${{ inputs.tag || github.ref_name }} \
               -X main.RepoOwner=${{ github.repository_owner }} \
               -X main.RepoName=${{ github.event.repository.name }}" \
             -o dist/${{ matrix.name }} ${{ matrix.pkg }}
@@ -127,8 +132,8 @@ jobs:
         with:
           path: .
           format: spdx-json
-          artifact-name: wg-monitor-${{ github.ref_name }}-sbom.spdx.json
-          output-file: dist/wg-monitor-${{ github.ref_name }}-sbom.spdx.json
+          artifact-name: wg-monitor-${{ inputs.tag || github.ref_name }}-sbom.spdx.json
+          output-file: dist/wg-monitor-${{ inputs.tag || github.ref_name }}-sbom.spdx.json
           # Don't fail the release if SBOM generation hiccups — it's a nice
           # to have, not a blocker for binary publication.
           upload-artifact: false
@@ -150,7 +155,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v2.0.4
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
-          prerelease: ${{ contains(github.ref_name, '-rc') }}
+          prerelease: ${{ contains(inputs.tag || github.ref_name, '-rc') }}

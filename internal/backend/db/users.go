@@ -10,7 +10,10 @@ import (
 	"time"
 )
 
-var ErrUserNotFound = errors.New("user not found")
+var (
+	ErrUserNotFound  = errors.New("user not found")
+	ErrDeployPending = errors.New("deploy already pending")
+)
 
 const (
 	KindStatic = "static"
@@ -535,7 +538,10 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 // been confirmed by the agent heartbeat.
 func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince string) error {
 	res, err := u.d.db.Exec(
-		`UPDATE users SET pending_version = ?, pending_since = ? WHERE id = ?`,
+		`UPDATE users
+		    SET pending_version = ?, pending_since = ?
+		  WHERE id = ?
+		    AND (pending_version IS NULL OR pending_version = '')`,
 		targetVersion, pendingSince, id,
 	)
 	if err != nil {
@@ -546,6 +552,13 @@ func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince stri
 		return err
 	}
 	if n == 0 {
+		existing, getErr := u.GetByID(id)
+		if getErr != nil {
+			return getErr
+		}
+		if existing != nil && existing.PendingVersion != nil && *existing.PendingVersion != "" {
+			return ErrDeployPending
+		}
 		return ErrUserNotFound
 	}
 	return nil

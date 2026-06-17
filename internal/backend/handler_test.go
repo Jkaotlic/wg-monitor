@@ -1445,6 +1445,46 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	}
 }
 
+func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail-no-notifier.db"))
+	defer d.Close()
+	tok := "eded01eded01eded01eded01eded01eded01eded01eded01eded01eded01eded"
+	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc53", "2026-06-15T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{commands: map[string]wire.Command{
+		"cmd1": {
+			ID:     "cmd1",
+			Action: "self_update",
+			Args:   map[string]any{"version": "v0.13.0-rc53"},
+		},
+	}}
+	h := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		CommandSink: sink,
+	})
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "cmd1", Status: "err", Output: "download checksums.txt: HTTP 502"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil || u.PendingSince != nil {
+		t.Fatalf("failed self_update should clear matching pending deploy without notifier, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	}
+}
+
 func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-expired.db"))
 	defer d.Close()

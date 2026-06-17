@@ -86,6 +86,68 @@ func TestRunBackendUpdateRunnerSwapsBinaryAndClearsPending(t *testing.T) {
 	}
 }
 
+func TestRunBackendUpdateRunnerRollsBackWhenRestartCommandFails(t *testing.T) {
+	dir := t.TempDir()
+	current := filepath.Join(dir, "wg-monitor-backend")
+	pending := filepath.Join(dir, "backend-update.json")
+	if err := os.WriteFile(current, []byte("old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	newBody := []byte("new-binary")
+	asset := "wg-monitor-backend-linux-" + runtime.GOARCH
+	sum := sha256.Sum256(newBody)
+	repoBase := releaseorigin.DefaultBackendMirrorBase
+	withBackendUpdateHTTPClient(t, func(r *http.Request) (*http.Response, error) {
+		var body []byte
+		switch r.URL.String() {
+		case repoBase + "/v0.13.0-rc109/" + asset:
+			body = newBody
+		case repoBase + "/v0.13.0-rc109/checksums.txt":
+			body = []byte(fmt.Sprintf("%s  %s\n", hex.EncodeToString(sum[:]), asset))
+		default:
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Body:       io.NopCloser(strings.NewReader("not found")),
+				Header:     make(http.Header),
+				Request:    r,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(body)),
+			Header:     make(http.Header),
+			Request:    r,
+		}, nil
+	})
+	body := fmt.Sprintf(`{"target_version":"v0.13.0-rc109","repo_base":%q}`, repoBase)
+	if err := os.WriteFile(pending, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runBackendUpdateRunnerCommand([]string{
+		"--pending-file", pending,
+		"--binary", current,
+		"--restart-cmd", "exit 1",
+	})
+	if err == nil {
+		t.Fatal("expected restart failure")
+	}
+	got, readErr := os.ReadFile(current)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(got) != "old" {
+		t.Fatalf("binary should roll back to old after restart failure, got %q", string(got))
+	}
+	logBody, readErr := os.ReadFile(pending + ".last")
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(logBody), "err") || !strings.Contains(string(logBody), "restart") {
+		t.Fatalf("last status=%s", string(logBody))
+	}
+}
+
 func TestRunBackendUpdateRunnerUsesRepoResolveIPFallback(t *testing.T) {
 	dir := t.TempDir()
 	current := filepath.Join(dir, "wg-monitor-backend")

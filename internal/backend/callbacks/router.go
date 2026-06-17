@@ -768,7 +768,9 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 	if q.Message.MessageThreadID != nil && user.TelegramThreadID != nil &&
 		*q.Message.MessageThreadID == *user.TelegramThreadID {
 		if err := r.d.Users().SetTelegramUserID(user.ID, q.From.ID); err != nil {
-			slog.Warn("acl: TOFU bind failed, allowing", "router_user_id", user.ID, "from", q.From.ID, "err", err)
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось привязать владельца роутера")
+			slog.Warn("acl: TOFU bind failed, rejecting", "router_user_id", user.ID, "from", q.From.ID, "err", err)
+			return false
 		} else {
 			slog.Info("acl: TOFU bound router owner", "router_user_id", user.ID, "tg_user_id", q.From.ID)
 		}

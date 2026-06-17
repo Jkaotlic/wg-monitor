@@ -47,6 +47,7 @@ type Loop struct {
 type cachedResult struct {
 	result wire.CommandResult
 	at     time.Time
+	posted bool
 }
 
 type resultCacheFile struct {
@@ -57,6 +58,7 @@ type cachedResultEntry struct {
 	ID     string             `json:"id"`
 	Result wire.CommandResult `json:"result"`
 	At     time.Time          `json:"at"`
+	Posted bool               `json:"posted,omitempty"`
 }
 
 func New(client BackendClient, runner CommandRunner, waitSec int) *Loop {
@@ -120,19 +122,26 @@ func (l *Loop) Run(ctx context.Context) {
 		escalated = false
 		if cmd == nil {
 			// 204 idle — go right back to long-poll.
+			l.postUnpostedCachedResults(ctx)
 			continue
 		}
 		slog.Info("cmdloop received command", "cmd_id", cmd.ID, "action", cmd.Action)
 		if cached, ok := l.cachedResult(cmd.ID); ok {
 			if perr := l.client.PostResult(ctx, cached); perr != nil {
+				l.markResultPosted(cmd.ID, false)
 				slog.Warn("cmdloop post cached result failed (continuing)", "cmd_id", cmd.ID, "err", perr)
+			} else {
+				l.markResultPosted(cmd.ID, true)
 			}
 			continue
 		}
 		res := l.runner.Execute(ctx, *cmd)
 		l.rememberResult(cmd.ID, res)
 		if perr := l.client.PostResult(ctx, res); perr != nil {
+			l.markResultPosted(cmd.ID, false)
 			slog.Warn("cmdloop post result failed (continuing)", "cmd_id", cmd.ID, "err", perr)
+		} else {
+			l.markResultPosted(cmd.ID, true)
 		}
 	}
 }
@@ -178,6 +187,42 @@ func (l *Loop) rememberResult(id string, result wire.CommandResult) {
 	l.persistResultCache()
 }
 
+func (l *Loop) markResultPosted(id string, posted bool) {
+	if id == "" || l.resultCache == nil {
+		return
+	}
+	cached, ok := l.resultCache[id]
+	if !ok {
+		return
+	}
+	cached.posted = posted
+	l.resultCache[id] = cached
+	l.persistResultCache()
+}
+
+func (l *Loop) postUnpostedCachedResults(ctx context.Context) {
+	if l.resultCache == nil {
+		return
+	}
+	for id, cached := range l.resultCache {
+		if cached.posted {
+			continue
+		}
+		if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
+			delete(l.resultCache, id)
+			l.persistResultCache()
+			continue
+		}
+		if perr := l.client.PostResult(ctx, cached.result); perr != nil {
+			slog.Warn("cmdloop retry cached result failed (continuing)", "cmd_id", id, "err", perr)
+			continue
+		}
+		cached.posted = true
+		l.resultCache[id] = cached
+		l.persistResultCache()
+	}
+}
+
 func (l *Loop) loadResultCache() {
 	body, err := os.ReadFile(l.cachePath)
 	if os.IsNotExist(err) {
@@ -202,7 +247,7 @@ func (l *Loop) loadResultCache() {
 		if l.cacheTTL > 0 && time.Since(entry.At) > l.cacheTTL {
 			continue
 		}
-		l.resultCache[entry.ID] = cachedResult{result: entry.Result, at: entry.At}
+		l.resultCache[entry.ID] = cachedResult{result: entry.Result, at: entry.At, posted: entry.Posted}
 	}
 }
 
@@ -218,7 +263,7 @@ func (l *Loop) persistResultCache() {
 		if l.cacheTTL > 0 && time.Since(cached.at) > l.cacheTTL {
 			continue
 		}
-		entries = append(entries, cachedResultEntry{ID: id, Result: cached.result, At: cached.at})
+		entries = append(entries, cachedResultEntry{ID: id, Result: cached.result, At: cached.at, Posted: cached.posted})
 	}
 	body, err := json.MarshalIndent(resultCacheFile{Results: entries}, "", "  ")
 	if err != nil {

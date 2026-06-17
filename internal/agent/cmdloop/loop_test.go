@@ -19,6 +19,7 @@ type fakeClient struct {
 	pollHits int32
 	posts    []wire.CommandResult
 	postErr  error
+	postErrs []error
 }
 
 type pollResp struct {
@@ -46,6 +47,11 @@ func (f *fakeClient) PostResult(ctx context.Context, r wire.CommandResult) error
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.posts = append(f.posts, r)
+	if len(f.postErrs) > 0 {
+		err := f.postErrs[0]
+		f.postErrs = f.postErrs[1:]
+		return err
+	}
 	return f.postErr
 }
 
@@ -166,6 +172,40 @@ func TestLoop_PostResultErrorContinues(t *testing.T) {
 	defer rn.mu.Unlock()
 	if len(rn.seen) < 2 {
 		t.Errorf("loop should keep running through post errors, seen=%v", rn.seen)
+	}
+}
+
+func TestLoop_RetriesCachedResultAfterPostFailureWithoutReexecution(t *testing.T) {
+	cl := &fakeClient{
+		pollSeq: []pollResp{
+			{cmd: &wire.Command{ID: "side-effect", Action: "tunnel_delete"}},
+			{cmd: nil},
+			{cmd: nil},
+			{cmd: nil},
+		},
+		postErrs: []error{errors.New("backend transient"), nil},
+	}
+	rn := &fakeRunner{}
+	l := New(cl, rn, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	l.Run(ctx)
+
+	rn.mu.Lock()
+	seen := len(rn.seen)
+	rn.mu.Unlock()
+	if seen != 1 {
+		t.Fatalf("command must execute once, got %d executions", seen)
+	}
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if len(cl.posts) < 2 {
+		t.Fatalf("cached result should be retried after post failure, posts=%+v", cl.posts)
+	}
+	for _, post := range cl.posts {
+		if post.ID != "side-effect" {
+			t.Fatalf("unexpected post: %+v", post)
+		}
 	}
 }
 

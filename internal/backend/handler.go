@@ -1025,7 +1025,7 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			}
-		} else if d.DeployNotifier != nil {
+		} else {
 			if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
 				target := commandVersionArg(cmd)
 				if target != "" {
@@ -1034,17 +1034,19 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 							"nickname", nick, "cmd_id", res.ID, "target_version", target, "err", err)
 					}
 				}
-				output := res.Output
-				nickname := nick
-				status := res.Status
-				go func() {
-					ctx, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
-					defer cancel()
-					if err := d.DeployNotifier.SendDeferredUpdate(ctx, uid, nickname, target, status, output); err != nil {
-						incTGError()
-						d.Logger.Warn("deploy notifier failed", "cmd_id", res.ID, "action", cmd.Action, "err", err)
-					}
-				}()
+				if d.DeployNotifier != nil {
+					output := res.Output
+					nickname := nick
+					status := res.Status
+					go func() {
+						ctx, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
+						defer cancel()
+						if err := d.DeployNotifier.SendDeferredUpdate(ctx, uid, nickname, target, status, output); err != nil {
+							incTGError()
+							d.Logger.Warn("deploy notifier failed", "cmd_id", res.ID, "action", cmd.Action, "err", err)
+						}
+					}()
+				}
 			}
 		}
 	resultLogged:

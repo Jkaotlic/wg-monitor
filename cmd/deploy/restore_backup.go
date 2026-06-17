@@ -586,18 +586,27 @@ systemctl start wg-monitor-backend
 
 func verifyRestoredBackend(s *SSH, domain string) error {
 	out, err := s.MustRun("systemctl is-active wg-monitor-backend")
-	if err != nil {
+	var healthErr error
+	if strings.TrimSpace(domain) != "" {
+		healthErr = stepVerifyBackendHealth(s, domain)
+	}
+	if err := restoredBackendVerificationResult(out, err, domain, healthErr); err != nil {
 		return err
 	}
-	if strings.TrimSpace(out) != "active" {
-		return fmt.Errorf("wg-monitor-backend is %q", strings.TrimSpace(out))
-	}
-	if strings.TrimSpace(domain) != "" {
-		if err := stepVerifyBackendHealth(s, domain); err != nil {
-			PrintWarn("health check failed: " + err.Error())
-		}
-	}
 	PrintOK("restored backend is active")
+	return nil
+}
+
+func restoredBackendVerificationResult(activeOut string, activeErr error, domain string, healthErr error) error {
+	if activeErr != nil {
+		return activeErr
+	}
+	if strings.TrimSpace(activeOut) != "active" {
+		return fmt.Errorf("wg-monitor-backend is %q", strings.TrimSpace(activeOut))
+	}
+	if strings.TrimSpace(domain) != "" && healthErr != nil {
+		return fmt.Errorf("health check failed: %w", healthErr)
+	}
 	return nil
 }
 

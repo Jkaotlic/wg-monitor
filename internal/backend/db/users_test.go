@@ -115,6 +115,31 @@ func TestClearPendingDeployIfMatches(t *testing.T) {
 	}
 }
 
+func TestMarkPendingDeployRejectsExistingPendingDeploy(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	uid, err := d.Users().Insert("router", "tok", "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc150", "2026-06-15T12:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc151", "2026-06-15T12:01:00Z"); err == nil {
+		t.Fatal("expected existing pending deploy to be rejected")
+	}
+	u, err := d.Users().GetByID(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc150" {
+		t.Fatalf("pending version changed after rejected mark: %v", u.PendingVersion)
+	}
+}
+
 func TestUpdateLastSeenAndThreadID(t *testing.T) {
 	d := newTestDB(t)
 	tok := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
