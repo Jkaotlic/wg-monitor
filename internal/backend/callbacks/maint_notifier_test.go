@@ -191,6 +191,30 @@ func TestMaintNotifier_ServiceRestart_EnqueuesFreshVersionAudit(t *testing.T) {
 	}
 }
 
+func TestMaintNotifier_ServiceRestart_TimeoutRendersErrorBanner(t *testing.T) {
+	tgFake, n, u, _ := newMaintNotifierTestRig(t)
+	n.Audit.PutVersionAudit(u.ID, wire.VersionAudit{AwgmgrVersion: "2.8.2", FirmwareCurrent: "5.0.0"})
+	sink := &fakeEnqueuer{}
+	n.Sink = sink
+
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "service_restart"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "timeout", Output: "agent did not report result"}, u.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got := tgFake.lastText()
+	firstLine := strings.SplitN(got, "\n", 2)[0]
+	if strings.Contains(firstLine, "✅") {
+		t.Fatalf("timeout maintenance result must not render as success:\n%s", got)
+	}
+	if !strings.Contains(got, "❌") || !strings.Contains(got, "timeout") || !strings.Contains(got, "agent did not report result") {
+		t.Fatalf("timeout maintenance result should render an actionable error banner:\n%s", got)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("timeout maintenance result must not enqueue success refresh, got %+v", sink.calls)
+	}
+}
+
 func TestMaintNotifier_ServiceRestart_NoCachedAudit_MinimalText(t *testing.T) {
 	tgFake, n, u, _ := newMaintNotifierTestRig(t)
 	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "service_restart"}
