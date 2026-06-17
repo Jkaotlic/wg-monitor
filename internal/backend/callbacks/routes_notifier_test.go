@@ -127,6 +127,40 @@ func TestRoutesPanelNotifier_RebindResultEnqueuesFreshRouteStatus(t *testing.T) 
 	}
 }
 
+func TestRoutesPanelNotifier_RebindPartialUsesStructuredResult(t *testing.T) {
+	cache := &RoutesCache{TTL: time.Minute}
+	tgFake := &fakeEditTG{}
+	d, uid := newTestDB(t)
+	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{
+		{ID: "t1", Name: "old", Iface: "nwg1"},
+		{ID: "t2", Name: "new", Iface: "nwg2"},
+	}})
+	sink := &fakeEnqueuer{}
+	n := &RoutesPanelNotifier{TG: tgFake, Cache: cache, DB: d, Sink: sink}
+	rb := wire.RouteRebindResult{
+		SrcTunnelID: "t1",
+		DstTunnelID: "t2",
+		DNS:         wire.CategoryResult{OK: 1},
+		Static:      wire.CategoryResult{Errors: []string{"routing/refresh: boom"}},
+	}
+	body, _ := json.Marshal(rb)
+
+	ref := cmdpkg.MessageRef{Action: "route_rebind", ChatID: 10, MessageID: 20, ThreadID: ptrInt64(30)}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "partial", Output: string(body)}, uid); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(tgFake.editText, "частично") || !strings.Contains(tgFake.editText, "routing/refresh: boom") {
+		t.Fatalf("partial rebind should render structured result, got:\n%s", tgFake.editText)
+	}
+	if _, ok := cache.Get(uid); ok {
+		t.Fatal("cache should be invalidated after partial rebind")
+	}
+	if len(sink.calls) != 1 || sink.calls[0].action != "route_status" {
+		t.Fatalf("partial rebind should enqueue fresh route_status, got %+v", sink.calls)
+	}
+}
+
 func TestRoutesPanelNotifier_RebindStatusErrShowsTelegramError(t *testing.T) {
 	cache := &RoutesCache{TTL: time.Minute}
 	tgFake := &fakeEditTG{}

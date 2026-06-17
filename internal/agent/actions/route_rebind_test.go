@@ -590,3 +590,16 @@ func TestRouteRebind_DNSPartialFail(t *testing.T) {
 		t.Errorf("errors should be reported")
 	}
 }
+
+func TestRouteRebindCommandStatus_TreatsCategoryErrorsAsPartial(t *testing.T) {
+	body, _ := json.Marshal(wire.RouteRebindResult{
+		SrcTunnelID: "t1",
+		DstTunnelID: "t2",
+		DNS:         wire.CategoryResult{OK: 1},
+		Static:      wire.CategoryResult{Errors: []string{"routing/refresh: boom"}},
+	})
+
+	if got := routeRebindCommandStatus(string(body)); got != "partial" {
+		t.Fatalf("status = %q, want partial for maintenance error", got)
+	}
+}

@@ -1117,6 +1117,7 @@ func TestWizardCommandDispatchRejectsUnsafeCommand(t *testing.T) {
 		`{"action":"service_restart","args":{"name":"router"}}`,
 		`{"action":"tunnel_restart","args":{"ndms_name":"Wireguard1; system reboot"}}`,
 		`{"action":"route_rebind","args":{"src_tunnel_id":"awg10; reboot","dst_tunnel_id":"awg13"}}`,
+		`{"action":"route_rebind","args":{"src_tunnel_id":"awg10","dst_tunnel_id":"awg10"}}`,
 		`{"action":"tunnel_delete","args":{"tunnel_id":"../awg10"}}`,
 	} {
 		t.Run(body, func(t *testing.T) {
