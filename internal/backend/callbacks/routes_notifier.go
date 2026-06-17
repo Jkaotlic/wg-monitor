@@ -113,7 +113,7 @@ func (n *RoutesPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messa
 }
 
 func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, user *db.User) error {
-	if res.Status != "ok" {
+	if res.Status != "ok" && res.Status != "partial" {
 		text := alerts.Card{
 			Badge:   "❌",
 			Label:   "🛣 Маршруты",
@@ -148,7 +148,7 @@ func (n *RoutesPanelNotifier) renderRebind(ctx context.Context, ref cmdpkg.Messa
 		}
 	}
 	n.Cache.Invalidate(user.ID)
-	totalFailed := rb.DNS.Failed + rb.Static.Failed
+	totalFailed := rb.DNS.Failed + rb.Static.Failed + rb.HRNeo.Failed + len(rb.DNS.Errors) + len(rb.Static.Errors) + len(rb.HRNeo.Errors)
 	text := tg.RebindResultText(srcName, dstName, rb)
 	kb := tg.RebindResultKeyboard(user.ID, rb.SrcTunnelID, rb.DstTunnelID, totalFailed)
 	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {

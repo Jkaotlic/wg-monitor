@@ -741,7 +741,8 @@ func routeRebindCommandStatus(out string) string {
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		return "ok"
 	}
-	if res.DNS.Failed+res.Static.Failed+res.HRNeo.Failed > 0 {
+	if res.DNS.Failed+res.Static.Failed+res.HRNeo.Failed > 0 ||
+		len(res.DNS.Errors)+len(res.Static.Errors)+len(res.HRNeo.Errors) > 0 {
 		return "partial"
 	}
 	return "ok"

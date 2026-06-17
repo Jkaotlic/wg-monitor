@@ -359,6 +359,43 @@ func TestRouteSnapshotText_IncludesStableSummary(t *testing.T) {
 	}
 }
 
+func TestRouteSnapshotText_IncludesHRNeoPolicyTotals(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		HRNeo:  wire.HRStatus{Installed: true, Running: true},
+		Counts: map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{{
+			Name:  "HydraRoute",
+			DNS:   25,
+			HRNeo: 25,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Name: "primary", Bind: "nwg3", Role: "active", Available: true},
+				{Name: "fallback", Bind: "nwg0", Role: "fallback", Available: true},
+			},
+		}},
+	}
+
+	text := RouteSnapshotText("testkeen", snap)
+	for _, want := range []string{"DNS: 25, static: 0, HR-Neo: 25", "HydraRoute", "primary", "fallback"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("snapshot text missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRebindResultText_ShowsCategoryErrorsWhenFailedCountIsZero(t *testing.T) {
+	text := RebindResultText("old", "new", wire.RouteRebindResult{
+		DNS:    wire.CategoryResult{OK: 1},
+		Static: wire.CategoryResult{Errors: []string{"routing/refresh: boom"}},
+	})
+
+	if !strings.Contains(text, "частично") || !strings.Contains(text, "routing/refresh: boom") {
+		t.Fatalf("maintenance errors must render as partial:\n%s", text)
+	}
+	if strings.Contains(text, "готово") {
+		t.Fatalf("maintenance errors must not render clean success:\n%s", text)
+	}
+}
+
 func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 	snap := wire.RouteSnapshot{
 		Tunnels: []wire.TunnelMeta{

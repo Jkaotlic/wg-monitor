@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/netip"
+	"strings"
 
 	"golang.org/x/sync/errgroup"
 
@@ -53,6 +54,8 @@ func buildHRNeoInventory(hr *awgmgr.HydraRouteStatus, dns []awgmgr.DNSRoute) wir
 			if rule.Bind == "" {
 				rule.Bind = route.Routes[0].TunnelID
 			}
+		} else if ifaces := cleanRoutePolicyInterfaces(route.HRPolicyInterfaces); len(ifaces) > 0 {
+			rule.Bind = strings.Join(ifaces, ", ")
 		}
 		rule.Domains, rule.Routes = splitHRNeoTargets(route.Domains, rule.Routes)
 		rule.ManualDomains, rule.Routes = splitHRNeoTargets(route.ManualDomains, rule.Routes)

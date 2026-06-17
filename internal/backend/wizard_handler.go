@@ -888,6 +888,10 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			writeJSONError(w, http.StatusBadRequest, "invalid_route_id", "src_tunnel_id and dst_tunnel_id must be safe route target ids")
 			return nil, false
 		}
+		if src == dst {
+			writeJSONError(w, http.StatusBadRequest, "same_route_id", "src_tunnel_id and dst_tunnel_id must be different")
+			return nil, false
+		}
 		return map[string]any{"src_tunnel_id": src, "dst_tunnel_id": dst}, true
 	case "tunnel_enable", "tunnel_disable", "tunnel_restart":
 		ndms, _ := args["ndms_name"].(string)

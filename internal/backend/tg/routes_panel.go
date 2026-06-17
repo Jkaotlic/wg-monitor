@@ -285,11 +285,35 @@ func RouteSnapshotText(nickname string, snap wire.RouteSnapshot) string {
 		totalStatic += c.Static
 		totalHR += c.HRNeo
 	}
+	for _, policy := range snap.Policies {
+		totalDNS += policy.DNS
+		totalHR += policy.HRNeo
+	}
 	fmt.Fprintf(&b, "  • DNS: %d, static: %d, HR-Neo: %d\n", totalDNS, totalStatic, totalHR)
 	b.WriteString("\nТуннели:\n")
 	for _, t := range snap.Tunnels {
 		c := snap.Counts[t.ID]
 		fmt.Fprintf(&b, "  • %s (%s): dns=%d static=%d hr=%d\n", t.Name, t.Iface, c.DNS, c.Static, c.HRNeo)
+	}
+	if len(snap.Policies) > 0 {
+		b.WriteString("\nHR-Neo policies:\n")
+		for _, policy := range snap.Policies {
+			fmt.Fprintf(&b, "  • %s: dns=%d hr=%d", fallback(policy.Name, "policy"), policy.DNS, policy.HRNeo)
+			if len(policy.Interfaces) > 0 {
+				b.WriteString(" via ")
+				for i, iface := range policy.Interfaces {
+					if i > 0 {
+						b.WriteString(" -> ")
+					}
+					label := firstNonEmpty(iface.Name, iface.Bind)
+					if iface.Role != "" {
+						label += " (" + iface.Role + ")"
+					}
+					b.WriteString(label)
+				}
+			}
+			b.WriteString("\n")
+		}
 	}
 	if snap.Other.DNS+snap.Other.Static > 0 {
 		fmt.Fprintf(&b, "  • WAN/system: dns=%d static=%d hr=%d\n", snap.Other.DNS, snap.Other.Static, snap.Other.HRNeo)
@@ -506,9 +530,10 @@ func RebindPreviewKeyboard(userID int64, srcID, dstID, token string) InlineKeybo
 
 // RebindResultText renders Screen 5.
 func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) string {
-	totalFailed := res.DNS.Failed + res.Static.Failed
+	totalFailed := res.DNS.Failed + res.Static.Failed + res.HRNeo.Failed
+	totalErrors := len(res.DNS.Errors) + len(res.Static.Errors) + len(res.HRNeo.Errors)
 	var b strings.Builder
-	if totalFailed == 0 {
+	if totalFailed == 0 && totalErrors == 0 {
 		fmt.Fprintf(&b, "🛣 ✅ %s → %s готово\n\n", srcName, dstName)
 	} else {
 		fmt.Fprintf(&b, "🛣 ⚠ %s → %s — частично\n\n", srcName, dstName)
@@ -530,9 +555,11 @@ func RebindResultText(srcName, dstName string, res wire.RouteRebindResult) strin
 		fmt.Fprintf(&b, ", %d FAIL", res.Static.Failed)
 	}
 	b.WriteString("\n")
-	if totalFailed > 0 {
+	if totalFailed > 0 || totalErrors > 0 {
 		b.WriteString("\nОперация идемпотентна, но снапшот уже устарел. Обнови маршруты и повтори перенос из свежего состояния.\n")
-		for _, e := range append(append([]string{}, res.DNS.Errors...), res.Static.Errors...) {
+		errors := append(append([]string{}, res.DNS.Errors...), res.Static.Errors...)
+		errors = append(errors, res.HRNeo.Errors...)
+		for _, e := range errors {
 			fmt.Fprintf(&b, "  • %s\n", e)
 		}
 	} else {

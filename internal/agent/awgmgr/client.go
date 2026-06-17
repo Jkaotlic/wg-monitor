@@ -228,7 +228,10 @@ func rejectFailureEnvelope(path string, body []byte) error {
 		Error   any    `json:"error"`
 		Code    string `json:"code"`
 	}
-	if err := json.Unmarshal(body, &env); err != nil || env.Success == nil || *env.Success {
+	if err := json.Unmarshal(body, &env); err != nil {
+		return fmt.Errorf("awgmgr %s: decode response envelope: %w (body=%s)", path, err, snippet(body))
+	}
+	if env.Success == nil || *env.Success {
 		return nil
 	}
 	detail := strings.TrimSpace(env.Message)

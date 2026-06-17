@@ -153,6 +153,26 @@ func TestCreateDNSRouteRejectsSuccessFalseEnvelope(t *testing.T) {
 	}
 }
 
+func TestCreateDNSRouteRejectsMalformedSuccessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/dns-routes/create" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":false`))
+	}))
+	defer srv.Close()
+
+	err := New(srv.URL).CreateDNSRoute(context.Background(), DNSRoute{Name: "Telegram"})
+
+	if err == nil {
+		t.Fatal("expected malformed 2xx body to fail")
+	}
+	if !strings.Contains(err.Error(), "decode") {
+		t.Fatalf("error = %v, want decode failure", err)
+	}
+}
+
 func TestDeleteDNSRoute_EscapesIDInQuery(t *testing.T) {
 	var gotRawQuery, gotDecodedID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +362,26 @@ func TestRoutingRefresh_HappyPath(t *testing.T) {
 	}
 	if !called {
 		t.Errorf("/api/routing/refresh not called")
+	}
+}
+
+func TestRoutingRefreshRejectsMalformedSuccessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/routing/refresh" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not-json`))
+	}))
+	defer srv.Close()
+
+	err := New(srv.URL).RoutingRefresh(context.Background())
+
+	if err == nil {
+		t.Fatal("expected malformed 2xx body to fail")
+	}
+	if !strings.Contains(err.Error(), "decode") {
+		t.Fatalf("error = %v, want decode failure", err)
 	}
 }
 

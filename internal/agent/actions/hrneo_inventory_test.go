@@ -72,6 +72,30 @@ func TestBuildHRNeoInventory_FiltersHydraRouteRules(t *testing.T) {
 	}
 }
 
+func TestBuildHRNeoInventory_ShowsPolicyOnlyInterfaces(t *testing.T) {
+	inv := buildHRNeoInventory(&awgmgr.HydraRouteStatus{Installed: true, Running: true}, []awgmgr.DNSRoute{
+		{
+			ID:                 "hr:PolicyOnly",
+			Name:               "PolicyOnly",
+			Enabled:            true,
+			Backend:            "hydraroute",
+			HRRouteMode:        "policy",
+			HRPolicyName:       "HydraRoute",
+			HRPolicyInterfaces: []string{" Wireguard5 ", "Wireguard5", "nwg7"},
+			Domains:            []string{"telegram.org"},
+			Routes:             nil,
+		},
+	})
+
+	if len(inv.Rules) != 1 {
+		t.Fatalf("rules: %+v", inv.Rules)
+	}
+	rule := inv.Rules[0]
+	if rule.Bind != "Wireguard5, nwg7" {
+		t.Fatalf("policy-only bind = %q, want real HR policy interfaces", rule.Bind)
+	}
+}
+
 func TestHRNeoInventoryJSON_FetchesStatusAndDNSRoutes(t *testing.T) {
 	var statusHits, dnsHits int
 	mux := http.NewServeMux()
