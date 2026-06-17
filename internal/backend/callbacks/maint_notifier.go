@@ -124,7 +124,7 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 		Summary: strings.TrimSpace(res.Output),
 		Meta:    []string{alerts.KV("роутер", user.Nickname), alerts.KV("статус", res.Status)},
 	}.Render(alerts.CardOpts{MaxBytes: 900})
-	if res.Status == "err" {
+	if res.Status != "ok" {
 		banner = alerts.Card{
 			Badge:   "❌",
 			Label:   "🛠 Обслуживание",

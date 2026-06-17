@@ -230,7 +230,8 @@ func (p *Poller) tick(ctx context.Context) {
 			RealertEvery: cadence,
 		})
 		kb := tg.HardAlertKeyboard(sh.UserID, sh.CheckName)
-		_, err = p.tg.SendMessageWithKeyboard(ctx, p.cfg.ChatID, u.TelegramThreadID, text, "", nil, &kb)
+		chatID := u.EffectiveTelegramChatID(p.cfg.ChatID)
+		_, err = p.tg.SendMessageWithKeyboard(ctx, chatID, u.TelegramThreadID, text, "", nil, &kb)
 		if err != nil {
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)

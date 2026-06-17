@@ -189,7 +189,11 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		}},
 	}.Render(alerts.CardOpts{MaxBytes: 3500})
 
-	_, err = a.tg.SendMessage(ctx, a.chatID, threadID, text, "", nil)
+	chatID := a.chatID
+	if user != nil {
+		chatID = user.EffectiveTelegramChatID(a.chatID)
+	}
+	_, err = a.tg.SendMessage(ctx, chatID, threadID, text, "", nil)
 	if err != nil {
 		return "", err
 	}

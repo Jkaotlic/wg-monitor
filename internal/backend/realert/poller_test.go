@@ -18,6 +18,8 @@ import (
 type fakeTG struct {
 	mu        sync.Mutex
 	sent      []string
+	chats     []int64
+	threads   []*int64
 	keyboards []*tg.InlineKeyboardMarkup
 	sendErr   error
 }
@@ -26,6 +28,8 @@ func (f *fakeTG) SendMessage(ctx context.Context, chatID int64, threadID *int64,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, text)
+	f.chats = append(f.chats, chatID)
+	f.threads = append(f.threads, threadID)
 	return 99, f.sendErr
 }
 
@@ -33,6 +37,8 @@ func (f *fakeTG) SendMessageWithKeyboard(ctx context.Context, chatID int64, thre
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sent = append(f.sent, text)
+	f.chats = append(f.chats, chatID)
+	f.threads = append(f.threads, threadID)
 	f.keyboards = append(f.keyboards, kb)
 	return 99, f.sendErr
 }
@@ -140,6 +146,38 @@ func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 	}
 	for cb := range want {
 		t.Errorf("missing realert button %s in %+v", cb, f.keyboards[0])
+	}
+}
+
+func TestTickRealertUsesRouterTelegramChatID(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 777); err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+
+	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	p.SetNow(func() time.Time { return now })
+	hardSince := now.Add(-3 * time.Hour)
+	lastAlert := now.Add(-2 * time.Hour)
+	if err := d.State().Save(uid, "dns", db.IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
+		ConsecutiveFails: 8, HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	p.tick(context.Background())
+
+	if len(f.chats) != 1 {
+		t.Fatalf("expected one realert send, got chats=%v texts=%d", f.chats, len(f.sent))
+	}
+	if f.chats[0] != -200 {
+		t.Fatalf("realert chatID=%d, want router chat -200", f.chats[0])
+	}
+	if f.threads[0] == nil || *f.threads[0] != 777 {
+		t.Fatalf("realert threadID=%v, want 777", f.threads[0])
 	}
 }
 

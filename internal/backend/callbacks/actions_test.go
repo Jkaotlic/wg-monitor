@@ -362,15 +362,44 @@ func TestActionHistoryWithTransitions(t *testing.T) {
 	}
 }
 
+func TestActionHistoryUsesRouterTelegramChatID(t *testing.T) {
+	d, uid := newTestDB(t)
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 4242); err != nil {
+		t.Fatal(err)
+	}
+	fakeTG := &fakeTGForHistory{}
+	a := NewHistoryAction(d, fakeTG, -100)
+
+	_, err := a.Apply(context.Background(), &tg.CallbackQuery{}, Args{
+		Action: "history", UserID: uid, CheckName: "awg_handshake",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fakeTG.chats) != 1 {
+		t.Fatalf("expected one history message, got chats=%v", fakeTG.chats)
+	}
+	if fakeTG.chats[0] != -200 {
+		t.Fatalf("history chatID=%d, want router chat -200", fakeTG.chats[0])
+	}
+	if fakeTG.threads[0] == nil || *fakeTG.threads[0] != 4242 {
+		t.Fatalf("history threadID=%v, want 4242", fakeTG.threads[0])
+	}
+}
+
 // Minimal mock for History tests (no SendMessageWithKeyboard needed)
 type fakeTGForHistory struct {
-	onSend func(text string)
+	onSend  func(text string)
+	chats   []int64
+	threads []*int64
 }
 
 func (f *fakeTGForHistory) SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error) {
 	if f.onSend != nil {
 		f.onSend(text)
 	}
+	f.chats = append(f.chats, chatID)
+	f.threads = append(f.threads, threadID)
 	return 1, nil
 }
 
