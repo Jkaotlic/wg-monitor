@@ -228,6 +228,23 @@ func pickDefaultRouteIface(ctx context.Context, c *awgmgr.Client, logger *slog.L
 		}
 		return ""
 	}
+	// Prefer the tunnel awg-manager actually routes default traffic through
+	// (settings.download.routeTag). Several tunnels can each report
+	// defaultRoute=true, but only one is the live egress; binding external_reach
+	// to the first-listed default would probe the wrong tunnel and give a false
+	// reachability signal. Best-effort: on Settings error keep the legacy
+	// first-defaultRoute heuristic.
+	activeID := ""
+	if s, serr := c.Settings(ctx); serr == nil {
+		activeID = s.ActiveDefaultTunnelID()
+	}
+	if activeID != "" {
+		for _, t := range ta.Tunnels {
+			if t.ID == activeID && t.Enabled && t.InterfaceName != "" {
+				return t.InterfaceName
+			}
+		}
+	}
 	for _, t := range ta.Tunnels {
 		if t.DefaultRoute && t.Enabled && t.InterfaceName != "" {
 			return t.InterfaceName

@@ -65,8 +65,9 @@ func (c ExternalReachCheck) Run(ctx context.Context, _ Deps) wire.Check {
 	}
 
 	type result struct {
-		ok  bool
-		err string
+		ok     bool
+		err    string
+		status int // HTTP status when a response arrived; 0 on transport error
 	}
 	results := make([]result, len(c.Targets))
 	var wg sync.WaitGroup
@@ -78,37 +79,59 @@ func (c ExternalReachCheck) Run(ctx context.Context, _ Deps) wire.Check {
 			defer cancel()
 			req, err := http.NewRequestWithContext(cctx, http.MethodGet, t.URL, nil)
 			if err != nil {
-				results[i] = result{false, err.Error()}
+				results[i] = result{ok: false, err: err.Error()}
 				return
 			}
 			req.Header.Set("User-Agent", "wg-monitor/external-reach")
 			resp, err := httpc.Do(req)
 			if err != nil {
-				results[i] = result{false, err.Error()}
+				results[i] = result{ok: false, err: err.Error()}
 				return
 			}
 			defer resp.Body.Close()
-			if resp.StatusCode/100 != 2 && resp.StatusCode/100 != 3 {
-				results[i] = result{false, fmt.Sprintf("HTTP %d", resp.StatusCode)}
+			// We got an HTTP response, so the network path through the tunnel
+			// actually worked (DNS → TCP → TLS → HTTP round-trip all succeeded).
+			// Only a 5xx (server-side error) counts as "unreachable". A 4xx —
+			// e.g. Instagram/YouTube answering our non-browser User-Agent with
+			// 403/429 — proves the path is fine and the service deliberately
+			// refused the bot. Counting those as failures produced false
+			// "Внешние сервисы недоступны через туннель" HARD alerts; the real
+			// RKN/blackhole failure modes this check exists to catch surface as
+			// transport errors (timeout / refused / reset) or 5xx, both still
+			// caught below.
+			if resp.StatusCode >= 500 {
+				results[i] = result{ok: false, err: fmt.Sprintf("HTTP %d", resp.StatusCode), status: resp.StatusCode}
 				return
 			}
-			results[i] = result{true, ""}
+			results[i] = result{ok: true, status: resp.StatusCode}
 		}(i, t)
 	}
 	wg.Wait()
 
+	// Three buckets: failed (transport error / 5xx — counts toward threshold),
+	// degraded (reachable but the service answered 4xx, e.g. Instagram/YouTube
+	// refusing our bot UA — path works, does NOT count as failure but is worth
+	// surfacing so the operator isn't misled by "Работают: Instagram" when it
+	// really returned 403), and clean ok (2xx/3xx).
 	var failed []map[string]any
+	var degraded []map[string]any
 	var okNames []string
 	for i, r := range results {
 		t := c.Targets[i]
-		if r.ok {
-			okNames = append(okNames, t.Name)
-		} else {
+		switch {
+		case !r.ok:
 			failed = append(failed, map[string]any{
 				"name": t.Name,
 				"url":  t.URL,
 				"err":  r.err,
 			})
+		case r.status >= 400:
+			degraded = append(degraded, map[string]any{
+				"name":   t.Name,
+				"status": r.status,
+			})
+		default:
+			okNames = append(okNames, t.Name)
 		}
 	}
 	details := map[string]any{
@@ -116,6 +139,9 @@ func (c ExternalReachCheck) Run(ctx context.Context, _ Deps) wire.Check {
 		"targets_failed": failed,
 		"targets_ok":     okNames,
 		"threshold":      threshold,
+	}
+	if len(degraded) > 0 {
+		details["targets_degraded"] = degraded
 	}
 	if c.ViaInterface != "" {
 		details["via_interface"] = c.ViaInterface

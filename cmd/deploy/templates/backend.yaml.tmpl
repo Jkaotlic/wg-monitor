@@ -88,3 +88,12 @@ wizard:
   # A host-side wg-monitor-backend-update.timer consumes the file and restarts
   # the backend locally, so future backend updates do not require SSH reachability.
   backend_update_file: /var/lib/wg-monitor/backend-update.json
+
+# Dead-man digest: once-a-day "🟢 Монитор жив — N/M роутеров онлайн" to the
+# primary chat. Its ABSENCE is the signal — if the digest stops arriving, the
+# backend is down. Opt-in; pair with an external probe
+# (docs/external-uptime-probe.md) for a hard guarantee outside the failure domain.
+digest:
+  enabled: false
+  hour_msk: 9
+  online_window_sec: 600

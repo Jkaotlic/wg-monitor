@@ -22,6 +22,19 @@ You need a probe outside the failure domain.
 
 ## Recommended setup
 
+## Which endpoint to probe: `/readyz`, not `/healthz`
+
+The backend exposes two:
+
+- **`/healthz`** — *liveness only*: returns `200` + JSON `{"status":"ok",...}` as
+  long as the process accepts HTTP. It does **not** touch the database, so it
+  stays `200` even when SQLite is corrupted and every alert is silently dropped.
+  Use it only for Caddy upstream health.
+- **`/readyz`** — *deep health*: runs an actual table read (`HealthCheck`), not a
+  bare connection ping. Returns `200` + body `ready` when the DB is genuinely
+  readable, and `503` when it isn't. This is the one that catches the
+  "listener up, alerts dropped" silent-failure mode — **probe this one.**
+
 Pick **one** of:
 
 ### Option A — uptime-kuma / healthchecks.io / dead-man-snitch (preferred)
@@ -37,9 +50,9 @@ Configure a check:
 | Field          | Value                                       |
 | -------------- | ------------------------------------------- |
 | Type           | HTTP(S) keyword                             |
-| URL            | `https://<your-domain>/healthz`             |
+| URL            | `https://<your-domain>/readyz`              |
 | Interval       | 60s                                         |
-| Expected body  | `ok`                                        |
+| Expected body  | `ready`                                     |
 | Expected code  | 200                                         |
 | Timeout        | 5s                                          |
 | Retries        | 2 before paging                             |
@@ -58,13 +71,16 @@ with `/usr/local/bin/wg-monitor-probe`:
 ```sh
 #!/bin/sh
 set -eu
-URL="https://wgmon.example.com/healthz"
+URL="https://wgmon.example.com/readyz"   # deep check: 200 + "ready", 503 on DB failure
 TG_TOKEN="<separate-bot-token-not-the-monitor's>"
 TG_CHAT="<your-chat-id>"
 STATE=/var/lib/wg-monitor-probe.last
 
-body=$(curl -sS -m 5 "$URL" 2>/dev/null || echo FAIL)
-if [ "$body" = "ok" ]; then
+# /readyz returns the literal body "ready" with HTTP 200 only when the DB is
+# actually readable; any non-200 (incl. 503 on SQLite corruption) or transport
+# error trips the alert.
+body=$(curl -sS -m 5 -f "$URL" 2>/dev/null | tr -d '[:space:]' || echo FAIL)
+if [ "$body" = "ready" ]; then
     [ -f "$STATE" ] && {
         # was failing, now recovered
         curl -sS -m 5 "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
@@ -92,14 +108,39 @@ shared-failure-domain problem (token revocation, Telegram outage).
 - Don't probe from a Keenetic agent. Agents run on consumer flash and
   reboot when the user power-cycles the router; a missed probe ≠ dead
   backend.
-- Don't omit body matching (`ok`). A reverse proxy returning 200 with an
+- Don't omit body matching (`ready`). A reverse proxy returning 200 with an
   empty body or a Caddy default page would pass a status-only check.
+
+## Quick install (Option B, copy-paste)
+
+On a second always-on box (home Pi/NAS — NOT the backend VPS, NOT a Keenetic
+agent), filling in the three values:
+
+```sh
+sudo tee /usr/local/bin/wg-monitor-probe >/dev/null <<'EOF'
+# (paste the Option B script above)
+EOF
+sudo chmod +x /usr/local/bin/wg-monitor-probe
+echo '* * * * * root /usr/local/bin/wg-monitor-probe >/dev/null 2>&1' | sudo tee /etc/cron.d/wg-monitor-probe
+```
+
+## In-process complement: the daily digest
+
+The backend can also send a once-a-day "🟢 Монитор жив — N/M роутеров онлайн"
+message to the primary chat (`digest.enabled: true`, `digest.hour_msk: 9` in
+`backend.yaml`). Its **absence** at the expected time is itself a signal that
+the backend is down. This is a soft, zero-extra-infra complement — it shares the
+backend's failure domain, so it does **not** replace an external probe; it just
+makes silence noticeable for operators who haven't set one up yet.
 
 ## Future work (not yet implemented)
 
+- **Wizard auto-provisioning of the external probe** (deferred): a "register
+  external uptime probe" step that SSHes to a second host, uploads
+  `wg-monitor-probe`, and writes the cron. Deferred because the wizard currently
+  models only agent (router) and backend (VPS) SSH targets — the probe host is a
+  third target type with its own credentials/known-hosts, which is a meaningful
+  addition. Until then, use the copy-paste above.
 - Have agents observe a "backend silent for >N minutes" condition and send
   an out-of-band alert via their own direct TG client (currently every
   agent only reports through the backend).
-- Wizard menu item "Step 7: register external uptime probe" that walks
-  the operator through Option A/B and saves the chosen channel into
-  `state.db` for documentation.

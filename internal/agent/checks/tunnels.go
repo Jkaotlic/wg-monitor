@@ -55,7 +55,18 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	// HR-Neo rules (routes=nil, hydraroute backend) are credited to the
 	// default-route tunnel — mirrors what RouteRebind would migrate.
 	// Any list error → empty map → alert silently omits the line.
-	routeCounts := tallyRouteCounts(ctx, t.Client, tunnels.Tunnels)
+	//
+	// activeDefaultID names the tunnel awg-manager actually routes default
+	// traffic through (settings.download.routeTag). Several tunnels can each
+	// carry defaultRoute=true; without this we'd credit the fall-through blast
+	// radius to the first-listed default, which may not be the live egress.
+	// Best-effort: on any Settings error we pass "" and keep the legacy
+	// first-defaultRoute heuristic.
+	activeDefaultID := ""
+	if s, serr := t.Client.Settings(ctx); serr == nil {
+		activeDefaultID = s.ActiveDefaultTunnelID()
+	}
+	routeCounts := tallyRouteCounts(ctx, t.Client, tunnels.Tunnels, activeDefaultID)
 
 	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
 	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
@@ -94,7 +105,7 @@ type routeCounts struct {
 // interface name (e.g. "nwg1"). Fall-through HR-Neo rules (routes=nil,
 // hrPolicyName set) are credited to the default-route tunnel. Either list
 // failing returns an empty map — degraded, not fatal.
-func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel) map[string]routeCounts {
+func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tunnel, activeDefaultID string) map[string]routeCounts {
 	dns, err := c.ListDNSRoutes(ctx)
 	if err != nil {
 		return nil
@@ -103,13 +114,7 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 	if err != nil {
 		return nil
 	}
-	defaultIface := ""
-	for _, tu := range tunnels {
-		if tu.DefaultRoute && tunnelRouteFallbackUsable(tu) {
-			defaultIface = tu.InterfaceName
-			break
-		}
-	}
+	defaultIface := resolveDefaultIface(tunnels, activeDefaultID)
 	out := map[string]routeCounts{}
 	bump := func(iface string, dns, hr, stat int) {
 		if iface == "" {
@@ -152,6 +157,30 @@ func tallyRouteCounts(ctx context.Context, c *awgmgr.Client, tunnels []awgmgr.Tu
 		bump(r.TunnelID, 0, 0, 1)
 	}
 	return out
+}
+
+// resolveDefaultIface returns the interface of the tunnel awg-manager actually
+// routes default / HR-Neo-fall-through traffic through. When awg-manager reports
+// an authoritative default via settings.download.routeTag (activeDefaultID), that
+// tunnel wins — several tunnels can each carry defaultRoute=true, but only one is
+// the live egress. Falls back to the first usable defaultRoute=true tunnel when
+// the authoritative id is unknown or doesn't resolve to a usable tunnel. The
+// usable gate (vs. plain enabled) keeps a starting/stopped default from absorbing
+// fall-through credit it isn't yet carrying.
+func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string) string {
+	if activeDefaultID != "" {
+		for _, tu := range tunnels {
+			if tu.ID == activeDefaultID && tunnelRouteFallbackUsable(tu) {
+				return tu.InterfaceName
+			}
+		}
+	}
+	for _, tu := range tunnels {
+		if tu.DefaultRoute && tunnelRouteFallbackUsable(tu) {
+			return tu.InterfaceName
+		}
+	}
+	return ""
 }
 
 func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration) wire.Check {

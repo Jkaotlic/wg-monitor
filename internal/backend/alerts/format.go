@@ -582,6 +582,7 @@ func writeAwgmgrAPIWhatBroke(b *strings.Builder, d map[string]any) {
 func writeExternalReachWhatBroke(b *strings.Builder, d map[string]any) {
 	failed := mapsSlice(d, "targets_failed")
 	okList := strSlice(d, "targets_ok")
+	degraded := mapsSlice(d, "targets_degraded")
 	total, _ := intOrZero(d, "targets_total")
 	if total > 0 {
 		fmt.Fprintf(b, "  Не отвечают %d из %d целей\n", len(failed), total)
@@ -593,6 +594,18 @@ func writeExternalReachWhatBroke(b *strings.Builder, d map[string]any) {
 	}
 	if len(okList) > 0 {
 		fmt.Fprintf(b, "  Работают: %s\n", strings.Join(okList, ", "))
+	}
+	// Reachable-but-refused targets: the network path works, the service just
+	// answered 4xx (typically bot-detection 403/429). Surface them with the code
+	// so the operator isn't misled into thinking the tunnel is the problem.
+	if len(degraded) > 0 {
+		var parts []string
+		for _, t := range degraded {
+			name, _ := t["name"].(string)
+			status, _ := intOrZero(t, "status")
+			parts = append(parts, fmt.Sprintf("%s (%d)", name, status))
+		}
+		fmt.Fprintf(b, "  Доступны, но вернули отказ: %s — это не сбой связи, сервис отверг бота\n", strings.Join(parts, ", "))
 	}
 	if iface, _ := d["via_interface"].(string); iface != "" {
 		fmt.Fprintf(b, "  Через интерфейс: %s\n", iface)
@@ -911,10 +924,26 @@ func adviseTunnel(d map[string]any, _ []NeighborSummary) string {
 	if !hasAge {
 		return "Тыкни «📊 Диагностика» — она покажет сервер туннеля, AWG-параметры и попытается поднять связь. Если сервер правильный, но обмен ключами не идёт — провайдер может резать UDP."
 	}
+	var base string
 	if age > 600 {
-		return "Жми «🔁 Перезапуск туннеля» — обычно помогает. Если нет — «📊 Диагностика», там увидишь конкретный сбой."
+		base = "Жми «🔁 Перезапуск туннеля» — обычно помогает. Если нет — «📊 Диагностика», там увидишь конкретный сбой."
+	} else {
+		base = "Подожди ещё минуту — handshake мог моргнуть. Если не вернётся за 2-3 минуты, тыкни «🔁 Перезапуск туннеля»."
 	}
-	return "Подожди ещё минуту — handshake мог моргнуть. Если не вернётся за 2-3 минуты, тыкни «🔁 Перезапуск туннеля»."
+	// pingCheck выключен → бот судит о связи только по возрасту handshake, а он
+	// у idle-туннеля устаревает сам по себе. Подсказываем включить активную
+	// проверку, чтобы отличать простой от настоящего обрыва.
+	if pingCheckIsDisabled(d) {
+		base += " Заодно включи pingCheck (🛡 PingCheck в панели) — сейчас он выключен, и бот видит только возраст handshake; с pingCheck он активно проверяет связь и не путает простой с обрывом."
+	}
+	return base
+}
+
+// pingCheckIsDisabled reports whether the tunnel's awg-manager pingCheck watchdog
+// is turned off. When it is, handshake age is the only liveness signal — which
+// goes stale on idle tunnels even when they're healthy.
+func pingCheckIsDisabled(d map[string]any) bool {
+	return strings.EqualFold(strings.TrimSpace(strOrEmpty(d, "ping_check_status")), "disabled")
 }
 
 func adviseHydraRoute(d map[string]any) string {

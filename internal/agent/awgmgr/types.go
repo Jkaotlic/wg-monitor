@@ -4,6 +4,8 @@
 // it the daemon serves the SvelteKit SPA shell instead of JSON.
 package awgmgr
 
+import "strings"
+
 type Envelope[T any] struct {
 	Success bool `json:"success"`
 	Data    T    `json:"data"`
@@ -118,6 +120,27 @@ type Settings struct {
 type SettingsDownload struct {
 	RouteTag  string `json:"routeTag"`
 	RouteKind string `json:"routeKind"`
+}
+
+// ActiveDefaultTunnelID extracts the authoritative active default-route tunnel
+// id from download.routeTag (form "<routeKind>-<tunnelID>", e.g. "awg-awg12");
+// the kind prefix is stripped to recover the id used in /api/tunnels/all.
+// Returns "" when settings are unavailable or routeTag is empty, so callers
+// fall back to the legacy first-defaultRoute heuristic. When several tunnels
+// each carry defaultRoute=true, this is the only reliable signal for which one
+// awg-manager actually routes default / HR-Neo-fall-through traffic through.
+func (s *Settings) ActiveDefaultTunnelID() string {
+	if s == nil {
+		return ""
+	}
+	tag := strings.TrimSpace(s.Download.RouteTag)
+	if tag == "" {
+		return ""
+	}
+	if kind := strings.TrimSpace(s.Download.RouteKind); kind != "" {
+		tag = strings.TrimPrefix(tag, kind+"-")
+	}
+	return strings.TrimSpace(tag)
 }
 
 // CreateTunnelRequest is the body for POST /api/tunnels/create.
