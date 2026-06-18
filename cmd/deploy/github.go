@@ -93,6 +93,30 @@ func defaultCacheDir() string {
 	return base
 }
 
+// applyGitHubAPIHeaders sets the standard GitHub REST headers and, when a token
+// is present in the environment, an Authorization header. Authenticated calls
+// raise the API rate limit from 60/h (unauthenticated, shared across a NAT
+// egress IP) to 5000/h, so update-all across several agents from one office no
+// longer trips a 403 (SEC-04). Token is read from GITHUB_TOKEN or GH_TOKEN.
+func applyGitHubAPIHeaders(req *http.Request) {
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
+	req.Header.Set("Cache-Control", "no-cache")
+	req.Header.Set("Pragma", "no-cache")
+	if tok := githubToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+func githubToken() string {
+	for _, env := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
+		if v := strings.TrimSpace(os.Getenv(env)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // GetLatestRelease returns the most recent published release, including
 // prereleases. The /releases/latest endpoint skips prereleases entirely
 // (returns 404 if every release is a prerelease), which is the wrong
@@ -102,10 +126,7 @@ func defaultCacheDir() string {
 func (d *Downloader) GetLatestRelease() (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases?per_page=100", strings.TrimRight(GitHubAPIBase, "/"), RepoOwner, RepoName)
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
+	applyGitHubAPIHeaders(req)
 	resp, err := d.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GitHub API: %w", err)
@@ -178,10 +199,7 @@ func (d *Downloader) getReleaseByTag(tag string) (*Release, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s",
 		strings.TrimRight(GitHubAPIBase, "/"), RepoOwner, RepoName, tag)
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "wg-monitor-deploy/"+Version)
-	req.Header.Set("Cache-Control", "no-cache")
-	req.Header.Set("Pragma", "no-cache")
+	applyGitHubAPIHeaders(req)
 	resp, err := d.HTTP.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("GitHub API tag %s: %w", tag, err)
