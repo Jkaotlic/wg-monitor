@@ -394,6 +394,62 @@ func TestRouteStatus_DoesNotCreditHRNeoDirectProviderPolicyToDefaultTunnel(t *te
 	}
 }
 
+// TestRouteStatus_FallthroughCreditsAuthoritativeDefaultTunnel reproduces the
+// live testkeen bug (2026-06-18): two tunnels both report defaultRoute=true,
+// HR-Neo policy rules carry no hrPolicyInterfaces (fall through to the global
+// default). The legacy heuristic picked the FIRST defaultRoute tunnel (nwg0),
+// but the real active default — per awg-manager settings download.routeTag —
+// is awg12/nwg3 (the tunnel HydraRoute actually routes through). The snapshot
+// must credit the authoritative default tunnel, not the first one listed.
+func TestRouteStatus_FallthroughCreditsAuthoritativeDefaultTunnel(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"installed":true,"running":true}}`))
+	})
+	mux.HandleFunc("/api/tunnels/all", func(w http.ResponseWriter, r *http.Request) {
+		// awg10/nwg0 listed FIRST, awg12/nwg3 second — both defaultRoute=true.
+		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+			{"id":"awg10","name":"amnezia_for_awg-nktelecom","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true,"defaultRoute":true},
+			{"id":"awg12","name":"NetherlandsAmsterdamH17","interfaceName":"nwg3","ndmsName":"Wireguard3","enabled":true,"defaultRoute":true}
+		],"external":[],"system":[]}}`))
+	})
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"awg10","name":"amnezia_for_awg-nktelecom","iface":"nwg0","type":"managed","status":"running","available":true},
+			{"id":"awg12","name":"NetherlandsAmsterdamH17","iface":"nwg3","type":"managed","status":"running","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:ChatGPT","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute"},
+			{"id":"hr:YouTube","backend":"hydraroute","enabled":true,"routes":null,"hrRouteMode":"policy","hrPolicyName":"HydraRoute"}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/settings/get", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteStatus(context.Background(), awgmgr.New(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap wire.RouteSnapshot
+	if err := json.Unmarshal([]byte(out), &snap); err != nil {
+		t.Fatalf("output not JSON: %v\n%s", err, out)
+	}
+	if got := snap.Counts["awg12"]; got.DNS != 2 || got.HRNeo != 2 {
+		t.Fatalf("HR-Neo fall-through must credit authoritative default awg12 (nwg3): %+v", got)
+	}
+	if got := snap.Counts["awg10"]; got.DNS != 0 || got.HRNeo != 0 {
+		t.Fatalf("first-listed defaultRoute tunnel awg10 (nwg0) must NOT receive fall-through credit: %+v", got)
+	}
+}
+
 func TestRouteStatus_ReportsHRNeoPolicyInterfacesWithoutCreditingSingleTunnel(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/system/hydraroute-status", func(w http.ResponseWriter, r *http.Request) {

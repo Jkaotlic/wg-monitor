@@ -303,6 +303,20 @@ func (c *Client) HydraRouteStatus(ctx context.Context) (*HydraRouteStatus, error
 	return &env.Data, nil
 }
 
+// Settings returns /api/settings/get data. Present on awg-manager builds that
+// expose the settings JSON endpoint; older builds serve the SPA shell here and
+// callers must treat the resulting decode error as non-fatal.
+func (c *Client) Settings(ctx context.Context) (*Settings, error) {
+	var env Envelope[Settings]
+	if err := c.get(ctx, "/api/settings/get", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr settings/get: success=false")
+	}
+	return &env.Data, nil
+}
+
 // RestartAll triggers /api/control/restart-all.
 func (c *Client) RestartAll(ctx context.Context) error {
 	return c.post(ctx, "/api/control/restart-all", nil, nil)
