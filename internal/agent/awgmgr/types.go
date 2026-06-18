@@ -106,6 +106,20 @@ type HydraRouteStatus struct {
 	Running   bool `json:"running"`
 }
 
+// Settings mirrors the subset of /api/settings/get .data we need. awg-manager
+// records the active default-route tunnel in download.routeTag (form
+// "<routeKind>-<tunnelID>", e.g. "awg-awg12"). When several tunnels each carry
+// defaultRoute=true in /api/tunnels/all, this is the authoritative signal for
+// which one HR-Neo policy traffic actually egresses through.
+type Settings struct {
+	Download SettingsDownload `json:"download"`
+}
+
+type SettingsDownload struct {
+	RouteTag  string `json:"routeTag"`
+	RouteKind string `json:"routeKind"`
+}
+
 // CreateTunnelRequest is the body for POST /api/tunnels/create.
 type CreateTunnelRequest struct {
 	Name         string          `json:"name"`

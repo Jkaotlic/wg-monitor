@@ -23,6 +23,7 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 		routingErr error
 		dns        []awgmgr.DNSRoute
 		statics    []awgmgr.StaticRoute
+		settings   *awgmgr.Settings
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { hr, err = c.HydraRouteStatus(gctx); return })
@@ -33,10 +34,17 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	})
 	g.Go(func() (err error) { dns, err = c.ListDNSRoutes(gctx); return })
 	g.Go(func() (err error) { statics, err = c.ListStaticRoutes(gctx); return })
+	g.Go(func() error {
+		// Non-fatal: older awg-manager builds serve the SPA shell at this
+		// endpoint. On any failure settings stays nil and buildRouteSnapshot
+		// falls back to the first defaultRoute=true tunnel.
+		settings, _ = c.Settings(gctx)
+		return nil
+	})
 	if err := g.Wait(); err != nil {
 		return "", err
 	}
-	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics)
+	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings))
 	if routingErr != nil {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/tunnels failed: %v", routingErr))
 	}
@@ -47,14 +55,41 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	return string(b), nil
 }
 
+// activeDefaultTunnelID extracts the authoritative active default-route tunnel
+// id from awg-manager settings. download.routeTag has the form
+// "<routeKind>-<tunnelID>" (e.g. "awg-awg12"); strip the kind prefix to recover
+// the tunnel id used in /api/tunnels/all. Returns "" when settings are
+// unavailable so callers keep the legacy first-defaultRoute heuristic.
+func activeDefaultTunnelID(s *awgmgr.Settings) string {
+	if s == nil {
+		return ""
+	}
+	tag := strings.TrimSpace(s.Download.RouteTag)
+	if tag == "" {
+		return ""
+	}
+	if kind := strings.TrimSpace(s.Download.RouteKind); kind != "" {
+		tag = strings.TrimPrefix(tag, kind+"-")
+	}
+	return strings.TrimSpace(tag)
+}
+
 // buildRouteSnapshot is the pure aggregation function: easy to test.
-func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute) wire.RouteSnapshot {
+//
+// activeDefaultID is the authoritative active default-route tunnel id (from
+// awg-manager settings.download.routeTag, "" when unknown). Several tunnels can
+// each report defaultRoute=true in /api/tunnels/all; HR-Neo policy rules with
+// no explicit hrPolicyInterfaces fall through to the live default egress, so we
+// must credit/label them against the tunnel awg-manager actually routes
+// through — not just the first defaultRoute=true tunnel encountered.
+func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string) wire.RouteSnapshot {
 	snap := wire.RouteSnapshot{Counts: make(map[string]wire.TunnelCounts)}
 	if hr != nil {
 		snap.HRNeo = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
 	}
 	byIface := make(map[string]string)
 	defaultIface := ""
+	authoritativeDefaultIface := ""
 	if tunnels != nil {
 		for _, t := range tunnels.Tunnels {
 			ep := managedRouteEndpoint(t)
@@ -75,7 +110,16 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 			if ep.DefaultRoute && ep.Enabled && defaultIface == "" {
 				defaultIface = ep.Iface
 			}
+			if activeDefaultID != "" && ep.Enabled && ep.ID == activeDefaultID {
+				authoritativeDefaultIface = ep.Iface
+			}
 		}
+	}
+	// awg-manager's recorded default-route tunnel wins over the first-listed
+	// defaultRoute=true heuristic: when multiple tunnels carry defaultRoute=true
+	// only one is the live egress, and routeTag names it.
+	if authoritativeDefaultIface != "" {
+		defaultIface = authoritativeDefaultIface
 	}
 	for _, t := range routing {
 		ep := ndmsRouteEndpoint(t)
