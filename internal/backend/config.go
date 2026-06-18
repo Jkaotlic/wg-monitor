@@ -28,6 +28,18 @@ type Config struct {
 	Amnezia           AmneziaConfig            `yaml:"amnezia_premium"`
 	SelfHostedAmnezia selfhostedamnezia.Config `yaml:"amnezia_selfhosted"`
 	HideMy            HideMyConfig             `yaml:"hidemyname"`
+	Digest            DigestConfig             `yaml:"digest"`
+}
+
+// DigestConfig controls the daily "dead-man" digest (🟢 monitor alive, N/M
+// online). Opt-in: disabled by default. Its absence is the signal — if the
+// backend dies, the digest stops arriving. Pair with an external probe
+// (docs/external-uptime-probe.md) for a hard guarantee outside the failure
+// domain; this is the soft, zero-extra-infra complement.
+type DigestConfig struct {
+	Enabled         bool `yaml:"enabled"`
+	HourMSK         int  `yaml:"hour_msk"`          // 0-23, MSK hour to post; default 9
+	OnlineWindowSec int  `yaml:"online_window_sec"` // router counts as online if its last report is fresher; default 600
 }
 
 // AmneziaConfig wires the optional Amnezia Premium cabinet helper.

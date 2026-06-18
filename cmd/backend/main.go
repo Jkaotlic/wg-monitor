@@ -16,6 +16,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/callbacks"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/retention"
@@ -334,6 +335,19 @@ func main() {
 			notifyDegradation("realert poller", err)
 		}
 	}()
+
+	// Dead-man digest: opt-in daily "monitor alive" heartbeat to the primary
+	// chat. Its ABSENCE is the signal — silence from a dead backend becomes
+	// visible. Disabled by default; a real external probe stays recommended.
+	if cfg.Digest.Enabled {
+		dp := digest.NewPoller(d, tgClient, digest.Config{
+			ChatID:       cfg.Telegram.ChatID,
+			HourMSK:      cfg.Digest.HourMSK,
+			OnlineWindow: time.Duration(cfg.Digest.OnlineWindowSec) * time.Second,
+		})
+		go dp.Run(ctx)
+		logger.Info("dead-man digest enabled", "hour_msk", cfg.Digest.HourMSK)
+	}
 
 	go func() {
 		logger.Info("backend listening", "addr", cfg.Listen, "version", Version)

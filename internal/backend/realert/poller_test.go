@@ -149,6 +149,51 @@ func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 	}
 }
 
+// TestTickTunnelRealertCarriesActionButtons proves a STILL-DOWN reminder for
+// a tunnel_* check carries the same per-tunnel action row (restart / diag /
+// pingcheck) as the original HARD alert. Previously the reminder shipped only
+// the silence/ack/mute/history base row, so an operator acting on the 6h-later
+// reminder (the one they're more likely to actually see) had no way to restart
+// or diagnose the tunnel without digging into a panel.
+func TestTickTunnelRealertCarriesActionButtons(t *testing.T) {
+	d, uid := newTestDB(t)
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+
+	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
+	p.SetNow(func() time.Time { return now })
+	hardSince := now.Add(-3 * time.Hour)
+	lastAlert := now.Add(-2 * time.Hour)
+	if err := d.State().Save(uid, "tunnel_awg11", db.IncidentState{
+		UserID: uid, CheckName: "tunnel_awg11", CurrentStatus: "hard",
+		ConsecutiveFails: 8, HardSince: &hardSince, LastAlertAt: &lastAlert,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(uid, "tunnel_awg11", "fail", `{"tunnel_name":"amnezia","interface":"nwg1","handshake_age_sec":900}`, now.Add(-30*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	p.tick(context.Background())
+
+	if len(f.keyboards) != 1 || f.keyboards[0] == nil {
+		t.Fatalf("expected realert inline keyboard, got %+v", f.keyboards)
+	}
+	want := map[string]bool{
+		"restart_tunnel:" + itoa(uid) + ":tunnel_awg11": true,
+		"diag_now:" + itoa(uid) + ":tunnel_awg11":       true,
+		"pingcheck_now:" + itoa(uid) + ":tunnel_awg11":  true,
+	}
+	for _, row := range f.keyboards[0].InlineKeyboard {
+		for _, b := range row {
+			delete(want, b.CallbackData)
+		}
+	}
+	for cb := range want {
+		t.Errorf("tunnel realert missing action button %s in %+v", cb, f.keyboards[0])
+	}
+}
+
 func TestTickRealertUsesRouterTelegramChatID(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateTelegramTopic(uid, -200, 777); err != nil {

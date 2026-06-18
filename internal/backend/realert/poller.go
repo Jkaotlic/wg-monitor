@@ -229,7 +229,22 @@ func (p *Poller) tick(ctx context.Context) {
 			Neighbors:    neighbors,
 			RealertEvery: cadence,
 		})
-		kb := tg.HardAlertKeyboard(sh.UserID, sh.CheckName)
+		// Mirror the original HARD alert's per-category action buttons so the
+		// STILL-DOWN reminder is just as actionable. Without this the reminder —
+		// which the operator is MORE likely to actually see than the original —
+		// shipped only the silence/ack/mute/history base row, forcing a dig into
+		// a panel to restart or diagnose. Keep in sync with alerts.Dispatcher.Handle.
+		var opts []tg.KeyboardOption
+		if strings.HasPrefix(sh.CheckName, "tunnel_") {
+			opts = append(opts, tg.WithTunnelActions())
+		}
+		if sh.CheckName == "hydraroute" {
+			opts = append(opts, tg.WithHydraRouteActions())
+		}
+		if u.IsMobile() && sh.CheckName == "agent_heartbeat" {
+			opts = append(opts, tg.WithMobileActions())
+		}
+		kb := tg.HardAlertKeyboard(sh.UserID, sh.CheckName, opts...)
 		chatID := u.EffectiveTelegramChatID(p.cfg.ChatID)
 		_, err = p.tg.SendMessageWithKeyboard(ctx, chatID, u.TelegramThreadID, text, "", nil, &kb)
 		if err != nil {

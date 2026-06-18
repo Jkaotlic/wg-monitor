@@ -92,18 +92,22 @@ func (d *routerDoctor) probeTunnels() {
 	}
 	total := len(ta.Tunnels)
 	running := 0
-	var defaults []string
+	var defaults []awgmgr.Tunnel
 	for _, t := range ta.Tunnels {
 		if t.Status == "running" {
 			running++
 		}
 		if t.DefaultRoute {
-			defaults = append(defaults, tunnelLabel(t))
+			defaults = append(defaults, t)
 		}
 	}
 	detail := fmt.Sprintf("%d/%d running", running, total)
 	if len(defaults) > 0 {
-		detail += "; default: " + strings.Join(defaults, ", ")
+		labels := make([]string, 0, len(defaults))
+		for _, t := range defaults {
+			labels = append(labels, tunnelLabel(t))
+		}
+		detail += "; default: " + strings.Join(labels, ", ")
 	}
 	if total == 0 {
 		d.warn("tunnels", "no managed tunnels")
@@ -114,6 +118,34 @@ func (d *routerDoctor) probeTunnels() {
 		return
 	}
 	d.ok("tunnels", detail)
+	if len(defaults) > 1 {
+		d.warnMultipleDefaults(ctx, defaults)
+	}
+}
+
+// warnMultipleDefaults flags the ambiguous "two tunnels both carry
+// defaultRoute=true" config. Only one is the live egress (named by
+// settings.download.routeTag); the others mislead external-reach binding and
+// HR-Neo blast-radius attribution. Best-effort: if Settings is unavailable we
+// still warn, just without naming the authoritative one.
+func (d *routerDoctor) warnMultipleDefaults(ctx context.Context, defaults []awgmgr.Tunnel) {
+	activeLabel := ""
+	if s, err := d.awg.Settings(ctx); err == nil {
+		if id := s.ActiveDefaultTunnelID(); id != "" {
+			for _, t := range defaults {
+				if t.ID == id {
+					activeLabel = tunnelLabel(t)
+					break
+				}
+			}
+		}
+	}
+	msg := fmt.Sprintf("%d туннелей помечены defaultRoute — реально трафик несёт только один", len(defaults))
+	if activeLabel != "" {
+		msg += "; живой: " + activeLabel
+	}
+	msg += ". Сними default с лишних (🎛 Туннели), иначе проверка выхода и привязка правил могут смотреть не на тот туннель"
+	d.warn("default route conflict", msg)
 }
 
 func (d *routerDoctor) probePingCheck() {

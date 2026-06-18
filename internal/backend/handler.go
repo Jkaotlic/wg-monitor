@@ -371,9 +371,13 @@ func NewMux(d Deps) http.Handler {
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if err := d.DB.SQL().PingContext(ctx); err != nil {
-			d.Logger.Warn("readyz db ping failed", "err", err)
-			http.Error(w, "db ping: "+err.Error(), http.StatusServiceUnavailable)
+		// HealthCheck (a real table read), not just PingContext: a bare ping
+		// returns OK on SQLite-corruption / disk-error classes where the
+		// connection is alive but reads silently fail — the exact silent failure
+		// mode an external probe needs to catch (see docs/external-uptime-probe.md).
+		if err := d.DB.HealthCheck(ctx); err != nil {
+			d.Logger.Warn("readyz db check failed", "err", err)
+			http.Error(w, "db check: "+err.Error(), http.StatusServiceUnavailable)
 			return
 		}
 		_, _ = io.WriteString(w, "ready\n")

@@ -3,6 +3,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	_ "embed"
 	"fmt"
@@ -233,3 +234,14 @@ func (d *DB) Close() error { return d.db.Close() }
 func (d *DB) SQL() *sql.DB { return d.db }
 
 func (d *DB) Path() string { return d.path }
+
+// HealthCheck verifies the database is actually readable, not merely
+// connectable. PingContext only proves the connection is open; a SELECT against
+// a real table also catches SQLite-corruption / disk-error classes where the
+// connection is alive but every read silently fails — exactly the "listener up,
+// alerts dropped" mode an external uptime probe must be able to detect. The
+// users table is tiny, so this stays cheap to run on every /readyz poll.
+func (d *DB) HealthCheck(ctx context.Context) error {
+	var n int
+	return d.db.QueryRowContext(ctx, "SELECT count(*) FROM users").Scan(&n)
+}

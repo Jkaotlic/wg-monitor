@@ -21,10 +21,14 @@ func TestBuildExternalReachCheckFailsClosedWhenNoDefaultRouteTunnel(t *testing.T
 	defer target.Close()
 
 	awgm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/tunnels/all" {
+		switch r.URL.Path {
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"Wireguard0","name":"nl","interfaceName":"nwg0","enabled":true,"defaultRoute":false}],"external":[],"system":[]}}`))
+		default:
 			t.Fatalf("unexpected awgm path %s", r.URL.Path)
 		}
-		_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[{"id":"Wireguard0","name":"nl","interfaceName":"nwg0","enabled":true,"defaultRoute":false}],"external":[],"system":[]}}`))
 	}))
 	defer awgm.Close()
 
@@ -57,6 +61,13 @@ func TestBuildExternalReachCheckRecoversWhenDefaultRouteAppears(t *testing.T) {
 
 	var calls atomic.Int32
 	awgm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/settings/get" {
+			// No authoritative routeTag in this fixture → callers keep the
+			// first-defaultRoute heuristic. Handled separately so the call
+			// counter below only advances on /api/tunnels/all.
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+			return
+		}
 		if r.URL.Path != "/api/tunnels/all" {
 			t.Fatalf("unexpected awgm path %s", r.URL.Path)
 		}
@@ -117,5 +128,31 @@ func TestFetchIfaceMapSkipsStartingTunnels(t *testing.T) {
 	}
 	if got["Wireguard5"] != "nwg5" {
 		t.Fatalf("running tunnel missing from map: %+v", got)
+	}
+}
+
+// TestPickDefaultRouteIfacePrefersRouteTagOverFirstListed pins the fix: when
+// several tunnels carry defaultRoute=true, external_reach must bind to the one
+// awg-manager actually routes through (settings.download.routeTag → awg12/nwg3),
+// not the first-listed default (awg10/nwg0).
+func TestPickDefaultRouteIfacePrefersRouteTagOverFirstListed(t *testing.T) {
+	awgm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"local","interfaceName":"nwg0","enabled":true,"defaultRoute":true},
+				{"id":"awg12","name":"nl","interfaceName":"nwg3","enabled":true,"defaultRoute":true}
+			],"external":[],"system":[]}}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`))
+		default:
+			t.Fatalf("unexpected awgm path %s", r.URL.Path)
+		}
+	}))
+	defer awgm.Close()
+
+	got := pickDefaultRouteIface(context.Background(), awgmgr.New(awgm.URL), nil)
+	if got != "nwg3" {
+		t.Fatalf("pickDefaultRouteIface=%q, want nwg3 (authoritative routeTag awg12), not nwg0 (first-listed)", got)
 	}
 }

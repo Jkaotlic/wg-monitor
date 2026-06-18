@@ -61,17 +61,7 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 // the tunnel id used in /api/tunnels/all. Returns "" when settings are
 // unavailable so callers keep the legacy first-defaultRoute heuristic.
 func activeDefaultTunnelID(s *awgmgr.Settings) string {
-	if s == nil {
-		return ""
-	}
-	tag := strings.TrimSpace(s.Download.RouteTag)
-	if tag == "" {
-		return ""
-	}
-	if kind := strings.TrimSpace(s.Download.RouteKind); kind != "" {
-		tag = strings.TrimPrefix(tag, kind+"-")
-	}
-	return strings.TrimSpace(tag)
+	return s.ActiveDefaultTunnelID()
 }
 
 // buildRouteSnapshot is the pure aggregation function: easy to test.

@@ -316,6 +316,60 @@ func TestFormatHardExternalReachSeverity(t *testing.T) {
 	}
 }
 
+func TestFormatHardExternalReachDegradedShowsStatus(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname:  "vasya",
+		CheckName: "external_reach",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "external_reach", Status: "fail", Details: map[string]any{
+			"targets_total": 3,
+			"targets_failed": []any{
+				map[string]any{"name": "youtube", "err": "i/o timeout"},
+			},
+			"targets_ok":       []any{"telegram"},
+			"targets_degraded": []any{map[string]any{"name": "instagram", "status": 403}},
+		}},
+	})
+	for _, want := range []string{"Доступны, но вернули отказ", "instagram (403)", "сервис отверг бота"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("degraded target should be surfaced with status, missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestFormatHardTunnelPingCheckDisabledNudge(t *testing.T) {
+	// Stale handshake on a tunnel whose pingCheck is disabled → advice should
+	// nudge enabling pingCheck.
+	withNudge := FormatHard(HardArgs{
+		Nickname:  "vasya",
+		CheckName: "tunnel_awg12",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "tunnel_awg12", Status: "fail", Details: map[string]any{
+			"tunnel_name":       "NL",
+			"handshake_age_sec": 900,
+			"ping_check_status": "disabled",
+		}},
+	})
+	if !strings.Contains(withNudge, "pingCheck") || !strings.Contains(withNudge, "выключен") {
+		t.Fatalf("disabled pingCheck on a stale tunnel should nudge enabling it:\n%s", withNudge)
+	}
+
+	// With pingCheck alive, no nudge (would be noise).
+	noNudge := FormatHard(HardArgs{
+		Nickname:  "vasya",
+		CheckName: "tunnel_awg12",
+		HardSince: time.Now(),
+		Check: wire.Check{Name: "tunnel_awg12", Status: "fail", Details: map[string]any{
+			"tunnel_name":       "NL",
+			"handshake_age_sec": 900,
+			"ping_check_status": "alive",
+		}},
+	})
+	if strings.Contains(noNudge, "включи pingCheck") {
+		t.Fatalf("healthy pingCheck should not trigger the nudge:\n%s", noNudge)
+	}
+}
+
 func TestFormatHardHydraRouteBody(t *testing.T) {
 	got := FormatHard(HardArgs{
 		Nickname:  "vasya",

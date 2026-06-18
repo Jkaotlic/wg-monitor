@@ -35,13 +35,15 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 				{"id":"s3","tunnelID":"nwg1","subnets":["10.0.2.0/24"]},
 				{"id":"s-disabled","tunnelID":"nwg1","enabled":false,"subnets":["10.0.3.0/24"]}
 			]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
-	got := tallyRouteCounts(context.Background(), c, tunnels)
+	got := tallyRouteCounts(context.Background(), c, tunnels, "")
 	// nwg1 (default): 1 explicit HR + 2 fall-through HR credited = 3 DNS, all HR.
 	if c := got["nwg1"]; c.DNS != 3 || c.DNSHR != 3 || c.Static != 1 {
 		t.Errorf("nwg1: %+v (want DNS=3 HR=3 Static=1)", c)
@@ -72,7 +74,7 @@ func TestTallyRouteCounts_NoDefaultRoute_FallThroughDropped(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
-	got := tallyRouteCounts(context.Background(), c, tunnels)
+	got := tallyRouteCounts(context.Background(), c, tunnels, "")
 	if len(got) != 0 {
 		t.Errorf("want empty (disabled default iface, fall-through dropped); got %+v", got)
 	}
@@ -96,7 +98,7 @@ func TestTallyRouteCounts_DoesNotCreditFallThroughToStartingDefaultTunnel(t *tes
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 
-	got := tallyRouteCounts(context.Background(), c, tunnels)
+	got := tallyRouteCounts(context.Background(), c, tunnels, "")
 	if c := got["nwg1"]; c.DNS != 0 || c.DNSHR != 0 {
 		t.Fatalf("starting default tunnel must not receive HR fall-through counts: %+v", c)
 	}
@@ -118,6 +120,8 @@ func TestTallyRouteCounts_ExplicitRouteUsesTunnelIDWhenInterfaceMissing(t *testi
 			]}`))
 		case "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -125,7 +129,7 @@ func TestTallyRouteCounts_ExplicitRouteUsesTunnelIDWhenInterfaceMissing(t *testi
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
 
-	got := tallyRouteCounts(context.Background(), c, tunnels)
+	got := tallyRouteCounts(context.Background(), c, tunnels, "")
 	if c := got["nwg1"]; c.DNS != 1 || c.DNSHR != 1 {
 		t.Fatalf("explicit HR route should be credited by tunnelId fallback: %+v", c)
 	}
@@ -140,7 +144,7 @@ func TestTallyRouteCounts_ListError_ReturnsNil(t *testing.T) {
 	}))
 	defer srv.Close()
 	c := awgmgr.New(srv.URL)
-	got := tallyRouteCounts(context.Background(), c, nil)
+	got := tallyRouteCounts(context.Background(), c, nil, "")
 	if got != nil {
 		t.Errorf("want nil on list error; got %+v", got)
 	}
@@ -159,6 +163,8 @@ func TestTunnelsCheck_UnusedTunnelWithPingCheckDisabledDoesNotFailOnNoHandshake(
 			]}}`))
 		case "/api/dns-routes/list", "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -208,6 +214,8 @@ func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {
 				{"id":"s1","tunnelID":"nwg1"},
 				{"id":"s-disabled","tunnelID":"nwg1","enabled":false}
 			]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -316,6 +324,8 @@ func TestTunnelsCheck_PingCheckDisabledDoesNotFailLiveTunnel(t *testing.T) {
 			]}}`))
 		case "/api/dns-routes/list", "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -348,6 +358,8 @@ func TestTunnelsCheck_FutureHandshakeDoesNotReportOK(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
 		case "/api/dns-routes/list", "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -369,4 +381,88 @@ func TestTunnelsCheck_FutureHandshakeDoesNotReportOK(t *testing.T) {
 		return
 	}
 	t.Fatalf("tunnel_awg11 check not emitted; got: %+v", out)
+}
+
+// TestTallyRouteCounts_CreditsAuthoritativeDefaultFromRouteTag pins the fix for
+// the multi-default ambiguity: awg10 (nwg0) is listed first AND carries
+// defaultRoute=true, but awg-manager's authoritative default (routeTag → awg12)
+// is the live egress. HR-Neo fall-through blast-radius must be credited to the
+// real default, not the first-listed one.
+func TestTallyRouteCounts_CreditsAuthoritativeDefaultFromRouteTag(t *testing.T) {
+	tunnels := []awgmgr.Tunnel{
+		{ID: "awg10", InterfaceName: "nwg0", DefaultRoute: true, Enabled: true, Status: "running"},
+		{ID: "awg12", InterfaceName: "nwg3", DefaultRoute: true, Enabled: true, Status: "running"},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/dns-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"hr:AI","routes":null,"backend":"hydraroute","hrPolicyName":"HydraRoute"}
+			]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	c := awgmgr.New(srv.URL)
+
+	got := tallyRouteCounts(context.Background(), c, tunnels, "awg12")
+	if cc := got["nwg3"]; cc.DNS != 1 || cc.DNSHR != 1 {
+		t.Errorf("authoritative default nwg3 (awg12) should carry HR fall-through: %+v", cc)
+	}
+	if cc := got["nwg0"]; cc.DNS != 0 || cc.DNSHR != 0 {
+		t.Errorf("first-listed default nwg0 (awg10) must NOT be credited: %+v", cc)
+	}
+}
+
+// TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed is the end-to-end
+// version: TunnelsCheck.Run reads settings.download.routeTag and threads the
+// authoritative default through so the per-tunnel HARD alert details credit the
+// blast radius to the tunnel awg-manager actually routes through.
+func TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed(t *testing.T) {
+	hs := time.Now().UTC().Add(-30 * time.Second).Format(time.RFC3339)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"local","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg0","lastHandshake":"` + hs + `"},
+				{"id":"awg12","name":"nl","type":"awg","status":"running","enabled":true,"defaultRoute":true,"interfaceName":"nwg3","lastHandshake":"` + hs + `"}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[]}}`))
+		case "/api/dns-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"hr:AI","routes":null,"backend":"hydraroute","hrPolicyName":"HydraRoute"}
+			]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	out := TunnelsCheck{Client: awgmgr.New(srv.URL)}.Run(context.Background(), Deps{})
+	var awg12, awg10 map[string]any
+	for _, c := range out {
+		switch c.Name {
+		case "tunnel_awg12":
+			awg12 = c.Details
+		case "tunnel_awg10":
+			awg10 = c.Details
+		}
+	}
+	if awg12 == nil || awg10 == nil {
+		t.Fatalf("expected both tunnel checks; got %+v", out)
+	}
+	if got, _ := awg12["routes_dns_hr"].(int); got != 1 {
+		t.Errorf("awg12 (real default) should carry HR fall-through: routes_dns_hr=%v", awg12["routes_dns_hr"])
+	}
+	if _, ok := awg10["routes_dns"]; ok {
+		t.Errorf("awg10 (first-listed default) must NOT be credited: routes_dns=%v", awg10["routes_dns"])
+	}
 }
