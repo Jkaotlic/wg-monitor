@@ -55,3 +55,21 @@ bin/wg-monitor-deploy*
 
 # Local reverse-engineering/probe workspaces
 /analysis/
+
+# Local-only operational notes — kept on disk, intentionally NOT published to
+# the public repo (internal infra topology / session scratch). Per operator
+# decision 2026-06-18. New shareable docs still go under docs/ and get committed.
+/docs/audit-2026-06-11.md
+/docs/newaudit.md
+/docs/project-spec-simple.md
+/docs/operations/2026-06-04-codex-session-transfer.md
+/docs/operations/2026-06-04-testkeen-private-control-session.md
+/docs/operations/2026-06-05-encrypted-backup-rc83-session.md
+/docs/operations/2026-06-05-nativewg-rc87-session.md
+/docs/operations/2026-06-08-code-analysis-report.md
+/docs/operations/2026-06-08-code-review-findings.md
+/docs/operations/2026-06-08-code-review-fixes-session.md
+/docs/operations/2026-06-08-full-audit.md
+/docs/operations/2026-06-08-post-push-full-audit.md
+/docs/operations/2026-06-08-rc113-remote-backend-update-session.md
+/docs/operations/2026-06-08-v0130-stable-release-session.md
