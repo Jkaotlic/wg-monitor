@@ -37,8 +37,17 @@ func addIfaceToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, iface s
 		if !isHydraRoutePolicyRule(rule) || routePolicyHasInterface(rule, iface) {
 			continue
 		}
+		existing := cleanRoutePolicyInterfaces(rule.HRPolicyInterfaces)
+		// Leave global-default policies (empty interface chain) untouched: they
+		// follow the live default route, and appending into an empty list would
+		// make the new tunnel their sole/active interface — hijacking all their
+		// traffic onto a freshly imported tunnel. Only policies that already pin
+		// an explicit chain get the new tunnel, where it lands as a fallback.
+		if len(existing) == 0 {
+			continue
+		}
 		updated := rule
-		updated.HRPolicyInterfaces = append(cleanRoutePolicyInterfaces(updated.HRPolicyInterfaces), iface)
+		updated.HRPolicyInterfaces = append(existing, iface)
 		if updated.HRPolicyName == "" {
 			updated.HRPolicyName = defaultHydraRoutePolicyName
 		}
