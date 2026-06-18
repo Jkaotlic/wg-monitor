@@ -6,10 +6,16 @@ deploy/**/*.local.*
 # Binaries
 /bin/
 /dist/
+# Per-RC release build outputs (dist-rc107/, dist-rc108-flat/, …) — regenerable
+/dist-rc*/
 *.exe
 *.upx
 wg-monitor
 wg-monitor-backend
+
+# MCP / tool scratch output
+.playwright-mcp/
+.tmp/
 
 # Go test cache
 .gocache/
