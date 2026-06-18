@@ -35,10 +35,12 @@
           <div class="eyebrow">operator dashboard</div>
           <h1>Fleet Control</h1>
           <p id="summaryText" class="topbar-note">Загружаю состояние флота...</p>
+          <p class="freshness-line"><span class="status-dot" id="freshnessDot"></span><span id="freshness">никогда</span></p>
         </div>
         <div class="topbar-actions">
           <button id="backendUpdateBtn" class="btn btn-warn hidden" type="button" data-state="idle"><span class="ti ti-arrow-up-circle"></span><span id="backendUpdateText">Update backend</span></button>
           <button id="addAgentBtn" class="btn btn-secondary" type="button"><span class="ti ti-plus"></span>Add agent</button>
+          <button id="autoRefreshBtn" class="btn btn-ghost" type="button" aria-pressed="true" title="Авто-обновление каждые 20с"><span class="ti ti-player-pause"></span><span id="autoRefreshText">Auto</span></button>
           <button id="refreshBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-refresh"></span>Refresh</button>
           <button id="logoutBtn" class="btn btn-ghost" type="button"><span class="ti ti-lock"></span>Log out</button>
         </div>
@@ -231,6 +233,152 @@
       <div class="modal-actions">
         <button class="btn btn-ghost" type="button" data-close-add-agent>Cancel</button>
         <button id="createAgentBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-key"></span>Create enrollment</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="editAgentModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editAgentTitle">
+    <div class="modal-panel modal-wide">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">edit router</div>
+          <h2 id="editAgentTitle">Edit agent</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-edit-agent><span class="ti ti-x"></span></button>
+      </div>
+      <p class="modal-note">Пустые поля сохраняют текущее значение. Смена AWG Manager URL меняет домен роутера для кнопки «Open AWG Manager».</p>
+      <div class="form-section-title">Router / AWG Manager</div>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>AWG Manager URL (router domain)</span>
+          <input id="editAgentAWGMURL" type="url" placeholder="https://awg.router.example">
+        </label>
+        <label class="form-field">
+          <span>AWG auth</span>
+          <select id="editAgentAWGMAuth">
+            <option value="">keep / unknown</option>
+            <option value="web">web login</option>
+            <option value="api-key">api key</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-section-title">SSH / deploy</div>
+      <div class="form-grid form-grid-three">
+        <label class="form-field">
+          <span>SSH host</span>
+          <input id="editAgentSSHHost" type="text" placeholder="192.168.31.1">
+        </label>
+        <label class="form-field">
+          <span>SSH port</span>
+          <input id="editAgentSSHPort" type="number" min="1" max="65535" placeholder="222">
+        </label>
+        <label class="form-field">
+          <span>SSH user</span>
+          <input id="editAgentSSHUser" type="text" placeholder="root">
+        </label>
+      </div>
+      <div class="form-grid form-grid-three">
+        <label class="form-field">
+          <span>Deploy mode</span>
+          <select id="editAgentDeployMode">
+            <option value="">keep / unknown</option>
+            <option value="pull">pull</option>
+            <option value="ssh">ssh</option>
+            <option value="deferred-awgm">deferred-awgm</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>Router arch</span>
+          <select id="editAgentArch">
+            <option value="">keep / unknown</option>
+            <option value="arm64">arm64</option>
+            <option value="mipsle">mipsle</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>Ring</span>
+          <select id="editAgentRing">
+            <option value="">keep / unknown</option>
+            <option value="rc">rc</option>
+            <option value="stable">stable</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>Expected MAC</span>
+          <input id="editAgentExpectedMAC" type="text" placeholder="aa:bb:cc:dd:ee:ff">
+        </label>
+      </div>
+      <div id="editAgentError" class="form-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" data-close-edit-agent>Cancel</button>
+        <button id="saveAgentBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-device-floppy"></span>Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="agentConfigModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="agentConfigTitle">
+    <div class="modal-panel modal-wide">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">on-router config</div>
+          <h2 id="agentConfigTitle">Agent config</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-agent-config><span class="ti ti-x"></span></button>
+      </div>
+      <p class="modal-note">Безопасные ключи <code>config.yaml</code> на роутере. Apply перепишет конфиг и <strong>перезапустит агента</strong>. Домен бэкенда (<code>backend.url</code>) тут не меняется — это wizard/CLI.</p>
+      <div class="form-section-title">Agent</div>
+      <div class="form-grid form-grid-three">
+        <label class="form-field">
+          <span>Report interval (sec)</span>
+          <input id="cfgIntervalSec" type="number" min="10" max="86400" placeholder="60">
+        </label>
+        <label class="form-field">
+          <span>external_reach fail threshold</span>
+          <input id="cfgExternalReachFail" type="number" min="1" max="20" placeholder="2">
+        </label>
+        <label class="form-field">
+          <span>external_reach enabled</span>
+          <select id="cfgExternalReachEnabled">
+            <option value="true">on</option>
+            <option value="false">off</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-section-title">AWG Manager (local)</div>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>awg_manager base_url</span>
+          <input id="cfgAwgmBaseURL" type="url" placeholder="http://127.0.0.1:2222">
+        </label>
+        <label class="form-field">
+          <span>awg_manager login</span>
+          <input id="cfgAwgmLogin" type="text" autocomplete="off" placeholder="(empty = no auth)">
+        </label>
+      </div>
+      <div class="form-section-title">Maintenance gates</div>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>allow_router_reboot</span>
+          <select id="cfgAllowReboot">
+            <option value="true">on</option>
+            <option value="false">off</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>allow_firmware_install</span>
+          <select id="cfgAllowFirmware">
+            <option value="true">on</option>
+            <option value="false">off</option>
+          </select>
+        </label>
+      </div>
+      <div id="agentConfigError" class="form-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" data-close-agent-config>Cancel</button>
+        <button id="applyAgentConfigBtn" class="btn btn-warn" type="button" data-state="idle"><span class="ti ti-device-floppy"></span>Apply &amp; restart</button>
       </div>
     </div>
   </div>

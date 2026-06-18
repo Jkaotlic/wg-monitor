@@ -21,6 +21,8 @@ func TestEntwareCleanInstallWritesSafeScriptAndManagedCrontab(t *testing.T) {
 		switch {
 		case key == "df -k /opt":
 			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 200000 100000 75000 60% /opt\n"), nil
+		case key == "sh -c test -x "+cronInitScript:
+			return nil, nil // cron package already present
 		case key == "cat /proc/meminfo":
 			return []byte("MemTotal:         250000 kB\nMemAvailable:      72000 kB\n"), nil
 		case key == "crontab -l":

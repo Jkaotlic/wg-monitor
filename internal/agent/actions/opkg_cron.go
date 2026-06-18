@@ -44,6 +44,10 @@ func (m *OpkgCronManager) Install(ctx context.Context, schedule string) (wire.Op
 	if free < m.minFreeKB() {
 		return wire.OpkgCronStatus{}, fmt.Errorf("not enough free space on /opt: free %d KB, need at least %d KB", free, m.minFreeKB())
 	}
+	cronInstalledNow, err := ensureCronInstalled(ctx, m.exec)
+	if err != nil {
+		return wire.OpkgCronStatus{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(m.scriptPath()), 0o755); err != nil {
 		return wire.OpkgCronStatus{}, fmt.Errorf("create script dir: %w", err)
 	}
@@ -64,13 +68,17 @@ func (m *OpkgCronManager) Install(ctx context.Context, schedule string) (wire.Op
 	_, _ = m.exec(ctx, "/opt/etc/init.d/S10cron", "start")
 	tail := m.readLogTail(40)
 	lastRun, lastStatus := parseOpkgCronLogTail(tail)
+	cronService := "available"
+	if cronInstalledNow {
+		cronService = "available (installed cron package)"
+	}
 	return wire.OpkgCronStatus{
 		Installed:   true,
 		Schedule:    sched,
 		ScriptPath:  m.scriptPath(),
 		CronPath:    "root crontab",
 		LogPath:     m.logPath(),
-		CronService: "available",
+		CronService: cronService,
 		FreeKB:      free,
 		TotalKB:     total,
 		MinFreeKB:   m.minFreeKB(),

@@ -46,6 +46,9 @@ func (m *EntwareCleanManager) Install(ctx context.Context, schedule string) (wir
 	if free < m.minFreeKB() {
 		return wire.EntwareCleanStatus{}, fmt.Errorf("not enough free space on /opt: free %d KB, need at least %d KB", free, m.minFreeKB())
 	}
+	if _, err := ensureCronInstalled(ctx, m.exec); err != nil {
+		return wire.EntwareCleanStatus{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(m.scriptPath()), 0o755); err != nil {
 		return wire.EntwareCleanStatus{}, fmt.Errorf("create script dir: %w", err)
 	}

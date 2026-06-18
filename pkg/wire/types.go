@@ -92,6 +92,8 @@ var validCommandActions = map[string]bool{
 	"self_update":           true,
 	"router_doctor":         true,
 	"update_backend_url":    true,
+	"agent_config_get":      true,
+	"update_agent_config":   true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

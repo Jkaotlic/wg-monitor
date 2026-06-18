@@ -9,8 +9,11 @@ through the normal agent command channel.
 
 - `entware_clean_status` checks install state, cron schedule, `/opt` free space,
   memory snapshot, and log tail.
-- `entware_clean_install` writes the managed script and root crontab block.
-  Default schedule is `05:15`.
+- `entware_clean_install` **ensures the Entware `cron` package is installed**
+  (`opkg install cron`, retrying once after `opkg update`, when
+  `/opt/etc/init.d/S10cron` is missing), then writes the managed script and root
+  crontab block. Default schedule is `05:15`. If cron cannot be installed the
+  command fails rather than scheduling a job that would never run.
 - `entware_clean_run` runs the installed script immediately.
 - `entware_clean_logs` returns a larger log tail.
 - `entware_clean_remove` removes only the managed crontab block and managed
