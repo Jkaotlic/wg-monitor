@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -161,7 +162,7 @@ func dashboardSessionValid(r *http.Request, token string) bool {
 		return false
 	}
 	parts := strings.Split(cookie.Value, ":")
-	if len(parts) != 3 || parts[0] != "v2" {
+	if len(parts) != 3 || parts[0] != "v3" {
 		return false
 	}
 	expUnix, err := strconv.ParseInt(parts[1], 10, 64)
@@ -176,13 +177,50 @@ func dashboardSessionValid(r *http.Request, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(want)) == 1
 }
 
+// dashboardSessionEpoch is a server-side secret mixed into every session HMAC.
+// It is random per process start and can be rotated on demand, which lets the
+// operator invalidate ALL outstanding dashboard sessions (e.g. a cookie leaked
+// from a browser) without rotating the dashboard token itself (SEC-05). A side
+// effect is that a backend restart logs dashboard sessions out — acceptable for
+// an operator-driven tool, and a mild hardening on its own.
+var (
+	dashboardSessionEpochMu sync.RWMutex
+	dashboardSessionEpoch   = newDashboardSessionEpoch()
+)
+
+func newDashboardSessionEpoch() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand failure is near-impossible; fall back to a per-start value
+		// so the epoch still differs across process lifetimes.
+		return strconv.FormatInt(dashboardNow().UnixNano(), 16)
+	}
+	return hex.EncodeToString(b)
+}
+
+func currentDashboardSessionEpoch() string {
+	dashboardSessionEpochMu.RLock()
+	defer dashboardSessionEpochMu.RUnlock()
+	return dashboardSessionEpoch
+}
+
+// RotateDashboardSessions invalidates every outstanding dashboard session
+// cookie. Intended for "log out everywhere" without changing the token.
+func RotateDashboardSessions() {
+	dashboardSessionEpochMu.Lock()
+	defer dashboardSessionEpochMu.Unlock()
+	dashboardSessionEpoch = newDashboardSessionEpoch()
+}
+
 func dashboardSessionValue(token string, expiresAt time.Time) string {
 	exp := strconv.FormatInt(expiresAt.Unix(), 10)
 	mac := hmac.New(sha256.New, []byte(token))
 	_, _ = mac.Write([]byte("wg-monitor-dashboard-session-v1"))
 	_, _ = mac.Write([]byte(":"))
+	_, _ = mac.Write([]byte(currentDashboardSessionEpoch()))
+	_, _ = mac.Write([]byte(":"))
 	_, _ = mac.Write([]byte(exp))
-	return "v2:" + exp + ":" + hex.EncodeToString(mac.Sum(nil))
+	return "v3:" + exp + ":" + hex.EncodeToString(mac.Sum(nil))
 }
 
 func requestIsHTTPS(r *http.Request) bool {

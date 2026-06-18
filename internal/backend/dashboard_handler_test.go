@@ -45,8 +45,8 @@ func TestDashboardSessionCookieHasExpiryAndRejectsExpiredValue(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
 	cookie := dashboardSessionCookie(req, "secret")
-	if !strings.HasPrefix(cookie.Value, "v2:") {
-		t.Fatalf("cookie value=%q, want v2 with expiry", cookie.Value)
+	if !strings.HasPrefix(cookie.Value, "v3:") {
+		t.Fatalf("cookie value=%q, want v3 with expiry", cookie.Value)
 	}
 	if cookie.MaxAge <= 0 {
 		t.Fatalf("cookie MaxAge=%d, want positive expiry", cookie.MaxAge)
@@ -60,6 +60,26 @@ func TestDashboardSessionCookieHasExpiryAndRejectsExpiredValue(t *testing.T) {
 	dashboardNow = func() time.Time { return now.Add(dashboardSessionTTL + time.Second) }
 	if dashboardSessionValid(authReq, "secret") {
 		t.Fatal("expired session cookie should be rejected")
+	}
+}
+
+func TestDashboardSession_RotateRevokesOutstandingCookies(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
+	cookie := dashboardSessionCookie(req, "secret")
+	authReq := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	authReq.AddCookie(cookie)
+	if !dashboardSessionValid(authReq, "secret") {
+		t.Fatal("freshly issued session should be valid")
+	}
+	RotateDashboardSessions()
+	if dashboardSessionValid(authReq, "secret") {
+		t.Fatal("session must be rejected after RotateDashboardSessions (SEC-05)")
+	}
+	// A session issued after rotation is valid again (new epoch).
+	fresh := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	fresh.AddCookie(dashboardSessionCookie(req, "secret"))
+	if !dashboardSessionValid(fresh, "secret") {
+		t.Fatal("session issued after rotation should be valid")
 	}
 }
 
