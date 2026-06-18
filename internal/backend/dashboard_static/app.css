@@ -1007,3 +1007,68 @@ details.raw-output pre {
     margin-left: 0;
   }
 }
+
+/* --- 2026-06-18 audit: freshness, edit, resurrect, focus polish --- */
+.freshness-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.status-dot.warn {
+  background: var(--amber);
+}
+
+.drawer-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drawer-section-recovery {
+  border: 1px solid #f1d6ab;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(183, 121, 31, 0.07), rgba(183, 121, 31, 0));
+  padding: 12px 12px 14px;
+}
+
+.drawer-section-recovery h3 {
+  color: var(--amber);
+}
+
+.action-btn.warn {
+  border-color: #eab676;
+  background: #fff7ec;
+  color: #92500a;
+}
+
+.action-btn.warn:hover {
+  border-color: var(--amber);
+  background: #fdeccb;
+}
+
+.modal-note code {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #eef2f8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+/* Sharper, consistent keyboard focus for the whole console. */
+.btn:focus-visible,
+.action-btn:focus-visible,
+.icon-btn:focus-visible,
+.mini-btn:focus-visible,
+.segment:focus-visible,
+.nav-item:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}

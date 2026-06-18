@@ -78,6 +78,7 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("GET /dashboard/", requestIDMiddleware()(pageAuth(staticHandler)))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))
 	mux.Handle("POST /v1/dashboard/enrollments", requestIDMiddleware()(dashAuth(dashboardEnrollmentHandler(d))))
+	mux.Handle("PUT /v1/dashboard/agents/{nickname}", requestIDMiddleware()(dashAuth(dashboardEditAgentHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy", requestIDMiddleware()(dashAuth(wizardDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/backend/deploy", requestIDMiddleware()(dashAuth(wizardBackendDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/commands", requestIDMiddleware()(dashAuth(dashboardCommandHandler(d))))
@@ -412,6 +413,8 @@ type dashboardSummaryAgent struct {
 	LastDeploy       string              `json:"last_deploy"`
 	DeployMode       string              `json:"deploy_mode"`
 	AWGMURL          string              `json:"awgm_url"`
+	AWGMAuth         string              `json:"awgm_auth"`
+	ExpectedMAC      string              `json:"expected_mac"`
 	TelegramChatID   int64               `json:"telegram_chat_id"`
 	TelegramThreadID int64               `json:"telegram_thread_id"`
 	HasTopic         bool                `json:"has_topic"`
@@ -749,6 +752,8 @@ func dashboardAgentFromUser(user db.User, incidents []dashboardIncident, now tim
 		LastDeploy:      stringValue(user.LastDeploy),
 		DeployMode:      stringValue(user.DeployMode),
 		AWGMURL:         safeDashboardAWGMURL(stringValue(user.AWGMURL)),
+		AWGMAuth:        stringValue(user.AWGMAuth),
+		ExpectedMAC:     stringValue(user.ExpectedMAC),
 		HasTopic:        user.TelegramThreadID != nil && *user.TelegramThreadID != 0,
 		ActiveIncidents: incidents,
 	}
@@ -870,6 +875,127 @@ func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
 			Message:          "Agent enrollment created. Save the token now; it will not be shown once this panel is closed.",
 		})
 	}
+}
+
+// dashboardEditAgentReq carries the operator-editable router/deploy metadata.
+// System-managed fields (versions, pending deploy markers) are intentionally
+// absent — the handler preserves them from the current row.
+type dashboardEditAgentReq struct {
+	Kind             string `json:"kind"`
+	TelegramThreadID int64  `json:"telegram_thread_id"`
+	DeployMode       string `json:"deploy_mode"`
+	AWGMURL          string `json:"awgm_url"`
+	AWGMAuth         string `json:"awgm_auth"`
+	SSHHost          string `json:"ssh_host"`
+	SSHPort          int64  `json:"ssh_port"`
+	SSHUser          string `json:"ssh_user"`
+	Arch             string `json:"arch"`
+	Ring             string `json:"ring"`
+	ExpectedMAC      string `json:"expected_mac"`
+}
+
+// dashboardEditAgentHandler updates an existing agent's router/deploy metadata
+// (AWG Manager URL = router domain, SSH host, arch, ring, deploy mode, expected
+// MAC, telegram topic) without re-enrolling. It merges with the current row so
+// blank fields are preserved — UpdateDeployInfo overwrites ring/deploy_mode/
+// awgm_*/expected_mac unconditionally, which would otherwise wipe them on a
+// partial edit. Pair with the update_backend_url command to "resurrect" an
+// agent after its domain changes.
+func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if d.DB == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
+			return
+		}
+		nickname := r.PathValue("nickname")
+		if nickname == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
+			return
+		}
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req dashboardEditAgentReq
+		if !decodeWizardJSON(w, r, &req) {
+			return
+		}
+		req.Kind = strings.TrimSpace(req.Kind)
+		if req.Kind != "" && !db.IsValidKind(req.Kind) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_kind", "kind must be static or mobile")
+			return
+		}
+		arch, err := normalizeAgentDeployArch(req.Arch)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_arch", err.Error())
+			return
+		}
+		req.Arch = arch
+		if err := validateDashboardAWGMURL(req.AWGMURL); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "invalid_awgm_url", err.Error())
+			return
+		}
+		current, err := d.DB.Users().GetByNickname(nickname)
+		if err != nil {
+			if errors.Is(err, db.ErrUserNotFound) {
+				writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		if current == nil {
+			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
+			return
+		}
+		if err := d.DB.Users().UpdateDeployInfo(nickname, dashboardEditDeployInfo(*current, req)); err != nil {
+			if errors.Is(err, db.ErrUserNotFound) {
+				writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		if d.Logger != nil {
+			d.Logger.Info("dashboard agent edited", "nickname", nickname)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// dashboardEditDeployInfo builds a full DeployInfo from the edit request,
+// preserving system-managed fields and keeping current values for blank
+// overwrite-semantics fields (ring/deploy_mode/awgm_*/expected_mac).
+func dashboardEditDeployInfo(current db.User, req dashboardEditAgentReq) db.DeployInfo {
+	return db.DeployInfo{
+		Kind:                req.Kind,
+		ThreadID:            req.TelegramThreadID,
+		SSHHost:             strings.TrimSpace(req.SSHHost),
+		SSHPort:             req.SSHPort,
+		SSHUser:             strings.TrimSpace(req.SSHUser),
+		Arch:                strings.TrimSpace(req.Arch),
+		LastDeployedVersion: stringValue(current.LastDeployedVersion),
+		PendingVersion:      stringValue(current.PendingVersion),
+		PendingSince:        stringValue(current.PendingSince),
+		LastDeploy:          stringValue(current.LastDeploy),
+		Ring:                firstNonEmptyTrimmed(req.Ring, stringValue(current.Ring)),
+		DeployMode:          firstNonEmptyTrimmed(req.DeployMode, stringValue(current.DeployMode)),
+		AWGMURL:             firstNonEmptyTrimmed(req.AWGMURL, stringValue(current.AWGMURL)),
+		AWGMAuth:            firstNonEmptyTrimmed(req.AWGMAuth, stringValue(current.AWGMAuth)),
+		ExpectedMAC:         firstNonEmptyTrimmed(req.ExpectedMAC, stringValue(current.ExpectedMAC)),
+	}
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, v := range values {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 func validateDashboardAWGMURL(raw string) error {

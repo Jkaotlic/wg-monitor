@@ -5,10 +5,14 @@
     query: "",
     selected: null,
     deployAgent: null,
+    editAgent: null,
+    autoRefresh: true,
+    lastUpdatedAt: 0,
     buttonStates: new Map(),
     opkgCron: new Map(),
     entwareClean: new Map(),
-    versions: new Map()
+    versions: new Map(),
+    agentConfig: new Map()
   };
 
   const els = {
@@ -57,8 +61,38 @@
     closeDrawerBtn: document.getElementById("closeDrawerBtn"),
     toast: document.getElementById("toast"),
     backendUpdateBtn: document.getElementById("backendUpdateBtn"),
-    backendUpdateText: document.getElementById("backendUpdateText")
+    backendUpdateText: document.getElementById("backendUpdateText"),
+    autoRefreshBtn: document.getElementById("autoRefreshBtn"),
+    autoRefreshText: document.getElementById("autoRefreshText"),
+    freshness: document.getElementById("freshness"),
+    freshnessDot: document.getElementById("freshnessDot"),
+    editAgentModal: document.getElementById("editAgentModal"),
+    editAgentTitle: document.getElementById("editAgentTitle"),
+    editAgentAWGMURL: document.getElementById("editAgentAWGMURL"),
+    editAgentAWGMAuth: document.getElementById("editAgentAWGMAuth"),
+    editAgentSSHHost: document.getElementById("editAgentSSHHost"),
+    editAgentSSHPort: document.getElementById("editAgentSSHPort"),
+    editAgentSSHUser: document.getElementById("editAgentSSHUser"),
+    editAgentDeployMode: document.getElementById("editAgentDeployMode"),
+    editAgentArch: document.getElementById("editAgentArch"),
+    editAgentRing: document.getElementById("editAgentRing"),
+    editAgentExpectedMAC: document.getElementById("editAgentExpectedMAC"),
+    editAgentError: document.getElementById("editAgentError"),
+    saveAgentBtn: document.getElementById("saveAgentBtn"),
+    agentConfigModal: document.getElementById("agentConfigModal"),
+    agentConfigTitle: document.getElementById("agentConfigTitle"),
+    cfgIntervalSec: document.getElementById("cfgIntervalSec"),
+    cfgExternalReachFail: document.getElementById("cfgExternalReachFail"),
+    cfgExternalReachEnabled: document.getElementById("cfgExternalReachEnabled"),
+    cfgAwgmBaseURL: document.getElementById("cfgAwgmBaseURL"),
+    cfgAwgmLogin: document.getElementById("cfgAwgmLogin"),
+    cfgAllowReboot: document.getElementById("cfgAllowReboot"),
+    cfgAllowFirmware: document.getElementById("cfgAllowFirmware"),
+    agentConfigError: document.getElementById("agentConfigError"),
+    applyAgentConfigBtn: document.getElementById("applyAgentConfigBtn")
   };
+
+  const AUTO_REFRESH_MS = 20000;
 
   function setAuth(ok) {
     els.authDot.classList.toggle("ok", ok);
@@ -124,14 +158,60 @@
     try {
       const summary = await api("/v1/dashboard/summary");
       state.summary = summary;
+      state.lastUpdatedAt = Date.now();
       setAuth(true);
       setButtonState(els.refreshBtn, "ok");
       render();
+      updateFreshness();
       window.setTimeout(() => setButtonState(els.refreshBtn, "idle"), 700);
     } catch (err) {
       setAuth(false);
       setButtonState(els.refreshBtn, "error");
       renderError(err.message);
+    }
+  }
+
+  // overlayOpen is true while a modal or the result drawer is showing — used to
+  // pause auto-refresh so it never yanks the UI out from under an open form.
+  function overlayOpen() {
+    return Boolean(document.querySelector(".modal:not(.hidden)")) ||
+      !els.resultDrawer.classList.contains("hidden");
+  }
+
+  function setAutoRefresh(on) {
+    state.autoRefresh = on;
+    if (els.autoRefreshBtn) {
+      els.autoRefreshBtn.setAttribute("aria-pressed", on ? "true" : "false");
+      els.autoRefreshBtn.classList.toggle("btn-ghost", !on);
+      els.autoRefreshBtn.classList.toggle("btn-secondary", on);
+      const icon = els.autoRefreshBtn.querySelector(".ti");
+      if (icon) icon.className = "ti " + (on ? "ti-player-pause" : "ti-player-play");
+    }
+    if (els.autoRefreshText) els.autoRefreshText.textContent = on ? "Auto" : "Manual";
+  }
+
+  function updateFreshness() {
+    if (!els.freshness) return;
+    if (!state.lastUpdatedAt) {
+      els.freshness.textContent = "никогда";
+      if (els.freshnessDot) els.freshnessDot.classList.remove("ok", "warn");
+      return;
+    }
+    const sec = Math.max(0, Math.round((Date.now() - state.lastUpdatedAt) / 1000));
+    let text;
+    if (sec < 5) text = "обновлено только что";
+    else if (sec < 90) text = `обновлено ${sec}с назад`;
+    else text = `обновлено ${Math.round(sec / 60)}м назад`;
+    els.freshness.textContent = state.autoRefresh ? text : text + " · auto off";
+    if (els.freshnessDot) {
+      els.freshnessDot.classList.toggle("ok", sec < 60);
+      els.freshnessDot.classList.toggle("warn", sec >= 60);
+    }
+  }
+
+  function autoRefreshTick() {
+    if (state.autoRefresh && !overlayOpen() && !isButtonBusy(els.refreshBtn)) {
+      refresh();
     }
   }
 
@@ -328,15 +408,19 @@
     const cronStatus = state.opkgCron.get(selected.nickname);
     const cleanStatus = state.entwareClean.get(selected.nickname);
     const versionStatus = state.versions.get(selected.nickname);
+    const agentConfigView = state.agentConfig.get(selected.nickname);
     const awgBlock = selected.awgm_url
       ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
       : `<button class="action-btn disabled" type="button" disabled><span class="ti ti-external-link"></span>Open AWG</button><p class="drawer-note">AWG Manager URL не сохранен. Добавь его через deploy sync или awgm-url-patch.</p>`;
     els.agentDrawer.innerHTML = `
       <div class="drawer-card">
-        <div>
-          <div class="eyebrow">agent detail</div>
-          <h2>${escapeHTML(selected.nickname)}</h2>
-          <p class="drawer-note">${escapeHTML(statusLongText(selected))}</p>
+        <div class="drawer-header">
+          <div>
+            <div class="eyebrow">agent detail</div>
+            <h2>${escapeHTML(selected.nickname)}</h2>
+            <p class="drawer-note">${escapeHTML(statusLongText(selected))}</p>
+          </div>
+          <button class="icon-btn" type="button" title="Edit router settings" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span></button>
         </div>
         <section class="drawer-section">
           <h3>Состояние</h3>
@@ -369,6 +453,28 @@
             ${drawerCommandButton(selected, "version_audit", "Versions")}
           </div>
         </section>
+        <section class="drawer-section drawer-section-recovery">
+          <h3>Resurrect / recovery</h3>
+          <p class="drawer-note">Сменился домен или настройки роутера? Отредактируй агента, затем верни его в строй: wake запросит свежий отчёт, Restart AWG перезапустит AWG Manager на роутере.</p>
+          <div class="drawer-actions">
+            <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
+            ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
+            <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>On-router config</h3>
+          <p class="drawer-note">Безопасные ключи config.yaml на самом роутере (interval, awg-manager, external_reach, maintenance). Load читает текущие, Edit перепишет конфиг и перезапустит агента. backend URL тут НЕ меняется — это wizard.</p>
+          <div class="incident-list">
+            ${agentConfigView ? '<span class="badge badge-success">loaded</span>' : '<span class="badge badge-muted">not loaded</span>'}
+            ${agentConfigView && agentConfigView.interval_sec ? `<span class="badge badge-info">interval ${escapeHTML(String(agentConfigView.interval_sec))}s</span>` : ""}
+            ${agentConfigView && agentConfigView.awgm_base_url ? `<span class="badge badge-info">${escapeHTML(shortURL(agentConfigView.awgm_base_url))}</span>` : ""}
+          </div>
+          <div class="drawer-actions">
+            ${drawerCommandButton(selected, "agent_config_get", "Load config")}
+            ${agentConfigView ? `<button class="action-btn warn" type="button" data-agent-config="${escapeAttr(selected.nickname)}"><span class="ti ti-settings"></span>Edit & restart</button>` : ""}
+          </div>
+        </section>
         <section class="drawer-section">
           <h3>Checks</h3>
           <div class="drawer-actions">
@@ -393,7 +499,7 @@
           </div>
           <label class="form-field schedule-field">
             <span>Run time</span>
-            <input id="opkgCronSchedule" type="time" value="04:30">
+            <input id="opkgCronSchedule" type="time" value="${escapeAttr(cronScheduleToTime(cronStatus && cronStatus.schedule, "04:30"))}">
           </label>
           <div class="drawer-actions">
             ${drawerCommandButton(selected, "opkg_cron_status", "Check")}
@@ -412,7 +518,7 @@
           </div>
           <label class="form-field schedule-field">
             <span>Run time</span>
-            <input id="entwareCleanSchedule" type="time" value="05:15">
+            <input id="entwareCleanSchedule" type="time" value="${escapeAttr(cronScheduleToTime(cleanStatus && cleanStatus.schedule, "05:15"))}">
           </label>
           <div class="drawer-actions">
             ${drawerCommandButton(selected, "entware_clean_status", "Check")}
@@ -668,6 +774,145 @@
     setButtonState(els.createAgentBtn, "idle");
   }
 
+  function openEditAgent(nickname) {
+    const agent = (state.summary?.agents || []).find((a) => a.nickname === nickname);
+    if (!agent) return;
+    state.editAgent = nickname;
+    els.editAgentTitle.textContent = "Edit agent / " + nickname;
+    els.editAgentAWGMURL.value = agent.awgm_url || "";
+    els.editAgentAWGMAuth.value = agent.awgm_auth || "";
+    els.editAgentSSHHost.value = agent.ssh_host || "";
+    els.editAgentSSHPort.value = agent.ssh_port ? String(agent.ssh_port) : "";
+    els.editAgentSSHUser.value = agent.ssh_user || "";
+    els.editAgentDeployMode.value = agent.deploy_mode || "";
+    els.editAgentArch.value = agent.arch || "";
+    els.editAgentRing.value = agent.ring || "";
+    els.editAgentExpectedMAC.value = agent.expected_mac || "";
+    els.editAgentError.textContent = "";
+    setButtonState(els.saveAgentBtn, "idle");
+    els.editAgentModal.classList.remove("hidden");
+    els.editAgentAWGMURL.focus();
+  }
+
+  function closeEditAgent() {
+    els.editAgentModal.classList.add("hidden");
+    state.editAgent = null;
+    setButtonState(els.saveAgentBtn, "idle");
+  }
+
+  async function saveAgentEdit() {
+    const nickname = state.editAgent;
+    if (!nickname) return;
+    els.editAgentError.textContent = "";
+    setButtonState(els.saveAgentBtn, "waiting");
+    try {
+      const payload = {
+        awgm_url: els.editAgentAWGMURL.value.trim(),
+        awgm_auth: els.editAgentAWGMAuth.value,
+        ssh_host: els.editAgentSSHHost.value.trim(),
+        ssh_port: Number(els.editAgentSSHPort.value || 0),
+        ssh_user: els.editAgentSSHUser.value.trim(),
+        deploy_mode: els.editAgentDeployMode.value,
+        arch: els.editAgentArch.value,
+        ring: els.editAgentRing.value,
+        expected_mac: els.editAgentExpectedMAC.value.trim()
+      };
+      await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      closeEditAgent();
+      toast("agent settings saved");
+      await refresh();
+    } catch (err) {
+      els.editAgentError.textContent = err.message;
+      setButtonState(els.saveAgentBtn, "error");
+    }
+  }
+
+  function openAgentConfig(nickname) {
+    const cfg = state.agentConfig.get(nickname);
+    if (!cfg) {
+      toast("Сначала нажми «Load config» — нужен текущий конфиг с роутера");
+      return;
+    }
+    state.agentConfigNick = nickname;
+    els.agentConfigTitle.textContent = "Agent config / " + nickname;
+    els.cfgIntervalSec.value = cfg.interval_sec != null ? String(cfg.interval_sec) : "";
+    els.cfgExternalReachFail.value = cfg.external_reach_fail_threshold != null ? String(cfg.external_reach_fail_threshold) : "";
+    els.cfgExternalReachEnabled.value = cfg.external_reach_enabled ? "true" : "false";
+    els.cfgAwgmBaseURL.value = cfg.awgm_base_url || "";
+    els.cfgAwgmLogin.value = cfg.awgm_login || "";
+    els.cfgAllowReboot.value = cfg.allow_router_reboot ? "true" : "false";
+    els.cfgAllowFirmware.value = cfg.allow_firmware_install ? "true" : "false";
+    els.agentConfigError.textContent = "";
+    setButtonState(els.applyAgentConfigBtn, "idle");
+    els.agentConfigModal.classList.remove("hidden");
+    els.cfgIntervalSec.focus();
+  }
+
+  function closeAgentConfig() {
+    els.agentConfigModal.classList.add("hidden");
+    state.agentConfigNick = null;
+    setButtonState(els.applyAgentConfigBtn, "idle");
+  }
+
+  async function applyAgentConfig() {
+    const nickname = state.agentConfigNick;
+    if (!nickname) return;
+    const interval = Number(els.cfgIntervalSec.value);
+    const fail = Number(els.cfgExternalReachFail.value);
+    if (!Number.isInteger(interval) || interval < 10 || interval > 86400) {
+      els.agentConfigError.textContent = "Report interval должен быть 10..86400 секунд";
+      return;
+    }
+    if (!Number.isInteger(fail) || fail < 1 || fail > 20) {
+      els.agentConfigError.textContent = "external_reach fail threshold должен быть 1..20";
+      return;
+    }
+    els.agentConfigError.textContent = "";
+    setButtonState(els.applyAgentConfigBtn, "waiting");
+    const args = {
+      interval_sec: interval,
+      external_reach_fail_threshold: fail,
+      external_reach_enabled: els.cfgExternalReachEnabled.value === "true",
+      awgm_base_url: els.cfgAwgmBaseURL.value.trim(),
+      awgm_login: els.cfgAwgmLogin.value.trim(),
+      allow_router_reboot: els.cfgAllowReboot.value === "true",
+      allow_firmware_install: els.cfgAllowFirmware.value === "true"
+    };
+    try {
+      setActionState(nickname, "update_agent_config", "queued");
+      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update_agent_config", args })
+      });
+      closeAgentConfig();
+      toast("config queued — агент перезапустится");
+      setActionState(nickname, "update_agent_config", "waiting");
+      pollResult(nickname, res.cmd_id, "update_agent_config");
+    } catch (err) {
+      els.agentConfigError.textContent = err.message;
+      setButtonState(els.applyAgentConfigBtn, "error");
+    }
+  }
+
+  // cronScheduleToTime converts a stored "M H * * *" cron line to an "HH:MM"
+  // value for the <input type=time> so the drawer reflects the live schedule.
+  function cronScheduleToTime(schedule, fallback) {
+    const fields = String(schedule || "").trim().split(/\s+/);
+    if (fields.length === 5) {
+      const min = Number(fields[0]);
+      const hour = Number(fields[1]);
+      if (Number.isInteger(min) && Number.isInteger(hour) && hour >= 0 && hour <= 23 && min >= 0 && min <= 59) {
+        return String(hour).padStart(2, "0") + ":" + String(min).padStart(2, "0");
+      }
+    }
+    return fallback;
+  }
+
   function renderGroupOptions() {
     const telegram = state.summary?.telegram || {};
     const current = els.newAgentGroup.value;
@@ -736,6 +981,9 @@
     } else if (isVersionAudit(parsed)) {
       state.versions.set(nickname, parsed);
       renderSelectedDrawer();
+    } else if (isAgentConfig(parsed)) {
+      state.agentConfig.set(nickname, parsed);
+      renderSelectedDrawer();
     }
   }
 
@@ -766,6 +1014,7 @@
     if (isOpkgCronStatus(value)) return formatOpkgCronStatus(value);
     if (isEntwareCleanStatus(value)) return formatEntwareCleanStatus(value);
     if (isVersionAudit(value)) return formatVersionAudit(value);
+    if (isAgentConfig(value)) return formatAgentConfig(value);
     const sections = [];
     const compact = {};
     Object.keys(value).forEach((key) => {
@@ -862,6 +1111,25 @@
         hrneo_uptime: value.hrneo_uptime || "-",
         firmware: value.firmware_current || "-",
         firmware_available: value.firmware_avail || "-"
+      })
+    ].join("");
+  }
+
+  function isAgentConfig(value) {
+    return Boolean(value) && value.config_kind === "agent";
+  }
+
+  function formatAgentConfig(value) {
+    return [
+      `<div class="result-section"><strong>On-router config</strong><p>${escapeHTML(value.config_path || "config.yaml")}</p></div>`,
+      resultGrid({
+        interval_sec: value.interval_sec,
+        awgm_base_url: value.awgm_base_url,
+        awgm_login: value.awgm_login,
+        external_reach_enabled: value.external_reach_enabled,
+        external_reach_fail_threshold: value.external_reach_fail_threshold,
+        allow_router_reboot: value.allow_router_reboot,
+        allow_firmware_install: value.allow_firmware_install
       })
     ].join("");
   }
@@ -965,6 +1233,8 @@
     if (button) {
       if (isButtonBusy(button)) return;
       const nickname = button.dataset.agent || button.dataset.deploy;
+      if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
+      if (button.dataset.agentConfig) openAgentConfig(button.dataset.agentConfig);
       if (button.dataset.deploy) openDeploy(nickname);
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
         setActionState(nickname, "self_update", "error");
@@ -988,18 +1258,50 @@
   });
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
   document.querySelectorAll("[data-close-add-agent]").forEach((button) => button.addEventListener("click", closeAddAgent));
+  document.querySelectorAll("[data-close-edit-agent]").forEach((button) => button.addEventListener("click", closeEditAgent));
+  document.querySelectorAll("[data-close-agent-config]").forEach((button) => button.addEventListener("click", closeAgentConfig));
   els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => {
     setButtonState(els.confirmDeployBtn, "error");
     toast(err.message);
   }));
   els.createAgentBtn.addEventListener("click", createEnrollment);
+  els.saveAgentBtn.addEventListener("click", () => saveAgentEdit().catch((err) => {
+    setButtonState(els.saveAgentBtn, "error");
+    els.editAgentError.textContent = err.message;
+  }));
+  els.applyAgentConfigBtn.addEventListener("click", () => applyAgentConfig().catch((err) => {
+    setButtonState(els.applyAgentConfigBtn, "error");
+    els.agentConfigError.textContent = err.message;
+  }));
   els.newAgentGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
+  els.autoRefreshBtn.addEventListener("click", () => setAutoRefresh(!state.autoRefresh));
   els.backendUpdateBtn.addEventListener("click", () => deployBackend().catch((err) => {
     setButtonState(els.backendUpdateBtn, "error");
     toast(err.message);
     window.setTimeout(() => setButtonState(els.backendUpdateBtn, "idle"), 3000);
   }));
+
+  // Keyboard: Esc closes the top-most overlay; "/" focuses search.
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      if (!els.agentConfigModal.classList.contains("hidden")) { closeAgentConfig(); return; }
+      if (!els.editAgentModal.classList.contains("hidden")) { closeEditAgent(); return; }
+      if (!els.addAgentModal.classList.contains("hidden")) { closeAddAgent(); return; }
+      if (!els.deployModal.classList.contains("hidden")) { closeModal(); return; }
+      if (!els.resultDrawer.classList.contains("hidden")) { els.resultDrawer.classList.add("hidden"); return; }
+      return;
+    }
+    if (event.key === "/" && !/^(input|select|textarea)$/i.test(event.target.tagName) && !overlayOpen()) {
+      event.preventDefault();
+      els.searchInput.focus();
+    }
+  });
+
+  setAutoRefresh(true);
+  updateFreshness();
+  window.setInterval(updateFreshness, 1000);
+  window.setInterval(autoRefreshTick, AUTO_REFRESH_MS);
 
   refresh();
 })();

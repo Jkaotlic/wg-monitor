@@ -719,6 +719,18 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "agent_config_get":
+		out, err := GetAgentConfig(r.ConfigPath)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
+	case "update_agent_config":
+		out, err := UpdateAgentConfig(ctx, cmd.Args, r.ConfigPath)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "self_update":
 		version, _ := cmd.Args["version"].(string)
 		if version == "" {

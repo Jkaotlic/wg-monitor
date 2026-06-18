@@ -11,8 +11,13 @@ truth returned by the selected router.
 
 - `opkg_cron_status`: checks whether the managed script and crontab entry exist,
   reads `/opt` free space, and returns the last log tail.
-- `opkg_cron_install`: checks `/opt` free space, writes the script, updates only
-  the managed crontab block, and best-effort starts Entware cron.
+- `opkg_cron_install`: checks `/opt` free space, **ensures the Entware `cron`
+  package is installed** (`/opt/etc/init.d/S10cron`; runs `opkg install cron`,
+  retrying once after `opkg update`, when missing), writes the script, updates
+  only the managed crontab block, and best-effort starts Entware cron. When the
+  install had to add the cron package, the returned status `cron_service` reads
+  `available (installed cron package)`. If cron cannot be installed, the command
+  fails with the opkg error instead of silently scheduling a job that never runs.
 - `opkg_cron_logs`: returns a larger log tail.
 - `opkg_cron_remove`: removes the managed crontab block and script.
 - `version_audit`: shows AWG Manager, HR-Neo, and Keenetic firmware versions in

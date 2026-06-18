@@ -568,6 +568,8 @@ var wizardCommandAllowlist = map[string]bool{
 	"tunnel_restart":        true,
 	"tunnel_delete":         true,
 	"update_backend_url":    true,
+	"agent_config_get":      true,
+	"update_agent_config":   true,
 }
 
 var dashboardCommandAllowlist = map[string]bool{
@@ -585,6 +587,16 @@ var dashboardCommandAllowlist = map[string]bool{
 	"entware_clean_logs":    true,
 	"entware_clean_remove":  true,
 	"version_audit":         true,
+	// Safe on-router config editing: read the safe config subset and patch the
+	// whitelisted keys (interval, awg-manager URL/login, external_reach,
+	// maintenance gates) then restart the agent. backend.url is NOT touchable here
+	// — that whitelist lives agent-side in update_agent_config.
+	"agent_config_get":    true,
+	"update_agent_config": true,
+	// NB: update_backend_url is intentionally NOT here. Re-pointing the fleet's
+	// backend domain from a browser session is fleet-takeover blast radius, so it
+	// stays gated to the wizard token / deploy CLI (see
+	// TestDashboardCommandDispatchRejectsHiddenBackendURLUpdate).
 }
 
 // wizardDeployHandler enqueues a self_update command for an agent through
@@ -937,8 +949,94 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"url": normalized}, true
+	case "agent_config_get":
+		return map[string]any{}, true
+	case "update_agent_config":
+		return sanitizeAgentConfigArgs(w, args)
 	default:
 		return args, true
+	}
+}
+
+// agentConfigArgSpec mirrors the agent-side whitelist (actions.agentConfigWhitelist):
+// only these keys can be pushed via update_agent_config. backend.url/token are
+// absent on purpose — re-pointing the backend stays on the wizard/CLI path.
+var agentConfigBoolArgs = map[string]bool{
+	"external_reach_enabled": true,
+	"allow_router_reboot":    true,
+	"allow_firmware_install": true,
+}
+
+// sanitizeAgentConfigArgs validates and narrows update_agent_config args to the
+// known-safe keys, with the same type/range checks the agent enforces. At least
+// one recognized key must be present.
+func sanitizeAgentConfigArgs(w http.ResponseWriter, args map[string]any) (map[string]any, bool) {
+	out := map[string]any{}
+	reject := func(field string) (map[string]any, bool) {
+		writeJSONError(w, http.StatusBadRequest, "invalid_agent_config", "invalid value for "+field)
+		return nil, false
+	}
+	if v, ok := args["interval_sec"]; ok {
+		n, ok := agentConfigArgInt(v)
+		if !ok || n < 10 || n > 86400 {
+			return reject("interval_sec (want 10..86400)")
+		}
+		out["interval_sec"] = n
+	}
+	if v, ok := args["external_reach_fail_threshold"]; ok {
+		n, ok := agentConfigArgInt(v)
+		if !ok || n < 1 || n > 20 {
+			return reject("external_reach_fail_threshold (want 1..20)")
+		}
+		out["external_reach_fail_threshold"] = n
+	}
+	if v, ok := args["awgm_base_url"]; ok {
+		s, ok := v.(string)
+		if !ok {
+			return reject("awgm_base_url")
+		}
+		s = strings.TrimSpace(s)
+		if s != "" {
+			u, err := url.Parse(s)
+			if err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+				return reject("awgm_base_url (want absolute http(s) URL)")
+			}
+		}
+		out["awgm_base_url"] = s
+	}
+	if v, ok := args["awgm_login"]; ok {
+		s, ok := v.(string)
+		if !ok || len(strings.TrimSpace(s)) > 64 {
+			return reject("awgm_login")
+		}
+		out["awgm_login"] = strings.TrimSpace(s)
+	}
+	for key := range agentConfigBoolArgs {
+		if v, ok := args[key]; ok {
+			b, ok := v.(bool)
+			if !ok {
+				return reject(key)
+			}
+			out[key] = b
+		}
+	}
+	if len(out) == 0 {
+		writeJSONError(w, http.StatusBadRequest, "invalid_agent_config", "no recognized settings to change")
+		return nil, false
+	}
+	return out, true
+}
+
+func agentConfigArgInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	default:
+		return 0, false
 	}
 }
 
