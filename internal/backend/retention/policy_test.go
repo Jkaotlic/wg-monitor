@@ -2,6 +2,7 @@ package retention
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"log/slog"
@@ -32,6 +33,53 @@ func insertTestUser(t *testing.T, d *db.DB) int64 {
 		t.Fatalf("insert test user: %v", err)
 	}
 	return uid
+}
+
+// dbAutoVacuumMode reads the on-disk auto_vacuum mode via a fresh connection so
+// it reflects the actual file header rather than a connection's cached view.
+func dbAutoVacuumMode(t *testing.T, path string) int {
+	t.Helper()
+	c, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatalf("open db for pragma read: %v", err)
+	}
+	defer c.Close()
+	var mode int
+	if err := c.QueryRow("PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		t.Fatalf("read auto_vacuum: %v", err)
+	}
+	return mode
+}
+
+// TestPolicy_Vacuum_ConvertsToIncremental pins BE-01: instead of a blocking
+// in-place full VACUUM on every tick, the policy converts the DB to incremental
+// auto-vacuum once, then reclaims free pages incrementally without holding the
+// writer lock for the whole database.
+func TestPolicy_Vacuum_ConvertsToIncremental(t *testing.T) {
+	d := newTestDB(t)
+	p := &Policy{
+		DB:     d,
+		Cfg:    Config{VacuumInterval: time.Hour},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	const incremental = 2
+	if got := dbAutoVacuumMode(t, d.Path()); got == incremental {
+		t.Fatalf("fresh DB already incremental (%d); test would not exercise conversion", got)
+	}
+	// First run converts NONE -> incremental.
+	if err := p.vacuum(context.Background()); err != nil {
+		t.Fatalf("vacuum (convert): %v", err)
+	}
+	if got := dbAutoVacuumMode(t, d.Path()); got != incremental {
+		t.Fatalf("auto_vacuum=%d after first vacuum, want %d (incremental)", got, incremental)
+	}
+	// Second run takes the incremental path and must not error or regress mode.
+	if err := p.vacuum(context.Background()); err != nil {
+		t.Fatalf("vacuum (incremental): %v", err)
+	}
+	if got := dbAutoVacuumMode(t, d.Path()); got != incremental {
+		t.Fatalf("auto_vacuum=%d after second vacuum, want %d", got, incremental)
+	}
 }
 
 func TestPolicy_Prune_DeletesOldEventsOnly(t *testing.T) {

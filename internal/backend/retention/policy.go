@@ -7,6 +7,7 @@ package retention
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -100,6 +101,13 @@ func (p *Policy) prune(ctx context.Context) error {
 	return nil
 }
 
+// vacuum reclaims free pages. In-place full VACUUM holds an exclusive lock on
+// the whole database for its entire duration, which on a busy backend blocks
+// /v1/report writes until busy_timeout and produces false OFFLINE alerts
+// (BE-01). Instead we convert the DB to incremental auto-vacuum once (the only
+// full VACUUM that ever runs — it rewrites the file to apply the mode change),
+// then every later tick runs PRAGMA incremental_vacuum, which frees pages
+// incrementally without locking the database for minutes.
 func (p *Policy) vacuum(ctx context.Context) error {
 	start := p.now()
 	maint, err := sql.Open("sqlite", "file:"+p.DB.Path()+"?_pragma=busy_timeout(100)")
@@ -108,11 +116,29 @@ func (p *Policy) vacuum(ctx context.Context) error {
 	}
 	defer maint.Close()
 	maint.SetMaxOpenConns(1)
-	if _, err := maint.ExecContext(ctx, "VACUUM"); err != nil {
-		p.Logger.Warn("retention: VACUUM failed", "duration_ms", p.now().Sub(start).Milliseconds(), "err", err)
+
+	const incremental = 2 // SQLite auto_vacuum: 0=NONE, 1=FULL, 2=INCREMENTAL
+	var mode int
+	if err := maint.QueryRowContext(ctx, "PRAGMA auto_vacuum").Scan(&mode); err != nil {
+		return fmt.Errorf("read auto_vacuum: %w", err)
+	}
+	if mode != incremental {
+		if _, err := maint.ExecContext(ctx, "PRAGMA auto_vacuum=INCREMENTAL"); err != nil {
+			return fmt.Errorf("set auto_vacuum incremental: %w", err)
+		}
+		// The mode change only takes effect once the file is rewritten.
+		if _, err := maint.ExecContext(ctx, "VACUUM"); err != nil {
+			p.Logger.Warn("retention: VACUUM (incremental conversion) failed", "duration_ms", p.now().Sub(start).Milliseconds(), "err", err)
+			return err
+		}
+		p.Logger.Info("retention: converted DB to incremental auto-vacuum", "duration_ms", p.now().Sub(start).Milliseconds())
+		return nil
+	}
+	if _, err := maint.ExecContext(ctx, "PRAGMA incremental_vacuum"); err != nil {
+		p.Logger.Warn("retention: incremental_vacuum failed", "duration_ms", p.now().Sub(start).Milliseconds(), "err", err)
 		return err
 	}
-	p.Logger.Info("retention: VACUUM done", "duration_ms", p.now().Sub(start).Milliseconds())
+	p.Logger.Info("retention: incremental_vacuum done", "duration_ms", p.now().Sub(start).Milliseconds())
 	return nil
 }
 
