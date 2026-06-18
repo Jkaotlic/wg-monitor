@@ -167,6 +167,36 @@ func relayParent(d Deps) context.Context {
 	return context.Background()
 }
 
+// relayConcurrencyLimit bounds the fire-and-forget TG relay goroutines spawned
+// from the /v1/report and /v1/cmd/result hot paths. Without a bound, a
+// fleet-wide resume storm (VPN server restart → every agent resumes at once)
+// spawns one goroutine per agent, each holding a TG call up to 10s; TG then
+// 429s and the goroutines pile up, potentially outliving Shutdown (BE-02).
+const relayConcurrencyLimit = 32
+
+// relaySem is a process-wide semaphore for relay goroutines. Package-level so it
+// is shared across the by-value Deps copies every handler receives.
+var relaySem = make(chan struct{}, relayConcurrencyLimit)
+
+// spawnRelay runs fn in a bounded background goroutine parented to the relay
+// (shutdown) context with a 10s timeout. When the relay pool is saturated the
+// notification is dropped (and logged) instead of spawning an unbounded
+// goroutine — best-effort TG notices are the right thing to shed under a storm.
+func spawnRelay(d Deps, label string, fn func(ctx context.Context)) {
+	select {
+	case relaySem <- struct{}{}:
+	default:
+		d.Logger.Warn("relay pool saturated; dropping background notify", "label", label, "limit", relayConcurrencyLimit)
+		return
+	}
+	go func() {
+		defer func() { <-relaySem }()
+		ctx, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
+		defer cancel()
+		fn(ctx)
+	}()
+}
+
 // trimSpace + indexByte are tiny one-line helpers to avoid importing strings
 // only for two calls — handler.go already pulls many deps. Using stdlib here
 // would also be fine.
@@ -550,13 +580,11 @@ func reportHandler(d Deps) http.HandlerFunc {
 			if d.WakeNotifier != nil {
 				checks := append([]wire.Check(nil), rep.Checks...)
 				nickname := nick
-				go func() {
-					bg, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
-					defer cancel()
+				spawnRelay(d, "wake", func(bg context.Context) {
 					if err := d.WakeNotifier.SendWake(bg, uid, nickname, checks); err != nil {
 						d.Logger.Warn("wake notifier", "nickname", nickname, "err", err)
 					}
-				}()
+				})
 			}
 		}
 
@@ -748,13 +776,11 @@ func reportHandler(d Deps) http.HandlerFunc {
 			} else if update.PendingCleared && d.DeployNotifier != nil {
 				version := update.Version
 				nickname := nick
-				go func() {
-					bg, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
-					defer cancel()
+				spawnRelay(d, "deploy-deferred", func(bg context.Context) {
 					if err := d.DeployNotifier.SendDeferredUpdate(bg, uid, nickname, version, "ok", "heartbeat confirmed new agent version"); err != nil {
 						d.Logger.Warn("deploy notifier success", "nickname", nickname, "version", version, "err", err)
 					}
-				}()
+				})
 			}
 		}
 		if d.PublicBaseURL != "" {
@@ -1038,14 +1064,12 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					output := res.Output
 					nickname := nick
 					status := res.Status
-					go func() {
-						ctx, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
-						defer cancel()
+					spawnRelay(d, "deploy-result", func(ctx context.Context) {
 						if err := d.DeployNotifier.SendDeferredUpdate(ctx, uid, nickname, target, status, output); err != nil {
 							incTGError()
 							d.Logger.Warn("deploy notifier failed", "cmd_id", res.ID, "action", cmd.Action, "err", err)
 						}
-					}()
+					})
 				}
 			}
 		}
