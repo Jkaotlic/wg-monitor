@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -67,15 +66,15 @@ func (e *AWGMHTTPError) Error() string {
 }
 
 func NewAWGMClient(baseURL, login, password string) *AWGMClient {
+	normalized := normalizeAWGMURL(baseURL)
 	httpClient := &http.Client{Timeout: awgmClientTimeout}
 	if awgmInsecureTLS() {
 		httpClient.Transport = &http.Transport{
-			// #nosec G402 -- explicit AWGM_INSECURE_TLS=1 break-glass mode for self-signed router web UI.
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: awgmInsecureTLSConfig(awgmHost(normalized)),
 		}
 	}
 	return &AWGMClient{
-		BaseURL:  normalizeAWGMURL(baseURL),
+		BaseURL:  normalized,
 		LoginID:  login,
 		Password: password,
 		HTTP:     httpClient,
@@ -202,7 +201,7 @@ func (c *AWGMClient) RunTerminalScriptWithLogin(ctx context.Context, script, log
 		return TerminalRunResult{}, err
 	}
 	cfg.Header.Set("X-Requested-With", "XMLHttpRequest")
-	applyAWGMWebsocketTLSConfig(cfg)
+	applyAWGMWebsocketTLSConfig(cfg, awgmHost(c.BaseURL))
 	if hdr := c.authHeader(); hdr != "" {
 		cfg.Header.Set("Authorization", hdr)
 	}
@@ -258,12 +257,11 @@ func awgmInsecureTLS() bool {
 	return strings.EqualFold(strings.TrimSpace(os.Getenv("AWGM_INSECURE_TLS")), "1")
 }
 
-func applyAWGMWebsocketTLSConfig(cfg *websocket.Config) {
+func applyAWGMWebsocketTLSConfig(cfg *websocket.Config, host string) {
 	if cfg == nil || !awgmInsecureTLS() {
 		return
 	}
-	// #nosec G402 -- explicit AWGM_INSECURE_TLS=1 break-glass mode for self-signed router web UI.
-	cfg.TlsConfig = &tls.Config{InsecureSkipVerify: true}
+	cfg.TlsConfig = awgmInsecureTLSConfig(host)
 }
 
 func awgmTerminalDoneFromChunk(text, marker string) (bool, error) {

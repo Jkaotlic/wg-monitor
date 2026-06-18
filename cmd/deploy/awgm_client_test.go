@@ -40,7 +40,7 @@ func TestAWGMClientInsecureTLSAppliesToWebsocketConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConfig strict: %v", err)
 	}
-	applyAWGMWebsocketTLSConfig(strict)
+	applyAWGMWebsocketTLSConfig(strict, "awg.example")
 	if strict.TlsConfig != nil {
 		t.Fatalf("strict websocket TLS config = %#v, want nil", strict.TlsConfig)
 	}
@@ -50,9 +50,12 @@ func TestAWGMClientInsecureTLSAppliesToWebsocketConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConfig insecure: %v", err)
 	}
-	applyAWGMWebsocketTLSConfig(insecure)
+	applyAWGMWebsocketTLSConfig(insecure, "awg.example")
 	if insecure.TlsConfig == nil || !insecure.TlsConfig.InsecureSkipVerify {
 		t.Fatalf("insecure websocket TLS config = %#v, want InsecureSkipVerify", insecure.TlsConfig)
+	}
+	if insecure.TlsConfig.VerifyConnection == nil {
+		t.Fatal("insecure websocket TLS config must pin the cert via VerifyConnection (SEC-02)")
 	}
 }
 
