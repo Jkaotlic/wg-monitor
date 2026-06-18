@@ -42,9 +42,12 @@ func SignatureRequiredForVersion(version string) bool {
 	if version == "" {
 		return true
 	}
-	if strings.EqualFold(version, "v0.13.0") {
-		return false
-	}
+	// Legacy carve-out: only the pre-signing v0.13.0-rc1..rc127 prereleases are
+	// exempt — they were published before the release workflow signed
+	// checksums and cannot be signed retroactively. Every later version,
+	// including the v0.13.0 stable tag, MUST carry a valid signature (the
+	// release workflow signs unconditionally), so a compromised GitHub release
+	// cannot serve an unsigned stable binary to the fleet.
 	if n, ok := rcNumber(version, "v0.13.0-rc"); ok {
 		return n >= 128
 	}

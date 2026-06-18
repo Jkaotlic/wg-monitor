@@ -46,7 +46,7 @@ func TestSignatureRequiredForVersion(t *testing.T) {
 		{"v0.13.0-rc127", false},
 		{"v0.13.0-rc128", true},
 		{"v0.13.0-rc129", true},
-		{"v0.13.0", false},
+		{"v0.13.0", true},
 		{"v0.13.1", true},
 		{"v1.0.0", true},
 		{"", true},
