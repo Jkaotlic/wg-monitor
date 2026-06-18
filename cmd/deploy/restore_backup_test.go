@@ -257,6 +257,29 @@ func TestBuildRestoreRemoteScriptValidatesTokensBeforeStop(t *testing.T) {
 	}
 }
 
+func TestBuildRestoreRemoteScriptRollsBackAfterStopOnFailure(t *testing.T) {
+	script := buildRestoreRemoteScript("20260522T055443Z")
+	// On any failure after the service is stopped, the script must restore the
+	// pre-restore copies (bak -> live) and bring the old version back, so a
+	// broken install never leaves prod down (DEP-01).
+	for _, want := range []string{
+		"trap '",
+		"cp -p /var/lib/wg-monitor/state.db.bak.20260522T055443Z /var/lib/wg-monitor/state.db",
+		"cp -p /etc/wg-monitor/backend.yaml.bak.20260522T055443Z /etc/wg-monitor/backend.yaml",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("restore script missing rollback step %q:\n%s", want, script)
+		}
+	}
+	// The rollback trap must be armed only after the service is stopped — a
+	// pre-stop validation failure leaves the running service untouched.
+	stop := strings.Index(script, "systemctl stop wg-monitor-backend")
+	trapIdx := strings.Index(script, "trap '")
+	if stop < 0 || trapIdx < 0 || trapIdx < stop {
+		t.Fatalf("rollback trap must be armed after systemctl stop:\n%s", script)
+	}
+}
+
 func TestRestoredBackendVerificationFailsOnHealthError(t *testing.T) {
 	err := restoredBackendVerificationResult("active\n", nil, "wg.example.test", errors.New("health failed"))
 	if err == nil || !strings.Contains(err.Error(), "health failed") {
