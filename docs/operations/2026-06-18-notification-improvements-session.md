@@ -59,9 +59,27 @@ Deliberately NOT changed:
 
 ## Push
 
-- `git push origin main`: `23470cfd..f5a878d9` (this session's commit `f5a878d9`
-  plus the previously-deferred 2026-06-18 audit/SEC commits that were sitting
-  unpushed). origin/main now == local HEAD.
+- `git push origin main`: `23470cfd..f5a878d9` (this session's feature commit
+  `f5a878d9` plus the previously-deferred 2026-06-18 audit/SEC commits that were
+  sitting unpushed), then `f5a878d9..4b37040c` (this checkpoint doc).
+
+## Repo cleanup (same session)
+
+The working tree had accumulated clutter; tidied it:
+
+- **Removed from disk** (regenerable build junk): `dist-rc107..111/` + their
+  `-flat` variants (compiled release binaries for all platforms) and
+  `.playwright-mcp/` (MCP tool logs/screenshots).
+- **`.gitignore` extended**: `/dist-rc*/`, `.playwright-mcp/`, `.tmp/`
+  (commit `b81ea2ee`).
+- **14 internal operational notes kept local-only** (operator decision): no
+  hard secrets, but internal infra topology → listed explicitly in `.gitignore`
+  so they stay on disk but are NOT published to the public repo
+  (commit `95f96458`). New shareable docs still get committed.
+- `deploy.exe` (operator's wizard binary) and `dist/` left untouched (already
+  ignored). `git status` is now clean.
+
+Final HEAD pushed: `95f96458` (+ this doc update). origin/main == local HEAD.
 
 ## Deferred / next
 
