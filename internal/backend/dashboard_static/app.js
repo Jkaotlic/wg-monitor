@@ -357,14 +357,19 @@
         <td>${awg}</td>
         <td><div class="incident-list">${incidents || '<span class="badge badge-success">clear</span>'}</div></td>
         <td>
-          <div class="action-strip">
-            <button class="mini-btn" type="button" title="Run diagnostics" data-state="${buttonState(agent.nickname, "diag_now")}" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diagnostics</button>
+          <div class="row-actions">
+            <button class="mini-btn" type="button" title="Run diagnostics" data-state="${buttonState(agent.nickname, "diag_now")}" data-command="diag_now" data-agent="${escapeAttr(agent.nickname)}">Diag</button>
             <button class="mini-btn" type="button" title="${escapeAttr(recheckTitle(agent))}" data-state="${buttonState(agent.nickname, "force_recheck")}" data-command="force_recheck" data-agent="${escapeAttr(agent.nickname)}">${escapeHTML(recheckShortLabel(agent))}</button>
-            <button class="mini-btn" type="button" title="Show route status" data-state="${buttonState(agent.nickname, "route_status")}" data-command="route_status" data-agent="${escapeAttr(agent.nickname)}">Routes</button>
-            <button class="mini-btn" type="button" title="Show tunnel status" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
-            <button class="mini-btn danger" type="button" title="Restart AWG Manager" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">Restart AWG</button>
             ${latestDeployButton(agent, "mini-btn primary", "Update")}
-            <button class="mini-btn" type="button" title="Deploy a specific version" data-deploy="${escapeAttr(agent.nickname)}">Version</button>
+            <div class="row-overflow">
+              <button class="mini-btn" type="button" title="More actions" data-overflow="${escapeAttr(agent.nickname)}">⋯</button>
+              <div class="row-overflow-menu">
+                <button class="mini-btn" type="button" title="Show route status" data-state="${buttonState(agent.nickname, "route_status")}" data-command="route_status" data-agent="${escapeAttr(agent.nickname)}">Routes</button>
+                <button class="mini-btn" type="button" title="Show tunnel status" data-state="${buttonState(agent.nickname, "tunnels_status")}" data-command="tunnels_status" data-agent="${escapeAttr(agent.nickname)}">Tunnels</button>
+                <button class="mini-btn danger" type="button" title="Restart AWG Manager" data-state="${buttonState(agent.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(agent.nickname)}">Restart AWG</button>
+                <button class="mini-btn" type="button" title="Deploy a specific version" data-deploy="${escapeAttr(agent.nickname)}">Version</button>
+              </div>
+            </div>
           </div>
         </td>
       </tr>
@@ -1338,8 +1343,17 @@
     });
   });
   document.body.addEventListener("click", (event) => {
+    // Close any open row-overflow menu unless the click is inside it (or on its toggle).
+    document.querySelectorAll(".row-overflow.open").forEach((node) => {
+      if (!node.contains(event.target)) node.classList.remove("open");
+    });
     const button = event.target.closest("button");
     if (button) {
+      if (button.dataset.overflow) {
+        const wrap = button.closest(".row-overflow");
+        if (wrap) wrap.classList.toggle("open");
+        return;
+      }
       if (isButtonBusy(button)) return;
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
