@@ -11,17 +11,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/awgmrelay"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
 // Dashboard "Revive via AWG Manager". A router goes dark when its backend domain
 // changes: the agent keeps dialing the old backend.url and never polls the
 // current backend, so no agent-channel command can reach it. But the router's
-// awg-manager is a separate daemon, reachable over its public DDNS, and the VPS
-// already ships a Python relay (awgm-relay.py, installed by the wizard's
-// deferred-awgm deploy) that drives the awg-manager terminal. So the backend can
-// revive a dark router out-of-band: run a script through that terminal to rewrite
+// awg-manager is a separate daemon, reachable over its public DDNS, and a Python
+// relay (awgm-relay.py) drives the awg-manager terminal. So the backend can revive
+// a dark router out-of-band: run a script through that terminal to rewrite
 // backend.url and restart the agent.
+//
+// The relay is embedded in the backend (internal/awgmrelay, stdlib-only python3)
+// and self-provisioned to a temp file per call, so revive works with NO wizard
+// step. A wizard-installed copy at AWGMRelayPath is used only as an override when
+// present (the wizard is a pure fallback).
 //
 // The router root password (terminal login) is NOT stored — the operator supplies
 // it per-click. So a leaked dashboard session alone cannot revive anything; it's
@@ -56,10 +61,48 @@ type awgmReviveJob struct {
 // can swap in a fake without a real router/relay.
 var runAWGMRelayJob = defaultRunAWGMRelayJob
 
-func defaultRunAWGMRelayJob(ctx context.Context, relayPath string, job awgmReviveJob) (string, error) {
-	if _, err := os.Stat(relayPath); err != nil {
-		return "", fmt.Errorf("awg-manager relay not installed at %s — run a deferred-awgm deploy from the wizard once to install it", relayPath)
+// resolveRelayScript returns the path to the awgm-relay.py to execute. A
+// wizard-installed copy at override is used as-is when it exists; otherwise the
+// embedded relay is written to a 0700 temp file so revive needs no wizard step.
+// cleanup removes the temp file (a no-op for the override path).
+func resolveRelayScript(override string) (path string, cleanup func(), err error) {
+	if override != "" {
+		if _, statErr := os.Stat(override); statErr == nil {
+			return override, func() {}, nil
+		}
 	}
+	f, err := os.CreateTemp("", "wg-monitor-awgm-relay-*.py")
+	if err != nil {
+		return "", func() {}, err
+	}
+	name := f.Name()
+	cleanup = func() { _ = os.Remove(name) }
+	if err := f.Chmod(0o700); err != nil {
+		_ = f.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if _, err := f.Write(awgmrelay.Script); err != nil {
+		_ = f.Close()
+		cleanup()
+		return "", func() {}, err
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return name, cleanup, nil
+}
+
+func defaultRunAWGMRelayJob(ctx context.Context, relayPath string, job awgmReviveJob) (string, error) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		return "", fmt.Errorf("python3 not found on the backend host — the revive relay needs it (install python3)")
+	}
+	scriptPath, cleanupScript, err := resolveRelayScript(relayPath)
+	if err != nil {
+		return "", fmt.Errorf("provision awgm relay: %w", err)
+	}
+	defer cleanupScript()
 	body, err := json.Marshal(job)
 	if err != nil {
 		return "", err
@@ -83,7 +126,7 @@ func defaultRunAWGMRelayJob(ctx context.Context, relayPath string, job awgmReviv
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(runCtx, "python3", relayPath, tmp).CombinedOutput()
+	out, err := exec.CommandContext(runCtx, "python3", scriptPath, tmp).CombinedOutput()
 	return string(out), err
 }
 
