@@ -249,6 +249,7 @@
     els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
     els.summaryText.textContent = summarySentence(summary);
+    renderHealthStrip(summary);
     renderGroupOptions();
 
     const agents = visibleAgents(summary);
@@ -259,6 +260,22 @@
     }
     els.agentsBody.innerHTML = agents.map(agentRow).join("");
     renderSelectedDrawer();
+  }
+
+  function renderHealthStrip(summary) {
+    const t = summary.totals || {};
+    const segs = [
+      { n: t.online || 0, cls: "seg-online", label: "online" },
+      { n: t.sleeping || 0, cls: "seg-sleeping", label: "sleeping" },
+      { n: t.alerts || 0, cls: "seg-alert", label: "alert" },
+      { n: t.offline || 0, cls: "seg-offline", label: "offline" }
+    ].filter((s) => s.n > 0);
+    const total = segs.reduce((sum, s) => sum + s.n, 0) || 1;
+    const bar = document.getElementById("healthBar");
+    if (!bar) return;
+    bar.innerHTML = segs.map((s) =>
+      `<span class="health-seg ${s.cls}" style="width:${(s.n / total) * 100}%" title="${escapeAttr(s.n + " " + s.label)}"></span>`
+    ).join("") || `<span class="health-seg seg-offline" style="width:100%"></span>`;
   }
 
   function visibleAgents(summary) {

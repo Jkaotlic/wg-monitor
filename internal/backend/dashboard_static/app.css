@@ -350,32 +350,85 @@ select:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-.kpi-grid {
+.health-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 18px;
-}
-
-.kpi-card {
-  min-height: 126px;
   border: 1px solid var(--line);
-  border-top: 4px solid var(--blue);
-  border-radius: 8px;
-  background: var(--panel);
-  box-shadow: 0 12px 30px rgba(31, 41, 55, 0.08);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
   padding: 18px;
 }
 
-.kpi-card.good {
+.health-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.health-headline {
+  max-width: 860px;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.health-bar {
+  display: flex;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.health-seg {
+  display: block;
+  height: 100%;
+  transition: width 320ms ease;
+}
+
+.health-seg.seg-online {
+  background: var(--green);
+}
+
+.health-seg.seg-sleeping {
+  background: var(--amber);
+}
+
+.health-seg.seg-alert {
+  background: var(--red);
+}
+
+.health-seg.seg-offline {
+  background: var(--faint);
+}
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.stat-tile {
+  border: 1px solid var(--line);
+  border-top: 3px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 14px 16px;
+}
+
+.stat-tile.good {
   border-top-color: var(--green);
 }
 
-.kpi-card.bad {
+.stat-tile.bad {
   border-top-color: var(--red);
 }
 
-.kpi-card.warn {
+.stat-tile.warn {
   border-top-color: var(--amber);
 }
 
@@ -386,17 +439,18 @@ select:focus {
   text-transform: uppercase;
 }
 
-.kpi-card strong {
+.stat-tile strong {
   display: block;
-  margin-top: 10px;
-  font-size: 34px;
+  margin-top: 8px;
+  font-size: 30px;
   line-height: 1;
 }
 
-.kpi-card small {
+.stat-tile small {
   display: block;
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 
 .toolbar {
