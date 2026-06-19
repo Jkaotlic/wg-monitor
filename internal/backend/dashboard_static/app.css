@@ -35,9 +35,11 @@ body {
     radial-gradient(1200px 600px at 70% -10%, rgba(59, 130, 246, 0.10), transparent 60%),
     var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 14px;
-  line-height: 1.45;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 button,
@@ -98,21 +100,20 @@ button {
   background: var(--surface-2);
   color: var(--accent);
   font-size: 14px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .brand-title,
 .agent-name {
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .brand-subtitle,
 .eyebrow {
   color: var(--faint);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   letter-spacing: 0;
-  text-transform: uppercase;
 }
 
 .nav-stack {
@@ -143,7 +144,7 @@ button {
   gap: 9px;
   color: var(--muted);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .status-dot {
@@ -181,16 +182,24 @@ p {
 
 h1 {
   margin-top: 4px;
-  font-size: 30px;
-  line-height: 1.15;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
 }
 
 h2 {
-  font-size: 20px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 h3 {
-  font-size: 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.topbar h1 {
+  white-space: nowrap;
 }
 
 .topbar-note {
@@ -220,7 +229,7 @@ h3 {
   background: var(--surface-2);
   color: var(--text);
   padding: 0 12px;
-  font-weight: 800;
+  font-weight: 600;
   text-decoration: none;
   transition: background 140ms ease, border-color 140ms ease, color 140ms ease, transform 120ms ease, box-shadow 140ms ease;
 }
@@ -371,9 +380,9 @@ select:focus {
 .health-headline {
   max-width: 860px;
   color: var(--text);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1.45;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.5;
 }
 
 .health-bar {
@@ -435,15 +444,17 @@ select:focus {
 .kpi-label {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .stat-tile strong {
   display: block;
   margin-top: 8px;
-  font-size: 30px;
+  font-size: 28px;
+  font-weight: 700;
   line-height: 1;
+  letter-spacing: -0.02em;
 }
 
 .stat-tile small {
@@ -492,7 +503,7 @@ select:focus {
   background: transparent;
   color: var(--muted);
   padding: 0 12px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .segment:hover {
@@ -516,7 +527,7 @@ select:focus {
   background: var(--surface-2);
   color: var(--muted);
   font-size: 11px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .segment.active .pill-count {
@@ -542,9 +553,9 @@ select:focus {
 .fleet-table th,
 .fleet-table td {
   border-bottom: 1px solid var(--line);
-  padding: 12px 14px;
+  padding: 13px 14px;
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .fleet-table th {
@@ -554,7 +565,9 @@ select:focus {
   background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
-  text-transform: uppercase;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: 0.01em;
 }
 
 .fleet-table th:nth-child(1) {
@@ -661,7 +674,7 @@ select:focus {
   border-radius: 999px;
   padding: 0 9px;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .badge-success {
@@ -808,7 +821,7 @@ select:focus {
   border-radius: 7px;
   background: transparent;
   color: var(--muted);
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
   transition: background 140ms ease, color 140ms ease;
 }
@@ -912,8 +925,7 @@ select:focus {
 .form-field span {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
+  font-weight: 600;
 }
 
 .form-grid {
@@ -930,8 +942,7 @@ select:focus {
   margin: 12px 0 8px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 600;
 }
 
 .modal-note {
@@ -945,7 +956,7 @@ select:focus {
   margin-top: 10px;
   color: var(--red);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .icon-btn {
@@ -1023,8 +1034,7 @@ select:focus {
 .result-grid span {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
-  text-transform: uppercase;
+  font-weight: 600;
 }
 
 .result-grid strong {
@@ -1054,8 +1064,7 @@ select:focus {
 
 .result-table th {
   color: var(--muted);
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 600;
 }
 
 .raw-output,
@@ -1078,7 +1087,7 @@ details.raw-output {
 
 details.raw-output summary {
   cursor: pointer;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 details.raw-output pre {
@@ -1098,7 +1107,7 @@ details.raw-output pre {
   color: var(--text);
   box-shadow: var(--shadow);
   padding: 12px 14px;
-  font-weight: 800;
+  font-weight: 600;
 }
 
 .hidden {
@@ -1200,7 +1209,7 @@ details.raw-output pre {
   margin-top: 8px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 500;
 }
 
 .status-dot.warn {
@@ -1254,7 +1263,7 @@ details.raw-output pre {
   cursor: pointer;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 600;
   padding: 4px 0;
 }
 
