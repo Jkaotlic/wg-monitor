@@ -272,6 +272,30 @@ type defaultRouteExternalReachCheck struct {
 func (c defaultRouteExternalReachCheck) Name() string { return "external_reach" }
 
 func (c defaultRouteExternalReachCheck) Run(ctx context.Context, deps checks.Deps) wire.Check {
+	start := time.Now()
+	// When the sing-box router is the active routing method (e.g. client-c:
+	// singboxRouter.enabled + deviceMode "all"), awg-manager routes per sing-box's
+	// own policy using the tunnels as outbounds, and download.routeTag is "direct".
+	// A single iface-bound (or WAN-direct) probe from the router cannot replicate
+	// that per-destination routing, so it gives a misleading signal — which showed
+	// up as a false "external services unreachable" HARD. Report OK with a note
+	// that routing is sing-box-managed instead of probing.
+	if c.awgClient != nil {
+		sbCtx, sbCancel := context.WithTimeout(ctx, 5*time.Second)
+		s, err := c.awgClient.Settings(sbCtx)
+		sbCancel()
+		if err == nil && s.SingboxRouterActive() {
+			if c.logger != nil {
+				c.logger.Info("external_reach: sing-box router active — skipping router-side probe", "device_mode", s.SingboxRouter.DeviceMode)
+			}
+			return checks.OK("external_reach", start, map[string]any{
+				"skipped":     true,
+				"reason":      "singbox_router_active",
+				"routing_via": "singbox",
+				"device_mode": s.SingboxRouter.DeviceMode,
+			})
+		}
+	}
 	pickCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	viaIface := pickDefaultRouteIface(pickCtx, c.awgClient, c.logger)
 	cancel()
