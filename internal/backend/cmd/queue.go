@@ -258,6 +258,39 @@ func (q *Queue) Enqueue(userID int64, cmd wire.Command) error {
 	return nil
 }
 
+// DropPending removes all queued (not-yet-issued) commands of the given action
+// for a user and returns them. Backs the operator's "cancel pending deploy"
+// action: dropping a queued self_update means it never fires when a sleeping
+// agent later wakes. The expired-command handler is NOT invoked — the caller
+// owns the pending-state cleanup (so it can clear unconditionally).
+func (q *Queue) DropPending(userID int64, action string) []wire.Command {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	queue := q.pending[userID]
+	if len(queue) == 0 {
+		return nil
+	}
+	var dropped []wire.Command
+	filtered := queue[:0]
+	for _, existing := range queue {
+		if existing.Action == action {
+			q.deleteOriginLocked(userID, existing.ID)
+			dropped = append(dropped, existing)
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	if len(filtered) == 0 {
+		delete(q.pending, userID)
+	} else {
+		q.pending[userID] = filtered
+	}
+	if len(dropped) > 0 {
+		q.log().Debug("queue drop pending", "user_id", userID, "action", action, "dropped", len(dropped))
+	}
+	return dropped
+}
+
 // Dequeue returns the head command for userID. If empty, waits up to
 // holdTimeout for an Enqueue or until ctx is done. Returns (nil, false) if
 // timed out or ctx cancelled. Otherwise (cmd, true).

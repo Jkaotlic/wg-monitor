@@ -1223,6 +1223,8 @@ func (s failingEnqueueSink) CommandByID(int64, string) (wire.Command, bool) {
 
 func (s failingEnqueueSink) Enqueue(int64, wire.Command) error { return s.err }
 
+func (s failingEnqueueSink) DropPending(int64, string) []wire.Command { return nil }
+
 func (s failingEnqueueSink) AwaitResult(context.Context, int64, string, time.Duration) (*wire.CommandResult, bool) {
 	return nil, false
 }
