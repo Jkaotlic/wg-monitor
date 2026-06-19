@@ -13,7 +13,8 @@
     opkgCron: new Map(),
     entwareClean: new Map(),
     versions: new Map(),
-    agentConfig: new Map()
+    agentConfig: new Map(),
+    cronAutoChecked: new Set()
   };
 
   const els = {
@@ -481,6 +482,7 @@
   function drawerTabOverview(selected) {
     const incidents = (selected.active_incidents || []).map((i) => `<span class="badge badge-danger">${escapeHTML(i.check_name)} ${i.fail_count || ""}</span>`).join("") || '<span class="badge badge-success">clear</span>';
     const versionStatus = state.versions.get(selected.nickname);
+    const cronText = opkgCronOverviewText(selected);
     const awgBlock = selected.awgm_url
       ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
       : `<button class="action-btn disabled" type="button" disabled><span class="ti ti-external-link"></span>Open AWG</button><p class="drawer-note">AWG Manager URL не сохранен. Добавь его через deploy sync или awgm-url-patch.</p>`;
@@ -492,6 +494,7 @@
             ${drawerKV("Last seen", formatLastSeen(selected))}
             ${drawerKV("Version", selected.agent_version || "-")}
             ${drawerKV("Pending", selected.pending_version || "idle")}
+            ${drawerKV("OPKG cron", cronText)}
           </div>
           ${selected.pending_version ? `<div class="drawer-actions drawer-actions-top"><button class="action-btn warn" type="button" title="Снять зависший pending-деплой (дропает очередь self_update, чтобы он не сработал при пробуждении)" data-cancel-deploy="${escapeAttr(selected.nickname)}"><span class="ti ti-x"></span>Cancel pending ${escapeHTML(selected.pending_version)}</button></div>` : ""}
         </section>
@@ -711,6 +714,56 @@
     const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/deploy/cancel`, { method: "POST" });
     toast(res && res.cleared ? "pending deploy отменён" : "нечего отменять");
     await refresh();
+  }
+
+  // opkgCronOverviewText surfaces the OPKG update-cron install state at a glance
+  // in the agent drawer, so the operator doesn't have to dig into Maintenance and
+  // click Check. Reflects the cached opkg_cron_status (auto-checked on select).
+  function opkgCronOverviewText(selected) {
+    const cron = state.opkgCron.get(selected.nickname);
+    if (cron) return cron.installed ? "installed" + (cron.schedule ? " · " + cron.schedule : "") : "not installed";
+    if (state.cronAutoChecked.has(selected.nickname)) return "проверяю…";
+    if (selected.status !== "online" && selected.status !== "alert") return "— (агент офлайн)";
+    return "—";
+  }
+
+  // maybeAutoCheckCron fires a one-shot, silent opkg_cron_status when a reachable
+  // agent is opened and its cron state is not yet known — so "OPKG cron" in the
+  // drawer fills in by itself. Skips sleeping/offline agents (can't reach them)
+  // and never re-fires for the same agent in a session.
+  function maybeAutoCheckCron(nickname) {
+    if (!nickname || state.cronAutoChecked.has(nickname) || state.opkgCron.has(nickname)) return;
+    const agent = (state.summary?.agents || []).find((a) => a.nickname === nickname);
+    if (!agent || (agent.status !== "online" && agent.status !== "alert")) return;
+    state.cronAutoChecked.add(nickname);
+    renderSelectedDrawer();
+    silentCommand(nickname, "opkg_cron_status", { lines: 40 });
+  }
+
+  // silentCommand queues a read-only status command and polls its result without
+  // opening the result drawer, feeding the cached state via rememberCommandResult.
+  // Best-effort: errors and timeouts are swallowed (the badge falls back to "—").
+  async function silentCommand(nickname, action, args) {
+    try {
+      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/commands`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, args: args || {} })
+      });
+      if (!res || !res.cmd_id) return;
+      for (let i = 0; i < 8; i++) {
+        try {
+          const r = await api(`/v1/dashboard/commands/${encodeURIComponent(res.cmd_id)}?nickname=${encodeURIComponent(nickname)}&wait_sec=5`);
+          rememberCommandResult(nickname, action, r);
+          return;
+        } catch (err) {
+          if (!(err.status === 404 && err.code === "result_not_ready")) return;
+          await sleep(1200);
+        }
+      }
+    } catch (_) {
+      // silent — auto-check is best-effort
+    }
   }
 
   async function deployLatest(nickname) {
@@ -1432,6 +1485,7 @@
       if (state.selected !== row.dataset.rowAgent) state.drawerTab = "overview";
       state.selected = row.dataset.rowAgent;
       renderSelectedDrawer();
+      maybeAutoCheckCron(state.selected);
     }
   });
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
