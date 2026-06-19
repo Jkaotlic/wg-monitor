@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -147,5 +148,42 @@ func TestDashboardReviveRequiresAuth(t *testing.T) {
 	rec := postRevive(t, h, "snekhaev", `{"root_password":"x"}`, false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The relay is embedded in the backend and self-provisioned, so revive needs no
+// wizard step: a missing path yields a temp copy of the real relay python.
+func TestResolveRelayScriptSelfProvisionsEmbedded(t *testing.T) {
+	path, cleanup, err := resolveRelayScript(filepath.Join(t.TempDir(), "absent.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("temp relay not readable: %v", err)
+	}
+	if !strings.HasPrefix(string(b), "#!/usr/bin/env python3") {
+		t.Fatalf("temp file is not the embedded relay: %.40q", string(b))
+	}
+	cleanup()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("cleanup should remove the temp relay, stat err=%v", err)
+	}
+}
+
+// A wizard-installed copy at the override path is honored as-is (wizard fallback).
+func TestResolveRelayScriptUsesInstalledOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "awgm-relay.py")
+	if err := os.WriteFile(override, []byte("# installed copy\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, cleanup, err := resolveRelayScript(override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if path != override {
+		t.Fatalf("should use the installed override, got %q", path)
 	}
 }
