@@ -80,11 +80,66 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("POST /v1/dashboard/enrollments", requestIDMiddleware()(dashAuth(dashboardEnrollmentHandler(d))))
 	mux.Handle("PUT /v1/dashboard/agents/{nickname}", requestIDMiddleware()(dashAuth(dashboardEditAgentHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy", requestIDMiddleware()(dashAuth(wizardDeployHandler(d))))
+	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy/cancel", requestIDMiddleware()(dashAuth(dashboardCancelDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/backend/deploy", requestIDMiddleware()(dashAuth(wizardBackendDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/commands", requestIDMiddleware()(dashAuth(dashboardCommandHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/maintenance", requestIDMiddleware()(dashAuth(wizardMaintenanceHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/revive", requestIDMiddleware()(dashAuth(dashboardReviveAgentHandler(d))))
 	mux.Handle("GET /v1/dashboard/commands/{cmd_id}", requestIDMiddleware()(dashAuth(wizardCmdResultHandler(d))))
+}
+
+// dashboardCancelDeployHandler cancels a pending agent deploy: it drops any
+// queued self_update (so it never fires when a sleeping mobile agent wakes) and
+// unconditionally clears the pending_version marker. Idempotent — returns 200
+// with cleared=false if there was nothing pending.
+func dashboardCancelDeployHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		if d.DB == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
+			return
+		}
+		nickname := r.PathValue("nickname")
+		if nickname == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname required")
+			return
+		}
+		u, err := d.DB.Users().GetByNickname(nickname)
+		if err != nil {
+			if errors.Is(err, db.ErrUserNotFound) {
+				writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
+				return
+			}
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		if u == nil {
+			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
+			return
+		}
+		var dropped int
+		if d.CommandSink != nil {
+			dropped = len(d.CommandSink.DropPending(u.ID, "self_update"))
+		}
+		cleared, err := d.DB.Users().ClearPendingDeploy(u.ID)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
+		if d.Logger != nil {
+			d.Logger.Info("dashboard cancel pending deploy",
+				"nickname", nickname, "user_id", u.ID, "cleared", cleared, "dropped_commands", dropped)
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(struct {
+			OK              bool `json:"ok"`
+			Cleared         bool `json:"cleared"`
+			DroppedCommands int  `json:"dropped_commands"`
+		}{OK: true, Cleared: cleared, DroppedCommands: dropped})
+	}
 }
 
 // DashboardPageAuthMiddleware protects the browser app itself. The JSON API

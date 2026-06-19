@@ -931,6 +931,52 @@ func TestDashboardEnrollmentRejectsInvalidInputs(t *testing.T) {
 	}
 }
 
+func TestDashboardCancelPendingDeploy(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("sleepy", "tok-sleepy-0000000000000000", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(userID, "v0.13.0", "2026-06-19T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, CommandSink: sink, DashboardToken: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/agents/sleepy/deploy/cancel", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		OK              bool `json:"ok"`
+		Cleared         bool `json:"cleared"`
+		DroppedCommands int  `json:"dropped_commands"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || !resp.Cleared {
+		t.Fatalf("expected ok+cleared, got %+v", resp)
+	}
+	if len(sink.droppedActions) != 1 || sink.droppedActions[0] != "self_update" {
+		t.Fatalf("should drop the queued self_update, got %v", sink.droppedActions)
+	}
+	u, err := d.Users().GetByNickname("sleepy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.PendingVersion != nil {
+		t.Fatalf("pending should be cleared, got %q", *u.PendingVersion)
+	}
+}
+
 func TestDashboardCommandDispatchEnqueuesSafeAgentCommand(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -1264,11 +1310,12 @@ func setDashboardTestLastSeen(t *testing.T, d *db.DB, userID int64, ts time.Time
 }
 
 type dashboardActionSink struct {
-	enqueued      []wire.Command
-	enqueuedUsers []int64
-	results       map[string]wire.CommandResult
-	awaitUserID   int64
-	awaitCmdID    string
+	enqueued       []wire.Command
+	enqueuedUsers  []int64
+	results        map[string]wire.CommandResult
+	awaitUserID    int64
+	awaitCmdID     string
+	droppedActions []string
 }
 
 func (s *dashboardActionSink) Dequeue(context.Context, int64, time.Duration) (*wire.Command, bool) {
@@ -1290,6 +1337,11 @@ func (s *dashboardActionSink) CommandByID(int64, string) (wire.Command, bool) {
 func (s *dashboardActionSink) Enqueue(userID int64, cmd wire.Command) error {
 	s.enqueuedUsers = append(s.enqueuedUsers, userID)
 	s.enqueued = append(s.enqueued, cmd)
+	return nil
+}
+
+func (s *dashboardActionSink) DropPending(_ int64, action string) []wire.Command {
+	s.droppedActions = append(s.droppedActions, action)
 	return nil
 }
 
