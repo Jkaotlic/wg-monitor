@@ -23,7 +23,9 @@ type DNSRoute struct {
 	ID                 string          `json:"id"`
 	Name               string          `json:"name"`
 	Domains            []string        `json:"domains"`
+	Subnets            []string        `json:"subnets,omitempty"`
 	ManualDomains      []string        `json:"manualDomains"`
+	ManualText         string          `json:"manualText,omitempty"`
 	Routes             []DNSRouteEntry `json:"routes"`
 	Enabled            bool            `json:"enabled"`
 	CreatedAt          string          `json:"createdAt"`

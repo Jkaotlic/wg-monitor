@@ -222,6 +222,13 @@ func buildRouteAddPlan(ctx context.Context, c *awgmgr.Client, req wire.RouteAddR
 			}
 		}
 	}
+	// Mechanism-aware: a sing-box router routes per its own policy and ignores
+	// NDMS/HR-Neo routes, so adding one here would create dead config. Refuse
+	// with a clear reason instead (route templates + rebind apply to
+	// NDMS/HR-Neo routers; sing-box route config is a follow-up).
+	if s, serr := c.Settings(ctx); serr == nil && s.SingboxRouterActive() {
+		return wire.RouteAddPlan{}, fmt.Errorf("route_add: router routes via sing-box (deviceMode %q) — NDMS/HR-Neo routes do not take effect here; manage routing in the sing-box config", s.SingboxRouter.DeviceMode)
+	}
 	t, err := resolveRouteEndpoint(ctx, c, req.TunnelID)
 	if err != nil {
 		return wire.RouteAddPlan{}, fmt.Errorf("resolve route target: %w", err)

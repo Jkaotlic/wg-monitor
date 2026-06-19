@@ -559,6 +559,23 @@ func TestRouteAddPlanWarnsOnDefaultRouteLikeTarget(t *testing.T) {
 	}
 }
 
+// On a sing-box router (settings.singboxRouter.enabled) route_add must refuse —
+// NDMS/HR-Neo routes are ignored there, so creating one would be dead config.
+func TestRouteAddRefusesOnSingboxRouter(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/settings/get", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"direct"},"singboxRouter":{"enabled":true,"deviceMode":"all"}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req := wire.RouteAddRequest{Kind: "dns", Name: "Telegram", TunnelID: "awg10", Targets: []string{"t.me"}}
+	_, err := RouteAddPlanJSON(context.Background(), awgmgr.New(srv.URL), req)
+	if err == nil || !strings.Contains(err.Error(), "sing-box") {
+		t.Fatalf("expected sing-box refusal, got err=%v", err)
+	}
+}
+
 func TestRouteTemplatesJSONListsAWGManagerPresets(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/presets", func(w http.ResponseWriter, r *http.Request) {
