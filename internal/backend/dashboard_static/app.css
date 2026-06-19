@@ -768,7 +768,7 @@ select:focus {
   height: 100vh;
   overflow: auto;
   border-left: 1px solid var(--line);
-  background: #f8fbff;
+  background: var(--surface);
   padding: 22px;
 }
 
@@ -783,7 +783,7 @@ select:focus {
 }
 
 .drawer-empty .ti {
-  color: #93a4bd;
+  color: var(--faint);
   font-size: 38px;
 }
 
@@ -792,10 +792,40 @@ select:focus {
   gap: 16px;
 }
 
+.drawer-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 4px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.drawer-tabs button {
+  flex: 1;
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease;
+}
+
+.drawer-tabs button:hover {
+  color: var(--text);
+}
+
+.drawer-tabs button.active {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
 .drawer-section {
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
+  border-radius: var(--radius);
+  background: var(--surface-2);
   padding: 14px;
 }
 
@@ -821,14 +851,14 @@ select:focus {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  border-bottom: 1px solid #edf1f6;
+  border-bottom: 1px solid var(--line);
   padding-bottom: 7px;
   color: var(--muted);
   font-size: 13px;
 }
 
 .drawer-kv strong {
-  color: var(--panel-ink);
+  color: var(--text);
   text-align: right;
 }
 
