@@ -34,8 +34,6 @@
         <div>
           <div class="eyebrow">operator dashboard</div>
           <h1>Fleet Control</h1>
-          <p id="summaryText" class="topbar-note">Загружаю состояние флота...</p>
-          <p class="freshness-line"><span class="status-dot" id="freshnessDot"></span><span id="freshness">никогда</span></p>
         </div>
         <div class="topbar-actions">
           <button id="backendUpdateBtn" class="btn btn-warn hidden" type="button" data-state="idle"><span class="ti ti-arrow-up-circle"></span><span id="backendUpdateText">Update backend</span></button>
@@ -46,27 +44,34 @@
         </div>
       </header>
 
-      <section class="kpi-grid" aria-label="Fleet totals">
-        <article class="kpi-card">
-          <span class="kpi-label">Agents</span>
-          <strong id="kpiAgents">-</strong>
-          <small id="kpiVersion">version unknown</small>
-        </article>
-        <article class="kpi-card good">
-          <span class="kpi-label">Online</span>
-          <strong id="kpiOnline">-</strong>
-          <small id="kpiOnlineText">reporting recently</small>
-        </article>
-        <article class="kpi-card bad">
-          <span class="kpi-label">Alerts</span>
-          <strong id="kpiAlerts">-</strong>
-          <small id="kpiAlertsText">hard incidents</small>
-        </article>
-        <article class="kpi-card warn">
-          <span class="kpi-label">Deploys</span>
-          <strong id="kpiDeploys">-</strong>
-          <small id="kpiDeploysText">pending updates</small>
-        </article>
+      <section class="health-strip" aria-label="Fleet health">
+        <div class="health-top">
+          <p id="summaryText" class="health-headline">Загружаю состояние флота...</p>
+          <p class="freshness-line"><span class="status-dot" id="freshnessDot"></span><span id="freshness">никогда</span></p>
+        </div>
+        <div class="health-bar" id="healthBar" aria-hidden="true"></div>
+        <div class="stat-tiles">
+          <article class="stat-tile">
+            <span class="kpi-label">Agents</span>
+            <strong id="kpiAgents">-</strong>
+            <small id="kpiVersion">version unknown</small>
+          </article>
+          <article class="stat-tile good">
+            <span class="kpi-label">Online</span>
+            <strong id="kpiOnline">-</strong>
+            <small id="kpiOnlineText">reporting recently</small>
+          </article>
+          <article class="stat-tile bad">
+            <span class="kpi-label">Alerts</span>
+            <strong id="kpiAlerts">-</strong>
+            <small id="kpiAlertsText">hard incidents</small>
+          </article>
+          <article class="stat-tile warn">
+            <span class="kpi-label">Deploys</span>
+            <strong id="kpiDeploys">-</strong>
+            <small id="kpiDeploysText">pending updates</small>
+          </article>
+        </div>
       </section>
 
       <section class="toolbar">
