@@ -8,6 +8,13 @@
 *.sh text eol=lf
 cmd/deploy/templates/S99wg-monitor text eol=lf
 
+# Python relay: always LF (embedded into the backend + run on the Linux VPS)
+*.py text eol=lf
+
+# Web fonts: never convert (binary)
+*.woff2 binary
+*.woff binary
+
 # Systemd unit files: always LF
 *.service text eol=lf
 
