@@ -337,6 +337,10 @@ type Deps struct {
 	TelegramExtraChatIDs  []int64
 	BackendUpdatePath     string
 	PublicBaseURL         string
+	// AWGMRelayPath is the path to awgm-relay.py on the backend host, used by the
+	// dashboard "Revive via AWG Manager" action to drive the router's awg-manager
+	// terminal out-of-band. Empty falls back to defaultAWGMRelayPath.
+	AWGMRelayPath string
 }
 
 type AlertPolicy struct {

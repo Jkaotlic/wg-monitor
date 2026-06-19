@@ -89,7 +89,16 @@
     cfgAllowReboot: document.getElementById("cfgAllowReboot"),
     cfgAllowFirmware: document.getElementById("cfgAllowFirmware"),
     agentConfigError: document.getElementById("agentConfigError"),
-    applyAgentConfigBtn: document.getElementById("applyAgentConfigBtn")
+    applyAgentConfigBtn: document.getElementById("applyAgentConfigBtn"),
+    reviveModal: document.getElementById("reviveModal"),
+    reviveTitle: document.getElementById("reviveTitle"),
+    reviveRootPass: document.getElementById("reviveRootPass"),
+    reviveNewURL: document.getElementById("reviveNewURL"),
+    reviveAwgmLogin: document.getElementById("reviveAwgmLogin"),
+    reviveAwgmPass: document.getElementById("reviveAwgmPass"),
+    reviveAwgmKey: document.getElementById("reviveAwgmKey"),
+    reviveError: document.getElementById("reviveError"),
+    reviveConfirmBtn: document.getElementById("reviveConfirmBtn")
   };
 
   const AUTO_REFRESH_MS = 20000;
@@ -140,7 +149,7 @@
     const ct = res.headers.get("content-type") || "";
     const body = ct.includes("application/json") ? await res.json() : await res.text();
     if (!res.ok) {
-      const message = body && body.message ? body.message : String(body || res.statusText);
+      const message = body && (body.message || body.error) ? (body.message || body.error) : String(body || res.statusText);
       if (res.status === 401) {
         window.location.href = "/dashboard/login";
         return null;
@@ -148,6 +157,7 @@
       const error = new Error(message);
       error.status = res.status;
       error.code = body && body.code;
+      error.body = body;
       throw error;
     }
     return body;
@@ -458,6 +468,7 @@
           <p class="drawer-note">Сменился домен или настройки роутера? Отредактируй агента, затем верни его в строй: wake запросит свежий отчёт, Restart AWG перезапустит AWG Manager на роутере.</p>
           <div class="drawer-actions">
             <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
+            <button class="action-btn warn" type="button" title="Перепривязать backend + рестарт через awg-manager terminal (работает даже если агент offline)" data-revive="${escapeAttr(selected.nickname)}"><span class="ti ti-heartbeat"></span>Revive (AWG Manager)</button>
             ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
             <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
           </div>
@@ -899,6 +910,78 @@
     }
   }
 
+  function openRevive(nickname) {
+    state.reviveNick = nickname;
+    els.reviveTitle.textContent = "Revive / " + nickname;
+    els.reviveRootPass.value = "";
+    els.reviveNewURL.value = "";
+    els.reviveAwgmLogin.value = "";
+    els.reviveAwgmPass.value = "";
+    els.reviveAwgmKey.value = "";
+    els.reviveError.textContent = "";
+    setButtonState(els.reviveConfirmBtn, "idle");
+    els.reviveModal.classList.remove("hidden");
+    els.reviveRootPass.focus();
+  }
+
+  function closeRevive() {
+    els.reviveModal.classList.add("hidden");
+    state.reviveNick = null;
+    setButtonState(els.reviveConfirmBtn, "idle");
+  }
+
+  async function submitRevive() {
+    const nickname = state.reviveNick;
+    if (!nickname) return;
+    if (!els.reviveRootPass.value) {
+      els.reviveError.textContent = "Нужен root-пароль роутера";
+      return;
+    }
+    els.reviveError.textContent = "";
+    setButtonState(els.reviveConfirmBtn, "waiting");
+    const payload = {
+      root_password: els.reviveRootPass.value,
+      new_backend_url: els.reviveNewURL.value.trim(),
+      awgm_login: els.reviveAwgmLogin.value.trim(),
+      awgm_password: els.reviveAwgmPass.value,
+      awgm_api_key: els.reviveAwgmKey.value.trim()
+    };
+    try {
+      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/revive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      closeRevive();
+      toast("revive отправлен — агент перезапускается на новом backend");
+      showReviveResult(nickname, res, null);
+      refresh();
+    } catch (err) {
+      // The handler returns 502 with {output,error} when the relay ran but failed.
+      if (err.status === 502) {
+        closeRevive();
+        showReviveResult(nickname, null, err);
+      } else {
+        els.reviveError.textContent = err.message;
+        setButtonState(els.reviveConfirmBtn, "error");
+      }
+    }
+  }
+
+  function showReviveResult(nickname, res, err) {
+    els.drawerTitle.textContent = "Revive / " + nickname;
+    const ok = res && res.ok;
+    const output = (res && res.output) || (err && err.body && err.body.output) || "";
+    const sections = [
+      `<div class="result-section${ok ? "" : " result-error"}"><strong>${ok ? "Revive отправлен" : "Revive не удался"}</strong><p>${escapeHTML((res && res.new_backend_url) || "")}</p>${err && err.message ? `<p>${escapeHTML(err.message)}</p>` : ""}</div>`
+    ];
+    if (output) {
+      sections.push(`<div class="result-section"><strong>AWG Manager terminal</strong><pre class="raw-output">${escapeHTML(output)}</pre></div>`);
+    }
+    setResultHTML(sections.join(""));
+    els.resultDrawer.classList.remove("hidden");
+  }
+
   // cronScheduleToTime converts a stored "M H * * *" cron line to an "HH:MM"
   // value for the <input type=time> so the drawer reflects the live schedule.
   function cronScheduleToTime(schedule, fallback) {
@@ -1235,6 +1318,7 @@
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
       if (button.dataset.agentConfig) openAgentConfig(button.dataset.agentConfig);
+      if (button.dataset.revive) openRevive(button.dataset.revive);
       if (button.dataset.deploy) openDeploy(nickname);
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
         setActionState(nickname, "self_update", "error");
@@ -1260,6 +1344,7 @@
   document.querySelectorAll("[data-close-add-agent]").forEach((button) => button.addEventListener("click", closeAddAgent));
   document.querySelectorAll("[data-close-edit-agent]").forEach((button) => button.addEventListener("click", closeEditAgent));
   document.querySelectorAll("[data-close-agent-config]").forEach((button) => button.addEventListener("click", closeAgentConfig));
+  document.querySelectorAll("[data-close-revive]").forEach((button) => button.addEventListener("click", closeRevive));
   els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => {
     setButtonState(els.confirmDeployBtn, "error");
     toast(err.message);
@@ -1273,6 +1358,10 @@
     setButtonState(els.applyAgentConfigBtn, "error");
     els.agentConfigError.textContent = err.message;
   }));
+  els.reviveConfirmBtn.addEventListener("click", () => submitRevive().catch((err) => {
+    setButtonState(els.reviveConfirmBtn, "error");
+    els.reviveError.textContent = err.message;
+  }));
   els.newAgentGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
   els.autoRefreshBtn.addEventListener("click", () => setAutoRefresh(!state.autoRefresh));
@@ -1285,6 +1374,7 @@
   // Keyboard: Esc closes the top-most overlay; "/" focuses search.
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      if (!els.reviveModal.classList.contains("hidden")) { closeRevive(); return; }
       if (!els.agentConfigModal.classList.contains("hidden")) { closeAgentConfig(); return; }
       if (!els.editAgentModal.classList.contains("hidden")) { closeEditAgent(); return; }
       if (!els.addAgentModal.classList.contains("hidden")) { closeAddAgent(); return; }
