@@ -582,7 +582,7 @@ func runOneUpdate(state *State, secrets *SecretStore, dl *Downloader, t updateTa
 		}
 		return fmt.Errorf("%s metadata-gap: нет SSH endpoint и нет AWG Manager URL. Сначала sync-vps; если backend тоже пустой, сделай re-enroll через AWG Manager", t.AgentNickname)
 	}
-	return actionUpdateAgent(state, secrets, dl, t.AgentNickname)
+	return actionUpdateAgent(state, secrets, dl, t.AgentNickname, false)
 }
 
 func recoverAgentUpdateViaAWGM(state *State, secrets *SecretStore, dl *Downloader, t updateTarget, reason string) (bool, error) {

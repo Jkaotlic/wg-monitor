@@ -30,7 +30,7 @@ func TestActionUpdateAgent_BailsWhenNeverDeployed(t *testing.T) {
 			LastDeployedVersion: "",
 		}},
 	}
-	err := actionUpdateAgent(state, nil, nil, "de4ddy")
+	err := actionUpdateAgent(state, nil, nil, "de4ddy", false)
 	if err == nil {
 		t.Fatal("expected error for never-deployed agent, got nil")
 	}
@@ -64,7 +64,7 @@ func TestActionUpdateAgent_DoesNotBailWhenDeployedBefore(t *testing.T) {
 			t.Fatal("expected nil-dl panic past the never-deployed guard; the guard fired when it shouldn't have")
 		}
 	}()
-	_ = actionUpdateAgent(state, nil, nil, "testkeen")
+	_ = actionUpdateAgent(state, nil, nil, "testkeen", false)
 }
 
 // TestColdInstallGate_DefaultDeniesOnEmpty covers the Layer-2 confirm-gate:
