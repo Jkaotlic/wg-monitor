@@ -383,6 +383,40 @@
     </div>
   </div>
 
+  <div id="reviveModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="reviveTitle">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">resurrect via awg manager</div>
+          <h2 id="reviveTitle">Revive</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-revive><span class="ti ti-x"></span></button>
+      </div>
+      <p class="modal-note">Заходит на роутер по <strong>awg-manager terminal</strong> (публичный DDNS), переписывает <code>backend.url</code> на текущий бэкенд и рестартует агента — <strong>работает даже если агент тёмный</strong>. Root-пароль используется один раз для terminal-логина и не сохраняется.</p>
+      <label class="form-field">
+        <span>Router root password</span>
+        <input id="reviveRootPass" type="password" autocomplete="off" placeholder="root пароль роутера">
+      </label>
+      <label class="form-field">
+        <span>New backend URL (пусто = текущий бэкенд)</span>
+        <input id="reviveNewURL" type="url" autocomplete="off" placeholder="https://wgmonitor.<...>.ddns.example">
+      </label>
+      <details class="revive-advanced">
+        <summary>AWG Manager auth (если awg-manager под логином/api-key)</summary>
+        <div class="form-grid form-grid-three">
+          <label class="form-field"><span>awgm login</span><input id="reviveAwgmLogin" type="text" autocomplete="off"></label>
+          <label class="form-field"><span>awgm password</span><input id="reviveAwgmPass" type="password" autocomplete="off"></label>
+          <label class="form-field"><span>awgm api-key</span><input id="reviveAwgmKey" type="text" autocomplete="off"></label>
+        </div>
+      </details>
+      <div id="reviveError" class="form-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" data-close-revive>Cancel</button>
+        <button id="reviveConfirmBtn" class="btn btn-warn" type="button" data-state="idle"><span class="ti ti-heartbeat"></span>Revive</button>
+      </div>
+    </div>
+  </div>
+
   <aside id="resultDrawer" class="result-drawer hidden" aria-live="polite">
     <div class="drawer-head">
       <div>

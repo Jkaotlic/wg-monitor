@@ -1060,6 +1060,22 @@ details.raw-output pre {
   font-size: 12px;
 }
 
+.revive-advanced {
+  margin: 4px 0 2px;
+}
+
+.revive-advanced > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 0;
+}
+
+.revive-advanced[open] > summary {
+  margin-bottom: 8px;
+}
+
 /* Sharper, consistent keyboard focus for the whole console. */
 .btn:focus-visible,
 .action-btn:focus-visible,
