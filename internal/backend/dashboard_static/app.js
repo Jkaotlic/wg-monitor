@@ -250,6 +250,9 @@
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
     els.summaryText.textContent = summarySentence(summary);
     renderHealthStrip(summary);
+    const counts = filterCounts(summary);
+    [["cntAll", "all"], ["cntAlert", "alert"], ["cntOnline", "online"], ["cntSleeping", "sleeping"], ["cntOffline", "offline"]]
+      .forEach(([id, key]) => { const el = document.getElementById(id); if (el) el.textContent = counts[key]; });
     renderGroupOptions();
 
     const agents = visibleAgents(summary);
@@ -260,6 +263,12 @@
     }
     els.agentsBody.innerHTML = agents.map(agentRow).join("");
     renderSelectedDrawer();
+  }
+
+  function filterCounts(summary) {
+    const agents = summary.agents || [];
+    const by = (s) => agents.filter((a) => a.status === s).length;
+    return { all: agents.length, alert: by("alert"), online: by("online"), sleeping: by("sleeping"), offline: by("offline") };
   }
 
   function renderHealthStrip(summary) {

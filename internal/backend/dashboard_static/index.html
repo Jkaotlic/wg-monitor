@@ -80,11 +80,11 @@
           <input id="searchInput" type="search" placeholder="Search agents, IP, group, AWG" spellcheck="false">
         </div>
         <div class="segmented" role="tablist" aria-label="Status filter">
-          <button type="button" class="segment active" data-filter="all">All</button>
-          <button type="button" class="segment" data-filter="alert">Alerts</button>
-          <button type="button" class="segment" data-filter="online">Online</button>
-          <button type="button" class="segment" data-filter="sleeping">Sleeping</button>
-          <button type="button" class="segment" data-filter="offline">Offline</button>
+          <button type="button" class="segment active" data-filter="all">All<span class="pill-count" id="cntAll">0</span></button>
+          <button type="button" class="segment" data-filter="alert">Alerts<span class="pill-count" id="cntAlert">0</span></button>
+          <button type="button" class="segment" data-filter="online">Online<span class="pill-count" id="cntOnline">0</span></button>
+          <button type="button" class="segment" data-filter="sleeping">Sleeping<span class="pill-count" id="cntSleeping">0</span></button>
+          <button type="button" class="segment" data-filter="offline">Offline<span class="pill-count" id="cntOffline">0</span></button>
         </div>
       </section>
 
