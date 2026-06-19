@@ -45,6 +45,13 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 		return "", err
 	}
 	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings))
+	if settings != nil && settings.SingboxRouterActive() {
+		snap.SingboxRouter = &wire.SingboxRouterStatus{
+			Enabled:    true,
+			DeviceMode: settings.SingboxRouter.DeviceMode,
+			PolicyName: settings.SingboxRouter.PolicyName,
+		}
+	}
 	if routingErr != nil {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/tunnels failed: %v", routingErr))
 	}

@@ -114,12 +114,31 @@ type HydraRouteStatus struct {
 // defaultRoute=true in /api/tunnels/all, this is the authoritative signal for
 // which one HR-Neo policy traffic actually egresses through.
 type Settings struct {
-	Download SettingsDownload `json:"download"`
+	Download      SettingsDownload      `json:"download"`
+	SingboxRouter SettingsSingboxRouter `json:"singboxRouter"`
 }
 
 type SettingsDownload struct {
 	RouteTag  string `json:"routeTag"`
 	RouteKind string `json:"routeKind"`
+}
+
+// SettingsSingboxRouter mirrors settings.singboxRouter from /api/settings/get.
+// When Enabled, the sing-box router is the active routing method (it routes per
+// its own policy / deviceMode using the AWG tunnels as outbounds), so the NDMS
+// default-route / HR-Neo signals do not reflect the real per-destination path.
+type SettingsSingboxRouter struct {
+	Enabled    bool   `json:"enabled"`
+	DeviceMode string `json:"deviceMode"`
+	PolicyName string `json:"policyName"`
+}
+
+// SingboxRouterActive reports whether sing-box is the active routing method.
+// Agents must not raise AWG-default-route / external-reach routing alarms when
+// this is true — the router-side default path does not reflect sing-box's
+// per-destination routing of the actual client traffic.
+func (s *Settings) SingboxRouterActive() bool {
+	return s != nil && s.SingboxRouter.Enabled
 }
 
 // ActiveDefaultTunnelID extracts the authoritative active default-route tunnel
