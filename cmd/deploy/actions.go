@@ -523,7 +523,7 @@ func checkWizardEndpoint(url string) error {
 	}
 }
 
-func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string) error {
+func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickname string, refreshBackendURL bool) error {
 	if len(state.Agents) == 0 {
 		PrintFail("В wizard.toml нет [[agents]] — сначала install-agent / add-router")
 		return fmt.Errorf("no agents configured")
@@ -664,6 +664,19 @@ func actionUpdateAgent(state *State, secrets *SecretStore, dl *Downloader, nickn
 	}
 	if ag.Port == 0 {
 		ag.Port = 222
+	}
+
+	// Revive: rewrite backend.url to the wizard's current domain BEFORE the
+	// binary swap, so the single restart at the end brings the agent up on the
+	// correct backend (this is the only way to recover an agent that went dark
+	// after a backend domain change — it can't be reached over the command
+	// channel). No-op when the URL already matches.
+	if refreshBackendURL {
+		fmt.Println(Colorize("Оживление: refresh backend URL в config.yaml", ColorBold))
+		if err := refreshAgentBackendURLOverSSH(s, state, ag); err != nil {
+			PrintFail(err.Error())
+			return err
+		}
 	}
 
 	PrintStep(2, 4, "Определить архитектуру")

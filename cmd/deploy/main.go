@@ -138,7 +138,22 @@ func main() {
 			fmt.Fprintf(os.Stderr, "update-agent: agent %q не найден в wizard.toml\n", agentFlag)
 			os.Exit(2)
 		}
-		runCLIAction("update-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag) })
+		runCLIAction("update-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag, false) })
+	case "revive-agent":
+		// revive-agent --agent <nick>: redeploy over SSH AND rewrite backend.url
+		// to the current domain. For routers that went dark after a backend
+		// domain change and can no longer be reached over the command channel.
+		agentFlag := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--agent" && i+1 < len(args) {
+				agentFlag = args[i+1]
+			}
+		}
+		if agentFlag != "" && state.FindAgent(agentFlag) == nil {
+			fmt.Fprintf(os.Stderr, "revive-agent: agent %q не найден в wizard.toml\n", agentFlag)
+			os.Exit(2)
+		}
+		runCLIAction("revive-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag, true) })
 	case "add-router":
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
 	case "telegram-group", "bind-telegram-group":
@@ -448,6 +463,7 @@ Commands:
                                allow a separate TG supergroup and bind router topic
   install-agent --agent <nick> install/reinstall through AWG Manager/KeenDNS
   update-agent [--agent <nick>]
+  revive-agent --agent <nick>    redeploy over SSH + fix backend.url (offline after domain change)
                                update one agent or choose interactively
   uninstall-agent --agent <nick>
   uninstall-agent --host <ip> [--port N] [--user U]
