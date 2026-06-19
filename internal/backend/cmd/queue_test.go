@@ -171,6 +171,32 @@ func TestQueue_EnqueueSupersedesSelfUpdate(t *testing.T) {
 	}
 }
 
+func TestQueue_DropPending(t *testing.T) {
+	q := New()
+	if err := q.Enqueue(7, mkCmd("upd", "self_update")); err != nil {
+		t.Fatalf("enqueue self_update: %v", err)
+	}
+	if err := q.Enqueue(7, mkCmd("diag", "diag_now")); err != nil {
+		t.Fatalf("enqueue diag_now: %v", err)
+	}
+	dropped := q.DropPending(7, "self_update")
+	if len(dropped) != 1 || dropped[0].ID != "upd" {
+		t.Fatalf("DropPending should drop the queued self_update, got %+v", dropped)
+	}
+	// The unrelated command survives and is still dequeueable.
+	got, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond)
+	if !ok || got == nil || got.ID != "diag" {
+		t.Fatalf("non-self_update command should remain, got %+v ok=%v", got, ok)
+	}
+	if got, ok = q.Dequeue(context.Background(), 7, 10*time.Millisecond); ok || got != nil {
+		t.Fatalf("self_update should be gone, got %+v ok=%v", got, ok)
+	}
+	// Dropping again is a no-op.
+	if d := q.DropPending(7, "self_update"); len(d) != 0 {
+		t.Fatalf("second drop should be empty, got %+v", d)
+	}
+}
+
 func TestQueue_EnqueueNotifiesSupersededSelfUpdate(t *testing.T) {
 	q := New()
 	first := mkCmd("old-update", "self_update")

@@ -338,7 +338,7 @@
       return `<span class="badge badge-danger">${escapeHTML(incident.check_name)} ${incident.fail_count || ""}</span>`;
     }).join("");
     const pending = agent.pending_version
-      ? `<span class="badge badge-warning">${escapeHTML(agent.pending_version)}</span>`
+      ? `<span class="badge badge-warning">${escapeHTML(agent.pending_version)}</span><button class="mini-btn danger cancel-pending" type="button" title="Cancel pending deploy" data-cancel-deploy="${escapeAttr(agent.nickname)}">✕</button>`
       : `<span class="badge badge-muted">idle</span>`;
     const rowClass = agent.pending_version && agent.status !== "alert" ? "status-pending" : "status-" + (agent.status || "offline");
     const awg = agent.awgm_url
@@ -493,6 +493,7 @@
             ${drawerKV("Version", selected.agent_version || "-")}
             ${drawerKV("Pending", selected.pending_version || "idle")}
           </div>
+          ${selected.pending_version ? `<div class="drawer-actions drawer-actions-top"><button class="action-btn warn" type="button" title="Снять зависший pending-деплой (дропает очередь self_update, чтобы он не сработал при пробуждении)" data-cancel-deploy="${escapeAttr(selected.nickname)}"><span class="ti ti-x"></span>Cancel pending ${escapeHTML(selected.pending_version)}</button></div>` : ""}
         </section>
         <section class="drawer-section">
           <h3>Telegram</h3>
@@ -703,6 +704,13 @@
     });
     toast("Backend update queued → " + version + ". Перезагружаю страницу через 15 с...");
     window.setTimeout(() => window.location.reload(), 15000);
+  }
+
+  async function cancelDeploy(nickname) {
+    if (!nickname) return;
+    const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/deploy/cancel`, { method: "POST" });
+    toast(res && res.cleared ? "pending deploy отменён" : "нечего отменять");
+    await refresh();
   }
 
   async function deployLatest(nickname) {
@@ -1404,6 +1412,7 @@
       if (button.dataset.agentConfig) openAgentConfig(button.dataset.agentConfig);
       if (button.dataset.revive) openRevive(button.dataset.revive);
       if (button.dataset.deploy) openDeploy(nickname);
+      if (button.dataset.cancelDeploy) cancelDeploy(button.dataset.cancelDeploy).catch((err) => toast(err.message));
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
         setActionState(nickname, "self_update", "error");
         toast(err.message);

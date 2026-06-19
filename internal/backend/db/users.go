@@ -588,6 +588,29 @@ func (u *UsersRepo) ClearPendingDeployIfMatches(id int64, targetVersion string) 
 	return n > 0, nil
 }
 
+// ClearPendingDeploy unconditionally clears the pending deploy marker for an
+// agent, regardless of which version it points at. Backs the operator-driven
+// "cancel pending deploy" action — e.g. to unstick a sleeping mobile router that
+// was queued an old version it will never confirm. Returns true if a marker was
+// actually cleared.
+func (u *UsersRepo) ClearPendingDeploy(id int64) (bool, error) {
+	res, err := u.d.db.Exec(
+		`UPDATE users
+		    SET pending_version = NULL,
+		        pending_since = NULL
+		  WHERE id = ? AND pending_version IS NOT NULL`,
+		id,
+	)
+	if err != nil {
+		return false, fmt.Errorf("users.ClearPendingDeploy: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
 // UpdateLastSeenAgentVersion advances users.last_deployed_version to the
 // version reported by the running agent in its latest heartbeat. If the
 // heartbeat matches a pending wizard deploy, it also clears the pending marker

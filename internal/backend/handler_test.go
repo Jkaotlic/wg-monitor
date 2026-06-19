@@ -710,6 +710,9 @@ func (f *fakeCmdSink) Enqueue(userID int64, cmd wire.Command) error {
 	f.enqueued = append(f.enqueued, cmd)
 	return nil
 }
+func (f *fakeCmdSink) DropPending(int64, string) []wire.Command {
+	return nil
+}
 func (f *fakeCmdSink) AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool) {
 	return nil, false
 }

@@ -253,6 +253,7 @@ type CommandSink interface {
 	ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.MessageRef, bool)
 	CommandByID(userID int64, cmdID string) (wire.Command, bool)
 	Enqueue(userID int64, cmd wire.Command) error
+	DropPending(userID int64, action string) []wire.Command
 	AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool)
 }
 
