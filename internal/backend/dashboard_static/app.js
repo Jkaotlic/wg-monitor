@@ -4,6 +4,7 @@
     filter: "all",
     query: "",
     selected: null,
+    drawerTab: "overview",
     deployAgent: null,
     editAgent: null,
     autoRefresh: true,
@@ -439,20 +440,28 @@
     }
   }
 
+  const DRAWER_TABS = [
+    ["overview", "Overview"],
+    ["maintenance", "Maintenance"],
+    ["config", "Config"],
+    ["recovery", "Recovery"]
+  ];
+
   function renderSelectedDrawer() {
     const selected = state.selected && (state.summary?.agents || []).find((a) => a.nickname === state.selected);
     if (!selected) {
       els.agentDrawer.innerHTML = `<div class="drawer-empty"><span class="ti ti-router"></span><strong>Выбери агента</strong><p>Клик по строке откроет понятную карточку с проверками, Telegram topic и AWG Manager.</p></div>`;
       return;
     }
-    const incidents = (selected.active_incidents || []).map((i) => `<span class="badge badge-danger">${escapeHTML(i.check_name)} ${i.fail_count || ""}</span>`).join("") || '<span class="badge badge-success">clear</span>';
-    const cronStatus = state.opkgCron.get(selected.nickname);
-    const cleanStatus = state.entwareClean.get(selected.nickname);
-    const versionStatus = state.versions.get(selected.nickname);
-    const agentConfigView = state.agentConfig.get(selected.nickname);
-    const awgBlock = selected.awgm_url
-      ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
-      : `<button class="action-btn disabled" type="button" disabled><span class="ti ti-external-link"></span>Open AWG</button><p class="drawer-note">AWG Manager URL не сохранен. Добавь его через deploy sync или awgm-url-patch.</p>`;
+    const tab = state.drawerTab || "overview";
+    const nav = DRAWER_TABS.map(([id, label]) =>
+      `<button type="button" data-drawer-tab="${id}" class="${tab === id ? "active" : ""}">${label}</button>`
+    ).join("");
+    let body;
+    if (tab === "maintenance") body = drawerTabMaintenance(selected);
+    else if (tab === "config") body = drawerTabConfig(selected);
+    else if (tab === "recovery") body = drawerTabRecovery(selected);
+    else body = drawerTabOverview(selected);
     els.agentDrawer.innerHTML = `
       <div class="drawer-card">
         <div class="drawer-header">
@@ -463,6 +472,19 @@
           </div>
           <button class="icon-btn" type="button" title="Edit router settings" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span></button>
         </div>
+        <nav class="drawer-tabs" aria-label="Agent detail tabs">${nav}</nav>
+        ${body}
+      </div>
+    `;
+  }
+
+  function drawerTabOverview(selected) {
+    const incidents = (selected.active_incidents || []).map((i) => `<span class="badge badge-danger">${escapeHTML(i.check_name)} ${i.fail_count || ""}</span>`).join("") || '<span class="badge badge-success">clear</span>';
+    const versionStatus = state.versions.get(selected.nickname);
+    const awgBlock = selected.awgm_url
+      ? `<a class="action-btn primary" href="${escapeAttr(selected.awgm_url)}" target="_blank" rel="noreferrer noopener"><span class="ti ti-external-link"></span>Open AWG Manager</a><p class="drawer-note">Откроется веб-интерфейс AWG Manager. Логин остается на стороне AWG Manager.</p>`
+      : `<button class="action-btn disabled" type="button" disabled><span class="ti ti-external-link"></span>Open AWG</button><p class="drawer-note">AWG Manager URL не сохранен. Добавь его через deploy sync или awgm-url-patch.</p>`;
+    return `
         <section class="drawer-section">
           <h3>Состояние</h3>
           <div class="incident-list">${incidents}</div>
@@ -494,29 +516,13 @@
             ${drawerCommandButton(selected, "version_audit", "Versions")}
           </div>
         </section>
-        <section class="drawer-section drawer-section-recovery">
-          <h3>Resurrect / recovery</h3>
-          <p class="drawer-note">Сменился домен или настройки роутера? Отредактируй агента, затем верни его в строй: wake запросит свежий отчёт, Restart AWG перезапустит AWG Manager на роутере.</p>
-          <div class="drawer-actions">
-            <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
-            <button class="action-btn warn" type="button" title="Перепривязать backend + рестарт через awg-manager terminal (работает даже если агент offline)" data-revive="${escapeAttr(selected.nickname)}"><span class="ti ti-heartbeat"></span>Revive (AWG Manager)</button>
-            ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
-            <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
-          </div>
-        </section>
-        <section class="drawer-section">
-          <h3>On-router config</h3>
-          <p class="drawer-note">Безопасные ключи config.yaml на самом роутере (interval, awg-manager, external_reach, maintenance). Load читает текущие, Edit перепишет конфиг и перезапустит агента. backend URL тут НЕ меняется — это wizard.</p>
-          <div class="incident-list">
-            ${agentConfigView ? '<span class="badge badge-success">loaded</span>' : '<span class="badge badge-muted">not loaded</span>'}
-            ${agentConfigView && agentConfigView.interval_sec ? `<span class="badge badge-info">interval ${escapeHTML(String(agentConfigView.interval_sec))}s</span>` : ""}
-            ${agentConfigView && agentConfigView.awgm_base_url ? `<span class="badge badge-info">${escapeHTML(shortURL(agentConfigView.awgm_base_url))}</span>` : ""}
-          </div>
-          <div class="drawer-actions">
-            ${drawerCommandButton(selected, "agent_config_get", "Load config")}
-            ${agentConfigView ? `<button class="action-btn warn" type="button" data-agent-config="${escapeAttr(selected.nickname)}"><span class="ti ti-settings"></span>Edit & restart</button>` : ""}
-          </div>
-        </section>
+    `;
+  }
+
+  function drawerTabMaintenance(selected) {
+    const cronStatus = state.opkgCron.get(selected.nickname);
+    const cleanStatus = state.entwareClean.get(selected.nickname);
+    return `
         <section class="drawer-section">
           <h3>Checks</h3>
           <div class="drawer-actions">
@@ -570,7 +576,40 @@
             ${drawerCommandButton(selected, "entware_clean_remove", "Remove")}
           </div>
         </section>
-      </div>
+    `;
+  }
+
+  function drawerTabConfig(selected) {
+    const agentConfigView = state.agentConfig.get(selected.nickname);
+    return `
+        <section class="drawer-section">
+          <h3>On-router config</h3>
+          <p class="drawer-note">Безопасные ключи config.yaml на самом роутере (interval, awg-manager, external_reach, maintenance). Load читает текущие, Edit перепишет конфиг и перезапустит агента. backend URL тут НЕ меняется — это wizard.</p>
+          <div class="incident-list">
+            ${agentConfigView ? '<span class="badge badge-success">loaded</span>' : '<span class="badge badge-muted">not loaded</span>'}
+            ${agentConfigView && agentConfigView.interval_sec ? `<span class="badge badge-info">interval ${escapeHTML(String(agentConfigView.interval_sec))}s</span>` : ""}
+            ${agentConfigView && agentConfigView.awgm_base_url ? `<span class="badge badge-info">${escapeHTML(shortURL(agentConfigView.awgm_base_url))}</span>` : ""}
+          </div>
+          <div class="drawer-actions">
+            ${drawerCommandButton(selected, "agent_config_get", "Load config")}
+            ${agentConfigView ? `<button class="action-btn warn" type="button" data-agent-config="${escapeAttr(selected.nickname)}"><span class="ti ti-settings"></span>Edit & restart</button>` : ""}
+          </div>
+        </section>
+    `;
+  }
+
+  function drawerTabRecovery(selected) {
+    return `
+        <section class="drawer-section drawer-section-recovery">
+          <h3>Resurrect / recovery</h3>
+          <p class="drawer-note">Сменился домен или настройки роутера? Отредактируй агента, затем верни его в строй: wake запросит свежий отчёт, Restart AWG перезапустит AWG Manager на роутере.</p>
+          <div class="drawer-actions">
+            <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
+            <button class="action-btn warn" type="button" title="Перепривязать backend + рестарт через awg-manager terminal (работает даже если агент offline)" data-revive="${escapeAttr(selected.nickname)}"><span class="ti ti-heartbeat"></span>Revive (AWG Manager)</button>
+            ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
+            <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
+          </div>
+        </section>
     `;
   }
 
@@ -1354,6 +1393,11 @@
         if (wrap) wrap.classList.toggle("open");
         return;
       }
+      if (button.dataset.drawerTab) {
+        state.drawerTab = button.dataset.drawerTab;
+        renderSelectedDrawer();
+        return;
+      }
       if (isButtonBusy(button)) return;
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
@@ -1376,6 +1420,7 @@
     }
     const row = event.target.closest("[data-row-agent]");
     if (row) {
+      if (state.selected !== row.dataset.rowAgent) state.drawerTab = "overview";
       state.selected = row.dataset.rowAgent;
       renderSelectedDrawer();
     }
