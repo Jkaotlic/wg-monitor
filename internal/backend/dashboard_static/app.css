@@ -67,9 +67,9 @@ button {
   height: 100vh;
   flex-direction: column;
   gap: 22px;
-  border-right: 1px solid #283447;
-  background: var(--bg-ink);
-  color: #eef4ff;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
   padding: 22px 18px;
 }
 
@@ -93,10 +93,10 @@ button {
   width: 44px;
   height: 44px;
   place-items: center;
-  border: 1px solid #3a4a62;
+  border: 1px solid var(--line-strong);
   border-radius: 8px;
-  background: #1f2937;
-  color: #91caff;
+  background: var(--surface-2);
+  color: var(--accent);
   font-size: 14px;
   font-weight: 900;
 }
@@ -108,7 +108,7 @@ button {
 
 .brand-subtitle,
 .eyebrow {
-  color: #8fa3c2;
+  color: var(--faint);
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0;
@@ -127,21 +127,21 @@ button {
   gap: 10px;
   border-radius: 8px;
   background: transparent;
-  color: #cbd5e1;
+  color: var(--muted);
   padding: 11px 12px;
   text-align: left;
 }
 
 .nav-item.active,
 .nav-item:hover {
-  background: #22304a;
-  color: #ffffff;
+  background: var(--surface-hover);
+  color: var(--text);
 }
 
 .sidebar-status {
   margin-top: auto;
   gap: 9px;
-  color: #a7b5cc;
+  color: var(--muted);
   font-size: 13px;
   font-weight: 800;
 }
@@ -150,11 +150,13 @@ button {
   width: 9px;
   height: 9px;
   border-radius: 999px;
-  background: #ef4444;
+  background: var(--red);
+  box-shadow: 0 0 0 3px var(--red-soft);
 }
 
 .status-dot.ok {
-  background: #22c55e;
+  background: var(--green);
+  box-shadow: 0 0 0 3px var(--green-soft);
 }
 
 .workspace {
@@ -214,9 +216,9 @@ h3 {
   justify-content: center;
   gap: 8px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  color: #223047;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--text);
   padding: 0 12px;
   font-weight: 800;
   text-decoration: none;
@@ -228,8 +230,9 @@ h3 {
 .mini-btn:hover,
 .icon-btn:hover {
   border-color: var(--line-strong);
+  background: var(--surface-hover);
   transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(22, 31, 49, 0.12);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
 }
 
 .btn:active,
@@ -241,43 +244,50 @@ h3 {
 
 .btn-primary,
 .action-btn.primary {
-  border-color: var(--blue);
-  background: var(--blue);
+  border-color: var(--accent);
+  background: var(--accent);
   color: #ffffff;
 }
 
+.btn-primary:hover,
+.action-btn.primary:hover {
+  background: #2f6fe0;
+  border-color: #2f6fe0;
+}
+
 .btn-secondary {
-  border-color: rgba(14, 116, 144, 0.28);
-  background: #e5f7fb;
-  color: #0e5f74;
+  border-color: rgba(56, 189, 248, 0.4);
+  background: var(--info-soft);
+  color: var(--info);
 }
 
 .btn-ghost {
   background: transparent;
+  color: var(--muted);
 }
 
 .btn-warn {
-  border-color: rgba(183, 121, 31, 0.4);
-  background: #fffbeb;
-  color: #92400e;
+  border-color: rgba(251, 191, 36, 0.45);
+  background: var(--amber-soft);
+  color: var(--amber);
 }
 
 .btn-warn:hover {
   border-color: var(--amber);
-  background: #fef3c7;
+  background: rgba(251, 191, 36, 0.22);
 }
 
 .btn-warn[data-state="waiting"] {
-  border-color: #f6d38f;
-  background: #fff7df;
-  color: #915f00;
+  border-color: rgba(251, 191, 36, 0.5);
+  background: var(--amber-soft);
+  color: var(--amber);
   pointer-events: none;
 }
 
 .btn-warn[data-state="error"] {
-  border-color: #ffbfba;
-  background: #fff1f0;
-  color: #b42318;
+  border-color: rgba(248, 113, 113, 0.5);
+  background: var(--red-soft);
+  color: var(--red);
 }
 
 .action-btn[data-state="queued"],
@@ -323,17 +333,21 @@ input,
 select {
   min-height: 40px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
+  border-radius: var(--radius);
+  background: var(--surface-2);
   color: var(--text);
   padding: 0 12px;
   outline: none;
 }
 
+input::placeholder {
+  color: var(--faint);
+}
+
 input:focus,
 select:focus {
-  border-color: #77a7ff;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.16);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .kpi-grid {
@@ -791,8 +805,8 @@ select:focus {
   height: 36px;
   place-items: center;
   border-radius: 8px;
-  background: #eef2f6;
-  color: #1f2937;
+  background: var(--surface-2);
+  color: var(--text);
   padding: 0;
 }
 
