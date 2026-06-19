@@ -60,6 +60,16 @@ type RoutePolicySummary struct {
 	HRNeo      int                    `json:"hr_neo"`
 }
 
+// SingboxRouterStatus reports awg-manager's sing-box router method (a third
+// routing mechanism alongside NDMS default-route and HR-Neo). When Enabled,
+// sing-box routes per its own policy/deviceMode using the tunnels as outbounds,
+// so the NDMS/HR-Neo route accounting does not reflect the real client path.
+type SingboxRouterStatus struct {
+	Enabled    bool   `json:"enabled"`
+	DeviceMode string `json:"device_mode,omitempty"`
+	PolicyName string `json:"policy_name,omitempty"`
+}
+
 // RouteSnapshot is the payload of a successful route_status CommandResult.
 type RouteSnapshot struct {
 	HRNeo    HRStatus                `json:"hr_neo"`
@@ -68,6 +78,9 @@ type RouteSnapshot struct {
 	Other    TunnelCounts            `json:"other"`   // sum across unknown/unmatched binds
 	Policies []RoutePolicySummary    `json:"policies,omitempty"`
 	Rules    []RouteRuleSummary      `json:"rules,omitempty"`
+	// SingboxRouter is set when awg-manager's sing-box router is the active
+	// routing method; nil otherwise (NDMS/HR-Neo routing).
+	SingboxRouter *SingboxRouterStatus `json:"singbox_router,omitempty"`
 	// Warnings names non-fatal data source failures. UI must treat the
 	// snapshot as partial when present.
 	Warnings []string `json:"warnings,omitempty"`
