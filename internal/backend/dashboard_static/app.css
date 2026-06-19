@@ -1118,7 +1118,7 @@ details.raw-output pre {
     border-top: 1px solid var(--line);
   }
 
-  .kpi-grid {
+  .stat-tiles {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1164,11 +1164,21 @@ details.raw-output pre {
     flex: 1 1 160px;
   }
 
-  .kpi-grid,
+  .stat-tiles,
   .form-grid,
   .form-grid-three,
   .result-grid {
     grid-template-columns: 1fr;
+  }
+
+  .health-top {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .row-overflow-menu {
+    right: auto;
+    left: 0;
   }
 
   .sidebar {
@@ -1195,6 +1205,7 @@ details.raw-output pre {
 
 .status-dot.warn {
   background: var(--amber);
+  box-shadow: 0 0 0 3px var(--amber-soft);
 }
 
 .drawer-header {
@@ -1258,6 +1269,8 @@ details.raw-output pre {
 .mini-btn:focus-visible,
 .segment:focus-visible,
 .nav-item:focus-visible,
+.drawer-tabs button:focus-visible,
+[data-overflow]:focus-visible,
 input:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--accent);
