@@ -91,6 +91,7 @@ var validCommandActions = map[string]bool{
 	"version_audit":         true,
 	"self_update":           true,
 	"router_doctor":         true,
+	"dns_reset":             true,
 	"update_backend_url":    true,
 	"agent_config_get":      true,
 	"update_agent_config":   true,
