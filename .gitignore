@@ -73,3 +73,5 @@ bin/wg-monitor-deploy*
 /docs/operations/2026-06-08-post-push-full-audit.md
 /docs/operations/2026-06-08-rc113-remote-backend-update-session.md
 /docs/operations/2026-06-08-v0130-stable-release-session.md
+/docs/operations/2026-06-19-dashboard-revive-session.md
+/docs/operations/2026-06-19-routing-singbox-and-ops-session.md
