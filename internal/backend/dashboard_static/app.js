@@ -448,6 +448,53 @@
     ["recovery", "Recovery"]
   ];
 
+  // Reference DNS-over-TLS upstreams for Keenetic/NetCraze (Entware ndmc).
+  // Shown read-only in the Maintenance tab with a copy button — these run on the
+  // router via SSH/terminal, not dispatched through the agent.
+  const DNS_REFERENCE_COMMANDS = [
+    "ndmc -c dns-proxy tls upstream 8.8.8.8 sni dns.google",
+    "ndmc -c dns-proxy tls upstream 9.9.9.9 sni dns.quad9.net",
+    "ndmc -c dns-proxy tls upstream 1.1.1.1 sni cloudflare-dns.com",
+    "ndmc -c dns-proxy tls upstream common.dot.dns.yandex.net domain ru",
+    "ndmc -c dns-proxy tls upstream common.dot.dns.yandex.net domain su",
+    "ndmc -c dns-proxy tls upstream common.dot.dns.yandex.net domain xn--p1ai",
+    "ndmc -c system configuration save"
+  ].join("\n");
+
+  // copyText copies via the async Clipboard API when available (secure context),
+  // else falls back to a hidden textarea + execCommand("copy") so it still works
+  // when the dashboard is served over plain http.
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) {
+        // fall through to the legacy path
+      }
+    }
+    try {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(ta);
+      return ok;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function copyDNSReference() {
+    const node = document.getElementById("dnsReferenceScript");
+    const text = node ? node.textContent : DNS_REFERENCE_COMMANDS;
+    copyText(text).then((ok) => toast(ok ? "DNS-команды скопированы" : "Не удалось скопировать"));
+  }
+
   function renderSelectedDrawer() {
     const selected = state.selected && (state.summary?.agents || []).find((a) => a.nickname === state.selected);
     if (!selected) {
@@ -578,6 +625,18 @@
             ${drawerCommandButton(selected, "entware_clean_run", "Run now")}
             ${drawerCommandButton(selected, "entware_clean_logs", "Logs")}
             ${drawerCommandButton(selected, "entware_clean_remove", "Remove")}
+          </div>
+        </section>
+        <section class="drawer-section">
+          <h3>DNS reset (reference DoT)</h3>
+          <p class="drawer-note">«Reset DNS» прогонит на роутере через агента эталонную настройку DNS-over-TLS: снимет все текущие dns-proxy upstream'ы (DoT/DoH) и применит набор ниже, затем сохранит конфиг. Агент должен быть online. Per-interface ip name-server от туннелей не трогаются — удали их из конфигов туннелей, иначе пересоздадутся. Не допускай дублирований: иначе маршрутизация ведёт себя непредсказуемо.</p>
+          <div class="drawer-actions">
+            ${drawerCommandButton(selected, "dns_reset", "Reset DNS → reference")}
+          </div>
+          <p class="drawer-note">Эталонные команды (для ручного прогона в SSH/терминале роутера):</p>
+          <pre id="dnsReferenceScript" class="raw-output">${escapeHTML(DNS_REFERENCE_COMMANDS)}</pre>
+          <div class="drawer-actions">
+            <button class="action-btn" type="button" data-copy-dns><span class="ti ti-clipboard"></span>Copy commands</button>
           </div>
         </section>
     `;
@@ -1459,6 +1518,10 @@
         renderSelectedDrawer();
         return;
       }
+      if (button.hasAttribute("data-copy-dns")) {
+        copyDNSReference();
+        return;
+      }
       if (isButtonBusy(button)) return;
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
@@ -1470,10 +1533,13 @@
         setActionState(nickname, "self_update", "error");
         toast(err.message);
       });
-      if (button.dataset.command) enqueueCommand(nickname, button.dataset.command, commandArgs(button)).catch((err) => {
-        setActionState(nickname, button.dataset.command, "error");
-        toast(err.message);
-      });
+      if (button.dataset.command) {
+        if (button.dataset.command === "dns_reset" && !window.confirm("Сбросить DNS к эталонным DoT?\n\nТекущие dns-proxy upstream'ы будут удалены и заменены эталонным набором, конфиг сохранён. Команды выполнит агент на роутере.")) return;
+        enqueueCommand(nickname, button.dataset.command, commandArgs(button)).catch((err) => {
+          setActionState(nickname, button.dataset.command, "error");
+          toast(err.message);
+        });
+      }
       if (button.dataset.maint) restartAWGM(nickname).catch((err) => {
         setActionState(nickname, "awgmgr", "error");
         toast(err.message);

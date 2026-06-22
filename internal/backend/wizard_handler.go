@@ -587,6 +587,10 @@ var dashboardCommandAllowlist = map[string]bool{
 	"entware_clean_logs":    true,
 	"entware_clean_remove":  true,
 	"version_audit":         true,
+	// DNS reset: wipe the dns-proxy DoT/DoH upstream set and re-apply the
+	// reference DNS-over-TLS upstreams on the router (ndmc, no args). Destructive
+	// but router-local and recoverable; the dashboard confirms before dispatch.
+	"dns_reset": true,
 	// Safe on-router config editing: read the safe config subset and patch the
 	// whitelisted keys (interval, awg-manager URL/login, external_reach,
 	// maintenance gates) then restart the agent. backend.url is NOT touchable here
@@ -857,7 +861,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "route_status", "tunnels_status":
+	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "route_status", "tunnels_status", "dns_reset":
 		return map[string]any{}, true
 	case "opkg_cron_install", "entware_clean_install":
 		schedule, _ := args["schedule"].(string)

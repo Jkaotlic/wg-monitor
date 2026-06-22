@@ -26,6 +26,8 @@
 //   - firmware_install → ndmc components commit (gated on AllowFirmwareInstall)
 //   - version_audit    → composite of awgmgr SystemInfo + opkg + components list
 //   - router_doctor    → read-only router health snapshot for Telegram
+//   - dns_reset        → wipe dns-proxy DoT/DoH upstreams, apply reference DoT
+//     set, then `system configuration save` (ndmc, local exec)
 //
 // Every action returns a wire.CommandResult with the original Command.ID
 // preserved so the backend can correlate outcome with the TG callback.
@@ -608,6 +610,13 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 
 	case "router_doctor":
 		s, o := RouterDoctor(ctx, r.AwgClient, r.Exec)
+		return s, o, payload
+
+	case "dns_reset":
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		s, o := DNSReset(ctx, r.Exec)
 		return s, o, payload
 
 	case "route_status", "tunnels_status":
