@@ -1,4 +1,5 @@
 import importlib.util, os, sys, types, unittest
+from unittest.mock import MagicMock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -17,13 +18,22 @@ class InstallModeTest(unittest.TestCase):
         relay.opener = lambda: (object(), object())
         relay.login_if_needed = lambda op, cfg: None
 
+        # Track which api_paths were requested (for cleanup assertions).
+        requested_paths = []
+
         def fake_request(op, cfg, method, api_path, body=None):
+            requested_paths.append(api_path)
             if api_path == "/api/system/info":
                 return {"data": {"goArch": "arm64"}}
             return {"data": {}}
         relay.request = fake_request
+
         relay.ensure_terminal = lambda op, cfg: None
-        relay.ws_connect = lambda cfg, jar: object()
+
+        # Use a MagicMock so ws_connect returns a socket whose .close() is trackable.
+        fake_sock = MagicMock()
+        relay.ws_connect = lambda cfg, jar: fake_sock
+
         relay.ws_send = lambda sock, opcode, payload: None
         relay.send_resize = lambda sock, cols=120, rows=40: None
         relay.login_terminal = lambda sock, cfg: None
@@ -56,6 +66,11 @@ class InstallModeTest(unittest.TestCase):
         self.assertIn("EXPECTED_SHA='aa11bb22'", s)
         self.assertIn('token: "tok-deadbeef"', s)
         self.assertIn('url: "https://wgmon.example"', s)
+
+        # Cleanup assertions: socket must be closed and terminal must be stopped.
+        fake_sock.close.assert_called()
+        self.assertIn("/api/terminal/stop", requested_paths,
+                      "expected /api/terminal/stop to be called in finally-cleanup")
 
 if __name__ == "__main__":
     unittest.main()

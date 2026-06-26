@@ -181,8 +181,7 @@ sends heartbeat → pending clears, version confirmed in fleet view.
   refuses to overwrite a `config.yaml` whose `agent.nickname` differs (`exit 11`) —
   protects against clobbering another agent.
 - **No `/opt` (Entware)** → script `exit 10`.
-- **system_info has no goArch / probe fails** → fall back to stored `arch`; if both
-  absent → 400 "cannot determine router arch (set arch in Edit)".
+- **system_info has no goArch / probe fails** → relay raises a hard error (same as `run_deferred_bootstrap`); no silent wrong-arch install. Handler returns a clear error to the caller.
 - **python3 missing on backend host** → existing `defaultRunAWGMRelayJob` error.
 - **Re-deploy of a live agent** rotates the token (new hash); the freshly written
   `config.yaml` carries the new token, so the agent re-authenticates cleanly.
