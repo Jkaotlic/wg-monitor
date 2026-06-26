@@ -120,10 +120,17 @@ func TestDeployRouterRequiresStoredAWGMURL(t *testing.T) {
 
 func TestDeployRouterRelayFailureReturns502(t *testing.T) {
 	_, h := newDeployRouterMux(t, "https://awg.example")
+
+	origVer := lookupDashboardLatestVersion
 	lookupDashboardLatestVersion = func(_ context.Context) (string, error) { return "v0.13.8", nil }
+	t.Cleanup(func() { lookupDashboardLatestVersion = origVer })
+
+	origSums := releaseChecksumsFetcher
 	releaseChecksumsFetcher = func(_ context.Context, _ string) (map[string]string, error) {
 		return map[string]string{"wg-monitor-agent-linux-arm64": "aa11"}, nil
 	}
+	t.Cleanup(func() { releaseChecksumsFetcher = origSums })
+
 	origRun := runAWGMInstallJob
 	runAWGMInstallJob = func(_ context.Context, _ string, _ awgmInstallJob) (string, error) {
 		return "checksum mismatch\n", context.DeadlineExceeded

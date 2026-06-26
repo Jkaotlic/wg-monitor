@@ -40,7 +40,7 @@ func defaultRunAWGMInstallJob(ctx context.Context, relayPath string, job awgmIns
 	if err != nil {
 		return "", err
 	}
-	return runRelayProcess(ctx, relayPath, body)
+	return runRelayProcess(ctx, relayPath, body, 10*time.Minute)
 }
 
 type dashboardDeployRouterReq struct {
