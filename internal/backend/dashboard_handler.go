@@ -85,6 +85,7 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/commands", requestIDMiddleware()(dashAuth(dashboardCommandHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/maintenance", requestIDMiddleware()(dashAuth(wizardMaintenanceHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/revive", requestIDMiddleware()(dashAuth(dashboardReviveAgentHandler(d))))
+	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy-router", requestIDMiddleware()(dashAuth(dashboardDeployRouterHandler(d))))
 	mux.Handle("GET /v1/dashboard/commands/{cmd_id}", requestIDMiddleware()(dashAuth(wizardCmdResultHandler(d))))
 }
 

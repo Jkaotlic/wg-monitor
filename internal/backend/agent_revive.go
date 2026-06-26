@@ -95,19 +95,26 @@ func resolveRelayScript(override string) (path string, cleanup func(), err error
 }
 
 func defaultRunAWGMRelayJob(ctx context.Context, relayPath string, job awgmReviveJob) (string, error) {
+	body, err := json.Marshal(job)
+	if err != nil {
+		return "", err
+	}
+	return runRelayProcess(ctx, relayPath, body)
+}
+
+// runRelayProcess provisions the embedded relay (or a wizard override), writes
+// the marshalled job to a 0600 temp file, runs python3 against it, and removes
+// the file so transient credentials never persist. Shared by revive + install.
+func runRelayProcess(ctx context.Context, relayPath string, jobJSON []byte) (string, error) {
 	if _, err := exec.LookPath("python3"); err != nil {
-		return "", fmt.Errorf("python3 not found on the backend host — the revive relay needs it (install python3)")
+		return "", fmt.Errorf("python3 not found on the backend host — the relay needs it (install python3)")
 	}
 	scriptPath, cleanupScript, err := resolveRelayScript(relayPath)
 	if err != nil {
 		return "", fmt.Errorf("provision awgm relay: %w", err)
 	}
 	defer cleanupScript()
-	body, err := json.Marshal(job)
-	if err != nil {
-		return "", err
-	}
-	f, err := os.CreateTemp("", "wg-monitor-revive-*.json")
+	f, err := os.CreateTemp("", "wg-monitor-relayjob-*.json")
 	if err != nil {
 		return "", err
 	}
@@ -117,14 +124,14 @@ func defaultRunAWGMRelayJob(ctx context.Context, relayPath string, job awgmReviv
 		_ = f.Close()
 		return "", err
 	}
-	if _, err := f.Write(body); err != nil {
+	if _, err := f.Write(jobJSON); err != nil {
 		_ = f.Close()
 		return "", err
 	}
 	if err := f.Close(); err != nil {
 		return "", err
 	}
-	runCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	out, err := exec.CommandContext(runCtx, "python3", scriptPath, tmp).CombinedOutput()
 	return string(out), err
