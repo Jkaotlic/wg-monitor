@@ -619,6 +619,51 @@ def run_deferred_bootstrap(cfg, cfg_path):
             f.write("EOF\n")
     os.remove(cfg_path)
 
+def run_install_bootstrap(cfg):
+    global TLS_CONFIG
+    TLS_CONFIG = cfg
+    nick = cfg.get("nickname") or ""
+    backend_url = cfg.get("backend_url") or ""
+    raw_token = cfg.get("raw_token") or ""
+    if not nick or not backend_url or not raw_token:
+        raise RelayError("bootstrap_install requires nickname, backend_url, raw_token")
+    checksums = cfg.get("checksums") or {}
+    if not isinstance(checksums, dict) or not checksums:
+        raise RelayError("bootstrap_install requires a non-empty checksums map")
+    op, jar = opener()
+    login_if_needed(op, cfg)
+    env = request(op, cfg, "GET", "/api/system/info")
+    data = env.get("data") or {}
+    raw_arch = (data.get("goArch") or "").strip()
+    if not raw_arch:
+        raise RelayError("AWG Manager system_info did not report goArch")
+    arch = normalize_arch(raw_arch)
+    asset = "wg-monitor-agent-linux-" + arch
+    expected_sha = (checksums.get(asset) or "").strip()
+    if not expected_sha:
+        raise RelayError("no checksum for asset %s in provided checksums map" % asset)
+    cfg["expected_sha"] = expected_sha
+    script = build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch)
+    ensure_terminal(op, cfg)
+    sock = None
+    try:
+        sock = ws_connect(cfg, jar)
+        ws_send(sock, 0x1, '{"AuthToken":""}')
+        send_resize(sock)
+        login_terminal(sock, cfg)
+        run_bootstrap(sock, {**cfg, "bootstrap_script": script})
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+        try:
+            request(op, cfg, "POST", "/api/terminal/stop")
+        except Exception as e:
+            print("WARN terminal stop failed: %s" % e, file=sys.stderr)
+    print("install bootstrap complete for %s at %s (%s)" % (nick, cfg.get("target_version") or "", arch))
+
 def login_terminal(sock, cfg):
     out = ""
     sent_user = False
@@ -687,6 +732,9 @@ def main():
     TLS_CONFIG = cfg
     if cfg.get("mode") == "deferred_bootstrap":
         run_deferred_bootstrap(cfg, sys.argv[1])
+        return
+    if cfg.get("mode") == "bootstrap_install":
+        run_install_bootstrap(cfg)
         return
     op, jar = opener()
     sock = None
