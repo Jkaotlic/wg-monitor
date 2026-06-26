@@ -14,7 +14,8 @@
     entwareClean: new Map(),
     versions: new Map(),
     agentConfig: new Map(),
-    cronAutoChecked: new Set()
+    cronAutoChecked: new Set(),
+    deployRouterNick: null
   };
 
   const els = {
@@ -100,7 +101,16 @@
     reviveAwgmPass: document.getElementById("reviveAwgmPass"),
     reviveAwgmKey: document.getElementById("reviveAwgmKey"),
     reviveError: document.getElementById("reviveError"),
-    reviveConfirmBtn: document.getElementById("reviveConfirmBtn")
+    reviveConfirmBtn: document.getElementById("reviveConfirmBtn"),
+    deployRouterModal: document.getElementById("deployRouterModal"),
+    deployRouterTitle: document.getElementById("deployRouterTitle"),
+    deployRouterRootPass: document.getElementById("deployRouterRootPass"),
+    deployRouterVersion: document.getElementById("deployRouterVersion"),
+    deployRouterAwgmLogin: document.getElementById("deployRouterAwgmLogin"),
+    deployRouterAwgmPass: document.getElementById("deployRouterAwgmPass"),
+    deployRouterAwgmKey: document.getElementById("deployRouterAwgmKey"),
+    deployRouterError: document.getElementById("deployRouterError"),
+    deployRouterConfirmBtn: document.getElementById("deployRouterConfirmBtn")
   };
 
   const AUTO_REFRESH_MS = 20000;
@@ -669,6 +679,7 @@
           <div class="drawer-actions">
             <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
             <button class="action-btn warn" type="button" title="Перепривязать backend + рестарт через awg-manager terminal (работает даже если агент offline)" data-revive="${escapeAttr(selected.nickname)}"><span class="ti ti-heartbeat"></span>Revive (AWG Manager)</button>
+            <button class="action-btn warn" type="button" title="Поставить агента на новый роутер через awg-manager terminal (качает бинарь, пишет config, запускает)" data-deploy-router="${escapeAttr(selected.nickname)}"><span class="ti ti-rocket"></span>Deploy to router</button>
             ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
             <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
           </div>
@@ -1172,6 +1183,78 @@
     els.resultDrawer.classList.remove("hidden");
   }
 
+  function openDeployRouter(nickname) {
+    state.deployRouterNick = nickname;
+    els.deployRouterTitle.textContent = "Deploy to router / " + nickname;
+    els.deployRouterRootPass.value = "";
+    els.deployRouterVersion.value = latestVersion();
+    els.deployRouterAwgmLogin.value = "";
+    els.deployRouterAwgmPass.value = "";
+    els.deployRouterAwgmKey.value = "";
+    els.deployRouterError.textContent = "";
+    setButtonState(els.deployRouterConfirmBtn, "idle");
+    els.deployRouterModal.classList.remove("hidden");
+    els.deployRouterRootPass.focus();
+  }
+
+  function closeDeployRouter() {
+    els.deployRouterModal.classList.add("hidden");
+    state.deployRouterNick = null;
+    setButtonState(els.deployRouterConfirmBtn, "idle");
+  }
+
+  async function submitDeployRouter() {
+    const nickname = state.deployRouterNick;
+    if (!nickname) return;
+    if (!els.deployRouterRootPass.value) {
+      els.deployRouterError.textContent = "Нужен root-пароль роутера";
+      return;
+    }
+    els.deployRouterError.textContent = "";
+    setButtonState(els.deployRouterConfirmBtn, "waiting");
+    const payload = {
+      root_password: els.deployRouterRootPass.value,
+      version: els.deployRouterVersion.value.trim(),
+      awgm_login: els.deployRouterAwgmLogin.value.trim(),
+      awgm_password: els.deployRouterAwgmPass.value,
+      awgm_api_key: els.deployRouterAwgmKey.value.trim()
+    };
+    try {
+      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/deploy-router`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      closeDeployRouter();
+      toast("deploy отправлен — агент ставится на роутер");
+      showDeployRouterResult(nickname, res, null);
+      refresh();
+    } catch (err) {
+      if (err.status === 502) {
+        closeDeployRouter();
+        showDeployRouterResult(nickname, null, err);
+      } else {
+        els.deployRouterError.textContent = err.message;
+        setButtonState(els.deployRouterConfirmBtn, "error");
+      }
+    }
+  }
+
+  function showDeployRouterResult(nickname, res, err) {
+    els.drawerTitle.textContent = "Deploy to router / " + nickname;
+    const ok = res && res.ok;
+    const output = (res && res.output) || (err && err.body && err.body.output) || "";
+    const version = (res && res.version) || (err && err.body && err.body.version) || "";
+    const sections = [
+      `<div class="result-section${ok ? "" : " result-error"}"><strong>${ok ? "Deploy отправлен" : "Deploy не удался"}</strong><p>${escapeHTML(version)}</p>${err && err.message ? `<p>${escapeHTML(err.message)}</p>` : ""}</div>`
+    ];
+    if (output) {
+      sections.push(`<div class="result-section"><strong>AWG Manager terminal</strong><pre class="raw-output">${escapeHTML(output)}</pre></div>`);
+    }
+    setResultHTML(sections.join(""));
+    els.resultDrawer.classList.remove("hidden");
+  }
+
   // cronScheduleToTime converts a stored "M H * * *" cron line to an "HH:MM"
   // value for the <input type=time> so the drawer reflects the live schedule.
   function cronScheduleToTime(schedule, fallback) {
@@ -1527,6 +1610,7 @@
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
       if (button.dataset.agentConfig) openAgentConfig(button.dataset.agentConfig);
       if (button.dataset.revive) openRevive(button.dataset.revive);
+      if (button.dataset.deployRouter) openDeployRouter(button.dataset.deployRouter);
       if (button.dataset.deploy) openDeploy(nickname);
       if (button.dataset.cancelDeploy) cancelDeploy(button.dataset.cancelDeploy).catch((err) => toast(err.message));
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
@@ -1559,6 +1643,7 @@
   document.querySelectorAll("[data-close-edit-agent]").forEach((button) => button.addEventListener("click", closeEditAgent));
   document.querySelectorAll("[data-close-agent-config]").forEach((button) => button.addEventListener("click", closeAgentConfig));
   document.querySelectorAll("[data-close-revive]").forEach((button) => button.addEventListener("click", closeRevive));
+  document.querySelectorAll("[data-close-deploy-router]").forEach((button) => button.addEventListener("click", closeDeployRouter));
   els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => {
     setButtonState(els.confirmDeployBtn, "error");
     toast(err.message);
@@ -1576,6 +1661,10 @@
     setButtonState(els.reviveConfirmBtn, "error");
     els.reviveError.textContent = err.message;
   }));
+  els.deployRouterConfirmBtn.addEventListener("click", () => submitDeployRouter().catch((err) => {
+    setButtonState(els.deployRouterConfirmBtn, "error");
+    els.deployRouterError.textContent = err.message;
+  }));
   els.newAgentGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
   els.autoRefreshBtn.addEventListener("click", () => setAutoRefresh(!state.autoRefresh));
@@ -1589,6 +1678,7 @@
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (!els.reviveModal.classList.contains("hidden")) { closeRevive(); return; }
+      if (!els.deployRouterModal.classList.contains("hidden")) { closeDeployRouter(); return; }
       if (!els.agentConfigModal.classList.contains("hidden")) { closeAgentConfig(); return; }
       if (!els.editAgentModal.classList.contains("hidden")) { closeEditAgent(); return; }
       if (!els.addAgentModal.classList.contains("hidden")) { closeAddAgent(); return; }
