@@ -90,6 +90,17 @@ Flow:
 
 No SSTP/WireGuard connection from the operator machine to the router LAN is required for this path.
 
+### From the dashboard (no wizard machine needed)
+
+For a router that already has AWG Manager reachable on its public domain, you can
+install the agent straight from the dashboard: open the agent's drawer →
+**Recovery** → **Deploy to router**. Enter the AWG Manager auth (api-key or
+login/password) and the router root password. The backend re-mints the enrollment
+token, resolves the latest stable version (or a version you type), and drives the
+AWG Manager terminal to download the agent, write `config.yaml`, install the init
+service, and start it. Credentials are used once and never stored. The router must
+already be enrolled (Add agent) with its `awgm_url` set.
+
 ## Move Old Routers To A New VPS
 
 Use `[4] Move to new VPS`.

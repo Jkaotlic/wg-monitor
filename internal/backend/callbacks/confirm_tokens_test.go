@@ -44,4 +44,3 @@ func TestPendingConfirmStoreRejectsExpiredToken(t *testing.T) {
 		t.Fatal("expired confirm token must not be accepted")
 	}
 }
-
