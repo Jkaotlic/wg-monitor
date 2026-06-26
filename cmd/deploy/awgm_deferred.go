@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
 const (
@@ -48,10 +50,6 @@ func buildDeferredAWGMConfig(p deferredAWGMConfigParams) (awgmRelayConfig, error
 	if kind == "" {
 		kind = "static"
 	}
-	initScript, err := ReadStaticTemplate("S99wg-monitor")
-	if err != nil {
-		return awgmRelayConfig{}, err
-	}
 	return awgmRelayConfig{
 		BaseURL:          normalizeAWGMURL(p.Agent.AWGMURL),
 		APIKey:           p.APIKey,
@@ -68,7 +66,7 @@ func buildDeferredAWGMConfig(p deferredAWGMConfigParams) (awgmRelayConfig, error
 		TargetVersion:    p.Release.TagName,
 		ReleaseBase:      backendURL + "/v1/releases/download",
 		ExpectedSHA:      strings.TrimSpace(p.ExpectedSHA),
-		InitScript:       strings.TrimRight(string(initScript), "\n"),
+		InitScript:       installtmpl.InitScript(),
 		ExpiresAtUnix:    p.ExpiresAt.Unix(),
 		RecoveryHint:     p.RecoveryHint,
 	}, nil

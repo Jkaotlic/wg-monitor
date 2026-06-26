@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
 func TestRenderBackendYAML(t *testing.T) {
@@ -142,7 +144,6 @@ func TestRenderCaddyfile(t *testing.T) {
 
 func TestStaticTemplates(t *testing.T) {
 	for _, name := range []string{
-		"S99wg-monitor",
 		"wg-monitor-backend.service",
 		"wg-monitor-backup.service",
 		"wg-monitor-backup.timer",
@@ -154,6 +155,16 @@ func TestStaticTemplates(t *testing.T) {
 		if len(got) == 0 {
 			t.Errorf("empty %s", name)
 		}
+	}
+}
+
+func TestInitScriptAvailableViaInstalltmpl(t *testing.T) {
+	s := installtmpl.InitScript()
+	if len(s) == 0 {
+		t.Fatal("installtmpl.InitScript() is empty")
+	}
+	if !strings.Contains(s, "S99wg-monitor") {
+		t.Fatal("init script missing S99wg-monitor reference")
 	}
 }
 

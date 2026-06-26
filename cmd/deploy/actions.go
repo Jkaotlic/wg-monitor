@@ -18,6 +18,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
 // runPathDiscoveryStep is the operator-facing wrapper around
@@ -1636,11 +1637,7 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 	PrintOK("/opt/etc/wg-monitor/config.yaml")
 
 	PrintStep(6, 8, "init.d скрипт")
-	initd, err := ReadStaticTemplate("S99wg-monitor")
-	if err != nil {
-		return err
-	}
-	if err := s.UploadStdin("/opt/etc/init.d/S99wg-monitor", initd); err != nil {
+	if err := s.UploadStdin("/opt/etc/init.d/S99wg-monitor", []byte(installtmpl.InitScript())); err != nil {
 		return err
 	}
 	s.MustRun("chmod +x /opt/etc/init.d/S99wg-monitor")

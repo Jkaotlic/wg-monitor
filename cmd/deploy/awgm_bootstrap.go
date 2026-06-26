@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"strings"
+
+	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
 type AWGMBootstrapParams struct {
@@ -42,10 +44,6 @@ func RenderAWGMBootstrapScript(p AWGMBootstrapParams) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	initScript, err := ReadStaticTemplate("S99wg-monitor")
-	if err != nil {
-		return "", err
-	}
 	raw, err := renderTemplate("awgm-bootstrap.sh.tmpl", awgmBootstrapTemplateParams{
 		NicknameQ:     shellQuote(p.Nickname),
 		VersionQ:      shellQuote(p.Version),
@@ -53,7 +51,7 @@ func RenderAWGMBootstrapScript(p AWGMBootstrapParams) (string, error) {
 		ChecksumNameQ: shellQuote(p.ChecksumName),
 		ExpectedSHAQ:  shellQuote(p.ExpectedSHA),
 		AgentConfig:   strings.TrimRight(string(agentYAML), "\n"),
-		InitScript:    strings.TrimRight(string(initScript), "\n"),
+		InitScript:    installtmpl.InitScript(),
 		StartBlock:    awgmBootstrapStartBlock(!p.DeferStart),
 	})
 	if err != nil {
