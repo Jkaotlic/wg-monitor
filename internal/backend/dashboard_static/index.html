@@ -423,6 +423,40 @@
     </div>
   </div>
 
+  <div id="deployRouterModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deployRouterTitle">
+    <div class="modal-panel">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">deploy agent to a new router</div>
+          <h2 id="deployRouterTitle">Deploy to router</h2>
+        </div>
+        <button class="icon-btn" type="button" data-close-deploy-router><span class="ti ti-x"></span></button>
+      </div>
+      <p class="modal-note">Ставит агента на роутер через <strong>awg-manager terminal</strong> (публичный DDNS): качает бинарь, пишет <code>config.yaml</code> с новым токеном, ставит init-сервис и запускает. Креды используются один раз и <strong>не сохраняются</strong>. AWG Manager URL берётся из настроек агента (меняется в Edit).</p>
+      <label class="form-field">
+        <span>Router root password</span>
+        <input id="deployRouterRootPass" type="password" autocomplete="off" placeholder="root пароль роутера">
+      </label>
+      <label class="form-field">
+        <span>Target version (пусто = latest stable)</span>
+        <input id="deployRouterVersion" type="text" autocomplete="off" placeholder="v0.13.8">
+      </label>
+      <details class="revive-advanced">
+        <summary>AWG Manager auth (если awg-manager под логином/api-key)</summary>
+        <div class="form-grid form-grid-three">
+          <label class="form-field"><span>awgm login</span><input id="deployRouterAwgmLogin" type="text" autocomplete="off"></label>
+          <label class="form-field"><span>awgm password</span><input id="deployRouterAwgmPass" type="password" autocomplete="off"></label>
+          <label class="form-field"><span>awgm api-key</span><input id="deployRouterAwgmKey" type="text" autocomplete="off"></label>
+        </div>
+      </details>
+      <div id="deployRouterError" class="form-error"></div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" type="button" data-close-deploy-router>Cancel</button>
+        <button id="deployRouterConfirmBtn" class="btn btn-warn" type="button" data-state="idle"><span class="ti ti-rocket"></span>Deploy</button>
+      </div>
+    </div>
+  </div>
+
   <aside id="resultDrawer" class="result-drawer hidden" aria-live="polite">
     <div class="drawer-head">
       <div>
