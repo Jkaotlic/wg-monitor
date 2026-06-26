@@ -26,6 +26,10 @@ wg-monitor-backend
 *.out
 coverage.txt
 
+# Python relay test cache (internal/awgmrelay unittest)
+__pycache__/
+*.pyc
+
 # Local config (never commit real tokens)
 backend.yaml
 config.yaml
@@ -75,3 +79,4 @@ bin/wg-monitor-deploy*
 /docs/operations/2026-06-08-v0130-stable-release-session.md
 /docs/operations/2026-06-19-dashboard-revive-session.md
 /docs/operations/2026-06-19-routing-singbox-and-ops-session.md
+/docs/operations/2026-06-22-dns-reset-and-hydraroute-singbox-session.md
