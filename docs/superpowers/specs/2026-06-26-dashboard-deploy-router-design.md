@@ -69,7 +69,9 @@ that drives the relay with a full-install script instead of the revive script.**
    the wizard path), add a **separate "Deploy to router"** action with creds (like
    Revive). Allows deploy and later re-deploy.
 5. **Arch:** **auto-detected** by the relay via `GET /api/system/info` (goArch) — no
-   arch field in the form. Falls back to stored `arch` metadata if the probe fails.
+   arch field in the form. If `system_info` reports no `goArch`, the relay hard-fails
+   with a clear error (no silent wrong-arch install) — consistent with the existing
+   `run_deferred_bootstrap`.
 6. **Script generation:** stays in the **Python relay** (new `bootstrap_install`
    mode reusing `build_deferred_bootstrap_script`) — single source of truth, no
    duplicated shell template in Go.
