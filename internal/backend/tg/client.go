@@ -348,16 +348,30 @@ func (c *Client) GetFile(ctx context.Context, fileID string) (string, error) {
 
 // DownloadFile fetches raw bytes from the TG file CDN.
 // filePath comes from GetFile. Limit 20 MB (TG Bot API hard cap).
+//
+// CRITICAL: both the build-request and transport-Do failures below can
+// surface a *url.Error whose Error() embeds the full request URL —
+// including our bot-token. (The file-CDN URL shape is
+// ".../file/bot<token>/<filePath>", distinct from the ".../bot<token>/<method>"
+// shape callWith uses, which is why redactURLError recognises both prefixes.)
+// Both paths are redacted before being returned: callers — notably the
+// document-upload chat handler — relay these errors verbatim into Telegram
+// chat text, so an unredacted error here would leak the live bot-token to
+// every member of the topic.
 func (c *Client) DownloadFile(ctx context.Context, filePath string) ([]byte, error) {
 	fileBase := strings.TrimSuffix(c.BaseURL, "bot") + "file/bot"
 	url := fileBase + c.Token + "/" + filePath
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("tg DownloadFile: build request: %w", err)
+		safe := redactURLError(err)
+		c.warn("DownloadFile", "build request failed", "err", safe)
+		return nil, fmt.Errorf("tg DownloadFile: build request: %s", safe)
 	}
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tg DownloadFile: %w", err)
+		safe := redactURLError(err)
+		c.warn("DownloadFile", "transport error", "err", safe)
+		return nil, fmt.Errorf("tg DownloadFile: %s", safe)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
@@ -490,26 +504,38 @@ func isMessageNotModified(method string, code int, description string) bool {
 
 // redactURLError replaces the embedded URL in `*url.Error.Error()` with one
 // where the bot-token segment is masked as `***`. Best-effort: any error
-// shape we don't recognise is returned unchanged. Anchored by the literal
-// "https://api.telegram.org/bot" prefix that DefaultBaseURL carries.
+// shape we don't recognise is returned unchanged. Anchored by two literal
+// prefixes:
+//   - "https://api.telegram.org/bot" — method calls (DefaultBaseURL), used
+//     by callWith/SendDocument.
+//   - "https://api.telegram.org/file/bot" — file-CDN downloads (DownloadFile),
+//     which insert a "file/" path segment ahead of "bot" and so do NOT match
+//     the method-call prefix above; it needs its own anchor.
+//
+// The two prefixes are mutually exclusive on real inputs, so checking the
+// longer one first is sufficient — no input matches both.
 func redactURLError(err error) error {
 	if err == nil {
 		return nil
 	}
 	s := err.Error()
-	const prefix = "https://api.telegram.org/bot"
-	idx := strings.Index(s, prefix)
-	if idx < 0 {
-		return err
+	for _, prefix := range [...]string{
+		"https://api.telegram.org/file/bot",
+		"https://api.telegram.org/bot",
+	} {
+		idx := strings.Index(s, prefix)
+		if idx < 0 {
+			continue
+		}
+		// Token = everything between the prefix and the next "/" (path separator).
+		tail := s[idx+len(prefix):]
+		slash := strings.Index(tail, "/")
+		if slash <= 0 {
+			continue
+		}
+		return errSanitized(s[:idx+len(prefix)] + "***" + tail[slash:])
 	}
-	// Token = everything between "/bot" and the next "/" (method separator).
-	tail := s[idx+len(prefix):]
-	slash := strings.Index(tail, "/")
-	if slash <= 0 {
-		return err
-	}
-	redacted := s[:idx+len(prefix)] + "***" + tail[slash:]
-	return errSanitized(redacted)
+	return err
 }
 
 type errSanitized string

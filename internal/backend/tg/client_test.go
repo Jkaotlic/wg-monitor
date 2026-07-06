@@ -4,6 +4,7 @@ package tg
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -371,6 +372,66 @@ func TestDownloadFileRejectsOversizeResponse(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// stubTransportErrRoundTripper forces http.Client.Do to fail with a
+// transport-level error without any real network I/O. Go's http.Client
+// wraps whatever the RoundTripper returns in a *url.Error whose Error()
+// embeds the full request URL — exactly the shape that leaked the bot-token
+// before DownloadFile redacted it.
+type stubTransportErrRoundTripper struct{ err error }
+
+func (rt stubTransportErrRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, rt.err
+}
+
+// TestDownloadFileRedactsBotTokenOnTransportError forces a *url.Error via a
+// stub RoundTripper (simulating a dial/timeout failure while downloading an
+// uploaded .conf) and asserts the token never survives into the returned
+// error string. This error is relayed verbatim into Telegram chat text by
+// callbacks.handleDocumentUpload, so a leak here means the live bot-token
+// gets posted into the topic.
+func TestDownloadFileRedactsBotTokenOnTransportError(t *testing.T) {
+	const token = "123456:SECRETTOKEN"
+	c := &Client{
+		BaseURL: DefaultBaseURL,
+		Token:   token,
+		HTTP:    &http.Client{Transport: stubTransportErrRoundTripper{err: errors.New("simulated dial failure")}},
+	}
+	_, err := c.DownloadFile(context.Background(), "documents/file123.conf")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("DownloadFile error leaks bot token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "***") {
+		t.Fatalf("expected redaction marker (***) in error, got %v", err)
+	}
+}
+
+// TestDownloadFileRedactsBotTokenOnBuildRequestError covers the OTHER
+// *url.Error source in DownloadFile: a raw control character in filePath
+// makes net/url.Parse (invoked by http.NewRequestWithContext) fail before
+// any request is sent, and that error's Error() also embeds the full URL
+// (token included) — the "not just one [error path]" case from the audit.
+func TestDownloadFileRedactsBotTokenOnBuildRequestError(t *testing.T) {
+	const token = "123456:SECRETTOKEN"
+	c := &Client{
+		BaseURL: DefaultBaseURL,
+		Token:   token,
+		HTTP:    http.DefaultClient, // unreachable: request build fails first
+	}
+	_, err := c.DownloadFile(context.Background(), "documents/\n.conf")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if strings.Contains(err.Error(), token) {
+		t.Fatalf("DownloadFile error leaks bot token: %v", err)
+	}
+	if !strings.Contains(err.Error(), "***") {
+		t.Fatalf("expected redaction marker (***) in error, got %v", err)
 	}
 }
 
