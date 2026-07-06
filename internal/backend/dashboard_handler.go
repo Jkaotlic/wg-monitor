@@ -87,6 +87,13 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/revive", requestIDMiddleware()(dashAuth(dashboardReviveAgentHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy-router", requestIDMiddleware()(dashAuth(dashboardDeployRouterHandler(d))))
 	mux.Handle("GET /v1/dashboard/commands/{cmd_id}", requestIDMiddleware()(dashAuth(wizardCmdResultHandler(d))))
+	// Router-provisioning engine (register/install a new router, poll its
+	// progress, repair repoint/reinstall — see internal/backend/provision and
+	// provision_handler.go). Same dashAuth-gated pattern as every other
+	// operator-only endpoint above: never exposed unauthenticated.
+	mux.Handle("POST /v1/dashboard/provision", requestIDMiddleware()(dashAuth(dashboardProvisionHandler(d))))
+	mux.Handle("GET /v1/dashboard/provision/{job_id}", requestIDMiddleware()(dashAuth(dashboardProvisionPollHandler(d))))
+	mux.Handle("POST /v1/dashboard/agents/{nickname}/repair", requestIDMiddleware()(dashAuth(dashboardRepairHandler(d))))
 }
 
 // dashboardCancelDeployHandler cancels a pending agent deploy: it drops any

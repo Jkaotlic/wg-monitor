@@ -18,6 +18,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/retention"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
@@ -215,6 +216,24 @@ func main() {
 		dashboardMobileStaleAfter = cfg.Heartbeat.MobileSleepAfterSec
 	}
 
+	// Router-provisioning engine (dashboard "Provision router" + repair
+	// repoint/reinstall — see internal/backend/provision). BaseCtx is this
+	// same process-owned ctx (cancelled on SIGINT/SIGTERM, same one wired as
+	// ShutdownCtx below), NEVER a request ctx: the worker derives its own
+	// timeout-bound contexts from it, so a run started by an HTTP handler
+	// survives that handler returning (see provision.Deps' own doc). LastSeen
+	// reads the exact column POST /v1/report updates (provisionLastSeen, this
+	// package) — anything else would make verify_online lag or miss reports.
+	provisionStore := provision.NewStore()
+	provisionDeps := provision.Deps{
+		Store:    provisionStore,
+		BaseCtx:  ctx,
+		Relay:    provision.DefaultRelay,
+		LastSeen: provisionLastSeen(d),
+		Now:      time.Now,
+		Logger:   logger.With("component", "provision"),
+	}
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:              logger,
 		DB:                  d,
@@ -250,6 +269,7 @@ func main() {
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
 		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),
 		PublicBaseURL:             cfg.PublicBaseURL,
+		Provision:                 provisionDeps,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,
@@ -312,6 +332,24 @@ func main() {
 				if o, r := cmdQueue.Sweep(1 * time.Hour); o > 0 || r > 0 {
 					logger.Debug("cmd queue swept", "origins", o, "results", r)
 				}
+			}
+		}
+	}()
+
+	// Provision-job janitor: evict terminal (success/failed) provisioning
+	// jobs once they're past their retention window (provision.Store.Sweep;
+	// jobTTL is 30m — see internal/backend/provision/job.go) so a long-running
+	// backend doesn't accumulate an unbounded map of old installs/repairs.
+	// Running jobs are never evicted regardless of age.
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				provisionStore.Sweep()
 			}
 		}
 	}()
