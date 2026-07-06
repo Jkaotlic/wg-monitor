@@ -211,12 +211,11 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		return
 	}
 
-	sums, err := verifiedChecksumsFetcher(r.Context(), releaseDownloadBase, version)
-	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "checksums_failed", err.Error())
-		return
-	}
-
+	// Anti-downgrade BEFORE the checksums network fetch: a cheap local compare
+	// that rejects a target older than what's already installed (unless the
+	// operator opted in) shouldn't cost a GitHub round trip first. existing is
+	// nil for a brand-new nickname (nothing to downgrade from); it is also
+	// reused below to preserve merge-safe metadata.
 	existing, err := lookupExistingUser(d.DB, req.Nickname)
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
@@ -229,11 +228,32 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		return
 	}
 
+	sums, err := verifiedChecksumsFetcher(r.Context(), releaseDownloadBase, version)
+	if err != nil {
+		writeJSONError(w, http.StatusBadGateway, "checksums_failed", err.Error())
+		return
+	}
+
 	backendURL := strings.TrimRight(strings.TrimSpace(d.PublicBaseURL), "/")
 	if backendURL == "" {
 		writeJSONError(w, http.StatusInternalServerError, "no_public_base_url", "backend PublicBaseURL is not configured")
 		return
 	}
+
+	// Single-flight lock BEFORE the token mint (see acquireProvisionMintLock):
+	// createAgentEnrollment re-mints unconditionally (UpsertEnrollment
+	// overwrites token_hash), so two concurrent requests for the same nickname
+	// must not both mint and leave the winning job's raw token out of sync
+	// with the stored hash — which would break a live agent's auth on a
+	// plausible double-click. Held only across the mint + job-JSON build (all
+	// local/DB, no network); released right before Start so Start's own
+	// TryLock re-acquires it. The guarded release covers every error path
+	// below and is a no-op once handed off to Start.
+	release, ok := acquireProvisionMintLock(w, d.Provision.Store, req.Nickname)
+	if !ok {
+		return
+	}
+	defer release()
 
 	enrollment, userID, err := createAgentEnrollment(d.DB, req.Nickname, req.AgentKind, req.ThreadID)
 	if err != nil {
@@ -272,6 +292,10 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		return
 	}
 
+	// Hand the single-flight lock off to Start: release here so Start's own
+	// TryLock re-acquires it (same nickname, same goroutine — a few-ns gap,
+	// not the two network round trips the pre-mint lock replaced).
+	release()
 	jobID, err := d.Provision.Start(provision.StartReq{
 		Kind:          provision.KindProvision,
 		Nickname:      enrollment.Nickname,
@@ -450,15 +474,11 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 		writeJSONError(w, http.StatusBadGateway, "latest_version_failed", err.Error())
 		return
 	}
-	// Anti-downgrade before the checksums fetch (the reverse order from
-	// dashboardHandleProvisionInstall, which follows the brief's literal
-	// provision-install sequence): user.LastDeployedVersion is already in
-	// hand here (dashboardRepairHandler's shared GetByNickname), so rejecting
-	// a downgrade costs nothing extra, whereas provision-install has no
-	// existing row to check against until later. Reinstall targets an
-	// already-enrolled nickname, where a downgrade attempt (e.g. rolling back
-	// a bad deploy without the explicit override) is the realistic case this
-	// guards, so failing fast here also skips a wasted GitHub round trip.
+	// Anti-downgrade before the checksums network fetch — same fail-fast order
+	// as dashboardHandleProvisionInstall. user.LastDeployedVersion is already
+	// in hand (dashboardRepairHandler's shared GetByNickname), so rejecting a
+	// downgrade (e.g. rolling back a bad deploy without the explicit override)
+	// costs nothing and skips a wasted GitHub round trip.
 	if !req.AllowDowngrade && isVersionDowngrade(version, stringValue(user.LastDeployedVersion)) {
 		writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
 			fmt.Sprintf("target version %s is older than the currently installed %s — pass allow_downgrade to override",
@@ -477,6 +497,18 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 		writeJSONError(w, http.StatusInternalServerError, "no_public_base_url", "backend PublicBaseURL is not configured")
 		return
 	}
+
+	// Single-flight lock BEFORE the token re-mint (see acquireProvisionMintLock):
+	// two concurrent reinstalls of the same nickname must not both re-mint and
+	// desync the winning job's raw token from the stored hash. Held only across
+	// the mint + job-JSON build (no network); released right before Start so
+	// Start's own TryLock re-acquires it. The guarded release covers every
+	// error path below and is a no-op once handed off to Start.
+	release, ok := acquireProvisionMintLock(w, d.Provision.Store, nickname)
+	if !ok {
+		return
+	}
+	defer release()
 
 	// Re-mint the enrollment token: the DB only keeps the hash, and a fresh
 	// config.yaml needs the raw token (mirrors dashboardDeployRouterHandler's
@@ -509,6 +541,8 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 		return
 	}
 
+	// Hand the single-flight lock off to Start (same nickname, same goroutine).
+	release()
 	jobID, err := d.Provision.Start(provision.StartReq{
 		Kind:          provision.KindRepairReinstall,
 		Nickname:      nickname,
@@ -668,11 +702,46 @@ func writeProvisionEnrollmentError(w http.ResponseWriter, err error) {
 // failure mode (ErrAlreadyRunning) to 409 Conflict, handing its already
 // operator-friendly Error() text straight through — the same convention
 // agent_revive.go's dashboardReviveAgentHandler uses for a relay error's
-// Error() text today (see runner.go's ErrAlreadyRunning doc).
+// Error() text today (see runner.go's ErrAlreadyRunning doc). This can only
+// fire in the few-ns gap between a mutating handler releasing the pre-mint
+// lock and Start re-acquiring it (acquireProvisionMintLock closes the wide
+// window); it is the same "already running for this router" condition, just
+// caught one lock-hop later.
 func writeProvisionStartError(w http.ResponseWriter, err error) {
 	if errors.Is(err, provision.ErrAlreadyRunning) {
 		writeJSONError(w, http.StatusConflict, "already_running", err.Error())
 		return
 	}
 	writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+}
+
+// acquireProvisionMintLock takes the provisioning engine's per-nickname
+// single-flight lock so a token re-mint cannot race a concurrent
+// provision/reinstall for the same router (createAgentEnrollment overwrites
+// token_hash unconditionally, so a double-mint would desync the winning job's
+// raw token from the stored hash and break a live agent's auth). On success
+// it returns an idempotent release func — safe to call BOTH via defer on the
+// error paths AND explicitly right before handing off to Start — and true. On
+// contention it writes a 409 and returns (nil, false).
+//
+// This is the SAME lock provision.Deps.Start acquires internally, so the
+// caller MUST release before calling Start: releasing first, in the same
+// goroutine, avoids a self-deadlock and shrinks the double-mint window from
+// two network round trips (version + checksums) to a few nanoseconds. Callers
+// hold Store non-nil (both mutating handlers 503 on a nil Store up front), so
+// this does not nil-guard it.
+func acquireProvisionMintLock(w http.ResponseWriter, store *provision.Store, nickname string) (release func(), ok bool) {
+	if !store.TryLock(nickname) {
+		writeJSONError(w, http.StatusConflict, "provision_already_running",
+			"provisioning already in progress for this router")
+		return nil, false
+	}
+	released := false
+	return func() {
+		if released {
+			return
+		}
+		released = true
+		store.Unlock(nickname)
+	}, true
 }

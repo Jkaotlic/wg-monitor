@@ -343,10 +343,15 @@ func TestDashboardProvision_InvalidKind400(t *testing.T) {
 	}
 }
 
-func TestDashboardProvisionInstall_SecondConcurrentCallRejected409(t *testing.T) {
+// Regression guard for the mint-before-lock token-rotation race: the first
+// job holds the single-flight lock (its worker blocked in the fake relay),
+// and a second concurrent provision for the same nickname must be rejected
+// 409 BEFORE it re-mints the enrollment token — otherwise the winning job's
+// raw token would desync from the stored hash and break a live agent's auth.
+func TestDashboardProvisionInstall_SecondConcurrentCallRejected409AndNoReMint(t *testing.T) {
 	unblock := make(chan struct{})
 	relay := &fakeProvisionRelay{rc: 0, block: unblock}
-	_, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
+	database, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
 	stubVerifiedChecksums(t, map[string]string{"a": "b"})
 
 	body := `{"kind":"provision","nickname":"busyrouter","agent_kind":"static",` +
@@ -357,19 +362,133 @@ func TestDashboardProvisionInstall_SecondConcurrentCallRejected409(t *testing.T)
 	}
 	var resp1 dashboardJobStartResp
 	_ = json.Unmarshal(rec1.Body.Bytes(), &resp1)
+	// The first request has already minted busyrouter's token, and its job's
+	// worker holds the single-flight lock (Start acquires it synchronously
+	// before returning — see runner.go — then blocks in the fake relay).
+	hash1 := tokenHashOf(t, database, "busyrouter")
 
-	// provision.Deps.Start acquires the single-flight lock synchronously
-	// before returning (see runner.go's own doc), and this handler calls
-	// Start synchronously within the request — so by the time postProvisionJSON
-	// above has returned, "busyrouter" is already locked. No extra
-	// synchronization is needed before firing the second request.
 	rec2 := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/provision", body)
 	if rec2.Code != http.StatusConflict {
 		t.Fatalf("second status = %d, want 409, body=%s", rec2.Code, rec2.Body.String())
 	}
+	if h := tokenHashOf(t, database, "busyrouter"); h != hash1 {
+		t.Error("second (rejected) provision re-minted the token — the pre-mint lock did not close the race")
+	}
 
 	close(unblock)
-	waitForProvisionTerminal(t, store, resp1.JobID, time.Second)
+	job := waitForProvisionTerminal(t, store, resp1.JobID, time.Second)
+	if job.State != provision.StateSuccess {
+		t.Fatalf("first job state = %q, want success (hint=%q)", job.State, job.Hint)
+	}
+	if relay.callCount() != 1 {
+		t.Errorf("relay called %d times total, want exactly 1 (second call rejected before Start)", relay.callCount())
+	}
+}
+
+// Same regression guard, reinstall path: the token re-mint for an existing
+// nickname must not run for a second concurrent reinstall while the first
+// still holds the lock.
+func TestDashboardRepairReinstall_SecondConcurrentCallRejected409AndNoReMint(t *testing.T) {
+	unblock := make(chan struct{})
+	relay := &fakeProvisionRelay{rc: 0, block: unblock}
+	database, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
+	if _, err := database.Users().UpsertEnrollment("client-g", "tok-client-g-000000000000000000", db.KindStatic, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Users().UpdateDeployInfo("client-g", db.DeployInfo{
+		AWGMURL: "https://awg.example", LastDeployedVersion: "v0.13.5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubVerifiedChecksums(t, map[string]string{"a": "b"})
+
+	body := `{"mode":"reinstall","root_password":"rootpw","version":"v0.13.9"}`
+	rec1 := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/agents/client-g/repair", body)
+	if rec1.Code != http.StatusAccepted {
+		t.Fatalf("first status = %d, body=%s", rec1.Code, rec1.Body.String())
+	}
+	var resp1 dashboardJobStartResp
+	_ = json.Unmarshal(rec1.Body.Bytes(), &resp1)
+	hash1 := tokenHashOf(t, database, "client-g") // the first reinstall's freshly re-minted hash
+
+	rec2 := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/agents/client-g/repair", body)
+	if rec2.Code != http.StatusConflict {
+		t.Fatalf("second status = %d, want 409, body=%s", rec2.Code, rec2.Body.String())
+	}
+	if h := tokenHashOf(t, database, "client-g"); h != hash1 {
+		t.Error("second (rejected) reinstall re-minted the token — the pre-mint lock did not close the race")
+	}
+
+	close(unblock)
+	job := waitForProvisionTerminal(t, store, resp1.JobID, time.Second)
+	if job.State != provision.StateSuccess {
+		t.Fatalf("first job state = %q, want success (hint=%q)", job.State, job.Hint)
+	}
+	if relay.callCount() != 1 {
+		t.Errorf("relay called %d times total, want exactly 1 (second call rejected before Start)", relay.callCount())
+	}
+}
+
+// --- provision (install now): anti-downgrade -------------------------------
+
+// Anti-downgrade on the kind=provision path (re-provisioning an existing
+// nickname). Also pins Minor 1's fail-fast order: the checksums network fetch
+// must NOT run when anti-downgrade rejects, so the stubbed fetcher fails the
+// test if it is reached.
+func TestDashboardProvisionInstall_AntiDowngradeRejects400(t *testing.T) {
+	relay := &fakeProvisionRelay{}
+	database, _, mux := newProvisionTestHandler(t, relay, func(string) (time.Time, bool) { return time.Time{}, false })
+	if _, err := database.Users().UpsertEnrollment("existing", "tok-existing-00000000000000000", db.KindStatic, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Users().UpdateDeployInfo("existing", db.DeployInfo{
+		AWGMURL: "https://awg.example", LastDeployedVersion: "v0.13.9",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	orig := verifiedChecksumsFetcher
+	verifiedChecksumsFetcher = func(context.Context, string, string) (map[string]string, error) {
+		t.Error("checksums must not be fetched when anti-downgrade rejects (Minor 1: anti-downgrade precedes the network fetch)")
+		return nil, nil
+	}
+	t.Cleanup(func() { verifiedChecksumsFetcher = orig })
+
+	body := `{"kind":"provision","nickname":"existing","agent_kind":"static",` +
+		`"awgm_url":"https://awg.example","root_password":"rootpw","version":"v0.13.5"}`
+	rec := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/provision", body)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	if relay.callCount() != 0 {
+		t.Error("relay must not be called when anti-downgrade rejects")
+	}
+}
+
+func TestDashboardProvisionInstall_AllowDowngradeOverrides(t *testing.T) {
+	relay := &fakeProvisionRelay{rc: 0}
+	database, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
+	if _, err := database.Users().UpsertEnrollment("existing", "tok-existing-00000000000000000", db.KindStatic, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Users().UpdateDeployInfo("existing", db.DeployInfo{
+		AWGMURL: "https://awg.example", LastDeployedVersion: "v0.13.9",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stubVerifiedChecksums(t, map[string]string{"a": "b"})
+
+	body := `{"kind":"provision","nickname":"existing","agent_kind":"static",` +
+		`"awgm_url":"https://awg.example","root_password":"rootpw","version":"v0.13.5","allow_downgrade":true}`
+	rec := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/provision", body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202, body=%s", rec.Code, rec.Body.String())
+	}
+	var resp dashboardJobStartResp
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	waitForProvisionTerminal(t, store, resp.JobID, time.Second)
+	if relay.callCount() != 1 {
+		t.Error("relay should be called once allow_downgrade overrides the rejection")
+	}
 }
 
 // --- poll --------------------------------------------------------------
