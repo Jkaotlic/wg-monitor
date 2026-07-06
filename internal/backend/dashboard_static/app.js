@@ -15,11 +15,12 @@
     versions: new Map(),
     agentConfig: new Map(),
     cronAutoChecked: new Set(),
-    deployRouterNick: null
+    provisionMode: null,
+    provisionStep: "mode"
   };
 
   const els = {
-    addAgentBtn: document.getElementById("addAgentBtn"),
+    provisionBtn: document.getElementById("provisionBtn"),
     refreshBtn: document.getElementById("refreshBtn"),
     logoutBtn: document.getElementById("logoutBtn"),
     authDot: document.getElementById("authDot"),
@@ -40,24 +41,24 @@
     deployTitle: document.getElementById("deployTitle"),
     deployVersionInput: document.getElementById("deployVersionInput"),
     confirmDeployBtn: document.getElementById("confirmDeployBtn"),
-    addAgentModal: document.getElementById("addAgentModal"),
-    newAgentNickname: document.getElementById("newAgentNickname"),
-    newAgentKind: document.getElementById("newAgentKind"),
-    newAgentGroup: document.getElementById("newAgentGroup"),
-    customGroupField: document.getElementById("customGroupField"),
-    newAgentCustomGroup: document.getElementById("newAgentCustomGroup"),
-    newAgentThread: document.getElementById("newAgentThread"),
-    newAgentDeployMode: document.getElementById("newAgentDeployMode"),
-    newAgentArch: document.getElementById("newAgentArch"),
-    newAgentRing: document.getElementById("newAgentRing"),
-    newAgentAWGMURL: document.getElementById("newAgentAWGMURL"),
-    newAgentAWGMAuth: document.getElementById("newAgentAWGMAuth"),
-    newAgentSSHHost: document.getElementById("newAgentSSHHost"),
-    newAgentSSHPort: document.getElementById("newAgentSSHPort"),
-    newAgentSSHUser: document.getElementById("newAgentSSHUser"),
-    newAgentExpectedMAC: document.getElementById("newAgentExpectedMAC"),
-    createAgentBtn: document.getElementById("createAgentBtn"),
-    addAgentError: document.getElementById("addAgentError"),
+    provisionModal: document.getElementById("provisionModal"),
+    provisionNickname: document.getElementById("provisionNickname"),
+    provisionKind: document.getElementById("provisionKind"),
+    provisionGroup: document.getElementById("provisionGroup"),
+    provisionCustomGroupField: document.getElementById("provisionCustomGroupField"),
+    provisionCustomGroup: document.getElementById("provisionCustomGroup"),
+    provisionThread: document.getElementById("provisionThread"),
+    provisionIdentityError: document.getElementById("provisionIdentityError"),
+    provisionIdentityNextBtn: document.getElementById("provisionIdentityNextBtn"),
+    provisionAWGMURL: document.getElementById("provisionAWGMURL"),
+    provisionAWGMAuth: document.getElementById("provisionAWGMAuth"),
+    provisionRootPassword: document.getElementById("provisionRootPassword"),
+    provisionVersion: document.getElementById("provisionVersion"),
+    provisionAwgmLogin: document.getElementById("provisionAwgmLogin"),
+    provisionAwgmPassword: document.getElementById("provisionAwgmPassword"),
+    provisionAwgmApiKey: document.getElementById("provisionAwgmApiKey"),
+    provisionAccessError: document.getElementById("provisionAccessError"),
+    provisionStartBtn: document.getElementById("provisionStartBtn"),
     resultDrawer: document.getElementById("resultDrawer"),
     drawerTitle: document.getElementById("drawerTitle"),
     resultOutput: document.getElementById("resultOutput"),
@@ -101,16 +102,7 @@
     reviveAwgmPass: document.getElementById("reviveAwgmPass"),
     reviveAwgmKey: document.getElementById("reviveAwgmKey"),
     reviveError: document.getElementById("reviveError"),
-    reviveConfirmBtn: document.getElementById("reviveConfirmBtn"),
-    deployRouterModal: document.getElementById("deployRouterModal"),
-    deployRouterTitle: document.getElementById("deployRouterTitle"),
-    deployRouterRootPass: document.getElementById("deployRouterRootPass"),
-    deployRouterVersion: document.getElementById("deployRouterVersion"),
-    deployRouterAwgmLogin: document.getElementById("deployRouterAwgmLogin"),
-    deployRouterAwgmPass: document.getElementById("deployRouterAwgmPass"),
-    deployRouterAwgmKey: document.getElementById("deployRouterAwgmKey"),
-    deployRouterError: document.getElementById("deployRouterError"),
-    deployRouterConfirmBtn: document.getElementById("deployRouterConfirmBtn")
+    reviveConfirmBtn: document.getElementById("reviveConfirmBtn")
   };
 
   const AUTO_REFRESH_MS = 20000;
@@ -679,7 +671,6 @@
           <div class="drawer-actions">
             <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
             <button class="action-btn warn" type="button" title="Перепривязать backend + рестарт через awg-manager terminal (работает даже если агент offline)" data-revive="${escapeAttr(selected.nickname)}"><span class="ti ti-heartbeat"></span>Revive (AWG Manager)</button>
-            <button class="action-btn warn" type="button" title="Поставить агента на новый роутер через awg-manager terminal (качает бинарь, пишет config, запускает)" data-deploy-router="${escapeAttr(selected.nickname)}"><span class="ti ti-rocket"></span>Deploy to router</button>
             ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
             <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
           </div>
@@ -854,57 +845,16 @@
     refresh();
   }
 
-  async function createEnrollment() {
-    els.addAgentError.textContent = "";
-    const group = selectedGroup();
-    if (!els.newAgentNickname.value.trim()) {
-      els.addAgentError.textContent = "Nickname required";
-      return;
-    }
-    if (!group.ok) {
-      els.addAgentError.textContent = group.error;
-      return;
-    }
-    setButtonState(els.createAgentBtn, "waiting");
-    try {
-      const payload = {
-        nickname: els.newAgentNickname.value.trim(),
-        kind: els.newAgentKind.value,
-        telegram_chat_id: group.chatID,
-        telegram_thread_id: Number(els.newAgentThread.value || 0),
-        custom_telegram_chat: group.custom,
-        deploy_mode: els.newAgentDeployMode.value,
-        awgm_url: els.newAgentAWGMURL.value.trim(),
-        awgm_auth: els.newAgentAWGMAuth.value,
-        ssh_host: els.newAgentSSHHost.value.trim(),
-        ssh_port: Number(els.newAgentSSHPort.value || 0),
-        ssh_user: els.newAgentSSHUser.value.trim(),
-        arch: els.newAgentArch.value,
-        ring: els.newAgentRing.value,
-        expected_mac: els.newAgentExpectedMAC.value.trim()
-      };
-      const res = await api("/v1/dashboard/enrollments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      closeAddAgent();
-      toast("enrollment created");
-      showEnrollmentResult(res);
-      await refresh();
-    } catch (err) {
-      els.addAgentError.textContent = err.message;
-      setButtonState(els.createAgentBtn, "error");
-    }
-  }
-
+  // selectedGroup reads the provision-wizard identity step's Telegram group
+  // picker (a preset primary/extra chat id, or the "Custom group..." option
+  // backed by provisionCustomGroup). Only ever used by the provision wizard now.
   function selectedGroup() {
-    const value = els.newAgentGroup.value;
+    const value = els.provisionGroup.value;
     if (value === "custom") {
-      const raw = els.newAgentCustomGroup.value.trim();
-      if (!raw) return { ok: false, error: "Custom chat id required" };
+      const raw = els.provisionCustomGroup.value.trim();
+      if (!raw) return { ok: false, error: "Укажи свой chat id" };
       const chatID = Number(raw);
-      if (!Number.isFinite(chatID) || chatID === 0) return { ok: false, error: "Custom chat id must be non-zero" };
+      if (!Number.isFinite(chatID) || chatID === 0) return { ok: false, error: "Chat id должен быть не равен 0" };
       return { ok: true, chatID, custom: true };
     }
     return { ok: true, chatID: Number(value || 0), custom: false };
@@ -913,6 +863,204 @@
   function showEnrollmentResult(res) {
     els.drawerTitle.textContent = "Enrollment / " + res.nickname;
     setResultHTML(formatEnrollmentResult(res));
+    els.resultDrawer.classList.remove("hidden");
+  }
+
+  // provisionShowStep switches the visible panel inside #provisionModal —
+  // vanilla show/hide over the four data-step panels (mode/identity/access/run),
+  // no router/bundler involved.
+  function provisionShowStep(step) {
+    state.provisionStep = step;
+    document.querySelectorAll("#provisionModal [data-step]").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.dataset.step !== step);
+    });
+  }
+
+  // PROVISION_BACK_MAP is the static predecessor for each panel's Back button —
+  // the wizard only ever moves forward one step at a time, so a plain lookup
+  // is enough (no history stack needed).
+  const PROVISION_BACK_MAP = { identity: "mode", access: "identity" };
+
+  function provisionGoBack() {
+    const prev = PROVISION_BACK_MAP[state.provisionStep];
+    if (prev) provisionShowStep(prev);
+  }
+
+  // updateProvisionIdentityButton swaps the identity step's advance button
+  // between "Дальше" (provision mode — goes on to the access step) and
+  // "Зарегистрировать" (register mode — submits right away, no router access
+  // needed). The strings are fixed literals, not user/server data, so no
+  // escaping is needed for this innerHTML assignment.
+  function updateProvisionIdentityButton() {
+    els.provisionIdentityNextBtn.innerHTML = state.provisionMode === "register"
+      ? '<span class="ti ti-rocket"></span>Зарегистрировать'
+      : "Дальше";
+  }
+
+  function chooseProvisionMode(mode) {
+    state.provisionMode = mode;
+    els.provisionIdentityError.textContent = "";
+    els.provisionAccessError.textContent = "";
+    setButtonState(els.provisionIdentityNextBtn, "idle");
+    setButtonState(els.provisionStartBtn, "idle");
+    updateProvisionIdentityButton();
+    provisionShowStep("identity");
+    els.provisionNickname.focus();
+  }
+
+  // provisionValidateIdentity is shared by the register-direct-submit path and
+  // the provision-mode "advance to access" path — both need nickname + a valid
+  // Telegram group before going further.
+  function provisionValidateIdentity() {
+    const nickname = els.provisionNickname.value.trim();
+    if (!nickname) return { ok: false, error: "Никнейм обязателен" };
+    const group = selectedGroup();
+    if (!group.ok) return { ok: false, error: group.error };
+    return { ok: true, nickname, group };
+  }
+
+  function provisionIdentityNext() {
+    if (state.provisionMode === "register") {
+      submitProvision("register").catch((err) => toast(err.message));
+      return;
+    }
+    const v = provisionValidateIdentity();
+    if (!v.ok) {
+      els.provisionIdentityError.textContent = v.error;
+      return;
+    }
+    els.provisionIdentityError.textContent = "";
+    provisionShowStep("access");
+    els.provisionAWGMURL.focus();
+  }
+
+  function openProvision() {
+    state.provisionMode = null;
+    els.provisionNickname.value = "";
+    els.provisionKind.value = "static";
+    els.provisionThread.value = "";
+    els.provisionCustomGroup.value = "";
+    els.provisionAWGMURL.value = "";
+    els.provisionAWGMAuth.value = "";
+    els.provisionRootPassword.value = "";
+    els.provisionVersion.value = latestVersion();
+    els.provisionAwgmLogin.value = "";
+    els.provisionAwgmPassword.value = "";
+    els.provisionAwgmApiKey.value = "";
+    els.provisionIdentityError.textContent = "";
+    els.provisionAccessError.textContent = "";
+    setButtonState(els.provisionStartBtn, "idle");
+    setButtonState(els.provisionIdentityNextBtn, "idle");
+    renderGroupOptions();
+    provisionShowStep("mode");
+    els.provisionModal.classList.remove("hidden");
+  }
+
+  function closeProvision() {
+    els.provisionModal.classList.add("hidden");
+    state.provisionMode = null;
+    setButtonState(els.provisionStartBtn, "idle");
+    setButtonState(els.provisionIdentityNextBtn, "idle");
+  }
+
+  // submitProvision posts to the one provisioning endpoint for both wizard
+  // outcomes: kind "register" mints a token only (no relay call, no router
+  // access needed — the access step is skipped entirely); kind "provision"
+  // validates + sends the router-access fields too and gets back an async
+  // job to hand off to startJobProgress. Errors bounce the wizard back to
+  // whichever step owns the offending fields, mirroring the old
+  // createEnrollment/submitDeployRouter per-panel error convention.
+  async function submitProvision(kind) {
+    const v = provisionValidateIdentity();
+    if (!v.ok) {
+      els.provisionIdentityError.textContent = v.error;
+      provisionShowStep("identity");
+      return;
+    }
+    els.provisionIdentityError.textContent = "";
+
+    const payload = {
+      kind,
+      nickname: v.nickname,
+      agent_kind: els.provisionKind.value,
+      telegram_group: v.group.chatID,
+      thread_id: Number(els.provisionThread.value || 0)
+    };
+
+    if (kind === "provision") {
+      const awgmURL = els.provisionAWGMURL.value.trim();
+      if (!awgmURL) {
+        els.provisionAccessError.textContent = "AWG Manager URL обязателен";
+        provisionShowStep("access");
+        return;
+      }
+      if (!els.provisionRootPassword.value) {
+        els.provisionAccessError.textContent = "Нужен root-пароль роутера";
+        provisionShowStep("access");
+        return;
+      }
+      els.provisionAccessError.textContent = "";
+      payload.awgm_url = awgmURL;
+      payload.awgm_auth = els.provisionAWGMAuth.value;
+      payload.root_password = els.provisionRootPassword.value;
+      payload.awgm_login = els.provisionAwgmLogin.value.trim();
+      payload.awgm_password = els.provisionAwgmPassword.value;
+      payload.awgm_api_key = els.provisionAwgmApiKey.value.trim();
+      payload.version = els.provisionVersion.value.trim();
+    }
+
+    const busyBtn = kind === "provision" ? els.provisionStartBtn : els.provisionIdentityNextBtn;
+    setButtonState(busyBtn, "waiting");
+    provisionShowStep("run");
+    try {
+      const res = await api("/v1/dashboard/provision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      closeProvision();
+      if (kind === "register") {
+        toast("токен создан — сохрани сейчас");
+        showEnrollmentResult(Object.assign({}, res, {
+          telegram_chat_id: v.group.chatID,
+          telegram_thread_id: payload.thread_id
+        }));
+      } else {
+        toast("установка запущена — job " + ((res && res.job_id) || ""));
+        startJobProgress(v.nickname, res);
+      }
+      await refresh();
+    } catch (err) {
+      setButtonState(busyBtn, "error");
+      if (kind === "register") {
+        provisionShowStep("identity");
+        els.provisionIdentityError.textContent = err.message;
+      } else {
+        provisionShowStep("access");
+        els.provisionAccessError.textContent = err.message;
+      }
+    }
+  }
+
+  // startJobProgress is a minimal placeholder: it renders the seeded step
+  // checklist from the {job_id, steps} response exactly once, in the result
+  // drawer. TODO(B12): replace with a STEP_LABELS-driven renderJobProgress(job)
+  // plus pollJob(jobId) that polls GET /v1/dashboard/provision/{job_id} on an
+  // interval until job.state is no longer "running", updating the checklist
+  // live and rendering the terminal success/failure card (job.hint / redacted
+  // job.tail) — see the provisioning-rework design spec's "Progress view".
+  function startJobProgress(nickname, res) {
+    const jobID = (res && res.job_id) || "";
+    const steps = (res && res.steps) || [];
+    els.drawerTitle.textContent = "Provision / " + nickname;
+    const rows = steps.length
+      ? steps.map((step) => `<div class="drawer-kv"><span>${escapeHTML(step.name)}</span><strong>${escapeHTML(step.status)}</strong></div>`).join("")
+      : "<p>Шаги ещё не пришли.</p>";
+    setResultHTML([
+      `<div class="result-section"><strong>Установка запущена — job ${escapeHTML(jobID)}</strong><p>Живой прогресс появится в следующей версии дашборда. Пока — снятый на старте чек-лист ниже.</p></div>`,
+      `<div class="result-section"><div class="drawer-list">${rows}</div></div>`,
+      rawDetails(res)
+    ].join(""));
     els.resultDrawer.classList.remove("hidden");
   }
 
@@ -958,32 +1106,6 @@
     els.deployModal.classList.add("hidden");
     state.deployAgent = null;
     setButtonState(els.confirmDeployBtn, "idle");
-  }
-
-  function openAddAgent() {
-    els.newAgentNickname.value = "";
-    els.newAgentKind.value = "static";
-    els.newAgentThread.value = "";
-    els.newAgentCustomGroup.value = "";
-    els.newAgentDeployMode.value = "";
-    els.newAgentArch.value = "";
-    els.newAgentRing.value = "";
-    els.newAgentAWGMURL.value = "";
-    els.newAgentAWGMAuth.value = "";
-    els.newAgentSSHHost.value = "";
-    els.newAgentSSHPort.value = "";
-    els.newAgentSSHUser.value = "";
-    els.newAgentExpectedMAC.value = "";
-    els.addAgentError.textContent = "";
-    setButtonState(els.createAgentBtn, "idle");
-    renderGroupOptions();
-    els.addAgentModal.classList.remove("hidden");
-    els.newAgentNickname.focus();
-  }
-
-  function closeAddAgent() {
-    els.addAgentModal.classList.add("hidden");
-    setButtonState(els.createAgentBtn, "idle");
   }
 
   function openEditAgent(nickname) {
@@ -1183,78 +1305,6 @@
     els.resultDrawer.classList.remove("hidden");
   }
 
-  function openDeployRouter(nickname) {
-    state.deployRouterNick = nickname;
-    els.deployRouterTitle.textContent = "Deploy to router / " + nickname;
-    els.deployRouterRootPass.value = "";
-    els.deployRouterVersion.value = latestVersion();
-    els.deployRouterAwgmLogin.value = "";
-    els.deployRouterAwgmPass.value = "";
-    els.deployRouterAwgmKey.value = "";
-    els.deployRouterError.textContent = "";
-    setButtonState(els.deployRouterConfirmBtn, "idle");
-    els.deployRouterModal.classList.remove("hidden");
-    els.deployRouterRootPass.focus();
-  }
-
-  function closeDeployRouter() {
-    els.deployRouterModal.classList.add("hidden");
-    state.deployRouterNick = null;
-    setButtonState(els.deployRouterConfirmBtn, "idle");
-  }
-
-  async function submitDeployRouter() {
-    const nickname = state.deployRouterNick;
-    if (!nickname) return;
-    if (!els.deployRouterRootPass.value) {
-      els.deployRouterError.textContent = "Нужен root-пароль роутера";
-      return;
-    }
-    els.deployRouterError.textContent = "";
-    setButtonState(els.deployRouterConfirmBtn, "waiting");
-    const payload = {
-      root_password: els.deployRouterRootPass.value,
-      version: els.deployRouterVersion.value.trim(),
-      awgm_login: els.deployRouterAwgmLogin.value.trim(),
-      awgm_password: els.deployRouterAwgmPass.value,
-      awgm_api_key: els.deployRouterAwgmKey.value.trim()
-    };
-    try {
-      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/deploy-router`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      closeDeployRouter();
-      toast("deploy отправлен — агент ставится на роутер");
-      showDeployRouterResult(nickname, res, null);
-      refresh();
-    } catch (err) {
-      if (err.status === 502) {
-        closeDeployRouter();
-        showDeployRouterResult(nickname, null, err);
-      } else {
-        els.deployRouterError.textContent = err.message;
-        setButtonState(els.deployRouterConfirmBtn, "error");
-      }
-    }
-  }
-
-  function showDeployRouterResult(nickname, res, err) {
-    els.drawerTitle.textContent = "Deploy to router / " + nickname;
-    const ok = res && res.ok;
-    const output = (res && res.output) || (err && err.body && err.body.output) || "";
-    const version = (res && res.version) || (err && err.body && err.body.version) || "";
-    const sections = [
-      `<div class="result-section${ok ? "" : " result-error"}"><strong>${ok ? "Deploy отправлен" : "Deploy не удался"}</strong><p>${escapeHTML(version)}</p>${err && err.message ? `<p>${escapeHTML(err.message)}</p>` : ""}</div>`
-    ];
-    if (output) {
-      sections.push(`<div class="result-section"><strong>AWG Manager terminal</strong><pre class="raw-output">${escapeHTML(output)}</pre></div>`);
-    }
-    setResultHTML(sections.join(""));
-    els.resultDrawer.classList.remove("hidden");
-  }
-
   // cronScheduleToTime converts a stored "M H * * *" cron line to an "HH:MM"
   // value for the <input type=time> so the drawer reflects the live schedule.
   function cronScheduleToTime(schedule, fallback) {
@@ -1271,21 +1321,21 @@
 
   function renderGroupOptions() {
     const telegram = state.summary?.telegram || {};
-    const current = els.newAgentGroup.value;
+    const current = els.provisionGroup.value;
     const options = [`<option value="0">Primary group (${escapeHTML(telegram.primary_chat_id || "default")})</option>`];
     (telegram.extra_chat_ids || []).forEach((chatID) => {
       options.push(`<option value="${escapeAttr(chatID)}">Extra group (${escapeHTML(chatID)})</option>`);
     });
     options.push('<option value="custom">Custom group...</option>');
-    els.newAgentGroup.innerHTML = options.join("");
-    if ([...els.newAgentGroup.options].some((o) => o.value === current)) {
-      els.newAgentGroup.value = current;
+    els.provisionGroup.innerHTML = options.join("");
+    if ([...els.provisionGroup.options].some((o) => o.value === current)) {
+      els.provisionGroup.value = current;
     }
     toggleCustomGroup();
   }
 
   function toggleCustomGroup() {
-    els.customGroupField.classList.toggle("hidden", els.newAgentGroup.value !== "custom");
+    els.provisionCustomGroupField.classList.toggle("hidden", els.provisionGroup.value !== "custom");
   }
 
   function setResultHTML(html) {
@@ -1569,7 +1619,7 @@
   }
 
   els.refreshBtn.addEventListener("click", refresh);
-  els.addAgentBtn.addEventListener("click", openAddAgent);
+  els.provisionBtn.addEventListener("click", openProvision);
   els.logoutBtn.addEventListener("click", logout);
   document.querySelector('[data-action="refresh"]').addEventListener("click", refresh);
   els.searchInput.addEventListener("input", (event) => {
@@ -1610,7 +1660,6 @@
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
       if (button.dataset.agentConfig) openAgentConfig(button.dataset.agentConfig);
       if (button.dataset.revive) openRevive(button.dataset.revive);
-      if (button.dataset.deployRouter) openDeployRouter(button.dataset.deployRouter);
       if (button.dataset.deploy) openDeploy(nickname);
       if (button.dataset.cancelDeploy) cancelDeploy(button.dataset.cancelDeploy).catch((err) => toast(err.message));
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
@@ -1639,16 +1688,25 @@
     }
   });
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
-  document.querySelectorAll("[data-close-add-agent]").forEach((button) => button.addEventListener("click", closeAddAgent));
+  document.querySelectorAll("[data-close-provision]").forEach((button) => button.addEventListener("click", closeProvision));
   document.querySelectorAll("[data-close-edit-agent]").forEach((button) => button.addEventListener("click", closeEditAgent));
   document.querySelectorAll("[data-close-agent-config]").forEach((button) => button.addEventListener("click", closeAgentConfig));
   document.querySelectorAll("[data-close-revive]").forEach((button) => button.addEventListener("click", closeRevive));
-  document.querySelectorAll("[data-close-deploy-router]").forEach((button) => button.addEventListener("click", closeDeployRouter));
   els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => {
     setButtonState(els.confirmDeployBtn, "error");
     toast(err.message);
   }));
-  els.createAgentBtn.addEventListener("click", createEnrollment);
+  document.querySelectorAll("#provisionModal [data-provision-mode]").forEach((button) => {
+    button.addEventListener("click", () => chooseProvisionMode(button.dataset.provisionMode));
+  });
+  document.querySelectorAll("#provisionModal [data-provision-back]").forEach((button) => {
+    button.addEventListener("click", provisionGoBack);
+  });
+  els.provisionIdentityNextBtn.addEventListener("click", provisionIdentityNext);
+  els.provisionStartBtn.addEventListener("click", () => submitProvision("provision").catch((err) => {
+    setButtonState(els.provisionStartBtn, "error");
+    els.provisionAccessError.textContent = err.message;
+  }));
   els.saveAgentBtn.addEventListener("click", () => saveAgentEdit().catch((err) => {
     setButtonState(els.saveAgentBtn, "error");
     els.editAgentError.textContent = err.message;
@@ -1661,11 +1719,7 @@
     setButtonState(els.reviveConfirmBtn, "error");
     els.reviveError.textContent = err.message;
   }));
-  els.deployRouterConfirmBtn.addEventListener("click", () => submitDeployRouter().catch((err) => {
-    setButtonState(els.deployRouterConfirmBtn, "error");
-    els.deployRouterError.textContent = err.message;
-  }));
-  els.newAgentGroup.addEventListener("change", toggleCustomGroup);
+  els.provisionGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
   els.autoRefreshBtn.addEventListener("click", () => setAutoRefresh(!state.autoRefresh));
   els.backendUpdateBtn.addEventListener("click", () => deployBackend().catch((err) => {
@@ -1678,10 +1732,9 @@
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (!els.reviveModal.classList.contains("hidden")) { closeRevive(); return; }
-      if (!els.deployRouterModal.classList.contains("hidden")) { closeDeployRouter(); return; }
       if (!els.agentConfigModal.classList.contains("hidden")) { closeAgentConfig(); return; }
       if (!els.editAgentModal.classList.contains("hidden")) { closeEditAgent(); return; }
-      if (!els.addAgentModal.classList.contains("hidden")) { closeAddAgent(); return; }
+      if (!els.provisionModal.classList.contains("hidden")) { closeProvision(); return; }
       if (!els.deployModal.classList.contains("hidden")) { closeModal(); return; }
       if (!els.resultDrawer.classList.contains("hidden")) { els.resultDrawer.classList.add("hidden"); return; }
       return;

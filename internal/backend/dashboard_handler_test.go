@@ -264,17 +264,17 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 	js := get("/dashboard/app.js")
 	css := get("/dashboard/app.css")
 
-	for _, want := range []string{"Add agent", "agentDrawer", "addAgentModal", "AWG Manager URL", "Deploy mode", "SSH host", "Router arch", `data-filter="sleeping"`} {
+	for _, want := range []string{"Provision router", "agentDrawer", "provisionModal", "AWG Manager URL", "Поставить сейчас", "Только зарегать токен", "Root-пароль роутера", `data-filter="sleeping"`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("dashboard page missing %q", want)
 		}
 	}
-	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/enrollments", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck", "OPKG cron", "opkg_cron_install", "Entware cleanup", "entware_clean_install", "formatEntwareCleanStatus", "version_audit", "Pending ${pending}", "Timed out waiting for agent"} {
+	for _, want := range []string{"Open AWG Manager", "data-state", "/v1/dashboard/provision", "submitProvision", "startJobProgress", "Update to latest", "Custom version", "formatCommandResult", "badge-warning", "sleeping", "Wake / recheck", "OPKG cron", "opkg_cron_install", "Entware cleanup", "entware_clean_install", "formatEntwareCleanStatus", "version_audit", "Pending ${pending}", "Timed out waiting for agent"} {
 		if !strings.Contains(js, want) {
 			t.Fatalf("dashboard js missing %q", want)
 		}
 	}
-	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output", "status-sleeping", "schedule-field"} {
+	for _, want := range []string{"agent-drawer", "data-state", "action-btn", "result-section", "raw-output", "status-sleeping", "schedule-field", "mode-choice"} {
 		if !strings.Contains(css, want) {
 			t.Fatalf("dashboard css missing %q", want)
 		}

@@ -38,7 +38,7 @@
         </div>
         <div class="topbar-actions">
           <button id="backendUpdateBtn" class="btn btn-warn hidden" type="button" data-state="idle"><span class="ti ti-arrow-up-circle"></span><span id="backendUpdateText">Update backend</span></button>
-          <button id="addAgentBtn" class="btn btn-secondary" type="button"><span class="ti ti-plus"></span>Add agent</button>
+          <button id="provisionBtn" class="btn btn-secondary" type="button"><span class="ti ti-rocket"></span>Provision router</button>
           <button id="autoRefreshBtn" class="btn btn-ghost" type="button" aria-pressed="true" title="Авто-обновление каждые 20с"><span class="ti ti-player-pause"></span><span id="autoRefreshText">Auto</span></button>
           <button id="logoutBtn" class="btn btn-ghost" type="button"><span class="ti ti-lock"></span>Log out</button>
           <button id="refreshBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-refresh"></span>Refresh</button>
@@ -140,105 +140,112 @@
     </div>
   </div>
 
-  <div id="addAgentModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="addAgentTitle">
+  <div id="provisionModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="provisionTitle">
     <div class="modal-panel modal-wide">
       <div class="modal-head">
         <div>
-          <div class="eyebrow">new enrollment</div>
-          <h2 id="addAgentTitle">Add agent</h2>
+          <div class="eyebrow">provision router</div>
+          <h2 id="provisionTitle">Provision router</h2>
         </div>
-        <button class="icon-btn" type="button" data-close-add-agent><span class="ti ti-x"></span></button>
+        <button class="icon-btn" type="button" data-close-provision><span class="ti ti-x"></span></button>
       </div>
-      <div class="form-section-title">Identity</div>
-      <div class="form-grid">
-        <label class="form-field">
-          <span>Nickname</span>
-          <input id="newAgentNickname" type="text" placeholder="client-g" autocomplete="off">
-        </label>
-        <label class="form-field">
-          <span>Kind</span>
-          <select id="newAgentKind">
-            <option value="static">static</option>
-            <option value="mobile">mobile</option>
-          </select>
-        </label>
-        <label class="form-field">
-          <span>Telegram group</span>
-          <select id="newAgentGroup"></select>
-        </label>
-        <label class="form-field hidden" id="customGroupField">
-          <span>Custom chat id</span>
-          <input id="newAgentCustomGroup" type="number" placeholder="-100...">
-        </label>
-        <label class="form-field">
-          <span>Topic id</span>
-          <input id="newAgentThread" type="number" placeholder="0 = no topic yet">
-        </label>
+
+      <div data-step="mode">
+        <p class="modal-note">Выбери, что сделать с этим роутером. Креды не сохраняются на фронте — используются один раз при отправке.</p>
+        <div class="mode-choice-grid">
+          <button class="mode-choice" type="button" data-provision-mode="provision">
+            <span class="mode-choice-icon" aria-hidden="true">⚡</span>
+            <span class="mode-choice-title">Поставить сейчас</span>
+            <span class="mode-choice-desc">Установит агента через AWG Manager terminal: проверит подпись релиза, скачает бинарь, запишет config.yaml и запустит сервис.</span>
+          </button>
+          <button class="mode-choice" type="button" data-provision-mode="register">
+            <span class="mode-choice-icon" aria-hidden="true">🎫</span>
+            <span class="mode-choice-title">Только зарегать токен</span>
+            <span class="mode-choice-desc">Создаст токен и запись агента без установки — пригодится, если поставишь агента на роутер позже вручную.</span>
+          </button>
+        </div>
       </div>
-      <div class="form-section-title">Deploy data</div>
-      <div class="form-grid form-grid-three">
-        <label class="form-field">
-          <span>Deploy mode</span>
-          <select id="newAgentDeployMode">
-            <option value="">unknown</option>
-            <option value="pull">pull</option>
-            <option value="ssh">ssh</option>
-            <option value="deferred-awgm">deferred-awgm</option>
-          </select>
-        </label>
-        <label class="form-field">
-          <span>Router arch</span>
-          <select id="newAgentArch">
-            <option value="">unknown</option>
-            <option value="arm64">arm64</option>
-            <option value="mipsle">mipsle</option>
-          </select>
-        </label>
-        <label class="form-field">
-          <span>Ring</span>
-          <select id="newAgentRing">
-            <option value="">unknown</option>
-            <option value="rc">rc</option>
-            <option value="stable">stable</option>
-          </select>
-        </label>
+
+      <div class="hidden" data-step="identity">
+        <div class="form-section-title">Личные данные агента</div>
+        <div class="form-grid">
+          <label class="form-field">
+            <span>Никнейм</span>
+            <input id="provisionNickname" type="text" placeholder="client-g" autocomplete="off">
+          </label>
+          <label class="form-field">
+            <span>Тип</span>
+            <select id="provisionKind">
+              <option value="static">static</option>
+              <option value="mobile">mobile</option>
+            </select>
+          </label>
+          <label class="form-field">
+            <span>Telegram группа</span>
+            <select id="provisionGroup"></select>
+          </label>
+          <label class="form-field hidden" id="provisionCustomGroupField">
+            <span>Свой chat id</span>
+            <input id="provisionCustomGroup" type="number" placeholder="-100...">
+          </label>
+          <label class="form-field">
+            <span>ID топика</span>
+            <input id="provisionThread" type="number" placeholder="0 = без топика">
+          </label>
+        </div>
+        <div id="provisionIdentityError" class="form-error"></div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" type="button" data-provision-back>Назад</button>
+          <button id="provisionIdentityNextBtn" class="btn btn-primary" type="button" data-state="idle">Дальше</button>
+        </div>
       </div>
-      <div class="form-grid">
-        <label class="form-field">
-          <span>AWG Manager URL</span>
-          <input id="newAgentAWGMURL" type="url" placeholder="https://awg.router.example">
-        </label>
-        <label class="form-field">
-          <span>AWG auth</span>
-          <select id="newAgentAWGMAuth">
-            <option value="">unknown</option>
-            <option value="web">web login</option>
-            <option value="api-key">api key</option>
-            <option value="none">none</option>
-          </select>
-        </label>
-        <label class="form-field">
-          <span>SSH host</span>
-          <input id="newAgentSSHHost" type="text" placeholder="192.168.0.1">
-        </label>
-        <label class="form-field">
-          <span>SSH port</span>
-          <input id="newAgentSSHPort" type="number" min="1" max="65535" placeholder="222">
-        </label>
-        <label class="form-field">
-          <span>SSH user</span>
-          <input id="newAgentSSHUser" type="text" placeholder="root">
-        </label>
-        <label class="form-field">
-          <span>Expected MAC</span>
-          <input id="newAgentExpectedMAC" type="text" placeholder="aa:bb:cc:dd:ee:ff">
-        </label>
+
+      <div class="hidden" data-step="access">
+        <div class="form-section-title">Доступ к роутеру</div>
+        <div class="form-grid">
+          <label class="form-field">
+            <span>AWG Manager URL</span>
+            <input id="provisionAWGMURL" type="url" placeholder="https://awg.router.example">
+          </label>
+          <label class="form-field">
+            <span>AWG авторизация</span>
+            <select id="provisionAWGMAuth">
+              <option value="">unknown</option>
+              <option value="web">web login</option>
+              <option value="api-key">api key</option>
+              <option value="none">none</option>
+            </select>
+          </label>
+          <label class="form-field">
+            <span>Root-пароль роутера</span>
+            <input id="provisionRootPassword" type="password" autocomplete="off" placeholder="root пароль роутера">
+          </label>
+          <label class="form-field">
+            <span>Целевая версия (пусто = latest stable)</span>
+            <input id="provisionVersion" type="text" autocomplete="off" placeholder="v0.13.8">
+          </label>
+        </div>
+        <details class="revive-advanced">
+          <summary>AWG Manager auth (если awg-manager под логином/api-key)</summary>
+          <div class="form-grid form-grid-three">
+            <label class="form-field"><span>awgm login</span><input id="provisionAwgmLogin" type="text" autocomplete="off"></label>
+            <label class="form-field"><span>awgm password</span><input id="provisionAwgmPassword" type="password" autocomplete="off"></label>
+            <label class="form-field"><span>awgm api-key</span><input id="provisionAwgmApiKey" type="text" autocomplete="off"></label>
+          </div>
+        </details>
+        <p class="modal-note">Root-пароль и awgm-креды используются один раз для входа в AWG Manager terminal и нигде не сохраняются.</p>
+        <div id="provisionAccessError" class="form-error"></div>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" type="button" data-provision-back>Назад</button>
+          <button id="provisionStartBtn" class="btn btn-warn" type="button" data-state="idle"><span class="ti ti-rocket"></span>Запустить установку</button>
+        </div>
       </div>
-      <p class="modal-note">Token is shown once. Save it with the deploy data before closing this panel.</p>
-      <div id="addAgentError" class="form-error"></div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" type="button" data-close-add-agent>Cancel</button>
-        <button id="createAgentBtn" class="btn btn-primary" type="button" data-state="idle"><span class="ti ti-key"></span>Create enrollment</button>
+
+      <div class="hidden" data-step="run">
+        <div class="provision-run-status">
+          <span class="ti ti-refresh spin" aria-hidden="true"></span>
+          <p>Отправляю запрос...</p>
+        </div>
       </div>
     </div>
   </div>
@@ -419,40 +426,6 @@
       <div class="modal-actions">
         <button class="btn btn-ghost" type="button" data-close-revive>Cancel</button>
         <button id="reviveConfirmBtn" class="btn btn-warn" type="button" data-state="idle"><span class="ti ti-heartbeat"></span>Revive</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="deployRouterModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deployRouterTitle">
-    <div class="modal-panel">
-      <div class="modal-head">
-        <div>
-          <div class="eyebrow">deploy agent to a new router</div>
-          <h2 id="deployRouterTitle">Deploy to router</h2>
-        </div>
-        <button class="icon-btn" type="button" data-close-deploy-router><span class="ti ti-x"></span></button>
-      </div>
-      <p class="modal-note">Ставит агента на роутер через <strong>awg-manager terminal</strong> (публичный DDNS): качает бинарь, пишет <code>config.yaml</code> с новым токеном, ставит init-сервис и запускает. Креды используются один раз и <strong>не сохраняются</strong>. AWG Manager URL берётся из настроек агента (меняется в Edit).</p>
-      <label class="form-field">
-        <span>Router root password</span>
-        <input id="deployRouterRootPass" type="password" autocomplete="off" placeholder="root пароль роутера">
-      </label>
-      <label class="form-field">
-        <span>Target version (пусто = latest stable)</span>
-        <input id="deployRouterVersion" type="text" autocomplete="off" placeholder="v0.13.8">
-      </label>
-      <details class="revive-advanced">
-        <summary>AWG Manager auth (если awg-manager под логином/api-key)</summary>
-        <div class="form-grid form-grid-three">
-          <label class="form-field"><span>awgm login</span><input id="deployRouterAwgmLogin" type="text" autocomplete="off"></label>
-          <label class="form-field"><span>awgm password</span><input id="deployRouterAwgmPass" type="password" autocomplete="off"></label>
-          <label class="form-field"><span>awgm api-key</span><input id="deployRouterAwgmKey" type="text" autocomplete="off"></label>
-        </div>
-      </details>
-      <div id="deployRouterError" class="form-error"></div>
-      <div class="modal-actions">
-        <button class="btn btn-ghost" type="button" data-close-deploy-router>Cancel</button>
-        <button id="deployRouterConfirmBtn" class="btn btn-warn" type="button" data-state="idle"><span class="ti ti-rocket"></span>Deploy</button>
       </div>
     </div>
   </div>
