@@ -77,7 +77,75 @@ type Runner struct {
 	// BackendURL is the trusted command-plane origin from the agent config.
 	// self_update may use its same-origin /v1/releases/download mirror.
 	BackendURL string
-	routeMu    sync.Mutex // serialises concurrent route_rebind calls
+	// ActionTimeout, if set, overrides the per-action execution budget
+	// (see actionTimeoutFor) that Execute binds ctx to via withActionTimeout.
+	// Nil uses the production table (45s default; opkg_upgrade/tunnel_import
+	// 300s; firmware_install 600s). Tests inject a tiny constant budget here
+	// so a hung-subprocess test asserts within milliseconds instead of
+	// blocking for the real 45s.
+	ActionTimeout func(action string) time.Duration
+	routeMu       sync.Mutex // serialises concurrent route_rebind calls
+}
+
+// defaultActionTimeout bounds any dispatched action with no entry in
+// actionTimeoutOverrides. It exists so one wedged subprocess (ndmc stuck
+// during a firmware install or a CPU spike) can't block Execute forever:
+// cmdloop.Run is single-goroutine, so an Execute call that never returns
+// means every command after it silently dies while heartbeats keep flowing.
+const defaultActionTimeout = 45 * time.Second
+
+// actionTimeoutOverrides lists actions whose legitimate runtime exceeds
+// defaultActionTimeout, so binding them to the 45s default would wrongly
+// abort real work. Two families qualify:
+//
+//   - opkg update/install/SmartUpgrade pipelines, which fetch package lists
+//     and install over the network and routinely take minutes on a slow
+//     router: opkg_upgrade and opkg_feed_disable (re-runs SmartUpgrade),
+//     plus opkg_cron_install and entware_clean_install (both call
+//     ensureCronInstalled → `opkg install cron` [+ `opkg update` + retry]).
+//   - multi-step network pipelines: tunnel_import; and self_update, which
+//     streams an agent binary of up to 64MB behind a 60s-per-request HTTP
+//     client across up to three sequential requests (checksums, sig, binary).
+//
+// firmware_install additionally kicks off a router reboot. Sibling actions
+// in the same families that only read state or touch local files
+// (opkg_cron_status/logs/remove, entware_clean_status/run/logs/remove) are
+// deliberately left at the 45s default — they do not run opkg or the network.
+var actionTimeoutOverrides = map[string]time.Duration{
+	"opkg_upgrade":          300 * time.Second,
+	"opkg_feed_disable":     300 * time.Second,
+	"opkg_cron_install":     300 * time.Second,
+	"entware_clean_install": 300 * time.Second,
+	"tunnel_import":         300 * time.Second,
+	"self_update":           300 * time.Second,
+	"firmware_install":      600 * time.Second,
+}
+
+// actionTimeoutFor returns the production execution budget for action.
+func actionTimeoutFor(action string) time.Duration {
+	if d, ok := actionTimeoutOverrides[action]; ok {
+		return d
+	}
+	return defaultActionTimeout
+}
+
+// actionTimeout resolves the budget for action, preferring r.ActionTimeout
+// (test injection) over the production table.
+func (r *Runner) actionTimeout(action string) time.Duration {
+	if r.ActionTimeout != nil {
+		return r.ActionTimeout(action)
+	}
+	return actionTimeoutFor(action)
+}
+
+// withActionTimeout binds ctx to action's execution budget. Applied once,
+// centrally, in Execute so every action gets a deadline without each
+// dispatch case needing to remember to add one — mirrors the existing
+// per-site context.WithTimeout wraps in router_doctor.go / hrneo_doctor.go.
+// Nesting is safe: an action that already wraps its own shorter timeout
+// keeps working exactly as before, since whichever deadline is sooner wins.
+func (r *Runner) withActionTimeout(ctx context.Context, action string) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, r.actionTimeout(action))
 }
 
 // DiagNow fetches the awg-manager diagnostic report. If awg-manager
@@ -235,7 +303,19 @@ func (r *Runner) sleep(ctx context.Context, d time.Duration) error {
 
 func (r *Runner) Execute(ctx context.Context, cmd wire.Command) wire.CommandResult {
 	start := r.now()
-	status, output, payload := r.dispatchWithPayload(ctx, cmd)
+	actionCtx, cancel := r.withActionTimeout(ctx, cmd.Action)
+	defer cancel()
+	status, output, payload := r.dispatchWithPayload(actionCtx, cmd)
+	if status == "err" && actionCtx.Err() == context.DeadlineExceeded {
+		// The action's own error (e.g. "signal: killed" from a subprocess
+		// exec.CommandContext just terminated) is real but not the useful
+		// signal here — surface the reserved wire.CommandResult "timeout"
+		// status instead so the backend renders the dedicated "агент не
+		// уложился в лимит" hint (internal/backend/alerts/error_hints.go)
+		// rather than a generic error card.
+		status = "timeout"
+		output = fmt.Sprintf("%s exceeded its execution timeout: %s", cmd.Action, output)
+	}
 	res := wire.CommandResult{
 		ID:         cmd.ID,
 		Status:     status,
