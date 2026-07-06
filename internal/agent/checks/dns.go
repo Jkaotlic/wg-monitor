@@ -2,9 +2,11 @@ package checks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/anex/wg-monitor/internal/agent/keenetic"
@@ -29,6 +31,16 @@ var spoofIPs = map[string]struct{}{
 //  1. Reachability — does the resolver answer a basic A-query for TestDomain?
 //  2. RKN-cleanliness — for endpoints that ARE reachable, do the RKN-test
 //     domains return plausible (non-spoofed) IPs?
+//
+// Endpoints, and (per reachable endpoint) its RKN-test domains, are probed
+// concurrently — see probeEndpoint/rknProbe — so total wall-clock time stays
+// close to a single PerProbeTimeout round-trip regardless of how many
+// endpoints/domains are configured, instead of their sum. This matters
+// because reporter.go bounds every Check.Run to a fixed per-check budget:
+// probed sequentially, N endpoints x M RKN domains can blow that budget long
+// before finishing, and the parent ctx being canceled/deadline-exceeded
+// mid-probe must NOT be scored the same as a genuine spoofed/unreachable
+// answer — see probeInconclusive.
 //
 // Check FAILs when:
 //   - >= FailThreshold endpoints are unreachable, OR
@@ -108,40 +120,88 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 		RKNStatus  string         `json:"rkn_status,omitempty"` // clean | suspect | n/a
 	}
 
-	var results []epResult
-	failedCount := 0
-	skippedCount := 0
-	rknBlockedCount := 0
-	rknProbedCount := 0
-	for _, ep := range endpoints {
+	// probeEndpoint runs the full per-endpoint sequence (NDMS-skip check,
+	// reachability, then — if reachable — the RKN probe). Called
+	// concurrently, once per endpoint, below; it only ever touches its own
+	// local epResult, so there is nothing shared to race on.
+	probeEndpoint := func(ep keenetic.DNSEndpoint) epResult {
 		r := epResult{Type: ep.Type, Target: epTarget(ep), NDMSName: ep.NDMSName}
 		if c.shouldSkipNDMSEndpoint(ep, ifaceMapFresh) {
 			r.Skipped = true
 			r.SkipReason = "ndms interface is not present in current awg-manager tunnel map"
 			r.RKNStatus = "n/a"
-			skippedCount++
-			results = append(results, r)
-			continue
+			return r
 		}
-		if err := c.probeOne(ctx, ep, c.TestDomain, httpc); err != nil {
-			r.Reachable = false
+
+		err := c.probeOne(ctx, ep, c.TestDomain, httpc)
+		switch {
+		case err == nil:
+			r.Reachable = true
+		case probeInconclusive(ctx, err):
+			// The check ran out of its time budget (or was canceled) before
+			// this probe got a fair shot — that is NOT evidence the resolver
+			// is down or tampered with, so it must not count as a failure.
+			r.Skipped = true
+			r.SkipReason = "check canceled/timed out before probe completed: " + err.Error()
+			r.RKNStatus = "n/a"
+			return r
+		default:
 			r.Err = err.Error()
 			r.RKNStatus = "n/a"
-			failedCount++
-			results = append(results, r)
-			continue
+			return r
 		}
-		r.Reachable = true
-		blocked, perDomain := c.rknProbe(ctx, ep, rknDomains, httpc)
+
+		blocked, conclusive, perDomain := c.rknProbe(ctx, ep, rknDomains, httpc)
 		r.RKN = perDomain
-		rknProbedCount++
-		if blocked {
+		switch {
+		case !conclusive:
+			// Every configured RKN domain was inconclusive (ctx canceled or
+			// deadline-exceeded) — no verdict possible for this endpoint.
+			r.RKNStatus = "n/a"
+		case blocked:
 			r.RKNStatus = "suspect"
-			rknBlockedCount++
-		} else {
+		default:
 			r.RKNStatus = "clean"
 		}
-		results = append(results, r)
+		return r
+	}
+
+	// Probe every endpoint concurrently: each goroutine owns exactly one
+	// index of `results`, so there is no shared-map/slice race, and
+	// endpoints_detail keeps the same order as `endpoints`.
+	results := make([]epResult, len(endpoints))
+	var wg sync.WaitGroup
+	for i, ep := range endpoints {
+		wg.Add(1)
+		go func(i int, ep keenetic.DNSEndpoint) {
+			defer wg.Done()
+			results[i] = probeEndpoint(ep)
+		}(i, ep)
+	}
+	wg.Wait()
+
+	failedCount := 0
+	skippedCount := 0
+	rknBlockedCount := 0
+	rknProbedCount := 0
+	for _, r := range results {
+		switch {
+		case r.Skipped:
+			skippedCount++
+		case !r.Reachable:
+			failedCount++
+		default:
+			switch r.RKNStatus {
+			case "suspect":
+				rknProbedCount++
+				rknBlockedCount++
+			case "clean":
+				rknProbedCount++
+			}
+			// RKNStatus == "n/a" here means the endpoint was reachable but
+			// every RKN domain probe on it was inconclusive: no verdict,
+			// excluded from both the numerator and denominator below.
+		}
 	}
 
 	details := map[string]any{
@@ -224,42 +284,107 @@ func (c DNS) resolveIPs(ctx context.Context, ep keenetic.DNSEndpoint, domain str
 	}
 }
 
-// rknProbe queries `ep` for each RKN-test domain and reports per-domain
-// results. The endpoint is considered "blocked" if a strict majority of the
-// configured domains return a suspect answer (no IPs, error, or spoof IP).
-// Threshold scales with len(domains) so 1-domain probes still work and
-// 5-domain probes don't false-positive on a single transient flap.
-func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []string, httpc *http.Client) (blocked bool, perDomain map[string]any) {
+// rknProbe queries `ep` for each RKN-test domain concurrently and reports
+// per-domain results. The endpoint is considered "blocked" if a strict
+// majority of the CONCLUSIVE domains (i.e. excluding any whose probe was
+// canceled/timed-out at the check level — see probeInconclusive) come back
+// suspect (no IPs, genuine error, or spoof IP). The threshold scales with the
+// conclusive count, not the configured count, so a run cut short by the
+// check's time budget can't manufacture a false majority in either
+// direction; each per-domain goroutine owns exactly one index of `results`,
+// and perDomain is only written to after wg.Wait(), so there is no
+// shared-map race.
+//
+// conclusive is false only when >=1 domain was configured and every single
+// one came back inconclusive — i.e. we have zero signal either way. When RKN
+// probing is disabled (no domains configured), conclusive is true and
+// blocked is false, matching the pre-existing "n/a -> clean" trivial
+// behavior for that case.
+func (c DNS) rknProbe(ctx context.Context, ep keenetic.DNSEndpoint, domains []string, httpc *http.Client) (blocked, conclusive bool, perDomain map[string]any) {
 	perDomain = map[string]any{}
 	if len(domains) == 0 {
-		return false, perDomain
+		return false, true, perDomain
 	}
+
+	type domainResult struct {
+		domain       string
+		info         map[string]any
+		sus          bool
+		inconclusive bool
+	}
+	results := make([]domainResult, len(domains))
+	var wg sync.WaitGroup
+	for i, dom := range domains {
+		wg.Add(1)
+		go func(i int, dom string) {
+			defer wg.Done()
+			info := map[string]any{}
+			ips, err := c.resolveIPs(ctx, ep, dom, httpc)
+			switch {
+			case err != nil && probeInconclusive(ctx, err):
+				info["err"] = err.Error()
+				info["inconclusive"] = true
+				results[i] = domainResult{domain: dom, info: info, inconclusive: true}
+			case err != nil:
+				info["err"] = err.Error()
+				info["sus"] = true
+				results[i] = domainResult{domain: dom, info: info, sus: true}
+			case len(ips) == 0:
+				info["ips"] = []string{}
+				info["sus"] = true
+				results[i] = domainResult{domain: dom, info: info, sus: true}
+			case hasSpoofIP(ips):
+				info["ips"] = ips
+				info["sus"] = true
+				results[i] = domainResult{domain: dom, info: info, sus: true}
+			default:
+				info["ips"] = ips
+				info["sus"] = false
+				results[i] = domainResult{domain: dom, info: info}
+			}
+		}(i, dom)
+	}
+	wg.Wait()
+
 	susCount := 0
-	for _, dom := range domains {
-		info := map[string]any{}
-		ips, err := c.resolveIPs(ctx, ep, dom, httpc)
-		switch {
-		case err != nil:
-			info["err"] = err.Error()
-			info["sus"] = true
-			susCount++
-		case len(ips) == 0:
-			info["ips"] = []string{}
-			info["sus"] = true
-			susCount++
-		case hasSpoofIP(ips):
-			info["ips"] = ips
-			info["sus"] = true
-			susCount++
-		default:
-			info["ips"] = ips
-			info["sus"] = false
+	conclusiveDomains := 0
+	for _, res := range results {
+		perDomain[res.domain] = res.info
+		if res.inconclusive {
+			continue
 		}
-		perDomain[dom] = info
+		conclusiveDomains++
+		if res.sus {
+			susCount++
+		}
 	}
-	// Strict majority: 2*sus > len(domains). For 1 domain → 1 sus blocks; for
-	// 3 → 2 of 3; for 5 → 3 of 5.
-	return susCount*2 > len(domains), perDomain
+	if conclusiveDomains == 0 {
+		return false, false, perDomain
+	}
+	// Strict majority: 2*sus > conclusiveDomains. For 1 domain → 1 sus
+	// blocks; for 3 → 2 of 3; for 5 → 3 of 5.
+	return susCount*2 > conclusiveDomains, true, perDomain
+}
+
+// probeInconclusive reports whether err reflects the check itself running
+// out of its time budget (parent ctx canceled or deadline-exceeded) rather
+// than a genuine reachability/spoofing verdict about the target.
+//
+// This can't be decided by inspecting err alone: ProbePlainDNS/ProbeDoH each
+// enforce PerProbeTimeout via their OWN internally-derived child context, so
+// an ordinary "this resolver never answered" failure produces the exact same
+// context.DeadlineExceeded shape as a parent-level cancellation would. The
+// one signal that reliably tells them apart is the state of the ctx WE
+// handed the probe: if it is still healthy, whatever error came back is the
+// probe's own finding about the target and must count toward the verdict; if
+// it is already Done, the probe never got a fair shot, so its result carries
+// no signal either way and must not be scored as a failure.
+func probeInconclusive(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	cerr := ctx.Err()
+	return errors.Is(cerr, context.Canceled) || errors.Is(cerr, context.DeadlineExceeded)
 }
 
 func hasSpoofIP(ips []string) bool {
