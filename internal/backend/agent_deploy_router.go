@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
-	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
 // awgmInstallJob drives the relay's bootstrap_install mode: a first-time agent
@@ -49,12 +48,28 @@ type dashboardDeployRouterReq struct {
 	AWGMPassword string `json:"awgm_password"`
 	AWGMAPIKey   string `json:"awgm_api_key"`
 	Version      string `json:"version"`
+	// AllowDowngrade overrides the anti-downgrade rejection the shared engine
+	// core (runProvisionInstallCore) now applies to this route — the old
+	// synchronous handler had no such check at all. Omitted/false preserves
+	// the safer default (reject); this field exists so an operator who
+	// legitimately wants to roll back via this route still can.
+	AllowDowngrade bool `json:"allow_downgrade"`
 }
 
-// dashboardDeployRouterHandler performs a first-time agent install on a router
-// from the dashboard: it re-mints the enrollment token, resolves the target
-// version + release checksums, and drives the relay's bootstrap_install mode
-// with operator-supplied, never-stored credentials.
+// dashboardDeployRouterHandler performs a first-time agent install on a
+// router from the dashboard. It is a thin adapter (Task 10) over the same
+// bootstrap_install engine core dashboardHandleProvisionInstall uses
+// (runProvisionInstallCore, provision_handler.go): signature-verified
+// checksums, mint-under-lock, engine.Start — returning ONLY {job_id, steps},
+// never the old raw {ok, output, version}. This closes the P0 vuln (unsigned
+// checksums / raw token in the response / request-scoped context) that this
+// still-registered route carried before.
+//
+// Unlike dashboardHandleProvisionInstall (which can register a brand-new
+// nickname), this route always targets an already-enrolled one: awgm_url and
+// awgm_auth come from the stored row, not the request body, and the
+// Telegram topic is left untouched (UpdateTopic: false — this request shape
+// has no telegram_group/thread_id fields to assign from).
 func dashboardDeployRouterHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -63,6 +78,10 @@ func dashboardDeployRouterHandler(d Deps) http.HandlerFunc {
 		}
 		if d.DB == nil {
 			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
+			return
+		}
+		if d.Provision.Store == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "provision_not_configured", "provisioning engine not configured")
 			return
 		}
 		nickname := r.PathValue("nickname")
@@ -100,98 +119,20 @@ func dashboardDeployRouterHandler(d Deps) http.HandlerFunc {
 			return
 		}
 
-		version := strings.TrimSpace(req.Version)
-		if version == "" {
-			version, err = lookupDashboardLatestVersion(r.Context())
-			if err != nil {
-				writeJSONError(w, http.StatusBadGateway, "latest_version_failed", err.Error())
-				return
-			}
-		}
-		sums, err := releaseChecksumsFetcher(r.Context(), version)
-		if err != nil {
-			writeJSONError(w, http.StatusBadGateway, "checksums_failed", err.Error())
-			return
-		}
-
-		backendURL := strings.TrimRight(strings.TrimSpace(d.PublicBaseURL), "/")
-		if backendURL == "" {
-			writeJSONError(w, http.StatusInternalServerError, "no_public_base_url",
-				"backend PublicBaseURL is not configured")
-			return
-		}
-
-		// Re-mint the enrollment token: the DB only keeps the hash, and a fresh
-		// config.yaml needs the raw token. Idempotent (UpsertEnrollment upserts).
-		enrollment, _, err := createAgentEnrollment(d.DB, nickname, user.Kind, int64Value(user.TelegramThreadID))
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-			return
-		}
-
-		relayPath := d.AWGMRelayPath
-		if relayPath == "" {
-			relayPath = defaultAWGMRelayPath
-		}
-		job := awgmInstallJob{
-			BaseURL:          awgmURL,
-			APIKey:           strings.TrimSpace(req.AWGMAPIKey),
-			Login:            strings.TrimSpace(req.AWGMLogin),
-			Password:         req.AWGMPassword,
-			TerminalUser:     "root",
-			TerminalPassword: req.RootPassword,
-			Mode:             "bootstrap_install",
-			Nickname:         nickname,
-			TargetVersion:    version,
-			BackendURL:       backendURL,
-			RawToken:         enrollment.RawToken,
-			ReleaseBase:      backendURL + "/v1/releases/download",
-			InitScript:       installtmpl.InitScript(),
-			Checksums:        sums,
-		}
-		output, runErr := runAWGMInstallJob(r.Context(), relayPath, job)
-		if runErr != nil {
-			if d.Logger != nil {
-				d.Logger.Warn("dashboard deploy-router failed", "nickname", nickname, "version", version, "err", runErr)
-			}
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(w).Encode(struct {
-				OK      bool   `json:"ok"`
-				Error   string `json:"error"`
-				Output  string `json:"output"`
-				Version string `json:"version"`
-			}{OK: false, Error: runErr.Error(), Output: output, Version: version})
-			return
-		}
-
-		// Record the successful install (merge-safe: preserve existing fields).
-		info := db.DeployInfo{
-			Kind:                user.Kind,
-			ThreadID:            int64Value(user.TelegramThreadID),
-			SSHHost:             stringValue(user.SSHHost),
-			SSHPort:             int64Value(user.SSHPort),
-			SSHUser:             stringValue(user.SSHUser),
-			Arch:                stringValue(user.Arch),
-			Ring:                stringValue(user.Ring),
-			DeployMode:          "awgm",
-			AWGMURL:             awgmURL,
-			AWGMAuth:            stringValue(user.AWGMAuth),
-			ExpectedMAC:         stringValue(user.ExpectedMAC),
-			LastDeployedVersion: version,
-			LastDeploy:          time.Now().UTC().Format(time.RFC3339),
-		}
-		if err := d.DB.Users().UpdateDeployInfo(nickname, info); err != nil && d.Logger != nil {
-			d.Logger.Warn("deploy-router: UpdateDeployInfo failed", "nickname", nickname, "err", err)
-		}
-		if d.Logger != nil {
-			d.Logger.Info("dashboard deploy-router ok", "nickname", nickname, "version", version)
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(struct {
-			OK      bool   `json:"ok"`
-			Output  string `json:"output"`
-			Version string `json:"version"`
-		}{OK: true, Output: output, Version: version})
+		runProvisionInstallCore(w, r, d, provisionInstallCoreParams{
+			Nickname:       nickname,
+			AgentKind:      user.Kind,
+			ThreadID:       int64Value(user.TelegramThreadID),
+			AWGMURL:        awgmURL,
+			AWGMAuth:       stringValue(user.AWGMAuth),
+			RootPassword:   req.RootPassword,
+			AWGMLogin:      strings.TrimSpace(req.AWGMLogin),
+			AWGMPassword:   req.AWGMPassword,
+			AWGMAPIKey:     strings.TrimSpace(req.AWGMAPIKey),
+			Version:        strings.TrimSpace(req.Version),
+			AllowDowngrade: req.AllowDowngrade,
+			Existing:       user,
+			UpdateTopic:    false,
+		})
 	}
 }

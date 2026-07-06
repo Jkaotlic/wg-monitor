@@ -9,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 )
 
 func TestBuildReviveScriptRewritesBackendURLAndRestarts(t *testing.T) {
@@ -21,10 +23,31 @@ func TestBuildReviveScriptRewritesBackendURLAndRestarts(t *testing.T) {
 		"bak-revive-",
 		"/^backend:[ \\t]*$/", // section-aware
 		"/opt/etc/init.d/S99wg-monitor restart",
+		provision.StepMarker + " " + provision.StepBackendURLRewrite,
+		provision.StepMarker + " " + provision.StepServiceRestarted,
 	} {
 		if !strings.Contains(s, want) {
 			t.Fatalf("revive script missing %q:\n%s", want, s)
 		}
+	}
+
+	// The repair-repoint job checklist is terminal_connected (relay-emitted,
+	// Task 7) -> backend_url_rewritten -> service_restarted -> verify_online
+	// (engine, runner.go). The script itself must emit its two markers in
+	// that order, straddling the config rewrite and the agent restart
+	// respectively — otherwise the dashboard's checklist stalls forever on a
+	// step nothing ever completes (see runner.go's onLine: a step only
+	// advances once its marker line arrives).
+	mvIdx := strings.Index(s, `mv "$CFG.tmp" "$CFG"`)
+	rewriteMarkerIdx := strings.Index(s, provision.StepMarker+" "+provision.StepBackendURLRewrite)
+	restartIdx := strings.Index(s, "/opt/etc/init.d/S99wg-monitor restart")
+	restartMarkerIdx := strings.Index(s, provision.StepMarker+" "+provision.StepServiceRestarted)
+	if mvIdx < 0 || rewriteMarkerIdx < 0 || restartIdx < 0 || restartMarkerIdx < 0 {
+		t.Fatalf("script missing one of the expected markers/lines:\n%s", s)
+	}
+	if !(mvIdx < rewriteMarkerIdx && rewriteMarkerIdx < restartIdx && restartIdx < restartMarkerIdx) {
+		t.Fatalf("step markers out of order: mv=%d rewriteMarker=%d restart=%d restartMarker=%d\n%s",
+			mvIdx, rewriteMarkerIdx, restartIdx, restartMarkerIdx, s)
 	}
 }
 
@@ -40,7 +63,14 @@ func seedReviveAgent(t *testing.T, d *db.DB, awgmURL string) {
 	}
 }
 
-func newReviveMux(t *testing.T, awgmURL string) (*db.DB, http.Handler) {
+// newReviveMux builds a real backend mux (NewMux/registerDashboardRoutes)
+// with the provisioning engine wired to the given fake relay — Task 10 routes
+// dashboardReviveAgentHandler through provision.Deps.Start (KindRepairRepoint)
+// instead of the old synchronous runAWGMRelayJob, so every test needs a
+// non-nil Provision.Store or the handler's own 503 guard trips (a nil Store
+// would otherwise panic the moment the engine's single-flight lock is
+// acquired).
+func newReviveMux(t *testing.T, awgmURL string, relay *fakeProvisionRelay) (*db.DB, *provision.Store, http.Handler) {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -48,8 +78,19 @@ func newReviveMux(t *testing.T, awgmURL string) (*db.DB, http.Handler) {
 	}
 	t.Cleanup(func() { d.Close() })
 	seedReviveAgent(t, d, awgmURL)
-	h := NewMux(Deps{DB: d, DashboardToken: "secret", PublicBaseURL: "https://wgmonitor.example.com"})
-	return d, h
+	store := provision.NewStore()
+	h := NewMux(Deps{
+		DB:             d,
+		DashboardToken: "secret",
+		PublicBaseURL:  "https://wgmonitor.example.com",
+		Provision: provision.Deps{
+			Store:    store,
+			BaseCtx:  context.Background(),
+			Relay:    relay.run,
+			LastSeen: freshLastSeen,
+		},
+	})
+	return d, store, h
 }
 
 func postRevive(t *testing.T, h http.Handler, nick, body string, auth bool) *httptest.ResponseRecorder {
@@ -64,33 +105,42 @@ func postRevive(t *testing.T, h http.Handler, nick, body string, auth bool) *htt
 	return rec
 }
 
+// TestDashboardReviveDrivesRelayWithTransientPassword pins the async
+// {job_id, steps} contract dashboardReviveAgentHandler now shares with
+// dashboardHandleRepairRepoint (Task 10): the old handler used to run the
+// relay synchronously and return {ok, output, new_backend_url}; it now starts
+// a KindRepairRepoint engine job and returns 202 immediately, with the job
+// reaching StateSuccess once the (stubbed) relay completes.
 func TestDashboardReviveDrivesRelayWithTransientPassword(t *testing.T) {
-	_, h := newReviveMux(t, "https://awg.client-c.example")
-
-	var captured awgmReviveJob
-	var capturedPath string
-	orig := runAWGMRelayJob
-	runAWGMRelayJob = func(_ context.Context, relayPath string, job awgmReviveJob) (string, error) {
-		captured = job
-		capturedPath = relayPath
-		return "backend.url -> https://wgmonitor.example.com\nagent restarted\n", nil
-	}
-	t.Cleanup(func() { runAWGMRelayJob = orig })
+	relay := &fakeProvisionRelay{rc: 0}
+	_, store, h := newReviveMux(t, "https://awg.client-c.example", relay)
 
 	rec := postRevive(t, h, "client-c", `{"root_password":"s3cr3t-root"}`, true)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	var resp struct {
-		OK     bool   `json:"ok"`
-		Output string `json:"output"`
-		NewURL string `json:"new_backend_url"`
-	}
+	var resp dashboardJobStartResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	if !resp.OK || !strings.Contains(resp.Output, "agent restarted") {
-		t.Fatalf("bad response: %+v", resp)
+	if resp.JobID == "" {
+		t.Fatal("job_id missing")
+	}
+	if len(resp.Steps) == 0 {
+		t.Error("steps missing from the start response")
+	}
+
+	job := waitForProvisionTerminal(t, store, resp.JobID, time.Second)
+	if job.State != provision.StateSuccess {
+		t.Fatalf("job state = %q, want success (hint=%q)", job.State, job.Hint)
+	}
+
+	if got := relay.callCount(); got != 1 {
+		t.Fatalf("relay calls = %d, want 1", got)
+	}
+	var captured awgmReviveJob
+	if err := json.Unmarshal(relay.capturedJobJSON(), &captured); err != nil {
+		t.Fatal(err)
 	}
 	// Job carries the transient root password + targets the agent's awgm URL,
 	// and the script rewrites to the backend's public URL.
@@ -103,32 +153,27 @@ func TestDashboardReviveDrivesRelayWithTransientPassword(t *testing.T) {
 	if !strings.Contains(captured.BootstrapScript, "https://wgmonitor.example.com") {
 		t.Fatalf("script should rewrite to PublicBaseURL: %s", captured.BootstrapScript)
 	}
-	if capturedPath != defaultAWGMRelayPath {
-		t.Fatalf("relay path: %q", capturedPath)
-	}
-	if resp.NewURL != "https://wgmonitor.example.com" {
-		t.Fatalf("new url: %q", resp.NewURL)
+	if relay.capturedRelayPath() != defaultAWGMRelayPath {
+		t.Fatalf("relay path: %q", relay.capturedRelayPath())
 	}
 }
 
 func TestDashboardReviveRequiresRootPassword(t *testing.T) {
-	_, h := newReviveMux(t, "https://awg.client-c.example")
-	called := false
-	orig := runAWGMRelayJob
-	runAWGMRelayJob = func(context.Context, string, awgmReviveJob) (string, error) { called = true; return "", nil }
-	t.Cleanup(func() { runAWGMRelayJob = orig })
+	relay := &fakeProvisionRelay{}
+	_, _, h := newReviveMux(t, "https://awg.client-c.example", relay)
 
 	rec := postRevive(t, h, "client-c", `{"root_password":"  "}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
 	}
-	if called {
+	if relay.callCount() != 0 {
 		t.Fatal("relay must not run without a root password")
 	}
 }
 
 func TestDashboardReviveNeedsAWGMURL(t *testing.T) {
-	_, h := newReviveMux(t, "") // no awgm_url
+	relay := &fakeProvisionRelay{}
+	_, _, h := newReviveMux(t, "", relay) // no awgm_url
 	rec := postRevive(t, h, "client-c", `{"root_password":"x"}`, true)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
@@ -136,7 +181,8 @@ func TestDashboardReviveNeedsAWGMURL(t *testing.T) {
 }
 
 func TestDashboardReviveUnknownAgent(t *testing.T) {
-	_, h := newReviveMux(t, "https://awg.client-c.example")
+	relay := &fakeProvisionRelay{}
+	_, _, h := newReviveMux(t, "https://awg.client-c.example", relay)
 	rec := postRevive(t, h, "ghost", `{"root_password":"x"}`, true)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("want 404, got %d body=%s", rec.Code, rec.Body.String())
@@ -144,7 +190,8 @@ func TestDashboardReviveUnknownAgent(t *testing.T) {
 }
 
 func TestDashboardReviveRequiresAuth(t *testing.T) {
-	_, h := newReviveMux(t, "https://awg.client-c.example")
+	relay := &fakeProvisionRelay{}
+	_, _, h := newReviveMux(t, "https://awg.client-c.example", relay)
 	rec := postRevive(t, h, "client-c", `{"root_password":"x"}`, false)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d body=%s", rec.Code, rec.Body.String())
