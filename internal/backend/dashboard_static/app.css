@@ -1182,7 +1182,8 @@ details.raw-output pre {
   .stat-tiles,
   .form-grid,
   .form-grid-three,
-  .result-grid {
+  .result-grid,
+  .mode-choice-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1277,11 +1278,80 @@ details.raw-output pre {
   margin-bottom: 8px;
 }
 
+/* --- 2026-07-06 provisioning rework: Provision wizard stepper --- */
+.mode-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.mode-choice {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  padding: 18px 16px;
+  text-align: left;
+  color: var(--text);
+  white-space: normal;
+  min-height: 0;
+}
+
+.mode-choice:hover {
+  border-color: var(--accent);
+  background: var(--surface-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.mode-choice-icon {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.mode-choice-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.mode-choice-desc {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+}
+
+.provision-run-status {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 34px 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.provision-run-status .ti {
+  font-size: 26px;
+  color: var(--accent);
+}
+
+.provision-run-status .spin {
+  animation: wg-spin 900ms linear infinite;
+}
+
+@keyframes wg-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* Sharper, consistent keyboard focus for the whole console. */
 .btn:focus-visible,
 .action-btn:focus-visible,
 .icon-btn:focus-visible,
 .mini-btn:focus-visible,
+.mode-choice:focus-visible,
 .segment:focus-visible,
 .nav-item:focus-visible,
 .drawer-tabs button:focus-visible,
