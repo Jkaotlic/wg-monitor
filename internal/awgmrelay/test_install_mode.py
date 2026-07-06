@@ -1,4 +1,4 @@
-import importlib.util, os, sys, types, unittest
+import contextlib, importlib.util, io, os, socket, sys, types, unittest
 from unittest.mock import MagicMock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -58,7 +58,9 @@ class InstallModeTest(unittest.TestCase):
                 "wg-monitor-agent-linux-mipsle": "cc33dd44",
             },
         }
-        relay.run_install_bootstrap(cfg)
+        stdout_buf = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buf):
+            relay.run_install_bootstrap(cfg)
 
         s = captured["script"]
         self.assertIn("NICKNAME='client-g'", s)
@@ -71,6 +73,74 @@ class InstallModeTest(unittest.TestCase):
         fake_sock.close.assert_called()
         self.assertIn("/api/terminal/stop", requested_paths,
                       "expected /api/terminal/stop to be called in finally-cleanup")
+
+        # --- __WG_STEP__ progress markers (Task 7 / B7) --------------------
+        #
+        # Router-side markers: the rendered bootstrap script must "echo" each
+        # marker (never emit a bare "__WG_STEP__..." as the first token of a
+        # command -- the Go parser strict-prefix-matches trimmed stdout
+        # lines, and an echoed COMMAND line must not itself parse as a
+        # marker), in checklist order.
+        marker_lines = [
+            "echo __WG_STEP__ downloading",
+            "echo __WG_STEP__ checksum_ok",
+            "echo __WG_STEP__ config_written",
+            "echo __WG_STEP__ init_installed",
+            "echo __WG_STEP__ service_started",
+        ]
+        for marker_line in marker_lines:
+            self.assertIn(marker_line, s)
+        positions = [s.index(line) for line in marker_lines]
+        self.assertEqual(positions, sorted(positions),
+                          "step markers must appear in checklist order in the rendered script")
+
+        # Token safety: the raw token must appear ONLY inside the quoted
+        # config heredoc, never on a __WG_STEP__ line -- the Go side stores a
+        # marker's detail argument UNREDACTED in the visible job step.
+        token = cfg["raw_token"]
+        self.assertIn(token, s, "sanity: token should still be present in the config heredoc")
+        for line in s.splitlines():
+            if "__WG_STEP__" in line:
+                self.assertNotIn(token, line,
+                                  "raw token must never appear on a __WG_STEP__ line: %r" % line)
+
+        # Python-side markers: terminal_connected/arch_detected are printed
+        # directly by the relay process itself (not part of the router-side
+        # script). login_terminal is stubbed to a no-op above, so only
+        # arch_detected (printed right after normalize_arch in
+        # run_install_bootstrap) is observable in this test.
+        printed = stdout_buf.getvalue()
+        self.assertIn("__WG_STEP__ arch_detected arm64", printed)
+        self.assertNotIn(cfg["raw_token"], printed,
+                          "raw token must never appear in relay stdout prints")
+
+
+class LoginTerminalStepMarkerTest(unittest.TestCase):
+    """login_terminal must print terminal_connected on BOTH success paths:
+    the explicit shell-prompt match, and the "already at a shell, first read
+    just timed out before any login/password exchange began" fast path."""
+
+    def test_prints_terminal_connected_on_shell_prompt_match(self):
+        relay = load_relay()
+        relay.ws_recv = lambda sock: "root@Keenetic:~# "
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            out = relay.login_terminal(object(), {})
+        self.assertIn("__WG_STEP__ terminal_connected", buf.getvalue())
+        self.assertIn("root@Keenetic:~# ", out)
+
+    def test_prints_terminal_connected_on_immediate_timeout_fast_path(self):
+        relay = load_relay()
+
+        def raise_timeout(sock):
+            raise socket.timeout()
+        relay.ws_recv = raise_timeout
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            relay.login_terminal(object(), {})
+        self.assertIn("__WG_STEP__ terminal_connected", buf.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

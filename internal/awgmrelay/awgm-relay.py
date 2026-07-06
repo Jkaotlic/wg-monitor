@@ -413,7 +413,7 @@ def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_sta
     if defer_start:
         start_block = 'echo "wg-monitor bootstrap staged; service start deferred until backend token commit"'
     else:
-        start_block = '"$INIT" restart || "$INIT" start\necho "wg-monitor bootstrap complete for $NICKNAME"'
+        start_block = '"$INIT" restart || "$INIT" start\necho __WG_STEP__ service_started\necho "wg-monitor bootstrap complete for $NICKNAME"'
     return """#!/bin/sh
 set -eu
 
@@ -459,6 +459,7 @@ fetch() {
 }
 
 echo "Installing wg-monitor $VERSION for $NICKNAME"
+echo __WG_STEP__ downloading
 fetch "$DOWNLOAD_URL" "$TMP_BIN"
 
 got=$(sha256sum "$TMP_BIN" | awk '{print $1}')
@@ -466,18 +467,21 @@ if [ "$got" != "$EXPECTED_SHA" ]; then
     echo "checksum mismatch for $CHECKSUM_NAME"
     exit 14
 fi
+echo __WG_STEP__ checksum_ok
 
 cat >"$CONFIG.tmp" <<'WG_MONITOR_AGENT_CONFIG'
 %s
 WG_MONITOR_AGENT_CONFIG
 mv "$CONFIG.tmp" "$CONFIG"
 chmod 600 "$CONFIG"
+echo __WG_STEP__ config_written
 
 cat >"$INIT.tmp" <<'WG_MONITOR_INIT'
 %s
 WG_MONITOR_INIT
 mv "$INIT.tmp" "$INIT"
 chmod 755 "$INIT"
+echo __WG_STEP__ init_installed
 
 chmod 755 "$TMP_BIN"
 mv "$TMP_BIN" "$BIN"
@@ -545,6 +549,7 @@ def run_deferred_bootstrap(cfg, cfg_path):
     arch = (data.get("goArch") or "").strip()
     if not arch:
         raise RelayError("AWG Manager system_info did not report goArch")
+    print("__WG_STEP__ arch_detected " + normalize_arch(arch))
     two_phase = deferred_agent_needs_two_phase(agent)
     if two_phase:
         raw_token = new_deferred_agent_raw_token()
@@ -638,6 +643,7 @@ def run_install_bootstrap(cfg):
     if not raw_arch:
         raise RelayError("AWG Manager system_info did not report goArch")
     arch = normalize_arch(raw_arch)
+    print("__WG_STEP__ arch_detected " + arch)
     asset = "wg-monitor-agent-linux-" + arch
     expected_sha = (checksums.get(asset) or "").strip()
     if not expected_sha:
@@ -674,6 +680,7 @@ def login_terminal(sock, cfg):
             text = ws_recv(sock)
         except socket.timeout:
             if not sent_user and not sent_password:
+                print("__WG_STEP__ terminal_connected")
                 return out
             continue
         out += text
@@ -691,6 +698,7 @@ def login_terminal(sock, cfg):
             send_input(sock, password + "\n")
             sent_password = True
         elif action == "shell":
+            print("__WG_STEP__ terminal_connected")
             return out
     return out
 
