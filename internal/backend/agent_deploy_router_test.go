@@ -8,11 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/provision"
 )
 
-func newDeployRouterMux(t *testing.T, awgmURL string) (*db.DB, http.Handler) {
+// newDeployRouterMux builds a real backend mux (NewMux/registerDashboardRoutes)
+// with the provisioning engine wired to the given fake relay — Task 10 routes
+// dashboardDeployRouterHandler through the same engine core
+// dashboardHandleProvisionInstall uses (provision.Deps.Start, KindProvision)
+// instead of the old synchronous runAWGMInstallJob, so every test needs a
+// non-nil Provision.Store or the handler's own 503 guard trips.
+func newDeployRouterMux(t *testing.T, awgmURL string, relay *fakeProvisionRelay) (*db.DB, *provision.Store, http.Handler) {
 	t.Helper()
 	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -27,8 +35,19 @@ func newDeployRouterMux(t *testing.T, awgmURL string) (*db.DB, http.Handler) {
 			t.Fatal(err)
 		}
 	}
-	h := NewMux(Deps{DB: d, DashboardToken: "secret", PublicBaseURL: "https://wgmon.example"})
-	return d, h
+	store := provision.NewStore()
+	h := NewMux(Deps{
+		DB:             d,
+		DashboardToken: "secret",
+		PublicBaseURL:  "https://wgmon.example",
+		Provision: provision.Deps{
+			Store:    store,
+			BaseCtx:  context.Background(),
+			Relay:    relay.run,
+			LastSeen: freshLastSeen,
+		},
+	})
+	return d, store, h
 }
 
 func postDeployRouter(t *testing.T, h http.Handler, nick, body string) *httptest.ResponseRecorder {
@@ -41,34 +60,60 @@ func postDeployRouter(t *testing.T, h http.Handler, nick, body string) *httptest
 	return rec
 }
 
+// TestDeployRouterBuildsInstallJobWithTransientCreds pins the async
+// {job_id, steps} contract dashboardDeployRouterHandler now shares with
+// dashboardHandleProvisionInstall (Task 10): the old handler ran the relay
+// synchronously via the unsigned releaseChecksumsFetcher and returned
+// {ok, output, version}; it now must go through the SIGNATURE-VERIFIED
+// verifiedChecksumsFetcher, start a KindProvision engine job, and return 202
+// immediately (this closes the P0 unsigned-checksums/raw-token/request-ctx
+// vuln on this still-registered route).
 func TestDeployRouterBuildsInstallJobWithTransientCreds(t *testing.T) {
-	d, h := newDeployRouterMux(t, "https://awg.example")
+	relay := &fakeProvisionRelay{rc: 0}
+	d, store, h := newDeployRouterMux(t, "https://awg.example", relay)
 
-	origVer := lookupDashboardLatestVersion
-	lookupDashboardLatestVersion = func(_ context.Context) (string, error) { return "v0.13.8", nil }
-	t.Cleanup(func() { lookupDashboardLatestVersion = origVer })
+	stubLatestVersion(t, "v0.13.8")
 
+	// Regression pin for the vuln fix: the OLD unsigned fetcher must never be
+	// reached now that this route delegates to the engine's shared core.
 	origSums := releaseChecksumsFetcher
-	releaseChecksumsFetcher = func(_ context.Context, version string) (map[string]string, error) {
-		return map[string]string{"wg-monitor-agent-linux-arm64": "aa11"}, nil
+	releaseChecksumsFetcher = func(context.Context, string) (map[string]string, error) {
+		t.Error("deploy-router must use the signature-verified checksums fetcher, not the legacy unsigned one")
+		return nil, nil
 	}
 	t.Cleanup(func() { releaseChecksumsFetcher = origSums })
+	stubVerifiedChecksums(t, map[string]string{"wg-monitor-agent-linux-arm64": "aa11"})
 
 	beforeHash := tokenHashOf(t, d, "bronya")
-
-	var captured awgmInstallJob
-	origRun := runAWGMInstallJob
-	runAWGMInstallJob = func(_ context.Context, _ string, job awgmInstallJob) (string, error) {
-		captured = job
-		return "install bootstrap complete for bronya at v0.13.8 (arm64)\n", nil
-	}
-	t.Cleanup(func() { runAWGMInstallJob = origRun })
 
 	rec := postDeployRouter(t, h, "bronya",
 		`{"root_password":"rootpw","awgm_api_key":"key-123"}`)
 
-	if rec.Code != http.StatusOK {
+	if rec.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp dashboardJobStartResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.JobID == "" {
+		t.Fatal("job_id missing")
+	}
+	if len(resp.Steps) == 0 {
+		t.Error("steps missing from the start response")
+	}
+
+	job := waitForProvisionTerminal(t, store, resp.JobID, time.Second)
+	if job.State != provision.StateSuccess {
+		t.Fatalf("job state = %q, want success (hint=%q)", job.State, job.Hint)
+	}
+
+	if got := relay.callCount(); got != 1 {
+		t.Fatalf("relay calls = %d, want 1", got)
+	}
+	var captured awgmInstallJob
+	if err := json.Unmarshal(relay.capturedJobJSON(), &captured); err != nil {
+		t.Fatal(err)
 	}
 	if captured.Mode != "bootstrap_install" {
 		t.Errorf("Mode = %q", captured.Mode)
@@ -97,57 +142,59 @@ func TestDeployRouterBuildsInstallJobWithTransientCreds(t *testing.T) {
 	if captured.InitScript == "" {
 		t.Error("init script missing")
 	}
+	if relay.capturedRelayPath() != defaultAWGMRelayPath {
+		t.Errorf("relay path: %q", relay.capturedRelayPath())
+	}
 	if h := tokenHashOf(t, d, "bronya"); h == beforeHash {
 		t.Error("expected token to be re-minted (hash should change)")
 	}
 }
 
 func TestDeployRouterRequiresRootPassword(t *testing.T) {
-	_, h := newDeployRouterMux(t, "https://awg.example")
+	relay := &fakeProvisionRelay{}
+	_, _, h := newDeployRouterMux(t, "https://awg.example", relay)
 	rec := postDeployRouter(t, h, "bronya", `{"awgm_api_key":"k"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
+	if relay.callCount() != 0 {
+		t.Error("relay must not be called without a root password")
+	}
 }
 
 func TestDeployRouterRequiresStoredAWGMURL(t *testing.T) {
-	_, h := newDeployRouterMux(t, "") // no awgm_url
+	relay := &fakeProvisionRelay{}
+	_, _, h := newDeployRouterMux(t, "", relay) // no awgm_url
 	rec := postDeployRouter(t, h, "bronya", `{"root_password":"rootpw"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }
 
-func TestDeployRouterRelayFailureReturns502(t *testing.T) {
-	_, h := newDeployRouterMux(t, "https://awg.example")
+// TestDeployRouterRelayFailureMarksJobFailed replaces the old
+// TestDeployRouterRelayFailureReturns502: a relay failure can no longer
+// surface as an immediate HTTP error, since the handler returns 202 the
+// moment the async job starts — the failure now shows up as StateFailed on
+// the polled job instead.
+func TestDeployRouterRelayFailureMarksJobFailed(t *testing.T) {
+	relay := &fakeProvisionRelay{rc: 1, err: context.DeadlineExceeded}
+	_, store, h := newDeployRouterMux(t, "https://awg.example", relay)
 
-	origVer := lookupDashboardLatestVersion
-	lookupDashboardLatestVersion = func(_ context.Context) (string, error) { return "v0.13.8", nil }
-	t.Cleanup(func() { lookupDashboardLatestVersion = origVer })
-
-	origSums := releaseChecksumsFetcher
-	releaseChecksumsFetcher = func(_ context.Context, _ string) (map[string]string, error) {
-		return map[string]string{"wg-monitor-agent-linux-arm64": "aa11"}, nil
-	}
-	t.Cleanup(func() { releaseChecksumsFetcher = origSums })
-
-	origRun := runAWGMInstallJob
-	runAWGMInstallJob = func(_ context.Context, _ string, _ awgmInstallJob) (string, error) {
-		return "checksum mismatch\n", context.DeadlineExceeded
-	}
-	t.Cleanup(func() { runAWGMInstallJob = origRun })
+	stubLatestVersion(t, "v0.13.8")
+	stubVerifiedChecksums(t, map[string]string{"wg-monitor-agent-linux-arm64": "aa11"})
 
 	rec := postDeployRouter(t, h, "bronya", `{"root_password":"rootpw"}`)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502", rec.Code)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (relay failures now surface async via the job), body = %s", rec.Code, rec.Body.String())
 	}
-	var resp struct {
-		OK     bool   `json:"ok"`
-		Output string `json:"output"`
+	var resp dashboardJobStartResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
 	}
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-	if resp.OK || !strings.Contains(resp.Output, "checksum mismatch") {
-		t.Fatalf("bad 502 body: %s", rec.Body.String())
+
+	job := waitForProvisionTerminal(t, store, resp.JobID, time.Second)
+	if job.State != provision.StateFailed {
+		t.Fatalf("job state = %q, want failed (hint=%q)", job.State, job.Hint)
 	}
 }
 

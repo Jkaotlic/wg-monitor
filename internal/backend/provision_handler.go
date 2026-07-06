@@ -150,7 +150,8 @@ func dashboardHandleRegister(w http.ResponseWriter, r *http.Request, d Deps, req
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 		return
 	}
-	if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname, provisionDeployInfo(existing, req)); err != nil {
+	if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname,
+		provisionDeployInfo(existing, req.AgentKind, req.ThreadID, req.AWGMURL, req.AWGMAuth)); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 		return
 	}
@@ -187,6 +188,16 @@ func dashboardHandleRegister(w http.ResponseWriter, r *http.Request, d Deps, req
 // enrollment token, assembles the bootstrap_install relay job, and starts the
 // async engine. Returns ONLY {job_id, steps} — never the token, never any
 // relay output.
+//
+// This is a thin wrapper around runProvisionInstallCore (Task 10): it only
+// resolves the fields specific to dashboardProvisionReq's own request shape
+// (a register-or-install body that may target a brand-new nickname, so
+// awgm_url/root_password come from the request itself, and the Telegram
+// topic is always (re)assigned from telegram_group/thread_id — even to
+// intentionally clear it via zero values). dashboardDeployRouterHandler
+// (agent_deploy_router.go) is the other caller of the shared core, for an
+// always-already-enrolled nickname whose awgm_url/awgm_auth come from the
+// stored row instead.
 func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d Deps, req dashboardProvisionReq) {
 	if d.Provision.Store == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "provision_not_configured", "provisioning engine not configured")
@@ -205,7 +216,82 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		return
 	}
 
-	version, err := resolveProvisionVersion(r.Context(), req.Version)
+	// existing is nil for a brand-new nickname (nothing to downgrade from);
+	// it is also reused by the shared core to preserve merge-safe metadata.
+	existing, err := lookupExistingUser(d.DB, req.Nickname)
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return
+	}
+
+	runProvisionInstallCore(w, r, d, provisionInstallCoreParams{
+		Nickname:       req.Nickname,
+		AgentKind:      req.AgentKind,
+		ThreadID:       req.ThreadID,
+		AWGMURL:        awgmURL,
+		AWGMAuth:       strings.TrimSpace(req.AWGMAuth),
+		RootPassword:   rootPassword,
+		AWGMLogin:      strings.TrimSpace(req.AWGMLogin),
+		AWGMPassword:   req.AWGMPassword,
+		AWGMAPIKey:     strings.TrimSpace(req.AWGMAPIKey),
+		Version:        req.Version,
+		AllowDowngrade: req.AllowDowngrade,
+		Existing:       existing,
+		UpdateTopic:    true,
+		TelegramGroup:  req.TelegramGroup,
+	})
+}
+
+// provisionInstallCoreParams bundles the fields dashboardHandleProvisionInstall
+// (provision_handler.go) and dashboardDeployRouterHandler
+// (agent_deploy_router.go) both resolve from their own differently-shaped
+// request bodies before handing off to the one shared engine core,
+// runProvisionInstallCore — Task 10 factors this out so the P0-vuln fix
+// (signature-verified checksums, mint-under-lock, engine.Start) lives exactly
+// once instead of being copy-pasted into the old deploy-router handler.
+type provisionInstallCoreParams struct {
+	Nickname     string
+	AgentKind    string
+	ThreadID     int64
+	AWGMURL      string
+	AWGMAuth     string
+	RootPassword string
+	AWGMLogin    string
+	AWGMPassword string
+	AWGMAPIKey   string
+	Version      string
+	// AllowDowngrade overrides the anti-downgrade rejection below.
+	AllowDowngrade bool
+	// Existing is the row as it stood before this request: nil for a
+	// brand-new nickname (dashboardHandleProvisionInstall only — it allows
+	// registering while installing); always non-nil for
+	// dashboardDeployRouterHandler, which 404s first if the nickname isn't
+	// already enrolled. Used both for the anti-downgrade compare and to
+	// preserve merge-safe metadata (provisionDeployInfo).
+	Existing *db.User
+	// UpdateTopic, when true, calls UpdateTelegramTopic(userID, TelegramGroup,
+	// ThreadID) right after the token mint. dashboardHandleProvisionInstall's
+	// request shape carries telegram_group/thread_id and always wants this,
+	// even to intentionally clear a topic via zero values.
+	// dashboardDeployRouterHandler's request has no such fields and must
+	// NEVER touch the topic: unlike UpdateDeployInfo's own ThreadID column
+	// (merge-safe — a zero is a preserving no-op, see db.UpdateDeployInfo's
+	// CASE WHEN), UpdateTelegramTopic writes NULL unconditionally on a zero
+	// value, so this cannot simply default to "pass zero" — it must be
+	// skipped outright.
+	UpdateTopic   bool
+	TelegramGroup int64
+}
+
+// runProvisionInstallCore is the shared bootstrap_install engine core behind
+// dashboardHandleProvisionInstall and dashboardDeployRouterHandler (Task 10):
+// resolve + signature-verify the target release, reject a downgrade, mint an
+// enrollment token under the engine's single-flight lock, persist merge-safe
+// deploy metadata, build the relay job, and start the async KindProvision
+// run. Writes ONLY {job_id, steps} on every path — never a raw relay
+// transcript, never a token.
+func runProvisionInstallCore(w http.ResponseWriter, r *http.Request, d Deps, p provisionInstallCoreParams) {
+	version, err := resolveProvisionVersion(r.Context(), p.Version)
 	if err != nil {
 		writeJSONError(w, http.StatusBadGateway, "latest_version_failed", err.Error())
 		return
@@ -213,18 +299,11 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 
 	// Anti-downgrade BEFORE the checksums network fetch: a cheap local compare
 	// that rejects a target older than what's already installed (unless the
-	// operator opted in) shouldn't cost a GitHub round trip first. existing is
-	// nil for a brand-new nickname (nothing to downgrade from); it is also
-	// reused below to preserve merge-safe metadata.
-	existing, err := lookupExistingUser(d.DB, req.Nickname)
-	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-		return
-	}
-	if existing != nil && !req.AllowDowngrade && isVersionDowngrade(version, stringValue(existing.LastDeployedVersion)) {
+	// operator opted in) shouldn't cost a GitHub round trip first.
+	if p.Existing != nil && !p.AllowDowngrade && isVersionDowngrade(version, stringValue(p.Existing.LastDeployedVersion)) {
 		writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
 			fmt.Sprintf("target version %s is older than the currently installed %s — pass allow_downgrade to override",
-				version, stringValue(existing.LastDeployedVersion)))
+				version, stringValue(p.Existing.LastDeployedVersion)))
 		return
 	}
 
@@ -249,34 +328,36 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 	// local/DB, no network); released right before Start so Start's own
 	// TryLock re-acquires it. The guarded release covers every error path
 	// below and is a no-op once handed off to Start.
-	release, ok := acquireProvisionMintLock(w, d.Provision.Store, req.Nickname)
+	release, ok := acquireProvisionMintLock(w, d.Provision.Store, p.Nickname)
 	if !ok {
 		return
 	}
 	defer release()
 
-	enrollment, userID, err := createAgentEnrollment(d.DB, req.Nickname, req.AgentKind, req.ThreadID)
+	enrollment, userID, err := createAgentEnrollment(d.DB, p.Nickname, p.AgentKind, p.ThreadID)
 	if err != nil {
 		writeProvisionEnrollmentError(w, err)
 		return
 	}
-	if err := d.DB.Users().UpdateTelegramTopic(userID, req.TelegramGroup, req.ThreadID); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-		return
+	if p.UpdateTopic {
+		if err := d.DB.Users().UpdateTelegramTopic(userID, p.TelegramGroup, p.ThreadID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+			return
+		}
 	}
-	req.AWGMURL = awgmURL
-	if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname, provisionDeployInfo(existing, req)); err != nil {
+	if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname,
+		provisionDeployInfo(p.Existing, p.AgentKind, p.ThreadID, p.AWGMURL, p.AWGMAuth)); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 		return
 	}
 
 	job := awgmInstallJob{
-		BaseURL:          awgmURL,
-		APIKey:           strings.TrimSpace(req.AWGMAPIKey),
-		Login:            strings.TrimSpace(req.AWGMLogin),
-		Password:         req.AWGMPassword,
+		BaseURL:          p.AWGMURL,
+		APIKey:           strings.TrimSpace(p.AWGMAPIKey),
+		Login:            strings.TrimSpace(p.AWGMLogin),
+		Password:         p.AWGMPassword,
 		TerminalUser:     defaultProvisionTerminalUser,
-		TerminalPassword: rootPassword,
+		TerminalPassword: p.RootPassword,
 		Mode:             "bootstrap_install",
 		Nickname:         enrollment.Nickname,
 		TargetVersion:    version,
@@ -311,7 +392,7 @@ func dashboardHandleProvisionInstall(w http.ResponseWriter, r *http.Request, d D
 		return
 	}
 	if d.Logger != nil {
-		d.Logger.Info("dashboard provision: install started", "nickname", enrollment.Nickname, "job_id", jobID, "version", version)
+		d.Logger.Info("provision install started", "nickname", enrollment.Nickname, "job_id", jobID, "version", version)
 	}
 	respondProvisionJobStarted(w, d, jobID, provision.KindProvision)
 }
@@ -632,19 +713,25 @@ func isVersionDowngrade(target, current string) bool {
 }
 
 // provisionDeployInfo builds the DeployInfo to persist for a register/provision
-// request. current is the row as it stood before this request (nil for a
-// brand-new nickname) — system-managed fields (versions, pending markers) and
-// metadata this request shape has no fields for (ssh/ring/arch/mac; the
-// engine auto-detects arch and always uses the awgm/relay path, per the
-// provisioning-rework design spec) are preserved from it rather than blanked,
-// matching dashboardEditDeployInfo/dashboardDeployInfoFromEnrollmentReq's
-// existing merge-safe convention.
-func provisionDeployInfo(current *db.User, req dashboardProvisionReq) db.DeployInfo {
+// (or deploy-router, Task 10) request. current is the row as it stood before
+// this request (nil for a brand-new nickname) — system-managed fields
+// (versions, pending markers) and metadata this request shape has no fields
+// for (ssh/ring/arch/mac; the engine auto-detects arch and always uses the
+// awgm/relay path, per the provisioning-rework design spec) are preserved
+// from it rather than blanked, matching dashboardEditDeployInfo/
+// dashboardDeployInfoFromEnrollmentReq's existing merge-safe convention.
+//
+// Takes plain fields rather than dashboardProvisionReq (its only caller until
+// Task 10) so dashboardDeployRouterHandler's differently-shaped request —
+// whose awgm_url/awgm_auth come from the stored row, not a request body field
+// — can share this exact same persistence logic via runProvisionInstallCore
+// instead of duplicating it.
+func provisionDeployInfo(current *db.User, agentKind string, threadID int64, awgmURL, awgmAuth string) db.DeployInfo {
 	info := db.DeployInfo{
-		Kind:       req.AgentKind,
-		ThreadID:   req.ThreadID,
-		AWGMURL:    strings.TrimSpace(req.AWGMURL),
-		AWGMAuth:   strings.TrimSpace(req.AWGMAuth),
+		Kind:       agentKind,
+		ThreadID:   threadID,
+		AWGMURL:    strings.TrimSpace(awgmURL),
+		AWGMAuth:   strings.TrimSpace(awgmAuth),
 		DeployMode: "awgm",
 	}
 	if current == nil {

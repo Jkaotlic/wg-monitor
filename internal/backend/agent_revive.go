@@ -13,6 +13,7 @@ import (
 
 	"github.com/anex/wg-monitor/internal/awgmrelay"
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/provision"
 )
 
 // Dashboard "Revive via AWG Manager". A router goes dark when its backend domain
@@ -141,6 +142,22 @@ func runRelayProcess(ctx context.Context, relayPath string, jobJSON []byte, time
 // router's config.yaml to newBackendURL (section-aware awk, comment- and
 // token-preserving, with a backup) and restarts the agent. Run on the router via
 // the awg-manager terminal, so the agent does not need to be reachable.
+//
+// This is the script the NEW repair-repoint flow runs (dashboardHandleRepairRepoint,
+// provision_handler.go), whose job checklist is terminal_connected ->
+// backend_url_rewritten -> service_restarted -> verify_online:
+// terminal_connected is emitted by the Python relay itself (Task 7) once it
+// connects, and verify_online is resolved by the engine's own post-relay poll
+// (runner.go), but nothing else ever emits the middle two — so this script
+// must echo them itself, in order, or the dashboard's checklist stalls
+// forever on a step nothing ever completes. Marker names are the exact
+// provision.Step* constants (steps.go), not hand-typed literals, so this
+// cannot silently drift from what ParseStepLine/the engine actually expects.
+// Emitted via `echo` (matching Task 7's relay convention) rather than some
+// other mechanism: a PTY echoes back the command line it just ran, and
+// runner.go's onLine relies on that echoed line starting with "echo" (the
+// builtin), not the marker itself, so ParseStepLine's strict-prefix match
+// only ever fires on the real output line, never the reflected input.
 func buildReviveScript(newBackendURL string) string {
 	return `set -e
 CFG=/opt/etc/wg-monitor/config.yaml
@@ -152,9 +169,11 @@ awk -v new="$NEW" '
 inb && !done && $0 ~ /^[ \t]+url:/ { match($0, /^[ \t]+/); printf "%surl: %s\n", substr($0, 1, RLENGTH), new; done=1; next }
 { print }
 ' "$CFG" > "$CFG.tmp" && mv "$CFG.tmp" "$CFG"
+echo ` + provision.StepMarker + ` ` + provision.StepBackendURLRewrite + `
 chmod 600 "$CFG"
 echo "backend.url -> $NEW"
 /opt/etc/init.d/S99wg-monitor restart
+echo ` + provision.StepMarker + ` ` + provision.StepServiceRestarted + `
 echo "agent restarted"
 `
 }
@@ -165,6 +184,17 @@ func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// dashboardReviveAgentHandler serves the older POST
+// /v1/dashboard/agents/{nickname}/revive route. It is a thin adapter (Task
+// 10) over the engine's KindRepairRepoint path: after its own
+// request-shape-specific validation (dashboardReviveReq has no `mode` field —
+// this route only ever means repoint), it delegates straight to
+// dashboardHandleRepairRepoint (provision_handler.go) — the SAME function
+// POST /v1/dashboard/agents/{nickname}/repair {"mode":"repoint",...} calls —
+// so the two routes share one implementation rather than two copies that can
+// drift. The response is therefore {job_id, steps}, never the old raw
+// {ok, output, new_backend_url}; the caller polls
+// GET /v1/dashboard/provision/{job_id} like any other provision/repair job.
 func dashboardReviveAgentHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -173,6 +203,10 @@ func dashboardReviveAgentHandler(d Deps) http.HandlerFunc {
 		}
 		if d.DB == nil {
 			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
+			return
+		}
+		if d.Provision.Store == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, "provision_not_configured", "provisioning engine not configured")
 			return
 		}
 		nickname := r.PathValue("nickname")
@@ -193,11 +227,6 @@ func dashboardReviveAgentHandler(d Deps) http.HandlerFunc {
 				"router root password is required (it is used once for the terminal login and never stored)")
 			return
 		}
-		newURL, err := reviveNewBackendURL(req.NewBackendURL, d.PublicBaseURL)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid_backend_url", err.Error())
-			return
-		}
 		user, err := d.DB.Users().GetByNickname(nickname)
 		if err != nil {
 			if errors.Is(err, db.ErrUserNotFound) {
@@ -211,50 +240,19 @@ func dashboardReviveAgentHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		awgmURL := strings.TrimSpace(stringValue(user.AWGMURL))
-		if err := validateDashboardAWGMURL(awgmURL); err != nil || awgmURL == "" {
-			writeJSONError(w, http.StatusBadRequest, "no_awgm_url",
-				"agent has no AWG Manager URL — revive runs over the awg-manager terminal, set awgm_url first (Edit settings)")
-			return
-		}
-		relayPath := d.AWGMRelayPath
-		if relayPath == "" {
-			relayPath = defaultAWGMRelayPath
-		}
-		job := awgmReviveJob{
-			BaseURL:          awgmURL,
-			APIKey:           strings.TrimSpace(req.AWGMAPIKey),
-			Login:            strings.TrimSpace(req.AWGMLogin),
-			Password:         req.AWGMPassword,
-			TerminalUser:     "root",
-			TerminalPassword: req.RootPassword,
-			BootstrapScript:  buildReviveScript(newURL),
-			Mode:             "",
-		}
-		output, runErr := runAWGMRelayJob(r.Context(), relayPath, job)
-		if runErr != nil {
-			if d.Logger != nil {
-				d.Logger.Warn("dashboard revive failed", "nickname", nickname, "err", runErr)
-			}
-			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.WriteHeader(http.StatusBadGateway)
-			_ = json.NewEncoder(w).Encode(struct {
-				OK     bool   `json:"ok"`
-				Error  string `json:"error"`
-				Output string `json:"output"`
-				NewURL string `json:"new_backend_url"`
-			}{OK: false, Error: runErr.Error(), Output: output, NewURL: newURL})
-			return
-		}
-		if d.Logger != nil {
-			d.Logger.Info("dashboard revive ok", "nickname", nickname, "new_backend_url", newURL)
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_ = json.NewEncoder(w).Encode(struct {
-			OK     bool   `json:"ok"`
-			Output string `json:"output"`
-			NewURL string `json:"new_backend_url"`
-		}{OK: true, Output: output, NewURL: newURL})
+
+		// newURL/awgm_url resolution and the actual job build + engine Start
+		// all live in dashboardHandleRepairRepoint — delegating rather than
+		// re-validating keeps this route byte-for-byte in sync with the new
+		// repair-repoint path (right down to the awgm_url error wording).
+		dashboardHandleRepairRepoint(w, r, d, nickname, user, dashboardRepairReq{
+			Mode:          "repoint",
+			RootPassword:  req.RootPassword,
+			NewBackendURL: req.NewBackendURL,
+			AWGMLogin:     req.AWGMLogin,
+			AWGMPassword:  req.AWGMPassword,
+			AWGMAPIKey:    req.AWGMAPIKey,
+		})
 	}
 }
 
