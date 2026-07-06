@@ -2,6 +2,7 @@ package callbacks
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,6 +120,91 @@ func TestHandleDocumentUploadRejectsOversizeDownloadedBody(t *testing.T) {
 	}
 	if len(f.sentMsgs) == 0 || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], "50") || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], ".conf") {
 		t.Fatalf("expected oversize warning, got messages=%q", f.sentMsgs)
+	}
+}
+
+// routeAwareRoundTripper stands in for the whole TG Bot API + file-CDN over
+// a single http.Client without any real network I/O: getFile succeeds, the
+// file download fails at the transport level (simulating a transient
+// network blip while downloading an uploaded .conf — the exact scenario
+// that used to leak the bot-token, see client.go DownloadFile), and
+// sendMessage succeeds while recording the outgoing request body so the
+// test can inspect exactly what text would have reached the chat.
+type routeAwareRoundTripper struct {
+	mu           sync.Mutex
+	sendMessages [][]byte
+}
+
+func (rt *routeAwareRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	path := req.URL.Path
+	switch {
+	case strings.HasSuffix(path, "/getFile"):
+		return stubJSONResponse(`{"ok":true,"result":{"file_path":"documents/x.conf"}}`), nil
+	case strings.Contains(path, "/file/bot"):
+		return nil, errors.New("simulated dial failure")
+	case strings.HasSuffix(path, "/sendMessage"):
+		body, _ := io.ReadAll(req.Body)
+		rt.mu.Lock()
+		rt.sendMessages = append(rt.sendMessages, body)
+		rt.mu.Unlock()
+		return stubJSONResponse(`{"ok":true,"result":{"message_id":1}}`), nil
+	default:
+		return nil, fmt.Errorf("routeAwareRoundTripper: unexpected request path %s", path)
+	}
+}
+
+func stubJSONResponse(body string) *http.Response {
+	return &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
+// TestHandleDocumentUploadDownloadFailureDoesNotLeakBotTokenToChat is the
+// end-to-end regression for the DownloadFile bot-token redaction fix: it
+// wires the REAL tg.Client (not a fake) into the router so the request URLs
+// are built exactly as production does, forces a transport failure on the
+// file-CDN download, and asserts the resulting "не удалось скачать файл: "
+// chat message — captured from the literal outgoing sendMessage HTTP body —
+// never contains the bot token.
+func TestHandleDocumentUploadDownloadFailureDoesNotLeakBotTokenToChat(t *testing.T) {
+	const token = "123456:SECRETTOKEN"
+	rt := &routeAwareRoundTripper{}
+	client := &tg.Client{
+		BaseURL: tg.DefaultBaseURL,
+		Token:   token,
+		HTTP:    &http.Client{Transport: rt},
+	}
+	r := &Router{
+		tg:      client,
+		pending: make(map[int64]*pendingUpload),
+	}
+	threadID := int64(11)
+	user := &db.User{ID: 7, Nickname: "testkeen"}
+	msg := &tg.Message{
+		Chat:            tg.Chat{ID: -100},
+		MessageThreadID: &threadID,
+		Document: &tg.Document{
+			FileID:   "file-1",
+			FileName: "awg11.conf",
+			FileSize: 100,
+		},
+	}
+
+	r.handleDocumentUpload(context.Background(), msg, "per_router", user)
+
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.sendMessages) == 0 {
+		t.Fatal("expected a sendMessage call reporting the download failure")
+	}
+	last := string(rt.sendMessages[len(rt.sendMessages)-1])
+	if strings.Contains(last, token) {
+		t.Fatalf("bot token leaked into chat-bound sendMessage body: %s", last)
+	}
+	if !strings.Contains(last, "не удалось скачать файл") {
+		t.Fatalf("expected download-failure text, got: %s", last)
 	}
 }
 
