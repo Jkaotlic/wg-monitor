@@ -14,6 +14,7 @@ import (
 
 	cmdpkg "github.com/anex/wg-monitor/internal/backend/cmd"
 	"github.com/anex/wg-monitor/internal/backend/db"
+	"github.com/anex/wg-monitor/internal/backend/provision"
 	"github.com/anex/wg-monitor/internal/backend/state"
 	"github.com/anex/wg-monitor/pkg/wire"
 )
@@ -342,6 +343,16 @@ type Deps struct {
 	// dashboard "Revive via AWG Manager" action to drive the router's awg-manager
 	// terminal out-of-band. Empty falls back to defaultAWGMRelayPath.
 	AWGMRelayPath string
+	// Provision holds the async router-provisioning engine's collaborators
+	// (Store + BaseCtx + Relay + LastSeen + Now + Logger — see
+	// internal/backend/provision.Deps). Zero value (nil Store) means the
+	// engine is not wired: the provision-install/repair/poll handlers
+	// respond 503 rather than dereferencing a nil Store, while the register
+	// path (mint token + persist metadata) still works standalone, since it
+	// never touches Store/Relay/Start at all. Constructed and populated in
+	// cmd/backend/main.go, including BaseCtx = the process's own long-lived
+	// context and a ticker driving Store.Sweep (see provision/job.go).
+	Provision provision.Deps
 }
 
 type AlertPolicy struct {
