@@ -1346,6 +1346,102 @@ details.raw-output pre {
   to { transform: rotate(360deg); }
 }
 
+/* Live job progress checklist (renderJobProgress) — shared by provision and,
+   later, repair. One row per job.steps[] entry, in whatever array order the
+   backend template defines (never re-sorted here). */
+.job-progress-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.job-steps {
+  display: grid;
+  gap: 6px;
+}
+
+.job-steps-empty {
+  color: var(--muted);
+}
+
+.job-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 9px 11px;
+  transition: opacity 150ms ease, border-color 150ms ease;
+}
+
+.job-step-glyph {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.job-step-glyph .ti {
+  font-size: 15px;
+}
+
+.job-step-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.job-step-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.job-step-label {
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.job-step-detail {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.job-step[data-status="pending"] {
+  opacity: 0.6;
+}
+
+.job-step[data-status="pending"] .job-step-label {
+  font-weight: 500;
+}
+
+.job-step[data-status="active"] {
+  border-color: var(--accent);
+}
+
+.job-step[data-status="active"] .job-step-glyph {
+  color: var(--accent);
+}
+
+.job-step[data-status="done"] .job-step-glyph {
+  color: var(--green);
+}
+
+.job-step[data-status="failed"] {
+  border-color: rgba(248, 113, 113, 0.5);
+}
+
+.job-step[data-status="failed"] .job-step-glyph {
+  color: var(--red);
+}
+
 /* Sharper, consistent keyboard focus for the whole console. */
 .btn:focus-visible,
 .action-btn:focus-visible,

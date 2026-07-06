@@ -16,7 +16,12 @@
     agentConfig: new Map(),
     cronAutoChecked: new Set(),
     provisionMode: null,
-    provisionStep: "mode"
+    provisionStep: "mode",
+    // jobPoll is non-null while pollJob has a live setInterval ticking against
+    // a provision/repair job (see pollJob/stopJobPoll) — overlayOpen() also
+    // inspects this so auto-refresh pauses for the whole life of a job, not
+    // just incidentally because the result drawer happens to be open.
+    jobPoll: null
   };
 
   const els = {
@@ -185,11 +190,21 @@
     }
   }
 
-  // overlayOpen is true while a modal or the result drawer is showing — used to
-  // pause auto-refresh so it never yanks the UI out from under an open form.
+  // overlayOpen is true while a modal, the result drawer, or a live job poll
+  // is active — used to pause auto-refresh so it never yanks the UI out from
+  // under an open form or a running provision/repair job. The job-poll check
+  // is belt-and-suspenders alongside the resultDrawer check: today
+  // renderJobProgress always renders into the (visible) result drawer, so
+  // the two conditions overlap for the whole life of a job, but gating on
+  // state.jobPoll directly means the pause holds by construction — tied to
+  // "is a job actively being polled", not incidentally to "is this one DOM
+  // node's hidden class toggled" — and survives a future refactor that
+  // renders progress somewhere else. Closes the audit's drawer-clobber
+  // finding for this surface (flagged forward from Task 11's self-review).
   function overlayOpen() {
     return Boolean(document.querySelector(".modal:not(.hidden)")) ||
-      !els.resultDrawer.classList.contains("hidden");
+      !els.resultDrawer.classList.contains("hidden") ||
+      Boolean(state.jobPoll);
   }
 
   function setAutoRefresh(on) {
@@ -1042,26 +1057,245 @@
     }
   }
 
-  // startJobProgress is a minimal placeholder: it renders the seeded step
-  // checklist from the {job_id, steps} response exactly once, in the result
-  // drawer. TODO(B12): replace with a STEP_LABELS-driven renderJobProgress(job)
-  // plus pollJob(jobId) that polls GET /v1/dashboard/provision/{job_id} on an
-  // interval until job.state is no longer "running", updating the checklist
-  // live and rendering the terminal success/failure card (job.hint / redacted
-  // job.tail) — see the provisioning-rework design spec's "Progress view".
+  // STEP_LABELS is the shared declarative registry the provisioning-rework
+  // design spec calls for ("a small declarative registry [{name,label,icon}]"):
+  // name -> {label, icon} for every step-catalog constant provision/steps.go
+  // defines (installSequence + repointSequence's full 10-name set). A step
+  // whose name isn't in this map (e.g. a future step the backend grew before
+  // this bundle was redeployed) still renders safely — stepRow falls back to
+  // the raw, escaped step name — rather than throwing.
+  //
+  // Order here is irrelevant: renderJobProgress always walks job.steps in the
+  // array order the backend's per-kind template defines (steps.go's own
+  // Template), never re-sorted client-side, so a later task reordering
+  // installSequence cannot break this map.
+  //
+  // icon is a decorative tabler glyph shown next to the label; the lite icon
+  // subset this dashboard ships (vendor/tabler-icons-lite.css) only defines
+  // ti-dashboard/refresh/lock/search/x/rocket/terminal/activity/upload/
+  // player-play, so a few of these are the closest available stand-in rather
+  // than a perfect semantic match (e.g. ti-upload for "downloading" — there's
+  // no dedicated download glyph in the subset). Purely cosmetic either way;
+  // the actual done/failed/active signal is stepStatusGlyph, not this icon.
+  const STEP_LABELS = {
+    terminal_connected: { icon: "ti-terminal", label: "Подключение к терминалу" },
+    arch_detected: { icon: "ti-activity", label: "Определение архитектуры" },
+    downloading: { icon: "ti-upload", label: "Скачивание бинаря" },
+    checksum_ok: { icon: "ti-lock", label: "Проверка подписи/суммы" },
+    config_written: { icon: "ti-activity", label: "Запись конфигурации" },
+    init_installed: { icon: "ti-terminal", label: "Установка init-скрипта" },
+    service_started: { icon: "ti-player-play", label: "Запуск сервиса" },
+    backend_url_rewritten: { icon: "ti-refresh", label: "Обновление backend URL" },
+    service_restarted: { icon: "ti-player-play", label: "Перезапуск сервиса" },
+    verify_online: { icon: "ti-rocket", label: "Агент выходит на связь" }
+  };
+
+  // JOB_STATE_HEADERS renders renderJobProgress's header from job.state. Any
+  // value outside this map (defensive only — the backend Job.State is always
+  // one of these three) falls back to the escaped raw state string instead of
+  // rendering "undefined" or throwing.
+  const JOB_STATE_HEADERS = {
+    running: "Установка идёт…",
+    success: "Готово",
+    failed: "Ошибка"
+  };
+
+  // STEP_STATUS_GLYPH is the left-hand status marker for one checklist row —
+  // independent of STEP_LABELS's per-step topic icon. Every value is a fixed
+  // literal (the spinner reuses the existing wg-spin keyframe / ti-refresh
+  // glyph already used by provision-run-status), so none of this ever needs
+  // escaping. Any status outside pending/active/done/failed (defensive only)
+  // falls back to the pending glyph.
+  const STEP_STATUS_GLYPH = {
+    pending: "⏳",
+    active: '<span class="ti ti-refresh spin" aria-hidden="true"></span>',
+    done: "✓",
+    failed: "✗"
+  };
+
+  function stepStatusGlyph(status) {
+    return STEP_STATUS_GLYPH[status] || STEP_STATUS_GLYPH.pending;
+  }
+
+  // stepRow renders one job.steps[] entry. name/status/detail are all
+  // server-controlled, so every one is escaped before insertion — status only
+  // ever feeds a `data-status` attribute here, but it is escaped anyway per
+  // the "escape every dynamic value" rule rather than trusting the backend's
+  // enum shape never to change.
+  function stepRow(step) {
+    const meta = STEP_LABELS[step.name];
+    const label = escapeHTML((meta && meta.label) || step.name);
+    const icon = (meta && meta.icon) || "ti-activity";
+    const statusAttr = escapeAttr(step.status || "pending");
+    const detail = step.detail
+      ? `<div class="job-step-detail">${escapeHTML(step.detail)}</div>`
+      : "";
+    return `
+      <div class="job-step" data-status="${statusAttr}">
+        <span class="job-step-glyph" aria-hidden="true">${stepStatusGlyph(step.status)}</span>
+        <span class="job-step-icon ti ${icon}" aria-hidden="true"></span>
+        <div class="job-step-body">
+          <div class="job-step-label">${label}</div>
+          ${detail}
+        </div>
+      </div>`;
+  }
+
+  function findStep(steps, name) {
+    return (steps || []).find((step) => step.name === name);
+  }
+
+  // failedStepLabel finds the step the engine's fail() (runner.go) marked
+  // StepFailed and returns its escaped human label for the "Упало на «label»"
+  // card. Falls back to a generic phrase if no step is marked failed
+  // (defensive only — the backend always marks exactly one step failed
+  // alongside StateFailed).
+  function failedStepLabel(steps) {
+    const failed = (steps || []).find((step) => step.status === "failed");
+    if (!failed) return "неизвестный шаг";
+    const meta = STEP_LABELS[failed.name];
+    return escapeHTML((meta && meta.label) || failed.name);
+  }
+
+  // jobSuccessCard: "✓ Агент онлайн — <version>, <verify_online detail>" per
+  // the design spec's Progress view section. Both pieces degrade gracefully
+  // (no dangling "—"/"," ) if either is missing — reachable in practice only
+  // for a job kind that never sets Job.Version (e.g. a future repair_repoint
+  // job reusing this same shared renderer, see steps.go's repointSequence).
+  function jobSuccessCard(job) {
+    const verify = findStep(job.steps, "verify_online");
+    const parts = [];
+    if (job.version) parts.push(escapeHTML(job.version));
+    if (verify && verify.detail) parts.push(escapeHTML(verify.detail));
+    const suffix = parts.length ? " — " + parts.join(", ") : "";
+    return `<div class="result-section"><strong>✓ Агент онлайн${suffix}</strong></div>`;
+  }
+
+  // jobFailureCard: "✗ Упало на «label»" + the backend's already-friendly,
+  // already-Russian job.hint, plus a collapsible, already-redacted job.tail
+  // (still escaped here regardless — never trust a raw token wasn't left in
+  // by some future backend change).
+  function jobFailureCard(job) {
+    const label = failedStepLabel(job.steps);
+    const hint = job.hint ? `<p>${escapeHTML(job.hint)}</p>` : "";
+    const card = `<div class="result-section result-error"><strong>✗ Упало на «${label}»</strong>${hint}</div>`;
+    if (!job.tail) return card;
+    return card + `<details class="raw-output"><summary>Журнал терминала</summary><pre>${escapeHTML(job.tail)}</pre></details>`;
+  }
+
+  // renderJobProgress is the shared progress-render component the design spec
+  // calls for: header from job.state, checklist from job.steps walked in
+  // array order (never reordered/sorted here — see STEP_LABELS's doc), plus
+  // the terminal success/failure card once job.state leaves "running". Called
+  // both for the initial seeded {job_id,steps} response (startJobProgress)
+  // and on every pollJob tick, so it always fully replaces resultOutput
+  // rather than incrementally patching it.
+  function renderJobProgress(job) {
+    const steps = Array.isArray(job.steps) ? job.steps : [];
+    const header = JOB_STATE_HEADERS[job.state] || escapeHTML(String(job.state || "unknown"));
+    const rows = steps.length
+      ? steps.map(stepRow).join("")
+      : '<p class="job-steps-empty">Шаги ещё не пришли.</p>';
+    const sections = [
+      `<div class="result-section job-progress-header"><strong>${header}</strong></div>`,
+      `<div class="result-section"><div class="job-steps">${rows}</div></div>`
+    ];
+    if (job.state === "success") {
+      sections.push(jobSuccessCard(job));
+    } else if (job.state === "failed") {
+      sections.push(jobFailureCard(job));
+    }
+    setResultHTML(sections.join(""));
+  }
+
+  // jobPollToken guards a poll's in-flight fetch against acting on stale
+  // data: stopJobPoll bumps it, so a request that resolves after the user
+  // closed the drawer (or a newer job superseded this one) checks its
+  // captured token against the live one before touching state/DOM. Kept as a
+  // plain module variable (not on `state`) — it's pure internal bookkeeping
+  // that nothing else ever reads or renders, unlike state.jobPoll below,
+  // which overlayOpen/stopJobPoll do inspect.
+  let jobPollToken = 0;
+
+  // stopJobPoll clears the live poll's setInterval (if any) and marks no job
+  // as polling. The one function that MUST run on every exit path: terminal
+  // job state, explicit drawer close (closeResultDrawer), and the top of
+  // pollJob itself (superseding whatever ran before it). Safe to call when
+  // nothing is polling.
+  function stopJobPoll() {
+    jobPollToken++;
+    if (state.jobPoll && state.jobPoll.timer != null) {
+      window.clearInterval(state.jobPoll.timer);
+    }
+    state.jobPoll = null;
+  }
+
+  function renderJobPollError() {
+    setResultHTML(
+      '<div class="result-section result-error"><strong>Задача не найдена или истекла</strong>' +
+      "<p>Не удалось получить статус установки — возможно, задача устарела (TTL 30 минут) или сервер временно недоступен. Обнови страницу или запусти заново.</p></div>"
+    );
+  }
+
+  // pollJob polls GET /v1/dashboard/provision/{jobId} every ~1500ms, re-
+  // rendering the checklist on every response, until job.state leaves
+  // "running". A 404 (job TTL-evicted server-side) or any other request
+  // failure (network blip, 5xx, a 401 redirect that hands back null — see
+  // api()) is treated as terminal for the poller: there's no partial-
+  // checklist state worth preserving once the poll itself can't be trusted,
+  // so it shows one clear "not found/expired" card and stops rather than
+  // retrying forever against a job that may never resolve. `busy` skips a
+  // tick if the previous request is still in flight, so a slow response
+  // (longer than the 1500ms cadence) can never pile up overlapping requests.
+  function pollJob(jobId) {
+    stopJobPoll();
+    const token = jobPollToken;
+    const poll = { timer: null, busy: false };
+    state.jobPoll = poll;
+
+    const tick = async () => {
+      if (jobPollToken !== token || poll.busy) return;
+      poll.busy = true;
+      try {
+        const job = await api(`/v1/dashboard/provision/${encodeURIComponent(jobId)}`);
+        if (jobPollToken !== token) return; // superseded/stopped while awaiting
+        poll.busy = false;
+        if (!job) {
+          // api() hands back null on a 401 (it redirects to /dashboard/login
+          // itself rather than throwing) — nothing to render, and no point
+          // continuing to poll a session that's going away.
+          stopJobPoll();
+          return;
+        }
+        renderJobProgress(job);
+        if (job.state !== "running") {
+          stopJobPoll();
+        }
+      } catch (err) {
+        if (jobPollToken !== token) return;
+        renderJobPollError();
+        stopJobPoll();
+      }
+    };
+
+    poll.timer = window.setInterval(tick, 1500);
+    tick();
+  }
+
+  // startJobProgress hands the seeded {job_id, steps} response from
+  // submitProvision("provision") off to the live checklist: render once
+  // immediately (so the drawer never shows a blank flash before the first
+  // poll resolves), then start pollJob — if a job id actually came back
+  // (defensive; should always be present on a 202, but polling with an empty
+  // id is nonsensical).
   function startJobProgress(nickname, res) {
     const jobID = (res && res.job_id) || "";
-    const steps = (res && res.steps) || [];
     els.drawerTitle.textContent = "Provision / " + nickname;
-    const rows = steps.length
-      ? steps.map((step) => `<div class="drawer-kv"><span>${escapeHTML(step.name)}</span><strong>${escapeHTML(step.status)}</strong></div>`).join("")
-      : "<p>Шаги ещё не пришли.</p>";
-    setResultHTML([
-      `<div class="result-section"><strong>Установка запущена — job ${escapeHTML(jobID)}</strong><p>Живой прогресс появится в следующей версии дашборда. Пока — снятый на старте чек-лист ниже.</p></div>`,
-      `<div class="result-section"><div class="drawer-list">${rows}</div></div>`,
-      rawDetails(res)
-    ].join(""));
+    renderJobProgress({ state: "running", steps: (res && res.steps) || [] });
     els.resultDrawer.classList.remove("hidden");
+    if (jobID) {
+      pollJob(jobID);
+    }
   }
 
   async function pollResult(nickname, cmdID, title) {
@@ -1340,6 +1574,17 @@
 
   function setResultHTML(html) {
     els.resultOutput.innerHTML = html;
+  }
+
+  // closeResultDrawer hides the result/progress drawer and stops any live job
+  // poll. The drawer is the only surface pollJob ever renders into, so
+  // closing it must always stop the interval — otherwise it would keep
+  // ticking (and re-fetching) indefinitely against a hidden drawer nobody is
+  // looking at. Both drawer-close entry points (the X button and Escape) call
+  // this instead of toggling the hidden class directly.
+  function closeResultDrawer() {
+    els.resultDrawer.classList.add("hidden");
+    stopJobPoll();
   }
 
   function formatEnrollmentResult(res) {
@@ -1720,7 +1965,7 @@
     els.reviveError.textContent = err.message;
   }));
   els.provisionGroup.addEventListener("change", toggleCustomGroup);
-  els.closeDrawerBtn.addEventListener("click", () => els.resultDrawer.classList.add("hidden"));
+  els.closeDrawerBtn.addEventListener("click", closeResultDrawer);
   els.autoRefreshBtn.addEventListener("click", () => setAutoRefresh(!state.autoRefresh));
   els.backendUpdateBtn.addEventListener("click", () => deployBackend().catch((err) => {
     setButtonState(els.backendUpdateBtn, "error");
@@ -1736,7 +1981,7 @@
       if (!els.editAgentModal.classList.contains("hidden")) { closeEditAgent(); return; }
       if (!els.provisionModal.classList.contains("hidden")) { closeProvision(); return; }
       if (!els.deployModal.classList.contains("hidden")) { closeModal(); return; }
-      if (!els.resultDrawer.classList.contains("hidden")) { els.resultDrawer.classList.add("hidden"); return; }
+      if (!els.resultDrawer.classList.contains("hidden")) { closeResultDrawer(); return; }
       return;
     }
     if (event.key === "/" && !/^(input|select|textarea)$/i.test(event.target.tagName) && !overlayOpen()) {
