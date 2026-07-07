@@ -75,16 +75,6 @@ func (f *fakeProvisionRelay) capturedJobJSON() []byte {
 	return f.jobJSON
 }
 
-// capturedRelayPath returns the relayPath argument the fake was invoked
-// with — used by the agent_deploy_router.go/agent_revive.go adapter tests to
-// pin that resolvedRelayPath's fallback still threads through once those
-// handlers delegate to the engine (Task 10).
-func (f *fakeProvisionRelay) capturedRelayPath() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.relayPath
-}
-
 // deadlineUntil returns how far in the future the captured context's
 // deadline was at call time, and whether a deadline was set at all.
 func (f *fakeProvisionRelay) deadlineUntil() (time.Duration, bool) {
@@ -179,6 +169,18 @@ func stubVerifiedChecksums(t *testing.T, sums map[string]string) {
 		return sums, nil
 	}
 	t.Cleanup(func() { verifiedChecksumsFetcher = orig })
+}
+
+// tokenHashOf reads the stored token_hash for a nickname. Moved here from the
+// now-deleted agent_deploy_router_test.go (Task 14): this file's anti-mint-race
+// and reinstall tests are its only remaining callers.
+func tokenHashOf(t *testing.T, d *db.DB, nick string) string {
+	t.Helper()
+	u, err := d.Users().GetByNickname(nick)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.TokenHash
 }
 
 // --- register --------------------------------------------------------------
