@@ -60,12 +60,213 @@ func TestHTTPGetLimitedUsesSmallerMetadataLimit(t *testing.T) {
 }
 
 func TestSelfUpdateRejectsUnsafeReleaseTag(t *testing.T) {
-	_, err := SelfUpdate(context.Background(), "v0.13.0/../../bad")
+	_, err := SelfUpdate(context.Background(), "v0.13.0/../../bad", "", false)
 	if err == nil {
 		t.Fatal("expected unsafe release tag to fail")
 	}
 	if !strings.Contains(err.Error(), "version") {
 		t.Fatalf("expected version validation error, got %v", err)
+	}
+}
+
+// --- isSelfUpdateDowngrade (unit) -------------------------------------------
+
+func TestIsSelfUpdateDowngrade(t *testing.T) {
+	cases := []struct {
+		name, target, current string
+		want                  bool
+	}{
+		{"rc9 target vs rc10 current is a downgrade", "v0.13.0-rc9", "v0.13.0-rc10", true},
+		{"rc10 target vs rc9 current is not a downgrade (numeric, not lexical, RC compare)", "v0.13.0-rc10", "v0.13.0-rc9", false},
+		{"equal versions are not a downgrade", "v0.13.0-rc9", "v0.13.0-rc9", false},
+		{"lower patch is a downgrade", "v0.13.0", "v0.13.1", true},
+		{"higher patch is not a downgrade", "v0.13.1", "v0.13.0", false},
+		{"empty current is never a downgrade", "v0.13.0-rc9", "", false},
+		{"empty target is never a downgrade", "", "v0.13.0-rc9", false},
+		{"unparseable current is never treated as a downgrade", "v0.13.0-rc9", "not-a-version", false},
+		{"unparseable target is never treated as a downgrade", "not-a-version", "v0.13.0-rc9", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isSelfUpdateDowngrade(c.target, c.current); got != c.want {
+				t.Fatalf("isSelfUpdateDowngrade(%q,%q) = %v, want %v", c.target, c.current, got, c.want)
+			}
+		})
+	}
+}
+
+// --- checkSelfUpdateFreeSpace (fake exec) -----------------------------------
+
+func TestCheckSelfUpdateFreeSpaceSufficient(t *testing.T) {
+	old := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = old })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name != "df" || strings.Join(args, " ") != "-k /opt" {
+			t.Fatalf("unexpected command: %s %s", name, strings.Join(args, " "))
+		}
+		// total=1,000,000 KB, free=900,000 KB: comfortably more than the 64 MB
+		// (65,536 KB) artifact ceiling plus the required 10% headroom.
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000000 100000 900000 10% /opt\n"), nil
+	}
+	if err := checkSelfUpdateFreeSpace(context.Background()); err != nil {
+		t.Fatalf("expected sufficient space to pass, got %v", err)
+	}
+}
+
+func TestCheckSelfUpdateFreeSpaceInsufficient(t *testing.T) {
+	old := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = old })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		// total=100,000 KB (10,000 KB headroom needed); free=70,000 KB; the
+		// artifact ceiling alone (65,536 KB) leaves only 4,464 KB < headroom.
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 30000 70000 30% /opt\n"), nil
+	}
+	err := checkSelfUpdateFreeSpace(context.Background())
+	if err == nil {
+		t.Fatal("expected insufficient space to fail")
+	}
+	if !strings.Contains(err.Error(), "space") {
+		t.Fatalf("expected a space-related error, got %v", err)
+	}
+}
+
+func TestCheckSelfUpdateFreeSpacePropagatesExecError(t *testing.T) {
+	old := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = old })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, errors.New("df: command not found")
+	}
+	if err := checkSelfUpdateFreeSpace(context.Background()); err == nil {
+		t.Fatal("expected df exec error to propagate")
+	}
+}
+
+// --- SelfUpdate: downgrade guard wiring -------------------------------------
+
+func TestSelfUpdateRejectsDowngradeWithoutAllow(t *testing.T) {
+	// repoBase deliberately unreachable: the downgrade guard must reject
+	// before any network activity, so this must never actually be dialed.
+	_, err := SelfUpdate(context.Background(), "v0.13.0-rc9", "v0.13.0-rc10", false, "https://127.0.0.1.invalid.example/unreachable")
+	if err == nil {
+		t.Fatal("expected downgrade to be rejected")
+	}
+	if !strings.Contains(err.Error(), "older") {
+		t.Fatalf("expected a downgrade-specific error, got %v", err)
+	}
+}
+
+func TestSelfUpdateAllowsDowngradeOverrideAndProceedsPastGuard(t *testing.T) {
+	oldArch := selfUpdateDetectArch
+	selfUpdateDetectArch = func() (string, error) { return "arm64", nil }
+	t.Cleanup(func() { selfUpdateDetectArch = oldArch })
+	oldValidate := selfUpdateValidateRepoBase
+	selfUpdateValidateRepoBase = func(repoBase, _ string) (string, error) { return repoBase, nil }
+	t.Cleanup(func() { selfUpdateValidateRepoBase = oldValidate })
+
+	// No handlers registered: SelfUpdate should reach (and fail at) the
+	// checksums.txt fetch — proof that the downgrade guard let it past the
+	// version compare instead of rejecting it outright.
+	srv := httptest.NewServer(http.NotFoundHandler())
+	defer srv.Close()
+
+	_, err := SelfUpdate(context.Background(), "v0.13.0-rc9", "v0.13.0-rc10", true, srv.URL)
+	if err == nil {
+		t.Fatal("expected the (unhandled) checksums.txt fetch to fail")
+	}
+	if strings.Contains(err.Error(), "older") {
+		t.Fatalf("allow_downgrade should have bypassed the guard, got downgrade error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "checksums.txt") {
+		t.Fatalf("expected a checksums.txt download error proving guard bypass, got %v", err)
+	}
+}
+
+// --- SelfUpdate: free-space guard wiring ------------------------------------
+
+func selfUpdateFakeChecksumsServer(t *testing.T, assetName, sha string, assetHandler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/checksums.txt") {
+			_, _ = w.Write([]byte(sha + "  " + assetName + "\n"))
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/"+assetName) {
+			assetHandler(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	return httptest.NewServer(mux)
+}
+
+func TestSelfUpdateRejectsInsufficientOptSpaceBeforeDownloadingBinary(t *testing.T) {
+	oldArch := selfUpdateDetectArch
+	selfUpdateDetectArch = func() (string, error) { return "arm64", nil }
+	t.Cleanup(func() { selfUpdateDetectArch = oldArch })
+	oldValidate := selfUpdateValidateRepoBase
+	selfUpdateValidateRepoBase = func(repoBase, _ string) (string, error) { return repoBase, nil }
+	t.Cleanup(func() { selfUpdateValidateRepoBase = oldValidate })
+	oldExec := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = oldExec })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 30000 70000 30% /opt\n"), nil
+	}
+
+	assetHit := false
+	srv := selfUpdateFakeChecksumsServer(t, "wg-monitor-agent-linux-arm64", strings.Repeat("ab", 32),
+		func(w http.ResponseWriter, r *http.Request) {
+			assetHit = true
+			_, _ = w.Write([]byte("binary-bytes"))
+		})
+	defer srv.Close()
+
+	_, err := SelfUpdate(context.Background(), "v0.13.0-rc50", "", false, srv.URL)
+	if err == nil {
+		t.Fatal("expected insufficient /opt space to fail")
+	}
+	if !strings.Contains(err.Error(), "space") {
+		t.Fatalf("expected a space-related error, got %v", err)
+	}
+	if assetHit {
+		t.Fatal("insufficient space must refuse before requesting the binary asset")
+	}
+}
+
+func TestSelfUpdateProceedsPastFreeSpaceCheckWhenSufficient(t *testing.T) {
+	oldArch := selfUpdateDetectArch
+	selfUpdateDetectArch = func() (string, error) { return "arm64", nil }
+	t.Cleanup(func() { selfUpdateDetectArch = oldArch })
+	oldValidate := selfUpdateValidateRepoBase
+	selfUpdateValidateRepoBase = func(repoBase, _ string) (string, error) { return repoBase, nil }
+	t.Cleanup(func() { selfUpdateValidateRepoBase = oldValidate })
+	oldExec := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = oldExec })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000000 100000 900000 10% /opt\n"), nil
+	}
+
+	assetHit := false
+	srv := selfUpdateFakeChecksumsServer(t, "wg-monitor-agent-linux-arm64", strings.Repeat("ab", 32),
+		func(w http.ResponseWriter, r *http.Request) {
+			assetHit = true
+			// Deliberately fail the request itself (rather than serve real
+			// bytes) so this test stays scoped to "did the space check let us
+			// reach the download" without also exercising the download/swap
+			// machinery — that is covered end-to-end separately.
+			http.Error(w, "boom", http.StatusInternalServerError)
+		})
+	defer srv.Close()
+
+	_, err := SelfUpdate(context.Background(), "v0.13.0-rc50", "", false, srv.URL)
+	if err == nil {
+		t.Fatal("expected the deliberately-failing asset download to fail")
+	}
+	if strings.Contains(err.Error(), "space") {
+		t.Fatalf("sufficient space must not be refused, got %v", err)
+	}
+	if !assetHit {
+		t.Fatal("expected SelfUpdate to reach the binary asset request once space is sufficient")
 	}
 }
 
