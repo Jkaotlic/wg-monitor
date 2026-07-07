@@ -120,6 +120,10 @@ func main() {
 	})
 
 	mobileLifecycle := cfg.Heartbeat.MobileLifecycle == nil || *cfg.Heartbeat.MobileLifecycle
+	muteCutoffHour := 9
+	if cfg.State.MuteCutoffHour != nil {
+		muteCutoffHour = *cfg.State.MuteCutoffHour
+	}
 	watcher := heartbeat.NewWatcher(d, disp, heartbeat.Config{
 		StaleAfter:       time.Duration(cfg.Heartbeat.StaleAfterSec) * time.Second,
 		StaleAfterStatic: time.Duration(cfg.Heartbeat.StaleAfterStaticSec) * time.Second,
@@ -174,7 +178,7 @@ func main() {
 		ChatID:             cfg.Telegram.ChatID,
 		ExtraChatIDs:       cfg.Telegram.ExtraChatIDs,
 		AdminUserID:        cfg.Telegram.AdminUserID,
-		MuteCutoffHour:     cfg.State.MuteCutoffHour,
+		MuteCutoffHour:     muteCutoffHour,
 		BackendVersion:     Version,
 		PublicBaseURL:      cfg.PublicBaseURL,
 		UI:                 uiSnap,

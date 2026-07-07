@@ -651,3 +651,49 @@ func TestEnsureTopic_NoWelcomeWhenKeyboardNil(t *testing.T) {
 		t.Errorf("want 0 welcome (nil keyboard), got %d", len(ftg.welcomeSends))
 	}
 }
+
+// TestDispatcherSetNow_OverridesLastAlertClock pins C14: Dispatcher exposes an
+// injectable Now seam (mirroring heartbeat.Watcher / realert.Poller /
+// digest.Poller) instead of calling time.Now() directly, so HARD/offline
+// timestamps are deterministic under test.
+func TestDispatcherSetNow_OverridesLastAlertClock(t *testing.T) {
+	d := newDB(t)
+	tok := "3333333333333333333333333333333333333333333333333333333333333333"
+	uid, _ := d.Users().Insert("clockuser", tok, "1.1.1.1", "awg0")
+	tg := &fakeTG{topicID: 555}
+	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	disp.SetNow(func() time.Time { return fixed })
+
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(fixed)},
+	}
+	if err := disp.Handle(context.Background(), uid, "clockuser", "awg_handshake", tr, chk("awg_handshake", "fail", nil)); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	saved, err := d.State().Get(uid, "awg_handshake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.LastAlertAt == nil {
+		t.Fatal("LastAlertAt nil")
+	}
+	if saved.LastAlertAt.Sub(fixed).Abs() > time.Second {
+		t.Errorf("LastAlertAt = %v, want ~%v (injected clock)", saved.LastAlertAt, fixed)
+	}
+
+	// SetNow(nil) restores the real wall clock (mirrors Watcher/Poller.SetNow).
+	disp.SetNow(nil)
+	before := time.Now()
+	if err := disp.SendOffline(context.Background(), uid, "clockuser", time.Minute); err != nil {
+		t.Fatalf("SendOffline: %v", err)
+	}
+	afterState, err := d.State().Get(uid, "agent_heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterState.LastAlertAt == nil || afterState.LastAlertAt.Before(before.Add(-time.Second)) {
+		t.Errorf("SetNow(nil) should restore real clock; LastAlertAt=%v, want ~now", afterState.LastAlertAt)
+	}
+}

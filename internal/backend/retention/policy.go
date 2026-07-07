@@ -54,9 +54,19 @@ func (p *Policy) Run(ctx context.Context) {
 	<-ctx.Done()
 }
 
+// runLoop fires fn every `every`, first after `initialDelay`. Scheduling is
+// fixed-phase: each fire time is computed as the previous scheduled time plus
+// `every` (using the real wall clock, since it drives a real time.Timer), NOT
+// as "now + every" after fn returns. That distinction matters because fn's
+// own duration would otherwise accumulate as drift on every cycle — a slow
+// VACUUM or prune would permanently push every later fire back by its
+// runtime. If fn overruns a whole `every` window, the next fire is scheduled
+// immediately (no negative/zero timer) rather than trying to catch up on
+// every missed tick.
 func (p *Policy) runLoop(ctx context.Context, name string, every, initialDelay time.Duration, fn func(context.Context) error) {
 	timer := time.NewTimer(initialDelay)
 	defer timer.Stop()
+	next := time.Now().Add(initialDelay)
 	for {
 		select {
 		case <-ctx.Done():
@@ -66,7 +76,12 @@ func (p *Policy) runLoop(ctx context.Context, name string, every, initialDelay t
 		if err := fn(ctx); err != nil {
 			p.Logger.Warn("retention: operation failed", "op", name, "err", err)
 		}
-		timer.Reset(every)
+		next = next.Add(every)
+		delay := time.Until(next)
+		if delay < 0 {
+			delay = 0
+		}
+		timer.Reset(delay)
 	}
 }
 

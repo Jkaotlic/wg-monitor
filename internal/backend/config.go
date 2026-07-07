@@ -139,7 +139,11 @@ type StateConfig struct {
 	RealertEverySec        int `yaml:"realert_every_sec"`
 	MobileRealertEverySec  int `yaml:"mobile_realert_every_sec"`
 	RealertTickSec         int `yaml:"realert_tick_sec"`
-	MuteCutoffHour         int `yaml:"mute_cutoff_hour"`
+	// MuteCutoffHour — 0-23, MSK hour before which HARD alerts are muted.
+	// Pointer type so omitted YAML (nil) applies the default (9) while an
+	// explicit `0` (literal midnight) is honoured instead of being mistaken
+	// for "not configured".
+	MuteCutoffHour *int `yaml:"mute_cutoff_hour"`
 }
 
 // UIConfig controls v0.6.0 ReplyKeyboard / smart-reply behaviour (spec §8).
@@ -271,8 +275,9 @@ func LoadConfig(path string) (*Config, error) {
 	if cfg.State.RealertTickSec == 0 {
 		cfg.State.RealertTickSec = 300
 	}
-	if cfg.State.MuteCutoffHour == 0 {
-		cfg.State.MuteCutoffHour = 9
+	if cfg.State.MuteCutoffHour == nil {
+		v := 9
+		cfg.State.MuteCutoffHour = &v
 	}
 	// Rate-limit defaults: 0.2 r/s × burst 5 = "1 every 5s sustained, burst
 	// of 5". Reporter interval is 60s so legitimate traffic uses ~1/60 r/s
