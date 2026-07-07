@@ -633,7 +633,14 @@ func fetchDashboardLatestVersion(ctx context.Context) (string, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "wg-monitor-dashboard/"+serverVersion)
-	client := &http.Client{Timeout: 4 * time.Second}
+	// Shares releaseFetchTransport (release_verify.go): api.github.com is the
+	// same dual-stack GitHub infra whose IPv6 path blackholes TLS from some
+	// networks, and this call gates provisioning (provision_handler.go resolves
+	// the version here first). Pinning IPv4 removes the stall that made the old
+	// 4s deadline fire; the timeout is loosened to 12s as a backstop for a
+	// genuinely slow-but-working handshake — the 5-minute cache above keeps
+	// cold fetches rare, so the dashboard stays responsive.
+	client := &http.Client{Timeout: 12 * time.Second, Transport: releaseFetchTransport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("github releases: %w", err)
