@@ -110,7 +110,11 @@ button {
 
 .brand-subtitle,
 .eyebrow {
-  color: var(--faint);
+  /* --faint (#5c6b85) on --surface (#141a26) is ~3.2:1 — fails WCAG AA's
+     4.5:1 for normal text at this 12px/600 size (not "large text" under the
+     18.66px-bold threshold). --muted (#8a99b3) is ~6.0:1 on the same
+     background, so it passes comfortably without introducing a new token. */
+  color: var(--muted);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0;
@@ -566,7 +570,6 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
-  text-transform: none;
   letter-spacing: 0.01em;
 }
 
@@ -1284,7 +1287,7 @@ details.raw-output pre {
   margin-bottom: 8px;
 }
 
-/* --- 2026-07-06 provisioning rework: Provision wizard stepper --- */
+/* --- 2026-07-06 provisioning rework: Provision + Repair wizard stepper (shared by both wizards) --- */
 .mode-choice-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1329,7 +1332,7 @@ details.raw-output pre {
   line-height: 1.45;
 }
 
-.provision-run-status {
+.wizard-run-status {
   display: grid;
   justify-items: center;
   gap: 10px;
@@ -1338,12 +1341,18 @@ details.raw-output pre {
   text-align: center;
 }
 
-.provision-run-status .ti {
+.wizard-run-status .ti {
   font-size: 26px;
   color: var(--accent);
 }
 
-.provision-run-status .spin {
+/* Bare .spin (not scoped to .wizard-run-status) so the same rotation covers
+   every spinning ti-refresh glyph in the app: the provision/repair wizards'
+   run-status banner, the result drawer's job-poll-status "reconnecting"
+   badge, and the job checklist's active-step glyph (STEP_STATUS_GLYPH.active
+   in app.js) — previously only the wizard banner spun and the other two
+   rendered a static, non-animated icon. */
+.spin {
   animation: wg-spin 900ms linear infinite;
 }
 

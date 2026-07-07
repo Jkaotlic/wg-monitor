@@ -19,3 +19,12 @@
 .ti-activity::before { content: "~"; }
 .ti-upload::before { content: "^"; }
 .ti-player-play::before { content: ">"; }
+.ti-player-pause::before { content: "P"; }
+.ti-arrow-up-circle::before { content: "U"; }
+.ti-router::before { content: "N"; }
+.ti-device-floppy::before { content: "F"; }
+.ti-edit::before { content: "E"; }
+.ti-external-link::before { content: "L"; }
+.ti-server::before { content: "="; }
+.ti-clipboard::before { content: "C"; }
+.ti-settings::before { content: "*"; }

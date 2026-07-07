@@ -24,7 +24,13 @@
     // a provision/repair job (see pollJob/stopJobPoll) — overlayOpen() also
     // inspects this so auto-refresh pauses for the whole life of a job, not
     // just incidentally because the result drawer happens to be open.
-    jobPoll: null
+    jobPoll: null,
+    // modalReturnFocus holds document.activeElement from just before a modal
+    // opened (see rememberFocus/restoreFocus below), so closing the modal can
+    // return focus to whatever triggered it instead of leaving it wherever
+    // the browser's focus-fixup rule drops it once the focused element's
+    // subtree is hidden (usually <body>).
+    modalReturnFocus: null
   };
 
   const els = {
@@ -212,6 +218,68 @@
     return Boolean(document.querySelector(".modal:not(.hidden)")) ||
       !els.resultDrawer.classList.contains("hidden") ||
       Boolean(state.jobPoll);
+  }
+
+  // FOCUSABLE_SELECTOR / isVisible / focusableIn / rememberFocus / restoreFocus
+  // / trapModalTab implement a small, dependency-free focus trap shared by
+  // every .modal (deploy / provision / edit-agent / agent-config / repair —
+  // including the provision and repair wizards' multi-step panels).
+  // trapModalTab always re-queries the *currently* open ".modal:not(.hidden)"
+  // and its visible focusable descendants on every Tab press rather than
+  // caching a list at open time, so it stays correct as a wizard advances
+  // through steps (each step toggles "hidden" on its own panel, changing
+  // which fields are actually focusable) without any per-modal bookkeeping.
+  const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+  function isVisible(el) {
+    return Boolean(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+  }
+
+  function focusableIn(panel) {
+    return Array.from(panel.querySelectorAll(FOCUSABLE_SELECTOR)).filter(isVisible);
+  }
+
+  // rememberFocus/restoreFocus bracket every open*/close* modal function pair:
+  // rememberFocus runs just before a modal's "hidden" class is removed (so it
+  // captures whatever triggered the open — a row action button, a drawer
+  // link, ...); restoreFocus runs after the "hidden" class is re-added on
+  // close, returning focus there instead of leaving it wherever the browser
+  // dropped it once the previously-focused element's subtree got hidden.
+  function rememberFocus() {
+    state.modalReturnFocus = document.activeElement;
+  }
+
+  function restoreFocus() {
+    const target = state.modalReturnFocus;
+    state.modalReturnFocus = null;
+    if (target && typeof target.focus === "function" && document.contains(target)) {
+      target.focus();
+    }
+  }
+
+  // trapModalTab keeps Tab/Shift+Tab cycling within the open modal's
+  // .modal-panel instead of escaping to the page behind the backdrop. A
+  // no-op when no modal is open, so it is safe to call unconditionally from
+  // the global keydown handler below.
+  function trapModalTab(event) {
+    const modal = document.querySelector(".modal:not(.hidden)");
+    if (!modal) return;
+    const panel = modal.querySelector(".modal-panel");
+    if (!panel) return;
+    const focusable = focusableIn(panel);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !panel.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !panel.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
   }
 
   function setAutoRefresh(on) {
@@ -975,6 +1043,7 @@
     setButtonState(els.provisionIdentityNextBtn, "idle");
     renderGroupOptions();
     provisionShowStep("mode");
+    rememberFocus();
     els.provisionModal.classList.remove("hidden");
   }
 
@@ -983,6 +1052,7 @@
     state.provisionMode = null;
     setButtonState(els.provisionStartBtn, "idle");
     setButtonState(els.provisionIdentityNextBtn, "idle");
+    restoreFocus();
   }
 
   // submitProvision posts to the one provisioning endpoint for both wizard
@@ -1077,13 +1147,15 @@
   // Template), never re-sorted client-side, so a later task reordering
   // installSequence cannot break this map.
   //
-  // icon is a decorative tabler glyph shown next to the label; the lite icon
-  // subset this dashboard ships (vendor/tabler-icons-lite.css) only defines
-  // ti-dashboard/refresh/lock/search/x/rocket/terminal/activity/upload/
-  // player-play, so a few of these are the closest available stand-in rather
-  // than a perfect semantic match (e.g. ti-upload for "downloading" — there's
-  // no dedicated download glyph in the subset). Purely cosmetic either way;
-  // the actual done/failed/active signal is stepStatusGlyph, not this icon.
+  // icon is a decorative tabler glyph shown next to the label. The icons
+  // picked here deliberately stick to a small subset (ti-dashboard/refresh/
+  // lock/search/x/rocket/terminal/activity/upload/player-play) even though
+  // vendor/tabler-icons-lite.css now defines more glyphs (added for other
+  // dashboard buttons), so a few of these are the closest available
+  // stand-in rather than a perfect semantic match (e.g. ti-upload for
+  // "downloading" — there's no dedicated download glyph in the subset).
+  // Purely cosmetic either way; the actual done/failed/active signal is
+  // stepStatusGlyph, not this icon.
   const STEP_LABELS = {
     terminal_connected: { icon: "ti-terminal", label: "Подключение к терминалу" },
     arch_detected: { icon: "ti-activity", label: "Определение архитектуры" },
@@ -1109,10 +1181,11 @@
 
   // STEP_STATUS_GLYPH is the left-hand status marker for one checklist row —
   // independent of STEP_LABELS's per-step topic icon. Every value is a fixed
-  // literal (the spinner reuses the existing wg-spin keyframe / ti-refresh
-  // glyph already used by provision-run-status), so none of this ever needs
-  // escaping. Any status outside pending/active/done/failed (defensive only)
-  // falls back to the pending glyph.
+  // literal (the spinner reuses the existing wg-spin keyframe via the bare
+  // .spin rule in app.css, shared with .wizard-run-status and
+  // #jobPollStatus's reconnect badge), so none of this ever needs escaping.
+  // Any status outside pending/active/done/failed (defensive only) falls
+  // back to the pending glyph.
   const STEP_STATUS_GLYPH = {
     pending: "⏳",
     active: '<span class="ti ti-refresh spin" aria-hidden="true"></span>',
@@ -1408,6 +1481,7 @@
     els.deployTitle.textContent = "Custom version / " + nickname;
     els.deployVersionInput.value = latestVersion();
     setButtonState(els.confirmDeployBtn, "idle");
+    rememberFocus();
     els.deployModal.classList.remove("hidden");
     els.deployVersionInput.focus();
   }
@@ -1416,6 +1490,7 @@
     els.deployModal.classList.add("hidden");
     state.deployAgent = null;
     setButtonState(els.confirmDeployBtn, "idle");
+    restoreFocus();
   }
 
   function openEditAgent(nickname) {
@@ -1434,6 +1509,7 @@
     els.editAgentExpectedMAC.value = agent.expected_mac || "";
     els.editAgentError.textContent = "";
     setButtonState(els.saveAgentBtn, "idle");
+    rememberFocus();
     els.editAgentModal.classList.remove("hidden");
     els.editAgentAWGMURL.focus();
   }
@@ -1442,6 +1518,7 @@
     els.editAgentModal.classList.add("hidden");
     state.editAgent = null;
     setButtonState(els.saveAgentBtn, "idle");
+    restoreFocus();
   }
 
   async function saveAgentEdit() {
@@ -1492,6 +1569,7 @@
     els.cfgAllowFirmware.value = cfg.allow_firmware_install ? "true" : "false";
     els.agentConfigError.textContent = "";
     setButtonState(els.applyAgentConfigBtn, "idle");
+    rememberFocus();
     els.agentConfigModal.classList.remove("hidden");
     els.cfgIntervalSec.focus();
   }
@@ -1500,6 +1578,7 @@
     els.agentConfigModal.classList.add("hidden");
     state.agentConfigNick = null;
     setButtonState(els.applyAgentConfigBtn, "idle");
+    restoreFocus();
   }
 
   async function applyAgentConfig() {
@@ -1595,6 +1674,7 @@
     els.repairVersionField.classList.add("hidden");
     setButtonState(els.repairStartBtn, "idle");
     repairShowStep("mode");
+    rememberFocus();
     els.repairModal.classList.remove("hidden");
   }
 
@@ -1603,6 +1683,7 @@
     state.repairNick = null;
     state.repairMode = null;
     setButtonState(els.repairStartBtn, "idle");
+    restoreFocus();
   }
 
   // submitRepair posts to POST /v1/dashboard/agents/{nick}/repair for
@@ -2099,7 +2180,8 @@
     window.setTimeout(() => setButtonState(els.backendUpdateBtn, "idle"), 3000);
   }));
 
-  // Keyboard: Esc closes the top-most overlay; "/" focuses search.
+  // Keyboard: Esc closes the top-most overlay; Tab traps focus inside an open
+  // modal (see trapModalTab); "/" focuses search.
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
       if (!els.repairModal.classList.contains("hidden")) { closeRepair(); return; }
@@ -2108,6 +2190,10 @@
       if (!els.provisionModal.classList.contains("hidden")) { closeProvision(); return; }
       if (!els.deployModal.classList.contains("hidden")) { closeModal(); return; }
       if (!els.resultDrawer.classList.contains("hidden")) { closeResultDrawer(); return; }
+      return;
+    }
+    if (event.key === "Tab") {
+      trapModalTab(event);
       return;
     }
     if (event.key === "/" && !/^(input|select|textarea)$/i.test(event.target.tagName) && !overlayOpen()) {
