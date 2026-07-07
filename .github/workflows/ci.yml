@@ -68,6 +68,18 @@ jobs:
       # dispatch surfaces; G101 stays enabled and false positives are annotated.
       - run: gosec -severity high -exclude=G702,G703,G704 -exclude-dir=.gomodcache -exclude-dir=.gopath -exclude-dir=.gocache ./...
 
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 # 2026.1
+      - run: staticcheck ./...
+
   grype:
     name: grype
     runs-on: ubuntu-latest
