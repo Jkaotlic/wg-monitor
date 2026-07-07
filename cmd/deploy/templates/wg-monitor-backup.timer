@@ -1,6 +1,6 @@
 [Unit]
 Description=Daily wg-monitor Telegram backup
-Documentation=https://github.com/anex/wg-monitor
+Documentation=https://github.com/Jkaotlic/wg-monitor
 
 [Timer]
 # Send the recovery bundle to the admin's private Telegram chat every morning.

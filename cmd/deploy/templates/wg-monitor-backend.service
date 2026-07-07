@@ -1,6 +1,6 @@
 [Unit]
 Description=wg-monitor backend
-Documentation=https://github.com/anex/wg-monitor
+Documentation=https://github.com/Jkaotlic/wg-monitor
 After=network-online.target
 Wants=network-online.target
 StartLimitBurst=5
