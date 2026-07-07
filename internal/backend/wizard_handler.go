@@ -519,6 +519,10 @@ func wizardPutAgentHandler(d Deps) http.HandlerFunc {
 // depending on router-side DNS/reachability to GitHub.
 type wizardDeployReq struct {
 	TargetVersion string `json:"target_version"`
+	// AllowDowngrade overrides the anti-downgrade rejection below (same
+	// escape hatch as the provisioning repair/reinstall flow's field of the
+	// same name — see isVersionDowngrade in provision_handler.go).
+	AllowDowngrade bool `json:"allow_downgrade"`
 }
 
 type wizardDeployResp struct {
@@ -531,6 +535,8 @@ type backendUpdateRequest struct {
 	RepoResolveIP     string `json:"repo_resolve_ip,omitempty"`
 	TrustedBackendURL string `json:"trusted_backend_url,omitempty"`
 	RequestedAt       string `json:"requested_at"`
+	// AllowDowngrade overrides the anti-downgrade rejection below.
+	AllowDowngrade bool `json:"allow_downgrade,omitempty"`
 }
 
 type wizardCommandReq struct {
@@ -653,6 +659,20 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
+		// Anti-downgrade floor: reject a target older than the version the
+		// agent's own heartbeat last reported (users.last_deployed_version),
+		// unless the operator explicitly opts in. Mirrors the provisioning
+		// install/repair path's isVersionDowngrade guard (same helper, so
+		// rc9-vs-rc10 compares correctly — see its doc comment) so this
+		// legacy self_update-over-/v1/cmd deploy path cannot be used to slip
+		// an older, previously-patched build past an operator who forgot
+		// this flag existed here too.
+		if !req.AllowDowngrade && isVersionDowngrade(req.TargetVersion, stringValue(u.LastDeployedVersion)) {
+			writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
+				fmt.Sprintf("target version %s is older than the currently installed %s — pass allow_downgrade to override",
+					req.TargetVersion, stringValue(u.LastDeployedVersion)))
+			return
+		}
 		if pending := strings.TrimSpace(stringValue(u.PendingVersion)); pending != "" {
 			writeJSONError(w, http.StatusConflict, "deploy_pending", "agent already has pending deploy "+pending)
 			return
@@ -725,6 +745,18 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		req.TargetVersion = targetVersion
+		// Anti-downgrade floor: reject a target older than the currently
+		// running backend binary (serverVersion, set once at startup via
+		// SetVersion) unless the operator explicitly opts in. Same
+		// isVersionDowngrade helper as the agent deploy path above and the
+		// provisioning install/repair flow, so rc9-vs-rc10 compares
+		// correctly instead of sorting lexically.
+		if !req.AllowDowngrade && isVersionDowngrade(req.TargetVersion, serverVersion) {
+			writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
+				fmt.Sprintf("target version %s is older than the running backend %s — pass allow_downgrade to override",
+					req.TargetVersion, serverVersion))
+			return
+		}
 		repoBaseURL, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
 		if !ok {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
