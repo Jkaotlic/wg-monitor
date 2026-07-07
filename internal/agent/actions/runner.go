@@ -754,7 +754,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", err.Error(), payload
 		}
-		return "ok", out, payload
+		return routeApplyCommandStatus(out), out, payload
 	case "route_delete_plan":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -776,7 +776,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if err != nil {
 			return "err", err.Error(), payload
 		}
-		return "ok", out, payload
+		return routeApplyCommandStatus(out), out, payload
 	case "hrneo_inventory":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
@@ -844,6 +844,21 @@ func routeRebindCommandStatus(out string) string {
 	}
 	if res.DNS.Failed+res.Static.Failed+res.HRNeo.Failed > 0 ||
 		len(res.DNS.Errors)+len(res.Static.Errors)+len(res.HRNeo.Errors) > 0 {
+		return "partial"
+	}
+	return "ok"
+}
+
+// routeApplyCommandStatus downgrades route_add/route_delete's command status
+// to "partial" when the underlying wire.RouteApplyResult carries a non-empty
+// Warning (e.g. the mutation applied but the post-change RoutingRefresh or
+// HR-Neo restart failed) — mirroring routeRebindCommandStatus above.
+func routeApplyCommandStatus(out string) string {
+	var res wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		return "ok"
+	}
+	if strings.TrimSpace(res.Warning) != "" {
 		return "partial"
 	}
 	return "ok"
