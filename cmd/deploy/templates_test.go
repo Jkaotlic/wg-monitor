@@ -203,6 +203,56 @@ func TestBackupServiceSendsTelegramBundle(t *testing.T) {
 	}
 }
 
+// TestEmbeddedTemplatesContainNoCarriageReturns guards against a Windows
+// checkout (core.autocrlf=true) reintroducing CRLF into a *.tmpl/*.timer
+// file that isn't pinned to eol=lf in .gitattributes: go:embed captures
+// whatever is on disk at build time, and a stray \r breaks `set -eu` under
+// dash on the router.
+func TestEmbeddedTemplatesContainNoCarriageReturns(t *testing.T) {
+	entries, err := templatesFS.ReadDir("templates")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("embedded templates FS is empty")
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		raw, err := templatesFS.ReadFile("templates/" + name)
+		if err != nil {
+			t.Fatalf("read embedded template %s: %v", name, err)
+		}
+		if strings.ContainsRune(string(raw), '\r') {
+			t.Errorf("embedded template %s contains a carriage return (CRLF checkout corruption) - pin eol=lf in .gitattributes", name)
+		}
+	}
+}
+
+// TestRenderedAWGMBootstrapScriptContainsNoCarriageReturns renders the
+// bootstrap script the way production code does and checks the fully
+// rendered output (template + interpolated agent.yaml + init script), not
+// just the raw .tmpl file on disk.
+func TestRenderedAWGMBootstrapScriptContainsNoCarriageReturns(t *testing.T) {
+	script, err := RenderAWGMBootstrapScript(AWGMBootstrapParams{
+		Nickname:     "crlfcheck",
+		BackendURL:   "https://wg.example.test",
+		RawToken:     strings.Repeat("a", 64),
+		Version:      "v0.13.0-rc1",
+		DownloadURL:  "https://example.test/wg-monitor-linux-arm64",
+		ChecksumName: "wg-monitor-linux-arm64",
+		ExpectedSHA:  strings.Repeat("b", 64),
+	})
+	if err != nil {
+		t.Fatalf("RenderAWGMBootstrapScript: %v", err)
+	}
+	if strings.ContainsRune(script, '\r') {
+		t.Fatalf("rendered awgm-bootstrap script contains a carriage return; dash on the router fails on `set -eu\\r`:\n%q", script)
+	}
+}
+
 func TestRenderBackupServiceSupportsDockerLayout(t *testing.T) {
 	got, err := RenderBackupService(BackupServiceParams{
 		User:            "user",
