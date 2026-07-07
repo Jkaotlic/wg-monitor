@@ -43,10 +43,23 @@ type Dispatcher struct {
 	// after the bottom reply keyboard. Nil keeps the legacy one-message
 	// welcome for tests and compatibility callers.
 	WelcomeVisibleKeyboard func() any
+	// now is the injectable wall-clock seam (mirrors heartbeat.Watcher /
+	// realert.Poller / digest.Poller): production leaves it as time.Now,
+	// tests override via SetNow for deterministic HARD/offline timestamps.
+	now func() time.Time
 }
 
 func NewDispatcher(d *db.DB, tg TGSender, cfg Config) *Dispatcher {
-	return &Dispatcher{d: d, tg: tg, cfg: cfg}
+	return &Dispatcher{d: d, tg: tg, cfg: cfg, now: time.Now}
+}
+
+// SetNow overrides the wall-clock seam for deterministic tests.
+func (di *Dispatcher) SetNow(fn func() time.Time) {
+	if fn == nil {
+		di.now = time.Now
+		return
+	}
+	di.now = fn
 }
 
 // Handle reacts to one FSM transition for one (user, check). The full
@@ -57,7 +70,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 	case state.Noop, state.Soft:
 		return di.d.State().Save(userID, checkName, tr.Next)
 	case state.SoftFlap:
-		today := time.Now().UTC().Format("2006-01-02")
+		today := di.now().UTC().Format("2006-01-02")
 		if err := di.d.State().IncSoftFlap(userID, checkName, today); err != nil {
 			return err
 		}
@@ -123,7 +136,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
 		}
 		next.LastAlertMsgID = &mid
-		now := time.Now()
+		now := di.now()
 		next.LastAlertAt = &now
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
 			// Full Save failed (DB momentarily locked / disk error). The HARD
@@ -166,7 +179,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			Nickname:    nickname,
 			CheckName:   checkName,
 			HardSince:   hardSince,
-			RecoveredAt: time.Now(),
+			RecoveredAt: di.now(),
 			Check:       check,
 		})
 		sendRecovery := func(ref TopicRef) (int64, error) {
@@ -188,7 +201,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 // not the load-bearing payload, and we'd rather send a slightly thinner
 // alert than no alert at all.
 func (di *Dispatcher) collectNeighbors(userID int64, excludeCheck string) []NeighborSummary {
-	rows, err := di.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", time.Now().Add(-NeighborFreshWindow))
+	rows, err := di.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", di.now().Add(-NeighborFreshWindow))
 	if err != nil {
 		slog.Warn("collectNeighbors: events lookup failed", "user_id", userID, "err", err)
 		return nil
@@ -232,7 +245,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	if err != nil {
 		return err
 	}
-	now := time.Now()
+	now := di.now()
 	hardSince := now.Add(-since)
 	text := FormatRouterOffline(nickname, since)
 	opts := []tg.KeyboardOption{}

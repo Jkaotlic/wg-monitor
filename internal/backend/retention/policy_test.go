@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,6 +200,60 @@ func TestPolicy_Checkpoint_Runs(t *testing.T) {
 	}
 	if err := p.checkpoint(context.Background()); err != nil {
 		t.Fatalf("checkpoint should succeed on empty DB: %v", err)
+	}
+}
+
+// TestPolicy_RunLoop_FixedPhase_NoDriftFromSlowOp pins C14: runLoop must not
+// let a slow fn push subsequent fires later by fn's own duration each cycle
+// (the old code called timer.Reset(every) AFTER fn returned, so the cadence
+// drifted by the operation's runtime every tick). With a fixed-phase
+// schedule, fire N should land near start+N*every regardless of how long fn
+// takes (as long as it stays under `every`).
+func TestPolicy_RunLoop_FixedPhase_NoDriftFromSlowOp(t *testing.T) {
+	p := &Policy{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	const every = 100 * time.Millisecond
+	const opDuration = 40 * time.Millisecond
+	const wantFires = 5
+
+	var mu sync.Mutex
+	var fireTimes []time.Time
+	ctx, cancel := context.WithCancel(context.Background())
+	fn := func(context.Context) error {
+		mu.Lock()
+		fireTimes = append(fireTimes, time.Now())
+		n := len(fireTimes)
+		mu.Unlock()
+		time.Sleep(opDuration)
+		if n >= wantFires {
+			cancel()
+		}
+		return nil
+	}
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		p.runLoop(ctx, "test", every, 0, fn)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runLoop did not stop after cancel")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(fireTimes) < wantFires {
+		t.Fatalf("expected >= %d fires, got %d", wantFires, len(fireTimes))
+	}
+	const tolerance = 40 * time.Millisecond
+	for i, ft := range fireTimes {
+		want := start.Add(time.Duration(i) * every)
+		if drift := ft.Sub(want); drift < -tolerance || drift > tolerance {
+			t.Errorf("fire[%d] drift = %v (fired at %v after start, want ~%v after start)",
+				i, drift, ft.Sub(start), want.Sub(start))
+		}
 	}
 }
 

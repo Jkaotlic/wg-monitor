@@ -171,11 +171,39 @@ telegram:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.State.MuteCutoffHour != 9 {
-		t.Errorf("MuteCutoffHour default: got %d, want 9", cfg.State.MuteCutoffHour)
+	if cfg.State.MuteCutoffHour == nil || *cfg.State.MuteCutoffHour != 9 {
+		t.Errorf("MuteCutoffHour default: got %v, want 9", cfg.State.MuteCutoffHour)
 	}
 	if cfg.State.RealertTickSec != 300 {
 		t.Errorf("RealertTickSec default: got %d, want 300", cfg.State.RealertTickSec)
+	}
+}
+
+// TestLoadConfig_MuteCutoffHourZeroHonored pins C14: MuteCutoffHour==0 must be
+// distinguishable from "not configured" so an operator can set literal
+// midnight. A pointer type lets nil mean "apply the default (9)" while an
+// explicit 0 in YAML is honoured as-is.
+func TestLoadConfig_MuteCutoffHourZeroHonored(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "test-token")
+	cfgPath := writeFile(t, dir, "cfg.yaml", `
+db_path: /tmp/x.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100
+  admin_user_id: 12345
+state:
+  mute_cutoff_hour: 0
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.State.MuteCutoffHour == nil {
+		t.Fatal("MuteCutoffHour: explicit 0 was overwritten to nil")
+	}
+	if *cfg.State.MuteCutoffHour != 0 {
+		t.Errorf("MuteCutoffHour: got %d, want 0 (honoured, not defaulted to 9)", *cfg.State.MuteCutoffHour)
 	}
 }
 
