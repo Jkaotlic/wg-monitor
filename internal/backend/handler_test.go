@@ -1161,6 +1161,155 @@ func TestCmdResult_DispatchesBulkNotifier(t *testing.T) {
 	}
 }
 
+// TestCmdResult_BulkRelayRespectsPoolBound pins C4: the bulk-result relay
+// goroutine spawned by cmdResultHandler must share the bounded relaySem pool
+// with spawnRelay (not a raw `go func`), so a fleet-wide bulk-result storm
+// can't spawn unbounded TG-calling goroutines. Saturate the pool the same
+// way any other relay site would, post a bulk cmd result, and assert
+// BulkNotifier is NOT invoked while the pool is full — proving the goroutine
+// went through the shared semaphore instead of firing unconditionally. Then
+// drain the pool and confirm the same kind of request relays normally.
+func TestCmdResult_BulkRelayRespectsPoolBound(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	fillDeps := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	// t.Cleanup (not defer) so a t.Fatalf mid-test still unblocks the fillers
+	// instead of leaking 32 goroutines that would wedge relaySem for every
+	// later test in this package.
+	t.Cleanup(closeRelease)
+	for i := 0; i < relayConcurrencyLimit; i++ {
+		spawnRelay(fillDeps, "fill", func(ctx context.Context) { <-release })
+	}
+
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	tok := "bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01"
+	if _, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	bn := &fakeBulkNotifier{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "router_doctor", ChatID: 1, MessageID: 2, BulkID: "fleet-1", BulkNick: "vasya"}}
+	mux := NewMux(Deps{
+		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:           d,
+		Dispatcher:   &fakeDisp{},
+		CommandSink:  sink,
+		BulkNotifier: bn,
+		Thresholds:   state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	post := func(id string) *http.Response {
+		body, _ := json.Marshal(wire.CommandResult{ID: id, Status: "ok", Output: "doctor ok", DurationMs: 1})
+		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	resp := post("bulk-cmd-1")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	// The result POST itself must return promptly regardless of relay-pool
+	// state (async relay must never block the agent's request). Give a
+	// would-be unbounded goroutine ample time to run before asserting.
+	time.Sleep(150 * time.Millisecond)
+	bn.mu.Lock()
+	called := bn.called
+	bn.mu.Unlock()
+	if called != 0 {
+		t.Fatalf("BulkNotifier called %d time(s) while relay pool was saturated (limit=%d); want 0 (relay must be dropped, not spawned unbounded)", called, relayConcurrencyLimit)
+	}
+
+	closeRelease()
+	waitRelayPoolEmpty(t)
+
+	// Once the pool drains, the same bulk result path must relay normally.
+	sink.mu.Lock()
+	sink.originRef = &cmdpkg.MessageRef{Action: "router_doctor", ChatID: 1, MessageID: 2, BulkID: "fleet-1", BulkNick: "vasya"}
+	sink.mu.Unlock()
+	resp = post("bulk-cmd-2")
+	resp.Body.Close()
+	got := waitForRelay(t, func() int {
+		bn.mu.Lock()
+		defer bn.mu.Unlock()
+		return bn.called
+	}, 1, 500*time.Millisecond)
+	if got != 1 {
+		t.Fatalf("BulkNotifier called %d times after pool drained, want 1", got)
+	}
+}
+
+// TestCmdResult_DefaultRelayRespectsPoolBound is the same proof as above for
+// the generic TGNotifier ("default" case) relay — the highest-traffic of the
+// 7 cmd-result relay sites, since it fires for any action without a
+// specialized notifier.
+func TestCmdResult_DefaultRelayRespectsPoolBound(t *testing.T) {
+	waitRelayPoolEmpty(t)
+	fillDeps := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(closeRelease)
+	for i := 0; i < relayConcurrencyLimit; i++ {
+		spawnRelay(fillDeps, "fill", func(ctx context.Context) { <-release })
+	}
+
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	tok := "be01be01be01be01be01be01be01be01be01be01be01be01be01be01be01be01"
+	if _, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	rc := &relayCapture{}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "diag_now", ChatID: 1, MessageID: 2}}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		TGNotifier:  rc,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, _ := json.Marshal(wire.CommandResult{ID: "d1", Status: "ok", Output: "diag ok", DurationMs: 1})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	if chunks := rc.snapshot().chunks; len(chunks) != 0 {
+		t.Fatalf("default TGNotifier relayed %d chunk(s) while relay pool was saturated; want 0 (dropped)", len(chunks))
+	}
+
+	closeRelease()
+	waitRelayPoolEmpty(t)
+}
+
 func testCmdResultDispatchesMaintNotifier(t *testing.T, action string) {
 	t.Helper()
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))

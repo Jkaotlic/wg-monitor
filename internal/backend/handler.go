@@ -184,6 +184,18 @@ var relaySem = make(chan struct{}, relayConcurrencyLimit)
 // notification is dropped (and logged) instead of spawning an unbounded
 // goroutine — best-effort TG notices are the right thing to shed under a storm.
 func spawnRelay(d Deps, label string, fn func(ctx context.Context)) {
+	spawnRelayTimeout(d, label, 10*time.Second, fn)
+}
+
+// spawnRelayTimeout is spawnRelay with a caller-chosen timeout, sharing the
+// same bounded relaySem pool. The /v1/cmd/result notifier relays (bulk,
+// routes, maint, pingcheck, opkg, default TG — C4) use a longer 30s budget
+// than the /v1/report wake/deploy relays because they can carry larger
+// rendered payloads (fleet-batch edits, opkg output); this preserves each
+// site's already-tuned timeout while still bounding total relay concurrency
+// through the one shared pool, so a fleet-wide resume/bulk-result storm
+// can't spawn unbounded TG-calling goroutines (BE-02/C4).
+func spawnRelayTimeout(d Deps, label string, timeout time.Duration, fn func(ctx context.Context)) {
 	select {
 	case relaySem <- struct{}{}:
 	default:
@@ -192,7 +204,7 @@ func spawnRelay(d Deps, label string, fn func(ctx context.Context)) {
 	}
 	go func() {
 		defer func() { <-relaySem }()
-		ctx, cancel := context.WithTimeout(relayParent(d), 10*time.Second)
+		ctx, cancel := context.WithTimeout(relayParent(d), timeout)
 		defer cancel()
 		fn(ctx)
 	}()
@@ -963,14 +975,12 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			incCmdResultRelay()
 			if ref.BulkID != "" {
 				if d.BulkNotifier != nil {
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-bulk", 30*time.Second, func(ctx context.Context) {
 						if err := d.BulkNotifier.NotifyBulkCommandResult(ctx, ref, res, uid); err != nil {
 							incTGError()
 							d.Logger.Warn("bulk notifier failed", "cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "err", err)
 						}
-					}(ref, res)
+					})
 				} else {
 					d.Logger.Warn("bulk notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "nickname", nick)
@@ -980,42 +990,36 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			switch ref.Action {
 			case "route_status", "tunnels_status", "route_rebind", "route_templates", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory", "hrneo_doctor":
 				if d.RoutesNotifier != nil {
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-routes", 30*time.Second, func(ctx context.Context) {
 						if err := d.RoutesNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
 							incTGError()
 							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
-					}(ref, res)
+					})
 				} else {
 					d.Logger.Warn("routes notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			case "version_audit", "firmware_status", "service_restart", "firmware_install":
 				if d.MaintNotifier != nil {
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-maint", 30*time.Second, func(ctx context.Context) {
 						if err := d.MaintNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
 							incTGError()
 							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
-					}(ref, res)
+					})
 				} else {
 					d.Logger.Warn("maint notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			case "pingcheck_status", "pingcheck_toggle":
 				if d.PingCheckNotifier != nil {
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-pingcheck", 30*time.Second, func(ctx context.Context) {
 						if err := d.PingCheckNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
 							incTGError()
 							d.Logger.Warn("pingcheck notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
-					}(ref, res)
+					})
 				} else {
 					d.Logger.Warn("pingcheck notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
@@ -1026,28 +1030,24 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					if maxChars == 0 {
 						maxChars = 3500
 					}
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult, maxChars int) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-opkg", 30*time.Second, func(ctx context.Context) {
 						if err := d.OpkgNotifier.NotifyOpkgResult(ctx, ref, res, uid, maxChars); err != nil {
 							incTGError()
 							d.Logger.Warn("opkg notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
 						}
-					}(ref, res, maxChars)
+					})
 				} else if d.TGNotifier != nil {
 					// Graceful fallback: no repair buttons, but still relay the text.
 					maxChars := d.UI.DiagMaxChars
 					if maxChars == 0 {
 						maxChars = 3500
 					}
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult, uid int64, maxChars int) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-opkg-fallback", 30*time.Second, func(ctx context.Context) {
 						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, uid, maxChars); err != nil {
 							incTGError()
 							d.Logger.Warn("tg notify failed (opkg fallback)", "cmd_id", res.ID, "err", err)
 						}
-					}(ref, res, uid, maxChars)
+					})
 				} else {
 					d.Logger.Warn("opkg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
@@ -1058,14 +1058,12 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					if maxChars == 0 {
 						maxChars = 3500
 					}
-					go func(ref cmdpkg.MessageRef, res wire.CommandResult, uid int64, maxChars int) {
-						ctx, cancel := context.WithTimeout(relayParent(d), 30*time.Second)
-						defer cancel()
+					spawnRelayTimeout(d, "cmd-default", 30*time.Second, func(ctx context.Context) {
 						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, uid, maxChars); err != nil {
 							incTGError()
 							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
 						}
-					}(ref, res, uid, maxChars)
+					})
 				} else {
 					d.Logger.Warn("tg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)

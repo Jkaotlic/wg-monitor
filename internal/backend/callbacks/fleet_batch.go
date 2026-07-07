@@ -15,6 +15,10 @@ import (
 type fleetBatchStore struct {
 	mu      sync.Mutex
 	batches map[string]*fleetBatch
+	// senders holds one coalescing sender per BulkID (C4): concurrent
+	// NotifyBulkCommandResult calls for the same batch must not each fire
+	// their own EditMessageText — see batchSender.
+	senders map[string]*batchSender
 }
 
 type fleetBatch struct {
@@ -36,7 +40,7 @@ type fleetBatchItem struct {
 }
 
 func newFleetBatchStore() *fleetBatchStore {
-	return &fleetBatchStore{batches: make(map[string]*fleetBatch)}
+	return &fleetBatchStore{batches: make(map[string]*fleetBatch), senders: make(map[string]*batchSender)}
 }
 
 func (s *fleetBatchStore) start(b *fleetBatch) {
@@ -62,6 +66,98 @@ func (s *fleetBatchStore) update(batchID, nick, status, summary string) (*fleetB
 	item.Summary = summary
 	cp := cloneFleetBatch(b)
 	return cp, true
+}
+
+// snapshot returns a point-in-time clone of the live batch state. Used by
+// batchSender.sendCoalesced to always render the freshest data at actual
+// send time, rather than a copy captured back when some earlier caller's own
+// update() ran — which could already be stale by the time its turn to
+// (re-)send comes up under concurrent updates (C4).
+func (s *fleetBatchStore) snapshot(batchID string) (*fleetBatch, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.batches[batchID]
+	if !ok {
+		return nil, false
+	}
+	return cloneFleetBatch(b), true
+}
+
+// senderFor returns the coalescing sender for batchID, creating one on first
+// use. One sender per BulkID for the lifetime of the process — mirrors
+// batches' own never-reaped lifecycle (fleet batches are created only by
+// operator-triggered fleet commands, not per-agent traffic, so this stays
+// small and bounded).
+func (s *fleetBatchStore) senderFor(batchID string) *batchSender {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sd, ok := s.senders[batchID]
+	if !ok {
+		sd = &batchSender{}
+		s.senders[batchID] = sd
+	}
+	return sd
+}
+
+// batchSender coalesces concurrent edits for a single fleet BulkID into at
+// most one in-flight Telegram EditMessageText call, with at most one
+// trailing send queued behind it (C4). Multiple agents in a fleet-wide
+// command can report results back within milliseconds of each other;
+// without this, each result raced its own EditMessageText call directly off
+// the map snapshot it read outside any lock, so a slower network round trip
+// for an EARLIER snapshot could land after a later one and show stale
+// progress (or flap) in the TG message.
+//
+// The first concurrent caller becomes the "active" sender and loops
+// re-rendering + sending the latest snapshot until no update arrived during
+// its last send; every other concurrent caller just marks the sender dirty
+// and returns immediately — the active sender's next loop iteration
+// re-fetches the live snapshot (via get) and delivers it, so the final edit
+// always reflects the newest state regardless of which goroutine's update()
+// happened to run last.
+type batchSender struct {
+	mu      sync.Mutex
+	sending bool
+	dirty   bool
+}
+
+// sendCoalesced ensures at most one send (network call) is in flight at a
+// time for this sender. get must return the freshest known snapshot (safe to
+// call repeatedly/concurrently — see fleetBatchStore.snapshot). If another
+// goroutine is already sending, this call marks it dirty and returns nil
+// immediately without touching the network; the active sender is guaranteed
+// to loop at least once more before it stops, so the update is never lost.
+//
+// ctx is the caller-that-became-the-active-sender's context and is reused
+// for every loop iteration (including any trailing coalesced sends) — the
+// active sender's own goroutine doesn't return, and hence its ctx isn't
+// cancelled, until the whole loop finishes.
+func (s *batchSender) sendCoalesced(ctx context.Context, get func() *fleetBatch, send func(context.Context, *fleetBatch) error) error {
+	s.mu.Lock()
+	if s.sending {
+		s.dirty = true
+		s.mu.Unlock()
+		return nil
+	}
+	s.sending = true
+	s.mu.Unlock()
+
+	var firstErr error
+	for {
+		if snap := get(); snap != nil {
+			if err := send(ctx, snap); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		s.mu.Lock()
+		if !s.dirty {
+			s.sending = false
+			s.mu.Unlock()
+			return firstErr
+		}
+		s.dirty = false
+		s.mu.Unlock()
+	}
 }
 
 func cloneFleetBatch(b *fleetBatch) *fleetBatch {
@@ -146,12 +242,20 @@ func (r *Router) NotifyBulkCommandResult(ctx context.Context, ref cmdpkg.Message
 	if summary == "" {
 		summary = res.Status
 	}
-	b, ok := r.fleetBatches.update(ref.BulkID, nick, status, summary)
-	if !ok {
+	if _, ok := r.fleetBatches.update(ref.BulkID, nick, status, summary); !ok {
 		return fmt.Errorf("fleet batch not found: %s", ref.BulkID)
 	}
-	kb := panelResultKb()
-	return r.tg.EditMessageText(ctx, b.ChatID, b.MessageID, b.render(), "", &kb)
+	sender := r.fleetBatches.senderFor(ref.BulkID)
+	return sender.sendCoalesced(ctx,
+		func() *fleetBatch {
+			b, _ := r.fleetBatches.snapshot(ref.BulkID)
+			return b
+		},
+		func(sendCtx context.Context, snap *fleetBatch) error {
+			kb := panelResultKb()
+			return r.tg.EditMessageText(sendCtx, snap.ChatID, snap.MessageID, snap.render(), "", &kb)
+		},
+	)
 }
 
 func newFleetBatchID() string {
