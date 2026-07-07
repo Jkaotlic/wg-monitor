@@ -28,10 +28,6 @@ import (
 
 var Version = "0.8.0-tunnel-import"
 
-func telegramCommandMenu() []tg.BotCommand {
-	return telegramOperatorCommandMenu()
-}
-
 func telegramOperatorCommandMenu() []tg.BotCommand {
 	return tg.OperatorBotCommands()
 }

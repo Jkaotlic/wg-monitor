@@ -75,9 +75,7 @@ func (p *Poller) recordSendOutcome(userID int64, checkName string, ok bool) (log
 	p.sendFailMu.Lock()
 	defer p.sendFailMu.Unlock()
 	if ok {
-		if _, had := p.sendFailCount[key]; had {
-			delete(p.sendFailCount, key)
-		}
+		delete(p.sendFailCount, key)
 		return false, 0
 	}
 	p.sendFailCount[key]++

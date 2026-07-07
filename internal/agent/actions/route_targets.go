@@ -167,20 +167,6 @@ func routeBindMatches(bind string, aliases map[string]bool) bool {
 	return bind != "" && aliases[bind]
 }
 
-func routeAnyAliasKnown(ep routeEndpoint, known map[string]bool) bool {
-	for _, alias := range ep.Aliases {
-		if known[alias] {
-			return true
-		}
-	}
-	return false
-}
-
-func routeAnyAliasMapped(ep routeEndpoint, known map[string]string) bool {
-	_, ok := routeMappedID(ep, known)
-	return ok
-}
-
 func routeMappedID(ep routeEndpoint, known map[string]string) (string, bool) {
 	for _, alias := range ep.Aliases {
 		if id, ok := known[alias]; ok {

@@ -225,12 +225,6 @@ func connectivityTunnelUsable(t awgmgr.Tunnel) bool {
 	return status == "" || routingStatusEnabled(status)
 }
 
-// pickDefaultTunnelIface is kept for older tests/callers; new connectivity
-// checks should use pickConnectivityTunnelIface.
-func pickDefaultTunnelIface(ctx context.Context, c *awgmgr.Client) (string, string) {
-	return pickConnectivityTunnelIface(ctx, c, nil)
-}
-
 func pickHydraRouteIface(ctx context.Context, c *awgmgr.Client, targets []connectivityTarget, labels map[string]string, ifaceByAlias map[string]string, policyDefaultIface string) (string, string) {
 	if len(targets) == 0 {
 		return "", ""

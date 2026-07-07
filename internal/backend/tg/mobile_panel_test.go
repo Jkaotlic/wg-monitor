@@ -30,7 +30,7 @@ func TestMobileFleetPanelText_FutureLastSeenIsClockSkew(t *testing.T) {
 		{Nickname: "carvan", Kind: "mobile", LastSeenAt: &future},
 	}, now)
 
-	if strings.Contains(text, "Ð² ÑÐµÑ‚Ð¸") {
+	if strings.Contains(text, "Ð² Ñ\u0081ÐµÑ‚Ð¸") {
 		t.Fatalf("future last_seen must not render as online:\n%s", text)
 	}
 	if !strings.Contains(text, "clock") {

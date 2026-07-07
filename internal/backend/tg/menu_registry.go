@@ -140,10 +140,7 @@ func AdminPanelHomeKeyboard() InlineKeyboardMarkup {
 	for _, row := range adminPanelHomeRows {
 		buttons := make([]InlineKeyboardButton, 0, len(row))
 		for _, b := range row {
-			buttons = append(buttons, InlineKeyboardButton{
-				Text:         b.Text,
-				CallbackData: b.CallbackData,
-			})
+			buttons = append(buttons, InlineKeyboardButton(b))
 		}
 		rows = append(rows, buttons)
 	}
@@ -159,19 +156,6 @@ func OperatorMenuHelpText() string {
 		lines = append(lines, "  "+item.Label+" - "+item.Description)
 	}
 	return strings.Join(lines, "\n")
-}
-
-func commandsFromItems(items []BotMenuItem) []BotCommand {
-	out := make([]BotCommand, 0, len(items))
-	seen := map[string]bool{}
-	for _, item := range items {
-		if item.Command == "" || seen[item.Command] {
-			continue
-		}
-		seen[item.Command] = true
-		out = append(out, BotCommand{Command: item.Command, Description: item.Description})
-	}
-	return out
 }
 
 func commandsFromItemsInOrder(items []BotMenuItem, order []string) []BotCommand {

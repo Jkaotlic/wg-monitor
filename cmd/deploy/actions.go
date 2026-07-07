@@ -2391,8 +2391,8 @@ var cliNicknameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
 // vpsUserExists checks /var/lib/wg-monitor/state.db for a row with the given
 // nickname via sqlite3 (which is part of the standard VPS toolchain — same
 // binary the CLI uses). Returns (exists, err); a missing DB or sqlite3 binary
-// is treated as a real error so the caller doesn't silently fall through to
-// vpsAddUser and clobber an existing row.
+// is treated as a real error so the caller doesn't silently fall through and
+// clobber an existing row.
 //
 // SQL string is built with shell single-quote escaping for the outer shell
 // (sqlite3 is invoked via SSH `sh -c`) AND SQL-double-single-quote for the
@@ -2430,23 +2430,6 @@ func ensureRemoteSQLite3(bs *SSH) error {
 		return fmt.Errorf("install sqlite3 rc=%d stderr=%q stdout=%q", rc, strings.TrimSpace(stderr), strings.TrimSpace(out))
 	}
 	PrintOK("sqlite3 установлен")
-	return nil
-}
-
-func ensureRemoteAPTCommand(bs *SSH, cmdName, pkgName string) error {
-	if _, _, rc, _ := bs.Run("command -v " + cmdName + " >/dev/null 2>&1"); rc == 0 {
-		return nil
-	}
-	PrintWarn(cmdName + " not installed on VPS; installing package " + pkgName)
-	cmd := "export DEBIAN_FRONTEND=noninteractive; apt-get update && apt-get install -y " + pkgName
-	out, stderr, rc, err := bs.Run(cmd)
-	if err != nil {
-		return fmt.Errorf("install %s ssh transport: %w", pkgName, err)
-	}
-	if rc != 0 {
-		return fmt.Errorf("install %s rc=%d stderr=%q stdout=%q", pkgName, rc, strings.TrimSpace(stderr), strings.TrimSpace(out))
-	}
-	PrintOK(pkgName + " installed")
 	return nil
 }
 
@@ -2618,57 +2601,6 @@ func chooseAgentForAction(state *State, nickname, label string) (*AgentState, er
 	return &state.Agents[idx-1], nil
 }
 
-// vpsAddUser invokes /usr/local/bin/wg-monitor-cli add-user on the VPS and
-// extracts the raw token from its stdout. The CLI prints exactly one
-// "Token (raw, save now — only shown once): <hex>\n" line — see
-// cmd/wg-monitor-cli/main.go runAddUser. Returns an actionable error if the
-// CLI binary isn't installed (operator either ran wizard before that release
-// or wiped /usr/local/bin).
-//
-// awg_iface / expected_exit_ip are passed as fixed placeholders: both fields
-// are deprecated in the agent (silently ignored after the awg-manager pivot,
-// see internal/agent/config.go::AWGCheckConfig), but wg-monitor-cli still
-// requires non-empty values for the DB schema. Kind ("static"/"mobile") IS
-// load-bearing: backend's heartbeat watcher uses StaleAfterMobileSec for
-// mobile-kind users.
-func vpsAddUser(bs *SSH, nick, kind string) (string, error) {
-	if _, _, rc, _ := bs.Run("test -x /usr/local/bin/wg-monitor-cli"); rc != 0 {
-		return "", fmt.Errorf(
-			"/usr/local/bin/wg-monitor-cli не установлен на VPS — на этом VPS он добавлялся вручную. " +
-				"Поставь его вручную (scp wg-monitor-cli-linux-amd64 → /usr/local/bin/wg-monitor-cli, chmod +x) и повтори [3].")
-	}
-	cmd := fmt.Sprintf(
-		`/usr/local/bin/wg-monitor-cli add-user --nickname=%s --awg-iface=awg0 --expected-exit-ip=0.0.0.0 --kind=%s`,
-		shellSingleQuote(nick), shellSingleQuote(kind),
-	)
-	out, stderr, rc, err := bs.Run(cmd)
-	if err != nil {
-		return "", fmt.Errorf("ssh transport: %w", err)
-	}
-	if rc != 0 {
-		return "", fmt.Errorf("wg-monitor-cli add-user rc=%d stderr=%q", rc, strings.TrimSpace(stderr))
-	}
-	tok := extractRawTokenFromAddUserOutput(out)
-	if tok == "" {
-		return "", fmt.Errorf("wg-monitor-cli add-user отработал rc=0, но raw-токен не найден в stdout: %q", out)
-	}
-	PrintOK("wg-monitor-cli add-user выполнился, raw-токен получен")
-	return tok, nil
-}
-
-// addUserTokenLineRe matches the raw-token line printed by wg-monitor-cli.
-// Format is fixed (cmd/wg-monitor-cli/main.go:113). Token is 64 hex chars
-// (32-byte rand → hex.EncodeToString).
-var addUserTokenLineRe = regexp.MustCompile(`Token \(raw, save now[^)]*\):\s*([0-9a-fA-F]{64})`)
-
-func extractRawTokenFromAddUserOutput(stdout string) string {
-	m := addUserTokenLineRe.FindStringSubmatch(stdout)
-	if len(m) < 2 {
-		return ""
-	}
-	return m[1]
-}
-
 // shellSingleQuote wraps s in POSIX single quotes for safe inclusion in a
 // remote `sh -c` command. ASCII-only inputs (validated upstream) make the
 // escape trivial — we just close the quote, emit a backslash-quote, and
@@ -2755,12 +2687,6 @@ func orDefault(s, def string) string {
 		return def
 	}
 	return s
-}
-
-func randomHexToken(nBytes int) string {
-	b := make([]byte, nBytes)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 // actionSyncVPS pulls the fleet list from /v1/wizard/agents and merges into

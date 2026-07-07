@@ -159,67 +159,6 @@ func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, ki
 	return nil
 }
 
-func (r *Router) panelDoctorAll(ctx context.Context, q *tg.CallbackQuery) {
-	users, err := r.d.Users().GetAll()
-	if err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось прочитать роутеры")
-		return
-	}
-	if r.command == nil || r.cmdSink == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command channel не настроен")
-		return
-	}
-	var queued, noTopic int
-	var failLines []string
-	targetChatID := q.Message.Chat.ID
-	if r.cfg.ChatID != 0 {
-		targetChatID = r.cfg.ChatID
-	}
-	for _, u := range users {
-		if u.TelegramThreadID == nil {
-			noTopic++
-			continue
-		}
-		ackText := "⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…"
-		ackMID, sendErr := r.tg.SendMessageWithReplyKeyboard(ctx, targetChatID, u.TelegramThreadID, ackText, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		if sendErr != nil {
-			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, sendErr))
-			continue
-		}
-		if err := r.command.DispatchFromMessage(ctx, "router_doctor", u.ID, targetChatID, ackMID, u.TelegramThreadID); err != nil {
-			failLines = append(failLines, fmt.Sprintf("❌ %s: %v", u.Nickname, err))
-			continue
-		}
-		queued++
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "🎛 Панель управления\n\n🩺 Проверка всех роутеров\n\nИтог:\n  • ✅ Поставлено в очередь: %d", queued)
-	if noTopic > 0 {
-		fmt.Fprintf(&b, "\n  • ⚠ Без топика: %d", noTopic)
-	}
-	if len(failLines) > 0 {
-		fmt.Fprintf(&b, "\n  • ❌ Ошибок: %d", len(failLines))
-		b.WriteString("\n\nОшибки:")
-		for _, line := range failLines {
-			b.WriteString("\n  ")
-			b.WriteString(line)
-		}
-	}
-	if queued > 0 {
-		b.WriteString("\n\nЧто будет дальше:\n  • Результаты придут ответами в соответствующие топики.")
-	}
-	text := b.String()
-	if len(text) > 4096 {
-		text = text[:4093] + "..."
-	}
-	kb := panelResultKb()
-	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
-		slog.Warn("panel doctor all result edit failed", "err", err)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
 func (r *Router) panelAuditAll(ctx context.Context, q *tg.CallbackQuery) {
 	r.startFleetCommand(ctx, q, "Version audit", "version_audit", nil)
 }

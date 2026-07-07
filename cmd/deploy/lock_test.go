@@ -56,7 +56,6 @@ func TestAcquirePIDLockFileRejectsSecondHolderInSameProcess(t *testing.T) {
 	}
 
 	release()
-	release = func() {}
 	if releaseAgain, err := acquirePIDLockFile(path); err != nil {
 		t.Fatalf("lock after release: %v", err)
 	} else {

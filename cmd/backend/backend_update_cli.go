@@ -186,14 +186,6 @@ func backendUpdateTrustedURL(configPath, pendingTrustedURL string) string {
 	return cfg.PublicBaseURL
 }
 
-func httpGetBytes(ctx context.Context, url string) ([]byte, error) {
-	return httpGetBytesLimited(ctx, url, maxBackendUpdateArtifactSize)
-}
-
-func httpGetBytesLimited(ctx context.Context, url string, maxBytes int64) ([]byte, error) {
-	return httpGetBytesLimitedWithClient(ctx, newBackendUpdatePrimaryHTTPClient(90), url, maxBytes)
-}
-
 func httpGetBytesLimitedWithClient(ctx context.Context, c *http.Client, url string, maxBytes int64) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

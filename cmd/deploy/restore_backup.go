@@ -98,6 +98,9 @@ func inspectRestoreBackup(archivePath string, validateBackendYAML func(string) e
 			cleanup()
 			return nil, nil, fmt.Errorf("tar backup archive: %w", err)
 		}
+		//lint:ignore SA1019 accept both old (TypeRegA/NUL) and new (TypeReg/'0') regular-file
+		// markers — backup archives may be produced by non-Go tar implementations that still
+		// emit the legacy flag; TypeReg alone would silently skip those members.
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
 			continue
 		}
