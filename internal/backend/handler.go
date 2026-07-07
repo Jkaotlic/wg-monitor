@@ -766,7 +766,21 @@ func reportHandler(d Deps) http.HandlerFunc {
 					"consecutive_fails", tr.Next.ConsecutiveFails,
 				)
 			}
-			if err := d.Dispatcher.Handle(r.Context(), uid, nick, c.Name, tr, c); err != nil {
+			// Server-owned context (relayParent(d), not r.Context() — C6):
+			// the agent's report POST can disconnect mid-handler (its own
+			// timeout, network blip, process restart) for reasons that have
+			// nothing to do with whether this HARD/Recovery alert should
+			// still be sent. net/http cancels r.Context() on client
+			// disconnect independent of server shutdown, which was
+			// aborting an in-flight TG send out from under the alert.
+			// Bounded (unlike the request context, which had no timeout of
+			// its own) so a genuinely stuck TG call can't hang forever
+			// after being decoupled from the request's lifetime — same
+			// budget as the other TG-relay families in this file.
+			dispatchCtx, cancelDispatch := context.WithTimeout(relayParent(d), 30*time.Second)
+			err = d.Dispatcher.Handle(dispatchCtx, uid, nick, c.Name, tr, c)
+			cancelDispatch()
+			if err != nil {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
 			}
 		}
