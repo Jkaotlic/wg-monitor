@@ -32,7 +32,17 @@ func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
 		}
-		resp, err := (&http.Client{Timeout: 90 * time.Second}).Do(req)
+		// Shares releaseFetchTransport (release_verify.go) — same CDN, same
+		// flaky-home-uplink TLS-handshake fragility — but keeps its own
+		// longer overall timeout since this proxies a full binary/archive,
+		// not a small checksums file. Deliberately no retry here: unlike
+		// fetchReleaseVerifyAsset's plain fetch, this handler already
+		// distinguishes oversized-Content-Length, oversized-chunked, and
+		// truncated-body failures with their own status codes/messages
+		// (see wizard_handler_test.go's ReleaseAssetProxy* tests), and
+		// retrying would risk conflating a retryable transport hiccup with
+		// those non-retryable validation failures.
+		resp, err := (&http.Client{Timeout: 90 * time.Second, Transport: releaseFetchTransport}).Do(req)
 		if err != nil {
 			writeJSONError(w, http.StatusBadGateway, errCodeInternal, "release fetch: "+err.Error())
 			return
