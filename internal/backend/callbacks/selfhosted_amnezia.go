@@ -468,6 +468,9 @@ func parseSelfHostedAddMessage(text string) (selfhostedamnezia.Instance, error) 
 		return inst, nil
 	}
 	if len(fields) < 3 {
+		//lint:ignore ST1005 Cyrillic message sent verbatim to the Telegram operator (not
+		// English chained-error prose); capitalized as a standalone sentence, matching this
+		// file's other operator-facing messages (e.g. "Не удалось сохранить VPS").
 		return selfhostedamnezia.Instance{}, fmt.Errorf("Формат: id=home ssh_host=1.2.3.4 ssh_user=root ssh_password=... endpoint_host=vpn.example.com endpoint_port=47567 label=Home-VPS\nИли коротко: home vpn.example.com 47567 Home VPS")
 	}
 	port, err := strconv.Atoi(fields[2])
@@ -485,11 +488,17 @@ func parseSelfHostedAddMessage(text string) (selfhostedamnezia.Instance, error) 
 func applySelfHostedKVLine(inst *selfhostedamnezia.Instance, text string) error {
 	fields := selfHostedKVFields(text)
 	if len(fields) == 0 {
+		//lint:ignore ST1005 Cyrillic message sent verbatim to the Telegram operator (not
+		// English chained-error prose); capitalized as a standalone sentence, matching this
+		// file's other operator-facing messages (e.g. "Не удалось сохранить VPS").
 		return fmt.Errorf("Пришли key=value, например: host=vpn.example.com port=47567 label=Home")
 	}
 	for _, raw := range fields {
 		key, val, ok := strings.Cut(raw, "=")
 		if !ok {
+			//lint:ignore ST1005 Cyrillic message sent verbatim to the Telegram operator (not
+			// English chained-error prose); capitalized as a standalone sentence, matching this
+			// file's other operator-facing messages (e.g. "Не удалось сохранить VPS").
 			return fmt.Errorf("Ожидал key=value, получил: %s", raw)
 		}
 		if err := applySelfHostedField(inst, strings.ToLower(strings.TrimSpace(key)), strings.TrimSpace(val)); err != nil {

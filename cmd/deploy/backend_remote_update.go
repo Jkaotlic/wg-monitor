@@ -59,15 +59,6 @@ func backendHealthClientForState(state *State, requestTimeout time.Duration) (st
 	return c.BaseURL, c.HTTP, nil
 }
 
-func waitBackendVersion(domain, want string, timeout time.Duration) error {
-	base := strings.TrimRight(domain, "/")
-	if !strings.Contains(base, "://") {
-		base = "https://" + base
-	}
-	client := &http.Client{Timeout: 8 * time.Second}
-	return waitBackendVersionWithClient(client, base, want, timeout)
-}
-
 func waitBackendVersionWithClient(client *http.Client, base, want string, timeout time.Duration) error {
 	url := strings.TrimRight(base, "/") + "/healthz"
 	deadline := time.Now().Add(timeout)

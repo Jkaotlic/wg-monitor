@@ -670,18 +670,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	}
 }
 
-func isSelfHostedAmneziaAction(action string) bool {
-	switch action {
-	case "amz_selfhosted_issue", "amz_selfhosted_confirm",
-		"amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_edit",
-		"amz_selfhosted_toggle", "amz_selfhosted_delete", "amz_selfhosted_delete_confirm",
-		"amz_selfhosted_cancel":
-		return true
-	default:
-		return false
-	}
-}
-
 func isSelfHostedAmneziaAdminAction(action string) bool {
 	switch action {
 	case "amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_edit",
@@ -747,17 +735,11 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 	}
 	if user.TelegramUserID != nil {
 		if *user.TelegramUserID == q.From.ID {
-			if r.rejectBeforeRouterTopicExists(ctx, q, args, user) {
-				return false
-			}
-			return true
+			return !r.rejectBeforeRouterTopicExists(ctx, q, args, user)
 		}
 		// Owner mismatch — try the operator whitelist before rejecting.
 		if r.d.RouterOperators().HasAccess(user.ID, q.From.ID) {
-			if r.rejectBeforeRouterTopicExists(ctx, q, args, user) {
-				return false
-			}
-			return true
+			return !r.rejectBeforeRouterTopicExists(ctx, q, args, user)
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
 		slog.Warn("acl: rejected (owner mismatch)",
@@ -1414,11 +1396,6 @@ func (r *Router) putPendingConfirm(q *tg.CallbackQuery, userID int64, action, ta
 	return token
 }
 
-func (r *Router) consumePendingConfirm(ctx context.Context, q *tg.CallbackQuery, args Args, target string) bool {
-	_, ok := r.takePendingConfirm(ctx, q, args, target)
-	return ok
-}
-
 func (r *Router) takePendingConfirm(ctx context.Context, q *tg.CallbackQuery, args Args, target string) (*pendingConfirm, bool) {
 	if p, ok := r.pendingConfirms.consume(args.UserID, q.From.ID, q.Message.MessageThreadID, args.Action, target, args.ConfirmToken); ok {
 		return p, true
@@ -1464,11 +1441,6 @@ func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeybo
 	}
 	text, kb := r.buildTunnelsPanel(u)
 	return text, kb, true
-}
-
-// dispatchHelp sends the static help text for the topic kind.
-func (r *Router) dispatchHelp(ctx context.Context, m *tg.Message, kind string) {
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, topicHelpBody(kind), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 }
 
 func topicHelpBody(kind string) string {
@@ -1844,10 +1816,6 @@ func (r *Router) putPendingRebind(pr *pendingRebind) {
 		r.pendingRebinds = make(map[string]*pendingRebind)
 	}
 	r.pendingRebinds[pr.Token] = pr
-}
-
-func (r *Router) consumePendingRebind(userID int64, token string) (*pendingRebind, bool) {
-	return r.consumePendingRebindForActor(userID, 0, token)
 }
 
 func (r *Router) consumePendingRebindForActor(userID, actorTGID int64, token string) (*pendingRebind, bool) {

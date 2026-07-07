@@ -81,6 +81,9 @@ func extractTarMember(gzBody []byte, name string) ([]byte, error) {
 			return nil, err
 		}
 		memberName := filepath.ToSlash(h.Name)
+		//lint:ignore SA1019 accept both old (TypeRegA/NUL) and new (TypeReg/'0') regular-file
+		// markers — backup archives may be produced by non-Go tar implementations that still
+		// emit the legacy flag; TypeReg alone would silently skip those members.
 		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
 			continue
 		}

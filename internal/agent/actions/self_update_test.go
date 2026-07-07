@@ -32,7 +32,6 @@ func (zeroReader) Read(p []byte) (int, error) {
 
 const expectedMaxSelfUpdateArtifactSize = 64 << 20
 const expectedMaxSelfUpdateChecksumsSize = 1 << 20
-const expectedMaxSelfUpdateSignatureSize = 4 << 10
 
 func TestHTTPGetRejectsOversizedBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

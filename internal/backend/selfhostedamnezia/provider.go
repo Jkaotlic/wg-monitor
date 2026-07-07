@@ -712,6 +712,8 @@ func allocateAddress(prefix netip.Prefix, used map[netip.Addr]bool) (netip.Addr,
 	bits := prefix.Bits()
 	hostBits := 32 - bits
 	if hostBits <= 1 {
+		//lint:ignore ST1005 "Amnezia" is a proper noun (product name), not a capitalized
+		// sentence start.
 		return netip.Addr{}, errors.New("Amnezia IPv4 pool is too small")
 	}
 	broadcast := base | ((uint32(1) << hostBits) - 1)

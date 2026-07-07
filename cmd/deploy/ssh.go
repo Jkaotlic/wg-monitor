@@ -529,7 +529,7 @@ func (k *KnownHosts) checkOrAppend(hostKey string, remote net.Addr, pub ssh.Publ
 					"SSH host key fingerprint совпадает с уже сохранённым под alias %q. "+
 						"Скорее всего ты цепляешься к ФИЗИЧЕСКИ ТОМУ ЖЕ роутеру под новым nickname'ом "+
 						"— проверь, поднят ли VPN/SSTP. Если правда хочешь добавить тот же роутер "+
-						"под двумя именами, удали строку для %q из %s.",
+						"под двумя именами, удали строку для %q из %s",
 					other, other, k.path)
 			}
 			line := knownhosts.Line([]string{hostKey}, pub)

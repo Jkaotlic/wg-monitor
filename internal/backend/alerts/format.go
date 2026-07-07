@@ -1019,20 +1019,6 @@ func humaniseNetErr(s string) string {
 	return s
 }
 
-// writeWrapped writes a paragraph as a single indented line. Telegram already
-// handles soft-wrap; we just want the leading two spaces for visual grouping.
-func writeWrapped(b *strings.Builder, s string) {
-	for _, line := range strings.Split(s, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		b.WriteString("  ")
-		b.WriteString(line)
-		b.WriteString("\n")
-	}
-}
-
 // shortDur renders a duration as "6h" / "30m" / "1h30m" — no fractional units.
 func shortDur(d time.Duration) string {
 	if d <= 0 {

@@ -231,21 +231,6 @@ func amneziaCountriesView(user *db.User, stored amneziaStoredKey, info *amnezia.
 	return text, tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func amneziaCountryButton(userID int64, c amnezia.Country) tg.InlineKeyboardButton {
-	return amneziaCountryButtonForKey(userID, "active", c)
-}
-
-func amneziaCountryButtonForKey(userID int64, keyID string, c amnezia.Country) tg.InlineKeyboardButton {
-	label := amneziaCountryLabel(c)
-	if keyID == "" {
-		keyID = "active"
-	}
-	return tg.InlineKeyboardButton{
-		Text:         "Выпустить " + label,
-		CallbackData: fmt.Sprintf("amz_dl:%d:_panel_:%s:%s", userID, keyID, strings.ToLower(c.Code)),
-	}
-}
-
 func amneziaCountryLabel(c amnezia.Country) string {
 	label := strings.ToUpper(c.Code)
 	if c.Name != "" {

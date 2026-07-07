@@ -71,16 +71,6 @@ func TestPanelHome_AdminDMAllowed(t *testing.T) {
 	}
 }
 
-func flattenKbTexts(kb *tg.InlineKeyboardMarkup) []string {
-	var out []string
-	for _, row := range kb.InlineKeyboard {
-		for _, b := range row {
-			out = append(out, b.Text)
-		}
-	}
-	return out
-}
-
 func flattenKbCallbacks(kb *tg.InlineKeyboardMarkup) []string {
 	var out []string
 	for _, row := range kb.InlineKeyboard {

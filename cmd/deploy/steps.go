@@ -142,29 +142,6 @@ func stepUploadAndSwap(s *SSH, localPath, remotePath, service string) error {
 	return nil
 }
 
-func stepRollbackRemoteBinary(s *SSH, remotePath, service string) error {
-	bak := remotePath + ".bak"
-	if _, _, rc, _ := s.Run("test -f " + bak); rc != 0 {
-		return fmt.Errorf(".bak absent, nothing to rollback (probably first install)")
-	}
-	PrintWarn("automatic rollback to " + bak)
-	if service != "" {
-		s.Run("systemctl stop " + service)
-	}
-	if _, rbErr := s.MustRun(fmt.Sprintf("mv %s %s && chmod 755 %s", bak, remotePath, remotePath)); rbErr != nil {
-		PrintFail("rollback failed: " + rbErr.Error())
-		return rbErr
-	}
-	if service != "" {
-		if _, rbErr := s.MustRun("systemctl start " + service); rbErr != nil {
-			PrintFail("old binary also failed to start: " + rbErr.Error())
-			return rbErr
-		}
-	}
-	PrintOK("rollback complete - previous version is running")
-	return nil
-}
-
 // stepVerifyHTTP: curl URL, expect 200. Backend restarts can return
 // connection-refused for a short window after systemctl start succeeds, so
 // give the listener a few seconds before surfacing the failure.

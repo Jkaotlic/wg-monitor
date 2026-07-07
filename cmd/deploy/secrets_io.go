@@ -160,6 +160,9 @@ func ImportSecrets(src string, statePath string, force bool) error {
 		if err != nil {
 			return fmt.Errorf("tar %s: %w", src, err)
 		}
+		//lint:ignore SA1019 accept both old (TypeRegA/NUL) and new (TypeReg/'0') regular-file
+		// markers — backup archives may be produced by non-Go tar implementations that still
+		// emit the legacy flag; TypeReg alone would silently skip those members.
 		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeRegA {
 			continue
 		}

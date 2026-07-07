@@ -2541,17 +2541,6 @@ func TestCollectActiveIncidentsDropsDeletedTunnelWhenLiveSnapshotExists(t *testi
 	}
 }
 
-// seedUser creates a user and returns their ID. Mirrors newTestDB but for
-// routers that already have a DB.
-func seedUser(t *testing.T, d *db.DB, nick string) int64 {
-	t.Helper()
-	uid, err := d.Users().Insert(nick, "tok-"+nick, "1.2.3.4", "nwg0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return uid
-}
-
 // makeCBQ builds a minimal CallbackQuery for the given callback_data string.
 func makeCBQ(data string) *tg.CallbackQuery {
 	return &tg.CallbackQuery{
@@ -2696,7 +2685,7 @@ func TestRouterHandleCallback_MaintOpen_EnqueueFailRestoresRecoveryKeyboard(t *t
 		t.Fatalf("expected loading and recovery edits, got %d: %v", len(f.edits), f.edits)
 	}
 	lastText := f.edits[len(f.edits)-1]
-	if !strings.Contains(lastText, "Обслуживание") && !strings.Contains(lastText, "ÐžÐ±ÑÐ»ÑƒÐ¶Ð¸Ð²Ð°Ð½Ð¸Ðµ") {
+	if !strings.Contains(lastText, "Обслуживание") && !strings.Contains(lastText, "ÐžÐ±Ñ\u0081Ð»ÑƒÐ¶Ð¸Ð²Ð°Ð½Ð¸Ðµ") {
 		t.Fatalf("recovery edit should mention maintenance, got %q", lastText)
 	}
 	lastKB := f.editMarkups[len(f.editMarkups)-1]
