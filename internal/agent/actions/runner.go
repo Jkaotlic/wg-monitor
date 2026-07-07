@@ -77,6 +77,13 @@ type Runner struct {
 	// BackendURL is the trusted command-plane origin from the agent config.
 	// self_update may use its same-origin /v1/releases/download mirror.
 	BackendURL string
+	// Version is the agent's own currently-running version (main.Version at
+	// process start — the same value reported as AgentVersion in
+	// heartbeats). self_update's downgrade guard refuses an older target
+	// unless the command's allow_downgrade arg is set. Empty skips that
+	// guard (should not happen in practice: main.Version always has a
+	// value).
+	Version string
 	// ActionTimeout, if set, overrides the per-action execution budget
 	// (see actionTimeoutFor) that Execute binds ctx to via withActionTimeout.
 	// Nil uses the production table (45s default; opkg_upgrade/tunnel_import
@@ -827,7 +834,8 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		repoBase, _ := cmd.Args["repo_base"].(string)
 		repoResolveIP, _ := cmd.Args["repo_resolve_ip"].(string)
-		out, err := SelfUpdate(ctx, version, repoBase, repoResolveIP, r.BackendURL)
+		allowDowngrade, _ := cmd.Args["allow_downgrade"].(bool)
+		out, err := SelfUpdate(ctx, version, r.Version, allowDowngrade, repoBase, repoResolveIP, r.BackendURL)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

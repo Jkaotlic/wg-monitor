@@ -58,6 +58,34 @@ func SignatureRequiredForVersion(version string) bool {
 	return true
 }
 
+// CompareReleaseTags ranks two release tags in this project's own tag
+// order — major.minor.patch, then RC number, with a full release outranking
+// every "-rcN" of the same major.minor.patch — the same ordering
+// SignatureRequiredForVersion already relies on internally via releaseRank/
+// compareRank. ok is false if either tag isn't in that shape, in which case
+// cmp is meaningless (callers must treat "not ok" as "cannot determine",
+// never as a definite order).
+//
+// Deliberately not implemented with golang.org/x/mod/semver: its prerelease
+// compare treats a whole "-rcN" suffix as one opaque ASCII-lexical
+// identifier (no dot to split "rc" from the number), so "rc9" would sort
+// AFTER "rc10" — wrong, since this project has shipped double- and
+// triple-digit RC tags (rc133 seen in production). Exported so
+// internal/agent/actions.SelfUpdate's downgrade guard can reuse this exact
+// compare (releasesig is already an agent-side dependency for
+// SignatureRequiredForVersion/VerifyChecksumsSignature) instead of adding a
+// fourth local copy of the same rank/compare pair already duplicated in
+// internal/backend/dashboard_handler.go (compareDashboardReleaseTags) and
+// internal/backend/callbacks/fleet_batch.go (compareReleaseTagsLocal).
+func CompareReleaseTags(a, b string) (cmp int, ok bool) {
+	ar, aok := releaseRank(a)
+	br, bok := releaseRank(b)
+	if !aok || !bok {
+		return 0, false
+	}
+	return compareRank(ar, br), true
+}
+
 func mustDecodePublicKey(raw string) ed25519.PublicKey {
 	key, err := base64.StdEncoding.DecodeString(raw)
 	if err != nil || len(key) != ed25519.PublicKeySize {

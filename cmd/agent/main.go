@@ -114,6 +114,7 @@ func main() {
 		AllowFirmwareInstall: cfg.Maintenance.AllowFirmwareInstall,
 		ConfigPath:           *configPath,
 		BackendURL:           cfg.Backend.URL,
+		Version:              Version,
 	}
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())

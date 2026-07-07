@@ -24,11 +24,37 @@ import (
 // can rebuild with a different default. Tag is appended at call time.
 var SelfUpdateRepoBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
 
+// SelfUpdateExec runs the handful of external commands SelfUpdate's own
+// preflight checks need (currently just `df -k /opt`). A package var (like
+// SelfUpdateRepoBase above) rather than a Runner field, since SelfUpdate is a
+// free function, not a Runner method; tests substitute a fake to avoid
+// depending on a real df binary.
+var SelfUpdateExec ExecFunc = DefaultExec
+
+// selfUpdateDetectArch resolves the release asset suffix for this host. A
+// package var wrapping detectAgentArch so tests running on a dev/CI
+// machine's native GOARCH (never arm64 or mipsle in this project's release
+// matrix) can fake a supported arch and exercise the rest of SelfUpdate's
+// sequence instead of always failing at this first step.
+var selfUpdateDetectArch = detectAgentArch
+
+// selfUpdateValidateRepoBase indirects validateSelfUpdateRepoBase so tests
+// can substitute a passthrough validator. releaseorigin's checks correctly
+// hard-reject every loopback/private-IP origin (httptest.Server always binds
+// to 127.0.0.1), which would otherwise make it impossible to drive
+// SelfUpdate's real HTTP sequence against a local test server at all.
+var selfUpdateValidateRepoBase = validateSelfUpdateRepoBase
+
 const (
 	maxSelfUpdateChecksumsSize = 1 << 20
 	maxSelfUpdateSignatureSize = 4 << 10
 	maxSelfUpdateArtifactSize  = 64 << 20
 	selfUpdateStateDir         = "/opt/var/wg-monitor"
+	// selfUpdateMinFreeRatioPct is the same "≥10% of the partition must
+	// stay free post-write" floor OpkgRunner.SmartUpgrade's df -k /opt check
+	// (opkg.go) uses, applied here to the ≤64 MB agent binary instead of an
+	// opkg package set.
+	selfUpdateMinFreeRatioPct = 10
 )
 
 // SelfUpdate downloads the agent binary for the given release tag, verifies
@@ -39,16 +65,31 @@ const (
 // ack via /v1/cmd/result before the running agent is killed; the wizard
 // then polls for the next heartbeat's agent_version to confirm the flip.
 //
+// currentVersion is the agent's own running version (e.g. main.Version),
+// used only for the downgrade guard below; an empty value skips that guard
+// (nothing to compare against). allowDowngrade overrides it.
+//
+// Before any of the above: version must not rank below currentVersion
+// (isSelfUpdateDowngrade) unless allowDowngrade is set, and — after the
+// small checksums.txt/signature fetch but before streaming the ≤64 MB
+// binary — /opt must have enough free space (checkSelfUpdateFreeSpace).
+// Both guards return an error without touching the filesystem or network
+// beyond what they each individually need.
+//
 // On any failure prior to spawning the swap script, the running agent is
 // left untouched on the old binary.
-func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (string, error) {
+func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngrade bool, repoBaseOpt ...string) (string, error) {
 	validVersion, err := releaseorigin.ValidateReleaseTag(version)
 	if err != nil {
 		return "", fmt.Errorf("self_update: %w", err)
 	}
 	version = validVersion
 
-	arch, err := detectAgentArch()
+	if !allowDowngrade && isSelfUpdateDowngrade(version, currentVersion) {
+		return "", fmt.Errorf("self_update: target version %s is older than the running %s — pass allow_downgrade to override", version, currentVersion)
+	}
+
+	arch, err := selfUpdateDetectArch()
 	if err != nil {
 		return "", err
 	}
@@ -62,7 +103,7 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	if len(repoBaseOpt) > 2 {
 		trustedBackendURL = strings.TrimSpace(repoBaseOpt[2])
 	}
-	repoBase, err = validateSelfUpdateRepoBase(repoBase, trustedBackendURL)
+	repoBase, err = selfUpdateValidateRepoBase(repoBase, trustedBackendURL)
 	if err != nil {
 		return "", fmt.Errorf("self_update: %w", err)
 	}
@@ -92,6 +133,10 @@ func SelfUpdate(ctx context.Context, version string, repoBaseOpt ...string) (str
 	wantSha, ok := parseChecksum(string(sumsBody), assetName)
 	if !ok {
 		return "", fmt.Errorf("checksums.txt: no entry for %s", assetName)
+	}
+
+	if err := checkSelfUpdateFreeSpace(ctx); err != nil {
+		return "", err
 	}
 
 	// Stream the binary directly to disk — never load 64 MB into RAM.
@@ -193,6 +238,61 @@ func detectAgentArch() (string, error) {
 	default:
 		return "", fmt.Errorf("self_update: unsupported GOARCH %q (expected arm64 or mipsle)", runtime.GOARCH)
 	}
+}
+
+// isSelfUpdateDowngrade reports whether target ranks strictly below current
+// in this project's release-tag order (major.minor.patch, then RC number).
+// Delegates to releasesig.CompareReleaseTags — already an agent-side
+// dependency for SignatureRequiredForVersion/VerifyChecksumsSignature —
+// rather than adding a fourth local copy of the same rank/compare pair
+// already duplicated in internal/backend/dashboard_handler.go
+// (compareDashboardReleaseTags, used by the wizard deploy paths' own
+// isVersionDowngrade) and internal/backend/callbacks/fleet_batch.go
+// (compareReleaseTagsLocal). See CompareReleaseTags's doc comment for why
+// golang.org/x/mod/semver is deliberately not used here either (it would
+// rank "-rc9" after "-rc10").
+//
+// An empty target or current is never a downgrade: current is empty when
+// the running binary's version wasn't wired in (defensive default — should
+// not happen in practice, main.Version always has a value), and an
+// unparseable tag on either side means "cannot determine" rather than
+// "reject" — self_update must not refuse to run over a version string whose
+// shape it doesn't recognize.
+func isSelfUpdateDowngrade(target, current string) bool {
+	target = strings.TrimSpace(target)
+	current = strings.TrimSpace(current)
+	if target == "" || current == "" {
+		return false
+	}
+	cmp, ok := releasesig.CompareReleaseTags(target, current)
+	return ok && cmp < 0
+}
+
+// checkSelfUpdateFreeSpace runs `df -k /opt` (via SelfUpdateExec, so tests
+// can fake it) and refuses to proceed if writing another
+// maxSelfUpdateArtifactSize-sized binary to /opt/bin/wg-monitor.new would
+// leave less than selfUpdateMinFreeRatioPct of the partition free —
+// mirroring OpkgRunner.SmartUpgrade's own df -k /opt safety check (opkg.go).
+// Unlike SmartUpgrade's per-package Installed-Size estimate (opkg has no
+// fixed upper bound on an upgrade's total size), the "needed" size here is a
+// simple constant: every release binary is capped at maxSelfUpdateArtifactSize
+// by the release workflow, so there is no per-asset total to sum first.
+func checkSelfUpdateFreeSpace(ctx context.Context) error {
+	out, err := SelfUpdateExec(ctx, "df", "-k", "/opt")
+	if err != nil {
+		return fmt.Errorf("self_update: df /opt: %w", err)
+	}
+	freeKB, totalKB, err := parseDfOptOutput(out)
+	if err != nil {
+		return fmt.Errorf("self_update: df /opt: %w", err)
+	}
+	neededKB := int64(maxSelfUpdateArtifactSize / 1024)
+	headroomKB := totalKB * selfUpdateMinFreeRatioPct / 100
+	if freeKB-neededKB < headroomKB {
+		return fmt.Errorf("self_update: insufficient /opt space: %d KB free, need %d KB for the new binary plus %d KB headroom (%d KB total)",
+			freeKB, neededKB, headroomKB, totalKB)
+	}
+	return nil
 }
 
 func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {

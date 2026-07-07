@@ -64,6 +64,46 @@ func TestSignatureRequiredForVersion(t *testing.T) {
 	}
 }
 
+func TestCompareReleaseTags(t *testing.T) {
+	cases := []struct {
+		a, b    string
+		wantCmp int
+		wantOK  bool
+		reason  string
+	}{
+		{"v0.13.0-rc10", "v0.13.0-rc9", 1, true, "rc10 must rank above rc9 (numeric, not lexical, RC compare)"},
+		{"v0.13.0-rc9", "v0.13.0-rc10", -1, true, "rc9 must rank below rc10"},
+		{"v0.13.0-rc9", "v0.13.0-rc9", 0, true, "identical tags rank equal"},
+		{"v0.13.0", "v0.13.0-rc133", 1, true, "a full release outranks any RC of the same major.minor.patch"},
+		{"v0.13.1", "v0.13.0", 1, true, "higher patch outranks lower patch"},
+		{"v0.12.9", "v0.13.0", -1, true, "lower minor ranks below higher minor regardless of patch"},
+		{"not-a-tag", "v0.13.0", 0, false, "unparseable left side is not ok"},
+		{"v0.13.0", "not-a-tag", 0, false, "unparseable right side is not ok"},
+	}
+	for _, c := range cases {
+		t.Run(c.a+"_vs_"+c.b, func(t *testing.T) {
+			cmp, ok := CompareReleaseTags(c.a, c.b)
+			if ok != c.wantOK {
+				t.Fatalf("%s: CompareReleaseTags(%q,%q) ok=%v, want %v", c.reason, c.a, c.b, ok, c.wantOK)
+			}
+			if ok && sign(cmp) != sign(c.wantCmp) {
+				t.Fatalf("%s: CompareReleaseTags(%q,%q)=%d, want sign %d", c.reason, c.a, c.b, cmp, c.wantCmp)
+			}
+		})
+	}
+}
+
+func sign(n int) int {
+	switch {
+	case n > 0:
+		return 1
+	case n < 0:
+		return -1
+	default:
+		return 0
+	}
+}
+
 func TestReleaseRankRejectsSignedComponents(t *testing.T) {
 	cases := []string{
 		"v0.13.0-rc-1",
