@@ -49,7 +49,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: go install golang.org/x/vuln/cmd/govulncheck@v1.5.0
       - run: govulncheck ./...
 
   gosec:
@@ -61,7 +61,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+      - run: go install github.com/securego/gosec/v2/cmd/gosec@v2.27.1
       # Start with a blocking high-severity gate while the historical gosec
       # baseline is triaged. Excluded taint classes are noisy for controlled
       # command runners, release-proxy allowlists, and deliberate command
@@ -77,5 +77,5 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install github.com/anchore/grype/cmd/grype@latest
+      - run: go install github.com/anchore/grype/cmd/grype@v0.115.0
       - run: grype dir:. --fail-on high
