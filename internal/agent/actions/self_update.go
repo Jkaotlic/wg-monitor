@@ -45,11 +45,33 @@ var selfUpdateDetectArch = detectAgentArch
 // SelfUpdate's real HTTP sequence against a local test server at all.
 var selfUpdateValidateRepoBase = validateSelfUpdateRepoBase
 
+// selfUpdateVerifyChecksumsSignature wraps releasesig.VerifyChecksumsSignature
+// (see internal/backend/release_verify.go's identical verifyChecksumsSignature
+// var for the full rationale): the production signing public key baked into
+// internal/releasesig has no matching private key in this repo (the signing
+// seed is a GitHub Actions secret), so an accept-path test cannot produce a
+// signature the real key would verify without substituting this var for a
+// verifier over a locally generated key pair. Production code never
+// reassigns it.
+var selfUpdateVerifyChecksumsSignature = releasesig.VerifyChecksumsSignature
+
+// selfUpdateStateDir holds the swap script + its log. A var (not const) so
+// tests point it at a t.TempDir()-backed sandbox instead of the real
+// /opt/var/wg-monitor.
+var selfUpdateStateDir = "/opt/var/wg-monitor"
+
+// selfUpdateBinPath is the live agent binary SelfUpdate ultimately replaces —
+// SelfUpdate itself only ever writes selfUpdateBinPath+".new"; the actual
+// swap to this path happens later, inside the detached swap script. A var so
+// tests write to a t.TempDir()-backed path instead of the real
+// /opt/bin/wg-monitor, and can assert it stays byte-for-byte untouched when
+// SelfUpdate fails before ever handing off to that script.
+var selfUpdateBinPath = "/opt/bin/wg-monitor"
+
 const (
 	maxSelfUpdateChecksumsSize = 1 << 20
 	maxSelfUpdateSignatureSize = 4 << 10
 	maxSelfUpdateArtifactSize  = 64 << 20
-	selfUpdateStateDir         = "/opt/var/wg-monitor"
 	// selfUpdateMinFreeRatioPct is the same "≥10% of the partition must
 	// stay free post-write" floor OpkgRunner.SmartUpgrade's df -k /opt check
 	// (opkg.go) uses, applied here to the ≤64 MB agent binary instead of an
@@ -126,7 +148,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 		if err != nil {
 			return "", fmt.Errorf("download checksums.txt.sig: %w", err)
 		}
-		if err := releasesig.VerifyChecksumsSignature(sumsBody, sigBody); err != nil {
+		if err := selfUpdateVerifyChecksumsSignature(sumsBody, sigBody); err != nil {
 			return "", fmt.Errorf("verify checksums.txt signature: %w", err)
 		}
 	}
@@ -141,7 +163,7 @@ func SelfUpdate(ctx context.Context, version, currentVersion string, allowDowngr
 
 	// Stream the binary directly to disk — never load 64 MB into RAM.
 	// Critical on MIPSLE routers where total RAM is ≤64 MB.
-	const binPath = "/opt/bin/wg-monitor"
+	binPath := selfUpdateBinPath
 	tmpPath := binPath + ".new"
 	gotSha, err := httpGetToFileWithFallback(ctx, httpClient, fallbackClient, binURL, fallbackLabel, tmpPath, maxSelfUpdateArtifactSize)
 	if err != nil {
@@ -216,7 +238,13 @@ func launchSelfUpdateSwap(scriptPath string) error {
 	return nil
 }
 
-func selfUpdateSwapCommand(scriptPath string) *exec.Cmd {
+// selfUpdateSwapCommand builds the exec.Cmd that runs the swap script. A
+// package var (default: `sh scriptPath`) so tests substitute a harmless,
+// always-present process instead of depending on a POSIX shell being
+// resolvable wherever `go test` runs — this test binary re-invoked with a
+// no-op test filter (`-test.run=^$`) is the standard portable stand-in (see
+// os/exec's own test suite for the same trick).
+var selfUpdateSwapCommand = func(scriptPath string) *exec.Cmd {
 	return exec.Command("sh", scriptPath)
 }
 

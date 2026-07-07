@@ -3,15 +3,20 @@ package actions
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -56,6 +61,28 @@ func TestHTTPGetLimitedUsesSmallerMetadataLimit(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too large") || !strings.Contains(err.Error(), "1048576") {
 		t.Fatalf("expected checksum size-limit error, got: %v", err)
+	}
+}
+
+// TestDetectAgentArch calls the real, un-overridden detectAgentArch (the
+// function selfUpdateDetectArch wraps for tests everywhere else in this
+// file) so its own GOARCH switch has direct coverage instead of only ever
+// running through the test seam.
+func TestDetectAgentArch(t *testing.T) {
+	got, err := detectAgentArch()
+	switch runtime.GOARCH {
+	case "arm64":
+		if err != nil || got != "arm64" {
+			t.Fatalf("detectAgentArch() = (%q, %v), want (\"arm64\", nil)", got, err)
+		}
+	case "mipsle":
+		if err != nil || got != "mipsle" {
+			t.Fatalf("detectAgentArch() = (%q, %v), want (\"mipsle\", nil)", got, err)
+		}
+	default:
+		if err == nil {
+			t.Fatalf("detectAgentArch() on unsupported GOARCH %q should error, got (%q, nil)", runtime.GOARCH, got)
+		}
 	}
 }
 
@@ -503,5 +530,236 @@ func TestHTTPGetToFileWithFallbackRetriesNetworkFailure(t *testing.T) {
 	}
 	if gotSHA != wantSHA {
 		t.Fatalf("sha256: got %s want %s", gotSHA, wantSHA)
+	}
+}
+
+// --- SelfUpdate: full end-to-end sequence -----------------------------------
+//
+// The tests below drive the real, exported SelfUpdate against an
+// httptest.Server, exercising the complete sequence (arch detect -> repo
+// base resolve -> checksums fetch -> signature branch -> free-space check ->
+// binary download -> sha compare -> swap script write + launch) rather than
+// unit-testing its pieces in isolation. Doing so requires overriding every
+// seam that would otherwise hit something real and environment-dependent:
+// the dev/CI machine's actual GOARCH (never arm64/mipsle), releaseorigin's
+// hard loopback rejection (httptest.Server always binds to 127.0.0.1), a
+// real df binary, the real /opt/bin + /opt/var paths, and a POSIX `sh` on
+// PATH for the swap script launch.
+
+// selfUpdateTestHarness overrides every such seam and restores each on test
+// cleanup, returning the sandbox root. freeSpaceOK selects which df -k /opt
+// fixture SelfUpdateExec fakes (see checkSelfUpdateFreeSpace's own unit
+// tests above for the exact headroom arithmetic each fixture is tuned for).
+func selfUpdateTestHarness(t *testing.T, arch string, freeSpaceOK bool) string {
+	t.Helper()
+	tmp := t.TempDir()
+
+	oldArch := selfUpdateDetectArch
+	selfUpdateDetectArch = func() (string, error) { return arch, nil }
+	t.Cleanup(func() { selfUpdateDetectArch = oldArch })
+
+	oldValidate := selfUpdateValidateRepoBase
+	selfUpdateValidateRepoBase = func(repoBase, _ string) (string, error) { return repoBase, nil }
+	t.Cleanup(func() { selfUpdateValidateRepoBase = oldValidate })
+
+	oldExec := SelfUpdateExec
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if freeSpaceOK {
+			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000000 100000 900000 10% /opt\n"), nil
+		}
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 30000 70000 30% /opt\n"), nil
+	}
+	t.Cleanup(func() { SelfUpdateExec = oldExec })
+
+	oldBinPath := selfUpdateBinPath
+	selfUpdateBinPath = filepath.Join(tmp, "wg-monitor")
+	t.Cleanup(func() { selfUpdateBinPath = oldBinPath })
+
+	oldStateDir := selfUpdateStateDir
+	selfUpdateStateDir = filepath.Join(tmp, "state")
+	t.Cleanup(func() { selfUpdateStateDir = oldStateDir })
+
+	oldSwapCmd := selfUpdateSwapCommand
+	selfUpdateSwapCommand = func(scriptPath string) *exec.Cmd {
+		// A harmless, always-present process: this test binary re-invoked
+		// with a test filter matching no test (`^$` anchors to the empty
+		// string only), so it starts and exits almost immediately without
+		// depending on a POSIX shell being resolvable on PATH.
+		return exec.Command(os.Args[0], "-test.run=^$")
+	}
+	t.Cleanup(func() { selfUpdateSwapCommand = oldSwapCmd })
+
+	return tmp
+}
+
+// (a) Happy path: a full, signature-required release installs end to end.
+func TestSelfUpdate_HappyPath_InstallsSignedRelease(t *testing.T) {
+	selfUpdateTestHarness(t, "arm64", true)
+
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldVerify := selfUpdateVerifyChecksumsSignature
+	selfUpdateVerifyChecksumsSignature = func(checksums, signature []byte) error {
+		if len(signature) != ed25519.SignatureSize {
+			return fmt.Errorf("test release signature has invalid size %d", len(signature))
+		}
+		if !ed25519.Verify(pub, checksums, signature) {
+			return fmt.Errorf("test release signature verification failed")
+		}
+		return nil
+	}
+	t.Cleanup(func() { selfUpdateVerifyChecksumsSignature = oldVerify })
+
+	const version = "v0.13.0-rc200" // >= rc128: SignatureRequiredForVersion is true
+	const assetName = "wg-monitor-agent-linux-arm64"
+	artifact := []byte("totally-real-arm64-agent-binary-bytes")
+	sum := sha256.Sum256(artifact)
+	checksums := []byte(hex.EncodeToString(sum[:]) + "  " + assetName + "\n")
+	sig := ed25519.Sign(priv, checksums)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(checksums)
+	})
+	mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(sig)
+	})
+	mux.HandleFunc("/"+version+"/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(artifact)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := SelfUpdate(context.Background(), version, "", false, srv.URL)
+	if err != nil {
+		t.Fatalf("SelfUpdate: %v", err)
+	}
+	if !strings.Contains(out, version) {
+		t.Fatalf("output = %q, want it to mention %s", out, version)
+	}
+
+	got, err := os.ReadFile(selfUpdateBinPath + ".new")
+	if err != nil {
+		t.Fatalf("expected downloaded artifact at %s.new: %v", selfUpdateBinPath, err)
+	}
+	if !bytes.Equal(got, artifact) {
+		t.Fatal("downloaded artifact content mismatch")
+	}
+	if _, err := os.Stat(selfUpdateSwapScriptPath()); err != nil {
+		t.Fatalf("expected swap script to be written: %v", err)
+	}
+}
+
+// (b) The signature-required branch actually fires for a non-legacy
+// version: a missing checksums.txt.sig refuses the update.
+func TestSelfUpdate_RefusesMissingSignatureForNonLegacyVersion(t *testing.T) {
+	selfUpdateTestHarness(t, "arm64", true)
+
+	const version = "v0.13.0-rc200"
+	const assetName = "wg-monitor-agent-linux-arm64"
+	checksums := []byte(strings.Repeat("a", 64) + "  " + assetName + "\n")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(checksums)
+	})
+	mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	// Deliberately no handler for the binary asset: must never be reached.
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := SelfUpdate(context.Background(), version, "", false, srv.URL)
+	if err == nil {
+		t.Fatal("expected a missing checksums.txt.sig to refuse the update")
+	}
+	if !strings.Contains(err.Error(), "checksums.txt.sig") {
+		t.Fatalf("expected a checksums.txt.sig-specific error, got %v", err)
+	}
+}
+
+// (b) ...and an invalid checksums.txt.sig also refuses the update. This
+// deliberately does NOT override selfUpdateVerifyChecksumsSignature: it
+// exercises the real releasesig.VerifyChecksumsSignature against the
+// production public key, which any garbage signature legitimately fails
+// without needing a substituted keypair.
+func TestSelfUpdate_RefusesInvalidSignatureForNonLegacyVersion(t *testing.T) {
+	selfUpdateTestHarness(t, "arm64", true)
+
+	const version = "v0.13.0-rc201"
+	const assetName = "wg-monitor-agent-linux-arm64"
+	checksums := []byte(strings.Repeat("b", 64) + "  " + assetName + "\n")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(checksums)
+	})
+	mux.HandleFunc("/"+version+"/checksums.txt.sig", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("not-a-real-ed25519-signature-at-all"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := SelfUpdate(context.Background(), version, "", false, srv.URL)
+	if err == nil {
+		t.Fatal("expected an invalid checksums.txt.sig to refuse the update")
+	}
+	if !strings.Contains(err.Error(), "verify checksums.txt signature") {
+		t.Fatalf("expected a signature-verification error, got %v", err)
+	}
+}
+
+// (c) A checksum mismatch mid-sequence leaves /opt/bin/wg-monitor (faked via
+// selfUpdateBinPath here) untouched, and cleans up the downloaded temp file.
+func TestSelfUpdate_ChecksumMismatchCleansUpTempFileAndLeavesBinaryUntouched(t *testing.T) {
+	selfUpdateTestHarness(t, "arm64", true)
+
+	// Pre-seed the "currently installed" binary so we can prove SelfUpdate
+	// never touches it directly — only the detached swap script (which
+	// never runs here, since SelfUpdate fails before spawning it) does the
+	// actual replace.
+	const oldContent = "old-binary-must-survive-a-checksum-mismatch"
+	if err := os.WriteFile(selfUpdateBinPath, []byte(oldContent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	const version = "v0.13.0-rc50" // legacy: no signature required, keeps this scoped to the checksum path
+	const assetName = "wg-monitor-agent-linux-arm64"
+	artifact := []byte("downloaded-bytes-that-will-not-match-the-advertised-sha")
+	wrongSha := strings.Repeat("0", 64) // well-formed-looking but guaranteed != sha256(artifact)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+version+"/checksums.txt", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(wrongSha + "  " + assetName + "\n"))
+	})
+	mux.HandleFunc("/"+version+"/"+assetName, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(artifact)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := SelfUpdate(context.Background(), version, "", false, srv.URL)
+	if err == nil {
+		t.Fatal("expected a checksum mismatch to fail")
+	}
+	if !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected a sha256 mismatch error, got %v", err)
+	}
+
+	if _, statErr := os.Stat(selfUpdateBinPath + ".new"); !os.IsNotExist(statErr) {
+		t.Fatalf("expected the downloaded temp file to be cleaned up, stat err=%v", statErr)
+	}
+	if _, statErr := os.Stat(selfUpdateBinPath + ".new.tmp"); !os.IsNotExist(statErr) {
+		t.Fatalf("expected no leftover .new.tmp file either, stat err=%v", statErr)
+	}
+	after, err := os.ReadFile(selfUpdateBinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != oldContent {
+		t.Fatalf("the installed binary must stay untouched on a checksum mismatch, got %q", after)
 	}
 }
