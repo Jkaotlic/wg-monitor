@@ -437,7 +437,7 @@ func TestImportAction_Apply_Replace(t *testing.T) {
 	if !strings.Contains(status, "awg11") {
 		t.Errorf("status: %q", status)
 	}
-	if !strings.Contains(status, "проверяю") && !strings.Contains(status, "Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑÑŽ") {
+	if !strings.Contains(status, "проверяю") {
 		t.Errorf("status should tell operator that tunnel start is being checked, got %q", status)
 	}
 	// EnqueueWithRef was called — check via refs slice

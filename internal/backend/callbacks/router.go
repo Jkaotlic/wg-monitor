@@ -737,7 +737,7 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		return false
 	}
 	if user.TelegramThreadID != nil && q.Message.Chat.ID != user.EffectiveTelegramChatID(r.cfg.ChatID) {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ÑÑ‚Ð¾ Ð½Ðµ Ñ‡Ð°Ñ‚ ÑÑ‚Ð¾Ð³Ð¾ Ñ€Ð¾ÑƒÑ‚ÐµÑ€Ð°")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не чат этого роутера")
 		slog.Warn("acl: rejected (foreign chat)",
 			"from", q.From.ID, "router_user_id", args.UserID, "chat", q.Message.Chat.ID, "owner_chat", user.EffectiveTelegramChatID(r.cfg.ChatID), "data", q.Data)
 		return false
@@ -1754,7 +1754,7 @@ func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind s
 	}
 	if len(data) > maxUploadedTunnelConfigBytes {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"Ñ„Ð°Ð¹Ð» ÑÐ»Ð¸ÑˆÐºÐ¾Ð¼ Ð±Ð¾Ð»ÑŒÑˆÐ¾Ð¹ (Ð¼Ð°ÐºÑÐ¸Ð¼ÑƒÐ¼ 50 ÐšÐ‘ Ð´Ð»Ñ .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
+			"файл слишком большой (максимум 50 КБ для .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
 		return
 	}
 	confB64 := base64.StdEncoding.EncodeToString(data)
@@ -2006,7 +2006,7 @@ func (r *Router) handleOpkgUpgradeAsk(ctx context.Context, q *tg.CallbackQuery, 
 func (r *Router) handleOpkgUpgradeMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) {
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"ÑÑ‚Ð° ÐºÐ¾Ð¼Ð°Ð½Ð´Ð° Ñ€Ð°Ð±Ð¾Ñ‚Ð°ÐµÑ‚ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ Ð² Ñ‚Ð¾Ð¿Ð¸ÐºÐµ Ð¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ñ‚ÐµÐ»Ñ.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
+			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		return
 	}
 	tok := makeMaintToken()
