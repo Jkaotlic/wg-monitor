@@ -175,6 +175,69 @@ func TestWizardBackendDeployRejectsUnsafeReleaseTag(t *testing.T) {
 	}
 }
 
+func TestWizardBackendDeployRejectsDowngradeWithoutOverride(t *testing.T) {
+	old := serverVersion
+	SetVersion("v0.13.8")
+	t.Cleanup(func() { SetVersion(old) })
+
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "backend-update.json")
+	h := NewMux(Deps{WizardToken: "secret", BackendUpdatePath: pending})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/backend/deploy",
+		strings.NewReader(`{"target_version":"v0.13.5"}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "wgmonitor.example.test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "downgrade_rejected") {
+		t.Fatalf("expected downgrade_rejected error code, got %s", rec.Body.String())
+	}
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Fatalf("downgrade must not write a pending backend update, err=%v", err)
+	}
+}
+
+func TestWizardBackendDeployAllowsDowngradeWithOverride(t *testing.T) {
+	old := serverVersion
+	SetVersion("v0.13.8")
+	t.Cleanup(func() { SetVersion(old) })
+
+	dir := t.TempDir()
+	pending := filepath.Join(dir, "backend-update.json")
+	h := NewMux(Deps{WizardToken: "secret", BackendUpdatePath: pending})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/backend/deploy",
+		strings.NewReader(`{"target_version":"v0.13.5","allow_downgrade":true}`))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-Host", "wgmonitor.example.test")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body, err := os.ReadFile(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got backendUpdateRequest
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TargetVersion != "v0.13.5" {
+		t.Fatalf("target_version=%q", got.TargetVersion)
+	}
+}
+
 func TestWizardEnrollmentRejectsOversizedJSONBody(t *testing.T) {
 	dbPath := t.TempDir() + "/state.db"
 	d, err := db.Open(dbPath)
@@ -630,6 +693,116 @@ func TestWizardDeployRejectsAnyAlreadyPendingDeploy(t *testing.T) {
 	}
 	if len(sink.enqueued) != 0 {
 		t.Fatalf("pending deploy replay should not enqueue another command: %+v", sink.enqueued)
+	}
+}
+
+func TestWizardDeployRejectsDowngradeWithoutOverride(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a heartbeat that already reported a newer version than the
+	// requested deploy target.
+	if err := d.Users().UpdateLastSeenAgentVersion(userID, "v0.13.0-rc20"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc10"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "downgrade_rejected") {
+		t.Fatalf("expected downgrade_rejected error code, got %s", rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("downgrade must not enqueue a command: %+v", sink.enqueued)
+	}
+	got, err := d.Users().GetByNickname("testkeen")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PendingVersion != nil {
+		t.Fatalf("downgrade must not mark a pending deploy: %v", *got.PendingVersion)
+	}
+}
+
+func TestWizardDeployAllowsDowngradeWithOverride(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(userID, "v0.13.0-rc20"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy",
+		strings.NewReader(`{"target_version":"v0.13.0-rc10","allow_downgrade":true}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 || sink.enqueued[0].Args["version"] != "v0.13.0-rc10" {
+		t.Fatalf("allow_downgrade should still enqueue the requested target: %+v", sink.enqueued)
+	}
+}
+
+// rc9 vs rc10 is the canonical regression case for lexical-vs-numeric RC
+// compare (see isVersionDowngrade's doc comment / project memory): a naive
+// ASCII compare ranks "rc9" after "rc10", which would let an actual
+// downgrade from rc10 to rc9 sail through unblocked.
+func TestWizardDeployRejectsDowngradeAcrossDoubleDigitRC(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	userID, err := d.Users().Insert("testkeen", "tok", "1.2.3.4", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(userID, "v0.13.0-rc10"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &fakeCmdSink{}
+	h := wizardDeployHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/testkeen/deploy", strings.NewReader(`{"target_version":"v0.13.0-rc9"}`))
+	req.Host = "wg.example.test"
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "testkeen")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("rc10 -> rc9 must be rejected as a downgrade: %+v", sink.enqueued)
 	}
 }
 
