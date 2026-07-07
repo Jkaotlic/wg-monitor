@@ -1364,6 +1364,30 @@ details.raw-output pre {
   color: var(--muted);
 }
 
+/* job-poll-status is the subtle "reconnecting" badge pollJob toggles on a
+   transient poll error (network blip/5xx — see pollJob's catch block in
+   app.js), so a dropped fetch reads as a connectivity hiccup rather than a
+   dead/failed job. Deliberately quieter than .result-error: no red tint,
+   just a muted pill above the (untouched, still-showing) last-known
+   checklist. */
+.job-poll-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.job-poll-status .ti {
+  font-size: 15px;
+  color: var(--accent);
+}
+
 .job-step {
   display: flex;
   align-items: flex-start;
