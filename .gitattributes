@@ -25,6 +25,14 @@ internal/installtmpl/S99wg-monitor text eol=lf
 # Caddyfile template: LF
 Caddyfile.tmpl text eol=lf
 
+# Deploy templates: always LF (rendered on the dev/build machine but executed
+# by dash on Entware routers or systemd on the VPS; CRLF breaks `set -eu`)
+*.tmpl text eol=lf
+*.timer text eol=lf
+cmd/deploy/templates/awgm-bootstrap.sh.tmpl text eol=lf
+cmd/deploy/templates/wg-monitor-backup.service.tmpl text eol=lf
+cmd/deploy/templates/wg-monitor-backup.timer text eol=lf
+
 # Binary files: no conversion
 *.exe binary
 *.db binary
