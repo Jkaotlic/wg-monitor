@@ -67,6 +67,7 @@
     resultDrawer: document.getElementById("resultDrawer"),
     drawerTitle: document.getElementById("drawerTitle"),
     resultOutput: document.getElementById("resultOutput"),
+    jobPollStatus: document.getElementById("jobPollStatus"),
     closeDrawerBtn: document.getElementById("closeDrawerBtn"),
     toast: document.getElementById("toast"),
     backendUpdateBtn: document.getElementById("backendUpdateBtn"),
@@ -1221,15 +1222,24 @@
   // as polling. The one function that MUST run on every exit path: terminal
   // job state, explicit drawer close (closeResultDrawer), and the top of
   // pollJob itself (superseding whatever ran before it). Safe to call when
-  // nothing is polling.
+  // nothing is polling. Also hides the transient "reconnecting" badge (see
+  // showJobPollTransient/hideJobPollTransient below) so it can never survive
+  // past the job it belonged to — one choke point for all poll-related UI
+  // teardown, same reasoning as the interval/token bookkeeping it already did.
   function stopJobPoll() {
     jobPollToken++;
     if (state.jobPoll && state.jobPoll.timer != null) {
       window.clearInterval(state.jobPoll.timer);
     }
     state.jobPoll = null;
+    hideJobPollTransient();
   }
 
+  // renderJobPollError is the genuinely-terminal card for a 404: job.go's
+  // Sweep only evicts terminal (success/failed) jobs after a 30-minute TTL —
+  // running jobs are never evicted — so a 404 here means the job really is
+  // gone (store-evicted or, defensively, never existed), not merely that one
+  // request failed.
   function renderJobPollError() {
     setResultHTML(
       '<div class="result-section result-error"><strong>Задача не найдена или истекла</strong>' +
@@ -1237,20 +1247,62 @@
     );
   }
 
+  // renderJobPollLost is the terminal card shown when pollJob gives up after
+  // JOB_POLL_FAILURE_LIMIT consecutive *transient* failures. Deliberately not
+  // phrased as "failed"/"expired" like renderJobPollError above: this path
+  // only means the client gave up polling, not that the job itself ended —
+  // per job.go, a running job is never evicted, so it may well still be
+  // going on the server. Wording steers the operator to re-open and check
+  // rather than implying the install died.
+  function renderJobPollLost() {
+    setResultHTML(
+      '<div class="result-section"><strong>Соединение потеряно</strong>' +
+      "<p>Задача могла продолжиться на сервере — откройте заново, чтобы проверить.</p></div>"
+    );
+  }
+
+  // showJobPollTransient/hideJobPollTransient toggle the small badge above
+  // the checklist that pollJob shows while it's retrying through non-404
+  // errors. Deliberately does not touch #resultOutput — the last successfully
+  // rendered checklist stays exactly as it was, since nothing about the job
+  // itself is known to have changed, only that the last poll didn't land.
+  function showJobPollTransient() {
+    if (els.jobPollStatus) els.jobPollStatus.classList.remove("hidden");
+  }
+
+  function hideJobPollTransient() {
+    if (els.jobPollStatus) els.jobPollStatus.classList.add("hidden");
+  }
+
+  // JOB_POLL_FAILURE_LIMIT bounds how many consecutive non-404 poll failures
+  // (network blips, 5xx, timeouts) pollJob tolerates before it gives up and
+  // shows renderJobPollLost. At the ~1500ms tick cadence that's roughly 60s
+  // of unbroken connectivity loss — long enough to ride out a flaky link
+  // without polling forever against a link that may never recover. Reset to
+  // 0 on every successful tick (see pollJob).
+  const JOB_POLL_FAILURE_LIMIT = 40;
+
   // pollJob polls GET /v1/dashboard/provision/{jobId} every ~1500ms, re-
   // rendering the checklist on every response, until job.state leaves
-  // "running". A 404 (job TTL-evicted server-side) or any other request
-  // failure (network blip, 5xx, a 401 redirect that hands back null — see
-  // api()) is treated as terminal for the poller: there's no partial-
-  // checklist state worth preserving once the poll itself can't be trusted,
-  // so it shows one clear "not found/expired" card and stops rather than
-  // retrying forever against a job that may never resolve. `busy` skips a
-  // tick if the previous request is still in flight, so a slow response
-  // (longer than the 1500ms cadence) can never pile up overlapping requests.
+  // "running". Errors split two ways:
+  //   - `err.status === 404` (job store-evicted — see renderJobPollError's
+  //     comment) is genuinely terminal: show the not-found/expired card and
+  //     stop.
+  //   - Everything else (a plain network failure has no `.status` at all —
+  //     see api()'s `fetch` call — plus any non-404 HTTP error) is treated as
+  //     a transient blip: the job is still running server-side, so polling
+  //     continues on the same interval and only a subtle "reconnecting"
+  //     badge is shown, without disturbing the last-rendered checklist. If
+  //     failures keep piling up past JOB_POLL_FAILURE_LIMIT, pollJob finally
+  //     gives up via renderJobPollLost (non-alarming wording — the job may
+  //     still have finished server-side, the client just stopped watching).
+  // `busy` skips a tick if the previous request is still in flight, so a
+  // slow response (longer than the 1500ms cadence) can never pile up
+  // overlapping requests.
   function pollJob(jobId) {
     stopJobPoll();
     const token = jobPollToken;
-    const poll = { timer: null, busy: false };
+    const poll = { timer: null, busy: false, failures: 0 };
     state.jobPoll = poll;
 
     const tick = async () => {
@@ -1267,14 +1319,27 @@
           stopJobPoll();
           return;
         }
+        poll.failures = 0;
+        hideJobPollTransient();
         renderJobProgress(job);
         if (job.state !== "running") {
           stopJobPoll();
         }
       } catch (err) {
         if (jobPollToken !== token) return;
-        renderJobPollError();
-        stopJobPoll();
+        poll.busy = false; // must reset even on error — see busy-flag note above
+        if (err && err.status === 404) {
+          stopJobPoll();
+          renderJobPollError();
+          return;
+        }
+        poll.failures++;
+        if (poll.failures >= JOB_POLL_FAILURE_LIMIT) {
+          stopJobPoll();
+          renderJobPollLost();
+          return;
+        }
+        showJobPollTransient();
       }
     };
 
