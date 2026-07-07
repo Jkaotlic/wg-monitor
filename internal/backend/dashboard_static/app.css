@@ -1262,11 +1262,17 @@ details.raw-output pre {
   font-size: 12px;
 }
 
-.revive-advanced {
+/* advanced-disclosure is the generic <details> "optional/advanced fields"
+   widget shared by the Provision and Repair wizards' AWG Manager auth
+   section (login/password/api-key) — not specific to either wizard despite
+   the name history (this rule predates the 2026-07-06 provisioning rework's
+   Revive removal, which is the last caller that gave it a feature-specific
+   name). */
+.advanced-disclosure {
   margin: 4px 0 2px;
 }
 
-.revive-advanced > summary {
+.advanced-disclosure > summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 12px;
@@ -1274,7 +1280,7 @@ details.raw-output pre {
   padding: 4px 0;
 }
 
-.revive-advanced[open] > summary {
+.advanced-disclosure[open] > summary {
   margin-bottom: 8px;
 }
 

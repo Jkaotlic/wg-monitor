@@ -7,6 +7,7 @@
     drawerTab: "overview",
     deployAgent: null,
     editAgent: null,
+    repairNick: null,
     autoRefresh: true,
     lastUpdatedAt: 0,
     buttonStates: new Map(),
@@ -17,6 +18,8 @@
     cronAutoChecked: new Set(),
     provisionMode: null,
     provisionStep: "mode",
+    repairMode: null,
+    repairStep: "mode",
     // jobPoll is non-null while pollJob has a live setInterval ticking against
     // a provision/repair job (see pollJob/stopJobPoll) — overlayOpen() also
     // inspects this so auto-refresh pauses for the whole life of a job, not
@@ -100,15 +103,18 @@
     cfgAllowFirmware: document.getElementById("cfgAllowFirmware"),
     agentConfigError: document.getElementById("agentConfigError"),
     applyAgentConfigBtn: document.getElementById("applyAgentConfigBtn"),
-    reviveModal: document.getElementById("reviveModal"),
-    reviveTitle: document.getElementById("reviveTitle"),
-    reviveRootPass: document.getElementById("reviveRootPass"),
-    reviveNewURL: document.getElementById("reviveNewURL"),
-    reviveAwgmLogin: document.getElementById("reviveAwgmLogin"),
-    reviveAwgmPass: document.getElementById("reviveAwgmPass"),
-    reviveAwgmKey: document.getElementById("reviveAwgmKey"),
-    reviveError: document.getElementById("reviveError"),
-    reviveConfirmBtn: document.getElementById("reviveConfirmBtn")
+    repairModal: document.getElementById("repairModal"),
+    repairTitle: document.getElementById("repairTitle"),
+    repairRootPassword: document.getElementById("repairRootPassword"),
+    repairNewURLField: document.getElementById("repairNewURLField"),
+    repairNewURL: document.getElementById("repairNewURL"),
+    repairVersionField: document.getElementById("repairVersionField"),
+    repairVersion: document.getElementById("repairVersion"),
+    repairAwgmLogin: document.getElementById("repairAwgmLogin"),
+    repairAwgmPassword: document.getElementById("repairAwgmPassword"),
+    repairAwgmApiKey: document.getElementById("repairAwgmApiKey"),
+    repairAccessError: document.getElementById("repairAccessError"),
+    repairStartBtn: document.getElementById("repairStartBtn")
   };
 
   const AUTO_REFRESH_MS = 20000;
@@ -683,10 +689,10 @@
     return `
         <section class="drawer-section drawer-section-recovery">
           <h3>Resurrect / recovery</h3>
-          <p class="drawer-note">Сменился домен или настройки роутера? Отредактируй агента, затем верни его в строй: wake запросит свежий отчёт, Restart AWG перезапустит AWG Manager на роутере.</p>
+          <p class="drawer-note">Сменился домен или настройки роутера, или агент тёмный? Edit меняет метаданные на бэкенде; Repair чинит сам роутер через awg-manager terminal (re-point URL или полная переустановка) — работает даже если агент офлайн.</p>
           <div class="drawer-actions">
             <button class="action-btn" type="button" data-edit-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-edit"></span>Edit settings</button>
-            <button class="action-btn warn" type="button" title="Перепривязать backend + рестарт через awg-manager terminal (работает даже если агент offline)" data-revive="${escapeAttr(selected.nickname)}"><span class="ti ti-heartbeat"></span>Revive (AWG Manager)</button>
+            <button class="action-btn warn" type="button" title="Почини роутер через awg-manager terminal: быстрый re-point URL или полная переустановка (работает даже если агент офлайн)" data-repair="${escapeAttr(selected.nickname)}"><span class="ti ti-terminal"></span>Repair</button>
             ${drawerCommandButton(selected, "force_recheck", recheckLongLabel(selected))}
             <button class="action-btn" type="button" data-state="${buttonState(selected.nickname, "awgmgr")}" data-maint="awgmgr" data-agent="${escapeAttr(selected.nickname)}"><span class="ti ti-server"></span>Restart AWG</button>
           </div>
@@ -1043,7 +1049,7 @@
         }));
       } else {
         toast("установка запущена — job " + ((res && res.job_id) || ""));
-        startJobProgress(v.nickname, res);
+        startJobProgress(v.nickname, res, "Provision");
       }
       await refresh();
     } catch (err) {
@@ -1347,15 +1353,20 @@
     tick();
   }
 
-  // startJobProgress hands the seeded {job_id, steps} response from
-  // submitProvision("provision") off to the live checklist: render once
+  // startJobProgress hands the seeded {job_id, steps} response from either
+  // submitProvision("provision") or submitRepair() off to the SAME live
+  // checklist — the design spec's Repair section is explicit that the run
+  // step is "same progress view", not a second implementation. Render once
   // immediately (so the drawer never shows a blank flash before the first
   // poll resolves), then start pollJob — if a job id actually came back
   // (defensive; should always be present on a 202, but polling with an empty
-  // id is nonsensical).
-  function startJobProgress(nickname, res) {
+  // id is nonsensical). `label` is the fixed, caller-supplied drawer-title
+  // prefix ("Provision"/"Repair") — a compile-time literal, not user/server
+  // data, so it needs no escaping; defaults to "Provision" only as a
+  // defensive fallback for a hypothetical future caller that forgets it.
+  function startJobProgress(nickname, res, label) {
     const jobID = (res && res.job_id) || "";
-    els.drawerTitle.textContent = "Provision / " + nickname;
+    els.drawerTitle.textContent = (label || "Provision") + " / " + nickname;
     renderJobProgress({ state: "running", steps: (res && res.steps) || [] });
     els.resultDrawer.classList.remove("hidden");
     if (jobID) {
@@ -1532,76 +1543,120 @@
     }
   }
 
-  function openRevive(nickname) {
-    state.reviveNick = nickname;
-    els.reviveTitle.textContent = "Revive / " + nickname;
-    els.reviveRootPass.value = "";
-    els.reviveNewURL.value = "";
-    els.reviveAwgmLogin.value = "";
-    els.reviveAwgmPass.value = "";
-    els.reviveAwgmKey.value = "";
-    els.reviveError.textContent = "";
-    setButtonState(els.reviveConfirmBtn, "idle");
-    els.reviveModal.classList.remove("hidden");
-    els.reviveRootPass.focus();
+  // repairShowStep switches the visible panel inside #repairModal — the same
+  // vanilla show/hide pattern as provisionShowStep, over the three
+  // data-repair-step panels (mode/access/run). Repair's wizard is a flat
+  // 2-step form (no identity step — an existing, already-enrolled nickname
+  // has nothing to (re)identify), so unlike PROVISION_BACK_MAP there is only
+  // ever one back transition (access -> mode); repairGoBack below is a
+  // one-line direct call rather than a lookup table for that reason.
+  function repairShowStep(step) {
+    state.repairStep = step;
+    document.querySelectorAll("#repairModal [data-repair-step]").forEach((panel) => {
+      panel.classList.toggle("hidden", panel.dataset.repairStep !== step);
+    });
   }
 
-  function closeRevive() {
-    els.reviveModal.classList.add("hidden");
-    state.reviveNick = null;
-    setButtonState(els.reviveConfirmBtn, "idle");
+  function repairGoBack() {
+    repairShowStep("mode");
   }
 
-  async function submitRevive() {
-    const nickname = state.reviveNick;
-    if (!nickname) return;
-    if (!els.reviveRootPass.value) {
-      els.reviveError.textContent = "Нужен root-пароль роутера";
+  // chooseRepairMode records which repair the operator picked and reveals
+  // the access step's mode-specific field: repoint gets an optional new
+  // backend URL, reinstall gets an optional target version (pre-filled with
+  // the known latest, mirroring openProvision's install-now default so the
+  // operator isn't forced to look it up). Root password and the awgm-auth
+  // disclosure are shown for both modes.
+  function chooseRepairMode(mode) {
+    state.repairMode = mode;
+    els.repairAccessError.textContent = "";
+    setButtonState(els.repairStartBtn, "idle");
+    els.repairNewURLField.classList.toggle("hidden", mode !== "repoint");
+    els.repairVersionField.classList.toggle("hidden", mode !== "reinstall");
+    if (mode === "reinstall" && !els.repairVersion.value) {
+      els.repairVersion.value = latestVersion();
+    }
+    repairShowStep("access");
+    els.repairRootPassword.focus();
+  }
+
+  function openRepair(nickname) {
+    state.repairNick = nickname;
+    state.repairMode = null;
+    els.repairTitle.textContent = "Repair / " + nickname;
+    els.repairRootPassword.value = "";
+    els.repairNewURL.value = "";
+    els.repairVersion.value = "";
+    els.repairAwgmLogin.value = "";
+    els.repairAwgmPassword.value = "";
+    els.repairAwgmApiKey.value = "";
+    els.repairAccessError.textContent = "";
+    els.repairNewURLField.classList.add("hidden");
+    els.repairVersionField.classList.add("hidden");
+    setButtonState(els.repairStartBtn, "idle");
+    repairShowStep("mode");
+    els.repairModal.classList.remove("hidden");
+  }
+
+  function closeRepair() {
+    els.repairModal.classList.add("hidden");
+    state.repairNick = null;
+    state.repairMode = null;
+    setButtonState(els.repairStartBtn, "idle");
+  }
+
+  // submitRepair posts to POST /v1/dashboard/agents/{nick}/repair for
+  // whichever mode chooseRepairMode recorded, then hands the returned
+  // {job_id, steps} off to the SAME shared progress view submitProvision
+  // uses (startJobProgress -> pollJob -> renderJobProgress) — per the design
+  // spec's "Repair modal ... Step 2 — run: -> same progress view", this is
+  // not a second checklist implementation. Unlike the old synchronous
+  // /revive endpoint (which could return a 502 with an inline {output,error}
+  // transcript), the engine-backed /repair endpoint only ever returns
+  // {job_id, steps} on success — every relay-side failure happens inside the
+  // async job and is discovered by polling, so there is no special-cased
+  // error status to handle here beyond the plain reject-before-job-starts
+  // validation errors (bad mode, no root password, no awgm_url on file,
+  // downgrade rejected, already running, etc.), all shown inline in the
+  // access step exactly like submitProvision's "provision" kind.
+  async function submitRepair() {
+    const nickname = state.repairNick;
+    const mode = state.repairMode;
+    if (!nickname || !mode) return;
+    if (!els.repairRootPassword.value) {
+      els.repairAccessError.textContent = "Нужен root-пароль роутера";
       return;
     }
-    els.reviveError.textContent = "";
-    setButtonState(els.reviveConfirmBtn, "waiting");
+    els.repairAccessError.textContent = "";
     const payload = {
-      root_password: els.reviveRootPass.value,
-      new_backend_url: els.reviveNewURL.value.trim(),
-      awgm_login: els.reviveAwgmLogin.value.trim(),
-      awgm_password: els.reviveAwgmPass.value,
-      awgm_api_key: els.reviveAwgmKey.value.trim()
+      mode,
+      root_password: els.repairRootPassword.value,
+      awgm_login: els.repairAwgmLogin.value.trim(),
+      awgm_password: els.repairAwgmPassword.value,
+      awgm_api_key: els.repairAwgmApiKey.value.trim()
     };
+    if (mode === "repoint") {
+      payload.new_backend_url = els.repairNewURL.value.trim();
+    } else {
+      payload.version = els.repairVersion.value.trim();
+    }
+    setButtonState(els.repairStartBtn, "waiting");
+    repairShowStep("run");
     try {
-      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/revive`, {
+      const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/repair`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      closeRevive();
-      toast("revive отправлен — агент перезапускается на новом backend");
-      showReviveResult(nickname, res, null);
-      refresh();
+      closeRepair();
+      toast("repair запущен — job " + ((res && res.job_id) || ""));
+      startJobProgress(nickname, res, "Repair");
+      await refresh();
     } catch (err) {
-      // The handler returns 502 with {output,error} when the relay ran but failed.
-      if (err.status === 502) {
-        closeRevive();
-        showReviveResult(nickname, null, err);
-      } else {
-        els.reviveError.textContent = err.message;
-        setButtonState(els.reviveConfirmBtn, "error");
-      }
+      setButtonState(els.repairStartBtn, "error");
+      repairShowStep("access");
+      els.repairAccessError.textContent = err.message;
     }
-  }
-
-  function showReviveResult(nickname, res, err) {
-    els.drawerTitle.textContent = "Revive / " + nickname;
-    const ok = res && res.ok;
-    const output = (res && res.output) || (err && err.body && err.body.output) || "";
-    const sections = [
-      `<div class="result-section${ok ? "" : " result-error"}"><strong>${ok ? "Revive отправлен" : "Revive не удался"}</strong><p>${escapeHTML((res && res.new_backend_url) || "")}</p>${err && err.message ? `<p>${escapeHTML(err.message)}</p>` : ""}</div>`
-    ];
-    if (output) {
-      sections.push(`<div class="result-section"><strong>AWG Manager terminal</strong><pre class="raw-output">${escapeHTML(output)}</pre></div>`);
-    }
-    setResultHTML(sections.join(""));
-    els.resultDrawer.classList.remove("hidden");
   }
 
   // cronScheduleToTime converts a stored "M H * * *" cron line to an "HH:MM"
@@ -1969,7 +2024,7 @@
       const nickname = button.dataset.agent || button.dataset.deploy;
       if (button.dataset.editAgent) openEditAgent(button.dataset.editAgent);
       if (button.dataset.agentConfig) openAgentConfig(button.dataset.agentConfig);
-      if (button.dataset.revive) openRevive(button.dataset.revive);
+      if (button.dataset.repair) openRepair(button.dataset.repair);
       if (button.dataset.deploy) openDeploy(nickname);
       if (button.dataset.cancelDeploy) cancelDeploy(button.dataset.cancelDeploy).catch((err) => toast(err.message));
       if (button.dataset.updateLatest) deployLatest(nickname).catch((err) => {
@@ -2001,7 +2056,7 @@
   document.querySelectorAll("[data-close-provision]").forEach((button) => button.addEventListener("click", closeProvision));
   document.querySelectorAll("[data-close-edit-agent]").forEach((button) => button.addEventListener("click", closeEditAgent));
   document.querySelectorAll("[data-close-agent-config]").forEach((button) => button.addEventListener("click", closeAgentConfig));
-  document.querySelectorAll("[data-close-revive]").forEach((button) => button.addEventListener("click", closeRevive));
+  document.querySelectorAll("[data-close-repair]").forEach((button) => button.addEventListener("click", closeRepair));
   els.confirmDeployBtn.addEventListener("click", () => deployAgent().catch((err) => {
     setButtonState(els.confirmDeployBtn, "error");
     toast(err.message);
@@ -2025,9 +2080,15 @@
     setButtonState(els.applyAgentConfigBtn, "error");
     els.agentConfigError.textContent = err.message;
   }));
-  els.reviveConfirmBtn.addEventListener("click", () => submitRevive().catch((err) => {
-    setButtonState(els.reviveConfirmBtn, "error");
-    els.reviveError.textContent = err.message;
+  document.querySelectorAll("#repairModal [data-repair-mode]").forEach((button) => {
+    button.addEventListener("click", () => chooseRepairMode(button.dataset.repairMode));
+  });
+  document.querySelectorAll("#repairModal [data-repair-back]").forEach((button) => {
+    button.addEventListener("click", repairGoBack);
+  });
+  els.repairStartBtn.addEventListener("click", () => submitRepair().catch((err) => {
+    setButtonState(els.repairStartBtn, "error");
+    els.repairAccessError.textContent = err.message;
   }));
   els.provisionGroup.addEventListener("change", toggleCustomGroup);
   els.closeDrawerBtn.addEventListener("click", closeResultDrawer);
@@ -2041,7 +2102,7 @@
   // Keyboard: Esc closes the top-most overlay; "/" focuses search.
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      if (!els.reviveModal.classList.contains("hidden")) { closeRevive(); return; }
+      if (!els.repairModal.classList.contains("hidden")) { closeRepair(); return; }
       if (!els.agentConfigModal.classList.contains("hidden")) { closeAgentConfig(); return; }
       if (!els.editAgentModal.classList.contains("hidden")) { closeEditAgent(); return; }
       if (!els.provisionModal.classList.contains("hidden")) { closeProvision(); return; }
