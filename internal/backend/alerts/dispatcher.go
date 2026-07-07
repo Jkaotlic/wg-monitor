@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -34,7 +33,6 @@ type Dispatcher struct {
 	d   *db.DB
 	tg  TGSender
 	cfg Config
-	mu  sync.Mutex
 	// WelcomeKeyboard returns the reply-keyboard markup to attach to the
 	// first message in a freshly-created per_router topic. Set by
 	// cmd/backend/main.go after construction (the Dispatcher doesn't
@@ -294,10 +292,12 @@ func (di *Dispatcher) retryOnStaleTopic(
 }
 
 // ensureTopic returns a forum_topic id for `nickname`, creating one if
-// missing. Fast path is lock-free; on cache miss it takes the dispatcher
-// mutex and double-checks before delegating to EnsureTopicForUser so
-// concurrent alerts for the same user don't race to create duplicate
-// topics in TG.
+// missing. Fast path is lock-free; on cache miss it takes the process-wide,
+// per-user topic-creation lock (LockTopicCreation, package alerts — C5) and
+// double-checks before delegating to EnsureTopicForUser, so concurrent
+// alerts for the same user — AND the admin /ensure_topics /recreate_topic
+// commands, which call EnsureTopicForUser directly under the same shared
+// lock — don't race to create duplicate topics in TG.
 func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname string) (TopicRef, error) {
 	u, err := di.d.Users().GetByNickname(nickname)
 	if err != nil {
@@ -306,10 +306,11 @@ func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname st
 	if u.TelegramThreadID != nil {
 		return TopicRef{ChatID: u.EffectiveTelegramChatID(di.cfg.ChatID), ThreadID: *u.TelegramThreadID}, nil
 	}
-	di.mu.Lock()
-	defer di.mu.Unlock()
-	// Double-check under lock — another goroutine may have created the
-	// topic while we waited.
+	unlock := LockTopicCreation(u.ID)
+	defer unlock()
+	// Double-check under lock — another goroutine (or the admin topic
+	// commands, sharing this same lock) may have created the topic while we
+	// waited.
 	u2, err := di.d.Users().GetByID(u.ID)
 	if err == nil && u2 != nil && u2.TelegramThreadID != nil {
 		return TopicRef{ChatID: u2.EffectiveTelegramChatID(di.cfg.ChatID), ThreadID: *u2.TelegramThreadID}, nil

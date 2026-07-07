@@ -128,7 +128,14 @@ func (r *Router) adminEnsureTopics(ctx context.Context, m *tg.Message) {
 			skipped++
 			continue
 		}
+		// Shared with Dispatcher.ensureTopic (C5): EnsureTopicForUser is not
+		// goroutine-safe, so a concurrent alert-driven topic creation for
+		// the same user (fired from a report landing mid-loop) must not
+		// race this bulk command — otherwise both could create a TG topic
+		// and the loser's DB write would orphan the other.
+		unlock := alerts.LockTopicCreation(u.ID)
 		ref, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, false)
+		unlock()
 		if err != nil {
 			fmt.Fprintf(&b, "❌ %s — %v\n", u.Nickname, err)
 			failed++
@@ -165,7 +172,11 @@ func (r *Router) adminRecreateTopic(ctx context.Context, m *tg.Message) {
 	if u.TelegramThreadID != nil {
 		oldID = *u.TelegramThreadID
 	}
+	// Shared with Dispatcher.ensureTopic and adminEnsureTopics (C5): guards
+	// against a concurrent alert-driven topic creation racing this rebuild.
+	unlock := alerts.LockTopicCreation(u.ID)
 	ref, err := alerts.EnsureTopicForUser(ctx, r.tg, r.d, r.cfg.ChatID, u.ID, true)
+	unlock()
 	if err != nil {
 		sum, hint := alerts.HintFor("admin_recreate_topic", err.Error())
 		card := alerts.Card{Badge: "❌", Label: "Не удалось пересоздать топик", Summary: sum, Hint: hint}
