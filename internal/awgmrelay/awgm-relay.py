@@ -398,6 +398,66 @@ def normalize_arch(arch):
         return "mipsle"
     raise RelayError("unsupported arch: " + arch + " (supported: aarch64/arm64, mips/mipsel/mipsle)")
 
+# PLAIN_FETCH is the default binary-download helper: whatever downloader the
+# router has, fetch $url to $dst. Used when no download_resolve_ip is pinned.
+PLAIN_FETCH = """fetch() {
+    url=$1
+    dst=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$dst"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$dst"
+    else
+        echo "curl/wget not found"
+        exit 12
+    fi
+}"""
+
+# RESOLVE_FETCH pins the download host to a fixed IP so a router whose DNS
+# cannot resolve the backend still fetches the binary during repair. curl gets
+# --resolve (host:port:ip); busybox wget (no --resolve) gets a temporary
+# /etc/hosts entry that is removed afterwards, best-effort if /etc/hosts is
+# read-only. TLS stays validated against RESOLVE_HOST — no -k, no IP-in-URL.
+# The three %s are sh-quoted host, ip, port. echo (not printf) so the template
+# carries no bare % for the outer format. set -eu safe: wget rc is captured in
+# an if-condition, and cleanup runs before the non-zero exit.
+RESOLVE_FETCH = """RESOLVE_HOST=%s
+RESOLVE_IP=%s
+RESOLVE_PORT=%s
+
+fetch() {
+    url=$1
+    dst=$2
+    if command -v curl >/dev/null 2>&1; then
+        curl --resolve "$RESOLVE_HOST:$RESOLVE_PORT:$RESOLVE_IP" -fsSL "$url" -o "$dst"
+    elif command -v wget >/dev/null 2>&1; then
+        _hosts_line="$RESOLVE_IP $RESOLVE_HOST"
+        _hosts_added=
+        if ! grep -qxF "$_hosts_line" /etc/hosts 2>/dev/null; then
+            if echo "$_hosts_line" >> /etc/hosts 2>/dev/null; then
+                _hosts_added=1
+            fi
+        fi
+        if wget -q "$url" -O "$dst"; then _rc=0; else _rc=$?; fi
+        if [ -n "$_hosts_added" ]; then
+            grep -vxF "$_hosts_line" /etc/hosts > /etc/hosts.wgtmp 2>/dev/null && mv /etc/hosts.wgtmp /etc/hosts 2>/dev/null || rm -f /etc/hosts.wgtmp 2>/dev/null
+        fi
+        [ "$_rc" -eq 0 ] || exit "$_rc"
+    else
+        echo "curl/wget not found"
+        exit 12
+    fi
+}"""
+
+def build_fetch_block(cfg, download_url):
+    resolve_ip = (cfg.get("download_resolve_ip") or "").strip()
+    if not resolve_ip:
+        return PLAIN_FETCH
+    parsed = urllib.parse.urlparse(download_url)
+    host = parsed.hostname or ""
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return RESOLVE_FETCH % (sh_quote(host), sh_quote(resolve_ip), sh_quote(str(port)))
+
 def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_start=False):
     nickname = cfg.get("nickname") or ""
     version = cfg.get("target_version") or ""
@@ -410,6 +470,7 @@ def build_deferred_bootstrap_script(cfg, backend_url, raw_token, arch, defer_sta
     agent_config = build_agent_config(cfg, backend_url, raw_token).rstrip()
     init_script = (cfg.get("init_script") or "").rstrip()
     download_url = release_base + "/" + version + "/" + asset
+    fetch_block = build_fetch_block(cfg, download_url)
     if defer_start:
         start_block = 'echo "wg-monitor bootstrap staged; service start deferred until backend token commit"'
     else:
@@ -445,18 +506,7 @@ if [ -f "$CONFIG" ]; then
     fi
 fi
 
-fetch() {
-    url=$1
-    dst=$2
-    if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" -o "$dst"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q "$url" -O "$dst"
-    else
-        echo "curl/wget not found"
-        exit 12
-    fi
-}
+%s
 
 echo "Installing wg-monitor $VERSION for $NICKNAME"
 echo __WG_STEP__ downloading
@@ -487,7 +537,7 @@ chmod 755 "$TMP_BIN"
 mv "$TMP_BIN" "$BIN"
 
 %s
-""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(asset), sh_quote(expected_sha), agent_config, init_script, start_block)
+""" % (sh_quote(nickname), sh_quote(version), sh_quote(download_url), sh_quote(asset), sh_quote(expected_sha), fetch_block, agent_config, init_script, start_block)
 
 def build_deferred_start_script(nickname):
     return """#!/bin/sh

@@ -351,6 +351,11 @@ type Deps struct {
 	TelegramExtraChatIDs  []int64
 	BackendUpdatePath     string
 	PublicBaseURL         string
+	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
+	// injected into the provisioning bootstrap as curl --resolve so a router
+	// with broken DNS can still download the agent during repair. Empty → the
+	// download resolves the host normally (unchanged behaviour).
+	PublicIP string
 	// AWGMRelayPath is the path to awgm-relay.py on the backend host, used by the
 	// dashboard "Revive via AWG Manager" action to drive the router's awg-manager
 	// terminal out-of-band. Empty falls back to defaultAWGMRelayPath.

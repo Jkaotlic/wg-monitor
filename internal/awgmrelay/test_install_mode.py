@@ -142,5 +142,43 @@ class LoginTerminalStepMarkerTest(unittest.TestCase):
         self.assertIn("__WG_STEP__ terminal_connected", buf.getvalue())
 
 
+class DownloadResolveIPTest(unittest.TestCase):
+    """The bootstrap fetch() must pin the download to a fixed IP (curl
+    --resolve, /etc/hosts fallback for wget) when download_resolve_ip is set,
+    so a router whose DNS can't resolve the backend still downloads the agent
+    during repair — and must be byte-identical to the plain fetch when unset."""
+
+    BASE = {
+        "nickname": "snekhaev",
+        "target_version": "v0.14.1",
+        "release_base": "https://wgmonitor.anexaev.crazedns.ru/v1/releases/download",
+        "expected_sha": "ab" * 32,
+        "init_script": "#!/bin/sh\ntrue",
+    }
+
+    def _script(self, **extra):
+        relay = load_relay()
+        cfg = dict(self.BASE, **extra)
+        return relay.build_deferred_bootstrap_script(cfg, "https://wgmon.example", "tok", "arm64")
+
+    def test_no_resolve_ip_keeps_plain_fetch(self):
+        s = self._script()
+        self.assertNotIn("--resolve", s)
+        self.assertNotIn("RESOLVE_", s)
+        self.assertIn('curl -fsSL "$url" -o "$dst"', s)
+
+    def test_resolve_ip_pins_curl_and_wget(self):
+        s = self._script(download_resolve_ip="128.0.142.207")
+        self.assertIn("RESOLVE_HOST='wgmonitor.anexaev.crazedns.ru'", s)
+        self.assertIn("RESOLVE_IP='128.0.142.207'", s)
+        self.assertIn("RESOLVE_PORT='443'", s)
+        self.assertIn('curl --resolve "$RESOLVE_HOST:$RESOLVE_PORT:$RESOLVE_IP" -fsSL "$url" -o "$dst"', s)
+        # wget fallback: temporary /etc/hosts entry, added then removed.
+        self.assertIn("/etc/hosts", s)
+        # TLS stays validated against the hostname — never curl -k / IP-in-URL.
+        self.assertNotIn("curl -k", s)
+        self.assertNotIn("--insecure", s)
+
+
 if __name__ == "__main__":
     unittest.main()
