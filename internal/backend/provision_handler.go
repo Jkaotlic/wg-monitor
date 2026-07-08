@@ -352,20 +352,21 @@ func runProvisionInstallCore(w http.ResponseWriter, r *http.Request, d Deps, p p
 	}
 
 	job := awgmInstallJob{
-		BaseURL:          p.AWGMURL,
-		APIKey:           strings.TrimSpace(p.AWGMAPIKey),
-		Login:            strings.TrimSpace(p.AWGMLogin),
-		Password:         p.AWGMPassword,
-		TerminalUser:     defaultProvisionTerminalUser,
-		TerminalPassword: p.RootPassword,
-		Mode:             "bootstrap_install",
-		Nickname:         enrollment.Nickname,
-		TargetVersion:    version,
-		BackendURL:       backendURL,
-		RawToken:         enrollment.RawToken,
-		ReleaseBase:      backendURL + "/v1/releases/download",
-		InitScript:       installtmpl.InitScript(),
-		Checksums:        sums,
+		BaseURL:           p.AWGMURL,
+		APIKey:            strings.TrimSpace(p.AWGMAPIKey),
+		Login:             strings.TrimSpace(p.AWGMLogin),
+		Password:          p.AWGMPassword,
+		TerminalUser:      defaultProvisionTerminalUser,
+		TerminalPassword:  p.RootPassword,
+		Mode:              "bootstrap_install",
+		Nickname:          enrollment.Nickname,
+		TargetVersion:     version,
+		BackendURL:        backendURL,
+		RawToken:          enrollment.RawToken,
+		ReleaseBase:       backendURL + "/v1/releases/download",
+		InitScript:        installtmpl.InitScript(),
+		Checksums:         sums,
+		DownloadResolveIP: d.PublicIP,
 	}
 	jobJSON, err := json.Marshal(job)
 	if err != nil {
@@ -601,20 +602,21 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 	}
 
 	job := awgmInstallJob{
-		BaseURL:          awgmURL,
-		APIKey:           strings.TrimSpace(req.AWGMAPIKey),
-		Login:            strings.TrimSpace(req.AWGMLogin),
-		Password:         req.AWGMPassword,
-		TerminalUser:     defaultProvisionTerminalUser,
-		TerminalPassword: req.RootPassword,
-		Mode:             "bootstrap_install",
-		Nickname:         nickname,
-		TargetVersion:    version,
-		BackendURL:       backendURL,
-		RawToken:         enrollment.RawToken,
-		ReleaseBase:      backendURL + "/v1/releases/download",
-		InitScript:       installtmpl.InitScript(),
-		Checksums:        sums,
+		BaseURL:           awgmURL,
+		APIKey:            strings.TrimSpace(req.AWGMAPIKey),
+		Login:             strings.TrimSpace(req.AWGMLogin),
+		Password:          req.AWGMPassword,
+		TerminalUser:      defaultProvisionTerminalUser,
+		TerminalPassword:  req.RootPassword,
+		Mode:              "bootstrap_install",
+		Nickname:          nickname,
+		TargetVersion:     version,
+		BackendURL:        backendURL,
+		RawToken:          enrollment.RawToken,
+		ReleaseBase:       backendURL + "/v1/releases/download",
+		InitScript:        installtmpl.InitScript(),
+		Checksums:         sums,
+		DownloadResolveIP: d.PublicIP,
 	}
 	jobJSON, err := json.Marshal(job)
 	if err != nil {

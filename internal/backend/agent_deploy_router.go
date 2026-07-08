@@ -27,4 +27,10 @@ type awgmInstallJob struct {
 	ReleaseBase      string            `json:"release_base"`
 	InitScript       string            `json:"init_script"`
 	Checksums        map[string]string `json:"checksums"`
+	// DownloadResolveIP, when set, pins the release-download host to this IPv4
+	// via curl --resolve (or an /etc/hosts fallback for busybox wget) in the
+	// bootstrap script, so a router whose DNS cannot resolve the backend host
+	// still downloads the agent during repair. TLS stays validated against the
+	// hostname. Empty → the router resolves the host normally.
+	DownloadResolveIP string `json:"download_resolve_ip,omitempty"`
 }

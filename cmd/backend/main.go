@@ -269,6 +269,7 @@ func main() {
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
 		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),
 		PublicBaseURL:             cfg.PublicBaseURL,
+		PublicIP:                  cfg.PublicIP,
 		Provision:                 provisionDeps,
 	})
 	srv := &http.Server{

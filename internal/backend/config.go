@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +13,17 @@ import (
 )
 
 type Config struct {
-	Listen            string                   `yaml:"listen"`
-	LogLevel          string                   `yaml:"log_level"`
-	PublicBaseURL     string                   `yaml:"public_base_url"`
+	Listen        string `yaml:"listen"`
+	LogLevel      string `yaml:"log_level"`
+	PublicBaseURL string `yaml:"public_base_url"`
+	// PublicIP pins the backend's fleet-facing public IPv4 for the provisioning
+	// download's curl --resolve, so a router with broken DNS can still fetch the
+	// agent binary during repair (see docs/.../dns-independent-repair-download).
+	// Static, not auto-resolved: the backend may run behind split-horizon DNS
+	// (e.g. rpie4 inside the operator tunnel resolves its own host to a private
+	// address), so it cannot look up its own fleet-facing IP. Empty → no
+	// --resolve (unchanged behaviour).
+	PublicIP          string                   `yaml:"public_ip"`
 	DBPath            string                   `yaml:"db_path"`
 	Telegram          TelegramConfig           `yaml:"telegram"`
 	Wizard            WizardConfig             `yaml:"wizard"`
@@ -185,6 +194,12 @@ func LoadConfig(path string) (*Config, error) {
 		cfg.LogLevel = "info"
 	}
 	cfg.PublicBaseURL = strings.TrimRight(strings.TrimSpace(cfg.PublicBaseURL), "/")
+	cfg.PublicIP = strings.TrimSpace(cfg.PublicIP)
+	if cfg.PublicIP != "" {
+		if ip := net.ParseIP(cfg.PublicIP); ip == nil || ip.To4() == nil {
+			return nil, fmt.Errorf("public_ip must be a valid IPv4 address, got %q", cfg.PublicIP)
+		}
+	}
 	if cfg.DBPath == "" {
 		return nil, fmt.Errorf("db_path is required")
 	}
