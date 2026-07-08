@@ -143,6 +143,49 @@ telegram:
 	}
 }
 
+func TestLoadConfigPublicIPValidAndInvalid(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "x")
+	base := func(publicIP string) string {
+		return `
+db_path: /tmp/state.db
+public_ip: ` + publicIP + `
+telegram:
+  bot_token_file: ` + tokPath + `
+  chat_id: -100
+  admin_user_id: 1
+`
+	}
+
+	// Valid IPv4 loads and is trimmed.
+	cfg, err := LoadConfig(writeFile(t, dir, "ok.yaml", base(`" 128.0.142.207 "`)))
+	if err != nil {
+		t.Fatalf("valid public_ip rejected: %v", err)
+	}
+	if cfg.PublicIP != "128.0.142.207" {
+		t.Fatalf("PublicIP = %q, want trimmed IPv4", cfg.PublicIP)
+	}
+
+	// A non-IP string is rejected (fail fast, not a silent broken --resolve).
+	if _, err := LoadConfig(writeFile(t, dir, "bad.yaml", base("not-an-ip"))); err == nil {
+		t.Fatal("expected error for non-IP public_ip")
+	}
+
+	// IPv6 is rejected — the feature is IPv4-only by design.
+	if _, err := LoadConfig(writeFile(t, dir, "v6.yaml", base(`"2001:db8::1"`))); err == nil {
+		t.Fatal("expected error for IPv6 public_ip (IPv4-only)")
+	}
+
+	// Empty/omitted stays empty (unchanged behaviour, no --resolve).
+	cfg, err = LoadConfig(writeFile(t, dir, "empty.yaml", base(`""`)))
+	if err != nil {
+		t.Fatalf("empty public_ip should be allowed: %v", err)
+	}
+	if cfg.PublicIP != "" {
+		t.Fatalf("PublicIP = %q, want empty", cfg.PublicIP)
+	}
+}
+
 func TestLoadConfigRejectsMissingChatID(t *testing.T) {
 	dir := t.TempDir()
 	tokPath := writeFile(t, dir, "tok", "x")

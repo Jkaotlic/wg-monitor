@@ -106,6 +106,7 @@ func newProvisionTestHandler(t *testing.T, relay *fakeProvisionRelay, lastSeen p
 		DB:             database,
 		DashboardToken: "secret",
 		PublicBaseURL:  "https://wgmon.example",
+		PublicIP:       "203.0.113.9",
 		Provision: provision.Deps{
 			Store:    store,
 			BaseCtx:  context.Background(),
@@ -311,6 +312,9 @@ func TestDashboardProvisionInstall_BuildsBootstrapJobWithVerifiedChecksumsAndPos
 	}
 	if captured.ReleaseBase != "https://wgmon.example/v1/releases/download" {
 		t.Errorf("release base = %q", captured.ReleaseBase)
+	}
+	if captured.DownloadResolveIP != "203.0.113.9" {
+		t.Errorf("download_resolve_ip = %q, want the configured PublicIP so a broken-DNS router can still download", captured.DownloadResolveIP)
 	}
 
 	until, ok := relay.deadlineUntil()
@@ -655,6 +659,9 @@ func TestDashboardRepairReinstall_BuildsBootstrapJobForExistingNick(t *testing.T
 	}
 	if captured.Checksums["wg-monitor-agent-linux-arm64"] != "cafebabe" {
 		t.Errorf("checksums missing: %v", captured.Checksums)
+	}
+	if captured.DownloadResolveIP != "203.0.113.9" {
+		t.Errorf("download_resolve_ip = %q, want the configured PublicIP (repair path must also pin the download)", captured.DownloadResolveIP)
 	}
 	if h := tokenHashOf(t, database, "bronya"); h == beforeHash {
 		t.Error("expected a freshly re-minted token (hash should change)")
