@@ -17,6 +17,10 @@ wg-monitor-backend
 .playwright-mcp/
 .tmp/
 
+# Mini app frontend build tooling — build output IS committed (miniapp_static/),
+# only node_modules is not.
+miniapp/node_modules/
+
 # Go test cache
 .gocache/
 .gomodcache/
