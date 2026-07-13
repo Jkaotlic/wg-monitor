@@ -4,6 +4,8 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"sort"
 	"strconv"
@@ -121,5 +123,65 @@ func TestVerifyInitData_MissingUserRejected(t *testing.T) {
 
 	if _, err := verifyInitData(raw, "test-bot-token", now); err == nil {
 		t.Fatal("expected missing-user error, got nil")
+	}
+}
+
+func TestMiniappSessionRoundTrip(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/miniapp/session", nil)
+	cookie := miniappSessionCookie(req, "test-bot-token", 555)
+
+	verifyReq := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	verifyReq.AddCookie(cookie)
+
+	uid, ok := miniappSessionUserID(verifyReq, "test-bot-token")
+	if !ok || uid != 555 {
+		t.Fatalf("uid=%d ok=%v, want 555/true", uid, ok)
+	}
+}
+
+func TestMiniappSessionRejectsWrongBotToken(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "/v1/miniapp/session", nil)
+	cookie := miniappSessionCookie(req, "test-bot-token", 555)
+
+	verifyReq := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	verifyReq.AddCookie(cookie)
+
+	if _, ok := miniappSessionUserID(verifyReq, "different-bot-token"); ok {
+		t.Fatal("expected rejection with wrong bot token")
+	}
+}
+
+func TestMiniappSessionRejectsMissingCookie(t *testing.T) {
+	verifyReq := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	if _, ok := miniappSessionUserID(verifyReq, "test-bot-token"); ok {
+		t.Fatal("expected rejection with no cookie")
+	}
+}
+
+func TestMiniAppAuthMiddleware(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		uid, ok := miniappUserFromContext(r.Context())
+		if !ok || uid != 555 {
+			t.Errorf("context uid=%d ok=%v, want 555/true", uid, ok)
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := MiniAppAuthMiddleware("test-bot-token", nil)(inner)
+
+	noCookie := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, noCookie)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no cookie: want 401, got %d", rec.Code)
+	}
+
+	mintReq := httptest.NewRequest(http.MethodPost, "/v1/miniapp/session", nil)
+	cookie := miniappSessionCookie(mintReq, "test-bot-token", 555)
+	withCookie := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	withCookie.AddCookie(cookie)
+	rec2 := httptest.NewRecorder()
+	handler.ServeHTTP(rec2, withCookie)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("with cookie: want 200, got %d", rec2.Code)
 	}
 }
