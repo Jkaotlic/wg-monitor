@@ -46,6 +46,15 @@ English:
 - Админские команды регистрируются отдельно, только для admin scope: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, `/selfhosted`.
 - В `/panel` живут хаб флота, массовые проверки, update-all, доступы, справка оператора и "оживить топики" - массовая переотправка актуального меню во все топики роутеров.
 
+## Telegram Mini App (beta)
+
+A Telegram Mini App is available alongside the existing bot panels, covering fleet
+overview and per-router status (`/miniapp/`, opened via a "📱 Открыть в приложении"
+button on HARD alerts). It authenticates via Telegram's signed `initData` against the
+same admin/owner/operator model the bot already uses — no separate login. The browser
+dashboard (`/dashboard/`) remains the primary surface for deploy/provision/repair and
+everything else the mini app doesn't cover yet.
+
 ## Deploy Model
 
 New and recovered routers are deployed through:
