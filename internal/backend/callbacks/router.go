@@ -734,11 +734,13 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		return true
 	}
 	if user.TelegramUserID != nil {
-		if *user.TelegramUserID == q.From.ID {
-			return !r.rejectBeforeRouterTopicExists(ctx, q, args, user)
+		role, err := r.d.RouterAccessRole(user.ID, q.From.ID)
+		if err != nil {
+			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "Ошибка проверки доступа")
+			slog.Warn("acl: access role lookup failed, rejecting", "router_user_id", user.ID, "from", q.From.ID, "err", err)
+			return false
 		}
-		// Owner mismatch — try the operator whitelist before rejecting.
-		if r.d.RouterOperators().HasAccess(user.ID, q.From.ID) {
+		if role != "" {
 			return !r.rejectBeforeRouterTopicExists(ctx, q, args, user)
 		}
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
