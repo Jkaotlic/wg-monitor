@@ -63,12 +63,14 @@ func miniappSessionHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-// miniappIsAdmin mirrors callbacks.Router.isAdminTG: an unset AdminUserID (0)
-// is a defensive fallback that config-loading never actually allows in
-// production (Telegram.AdminUserID is required non-zero) — kept here only so
-// the two admin checks can't silently diverge.
+// miniappIsAdmin enforces a fail-closed access gate for the mini app: only the
+// explicitly configured TelegramAdminUserID is treated as admin. Unlike the
+// dashboard's isAdminTG (which is fail-open for UI hints only), miniappIsAdmin
+// is the actual authorization boundary: it controls fleet visibility and query
+// access. Returning true grants complete router access, so it must reject any
+// unset adminUserID (0) even though config-loading prevents that in practice.
 func miniappIsAdmin(telegramUserID, adminUserID int64) bool {
-	return adminUserID == 0 || telegramUserID == adminUserID
+	return adminUserID != 0 && telegramUserID == adminUserID
 }
 
 type miniappRouterSummary struct {
