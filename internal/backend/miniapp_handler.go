@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
@@ -58,14 +59,74 @@ func miniappIsAdmin(telegramUserID, adminUserID int64) bool {
 	return adminUserID == 0 || telegramUserID == adminUserID
 }
 
-// miniappRoutersHandler, miniappRouterDetailHandler, and
-// miniappRouterEventsHandler are trivial stubs so this package compiles and
-// this task's own tests can run standalone. Task 8 replaces
-// miniappRoutersHandler with a real implementation; Task 9 replaces the other
-// two. Do not implement these for real here — that's out of scope for Task 7.
-func miniappRoutersHandler(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+type miniappRouterSummary struct {
+	ID              int64               `json:"id"`
+	Nickname        string              `json:"nickname"`
+	Status          string              `json:"status"`
+	LastSeenAt      *time.Time          `json:"last_seen_at,omitempty"`
+	LastSeenAgeSec  *int64              `json:"last_seen_age_sec,omitempty"`
+	ActiveIncidents []dashboardIncident `json:"active_incidents,omitempty"`
 }
+
+func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary {
+	return miniappRouterSummary{
+		ID:              a.ID,
+		Nickname:        a.Nickname,
+		Status:          a.Status,
+		LastSeenAt:      a.LastSeenAt,
+		LastSeenAgeSec:  a.LastSeenAgeSec,
+		ActiveIncidents: a.ActiveIncidents,
+	}
+}
+
+type miniappRoutersResp struct {
+	Routers []miniappRouterSummary `json:"routers"`
+}
+
+// miniappRoutersHandler lists the routers visible to the caller: the full
+// fleet for the Telegram admin, or only routers telegramUserID owns or
+// operates (via db.AccessibleRouterIDs) for everyone else. The response
+// deliberately excludes dashboardSummaryAgent's SSH/AWGM/deploy-metadata
+// fields — mini-app callers include non-admin operators who shouldn't see
+// those.
+func miniappRoutersHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramUserID, _ := miniappUserFromContext(r.Context())
+		summary, err := buildDashboardSummary(d.DB, time.Now().UTC(), dashboardStatusPolicyFromDeps(d))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "fleet summary failed")
+			return
+		}
+		resp := miniappRoutersResp{}
+		if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+			for _, a := range summary.Agents {
+				resp.Routers = append(resp.Routers, miniappRouterSummaryFromAgent(a))
+			}
+		} else {
+			allowed, err := d.DB.AccessibleRouterIDs(telegramUserID)
+			if err != nil {
+				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "access lookup failed")
+				return
+			}
+			allowedSet := make(map[int64]bool, len(allowed))
+			for _, id := range allowed {
+				allowedSet[id] = true
+			}
+			for _, a := range summary.Agents {
+				if allowedSet[a.ID] {
+					resp.Routers = append(resp.Routers, miniappRouterSummaryFromAgent(a))
+				}
+			}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// miniappRouterDetailHandler and miniappRouterEventsHandler are trivial
+// stubs so this package compiles and Task 7's own tests can run standalone.
+// Task 9 replaces these. Do not implement these for real here — that's out
+// of scope for Task 8.
 func miniappRouterDetailHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
 }

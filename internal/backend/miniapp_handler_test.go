@@ -94,3 +94,79 @@ func TestMiniappRoutesNotRegisteredWithoutBotToken(t *testing.T) {
 		t.Fatalf("want 404 when TelegramBotToken is empty, got %d", rec.Code)
 	}
 }
+
+func seedMiniappFleet(t *testing.T) (*db.DB, int64, int64, int64) {
+	t.Helper()
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	ownedID, err := d.Users().Insert("router-owned", "tok-owned-0000000000000000000000000000000000000000000000000000", "1.1.1.1", "awg11")
+	if err != nil {
+		t.Fatalf("insert owned: %v", err)
+	}
+	if err := d.Users().SetTelegramUserID(ownedID, 100); err != nil {
+		t.Fatalf("set owner: %v", err)
+	}
+	otherID, err := d.Users().Insert("router-other", "tok-other-0000000000000000000000000000000000000000000000000000", "1.1.1.2", "awg11")
+	if err != nil {
+		t.Fatalf("insert other: %v", err)
+	}
+	if err := d.Users().SetTelegramUserID(otherID, 200); err != nil {
+		t.Fatalf("set other owner: %v", err)
+	}
+	return d, ownedID, otherID, 100
+}
+
+func miniappSessionCookieFor(t *testing.T, botToken string, telegramUserID int64) *http.Cookie {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/miniapp/session", nil)
+	return miniappSessionCookie(req, botToken, telegramUserID)
+}
+
+func TestMiniappRoutersListScopedToOwnedRouter(t *testing.T) {
+	d, ownedID, otherID, telegramUserID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRoutersResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Routers) != 1 || resp.Routers[0].ID != ownedID {
+		t.Fatalf("routers = %+v, want exactly [%d]", resp.Routers, ownedID)
+	}
+	_ = otherID
+}
+
+func TestMiniappRoutersListAdminSeesAll(t *testing.T) {
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRoutersResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[int64]bool{}
+	for _, r := range resp.Routers {
+		got[r.ID] = true
+	}
+	if !got[ownedID] || !got[otherID] || len(got) != 2 {
+		t.Fatalf("admin routers = %+v, want both %d and %d", resp.Routers, ownedID, otherID)
+	}
+}
