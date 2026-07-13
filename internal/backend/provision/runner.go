@@ -40,6 +40,11 @@ const tailRingLimit = 40
 // instantly-failed Job.
 var ErrAlreadyRunning = errors.New("установка/ремонт этого роутера уже выполняется — дождись завершения текущего задания")
 
+// errTokenCommit wraps a CommitToken failure so hintFor can map it to the
+// distinct "token not saved in the backend DB" hint instead of the generic
+// post-checksum service hint.
+var errTokenCommit = errors.New("token commit failed")
+
 // verifySleep is the sleep func Start's worker hands to VerifyOnline in
 // production (real time.Sleep). It is a package var — not a Deps field —
 // because Deps' shape is fixed by the provisioning-rework plan (see the
@@ -104,6 +109,17 @@ type StartReq struct {
 	Version       string
 	InstallBudget time.Duration
 	VerifyBudget  time.Duration
+
+	// CommitToken, when non-nil, is invoked exactly once by the worker the
+	// moment the config_written marker is applied — i.e. the router has just
+	// persisted config.yaml with this run's fresh token. It performs the
+	// backend-side DB commit (UpsertEnrollment of the token hash + deploy
+	// metadata). Deferring it here — rather than the handler committing before
+	// Start — is what guarantees a failed install (e.g. a download that never
+	// reaches config_written) can never leave the DB rotated while the router
+	// keeps the old token (the 2026-07-13 token-desync fix). A nil CommitToken
+	// (repoint, register) means "nothing to commit here".
+	CommitToken func() error
 }
 
 // Start registers a Job for req and launches the async worker goroutine that
@@ -163,6 +179,8 @@ func (d Deps) run(jobID string, req StartReq) {
 
 	activeStep := StepTerminalConnected
 	var tail []string
+	var commitErr error
+	committed := false
 
 	onLine := func(line string) {
 		tail = appendTail(tail, line)
@@ -199,9 +217,20 @@ func (d Deps) run(jobID string, req StartReq) {
 		if applied {
 			activeStep = name
 		}
+		if applied && name == StepConfigWritten && req.CommitToken != nil && !committed {
+			committed = true
+			if err := req.CommitToken(); err != nil {
+				commitErr = fmt.Errorf("%w: %v", errTokenCommit, err)
+			}
+		}
 	}
 
 	rc, relayErr := d.Relay(installCtx, req.RelayPath, req.JobJSON, onLine)
+
+	if commitErr != nil {
+		d.fail(jobID, req, StepConfigWritten, commitErr, noExitCode, tail)
+		return
+	}
 
 	if rc != 0 || relayErr != nil {
 		// Cross-task requirement (from Task 4/B4's review): a ctx-kill and a
@@ -342,6 +371,10 @@ func appendTail(buf []string, line string) []string {
 // ParseStepLine + stepIndex have already validated against the job's own
 // template), never anything derived from relayErr.
 func hintFor(step string, relayErr error) string {
+	if errors.Is(relayErr, errTokenCommit) {
+		return "токен агента не сохранён в БД backend — повтори установку/ремонт"
+	}
+
 	if errors.Is(relayErr, context.DeadlineExceeded) {
 		return fmt.Sprintf("истёк таймаут на шаге «%s» — терминал или роутер не ответили вовремя, попробуй ещё раз", step)
 	}

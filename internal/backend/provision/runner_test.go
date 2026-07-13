@@ -540,6 +540,103 @@ func TestHintFor_UnknownStepReturnsSanitizedGeneric(t *testing.T) {
 	}
 }
 
+// --- Task 1: deferred token commit at config_written -------------------
+
+func TestDeps_Start_CommitToken_FiresOnceOnConfigWritten(t *testing.T) {
+	relay := &scriptedRelay{
+		lines: []string{
+			"__WG_STEP__ arch_detected arm64",
+			"__WG_STEP__ downloading",
+			"__WG_STEP__ checksum_ok",
+			"__WG_STEP__ config_written",
+			"__WG_STEP__ init_installed",
+			"__WG_STEP__ service_started",
+		},
+		rc: 0,
+	}
+	commits := 0
+	clock := &fakeClock{t: time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)}
+	deps := Deps{
+		Store:    NewStore(),
+		BaseCtx:  context.Background(),
+		Relay:    relay.run,
+		LastSeen: func(string) (time.Time, bool) { return time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), true },
+		Now:      clock.now,
+	}
+	id, err := deps.Start(StartReq{
+		Kind: KindProvision, Nickname: "router1",
+		InstallBudget: 2 * time.Second, VerifyBudget: 2 * time.Second,
+		CommitToken: func() error { commits++; return nil },
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	job := waitForTerminal(t, deps.Store, id, time.Second)
+	if job.State != StateSuccess {
+		t.Fatalf("State = %q, want success (hint=%q)", job.State, job.Hint)
+	}
+	if commits != 1 {
+		t.Fatalf("CommitToken called %d times, want exactly 1", commits)
+	}
+}
+
+func TestDeps_Start_CommitToken_NotCalledWhenFailBeforeConfigWritten(t *testing.T) {
+	relay := &scriptedRelay{
+		lines: []string{"__WG_STEP__ arch_detected arm64", "__WG_STEP__ downloading"},
+		rc:    1, err: errors.New("download failed"),
+	}
+	commits := 0
+	deps := Deps{
+		Store: NewStore(), BaseCtx: context.Background(), Relay: relay.run,
+		LastSeen: func(string) (time.Time, bool) { return time.Time{}, false },
+	}
+	id, err := deps.Start(StartReq{
+		Kind: KindProvision, Nickname: "router1",
+		InstallBudget: 2 * time.Second, VerifyBudget: 2 * time.Second,
+		CommitToken: func() error { commits++; return nil },
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	job := waitForTerminal(t, deps.Store, id, time.Second)
+	if job.State != StateFailed {
+		t.Fatalf("State = %q, want failed", job.State)
+	}
+	if commits != 0 {
+		t.Fatalf("CommitToken called %d times, want 0 (no config_written => DB untouched)", commits)
+	}
+}
+
+func TestDeps_Start_CommitToken_ErrorFailsJob(t *testing.T) {
+	relay := &scriptedRelay{
+		lines: []string{
+			"__WG_STEP__ arch_detected arm64", "__WG_STEP__ downloading",
+			"__WG_STEP__ checksum_ok", "__WG_STEP__ config_written",
+			"__WG_STEP__ init_installed", "__WG_STEP__ service_started",
+		},
+		rc: 0,
+	}
+	deps := Deps{
+		Store: NewStore(), BaseCtx: context.Background(), Relay: relay.run,
+		LastSeen: func(string) (time.Time, bool) { return time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC), true },
+	}
+	id, err := deps.Start(StartReq{
+		Kind: KindProvision, Nickname: "router1",
+		InstallBudget: 2 * time.Second, VerifyBudget: 2 * time.Second,
+		CommitToken: func() error { return errors.New("db down") },
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	job := waitForTerminal(t, deps.Store, id, time.Second)
+	if job.State != StateFailed {
+		t.Fatalf("State = %q, want failed", job.State)
+	}
+	if !strings.Contains(job.Hint, "БД") {
+		t.Fatalf("Hint = %q, want the token-commit-failure hint", job.Hint)
+	}
+}
+
 // --- verifyPollInterval --------------------------------------------------
 
 // Pins cross-task requirement #3 (from B5's review) as an executable
