@@ -130,8 +130,8 @@ func TestCheckSelfUpdateFreeSpaceSufficient(t *testing.T) {
 		if name != "df" || strings.Join(args, " ") != "-k /opt" {
 			t.Fatalf("unexpected command: %s %s", name, strings.Join(args, " "))
 		}
-		// total=1,000,000 KB, free=900,000 KB: comfortably more than the 64 MB
-		// (65,536 KB) artifact ceiling plus the required 10% headroom.
+		// total=1,000,000 KB, free=900,000 KB: comfortably more than the 8 MB
+		// (8,192 KB) realistic-binary estimate plus the required 10% headroom.
 		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000000 100000 900000 10% /opt\n"), nil
 	}
 	if err := checkSelfUpdateFreeSpace(context.Background()); err != nil {
@@ -143,9 +143,9 @@ func TestCheckSelfUpdateFreeSpaceInsufficient(t *testing.T) {
 	old := SelfUpdateExec
 	t.Cleanup(func() { SelfUpdateExec = old })
 	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		// total=100,000 KB (10,000 KB headroom needed); free=70,000 KB; the
-		// artifact ceiling alone (65,536 KB) leaves only 4,464 KB < headroom.
-		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 30000 70000 30% /opt\n"), nil
+		// total=100,000 KB (10,000 KB headroom needed); free=15,000 KB; the
+		// 8,192 KB realistic-binary estimate leaves only 6,808 KB < headroom.
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 85000 15000 85% /opt\n"), nil
 	}
 	err := checkSelfUpdateFreeSpace(context.Background())
 	if err == nil {
@@ -153,6 +153,24 @@ func TestCheckSelfUpdateFreeSpaceInsufficient(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "space") {
 		t.Fatalf("expected a space-related error, got %v", err)
+	}
+}
+
+// TestCheckSelfUpdateFreeSpaceSufficient_RealWorldTestkeenNumbers locks in
+// the actual 2026-07-13 incident: testkeen's self_update refused to run
+// (28,000 KB free / 105,852 KB total /opt) because the old check estimated
+// "needed" space from the 64 MB HTTP download safety cap
+// (maxSelfUpdateArtifactSize) instead of the real ~2.1 MB agent binary size.
+// With the realistic 8,192 KB estimate, this exact df output must pass:
+// 28,000 - 8,192 = 19,808 KB free >= 10,585 KB headroom (10% of 105,852).
+func TestCheckSelfUpdateFreeSpaceSufficient_RealWorldTestkeenNumbers(t *testing.T) {
+	old := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = old })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 105852 77852 28000 74% /opt\n"), nil
+	}
+	if err := checkSelfUpdateFreeSpace(context.Background()); err != nil {
+		t.Fatalf("expected testkeen's real-world free space to pass with the realistic estimate, got %v", err)
 	}
 }
 
@@ -236,7 +254,7 @@ func TestSelfUpdateRejectsInsufficientOptSpaceBeforeDownloadingBinary(t *testing
 	oldExec := SelfUpdateExec
 	t.Cleanup(func() { SelfUpdateExec = oldExec })
 	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 30000 70000 30% /opt\n"), nil
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 85000 15000 85% /opt\n"), nil
 	}
 
 	assetHit := false
@@ -566,7 +584,7 @@ func selfUpdateTestHarness(t *testing.T, arch string, freeSpaceOK bool) string {
 		if freeSpaceOK {
 			return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 1000000 100000 900000 10% /opt\n"), nil
 		}
-		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 30000 70000 30% /opt\n"), nil
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 100000 85000 15000 85% /opt\n"), nil
 	}
 	t.Cleanup(func() { SelfUpdateExec = oldExec })
 
