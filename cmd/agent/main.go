@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -33,8 +34,9 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	slog.SetDefault(logger)
+	// Bootstrap logger to stderr until config (which may point the log file
+	// elsewhere, or disable it) is loaded.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
 
 	var loadOpts []agent.LoadOption
 	if *allowHTTP {
@@ -42,9 +44,27 @@ func main() {
 	}
 	cfg, err := agent.LoadConfig(*configPath, loadOpts...)
 	if err != nil {
-		logger.Error("config load", "err", err, "path", *configPath)
+		slog.Error("config load", "err", err, "path", *configPath)
 		os.Exit(2)
 	}
+
+	// Real logger: stderr (journald on the VPS/dev) + a rotating file so the
+	// agent's logs survive S99's stderr->/dev/null on Entware routers.
+	logSink := io.Writer(os.Stderr)
+	var logFileErr error
+	if lf := cfg.Logging.ResolveFile(); lf != "" {
+		if rf, ferr := agent.NewLogFile(lf, cfg.Logging.MaxBytes); ferr != nil {
+			logFileErr = ferr
+		} else {
+			logSink = io.MultiWriter(os.Stderr, rf)
+		}
+	}
+	logger := slog.New(slog.NewTextHandler(logSink, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	slog.SetDefault(logger)
+	if logFileErr != nil {
+		logger.Warn("agent log file unavailable; logging to stderr only", "err", logFileErr)
+	}
+
 	logger.Info("starting", "nickname", cfg.Agent.Nickname, "backend", cfg.Backend.URL,
 		"interval", cfg.Agent.Interval(), "version", Version,
 		"awg_manager", cfg.AwgManager.URL())
