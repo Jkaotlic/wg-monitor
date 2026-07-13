@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,6 +27,13 @@ type rotatingFile struct {
 	maxBytes int64
 	f        *os.File
 	size     int64
+}
+
+// NewLogFile builds the agent's rotating log sink for cmd/agent (the
+// rotatingFile type stays unexported). Returns io.Writer so callers depend
+// only on the writer contract.
+func NewLogFile(path string, maxBytes int64) (io.Writer, error) {
+	return newRotatingFile(path, maxBytes)
 }
 
 func newRotatingFile(path string, maxBytes int64) (*rotatingFile, error) {

@@ -21,6 +21,28 @@ type Config struct {
 	State         StateConfig         `yaml:"state"`
 	ExternalReach ExternalReachConfig `yaml:"external_reach"`
 	Maintenance   MaintenanceConfig   `yaml:"maintenance"`
+	Logging       LoggingConfig       `yaml:"logging"`
+}
+
+// LoggingConfig controls the agent's log destination. On Entware the S99 init
+// sends stderr to /dev/null, so the agent additionally tees slog to a rotating
+// file. File defaults to defaultAgentLogFile when unset; set it to "off"/"none"
+// to disable the file sink (stderr only). MaxBytes 0 => defaultLogMaxBytes.
+type LoggingConfig struct {
+	File     string `yaml:"file"`
+	MaxBytes int64  `yaml:"max_bytes"`
+}
+
+func (c LoggingConfig) ResolveFile() string {
+	f := strings.TrimSpace(c.File)
+	switch f {
+	case "":
+		return defaultAgentLogFile
+	case "off", "none", "disabled":
+		return ""
+	default:
+		return f
+	}
 }
 
 // ExternalReachConfig: probes blocked-in-RU services through the

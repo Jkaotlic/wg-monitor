@@ -412,3 +412,22 @@ func TestLoadConfig_NewDNSSchema(t *testing.T) {
 		t.Errorf("plain: %+v", plain)
 	}
 }
+
+func TestLoggingConfig_ResolveFile(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", defaultAgentLogFile},   // omitted => default path
+		{"  ", defaultAgentLogFile}, // blank => default path
+		{"off", ""},                 // explicit disable
+		{"none", ""},                // explicit disable
+		{"/tmp/custom.log", "/tmp/custom.log"},
+	}
+	for _, c := range cases {
+		got := LoggingConfig{File: c.in}.ResolveFile()
+		if got != c.want {
+			t.Errorf("ResolveFile(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
