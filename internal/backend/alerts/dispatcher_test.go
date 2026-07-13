@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -695,5 +696,61 @@ func TestDispatcherSetNow_OverridesLastAlertClock(t *testing.T) {
 	}
 	if afterState.LastAlertAt == nil || afterState.LastAlertAt.Before(before.Add(-time.Second)) {
 		t.Errorf("SetNow(nil) should restore real clock; LastAlertAt=%v, want ~now", afterState.LastAlertAt)
+	}
+}
+
+func TestDispatcherHardIncludesMiniAppButtonWhenConfigured(t *testing.T) {
+	d := newDB(t)
+	tok := "1111000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("miniapp-router", tok, "1.1.1.1", "awg0")
+	tgc := &fakeTG{topicID: 5555}
+	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://wg.example.test"})
+
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+	}
+	if err := disp.Handle(context.Background(), uid, "miniapp-router", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	if len(tgc.sentWithKeyboard) != 1 {
+		t.Fatalf("sentWithKeyboard %d messages", len(tgc.sentWithKeyboard))
+	}
+	kb := tgc.sentWithKeyboard[0].keyboard
+	wantURL := fmt.Sprintf("https://wg.example.test/miniapp/?router=%d", uid)
+	var got string
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.WebApp != nil {
+				got = btn.WebApp.URL
+			}
+		}
+	}
+	if got != wantURL {
+		t.Fatalf("web_app button URL = %q, want %q", got, wantURL)
+	}
+}
+
+func TestDispatcherHardOmitsMiniAppButtonWhenNotConfigured(t *testing.T) {
+	d := newDB(t)
+	tok := "2222000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("no-miniapp-router", tok, "1.1.1.1", "awg0")
+	tgc := &fakeTG{topicID: 6666}
+	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+	}
+	if err := disp.Handle(context.Background(), uid, "no-miniapp-router", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	kb := tgc.sentWithKeyboard[0].keyboard
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.WebApp != nil {
+				t.Fatalf("unexpected web_app button: %+v", btn)
+			}
+		}
 	}
 }

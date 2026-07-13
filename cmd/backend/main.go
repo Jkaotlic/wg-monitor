@@ -113,6 +113,7 @@ func main() {
 		ChatID:            cfg.Telegram.ChatID,
 		FailThreshold:     cfg.State.FailThreshold,
 		RecoveryThreshold: cfg.State.RecoveryThreshold,
+		MiniAppBaseURL:    cfg.PublicBaseURL,
 	})
 
 	mobileLifecycle := cfg.Heartbeat.MobileLifecycle == nil || *cfg.Heartbeat.MobileLifecycle

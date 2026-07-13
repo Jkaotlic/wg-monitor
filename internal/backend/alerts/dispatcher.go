@@ -25,6 +25,10 @@ type Config struct {
 	ChatID            int64
 	FailThreshold     int
 	RecoveryThreshold int
+	// MiniAppBaseURL, when non-empty, adds an "Open in app" web_app button to
+	// HARD alert cards deep-linking into the Telegram Mini App for this
+	// router. Empty disables the button entirely (unchanged behaviour).
+	MiniAppBaseURL string
 }
 
 const NeighborFreshWindow = 5 * time.Minute
@@ -122,6 +126,9 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		}
 		if args.IsMobile && checkName == "agent_heartbeat" {
 			opts = append(opts, tg.WithMobileActions())
+		}
+		if di.cfg.MiniAppBaseURL != "" {
+			opts = append(opts, tg.WithWebAppButton(fmt.Sprintf("%s/miniapp/?router=%d", strings.TrimRight(di.cfg.MiniAppBaseURL, "/"), userID)))
 		}
 		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
 		sendHard := func(ref TopicRef) (int64, error) {
