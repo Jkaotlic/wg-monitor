@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -37,9 +38,10 @@ type fakeProvisionRelay struct {
 	rc          int
 	err         error
 	block       <-chan struct{}
+	lines       []string
 }
 
-func (f *fakeProvisionRelay) run(ctx context.Context, relayPath string, jobJSON []byte, _ func(string)) (int, error) {
+func (f *fakeProvisionRelay) run(ctx context.Context, relayPath string, jobJSON []byte, onLine func(string)) (int, error) {
 	f.mu.Lock()
 	f.calls++
 	f.jobJSON = append([]byte(nil), jobJSON...)
@@ -53,6 +55,10 @@ func (f *fakeProvisionRelay) run(ctx context.Context, relayPath string, jobJSON 
 	err := f.err
 	f.mu.Unlock()
 
+	for _, l := range f.linesSnapshot() {
+		onLine(l)
+	}
+
 	if block != nil {
 		select {
 		case <-block:
@@ -61,6 +67,15 @@ func (f *fakeProvisionRelay) run(ctx context.Context, relayPath string, jobJSON 
 		}
 	}
 	return rc, err
+}
+
+// linesSnapshot returns a copy of f.lines, the scripted __WG_STEP__ lines run
+// feeds through onLine before honoring block/rc — lets a test drive
+// config_written (and therefore CommitToken) without a real relay.
+func (f *fakeProvisionRelay) linesSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.lines...)
 }
 
 func (f *fakeProvisionRelay) callCount() int {
@@ -364,9 +379,16 @@ func TestDashboardProvision_InvalidKind400(t *testing.T) {
 // and a second concurrent provision for the same nickname must be rejected
 // 409 BEFORE it re-mints the enrollment token — otherwise the winning job's
 // raw token would desync from the stored hash and break a live agent's auth.
+//
+// Since Task 2 (2026-07-13 token-atomicity design), the DB write itself is
+// deferred to config_written, so a mid-flight tokenHashOf comparison — while
+// the first job's worker is still parked on block — would race the async
+// commit rather than exercise the lock. The invariant that actually matters
+// (no desync) is checked once the run is over: the persisted hash must match
+// the one relay call's raw token, and no second relay call ever happened.
 func TestDashboardProvisionInstall_SecondConcurrentCallRejected409AndNoReMint(t *testing.T) {
 	unblock := make(chan struct{})
-	relay := &fakeProvisionRelay{rc: 0, block: unblock}
+	relay := &fakeProvisionRelay{rc: 0, block: unblock, lines: []string{"__WG_STEP__ config_written"}}
 	database, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
 	stubVerifiedChecksums(t, map[string]string{"a": "b"})
 
@@ -378,17 +400,15 @@ func TestDashboardProvisionInstall_SecondConcurrentCallRejected409AndNoReMint(t 
 	}
 	var resp1 dashboardJobStartResp
 	_ = json.Unmarshal(rec1.Body.Bytes(), &resp1)
-	// The first request has already minted busyrouter's token, and its job's
-	// worker holds the single-flight lock (Start acquires it synchronously
-	// before returning — see runner.go — then blocks in the fake relay).
-	hash1 := tokenHashOf(t, database, "busyrouter")
 
+	// The first request's worker holds the single-flight lock synchronously
+	// from Start() through job completion (runner.go's TryLock/Unlock — held
+	// well before this handler goroutine returns), so a second concurrent
+	// request for the same nickname is deterministically rejected 409 while
+	// the first job is still parked on block.
 	rec2 := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/provision", body)
 	if rec2.Code != http.StatusConflict {
 		t.Fatalf("second status = %d, want 409, body=%s", rec2.Code, rec2.Body.String())
-	}
-	if h := tokenHashOf(t, database, "busyrouter"); h != hash1 {
-		t.Error("second (rejected) provision re-minted the token — the pre-mint lock did not close the race")
 	}
 
 	close(unblock)
@@ -399,14 +419,27 @@ func TestDashboardProvisionInstall_SecondConcurrentCallRejected409AndNoReMint(t 
 	if relay.callCount() != 1 {
 		t.Errorf("relay called %d times total, want exactly 1 (second call rejected before Start)", relay.callCount())
 	}
+
+	// The persisted token must be exactly the one relay call's raw token — a
+	// re-mint by the rejected second call would have desynced the DB hash
+	// from the raw token the (only) successful run actually used.
+	var captured awgmInstallJob
+	if err := json.Unmarshal(relay.capturedJobJSON(), &captured); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Users().GetByToken(captured.RawToken); err != nil {
+		t.Fatalf("winning job's raw token does not authenticate — desynced from DB: %v", err)
+	}
 }
 
 // Same regression guard, reinstall path: the token re-mint for an existing
 // nickname must not run for a second concurrent reinstall while the first
-// still holds the lock.
+// still holds the lock. See the provision-install variant above for why the
+// post-Task-2 check is the final persisted token rather than a mid-flight
+// tokenHashOf comparison.
 func TestDashboardRepairReinstall_SecondConcurrentCallRejected409AndNoReMint(t *testing.T) {
 	unblock := make(chan struct{})
-	relay := &fakeProvisionRelay{rc: 0, block: unblock}
+	relay := &fakeProvisionRelay{rc: 0, block: unblock, lines: []string{"__WG_STEP__ config_written"}}
 	database, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
 	if _, err := database.Users().UpsertEnrollment("bronya", "tok-bronya-000000000000000000", db.KindStatic, 0); err != nil {
 		t.Fatal(err)
@@ -425,14 +458,10 @@ func TestDashboardRepairReinstall_SecondConcurrentCallRejected409AndNoReMint(t *
 	}
 	var resp1 dashboardJobStartResp
 	_ = json.Unmarshal(rec1.Body.Bytes(), &resp1)
-	hash1 := tokenHashOf(t, database, "bronya") // the first reinstall's freshly re-minted hash
 
 	rec2 := postProvisionJSON(t, mux, http.MethodPost, "/v1/dashboard/agents/bronya/repair", body)
 	if rec2.Code != http.StatusConflict {
 		t.Fatalf("second status = %d, want 409, body=%s", rec2.Code, rec2.Body.String())
-	}
-	if h := tokenHashOf(t, database, "bronya"); h != hash1 {
-		t.Error("second (rejected) reinstall re-minted the token — the pre-mint lock did not close the race")
 	}
 
 	close(unblock)
@@ -442,6 +471,14 @@ func TestDashboardRepairReinstall_SecondConcurrentCallRejected409AndNoReMint(t *
 	}
 	if relay.callCount() != 1 {
 		t.Errorf("relay called %d times total, want exactly 1 (second call rejected before Start)", relay.callCount())
+	}
+
+	var captured awgmInstallJob
+	if err := json.Unmarshal(relay.capturedJobJSON(), &captured); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Users().GetByToken(captured.RawToken); err != nil {
+		t.Fatalf("winning job's raw token does not authenticate — desynced from DB: %v", err)
 	}
 }
 
@@ -621,7 +658,10 @@ func TestDashboardRepairRepoint_NoStoredAWGMURL400(t *testing.T) {
 // --- repair: reinstall ---------------------------------------------------
 
 func TestDashboardRepairReinstall_BuildsBootstrapJobForExistingNick(t *testing.T) {
-	relay := &fakeProvisionRelay{rc: 0}
+	// config_written must be observed for the deferred DB commit (Task 2's
+	// token-atomicity fix) to fire — without it, the freshly re-minted raw
+	// token never lands in the DB even though the job still reports success.
+	relay := &fakeProvisionRelay{rc: 0, lines: []string{"__WG_STEP__ config_written"}}
 	database, store, mux := newProvisionTestHandler(t, relay, freshLastSeen)
 	if _, err := database.Users().UpsertEnrollment("bronya", "tok-bronya-000000000000000000", db.KindStatic, 0); err != nil {
 		t.Fatal(err)
@@ -713,6 +753,61 @@ func TestDashboardRepairReinstall_AllowDowngradeOverrides(t *testing.T) {
 	waitForProvisionTerminal(t, store, resp.JobID, time.Second)
 	if relay.callCount() != 1 {
 		t.Error("relay should be called once allow_downgrade overrides the rejection")
+	}
+}
+
+// TestRepairReinstall_FailBeforeConfigWritten_LeavesTokenIntact is the
+// token-atomicity regression guard (2026-07-13 design): a reinstall that
+// fails BEFORE the router ever reaches config_written must not touch the
+// DB's token_hash — the old raw token must keep authenticating. Before this
+// fix, createAgentEnrollment wrote the freshly-minted token synchronously in
+// the HTTP handler, ahead of the (here, failing) relay run, desyncing the
+// stored hash from the token the live agent actually has on disk.
+func TestRepairReinstall_FailBeforeConfigWritten_LeavesTokenIntact(t *testing.T) {
+	relay := &fakeProvisionRelay{
+		lines: []string{"__WG_STEP__ arch_detected arm64", "__WG_STEP__ downloading"},
+		rc:    1, err: errors.New("download failed"),
+	}
+	database, store, handler := newProvisionTestHandler(t, relay,
+		func(string) (time.Time, bool) { return time.Time{}, false })
+
+	// Existing, working agent with a known token.
+	const oldToken = "old-token-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := database.Users().UpsertEnrollment("snektest", oldToken, db.KindStatic, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Users().UpdateDeployInfo("snektest", db.DeployInfo{
+		AWGMURL: "https://awg.snektest.example", DeployMode: "awgm",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Explicit version keeps resolveProvisionVersion off the real
+	// lookupDashboardLatestVersion GitHub call; verifiedChecksumsFetcher is
+	// stubbed for the same reason (both default to live network fetchers).
+	stubVerifiedChecksums(t, map[string]string{"wg-monitor-agent-linux-arm64": "deadbeef"})
+	body := `{"mode":"reinstall","version":"v0.14.0","root_password":"x","awgm_login":"admin","awgm_password":"y"}`
+	req := httptest.NewRequest("POST", "/v1/dashboard/agents/snektest/repair", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	waitForProvisionTerminal(t, store, resp.JobID, time.Second) // failed
+
+	// The install failed before config_written => the DB token must be UNCHANGED:
+	// the old token still authenticates (no desync).
+	if _, err := database.Users().GetByToken(oldToken); err != nil {
+		t.Fatalf("old token must still authenticate after a failed reinstall, got: %v", err)
 	}
 }
 

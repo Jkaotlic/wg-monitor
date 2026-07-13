@@ -334,21 +334,27 @@ func runProvisionInstallCore(w http.ResponseWriter, r *http.Request, d Deps, p p
 	}
 	defer release()
 
-	enrollment, userID, err := createAgentEnrollment(d.DB, p.Nickname, p.AgentKind, p.ThreadID)
+	rawToken, nickname, kind, err := mintProvisionToken(p.Nickname, p.AgentKind)
 	if err != nil {
 		writeProvisionEnrollmentError(w, err)
 		return
 	}
-	if p.UpdateTopic {
-		if err := d.DB.Users().UpdateTelegramTopic(userID, p.TelegramGroup, p.ThreadID); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-			return
+
+	// Persist the token hash + topic + deploy metadata only once the router
+	// has written config.yaml (the engine fires this at config_written), so a
+	// failed install never rotates a live agent's token.
+	deployInfo := provisionDeployInfo(p.Existing, p.AgentKind, p.ThreadID, p.AWGMURL, p.AWGMAuth)
+	commit := func() error {
+		userID, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, p.ThreadID)
+		if err != nil {
+			return err
 		}
-	}
-	if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname,
-		provisionDeployInfo(p.Existing, p.AgentKind, p.ThreadID, p.AWGMURL, p.AWGMAuth)); err != nil {
-		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-		return
+		if p.UpdateTopic {
+			if err := d.DB.Users().UpdateTelegramTopic(userID, p.TelegramGroup, p.ThreadID); err != nil {
+				return err
+			}
+		}
+		return d.DB.Users().UpdateDeployInfo(nickname, deployInfo)
 	}
 
 	job := awgmInstallJob{
@@ -359,10 +365,10 @@ func runProvisionInstallCore(w http.ResponseWriter, r *http.Request, d Deps, p p
 		TerminalUser:      defaultProvisionTerminalUser,
 		TerminalPassword:  p.RootPassword,
 		Mode:              "bootstrap_install",
-		Nickname:          enrollment.Nickname,
+		Nickname:          nickname,
 		TargetVersion:     version,
 		BackendURL:        backendURL,
-		RawToken:          enrollment.RawToken,
+		RawToken:          rawToken,
 		ReleaseBase:       backendURL + "/v1/releases/download",
 		InitScript:        installtmpl.InitScript(),
 		Checksums:         sums,
@@ -380,20 +386,21 @@ func runProvisionInstallCore(w http.ResponseWriter, r *http.Request, d Deps, p p
 	release()
 	jobID, err := d.Provision.Start(provision.StartReq{
 		Kind:          provision.KindProvision,
-		Nickname:      enrollment.Nickname,
+		Nickname:      nickname,
 		RelayPath:     resolvedRelayPath(d),
 		JobJSON:       jobJSON,
-		RawToken:      enrollment.RawToken,
+		RawToken:      rawToken,
 		Version:       version,
 		InstallBudget: provisionInstallBudget,
 		VerifyBudget:  provisionVerifyBudget,
+		CommitToken:   commit,
 	})
 	if err != nil {
 		writeProvisionStartError(w, err)
 		return
 	}
 	if d.Logger != nil {
-		d.Logger.Info("provision install started", "nickname", enrollment.Nickname, "job_id", jobID, "version", version)
+		d.Logger.Info("provision install started", "nickname", nickname, "job_id", jobID, "version", version)
 	}
 	respondProvisionJobStarted(w, d, jobID, provision.KindProvision)
 }
@@ -594,11 +601,17 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 
 	// Re-mint the enrollment token: the DB only keeps the hash, and a fresh
 	// config.yaml needs the raw token (mirrors dashboardDeployRouterHandler's
-	// existing re-mint-on-every-install convention). Idempotent — UpsertEnrollment upserts.
-	enrollment, _, err := createAgentEnrollment(d.DB, nickname, user.Kind, int64Value(user.TelegramThreadID))
+	// existing re-mint-on-every-install convention). The DB write itself is
+	// deferred to the config_written commit hook (see runProvisionInstallCore's
+	// doc) so a failed reinstall never rotates a live agent's token.
+	rawToken, _, kind, err := mintProvisionToken(nickname, user.Kind)
 	if err != nil {
 		writeProvisionEnrollmentError(w, err)
 		return
+	}
+	commit := func() error {
+		_, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, int64Value(user.TelegramThreadID))
+		return err
 	}
 
 	job := awgmInstallJob{
@@ -612,7 +625,7 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 		Nickname:          nickname,
 		TargetVersion:     version,
 		BackendURL:        backendURL,
-		RawToken:          enrollment.RawToken,
+		RawToken:          rawToken,
 		ReleaseBase:       backendURL + "/v1/releases/download",
 		InitScript:        installtmpl.InitScript(),
 		Checksums:         sums,
@@ -631,10 +644,11 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 		Nickname:      nickname,
 		RelayPath:     resolvedRelayPath(d),
 		JobJSON:       jobJSON,
-		RawToken:      enrollment.RawToken,
+		RawToken:      rawToken,
 		Version:       version,
 		InstallBudget: provisionInstallBudget,
 		VerifyBudget:  provisionVerifyBudget,
+		CommitToken:   commit,
 	})
 	if err != nil {
 		writeProvisionStartError(w, err)

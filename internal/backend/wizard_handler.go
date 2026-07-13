@@ -230,30 +230,39 @@ func wizardEnrollmentHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-func createAgentEnrollment(database *db.DB, nickname, kind string, threadID int64) (wizardEnrollmentResp, int64, error) {
-	nickname = strings.TrimSpace(nickname)
-	if !enrollmentNicknameRe.MatchString(nickname) {
-		return wizardEnrollmentResp{}, 0, errEnrollmentInvalidNickname
+// mintProvisionToken validates nickname/kind and returns a fresh raw enrollment
+// token WITHOUT persisting it. The DB write is deferred to the provision
+// engine's config_written commit hook (see the 2026-07-13 token-atomicity
+// design) so a failed install never rotates a live agent's token.
+func mintProvisionToken(nickname, kind string) (rawToken, normNick, normKind string, err error) {
+	normNick = strings.TrimSpace(nickname)
+	if !enrollmentNicknameRe.MatchString(normNick) {
+		return "", "", "", errEnrollmentInvalidNickname
 	}
-	kind = strings.TrimSpace(kind)
-	if kind == "" {
-		kind = db.KindStatic
+	normKind = strings.TrimSpace(kind)
+	if normKind == "" {
+		normKind = db.KindStatic
 	}
-	if !db.IsValidKind(kind) {
-		return wizardEnrollmentResp{}, 0, errEnrollmentInvalidKind
+	if !db.IsValidKind(normKind) {
+		return "", "", "", errEnrollmentInvalidKind
 	}
-	rawToken, err := newAgentEnrollmentToken()
+	rawToken, err = newAgentEnrollmentToken()
 	if err != nil {
-		return wizardEnrollmentResp{}, 0, fmt.Errorf("token gen: %w", err)
+		return "", "", "", fmt.Errorf("token gen: %w", err)
 	}
-	userID, err := database.Users().UpsertEnrollment(nickname, rawToken, kind, threadID)
+	return rawToken, normNick, normKind, nil
+}
+
+func createAgentEnrollment(database *db.DB, nickname, kind string, threadID int64) (wizardEnrollmentResp, int64, error) {
+	rawToken, normNick, normKind, err := mintProvisionToken(nickname, kind)
 	if err != nil {
 		return wizardEnrollmentResp{}, 0, err
 	}
-	return wizardEnrollmentResp{
-		Nickname: nickname,
-		RawToken: rawToken,
-	}, userID, nil
+	userID, err := database.Users().UpsertEnrollment(normNick, rawToken, normKind, threadID)
+	if err != nil {
+		return wizardEnrollmentResp{}, 0, err
+	}
+	return wizardEnrollmentResp{Nickname: normNick, RawToken: rawToken}, userID, nil
 }
 
 func newAgentEnrollmentToken() (string, error) {
