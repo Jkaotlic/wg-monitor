@@ -3,6 +3,7 @@ package backend
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -168,5 +169,67 @@ func TestMiniappRoutersListAdminSeesAll(t *testing.T) {
 	}
 	if !got[ownedID] || !got[otherID] || len(got) != 2 {
 		t.Fatalf("admin routers = %+v, want both %d and %d", resp.Routers, ownedID, otherID)
+	}
+}
+
+func TestMiniappRouterDetailDeniedForStranger(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 777)) // unrelated TG user
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for stranger, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiniappRouterDetailAllowedForOwner(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRouterResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Router.ID != ownedID || resp.Router.Nickname != "router-owned" {
+		t.Fatalf("router = %+v, want id=%d nickname=router-owned", resp.Router, ownedID)
+	}
+}
+
+func TestMiniappRouterEventsReturnsLatestPerCheck(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.Events().Insert(ownedID, "tunnel_amnezia_for_awg2", "ok", "{}", time.Now()); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRouterEventsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range resp.Checks {
+		if c.CheckName == "tunnel_amnezia_for_awg2" && c.Status == "ok" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("checks = %+v, want tunnel_amnezia_for_awg2/ok", resp.Checks)
 	}
 }

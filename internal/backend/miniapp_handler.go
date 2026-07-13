@@ -3,6 +3,7 @@ package backend
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -123,13 +124,88 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 	}
 }
 
-// miniappRouterDetailHandler and miniappRouterEventsHandler are trivial
-// stubs so this package compiles and Task 7's own tests can run standalone.
-// Task 9 replaces these. Do not implement these for real here — that's out
-// of scope for Task 8.
-func miniappRouterDetailHandler(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+type miniappRouterResp struct {
+	Router miniappRouterSummary `json:"router"`
 }
+
+func miniappRouterDetailHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramUserID, _ := miniappUserFromContext(r.Context())
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok || !miniappRouterAllowed(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		summary, err := buildDashboardSummary(d.DB, time.Now().UTC(), dashboardStatusPolicyFromDeps(d))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "fleet summary failed")
+			return
+		}
+		for _, a := range summary.Agents {
+			if a.ID == routerID {
+				w.Header().Set("Content-Type", "application/json; charset=utf-8")
+				_ = json.NewEncoder(w).Encode(miniappRouterResp{Router: miniappRouterSummaryFromAgent(a)})
+				return
+			}
+		}
+		writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+	}
+}
+
+type miniappCheckStatus struct {
+	CheckName string `json:"check_name"`
+	Status    string `json:"status"`
+	Timestamp string `json:"ts"`
+}
+
+type miniappRouterEventsResp struct {
+	Checks []miniappCheckStatus `json:"checks"`
+}
+
+// miniappEventsWindow bounds how far back "the latest status of every
+// check" looks. A pragmatic default, not a hard requirement — easy to tune
+// later if it proves too short/long in practice.
+const miniappEventsWindow = 30 * 24 * time.Hour
+
 func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramUserID, _ := miniappUserFromContext(r.Context())
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok || !miniappRouterAllowed(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		// An empty prefix matches every check_name, so this returns one row
+		// per check: its latest known status — the same query shape the
+		// bot's tunnels panel/alert formatter already use, not a full
+		// chronological history.
+		rows, err := d.DB.Events().LatestEventsByPrefixSince(routerID, "", time.Now().UTC().Add(-miniappEventsWindow))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "events lookup failed")
+			return
+		}
+		resp := miniappRouterEventsResp{}
+		for _, row := range rows {
+			resp.Checks = append(resp.Checks, miniappCheckStatus{
+				CheckName: row.CheckName,
+				Status:    row.Status,
+				Timestamp: row.TS.UTC().Format(time.RFC3339),
+			})
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func parseMiniappRouterID(r *http.Request) (int64, bool) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	return id, err == nil
+}
+
+func miniappRouterAllowed(d Deps, telegramUserID, routerID int64) bool {
+	if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+		return true
+	}
+	role, err := d.DB.RouterAccessRole(routerID, telegramUserID)
+	return err == nil && role != ""
 }
