@@ -237,8 +237,8 @@ func (r *Reporter) runAll(parent context.Context) []wire.Check {
 
 type reporterState struct {
 	LastReportAt           time.Time `json:"last_report_at"`
-	LastAuthErrorAt        time.Time `json:"last_auth_error_at,omitempty"`
-	ConsecutiveAuthRejects int       `json:"consecutive_auth_rejects,omitempty"`
+	LastAuthErrorAt        time.Time `json:"last_auth_error_at,omitzero"`
+	ConsecutiveAuthRejects int       `json:"consecutive_auth_rejects,omitzero"`
 }
 
 func (r *Reporter) loadState() {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -284,9 +285,20 @@ func TestReporter_AuthReject_RecordsBreadcrumb(t *testing.T) {
 	sender.url = ""
 	r.sendOnce(context.Background())
 	body, _ = os.ReadFile(statePath)
-	// Reset st: ConsecutiveAuthRejects is `omitempty` and correctly absent
-	// from the JSON once it's back to 0, but json.Unmarshal only overwrites
-	// fields present in the source, so a stale value would otherwise survive.
+	// The breadcrumb keys must be entirely absent from a healthy agent's
+	// state file (omitzero), so a single `cat` self-describes "no auth
+	// problem" — assert on the raw bytes, not just the Go value, because a
+	// zero time.Time under `omitempty` would silently persist as
+	// "0001-01-01T00:00:00Z" and defeat the whole diagnosis goal.
+	if bytes.Contains(body, []byte("last_auth_error_at")) {
+		t.Fatalf("healthy state file must not contain last_auth_error_at: %s", body)
+	}
+	if bytes.Contains(body, []byte("consecutive_auth_rejects")) {
+		t.Fatalf("healthy state file must not contain consecutive_auth_rejects: %s", body)
+	}
+	// Reset st: the breadcrumb keys are correctly absent from the JSON once
+	// back to zero, but json.Unmarshal only overwrites fields present in the
+	// source, so a stale value would otherwise survive from the earlier read.
 	st = reporterState{}
 	_ = json.Unmarshal(body, &st)
 	if st.ConsecutiveAuthRejects != 0 {
