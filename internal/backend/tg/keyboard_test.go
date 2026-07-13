@@ -187,3 +187,46 @@ func TestPerRouterKeyboardContainsHideMyName(t *testing.T) {
 		t.Fatalf("compat reverse = %q", got)
 	}
 }
+
+func TestHardAlertKeyboardWithWebAppButton(t *testing.T) {
+	kb := HardAlertKeyboard(42, "tunnel_amnezia", WithWebAppButton("https://wg.example.test/miniapp/?router=42"))
+	if len(kb.InlineKeyboard) != 3 {
+		t.Fatalf("expected 3 rows (base 2 + web_app), got %d", len(kb.InlineKeyboard))
+	}
+	row := kb.InlineKeyboard[2]
+	if len(row) != 1 || row[0].WebApp == nil {
+		t.Fatalf("expected 1 web_app button, got %+v", row)
+	}
+	if row[0].WebApp.URL != "https://wg.example.test/miniapp/?router=42" {
+		t.Errorf("web_app url = %q", row[0].WebApp.URL)
+	}
+	if row[0].CallbackData != "" {
+		t.Errorf("web_app button must not also carry callback_data, got %q", row[0].CallbackData)
+	}
+}
+
+func TestHardAlertKeyboardWebAppButtonOmittedWhenEmpty(t *testing.T) {
+	kb := HardAlertKeyboard(42, "tunnel_amnezia")
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.WebApp != nil {
+				t.Fatalf("unexpected web_app button when WithWebAppButton not used: %+v", btn)
+			}
+		}
+	}
+}
+
+func TestHardAlertKeyboardWebAppButtonJSONShape(t *testing.T) {
+	kb := HardAlertKeyboard(42, "tunnel_amnezia", WithWebAppButton("https://wg.example.test/miniapp/?router=42"))
+	raw, err := json.Marshal(kb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, `"web_app":{"url":"https://wg.example.test/miniapp/?router=42"}`) {
+		t.Errorf("json missing web_app field, got %s", s)
+	}
+	if strings.Contains(s, `"callback_data":""`) {
+		t.Errorf("web_app button must omit empty callback_data from JSON, got %s", s)
+	}
+}

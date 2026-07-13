@@ -2,9 +2,17 @@ package tg
 
 import "fmt"
 
+// WebAppInfo is Telegram's InlineKeyboardButton.web_app shape: opening this
+// button launches the given URL as a Telegram Mini App instead of firing a
+// callback_data update.
+type WebAppInfo struct {
+	URL string `json:"url"`
+}
+
 type InlineKeyboardButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data"`
+	Text         string      `json:"text"`
+	CallbackData string      `json:"callback_data,omitempty"`
+	WebApp       *WebAppInfo `json:"web_app,omitempty"`
 }
 
 type InlineKeyboardMarkup struct {
@@ -19,6 +27,7 @@ type kbOpts struct {
 	tunnelActions     bool
 	mobileActions     bool
 	hydraRouteActions bool
+	webAppURL         string
 }
 
 // WithTunnelActions appends a row [🔁 Restart awg-manager][📊 Diag][▶ Pingcheck].
@@ -35,6 +44,13 @@ func WithMobileActions() KeyboardOption {
 
 func WithHydraRouteActions() KeyboardOption {
 	return func(o *kbOpts) { o.hydraRouteActions = true }
+}
+
+// WithWebAppButton appends a row with a single button that opens the
+// Telegram Mini App at url instead of firing a callback. Added last so it
+// stays the bottom-most row regardless of which other options are set.
+func WithWebAppButton(url string) KeyboardOption {
+	return func(o *kbOpts) { o.webAppURL = url }
 }
 
 // HardAlertKeyboard returns the inline keyboard layout under each HARD alert.
@@ -79,6 +95,11 @@ func HardAlertKeyboard(userID int64, checkName string, opts ...KeyboardOption) I
 		rows = append(rows, []InlineKeyboardButton{
 			{Text: "▶ Запустить HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo_start", userID)},
 			{Text: "🔁 Перезапустить HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo", userID)},
+		})
+	}
+	if o.webAppURL != "" {
+		rows = append(rows, []InlineKeyboardButton{
+			{Text: "📱 Открыть в приложении", WebApp: &WebAppInfo{URL: o.webAppURL}},
 		})
 	}
 	return InlineKeyboardMarkup{InlineKeyboard: rows}

@@ -140,7 +140,10 @@ func AdminPanelHomeKeyboard() InlineKeyboardMarkup {
 	for _, row := range adminPanelHomeRows {
 		buttons := make([]InlineKeyboardButton, 0, len(row))
 		for _, b := range row {
-			buttons = append(buttons, InlineKeyboardButton(b))
+			buttons = append(buttons, InlineKeyboardButton{
+				Text:         b.Text,
+				CallbackData: b.CallbackData,
+			})
 		}
 		rows = append(rows, buttons)
 	}
