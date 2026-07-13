@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -50,6 +51,9 @@ type Reporter struct {
 	sendOnceMu   sync.Mutex // serialises sendOnce; see sendOnce comment
 	lastReportAt time.Time
 	forceResumed bool // set by ForceResumed; consumed by next sendOnce
+
+	lastAuthErrorAt        time.Time
+	consecutiveAuthRejects int
 }
 
 type ReporterConfig struct {
@@ -81,7 +85,7 @@ func NewReporter(cfg ReporterConfig) *Reporter {
 		configPath:  cfg.ConfigPath,
 		backendURL:  cfg.BackendURL,
 	}
-	r.lastReportAt = r.loadLastReportAt()
+	r.loadState()
 	return r
 }
 
@@ -161,6 +165,19 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	canonicalURL, err := r.sender.SendReport(ctx, report)
 	if err != nil {
 		slog.Warn("send report failed", "err", err)
+		if errors.Is(err, ErrUnauthorized) {
+			now := time.Now()
+			r.mu.Lock()
+			r.consecutiveAuthRejects++
+			r.lastAuthErrorAt = now
+			snap := reporterState{
+				LastReportAt:           r.lastReportAt,
+				LastAuthErrorAt:        r.lastAuthErrorAt,
+				ConsecutiveAuthRejects: r.consecutiveAuthRejects,
+			}
+			r.mu.Unlock()
+			r.persistState(snap)
+		}
 		return
 	}
 	if canonicalURL != "" && canonicalURL != r.backendURL && r.configPath != "" {
@@ -175,8 +192,11 @@ func (r *Reporter) sendOnceLocked(ctx context.Context) {
 	now := time.Now()
 	r.mu.Lock()
 	r.lastReportAt = now
+	r.consecutiveAuthRejects = 0
+	r.lastAuthErrorAt = time.Time{}
+	snap := reporterState{LastReportAt: now}
 	r.mu.Unlock()
-	r.persistLastReportAt(now)
+	r.persistState(snap)
 }
 
 func (r *Reporter) runAll(parent context.Context) []wire.Check {
@@ -216,28 +236,32 @@ func (r *Reporter) runAll(parent context.Context) []wire.Check {
 }
 
 type reporterState struct {
-	LastReportAt time.Time `json:"last_report_at"`
+	LastReportAt           time.Time `json:"last_report_at"`
+	LastAuthErrorAt        time.Time `json:"last_auth_error_at,omitempty"`
+	ConsecutiveAuthRejects int       `json:"consecutive_auth_rejects,omitempty"`
 }
 
-func (r *Reporter) loadLastReportAt() time.Time {
+func (r *Reporter) loadState() {
 	if r.statePath == "" {
-		return time.Time{}
+		return
 	}
 	body, err := os.ReadFile(r.statePath)
 	if err != nil {
-		return time.Time{}
+		return
 	}
 	var s reporterState
 	if err := json.Unmarshal(body, &s); err != nil {
 		// State file existed but was corrupt: surface so accumulated stale
 		// `.tmp` artefacts or aborted writes are diagnosable.
 		slog.Warn("reporter state corrupt; treating agent as freshly-started", "path", r.statePath, "err", err)
-		return time.Time{}
+		return
 	}
-	return s.LastReportAt
+	r.lastReportAt = s.LastReportAt
+	r.lastAuthErrorAt = s.LastAuthErrorAt
+	r.consecutiveAuthRejects = s.ConsecutiveAuthRejects
 }
 
-func (r *Reporter) persistLastReportAt(t time.Time) {
+func (r *Reporter) persistState(s reporterState) {
 	if r.statePath == "" {
 		return
 	}
@@ -245,7 +269,7 @@ func (r *Reporter) persistLastReportAt(t time.Time) {
 		slog.Debug("reporter state mkdir", "err", err)
 		return
 	}
-	body, _ := json.Marshal(reporterState{LastReportAt: t})
+	body, _ := json.Marshal(s)
 	tmp := r.statePath + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o644); err != nil {
 		slog.Debug("reporter state write", "err", err)

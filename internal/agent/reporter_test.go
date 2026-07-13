@@ -2,6 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -242,6 +246,64 @@ func TestReporterSkipsMigrationWithNoConfigPath(t *testing.T) {
 	if called {
 		t.Error("migration must not be called when config path is empty")
 	}
+}
+
+func TestReporter_AuthReject_RecordsBreadcrumb(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "reporter-state.json")
+
+	authErr := fmt.Errorf("%w: /v1/report status=401", ErrUnauthorized)
+	sender := &stubSender{err: authErr}
+	r := NewReporter(ReporterConfig{
+		Sender:    sender,
+		Version:   "test",
+		Interval:  time.Minute,
+		StatePath: statePath,
+	})
+
+	r.sendOnce(context.Background())
+	r.sendOnce(context.Background())
+
+	body, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("state file not written: %v", err)
+	}
+	var st reporterState
+	if err := json.Unmarshal(body, &st); err != nil {
+		t.Fatal(err)
+	}
+	if st.ConsecutiveAuthRejects != 2 {
+		t.Fatalf("ConsecutiveAuthRejects = %d, want 2", st.ConsecutiveAuthRejects)
+	}
+	if st.LastAuthErrorAt.IsZero() {
+		t.Fatal("LastAuthErrorAt should be set after a 401")
+	}
+
+	// A subsequent success resets the counter.
+	sender.err = nil
+	sender.url = ""
+	r.sendOnce(context.Background())
+	body, _ = os.ReadFile(statePath)
+	// Reset st: ConsecutiveAuthRejects is `omitempty` and correctly absent
+	// from the JSON once it's back to 0, but json.Unmarshal only overwrites
+	// fields present in the source, so a stale value would otherwise survive.
+	st = reporterState{}
+	_ = json.Unmarshal(body, &st)
+	if st.ConsecutiveAuthRejects != 0 {
+		t.Fatalf("ConsecutiveAuthRejects after success = %d, want 0", st.ConsecutiveAuthRejects)
+	}
+	if st.LastReportAt.IsZero() {
+		t.Fatal("LastReportAt should be set after a successful report")
+	}
+}
+
+type stubSender struct {
+	url string
+	err error
+}
+
+func (s *stubSender) SendReport(context.Context, wire.Report) (string, error) {
+	return s.url, s.err
 }
 
 func TestReporterFreshStartIsNotResumed(t *testing.T) {
