@@ -233,3 +233,22 @@ func TestMiniappRouterEventsReturnsLatestPerCheck(t *testing.T) {
 		t.Fatalf("checks = %+v, want tunnel_amnezia_for_awg2/ok", resp.Checks)
 	}
 }
+
+func TestMiniappStaticServed(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token"})
+
+	req := httptest.NewRequest(http.MethodGet, "/miniapp/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200 for /miniapp/, got %d", rec.Code)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("<div id=\"app\">")) {
+		t.Errorf("expected the built index.html shell, got: %s", rec.Body.String())
+	}
+}

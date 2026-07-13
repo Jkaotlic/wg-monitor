@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +11,16 @@ import (
 func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	reqID := requestIDMiddleware()
 	auth := MiniAppAuthMiddleware(d.TelegramBotToken, d.Logger)
+
+	staticFS, err := fs.Sub(miniappStaticFS, "miniapp_static")
+	if err != nil {
+		panic(err)
+	}
+	// The app shell (HTML/JS/CSS) carries no sensitive data — only the JSON
+	// API calls it makes are auth-gated, same principle as any SPA's public
+	// login page. Telegram must be able to load it before a session exists.
+	staticHandler := http.StripPrefix("/miniapp/", http.FileServer(http.FS(staticFS)))
+	mux.Handle("GET /miniapp/", reqID(staticHandler))
 
 	mux.Handle("POST /v1/miniapp/session", reqID(miniappSessionHandler(d)))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
