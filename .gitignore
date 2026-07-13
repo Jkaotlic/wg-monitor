@@ -42,6 +42,8 @@ config.yaml
 
 # Git worktrees (per-feature isolated workspaces)
 .worktrees/
+# Claude Code local session/worktree state (native EnterWorktree tool)
+.claude/
 
 # Deploy wizard local config (contains hosts; not secrets, but local-only)
 wizard.toml
