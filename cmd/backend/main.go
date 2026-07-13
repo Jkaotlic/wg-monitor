@@ -266,6 +266,8 @@ func main() {
 		DashboardStaleAfterMobile: time.Duration(dashboardMobileStaleAfter) * time.Second,
 		WizardToken:               cfg.Wizard.Token,
 		DashboardToken:            cfg.Dashboard.Token,
+		TelegramBotToken:          cfg.Telegram.BotToken,
+		TelegramAdminUserID:       cfg.Telegram.AdminUserID,
 		TelegramPrimaryChatID:     cfg.Telegram.ChatID,
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
 		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),

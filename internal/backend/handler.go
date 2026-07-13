@@ -345,8 +345,14 @@ type Deps struct {
 	DashboardStaleAfterMobile time.Duration
 	// WizardToken enables /v1/wizard/* endpoints when non-empty. Set from
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
-	WizardToken           string
-	DashboardToken        string
+	WizardToken    string
+	DashboardToken string
+	// TelegramBotToken and TelegramAdminUserID enable /v1/miniapp/* endpoints
+	// when TelegramBotToken is non-empty. Set from cfg.Telegram.BotToken and
+	// cfg.Telegram.AdminUserID by main. Empty BotToken → endpoints not
+	// registered (fail-closed, mirrors WizardToken/DashboardToken).
+	TelegramBotToken      string
+	TelegramAdminUserID   int64
 	TelegramPrimaryChatID int64
 	TelegramExtraChatIDs  []int64
 	BackendUpdatePath     string
@@ -444,6 +450,9 @@ func NewMux(d Deps) http.Handler {
 	}
 	if d.DashboardToken != "" {
 		registerDashboardRoutes(mux, d)
+	}
+	if d.TelegramBotToken != "" {
+		registerMiniappRoutes(mux, d)
 	}
 	return mux
 }
