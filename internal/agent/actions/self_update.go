@@ -72,10 +72,22 @@ const (
 	maxSelfUpdateChecksumsSize = 1 << 20
 	maxSelfUpdateSignatureSize = 4 << 10
 	maxSelfUpdateArtifactSize  = 64 << 20
+	// selfUpdateEstimatedBinaryKB is the disk-space preflight's estimate of
+	// the new binary's size — deliberately NOT maxSelfUpdateArtifactSize
+	// (that constant is the HTTP download's hard safety cap, guarding
+	// against a corrupted/oversized CDN response; it has never reflected an
+	// actual release size). Real agent binaries are UPX-packed and land
+	// around 2.1 MB (measured from the v0.14.3 release assets); 8 MB is
+	// ~4x that, generous slack for the binary growing over future releases
+	// without demanding space no real update will ever need. Routers with
+	// small Entware /opt partitions (100-250 MB is typical on Keenetic)
+	// were being refused updates over a 64 MB estimate ~32x too large — see
+	// docs/superpowers/specs/2026-07-13-self-update-space-check-realistic-estimate-design.md.
+	selfUpdateEstimatedBinaryKB = 8192
 	// selfUpdateMinFreeRatioPct is the same "≥10% of the partition must
 	// stay free post-write" floor OpkgRunner.SmartUpgrade's df -k /opt check
-	// (opkg.go) uses, applied here to the ≤64 MB agent binary instead of an
-	// opkg package set.
+	// (opkg.go) uses, applied here to the estimated agent binary size
+	// instead of an opkg package set.
 	selfUpdateMinFreeRatioPct = 10
 )
 
@@ -298,13 +310,15 @@ func isSelfUpdateDowngrade(target, current string) bool {
 
 // checkSelfUpdateFreeSpace runs `df -k /opt` (via SelfUpdateExec, so tests
 // can fake it) and refuses to proceed if writing another
-// maxSelfUpdateArtifactSize-sized binary to /opt/bin/wg-monitor.new would
+// selfUpdateEstimatedBinaryKB-sized binary to /opt/bin/wg-monitor.new would
 // leave less than selfUpdateMinFreeRatioPct of the partition free —
 // mirroring OpkgRunner.SmartUpgrade's own df -k /opt safety check (opkg.go).
 // Unlike SmartUpgrade's per-package Installed-Size estimate (opkg has no
 // fixed upper bound on an upgrade's total size), the "needed" size here is a
-// simple constant: every release binary is capped at maxSelfUpdateArtifactSize
-// by the release workflow, so there is no per-asset total to sum first.
+// simple constant: real release binaries vary little in size release to
+// release, so a fixed realistic estimate (see selfUpdateEstimatedBinaryKB's
+// doc comment) serves just as well as a per-asset total, without needing to
+// probe the actual release first.
 func checkSelfUpdateFreeSpace(ctx context.Context) error {
 	out, err := SelfUpdateExec(ctx, "df", "-k", "/opt")
 	if err != nil {
@@ -314,7 +328,7 @@ func checkSelfUpdateFreeSpace(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("self_update: df /opt: %w", err)
 	}
-	neededKB := int64(maxSelfUpdateArtifactSize / 1024)
+	neededKB := int64(selfUpdateEstimatedBinaryKB)
 	headroomKB := totalKB * selfUpdateMinFreeRatioPct / 100
 	if freeKB-neededKB < headroomKB {
 		return fmt.Errorf("self_update: insufficient /opt space: %d KB free, need %d KB for the new binary plus %d KB headroom (%d KB total)",
