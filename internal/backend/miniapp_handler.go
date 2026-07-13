@@ -65,10 +65,11 @@ func miniappSessionHandler(d Deps) http.HandlerFunc {
 
 // miniappIsAdmin enforces a fail-closed access gate for the mini app: only the
 // explicitly configured TelegramAdminUserID is treated as admin. Unlike the
-// dashboard's isAdminTG (which is fail-open for UI hints only), miniappIsAdmin
-// is the actual authorization boundary: it controls fleet visibility and query
-// access. Returning true grants complete router access, so it must reject any
-// unset adminUserID (0) even though config-loading prevents that in practice.
+// bot's callbacks.Router.isAdminTG (which is fail-open for UI hints only),
+// miniappIsAdmin is the actual authorization boundary: it controls fleet
+// visibility and query access. Returning true grants complete router access,
+// so it must reject any unset adminUserID (0) even though config-loading
+// prevents that in practice.
 func miniappIsAdmin(telegramUserID, adminUserID int64) bool {
 	return adminUserID != 0 && telegramUserID == adminUserID
 }
