@@ -372,16 +372,8 @@
 }
 
 /* ============================================================
-   Existing rules (pre-token-layer). Task 5 migrates RouterDetail
-   onto the vocabulary above; left as-is here so nothing regresses
-   in the meantime.
-
-   .state-message/-error are kept even though RouterList (Task 4)
-   no longer references them -- RouterDetail still renders its own
-   loading/error text via these two classes. Retire them once
-   Task 5 moves RouterDetail onto .state/.state-error.
+   Global reset
    ============================================================ */
-
 * {
   box-sizing: border-box;
 }
@@ -390,109 +382,102 @@ body {
   margin: 0;
   background: var(--tg-bg-color);
   color: var(--tg-text-color);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-body);
 }
 
-.state-message {
-  padding: 24px 16px;
-  color: var(--tg-hint-color);
-  text-align: center;
-}
-
-.state-message-error {
-  color: #d14343;
-}
-
-.router-detail {
-  padding: 16px;
-}
-
-.router-status-alert {
-  color: #d14343;
-  font-weight: 600;
-}
-
-.router-detail ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.router-detail li {
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.incident-header {
+/* ============================================================
+   Router detail -- header, incident cards, history, check rows.
+   Everything below reaches only for the semantic token layer at
+   the top of this file (no --tg-* or hardcoded hex), same as the
+   rest of the component vocabulary.
+   ============================================================ */
+.router-header {
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+}
+
+/* Vertical stack of standalone .card elements (one per incident).
+   .list-reset strips the <ul>'s marker/margin; this adds the
+   between-card gap that .row's dividers provide inside a single
+   card, but each incident here is its own card, not a row. */
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.incident-head {
+  display: flex;
   align-items: baseline;
-  gap: 8px;
-  font-weight: 600;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-2);
 }
 
 .incident-since {
-  font-weight: 400;
-  font-size: 0.85em;
-  color: var(--tg-hint-color);
-}
-
-.incident-suppressed {
-  margin: 4px 0;
-  color: var(--tg-hint-color);
-  font-size: 0.9em;
+  flex: none;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
 }
 
 .incident-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin: 6px 0;
-}
-
-.incident-actions button,
-.incident-history-toggle {
-  border: 1px solid var(--tg-button-color);
-  background: transparent;
-  color: var(--tg-button-color);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 0.85em;
-  cursor: pointer;
-}
-
-.incident-actions button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  gap: var(--sp-2);
 }
 
 .incident-history-toggle {
-  display: block;
-  margin-top: 4px;
+  margin-top: var(--sp-3);
 }
 
-.incident-error {
-  color: #d14343;
-  font-size: 0.85em;
-  margin: 4px 0;
+.incident-history {
+  margin-top: var(--sp-3);
 }
 
-.incident-history ul {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
+.history-list {
+  margin-top: var(--sp-2);
 }
 
-.incident-history li {
-  padding: 4px 0;
-  border-bottom: none;
-  font-size: 0.85em;
+.history-entry {
+  padding: var(--sp-1) 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
 }
 
 .history-entry-fail {
-  color: #d14343;
+  color: var(--danger);
 }
 
 .history-entry-ok {
-  color: var(--tg-hint-color);
+  color: var(--muted);
+}
+
+/* A .state message nested inside a .card -- an incident's action
+   error, or its history's loading/empty/truncated notes -- reads
+   as part of that card, not a full-screen state: drop the generous
+   centered padding and left-align it flush with the card's own
+   content instead. */
+.card .state {
+  padding: var(--sp-1) 0 0;
+  text-align: left;
+  font-size: var(--fs-sm);
+}
+
+.checks-status {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.checks-status-ok {
+  color: var(--muted);
+}
+
+.checks-status-fail {
+  color: var(--danger);
 }
