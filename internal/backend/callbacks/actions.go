@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/alertaction"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -41,21 +42,20 @@ func (a *SilenceAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if err != nil {
 		return "", err
 	}
-	until := time.Now().Add(args.TTL)
-	st.SilencedUntil = &until
+	st, line := alertaction.ApplySilence(st, args.TTL, time.Now())
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("⏸ Уведомления скрыты до %s МСК (админ)",
-		until.In(moscowLoc()).Format("15:04")), nil
+	return line, nil
 }
 
-func moscowLoc() *time.Location {
-	loc, err := time.LoadLocation("Europe/Moscow")
-	if err != nil {
-		return time.FixedZone("MSK", 3*3600)
-	}
-	return loc
+func moscowLoc() *time.Location { return alertaction.MoscowLoc() }
+
+// nextCutoff is a thin wrapper over alertaction.NextCutoff kept for
+// TestNextCutoff (actions_test.go), which exercises the cutoff-computation
+// day-boundary cases directly against the package-local name.
+func nextCutoff(now time.Time, hour int, loc *time.Location) time.Time {
+	return alertaction.NextCutoff(now, hour, loc)
 }
 
 // ----- Ack -----
@@ -69,11 +69,11 @@ func (a *AckAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (
 	if err != nil {
 		return "", err
 	}
-	st.Acked = true
+	st, line := alertaction.ApplyAck(st, time.Now())
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return "✅ Отмечено: вижу проблему, напомню после восстановления", nil
+	return line, nil
 }
 
 // ----- Mute -----
@@ -88,30 +88,15 @@ func NewMuteAction(d *db.DB, cutoffHour int) *MuteAction {
 }
 
 func (a *MuteAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	loc := moscowLoc()
-	until := nextCutoff(time.Now().In(loc), a.cutoffHour, loc)
 	st, err := a.d.State().Get(args.UserID, args.CheckName)
 	if err != nil {
 		return "", err
 	}
-	untilUTC := until.UTC()
-	st.SilencedUntil = &untilUTC
+	st, line := alertaction.ApplyMute(st, a.cutoffHour, time.Now())
 	if err := a.d.State().Save(args.UserID, args.CheckName, st); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("🔇 Тихий режим до %02d:00 МСК (%s)",
-		a.cutoffHour, until.Format("02 Jan")), nil
-}
-
-// nextCutoff returns the next moment of `hour:00` in `loc`, strictly in the future.
-// If now is exactly at hour:00, returns next day's hour:00.
-func nextCutoff(now time.Time, hour int, loc *time.Location) time.Time {
-	nowLoc := now.In(loc)
-	target := time.Date(nowLoc.Year(), nowLoc.Month(), nowLoc.Day(), hour, 0, 0, 0, loc)
-	if !target.After(nowLoc) {
-		target = target.AddDate(0, 0, 1)
-	}
-	return target
+	return line, nil
 }
 
 // ----- History -----
@@ -130,8 +115,6 @@ func NewHistoryAction(d *db.DB, tgClient historyTG, chatID int64) *HistoryAction
 	return &HistoryAction{d: d, tg: tgClient, chatID: chatID}
 }
 
-const historyMaxTransitions = 30
-
 func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
 	cutoff := time.Now().Add(-24 * time.Hour)
 	events, err := a.d.Events().ListSince(args.UserID, args.CheckName, cutoff)
@@ -140,17 +123,14 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	}
 
 	// Compute transitions: only emit lines on status change.
+	transitions, truncated := alertaction.Transitions(events)
 	var lines []string
-	var prev string
-	for _, e := range events {
-		if e.Status != prev {
-			icon := "✅"
-			if e.Status == "fail" {
-				icon = "❌"
-			}
-			lines = append(lines, fmt.Sprintf("%s %s %s", e.TS.In(moscowLoc()).Format("15:04"), icon, humanEventStatus(e.Status)))
-			prev = e.Status
+	for _, tr := range transitions {
+		icon := "✅"
+		if tr.Status == "fail" {
+			icon = "❌"
 		}
+		lines = append(lines, fmt.Sprintf("%s %s %s", tr.TS.In(moscowLoc()).Format("15:04"), icon, humanEventStatus(tr.Status)))
 	}
 
 	// Look up nickname and thread.
@@ -168,11 +148,6 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if len(lines) == 0 {
 		historyLines = []string{"нет событий за период"}
 	} else {
-		truncated := false
-		if len(lines) > historyMaxTransitions {
-			lines = lines[len(lines)-historyMaxTransitions:]
-			truncated = true
-		}
 		if truncated {
 			historyLines = append(historyLines, "показаны только последние события")
 		}
