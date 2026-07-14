@@ -143,7 +143,8 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 }
 
 type miniappRouterResp struct {
-	Router miniappRouterSummary `json:"router"`
+	Router    miniappRouterSummary `json:"router"`
+	Incidents []miniappIncident    `json:"incidents"`
 }
 
 func miniappRouterDetailHandler(d Deps) http.HandlerFunc {
@@ -161,8 +162,17 @@ func miniappRouterDetailHandler(d Deps) http.HandlerFunc {
 		}
 		for _, a := range summary.Agents {
 			if a.ID == routerID {
+				incidents, err := d.DB.State().HardIncidentsForUser(routerID)
+				if err != nil {
+					writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "incident lookup failed")
+					return
+				}
+				resp := miniappRouterResp{Router: miniappRouterSummaryFromAgent(a)}
+				for _, st := range incidents {
+					resp.Incidents = append(resp.Incidents, miniappIncidentFromState(st))
+				}
 				w.Header().Set("Content-Type", "application/json; charset=utf-8")
-				_ = json.NewEncoder(w).Encode(miniappRouterResp{Router: miniappRouterSummaryFromAgent(a)})
+				_ = json.NewEncoder(w).Encode(resp)
 				return
 			}
 		}

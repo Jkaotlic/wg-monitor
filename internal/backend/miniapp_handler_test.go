@@ -252,3 +252,40 @@ func TestMiniappStaticServed(t *testing.T) {
 		t.Errorf("expected the built index.html shell, got: %s", rec.Body.String())
 	}
 }
+
+func TestMiniappRouterDetailCarriesSuppressionState(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	silencedUntil := time.Now().Add(time.Hour).UTC()
+	hardSince := time.Now().Add(-time.Hour).UTC()
+	if err := d.State().Save(ownedID, "tunnel_a", db.IncidentState{
+		UserID: ownedID, CheckName: "tunnel_a", CurrentStatus: "hard",
+		HardSince: &hardSince, SilencedUntil: &silencedUntil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRouterResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, inc := range resp.Incidents {
+		if inc.CheckName == "tunnel_a" {
+			found = true
+			if inc.SilencedUntil == nil {
+				t.Error("expected silenced_until on the enriched incident")
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("enriched incident tunnel_a not found in detail response: %+v", resp.Incidents)
+	}
+}
