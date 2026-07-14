@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -575,4 +576,29 @@ func (zeroReader) Read(p []byte) (int, error) {
 		p[i] = 0
 	}
 	return len(p), nil
+}
+
+func TestEditMessageReplyMarkup(t *testing.T) {
+	var captured map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		json.Unmarshal(body, &captured)
+		json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 555}})
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
+	err := c.EditMessageReplyMarkup(context.Background(), 100, 555, &InlineKeyboardMarkup{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := captured["reply_markup"]; !ok {
+		t.Errorf("expected reply_markup in body, got %+v", captured)
+	}
+	if captured["text"] != nil {
+		t.Errorf("editMessageReplyMarkup must not send a text field, got %+v", captured["text"])
+	}
+	if fmt.Sprintf("%v", captured["message_id"]) != "555" {
+		t.Errorf("message_id = %v, want 555", captured["message_id"])
+	}
 }

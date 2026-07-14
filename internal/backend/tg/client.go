@@ -219,6 +219,26 @@ func (c *Client) EditMessageText(ctx context.Context, chatID, messageID int64, t
 	return c.call(ctx, "editMessageText", body, nil)
 }
 
+type editMessageReplyMarkupReq struct {
+	ChatID      int64                 `json:"chat_id"`
+	MessageID   int64                 `json:"message_id"`
+	ReplyMarkup *InlineKeyboardMarkup `json:"reply_markup,omitempty"`
+}
+
+// EditMessageReplyMarkup replaces (or, with an empty markup, removes) the
+// inline keyboard of an existing message without touching its text. Passing
+// &InlineKeyboardMarkup{} sends an empty inline_keyboard array, which Telegram
+// treats as "remove the buttons". A "message is not modified" 400 is treated
+// as success, mirroring EditMessageText.
+func (c *Client) EditMessageReplyMarkup(ctx context.Context, chatID, messageID int64, markup *InlineKeyboardMarkup) error {
+	body, _ := json.Marshal(editMessageReplyMarkupReq{
+		ChatID:      chatID,
+		MessageID:   messageID,
+		ReplyMarkup: markup,
+	})
+	return c.call(ctx, "editMessageReplyMarkup", body, nil)
+}
+
 // sendMessageWithRMReq lets reply_markup be ANY of {InlineKeyboardMarkup,
 // ReplyKeyboardMarkup, ReplyKeyboardRemove}. Encoded as raw json.RawMessage
 // avoids polymorphic struct fields and keeps the wire format clean.
@@ -496,7 +516,10 @@ func (c *Client) warn(method, msg string, attrs ...any) {
 }
 
 func isMessageNotModified(method string, code int, description string) bool {
-	if method != "editMessageText" || code != 400 {
+	if code != 400 {
+		return false
+	}
+	if method != "editMessageText" && method != "editMessageReplyMarkup" {
 		return false
 	}
 	return strings.Contains(strings.ToLower(description), "message is not modified")
