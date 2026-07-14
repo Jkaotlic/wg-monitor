@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { initTelegram, getInitData, getThemeParams } from './telegram.js'
+import { initTelegram, getInitData, getThemeParams, onThemeChanged } from './telegram.js'
 import { createSession } from './api.js'
 import { RouterList } from './screens/RouterList.jsx'
 import { RouterDetail } from './screens/RouterDetail.jsx'
@@ -22,13 +22,16 @@ function initialRouterID() {
 export function App() {
   const [status, setStatus] = useState('loading')
   const [selectedID, setSelectedID] = useState(initialRouterID)
+  const [isAdmin, setIsAdmin] = useState(false)
 
   useEffect(() => {
     initTelegram()
     applyTheme()
+    const offTheme = onThemeChanged(applyTheme)
     createSession(getInitData())
-      .then(() => setStatus('ready'))
+      .then((s) => { setIsAdmin(!!s.is_admin); setStatus('ready') })
       .catch(() => setStatus('error'))
+    return offTheme
   }, [])
 
   if (status === 'loading') return <p class="state-message">Загрузка…</p>
@@ -41,7 +44,7 @@ export function App() {
   }
 
   if (selectedID != null) {
-    return <RouterDetail id={selectedID} onBack={() => setSelectedID(null)} />
+    return <RouterDetail id={selectedID} onBack={() => setSelectedID(null)} isAdmin={isAdmin} />
   }
   return <RouterList onSelect={setSelectedID} />
 }

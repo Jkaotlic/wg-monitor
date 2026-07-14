@@ -20,6 +20,12 @@ export function onBackButtonClick(handler) {
   return () => tg.BackButton.offClick(handler)
 }
 
+export function onThemeChanged(handler) {
+  if (!tg) return () => {}
+  tg.onEvent('themeChanged', handler)
+  return () => tg.offEvent('themeChanged', handler)
+}
+
 export function setBackButtonVisible(visible) {
   if (!tg) return
   if (visible) tg.BackButton.show()

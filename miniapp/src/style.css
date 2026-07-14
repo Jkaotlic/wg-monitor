@@ -1,11 +1,332 @@
+/* ============================================================
+   Design tokens
+   ------------------------------------------------------------
+   Telegram hands over live theme colors via WebApp.themeParams;
+   App.jsx's applyTheme() writes them inline on <html> as --tg-*,
+   which always wins over any rule here (inline beats stylesheet,
+   even inside a media query). What's below is only the fallback
+   used before that handoff, or when the app runs outside
+   Telegram entirely -- the dark media block covers that case.
+
+   Everything components use lives in the semantic layer (surface,
+   text, accent, status-*, spacing, radius, type). Components
+   should reach for those, not --tg-* directly.
+   ============================================================ */
 :root {
+  /* Telegram-provided surface & text colors (light fallback) */
   --tg-bg-color: #ffffff;
-  --tg-text-color: #222222;
-  --tg-hint-color: #999999;
+  --tg-text-color: #1c1c1e;
+  --tg-hint-color: #8a8a8e;
   --tg-link-color: #2481cc;
   --tg-button-color: #2481cc;
   --tg-button-text-color: #ffffff;
+  --tg-secondary-bg-color: #f2f2f7;
+
+  /* Semantic layer */
+  --surface: var(--tg-bg-color, #fff);
+  --surface-2: var(--tg-secondary-bg-color, #f2f2f7);
+  --text: var(--tg-text-color, #1c1c1e);
+  --muted: var(--tg-hint-color, #8a8a8e);
+  --accent: var(--tg-button-color, #2481cc);
+  --accent-text: var(--tg-button-text-color, #fff);
+  --link: var(--tg-link-color, #2481cc);
+
+  --border: color-mix(in srgb, var(--text) 12%, transparent);
+  --border-strong: color-mix(in srgb, var(--text) 24%, transparent);
+  --shadow-card: 0 1px 2px color-mix(in srgb, var(--text) 7%, transparent);
+
+  /* Status hues. Each is anchored to a fixed brand hue but mixed
+     with --text so it self-corrects contrast per theme: in light
+     mode --text is near-black and pulls the hue darker (readable
+     on a pale surface); in dark mode --text is near-white and
+     pulls it lighter (readable on a near-black surface). Offline
+     reuses --muted outright -- "offline" IS the inactive/hint
+     tone, not a separate color to invent. */
+  --status-online: color-mix(in srgb, #1fa661 78%, var(--text) 22%);
+  --status-sleeping: color-mix(in srgb, #b8790a 78%, var(--text) 22%);
+  --status-offline: var(--muted);
+  --status-alert: color-mix(in srgb, #e5484d 82%, var(--text) 18%);
+  --danger: var(--status-alert);
+  --success: var(--status-online);
+
+  /* Spacing (4px step) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+
+  /* Radius */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-pill: 999px;
+
+  /* Type. System stack for prose -- this is embedded Telegram
+     chrome, so body text should feel like it belongs to the host
+     app, not a foreign import. Monospace for identifiers, status
+     codes and timestamps: this is a network-ops tool, and setting
+     that data in mono marks it as a *reading*, distinct from the
+     surrounding prose -- the same convention terminals and
+     dashboards use, applied because the content is genuinely
+     tabular/numeric, not for decoration. */
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+
+  --fs-xl: 1.375rem;
+  --fs-lg: 1.125rem;
+  --fs-md: 1rem;
+  --fs-sm: 0.875rem;
+  --fs-xs: 0.75rem;
+
+  --lh-tight: 1.25;
+  --lh-normal: 1.45;
+
+  --transition-fast: 120ms ease;
 }
+
+@media (prefers-color-scheme: dark) {
+  /* Dark fallbacks for --tg-*. Only in effect outside Telegram:
+     inside Telegram, applyTheme() always sets these inline before
+     anything paints, and inline wins regardless of this query. */
+  :root {
+    --tg-bg-color: #1c1c1e;
+    --tg-text-color: #f2f2f3;
+    --tg-hint-color: #8e8e93;
+    --tg-link-color: #6ab7ff;
+    --tg-button-color: #3ea6ff;
+    --tg-button-text-color: #ffffff;
+    --tg-secondary-bg-color: #2c2c2e;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* ============================================================
+   Layout primitives
+   ============================================================ */
+.screen {
+  padding: var(--sp-4) var(--sp-4) var(--sp-6);
+}
+
+.screen-title {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  color: var(--text);
+}
+
+.section {
+  margin-top: var(--sp-5);
+}
+
+.section-title {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ============================================================
+   Card / row
+   ============================================================ */
+.card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: var(--sp-4);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+/* ============================================================
+   Buttons
+   ============================================================ */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-1);
+  min-height: 32px;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), opacity var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn-danger {
+  background: transparent;
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ============================================================
+   Badge -- status pills. Each status-* token already self-tunes
+   for contrast per theme (see the token block above); the badge
+   just tints the local surface with a sliver of that hue via
+   color-mix, so there is one rule set for both themes instead of
+   a hand-maintained light/dark pair. The dot repeats the hue at
+   full strength via currentColor.
+   ============================================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  padding: 3px var(--sp-2);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.badge::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.badge-online {
+  color: var(--status-online);
+  background: color-mix(in srgb, var(--status-online) 16%, var(--surface));
+}
+
+.badge-sleeping {
+  color: var(--status-sleeping);
+  background: color-mix(in srgb, var(--status-sleeping) 16%, var(--surface));
+}
+
+.badge-offline {
+  color: var(--status-offline);
+  background: color-mix(in srgb, var(--status-offline) 14%, var(--surface));
+}
+
+.badge-alert {
+  color: var(--status-alert);
+  background: color-mix(in srgb, var(--status-alert) 16%, var(--surface));
+}
+
+/* Role badge -- a different axis (permission, not health), so it
+   borrows the accent instead of a status hue and drops the dot. */
+.badge-role {
+  font-family: var(--font-body);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+}
+
+.badge-role::before {
+  content: none;
+}
+
+/* ============================================================
+   Field
+   ============================================================ */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.field label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.field input {
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ============================================================
+   Text utilities / states
+   ============================================================ */
+.muted {
+  color: var(--muted);
+}
+
+.state {
+  padding: var(--sp-6) var(--sp-4);
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--fs-sm);
+}
+
+.state-error {
+  color: var(--danger);
+}
+
+/* ============================================================
+   Existing rules (pre-token-layer). Tasks 4-5 migrate these
+   screens onto the vocabulary above; left as-is here so nothing
+   regresses in the meantime.
+   ============================================================ */
 
 * {
   box-sizing: border-box;
