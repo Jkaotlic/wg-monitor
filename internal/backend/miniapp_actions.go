@@ -68,6 +68,10 @@ func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutat
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "state lookup failed")
 		return
 	}
+	if st.CurrentStatus != "hard" {
+		writeJSONError(w, http.StatusNotFound, "incident_not_active", "incident is no longer active")
+		return
+	}
 	newSt, statusLine := mutate(st)
 	if err := d.DB.State().Save(routerID, check, newSt); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "state save failed")

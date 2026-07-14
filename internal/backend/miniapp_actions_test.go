@@ -185,3 +185,23 @@ func TestMiniappHistoryDeniedForStranger(t *testing.T) {
 		t.Fatalf("want 404 for stranger, got %d", rec.Code)
 	}
 }
+
+func TestMiniappSilenceRejectsNonHardIncident(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	// Don't seed a hard incident; the check will have zero-value status "ok"
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	body, _ := json.Marshal(map[string]string{"ttl": "1h"})
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/tunnel_a/silence", ownedID), bytes.NewReader(body))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for non-hard incident, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	// Verify no silenced_until was persisted
+	st, _ := d.State().Get(ownedID, "tunnel_a")
+	if st.SilencedUntil != nil {
+		t.Fatal("unexpected silenced_until was persisted for non-hard incident")
+	}
+}
