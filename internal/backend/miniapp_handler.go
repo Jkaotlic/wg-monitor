@@ -26,6 +26,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/silence", reqID(auth(miniappSilenceHandler(d))))
 }
 
 type miniappSessionReq struct {
