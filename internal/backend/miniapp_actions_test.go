@@ -101,3 +101,46 @@ func TestMiniappSilenceSyncIsBestEffort(t *testing.T) {
 		t.Fatal("silence must persist even when TG sync is skipped")
 	}
 }
+
+func TestMiniappAckPersists(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedHardIncident(t, d, ownedID, "dns")
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/dns/ack", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappIncidentResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Incident.Acked {
+		t.Fatal("expected acked=true in response")
+	}
+	st, _ := d.State().Get(ownedID, "dns")
+	if !st.Acked {
+		t.Fatal("ack not persisted")
+	}
+}
+
+func TestMiniappMutePersistsSilencedUntil(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedHardIncident(t, d, ownedID, "tunnel_b")
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, MuteCutoffHour: 9})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/tunnel_b/mute", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	st, _ := d.State().Get(ownedID, "tunnel_b")
+	if st.SilencedUntil == nil {
+		t.Fatal("mute did not set silenced_until")
+	}
+}

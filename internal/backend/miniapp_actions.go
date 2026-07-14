@@ -120,3 +120,19 @@ func miniappSilenceHandler(d Deps) http.HandlerFunc {
 		})
 	}
 }
+
+func miniappAckHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		miniappIncidentAction(d, w, r, func(st db.IncidentState) (db.IncidentState, string) {
+			return alertaction.ApplyAck(st, time.Now())
+		})
+	}
+}
+
+func miniappMuteHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		miniappIncidentAction(d, w, r, func(st db.IncidentState) (db.IncidentState, string) {
+			return alertaction.ApplyMute(st, d.MuteCutoffHour, time.Now())
+		})
+	}
+}
