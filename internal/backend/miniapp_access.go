@@ -67,6 +67,10 @@ func miniappRequireAdmin(d Deps, w http.ResponseWriter, r *http.Request) (int64,
 // miniappRespondAccess writes the router's current access object (or 500).
 func miniappRespondAccess(d Deps, w http.ResponseWriter, routerID int64) {
 	resp, err := buildMiniappAccess(d, routerID)
+	if errors.Is(err, db.ErrUserNotFound) {
+		writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+		return
+	}
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "access lookup failed")
 		return

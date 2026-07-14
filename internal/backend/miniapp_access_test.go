@@ -172,6 +172,18 @@ func TestMiniappRemoveOperator(t *testing.T) {
 	}
 }
 
+func TestMiniappRemoveOperatorUnknownRouter404(t *testing.T) {
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodDelete, "/v1/miniapp/routers/999999/access/operators/555", nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999)) // admin
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for remove-operator on unknown router, got %d", rec.Code)
+	}
+}
+
 func TestMiniappUnbindOwner(t *testing.T) {
 	d, ownedID, _, _ := seedMiniappFleet(t) // owned by TG 100
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})

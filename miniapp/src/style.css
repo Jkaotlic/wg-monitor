@@ -334,19 +334,6 @@
   background: color-mix(in srgb, var(--status-alert) 16%, var(--surface));
 }
 
-/* Role badge -- a different axis (permission, not health), so it
-   borrows the accent instead of a status hue and drops the dot. */
-.badge-role {
-  font-family: var(--font-body);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
-}
-
-.badge-role::before {
-  content: none;
-}
 
 /* ============================================================
    Field
