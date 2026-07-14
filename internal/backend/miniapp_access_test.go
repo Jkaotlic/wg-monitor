@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -103,5 +104,91 @@ func TestMiniappRouterDetailOmitsActiveIncidentsOnRouter(t *testing.T) {
 	incidents, _ := raw["incidents"].([]any)
 	if len(incidents) == 0 {
 		t.Errorf("expected the enriched top-level incidents to be present and non-empty")
+	}
+}
+
+func TestMiniappAddOperatorPersistsAndReturnsAccess(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	body := `{"telegram_user_id": 555}`
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/access/operators", ownedID), strings.NewReader(body))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappAccessResp
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Operators) != 1 || resp.Operators[0].TelegramUserID != 555 {
+		t.Fatalf("operators = %+v, want tgid 555", resp.Operators)
+	}
+	// Persistence + granted_by = admin.
+	ops, _ := d.RouterOperators().List(ownedID)
+	if len(ops) != 1 || ops[0].TelegramUserID != 555 || ops[0].GrantedBy != 999 {
+		t.Fatalf("persisted ops = %+v", ops)
+	}
+}
+
+func TestMiniappAddOperatorRejectsBadID(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/access/operators", ownedID), strings.NewReader(`{"telegram_user_id": 0}`))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for id<=0, got %d", rec.Code)
+	}
+}
+
+func TestMiniappAddOperatorForbiddenForNonAdmin(t *testing.T) {
+	d, ownedID, _, ownerTGID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/access/operators", ownedID), strings.NewReader(`{"telegram_user_id": 555}`))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", ownerTGID)) // owner, not admin
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", rec.Code)
+	}
+}
+
+func TestMiniappRemoveOperator(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	_ = d.RouterOperators().Add(ownedID, 555, 999)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/miniapp/routers/%d/access/operators/555", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	ops, _ := d.RouterOperators().List(ownedID)
+	if len(ops) != 0 {
+		t.Fatalf("operator not removed: %+v", ops)
+	}
+}
+
+func TestMiniappUnbindOwner(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t) // owned by TG 100
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v1/miniapp/routers/%d/access/owner", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappAccessResp
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Owner != nil {
+		t.Fatalf("owner should be nil after unbind, got %+v", resp.Owner)
+	}
+	u, _ := d.Users().GetByID(ownedID)
+	if u.TelegramUserID != nil {
+		t.Fatalf("users.telegram_user_id should be NULL after unbind, got %v", *u.TelegramUserID)
 	}
 }

@@ -31,6 +31,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/mute", reqID(auth(miniappMuteHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/incidents/{check}/history", reqID(auth(miniappHistoryHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/access", reqID(auth(miniappAccessHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/access/operators", reqID(auth(miniappAddOperatorHandler(d))))
+	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/operators/{tgid}", reqID(auth(miniappRemoveOperatorHandler(d))))
+	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/owner", reqID(auth(miniappUnbindOwnerHandler(d))))
 }
 
 type miniappSessionReq struct {

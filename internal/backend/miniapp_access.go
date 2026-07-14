@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -95,5 +96,90 @@ func miniappAccessHandler(d Deps) http.HandlerFunc {
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+func miniappAddOperatorHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		adminID, ok := miniappRequireAdmin(d, w, r)
+		if !ok {
+			return
+		}
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		var body struct {
+			TelegramUserID int64 `json:"telegram_user_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_request", "invalid body")
+			return
+		}
+		if body.TelegramUserID <= 0 {
+			writeJSONError(w, http.StatusBadRequest, "bad_operator_id", "telegram_user_id must be positive")
+			return
+		}
+		if _, err := d.DB.Users().GetByID(routerID); errors.Is(err, db.ErrUserNotFound) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		} else if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "router lookup failed")
+			return
+		}
+		if err := d.DB.RouterOperators().Add(routerID, body.TelegramUserID, adminID); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "add operator failed")
+			return
+		}
+		miniappRespondAccess(d, w, routerID)
+	}
+}
+
+func miniappRemoveOperatorHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := miniappRequireAdmin(d, w, r); !ok {
+			return
+		}
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		tgid, err := strconv.ParseInt(r.PathValue("tgid"), 10, 64)
+		if err != nil {
+			writeJSONError(w, http.StatusNotFound, "not_found", "operator not found")
+			return
+		}
+		if err := d.DB.RouterOperators().Remove(routerID, tgid); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "remove operator failed")
+			return
+		}
+		miniappRespondAccess(d, w, routerID)
+	}
+}
+
+func miniappUnbindOwnerHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := miniappRequireAdmin(d, w, r); !ok {
+			return
+		}
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		if _, err := d.DB.Users().GetByID(routerID); errors.Is(err, db.ErrUserNotFound) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		} else if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "router lookup failed")
+			return
+		}
+		if err := d.DB.Users().SetTelegramUserID(routerID, 0); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "unbind owner failed")
+			return
+		}
+		miniappRespondAccess(d, w, routerID)
 	}
 }
