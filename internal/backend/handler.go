@@ -16,6 +16,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -309,6 +310,15 @@ type PingCheckNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
+// MiniappTGClient is the narrow Telegram capability the mini-app alert-action
+// handlers need for their best-effort sync of the original alert message:
+// strip its inline keyboard and post a threaded breadcrumb reply. *tg.Client
+// satisfies it.
+type MiniappTGClient interface {
+	EditMessageReplyMarkup(ctx context.Context, chatID, messageID int64, markup *tg.InlineKeyboardMarkup) error
+	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
+}
+
 type Deps struct {
 	Logger              *slog.Logger
 	DB                  *db.DB
@@ -355,7 +365,15 @@ type Deps struct {
 	TelegramAdminUserID   int64
 	TelegramPrimaryChatID int64
 	TelegramExtraChatIDs  []int64
-	BackendUpdatePath     string
+	// MiniappTG lets the mini-app alert-action handlers strip buttons and post
+	// a breadcrumb on the original Telegram alert (best-effort). Nil disables
+	// the sync (the DB write still happens). Wired from the shared *tg.Client.
+	MiniappTG MiniappTGClient
+	// MuteCutoffHour (0-23 MSK) is the "тихо до утра" cutoff used by the
+	// mini-app mute endpoint, matching the callback MuteAction. Sourced from
+	// the same cfg.State.MuteCutoffHour the bot uses.
+	MuteCutoffHour int
+	BackendUpdatePath  string
 	PublicBaseURL         string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router

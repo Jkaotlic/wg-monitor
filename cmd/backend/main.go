@@ -270,6 +270,8 @@ func main() {
 		TelegramAdminUserID:       cfg.Telegram.AdminUserID,
 		TelegramPrimaryChatID:     cfg.Telegram.ChatID,
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
+		MiniappTG:                 tgClient,
+		MuteCutoffHour:            muteCutoffHour,
 		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),
 		PublicBaseURL:             cfg.PublicBaseURL,
 		PublicIP:                  cfg.PublicIP,
