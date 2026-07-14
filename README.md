@@ -55,6 +55,12 @@ same admin/owner/operator model the bot already uses — no separate login. The 
 dashboard (`/dashboard/`) remains the primary surface for deploy/provision/repair and
 everything else the mini app doesn't cover yet.
 
+The mini app can now also act on HARD alerts — silence (1ч/4ч/24ч), acknowledge,
+mute until the morning cutoff, and view a 24h status-transition history — per incident,
+using the same suppression semantics as the Telegram alert buttons. Acting from the app
+strips the buttons from the original Telegram alert message and posts a short breadcrumb
+reply, keeping both surfaces consistent.
+
 ## Deploy Model
 
 New and recovered routers are deployed through:
