@@ -8,6 +8,7 @@ import {
   muteIncident,
 } from '../api.js'
 import { setBackButtonVisible, onBackButtonClick } from '../telegram.js'
+import { AccessSection } from './AccessSection.jsx'
 
 const SILENCE_OPTIONS = [
   { ttl: '1h', label: '1ч' },
@@ -138,7 +139,7 @@ function IncidentCard({ routerID, incident, onUpdate }) {
   )
 }
 
-export function RouterDetail({ id, onBack }) {
+export function RouterDetail({ id, onBack, isAdmin }) {
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
@@ -201,6 +202,8 @@ export function RouterDetail({ id, onBack }) {
           ))}
         </ul>
       </section>
+
+      {isAdmin && <AccessSection routerID={id} />}
     </div>
   )
 }

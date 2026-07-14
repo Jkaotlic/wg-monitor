@@ -61,3 +61,22 @@ export function muteIncident(routerID, check) {
 export function fetchIncidentHistory(routerID, check) {
   return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/history`)
 }
+
+export function fetchAccess(routerID) {
+  return request(`/routers/${routerID}/access`)
+}
+
+export function addOperator(routerID, telegramUserID) {
+  return request(`/routers/${routerID}/access/operators`, {
+    method: 'POST',
+    body: JSON.stringify({ telegram_user_id: telegramUserID }),
+  })
+}
+
+export function removeOperator(routerID, telegramUserID) {
+  return request(`/routers/${routerID}/access/operators/${telegramUserID}`, { method: 'DELETE' })
+}
+
+export function unbindOwner(routerID) {
+  return request(`/routers/${routerID}/access/owner`, { method: 'DELETE' })
+}
