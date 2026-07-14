@@ -241,3 +241,56 @@ func TestSetLastAlert_UpdatesHardOnly(t *testing.T) {
 }
 
 func ptrTime(t time.Time) *time.Time { return &t }
+
+func TestHardIncidentsForUser(t *testing.T) {
+	d := newTestDB(t)
+	tok := "7777000000000000000000000000000000000000000000000000000000000000"
+	uid, err := d.Users().Insert("hardu", tok, "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	hardSince := time.Now().Add(-time.Hour).UTC()
+	silencedUntil := time.Now().Add(time.Hour).UTC()
+	// One hard + silenced incident.
+	if err := d.State().Save(uid, "tunnel_a", IncidentState{
+		UserID: uid, CheckName: "tunnel_a", CurrentStatus: "hard",
+		HardSince: &hardSince, SilencedUntil: &silencedUntil,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// One hard + acked incident.
+	if err := d.State().Save(uid, "dns", IncidentState{
+		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
+		HardSince: &hardSince, Acked: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// One non-hard incident that must be excluded.
+	if err := d.State().Save(uid, "ok_check", IncidentState{
+		UserID: uid, CheckName: "ok_check", CurrentStatus: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := d.State().HardIncidentsForUser(uid)
+	if err != nil {
+		t.Fatalf("HardIncidentsForUser: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("got %d hard incidents, want 2 (%+v)", len(rows), rows)
+	}
+	byCheck := map[string]IncidentState{}
+	for _, r := range rows {
+		byCheck[r.CheckName] = r
+	}
+	if s := byCheck["tunnel_a"]; s.SilencedUntil == nil || !s.SilencedUntil.Equal(silencedUntil) {
+		t.Errorf("tunnel_a SilencedUntil = %v, want %v", s.SilencedUntil, silencedUntil)
+	}
+	if s := byCheck["dns"]; !s.Acked {
+		t.Errorf("dns Acked = false, want true")
+	}
+	if _, present := byCheck["ok_check"]; present {
+		t.Errorf("non-hard incident must be excluded")
+	}
+}

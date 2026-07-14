@@ -274,6 +274,48 @@ func (s *StateRepo) StaleHards(cutoff time.Time) ([]StaleHard, error) {
 	return out, rows.Err()
 }
 
+// HardIncidentsForUser returns the full IncidentState rows for every
+// current_status='hard' incident of one user, ordered by hard_since. Unlike
+// ActiveHardForUser (which filters out silenced/acked incidents and returns
+// trimmed rows), this returns ALL hard incidents WITH their silenced_until /
+// acked state, for the mini-app router-detail view.
+func (s *StateRepo) HardIncidentsForUser(userID int64) ([]IncidentState, error) {
+	rows, err := s.d.db.Query(
+		`SELECT user_id, check_name, consecutive_fails, consecutive_oks, current_status,
+		        hard_since, last_alert_msg_id, last_alert_at, silenced_until, acked_until, acked
+		   FROM incident_state
+		  WHERE user_id = ? AND current_status = 'hard'
+		  ORDER BY hard_since`,
+		userID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IncidentState
+	for rows.Next() {
+		var st IncidentState
+		var hardSince, lastAlertAt, silenced, ackedUntil sql.NullTime
+		var lastMsgID sql.NullInt64
+		var ackedFlag int
+		if err := rows.Scan(&st.UserID, &st.CheckName, &st.ConsecutiveFails, &st.ConsecutiveOKs, &st.CurrentStatus,
+			&hardSince, &lastMsgID, &lastAlertAt, &silenced, &ackedUntil, &ackedFlag); err != nil {
+			return nil, err
+		}
+		st.HardSince = nullTime(hardSince)
+		st.LastAlertAt = nullTime(lastAlertAt)
+		st.SilencedUntil = nullTime(silenced)
+		st.AckedUntil = nullTime(ackedUntil)
+		if lastMsgID.Valid {
+			v := lastMsgID.Int64
+			st.LastAlertMsgID = &v
+		}
+		st.Acked = ackedFlag == 1
+		out = append(out, st)
+	}
+	return out, rows.Err()
+}
+
 func nullTime(n sql.NullTime) *time.Time {
 	if !n.Valid {
 		return nil
