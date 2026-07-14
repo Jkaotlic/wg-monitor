@@ -372,9 +372,9 @@ type Deps struct {
 	// MuteCutoffHour (0-23 MSK) is the "тихо до утра" cutoff used by the
 	// mini-app mute endpoint, matching the callback MuteAction. Sourced from
 	// the same cfg.State.MuteCutoffHour the bot uses.
-	MuteCutoffHour int
-	BackendUpdatePath  string
-	PublicBaseURL         string
+	MuteCutoffHour    int
+	BackendUpdatePath string
+	PublicBaseURL     string
 	// PublicIP is the backend's fleet-facing public IPv4 (config public_ip),
 	// injected into the provisioning bootstrap as curl --resolve so a router
 	// with broken DNS can still download the agent during repair. Empty → the
