@@ -61,6 +61,11 @@ using the same suppression semantics as the Telegram alert buttons. Acting from 
 strips the buttons from the original Telegram alert message and posts a short breadcrumb
 reply, keeping both surfaces consistent.
 
+Admins can also manage per-router access from the router's screen in the mini app —
+view/unbind the owner and add/remove operators (by numeric Telegram user id) — backed
+by the same `router_operators`/owner model the bot's access panel uses. The mini app's
+UI follows a small theme-native design system (light/dark via Telegram's theme).
+
 ## Deploy Model
 
 New and recovered routers are deployed through:
