@@ -136,3 +136,53 @@ func miniappMuteHandler(d Deps) http.HandlerFunc {
 		})
 	}
 }
+
+type miniappTransition struct {
+	Timestamp string `json:"ts"`     // RFC3339 UTC
+	Status    string `json:"status"` // "ok" | "fail"
+	Label     string `json:"label"`  // "в норме" | "сбой"
+}
+
+type miniappHistoryResp struct {
+	Transitions []miniappTransition `json:"transitions"`
+	Truncated   bool                `json:"truncated"`
+}
+
+// miniappHistoryWindow bounds the history lookback (matches the callback
+// History action's 24h window).
+const miniappHistoryWindow = 24 * time.Hour
+
+func miniappHistoryLabel(status string) string {
+	if status == "fail" {
+		return "сбой"
+	}
+	return "в норме"
+}
+
+func miniappHistoryHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramUserID, _ := miniappUserFromContext(r.Context())
+		routerID, ok := parseMiniappRouterID(r)
+		check := r.PathValue("check")
+		if !ok || check == "" || !miniappRouterAllowed(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		events, err := d.DB.Events().ListSince(routerID, check, time.Now().Add(-miniappHistoryWindow))
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "history lookup failed")
+			return
+		}
+		transitions, truncated := alertaction.Transitions(events)
+		resp := miniappHistoryResp{Truncated: truncated}
+		for _, tr := range transitions {
+			resp.Transitions = append(resp.Transitions, miniappTransition{
+				Timestamp: tr.TS.UTC().Format(time.RFC3339),
+				Status:    tr.Status,
+				Label:     miniappHistoryLabel(tr.Status),
+			})
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}

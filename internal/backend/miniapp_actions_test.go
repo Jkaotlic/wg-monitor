@@ -144,3 +144,44 @@ func TestMiniappMutePersistsSilencedUntil(t *testing.T) {
 		t.Fatal("mute did not set silenced_until")
 	}
 }
+
+func TestMiniappHistoryReturnsTransitions(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	base := time.Now().Add(-2 * time.Hour)
+	// ok → fail → ok, plus a duplicate that must be compressed away.
+	_ = d.Events().Insert(ownedID, "tunnel_c", "ok", "{}", base)
+	_ = d.Events().Insert(ownedID, "tunnel_c", "ok", "{}", base.Add(time.Minute))
+	_ = d.Events().Insert(ownedID, "tunnel_c", "fail", "{}", base.Add(2*time.Minute))
+	_ = d.Events().Insert(ownedID, "tunnel_c", "ok", "{}", base.Add(3*time.Minute))
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/tunnel_c/history", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappHistoryResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Transitions) != 3 {
+		t.Fatalf("got %d transitions, want 3 (ok→fail→ok): %+v", len(resp.Transitions), resp.Transitions)
+	}
+	if resp.Transitions[0].Status != "ok" || resp.Transitions[1].Status != "fail" {
+		t.Errorf("transition order = %+v", resp.Transitions)
+	}
+}
+
+func TestMiniappHistoryDeniedForStranger(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/tunnel_c/history", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 777))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for stranger, got %d", rec.Code)
+	}
+}
