@@ -30,6 +30,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/ack", reqID(auth(miniappAckHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/mute", reqID(auth(miniappMuteHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/incidents/{check}/history", reqID(auth(miniappHistoryHandler(d))))
+	mux.Handle("GET /v1/miniapp/routers/{id}/access", reqID(auth(miniappAccessHandler(d))))
 }
 
 type miniappSessionReq struct {
@@ -168,6 +169,10 @@ func miniappRouterDetailHandler(d Deps) http.HandlerFunc {
 					return
 				}
 				resp := miniappRouterResp{Router: miniappRouterSummaryFromAgent(a)}
+				// The enriched top-level Incidents supersedes the summary's
+				// lightweight active_incidents on the detail view; omitempty
+				// then drops it from the JSON. (Kept on the fleet-list summary.)
+				resp.Router.ActiveIncidents = nil
 				for _, st := range incidents {
 					resp.Incidents = append(resp.Incidents, miniappIncidentFromState(st))
 				}
