@@ -34,10 +34,10 @@ export function App() {
     return offTheme
   }, [])
 
-  if (status === 'loading') return <p class="state-message">Загрузка…</p>
+  if (status === 'loading') return <p class="state">Загрузка…</p>
   if (status === 'error') {
     return (
-      <p class="state-message state-message-error">
+      <p class="state state-error">
         Не удалось войти. Откройте mini-app из Telegram заново.
       </p>
     )

@@ -41,11 +41,24 @@
      on a pale surface); in dark mode --text is near-white and
      pulls it lighter (readable on a near-black surface). Offline
      reuses --muted outright -- "offline" IS the inactive/hint
-     tone, not a separate color to invent. */
-  --status-online: color-mix(in srgb, #1fa661 78%, var(--text) 22%);
-  --status-sleeping: color-mix(in srgb, #b8790a 78%, var(--text) 22%);
+     tone, not a separate color to invent.
+
+     Mix ratios below (60/40, 65/35, 70/30) were widened from an
+     earlier 78-82% anchor / 18-22% text pass once these tokens
+     started actually rendering as badge text-on-tint pills: the
+     lighter ratio computed to ~3.6-4.1:1 against its own badge
+     background in light mode, under WCAG AA's 4.5:1 for normal-size
+     text. Pulling more --text into the mix darkens the token in
+     light mode *and* lightens it in dark mode (same self-correcting
+     mechanism, just tuned further), which raised every badge above
+     4.5:1 in both themes -- verified by computing sRGB relative
+     luminance for each token's on-badge text against its own
+     color-mix'd background (see badge rules below), not just
+     eyeballed. */
+  --status-online: color-mix(in srgb, #1fa661 60%, var(--text) 40%);
+  --status-sleeping: color-mix(in srgb, #b8790a 65%, var(--text) 35%);
   --status-offline: var(--muted);
-  --status-alert: color-mix(in srgb, #e5484d 82%, var(--text) 18%);
+  --status-alert: color-mix(in srgb, #e5484d 70%, var(--text) 30%);
   --danger: var(--status-alert);
   --success: var(--status-online);
 
@@ -159,6 +172,34 @@
   border-bottom: none;
 }
 
+/* Modifiers for rows that act as navigation/tap targets (e.g. a
+   router list row that opens detail). Plain .row stays inert by
+   default since not every row is clickable. */
+.row-clickable {
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.row-clickable:hover,
+.row-clickable:active {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.row-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* List container for a .card full of .row items -- strips the
+   <ul>'s default marker/margin so the card's own padding and the
+   rows' dividers are the only spacing in play. */
+.list-reset {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
 /* ============================================================
    Buttons
    ============================================================ */
@@ -248,8 +289,16 @@
   background: color-mix(in srgb, var(--status-sleeping) 16%, var(--surface));
 }
 
+/* Offline's badge text is darkened locally rather than by editing
+   --status-offline itself: that token is deliberately still "plain
+   --muted" (see the comment above) for any non-badge use. Plain
+   --muted at full strength only reaches ~3.4:1 on --surface, well
+   under the 4.5:1 a badge pill needs, so the pill mixes in extra
+   --text just for this rule -- the same self-correcting trick as
+   the other three tokens, scoped to where the contrast problem
+   actually is. */
 .badge-offline {
-  color: var(--status-offline);
+  color: color-mix(in srgb, var(--status-offline) 60%, var(--text) 40%);
   background: color-mix(in srgb, var(--status-offline) 14%, var(--surface));
 }
 
@@ -323,9 +372,14 @@
 }
 
 /* ============================================================
-   Existing rules (pre-token-layer). Tasks 4-5 migrate these
-   screens onto the vocabulary above; left as-is here so nothing
-   regresses in the meantime.
+   Existing rules (pre-token-layer). Task 5 migrates RouterDetail
+   onto the vocabulary above; left as-is here so nothing regresses
+   in the meantime.
+
+   .state-message/-error are kept even though RouterList (Task 4)
+   no longer references them -- RouterDetail still renders its own
+   loading/error text via these two classes. Retire them once
+   Task 5 moves RouterDetail onto .state/.state-error.
    ============================================================ */
 
 * {
@@ -347,31 +401,6 @@ body {
 
 .state-message-error {
   color: #d14343;
-}
-
-.router-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.router-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 14px 16px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-  cursor: pointer;
-}
-
-.router-row-status {
-  color: var(--tg-hint-color);
-  font-size: 0.9em;
-}
-
-.router-row-alert .router-row-status {
-  color: #d14343;
-  font-weight: 600;
 }
 
 .router-detail {
