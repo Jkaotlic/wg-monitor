@@ -72,3 +72,77 @@ body {
   padding: 8px 0;
   border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
+
+.incident-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.incident-since {
+  font-weight: 400;
+  font-size: 0.85em;
+  color: var(--tg-hint-color);
+}
+
+.incident-suppressed {
+  margin: 4px 0;
+  color: var(--tg-hint-color);
+  font-size: 0.9em;
+}
+
+.incident-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.incident-actions button,
+.incident-history-toggle {
+  border: 1px solid var(--tg-button-color);
+  background: transparent;
+  color: var(--tg-button-color);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.incident-actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.incident-history-toggle {
+  display: block;
+  margin-top: 4px;
+}
+
+.incident-error {
+  color: #d14343;
+  font-size: 0.85em;
+  margin: 4px 0;
+}
+
+.incident-history ul {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+
+.incident-history li {
+  padding: 4px 0;
+  border-bottom: none;
+  font-size: 0.85em;
+}
+
+.history-entry-fail {
+  color: #d14343;
+}
+
+.history-entry-ok {
+  color: var(--tg-hint-color);
+}

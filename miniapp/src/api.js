@@ -42,3 +42,22 @@ export function fetchRouter(id) {
 export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }
+
+export function silenceIncident(routerID, check, ttl) {
+  return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/silence`, {
+    method: 'POST',
+    body: JSON.stringify({ ttl }),
+  })
+}
+
+export function ackIncident(routerID, check) {
+  return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/ack`, { method: 'POST' })
+}
+
+export function muteIncident(routerID, check) {
+  return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/mute`, { method: 'POST' })
+}
+
+export function fetchIncidentHistory(routerID, check) {
+  return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/history`)
+}
