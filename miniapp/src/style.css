@@ -76,13 +76,31 @@
                           light (hint #707579)   dark (hint #7d8b99)
        --muted on --surface      4.66  ok            4.01  FAIL
        --muted on --surface-2    4.24  FAIL          5.29  ok
-       --muted-ink on --surface  6.58  ok            5.39  ok
-       --muted-ink on --surface-2 5.99 ok            7.12  ok
+       --muted-ink on --surface  6.55  ok            6.86  ok
+       --muted-ink on --surface-2 5.87 ok            5.62  ok
 
-     80/20 is the shallowest mix that clears all four; anything deeper
-     starts reading as body text and stops being secondary at all, which
-     is the whole job of this colour. Verified via getComputedStyle + WCAG
-     relative luminance in a browser, not eyeballed -- see
+     But --tg-hint-color is Telegram's live value, applied inline before
+     paint; this token also has to hold on the *static fallback* hex used
+     pre-handoff or outside Telegram entirely (see the file header comment
+     -- a real code path, not theoretical), and that palette's hint is
+     different again: #8a8a8e light / #8e8e93 dark. The ratio this token
+     first shipped with, 80/20, clears every real-Telegram cell above but
+     comes up short on the fallback's worst case -- --muted-ink on
+     --surface-2 in light mode measured 4.17:1, under the 4.5:1 bar.
+     74/26 -- six more points of --text pulled into the mix -- clears all
+     eight cells (both palettes x both surfaces x both themes), landing
+     the fallback's worst case at 4.59:1: a small margin over 4.5, not a
+     large one, because anything much deeper starts reading as body text
+     and stops being secondary at all, which is the whole job of this
+     colour:
+
+                              -- static fallback palette --
+                          light (hint #8a8a8e)   dark (hint #8e8e93)
+       --muted-ink on --surface  5.13  ok            7.18  ok
+       --muted-ink on --surface-2 4.59 ok            5.88  ok
+
+     Verified via getComputedStyle + WCAG relative luminance in a browser
+     (Playwright), not eyeballed, on both palettes above -- see
      .superpowers/sdd/miniapp-p4-task-10-report.md.
 
      Scope is "muted text this screen must be able to READ" (the tunnel
@@ -91,7 +109,7 @@
      that inherit the same 4.24/4.01 problem (.state, .incident-since,
      .muted itself) are flagged in that report rather than swept into this
      task's diff. */
-  --muted-ink: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+  --muted-ink: color-mix(in srgb, var(--muted) 74%, var(--text) 26%);
 
   /* Status hues. Each is anchored to a fixed brand hue but mixed
      with --text so it self-corrects contrast per theme: in light
