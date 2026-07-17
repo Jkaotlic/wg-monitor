@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -46,6 +48,16 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		if miniappCommandAllowlist[a] {
 			t.Errorf("%q must NOT be dispatchable from a mini-app session", a)
 		}
+	}
+
+	// Pin the allowlist's exact size too, not just spot-checked membership --
+	// otherwise an entry added outside both `allowed` and `denied` (e.g. by a
+	// careless merge) would pass this test silently. If this count changes,
+	// add the new action to `allowed` or `denied` above with its own
+	// justification; don't just bump the number.
+	if len(miniappCommandAllowlist) != len(allowed) {
+		t.Fatalf("miniappCommandAllowlist has %d entries, want exactly the %d in `allowed`: %v",
+			len(miniappCommandAllowlist), len(allowed), miniappCommandAllowlist)
 	}
 }
 
@@ -108,14 +120,28 @@ func TestMiniappCommandStrangerGets404BeforeExistence(t *testing.T) {
 	}
 }
 
+// seedMiniappTunnelEvent inserts a tunnel_<tunnelID> event for routerID whose
+// details carry ndms_name -- the only way miniappResolveTunnelNDMSName can
+// learn the router-local interface name for that tunnel.
+func seedMiniappTunnelEvent(t *testing.T, d *db.DB, routerID int64, tunnelID, ndmsName string) {
+	t.Helper()
+	details := fmt.Sprintf(`{"tunnel_id":%q,"ndms_name":%q}`, tunnelID, ndmsName)
+	if err := d.Events().Insert(routerID, "tunnel_"+tunnelID, "ok", details, time.Now()); err != nil {
+		t.Fatalf("seed tunnel event: %v", err)
+	}
+}
+
+// This is the fix for the "tunnel_restart can restart ANY router interface"
+// finding: the client sends a tunnel_id, and the backend resolves it to
+// ndms_name from ITS OWN tunnel_* event rows -- the client-supplied value
+// never reaches the agent directly.
 func TestMiniappCommandEnqueuesAllowedAction(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg12", "Wireguard0")
 	sink := &dashboardActionSink{}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
 
-	// tunnel_restart requires a valid ndms_name arg (sanitizeWizardCommandArgs);
-	// an empty/missing one is rejected before it ever reaches the sink.
-	body := `{"action":"tunnel_restart","args":{"ndms_name":"Wireguard0"}}`
+	body := `{"action":"tunnel_restart","args":{"tunnel_id":"awg12"}}`
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
 	rec := httptest.NewRecorder()
@@ -127,6 +153,58 @@ func TestMiniappCommandEnqueuesAllowedAction(t *testing.T) {
 		t.Fatalf("unexpected enqueue: users=%v cmds=%+v", sink.enqueuedUsers, sink.enqueued)
 	}
 	if sink.enqueued[0].Action != "tunnel_restart" || sink.enqueued[0].Args["ndms_name"] != "Wireguard0" {
-		t.Fatalf("bad command: %+v", sink.enqueued[0])
+		t.Fatalf("bad command: the agent must receive the resolved ndms_name, got %+v", sink.enqueued[0])
+	}
+}
+
+// The attack this whole fix exists to close: a caller sending the router's
+// raw NDM interface name (the old arg shape, or a tunnel_id crafted to look
+// like one) must never reach the agent. There is no tunnel_ISP event on this
+// router, so "ISP" is not a resolvable tunnel_id -- neither spelling of the
+// request may enqueue anything.
+func TestMiniappCommandTunnelRestartRejectsRawNDMSName(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg12", "Wireguard0")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	bodies := []string{
+		`{"action":"tunnel_restart","args":{"ndms_name":"ISP"}}`,
+		`{"action":"tunnel_restart","args":{"tunnel_id":"ISP"}}`,
+	}
+	for _, body := range bodies {
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("body %s: want 400, got %d: %s", body, rec.Code, rec.Body.String())
+		}
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("neither request may enqueue anything: %+v", sink.enqueued)
+	}
+}
+
+// A tunnel_id that is real, but belongs to a DIFFERENT router, must not
+// resolve here -- otherwise a caller who happens to know a sibling router's
+// tunnel id could bounce an interface on a router they administer, using
+// topology from a router they don't.
+func TestMiniappCommandTunnelRestartRejectsOtherRoutersTunnelID(t *testing.T) {
+	d, ownedID, otherID, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, otherID, "awg12", "Wireguard0")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	body := `{"action":"tunnel_restart","args":{"tunnel_id":"awg12"}}`
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for a tunnel_id that belongs to a different router, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("must not enqueue: %+v", sink.enqueued)
 	}
 }
