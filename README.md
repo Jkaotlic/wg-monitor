@@ -66,6 +66,24 @@ view/unbind the owner and add/remove operators (by numeric Telegram user id) —
 by the same `router_operators`/owner model the bot's access panel uses. The mini app's
 UI follows a small theme-native design system (light/dark via Telegram's theme).
 
+The router screen now leads with the two questions an operator actually asks: are the
+tunnels alive, and is traffic currently going direct or through the VPN? The traffic
+answer is derived from the router's live default-route state and only appears once the
+connected agent is new enough to report it; against an older agent, or when the
+router's own sing-box tproxy routing is active (which makes "the default route" the
+wrong question), the screen says "unknown" instead of guessing among the several
+tunnels that can each merely *claim* to be the default.
+
+The mini app can now also dispatch a handful of agent commands from the router screen:
+the same read-only checks the bot already exposes (recheck, diagnostics, tunnel/route
+status), two read-only exit-IP probes (direct vs. via-tunnel), and a tunnel restart.
+This allowlist is deliberately not the dashboard's — the dashboard trusts one admin
+holding one token, while a mini-app session is a Telegram user resolved to a per-router
+owner/operator role. So it both subtracts (no `dns_reset`, no agent-config editing, no
+opkg/entware maintenance — those stay admin-only, on the dashboard) and adds (the
+exit-IP probes and `tunnel_restart`, each justified as router-local, reversible, and
+confirmed in the UI before it's sent).
+
 ## Deploy Model
 
 New and recovered routers are deployed through:
