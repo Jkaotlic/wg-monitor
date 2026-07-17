@@ -833,10 +833,13 @@ body {
    Same visual voice as every other .section-title (small, muted, uppercase,
    letter-spaced) so a collapsed spoiler reads as just another section header,
    not a foreign control -- the marker triangle is the only tell that this one
-   is interactive. Native <details>/<summary> rather than a hand-rolled
-   toggle: RouterDetail.jsx sets `open` from live data every render (any check
-   not "ok" forces it open), and the platform element already gives that for
-   free with no extra state to keep in sync. */
+   is interactive. Native <details>/<summary>, but driven as a CONTROLLED
+   disclosure: RouterDetail.jsx keeps `open` in state and syncs every native
+   toggle back via onToggle, so a manual collapse sticks while the failing set
+   is unchanged, yet a newly-failing check force-reopens it. Do NOT "simplify"
+   this back to `open={liveBoolean}` -- Preact diffs that prop against the vnode,
+   not the DOM, so a native collapse desyncs and a later failure stays hidden
+   (see the long note in RouterDetail.jsx above the spoiler). */
 .checks-spoiler-summary {
   display: flex;
   align-items: center;
