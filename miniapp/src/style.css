@@ -535,3 +535,150 @@ body {
   padding-left: var(--sp-2);
   padding-right: var(--sp-2);
 }
+
+/* ============================================================
+   The instrument -- RouterDevice.jsx
+   ------------------------------------------------------------
+   Ported from the operator-approved mockup (docs/superpowers/
+   specs/assets/2026-07-17-router-device-mockup-a.html), whose
+   .mA-* rules are renamed .device-* here and un-scoped from
+   [data-mock="A"]. Only the instrument's own rules moved: that
+   file also mirrored card/badge/row/button under .mA-*, and
+   those already exist above as the real component vocabulary.
+
+   Material palette: the plastic and metal hexes in the JSX are
+   NOT tokens on purpose -- a physical shell does not re-theme.
+   They are picked to hold their reading against both a white and
+   a near-black --surface (mid-slate body + light rim highlight).
+   Every *state* colour comes from the semantic tokens: the lamps,
+   the antenna fields, the defaultRoute collars and the traffic
+   path all reach for --status-* / --accent-ink / --muted.
+   ============================================================ */
+.device-stage {
+  padding: var(--sp-3) 0 var(--sp-2);
+}
+
+.device {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Screen-printed lettering on the shell: small, tracked,
+   low-contrast -- the way a real panel is actually silkscreened.
+   These sit ON the dark shell, so they keep the shell's own greys
+   rather than a --surface-relative token; the legend plate below
+   the drawing carries the readable version. */
+.device-print {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  fill: #b4bcc8;
+}
+
+.device-print-alert {
+  fill: var(--status-alert);
+}
+
+.device-print-port {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  fill: #c4ccd8;
+}
+
+.device-print-iface {
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  fill: #7b8391;
+}
+
+/* Laser-etched asset label between the antennas. */
+.device-etch {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  fill: #737b89;
+}
+
+/* ---------------- Traffic path ----------------
+   New in Phase 4; the mockup had no such element. It answers
+   "where do packets actually leave", which is a question about
+   direction, not health -- so it takes the accent hue, not a
+   --status-* one. --accent-ink is the token hardened for use as
+   ink directly on --surface (see the token block above), and the
+   casing underneath it is what guarantees that is the background
+   it actually gets: the path crosses the mid-slate mast and the
+   field arcs, where a raw accent would muddy. The casing paints
+   --surface behind the line, so the hardened contrast holds. */
+.device-path-casing {
+  fill: none;
+  stroke: var(--surface);
+  stroke-width: 6.4;
+  stroke-linecap: round;
+}
+
+.device-path {
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+/* The honest fourth answer. Dashed, muted, no arrowhead: it ends
+   in a question mark instead of at a tunnel. */
+.device-path-unknown {
+  stroke: var(--muted);
+  stroke-width: 2.2;
+  stroke-dasharray: 5 6;
+}
+
+.device-qmark {
+  font-family: var(--font-body);
+  font-size: 17px;
+  font-weight: 700;
+  fill: var(--muted);
+}
+
+/* ---------------- Motion ----------------
+   Only where it carries a reading: the fault beacon and the live
+   egress. Nothing decorative. Every lamp still reads correctly
+   frozen -- the fault keeps a static red halo ring, a red bezel
+   and red silkscreen, and a dead antenna droops -- so `reduce`
+   loses nothing but the movement. */
+@keyframes device-blink {
+  0%, 100% { opacity: 1; }
+  55%      { opacity: 0.3; }
+}
+
+@keyframes device-bloom {
+  0%        { transform: scale(0.75); opacity: 0.5; }
+  75%, 100% { transform: scale(1.75); opacity: 0; }
+}
+
+@keyframes device-wave {
+  0%   { transform: scale(0.5); opacity: 0.8; }
+  100% { transform: scale(1.5); opacity: 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .device-led-alert {
+    animation: device-blink 1.5s ease-in-out infinite;
+  }
+
+  .device-bloom-alert {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: device-bloom 1.5s ease-out infinite;
+  }
+
+  /* transform-origin is set inline per antenna: the wave has to
+     scale from its own tip, and that point moves with the tunnel
+     count. */
+  .device-wave {
+    transform-box: view-box;
+    animation: device-wave 2.4s ease-out infinite;
+  }
+}
