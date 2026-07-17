@@ -536,6 +536,17 @@ body {
   white-space: nowrap;
 }
 
+/* incidentCopy's "why" line -- same answer-then-detail voice as
+   .traffic-detail (§3.4): secondary to the headline above, silent (not
+   rendered at all) when incidentCopy had no specific copy and fell back to
+   an empty string rather than a guessed reason. */
+.incident-why {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted-ink);
+}
+
 .incident-actions {
   display: flex;
   flex-wrap: wrap;

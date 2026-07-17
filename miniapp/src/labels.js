@@ -25,6 +25,53 @@ export function checkLabel(name) {
   return name
 }
 
+// What a HARD incident means and what to do about it -- the incident card's
+// second line, next to the plain check name from checkLabel above. Ported
+// where the bot's own copy translates directly (categoryHeadline and the
+// writeXWhatBroke bodies in alerts/format.go, the per-category hints in
+// alerts/smart_reply.go's smartReplyActionHints); where the bot writes for an
+// operator who already knows what DNS/HydraRoute/awg-manager are and this
+// screen's reader may not, the "why" line explains the mechanism in plain
+// words instead. See this task's report for the line-by-line comparison and
+// every place the wording below departs from the bot's.
+const INCIDENT_COPY = {
+  external_reach: {
+    what: 'Нет доступа в интернет',
+    why: 'Роутер на связи и туннели подняты, но сайты снаружи не открываются. Обычно это провайдер или сторона VPN-сервера.',
+  },
+  dns: {
+    what: 'Не определяются адреса сайтов',
+    why: 'Роутер не может превратить имя сайта в адрес. Сайты не откроются, даже если интернет есть.',
+  },
+  hydraroute: {
+    what: 'Не работает обход блокировок',
+    why: 'Служба обхода не работает — заблокированные сайты будут открываться напрямую, как будто обхода нет.',
+  },
+  awg_manager: {
+    what: 'Нет связи с панелью роутера',
+    why: 'Агент не достучался до панели управления. Данные о туннелях могут устареть.',
+  },
+}
+
+// checkName is either one of the four plain checks above or a `tunnel_<id>`
+// incident; both are handled here so IncidentCard never has to branch on the
+// name shape itself. Reuses checkLabel for the tunnel-id fallback (same
+// "Туннель <id>" text the id gets everywhere else) and for the
+// never-seen-this-check fallback -- an incident this function has no specific
+// copy for gets checkLabel's honest name and an empty "why" rather than a
+// guessed explanation, the same rule checkLabel itself follows for a name it
+// doesn't recognize.
+export function incidentCopy(checkName) {
+  if (INCIDENT_COPY[checkName]) return INCIDENT_COPY[checkName]
+  if (checkName?.startsWith('tunnel_')) {
+    return {
+      what: `${checkLabel(checkName)} не отвечает`,
+      why: 'Обмен ключами не проходит — трафик через этот туннель не пойдёт.',
+    }
+  }
+  return { what: checkLabel(checkName), why: '' }
+}
+
 // Spoken form of a check's status, for the instrument's <desc> and for the
 // legend plate that names the same lamps. "не работает" is the spec's wording
 // for a failed check (§3.7). The fallback echoes an unrecognized status rather

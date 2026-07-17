@@ -15,15 +15,19 @@ import {
   checkLabel,
   checkStateLabel,
   humanAge,
+  incidentCopy,
   pingLabel,
   trafficLabel,
   tunnelStateLabel,
 } from '../labels.js'
 
+// TTLs the backend accepts (miniapp_actions.go's miniappSilenceTTLs); the
+// button text itself comes from ACTION_LABELS so this card and any other
+// screen that offers the same three durations cannot drift on wording.
 const SILENCE_OPTIONS = [
-  { ttl: '1h', label: '1ч' },
-  { ttl: '4h', label: '4ч' },
-  { ttl: '24h', label: '24ч' },
+  { ttl: '1h', labelKey: 'silence1h' },
+  { ttl: '4h', labelKey: 'silence4h' },
+  { ttl: '24h', labelKey: 'silence24h' },
 ]
 
 // The header's four words. This is the ONLY router-state vocabulary on the screen:
@@ -85,19 +89,36 @@ function IncidentCard({ routerID, incident, onUpdate }) {
   }
 
   const suppressed = isSuppressed(incident)
+  const { what, why } = incidentCopy(incident.check_name)
 
   return (
     <li class="card">
       <div class="incident-head">
-        <span class="row-title">{incident.check_name}</span>
+        <span class="row-title">{what}</span>
         {incident.hard_since && <span class="incident-since">с {formatDateTime(incident.hard_since)}</span>}
       </div>
 
+      {why && <p class="incident-why">{why}</p>}
+
       {suppressed ? (
+        // Wording mirrors the backend's own confirmation lines for these two
+        // actions (alertaction.go's ApplyAck/ApplySilence/ApplyMute status
+        // strings, minus emoji and the admin/MSK footer this screen doesn't
+        // need) rather than the old bare "квитирован" -- acked and
+        // silenced/muted are indistinguishable here (both just set
+        // silenced_until; the incident carries no separate "was this a mute"
+        // flag), so the silenced branch uses ApplySilence's phrasing, which
+        // is honest for either origin.
         <span class="badge badge-offline">
-          {incident.acked ? 'квитирован' : `заглушён до ${formatTime(incident.silenced_until)}`}
+          {incident.acked
+            ? 'Вижу проблему — напомним после восстановления'
+            : `Уведомления скрыты до ${formatTime(incident.silenced_until)}`}
         </span>
       ) : (
+        // Task 12 adds a primary "Перезапустить туннель" button ahead of
+        // these for tunnel_* incidents (ACTION_LABELS.restartTunnel already
+        // reserves the wording); it owns the command dispatch and waiting
+        // UX, so no button for it is stubbed here.
         <div class="incident-actions">
           {SILENCE_OPTIONS.map((opt) => (
             <button
@@ -106,7 +127,7 @@ function IncidentCard({ routerID, incident, onUpdate }) {
               disabled={busy}
               onClick={() => runAction(() => silenceIncident(routerID, incident.check_name, opt.ttl))}
             >
-              {opt.label}
+              {ACTION_LABELS[opt.labelKey]}
             </button>
           ))}
           <button
@@ -114,14 +135,14 @@ function IncidentCard({ routerID, incident, onUpdate }) {
             disabled={busy}
             onClick={() => runAction(() => ackIncident(routerID, incident.check_name))}
           >
-            Квитировать
+            {ACTION_LABELS.ack}
           </button>
           <button
             class="btn btn-danger"
             disabled={busy}
             onClick={() => runAction(() => muteIncident(routerID, incident.check_name))}
           >
-            Заглушить
+            {ACTION_LABELS.mute}
           </button>
         </div>
       )}
