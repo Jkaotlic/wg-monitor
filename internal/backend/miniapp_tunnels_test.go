@@ -118,7 +118,8 @@ func TestMiniappTunnelFromEventOldAgentEgressUnknown(t *testing.T) {
 }
 
 func TestMiniappTunnelFromEventSurvivesGarbageDetails(t *testing.T) {
-	for _, blob := range []string{"", "null", "not json", "[]"} {
+	// Test error-producing blobs: these trigger unmarshal errors, so Enabled must remain nil.
+	for _, blob := range []string{"", "not json", "[]"} {
 		got, ok := miniappTunnelFromEvent(db.EventRow{CheckName: "tunnel_awg1", Status: "fail", DetailsJSON: blob})
 		if !ok {
 			t.Fatalf("details %q: row must still project from its check name", blob)
@@ -126,5 +127,19 @@ func TestMiniappTunnelFromEventSurvivesGarbageDetails(t *testing.T) {
 		if got.TunnelID != "awg1" {
 			t.Fatalf("details %q: tunnel id must fall back to the check-name suffix, got %q", blob, got.TunnelID)
 		}
+		// Enabled must stay nil when details fail to unmarshal: no guessing.
+		if got.Enabled != nil {
+			t.Fatalf("details %q: enabled must be nil (unknown) when unmarshal fails, got %v", blob, *got.Enabled)
+		}
+	}
+
+	// "null" is valid JSON that decodes to zero values (pointers remain nil), so it takes
+	// the success path but doesn't test the constructor default.
+	got, ok := miniappTunnelFromEvent(db.EventRow{CheckName: "tunnel_awg1", Status: "fail", DetailsJSON: "null"})
+	if !ok {
+		t.Fatalf("details %q: row must still project from its check name", "null")
+	}
+	if got.TunnelID != "awg1" {
+		t.Fatalf("details %q: tunnel id must fall back to the check-name suffix, got %q", "null", got.TunnelID)
 	}
 }
