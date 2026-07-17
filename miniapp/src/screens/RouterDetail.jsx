@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import {
   fetchRouter,
   fetchRouterChecks,
@@ -596,6 +596,63 @@ export function RouterDetail({ id, onBack, isAdmin }) {
     setIncidents((prev) => prev.map((inc) => (inc.check_name === updated.check_name ? updated : inc)))
   }
 
+  // The lamps' own set, in the lamps' own order (RouterDevice owns both). The
+  // `tunnel_*` rows that `checks[]` also carries are filtered there -- they are the
+  // antennas and the Туннели block above, and listing them here as well would show
+  // every tunnel three times. Computed up here (ahead of the error/loading early
+  // returns below) because the disclosure state hooks that follow must run on
+  // every render in the same order -- see the rules-of-hooks note below.
+  const otherChecks = orderChecks(checks ?? [])
+  const otherChecksOkCount = otherChecks.filter((c) => c.status === 'ok').length
+  // Sorted names of the currently-failing internal checks -- a signature the
+  // effect below compares across renders to detect the set *growing*, as
+  // opposed to just being non-empty (see that effect for why "non-empty" is
+  // not the right question to ask on every render).
+  const otherChecksFailing = otherChecks
+    .filter((c) => c.status !== 'ok')
+    .map((c) => c.check_name)
+    .sort()
+  const otherChecksFailingKey = otherChecksFailing.join(',')
+
+  // §3.6: these four checks are the system's own plumbing vocabulary, not
+  // something the router's owner opens this screen to read -- so the spoiler
+  // defaults to collapsed unless something is already failing on first load.
+  //
+  // This used to be `open={otherChecksNeedAttention}` with `otherChecksNeedAttention`
+  // recomputed fresh every render. That is provably unsafe: Preact's generic prop
+  // diff for `<details>` compares the new `open` value against the *vnode's own
+  // previous* prop value, not the live DOM (unlike its special-cased `value`/
+  // `checked`). A native click on <summary> flips the DOM `open` attribute directly,
+  // bypassing Preact entirely -- so if the reader collapses the spoiler while
+  // `hydraroute` is failing, and `dns` *also* starts failing on a later refresh,
+  // the recomputed boolean is still `true === true` from Preact's point of view and
+  // it leaves the (now closed) DOM alone. A newly-red check would sit hidden behind
+  // a spoiler the reader has every reason to believe they already dealt with.
+  //
+  // The fix: make this a genuinely controlled disclosure. `spoilerOpen` is real
+  // component state, and `onToggle` mirrors every native toggle (collapse OR
+  // expand, mouse or keyboard) back into that state -- so Preact's tracked
+  // previous `open` prop always matches what's actually on screen, and the
+  // desync above cannot happen. The effect below is the other half: it compares
+  // the failing-check signature across renders and forces `spoilerOpen` back to
+  // `true` whenever the set *grew*, even if the reader had manually collapsed it
+  // -- a new problem overrides a manual dismissal. A refresh that reports the
+  // exact same check(s) still failing does not touch `spoilerOpen`, so a reader
+  // who already closed it is not re-annoyed by every poll.
+  const [spoilerOpen, setSpoilerOpen] = useState(otherChecksFailing.length > 0)
+  const prevFailingRef = useRef(new Set(otherChecksFailing))
+
+  useEffect(() => {
+    const prevFailing = prevFailingRef.current
+    const grew = otherChecksFailing.some((name) => !prevFailing.has(name))
+    if (grew) setSpoilerOpen(true)
+    prevFailingRef.current = new Set(otherChecksFailing)
+    // otherChecksFailingKey is the primitive form of otherChecksFailing (a new
+    // array/closure every render) and is the real dependency here -- comparing
+    // the array itself would rerun this every render regardless of content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otherChecksFailingKey])
+
   if (error) return <p class="state state-error">{error}</p>
   if (router == null) return <p class="state">Загрузка…</p>
 
@@ -610,20 +667,6 @@ export function RouterDetail({ id, onBack, isAdmin }) {
   // is actually sitting there answering would be the same false-confidence
   // failure this whole phase exists to avoid, just pointed the other way.
   const asleep = router.status === 'offline' || router.status === 'sleeping'
-
-  // The lamps' own set, in the lamps' own order (RouterDevice owns both). The
-  // `tunnel_*` rows that `checks[]` also carries are filtered there -- they are the
-  // antennas and the Туннели block above, and listing them here as well would show
-  // every tunnel three times.
-  const otherChecks = orderChecks(checks ?? [])
-  const otherChecksOkCount = otherChecks.filter((c) => c.status === 'ok').length
-  // §3.6: these four checks are the system's own plumbing vocabulary, not
-  // something the router's owner opens this screen to read -- so the spoiler
-  // defaults to collapsed. But collapsed-by-default must never mean
-  // hidden-while-broken: a failing check (anything not "ok", same test the
-  // instrument's own lamps use) forces it open so the reader is never one tap
-  // away from discovering a red row that was quietly sitting closed.
-  const otherChecksNeedAttention = otherChecksOkCount < otherChecks.length
 
   return (
     <div class="screen">
@@ -670,11 +713,17 @@ export function RouterDetail({ id, onBack, isAdmin }) {
 
       {otherChecks.length > 0 && (
         <section class="section">
-          {/* `open` is recomputed from live data every render (not local state),
-              so a check that flips to failing after a refresh (force_recheck's
-              onDone={loadData}) forces this back open even if the reader had
-              closed it -- see otherChecksNeedAttention above. */}
-          <details class="checks-spoiler" open={otherChecksNeedAttention}>
+          {/* Controlled disclosure: `open` is driven by `spoilerOpen` state, and
+              `onToggle` mirrors every native toggle back into it, so Preact's
+              tracked previous `open` prop never desyncs from the live DOM (see
+              the long comment above `spoilerOpen`'s declaration). The effect up
+              there forces this back open whenever the failing-check set grows,
+              even if the reader had manually collapsed it. */}
+          <details
+            class="checks-spoiler"
+            open={spoilerOpen}
+            onToggle={(e) => setSpoilerOpen(e.currentTarget.open)}
+          >
             <summary class="section-title checks-spoiler-summary">
               Прочие проверки — {otherChecksOkCount} в норме
             </summary>
