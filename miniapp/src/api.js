@@ -18,7 +18,9 @@ async function request(path, opts = {}) {
     let code = 'unknown'
     try {
       const body = await res.json()
-      code = body.error ?? code
+      // Backend error bodies are { code, message } (writeJSONError,
+      // internal/backend/handler.go:57-60) -- the field is "code", not "error".
+      code = body.code ?? code
     } catch {
       // ignore non-JSON error bodies
     }
@@ -79,4 +81,28 @@ export function removeOperator(routerID, telegramUserID) {
 
 export function unbindOwner(routerID) {
   return request(`/routers/${routerID}/access/owner`, { method: 'DELETE' })
+}
+
+// Dispatches an allowlisted agent command for a router. Resolves to the raw
+// body the backend sends on 202: { cmd_id }. That shape is wizardDeployResp
+// (wizard_handler.go:537-539) -- miniappCommandHandler (miniapp_commands.go)
+// reuses it verbatim via enqueueAgentCommandForUser (wizard_handler.go:1234),
+// which encodes `wizardDeployResp{CmdID: id}`. The key is "cmd_id", NOT
+// "command_id" -- callers must destructure { cmd_id } or they'll silently get
+// undefined and poll `/commands/undefined` forever.
+export function sendCommand(routerID, action, args = {}) {
+  return request(`/routers/${routerID}/commands`, {
+    method: 'POST',
+    body: JSON.stringify({ action, args }),
+  })
+}
+
+// Resolves to null when the agent hasn't answered yet: the backend returns 404
+// result_not_ready by design (miniappCommandResultHandler, miniapp_commands.go),
+// which is a "poll again", not a failure. Any other error still throws.
+export function fetchCommandResult(routerID, cmdID, waitSec = 10) {
+  return request(`/routers/${routerID}/commands/${encodeURIComponent(cmdID)}?wait_sec=${waitSec}`).catch((err) => {
+    if (err instanceof ApiError && err.status === 404 && err.code === 'result_not_ready') return null
+    throw err
+  })
 }
