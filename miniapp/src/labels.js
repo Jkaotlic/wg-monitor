@@ -189,9 +189,9 @@ export function trafficLabel(traffic) {
 // and "Повторить проверку" mirrors "🩺 Повторить проверку"
 // (callbacks/notifier.go:142), both minus the emoji (this UI has its own
 // icons). "ack"/"mute" have no equivalent standalone Telegram button caption
-// to port from -- RouterDetail.jsx currently spells these "Квитировать" /
-// "Заглушить"; the phrasing below is deliberately plainer for the same reason
-// this whole file exists, and is left for a later task to swap in.
+// to port from -- the bot spells these "Квитировать" / "Заглушить";
+// RouterDetail.jsx renders the plainer wording below instead (Task 11), for
+// the same reason this whole file exists.
 export const ACTION_LABELS = {
   ack: 'Понятно, вижу',
   mute: 'Больше не напоминать',

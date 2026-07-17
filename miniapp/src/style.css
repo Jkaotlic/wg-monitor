@@ -829,6 +829,50 @@ body {
   color: var(--danger);
 }
 
+/* ---------------- Прочие проверки spoiler (§3.6) ----------------
+   Same visual voice as every other .section-title (small, muted, uppercase,
+   letter-spaced) so a collapsed spoiler reads as just another section header,
+   not a foreign control -- the marker triangle is the only tell that this one
+   is interactive. Native <details>/<summary> rather than a hand-rolled
+   toggle: RouterDetail.jsx sets `open` from live data every render (any check
+   not "ok" forces it open), and the platform element already gives that for
+   free with no extra state to keep in sync. */
+.checks-spoiler-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+/* Safari/older Chromium render the disclosure marker via this pseudo instead
+   of (or in addition to) ::marker; hiding both and drawing one triangle
+   ourselves below is the only way to get one consistent glyph cross-browser. */
+.checks-spoiler-summary::-webkit-details-marker {
+  display: none;
+}
+
+.checks-spoiler-summary::marker {
+  content: '';
+}
+
+.checks-spoiler-summary::before {
+  content: '▸';
+  display: inline-block;
+  color: var(--muted);
+  transition: transform var(--transition-fast);
+}
+
+.checks-spoiler[open] > .checks-spoiler-summary::before {
+  transform: rotate(90deg);
+}
+
+.checks-spoiler-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ============================================================
    Access management -- admin-only "Доступ" section on RouterDetail.
    Owner/operators each get their own labeled sub-group inside the

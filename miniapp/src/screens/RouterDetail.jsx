@@ -108,7 +108,12 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
         {asleep && <p class="state">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>}
         {mutatingText && <p class="state">{mutatingText}</p>}
         <div class="command-actions">
-          <button class="btn btn-danger" onClick={dispatch}>
+          {/* Red only when confirming actually guards a mutation (mutatingText set,
+              i.e. tunnel_restart). When the sole reason for this step is the asleep
+              gate on a read-only action (force_recheck), "Да, выполнить" just means
+              "queue it anyway" -- styling that as a danger button would tell the
+              reader a harmless probe is destructive. */}
+          <button class={`btn ${mutatingText ? 'btn-danger' : 'btn-primary'}`} onClick={dispatch}>
             Да, выполнить
           </button>
           <button class="btn btn-ghost" onClick={() => setConfirming(false)}>
@@ -507,7 +512,11 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
           <div class="compare-confirm">
             <p class="state">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>
             <div class="command-actions">
-              <button class="btn btn-danger" onClick={dispatch}>
+              {/* Both probes here are read-only (check_via_tunnel/check_direct issue
+                  no mutation) -- this step only ever exists for the asleep gate, never
+                  for a destructive confirm, so it stays primary rather than danger;
+                  same reasoning as CommandButton's confirm button above. */}
+              <button class="btn btn-primary" onClick={dispatch}>
                 Да, выполнить
               </button>
               <button class="btn btn-ghost" onClick={() => setConfirming(false)}>
@@ -607,6 +616,14 @@ export function RouterDetail({ id, onBack, isAdmin }) {
   // antennas and the Туннели block above, and listing them here as well would show
   // every tunnel three times.
   const otherChecks = orderChecks(checks ?? [])
+  const otherChecksOkCount = otherChecks.filter((c) => c.status === 'ok').length
+  // §3.6: these four checks are the system's own plumbing vocabulary, not
+  // something the router's owner opens this screen to read -- so the spoiler
+  // defaults to collapsed. But collapsed-by-default must never mean
+  // hidden-while-broken: a failing check (anything not "ok", same test the
+  // instrument's own lamps use) forces it open so the reader is never one tap
+  // away from discovering a red row that was quietly sitting closed.
+  const otherChecksNeedAttention = otherChecksOkCount < otherChecks.length
 
   return (
     <div class="screen">
@@ -653,17 +670,25 @@ export function RouterDetail({ id, onBack, isAdmin }) {
 
       {otherChecks.length > 0 && (
         <section class="section">
-          <h2 class="section-title">Прочие проверки</h2>
-          <ul class="card list-reset">
-            {otherChecks.map((c) => (
-              <li key={c.check_name} class="row checks-row">
-                <span class="row-title">{checkLabel(c.check_name)}</span>
-                <span class={`checks-status checks-status-${c.status}`}>
-                  {checkStateLabel(c.status)} · {formatDateTime(c.ts)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          {/* `open` is recomputed from live data every render (not local state),
+              so a check that flips to failing after a refresh (force_recheck's
+              onDone={loadData}) forces this back open even if the reader had
+              closed it -- see otherChecksNeedAttention above. */}
+          <details class="checks-spoiler" open={otherChecksNeedAttention}>
+            <summary class="section-title checks-spoiler-summary">
+              Прочие проверки — {otherChecksOkCount} в норме
+            </summary>
+            <ul class="card list-reset">
+              {otherChecks.map((c) => (
+                <li key={c.check_name} class="row checks-row">
+                  <span class="row-title">{checkLabel(c.check_name)}</span>
+                  <span class={`checks-status checks-status-${c.status}`}>
+                    {checkStateLabel(c.status)} · {formatDateTime(c.ts)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </details>
         </section>
       )}
 
