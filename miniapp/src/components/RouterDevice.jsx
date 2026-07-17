@@ -138,7 +138,12 @@ export function lampKey(name) {
 // (DNS, EXT, HR, AWGM, TUN); anything unrecognised sorts after, alphabetically.
 const LAMP_ORDER = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels']
 
-function orderChecks(checks) {
+// Exported for the same reason LAMP_KEYS is: the screen's "прочие проверки" list is
+// the SAME set of checks as the panel's lamps, in the same order, and deriving it
+// twice would let the two drift -- a check that is a lamp but not a row (or the
+// reverse) is precisely the kind of quiet inconsistency this component's key export
+// exists to prevent. One filter, one order, two renderings of it.
+export function orderChecks(checks) {
   // `tunnel_*` rows are excluded on purpose: those are the antennas. The events
   // endpoint carries them in `checks` too (miniapp_handler.go:238-245 appends every
   // row, then projects the tunnel ones into `tunnels` as well), so without this

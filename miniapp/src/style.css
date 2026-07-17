@@ -62,6 +62,37 @@
   --accent-fill: color-mix(in srgb, var(--accent) 65%, black 35%);
   --accent-ink: color-mix(in srgb, var(--accent) 70%, var(--text) 30%);
 
+  /* --muted used as PROSE that has to be read, not as a hint tint. Same
+     -ink naming rule and the same self-correcting mix as --accent-ink
+     above, and it exists for the same reason: --muted is a raw Telegram
+     passthrough (--tg-hint-color) with no contrast guarantee of its own.
+     Telegram picks its hint colour against the MAIN background; nothing
+     promises it against --surface-2, which is where this app puts most of
+     its text (every .card). Measured against the real Telegram palettes,
+     plain --muted fails WCAG AA (4.5:1 for normal-size text) on a
+     DIFFERENT background in each theme -- so neither theme alone would
+     have caught it:
+
+                          light (hint #707579)   dark (hint #7d8b99)
+       --muted on --surface      4.66  ok            4.01  FAIL
+       --muted on --surface-2    4.24  FAIL          5.29  ok
+       --muted-ink on --surface  6.58  ok            5.39  ok
+       --muted-ink on --surface-2 5.99 ok            7.12  ok
+
+     80/20 is the shallowest mix that clears all four; anything deeper
+     starts reading as body text and stops being secondary at all, which
+     is the whole job of this colour. Verified via getComputedStyle + WCAG
+     relative luminance in a browser, not eyeballed -- see
+     .superpowers/sdd/miniapp-p4-task-10-report.md.
+
+     Scope is "muted text this screen must be able to READ" (the tunnel
+     readings, the traffic detail, the check states). Plain --muted stays
+     correct for hint TINTS and is untouched here; the older components
+     that inherit the same 4.24/4.01 problem (.state, .incident-since,
+     .muted itself) are flagged in that report rather than swept into this
+     task's diff. */
+  --muted-ink: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+
   /* Status hues. Each is anchored to a fixed brand hue but mixed
      with --text so it self-corrects contrast per theme: in light
      mode --text is near-black and pulls the hue darker (readable
@@ -531,14 +562,104 @@ body {
   font-size: var(--fs-sm);
 }
 
+/* The router's own heartbeat, under its name. Prose, not a reading, so it
+   takes the body face -- the age is the only number in it. */
+.router-lastseen {
+  margin: calc(-1 * var(--sp-2)) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--muted-ink);
+}
+
+/* ---------------- Tunnels (§3.3) ----------------
+   A .row that wraps, which is what lets it hold the spec's own two-line
+   sketch without a second layout primitive: name and the egress badge sit on
+   line 1 (.row's space-between puts them at the ends), and .tunnel-sub claims
+   a full basis so the human reading always starts line 2 -- at 380px the badge
+   and a three-clause reading cannot share a line, and the badge is the part
+   that must not wrap mid-phrase. */
+.tunnel-row {
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: var(--sp-1);
+}
+
+.tunnel-name {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+/* The interface id is secondary to the human name, and is an identifier --
+   mono, the same convention the rest of the app marks readings with. */
+.tunnel-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--muted-ink);
+}
+
+/* The screen's primary reading -- "работает · обмен ключами 45 сек назад".
+   Secondary to the tunnel's name, but the sentence the operator actually
+   opens the app for, so it takes the readable -ink token, not the tint. */
+.tunnel-sub {
+  flex-basis: 100%;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted-ink);
+}
+
+/* ---------------- Traffic (§3.4) ----------------
+   The headline answer, so it is the one piece of body copy on the screen set
+   above --fs-md: it is what the operator opens the app to read. */
+.traffic-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--text);
+}
+
+.traffic-detail {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted-ink);
+}
+
+/* The contested-default footnote: a real and common condition (the operator's
+   own router does it), but a caveat on the answer above rather than an alarm --
+   sleeping's amber, not alert's red. */
+.traffic-note {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--status-sleeping) 12%, var(--surface));
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+}
+
+.traffic-probe {
+  margin-top: var(--sp-4);
+}
+
+/* Same wrapping deal as .tunnel-row: a human check name and its reading do not
+   fit on one 380px line, and squeezing them is how "Определение адресов сайтов"
+   becomes unreadable. */
+.checks-row {
+  flex-wrap: wrap;
+  row-gap: var(--sp-1);
+}
+
 .checks-status {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  color: var(--muted);
+  color: var(--muted-ink);
 }
 
 .checks-status-ok {
-  color: var(--muted);
+  color: var(--muted-ink);
 }
 
 .checks-status-fail {
