@@ -210,7 +210,8 @@ export const ACTION_LABELS = {
 // "err" surfaces the agent's own diagnostic (result.output) rather than a
 // canned phrase -- swallowing it would hide the one thing the operator needs
 // to decide what to do next, and every other check/incident string in this
-// file already prefers an honest specific over a vague generic.
+// file already prefers an honest specific over a vague generic. tunnel_restart
+// is the one exception, handled before this branch is reached -- see below.
 //
 // "ok" deliberately does NOT echo result.output, unlike err. For
 // tunnel_restart specifically, Output is the agent's raw "restarted <ndms>
@@ -221,6 +222,17 @@ export const ACTION_LABELS = {
 // Printing it here on success would leak that same value back out through
 // the command-result endpoint instead of the tunnel list -- a side door,
 // not a fix, so success gets a fixed phrase per action instead.
+//
+// The failure side has the identical leak and needs the identical guard:
+// tunnel_restart's error Output is the agent's ndmc failure string (runner.go
+// actions/runner.go:523/526/530, e.g. "ndmc interface Wireguard0 down: exit
+// status 1") -- same ndms_name/interface topology as the success line above,
+// just spelled differently. Echoing result.output here would undo the ok
+// branch's suppression through the other half of the same switch, so
+// tunnel_restart gets a fixed failure phrase too, checked before the generic
+// echo below. force_recheck/check_via_tunnel/check_direct are unaffected:
+// their Output is exit IPs and per-site checkmarks, not router topology, so
+// they keep the honest echo.
 export function commandOutcomeLabel(action, result) {
   switch (result.status) {
     case 'locked':
@@ -228,6 +240,7 @@ export function commandOutcomeLabel(action, result) {
     case 'timeout':
       return 'Роутер не ответил вовремя'
     case 'err':
+      if (action === 'tunnel_restart') return 'Не удалось перезапустить туннель'
       return result.output?.trim() || 'Команда завершилась с ошибкой'
     default:
       return action === 'tunnel_restart' ? 'Туннель перезапущен' : 'Готово'
