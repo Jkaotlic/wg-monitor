@@ -44,6 +44,10 @@ config.yaml
 *.swp
 .DS_Store
 
+# Superpowers local scratch — SDD ledgers, brainstorm mockups. All local-only
+# working state, never published to the public repo.
+/.superpowers/
+
 # Git worktrees (per-feature isolated workspaces)
 .worktrees/
 # Claude Code local session/worktree state (native EnterWorktree tool)
