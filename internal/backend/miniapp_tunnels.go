@@ -109,3 +109,86 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 	out.Note = d.Note
 	return out, true
 }
+
+// Traffic modes. These answer the operator's daily question -- "does traffic go
+// direct or through the VPN" -- and the honest fourth answer, "we cannot tell".
+const (
+	miniappTrafficVPN     = "vpn"
+	miniappTrafficDirect  = "direct"
+	miniappTrafficSingbox = "singbox"
+	miniappTrafficUnknown = "unknown"
+)
+
+// miniappTraffic is the screen's headline answer.
+type miniappTraffic struct {
+	Mode             string `json:"mode"`
+	EgressTunnelID   string `json:"egress_tunnel_id,omitempty"`
+	EgressTunnelName string `json:"egress_tunnel_name,omitempty"`
+	// ContestedDefault: more than one tunnel claims defaultRoute=true. Real and
+	// common (the operator's own router does it). Worth surfacing either way: when
+	// we know the egress it explains why the other tunnel looks idle; when we
+	// don't, it is precisely why.
+	ContestedDefault bool `json:"contested_default"`
+}
+
+// miniappHydraDetails decodes only the sing-box flag out of the hydraroute check.
+type miniappHydraDetails struct {
+	SingboxRouterActive bool `json:"singbox_router_active"`
+}
+
+// miniappDeriveTraffic answers "direct or via VPN" from stored state alone.
+//
+// Order matters. sing-box wins first: when its tproxy router is active it picks a
+// route per destination, so "the default route" is not the question anymore and
+// any single answer would be a lie (the external_reach probe doesn't even run on
+// those routers -- cmd/agent/main.go:304-318).
+//
+// Otherwise the answer is only as good as the agent: is_active_default comes from
+// settings.download.routeTag and is the sole authority. Without it (agent older
+// than the routeTag change, or /api/settings/get down) we return "unknown" rather
+// than falling back to default_route_intent -- several tunnels can each claim it,
+// so that fallback is a coin flip, and the operator's own router is exactly that
+// case.
+func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRow) miniappTraffic {
+	out := miniappTraffic{Mode: miniappTrafficUnknown}
+
+	claimed := 0
+	for _, t := range tunnels {
+		if t.DefaultRouteIntent {
+			claimed++
+		}
+	}
+	out.ContestedDefault = claimed > 1
+
+	if row, ok := byCheck["hydraroute"]; ok {
+		var hd miniappHydraDetails
+		if json.Unmarshal([]byte(row.DetailsJSON), &hd) == nil && hd.SingboxRouterActive {
+			out.Mode = miniappTrafficSingbox
+			return out
+		}
+	}
+
+	if len(tunnels) == 0 {
+		return out
+	}
+
+	known := false
+	for _, t := range tunnels {
+		if !t.ActiveDefaultKnown {
+			continue
+		}
+		known = true
+		if t.IsActiveDefault {
+			out.Mode = miniappTrafficVPN
+			out.EgressTunnelID = t.TunnelID
+			out.EgressTunnelName = t.Name
+			return out
+		}
+	}
+	if known {
+		// awg-manager answered, and no tunnel is the egress: traffic leaves
+		// through the WAN.
+		out.Mode = miniappTrafficDirect
+	}
+	return out
+}

@@ -143,3 +143,78 @@ func TestMiniappTunnelFromEventSurvivesGarbageDetails(t *testing.T) {
 		t.Fatalf("details %q: tunnel id must fall back to the check-name suffix, got %q", "null", got.TunnelID)
 	}
 }
+
+// Enabled is irrelevant to traffic derivation (that question is "which tunnel
+// carries the default route", not "which tunnels are on"), so fixtures below
+// leave it nil rather than inventing a true/false that would imply otherwise.
+
+func TestMiniappDeriveTrafficNamesTheLiveEgress(t *testing.T) {
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg10", Name: "nkt", Status: "ok", DefaultRouteIntent: true, ActiveDefaultKnown: true, IsActiveDefault: false},
+		{TunnelID: "awg12", Name: "amst", Status: "ok", DefaultRouteIntent: true, ActiveDefaultKnown: true, IsActiveDefault: true},
+	}
+	got := miniappDeriveTraffic(tunnels, nil)
+	if got.Mode != miniappTrafficVPN {
+		t.Fatalf("want mode=%q, got %q", miniappTrafficVPN, got.Mode)
+	}
+	if got.EgressTunnelID != "awg12" || got.EgressTunnelName != "amst" {
+		t.Fatalf("want egress awg12/amst, got %+v", got)
+	}
+	if !got.ContestedDefault {
+		t.Fatal("two tunnels claim defaultRoute -- that is worth telling the operator")
+	}
+}
+
+// An agent older than Task 1 sends default_route_intent but never
+// active_default_known/is_active_default. Falling back to default_route_intent
+// here would be a guess dressed up as fact -- both tunnels claim it, and the
+// operator's own router really does have two defaultRoute=true tunnels.
+func TestMiniappDeriveTrafficUnknownWithOldAgent(t *testing.T) {
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg10", Status: "ok", DefaultRouteIntent: true},
+		{TunnelID: "awg12", Status: "ok", DefaultRouteIntent: true},
+	}
+	got := miniappDeriveTraffic(tunnels, nil)
+	if got.Mode != miniappTrafficUnknown {
+		t.Fatalf("old agent cannot answer this -- want %q, got %q", miniappTrafficUnknown, got.Mode)
+	}
+	if got.EgressTunnelID != "" {
+		t.Fatalf("must not guess an egress, got %q", got.EgressTunnelID)
+	}
+	if !got.ContestedDefault {
+		t.Fatal("two claimed defaults is exactly why we cannot answer -- say so")
+	}
+}
+
+func TestMiniappDeriveTrafficSingboxDecidesPerDestination(t *testing.T) {
+	byCheck := map[string]db.EventRow{
+		"hydraroute": {CheckName: "hydraroute", Status: "ok", DetailsJSON: `{"singbox_router_active":true}`},
+	}
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg12", Status: "ok", ActiveDefaultKnown: true, IsActiveDefault: true},
+	}
+	got := miniappDeriveTraffic(tunnels, byCheck)
+	if got.Mode != miniappTrafficSingbox {
+		t.Fatalf("sing-box routes per destination -- want %q, got %q", miniappTrafficSingbox, got.Mode)
+	}
+}
+
+func TestMiniappDeriveTrafficDirectWhenNoTunnelCarriesDefault(t *testing.T) {
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg10", Status: "ok", ActiveDefaultKnown: true, IsActiveDefault: false, DefaultRouteIntent: false},
+	}
+	got := miniappDeriveTraffic(tunnels, nil)
+	if got.Mode != miniappTrafficDirect {
+		t.Fatalf("nothing carries the default route -- want %q, got %q", miniappTrafficDirect, got.Mode)
+	}
+	if got.ContestedDefault {
+		t.Fatal("nobody claims default -- nothing is contested")
+	}
+}
+
+func TestMiniappDeriveTrafficNoTunnelsAtAll(t *testing.T) {
+	got := miniappDeriveTraffic(nil, nil)
+	if got.Mode != miniappTrafficUnknown {
+		t.Fatalf("no tunnels reported yet -- want %q, got %q", miniappTrafficUnknown, got.Mode)
+	}
+}
