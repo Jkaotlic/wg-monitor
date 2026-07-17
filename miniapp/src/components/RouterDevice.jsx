@@ -1,5 +1,5 @@
 import { useId } from 'preact/hooks'
-import { checkLabel, tunnelStateLabel, trafficLabel } from '../labels.js'
+import { checkLabel, checkStateLabel, tunnelStateLabel, trafficLabel } from '../labels.js'
 
 // The drawing IS the instrument: antennas are tunnels, lamps are checks, and the
 // traffic path shows where packets actually leave. Nothing here is decorative --
@@ -77,6 +77,23 @@ function antennaSlots(count) {
   })
 }
 
+// A mast's angle from vertical, and the ONE place DROOP is applied. Both the
+// antenna and the traffic path have to agree on where a tip is: `vpn` names an
+// egress that is not necessarily alive -- a stopped tunnel can still hold the
+// routeTag, and that is arguably the incident most worth drawing -- so the two
+// callers meet at a drooped mast more often than the healthy case suggests.
+function mastTheta(t, alive) {
+  // Outboard droop for a dead antenna; t=0 (a lone antenna) has no outboard side,
+  // so it flops right.
+  return t * ANT_LEAN + (alive ? 0 : rad(DROOP) * (t >= 0 ? 1 : -1))
+}
+
+// One source of truth for "is this tunnel healthy": labels.js. Re-deriving it from
+// enabled/run_state here would give the drawing and the text below it two opinions
+// -- and `enabled` is a nullable tri-state, so the naive derivation renders "we
+// never heard" as "switched off".
+const isAlive = (tunnel) => tunnelStateLabel(tunnel) === 'работает'
+
 // Where an "up and out" path may rise without touching a mast.
 //
 // This is load-bearing, not cosmetic: `unknown` must never point at a tunnel, and
@@ -147,22 +164,18 @@ function lampTone(status) {
   return 'unknown'
 }
 
-// Spoken form of a lamp, for the drawing's <desc>. "не работает" is the spec's
-// wording for a failed check (§3.7); an unrecognised status is echoed as-is, the
-// same honesty rule labels.js applies to pingLabel/checkLabel.
-function checkStateLabel(status) {
-  if (status === 'fail') return 'не работает'
-  if (status === 'ok') return 'работает'
-  return status ?? 'неизвестно'
-}
-
+// Every lamp -- lens, bloom, bezel and halo -- is painted on the panel and its
+// recess, i.e. on fixed material, so all three tones take the -on-metal anchors.
+// The antenna below deliberately does NOT: it is drawn above the shell, on
+// --surface, where the plain --status-* tokens are exactly right. See the token
+// block in style.css for the measured ratios behind both halves of that split.
 function Lamp({ cx, tone, label }) {
   const alert = tone === 'alert'
   const hue = alert
-    ? 'var(--status-alert)'
+    ? 'var(--status-alert-on-metal)'
     : tone === 'ok'
-      ? 'var(--status-online)'
-      : 'var(--status-offline)'
+      ? 'var(--status-online-on-metal)'
+      : 'var(--status-offline-on-metal)'
   return (
     <g>
       {alert ? (
@@ -200,15 +213,8 @@ function Lamp({ cx, tone, label }) {
 
 function Antenna({ slot, tunnel, egress, waveOrigin }) {
   const { t, baseX } = slot
-  // One source of truth for "is this tunnel healthy": labels.js. Re-deriving it from
-  // enabled/run_state here would give the drawing and the text below it two opinions
-  // -- and `enabled` is a nullable tri-state, so the naive derivation renders "we
-  // never heard" as "switched off".
-  const alive = tunnelStateLabel(tunnel) === 'работает'
-
-  // Outboard droop for a dead antenna; t=0 (a lone antenna) has no outboard side, so
-  // it flops right.
-  const theta = t * ANT_LEAN + (alive ? 0 : rad(DROOP) * (t >= 0 ? 1 : -1))
+  const alive = isAlive(tunnel)
+  const theta = mastTheta(t, alive)
   const sin = Math.sin(theta)
   const cos = Math.cos(theta)
   const endX = baseX + MAST_LEN * sin
@@ -217,6 +223,9 @@ function Antenna({ slot, tunnel, egress, waveOrigin }) {
   const tipY = endY - TIP_GAP
   const arcCentre = 90 - ARC_OUTBOARD * t
 
+  // Surface-relative tokens on purpose, unlike the lamps: the whole antenna is
+  // drawn above the shell, against --surface, which is the background --status-*
+  // is written to self-correct for. Only what rides the material takes -on-metal.
   const hue = alive ? 'var(--status-online)' : 'var(--status-offline)'
   // Three tiers, all of them the mockup's own: the live egress gets its full
   // radiating fan (the mockup's awg12), a healthy non-egress tunnel gets the faint
@@ -297,14 +306,14 @@ function Collar({ slot, tunnel }) {
           traffic go"; the traffic path answers that. */}
       {tunnel.default_route_intent && (
         <>
-          <ellipse cx={r2(baseX)} cy={COLLAR_Y} rx="12" ry="6.4" fill="var(--status-sleeping)" opacity="0.12" />
+          <ellipse cx={r2(baseX)} cy={COLLAR_Y} rx="12" ry="6.4" fill="var(--status-sleeping-on-metal)" opacity="0.12" />
           <ellipse
             cx={r2(baseX)}
             cy={COLLAR_Y}
             rx="12"
             ry="6.4"
             fill="none"
-            stroke="var(--status-sleeping)"
+            stroke="var(--status-sleeping-on-metal)"
             stroke-width="1.6"
             opacity="0.95"
           />
@@ -325,14 +334,17 @@ function Collar({ slot, tunnel }) {
 // The traffic path -- the one element the mockup never had, and the reason this
 // screen exists. It answers "where do my packets actually leave", and it is drawn
 // last so it reads over the hardware.
-function TrafficPath({ mode, egressSlot, laneX, arrow }) {
+function TrafficPath({ mode, egressSlot, egressAlive, laneX, arrow }) {
   const casing = (d, key) => <path key={key} class="device-path-casing" d={d} />
 
   // Up and out through the egress antenna's own axis, offset inboard so the mast
-  // stays visible underneath rather than being painted over.
+  // stays visible underneath rather than being painted over. It reads the SAME
+  // mastTheta the antenna does, droop included: a stopped tunnel that still holds
+  // the routeTag is drawn drooped, and a path that ignored that flew to where the
+  // mast would have been if it were healthy -- past the tip, into empty space.
   function vpnPath(slot) {
     const { t, baseX } = slot
-    const theta = t * ANT_LEAN
+    const theta = mastTheta(t, egressAlive)
     const u = [Math.sin(theta), -Math.cos(theta)]
     const n = [Math.cos(theta), Math.sin(theta)]
     const off = t >= 0 ? -9.5 : 9.5
@@ -525,7 +537,7 @@ export function RouterDevice({ tunnels = [], traffic, checks = [], name }) {
               y="148.6"
               width={r2((lampPitch || 47.2) - 1.2)}
               height="46.8"
-              fill="var(--status-alert)"
+              fill="var(--status-alert-on-metal)"
               opacity="0.07"
               clip-path={`url(#${uid}-panel)`}
             />
@@ -541,7 +553,13 @@ export function RouterDevice({ tunnels = [], traffic, checks = [], name }) {
           WAN
         </text>
 
-        <TrafficPath mode={mode} egressSlot={slots[egressIdx]} laneX={laneX} arrow={`url(#${uid}-arrow)`} />
+        <TrafficPath
+          mode={mode}
+          egressSlot={slots[egressIdx]}
+          egressAlive={egressIdx >= 0 && isAlive(tunnels[egressIdx])}
+          laneX={laneX}
+          arrow={`url(#${uid}-arrow)`}
+        />
       </svg>
     </div>
   )

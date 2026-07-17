@@ -89,6 +89,55 @@
   --danger: var(--status-alert);
   --success: var(--status-online);
 
+  /* The same states, anchored for the one background --status-* above
+     cannot serve: the instrument's own material (RouterDevice.jsx).
+     Its recess #15181d, shell #414852 and panel #252a30 are fixed
+     plastic and metal -- they do not re-theme. A token that
+     self-corrects against --surface is therefore not merely unhelpful
+     on them, it is backwards: in light mode --status-online mixes
+     toward near-black to stay legible on a white page, which darkens
+     the LED against an already-near-black recess. Measured, that put
+     four elements under WCAG 1.4.11 in light mode (online LED 2.89:1,
+     alert LED 2.86:1, collar 1.48:1, EXT silkscreen 2.32:1) while the
+     same four passed in dark -- the token used outside its contract.
+
+     So these are fixed anchors, not mixes. Fixed is also the truer
+     model: a physical LED does not change colour when the phone flips
+     to dark, and the material palette beside it already works this way
+     (see .device-print below, whose greys are raw hexes for exactly
+     this reason). The ratios hold in BOTH themes because nothing in
+     either operand moves:
+
+       online    #1fa661 on recess #15181d  5.66:1  (needs 3:1)
+       alert     #e5484d on recess #15181d  4.55:1  (needs 3:1)
+       offline   #8a8a8e on recess #15181d  5.17:1  (needs 3:1)
+       sleeping  #ffb224 on shell  #414852  4.79:1  (needs 3:1, ring at 0.95 alpha)
+       alert-ink #ff9592 on panel  #252a30  6.86:1  (needs 4.5:1)
+
+     Two of those values are not the brand anchor, for reasons worth
+     keeping. --sleeping-on-metal is not #b8790a: the shell is
+     mid-slate rather than near-black, and that dark amber measures
+     2.54:1 on it -- a lit ring on a mid-tone housing has to be
+     BRIGHTER than the housing, not darker, so this takes the amber
+     scale's solid step. And the alert hue splits in two: #e5484d
+     clears the 3:1 graphical bar as a lamp on the recess but reaches
+     only 3.69:1 as 8px text on the lighter panel, under the 4.5:1 text
+     bar -- so the silkscreen gets its own -ink anchor (same naming
+     rule as --accent-ink above: -ink means "used as text"), landing
+     near the plain silkscreen's own 7.55:1 so both prints read as one
+     ink weight.
+
+     Scope is exactly "rides on the material". Whatever is drawn ABOVE
+     the shell -- the antenna fields and tips -- sits on --surface and
+     keeps the plain --status-* tokens, which is what their contract is
+     for. Verified in a browser via getComputedStyle + WCAG relative
+     luminance, not eyeballed; see .superpowers/sdd/miniapp-p4-task-9-report.md. */
+  --status-online-on-metal: #1fa661;
+  --status-alert-on-metal: #e5484d;
+  --status-offline-on-metal: #8a8a8e;
+  --status-sleeping-on-metal: #ffb224;
+  --status-alert-ink-on-metal: #ff9592;
+
   /* Spacing (4px step) */
   --sp-1: 4px;
   --sp-2: 8px;
@@ -550,9 +599,19 @@ body {
    NOT tokens on purpose -- a physical shell does not re-theme.
    They are picked to hold their reading against both a white and
    a near-black --surface (mid-slate body + light rim highlight).
-   Every *state* colour comes from the semantic tokens: the lamps,
-   the antenna fields, the defaultRoute collars and the traffic
-   path all reach for --status-* / --accent-ink / --muted.
+
+   Every *state* colour still comes from the semantic tokens, but
+   which family depends on what the element is painted ON, because
+   this drawing is the one place both backgrounds exist at once:
+     - ON the material (lamps in their recess, collars on the
+       shell, silkscreen on the panel) -> --status-*-on-metal, the
+       fixed anchors; the material never re-themes, so neither may
+       the state colour riding it.
+     - ON --surface (the antenna fields and tips, which are drawn
+       above the shell, and the traffic path) -> the plain
+       --status-* / --accent-ink / --muted, whose whole contract is
+       to self-correct against --surface.
+   The token block up top carries the measured ratios for both.
    ============================================================ */
 .device-stage {
   padding: var(--sp-3) 0 var(--sp-2);
@@ -568,7 +627,9 @@ body {
    low-contrast -- the way a real panel is actually silkscreened.
    These sit ON the dark shell, so they keep the shell's own greys
    rather than a --surface-relative token; the legend plate below
-   the drawing carries the readable version. */
+   the drawing carries the readable version. This grey measures
+   7.55:1 on the panel, and is the ink weight the alert print below
+   is matched to. */
 .device-print {
   font-family: var(--font-mono);
   font-size: 8px;
@@ -577,8 +638,12 @@ body {
   fill: #b4bcc8;
 }
 
+/* Red pigment, same ink weight (6.86:1 vs the plain print's 7.55:1).
+   It is text on the fixed panel, so it takes the -ink anchor and not
+   --status-alert, which is mixed for --surface and fell to 2.32:1
+   here in light mode. */
 .device-print-alert {
-  fill: var(--status-alert);
+  fill: var(--status-alert-ink-on-metal);
 }
 
 .device-print-port {

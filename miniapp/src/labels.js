@@ -25,6 +25,18 @@ export function checkLabel(name) {
   return name
 }
 
+// Spoken form of a check's status, for the instrument's <desc> and for the
+// legend plate that names the same lamps. "не работает" is the spec's wording
+// for a failed check (§3.7). The fallback echoes an unrecognized status rather
+// than swallowing it -- same honesty rule as checkLabel above, and the one that
+// matters most here: a status this function hasn't seen yet must not be spoken
+// as either "работает" or "не работает".
+export function checkStateLabel(status) {
+  if (status === 'fail') return 'не работает'
+  if (status === 'ok') return 'работает'
+  return status ?? 'неизвестно'
+}
+
 // Mirrors alerts/format.go:700-710 (humanPingStatus) exactly, including its
 // fallback: an unrecognized status is echoed as-is rather than swallowed into
 // blank, same honesty rule as checkLabel above -- a status this function
