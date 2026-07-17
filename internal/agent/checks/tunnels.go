@@ -88,7 +88,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		if tu.Type != "" && tu.Type != "awg" && tu.Type != "wg" {
 			continue
 		}
-		out = append(out, evalTunnel(tu, pcByID[tu.ID], routeCounts[tu.InterfaceName], start, maxAge))
+		out = append(out, evalTunnel(tu, pcByID[tu.ID], routeCounts[tu.InterfaceName], start, maxAge, activeDefaultID))
 	}
 	return out
 }
@@ -183,7 +183,14 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string) string
 	return ""
 }
 
-func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration) wire.Check {
+// evalTunnel renders one tunnel_<id> check. activeDefaultID is the tunnel
+// awg-manager actually routes default traffic through (settings.download.routeTag),
+// or "" when awg-manager wouldn't tell us. It is NOT the same as the tunnel's own
+// defaultRoute flag: several tunnels can each claim defaultRoute=true while only
+// one is the live egress, so consumers get both `is_active_default` (the answer)
+// and `active_default_known` (whether there IS an answer) rather than being left
+// to guess from intent.
+func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string) wire.Check {
 	name := tunnelCheckPrefix + tu.ID
 	details := map[string]any{
 		"tunnel_id":            tu.ID,
@@ -199,6 +206,8 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 		"status":               tu.Status,
 		"enabled":              tu.Enabled,
 		"default_route_intent": tu.DefaultRoute,
+		"active_default_known": activeDefaultID != "",
+		"is_active_default":    activeDefaultID != "" && tu.ID == activeDefaultID,
 		"address_conflict":     tu.HasAddressConflict,
 		"rx_bytes":             tu.RxBytes,
 		"tx_bytes":             tu.TxBytes,

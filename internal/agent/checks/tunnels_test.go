@@ -3,6 +3,7 @@ package checks
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -465,4 +466,77 @@ func TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed(t *testing.T) {
 	if _, ok := awg10["routes_dns"]; ok {
 		t.Errorf("awg10 (first-listed default) must NOT be credited: routes_dns=%v", awg10["routes_dns"])
 	}
+}
+
+func TestTunnelsCheckMarksAuthoritativeDefaultNotFirstListed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = io.WriteString(w, `{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"nkt","interfaceName":"nwg0","type":"awg","enabled":true,"status":"running","defaultRoute":true},
+				{"id":"awg12","name":"amst","interfaceName":"nwg3","type":"awg","enabled":true,"status":"running","defaultRoute":true}
+			]}}`)
+		case "/api/pingcheck/status":
+			_, _ = io.WriteString(w, `{"success":true,"data":{"tunnels":[]}}`)
+		case "/api/settings/get":
+			// routeTag names awg12 as the live egress even though awg10 is listed first.
+			// routeKind must accompany routeTag for ActiveDefaultTunnelID to strip the
+			// "<kind>-" prefix (see awgmgr.Settings.ActiveDefaultTunnelID) -- matches the
+			// real awg-manager payload shape used by TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed.
+			_, _ = io.WriteString(w, `{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`)
+		default:
+			_, _ = io.WriteString(w, `{"success":true,"data":{}}`)
+		}
+	}))
+	defer srv.Close()
+
+	out := TunnelsCheck{Client: awgmgr.New(srv.URL)}.Run(context.Background(), Deps{})
+
+	got := map[string]map[string]any{}
+	for _, c := range out {
+		got[c.Name] = c.Details
+	}
+	if v, ok := got["tunnel_awg12"]["is_active_default"].(bool); !ok || !v {
+		t.Fatalf("awg12 is the routeTag egress, want is_active_default=true, got %v", got["tunnel_awg12"]["is_active_default"])
+	}
+	if v, ok := got["tunnel_awg10"]["is_active_default"].(bool); !ok || v {
+		t.Fatalf("awg10 only *claims* defaultRoute, want is_active_default=false, got %v", got["tunnel_awg10"]["is_active_default"])
+	}
+	for _, n := range []string{"tunnel_awg10", "tunnel_awg12"} {
+		if v, ok := got[n]["active_default_known"].(bool); !ok || !v {
+			t.Fatalf("%s: routeTag resolved, want active_default_known=true", n)
+		}
+	}
+}
+
+func TestTunnelsCheckReportsUnknownEgressWhenSettingsFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = io.WriteString(w, `{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"nkt","interfaceName":"nwg0","type":"awg","enabled":true,"status":"running","defaultRoute":true}
+			]}}`)
+		case "/api/settings/get":
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			_, _ = io.WriteString(w, `{"success":true,"data":{"tunnels":[]}}`)
+		}
+	}))
+	defer srv.Close()
+
+	out := TunnelsCheck{Client: awgmgr.New(srv.URL)}.Run(context.Background(), Deps{})
+
+	for _, c := range out {
+		if c.Name != "tunnel_awg10" {
+			continue
+		}
+		if v, ok := c.Details["active_default_known"].(bool); !ok || v {
+			t.Fatalf("settings unavailable, want active_default_known=false, got %v", c.Details["active_default_known"])
+		}
+		if v, ok := c.Details["is_active_default"].(bool); !ok || v {
+			t.Fatalf("egress unknown must not be claimed as active, got %v", c.Details["is_active_default"])
+		}
+		return
+	}
+	t.Fatal("tunnel_awg10 check not emitted")
 }
