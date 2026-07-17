@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,6 +128,65 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		enqueueAgentCommandForUser(w, d, u, req.Action, args)
+	}
+}
+
+// miniappMaxCommandWaitSec caps the long-poll. Agents report on a ~68s median
+// cadence (measured 2026-07-06), and the command channel is a separate long-poll,
+// but a sleeping mobile router can take far longer -- so the client polls in
+// bounded hops rather than holding one socket open forever.
+const miniappMaxCommandWaitSec = 30
+
+// miniappCommandResultHandler polls for the result of a command previously
+// dispatched via miniappCommandHandler. It is gated by the same per-router
+// ACL, checked before cmd_id is even looked at, for the same reason: a
+// stranger must not be able to read another router's command output, nor
+// tell an existing-but-forbidden router apart from a nonexistent one.
+//
+// A missing result is 404 result_not_ready, not an error -- the agent simply
+// hasn't answered yet and the client is expected to poll again. That mirrors
+// wizardCmdResultHandler's contract (wizard_handler.go:1284) exactly, so a
+// later frontend task can rely on the same "keep polling" vs "something
+// broke" distinction it already implements for the wizard.
+func miniappCommandResultHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramUserID, _ := miniappUserFromContext(r.Context())
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok || !miniappRouterAllowed(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		if d.CommandSink == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "command sink not configured")
+			return
+		}
+		cmdID := strings.TrimSpace(r.PathValue("cmd_id"))
+		if cmdID == "" {
+			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "cmd_id required")
+			return
+		}
+		wait := miniappMaxCommandWaitSec
+		if q := r.URL.Query().Get("wait_sec"); q != "" {
+			if n, err := strconv.Atoi(q); err == nil {
+				wait = n
+			}
+		}
+		if wait < 0 {
+			wait = 0
+		}
+		if wait > miniappMaxCommandWaitSec {
+			wait = miniappMaxCommandWaitSec
+		}
+		// routerID IS users.id in the mini app (see miniappRouterAllowed above),
+		// so it goes straight to AwaitResult -- unlike wizardCmdResultHandler,
+		// there is no nickname to resolve first.
+		res, ok := d.CommandSink.AwaitResult(r.Context(), routerID, cmdID, time.Duration(wait)*time.Second)
+		if !ok {
+			writeJSONError(w, http.StatusNotFound, "result_not_ready", "no result yet — poll again")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(res)
 	}
 }
 

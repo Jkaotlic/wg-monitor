@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -117,6 +118,95 @@ func TestMiniappCommandStrangerGets404BeforeExistence(t *testing.T) {
 	}
 	if len(sink.enqueued) != 0 {
 		t.Fatalf("stranger must never reach enqueue: %+v", sink.enqueued)
+	}
+}
+
+// A missing result is 404 result_not_ready, not an error -- the agent simply
+// hasn't answered yet, and the client is expected to poll again. Same
+// contract as wizardCmdResultHandler's timeout branch.
+func TestMiniappCommandResultNotReadyIs404(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/v1/miniapp/routers/%d/commands/deadbeef?wait_sec=0", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 result_not_ready so the client just polls again, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Code != "result_not_ready" {
+		t.Fatalf("want code=result_not_ready, got %+v", body)
+	}
+}
+
+// Once the agent has answered, the endpoint hands back the CommandResult
+// as-is. AwaitResult must be called with routerID itself -- the mini app's
+// routerID IS users.id, so there is no nickname round-trip like the wizard's
+// polling endpoint needs.
+func TestMiniappCommandResultReturnsResultWhenReady(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{results: map[string]wire.CommandResult{
+		"deadbeef": {ID: "deadbeef", Status: "ok", Output: "reachable", DurationMs: 42},
+	}}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/v1/miniapp/routers/%d/commands/deadbeef?wait_sec=0", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var got wire.CommandResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "ok" || got.Output != "reachable" || got.DurationMs != 42 {
+		t.Fatalf("unexpected result: %+v", got)
+	}
+	if sink.awaitUserID != ownedID {
+		t.Fatalf("AwaitResult must be called with the router's own id (== users.id), got %d", sink.awaitUserID)
+	}
+}
+
+// ACL is checked before cmd_id is even looked at, so a stranger cannot use
+// this endpoint either to read another router's command output or to probe
+// which router ids exist. The sink DOES have a ready result for this cmd_id
+// -- proving the 404 comes from the ACL gate, not merely from an empty sink.
+func TestMiniappCommandResultStrangerGets404BeforeExistence(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	sink := &dashboardActionSink{results: map[string]wire.CommandResult{
+		"deadbeef": {ID: "deadbeef", Status: "ok"},
+	}}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	const strangerID = 999001
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/v1/miniapp/routers/%d/commands/deadbeef?wait_sec=0", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", strangerID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("stranger must not poll another router's command results, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet,
+		"/v1/miniapp/routers/424242/commands/deadbeef?wait_sec=0", nil)
+	req2.AddCookie(miniappSessionCookieFor(t, "test-bot-token", strangerID))
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, req2)
+	if rec2.Code != rec.Code {
+		t.Fatalf("existing-but-forbidden (%d) and nonexistent (%d) must be indistinguishable", rec.Code, rec2.Code)
 	}
 }
 
