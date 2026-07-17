@@ -41,6 +41,27 @@ func TestMiniappTunnelFromEventProjectsWhitelistedFields(t *testing.T) {
 	if got.PingCheckStatus != "alive" || !got.IsActiveDefault || !got.ActiveDefaultKnown {
 		t.Fatalf("state: got %+v", got)
 	}
+	if got.Enabled == nil || !*got.Enabled {
+		t.Fatalf("enabled: details carried the key as true, got %+v", got.Enabled)
+	}
+}
+
+// An agent that hasn't shipped the enabled key yet -- or a details blob that
+// simply omits it -- must not be read as "disabled" or, worse, defaulted to
+// "enabled" and presented as fact. Absence has to survive as nil.
+func TestMiniappTunnelFromEventEnabledUnknownWhenKeyAbsent(t *testing.T) {
+	row := db.EventRow{
+		CheckName:   "tunnel_awg13",
+		Status:      "ok",
+		DetailsJSON: `{"tunnel_id":"awg13","tunnel_name":"riga"}`,
+	}
+	got, ok := miniappTunnelFromEvent(row)
+	if !ok {
+		t.Fatal("must project")
+	}
+	if got.Enabled != nil {
+		t.Fatalf("enabled must be nil (unknown) when the details omit the key, got %v", *got.Enabled)
+	}
 }
 
 // The mini app is read by owners and operators, not only the admin. Router
@@ -57,7 +78,7 @@ func TestMiniappTunnelFromEventDropsTopology(t *testing.T) {
 		t.Fatal("must project")
 	}
 	blob := mustJSON(t, got)
-	for _, leak := range []string{"1.2.3.4", "51820", "10.0.0.2", "ISP", "Wireguard0"} {
+	for _, leak := range []string{"1.2.3.4", "51820", "10.0.0.2", "ISP", "Wireguard0", "nwg3"} {
 		if contains(blob, leak) {
 			t.Fatalf("topology %q leaked into mini-app JSON: %s", leak, blob)
 		}

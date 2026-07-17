@@ -31,8 +31,11 @@ type miniappTunnel struct {
 	// Status is the check verdict ("ok"|"fail") -- the FSM's opinion.
 	Status string `json:"status"`
 	// RunState is the router's own word for the tunnel ("running"|"stopped"|...).
-	RunState        string `json:"run_state,omitempty"`
-	Enabled         bool   `json:"enabled"`
+	RunState string `json:"run_state,omitempty"`
+	// Enabled is a pointer for the same reason as HandshakeAgeSec/PingLatencyMs:
+	// an unparseable details blob, or an agent older than this key, must render
+	// as "unknown", not as a guessed true/false.
+	Enabled         *bool  `json:"enabled,omitempty"`
 	HandshakeAgeSec *int   `json:"handshake_age_sec,omitempty"`
 	PingCheckStatus string `json:"ping_check_status,omitempty"`
 	PingLatencyMs   *int   `json:"ping_latency_ms,omitempty"`
@@ -82,7 +85,7 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 		return miniappTunnel{}, false
 	}
 
-	out := miniappTunnel{TunnelID: id, Status: row.Status, Enabled: true}
+	out := miniappTunnel{TunnelID: id, Status: row.Status}
 	if !row.TS.IsZero() {
 		out.TS = row.TS.UTC().Format(time.RFC3339)
 	}
@@ -96,9 +99,7 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 	}
 	out.Name = d.TunnelName
 	out.RunState = d.Status
-	if d.Enabled != nil {
-		out.Enabled = *d.Enabled
-	}
+	out.Enabled = d.Enabled
 	out.HandshakeAgeSec = d.HandshakeAgeSec
 	out.PingCheckStatus = d.PingCheckStatus
 	out.PingLatencyMs = d.PingLastLatencyMs
