@@ -1196,6 +1196,17 @@ func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action s
 		writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 		return
 	}
+	enqueueAgentCommandForUser(w, d, u, action, args)
+}
+
+// enqueueAgentCommandForUser queues a command for an ALREADY-RESOLVED agent.
+// The wizard/dashboard reach it by nickname via enqueueWizardAgentCommand's
+// thin wrapper above; the mini app already holds the router's users.id (that
+// is what its whole ACL is keyed on -- see db.RouterAccessRole(routerUserID,
+// ...)), so making it round-trip id -> nickname -> id just to enqueue would be
+// silly. Callers do their own authorization before calling this: it enforces
+// none.
+func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any) {
 	id, err := newCmdID()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
@@ -1215,8 +1226,8 @@ func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action s
 		return
 	}
 	if d.Logger != nil {
-		d.Logger.Info("wizard command enqueued",
-			"nickname", nickname, "user_id", u.ID, "cmd_id", id, "action", action)
+		d.Logger.Info("agent command enqueued",
+			"nickname", u.Nickname, "user_id", u.ID, "cmd_id", id, "action", action)
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
