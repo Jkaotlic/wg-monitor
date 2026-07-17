@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"io/fs"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
 func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
@@ -196,6 +199,12 @@ type miniappCheckStatus struct {
 
 type miniappRouterEventsResp struct {
 	Checks []miniappCheckStatus `json:"checks"`
+	// Tunnels is the projection of the tunnel_* rows' details -- the screen's
+	// "are my tunnels alive" answer. Checks keeps carrying the same rows in flat
+	// form for backwards compatibility; the two are views of one query, not two
+	// sources of truth.
+	Tunnels []miniappTunnel `json:"tunnels"`
+	Traffic miniappTraffic  `json:"traffic"`
 }
 
 // miniappEventsWindow bounds how far back "the latest status of every
@@ -220,14 +229,21 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "events lookup failed")
 			return
 		}
-		resp := miniappRouterEventsResp{}
+		resp := miniappRouterEventsResp{Tunnels: []miniappTunnel{}}
+		byCheck := make(map[string]db.EventRow, len(rows))
 		for _, row := range rows {
+			byCheck[row.CheckName] = row
 			resp.Checks = append(resp.Checks, miniappCheckStatus{
 				CheckName: row.CheckName,
 				Status:    row.Status,
 				Timestamp: row.TS.UTC().Format(time.RFC3339),
 			})
+			if tu, ok := miniappTunnelFromEvent(row); ok {
+				resp.Tunnels = append(resp.Tunnels, tu)
+			}
 		}
+		sort.Slice(resp.Tunnels, func(i, j int) bool { return resp.Tunnels[i].TunnelID < resp.Tunnels[j].TunnelID })
+		resp.Traffic = miniappDeriveTraffic(resp.Tunnels, byCheck)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

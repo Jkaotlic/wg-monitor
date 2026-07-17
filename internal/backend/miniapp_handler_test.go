@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -231,6 +232,68 @@ func TestMiniappRouterEventsReturnsLatestPerCheck(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("checks = %+v, want tunnel_amnezia_for_awg2/ok", resp.Checks)
+	}
+}
+
+func TestMiniappEventsReturnsTunnelsAndTraffic(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now()
+	if err := d.Events().Insert(ownedID, "tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"nkt","status":"running","enabled":true,"handshake_age_sec":30,"default_route_intent":true,"active_default_known":true,"is_active_default":false,"endpoint":"1.2.3.4:51820"}`, now); err != nil {
+		t.Fatalf("insert tunnel_awg10: %v", err)
+	}
+	if err := d.Events().Insert(ownedID, "tunnel_awg12", "ok", `{"tunnel_id":"awg12","tunnel_name":"amst","status":"running","enabled":true,"handshake_age_sec":12,"default_route_intent":true,"active_default_known":true,"is_active_default":true}`, now); err != nil {
+		t.Fatalf("insert tunnel_awg12: %v", err)
+	}
+	if err := d.Events().Insert(ownedID, "dns", "ok", `{}`, now); err != nil {
+		t.Fatalf("insert dns: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRouterEventsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Tunnels) != 2 {
+		t.Fatalf("want 2 tunnels, got %d (%+v)", len(resp.Tunnels), resp.Tunnels)
+	}
+	if resp.Traffic.Mode != miniappTrafficVPN || resp.Traffic.EgressTunnelName != "amst" {
+		t.Fatalf("traffic: %+v", resp.Traffic)
+	}
+	if !resp.Traffic.ContestedDefault {
+		t.Fatal("both tunnels claim defaultRoute -- want contested_default=true")
+	}
+	// The flat checks list stays as-is for backwards compatibility.
+	if len(resp.Checks) != 3 {
+		t.Fatalf("want all 3 checks still listed, got %d", len(resp.Checks))
+	}
+}
+
+func TestMiniappEventsDoesNotLeakTunnelTopology(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.Events().Insert(ownedID, "tunnel_awg12", "ok", `{"tunnel_id":"awg12","endpoint":"1.2.3.4:51820","address":"10.0.0.2/32","isp_interface":"ISP","ndms_name":"Wireguard0"}`, time.Now()); err != nil {
+		t.Fatalf("insert tunnel_awg12: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, leak := range []string{"1.2.3.4", "51820", "10.0.0.2", "Wireguard0"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("topology %q leaked to the mini app: %s", leak, body)
+		}
 	}
 }
 
