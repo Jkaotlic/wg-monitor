@@ -553,6 +553,28 @@ body {
   gap: var(--sp-2);
 }
 
+/* ---------------- Async commands (Task 12) ----------------
+   CommandButton's own two rules, in RouterDetail.jsx. The confirm step's
+   Yes/Cancel pair reuses the same flex-row shape as .incident-actions above
+   (it IS the same shape: a wrapping row of buttons) but gets its own class
+   rather than borrowing that incident-specific name into TrafficSection's
+   markup, which doesn't otherwise mention incidents at all. */
+.command-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+/* The tunnel_restart button on an incident card sits between .incident-why
+   and the silence/ack/mute row (or the suppressed badge) below it -- both
+   already exist elsewhere in this card, so this button needs its own
+   trailing space to read as a distinct row rather than crowding into either
+   neighbor. TrafficSection's button needs no equivalent rule: it reuses
+   .traffic-probe below, which already carries the same job for that card. */
+.restart-block {
+  margin-bottom: var(--sp-3);
+}
+
 .incident-history-toggle {
   margin-top: var(--sp-3);
 }

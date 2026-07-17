@@ -201,3 +201,35 @@ export const ACTION_LABELS = {
   recheck: 'Повторить проверку',
   restartTunnel: 'Перезапустить туннель',
 }
+
+// What a dispatched agent command's result means, once the agent has
+// actually answered (busy/pending has its own copy at the call site -- this
+// is only the resolved four: pkg/wire/types.go's CommandResult.Status is
+// ok/err/locked/timeout).
+//
+// "err" surfaces the agent's own diagnostic (result.output) rather than a
+// canned phrase -- swallowing it would hide the one thing the operator needs
+// to decide what to do next, and every other check/incident string in this
+// file already prefers an honest specific over a vague generic.
+//
+// "ok" deliberately does NOT echo result.output, unlike err. For
+// tunnel_restart specifically, Output is the agent's raw "restarted <ndms>
+// ..." line (humanRestartResult, alerts/command_result.go:134-148), and
+// ndms_name is router-internal topology the mini app is never otherwise
+// shown (miniappResolveTunnelNDMSName, miniapp_commands.go, resolves it
+// server-side and never attaches it to any response type a client sees).
+// Printing it here on success would leak that same value back out through
+// the command-result endpoint instead of the tunnel list -- a side door,
+// not a fix, so success gets a fixed phrase per action instead.
+export function commandOutcomeLabel(action, result) {
+  switch (result.status) {
+    case 'locked':
+      return 'Такая команда уже выполняется'
+    case 'timeout':
+      return 'Роутер не ответил вовремя'
+    case 'err':
+      return result.output?.trim() || 'Команда завершилась с ошибкой'
+    default:
+      return action === 'tunnel_restart' ? 'Туннель перезапущен' : 'Готово'
+  }
+}

@@ -10,10 +10,12 @@ import {
 import { setBackButtonVisible, onBackButtonClick } from '../telegram.js'
 import { AccessSection } from './AccessSection.jsx'
 import { RouterDevice, orderChecks } from '../components/RouterDevice.jsx'
+import { useCommand } from '../useCommand.js'
 import {
   ACTION_LABELS,
   checkLabel,
   checkStateLabel,
+  commandOutcomeLabel,
   humanAge,
   incidentCopy,
   pingLabel,
@@ -57,7 +59,81 @@ function isSuppressed(incident) {
   return incident.acked || (incident.silenced_until != null && new Date(incident.silenced_until) > new Date())
 }
 
-function IncidentCard({ routerID, incident, onUpdate }) {
+// One button that owns the whole asynchronous-command lifecycle for a single
+// action: an optional confirm step, dispatch, the bounded poll (useCommand),
+// and a plain-language rendering of whatever it settles on. Two call sites
+// share this -- TrafficSection's "Проверить сейчас" and the restart button on
+// a tunnel_* incident -- so neither has to reimplement the confirm gate or
+// the pending/ok/err/locked/timeout wording.
+//
+// Two independent reasons can require confirmation before dispatch, and both
+// route through the same `confirming` step rather than two separate dialogs:
+//   - `mutatingText` set: this action changes something on the router
+//     (tunnel_restart is the only one reachable from this screen -- see
+//     miniapp_commands.go's allowlist comment). Always confirmed, online or
+//     not, same precedent as the dashboard confirming dns_reset.
+//   - `asleep` true: the router is offline/sleeping right now (computed by
+//     the caller from router.status -- see RouterDetail's own comment on
+//     why that excludes `alert`), so the command will simply sit queued
+//     until it wakes. Read-only actions get this same gate when asleep,
+//     because "the button appears to do nothing for 90 seconds" is exactly
+//     the confusion this task exists to remove -- better to say so up front
+//     and let the caller choose to queue it anyway.
+function CommandButton({ routerID, action, args = {}, label, busyLabel, mutatingText, asleep, wrapClass, onDone }) {
+  const { busy, result, error, run } = useCommand(routerID)
+  const [confirming, setConfirming] = useState(false)
+
+  function dispatch() {
+    setConfirming(false)
+    // A router already known asleep was just told (via the confirm copy
+    // below) that its command will simply run late -- so this wait gets far
+    // more room than the default 90s before giving up on a reply, matching
+    // the promise just made rather than contradicting it a few seconds later.
+    run(action, args, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }).then((res) => {
+      if (res?.status === 'ok' && onDone) onDone()
+    })
+  }
+
+  function handleClick() {
+    if ((mutatingText || asleep) && !confirming) {
+      setConfirming(true)
+      return
+    }
+    dispatch()
+  }
+
+  if (confirming) {
+    return (
+      <div class={wrapClass}>
+        {asleep && <p class="state">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>}
+        {mutatingText && <p class="state">{mutatingText}</p>}
+        <div class="command-actions">
+          <button class="btn btn-danger" onClick={dispatch}>
+            Да, выполнить
+          </button>
+          <button class="btn btn-ghost" onClick={() => setConfirming(false)}>
+            Отмена
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div class={wrapClass}>
+      <button class="btn btn-primary" disabled={busy} onClick={handleClick}>
+        {busy ? (busyLabel ?? 'Выполняю…') : label}
+      </button>
+      {busy && <p class="state">Ждём ответа от роутера…</p>}
+      {result && (
+        <p class={`state${result.status === 'ok' ? '' : ' state-error'}`}>{commandOutcomeLabel(action, result)}</p>
+      )}
+      {error && <p class="state state-error">{error}</p>}
+    </div>
+  )
+}
+
+function IncidentCard({ routerID, incident, onUpdate, asleep, onDone }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(false)
@@ -91,6 +167,11 @@ function IncidentCard({ routerID, incident, onUpdate }) {
   const suppressed = isSuppressed(incident)
   const { what, why } = incidentCopy(incident.check_name)
 
+  // tunnel_<id> incidents get a restart button; the four plain checks
+  // (external_reach/dns/hydraroute/awg_manager) have no per-router command
+  // that fixes them from here, so they get none.
+  const tunnelID = incident.check_name.startsWith('tunnel_') ? incident.check_name.slice('tunnel_'.length) : null
+
   return (
     <li class="card">
       <div class="incident-head">
@@ -99,6 +180,24 @@ function IncidentCard({ routerID, incident, onUpdate }) {
       </div>
 
       {why && <p class="incident-why">{why}</p>}
+
+      {/* Deliberately OUTSIDE the suppressed/!suppressed split below: silence/
+          ack/mute only control whether this incident nags again, they never
+          touch the router, so a muted tunnel incident must not lose the one
+          button that can actually fix it. */}
+      {tunnelID && (
+        <CommandButton
+          routerID={routerID}
+          action="tunnel_restart"
+          args={{ tunnel_id: tunnelID }}
+          label={ACTION_LABELS.restartTunnel}
+          busyLabel="Перезапускаю…"
+          mutatingText={`Перезапустить ${checkLabel(incident.check_name).toLowerCase()}? Связь через него на несколько секунд прервётся.`}
+          asleep={asleep}
+          wrapClass="restart-block"
+          onDone={onDone}
+        />
+      )}
 
       {suppressed ? (
         // Wording mirrors the backend's own confirmation lines for these two
@@ -115,10 +214,6 @@ function IncidentCard({ routerID, incident, onUpdate }) {
             : `Уведомления скрыты до ${formatTime(incident.silenced_until)}`}
         </span>
       ) : (
-        // Task 12 adds a primary "Перезапустить туннель" button ahead of
-        // these for tunnel_* incidents (ACTION_LABELS.restartTunnel already
-        // reserves the wording); it owns the command dispatch and waiting
-        // UX, so no button for it is stubbed here.
         <div class="incident-actions">
           {SILENCE_OPTIONS.map((opt) => (
             <button
@@ -238,10 +333,13 @@ function TunnelsSection({ tunnels, traffic }) {
   )
 }
 
-// The operator's daily question, answered in one line. `onProbe`/`probing` are the
-// presentational contract only: Task 12 owns the command dispatch and its waiting
-// UX, so the button is threaded but inert until that lands.
-function TrafficSection({ traffic, onProbe, probing }) {
+// The operator's daily question, answered in one line. "Проверить сейчас"
+// dispatches force_recheck via CommandButton -- read-only, so it needs no
+// mutatingText, only the asleep gate every command gets. The two-exit-IP
+// comparison (check_via_tunnel/check_direct) that would render alongside the
+// verdict is Task 13's; this button only re-runs the recheck that produces
+// the verdict above and refreshes the screen (onDone={loadData}) once it's ok.
+function TrafficSection({ routerID, traffic, asleep, onDone }) {
   const { title, detail } = trafficLabel(traffic)
   return (
     <section class="section">
@@ -252,9 +350,15 @@ function TrafficSection({ traffic, onProbe, probing }) {
         {traffic?.contested_default && (
           <p class="traffic-note">Основным настроен ещё один туннель, но трафик несёт не он.</p>
         )}
-        <button class="btn btn-primary traffic-probe" disabled={probing} onClick={onProbe}>
-          {probing ? 'Проверяю…' : ACTION_LABELS.recheck}
-        </button>
+        <CommandButton
+          routerID={routerID}
+          action="force_recheck"
+          label={ACTION_LABELS.recheck}
+          busyLabel="Проверяю…"
+          asleep={asleep}
+          wrapClass="traffic-probe"
+          onDone={onDone}
+        />
       </div>
     </section>
   )
@@ -277,8 +381,16 @@ export function RouterDetail({ id, onBack, isAdmin }) {
     }
   }, [onBack])
 
-  useEffect(() => {
-    Promise.all([fetchRouter(id), fetchRouterChecks(id)])
+  // Named rather than inlined so a completed command can call it again:
+  // an "ok" force_recheck or tunnel_restart changes state that lives in
+  // this same fetch (checks/tunnels/traffic, and possibly the incident
+  // list), and the screen otherwise never refetches after the initial load.
+  // Not guaranteed to show the change immediately -- the agent's own next
+  // heartbeat is still the real source of truth -- but it costs one cheap
+  // request and shows whatever is currently true rather than leaving stale
+  // data on screen indefinitely after a button says "done".
+  function loadData() {
+    return Promise.all([fetchRouter(id), fetchRouterChecks(id)])
       .then(([r, c]) => {
         setRouter(r.router)
         setIncidents(r.incidents ?? [])
@@ -290,6 +402,10 @@ export function RouterDetail({ id, onBack, isAdmin }) {
         setTraffic(c.traffic ?? null)
       })
       .catch((err) => setError(err.message))
+  }
+
+  useEffect(() => {
+    loadData()
   }, [id])
 
   function updateIncident(updated) {
@@ -298,6 +414,18 @@ export function RouterDetail({ id, onBack, isAdmin }) {
 
   if (error) return <p class="state state-error">{error}</p>
   if (router == null) return <p class="state">Загрузка…</p>
+
+  // Say it before dispatching, not after a timeout: router.status already
+  // distinguishes reachability from alerting (dashboard_handler.go:780-796),
+  // so a spinner that runs 90 seconds to reach the same conclusion the header
+  // already states would teach the operator nothing. Keyed on offline/sleeping
+  // ONLY -- `alert` means an open incident, and an incident does not imply
+  // unreachability: a router can be fully reachable and mid-alert (e.g. an
+  // external_reach failure) at the same time, in which case its commands
+  // dispatch and answer normally. Warning "may take a while" on a router that
+  // is actually sitting there answering would be the same false-confidence
+  // failure this whole phase exists to avoid, just pointed the other way.
+  const asleep = router.status === 'offline' || router.status === 'sleeping'
 
   // The lamps' own set, in the lamps' own order (RouterDevice owns both). The
   // `tunnel_*` rows that `checks[]` also carries are filtered there -- they are the
@@ -326,15 +454,21 @@ export function RouterDetail({ id, onBack, isAdmin }) {
 
       <TunnelsSection tunnels={tunnels} traffic={traffic} />
 
-      {/* onProbe is deliberately not passed yet -- Task 12 owns the dispatch. */}
-      <TrafficSection traffic={traffic} />
+      <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} />
 
       {incidents.length > 0 && (
         <section class="section">
           <h2 class="section-title">Активные тревоги</h2>
           <ul class="list-reset card-stack">
             {incidents.map((inc) => (
-              <IncidentCard key={inc.check_name} routerID={id} incident={inc} onUpdate={updateIncident} />
+              <IncidentCard
+                key={inc.check_name}
+                routerID={id}
+                incident={inc}
+                onUpdate={updateIncident}
+                asleep={asleep}
+                onDone={loadData}
+              />
             ))}
           </ul>
         </section>
