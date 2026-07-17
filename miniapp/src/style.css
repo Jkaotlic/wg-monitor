@@ -695,6 +695,107 @@ body {
   margin-top: var(--sp-4);
 }
 
+/* ---------------- Exit-IP compare (Task 13, §3.4) ----------------
+   ExitCompareSection's own card content: the run button, the two probe
+   blocks, and the note that actually answers the operator's question. Reuses
+   .state/.command-actions/.btn-danger/.btn-ghost from the Task 12 confirm
+   pattern (same shape: a warning line above a Yes/Cancel pair) rather than
+   inventing a second version of that dialog. */
+.compare-run {
+  margin-top: var(--sp-3);
+}
+
+.compare-confirm {
+  margin-top: var(--sp-3);
+}
+
+.compare-probes {
+  margin-top: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* A divider between the two probe blocks only -- .row's own convention
+   (border-bottom on every row, stripped on :last-child) doesn't fit here
+   since there are exactly two blocks and no list semantics, so this borrows
+   the same 1px --border but as a border-TOP on the second block instead. */
+.compare-probe + .compare-probe {
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+}
+
+.compare-probe-label {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.compare-probe-ip {
+  margin: var(--sp-1) 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* Genuinely no IP for this side -- an honest gap, not a guess, so it reads as
+   a fault (--danger) same as every other command error on this screen. */
+.compare-probe-unknown {
+  font-family: var(--font-body);
+  font-weight: 400;
+  color: var(--danger);
+}
+
+.compare-probe-pending {
+  font-family: var(--font-body);
+  font-weight: 400;
+  color: var(--muted);
+}
+
+/* The agent's own report, shown verbatim (connectivity.go's per-site ✅/❌
+   lines plus its own "Exit IP:" line) -- pre-line keeps its \n breaks without
+   this file re-splitting the string into elements. Same reading tone as
+   .traffic-detail: secondary to the headline IP above it. */
+.compare-probe-detail {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted-ink);
+  white-space: pre-line;
+}
+
+/* Three readings of the same comparison, same recipe as .traffic-note (12-16%
+   tint of the state hue over --surface, plain --text on top) so this block
+   reads as one family with the traffic card above it rather than a separate
+   alert vocabulary. Alert = the finding that matters (VPN not carrying
+   traffic); good = the healthy case named explicitly rather than left silent;
+   caution = sing-box's "don't trust a verdict here" caveat, sleeping's amber
+   because it is a caveat, not a fault. */
+.compare-note {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--text);
+}
+
+.compare-note-alert {
+  background: color-mix(in srgb, var(--status-alert) 14%, var(--surface));
+}
+
+.compare-note-good {
+  background: color-mix(in srgb, var(--status-online) 14%, var(--surface));
+}
+
+.compare-note-caution {
+  background: color-mix(in srgb, var(--status-sleeping) 12%, var(--surface));
+}
+
 /* Same wrapping deal as .tunnel-row: a human check name and its reading do not
    fit on one 380px line, and squeezing them is how "Определение адресов сайтов"
    becomes unreadable. */
