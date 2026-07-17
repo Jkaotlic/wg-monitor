@@ -25,23 +25,6 @@ export function checkLabel(name) {
   return name
 }
 
-// Mirrors SmartReplyState.String() (alerts/smart_reply.go:23-35) and the four
-// headline sentences FormatSmartReply opens with ("всё работает" / "есть
-// подозрения" / "есть проблема" / "роутер не на связи" -- lines 238/258/301/360).
-// This is a DIFFERENT axis from a router's `status` field in the mini app API
-// (miniappRouterSummary.status: "online"/"sleeping"/"offline"/"alert", see
-// dashboard_handler.go's dashboardAgentFromUser) -- that field is "is the agent
-// checking in on schedule"; ROUTER_STATE is "is everything this agent reports
-// actually healthy", the bot's own classification of tunnels + incidents. A
-// future screen that reproduces the bot's ClassifyState logic client-side is
-// the intended consumer, not a rename of the existing status badge.
-export const ROUTER_STATE = {
-  ok: 'Всё работает',
-  degraded: 'Есть подозрения',
-  hard: 'Есть проблема',
-  offline: 'Роутер не на связи',
-}
-
 // Mirrors alerts/format.go:700-710 (humanPingStatus) exactly, including its
 // fallback: an unrecognized status is echoed as-is rather than swallowed into
 // blank, same honesty rule as checkLabel above -- a status this function
@@ -63,9 +46,18 @@ export function pingLabel(status) {
   }
 }
 
-// Mirrors tg/tunnels_panel.go:50-90 (formatTunnelRow + humanTunnelStatus) --
-// same branches, same order, so the mini app and the bot never disagree about
-// one tunnel. One deliberate departure from that source, though: `t.enabled`
+// Failure and disabled wording is ported verbatim from humanTunnelStatus
+// (tg/tunnels_panel.go:79-90) -- "остановлен" / "выключен" / "не на связи"
+// mean the same thing to the bot's audience and this one, so they get the
+// same words. The healthy branch is NOT a mirror, though: the bot's healthy
+// row prints only "обмен ключами " + humanAgeShort(...) (tg/tunnels_panel.go:
+// 60-61) -- a bare duration, no verdict -- because whoever reads the bot
+// already has the context to judge whether that duration is fine. The mini
+// app's reader can't be assumed to, so this branch adds a verdict word the
+// bot never says; the consuming screen renders both together (e.g. "работает
+// · обмен ключами 45 сек назад").
+//
+// One further departure, forced rather than chosen for clarity: `t.enabled`
 // here is miniapp_tunnels.go's `*bool` (json `enabled,omitempty`), a NULLABLE
 // tri-state -- true, false, or absent because an old agent (or an unparseable
 // details blob) never reported it. tunnels_panel.go's `Enabled` is a plain
