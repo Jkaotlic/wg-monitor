@@ -734,12 +734,19 @@ body {
   color: var(--muted);
 }
 
+/* Real exit addresses are IPv6 as often as not, and a SLAAC/privacy-extension
+   address (2a02:6b8:b010:0031:0225:90ff:fe0d:8ee0) rarely compresses to
+   anything short -- overflow-wrap: anywhere lets it break inside this
+   column's width instead of forcing the whole 380px screen to scroll
+   sideways, while leaving short IPv4 addresses on one line since it only
+   breaks when there's no other option. */
 .compare-probe-ip {
   margin: var(--sp-1) 0 0;
   font-family: var(--font-mono);
   font-size: var(--fs-md);
   font-weight: 600;
   color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 /* Genuinely no IP for this side -- an honest gap, not a guess, so it reads as
@@ -766,6 +773,10 @@ body {
   line-height: var(--lh-normal);
   color: var(--muted-ink);
   white-space: pre-line;
+  /* Same long-IPv6 "Exit IP: ..." line as .compare-probe-ip above, just
+     inside this verbatim report -- same overflow-wrap fix so it wraps
+     instead of widening the page. */
+  overflow-wrap: anywhere;
 }
 
 /* Three readings of the same comparison, same recipe as .traffic-note (12-16%
