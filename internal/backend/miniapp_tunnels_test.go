@@ -218,3 +218,40 @@ func TestMiniappDeriveTrafficNoTunnelsAtAll(t *testing.T) {
 		t.Fatalf("no tunnels reported yet -- want %q, got %q", miniappTrafficUnknown, got.Mode)
 	}
 }
+
+// LatestEventsByPrefixSince picks the latest row per check_name independently
+// (db/events.go), so one poll's fresh "not the egress" for awg10 can sit next
+// to a stale row for awg12 whose blip left active_default_known=false behind.
+// awg12's false is not "confirmed not the egress" -- it is "we never asked
+// this cycle" -- so declaring direct here would be exactly the guess this
+// function exists to refuse.
+func TestMiniappDeriveTrafficUnknownWhenSiblingUnknown(t *testing.T) {
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg10", Status: "ok", ActiveDefaultKnown: true, IsActiveDefault: false},
+		{TunnelID: "awg12", Status: "ok", ActiveDefaultKnown: false},
+	}
+	got := miniappDeriveTraffic(tunnels, nil)
+	if got.Mode != miniappTrafficUnknown {
+		t.Fatalf("one tunnel's egress status is unreadable -- want %q, got %q", miniappTrafficUnknown, got.Mode)
+	}
+	if got.EgressTunnelID != "" {
+		t.Fatalf("must not guess an egress, got %q", got.EgressTunnelID)
+	}
+}
+
+// A known tunnel claiming the egress is authoritative regardless of what its
+// siblings could or couldn't report -- traffic demonstrably leaves through
+// it, and a sibling's ignorance doesn't undo that.
+func TestMiniappDeriveTrafficVPNWinsDespiteUnknownSibling(t *testing.T) {
+	tunnels := []miniappTunnel{
+		{TunnelID: "awg12", Name: "amst", Status: "ok", ActiveDefaultKnown: true, IsActiveDefault: true},
+		{TunnelID: "awg10", Status: "ok", ActiveDefaultKnown: false},
+	}
+	got := miniappDeriveTraffic(tunnels, nil)
+	if got.Mode != miniappTrafficVPN {
+		t.Fatalf("known egress must win over an unknown sibling -- want %q, got %q", miniappTrafficVPN, got.Mode)
+	}
+	if got.EgressTunnelID != "awg12" || got.EgressTunnelName != "amst" {
+		t.Fatalf("want egress awg12/amst, got %+v", got)
+	}
+}

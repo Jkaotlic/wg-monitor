@@ -172,12 +172,12 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 		return out
 	}
 
-	known := false
+	allKnown := true
 	for _, t := range tunnels {
 		if !t.ActiveDefaultKnown {
+			allKnown = false
 			continue
 		}
-		known = true
 		if t.IsActiveDefault {
 			out.Mode = miniappTrafficVPN
 			out.EgressTunnelID = t.TunnelID
@@ -185,9 +185,15 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 			return out
 		}
 	}
-	if known {
-		// awg-manager answered, and no tunnel is the egress: traffic leaves
-		// through the WAN.
+	if allKnown {
+		// Every tunnel answered and none is the egress: traffic leaves through
+		// the WAN. But LatestEventsByPrefixSince picks the latest row per
+		// check_name independently (db/events.go), so this slice can mix a
+		// tunnel's fresh state with a sibling's stale row from before it
+		// dropped out of awg-manager -- that sibling's ActiveDefaultKnown=false
+		// means "never asked this cycle", not "confirmed not the egress". One
+		// unread tunnel is enough doubt to withhold "direct" and say "unknown"
+		// instead.
 		out.Mode = miniappTrafficDirect
 	}
 	return out
