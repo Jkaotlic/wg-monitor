@@ -83,10 +83,16 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	if routingErr != nil {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/tunnels failed: %v", routingErr))
 	}
-	if policiesErr != nil {
+	// 404 на любой из двух выборок политик -- это не отказ, а ответ роутера
+	// "я старая сборка": сигнал модели, а не потеря данных. Warnings ниже по
+	// потоку означает "снапшот неполный" (панель бота, баннер мини-аппа), и
+	// клеймить им каждый опрос легаси-половины парка значило бы врать о
+	// состоянии роутера, у которого всё в порядке. Предупреждаем о том, что
+	// классифицировать не смогли: 500, таймаут, ошибка разбора.
+	if policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr) {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/access-policies failed: %v", policiesErr))
 	}
-	if polIfacesErr != nil {
+	if polIfacesErr != nil && !awgmgr.IsEndpointMissing(polIfacesErr) {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/policy-interfaces failed: %v", polIfacesErr))
 	}
 	b, err := json.Marshal(snap)

@@ -101,6 +101,10 @@ func TestRouteStatus_PolicyInterfacesErrorAddsWarning(t *testing.T) {
 	if !hasWarningAbout(snap, "/api/routing/policy-interfaces") {
 		t.Fatalf("provider of up/down failed silently; warnings = %+v", snap.Warnings)
 	}
+	// Ровно одна строка: 502 -- это настоящий отказ, и он один.
+	if len(snap.Warnings) != 1 {
+		t.Errorf("warnings = %+v, want exactly one", snap.Warnings)
+	}
 	// Роли при этом честно деградируют -- это не ошибка, а следствие; важно,
 	// что экран узнаёт о неполноте снимка.
 	if len(snap.Policies) != 1 || snap.Policies[0].ActiveTunnelID != "" {
@@ -128,6 +132,24 @@ func TestRouteStatus_MissingPoliciesEndpointKeepsLegacyModel(t *testing.T) {
 	if snap.Other.DNS != 0 {
 		t.Errorf("Other = %+v, want zero on the legacy path", snap.Other)
 	}
+	// И главное: снимок НЕ неполный. 404 -- это ответ роутера "я старая
+	// сборка", а не пропавшие данные. Иначе вся легаси-половина парка
+	// навсегда получает "⚠ снапшот неполный" на каждом опросе -- ложь о
+	// состоянии роутера, у которого всё в порядке.
+	if len(snap.Warnings) != 0 {
+		t.Errorf("an absent endpoint must not brand the snapshot incomplete: %+v", snap.Warnings)
+	}
+}
+
+// То же и для второй выборки по отдельности: отсутствующий эндпоинт --
+// сигнал модели, а не потеря данных.
+func TestRouteStatus_MissingPolicyInterfacesEndpointDoesNotWarn(t *testing.T) {
+	srv := fakeDegradedRouter(t, degradedRouterOpts{polIfacesStatus: http.StatusNotFound})
+	snap := routeStatusSnapshot(t, srv)
+
+	if len(snap.Warnings) != 0 {
+		t.Errorf("404 on policy-interfaces must not warn: %+v", snap.Warnings)
+	}
 }
 
 // 500/таймаут -- это НЕ "старая сборка". Уйти в старую модель здесь значит
@@ -138,6 +160,11 @@ func TestRouteStatus_PolicyReadErrorDoesNotInventDefaultBinding(t *testing.T) {
 
 	if !hasWarningAbout(snap, "/api/routing/access-policies") {
 		t.Fatalf("warnings = %+v", snap.Warnings)
+	}
+	// Здесь предупреждение уместно и оно ровно одно: интерфейсы политик
+	// прочитались нормально.
+	if len(snap.Warnings) != 1 {
+		t.Errorf("warnings = %+v, want exactly one", snap.Warnings)
 	}
 	if snap.PolicyModel {
 		t.Error("a failed policy read must not claim the policy model either")
