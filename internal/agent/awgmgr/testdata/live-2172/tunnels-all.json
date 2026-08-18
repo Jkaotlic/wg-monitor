@@ -1,0 +1,88 @@
+{
+  "success": true,
+  "data": {
+    "external": [],
+    "system": [],
+    "tunnels": [
+      {
+        "id": "awg10",
+        "name": "awg3-main-work",
+        "type": "awg",
+        "status": "disabled",
+        "enabled": false,
+        "defaultRoute": true,
+        "endpoint": "198.51.100.10:51772",
+        "address": "10.11.0.5/32",
+        "interfaceName": "opkgtun10",
+        "hasAddressConflict": false,
+        "rxBytes": 2949,
+        "txBytes": 15554,
+        "lastHandshake": "2026-08-17T17:53:43+03:00",
+        "backend": "kernel",
+        "backendType": "kernel",
+        "awgVersion": "awg3",
+        "mtu": 1280,
+        "pingCheck": {
+          "status": "disabled",
+          "restartCount": 0,
+          "failCount": 0,
+          "failThreshold": 0
+        }
+      },
+      {
+        "id": "awg11",
+        "name": "awg3-work-via-ru1",
+        "type": "awg",
+        "status": "running",
+        "enabled": true,
+        "defaultRoute": true,
+        "resolvedIspInterface": "eth3",
+        "resolvedIspInterfaceLabel": "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 Ethernet",
+        "endpoint": "198.51.100.11:443",
+        "address": "10.11.0.7/32",
+        "interfaceName": "opkgtun11",
+        "hasAddressConflict": false,
+        "rxBytes": 3500398346,
+        "txBytes": 2319282339,
+        "lastHandshake": "2026-08-18T13:55:12+03:00",
+        "backend": "kernel",
+        "backendType": "kernel",
+        "awgVersion": "awg3",
+        "mtu": 1280,
+        "startedAt": "2026-08-17T14:53:35Z",
+        "pingCheck": {
+          "status": "alive",
+          "restartCount": 0,
+          "failCount": 0,
+          "failThreshold": 3
+        }
+      },
+      {
+        "id": "awg20",
+        "name": "NetherlandsKerkradeS24",
+        "type": "awg",
+        "status": "disabled",
+        "enabled": false,
+        "defaultRoute": true,
+        "endpoint": "198.51.100.12:45324",
+        "address": "10.69.234.117/32",
+        "interfaceName": "nwg0",
+        "ndmsName": "Wireguard0",
+        "hasAddressConflict": false,
+        "rxBytes": 0,
+        "txBytes": 0,
+        "lastHandshake": "",
+        "backend": "nativewg",
+        "backendType": "nativewg",
+        "awgVersion": "awg2.0",
+        "mtu": 1280,
+        "pingCheck": {
+          "status": "disabled",
+          "restartCount": 0,
+          "failCount": 0,
+          "failThreshold": 0
+        }
+      }
+    ]
+  }
+}

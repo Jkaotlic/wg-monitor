@@ -1,0 +1,45 @@
+{
+  "success": true,
+  "data": [
+    {
+      "name": "OpkgTun11",
+      "label": "awg3-work-via-ru1",
+      "up": true
+    },
+    {
+      "name": "GigabitEthernet1",
+      "label": "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 Ethernet",
+      "up": true
+    },
+    {
+      "name": "OpkgTun10",
+      "label": "awg3-main-work",
+      "up": false
+    },
+    {
+      "name": "Wireguard0",
+      "label": "NetherlandsKerkradeS24",
+      "up": false
+    },
+    {
+      "name": "Bridge1",
+      "label": "Guest network",
+      "up": false
+    },
+    {
+      "name": "CdcEthernet0",
+      "label": "Huawei Mobile Broadband",
+      "up": false
+    },
+    {
+      "name": "WifiMaster0/WifiStation0",
+      "label": "WifiStation (apcli0)",
+      "up": false
+    },
+    {
+      "name": "WifiMaster1/WifiStation0",
+      "label": "WifiStation (apclii0)",
+      "up": false
+    }
+  ]
+}
