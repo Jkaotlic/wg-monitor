@@ -211,6 +211,11 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any
 // router's own UI reads), while mutations go to /api/access-policies/*
 // (see PermitPolicyInterface). Asymmetric, but it is the router's contract —
 // do not "fix" one path to match the other.
+//
+// One deliberate exception: AccessPoliciesFresh below READS from the mutation
+// namespace, because ?refresh=true (the only way past the NDMS cache) exists
+// only there. That is not the mistake this comment forbids — see its own
+// doc for why it is needed and where it is allowed to be used.
 func (c *Client) AccessPolicies(ctx context.Context) ([]AccessPolicy, error) {
 	var env Envelope[[]AccessPolicy]
 	if err := c.get(ctx, "/api/routing/access-policies", &env); err != nil {
@@ -225,6 +230,14 @@ func (c *Client) AccessPolicies(ctx context.Context) ([]AccessPolicy, error) {
 // AccessPoliciesFresh returns the same data as AccessPolicies with the NDMS
 // cache bypassed (the router's own OpenAPI documents ?refresh=true on this
 // endpoint).
+//
+// Note the path: this reads from /api/access-policies — the MUTATION
+// namespace — and it is the one deliberate exception to the split AccessPolicies
+// documents. ?refresh=true exists nowhere else, so a cache-bypassing read has
+// no other address. The flip side is that a build serving the routing
+// namespace need not serve this one; callers must treat IsEndpointMissing here
+// as "no fresh read available", not as a failure (addTunnelToHydraRoutePolicies
+// falls back to the cached list for its post-condition check).
 //
 // Use it ONLY where a stale answer would be misread as a fact. Verifying that
 // a write took effect is that case: re-reading through the cache right after

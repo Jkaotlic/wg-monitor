@@ -362,3 +362,105 @@ func TestAddTunnelToHydraRoutePolicies_VerifiesPastTheNDMSCache(t *testing.T) {
 		t.Errorf("verify read refresh = %q, want true (the NDMS cache must be bypassed)", freshRefresh)
 	}
 }
+
+// Проверка постусловия не имеет права превратить успешный permit в ошибку --
+// с любой стороны.
+//
+// Свежее чтение живёт в неймспейсе /api/access-policies, потому что
+// ?refresh=true есть только там. Но до проверки мы доходим, лишь успешно
+// прочитав /api/routing/access-policies, и сборка, обслуживающая routing-путь
+// и не обслуживающая простой, вернёт 404 именно на верификации: сработавшая
+// привязка была бы объявлена провалом. Это тот же ложный отказ, ради
+// устранения которого свежее чтение и появилось, только с другой стороны.
+func TestAddTunnelToHydraRoutePolicies_FallsBackToCachedVerifyWhenFreshIsAbsent(t *testing.T) {
+	live := map[string][]awgmgr.AccessPolicyInterface{
+		"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+	}
+	var freshCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		out := []awgmgr.AccessPolicy{}
+		for name, chain := range live {
+			out = append(out, awgmgr.AccessPolicy{Name: name, Interfaces: chain})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": out})
+	})
+	// Простого неймспейса на этой сборке нет вовсе.
+	mux.HandleFunc("/api/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		freshCalls++
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":true,"message":"эндпоинт не найден"}`))
+	})
+	mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "Wireguard0", Up: false},
+		}})
+	})
+	mux.HandleFunc("/api/access-policies/permit", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name      string `json:"name"`
+			Interface string `json:"interface"`
+			Order     int    `json:"order"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		live[body.Name] = append(live[body.Name], awgmgr.AccessPolicyInterface{Name: body.Interface, Order: body.Order})
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err != nil {
+		t.Fatalf("permit worked but was reported as failed: %v", err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1", changed)
+	}
+	// Свежий путь всё же пробуется первым: откат -- только на его отсутствие.
+	if freshCalls == 0 {
+		t.Error("the fresh read must be attempted before falling back")
+	}
+}
+
+// Любой другой отказ свежего чтения по-прежнему ошибка: 500 не означает
+// "эндпоинта нет", и проверять постусловие нам в этот момент нечем.
+func TestAddTunnelToHydraRoutePolicies_FreshVerifyErrorStillFails(t *testing.T) {
+	live := map[string][]awgmgr.AccessPolicyInterface{
+		"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		out := []awgmgr.AccessPolicy{}
+		for name, chain := range live {
+			out = append(out, awgmgr.AccessPolicy{Name: name, Interfaces: chain})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": out})
+	})
+	mux.HandleFunc("/api/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "Wireguard0", Up: false},
+		}})
+	})
+	mux.HandleFunc("/api/access-policies/permit", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name      string `json:"name"`
+			Interface string `json:"interface"`
+			Order     int    `json:"order"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		live[body.Name] = append(live[body.Name], awgmgr.AccessPolicyInterface{Name: body.Interface, Order: body.Order})
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	if _, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel); err == nil {
+		t.Fatal("want error: the verify read failed for a reason other than an absent endpoint")
+	}
+}
