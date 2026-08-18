@@ -144,3 +144,37 @@ func TestBuildRouteSnapshot_PolicyWithNothingUpHasNoActive(t *testing.T) {
 		t.Errorf("role = %q", snap.Policies[0].Interfaces[0].Role)
 	}
 }
+
+// Роутер без /api/routing/access-policies (2.8.x и кастомные сборки): привязка
+// живёт в самом правиле. Поведение обязано остаться ровно таким, как до фазы B.
+func TestBuildRouteSnapshot_LegacyModelUnchanged(t *testing.T) {
+	tunnels := awgmgr.TunnelsAll{Tunnels: []awgmgr.Tunnel{
+		{ID: "awg11", Name: "amst", InterfaceName: "nwg1", NDMSName: "Wireguard1", Enabled: true, DefaultRoute: true},
+		{ID: "awg12", Name: "fra", InterfaceName: "nwg0", NDMSName: "Wireguard0", Enabled: true},
+	}}
+	dns := []awgmgr.DNSRoute{
+		{ID: "hr:A", Name: "A", Enabled: true, Backend: "hydraroute", HRRouteMode: "policy",
+			HRPolicyName: "HydraRoute", HRPolicyInterfaces: []string{"nwg1", "nwg0"}},
+		{ID: "hr:B", Name: "B", Enabled: true, Backend: "hydraroute",
+			Routes: []awgmgr.DNSRouteEntry{{Interface: "nwg0", TunnelID: "nwg0"}}},
+	}
+
+	// Политик нет -- ровно это и означает старую модель.
+	snap := buildRouteSnapshot(nil, &tunnels, nil, dns, nil, "awg11", nil, nil)
+
+	if len(snap.Policies) != 1 || snap.Policies[0].Name != "HydraRoute" || snap.Policies[0].DNS != 1 {
+		t.Fatalf("legacy policy summary = %+v", snap.Policies)
+	}
+	// Роли по-прежнему считаются из доступности туннелей, а не из up/down.
+	if snap.Policies[0].Interfaces[0].Role != "active" {
+		t.Errorf("legacy roles = %+v", snap.Policies[0].Interfaces)
+	}
+	// Правило с явной привязкой по-прежнему кредитуется туннелю.
+	if snap.Counts["awg12"].DNS != 1 {
+		t.Errorf("Counts[awg12] = %+v, want DNS=1", snap.Counts["awg12"])
+	}
+	// Новые поля старая ветка не заполняет -- и не должна.
+	if snap.Policies[0].ActiveTunnelID != "" {
+		t.Errorf("legacy branch must not claim an active tunnel: %q", snap.Policies[0].ActiveTunnelID)
+	}
+}
