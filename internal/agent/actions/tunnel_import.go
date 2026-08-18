@@ -321,7 +321,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 
 	if hs, err := client.HydraRouteStatus(ctx); err == nil && hs.Installed {
 		if imported, ferr := findTunnelByID(ctx, client, newID); ferr == nil && tunnelLooksStarted(*imported) {
-			if changed, perr := addIfaceToHydraRoutePolicies(ctx, client, imported.InterfaceName); perr != nil {
+			if changed, perr := addTunnelToHydraRoutePolicies(ctx, client, *imported); perr != nil {
 				slog.Warn("tunnel import: hydraroute policy update failed", "name", name, "id", newID, "err", perr)
 				fmt.Fprintf(&result, "\n⚠️ HydraRoute policy update failed: %v", perr)
 			} else if changed > 0 {

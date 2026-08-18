@@ -36,7 +36,88 @@ func hrNeoPolicyRoute(name string, targets []string, iface, bindID string) awgmg
 	}
 }
 
-func addIfaceToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, iface string) (int, error) {
+// addIfaceToHydraRoutePolicies makes a freshly imported tunnel reachable as a
+// standby for the router's access policies.
+//
+// On the policy model (awg-manager 2.16+) the binding lives on the policy, so
+// the change is a permit call per policy, not an edit of every rule. On older
+// builds the legacy per-rule path below still applies.
+//
+// Two invariants carry over from the legacy implementation and must not be
+// relaxed:
+//
+//   - a policy with an EMPTY chain is left alone. An empty chain means "follow
+//     the global default"; appending into it would make the fresh tunnel that
+//     policy's sole and therefore active interface, hijacking all of its
+//     traffic the moment a config is imported.
+//   - the new interface goes to the END of the chain (order = len(chain)), so
+//     it is a fallback, never the active egress.
+//
+// And one invariant is new, because its absence WAS the defect: the chain is
+// re-read after the write and the interface must be there. Reporting success
+// without checking is what let this function silently do nothing for months.
+// It takes the whole tunnel, not just its iface: the name /api/access-policies
+// accepts is the NDMS one ("Wireguard0", "OpkgTun12"), and reaching it from a
+// kernel iface ("nwg0") needs every alias the tunnel has.
+func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgmgr.Tunnel) (int, error) {
+	iface := strings.TrimSpace(t.InterfaceName)
+	if iface == "" {
+		return 0, nil
+	}
+	policies, err := c.AccessPolicies(ctx)
+	if err != nil || len(policies) == 0 {
+		// No policies (or no endpoint) — this router runs the legacy model.
+		return addIfaceToHydraRouteRules(ctx, c, iface)
+	}
+	polIfaces, err := c.PolicyInterfaces(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("routing/policy-interfaces: %w", err)
+	}
+	resolver := newPolicyIfaceResolver(nil, polIfaces)
+	permitName, ok := resolver.permitName(t.NDMSName, t.InterfaceName, t.Name, t.ID)
+	if !ok {
+		return 0, fmt.Errorf("access policies do not offer interface %q (the router lists %d policy interfaces)", iface, len(polIfaces))
+	}
+	changed := 0
+	for _, p := range policies {
+		if len(p.Interfaces) == 0 || policyChainHasInterface(p, permitName) {
+			continue
+		}
+		if err := c.PermitPolicyInterface(ctx, p.Name, permitName, len(p.Interfaces)); err != nil {
+			return changed, fmt.Errorf("access-policies/permit %s/%s: %w", p.Name, permitName, err)
+		}
+		changed++
+	}
+	if changed == 0 {
+		return 0, nil
+	}
+	after, err := c.AccessPolicies(ctx)
+	if err != nil {
+		return changed, fmt.Errorf("verify access policies after permit: %w", err)
+	}
+	for _, p := range after {
+		if len(p.Interfaces) == 0 {
+			continue
+		}
+		if !policyChainHasInterface(p, permitName) {
+			return changed, fmt.Errorf("interface %q did not appear in policy %q after permit", permitName, p.Name)
+		}
+	}
+	return changed, nil
+}
+
+func policyChainHasInterface(p awgmgr.AccessPolicy, iface string) bool {
+	for _, existing := range p.Interfaces {
+		if strings.EqualFold(strings.TrimSpace(existing.Name), iface) {
+			return true
+		}
+	}
+	return false
+}
+
+// addIfaceToHydraRouteRules is the legacy per-rule model: it edits every
+// HR-Neo DNS rule directly. Runs when the router serves no access policies.
+func addIfaceToHydraRouteRules(ctx context.Context, c *awgmgr.Client, iface string) (int, error) {
 	iface = strings.TrimSpace(iface)
 	if iface == "" {
 		return 0, nil

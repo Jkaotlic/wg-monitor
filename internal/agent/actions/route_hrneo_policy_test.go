@@ -3,8 +3,10 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
@@ -63,7 +65,7 @@ func TestAddIfaceToHydraRoutePolicies_SkipsGlobalDefaultPolicies(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	changed, err := addIfaceToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), "nwg7")
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), awgmgr.Tunnel{InterfaceName: "nwg7"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,5 +77,139 @@ func TestAddIfaceToHydraRoutePolicies_SkipsGlobalDefaultPolicies(t *testing.T) {
 	}
 	if got := strings.Join(updatedBodies[0].HRPolicyInterfaces, ","); got != "nwg1,nwg7" {
 		t.Fatalf("pinned policy interfaces=%q, want nwg1,nwg7 (new tunnel appended as fallback)", got)
+	}
+}
+
+// Заглушка awg-manager на модели политик: отдаёт цепочки, принимает permit и
+// показывает результат в следующем чтении.
+type policyStub struct {
+	policies map[string][]awgmgr.AccessPolicyInterface
+	ifaces   []awgmgr.PolicyInterface
+	permits  []string
+	drop     bool // роутер отвечает 200, но ничего не меняет
+}
+
+func (s *policyStub) server(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		out := []awgmgr.AccessPolicy{}
+		for name, chain := range s.policies {
+			out = append(out, awgmgr.AccessPolicy{Name: name, Interfaces: chain})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": out})
+	})
+	mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": s.ifaces})
+	})
+	mux.HandleFunc("/api/access-policies/permit", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name      string `json:"name"`
+			Interface string `json:"interface"`
+			Order     int    `json:"order"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		s.permits = append(s.permits, fmt.Sprintf("%s/%s@%d", body.Name, body.Interface, body.Order))
+		if !s.drop {
+			s.policies[body.Name] = append(s.policies[body.Name], awgmgr.AccessPolicyInterface{Name: body.Interface, Order: body.Order})
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestAddTunnelToHydraRoutePolicies_AppendsAsLastFallback(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"HydraRoute": {{Name: "OpkgTun11", Order: 0}, {Name: "OpkgTun10", Order: 1}},
+		},
+		ifaces: []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "OpkgTun10", Up: false},
+			{Name: "Wireguard0", Label: "NetherlandsKerkradeS24", Up: false},
+		},
+	}
+	srv := s.server(t)
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", Name: "NetherlandsKerkradeS24", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err != nil {
+		t.Fatalf("addIfaceToHydraRoutePolicies: %v", err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1", changed)
+	}
+	// Новый туннель приезжает последним резервом: заняв нулевой приоритет,
+	// он перехватил бы весь трафик политики сразу после импорта.
+	if len(s.permits) != 1 || s.permits[0] != "HydraRoute/Wireguard0@2" {
+		t.Errorf("permits = %+v", s.permits)
+	}
+}
+
+func TestAddTunnelToHydraRoutePolicies_SkipsEmptyChain(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{"HydraRoute": nil},
+		ifaces:   []awgmgr.PolicyInterface{{Name: "Wireguard0", Up: false}},
+	}
+	srv := s.server(t)
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	// Пустая цепочка означает "следуй глобальному маршруту". Добавив туда
+	// единственный интерфейс, мы сделали бы его активным для всей политики.
+	if changed != 0 || len(s.permits) != 0 {
+		t.Errorf("changed=%d permits=%+v", changed, s.permits)
+	}
+}
+
+func TestAddTunnelToHydraRoutePolicies_SkipsAlreadyPresent(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"HydraRoute": {{Name: "Wireguard0", Order: 0}},
+		},
+		ifaces: []awgmgr.PolicyInterface{{Name: "Wireguard0", Up: true}},
+	}
+	srv := s.server(t)
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err != nil || changed != 0 || len(s.permits) != 0 {
+		t.Errorf("changed=%d err=%v permits=%+v", changed, err, s.permits)
+	}
+}
+
+func TestAddTunnelToHydraRoutePolicies_FailsWhenRouterDoesNotOfferInterface(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+		},
+		ifaces: []awgmgr.PolicyInterface{{Name: "OpkgTun11", Up: true}},
+	}
+	srv := s.server(t)
+	tunnel := awgmgr.Tunnel{ID: "awg99", Name: "unknown", InterfaceName: "nwg9"}
+	_, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err == nil {
+		t.Fatal("want error: the router offers no such interface to policies")
+	}
+}
+
+func TestAddTunnelToHydraRoutePolicies_FailsWhenPostconditionNotMet(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+		},
+		ifaces: []awgmgr.PolicyInterface{{Name: "OpkgTun11", Up: true}, {Name: "Wireguard0", Up: false}},
+		drop:   true,
+	}
+	srv := s.server(t)
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	_, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	// Исходный дефект и был в том, что функция рапортовала об успехе, не
+	// проверив результат. Повторять его в новом коде нельзя.
+	if err == nil {
+		t.Fatal("want error: interface did not appear in the chain after permit")
 	}
 }
