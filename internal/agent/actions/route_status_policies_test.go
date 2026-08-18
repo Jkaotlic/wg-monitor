@@ -30,7 +30,7 @@ func TestBuildRouteSnapshot_LivePolicyModel(t *testing.T) {
 	policies := loadLiveFixture[[]awgmgr.AccessPolicy](t, "access-policies.json")
 	polIfaces := loadLiveFixture[[]awgmgr.PolicyInterface](t, "policy-interfaces.json")
 
-	snap := buildRouteSnapshot(nil, &tunnels, routing, dns, nil, "direct", policies, polIfaces)
+	snap := buildRouteSnapshot(nil, &tunnels, routing, dns, nil, "direct", policies, polIfaces, false)
 
 	if !snap.PolicyModel {
 		t.Error("snapshot must flag that the agent read access policies")
@@ -99,7 +99,7 @@ func TestBuildRouteSnapshot_PolicyChainSortedByOrder(t *testing.T) {
 		{Name: "OpkgTun10", Up: true},
 		{Name: "OpkgTun11", Up: true},
 	}
-	snap := buildRouteSnapshot(nil, nil, nil, nil, nil, "", policies, polIfaces)
+	snap := buildRouteSnapshot(nil, nil, nil, nil, nil, "", policies, polIfaces, false)
 	chain := snap.Policies[0].Interfaces
 	if len(chain) != 2 || chain[0].Bind != "OpkgTun11" || chain[0].Role != "active" {
 		t.Fatalf("chain = %+v", chain)
@@ -125,7 +125,7 @@ func TestBuildRouteSnapshot_InterfaceModeRuleCreditedToItsTunnel(t *testing.T) {
 	}}
 	polIfaces := []awgmgr.PolicyInterface{{Name: "OpkgTun11", Up: true}, {Name: "Wireguard0", Up: true}}
 
-	snap := buildRouteSnapshot(nil, &tunnels, nil, dns, nil, "", policies, polIfaces)
+	snap := buildRouteSnapshot(nil, &tunnels, nil, dns, nil, "", policies, polIfaces, false)
 	if snap.Counts["awg20"].DNS != 1 {
 		t.Errorf("Counts[awg20] = %+v, want DNS=1", snap.Counts["awg20"])
 	}
@@ -140,7 +140,7 @@ func TestBuildRouteSnapshot_PolicyWithNothingUpHasNoActive(t *testing.T) {
 		Interfaces: []awgmgr.AccessPolicyInterface{{Name: "OpkgTun10", Order: 0}},
 	}}
 	polIfaces := []awgmgr.PolicyInterface{{Name: "OpkgTun10", Up: false}}
-	snap := buildRouteSnapshot(nil, nil, nil, nil, nil, "", policies, polIfaces)
+	snap := buildRouteSnapshot(nil, nil, nil, nil, nil, "", policies, polIfaces, false)
 	if snap.Policies[0].ActiveTunnelID != "" || snap.Policies[0].ViaVPN {
 		t.Errorf("policy with a dead chain must claim no active egress: %+v", snap.Policies[0])
 	}
@@ -164,7 +164,7 @@ func TestBuildRouteSnapshot_LegacyModelUnchanged(t *testing.T) {
 	}
 
 	// Политик нет -- ровно это и означает старую модель.
-	snap := buildRouteSnapshot(nil, &tunnels, nil, dns, nil, "awg11", nil, nil)
+	snap := buildRouteSnapshot(nil, &tunnels, nil, dns, nil, "awg11", nil, nil, false)
 
 	if len(snap.Policies) != 1 || snap.Policies[0].Name != "HydraRoute" || snap.Policies[0].DNS != 1 {
 		t.Fatalf("legacy policy summary = %+v", snap.Policies)
@@ -189,7 +189,7 @@ func TestBuildRouteSnapshot_LegacyModelUnchanged(t *testing.T) {
 func TestBuildRouteSnapshot_RestartMethodTellsScreenWhatIsPossible(t *testing.T) {
 	tunnels := loadLiveFixture[awgmgr.TunnelsAll](t, "tunnels-all.json")
 	routing := loadLiveFixture[[]awgmgr.RoutingTunnel](t, "routing-tunnels.json")
-	snap := buildRouteSnapshot(nil, &tunnels, routing, nil, nil, "direct", nil, nil)
+	snap := buildRouteSnapshot(nil, &tunnels, routing, nil, nil, "direct", nil, nil, false)
 	got := map[string]string{}
 	for _, t := range snap.Tunnels {
 		got[t.ID] = t.RestartMethod

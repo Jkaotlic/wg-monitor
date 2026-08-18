@@ -18,16 +18,17 @@ import (
 // string suitable for wire.CommandResult.Output.
 func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	var (
-		hr          *awgmgr.HydraRouteStatus
-		tunnels     *awgmgr.TunnelsAll
-		routing     []awgmgr.RoutingTunnel
-		routingErr  error
-		dns         []awgmgr.DNSRoute
-		statics     []awgmgr.StaticRoute
-		settings    *awgmgr.Settings
-		policies    []awgmgr.AccessPolicy
-		policiesErr error
-		polIfaces   []awgmgr.PolicyInterface
+		hr           *awgmgr.HydraRouteStatus
+		tunnels      *awgmgr.TunnelsAll
+		routing      []awgmgr.RoutingTunnel
+		routingErr   error
+		dns          []awgmgr.DNSRoute
+		statics      []awgmgr.StaticRoute
+		settings     *awgmgr.Settings
+		policies     []awgmgr.AccessPolicy
+		policiesErr  error
+		polIfaces    []awgmgr.PolicyInterface
+		polIfacesErr error
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { hr, err = c.HydraRouteStatus(gctx); return })
@@ -52,14 +53,26 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	})
 	g.Go(func() error {
 		// Тоже не фатально: без up/down цепочка всё ещё читается, деградируют
-		// только роли звеньев.
-		polIfaces, _ = c.PolicyInterfaces(gctx)
+		// только роли звеньев. Но деградируют молча и целиком: резолвер считает
+		// НЕизвестный интерфейс лежачим, поэтому активного звена не остаётся ни
+		// у одной политики, ActiveTunnelID пустеет, а бот печатает "нет
+		// доступного интерфейса" на всё подряд. Без строки в Warnings обе морды
+		// покажут это как полный снимок -- поэтому ошибка обязана дойти.
+		polIfaces, polIfacesErr = c.PolicyInterfaces(gctx)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
 		return "", err
 	}
-	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings), policies, polIfaces)
+	// "Эндпоинта нет" и "чтение упало" -- разные факты, и путать их нельзя.
+	// 404 означает сборку без политик: там привязка действительно живёт в
+	// правиле, и старая модель для неё верна. Любой другой отказ (500,
+	// таймаут) оставляет привязку НЕизвестной -- уйти в старую модель значит
+	// приписать правила default-туннелю по выдумке, которую фаза и удаляет.
+	// Путь записи (addTunnelToHydraRoutePolicies) различает эти два случая
+	// ровно так же; чтение обязано быть с ним согласовано.
+	policiesUnknown := policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr)
+	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings), policies, polIfaces, policiesUnknown)
 	if settings != nil && settings.SingboxRouterActive() {
 		snap.SingboxRouter = &wire.SingboxRouterStatus{
 			Enabled:    true,
@@ -72,6 +85,9 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	}
 	if policiesErr != nil {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/access-policies failed: %v", policiesErr))
+	}
+	if polIfacesErr != nil {
+		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/policy-interfaces failed: %v", polIfacesErr))
 	}
 	b, err := json.Marshal(snap)
 	if err != nil {
@@ -97,7 +113,14 @@ func activeDefaultTunnelID(s *awgmgr.Settings) string {
 // no explicit hrPolicyInterfaces fall through to the live default egress, so we
 // must credit/label them against the tunnel awg-manager actually routes
 // through — not just the first defaultRoute=true tunnel encountered.
-func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string, policies []awgmgr.AccessPolicy, polIfaces []awgmgr.PolicyInterface) wire.RouteSnapshot {
+//
+// policiesUnknown says the router HAS the access-policies endpoint and reading
+// it failed anyway (anything but a 404). Then the binding of every
+// policy-bound rule is unknown, and unknown is not the default route: such
+// rules go to snap.Other rather than being credited to a tunnel by guesswork.
+// An empty policies slice with policiesUnknown=false is the honest old-build
+// case and keeps the legacy per-rule behaviour.
+func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string, policies []awgmgr.AccessPolicy, polIfaces []awgmgr.PolicyInterface, policiesUnknown bool) wire.RouteSnapshot {
 	snap := wire.RouteSnapshot{Counts: make(map[string]wire.TunnelCounts)}
 	if hr != nil {
 		snap.HRNeo = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
@@ -267,6 +290,13 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				} else {
 					creditOther(isHR, false)
 				}
+			} else if policiesUnknown && isMovableHRNeoFallthrough(r) {
+				// Привязка такого правила лежит на политике, а политики не
+				// прочитались. Имя политики -- всё, что мы честно знаем;
+				// куда она ведёт, не знает никто, поэтому правило идёт в
+				// Other, а не туннелю по умолчанию.
+				ruleBind = routePolicyLabel(r)
+				creditOther(isHR, false)
 			} else {
 				if isMovableHRNeoFallthrough(r) && len(r.HRPolicyInterfaces) > 0 {
 					ruleBind = routePolicyLabel(r)
