@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { parseRouteSnapshot, routingVerdict, policyRows, rulesByBind } from '../routes.js'
+import { parseRouteSnapshot, routingVerdict, policyRows, tunnelRows, rulesByBind } from '../routes.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 
@@ -18,9 +18,10 @@ function ruleTargets(rule) {
   return targets.length > 3 ? `${shown} и ещё ${targets.length - 3}` : shown
 }
 
-// Маршруты: только чтение. Управление появится, когда система научится
-// верно читать привязку правил к политикам роутера (раздел 3 спеки Phase 5) --
-// переключатель поверх неверной раскладки управлял бы выдумкой.
+// Маршруты: только чтение. Привязка правил берётся из политик доступа
+// роутера, поэтому раскладке ниже можно верить. Управление сюда не вынесено
+// сознательно -- перенос правил между туннелями требует превью, подтверждения
+// и отката, и он относится к фазе рабочего места оператора.
 export function RoutesTab({ routerID, asleep }) {
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
@@ -37,6 +38,7 @@ export function RoutesTab({ routerID, asleep }) {
 
   const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
+  const tunnels = tunnelRows(snapshot)
   const groups = rulesByBind(snapshot)
 
   return (
@@ -74,25 +76,22 @@ export function RoutesTab({ routerID, asleep }) {
 
       {snapshot && (
         <Section title="Туннели в маршрутизации">
-          {snapshot.tunnels?.length ? (
+          {tunnels.length ? (
             <ul class="card list-reset">
-              {snapshot.tunnels.map((t) => {
-                const counts = snapshot.counts?.[t.id]
-                const total = (counts?.dns ?? 0) + (counts?.static ?? 0)
-                return (
-                  <li key={t.id} class="row tunnel-row">
-                    <span class="tunnel-name">
-                      <span class="row-title">{t.name || t.id}</span>
-                      {t.name && t.name !== t.id && <span class="tunnel-id">{t.id}</span>}
-                    </span>
-                    {t.default_route && <Chip tone="ok">основной маршрут</Chip>}
-                    <span class="tunnel-sub">
-                      {total > 0 ? `${total} правил ведут сюда` : 'правил на него нет'}
-                      {counts?.hr_neo ? ` · из них ${counts.hr_neo} через HydraRoute` : ''}
-                    </span>
-                  </li>
-                )
-              })}
+              {tunnels.map((t) => (
+                <li key={t.id} class="row tunnel-row">
+                  <span class="tunnel-name">
+                    <span class="row-title">{t.name}</span>
+                    {t.name !== t.id && <span class="tunnel-id">{t.id}</span>}
+                  </span>
+                  {t.defaultRoute && <Chip tone="ok">основной маршрут</Chip>}
+                  <span class="tunnel-sub">
+                    {t.total > 0 ? `${t.total} правил ведут сюда` : 'правил на него нет'}
+                    {t.policyRules ? ` · ${t.policyRules} из них через политику` : ''}
+                    {t.hrNeo ? ` · ${t.hrNeo} через HydraRoute` : ''}
+                  </span>
+                </li>
+              ))}
             </ul>
           ) : (
             <div class="card">
@@ -167,8 +166,9 @@ export function RoutesTab({ routerID, asleep }) {
 
       {snapshot && (
         <p class="admin-note">
-          Менять маршруты отсюда пока нельзя: система ещё не читает привязку правил к политикам
-          роутера верно, и переключатель управлял бы не тем, что показан выше.
+          Раскладка выше читается из политик доступа роутера — это то, куда трафик идёт на самом
+          деле. Менять маршруты отсюда нельзя намеренно: перенос правил между туннелями требует
+          превью и отката, и он появится вместе с рабочим местом оператора.
         </p>
       )}
     </div>
