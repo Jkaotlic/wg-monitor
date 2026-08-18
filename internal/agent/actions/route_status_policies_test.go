@@ -185,3 +185,25 @@ func TestBuildRouteSnapshot_LegacyModelUnchanged(t *testing.T) {
 		t.Error("legacy snapshot (policies == nil) must not claim to have read policies")
 	}
 }
+
+func TestBuildRouteSnapshot_RestartMethodTellsScreenWhatIsPossible(t *testing.T) {
+	tunnels := loadLiveFixture[awgmgr.TunnelsAll](t, "tunnels-all.json")
+	routing := loadLiveFixture[[]awgmgr.RoutingTunnel](t, "routing-tunnels.json")
+	snap := buildRouteSnapshot(nil, &tunnels, routing, nil, nil, "direct", nil, nil)
+	got := map[string]string{}
+	for _, t := range snap.Tunnels {
+		got[t.ID] = t.RestartMethod
+	}
+	// opkg-туннель перезапускается по id -- кнопка предлагается.
+	if got["awg11"] != "control" {
+		t.Errorf("awg11 restart_method = %q, want control", got["awg11"])
+	}
+	// WAN и системные интерфейсы перезапуску не подлежат -- кнопки быть не должно.
+	// Ключ -- "eth3" (iface), а не сырой routing id "wan:eth3": ndmsRouteEndpoint
+	// в route_targets.go всегда использует iface как ID, когда он не пуст -- так
+	// же, как во всех соседних тестах пакета (route_ifaces_test.go,
+	// route_status_test.go, route_rebind_test.go).
+	if got["eth3"] != "none" {
+		t.Errorf("eth3 restart_method = %q, want none", got["eth3"])
+	}
+}

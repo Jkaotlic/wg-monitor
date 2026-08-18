@@ -118,6 +118,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				HasHandshake: t.LastHandshake.Time() != nil,
 				HandshakeAge: handshakeAgeSeconds(t.LastHandshake.Time()),
 				PingStatus:   t.PingCheck.Status, PingFails: t.PingCheck.FailCount, PingFailMax: t.PingCheck.FailThreshold,
+				RestartMethod: "control",
 			})
 			for _, alias := range ep.Aliases {
 				byIface[alias] = ep.ID
@@ -161,6 +162,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
 			ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
 			Enabled: ep.Enabled, Available: ep.Available,
+			RestartMethod: "none",
 		})
 		for _, alias := range ep.Aliases {
 			byIface[alias] = ep.ID

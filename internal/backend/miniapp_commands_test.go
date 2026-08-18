@@ -298,3 +298,73 @@ func TestMiniappCommandTunnelRestartRejectsOtherRoutersTunnelID(t *testing.T) {
 		t.Fatalf("must not enqueue: %+v", sink.enqueued)
 	}
 }
+
+func TestMiniappCommandTunnelRestartOpkgTunnelWithoutNDMSName(t *testing.T) {
+	// Половина туннелей живого роутера -- opkg, у них ndms_name нет вовсе.
+	// Раньше мини-апп отвечал 400 "unknown_tunnel" на существующий туннель.
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg11", "")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	body := `{"action":"tunnel_restart","args":{"tunnel_id":"awg11"}}`
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 {
+		t.Fatalf("enqueued = %+v", sink.enqueued)
+	}
+	if sink.enqueued[0].Args["tunnel_id"] != "awg11" {
+		t.Errorf("args = %+v, want tunnel_id", sink.enqueued[0].Args)
+	}
+	if _, present := sink.enqueued[0].Args["ndms_name"]; present {
+		t.Errorf("args must carry no ndms_name for an opkg tunnel: %+v", sink.enqueued[0].Args)
+	}
+}
+
+func TestMiniappCommandTunnelRestartPassesServerResolvedNDMSName(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg20", "Wireguard0")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	body := `{"action":"tunnel_restart","args":{"tunnel_id":"awg20"}}`
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	// ndms_name по-прежнему приходит ТОЛЬКО от сервера: агенту он нужен как
+	// откат на сборках без /api/control/restart.
+	if sink.enqueued[0].Args["ndms_name"] != "Wireguard0" || sink.enqueued[0].Args["tunnel_id"] != "awg20" {
+		t.Errorf("args = %+v", sink.enqueued[0].Args)
+	}
+}
+
+func TestMiniappCommandTunnelRestartUnknownTunnelStillRejected(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg11", "")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	body := `{"action":"tunnel_restart","args":{"tunnel_id":"awg99"}}`
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Errorf("nothing must be enqueued: %+v", sink.enqueued)
+	}
+}
