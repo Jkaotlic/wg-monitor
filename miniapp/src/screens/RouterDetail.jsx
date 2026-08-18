@@ -9,6 +9,7 @@ import {
 } from '../api.js'
 import { RouterDevice, orderChecks } from '../components/RouterDevice.jsx'
 import { useCommand } from '../useCommand.js'
+import { confirmSheet } from '../sheet.js'
 import {
   ACTION_LABELS,
   checkLabel,
@@ -65,49 +66,33 @@ function isSuppressed(incident) {
 //     because "the button appears to do nothing for 90 seconds" is exactly
 //     the confusion this task exists to remove -- better to say so up front
 //     and let the caller choose to queue it anyway.
-function CommandButton({ routerID, action, args = {}, label, busyLabel, mutatingText, asleep, wrapClass, onDone }) {
+function CommandButton({ routerID, action, args = {}, label, busyLabel, mutatingText, asleep, wrapClass, onDone, openSheet, sheetTitle }) {
   const { busy, result, error, run } = useCommand(routerID)
-  const [confirming, setConfirming] = useState(false)
 
-  function dispatch() {
-    setConfirming(false)
-    // A router already known asleep was just told (via the confirm copy
-    // below) that its command will simply run late -- so this wait gets far
-    // more room than the default 90s before giving up on a reply, matching
-    // the promise just made rather than contradicting it a few seconds later.
+  // Подтверждение и ход выполнения переехали в нижний шит: раньше каждая
+  // кнопка изобретала своё подтверждение прямо внутри карточки, и они
+  // расходились друг с другом. Читающая команда на живом роутере по-прежнему
+  // запускается сразу -- подтверждать нечего.
+  function handleClick() {
+    if ((mutatingText || asleep) && openSheet) {
+      openSheet(
+        confirmSheet({
+          routerID,
+          title: sheetTitle ?? label,
+          body: mutatingText ?? 'Роутер сейчас не на связи. Команда встанет в очередь и выполнится, когда он проснётся.',
+          action,
+          args,
+          buttonLabel: mutatingText ? 'Да, выполнить' : 'Поставить в очередь',
+          danger: Boolean(mutatingText),
+          asleep,
+          onDone,
+        }),
+      )
+      return
+    }
     run(action, args, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }).then((res) => {
       if (res?.status === 'ok' && onDone) onDone()
     })
-  }
-
-  function handleClick() {
-    if ((mutatingText || asleep) && !confirming) {
-      setConfirming(true)
-      return
-    }
-    dispatch()
-  }
-
-  if (confirming) {
-    return (
-      <div class={wrapClass}>
-        {asleep && <p class="state">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>}
-        {mutatingText && <p class="state">{mutatingText}</p>}
-        <div class="command-actions">
-          {/* Red only when confirming actually guards a mutation (mutatingText set,
-              i.e. tunnel_restart). When the sole reason for this step is the asleep
-              gate on a read-only action (force_recheck), "Да, выполнить" just means
-              "queue it anyway" -- styling that as a danger button would tell the
-              reader a harmless probe is destructive. */}
-          <button class={`btn ${mutatingText ? 'btn-danger' : 'btn-primary'}`} onClick={dispatch}>
-            Да, выполнить
-          </button>
-          <button class="btn btn-ghost" onClick={() => setConfirming(false)}>
-            Отмена
-          </button>
-        </div>
-      </div>
-    )
   }
 
   return (
@@ -124,7 +109,7 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
   )
 }
 
-function IncidentCard({ routerID, incident, onUpdate, asleep, onDone }) {
+function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(false)
@@ -187,6 +172,8 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone }) {
           asleep={asleep}
           wrapClass="restart-block"
           onDone={onDone}
+          openSheet={openSheet}
+          sheetTitle={ACTION_LABELS.restartTunnel}
         />
       )}
 
@@ -332,7 +319,7 @@ function TunnelsSection({ tunnels, traffic }) {
 // disproves that verdict (check_via_tunnel/check_direct) is a separate block,
 // ExitCompareSection below (Task 13) -- two independent read-only probes, not
 // a rerun of this one.
-function TrafficSection({ routerID, traffic, asleep, onDone }) {
+function TrafficSection({ routerID, traffic, asleep, onDone, openSheet }) {
   const { title, detail } = trafficLabel(traffic)
   return (
     <section class="section">
@@ -351,6 +338,7 @@ function TrafficSection({ routerID, traffic, asleep, onDone }) {
           asleep={asleep}
           wrapClass="traffic-probe"
           onDone={onDone}
+          openSheet={openSheet}
         />
       </div>
     </section>
@@ -534,7 +522,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
   )
 }
 
-export function RouterDetail({ id, isAdmin, onOpenAdmin }) {
+export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet }) {
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
@@ -666,7 +654,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin }) {
 
       <TunnelsSection tunnels={tunnels} traffic={traffic} />
 
-      <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} />
+      <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} openSheet={openSheet} />
 
       <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
 
@@ -682,6 +670,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin }) {
                 onUpdate={updateIncident}
                 asleep={asleep}
                 onDone={loadData}
+                openSheet={openSheet}
               />
             ))}
           </ul>

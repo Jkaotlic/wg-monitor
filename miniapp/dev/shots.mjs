@@ -15,6 +15,13 @@ const SHOTS = [
   { name: 'router', steps: async () => {} },
   { name: 'fleet', overlay: true, steps: async (page) => page.getByRole('button', { name: 'Мои роутеры' }).click() },
   { name: 'admin', overlay: true, steps: async (page) => page.getByRole('button', { name: /Обслуживание/ }).click({ timeout: 2000 }) },
+  {
+    name: 'sheet',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Перезапустить туннель' }).first().click({ timeout: 2000 })
+    },
+  },
   { name: 'routes', steps: async (page) => page.getByRole('button', { name: 'Маршруты' }).click() },
   { name: 'diag', steps: async (page) => page.getByRole('button', { name: 'Диагностика' }).click() },
   { name: 'events', steps: async (page) => page.getByRole('button', { name: 'События' }).click() },

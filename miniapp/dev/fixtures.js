@@ -76,6 +76,7 @@ const CHECKS = [
 
 const INCIDENTS = [
   { check_name: 'hydraroute', hard_since: agoISO(1800), fail_count: 3, acked: false },
+  { check_name: 'tunnel_awg7', hard_since: agoISO(5400), fail_count: 7, acked: false },
 ]
 
 const HISTORY = [

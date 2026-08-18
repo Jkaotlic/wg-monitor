@@ -17,6 +17,7 @@ import { RouterDetail } from './screens/RouterDetail.jsx'
 import { FleetOverlay } from './screens/FleetOverlay.jsx'
 import { AdminOverlay } from './screens/AdminOverlay.jsx'
 import { NoAccess } from './screens/NoAccess.jsx'
+import { Sheet } from './ui/Sheet.jsx'
 
 function deepLinkRouterID() {
   const params = new URLSearchParams(window.location.search)
@@ -99,6 +100,7 @@ export function App() {
             id={nav.routerID}
             isAdmin={isAdmin}
             onOpenAdmin={() => dispatch({ type: 'overlay', overlay: 'admin' })}
+            openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
           />
         ) : (
           <p class="state">Скоро</p>
@@ -106,6 +108,13 @@ export function App() {
       </div>
       <TabBar tabs={TABS} tab={nav.tab} onTab={(tab) => dispatch({ type: 'tab', tab })} />
       {overlay}
+      {nav.sheet && (
+        <Sheet
+          sheet={nav.sheet}
+          asleep={nav.sheet.asleep}
+          onClose={() => dispatch({ type: 'sheet', sheet: null })}
+        />
+      )}
     </>
   )
 }
