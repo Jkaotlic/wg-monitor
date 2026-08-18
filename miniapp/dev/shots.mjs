@@ -34,6 +34,17 @@ const SHOTS = [
   { name: 'events', steps: async (page) => page.getByRole('button', { name: 'События', exact: true }).click() },
 ]
 
+// Два состояния, которых в фикстурах нет по смыслу: пустой доступ и ровно
+// один роутер. Подменяем ответ списка прямо в браузере, чтобы не заводить
+// ради них второй набор фикстур.
+const OVERRIDES = [
+  { name: 'no-access', routers: [] },
+  {
+    name: 'single-router',
+    routers: [{ id: 1, nickname: 'Дом', status: 'online', last_seen_age_sec: 12 }],
+  },
+]
+
 const browser = await chromium.launch()
 for (const scheme of ['light', 'dark']) {
   const context = await browser.newContext({
@@ -55,6 +66,16 @@ for (const scheme of ['light', 'dark']) {
     // Оверлей перекрывает экран целиком, но fullPage снимает и то, что под
     // ним -- для таких снимков берём ровно видимую область.
     await page.screenshot({ path: `${outDir}${shot.name}-${scheme}.png`, fullPage: !shot.overlay })
+    await page.close()
+  }
+  for (const o of OVERRIDES) {
+    const page = await context.newPage()
+    await page.route('**/v1/miniapp/routers', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify({ routers: o.routers }) }),
+    )
+    await page.goto(base.split('?')[0], { waitUntil: 'networkidle' })
+    await page.waitForTimeout(250)
+    await page.screenshot({ path: `${outDir}${o.name}-${scheme}.png` })
     await page.close()
   }
   await context.close()

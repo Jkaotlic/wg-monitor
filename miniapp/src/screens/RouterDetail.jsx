@@ -198,6 +198,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet 
         </span>
       ) : (
         <div class="incident-actions">
+          <span class="incident-actions-label">{ACTION_LABELS.silenceGroup}</span>
           {SILENCE_OPTIONS.map((opt) => (
             <button
               key={opt.ttl}

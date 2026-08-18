@@ -210,7 +210,9 @@
   align-items: center;
   justify-content: center;
   gap: var(--sp-1);
-  min-height: 32px;
+  /* 44 px -- минимальная зона нажатия пальцем; мини-апп открывают с телефона,
+     и кнопка в 32 px промахивается. */
+  min-height: 44px;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -426,7 +428,14 @@ body {
 .incident-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--sp-2);
+}
+
+.incident-actions-label {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
 }
 
 /* ---------------- Async commands (Task 12) ----------------
