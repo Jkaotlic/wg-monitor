@@ -60,17 +60,75 @@ describe('policyRows', () => {
       ],
     })
     expect(rows).toHaveLength(1)
-    expect(rows[0].chain).toBe('OpkgTun11 → Wireguard1')
+    expect(rows[0].chain.map((i) => i.label)).toEqual(['OpkgTun11', 'Wireguard1'])
     expect(rows[0].rules).toBe(32)
   })
 
-  it('политика без интерфейсов честно говорит, что привязки нет', () => {
-    expect(policyRows({ policies: [{ name: 'RU', dns: 3 }] })[0].chain).toBe('привязки нет')
+  it('политика без интерфейсов даёт пустую цепочку', () => {
+    expect(policyRows({ policies: [{ name: 'RU', dns: 3 }] })[0].chain).toEqual([])
   })
 
   it('снимок без политик даёт пустой список', () => {
     expect(policyRows({})).toEqual([])
     expect(policyRows(null)).toEqual([])
+  })
+})
+
+const liveSnapshot = {
+  policies: [
+    {
+      name: 'HydraRoute',
+      dns: 26,
+      hr_neo: 26,
+      active_tunnel_id: 'awg11',
+      via_vpn: true,
+      interfaces: [
+        { bind: 'OpkgTun11', name: 'awg3-work-via-ru1', role: 'active', available: true, tunnel_id: 'awg11', via_vpn: true },
+        { bind: 'Wireguard0', name: 'NetherlandsKerkradeS24', role: 'unavailable', order: 1, tunnel_id: 'awg20' },
+        { bind: 'OpkgTun10', name: 'awg3-main-work', role: 'unavailable', order: 2, tunnel_id: 'awg10' },
+      ],
+    },
+    {
+      name: 'RU',
+      dns: 2,
+      hr_neo: 2,
+      interfaces: [{ bind: 'GigabitEthernet1', name: 'Подключение Ethernet', role: 'active', available: true }],
+    },
+  ],
+}
+
+describe('policyRows', () => {
+  it('раскладывает цепочку по ролям, а не в одну строку', () => {
+    const [hydra] = policyRows(liveSnapshot)
+    expect(hydra.chain.map((i) => i.role)).toEqual(['active', 'unavailable', 'unavailable'])
+    expect(hydra.chain[0].label).toBe('awg3-work-via-ru1')
+    expect(hydra.rules).toBe(26)
+  })
+
+  it('помечает политику, которая выходит мимо VPN', () => {
+    const [, ru] = policyRows(liveSnapshot)
+    expect(ru.viaVPN).toBe(false)
+    expect(ru.egress).toBe('мимо VPN')
+  })
+
+  it('не помечает политику, идущую через туннель', () => {
+    const [hydra] = policyRows(liveSnapshot)
+    expect(hydra.viaVPN).toBe(true)
+    expect(hydra.egress).toBe('')
+  })
+
+  it('говорит прямо, когда в цепочке нет живого звена', () => {
+    const [dead] = policyRows({
+      policies: [{ name: 'Dead', dns: 1, interfaces: [{ bind: 'OpkgTun10', role: 'unavailable' }] }],
+    })
+    expect(dead.egress).toBe('нет доступного интерфейса')
+  })
+
+  it('снимок старого агента не размечается догадками', () => {
+    const [old] = policyRows({
+      policies: [{ name: 'HydraRoute', dns: 7, interfaces: [{ bind: 'nwg1', name: 'amst', role: 'active', available: true }] }],
+    })
+    expect(old.egress).toBe('')
   })
 })
 

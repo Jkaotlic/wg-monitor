@@ -545,6 +545,45 @@ body {
   color: var(--muted);
 }
 
+/* Цепочка политики: приоритетный список звеньев, не строка. Недоступные
+   звенья приглушены -- оператору важно, какое звено активно сейчас. */
+.policy-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+.policy-link {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.policy-link-order {
+  color: var(--muted);
+  min-width: 1.2em;
+}
+
+.policy-link-role {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.policy-link-unavailable .policy-link-name,
+.policy-link-unavailable .policy-link-role {
+  opacity: 0.55;
+}
+
+/* Политика уходит мимо VPN -- та же тревожная краска, что и другие сбои
+   на этом экране (--danger), не самодельный цвет. */
+.policy-egress {
+  margin-left: var(--sp-2);
+  color: var(--danger);
+  font-size: var(--fs-xs);
+}
+
 /* ---------------- Traffic (§3.4) ----------------
    The headline answer, so it is the one piece of body copy on the screen set
    above --fs-md: it is what the operator opens the app to read. */

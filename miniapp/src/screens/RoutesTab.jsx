@@ -5,6 +5,11 @@ import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
+const POLICY_ROLE_LABEL = {
+  active: 'активный',
+  fallback: 'резерв',
+  unavailable: 'недоступен',
+}
 
 function ruleTargets(rule) {
   const targets = rule.targets ?? []
@@ -101,17 +106,29 @@ export function RoutesTab({ routerID, asleep }) {
         <Section title="Политики">
           <ul class="card list-reset">
             {policies.map((p) => (
-              <li key={p.name} class="row tunnel-row">
-                <span class="row-title">{p.name}</span>
+              <li key={p.name} class="row tunnel-row policy-row">
+                <span class="row-title">
+                  {p.name}
+                  {p.egress ? <span class="policy-egress">{p.egress}</span> : null}
+                </span>
                 <span class="tunnel-sub">
-                  {p.chain} · {p.rules} правил
+                  {p.rules} правил
                   {p.hrNeo ? ` (${p.hrNeo} через HydraRoute)` : ''}
                 </span>
+                <ol class="policy-chain list-reset">
+                  {p.chain.map((i, idx) => (
+                    <li key={i.bind} class={`policy-link policy-link-${i.role}`}>
+                      <span class="policy-link-order">{idx + 1}</span>
+                      <span class="policy-link-name">{i.label}</span>
+                      <span class="policy-link-role">{POLICY_ROLE_LABEL[i.role] ?? i.role}</span>
+                    </li>
+                  ))}
+                </ol>
               </li>
             ))}
           </ul>
           <p class="admin-note">
-            Первый доступный интерфейс в цепочке и несёт трафик политики, остальные ждут как резерв.
+            Первое доступное звено цепочки и несёт трафик политики, остальные ждут как резерв.
           </p>
         </Section>
       )}

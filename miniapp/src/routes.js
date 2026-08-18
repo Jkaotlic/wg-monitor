@@ -69,16 +69,46 @@ export function routingVerdict(snapshot) {
   }
 }
 
+// Цепочка -- это приоритет: первое доступное звено несёт трафик политики,
+// остальные ждут своей очереди. Экран показывает её звеньями, а не строкой:
+// оператору важно, КАКОЕ звено активно, а не вся строка целиком.
 export function policyRows(snapshot) {
   const policies = Array.isArray(snapshot?.policies) ? snapshot.policies : []
-  return policies.map((p) => ({
-    name: p.name,
-    // Цепочка -- это приоритет: первый доступный интерфейс и несёт трафик
-    // политики, остальные ждут своей очереди как резерв.
-    chain: p.interfaces?.length ? p.interfaces.map((i) => i.name || i.bind).join(' → ') : 'привязки нет',
-    rules: (p.dns ?? 0) + (p.static ?? 0),
-    hrNeo: p.hr_neo ?? 0,
-  }))
+  // Старый агент не сопоставляет интерфейсы политики с туннелями. У его
+  // снимка нет ни tunnel_id, ни active_tunnel_id -- доверять отсутствующему
+  // via_vpn и заявлять "мимо VPN" значило бы гадать, поэтому метки просто нет.
+  // Это снимко-широкий флаг: если хоть одна политика знает свои туннели,
+  // значит снимок собрал новый агент, и остальным политикам можно верить так же.
+  const tunnelKnown = policies.some(
+    (p) => p.active_tunnel_id || (p.interfaces ?? []).some((i) => i.tunnel_id),
+  )
+  return policies.map((p) => {
+    const interfaces = p.interfaces ?? []
+    // А вот "нет активного звена" -- факт, а не догадка, как только сама
+    // политика явно проставляет role хотя бы одному интерфейсу: старый агент
+    // role вообще не присылает, поэтому это проверяется отдельно от туннелей.
+    const roleKnown = interfaces.some((i) => i.role !== undefined)
+    const chain = interfaces.map((i) => ({
+      label: i.name || i.bind,
+      bind: i.bind,
+      role: i.role || 'unavailable',
+      viaVPN: Boolean(i.via_vpn),
+    }))
+    const active = chain.find((i) => i.role === 'active')
+    let egress = ''
+    if (chain.length > 0) {
+      if (roleKnown && !active) egress = 'нет доступного интерфейса'
+      else if (tunnelKnown && active && !active.viaVPN) egress = 'мимо VPN'
+    }
+    return {
+      name: p.name,
+      chain,
+      rules: (p.dns ?? 0) + (p.static ?? 0),
+      hrNeo: p.hr_neo ?? 0,
+      viaVPN: Boolean(p.via_vpn),
+      egress,
+    }
+  })
 }
 
 // Правила группируются по привязке: оператор спрашивает "что уходит в этот
