@@ -231,7 +231,7 @@ function Antenna({ slot, tunnel, egress, waveOrigin }) {
   // Surface-relative tokens on purpose, unlike the lamps: the whole antenna is
   // drawn above the shell, against --surface, which is the background --status-*
   // is written to self-correct for. Only what rides the material takes -on-metal.
-  const hue = alive ? 'var(--status-online)' : 'var(--status-offline)'
+  const hue = alive ? 'var(--ok)' : 'var(--muted)'
   // Three tiers, all of them the mockup's own: the live egress gets its full
   // radiating fan (the mockup's awg12), a healthy non-egress tunnel gets the faint
   // standing field (its awg10), and a dead one gets that same standing field in
@@ -490,7 +490,7 @@ export function RouterDevice({ tunnels = [], traffic, checks = [], name }) {
             orient="auto"
             markerUnits="strokeWidth"
           >
-            <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--accent-ink)" />
+            <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--accent)" />
           </marker>
         </defs>
 
