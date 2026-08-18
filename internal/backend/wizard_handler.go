@@ -980,7 +980,9 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			out["ndms_name"] = ndms
 		}
 		if len(out) == 0 {
-			writeJSONError(w, http.StatusBadRequest, "invalid_ndms_name", "tunnel_id or ndms_name is required")
+			// Не "невалидный ndms_name", а вовсе не переданный идентификатор:
+			// код ошибки -- контракт, и он обязан называть настоящую причину.
+			writeJSONError(w, http.StatusBadRequest, "missing_tunnel_identifier", "tunnel_id or ndms_name is required")
 			return nil, false
 		}
 		return out, true

@@ -211,7 +211,7 @@ func TestMiniappCommandResultStrangerGets404BeforeExistence(t *testing.T) {
 }
 
 // seedMiniappTunnelEvent inserts a tunnel_<tunnelID> event for routerID whose
-// details carry ndms_name -- the only way miniappResolveTunnelNDMSName can
+// details carry ndms_name -- the only way miniappResolveTunnelRestartArgs can
 // learn the router-local interface name for that tunnel.
 func seedMiniappTunnelEvent(t *testing.T, d *db.DB, routerID int64, tunnelID, ndmsName string) {
 	t.Helper()

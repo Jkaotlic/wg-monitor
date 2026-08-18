@@ -34,7 +34,7 @@ import (
 //     is provably one tunnel on one router the caller already administers: the
 //     client sends a tunnel_id, never an ndms_name, and miniappCommandHandler
 //     resolves that id to the router's NDM interface name from THIS router's own
-//     tunnel_* event rows (see miniappResolveTunnelNDMSName below). An interface
+//     tunnel_* event rows (see miniappResolveTunnelRestartArgs below). An interface
 //     the backend has no tunnel_<id> event for is unreachable, not merely
 //     rejected -- sanitizeWizardCommandArgs's regex check on ndms_name is a
 //     wizard-side belt-and-braces, not what makes this safe for a mini-app
