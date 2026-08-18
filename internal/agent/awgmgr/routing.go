@@ -203,3 +203,75 @@ func (c *Client) postJSON(ctx context.Context, path string, body []byte, out any
 	}
 	return nil
 }
+
+// AccessPolicies returns /api/routing/access-policies .data.
+//
+// Read and write live in DIFFERENT namespaces on awg-manager: the routing
+// snapshot is served from /api/routing/access-policies (this is what the
+// router's own UI reads), while mutations go to /api/access-policies/*
+// (see PermitPolicyInterface). Asymmetric, but it is the router's contract —
+// do not "fix" one path to match the other.
+func (c *Client) AccessPolicies(ctx context.Context) ([]AccessPolicy, error) {
+	var env Envelope[[]AccessPolicy]
+	if err := c.get(ctx, "/api/routing/access-policies", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr routing/access-policies: success=false")
+	}
+	return env.Data, nil
+}
+
+// PolicyInterfaces returns /api/routing/policy-interfaces .data — the
+// interfaces policies may reference, with their live up/down state.
+func (c *Client) PolicyInterfaces(ctx context.Context) ([]PolicyInterface, error) {
+	var env Envelope[[]PolicyInterface]
+	if err := c.get(ctx, "/api/routing/policy-interfaces", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr routing/policy-interfaces: success=false")
+	}
+	return env.Data, nil
+}
+
+// PermitPolicyInterface adds iface to the policy's chain at the given order
+// (lower = higher priority). POST /api/access-policies/permit.
+//
+// iface must be a name the router itself offers in /api/routing/policy-interfaces:
+// kernel iface names ("opkgtun11") are not accepted where NDMS names
+// ("OpkgTun11") are expected.
+func (c *Client) PermitPolicyInterface(ctx context.Context, policy, iface string, order int) error {
+	body, err := json.Marshal(map[string]any{"name": policy, "interface": iface, "order": order})
+	if err != nil {
+		return err
+	}
+	return c.postJSON(ctx, "/api/access-policies/permit", body, nil)
+}
+
+// DenyPolicyInterface removes iface from the policy's chain.
+// DELETE /api/access-policies/permit?name=<policy>&interface=<iface>.
+func (c *Client) DenyPolicyInterface(ctx context.Context, policy, iface string) error {
+	return c.delete(ctx, "/api/access-policies/permit?name="+url.QueryEscape(policy)+"&interface="+url.QueryEscape(iface))
+}
+
+// delete issues a DELETE and applies the same envelope checks as postJSON.
+// awg-manager uses DELETE only for policy interface removal.
+func (c *Client) delete(ctx context.Context, path string) error {
+	start := time.Now()
+	resp, err := c.do(ctx, http.MethodDelete, path, nil, "")
+	if err != nil {
+		slog.Warn("awgmgr request failed", "method", "DELETE", "path", path, "err", err, "duration_ms", time.Since(start).Milliseconds())
+		return fmt.Errorf("awgmgr DELETE %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+	slog.Debug("awgmgr", "method", "DELETE", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
+	rb, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("awgmgr read %s: %w", path, err)
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(rb))
+	}
+	return rejectFailureEnvelope(path, rb)
+}
