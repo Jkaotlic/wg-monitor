@@ -1,16 +1,9 @@
 import { useEffect, useState } from 'preact/hooks'
-import { initTelegram, getInitData, getThemeParams, onThemeChanged } from './telegram.js'
+import { initTelegram, getInitData, getColorScheme, onColorSchemeChanged, paintChrome } from './telegram.js'
+import { applyPalette } from './theme.js'
 import { createSession } from './api.js'
 import { RouterList } from './screens/RouterList.jsx'
 import { RouterDetail } from './screens/RouterDetail.jsx'
-
-function applyTheme() {
-  const theme = getThemeParams()
-  const root = document.documentElement
-  for (const [key, value] of Object.entries(theme)) {
-    root.style.setProperty(`--tg-${key.replace(/_/g, '-')}`, value)
-  }
-}
 
 function initialRouterID() {
   const params = new URLSearchParams(window.location.search)
@@ -26,8 +19,9 @@ export function App() {
 
   useEffect(() => {
     initTelegram()
-    applyTheme()
-    const offTheme = onThemeChanged(applyTheme)
+    const paint = () => paintChrome(applyPalette(getColorScheme()))
+    paint()
+    const offTheme = onColorSchemeChanged(paint)
     createSession(getInitData())
       .then((s) => { setIsAdmin(!!s.is_admin); setStatus('ready') })
       .catch(() => setStatus('error'))
