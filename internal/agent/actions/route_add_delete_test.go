@@ -260,11 +260,11 @@ func TestRouteAddJSON_CanApplyAWGManagerPreset(t *testing.T) {
 	if _, err := RouteAddJSON(context.Background(), c, req); err != nil {
 		t.Fatalf("RouteAddJSON: %v", err)
 	}
-	if created.Name != "YouTube" || created.Backend != "hydraroute" || created.HRRouteMode != "policy" || len(created.ManualDomains) != 2 {
+	if created.Name != "YouTube" || created.Backend != "hydraroute" || created.HRRouteMode != "interface" || len(created.ManualDomains) != 2 {
 		t.Fatalf("created route did not use template: %+v", created)
 	}
-	if len(created.Routes) != 0 || len(created.HRPolicyInterfaces) != 1 || created.HRPolicyInterfaces[0] != "nwg5" {
-		t.Fatalf("created route did not use HR-Neo policy iface: %+v", created)
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg5" || created.Routes[0].TunnelID != "awg11" || len(created.HRPolicyInterfaces) != 0 {
+		t.Fatalf("created route did not pin to interface correctly: %+v", created)
 	}
 }
 
@@ -368,14 +368,14 @@ func TestRouteAddJSON_AWGTemplateHRNeoBindsSelectedRoutingInterface(t *testing.T
 	if _, err := RouteAddJSON(context.Background(), c, req); err != nil {
 		t.Fatalf("RouteAddJSON: %v", err)
 	}
-	if created.Backend != "hydraroute" || created.HRPolicyName != "HydraRoute" || created.HRRouteMode != "policy" || len(created.ManualDomains) != 2 {
+	if created.Backend != "hydraroute" || created.HRPolicyName != "" || created.HRRouteMode != "interface" || len(created.ManualDomains) != 2 {
 		t.Fatalf("created route should be HR-Neo template, got %+v", created)
 	}
-	if len(created.Routes) != 0 {
-		t.Fatalf("HR-Neo policy route must not create explicit routes: %+v", created)
+	if len(created.Routes) != 1 || created.Routes[0].Interface != "nwg-right" || created.Routes[0].TunnelID != "right" {
+		t.Fatalf("HR-Neo interface route must pin the interface in routes: %+v", created)
 	}
-	if len(created.HRPolicyInterfaces) != 1 || created.HRPolicyInterfaces[0] != "nwg-right" {
-		t.Fatalf("created HR-Neo policy route bound to wrong policy iface: %+v", created)
+	if len(created.HRPolicyInterfaces) != 0 {
+		t.Fatalf("created HR-Neo interface route must not use policy interfaces: %+v", created)
 	}
 }
 

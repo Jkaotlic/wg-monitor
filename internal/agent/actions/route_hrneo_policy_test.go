@@ -18,6 +18,31 @@ import (
 // follow the live default route, and turning them into [newIface] would make
 // the new tunnel their sole/active egress and hijack all their traffic. Those
 // must be left untouched.
+func TestHRNeoPolicyRoute_PinsInterfaceThroughRoutes(t *testing.T) {
+	got := hrNeoPolicyRoute("Streaming", []string{"netflix.com"}, "nwg1", "awg11")
+	// hrRouteMode -- это enum interface|policy. В режиме policy привязку даёт
+	// политика, а hrPolicyInterfaces игнорируется: прежняя комбинация
+	// mode=policy + непустой hrPolicyInterfaces была самопротиворечивой,
+	// и правило уходило не туда, куда просили.
+	if got.HRRouteMode != "interface" {
+		t.Errorf("HRRouteMode = %q, want interface", got.HRRouteMode)
+	}
+	// Привязка правила к интерфейсу живёт в routes[0]. Interface — это ядерный iface,
+	// TunnelID — это стабильный bind id (два разных namespace'а).
+	if len(got.Routes) != 1 || got.Routes[0].Interface != "nwg1" || got.Routes[0].TunnelID != "awg11" {
+		t.Errorf("Routes = %+v", got.Routes)
+	}
+	if len(got.HRPolicyInterfaces) != 0 {
+		t.Errorf("HRPolicyInterfaces = %+v, want empty: the binding is in routes", got.HRPolicyInterfaces)
+	}
+	if got.HRPolicyName != "" {
+		t.Errorf("HRPolicyName = %q, want empty: the rule is pinned to an interface, not to a policy", got.HRPolicyName)
+	}
+	if got.Backend != "hydraroute" || !got.Enabled {
+		t.Errorf("rule = %+v", got)
+	}
+}
+
 func TestAddIfaceToHydraRoutePolicies_SkipsGlobalDefaultPolicies(t *testing.T) {
 	var updatedIDs []string
 	var updatedBodies []awgmgr.DNSRoute

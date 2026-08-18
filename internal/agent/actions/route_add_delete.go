@@ -60,7 +60,7 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 			Routes:        []awgmgr.DNSRouteEntry{{Interface: t.Iface, TunnelID: dnsBindID, Fallback: "auto"}},
 		}
 		if req.UseHRNeo {
-			rule = hrNeoPolicyRoute(req.Name, req.Targets, t.Iface)
+			rule = hrNeoPolicyRoute(req.Name, req.Targets, t.Iface, dnsBindID)
 			hrTouched = true
 		}
 		if err := c.CreateDNSRoute(ctx, rule); err != nil {

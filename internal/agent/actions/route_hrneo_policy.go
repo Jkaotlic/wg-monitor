@@ -10,16 +10,29 @@ import (
 
 const defaultHydraRoutePolicyName = "HydraRoute"
 
-func hrNeoPolicyRoute(name string, targets []string, iface string) awgmgr.DNSRoute {
+// hrNeoPolicyRoute builds an HR-Neo rule pinned to one interface.
+//
+// hrRouteMode is an enum: "policy" takes the binding from the named policy and
+// ignores the rule's own interface fields, "interface" pins the rule itself.
+// Setting mode="policy" AND a non-empty interface list — which is what this
+// function used to do — is self-contradictory: the rule silently followed the
+// policy instead of the requested tunnel.
+//
+// The pin goes into Routes, not into HRPolicyInterfaces: that is where
+// awg-manager reads an interface-target rule from. The two fields of the entry
+// are NOT the same namespace — `interface` is the kernel iface ("nwg1",
+// "opkgtun11") while `tunnelId` is the stable bind id, exactly as the NDMS
+// branch of route_add already sends it. HRPolicyName stays empty so nothing
+// re-reads this rule as policy-bound.
+func hrNeoPolicyRoute(name string, targets []string, iface, bindID string) awgmgr.DNSRoute {
 	return awgmgr.DNSRoute{
-		Name:               name,
-		Domains:            targets,
-		ManualDomains:      targets,
-		Enabled:            true,
-		Backend:            "hydraroute",
-		HRPolicyName:       defaultHydraRoutePolicyName,
-		HRRouteMode:        "policy",
-		HRPolicyInterfaces: []string{iface},
+		Name:          name,
+		Domains:       targets,
+		ManualDomains: targets,
+		Enabled:       true,
+		Backend:       "hydraroute",
+		HRRouteMode:   "interface",
+		Routes:        []awgmgr.DNSRouteEntry{{Interface: iface, TunnelID: bindID, Fallback: "auto"}},
 	}
 }
 
