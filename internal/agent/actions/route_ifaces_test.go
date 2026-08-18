@@ -33,7 +33,7 @@ func TestPolicyIfaceResolver_TunnelForNames(t *testing.T) {
 		wantID      string
 		wantOK      bool
 	}{
-		{"OpkgTun11", "awg3-work-via-ru1", "awg11", true},   // регистр iface
+		{"OpkgTun11", "awg3-work-via-ru1", "awg11", true},       // регистр iface
 		{"Wireguard0", "NetherlandsKerkradeS24", "awg20", true}, // ndmsName
 		{"OpkgTun10", "awg3-main-work", "awg10", true},
 		{"GigabitEthernet1", "Подключение Ethernet", "wan:eth3", true}, // только по label
@@ -89,5 +89,28 @@ func TestPolicyIfaceResolver_PermitName(t *testing.T) {
 	// упасть, а не молча "успешно" ничего не сделать.
 	if got, ok := r.permitName("nwg9", "awg99"); ok {
 		t.Errorf("permitName(unknown) = (%q,true), want ok=false", got)
+	}
+}
+
+func TestPolicyIfaceResolver_StrongAliasWinsRegardlessOfOrder(t *testing.T) {
+	// Verify that a stronger alias tier always beats a weaker one, regardless of
+	// tunnel slice order. This test would fail with a single-pass implementation
+	// where first occurrence wins globally.
+	tunnels := []wire.TunnelMeta{
+		{ID: "weak-first", Name: "Wireguard0", Iface: "eth0"},        // weak Name alias first
+		{ID: "strong-second", NDMSName: "Wireguard0", Iface: "nwg0"}, // strong NDMSName second
+	}
+	ifaces := []awgmgr.PolicyInterface{
+		{Name: "Wireguard0", Label: "", Up: true},
+	}
+	r := newPolicyIfaceResolver(tunnels, ifaces)
+
+	// Despite tunnel order, NDMSName (tier 1) must beat Name (tier 4)
+	id, ok := r.tunnelForNames("Wireguard0")
+	if !ok {
+		t.Fatal("Wireguard0 must resolve to a tunnel")
+	}
+	if id != "strong-second" {
+		t.Errorf("tunnelForNames(Wireguard0) = %q, want strong-second (NDMSName tier > Name tier)", id)
 	}
 }

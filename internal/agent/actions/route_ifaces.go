@@ -32,15 +32,38 @@ func newPolicyIfaceResolver(tunnels []wire.TunnelMeta, ifaces []awgmgr.PolicyInt
 		upByName:    map[string]bool{},
 		nameByKey:   map[string]string{},
 	}
+	// Build tunnelByKey in global tiers of alias strength: a stronger alias always
+	// wins over a weaker one regardless of tunnel slice order. Within each tier,
+	// first occurrence wins. Tier order: NDMSName (literal match) > Iface
+	// (case-insensitive) > ID > Name (label lookup). This ensures consistent
+	// resolution regardless of tunnel list order.
+	// Tier 1: NDMSName (global literal match in policy)
 	for _, t := range tunnels {
-		// Порядок псевдонимов -- порядок надёжности: ndmsName совпадает с
-		// именем в политике буквально, iface -- с точностью до регистра,
-		// имя туннеля -- только через label политики.
-		for _, alias := range []string{t.NDMSName, t.Iface, t.ID, t.Name} {
-			key := policyIfaceKey(alias)
-			if key == "" {
-				continue
+		if key := policyIfaceKey(t.NDMSName); key != "" {
+			if _, taken := r.tunnelByKey[key]; !taken {
+				r.tunnelByKey[key] = t.ID
 			}
+		}
+	}
+	// Tier 2: Iface (case-insensitive for opkgtun-style, unrelated for nativewg)
+	for _, t := range tunnels {
+		if key := policyIfaceKey(t.Iface); key != "" {
+			if _, taken := r.tunnelByKey[key]; !taken {
+				r.tunnelByKey[key] = t.ID
+			}
+		}
+	}
+	// Tier 3: ID
+	for _, t := range tunnels {
+		if key := policyIfaceKey(t.ID); key != "" {
+			if _, taken := r.tunnelByKey[key]; !taken {
+				r.tunnelByKey[key] = t.ID
+			}
+		}
+	}
+	// Tier 4: Name (weakest, matched only through policy label)
+	for _, t := range tunnels {
+		if key := policyIfaceKey(t.Name); key != "" {
 			if _, taken := r.tunnelByKey[key]; !taken {
 				r.tunnelByKey[key] = t.ID
 			}
