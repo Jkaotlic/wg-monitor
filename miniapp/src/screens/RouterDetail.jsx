@@ -7,7 +7,11 @@ import {
   ackIncident,
   muteIncident,
 } from '../api.js'
-import { RouterDevice, orderChecks } from '../components/RouterDevice.jsx'
+import { RouterDevice, orderChecks, lampKey } from '../components/RouterDevice.jsx'
+import { Section } from '../ui/Section.jsx'
+import { ActionTile } from '../ui/ActionTile.jsx'
+import { ListRow } from '../ui/ListRow.jsx'
+import { tunnelHealth } from './tunnelHealth.js'
 import { useCommand } from '../useCommand.js'
 import { confirmSheet } from '../sheet.js'
 import {
@@ -17,6 +21,7 @@ import {
   commandOutcomeLabel,
   humanAge,
   incidentCopy,
+  legendLabel,
   pingLabel,
   statusLabel,
   trafficLabel,
@@ -288,6 +293,7 @@ function TunnelRow({ tunnel, isEgress }) {
 }
 
 function TunnelsSection({ tunnels, traffic }) {
+  const health = tunnelHealth(tunnels)
   // Only a `vpn` verdict names an egress, and only a name we actually have may be
   // badged -- same guard the drawing uses (RouterDevice.jsx:424-430). A verdict
   // pointing at a tunnel we weren't given badges nothing rather than the first row.
@@ -295,7 +301,7 @@ function TunnelsSection({ tunnels, traffic }) {
 
   return (
     <section class="section">
-      <h2 class="section-title">Туннели</h2>
+      <h2 class="section-title">Целостность туннелей · {health.label}</h2>
       {tunnels.length === 0 ? (
         <div class="card">
           <p class="traffic-detail">Туннели не заведены — роутер не сообщил ни одного.</p>
@@ -342,6 +348,53 @@ function TrafficSection({ routerID, traffic, asleep, onDone, openSheet }) {
         />
       </div>
     </section>
+  )
+}
+
+
+// Быстрые действия по макету: плитки вместо разрозненных кнопок внутри
+// карточек. Набор -- ровно то, что мини-аппу разрешено (allowlist в
+// miniapp_commands.go). "Сбросить DNS", "Обслужить пакеты" и "Перезагрузить
+// роутер" из макета здесь сознательно отсутствуют: этих команд у мини-аппа
+// нет, они админские и живут в дашборде.
+function QuickActions({ routerID, tunnels, traffic, asleep, onDone, openSheet, onTab }) {
+  // Перезапускать предлагаем тот туннель, которым сейчас идёт трафик: если
+  // трафик идёт мимо туннелей, предлагать нечего -- плитка не рисуется.
+  const egressID = traffic?.mode === 'vpn' ? traffic.egress_tunnel_id : null
+  const egress = tunnels.find((t) => t.tunnel_id === egressID)
+
+  return (
+    <Section title="Быстрые действия">
+      <div class="action-grid">
+        {egress && (
+          <ActionTile
+            title={ACTION_LABELS.restartTunnel}
+            hint={`${egress.tunnel_id} · связь прервётся на несколько секунд`}
+            danger
+            onClick={() =>
+              openSheet(
+                confirmSheet({
+                  routerID,
+                  title: ACTION_LABELS.restartTunnel,
+                  body: `Перезапустить туннель ${egress.name || egress.tunnel_id}? Связь через него на несколько секунд прервётся.`,
+                  action: 'tunnel_restart',
+                  args: { tunnel_id: egress.tunnel_id },
+                  buttonLabel: 'Да, выполнить',
+                  danger: true,
+                  asleep,
+                  onDone,
+                }),
+              )
+            }
+          />
+        )}
+        <ActionTile
+          title="Собрать диагностику"
+          hint="полный отчёт от агента"
+          onClick={() => onTab('diag')}
+        />
+      </div>
+    </Section>
   )
 }
 
@@ -522,7 +575,27 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
   )
 }
 
-export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet }) {
+
+// Легенда панели: пять ламп подписаны на корпусе четырьмя буквами, и без
+// расшифровки они читаются как шифр. Порядок и набор -- те же, что у ламп
+// (orderChecks), чтобы легенда не разошлась с прибором.
+function DeviceLegend({ checks }) {
+  const rows = orderChecks(checks ?? [])
+  if (rows.length === 0) return null
+  return (
+    <ul class="legend card list-reset">
+      {rows.map((c) => (
+        <li key={c.check_name} class={`legend-item${c.status === 'fail' ? ' legend-item-fail' : ''}`}>
+          <span class="legend-dot" />
+          <span class="legend-key">{lampKey(c.check_name)}</span>
+          <span class="legend-label">{legendLabel(c.check_name)}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
@@ -650,14 +723,10 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet }) {
           : 'Роутер ещё ни разу не выходил на связь'}
       </p>
 
-      <RouterDevice tunnels={tunnels} traffic={traffic} checks={checks ?? []} name={router.nickname} />
-
-      <TunnelsSection tunnels={tunnels} traffic={traffic} />
-
-      <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} openSheet={openSheet} />
-
-      <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
-
+      {/* Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
+          что сломано, потом куда идёт трафик, потом состояние туннелей, и
+          только затем действия. Тревога -- единственное, ради чего экран
+          вообще открывают в плохой день, поэтому она выше прибора. */}
       {incidents.length > 0 && (
         <section class="section">
           <h2 class="section-title">Активные тревоги</h2>
@@ -676,6 +745,25 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet }) {
           </ul>
         </section>
       )}
+
+      <RouterDevice tunnels={tunnels} traffic={traffic} checks={checks ?? []} name={router.nickname} />
+      <DeviceLegend checks={checks} />
+
+      <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} openSheet={openSheet} />
+
+      <TunnelsSection tunnels={tunnels} traffic={traffic} />
+
+      <QuickActions
+        routerID={id}
+        tunnels={tunnels}
+        traffic={traffic}
+        asleep={asleep}
+        onDone={loadData}
+        openSheet={openSheet}
+        onTab={onTab}
+      />
+
+      <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
 
       {otherChecks.length > 0 && (
         <section class="section">
@@ -707,6 +795,17 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet }) {
         </section>
       )}
 
+      {isAdmin && (
+        <Section title="Администрирование">
+          <ul class="card list-reset">
+            <ListRow
+              title="Обслуживание и доступы"
+              sub="владелец, операторы; обслуживание пока в дашборде"
+              onClick={onOpenAdmin}
+            />
+          </ul>
+        </Section>
+      )}
     </div>
   )
 }

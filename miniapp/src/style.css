@@ -1216,3 +1216,152 @@ body {
   width: 100%;
   margin-top: var(--sp-3);
 }
+
+/* ============================================================
+   Легенда панели, плитки действий, строки списка
+   ============================================================ */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.legend-item-fail {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ok);
+}
+
+.legend-item-fail .legend-dot {
+  background: var(--danger);
+}
+
+.legend-key {
+  width: 40px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.legend-item-fail .legend-key {
+  color: var(--danger);
+}
+
+.legend-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.action-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  min-height: 64px;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action-tile-danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.action-tile-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-tile-danger .action-tile-title {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+}
+
+.action-tile-hint {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+}
+
+.action-tile-danger .action-tile-hint {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+}
+
+.list-row {
+  gap: var(--sp-3);
+}
+
+.list-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.list-row-sub {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+}
+
+.list-row-chevron {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Тональные пилюли для новых экранов: смысл вместо имени состояния роутера. */
+.badge-tone-ok {
+  color: color-mix(in srgb, var(--ok) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+}
+
+.badge-tone-warn {
+  color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+}
+
+.badge-tone-danger {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+}
+
+.badge-tone-muted {
+  color: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--muted) 16%, var(--surface));
+}

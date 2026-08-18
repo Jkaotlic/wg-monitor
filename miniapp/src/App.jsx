@@ -101,6 +101,7 @@ export function App() {
             isAdmin={isAdmin}
             onOpenAdmin={() => dispatch({ type: 'overlay', overlay: 'admin' })}
             openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+            onTab={(tab) => dispatch({ type: 'tab', tab })}
           />
         ) : (
           <p class="state">Скоро</p>

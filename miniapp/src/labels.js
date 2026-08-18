@@ -260,3 +260,18 @@ const STATUS_LABEL = {
 export function statusLabel(status) {
   return STATUS_LABEL[status] ?? status
 }
+
+// Подписи для легенды панели: на корпусе лампа подписана четырьмя буквами, и
+// рядом нужна расшифровка в два-три слова, а не полное имя проверки -- иначе
+// легенда перестаёт быть легендой и превращается во второй список проверок.
+const LEGEND_LABEL = {
+  dns: 'адреса сайтов',
+  external_reach: 'интернет',
+  hydraroute: 'обход блокировок',
+  awg_manager: 'панель роутера',
+  tunnels: 'связь с ботом',
+}
+
+export function legendLabel(name) {
+  return LEGEND_LABEL[name] ?? checkLabel(name)
+}
