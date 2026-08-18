@@ -100,7 +100,12 @@ func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgm
 	if changed == 0 {
 		return 0, nil
 	}
-	after, err := c.AccessPolicies(ctx)
+	// Перечитывать ОБЯЗАТЕЛЬНО мимо кэша NDMS. Обычный список политик
+	// отдаётся кэшированным, и сразу после permit кэш ещё показывает цепочку
+	// до записи: успешная привязка прочиталась бы как "интерфейс не появился",
+	// а импортированный туннель был бы объявлен немаршрутизируемым. Не менять
+	// на AccessPolicies -- этот отказ виден только против живого роутера.
+	after, err := c.AccessPoliciesFresh(ctx)
 	if err != nil {
 		return changed, fmt.Errorf("verify access policies after permit: %w", err)
 	}

@@ -144,3 +144,39 @@ func TestRestartTunnel_MissingEndpointIsRecognisable(t *testing.T) {
 		t.Errorf("IsEndpointMissing(%v) = false, want true", err)
 	}
 }
+
+// Список политик роутер по умолчанию отдаёт из кэша NDMS. Для проверки
+// постусловия записи это неприемлемо: кэш вернёт "интерфейса нет" на успешно
+// применённый permit. Параметр refresh=true и есть весь смысл метода, поэтому
+// тест проверяет именно его.
+func TestAccessPoliciesFresh_BypassesNDMSCache(t *testing.T) {
+	body, err := os.ReadFile("testdata/live-2172/access-policies.json")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	var gotPath, gotRefresh string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotRefresh = r.URL.Query().Get("refresh")
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).AccessPoliciesFresh(context.Background())
+	if err != nil {
+		t.Fatalf("AccessPoliciesFresh: %v", err)
+	}
+	if gotPath != "/api/access-policies" {
+		t.Errorf("path = %q, want /api/access-policies", gotPath)
+	}
+	if gotRefresh != "true" {
+		t.Errorf("refresh = %q, want true", gotRefresh)
+	}
+	// Форма ответа та же, что у кэшированного чтения -- декодер общий.
+	if len(got) != 2 || got[0].Name != "HydraRoute" || len(got[0].Interfaces) != 3 {
+		t.Fatalf("policies = %+v", got)
+	}
+	if got[0].Interfaces[0].Name != "OpkgTun11" || got[0].Interfaces[0].Order != 0 {
+		t.Errorf("first interface = %+v", got[0].Interfaces[0])
+	}
+}

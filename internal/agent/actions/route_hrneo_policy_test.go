@@ -87,18 +87,29 @@ type policyStub struct {
 	ifaces   []awgmgr.PolicyInterface
 	permits  []string
 	drop     bool // роутер отвечает 200, но ничего не меняет
+
+	freshReads int // сколько раз читали с обходом кэша NDMS
 }
 
 func (s *policyStub) server(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+	writePolicies := func(w http.ResponseWriter) {
 		out := []awgmgr.AccessPolicy{}
 		for name, chain := range s.policies {
 			out = append(out, awgmgr.AccessPolicy{Name: name, Interfaces: chain})
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": out})
+	}
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		writePolicies(w)
+	})
+	// Чтение с обходом кэша NDMS живёт на другом пути -- им проверяется
+	// постусловие permit.
+	mux.HandleFunc("/api/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		s.freshReads++
+		writePolicies(w)
 	})
 	mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": s.ifaces})
@@ -145,6 +156,11 @@ func TestAddTunnelToHydraRoutePolicies_AppendsAsLastFallback(t *testing.T) {
 	// он перехватил бы весь трафик политики сразу после импорта.
 	if len(s.permits) != 1 || s.permits[0] != "HydraRoute/Wireguard0@2" {
 		t.Errorf("permits = %+v", s.permits)
+	}
+	// Постусловие проверяется чтением мимо кэша NDMS -- см.
+	// TestAddTunnelToHydraRoutePolicies_VerifiesPastTheNDMSCache.
+	if s.freshReads != 1 {
+		t.Errorf("fresh (cache-bypassing) reads = %d, want 1", s.freshReads)
 	}
 }
 
@@ -281,5 +297,68 @@ func TestAddTunnelToHydraRoutePolicies_FailsOnPolicyReadError(t *testing.T) {
 		if strings.HasPrefix(p, "/api/dns-routes/") {
 			t.Errorf("legacy endpoint %q was called after a non-404 access-policies read error; that endpoint no longer holds the binding on this router", p)
 		}
+	}
+}
+
+// Проверка постусловия обязана читать мимо кэша NDMS.
+//
+// /api/routing/access-policies по умолчанию отдаёт кэшированный вид. Если
+// перечитать им же сразу после permit, успешная запись прочитается как
+// "интерфейс не появился", и импортированный туннель будет объявлен
+// немаршрутизируемым, хотя он маршрутизируется. Проверка, которая падает по
+// причине, не связанной с проверяемым фактом, -- не проверка.
+func TestAddTunnelToHydraRoutePolicies_VerifiesPastTheNDMSCache(t *testing.T) {
+	live := map[string][]awgmgr.AccessPolicyInterface{
+		"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+	}
+	// Кэшированный путь застрял на состоянии ДО permit и таким и останется.
+	cached := map[string][]awgmgr.AccessPolicyInterface{
+		"HydraRoute": {{Name: "OpkgTun11", Order: 0}},
+	}
+	encode := func(w http.ResponseWriter, src map[string][]awgmgr.AccessPolicyInterface) {
+		out := []awgmgr.AccessPolicy{}
+		for name, chain := range src {
+			out = append(out, awgmgr.AccessPolicy{Name: name, Interfaces: chain})
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": out})
+	}
+	var freshRefresh string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		encode(w, cached)
+	})
+	mux.HandleFunc("/api/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		freshRefresh = r.URL.Query().Get("refresh")
+		encode(w, live)
+	})
+	mux.HandleFunc("/api/routing/policy-interfaces", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "Wireguard0", Up: false},
+		}})
+	})
+	mux.HandleFunc("/api/access-policies/permit", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Name      string `json:"name"`
+			Interface string `json:"interface"`
+			Order     int    `json:"order"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		live[body.Name] = append(live[body.Name], awgmgr.AccessPolicyInterface{Name: body.Interface, Order: body.Order})
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err != nil {
+		t.Fatalf("permit succeeded on the router but was reported as failed: %v", err)
+	}
+	if changed != 1 {
+		t.Errorf("changed = %d, want 1", changed)
+	}
+	if freshRefresh != "true" {
+		t.Errorf("verify read refresh = %q, want true (the NDMS cache must be bypassed)", freshRefresh)
 	}
 }

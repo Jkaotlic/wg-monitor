@@ -222,6 +222,27 @@ func (c *Client) AccessPolicies(ctx context.Context) ([]AccessPolicy, error) {
 	return env.Data, nil
 }
 
+// AccessPoliciesFresh returns the same data as AccessPolicies with the NDMS
+// cache bypassed (the router's own OpenAPI documents ?refresh=true on this
+// endpoint).
+//
+// Use it ONLY where a stale answer would be misread as a fact. Verifying that
+// a write took effect is that case: re-reading through the cache right after
+// PermitPolicyInterface can still show the chain from before the write, and
+// the caller would report a successful permit as a failure. Everything else —
+// the routing snapshot above all — stays on AccessPolicies: forcing an NDMS
+// cache miss on every poll is load on the router with nothing bought for it.
+func (c *Client) AccessPoliciesFresh(ctx context.Context) ([]AccessPolicy, error) {
+	var env Envelope[[]AccessPolicy]
+	if err := c.get(ctx, "/api/access-policies?refresh=true", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr access-policies?refresh=true: success=false")
+	}
+	return env.Data, nil
+}
+
 // PolicyInterfaces returns /api/routing/policy-interfaces .data — the
 // interfaces policies may reference, with their live up/down state.
 func (c *Client) PolicyInterfaces(ctx context.Context) ([]PolicyInterface, error) {
