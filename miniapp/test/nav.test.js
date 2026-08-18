@@ -75,6 +75,23 @@ describe('navReducer', () => {
   })
 })
 
+describe('navReducer: init', () => {
+  it('подставляет состояние, посчитанное после загрузки списка роутеров', () => {
+    // Список приходит с сервера уже после первого рендера, поэтому стартовое
+    // состояние считается дважды: пустым при монтировании и настоящим здесь.
+    const s = navReducer(initialNav({ routerIDs: [], deepLinkID: null }), {
+      type: 'init',
+      state: initialNav({ routerIDs: [4], deepLinkID: 4 }),
+    })
+    expect(s).toMatchObject({ routerID: 4, tab: 'router', overlay: null })
+  })
+
+  it('init без состояния ничего не ломает', () => {
+    const base = initialNav({ routerIDs: [1], deepLinkID: null })
+    expect(navReducer(base, { type: 'init' })).toEqual(base)
+  })
+})
+
 describe('backButtonVisible', () => {
   const base = initialNav({ routerIDs: [1], deepLinkID: null })
   it('скрыта на корневом экране', () => {

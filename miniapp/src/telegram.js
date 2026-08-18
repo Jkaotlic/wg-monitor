@@ -1,5 +1,11 @@
 const tg = window.Telegram?.WebApp
 
+// Скрипт telegram-web-app.js подключается всегда и вне Telegram тоже: он
+// создаёт объект WebApp с colorScheme = 'light' и platform = 'unknown'.
+// Поэтому "мы внутри Telegram" -- это платформа, а не наличие объекта; иначе
+// локальная отладка всегда светлая, каким бы ни было оформление системы.
+const inTelegram = Boolean(tg && tg.platform && tg.platform !== 'unknown')
+
 export function initTelegram() {
   if (!tg) return
   tg.ready()
@@ -13,7 +19,7 @@ export function getInitData() {
 // Тему выбирает Telegram, цвета -- приложение (см. theme.js). Вне Telegram
 // (локальная отладка в браузере) схему подсказывает сама система.
 export function getColorScheme() {
-  if (tg?.colorScheme) return tg.colorScheme
+  if (inTelegram && tg.colorScheme) return tg.colorScheme
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
@@ -32,7 +38,7 @@ export function onBackButtonClick(handler) {
 }
 
 export function onColorSchemeChanged(handler) {
-  if (!tg) {
+  if (!inTelegram) {
     const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
     if (!mq) return () => {}
     mq.addEventListener('change', handler)

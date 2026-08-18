@@ -11,7 +11,10 @@
       // style.css и src/theme.js -- здесь только выбор темы.
       (function () {
         var tg = window.Telegram && window.Telegram.WebApp
-        var scheme = (tg && tg.colorScheme) ||
+        // Вне Telegram объект WebApp всё равно есть, но platform = 'unknown'
+        // и colorScheme всегда 'light' -- тогда тему подсказывает система.
+        var inTelegram = !!(tg && tg.platform && tg.platform !== 'unknown')
+        var scheme = (inTelegram && tg.colorScheme) ||
           (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
         document.documentElement.setAttribute('data-theme', scheme === 'dark' ? 'dark' : 'light')
       })()

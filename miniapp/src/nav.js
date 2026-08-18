@@ -23,6 +23,12 @@ export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
 
 export function navReducer(state, action) {
   switch (action.type) {
+    // Список роутеров приходит с сервера уже после первого рендера, поэтому
+    // стартовое состояние подставляется отдельным действием, а не считается
+    // в useReducer -- иначе выбор "открыть роутер или показать список"
+    // пришлось бы делать до того, как известно, что доступно.
+    case 'init':
+      return action.state ?? state
     case 'tab':
       return TABS.includes(action.tab) ? { ...state, tab: action.tab } : state
     case 'router':

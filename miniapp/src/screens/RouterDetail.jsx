@@ -7,8 +7,6 @@ import {
   ackIncident,
   muteIncident,
 } from '../api.js'
-import { setBackButtonVisible, onBackButtonClick } from '../telegram.js'
-import { AccessSection } from './AccessSection.jsx'
 import { RouterDevice, orderChecks } from '../components/RouterDevice.jsx'
 import { useCommand } from '../useCommand.js'
 import {
@@ -19,6 +17,7 @@ import {
   humanAge,
   incidentCopy,
   pingLabel,
+  statusLabel,
   trafficLabel,
   tunnelStateLabel,
 } from '../labels.js'
@@ -31,19 +30,6 @@ const SILENCE_OPTIONS = [
   { ttl: '4h', labelKey: 'silence4h' },
   { ttl: '24h', labelKey: 'silence24h' },
 ]
-
-// The header's four words. This is the ONLY router-state vocabulary on the screen:
-// `router.status` (online/sleeping/offline/alert, dashboard_handler.go:780-796) is
-// the state model the backend actually produces, and a second one would drift from
-// it. (The spec's §3.1 ClassifyState port -- ok/degraded/hard/offline -- was cut
-// from this phase; nothing produces those values, so labels.js no longer carries
-// them either.)
-const STATUS_LABEL = {
-  online: 'В сети',
-  sleeping: 'Спит',
-  offline: 'Офлайн',
-  alert: 'Тревога',
-}
 
 function formatTime(iso) {
   if (!iso) return ''
@@ -548,22 +534,13 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
   )
 }
 
-export function RouterDetail({ id, onBack, isAdmin }) {
+export function RouterDetail({ id, isAdmin, onOpenAdmin }) {
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
   const [tunnels, setTunnels] = useState([])
   const [traffic, setTraffic] = useState(null)
   const [error, setError] = useState(null)
-
-  useEffect(() => {
-    setBackButtonVisible(true)
-    const off = onBackButtonClick(onBack)
-    return () => {
-      setBackButtonVisible(false)
-      off()
-    }
-  }, [onBack])
 
   // Named rather than inlined so a completed command can call it again:
   // an "ok" force_recheck or tunnel_restart changes state that lives in
@@ -672,7 +649,7 @@ export function RouterDetail({ id, onBack, isAdmin }) {
     <div class="screen">
       <div class="router-header">
         <h1 class="screen-title">{router.nickname}</h1>
-        <span class={`badge badge-${router.status}`}>{STATUS_LABEL[router.status] ?? router.status}</span>
+        <span class={`badge badge-${router.status}`}>{statusLabel(router.status)}</span>
       </div>
       {/* The vitality the panel's PWR lamp would have carried, stated in words
           instead. See this task's report: `router.status` alone cannot honestly
@@ -741,7 +718,6 @@ export function RouterDetail({ id, onBack, isAdmin }) {
         </section>
       )}
 
-      {isAdmin && <AccessSection routerID={id} />}
     </div>
   )
 }

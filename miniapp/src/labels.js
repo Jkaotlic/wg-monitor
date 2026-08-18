@@ -246,3 +246,17 @@ export function commandOutcomeLabel(action, result) {
       return action === 'tunnel_restart' ? 'Туннель перезапущен' : 'Готово'
   }
 }
+
+// Четыре состояния роутера из dashboard_handler.go:780-796 -- единственный
+// словарь состояний в приложении. Второй развалился бы с этим при первой же
+// правке бэкенда.
+const STATUS_LABEL = {
+  online: 'В сети',
+  sleeping: 'Спит',
+  offline: 'Офлайн',
+  alert: 'Тревога',
+}
+
+export function statusLabel(status) {
+  return STATUS_LABEL[status] ?? status
+}

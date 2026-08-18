@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@preact/preset-vite": "^2.9.3",
+    "playwright": "^1.62.1",
     "vite": "^6.0.5",
     "vitest": "^4.1.10"
   }
