@@ -1,12 +1,13 @@
 // Строка списка: заголовок, подпись под ним, необязательный правый слот и
 // шеврон у кликабельных строк.
+//
+// Кликабельная строка -- это кнопка внутри li, а не li с обработчиком:
+// иначе строка недоступна с клавиатуры и невидима для скринридера, а
+// мини-апп открывают и с десктопа тоже.
 export function ListRow({ title, sub, right, onClick, tone }) {
   const clickable = typeof onClick === 'function'
-  return (
-    <li
-      class={`row list-row${clickable ? ' row-clickable' : ''}${tone ? ` list-row-${tone}` : ''}`}
-      onClick={onClick}
-    >
+  const content = (
+    <>
       <span class="list-row-main">
         <span class="row-title">{title}</span>
         {sub && <span class="list-row-sub">{sub}</span>}
@@ -17,6 +18,17 @@ export function ListRow({ title, sub, right, onClick, tone }) {
           <path d="M 6 3 L 11 8 L 6 13" />
         </svg>
       )}
+    </>
+  )
+
+  if (!clickable) {
+    return <li class={`row list-row${tone ? ` list-row-${tone}` : ''}`}>{content}</li>
+  }
+  return (
+    <li class={`list-row-item${tone ? ` list-row-${tone}` : ''}`}>
+      <button type="button" class="row list-row list-row-btn" onClick={onClick}>
+        {content}
+      </button>
     </li>
   )
 }

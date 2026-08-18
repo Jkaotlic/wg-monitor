@@ -17,6 +17,9 @@ import { RouterDetail } from './screens/RouterDetail.jsx'
 import { FleetOverlay } from './screens/FleetOverlay.jsx'
 import { AdminOverlay } from './screens/AdminOverlay.jsx'
 import { NoAccess } from './screens/NoAccess.jsx'
+import { RoutesTab } from './screens/RoutesTab.jsx'
+import { DiagTab } from './screens/DiagTab.jsx'
+import { EventsTab } from './screens/EventsTab.jsx'
 import { Sheet } from './ui/Sheet.jsx'
 
 function deepLinkRouterID() {
@@ -76,6 +79,11 @@ export function App() {
   }
   if (routers.length === 0) return <NoAccess />
 
+  // Статус берём из списка флота: экраны табов не грузят карточку роутера
+  // сами, а спящему роутеру нужно обещать отложенный ответ, а не мгновенный.
+  const current = routers.find((r) => r.id === nav.routerID)
+  const asleep = current?.status === 'offline' || current?.status === 'sleeping'
+
   const overlay = nav.overlay === 'fleet'
     ? (
       <FleetOverlay
@@ -103,8 +111,12 @@ export function App() {
             openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
             onTab={(tab) => dispatch({ type: 'tab', tab })}
           />
+        ) : nav.tab === 'routes' ? (
+          <RoutesTab routerID={nav.routerID} asleep={asleep} />
+        ) : nav.tab === 'diag' ? (
+          <DiagTab routerID={nav.routerID} asleep={asleep} />
         ) : (
-          <p class="state">Скоро</p>
+          <EventsTab routerID={nav.routerID} routerName={current?.nickname} />
         )}
       </div>
       <TabBar tabs={TABS} tab={nav.tab} onTab={(tab) => dispatch({ type: 'tab', tab })} />

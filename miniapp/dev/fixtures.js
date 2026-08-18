@@ -87,6 +87,82 @@ const HISTORY = [
   { check_name: 'tunnel_awg12', status: 'ok', ts: agoISO(180000), details: '' },
 ]
 
+const ROUTE_SNAPSHOT = {
+  hr_neo: { enabled: true },
+  tunnels: [
+    { id: 'awg12', name: 'Amsterdam', iface: 'OpkgTun11', enabled: true, default_route: true },
+    { id: 'awg10', name: 'Frankfurt', iface: 'OpkgTun10', enabled: true },
+    { id: 'awg7', name: 'Reserve', iface: 'Wireguard1', enabled: false },
+  ],
+  counts: {
+    awg12: { dns: 32, static: 2, hr_neo: 32 },
+    awg10: { dns: 0, static: 0, hr_neo: 0 },
+    awg7: { dns: 3, static: 0, hr_neo: 0 },
+  },
+  policies: [
+    {
+      name: 'HydraRoute',
+      dns: 32,
+      hr_neo: 32,
+      interfaces: [
+        { bind: 'OpkgTun11', name: 'Amsterdam', role: 'active', available: true },
+        { bind: 'OpkgTun10', name: 'Frankfurt', role: 'fallback', available: true },
+        { bind: 'Wireguard1', name: 'Reserve', role: 'unavailable' },
+      ],
+    },
+    { name: 'RU', dns: 3, hr_neo: 0, interfaces: [{ bind: 'GigabitEthernet1', name: 'Провайдер', role: 'active' }] },
+  ],
+  rules: [
+    { id: '1', name: 'youtube', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'OpkgTun11', targets: [{ type: 'domain', value: 'youtube.com' }, { type: 'domain', value: 'ytimg.com' }] },
+    { id: '2', name: 'instagram', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'OpkgTun11', targets: [{ type: 'domain', value: 'instagram.com' }] },
+    { id: '3', name: 'банки', kind: 'static', enabled: true, bind: 'GigabitEthernet1', targets: [{ type: 'cidr', value: '185.71.76.0/22' }] },
+  ],
+}
+
+const DIAG_REPORT = {
+  version: '1.0',
+  generatedAt: nowISO(),
+  durationMs: 2559,
+  system: {
+    appVersion: '2.16.4',
+    keeneticOS: '4.1.7',
+    arch: 'aarch64',
+    uptime: '5 дней 4 часа',
+    totalMemoryMB: 256,
+    kernelModule: { exists: true, loaded: true },
+  },
+  wan: { anyUp: true, interfaces: { ISP: { up: true, label: 'Провайдер' } } },
+  tunnels: {
+    awg12: { handshake: { status: 'ok' }, ping: { status: 'ok' }, mtu: { status: 'ok' } },
+    awg10: { handshake: { status: 'ok' }, ping: { status: 'ok' }, mtu: { status: 'ok' } },
+    awg7: { handshake: { status: 'fail', reason: 'нет рукопожатия 2 часа' }, ping: { status: 'skip', reason: 'туннель выключен' }, mtu: { status: 'ok' } },
+  },
+}
+
+// Последняя запрошенная команда: dev-сервер отвечает на опрос результата тем,
+// что соответствует действию, а не одной заглушкой на все случаи.
+let lastAction = null
+
+export function setLastAction(action) {
+  lastAction = action
+}
+
+function commandResult() {
+  if (lastAction === 'route_status') {
+    return { id: 'dev', status: 'ok', duration_ms: 120, output: JSON.stringify(ROUTE_SNAPSHOT) }
+  }
+  if (lastAction === 'diag_now') {
+    return { id: 'dev', status: 'ok', duration_ms: 2559, output: JSON.stringify(DIAG_REPORT) }
+  }
+  if (lastAction === 'check_direct') {
+    return { id: 'dev', status: 'ok', duration_ms: 900, output: '🇷🇺 Напрямую (через системный маршрут):\nExit IP: 203.0.113.7\n\n✅ ya.ru' }
+  }
+  if (lastAction === 'check_via_tunnel') {
+    return { id: 'dev', status: 'ok', duration_ms: 1100, output: '🌍 Через туннель (awg12):\nExit IP: 203.0.113.19\n\n✅ google.com' }
+  }
+  return { id: 'dev', status: 'ok', duration_ms: 300, output: 'готово' }
+}
+
 export function respond(method, path) {
   if (method === 'POST' && path === '/v1/miniapp/session') {
     return { ok: true, telegram_user_id: 42, is_admin: true }
@@ -112,7 +188,9 @@ export function respond(method, path) {
       },
     }
   }
-  if (rest === '/history') return { events: HISTORY, days: 7, truncated: false }
+  if (rest === '/timeline') return { events: HISTORY, days: 7, truncated: false }
+  if (rest === '/commands') return { cmd_id: 'dev' }
+  if (rest.startsWith('/commands/')) return commandResult()
   if (rest === '/access') {
     return {
       owner: { telegram_user_id: 42 },

@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import preact from '@preact/preset-vite'
-import { respond } from './dev/fixtures.js'
+import { respond, setLastAction } from './dev/fixtures.js'
 
 // Отдаёт заготовленные ответы вместо бэкенда -- только в режиме разработки.
 // Нужен, чтобы открыть экраны в браузере (и снять с них скриншоты) без живого
@@ -13,6 +13,22 @@ function mockApi() {
       server.middlewares.use((req, res, next) => {
         if (!req.url.startsWith('/v1/miniapp/')) return next()
         const path = req.url.split('?')[0]
+        if (req.method === 'POST' && path.endsWith('/commands')) {
+          // Запоминаем действие, чтобы отдать правдоподобный именно для него
+          // результат при опросе.
+          let raw = ''
+          req.on('data', (chunk) => { raw += chunk })
+          req.on('end', () => {
+            try {
+              setLastAction(JSON.parse(raw).action)
+            } catch {
+              setLastAction(null)
+            }
+            res.setHeader('Content-Type', 'application/json')
+            res.end(JSON.stringify({ cmd_id: 'dev' }))
+          })
+          return
+        }
         const body = respond(req.method, path)
         if (body == null) {
           res.statusCode = 404

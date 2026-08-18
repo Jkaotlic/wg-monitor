@@ -64,6 +64,12 @@ export function fetchIncidentHistory(routerID, check) {
   return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/history`)
 }
 
+// Лента событий роутера (/timeline), а не история одной проверки
+// (/incidents/{check}/history) -- см. комментарий у miniappTimelineResp.
+export function fetchTimeline(routerID, days = 7) {
+  return request(`/routers/${routerID}/timeline?days=${days}`)
+}
+
 export function fetchAccess(routerID) {
   return request(`/routers/${routerID}/access`)
 }

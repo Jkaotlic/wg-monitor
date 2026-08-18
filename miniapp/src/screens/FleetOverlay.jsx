@@ -1,4 +1,5 @@
 import { Overlay } from '../ui/Overlay.jsx'
+import { ListRow } from '../ui/ListRow.jsx'
 import { sortByUrgency } from '../fleet.js'
 import { humanAge, statusLabel } from '../labels.js'
 
@@ -12,19 +13,18 @@ export function FleetOverlay({ routers, currentID, onPick, onClose }) {
         <p class="muted">Выберите роутер — откроется его экран.</p>
         <ul class="card list-reset">
           {rows.map((r) => (
-            <li
+            <ListRow
               key={r.id}
-              class={`row row-clickable${r.id === currentID ? ' row-current' : ''}`}
-              onClick={() => onPick(r.id)}
-            >
-              <span class="row-title">{r.nickname}</span>
-              <span class={`badge badge-${r.status}`}>{statusLabel(r.status)}</span>
-              <span class="row-sub">
-                {r.last_seen_age_sec != null
+              title={r.nickname}
+              sub={
+                r.last_seen_age_sec != null
                   ? `последний ответ ${humanAge(r.last_seen_age_sec)} назад`
-                  : 'ещё ни разу не выходил на связь'}
-              </span>
-            </li>
+                  : 'ещё ни разу не выходил на связь'
+              }
+              right={<span class={`badge badge-${r.status}`}>{statusLabel(r.status)}</span>}
+              tone={r.id === currentID ? 'current' : undefined}
+              onClick={() => onPick(r.id)}
+            />
           ))}
         </ul>
       </div>

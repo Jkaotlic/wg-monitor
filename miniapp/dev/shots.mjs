@@ -23,8 +23,15 @@ const SHOTS = [
     },
   },
   { name: 'routes', steps: async (page) => page.getByRole('button', { name: 'Маршруты' }).click() },
-  { name: 'diag', steps: async (page) => page.getByRole('button', { name: 'Диагностика' }).click() },
-  { name: 'events', steps: async (page) => page.getByRole('button', { name: 'События' }).click() },
+  {
+    name: 'diag',
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Диагностика' }).click()
+      await page.getByRole('button', { name: 'Собрать отчёт' }).click()
+      await page.waitForTimeout(600)
+    },
+  },
+  { name: 'events', steps: async (page) => page.getByRole('button', { name: 'События', exact: true }).click() },
 ]
 
 const browser = await chromium.launch()

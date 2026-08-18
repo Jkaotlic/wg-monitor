@@ -1365,3 +1365,172 @@ body {
   color: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
   background: color-mix(in srgb, var(--muted) 16%, var(--surface));
 }
+
+/* ============================================================
+   Лента событий
+   ============================================================ */
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 var(--sp-4);
+}
+
+.filter-chip {
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-chip-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.event-row {
+  gap: var(--sp-3);
+}
+
+.event-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.event-dot-ok { background: var(--ok); }
+.event-dot-warn { background: var(--warn); }
+.event-dot-danger { background: var(--danger); }
+
+.event-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.event-detail {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.event-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ============================================================
+   Маршруты и диагностика
+   ============================================================ */
+.rules-group + .rules-group {
+  margin-top: var(--sp-4);
+}
+
+.rules-bind {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.rules-target {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.diag-cards {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.diag-card {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.diag-card-danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.diag-card-warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.diag-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.diag-verdict {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.diag-verdict-ok { color: color-mix(in srgb, var(--ok) 80%, var(--text) 20%); }
+.diag-verdict-warn { color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%); }
+.diag-verdict-danger { color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%); }
+.diag-verdict-muted { color: var(--muted); }
+
+.raw-toggle {
+  width: 100%;
+}
+
+.raw-dump {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Кликабельная строка -- кнопка внутри li: сама li остаётся разделителем и
+   держит границу, кнопка занимает её целиком и доступна с клавиатуры. */
+.list-row-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.list-row-item:last-child {
+  border-bottom: none;
+}
+
+.list-row-btn {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-row-btn:hover,
+.list-row-btn:active {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.list-row-current .list-row-btn {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
