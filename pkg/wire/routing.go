@@ -107,6 +107,12 @@ type RouteSnapshot struct {
 	// Warnings names non-fatal data source failures. UI must treat the
 	// snapshot as partial when present.
 	Warnings []string `json:"warnings,omitempty"`
+	// PolicyModel marks a snapshot built by an agent that reads awg-manager's
+	// access policies. It cannot be inferred from the policy data: a policy
+	// whose whole chain leaves the VPN has no tunnel ids anywhere, so a router
+	// carrying only such a policy would be indistinguishable from an agent too
+	// old to resolve policies at all.
+	PolicyModel bool `json:"policy_model,omitempty"`
 }
 
 type HRNeoRule struct {

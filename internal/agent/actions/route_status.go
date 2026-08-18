@@ -175,6 +175,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 	policyIndex := map[string]int{}
 	var policyResolver *policyIfaceResolver
 	if policyModel {
+		snap.PolicyModel = true
 		// Only Type=="managed" entries are our VPN tunnels. snap.Tunnels also
 		// carries WAN/system routing targets (added above from the NDMS
 		// routing catalogue) purely for the rebind picker; their display

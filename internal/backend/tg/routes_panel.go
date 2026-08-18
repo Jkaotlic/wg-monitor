@@ -89,7 +89,17 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 // agent that resolves policy interfaces to tunnels. Older agents fill neither
 // ActiveTunnelID nor RoutePolicyInterface.TunnelID, and their snapshots must
 // keep the pre-Phase-B rendering rather than silently lose attribution.
+//
+// snap.PolicyModel is the authoritative signal: whether the agent read
+// access policies is a fact it knows about itself, not something inferable
+// from the policy data -- a policy whose entire chain leaves the VPN has no
+// tunnel ids anywhere, which would otherwise be indistinguishable from an
+// agent too old to resolve policies at all. The per-policy scan below is
+// belt-and-braces for snapshots built before the flag existed.
 func routeSnapshotHasPolicyIdentity(snap wire.RouteSnapshot) bool {
+	if snap.PolicyModel {
+		return true
+	}
 	for _, p := range snap.Policies {
 		if p.ActiveTunnelID != "" {
 			return true

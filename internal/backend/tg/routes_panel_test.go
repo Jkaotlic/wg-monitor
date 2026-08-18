@@ -493,6 +493,27 @@ func TestRoutesPanelText_OldAgentKeepsLegacyAttribution(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelText_PolicyModelFlagCatchesAllNonVPNChain(t *testing.T) {
+	// Политика, у которой вся цепочка не туннель, не оставляет ни
+	// ActiveTunnelID, ни TunnelID -- по этим полям её не отличить от снимка
+	// старого агента. Признак того, что агент вообще читал политики, обязан
+	// быть явным флагом, а не выводиться из данных политики.
+	snap := wire.RouteSnapshot{
+		PolicyModel: true,
+		Counts:      map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{{
+			Name: "RU", DNS: 2, HRNeo: 2,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Bind: "GigabitEthernet1", Name: "Подключение Ethernet", Role: "active", Available: true},
+			},
+		}},
+	}
+	got := RoutesPanelText("client-b", snap)
+	if !strings.Contains(got, "мимо VPN") {
+		t.Errorf("sole non-VPN policy must be marked, even without any tunnel id:\n%s", got)
+	}
+}
+
 func routesKeyboardHasCallback(kb InlineKeyboardMarkup, want string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {

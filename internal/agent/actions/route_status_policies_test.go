@@ -32,6 +32,10 @@ func TestBuildRouteSnapshot_LivePolicyModel(t *testing.T) {
 
 	snap := buildRouteSnapshot(nil, &tunnels, routing, dns, nil, "direct", policies, polIfaces)
 
+	if !snap.PolicyModel {
+		t.Error("snapshot must flag that the agent read access policies")
+	}
+
 	byName := map[string]int{}
 	for i, p := range snap.Policies {
 		byName[p.Name] = i
@@ -176,5 +180,8 @@ func TestBuildRouteSnapshot_LegacyModelUnchanged(t *testing.T) {
 	// Новые поля старая ветка не заполняет -- и не должна.
 	if snap.Policies[0].ActiveTunnelID != "" {
 		t.Errorf("legacy branch must not claim an active tunnel: %q", snap.Policies[0].ActiveTunnelID)
+	}
+	if snap.PolicyModel {
+		t.Error("legacy snapshot (policies == nil) must not claim to have read policies")
 	}
 }
