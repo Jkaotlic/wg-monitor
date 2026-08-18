@@ -68,6 +68,19 @@ describe('policyRows', () => {
     expect(policyRows({ policies: [{ name: 'RU', dns: 3 }] })[0].chain).toEqual([])
   })
 
+  // Экран решает, рисовать ли "привязки нет" вместо списка звеньев, ровно по
+  // chain.length -- отсутствие интерфейсов у политики должно оставаться
+  // отличимым от одного недоступного интерфейса, иначе оба случая молча
+  // схлопнутся в одну и ту же (неверную для одного из них) картинку.
+  it('пустая цепочка отличима от цепочки с одним недоступным звеном', () => {
+    const noInterfaces = policyRows({ policies: [{ name: 'RU', dns: 3 }] })[0]
+    const oneUnavailable = policyRows({
+      policies: [{ name: 'RU', dns: 3, interfaces: [{ bind: 'eth0', role: 'unavailable' }] }],
+    })[0]
+    expect(noInterfaces.chain).toHaveLength(0)
+    expect(oneUnavailable.chain).toHaveLength(1)
+  })
+
   it('снимок без политик даёт пустой список', () => {
     expect(policyRows({})).toEqual([])
     expect(policyRows(null)).toEqual([])

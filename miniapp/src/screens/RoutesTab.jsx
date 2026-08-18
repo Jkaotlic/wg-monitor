@@ -106,7 +106,7 @@ export function RoutesTab({ routerID, asleep }) {
         <Section title="Политики">
           <ul class="card list-reset">
             {policies.map((p) => (
-              <li key={p.name} class="row tunnel-row policy-row">
+              <li key={p.name} class="row tunnel-row">
                 <span class="row-title">
                   {p.name}
                   {p.egress ? <span class="policy-egress">{p.egress}</span> : null}
@@ -115,15 +115,22 @@ export function RoutesTab({ routerID, asleep }) {
                   {p.rules} правил
                   {p.hrNeo ? ` (${p.hrNeo} через HydraRoute)` : ''}
                 </span>
-                <ol class="policy-chain list-reset">
-                  {p.chain.map((i, idx) => (
-                    <li key={i.bind} class={`policy-link policy-link-${i.role}`}>
-                      <span class="policy-link-order">{idx + 1}</span>
-                      <span class="policy-link-name">{i.label}</span>
-                      <span class="policy-link-role">{POLICY_ROLE_LABEL[i.role] ?? i.role}</span>
-                    </li>
-                  ))}
-                </ol>
+                {p.chain.length > 0 ? (
+                  <ol class="policy-chain list-reset">
+                    {p.chain.map((i, idx) => (
+                      <li key={i.bind} class={`policy-link policy-link-${i.role}`}>
+                        <span class="policy-link-order">{idx + 1}</span>
+                        <span class="policy-link-name">{i.label}</span>
+                        <span class="policy-link-role">{POLICY_ROLE_LABEL[i.role] ?? i.role}</span>
+                      </li>
+                    ))}
+                  </ol>
+                ) : (
+                  // Пустая цепочка -- тоже правда, а не пробел: у политики
+                  // нет ни одного интерфейса, и экран обязан сказать это,
+                  // а не молчать пустым списком.
+                  <p class="policy-chain-empty">привязки нет</p>
+                )}
               </li>
             ))}
           </ul>
