@@ -1422,3 +1422,67 @@ func TestRunner_PingCheckToggleRejectsUnsafeNDMSName(t *testing.T) {
 		t.Fatalf("expected ndms_name validation error, got status=%q output=%q", res.Status, res.Output)
 	}
 }
+
+func TestRunner_TunnelRestartByIDUsesControlEndpoint(t *testing.T) {
+	var gotPath, gotID string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotID = r.URL.Path, r.URL.Query().Get("id")
+		_, _ = w.Write([]byte(`{"success":true}`))
+	}))
+	defer srv.Close()
+
+	r := &Runner{AwgClient: awgmgr.New(srv.URL)}
+	// opkg-туннель не имеет ndms_name вовсе: ndmc для него невозможен, и
+	// раньше мини-апп получал 400 "unknown_tunnel" на существующий туннель.
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "c1",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"tunnel_id": "awg11"},
+	})
+	if res.Status != "ok" {
+		t.Fatalf("status = %q, out = %q", res.Status, res.Output)
+	}
+	if gotPath != "/api/control/restart" || gotID != "awg11" {
+		t.Errorf("path=%q id=%q", gotPath, gotID)
+	}
+}
+
+func TestRunner_TunnelRestartFallsBackToNDMCOn404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	var cmds []string
+	r := &Runner{
+		AwgClient: awgmgr.New(srv.URL),
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			cmds = append(cmds, strings.Join(args, " "))
+			return []byte("ok"), nil
+		},
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "c2",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"tunnel_id": "awg20", "ndms_name": "Wireguard0"},
+	})
+	if res.Status != "ok" {
+		t.Fatalf("status = %q, out = %q", res.Status, res.Output)
+	}
+	// Старая сборка без /api/control/restart -- откат на ndmc, а не отказ.
+	if len(cmds) != 2 || !strings.Contains(cmds[0], "Wireguard0 down") || !strings.Contains(cmds[1], "Wireguard0 up") {
+		t.Errorf("ndmc fallback commands = %+v", cmds)
+	}
+}
+
+func TestRunner_TunnelRestartRejectsUnsafeTunnelID(t *testing.T) {
+	r := &Runner{AwgClient: awgmgr.New("http://127.0.0.1:1")}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "c3",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"tunnel_id": "awg11; reboot"},
+	})
+	if res.Status != "err" || !strings.Contains(res.Output, "tunnel_id") {
+		t.Errorf("status=%q out=%q", res.Status, res.Output)
+	}
+}
