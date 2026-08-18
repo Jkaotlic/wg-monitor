@@ -140,7 +140,7 @@ func TestRestartTunnel_MissingEndpointIsRecognisable(t *testing.T) {
 	}
 	// Старые сборки без /api/control/restart должны отличаться от настоящей
 	// ошибки: только по этому признаку агент решает откатиться на ndmc.
-	if !isAwgmgrEndpointMissing(err) {
-		t.Errorf("isAwgmgrEndpointMissing(%v) = false, want true", err)
+	if !IsEndpointMissing(err) {
+		t.Errorf("IsEndpointMissing(%v) = false, want true", err)
 	}
 }
