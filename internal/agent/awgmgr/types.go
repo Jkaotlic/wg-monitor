@@ -52,19 +52,22 @@ type TunnelsAll struct {
 
 // PingCheckTunnel mirrors /api/pingcheck/status .data.tunnels[].
 type PingCheckTunnel struct {
-	TunnelID      string       `json:"tunnelId"`
-	TunnelName    string       `json:"tunnelName"`
-	Enabled       bool         `json:"enabled"`
-	Backend       string       `json:"backend"`
-	Status        string       `json:"status"`
-	Method        string       `json:"method"`
-	LastCheck     nullableTime `json:"lastCheck"`
-	LastLatency   int          `json:"lastLatency"`
-	FailCount     int          `json:"failCount"`
-	SuccessCount  int64        `json:"successCount"`
-	FailThreshold int          `json:"failThreshold"`
-	RestartCount  int          `json:"restartCount"`
-	TunnelRunning bool         `json:"tunnelRunning"`
+	TunnelID    string       `json:"tunnelId"`
+	TunnelName  string       `json:"tunnelName"`
+	Enabled     bool         `json:"enabled"`
+	Backend     string       `json:"backend"`
+	Status      string       `json:"status"`
+	Method      string       `json:"method"`
+	LastCheck   nullableTime `json:"lastCheck"`
+	LastLatency int          `json:"lastLatency"`
+	FailCount   int          `json:"failCount"`
+	// SuccessCount is absent from awg-manager 2.16+ responses. A pointer keeps
+	// "the router did not report it" distinct from "the router reported zero" --
+	// conflating the two is what printed a permanent ✓0 to the operator.
+	SuccessCount  *int64 `json:"successCount"`
+	FailThreshold int    `json:"failThreshold"`
+	RestartCount  int    `json:"restartCount"`
+	TunnelRunning bool   `json:"tunnelRunning"`
 	// NDMSName is the Keenetic interface name (e.g. "Wireguard0"),
 	// resolved by the agent from /api/tunnels/all. Empty if the
 	// tunnel id can't be matched (rare — would mean awg-mgr is
