@@ -325,7 +325,7 @@ func ImportTunnel(ctx context.Context, client *awgmgr.Client, exec ExecFunc, sle
 				slog.Warn("tunnel import: hydraroute policy update failed", "name", name, "id", newID, "err", perr)
 				fmt.Fprintf(&result, "\n⚠️ HydraRoute policy update failed: %v", perr)
 			} else if changed > 0 {
-				fmt.Fprintf(&result, "\n🔁 HydraRoute policy updated: iface=%s rules=%d", imported.InterfaceName, changed)
+				fmt.Fprintf(&result, "\n🔁 HydraRoute policy updated: iface=%s targets=%d", imported.InterfaceName, changed)
 			}
 		}
 		out, execErr := exec(ctx, "/opt/etc/init.d/S99hrneo", "restart")

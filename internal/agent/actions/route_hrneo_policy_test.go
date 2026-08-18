@@ -136,7 +136,7 @@ func TestAddTunnelToHydraRoutePolicies_AppendsAsLastFallback(t *testing.T) {
 	tunnel := awgmgr.Tunnel{ID: "awg20", Name: "NetherlandsKerkradeS24", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
 	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
 	if err != nil {
-		t.Fatalf("addIfaceToHydraRoutePolicies: %v", err)
+		t.Fatalf("addTunnelToHydraRoutePolicies: %v", err)
 	}
 	if changed != 1 {
 		t.Errorf("changed = %d, want 1", changed)
@@ -211,5 +211,75 @@ func TestAddTunnelToHydraRoutePolicies_FailsWhenPostconditionNotMet(t *testing.T
 	// проверив результат. Повторять его в новом коде нельзя.
 	if err == nil {
 		t.Fatal("want error: interface did not appear in the chain after permit")
+	}
+}
+
+// TestAddTunnelToHydraRoutePolicies_OrderPerPolicyDoesNotLeak covers a single
+// call that permits into two policies whose chains have different lengths.
+// A single-policy test cannot show whether the order argument is computed
+// fresh per policy or leaks a counter/length across loop iterations.
+func TestAddTunnelToHydraRoutePolicies_OrderPerPolicyDoesNotLeak(t *testing.T) {
+	s := &policyStub{
+		policies: map[string][]awgmgr.AccessPolicyInterface{
+			"Short": {{Name: "OpkgTun11", Order: 0}},
+			"Long":  {{Name: "OpkgTun11", Order: 0}, {Name: "OpkgTun10", Order: 1}, {Name: "OpkgTun9", Order: 2}},
+		},
+		ifaces: []awgmgr.PolicyInterface{
+			{Name: "OpkgTun11", Up: true}, {Name: "OpkgTun10", Up: false}, {Name: "OpkgTun9", Up: false},
+			{Name: "Wireguard0", Up: false},
+		},
+	}
+	srv := s.server(t)
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	changed, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err != nil {
+		t.Fatalf("addTunnelToHydraRoutePolicies: %v", err)
+	}
+	if changed != 2 {
+		t.Fatalf("changed = %d, want 2", changed)
+	}
+	want := map[string]bool{"Short/Wireguard0@1": true, "Long/Wireguard0@3": true}
+	if len(s.permits) != 2 {
+		t.Fatalf("permits = %+v", s.permits)
+	}
+	for _, p := range s.permits {
+		if !want[p] {
+			t.Errorf("unexpected permit %q (order must be computed per-policy, not leaked across iterations)", p)
+		}
+	}
+}
+
+// TestAddTunnelToHydraRoutePolicies_FailsOnPolicyReadError covers the door the
+// fallback-on-any-error version of this function left open: on a genuine
+// 2.16+ router, a transient failure reading /api/routing/access-policies (not
+// a 404 — the endpoint exists) must NOT be treated as "old router, use the
+// legacy path". The binding no longer lives on the DNS rule on this build, so
+// silently falling back there would edit nothing that matters and report
+// success for a tunnel that never entered routing — the exact defect this
+// task exists to eliminate, reached through a different door.
+func TestAddTunnelToHydraRoutePolicies_FailsOnPolicyReadError(t *testing.T) {
+	var paths []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	tunnel := awgmgr.Tunnel{ID: "awg20", InterfaceName: "nwg0", NDMSName: "Wireguard0"}
+	_, err := addTunnelToHydraRoutePolicies(context.Background(), awgmgr.New(srv.URL), tunnel)
+	if err == nil {
+		t.Fatal("want error: access-policies read failed with a non-404 status")
+	}
+	for _, p := range paths {
+		if strings.HasPrefix(p, "/api/dns-routes/") {
+			t.Errorf("legacy endpoint %q was called after a non-404 access-policies read error; that endpoint no longer holds the binding on this router", p)
+		}
 	}
 }

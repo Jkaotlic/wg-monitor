@@ -36,7 +36,7 @@ func hrNeoPolicyRoute(name string, targets []string, iface, bindID string) awgmg
 	}
 }
 
-// addIfaceToHydraRoutePolicies makes a freshly imported tunnel reachable as a
+// addTunnelToHydraRoutePolicies makes a freshly imported tunnel reachable as a
 // standby for the router's access policies.
 //
 // On the policy model (awg-manager 2.16+) the binding lives on the policy, so
@@ -65,8 +65,17 @@ func addTunnelToHydraRoutePolicies(ctx context.Context, c *awgmgr.Client, t awgm
 		return 0, nil
 	}
 	policies, err := c.AccessPolicies(ctx)
-	if err != nil || len(policies) == 0 {
-		// No policies (or no endpoint) — this router runs the legacy model.
+	switch {
+	case err != nil && awgmgr.IsEndpointMissing(err):
+		// No such endpoint — a build old enough to keep the binding on the rule.
+		return addIfaceToHydraRouteRules(ctx, c, iface)
+	case err != nil:
+		// The endpoint exists and the read failed. Falling back to the legacy
+		// path here would edit rules whose binding no longer lives there and
+		// report success for a tunnel that never entered routing.
+		return 0, fmt.Errorf("routing/access-policies: %w", err)
+	case len(policies) == 0:
+		// Policy model present but nothing configured — nothing to permit into.
 		return addIfaceToHydraRouteRules(ctx, c, iface)
 	}
 	polIfaces, err := c.PolicyInterfaces(ctx)
