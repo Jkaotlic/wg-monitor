@@ -87,35 +87,112 @@ const HISTORY = [
   { check_name: 'tunnel_awg12', status: 'ok', ts: agoISO(180000), details: '' },
 ]
 
+// Настоящий снимок с домашнего роутера (awg-manager 2.17.2+r5), снят вручную
+// командой route_status 2026-08-18. Это не выдумка -- смысл этой фикстуры в
+// том, что на неё можно положиться при проверке цепочки политик, отметки
+// "мимо VPN" и привязки правил к туннелю. Из 28 присланных правил оставлена
+// показательная выборка (4 с bind=policy:HydraRoute, 2 с bind=policy:RU) --
+// чтобы список на скриншоте оставался читаемым; в каждом правиле убраны
+// повторы одного и того же target (сырой ответ дублирует их), значения не
+// придуманы. Политики, туннели, counts, other и policy_model скопированы
+// целиком. Чтобы переснять: agent route_status на живом роутере, тот же
+// отбор правил.
 const ROUTE_SNAPSHOT = {
-  hr_neo: { enabled: true },
+  hr_neo: { installed: true, running: true },
+  policy_model: true,
+  counts: {},
+  other: { dns: 0, hr_neo: 0, static: 0 },
   tunnels: [
-    { id: 'awg12', name: 'Amsterdam', iface: 'OpkgTun11', enabled: true, default_route: true },
-    { id: 'awg10', name: 'Frankfurt', iface: 'OpkgTun10', enabled: true },
-    { id: 'awg7', name: 'Reserve', iface: 'Wireguard1', enabled: false },
+    {
+      id: 'awg10', name: 'awg3-main-work', iface: 'opkgtun10', type: 'managed',
+      enabled: true, available: true, status: 'disabled', default_route: true,
+      has_handshake: true, handshake_age_sec: 101262, ping_status: 'disabled',
+      restart_method: 'control',
+    },
+    {
+      id: 'awg11', name: 'awg3-work-via-ru1', iface: 'opkgtun11', type: 'managed',
+      enabled: true, available: true, status: 'running', default_route: true,
+      has_handshake: true, handshake_age_sec: 115, ping_status: 'alive', ping_fail_max: 3,
+      restart_method: 'control',
+    },
+    {
+      id: 'awg20', name: 'NetherlandsKerkradeS24', iface: 'nwg0', ndms_name: 'Wireguard0', type: 'managed',
+      enabled: true, available: true, status: 'disabled', default_route: true,
+      ping_status: 'disabled', restart_method: 'control',
+    },
+    {
+      id: 'Wireguard4', name: 'AWGM WG Server', iface: 'Wireguard4', type: 'system',
+      enabled: true, available: true, restart_method: 'none',
+    },
+    { id: 'apcli0', name: 'Wi-Fi клиент 2.4 ГГц', iface: 'apcli0', type: 'wan', enabled: false, restart_method: 'none' },
+    { id: 'apclii0', name: 'Wi-Fi клиент 2.4 ГГц', iface: 'apclii0', type: 'wan', enabled: false, restart_method: 'none' },
+    { id: 'cdc_br0', name: 'Huawei Mobile Broadband', iface: 'cdc_br0', type: 'wan', enabled: false, restart_method: 'none' },
+    { id: 'eth3', name: 'Подключение Ethernet', iface: 'eth3', type: 'wan', enabled: true, available: true, restart_method: 'none' },
   ],
-  counts: {
-    awg12: { dns: 32, static: 2, hr_neo: 32 },
-    awg10: { dns: 0, static: 0, hr_neo: 0 },
-    awg7: { dns: 3, static: 0, hr_neo: 0 },
-  },
   policies: [
     {
       name: 'HydraRoute',
-      dns: 32,
-      hr_neo: 32,
+      dns: 26,
+      hr_neo: 26,
+      via_vpn: true,
+      active_tunnel_id: 'awg11',
+      // Цепочка -- приоритет: awg11 сейчас несёт трафик (role active), awg20
+      // и awg10 -- резерв на случай, если awg11 ляжет (role unavailable).
       interfaces: [
-        { bind: 'OpkgTun11', name: 'Amsterdam', role: 'active', available: true },
-        { bind: 'OpkgTun10', name: 'Frankfurt', role: 'fallback', available: true },
-        { bind: 'Wireguard1', name: 'Reserve', role: 'unavailable' },
+        { bind: 'OpkgTun11', name: 'awg3-work-via-ru1', role: 'active', available: true, tunnel_id: 'awg11', via_vpn: true },
+        { bind: 'Wireguard0', name: 'NetherlandsKerkradeS24', role: 'unavailable', order: 1, tunnel_id: 'awg20', via_vpn: true },
+        { bind: 'OpkgTun10', name: 'awg3-main-work', role: 'unavailable', order: 2, tunnel_id: 'awg10', via_vpn: true },
       ],
     },
-    { name: 'RU', dns: 3, hr_neo: 0, interfaces: [{ bind: 'GigabitEthernet1', name: 'Провайдер', role: 'active' }] },
+    {
+      // У RU нет tunnel_id ни на политике, ни на её единственном звене --
+      // трафик идёт через провайдера напрямую, мимо VPN, и это тоже правда.
+      name: 'RU',
+      dns: 2,
+      hr_neo: 2,
+      interfaces: [{ bind: 'GigabitEthernet1', name: 'Подключение Ethernet', role: 'active', available: true }],
+    },
   ],
   rules: [
-    { id: '1', name: 'youtube', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'OpkgTun11', targets: [{ type: 'domain', value: 'youtube.com' }, { type: 'domain', value: 'ytimg.com' }] },
-    { id: '2', name: 'instagram', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'OpkgTun11', targets: [{ type: 'domain', value: 'instagram.com' }] },
-    { id: '3', name: 'банки', kind: 'static', enabled: true, bind: 'GigabitEthernet1', targets: [{ type: 'cidr', value: '185.71.76.0/22' }] },
+    {
+      id: 'hr:AIgeo', name: 'AIgeo', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:HydraRoute',
+      targets: [
+        { type: 'opaque', value: 'geosite:OPENAI' },
+        { type: 'opaque', value: 'geosite:ANTHROPIC' },
+        { type: 'opaque', value: 'geosite:CATEGORY-AI' },
+        { type: 'opaque', value: 'geosite:CATEGORY-AI-CHAT' },
+        { type: 'opaque', value: 'geoip:ANTHROPIC' },
+        { type: 'opaque', value: 'geoip:AI' },
+      ],
+    },
+    {
+      id: 'hr:Amnezia', name: 'Amnezia', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:HydraRoute',
+      targets: [{ type: 'domain', value: 'amnezia.org' }],
+    },
+    {
+      id: 'hr:ChatGPT', name: 'ChatGPT', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:HydraRoute',
+      targets: [
+        { type: 'domain', value: 'chatgpt.com' },
+        { type: 'domain', value: 'gpt3-openai.com' },
+        { type: 'domain', value: 'oaistatic.com' },
+        { type: 'domain', value: 'oaiusercontent.com' },
+        { type: 'domain', value: 'openai.com' },
+        { type: 'domain', value: 'openai.fund' },
+        { type: 'domain', value: 'openai.org' },
+      ],
+    },
+    {
+      id: 'hr:GITHUB', name: 'GITHUB', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:HydraRoute',
+      targets: [{ type: 'opaque', value: 'geosite:GITHUB' }, { type: 'opaque', value: 'geoip:GITHUB' }],
+    },
+    {
+      id: 'hr:geoip:ru', name: 'geoip:ru', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:RU',
+      targets: [{ type: 'opaque', value: 'geoip:ru' }],
+    },
+    {
+      id: 'hr:Домены', name: 'Домены', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:RU',
+      targets: [{ type: 'domain', value: 'ru' }, { type: 'domain', value: 'su' }],
+    },
   ],
 }
 
