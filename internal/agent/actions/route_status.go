@@ -92,7 +92,15 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	if policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr) {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/access-policies failed: %v", policiesErr))
 	}
-	if polIfacesErr != nil && !awgmgr.IsEndpointMissing(polIfacesErr) {
+	// Для интерфейсов политик 404 означает "старая сборка" ТОЛЬКО пока старая
+	// модель и правда в силе, то есть пока политик у нас нет. Если политики
+	// прочитались, сборка заведомо новая, снимок живёт ими -- и отсутствие
+	// up/down это не сигнал модели, а недостающие данные: резолвер сочтёт
+	// лежачим каждый интерфейс, активного звена не останется ни у одной
+	// политики, и обе морды покажут "нет доступного интерфейса" как полный
+	// снимок.
+	legacyModel := len(policies) == 0
+	if polIfacesErr != nil && !(legacyModel && awgmgr.IsEndpointMissing(polIfacesErr)) {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/policy-interfaces failed: %v", polIfacesErr))
 	}
 	b, err := json.Marshal(snap)

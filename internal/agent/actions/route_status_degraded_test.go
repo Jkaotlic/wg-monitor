@@ -141,14 +141,41 @@ func TestRouteStatus_MissingPoliciesEndpointKeepsLegacyModel(t *testing.T) {
 	}
 }
 
-// То же и для второй выборки по отдельности: отсутствующий эндпоинт --
+// Старая сборка: нет ни политик, ни их интерфейсов. Второй эндпоинт
+// отсутствует по той же причине, что и первый, и молчание про него -- тот же
 // сигнал модели, а не потеря данных.
-func TestRouteStatus_MissingPolicyInterfacesEndpointDoesNotWarn(t *testing.T) {
-	srv := fakeDegradedRouter(t, degradedRouterOpts{polIfacesStatus: http.StatusNotFound})
+func TestRouteStatus_LegacyRouterWithNeitherPolicyEndpointDoesNotWarn(t *testing.T) {
+	srv := fakeDegradedRouter(t, degradedRouterOpts{
+		policiesStatus:  http.StatusNotFound,
+		polIfacesStatus: http.StatusNotFound,
+	})
 	snap := routeStatusSnapshot(t, srv)
 
 	if len(snap.Warnings) != 0 {
-		t.Errorf("404 on policy-interfaces must not warn: %+v", snap.Warnings)
+		t.Errorf("404 on both policy endpoints must not warn: %+v", snap.Warnings)
+	}
+}
+
+// А вот смешанный случай -- настоящая потеря данных, и молчать про неё
+// нельзя.
+//
+// Политики прочитались, значит модель политик включена и снимок ими живёт.
+// Без up/down резолвер считает лежачим каждый интерфейс: активного звена нет
+// ни у одной политики, ActiveTunnelID пустеет, бот печатает "нет доступного
+// интерфейса" на всё подряд. 404 здесь означает не "старая сборка" (сборка
+// заведомо новая -- она отдала политики), а именно недостающие данные.
+func TestRouteStatus_MissingPolicyInterfacesOnPolicyModelWarns(t *testing.T) {
+	srv := fakeDegradedRouter(t, degradedRouterOpts{polIfacesStatus: http.StatusNotFound})
+	snap := routeStatusSnapshot(t, srv)
+
+	if !snap.PolicyModel {
+		t.Fatalf("precondition: policies were served, so the policy model must be on")
+	}
+	if !hasWarningAbout(snap, "/api/routing/policy-interfaces") {
+		t.Fatalf("policy model with no up/down is a partial snapshot; warnings = %+v", snap.Warnings)
+	}
+	if len(snap.Warnings) != 1 {
+		t.Errorf("warnings = %+v, want exactly one", snap.Warnings)
 	}
 }
 
