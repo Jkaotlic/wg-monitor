@@ -1448,7 +1448,9 @@ func TestRunner_TunnelRestartByIDUsesControlEndpoint(t *testing.T) {
 }
 
 func TestRunner_TunnelRestartFallsBackToNDMCOn404(t *testing.T) {
+	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
@@ -1460,6 +1462,7 @@ func TestRunner_TunnelRestartFallsBackToNDMCOn404(t *testing.T) {
 			cmds = append(cmds, strings.Join(args, " "))
 			return []byte("ok"), nil
 		},
+		Sleep: func(ctx context.Context, d time.Duration) error { return nil },
 	}
 	res := r.Execute(context.Background(), wire.Command{
 		ID:     "c2",
@@ -1470,8 +1473,48 @@ func TestRunner_TunnelRestartFallsBackToNDMCOn404(t *testing.T) {
 		t.Fatalf("status = %q, out = %q", res.Status, res.Output)
 	}
 	// Старая сборка без /api/control/restart -- откат на ndmc, а не отказ.
+	// hits == 1 proves awg-manager was actually contacted (and answered 404)
+	// before ndmc ran; against the pre-fix code, which never called
+	// awg-manager at all, hits would be 0 and this assertion would fail.
+	if hits != 1 {
+		t.Errorf("awg-manager hits = %d, want 1 (contacted before ndmc fallback)", hits)
+	}
 	if len(cmds) != 2 || !strings.Contains(cmds[0], "Wireguard0 down") || !strings.Contains(cmds[1], "Wireguard0 up") {
 		t.Errorf("ndmc fallback commands = %+v", cmds)
+	}
+}
+
+func TestRunner_TunnelRestartDoesNotFallBackOnNon404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"unknown_tunnel"}`))
+	}))
+	defer srv.Close()
+
+	var execCalls int
+	r := &Runner{
+		AwgClient: awgmgr.New(srv.URL),
+		Exec: func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			execCalls++
+			return []byte("ok"), nil
+		},
+		Sleep: func(ctx context.Context, d time.Duration) error { return nil },
+	}
+	res := r.Execute(context.Background(), wire.Command{
+		ID:     "c4",
+		Action: "tunnel_restart",
+		Args:   map[string]any{"tunnel_id": "awg20", "ndms_name": "Wireguard0"},
+	})
+	// A 400 means the endpoint exists and rejected the input -- a real
+	// failure the operator must see, never a reason to fall back to ndmc.
+	if res.Status != "err" {
+		t.Fatalf("status = %q, out = %q, want err", res.Status, res.Output)
+	}
+	if !strings.Contains(res.Output, "400") || !strings.Contains(res.Output, "unknown_tunnel") {
+		t.Errorf("output = %q, want it to carry the 400 body through", res.Output)
+	}
+	if execCalls != 0 {
+		t.Errorf("Exec called %d times, want 0: a non-404 must never fall back to ndmc", execCalls)
 	}
 }
 
