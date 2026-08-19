@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -102,5 +102,32 @@ describe('backButtonVisible', () => {
   })
   it('видна при открытом шите', () => {
     expect(backButtonVisible({ ...base, sheet: { title: 'x' } })).toBe(true)
+  })
+})
+
+// Таб "Маршруты" уступил место табу "Туннели": маршруты уехали внутрь
+// туннеля, потому что оператор спрашивает "какая линия поднята", а уже
+// потом -- "что через неё идёт".
+describe('переименование таба маршрутов в туннели', () => {
+  it('в списке табов есть tunnels и нет routes', () => {
+    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events'])
+  })
+
+  it('переключение на tunnels работает', () => {
+    const s = navReducer({ tab: 'router' }, { type: 'tab', tab: 'tunnels' })
+    expect(s.tab).toBe('tunnels')
+  })
+
+  // Deep-link из старой тревоги ведёт на routes. Молча игнорировать его
+  // значило бы открыть не тот экран и не сказать об этом: ссылка живёт в
+  // уже отправленных сообщениях Telegram и будет приходить ещё месяцами.
+  it('старый deep-link на routes открывает tunnels', () => {
+    const s = navReducer({ tab: 'router' }, { type: 'tab', tab: 'routes' })
+    expect(s.tab).toBe('tunnels')
+  })
+
+  it('незнакомый таб по-прежнему игнорируется', () => {
+    const s = navReducer({ tab: 'router' }, { type: 'tab', tab: 'нечто' })
+    expect(s.tab).toBe('router')
   })
 })

@@ -2,7 +2,14 @@
 // компонентам. Причина: слоёв стало четыре (таб, оверлей, шит и выбранный
 // роутер), а кнопка "назад" у Telegram одна, и решать, что она закрывает,
 // должно одно место.
-export const TABS = ['router', 'routes', 'diag', 'events']
+export const TABS = ['router', 'tunnels', 'diag', 'events']
+
+// Таб "Маршруты" стал табом "Туннели": маршруты уехали внутрь туннеля, потому
+// что оператор сначала спрашивает "какая линия поднята", и только потом --
+// "что через неё идёт". Прежнее имя остаётся псевдонимом не из вежливости:
+// deep-link из уже отправленных тревог живёт в переписке Telegram месяцами,
+// и открыть по нему не тот экран молча было бы хуже, чем не открыть вовсе.
+const TAB_ALIASES = { routes: 'tunnels' }
 
 export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
   const state = { routerID: null, tab: 'router', overlay: null, sheet: null }
@@ -29,8 +36,10 @@ export function navReducer(state, action) {
     // пришлось бы делать до того, как известно, что доступно.
     case 'init':
       return action.state ?? state
-    case 'tab':
-      return TABS.includes(action.tab) ? { ...state, tab: action.tab } : state
+    case 'tab': {
+      const tab = TAB_ALIASES[action.tab] ?? action.tab
+      return TABS.includes(tab) ? { ...state, tab } : state
+    }
     case 'router':
       return { ...state, routerID: action.id, tab: 'router', overlay: null, sheet: null }
     case 'overlay':
