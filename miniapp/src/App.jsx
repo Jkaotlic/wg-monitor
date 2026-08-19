@@ -98,7 +98,11 @@ export function App() {
       : nav.overlay === 'routes' && nav.routerID != null
         ? (
           <Overlay title="Маршруты" backLabel="Туннели" onBack={() => dispatch({ type: 'overlay', overlay: null })}>
-            <RoutesTab routerID={nav.routerID} asleep={asleep} />
+            <RoutesTab
+              routerID={nav.routerID}
+              asleep={asleep}
+              openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+            />
           </Overlay>
         )
         : null

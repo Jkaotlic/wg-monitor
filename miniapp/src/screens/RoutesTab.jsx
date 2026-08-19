@@ -15,6 +15,8 @@ import {
 } from '../routes.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
+import { confirmSheet } from '../sheet.js'
+import { deletePlanSummary } from '../routeAdd.js'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
 const POLICY_ROLE_LABEL = {
@@ -34,7 +36,7 @@ function ruleTargets(rule) {
 // роутера, поэтому раскладке ниже можно верить. Управление сюда не вынесено
 // сознательно -- перенос правил между туннелями требует превью, подтверждения
 // и отката, и он относится к фазе рабочего места оператора.
-export function RoutesTab({ routerID, asleep }) {
+export function RoutesTab({ routerID, asleep, openSheet }) {
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
@@ -48,10 +50,51 @@ export function RoutesTab({ routerID, asleep }) {
     if (result?.status === 'ok') setSnapshot(parseRouteSnapshot(result.output))
   }, [result])
 
+  // Удаление идёт в два шага: сначала агент считает план и говорит, что
+  // именно исчезнет, и только потом человек подтверждает. Одношаговое
+  // удаление правила, которого он не видит целиком, -- это удаление вслепую.
+  const plan = useCommand(routerID)
+  const [pendingRule, setPendingRule] = useState(null)
+
+  useEffect(() => {
+    if (!pendingRule || plan.result?.status !== 'ok') return
+    const summary = deletePlanSummary(parseRouteSnapshot(plan.result.output))
+    setPendingRule(null)
+    openSheet?.(
+      confirmSheet({
+        routerID,
+        title: `Убрать «${summary.title}»?`,
+        body: summary.lines.length
+          ? `Перестанет уходить в туннель: ${summary.lines.join(' · ')}`
+          : 'Правило исчезнет с роутера.',
+        action: 'route_delete',
+        args: { kind: pendingRule.kind, route_id: pendingRule.id, preview_hash: summary.hash },
+        buttonLabel: 'Убрать',
+        danger: true,
+        asleep,
+        onDone: () => run('route_status', {}, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }),
+      }),
+    )
+  }, [plan.result])
+
+  const askDelete = (rule) => {
+    setPendingRule({ id: rule.id, kind: rule.kind })
+    plan.run('route_delete_plan', { kind: rule.kind, route_id: rule.id }, { deadlineMs: asleep ? 6 * 60_000 : 90_000 })
+  }
+
   const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
   const tunnels = visibleTunnelRows(tunnelRows(snapshot))
   const groups = rulesByBind(snapshot)
+
+  // Менять маршруты по неполной картине нельзя. Серая неактивная кнопка тут
+  // не годится: она не объясняет, почему нельзя, -- поэтому кнопок просто
+  // нет, а причина сказана словами ниже.
+  const canMutate =
+    Boolean(openSheet) &&
+    snapshot != null &&
+    !(snapshot.warnings?.length) &&
+    !snapshot.singbox_router?.enabled
 
   return (
     <div class="screen">
@@ -161,6 +204,16 @@ export function RoutesTab({ routerID, asleep }) {
                 {g.rules.slice(0, 20).map((r) => (
                   <li key={r.id} class="row tunnel-row">
                     <span class="row-title rules-target">{ruleTargets(r)}</span>
+                    {canMutate && (
+                      <button
+                        type="button"
+                        class="btn btn-ghost btn-row"
+                        disabled={plan.busy}
+                        onClick={() => askDelete(r)}
+                      >
+                        Убрать
+                      </button>
+                    )}
                     <span class="tunnel-sub">
                       {KIND_LABEL[r.kind] ?? r.kind}
                       {r.backend ? ` · ${ruleBackendLabel(r.backend)}` : ''}
@@ -175,6 +228,14 @@ export function RoutesTab({ routerID, asleep }) {
             </div>
           ))}
         </Section>
+      )}
+
+      {snapshot && !canMutate && openSheet && (
+        <p class="admin-note">
+          {snapshot.singbox_router?.enabled
+            ? 'Маршрут выбирает sing-box — правила ниже не действуют, и менять их отсюда бессмысленно.'
+            : 'Снимок неполный — менять маршруты по нему нельзя.'}
+        </p>
       )}
 
       {snapshot && (

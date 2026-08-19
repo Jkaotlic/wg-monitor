@@ -225,6 +225,31 @@ export function setLastAction(action) {
 }
 
 function commandResult() {
+  if (lastAction === 'route_delete_plan') {
+    return {
+      id: 'dev',
+      status: 'ok',
+      duration_ms: 140,
+      output: JSON.stringify({
+        route: {
+          id: 'hr:ChatGPT',
+          name: 'ChatGPT',
+          kind: 'dns',
+          targets: [
+            { type: 'domain', value: 'chatgpt.com' },
+            { type: 'domain', value: 'openai.com' },
+            { type: 'domain', value: 'oaistatic.com' },
+          ],
+        },
+        warnings: [{ severity: 'warn', reason: 'последнее правило, ведущее в awg3-work-via-ru1' }],
+        can_apply: true,
+        hash: 'devhash',
+      }),
+    }
+  }
+  if (lastAction === 'route_delete') {
+    return { id: 'dev', status: 'ok', duration_ms: 260, output: 'правило удалено' }
+  }
   if (lastAction === 'route_status') {
     return { id: 'dev', status: 'ok', duration_ms: 120, output: JSON.stringify(ROUTE_SNAPSHOT) }
   }
