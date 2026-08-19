@@ -20,6 +20,14 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 	allowed := []string{
 		"force_recheck", "diag_now", "tunnels_status", "route_status",
 		"check_via_tunnel", "check_direct", "tunnel_restart",
+		// Управление маршрутами (фаза C3). Каждое router-local и обратимо:
+		// add/delete идут через план с хешем черновика, rebind -- с превью и
+		// результатом по категориям, promote переупорядочивает уже состоящие
+		// в цепочке интерфейсы и отменяется тем же действием. Аргументы всех
+		// семи проверяются явными ветками sanitizeWizardCommandArgs.
+		"route_templates", "route_add_plan", "route_add",
+		"route_delete_plan", "route_delete", "route_rebind",
+		"route_policy_promote",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -36,7 +44,6 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_enable",      // config change, not a fix
 		"tunnel_disable",     // config change, not a fix
 		"self_update",        // audited deploy flow
-		"route_rebind",       // route mutation
 		"tunnel_import",      // route/config mutation
 		"dns_reset",          // router-global; stays on the dashboard
 		"agent_config_get",
@@ -366,5 +373,35 @@ func TestMiniappCommandTunnelRestartUnknownTunnelStillRejected(t *testing.T) {
 	}
 	if len(sink.enqueued) != 0 {
 		t.Errorf("nothing must be enqueued: %+v", sink.enqueued)
+	}
+}
+
+// Управление маршрутами: шесть готовых действий агента плюс новое
+// route_policy_promote. Каждое router-local; add/delete идут через план с
+// хешем черновика, rebind -- с превью и результатом по категориям.
+func TestMiniappAllowsRouteManagement(t *testing.T) {
+	for _, action := range []string{
+		"route_templates", "route_add_plan", "route_add",
+		"route_delete_plan", "route_delete", "route_rebind",
+		"route_policy_promote",
+	} {
+		if !miniappCommandAllowlist[action] {
+			t.Errorf("%s должен быть разрешён мини-аппу", action)
+		}
+	}
+}
+
+// Радиус поражения этих действий шире одного роутера либо необратим, и фаза
+// управления маршрутами их не открывает. Список закреплён тестом, потому что
+// «добавить ещё одно, раз уж рядом» -- самый частый способ потерять границу.
+func TestMiniappStillDeniesDangerousActions(t *testing.T) {
+	for _, action := range []string{
+		"tunnel_delete", "dns_reset", "update_backend_url", "tunnel_import",
+		"opkg_upgrade", "firmware_install", "self_update", "update_agent_config",
+		"service_restart", "entware_clean_run",
+	} {
+		if miniappCommandAllowlist[action] {
+			t.Errorf("%s не должен быть доступен мини-аппу", action)
+		}
 	}
 }

@@ -1633,3 +1633,113 @@ func TestWizardCommandDispatchNamesMissingTunnelIdentifier(t *testing.T) {
 		t.Fatalf("command without an identifier was enqueued: %+v", sink.enqueued)
 	}
 }
+
+// --- Маршрутные действия -------------------------------------------------
+//
+// Ветка default санитайзера возвращает аргументы КАК ЕСТЬ. Пока маршрутных
+// действий не было в allowlist мини-аппа, это ничем не грозило: у остальных
+// разрешённых действий аргументов нет вовсе. В ту секунду, когда allowlist
+// их открывает, клиентские name/targets/template_id поедут агенту без единой
+// проверки -- поэтому явные ветки обязаны лечь раньше allowlist.
+
+func TestSanitizeRouteAddArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_add", map[string]any{
+		"kind":       "dns",
+		"name":       "  ChatGPT  ",
+		"tunnel_id":  "awg11",
+		"targets":    []any{" openai.com ", "chatgpt.com", ""},
+		"use_hr_neo": true,
+		"draft_hash": "abc123",
+		"лишнее":     "должно исчезнуть",
+	})
+	if !ok {
+		t.Fatalf("отбил корректные аргументы: %s", rec.Body.String())
+	}
+	if got["name"] != "ChatGPT" {
+		t.Fatalf("name = %v, ожидалось обрезанное", got["name"])
+	}
+	if _, extra := got["лишнее"]; extra {
+		t.Fatal("санитайзер пропустил неизвестный ключ")
+	}
+	targets, _ := got["targets"].([]string)
+	if len(targets) != 2 || targets[0] != "openai.com" {
+		t.Fatalf("targets = %v, ожидались две очищенные цели", got["targets"])
+	}
+}
+
+func TestSanitizeRouteAddRejectsBadInput(t *testing.T) {
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"чужой kind", map[string]any{"kind": "magic", "tunnel_id": "awg11", "targets": []any{"a.com"}}},
+		{"небезопасный tunnel_id", map[string]any{"kind": "dns", "tunnel_id": "awg11;rm -rf /", "targets": []any{"a.com"}}},
+		{"ни целей, ни шаблона", map[string]any{"kind": "dns", "tunnel_id": "awg11"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if _, ok := sanitizeWizardCommandArgs(rec, "route_add", tc.args); ok {
+				t.Fatal("санитайзер пропустил невалидные аргументы")
+			}
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("код = %d, ожидался 400", rec.Code)
+			}
+		})
+	}
+}
+
+func TestSanitizeRouteDeleteArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_delete", map[string]any{
+		"kind": "dns", "route_id": "hr:ChatGPT", "preview_hash": "deadbeef", "мусор": 1,
+	})
+	if !ok {
+		t.Fatalf("отбил корректные аргументы: %s", rec.Body.String())
+	}
+	if got["route_id"] != "hr:ChatGPT" || len(got) != 3 {
+		t.Fatalf("got = %v", got)
+	}
+}
+
+func TestSanitizeRouteTemplatesTakesNoArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_templates", map[string]any{"что-то": "лишнее"})
+	if !ok || len(got) != 0 {
+		t.Fatalf("got = %v ok = %v, ожидались пустые аргументы", got, ok)
+	}
+}
+
+func TestSanitizeRoutePolicyPromoteArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_policy_promote", map[string]any{
+		"policy_name": " HydraRoute ", "tunnel_id": "awg11", "лишнее": true,
+	})
+	if !ok || got["policy_name"] != "HydraRoute" || len(got) != 2 {
+		t.Fatalf("got = %v ok = %v", got, ok)
+	}
+	rec = httptest.NewRecorder()
+	if _, ok := sanitizeWizardCommandArgs(rec, "route_policy_promote", map[string]any{"policy_name": "", "tunnel_id": "awg11"}); ok {
+		t.Fatal("пустое имя политики должно отбиваться")
+	}
+}
+
+// Список целей ограничен не из вредности: правило с тысячей доменов роутер
+// примет, а потом утонет при каждом обновлении маршрутов.
+func TestSanitizeRouteTargetsBounded(t *testing.T) {
+	huge := make([]any, 0, 500)
+	for i := 0; i < 500; i++ {
+		huge = append(huge, "site.example")
+	}
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_add", map[string]any{
+		"kind": "dns", "tunnel_id": "awg11", "targets": huge,
+	})
+	if !ok {
+		t.Fatalf("отбил: %s", rec.Body.String())
+	}
+	if targets, _ := got["targets"].([]string); len(targets) != 200 {
+		t.Fatalf("целей %d, ожидалось 200", len(targets))
+	}
+}

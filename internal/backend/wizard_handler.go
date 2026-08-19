@@ -936,6 +936,82 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "route_templates":
+		// Каталог читается без параметров; всё, что прислал клиент, -- лишнее.
+		return map[string]any{}, true
+	case "route_add", "route_add_plan":
+		kind := strings.ToLower(strings.TrimSpace(argString(args, "kind")))
+		if kind != "dns" && kind != "static" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_route_kind", "kind must be dns or static")
+			return nil, false
+		}
+		tunnelID := strings.TrimSpace(argString(args, "tunnel_id"))
+		if !wizardRouteTargetIDLooksSafe(tunnelID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe route target id")
+			return nil, false
+		}
+		targets := sanitizeRouteTargets(args["targets"])
+		templateID := strings.TrimSpace(argString(args, "template_id"))
+		// Либо явные цели, либо набор из каталога: без того и другого плану
+		// не из чего собирать правило, и агент ответит ошибкой уже после
+		// похода на роутер.
+		if len(targets) == 0 && templateID == "" {
+			writeJSONError(w, http.StatusBadRequest, "empty_route_targets", "targets or template_id is required")
+			return nil, false
+		}
+		if templateID != "" && !wizardRouteTargetIDLooksSafe(templateID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_template_id", "template_id must be a safe id")
+			return nil, false
+		}
+		out := map[string]any{"kind": kind, "tunnel_id": tunnelID}
+		if len(targets) > 0 {
+			out["targets"] = targets
+		}
+		if templateID != "" {
+			out["template_id"] = templateID
+		}
+		if name := strings.TrimSpace(argString(args, "name")); name != "" {
+			if len([]rune(name)) > 64 {
+				writeJSONError(w, http.StatusBadRequest, "invalid_route_name", "name must be at most 64 characters")
+				return nil, false
+			}
+			out["name"] = name
+		}
+		if v, isBool := args["use_hr_neo"].(bool); isBool {
+			out["use_hr_neo"] = v
+		}
+		if h := strings.TrimSpace(argString(args, "draft_hash")); h != "" {
+			out["draft_hash"] = h
+		}
+		return out, true
+	case "route_delete", "route_delete_plan":
+		kind := strings.ToLower(strings.TrimSpace(argString(args, "kind")))
+		if kind != "dns" && kind != "static" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_route_kind", "kind must be dns or static")
+			return nil, false
+		}
+		routeID := strings.TrimSpace(argString(args, "route_id"))
+		if !wizardRouteTargetIDLooksSafe(routeID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_route_id", "route_id must be a safe route id")
+			return nil, false
+		}
+		out := map[string]any{"kind": kind, "route_id": routeID}
+		if h := strings.TrimSpace(argString(args, "preview_hash")); h != "" {
+			out["preview_hash"] = h
+		}
+		return out, true
+	case "route_policy_promote":
+		policy := strings.TrimSpace(argString(args, "policy_name"))
+		tunnelID := strings.TrimSpace(argString(args, "tunnel_id"))
+		if policy == "" || len([]rune(policy)) > 64 {
+			writeJSONError(w, http.StatusBadRequest, "invalid_policy_name", "policy_name is required and must be at most 64 characters")
+			return nil, false
+		}
+		if !wizardRouteTargetIDLooksSafe(tunnelID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe route target id")
+			return nil, false
+		}
+		return map[string]any{"policy_name": policy, "tunnel_id": tunnelID}, true
 	case "route_rebind":
 		src, _ := args["src_tunnel_id"].(string)
 		dst, _ := args["dst_tunnel_id"].(string)
@@ -1187,6 +1263,31 @@ func dashboardScheduleLooksSafe(schedule string) bool {
 		}
 	}
 	return true
+}
+
+func argString(args map[string]any, key string) string {
+	s, _ := args[key].(string)
+	return s
+}
+
+// sanitizeRouteTargets приводит цели к []string, выбрасывая пустые и обрезая
+// список. Верхняя граница не косметическая: правило с тысячей доменов роутер
+// примет, а потом утонет при каждом обновлении маршрутов.
+func sanitizeRouteTargets(v any) []string {
+	raw, _ := v.([]any)
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		s, _ := item.(string)
+		s = strings.TrimSpace(s)
+		if s == "" || len(s) > 253 {
+			continue
+		}
+		out = append(out, s)
+		if len(out) == 200 {
+			break
+		}
+	}
+	return out
 }
 
 func wizardRouteTargetIDLooksSafe(id string) bool {

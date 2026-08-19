@@ -17,6 +17,8 @@
 //   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
 //   - tunnel_restart → /api/control/restart?id= (ndmc down/up only on builds
 //     without the endpoint)
+//   - route_policy_promote → permit с order 0 для интерфейса, уже стоящего в
+//     цепочке политики (отдельного эндпоинта переупорядочивания у роутера нет)
 //   - tunnel_delete → awg-manager POST /api/tunnels/delete?id=<tunnel_id>
 //   - service_restart  → init.d for hrneo/awg-mgr; ndmc system reboot for router
 //     (router gated on AllowRouterReboot config flag)
@@ -755,6 +757,27 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return routeRebindCommandStatus(out), out, payload
+	case "route_policy_promote":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		policy, _ := cmd.Args["policy_name"].(string)
+		tunnelID, _ := cmd.Args["tunnel_id"].(string)
+		if strings.TrimSpace(policy) == "" || strings.TrimSpace(tunnelID) == "" {
+			return "err", "route_policy_promote: policy_name and tunnel_id are required", payload
+		}
+		// Тот же мьютекс, что у route_rebind: две правки маршрутизации разом
+		// оставили бы роутер в состоянии, которого не ждал никто.
+		r.routeMu.Lock()
+		defer r.routeMu.Unlock()
+		out, err := RoutePolicyPromoteJSON(ctx, r.AwgClient, wire.RoutePolicyPromoteRequest{
+			PolicyName: strings.TrimSpace(policy),
+			TunnelID:   strings.TrimSpace(tunnelID),
+		})
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "route_add_plan":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

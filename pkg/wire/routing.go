@@ -231,6 +231,18 @@ type RouteDeletePlan struct {
 	Hash     string           `json:"hash"`
 }
 
+// RoutePolicyPromoteRequest makes a tunnel the first link of a policy's chain.
+//
+// Reordering only: the tunnel must already be in the chain. awg-manager has no
+// reorder endpoint — promotion is `permit` with order 0 for an interface that
+// is already a member, which is exactly what the router's own UI does. Adding
+// a NEW interface to a policy changes what the policy can fall back to, not
+// merely the order, and belongs to the config-replacement wizard.
+type RoutePolicyPromoteRequest struct {
+	PolicyName string `json:"policy_name"`
+	TunnelID   string `json:"tunnel_id"`
+}
+
 type RouteApplyResult struct {
 	Action         string `json:"action"` // add | delete
 	Kind           string `json:"kind"`

@@ -58,6 +58,22 @@ var miniappCommandAllowlist = map[string]bool{
 	"check_direct":     true,
 	// Mutating; new for a browser session. Router-local, reversible, UI-confirmed.
 	"tunnel_restart": true,
+	// Управление маршрутами. Каждое router-local: add/delete идут через план
+	// с хешем черновика, rebind -- с превью и результатом по категориям,
+	// promote переупорядочивает уже состоящие в цепочке интерфейсы и
+	// обратим тем же действием.
+	//
+	// Аргументы всех семи проверяются ЯВНЫМИ ветками sanitizeWizardCommandArgs.
+	// Это не перестраховка: его ветка default возвращает аргументы как есть,
+	// и открыть здесь действие, которого там нет, значит отдать агенту
+	// клиентский ввод без единой проверки.
+	"route_templates":      true,
+	"route_add_plan":       true,
+	"route_add":            true,
+	"route_delete_plan":    true,
+	"route_delete":         true,
+	"route_rebind":         true,
+	"route_policy_promote": true,
 }
 
 type miniappCommandReq struct {
