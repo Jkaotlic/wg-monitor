@@ -12,6 +12,12 @@ import { humanAge, incidentCopy } from './labels.js'
 
 export function routerHeadline({ router, traffic, incidents = [] } = {}) {
   const age = router?.last_seen_age_sec
+  // Молчащий роутер делает УСТАРЕВШИМИ все показания на экране, а не только
+  // шапку: число поднятых линий, адрес выхода, состояние служб -- всё это
+  // данные на момент последнего отчёта, и показать их как текущие значит
+  // соврать. Отличается от cold: холодной шапка бывает и у живого роутера с
+  // тревогой, а его показания как раз свежие.
+  const stale = router?.status === 'offline' || router?.status === 'sleeping'
 
   // Роутер, который ещё ни разу не выходил на связь. Это не авария (чинить
   // нечего) и не норма -- отдельное состояние со своими словами.
@@ -19,6 +25,7 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'off',
       cold: true,
+      stale,
       tag: 'роутер ещё ни разу не отвечал',
       verdict: 'Агент установлен, но ни одного отчёта от него не приходило.',
     }
@@ -28,6 +35,7 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'danger',
       cold: true,
+      stale,
       tag: `роутер не отвечает · ${humanAge(age)}`,
       verdict: `Последний отчёт ${humanAge(age)} назад. Всё, что показано ниже, — данные на тот момент, а не сейчас.`,
     }
@@ -40,6 +48,7 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'danger',
       cold: true,
+      stale,
       tag: copy.what.toLowerCase(),
       verdict: copy.why || 'Подробности — в карточке тревоги ниже.',
     }
@@ -50,6 +59,8 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'sig',
       cold: false,
+    stale,
+      stale,
       tag: age != null ? `туннель поднят · ответ ${humanAge(age)} назад` : 'туннель поднят',
       verdict: `Трафик идёт через «${via}», обход блокировок работает.`,
     }
@@ -61,6 +72,7 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'warn',
       cold: true,
+      stale,
       tag: 'трафик идёт напрямую',
       verdict: 'Ни один туннель не несёт основной маршрут: трафик уходит напрямую через провайдера, и обход блокировок не работает.',
     }
@@ -70,6 +82,8 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'off',
       cold: false,
+    stale,
+      stale,
       tag: 'маршрут выбирает sing-box',
       verdict: 'Для каждого адреса отдельно — единого ответа «через VPN или напрямую» тут нет.',
     }
@@ -78,6 +92,7 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
   return {
     tone: 'off',
     cold: false,
+    stale,
     tag: age != null ? `роутер на связи · ответ ${humanAge(age)} назад` : 'роутер на связи',
     verdict: 'Роутер не сообщил, какой туннель основной. Соберите отчёт заново.',
   }

@@ -660,9 +660,11 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         <RouterDevice tunnels={tunnels} traffic={traffic} checks={checks ?? []} name={router.nickname} />
         <div class="hero-bar">
           <span>
-            {tunnels.length === 0
-              ? 'Туннелей нет'
-              : `${liveCount} ${liveCount === 1 ? 'линия' : 'линии'} из ${tunnels.length}`}
+            {headline.stale
+              ? 'показания на момент последнего отчёта'
+              : tunnels.length === 0
+                ? 'Туннелей нет'
+                : `${liveCount} ${liveCount === 1 ? 'линия' : 'линии'} из ${tunnels.length}`}
             {overflow > 0 ? ` · ${overflow} не поместились на корпус` : ''}
           </span>
           {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}
@@ -671,11 +673,22 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
       {/* Два показания, ради которых экран открывают чаще всего. */}
       <div class="stat-grid" style="margin-top:12px">
+        {/* На молчащем роутере число поднятых линий -- это данные на момент
+            последнего отчёта, а не сейчас. Показать их как текущее показание
+            значило бы соврать ровно тем способом, против которого написана
+            половина этого приложения: цифра выглядит достоверной именно
+            потому, что она цифра. */}
         <Stat
           label="линий поднято"
-          value={tunnels.length ? liveCount : null}
-          note={tunnels.length ? `из ${tunnels.length} настроенных` : 'роутер не сообщил туннели'}
-          tone={tunnels.length && liveCount === 0 ? 'danger' : undefined}
+          value={headline.stale || !tunnels.length ? null : liveCount}
+          note={
+            headline.stale
+              ? 'роутер молчит — данные устарели'
+              : tunnels.length
+                ? `из ${tunnels.length} настроенных`
+                : 'роутер не сообщил туннели'
+          }
+          tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
         />
         <Stat
           label="последний ответ"

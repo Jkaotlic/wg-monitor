@@ -63,6 +63,28 @@ describe('routerHeadline', () => {
     expect(h.tag).toContain('ещё ни разу')
   })
 
+  // stale -- это не то же самое, что cold. Холодная шапка бывает и у живого
+  // роутера с тревогой; устаревшими показания становятся только тогда, когда
+  // роутер молчит, и тогда их нельзя показывать как текущие НИГДЕ на экране.
+  it('молчащий роутер помечает все показания устаревшими', () => {
+    const h = routerHeadline({
+      router: { status: 'offline', last_seen_age_sec: 900 },
+      traffic: { mode: 'vpn', egress_tunnel_name: 'awg11' },
+      incidents: [],
+    })
+    expect(h.stale).toBe(true)
+  })
+
+  it('живой роутер с тревогой -- шапка холодная, но показания свежие', () => {
+    const h = routerHeadline({
+      router: ONLINE,
+      traffic: { mode: 'vpn', egress_tunnel_name: 'awg11' },
+      incidents: [{ check_name: 'hydraroute' }],
+    })
+    expect(h.cold).toBe(true)
+    expect(h.stale).toBe(false)
+  })
+
   it('нет данных о трафике -- не выдумываем вердикт', () => {
     const h = routerHeadline({ router: ONLINE, traffic: null, incidents: [] })
     expect(h.tone).toBe('off')
