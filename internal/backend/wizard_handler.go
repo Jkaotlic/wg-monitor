@@ -950,7 +950,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"src_tunnel_id": src, "dst_tunnel_id": dst}, true
-	case "tunnel_enable", "tunnel_disable", "tunnel_restart":
+	case "tunnel_enable", "tunnel_disable":
 		ndms, _ := args["ndms_name"].(string)
 		ndms = strings.TrimSpace(ndms)
 		if !wizardNDMSNameLooksSafe(ndms) {
@@ -958,6 +958,34 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"ndms_name": ndms}, true
+	case "tunnel_restart":
+		// Either identifier is enough: awg-manager restarts by tunnel id, and
+		// opkg tunnels have no NDMS name at all. Whatever is present must still
+		// be safe — both values end up in a URL query or an ndmc command line.
+		out := map[string]any{}
+		if tunnelID, _ := args["tunnel_id"].(string); strings.TrimSpace(tunnelID) != "" {
+			tunnelID = strings.TrimSpace(tunnelID)
+			if !wizardRouteTargetIDLooksSafe(tunnelID) {
+				writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe route target id")
+				return nil, false
+			}
+			out["tunnel_id"] = tunnelID
+		}
+		if ndms, _ := args["ndms_name"].(string); strings.TrimSpace(ndms) != "" {
+			ndms = strings.TrimSpace(ndms)
+			if !wizardNDMSNameLooksSafe(ndms) {
+				writeJSONError(w, http.StatusBadRequest, "invalid_ndms_name", "ndms_name must match ^[A-Za-z0-9_-]{1,32}$")
+				return nil, false
+			}
+			out["ndms_name"] = ndms
+		}
+		if len(out) == 0 {
+			// Не "невалидный ndms_name", а вовсе не переданный идентификатор:
+			// код ошибки -- контракт, и он обязан называть настоящую причину.
+			writeJSONError(w, http.StatusBadRequest, "missing_tunnel_identifier", "tunnel_id or ndms_name is required")
+			return nil, false
+		}
+		return out, true
 	case "tunnel_delete":
 		tunnelID, _ := args["tunnel_id"].(string)
 		checkName, _ := args["check_name"].(string)

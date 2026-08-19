@@ -15,10 +15,8 @@
 //   - pingcheck_toggle → awg-mgr POST /api/pingcheck/toggle (primary)
 //     with ndmc CLI fallback (interface <ndms_name> ping-check)
 //   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
-//   - tunnel_restart → ndmc down, short settle delay, then ndmc up
-//     (awg-manager API has no per-tunnel start/stop endpoint — Keenetic native
-//     ndmc CLI is the authoritative path. NDMSName must be supplied in
-//     cmd.Args["ndms_name"] by the backend.)
+//   - tunnel_restart → /api/control/restart?id= (ndmc down/up only on builds
+//     without the endpoint)
 //   - tunnel_delete → awg-manager POST /api/tunnels/delete?id=<tunnel_id>
 //   - service_restart  → init.d for hrneo/awg-mgr; ndmc system reboot for router
 //     (router gated on AllowRouterReboot config flag)
@@ -508,12 +506,38 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		return "ok", fmt.Sprintf("interface %s -> %s\n%s", ndms, state, string(out)), payload
 	case "tunnel_restart":
+		tunnelID, _ := cmd.Args["tunnel_id"].(string)
+		ndms, _ := cmd.Args["ndms_name"].(string)
+		tunnelID = strings.TrimSpace(tunnelID)
+		ndms = strings.TrimSpace(ndms)
+		if tunnelID == "" && ndms == "" {
+			return "err", "tunnel_restart: tunnel_id or ndms_name missing in args", payload
+		}
+		if tunnelID != "" && !safeTunnelID(tunnelID) {
+			return "err", "tunnel_restart: tunnel_id must match ^[A-Za-z0-9_-]{1,64}$", payload
+		}
+		// awg-manager restarts any tunnel by id, whatever its backend. This is
+		// the ONLY path that works for opkg tunnels: they carry no ndmsName, so
+		// ndmc has no interface to address.
+		if tunnelID != "" && r.AwgClient != nil {
+			err := r.AwgClient.RestartTunnel(ctx, tunnelID)
+			if err == nil {
+				if r.ForceRecheck != nil {
+					r.ForceRecheck(ctx)
+				}
+				return "ok", fmt.Sprintf("restarted %s via awg-manager", tunnelID), payload
+			}
+			if !awgmgr.IsEndpointMissing(err) {
+				return "err", fmt.Sprintf("restart %s: %v", tunnelID, err), payload
+			}
+			// 404 — build predates /api/control/restart; ndmc below is the
+			// only remaining option, and only for tunnels that have an NDMS name.
+		}
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		ndms, _ := cmd.Args["ndms_name"].(string)
 		if ndms == "" {
-			return "err", "tunnel_restart: ndms_name missing in args", payload
+			return "err", "tunnel_restart: this awg-manager build needs ndms_name, and the tunnel has none", payload
 		}
 		if !safeNDMSName(ndms) {
 			return "err", "tunnel_restart: ndms_name must match ^[A-Za-z0-9_-]{1,32}$", payload
@@ -955,6 +979,23 @@ func boolEnableLabel(enable bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+// safeTunnelID guards the awg-manager tunnel id before it reaches a URL query.
+// Tunnel ids are short slugs ("awg11"); anything else is refused rather than
+// escaped, so a crafted id can never grow into a second request parameter.
+func safeTunnelID(v string) bool {
+	if v == "" || len(v) > 64 {
+		return false
+	}
+	for _, r := range v {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func safeNDMSName(name string) bool {

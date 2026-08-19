@@ -29,6 +29,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
+	mux.Handle("GET /v1/miniapp/routers/{id}/timeline", reqID(auth(miniappRouterTimelineHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/commands", reqID(auth(miniappCommandHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/commands/{cmd_id}", reqID(auth(miniappCommandResultHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/silence", reqID(auth(miniappSilenceHandler(d))))
@@ -125,7 +126,9 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "fleet summary failed")
 			return
 		}
-		resp := miniappRoutersResp{}
+		// Пустой слайс, а не nil: клиент делает .map по этому полю, и null
+		// уронил бы экран человека, которому пока не выдали ни одного роутера.
+		resp := miniappRoutersResp{Routers: []miniappRouterSummary{}}
 		if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
 			for _, a := range summary.Agents {
 				resp.Routers = append(resp.Routers, miniappRouterSummaryFromAgent(a))
@@ -246,6 +249,85 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 		}
 		sort.Slice(resp.Tunnels, func(i, j int) bool { return resp.Tunnels[i].TunnelID < resp.Tunnels[j].TunnelID })
 		resp.Traffic = miniappDeriveTraffic(resp.Tunnels, byCheck)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
+// miniappTimelineEvent is one row of the router's timeline: what changed and
+// when. Deliberately NOT the same shape as miniappTransition (the per-incident
+// history): that one answers "how did THIS check flap", this one answers "what
+// happened on the router", and squeezing both into one type would force every
+// future reader to work out which question they are looking at.
+type miniappTimelineEvent struct {
+	CheckName string `json:"check_name"`
+	Status    string `json:"status"`
+	Timestamp string `json:"ts"`
+}
+
+type miniappTimelineResp struct {
+	Events []miniappTimelineEvent `json:"events"`
+	// Days is the window actually applied, not the one asked for -- the client
+	// prints it, so a clamped request must not be reported back as honoured.
+	Days      int  `json:"days"`
+	Truncated bool `json:"truncated"`
+}
+
+const (
+	miniappTimelineDefaultDays = 7
+	miniappTimelineMaxDays     = 30
+	// Столько строк экран ещё способен показать осмысленно; всё, что сверх,
+	// помечается truncated -- молча показанная часть выглядела бы как целое.
+	miniappTimelineMaxRows = 500
+)
+
+// miniappTimelineDays reads the window from the query string. Anything absent,
+// unparseable, or out of range falls back to the default instead of erroring:
+// a timeline is a read-only screen, and refusing to draw it over a bad query
+// parameter would be a worse answer than drawing the usual week.
+func miniappTimelineDays(raw string) int {
+	if raw == "" {
+		return miniappTimelineDefaultDays
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return miniappTimelineDefaultDays
+	}
+	if n > miniappTimelineMaxDays {
+		return miniappTimelineMaxDays
+	}
+	return n
+}
+
+func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		telegramUserID, _ := miniappUserFromContext(r.Context())
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok || !miniappRouterAllowed(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		days := miniappTimelineDays(r.URL.Query().Get("days"))
+		since := time.Now().UTC().AddDate(0, 0, -days)
+		// Запрашиваем на одну строку больше предела: только так видно, что
+		// строки кончились не потому, что событий больше нет.
+		rows, err := d.DB.Events().ListAllSince(routerID, since, miniappTimelineMaxRows+1)
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "timeline lookup failed")
+			return
+		}
+		resp := miniappTimelineResp{Events: []miniappTimelineEvent{}, Days: days}
+		if len(rows) > miniappTimelineMaxRows {
+			rows = rows[:miniappTimelineMaxRows]
+			resp.Truncated = true
+		}
+		for _, row := range rows {
+			resp.Events = append(resp.Events, miniappTimelineEvent{
+				CheckName: row.CheckName,
+				Status:    row.Status,
+				Timestamp: row.TS.UTC().Format(time.RFC3339),
+			})
+		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}

@@ -33,6 +33,11 @@ type TunnelMeta struct {
 	// the heuristic for the global HR-Neo policy default during rebind
 	// fall-through conversion.
 	DefaultRoute bool `json:"default_route,omitempty"`
+	// RestartMethod tells the screen whether a restart button can be offered
+	// at all: "control" for awg-manager-managed tunnels (restartable by id via
+	// /api/control/restart), "none" for system/WAN entries that only appear in
+	// the routing catalogue. Empty means an older agent that did not report it.
+	RestartMethod string `json:"restart_method,omitempty"`
 }
 
 // TunnelCounts tracks rules attached to a single tunnel by category.
@@ -51,13 +56,31 @@ type RoutePolicyInterface struct {
 	Name      string `json:"name,omitempty"`
 	Role      string `json:"role,omitempty"` // active | fallback | unavailable
 	Available bool   `json:"available,omitempty"`
+	// Order is the policy's own priority number (lower wins). The slice is
+	// already sorted by it; the number is kept for the screen to show.
+	Order int `json:"order,omitempty"`
+	// TunnelID is our tunnel behind this interface. Empty means the interface
+	// is not a tunnel of ours — WAN, bridge, guest network.
+	TunnelID string `json:"tunnel_id,omitempty"`
+	// ViaVPN mirrors TunnelID != "": traffic on this link is protected.
+	ViaVPN bool `json:"via_vpn,omitempty"`
 }
 
 type RoutePolicySummary struct {
-	Name       string                 `json:"name"`
-	Interfaces []RoutePolicyInterface `json:"interfaces,omitempty"`
-	DNS        int                    `json:"dns"`
-	HRNeo      int                    `json:"hr_neo"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	Interfaces  []RoutePolicyInterface `json:"interfaces,omitempty"`
+	DNS         int                    `json:"dns"`
+	HRNeo       int                    `json:"hr_neo"`
+	// ActiveTunnelID is the tunnel carrying this policy's traffic right now —
+	// the first chain link that is up. Empty when that link is not a tunnel of
+	// ours, or when nothing in the chain is up. Consumers must attribute the
+	// policy's rules to this tunnel and to no other: crediting every link of
+	// the chain multiplies the same rules across all of them.
+	ActiveTunnelID string `json:"active_tunnel_id,omitempty"`
+	// ViaVPN reports whether the active link is a tunnel. False with a
+	// non-empty chain means the policy's rules leave the router unprotected.
+	ViaVPN bool `json:"via_vpn,omitempty"`
 }
 
 // SingboxRouterStatus reports awg-manager's sing-box router method (a third
@@ -84,6 +107,12 @@ type RouteSnapshot struct {
 	// Warnings names non-fatal data source failures. UI must treat the
 	// snapshot as partial when present.
 	Warnings []string `json:"warnings,omitempty"`
+	// PolicyModel marks a snapshot built by an agent that reads awg-manager's
+	// access policies. It cannot be inferred from the policy data: a policy
+	// whose whole chain leaves the VPN has no tunnel ids anywhere, so a router
+	// carrying only such a policy would be indistinguishable from an agent too
+	// old to resolve policies at all.
+	PolicyModel bool `json:"policy_model,omitempty"`
 }
 
 type HRNeoRule struct {

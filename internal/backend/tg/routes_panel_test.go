@@ -424,6 +424,96 @@ func TestRebindPreviewText_ShowsUntouchedBlock(t *testing.T) {
 	}
 }
 
+func TestRoutesPanelText_PolicyRulesCreditedOnceToActiveTunnel(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{
+			{ID: "awg11", Name: "awg3-work-via-ru1", Iface: "opkgtun11"},
+			{ID: "awg20", Name: "NetherlandsKerkradeS24", Iface: "nwg0"},
+		},
+		Counts: map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{{
+			Name: "HydraRoute", DNS: 26, HRNeo: 26, ActiveTunnelID: "awg11", ViaVPN: true,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Bind: "OpkgTun11", Name: "awg3-work-via-ru1", Role: "active", Available: true, TunnelID: "awg11", ViaVPN: true},
+				{Bind: "Wireguard0", Name: "NetherlandsKerkradeS24", Role: "unavailable", Order: 1, TunnelID: "awg20"},
+			},
+		}},
+	}
+	got := RoutesPanelText("client-b", snap)
+	// Раньше 26 правил приписывались каждому звену цепочки.
+	if !strings.Contains(got, "awg3-work-via-ru1 (opkgtun11): 0 правил (+26 HR-Neo policy)") {
+		t.Errorf("active tunnel line missing:\n%s", got)
+	}
+	if strings.Contains(got, "NetherlandsKerkradeS24 (nwg0): 0 правил (+26") {
+		t.Errorf("fallback tunnel must not be credited:\n%s", got)
+	}
+}
+
+func TestRoutesPanelText_MarksPolicyBypassingVPN(t *testing.T) {
+	snap := wire.RouteSnapshot{
+		Counts: map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{{
+			Name: "RU", DNS: 2, HRNeo: 2,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Bind: "GigabitEthernet1", Name: "Подключение Ethernet", Role: "active", Available: true},
+			},
+		}, {
+			Name: "HydraRoute", DNS: 26, HRNeo: 26, ActiveTunnelID: "awg11", ViaVPN: true,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Bind: "OpkgTun11", Role: "active", Available: true, TunnelID: "awg11", ViaVPN: true},
+			},
+		}},
+	}
+	got := RoutesPanelText("client-b", snap)
+	if !strings.Contains(got, "мимо VPN") {
+		t.Errorf("RU must be marked as bypassing VPN:\n%s", got)
+	}
+	if strings.Count(got, "мимо VPN") != 1 {
+		t.Errorf("only RU must carry the mark:\n%s", got)
+	}
+}
+
+func TestRoutesPanelText_OldAgentKeepsLegacyAttribution(t *testing.T) {
+	// Снимок старого агента: ни ActiveTunnelID, ни TunnelID в звеньях.
+	// Приписывание должно остаться прежним, а метки "мимо VPN" не появиться.
+	snap := wire.RouteSnapshot{
+		Tunnels: []wire.TunnelMeta{{ID: "awg11", Name: "amst", Iface: "nwg1"}},
+		Counts:  map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{{
+			Name: "HydraRoute", DNS: 7, HRNeo: 7,
+			Interfaces: []wire.RoutePolicyInterface{{Bind: "nwg1", Name: "amst", Role: "active", Available: true}},
+		}},
+	}
+	got := RoutesPanelText("client-b", snap)
+	if !strings.Contains(got, "(+7 HR-Neo policy)") {
+		t.Errorf("legacy attribution lost:\n%s", got)
+	}
+	if strings.Contains(got, "мимо VPN") {
+		t.Errorf("old agent snapshot must not be labelled:\n%s", got)
+	}
+}
+
+func TestRoutesPanelText_PolicyModelFlagCatchesAllNonVPNChain(t *testing.T) {
+	// Политика, у которой вся цепочка не туннель, не оставляет ни
+	// ActiveTunnelID, ни TunnelID -- по этим полям её не отличить от снимка
+	// старого агента. Признак того, что агент вообще читал политики, обязан
+	// быть явным флагом, а не выводиться из данных политики.
+	snap := wire.RouteSnapshot{
+		PolicyModel: true,
+		Counts:      map[string]wire.TunnelCounts{},
+		Policies: []wire.RoutePolicySummary{{
+			Name: "RU", DNS: 2, HRNeo: 2,
+			Interfaces: []wire.RoutePolicyInterface{
+				{Bind: "GigabitEthernet1", Name: "Подключение Ethernet", Role: "active", Available: true},
+			},
+		}},
+	}
+	got := RoutesPanelText("client-b", snap)
+	if !strings.Contains(got, "мимо VPN") {
+		t.Errorf("sole non-VPN policy must be marked, even without any tunnel id:\n%s", got)
+	}
+}
+
 func routesKeyboardHasCallback(kb InlineKeyboardMarkup, want string) bool {
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {

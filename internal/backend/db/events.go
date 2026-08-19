@@ -203,6 +203,44 @@ func (e *EventsRepo) ListSince(userID int64, checkName string, since time.Time) 
 	return out, rows.Err()
 }
 
+// ListAllSince returns every event for userID with ts >= since, newest first,
+// capped at limit rows. Separate from ListSince on purpose: that one answers
+// "history of THIS check" (one incident's story), this one answers "what
+// happened on this router" (a timeline across all checks), and the two differ
+// in both the WHERE clause and the sort direction a reader expects.
+func (e *EventsRepo) ListAllSince(userID int64, since time.Time, limit int) ([]EventRow, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := e.d.db.Query(
+		`SELECT id, user_id, check_name, status, details_json, ts
+		   FROM events
+		  WHERE user_id = ? AND ts >= ?
+		  ORDER BY ts DESC
+		  LIMIT ?`,
+		userID, since.UTC(), limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventRow
+	for rows.Next() {
+		var r EventRow
+		var tsStr string
+		if err := rows.Scan(&r.ID, &r.UserID, &r.CheckName, &r.Status, &r.DetailsJSON, &tsStr); err != nil {
+			return nil, err
+		}
+		t, err := parseEventTS(tsStr)
+		if err != nil {
+			return nil, err
+		}
+		r.TS = t
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // parseEventTS handles both "2006-01-02T15:04:05Z07:00" (RFC3339) and
 // "2006-01-02 15:04:05.999999999 -0700 MST" (Go time.String) formats.
 func parseEventTS(s string) (time.Time, error) {

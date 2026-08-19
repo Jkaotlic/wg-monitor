@@ -1,0 +1,894 @@
+{
+  "success": true,
+  "data": [
+    {
+      "id": "hr:AIgeo",
+      "name": "AIgeo",
+      "domains": [
+        "geosite:OPENAI",
+        "geosite:ANTHROPIC",
+        "geosite:CATEGORY-AI",
+        "geosite:CATEGORY-AI-CHAT"
+      ],
+      "subnets": [
+        "geoip:ANTHROPIC",
+        "geoip:AI"
+      ],
+      "manualDomains": [
+        "geosite:OPENAI",
+        "geosite:ANTHROPIC",
+        "geosite:CATEGORY-AI",
+        "geosite:CATEGORY-AI-CHAT",
+        "geoip:ANTHROPIC",
+        "geoip:AI"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:AMAZON",
+      "name": "AMAZON",
+      "domains": [
+        "geosite:AMAZON"
+      ],
+      "subnets": [
+        "geoip:AMAZON"
+      ],
+      "manualDomains": [
+        "geosite:AMAZON",
+        "geoip:AMAZON"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Amnezia",
+      "name": "Amnezia",
+      "domains": [
+        "amnezia.org"
+      ],
+      "manualDomains": [
+        "amnezia.org"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:ChatGPT",
+      "name": "ChatGPT",
+      "domains": [
+        "chatgpt.com",
+        "gpt3-openai.com",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "openai.com",
+        "openai.fund",
+        "openai.org"
+      ],
+      "manualDomains": [
+        "chatgpt.com",
+        "gpt3-openai.com",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "openai.com",
+        "openai.fund",
+        "openai.org"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:GITHUB",
+      "name": "GITHUB",
+      "domains": [
+        "geosite:GITHUB"
+      ],
+      "subnets": [
+        "geoip:GITHUB"
+      ],
+      "manualDomains": [
+        "geosite:GITHUB",
+        "geoip:GITHUB"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:GOOGLE",
+      "name": "GOOGLE",
+      "domains": [
+        "geosite:GOOGLE",
+        "geosite:GOOGLE-REGISTRY",
+        "geosite:GOOGLE-TRUST-SERVICES"
+      ],
+      "subnets": [
+        "geoip:GOOGLE"
+      ],
+      "manualDomains": [
+        "geosite:GOOGLE",
+        "geosite:GOOGLE-REGISTRY",
+        "geosite:GOOGLE-TRUST-SERVICES",
+        "geoip:GOOGLE"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Google",
+      "name": "Google",
+      "domains": [
+        "ggpht.com",
+        "googleplay.com",
+        "googlevideo.com",
+        "play-fe.googleapis.com",
+        "play-games.googleusercontent.com",
+        "play-lh.googleusercontent.com",
+        "play.google.com",
+        "play.googleapis.com",
+        "redirector.c.play.google.com",
+        "xn--ngstr-lra8j.com",
+        "youtu.be",
+        "youtube.com",
+        "youtubei.googleapis.com",
+        "youtubekids.com",
+        "ytimg.com"
+      ],
+      "manualDomains": [
+        "ggpht.com",
+        "googleplay.com",
+        "googlevideo.com",
+        "play-fe.googleapis.com",
+        "play-games.googleusercontent.com",
+        "play-lh.googleusercontent.com",
+        "play.google.com",
+        "play.googleapis.com",
+        "redirector.c.play.google.com",
+        "xn--ngstr-lra8j.com",
+        "youtu.be",
+        "youtube.com",
+        "youtubei.googleapis.com",
+        "youtubekids.com",
+        "ytimg.com"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Kindle",
+      "name": "Kindle",
+      "domains": [
+        "geosite:KINDLE"
+      ],
+      "manualDomains": [
+        "geosite:KINDLE"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:LOGITECH",
+      "name": "LOGITECH",
+      "domains": [
+        "geosite:LOGITECH"
+      ],
+      "manualDomains": [
+        "geosite:LOGITECH"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:META",
+      "name": "META",
+      "domains": [
+        "geosite:META",
+        "geosite:INSTAGRAM",
+        "geosite:FACEBOOK",
+        "geosite:WHATSAPP"
+      ],
+      "subnets": [
+        "geoip:META",
+        "geoip:FACEBOOK"
+      ],
+      "manualDomains": [
+        "geosite:META",
+        "geosite:INSTAGRAM",
+        "geosite:FACEBOOK",
+        "geosite:WHATSAPP",
+        "geoip:META",
+        "geoip:FACEBOOK"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Other",
+      "name": "Other",
+      "domains": [
+        "4pda.to",
+        "deepl.com",
+        "nnmclub.to",
+        "rutracker.org"
+      ],
+      "manualDomains": [
+        "4pda.to",
+        "deepl.com",
+        "nnmclub.to",
+        "rutracker.org"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Proton",
+      "name": "Proton",
+      "domains": [
+        "geosite:PROTONMAIL"
+      ],
+      "manualDomains": [
+        "geosite:PROTONMAIL"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:SPOTIFY",
+      "name": "SPOTIFY",
+      "domains": [
+        "geosite:SPOTIFY"
+      ],
+      "manualDomains": [
+        "geosite:SPOTIFY"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Telegramall",
+      "name": "Telegramall",
+      "domains": [
+        "geosite:TELEGRAM"
+      ],
+      "subnets": [
+        "geoip:TELEGRAM"
+      ],
+      "manualDomains": [
+        "geosite:TELEGRAM",
+        "geoip:TELEGRAM"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Torrents",
+      "name": "Torrents",
+      "domains": [
+        "geosite:RUTRACKER",
+        "geosite:FLIBUSTA"
+      ],
+      "manualDomains": [
+        "geosite:RUTRACKER",
+        "geosite:FLIBUSTA"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:VPN",
+      "name": "VPN",
+      "domains": [
+        "geosite:CATEGORY-VPNSERVICES"
+      ],
+      "manualDomains": [
+        "geosite:CATEGORY-VPNSERVICES"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:VPS",
+      "name": "VPS",
+      "domains": [
+        "198.51.100.13"
+      ],
+      "manualDomains": [
+        "198.51.100.13"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:Youtubeall",
+      "name": "Youtubeall",
+      "domains": [
+        "geosite:YOUTUBE"
+      ],
+      "manualDomains": [
+        "geosite:YOUTUBE"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:geoip:ru",
+      "name": "geoip:ru",
+      "domains": null,
+      "subnets": [
+        "geoip:ru"
+      ],
+      "manualDomains": [
+        "geoip:ru"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "RU"
+    },
+    {
+      "id": "hr:geosite: GITHUB / geoip: GITHUB",
+      "name": "geosite: GITHUB / geoip: GITHUB",
+      "domains": [
+        "geosite:GITHUB",
+        "geosite:GITHUB-COPILOT"
+      ],
+      "subnets": [
+        "geoip:GITHUB"
+      ],
+      "manualDomains": [
+        "geosite:GITHUB",
+        "geosite:GITHUB-COPILOT",
+        "geoip:GITHUB"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:geosite: KINOPUB",
+      "name": "geosite: KINOPUB",
+      "domains": [
+        "geosite:KINOPUB"
+      ],
+      "manualDomains": [
+        "geosite:KINOPUB"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:geosite: YOUTUBE",
+      "name": "geosite: YOUTUBE",
+      "domains": [
+        "geosite:YOUTUBE"
+      ],
+      "manualDomains": [
+        "geosite:YOUTUBE"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:https://hide.mn/",
+      "name": "https://hide.mn/",
+      "domains": [
+        "hide.mn"
+      ],
+      "manualDomains": [
+        "hide.mn"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:https://hide.mn/en/",
+      "name": "https://hide.mn/en/",
+      "domains": [
+        "hide.mn"
+      ],
+      "manualDomains": [
+        "hide.mn"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:https://listenbrainz.org/",
+      "name": "https://listenbrainz.org/",
+      "domains": [
+        "listenbrainz.org"
+      ],
+      "manualDomains": [
+        "listenbrainz.org"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:dns.example.com",
+      "name": "dns.example.com",
+      "domains": [
+        "duckdns.org"
+      ],
+      "manualDomains": [
+        "duckdns.org"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:\u0412\u0441\u0435 AI \u0441\u0435\u0440\u0432\u0438\u0441\u044b",
+      "name": "\u0412\u0441\u0435 AI \u0441\u0435\u0440\u0432\u0438\u0441\u044b",
+      "domains": [
+        "agentclientprotocol.com",
+        "ai.google.dev",
+        "ai.studio",
+        "aicode.googleapis.com",
+        "aida.googleapis.com",
+        "aisandbox-pa.googleapis.com",
+        "aistudio.google.com",
+        "alkalicore-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+        "anthropic.com",
+        "antigravity-pa.googleapis.com",
+        "antigravity-unleash.goog",
+        "antigravity.google",
+        "antigravity.googleapis.com",
+        "anythingllm.com",
+        "api.github.com",
+        "api.individual.githubcopilot.com",
+        "api.x.com",
+        "arena.ai",
+        "bard.google.com",
+        "browser-intake-datadoghq.com",
+        "cerebras.ai",
+        "chat.com",
+        "chatgpt.com",
+        "chatgpt.livekit.cloud",
+        "chutes.ai",
+        "cici.com",
+        "ciciai.com",
+        "ciciaicdn.com",
+        "clau.de",
+        "claude.ai",
+        "claude.com",
+        "claudemcpclient.com",
+        "claudeusercontent.com",
+        "clawhub.ai",
+        "clipdrop.co",
+        "cloudaicompanion.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "codeium.com",
+        "codeiumdata.com",
+        "coderabbit.ai",
+        "coderabbit.gallery.vsassets.io",
+        "cohere.ai",
+        "cohere.com",
+        "comfy.org",
+        "comfyci.org",
+        "comfyregistry.org",
+        "copilot-proxy.githubusercontent.com",
+        "copilot-telemetry-service.githubusercontent.com",
+        "copilot-telemetry.githubusercontent.com",
+        "copilot-workspace.githubnext.com",
+        "copilot.microsoft.com",
+        "copilotprodattachments.blob.core.windows.net",
+        "coze.com",
+        "crewai.com",
+        "crixet.com",
+        "cursor-cdn.com",
+        "cursor.com",
+        "cursor.sh",
+        "cursorapi.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "deepmind.com",
+        "deepmind.google",
+        "devin.ai",
+        "diabrowser.com",
+        "diabrowser.engineering",
+        "dify.ai",
+        "dola.com",
+        "duck.ai",
+        "elevenlabs.com",
+        "elevenlabs.io",
+        "envato-static.com",
+        "envato.com",
+        "envatousercontent.com",
+        "gateway.ai.cloudflare.com",
+        "geller-pa.googleapis.com",
+        "gemini.google",
+        "gemini.google.com",
+        "gemini.gstatic.com",
+        "generativeai.google",
+        "generativelanguage.googleapis.com",
+        "githubcopilot.com",
+        "grok.com",
+        "grok.x.com",
+        "groq.com",
+        "h2o.ai",
+        "hf.co",
+        "hf.space",
+        "host.livekit.cloud",
+        "huggingface.co",
+        "jasper.ai",
+        "jules.google",
+        "jules.google.com",
+        "kiro.dev",
+        "labs.google",
+        "labs.google.com",
+        "langchain.com",
+        "liveperson.net",
+        "lmstudio.ai",
+        "lovart.ai",
+        "lpsnmedia.net",
+        "makersuite.google.com",
+        "manus.im",
+        "manuscdn.com",
+        "marscode.com",
+        "meta.ai",
+        "midjourney.com",
+        "minimax.io",
+        "mistral.ai",
+        "mozilla.ai",
+        "notebooklm-pa.googleapis.com",
+        "notebooklm.google",
+        "notebooklm.google.com",
+        "notebooklm.googleapis.com",
+        "o33249.ingest.sentry.io",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "ollama.com",
+        "opal.google",
+        "opal.google.com",
+        "openai.com",
+        "openai.com.cdn.cloudflare.net",
+        "openaiapi-site.azureedge.net",
+        "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
+        "openaicom.imgix.net",
+        "openaicomproductionae4b.blob.core.windows.net",
+        "openart.ai",
+        "openclaw.ai",
+        "openrouter.ai",
+        "openspec.dev",
+        "oystermercury.top",
+        "perplexity.ai",
+        "perplexity.com",
+        "plannotator.ai",
+        "poe.com",
+        "poecdn.net",
+        "ppl-ai-file-upload.s3.amazonaws.com",
+        "pplx-res.cloudinary.com",
+        "pplx.ai",
+        "proactivebackend-pa.googleapis.com",
+        "production-openaicom-storage.azureedge.net",
+        "robinfrontend-pa.googleapis.com",
+        "servd-anthropic-website.b-cdn.net",
+        "sora.com",
+        "spicywriter.com",
+        "stitch.withgoogle.com",
+        "tapnow.ai",
+        "themeforest.net",
+        "trae.ai",
+        "turn.livekit.cloud",
+        "webchannel-alkalimakersuite-pa.clients6.google.com",
+        "windsurf.build",
+        "windsurf.com",
+        "x.ai",
+        "youmind.ai",
+        "youmind.com",
+        "youmind.site"
+      ],
+      "manualDomains": [
+        "agentclientprotocol.com",
+        "ai.google.dev",
+        "ai.studio",
+        "aicode.googleapis.com",
+        "aida.googleapis.com",
+        "aisandbox-pa.googleapis.com",
+        "aistudio.google.com",
+        "alkalicore-pa.clients6.google.com",
+        "alkalimakersuite-pa.clients6.google.com",
+        "anthropic.com",
+        "antigravity-pa.googleapis.com",
+        "antigravity-unleash.goog",
+        "antigravity.google",
+        "antigravity.googleapis.com",
+        "anythingllm.com",
+        "api.github.com",
+        "api.individual.githubcopilot.com",
+        "api.x.com",
+        "arena.ai",
+        "bard.google.com",
+        "browser-intake-datadoghq.com",
+        "cerebras.ai",
+        "chat.com",
+        "chatgpt.com",
+        "chatgpt.livekit.cloud",
+        "chutes.ai",
+        "cici.com",
+        "ciciai.com",
+        "ciciaicdn.com",
+        "clau.de",
+        "claude.ai",
+        "claude.com",
+        "claudemcpclient.com",
+        "claudeusercontent.com",
+        "clawhub.ai",
+        "clipdrop.co",
+        "cloudaicompanion.googleapis.com",
+        "cloudcode-pa.googleapis.com",
+        "codeium.com",
+        "codeiumdata.com",
+        "coderabbit.ai",
+        "coderabbit.gallery.vsassets.io",
+        "cohere.ai",
+        "cohere.com",
+        "comfy.org",
+        "comfyci.org",
+        "comfyregistry.org",
+        "copilot-proxy.githubusercontent.com",
+        "copilot-telemetry-service.githubusercontent.com",
+        "copilot-telemetry.githubusercontent.com",
+        "copilot-workspace.githubnext.com",
+        "copilot.microsoft.com",
+        "copilotprodattachments.blob.core.windows.net",
+        "coze.com",
+        "crewai.com",
+        "crixet.com",
+        "cursor-cdn.com",
+        "cursor.com",
+        "cursor.sh",
+        "cursorapi.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "deepmind.com",
+        "deepmind.google",
+        "devin.ai",
+        "diabrowser.com",
+        "diabrowser.engineering",
+        "dify.ai",
+        "dola.com",
+        "duck.ai",
+        "elevenlabs.com",
+        "elevenlabs.io",
+        "envato-static.com",
+        "envato.com",
+        "envatousercontent.com",
+        "gateway.ai.cloudflare.com",
+        "geller-pa.googleapis.com",
+        "gemini.google",
+        "gemini.google.com",
+        "gemini.gstatic.com",
+        "generativeai.google",
+        "generativelanguage.googleapis.com",
+        "githubcopilot.com",
+        "grok.com",
+        "grok.x.com",
+        "groq.com",
+        "h2o.ai",
+        "hf.co",
+        "hf.space",
+        "host.livekit.cloud",
+        "huggingface.co",
+        "jasper.ai",
+        "jules.google",
+        "jules.google.com",
+        "kiro.dev",
+        "labs.google",
+        "labs.google.com",
+        "langchain.com",
+        "liveperson.net",
+        "lmstudio.ai",
+        "lovart.ai",
+        "lpsnmedia.net",
+        "makersuite.google.com",
+        "manus.im",
+        "manuscdn.com",
+        "marscode.com",
+        "meta.ai",
+        "midjourney.com",
+        "minimax.io",
+        "mistral.ai",
+        "mozilla.ai",
+        "notebooklm-pa.googleapis.com",
+        "notebooklm.google",
+        "notebooklm.google.com",
+        "notebooklm.googleapis.com",
+        "o33249.ingest.sentry.io",
+        "oaistatic.com",
+        "oaiusercontent.com",
+        "ollama.com",
+        "opal.google",
+        "opal.google.com",
+        "openai.com",
+        "openai.com.cdn.cloudflare.net",
+        "openaiapi-site.azureedge.net",
+        "openaicom-api-bdcpf8c6d2e9atf6.z01.azurefd.net",
+        "openaicom.imgix.net",
+        "openaicomproductionae4b.blob.core.windows.net",
+        "openart.ai",
+        "openclaw.ai",
+        "openrouter.ai",
+        "openspec.dev",
+        "oystermercury.top",
+        "perplexity.ai",
+        "perplexity.com",
+        "plannotator.ai",
+        "poe.com",
+        "poecdn.net",
+        "ppl-ai-file-upload.s3.amazonaws.com",
+        "pplx-res.cloudinary.com",
+        "pplx.ai",
+        "proactivebackend-pa.googleapis.com",
+        "production-openaicom-storage.azureedge.net",
+        "robinfrontend-pa.googleapis.com",
+        "servd-anthropic-website.b-cdn.net",
+        "sora.com",
+        "spicywriter.com",
+        "stitch.withgoogle.com",
+        "tapnow.ai",
+        "themeforest.net",
+        "trae.ai",
+        "turn.livekit.cloud",
+        "webchannel-alkalimakersuite-pa.clients6.google.com",
+        "windsurf.build",
+        "windsurf.com",
+        "x.ai",
+        "youmind.ai",
+        "youmind.com",
+        "youmind.site"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "HydraRoute"
+    },
+    {
+      "id": "hr:\u0414\u043e\u043c\u0435\u043d\u044b",
+      "name": "\u0414\u043e\u043c\u0435\u043d\u044b",
+      "domains": [
+        "ru",
+        "su"
+      ],
+      "manualDomains": [
+        "ru",
+        "su"
+      ],
+      "routes": null,
+      "enabled": true,
+      "createdAt": "",
+      "updatedAt": "",
+      "backend": "hydraroute",
+      "hrRouteMode": "policy",
+      "hrPolicyName": "RU"
+    }
+  ]
+}

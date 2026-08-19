@@ -69,6 +69,7 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 			if chain := routePolicyChainLabel(p.Interfaces); chain != "" {
 				fmt.Fprintf(&b, " → %s", chain)
 			}
+			b.WriteString(routePolicyEgressNote(snap, p))
 			b.WriteByte('\n')
 		}
 	}
@@ -84,7 +85,56 @@ func RoutesPanelText(nickname string, snap wire.RouteSnapshot) string {
 	return b.String()
 }
 
+// routeSnapshotHasPolicyIdentity reports whether the snapshot came from an
+// agent that resolves policy interfaces to tunnels. Older agents fill neither
+// ActiveTunnelID nor RoutePolicyInterface.TunnelID, and their snapshots must
+// keep the pre-Phase-B rendering rather than silently lose attribution.
+//
+// snap.PolicyModel is the authoritative signal: whether the agent read
+// access policies is a fact it knows about itself, not something inferable
+// from the policy data -- a policy whose entire chain leaves the VPN has no
+// tunnel ids anywhere, which would otherwise be indistinguishable from an
+// agent too old to resolve policies at all. The per-policy scan below is
+// belt-and-braces for snapshots built before the flag existed.
+func routeSnapshotHasPolicyIdentity(snap wire.RouteSnapshot) bool {
+	if snap.PolicyModel {
+		return true
+	}
+	for _, p := range snap.Policies {
+		if p.ActiveTunnelID != "" {
+			return true
+		}
+		for _, iface := range p.Interfaces {
+			if iface.TunnelID != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// routePolicyDNSByTunnelID attributes each policy's rules to the tunnel that
+// actually carries them.
+//
+// The legacy branch credits every interface of the chain, which multiplies the
+// same rules across active and standby alike: 26 HydraRoute rules were counted
+// three times on the live router. With ActiveTunnelID the answer is exact, so
+// the heuristic survives only for snapshots that predate it.
 func routePolicyDNSByTunnelID(snap wire.RouteSnapshot) map[string]int {
+	if !routeSnapshotHasPolicyIdentity(snap) {
+		return routePolicyDNSByTunnelIDLegacy(snap)
+	}
+	out := map[string]int{}
+	for _, p := range snap.Policies {
+		if p.DNS == 0 || p.ActiveTunnelID == "" {
+			continue
+		}
+		out[p.ActiveTunnelID] += p.DNS
+	}
+	return out
+}
+
+func routePolicyDNSByTunnelIDLegacy(snap wire.RouteSnapshot) map[string]int {
 	out := map[string]int{}
 	if len(snap.Policies) == 0 || len(snap.Tunnels) == 0 {
 		return out
@@ -122,6 +172,24 @@ func routePolicyDNSByTunnelID(snap wire.RouteSnapshot) map[string]int {
 		}
 	}
 	return out
+}
+
+// routePolicyEgressNote warns when a policy's traffic does not go through a
+// tunnel. Only snapshots that resolve interfaces to tunnels can tell the
+// difference, so older ones get no note rather than a wrong one.
+func routePolicyEgressNote(snap wire.RouteSnapshot, p wire.RoutePolicySummary) string {
+	if len(p.Interfaces) == 0 || !routeSnapshotHasPolicyIdentity(snap) {
+		return ""
+	}
+	for _, iface := range p.Interfaces {
+		if strings.EqualFold(iface.Role, "active") {
+			if iface.ViaVPN {
+				return ""
+			}
+			return " ⚠ мимо VPN"
+		}
+	}
+	return " ⚠ нет доступного интерфейса"
 }
 
 func routePolicyChainLabel(ifaces []wire.RoutePolicyInterface) string {

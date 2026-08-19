@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,13 +18,17 @@ import (
 // string suitable for wire.CommandResult.Output.
 func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	var (
-		hr         *awgmgr.HydraRouteStatus
-		tunnels    *awgmgr.TunnelsAll
-		routing    []awgmgr.RoutingTunnel
-		routingErr error
-		dns        []awgmgr.DNSRoute
-		statics    []awgmgr.StaticRoute
-		settings   *awgmgr.Settings
+		hr           *awgmgr.HydraRouteStatus
+		tunnels      *awgmgr.TunnelsAll
+		routing      []awgmgr.RoutingTunnel
+		routingErr   error
+		dns          []awgmgr.DNSRoute
+		statics      []awgmgr.StaticRoute
+		settings     *awgmgr.Settings
+		policies     []awgmgr.AccessPolicy
+		policiesErr  error
+		polIfaces    []awgmgr.PolicyInterface
+		polIfacesErr error
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) { hr, err = c.HydraRouteStatus(gctx); return })
@@ -41,10 +46,33 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 		settings, _ = c.Settings(gctx)
 		return nil
 	})
+	g.Go(func() error {
+		// Не фатально: роутер без политик — это старая модель, а не поломка.
+		policies, policiesErr = c.AccessPolicies(gctx)
+		return nil
+	})
+	g.Go(func() error {
+		// Тоже не фатально: без up/down цепочка всё ещё читается, деградируют
+		// только роли звеньев. Но деградируют молча и целиком: резолвер считает
+		// НЕизвестный интерфейс лежачим, поэтому активного звена не остаётся ни
+		// у одной политики, ActiveTunnelID пустеет, а бот печатает "нет
+		// доступного интерфейса" на всё подряд. Без строки в Warnings обе морды
+		// покажут это как полный снимок -- поэтому ошибка обязана дойти.
+		polIfaces, polIfacesErr = c.PolicyInterfaces(gctx)
+		return nil
+	})
 	if err := g.Wait(); err != nil {
 		return "", err
 	}
-	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings))
+	// "Эндпоинта нет" и "чтение упало" -- разные факты, и путать их нельзя.
+	// 404 означает сборку без политик: там привязка действительно живёт в
+	// правиле, и старая модель для неё верна. Любой другой отказ (500,
+	// таймаут) оставляет привязку НЕизвестной -- уйти в старую модель значит
+	// приписать правила default-туннелю по выдумке, которую фаза и удаляет.
+	// Путь записи (addTunnelToHydraRoutePolicies) различает эти два случая
+	// ровно так же; чтение обязано быть с ним согласовано.
+	policiesUnknown := policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr)
+	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings), policies, polIfaces, policiesUnknown)
 	if settings != nil && settings.SingboxRouterActive() {
 		snap.SingboxRouter = &wire.SingboxRouterStatus{
 			Enabled:    true,
@@ -54,6 +82,26 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	}
 	if routingErr != nil {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/tunnels failed: %v", routingErr))
+	}
+	// 404 на любой из двух выборок политик -- это не отказ, а ответ роутера
+	// "я старая сборка": сигнал модели, а не потеря данных. Warnings ниже по
+	// потоку означает "снапшот неполный" (панель бота, баннер мини-аппа), и
+	// клеймить им каждый опрос легаси-половины парка значило бы врать о
+	// состоянии роутера, у которого всё в порядке. Предупреждаем о том, что
+	// классифицировать не смогли: 500, таймаут, ошибка разбора.
+	if policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr) {
+		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/access-policies failed: %v", policiesErr))
+	}
+	// Для интерфейсов политик 404 означает "старая сборка" ТОЛЬКО пока старая
+	// модель и правда в силе, то есть пока политик у нас нет. Если политики
+	// прочитались, сборка заведомо новая, снимок живёт ими -- и отсутствие
+	// up/down это не сигнал модели, а недостающие данные: резолвер сочтёт
+	// лежачим каждый интерфейс, активного звена не останется ни у одной
+	// политики, и обе морды покажут "нет доступного интерфейса" как полный
+	// снимок.
+	legacyModel := len(policies) == 0
+	if polIfacesErr != nil && !(legacyModel && awgmgr.IsEndpointMissing(polIfacesErr)) {
+		snap.Warnings = append(snap.Warnings, fmt.Sprintf("/api/routing/policy-interfaces failed: %v", polIfacesErr))
 	}
 	b, err := json.Marshal(snap)
 	if err != nil {
@@ -79,7 +127,14 @@ func activeDefaultTunnelID(s *awgmgr.Settings) string {
 // no explicit hrPolicyInterfaces fall through to the live default egress, so we
 // must credit/label them against the tunnel awg-manager actually routes
 // through — not just the first defaultRoute=true tunnel encountered.
-func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string) wire.RouteSnapshot {
+//
+// policiesUnknown says the router HAS the access-policies endpoint and reading
+// it failed anyway (anything but a 404). Then the binding of every
+// policy-bound rule is unknown, and unknown is not the default route: such
+// rules go to snap.Other rather than being credited to a tunnel by guesswork.
+// An empty policies slice with policiesUnknown=false is the honest old-build
+// case and keeps the legacy per-rule behaviour.
+func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string, policies []awgmgr.AccessPolicy, polIfaces []awgmgr.PolicyInterface, policiesUnknown bool) wire.RouteSnapshot {
 	snap := wire.RouteSnapshot{Counts: make(map[string]wire.TunnelCounts)}
 	if hr != nil {
 		snap.HRNeo = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
@@ -100,6 +155,7 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				HasHandshake: t.LastHandshake.Time() != nil,
 				HandshakeAge: handshakeAgeSeconds(t.LastHandshake.Time()),
 				PingStatus:   t.PingCheck.Status, PingFails: t.PingCheck.FailCount, PingFailMax: t.PingCheck.FailThreshold,
+				RestartMethod: "control",
 			})
 			for _, alias := range ep.Aliases {
 				byIface[alias] = ep.ID
@@ -143,11 +199,43 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{
 			ID: ep.ID, Name: ep.Name, Iface: ep.Iface, Type: ep.Type,
 			Enabled: ep.Enabled, Available: ep.Available,
+			RestartMethod: "none",
 		})
 		for _, alias := range ep.Aliases {
 			byIface[alias] = ep.ID
 		}
 	}
+	// Модель политик (awg-manager 2.16+): привязка правила с
+	// hrRouteMode=="policy" лежит на политике, а не на правиле. Старые сборки
+	// политик не отдают вовсе -- там продолжает работать ветка
+	// hrPolicyInterfaces ниже. Выбор идёт по наличию данных, не по версии:
+	// версия бывает кастомной сборкой.
+	policyModel := len(policies) > 0
+	policyIndex := map[string]int{}
+	var policyResolver *policyIfaceResolver
+	if policyModel {
+		snap.PolicyModel = true
+		// Only Type=="managed" entries are our VPN tunnels. snap.Tunnels also
+		// carries WAN/system routing targets (added above from the NDMS
+		// routing catalogue) purely for the rebind picker; their display
+		// names can coincidentally collide with a policy interface's label
+		// (e.g. both called "Подключение Ethernet"), and letting them into
+		// the resolver would misclassify a WAN egress as one of our tunnels.
+		var vpnTunnels []wire.TunnelMeta
+		for _, t := range snap.Tunnels {
+			if strings.EqualFold(t.Type, "managed") {
+				vpnTunnels = append(vpnTunnels, t)
+			}
+		}
+		policyResolver = newPolicyIfaceResolver(vpnTunnels, polIfaces)
+		for _, p := range policies {
+			snap.Policies = append(snap.Policies, buildPolicySummary(p, policyResolver))
+		}
+		for i, p := range snap.Policies {
+			policyIndex[strings.ToLower(strings.TrimSpace(p.Name))] = i
+		}
+	}
+
 	creditDNS := func(tid string, isHRNeo bool) {
 		c := snap.Counts[tid]
 		c.DNS++
@@ -201,6 +289,28 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 				} else {
 					creditOther(isHR, false)
 				}
+			} else if idx, ok := policyIndex[strings.ToLower(strings.TrimSpace(r.HRPolicyName))]; policyModel && ok {
+				// Правило привязано политикой: чей это трафик, знает цепочка.
+				snap.Policies[idx].DNS++
+				if isHR {
+					snap.Policies[idx].HRNeo++
+				}
+				ruleBind = "policy:" + snap.Policies[idx].Name
+			} else if bind, id, ok := hrNeoInterfaceBind(r, policyResolver); ok {
+				// Правило приколочено к интерфейсу, а не к политике.
+				ruleBind = bind
+				if id != "" {
+					creditDNS(id, isHR)
+				} else {
+					creditOther(isHR, false)
+				}
+			} else if policiesUnknown && isMovableHRNeoFallthrough(r) {
+				// Привязка такого правила лежит на политике, а политики не
+				// прочитались. Имя политики -- всё, что мы честно знаем;
+				// куда она ведёт, не знает никто, поэтому правило идёт в
+				// Other, а не туннелю по умолчанию.
+				ruleBind = routePolicyLabel(r)
+				creditOther(isHR, false)
 			} else {
 				if isMovableHRNeoFallthrough(r) && len(r.HRPolicyInterfaces) > 0 {
 					ruleBind = routePolicyLabel(r)
@@ -240,6 +350,70 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		}))
 	}
 	return snap
+}
+
+// buildPolicySummary turns one access policy into the wire shape: the chain
+// sorted by the router's own priority, one active link (the first that is up),
+// and the tunnel that link resolves to.
+func buildPolicySummary(p awgmgr.AccessPolicy, r *policyIfaceResolver) wire.RoutePolicySummary {
+	entries := append([]awgmgr.AccessPolicyInterface(nil), p.Interfaces...)
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Order < entries[j].Order })
+	out := wire.RoutePolicySummary{Name: p.Name, Description: p.Description}
+	activeAssigned := false
+	for _, e := range entries {
+		tunnelID, isTunnel := r.tunnelForNames(e.Name, e.Label)
+		item := wire.RoutePolicyInterface{
+			Bind:      e.Name,
+			Name:      firstNonEmptyRoute(e.Label, e.Name),
+			Order:     e.Order,
+			Available: r.up(e.Name),
+			TunnelID:  tunnelID,
+			ViaVPN:    isTunnel,
+		}
+		switch {
+		case item.Available && !activeAssigned:
+			item.Role = "active"
+			activeAssigned = true
+			// Активное звено и определяет, куда политика ведёт СЕЙЧАС. Пустой
+			// ActiveTunnelID при непустой цепочке -- это выход мимо VPN.
+			out.ActiveTunnelID = tunnelID
+			out.ViaVPN = isTunnel
+		case item.Available:
+			item.Role = "fallback"
+		default:
+			item.Role = "unavailable"
+		}
+		out.Interfaces = append(out.Interfaces, item)
+	}
+	return out
+}
+
+// hrNeoInterfaceBind resolves a rule pinned to an interface rather than to a
+// policy. hrRouteMode=="interface" binds through hrPolicyInterfaces, and
+// hrPolicyName may itself name an interface instead of a policy — the router's
+// own UI resolves it that way, and tunnel_import writes exactly such rules.
+//
+// A name the router does not offer to policies is NOT claimed here: it falls
+// through to the legacy branches, which is what a router without the policy
+// model needs.
+func hrNeoInterfaceBind(r awgmgr.DNSRoute, resolver *policyIfaceResolver) (bind string, tunnelID string, ok bool) {
+	if resolver == nil {
+		return "", "", false
+	}
+	candidates := append(append([]string{}, r.HRPolicyInterfaces...), r.HRPolicyName)
+	for _, name := range candidates {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if id, isTunnel := resolver.tunnelForNames(name); isTunnel {
+			return name, id, true
+		}
+		if resolver.knownInterface(name) {
+			return name, "", true
+		}
+	}
+	return "", "", false
 }
 
 func routePolicyBind(r awgmgr.DNSRoute, fallbackIface string, byIface map[string]string) string {

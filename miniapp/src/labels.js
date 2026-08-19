@@ -195,9 +195,14 @@ export function trafficLabel(traffic) {
 export const ACTION_LABELS = {
   ack: 'Понятно, вижу',
   mute: 'Больше не напоминать',
-  silence1h: 'Не беспокоить час',
-  silence4h: 'Не беспокоить 4 часа',
-  silence24h: 'Не беспокоить сутки',
+  // Три варианта тишины подписаны одним словом каждый: на экране 390 px
+  // "Не беспокоить 4 часа" занимает строку целиком, и три такие кнопки
+  // превращают карточку тревоги в столбик. Смысл несёт подпись группы
+  // ("Не беспокоить"), а кнопка -- только срок.
+  silence1h: 'Час',
+  silence4h: '4 часа',
+  silence24h: 'Сутки',
+  silenceGroup: 'Не беспокоить',
   recheck: 'Повторить проверку',
   restartTunnel: 'Перезапустить туннель',
 }
@@ -245,4 +250,49 @@ export function commandOutcomeLabel(action, result) {
     default:
       return action === 'tunnel_restart' ? 'Туннель перезапущен' : 'Готово'
   }
+}
+
+// Четыре состояния роутера из dashboard_handler.go:780-796 -- единственный
+// словарь состояний в приложении. Второй развалился бы с этим при первой же
+// правке бэкенда.
+const STATUS_LABEL = {
+  online: 'В сети',
+  sleeping: 'Спит',
+  offline: 'Офлайн',
+  alert: 'Тревога',
+}
+
+export function statusLabel(status) {
+  return STATUS_LABEL[status] ?? status
+}
+
+// Подписи для легенды панели: на корпусе лампа подписана четырьмя буквами, и
+// рядом нужна расшифровка в два-три слова, а не полное имя проверки -- иначе
+// легенда перестаёт быть легендой и превращается во второй список проверок.
+const LEGEND_LABEL = {
+  dns: 'адреса сайтов',
+  external_reach: 'интернет',
+  hydraroute: 'обход блокировок',
+  awg_manager: 'панель роутера',
+  tunnels: 'связь с ботом',
+}
+
+export function legendLabel(name) {
+  return LEGEND_LABEL[name] ?? checkLabel(name)
+}
+
+// Русское числительное с существительным: 1 правило, 2 правила, 5 правил.
+// Нужно потому, что "2 правил" на экране маршрутов читается как опечатка, а
+// не как счётчик, и подрывает доверие к самим цифрам.
+export function pluralRu(n, one, few, many) {
+  const mod100 = Math.abs(n) % 100
+  const mod10 = mod100 % 10
+  if (mod100 >= 11 && mod100 <= 14) return many
+  if (mod10 === 1) return one
+  if (mod10 >= 2 && mod10 <= 4) return few
+  return many
+}
+
+export function rulesCount(n) {
+  return `${n} ${pluralRu(n, 'правило', 'правила', 'правил')}`
 }

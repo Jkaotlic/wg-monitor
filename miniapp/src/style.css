@@ -1,186 +1,58 @@
 /* ============================================================
    Design tokens
    ------------------------------------------------------------
-   Telegram hands over live theme colors via WebApp.themeParams;
-   App.jsx's applyTheme() writes them inline on <html> as --tg-*,
-   which always wins over any rule here (inline beats stylesheet,
-   even inside a media query). What's below is only the fallback
-   used before that handoff, or when the app runs outside
-   Telegram entirely -- the dark media block covers that case.
+   Палитра приложения объявлена в src/theme.js и применяется оттуда
+   как CSS-переменные; здесь она продублирована как значение по
+   умолчанию -- то, чем страница красится до того, как загрузится
+   бандл. Два источника сверяет test/theme.css.test.js, поэтому
+   разъехаться молча они не могут.
 
-   Everything components use lives in the semantic layer (surface,
-   text, accent, status-*, spacing, radius, type). Components
-   should reach for those, not --tg-* directly.
+   Тему (светлая/тёмная) выбирает Telegram, а не хост-палитра: тонкий
+   скрипт в index.html ставит data-theme до первой отрисовки, дальше
+   applyPalette() держит его в согласии с событием themeChanged.
+   Никаких --tg-* переменных в токенах больше нет -- приложение красит
+   себя само, и потому контраст можно измерить и зафиксировать тестом.
+
+   Компоненты берут только семантические токены (--page, --surface,
+   --text, --muted, --accent, --ok, --warn, --danger), никогда hex.
+   Единственное исключение -- материал прибора (--*-on-metal ниже и
+   RouterDevice.jsx): физическая пластмасса и светодиоды не
+   перекрашиваются вслед за темой телефона.
    ============================================================ */
 :root {
-  /* Telegram-provided surface & text colors (light fallback) */
-  --tg-bg-color: #ffffff;
-  --tg-text-color: #1c1c1e;
-  --tg-hint-color: #8a8a8e;
-  --tg-link-color: #2481cc;
-  --tg-button-color: #2481cc;
-  --tg-button-text-color: #ffffff;
-  --tg-secondary-bg-color: #f2f2f7;
+  --page: #e9e9ef;
+  --surface: #f2f2f7;
+  --text: #1c1c1e;
+  --muted: #67676c;
+  --accent: #226398;
+  --accent-fill: #175485;
+  --ok: #1E6F46;
+  --warn: #8a5a00;
+  --danger: #A93B3F;
+  --border: rgba(28,28,30,0.12);
+  --shadow-card: 0 1px 2px rgba(28,28,30,0.07);
+  /* Производные от палитры, не входящие в неё: цвет текста на залитой
+     кнопке (белый в обеих темах -- под него и подобран --accent-fill) и
+     усиленная граница для полей ввода. */
+  --on-accent: #ffffff;
+  --border-strong: rgba(28,28,30,0.24);
 
-  /* Semantic layer */
-  --surface: var(--tg-bg-color, #fff);
-  --surface-2: var(--tg-secondary-bg-color, #f2f2f7);
-  --text: var(--tg-text-color, #1c1c1e);
-  --muted: var(--tg-hint-color, #8a8a8e);
-  --accent: var(--tg-button-color, #2481cc);
-  --accent-text: var(--tg-button-text-color, #fff);
-  --link: var(--tg-link-color, #2481cc);
+  /* Материал прибора: корпус, светодиоды и шелкография RouterDevice.jsx.
+     Это не тема, а физика -- светодиод не меняет цвет, когда телефон
+     переключается в тёмную. Ратио держатся в обеих темах, потому что
+     не движется ни один операнд:
 
-  --border: color-mix(in srgb, var(--text) 12%, transparent);
-  --border-strong: color-mix(in srgb, var(--text) 24%, transparent);
-  --shadow-card: 0 1px 2px color-mix(in srgb, var(--text) 7%, transparent);
+       online    #1fa661 на утопленной панели #15181d  5.66:1  (нужно 3:1)
+       alert     #e5484d на ней же                     4.55:1  (нужно 3:1)
+       offline   #8a8a8e на ней же                     5.17:1  (нужно 3:1)
+       sleeping  #ffb224 на корпусе #414852            4.79:1  (нужно 3:1)
+       alert-ink #ff9592 на панели #252a30             6.86:1  (нужно 4.5:1)
 
-  /* --accent/--accent-text are raw Telegram passthroughs (see below) with
-     no contrast guarantee of their own -- inside real Telegram the button
-     color pair IS guaranteed accessible by the host, but our *fallback*
-     hex values (used pre-handoff or outside Telegram entirely) are not:
-     measured, --accent-text-on-accent came out to ~4.13:1 light / ~2.59:1
-     dark, and --accent-as-text-on-surface ~4.13:1 light -- both under
-     WCAG AA's 4.5:1. Two derived tokens harden the fallback, each fixed
-     for what it's actually used for:
-
-     --accent-fill: the background of a FILLED button carrying fixed white
-     text. Text is fixed, so the background must always move darker
-     regardless of theme -- mixed with black (not --text, which would
-     mean mixing toward near-white in dark mode, the wrong direction).
-     65/35 clears both fallbacks with margin: light ~7.96:1, dark ~5.55:1.
-
-     --accent-ink: --accent used AS text color directly on --surface
-     (ghost button). Same self-correcting mix-with-text trick as the
-     --status-* tokens above: pulls toward black in light mode, toward
-     white in dark mode, both directions increasing contrast against
-     --surface. 70/30 clears both: light ~6.38:1, dark ~8.43:1.
-
-     Verified via getComputedStyle + WCAG relative-luminance in a real
-     browser (Playwright), not just eyeballed -- see
-     .superpowers/sdd/miniapp-p3-task-6-report.md for the full table. */
-  --accent-fill: color-mix(in srgb, var(--accent) 65%, black 35%);
-  --accent-ink: color-mix(in srgb, var(--accent) 70%, var(--text) 30%);
-
-  /* --muted used as PROSE that has to be read, not as a hint tint. Same
-     -ink naming rule and the same self-correcting mix as --accent-ink
-     above, and it exists for the same reason: --muted is a raw Telegram
-     passthrough (--tg-hint-color) with no contrast guarantee of its own.
-     Telegram picks its hint colour against the MAIN background; nothing
-     promises it against --surface-2, which is where this app puts most of
-     its text (every .card). Measured against the real Telegram palettes,
-     plain --muted fails WCAG AA (4.5:1 for normal-size text) on a
-     DIFFERENT background in each theme -- so neither theme alone would
-     have caught it:
-
-                          light (hint #707579)   dark (hint #7d8b99)
-       --muted on --surface      4.66  ok            4.01  FAIL
-       --muted on --surface-2    4.24  FAIL          5.29  ok
-       --muted-ink on --surface  6.55  ok            6.86  ok
-       --muted-ink on --surface-2 5.87 ok            5.62  ok
-
-     But --tg-hint-color is Telegram's live value, applied inline before
-     paint; this token also has to hold on the *static fallback* hex used
-     pre-handoff or outside Telegram entirely (see the file header comment
-     -- a real code path, not theoretical), and that palette's hint is
-     different again: #8a8a8e light / #8e8e93 dark. The ratio this token
-     first shipped with, 80/20, clears every real-Telegram cell above but
-     comes up short on the fallback's worst case -- --muted-ink on
-     --surface-2 in light mode measured 4.17:1, under the 4.5:1 bar.
-     74/26 -- six more points of --text pulled into the mix -- clears all
-     eight cells (both palettes x both surfaces x both themes), landing
-     the fallback's worst case at 4.59:1: a small margin over 4.5, not a
-     large one, because anything much deeper starts reading as body text
-     and stops being secondary at all, which is the whole job of this
-     colour:
-
-                              -- static fallback palette --
-                          light (hint #8a8a8e)   dark (hint #8e8e93)
-       --muted-ink on --surface  5.13  ok            7.18  ok
-       --muted-ink on --surface-2 4.59 ok            5.88  ok
-
-     Verified via getComputedStyle + WCAG relative luminance in a browser
-     (Playwright), not eyeballed, on both palettes above -- see
-     .superpowers/sdd/miniapp-p4-task-10-report.md.
-
-     Scope is "muted text this screen must be able to READ" (the tunnel
-     readings, the traffic detail, the check states). Plain --muted stays
-     correct for hint TINTS and is untouched here; the older components
-     that inherit the same 4.24/4.01 problem (.state, .incident-since,
-     .muted itself) are flagged in that report rather than swept into this
-     task's diff. */
-  --muted-ink: color-mix(in srgb, var(--muted) 74%, var(--text) 26%);
-
-  /* Status hues. Each is anchored to a fixed brand hue but mixed
-     with --text so it self-corrects contrast per theme: in light
-     mode --text is near-black and pulls the hue darker (readable
-     on a pale surface); in dark mode --text is near-white and
-     pulls it lighter (readable on a near-black surface). Offline
-     reuses --muted outright -- "offline" IS the inactive/hint
-     tone, not a separate color to invent.
-
-     Mix ratios below (60/40, 65/35, 70/30) were widened from an
-     earlier 78-82% anchor / 18-22% text pass once these tokens
-     started actually rendering as badge text-on-tint pills: the
-     lighter ratio computed to ~3.6-4.1:1 against its own badge
-     background in light mode, under WCAG AA's 4.5:1 for normal-size
-     text. Pulling more --text into the mix darkens the token in
-     light mode *and* lightens it in dark mode (same self-correcting
-     mechanism, just tuned further), which raised every badge above
-     4.5:1 in both themes -- verified by computing sRGB relative
-     luminance for each token's on-badge text against its own
-     color-mix'd background (see badge rules below), not just
-     eyeballed. */
-  --status-online: color-mix(in srgb, #1fa661 60%, var(--text) 40%);
-  --status-sleeping: color-mix(in srgb, #b8790a 65%, var(--text) 35%);
-  --status-offline: var(--muted);
-  --status-alert: color-mix(in srgb, #e5484d 70%, var(--text) 30%);
-  --danger: var(--status-alert);
-  --success: var(--status-online);
-
-  /* The same states, anchored for the one background --status-* above
-     cannot serve: the instrument's own material (RouterDevice.jsx).
-     Its recess #15181d, shell #414852 and panel #252a30 are fixed
-     plastic and metal -- they do not re-theme. A token that
-     self-corrects against --surface is therefore not merely unhelpful
-     on them, it is backwards: in light mode --status-online mixes
-     toward near-black to stay legible on a white page, which darkens
-     the LED against an already-near-black recess. Measured, that put
-     four elements under WCAG 1.4.11 in light mode (online LED 2.89:1,
-     alert LED 2.86:1, collar 1.48:1, EXT silkscreen 2.32:1) while the
-     same four passed in dark -- the token used outside its contract.
-
-     So these are fixed anchors, not mixes. Fixed is also the truer
-     model: a physical LED does not change colour when the phone flips
-     to dark, and the material palette beside it already works this way
-     (see .device-print below, whose greys are raw hexes for exactly
-     this reason). The ratios hold in BOTH themes because nothing in
-     either operand moves:
-
-       online    #1fa661 on recess #15181d  5.66:1  (needs 3:1)
-       alert     #e5484d on recess #15181d  4.55:1  (needs 3:1)
-       offline   #8a8a8e on recess #15181d  5.17:1  (needs 3:1)
-       sleeping  #ffb224 on shell  #414852  4.79:1  (needs 3:1, ring at 0.95 alpha)
-       alert-ink #ff9592 on panel  #252a30  6.86:1  (needs 4.5:1)
-
-     Two of those values are not the brand anchor, for reasons worth
-     keeping. --sleeping-on-metal is not #b8790a: the shell is
-     mid-slate rather than near-black, and that dark amber measures
-     2.54:1 on it -- a lit ring on a mid-tone housing has to be
-     BRIGHTER than the housing, not darker, so this takes the amber
-     scale's solid step. And the alert hue splits in two: #e5484d
-     clears the 3:1 graphical bar as a lamp on the recess but reaches
-     only 3.69:1 as 8px text on the lighter panel, under the 4.5:1 text
-     bar -- so the silkscreen gets its own -ink anchor (same naming
-     rule as --accent-ink above: -ink means "used as text"), landing
-     near the plain silkscreen's own 7.55:1 so both prints read as one
-     ink weight.
-
-     Scope is exactly "rides on the material". Whatever is drawn ABOVE
-     the shell -- the antenna fields and tips -- sits on --surface and
-     keeps the plain --status-* tokens, which is what their contract is
-     for. Verified in a browser via getComputedStyle + WCAG relative
-     luminance, not eyeballed; see .superpowers/sdd/miniapp-p4-task-9-report.md. */
+     Два значения отличаются от интерфейсных не случайно: корпус --
+     средне-серый, и на нём горящее кольцо должно быть ЯРЧЕ фона, а не
+     темнее; а красный раздваивается, потому что как лампа он проходит
+     графический барьер 3:1, а как шелкография 8px -- уже нет.
+     Измерено в браузере, не на глаз: .superpowers/sdd/miniapp-p4-task-9-report.md. */
   --status-online-on-metal: #1fa661;
   --status-alert-on-metal: #e5484d;
   --status-offline-on-metal: #8a8a8e;
@@ -223,19 +95,24 @@
   --transition-fast: 120ms ease;
 }
 
-@media (prefers-color-scheme: dark) {
-  /* Dark fallbacks for --tg-*. Only in effect outside Telegram:
-     inside Telegram, applyTheme() always sets these inline before
-     anything paints, and inline wins regardless of this query. */
-  :root {
-    --tg-bg-color: #1c1c1e;
-    --tg-text-color: #f2f2f3;
-    --tg-hint-color: #8e8e93;
-    --tg-link-color: #6ab7ff;
-    --tg-button-color: #3ea6ff;
-    --tg-button-text-color: #ffffff;
-    --tg-secondary-bg-color: #2c2c2e;
-  }
+/* Тёмная тема. Значения -- зеркало PALETTES.dark из theme.js; сверяется
+   тестом. Атрибут ставит скрипт в index.html до первой отрисовки, а потом
+   держит applyPalette(), поэтому вспышки светлой темы при открытии нет.
+   Материал прибора (--*-on-metal) здесь не повторяется: он не тема. */
+[data-theme="dark"] {
+  --page: #15181d;
+  --surface: #21262d;
+  --text: #e6e9ee;
+  --muted: #a2abb8;
+  --accent: #7fb6e6;
+  --accent-fill: #2b6ea8;
+  --ok: #3fbf7a;
+  --warn: #f0b429;
+  --danger: #ff8a86;
+  --border: rgba(255,255,255,0.14);
+  --shadow-card: none;
+  --on-accent: #ffffff;
+  --border-strong: rgba(255,255,255,0.28);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -277,7 +154,7 @@
    Card / row
    ============================================================ */
 .card {
-  background: var(--surface-2);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
@@ -333,7 +210,9 @@
   align-items: center;
   justify-content: center;
   gap: var(--sp-1);
-  min-height: 32px;
+  /* 44 px -- минимальная зона нажатия пальцем; мини-апп открывают с телефона,
+     и кнопка в 32 px промахивается. */
+  min-height: 44px;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -359,13 +238,13 @@
 .btn-primary {
   background: var(--accent-fill);
   border-color: var(--accent-fill);
-  color: var(--accent-text);
+  color: var(--on-accent);
 }
 
 .btn-ghost {
   background: transparent;
-  border-color: var(--accent-ink);
-  color: var(--accent-ink);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .btn-danger {
@@ -404,32 +283,31 @@
   flex: none;
 }
 
+/* Пилюли статусов. Фон -- тинт токена по макету (16% на карточке), а текст
+   на 20% подтянут к --text. Причина ровно одна: сам по себе токен на своём
+   же тинте даёт 4.24-4.40:1 при требуемых 4.5 -- то есть палитра макета в
+   этом месте не дотягивает, и дотягивать её надо там, где проблема, а не
+   перекрашивая токен для всего приложения. С подтяжкой худший случай --
+   5.18:1 в светлой теме и 5.50:1 в тёмной. Проценты продублированы в
+   test/theme.test.js: разъехаться они не могут, тест сверяет этот файл. */
 .badge-online {
-  color: var(--status-online);
-  background: color-mix(in srgb, var(--status-online) 16%, var(--surface));
+  color: color-mix(in srgb, var(--ok) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
 }
 
 .badge-sleeping {
-  color: var(--status-sleeping);
-  background: color-mix(in srgb, var(--status-sleeping) 16%, var(--surface));
+  color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
 }
 
-/* Offline's badge text is darkened locally rather than by editing
-   --status-offline itself: that token is deliberately still "plain
-   --muted" (see the comment above) for any non-badge use. Plain
-   --muted at full strength only reaches ~3.4:1 on --surface, well
-   under the 4.5:1 a badge pill needs, so the pill mixes in extra
-   --text just for this rule -- the same self-correcting trick as
-   the other three tokens, scoped to where the contrast problem
-   actually is. */
 .badge-offline {
-  color: color-mix(in srgb, var(--status-offline) 60%, var(--text) 40%);
-  background: color-mix(in srgb, var(--status-offline) 14%, var(--surface));
+  color: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--muted) 16%, var(--surface));
 }
 
 .badge-alert {
-  color: var(--status-alert);
-  background: color-mix(in srgb, var(--status-alert) 16%, var(--surface));
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
 }
 
 
@@ -454,7 +332,7 @@
   font-family: inherit;
   font-size: var(--fs-md);
   color: var(--text);
-  background: var(--surface);
+  background: var(--page);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: var(--sp-2) var(--sp-3);
@@ -492,8 +370,8 @@
 
 body {
   margin: 0;
-  background: var(--tg-bg-color);
-  color: var(--tg-text-color);
+  background: var(--page);
+  color: var(--text);
   font-family: var(--font-body);
 }
 
@@ -544,13 +422,20 @@ body {
   margin: 0 0 var(--sp-3);
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
-  color: var(--muted-ink);
+  color: var(--muted);
 }
 
 .incident-actions {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--sp-2);
+}
+
+.incident-actions-label {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
 }
 
 /* ---------------- Async commands (Task 12) ----------------
@@ -618,7 +503,7 @@ body {
 .router-lastseen {
   margin: calc(-1 * var(--sp-2)) 0 0;
   font-size: var(--fs-sm);
-  color: var(--muted-ink);
+  color: var(--muted);
 }
 
 /* ---------------- Tunnels (§3.3) ----------------
@@ -647,7 +532,7 @@ body {
 .tunnel-id {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  color: var(--muted-ink);
+  color: var(--muted);
 }
 
 /* The screen's primary reading -- "работает · обмен ключами 45 сек назад".
@@ -657,7 +542,54 @@ body {
   flex-basis: 100%;
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
-  color: var(--muted-ink);
+  color: var(--muted);
+}
+
+/* Цепочка политики: приоритетный список звеньев, не строка. Недоступные
+   звенья приглушены -- оператору важно, какое звено активно сейчас. */
+.policy-chain {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+.policy-link {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+}
+
+.policy-link-order {
+  color: var(--muted);
+  min-width: 1.2em;
+}
+
+.policy-link-role {
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.policy-link-unavailable .policy-link-name,
+.policy-link-unavailable .policy-link-role {
+  opacity: 0.55;
+}
+
+/* У политики нет ни одного интерфейса -- это факт, а не тревога, поэтому
+   приглушённый --muted, а не --danger, каким помечена "мимо VPN" ниже. */
+.policy-chain-empty {
+  margin-top: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+/* Политика уходит мимо VPN -- та же тревожная краска, что и другие сбои
+   на этом экране (--danger), не самодельный цвет. */
+.policy-egress {
+  margin-left: var(--sp-2);
+  color: var(--danger);
+  font-size: var(--fs-xs);
 }
 
 /* ---------------- Traffic (§3.4) ----------------
@@ -675,7 +607,7 @@ body {
   margin: var(--sp-2) 0 0;
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
-  color: var(--muted-ink);
+  color: var(--muted);
 }
 
 /* The contested-default footnote: a real and common condition (the operator's
@@ -685,7 +617,7 @@ body {
   margin: var(--sp-3) 0 0;
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--status-sleeping) 12%, var(--surface));
+  background: color-mix(in srgb, var(--warn) 12%, var(--surface));
   color: var(--text);
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
@@ -771,7 +703,7 @@ body {
   margin: var(--sp-2) 0 0;
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
-  color: var(--muted-ink);
+  color: var(--muted);
   white-space: pre-line;
   /* Same long-IPv6 "Exit IP: ..." line as .compare-probe-ip above, just
      inside this verbatim report -- same overflow-wrap fix so it wraps
@@ -796,15 +728,15 @@ body {
 }
 
 .compare-note-alert {
-  background: color-mix(in srgb, var(--status-alert) 14%, var(--surface));
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
 }
 
 .compare-note-good {
-  background: color-mix(in srgb, var(--status-online) 14%, var(--surface));
+  background: color-mix(in srgb, var(--ok) 14%, var(--surface));
 }
 
 .compare-note-caution {
-  background: color-mix(in srgb, var(--status-sleeping) 12%, var(--surface));
+  background: color-mix(in srgb, var(--warn) 12%, var(--surface));
 }
 
 /* Same wrapping deal as .tunnel-row: a human check name and its reading do not
@@ -818,11 +750,11 @@ body {
 .checks-status {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
-  color: var(--muted-ink);
+  color: var(--muted);
 }
 
 .checks-status-ok {
-  color: var(--muted-ink);
+  color: var(--muted);
 }
 
 .checks-status-fail {
@@ -940,7 +872,7 @@ body {
        the state colour riding it.
      - ON --surface (the antenna fields and tips, which are drawn
        above the shell, and the traffic path) -> the plain
-       --status-* / --accent-ink / --muted, whose whole contract is
+       --ok / --danger / --accent / --muted, whose whole contract is
        to self-correct against --surface.
    The token block up top carries the measured ratios for both.
    ============================================================ */
@@ -1003,7 +935,7 @@ body {
    New in Phase 4; the mockup had no such element. It answers
    "where do packets actually leave", which is a question about
    direction, not health -- so it takes the accent hue, not a
-   --status-* one. --accent-ink is the token hardened for use as
+   material one. --accent is the interface token, hardened for use as
    ink directly on --surface (see the token block above), and the
    casing underneath it is what guarantees that is the background
    it actually gets: the path crosses the mid-slate mast and the
@@ -1011,14 +943,14 @@ body {
    --surface behind the line, so the hardened contrast holds. */
 .device-path-casing {
   fill: none;
-  stroke: var(--surface);
+  stroke: var(--page);
   stroke-width: 6.4;
   stroke-linecap: round;
 }
 
 .device-path {
   fill: none;
-  stroke: var(--accent-ink);
+  stroke: var(--accent);
   stroke-width: 2.6;
   stroke-linecap: round;
 }
@@ -1077,4 +1009,584 @@ body {
     transform-box: view-box;
     animation: device-wave 2.4s ease-out infinite;
   }
+}
+
+/* ============================================================
+   Оболочка: шапка, нижние табы, оверлеи
+   ============================================================ */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--page);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header-brand {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.app-header-fleet {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-2);
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* Контент не должен прятаться под фиксированным таббаром: его высота плюс
+   безопасная зона внизу экрана уходят в отступ страницы. */
+.app-body {
+  padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+}
+
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.tabbar-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 56px;
+  padding: var(--sp-2) var(--sp-1);
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tabbar-item-active {
+  color: var(--accent);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--page);
+}
+
+.overlay-head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.overlay-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-2) var(--sp-1) 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.overlay-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.overlay-body {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* Строка списка роутеров: имя, статус и возраст данных на второй строке. */
+.row-sub {
+  flex-basis: 100%;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.row-current {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+.admin-note {
+  margin-top: var(--sp-5);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+}
+
+/* ============================================================
+   Нижний шит: подтверждение, ход выполнения, результат
+   ============================================================ */
+.sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.sheet {
+  position: relative;
+  background: var(--surface);
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-4) calc(var(--sp-5) + env(safe-area-inset-bottom, 0px));
+  animation: sheet-up 180ms ease-out;
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(24px); opacity: 0.4; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+  color: var(--accent);
+}
+
+.sheet-grip {
+  width: 36px;
+  height: 4px;
+  margin: 0 auto var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+}
+
+.sheet-title {
+  margin: 0;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  color: var(--text);
+}
+
+.sheet-body {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+}
+
+.sheet-note {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--warn);
+}
+
+/* Оператор должен видеть, что именно уйдёт на роутер: имя команды печатается
+   рядом с кнопкой, а не прячется за формулировкой. */
+.sheet-command {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.sheet-command-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.sheet-command-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.sheet-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+}
+
+.sheet-actions .btn {
+  flex: 1;
+}
+
+.sheet-running {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--muted);
+}
+
+.sheet-result {
+  margin-top: var(--sp-4);
+}
+
+.sheet-result .btn {
+  width: 100%;
+  margin-top: var(--sp-3);
+}
+
+/* ============================================================
+   Легенда панели, плитки действий, строки списка
+   ============================================================ */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.legend {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  margin-bottom: var(--sp-5);
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+
+.legend-item-fail {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--ok);
+}
+
+.legend-item-fail .legend-dot {
+  background: var(--danger);
+}
+
+.legend-key {
+  width: 40px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.legend-item-fail .legend-key {
+  color: var(--danger);
+}
+
+.legend-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.action-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
+  min-height: 64px;
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.action-tile-danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+}
+
+.action-tile-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.action-tile-danger .action-tile-title {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+}
+
+.action-tile-hint {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+}
+
+.action-tile-danger .action-tile-hint {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+}
+
+.list-row {
+  gap: var(--sp-3);
+}
+
+.list-row-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.list-row-sub {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+}
+
+.list-row-chevron {
+  flex: none;
+  color: var(--muted);
+}
+
+/* Тональные пилюли для новых экранов: смысл вместо имени состояния роутера. */
+.badge-tone-ok {
+  color: color-mix(in srgb, var(--ok) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--ok) 16%, var(--surface));
+}
+
+.badge-tone-warn {
+  color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--warn) 16%, var(--surface));
+}
+
+.badge-tone-danger {
+  color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--danger) 16%, var(--surface));
+}
+
+.badge-tone-muted {
+  color: color-mix(in srgb, var(--muted) 80%, var(--text) 20%);
+  background: color-mix(in srgb, var(--muted) 16%, var(--surface));
+}
+
+/* ============================================================
+   Лента событий
+   ============================================================ */
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 var(--sp-4);
+}
+
+.filter-chip {
+  min-height: 32px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filter-chip-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.event-row {
+  gap: var(--sp-3);
+}
+
+.event-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.event-dot-ok { background: var(--ok); }
+.event-dot-warn { background: var(--warn); }
+.event-dot-danger { background: var(--danger); }
+
+.event-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.event-detail {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.event-time {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* ============================================================
+   Маршруты и диагностика
+   ============================================================ */
+.rules-group + .rules-group {
+  margin-top: var(--sp-4);
+}
+
+.rules-bind {
+  margin: 0 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.rules-target {
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.diag-cards {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.diag-card {
+  display: grid;
+  gap: var(--sp-1);
+}
+
+.diag-card-danger {
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.diag-card-warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.diag-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-2);
+}
+
+.diag-verdict {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+.diag-verdict-ok { color: color-mix(in srgb, var(--ok) 80%, var(--text) 20%); }
+.diag-verdict-warn { color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%); }
+.diag-verdict-danger { color: color-mix(in srgb, var(--danger) 80%, var(--text) 20%); }
+.diag-verdict-muted { color: var(--muted); }
+
+.raw-toggle {
+  width: 100%;
+}
+
+.raw-dump {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Кликабельная строка -- кнопка внутри li: сама li остаётся разделителем и
+   держит границу, кнопка занимает её целиком и доступна с клавиатуры. */
+.list-row-item {
+  border-bottom: 1px solid var(--border);
+}
+
+.list-row-item:last-child {
+  border-bottom: none;
+}
+
+.list-row-btn {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-row-btn:hover,
+.list-row-btn:active {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.list-row-current .list-row-btn {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }

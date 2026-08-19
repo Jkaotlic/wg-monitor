@@ -1,0 +1,9 @@
+{
+  "success": true,
+  "data": {
+    "download": {
+      "routeTag": "direct",
+      "routeKind": "direct"
+    }
+  }
+}

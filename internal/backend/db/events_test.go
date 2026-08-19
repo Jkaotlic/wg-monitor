@@ -48,3 +48,81 @@ func TestEventsPruneBefore(t *testing.T) {
 		t.Fatalf("pruned %d, want 1", n)
 	}
 }
+
+func TestListAllSince(t *testing.T) {
+	d := newTestDB(t)
+	tok := "3333333333333333333333333333333333333333333333333333333333333333"
+	uid, _ := d.Users().Insert("home", tok, "1.1.1.1", "awg0")
+
+	now := time.Now().UTC()
+	rows := []struct {
+		check  string
+		status string
+		age    time.Duration
+	}{
+		{"tunnel_awg12", "fail", 30 * time.Minute},
+		{"dns", "ok", 20 * time.Minute},
+		{"tunnel_awg12", "ok", 10 * time.Minute},
+		{"old", "ok", 48 * time.Hour},
+	}
+	for _, ev := range rows {
+		if err := d.Events().Insert(uid, ev.check, ev.status, "{}", now.Add(-ev.age)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	got, err := d.Events().ListAllSince(uid, now.Add(-24*time.Hour), 100)
+	if err != nil {
+		t.Fatalf("ListAllSince: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3 (событие старше окна не берётся)", len(got))
+	}
+	// Свежие первыми: экран читается сверху вниз, как лента.
+	if !got[0].TS.After(got[1].TS) || !got[1].TS.After(got[2].TS) {
+		t.Errorf("порядок не по убыванию времени: %v", got)
+	}
+	// Лента идёт по всем проверкам, а не по одной: ListSince этого не умеет.
+	if got[0].CheckName != "tunnel_awg12" || got[1].CheckName != "dns" {
+		t.Errorf("получили %q, %q; ожидали tunnel_awg12, dns", got[0].CheckName, got[1].CheckName)
+	}
+}
+
+func TestListAllSinceLimit(t *testing.T) {
+	d := newTestDB(t)
+	tok := "4444444444444444444444444444444444444444444444444444444444444444"
+	uid, _ := d.Users().Insert("home", tok, "1.1.1.1", "awg0")
+
+	now := time.Now().UTC()
+	for i := 0; i < 10; i++ {
+		if err := d.Events().Insert(uid, "dns", "ok", "{}", now.Add(-time.Duration(i)*time.Minute)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+
+	got, err := d.Events().ListAllSince(uid, now.Add(-time.Hour), 3)
+	if err != nil {
+		t.Fatalf("ListAllSince: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len = %d, want 3", len(got))
+	}
+	// Обрезаются самые старые, а не самые свежие.
+	if !got[0].TS.After(got[2].TS) {
+		t.Errorf("обрезали не с того конца: %v", got)
+	}
+}
+
+func TestListAllSinceEmptyIsNotError(t *testing.T) {
+	d := newTestDB(t)
+	tok := "5555555555555555555555555555555555555555555555555555555555555555"
+	uid, _ := d.Users().Insert("home", tok, "1.1.1.1", "awg0")
+
+	got, err := d.Events().ListAllSince(uid, time.Now().UTC().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListAllSince: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("len = %d, want 0", len(got))
+	}
+}

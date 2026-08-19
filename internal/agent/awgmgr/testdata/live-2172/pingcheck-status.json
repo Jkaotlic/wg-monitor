@@ -1,0 +1,50 @@
+{
+  "success": true,
+  "data": {
+    "enabled": false,
+    "tunnels": [
+      {
+        "tunnelId": "awg10",
+        "tunnelName": "awg3-main-work",
+        "enabled": false,
+        "backend": "kernel",
+        "status": "disabled",
+        "method": "http",
+        "lastCheck": null,
+        "lastLatency": 0,
+        "failCount": 0,
+        "failThreshold": 3,
+        "restartCount": 0,
+        "tunnelRunning": false
+      },
+      {
+        "tunnelId": "awg11",
+        "tunnelName": "awg3-work-via-ru1",
+        "enabled": true,
+        "backend": "kernel",
+        "status": "alive",
+        "method": "icmp",
+        "lastCheck": "2026-08-18T15:34:19.21316568+03:00",
+        "lastLatency": 70,
+        "failCount": 0,
+        "failThreshold": 3,
+        "restartCount": 0,
+        "tunnelRunning": false
+      },
+      {
+        "tunnelId": "awg20",
+        "tunnelName": "NetherlandsKerkradeS24",
+        "enabled": true,
+        "backend": "nativewg",
+        "status": "disabled",
+        "method": "icmp",
+        "lastCheck": null,
+        "lastLatency": 0,
+        "failCount": 0,
+        "failThreshold": 3,
+        "restartCount": 0,
+        "tunnelRunning": false
+      }
+    ]
+  }
+}

@@ -17,10 +17,11 @@ type PingCheckPanelEntry struct {
 	Status           string // "alive" | "dead" | ""
 	PerTunnelEnabled bool   // false → ⏸ icon, watchdog suspended for this tunnel
 	LastLatencyMs    int    // 0 → "---"
-	SuccessCount     int64
-	FailCount        int
-	FailThreshold    int
-	RestartCount     int
+	// SuccessCount is nil when awg-manager did not report it (2.16+).
+	SuccessCount  *int64
+	FailCount     int
+	FailThreshold int
+	RestartCount  int
 }
 
 // PingCheckPanelText renders the message body. globalEnabled is the
@@ -44,7 +45,14 @@ func PingCheckPanelText(nickname string, globalEnabled bool, entries []PingCheck
 	} else {
 		b.WriteString("⏸ выключен")
 	}
-	b.WriteString("\n  • ✓ — успешные проверки, ✗ — ошибки подряд, restart — автоперезапуски")
+	legend := "\n  • ✗ — ошибки подряд, restart — автоперезапуски"
+	for _, e := range entries {
+		if e.SuccessCount != nil {
+			legend = "\n  • ✓ — успешные проверки, ✗ — ошибки подряд, restart — автоперезапуски"
+			break
+		}
+	}
+	b.WriteString(legend)
 	return b.String()
 }
 
@@ -70,8 +78,12 @@ func formatPingCheckRow(e PingCheckPanelEntry) string {
 	if name == "" {
 		name = e.TunnelID
 	}
-	return fmt.Sprintf("%s %s  %s  ✓%s  ✗%d/%d   restart×%d%s",
-		icon, name, lat, formatCount(e.SuccessCount), e.FailCount, e.FailThreshold, e.RestartCount, warn)
+	success := ""
+	if e.SuccessCount != nil {
+		success = fmt.Sprintf("  ✓%s", formatCount(*e.SuccessCount))
+	}
+	return fmt.Sprintf("%s %s  %s%s  ✗%d/%d   restart×%d%s",
+		icon, name, lat, success, e.FailCount, e.FailThreshold, e.RestartCount, warn)
 }
 
 // formatCount renders 0..9999 as plain int; >=10000 as "12.5k" (one decimal).

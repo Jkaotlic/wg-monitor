@@ -352,3 +352,145 @@ func TestMiniappRouterDetailCarriesSuppressionState(t *testing.T) {
 		t.Fatalf("enriched incident tunnel_a not found in detail response: %+v", resp.Incidents)
 	}
 }
+
+func TestMiniappTimelineDeniedForStranger(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 777))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404 for stranger, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiniappTimelineNewestFirst(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now().UTC()
+	if err := d.Events().Insert(ownedID, "dns", "fail", "{}", now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := d.Events().Insert(ownedID, "dns", "ok", "{}", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	// Вне окна: не должно попасть в семидневную ленту.
+	if err := d.Events().Insert(ownedID, "dns", "fail", "{}", now.Add(-30*24*time.Hour)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappTimelineResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Events) != 2 {
+		t.Fatalf("events = %+v, want 2 (третье старше окна)", resp.Events)
+	}
+	if resp.Events[0].Status != "ok" {
+		t.Errorf("первым должно идти свежее событие, получили %+v", resp.Events[0])
+	}
+	if resp.Days != miniappTimelineDefaultDays {
+		t.Errorf("days = %d, want %d", resp.Days, miniappTimelineDefaultDays)
+	}
+	if resp.Truncated {
+		t.Errorf("truncated = true при двух событиях")
+	}
+}
+
+func TestMiniappTimelineEmptyIsArrayNotNull(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	// Клиент делает .map по этому полю: null уронил бы экран.
+	if !strings.Contains(rec.Body.String(), `"events":[]`) {
+		t.Fatalf("пустая история должна быть [], получили %s", rec.Body.String())
+	}
+}
+
+func TestMiniappTimelineClampsDays(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	for _, tc := range []struct {
+		query string
+		want  int
+	}{
+		{"?days=0", miniappTimelineDefaultDays},
+		{"?days=-5", miniappTimelineDefaultDays},
+		{"?days=999", miniappTimelineMaxDays},
+		{"?days=нечто", miniappTimelineDefaultDays},
+		{"?days=3", 3},
+		{"", miniappTimelineDefaultDays},
+	} {
+		req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline%s", ownedID, tc.query), nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%q: want 200, got %d", tc.query, rec.Code)
+		}
+		var resp miniappTimelineResp
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.Days != tc.want {
+			t.Errorf("%q: days = %d, want %d", tc.query, resp.Days, tc.want)
+		}
+	}
+}
+
+func TestMiniappTimelineTruncates(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now().UTC()
+	for i := 0; i < miniappTimelineMaxRows+5; i++ {
+		if err := d.Events().Insert(ownedID, "dns", "ok", "{}", now.Add(-time.Duration(i)*time.Second)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp miniappTimelineResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Events) != miniappTimelineMaxRows {
+		t.Fatalf("events = %d, want %d", len(resp.Events), miniappTimelineMaxRows)
+	}
+	// Обрезали молча -- значит показали часть под видом целого.
+	if !resp.Truncated {
+		t.Errorf("truncated = false, хотя событий больше предела")
+	}
+}
+
+func TestMiniappRoutersEmptyIsArrayNotNull(t *testing.T) {
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 777)) // ни одного своего роутера
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"routers":[]`) {
+		t.Fatalf("пустой список должен быть [], получили %s", rec.Body.String())
+	}
+}

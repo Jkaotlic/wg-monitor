@@ -433,6 +433,26 @@ func (c *Client) ToggleDefaultRoute(ctx context.Context, tunnelID string) error 
 	return c.post(ctx, "/api/control/toggle-default-route?id="+url.QueryEscape(tunnelID), nil, nil)
 }
 
+// RestartTunnel calls POST /api/control/restart?id=<tunnelID>.
+//
+// Works for every backend awg-manager manages, including opkg tunnels that
+// have no ndmsName and therefore cannot be restarted through ndmc at all.
+// Builds older than the endpoint answer 404 — callers detect that with
+// IsEndpointMissing and fall back to ndmc.
+func (c *Client) RestartTunnel(ctx context.Context, tunnelID string) error {
+	return c.post(ctx, "/api/control/restart?id="+url.QueryEscape(tunnelID), nil, nil)
+}
+
+// IsEndpointMissing reports whether err came from an awg-manager build that
+// does not serve the requested endpoint, as opposed to a real failure. Only
+// 404 qualifies: a 400 means the endpoint exists and rejected the input.
+//
+// Exported because the only caller lives in package actions: the agent falls
+// back to ndmc exactly when awg-manager has no /api/control/restart.
+func IsEndpointMissing(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+}
+
 // ReplaceConf calls POST /api/tunnels/replace?id=<tunnelID> — replaces an
 // existing tunnel's config in-place. Returns the updated Tunnel.
 func (c *Client) ReplaceConf(ctx context.Context, tunnelID, rawConf, name, backend string) (*Tunnel, error) {

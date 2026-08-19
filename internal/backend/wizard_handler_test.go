@@ -1588,3 +1588,48 @@ func (zeroReader) Read(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+
+// Код ошибки -- часть контракта: клиент ветвится по нему, а не по тексту.
+// "Не передан ни tunnel_id, ни ndms_name" -- это отсутствие идентификатора, а
+// не невалидный ndms_name; переименовать надо сейчас, пока никто не завязался.
+func TestWizardCommandDispatchNamesMissingTunnelIdentifier(t *testing.T) {
+	dbPath := t.TempDir() + "/state.db"
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("client-b", "tok", "1.2.3.4", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &fakeCmdSink{}
+	h := wizardCommandHandler(Deps{DB: d, CommandSink: sink})
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/agents/client-b/commands",
+		strings.NewReader(`{"action":"tunnel_restart","args":{}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("nickname", "client-b")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	if got.Code != "missing_tunnel_identifier" {
+		t.Errorf("code = %q, want missing_tunnel_identifier", got.Code)
+	}
+	// Человеческий текст остаётся прежним -- меняется только код.
+	if got.Message != "tunnel_id or ndms_name is required" {
+		t.Errorf("message = %q", got.Message)
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("command without an identifier was enqueued: %+v", sink.enqueued)
+	}
+}

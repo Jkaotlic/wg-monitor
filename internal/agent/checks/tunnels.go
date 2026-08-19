@@ -230,7 +230,9 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 		details["ping_check_status"] = pc.Status
 		details["ping_check_method"] = pc.Method
 		details["ping_check_fail_count"] = pc.FailCount
-		details["ping_check_success_count"] = pc.SuccessCount
+		if pc.SuccessCount != nil {
+			details["ping_check_success_count"] = *pc.SuccessCount
+		}
 		details["ping_check_fail_threshold"] = pc.FailThreshold
 		details["ping_check_restart_count"] = pc.RestartCount
 		details["ping_check_last_latency_ms"] = pc.LastLatency

@@ -34,7 +34,7 @@ import (
 //     is provably one tunnel on one router the caller already administers: the
 //     client sends a tunnel_id, never an ndms_name, and miniappCommandHandler
 //     resolves that id to the router's NDM interface name from THIS router's own
-//     tunnel_* event rows (see miniappResolveTunnelNDMSName below). An interface
+//     tunnel_* event rows (see miniappResolveTunnelRestartArgs below). An interface
 //     the backend has no tunnel_<id> event for is unreachable, not merely
 //     rejected -- sanitizeWizardCommandArgs's regex check on ndms_name is a
 //     wizard-side belt-and-braces, not what makes this safe for a mini-app
@@ -101,12 +101,12 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			// patching req.Args, is what makes the old {"ndms_name":"..."} shape
 			// inert instead of just rejected.
 			tunnelID, _ := req.Args["tunnel_id"].(string)
-			ndmsName, ok := miniappResolveTunnelNDMSName(d, routerID, tunnelID)
+			resolved, ok := miniappResolveTunnelRestartArgs(d, routerID, tunnelID)
 			if !ok {
 				writeJSONError(w, http.StatusBadRequest, "unknown_tunnel", "tunnel_id does not match a known tunnel on this router")
 				return
 			}
-			commandArgs = map[string]any{"ndms_name": ndmsName}
+			commandArgs = resolved
 		}
 		args, ok := sanitizeWizardCommandArgs(w, req.Action, commandArgs)
 		if !ok {
@@ -201,41 +201,41 @@ type miniappTunnelNDMSNameDetails struct {
 	NDMSName string `json:"ndms_name"`
 }
 
-// miniappResolveTunnelNDMSName maps a tunnel_id the mini-app client sent to
-// the router's actual NDM interface name, using only routerID's own tunnel_*
-// event rows -- never the caller-supplied id itself, and never a row from any
-// other router. This is what makes tunnel_restart's blast radius provably one
-// tunnel on one router: an interface the backend has no tunnel_<id> event for
-// is unreachable, not merely rejected, and a tunnel id that is real but
-// belongs to a different router does not resolve here either.
+// miniappResolveTunnelRestartArgs maps a tunnel_id the mini-app client sent to
+// the arguments the agent needs, using only routerID's own tunnel_* event rows —
+// never the caller-supplied id itself, and never a row from another router.
+// This is what makes tunnel_restart's blast radius provably one tunnel on one
+// router: a tunnel the backend has no tunnel_<id> event for is unreachable,
+// not merely rejected, and a real tunnel belonging to a different router does
+// not resolve here either.
 //
-// Returns false (not the raw tunnelID) whenever a resolved ndms_name isn't
-// available: unknown/empty tunnel_id, a row whose details don't decode, or a
-// row whose details carry no ndms_name. Falling back to the raw id would
-// re-open exactly the hole this function exists to close.
-func miniappResolveTunnelNDMSName(d Deps, routerID int64, tunnelID string) (string, bool) {
+// tunnel_id is always returned — awg-manager restarts by id, which is the only
+// path that works for opkg tunnels. ndms_name is added only when the router's
+// own events carry one; the agent needs it solely as a fallback on builds that
+// predate /api/control/restart. It is still server-derived: a client-supplied
+// ndms_name never reaches the agent.
+func miniappResolveTunnelRestartArgs(d Deps, routerID int64, tunnelID string) (map[string]any, bool) {
 	tunnelID = strings.TrimSpace(tunnelID)
 	if tunnelID == "" {
-		return "", false
+		return nil, false
 	}
 	rows, err := d.DB.Events().LatestEventsByPrefixSince(routerID, miniappTunnelPrefix, time.Now().UTC().Add(-miniappEventsWindow))
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	for _, row := range rows {
 		tu, ok := miniappTunnelFromEvent(row)
 		if !ok || tu.TunnelID != tunnelID {
 			continue
 		}
+		args := map[string]any{"tunnel_id": tunnelID}
 		var det miniappTunnelNDMSNameDetails
-		if err := json.Unmarshal([]byte(row.DetailsJSON), &det); err != nil {
-			return "", false
+		if err := json.Unmarshal([]byte(row.DetailsJSON), &det); err == nil {
+			if ndmsName := strings.TrimSpace(det.NDMSName); ndmsName != "" {
+				args["ndms_name"] = ndmsName
+			}
 		}
-		ndmsName := strings.TrimSpace(det.NDMSName)
-		if ndmsName == "" {
-			return "", false
-		}
-		return ndmsName, true
+		return args, true
 	}
-	return "", false
+	return nil, false
 }

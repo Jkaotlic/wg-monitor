@@ -22,6 +22,30 @@ jobs:
       - run: go vet ./...
       - run: go test ./... -count=1 -timeout 180s
 
+  miniapp:
+    name: mini app tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: miniapp/package-lock.json
+      - run: npm ci
+        working-directory: miniapp
+      # Тесты покрывают чистую логику фронта: контраст палитры, дисциплину
+      # токенов, навигацию, разбор ответов роутера. Вёрстка тестами не
+      # покрывается -- она проверяется скриншотами вручную (miniapp/dev).
+      - run: npm test
+        working-directory: miniapp
+      # Бандл коммитится в internal/backend/miniapp_static; пересборка здесь
+      # ловит случай, когда исходники поменяли, а собрать забыли.
+      - run: npm run build
+        working-directory: miniapp
+      - name: бандл пересобран и закоммичен
+        run: git diff --exit-code -- internal/backend/miniapp_static
+
   test-race:
     name: race detector
     # TEST-01 от rc20 audit: codebase имеет ≥5 concurrency surfaces

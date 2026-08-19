@@ -115,3 +115,44 @@ type PresetDNSEngine struct {
 type PresetHydraRouteEngine struct {
 	GeoTags []string `json:"geoTags"`
 }
+
+// AccessPolicy mirrors one entry of /api/routing/access-policies .data[].
+//
+// The interface chain here IS the binding for every DNS rule with
+// hrRouteMode=="policy": awg-manager keeps it on the policy, not on the rule.
+// A rule's own hrPolicyInterfaces field belongs to hrRouteMode=="interface"
+// and is empty for policy-mode rules — reading it for them yields nothing,
+// which is exactly the bug this type exists to fix.
+type AccessPolicy struct {
+	Name        string                  `json:"name"`
+	Description string                  `json:"description"`
+	Standalone  bool                    `json:"standalone"`
+	Interfaces  []AccessPolicyInterface `json:"interfaces"`
+	DeviceCount int                     `json:"deviceCount"`
+	IsStandard  bool                    `json:"isStandard"`
+}
+
+// AccessPolicyInterface is one link of a policy's priority chain.
+//
+// Name is the NDMS/RCI interface name ("OpkgTun11", "Wireguard0",
+// "GigabitEthernet1") — NOT the kernel iface ("opkgtun11", "nwg0", "eth3")
+// that /api/routing/tunnels and DNS route bindings use. Label is the human
+// name and equals the tunnel's name for managed tunnels.
+//
+// Order is the priority: lower wins, and the first link that is up carries the
+// policy's traffic.
+type AccessPolicyInterface struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Order int    `json:"order"`
+}
+
+// PolicyInterface mirrors /api/routing/policy-interfaces .data[] — the
+// catalogue of interfaces a policy may reference, with live up/down state.
+// It is also the only authoritative source of the exact interface name
+// /api/access-policies/permit accepts.
+type PolicyInterface struct {
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Up    bool   `json:"up"`
+}

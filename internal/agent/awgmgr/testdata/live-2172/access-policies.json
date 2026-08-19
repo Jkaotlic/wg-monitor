@@ -1,0 +1,43 @@
+{
+  "success": true,
+  "data": [
+    {
+      "name": "HydraRoute",
+      "description": "",
+      "standalone": false,
+      "interfaces": [
+        {
+          "name": "OpkgTun11",
+          "label": "awg3-work-via-ru1",
+          "order": 0
+        },
+        {
+          "name": "Wireguard0",
+          "label": "NetherlandsKerkradeS24",
+          "order": 1
+        },
+        {
+          "name": "OpkgTun10",
+          "label": "awg3-main-work",
+          "order": 2
+        }
+      ],
+      "deviceCount": 0,
+      "isStandard": false
+    },
+    {
+      "name": "RU",
+      "description": "",
+      "standalone": false,
+      "interfaces": [
+        {
+          "name": "GigabitEthernet1",
+          "label": "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 Ethernet",
+          "order": 0
+        }
+      ],
+      "deviceCount": 0,
+      "isStandard": false
+    }
+  ]
+}

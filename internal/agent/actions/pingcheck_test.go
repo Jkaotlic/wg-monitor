@@ -2,9 +2,11 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -177,6 +179,22 @@ func TestPingCheckStatus_EnrichesNDMSName(t *testing.T) {
 	}
 	if !strings.Contains(out, `"ndmsName":"Wireguard0"`) {
 		t.Errorf("expected enriched NDMSName in output, got: %s", out)
+	}
+}
+
+func TestPingCheckStatus_LiveResponseHasNoSuccessCount(t *testing.T) {
+	raw, err := os.ReadFile("../awgmgr/testdata/live-2172/pingcheck-status.json")
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	var env awgmgr.Envelope[awgmgr.PingCheckStatus]
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, tun := range env.Data.Tunnels {
+		if tun.SuccessCount != nil {
+			t.Errorf("tunnel %s: successCount = %d, want absent", tun.TunnelID, *tun.SuccessCount)
+		}
 	}
 }
 

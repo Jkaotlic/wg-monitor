@@ -5,8 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>wg-monitor</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <script type="module" crossorigin src="/miniapp/assets/index-O_J60C6i.js"></script>
-    <link rel="stylesheet" crossorigin href="/miniapp/assets/index-NnvQwyrM.css">
+    <script>
+      // Тема ставится до первой отрисовки, иначе тёмный клиент на долю
+      // секунды показывает светлую страницу. Значения цветов живут в
+      // style.css и src/theme.js -- здесь только выбор темы.
+      (function () {
+        var tg = window.Telegram && window.Telegram.WebApp
+        // Вне Telegram объект WebApp всё равно есть, но platform = 'unknown'
+        // и colorScheme всегда 'light' -- тогда тему подсказывает система.
+        var inTelegram = !!(tg && tg.platform && tg.platform !== 'unknown')
+        var scheme = (inTelegram && tg.colorScheme) ||
+          (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+        document.documentElement.setAttribute('data-theme', scheme === 'dark' ? 'dark' : 'light')
+      })()
+    </script>
+    <script type="module" crossorigin src="/miniapp/assets/index-B17jhGAm.js"></script>
+    <link rel="stylesheet" crossorigin href="/miniapp/assets/index-AOXe1PCl.css">
   </head>
   <body>
     <div id="app"></div>

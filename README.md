@@ -46,43 +46,48 @@ English:
 - Админские команды регистрируются отдельно, только для admin scope: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, `/selfhosted`.
 - В `/panel` живут хаб флота, массовые проверки, update-all, доступы, справка оператора и "оживить топики" - массовая переотправка актуального меню во все топики роутеров.
 
-## Telegram Mini App (beta)
+## Telegram Mini App
 
-A Telegram Mini App is available alongside the existing bot panels, covering fleet
-overview and per-router status (`/miniapp/`, opened via a "📱 Открыть в приложении"
-button on HARD alerts). It authenticates via Telegram's signed `initData` against the
-same admin/owner/operator model the bot already uses — no separate login. The browser
-dashboard (`/dashboard/`) remains the primary surface for deploy/provision/repair and
-everything else the mini app doesn't cover yet.
+Мини-апп — рабочее место оператора: он открывается на **своём роутере**, а не на
+списке. Внизу четыре таба, флот и администрирование живут слоями поверх.
 
-The mini app can now also act on HARD alerts — silence (1ч/4ч/24ч), acknowledge,
-mute until the morning cutoff, and view a 24h status-transition history — per incident,
-using the same suppression semantics as the Telegram alert buttons. Acting from the app
-strips the buttons from the original Telegram alert message and posts a short breadcrumb
-reply, keeping both surfaces consistent.
+- **Роутер** — тревоги, прибор с лампами проверок и антеннами-туннелями, вердикт
+  «куда идёт трафик», целостность туннелей, быстрые действия.
+- **Маршруты** — снимок маршрутизации: главный туннель, политики и их цепочки
+  интерфейсов, правила по привязкам. Только чтение (см. ниже).
+- **Диагностика** — полный отчёт роутера, разобранный по проверкам, плюс сырой ответ.
+- **События** — лента за неделю с фильтрами (все / тревоги / восстановления).
 
-Admins can also manage per-router access from the router's screen in the mini app —
-view/unbind the owner and add/remove operators (by numeric Telegram user id) — backed
-by the same `router_operators`/owner model the bot's access panel uses. The mini app's
-UI follows a small theme-native design system (light/dark via Telegram's theme).
+Вход — по подписанному Telegram `initData`, роли те же, что у бота
+(admin/owner/operator); отдельного логина нет. Deep-link `/miniapp/?router=<id>`
+с тревоги открывает нужный роутер, но доступ не обходит. У человека без доступа
+теперь свой экран, а не пустой список.
 
-The router screen now leads with the two questions an operator actually asks: are the
-tunnels alive, and is traffic currently going direct or through the VPN? The traffic
-answer is derived from the router's live default-route state and only appears once the
-connected agent is new enough to report it; against an older agent, or when the
-router's own sing-box tproxy routing is active (which makes "the default route" the
-wrong question), the screen says "unknown" instead of guessing among the several
-tunnels that can each merely *claim* to be the default.
+Мутирующие команды идут через нижний шит с подтверждением, где видно, какая
+именно команда уйдёт на роутер. Allowlist мини-аппа — не дашбордовый: он и
+вычитает (нет `dns_reset`, правки конфига агента, opkg/entware — это админское и
+остаётся в дашборде), и добавляет (два зонда адреса выхода и `tunnel_restart`).
 
-The mini app can now also dispatch a handful of agent commands from the router screen:
-the same read-only checks the bot already exposes (recheck, diagnostics, tunnel/route
-status), two read-only exit-IP probes (direct vs. via-tunnel), and a tunnel restart.
-This allowlist is deliberately not the dashboard's — the dashboard trusts one admin
-holding one token, while a mini-app session is a Telegram user resolved to a per-router
-owner/operator role. So it both subtracts (no `dns_reset`, no agent-config editing, no
-opkg/entware maintenance — those stay admin-only, on the dashboard) and adds (the
-exit-IP probes and `tunnel_restart`, each justified as router-local, reversible, and
-confirmed in the UI before it's sent).
+**Чего в мини-аппе пока нет:** изменения маршрутов (появится, когда система
+научится верно читать привязку правил к политикам awg-manager), обслуживания
+пакетов, бэкапов, кабинетов провайдеров и подключения новых роутеров. Всё это
+пока в браузерном дашборде `/dashboard/`.
+
+### Дизайн и сборка
+
+У приложения своя палитра (`miniapp/src/theme.js`); от Telegram берётся только
+выбор светлой или тёмной темы. Контраст не на глаз: каждый текстовый токен на
+каждом фоне проверяется тестом по WCAG, и цвета вне палитры запрещены отдельным
+тестом.
+
+```bash
+cd miniapp
+npm ci
+npm test          # чистая логика: палитра, навигация, разбор ответов роутера
+npm run build     # бандл в internal/backend/miniapp_static (коммитится)
+npm run dev       # dev-сервер с фикстурами вместо бэкенда
+node dev/shots.mjs  # скриншоты всех экранов в двух темах (нужен playwright)
+```
 
 ## Deploy Model
 
