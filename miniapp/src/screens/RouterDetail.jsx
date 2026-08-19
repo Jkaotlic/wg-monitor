@@ -7,7 +7,12 @@ import {
   ackIncident,
   muteIncident,
 } from '../api.js'
-import { RouterDevice, orderChecks, lampKey } from '../components/RouterDevice.jsx'
+import { RouterDevice, orderChecks, lampKey, antennaOverflow } from '../components/RouterDevice.jsx'
+import { routerHeadline } from '../routerHeadline.js'
+import { Hero } from '../ui/Hero.jsx'
+import { StateTag } from '../ui/StateTag.jsx'
+import { Stat } from '../ui/Stat.jsx'
+import { NavCard } from '../ui/NavCard.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -114,7 +119,11 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
   )
 }
 
-function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet }) {
+// whySuppressed ставится для той тревоги, которую уже назвала шапка экрана.
+// Повторять её объяснение слово в слово двумя блоками ниже -- это не
+// «подчеркнуть», а заставить прочитать одно и то же дважды и потерять время
+// в тот момент, когда его меньше всего.
+function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(false)
@@ -160,7 +169,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet 
         {incident.hard_since && <span class="incident-since">с {formatDateTime(incident.hard_since)}</span>}
       </div>
 
-      {why && <p class="incident-why">{why}</p>}
+      {why && !whySuppressed && <p class="incident-why">{why}</p>}
 
       {/* Deliberately OUTSIDE the suppressed/!suppressed split below: silence/
           ack/mute only control whether this incident nags again, they never
@@ -707,23 +716,49 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   // failure this whole phase exists to avoid, just pointed the other way.
   const asleep = router.status === 'offline' || router.status === 'sleeping'
 
+  // Шапка -- главная новость экрана, и порядок её веток задан в
+  // routerHeadline: молчащий роутер перебивает любое другое показание.
+  const headline = routerHeadline({ router, traffic, incidents })
+  const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
+  const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
+  const overflow = antennaOverflow(tunnels.length)
+
   return (
     <div class="screen">
-      <div class="router-header">
-        <h1 class="screen-title">{router.nickname}</h1>
-        <span class={`badge badge-${router.status}`}>{statusLabel(router.status)}</span>
-      </div>
-      {/* The vitality the panel's PWR lamp would have carried, stated in words
-          instead. See this task's report: `router.status` alone cannot honestly
-          light that lamp (an incident makes it "alert" no matter how long the
-          router has been dark), and the age threshold that could is backend
-          policy the mini app is never told. A printed age needs no threshold. */}
-      <p class="router-lastseen">
-        {router.last_seen_age_sec != null
-          ? `Последний ответ ${humanAge(router.last_seen_age_sec)} назад`
-          : 'Роутер ещё ни разу не выходил на связь'}
-      </p>
+      {/* Прибор живёт внутри шапки: рисунок и вывод под ним -- одно
+          высказывание, а не картинка и подпись к ней. Холодная подсветка
+          включается тем же признаком, что и тон метки. */}
+      <Hero cold={headline.cold}>
+        <StateTag tone={headline.tone}>{headline.tag}</StateTag>
+        <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>
+        <p class="traffic-detail" style="margin-top:6px">{headline.verdict}</p>
+        <RouterDevice tunnels={tunnels} traffic={traffic} checks={checks ?? []} name={router.nickname} />
+        <div class="hero-bar">
+          <span>
+            {tunnels.length === 0
+              ? 'Туннелей нет'
+              : `${liveCount} ${liveCount === 1 ? 'линия' : 'линии'} из ${tunnels.length}`}
+            {overflow > 0 ? ` · ${overflow} не поместились на корпус` : ''}
+          </span>
+          {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}
+        </div>
+      </Hero>
 
+      {/* Два показания, ради которых экран открывают чаще всего. */}
+      <div class="stat-grid" style="margin-top:12px">
+        <Stat
+          label="линий поднято"
+          value={tunnels.length ? liveCount : null}
+          note={tunnels.length ? `из ${tunnels.length} настроенных` : 'роутер не сообщил туннели'}
+          tone={tunnels.length && liveCount === 0 ? 'danger' : undefined}
+        />
+        <Stat
+          label="последний ответ"
+          value={router.last_seen_age_sec != null ? humanAge(router.last_seen_age_sec) : null}
+          note={router.last_seen_age_sec != null ? 'назад' : 'роутер ещё не отвечал'}
+          tone={asleep ? 'warn' : undefined}
+        />
+      </div>
       {/* Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
           что сломано, потом куда идёт трафик, потом состояние туннелей, и
           только затем действия. Тревога -- единственное, ради чего экран
@@ -732,11 +767,12 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         <section class="section">
           <h2 class="section-title">Активные тревоги</h2>
           <ul class="list-reset card-stack">
-            {incidents.map((inc) => (
+            {incidents.map((inc, i) => (
               <IncidentCard
                 key={inc.check_name}
                 routerID={id}
                 incident={inc}
+                whySuppressed={i === 0 && headline.tone === 'danger'}
                 onUpdate={updateIncident}
                 asleep={asleep}
                 onDone={loadData}
@@ -747,8 +783,11 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         </section>
       )}
 
-      <RouterDevice tunnels={tunnels} traffic={traffic} checks={checks ?? []} name={router.nickname} />
       <DeviceLegend checks={checks} />
+
+      <div style="margin-top:20px">
+        <NavCard title="Туннели и резерв" note={`${tunnels.length} лин.`} onClick={() => onTab?.('tunnels')} />
+      </div>
 
       <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} openSheet={openSheet} />
 

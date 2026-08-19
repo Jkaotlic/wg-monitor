@@ -1905,3 +1905,25 @@ body {
   border-top: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.015);
 }
+
+/* Полоса под прибором: короткая сводка, которую видно, не читая экран. */
+.hero-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: var(--sp-3) calc(var(--sp-4) * -1) 0;
+  padding: 11px var(--sp-4);
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
+.hero-bar b {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--sig);
+  white-space: nowrap;
+}
