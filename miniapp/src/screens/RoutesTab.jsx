@@ -1,6 +1,17 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { parseRouteSnapshot, routingVerdict, policyRows, tunnelRows, rulesByBind } from '../routes.js'
+import {
+  parseRouteSnapshot,
+  routingVerdict,
+  policyRows,
+  tunnelRows,
+  rulesByBind,
+  defaultRouteBadge,
+  tunnelRuleSummary,
+  policyRuleSummary,
+  ruleBackendLabel,
+  visibleTunnelRows,
+} from '../routes.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
 
@@ -38,7 +49,7 @@ export function RoutesTab({ routerID, asleep }) {
 
   const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
-  const tunnels = tunnelRows(snapshot)
+  const tunnels = visibleTunnelRows(tunnelRows(snapshot))
   const groups = rulesByBind(snapshot)
 
   return (
@@ -78,20 +89,19 @@ export function RoutesTab({ routerID, asleep }) {
         <Section title="Туннели в маршрутизации">
           {tunnels.length ? (
             <ul class="card list-reset">
-              {tunnels.map((t) => (
-                <li key={t.id} class="row tunnel-row">
-                  <span class="tunnel-name">
-                    <span class="row-title">{t.name}</span>
-                    {t.name !== t.id && <span class="tunnel-id">{t.id}</span>}
-                  </span>
-                  {t.defaultRoute && <Chip tone="ok">основной маршрут</Chip>}
-                  <span class="tunnel-sub">
-                    {t.total > 0 ? `${t.total} правил ведут сюда` : 'правил на него нет'}
-                    {t.policyRules ? ` · ${t.policyRules} из них через политику` : ''}
-                    {t.hrNeo ? ` · ${t.hrNeo} через HydraRoute` : ''}
-                  </span>
-                </li>
-              ))}
+              {tunnels.map((t) => {
+                const badge = defaultRouteBadge(t)
+                return (
+                  <li key={t.id} class="row tunnel-row">
+                    <span class="tunnel-name">
+                      <span class="row-title">{t.name}</span>
+                      {t.name !== t.id && <span class="tunnel-id">{t.id}</span>}
+                    </span>
+                    {badge && <Chip tone={badge.tone}>{badge.text}</Chip>}
+                    <span class="tunnel-sub">{tunnelRuleSummary(t)}</span>
+                  </li>
+                )
+              })}
             </ul>
           ) : (
             <div class="card">
@@ -110,10 +120,7 @@ export function RoutesTab({ routerID, asleep }) {
                   {p.name}
                   {p.egress ? <span class="policy-egress">{p.egress}</span> : null}
                 </span>
-                <span class="tunnel-sub">
-                  {p.rules} правил
-                  {p.hrNeo ? ` (${p.hrNeo} через HydraRoute)` : ''}
-                </span>
+                <span class="tunnel-sub">{policyRuleSummary(p)}</span>
                 {p.chain.length > 0 ? (
                   <ol class="policy-chain list-reset">
                     {p.chain.map((i, idx) => (
@@ -143,14 +150,14 @@ export function RoutesTab({ routerID, asleep }) {
         <Section title="Правила">
           {groups.map((g) => (
             <div key={g.bind} class="rules-group">
-              <h3 class="rules-bind">{g.bind}</h3>
+              <h3 class="rules-bind">{g.label}</h3>
               <ul class="card list-reset">
                 {g.rules.slice(0, 20).map((r) => (
                   <li key={r.id} class="row tunnel-row">
                     <span class="row-title rules-target">{ruleTargets(r)}</span>
                     <span class="tunnel-sub">
                       {KIND_LABEL[r.kind] ?? r.kind}
-                      {r.backend ? ` · ${r.backend}` : ''}
+                      {r.backend ? ` · ${ruleBackendLabel(r.backend)}` : ''}
                       {r.enabled === false ? ' · выключено' : ''}
                     </span>
                   </li>

@@ -1,5 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { routingVerdict, policyRows, tunnelRows, parseRouteSnapshot } from '../src/routes.js'
+import {
+  routingVerdict,
+  policyRows,
+  tunnelRows,
+  parseRouteSnapshot,
+  tunnelLive,
+  defaultRouteBadge,
+  tunnelRuleSummary,
+  policyRuleSummary,
+  rulesByBind,
+  ruleBackendLabel,
+  visibleTunnelRows,
+} from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot (pkg/wire/routing.go): tunnels[],
 // counts{}, policies[], rules[], singbox_router, warnings[].
@@ -305,5 +317,249 @@ describe('parseRouteSnapshot', () => {
     expect(parseRouteSnapshot('не json')).toBe(null)
     expect(parseRouteSnapshot('')).toBe(null)
     expect(parseRouteSnapshot(null)).toBe(null)
+  })
+})
+
+
+// Три придирки к тексту таба «Маршруты», снятые с живого снимка домашнего
+// роутера (26 правил через политику HydraRoute, три туннеля с
+// default_route=true, из них работает один): одно и то же число не должно
+// повторяться в строке трижды, движок HR Neo не должен зваться так же, как
+// соседняя политика «HydraRoute», и зелёный бейдж «основной маршрут» не
+// должен висеть на выключенном туннеле.
+describe('tunnelLive', () => {
+  // Словарь тот же, что у агента (routingStatusEnabled,
+  // internal/agent/actions/route_targets.go:56). Вторая формула для той же
+  // величины разошлась бы с первой.
+  it('running/up/started/active -- туннель поднят', () => {
+    for (const status of ['running', 'up', 'started', 'active', 'RUNNING']) {
+      expect(tunnelLive({ status })).toBe('up')
+    }
+  })
+
+  it('disabled -- туннель выключен', () => {
+    expect(tunnelLive({ status: 'disabled' })).toBe('down')
+    expect(tunnelLive({ status: 'stopped' })).toBe('down')
+  })
+
+  // enabled в снимке НЕ говорит о том, включён ли туннель: агент дожимает
+  // его до true из каталога маршрутизации NDMS
+  // (route_status.go:190, `Enabled || ep.Enabled`), чтобы выключенный
+  // туннель оставался мишенью для переноса правил. Живой роутер отдаёт
+  // awg10 как enabled:false/status:"disabled", а снимок -- enabled:true.
+  // Судить о жизни туннеля можно только по status.
+  it('не верит полю enabled -- судит по status', () => {
+    expect(tunnelLive({ enabled: true, status: 'disabled' })).toBe('down')
+  })
+
+  it('пустой status -- неизвестно, а не "выключен"', () => {
+    expect(tunnelLive({})).toBe('unknown')
+    expect(tunnelLive({ status: '' })).toBe('unknown')
+  })
+})
+
+describe('defaultRouteBadge', () => {
+  it('туннель работает и несёт основной маршрут -- зелёный бейдж', () => {
+    expect(defaultRouteBadge({ defaultRoute: true, live: 'up' })).toEqual({
+      tone: 'ok',
+      text: 'основной маршрут',
+    })
+  })
+
+  // Главная придирка: выключенный туннель основной маршрут не несёт, чем бы
+  // он ни был настроен, и зелёная пилюля на нём -- прямая неправда.
+  it('выключенный туннель не получает зелёный бейдж', () => {
+    const badge = defaultRouteBadge({ defaultRoute: true, live: 'down' })
+    expect(badge.tone).toBe('muted')
+    expect(badge.text).toBe('назначен основным, но выключен')
+  })
+
+  it('когда состояние неизвестно -- бейдж без утверждения о выключенности', () => {
+    expect(defaultRouteBadge({ defaultRoute: true, live: 'unknown' })).toEqual({
+      tone: 'muted',
+      text: 'назначен основным',
+    })
+  })
+
+  it('без default_route бейджа нет вовсе', () => {
+    expect(defaultRouteBadge({ defaultRoute: false, live: 'up' })).toBe(null)
+  })
+})
+
+describe('tunnelRuleSummary', () => {
+  // Было: "26 правил ведут сюда · 26 из них через политику · 26 через
+  // HydraRoute" -- одно число три раза, и ни одно повторение не добавляет
+  // знания.
+  it('не повторяет одно и то же число', () => {
+    const line = tunnelRuleSummary({ total: 26, policyRules: 26, hrNeo: 26 })
+    expect(line).toBe('26 правил — все через политику')
+    expect(line.match(/26/g)).toHaveLength(1)
+  })
+
+  it('разделяет собственные правила и правила политики, когда числа разные', () => {
+    expect(tunnelRuleSummary({ total: 31, policyRules: 26, hrNeo: 27 })).toBe(
+      '31 правило, из них 26 через политику · 27 через HR Neo',
+    )
+  })
+
+  it('без правил политики говорит просто про правила туннеля', () => {
+    expect(tunnelRuleSummary({ total: 5, policyRules: 0, hrNeo: 0 })).toBe('5 правил ведут сюда')
+    expect(tunnelRuleSummary({ total: 1, policyRules: 0, hrNeo: 0 })).toBe('1 правило ведёт сюда')
+    expect(tunnelRuleSummary({ total: 2, policyRules: 0, hrNeo: 0 })).toBe('2 правила ведут сюда')
+  })
+
+  it('пустой туннель', () => {
+    expect(tunnelRuleSummary({ total: 0, policyRules: 0, hrNeo: 0 })).toBe('правил на него нет')
+  })
+
+  // Движок зовётся так же, как одна из политик роутера, поэтому в тексте он
+  // называется тем же именем, что и на вкладке роутера -- «HR Neo».
+  it('движок называется HR Neo, а не HydraRoute', () => {
+    const line = tunnelRuleSummary({ total: 10, policyRules: 0, hrNeo: 4 })
+    expect(line).toContain('4 через HR Neo')
+    expect(line).not.toContain('HydraRoute')
+  })
+})
+
+describe('policyRuleSummary', () => {
+  // Вторая придирка: под политикой RU стояло "2 правил (2 через
+  // HydraRoute)" -- и число повторено, и движок назван именем соседней
+  // политики, будто правила RU уходят в политику HydraRoute.
+  it('политика, где все правила -- HR Neo, не поминает движок вовсе', () => {
+    expect(policyRuleSummary({ rules: 2, hrNeo: 2 })).toBe('2 правила')
+    expect(policyRuleSummary({ rules: 26, hrNeo: 26 })).toBe('26 правил')
+  })
+
+  it('называет движок, только когда он покрывает часть правил', () => {
+    expect(policyRuleSummary({ rules: 10, hrNeo: 4 })).toBe('10 правил · 4 через HR Neo')
+  })
+
+  it('политика без правил', () => {
+    expect(policyRuleSummary({ rules: 0, hrNeo: 0 })).toBe('правил нет')
+  })
+})
+
+describe('routingVerdict и выключенные туннели', () => {
+  // На домашнем роутере default_route=true стоит у всех трёх туннелей, но
+  // работает один. Старый вердикт объявлял главный туннель неизвестным,
+  // хотя выключенный туннель претендентом быть не может.
+  it('выключенные претенденты не делают главный туннель неизвестным', () => {
+    const v = routingVerdict({
+      tunnels: [
+        { id: 'awg10', name: 'main', default_route: true, status: 'disabled' },
+        { id: 'awg11', name: 'work', default_route: true, status: 'running' },
+        { id: 'awg20', name: 'nl', default_route: true, status: 'disabled' },
+      ],
+    })
+    expect(v.mode).toBe('vpn')
+    expect(v.title).toContain('work')
+  })
+
+  it('спорят только работающие туннели', () => {
+    const v = routingVerdict({
+      tunnels: [
+        { id: 'awg10', name: 'main', default_route: true, status: 'running' },
+        { id: 'awg11', name: 'work', default_route: true, status: 'running' },
+        { id: 'awg20', name: 'nl', default_route: true, status: 'disabled' },
+      ],
+    })
+    expect(v.mode).toBe('unknown')
+    expect(v.detail).toContain('main')
+    expect(v.detail).toContain('work')
+    expect(v.detail).not.toContain('nl')
+  })
+
+  it('все претенденты выключены -- трафик идёт напрямую, и экран говорит почему', () => {
+    const v = routingVerdict({
+      tunnels: [{ id: 'awg10', name: 'main', default_route: true, status: 'disabled' }],
+    })
+    expect(v.mode).toBe('direct')
+    expect(v.detail).toContain('main')
+    expect(v.detail).toContain('выключен')
+  })
+
+  // Снимок агента, который status не присылал, судить о выключенности не
+  // даёт -- и вердикт на нём остаётся прежним.
+  it('снимок без status ведёт себя как раньше', () => {
+    const v = routingVerdict({
+      tunnels: [
+        { id: 'awg10', name: 'main', default_route: true },
+        { id: 'awg11', name: 'work', default_route: true },
+      ],
+    })
+    expect(v.mode).toBe('unknown')
+    expect(v.detail).toContain('main')
+    expect(v.detail).toContain('work')
+  })
+})
+
+describe('tunnelRows -- состояние туннеля', () => {
+  it('строка несёт состояние туннеля, а не только его настройку', () => {
+    const rows = tunnelRows({
+      tunnels: [
+        { id: 'awg10', name: 'main', default_route: true, enabled: true, status: 'disabled' },
+        { id: 'awg11', name: 'work', default_route: true, enabled: true, status: 'running' },
+      ],
+      counts: {},
+    })
+    const byID = Object.fromEntries(rows.map((r) => [r.id, r]))
+    expect(byID.awg10.live).toBe('down')
+    expect(byID.awg11.live).toBe('up')
+  })
+})
+
+describe('подписи в списке правил', () => {
+  // Заголовок группы приезжает из снимка как "policy:HydraRoute" -- это
+  // системный идентификатор, а не текст для человека, и на экране он до сих
+  // пор стоял как есть.
+  it('группа правил политики подписана словами, а не идентификатором', () => {
+    const groups = rulesByBind({
+      rules: [
+        { id: '1', bind: 'policy:HydraRoute' },
+        { id: '2', bind: 'opkgtun11' },
+        { id: '3' },
+      ],
+    })
+    const byBind = Object.fromEntries(groups.map((g) => [g.bind, g.label]))
+    expect(byBind['policy:HydraRoute']).toBe('Политика «HydraRoute»')
+    // Имя интерфейса -- уже имя, его выдумывать не надо.
+    expect(byBind['opkgtun11']).toBe('opkgtun11')
+    expect(byBind['без привязки']).toBe('без привязки')
+  })
+
+  it('движок правила называется HR Neo, а не hydraroute', () => {
+    expect(ruleBackendLabel('hydraroute')).toBe('HR Neo')
+    // Незнакомый движок эхом, а не проглочен -- то же правило честности,
+    // что у checkLabel в labels.js.
+    expect(ruleBackendLabel('ndms')).toBe('ndms')
+    expect(ruleBackendLabel('')).toBe('')
+  })
+})
+
+describe('visibleTunnelRows', () => {
+  // В снимке живого роутера три своих туннеля и пять записей WAN/system из
+  // каталога NDMS. Раздел зовётся "Туннели в маршрутизации", а показывал в
+  // том числе "Wi-Fi клиент 2.4 ГГц" и "Подключение Ethernet" -- пустыми
+  // строками "правил на него нет".
+  it('оставляет свои туннели и прячет пустые WAN/system-записи', () => {
+    const rows = visibleTunnelRows([
+      { id: 'awg11', type: 'managed', total: 26 },
+      { id: 'awg10', type: 'managed', total: 0 },
+      { id: 'eth3', type: 'wan', total: 0 },
+      { id: 'Wireguard4', type: 'system', total: 0 },
+    ])
+    expect(rows.map((r) => r.id)).toEqual(['awg11', 'awg10'])
+  })
+
+  // Скрыть строку, на которой висят правила, значило бы спрятать часть
+  // раскладки -- этого не делаем даже ради опрятного списка.
+  it('WAN-запись с правилами остаётся видимой', () => {
+    const rows = visibleTunnelRows([{ id: 'eth3', type: 'wan', total: 3 }])
+    expect(rows.map((r) => r.id)).toEqual(['eth3'])
+  })
+
+  it('пустой список переживает', () => {
+    expect(visibleTunnelRows([])).toEqual([])
+    expect(visibleTunnelRows(undefined)).toEqual([])
   })
 })

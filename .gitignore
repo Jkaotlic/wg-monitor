@@ -18,8 +18,10 @@ wg-monitor-backend
 .tmp/
 
 # Mini app frontend build tooling — build output IS committed (miniapp_static/),
-# only node_modules is not.
+# only node_modules is not. Корневой node_modules/ появляется, когда vitest
+# зовут из корня репозитория, а не из miniapp/ — в дерево ему тоже нельзя.
 miniapp/node_modules/
+/node_modules/
 
 # Go test cache
 .gocache/

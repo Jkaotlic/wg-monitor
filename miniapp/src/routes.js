@@ -6,6 +6,24 @@
 // подтверждением и откатом, она относится к фазе рабочего места оператора.
 // Пока экран только показывает.
 
+import { rulesCount } from './labels.js'
+
+// Жив ли туннель прямо сейчас. Судить об этом можно ТОЛЬКО по status:
+// поле enabled в снимке отвечает на другой вопрос -- годится ли интерфейс
+// как мишень для переноса правил, и агент дожимает его до true из каталога
+// маршрутизации NDMS (route_status.go:190). Живой роутер отдаёт выключенный
+// туннель как enabled:false/status:"disabled", а в снимке он приезжает как
+// enabled:true -- и экран, поверивший enabled, назвал бы выключенный туннель
+// работающим. Словарь состояний тот же, что у агента (routingStatusEnabled,
+// route_targets.go:56); вторая формула для той же величины разошлась бы с
+// первой. Пустой status -- честное "неизвестно": так отвечает снимок агента,
+// который это поле ещё не присылал, и выдавать его за "выключен" нельзя.
+export function tunnelLive(t) {
+  const status = (t?.status ?? '').trim().toLowerCase()
+  if (status === '') return 'unknown'
+  return ['running', 'up', 'started', 'active'].includes(status) ? 'up' : 'down'
+}
+
 export function parseRouteSnapshot(output) {
   if (typeof output !== 'string' || output === '') return null
   try {
@@ -33,10 +51,16 @@ export function routingVerdict(snapshot) {
   }
 
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
+  // default_route -- это НАСТРОЙКА туннеля, а не факт о трафике: выключенный
+  // туннель остаётся с ней и претендентом на основной маршрут быть не может.
+  // Поэтому спорящими считаются только те, про кого не известно, что они
+  // лежат; "неизвестно" остаётся в споре, иначе снимок старого агента, где
+  // status не приходит вовсе, потерял бы всех претендентов разом.
   const claiming = tunnels.filter((t) => t.default_route)
+  const carrying = claiming.filter((t) => tunnelLive(t) !== 'down')
 
-  if (claiming.length === 1) {
-    const t = claiming[0]
+  if (carrying.length === 1) {
+    const t = carrying[0]
     return {
       mode: 'vpn',
       partial,
@@ -44,14 +68,26 @@ export function routingVerdict(snapshot) {
       detail: 'Этот туннель несёт основной маршрут.',
     }
   }
-  if (claiming.length > 1) {
+  if (carrying.length > 1) {
     // Каждый туннель может лишь ЗАЯВЛЯТЬ, что он главный. Назвать первого --
     // угадать; экран говорит "неизвестно" и перечисляет спорящих.
     return {
       mode: 'unknown',
       partial,
       title: 'Главный туннель не определён',
-      detail: `Основным настроены сразу несколько: ${claiming.map((t) => t.name || t.id).join(', ')}. Пока их больше одного, кто именно несёт трафик — по снимку не видно.`,
+      detail: `Основным настроены сразу несколько: ${carrying.map((t) => t.name || t.id).join(', ')}. Пока их больше одного, кто именно несёт трафик — по снимку не видно.`,
+    }
+  }
+  if (claiming.length > 0) {
+    // Претенденты есть, но все выключены. Трафик при этом действительно идёт
+    // напрямую -- и назвать причину важнее, чем повторить общий вывод: иначе
+    // оператор ищет поломку маршрутизации там, где просто выключен туннель.
+    const names = claiming.map((t) => t.name || t.id).join(', ')
+    return {
+      mode: 'direct',
+      partial,
+      title: 'Трафик идёт напрямую',
+      detail: `Основным настроен ${claiming.length > 1 ? 'сразу несколько туннелей' : 'туннель'} «${names}», но ${claiming.length > 1 ? 'все они выключены' : 'он выключен'} — трафик уходит через провайдера.`,
     }
   }
   if (tunnels.length > 0) {
@@ -147,6 +183,8 @@ export function tunnelRows(snapshot) {
       id: t.id,
       name: t.name || t.id,
       defaultRoute: Boolean(t.default_route),
+      live: tunnelLive(t),
+      type: t.type ?? '',
       total: own + viaPolicy.dns,
       policyRules: viaPolicy.dns,
       hrNeo: (counts?.hr_neo ?? 0) + viaPolicy.hrNeo,
@@ -202,5 +240,74 @@ export function rulesByBind(snapshot) {
   }
   return [...byBind.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([bind, items]) => ({ bind, rules: items }))
+    .map(([bind, items]) => ({ bind, label: bindLabel(bind), rules: items }))
+}
+
+// Заголовок группы правил. "policy:HydraRoute" -- системный ключ привязки, и
+// человеку он не адресован; имя интерфейса, наоборот, уже имя и переписывать
+// его нечем.
+function bindLabel(bind) {
+  const policy = /^policy:(.+)$/.exec(bind)
+  return policy ? `Политика «${policy[1]}»` : bind
+}
+
+// Движок правила приезжает идентификатором ("hydraroute"). Показываем его тем
+// же именем, что и на вкладке роутера; всё незнакомое -- эхом, а не молчанием.
+export function ruleBackendLabel(backend) {
+  return backend === 'hydraroute' ? HR_NEO : backend
+}
+
+// Бейдж основного маршрута. default_route -- настройка, а не факт: на живом
+// роутере она стоит у всех трёх туннелей, из которых работает один. Зелёная
+// пилюля на выключенном туннеле утверждала бы, что трафик идёт через него.
+export function defaultRouteBadge(row) {
+  if (!row?.defaultRoute) return null
+  if (row.live === 'down') return { tone: 'muted', text: 'назначен основным, но выключен' }
+  if (row.live === 'unknown') return { tone: 'muted', text: 'назначен основным' }
+  return { tone: 'ok', text: 'основной маршрут' }
+}
+
+// Движок обхода блокировок и одна из политик роутера зовутся одинаково --
+// "HydraRoute". В строке "2 правила (2 через HydraRoute)" под политикой RU
+// это читается как "правила RU уходят в политику HydraRoute", то есть прямо
+// наоборот. Поэтому движок здесь называется тем же именем, каким он подписан
+// на вкладке самого роутера, -- "HR Neo": оператор увидит на обоих экранах
+// одно слово, и с именем политики оно больше не совпадает.
+const HR_NEO = 'HR Neo'
+
+// Строка под туннелем. Правило одно: одно и то же число не повторяется.
+// Было "26 правил ведут сюда · 26 из них через политику · 26 через
+// HydraRoute" -- три одинаковых числа, из которых знание несёт первое.
+export function tunnelRuleSummary(row) {
+  const total = row?.total ?? 0
+  if (total === 0) return 'правил на него нет'
+  const policyRules = row.policyRules ?? 0
+  const hrNeo = row.hrNeo ?? 0
+  // Про движок говорим, только когда он покрывает ЧАСТЬ правил: "26 из 26"
+  // не сообщает ничего сверх самого счётчика.
+  const hr = hrNeo > 0 && hrNeo < total ? ` · ${hrNeo} через ${HR_NEO}` : ''
+  const count = rulesCount(total)
+  if (policyRules === 0) return `${count} ${total === 1 ? 'ведёт' : 'ведут'} сюда${hr}`
+  if (policyRules === total) return `${count} — все через политику${hr}`
+  return `${count}, из них ${policyRules} через политику${hr}`
+}
+
+// Строка под политикой -- то же правило про повтор числа и то же имя движка.
+export function policyRuleSummary(row) {
+  const rules = row?.rules ?? 0
+  if (rules === 0) return 'правил нет'
+  const hrNeo = row.hrNeo ?? 0
+  const count = rulesCount(rules)
+  return hrNeo > 0 && hrNeo < rules ? `${count} · ${hrNeo} через ${HR_NEO}` : count
+}
+
+// Что показывать в списке "Туннели в маршрутизации". Снимок несёт не только
+// туннели: из каталога маршрутизации NDMS в него попадают WAN и системные
+// интерфейсы (Wi-Fi клиент, Ethernet, серверный Wireguard) -- они нужны
+// будущему переносу правил как мишени, но в списке туннелей это пять пустых
+// строк подряд, и заголовок раздела на них врёт. Показываем свои туннели и
+// всё, на чём реально висят правила: скрыть строку с правилами значило бы
+// спрятать часть раскладки.
+export function visibleTunnelRows(rows) {
+  return (rows ?? []).filter((r) => r.type === 'managed' || r.total > 0)
 }

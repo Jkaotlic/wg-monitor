@@ -280,3 +280,19 @@ const LEGEND_LABEL = {
 export function legendLabel(name) {
   return LEGEND_LABEL[name] ?? checkLabel(name)
 }
+
+// Русское числительное с существительным: 1 правило, 2 правила, 5 правил.
+// Нужно потому, что "2 правил" на экране маршрутов читается как опечатка, а
+// не как счётчик, и подрывает доверие к самим цифрам.
+export function pluralRu(n, one, few, many) {
+  const mod100 = Math.abs(n) % 100
+  const mod10 = mod100 % 10
+  if (mod100 >= 11 && mod100 <= 14) return many
+  if (mod10 === 1) return one
+  if (mod10 >= 2 && mod10 <= 4) return few
+  return many
+}
+
+export function rulesCount(n) {
+  return `${n} ${pluralRu(n, 'правило', 'правила', 'правил')}`
+}
