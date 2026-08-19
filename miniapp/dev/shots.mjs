@@ -22,7 +22,7 @@ const SHOTS = [
       await page.getByRole('button', { name: 'Перезапустить туннель' }).first().click({ timeout: 2000 })
     },
   },
-  { name: 'routes', steps: async (page) => page.getByRole('button', { name: 'Маршруты' }).click() },
+  { name: 'tunnels', steps: async (page) => page.getByRole('button', { name: 'Туннели' }).click() },
   {
     name: 'diag',
     steps: async (page) => {

@@ -16,6 +16,8 @@ import { FleetOverlay } from './screens/FleetOverlay.jsx'
 import { AdminOverlay } from './screens/AdminOverlay.jsx'
 import { NoAccess } from './screens/NoAccess.jsx'
 import { RoutesTab } from './screens/RoutesTab.jsx'
+import { TunnelsTab } from './screens/TunnelsTab.jsx'
+import { Overlay } from './ui/Overlay.jsx'
 import { DiagTab } from './screens/DiagTab.jsx'
 import { EventsTab } from './screens/EventsTab.jsx'
 import { Sheet } from './ui/Sheet.jsx'
@@ -93,7 +95,13 @@ export function App() {
     )
     : nav.overlay === 'admin' && nav.routerID != null
       ? <AdminOverlay routerID={nav.routerID} onClose={() => dispatch({ type: 'overlay', overlay: null })} />
-      : null
+      : nav.overlay === 'routes' && nav.routerID != null
+        ? (
+          <Overlay title="Маршруты" backLabel="Туннели" onBack={() => dispatch({ type: 'overlay', overlay: null })}>
+            <RoutesTab routerID={nav.routerID} asleep={asleep} />
+          </Overlay>
+        )
+        : null
 
   return (
     <>
@@ -109,8 +117,12 @@ export function App() {
             openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
             onTab={(tab) => dispatch({ type: 'tab', tab })}
           />
-        ) : nav.tab === 'routes' ? (
-          <RoutesTab routerID={nav.routerID} asleep={asleep} />
+        ) : nav.tab === 'tunnels' ? (
+          <TunnelsTab
+            routerID={nav.routerID}
+            asleep={asleep}
+            onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
+          />
         ) : nav.tab === 'diag' ? (
           <DiagTab routerID={nav.routerID} asleep={asleep} />
         ) : (

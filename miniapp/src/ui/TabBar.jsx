@@ -8,7 +8,7 @@ const ICONS = {
       <path d="M 6 7 L 4 3.5 M 16 7 L 18 3.5" />
     </svg>
   ),
-  routes: (
+  tunnels: (
     <svg viewBox="0 0 22 22" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M 3 5.5 h 6 c 3 0 3 11 6 11 h 4" />
       <path d="M 3 16.5 h 5" />
@@ -30,7 +30,7 @@ const ICONS = {
 
 const LABELS = {
   router: 'Роутер',
-  routes: 'Маршруты',
+  tunnels: 'Туннели',
   diag: 'Диагностика',
   events: 'События',
 }
