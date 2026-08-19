@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, it, expect } from 'vitest'
-import { PALETTES, cssVarName } from '../src/theme.js'
+import { PALETTE, cssVarName } from '../src/theme.js'
 
 const css = readFileSync(fileURLToPath(new URL('../src/style.css', import.meta.url)), 'utf8')
 
@@ -19,16 +19,35 @@ describe('style.css повторяет палитру из theme.js', () => {
   // JS применяет переменные после загрузки; до этого момента страница
   // красится дефолтами из CSS. Разъехавшиеся значения дают вспышку чужого
   // цвета при каждом открытии -- поэтому они сверяются тестом.
-  for (const [key, value] of Object.entries(PALETTES.light)) {
-    it(`:root задаёт ${cssVarName(key)} как в светлой палитре`, () => {
+  for (const [key, value] of Object.entries(PALETTE)) {
+    it(`:root задаёт ${cssVarName(key)} как в палитре`, () => {
       expect(declared(':root {', cssVarName(key))).toBe(value)
     })
   }
-  for (const [key, value] of Object.entries(PALETTES.dark)) {
-    it(`тёмный блок задаёт ${cssVarName(key)} как в тёмной палитре`, () => {
-      expect(declared('[data-theme="dark"]', cssVarName(key))).toBe(value)
+
+  // Псевдонимы прежних имён обязаны указывать на новые токены, а не нести
+  // собственное значение: разъехавшись, они покрасят половину приложения
+  // в палитру, которой больше нет.
+  const ALIASES = {
+    '--page': 'var(--bg)',
+    '--surface': 'var(--surf)',
+    '--text': 'var(--ink)',
+    '--muted': 'var(--dim)',
+    '--accent': 'var(--sig)',
+    '--border': 'var(--line)',
+    '--danger': 'var(--bad)',
+  }
+  for (const [alias, target] of Object.entries(ALIASES)) {
+    it(`${alias} остаётся псевдонимом ${target}`, () => {
+      expect(declared(':root {', alias)).toBe(target)
     })
   }
+
+  // Второй темы нет намеренно -- блок [data-theme="dark"] с собственными
+  // значениями означал бы, что переключатель тихо вернулся.
+  it('второго набора значений в css нет', () => {
+    expect(css.includes('[data-theme="dark"] {')).toBe(false)
+  })
 })
 
 // --- Пилюли статусов -------------------------------------------------
@@ -60,8 +79,8 @@ const ratio = (a, b) => {
 const BADGES = [
   ['.badge-online', 'ok'],
   ['.badge-sleeping', 'warn'],
-  ['.badge-offline', 'muted'],
-  ['.badge-alert', 'danger'],
+  ['.badge-offline', 'dim'],
+  ['.badge-alert', 'bad'],
 ]
 
 // Достаёт проценты из правила: color-mix(... var(--ok) 80%, var(--text) 20%).
@@ -74,17 +93,14 @@ function badgePercents(selector) {
 }
 
 describe('контраст пилюль статуса', () => {
-  for (const scheme of ['light', 'dark']) {
-    for (const [selector, token] of BADGES) {
-      it(`${scheme}: ${selector} читается на собственном тинте`, () => {
-        const p = PALETTES[scheme]
-        const { ink, tint } = badgePercents(selector)
-        expect(ink).toBeGreaterThan(0)
-        expect(tint).toBeGreaterThan(0)
-        const fg = mix(p[token], p.text, ink)
-        const bg = mix(p[token], p.surface, tint)
-        expect(ratio(fg, bg)).toBeGreaterThanOrEqual(4.5)
-      })
-    }
+  for (const [selector, token] of BADGES) {
+    it(`${selector} читается на собственном тинте`, () => {
+      const { ink, tint } = badgePercents(selector)
+      expect(ink).toBeGreaterThan(0)
+      expect(tint).toBeGreaterThan(0)
+      const fg = mix(PALETTE[token], PALETTE.ink, ink)
+      const bg = mix(PALETTE[token], PALETTE.surf, tint)
+      expect(ratio(fg, bg)).toBeGreaterThanOrEqual(4.5)
+    })
   }
 })

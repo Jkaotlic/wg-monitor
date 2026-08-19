@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { PALETTES, applyPalette } from '../src/theme.js'
+import { PALETTE, applyPalette } from '../src/theme.js'
 
 function fakeRoot() {
   const vars = new Map()
@@ -13,28 +13,33 @@ function fakeRoot() {
 }
 
 describe('applyPalette', () => {
-  it('пишет все переменные тёмной палитры', () => {
+  it('пишет все переменные палитры', () => {
     const root = fakeRoot()
-    applyPalette('dark', root)
-    expect(root.vars.get('--page')).toBe(PALETTES.dark.page)
-    expect(root.vars.get('--accent-fill')).toBe(PALETTES.dark.accentFill)
-    expect(root.vars.size).toBe(Object.keys(PALETTES.dark).length)
+    applyPalette(root)
+    expect(root.vars.get('--bg')).toBe(PALETTE.bg)
+    expect(root.vars.get('--led-off')).toBe(PALETTE.ledOff)
+    expect(root.vars.size).toBe(Object.keys(PALETTE).length)
   })
 
-  it('ставит data-theme, чтобы дефолты CSS совпадали с применённой темой', () => {
+  // data-theme стоит в разметке index.html; applyPalette его подтверждает,
+  // чтобы дефолты CSS и применённая палитра не могли разойтись.
+  it('ставит data-theme', () => {
     const root = fakeRoot()
-    applyPalette('dark', root)
+    applyPalette(root)
     expect(root.attrs.get('data-theme')).toBe('dark')
   })
 
-  it('на неизвестной схеме берёт светлую, а не падает', () => {
+  // Схема больше не параметр: тема одна. Лишний аргумент не должен ни на что
+  // влиять -- иначе останется след прежнего переключателя, который однажды
+  // кто-нибудь снова начнёт передавать.
+  it('игнорирует любой переданный аргумент схемы', () => {
     const root = fakeRoot()
-    applyPalette('нечто', root)
-    expect(root.vars.get('--page')).toBe(PALETTES.light.page)
-    expect(root.attrs.get('data-theme')).toBe('light')
+    applyPalette(root, 'light')
+    expect(root.vars.get('--bg')).toBe(PALETTE.bg)
+    expect(root.attrs.get('data-theme')).toBe('dark')
   })
 
   it('возвращает применённую палитру -- ею красится хром Telegram', () => {
-    expect(applyPalette('dark', fakeRoot())).toBe(PALETTES.dark)
+    expect(applyPalette(fakeRoot())).toBe(PALETTE)
   })
 })

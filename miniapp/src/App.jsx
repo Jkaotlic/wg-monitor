@@ -2,8 +2,6 @@ import { useEffect, useReducer, useState } from 'preact/hooks'
 import {
   initTelegram,
   getInitData,
-  getColorScheme,
-  onColorSchemeChanged,
   onBackButtonClick,
   paintChrome,
   setBackButtonVisible,
@@ -37,9 +35,10 @@ export function App() {
 
   useEffect(() => {
     initTelegram()
-    const paint = () => paintChrome(applyPalette(getColorScheme()))
-    paint()
-    const offTheme = onColorSchemeChanged(paint)
+    // Тема одна, поэтому палитра применяется один раз и подписки на смену
+    // схемы больше нет: Telegram может сколько угодно переключаться между
+    // светлой и тёмной -- приложение остаётся тёмным намеренно.
+    paintChrome(applyPalette())
     // Сессия и список роутеров грузятся вместе: без списка нельзя решить,
     // открывать ли конкретный роутер, показывать список или экран пустого
     // доступа -- а решать это один раз при входе честнее, чем перерешать
@@ -59,7 +58,6 @@ export function App() {
         setStatus('ready')
       })
       .catch(() => setStatus('error'))
-    return offTheme
   }, [])
 
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка

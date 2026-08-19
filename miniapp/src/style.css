@@ -8,7 +8,7 @@
    разъехаться молча они не могут.
 
    Тему (светлая/тёмная) выбирает Telegram, а не хост-палитра: тонкий
-   скрипт в index.html ставит data-theme до первой отрисовки, дальше
+   data-theme стоит прямо в разметке index.html: тема одна, и
    applyPalette() держит его в согласии с событием themeChanged.
    Никаких --tg-* переменных в токенах больше нет -- приложение красит
    себя само, и потому контраст можно измерить и зафиксировать тестом.
@@ -20,44 +20,47 @@
    перекрашиваются вслед за темой телефона.
    ============================================================ */
 :root {
-  --page: #e9e9ef;
-  --surface: #f2f2f7;
-  --text: #1c1c1e;
-  --muted: #67676c;
-  --accent: #226398;
-  --accent-fill: #175485;
-  --ok: #1E6F46;
-  --warn: #8a5a00;
-  --danger: #A93B3F;
-  --border: rgba(28,28,30,0.12);
-  --shadow-card: 0 1px 2px rgba(28,28,30,0.07);
-  /* Производные от палитры, не входящие в неё: цвет текста на залитой
-     кнопке (белый в обеих темах -- под него и подобран --accent-fill) и
-     усиленная граница для полей ввода. */
-  --on-accent: #ffffff;
-  --border-strong: rgba(28,28,30,0.24);
+  /* Дизайн-система проекта Claude Design (screens/ui.css). Тема одна --
+     тёмная, и это решение: приложение открывают ночью и в дороге. Зеркало
+     PALETTE из theme.js; сверяется тестом theme.css.test.js. */
+  --bg: #0c1013;
+  --surf: #141a1f;
+  --surf2: #1b2229;
+  --ink: #eef3f5;
+  --dim: #8f9ea8;
+  --line: rgba(255,255,255,0.09);
+  --line2: rgba(255,255,255,0.05);
+  --sig: #c8f24a;
+  --ok: #5fd08a;
+  --warn: #ffbf3d;
+  --bad: #ff6a58;
+  --led-off: #39424a;
+  --on-sig: #0d1204;
+
+  /* Псевдонимы прежних имён. Экраны переезжают на новые токены по одному, и
+     до конца переезда обе системы имён обязаны показывать один цвет -- иначе
+     половина приложения окажется в старой палитре. Удалить, когда в src/ не
+     останется ни одной ссылки на левую колонку. */
+  --page: var(--bg);
+  --surface: var(--surf);
+  --text: var(--ink);
+  --muted: var(--dim);
+  --accent: var(--sig);
+  --accent-fill: var(--sig);
+  --on-accent: var(--on-sig);
+  --danger: var(--bad);
+  --border: var(--line);
+  --border-strong: rgba(255,255,255,0.16);
+  --shadow-card: none;
 
   /* Материал прибора: корпус, светодиоды и шелкография RouterDevice.jsx.
-     Это не тема, а физика -- светодиод не меняет цвет, когда телефон
-     переключается в тёмную. Ратио держатся в обеих темах, потому что
-     не движется ни один операнд:
-
-       online    #1fa661 на утопленной панели #15181d  5.66:1  (нужно 3:1)
-       alert     #e5484d на ней же                     4.55:1  (нужно 3:1)
-       offline   #8a8a8e на ней же                     5.17:1  (нужно 3:1)
-       sleeping  #ffb224 на корпусе #414852            4.79:1  (нужно 3:1)
-       alert-ink #ff9592 на панели #252a30             6.86:1  (нужно 4.5:1)
-
-     Два значения отличаются от интерфейсных не случайно: корпус --
-     средне-серый, и на нём горящее кольцо должно быть ЯРЧЕ фона, а не
-     темнее; а красный раздваивается, потому что как лампа он проходит
-     графический барьер 3:1, а как шелкография 8px -- уже нет.
-     Измерено в браузере, не на глаз: .superpowers/sdd/miniapp-p4-task-9-report.md. */
-  --status-online-on-metal: #1fa661;
-  --status-alert-on-metal: #e5484d;
-  --status-offline-on-metal: #8a8a8e;
-  --status-sleeping-on-metal: #ffb224;
-  --status-alert-ink-on-metal: #ff9592;
+     Это не тема, а физика -- светодиод не меняет цвет от настроек телефона.
+     Значения приведены к сигнальной палитре дизайн-системы. */
+  --status-online-on-metal: #5fd08a;
+  --status-alert-on-metal: #ff6a58;
+  --status-offline-on-metal: #8f9ea8;
+  --status-sleeping-on-metal: #ffbf3d;
+  --status-alert-ink-on-metal: #ff9184;
 
   /* Spacing (4px step) */
   --sp-1: 4px;
@@ -67,52 +70,31 @@
   --sp-5: 24px;
   --sp-6: 32px;
 
-  /* Radius */
-  --radius: 12px;
-  --radius-sm: 8px;
+  /* Radius: 20 герой -- 14 карточка и кнопка -- 999 пилюля */
+  --radius-hero: 20px;
+  --radius: 14px;
+  --radius-sm: 10px;
   --radius-pill: 999px;
 
-  /* Type. System stack for prose -- this is embedded Telegram
-     chrome, so body text should feel like it belongs to the host
-     app, not a foreign import. Monospace for identifiers, status
-     codes and timestamps: this is a network-ops tool, and setting
-     that data in mono marks it as a *reading*, distinct from the
-     surrounding prose -- the same convention terminals and
-     dashboards use, applied because the content is genuinely
-     tabular/numeric, not for decoration. */
-  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Consolas", monospace;
+  /* Type. IBM Plex Sans для прозы, IBM Plex Mono для данных: имён
+     интерфейсов, geo-тегов, времени -- всего, что оператор сверяет глазами
+     с роутером. Проза моноширинной не бывает. Шрифты грузятся ссылкой в
+     index.html; системный стек в fallback держит вёрстку до их загрузки. */
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
 
-  --fs-xl: 1.375rem;
+  --fs-xxl: 1.625rem;
+  --fs-xl: 1.5rem;
   --fs-lg: 1.125rem;
-  --fs-md: 1rem;
+  --fs-md: 0.9375rem;
   --fs-sm: 0.875rem;
-  --fs-xs: 0.75rem;
+  --fs-xs: 0.6875rem;
+  --fs-xxs: 0.625rem;
 
   --lh-tight: 1.25;
   --lh-normal: 1.45;
 
   --transition-fast: 120ms ease;
-}
-
-/* Тёмная тема. Значения -- зеркало PALETTES.dark из theme.js; сверяется
-   тестом. Атрибут ставит скрипт в index.html до первой отрисовки, а потом
-   держит applyPalette(), поэтому вспышки светлой темы при открытии нет.
-   Материал прибора (--*-on-metal) здесь не повторяется: он не тема. */
-[data-theme="dark"] {
-  --page: #15181d;
-  --surface: #21262d;
-  --text: #e6e9ee;
-  --muted: #a2abb8;
-  --accent: #7fb6e6;
-  --accent-fill: #2b6ea8;
-  --ok: #3fbf7a;
-  --warn: #f0b429;
-  --danger: #ff8a86;
-  --border: rgba(255,255,255,0.14);
-  --shadow-card: none;
-  --on-accent: #ffffff;
-  --border-strong: rgba(255,255,255,0.28);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -241,10 +223,15 @@
   color: var(--on-accent);
 }
 
+/* Вторичная кнопка НЕ красится сигнальным цветом. По правилу дизайн-системы
+   лайм значит "линия жива" и обозначает одно главное действие экрана; когда
+   им обведены и "Час", и "Сутки", и "Понятно, вижу", он перестаёт значить
+   что-либо вообще. Здесь -- нейтральный контур на карточке, как .b-ghost
+   в макете. */
 .btn-ghost {
-  background: transparent;
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--surf);
+  border-color: var(--line);
+  color: var(--ink);
 }
 
 .btn-danger {

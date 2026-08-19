@@ -16,36 +16,18 @@ export function getInitData() {
   return tg?.initData ?? ''
 }
 
-// Тему выбирает Telegram, цвета -- приложение (см. theme.js). Вне Telegram
-// (локальная отладка в браузере) схему подсказывает сама система.
-export function getColorScheme() {
-  if (inTelegram && tg.colorScheme) return tg.colorScheme
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
 // Telegram рисует свою шапку и фон вокруг вебвью. Если их не покрасить,
 // приложение выглядит вклеенным в чужое окно.
 export function paintChrome(palette) {
   if (!tg) return
-  tg.setHeaderColor?.(palette.page)
-  tg.setBackgroundColor?.(palette.page)
+  tg.setHeaderColor?.(palette.bg)
+  tg.setBackgroundColor?.(palette.bg)
 }
 
 export function onBackButtonClick(handler) {
   if (!tg) return () => {}
   tg.BackButton.onClick(handler)
   return () => tg.BackButton.offClick(handler)
-}
-
-export function onColorSchemeChanged(handler) {
-  if (!inTelegram) {
-    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
-    if (!mq) return () => {}
-    mq.addEventListener('change', handler)
-    return () => mq.removeEventListener('change', handler)
-  }
-  tg.onEvent('themeChanged', handler)
-  return () => tg.offEvent('themeChanged', handler)
 }
 
 export function setBackButtonVisible(visible) {
