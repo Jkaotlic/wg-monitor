@@ -64,8 +64,11 @@ func TestPingCheckToggle_PrimaryPathOK(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method: %s", r.Method)
 		}
-		// Path verified against Task 1 step 1 finding. Update if different.
-		if r.URL.Path != "/api/pingcheck/toggle" {
+		// Адрес сверен с живым роутером 2.17.2+r15: /api/pingcheck/toggle
+		// отвечает 404, снятие сторожа делается через per-tunnel адрес.
+		// Прежняя версия этого теста прибивала мёртвый эндпоинт и потому
+		// не давала заметить, что действие сломано.
+		if r.URL.Path != "/api/tunnels/pingcheck/remove" {
 			t.Errorf("path: %q", r.URL.Path)
 		}
 		posted = true

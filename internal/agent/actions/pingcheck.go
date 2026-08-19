@@ -71,6 +71,11 @@ func PingCheckToggle(ctx context.Context, c *awgmgr.Client, exec ExecFunc, tunne
 	if primaryErr == nil {
 		return nil
 	}
+	// У opkg-туннелей ndms_name нет вовсе, и ndmc адресовать нечем. Сказать
+	// это прямо честнее, чем звать команду с пустым именем интерфейса.
+	if strings.TrimSpace(ndmsName) == "" {
+		return fmt.Errorf("pingcheck_toggle: %v; запасной путь через ndmc недоступен -- у туннеля нет имени интерфейса", primaryErr)
+	}
 	cmd := "interface " + ndmsName + " ping-check"
 	if !enable {
 		cmd = "no " + cmd
@@ -83,15 +88,18 @@ func PingCheckToggle(ctx context.Context, c *awgmgr.Client, exec ExecFunc, tunne
 }
 
 func primaryPingCheckToggle(ctx context.Context, c *awgmgr.Client, tunnelID string, enable bool) error {
-	flag := "0"
-	if enable {
-		flag = "1"
+	// Эндпоинт /api/pingcheck/toggle из awg-manager убран: на 2.17.2 он
+	// отвечает 404. Вместо него пара per-tunnel адресов -- включить и снять.
+	// Пока код бил в старый адрес, включение сторожа держалось на одном лишь
+	// ndmc, а у opkg-туннелей нет ndms_name: для половины туннелей флота
+	// действие было сломано целиком и молча.
+	path := "/api/tunnels/pingcheck"
+	if !enable {
+		path = "/api/tunnels/pingcheck/remove"
 	}
-	q := url.Values{"id": {tunnelID}, "enable": {flag}}
-	// Reuse the client's HTTP transport but bypass GetEnv (we don't decode
-	// the body — only care about status code).
+	q := url.Values{"id": {tunnelID}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		c.BaseURL+"/api/pingcheck/toggle?"+q.Encode(), bytes.NewReader(nil))
+		c.BaseURL+path+"?"+q.Encode(), bytes.NewReader(nil))
 	if err != nil {
 		return err
 	}

@@ -1577,3 +1577,331 @@ body {
 .list-row-current .list-row-btn {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
+
+/* ============================================================
+   Дизайн-система: компоненты из проекта Claude Design
+   ------------------------------------------------------------
+   Перенос screens/ui.css один к одному по анатомии, но именами,
+   которые читаются: в макете классы сокращены до .r/.st/.cn,
+   потому что верстался мокап, а здесь по ним ориентируются в коде.
+
+   Правило, которое держит всю систему: СИГНАЛЬНЫЙ ЛАЙМ ЗНАЧИТ
+   "ЛИНИЯ ЖИВА" и обозначает одно главное действие экрана. Второй
+   лайм на экране обесценивает первый.
+   ============================================================ */
+
+/* Заголовок состояния: светящаяся точка и подпись капслоком. Свечение --
+   не украшение: это единственная метка, которую видно боковым зрением,
+   когда экран открывают на ходу. */
+.state-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sig);
+}
+
+.state-tag::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  box-shadow: 0 0 8px currentColor;
+  flex: none;
+}
+
+.state-tag-warn { color: var(--warn); }
+.state-tag-danger { color: var(--bad); }
+
+/* Погашенное состояние светиться не должно: "роутер не сказал" -- это
+   отсутствие сигнала, и метка обязана выглядеть погасшей. */
+.state-tag-off { color: var(--dim); }
+.state-tag-off::before {
+  background: var(--led-off);
+  box-shadow: none;
+}
+
+/* Пилюля: то же, что и .badge, но моноширинная и на своей заливке. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surf2);
+  color: var(--dim);
+}
+
+.pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+  flex: none;
+}
+
+.pill-sig { color: var(--sig); background: rgba(200, 242, 74, 0.13); }
+.pill-ok { color: var(--ok); background: rgba(95, 208, 138, 0.13); }
+.pill-warn { color: var(--warn); background: rgba(255, 191, 61, 0.13); }
+.pill-danger { color: var(--bad); background: rgba(255, 106, 88, 0.13); }
+
+/* Плитка-счётчик. Число набирается табличными цифрами: два счётчика рядом
+   не должны прыгать по ширине, когда 9 сменяется на 10. */
+.stat-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.stat {
+  border-radius: var(--radius);
+  background: var(--surf);
+  border: 1px solid var(--line);
+  padding: 13px 14px;
+}
+
+.stat-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.stat-value {
+  display: block;
+  margin-top: 7px;
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-unit {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  margin-left: 3px;
+}
+
+.stat-note {
+  display: block;
+  margin-top: 5px;
+  font-size: var(--fs-xxs);
+  color: var(--dim);
+}
+
+.stat-warn .stat-value { color: var(--warn); }
+.stat-danger .stat-value { color: var(--bad); }
+
+/* "Неизвестно" никогда не набирается крупно: это не показание, а его
+   отсутствие, и оно не должно весить столько же, сколько живая цифра. */
+.stat-unknown .stat-value {
+  color: var(--dim);
+  font-weight: 500;
+  font-size: var(--fs-lg);
+}
+
+/* Герой: карточка с подсветкой сверху. Холодный вариант -- когда линии нет. */
+.hero {
+  position: relative;
+  border-radius: var(--radius-hero);
+  background: radial-gradient(120% 80% at 50% 0%, #1c252c 0%, #11171c 60%, #0e1418 100%);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  padding: var(--sp-4) var(--sp-4) 0;
+}
+
+.hero::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  width: 190px;
+  height: 120px;
+  transform: translateX(-50%);
+  background: radial-gradient(closest-side, rgba(200, 242, 74, 0.15), transparent);
+  pointer-events: none;
+}
+
+.hero-cold::after {
+  background: radial-gradient(closest-side, rgba(255, 106, 88, 0.1), transparent);
+}
+
+/* Строка данных. Правило дизайн-системы: строка ВСЕГДА несёт значение
+   справа. Строка без значения -- повод дописать бэкенд, а не поставить
+   прочерк. */
+.data-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 46px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.data-row:last-child { border-bottom: none; }
+
+.data-row-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  background: var(--led-off);
+}
+
+.data-row-dot-ok { background: var(--ok); }
+.data-row-dot-sig { background: var(--sig); box-shadow: 0 0 8px rgba(200, 242, 74, 0.6); }
+.data-row-dot-warn { background: var(--warn); }
+.data-row-dot-danger { background: var(--bad); }
+
+.data-row-main {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+}
+
+/* Код -- мелким, под фразой: он для того, кто полезет в консоль, и смысл
+   в одиночку не несёт. */
+.data-row-code {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  letter-spacing: 0.05em;
+  color: var(--dim);
+  margin-top: 3px;
+}
+
+.data-row-value {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--ink);
+  white-space: nowrap;
+  text-align: right;
+}
+
+.data-row-value-sub {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  font-weight: 400;
+  color: var(--dim);
+  margin-top: 2px;
+}
+
+.data-row-value-ok { color: var(--ok); }
+.data-row-value-warn { color: var(--warn); }
+.data-row-value-danger { color: var(--bad); }
+.data-row-value-muted { color: var(--dim); font-weight: 400; }
+
+/* Цепочка подхвата: вертикальная линия связывает звенья, потому что это
+   порядок, а не список. Первое и последнее звено линию обрезают -- иначе
+   она обещает продолжение, которого нет. */
+.chain {
+  display: flex;
+  flex-direction: column;
+  padding: var(--sp-1) 0;
+}
+
+.chain-link {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 14px;
+  position: relative;
+}
+
+.chain-link::before {
+  content: "";
+  position: absolute;
+  left: 22px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--line);
+}
+
+.chain-link:first-child::before { top: 50%; }
+.chain-link:last-child::before { bottom: 50%; }
+
+.chain-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: var(--radius-pill);
+  background: #2b333a;
+  border: 2px solid var(--bg);
+  box-shadow: 0 0 0 1px var(--line);
+  flex: none;
+  margin-left: 3px;
+  position: relative;
+  z-index: 1;
+}
+
+.chain-dot-active { background: var(--sig); box-shadow: 0 0 10px rgba(200, 242, 74, 0.7); }
+.chain-dot-ready { background: var(--ok); }
+
+.chain-main {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+
+.chain-note {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* Переход на соседний экран. Единственное место, кроме главной кнопки, где
+   лайм допустим: это и есть "иди сюда". */
+.nav-card {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  background: linear-gradient(100deg, rgba(200, 242, 74, 0.14), rgba(200, 242, 74, 0.05));
+  border: 1px solid rgba(200, 242, 74, 0.28);
+  font-family: inherit;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--sig);
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-card-title { flex: 1; }
+
+.nav-card-note {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: rgba(200, 242, 74, 0.7);
+}
+
+/* Сноска под карточкой: объясняет показание, а не повторяет его. */
+.card-foot {
+  margin: 0;
+  padding: var(--sp-3) 14px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+  border-top: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.015);
+}

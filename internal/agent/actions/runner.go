@@ -12,7 +12,7 @@
 //   - opkg_cron_*     → install/status/log/remove managed scheduled opkg script
 //   - entware_clean_* → install/status/run/log/remove managed Entware cleanup
 //   - pingcheck_status → awgmgr.PingCheckStatus → JSON passthrough
-//   - pingcheck_toggle → awg-mgr POST /api/pingcheck/toggle (primary)
+//   - pingcheck_toggle → awg-mgr POST /api/tunnels/pingcheck (primary)
 //     with ndmc CLI fallback (interface <ndms_name> ping-check)
 //   - tunnel_enable/disable → ndmc -c "interface <ndms_name> up|down"
 //   - tunnel_restart → /api/control/restart?id= (ndmc down/up only on builds
