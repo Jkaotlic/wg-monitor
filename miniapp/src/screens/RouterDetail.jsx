@@ -59,7 +59,7 @@ function isSuppressed(incident) {
 // One button that owns the whole asynchronous-command lifecycle for a single
 // action: an optional confirm step, dispatch, the bounded poll (useCommand),
 // and a plain-language rendering of whatever it settles on. Two call sites
-// share this -- TrafficSection's "Проверить сейчас" and the restart button on
+// share this -- the restart button on
 // a tunnel_* incident -- so neither has to reimplement the confirm gate or
 // the pending/ok/err/locked/timeout wording.
 //
@@ -264,104 +264,6 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
   )
 }
 
-// One tunnel, in the shape §3.3 sketches it: name and the egress badge share the
-// first line, the human reading spans the second.
-//
-//   Amsterdam                             весь трафик идёт сюда
-//   работает · обмен ключами 45 сек назад · проверка связи живая
-//
-// Health is NOT re-derived here: `tunnelStateLabel` is imported so the antenna
-// above and this row cannot disagree about the same tunnel. That matters most for
-// `enabled`, which is a nullable tri-state (miniapp_tunnels.go:38) -- true, false,
-// or absent because the agent never told us -- and whose absence a second, naive
-// derivation would render as "выключен".
-function TunnelRow({ tunnel, isEgress }) {
-  const parts = [tunnelStateLabel(tunnel)]
-  // `!= null` deliberately: a fresh handshake is `handshake_age_sec: 0`, which is
-  // falsy but is the single most positive reading a tunnel has.
-  if (tunnel.handshake_age_sec != null) {
-    parts.push(`обмен ключами ${humanAge(tunnel.handshake_age_sec)} назад`)
-  }
-  const ping = pingLabel(tunnel.ping_check_status)
-  if (ping) parts.push(`проверка связи ${ping}`)
-
-  // The human name leads and the interface id follows as secondary (§3.3): the
-  // owner knows "Amsterdam", not "awg12". When the agent gave us no name, the id
-  // IS the name and printing it twice would be noise.
-  const named = tunnel.name && tunnel.name !== tunnel.tunnel_id
-
-  return (
-    <li class="row tunnel-row">
-      <span class="tunnel-name">
-        <span class="row-title">{named ? tunnel.name : tunnel.tunnel_id}</span>
-        {named && <span class="tunnel-id">{tunnel.tunnel_id}</span>}
-      </span>
-      {isEgress && <span class="badge badge-online">весь трафик идёт сюда</span>}
-      <span class="tunnel-sub">{parts.join(' · ')}</span>
-    </li>
-  )
-}
-
-function TunnelsSection({ tunnels, traffic }) {
-  const health = tunnelHealth(tunnels)
-  // Only a `vpn` verdict names an egress, and only a name we actually have may be
-  // badged -- same guard the drawing uses (RouterDevice.jsx:424-430). A verdict
-  // pointing at a tunnel we weren't given badges nothing rather than the first row.
-  const egressID = traffic?.mode === 'vpn' ? traffic.egress_tunnel_id : null
-
-  return (
-    <section class="section">
-      <h2 class="section-title">Целостность туннелей · {health.label}</h2>
-      {tunnels.length === 0 ? (
-        <div class="card">
-          <p class="traffic-detail">Туннели не заведены — роутер не сообщил ни одного.</p>
-        </div>
-      ) : (
-        <ul class="card list-reset">
-          {tunnels.map((t) => (
-            <TunnelRow key={t.tunnel_id} tunnel={t} isEgress={!!egressID && t.tunnel_id === egressID} />
-          ))}
-        </ul>
-      )}
-    </section>
-  )
-}
-
-// The operator's daily question, answered in one line. This button dispatches
-// force_recheck via CommandButton -- read-only, so it needs no mutatingText,
-// only the asleep gate every command gets -- and it only re-runs the recheck
-// that produces the verdict above, refreshing the screen (onDone={loadData})
-// once it settles ok. The two-exit-IP comparison that actually PROVES or
-// disproves that verdict (check_via_tunnel/check_direct) is a separate block,
-// ExitCompareSection below (Task 13) -- two independent read-only probes, not
-// a rerun of this one.
-function TrafficSection({ routerID, traffic, asleep, onDone, openSheet }) {
-  const { title, detail } = trafficLabel(traffic)
-  return (
-    <section class="section">
-      <h2 class="section-title">Куда идёт трафик</h2>
-      <div class="card">
-        <p class="traffic-title">{title}</p>
-        <p class="traffic-detail">{detail}</p>
-        {traffic?.contested_default && (
-          <p class="traffic-note">Основным настроен ещё один туннель, но трафик несёт не он.</p>
-        )}
-        <CommandButton
-          routerID={routerID}
-          action="force_recheck"
-          label={ACTION_LABELS.recheck}
-          busyLabel="Проверяю…"
-          asleep={asleep}
-          wrapClass="traffic-probe"
-          onDone={onDone}
-          openSheet={openSheet}
-        />
-      </div>
-    </section>
-  )
-}
-
-
 // Быстрые действия по макету: плитки вместо разрозненных кнопок внутри
 // карточек. Набор -- ровно то, что мини-аппу разрешено (allowlist в
 // miniapp_commands.go). "Сбросить DNS", "Обслужить пакеты" и "Перезагрузить
@@ -402,6 +304,26 @@ function QuickActions({ routerID, tunnels, traffic, asleep, onDone, openSheet, o
           title="Собрать диагностику"
           hint="полный отчёт от агента"
           onClick={() => onTab('diag')}
+        />
+        {/* Прежде эта кнопка жила в блоке "Куда идёт трафик" вместе с
+            вердиктом. Вердикт уехал в шапку экрана, и держать ради одной
+            кнопки целый раздел, повторяющий шапку словами, незачем. */}
+        <ActionTile
+          title={ACTION_LABELS.recheck}
+          hint="роутер опросит себя заново"
+          onClick={() =>
+            openSheet(
+              confirmSheet({
+                routerID,
+                title: ACTION_LABELS.recheck,
+                body: 'Роутер прогонит свои проверки заново и пришлёт свежий отчёт.',
+                action: 'force_recheck',
+                buttonLabel: 'Проверить',
+                asleep,
+                onDone,
+              }),
+            )
+          }
         />
       </div>
     </Section>
@@ -563,7 +485,10 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
           </div>
         ) : (
           <button class="btn btn-primary compare-run" disabled={busy} onClick={handleClick}>
-            {busy ? 'Сравниваю…' : ACTION_LABELS.recheck}
+            {/* Не "Повторить проверку": так называется опрос роутера в
+                быстрых действиях, а здесь запускаются два зонда наружу.
+                Одинаковые слова на кнопках, делающих разное, -- ловушка. */}
+            {busy ? 'Сравниваю…' : 'Сравнить адреса выхода'}
           </button>
         )}
 
@@ -788,10 +713,6 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
       <div style="margin-top:20px">
         <NavCard title="Туннели и резерв" note={`${tunnels.length} лин.`} onClick={() => onTab?.('tunnels')} />
       </div>
-
-      <TrafficSection routerID={id} traffic={traffic} asleep={asleep} onDone={loadData} openSheet={openSheet} />
-
-      <TunnelsSection tunnels={tunnels} traffic={traffic} />
 
       <QuickActions
         routerID={id}
