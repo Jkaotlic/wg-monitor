@@ -67,14 +67,30 @@ function fieldArc(tipX, tipY, r, centreDeg) {
   return `M ${r2(x0)} ${r2(y0)} A ${r} ${r} 0 0 1 ${r2(x1)} ${r2(y1)}`
 }
 
+// Предел числа рисуемых штырей. Больше восьми на 390 px -- расчёска: имена
+// под ними перестают читаться, а сам рисунок из ПОКАЗАНИЯ превращается в
+// инвентарь, которым и так служит список туннелей ниже. Остаток называется
+// числом (antennaOverflow), а не изображается.
+export const ANT_MAX = 8
+
 // Antenna slots. t runs -1..1 across the shell; at two tunnels it yields exactly
 // the mockup's -1 and +1, i.e. bases at 82 and 266. A lone tunnel stands upright
-// dead centre.
-function antennaSlots(count) {
-  return Array.from({ length: count }, (_, i) => {
-    const t = count === 1 ? 0 : (i / (count - 1)) * 2 - 1
+// dead centre -- роутер с одной линией нормальный, а не полупустой, и жать
+// единственную антенну к краю корпуса было бы неправдой о нём.
+//
+// Фиксированного числа слотов у прибора нет намеренно: пустой слот обещает
+// ёмкость, которой у роутера нет.
+export function antennaSlots(count) {
+  const drawn = Math.min(Math.max(count, 0), ANT_MAX)
+  return Array.from({ length: drawn }, (_, i) => {
+    const t = drawn === 1 ? 0 : (i / (drawn - 1)) * 2 - 1
     return { t, baseX: CENTER + t * ANT_SPAN }
   })
+}
+
+// Сколько туннелей не поместилось на корпус. Ноль -- обычный случай.
+export function antennaOverflow(count) {
+  return Math.max(0, (count ?? 0) - ANT_MAX)
 }
 
 // A mast's angle from vertical, and the ONE place DROOP is applied. Both the
@@ -432,7 +448,13 @@ export function RouterDevice({ tunnels = [], traffic, checks = [], name }) {
       : -1
   // A "vpn" verdict naming a tunnel we were not given is not a tunnel we may point
   // at. Fall back to the unknown treatment rather than to a guess.
-  const mode = traffic?.mode === 'vpn' && egressIdx < 0 ? 'unknown' : (traffic?.mode ?? 'unknown')
+  //
+  // То же правило действует и на туннель, который НЕ ПОМЕСТИЛСЯ на корпус
+  // (см. ANT_MAX): у него нет мачты, и путь трафика указал бы в пустое место
+  // или, того хуже, на чужую антенну. Рисунок обязан признать "не знаю", а не
+  // ткнуть наугад.
+  const egressDrawn = egressIdx >= 0 && egressIdx < slots.length
+  const mode = traffic?.mode === 'vpn' && !egressDrawn ? 'unknown' : (traffic?.mode ?? 'unknown')
 
   const lampPitch = lamps.length > 1 ? (LAMP_LAST - LAMP_FIRST) / (lamps.length - 1) : 0
   const lampX = (i) => (lamps.length === 1 ? CENTER : LAMP_FIRST + i * lampPitch)
@@ -452,7 +474,14 @@ export function RouterDevice({ tunnels = [], traffic, checks = [], name }) {
           .join('; ')}.`
       : 'Индикаторов нет.',
     tunnels.length
-      ? `Антенны: ${tunnels.map((t) => `${t.name || t.tunnel_id} — ${tunnelStateLabel(t)}`).join('; ')}.`
+      ? `Антенны: ${tunnels
+          .slice(0, slots.length)
+          .map((t) => `${t.name || t.tunnel_id} — ${tunnelStateLabel(t)}`)
+          .join('; ')}.${
+          antennaOverflow(tunnels.length)
+            ? ` Ещё ${antennaOverflow(tunnels.length)} туннелей на корпус не поместились — они в списке ниже.`
+            : ''
+        }`
       : 'Антенн нет: туннели не заведены.',
     trafficLabel({ ...traffic, mode }).title + '.',
   ].join(' ')
@@ -560,7 +589,7 @@ export function RouterDevice({ tunnels = [], traffic, checks = [], name }) {
 
         <TrafficPath
           mode={mode}
-          egressSlot={slots[egressIdx]}
+          egressSlot={egressDrawn ? slots[egressIdx] : undefined}
           egressAlive={egressIdx >= 0 && isAlive(tunnels[egressIdx])}
           laneX={laneX}
           arrow={`url(#${uid}-arrow)`}
