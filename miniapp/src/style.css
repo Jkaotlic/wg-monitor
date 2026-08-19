@@ -1927,3 +1927,11 @@ body {
   color: var(--sig);
   white-space: nowrap;
 }
+
+/* Строка про умолчание под вердиктом: вторая половина ответа о маршрутах. */
+.traffic-default {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--ink);
+}

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  defaultDestination,
   routingVerdict,
   policyRows,
   tunnelRows,
@@ -561,5 +562,62 @@ describe('visibleTunnelRows', () => {
   it('пустой список переживает', () => {
     expect(visibleTunnelRows([])).toEqual([])
     expect(visibleTunnelRows(undefined)).toEqual([])
+  })
+})
+
+// Куда уходит трафик, не заявленный ни одним правилом. Это вторая половина
+// модели оператора ("в туннель только названное, ОСТАЛЬНОЕ напрямую"), и на
+// экране её не было вовсе.
+describe('defaultDestination', () => {
+  // Авторитетный ответ приходит из снимка (default_egress, он же
+  // settings.download.routeTag) и перебивает любые флаги: на живом роутере
+  // default_route стоит у ВСЕХ трёх туннелей, пока трафик уходит напрямую.
+  // Считать умолчание по флагам -- значит утверждать обратное правде.
+  it('верит полю снимка, а не флагам туннелей', () => {
+    const d = defaultDestination({
+      default_egress: 'direct',
+      tunnels: [
+        { id: 'awg10', name: 'main', default_route: true, status: 'running' },
+        { id: 'awg11', name: 'work', default_route: true, status: 'running' },
+      ],
+    })
+    expect(d.mode).toBe('direct')
+    expect(d.text).toBe('Всё, что не названо ниже, идёт напрямую через провайдера.')
+  })
+
+  it('названный туннель называется по имени, а не по идентификатору', () => {
+    const d = defaultDestination({
+      default_egress: 'awg11',
+      tunnels: [{ id: 'awg11', name: 'work', default_route: false, status: 'running' }],
+    })
+    expect(d.mode).toBe('vpn')
+    expect(d.text).toBe('Всё, что не названо ниже, идёт через «work».')
+  })
+
+  // Снимок старого агента поля не несёт. Замолчать на нём было бы хуже, чем
+  // сказать по тому, что есть, -- остаётся прежняя догадка по флагам.
+  it('без поля остаётся догадка по живым флагам', () => {
+    const d = defaultDestination({
+      tunnels: [{ id: 'awg11', name: 'work', default_route: true, status: 'running' }],
+    })
+    expect(d.mode).toBe('vpn')
+    expect(d.text).toContain('work')
+  })
+
+  it('без поля и без живых претендентов -- напрямую', () => {
+    const d = defaultDestination({
+      tunnels: [{ id: 'awg10', name: 'main', default_route: true, status: 'disabled' }],
+    })
+    expect(d.mode).toBe('direct')
+  })
+
+  it('спорят несколько живых -- честное "не видно"', () => {
+    const d = defaultDestination({
+      tunnels: [
+        { id: 'awg11', name: 'work', default_route: true, status: 'running' },
+        { id: 'awg12', name: 'spare', default_route: true, status: 'running' },
+      ],
+    })
+    expect(d.mode).toBe('unknown')
   })
 })

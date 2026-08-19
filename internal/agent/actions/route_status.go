@@ -174,6 +174,23 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 	if authoritativeDefaultIface != "" {
 		defaultIface = authoritativeDefaultIface
 	}
+
+	// Куда уходит трафик, не заявленный ни одним правилом. Это отдельный от
+	// defaultIface факт: тот служит привязке fall-through правил HR-Neo, а
+	// этот отвечает экрану на вопрос "а всё остальное куда". Вывести его из
+	// флагов defaultRoute нельзя -- на живом роутере они стоят у всех
+	// туннелей сразу, а трафик идёт мимо них.
+	switch {
+	case activeDefaultID == wire.DefaultEgressDirect:
+		snap.DefaultEgress = wire.DefaultEgressDirect
+	case activeDefaultID != "" && byIface[activeDefaultID] != "":
+		snap.DefaultEgress = activeDefaultID
+	default:
+		// Роутер промолчал либо назвал туннель, которого в снимке нет.
+		// Сослаться на линию, которую экран не показывает, нельзя, а
+		// подставить первую попавшуюся -- значит выдать догадку за факт.
+		snap.DefaultEgress = ""
+	}
 	for _, t := range routing {
 		ep := ndmsRouteEndpoint(t)
 		if ep.Iface == "" {

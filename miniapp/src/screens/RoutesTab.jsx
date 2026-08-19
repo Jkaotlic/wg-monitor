@@ -3,6 +3,7 @@ import { useCommand } from '../useCommand.js'
 import {
   parseRouteSnapshot,
   routingVerdict,
+  defaultDestination,
   policyRows,
   tunnelRows,
   rulesByBind,
@@ -76,6 +77,11 @@ export function RoutesTab({ routerID, asleep }) {
           <div class="card">
             <p class="traffic-title">{verdict.title}</p>
             <p class="traffic-detail">{verdict.detail}</p>
+            {/* Вторая половина модели оператора: в туннель уходит только
+                названное, а всё остальное -- сюда. Этой строки на экране не
+                было вовсе, хотя без неё раскладка отвечает на половину
+                вопроса. */}
+            <p class="traffic-default">{defaultDestination(snapshot).text}</p>
             {verdict.partial && (
               <p class="traffic-note">
                 Снимок неполный: часть данных роутер не отдал ({snapshot.warnings.join('; ')}).

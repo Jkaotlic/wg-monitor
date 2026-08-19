@@ -106,6 +106,40 @@ export function routingVerdict(snapshot) {
   }
 }
 
+// Куда уходит трафик, не заявленный ни одним правилом, -- вторая половина
+// модели оператора: "в туннель только названное, остальное напрямую".
+//
+// Авторитетный ответ несёт сам снимок (default_egress, он же
+// settings.download.routeTag у роутера), и он перебивает любые флаги. Флаг
+// default_route описывает НАСТРОЙКУ туннеля: на живом роутере он стоит у всех
+// трёх сразу, пока трафик уходит напрямую, так что экран, считающий умолчание
+// по флагам, утверждает ровно обратное правде.
+export function defaultDestination(snapshot) {
+  const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
+  const egress = (snapshot?.default_egress ?? '').trim()
+
+  if (egress === 'direct') {
+    return { mode: 'direct', text: 'Всё, что не названо ниже, идёт напрямую через провайдера.' }
+  }
+  if (egress) {
+    const named = tunnels.find((t) => t.id === egress)
+    return { mode: 'vpn', text: `Всё, что не названо ниже, идёт через «${named?.name || egress}».` }
+  }
+
+  // Поля нет -- снимок агента старше этой фазы. Замолчать на нём было бы
+  // хуже, чем ответить по тому, что есть: претендентом считается только
+  // живой туннель, потому что выключенный основной маршрут не несёт.
+  const carrying = tunnels.filter((t) => t.default_route && tunnelLive(t) !== 'down')
+  if (carrying.length === 1) {
+    const t = carrying[0]
+    return { mode: 'vpn', text: `Всё, что не названо ниже, идёт через «${t.name || t.id}».` }
+  }
+  if (carrying.length > 1) {
+    return { mode: 'unknown', text: 'Куда идёт всё остальное — по снимку не видно.' }
+  }
+  return { mode: 'direct', text: 'Всё, что не названо ниже, идёт напрямую через провайдера.' }
+}
+
 // Читал ли агент политики роутера. policy_model -- факт, который агент знает
 // о СЕБЕ, и вывести его из данных нельзя: у политики, чья цепочка целиком
 // уходит мимо VPN, нет ни одного tunnel_id, и роутер с единственной такой

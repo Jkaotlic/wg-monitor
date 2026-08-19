@@ -5,6 +5,12 @@ package wire
 
 const RouteOtherID = "__other__"
 
+// DefaultEgressDirect is RouteSnapshot.DefaultEgress when the router routes
+// unclaimed traffic past every tunnel, straight to the ISP. awg-manager spells
+// it exactly this way in settings.download.routeTag, and it is a statement,
+// not a tunnel id we failed to resolve.
+const DefaultEgressDirect = "direct"
+
 type HRStatus struct {
 	Installed bool `json:"installed"`
 	Running   bool `json:"running"`
@@ -107,6 +113,17 @@ type RouteSnapshot struct {
 	// Warnings names non-fatal data source failures. UI must treat the
 	// snapshot as partial when present.
 	Warnings []string `json:"warnings,omitempty"`
+	// DefaultEgress names where traffic goes when no rule claims it — the
+	// authoritative answer from awg-manager's settings.download.routeTag,
+	// which is the ONLY place that fact lives.
+	//
+	// It cannot be derived from the per-tunnel DefaultRoute flags: on a live
+	// router all three tunnels carry the flag while traffic actually leaves
+	// direct, so a consumer computing the default from flags states the exact
+	// opposite of the truth. Values: DefaultEgressDirect, a tunnel id present
+	// in Tunnels, or "" — the router did not say, which is an answer and must
+	// not be replaced by a guess.
+	DefaultEgress string `json:"default_egress,omitempty"`
 	// PolicyModel marks a snapshot built by an agent that reads awg-manager's
 	// access policies. It cannot be inferred from the policy data: a policy
 	// whose whole chain leaves the VPN has no tunnel ids anywhere, so a router
