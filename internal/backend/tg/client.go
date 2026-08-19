@@ -430,8 +430,17 @@ type setChatMenuButtonReq struct {
 	MenuButton menuButton `json:"menu_button"`
 }
 
+// menuButton is the TG Bot API MenuButton union. Text/WebApp are set only for
+// type=web_app and must stay absent otherwise: TG rejects a commands button
+// that carries them instead of ignoring the extras.
 type menuButton struct {
-	Type string `json:"type"`
+	Type   string         `json:"type"`
+	Text   string         `json:"text,omitempty"`
+	WebApp *menuWebAppURL `json:"web_app,omitempty"`
+}
+
+type menuWebAppURL struct {
+	URL string `json:"url"`
 }
 
 // SetMyCommands registers the bot's slash-command menu so TG clients show
@@ -450,6 +459,23 @@ func (c *Client) SetMyCommandsWithScope(ctx context.Context, cmds []BotCommand, 
 
 func (c *Client) SetCommandsMenuButton(ctx context.Context) error {
 	body, _ := json.Marshal(setChatMenuButtonReq{MenuButton: menuButton{Type: "commands"}})
+	return c.call(ctx, "setChatMenuButton", body, nil)
+}
+
+// SetWebAppMenuButton points the private-chat menu button at the mini app.
+// Same endpoint as SetCommandsMenuButton and equally idempotent -- TG keeps
+// only the last button, so the two calls are alternatives, never a pair.
+//
+// Scope note: this sets the DEFAULT button, which TG shows in private chats
+// with the bot. Group and forum-topic chats do not render it at all, so the
+// per-topic operator surface (reply keyboards, inline fallbacks, slash
+// commands from setMyCommands) is untouched by this call.
+func (c *Client) SetWebAppMenuButton(ctx context.Context, text, url string) error {
+	body, _ := json.Marshal(setChatMenuButtonReq{MenuButton: menuButton{
+		Type:   "web_app",
+		Text:   text,
+		WebApp: &menuWebAppURL{URL: url},
+	}})
 	return c.call(ctx, "setChatMenuButton", body, nil)
 }
 

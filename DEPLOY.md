@@ -168,7 +168,7 @@ The wizard compares `wizard.toml`, backend `/healthz`, and the latest GitHub rel
 English:
 
 - The backend registers two command surfaces at startup: the default operator command set and a scoped admin command set.
-- The backend also sets the bot chat menu button to Telegram's `commands` menu, so clients show the blue `Menu` button next to the input bar when supported.
+- The backend also sets the bot chat menu button on every start. With `public_base_url` on HTTPS it becomes a `web_app` button opening the mini app at `<public_base_url>/miniapp/`; without it (or on plain HTTP, which Telegram refuses to open as a web app) it falls back to Telegram's `commands` menu. Either way the button is re-applied at startup, so a button set by hand in BotFather does not survive a restart — change `public_base_url` instead.
 - The default operator scope intentionally excludes admin-only commands, so operators on desktop clients see only topic-safe actions.
 - Router-topic menus are generated from the same menu registry as reply keyboards, compat inline keyboards, slash commands, and operator help.
 - `/menu` and `/keyboard` re-send both menu surfaces in the active router topic: first the bottom reply keyboard, then the visible inline fallback.
@@ -177,6 +177,7 @@ English:
 Русский:
 
 - Backend при старте регистрирует две поверхности команд: обычную операторскую и scoped admin-команды.
+- Кнопка меню приватного чата на каждом старте ставится заново: при `public_base_url` по HTTPS это `web_app`-кнопка «Открыть приложение» на `<public_base_url>/miniapp/`, иначе -- список команд. Кнопка, выставленная руками в BotFather, до следующего рестарта не доживёт. Топиков в группе это не касается: TG показывает кнопку меню только в приватном чате.
 - В default scope нет админских команд, поэтому операторы в desktop-клиентах видят только безопасные действия текущего топика.
 - Видимое меню топика строится из общего registry: из него же собираются reply keyboard, compat inline keyboard, slash-команды и операторская справка.
 - `/menu` и `/keyboard` заново присылают актуальное меню в текущий топик роутера.

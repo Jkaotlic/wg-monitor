@@ -89,7 +89,16 @@ func main() {
 	if err := tgClient.SetMyCommands(smcCtx, telegramOperatorCommandMenu()); err != nil {
 		logger.Warn("setMyCommands operator failed (non-fatal)", "err", err)
 	}
-	if err := tgClient.SetCommandsMenuButton(smcCtx); err != nil {
+	// Кнопка меню приватного чата ведёт в мини-апп, когда он снаружи доступен,
+	// и остаётся списком команд, когда нет. Ставится на каждом старте намеренно:
+	// иначе кнопка, выставленная руками через BotFather, жила бы до первого
+	// рестарта и молча пропадала. Групповые топики этим не задеты -- TG
+	// показывает кнопку меню только в приватном чате с ботом.
+	if miniURL := miniAppMenuURL(cfg.PublicBaseURL); miniURL != "" {
+		if err := tgClient.SetWebAppMenuButton(smcCtx, MiniAppMenuButtonText, miniURL); err != nil {
+			logger.Warn("setChatMenuButton web_app failed (non-fatal)", "err", err, "url", miniURL)
+		}
+	} else if err := tgClient.SetCommandsMenuButton(smcCtx); err != nil {
 		logger.Warn("setChatMenuButton commands failed (non-fatal)", "err", err)
 	}
 	adminCommands := telegramAdminCommandMenu()

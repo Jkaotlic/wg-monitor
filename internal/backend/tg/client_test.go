@@ -602,3 +602,63 @@ func TestEditMessageReplyMarkup(t *testing.T) {
 		t.Errorf("message_id = %v, want 555", captured["message_id"])
 	}
 }
+
+// Мини-апп стал основной поверхностью, и кнопка меню в приватном чате должна
+// открывать его, а не список слэш-команд. Проверяем ровно форму запроса:
+// TG принимает web_app-кнопку только с непустым text и вложенным web_app.url.
+func TestSetWebAppMenuButton_PostsWebAppButton(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/setChatMenuButton") {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{BaseURL: ts.URL + "/bot", Token: "T", HTTP: ts.Client()}
+	if err := c.SetWebAppMenuButton(context.Background(), "Открыть приложение", "https://wg.example.test/miniapp/"); err != nil {
+		t.Fatalf("SetWebAppMenuButton: %v", err)
+	}
+	var got struct {
+		MenuButton struct {
+			Type   string `json:"type"`
+			Text   string `json:"text"`
+			WebApp struct {
+				URL string `json:"url"`
+			} `json:"web_app"`
+		} `json:"menu_button"`
+	}
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("unmarshal body: %v\nbody: %s", err, gotBody)
+	}
+	if got.MenuButton.Type != "web_app" {
+		t.Fatalf("menu_button.type = %q, want web_app", got.MenuButton.Type)
+	}
+	if got.MenuButton.Text != "Открыть приложение" {
+		t.Fatalf("menu_button.text = %q", got.MenuButton.Text)
+	}
+	if got.MenuButton.WebApp.URL != "https://wg.example.test/miniapp/" {
+		t.Fatalf("menu_button.web_app.url = %q", got.MenuButton.WebApp.URL)
+	}
+}
+
+// Кнопка команд не должна утащить с собой пустые text/web_app: TG на
+// type=commands с лишними полями отвечает ошибкой, а не игнорирует их.
+func TestSetCommandsMenuButton_OmitsWebAppFields(t *testing.T) {
+	var gotBody []byte
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
+	}))
+	defer ts.Close()
+
+	c := &Client{BaseURL: ts.URL + "/bot", Token: "T", HTTP: ts.Client()}
+	if err := c.SetCommandsMenuButton(context.Background()); err != nil {
+		t.Fatalf("SetCommandsMenuButton: %v", err)
+	}
+	if strings.Contains(string(gotBody), "web_app") || strings.Contains(string(gotBody), `"text"`) {
+		t.Fatalf("commands button carries web_app/text: %s", gotBody)
+	}
+}
