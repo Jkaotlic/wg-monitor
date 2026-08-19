@@ -72,9 +72,27 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
+      # UPX comes from its own GitHub release, not from apt: `apt-get update`
+      # on the hosted runners hangs for tens of minutes often enough to stall a
+      # release (v0.15.0 lost two attempts to it, one of them 55 minutes on a
+      # single leg). The tarball is pinned by sha256 for the same reason the
+      # actions above are pinned by commit SHA -- a re-uploaded asset must not
+      # silently change what packs our agent binaries.
       - name: Install UPX
         if: matrix.upx
-        run: sudo apt-get update && sudo apt-get install -y upx-ucl
+        env:
+          UPX_VERSION: 5.2.0
+          UPX_SHA256: 3db5d3294707439db97866feab8d75d800f028f48481a40547411824da4288a1
+        run: |
+          set -euo pipefail
+          tarball="upx-${UPX_VERSION}-amd64_linux.tar.xz"
+          curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 \
+            "https://github.com/upx/upx/releases/download/v${UPX_VERSION}/${tarball}" \
+            -o "/tmp/${tarball}"
+          echo "${UPX_SHA256}  /tmp/${tarball}" | sha256sum -c -
+          tar -xJf "/tmp/${tarball}" -C /tmp
+          sudo install -m 0755 "/tmp/upx-${UPX_VERSION}-amd64_linux/upx" /usr/local/bin/upx
+          upx --version | head -1
 
       - name: Build
         env:
