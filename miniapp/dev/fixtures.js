@@ -366,6 +366,14 @@ function commandResult(id) {
       output: ['🩺 HR Neo', '✅ служба — работает, 2.4.0', '✅ правила — 26 активны', '✅ dnsmasq — перезапущен 2 ч назад'].join('\n'),
     }
   }
+  if (lastAction === 'tunnel_power') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1100,
+      output: `туннель ${lastArgs.tunnel_id ?? ''} ${lastArgs.on ? 'запущен' : 'остановлен'}`,
+    }
+  }
   if (lastAction === 'tunnel_enable' || lastAction === 'tunnel_disable') {
     return {
       id,

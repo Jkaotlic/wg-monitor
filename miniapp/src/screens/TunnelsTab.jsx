@@ -43,15 +43,16 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   const traffic = useCommand(routerID)
   const trafficOut = traffic.result?.status === 'ok' ? trafficSummary(traffic.result.output) : null
 
-  // Включить и выключить линию можно только через NDMS-интерфейс: агент
-  // делает это ndmc'ом, и у opkg-туннеля такого имени нет вовсе. Кнопки под
-  // ним поэтому не будет -- вместо неё честное отсутствие способа.
+  // Включение и выключение идёт по идентификатору туннеля (tunnel_power,
+  // awg-manager control/start|stop). Прежняя пара ndmc-действий умела только
+  // NDMS-интерфейсы, и у opkg-туннеля кнопки не было вовсе -- хотя половина
+  // туннелей живого роутера именно такие.
   //
   // Активную линию отсюда не выключают: она несёт трафик прямо сейчас, и
   // «выключить» на ней -- не переключатель, а обрыв. Для неё на главном
   // экране есть перезапуск.
   const toggleButton = (t) => {
-    if (!openSheet || !t.ndmsName || t.live === 'unknown') return null
+    if (!openSheet || t.live === 'unknown') return null
     const up = t.live === 'up'
     return (
       <button
@@ -65,8 +66,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
               body: up
                 ? `Роутер опустит интерфейс. Трафик, который шёл через «${t.name}», пойдёт по следующему звену цепочки или напрямую. Включить обратно — этой же кнопкой.`
                 : `Роутер поднимет интерфейс. Если он стоит в цепочке выше работающего, трафик перейдёт на него.`,
-              action: up ? 'tunnel_disable' : 'tunnel_enable',
-              args: { tunnel_id: t.tunnelID ?? t.id },
+              action: 'tunnel_power',
+              args: { tunnel_id: t.tunnelID ?? t.id, on: !up },
               buttonLabel: up ? 'Выключить' : 'Включить',
               danger: up,
               asleep,

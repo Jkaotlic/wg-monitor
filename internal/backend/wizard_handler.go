@@ -581,6 +581,7 @@ var wizardCommandAllowlist = map[string]bool{
 	"version_audit":         true,
 	"tunnel_enable":         true,
 	"tunnel_disable":        true,
+	"tunnel_power":          true,
 	"tunnel_restart":        true,
 	"tunnel_delete":         true,
 	"update_backend_url":    true,
@@ -1039,6 +1040,14 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"ndms_name": ndms}, true
+	case "tunnel_power":
+		tunnelID := strings.TrimSpace(argString(args, "tunnel_id"))
+		if !wizardRouteTargetIDLooksSafe(tunnelID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe tunnel id")
+			return nil, false
+		}
+		on, _ := args["on"].(bool)
+		return map[string]any{"tunnel_id": tunnelID, "on": on}, true
 	case "tunnel_traffic":
 		// Период уезжает в query-строку awg-manager'а. Словарь периодов
 		// принадлежит роутеру, и своей копии здесь нет -- есть запрет на то,

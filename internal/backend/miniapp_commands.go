@@ -102,6 +102,11 @@ var miniappCommandAllowlist = map[string]bool{
 	// только забирает.
 	"tunnel_traffic": true,
 
+	// Включение и выключение туннеля по идентификатору, через awg-manager.
+	// Обратимо своей же парой и работает там, где ndmc бессилен: у
+	// opkg-туннеля имени в NDMS нет вовсе.
+	"tunnel_power": true,
+
 	// Прошивка (фаза D2). Чтение состояния -- всем, у кого есть доступ;
 	// установка -- только владельцу (miniappOwnerOnlyActions), потому что
 	// она необратима и перезагружает роутер. Оператору дали смотреть и
@@ -127,6 +132,7 @@ var miniappTunnelArgActions = map[string]bool{
 	"tunnel_disable":   true,
 	"pingcheck_toggle": true,
 	"tunnel_traffic":   true,
+	"tunnel_power":     true,
 }
 
 // miniappNDMSRequiredActions -- те из них, которые без имени NDMS-интерфейса
@@ -206,6 +212,13 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			if req.Action == "tunnel_traffic" {
 				period, _ := req.Args["period"].(string)
 				resolved["period"] = period
+			}
+			// on -- выбор человека: включить или выключить. Топология тут ни
+			// при чём, и имя NDMS-интерфейса действию не нужно вовсе.
+			if req.Action == "tunnel_power" {
+				on, _ := req.Args["on"].(bool)
+				delete(resolved, "ndms_name")
+				resolved["on"] = on
 			}
 			commandArgs = resolved
 		}

@@ -210,3 +210,41 @@ func TestMiniappFirmwareInstallAllowedForOwner(t *testing.T) {
 		t.Fatalf("аргументов у установки нет вовсе: %+v", sink.enqueued[0].Args)
 	}
 }
+
+// tunnel_power адресуется идентификатором и работает у любого туннеля, в том
+// числе opkg -- у него имени в NDMS нет вовсе. Идентификатор по-прежнему
+// разрешается из событий этого роутера, «on» -- выбор человека.
+func TestMiniappTunnelPowerWorksForOpkgTunnel(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg11", "")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID,
+		`{"action":"tunnel_power","args":{"tunnel_id":"awg11","on":false}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	args := sink.enqueued[0].Args
+	if args["tunnel_id"] != "awg11" || args["on"] != false {
+		t.Fatalf("args = %+v", args)
+	}
+	if _, present := args["ndms_name"]; present {
+		t.Fatalf("ndms_name тут не нужен и не должен уезжать: %+v", args)
+	}
+}
+
+func TestMiniappTunnelPowerRejectsUnknownTunnel(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID,
+		`{"action":"tunnel_power","args":{"tunnel_id":"awg99","on":true}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
+	}
+}

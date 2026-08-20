@@ -788,6 +788,39 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "tunnel_power":
+		// Включение и выключение туннеля ПО ИДЕНТИФИКАТОРУ, через
+		// awg-manager. Прежняя пара tunnel_enable/tunnel_disable ходит
+		// ndmc'ом и потому умеет только NDMS-интерфейсы; половина туннелей
+		// живого роутера -- opkg, у них имени в NDMS нет вовсе. Мастеру
+		// замены конфига это нужно на шагах включения и отката, а экрану --
+		// чтобы кнопка была и у opkg-туннеля.
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		tunnelID, _ := cmd.Args["tunnel_id"].(string)
+		tunnelID = strings.TrimSpace(tunnelID)
+		if tunnelID == "" {
+			return "err", "tunnel_power: tunnel_id is required", payload
+		}
+		on, _ := cmd.Args["on"].(bool)
+		var err error
+		if on {
+			err = r.AwgClient.StartTunnel(ctx, tunnelID)
+		} else {
+			err = r.AwgClient.StopTunnel(ctx, tunnelID)
+		}
+		if err != nil {
+			return "err", fmt.Sprintf("tunnel_power %s: %v", tunnelID, err), payload
+		}
+		if r.ForceRecheck != nil {
+			r.ForceRecheck(ctx)
+		}
+		state := "остановлен"
+		if on {
+			state = "запущен"
+		}
+		return "ok", fmt.Sprintf("туннель %s %s", tunnelID, state), payload
 	case "tunnel_traffic":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

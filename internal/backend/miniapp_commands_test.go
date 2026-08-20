@@ -41,6 +41,9 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
 		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
 		"firmware_status", "firmware_install",
+		// Включение/выключение по идентификатору: работает и там, где ndmc
+		// бессилен (opkg-туннель без имени в NDMS).
+		"tunnel_power",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -423,6 +426,9 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
 		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
 		"firmware_status", "firmware_install",
+		// Включение/выключение по идентификатору: работает и там, где ndmc
+		// бессилен (opkg-туннель без имени в NDMS).
+		"tunnel_power",
 	} {
 		if !miniappCommandAllowlist[action] {
 			t.Errorf("%s должен быть разрешён мини-аппу", action)
