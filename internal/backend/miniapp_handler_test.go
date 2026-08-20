@@ -494,3 +494,53 @@ func TestMiniappRoutersEmptyIsArrayNotNull(t *testing.T) {
 		t.Fatalf("пустой список должен быть [], получили %s", rec.Body.String())
 	}
 }
+
+// Экран флота показывает пять служб точками -- те же пять ламп, что и на
+// экране роутера. Значит, список роутеров обязан нести их состояние: без
+// него экран либо врёт цветом, либо ходит за каждым роутером отдельным
+// запросом уже после отрисовки.
+func TestMiniappRoutersCarryServiceDots(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now()
+	for name, status := range map[string]string{
+		"dns": "ok", "external_reach": "ok", "hydraroute": "fail",
+		"awg_manager": "ok", "tunnels": "ok",
+	} {
+		if err := d.Events().Insert(ownedID, name, status, "{}", now); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+	// Проверки туннелей -- это антенны, а не лампы: в точках им места нет.
+	if err := d.Events().Insert(ownedID, "tunnel_awg12", "fail", `{"tunnel_id":"awg12"}`, now); err != nil {
+		t.Fatalf("insert tunnel: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRoutersResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Routers) != 1 {
+		t.Fatalf("routers = %+v", resp.Routers)
+	}
+	byName := make(map[string]string, len(resp.Routers[0].Checks))
+	for _, c := range resp.Routers[0].Checks {
+		byName[c.CheckName] = c.Status
+	}
+	if len(byName) != 5 {
+		t.Fatalf("точек должно быть пять (лампы), got %+v", byName)
+	}
+	if byName["hydraroute"] != "fail" || byName["dns"] != "ok" {
+		t.Fatalf("checks = %+v", byName)
+	}
+	if _, present := byName["tunnel_awg12"]; present {
+		t.Fatal("проверка туннеля -- антенна, а не лампа: в списке точек её быть не должно")
+	}
+}

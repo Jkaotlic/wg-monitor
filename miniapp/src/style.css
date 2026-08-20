@@ -2221,3 +2221,70 @@ body {
 .sheet-confirm input {
   min-height: 44px;
 }
+
+/* ============================================================
+   Экран флота
+   ============================================================ */
+.fleet-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  width: 100%;
+  padding: var(--sp-3) 14px;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.fleet-row:last-of-type { border-bottom: none; }
+
+.fleet-row:hover,
+.fleet-row:focus-visible {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Открытый сейчас роутер помечен полосой слева, а не цветом строки: цвет в
+   этом списке уже занят состоянием. */
+.fleet-row-current {
+  box-shadow: inset 2px 0 0 var(--sig);
+}
+
+.fleet-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.fleet-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.fleet-sub {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
+.fleet-dots {
+  display: flex;
+  gap: 4px;
+  margin-top: 7px;
+}
+
+.fleet-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--led-off);
+}
+
+.fleet-dot-ok { background: var(--ok); }
+.fleet-dot-warn { background: var(--warn); }
+.fleet-dot-danger { background: var(--bad); }

@@ -96,6 +96,50 @@ type miniappRouterSummary struct {
 	LastSeenAt      *time.Time          `json:"last_seen_at,omitempty"`
 	LastSeenAgeSec  *int64              `json:"last_seen_age_sec,omitempty"`
 	ActiveIncidents []dashboardIncident `json:"active_incidents,omitempty"`
+	// Checks -- состояние пяти служб роутера, тех самых, что на его экране
+	// нарисованы лампами. Экран флота показывает их точками, и без них он
+	// либо красит строку наугад, либо ходит за каждым роутером отдельным
+	// запросом уже после отрисовки.
+	Checks []miniappCheckDot `json:"checks,omitempty"`
+}
+
+// miniappCheckDot -- имя службы и её состояние, без деталей: точке на экране
+// флота больше ничего не нужно, а факты проверок живут на своём экране.
+type miniappCheckDot struct {
+	CheckName string `json:"check_name"`
+	Status    string `json:"status"`
+}
+
+// miniappLampChecks -- те же пять служб, что рисует прибор на экране роутера
+// (LAMP_ORDER в RouterDevice.jsx). Список фиксирован намеренно: точек ровно
+// пять, и лишняя строка событий не должна превращаться в шестую точку,
+// которую человеку никто не объяснял.
+var miniappLampChecks = map[string]bool{
+	"dns":            true,
+	"external_reach": true,
+	"hydraroute":     true,
+	"awg_manager":    true,
+	"tunnels":        true,
+}
+
+// miniappServiceDots читает состояние пяти служб одного роутера.
+//
+// Запрос на роутер: на флоте оператора их восемь, и восемь дешёвых выборок
+// при открытии списка честнее одной общей, которой в репозитории нет. Если
+// флот вырастет до сотен, здесь понадобится один запрос с группировкой.
+func miniappServiceDots(d Deps, routerID int64) []miniappCheckDot {
+	rows, err := d.DB.Events().LatestEventsByPrefixSince(routerID, "", time.Now().UTC().Add(-miniappEventsWindow))
+	if err != nil {
+		return nil
+	}
+	out := make([]miniappCheckDot, 0, len(miniappLampChecks))
+	for _, row := range rows {
+		if !miniappLampChecks[row.CheckName] {
+			continue
+		}
+		out = append(out, miniappCheckDot{CheckName: row.CheckName, Status: row.Status})
+	}
+	return out
 }
 
 func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary {
@@ -132,7 +176,9 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 		resp := miniappRoutersResp{Routers: []miniappRouterSummary{}}
 		if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
 			for _, a := range summary.Agents {
-				resp.Routers = append(resp.Routers, miniappRouterSummaryFromAgent(a))
+				row := miniappRouterSummaryFromAgent(a)
+				row.Checks = miniappServiceDots(d, a.ID)
+				resp.Routers = append(resp.Routers, row)
 			}
 		} else {
 			allowed, err := d.DB.AccessibleRouterIDs(telegramUserID)
@@ -146,7 +192,9 @@ func miniappRoutersHandler(d Deps) http.HandlerFunc {
 			}
 			for _, a := range summary.Agents {
 				if allowedSet[a.ID] {
-					resp.Routers = append(resp.Routers, miniappRouterSummaryFromAgent(a))
+					row := miniappRouterSummaryFromAgent(a)
+					row.Checks = miniappServiceDots(d, a.ID)
+					resp.Routers = append(resp.Routers, row)
 				}
 			}
 		}

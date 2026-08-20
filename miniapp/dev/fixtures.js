@@ -10,6 +10,7 @@
 const nowISO = () => new Date().toISOString()
 const agoISO = (sec) => new Date(Date.now() - sec * 1000).toISOString()
 
+// checks -- пять служб точками на экране флота (miniappCheckDot).
 export const ROUTERS = [
   {
     id: 1,
@@ -18,9 +19,37 @@ export const ROUTERS = [
     last_seen_at: agoISO(12),
     last_seen_age_sec: 12,
     active_incidents: [{ check_name: 'hydraroute', fail_count: 3 }],
+    checks: [
+      { check_name: 'dns', status: 'ok' },
+      { check_name: 'external_reach', status: 'ok' },
+      { check_name: 'hydraroute', status: 'fail' },
+      { check_name: 'awg_manager', status: 'ok' },
+      { check_name: 'tunnels', status: 'ok' },
+    ],
   },
-  { id: 2, nickname: 'Дача', status: 'online', last_seen_at: agoISO(40), last_seen_age_sec: 40 },
-  { id: 3, nickname: 'Офис', status: 'offline', last_seen_at: agoISO(7200), last_seen_age_sec: 7200 },
+  {
+    id: 2,
+    nickname: 'Дача',
+    status: 'online',
+    last_seen_at: agoISO(40),
+    last_seen_age_sec: 40,
+    checks: [
+      { check_name: 'dns', status: 'ok' },
+      { check_name: 'external_reach', status: 'ok' },
+      { check_name: 'hydraroute', status: 'ok' },
+      { check_name: 'awg_manager', status: 'ok' },
+      { check_name: 'tunnels', status: 'ok' },
+    ],
+  },
+  {
+    id: 3,
+    nickname: 'Офис',
+    status: 'offline',
+    last_seen_at: agoISO(7200),
+    last_seen_age_sec: 7200,
+    // Роутер молчит два часа: про службы он ничего не сказал, и точки серые.
+    checks: [],
+  },
 ]
 
 const TUNNELS = [
