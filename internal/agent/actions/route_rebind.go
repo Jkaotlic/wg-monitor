@@ -53,8 +53,16 @@ func RouteRebind(ctx context.Context, c *awgmgr.Client, srcID, dstID string) (st
 		}
 	}
 
+	// Политики, у которых есть СВОЯ цепочка интерфейсов, держат привязку у
+	// себя: правило такой политики привязано не интерфейсом в правиле, а
+	// порядком звеньев политики. Переписать ему интерфейс -- это сменить
+	// модель маршрутизации, а не перенести правило; менять порядок звеньев
+	// умеет route_policy_promote. Найдено на живом роутере 20.08.2026, где
+	// флагом defaultRoute помечены все четыре туннеля разом.
+	policyOwnsBinding := hrPoliciesWithOwnChain(ctx, c)
+
 	hrTouched := false
-	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, dstDNSBindID, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces)
+	res.DNS, res.HRNeo, hrTouched = rebindDNS(ctx, c, srcAliases, dstIface, dstDNSBindID, srcIsDefaultRoute, srcIsOther, defaultIface, knownIfaces, policyOwnsBinding)
 	res.Static = rebindStatic(ctx, c, srcAliases, dstIface, srcIsOther, knownIfaces)
 
 	if err := c.RoutingRefresh(ctx); err != nil {
@@ -125,7 +133,7 @@ func routeKnownIfaces(ctx context.Context, c *awgmgr.Client) (map[string]bool, s
 //
 // Returns: total category result, the HRNeo sub-count (subset of total),
 // and whether any hydraroute rule was actually written.
-func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface, dstDNSBindID string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
+func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool, dstIface, dstDNSBindID string, srcIsDefaultRoute bool, srcIsOther bool, defaultIface string, knownIfaces map[string]bool, policyOwnsBinding map[string]bool) (total wire.CategoryResult, hrNeo wire.CategoryResult, hrTouched bool) {
 	all, err := c.ListDNSRoutes(ctx)
 	if err != nil {
 		total.Failed = 1
@@ -144,7 +152,10 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 			didChange = true
 		}
 		if !didChange && !srcIsOther {
-			if newPolicyIfaces, changed := rebindHRNeoPolicyInterfaces(r, srcAliases, dstIface, srcIsDefaultRoute); changed {
+			// Привязка правила политики принадлежит политике: у неё своя
+			// цепочка, и дописывать интерфейс в само правило нельзя.
+			attachToRule := srcIsDefaultRoute && !policyOwnsBinding[strings.ToLower(strings.TrimSpace(r.HRPolicyName))]
+			if newPolicyIfaces, changed := rebindHRNeoPolicyInterfaces(r, srcAliases, dstIface, attachToRule); changed {
 				updated.HRPolicyInterfaces = newPolicyIfaces
 				ensureHRNeoPolicyDefaults(&updated)
 				didChange = true
@@ -169,6 +180,28 @@ func rebindDNS(ctx context.Context, c *awgmgr.Client, srcAliases map[string]bool
 		}
 	}
 	return
+}
+
+// hrPoliciesWithOwnChain -- имена политик, у которых есть собственная цепочка
+// интерфейсов. Лучшее усилие: если политики не читаются (старая сборка, сбой),
+// множество пустое, и поведение остаётся прежним -- перенос по-прежнему
+// дописывает интерфейс правилу, как делал до модели политик.
+func hrPoliciesWithOwnChain(ctx context.Context, c *awgmgr.Client) map[string]bool {
+	out := map[string]bool{}
+	policies, err := c.AccessPolicies(ctx)
+	if err != nil {
+		return out
+	}
+	for _, p := range policies {
+		if len(p.Interfaces) == 0 {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(p.Name))
+		if name != "" {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 func isMovableHRNeoFallthrough(r awgmgr.DNSRoute) bool {

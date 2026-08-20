@@ -603,3 +603,117 @@ func TestRouteRebindCommandStatus_TreatsCategoryErrorsAsPartial(t *testing.T) {
 		t.Fatalf("status = %q, want partial for maintenance error", got)
 	}
 }
+
+// Найдено на живом роутере 20.08.2026. На роутере с моделью политик привязка
+// правила живёт НЕ в правиле, а в цепочке интерфейсов политики. Ветка
+// «исходный туннель помечен default_route» дописывала таким правилам
+// собственный интерфейс -- то есть перенос правил менял саму модель
+// маршрутизации, о чём человеку никто не говорил. А на домашнем роутере
+// флагом default_route помечены все четыре туннеля разом.
+func TestRouteRebind_LeavesPolicyBoundRulesToThePolicy(t *testing.T) {
+	updated := map[string]bool{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"awg10","name":"main","iface":"opkgtun10","type":"managed","status":"up","available":true,"defaultRoute":true},
+			{"id":"awg20","name":"spare","iface":"nwg0","ndmsName":"Wireguard0","type":"managed","status":"up","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "awg10" {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"main","interfaceName":"opkgtun10","enabled":true,"defaultRoute":true}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg20","name":"spare","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true}}`))
+	})
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		// Политика несёт свою цепочку -- значит привязка её, а не правила.
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"name":"HydraRoute","interfaces":[{"name":"OpkgTun12","order":0},{"name":"OpkgTun10","order":1}]}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:AIgeo","name":"AIgeo","backend":"hydraroute","hrPolicyName":"HydraRoute","enabled":true,
+			 "domains":["geosite:OPENAI"],"manualDomains":["geosite:OPENAI"]}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/update", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if id, _ := body["id"].(string); id != "" {
+			updated[id] = true
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if _, err := RouteRebind(context.Background(), awgmgr.New(srv.URL), "awg10", "awg20"); err != nil {
+		t.Fatalf("RouteRebind: %v", err)
+	}
+	if updated["hr:AIgeo"] {
+		t.Fatal("правило политики переписано в привязку к интерфейсу: перенос сменил модель маршрутизации")
+	}
+}
+
+// Старый роутер без модели политик: там привязки в политике нет, и ветка
+// fall-through остаётся единственным способом перенести такие правила.
+func TestRouteRebind_StillMovesFallthroughRulesWithoutPolicyChain(t *testing.T) {
+	updated := map[string]bool{}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"awg10","name":"main","iface":"opkgtun10","type":"managed","status":"up","available":true,"defaultRoute":true},
+			{"id":"awg20","name":"spare","iface":"nwg0","type":"managed","status":"up","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/tunnels/get", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		if id == "awg10" {
+			_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg10","name":"main","interfaceName":"opkgtun10","enabled":true,"defaultRoute":true}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"success":true,"data":{"id":"awg20","name":"spare","interfaceName":"nwg0","ndmsName":"Wireguard0","enabled":true}}`))
+	})
+	mux.HandleFunc("/api/routing/access-policies", func(w http.ResponseWriter, r *http.Request) {
+		// Политик нет вовсе -- ровно как на сборках до модели политик.
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"hr:AIgeo","name":"AIgeo","backend":"hydraroute","hrPolicyName":"HydraRoute","enabled":true,
+			 "domains":["geosite:OPENAI"],"manualDomains":["geosite:OPENAI"]}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/update", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if id, _ := body["id"].(string); id != "" {
+			updated[id] = true
+		}
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	if _, err := RouteRebind(context.Background(), awgmgr.New(srv.URL), "awg10", "awg20"); err != nil {
+		t.Fatalf("RouteRebind: %v", err)
+	}
+	if !updated["hr:AIgeo"] {
+		t.Fatal("на роутере без модели политик правило обязано переехать")
+	}
+}
