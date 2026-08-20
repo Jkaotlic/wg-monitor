@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchTimeline } from '../api.js'
-import { EVENT_FILTERS, filterEvents, groupByDay } from '../events.js'
-import { checkLabel, checkStateLabel } from '../labels.js'
+import { EVENT_FILTERS, filterEvents, groupByDay, annotateEvents } from '../events.js'
 
 const DAYS = 7
 
@@ -14,12 +13,6 @@ function dayTitle(day) {
 
 function time(ts) {
   return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-}
-
-function tone(status) {
-  if (status === 'ok') return 'ok'
-  if (status === 'fail') return 'danger'
-  return 'warn'
 }
 
 // Лента за неделю: что происходило, а не что происходит сейчас. Отвечает на
@@ -43,7 +36,10 @@ export function EventsTab({ routerID, routerName }) {
   if (error) return <p class="state state-error">{error}</p>
   if (data == null) return <p class="state">Загрузка…</p>
 
-  const shown = filterEvents(data.events ?? [], filter)
+  // Длительность считается ДО фильтра: пара «упало -- поднялось» может
+  // разъехаться по фильтрам, и посчитанная по отфильтрованной ленте она
+  // назвала бы соседнее падение той же проверки.
+  const shown = filterEvents(annotateEvents(data.events ?? []), filter)
   const groups = groupByDay(shown)
 
   return (
@@ -70,6 +66,13 @@ export function EventsTab({ routerID, routerName }) {
         <p class="state">Показаны последние {data.events.length} событий — их было больше.</p>
       )}
 
+      {groups.length > 0 && (
+        <p class="hint">
+          <b>Красная точка</b> — человек это почувствовал. Жёлтая — знаем, что просрочено, но
+          заметить было нечего. Лаймовая — стало снова работать.
+        </p>
+      )}
+
       {groups.length === 0 ? (
         <p class="state">
           {filter === 'all'
@@ -82,13 +85,13 @@ export function EventsTab({ routerID, routerName }) {
             <h2 class="section-title">{dayTitle(g.day)}</h2>
             <ul class="card list-reset">
               {g.events.map((e, i) => (
-                <li key={`${e.check_name}-${e.ts}-${i}`} class="row event-row">
-                  <span class={`event-dot event-dot-${tone(e.status)}`} />
-                  <span class="event-main">
-                    <span class="row-title">{checkLabel(e.check_name)}</span>
-                    <span class="event-detail">{checkStateLabel(e.status)}</span>
+                <li key={`${e.check_name}-${e.ts}-${i}`} class="ev">
+                  <time class="ev-time">{time(e.ts)}</time>
+                  <span class="ev-main">
+                    {e.title}
+                    <u class="ev-code">{e.code}</u>
                   </span>
-                  <span class="event-time">{time(e.ts)}</span>
+                  <span class={`ev-dot ev-dot-${e.tone}`} />
                 </li>
               ))}
             </ul>

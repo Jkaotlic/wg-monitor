@@ -2033,3 +2033,78 @@ body {
   gap: var(--sp-2);
   margin-top: var(--sp-1);
 }
+
+/* Подпись под главным действием: чем эта кнопка обернётся. Мелким, потому
+   что читают её один раз, а живёт она рядом с кнопкой навсегда. */
+.hint {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.hint b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Подвал карточки, когда он несёт плохую новость: «наружу виден тот же
+   адрес» -- это вывод, а не примечание. */
+.card-foot-bad {
+  color: var(--bad);
+}
+
+/* ============================================================
+   Журнал событий (.ev-анатомия макета)
+   ============================================================ */
+.ev {
+  display: flex;
+  gap: var(--sp-3);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ev:last-child { border-bottom: none; }
+
+/* Время слева фиксированной колонкой: строки читаются столбиком, и прыгающая
+   ширина времени ломает этот столбик на каждой второй строке. */
+.ev-time {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  color: var(--dim);
+  width: 36px;
+  flex: none;
+  padding-top: 2px;
+}
+
+.ev-main {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+}
+
+.ev-code {
+  display: block;
+  text-decoration: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xxs);
+  color: var(--dim);
+  margin-top: 3px;
+}
+
+/* Точка справа, а не слева: слева время, и две колонки служебного перед
+   фразой отодвинули бы саму новость на треть экрана. */
+.ev-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  margin-top: 6px;
+  background: var(--led-off);
+}
+
+.ev-dot-sig { background: var(--sig); }
+.ev-dot-warn { background: var(--warn); }
+.ev-dot-bad { background: var(--bad); }

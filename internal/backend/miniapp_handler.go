@@ -200,6 +200,10 @@ type miniappCheckStatus struct {
 	CheckName string `json:"check_name"`
 	Status    string `json:"status"`
 	Timestamp string `json:"ts"`
+	// Facts — измеримое, что проверка узнала (miniapp_check_facts.go). Белый
+	// список, а не details_json как есть; nil означает «агент не сказал», и
+	// подменять его нулями нельзя.
+	Facts *miniappCheckFacts `json:"facts,omitempty"`
 }
 
 type miniappRouterEventsResp struct {
@@ -242,6 +246,7 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 				CheckName: row.CheckName,
 				Status:    row.Status,
 				Timestamp: row.TS.UTC().Format(time.RFC3339),
+				Facts:     miniappCheckFactsFrom(row.CheckName, row.DetailsJSON),
 			})
 			if tu, ok := miniappTunnelFromEvent(row); ok {
 				resp.Tunnels = append(resp.Tunnels, tu)

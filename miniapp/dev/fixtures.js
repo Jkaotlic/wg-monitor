@@ -63,11 +63,13 @@ const TUNNELS = [
   },
 ]
 
+// facts -- белый список измеримого (miniapp_check_facts.go). Формы срисованы
+// с него же: без них экран диагностики показывал бы только «когда мерили».
 const CHECKS = [
-  { check_name: 'dns', status: 'ok', ts: agoISO(30) },
-  { check_name: 'external_reach', status: 'ok', ts: agoISO(30) },
-  { check_name: 'hydraroute', status: 'fail', ts: agoISO(90) },
-  { check_name: 'awg_manager', status: 'ok', ts: agoISO(30) },
+  { check_name: 'dns', status: 'ok', ts: agoISO(30), facts: { resolvers: 3, resolvers_failed: 1, rkn_probed: 2, rkn_suspect: 0 } },
+  { check_name: 'external_reach', status: 'ok', ts: agoISO(30), facts: { targets_total: 3, targets_failed: 0 } },
+  { check_name: 'hydraroute', status: 'fail', ts: agoISO(90), facts: { routes_hr_neo: 26, routes_ndms: 2, routes_static: 0, active_backend: 'hydraroute' } },
+  { check_name: 'awg_manager', status: 'ok', ts: agoISO(30), facts: { version: '2.17.2', firmware: '4.3.7' } },
   { check_name: 'tunnels', status: 'ok', ts: agoISO(30) },
   { check_name: 'tunnel_awg12', status: 'ok', ts: agoISO(30) },
   { check_name: 'tunnel_awg10', status: 'ok', ts: agoISO(30) },
@@ -235,21 +237,21 @@ const ROUTE_TEMPLATES = {
   ],
 }
 
-// Последняя запрошенная команда: dev-сервер отвечает на опрос результата тем,
-// что соответствует действию, а не одной заглушкой на все случаи. Аргументы
-// хранятся вместе с действием: план добавления обязан отвечать про то, что
-// у него спросили, иначе превью на экране врёт.
-let lastAction = null
-let lastArgs = {}
+// Команды хранятся ПО СВОЕМУ ИДЕНТИФИКАТОРУ, а не одной «последней»: экран
+// диагностики пускает check_direct и check_via_tunnel одновременно, и общая
+// переменная отдала бы обоим ответ того, кто успел вторым, -- то есть один и
+// тот же адрес выхода с обеих сторон. Ровно та ошибка, которую этот экран и
+// должен ловить.
+const commands = new Map()
+let commandSeq = 0
 
-export function setLastAction(command) {
-  if (command && typeof command === 'object') {
-    lastAction = command.action ?? null
-    lastArgs = command.args ?? {}
-    return
-  }
-  lastAction = command
-  lastArgs = {}
+export function registerCommand(command) {
+  const id = `dev-${++commandSeq}`
+  commands.set(id, {
+    action: command && typeof command === 'object' ? command.action ?? null : command,
+    args: (command && typeof command === 'object' && command.args) || {},
+  })
+  return id
 }
 
 function targetType(value) {
@@ -290,17 +292,18 @@ function routeAddPlan(args) {
   }
 }
 
-function commandResult() {
+function commandResult(id) {
+  const { action: lastAction, args: lastArgs } = commands.get(id) ?? { action: null, args: {} }
   if (lastAction === 'route_templates') {
-    return { id: 'dev', status: 'ok', duration_ms: 310, output: JSON.stringify(ROUTE_TEMPLATES) }
+    return { id, status: 'ok', duration_ms: 310, output: JSON.stringify(ROUTE_TEMPLATES) }
   }
   if (lastAction === 'route_add_plan') {
-    return { id: 'dev', status: 'ok', duration_ms: 420, output: JSON.stringify(routeAddPlan(lastArgs)) }
+    return { id, status: 'ok', duration_ms: 420, output: JSON.stringify(routeAddPlan(lastArgs)) }
   }
   if (lastAction === 'route_add') {
     const plan = routeAddPlan(lastArgs)
     return {
-      id: 'dev',
+      id,
       status: 'ok',
       duration_ms: 780,
       output: JSON.stringify({ action: 'add', kind: plan.route.kind, route_id: 'hr:new', route_name: plan.route.name }),
@@ -308,7 +311,7 @@ function commandResult() {
   }
   if (lastAction === 'route_rebind') {
     return {
-      id: 'dev',
+      id,
       status: 'ok',
       duration_ms: 2100,
       output: JSON.stringify({
@@ -324,7 +327,7 @@ function commandResult() {
     // Ответ агента -- свежая политика: повышенное звено стало первым, но
     // трафик несёт по-прежнему живое (awg11), потому что awg10 выключен.
     return {
-      id: 'dev',
+      id,
       status: 'ok',
       duration_ms: 1600,
       output: JSON.stringify({
@@ -342,7 +345,7 @@ function commandResult() {
   }
   if (lastAction === 'route_delete_plan') {
     return {
-      id: 'dev',
+      id,
       status: 'ok',
       duration_ms: 140,
       output: JSON.stringify({
@@ -363,21 +366,21 @@ function commandResult() {
     }
   }
   if (lastAction === 'route_delete') {
-    return { id: 'dev', status: 'ok', duration_ms: 260, output: 'правило удалено' }
+    return { id, status: 'ok', duration_ms: 260, output: 'правило удалено' }
   }
   if (lastAction === 'route_status') {
-    return { id: 'dev', status: 'ok', duration_ms: 120, output: JSON.stringify(ROUTE_SNAPSHOT) }
+    return { id, status: 'ok', duration_ms: 120, output: JSON.stringify(ROUTE_SNAPSHOT) }
   }
   if (lastAction === 'diag_now') {
-    return { id: 'dev', status: 'ok', duration_ms: 2559, output: JSON.stringify(DIAG_REPORT) }
+    return { id, status: 'ok', duration_ms: 2559, output: JSON.stringify(DIAG_REPORT) }
   }
   if (lastAction === 'check_direct') {
-    return { id: 'dev', status: 'ok', duration_ms: 900, output: '🇷🇺 Напрямую (через системный маршрут):\nExit IP: 203.0.113.7\n\n✅ ya.ru' }
+    return { id, status: 'ok', duration_ms: 900, output: '🇷🇺 Напрямую (через системный маршрут):\nExit IP: 203.0.113.7\n\n✅ ya.ru' }
   }
   if (lastAction === 'check_via_tunnel') {
-    return { id: 'dev', status: 'ok', duration_ms: 1100, output: '🌍 Через туннель (awg12):\nExit IP: 203.0.113.19\n\n✅ google.com' }
+    return { id, status: 'ok', duration_ms: 1100, output: '🌍 Через туннель (awg12):\nExit IP: 203.0.113.19\n\n✅ google.com' }
   }
-  return { id: 'dev', status: 'ok', duration_ms: 300, output: 'готово' }
+  return { id, status: 'ok', duration_ms: 300, output: 'готово' }
 }
 
 export function respond(method, path) {
@@ -386,7 +389,9 @@ export function respond(method, path) {
   }
   if (path === '/v1/miniapp/routers') return { routers: ROUTERS }
 
-  const m = path.match(/^\/v1\/miniapp\/routers\/(\d+)(\/[a-z/]*)?/)
+  // Идентификатор команды теперь не только из букв (dev-3), и хвост пути
+  // обязан его пропускать -- иначе опрос результата уходит в никуда.
+  const m = path.match(/^\/v1\/miniapp\/routers\/(\d+)(\/[a-z0-9/_-]*)?/i)
   if (!m) return null
   const id = Number(m[1])
   const rest = m[2] ?? ''
@@ -406,8 +411,7 @@ export function respond(method, path) {
     }
   }
   if (rest === '/timeline') return { events: HISTORY, days: 7, truncated: false }
-  if (rest === '/commands') return { cmd_id: 'dev' }
-  if (rest.startsWith('/commands/')) return commandResult()
+  if (rest.startsWith('/commands/')) return commandResult(rest.slice('/commands/'.length))
   if (rest === '/access') {
     return {
       owner: { telegram_user_id: 42 },

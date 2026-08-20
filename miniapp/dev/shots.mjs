@@ -25,12 +25,31 @@ const SHOTS = [
   // exact: обычное имя ловит ещё и карточку перехода "Туннели и резерв" на
   // главном экране, и снимок падал на неоднозначности.
   { name: 'tunnels', steps: async (page) => page.getByRole('button', { name: 'Туннели', exact: true }).click() },
+  // Диагностика открывается сразу: числа берутся из того, что роутер уже
+  // прислал, и команда нужна только чтобы переспросить.
   {
     name: 'diag',
     steps: async (page) => {
       await page.getByRole('button', { name: 'Диагностика' }).click()
+      await page.waitForTimeout(500)
+    },
+  },
+  {
+    name: 'diag-exits',
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Диагностика' }).click()
+      await page.waitForTimeout(500)
+      await page.getByRole('button', { name: 'Сравнить адреса' }).click()
+      await page.waitForTimeout(1200)
+    },
+  },
+  {
+    name: 'diag-report',
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Диагностика' }).click()
+      await page.waitForTimeout(500)
       await page.getByRole('button', { name: 'Собрать отчёт' }).click()
-      await page.waitForTimeout(600)
+      await page.waitForTimeout(900)
     },
   },
   { name: 'events', steps: async (page) => page.getByRole('button', { name: 'События', exact: true }).click() },
