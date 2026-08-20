@@ -28,6 +28,7 @@ const wizardMaxJSONBodyBytes = 64 << 10
 
 var (
 	enrollmentNicknameRe         = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
+	trafficPeriodRe              = regexp.MustCompile(`^[A-Za-z0-9]{1,8}$`)
 	errEnrollmentInvalidNickname = errors.New("invalid enrollment nickname")
 	errEnrollmentInvalidKind     = errors.New("invalid enrollment kind")
 )
@@ -1034,6 +1035,25 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"ndms_name": ndms}, true
+	case "tunnel_traffic":
+		// Период уезжает в query-строку awg-manager'а. Словарь периодов
+		// принадлежит роутеру, и своей копии здесь нет -- есть запрет на то,
+		// чему в query делать нечего.
+		tunnelID := strings.TrimSpace(argString(args, "tunnel_id"))
+		if !wizardRouteTargetIDLooksSafe(tunnelID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe tunnel id")
+			return nil, false
+		}
+		period := strings.TrimSpace(argString(args, "period"))
+		if period != "" && !wizardTrafficPeriodLooksSafe(period) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_period", "period must match ^[A-Za-z0-9]{1,8}$")
+			return nil, false
+		}
+		out := map[string]any{"tunnel_id": tunnelID}
+		if period != "" {
+			out["period"] = period
+		}
+		return out, true
 	case "pingcheck_toggle":
 		// tunnel_id и ndms_name сюда приезжают уже разрешёнными сервером
 		// (miniappResolveTunnelArgs), но ветка обязана быть явной: default
@@ -1244,6 +1264,8 @@ func normalizedWizardURLHost(u *url.URL) string {
 	}
 	return host
 }
+
+func wizardTrafficPeriodLooksSafe(v string) bool { return trafficPeriodRe.MatchString(v) }
 
 func wizardNDMSNameLooksSafe(name string) bool {
 	if name == "" || len(name) > 32 {

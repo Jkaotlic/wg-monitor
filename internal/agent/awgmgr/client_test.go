@@ -307,3 +307,42 @@ func TestClient_RelogsInWhenSessionExpires(t *testing.T) {
 		t.Fatalf("tunnel hits: got %d want 3", tunnelHits)
 	}
 }
+
+// Фаза F: ряд трафика роутер ведёт сам, агенту остаётся его забрать.
+// Точки приходят как {t, rx, tx}; id и period едут запросом.
+func TestClient_TunnelTraffic_HappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tunnels/traffic" {
+			t.Errorf("path: %q", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("id"); got != "awg11" {
+			t.Errorf("id: %q", got)
+		}
+		if got := r.URL.Query().Get("period"); got != "24h" {
+			t.Errorf("period: %q", got)
+		}
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[{"t":"2026-08-20T09:00:00Z","rx":1024,"tx":512},{"t":"2026-08-20T10:00:00Z","rx":2048,"tx":256}]}}`))
+	}))
+	defer srv.Close()
+
+	got, err := New(srv.URL).TunnelTraffic(context.Background(), "awg11", "24h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Points) != 2 || got.Points[0].RX != 1024 || got.Points[1].TX != 256 {
+		t.Fatalf("points = %+v", got.Points)
+	}
+}
+
+func TestClient_TunnelTraffic_SuccessFalse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"success":false}`))
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).TunnelTraffic(context.Background(), "awg11", "24h"); err == nil {
+		t.Fatal("success=false must be an error, not an empty series: пустой ряд читается как «трафика не было»")
+	}
+}

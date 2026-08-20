@@ -788,6 +788,20 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "tunnel_traffic":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		tunnelID, _ := cmd.Args["tunnel_id"].(string)
+		period, _ := cmd.Args["period"].(string)
+		if strings.TrimSpace(tunnelID) == "" {
+			return "err", "tunnel_traffic: tunnel_id is required", payload
+		}
+		out, err := TunnelTrafficJSON(ctx, r.AwgClient, strings.TrimSpace(tunnelID), strings.TrimSpace(period))
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "route_templates":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

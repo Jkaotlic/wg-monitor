@@ -342,6 +342,24 @@ function commandResult(id) {
       output: `interface Wireguard0 -> ${lastAction === 'tunnel_enable' ? 'up' : 'down'}`,
     }
   }
+  if (lastAction === 'tunnel_traffic') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 900,
+      output: JSON.stringify({
+        tunnel_id: lastArgs.tunnel_id ?? 'awg11',
+        period: lastArgs.period ?? '24h',
+        rx_total: 3_221_225_472,
+        tx_total: 268_435_456,
+        points: Array.from({ length: 24 }, (_, i) => ({
+          t: `2026-08-20T${String(i).padStart(2, '0')}:00:00Z`,
+          rx: 134_217_728,
+          tx: 11_184_810,
+        })),
+      }),
+    }
+  }
   if (lastAction === 'pingcheck_now') {
     return { id, status: 'ok', duration_ms: 800, output: 'pingcheck-now triggered' }
   }

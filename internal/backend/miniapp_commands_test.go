@@ -36,6 +36,8 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// присылает tunnel_id, ndms_name сервер достаёт из событий этого
 		// роутера, и присланный клиентом никогда не доезжает до агента.
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
+		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
+		"tunnel_traffic",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -413,6 +415,8 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		// присылает tunnel_id, ndms_name сервер достаёт из событий этого
 		// роутера, и присланный клиентом никогда не доезжает до агента.
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
+		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
+		"tunnel_traffic",
 	} {
 		if !miniappCommandAllowlist[action] {
 			t.Errorf("%s должен быть разрешён мини-аппу", action)

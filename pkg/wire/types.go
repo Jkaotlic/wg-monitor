@@ -71,6 +71,7 @@ var validCommandActions = map[string]bool{
 	"tunnel_enable":         true,
 	"tunnel_disable":        true,
 	"tunnel_restart":        true,
+	"tunnel_traffic":        true,
 	"tunnel_delete":         true,
 	"check_via_tunnel":      true,
 	"check_direct":          true,

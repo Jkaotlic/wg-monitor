@@ -111,3 +111,53 @@ func TestMiniappPingcheckToggleResolvesTunnelAndKeepsChoice(t *testing.T) {
 		t.Fatalf("args = %+v", args)
 	}
 }
+
+// Фаза F: обмен по туннелю. tunnel_id тот же самый -- разрешается из событий
+// этого роутера; period -- выбор человека, единственное, что едет от клиента.
+func TestMiniappTunnelTrafficResolvesTunnelAndKeepsPeriod(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg11", "")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID,
+		`{"action":"tunnel_traffic","args":{"tunnel_id":"awg11","period":"24h"}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	args := sink.enqueued[0].Args
+	if args["tunnel_id"] != "awg11" || args["period"] != "24h" {
+		t.Fatalf("args = %+v", args)
+	}
+}
+
+// Период едет в query awg-manager'у, поэтому форма проверяется явно. Словарь
+// периодов принадлежит роутеру, и своей копии словаря здесь нет -- есть
+// только запрет на то, что в query-строке делать нечего.
+func TestMiniappTunnelTrafficRejectsUnsafePeriod(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	seedMiniappTunnelEvent(t, d, ownedID, "awg11", "")
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID,
+		`{"action":"tunnel_traffic","args":{"tunnel_id":"awg11","period":"24h&id=../../etc"}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
+	}
+}
+
+func TestMiniappTunnelTrafficRejectsUnknownTunnel(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID,
+		`{"action":"tunnel_traffic","args":{"tunnel_id":"awg99","period":"24h"}}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}

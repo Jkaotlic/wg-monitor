@@ -97,6 +97,10 @@ var miniappCommandAllowlist = map[string]bool{
 	"tunnel_enable":    true,
 	"tunnel_disable":   true,
 	"pingcheck_toggle": true,
+
+	// Обмен по туннелю (фаза F). Читающее: ряд ведёт сам роутер, агент его
+	// только забирает.
+	"tunnel_traffic": true,
 }
 
 // miniappTunnelArgActions -- действия, чей туннель адресуется идентификатором,
@@ -108,6 +112,7 @@ var miniappTunnelArgActions = map[string]bool{
 	"tunnel_enable":    true,
 	"tunnel_disable":   true,
 	"pingcheck_toggle": true,
+	"tunnel_traffic":   true,
 }
 
 // miniappNDMSRequiredActions -- те из них, которые без имени NDMS-интерфейса
@@ -176,6 +181,12 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			if req.Action == "pingcheck_toggle" {
 				enable, _ := req.Args["enable"].(bool)
 				resolved["enable"] = enable
+			}
+			// period -- тоже выбор человека, а не топология: он говорит, за
+			// какой срок показать обмен. Форму проверит санитайзер.
+			if req.Action == "tunnel_traffic" {
+				period, _ := req.Args["period"].(string)
+				resolved["period"] = period
 			}
 			commandArgs = resolved
 		}

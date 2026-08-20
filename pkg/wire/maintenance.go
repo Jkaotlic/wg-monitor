@@ -68,3 +68,28 @@ type EntwareCleanStatus struct {
 	LastFreedKB       int64  `json:"last_freed_kb,omitempty"`
 	LogTail           string `json:"log_tail,omitempty"`
 }
+
+// TunnelTraffic -- ответ на tunnel_traffic: ряд обмена по одному туннелю за
+// период, каким его ведёт сам роутер (/api/tunnels/traffic).
+//
+// Суммы считает агент, а не экран: плитки-счётчики показывают именно их, и
+// вторая формула того же числа на клиенте разошлась бы с первой на первом же
+// пропуске точки. Ряд едет целиком -- по нему рисуется график, когда он
+// понадобится.
+//
+// Пустой Points при Status ok -- это ответ «обмена не было», а не сбой: экран
+// обязан написать 0, а не «неизвестно».
+type TunnelTraffic struct {
+	TunnelID string         `json:"tunnel_id"`
+	Period   string         `json:"period,omitempty"`
+	RXTotal  int64          `json:"rx_total"`
+	TXTotal  int64          `json:"tx_total"`
+	Points   []TrafficPoint `json:"points"`
+}
+
+// TrafficPoint -- момент и два счётчика в байтах: rx принято, tx отдано.
+type TrafficPoint struct {
+	T  string `json:"t"`
+	RX int64  `json:"rx"`
+	TX int64  `json:"tx"`
+}

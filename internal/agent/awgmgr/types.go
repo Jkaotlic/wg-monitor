@@ -196,3 +196,18 @@ type PeerConfig struct {
 	Endpoint     string   `json:"endpoint"`
 	AllowedIPs   []string `json:"allowedIPs"`
 }
+
+// TunnelTraffic -- ряд обмена по туннелю из /api/tunnels/traffic.
+//
+// Точка несёт МОМЕНТ и два счётчика: rx -- принято роутером, tx -- отдано.
+// Единицы -- байты (проверено на живом роутере за 24 часа). Пустой ряд -- это
+// «за период обмена не было», а не ошибка: их обязан различать вызывающий.
+type TunnelTraffic struct {
+	Points []TrafficPoint `json:"points"`
+}
+
+type TrafficPoint struct {
+	T  string `json:"t"`
+	RX int64  `json:"rx"`
+	TX int64  `json:"tx"`
+}

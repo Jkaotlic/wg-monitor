@@ -3,6 +3,7 @@ import { useCommand } from '../useCommand.js'
 import { parseRouteSnapshot } from '../routes.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
+import { trafficSummary } from '../traffic.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
@@ -34,6 +35,11 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   }, [result])
 
   const view = tunnelsView(snapshot)
+  // Обмен спрашивается отдельной командой и только по кнопке: ряд роутер
+  // ведёт сам, но тянуть его при каждом открытии экрана незачем -- вопрос
+  // «сколько прошло за сутки» задают редко и осознанно.
+  const traffic = useCommand(routerID)
+  const trafficOut = traffic.result?.status === 'ok' ? trafficSummary(traffic.result.output) : null
 
   // Включить и выключить линию можно только через NDMS-интерфейс: агент
   // делает это ndmc'ом, и у opkg-туннеля такого имени нет вовсе. Кнопки под
@@ -115,6 +121,31 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
               Трафик уходит через провайдера. Если так не задумано — поднимите линию на экране ниже.
             </p>
           </Hero>
+        </Section>
+      )}
+
+      {view.active && (
+        <Section title="Обмен за сутки">
+          <div class="card">
+            <div class="stat-grid" style="padding:14px">
+              <Stat label="принято" value={trafficOut?.known ? trafficOut.rx : null} note={trafficOut?.empty ? 'за сутки ничего' : 'роутер посчитал сам'} />
+              <Stat label="отдано" value={trafficOut?.known ? trafficOut.tx : null} note={trafficOut?.known ? `точек в ряду: ${trafficOut.points}` : 'нажмите «Показать обмен»'} />
+            </div>
+            {traffic.result && traffic.result.status !== 'ok' && (
+              <p class="card-foot card-foot-bad">
+                Роутер не отдал ряд: {traffic.result.output || traffic.result.status}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-wide"
+            disabled={traffic.busy}
+            onClick={() => traffic.run('tunnel_traffic', { tunnel_id: view.active.id, period: '24h' }, deadline)}
+          >
+            {traffic.busy ? 'Считаем…' : 'Показать обмен'}
+          </button>
+          {traffic.error && <p class="state state-error">{traffic.error}</p>}
         </Section>
       )}
 

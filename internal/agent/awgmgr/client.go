@@ -267,6 +267,29 @@ func (c *Client) TunnelsAll(ctx context.Context) (*TunnelsAll, error) {
 	return &env.Data, nil
 }
 
+// TunnelTraffic returns the router's own traffic series for one tunnel
+// (/api/tunnels/traffic?id=&period=). Проверено вживую на awg11 за 24 часа
+// (docs/operations/2026-08-19-awgm-r15-audit.md): ряд ведёт сам роутер, и
+// считать байты агенту не нужно.
+//
+// period едет строкой как есть: словарь периодов принадлежит awg-manager, и
+// перевод его в свои константы означал бы вторую версию чужого словаря,
+// расходящуюся с оригиналом на первой же его правке.
+func (c *Client) TunnelTraffic(ctx context.Context, tunnelID, period string) (*TunnelTraffic, error) {
+	path := "/api/tunnels/traffic?id=" + url.QueryEscape(tunnelID)
+	if period != "" {
+		path += "&period=" + url.QueryEscape(period)
+	}
+	var env Envelope[TunnelTraffic]
+	if err := c.get(ctx, path, &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr tunnels/traffic: success=false")
+	}
+	return &env.Data, nil
+}
+
 // PingCheckStatus returns /api/pingcheck/status data.
 func (c *Client) PingCheckStatus(ctx context.Context) (*PingCheckStatus, error) {
 	var env Envelope[PingCheckStatus]
