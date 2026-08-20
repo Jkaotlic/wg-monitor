@@ -78,6 +78,20 @@ const SHOTS = [
     },
   },
   {
+    name: 'replace-running',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.waitForTimeout(800)
+      await page.getByRole('button', { name: /Заменить конфиг линии/ }).click()
+      await page.waitForTimeout(700)
+      await page.locator('.overlay').last().getByRole('button', { name: /Нидерланды/ }).click()
+      await page.waitForTimeout(300)
+      await page.getByRole('button', { name: 'Заменить конфиг', exact: true }).click()
+      await page.waitForTimeout(4000)
+    },
+  },
+  {
     name: 'cabinet',
     overlay: true,
     steps: async (page) => {

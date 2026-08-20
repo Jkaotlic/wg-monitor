@@ -277,6 +277,65 @@ const ROUTE_TEMPLATES = {
 const commands = new Map()
 let commandSeq = 0
 
+// Задание замены конфига: шаги проигрываются по времени, чтобы экран можно
+// было увидеть и в движении, и в конце.
+const REPLACE_STEPS = ['issue', 'import', 'handshake', 'promote', 'verify', 'retire']
+let replaceJob = null
+
+export function startReplaceJob(body) {
+  replaceJob = {
+    job_id: 'dev-replace',
+    state: 'running',
+    running: true,
+    startedAt: Date.now(),
+    option: body?.option_id ?? 'nl',
+    provider: body?.provider ?? 'amnezia',
+  }
+  return replaceStatus()
+}
+
+// Каждые полторы секунды закрывается следующий шаг: столько же примерно
+// занимает шаг на живом роутере, только там это минуты.
+//
+// Завершённое задание живёт недолго и исчезает: у настоящего бэкенда его
+// сметает TTL, а здесь это нужно, чтобы повторный проход по экрану снова
+// начинался с формы, а не с прошлого результата.
+const REPLACE_TTL_MS = 20_000
+
+export function replaceStatus() {
+  if (!replaceJob) return {}
+  const elapsed = Date.now() - replaceJob.startedAt
+  if (elapsed > REPLACE_STEPS.length * 1500 + REPLACE_TTL_MS) {
+    replaceJob = null
+    return {}
+  }
+  const doneCount = Math.min(REPLACE_STEPS.length, Math.floor(elapsed / 1500))
+  const steps = REPLACE_STEPS.map((name, i) => {
+    if (i < doneCount) return { name, status: 'done', detail: replaceDetail(name, replaceJob) }
+    if (i === doneCount) return { name, status: 'active', detail: '' }
+    return { name, status: 'pending' }
+  })
+  const finished = doneCount >= REPLACE_STEPS.length
+  return {
+    job_id: replaceJob.job_id,
+    state: finished ? 'success' : 'running',
+    running: !finished,
+    hint: finished ? `готово: трафик политики «HydraRoute» идёт через ${replaceJob.provider}_${replaceJob.option}` : '',
+    steps,
+  }
+}
+
+function replaceDetail(name, job) {
+  switch (name) {
+    case 'issue': return `конфиг получен: ${job.provider}_${job.option}`
+    case 'import': return 'новый туннель awg21 создан рядом с прежним'
+    case 'handshake': return 'канал живой'
+    case 'promote': return 'политика «HydraRoute» идёт через новый туннель'
+    case 'verify': return 'через туннель 203.0.113.19, напрямую 203.0.113.7'
+    default: return 'прежний туннель выключен и остался на роутере'
+  }
+}
+
 export function registerCommand(command) {
   const id = `dev-${++commandSeq}`
   commands.set(id, {
@@ -538,6 +597,7 @@ export function respond(method, path) {
   }
   if (rest === '/timeline') return { events: HISTORY, days: 7, truncated: false }
   // Пороги живут в backend.yaml; на домашнем бэкенде это 120/180/3600.
+  if (rest === '/replace') return replaceStatus()
   if (rest === '/vpn') {
     return {
       accounts: [

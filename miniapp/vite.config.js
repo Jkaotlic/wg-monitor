@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'
 import preact from '@preact/preset-vite'
-import { respond, registerCommand } from './dev/fixtures.js'
+import { respond, registerCommand, startReplaceJob } from './dev/fixtures.js'
 
 // Отдаёт заготовленные ответы вместо бэкенда -- только в режиме разработки.
 // Нужен, чтобы открыть экраны в браузере (и снять с них скриншоты) без живого
@@ -13,6 +13,21 @@ function mockApi() {
       server.middlewares.use((req, res, next) => {
         if (!req.url.startsWith('/v1/miniapp/')) return next()
         const path = req.url.split('?')[0]
+        // Мастер замены конфига: старт отвечает идентификатором задания, а
+        // состояние приезжает шагами -- фикстура проигрывает их по времени.
+        if (req.method === 'POST' && path.endsWith('/replace')) {
+          let raw = ''
+          req.on('data', (chunk) => { raw += chunk })
+          req.on('end', () => {
+            let body = {}
+            try { body = JSON.parse(raw) } catch { body = {} }
+            const job = startReplaceJob(body)
+            res.setHeader('Content-Type', 'application/json')
+            res.statusCode = 202
+            res.end(JSON.stringify(job))
+          })
+          return
+        }
         // Выпуск конфига из кабинета: сервер отвечает идентификатором
         // команды, конфиг клиенту не показывается вовсе.
         if (req.method === 'POST' && path.endsWith('/vpn/issue')) {

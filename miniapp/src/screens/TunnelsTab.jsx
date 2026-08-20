@@ -13,6 +13,7 @@ import { Chain } from '../ui/Chain.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
 import { CabinetScreen } from './CabinetScreen.jsx'
+import { ReplaceScreen } from './ReplaceScreen.jsx'
 
 // Туннели: какая линия несёт трафик, кто подхватит, если она замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -22,6 +23,7 @@ import { CabinetScreen } from './CabinetScreen.jsx'
 // линия поднята", и только потом -- "что через неё идёт".
 export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   const [cabinets, setCabinets] = useState(false)
+  const [replacing, setReplacing] = useState(null)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
@@ -206,6 +208,28 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             onClick={() => setCabinets(true)}
           />
         </div>
+      )}
+
+      {/* Замена конфига предлагается для работающей линии: смысл операции --
+          заменить то, чем сейчас ходит трафик, не потеряв прежний туннель. */}
+      {view.active && view.policyName && (
+        <div style="margin-top:12px">
+          <NavCard
+            title="Заменить конфиг линии"
+            note={view.active.name}
+            onClick={() => setReplacing(view.active)}
+          />
+        </div>
+      )}
+
+      {replacing && (
+        <ReplaceScreen
+          routerID={routerID}
+          tunnel={replacing}
+          policyName={view.policyName}
+          onClose={() => setReplacing(null)}
+          onDone={() => run('route_status', {}, deadline)}
+        />
       )}
 
       {cabinets && (

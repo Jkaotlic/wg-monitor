@@ -117,6 +117,17 @@ export function issueVPNConfig(routerID, provider, optionID) {
   })
 }
 
+// Мастер замены конфига: запуск и состояние. Состояние спрашивается ПРО
+// РОУТЕР -- операцию могли запустить с другого устройства, и идентификатора
+// задания у этого экрана может не быть вовсе.
+export function fetchReplaceStatus(routerID) {
+  return request(`/routers/${routerID}/replace`)
+}
+
+export function startReplace(routerID, body) {
+  return request(`/routers/${routerID}/replace`, { method: 'POST', body: JSON.stringify(body) })
+}
+
 export function sendCommand(routerID, action, args = {}) {
   return request(`/routers/${routerID}/commands`, {
     method: 'POST',
