@@ -72,3 +72,20 @@ describe('commandOutcomeLabel: маршруты', () => {
     expect(commandOutcomeLabel('route_rebind', ok('готово'))).toBe('Готово')
   })
 })
+
+// Флот разноверсионный: агент на чужом роутере может быть старше приложения
+// и такого действия не знать вовсе. Его ответ -- «unknown action: ...» --
+// человеку ничего не объясняет: он не виноват, что там старый агент, и
+// «unknown action» читается как поломка приложения.
+describe('commandOutcomeLabel: старый агент', () => {
+  it('незнакомое действие объясняется версией агента, а не кодом', () => {
+    const text = commandOutcomeLabel('tunnel_traffic', { status: 'err', output: 'unknown action: tunnel_traffic' })
+    expect(text).toContain('агент')
+    expect(text).not.toContain('unknown action')
+  })
+
+  it('обычная ошибка агента по-прежнему доезжает как есть', () => {
+    const text = commandOutcomeLabel('tunnel_traffic', { status: 'err', output: 'awgmgr tunnels/traffic: success=false' })
+    expect(text).toBe('awgmgr tunnels/traffic: success=false')
+  })
+})

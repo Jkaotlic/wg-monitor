@@ -86,3 +86,22 @@ func TestRunner_TunnelTraffic_RequiresTunnelID(t *testing.T) {
 		t.Fatalf("status=%q output=%q", res.Status, res.Output)
 	}
 }
+
+// Сборка без этого маршрута -- не поломка, а разница версий. Ответ обязан
+// говорить это словами: экран покажет его человеку как есть.
+func TestRunner_TunnelTraffic_OlderBuildExplainsItself(t *testing.T) {
+	cli := awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte("404 page not found"))
+	}))
+	r := Runner{AwgClient: cli, Now: mockNow()}
+	res := r.Execute(context.Background(), wire.Command{
+		ID: "t4", Action: "tunnel_traffic", Args: map[string]any{"tunnel_id": "awg11", "period": "24h"},
+	})
+	if res.Status != "err" {
+		t.Fatalf("status = %q", res.Status)
+	}
+	if !strings.Contains(res.Output, "сборке") {
+		t.Fatalf("output = %q, want объяснение про сборку, а не HTTP-код", res.Output)
+	}
+}

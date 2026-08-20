@@ -3,6 +3,7 @@ package awgmgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -349,5 +350,50 @@ func TestClient_TunnelTraffic_SuccessFalse(t *testing.T) {
 
 	if _, err := New(srv.URL).TunnelTraffic(context.Background(), "awg11", "24h"); err == nil {
 		t.Fatal("success=false must be an error, not an empty series: пустой ряд читается как «трафика не было»")
+	}
+}
+
+// Флот разноверсионный: у оператора сборка +r21, у остальных стабильный
+// 2.17.2. Конверт /api/presets между сборками менялся, поэтому клиент обязан
+// понимать все три виденные формы -- иначе каталог наборов у половины флота
+// окажется пустым, и экран покажет пустоту вместо 87 наборов.
+func TestClient_Presets_AcceptsEveryEnvelopeShape(t *testing.T) {
+	bodies := map[string]string{
+		"data-объект (2.17.2+r21)": `{"success":true,"data":{"presets":[{"id":"figma","name":"Figma","engines":{"dns":{"domains":["figma.com"]}}}]}}`,
+		"data-массив":              `{"success":true,"data":[{"id":"figma","name":"Figma","engines":{"dns":{"domains":["figma.com"]}}}]}`,
+		"без конверта":             `{"presets":[{"id":"figma","name":"Figma","engines":{"dns":{"domains":["figma.com"]}}}]}`,
+	}
+	for label, body := range bodies {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		}))
+		got, err := New(srv.URL).Presets(context.Background())
+		srv.Close()
+		if err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if len(got) != 1 || got[0].ID != "figma" {
+			t.Fatalf("%s: presets = %+v", label, got)
+		}
+	}
+}
+
+// Обмен по туннелю появился в awg-manager не сразу: на стабильном 2.17.2
+// этого маршрута может не быть вовсе. Тогда ответ обязан говорить «эта
+// сборка не умеет», а не «HTTP 404: 404 page not found» -- человек читает
+// экран, а не наш лог.
+func TestClient_TunnelTraffic_UnsupportedBuildSaysSo(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte("404 page not found"))
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL).TunnelTraffic(context.Background(), "awg11", "24h")
+	if err == nil {
+		t.Fatal("404 обязан быть ошибкой")
+	}
+	if !errors.Is(err, ErrUnsupportedByRouter) {
+		t.Fatalf("err = %v, want ErrUnsupportedByRouter", err)
 	}
 }

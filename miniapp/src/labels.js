@@ -268,9 +268,17 @@ export function commandOutcomeLabel(action, result) {
       return 'Такая команда уже выполняется'
     case 'timeout':
       return 'Роутер не ответил вовремя'
-    case 'err':
+    case 'err': {
       if (action === 'tunnel_restart') return 'Не удалось перезапустить туннель'
-      return result.output?.trim() || 'Команда завершилась с ошибкой'
+      const output = result.output?.trim() || ''
+      // Агент отвечает "unknown action: X", когда на роутере стоит версия
+      // старше приложения. Человеку это читается как поломка приложения, а
+      // на деле это разница версий -- и чинится она обновлением агента.
+      if (/^unknown action:/i.test(output)) {
+        return 'Агент на этом роутере старше приложения и такого пока не умеет — обновите агента.'
+      }
+      return output || 'Команда завершилась с ошибкой'
+    }
     default:
       if (action === 'tunnel_restart') return 'Туннель перезапущен'
       return routeOutcomeLabel(action, result.output) || 'Готово'

@@ -150,10 +150,17 @@ func (c *Client) Presets(ctx context.Context) ([]Preset, error) {
 			return nil, fmt.Errorf("awgmgr presets: success=false")
 		}
 		var env Envelope[PresetsListResponse]
-		if err := json.Unmarshal(raw, &env); err != nil {
+		if err := json.Unmarshal(raw, &env); err == nil && len(env.Data.Presets) > 0 {
+			return env.Data.Presets, nil
+		}
+		// Флот разноверсионный, и конверт между сборками менялся: у одних
+		// data -- объект с presets, у других сразу массив. Понимать надо обе
+		// формы: непонятая означает пустой каталог на экране.
+		var arr Envelope[[]Preset]
+		if err := json.Unmarshal(raw, &arr); err != nil {
 			return nil, fmt.Errorf("awgmgr presets: decode envelope: %w", err)
 		}
-		return env.Data.Presets, nil
+		return arr.Data, nil
 	}
 	var direct PresetsListResponse
 	if err := json.Unmarshal(raw, &direct); err != nil {

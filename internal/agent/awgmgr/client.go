@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -267,6 +268,13 @@ func (c *Client) TunnelsAll(ctx context.Context) (*TunnelsAll, error) {
 	return &env.Data, nil
 }
 
+// ErrUnsupportedByRouter -- маршрута нет на этой сборке awg-manager. Флот
+// разноверсионный: то, что есть у одного роутера, у другого может ещё не
+// появиться, и это не поломка, а разница сборок. Отличать её от настоящей
+// ошибки обязан вызывающий -- человеку надо сказать «эта сборка не умеет», а
+// не показать HTTP-код.
+var ErrUnsupportedByRouter = errors.New("этой сборке awg-manager такой запрос неизвестен")
+
 // TunnelTraffic returns the router's own traffic series for one tunnel
 // (/api/tunnels/traffic?id=&period=). Проверено вживую на awg11 за 24 часа
 // (docs/operations/2026-08-19-awgm-r15-audit.md): ряд ведёт сам роутер, и
@@ -282,6 +290,9 @@ func (c *Client) TunnelTraffic(ctx context.Context, tunnelID, period string) (*T
 	}
 	var env Envelope[TunnelTraffic]
 	if err := c.get(ctx, path, &env); err != nil {
+		if strings.Contains(err.Error(), "HTTP 404") {
+			return nil, fmt.Errorf("%w: обмен по туннелю появился в awg-manager позже", ErrUnsupportedByRouter)
+		}
 		return nil, err
 	}
 	if !env.Success {
