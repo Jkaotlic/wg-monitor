@@ -216,6 +216,11 @@ type RouteTemplate struct {
 
 type RouteTemplates struct {
 	Templates []RouteTemplate `json:"templates"`
+	// Skipped -- сколько наборов роутер описал так, что применить их правилом
+	// DNS/HR-Neo нельзя: одними sing-box rule-set'ами или ссылкой на подписку.
+	// Молча показать 75 из 87 значит соврать размером каталога; экран говорит
+	// разницу словами.
+	Skipped int `json:"skipped,omitempty"`
 }
 
 type RouteDeleteRequest struct {

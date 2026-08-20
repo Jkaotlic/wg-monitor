@@ -14,6 +14,7 @@ import {
   visibleTunnelRows,
   promoteTargets,
   rebindTargets,
+  canRebindTunnel,
 } from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot (pkg/wire/routing.go): tunnels[],
@@ -695,5 +696,32 @@ describe('rebindTargets', () => {
 
   it('без исходного туннеля отдаёт все свои туннели', () => {
     expect(rebindTargets(ROWS, '').map((r) => r.id)).toEqual(['awg11', 'awg10'])
+  })
+})
+
+// Найдено при сверке с живым роутером 20.08.2026: «Перенести всё» опирается
+// на route_rebind, а тот на роутере с моделью политик переписывает ПОЛИТИЧЕСКИЕ
+// правила в привязку к интерфейсу (ветка «src -- туннель с default_route» в
+// rebindHRNeoPolicyInterfaces). То есть кнопка меняла бы саму модель
+// маршрутизации, обещая «перенести правила».
+//
+// Пока это не исправлено в агенте, кнопка предлагается только там, где
+// переносить действительно есть что своего: у туннеля есть собственные
+// правила, а не только приехавшие через политику.
+describe('canRebindTunnel', () => {
+  it('туннель со своими правилами переносить можно', () => {
+    expect(canRebindTunnel({ type: 'managed', total: 5, policyRules: 2 })).toBe(true)
+  })
+
+  it('туннель, у которого все правила из политики, -- нельзя', () => {
+    expect(canRebindTunnel({ type: 'managed', total: 26, policyRules: 26 })).toBe(false)
+  })
+
+  it('пустой туннель переносить нечем', () => {
+    expect(canRebindTunnel({ type: 'managed', total: 0, policyRules: 0 })).toBe(false)
+  })
+
+  it('чужой интерфейс (WAN) не наш туннель', () => {
+    expect(canRebindTunnel({ type: 'wan', total: 4, policyRules: 0 })).toBe(false)
   })
 })

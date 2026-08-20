@@ -1,7 +1,7 @@
 import { useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { tunnelRows, rebindTargets, tunnelRuleSummary } from '../routes.js'
-import { templateGroups, templateChoice, parseManualTargets, addPlanSummary } from '../routeAdd.js'
+import { templateGroups, templateChoice, parseManualTargets, addPlanSummary, skippedNote } from '../routeAdd.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelLiveLabel } from '../labels.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -26,6 +26,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
   const [manual, setManual] = useState('')
   const [name, setName] = useState('')
   const [templates, setTemplates] = useState(null)
+  const [skipped, setSkipped] = useState(0)
   const [choice, setChoice] = useState(null)
   const [summary, setSummary] = useState(null)
 
@@ -41,9 +42,12 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
     catalog.run('route_templates', {}, deadline).then((res) => {
       if (res?.status !== 'ok') return
       try {
-        setTemplates(JSON.parse(res.output)?.templates ?? [])
+        const payload = JSON.parse(res.output)
+        setTemplates(payload?.templates ?? [])
+        setSkipped(payload?.skipped ?? 0)
       } catch {
         setTemplates([])
+        setSkipped(0)
       }
     })
   }
@@ -167,6 +171,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
                 {templates != null && templates.length === 0 && !catalog.busy && (
                   <p class="state">Каталог роутера пуст — заведите правило вручную.</p>
                 )}
+                {skippedNote(skipped) && <p class="hint">{skippedNote(skipped)}</p>}
                 {templateGroups(templates ?? []).map((g) => (
                   <Section key={g.category} title={g.category}>
                     <ul class="card list-reset">

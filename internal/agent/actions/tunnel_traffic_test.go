@@ -21,7 +21,7 @@ func TestRunner_TunnelTraffic_OK(t *testing.T) {
 			t.Errorf("query: %q", r.URL.RawQuery)
 		}
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[{"t":"2026-08-20T09:00:00Z","rx":1000,"tx":200},{"t":"2026-08-20T10:00:00Z","rx":2000,"tx":300}]}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[{"t":1787219289,"rx":1000.5,"tx":200.5},{"t":1787219299,"rx":2000,"tx":300}],"stats":{"points":2,"currentRx":2000,"currentTx":300,"volumeRx":3000,"volumeTx":500}}}`))
 	}))
 	r := Runner{AwgClient: cli, Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{
@@ -39,10 +39,14 @@ func TestRunner_TunnelTraffic_OK(t *testing.T) {
 	if out.TunnelID != "awg11" || out.Period != "24h" {
 		t.Errorf("ответ обязан помнить, о чём его спросили: %+v", out)
 	}
-	// Суммы считает агент: экран рисует плитки-счётчики, и складывать ряд на
-	// клиенте значило бы держать вторую формулу того же числа.
+	// Объём за период считает РОУТЕР (stats.volumeRx/volumeTx). Точки несут
+	// скорости, и сумма скоростей объёмом не является -- своя формула здесь
+	// разошлась бы с показаниями самого роутера.
 	if out.RXTotal != 3000 || out.TXTotal != 500 {
-		t.Errorf("totals = %d/%d, want 3000/500", out.RXTotal, out.TXTotal)
+		t.Errorf("totals = %d/%d, want объём из stats 3000/500", out.RXTotal, out.TXTotal)
+	}
+	if out.CurrentRx != 2000 {
+		t.Errorf("current_rx = %v, want мгновенную скорость из stats", out.CurrentRx)
 	}
 	if len(out.Points) != 2 {
 		t.Errorf("ряд обязан доехать целиком: %+v", out.Points)
@@ -54,7 +58,7 @@ func TestRunner_TunnelTraffic_OK(t *testing.T) {
 func TestRunner_TunnelTraffic_EmptySeriesIsAnAnswer(t *testing.T) {
 	cli := awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[]}}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[],"stats":{"points":0}}}`))
 	}))
 	r := Runner{AwgClient: cli, Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "t2", Action: "tunnel_traffic", Args: map[string]any{"tunnel_id": "awg11"}})
@@ -67,6 +71,11 @@ func TestRunner_TunnelTraffic_EmptySeriesIsAnAnswer(t *testing.T) {
 	}
 	if out.RXTotal != 0 || len(out.Points) != 0 {
 		t.Errorf("out = %+v", out)
+	}
+	// Период роутер требует обязательным, поэтому пустой заменяется суточным,
+	// а не уезжает пустым в query.
+	if out.Period != "24h" {
+		t.Errorf("period = %q, want 24h по умолчанию", out.Period)
 	}
 }
 

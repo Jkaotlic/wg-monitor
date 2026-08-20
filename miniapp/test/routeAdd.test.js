@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { templateGroups, addPlanSummary, deletePlanSummary, parseManualTargets, templateChoice } from '../src/routeAdd.js'
+import { templateGroups, addPlanSummary, deletePlanSummary, parseManualTargets, templateChoice, skippedNote } from '../src/routeAdd.js'
 
 describe('templateGroups', () => {
   // На живом роутере 87 наборов в семи категориях. Плоским списком по нему
@@ -144,5 +144,24 @@ describe('templateChoice', () => {
     const c = templateChoice(GEO, { hrNeoRunning: false })
     expect(c.canApply).toBe(false)
     expect(c.reason).toContain('HR Neo')
+  })
+})
+
+// Живой роутер (awg-manager 2.17.2+r21) описывает часть наборов правилами
+// sing-box или ссылкой на подписку -- правилом DNS/HR-Neo их не выразить, и
+// агент их не отдаёт. Молча показать 75 из 87 значит соврать размером
+// каталога: разница называется словами.
+describe('skippedNote', () => {
+  it('называет, сколько наборов приложение применить не может', () => {
+    expect(skippedNote(12)).toBe('Ещё 12 наборов роутер описывает правилами sing-box — их приложение применить не может.')
+  })
+
+  it('один набор -- в единственном числе', () => {
+    expect(skippedNote(1)).toContain('Ещё 1 набор ')
+  })
+
+  it('нечего пропускать -- нечего и говорить', () => {
+    expect(skippedNote(0)).toBe('')
+    expect(skippedNote()).toBe('')
   })
 })

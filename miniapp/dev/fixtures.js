@@ -264,6 +264,9 @@ const ROUTE_TEMPLATES = {
     { id: 'twitch', name: 'Twitch', category: 'видео', dns: ['twitch.tv', 'ttvnw.net'] },
     { id: 'vimeo', name: 'Vimeo', category: 'видео', dns: ['vimeo.com'] },
   ],
+  // Живой роутер 2.17.2+r21 описывает 12 наборов из 87 правилами sing-box:
+  // применить их правилом DNS/HR-Neo нельзя, и агент их не отдаёт.
+  skipped: 12,
 }
 
 // Команды хранятся ПО СВОЕМУ ИДЕНТИФИКАТОРУ, а не одной «последней»: экран

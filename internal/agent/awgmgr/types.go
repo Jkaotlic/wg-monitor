@@ -199,15 +199,35 @@ type PeerConfig struct {
 
 // TunnelTraffic -- ряд обмена по туннелю из /api/tunnels/traffic.
 //
-// Точка несёт МОМЕНТ и два счётчика: rx -- принято роутером, tx -- отдано.
-// Единицы -- байты (проверено на живом роутере за 24 часа). Пустой ряд -- это
-// «за период обмена не было», а не ошибка: их обязан различать вызывающий.
+// Формы сверены с живым роутером и его же OpenAPI (awg-manager 2.17.2+r21,
+// 20.08.2026), и обе прежние догадки оказались неверны:
+//
+//   - t -- unix-секунды ЧИСЛОМ, а не строкой RFC3339. Строка здесь роняла бы
+//     разбор ответа целиком, и заметить это можно было только на роутере.
+//   - rx/tx в точке -- это СКОРОСТИ (байт/сек, дробные), а не счётчики.
+//     Складывать их бессмысленно: сумма скоростей -- не объём.
+//
+// Объём за период роутер считает сам и кладёт в stats (volumeRx/volumeTx --
+// «Σ rxRate×Δt на сырых отсчётах»). Оттуда его и надо брать: своя формула по
+// точкам разошлась бы с показаниями самого роутера.
 type TunnelTraffic struct {
 	Points []TrafficPoint `json:"points"`
+	Stats  TrafficStats   `json:"stats"`
 }
 
 type TrafficPoint struct {
-	T  string `json:"t"`
-	RX int64  `json:"rx"`
-	TX int64  `json:"tx"`
+	T  int64   `json:"t"`
+	RX float64 `json:"rx"`
+	TX float64 `json:"tx"`
+}
+
+type TrafficStats struct {
+	Points    int     `json:"points"`
+	PeakRate  float64 `json:"peakRate"`
+	AvgRx     float64 `json:"avgRx"`
+	AvgTx     float64 `json:"avgTx"`
+	CurrentRx float64 `json:"currentRx"`
+	CurrentTx float64 `json:"currentTx"`
+	VolumeRx  int64   `json:"volumeRx"`
+	VolumeTx  int64   `json:"volumeTx"`
 }

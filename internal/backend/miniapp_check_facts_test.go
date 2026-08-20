@@ -19,9 +19,9 @@ func TestMiniappEventsCarriesCheckFacts(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
 	now := time.Now()
 	seed := map[string]string{
-		"dns":         `{"endpoints":3,"failed_count":1,"skipped_count":0,"rkn_probed":2,"rkn_suspect":0,"endpoints_detail":[{"target":"1.1.1.1"}]}`,
-		"hydraroute":  `{"installed":true,"running":true,"routes_hrneo":26,"routes_ndms":2,"routes_static":0,"active_backend":"hydraroute","singbox_router_active":false}`,
-		"awg_manager": `{"version":"2.17.2","firmware":"4.3.7","keenetic_os":"4.3.7","router_ip":"192.168.0.1","base_url":"http://192.168.0.1:2222"}`,
+		"dns":            `{"endpoints":3,"failed_count":1,"skipped_count":0,"rkn_probed":2,"rkn_suspect":0,"endpoints_detail":[{"target":"1.1.1.1"}]}`,
+		"hydraroute":     `{"installed":true,"running":true,"routes_hrneo":26,"routes_ndms":2,"routes_static":0,"active_backend":"hydraroute","singbox_router_active":false}`,
+		"awg_manager":    `{"version":"2.17.2","firmware":"4.3.7","keenetic_os":"4.3.7","router_ip":"192.168.0.1","base_url":"http://192.168.0.1:2222"}`,
 		"external_reach": `{"targets_total":3,"targets_failed":[{"name":"ya.ru","err":"timeout"}],"targets_ok":["google.com","cloudflare.com"],"via_interface":"ISP"}`,
 	}
 	for name, details := range seed {

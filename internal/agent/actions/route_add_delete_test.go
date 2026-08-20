@@ -603,3 +603,92 @@ func TestRouteTemplatesJSONListsAWGManagerPresets(t *testing.T) {
 		t.Fatalf("bad template: %+v", got)
 	}
 }
+
+// Найдено на живом роутере 20.08.2026: после УСПЕШНОГО создания действие
+// возвращало синтетический идентификатор плана ("new:dns:Figma"), а не тот,
+// что присвоил роутер ("list_1"). Внутри приложения это не всплывало -- экран
+// перечитывает снимок целиком, -- но любой, кто попробует что-то сделать с
+// возвращённым id (откатить, удалить, показать), получает "route not found".
+//
+// Правило то же, что и везде в этом коде: не выдумывать идентификатор за
+// роутер. У ветки ошибки такая сверка уже была; успех обходился без неё.
+func TestRouteAddJSON_ReturnsRouterAssignedIDOnSuccess(t *testing.T) {
+	created := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/routing/tunnels", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"awg12","name":"work","iface":"opkgtun12","type":"managed","status":"up","available":true}
+		]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		if !created {
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+			return
+		}
+		// Роутер присвоил своё имя: list_1, а не new:dns:Figma.
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"list_1","name":"Figma","domains":["figma.com"],"manualDomains":["figma.com"],
+			 "routes":[{"interface":"OpkgTun12","tunnelId":"awg12","fallback":"auto"}],
+			 "enabled":true,"backend":"ndms"}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	mux.HandleFunc("/api/dns-routes/create", func(w http.ResponseWriter, r *http.Request) {
+		created = true
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	})
+	mux.HandleFunc("/api/routing/refresh", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := awgmgr.New(srv.URL)
+	req := wire.RouteAddRequest{Kind: "dns", Name: "Figma", TunnelID: "awg12", Targets: []string{"figma.com"}}
+	plan, err := buildRouteAddPlan(context.Background(), c, req)
+	if err != nil {
+		t.Fatalf("buildRouteAddPlan: %v", err)
+	}
+	req.DraftHash = plan.Hash
+
+	out, err := RouteAddJSON(context.Background(), c, req)
+	if err != nil {
+		t.Fatalf("RouteAddJSON: %v", err)
+	}
+	var res wire.RouteApplyResult
+	if err := json.Unmarshal([]byte(out), &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.RouteID != "list_1" {
+		t.Fatalf("route_id = %q, want присвоенный роутером list_1", res.RouteID)
+	}
+}
+
+// Живой роутер отдаёт одну и ту же цель дважды -- в domains и в
+// manualDomains. Раньше это доезжало до превью удаления как «figma.com,
+// figma.com»: человек читает такое как две разные цели и не понимает, какая
+// из них лишняя.
+func TestLiveRouteSummaries_DeduplicatesRepeatedTargets(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/dns-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[
+			{"id":"list_1","name":"Figma","domains":["figma.com"],"manualDomains":["figma.com"],
+			 "routes":[{"interface":"OpkgTun12","tunnelId":"awg12"}],"enabled":true,"backend":"ndms"}
+		]}`))
+	})
+	mux.HandleFunc("/api/static-routes/list", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	rules, err := liveRouteSummaries(context.Background(), awgmgr.New(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) != 1 || len(rules[0].Targets) != 1 || rules[0].Targets[0].Value != "figma.com" {
+		t.Fatalf("targets = %+v, want одну figma.com", rules[0].Targets)
+	}
+}

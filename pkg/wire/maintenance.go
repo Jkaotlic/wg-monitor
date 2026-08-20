@@ -69,27 +69,31 @@ type EntwareCleanStatus struct {
 	LogTail           string `json:"log_tail,omitempty"`
 }
 
-// TunnelTraffic -- ответ на tunnel_traffic: ряд обмена по одному туннелю за
-// период, каким его ведёт сам роутер (/api/tunnels/traffic).
+// TunnelTraffic -- ответ на tunnel_traffic: обмен по одному туннелю за период,
+// каким его ведёт сам роутер (/api/tunnels/traffic).
 //
-// Суммы считает агент, а не экран: плитки-счётчики показывают именно их, и
-// вторая формула того же числа на клиенте разошлась бы с первой на первом же
-// пропуске точки. Ряд едет целиком -- по нему рисуется график, когда он
-// понадобится.
+// RXTotal/TXTotal -- ОБЪЁМ за период, и считает его роутер (stats.volumeRx /
+// volumeTx: «Σ rxRate×Δt на сырых отсчётах»). Агент его только переносит.
+// Своя сумма по точкам была бы вторым мнением о том же числе -- и неверным:
+// точки несут скорости, а не байты.
 //
-// Пустой Points при Status ok -- это ответ «обмена не было», а не сбой: экран
+// Пустой Points при status ok -- это ответ «обмена не было», а не сбой: экран
 // обязан написать 0, а не «неизвестно».
 type TunnelTraffic struct {
-	TunnelID string         `json:"tunnel_id"`
-	Period   string         `json:"period,omitempty"`
-	RXTotal  int64          `json:"rx_total"`
-	TXTotal  int64          `json:"tx_total"`
-	Points   []TrafficPoint `json:"points"`
+	TunnelID string `json:"tunnel_id"`
+	Period   string `json:"period,omitempty"`
+	RXTotal  int64  `json:"rx_total"`
+	TXTotal  int64  `json:"tx_total"`
+	// CurrentRx/CurrentTx -- мгновенная скорость на последнем отсчёте, байт/сек.
+	CurrentRx float64        `json:"current_rx,omitempty"`
+	CurrentTx float64        `json:"current_tx,omitempty"`
+	Points    []TrafficPoint `json:"points"`
 }
 
-// TrafficPoint -- момент и два счётчика в байтах: rx принято, tx отдано.
+// TrafficPoint -- момент (unix-секунды) и две СКОРОСТИ в байтах в секунду.
+// Не счётчики: складывать их нельзя, объём лежит в TunnelTraffic.RXTotal.
 type TrafficPoint struct {
-	T  string `json:"t"`
-	RX int64  `json:"rx"`
-	TX int64  `json:"tx"`
+	T  int64   `json:"t"`
+	RX float64 `json:"rx"`
+	TX float64 `json:"tx"`
 }

@@ -2,7 +2,10 @@ package actions
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -460,5 +463,39 @@ func TestParseProcStatStarttime(t *testing.T) {
 		if ok && got != c.want {
 			t.Errorf("%s: got=%d want %d", c.name, got, c.want)
 		}
+	}
+}
+
+// Наборы, которые роутер описывает только правилами sing-box или ссылкой на
+// подписку, применить как DNS/HR-Neo правило нельзя -- они не попадают в
+// каталог. Но их число уезжает экрану: молча показать 75 из 87 значит
+// соврать размером каталога. (Форма ответа сверена с живым awg-manager
+// 2.17.2+r21, где hydraRoute.geoTags исчез вовсе.)
+func TestRouteTemplatesJSON_CountsUnappliablePresets(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/presets", func(w http.ResponseWriter, r *http.Request) {
+		// Конверт списан с живого роутера: data -- объект с presets внутри.
+		_, _ = w.Write([]byte(`{"success":true,"data":{"presets":[
+			{"id":"figma","name":"Figma","category":"developer","engines":{"dns":{"domains":["figma.com"]}}},
+			{"id":"rkn","name":"Заблокировано в РФ","category":"block","engines":{"singbox":{"ruleSets":[{"tag":"geosite-rkn"}]}}},
+			{"id":"apple","name":"Apple","category":"cloud","engines":{"singbox":{"ruleSets":[{"tag":"geosite-apple"}]}}}
+		]}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	out, err := RouteTemplatesJSON(context.Background(), awgmgr.New(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got wire.RouteTemplates
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Templates) != 1 || got.Templates[0].ID != "figma" {
+		t.Fatalf("templates = %+v", got.Templates)
+	}
+	if got.Skipped != 2 {
+		t.Fatalf("skipped = %d, want 2", got.Skipped)
 	}
 }

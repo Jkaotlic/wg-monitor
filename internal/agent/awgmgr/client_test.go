@@ -322,7 +322,9 @@ func TestClient_TunnelTraffic_HappyPath(t *testing.T) {
 			t.Errorf("period: %q", got)
 		}
 		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[{"t":"2026-08-20T09:00:00Z","rx":1024,"tx":512},{"t":"2026-08-20T10:00:00Z","rx":2048,"tx":256}]}}`))
+		// Форма ответа списана с живого роутера (2.17.2+r21): t -- unix-секунды
+		// числом, rx/tx -- дробные СКОРОСТИ, объём лежит в stats.
+		_, _ = w.Write([]byte(`{"success":true,"data":{"points":[{"t":1787219289,"rx":4606.3,"tx":12785.8},{"t":1787219299,"rx":1118473.6,"tx":641049.7}],"stats":{"points":2,"currentRx":1118473.6,"currentTx":641049.7,"volumeRx":3707681860,"volumeTx":1845407616}}}`))
 	}))
 	defer srv.Close()
 
@@ -330,8 +332,11 @@ func TestClient_TunnelTraffic_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Points) != 2 || got.Points[0].RX != 1024 || got.Points[1].TX != 256 {
+	if len(got.Points) != 2 || got.Points[0].T != 1787219289 || got.Points[1].RX != 1118473.6 {
 		t.Fatalf("points = %+v", got.Points)
+	}
+	if got.Stats.VolumeRx != 3707681860 || got.Stats.VolumeTx != 1845407616 {
+		t.Fatalf("stats = %+v", got.Stats)
 	}
 }
 

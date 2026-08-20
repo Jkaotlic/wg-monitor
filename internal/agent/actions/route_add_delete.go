@@ -86,6 +86,18 @@ func RouteAddJSON(ctx context.Context, c *awgmgr.Client, req wire.RouteAddReques
 	default:
 		return "", fmt.Errorf("route_add: unknown kind %q", req.Kind)
 	}
+	// Идентификатор правила присваивает РОУТЕР, и до сверки с живым списком
+	// у нас на руках только синтетический ключ плана ("new:dns:Figma").
+	// Отдать его наружу -- значит пообещать вызывающему id, по которому
+	// ничего не найдётся: именно так и вышло на живом роутере 20.08.2026,
+	// где созданное правило приехало как list_1. У ветки ошибки эта сверка
+	// была всегда; успеху она нужна ровно так же.
+	if !createReconciled {
+		if reconciled, ok := reconcileAppliedRouteAdd(ctx, c, plan.Route); ok {
+			routeID = reconciled.ID
+			plan.Route = reconciled
+		}
+	}
 	hrRestarted, refreshErr := refreshRoutingAndMaybeHR(ctx, c, hrTouched)
 	warning := ""
 	if createReconciled {
@@ -117,8 +129,16 @@ func RouteTemplatesJSON(ctx context.Context, c *awgmgr.Client) (string, error) {
 			continue
 		}
 		dns := cleanRouteTargets(preset.Engines.DNS.Domains)
+		// geoTags остались от прежних сборок awg-manager. На 2.17.2+r21 их в
+		// ответе нет вовсе -- наборы описываются sing-box rule-set'ами, --
+		// но поле читается по-прежнему: роутеры во флоте разных версий.
 		hr := cleanRouteTargets(preset.Engines.HydraRoute.GeoTags)
 		if len(dns) == 0 && len(hr) == 0 {
+			// Набор из одних rule-set'ов или ссылки на подписку правилом
+			// DNS/HR-Neo не выражается. Показать его кнопкой значило бы
+			// пообещать действие, которого нет; поэтому он считается
+			// пропущенным и число уезжает экрану.
+			templates.Skipped++
 			continue
 		}
 		name := strings.TrimSpace(preset.Name)
@@ -345,7 +365,15 @@ func reconcileAppliedRouteAdd(ctx context.Context, c *awgmgr.Client, expected wi
 	expected = normalizeRouteRuleSummary(expected)
 	for _, rule := range rules {
 		rule = normalizeRouteRuleSummary(rule)
-		if rule.Kind != expected.Kind || rule.Name != expected.Name || rule.Bind != expected.Bind || rule.Backend != expected.Backend {
+		// Привязка сравнивается БЕЗ учёта регистра: план берёт имя интерфейса
+		// из каталога маршрутизации ("opkgtun12"), а созданное правило
+		// возвращается с ndms-написанием ("OpkgTun12"). Это одно и то же
+		// имя, и строгое сравнение здесь не находило собственное правило
+		// сразу после его создания -- видно только на живом роутере.
+		if rule.Kind != expected.Kind || rule.Name != expected.Name || rule.Backend != expected.Backend {
+			continue
+		}
+		if !strings.EqualFold(rule.Bind, expected.Bind) {
 			continue
 		}
 		if !routeTargetSetsEqual(rule.Targets, expected.Targets) {
@@ -392,6 +420,20 @@ func routeTargetSet(values []wire.RouteTarget) map[string]bool {
 	return out
 }
 
+func dedupeRouteTargets(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		key := strings.ToLower(strings.TrimSpace(v))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, v)
+	}
+	return out
+}
+
 func liveRouteSummaries(ctx context.Context, c *awgmgr.Client) ([]wire.RouteRuleSummary, error) {
 	var (
 		dns     []awgmgr.DNSRoute
@@ -411,8 +453,11 @@ func liveRouteSummaries(ctx context.Context, c *awgmgr.Client) ([]wire.RouteRule
 		} else if ifaces := cleanRoutePolicyInterfaces(r.HRPolicyInterfaces); len(ifaces) > 0 {
 			bind = strings.Join(ifaces, ", ")
 		}
-		targets := append([]string{}, r.Domains...)
-		targets = append(targets, r.ManualDomains...)
+		// domains и manualDomains у живого роутера пересекаются: одна и та же
+		// цель приезжает дважды. В превью это читается как две разные цели,
+		// поэтому повторы схлопываются здесь -- один раз для всех, кто
+		// пользуется этим списком.
+		targets := dedupeRouteTargets(append(append([]string{}, r.Domains...), r.ManualDomains...))
 		out = append(out, normalizeRouteRuleSummary(wire.RouteRuleSummary{
 			ID: r.ID, Name: r.Name, Kind: "dns", Backend: r.Backend, Enabled: r.Enabled, Bind: bind, Targets: rawTargets(targets),
 		}))

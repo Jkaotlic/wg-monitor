@@ -14,6 +14,7 @@ import {
   visibleTunnelRows,
   rebindTargets,
   promoteTargets,
+  canRebindTunnel,
 } from '../routes.js'
 import { rulesCount, tunnelLiveLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
@@ -230,7 +231,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             <ul class="card list-reset">
               {tunnels.map((t) => {
                 const badge = defaultRouteBadge(t)
-                const canRebind = canMutate && t.type === 'managed' && t.total > 0 && rebindTargets(rows, t.id).length > 0
+                const canRebind = canMutate && canRebindTunnel(t) && rebindTargets(rows, t.id).length > 0
                 const canPromote = canMutate && promoteTargets(snapshot, t.id).length > 0
                 return (
                   <li key={t.id} class="row tunnel-row">
