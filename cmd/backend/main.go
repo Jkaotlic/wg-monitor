@@ -245,15 +245,18 @@ func main() {
 	}
 
 	mux := backend.NewMux(backend.Deps{
-		Logger:              logger,
-		DB:                  d,
-		Dispatcher:          disp,
-		Resumer:             watcher,
-		CommandSink:         cmdQueue,
-		TGNotifier:          notifier,
-		RoutesNotifier:      routesNotifier,
-		MaintNotifier:       maintNotifier,
-		BulkNotifier:        cb,
+		Logger:         logger,
+		DB:             d,
+		Dispatcher:     disp,
+		Resumer:        watcher,
+		CommandSink:    cmdQueue,
+		TGNotifier:     notifier,
+		RoutesNotifier: routesNotifier,
+		MaintNotifier:  maintNotifier,
+		BulkNotifier:   cb,
+		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
+		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
+		VPNCabinet:          cb,
 		OpkgNotifier:        opkgNotifier,
 		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,

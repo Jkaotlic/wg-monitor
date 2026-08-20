@@ -12,6 +12,7 @@ import { Stat } from '../ui/Stat.jsx'
 import { Chain } from '../ui/Chain.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
+import { CabinetScreen } from './CabinetScreen.jsx'
 
 // Туннели: какая линия несёт трафик, кто подхватит, если она замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -20,6 +21,7 @@ import { NavCard } from '../ui/NavCard.jsx'
 // Маршруты уехали отсюда на свой экран: сначала человек спрашивает "какая
 // линия поднята", и только потом -- "что через неё идёт".
 export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
+  const [cabinets, setCabinets] = useState(false)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
@@ -193,6 +195,25 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             onClick={onOpenRoutes}
           />
         </div>
+      )}
+
+      {snapshot && (
+        <div style="margin-top:12px">
+          <NavCard
+            title="Новая линия из кабинета"
+            note="Amnezia · HideMy"
+            onClick={() => setCabinets(true)}
+          />
+        </div>
+      )}
+
+      {cabinets && (
+        <CabinetScreen
+          routerID={routerID}
+          asleep={asleep}
+          onClose={() => setCabinets(false)}
+          onIssued={() => run('route_status', {}, deadline)}
+        />
       )}
     </div>
   )

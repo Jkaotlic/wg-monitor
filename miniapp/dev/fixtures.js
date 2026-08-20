@@ -371,6 +371,9 @@ function commandResult(id) {
       output: `interface Wireguard0 -> ${lastAction === 'tunnel_enable' ? 'up' : 'down'}`,
     }
   }
+  if (lastAction === 'tunnel_import') {
+    return { id, status: 'ok', duration_ms: 3400, output: `tunnel ${lastArgs.name ?? ''} imported` }
+  }
   if (lastAction === 'firmware_status') {
     return {
       id,
@@ -524,6 +527,32 @@ export function respond(method, path) {
   }
   if (rest === '/timeline') return { events: HISTORY, days: 7, truncated: false }
   // Пороги живут в backend.yaml; на домашнем бэкенде это 120/180/3600.
+  if (rest === '/vpn') {
+    return {
+      accounts: [
+        {
+          provider: 'amnezia',
+          label: 'Amnezia Premium',
+          connected: true,
+          status: 'active',
+          ends_at: '2026-12-01',
+          devices_used: 2,
+          devices_max: 5,
+          options: [
+            { id: 'nl', label: 'Нидерланды' },
+            { id: 'de', label: 'Германия', issued: true },
+            { id: 'se', label: 'Швеция' },
+          ],
+        },
+        {
+          provider: 'hidemyname',
+          label: 'HideMy.name',
+          connected: false,
+          note: 'Код доступа не сохранён. Отправьте его боту в теме роутера — приложение коды не спрашивает.',
+        },
+      ],
+    }
+  }
   if (rest === '/settings') {
     return {
       silence_after_sec: 120,

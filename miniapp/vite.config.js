@@ -13,6 +13,25 @@ function mockApi() {
       server.middlewares.use((req, res, next) => {
         if (!req.url.startsWith('/v1/miniapp/')) return next()
         const path = req.url.split('?')[0]
+        // Выпуск конфига из кабинета: сервер отвечает идентификатором
+        // команды, конфиг клиенту не показывается вовсе.
+        if (req.method === 'POST' && path.endsWith('/vpn/issue')) {
+          let raw = ''
+          req.on('data', (chunk) => { raw += chunk })
+          req.on('end', () => {
+            let option = 'nl'
+            try {
+              option = JSON.parse(raw).option_id ?? option
+            } catch {
+              option = 'nl'
+            }
+            const cmdID = registerCommand({ action: 'tunnel_import', args: { name: 'amnezia_' + option } })
+            res.setHeader('Content-Type', 'application/json')
+            res.statusCode = 202
+            res.end(JSON.stringify({ cmd_id: cmdID, tunnel_name: 'amnezia_' + option }))
+          })
+          return
+        }
         if (req.method === 'POST' && path.endsWith('/commands')) {
           // Запоминаем команду под её идентификатором, чтобы отдать при
           // опросе результат именно для неё: параллельные команды с одним

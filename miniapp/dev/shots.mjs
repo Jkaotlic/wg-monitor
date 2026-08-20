@@ -78,6 +78,24 @@ const SHOTS = [
     },
   },
   {
+    name: 'cabinet',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.waitForTimeout(800)
+      await page.getByRole('button', { name: /Новая линия из кабинета/ }).click()
+      await page.waitForTimeout(800)
+    },
+  },
+  {
+    name: 'fleet-dots',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Мои роутеры' }).click()
+      await page.waitForTimeout(500)
+    },
+  },
+  {
     name: 'settings',
     overlay: true,
     steps: async (page) => {

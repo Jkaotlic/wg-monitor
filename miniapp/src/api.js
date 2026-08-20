@@ -102,6 +102,21 @@ export function unbindOwner(routerID) {
 // which encodes `wizardDeployResp{CmdID: id}`. The key is "cmd_id", NOT
 // "command_id" -- callers must destructure { cmd_id } or they'll silently get
 // undefined and poll `/commands/undefined` forever.
+// Кабинеты провайдеров: что подключено и что можно выпустить. Ключей
+// кабинета клиент не видит и не отправляет -- они живут у бота.
+export function fetchVPNAccounts(routerID) {
+  return request(`/routers/${routerID}/vpn`)
+}
+
+// Выпуск конфига: наружу уходит ТОЛЬКО выбор. Конфиг скачивает сервер и сам
+// кладёт его в команду агенту; в ответ приезжает идентификатор команды.
+export function issueVPNConfig(routerID, provider, optionID) {
+  return request(`/routers/${routerID}/vpn/issue`, {
+    method: 'POST',
+    body: JSON.stringify({ provider, option_id: optionID }),
+  })
+}
+
 export function sendCommand(routerID, action, args = {}) {
   return request(`/routers/${routerID}/commands`, {
     method: 'POST',
