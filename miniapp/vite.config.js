@@ -20,7 +20,7 @@ function mockApi() {
           req.on('data', (chunk) => { raw += chunk })
           req.on('end', () => {
             try {
-              setLastAction(JSON.parse(raw).action)
+              setLastAction(JSON.parse(raw))
             } catch {
               setLastAction(null)
             }

@@ -345,3 +345,43 @@ export function policyRuleSummary(row) {
 export function visibleTunnelRows(rows) {
   return (rows ?? []).filter((r) => r.type === 'managed' || r.total > 0)
 }
+
+// Что можно сделать главным в политике, которая сейчас ведёт в этот туннель.
+// Только звенья, уже состоящие в цепочке: добавить в политику новый интерфейс
+// -- другая операция, она меняет не порядок, а список того, чем политика
+// может подхватиться, и относится к мастеру замены конфига.
+//
+// live едет вместе со звеном не для красоты: сделать главным выключённый
+// туннель можно (порядок сменится), но трафик пойдёт через него не раньше,
+// чем он поднимется, и экран обязан сказать это ДО нажатия.
+export function promoteTargets(snapshot, activeTunnelID) {
+  if (!snapshot?.policy_model || !activeTunnelID) return []
+  const tunnels = Array.isArray(snapshot.tunnels) ? snapshot.tunnels : []
+  const byID = new Map(tunnels.map((t) => [t.id, t]))
+  const out = []
+  for (const p of snapshot.policies ?? []) {
+    if (p.active_tunnel_id !== activeTunnelID) continue
+    for (const link of p.interfaces ?? []) {
+      // Звено без tunnel_id -- это провайдер или мост, а не наш туннель:
+      // route_policy_promote адресует звено именно туннелем, и назвать
+      // такое звено ему нечем.
+      if (!link.tunnel_id || link.tunnel_id === activeTunnelID) continue
+      const t = byID.get(link.tunnel_id)
+      out.push({
+        policyName: p.name,
+        tunnelID: link.tunnel_id,
+        tunnelName: t?.name || link.name || link.tunnel_id,
+        live: t ? tunnelLive(t) : 'unknown',
+      })
+    }
+  }
+  return out
+}
+
+// Куда можно перенести правила. Только свои туннели: WAN и системные
+// интерфейсы тоже принимают правила, но перенос в них -- это "пустить мимо
+// VPN", и предлагать такое в одном списке с туннелями значит спрятать
+// последствие за одинаковой строкой.
+export function rebindTargets(rows, srcTunnelID = '') {
+  return (rows ?? []).filter((r) => r.type === 'managed' && r.id !== srcTunnelID)
+}

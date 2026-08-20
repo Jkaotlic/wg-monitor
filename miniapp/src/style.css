@@ -1951,3 +1951,85 @@ body {
   flex: 1;
   min-width: 0;
 }
+
+/* ============================================================
+   Экран «Отправить в туннель»
+   ============================================================ */
+
+/* Переключатель источника правила: каталог роутера или свои цели. Две
+   равные половины -- выбор равноправный, и подсвечен ровно один. */
+.seg {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  margin-bottom: var(--sp-4);
+  background: var(--surf);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.seg-btn {
+  flex: 1;
+  min-height: 44px;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--dim);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.seg-btn-on {
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.seg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* Карточка с полями ввода: поля и кнопка идут столбиком с одним ритмом. */
+.card-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+}
+
+.field textarea {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+  resize: vertical;
+}
+
+.field textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Главное действие экрана занимает всю ширину: оно одно, и делить строку
+   ему не с кем. */
+.btn-wide {
+  width: 100%;
+  margin-top: var(--sp-3);
+  min-height: 44px;
+}
+
+/* Кнопки правки на строке туннеля: своя строка под сводкой. Делить строку
+   с именем и состоянием им нельзя -- на 380 px имя туннеля выталкивает их
+   за край, и до кнопки не дотянуться. */
+.row-actions {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}

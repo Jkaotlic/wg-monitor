@@ -22,7 +22,9 @@ const SHOTS = [
       await page.getByRole('button', { name: 'Перезапустить туннель' }).first().click({ timeout: 2000 })
     },
   },
-  { name: 'tunnels', steps: async (page) => page.getByRole('button', { name: 'Туннели' }).click() },
+  // exact: обычное имя ловит ещё и карточку перехода "Туннели и резерв" на
+  // главном экране, и снимок падал на неоднозначности.
+  { name: 'tunnels', steps: async (page) => page.getByRole('button', { name: 'Туннели', exact: true }).click() },
   {
     name: 'diag',
     steps: async (page) => {
@@ -32,6 +34,44 @@ const SHOTS = [
     },
   },
   { name: 'events', steps: async (page) => page.getByRole('button', { name: 'События', exact: true }).click() },
+  // Маршруты и правка маршрутов: экран с кнопками правки, каталог наборов и
+  // превью с пересечением -- три состояния, которые ломаются молча, если
+  // смотреть только на тесты.
+  {
+    name: 'routes',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: /Маршруты|Что уходит/ }).first().click({ timeout: 2000 })
+      await page.waitForTimeout(900)
+    },
+  },
+  {
+    name: 'route-catalog',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: /Маршруты|Что уходит/ }).first().click({ timeout: 2000 })
+      await page.waitForTimeout(900)
+      await page.getByRole('button', { name: 'Отправить в туннель' }).first().click()
+      await page.locator('.overlay').last().getByRole('button', { name: /awg3-work-via-ru1/ }).click()
+      await page.waitForTimeout(800)
+    },
+  },
+  {
+    name: 'route-preview-blocked',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: /Маршруты|Что уходит/ }).first().click({ timeout: 2000 })
+      await page.waitForTimeout(900)
+      await page.getByRole('button', { name: 'Отправить в туннель' }).first().click()
+      await page.locator('.overlay').last().getByRole('button', { name: /awg3-work-via-ru1/ }).click()
+      await page.waitForTimeout(800)
+      await page.locator('.overlay').last().getByRole('button', { name: /^ChatGPT/ }).click()
+      await page.waitForTimeout(800)
+    },
+  },
 ]
 
 // Два состояния, которых в фикстурах нет по смыслу: пустой доступ и ровно

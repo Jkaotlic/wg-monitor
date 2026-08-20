@@ -12,6 +12,8 @@ import {
   rulesByBind,
   ruleBackendLabel,
   visibleTunnelRows,
+  promoteTargets,
+  rebindTargets,
 } from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot (pkg/wire/routing.go): tunnels[],
@@ -619,5 +621,79 @@ describe('defaultDestination', () => {
       ],
     })
     expect(d.mode).toBe('unknown')
+  })
+})
+
+// Задача 7 плана управления маршрутами: смена главного туннеля политики.
+describe('promoteTargets', () => {
+  const SNAP = {
+    policy_model: true,
+    tunnels: [
+      { id: 'awg11', name: 'work', type: 'managed', status: 'running' },
+      { id: 'awg10', name: 'main', type: 'managed', status: 'disabled' },
+    ],
+    policies: [{
+      name: 'HydraRoute',
+      active_tunnel_id: 'awg11',
+      interfaces: [
+        { bind: 'OpkgTun11', name: 'work', role: 'active', tunnel_id: 'awg11' },
+        { bind: 'OpkgTun10', name: 'main', role: 'unavailable', tunnel_id: 'awg10' },
+      ],
+    }],
+  }
+
+  // Главным можно сделать только то, что УЖЕ в цепочке: добавление нового
+  // интерфейса -- другая операция с другим радиусом поражения.
+  it('предлагает звенья цепочки, кроме уже активного', () => {
+    expect(promoteTargets(SNAP, 'awg11')).toEqual([
+      { policyName: 'HydraRoute', tunnelID: 'awg10', tunnelName: 'main', live: 'down' },
+    ])
+  })
+
+  // Снимок старого агента политик не читает, и кнопку рисовать не на чем.
+  it('без модели политик не предлагает ничего', () => {
+    expect(promoteTargets({ ...SNAP, policy_model: false, policies: [] }, 'awg11')).toEqual([])
+  })
+
+  // Туннель, который не несёт ни одной политики, -- не точка для смены
+  // главного: менять там нечего.
+  it('для туннеля без своей политики список пуст', () => {
+    expect(promoteTargets(SNAP, 'awg10')).toEqual([])
+  })
+
+  // Звено мимо VPN (провайдер) тоннелем не является, и сделать его главным
+  // этим действием нельзя -- у него нет tunnel_id.
+  it('звенья без tunnel_id пропускаются', () => {
+    const snap = {
+      ...SNAP,
+      policies: [{
+        name: 'RU',
+        active_tunnel_id: 'awg11',
+        interfaces: [
+          { bind: 'OpkgTun11', name: 'work', role: 'active', tunnel_id: 'awg11' },
+          { bind: 'GigabitEthernet1', name: 'Провайдер', role: 'fallback' },
+        ],
+      }],
+    }
+    expect(promoteTargets(snap, 'awg11')).toEqual([])
+  })
+})
+
+describe('rebindTargets', () => {
+  const ROWS = [
+    { id: 'awg11', name: 'work', type: 'managed', total: 26 },
+    { id: 'awg10', name: 'main', type: 'managed', total: 0 },
+    { id: 'eth3', name: 'Провайдер', type: 'wan', total: 2 },
+  ]
+
+  // Перенести правила можно только в свой туннель: WAN и системные
+  // интерфейсы -- это "мимо VPN", и предлагать их как цель переноса значит
+  // предлагать выключить защиту, не сказав об этом.
+  it('целями переноса бывают только свои туннели, кроме исходного', () => {
+    expect(rebindTargets(ROWS, 'awg11')).toEqual([{ id: 'awg10', name: 'main', type: 'managed', total: 0 }])
+  })
+
+  it('без исходного туннеля отдаёт все свои туннели', () => {
+    expect(rebindTargets(ROWS, '').map((r) => r.id)).toEqual(['awg11', 'awg10'])
   })
 })

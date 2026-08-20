@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { templateGroups, addPlanSummary, deletePlanSummary } from '../src/routeAdd.js'
+import { templateGroups, addPlanSummary, deletePlanSummary, parseManualTargets, templateChoice } from '../src/routeAdd.js'
 
 describe('templateGroups', () => {
   // На живом роутере 87 наборов в семи категориях. Плоским списком по нему
@@ -46,6 +46,19 @@ describe('addPlanSummary', () => {
 
   // Хеш черновика едет обратно вместе с подтверждением: агент откажется
   // применять план, чьё превью устарело, и без хеша эта защита не работает.
+  // Цели -- это код (мono), а пересечение -- фраза человеку. Одной кучей
+  // строк экран красит их одинаково, и предупреждение читается как ещё один
+  // домен.
+  it('цели и предупреждения разделены', () => {
+    const s = addPlanSummary({
+      route: { name: 'ChatGPT', targets: [{ value: 'openai.com' }] },
+      overlaps: [{ severity: 'block', reason: 'уже есть правило' }],
+    })
+    expect(s.targets).toBe('openai.com')
+    expect(s.notes).toEqual(['Мешает: уже есть правило'])
+    expect(s.lines).toEqual(['openai.com', 'Мешает: уже есть правило'])
+  })
+
   it('несёт хеш плана для подтверждения', () => {
     const s = addPlanSummary({ route: { name: 'X' }, hash: 'abc123', can_apply: true })
     expect(s.hash).toBe('abc123')
@@ -71,5 +84,65 @@ describe('deletePlanSummary', () => {
       can_apply: true,
     })
     expect(s.lines.join(' ')).toContain('последнее правило политики RU')
+  })
+})
+
+describe('parseManualTargets', () => {
+  // Правило либо про имена сайтов, либо про адреса сетей: агент проверяет
+  // это первым делом (buildRouteAddPlan, route_add_delete.go), и узнавать
+  // об ошибке после похода на роутер -- лишний круг.
+  it('домены дают правило по имени сайта', () => {
+    const p = parseManualTargets(' openai.com, chatgpt.com \n anthropic.com ')
+    expect(p.kind).toBe('dns')
+    expect(p.targets).toEqual(['openai.com', 'chatgpt.com', 'anthropic.com'])
+    expect(p.error).toBe('')
+  })
+
+  it('сети и адреса дают правило по адресу сети', () => {
+    const p = parseManualTargets('10.0.0.0/8 192.168.5.7')
+    expect(p.kind).toBe('static')
+    expect(p.targets).toEqual(['10.0.0.0/8', '192.168.5.7'])
+  })
+
+  it('смешивать имена и адреса в одном правиле нельзя', () => {
+    const p = parseManualTargets('openai.com, 10.0.0.0/8')
+    expect(p.kind).toBe('')
+    expect(p.error).toContain('в одном правиле')
+  })
+
+  it('пустой ввод -- не ошибка, а пустой список', () => {
+    expect(parseManualTargets('  ')).toEqual({ targets: [], kind: '', error: '' })
+  })
+
+  it('повторы схлопываются: роутер всё равно хранит их один раз', () => {
+    expect(parseManualTargets('openai.com openai.com').targets).toEqual(['openai.com'])
+  })
+})
+
+describe('templateChoice', () => {
+  const AI = { id: 'ai', name: 'AI', category: 'ai', dns: ['openai.com'], hr_neo: ['geosite:OPENAI', 'geoip:AI'] }
+  const GEO = { id: 'geo', name: 'Гео', category: 'ai', hr_neo: ['geosite:GITHUB'] }
+
+  // Гео-теги умеет разворачивать только HR Neo. Набор из одних тегов на
+  // роутере без него -- правило без целей: агент ответит ошибкой, и лучше
+  // сказать это на экране, чем сходить за ней на роутер.
+  it('с работающим HR Neo гео-теги идут в правило', () => {
+    const c = templateChoice(AI, { hrNeoRunning: true })
+    expect(c.args).toEqual({ template_id: 'ai', kind: 'dns', use_hr_neo: true })
+    expect(c.canApply).toBe(true)
+    expect(c.summary).toBe('1 домен и 2 гео-тега')
+  })
+
+  it('без HR Neo остаются только домены', () => {
+    const c = templateChoice(AI, { hrNeoRunning: false })
+    expect(c.args.use_hr_neo).toBe(false)
+    expect(c.canApply).toBe(true)
+    expect(c.summary).toBe('1 домен')
+  })
+
+  it('набор из одних гео-тегов без HR Neo применить нельзя, и экран говорит почему', () => {
+    const c = templateChoice(GEO, { hrNeoRunning: false })
+    expect(c.canApply).toBe(false)
+    expect(c.reason).toContain('HR Neo')
   })
 })

@@ -248,8 +248,85 @@ export function commandOutcomeLabel(action, result) {
       if (action === 'tunnel_restart') return 'Не удалось перезапустить туннель'
       return result.output?.trim() || 'Команда завершилась с ошибкой'
     default:
-      return action === 'tunnel_restart' ? 'Туннель перезапущен' : 'Готово'
+      if (action === 'tunnel_restart') return 'Туннель перезапущен'
+      return routeOutcomeLabel(action, result.output) || 'Готово'
   }
+}
+
+// Маршрутные команды отвечают не строкой, а payload'ом из pkg/wire/routing.go,
+// и "Готово" на нём -- не краткость, а потеря: перенос умеет пройти
+// наполовину (CategoryResult.Failed), повышение звена -- сменить порядок, не
+// сдвинув трафик, а add/delete -- применить правку и не суметь обновить
+// маршрутизацию после неё (RouteApplyResult.Warning). Каждый из трёх случаев
+// человек обязан увидеть до того, как решит, что дело сделано.
+function routeOutcomeLabel(action, output) {
+  const payload = parseJSON(output)
+  if (!payload) return ''
+  switch (action) {
+    case 'route_rebind':
+      return rebindOutcome(payload)
+    case 'route_policy_promote':
+      return promoteOutcome(payload)
+    case 'route_add':
+    case 'route_delete':
+      return applyOutcome(action, payload)
+    default:
+      return ''
+  }
+}
+
+function parseJSON(output) {
+  if (typeof output !== 'string' || output.trim() === '') return null
+  try {
+    const value = JSON.parse(output)
+    return value && typeof value === 'object' ? value : null
+  } catch {
+    return null
+  }
+}
+
+// hr_neo -- подмножество dns (комментарий у wire.RouteRebindResult), поэтому
+// в сумму оно не идёт: сложить их значило бы посчитать одни и те же правила
+// дважды.
+function rebindOutcome(res) {
+  const cats = [res.dns, res.static]
+  if (cats.every((c) => !c || typeof c.ok !== 'number')) return ''
+  const moved = cats.reduce((n, c) => n + (c?.ok ?? 0), 0)
+  const failed = cats.reduce((n, c) => n + (c?.failed ?? 0), 0)
+  if (failed > 0) {
+    const why = (res.dns?.errors ?? res.static?.errors ?? [])[0]
+    const tail = why ? ` (${why})` : ''
+    return `Перенесено ${moved} ${pluralRu(moved, 'правило', 'правила', 'правил')}, не удалось ${failed}${tail}`
+  }
+  if (moved === 0) return 'Переносить было нечего: правил на этом туннеле нет'
+  return `Перенесено ${rulesCount(moved)}`
+}
+
+// Ответ -- свежая политика (wire.RoutePolicySummary). Первое звено цепочки и
+// звено, несущее трафик, -- разные вещи: повысить можно выключённый туннель,
+// и тогда порядок сменился, а трафик остался там же. Сказать про это обязан
+// тот же экран, который повышение и запустил.
+function promoteOutcome(policy) {
+  const links = Array.isArray(policy.interfaces) ? policy.interfaces : []
+  const first = links[0]
+  if (!policy.name || !first) return ''
+  const linkName = (l) => l.name || l.bind
+  const active = links.find((l) => l.tunnel_id && l.tunnel_id === policy.active_tunnel_id)
+  if (!active) {
+    return `Первым звеном политики «${policy.name}» стал «${linkName(first)}», но доступного звена в цепочке сейчас нет`
+  }
+  if (active.bind !== first.bind) {
+    return `Первым звеном политики «${policy.name}» стал «${linkName(first)}», но трафик пока идёт через «${linkName(active)}»`
+  }
+  return `Правила политики «${policy.name}» идут через «${linkName(first)}»`
+}
+
+function applyOutcome(action, res) {
+  const name = (res.route_name || res.route_id || '').trim()
+  if (!name) return ''
+  const base = action === 'route_add' ? `Правило «${name}» создано` : `Правило «${name}» убрано`
+  const warning = (res.warning || '').trim()
+  return warning ? `${base}, но с оговоркой: ${warning}` : base
 }
 
 // Четыре состояния роутера из dashboard_handler.go:780-796 -- единственный
@@ -291,6 +368,18 @@ export function pluralRu(n, one, few, many) {
   if (mod10 === 1) return one
   if (mod10 >= 2 && mod10 <= 4) return few
   return many
+}
+
+// Живость туннеля словами. Словарь один на приложение: второй разошёлся бы
+// с первым на первой же правке, а строки эти стоят рядом на одном экране.
+export const TUNNEL_LIVE_LABEL = {
+  up: 'работает',
+  down: 'выключен',
+  unknown: 'состояние неизвестно',
+}
+
+export function tunnelLiveLabel(live) {
+  return TUNNEL_LIVE_LABEL[live] ?? live ?? ''
 }
 
 export function rulesCount(n) {

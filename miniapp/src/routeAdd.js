@@ -1,3 +1,5 @@
+import { pluralRu } from './labels.js'
+
 // Превью изменений маршрутизации: что именно уйдёт в туннель или исчезнет
 // из него. Чистые функции -- вся работа с планом агента живёт здесь, экран
 // только рисует.
@@ -39,6 +41,10 @@ export function addPlanSummary(plan) {
   return {
     title: route.name || route.id || 'Новое правило',
     lines,
+    // Те же данные, но разложенные по назначению: цели экран печатает
+    // моноширинным (это код), а предупреждения -- обычной фразой.
+    targets,
+    notes: lines.slice(targets ? 1 : 0),
     canApply: Boolean(plan?.can_apply),
     // Хеш едет обратно с подтверждением: агент откажется применять план,
     // чьё превью устарело, и без хеша эта защита мертва.
@@ -57,7 +63,64 @@ export function deletePlanSummary(plan) {
   return {
     title: route.name || route.id || 'Правило',
     lines,
+    targets,
+    notes: lines.slice(targets ? 1 : 0),
     canApply: Boolean(plan?.can_apply),
     hash: plan?.hash ?? '',
+  }
+}
+
+// Ручной ввод. Правило на роутере -- либо про имена сайтов (DNS), либо про
+// адреса сетей (static); агент отказывает смешанному первым же условием
+// (buildRouteAddPlan, route_add_delete.go), и узнавать об этом после похода
+// на роутер незачем. Тип не спрашиваем: он читается из того, что человек
+// написал, и вопрос "DNS или static" -- вопрос про механизм, а не про
+// последствие.
+export function parseManualTargets(text) {
+  const raw = String(text ?? '')
+    .split(/[\s,;]+/)
+    .map((v) => v.trim())
+    .filter(Boolean)
+  const targets = [...new Set(raw)]
+  if (targets.length === 0) return { targets: [], kind: '', error: '' }
+  const nets = targets.filter(looksLikeNet)
+  if (nets.length === targets.length) return { targets, kind: 'static', error: '' }
+  if (nets.length === 0) return { targets, kind: 'dns', error: '' }
+  return {
+    targets,
+    kind: '',
+    error: 'Имена сайтов и адреса сетей в одном правиле не уживаются — заведите два правила.',
+  }
+}
+
+// Адрес сети узнаётся по цифрам и точкам/двоеточиям: разбирать IPv4/IPv6
+// целиком здесь не нужно -- это делает агент, а экрану хватает отличить
+// "10.0.0.0/8" от "openai.com", чтобы не смешать их в одном правиле.
+function looksLikeNet(value) {
+  const bare = value.split('/')[0]
+  return /^[0-9.]+$/.test(bare) || /^[0-9a-f:]+$/i.test(bare) && bare.includes(':')
+}
+
+// Что уйдёт в правило из набора каталога. Гео-теги (geosite:OPENAI)
+// разворачивает только HR Neo, поэтому без него набор теряет их молча --
+// а набор, кроме тегов ничего не содержащий, применить нельзя вовсе, и
+// сказать об этом обязан экран: агент ответит на это ошибкой уже с роутера.
+export function templateChoice(template, { hrNeoRunning = false } = {}) {
+  const dns = (template?.dns ?? []).filter(Boolean)
+  const hr = (template?.hr_neo ?? []).filter(Boolean)
+  const useHRNeo = hrNeoRunning && hr.length > 0
+  const parts = []
+  if (dns.length > 0) parts.push(`${dns.length} ${pluralRu(dns.length, 'домен', 'домена', 'доменов')}`)
+  if (useHRNeo) parts.push(`${hr.length} ${pluralRu(hr.length, 'гео-тег', 'гео-тега', 'гео-тегов')}`)
+  const canApply = dns.length > 0 || useHRNeo
+  return {
+    id: template?.id ?? '',
+    name: template?.name || template?.id || 'Набор',
+    args: { template_id: template?.id ?? '', kind: 'dns', use_hr_neo: useHRNeo },
+    summary: parts.join(' и '),
+    canApply,
+    reason: canApply
+      ? ''
+      : 'Набор состоит из гео-тегов, а их разворачивает только HR Neo — на этом роутере он не работает.',
   }
 }

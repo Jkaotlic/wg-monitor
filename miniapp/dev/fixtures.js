@@ -216,15 +216,130 @@ const DIAG_REPORT = {
   },
 }
 
-// Последняя запрошенная команда: dev-сервер отвечает на опрос результата тем,
-// что соответствует действию, а не одной заглушкой на все случаи.
-let lastAction = null
+// Каталог наборов роутера (wire.RouteTemplates). На живом роутере их 87 в
+// семи категориях; здесь десяток в трёх -- ровно чтобы экран показал
+// группировку и разницу между набором с доменами и набором из одних
+// гео-тегов, которые без HR Neo не разворачиваются.
+const ROUTE_TEMPLATES = {
+  templates: [
+    { id: 'chatgpt', name: 'ChatGPT', category: 'ai', dns: ['chatgpt.com', 'openai.com', 'oaistatic.com'], hr_neo: ['geosite:OPENAI'] },
+    { id: 'claude', name: 'Claude', category: 'ai', dns: ['claude.ai', 'anthropic.com'], hr_neo: ['geosite:ANTHROPIC'] },
+    { id: 'ai-all', name: 'Весь ИИ', category: 'ai', hr_neo: ['geosite:CATEGORY-AI', 'geoip:AI'] },
+    { id: 'github', name: 'GitHub', category: 'разработка', dns: ['github.com', 'githubusercontent.com'], hr_neo: ['geosite:GITHUB'] },
+    { id: 'docker', name: 'Docker Hub', category: 'разработка', dns: ['docker.io', 'docker.com'] },
+    { id: 'npm', name: 'npm', category: 'разработка', dns: ['npmjs.com', 'npmjs.org'] },
+    { id: 'netflix', name: 'Netflix', category: 'видео', dns: ['netflix.com', 'nflxvideo.net'], hr_neo: ['geosite:NETFLIX'] },
+    { id: 'youtube', name: 'YouTube', category: 'видео', dns: ['youtube.com', 'ytimg.com', 'googlevideo.com'] },
+    { id: 'twitch', name: 'Twitch', category: 'видео', dns: ['twitch.tv', 'ttvnw.net'] },
+    { id: 'vimeo', name: 'Vimeo', category: 'видео', dns: ['vimeo.com'] },
+  ],
+}
 
-export function setLastAction(action) {
-  lastAction = action
+// Последняя запрошенная команда: dev-сервер отвечает на опрос результата тем,
+// что соответствует действию, а не одной заглушкой на все случаи. Аргументы
+// хранятся вместе с действием: план добавления обязан отвечать про то, что
+// у него спросили, иначе превью на экране врёт.
+let lastAction = null
+let lastArgs = {}
+
+export function setLastAction(command) {
+  if (command && typeof command === 'object') {
+    lastAction = command.action ?? null
+    lastArgs = command.args ?? {}
+    return
+  }
+  lastAction = command
+  lastArgs = {}
+}
+
+function targetType(value) {
+  if (value.includes(':')) return 'opaque'
+  return /^[0-9.]+$/.test(value.split('/')[0]) ? 'cidr' : 'domain'
+}
+
+// План добавления (wire.RouteAddPlan). Пересечение показываем на том, что и
+// на живом роутере: правило ChatGPT там уже есть, и второе такое же спорило
+// бы с ним -- это единственный случай, когда план запрещает применение.
+function routeAddPlan(args) {
+  const tpl = ROUTE_TEMPLATES.templates.find((t) => t.id === args.template_id)
+  const fromTemplate = [...(tpl?.dns ?? []), ...(args.use_hr_neo ? tpl?.hr_neo ?? [] : [])]
+  const targets = (args.targets ?? []).length ? args.targets : fromTemplate
+  const name = args.name || tpl?.name || 'Новое правило'
+  const blocked = targets.some((v) => v === 'openai.com' || v === 'chatgpt.com')
+  return {
+    request: { kind: args.kind ?? 'dns', name, tunnel_id: args.tunnel_id, targets, use_hr_neo: Boolean(args.use_hr_neo) },
+    route: {
+      id: `new:${args.kind ?? 'dns'}:${name}`,
+      name,
+      kind: args.kind ?? 'dns',
+      enabled: true,
+      backend: args.use_hr_neo ? 'hydraroute' : 'ndms',
+      bind: 'opkgtun11',
+      targets: targets.map((value) => ({ type: targetType(value), value })),
+    },
+    overlaps: blocked
+      ? [{
+          severity: 'block',
+          reason: 'уже есть правило «ChatGPT» на openai.com',
+          existing: { id: 'hr:ChatGPT', name: 'ChatGPT', kind: 'dns', backend: 'hydraroute', enabled: true, bind: 'policy:HydraRoute' },
+          target: { type: 'domain', value: 'openai.com' },
+        }]
+      : [],
+    can_apply: !blocked,
+    hash: 'devplanhash',
+  }
 }
 
 function commandResult() {
+  if (lastAction === 'route_templates') {
+    return { id: 'dev', status: 'ok', duration_ms: 310, output: JSON.stringify(ROUTE_TEMPLATES) }
+  }
+  if (lastAction === 'route_add_plan') {
+    return { id: 'dev', status: 'ok', duration_ms: 420, output: JSON.stringify(routeAddPlan(lastArgs)) }
+  }
+  if (lastAction === 'route_add') {
+    const plan = routeAddPlan(lastArgs)
+    return {
+      id: 'dev',
+      status: 'ok',
+      duration_ms: 780,
+      output: JSON.stringify({ action: 'add', kind: plan.route.kind, route_id: 'hr:new', route_name: plan.route.name }),
+    }
+  }
+  if (lastAction === 'route_rebind') {
+    return {
+      id: 'dev',
+      status: 'ok',
+      duration_ms: 2100,
+      output: JSON.stringify({
+        src_tunnel_id: lastArgs.src_tunnel_id ?? '',
+        dst_tunnel_id: lastArgs.dst_tunnel_id ?? '',
+        dns: { ok: 26, failed: 0 },
+        static: { ok: 0, failed: 0 },
+        hr_neo: { ok: 26, failed: 0 },
+      }),
+    }
+  }
+  if (lastAction === 'route_policy_promote') {
+    // Ответ агента -- свежая политика: повышенное звено стало первым, но
+    // трафик несёт по-прежнему живое (awg11), потому что awg10 выключен.
+    return {
+      id: 'dev',
+      status: 'ok',
+      duration_ms: 1600,
+      output: JSON.stringify({
+        name: lastArgs.policy_name ?? 'HydraRoute',
+        dns: 26,
+        hr_neo: 26,
+        via_vpn: true,
+        active_tunnel_id: 'awg11',
+        interfaces: [
+          { bind: 'OpkgTun10', name: 'awg3-main-work', role: 'unavailable', tunnel_id: 'awg10', via_vpn: true },
+          { bind: 'OpkgTun11', name: 'awg3-work-via-ru1', role: 'active', available: true, tunnel_id: 'awg11', via_vpn: true },
+        ],
+      }),
+    }
+  }
   if (lastAction === 'route_delete_plan') {
     return {
       id: 'dev',

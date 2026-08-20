@@ -12,11 +12,17 @@ import {
   policyRuleSummary,
   ruleBackendLabel,
   visibleTunnelRows,
+  rebindTargets,
+  promoteTargets,
 } from '../routes.js'
+import { rulesCount, tunnelLiveLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
+import { ListRow } from '../ui/ListRow.jsx'
+import { Overlay } from '../ui/Overlay.jsx'
 import { confirmSheet } from '../sheet.js'
 import { deletePlanSummary } from '../routeAdd.js'
+import { RouteAddScreen } from './RouteAddScreen.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
 const POLICY_ROLE_LABEL = {
@@ -32,17 +38,21 @@ function ruleTargets(rule) {
   return targets.length > 3 ? `${shown} и ещё ${targets.length - 3}` : shown
 }
 
-// Маршруты: только чтение. Привязка правил берётся из политик доступа
-// роутера, поэтому раскладке ниже можно верить. Управление сюда не вынесено
-// сознательно -- перенос правил между туннелями требует превью, подтверждения
-// и отката, и он относится к фазе рабочего места оператора.
+// Маршруты: раскладка и управление. Привязка правил берётся из политик
+// доступа роутера, поэтому тому, что показано, можно верить, а тому, что
+// меняется, -- тем более: каждая правка идёт через превью от агента и
+// подтверждение в шите, и каждая обратима другой кнопкой этого же экрана.
 export function RoutesTab({ routerID, asleep, openSheet }) {
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
+  // Спящий роутер отвечает минутами, и дедлайн у всех команд экрана один:
+  // разные сроки на соседних кнопках -- это разное поведение без причины.
+  const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
+  const refresh = () => run('route_status', {}, deadline)
 
   useEffect(() => {
     setSnapshot(null)
-    run('route_status', {}, { deadlineMs: asleep ? 6 * 60_000 : 90_000 })
+    run('route_status', {}, deadline)
     // Снимок запрашивается при каждой смене роутера; перезапрос -- кнопкой.
   }, [routerID])
 
@@ -72,20 +82,92 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
         buttonLabel: 'Убрать',
         danger: true,
         asleep,
-        onDone: () => run('route_status', {}, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }),
+        onDone: refresh,
       }),
     )
   }, [plan.result])
 
   const askDelete = (rule) => {
     setPendingRule({ id: rule.id, kind: rule.kind })
-    plan.run('route_delete_plan', { kind: rule.kind, route_id: rule.id }, { deadlineMs: asleep ? 6 * 60_000 : 90_000 })
+    plan.run('route_delete_plan', { kind: rule.kind, route_id: rule.id }, deadline)
   }
+
+  // Перенос и смена главного начинаются с выбора цели. Цель выбирается
+  // отдельным слоем, а не выпадающим списком: список туннелей -- это строки
+  // с состоянием, и в 44 px выпадающего меню состояние не поместится.
+  const [picker, setPicker] = useState(null)
+  const [adding, setAdding] = useState(false)
 
   const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
-  const tunnels = visibleTunnelRows(tunnelRows(snapshot))
+  const rows = tunnelRows(snapshot)
+  const tunnels = visibleTunnelRows(rows)
   const groups = rulesByBind(snapshot)
+
+  // Перенос забирает ВСЁ, что ведёт в туннель, -- и правила, и политику,
+  // которую он несёт (RouteRebind, route_rebind.go). Поэтому и спрашивается
+  // он на строке туннеля, а не на группе правил: группа -- это привязка,
+  // а переносится линия целиком.
+  const askRebind = (src) => {
+    const options = rebindTargets(rows, src.id)
+    if (options.length === 0) return
+    setPicker({
+      title: 'Куда перенести правила',
+      subtitle: `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(src.total)})`,
+      options: options.map((dst) => ({
+        id: dst.id,
+        title: dst.name,
+        sub: `${tunnelLiveLabel(dst.live)} · ${tunnelRuleSummary(dst)}`,
+        pick: () =>
+          confirmSheet({
+            routerID,
+            title: `Перенести всё в «${dst.name}»?`,
+            body: `${rulesCount(src.total)} уедут из «${src.name}» в «${dst.name}». В «${src.name}» не останется ничего — вернуть можно этой же кнопкой на «${dst.name}».`,
+            action: 'route_rebind',
+            args: { src_tunnel_id: src.id, dst_tunnel_id: dst.id },
+            buttonLabel: 'Перенести',
+            asleep,
+            onDone: refresh,
+          }),
+      })),
+    })
+  }
+
+  // Главным делается звено, уже стоящее в цепочке политики. Выключенный
+  // туннель повысить можно, и порядок сменится, но трафик пойдёт через него
+  // не раньше, чем он поднимется -- об этом экран говорит до нажатия.
+  const askPromote = (src) => {
+    const targets = promoteTargets(snapshot, src.id)
+    if (targets.length === 0) return
+    const ruleText = (policyName) => {
+      const p = policies.find((row) => row.name === policyName)
+      return p ? ` (${policyRuleSummary(p)})` : ''
+    }
+    setPicker({
+      title: 'Кто станет главным',
+      subtitle: `Сейчас правила политики идут через «${src.name}»`,
+      options: targets.map((t) => ({
+        id: `${t.policyName}:${t.tunnelID}`,
+        title: t.tunnelName,
+        sub: `политика «${t.policyName}» · ${tunnelLiveLabel(t.live)}`,
+        pick: () =>
+          confirmSheet({
+            routerID,
+            title: `Сделать «${t.tunnelName}» главным?`,
+            body:
+              `Правила политики «${t.policyName}»${ruleText(t.policyName)} пойдут через «${t.tunnelName}» вместо «${src.name}». Вернуть обратно можно этой же кнопкой.` +
+              (t.live === 'down'
+                ? ` «${t.tunnelName}» сейчас выключен: порядок сменится сразу, а трафик пойдёт через него не раньше, чем он поднимется.`
+                : ''),
+            action: 'route_policy_promote',
+            args: { policy_name: t.policyName, tunnel_id: t.tunnelID },
+            buttonLabel: 'Сделать главным',
+            asleep,
+            onDone: refresh,
+          }),
+      })),
+    })
+  }
 
   // Менять маршруты по неполной картине нельзя. Серая неактивная кнопка тут
   // не годится: она не объясняет, почему нельзя, -- поэтому кнопок просто
@@ -100,7 +182,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
     <div class="screen">
       <div class="router-header">
         <h1 class="screen-title">Маршруты</h1>
-        <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => run('route_status', {}, { deadlineMs: asleep ? 6 * 60_000 : 90_000 })}>
+        <button type="button" class="btn btn-ghost" disabled={busy} onClick={refresh}>
           {busy ? 'Читаю…' : 'Обновить'}
         </button>
       </div>
@@ -134,12 +216,22 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
         </Section>
       )}
 
+      {/* Сигнальный цвет -- одному действию на экране, и это оно: всё
+          остальное здесь либо читается, либо правит уже существующее. */}
+      {canMutate && (
+        <button type="button" class="btn btn-primary btn-wide" onClick={() => setAdding(true)}>
+          Отправить в туннель
+        </button>
+      )}
+
       {snapshot && (
         <Section title="Туннели в маршрутизации">
           {tunnels.length ? (
             <ul class="card list-reset">
               {tunnels.map((t) => {
                 const badge = defaultRouteBadge(t)
+                const canRebind = canMutate && t.type === 'managed' && t.total > 0 && rebindTargets(rows, t.id).length > 0
+                const canPromote = canMutate && promoteTargets(snapshot, t.id).length > 0
                 return (
                   <li key={t.id} class="row tunnel-row">
                     <span class="tunnel-name">
@@ -148,6 +240,20 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
                     </span>
                     {badge && <Chip tone={badge.tone}>{badge.text}</Chip>}
                     <span class="tunnel-sub">{tunnelRuleSummary(t)}</span>
+                    {(canRebind || canPromote) && (
+                      <span class="row-actions">
+                        {canRebind && (
+                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(t)}>
+                            Перенести всё
+                          </button>
+                        )}
+                        {canPromote && (
+                          <button type="button" class="btn btn-ghost btn-row" onClick={() => askPromote(t)}>
+                            Сделать главным
+                          </button>
+                        )}
+                      </span>
+                    )}
                   </li>
                 )
               })}
@@ -241,9 +347,43 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
       {snapshot && (
         <p class="admin-note">
           Раскладка выше читается из политик доступа роутера — это то, куда трафик идёт на самом
-          деле. Менять маршруты отсюда нельзя намеренно: перенос правил между туннелями требует
-          превью и отката, и он появится вместе с рабочим местом оператора.
+          деле. Каждую правку роутер сначала считает планом и показывает его целиком, и только
+          потом применяет; обратная кнопка есть у каждой.
         </p>
+      )}
+
+      {/* Выбор цели -- свой слой поверх экрана. Подтверждение он не заменяет:
+          выбранное едет в тот же шит, что и всё остальное. */}
+      {picker && (
+        <Overlay title={picker.title} backLabel="Маршруты" onBack={() => setPicker(null)}>
+          <div class="screen">
+            <p class="router-lastseen">{picker.subtitle}</p>
+            <ul class="card list-reset">
+              {picker.options.map((o) => (
+                <ListRow
+                  key={o.id}
+                  title={o.title}
+                  sub={o.sub}
+                  onClick={() => {
+                    setPicker(null)
+                    openSheet(o.pick())
+                  }}
+                />
+              ))}
+            </ul>
+          </div>
+        </Overlay>
+      )}
+
+      {adding && (
+        <RouteAddScreen
+          routerID={routerID}
+          asleep={asleep}
+          snapshot={snapshot}
+          openSheet={openSheet}
+          onClose={() => setAdding(false)}
+          onApplied={refresh}
+        />
       )}
     </div>
   )
