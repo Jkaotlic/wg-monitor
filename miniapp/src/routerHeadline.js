@@ -59,7 +59,6 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'sig',
       cold: false,
-    stale,
       stale,
       tag: age != null ? `туннель поднят · ответ ${humanAge(age)} назад` : 'туннель поднят',
       verdict: `Трафик идёт через «${via}», обход блокировок работает.`,
@@ -82,7 +81,6 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     return {
       tone: 'off',
       cold: false,
-    stale,
       stale,
       tag: 'маршрут выбирает sing-box',
       verdict: 'Для каждого адреса отдельно — единого ответа «через VPN или напрямую» тут нет.',
