@@ -45,6 +45,8 @@
     kpiAlerts: document.getElementById("kpiAlerts"),
     kpiDeploys: document.getElementById("kpiDeploys"),
     kpiVersion: document.getElementById("kpiVersion"),
+    backendVersion: document.getElementById("backendVersion"),
+    backendVersionHint: document.getElementById("backendVersionHint"),
     kpiOnlineText: document.getElementById("kpiOnlineText"),
     kpiAlertsText: document.getElementById("kpiAlertsText"),
     kpiDeploysText: document.getElementById("kpiDeploysText"),
@@ -333,6 +335,15 @@
     const latest = latestVersion();
     els.kpiVersion.textContent = latest && latest !== summary.version ? `${summary.version || "backend ?"} -> ${latest}` : (summary.version || "version unknown");
     const needsUpdate = latest && summary.version && latest !== summary.version;
+    // Версия -- подписанная и в шапке. "v0.17.1" само по себе не отвечает на
+    // вопрос "чья это версия", поэтому слово "бэкенд" стоит рядом с числом.
+    if (els.backendVersion) {
+      els.backendVersion.textContent = summary.version ? `бэкенд ${summary.version}` : "версия бэкенда неизвестна";
+    }
+    if (els.backendVersionHint) {
+      els.backendVersionHint.textContent = needsUpdate ? `доступна ${latest}` : "";
+      els.backendVersionHint.classList.toggle("hidden", !needsUpdate);
+    }
     if (els.backendUpdateBtn) {
       els.backendUpdateBtn.classList.toggle("hidden", !needsUpdate);
       if (needsUpdate && els.backendUpdateText) els.backendUpdateText.textContent = `Update → ${latest}`;

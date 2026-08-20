@@ -68,11 +68,11 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	if err != nil {
 		panic(err)
 	}
-	staticHandler := http.StripPrefix("/dashboard/", http.FileServer(http.FS(staticFS)))
+	staticHandler := staticCacheHeaders(http.StripPrefix("/dashboard/", http.FileServer(http.FS(staticFS))))
 	dashAuth := DashboardAuthMiddleware(d.DashboardToken, d.Logger)
 	pageAuth := DashboardPageAuthMiddleware(d.DashboardToken)
 	mux.Handle("GET /dashboard", requestIDMiddleware()(http.RedirectHandler("/dashboard/", http.StatusFound)))
-	mux.Handle("GET /dashboard/login", requestIDMiddleware()(dashboardLoginPageHandler()))
+	mux.Handle("GET /dashboard/login", requestIDMiddleware()(staticCacheHeadersForPage(dashboardLoginPageHandler())))
 	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(dashboardLoginHandler(d)))
 	mux.Handle("POST /v1/dashboard/logout", requestIDMiddleware()(dashboardLogoutHandler()))
 	mux.Handle("GET /dashboard/", requestIDMiddleware()(pageAuth(staticHandler)))

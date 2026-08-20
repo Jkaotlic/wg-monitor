@@ -34,6 +34,10 @@
         <div>
           <div class="eyebrow">operator dashboard</div>
           <h1>Fleet Control</h1>
+          <!-- Версия бэкенда в шапке, а не мелкой строкой под счётчиком
+               агентов: первый вопрос после обновления -- "раскатилось ли",
+               и ответ на него не должен требовать поисков по экрану. -->
+          <p class="topbar-version"><span id="backendVersion">версия неизвестна</span><span id="backendVersionHint" class="topbar-version-hint hidden"></span></p>
         </div>
         <div class="topbar-actions">
           <button id="backendUpdateBtn" class="btn btn-warn hidden" type="button" data-state="idle"><span class="ti ti-arrow-up-circle"></span><span id="backendUpdateText">Update backend</span></button>

@@ -22,7 +22,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	// The app shell (HTML/JS/CSS) carries no sensitive data — only the JSON
 	// API calls it makes are auth-gated, same principle as any SPA's public
 	// login page. Telegram must be able to load it before a session exists.
-	staticHandler := http.StripPrefix("/miniapp/", http.FileServer(http.FS(staticFS)))
+	staticHandler := staticCacheHeaders(http.StripPrefix("/miniapp/", http.FileServer(http.FS(staticFS))))
 	mux.Handle("GET /miniapp/", reqID(staticHandler))
 
 	mux.Handle("POST /v1/miniapp/session", reqID(miniappSessionHandler(d)))
