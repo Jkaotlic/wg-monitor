@@ -2211,3 +2211,13 @@ body {
   line-height: var(--lh-normal);
   color: var(--dim);
 }
+
+/* Поле подтверждения в шите: между текстом последствия и кнопкой, чтобы его
+   нельзя было проскочить взглядом. */
+.sheet-confirm {
+  margin-top: var(--sp-4);
+}
+
+.sheet-confirm input {
+  min-height: 44px;
+}

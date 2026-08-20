@@ -159,3 +159,43 @@ export function pingRows(tunnels) {
     }
   })
 }
+
+// Прошивка (wire.FirmwareStatus). Установка необратима и перезагружает
+// роутер, поэтому экран сначала показывает, ЧТО стоит и ЧТО доступно, и
+// только потом предлагает действие -- да и то владельцу.
+export function firmwareStatus(output) {
+  let fw = null
+  try {
+    fw = JSON.parse(output)
+  } catch {
+    return { known: false, updateAvailable: false, rows: [] }
+  }
+  if (!fw || typeof fw !== 'object' || !fw.current) {
+    return { known: false, updateAvailable: false, rows: [] }
+  }
+  const update = Boolean(fw.available && fw.available !== fw.current)
+  const rows = [
+    { key: 'current', title: 'Сейчас стоит', code: 'KeeneticOS', value: fw.current },
+    {
+      key: 'available',
+      title: 'Роутер предлагает',
+      code: fw.channel || 'канал не назван',
+      // Отсутствие обновления -- это ответ, а не пустая строка: строка без
+      // значения читается как «не проверяли».
+      value: update ? fw.available : 'обновления нет',
+      tone: update ? 'warn' : 'ok',
+    },
+  ]
+  // Подсказка роутера -- фраза, а не значение, и строкой данных она быть не
+  // может: в правой колонке значение не переносится, и длинная фраза налезет
+  // на собственный заголовок. Экран печатает её отдельной строкой под
+  // карточкой.
+  return {
+    known: true,
+    updateAvailable: update,
+    rows,
+    current: fw.current,
+    available: fw.available ?? '',
+    hint: fw.hint ?? '',
+  }
+}

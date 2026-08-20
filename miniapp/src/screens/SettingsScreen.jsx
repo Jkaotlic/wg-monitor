@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
 import { useCommand } from '../useCommand.js'
-import { thresholdRows, auditRows, doctorRows, pingRows } from '../settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus } from '../settings.js'
 import { confirmSheet } from '../sheet.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -21,6 +21,8 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   const [showHelp, setShowHelp] = useState(false)
 
   const audit = useCommand(routerID)
+  const firmware = useCommand(routerID)
+  const install = useCommand(routerID)
   const doctor = useCommand(routerID)
   const hrneo = useCommand(routerID)
   const pingNow = useCommand(routerID)
@@ -43,6 +45,12 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   const doctorOut = doctor.result?.status === 'ok' ? doctorRows(doctor.result.output) : []
   const hrneoOut = hrneo.result?.status === 'ok' ? doctorRows(hrneo.result.output) : []
   const pings = pingRows(tunnels)
+  const fw = firmware.result?.status === 'ok' ? firmwareStatus(firmware.result.output) : null
+  // Прошивку ставит только владелец: она необратима и перезагружает роутер.
+  // Оператору кнопку не рисуем вовсе -- сервер ему всё равно откажет, а
+  // серая кнопка не объясняет, почему нельзя.
+  const mayInstall = settings?.role === 'owner' || settings?.role === 'admin'
+
 
   // Включение и выключение проверки связи -- переключатель, а не правка
   // конфига: обратное действие стоит на той же строке.
@@ -101,6 +109,61 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               ))}
             </div>
           )}
+        </Section>
+
+        <Section title="Прошивка роутера">
+          <button type="button" class="btn btn-ghost btn-wide" disabled={firmware.busy} onClick={() => firmware.run('firmware_status', {}, deadline)}>
+            {firmware.busy ? 'Спрашиваем роутер…' : 'Проверить прошивку'}
+          </button>
+          {firmware.error && <p class="state state-error">{firmware.error}</p>}
+          {firmware.result && firmware.result.status !== 'ok' && (
+            <p class="state state-error">Роутер не ответил: {firmware.result.output || firmware.result.status}</p>
+          )}
+          {fw?.known && (
+            <div class="card settings-card">
+              {fw.rows.map((r) => (
+                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
+              ))}
+              {fw.hint && <p class="card-foot">Роутер говорит: {fw.hint}</p>}
+              <p class="card-foot">
+                Установка необратима: роутер скачает прошивку и перезагрузится. Туннели упадут на
+                несколько минут, и вернуть прежнюю версию из приложения нельзя.
+              </p>
+            </div>
+          )}
+          {fw?.known && fw.updateAvailable && mayInstall && openSheet && (
+            <button
+              type="button"
+              class="btn btn-danger btn-wide"
+              onClick={() =>
+                openSheet(
+                  confirmSheet({
+                    routerID,
+                    title: `Поставить прошивку ${fw.available}?`,
+                    body: `Роутер «${routerName}» скачает ${fw.available} вместо ${fw.current} и перезагрузится. Туннели упадут на несколько минут. Вернуть прежнюю версию из приложения нельзя.`,
+                    action: 'firmware_install',
+                    buttonLabel: 'Поставить и перезагрузить',
+                    danger: true,
+                    asleep,
+                    // Набор имени роутера -- пауза, а не защита от чужого
+                    // пальца: это единственное место, где человек читает
+                    // последствие до того, как оно случится.
+                    confirmPhrase: routerName || '',
+                    onDone: load,
+                  }),
+                )
+              }
+            >
+              Установить прошивку
+            </button>
+          )}
+          {fw?.known && fw.updateAvailable && !mayInstall && (
+            <p class="hint">
+              Обновление доступно, но ставить прошивку может только владелец роутера — вы здесь
+              оператор.
+            </p>
+          )}
+          {install.error && <p class="state state-error">{install.error}</p>}
         </Section>
 
         <Section title="Проверка связи">

@@ -161,3 +161,52 @@ func TestMiniappTunnelTrafficRejectsUnknownTunnel(t *testing.T) {
 		t.Fatalf("want 400, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Прошивка. Чтение состояния доступно всем, у кого есть доступ к роутеру;
+// установка -- только владельцу: она необратима и перезагружает роутер, а
+// оператор -- это человек, которому дали смотреть и чинить, а не менять
+// прошивку на чужом устройстве.
+func TestMiniappFirmwareStatusAllowedForOperator(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
+		t.Fatalf("grant operator: %v", err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, 555, `{"action":"firmware_status","args":{}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestMiniappFirmwareInstallRefusedForOperator(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
+		t.Fatalf("grant operator: %v", err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, 555, `{"action":"firmware_install","args":{}}`)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403 for operator, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
+	}
+}
+
+func TestMiniappFirmwareInstallAllowedForOwner(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID, `{"action":"firmware_install","args":{"force":true}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202 for owner, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued[0].Args) != 0 {
+		t.Fatalf("аргументов у установки нет вовсе: %+v", sink.enqueued[0].Args)
+	}
+}

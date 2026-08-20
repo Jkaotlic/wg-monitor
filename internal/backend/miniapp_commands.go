@@ -101,6 +101,20 @@ var miniappCommandAllowlist = map[string]bool{
 	// Обмен по туннелю (фаза F). Читающее: ряд ведёт сам роутер, агент его
 	// только забирает.
 	"tunnel_traffic": true,
+
+	// Прошивка (фаза D2). Чтение состояния -- всем, у кого есть доступ;
+	// установка -- только владельцу (miniappOwnerOnlyActions), потому что
+	// она необратима и перезагружает роутер. Оператору дали смотреть и
+	// чинить, а не менять прошивку на чужом устройстве.
+	"firmware_status":  true,
+	"firmware_install": true,
+}
+
+// miniappOwnerOnlyActions -- действия, которых оператору не положено. Список
+// маленький намеренно: сюда попадает только то, что необратимо и меняет само
+// устройство, а не его настройку.
+var miniappOwnerOnlyActions = map[string]bool{
+	"firmware_install": true,
 }
 
 // miniappTunnelArgActions -- действия, чей туннель адресуется идентификатором,
@@ -156,6 +170,11 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 		req.Action = strings.TrimSpace(req.Action)
 		if !miniappCommandAllowlist[req.Action] || !wire.IsValidCommandAction(req.Action) {
 			writeJSONError(w, http.StatusBadRequest, "unsupported_command", "action is not allowed from the mini app")
+			return
+		}
+		if miniappOwnerOnlyActions[req.Action] && !miniappIsOwner(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusForbidden, "owner_only",
+				"this action changes the device itself and is available to the router's owner only")
 			return
 		}
 		commandArgs := req.Args
@@ -270,6 +289,17 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(res)
 	}
+}
+
+// miniappIsOwner -- владелец роутера или админ бота. Роль читается тем же
+// запросом, что и доступ вообще (db.RouterAccessRole), чтобы «кто такой
+// владелец» имело в приложении один ответ, а не два.
+func miniappIsOwner(d Deps, telegramUserID, routerID int64) bool {
+	if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+		return true
+	}
+	role, err := d.DB.RouterAccessRole(routerID, telegramUserID)
+	return err == nil && role == "owner"
 }
 
 // miniappTunnelNDMSNameDetails is the minimal decode of a tunnel_* event's

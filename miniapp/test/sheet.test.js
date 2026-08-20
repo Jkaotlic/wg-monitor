@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { confirmSheet, sheetPhase } from '../src/sheet.js'
+import { confirmSheet, sheetPhase, confirmReady } from '../src/sheet.js'
 
 describe('confirmSheet', () => {
   it('несёт команду, которая уйдёт на роутер', () => {
@@ -47,5 +47,27 @@ describe('sheetPhase', () => {
   })
   it('пока идёт выполнение, старый результат не показывается', () => {
     expect(sheetPhase({ busy: true, result: { status: 'ok' } })).toBe('running')
+  })
+})
+
+// Необратимое действие подтверждается не нажатием, а набором: человек
+// печатает имя роутера, и только совпадение включает кнопку. Пауза здесь --
+// не формальность: это единственное место, где он читает, что именно
+// произойдёт, до того как это произойдёт.
+describe('confirmPhrase', () => {
+  it('шит несёт фразу подтверждения', () => {
+    const s = confirmSheet({ routerID: 1, title: 'т', body: 'б', action: 'firmware_install', confirmPhrase: 'Дом' })
+    expect(s.confirmPhrase).toBe('Дом')
+  })
+
+  it('без фразы подтверждение не требуется', () => {
+    expect(confirmReady(confirmSheet({ routerID: 1, title: 'т', body: 'б', action: 'x' }), '')).toBe(true)
+  })
+
+  it('совпадение считается по сути, а не по регистру и пробелам', () => {
+    const s = confirmSheet({ routerID: 1, title: 'т', body: 'б', action: 'x', confirmPhrase: 'Дом' })
+    expect(confirmReady(s, ' дом ')).toBe(true)
+    expect(confirmReady(s, 'Дача')).toBe(false)
+    expect(confirmReady(s, '')).toBe(false)
   })
 })

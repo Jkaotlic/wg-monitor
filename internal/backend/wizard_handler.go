@@ -937,6 +937,10 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "firmware_status", "firmware_install":
+		// Установка прошивки не берёт аргументов вовсе: агент ставит то, что
+		// роутер сам считает доступным. Всё, что прислал клиент, -- лишнее.
+		return map[string]any{}, true
 	case "route_templates":
 		// Каталог читается без параметров; всё, что прислал клиент, -- лишнее.
 		return map[string]any{}, true

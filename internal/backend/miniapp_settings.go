@@ -31,6 +31,10 @@ type miniappSettingsResp struct {
 	RecoveryAfterOKs int    `json:"recovery_after_oks"`
 	AgentVersion     string `json:"agent_version,omitempty"`
 	Mobile           bool   `json:"mobile,omitempty"`
+	// Role -- кем этот человек приходится роутеру: "owner", "operator" или
+	// "admin". Экран рисует по ней кнопки, которых серверу иначе пришлось бы
+	// отказывать: установка прошивки доступна только владельцу.
+	Role string `json:"role,omitempty"`
 }
 
 func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
@@ -50,11 +54,18 @@ func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "router lookup failed")
 			return
 		}
+		role := ""
+		if miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+			role = "admin"
+		} else if r, rerr := d.DB.RouterAccessRole(routerID, telegramUserID); rerr == nil {
+			role = r
+		}
 		policy := dashboardStatusPolicyFromDeps(d)
 		resp := miniappSettingsResp{
 			AlertAfterFails:  d.Thresholds.Fail,
 			RecoveryAfterOKs: d.Thresholds.Recovery,
 			Mobile:           u.IsMobile(),
+			Role:             role,
 		}
 		if u.IsMobile() {
 			resp.SilenceAfterSec = int(policy.MobileStaleAfter / time.Second)

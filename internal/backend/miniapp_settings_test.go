@@ -53,6 +53,31 @@ func TestMiniappSettingsReportsLiveThresholds(t *testing.T) {
 	if resp.AgentVersion == "" {
 		t.Errorf("agent_version пуст: версия агента живёт в users и на экране обязана быть")
 	}
+	// Роль нужна экрану, чтобы не рисовать кнопку, которой сервер всё равно
+	// откажет: установка прошивки -- только владельцу.
+	if resp.Role != "owner" {
+		t.Errorf("role = %q, want owner", resp.Role)
+	}
+}
+
+func TestMiniappSettingsReportsOperatorRole(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
+		t.Fatalf("grant operator: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/settings", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 555))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp miniappSettingsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Role != "operator" {
+		t.Errorf("role = %q, want operator", resp.Role)
+	}
 }
 
 // Чужой роутер отвечает 404 до того, как выяснится, существует ли он, --

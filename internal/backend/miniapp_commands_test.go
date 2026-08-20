@@ -38,6 +38,9 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
 		"tunnel_traffic",
+		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
+		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
+		"firmware_status", "firmware_install",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -417,6 +420,9 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
 		"tunnel_traffic",
+		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
+		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
+		"firmware_status", "firmware_install",
 	} {
 		if !miniappCommandAllowlist[action] {
 			t.Errorf("%s должен быть разрешён мини-аппу", action)
@@ -428,9 +434,14 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 // управления маршрутами их не открывает. Список закреплён тестом, потому что
 // «добавить ещё одно, раз уж рядом» -- самый частый способ потерять границу.
 func TestMiniappStillDeniesDangerousActions(t *testing.T) {
+	// firmware_install ушла отсюда в фазе D2 -- не потому, что стала
+	// безопаснее, а потому, что для неё завели отдельную границу: только
+	// владелец роутера (не оператор, не «кто-то с доступом») и подтверждение
+	// набором имени роутера вручную. Радиус её как был -- само устройство и
+	// перезагрузка, так и остался, и без обеих защит она сюда вернётся.
 	for _, action := range []string{
 		"tunnel_delete", "dns_reset", "update_backend_url", "tunnel_import",
-		"opkg_upgrade", "firmware_install", "self_update", "update_agent_config",
+		"opkg_upgrade", "self_update", "update_agent_config",
 		"service_restart", "entware_clean_run",
 	} {
 		if miniappCommandAllowlist[action] {

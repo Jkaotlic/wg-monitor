@@ -342,6 +342,17 @@ function commandResult(id) {
       output: `interface Wireguard0 -> ${lastAction === 'tunnel_enable' ? 'up' : 'down'}`,
     }
   }
+  if (lastAction === 'firmware_status') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1100,
+      output: JSON.stringify({ current: '4.3.7', available: '4.3.8', channel: 'stable', hint: 'обновление займёт около 3 минут с перезагрузкой' }),
+    }
+  }
+  if (lastAction === 'firmware_install') {
+    return { id, status: 'ok', duration_ms: 2200, output: 'firmware install kicked; router will reboot' }
+  }
   if (lastAction === 'tunnel_traffic') {
     return {
       id,
@@ -490,6 +501,7 @@ export function respond(method, path) {
       alert_after_fails: 3,
       recovery_after_oks: 2,
       agent_version: 'v0.16.0',
+      role: 'owner',
     }
   }
   if (rest.startsWith('/commands/')) return commandResult(rest.slice('/commands/'.length))

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { thresholdRows, auditRows, doctorRows, pingRows } from '../src/settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus } from '../src/settings.js'
 
 // Пороги живут в backend.yaml и больше нигде: экран печатает то, что прислал
 // сервер (miniappSettingsResp), а не числа из макета.
@@ -119,5 +119,33 @@ describe('pingRows', () => {
     const row = pingRows(TUNNELS)[2]
     expect(row.enabled).toBe(null)
     expect(row.value).toBe('неизвестно')
+  })
+})
+
+// firmware_status отвечает JSON'ом (wire.FirmwareStatus).
+describe('firmwareRows', () => {
+  it('доступное обновление названо и помечено', () => {
+    const s = firmwareStatus(JSON.stringify({ current: '4.3.7', available: '4.3.8', channel: 'stable', hint: 'перезагрузка ~3 мин' }))
+    expect(s.known).toBe(true)
+    expect(s.updateAvailable).toBe(true)
+    expect(s.rows.find((r) => r.key === 'current').value).toBe('4.3.7')
+    expect(s.rows.find((r) => r.key === 'available').value).toBe('4.3.8')
+    expect(s.rows.find((r) => r.key === 'available').tone).toBe('warn')
+    // Подсказка роутера -- фраза, и строкой данных она не становится: в
+    // правой колонке значение не переносится и налезло бы на заголовок.
+    expect(s.rows.some((r) => r.key === 'hint')).toBe(false)
+    expect(s.hint).toContain('перезагрузка')
+  })
+
+  // Свежая прошивка -- тоже ответ, и строка про неё не исчезает: пустое
+  // место читается как «не проверяли».
+  it('свежая прошивка говорит об этом прямо', () => {
+    const s = firmwareStatus(JSON.stringify({ current: '4.3.8' }))
+    expect(s.updateAvailable).toBe(false)
+    expect(s.rows.find((r) => r.key === 'available').value).toBe('обновления нет')
+  })
+
+  it('чужой ответ не выдаётся за состояние прошивки', () => {
+    expect(firmwareStatus('готово').known).toBe(false)
   })
 })
