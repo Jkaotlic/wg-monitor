@@ -107,20 +107,21 @@ type miniappVPNIssueResp struct {
 
 // miniappVPNIssueHandler выпускает конфиг и кладёт его в команду агенту.
 //
-// Только владельцу: выпуск занимает устройство в платной подписке и заводит
-// на роутере новый туннель. Оператору дали смотреть и чинить, а не тратить
-// чужую подписку.
+// Доступно всем, у кого есть доступ к роутеру, — владельцу и оператору. Это
+// решение спеки рабочего места (2026-08-02, §4.2), и причина в ней названа:
+// оператора добавляют именно для того, чтобы он чинил, а дробить его права
+// дальше значит объяснять человеку, почему он видит кнопку, которая ему
+// запрещена. Замена конфига — как раз починка: старый туннель остаётся на
+// месте, новый обратим выключением.
+//
+// Установка прошивки — другое дело и остаётся за владельцем
+// (miniappOwnerOnlyActions): она меняет само устройство и необратима.
 func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
 		routerID, ok := parseMiniappRouterID(r)
 		if !ok || !miniappRouterAllowed(d, telegramUserID, routerID) {
 			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
-			return
-		}
-		if !miniappIsOwner(d, telegramUserID, routerID) {
-			writeJSONError(w, http.StatusForbidden, "owner_only",
-				"issuing a config spends a device slot of the subscription and is available to the router's owner only")
 			return
 		}
 		if d.VPNCabinet == nil || d.CommandSink == nil {

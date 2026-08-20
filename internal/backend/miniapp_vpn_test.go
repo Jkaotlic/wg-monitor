@@ -122,9 +122,11 @@ func TestMiniappVPNIssueKeepsConfigServerSide(t *testing.T) {
 	}
 }
 
-// Выпуск тратит устройство платной подписки и заводит туннель: это дело
-// владельца, а не оператора.
-func TestMiniappVPNIssueRefusedForOperator(t *testing.T) {
+// Оператор выпускает конфиг наравне с владельцем: спека рабочего места
+// (2026-08-02, §4.2) прямо говорит, что оператора добавляют чинить, и дробить
+// его права дальше -- значит показывать ему кнопку, которая ему запрещена.
+// Прошивка -- отдельный случай: она меняет устройство и остаётся владельцу.
+func TestMiniappVPNIssueAllowedForOperator(t *testing.T) {
 	cab := &fakeCabinet{conf: []byte("x")}
 	sink := &dashboardActionSink{}
 	deps, ownedID, _ := cabinetDeps(t, cab, sink)
@@ -139,11 +141,11 @@ func TestMiniappVPNIssueRefusedForOperator(t *testing.T) {
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 555))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("want 403, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202 for operator, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(sink.enqueued) != 0 {
-		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
+	if len(sink.enqueued) != 1 {
+		t.Fatalf("команда обязана уйти агенту: %+v", sink.enqueued)
 	}
 }
 
