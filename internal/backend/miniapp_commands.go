@@ -74,6 +74,50 @@ var miniappCommandAllowlist = map[string]bool{
 	"route_delete":         true,
 	"route_rebind":         true,
 	"route_policy_promote": true,
+
+	// Обслуживание (фаза D1). Читающие, аргументов не берут вовсе: версии,
+	// два доктора и разовый прогон проверки связи. Раньше router_doctor был
+	// закрыт как «простыня текста для админа» -- закрыт был не радиус
+	// поражения, а вёрстка, и экран разбирает его вывод строками.
+	//
+	// pingcheck_status сюда НЕ входит намеренно: его JSON несёт ndms_name
+	// каждого туннеля (агент кладёт его туда, чтобы бот нарисовал кнопки), а
+	// это ровно та топология роутера, которую белый список miniapp_tunnels.go
+	// клиенту не отдаёт. Состояние проверки связи экран и так знает: оно
+	// приезжает в проекции туннеля (ping_check_status, ping_latency_ms).
+	"version_audit": true,
+	"router_doctor": true,
+	"hrneo_doctor":  true,
+	"pingcheck_now": true,
+
+	// Три мутирующих. Радиус тот же, что у tunnel_restart, и ограничен так
+	// же: клиент присылает tunnel_id, ndms_name сервер достаёт из событий
+	// ЭТОГО роутера (miniappResolveTunnelArgs). Выключение туннеля обратимо
+	// включением -- это переключатель, а не удаление.
+	"tunnel_enable":    true,
+	"tunnel_disable":   true,
+	"pingcheck_toggle": true,
+}
+
+// miniappTunnelArgActions -- действия, чей туннель адресуется идентификатором,
+// а имя NDMS-интерфейса подставляет сервер. Список общий, чтобы новое такое
+// действие нельзя было завести мимо резолвера: попав в allowlist без записи
+// здесь, оно ушло бы к агенту с клиентскими аргументами.
+var miniappTunnelArgActions = map[string]bool{
+	"tunnel_restart":   true,
+	"tunnel_enable":    true,
+	"tunnel_disable":   true,
+	"pingcheck_toggle": true,
+}
+
+// miniappNDMSRequiredActions -- те из них, которые без имени NDMS-интерфейса
+// выполнить нельзя: агент делает их через ndmc. Opkg-туннеля в NDMS нет
+// вовсе, и 202 на такую команду означал бы «принято» о том, что молча ничего
+// не сделает.
+var miniappNDMSRequiredActions = map[string]bool{
+	"tunnel_enable":    true,
+	"tunnel_disable":   true,
+	"pingcheck_toggle": true,
 }
 
 type miniappCommandReq struct {
@@ -110,17 +154,28 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		commandArgs := req.Args
-		if req.Action == "tunnel_restart" {
+		if miniappTunnelArgActions[req.Action] {
 			// The client sends tunnel_id, never ndms_name -- see the allowlist
 			// comment above. Any ndms_name in req.Args is ignored outright (not
 			// merely validated): building commandArgs fresh here, rather than
 			// patching req.Args, is what makes the old {"ndms_name":"..."} shape
 			// inert instead of just rejected.
 			tunnelID, _ := req.Args["tunnel_id"].(string)
-			resolved, ok := miniappResolveTunnelRestartArgs(d, routerID, tunnelID)
+			resolved, ok := miniappResolveTunnelArgs(d, routerID, tunnelID)
 			if !ok {
 				writeJSONError(w, http.StatusBadRequest, "unknown_tunnel", "tunnel_id does not match a known tunnel on this router")
 				return
+			}
+			if _, hasNDMS := resolved["ndms_name"]; !hasNDMS && miniappNDMSRequiredActions[req.Action] {
+				writeJSONError(w, http.StatusBadRequest, "no_ndms_name",
+					"this tunnel has no NDMS interface: the router cannot switch it this way")
+				return
+			}
+			// enable -- единственный аргумент, который клиенту разрешено
+			// прислать: это его выбор, а не топология роутера.
+			if req.Action == "pingcheck_toggle" {
+				enable, _ := req.Args["enable"].(bool)
+				resolved["enable"] = enable
 			}
 			commandArgs = resolved
 		}
@@ -230,7 +285,7 @@ type miniappTunnelNDMSNameDetails struct {
 // own events carry one; the agent needs it solely as a fallback on builds that
 // predate /api/control/restart. It is still server-derived: a client-supplied
 // ndms_name never reaches the agent.
-func miniappResolveTunnelRestartArgs(d Deps, routerID int64, tunnelID string) (map[string]any, bool) {
+func miniappResolveTunnelArgs(d Deps, routerID int64, tunnelID string) (map[string]any, bool) {
 	tunnelID = strings.TrimSpace(tunnelID)
 	if tunnelID == "" {
 		return nil, false

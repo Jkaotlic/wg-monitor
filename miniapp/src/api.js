@@ -41,6 +41,12 @@ export function fetchRouter(id) {
   return request(`/routers/${id}`)
 }
 
+// Пороги, по которым бот судит об этом роутере (miniappSettingsResp). Живут
+// они в backend.yaml, и клиент их только читает.
+export function fetchRouterSettings(id) {
+  return request(`/routers/${id}/settings`)
+}
+
 export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }

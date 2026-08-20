@@ -61,6 +61,11 @@ export function tunnelsView(snapshot) {
       role,
       note: ROLE_NOTE[role],
       handshakeAgeSec: role === 'active' ? age : null,
+      // Имя NDMS-интерфейса -- единственный способ включить или выключить
+      // туннель (агент делает это ndmc'ом). Пусто у opkg-туннелей: их в NDMS
+      // нет, и кнопки под ними быть не должно.
+      ndmsName: tunnel?.ndms_name ?? '',
+      live: tunnel ? tunnelLive(tunnel) : 'unknown',
     }
   })
 
@@ -69,7 +74,7 @@ export function tunnelsView(snapshot) {
   // попадают -- предложить поднять провайдера было бы бессмысленно.
   const unused = tunnels
     .filter((t) => t.type === 'managed' && !inChain.has(t.id))
-    .map((t) => ({ id: t.id, name: t.name || t.id, live: tunnelLive(t) }))
+    .map((t) => ({ id: t.id, name: t.name || t.id, live: tunnelLive(t), ndmsName: t.ndms_name ?? '' }))
 
   return { active, policyName: policy.name ?? '', chain, unused }
 }

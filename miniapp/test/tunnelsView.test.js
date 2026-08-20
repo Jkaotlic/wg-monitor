@@ -93,3 +93,42 @@ describe('tunnelsView -- не используются', () => {
     expect(v.unused.some((t) => t.id === 'eth3')).toBe(false)
   })
 })
+
+// Включить и выключить туннель можно только через NDMS-интерфейс: агент
+// делает это ndmc'ом. Раскладка обязана нести его имя, иначе экран нарисует
+// кнопку, которая ответит отказом с сервера.
+describe('tunnelsView: чем можно управлять', () => {
+  const SNAP = {
+    tunnels: [
+      { id: 'awg11', name: 'work', iface: 'opkgtun11', type: 'managed', status: 'running', has_handshake: true, handshake_age_sec: 30 },
+      { id: 'awg20', name: 'reserve', iface: 'nwg0', ndms_name: 'Wireguard0', type: 'managed', status: 'disabled' },
+      { id: 'awg7', name: 'spare', iface: 'nwg1', ndms_name: 'Wireguard1', type: 'managed', status: 'disabled' },
+    ],
+    policies: [{
+      name: 'HydraRoute',
+      active_tunnel_id: 'awg11',
+      dns: 26,
+      interfaces: [
+        { bind: 'OpkgTun11', name: 'work', role: 'active', tunnel_id: 'awg11' },
+        { bind: 'Wireguard0', name: 'reserve', role: 'unavailable', tunnel_id: 'awg20' },
+      ],
+    }],
+  }
+
+  it('звено цепочки несёт имя NDMS-интерфейса и своё состояние', () => {
+    const link = tunnelsView(SNAP).chain.find((c) => c.tunnelID === 'awg20')
+    expect(link.ndmsName).toBe('Wireguard0')
+    expect(link.live).toBe('down')
+  })
+
+  // Opkg-туннель в NDMS не заведён вовсе: имени нет, и кнопки под ним не
+  // будет -- это не пробел, а отсутствие способа.
+  it('у opkg-туннеля имени интерфейса нет', () => {
+    expect(tunnelsView(SNAP).chain.find((c) => c.tunnelID === 'awg11').ndmsName).toBe('')
+  })
+
+  it('неиспользуемый туннель тоже несёт имя интерфейса', () => {
+    const row = tunnelsView(SNAP).unused.find((t) => t.id === 'awg7')
+    expect(row.ndmsName).toBe('Wireguard1')
+  })
+})

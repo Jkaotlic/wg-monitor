@@ -294,6 +294,60 @@ function routeAddPlan(args) {
 
 function commandResult(id) {
   const { action: lastAction, args: lastArgs } = commands.get(id) ?? { action: null, args: {} }
+  if (lastAction === 'version_audit') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1400,
+      output: JSON.stringify({
+        awgmgr_version: '2.17.2',
+        awgmgr_running: true,
+        hrneo_installed: true,
+        hrneo_running: true,
+        hrneo_version: '2.4.0',
+        firmware_current: '4.3.7',
+        firmware_avail: '4.3.8',
+      }),
+    }
+  }
+  if (lastAction === 'router_doctor') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 2600,
+      output: [
+        '🩺 Проверка роутера',
+        '✅ awg-manager API — 2.17.2, backend awg',
+        '✅ туннели — 2 из 3 подняты',
+        '⚠️ ping-check — выключен у awg10',
+        '✅ wg-monitor agent — процесс жив',
+        '✅ awg-manager daemon — процесс жив',
+        '⚠️ маршрут по умолчанию — заявлен у трёх туннелей',
+      ].join('\n'),
+    }
+  }
+  if (lastAction === 'hrneo_doctor') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1900,
+      output: ['🩺 HR Neo', '✅ служба — работает, 2.4.0', '✅ правила — 26 активны', '✅ dnsmasq — перезапущен 2 ч назад'].join('\n'),
+    }
+  }
+  if (lastAction === 'tunnel_enable' || lastAction === 'tunnel_disable') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1200,
+      output: `interface Wireguard0 -> ${lastAction === 'tunnel_enable' ? 'up' : 'down'}`,
+    }
+  }
+  if (lastAction === 'pingcheck_now') {
+    return { id, status: 'ok', duration_ms: 800, output: 'pingcheck-now triggered' }
+  }
+  if (lastAction === 'pingcheck_toggle') {
+    return { id, status: 'ok', duration_ms: 700, output: `pingcheck ${lastArgs.enable ? 'enabled' : 'disabled'} for ${lastArgs.tunnel_id}` }
+  }
   if (lastAction === 'route_templates') {
     return { id, status: 'ok', duration_ms: 310, output: JSON.stringify(ROUTE_TEMPLATES) }
   }
@@ -411,6 +465,15 @@ export function respond(method, path) {
     }
   }
   if (rest === '/timeline') return { events: HISTORY, days: 7, truncated: false }
+  // Пороги живут в backend.yaml; на домашнем бэкенде это 120/180/3600.
+  if (rest === '/settings') {
+    return {
+      silence_after_sec: 120,
+      alert_after_fails: 3,
+      recovery_after_oks: 2,
+      agent_version: 'v0.16.0',
+    }
+  }
   if (rest.startsWith('/commands/')) return commandResult(rest.slice('/commands/'.length))
   if (rest === '/access') {
     return {

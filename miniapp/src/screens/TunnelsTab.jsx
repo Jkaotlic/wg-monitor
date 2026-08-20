@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { parseRouteSnapshot } from '../routes.js'
+import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
@@ -17,7 +18,7 @@ import { NavCard } from '../ui/NavCard.jsx'
 //
 // Маршруты уехали отсюда на свой экран: сначала человек спрашивает "какая
 // линия поднята", и только потом -- "что через неё идёт".
-export function TunnelsTab({ routerID, asleep, onOpenRoutes }) {
+export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
@@ -33,6 +34,43 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes }) {
   }, [result])
 
   const view = tunnelsView(snapshot)
+
+  // Включить и выключить линию можно только через NDMS-интерфейс: агент
+  // делает это ndmc'ом, и у opkg-туннеля такого имени нет вовсе. Кнопки под
+  // ним поэтому не будет -- вместо неё честное отсутствие способа.
+  //
+  // Активную линию отсюда не выключают: она несёт трафик прямо сейчас, и
+  // «выключить» на ней -- не переключатель, а обрыв. Для неё на главном
+  // экране есть перезапуск.
+  const toggleButton = (t) => {
+    if (!openSheet || !t.ndmsName || t.live === 'unknown') return null
+    const up = t.live === 'up'
+    return (
+      <button
+        type="button"
+        class="btn btn-ghost btn-row"
+        onClick={() =>
+          openSheet(
+            confirmSheet({
+              routerID,
+              title: up ? `Выключить «${t.name}»?` : `Включить «${t.name}»?`,
+              body: up
+                ? `Роутер опустит интерфейс. Трафик, который шёл через «${t.name}», пойдёт по следующему звену цепочки или напрямую. Включить обратно — этой же кнопкой.`
+                : `Роутер поднимет интерфейс. Если он стоит в цепочке выше работающего, трафик перейдёт на него.`,
+              action: up ? 'tunnel_disable' : 'tunnel_enable',
+              args: { tunnel_id: t.tunnelID ?? t.id },
+              buttonLabel: up ? 'Выключить' : 'Включить',
+              danger: up,
+              asleep,
+              onDone: () => run('route_status', {}, deadline),
+            }),
+          )
+        }
+      >
+        {up ? 'Выключить' : 'Включить'}
+      </button>
+    )
+  }
 
   return (
     <div class="screen">
@@ -88,6 +126,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes }) {
                 ...c,
                 title: c.role === 'active' ? 'Работает сейчас' : c.role === 'ready' ? 'Готов подхватить' : 'Выключен вручную',
                 value: c.role === 'active' && c.handshakeAgeSec != null ? humanAge(c.handshakeAgeSec) : c.note,
+                action: c.role === 'active' ? null : toggleButton(c),
               }))}
             />
             <p class="card-foot">
@@ -101,13 +140,15 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes }) {
         <Section title={`Не используются · ${view.unused.length}`}>
           <div class="card" style="padding:0">
             {view.unused.map((t) => (
-              <DataRow
-                key={t.id}
-                title={t.name}
-                code={t.id}
-                value={t.live === 'up' ? 'поднят' : t.live === 'down' ? 'выключен' : 'неизвестно'}
-                valueTone="muted"
-              />
+              <div key={t.id} class="settings-row">
+                <DataRow
+                  title={t.name}
+                  code={t.id}
+                  value={t.live === 'up' ? 'поднят' : t.live === 'down' ? 'выключен' : 'неизвестно'}
+                  valueTone="muted"
+                />
+                {toggleButton(t)}
+              </div>
             ))}
           </div>
         </Section>

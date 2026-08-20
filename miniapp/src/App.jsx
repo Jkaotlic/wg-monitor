@@ -16,6 +16,7 @@ import { FleetOverlay } from './screens/FleetOverlay.jsx'
 import { AdminOverlay } from './screens/AdminOverlay.jsx'
 import { NoAccess } from './screens/NoAccess.jsx'
 import { RoutesTab } from './screens/RoutesTab.jsx'
+import { SettingsScreen } from './screens/SettingsScreen.jsx'
 import { TunnelsTab } from './screens/TunnelsTab.jsx'
 import { Overlay } from './ui/Overlay.jsx'
 import { DiagTab } from './screens/DiagTab.jsx'
@@ -77,7 +78,18 @@ export function App() {
       </p>
     )
   }
-  if (routers.length === 0) return <NoAccess />
+  // Доступ мог появиться, пока приложение было открыто: экран пустого доступа
+  // умеет переспросить, и тогда оболочка продолжает как при обычном входе.
+  if (routers.length === 0) {
+    return (
+      <NoAccess
+        onRetry={(list) => {
+          setRouters(list)
+          dispatch({ type: 'init', state: initialNav({ routerIDs: list.map((r) => r.id), deepLinkID: deepLinkRouterID() }) })
+        }}
+      />
+    )
+  }
 
   // Статус берём из списка флота: экраны табов не грузят карточку роутера
   // сами, а спящему роутеру нужно обещать отложенный ответ, а не мгновенный.
@@ -93,6 +105,16 @@ export function App() {
         onClose={() => dispatch({ type: 'overlay', overlay: null })}
       />
     )
+    : nav.overlay === 'settings' && nav.routerID != null
+      ? (
+        <SettingsScreen
+          routerID={nav.routerID}
+          routerName={current?.nickname}
+          asleep={asleep}
+          openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+          onClose={() => dispatch({ type: 'overlay', overlay: null })}
+        />
+      )
     : nav.overlay === 'admin' && nav.routerID != null
       ? <AdminOverlay routerID={nav.routerID} onClose={() => dispatch({ type: 'overlay', overlay: null })} />
       : nav.overlay === 'routes' && nav.routerID != null
@@ -109,7 +131,11 @@ export function App() {
 
   return (
     <>
-      <Header fleetVisible={routers.length > 1} onFleet={() => dispatch({ type: 'overlay', overlay: 'fleet' })} />
+      <Header
+        fleetVisible={routers.length > 1}
+        onFleet={() => dispatch({ type: 'overlay', overlay: 'fleet' })}
+        onSettings={nav.routerID != null ? () => dispatch({ type: 'overlay', overlay: 'settings' }) : undefined}
+      />
       <div class="app-body">
         {nav.routerID == null ? (
           <p class="state">Выберите роутер в списке.</p>
@@ -126,6 +152,7 @@ export function App() {
             routerID={nav.routerID}
             asleep={asleep}
             onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
+            openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
           />
         ) : nav.tab === 'diag' ? (
           <DiagTab routerID={nav.routerID} asleep={asleep} />

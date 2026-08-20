@@ -902,7 +902,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "route_status", "tunnels_status", "dns_reset":
+	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "dns_reset":
 		return map[string]any{}, true
 	case "opkg_cron_install", "entware_clean_install":
 		schedule, _ := args["schedule"].(string)
@@ -1034,6 +1034,23 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"ndms_name": ndms}, true
+	case "pingcheck_toggle":
+		// tunnel_id и ndms_name сюда приезжают уже разрешёнными сервером
+		// (miniappResolveTunnelArgs), но ветка обязана быть явной: default
+		// пропускает аргументы как есть, и действие, забытое здесь, отдало бы
+		// агенту клиентский ввод без единой проверки.
+		tunnelID := strings.TrimSpace(argString(args, "tunnel_id"))
+		ndms := strings.TrimSpace(argString(args, "ndms_name"))
+		if !wizardRouteTargetIDLooksSafe(tunnelID) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_tunnel_id", "tunnel_id must be a safe tunnel id")
+			return nil, false
+		}
+		if !wizardNDMSNameLooksSafe(ndms) {
+			writeJSONError(w, http.StatusBadRequest, "invalid_ndms_name", "ndms_name must match ^[A-Za-z0-9_-]{1,32}$")
+			return nil, false
+		}
+		enable, _ := args["enable"].(bool)
+		return map[string]any{"tunnel_id": tunnelID, "ndms_name": ndms, "enable": enable}, true
 	case "tunnel_restart":
 		// Either identifier is enough: awg-manager restarts by tunnel id, and
 		// opkg tunnels have no NDMS name at all. Whatever is present must still

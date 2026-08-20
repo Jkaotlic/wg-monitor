@@ -78,6 +78,16 @@ const SHOTS = [
     },
   },
   {
+    name: 'settings',
+    overlay: true,
+    steps: async (page) => {
+      await page.getByRole('button', { name: 'Настройки' }).click()
+      await page.waitForTimeout(600)
+      await page.getByRole('button', { name: 'Сверить версии' }).click()
+      await page.waitForTimeout(900)
+    },
+  },
+  {
     name: 'route-preview-blocked',
     overlay: true,
     steps: async (page) => {
@@ -97,6 +107,8 @@ const SHOTS = [
 // один роутер. Подменяем ответ списка прямо в браузере, чтобы не заводить
 // ради них второй набор фикстур.
 const OVERRIDES = [
+  // Первый вход: доступа нет вовсе -- отдельный экран, а не список из нуля
+  // строк.
   { name: 'no-access', routers: [] },
   {
     name: 'single-router',

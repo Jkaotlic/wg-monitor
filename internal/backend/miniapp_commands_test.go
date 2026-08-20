@@ -28,6 +28,14 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"route_templates", "route_add_plan", "route_add",
 		"route_delete_plan", "route_delete", "route_rebind",
 		"route_policy_promote",
+		// Обслуживание (фаза D1). Четыре читающих: версии, два доктора и
+		// разовый прогон проверки связи. Аргументов не берут вовсе.
+		"version_audit", "router_doctor", "hrneo_doctor", "pingcheck_now",
+		// Три мутирующих, все router-local и обратимые своей же парой.
+		// Радиус ограничен тем же резолвером, что у tunnel_restart: клиент
+		// присылает tunnel_id, ndms_name сервер достаёт из событий этого
+		// роутера, и присланный клиентом никогда не доезжает до агента.
+		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -41,8 +49,6 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 	denied := []string{
 		"update_backend_url", // fleet takeover
 		"tunnel_delete",      // irreversible
-		"tunnel_enable",      // config change, not a fix
-		"tunnel_disable",     // config change, not a fix
 		"self_update",        // audited deploy flow
 		"tunnel_import",      // route/config mutation
 		"dns_reset",          // router-global; stays on the dashboard
@@ -50,8 +56,23 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"update_agent_config",
 		"opkg_upgrade",
 		"entware_clean_run",
-		"router_doctor", // free-text diagnostic aimed at the admin, not an owner
+		// Ответ несёт ndms_name каждого туннеля -- топологию, которую белый
+		// список туннелей клиенту не отдаёт. Состояние проверки связи экран
+		// берёт из проекции туннеля, а не из этого ответа.
+		"pingcheck_status",
 	}
+
+	// tunnel_enable/tunnel_disable и router_doctor раньше лежали в denied.
+	// Оба запрета сняты осознанно, и вот чем:
+	//
+	//   - выключение туннеля -- не «изменение конфига», а переключатель:
+	//     обратное действие стоит рядом на том же экране, и радиус у него тот
+	//     же, что у перезапуска, -- один туннель одного роутера, чьё имя
+	//     интерфейса подставил сервер. Приложение, умеющее только чинить, но
+	//     не умеющее выключить упавшую линию, оставляет человека в боте.
+	//   - router_doctor закрывали как «простыню текста для админа». Закрыт был
+	//     не радиус поражения (он читающий), а вёрстка: экран разбирает его
+	//     вывод строками данных, а сырой ответ прячет под спойлер.
 	for _, a := range denied {
 		if miniappCommandAllowlist[a] {
 			t.Errorf("%q must NOT be dispatchable from a mini-app session", a)
@@ -384,6 +405,14 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		"route_templates", "route_add_plan", "route_add",
 		"route_delete_plan", "route_delete", "route_rebind",
 		"route_policy_promote",
+		// Обслуживание (фаза D1). Четыре читающих: версии, два доктора и
+		// разовый прогон проверки связи. Аргументов не берут вовсе.
+		"version_audit", "router_doctor", "hrneo_doctor", "pingcheck_now",
+		// Три мутирующих, все router-local и обратимые своей же парой.
+		// Радиус ограничен тем же резолвером, что у tunnel_restart: клиент
+		// присылает tunnel_id, ndms_name сервер достаёт из событий этого
+		// роутера, и присланный клиентом никогда не доезжает до агента.
+		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 	} {
 		if !miniappCommandAllowlist[action] {
 			t.Errorf("%s должен быть разрешён мини-аппу", action)

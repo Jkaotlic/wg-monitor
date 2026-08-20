@@ -14,6 +14,9 @@ export function Chain({ links }) {
             {l.name ? <u class="data-row-code">{l.name}</u> : null}
           </span>
           <span class="chain-note">{l.value ?? ''}</span>
+          {/* Действие звена -- необязательный слот: у цепочки, которую
+              нельзя трогать, его просто нет. */}
+          {l.action ?? null}
         </div>
       ))}
     </div>

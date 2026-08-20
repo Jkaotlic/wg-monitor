@@ -2108,3 +2108,106 @@ body {
 .ev-dot-sig { background: var(--sig); }
 .ev-dot-warn { background: var(--warn); }
 .ev-dot-bad { background: var(--bad); }
+
+/* Шестерёнка в шапке: зона нажатия 44 px, сама иконка мельче -- иначе она
+   спорит с брендом и кнопкой флота за внимание. */
+.app-header-gear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+
+.app-header-gear:hover,
+.app-header-gear:focus-visible {
+  color: var(--ink);
+}
+
+/* Строка настройки с кнопкой справа: строка данных занимает ширину, кнопка
+   держится следом и не растягивается. */
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-right: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-row:last-of-type { border-bottom: none; }
+
+.settings-row .data-row {
+  flex: 1;
+  min-width: 0;
+  border-bottom: none;
+}
+
+.settings-card {
+  margin-top: var(--sp-3);
+}
+
+.settings-actions {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.settings-actions .btn {
+  flex: 1;
+  min-height: 44px;
+}
+
+/* ============================================================
+   Шаги (первый вход)
+   ============================================================ */
+.steps {
+  display: flex;
+  flex-direction: column;
+}
+
+.step {
+  display: flex;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.step:last-child { border-bottom: none; }
+
+.step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  background: color-mix(in srgb, var(--sig) 14%, transparent);
+  color: var(--sig);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.step-main {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  line-height: var(--lh-tight);
+}
+
+/* Пояснение к шагу -- обычной фразой, а не кодом: это объяснение человеку,
+   а не идентификатор. */
+.step-note {
+  display: block;
+  text-decoration: none;
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
