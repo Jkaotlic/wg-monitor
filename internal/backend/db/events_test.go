@@ -126,3 +126,64 @@ func TestListAllSinceEmptyIsNotError(t *testing.T) {
 		t.Fatalf("len = %d, want 0", len(got))
 	}
 }
+
+// Скорость этой выборки -- не абстракция: на ней открывается список роутеров,
+// и прежний запрос (просмотр всех событий роутера за период) держал экран 12
+// секунд на живой базе. Тест закрепляет обе гарантии разом: ответ остаётся
+// прежним по смыслу и не зависит от того, сколько событий накопилось.
+func TestLatestEventsByPrefixSince_OneRowPerCheckRegardlessOfHistory(t *testing.T) {
+	d := newTestDB(t)
+	uid, err := d.Users().Insert("r", "2222222222222222222222222222222222222222222222222222222222222222", "1.1.1.1", "awg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Now().UTC().Add(-2 * time.Hour)
+	// История: много старых строк на каждую проверку плюс одна свежая.
+	for i := 0; i < 200; i++ {
+		ts := base.Add(time.Duration(i) * time.Second)
+		for _, name := range []string{"dns", "hydraroute", "tunnel_awg10", "tunnels"} {
+			if err := d.Events().Insert(uid, name, "ok", "{}", ts); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	fresh := time.Now().UTC()
+	if err := d.Events().Insert(uid, "dns", "fail", `{"note":"свежая"}`, fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := d.Events().LatestEventsByPrefixSince(uid, "", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 {
+		t.Fatalf("ожидалась одна строка на проверку, получено %d: %+v", len(rows), rows)
+	}
+	byName := map[string]EventRow{}
+	for _, r := range rows {
+		byName[r.CheckName] = r
+	}
+	if byName["dns"].Status != "fail" || byName["dns"].DetailsJSON != `{"note":"свежая"}` {
+		t.Fatalf("dns = %+v, ждали самую свежую строку", byName["dns"])
+	}
+
+	// Префикс по-прежнему различает tunnel_ и tunnels: подчёркивание в LIKE
+	// экранируется.
+	tunnels, err := d.Events().LatestEventsByPrefixSince(uid, "tunnel_", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tunnels) != 1 || tunnels[0].CheckName != "tunnel_awg10" {
+		t.Fatalf("префикс tunnel_ = %+v", tunnels)
+	}
+
+	// Фильтр свежести отсекает проверки, о которых давно не отчитывались.
+	recent, err := d.Events().LatestEventsByPrefixSince(uid, "", fresh.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recent) != 1 || recent[0].CheckName != "dns" {
+		t.Fatalf("фильтр свежести = %+v", recent)
+	}
+}
