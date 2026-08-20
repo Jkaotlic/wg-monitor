@@ -282,3 +282,35 @@ func TestStore_ConcurrentAccessDoesNotRace(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Экран спрашивает «что сейчас с этим роутером», а не «что с заданием
+// №такой-то»: идентификатор задания он мог не увидеть вовсе -- операцию
+// запускали с другого устройства. Поэтому Store умеет отвечать по имени.
+func TestStore_LatestForNickname(t *testing.T) {
+	s := NewStore()
+	first := s.Create(KindProvision, "testkeen", []Step{{Name: "a", Status: StepPending}})
+	s.Update(first.ID, func(j *Job) { j.State = StateFailed })
+	second := s.Create(KindProvision, "testkeen", []Step{{Name: "b", Status: StepPending}})
+
+	got, ok := s.LatestFor("testkeen")
+	if !ok || got.ID != second.ID {
+		t.Fatalf("latest = %+v ok=%v, ждали %s", got, ok, second.ID)
+	}
+	if _, ok := s.LatestFor("нет-такого"); ok {
+		t.Fatal("для незнакомого имени задания быть не должно")
+	}
+}
+
+// Идущее задание важнее свежего завершённого: пока операция идёт, экран
+// обязан показывать именно её.
+func TestStore_LatestForPrefersRunning(t *testing.T) {
+	s := NewStore()
+	running := s.Create(KindProvision, "testkeen", []Step{{Name: "a", Status: StepActive}})
+	done := s.Create(KindProvision, "testkeen", []Step{{Name: "b", Status: StepDone}})
+	s.Update(done.ID, func(j *Job) { j.State = StateSuccess })
+
+	got, ok := s.LatestFor("testkeen")
+	if !ok || got.ID != running.ID {
+		t.Fatalf("latest = %s, ждали идущее %s", got.ID, running.ID)
+	}
+}

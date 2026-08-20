@@ -20,6 +20,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/retention"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
@@ -244,6 +245,24 @@ func main() {
 		Logger:   logger.With("component", "provision"),
 	}
 
+	// Мастер замены конфига: задание из шести шагов с откатом. Store общий с
+	// провижном намеренно -- блокировка в нём по имени роутера, и ставить
+	// агента заново посреди замены конфига было бы нельзя в любом случае.
+	replaceEngine := &replace.Deps{
+		Store:    provisionStore,
+		Commands: cmdQueue,
+		Cabinet:  backend.ReplaceCabinet(cb),
+		Origin:   backend.ReplaceOrigin(d),
+		Notify: func(ctx context.Context, routerID int64, text string) {
+			if err := cb.NotifyRouterTopic(ctx, routerID, text); err != nil {
+				logger.Warn("replace: notify failed", "router_id", routerID, "err", err)
+			}
+		},
+		BaseCtx: ctx,
+		Now:     time.Now,
+		Logger:  logger.With("component", "replace"),
+	}
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
 		DB:             d,
@@ -257,6 +276,7 @@ func main() {
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
 		VPNCabinet:          cb,
+		Replace:             replaceEngine,
 		OpkgNotifier:        opkgNotifier,
 		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,

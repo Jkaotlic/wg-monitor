@@ -15,6 +15,7 @@ import (
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -357,6 +358,10 @@ type Deps struct {
 	// cfg.Wizard.Token by main. Empty → endpoints not registered (fail-closed).
 	WizardToken    string
 	DashboardToken string
+	// Replace -- движок замены конфига туннеля (мастер из шести шагов с
+	// откатом, internal/backend/replace). nil-safe: без него экран отвечает
+	// «не настроено», а не падает.
+	Replace *replace.Deps
 	// VPNCabinet отдаёт мини-аппу кабинеты провайдеров (Amnezia Premium,
 	// HideMy.name) и выпускает из них конфиги. nil-safe: без него экран
 	// кабинетов отвечает «не настроено», а не падает.

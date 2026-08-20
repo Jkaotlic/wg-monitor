@@ -174,6 +174,40 @@ func (s *Store) Update(id string, mutate func(*Job)) {
 // TryLock acquires the single-flight lock for nick, returning true if it was
 // free (now held by the caller) or false if another run already holds it.
 // Callers must pair a successful TryLock with a later Unlock.
+// LatestFor возвращает задание этого агента: идущее, если оно есть, иначе
+// самое свежее завершённое. Экран спрашивает «что сейчас с роутером», а не
+// «что с заданием №такой-то»: операцию могли запустить с другого устройства,
+// и её идентификатора у спрашивающего нет.
+func (s *Store) LatestFor(nick string) (Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var best *Job
+	for _, job := range s.jobs {
+		if job.Nickname != nick {
+			continue
+		}
+		if best == nil {
+			best = job
+			continue
+		}
+		// Идущее перебивает завершённое; среди однородных -- то, что создано
+		// позже (идентификаторы монотонны по времени создания).
+		if job.State == StateRunning && best.State != StateRunning {
+			best = job
+			continue
+		}
+		if job.State == best.State && job.ID > best.ID {
+			best = job
+		}
+	}
+	if best == nil {
+		return Job{}, false
+	}
+	out := *best
+	out.Steps = copySteps(best.Steps)
+	return out, true
+}
+
 func (s *Store) TryLock(nick string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()

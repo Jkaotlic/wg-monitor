@@ -84,3 +84,23 @@ CREATE TABLE IF NOT EXISTS router_operators (
 -- HasAccess fires on every callback to a router-scoped action; needs an
 -- index on the lookup pair. Composite PK already gives the right key order
 -- (user_id, telegram_user_id) so no extra index needed.
+
+-- tunnel_config_origin -- чем поднят туннель: провайдер, вариант (страна или
+-- сервер) и когда конфиг выпущен. Без этой связи система не может ответить на
+-- вопрос «каким конфигом сейчас живёт маршрутизация»: при импорте до сих пор
+-- сохранялось только имя туннеля.
+--
+-- Заполняет мастер замены конфига. У туннелей, заведённых раньше или руками,
+-- строки нет вовсе -- и экран честно говорит «происхождение неизвестно»,
+-- вместо того чтобы выдумывать провайдера.
+CREATE TABLE IF NOT EXISTS tunnel_config_origin (
+    user_id     INTEGER NOT NULL,
+    tunnel_id   TEXT NOT NULL,
+    tunnel_name TEXT NOT NULL DEFAULT '',
+    provider    TEXT NOT NULL,
+    variant     TEXT NOT NULL DEFAULT '',
+    issued_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    issued_by   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, tunnel_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
