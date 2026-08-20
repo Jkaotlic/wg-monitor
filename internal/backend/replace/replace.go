@@ -179,6 +179,11 @@ func (d Deps) run(jobID string, req StartReq) {
 	}
 	defer d.Store.Unlock(req.Nickname)
 
+	if d.Logger != nil {
+		d.Logger.Info("replace started",
+			"job_id", jobID, "nickname", req.Nickname, "provider", req.Provider,
+			"option", req.OptionID, "old_tunnel", req.OldTunnelID, "policy", req.PolicyName)
+	}
 	state := &runState{}
 	if err := d.execute(ctx, jobID, req, state); err != nil {
 		d.rollback(ctx, jobID, req, state, err)
@@ -292,6 +297,10 @@ func (d Deps) finish(ctx context.Context, jobID string, req StartReq, state *run
 			d.Logger.Warn("replace: origin not recorded", "err", err)
 		}
 	}
+	if d.Logger != nil {
+		d.Logger.Info("replace done", "job_id", jobID, "nickname", req.Nickname,
+			"new_tunnel", state.NewTunnelID, "new_name", state.NewTunnelName)
+	}
 	d.Store.Update(jobID, func(j *provision.Job) {
 		j.State = provision.StateSuccess
 		j.Hint = "готово: трафик политики «" + req.PolicyName + "» идёт через " + state.NewTunnelName
@@ -330,6 +339,11 @@ func (d Deps) rollback(ctx context.Context, jobID string, req StartReq, state *r
 	if len(notes) > 0 {
 		hint += ". Откат: " + strings.Join(notes, "; ")
 	}
+	if d.Logger != nil {
+		d.Logger.Warn("replace rolled back", "job_id", jobID, "nickname", req.Nickname,
+			"cause", cause.Error(), "rollback", strings.Join(notes, "; "),
+			"new_tunnel", state.NewTunnelID)
+	}
 	d.Store.Update(jobID, func(j *provision.Job) {
 		j.State = provision.StateFailed
 		j.Hint = hint
@@ -345,6 +359,12 @@ func (d Deps) notify(ctx context.Context, routerID int64, text string) {
 }
 
 func (d Deps) step(jobID, name string, status provision.StepStatus, detail string) {
+	// Операция идёт без человека у экрана и может длиться минуты. Лог -- то
+	// единственное место, где потом видно, что происходило и на чём встало:
+	// задание живёт в памяти и через полчаса будет сметено.
+	if d.Logger != nil {
+		d.Logger.Info("replace step", "job_id", jobID, "step", name, "status", string(status), "detail", detail)
+	}
 	d.Store.Update(jobID, func(j *provision.Job) {
 		for i := range j.Steps {
 			if j.Steps[i].Name == name {
