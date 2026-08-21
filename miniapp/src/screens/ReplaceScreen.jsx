@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace } from '../api.js'
 import { accountSummary, optionRows } from '../cabinet.js'
-import { replaceView } from '../replace.js'
+import { replaceView, startErrorText } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -61,7 +61,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
       policy_name: policyName,
     })
       .then((j) => setJob({ ...j, steps: j.steps ?? [] }))
-      .catch((err) => setError(err.message))
+      .catch((err) => setError(startErrorText(err)))
       .finally(() => setStarting(false))
   }
 

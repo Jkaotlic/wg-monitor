@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { replaceView, stepTitle } from '../src/replace.js'
+import { replaceView, stepTitle, startErrorText } from '../src/replace.js'
 
 describe('stepTitle', () => {
   // Человеку показывают не имена шагов движка, а то, что происходит на
@@ -56,5 +56,38 @@ describe('replaceView', () => {
   it('замен не было — экран показывает форму, а не пустой список', () => {
     expect(replaceView(null).idle).toBe(true)
     expect(replaceView({}).idle).toBe(true)
+  })
+})
+
+// Отказ сервера доезжал до человека в виде «/routers/5/replace failed: 400»:
+// путь запроса и число. Причина при этом известна -- код ошибки лежит в
+// ответе, -- и не сказать её значит заставить оператора гадать там, где
+// сервер уже всё объяснил.
+describe('startErrorText', () => {
+  const apiErr = (status, code) => Object.assign(new Error(`/x failed: ${status}`), { status, code })
+
+  it('старый агент -- называет причину и что сделать', () => {
+    const text = startErrorText(apiErr(400, 'agent_too_old'))
+    expect(text).toMatch(/агент/i)
+    expect(text).toMatch(/обнов/i)
+    expect(text).not.toMatch(/failed/)
+  })
+
+  it('замена уже идёт', () => {
+    expect(startErrorText(apiErr(409, 'already_running'))).toMatch(/уже идёт/i)
+  })
+
+  it('сервер без кабинетов -- это настройка сервера, а не вина роутера', () => {
+    expect(startErrorText(apiErr(503, 'not_configured'))).toMatch(/не настроен/i)
+  })
+
+  it('незнакомый код -- честное «не знаю», но без внутренностей запроса', () => {
+    const text = startErrorText(apiErr(500, 'boom'))
+    expect(text).not.toMatch(/\/x failed/)
+    expect(text).toMatch(/500/)
+  })
+
+  it('не-ответ сервера (сеть оборвалась) тоже читается', () => {
+    expect(startErrorText(new Error('Failed to fetch'))).toMatch(/связ|сет/i)
   })
 })

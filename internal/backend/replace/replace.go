@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -51,6 +52,10 @@ const (
 // ErrAlreadyRunning -- на роутере уже идёт замена. Параллельные замены
 // запрещены: две операции разом оставили бы маршрутизацию в состоянии,
 // которого не ждал никто.
+// ErrAgentTooOld -- мастер отказался начинать: агент роутера не умеет команд,
+// без которых задание не доживёт до конца.
+var ErrAgentTooOld = errors.New("агент роутера слишком старый для замены конфига")
+
 var ErrAlreadyRunning = errors.New("на этом роутере уже идёт замена конфига — дождитесь её завершения")
 
 // Commander -- очередь команд агенту. Ровно два метода: положить и дождаться.
@@ -108,7 +113,21 @@ type StartReq struct {
 	OptionID    string
 	OldTunnelID string
 	PolicyName  string
+	// AgentVersion -- последняя версия агента, о которой роутер сообщал сам
+	// (users.last_seen_agent_version). Пустая строка -- «не сообщал»,
+	// и это НЕ повод отказывать: см. MinAgentVersion.
+	AgentVersion string
 }
+
+// MinAgentVersion -- версия агента, ниже которой мастер не начинает работу.
+// Определяется не вкусом, а тем, чего у старого агента физически нет:
+// route_policy_promote появился в v0.17.0, tunnel_power -- в v0.18.0, и оба
+// нужны мастеру. На v0.14.4 всё кончалось хуже, чем отказом: шаг «выпустить»
+// успевал потратить конфиг в платном кабинете, шаг «импорт» -- завести
+// туннель на роутере, и только promote упирался в незнакомую команду. Откат
+// при этом сам опирался на tunnel_power, которого там тоже нет, -- лишний
+// туннель оставался на роутере.
+const MinAgentVersion = "v0.18.0"
 
 // Steps -- чеклист задания в порядке выполнения.
 func Steps() []provision.Step {
@@ -164,6 +183,16 @@ func (d Deps) handshakeWait() time.Duration {
 // Start заводит задание и уходит: сама работа идёт в фоне, потому что она
 // длиннее любого http-запроса.
 func (d Deps) Start(req StartReq) (string, error) {
+	// Проверка версии идёт до замка и до первого шага: единственное место,
+	// где отказ ничего не стоит.
+	//
+	// Нечитаемую или пустую версию пропускаем. Отказ по незнанию перекрыл бы
+	// работу исправным роутерам, а мастер и без того умеет падать с откатом;
+	// запрещаем только то, про что ТОЧНО известно, что оно не выполнится.
+	if upstream.SoftwareNewerThan(req.AgentVersion, MinAgentVersion) {
+		return "", fmt.Errorf("%w: на роутере агент %s, мастеру нужен %s или новее",
+			ErrAgentTooOld, req.AgentVersion, MinAgentVersion)
+	}
 	if !d.Store.TryLock(req.Nickname) {
 		return "", ErrAlreadyRunning
 	}

@@ -109,14 +109,30 @@ func miniappReplaceStartHandler(d Deps) http.HandlerFunc {
 			return
 		}
 
+		// Версия агента -- та, о которой роутер сообщил сам в последнем
+		// отчёте. Мастер по ней решает, доживёт ли задание до конца: команд
+		// promote и tunnel_power у старого агента нет, а узнать это на
+		// четвёртом шаге -- значит уже потратить конфиг и завести на роутере
+		// лишний туннель.
+		agentVersion := ""
+		if u.LastDeployedVersion != nil {
+			agentVersion = *u.LastDeployedVersion
+		}
 		jobID, err := d.Replace.Start(replace.StartReq{
-			RouterID:    routerID,
-			Nickname:    u.Nickname,
-			Provider:    provider,
-			OptionID:    strings.TrimSpace(req.OptionID),
-			OldTunnelID: strings.TrimSpace(req.OldTunnelID),
-			PolicyName:  strings.TrimSpace(req.PolicyName),
+			RouterID:     routerID,
+			Nickname:     u.Nickname,
+			Provider:     provider,
+			OptionID:     strings.TrimSpace(req.OptionID),
+			OldTunnelID:  strings.TrimSpace(req.OldTunnelID),
+			PolicyName:   strings.TrimSpace(req.PolicyName),
+			AgentVersion: agentVersion,
 		})
+		if errors.Is(err, replace.ErrAgentTooOld) {
+			// Отказ по состоянию роутера, а не по форме запроса: экран должен
+			// сказать «обновите агента», а не «что-то пошло не так».
+			writeJSONError(w, http.StatusBadRequest, "agent_too_old", err.Error())
+			return
+		}
 		if errors.Is(err, replace.ErrAlreadyRunning) {
 			// Не ошибка запроса, а состояние роутера: экран покажет идущую
 			// операцию вместо кнопки.

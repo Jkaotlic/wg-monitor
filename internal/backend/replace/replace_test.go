@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -292,4 +293,69 @@ func TestReplace_CabinetFailureTouchesNothing(t *testing.T) {
 	if len(cmd.actions()) != 0 {
 		t.Fatalf("роутер не должен был получить ни одной команды: %v", cmd.actions())
 	}
+}
+
+// Мастер не спрашивал, умеет ли агент то, что ему предстоит. На роутере с
+// v0.14.4 это кончалось хуже, чем отказом: шаг 1 успевал ВЫПУСТИТЬ конфиг в
+// платном кабинете, шаг 2 -- завести на роутере новый туннель, и только на
+// promote агент отвечал «не знаю такой команды». Откат при этом опирался на
+// tunnel_power -- команду, которой у старого агента тоже нет, -- поэтому
+// лишний туннель оставался на роутере, а конфиг был потрачен.
+//
+// Отказ обязан случиться ДО первого необратимого шага.
+func TestReplace_RefusesOldAgent(t *testing.T) {
+	cmd := &fakeCommander{}
+	cab := &countingCabinet{}
+	var notes []string
+	d := deps(t, cmd, cab, &fakeOrigin{}, &notes)
+
+	req := startReq()
+	req.AgentVersion = "v0.14.4"
+	id, err := d.Start(req)
+
+	if !errors.Is(err, ErrAgentTooOld) {
+		t.Fatalf("ожидали ErrAgentTooOld, получили %v (job=%q)", err, id)
+	}
+	if id != "" {
+		t.Fatalf("задание не должно заводиться: %q", id)
+	}
+	if cab.calls != 0 {
+		t.Fatalf("кабинет не должен был выпускать конфиг: вызовов %d", cab.calls)
+	}
+	// Замок обязан остаться свободным: иначе один отказ запирал бы роутер на
+	// весь TTL задания.
+	if !d.Store.TryLock(req.Nickname) {
+		t.Fatal("замок роутера остался занят после отказа")
+	}
+	if !strings.Contains(err.Error(), "0.14.4") {
+		t.Errorf("в отказе нет текущей версии: %v", err)
+	}
+}
+
+func TestReplace_AllowsCurrentAndUnknownAgent(t *testing.T) {
+	for _, v := range []string{"v0.18.0", "v0.19.3", "", "неизвестно"} {
+		cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+			"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+			"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+			"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+		}}
+		var notes []string
+		d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+		req := startReq()
+		req.AgentVersion = v
+		// Неизвестную версию не запрещаем: агент мог не сообщить её вовсе, а
+		// отказ по незнанию перекрыл бы работу исправным роутерам.
+		id, err := d.Start(req)
+		if err != nil {
+			t.Fatalf("версия %q: %v", v, err)
+		}
+		waitJob(t, d, id)
+	}
+}
+
+type countingCabinet struct{ calls int }
+
+func (c *countingCabinet) IssueConfig(_ context.Context, _ int64, _, _ string) (Issued, error) {
+	c.calls++
+	return Issued{Conf: []byte("[Interface]\n"), TunnelName: "amnezia_nl"}, nil
 }
