@@ -384,7 +384,22 @@ func probeInconclusive(ctx context.Context, err error) bool {
 		return false
 	}
 	cerr := ctx.Err()
-	return errors.Is(cerr, context.Canceled) || errors.Is(cerr, context.DeadlineExceeded)
+	if errors.Is(cerr, context.Canceled) || errors.Is(cerr, context.DeadlineExceeded) {
+		return true
+	}
+	// Гонка на самом дедлайне. Сокетный дедлайн, выведенный из ctx, и сам ctx
+	// срабатывают в один и тот же момент, но ctx.Err() проставляется своей
+	// горутиной. На загруженной машине ошибка чтения ("i/o timeout")
+	// возвращается раньше, чем ctx успевает признаться, что он Done, -- и
+	// тогда исчерпанный бюджет проверки выглядел бы как «резолвер не
+	// отвечает». Отсюда флак в CI: тест на отменённый зонд падал через раз.
+	//
+	// Момент времени врать не умеет: если дедлайн уже позади, зонд не получил
+	// своего шанса, чем бы ни была ошибка.
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return true
+	}
+	return false
 }
 
 func hasSpoofIP(ips []string) bool {

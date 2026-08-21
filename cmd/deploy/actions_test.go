@@ -864,6 +864,14 @@ func TestDiagnosisFromReport_RouteElevationHint(t *testing.T) {
 			"PowerShell от имени администратора",
 			"route ADD 192.168.0.1 MASK 255.255.255.255 0.0.0.0 IF 46 METRIC 1",
 		)
+	} else if runtime.GOOS == "darwin" {
+		// Подсказка платформенная: на macOS маршрут ставится route(8), а не
+		// ip(8). Тест раньше ждал линуксовую строку на любой не-Windows
+		// системе и потому падал на каждом прогоне у оператора -- падение
+		// было в тесте, а не в коде.
+		wants = append(wants,
+			"sudo route -n add -host 192.168.0.1 -interface wg-srv_legion_laptop",
+		)
 	} else {
 		wants = append(wants,
 			"sudo ip route add 192.168.0.1/32 dev wg-srv_legion_laptop metric 1",

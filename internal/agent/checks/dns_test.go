@@ -475,3 +475,35 @@ func TestProbeInconclusive(t *testing.T) {
 		}
 	})
 }
+
+// pastDeadlineCtx -- контекст, у которого дедлайн уже позади, а Err() ещё
+// молчит. Это ровно та гонка, что ловилась в CI: сокет вернул «i/o timeout»
+// на дедлайне, а ctx не успел признаться, что он Done.
+type pastDeadlineCtx struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c pastDeadlineCtx) Deadline() (time.Time, bool) { return c.deadline, true }
+func (c pastDeadlineCtx) Err() error                  { return nil }
+
+func TestProbeInconclusive_DeadlinePassedButCtxNotYetDone(t *testing.T) {
+	ctx := pastDeadlineCtx{Context: context.Background(), deadline: time.Now().Add(-time.Millisecond)}
+	err := errors.New("read udp 127.0.0.1:1->127.0.0.1:2: i/o timeout")
+	if !probeInconclusive(ctx, err) {
+		t.Fatal("исчерпанный бюджет проверки не должен выглядеть как отказ резолвера")
+	}
+	// Ошибки нет -- значит и говорить не о чем, даже за дедлайном.
+	if probeInconclusive(ctx, nil) {
+		t.Fatal("успешный зонд не бывает неубедительным")
+	}
+}
+
+// Дедлайн ещё впереди -- ошибка принадлежит цели, а не нам.
+func TestProbeInconclusive_BeforeDeadlineStillCounts(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	if probeInconclusive(ctx, errors.New("connection refused")) {
+		t.Fatal("живой бюджет: отказ резолвера обязан считаться отказом")
+	}
+}
