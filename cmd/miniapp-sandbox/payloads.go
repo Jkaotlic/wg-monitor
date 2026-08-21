@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -20,15 +21,31 @@ import (
 func sandboxOutput(action string, args map[string]any) string {
 	switch action {
 	case "route_status":
-		return mustJSON(routeSnapshot())
+		return mustJSON(routeSnapshot(routerState()))
+	case "tunnel_import":
+		// Мастер вытаскивает идентификатор нового туннеля из этой строки:
+		// формат ровно тот, что печатает агент. Соврать здесь форматом --
+		// значит проверять экран на ответе, которого не бывает.
+		id := importTunnel(argString(args, "name", "amnezia_nl"))
+		return fmt.Sprintf("✅ Туннель %q создан (id=%s)", argString(args, "name", "amnezia_nl"), id)
+	case "route_policy_promote":
+		promoteTunnel(argString(args, "tunnel_id", ""))
+		return "политика переведена на " + argString(args, "tunnel_id", "")
+	case "tunnel_power":
+		on, _ := args["on"].(bool)
+		setTunnelPower(argString(args, "tunnel_id", ""), on)
+		return "интерфейс переключён"
 	case "tunnel_traffic":
 		return mustJSON(tunnelTraffic(argString(args, "tunnel_id", "awg12"), argString(args, "period", "24h")))
 	case "diag_report":
 		return mustJSON(diagReport())
-	case "exit_ip_direct":
-		return "Exit IP: 203.0.113.1"
-	case "exit_ip_tunnel", "exit_ip":
-		return "Exit IP: 203.0.113.9"
+	// Мастер сверяет адреса выхода этими двумя командами (а не exit_ip_*):
+	// адрес через туннель обязан отличаться от прямого, иначе трафик мимо
+	// VPN, и шаг проверки честно проваливается.
+	case "check_direct", "exit_ip_direct":
+		return "Проверка напрямую\nExit IP: 203.0.113.1"
+	case "check_via_tunnel", "exit_ip_tunnel", "exit_ip":
+		return "Проверка через туннель\nExit IP: 203.0.113.9"
 	case "recheck":
 		return "проверки перезапущены"
 	default:
@@ -54,8 +71,67 @@ func mustJSON(v any) string {
 // Парк из двух линий: одна несёт трафик, вторая готова подхватить. Плюс
 // политика с цепочкой и правила -- без них экраны «Туннели» и «Маршруты»
 // показывают форму, но не смысл.
-func routeSnapshot() wire.RouteSnapshot {
-	return wire.RouteSnapshot{
+// Состояние «роутера» между командами. Мастер замены -- цепочка из шести
+// шагов, и каждый следующий смотрит на последствия предыдущего: без памяти
+// песочница проверяла бы только первый.
+var sandboxRouter = struct {
+	mu       sync.Mutex
+	imported []wire.TunnelMeta
+	active   string
+	disabled map[string]bool
+	nextID   int
+}{active: "awg12", disabled: map[string]bool{}, nextID: 21}
+
+type routerSnapshotState struct {
+	imported []wire.TunnelMeta
+	active   string
+	disabled map[string]bool
+}
+
+func routerState() routerSnapshotState {
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	st := routerSnapshotState{active: sandboxRouter.active, disabled: map[string]bool{}}
+	st.imported = append(st.imported, sandboxRouter.imported...)
+	for k, v := range sandboxRouter.disabled {
+		st.disabled[k] = v
+	}
+	return st
+}
+
+func importTunnel(name string) string {
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	id := fmt.Sprintf("awg%d", sandboxRouter.nextID)
+	sandboxRouter.nextID++
+	sandboxRouter.imported = append(sandboxRouter.imported, wire.TunnelMeta{
+		ID: id, Name: name, Iface: "nwg" + id, Type: "managed",
+		Enabled: true, Available: true, Status: "up",
+		HasHandshake: true, HandshakeAge: 5, PingStatus: "ok", RestartMethod: "control",
+	})
+	return id
+}
+
+func promoteTunnel(id string) {
+	if id == "" {
+		return
+	}
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	sandboxRouter.active = id
+}
+
+func setTunnelPower(id string, on bool) {
+	if id == "" {
+		return
+	}
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	sandboxRouter.disabled[id] = !on
+}
+
+func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
+	snap := wire.RouteSnapshot{
 		HRNeo: wire.HRStatus{Installed: true, Running: true},
 		Tunnels: []wire.TunnelMeta{
 			{
@@ -99,6 +175,29 @@ func routeSnapshot() wire.RouteSnapshot {
 		DefaultEgress: wire.DefaultEgressDirect,
 		PolicyModel:   true,
 	}
+	snap.Tunnels = append(snap.Tunnels, st.imported...)
+	for i := range snap.Tunnels {
+		if st.disabled[snap.Tunnels[i].ID] {
+			snap.Tunnels[i].Enabled = false
+			snap.Tunnels[i].Status = "down"
+		}
+	}
+	// Политика ведёт туда, куда её перевели: цепочку строим от активного
+	// звена, иначе шаг проверки смотрел бы на вчерашнюю картину.
+	if st.active != "" {
+		snap.Policies[0].ActiveTunnelID = st.active
+		if st.active != "awg12" {
+			for _, t := range st.imported {
+				if t.ID == st.active {
+					snap.Policies[0].Interfaces = append([]wire.RoutePolicyInterface{{
+						Bind: t.Iface, Name: t.Name, Role: "active", Available: true, Order: 0,
+						TunnelID: t.ID, ViaVPN: true,
+					}}, snap.Policies[0].Interfaces...)
+				}
+			}
+		}
+	}
+	return snap
 }
 
 // Ряд -- это СКОРОСТИ в байтах в секунду, а объём лежит отдельными суммами:
