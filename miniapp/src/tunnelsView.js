@@ -5,15 +5,25 @@
 // сначала "работает ли сейчас", потом "что будет, если ляжет", и только
 // потом "что вообще есть". Поэтому и раскладка считается тремя кусками, а не
 // одним списком туннелей: список не отвечает ни на один из трёх вопросов.
-import { tunnelLive } from './routes.js'
+import { tunnelLive, tunnelSwitchedOff } from './routes.js'
 
 // Роль звена в цепочке. Различать "готов подхватить" и "выключен" обязательно:
 // первое -- обещание, что трафик переживёт падение активной линии, второе --
 // прямо противоположное. Выдать одно за другое цветом значило бы соврать в
 // том единственном месте, ради которого резерв и заводят.
+//
+// Упавшее звено -- третья роль, а не разновидность выключенного. Раньше всё,
+// что не поднято, называлось «выключен вручную»: экран докладывал о чужом
+// решении там, где случилась поломка, и подсовывал кнопку «включить» линии,
+// которая и так включена. Различение бесплатное: enabled -- это настройка,
+// status -- факт, и они приходят порознь.
 function chainRole(link, tunnel, activeTunnelID) {
   if (link.tunnel_id && link.tunnel_id === activeTunnelID) return 'active'
-  return tunnelLive(tunnel ?? {}) === 'up' ? 'ready' : 'off'
+  const live = tunnelLive(tunnel ?? {})
+  if (live === 'up') return 'ready'
+  if (tunnel && tunnelSwitchedOff(tunnel)) return 'off'
+  if (live === 'unknown') return 'unknown'
+  return 'down'
 }
 
 // Значение справа не повторяет заголовок строки: "Работает сейчас" и рядом
@@ -23,7 +33,9 @@ function chainRole(link, tunnel, activeTunnelID) {
 const ROLE_NOTE = {
   active: '',
   ready: 'отвечает',
+  down: 'включён',
   off: 'выключен',
+  unknown: 'роутер не сказал',
 }
 
 export function tunnelsView(snapshot) {

@@ -252,10 +252,10 @@ func (f *fakeAgent) Enqueue(userID int64, cmd wire.Command) error {
 	f.results[key(userID, cmd.ID)] = wire.CommandResult{
 		ID:         cmd.ID,
 		Status:     "ok",
-		Output:     "песочница: " + cmd.Action + " выполнен",
+		Output:     sandboxOutput(cmd.Action, cmd.Args),
 		DurationMs: 42,
 	}
-	slog.Info("песочница: команда принята", "action", cmd.Action, "args", cmd.Args)
+	slog.Info("песочница: команда принята", "action", cmd.Action, "args", argsLine(cmd.Args))
 	return nil
 }
 

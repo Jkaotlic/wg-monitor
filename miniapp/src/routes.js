@@ -24,6 +24,19 @@ export function tunnelLive(t) {
   return ['running', 'up', 'started', 'active'].includes(status) ? 'up' : 'down'
 }
 
+// Выключен ли туннель НАСТРОЙКОЙ. Отличать это от «не поднялся» обязательно:
+// выключенное включают кнопкой, упавшее чинят, и перепутать их значит послать
+// человека не туда. Слово роутера («disabled») здесь важнее флага enabled:
+// awg-manager так называет именно снятый вручную туннель, а флага в снимке
+// старого агента может не быть вовсе.
+const SWITCHED_OFF_STATUSES = ['disabled', 'stopped', 'off']
+
+export function tunnelSwitchedOff(t) {
+  const status = (t?.status ?? '').trim().toLowerCase()
+  if (SWITCHED_OFF_STATUSES.includes(status)) return true
+  return t?.enabled === false
+}
+
 export function parseRouteSnapshot(output) {
   if (typeof output !== 'string' || output === '') return null
   try {

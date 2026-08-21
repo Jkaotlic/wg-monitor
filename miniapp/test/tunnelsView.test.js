@@ -132,3 +132,51 @@ describe('tunnelsView: чем можно управлять', () => {
     expect(row.ndmsName).toBe('Wireguard1')
   })
 })
+
+// Резервное звено, которое ЛЕЖИТ, экран называл «выключено вручную» -- то
+// есть докладывал о чужом решении там, где случилась поломка. Это два
+// противоположных вывода: выключенное включают кнопкой, упавшее чинят. Данных
+// на различение хватало всегда: enabled -- это настройка, status -- факт.
+describe('роль звена различает выключенное и упавшее', () => {
+  const snap = (tunnel) => ({
+    tunnels: [
+      { id: 'awg12', name: 'активный', iface: 'opkgtun12', type: 'managed', enabled: true, status: 'up' },
+      tunnel,
+    ],
+    policies: [{
+      name: 'HydraRoute',
+      active_tunnel_id: 'awg12',
+      dns: 10,
+      interfaces: [
+        { bind: 'OpkgTun12', name: 'активный', tunnel_id: 'awg12' },
+        { bind: 'OpkgTun10', name: 'резерв', tunnel_id: 'awg10' },
+      ],
+    }],
+  })
+  const reserve = (t) => tunnelsView(snap(t)).chain.find((c) => c.tunnelID === 'awg10')
+
+  it('включён и отвечает -- готов подхватить', () => {
+    const link = reserve({ id: 'awg10', name: 'резерв', type: 'managed', enabled: true, status: 'up' })
+    expect(link.role).toBe('ready')
+  })
+
+  it('выключен настройкой -- выключен', () => {
+    const link = reserve({ id: 'awg10', name: 'резерв', type: 'managed', enabled: false, status: 'down' })
+    expect(link.role).toBe('off')
+    expect(link.note).toBe('выключен')
+  })
+
+  it('включён, но не поднялся -- упал, а не выключен', () => {
+    const link = reserve({ id: 'awg10', name: 'резерв', type: 'managed', enabled: true, status: 'down' })
+    expect(link.role).toBe('down')
+    // Заголовок строки скажет «Не отвечает», значение справа добавляет факт,
+    // которого в заголовке нет: линия при этом включена.
+    expect(link.note).toBe('включён')
+  })
+
+  it('роутер не сказал -- так и говорим', () => {
+    const link = reserve({ id: 'awg10', name: 'резерв', type: 'managed', enabled: true })
+    expect(link.role).toBe('unknown')
+    expect(link.note).toBe('роутер не сказал')
+  })
+})

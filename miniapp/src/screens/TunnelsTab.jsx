@@ -21,6 +21,17 @@ import { ReplaceScreen } from './ReplaceScreen.jsx'
 //
 // Маршруты уехали отсюда на свой экран: сначала человек спрашивает "какая
 // линия поднята", и только потом -- "что через неё идёт".
+// Заголовок строки в цепочке. «Выключен вручную» на упавшем звене был
+// докладом о чужом решении там, где случилась поломка -- а это два разных
+// вывода и два разных действия.
+const CHAIN_TITLE = {
+  active: 'Работает сейчас',
+  ready: 'Готов подхватить',
+  down: 'Не отвечает',
+  off: 'Выключен вручную',
+  unknown: 'Состояние неизвестно',
+}
+
 export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   const [cabinets, setCabinets] = useState(false)
   const [replacing, setReplacing] = useState(null)
@@ -84,6 +95,43 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
     )
   }
 
+  // Упавшему звену кнопка «Включить» не помогает: оно и так включено, роутер
+  // просто не смог его поднять. Единственное осмысленное действие здесь --
+  // перезапуск, и предлагать надо именно его.
+  const restartButton = (t) => {
+    if (!openSheet) return null
+    return (
+      <button
+        type="button"
+        class="btn btn-ghost btn-row"
+        onClick={() =>
+          openSheet(
+            confirmSheet({
+              routerID,
+              title: `Перезапустить «${t.name}»?`,
+              body: `Линия включена, но не поднялась. Роутер опустит и снова поднимет интерфейс — если дело в зависшем соединении, это его чинит. Трафик по цепочке идёт мимо неё и сейчас.`,
+              action: 'tunnel_restart',
+              args: { tunnel_id: t.tunnelID ?? t.id },
+              buttonLabel: 'Перезапустить',
+              asleep,
+              onDone: () => run('route_status', {}, deadline),
+            }),
+          )
+        }
+      >
+        Перезапустить
+      </button>
+    )
+  }
+
+  // Что предложить звену цепочки. Активное трогать нечем -- оно несёт трафик
+  // прямо сейчас, и «выключить» на нём не переключатель, а обрыв.
+  const chainAction = (c) => {
+    if (c.role === 'active' || c.role === 'unknown') return null
+    if (c.role === 'down') return restartButton(c)
+    return toggleButton(c)
+  }
+
   return (
     <div class="screen">
       <div class="router-header">
@@ -142,7 +190,14 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
         <Section title="Обмен за сутки">
           <div class="card">
             <div class="stat-grid" style="padding:14px">
-              <Stat label="принято" value={trafficOut?.known ? trafficOut.rx : null} note={trafficOut?.empty ? 'за сутки ничего' : 'роутер посчитал сам'} />
+              {/* Пока ряд не спрошен, плитка говорит «неизвестно» -- и
+                  подпись «роутер посчитал сам» под этим словом обещала
+                  посчитанное там, где не считали вовсе. */}
+              <Stat
+                label="принято"
+                value={trafficOut?.known ? trafficOut.rx : null}
+                note={!trafficOut?.known ? 'ещё не спрашивали' : trafficOut.empty ? 'за сутки ничего' : 'роутер посчитал сам'}
+              />
               <Stat label="отдано" value={trafficOut?.known ? trafficOut.tx : null} note={trafficOut?.known ? `точек в ряду: ${trafficOut.points}` : 'нажмите «Показать обмен»'} />
             </div>
             {traffic.result && traffic.result.status !== 'ok' && (
@@ -169,9 +224,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             <Chain
               links={view.chain.map((c) => ({
                 ...c,
-                title: c.role === 'active' ? 'Работает сейчас' : c.role === 'ready' ? 'Готов подхватить' : 'Выключен вручную',
+                title: CHAIN_TITLE[c.role] ?? 'Состояние неизвестно',
                 value: c.role === 'active' && c.handshakeAgeSec != null ? humanAge(c.handshakeAgeSec) : c.note,
-                action: c.role === 'active' ? null : toggleButton(c),
+                action: chainAction(c),
               }))}
             />
             <p class="card-foot">
