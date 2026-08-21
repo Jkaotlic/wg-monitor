@@ -2,6 +2,7 @@ package backend
 
 import (
 	"expvar"
+	"runtime"
 	"sync/atomic"
 )
 
@@ -24,6 +25,13 @@ var (
 	metricCmdResultRelayed   = expvar.NewInt("wgm_cmd_result_relayed_total")
 	metricTGSendErrors       = expvar.NewInt("wgm_tg_send_errors_total")
 )
+
+// Число горутин -- дешёвый детектор «фоновый цикл умер или залип». Утечка
+// растёт, смерть цикла видна как проседание; без этого единственным способом
+// узнать, жив ли сторож, был неприехавший алерт.
+func init() {
+	expvar.Publish("wgm_goroutines", expvar.Func(func() any { return runtime.NumGoroutine() }))
+}
 
 // Per-package callers go through these typed wrappers so renaming a metric
 // doesn't ripple. The closure form also lets us swap to atomic-int64 later

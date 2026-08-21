@@ -50,6 +50,11 @@ type Config struct {
 	ResumeGrace      time.Duration
 	ScanEvery        time.Duration
 	RenotifyEvery    time.Duration
+	// SendTimeout ограничивает одну отправку уведомления. Верхний ctx живёт
+	// столько же, сколько backend, поэтому без собственного дедлайна один
+	// подвисший запрос к Telegram останавливал бы обход всего парка -- и
+	// мониторинг замолкал бы целиком из-за одного роутера.
+	SendTimeout time.Duration
 }
 
 const (
@@ -59,6 +64,7 @@ const (
 	defaultResumeGrace      = 90 * time.Second
 	defaultScanEvery        = 30 * time.Second
 	defaultRenotifyEvery    = 6 * time.Hour
+	defaultSendTimeout      = 60 * time.Second
 )
 
 func (c Config) staleFor(u db.User) time.Duration {
@@ -88,6 +94,15 @@ func (c Config) staleFor(u db.User) time.Duration {
 	default:
 		return defaultStaleAfterStatic
 	}
+}
+
+// sendTimeout -- дедлайн одной отправки. Отдельный от ScanEvery: обход может
+// быть частым, а сообщение в Telegram при плохой сети законно идёт дольше.
+func (w *Watcher) sendTimeout() time.Duration {
+	if w.cfg.SendTimeout > 0 {
+		return w.cfg.SendTimeout
+	}
+	return defaultSendTimeout
 }
 
 type Watcher struct {
@@ -162,6 +177,15 @@ func (w *Watcher) MarkResumed(userID int64) {
 func (w *Watcher) Run(ctx context.Context) {
 	w.wg.Add(1)
 	defer w.wg.Done()
+	slog.Info("heartbeat: watcher started",
+		"scan_every", w.cfg.ScanEvery,
+		"stale_static", w.cfg.staleFor(db.User{Kind: db.KindStatic}),
+		"renotify_every", w.cfg.RenotifyEvery,
+		"send_timeout", w.sendTimeout())
+	// Выход из цикла возможен только по отмене корневого контекста, то есть
+	// при остановке backend'а. Если строка появится в логе в другой момент --
+	// это и есть объяснение молчащего мониторинга, а не «в парке всё хорошо».
+	defer slog.Warn("heartbeat: watcher loop exited", "err", ctx.Err())
 	w.scan(ctx)
 	t := time.NewTicker(w.cfg.ScanEvery)
 	defer t.Stop()
@@ -178,6 +202,21 @@ func (w *Watcher) Run(ctx context.Context) {
 func (w *Watcher) WaitForExit() { w.wg.Wait() }
 
 func (w *Watcher) scan(ctx context.Context) {
+	started := time.Now()
+	staleSeen := 0
+	// Счётчики пишутся и на аварийном выходе тоже: обход, упавший на чтении
+	// БД, -- это обход, который состоялся и ничего не увидел, и наблюдателю
+	// важно отличать его от обхода, которого не было вовсе.
+	defer func() {
+		metricScans.Add(1)
+		metricLastScanUnix.Set(w.now().Unix())
+		metricScanMillis.Set(time.Since(started).Milliseconds())
+		metricStaleUsers.Set(int64(staleSeen))
+		if d := time.Since(started); w.cfg.ScanEvery > 0 && d > w.cfg.ScanEvery {
+			slog.Warn("heartbeat: scan slower than its own interval",
+				"took", d, "scan_every", w.cfg.ScanEvery)
+		}
+	}()
 	users, err := w.d.Users().GetAll()
 	if err != nil {
 		slog.Warn("heartbeat scan: list users", "err", err)
@@ -239,6 +278,7 @@ func (w *Watcher) scan(ctx context.Context) {
 			}
 			continue
 		}
+		staleSeen++
 		w.mu.Lock()
 		// Resumed-suppression: skip if we just received a resumed report.
 		if rt, ok := w.resumed[u.ID]; ok {
@@ -269,14 +309,20 @@ func (w *Watcher) scan(ctx context.Context) {
 			if already || w.sleep == nil {
 				continue
 			}
-			if err := w.sleep.SendSleeping(ctx, u.ID, u.Nickname, latest); err != nil {
+			sleepCtx, cancelSleep := context.WithTimeout(ctx, w.sendTimeout())
+			err := w.sleep.SendSleeping(sleepCtx, u.ID, u.Nickname, latest)
+			cancelSleep()
+			if err != nil {
 				slog.Warn("heartbeat: send sleeping failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
 				// Reset so a future scan retries the one-shot.
 				w.mu.Lock()
 				delete(w.sleepNotified, u.ID)
 				w.mu.Unlock()
-			} else if err := w.d.KV().SetMobileSleepNotifiedAt(u.ID, latest); err != nil {
-				slog.Warn("heartbeat: persist mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+			} else {
+				metricSleepSent.Add(1)
+				if err := w.d.KV().SetMobileSleepNotifiedAt(u.ID, latest); err != nil {
+					slog.Warn("heartbeat: persist mobile sleep state failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+				}
 			}
 			continue
 		}
@@ -295,9 +341,22 @@ func (w *Watcher) scan(ctx context.Context) {
 		if !notify {
 			continue
 		}
-		if err := w.off.SendOffline(ctx, u.ID, u.Nickname, stale); err != nil {
-			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "err", err)
+		sendCtx, cancelSend := context.WithTimeout(ctx, w.sendTimeout())
+		err := w.off.SendOffline(sendCtx, u.ID, u.Nickname, stale)
+		cancelSend()
+		if err != nil {
+			metricOfflineErrors.Add(1)
+			slog.Warn("heartbeat: send offline failed", "user_id", u.ID, "nickname", u.Nickname, "stale", stale, "err", err)
+			// Отправка не состоялась -- снимаем отметку, иначе следующий обход
+			// решит, что человек уже предупреждён, и роутер останется тихим до
+			// самого RenotifyEvery.
+			w.mu.Lock()
+			delete(w.notified, u.ID)
+			w.mu.Unlock()
+			continue
 		}
+		metricOfflineSent.Add(1)
+		slog.Info("heartbeat: router offline notice sent", "user_id", u.ID, "nickname", u.Nickname, "stale", stale)
 	}
 }
 
