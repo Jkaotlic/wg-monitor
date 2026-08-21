@@ -53,6 +53,7 @@
     agentsBody: document.getElementById("agentsBody"),
     searchInput: document.getElementById("searchInput"),
     agentDrawer: document.getElementById("agentDrawer"),
+    watchdogLine: document.getElementById("watchdogLine"),
     deployModal: document.getElementById("deployModal"),
     deployTitle: document.getElementById("deployTitle"),
     deployVersionInput: document.getElementById("deployVersionInput"),
@@ -353,6 +354,7 @@
     els.kpiOnlineText.textContent = sleeping ? `${reporting}, ${sleeping} sleeping` : reporting;
     els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
+    renderWatchdog(summary.watchdog);
     els.summaryText.textContent = summarySentence(summary);
     renderHealthStrip(summary);
     const counts = filterCounts(summary);
@@ -522,6 +524,24 @@
 
   // Русское склонение: 1 минута, 2 минуты, 5 минут. Ниже эти формы нужны
   // и времени, и счётчику инцидентов, поэтому помощник общий.
+  // Состояние сторожа heartbeat. Отсутствие тревог значит одно из двух: в
+  // парке всё хорошо или сторож мёртв, -- и без этой строки различить их можно
+  // было только по неприехавшему алерту, задним числом.
+  function renderWatchdog(wd) {
+    if (!els.watchdogLine) return;
+    if (!wd) { els.watchdogLine.textContent = ""; els.watchdogLine.classList.remove("bad"); return; }
+    const parts = ["Сторож heartbeat: " + wd.reason];
+    if (wd.stale_users) {
+      parts.push(wd.stale_users + " " + pluralRu(wd.stale_users, "роутер просрочен", "роутера просрочены", "роутеров просрочены"));
+    }
+    if (wd.offline_errors) {
+      parts.push("неудачных отправок: " + wd.offline_errors);
+    }
+    parts.push("обходов с запуска: " + (wd.scans_total || 0));
+    els.watchdogLine.textContent = parts.join(" · ");
+    els.watchdogLine.classList.toggle("bad", !wd.alive);
+  }
+
   function pluralRu(n, one, few, many) {
     const abs = Math.abs(n) % 100;
     const last = abs % 10;

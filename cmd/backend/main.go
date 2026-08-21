@@ -271,6 +271,7 @@ func main() {
 
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
+		HeartbeatStats: watcher.Snapshot,
 		DB:             d,
 		Dispatcher:     disp,
 		Resumer:        watcher,

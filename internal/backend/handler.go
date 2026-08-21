@@ -14,6 +14,7 @@ import (
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
@@ -393,6 +394,11 @@ type Deps struct {
 	// dashboard "Revive via AWG Manager" action to drive the router's awg-manager
 	// terminal out-of-band. Empty falls back to defaultAWGMRelayPath.
 	AWGMRelayPath string
+	// HeartbeatStats отдаёт панели счётчики сторожа heartbeat. nil означает,
+	// что сторож не подключён (тесты, урезанные сборки), и раздел в сводке
+	// просто не появляется -- вместо нулей, которые читались бы как «сторож
+	// мёртв».
+	HeartbeatStats func() heartbeat.Stats
 	// Provision holds the async router-provisioning engine's collaborators
 	// (Store + BaseCtx + Relay + LastSeen + Now + Logger — see
 	// internal/backend/provision.Deps). Zero value (nil Store) means the

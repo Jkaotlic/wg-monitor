@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -439,6 +440,22 @@ type dashboardSummary struct {
 	Totals        dashboardSummaryTotals   `json:"totals"`
 	Telegram      dashboardTelegramSummary `json:"telegram"`
 	Agents        []dashboardSummaryAgent  `json:"agents"`
+	// Watchdog -- состояние сторожа heartbeat. Пустой указатель означает, что
+	// сторож в этой сборке не подключён; молчащий сторож и сторож, которому
+	// не о чем сообщить, снаружи выглядят одинаково, и панель -- единственное
+	// место, где эту разницу видно без ssh на саму машину.
+	Watchdog *dashboardWatchdog `json:"watchdog,omitempty"`
+}
+
+type dashboardWatchdog struct {
+	Alive         bool   `json:"alive"`
+	Reason        string `json:"reason"`
+	ScansTotal    int64  `json:"scans_total"`
+	LastScanAt    string `json:"last_scan_at,omitempty"`
+	LastScanMs    int64  `json:"last_scan_ms"`
+	StaleUsers    int64  `json:"stale_users"`
+	OfflineSent   int64  `json:"offline_sent_total"`
+	OfflineErrors int64  `json:"offline_errors_total"`
 }
 
 type dashboardTelegramSummary struct {
@@ -548,6 +565,23 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 		resp.Telegram = dashboardTelegramSummary{
 			PrimaryChatID: d.TelegramPrimaryChatID,
 			ExtraChatIDs:  append([]int64(nil), d.TelegramExtraChatIDs...),
+		}
+		if d.HeartbeatStats != nil {
+			st := d.HeartbeatStats()
+			verdict := heartbeat.Judge(st, time.Now().UTC())
+			wd := &dashboardWatchdog{
+				Alive:         verdict.Alive,
+				Reason:        verdict.Reason,
+				ScansTotal:    st.ScansTotal,
+				LastScanMs:    st.LastScanMs,
+				StaleUsers:    st.StaleUsers,
+				OfflineSent:   st.OfflineSent,
+				OfflineErrors: st.OfflineErrors,
+			}
+			if !st.LastScanAt.IsZero() {
+				wd.LastScanAt = st.LastScanAt.Format(time.RFC3339)
+			}
+			resp.Watchdog = wd
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)

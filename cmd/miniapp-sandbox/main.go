@@ -39,6 +39,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
@@ -85,6 +86,17 @@ func main() {
 	}
 	sink := &fakeAgent{}
 
+	// Настоящий сторож heartbeat: без него строка о нём в панели пуста, и
+	// проверить её было бы нечем. Уведомления никуда не уходят -- в песочнице
+	// некому.
+	watcher := heartbeat.NewWatcher(d, offlineToLog{}, heartbeat.Config{
+		StaleAfterStatic: 3 * time.Minute,
+		MobileLifecycle:  true,
+		MobileSleepAfter: 5 * time.Minute,
+		ScanEvery:        15 * time.Second,
+	})
+	go watcher.Run(context.Background())
+
 	cabinet := &fakeCabinet{}
 	// Мастер замены -- настоящий движок: песочница подменяет только кабинет,
 	// очередь команд и запись происхождения. Проверять экран мастера на
@@ -118,6 +130,7 @@ func main() {
 		// Дашборд поднимается тем же токеном, что напечатан при старте:
 		// песочница -- единственное место, где его можно писать в открытую.
 		DashboardToken: sandboxDashboardToken,
+		HeartbeatStats: watcher.Snapshot,
 		PublicBaseURL:  "http://" + *addr,
 	}
 	mux := backend.NewMux(deps)
@@ -132,6 +145,15 @@ func main() {
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)
 	}
+}
+
+// offlineToLog -- «отправка» тревоги в песочнице: строка в консоли вместо
+// сообщения в Telegram.
+type offlineToLog struct{}
+
+func (offlineToLog) SendOffline(_ context.Context, userID int64, nickname string, since time.Duration) error {
+	slog.Info("песочница: роутер молчит", "nickname", nickname, "user_id", userID, "молчит", since.Round(time.Second))
+	return nil
 }
 
 func fatal(err error) {
