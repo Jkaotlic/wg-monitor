@@ -153,6 +153,12 @@ func main() {
 	cmdQueue := cmd.New()
 	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
 	backend.AttachDeployExpiryHandler(cmdQueue, d, logger)
+	// Очередь пустая после старта, а назначенные обновления записаны в базе:
+	// без этого роутер, которому обновление назначили до рестарта, оставался
+	// «в ожидании» навсегда -- команду ему уже никто не слал.
+	if n := backend.ResumePendingDeploys(d, cmdQueue, cfg.PublicBaseURL, cfg.PublicIP, logger); n > 0 {
+		logger.Info("pending deploys re-queued after restart", "count", n)
+	}
 	uiSnap := callbacks.UIConfigSnapshot{
 		DeleteUserCommandMessages: cfg.UI.DeleteUserCommandMessages != nil && *cfg.UI.DeleteUserCommandMessages,
 		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
