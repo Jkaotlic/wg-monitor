@@ -533,7 +533,11 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "dashboard summary failed")
 			return
 		}
-		latest, err := lookupDashboardLatestVersion(r.Context())
+		// Свой дедлайн: сводка о парке не должна ждать GitHub дольше пары
+		// секунд -- строка «доступна версия N» справочная, а парк нужен всегда.
+		lookupCtx, cancelLookup := context.WithTimeout(r.Context(), dashboardLatestLookupBudget)
+		latest, err := lookupDashboardLatestVersion(lookupCtx)
+		cancelLookup()
 		if err != nil && d.Logger != nil {
 			d.Logger.Warn("dashboard latest release lookup failed", "err", err)
 		}
@@ -604,11 +608,23 @@ type dashboardGitHubRelease struct {
 }
 
 type dashboardLatestCache struct {
-	version string
-	at      time.Time
+	version  string
+	at       time.Time
+	failedAt time.Time
 }
 
 const dashboardLatestCacheTTL = 5 * time.Minute
+
+// Пауза после неудачного похода за списком релизов. Панель парка не имеет
+// права зависеть от доступности GitHub: когда сеть до api.github.com
+// пропадала, КАЖДЫЙ запрос сводки ждал полный таймаут в 12 секунд, а релей
+// рвал соединение раньше -- дашборд переставал открываться целиком из-за
+// одной справочной строки «доступна версия N».
+const dashboardLatestFailTTL = 2 * time.Minute
+
+// Верхняя граница на сам поход: сводка -- это ответ о парке, и справочная
+// строка не должна задерживать его дольше пары секунд.
+const dashboardLatestLookupBudget = 3 * time.Second
 const dashboardGitHubReleasesURL = "https://api.github.com/repos/Jkaotlic/wg-monitor/releases?per_page=30"
 const maxDashboardGitHubReleaseListBytes = 1 << 20
 
@@ -619,14 +635,40 @@ var (
 )
 
 func fetchDashboardLatestVersion(ctx context.Context) (string, error) {
+	return cachedDashboardLatestVersion(ctx, fetchDashboardLatestVersionUncached, time.Now())
+}
+
+// cachedDashboardLatestVersion -- кэш поверх похода в сеть, с памятью о
+// неудаче. Свежий кэш отдаётся без сети; после недавнего провала сеть не
+// трогается вовсе, и наружу идёт последняя известная версия (пустая, если её
+// никогда не было) -- без ошибки, потому что для сводки это не поломка.
+func cachedDashboardLatestVersion(ctx context.Context, fetch func(context.Context) (string, error), now time.Time) (string, error) {
 	dashboardLatestMu.Lock()
-	if dashboardLatestCached.version != "" && time.Since(dashboardLatestCached.at) < dashboardLatestCacheTTL {
-		version := dashboardLatestCached.version
-		dashboardLatestMu.Unlock()
-		return version, nil
-	}
+	cached := dashboardLatestCached
 	dashboardLatestMu.Unlock()
 
+	if cached.version != "" && now.Sub(cached.at) < dashboardLatestCacheTTL {
+		return cached.version, nil
+	}
+	if !cached.failedAt.IsZero() && now.Sub(cached.failedAt) < dashboardLatestFailTTL {
+		return cached.version, nil
+	}
+
+	version, err := fetch(ctx)
+	dashboardLatestMu.Lock()
+	if err != nil {
+		dashboardLatestCached.failedAt = now
+	} else {
+		dashboardLatestCached = dashboardLatestCache{version: version, at: now}
+	}
+	dashboardLatestMu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	return version, nil
+}
+
+func fetchDashboardLatestVersionUncached(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dashboardGitHubReleasesURL, nil)
 	if err != nil {
 		return "", err
@@ -649,14 +691,7 @@ func fetchDashboardLatestVersion(ctx context.Context) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("github releases HTTP %d", resp.StatusCode)
 	}
-	version, err := decodeDashboardLatestRelease(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	dashboardLatestMu.Lock()
-	dashboardLatestCached = dashboardLatestCache{version: version, at: time.Now()}
-	dashboardLatestMu.Unlock()
-	return version, nil
+	return decodeDashboardLatestRelease(resp.Body)
 }
 
 func decodeDashboardLatestRelease(r io.Reader) (string, error) {
