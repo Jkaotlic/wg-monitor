@@ -82,8 +82,12 @@ func seed(d *db.DB, tgUserID int64) error {
 // Выдумывать ключи бессмысленно: проекция их отбросит, и экран покажет
 // «нет данных» вместо фактов.
 func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
-	tunnelOK := `{"iface":"awg12","handshake_age_sec":21,"rx_bytes":5741000000,"tx_bytes":3120000000,"peer":"nl-1.example","exit_ip":"203.0.113.77"}`
-	tunnelBad := `{"iface":"awg12","handshake_age_sec":5400,"rx_bytes":0,"tx_bytes":8100,"peer":"nl-1.example","error":"no handshake for 90m"}`
+	// Ключи -- те, что разбирает miniappTunnelDetails (miniapp_tunnels.go).
+	// Выдумывать свои бессмысленно: проекция их отбросит, и экран честно
+	// скажет «0 линий поднято» о поднятых туннелях -- то есть песочница
+	// станет учить неправде.
+	tunnelOK := `{"tunnel_id":"awg12","tunnel_name":"Амстердам","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"default_route_intent":true,"is_active_default":true,"active_default_known":true}`
+	tunnelBad := `{"tunnel_id":"awg12","tunnel_name":"Амстердам","status":"down","enabled":true,"handshake_age_sec":5400,"ping_check_status":"fail","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"рукопожатия нет 90 минут"}`
 	rows := []struct {
 		name    string
 		status  string
@@ -95,7 +99,7 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		{"awg_manager", "ok", `{"version":"2.17.2","firmware":"4.3.9"}`},
 		{"external_reach", "ok", `{"targets_total":3,"targets_failed":[],"targets_degraded":[]}`},
 		{"tunnel_awg12", "ok", tunnelOK},
-		{"tunnel_awg10", "ok", `{"iface":"awg10","handshake_age_sec":48,"rx_bytes":880000000,"tx_bytes":140000000,"peer":"de-2.example"}`},
+		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"Франкфурт","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"active_default_known":true}`},
 	}
 	if broken {
 		rows[5].status = "fail"
