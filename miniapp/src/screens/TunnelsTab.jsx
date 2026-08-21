@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { parseRouteSnapshot } from '../routes.js'
+import { parseRouteSnapshot, snapshotState } from '../routes.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
 import { trafficSummary } from '../traffic.js'
@@ -39,6 +39,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   }, [result])
 
   const view = tunnelsView(snapshot)
+  const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен спрашивается отдельной командой и только по кнопке: ряд роутер
   // ведёт сам, но тянуть его при каждом открытии экрана незачем -- вопрос
   // «сколько прошло за сутки» задают редко и осознанно.
@@ -92,10 +93,18 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
         </button>
       </div>
 
-      {busy && snapshot == null && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
-      {error && <p class="state state-error">{error}</p>}
-      {result && result.status !== 'ok' && (
+      {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
+      {phase === 'error' && <p class="state state-error">{error}</p>}
+      {phase === 'refused' && (
         <p class="state state-error">Роутер не отдал снимок: {result.output || result.status}</p>
+      )}
+      {/* Ответ пришёл, а снимка в нём нет. Молчать здесь нельзя: пустой экран
+          неотличим от «туннелей нет», и человек будет искать поломку в
+          роутере, а не в том, что приложение не поняло ответ. */}
+      {phase === 'unreadable' && (
+        <p class="state state-error">
+          Роутер ответил, но снимок не разобрать. Так отвечает старый агент — обновите его на этом роутере.
+        </p>
       )}
 
       {view.active && (

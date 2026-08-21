@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandOutcomeLabel } from '../src/labels.js'
+import { commandOutcomeLabel, checkLabel, eventPhrase, legendLabel, incidentCopy } from '../src/labels.js'
 
 // Результат маршрутной команды -- это JSON агента (pkg/wire/routing.go), а не
 // строка для человека. "Готово" на нём было бы враньём в двух случаях сразу:
@@ -87,5 +87,32 @@ describe('commandOutcomeLabel: старый агент', () => {
   it('обычная ошибка агента по-прежнему доезжает как есть', () => {
     const text = commandOutcomeLabel('tunnel_traffic', { status: 'err', output: 'awgmgr tunnels/traffic: success=false' })
     expect(text).toBe('awgmgr tunnels/traffic: success=false')
+  })
+})
+
+// agent_heartbeat агент присылает в КАЖДОМ отчёте (internal/agent/reporter.go),
+// но человеческой подписи у него не было ни в одной из карт: журнал писал
+// «agent_heartbeat — снова в норме», легенда на корпусе подписывала лампу
+// идентификатором, а карточка тревоги -- именем механизма вместо последствия.
+// Имя проверки -- это идентификатор, и показывать его человеку значит
+// перекладывать перевод на него.
+describe('agent_heartbeat говорит по-человечески', () => {
+  it('в списке проверок', () => {
+    expect(checkLabel('agent_heartbeat')).toBe('Отчёты от роутера')
+  })
+
+  it('в журнале событий', () => {
+    expect(eventPhrase('agent_heartbeat', 'ok')).toBe('Роутер снова выходит на связь')
+    expect(eventPhrase('agent_heartbeat', 'fail')).not.toContain('agent_heartbeat')
+  })
+
+  it('в легенде на корпусе', () => {
+    expect(legendLabel('agent_heartbeat')).toBe('отчёты агента')
+  })
+
+  it('в карточке тревоги -- последствием, а не именем механизма', () => {
+    const copy = incidentCopy('agent_heartbeat')
+    expect(copy.what).toBe('Роутер не выходит на связь')
+    expect(copy.why).toContain('отчёт')
   })
 })

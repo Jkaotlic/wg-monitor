@@ -34,6 +34,23 @@ export function parseRouteSnapshot(output) {
   }
 }
 
+// Что показывать вместо снимка, пока его нет. Раньше каждый экран считал это
+// сам, и они разошлись: маршруты честно говорили «снимок пришёл, но разобрать
+// не удалось», а туннели в том же случае показывали пустоту -- неотличимую от
+// «туннелей нет».
+//
+// «ок» без разобранного снимка -- отдельное состояние, а не ошибка связи: так
+// отвечает агент, который команду знает, но описывает мир в формате, которого
+// приложение не понимает (обычно -- старый агент на роутере).
+export function snapshotState({ busy, error, result, snapshot } = {}) {
+  if (snapshot) return 'ready'
+  if (busy) return 'loading'
+  if (error) return 'error'
+  if (result && result.status !== 'ok') return 'refused'
+  if (result) return 'unreadable'
+  return 'idle'
+}
+
 export function routingVerdict(snapshot) {
   const partial = Boolean(snapshot?.warnings?.length)
 

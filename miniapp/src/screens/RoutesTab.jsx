@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import {
   parseRouteSnapshot,
+  snapshotState,
   routingVerdict,
   defaultDestination,
   policyRows,
@@ -99,6 +100,8 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
   const [picker, setPicker] = useState(null)
   const [adding, setAdding] = useState(false)
 
+  const phase = snapshotState({ busy, error, result, snapshot })
+
   const verdict = snapshot ? routingVerdict(snapshot) : null
   const policies = policyRows(snapshot)
   const rows = tunnelRows(snapshot)
@@ -189,12 +192,12 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
       </div>
       <p class="router-lastseen">Решает, какой трафик идёт через VPN, а какой напрямую.</p>
 
-      {busy && snapshot == null && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
-      {error && <p class="state state-error">{error}</p>}
-      {result && result.status !== 'ok' && (
+      {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
+      {phase === 'error' && <p class="state state-error">{error}</p>}
+      {phase === 'refused' && (
         <p class="state state-error">Роутер не отдал снимок маршрутизации: {result.output || result.status}</p>
       )}
-      {result?.status === 'ok' && snapshot == null && (
+      {phase === 'unreadable' && (
         <p class="state state-error">Снимок пришёл, но разобрать его не удалось — покажем как есть ниже.</p>
       )}
 

@@ -15,6 +15,10 @@ const CHECK_LABELS = {
   hydraroute: 'Обход блокировок',
   awg_manager: 'Панель управления роутером',
   tunnels: 'Связь с панелью роутера',
+  // Эту проверку агент присылает в каждом отчёте (internal/agent/reporter.go),
+  // так что без подписи она попадалась человеку чаще остальных -- и всюду
+  // сырым идентификатором.
+  agent_heartbeat: 'Отчёты от роутера',
 }
 
 // Check names are identifiers, not prose. Anything we don't have a human name
@@ -51,6 +55,10 @@ const INCIDENT_COPY = {
     what: 'Нет связи с панелью роутера',
     why: 'Агент не достучался до панели управления. Данные о туннелях могут устареть.',
   },
+  agent_heartbeat: {
+    what: 'Роутер не выходит на связь',
+    why: 'Агент перестал присылать отчёты. Всё, что показано о роутере, — данные на момент последнего отчёта, а не сейчас.',
+  },
 }
 
 // checkName is either one of the four plain checks above or a `tunnel_<id>`
@@ -82,6 +90,7 @@ const RECOVERY_COPY = {
   hydraroute: 'Обход блокировок снова работает',
   awg_manager: 'Связь с панелью роутера восстановлена',
   tunnels: 'Туннели снова опрашиваются',
+  agent_heartbeat: 'Роутер снова выходит на связь',
 }
 
 export function eventPhrase(checkName, status) {
@@ -384,6 +393,7 @@ const LEGEND_LABEL = {
   hydraroute: 'обход блокировок',
   awg_manager: 'панель роутера',
   tunnels: 'связь с ботом',
+  agent_heartbeat: 'отчёты агента',
 }
 
 export function legendLabel(name) {

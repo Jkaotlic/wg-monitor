@@ -8,7 +8,7 @@ import {
   muteIncident,
 } from '../api.js'
 import { RouterDevice, orderChecks, lampKey, antennaOverflow } from '../components/RouterDevice.jsx'
-import { routerHeadline } from '../routerHeadline.js'
+import { routerHeadline, linesSummary } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
@@ -42,14 +42,18 @@ const SILENCE_OPTIONS = [
   { ttl: '24h', labelKey: 'silence24h' },
 ]
 
+// Локаль прибита к ru-RU, как в остальных экранах: с локалью браузера
+// русский интерфейс показывал время тревоги как «8/21/26, 9:40 AM» --
+// оператор сверяет эти отметки с логами роутера, и чужой формат тут не
+// украшение, а лишний перевод в уме.
 function formatTime(iso) {
   if (!iso) return ''
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
 function formatDateTime(iso) {
   if (!iso) return ''
-  return new Date(iso).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })
+  return new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
 }
 
 function isSuppressed(incident) {
@@ -662,9 +666,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
           <span>
             {headline.stale
               ? 'показания на момент последнего отчёта'
-              : tunnels.length === 0
-                ? 'Туннелей нет'
-                : `${liveCount} ${liveCount === 1 ? 'линия' : 'линии'} из ${tunnels.length}`}
+              : linesSummary(liveCount, tunnels.length)}
             {overflow > 0 ? ` · ${overflow} не поместились на корпус` : ''}
           </span>
           {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}

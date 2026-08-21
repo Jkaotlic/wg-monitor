@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { routerHeadline } from '../src/routerHeadline.js'
+import { routerHeadline, linesSummary } from '../src/routerHeadline.js'
 
 const ONLINE = { status: 'online', nickname: 'testkeen', last_seen_age_sec: 52 }
 
@@ -89,5 +89,23 @@ describe('routerHeadline', () => {
     const h = routerHeadline({ router: ONLINE, traffic: null, incidents: [] })
     expect(h.tone).toBe('off')
     expect(h.verdict).toContain('не сообщил')
+  })
+})
+
+// Строка под корпусом роутера считала линии в две формы -- «1 линия» и всё
+// остальное «линии». На нуле выходило «0 линии из 2»: в приложении, где
+// человек сверяет показания с роутером, сломанное склонение читается как
+// сломанные данные.
+describe('linesSummary', () => {
+  it('склоняет линии по-русски', () => {
+    expect(linesSummary(0, 2)).toBe('0 линий из 2')
+    expect(linesSummary(1, 2)).toBe('1 линия из 2')
+    expect(linesSummary(2, 3)).toBe('2 линии из 3')
+    expect(linesSummary(5, 7)).toBe('5 линий из 7')
+    expect(linesSummary(21, 30)).toBe('21 линия из 30')
+  })
+
+  it('без туннелей говорит прямо, а не «0 из 0»', () => {
+    expect(linesSummary(0, 0)).toBe('Туннелей нет')
   })
 })

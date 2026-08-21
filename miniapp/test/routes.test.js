@@ -15,6 +15,7 @@ import {
   promoteTargets,
   rebindTargets,
   canRebindTunnel,
+  snapshotState,
 } from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot (pkg/wire/routing.go): tunnels[],
@@ -723,5 +724,35 @@ describe('canRebindTunnel', () => {
 
   it('чужой интерфейс (WAN) не наш туннель', () => {
     expect(canRebindTunnel({ type: 'wan', total: 4, policyRules: 0 })).toBe(false)
+  })
+})
+
+// Экран туннелей на снимок, который не разобрался, не говорил ничего: ответ
+// «ок» пришёл, разбор молча вернул null, и человек видел пустоту вместо
+// строчки о том, что случилось. Пустой экран -- худший вид ответа: он
+// одинаково выглядит и когда туннелей нет, и когда их не смогли прочитать.
+describe('snapshotState', () => {
+  it('снимок разобран -- показываем данные', () => {
+    expect(snapshotState({ snapshot: { tunnels: [] } })).toBe('ready')
+  })
+
+  it('пока ждём ответ -- ожидание, даже если ответа ещё нет', () => {
+    expect(snapshotState({ busy: true })).toBe('loading')
+  })
+
+  it('сеть или дедлайн -- ошибка', () => {
+    expect(snapshotState({ error: 'дедлайн вышел' })).toBe('error')
+  })
+
+  it('роутер ответил отказом -- отказ, а не «не разобрали»', () => {
+    expect(snapshotState({ result: { status: 'err', output: 'no such action' } })).toBe('refused')
+  })
+
+  it('ответ «ок», а снимка нет -- честно называем это неразобранным', () => {
+    expect(snapshotState({ result: { status: 'ok', output: 'какой-то текст' } })).toBe('unreadable')
+  })
+
+  it('ничего ещё не спрашивали', () => {
+    expect(snapshotState({})).toBe('idle')
   })
 })

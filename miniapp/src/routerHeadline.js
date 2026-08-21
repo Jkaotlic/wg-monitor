@@ -8,7 +8,7 @@
 // Молчащий роутер перебивает всё: в этот момент любое другое показание на
 // экране -- вчерашнее, и выдать его за текущее было бы той самой ложью,
 // против которой написана половина этого приложения.
-import { humanAge, incidentCopy } from './labels.js'
+import { humanAge, incidentCopy, pluralRu } from './labels.js'
 
 export function routerHeadline({ router, traffic, incidents = [] } = {}) {
   const age = router?.last_seen_age_sec
@@ -94,4 +94,14 @@ export function routerHeadline({ router, traffic, incidents = [] } = {}) {
     tag: age != null ? `роутер на связи · ответ ${humanAge(age)} назад` : 'роутер на связи',
     verdict: 'Роутер не сообщил, какой туннель основной. Соберите отчёт заново.',
   }
+}
+
+// Сколько линий поднято из настроенных. Живёт рядом с шапкой, а не внутри
+// разметки: это счёт со склонением, то есть логика, и проверять её в вёрстке
+// было бы нечем. Ноль линий -- «0 линий», а не «0 линии»: в приложении, где
+// человек сверяет показания с роутером, сломанное склонение читается как
+// сломанные данные.
+export function linesSummary(live, total) {
+  if (!total) return 'Туннелей нет'
+  return `${live} ${pluralRu(live, 'линия', 'линии', 'линий')} из ${total}`
 }
