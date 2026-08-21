@@ -64,9 +64,17 @@ func (p *Policy) Run(ctx context.Context) {
 // immediately (no negative/zero timer) rather than trying to catch up on
 // every missed tick.
 func (p *Policy) runLoop(ctx context.Context, name string, every, initialDelay time.Duration, fn func(context.Context) error) {
-	timer := time.NewTimer(initialDelay)
+	// Расписание считается от отметки о прошлом проходе, а не от старта
+	// процесса: иначе «раз в неделю» означало бы «раз в неделю И на каждый
+	// рестарт», и серия выкаток превращалась бы в серию тяжёлых проходов по
+	// базе (см. firstDelay).
+	startIn := firstDelay(p.loadLastRun(name), every, initialDelay, p.now())
+	if p.Logger != nil {
+		p.Logger.Info("retention: проход запланирован", "op", name, "через", startIn, "интервал", every)
+	}
+	timer := time.NewTimer(startIn)
 	defer timer.Stop()
-	next := time.Now().Add(initialDelay)
+	next := time.Now().Add(startIn)
 	for {
 		select {
 		case <-ctx.Done():
@@ -75,6 +83,10 @@ func (p *Policy) runLoop(ctx context.Context, name string, every, initialDelay t
 		}
 		if err := fn(ctx); err != nil {
 			p.Logger.Warn("retention: operation failed", "op", name, "err", err)
+		} else {
+			// Отметка ставится только на удачном проходе: неудачный должен
+			// повториться, а не считаться сделанным на неделю вперёд.
+			p.saveLastRun(name, p.now())
 		}
 		next = next.Add(every)
 		delay := time.Until(next)
