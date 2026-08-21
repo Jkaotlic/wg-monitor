@@ -71,9 +71,14 @@ func routeSnapshot() wire.RouteSnapshot {
 				RestartMethod: "control",
 			},
 		},
+		// Правила привязаны ЛИБО к интерфейсу, либо к политике -- эти
+		// множества не пересекаются (сверено с живым роутером: у него
+		// counts пуст, а девятнадцать правил висят на политике). Держать
+		// одни и те же правила в обоих местах значило бы показывать в
+		// песочнице числа, которых на роутере не бывает.
 		Counts: map[string]wire.TunnelCounts{
-			"awg12": {DNS: 32, Static: 4, HRNeo: 28},
-			"awg10": {DNS: 2, Static: 0, HRNeo: 0},
+			"awg12": {Static: 4},
+			"awg10": {DNS: 2},
 		},
 		Other: wire.TunnelCounts{DNS: 1},
 		Policies: []wire.RoutePolicySummary{
