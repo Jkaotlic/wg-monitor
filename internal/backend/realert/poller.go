@@ -33,7 +33,31 @@ type Config struct {
 const (
 	defaultRealertEvery = 6 * time.Hour
 	defaultTickEvery    = 5 * time.Minute
+	// Пороги затухания. Роутер, лежащий третью неделю, присылал напоминание
+	// каждый час -- четыре сотни сообщений в один топик. Такой поток
+	// перестают читать, и когда рядом ляжет второй роутер, его сообщение
+	// утонет в этом фоне. Первые сутки частота прежняя: пока инцидент
+	// свежий, напоминание -- это шанс на быструю починку.
+	backoffAfterDay  = 6 * time.Hour
+	backoffAfterWeek = 24 * time.Hour
 )
+
+// effectiveCadence удлиняет паузу между напоминаниями по возрасту инцидента.
+// Никогда не укорачивает: если оператор настроил редкие напоминания, пороги
+// затухания не имеют права его ускорять.
+func effectiveCadence(base, age time.Duration) time.Duration {
+	floor := time.Duration(0)
+	switch {
+	case age >= 7*24*time.Hour:
+		floor = backoffAfterWeek
+	case age >= 24*time.Hour:
+		floor = backoffAfterDay
+	}
+	if floor > base {
+		return floor
+	}
+	return base
+}
 
 type Poller struct {
 	d              *db.DB
@@ -211,10 +235,14 @@ func (p *Poller) tick(ctx context.Context) {
 		if u.IsMobile() {
 			cadence = p.cfg.MobileRealertEvery
 		}
+		// Счётчик считается по настроенной частоте, а не по затухшей: он
+		// должен расти монотонно, иначе на переходе через сутки номер
+		// напоминания поехал бы вниз.
+		count := int(now.Sub(*st.HardSince) / cadence)
+		cadence = effectiveCadence(cadence, now.Sub(*st.HardSince))
 		if st.LastAlertAt != nil && now.Sub(*st.LastAlertAt) < cadence {
 			continue
 		}
-		count := int(now.Sub(*st.HardSince) / cadence)
 		check := p.lastKnownCheck(sh.UserID, sh.CheckName)
 		neighbors := p.neighborSummaries(sh.UserID, sh.CheckName)
 		text := alerts.FormatRealert(alerts.RealertArgs{
