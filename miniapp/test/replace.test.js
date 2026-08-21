@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { replaceView, stepTitle, startErrorText } from '../src/replace.js'
+import { replaceView, stepTitle, startErrorText, stepValue } from '../src/replace.js'
 
 describe('stepTitle', () => {
   // Человеку показывают не имена шагов движка, а то, что происходит на
@@ -89,5 +89,26 @@ describe('startErrorText', () => {
 
   it('не-ответ сервера (сеть оборвалась) тоже читается', () => {
     expect(startErrorText(new Error('Failed to fetch'))).toMatch(/связ|сет/i)
+  })
+})
+
+// В законченном задании шаги, до которых дело не дошло, стояли со словом
+// «ждёт». Ждать там уже нечего: мастер остановился на упавшем шаге и не
+// вернётся. «Ждёт» в этот момент обещает продолжение, которого не будет.
+describe('stepValue', () => {
+  it('пока задание идёт, невыполненный шаг действительно ждёт', () => {
+    expect(stepValue('pending', true)).toBe('ждёт')
+  })
+
+  it('в законченном задании до шага просто не дошли', () => {
+    expect(stepValue('pending', false)).toBe('не начинали')
+  })
+
+  it('остальные состояния от хода задания не зависят', () => {
+    for (const running of [true, false]) {
+      expect(stepValue('done', running)).toBe('готово')
+      expect(stepValue('active', running)).toBe('идёт')
+      expect(stepValue('failed', running)).toBe('не вышло')
+    }
   })
 })

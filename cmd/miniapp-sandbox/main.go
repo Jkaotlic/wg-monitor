@@ -39,6 +39,8 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -79,11 +81,33 @@ func main() {
 	if err := seed(d, *tgUser); err != nil {
 		fatal(err)
 	}
+	sink := &fakeAgent{}
+
+	cabinet := &fakeCabinet{}
+	// Мастер замены -- настоящий движок: песочница подменяет только кабинет,
+	// очередь команд и запись происхождения. Проверять экран мастера на
+	// выдуманном движке не имело бы смысла: шаги, откат и блокировка -- это
+	// как раз то, что хочется увидеть глазами.
+	replaceEngine := &replace.Deps{
+		Store:    provision.NewStore(),
+		Commands: sink,
+		Cabinet:  backend.ReplaceCabinet(cabinet),
+		Origin:   backend.ReplaceOrigin(d),
+		Notify: func(_ context.Context, routerID int64, text string) {
+			slog.Info("песочница: уведомление в топик", "router_id", routerID, "text", text)
+		},
+		BaseCtx:        context.Background(),
+		AwaitStep:      20 * time.Second,
+		HandshakeTries: 2,
+		HandshakeWait:  time.Second,
+	}
 
 	deps := backend.Deps{
 		Logger:                logger,
 		DB:                    d,
-		CommandSink:           &fakeAgent{},
+		CommandSink:           sink,
+		VPNCabinet:            cabinet,
+		Replace:               replaceEngine,
 		Thresholds:            state.Thresholds{Fail: 2, Recovery: 2},
 		MuteCutoffHour:        23,
 		TelegramBotToken:      sandboxBotToken,

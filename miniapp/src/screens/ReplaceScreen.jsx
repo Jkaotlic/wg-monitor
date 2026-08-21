@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace } from '../api.js'
 import { accountSummary, optionRows } from '../cabinet.js'
-import { replaceView, startErrorText } from '../replace.js'
+import { replaceView, startErrorText, stepValue } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -87,15 +87,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
                   dot={s.tone === 'off' ? undefined : s.tone === 'sig' ? 'sig' : s.tone}
                   title={s.title}
                   code={s.detail}
-                  value={
-                    s.status === 'done'
-                      ? 'готово'
-                      : s.status === 'active'
-                        ? 'идёт'
-                        : s.status === 'failed'
-                          ? 'не вышло'
-                          : 'ждёт'
-                  }
+                  value={stepValue(s.status, view.running)}
                   valueTone={s.tone === 'off' ? undefined : s.tone === 'sig' ? undefined : s.tone}
                 />
               ))}
@@ -122,7 +114,12 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
             <div class="card">
               <DataRow title="Заменяем" code={tunnel.id} value={tunnel.name} />
               <DataRow title="Новый конфиг" code={pick.provider} value={pick.option.label} />
-              <DataRow title="Политика" code="route_policy_promote" value={policyName} />
+              {/* В code стоит то, что оператор может сверить с роутером:
+                  идентификатор туннеля, имя кабинета. Здесь раньше стояло
+                  «route_policy_promote» -- имя внутренней команды бэкенда,
+                  которого нет ни в одном экране роутера и которое человеку
+                  сверять не с чем. У политики опознаётся она сама -- по имени. */}
+              <DataRow title="Политика" value={policyName} />
               <p class="card-foot">
                 Шесть шагов: выпустить конфиг, положить новым туннелем рядом, дождаться
                 рукопожатия, перевести политику, проверить адрес выхода и только потом выключить

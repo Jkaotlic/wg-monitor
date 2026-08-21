@@ -20,6 +20,22 @@ export function stepTitle(name) {
   return STEP_TITLES[name] ?? name
 }
 
+// Что написать справа от шага. Зависит не только от самого шага, но и от
+// того, живо ли задание: «ждёт» в законченном задании обещает продолжение,
+// которого не будет -- мастер остановился на упавшем шаге и не вернётся.
+export function stepValue(status, running) {
+  switch (status) {
+    case 'done':
+      return 'готово'
+    case 'active':
+      return 'идёт'
+    case 'failed':
+      return 'не вышло'
+    default:
+      return running ? 'ждёт' : 'не начинали'
+  }
+}
+
 export function replaceView(job) {
   const steps = job?.steps ?? []
   if (!job || !job.job_id) {
