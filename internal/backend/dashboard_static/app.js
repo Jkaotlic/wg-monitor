@@ -416,10 +416,19 @@
 
   function summarySentence(summary) {
     const totals = summary.totals || {};
-    if (totals.alerts > 0) return `Есть ${totals.alerts} hard-инцидент(ов). Открой агента и начни с Diagnostics или Force recheck.`;
+    if (totals.alerts > 0) {
+      const word = pluralRu(totals.alerts, "hard-инцидент", "hard-инцидента", "hard-инцидентов");
+      return `Есть ${totals.alerts} ${word}. Открой агента и начни с Diagnostics или Force recheck.`;
+    }
     if (totals.pending_deploys > 0) return `${totals.pending_deploys} deploy ожидает подтверждения от heartbeat.`;
-    if ((totals.sleeping || 0) > 0) return `${totals.sleeping} мобильн. агент(ов) sleeping; они не online до свежего отчета.`;
-    if ((totals.offline || 0) > 0) return `${totals.offline} агент(ов) offline или еще ни разу не отчитались.`;
+    if ((totals.sleeping || 0) > 0) {
+      const word = pluralRu(totals.sleeping, "мобильный агент спит", "мобильных агента спят", "мобильных агентов спят");
+      return `${totals.sleeping} ${word}; онлайн они станут со свежим отчётом.`;
+    }
+    if ((totals.offline || 0) > 0) {
+      const word = pluralRu(totals.offline, "агент не на связи", "агента не на связи", "агентов не на связи");
+      return `${totals.offline} ${word} или ещё ни разу не отчитались.`;
+    }
     return "Флот выглядит спокойно: активных hard-инцидентов нет.";
   }
 
@@ -511,16 +520,31 @@
     return "последний отчет " + formatLastSeen(agent);
   }
 
+  // Русское склонение: 1 минута, 2 минуты, 5 минут. Ниже эти формы нужны
+  // и времени, и счётчику инцидентов, поэтому помощник общий.
+  function pluralRu(n, one, few, many) {
+    const abs = Math.abs(n) % 100;
+    const last = abs % 10;
+    if (abs > 10 && abs < 20) return many;
+    if (last > 1 && last < 5) return few;
+    if (last === 1) return one;
+    return many;
+  }
+
+  // Возраст отчёта стоял английским хвостом внутри русской фразы:
+  // «последний отчет 13s ago». Панель на русском, и половина фразы на чужом
+  // языке -- это не краткость, а недоделанный перевод.
   function formatLastSeen(agent) {
-    if (!agent.last_seen_at) return "never";
+    if (!agent.last_seen_at) return "ни разу";
     if (typeof agent.last_seen_age_sec === "number") {
       const sec = agent.last_seen_age_sec;
-      if (sec < 90) return sec + "s ago";
+      if (sec < 90) return sec + " " + pluralRu(sec, "секунду", "секунды", "секунд") + " назад";
       const min = Math.round(sec / 60);
-      if (min < 90) return min + "m ago";
+      if (min < 90) return min + " " + pluralRu(min, "минуту", "минуты", "минут") + " назад";
       const hour = Math.round(min / 60);
-      if (hour < 48) return hour + "h ago";
-      return Math.round(hour / 24) + "d ago";
+      if (hour < 48) return hour + " " + pluralRu(hour, "час", "часа", "часов") + " назад";
+      const day = Math.round(hour / 24);
+      return day + " " + pluralRu(day, "день", "дня", "дней") + " назад";
     }
     return agent.last_seen_at;
   }
@@ -601,6 +625,7 @@
   function renderSelectedDrawer() {
     const selected = state.selected && (state.summary?.agents || []).find((a) => a.nickname === state.selected);
     if (!selected) {
+      document.querySelector(".app-shell")?.classList.add("no-drawer");
       els.agentDrawer.innerHTML = `<div class="drawer-empty"><span class="ti ti-router"></span><strong>Выбери агента</strong><p>Клик по строке откроет понятную карточку с проверками, Telegram topic и AWG Manager.</p></div>`;
       return;
     }
@@ -613,6 +638,7 @@
     else if (tab === "config") body = drawerTabConfig(selected);
     else if (tab === "recovery") body = drawerTabRecovery(selected);
     else body = drawerTabOverview(selected);
+    document.querySelector(".app-shell")?.classList.remove("no-drawer");
     els.agentDrawer.innerHTML = `
       <div class="drawer-card">
         <div class="drawer-header">

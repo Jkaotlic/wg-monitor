@@ -49,6 +49,8 @@ import (
 // HMAC, одинаковый у подписывающей и проверяющей стороны.
 const sandboxBotToken = "sandbox:local-only-not-a-real-bot-token"
 
+const sandboxDashboardToken = "sandbox-dashboard-token"
+
 var telegramSDKTag = regexp.MustCompile(`<script[^>]*telegram-web-app\.js[^>]*>\s*</script>`)
 
 func main() {
@@ -113,7 +115,10 @@ func main() {
 		TelegramBotToken:      sandboxBotToken,
 		TelegramAdminUserID:   *tgUser,
 		TelegramPrimaryChatID: -100500,
-		PublicBaseURL:         "http://" + *addr,
+		// Дашборд поднимается тем же токеном, что напечатан при старте:
+		// песочница -- единственное место, где его можно писать в открытую.
+		DashboardToken: sandboxDashboardToken,
+		PublicBaseURL:  "http://" + *addr,
 	}
 	mux := backend.NewMux(deps)
 	initData := signInitData(sandboxBotToken, *tgUser, time.Now())
@@ -121,7 +126,8 @@ func main() {
 	fmt.Printf("\nпесочница мини-аппа\n")
 	fmt.Printf("  база:   %s\n", path)
 	fmt.Printf("  адрес:  http://%s/miniapp/\n", *addr)
-	fmt.Printf("  открыть: http://%s/miniapp/\n\n", *addr)
+	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
+	fmt.Printf("  дашборд: http://%s/dashboard/ (токен %s)\n\n", *addr, sandboxDashboardToken)
 
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)

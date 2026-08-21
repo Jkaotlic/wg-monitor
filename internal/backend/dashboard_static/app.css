@@ -62,6 +62,27 @@ button {
   grid-template-columns: 240px minmax(0, 1fr) minmax(320px, 390px);
 }
 
+/* Пока агент не выбран, правая колонка держала 390px ради одной подсказки --
+   а таблице парка их не хватало, и колонки «Incidents» и «Actions» уезжали
+   под край даже на 1440px. Подсказка переехала под таблицу, колонка
+   схлопывается, и парк виден целиком; карточка открывается по клику.
+   Только на широких экранах: ниже раскладка и так не трёхколоночная. */
+@media (min-width: 1181px) {
+  .app-shell.no-drawer {
+    grid-template-columns: 240px minmax(0, 1fr);
+  }
+
+  .app-shell.no-drawer .agent-drawer {
+    display: none;
+  }
+}
+
+.table-hint {
+  margin: 8px 2px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .sidebar {
   position: sticky;
   top: 0;
@@ -472,11 +493,20 @@ select:focus {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
+  /* На узком экране поиск и фильтры не помещаются в один ряд и раздвигали
+     страницу: документ становился шире окна, и весь дашборд ездил вбок.
+     Перенос ряда дешевле горизонтальной прокрутки -- искать строку в
+     таблице, которая сама уехала за край, невозможно. */
+  flex-wrap: wrap;
 }
 
 .search-wrap {
   position: relative;
-  min-width: min(420px, 100%);
+  /* Флекс-элемент по умолчанию не сжимается уже своего содержимого
+     (min-width: auto), поэтому поле поиска толкало ряд наружу. */
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .search-wrap .ti {
@@ -493,6 +523,11 @@ select:focus {
 
 .segmented {
   display: inline-flex;
+  /* Пять фильтров в один ряд не влезают ни на телефоне, ни на планшете.
+     Перенос оставляет их все видимыми -- в отличие от прокрутки, где
+     последние состояния просто исчезают за краем. */
+  flex-wrap: wrap;
+  max-width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
@@ -541,6 +576,11 @@ select:focus {
 
 .table-wrap {
   overflow: auto;
+  /* Таблица парка шире телефона намеренно (min-width: 1040px) -- в ней
+     девять колонок. Прокручиваться она обязана ВНУТРИ себя; без min-width: 0
+     контейнер раздувался под содержимое и уносил вбок всю страницу. */
+  min-width: 0;
+  max-width: 100%;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--surface);
