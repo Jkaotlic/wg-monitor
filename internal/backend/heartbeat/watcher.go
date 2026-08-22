@@ -204,6 +204,7 @@ func (w *Watcher) WaitForExit() { w.wg.Wait() }
 func (w *Watcher) scan(ctx context.Context) {
 	started := time.Now()
 	staleSeen := 0
+	suppressed := 0
 	// Счётчики пишутся и на аварийном выходе тоже: обход, упавший на чтении
 	// БД, -- это обход, который состоялся и ничего не увидел, и наблюдателю
 	// важно отличать его от обхода, которого не было вовсе.
@@ -212,6 +213,7 @@ func (w *Watcher) scan(ctx context.Context) {
 		metricLastScanUnix.Set(w.now().Unix())
 		metricScanMillis.Set(time.Since(started).Milliseconds())
 		metricStaleUsers.Set(int64(staleSeen))
+		metricSuppressed.Set(int64(suppressed))
 		if d := time.Since(started); w.cfg.ScanEvery > 0 && d > w.cfg.ScanEvery {
 			slog.Warn("heartbeat: scan slower than its own interval",
 				"took", d, "scan_every", w.cfg.ScanEvery)
@@ -329,6 +331,9 @@ func (w *Watcher) scan(ctx context.Context) {
 
 		// Legacy HARD-OFFLINE path (static + mobile with MobileLifecycle=false).
 		if w.offlineNotificationsSuppressed(u.ID, now) {
+			suppressed++
+			slog.Info("heartbeat: offline notice suppressed by operator",
+				"user_id", u.ID, "nickname", u.Nickname, "stale", stale)
 			continue
 		}
 		w.mu.Lock()

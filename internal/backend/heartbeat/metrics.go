@@ -18,4 +18,9 @@ var (
 	metricOfflineSent   = expvar.NewInt("wgm_heartbeat_offline_sent_total")
 	metricOfflineErrors = expvar.NewInt("wgm_heartbeat_offline_errors_total")
 	metricSleepSent     = expvar.NewInt("wgm_heartbeat_sleep_sent_total")
+	// Сколько просроченных роутеров обход пропустил намеренно -- из-за ack
+	// или тишины, выставленной оператором. Без этого числа «увидел четверых,
+	// не отправил ни одной тревоги» выглядит поломкой, хотя может быть
+	// послушанием.
+	metricSuppressed = expvar.NewInt("wgm_heartbeat_suppressed_users")
 )

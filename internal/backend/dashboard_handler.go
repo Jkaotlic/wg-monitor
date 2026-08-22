@@ -454,6 +454,8 @@ type dashboardWatchdog struct {
 	LastScanAt    string `json:"last_scan_at,omitempty"`
 	LastScanMs    int64  `json:"last_scan_ms"`
 	StaleUsers    int64  `json:"stale_users"`
+	Suppressed    int64  `json:"suppressed_users"`
+	SleepSent     int64  `json:"sleep_sent_total"`
 	OfflineSent   int64  `json:"offline_sent_total"`
 	OfflineErrors int64  `json:"offline_errors_total"`
 }
@@ -575,6 +577,8 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 				ScansTotal:    st.ScansTotal,
 				LastScanMs:    st.LastScanMs,
 				StaleUsers:    st.StaleUsers,
+				Suppressed:    st.Suppressed,
+				SleepSent:     st.SleepSent,
 				OfflineSent:   st.OfflineSent,
 				OfflineErrors: st.OfflineErrors,
 			}

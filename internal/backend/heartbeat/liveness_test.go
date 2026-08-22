@@ -124,3 +124,40 @@ func TestSendTimeoutDefaultsWhenUnset(t *testing.T) {
 		t.Fatalf("sendTimeout: %v, ждали 1s", got)
 	}
 }
+
+// «Увидел четверых просроченных, не отправил ни одной тревоги» -- это либо
+// поломка, либо послушание: оператор мог сам заглушить роутер. Снаружи эти
+// два случая до сих пор выглядели одинаково, и разбираться приходилось в
+// базе. Счётчик заглушённых отвечает на вопрос сразу.
+func TestScanCountsSuppressedSeparatelyFromSent(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "6666666666666666666666666666666666666666666666666666666666666666"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-10*time.Minute))
+	st, _ := d.State().Get(uid, "agent_heartbeat")
+	st.Acked = true
+	if err := d.State().Save(uid, "agent_heartbeat", st); err != nil {
+		t.Fatal(err)
+	}
+
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	sentBefore := metricOfflineSent.Value()
+
+	driveScan(w, now)
+
+	if got := len(off.snapshot()); got != 0 {
+		t.Fatalf("заглушённому роутеру ушло %d тревог", got)
+	}
+	if got := metricSuppressed.Value(); got != 1 {
+		t.Fatalf("заглушённых: %d, ждали 1", got)
+	}
+	if got := metricStaleUsers.Value(); got != 1 {
+		t.Fatalf("просроченных: %d, ждали 1 -- заглушённый всё равно просрочен", got)
+	}
+	if got := metricOfflineSent.Value(); got != sentBefore {
+		t.Fatalf("счётчик отправленных сдвинулся на %d", got-sentBefore)
+	}
+}

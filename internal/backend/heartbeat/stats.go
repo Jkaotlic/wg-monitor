@@ -15,6 +15,7 @@ type Stats struct {
 	LastScanAt    time.Time `json:"last_scan_at"`
 	LastScanMs    int64     `json:"last_scan_ms"`
 	StaleUsers    int64     `json:"stale_users"`
+	Suppressed    int64     `json:"suppressed_users"`
 	OfflineSent   int64     `json:"offline_sent_total"`
 	OfflineErrors int64     `json:"offline_errors_total"`
 	SleepSent     int64     `json:"sleep_sent_total"`
@@ -36,6 +37,7 @@ func (w *Watcher) Snapshot() Stats {
 		LastScanAt:    last,
 		LastScanMs:    metricScanMillis.Value(),
 		StaleUsers:    metricStaleUsers.Value(),
+		Suppressed:    metricSuppressed.Value(),
 		OfflineSent:   metricOfflineSent.Value(),
 		OfflineErrors: metricOfflineErrors.Value(),
 		SleepSent:     metricSleepSent.Value(),

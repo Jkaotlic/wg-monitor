@@ -534,6 +534,12 @@
     if (wd.stale_users) {
       parts.push(wd.stale_users + " " + pluralRu(wd.stale_users, "роутер просрочен", "роутера просрочены", "роутеров просрочены"));
     }
+    if (wd.suppressed_users) {
+      parts.push(wd.suppressed_users + " заглушено оператором");
+    }
+    if (wd.sleep_sent_total) {
+      parts.push("карточек «спит»: " + wd.sleep_sent_total);
+    }
     if (wd.offline_errors) {
       parts.push("неудачных отправок: " + wd.offline_errors);
     }
