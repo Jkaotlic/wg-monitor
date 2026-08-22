@@ -10,11 +10,21 @@ import (
 )
 
 type recordingEnqueuer struct {
-	mu   sync.Mutex
-	sent []struct {
+	mu      sync.Mutex
+	dropped int
+	sent    []struct {
 		userID int64
 		cmd    wire.Command
 	}
+}
+
+func (r *recordingEnqueuer) DropPending(_ int64, action string) []wire.Command {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if action == "self_update" {
+		r.dropped++
+	}
+	return nil
 }
 
 func (r *recordingEnqueuer) Enqueue(userID int64, cmd wire.Command) error {
@@ -113,5 +123,32 @@ func TestResumePendingDeploys_NeedsPublicBaseURL(t *testing.T) {
 func TestResumePendingDeploys_NilInputsAreSafe(t *testing.T) {
 	if n := ResumePendingDeploys(nil, nil, "https://x", "", nil); n != 0 {
 		t.Fatalf("возобновлено %d, ждали 0", n)
+	}
+}
+
+// Возобновление не должно множить команды: каждый рестарт клал в очередь ещё
+// один self_update тому же роутеру. Роутер, которого нет на связи, копил их,
+// а вернувшись -- пошёл бы скачивать бинарь столько раз, сколько раз я
+// перезапускал бэкенд.
+func TestResumePendingDeploys_ReplacesInsteadOfPilingUp(t *testing.T) {
+	d := resumeTestDB(t)
+	uid, err := d.Users().Insert("vasya", strings.Repeat("d", 64), "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", "2026-08-21T08:13:42Z"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingEnqueuer{}
+
+	ResumePendingDeploys(d, sink, "https://wgmonitor.example", "", nil)
+	ResumePendingDeploys(d, sink, "https://wgmonitor.example", "", nil)
+	ResumePendingDeploys(d, sink, "https://wgmonitor.example", "", nil)
+
+	if sink.dropped != 3 {
+		t.Fatalf("перед каждой постановкой прежние обязаны сниматься: снято %d раз из 3", sink.dropped)
+	}
+	if len(sink.sent) != 3 {
+		t.Fatalf("поставлено %d команд", len(sink.sent))
 	}
 }

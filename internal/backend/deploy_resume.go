@@ -14,6 +14,11 @@ import (
 // интерфейс, чтобы тест не изображал всю очередь ради одного метода.
 type deployEnqueuer interface {
 	Enqueue(userID int64, cmd wire.Command) error
+	// DropPending снимает прежние команды того же действия. Без него каждый
+	// рестарт клал роутеру ещё один self_update: роутер, которого нет на
+	// связи, копил их и, вернувшись, пошёл бы за бинарём столько раз, сколько
+	// было перезапусков.
+	DropPending(userID int64, action string) []wire.Command
 }
 
 // ResumePendingDeploys заново ставит в очередь обновления, назначенные до
@@ -77,6 +82,11 @@ func ResumePendingDeploys(d *db.DB, sink deployEnqueuer, publicBaseURL, publicIP
 		}
 		if ip := strings.TrimSpace(publicIP); ip != "" {
 			cmd.Args["repo_resolve_ip"] = ip
+		}
+		dropped := sink.DropPending(u.ID, "self_update")
+		if len(dropped) > 0 && logger != nil {
+			logger.Info("resume deploys: сняли прежние команды обновления",
+				"nickname", u.Nickname, "count", len(dropped))
 		}
 		if err := sink.Enqueue(u.ID, cmd); err != nil {
 			if logger != nil {

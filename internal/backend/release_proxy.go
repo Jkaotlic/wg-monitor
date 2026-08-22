@@ -13,10 +13,33 @@ import (
 
 var releaseDownloadBase = "https://github.com/Jkaotlic/wg-monitor/releases/download"
 
+// Раздача бинарей идёт через память: чтобы отличить «файл кончился раньше
+// времени» от «файл слишком большой», ответ проверяется целиком до первого
+// записанного байта (см. ниже). Плата за это -- память на каждого
+// скачивающего, а бэкенд живёт на Raspberry Pi.
+//
+// Вчера это выстрелило: перезапуски раз за разом ставили в очередь
+// self_update сразу четырём роутерам, и они пошли за бинарями одновременно.
+// Двух одновременных раздач хватает для парка любой величины -- агент,
+// получивший отказ, вернётся сам.
+const maxConcurrentReleaseProxy = 2
+
+var releaseProxySlots = make(chan struct{}, maxConcurrentReleaseProxy)
+
 func releaseAssetProxyHandler(_ Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
+			return
+		}
+		select {
+		case releaseProxySlots <- struct{}{}:
+			defer func() { <-releaseProxySlots }()
+		default:
+			// Не ждём в очереди: держать соединение открытым значит держать и
+			// память, ради которой всё это и затевалось.
+			w.Header().Set("Retry-After", "30")
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "release proxy busy; retry shortly")
 			return
 		}
 		version := strings.TrimSpace(r.PathValue("version"))
