@@ -377,14 +377,35 @@ func (w *Watcher) offlineNotificationsSuppressed(userID int64, now time.Time) bo
 	return st.SilencedUntil != nil && st.SilencedUntil.After(now.UTC())
 }
 
+// clearOfflineStateIfHard гасит след прошлого молчания, когда роутер снова на
+// связи.
+//
+// Условие «только если статус hard» когда-то казалось достаточным, но отметка
+// «вижу проблему» живёт дольше самого состояния: инцидент мог быть закрыт
+// другой веткой, а ack остаться. Роутер возвращался с непогашенной отметкой --
+// и тревог по нему больше не приходило НИКОГДА, потому что offline-ветка
+// молча пропускала заглушённых. Именно так боевой роутер молчал сутки, а
+// сторож считал это послушанием.
+//
+// «Понятно, вижу» обещает напомнить ПОСЛЕ восстановления, поэтому возвращение
+// роутера снимает отметку независимо от того, что записано в статусе.
 func (w *Watcher) clearOfflineStateIfHard(userID int64) {
 	st, err := w.d.State().Get(userID, "agent_heartbeat")
 	if err != nil {
 		slog.Warn("heartbeat: read offline recovery state failed", "user_id", userID, "err", err)
 		return
 	}
-	if st.CurrentStatus != "hard" {
+	// Только ack: он обещает «напомню после восстановления» и обязан гаснуть
+	// с возвращением роутера. Тишина -- другое обещание, с явным сроком
+	// («тихо до утра»), и обрывать её на первом же ответе роутера значило бы
+	// нарушить ровно то, о чём просил оператор.
+	suppressionLeftOver := st.Acked || st.AckedUntil != nil
+	if st.CurrentStatus != "hard" && !suppressionLeftOver {
 		return
+	}
+	if st.CurrentStatus != "hard" {
+		slog.Info("heartbeat: снимаем заглушку с вернувшегося роутера",
+			"user_id", userID, "status", st.CurrentStatus, "acked", st.Acked)
 	}
 	st.CurrentStatus = "ok"
 	st.ConsecutiveFails = 0

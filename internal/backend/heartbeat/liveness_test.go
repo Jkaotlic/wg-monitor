@@ -161,3 +161,91 @@ func TestScanCountsSuppressedSeparatelyFromSent(t *testing.T) {
 		t.Fatalf("счётчик отправленных сдвинулся на %d", got-sentBefore)
 	}
 }
+
+// «Понятно, вижу» обещает: напомню ПОСЛЕ восстановления. Снятие этой отметки
+// висело на условии current_status == "hard" -- а отметка живёт дольше
+// самого состояния. Роутер, чей инцидент к моменту возвращения уже не значился
+// «hard», возвращался с непогашенным ack и больше не получал тревог никогда.
+//
+// Ровно это и случилось с боевым роутером: сторож видел его просроченным,
+// считал заглушённым и молчал сутки.
+func TestFreshRouterClearsStickyAckEvenWhenStatusIsNotHard(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "7777777777777777777777777777777777777777777777777777777777777777"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now)
+
+	st, _ := d.State().Get(uid, "agent_heartbeat")
+	st.CurrentStatus = "ok"
+	st.Acked = true
+	if err := d.State().Save(uid, "agent_heartbeat", st); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWatcher(d, &fakeOffline{}, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, now)
+
+	got, err := d.State().Get(uid, "agent_heartbeat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Acked {
+		t.Fatal("роутер вернулся, а отметка «вижу проблему» осталась -- тревог по нему больше не будет")
+	}
+}
+
+// Пока роутер молчит, ack держится: он и означает «знаю, не напоминай».
+func TestStaleRouterKeepsAckUntilItComesBack(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "8888888888888888888888888888888888888888888888888888888888888888"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-2*time.Hour))
+	st, _ := d.State().Get(uid, "agent_heartbeat")
+	st.Acked = true
+	if err := d.State().Save(uid, "agent_heartbeat", st); err != nil {
+		t.Fatal(err)
+	}
+
+	off := &fakeOffline{}
+	w := NewWatcher(d, off, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, now)
+
+	if len(off.snapshot()) != 0 {
+		t.Fatal("заглушённому роутеру ушла тревога")
+	}
+	got, _ := d.State().Get(uid, "agent_heartbeat")
+	if !got.Acked {
+		t.Fatal("отметка снята с роутера, который так и не вернулся")
+	}
+}
+
+// Тишина «до утра» -- обещание со сроком, и возвращение роутера её не
+// отменяет: оператор просил не беспокоить до утра, а не до первого ответа.
+func TestFreshRouterKeepsOperatorSilence(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "9999999999999999999999999999999999999999999999999999999999999999"
+	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	now := time.Now().UTC()
+	d.Events().Insert(uid, "agent_heartbeat", "ok", "", now)
+
+	until := now.Add(6 * time.Hour)
+	st, _ := d.State().Get(uid, "agent_heartbeat")
+	st.CurrentStatus = "hard"
+	st.SilencedUntil = &until
+	if err := d.State().Save(uid, "agent_heartbeat", st); err != nil {
+		t.Fatal(err)
+	}
+
+	w := NewWatcher(d, &fakeOffline{}, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	driveScan(w, now)
+
+	got, _ := d.State().Get(uid, "agent_heartbeat")
+	if got.SilencedUntil == nil {
+		t.Fatal("тишина до утра снята возвращением роутера")
+	}
+}
