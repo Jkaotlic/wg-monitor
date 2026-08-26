@@ -46,11 +46,23 @@ func stepDownloadBackendAsset(s *SSH, dl *Downloader, rel *Release) (string, err
 	return stepDownloadAsset(dl, rel, assetName)
 }
 
-func detectBackendSwapPlan(s *SSH) backendSwapPlan {
-	if _, _, rc, _ := s.Run("test -f /home/user/wg-monitor/bin/wg-monitor-backend && command -v docker >/dev/null 2>&1 && docker inspect wg-monitor-backend >/dev/null 2>&1"); rc == 0 {
+// backendDockerBinary — бинарь бэкенда в docker-раскладке. Раскладка лежит в
+// домашнем каталоге ssh-пользователя бэкенда, поэтому путь ОБЯЗАН выводиться из
+// него, а не быть константой: при несовпадении имени учётки проба ниже просто
+// не находит файл и detectBackendSwapPlan молча уходит в systemd-ветку — ни
+// ошибки, ни предупреждения, просто другой способ рестарта.
+func backendDockerBinary(user string) string {
+	return backendDockerBase(user) + "/bin/wg-monitor-backend"
+}
+
+func detectBackendSwapPlan(s *SSH, user string) backendSwapPlan {
+	binary := backendDockerBinary(user)
+	probe := "test -f " + shellQuote(binary) +
+		" && command -v docker >/dev/null 2>&1 && docker inspect wg-monitor-backend >/dev/null 2>&1"
+	if _, _, rc, _ := s.Run(probe); rc == 0 {
 		return backendSwapPlan{
 			Name:       "docker:wg-monitor-backend",
-			RemotePath: "/home/user/wg-monitor/bin/wg-monitor-backend",
+			RemotePath: binary,
 			StartCmd:   "docker restart wg-monitor-backend >/dev/null || docker start wg-monitor-backend >/dev/null",
 		}
 	}

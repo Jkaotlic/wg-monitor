@@ -459,7 +459,7 @@ func actionUpdateBackend(state *State, secrets *SecretStore, dl *Downloader) err
 	if err := stepEnsureWizardSetup(s, secrets); err != nil {
 		PrintWarn("wizard setup пропущен: " + err.Error())
 	}
-	swapPlan := detectBackendSwapPlan(s)
+	swapPlan := detectBackendSwapPlan(s, userOrDefault(state.Backend.User, "root"))
 	PrintInfo("backend runtime: " + nonEmpty(swapPlan.Name, swapPlan.RemotePath))
 	if err := stepUploadBackendAndRestart(s, localPath, swapPlan); err != nil {
 		return err

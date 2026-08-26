@@ -51,8 +51,8 @@ func parseAWGMURLPatchArgs(args []string) (awgmURLPatchOptions, error) {
 	fs.StringVar(&opts.TerminalUser, "terminal-user", "root", "terminal login user")
 	fs.StringVar(&opts.TerminalPassword, "terminal-password", "", "terminal login password")
 	fs.StringVar(&opts.Nickname, "nickname", "", "expected agent nickname")
-	fs.StringVar(&opts.OldURL, "old", "https://wgmonitor.example.com", "old backend URL")
-	fs.StringVar(&opts.NewURL, "new", "https://wgmonitor.example.com", "new backend URL")
+	fs.StringVar(&opts.OldURL, "old", "", "old backend URL (required)")
+	fs.StringVar(&opts.NewURL, "new", "", "new backend URL (required)")
 	if err := fs.Parse(args); err != nil {
 		return opts, err
 	}
@@ -70,6 +70,16 @@ func parseAWGMURLPatchArgs(args []string) (awgmURLPatchOptions, error) {
 	}
 	if strings.TrimSpace(opts.TerminalPassword) == "" {
 		return opts, fmt.Errorf("terminal password is required")
+	}
+	// Дефолта у адресов быть не может: это всегда конкретная миграция. Равные
+	// old и new означали бы sed без эффекта и падение следующей проверки с exit 2,
+	// то есть команду, которая делает вид, что работает.
+	oldURL, newURL := strings.TrimSpace(opts.OldURL), strings.TrimSpace(opts.NewURL)
+	if oldURL == "" || newURL == "" {
+		return opts, fmt.Errorf("old and new backend URLs are required")
+	}
+	if oldURL == newURL {
+		return opts, fmt.Errorf("old and new backend URLs must differ")
 	}
 	return opts, nil
 }

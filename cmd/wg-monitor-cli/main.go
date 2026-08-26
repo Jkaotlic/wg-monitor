@@ -36,7 +36,7 @@ func main() {
 		nick := fs.String("nickname", "", "user nickname (regexp ^[a-z][a-z0-9_-]{1,15}$)")
 		iface := fs.String("awg-iface", "", "AWG interface name on the router (per-user, see spec Q4)")
 		exitIP := fs.String("expected-exit-ip", "", "expected exit IPv4 when probing through the tunnel")
-		backendURL := fs.String("backend-url", "https://wgmonitor.example.com", "backend HTTPS URL printed in install hint")
+		backendURL := fs.String("backend-url", envOr("WGM_BACKEND_URL", "https://wgmonitor.example.com"), "backend HTTPS URL printed in install hint (env WGM_BACKEND_URL)")
 		kind := fs.String("kind", db.KindStatic, "router kind: static (home/office, default) or mobile (4G in-vehicle)")
 		ensureTopic := fs.Bool("ensure-topic", false, "create the TG forum topic for this user immediately (requires --config)")
 		configPath := fs.String("config", "", "backend config.yaml (required with --ensure-topic; supplies chat_id and bot_token)")
