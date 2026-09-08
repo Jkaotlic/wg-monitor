@@ -17,6 +17,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -2190,5 +2191,96 @@ func TestReportRejectsTooLarge(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d", resp.StatusCode)
+	}
+}
+
+// hardReportEnv поднимает бэкенд, у которого проверка вот-вот уйдёт в hard:
+// два провала уже записаны, третий придёт отчётом.
+func hardReportEnv(t *testing.T, checkName string, start func(linkrepair.StartReq) (string, error)) (*httptest.Server, string) {
+	t.Helper()
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	t.Cleanup(func() { _ = d.Close() })
+	tok := "3030303030303030303030303030303030303030303030303030303030303030"
+	uid, _ := d.Users().Insert("роутер", tok, "198.51.100.10", "awg0")
+	// Два провала уже позади, и состояние именно fail: из ok счётчик
+	// начинается заново, третий провал дал бы Soft, а не Hard.
+	if err := d.State().Save(uid, checkName, db.IncidentState{
+		CurrentStatus: "fail", ConsecutiveFails: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(Deps{
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:              d,
+		Dispatcher:      &fakeDisp{db: d},
+		Thresholds:      state.Thresholds{Fail: 3, Recovery: 2},
+		StartLinkRepair: start,
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, tok
+}
+
+func postFailingCheck(t *testing.T, srv *httptest.Server, tok, checkName string) {
+	t.Helper()
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC().Truncate(time.Second),
+		AgentVersion: "v0.19.7",
+		Checks:       []wire.Check{{Name: checkName, Status: "fail"}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: %d", resp.StatusCode)
+	}
+}
+
+// Переход в hard по упавшему туннелю запускает починку сам.
+func TestHardTransition_StartsAutoRepair(t *testing.T) {
+	var mu sync.Mutex
+	got := linkrepair.StartReq{}
+	srv, tok := hardReportEnv(t, "tunnel_awg12", func(req linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = req
+		return "job-1", nil
+	})
+	postFailingCheck(t, srv, tok, "tunnel_awg12")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got.CheckName != "tunnel_awg12" {
+		t.Fatalf("починка не запустилась, CheckName=%q", got.CheckName)
+	}
+	if !got.Auto {
+		t.Fatal("сторож обязан звать починку как автозапуск: у неё свои тормоза")
+	}
+	if got.AgentVersion != "v0.19.7" {
+		t.Fatalf("версия агента не доехала: %q", got.AgentVersion)
+	}
+}
+
+// Молчащий роутер и пропавший интернет починку не запускают: сценария нет,
+// а дёргать движок впустую значит писать в журнал отказ на каждый провал.
+func TestHardTransition_SkipsUnfixable(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	srv, tok := hardReportEnv(t, "external_reach", func(linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls++
+		return "", nil
+	})
+	postFailingCheck(t, srv, tok, "external_reach")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 0 {
+		t.Fatalf("движок звали %d раз, должно быть 0", calls)
 	}
 }

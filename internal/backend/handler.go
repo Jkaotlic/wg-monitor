@@ -368,6 +368,11 @@ type Deps struct {
 	// LinkRepair -- движок починки упавшей линии: увести на резерв,
 	// перевыпустить конфиг мастером замены, вернуть линию на место.
 	LinkRepair *linkrepair.Deps
+
+	// StartLinkRepair -- как сторож зовёт починку. Отдельным полем, а не
+	// прямым вызовом LinkRepair.Start: так проверяется, что нечинибельные
+	// поломки движок не беспокоят вовсе.
+	StartLinkRepair func(linkrepair.StartReq) (string, error)
 	// VPNCabinet отдаёт мини-аппу кабинеты провайдеров (Amnezia Premium,
 	// HideMy.name) и выпускает из них конфиги. nil-safe: без него экран
 	// кабинетов отвечает «не настроено», а не падает.
@@ -834,6 +839,24 @@ func reportHandler(d Deps) http.HandlerFunc {
 			cancelDispatch()
 			if err != nil {
 				d.Logger.Warn("dispatch", "check", c.Name, "kind", tr.Kind, "err", err)
+			}
+			// Починка стартует ПОСЛЕ отправки тревоги: человек обязан узнать
+			// о поломке независимо от того, справится автоматика или нет.
+			// Запусти мы раньше -- отказ движка (выключенный полуавтомат,
+			// исчерпанные попытки, идущая замена) рисковал бы унести с собой
+			// и уведомление.
+			if tr.Kind == state.Hard && d.StartLinkRepair != nil {
+				if _, ok := linkrepair.ScenarioFor(c.Name); ok {
+					if _, err := d.StartLinkRepair(linkrepair.StartReq{
+						RouterID: uid, Nickname: nick, CheckName: c.Name,
+						AgentVersion: rep.AgentVersion, Auto: true,
+					}); err != nil {
+						// Отказ здесь -- норма, а не авария: полуавтомат
+						// выключен владельцем, попытки исчерпаны, идёт замена.
+						d.Logger.Info("автопочинка не начата",
+							"nickname", nick, "check", c.Name, "почему", err)
+					}
+				}
 			}
 		}
 		clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
