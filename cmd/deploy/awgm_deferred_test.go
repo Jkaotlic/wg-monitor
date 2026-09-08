@@ -113,10 +113,10 @@ func TestDeferredAWGMRecoveryHintGivesCopyPastePath(t *testing.T) {
 		&State{Backend: BackendState{Host: "198.51.100.10", Port: 2202, User: "deployer"}},
 		&AgentState{Nickname: "client-g"},
 		"/var/lib/wg-monitor/deferred-awgm/client-g.json.token",
-		"WG_AGENT_TOKEN_BRONYA",
+		"WG_AGENT_TOKEN_CLIENT-G",
 	)
 	for _, want := range []string{
-		"WG_AGENT_TOKEN_BRONYA",
+		"WG_AGENT_TOKEN_CLIENT-G",
 		"ssh -p 2202 deployer@198.51.100.10 \"cat /var/lib/wg-monitor/deferred-awgm/client-g.json.token\" | Add-Content -Encoding ascii \"" + secPath + "\"",
 		"wg-monitor-deploy sync-vps",
 		"wg-monitor-deploy doctor",
@@ -477,7 +477,7 @@ assert events == [
 assert not os.path.exists(job_path), "successful existing-agent job remained active"
 assert os.path.exists(job_path + ".done"), "successful existing-agent job did not write done artifact"
 done = open(job_path + ".done", encoding="utf-8").read()
-assert "token_env=WG_AGENT_TOKEN_BRONYA" in done, done
+assert "token_env=WG_AGENT_TOKEN_CLIENT-G" in done, done
 assert ("token_file=" + job_path + ".token") in done, done
 assert "local deploy secrets" in done, done
 assert "doctor/auth-probe" in done, done
@@ -486,7 +486,7 @@ assert "then run sync-vps" in done, done
 assert "then run doctor" in done, done
 assert "existing-token" not in done, done
 token = open(job_path + ".token", encoding="utf-8").read()
-assert token == "WG_AGENT_TOKEN_BRONYA=existing-token\n", token
+assert token == "WG_AGENT_TOKEN_CLIENT-G=existing-token\n", token
 assert put_body["deploy_mode"] == "awgm", put_body
 assert put_body["awgm_url"] == "https://awg.client-g.example.test", put_body
 assert put_body["awgm_auth"] == "router-admin", put_body
