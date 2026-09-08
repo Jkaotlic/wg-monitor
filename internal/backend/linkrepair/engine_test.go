@@ -3,6 +3,7 @@ package linkrepair
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -158,4 +159,114 @@ func TestStart_RefusesOldAgent(t *testing.T) {
 	if cmd.count() != 0 {
 		t.Fatalf("роутеру ушло %d команд, должно быть 0", cmd.count())
 	}
+}
+
+// scriptedCommander отвечает так, чтобы весь сценарий дошёл до конца:
+// снимок с политикой и резервом, импорт с идентификатором, разные адреса
+// выхода через туннель и напрямую.
+type scriptedCommander struct {
+	mu      sync.Mutex
+	actions []string
+	last    string
+}
+
+func (c *scriptedCommander) Enqueue(_ int64, cmd wire.Command) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.actions = append(c.actions, cmd.Action)
+	c.last = cmd.Action
+	return nil
+}
+
+func (c *scriptedCommander) AwaitResult(_ context.Context, _ int64, id string, _ time.Duration) (*wire.CommandResult, bool) {
+	c.mu.Lock()
+	action := c.last
+	c.mu.Unlock()
+	out := ""
+	switch action {
+	case "route_status":
+		out = `{"tunnels":[{"id":"awg21","name":"amnezia_nl","has_handshake":true}],` +
+			`"policies":[{"name":"HydraRoute","interfaces":[` +
+			`{"bind":"OpkgTun12","tunnel_id":"awg12","role":"active","available":false,"order":1},` +
+			`{"bind":"OpkgTun10","tunnel_id":"awg10","role":"fallback","available":true,"order":2}]}]}`
+	case "tunnel_import":
+		out = `Туннель "amnezia_nl" создан (id=awg21)`
+	case "check_via_tunnel":
+		out = "Exit IP: 203.0.113.19"
+	case "check_direct":
+		out = "Exit IP: 203.0.113.7"
+	}
+	return &wire.CommandResult{ID: id, Status: "ok", Output: out}, true
+}
+
+type scriptedCabinet struct{}
+
+func (scriptedCabinet) IssueConfig(context.Context, int64, string, string) (replace.Issued, error) {
+	return replace.Issued{TunnelName: "amnezia_nl", Conf: []byte("[Interface]\n"), Backend: "nativewg"}, nil
+}
+
+// Человек получает ОДНО сообщение об одном событии. Мастер замены внутри
+// починки обязан молчать: его текст говорит про «замену конфига» языком
+// инженера, а починка уже рассказала ту же историю по-человечески.
+func TestRun_SingleNotification(t *testing.T) {
+	cmd := &scriptedCommander{}
+	var mu sync.Mutex
+	var notes []string
+	collect := func(_ context.Context, _ int64, text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		notes = append(notes, text)
+	}
+
+	d := testDeps(t, nil)
+	d.Commands = cmd
+	d.Notify = collect
+	d.Replace = replace.Deps{
+		Store:          d.Store,
+		Commands:       cmd,
+		Cabinet:        scriptedCabinet{},
+		Origin:         noopOrigin{},
+		Notify:         collect,
+		BaseCtx:        context.Background(),
+		AwaitStep:      time.Second,
+		HandshakeTries: 2,
+		HandshakeWait:  time.Millisecond,
+		Sleep:          func(context.Context, time.Duration) {},
+	}
+
+	id, err := d.Start(StartReq{
+		RouterID: 1, Nickname: "роутер", CheckName: "tunnel_awg12",
+		AgentVersion: "v0.19.7",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitDone(t, d, id)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(notes) != 1 {
+		t.Fatalf("человеку ушло %d сообщений об одном событии: %v", len(notes), notes)
+	}
+	if !strings.Contains(notes[0], "Увёл трафик") {
+		t.Fatalf("сообщение не от починки: %q", notes[0])
+	}
+}
+
+type noopOrigin struct{}
+
+func (noopOrigin) Record(int64, string, string, string, string, time.Time) error { return nil }
+
+func waitDone(t *testing.T, d Deps, jobID string) provision.Job {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		job, ok := d.Store.Get(jobID)
+		if ok && job.State != provision.StateRunning {
+			return job
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("задание не завершилось за отведённое время")
+	return provision.Job{}
 }

@@ -12,6 +12,7 @@ deploy/**/*.local.*
 *.upx
 wg-monitor
 wg-monitor-backend
+miniapp-sandbox
 
 # MCP / tool scratch output
 .playwright-mcp/

@@ -162,7 +162,9 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 				Name: "HydraRoute", Description: "обход блокировок",
 				Interfaces: []wire.RoutePolicyInterface{
 					{Bind: "OpkgTun12", Name: "Амстердам", Role: "active", Available: true, Order: 1, TunnelID: "awg12", ViaVPN: true},
-					{Bind: "OpkgTun10", Name: "Франкфурт", Role: "fallback", Available: false, Order: 2, TunnelID: "awg10", ViaVPN: true},
+					// Резерв ДОСТУПЕН: иначе движку починки некуда уводить
+					// трафик, и весь сценарий с failover не отрепетировать.
+					{Bind: "OpkgTun10", Name: "Франкфурт", Role: "fallback", Available: true, Order: 2, TunnelID: "awg10", ViaVPN: true},
 				},
 				DNS: 32, HRNeo: 28, ActiveTunnelID: "awg12", ViaVPN: true,
 			},

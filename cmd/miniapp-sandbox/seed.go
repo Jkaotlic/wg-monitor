@@ -69,8 +69,11 @@ func seed(d *db.DB, tgUserID int64) error {
 				return err
 			}
 		}
-		if err := d.TunnelOrigins().Record(uid, "awg12", "awg12",
-			"amnezia_premium", "Нидерланды", now.Add(-72*time.Hour), tgUserID); err != nil {
+		// Провайдер и вариант -- ровно те, какими их пишет мастер замены
+		// (идентификатор опции, а не её подпись): починка перевыпускает по
+		// ним же, и разойтись они не имеют права.
+		if err := d.TunnelOrigins().Record(uid, "awg12", "Амстердам",
+			"amnezia", "nl", now.Add(-72*time.Hour), tgUserID); err != nil {
 			return err
 		}
 	}

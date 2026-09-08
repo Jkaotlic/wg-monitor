@@ -144,7 +144,12 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 		d.fail(ctx, jobID, req, replace.StepIssue, backup, ErrUnknownOrigin)
 		return
 	}
-	err = d.Replace.RunOnJob(ctx, jobID, replace.StartReq{
+	// Мастер замены внутри починки МОЛЧИТ. Его текст говорит про «замену
+	// конфига» языком инженера, а движок уже рассказывает ту же историю
+	// по-человечески: два сообщения об одном событии -- это не забота, а шум.
+	inner := d.Replace
+	inner.Notify = nil
+	err = inner.RunOnJob(ctx, jobID, replace.StartReq{
 		RouterID: req.RouterID, Nickname: req.Nickname,
 		Provider: provider, OptionID: option,
 		OldTunnelID: sc.TunnelID, PolicyName: pol.Name,

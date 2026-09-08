@@ -39,6 +39,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
@@ -116,12 +117,31 @@ func main() {
 		HandshakeWait:  time.Second,
 	}
 
+	// Движок починки -- тоже настоящий: подменены только кабинет, очередь
+	// команд и происхождение. Замок у него общий с мастером замены, поэтому
+	// Store один на двоих -- ровно как в проде.
+	repairEngine := &linkrepair.Deps{
+		Store:      replaceEngine.Store,
+		Replace:    *replaceEngine,
+		Origin:     backend.LinkRepairOrigin(d),
+		Attempts:   linkrepair.Attempts{KV: d.KV()},
+		AutoRepair: func(routerID int64) bool { on, _ := d.RepairSettings().AutoRepair(routerID); return on },
+		Commands:   sink,
+		Notify: func(_ context.Context, routerID int64, text string) {
+			slog.Info("песочница: отчёт о починке", "router_id", routerID, "text", text)
+		},
+		BaseCtx:   context.Background(),
+		AwaitStep: 20 * time.Second,
+	}
+
 	deps := backend.Deps{
 		Logger:                logger,
 		DB:                    d,
 		CommandSink:           sink,
 		VPNCabinet:            cabinet,
 		Replace:               replaceEngine,
+		LinkRepair:            repairEngine,
+		StartLinkRepair:       repairEngine.Start,
 		Thresholds:            state.Thresholds{Fail: 2, Recovery: 2},
 		MuteCutoffHour:        23,
 		TelegramBotToken:      sandboxBotToken,
