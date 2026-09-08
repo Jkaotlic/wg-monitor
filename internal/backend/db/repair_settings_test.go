@@ -57,3 +57,26 @@ func TestAutoRepair_OffThenOn(t *testing.T) {
 		t.Fatal("повторное включение обязано сработать")
 	}
 }
+
+// Обкатка: парк, который настройку ни разу не трогал, идёт за решением
+// оператора бэкенда. Явно выключивший её роутер остаётся выключенным, явно
+// включивший -- включённым, что бы ни стояло дефолтом.
+func TestAutoRepair_WithDefaultOff(t *testing.T) {
+	d, userID := newTestDBForRepair(t)
+	r := d.RepairSettings().WithDefault(false)
+
+	on, err := r.AutoRepair(userID)
+	if err != nil {
+		t.Fatalf("AutoRepair: %v", err)
+	}
+	if on {
+		t.Fatal("без строки полуавтомат обязан идти за дефолтом бэкенда")
+	}
+
+	if err := r.SetAutoRepair(userID, true); err != nil {
+		t.Fatalf("SetAutoRepair: %v", err)
+	}
+	if on, _ = r.AutoRepair(userID); !on {
+		t.Fatal("явно включённый роутер дефолту не подчиняется")
+	}
+}

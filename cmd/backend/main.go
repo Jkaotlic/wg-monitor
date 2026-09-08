@@ -16,6 +16,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/callbacks"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/digest"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
@@ -269,6 +270,32 @@ func main() {
 		Logger:  logger.With("component", "replace"),
 	}
 
+	// Движок починки линии. Store общий с мастером замены: замок один на
+	// двоих, иначе починка и замена столкнулись бы на одном роутере.
+	repairEngine := &linkrepair.Deps{
+		Store:    provisionStore,
+		Replace:  *replaceEngine,
+		Origin:   backend.LinkRepairOrigin(d),
+		Attempts: linkrepair.Attempts{KV: d.KV()},
+		AutoRepair: func(routerID int64) bool {
+			on, err := d.RepairSettings().WithDefault(cfg.Repair.AutoDefault).AutoRepair(routerID)
+			if err != nil {
+				logger.Warn("linkrepair: настройка не прочиталась", "router_id", routerID, "err", err)
+				return false
+			}
+			return on
+		},
+		Commands: cmdQueue,
+		Notify: func(ctx context.Context, routerID int64, text string) {
+			if err := cb.NotifyRouterTopic(ctx, routerID, text); err != nil {
+				logger.Warn("linkrepair: notify failed", "router_id", routerID, "err", err)
+			}
+		},
+		BaseCtx: ctx,
+		Now:     time.Now,
+		Logger:  logger.With("component", "linkrepair"),
+	}
+
 	mux := backend.NewMux(backend.Deps{
 		Logger:         logger,
 		HeartbeatStats: watcher.Snapshot,
@@ -284,6 +311,8 @@ func main() {
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
 		VPNCabinet:          cb,
 		Replace:             replaceEngine,
+		LinkRepair:          repairEngine,
+		StartLinkRepair:     repairEngine.Start,
 		OpkgNotifier:        opkgNotifier,
 		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,

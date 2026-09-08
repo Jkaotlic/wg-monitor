@@ -38,6 +38,7 @@ type Config struct {
 	SelfHostedAmnezia selfhostedamnezia.Config `yaml:"amnezia_selfhosted"`
 	HideMy            HideMyConfig             `yaml:"hidemyname"`
 	Digest            DigestConfig             `yaml:"digest"`
+	Repair            RepairConfig             `yaml:"repair"`
 }
 
 // DigestConfig controls the daily "dead-man" digest (🟢 monitor alive, N/M
@@ -45,6 +46,16 @@ type Config struct {
 // backend dies, the digest stops arriving. Pair with an external probe
 // (docs/external-uptime-probe.md) for a hard guarantee outside the failure
 // domain; this is the soft, zero-extra-infra complement.
+// RepairConfig -- поведение движка починки линии.
+type RepairConfig struct {
+	// AutoDefault -- чем считать полуавтомат у роутера, чья настройка ни разу
+	// не трогалась. Выключено, пока движок не обкатан на живом роутере:
+	// включённый по умолчанию, он при первой же тревоге начнёт менять
+	// маршрутизацию и тратить слоты в платных кабинетах разом на всём парке.
+	// Владелец каждого роутера может включить его себе независимо.
+	AutoDefault bool `yaml:"auto_default"`
+}
+
 type DigestConfig struct {
 	Enabled         bool `yaml:"enabled"`
 	HourMSK         int  `yaml:"hour_msk"`          // 0-23, MSK hour to post; default 9
