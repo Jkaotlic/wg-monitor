@@ -17,9 +17,8 @@ import (
 // заготовленным. Нужен, чтобы доказать главное свойство выключенного
 // полуавтомата: роутер не трогают ВООБЩЕ.
 type countingCommander struct {
-	mu      sync.Mutex
-	sent    int
-	replies map[string]wire.CommandResult
+	mu   sync.Mutex
+	sent int
 }
 
 func (c *countingCommander) Enqueue(_ int64, cmd wire.Command) error {
