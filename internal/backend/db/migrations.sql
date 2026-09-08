@@ -104,3 +104,12 @@ CREATE TABLE IF NOT EXISTS tunnel_config_origin (
     PRIMARY KEY (user_id, tunnel_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+-- Настройки починки на роутер. Отдельной таблицей, а не колонкой в users:
+-- в проекте применяются только CREATE TABLE IF NOT EXISTS, ALTER TABLE не
+-- используется ни разу, и заводить эту механику ради одного флага не стоит.
+CREATE TABLE IF NOT EXISTS router_repair_settings (
+    user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    auto_repair INTEGER NOT NULL DEFAULT 1,
+    updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
