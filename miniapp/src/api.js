@@ -128,6 +128,27 @@ export function startReplace(routerID, body) {
   return request(`/routers/${routerID}/replace`, { method: 'POST', body: JSON.stringify(body) })
 }
 
+// Починка линии: запуск, состояние и выключатель полуавтомата. Состояние,
+// как и у замены, спрашивается ПРО РОУТЕР: починку мог запустить сторож сам,
+// и идентификатора задания у экрана не будет вовсе.
+export function fetchRepairStatus(routerID) {
+  return request(`/routers/${routerID}/repair`)
+}
+
+export function startRepair(routerID, checkName) {
+  return request(`/routers/${routerID}/repair`, {
+    method: 'POST',
+    body: JSON.stringify({ check_name: checkName }),
+  })
+}
+
+export function setAutoRepair(routerID, enabled) {
+  return request(`/routers/${routerID}/repair/auto`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
 export function sendCommand(routerID, action, args = {}) {
   return request(`/routers/${routerID}/commands`, {
     method: 'POST',

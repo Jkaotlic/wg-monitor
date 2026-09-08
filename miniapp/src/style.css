@@ -2288,3 +2288,142 @@ body {
 .fleet-dot-ok { background: var(--ok); }
 .fleet-dot-warn { background: var(--warn); }
 .fleet-dot-danger { background: var(--bad); }
+
+/* ============================================================
+   Починка линии
+   ------------------------------------------------------------
+   Три шага вместо восьми: человек хочет знать стадию, а не читать
+   чеклист инженера. Метка шага несёт состояние сама -- галочка,
+   точка в кольце, номер или крест, — поэтому цвет здесь не
+   единственный носитель смысла.
+   ============================================================ */
+.repair-open {
+  width: 100%;
+  margin-top: var(--sp-3);
+}
+
+.repair {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-4) 0;
+}
+
+.repair-title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+
+.repair-lead {
+  margin: calc(-1 * var(--sp-2)) 0 0;
+  font-size: var(--fs-md);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.repair-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repair-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+}
+
+.repair-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
+.repair-mark-done {
+  background: var(--ok);
+  color: var(--bg);
+}
+
+.repair-mark-failed {
+  background: var(--bad);
+  color: var(--bg);
+}
+
+.repair-mark-active {
+  border: 2px solid var(--warn);
+  color: var(--warn);
+}
+
+.repair-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
+}
+
+.repair-mark-idle {
+  border: 2px solid var(--border);
+  color: var(--dim);
+}
+
+.repair-step-label {
+  padding-top: 4px;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.repair-step-pending .repair-step-label,
+.repair-step-skipped .repair-step-label {
+  font-weight: 500;
+  color: var(--dim);
+}
+
+.repair-note {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--bad);
+}
+
+.repair-calm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-4);
+  background: var(--surf);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.repair-calm-title {
+  margin: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.repair-calm-text {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.repair-error {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--bad);
+}

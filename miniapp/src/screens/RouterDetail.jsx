@@ -17,6 +17,7 @@ import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { tunnelHealth } from './tunnelHealth.js'
+import { RepairScreen } from './RepairScreen.jsx'
 import { useCommand } from '../useCommand.js'
 import { confirmSheet } from '../sheet.js'
 import {
@@ -128,6 +129,7 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
 // «подчеркнуть», а заставить прочитать одно и то же дважды и потерять время
 // в тот момент, когда его меньше всего.
 function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet, whySuppressed = false }) {
+  const [repairOpen, setRepairOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [expanded, setExpanded] = useState(false)
@@ -179,6 +181,27 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           ack/mute only control whether this incident nags again, they never
           touch the router, so a muted tunnel incident must not lose the one
           button that can actually fix it. */}
+      {/* Починка идёт первой и выглядит главной: она уводит трафик на резерв,
+          перевыпускает конфиг и возвращает линию на место. Перезапуск остаётся
+          рядом как ручной инструмент -- он бесполезен, когда мертва удалённая
+          сторона, но полезен, когда подвис сам туннель. */}
+      {tunnelID && (
+        <button class="btn btn-accent repair-open" onClick={() => setRepairOpen(true)}>
+          Починить
+        </button>
+      )}
+      {repairOpen && (
+        <RepairScreen
+          routerID={routerID}
+          checkName={incident.check_name}
+          lineName={tunnelID}
+          onClose={() => {
+            setRepairOpen(false)
+            onDone?.()
+          }}
+        />
+      )}
+
       {tunnelID && (
         <CommandButton
           routerID={routerID}
