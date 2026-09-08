@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 )
 
@@ -34,4 +35,20 @@ func ReplaceOrigin(database *db.DB) replace.OriginWriter { return replaceOrigin{
 
 func (o replaceOrigin) Record(routerID int64, tunnelID, tunnelName, provider, option string, issuedAt time.Time) error {
 	return o.db.TunnelOrigins().Record(routerID, tunnelID, tunnelName, provider, option, issuedAt, 0)
+}
+
+type linkRepairOrigin struct{ db *db.DB }
+
+// LinkRepairOrigin читает происхождение конфига для движка починки: чем была
+// поднята упавшая линия, тем её и перевыпускаем. Отсутствие строки -- это
+// «система не помнит», а не ошибка: у линий, заведённых руками или до мастера
+// замены, происхождения нет, и выдумать его нечем.
+func LinkRepairOrigin(database *db.DB) linkrepair.OriginReader { return linkRepairOrigin{db: database} }
+
+func (o linkRepairOrigin) Get(routerID int64, tunnelID string) (string, string, bool) {
+	got, ok, err := o.db.TunnelOrigins().Get(routerID, tunnelID)
+	if err != nil || !ok {
+		return "", "", false
+	}
+	return got.Provider, got.Variant, true
 }

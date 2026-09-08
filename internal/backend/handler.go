@@ -14,6 +14,7 @@ import (
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
@@ -363,6 +364,10 @@ type Deps struct {
 	// откатом, internal/backend/replace). nil-safe: без него экран отвечает
 	// «не настроено», а не падает.
 	Replace *replace.Deps
+
+	// LinkRepair -- движок починки упавшей линии: увести на резерв,
+	// перевыпустить конфиг мастером замены, вернуть линию на место.
+	LinkRepair *linkrepair.Deps
 	// VPNCabinet отдаёт мини-аппу кабинеты провайдеров (Amnezia Premium,
 	// HideMy.name) и выпускает из них конфиги. nil-safe: без него экран
 	// кабинетов отвечает «не настроено», а не падает.
