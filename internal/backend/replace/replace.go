@@ -202,12 +202,23 @@ func (d Deps) Start(req StartReq) (string, error) {
 }
 
 func (d Deps) run(jobID string, req StartReq) {
+	defer d.Store.Unlock(req.Nickname)
 	ctx := d.BaseCtx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	defer d.Store.Unlock(req.Nickname)
+	_ = d.RunOnJob(ctx, jobID, req)
+}
 
+// RunOnJob выполняет замену на УЖЕ созданном задании и НЕ трогает замок:
+// им владеет вызывающий. Так мастер переиспользуется движком починки линии,
+// который держит общий замок сам и добавляет свои шаги до и после.
+//
+// Возвращается ошибка сценария; откат к этому моменту уже сделан внутри.
+func (d Deps) RunOnJob(ctx context.Context, jobID string, req StartReq) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if d.Logger != nil {
 		d.Logger.Info("replace started",
 			"job_id", jobID, "nickname", req.Nickname, "provider", req.Provider,
@@ -216,9 +227,10 @@ func (d Deps) run(jobID string, req StartReq) {
 	state := &runState{}
 	if err := d.execute(ctx, jobID, req, state); err != nil {
 		d.rollback(ctx, jobID, req, state, err)
-		return
+		return err
 	}
 	d.finish(ctx, jobID, req, state)
+	return nil
 }
 
 // runState -- то, что уже сделано и что придётся отменять.

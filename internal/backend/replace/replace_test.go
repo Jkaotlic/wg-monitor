@@ -359,3 +359,41 @@ func (c *countingCabinet) IssueConfig(_ context.Context, _ int64, _, _ string) (
 	c.calls++
 	return Issued{Conf: []byte("[Interface]\n"), TunnelName: "amnezia_nl"}, nil
 }
+
+// RunOnJob обязан отработать на задании, созданном чужим кодом, и не трогать
+// замок: им владеет вызывающий. Иначе движок починки линии, который держит
+// замок сам и добавляет свои шаги до и после, встанет на дедлоке.
+func TestRunOnJob_UsesCallerJobAndLock(t *testing.T) {
+	cmd := &fakeCommander{replies: map[string]wire.CommandResult{
+		"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+	}}
+	var notes []string
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+	req := startReq()
+
+	if !d.Store.TryLock(req.Nickname) {
+		t.Fatal("замок должен браться")
+	}
+	job := d.Store.Create("чужой_вид", req.Nickname, Steps())
+
+	if err := d.RunOnJob(context.Background(), job.ID, req); err != nil {
+		t.Fatalf("RunOnJob: %v", err)
+	}
+
+	// Замок обязан остаться взятым -- RunOnJob его не снимает.
+	if d.Store.TryLock(req.Nickname) {
+		t.Fatal("RunOnJob снял чужой замок")
+	}
+	got, ok := d.Store.Get(job.ID)
+	if !ok {
+		t.Fatal("задание пропало")
+	}
+	if got.Kind != "чужой_вид" {
+		t.Fatalf("вид задания подменён на %q", got.Kind)
+	}
+	if got.State != provision.StateSuccess {
+		t.Fatalf("state=%s hint=%s", got.State, got.Hint)
+	}
+}
