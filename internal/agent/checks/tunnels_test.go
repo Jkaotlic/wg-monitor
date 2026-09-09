@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
@@ -38,6 +39,9 @@ func TestTallyRouteCounts_ExplicitAndFallThrough(t *testing.T) {
 			]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -123,6 +127,9 @@ func TestTallyRouteCounts_ExplicitRouteUsesTunnelIDWhenInterfaceMissing(t *testi
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -166,6 +173,9 @@ func TestTunnelsCheck_UnusedTunnelWithPingCheckDisabledDoesNotFailOnNoHandshake(
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -217,6 +227,9 @@ func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {
 			]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -327,6 +340,9 @@ func TestTunnelsCheck_PingCheckDisabledDoesNotFailLiveTunnel(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -361,6 +377,9 @@ func TestTunnelsCheck_FutureHandshakeDoesNotReportOK(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -402,6 +421,9 @@ func TestTallyRouteCounts_CreditsAuthoritativeDefaultFromRouteTag(t *testing.T) 
 			]}`))
 		case "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -441,6 +463,9 @@ func TestTunnelsCheck_RouteTagCreditsRealDefaultNotFirstListed(t *testing.T) {
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
 		case "/api/settings/get":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":"awg-awg12","routeKind":"awg"}}}`))
+		case "/api/monitoring/matrix":
+			// Роутер до 2.18: эндпоинта нет. Проверка обязана это пережить.
+			w.WriteHeader(http.StatusNotFound)
 		default:
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
@@ -539,4 +564,82 @@ func TestTunnelsCheckReportsUnknownEgressWhenSettingsFail(t *testing.T) {
 		return
 	}
 	t.Fatal("tunnel_awg10 check not emitted")
+}
+
+// matrixStub -- заглушка awg-manager, отвечающая ровно тем, что нужно проверке
+// туннеля. withMatrix=false воспроизводит роутер старше 2.18: эндпоинта нет.
+func matrixStub(t *testing.T, withMatrix bool) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"line-a","interfaceName":"opkgtun10","enabled":true,"status":"running","defaultRoute":true,"lastHandshake":"`+time.Now().UTC().Format(time.RFC3339)+`"}
+			]}}`))
+		case "/api/dns-routes/list", "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"enabled":false,"tunnels":[]}}`))
+		case "/api/monitoring/matrix":
+			if !withMatrix {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"success":false}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"success":true,"data":{
+				"targets":[{"id":"cc","host":"example.com","name":"example.com"}],
+				"tunnels":[{"id":"awg10","name":"line-a","ifaceName":"opkgtun10"}],
+				"cells":[{"targetId":"cc","tunnelId":"awg10","latencyMs":84,"ok":true,"isSelf":true}],
+				"updatedAt":"2026-09-09T09:32:23Z"}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+}
+
+func tunnelCheckFor(t *testing.T, baseURL, tunnelID string) wire.Check {
+	t.Helper()
+	out := TunnelsCheck{Client: awgmgr.New(baseURL)}.Run(context.Background(), Deps{})
+	for _, c := range out {
+		if c.Name == "tunnel_"+tunnelID {
+			return c
+		}
+	}
+	t.Fatalf("проверки tunnel_%s нет в выдаче", tunnelID)
+	return wire.Check{}
+}
+
+// Задержка из матрицы кладётся РЯДОМ с ping-check, а не вместо него: это
+// разные измерения, и подменять одно другим значило бы потерять оба.
+func TestTunnelCheck_CarriesMatrixLatency(t *testing.T) {
+	srv := matrixStub(t, true)
+	defer srv.Close()
+
+	c := tunnelCheckFor(t, srv.URL, "awg10")
+
+	if got := c.Details["matrix_latency_ms"]; got != 84 {
+		t.Fatalf("matrix_latency_ms = %v, хотим 84", got)
+	}
+	if c.Details["matrix_updated_at"] != "2026-09-09T09:32:23Z" {
+		t.Fatalf("время снимка не доехало: %v", c.Details["matrix_updated_at"])
+	}
+}
+
+// Старый awg-manager матрицы не знает. Проверка обязана отработать как раньше:
+// без задержки, но и без провала -- иначе обновление awg-manager стало бы
+// условием работы мониторинга.
+func TestTunnelCheck_SurvivesMissingMatrix(t *testing.T) {
+	srv := matrixStub(t, false)
+	defer srv.Close()
+
+	c := tunnelCheckFor(t, srv.URL, "awg10")
+
+	if c.Status == "fail" {
+		t.Fatalf("отсутствие матрицы не делает линию сломанной: %+v", c.Details)
+	}
+	if _, ok := c.Details["matrix_latency_ms"]; ok {
+		t.Fatal("без матрицы ключа быть не должно — пустое значение хуже отсутствия")
+	}
 }

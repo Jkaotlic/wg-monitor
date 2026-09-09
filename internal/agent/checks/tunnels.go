@@ -68,6 +68,15 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 	}
 	routeCounts := tallyRouteCounts(ctx, t.Client, tunnels.Tunnels, activeDefaultID)
 
+	// Матрица задержек -- один запрос на весь обход: снимок общий для всех
+	// линий. Эндпоинт появился в awg-manager 2.18, на старых роутерах его
+	// нет, и это деградация данных, а не поломка проверки: линия без
+	// задержки остаётся линией.
+	matrix, merr := t.Client.MonitoringMatrix(ctx)
+	if merr != nil {
+		matrix = nil
+	}
+
 	out := make([]wire.Check, 0, len(tunnels.Tunnels)+1)
 	// Synthetic "tunnels" check tracks awg-manager TunnelsAll endpoint health.
 	// On error (above) we emit "tunnels=fail"; on success here we emit
@@ -88,7 +97,7 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		if tu.Type != "" && tu.Type != "awg" && tu.Type != "wg" {
 			continue
 		}
-		out = append(out, evalTunnel(tu, pcByID[tu.ID], routeCounts[tu.InterfaceName], start, maxAge, activeDefaultID))
+		out = append(out, evalTunnel(tu, pcByID[tu.ID], routeCounts[tu.InterfaceName], start, maxAge, activeDefaultID, matrix))
 	}
 	return out
 }
@@ -190,7 +199,7 @@ func resolveDefaultIface(tunnels []awgmgr.Tunnel, activeDefaultID string) string
 // one is the live egress, so consumers get both `is_active_default` (the answer)
 // and `active_default_known` (whether there IS an answer) rather than being left
 // to guess from intent.
-func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string) wire.Check {
+func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, start time.Time, maxAge time.Duration, activeDefaultID string, matrix *awgmgr.MonitoringMatrix) wire.Check {
 	name := tunnelCheckPrefix + tu.ID
 	details := map[string]any{
 		"tunnel_id":            tu.ID,
@@ -224,6 +233,18 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 		details["routes_dns_hr"] = rc.DNSHR
 		details["routes_static"] = rc.Static
 	}
+	// Задержка из матрицы -- ЧЕРЕЗ туннель, в отличие от ping-check, который
+	// с целью вроде 8.8.8.8 меряет аплинк. Кладётся рядом, а не вместо:
+	// измерения разные, и подменять одно другим значило бы потерять оба.
+	// Ключа нет вовсе, когда данных нет: пустое значение хуже отсутствия --
+	// ноль на экране читается как «мгновенно».
+	if matrix != nil {
+		if ms, ok := matrix.BestLatency(tu.ID); ok {
+			details["matrix_latency_ms"] = ms
+			details["matrix_updated_at"] = matrix.UpdatedAt
+		}
+	}
+
 	// pingCheck data: prefer the dedicated /api/pingcheck/status (richer)
 	// over the brief object embedded in /api/tunnels/all.
 	if pc.TunnelID != "" {
