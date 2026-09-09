@@ -25,6 +25,13 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	staticHandler := staticCacheHeaders(http.StripPrefix("/miniapp/", http.FileServer(http.FS(staticFS))))
 	mux.Handle("GET /miniapp/", reqID(staticHandler))
 
+	// The bare domain has no handler of its own, so Go's mux answers a plain
+	// "404 page not found" — from the outside that is indistinguishable from
+	// an outage. Send it to the app instead, same idiom as GET /dashboard.
+	// "{$}" anchors the pattern to the exact root: a bare "/" would turn this
+	// into a catch-all and swallow every genuine 404.
+	mux.Handle("GET /{$}", reqID(http.RedirectHandler("/miniapp/", http.StatusFound)))
+
 	mux.Handle("POST /v1/miniapp/session", reqID(miniappSessionHandler(d)))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
