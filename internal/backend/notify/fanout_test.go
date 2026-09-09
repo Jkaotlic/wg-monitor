@@ -118,3 +118,91 @@ func TestFanout_NobodyToNotify(t *testing.T) {
 		t.Fatalf("доставлено %d, ждали ноль", n)
 	}
 }
+
+type fakeKeyboardSender struct {
+	fakeSender
+	nextID int64
+}
+
+func (f *fakeKeyboardSender) SendMessageWithKeyboard(_ context.Context, chatID int64, _ *int64, _, _ string, _ *int64, _ any) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.fail[chatID]; ok {
+		return 0, err
+	}
+	f.nextID++
+	f.sent = append(f.sent, chatID)
+	return f.nextID, nil
+}
+
+func TestFanout_SendTrackedRemembersEachMessage(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &fakeKeyboardSender{}
+	n, err := NewFanout(d, s, quietLogger()).SendTracked(context.Background(), router, "tunnel_awg0", "линия упала", "HTML", "кнопки")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("доставлено %d, ждали двоим", n)
+	}
+
+	got, err := d.AlertMessages().List(router, "tunnel_awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[1001] == 0 || got[1002] == 0 {
+		t.Fatalf("карта сообщений=%v, у каждого получателя должно быть своё", got)
+	}
+	if got[1001] == got[1002] {
+		t.Fatal("id сообщений разных людей не могут совпадать")
+	}
+}
+
+// «Починилось» приходит ответом на собственную тревогу каждого.
+func TestFanout_ReplyToEachUsesOwnMessage(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AlertMessages().Put(router, "tunnel_awg0", 1001, 555); err != nil {
+		t.Fatal(err)
+	}
+	// У 1002 сообщения нет: он подключился позже. Он обязан получить
+	// «починилось» обычным сообщением, а не остаться без него.
+
+	s := &replyCapturingSender{replies: map[int64]*int64{}}
+	if err := NewFanout(d, s, quietLogger()).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(s.replies) != 2 {
+		t.Fatalf("получателей=%d, ждали двоих", len(s.replies))
+	}
+	if s.replies[1001] == nil || *s.replies[1001] != 555 {
+		t.Fatalf("у 1001 replyTo=%v, ждали 555", s.replies[1001])
+	}
+	if s.replies[1002] != nil {
+		t.Fatalf("у 1002 replyTo=%v, ждали без привязки", *s.replies[1002])
+	}
+}
+
+type replyCapturingSender struct {
+	mu      sync.Mutex
+	replies map[int64]*int64
+}
+
+func (s *replyCapturingSender) SendMessage(_ context.Context, chatID int64, _ *int64, _, _ string, replyTo *int64) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.replies[chatID] = replyTo
+	return 1, nil
+}

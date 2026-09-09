@@ -136,3 +136,16 @@ CREATE TABLE IF NOT EXISTS telegram_unreachable (
     last_error       TEXT      NOT NULL,
     updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Кому какое сообщение о поломке ушло. До переезда в личку адрес был один
+-- (тема группы), и хватало единственного state.last_alert_msg_id: на него
+-- отвечало «восстановилось» и в него дописывал статус мини-апп. Получателей
+-- стало несколько, и один id перестал что-либо значить.
+CREATE TABLE IF NOT EXISTS alert_messages (
+    user_id          INTEGER   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    check_name       TEXT      NOT NULL,
+    telegram_user_id INTEGER   NOT NULL,
+    message_id       INTEGER   NOT NULL,
+    sent_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, check_name, telegram_user_id)
+);
