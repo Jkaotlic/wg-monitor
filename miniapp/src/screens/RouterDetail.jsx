@@ -7,7 +7,8 @@ import {
   ackIncident,
   muteIncident,
 } from '../api.js'
-import { RouterDevice, orderChecks, lampKey, antennaOverflow } from '../components/RouterDevice.jsx'
+import { orderChecks } from '../checksOrder.js'
+import { TrafficPath } from '../components/TrafficPath.jsx'
 import { routerHeadline, linesSummary } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -539,25 +540,6 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
 }
 
 
-// Легенда панели: пять ламп подписаны на корпусе четырьмя буквами, и без
-// расшифровки они читаются как шифр. Порядок и набор -- те же, что у ламп
-// (orderChecks), чтобы легенда не разошлась с прибором.
-function DeviceLegend({ checks }) {
-  const rows = orderChecks(checks ?? [])
-  if (rows.length === 0) return null
-  return (
-    <ul class="legend card list-reset">
-      {rows.map((c) => (
-        <li key={c.check_name} class={`legend-item${c.status === 'fail' ? ' legend-item-fail' : ''}`}>
-          <span class="legend-dot" />
-          <span class="legend-key">{lampKey(c.check_name)}</span>
-          <span class="legend-label">{legendLabel(c.check_name)}</span>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
 export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -582,8 +564,8 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         setChecks(c.checks ?? [])
         setTunnels(c.tunnels ?? [])
         // A backend older than this phase sends no `traffic` at all; trafficLabel
-        // and RouterDevice both read a missing one as "unknown", which is the
-        // honest answer rather than a defaulted-away one.
+        // and the traffic path both read a missing one as "unknown", which is
+        // the honest answer rather than a defaulted-away one.
         setTraffic(c.traffic ?? null)
       })
       .catch((err) => setError(err.message))
@@ -614,7 +596,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
     setIncidents((prev) => prev.map((inc) => (inc.check_name === updated.check_name ? updated : inc)))
   }
 
-  // The lamps' own set, in the lamps' own order (RouterDevice owns both). The
+  // Служебные проверки в общем порядке (checksOrder владеет им). Строки
   // `tunnel_*` rows that `checks[]` also carries are filtered there -- they are the
   // antennas and the Туннели block above, and listing them here as well would show
   // every tunnel three times. Computed up here (ahead of the error/loading early
@@ -691,24 +673,22 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   const headline = routerHeadline({ router, traffic, incidents })
   const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
   const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
-  const overflow = antennaOverflow(tunnels.length)
 
   return (
     <div class="screen">
-      {/* Прибор живёт внутри шапки: рисунок и вывод под ним -- одно
+      {/* Схема живёт внутри шапки: рисунок и вывод под ним -- одно
           высказывание, а не картинка и подпись к ней. Холодная подсветка
           включается тем же признаком, что и тон метки. */}
       <Hero cold={headline.cold}>
         <StateTag tone={headline.tone}>{headline.tag}</StateTag>
         <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>
         <p class="traffic-detail" style="margin-top:6px">{headline.verdict}</p>
-        <RouterDevice tunnels={tunnels} traffic={traffic} checks={checks ?? []} name={router.nickname} />
+        <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} />
         <div class="hero-bar">
           <span>
             {headline.stale
               ? 'показания на момент последнего отчёта'
               : linesSummary(liveCount, tunnels.length)}
-            {overflow > 0 ? ` · ${overflow} не поместились на корпус` : ''}
           </span>
           {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}
         </div>
@@ -764,7 +744,6 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         </section>
       )}
 
-      <DeviceLegend checks={checks} />
 
       <div style="margin-top:20px">
         <NavCard title="Туннели и резерв" note={`${tunnels.length} лин.`} onClick={() => onTab?.('tunnels')} />

@@ -17,7 +17,7 @@ export function sortByUrgency(routers = []) {
   })
 }
 
-// Пять служб в порядке ламп прибора (LAMP_ORDER в RouterDevice.jsx). Порядок
+// Пять служб в общем порядке (CHECK_ORDER в checksOrder.js). Порядок
 // фиксирован: точки, меняющиеся местами между обновлениями, перестают быть
 // прибором.
 const LAMPS = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels']

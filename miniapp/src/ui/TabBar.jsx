@@ -1,3 +1,5 @@
+import { tabLabel } from '../nav.js'
+
 // Нижняя навигация. Четыре таба -- четыре вопроса оператора: что с роутером,
 // куда идёт трафик, что показывает диагностика, что происходило раньше.
 const ICONS = {
@@ -28,12 +30,7 @@ const ICONS = {
   ),
 }
 
-const LABELS = {
-  router: 'Роутер',
-  tunnels: 'Туннели',
-  diag: 'Диагностика',
-  events: 'События',
-}
+
 
 export function TabBar({ tab, onTab, tabs }) {
   return (

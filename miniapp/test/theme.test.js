@@ -38,16 +38,11 @@ describe('контраст палитры', () => {
     expect(ratio(PALETTE.onSig, PALETTE.sig)).toBeGreaterThanOrEqual(4.5)
   })
 
-  // Погашенный светодиод -- графика на корпусе, а не текст: ему хватает 3:1.
-  // Планка ниже названа явно, чтобы никто не «починил» её до 4.5 по привычке.
-  it('погашенный светодиод отличим от корпуса', () => {
-    expect(ratio(PALETTE.ledOff, PALETTE.surf)).toBeGreaterThanOrEqual(1.4)
-  })
 })
 
 describe('имена CSS-переменных', () => {
   it('переводит camelCase в kebab-case с префиксом', () => {
-    expect(cssVarName('ledOff')).toBe('--led-off')
+    expect(cssVarName('onSig')).toBe('--on-sig')
     expect(cssVarName('bg')).toBe('--bg')
   })
 })

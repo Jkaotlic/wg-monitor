@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -129,5 +129,22 @@ describe('переименование таба маршрутов в тунне
   it('незнакомый таб по-прежнему игнорируется', () => {
     const s = navReducer({ tab: 'router' }, { type: 'tab', tab: 'нечто' })
     expect(s.tab).toBe('router')
+  })
+})
+
+// Ключи вкладок НЕ меняются: deep-link из уже отправленных тревог живёт в
+// переписке месяцами, и открыть по нему не тот экран было бы хуже, чем не
+// открыть вовсе. Меняются только подписи -- слова для человека.
+describe('подписи вкладок', () => {
+  it('человеческие, а ключи прежние', () => {
+    expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events'])
+    expect(tabLabel('router')).toBe('Сейчас')
+    expect(tabLabel('tunnels')).toBe('Линии')
+    expect(tabLabel('diag')).toBe('Проверки')
+    expect(tabLabel('events')).toBe('Что было')
+  })
+
+  it('незнакомый ключ не ломает вёрстку', () => {
+    expect(tabLabel('нечто')).toBe('нечто')
   })
 })

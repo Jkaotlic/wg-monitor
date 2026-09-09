@@ -15,9 +15,8 @@
 
    Компоненты берут только семантические токены (--page, --surface,
    --text, --muted, --accent, --ok, --warn, --danger), никогда hex.
-   Единственное исключение -- материал прибора (--*-on-metal ниже и
-   RouterDevice.jsx): физическая пластмасса и светодиоды не
-   перекрашиваются вслед за темой телефона.
+   Прибор с портами и его «материал» удалены вместе с самим прибором:
+   исключений из семантических токенов больше нет.
    ============================================================ */
 :root {
   /* Дизайн-система проекта Claude Design (screens/ui.css). Тема одна --
@@ -34,7 +33,6 @@
   --ok: #5fd08a;
   --warn: #ffbf3d;
   --bad: #ff6a58;
-  --led-off: #39424a;
   --on-sig: #0d1204;
 
   /* Псевдонимы прежних имён. Экраны переезжают на новые токены по одному, и
@@ -53,14 +51,6 @@
   --border-strong: rgba(255,255,255,0.16);
   --shadow-card: none;
 
-  /* Материал прибора: корпус, светодиоды и шелкография RouterDevice.jsx.
-     Это не тема, а физика -- светодиод не меняет цвет от настроек телефона.
-     Значения приведены к сигнальной палитре дизайн-системы. */
-  --status-online-on-metal: #5fd08a;
-  --status-alert-on-metal: #ff6a58;
-  --status-offline-on-metal: #8f9ea8;
-  --status-sleeping-on-metal: #ffbf3d;
-  --status-alert-ink-on-metal: #ff9184;
 
   /* Spacing (4px step) */
   --sp-1: 4px;
@@ -835,128 +825,6 @@ body {
   padding-right: var(--sp-2);
 }
 
-/* ============================================================
-   The instrument -- RouterDevice.jsx
-   ------------------------------------------------------------
-   Ported from the operator-approved mockup (docs/superpowers/
-   specs/assets/2026-07-17-router-device-mockup-a.html), whose
-   .mA-* rules are renamed .device-* here and un-scoped from
-   [data-mock="A"]. Only the instrument's own rules moved: that
-   file also mirrored card/badge/row/button under .mA-*, and
-   those already exist above as the real component vocabulary.
-
-   Material palette: the plastic and metal hexes in the JSX are
-   NOT tokens on purpose -- a physical shell does not re-theme.
-   They are picked to hold their reading against both a white and
-   a near-black --surface (mid-slate body + light rim highlight).
-
-   Every *state* colour still comes from the semantic tokens, but
-   which family depends on what the element is painted ON, because
-   this drawing is the one place both backgrounds exist at once:
-     - ON the material (lamps in their recess, collars on the
-       shell, silkscreen on the panel) -> --status-*-on-metal, the
-       fixed anchors; the material never re-themes, so neither may
-       the state colour riding it.
-     - ON --surface (the antenna fields and tips, which are drawn
-       above the shell, and the traffic path) -> the plain
-       --ok / --danger / --accent / --muted, whose whole contract is
-       to self-correct against --surface.
-   The token block up top carries the measured ratios for both.
-   ============================================================ */
-.device-stage {
-  padding: var(--sp-3) 0 var(--sp-2);
-}
-
-.device {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-/* Screen-printed lettering on the shell: small, tracked,
-   low-contrast -- the way a real panel is actually silkscreened.
-   These sit ON the dark shell, so they keep the shell's own greys
-   rather than a --surface-relative token; the legend plate below
-   the drawing carries the readable version. This grey measures
-   7.55:1 on the panel, and is the ink weight the alert print below
-   is matched to. */
-.device-print {
-  font-family: var(--font-mono);
-  font-size: 8px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  fill: #b4bcc8;
-}
-
-/* Red pigment, same ink weight (6.86:1 vs the plain print's 7.55:1).
-   It is text on the fixed panel, so it takes the -ink anchor and not
-   --status-alert, which is mixed for --surface and fell to 2.32:1
-   here in light mode. */
-.device-print-alert {
-  fill: var(--status-alert-ink-on-metal);
-}
-
-.device-print-port {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 600;
-  fill: #c4ccd8;
-}
-
-.device-print-iface {
-  font-family: var(--font-mono);
-  font-size: 7.5px;
-  fill: #7b8391;
-}
-
-/* Laser-etched asset label between the antennas. */
-.device-etch {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  fill: #737b89;
-}
-
-/* ---------------- Traffic path ----------------
-   New in Phase 4; the mockup had no such element. It answers
-   "where do packets actually leave", which is a question about
-   direction, not health -- so it takes the accent hue, not a
-   material one. --accent is the interface token, hardened for use as
-   ink directly on --surface (see the token block above), and the
-   casing underneath it is what guarantees that is the background
-   it actually gets: the path crosses the mid-slate mast and the
-   field arcs, where a raw accent would muddy. The casing paints
-   --surface behind the line, so the hardened contrast holds. */
-.device-path-casing {
-  fill: none;
-  stroke: var(--page);
-  stroke-width: 6.4;
-  stroke-linecap: round;
-}
-
-.device-path {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 2.6;
-  stroke-linecap: round;
-}
-
-/* The honest fourth answer. Dashed, muted, no arrowhead: it ends
-   in a question mark instead of at a tunnel. */
-.device-path-unknown {
-  stroke: var(--muted);
-  stroke-width: 2.2;
-  stroke-dasharray: 5 6;
-}
-
-.device-qmark {
-  font-family: var(--font-body);
-  font-size: 17px;
-  font-weight: 700;
-  fill: var(--muted);
-}
-
 /* ---------------- Motion ----------------
    Only where it carries a reading: the fault beacon and the live
    egress. Nothing decorative. Every lamp still reads correctly
@@ -1268,56 +1136,6 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: var(--sp-2);
-}
-
-.legend {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-2) var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  margin-bottom: var(--sp-5);
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-2);
-  font-size: var(--fs-sm);
-  color: var(--text);
-}
-
-.legend-item-fail {
-  color: var(--danger);
-  font-weight: 600;
-}
-
-.legend-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex: none;
-  background: var(--ok);
-}
-
-.legend-item-fail .legend-dot {
-  background: var(--danger);
-}
-
-.legend-key {
-  width: 40px;
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--muted);
-}
-
-.legend-item-fail .legend-key {
-  color: var(--danger);
-}
-
-.legend-label {
-  min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .action-grid {
