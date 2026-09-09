@@ -4191,3 +4191,57 @@ func TestImportQueuedViewsExplainLongImportCheck(t *testing.T) {
 		})
 	}
 }
+
+// Кнопка под тревогой в личке владельца обязана работать: уведомления
+// переехали туда, и у сообщения нет ни темы, ни чата роутера. Доступ при
+// этом по-прежнему проверяется по человеку, а не по тому, что чат приватный.
+func TestACL_OwnerPrivateChatAllowed(t *testing.T) {
+	d, uid := newTestDB(t)
+	const owner = int64(555001)
+	const staleThread = int64(4242)
+	// У роутера осталась тема с прежних времён -- именно она раньше и
+	// отклоняла нажатия из лички.
+	if err := d.Users().UpdateThreadID(uid, staleThread); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-dm-owner",
+		From:    tg.User{ID: owner},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: owner}, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	if !r.aclAllow(context.Background(), q, Args{UserID: uid}) {
+		t.Fatalf("нажатие из лички владельца отклонено, ответы: %v", f.answers)
+	}
+}
+
+// Чужая личка остаётся закрытой: приватность чата сама по себе ничего не
+// разрешает.
+func TestACL_StrangerPrivateChatRejected(t *testing.T) {
+	d, uid := newTestDB(t)
+	const owner = int64(555001)
+	const stranger = int64(777002)
+	if err := d.Users().SetTelegramUserID(uid, owner); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+
+	q := &tg.CallbackQuery{
+		ID:      "cbk-dm-stranger",
+		From:    tg.User{ID: stranger},
+		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: stranger}, Text: "🔴"},
+		Data:    "silence:" + itoa(uid) + ":awg_handshake:1h",
+	}
+	if r.aclAllow(context.Background(), q, Args{UserID: uid}) {
+		t.Fatal("нажатие постороннего из своей лички обязано быть отклонено")
+	}
+}

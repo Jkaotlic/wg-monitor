@@ -327,7 +327,13 @@ func newImportToken() string {
 // what — important since opkg_upgrade is enabled in the menu.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	adminPrivatePanel := r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))
-	if !r.chatAllowed(q.Message.Chat.ID) && !adminPrivatePanel {
+	// Кнопка под тревогой в собственной личке -- законный источник нажатия:
+	// уведомления переехали из тем группы туда. Пропуск узкий: админские
+	// панели сюда не попадают (у них своё условие выше), а право на действие
+	// с роутером всё равно проверяет aclAllow по человеку.
+	routerButtonInDM := q.Message.Chat.ID == q.From.ID &&
+		!strings.HasPrefix(q.Data, "panel:") && !strings.HasPrefix(q.Data, "access:")
+	if !r.chatAllowed(q.Message.Chat.ID) && !adminPrivatePanel && !routerButtonInDM {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "wrong chat")
 		slog.Warn("rejected callback (chat-id)", "from", q.From.ID, "chat", q.Message.Chat.ID, "data", q.Data)
 		return
@@ -717,14 +723,19 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 		slog.Warn("acl: user lookup failed, rejecting", "router_user_id", args.UserID, "err", err)
 		return false
 	}
-	if user.TelegramThreadID != nil &&
+	// Личка человека -- законный источник нажатия: уведомления переехали
+	// туда, и у такого сообщения нет ни темы роутера, ни его чата. Сам по
+	// себе приватный чат ничего не разрешает: доступ проверяется ниже по
+	// человеку (RouterAccessRole), как и для нажатий из группы.
+	isOwnDM := q.Message.Chat.ID == q.From.ID && q.Message.MessageThreadID == nil
+	if !isOwnDM && user.TelegramThreadID != nil &&
 		(q.Message.MessageThreadID == nil || *q.Message.MessageThreadID != *user.TelegramThreadID) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не топик этого роутера")
 		slog.Warn("acl: rejected (foreign topic)",
 			"from", q.From.ID, "router_user_id", args.UserID, "thread", q.Message.MessageThreadID, "owner_thread", *user.TelegramThreadID, "data", q.Data)
 		return false
 	}
-	if user.TelegramThreadID != nil && q.Message.Chat.ID != user.EffectiveTelegramChatID(r.cfg.ChatID) {
+	if !isOwnDM && user.TelegramThreadID != nil && q.Message.Chat.ID != user.EffectiveTelegramChatID(r.cfg.ChatID) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не чат этого роутера")
 		slog.Warn("acl: rejected (foreign chat)",
 			"from", q.From.ID, "router_user_id", args.UserID, "chat", q.Message.Chat.ID, "owner_chat", user.EffectiveTelegramChatID(r.cfg.ChatID), "data", q.Data)
@@ -768,6 +779,12 @@ func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) b
 
 func (r *Router) rejectBeforeRouterTopicExists(ctx context.Context, q *tg.CallbackQuery, args Args, user *db.User) bool {
 	if user == nil || user.TelegramThreadID != nil || !routerTopicRequiredBeforeNonAdminCallback(args.Action) {
+		return false
+	}
+	// Из лички тема не нужна и не будет: уведомления переехали туда, а
+	// сообщение и так пришло лично тому, чей доступ уже проверен. Проверка
+	// стерегла нажатия в группе до того, как у роутера появилась своя тема.
+	if q.Message.Chat.ID == q.From.ID && q.Message.MessageThreadID == nil {
 		return false
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала создай топик роутера")

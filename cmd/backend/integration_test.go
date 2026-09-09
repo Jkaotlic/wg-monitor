@@ -71,6 +71,11 @@ func TestStage2EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Уведомления идут в личку владельца: без привязки слать некому, и
+	// тревога никуда не уйдёт -- это и есть новое поведение.
+	if err := d.Users().SetTelegramUserID(uid, 4242); err != nil {
+		t.Fatal(err)
+	}
 
 	// 3. Build TG client + dispatcher + callbacks router + realert poller.
 	// BaseURL + Token + "/" + method → srv.URL + "/bot" + "t" + "/sendMessage"
@@ -113,19 +118,21 @@ func TestStage2EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.TelegramThreadID == nil {
-		t.Fatal("HARD alert should bind/create router topic before callback")
+	// Тему больше не создаём: тревога ушла в личку владельца, и нажатие
+	// придёт оттуда же.
+	if u.TelegramThreadID != nil {
+		t.Fatalf("тема роутера больше не заводится, получили %v", *u.TelegramThreadID)
 	}
 
 	// 5. Simulate callback Silence(1h).
+	// Нажатие приходит из лички владельца -- туда же, куда ушла тревога.
 	q := &tg.CallbackQuery{
 		ID:   "cbk-1",
-		From: tg.User{ID: 555},
+		From: tg.User{ID: 4242},
 		Message: tg.Message{
-			MessageID:       1001,
-			Chat:            tg.Chat{ID: -100},
-			MessageThreadID: u.TelegramThreadID,
-			Text:            hardText,
+			MessageID: 1001,
+			Chat:      tg.Chat{ID: 4242},
+			Text:      hardText,
 		},
 		Data: fmt.Sprintf("silence:%d:awg_handshake:1h", uid),
 	}

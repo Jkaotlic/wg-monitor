@@ -122,99 +122,42 @@ func newDB(t *testing.T) *db.DB {
 	return d
 }
 
-func TestDispatcherCreatesTopicLazily(t *testing.T) {
-	d := newDB(t)
-	tok := "0000000000000000000000000000000000000000000000000000000000000000"
-	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-	tg := &fakeTG{topicID: 7777}
-	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
 
-	tr := state.Transition{
-		Kind: state.Hard,
-		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
-	}
-	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-	if len(tg.sentWithKeyboard) != 1 {
-		t.Fatalf("sentWithKeyboard %d messages", len(tg.sentWithKeyboard))
-	}
-	if tg.sentWithKeyboard[0].threadID == nil || *tg.sentWithKeyboard[0].threadID != 7777 {
-		t.Fatalf("thread: %v", tg.sentWithKeyboard[0].threadID)
-	}
-	u, _ := d.Users().GetByNickname("vasya")
-	if u.TelegramThreadID == nil || *u.TelegramThreadID != 7777 {
-		t.Fatalf("thread id not persisted: %+v", u.TelegramThreadID)
-	}
-}
-
-func TestDispatcherHardPersistsStateWhenTopicCreateFails(t *testing.T) {
+func TestDispatcherHardPersistsStateWhenSendFails(t *testing.T) {
 	d := newDB(t)
 	tok := "9999000000000000000000000000000000000000000000000000000000000000"
-	uid, _ := d.Users().Insert("topicfail", tok, "1.1.1.1", "awg0")
-	tg := &fakeTG{topicErr: errStub("telegram rate limited")}
-	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	uid, _ := d.Users().Insert("sendfail", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1105); err != nil {
+		t.Fatal(err)
+	}
+	// Единственному получателю доставить не удалось -- значит тревога не
+	// ушла никому и обязана быть повторена. Состояние при этом сохраняется:
+	// иначе следующий fail-репорт снова пересёк бы порог и выдал дубль.
+	tgc := &fakeTG{sendErrOnce: errStub("telegram rate limited")}
+	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
 
 	hardSince := time.Now().Add(-2 * time.Minute).UTC()
 	tr := state.Transition{
 		Kind: state.Hard,
 		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: &hardSince},
 	}
-	err := disp.Handle(context.Background(), uid, "topicfail", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"}))
+	err := disp.Handle(context.Background(), uid, "sendfail", "awg_handshake", tr,
+		chk("awg_handshake", "fail", map[string]any{"error": "details"}))
 	if err == nil {
-		t.Fatal("expected topic create error")
+		t.Fatal("недоставленная никому тревога обязана вернуть ошибку")
 	}
 	saved, getErr := d.State().Get(uid, "awg_handshake")
 	if getErr != nil {
-		t.Fatalf("hard state should be saved even when Telegram topic creation fails: %v", getErr)
+		t.Fatalf("состояние обязано сохраниться даже при сбое Telegram: %v", getErr)
 	}
 	if saved.CurrentStatus != "hard" || saved.ConsecutiveFails != 3 {
-		t.Fatalf("hard state not persisted: %+v", saved)
+		t.Fatalf("состояние не сохранено: %+v", saved)
 	}
-	if saved.LastAlertAt != nil || saved.LastAlertMsgID != nil {
-		t.Fatalf("failed Telegram send must not mark alert as sent: %+v", saved)
+	if saved.LastAlertAt != nil {
+		t.Fatalf("несостоявшаяся отправка не имеет права помечать тревогу отправленной: %+v", saved)
 	}
 }
 
-func TestDispatcherRecoveryRepliesToHardMessage(t *testing.T) {
-	d := newDB(t)
-	tok := "1111111111111111111111111111111111111111111111111111111111111111"
-	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-	d.Users().UpdateThreadID(uid, 4242)
-	hardMsgID := int64(999)
-	d.State().Save(uid, "awg_handshake", db.IncidentState{
-		CurrentStatus: "hard", LastAlertMsgID: &hardMsgID, HardSince: ptrT(time.Now().Add(-7 * time.Minute)),
-	})
-	tg := &fakeTG{}
-	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
-
-	tr := state.Transition{
-		Kind: state.Recovery,
-		Next: db.IncidentState{CurrentStatus: "ok"},
-	}
-	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, chk("awg_handshake", "ok", nil)); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-	if len(tg.sent) != 1 {
-		t.Fatalf("sent: %d", len(tg.sent))
-	}
-	if tg.sent[0].replyTo == nil || *tg.sent[0].replyTo != 999 {
-		t.Fatalf("replyTo: %v", tg.sent[0].replyTo)
-	}
-	if !strings.Contains(tg.sent[0].text, "снова в норме") && !strings.Contains(tg.sent[0].text, "снова на связи") && !strings.Contains(tg.sent[0].text, "снова работает") && !strings.Contains(tg.sent[0].text, "восстановился") && !strings.Contains(tg.sent[0].text, "снова отвечает") && !strings.Contains(tg.sent[0].text, "снова доступен") && !strings.Contains(tg.sent[0].text, "снова доступны") {
-		t.Fatalf("text missing recovery headline: %s", tg.sent[0].text)
-	}
-	savedState, err := d.State().Get(uid, "awg_handshake")
-	if err != nil {
-		t.Fatalf("get state: %v", err)
-	}
-	if savedState.LastAlertMsgID != nil {
-		t.Fatalf("LastAlertMsgID should be nil after recovery, got %d", *savedState.LastAlertMsgID)
-	}
-	if savedState.CurrentStatus != "ok" {
-		t.Fatalf("status should be ok after recovery, got %s", savedState.CurrentStatus)
-	}
-}
 
 func TestDispatcherSoftFlapNoTGButCounted(t *testing.T) {
 	d := newDB(t)
@@ -241,6 +184,9 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 	d := newDB(t)
 	tok := "3333333333333333333333333333333333333333333333333333333333333333"
 	uid, _ := d.Users().Insert("bob", tok, "2.2.2.2", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1101); err != nil {
+		t.Fatal(err)
+	}
 	ftg := &fakeTG{topicID: 5555}
 	disp := NewDispatcher(d, ftg, Config{ChatID: -200, FailThreshold: 3, RecoveryThreshold: 2})
 
@@ -286,36 +232,6 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 	}
 }
 
-func TestDispatcherHardUsesRouterTelegramChatID(t *testing.T) {
-	d := newDB(t)
-	uid, err := d.Users().Insert("tenant", "tok", "1.1.1.1", "awg0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Users().UpdateTelegramTopic(uid, -200, 555); err != nil {
-		t.Fatal(err)
-	}
-	ftg := &fakeTG{}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
-
-	tr := state.Transition{
-		Kind: state.Hard,
-		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
-	}
-	if err := disp.Handle(context.Background(), uid, "tenant", "awg_handshake", tr, chk("awg_handshake", "fail", nil)); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-
-	if len(ftg.sentWithKeyboard) != 1 {
-		t.Fatalf("sentWithKeyboard=%d, want 1", len(ftg.sentWithKeyboard))
-	}
-	if ftg.sentWithKeyboard[0].chatID != -200 {
-		t.Fatalf("chatID=%d, want -200", ftg.sentWithKeyboard[0].chatID)
-	}
-	if tid := ftg.sentWithKeyboard[0].threadID; tid == nil || *tid != 555 {
-		t.Fatalf("threadID=%v, want 555", tid)
-	}
-}
 
 func TestEnsureTopicCreatesInRouterTelegramChatID(t *testing.T) {
 	d := newDB(t)
@@ -464,50 +380,6 @@ type errStub string
 
 func (e errStub) Error() string { return string(e) }
 
-// TestDispatcherSelfHealsStaleTopic: when the cached telegram_thread_id
-// points at a topic that no longer exists in TG (operator deleted it),
-// the first SendMessage* returns a 400 "message thread not found" and the
-// dispatcher must clear the id, recreate the topic, and resend once
-// against the fresh id. Covers scenario "тема была и пропала".
-func TestDispatcherSelfHealsStaleTopic(t *testing.T) {
-	d := newDB(t)
-	tok := "7777777777777777777777777777777777777777777777777777777777777777"
-	uid, _ := d.Users().Insert("frank", tok, "1.1.1.1", "awg0")
-	const staleID, freshID = int64(1111), int64(9999)
-	if err := d.Users().UpdateThreadID(uid, staleID); err != nil {
-		t.Fatal(err)
-	}
-	ftg := &fakeTG{
-		topicID:     freshID,
-		sendErrOnce: &tg.APIError{Method: "sendMessage", Description: "Bad Request: message thread not found", Code: 400},
-	}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
-
-	tr := state.Transition{
-		Kind: state.Hard,
-		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
-	}
-	if err := disp.Handle(context.Background(), uid, "frank", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "x"})); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-
-	if got := len(ftg.sentWithKeyboard); got != 2 {
-		t.Fatalf("expected 2 send attempts (stale + retry), got %d", got)
-	}
-	if tid := ftg.sentWithKeyboard[0].threadID; tid == nil || *tid != staleID {
-		t.Fatalf("first send threadID: want %d, got %v", staleID, tid)
-	}
-	if tid := ftg.sentWithKeyboard[1].threadID; tid == nil || *tid != freshID {
-		t.Fatalf("retry threadID: want %d, got %v", freshID, tid)
-	}
-	u, _ := d.Users().GetByNickname("frank")
-	if u.TelegramThreadID == nil || *u.TelegramThreadID != freshID {
-		t.Fatalf("DB thread_id after heal: want %d, got %v", freshID, u.TelegramThreadID)
-	}
-	if ftg.topicCallCount != 1 {
-		t.Fatalf("CreateForumTopic call count: want 1 (only the heal), got %d", ftg.topicCallCount)
-	}
-}
 
 // TestDispatcherSurfacesNonHealableTGError: a TG error that is NOT a
 // stale-topic signal (e.g. 403 forbidden, 429 rate-limit, malformed) must
@@ -516,6 +388,9 @@ func TestDispatcherSurfacesNonHealableTGError(t *testing.T) {
 	d := newDB(t)
 	tok := "8888888888888888888888888888888888888888888888888888888888888888"
 	uid, _ := d.Users().Insert("grace", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1104); err != nil {
+		t.Fatal(err)
+	}
 	const stableID = int64(5555)
 	_ = d.Users().UpdateThreadID(uid, stableID)
 	ftg := &fakeTG{
@@ -703,6 +578,9 @@ func TestDispatcherHardIncludesMiniAppButtonWhenConfigured(t *testing.T) {
 	d := newDB(t)
 	tok := "1111000000000000000000000000000000000000000000000000000000000000"
 	uid, _ := d.Users().Insert("miniapp-router", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1102); err != nil {
+		t.Fatal(err)
+	}
 	tgc := &fakeTG{topicID: 5555}
 	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://wg.example.test"})
 
@@ -735,6 +613,9 @@ func TestDispatcherHardOmitsMiniAppButtonWhenNotConfigured(t *testing.T) {
 	d := newDB(t)
 	tok := "2222000000000000000000000000000000000000000000000000000000000000"
 	uid, _ := d.Users().Insert("no-miniapp-router", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1103); err != nil {
+		t.Fatal(err)
+	}
 	tgc := &fakeTG{topicID: 6666}
 	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
 
@@ -752,5 +633,90 @@ func TestDispatcherHardOmitsMiniAppButtonWhenNotConfigured(t *testing.T) {
 				t.Fatalf("unexpected web_app button: %+v", btn)
 			}
 		}
+	}
+}
+
+// recordingSink -- счётчик рассылки: тесту важно, кому ушло, а не как.
+type recordingSink struct {
+	tracked  []int64 // routerUserID для каждой отправки тревоги
+	replies  []int64 // routerUserID для каждого «починилось»
+	checks   []string
+	delivers int
+}
+
+func (r *recordingSink) SendTracked(_ context.Context, routerUserID int64, checkName, _, _ string, _ *tg.InlineKeyboardMarkup) (int, error) {
+	r.tracked = append(r.tracked, routerUserID)
+	r.checks = append(r.checks, checkName)
+	return r.delivers, nil
+}
+
+func (r *recordingSink) ReplyToEach(_ context.Context, routerUserID int64, checkName, _, _ string) error {
+	r.replies = append(r.replies, routerUserID)
+	r.checks = append(r.checks, checkName)
+	return nil
+}
+
+// Тревога уходит рассылкой по личкам, а не в тему группы.
+func TestDispatcherHardFansOutToDMs(t *testing.T) {
+	d := newDB(t)
+	tok := "8888000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("router-a", tok, "1.1.1.1", "awg0")
+	tgc := &fakeTG{}
+	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	sink := &recordingSink{delivers: 2}
+	disp.SetNotifySink(sink)
+
+	hardSince := time.Now().Add(-2 * time.Minute).UTC()
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: &hardSince},
+	}
+	if err := disp.Handle(context.Background(), uid, "router-a", "awg_handshake", tr,
+		chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sink.tracked) != 1 || sink.tracked[0] != uid {
+		t.Fatalf("рассылка=%v, ждали одну по роутеру %d", sink.tracked, uid)
+	}
+	// Тревога с кнопками уходит через SendMessageWithKeyboard, поэтому
+	// проверяем оба канала: пустой `sent` сам по себе ничего не доказывает.
+	if len(tgc.sent) != 0 || len(tgc.sentWithKeyboard) != 0 {
+		t.Fatalf("в тему группы ушло %d+%d сообщений, ждали ноль",
+			len(tgc.sent), len(tgc.sentWithKeyboard))
+	}
+	if len(tgc.topicCalls) != 0 {
+		t.Fatalf("тему создавали %d раз, при рассылке в личку она не нужна", len(tgc.topicCalls))
+	}
+}
+
+// «Починилось» приходит ответом каждому, и переписка по проверке забывается.
+func TestDispatcherRecoveryRepliesToEach(t *testing.T) {
+	d := newDB(t)
+	tok := "7777000000000000000000000000000000000000000000000000000000000000"
+	uid, _ := d.Users().Insert("router-b", tok, "1.1.1.1", "awg0")
+	if err := d.AlertMessages().Put(uid, "awg_handshake", 1001, 555); err != nil {
+		t.Fatal(err)
+	}
+	tgc := &fakeTG{}
+	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	sink := &recordingSink{}
+	disp.SetNotifySink(sink)
+
+	tr := state.Transition{Kind: state.Recovery, Next: db.IncidentState{CurrentStatus: "ok"}}
+	if err := disp.Handle(context.Background(), uid, "router-b", "awg_handshake", tr,
+		chk("awg_handshake", "ok", nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sink.replies) != 1 || sink.replies[0] != uid {
+		t.Fatalf("ответов=%v, ждали один по роутеру %d", sink.replies, uid)
+	}
+	left, err := d.AlertMessages().List(uid, "awg_handshake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("переписка=%v, после «починилось» её надо забыть", left)
 	}
 }

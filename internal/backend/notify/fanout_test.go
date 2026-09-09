@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -205,4 +206,24 @@ func (s *replyCapturingSender) SendMessage(_ context.Context, chatID int64, _ *i
 	defer s.mu.Unlock()
 	s.replies[chatID] = replyTo
 	return 1, nil
+}
+
+// Никому не дошло, хотя получатели были -- это неуспех: тревогу надо
+// повторить. Отличается от «слать некому», где повторять её некому.
+func TestFanout_AllFailedIsAnError(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &fakeSender{fail: map[int64]error{1001: &tg.APIError{
+		Method: "sendMessage", Code: 500, Description: "Internal Server Error",
+	}}}
+	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	if n != 0 {
+		t.Fatalf("доставлено %d, ждали ноль", n)
+	}
+	if !errors.Is(err, ErrNoneDelivered) {
+		t.Fatalf("ошибка=%v, ждали ErrNoneDelivered", err)
+	}
 }

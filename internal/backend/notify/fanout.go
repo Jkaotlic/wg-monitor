@@ -3,6 +3,8 @@ package notify
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -14,6 +16,12 @@ import (
 type Sender interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
 }
+
+// ErrNoneDelivered -- получатели были, но не дошло никому. Отличается от
+// «слать некому» (получателей ноль) намеренно: первое означает, что Telegram
+// или сеть подвели и тревогу надо повторить, второе -- что повторять её
+// некому и напоминания будут молотить впустую.
+var ErrNoneDelivered = errors.New("уведомление не доставлено ни одному получателю")
 
 // Fanout рассылает одно уведомление всем, кому оно адресовано.
 type Fanout struct {
@@ -49,6 +57,9 @@ func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode s
 		}
 		delivered++
 		f.noteSuccess(chatID)
+	}
+	if delivered == 0 && len(targets) > 0 {
+		return 0, fmt.Errorf("%w: получателей %d", ErrNoneDelivered, len(targets))
 	}
 	return delivered, nil
 }
@@ -112,6 +123,9 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 				"telegram_user_id", chatID, "check", checkName, "err", err)
 		}
 		f.noteSuccess(chatID)
+	}
+	if delivered == 0 && len(targets) > 0 {
+		return 0, fmt.Errorf("%w: получателей %d", ErrNoneDelivered, len(targets))
 	}
 	return delivered, nil
 }

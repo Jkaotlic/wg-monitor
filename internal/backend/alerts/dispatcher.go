@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -19,6 +20,14 @@ type TGSender interface {
 	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
 	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
 	CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int) (int64, error)
+}
+
+// notifySink -- та часть notify.Fanout, которой пользуется диспетчер.
+// Интерфейсом, а не конкретным типом: тесты подставляют счётчик отправок и не
+// поднимают ради этого настоящую рассылку.
+type notifySink interface {
+	SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
+	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error
 }
 
 type Config struct {
@@ -51,11 +60,20 @@ type Dispatcher struct {
 	// realert.Poller / digest.Poller): production leaves it as time.Now,
 	// tests override via SetNow for deterministic HARD/offline timestamps.
 	now func() time.Time
+	// notify -- рассылка по личкам получателей. Заменила адресацию в тему
+	// группы: у роутера несколько получателей, и у каждого свой чат.
+	notify notifySink
 }
 
-func NewDispatcher(d *db.DB, tg TGSender, cfg Config) *Dispatcher {
-	return &Dispatcher{d: d, tg: tg, cfg: cfg, now: time.Now}
+func NewDispatcher(d *db.DB, tgc TGSender, cfg Config) *Dispatcher {
+	return &Dispatcher{
+		d: d, tg: tgc, cfg: cfg, now: time.Now,
+		notify: notify.NewFanout(d, tgc, slog.Default()),
+	}
 }
+
+// SetNotifySink подменяет рассылку. Только для тестов -- как SetNow.
+func (di *Dispatcher) SetNotifySink(s notifySink) { di.notify = s }
 
 // SetNow overrides the wall-clock seam for deterministic tests.
 func (di *Dispatcher) SetNow(fn func() time.Time) {
@@ -92,10 +110,6 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
 			return fmt.Errorf("save HARD state %s/%s: %w", nickname, checkName, err)
 		}
-		topicRef, err := di.ensureTopic(ctx, userID, nickname)
-		if err != nil {
-			return fmt.Errorf("ensure topic for %s/%s: %w", nickname, checkName, err)
-		}
 		args := HardArgs{
 			Nickname:    nickname,
 			CheckName:   checkName,
@@ -131,18 +145,22 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			opts = append(opts, tg.WithWebAppButton(fmt.Sprintf("%s/miniapp/?router=%d", strings.TrimRight(di.cfg.MiniAppBaseURL, "/"), userID)))
 		}
 		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
-		sendHard := func(ref TopicRef) (int64, error) {
-			tid := ref.ThreadID
-			return di.tg.SendMessageWithKeyboard(ctx, ref.ChatID, &tid, text, "", nil, &kb)
-		}
-		mid, err := sendHard(topicRef)
-		if err != nil {
-			mid, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendHard)
-		}
+		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb)
 		if err != nil {
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
 		}
-		next.LastAlertMsgID = &mid
+		if delivered == 0 {
+			// Слать некому: владелец не привязан, операторы не заведены либо
+			// всем недоставимо. Тревога не теряется -- её видно в сводке
+			// дашборда; здесь только след в логе.
+			slog.Warn("тревогу некому доставить",
+				"user_id", userID, "nickname", nickname, "check", checkName)
+		}
+		// LastAlertMsgID больше не источник правды: получателей несколько, и
+		// кому какое сообщение ушло, помнит таблица alert_messages. Здесь
+		// остаётся только отметка времени -- по ней realert решает, пора ли
+		// напомнить.
+		const noSingleMsgID = 0
 		now := di.now()
 		next.LastAlertAt = &now
 		if err := di.d.State().Save(userID, checkName, next); err != nil {
@@ -154,7 +172,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			// transaction more likely to succeed in this window.
 			slog.Error("HARD save failed; falling back to SetLastAlert",
 				"nickname", nickname, "check", checkName, "err", err)
-			if fbErr := di.d.State().SetLastAlert(userID, checkName, mid, now); fbErr != nil {
+			if fbErr := di.d.State().SetLastAlert(userID, checkName, noSingleMsgID, now); fbErr != nil {
 				return fmt.Errorf("HARD save fallback %s/%s: %w (orig: %v)", nickname, checkName, fbErr, err)
 			}
 		}
@@ -163,10 +181,6 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 		// Same ordering invariant как Hard: state-Save до TG-send. Если
 		// TG отвалится, recovery фактически уже сохранён в FSM; следующий
 		// OK-репорт превратится в Noop (state==ok), не в дубль Recovery.
-		topicRef, err := di.ensureTopic(ctx, userID, nickname)
-		if err != nil {
-			return fmt.Errorf("ensure topic for recovery %s/%s: %w", nickname, checkName, err)
-		}
 		prev, prevErr := di.d.State().Get(userID, checkName)
 		if prevErr != nil {
 			slog.Warn("recovery: state.Get failed; rendering without HardSince", "user_id", userID, "check", checkName, "err", prevErr)
@@ -189,14 +203,14 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			RecoveredAt: di.now(),
 			Check:       check,
 		})
-		sendRecovery := func(ref TopicRef) (int64, error) {
-			tid := ref.ThreadID
-			return di.tg.SendMessage(ctx, ref.ChatID, &tid, text, "", prev.LastAlertMsgID)
+		if err := di.notify.ReplyToEach(ctx, userID, checkName, text, ""); err != nil {
+			return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
 		}
-		if _, err := sendRecovery(topicRef); err != nil {
-			if _, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendRecovery); err != nil {
-				return fmt.Errorf("recovery tg send %s/%s: %w", nickname, checkName, err)
-			}
+		// Переписка по этой проверке закончилась: следующая поломка начнёт
+		// свою ветку с чистого листа.
+		if err := di.d.AlertMessages().Clear(userID, checkName); err != nil {
+			slog.Warn("не удалось забыть переписку по проверке",
+				"user_id", userID, "check", checkName, "err", err)
 		}
 		return nil
 	}
