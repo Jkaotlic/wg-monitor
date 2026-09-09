@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterSettings, fetchRouterChecks } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecks, setRouterNotify } from '../api.js'
 import { useCommand } from '../useCommand.js'
 import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus } from '../settings.js'
-import { confirmSheet } from '../sheet.js'
+import { confirmSheet, localSheet } from '../sheet.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -19,6 +19,9 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   const [tunnels, setTunnels] = useState([])
   const [error, setError] = useState(null)
   const [showHelp, setShowHelp] = useState(false)
+
+  const [notifyBusy, setNotifyBusy] = useState(false)
+  const [notifyError, setNotifyError] = useState(null)
 
   const audit = useCommand(routerID)
   const firmware = useCommand(routerID)
@@ -51,6 +54,37 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   // серая кнопка не объясняет, почему нельзя.
   const mayInstall = settings?.role === 'owner' || settings?.role === 'admin'
 
+
+  // Выключение уведомлений -- единственное действие на этом экране, которое
+  // человек делает СЕБЕ, а не роутеру. Поэтому и предупреждение здесь про
+  // последствие для него: бот замолчит, и поломку он увидит только сам.
+  const toggleNotify = () => {
+    const nextMuted = !settings?.notify_muted
+    const apply = () => {
+      setNotifyBusy(true)
+      setNotifyError(null)
+      return setRouterNotify(routerID, nextMuted)
+        .then(() => load())
+        .catch(() => setNotifyError('Не удалось сохранить. Попробуйте ещё раз.'))
+        .finally(() => setNotifyBusy(false))
+    }
+    if (!nextMuted || !openSheet) {
+      apply()
+      return
+    }
+    openSheet(
+      localSheet({
+        title: 'Выключить уведомления об этом роутере?',
+        body:
+          `Бот перестанет писать вам про «${routerName}». О поломке вы узнаете, ` +
+          'только сами открыв приложение. Остальные получатели этого роутера ' +
+          'продолжат получать уведомления.',
+        buttonLabel: 'Выключить',
+        danger: true,
+        perform: apply,
+      }),
+    )
+  }
 
   // Включение и выключение проверки связи -- переключатель, а не правка
   // конфига: обратное действие стоит на той же строке.
@@ -93,6 +127,30 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
             </div>
           </Section>
         )}
+
+        <Section title="Уведомления">
+          <div class="card settings-card">
+            <DataRow
+              title="Писать мне об этом роутере"
+              value={settings?.notify_muted ? 'выключено' : 'включено'}
+              valueTone={settings?.notify_muted ? 'warn' : 'ok'}
+            />
+            <p class="card-foot">
+              {settings?.notify_muted
+                ? 'Бот молчит об этом роутере. О поломке вы узнаете, только сами открыв приложение.'
+                : 'Бот напишет вам в личку, когда с роутером что-то случится.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            class={settings?.notify_muted ? 'btn btn-ghost btn-wide' : 'btn btn-danger btn-wide'}
+            disabled={notifyBusy}
+            onClick={toggleNotify}
+          >
+            {notifyBusy ? 'Сохраняем…' : settings?.notify_muted ? 'Снова уведомлять' : 'Выключить уведомления'}
+          </button>
+          {notifyError && <p class="state state-error">{notifyError}</p>}
+        </Section>
 
         <Section title="Что стоит на роутере">
           <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline)}>

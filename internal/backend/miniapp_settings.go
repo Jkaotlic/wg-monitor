@@ -35,6 +35,10 @@ type miniappSettingsResp struct {
 	// "admin". Экран рисует по ней кнопки, которых серверу иначе пришлось бы
 	// отказывать: установка прошивки доступна только владельцу.
 	Role string `json:"role,omitempty"`
+	// NotifyMuted -- выключены ли уведомления об этом роутере лично у того,
+	// кто смотрит экран. У каждого получателя своё значение, поэтому оно и
+	// живёт в ответе экрана, а не в общих настройках роутера.
+	NotifyMuted bool `json:"notify_muted"`
 }
 
 func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
@@ -61,11 +65,18 @@ func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
 			role = r
 		}
 		policy := dashboardStatusPolicyFromDeps(d)
+		// Состояние личного выключателя: у каждого получателя своё, поэтому
+		// читается по паре «человек + роутер», а не по роутеру.
+		muted, mErr := d.DB.NotifyMutes().IsMuted(telegramUserID, routerID)
+		if mErr != nil && d.Logger != nil {
+			d.Logger.Warn("miniapp: notify mute lookup failed", "router_id", routerID, "err", mErr)
+		}
 		resp := miniappSettingsResp{
 			AlertAfterFails:  d.Thresholds.Fail,
 			RecoveryAfterOKs: d.Thresholds.Recovery,
 			Mobile:           u.IsMobile(),
 			Role:             role,
+			NotifyMuted:      muted,
 		}
 		if u.IsMobile() {
 			resp.SilenceAfterSec = int(policy.MobileStaleAfter / time.Second)

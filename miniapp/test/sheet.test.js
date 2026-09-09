@@ -1,73 +1,33 @@
 import { describe, it, expect } from 'vitest'
-import { confirmSheet, sheetPhase, confirmReady } from '../src/sheet.js'
+import { confirmSheet, localSheet, confirmReady } from '../src/sheet.js'
 
-describe('confirmSheet', () => {
-  it('несёт команду, которая уйдёт на роутер', () => {
-    const s = confirmSheet({
-      routerID: 1,
-      title: 'Перезапустить туннель',
-      body: 'Связь через туннель прервётся секунд на пятнадцать.',
-      action: 'tunnel_restart',
-      args: { tunnel_id: 'awg12' },
-      buttonLabel: 'Перезапустить',
+describe('localSheet', () => {
+  // Выключение уведомлений человек делает СЕБЕ: это вызов бэкенда, а не
+  // команда роутеру. Шит обязан отличать одно от другого, иначе он покажет
+  // строку «команда: undefined» и уйдёт ждать ответа, которого не будет.
+  it('несёт локальное действие, а не команду роутеру', () => {
+    const sheet = localSheet({
+      title: 'Выключить уведомления?',
+      body: 'Бот замолчит.',
+      buttonLabel: 'Выключить',
+      danger: true,
+      perform: () => Promise.resolve(),
     })
-    expect(s).toMatchObject({
-      routerID: 1,
-      action: 'tunnel_restart',
-      args: { tunnel_id: 'awg12' },
-      buttonLabel: 'Перезапустить',
-    })
+    expect(sheet.action).toBeUndefined()
+    expect(typeof sheet.perform).toBe('function')
+    expect(sheet.danger).toBe(true)
   })
 
-  it('без args подставляет пустой объект, а не undefined', () => {
-    expect(confirmSheet({ routerID: 1, title: 't', body: 'b', action: 'a' }).args).toEqual({})
+  it('без набора подтверждения готов сразу', () => {
+    const sheet = localSheet({ title: 't', body: 'b', perform: () => {} })
+    expect(confirmReady(sheet, '')).toBe(true)
   })
 
-  it('запоминает, что роутер спит -- шит обещает отложенное выполнение', () => {
-    expect(confirmSheet({ routerID: 1, title: 't', body: 'b', action: 'a', asleep: true }).asleep).toBe(true)
-  })
-
-  it('помечает разрушающее действие, чтобы кнопка стала красной', () => {
-    expect(confirmSheet({ routerID: 1, title: 't', body: 'b', action: 'a', danger: true }).danger).toBe(true)
-  })
-})
-
-describe('sheetPhase', () => {
-  it('до запуска -- подтверждение', () => {
-    expect(sheetPhase({})).toBe('confirm')
-  })
-  it('во время выполнения -- ожидание', () => {
-    expect(sheetPhase({ busy: true })).toBe('running')
-  })
-  it('после успеха -- результат', () => {
-    expect(sheetPhase({ result: { status: 'ok' } })).toBe('done')
-  })
-  it('ошибка важнее результата', () => {
-    expect(sheetPhase({ result: { status: 'ok' }, error: 'таймаут' })).toBe('error')
-  })
-  it('пока идёт выполнение, старый результат не показывается', () => {
-    expect(sheetPhase({ busy: true, result: { status: 'ok' } })).toBe('running')
-  })
-})
-
-// Необратимое действие подтверждается не нажатием, а набором: человек
-// печатает имя роутера, и только совпадение включает кнопку. Пауза здесь --
-// не формальность: это единственное место, где он читает, что именно
-// произойдёт, до того как это произойдёт.
-describe('confirmPhrase', () => {
-  it('шит несёт фразу подтверждения', () => {
-    const s = confirmSheet({ routerID: 1, title: 'т', body: 'б', action: 'firmware_install', confirmPhrase: 'Дом' })
-    expect(s.confirmPhrase).toBe('Дом')
-  })
-
-  it('без фразы подтверждение не требуется', () => {
-    expect(confirmReady(confirmSheet({ routerID: 1, title: 'т', body: 'б', action: 'x' }), '')).toBe(true)
-  })
-
-  it('совпадение считается по сути, а не по регистру и пробелам', () => {
-    const s = confirmSheet({ routerID: 1, title: 'т', body: 'б', action: 'x', confirmPhrase: 'Дом' })
-    expect(confirmReady(s, ' дом ')).toBe(true)
-    expect(confirmReady(s, 'Дача')).toBe(false)
-    expect(confirmReady(s, '')).toBe(false)
+  // Команда роутеру, наоборот, обязана нести action -- иначе шит запустит
+  // пустую команду.
+  it('командный шит остаётся с action и без perform', () => {
+    const sheet = confirmSheet({ routerID: 1, title: 't', body: 'b', action: 'diag_now' })
+    expect(sheet.action).toBe('diag_now')
+    expect(sheet.perform).toBeUndefined()
   })
 })

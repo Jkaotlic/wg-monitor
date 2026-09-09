@@ -47,6 +47,15 @@ export function fetchRouterSettings(id) {
   return request(`/routers/${id}/settings`)
 }
 
+// Личный выключатель уведомлений об этом роутере. Личный -- потому что у
+// роутера несколько получателей, и решение каждого касается только его.
+export function setRouterNotify(id, muted) {
+  return request(`/routers/${id}/notify`, {
+    method: 'PUT',
+    body: JSON.stringify({ muted }),
+  })
+}
+
 export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }

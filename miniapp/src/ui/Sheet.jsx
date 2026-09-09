@@ -12,7 +12,15 @@ import { commandOutcomeLabel } from '../labels.js'
 // дедлайн ожидания шире.
 export function Sheet({ sheet, asleep, onClose }) {
   const { busy, result, error, run } = useCommand(sheet.routerID)
-  const phase = sheetPhase({ busy, result, error })
+  // Локальное действие (sheet.perform) выполняет сам бэкенд, а не роутер:
+  // ходу выполнения там неоткуда взяться, поэтому фаза остаётся «спросить»,
+  // а кнопка на время запроса гаснет.
+  const local = typeof sheet.perform === 'function'
+  const [localBusy, setLocalBusy] = useState(false)
+  const [localError, setLocalError] = useState(null)
+  const phase = local
+    ? sheetPhase({ busy: false, result: null, error: localError })
+    : sheetPhase({ busy, result, error })
   // Набранное подтверждение живёт здесь, а не в описании шита: описание --
   // это то, что задумал экран, а набранное -- то, что делает человек прямо
   // сейчас, и смешивать их значило бы переписывать намерение вводом.
@@ -20,6 +28,18 @@ export function Sheet({ sheet, asleep, onClose }) {
   const ready = confirmReady(sheet, typed)
 
   function start() {
+    if (local) {
+      setLocalBusy(true)
+      setLocalError(null)
+      Promise.resolve(sheet.perform())
+        .then(() => {
+          if (sheet.onDone) sheet.onDone()
+          onClose()
+        })
+        .catch(() => setLocalError('Не получилось. Попробуйте ещё раз.'))
+        .finally(() => setLocalBusy(false))
+      return
+    }
     run(sheet.action, sheet.args, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }).then((res) => {
       if (res?.status === 'ok' && sheet.onDone) sheet.onDone()
     })
@@ -37,13 +57,18 @@ export function Sheet({ sheet, asleep, onClose }) {
 
         {phase === 'confirm' && (
           <>
-            {asleep && (
+            {asleep && !local && (
               <p class="sheet-note">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>
             )}
-            <div class="sheet-command">
-              <span class="sheet-command-label">команда</span>
-              <span class="sheet-command-value">{sheet.action}</span>
-            </div>
+            {/* Локальное действие роутеру не уходит -- показывать имя команды
+                нечего, и строка «команда: undefined» была бы враньём. */}
+            {!local && (
+              <div class="sheet-command">
+                <span class="sheet-command-label">команда</span>
+                <span class="sheet-command-value">{sheet.action}</span>
+              </div>
+            )}
+            {localError && <p class="state state-error">{localError}</p>}
             {sheet.confirmPhrase && (
               <div class="field sheet-confirm">
                 <label for="sheet-confirm-input">Наберите «{sheet.confirmPhrase}», чтобы подтвердить</label>
@@ -61,10 +86,10 @@ export function Sheet({ sheet, asleep, onClose }) {
               <button
                 type="button"
                 class={`btn ${sheet.danger ? 'btn-danger' : 'btn-primary'}`}
-                disabled={!ready}
+                disabled={!ready || localBusy}
                 onClick={start}
               >
-                {sheet.buttonLabel}
+                {localBusy ? 'Сохраняем…' : sheet.buttonLabel}
               </button>
             </div>
           </>

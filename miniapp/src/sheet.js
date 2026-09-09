@@ -5,6 +5,13 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
   return { routerID, title, body, action, args, buttonLabel, danger, asleep, confirmPhrase, onDone }
 }
 
+// Подтверждение действия, которое человек делает СЕБЕ, а не роутеру:
+// выключение уведомлений живёт в бэкенде, команду агенту слать незачем.
+// Оформление берётся то же самое -- чтобы «точно?» везде выглядело одинаково.
+export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, perform, onDone }) {
+  return { title, body, buttonLabel, danger, perform, onDone, args: {} }
+}
+
 // Необратимое действие подтверждается набором, а не нажатием: человек
 // печатает имя роутера, и только совпадение включает кнопку. Смысл не в
 // защите от чужого пальца, а в паузе -- это единственное место, где он
