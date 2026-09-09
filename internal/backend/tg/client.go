@@ -34,6 +34,27 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("tg %s: %s (code=%d)", e.Method, e.Description, e.Code)
 }
 
+// IsCantInitiateChat reports whether err means Telegram will not deliver to
+// this person's DM: the bot has never been spoken to, or it was blocked.
+// Both are 403 and both stay broken until the human acts — unlike a kick from
+// a group chat, which says nothing about that person's DM.
+//
+// Used by the notification fan-out to mark a recipient unreachable instead of
+// retrying forever against a door only the human can open.
+func IsCantInitiateChat(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	if ae.Code != 403 {
+		return false
+	}
+	d := strings.ToLower(ae.Description)
+	return strings.Contains(d, "can't initiate conversation") ||
+		strings.Contains(d, "bot was blocked by the user") ||
+		strings.Contains(d, "user is deactivated")
+}
+
 // IsTopicNotFound reports whether err signals the target forum topic no
 // longer exists in TG. Used by the alert dispatcher to clear the cached
 // telegram_thread_id and recreate the topic on the next attempt rather

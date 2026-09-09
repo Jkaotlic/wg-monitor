@@ -125,3 +125,14 @@ CREATE TABLE IF NOT EXISTS router_notify_mutes (
     muted_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (telegram_user_id, user_id)
 );
+
+-- Кому бот не смог доставить в личку. Telegram отвечает 403, пока человек сам
+-- не заговорил с ботом, и починить это может только он. Пока уведомления шли
+-- в группу, такого состояния не существовало: тема принимала всех. После
+-- переезда недоставленность обязана быть видимой, иначе тревога исчезает
+-- молча.
+CREATE TABLE IF NOT EXISTS telegram_unreachable (
+    telegram_user_id INTEGER   PRIMARY KEY,
+    last_error       TEXT      NOT NULL,
+    updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

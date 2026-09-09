@@ -662,3 +662,28 @@ func TestSetCommandsMenuButton_OmitsWebAppFields(t *testing.T) {
 		t.Fatalf("commands button carries web_app/text: %s", gotBody)
 	}
 }
+
+func TestIsCantInitiateChat(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"не заговаривал с ботом", &APIError{Method: "sendMessage", Code: 403,
+			Description: "Forbidden: bot can't initiate conversation with a user"}, true},
+		{"заблокировал бота", &APIError{Method: "sendMessage", Code: 403,
+			Description: "Forbidden: bot was blocked by the user"}, true},
+		{"выгнали из группы -- это про группу, не про личку", &APIError{Method: "sendMessage", Code: 403,
+			Description: "Forbidden: bot was kicked from the supergroup chat"}, false},
+		{"лимит частоты", &APIError{Method: "sendMessage", Code: 429, Description: "Too Many Requests"}, false},
+		{"не наша ошибка", errors.New("dial tcp: timeout"), false},
+		{"пусто", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsCantInitiateChat(tc.err); got != tc.want {
+				t.Fatalf("IsCantInitiateChat=%v, ждали %v", got, tc.want)
+			}
+		})
+	}
+}
