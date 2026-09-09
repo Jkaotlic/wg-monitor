@@ -113,3 +113,15 @@ CREATE TABLE IF NOT EXISTS router_repair_settings (
     auto_repair INTEGER NOT NULL DEFAULT 1,
     updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Заглушённые уведомления: пара «человек + роутер». Отдельной таблицей, а не
+-- колонкой: выключатель личный, у одного роутера может быть несколько
+-- получателей с разными решениями. Строка есть -- заглушено; строки нет --
+-- уведомления идут. Дефолт «получает» держится отсутствием строки, поэтому
+-- переносить данные при выкатке не нужно.
+CREATE TABLE IF NOT EXISTS router_notify_mutes (
+    telegram_user_id INTEGER   NOT NULL,
+    user_id          INTEGER   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    muted_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (telegram_user_id, user_id)
+);
