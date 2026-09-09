@@ -365,7 +365,7 @@ func TestFormatSmartReply_HardDNSShowsHumanIncidentDetails(t *testing.T) {
 
 	text, kb := FormatSmartReply(a)
 	for _, want := range []string{
-		"DNS-резолвинг частично не работает",
+		"Часть сайтов может не открываться по имени",
 		"2 из 4 DNS-серверов не отвечают",
 		"Germany backup (Wireguard3 / nwg3)",
 		"RKN-блокировок не видно",

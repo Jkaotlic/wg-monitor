@@ -64,7 +64,7 @@ func FormatHard(a HardArgs) string {
 			writeWhatBroke(b, a.CheckName, a.Check.Details, a.Neighbors)
 		}),
 	}}
-	if impact := impactFor(a.CheckName, a.Check.Details); impact != "" {
+	if impact := impactFor(a.CheckName, a.Check.Details, a.Neighbors); impact != "" {
 		sections = append(sections, CardSection{Title: tone.ImpactTitle, Lines: []string{impact}})
 	}
 
@@ -77,10 +77,10 @@ func FormatHard(a HardArgs) string {
 	}
 
 	meta := []string{
-		KV("проверка", a.CheckName),
+		KV("проверка", checkHumanName(a.CheckName)),
 	}
 	if a.ConsecFails > 0 {
-		meta = append(meta, fmt.Sprintf("%d fails", a.ConsecFails))
+		meta = append(meta, fmt.Sprintf("проверок подряд без ответа: %d", a.ConsecFails))
 	}
 	if !a.HardSince.IsZero() {
 		meta = append(meta, "с "+a.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"))
@@ -150,11 +150,11 @@ func FormatRouterOffline(nickname string, since time.Duration) string {
 		Badge:   "🔴",
 		Label:   fmt.Sprintf("[%s]", nickname),
 		Summary: "Роутер не на связи",
-		Meta:    []string{KV("нет heartbeat", durFmt(since.Round(time.Minute)))},
+		Meta:    []string{KV("молчит", durFmt(since.Round(time.Minute)))},
 		Sections: []CardSection{
-			{Title: "Что не работает", Lines: []string{"Нет heartbeat'ов " + durFmt(since.Round(time.Minute))}},
-			{Title: "Что я думаю", Lines: []string{"Либо роутер выключен/перезагружается, либо у него отвалился WAN, либо упал агент wg-monitor."}},
-			{Title: "Что делать", Lines: []string{"Проверь питание роутера, потом WAN/4G. Если железо живо — зайди по SSH и глянь /opt/etc/init.d/S99wg-monitor status."}},
+			{Title: "Что не работает", Lines: []string{"Роутер молчит " + durFmt(since.Round(time.Minute)) + " — за это время он не прислал ни одного отчёта."}},
+			{Title: "Что я думаю", Lines: []string{"Либо роутер выключен или перезагружается, либо у него пропал интернет."}},
+			{Title: "Что делать", Lines: []string{"Проверьте, включён ли роутер и горят ли на нём лампочки. Если включён — проверьте, есть ли интернет у провайдера. Когда роутер вернётся, бот напишет сам."}},
 		},
 	}.Render(CardOpts{})
 }
@@ -191,7 +191,7 @@ func FormatRealert(args RealertArgs) string {
 				writeWhatBroke(b, args.CheckName, args.Check.Details, args.Neighbors)
 			}),
 		})
-		if impact := impactFor(args.CheckName, args.Check.Details); impact != "" {
+		if impact := impactFor(args.CheckName, args.Check.Details, args.Neighbors); impact != "" {
 			sections = append(sections, CardSection{Title: tone.ImpactTitle, Lines: []string{impact}})
 		}
 		if adv := suggestAction(args.CheckName, args.Check.Details, args.Neighbors); adv != "" {
@@ -310,27 +310,26 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
-		tname, _ := d["tunnel_name"].(string)
-		iface, _ := d["interface"].(string)
-		switch {
-		case tname != "" && iface != "":
-			return fmt.Sprintf("Туннель %s (%s) не на связи", tname, iface)
-		case tname != "":
-			return fmt.Sprintf("Туннель %s не на связи", tname)
-		case iface != "":
-			return fmt.Sprintf("Туннель %s не на связи", iface)
+		name := tunnelHumanName(d)
+		// Упавшая линия -- ещё не потерянный обход. Пока жива соседняя, трафик
+		// идёт через неё, и «не на связи» тревожным тоном гонит человека
+		// чинить то, что у него работает. Приложение в этот же момент пишет
+		// «работает на запасной линии» -- два голоса одной системы обязаны
+		// говорить одно и то же.
+		if spare, ok := liveSpare(ns); ok {
+			return fmt.Sprintf("Линия %s упала, обход идёт через «%s»", name, spareHumanName(spare))
 		}
-		return "Туннель не на связи"
+		return fmt.Sprintf("Линия %s не отвечает", name)
 	case "dns":
 		total, _ := intOrZero(d, "endpoints")
 		failed, _ := intOrZero(d, "failed_count")
 		if total > 0 && failed > 0 && failed < total {
-			return "DNS-резолвинг частично не работает"
+			return "Часть сайтов может не открываться по имени"
 		}
 		if total > 0 && failed == total && len(ns) > 0 && neighborsAlive(ns) {
-			return "DNS-резолвинг деградирует"
+			return "Роутер стал хуже находить сайты по имени"
 		}
-		return "DNS-резолвинг не работает"
+		return "Роутер не находит сайты по имени"
 	case "hydraroute":
 		installed, _ := boolOrFalse(d, "installed")
 		running, _ := boolOrFalse(d, "running")
@@ -342,9 +341,9 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		}
 		return "HydraRoute даёт сбой"
 	case "awg_manager":
-		return "awg-manager не отвечает"
+		return "Панель управления роутера не отвечает"
 	case "awgmgr_api":
-		return "Реестр туннелей awg-manager недоступен"
+		return "Бот не видит список линий роутера"
 	case "external_reach":
 		total, _ := intOrZero(d, "targets_total")
 		failed := mapsSlice(d, "targets_failed")
@@ -360,20 +359,19 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
 		if d != nil {
-			tname, _ := d["tunnel_name"].(string)
-			if tname != "" {
-				return "Туннель " + tname + " снова на связи"
+			if tname, _ := d["tunnel_name"].(string); tname != "" {
+				return "Линия " + tname + " снова работает"
 			}
 		}
-		return "Туннель снова на связи"
+		return "Линия снова работает"
 	case "dns":
-		return "DNS-резолвинг восстановился"
+		return "Роутер снова находит сайты по имени"
 	case "hydraroute":
 		return "HydraRoute снова работает"
 	case "awg_manager":
-		return "awg-manager снова отвечает"
+		return "Панель управления роутера снова отвечает"
 	case "awgmgr_api":
-		return "Реестр туннелей снова доступен"
+		return "Бот снова видит список линий"
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
 	}
@@ -671,26 +669,34 @@ func humanTunnelNameByNDMS(ndms string, ns []NeighborSummary) string {
 	return ndms
 }
 
-func impactFor(checkName string, d map[string]any) string {
+func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
 	case "dns":
 		return "Домены могут не открываться или уходить не туда: сайты, приложения и правила HR-Neo зависят от DNS."
 	case "tunnel":
+		// Пока жива запасная линия, обход работает -- и человеку надо сказать
+		// именно это, а не пугать его тем, чего он не увидит. Но и молчать
+		// нельзя: запасная осталась одна, и вторая поломка оставит его без
+		// обхода вовсе.
+		if spare, ok := liveSpare(ns); ok {
+			return fmt.Sprintf("Пока ничего: обход идёт через запасную линию «%s», сайты открываются как обычно. "+
+				"Починить упавшую всё равно стоит — запасная осталась одна.", spareHumanName(spare))
+		}
 		var parts []string
 		if rDNS, _ := intOrZero(d, "routes_dns"); rDNS > 0 {
-			parts = append(parts, fmt.Sprintf("%d DNS-правил", rDNS))
+			parts = append(parts, fmt.Sprintf("%d правил по именам сайтов", rDNS))
 		}
 		if rStatic, _ := intOrZero(d, "routes_static"); rStatic > 0 {
-			parts = append(parts, fmt.Sprintf("%d static-маршрутов", rStatic))
+			parts = append(parts, fmt.Sprintf("%d правил по адресам", rStatic))
 		}
 		if len(parts) > 0 {
-			return "Через этот туннель завязаны " + strings.Join(parts, " и ") + "; они могут не работать до восстановления туннеля."
+			return "Через эту линию идут " + strings.Join(parts, " и ") + " — они не работают, пока линия не поднимется. Обычные сайты, банки и госуслуги открываются как всегда."
 		}
-		return "Трафик, который должен идти через этот туннель, может не доходить до нужных сервисов."
+		return "То, что должно ходить через эту линию, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда."
 	case "hydraroute":
 		return "DNS/HR-Neo правила могут перестать направлять домены в нужные туннели; часть сайтов пойдёт обычным маршрутом или не откроется."
 	case "awg_manager", "awgmgr_api":
-		return "бот не может управлять туннелями через awg-manager: диагностика, маршруты и кнопки ремонта могут не сработать."
+		return "Интернет от этого не пропадает: линии работают сами по себе. Но кнопки в приложении — «Починить», перезапуск линии, правка маршрутов — могут не сработать, пока связь с роутером не вернётся."
 	case "external_reach":
 		return "Сервисы снаружи не открываются через выбранный туннель; проблема либо в самом туннеле, либо в маршрутизации через него."
 	}
@@ -721,9 +727,9 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 	case "hydraroute":
 		return diagnoseHydraRoute(d)
 	case "awg_manager":
-		return "awg-manager не отвечает на запрос статуса. Обычно это значит, что сервис упал или сильно загружен — версии и прошивка не считываются."
+		return "Панель роутера не ответила на запрос состояния. Обычно это значит, что она перезапускается или роутер сильно загружен."
 	case "awgmgr_api":
-		return "Список туннелей читается через API awg-manager. Если он недоступен — либо awg-manager упал, либо изменился порт или доступ к API."
+		return "Список линий бот читает у панели роутера. Если она не отвечает — либо перезапускается, либо на роутере поменяли доступ к ней."
 	case "external_reach":
 		return diagnoseExternalReach(d, ns)
 	}
@@ -734,7 +740,7 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 	rknSus, _ := intOrZero(d, "rkn_suspect")
 	rknProbed, _ := intOrZero(d, "rkn_probed")
 	if rknProbed > 0 && rknSus == rknProbed {
-		return "На всех проверенных серверах ответы похожи на RKN-блокировку. DNS-серверы живы, но трафик подменяется по дороге — нужен DoH или другой апстрим."
+		return "На всех проверенных серверах ответы похожи на блокировку: серверы имён живы, но ответ подменяют по дороге. Помогает шифрованный поиск имён или другой сервер."
 	}
 
 	failed := mapsSlice(d, "endpoints_detail")
@@ -798,9 +804,9 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 	}
 	if failedCount == total && total > 0 {
 		if len(ns) > 0 && neighborsAlive(ns) {
-			return "DNS endpoint'ы не ответили, но соседние туннели живы. Это похоже на локальную проблему DNS-апстрима, выключенного/старого правила или привязки маршрута, а не на общий обрыв WAN."
+			return "Серверы имён не ответили, но соседние линии живы. Похоже на проблему самого сервера имён или устаревшего правила, а не на пропавший интернет."
 		}
-		return "Не отвечает ни один сервер. Либо у роутера нет связи наружу, либо DNS-апстримы разом легли (что бывает редко)."
+		return "Не отвечает ни один сервер имён. Либо у роутера пропал интернет, либо все эти серверы легли разом — что бывает редко."
 	}
 	return ""
 }
@@ -874,18 +880,18 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 	case "hydraroute":
 		return adviseHydraRoute(d)
 	case "awg_manager", "awgmgr_api":
-		return "Открой 🛠 Обслуживание и нажми «Перезапустить awg-manager». Если не помогло — глянь логи: ssh root@router 'logread | grep awg-manager'."
+		return "Само по себе это не мешает интернету. Откройте приложение — там на экране «Проверки» видно, вернулась ли связь с панелью роутера. Если не вернулась за полчаса, перезагрузите роутер."
 	case "external_reach":
 		return adviseExternalReach(d, ns)
 	}
-	return "Открой 📊 Что происходит? — там общая сводка по роутеру."
+	return "Откройте приложение — на экране «Сейчас» видно, что с роутером происходит."
 }
 
 func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 	rknSus, _ := intOrZero(d, "rkn_suspect")
 	rknProbed, _ := intOrZero(d, "rkn_probed")
 	if rknProbed > 0 && rknSus == rknProbed {
-		return "Поменяй DNS-апстримы на DoH (например cloudflare-dns.com), либо проверь что DNS-запросы реально уходят через туннель — открой 🛣 Маршруты."
+		return "Похоже, провайдер подменяет ответы на запросы имён. Откройте приложение, экран «Маршруты» — там видно, через какую линию уходят эти запросы; их стоит увести в обход."
 	}
 
 	failed := mapsSlice(d, "endpoints_detail")
@@ -908,33 +914,41 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 		label := humanTunnelLabelByNDMS(iface, ns)
 		name := humanTunnelNameByNDMS(iface, ns)
 		if neighborsAlive(ns) {
-			return fmt.Sprintf("Открой 🎛 Туннели и проверь %s. Если он есть в списке, начни с перезапуска или диагностики именно этого туннеля.", label)
+			return fmt.Sprintf("Откройте приложение, экран «Линии», и посмотрите %s — начните с её перезапуска.", label)
 		}
-		return fmt.Sprintf("Сначала проверь WAN: 🌍 Через туннель? и 🇷🇺 Напрямую?. Если связь есть только напрямую, начни с %s.", name)
+		return fmt.Sprintf("Откройте приложение, экран «Проверки»: там видно, работает ли интернет напрямую. Если напрямую работает, а через обход нет — дело в линии %s.", name)
 	}
-	return "Подожди минуту — иногда апстримы временно отвечают таймаутом. Если не вернётся — открой 📊 Что происходит? и глянь общую картину по роутеру."
+	return "Подождите минуту — сервер имён мог не ответить разово. Если не вернётся, откройте приложение: на экране «Сейчас» видно общую картину."
 }
 
-func adviseTunnel(d map[string]any, _ []NeighborSummary) string {
+func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 	age, hasAge := intOrZero(d, "handshake_age_sec")
 	conflict, hasConflict := boolOrFalse(d, "address_conflict")
 	if hasConflict && conflict {
-		return "Открой 🎛 Туннели, найди этот туннель и проверь его адрес. Скорее всего он совпадает с другим интерфейсом — поменяй на свободную /24."
+		return "У этой линии адрес совпал с другой линией — сама она не поднимется. Нажмите «Починить» в приложении: оно перевыпустит настройки линии заново."
 	}
 	if !hasAge {
-		return "Тыкни «📊 Диагностика» — она покажет сервер туннеля, AWG-параметры и попытается поднять связь. Если сервер правильный, но обмен ключами не идёт — провайдер может резать UDP."
+		// Про увод трафика говорим только когда уводить есть куда: обещать
+		// обход, которого нет, -- то же враньё, что и молчать о нём.
+		if _, ok := liveSpare(ns); ok {
+			return "Нажмите «Починить» в приложении — оно уведёт трафик на запасную линию и перевыпустит настройки упавшей. Если и после этого связи нет, провайдер может резать такой трафик."
+		}
+		return "Нажмите «Починить» в приложении — оно перевыпустит настройки линии заново. Если и после этого связи нет, провайдер может резать такой трафик."
 	}
 	var base string
 	if age > 600 {
-		base = "Жми «🔁 Перезапуск туннеля» — обычно помогает. Если нет — «📊 Диагностика», там увидишь конкретный сбой."
+		base = "Нажмите «Починить» в приложении — обычно помогает."
+		if _, ok := liveSpare(ns); ok {
+			base += " Пока чинит, трафик пойдёт через запасную линию."
+		}
 	} else {
-		base = "Подожди ещё минуту — handshake мог моргнуть. Если не вернётся за 2-3 минуты, тыкни «🔁 Перезапуск туннеля»."
+		base = "Подождите пару минут — связь могла моргнуть. Если не вернётся, нажмите «Починить» в приложении."
 	}
 	// pingCheck выключен → бот судит о связи только по возрасту handshake, а он
 	// у idle-туннеля устаревает сам по себе. Подсказываем включить активную
 	// проверку, чтобы отличать простой от настоящего обрыва.
 	if pingCheckIsDisabled(d) {
-		base += " Заодно включи pingCheck (🛡 PingCheck в панели) — сейчас он выключен, и бот видит только возраст handshake; с pingCheck он активно проверяет связь и не путает простой с обрывом."
+		base += " Заодно включите проверку связи для этой линии на экране «Настройки»: сейчас она выключена, и бот судит о линии по косвенным признакам."
 	}
 	return base
 }
@@ -951,11 +965,11 @@ func adviseHydraRoute(d map[string]any) string {
 	running, _ := boolOrFalse(d, "running")
 	switch {
 	case !installed:
-		return "Установи hrneo через opkg, либо открой 🛠 Обслуживание → «Установить компоненты»."
+		return "Умная маршрутизация на роутере не установлена — без неё правила по именам сайтов не работают. Это ставится один раз; напишите тому, кто настраивал роутер."
 	case !running:
-		return "Открой 🛠 Обслуживание и нажми «Перезапустить hrneo»."
+		return "Умная маршрутизация остановлена. Обычно помогает перезагрузка роутера; если не помогла — напишите тому, кто его настраивал."
 	}
-	return "Проверь правила HR-Neo (🛣 Маршруты) — возможно одно из них ссылается на удалённый туннель."
+	return "Откройте приложение, экран «Маршруты» — возможно, одно из правил ссылается на линию, которой больше нет."
 }
 
 func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
@@ -973,6 +987,63 @@ func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
 
 // neighborsAlive returns true when at least one neighbor is in alive/ok status.
 // Used to distinguish "местная проблема туннеля" from "WAN-сбой".
+// checkHumanName -- как проверка называется для человека. Техническое имя
+// («tunnel_awg12», «awgmgr_api») он нигде не видел, а в подписи тревоги оно
+// стояло первым.
+func checkHumanName(check string) string {
+	switch checkCategory(check) {
+	case "tunnel":
+		return "линия"
+	case "dns":
+		return "поиск сайтов по имени"
+	case "hydraroute":
+		return "умная маршрутизация"
+	case "awg_manager", "awgmgr_api":
+		return "связь с панелью роутера"
+	case "external_reach":
+		return "доступность сервисов через обход"
+	}
+	if check == "agent_heartbeat" {
+		return "отчёты роутера"
+	}
+	return check
+}
+
+// liveSpare -- первая живая соседняя линия. Это и есть тот обход, который
+// сейчас работает вместо упавшей: у роутера их обычно две, и вторая молчит
+// ровно до того момента, когда понадобится.
+func liveSpare(ns []NeighborSummary) (NeighborSummary, bool) {
+	for _, n := range ns {
+		if isLiveStatus(n.Status) {
+			return n, true
+		}
+	}
+	return NeighborSummary{}, false
+}
+
+// tunnelHumanName -- как линию называет человек. Идентификатор («awg12») он
+// нигде не видел; имя даёт ему то, что он узнает в приложении.
+func tunnelHumanName(d map[string]any) string {
+	if tname, _ := d["tunnel_name"].(string); strings.TrimSpace(tname) != "" {
+		return strings.TrimSpace(tname)
+	}
+	if iface, _ := d["interface"].(string); strings.TrimSpace(iface) != "" {
+		return strings.TrimSpace(iface)
+	}
+	return "без имени"
+}
+
+// spareHumanName -- имя запасной линии для строки про обход.
+func spareHumanName(n NeighborSummary) string {
+	if strings.TrimSpace(n.TunnelName) != "" {
+		return strings.TrimSpace(n.TunnelName)
+	}
+	if strings.TrimSpace(n.Interface) != "" {
+		return strings.TrimSpace(n.Interface)
+	}
+	return strings.TrimPrefix(n.CheckName, "tunnel_")
+}
+
 func neighborsAlive(ns []NeighborSummary) bool {
 	for _, n := range ns {
 		if isLiveStatus(n.Status) {

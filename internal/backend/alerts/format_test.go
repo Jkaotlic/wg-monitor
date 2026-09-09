@@ -74,7 +74,7 @@ func TestFormatHardGenericFallback(t *testing.T) {
 		HardSince:   hardSince,
 		Check:       wire.Check{Name: "awg_handshake", Status: "fail", Details: map[string]any{"error": "handshake age 312s > 180s"}},
 	})
-	for _, want := range []string{"🔴", "vasya", "Что не работает:", "handshake age 312s", "3 fails"} {
+	for _, want := range []string{"🔴", "vasya", "Что не работает:", "handshake age 312s", "проверок подряд без ответа: 3"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
@@ -122,7 +122,7 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 	})
 	wants := []string{
 		"🟡",
-		"Туннель amnezia_for_awg2 (nwg0) не на связи",
+		"Линия amnezia_for_awg2 не отвечает",
 		"На что обратить внимание:",
 		"Сервер туннеля: 198.51.100.21:37634", "провайдерский выход: eth3",
 		"Последний обмен ключами:", "4 мин 37 с",
@@ -152,12 +152,12 @@ func TestFormatHardDNSBody(t *testing.T) {
 		}},
 	})
 	wants := []string{
-		"DNS-резолвинг не работает",
+		"Роутер не находит сайты по имени",
 		"Что не работает:",
 		"трафик подменяется",
 		"RKN-блокировка похоже на ВСЕХ",
 		"Что я думаю:",
-		"DoH",
+		"шифрованный поиск имён",
 		"Что это ломает:",
 	}
 	for _, w := range wants {
@@ -192,7 +192,7 @@ func TestFormatHardDNSPartial(t *testing.T) {
 	})
 	wants := []string{
 		"🟡",
-		"DNS-резолвинг частично не работает",
+		"Часть сайтов может не открываться по имени",
 		"На что обратить внимание:",
 		"Что может пострадать:",
 		"Не отвечают 2 из",
@@ -265,7 +265,7 @@ func TestFormatHardDNSAllFailedWithAliveNeighborsIsAdvisory(t *testing.T) {
 	})
 	for _, want := range []string{
 		"🟡",
-		"DNS-резолвинг деградирует",
+		"Роутер стал хуже находить сайты по имени",
 		"На что обратить внимание:",
 		"Остальные туннели выглядят живыми",
 		"это не общий WAN",
@@ -350,8 +350,10 @@ func TestFormatHardTunnelPingCheckDisabledNudge(t *testing.T) {
 			"ping_check_status": "disabled",
 		}},
 	})
-	if !strings.Contains(withNudge, "pingCheck") || !strings.Contains(withNudge, "выключен") {
-		t.Fatalf("disabled pingCheck on a stale tunnel should nudge enabling it:\n%s", withNudge)
+	// Подсказка осталась, но словами владельца: «проверка связи», а не
+	// pingCheck -- этого слова он нигде не видел.
+	if !strings.Contains(withNudge, "проверку связи") || !strings.Contains(withNudge, "выключена") {
+		t.Fatalf("на молчащей линии с выключенной проверкой связи нужна подсказка её включить:\n%s", withNudge)
 	}
 
 	// With pingCheck alive, no nudge (would be noise).
@@ -365,7 +367,7 @@ func TestFormatHardTunnelPingCheckDisabledNudge(t *testing.T) {
 			"ping_check_status": "alive",
 		}},
 	})
-	if strings.Contains(noNudge, "включи pingCheck") {
+	if strings.Contains(noNudge, "включите проверку связи") {
 		t.Fatalf("healthy pingCheck should not trigger the nudge:\n%s", noNudge)
 	}
 }
@@ -387,7 +389,7 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 		"HydraRoute установлен, но сервис остановлен",
 		"Что может пострадать:",
 		"демон не запущен",
-		"Перезапустить hrneo",
+		"перезагрузка роутера",
 	}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {
@@ -411,9 +413,9 @@ func TestFormatHardAwgManagerControlPlane(t *testing.T) {
 	})
 	for _, want := range []string{
 		"🔴",
-		"awg-manager не отвечает",
-		"бот не может управлять туннелями",
-		"Перезапустить awg-manager",
+		"Панель управления роутера не отвечает",
+		"кнопки в приложении",
+		"перезагрузите роутер",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
@@ -517,7 +519,7 @@ func TestFormatRecovery_TunnelWithoutDetails_StillRendersBare(t *testing.T) {
 		HardSince:   time.Now(),
 		RecoveredAt: time.Now(),
 	})
-	if !strings.Contains(got, "снова на связи") {
+	if !strings.Contains(got, "снова работает") {
 		t.Errorf("bare recovery line missing: %s", got)
 	}
 	if strings.Contains(got, "Вернулись правила") {
@@ -560,7 +562,7 @@ func TestFormatRealertKeepsAdvisoryToneAndAction(t *testing.T) {
 			"installed": true, "running": false,
 		}},
 	})
-	for _, want := range []string{"🟡", "Всё ещё требует внимания:", "На что обратить внимание:", "Что делать:", "Перезапустить hrneo"} {
+	for _, want := range []string{"🟡", "Всё ещё требует внимания:", "На что обратить внимание:", "Что делать:", "перезагрузка роутера"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("missing advisory realert part %q in:\n%s", want, msg)
 		}
@@ -633,6 +635,159 @@ func TestHumaniseNetErr(t *testing.T) {
 	for in, want := range cases {
 		if got := humaniseNetErr(in); got != want {
 			t.Errorf("humaniseNetErr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Линия упала, но соседняя жива -- значит обход работает, и трафик идёт через
+// неё. Гнать человека чинить то, что у него работает, тревога не имеет права:
+// приложение в этот же момент честно пишет «работает на запасной линии»
+// (miniapp/src/routerHeadline.js), и два голоса одной системы обязаны
+// говорить одно и то же. Чинить всё равно надо -- запасная осталась одна, --
+// но это предупреждение, а не «всё сломалось».
+func TestFormatHardTunnelWithLiveSpareIsHonest(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg11",
+		HardSince: time.Now(),
+		Check: wire.Check{
+			Name: "tunnel_awg11", Status: "fail",
+			Details: map[string]any{"tunnel_name": "Франкфурт", "interface": "nwg1"},
+		},
+		Neighbors: []NeighborSummary{
+			{CheckName: "tunnel_awg12", TunnelName: "Амстердам", Status: "alive"},
+		},
+	})
+
+	if !strings.Contains(got, "запасн") {
+		t.Fatalf("при живом резерве тревога обязана сказать, что обход работает:\n%s", got)
+	}
+	if !strings.Contains(got, "Амстердам") {
+		t.Fatalf("надо назвать линию, через которую сейчас идёт обход:\n%s", got)
+	}
+	if strings.Contains(got, "🔴") {
+		t.Fatalf("работающий обход -- не красная тревога:\n%s", got)
+	}
+}
+
+// А вот когда живых соседей нет, обход действительно потерян -- и тут тревога
+// обязана быть тревогой.
+func TestFormatHardTunnelWithoutSpareIsAlarming(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg11",
+		HardSince: time.Now(),
+		Check: wire.Check{
+			Name: "tunnel_awg11", Status: "fail",
+			Details: map[string]any{"tunnel_name": "Франкфурт", "interface": "nwg1"},
+		},
+		Neighbors: []NeighborSummary{
+			{CheckName: "tunnel_awg12", TunnelName: "Амстердам", Status: "dead"},
+		},
+	})
+	if strings.Contains(got, "запасн") {
+		t.Fatalf("живого резерва нет -- обещать обход нельзя:\n%s", got)
+	}
+}
+
+// После переезда уведомлений в личку советы читает ВЛАДЕЛЕЦ роутера, а не
+// оператор со старой панелью бота в теме группы. У него нет ни этих кнопок,
+// ни SSH на роутер, ни opkg. Совет, который нельзя выполнить, хуже
+// отсутствующего: человек решает, что сломано непоправимо.
+func TestAdviceNeverSendsOwnerWhereHeCannotGo(t *testing.T) {
+	// Запрещённые обороты: доступ, которого у владельца нет, и кнопки
+	// старой панели, которых в личке не существует.
+	forbidden := []string{"ssh ", "SSH", "opkg", "logread", "/opt/etc/init.d"}
+	oldPanel := []string{"🛠 Обслуживание", "🎛 Туннели", "📊 Что происходит?", "🛡 PingCheck", "🌍 Через туннель?", "🇷🇺 Напрямую?"}
+
+	cases := []struct {
+		name  string
+		check string
+		d     map[string]any
+	}{
+		{"линия без рукопожатия", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт"}},
+		{"линия давно молчит", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900}},
+		{"линия с выключенной проверкой связи", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "ping_check_status": "disabled"}},
+		{"конфликт адресов", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "address_conflict": true}},
+		{"имена сайтов не находятся", "dns", map[string]any{"endpoints": 2, "failed_count": 2}},
+		{"панель роутера молчит", "awg_manager", map[string]any{}},
+		{"реестр линий недоступен", "tunnels", map[string]any{}},
+		{"HydraRoute не установлен", "hydraroute", map[string]any{"installed": false}},
+		{"HydraRoute остановлен", "hydraroute", map[string]any{"installed": true, "running": false}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatHard(HardArgs{
+				Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(),
+				Check: wire.Check{Name: tc.check, Status: "fail", Details: tc.d},
+			})
+			for _, bad := range forbidden {
+				if strings.Contains(got, bad) {
+					t.Errorf("владельцу советуют недоступное (%q):\n%s", bad, got)
+				}
+			}
+			for _, bad := range oldPanel {
+				if strings.Contains(got, bad) {
+					t.Errorf("совет ведёт в старую панель бота (%q):\n%s", bad, got)
+				}
+			}
+		})
+	}
+}
+
+// Уведомление «роутер не на связи» -- то же самое: его читает владелец.
+func TestOfflineAdviceIsForOwner(t *testing.T) {
+	got := FormatRouterOffline("router-a", 12*time.Minute)
+	for _, bad := range []string{"SSH", "ssh ", "/opt/etc/init.d", "heartbeat"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("владельцу советуют недоступное или непонятное (%q):\n%s", bad, got)
+		}
+	}
+}
+
+// Тревогу читает владелец роутера, а не инженер. Слова, которых он нигде не
+// видел, не объясняют поломку -- они её прячут.
+func TestAlertSpeaksHumanRussian(t *testing.T) {
+	jargon := []string{"fails", "резолвинг", "heartbeat", "handshake", "апстрим",
+		"static-маршрут", "DoH", "/24", "WAN", "UDP"}
+
+	cases := []struct {
+		name  string
+		check string
+		d     map[string]any
+	}{
+		{"линия", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "routes_dns": 48, "routes_static": 3}},
+		{"имена сайтов", "dns", map[string]any{"endpoints": 2, "failed_count": 2, "rkn_probed": 2, "rkn_suspect": 2}},
+		{"панель роутера", "awg_manager", map[string]any{}},
+		{"реестр линий", "tunnels", map[string]any{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FormatHard(HardArgs{
+				Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(), ConsecFails: 3,
+				Check: wire.Check{Name: tc.check, Status: "fail", Details: tc.d},
+			})
+			for _, w := range jargon {
+				if strings.Contains(got, w) {
+					t.Errorf("жаргон %q в тексте для владельца:\n%s", w, got)
+				}
+			}
+		})
+	}
+}
+
+// Инженерные тревоги владельцу переписаны через последствие: он ничего не
+// сделает с «реестром туннелей», но должен понять, что кнопки могут не
+// сработать.
+func TestControlPlaneAlertSpeaksAboutConsequence(t *testing.T) {
+	// Проверка реестра линий называется «tunnels» -- категория awgmgr_api
+	// нигде не является именем проверки.
+	for _, check := range []string{"awg_manager", "tunnels"} {
+		got := FormatHard(HardArgs{
+			Nickname: "router-a", CheckName: check, HardSince: time.Now(),
+			Check: wire.Check{Name: check, Status: "fail"},
+		})
+		if !strings.Contains(got, "интернет") && !strings.Contains(got, "Интернет") {
+			t.Errorf("%s: владельцу надо сказать, мешает ли это интернету:\n%s", check, got)
 		}
 	}
 }
