@@ -454,6 +454,7 @@ func main() {
 	if cfg.Digest.Enabled {
 		dp := digest.NewPoller(d, tgClient, digest.Config{
 			ChatID:       cfg.Telegram.ChatID,
+			AdminUserID:  cfg.Telegram.AdminUserID,
 			HourMSK:      cfg.Digest.HourMSK,
 			OnlineWindow: time.Duration(cfg.Digest.OnlineWindowSec) * time.Second,
 		})

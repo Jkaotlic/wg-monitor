@@ -58,15 +58,15 @@ func TestDigest_SendsOncePerDayWithOnlineCount(t *testing.T) {
 	}
 
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, HourMSK: 9, OnlineWindow: 10 * time.Minute})
+	p := NewPoller(d, f, Config{ChatID: -100, AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
 	p.SetNow(func() time.Time { return fixedNow })
 
 	p.TickForTest(context.Background())
 	if f.count() != 1 {
 		t.Fatalf("expected exactly 1 digest at the configured hour, got %d", f.count())
 	}
-	if f.chats[0] != -100 {
-		t.Fatalf("digest должен идти в primary chat, got chat %d", f.chats[0])
+	if len(f.chats) != 1 || f.chats[0] != 500 {
+		t.Fatalf("сводка идёт в личку админа, получили чат %v", f.chats)
 	}
 	body := f.sent[0]
 	for _, want := range []string{"Монитор жив", "1 из 2", "petya"} {
@@ -88,12 +88,40 @@ func TestDigest_SilentOutsideConfiguredHour(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, HourMSK: 9, OnlineWindow: 10 * time.Minute})
+	p := NewPoller(d, f, Config{ChatID: -100, AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
 	// 10:00 MSK ≠ configured 09:00 → no send.
 	p.SetNow(func() time.Time { return fixedNow.Add(time.Hour) })
 
 	p.TickForTest(context.Background())
 	if f.count() != 0 {
 		t.Fatalf("digest must stay silent outside the configured hour, got %d sends", f.count())
+	}
+}
+
+// Сводка по парку -- админское чтиво: она уходит в личку админа, а не в
+// общий чат.
+func TestDigest_GoesToAdminDM(t *testing.T) {
+	d := openDB(t)
+	v, err := d.Users().Insert("vasya", "rawtoken-vasya", "1.1.1.1", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Events().Insert(v, "dns", "ok", "{}", fixedNow.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	f := &fakeTG{}
+	p := NewPoller(d, f, Config{ChatID: -100, AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
+	p.SetNow(func() time.Time { return fixedNow })
+
+	p.TickForTest(context.Background())
+
+	if f.count() != 1 {
+		t.Fatalf("сводок отправлено %d, ждали одну", f.count())
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.chats) != 1 || f.chats[0] != 500 {
+		t.Fatalf("адресаты=%v, ждали личку админа 500", f.chats)
 	}
 }

@@ -23,7 +23,10 @@ type Sender interface {
 }
 
 type Config struct {
-	ChatID       int64         // primary chat; digest posts to General (threadID nil)
+	ChatID       int64         // прежний общий чат; после переезда в личку не используется
+	// AdminUserID -- личка админа. Сводка по всему парку адресована ему:
+	// владельцу одного роутера картина по одиннадцати чужим ни к чему.
+	AdminUserID  int64
 	HourMSK      int           // 0-23, hour of day in MSK to send (default 9)
 	OnlineWindow time.Duration // a router is "online" if its latest event is fresher than this (default 10m)
 	TickEvery    time.Duration // how often to check the clock (default 5m)
@@ -129,7 +132,12 @@ func (p *Poller) tick(ctx context.Context) {
 	}
 
 	text := RenderDigest(online, len(users), offline, msk)
-	if _, err := p.tg.SendMessage(ctx, p.cfg.ChatID, nil, text, "", nil); err != nil {
+	target := p.cfg.AdminUserID
+	if target == 0 {
+		slog.Warn("digest: admin_user_id не задан, сводку слать некому")
+		return
+	}
+	if _, err := p.tg.SendMessage(ctx, target, nil, text, "", nil); err != nil {
 		slog.Warn("digest: send failed; will retry within the hour", "err", err)
 		return // do NOT mark sent → retry next tick while still in the hour
 	}
