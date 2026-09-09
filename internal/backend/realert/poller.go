@@ -14,6 +14,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -72,7 +73,20 @@ type Poller struct {
 	// Reset on success.
 	sendFailMu    sync.Mutex
 	sendFailCount map[string]int
+	// notify -- рассылка напоминаний по личкам получателей. Заменила
+	// адресацию в тему группы.
+	notify realertSink
 }
+
+// realertSink -- та часть веера, которой пользуются напоминания. Кнопки
+// прикладываются, но сообщения НЕ запоминаются: «починилось» обязано
+// отвечать на корневую тревогу, а не на последнее напоминание.
+type realertSink interface {
+	SendKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
+}
+
+// SetNotifySink подменяет рассылку. Только для тестов.
+func (p *Poller) SetNotifySink(s realertSink) { p.notify = s }
 
 func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 	if cfg.RealertEvery <= 0 {
@@ -87,6 +101,7 @@ func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 	return &Poller{
 		d: d, tg: tg, cfg: cfg, now: time.Now,
 		sendFailCount: make(map[string]int),
+		notify:        notify.NewFanout(d, tg, slog.Default()),
 	}
 }
 
@@ -271,8 +286,7 @@ func (p *Poller) tick(ctx context.Context) {
 			opts = append(opts, tg.WithMobileActions())
 		}
 		kb := tg.HardAlertKeyboard(sh.UserID, sh.CheckName, opts...)
-		chatID := u.EffectiveTelegramChatID(p.cfg.ChatID)
-		_, err = p.tg.SendMessageWithKeyboard(ctx, chatID, u.TelegramThreadID, text, "", nil, &kb)
+		_, err = p.notify.SendKeyboard(ctx, sh.UserID, text, "", &kb)
 		if err != nil {
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {
 				slog.Error("realert: tg send failed", "user_id", sh.UserID, "check", sh.CheckName, "consecutive_fails", count, "err", err)

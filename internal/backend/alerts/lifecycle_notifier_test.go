@@ -28,12 +28,12 @@ func (f *fakeSendTG) SendMessage(_ context.Context, chatID int64, threadID *int6
 	return 100, nil
 }
 
-func TestWakeNotifier_SendsToRouterTopic(t *testing.T) {
+func TestWakeNotifier_SendsToOwnerDM(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "1100110011001100110011001100110011001100110011001100110011001100"
 	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
-	if err := d.Users().UpdateThreadID(uid, 555); err != nil {
+	if err := d.Users().SetTelegramUserID(uid, 7001); err != nil {
 		t.Fatal(err)
 	}
 
@@ -43,23 +43,28 @@ func TestWakeNotifier_SendsToRouterTopic(t *testing.T) {
 	if err := wn.SendWake(context.Background(), uid, "client-h", checks); err != nil {
 		t.Fatal(err)
 	}
-	if tg.chatID != -100 {
-		t.Errorf("chatID: want -100, got %d", tg.chatID)
+	if tg.chatID != 7001 {
+		t.Errorf("адресат: ждали личку владельца 7001, получили %d", tg.chatID)
 	}
-	if tg.threadID == nil || *tg.threadID != 555 {
-		t.Errorf("threadID: want 555, got %v", tg.threadID)
+	if tg.threadID != nil {
+		t.Errorf("в личку пишут без темы, получили %v", *tg.threadID)
 	}
 	if !strings.Contains(tg.text, "🚗") || !strings.Contains(tg.text, "client-h") {
 		t.Errorf("text missing wake markers: %q", tg.text)
 	}
 }
 
-func TestWakeNotifier_UsesRouterTelegramChatID(t *testing.T) {
+func TestWakeNotifier_SkipsMutedRecipient(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "1111222233334444555566667777888899990000aaaabbbbccccddddeeeeffff"
 	uid, _ := d.Users().InsertWithKind("tenantcar", tok, "1.1.1.1", "nwg0", db.KindMobile)
-	if err := d.Users().UpdateTelegramTopic(uid, -200, 555); err != nil {
+	if err := d.Users().SetTelegramUserID(uid, 7002); err != nil {
+		t.Fatal(err)
+	}
+	// Владелец выключил уведомления по этому роутеру -- значит и отчёт о
+	// пробуждении ему не приходит.
+	if err := d.NotifyMutes().SetMuted(7002, uid, true); err != nil {
 		t.Fatal(err)
 	}
 
@@ -68,35 +73,33 @@ func TestWakeNotifier_UsesRouterTelegramChatID(t *testing.T) {
 	if err := wn.SendWake(context.Background(), uid, "tenantcar", []wire.Check{{Name: "tunnels", Status: "ok"}}); err != nil {
 		t.Fatal(err)
 	}
-	if tg.chatID != -200 {
-		t.Errorf("chatID: want -200, got %d", tg.chatID)
-	}
-	if tg.threadID == nil || *tg.threadID != 555 {
-		t.Errorf("threadID: want 555, got %v", tg.threadID)
+	if tg.chatID != 0 {
+		t.Errorf("заглушившему ушло сообщение в чат %d", tg.chatID)
 	}
 }
 
-func TestSleepNotifier_SendsToRouterTopic(t *testing.T) {
+func TestSleepNotifier_SendsToOwnerDM(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "2200220022002200220022002200220022002200220022002200220022002200"
-	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
-	d.Users().UpdateThreadID(uid, 777)
-
-	tg := &fakeSendTG{}
-	sn := NewSleepNotifier(d, tg, -200)
-	when := time.Date(2026, 5, 15, 14, 32, 0, 0, time.Local)
-	if err := sn.SendSleeping(context.Background(), uid, "client-h", when); err != nil {
+	uid, _ := d.Users().InsertWithKind("sleeper", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	if err := d.Users().SetTelegramUserID(uid, 7003); err != nil {
 		t.Fatal(err)
 	}
-	if tg.chatID != -200 {
-		t.Errorf("chatID: want -200, got %d", tg.chatID)
+
+	tg := &fakeSendTG{}
+	sn := NewSleepNotifier(d, tg, -100)
+	if err := sn.SendSleeping(context.Background(), uid, "sleeper", time.Now().Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
 	}
-	if tg.threadID == nil || *tg.threadID != 777 {
-		t.Errorf("threadID: want 777, got %v", tg.threadID)
+	if tg.chatID != 7003 {
+		t.Errorf("адресат: ждали личку владельца 7003, получили %d", tg.chatID)
 	}
-	if !strings.Contains(tg.text, "🌙") || !strings.Contains(tg.text, "client-h") {
-		t.Errorf("text missing sleep markers: %q", tg.text)
+	if tg.threadID != nil {
+		t.Errorf("в личку пишут без темы, получили %v", *tg.threadID)
+	}
+	if !strings.Contains(tg.text, "sleeper") {
+		t.Errorf("в тексте нет имени роутера: %q", tg.text)
 	}
 }
 

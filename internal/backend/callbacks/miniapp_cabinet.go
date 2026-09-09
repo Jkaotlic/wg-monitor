@@ -3,10 +3,12 @@ package callbacks
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 )
 
 // Кабинеты провайдеров для мини-аппа. Реализация backend.VPNCabinet живёт
@@ -126,21 +128,16 @@ func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (b
 	return acc, nil
 }
 
-// NotifyRouterTopic пишет текст в тему роутера. Нужен мастеру замены
-// конфига: он сообщает исход при закрытом приложении -- это единственное,
-// чего приложение не может, и ровно поэтому уведомления остаются у бота.
+// NotifyRouterTopic пишет текст всем, кому адресованы уведомления о роутере.
+// Нужен мастеру замены конфига: он сообщает исход при закрытом приложении --
+// это единственное, чего приложение не может, и ровно поэтому уведомления
+// остаются у бота.
 //
-// Тема и чат берутся у самого роутера (EffectiveTelegramChatID): у каждого
-// своя, и общий чат тут был бы рассылкой не по адресу.
+// Имя осталось прежним ради вызывающих; адресат сменился с темы группы на
+// личку каждого получателя.
 func (r *Router) NotifyRouterTopic(ctx context.Context, routerID int64, text string) error {
-	user, err := r.d.Users().GetByID(routerID)
-	if err != nil || user == nil {
-		return fmt.Errorf("notify router topic: роутер %d не найден: %w", routerID, err)
+	if _, err := notify.NewFanout(r.d, r.tg, slog.Default()).Send(ctx, routerID, text, ""); err != nil {
+		return fmt.Errorf("notify router: %w", err)
 	}
-	chatID := user.EffectiveTelegramChatID(r.cfg.ChatID)
-	if chatID == 0 {
-		return fmt.Errorf("notify router topic: у роутера %s нет чата", user.Nickname)
-	}
-	_, err = r.tg.SendMessage(ctx, chatID, user.TelegramThreadID, text, "", nil)
-	return err
+	return nil
 }

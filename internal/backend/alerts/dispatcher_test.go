@@ -639,9 +639,15 @@ func TestDispatcherHardOmitsMiniAppButtonWhenNotConfigured(t *testing.T) {
 // recordingSink -- счётчик рассылки: тесту важно, кому ушло, а не как.
 type recordingSink struct {
 	tracked  []int64 // routerUserID для каждой отправки тревоги
+	plain    []int64 // routerUserID для отправок без кнопок
 	replies  []int64 // routerUserID для каждого «починилось»
 	checks   []string
 	delivers int
+}
+
+func (r *recordingSink) Send(_ context.Context, routerUserID int64, _, _ string) (int, error) {
+	r.plain = append(r.plain, routerUserID)
+	return r.delivers, nil
 }
 
 func (r *recordingSink) SendTracked(_ context.Context, routerUserID int64, checkName, _, _ string, _ *tg.InlineKeyboardMarkup) (int, error) {

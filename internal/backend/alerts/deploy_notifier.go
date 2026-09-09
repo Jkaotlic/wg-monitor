@@ -7,20 +7,28 @@ import (
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 )
 
-// DeployNotifier posts backend/VPS-mediated agent update outcomes into the
-// router topic. It is intentionally separate from command-result replies:
+// DeployNotifier posts backend/VPS-mediated agent update outcomes to the
+// router's people. It is intentionally separate from command-result replies:
 // deferred jobs often have no Telegram message to reply to.
 type DeployNotifier struct {
 	db     *db.DB
 	tg     LifecycleSendTG
 	chatID int64
+	notify notifySink
 }
 
-func NewDeployNotifier(d *db.DB, tg LifecycleSendTG, chatID int64) *DeployNotifier {
-	return &DeployNotifier{db: d, tg: tg, chatID: chatID}
+func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *DeployNotifier {
+	return &DeployNotifier{
+		db: d, tg: tgc, chatID: chatID,
+		notify: notify.NewFanout(d, tgc, slog.Default()),
+	}
 }
+
+// SetNotifySink подменяет рассылку. Только для тестов.
+func (n *DeployNotifier) SetNotifySink(s notifySink) { n.notify = s }
 
 func (n *DeployNotifier) SendDeferredUpdate(ctx context.Context, userID int64, nickname, targetVersion, status, output string) error {
 	user, err := n.db.Users().GetByID(userID)
@@ -28,17 +36,13 @@ func (n *DeployNotifier) SendDeferredUpdate(ctx context.Context, userID int64, n
 		slog.Warn("deploy notifier: user lookup", "user_id", userID, "err", err)
 		return nil
 	}
-	if user.TelegramThreadID == nil {
-		slog.Debug("deploy notifier: no thread, skipping", "user_id", userID, "nickname", nickname)
-		return nil
-	}
 	card := RenderDeferredUpdate(nickname, targetVersion, status, output)
 	text := card.Render(CardOpts{MaxBytes: 1200})
-	_, err = n.tg.SendMessage(ctx, user.EffectiveTelegramChatID(n.chatID), user.TelegramThreadID, text, "", nil)
-	if err != nil {
+	if _, err := n.notify.Send(ctx, userID, text, ""); err != nil {
 		slog.Warn("deploy notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
+		return err
 	}
-	return err
+	return nil
 }
 
 func RenderDeferredUpdate(nickname, targetVersion, status, output string) Card {

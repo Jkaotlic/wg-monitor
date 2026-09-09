@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -28,20 +29,30 @@ type WakeNotifier struct {
 	db     *db.DB
 	tg     LifecycleSendTG
 	chatID int64
+	notify lifecycleSink
 }
 
-func NewWakeNotifier(d *db.DB, tg LifecycleSendTG, chatID int64) *WakeNotifier {
-	return &WakeNotifier{db: d, tg: tg, chatID: chatID}
+func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *WakeNotifier {
+	return &WakeNotifier{
+		db: d, tg: tgc, chatID: chatID,
+		notify: notify.NewFanout(d, tgc, slog.Default()),
+	}
+}
+
+// SetNotifySink подменяет рассылку. Только для тестов.
+func (n *WakeNotifier) SetNotifySink(s lifecycleSink) { n.notify = s }
+
+// lifecycleSink -- та часть веера, которой пользуются уведомления о сне и
+// пробуждении: обычная рассылка и рассылка с нижней клавиатурой.
+type lifecycleSink interface {
+	Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error)
+	SendWithReplyKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, markup any) (int, error)
 }
 
 func (n *WakeNotifier) SendWake(ctx context.Context, userID int64, nickname string, checks []wire.Check) error {
 	user, err := n.db.Users().GetByID(userID)
 	if err != nil || user == nil {
 		slog.Warn("wake notifier: user lookup", "user_id", userID, "err", err)
-		return nil
-	}
-	if user.TelegramThreadID == nil {
-		slog.Debug("wake notifier: no thread, skipping", "user_id", userID, "nickname", nickname)
 		return nil
 	}
 	now := time.Now()
@@ -53,12 +64,7 @@ func (n *WakeNotifier) SendWake(ctx context.Context, userID int64, nickname stri
 	}
 	card := RenderWakeReport(nickname, checks)
 	text := card.Render(CardOpts{MaxBytes: 3500})
-	chatID := user.EffectiveTelegramChatID(n.chatID)
-	if ktg, ok := n.tg.(lifecycleKeyboardTG); ok {
-		_, err = ktg.SendMessageWithReplyKeyboard(ctx, chatID, user.TelegramThreadID, text, "", nil, mobileWakeKeyboard(userID))
-	} else {
-		_, err = n.tg.SendMessage(ctx, chatID, user.TelegramThreadID, text, "", nil)
-	}
+	_, err = n.notify.SendWithReplyKeyboard(ctx, userID, text, "", mobileWakeKeyboard(userID))
 	if err != nil {
 		slog.Warn("wake notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
 	} else if err := n.db.KV().SetMobileWakeNotifiedAt(userID, now); err != nil {
@@ -74,11 +80,18 @@ type SleepNotifier struct {
 	db     *db.DB
 	tg     LifecycleSendTG
 	chatID int64
+	notify lifecycleSink
 }
 
-func NewSleepNotifier(d *db.DB, tg LifecycleSendTG, chatID int64) *SleepNotifier {
-	return &SleepNotifier{db: d, tg: tg, chatID: chatID}
+func NewSleepNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *SleepNotifier {
+	return &SleepNotifier{
+		db: d, tg: tgc, chatID: chatID,
+		notify: notify.NewFanout(d, tgc, slog.Default()),
+	}
 }
+
+// SetNotifySink подменяет рассылку. Только для тестов.
+func (n *SleepNotifier) SetNotifySink(s lifecycleSink) { n.notify = s }
 
 func (n *SleepNotifier) SendSleeping(ctx context.Context, userID int64, nickname string, lastSeen time.Time) error {
 	user, err := n.db.Users().GetByID(userID)
@@ -86,13 +99,9 @@ func (n *SleepNotifier) SendSleeping(ctx context.Context, userID int64, nickname
 		slog.Warn("sleep notifier: user lookup", "user_id", userID, "err", err)
 		return nil
 	}
-	if user.TelegramThreadID == nil {
-		slog.Debug("sleep notifier: no thread, skipping", "user_id", userID, "nickname", nickname)
-		return nil
-	}
 	card := RenderSleepInfo(nickname, lastSeen)
 	text := card.Render(CardOpts{MaxBytes: 800})
-	_, err = n.tg.SendMessage(ctx, user.EffectiveTelegramChatID(n.chatID), user.TelegramThreadID, text, "", nil)
+	_, err = n.notify.Send(ctx, userID, text, "")
 	if err != nil {
 		slog.Warn("sleep notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
 	}

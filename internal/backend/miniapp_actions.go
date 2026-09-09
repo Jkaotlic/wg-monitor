@@ -77,31 +77,39 @@ func miniappIncidentAction(d Deps, w http.ResponseWriter, r *http.Request, mutat
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "state save failed")
 		return
 	}
-	miniappSyncAlertMessage(d, r, routerID, newSt, statusLine)
+	miniappSyncAlertMessage(d, r, routerID, check, statusLine)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_ = json.NewEncoder(w).Encode(miniappIncidentResp{Incident: miniappIncidentFromState(newSt)})
 }
 
-// miniappSyncAlertMessage strips the buttons from the original alert and posts
-// a threaded breadcrumb — all best-effort. A nil MiniappTG or a missing
-// LastAlertMsgID skips it silently; Bot API errors are logged, not surfaced.
-func miniappSyncAlertMessage(d Deps, r *http.Request, routerID int64, st db.IncidentState, statusLine string) {
-	if d.MiniappTG == nil || st.LastAlertMsgID == nil || statusLine == "" {
+// miniappSyncAlertMessage снимает кнопки с исходной тревоги и дописывает под
+// ней строку о том, что человек сделал через приложение -- каждому получателю
+// в его собственном сообщении.
+//
+// До переезда в личку адрес был один (тема группы) и хватало одного
+// last_alert_msg_id. Теперь у каждого своё сообщение, и карту хранит таблица
+// alert_messages. Всё best-effort: ошибки Bot API логируются, наружу не идут.
+func miniappSyncAlertMessage(d Deps, r *http.Request, routerID int64, checkName, statusLine string) {
+	if d.MiniappTG == nil || statusLine == "" || checkName == "" {
 		return
 	}
-	user, err := d.DB.Users().GetByID(routerID)
-	if err != nil || user == nil {
+	msgs, err := d.DB.AlertMessages().List(routerID, checkName)
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("miniapp: alert messages lookup failed", "router_id", routerID, "check", checkName, "err", err)
+		}
 		return
 	}
-	chatID := user.EffectiveTelegramChatID(d.TelegramPrimaryChatID)
-	msgID := *st.LastAlertMsgID
 	ctx := r.Context()
-	if err := d.MiniappTG.EditMessageReplyMarkup(ctx, chatID, msgID, &miniappEmptyKeyboard); err != nil && d.Logger != nil {
-		d.Logger.Warn("miniapp: strip alert buttons failed", "router_id", routerID, "err", err)
-	}
 	breadcrumb := statusLine + " (через приложение)"
-	if _, err := d.MiniappTG.SendMessage(ctx, chatID, user.TelegramThreadID, breadcrumb, "", &msgID); err != nil && d.Logger != nil {
-		d.Logger.Warn("miniapp: alert breadcrumb failed", "router_id", routerID, "err", err)
+	for chatID, msgID := range msgs {
+		if err := d.MiniappTG.EditMessageReplyMarkup(ctx, chatID, msgID, &miniappEmptyKeyboard); err != nil && d.Logger != nil {
+			d.Logger.Warn("miniapp: strip alert buttons failed", "router_id", routerID, "telegram_user_id", chatID, "err", err)
+		}
+		mid := msgID
+		if _, err := d.MiniappTG.SendMessage(ctx, chatID, nil, breadcrumb, "", &mid); err != nil && d.Logger != nil {
+			d.Logger.Warn("miniapp: alert breadcrumb failed", "router_id", routerID, "telegram_user_id", chatID, "err", err)
+		}
 	}
 }
 

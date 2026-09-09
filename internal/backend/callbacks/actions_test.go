@@ -362,28 +362,29 @@ func TestActionHistoryWithTransitions(t *testing.T) {
 	}
 }
 
-func TestActionHistoryUsesRouterTelegramChatID(t *testing.T) {
+func TestActionHistoryAnswersWhereTapped(t *testing.T) {
 	d, uid := newTestDB(t)
-	if err := d.Users().UpdateTelegramTopic(uid, -200, 4242); err != nil {
+	if err := d.Users().UpdateTelegramTopic(uid, -200, 555); err != nil {
 		t.Fatal(err)
 	}
-	fakeTG := &fakeTGForHistory{}
-	a := NewHistoryAction(d, fakeTG, -100)
+	const tapper = int64(8001)
 
-	_, err := a.Apply(context.Background(), &tg.CallbackQuery{}, Args{
-		Action: "history", UserID: uid, CheckName: "awg_handshake",
-	})
-	if err != nil {
+	f := &fakeTGForHistory{}
+	a := NewHistoryAction(d, f, -100)
+	// Нажали в личке -- ответ обязан прийти туда же, а не в тему роутера.
+	q := &tg.CallbackQuery{
+		ID:      "cbk-history-dm",
+		From:    tg.User{ID: tapper},
+		Message: tg.Message{MessageID: 9, Chat: tg.Chat{ID: tapper}},
+	}
+	if _, err := a.Apply(context.Background(), q, Args{Action: "history", UserID: uid, CheckName: "awg_handshake"}); err != nil {
 		t.Fatal(err)
 	}
-	if len(fakeTG.chats) != 1 {
-		t.Fatalf("expected one history message, got chats=%v", fakeTG.chats)
+	if len(f.chats) != 1 || f.chats[0] != tapper {
+		t.Fatalf("ответ ушёл в %v, ждали личку нажавшего %d", f.chats, tapper)
 	}
-	if fakeTG.chats[0] != -200 {
-		t.Fatalf("history chatID=%d, want router chat -200", fakeTG.chats[0])
-	}
-	if fakeTG.threads[0] == nil || *fakeTG.threads[0] != 4242 {
-		t.Fatalf("history threadID=%v, want 4242", fakeTG.threads[0])
+	if f.threads[0] != nil {
+		t.Fatalf("в личку отвечают без темы, получили %v", *f.threads[0])
 	}
 }
 

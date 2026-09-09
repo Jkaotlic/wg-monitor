@@ -164,11 +164,16 @@ func (a *HistoryAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		}},
 	}.Render(alerts.CardOpts{MaxBytes: 3500})
 
-	chatID := a.chatID
-	if user != nil {
-		chatID = user.EffectiveTelegramChatID(a.chatID)
+	// Отвечаем туда, откуда нажали: из лички -- в личку, из группы -- в её
+	// тему. Раньше история всегда уезжала в тему роутера, и человек,
+	// нажавший кнопку в другом месте, ответа не видел вовсе.
+	chatID := q.Message.Chat.ID
+	replyThread := q.Message.MessageThreadID
+	if chatID == 0 {
+		chatID = a.chatID
+		replyThread = threadID
 	}
-	_, err = a.tg.SendMessage(ctx, chatID, threadID, text, "", nil)
+	_, err = a.tg.SendMessage(ctx, chatID, replyThread, text, "", nil)
 	if err != nil {
 		return "", err
 	}

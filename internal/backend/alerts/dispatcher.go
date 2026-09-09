@@ -26,6 +26,7 @@ type TGSender interface {
 // Интерфейсом, а не конкретным типом: тесты подставляют счётчик отправок и не
 // поднимают ради этого настоящую рассылку.
 type notifySink interface {
+	Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error)
 	SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error)
 	ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error
 }

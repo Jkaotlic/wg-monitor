@@ -61,6 +61,11 @@ func newTestDB(t *testing.T) (*db.DB, int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Напоминания идут в личку получателей: без привязанного владельца слать
+	// некому, и ни одно из них никуда не уйдёт.
+	if err := d.Users().SetTelegramUserID(uid, 6001); err != nil {
+		t.Fatal(err)
+	}
 	return d, uid
 }
 
@@ -194,35 +199,21 @@ func TestTickTunnelRealertCarriesActionButtons(t *testing.T) {
 	}
 }
 
-func TestTickRealertUsesRouterTelegramChatID(t *testing.T) {
+func TestTickRealertSkipsMutedRecipient(t *testing.T) {
 	d, uid := newTestDB(t)
-	if err := d.Users().UpdateTelegramTopic(uid, -200, 777); err != nil {
+	// Владелец выключил уведомления по этому роутеру -- напоминания тоже
+	// перестают приходить: тумблер один на все уведомления о роутере.
+	if err := d.NotifyMutes().SetMuted(6001, uid, true); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
+	stageIncident(t, d, uid, now, 5*time.Hour, 70*time.Minute)
 
-	now := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
-	p.SetNow(func() time.Time { return now })
-	hardSince := now.Add(-3 * time.Hour)
-	lastAlert := now.Add(-2 * time.Hour)
-	if err := d.State().Save(uid, "dns", db.IncidentState{
-		UserID: uid, CheckName: "dns", CurrentStatus: "hard",
-		ConsecutiveFails: 8, HardSince: &hardSince, LastAlertAt: &lastAlert,
-	}); err != nil {
-		t.Fatal(err)
-	}
+	pollerAt(d, f, now).tick(context.Background())
 
-	p.tick(context.Background())
-
-	if len(f.chats) != 1 {
-		t.Fatalf("expected one realert send, got chats=%v texts=%d", f.chats, len(f.sent))
-	}
-	if f.chats[0] != -200 {
-		t.Fatalf("realert chatID=%d, want router chat -200", f.chats[0])
-	}
-	if f.threads[0] == nil || *f.threads[0] != 777 {
-		t.Fatalf("realert threadID=%v, want 777", f.threads[0])
+	if f.count() != 0 {
+		t.Fatalf("заглушившему ушло %d напоминаний", f.count())
 	}
 }
 
@@ -252,6 +243,9 @@ func TestTickMobileHardUsesMobileRealertCadence(t *testing.T) {
 	d, _ := newTestDB(t)
 	uid, err := d.Users().InsertWithKind("car4", "mobiletoken", "1.1.1.1", "nwg0", db.KindMobile)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(uid, 6002); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeTG{}

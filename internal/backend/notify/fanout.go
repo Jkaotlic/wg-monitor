@@ -50,18 +50,59 @@ func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode s
 		return 0, err
 	}
 	delivered := 0
+	var lastErr error
 	for _, chatID := range targets {
 		if _, err := f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil); err != nil {
 			f.noteFailure(chatID, routerUserID, err)
+			lastErr = err
 			continue
 		}
 		delivered++
 		f.noteSuccess(chatID)
 	}
-	if delivered == 0 && len(targets) > 0 {
-		return 0, fmt.Errorf("%w: получателей %d", ErrNoneDelivered, len(targets))
+	return f.result(delivered, len(targets), lastErr)
+}
+
+// result -- общий вердикт рассылки. Исходную ошибку Telegram оборачиваем
+// внутрь: по ней вызывающий разбирает, был ли это лимит частоты, и решает,
+// когда повторить.
+func (f *Fanout) result(delivered, targets int, lastErr error) (int, error) {
+	if delivered == 0 && targets > 0 {
+		if lastErr != nil {
+			return 0, fmt.Errorf("%w: получателей %d: %w", ErrNoneDelivered, targets, lastErr)
+		}
+		return 0, fmt.Errorf("%w: получателей %d", ErrNoneDelivered, targets)
 	}
 	return delivered, nil
+}
+
+// SendKeyboard рассылает текст с кнопками, НЕ запоминая сообщения. Нужен
+// напоминаниям: «починилось» обязано отвечать на корневую тревогу, а не на
+// последнее напоминание.
+func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
+	targets, err := RecipientsFor(f.d, routerUserID)
+	if err != nil {
+		return 0, err
+	}
+	ks, hasKeyboard := f.s.(KeyboardSender)
+	delivered := 0
+	var lastErr error
+	for _, chatID := range targets {
+		var sendErr error
+		if hasKeyboard && kb != nil {
+			_, sendErr = ks.SendMessageWithKeyboard(ctx, chatID, nil, text, parseMode, nil, kb)
+		} else {
+			_, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
+		}
+		if sendErr != nil {
+			f.noteFailure(chatID, routerUserID, sendErr)
+			lastErr = sendErr
+			continue
+		}
+		delivered++
+		f.noteSuccess(chatID)
+	}
+	return f.result(delivered, len(targets), lastErr)
 }
 
 // noteFailure -- общая обработка неудачной доставки.
@@ -105,6 +146,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 	}
 	ks, hasKeyboard := f.s.(KeyboardSender)
 	delivered := 0
+	var lastErr error
 	for _, chatID := range targets {
 		var mid int64
 		var sendErr error
@@ -115,6 +157,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 		}
 		if sendErr != nil {
 			f.noteFailure(chatID, routerUserID, sendErr)
+			lastErr = sendErr
 			continue
 		}
 		delivered++
@@ -124,10 +167,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 		}
 		f.noteSuccess(chatID)
 	}
-	if delivered == 0 && len(targets) > 0 {
-		return 0, fmt.Errorf("%w: получателей %d", ErrNoneDelivered, len(targets))
-	}
-	return delivered, nil
+	return f.result(delivered, len(targets), lastErr)
 }
 
 // ReplyToEach отвечает каждому получателю на его собственное сообщение о
@@ -155,4 +195,40 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 		f.noteSuccess(chatID)
 	}
 	return nil
+}
+
+// ReplyKeyboardSender -- отправка с нижней клавиатурой. Ею пользуется отчёт о
+// пробуждении мобильного роутера: там кнопки не под сообщением, а панелью.
+type ReplyKeyboardSender interface {
+	Sender
+	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
+}
+
+// SendWithReplyKeyboard рассылает текст с нижней клавиатурой. Если отправитель
+// её не умеет, уведомление уходит без панели: потерять кнопки лучше, чем
+// потерять сообщение.
+func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, markup any) (int, error) {
+	targets, err := RecipientsFor(f.d, routerUserID)
+	if err != nil {
+		return 0, err
+	}
+	rks, hasKeyboard := f.s.(ReplyKeyboardSender)
+	delivered := 0
+	var lastErr error
+	for _, chatID := range targets {
+		var sendErr error
+		if hasKeyboard && markup != nil {
+			_, sendErr = rks.SendMessageWithReplyKeyboard(ctx, chatID, nil, text, parseMode, nil, markup)
+		} else {
+			_, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
+		}
+		if sendErr != nil {
+			f.noteFailure(chatID, routerUserID, sendErr)
+			lastErr = sendErr
+			continue
+		}
+		delivered++
+		f.noteSuccess(chatID)
+	}
+	return f.result(delivered, len(targets), lastErr)
 }

@@ -48,6 +48,10 @@ func TestIntegration_MobileLifecycle_WakeAndSleep(t *testing.T) {
 	defer d.Close()
 	tok := "ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00ff00"
 	uid, _ := d.Users().InsertWithKind("client-h", tok, "1.1.1.1", "nwg0", db.KindMobile)
+	// Уведомления идут в личку владельца: без привязки слать некому.
+	if err := d.Users().SetTelegramUserID(uid, 9001); err != nil {
+		t.Fatal(err)
+	}
 	if err := d.Users().UpdateThreadID(uid, 555); err != nil {
 		t.Fatal(err)
 	}
@@ -89,12 +93,14 @@ func TestIntegration_MobileLifecycle_WakeAndSleep(t *testing.T) {
 	if !strings.Contains(sends[1].text, "🌙") || !strings.Contains(sends[1].text, "client-h") {
 		t.Errorf("second send must be sleep-info, got %q", sends[1].text)
 	}
+	// Оба уведомления уходят в личку владельца: тема роутера осталась в
+	// базе с прежних времён, но адресатом больше не является.
 	for _, s := range sends {
-		if s.threadID == nil || *s.threadID != 555 {
-			t.Errorf("send threadID: want 555, got %v", s.threadID)
+		if s.threadID != nil {
+			t.Errorf("в личку пишут без темы, получили %v", *s.threadID)
 		}
-		if s.chatID != chatID {
-			t.Errorf("send chatID: want %d, got %d", chatID, s.chatID)
+		if s.chatID != 9001 {
+			t.Errorf("адресат: ждали личку владельца 9001, получили %d", s.chatID)
 		}
 	}
 }

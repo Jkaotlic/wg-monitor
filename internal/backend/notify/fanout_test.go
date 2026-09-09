@@ -227,3 +227,23 @@ func TestFanout_AllFailedIsAnError(t *testing.T) {
 		t.Fatalf("ошибка=%v, ждали ErrNoneDelivered", err)
 	}
 }
+
+// Исходная ошибка Telegram обязана дойти до вызывающего: по ней напоминания
+// разбирают лимит частоты и решают, когда повторить.
+func TestFanout_KeepsUnderlyingError(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	want := &tg.APIError{Method: "sendMessage", Code: 429, Description: "Too Many Requests", RetryAfter: 30}
+	s := &fakeSender{fail: map[int64]error{1001: want}}
+
+	_, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	var got *tg.APIError
+	if !errors.As(err, &got) {
+		t.Fatalf("ошибка=%v, из неё нельзя достать APIError", err)
+	}
+	if got.Code != 429 {
+		t.Fatalf("код=%d, ждали 429", got.Code)
+	}
+}
