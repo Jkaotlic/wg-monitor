@@ -14,7 +14,11 @@ describe('routerHeadline', () => {
     })
     expect(h.cold).toBe(false)
     expect(h.tone).toBe('sig')
-    expect(h.tag).toBe('туннель поднят · ответ 52 сек назад')
+    // Метка отвечает на вопрос человека («всё ли хорошо»), а не пересказывает
+    // прибор. Возраст данных ушёл в отдельную строку свежести, которая тикает
+    // сама: держать его в метке значило бы печатать число, застывшее на
+    // момент загрузки.
+    expect(h.tag).toBe('всё работает')
     expect(h.verdict).toContain('awg3-work-via-ru1')
   })
 
@@ -107,5 +111,32 @@ describe('linesSummary', () => {
 
   it('без туннелей говорит прямо, а не «0 из 0»', () => {
     expect(linesSummary(0, 0)).toBe('Туннелей нет')
+  })
+})
+
+describe('вердикт говорит правду о маршруте', () => {
+  // Главная ложь старого экрана: обещание единого ответа «через VPN или
+  // напрямую». Маршрут всегда умный -- заблокированное идёт через туннель,
+  // остальное напрямую, — и вердикт обязан говорить про ДВА потока.
+  it('не обещает единого маршрута для всего трафика', () => {
+    const h = routerHeadline({
+      router: { status: 'online', last_seen_age_sec: 6 },
+      traffic: { mode: 'vpn', egress_tunnel_name: 'Амстердам' },
+      incidents: [],
+    })
+    expect(h.verdict).not.toMatch(/весь трафик|весь интернет/i)
+    expect(h.verdict).toMatch(/заблокирован/i)
+    expect(h.verdict).toMatch(/напрямую/i)
+    expect(h.tag).toBe('всё работает')
+  })
+
+  it('на упавшей линии называет последствие человеческими словами', () => {
+    const h = routerHeadline({
+      router: { status: 'online', last_seen_age_sec: 6 },
+      traffic: { mode: 'vpn' },
+      incidents: [{ check_name: 'tunnel_awg12' }],
+    })
+    expect(h.tone).toBe('danger')
+    expect(h.tag).not.toMatch(/tunnel_|awg\d/)
   })
 })
