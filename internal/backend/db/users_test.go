@@ -622,3 +622,47 @@ func TestUpdateDeployInfoPreservesDeployIdentityWhenMissing(t *testing.T) {
 		t.Fatalf("empty pending fields should clear pending deploy: %+v", got)
 	}
 }
+
+func TestUpdateLastSeenAgentVersionReportsStillPendingTarget(t *testing.T) {
+	d := newTestDB(t)
+	id, err := d.Users().Insert("client-w", "tok", "1.1.1.1", "awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateDeployInfo("client-w", DeployInfo{
+		SSHHost:             "192.168.0.1",
+		SSHPort:             22,
+		SSHUser:             "root",
+		Arch:                "arm64",
+		LastDeployedVersion: "v0.14.1",
+		Ring:                "stable",
+		PendingVersion:      "v0.22.0",
+		PendingSince:        "2026-09-09T10:51:23Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Роутер проснулся и отчитался всё той же старой версией.
+	upd, err := d.Users().UpdateLastSeenAgentVersionResult(id, "v0.14.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upd.PendingCleared {
+		t.Fatal("отметка не должна сниматься: версия не совпала")
+	}
+	if upd.PendingTarget != "v0.22.0" {
+		t.Fatalf("PendingTarget=%q, ждали v0.22.0", upd.PendingTarget)
+	}
+
+	// А когда версия совпала -- цели больше нет, есть снятие.
+	upd, err = d.Users().UpdateLastSeenAgentVersionResult(id, "v0.22.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !upd.PendingCleared {
+		t.Fatal("совпавшая версия обязана снять отметку")
+	}
+	if upd.PendingTarget != "" {
+		t.Fatalf("PendingTarget=%q, ждали пусто", upd.PendingTarget)
+	}
+}

@@ -629,6 +629,11 @@ func (u *UsersRepo) UpdateLastSeenAgentVersion(id int64, version string) error {
 type AgentVersionUpdate struct {
 	Version        string
 	PendingCleared bool
+	// PendingTarget -- версия, которую роутер всё ещё должен получить:
+	// отметка стоит, а пришедшая версия с ней не совпала. Пустая, когда
+	// отметки не было или она только что снята. По ней обработчик отчёта
+	// понимает, что проснувшемуся роутеру пора заново положить команду.
+	PendingTarget string
 }
 
 func (u *UsersRepo) UpdateLastSeenAgentVersionResult(id int64, version string) (AgentVersionUpdate, error) {
@@ -658,9 +663,14 @@ func (u *UsersRepo) UpdateLastSeenAgentVersionResult(id int64, version string) (
 	if err != nil {
 		return AgentVersionUpdate{}, fmt.Errorf("users.UpdateLastSeenAgentVersion rows: %w", err)
 	}
+	stillPending := ""
+	if pending.Valid && pending.String != "" && pending.String != version {
+		stillPending = pending.String
+	}
 	return AgentVersionUpdate{
 		Version:        version,
 		PendingCleared: changed > 0 && pending.Valid && pending.String == version,
+		PendingTarget:  stillPending,
 	}, nil
 }
 
