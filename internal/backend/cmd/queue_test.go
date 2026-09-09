@@ -478,3 +478,43 @@ func TestQueue_ConcurrentEnqueue(t *testing.T) {
 		t.Errorf("expected %d items dequeued, got %d", N, count)
 	}
 }
+
+func TestHasActiveCommand(t *testing.T) {
+	q := New()
+	const uid = int64(7)
+
+	if q.HasActiveCommand(uid, "self_update") {
+		t.Fatal("пустая очередь не может быть занята")
+	}
+
+	if err := q.Enqueue(uid, mkCmd("c1", "self_update")); err != nil {
+		t.Fatal(err)
+	}
+	if !q.HasActiveCommand(uid, "self_update") {
+		t.Fatal("команда в очереди -- значит занята")
+	}
+	if q.HasActiveCommand(uid, "diag_now") {
+		t.Fatal("чужое действие не считается")
+	}
+
+	// Выдали агенту: очередь пуста, но команда в работе.
+	got, ok := q.Dequeue(context.Background(), uid, 50*time.Millisecond)
+	if !ok || got.ID != "c1" {
+		t.Fatalf("dequeue: %v %v", got, ok)
+	}
+	if !q.HasActiveCommand(uid, "self_update") {
+		t.Fatal("выданная команда всё ещё в работе")
+	}
+
+	// Протухшая в очереди места не держит.
+	q2 := New()
+	past := time.Now().Add(-2 * time.Hour).UTC()
+	if err := q2.Enqueue(uid, wire.Command{
+		ID: "old", Action: "self_update", IssuedAt: past, ExpiresAt: past.Add(30 * time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if q2.HasActiveCommand(uid, "self_update") {
+		t.Fatal("протухшая команда не должна считаться активной")
+	}
+}

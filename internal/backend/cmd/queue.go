@@ -423,6 +423,36 @@ func (q *Queue) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
 	return entry.cmd, true
 }
 
+// HasActiveCommand сообщает, есть ли у пользователя команда этого действия
+// в работе: либо непротухшая в очереди, либо уже выданная агенту и ещё не
+// отжившая свой TTL.
+//
+// Нужен постановке обновления при пробуждении (backend/deploy_wake.go):
+// агент шлёт отчёт раз в минуту, и без этой проверки каждый следующий отчёт
+// клал бы роутеру ещё один self_update, пока тот качает бинарь.
+//
+// Выданная команда считается активной не бессрочно: агент может уйти в
+// перезагрузку, не вернув результата, и тогда запись в issued провисит до
+// ближайшего Sweep. Порог -- собственный TTL действия: после него попытка
+// считается потерянной, и следующий отчёт вправе начать заново.
+func (q *Queue) HasActiveCommand(userID int64, action string) bool {
+	now := time.Now()
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, c := range q.pending[userID] {
+		if c.Action == action && !commandExpired(c, now) {
+			return true
+		}
+	}
+	ttl := defaultCommandTTL(action)
+	for _, e := range q.issued[userID] {
+		if e.cmd.Action == action && now.Sub(e.issuedAt) < ttl {
+			return true
+		}
+	}
+	return false
+}
+
 // AwaitResult blocks until RecordResult lands a matching (userID,id) entry,
 // or the timeout/ctx-cancel hits. Useful for the TG callback handler that
 // wants to display the action's outcome inline.
