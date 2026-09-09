@@ -397,3 +397,61 @@ func TestClient_TunnelTraffic_UnsupportedBuildSaysSo(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnsupportedByRouter", err)
 	}
 }
+
+func TestMonitoringMatrix_BestLatency(t *testing.T) {
+	m := &MonitoringMatrix{Cells: []MatrixCell{
+		{TunnelID: "awg10", LatencyMs: 226, OK: true},
+		{TunnelID: "awg14", LatencyMs: 84, OK: true},
+		// Провалившаяся проба -- не задержка, а отсутствие ответа: взять её
+		// значило бы напечатать «0 мс» на мёртвой линии.
+		{TunnelID: "awg14", LatencyMs: 0, OK: false},
+	}}
+
+	got, ok := m.BestLatency("awg14")
+	if !ok || got != 84 {
+		t.Fatalf("BestLatency(awg14) = %d, %v; хотим 84, true", got, ok)
+	}
+	if _, ok := m.BestLatency("awg99"); ok {
+		t.Fatal("для незнакомой линии задержки нет, и это не ошибка")
+	}
+}
+
+// Матрица есть только с awg-manager 2.18: на старых роутерах эндпоинта нет,
+// и это нормальный ответ, а не сбой -- проверка туннеля обязана его пережить.
+func TestMonitoringMatrix_404IsAnError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"success":false}`))
+	}))
+	defer srv.Close()
+
+	if _, err := New(srv.URL).MonitoringMatrix(context.Background()); err == nil {
+		t.Fatal("404 обязан приходить ошибкой, чтобы вызывающий проглотил её осознанно")
+	}
+}
+
+func TestMonitoringMatrix_ParsesLiveShape(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/monitoring/matrix" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		// Форма сверена с живым awg-manager 2.18.0+r1 09.09.2026.
+		_, _ = w.Write([]byte(`{"success":true,"data":{
+			"targets":[{"id":"cc","host":"example.com","name":"example.com"}],
+			"tunnels":[{"id":"awg10","name":"line-a","ifaceName":"opkgtun10"}],
+			"cells":[{"targetId":"cc","tunnelId":"awg10","latencyMs":84,"ok":true,"isSelf":true,"ts":"2026-09-09T09:32:22Z"}],
+			"updatedAt":"2026-09-09T09:32:23Z"}}`))
+	}))
+	defer srv.Close()
+
+	m, err := New(srv.URL).MonitoringMatrix(context.Background())
+	if err != nil {
+		t.Fatalf("MonitoringMatrix: %v", err)
+	}
+	if m.UpdatedAt != "2026-09-09T09:32:23Z" {
+		t.Fatalf("UpdatedAt = %q", m.UpdatedAt)
+	}
+	if got, ok := m.BestLatency("awg10"); !ok || got != 84 {
+		t.Fatalf("BestLatency = %d, %v", got, ok)
+	}
+}

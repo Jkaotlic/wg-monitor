@@ -314,6 +314,20 @@ func (c *Client) PingCheckStatus(ctx context.Context) (*PingCheckStatus, error) 
 }
 
 // SystemInfo returns /api/system/info data.
+// MonitoringMatrix возвращает снимок задержек. Эндпоинт появился в
+// awg-manager 2.18: на старых роутерах он отвечает 404, и вызывающий обязан
+// считать это отсутствием данных, а не поломкой.
+func (c *Client) MonitoringMatrix(ctx context.Context) (*MonitoringMatrix, error) {
+	var env Envelope[MonitoringMatrix]
+	if err := c.get(ctx, "/api/monitoring/matrix", &env); err != nil {
+		return nil, err
+	}
+	if !env.Success {
+		return nil, fmt.Errorf("awgmgr monitoring/matrix: success=false")
+	}
+	return &env.Data, nil
+}
+
 func (c *Client) SystemInfo(ctx context.Context) (*SystemInfo, error) {
 	var env Envelope[SystemInfo]
 	if err := c.get(ctx, "/api/system/info", &env); err != nil {

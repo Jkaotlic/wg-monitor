@@ -231,3 +231,53 @@ type TrafficStats struct {
 	VolumeRx  int64   `json:"volumeRx"`
 	VolumeTx  int64   `json:"volumeTx"`
 }
+
+// MonitoringMatrix -- снимок «цель × туннель» из awg-manager 2.18: сколько
+// миллисекунд идёт проба до каждой цели через каждую линию.
+//
+// Это ЧЕСТНАЯ задержка через туннель, в отличие от ping-check роутера:
+// у того цель вроде 8.8.8.8 достижима и мимо туннеля, проба утекает прямым
+// каналом и рапортует «жив» на мёртвой линии.
+type MonitoringMatrix struct {
+	Targets   []MatrixTarget `json:"targets"`
+	Tunnels   []MatrixTunnel `json:"tunnels"`
+	Cells     []MatrixCell   `json:"cells"`
+	UpdatedAt string         `json:"updatedAt"`
+}
+
+type MatrixTarget struct {
+	ID   string `json:"id"`
+	Host string `json:"host"`
+	Name string `json:"name"`
+}
+
+type MatrixTunnel struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IfaceName string `json:"ifaceName"`
+}
+
+type MatrixCell struct {
+	TargetID  string `json:"targetId"`
+	TunnelID  string `json:"tunnelId"`
+	LatencyMs int    `json:"latencyMs"`
+	OK        bool   `json:"ok"`
+	IsSelf    bool   `json:"isSelf"`
+	TS        string `json:"ts"`
+}
+
+// BestLatency -- лучшая УСПЕШНАЯ проба линии. Провалившаяся ячейка несёт
+// latencyMs=0, и печатать её как «0 мс» значило бы объявить мёртвую линию
+// самой быстрой на экране.
+func (m *MonitoringMatrix) BestLatency(tunnelID string) (int, bool) {
+	best, found := 0, false
+	for _, c := range m.Cells {
+		if c.TunnelID != tunnelID || !c.OK {
+			continue
+		}
+		if !found || c.LatencyMs < best {
+			best, found = c.LatencyMs, true
+		}
+	}
+	return best, found
+}
