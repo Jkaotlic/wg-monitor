@@ -263,10 +263,6 @@ func BuildNeighborSummaries(rows []db.EventRow, excludeCheck string) []NeighborS
 
 // SendOffline sends a ROUTER OFFLINE notice (used by the heartbeat watcher).
 func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname string, since time.Duration) error {
-	topicRef, err := di.ensureTopic(ctx, userID, nickname)
-	if err != nil {
-		return err
-	}
 	now := di.now()
 	hardSince := now.Add(-since)
 	text := FormatRouterOffline(nickname, since)
@@ -275,15 +271,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		opts = append(opts, tg.WithMobileActions())
 	}
 	kb := tg.HardAlertKeyboard(userID, "agent_heartbeat", opts...)
-	sendOffline := func(ref TopicRef) (int64, error) {
-		tid := ref.ThreadID
-		return di.tg.SendMessageWithKeyboard(ctx, ref.ChatID, &tid, text, "", nil, &kb)
-	}
-	mid, err := sendOffline(topicRef)
-	if err != nil {
-		mid, err = di.retryOnStaleTopic(ctx, userID, nickname, err, sendOffline)
-	}
-	if err != nil {
+	if _, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb); err != nil {
 		return err
 	}
 	return di.d.State().Save(userID, "agent_heartbeat", db.IncidentState{
@@ -292,79 +280,9 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		ConsecutiveFails: 1,
 		CurrentStatus:    "hard",
 		HardSince:        &hardSince,
-		LastAlertMsgID:   &mid,
-		LastAlertAt:      &now,
+		// LastAlertMsgID не заполняем: получателей несколько, и кому какое
+		// сообщение ушло, помнит таблица alert_messages.
+		LastAlertAt: &now,
 	})
 }
 
-// retryOnStaleTopic handles the case where SendMessage* failed because TG
-// reports the cached topic_id no longer exists (e.g. the operator deleted
-// the forum topic manually). When tg.IsTopicNotFound(initialErr) holds we
-// clear users.telegram_thread_id, recreate the topic via ensureTopic, and
-// invoke send once more with the fresh id. Other errors are returned
-// untouched. Only a single retry is attempted — if the recreate-then-send
-// also fails, the original error is wrapped so the caller sees both.
-func (di *Dispatcher) retryOnStaleTopic(
-	ctx context.Context,
-	userID int64,
-	nickname string,
-	initialErr error,
-	send func(ref TopicRef) (int64, error),
-) (int64, error) {
-	if !tg.IsTopicNotFound(initialErr) {
-		return 0, initialErr
-	}
-	slog.Warn("dispatch: stale forum topic; clearing and recreating",
-		"user_id", userID, "nickname", nickname, "err", initialErr)
-	if err := di.d.Users().ClearThreadID(userID); err != nil {
-		return 0, fmt.Errorf("self-heal clear thread id: %w (orig: %v)", err, initialErr)
-	}
-	ref, err := di.ensureTopic(ctx, userID, nickname)
-	if err != nil {
-		return 0, fmt.Errorf("self-heal recreate topic: %w (orig: %v)", err, initialErr)
-	}
-	return send(ref)
-}
-
-// ensureTopic returns a forum_topic id for `nickname`, creating one if
-// missing. Fast path is lock-free; on cache miss it takes the process-wide,
-// per-user topic-creation lock (LockTopicCreation, package alerts — C5) and
-// double-checks before delegating to EnsureTopicForUser, so concurrent
-// alerts for the same user — AND the admin /ensure_topics /recreate_topic
-// commands, which call EnsureTopicForUser directly under the same shared
-// lock — don't race to create duplicate topics in TG.
-func (di *Dispatcher) ensureTopic(ctx context.Context, userID int64, nickname string) (TopicRef, error) {
-	u, err := di.d.Users().GetByNickname(nickname)
-	if err != nil {
-		return TopicRef{}, err
-	}
-	if u.TelegramThreadID != nil {
-		return TopicRef{ChatID: u.EffectiveTelegramChatID(di.cfg.ChatID), ThreadID: *u.TelegramThreadID}, nil
-	}
-	unlock := LockTopicCreation(u.ID)
-	defer unlock()
-	// Double-check under lock — another goroutine (or the admin topic
-	// commands, sharing this same lock) may have created the topic while we
-	// waited.
-	u2, err := di.d.Users().GetByID(u.ID)
-	if err == nil && u2 != nil && u2.TelegramThreadID != nil {
-		return TopicRef{ChatID: u2.EffectiveTelegramChatID(di.cfg.ChatID), ThreadID: *u2.TelegramThreadID}, nil
-	}
-	ref, err := EnsureTopicForUser(ctx, di.tg, di.d, di.cfg.ChatID, u.ID, false)
-	if err != nil {
-		return TopicRef{}, err
-	}
-	// Fresh create — send welcome so reply-keyboard attaches to the topic.
-	// Non-fatal: log and continue if welcome fails. The topic is usable
-	// without it (it appears on first alert).
-	if di.WelcomeKeyboard != nil && di.WelcomeVisibleKeyboard != nil {
-		if werr := SendWelcomeRoleMenu(ctx, di.tg, ref.ChatID, ref.ThreadID, nickname, di.WelcomeKeyboard(), di.WelcomeVisibleKeyboard()); werr != nil {
-			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
-		}
-	} else if di.WelcomeKeyboard != nil {
-		if werr := SendWelcome(ctx, di.tg, ref.ChatID, ref.ThreadID, nickname, di.WelcomeKeyboard()); werr != nil {
-			slog.Warn("welcome send failed (non-fatal)", "user", nickname, "err", werr)
-		}
-	}
-	return ref, nil
-}

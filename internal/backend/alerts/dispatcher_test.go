@@ -233,40 +233,6 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 }
 
 
-func TestEnsureTopicCreatesInRouterTelegramChatID(t *testing.T) {
-	d := newDB(t)
-	uid, err := d.Users().Insert("tenant", "tok", "1.1.1.1", "awg0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Users().UpdateTelegramTopic(uid, -200, 0); err != nil {
-		t.Fatal(err)
-	}
-	ftg := &fakeTG{topicID: 9999}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
-	disp.WelcomeKeyboard = func() any { return "stub-kb" }
-
-	ref, err := disp.ensureTopic(context.Background(), uid, "tenant")
-	if err != nil {
-		t.Fatalf("ensureTopic: %v", err)
-	}
-	if ref.ChatID != -200 || ref.ThreadID != 9999 {
-		t.Fatalf("ref=%+v, want chat=-200 thread=9999", ref)
-	}
-	if len(ftg.topicCalls) != 1 || ftg.topicCalls[0].chatID != -200 {
-		t.Fatalf("topic calls=%+v, want one call to -200", ftg.topicCalls)
-	}
-	if len(ftg.welcomeSends) != 1 || ftg.welcomeSends[0].chatID != -200 {
-		t.Fatalf("welcome sends=%+v, want chat -200", ftg.welcomeSends)
-	}
-	got, err := d.Users().GetByID(uid)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.TelegramChatID == nil || *got.TelegramChatID != -200 || got.TelegramThreadID == nil || *got.TelegramThreadID != 9999 {
-		t.Fatalf("topic binding not persisted: %+v", got)
-	}
-}
 
 func TestDispatcherRecoveryZeroesAcked(t *testing.T) {
 	d := newDB(t)
@@ -331,6 +297,9 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	d := newDB(t)
 	tok := "5555555555555555555555555555555555555555555555555555555555555555"
 	uid, _ := d.Users().Insert("dora", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1106); err != nil {
+		t.Fatal(err)
+	}
 	d.Users().UpdateThreadID(uid, 8888)
 	ftg := &fakeTG{}
 	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
@@ -346,8 +315,12 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	if !strings.Contains(ftg.sentWithKeyboard[0].text, "Роутер не на связи") {
 		t.Fatalf("text missing offline headline: %q", ftg.sentWithKeyboard[0].text)
 	}
-	if ftg.sentWithKeyboard[0].threadID == nil || *ftg.sentWithKeyboard[0].threadID != 8888 {
-		t.Fatalf("thread mismatch: %v", ftg.sentWithKeyboard[0].threadID)
+	// В личку пишут без темы, и адресат -- владелец, а не чат группы.
+	if ftg.sentWithKeyboard[0].threadID != nil {
+		t.Fatalf("в личку пишут без темы, получили %v", *ftg.sentWithKeyboard[0].threadID)
+	}
+	if ftg.sentWithKeyboard[0].chatID != 1106 {
+		t.Fatalf("адресат=%d, ждали личку владельца 1106", ftg.sentWithKeyboard[0].chatID)
 	}
 	kb := ftg.sentWithKeyboard[0].keyboard
 	if kb == nil {
@@ -359,22 +332,6 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	}
 }
 
-// TestSendOffline_TopicCreateFailure: ensureTopic surfaces fakeTG.topicErr;
-// SendOffline must propagate, not swallow.
-func TestSendOffline_TopicCreateFailure(t *testing.T) {
-	d := newDB(t)
-	tok := "6666666666666666666666666666666666666666666666666666666666666666"
-	uid, _ := d.Users().Insert("eve", tok, "1.1.1.1", "awg0")
-	// no UpdateThreadID — ensureTopic will hit CreateForumTopic
-	ftg := &fakeTG{topicErr: errStub("rate limited")}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
-	if err := disp.SendOffline(context.Background(), uid, "eve", time.Hour); err == nil {
-		t.Fatalf("expected error from SendOffline when topic create fails")
-	}
-	if len(ftg.sent) != 0 {
-		t.Fatalf("no message should have been sent on topic-create-failure, got %d", len(ftg.sent))
-	}
-}
 
 type errStub string
 
@@ -476,57 +433,7 @@ func TestCollectNeighbors_OmitsStaleTunnelRows(t *testing.T) {
 	}
 }
 
-func TestEnsureTopic_SendsWelcomeOnFreshCreate(t *testing.T) {
-	d := newDB(t)
-	tok := "0000000000000000000000000000000000000000000000000000000000000000"
-	uid, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	ftg := &fakeTG{topicID: 9999}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
-	disp.WelcomeKeyboard = func() any { return "stub-kb" }
 
-	ref, err := disp.ensureTopic(context.Background(), uid, "vasya")
-	if err != nil {
-		t.Fatalf("ensureTopic fresh: %v", err)
-	}
-	if ref.ChatID != -100 || ref.ThreadID != 9999 {
-		t.Errorf("want chat -100 tid 9999, got %+v", ref)
-	}
-	if len(ftg.welcomeSends) != 1 {
-		t.Fatalf("want 1 welcome send on fresh create, got %d", len(ftg.welcomeSends))
-	}
-	if !strings.Contains(ftg.welcomeSends[0].text, "vasya") {
-		t.Errorf("welcome text missing nickname: %s", ftg.welcomeSends[0].text)
-	}
-	if ftg.welcomeSends[0].markup != "stub-kb" {
-		t.Errorf("welcome markup not propagated: %v", ftg.welcomeSends[0].markup)
-	}
-
-	// Second call — thread already exists, no new welcome.
-	if _, err := disp.ensureTopic(context.Background(), uid, "vasya"); err != nil {
-		t.Fatalf("ensureTopic no-op: %v", err)
-	}
-	if len(ftg.welcomeSends) != 1 {
-		t.Errorf("want still 1 welcome (no-op), got %d", len(ftg.welcomeSends))
-	}
-}
-
-func TestEnsureTopic_NoWelcomeWhenKeyboardNil(t *testing.T) {
-	d := newDB(t)
-	tok := "0000000000000000000000000000000000000000000000000000000000000000"
-	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-	ftg := &fakeTG{topicID: 9999}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100})
-	// disp.WelcomeKeyboard intentionally nil.
-	if _, err := disp.ensureTopic(context.Background(), uid, "vasya"); err != nil {
-		t.Fatal(err)
-	}
-	if len(ftg.welcomeSends) != 0 {
-		t.Errorf("want 0 welcome (nil keyboard), got %d", len(ftg.welcomeSends))
-	}
-}
 
 // TestDispatcherSetNow_OverridesLastAlertClock pins C14: Dispatcher exposes an
 // injectable Now seam (mirroring heartbeat.Watcher / realert.Poller /

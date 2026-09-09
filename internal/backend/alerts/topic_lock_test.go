@@ -77,14 +77,14 @@ func (f *blockingTopicTG) SendMessageWithReplyKeyboard(context.Context, int64, *
 
 var _ TGSender = (*blockingTopicTG)(nil)
 
-// TestEnsureTopic_SharedLockPreventsDuplicateAcrossPaths pins C5: a
-// concurrent topic-creation for the SAME user via Dispatcher's alert-driven
-// path (ensureTopic) and via the admin-command path (a direct
-// EnsureTopicForUser call, as callbacks.adminEnsureTopics/adminRecreateTopic
-// perform) must not both create a Telegram topic. Without a lock shared
-// across both paths, EnsureTopicForUser's documented non-goroutine-safety
-// lets both observe "no thread yet", both call CreateForumTopic, and
-// whichever DB write lands last wins — orphaning the other topic in TG.
+// Одновременное создание темы для ОДНОГО роутера из двух админских команд
+// (/ensure_topics и /recreate_topic) не имеет права завести две темы.
+// EnsureTopicForUser сама по себе не потокобезопасна: без общего замка обе
+// увидят «темы ещё нет», обе позовут CreateForumTopic, и чья запись в базу
+// ляжет последней -- та и победит, осиротив вторую тему в Telegram.
+//
+// После переезда уведомлений в личку диспетчер тем больше не создаёт, но
+// админские команды остались, и замок стережёт именно их.
 func TestEnsureTopic_SharedLockPreventsDuplicateAcrossPaths(t *testing.T) {
 	d := newDB(t)
 	tok := "1111111111111111111111111111111111111111111111111111111111111111"
@@ -97,25 +97,23 @@ func TestEnsureTopic_SharedLockPreventsDuplicateAcrossPaths(t *testing.T) {
 		blockFirst:   make(chan struct{}),
 		firstEntered: make(chan struct{}),
 	}
-	disp := NewDispatcher(d, tgFake, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
-
 	type result struct {
 		ref TopicRef
 		err error
 	}
 
-	// Goroutine A: Dispatcher's alert-driven path. Its CreateForumTopic call
-	// blocks (simulating a slow TG round trip) until released below.
+	// Первая команда: её CreateForumTopic блокируется, изображая медленный
+	// поход в Telegram, пока её не отпустят ниже.
 	aDone := make(chan result, 1)
 	go func() {
-		ref, err := disp.ensureTopic(context.Background(), uid, "vasya")
+		unlock := LockTopicCreation(uid)
+		defer unlock()
+		ref, err := EnsureTopicForUser(context.Background(), tgFake, d, -100, uid, false)
 		aDone <- result{ref, err}
 	}()
 	<-tgFake.firstEntered // A is now blocked inside CreateForumTopic, lock held
 
-	// Goroutine B: the admin /ensure_topics /recreate_topic path — a direct
-	// EnsureTopicForUser call guarded by the shared lock (what
-	// callbacks.adminEnsureTopics / adminRecreateTopic do post-C5 fix).
+	// Вторая команда идёт тем же путём и обязана ждать замок.
 	bDone := make(chan result, 1)
 	go func() {
 		unlock := LockTopicCreation(uid)
@@ -137,11 +135,11 @@ func TestEnsureTopic_SharedLockPreventsDuplicateAcrossPaths(t *testing.T) {
 	close(tgFake.blockFirst)
 	aRes := <-aDone
 	if aRes.err != nil {
-		t.Fatalf("goroutine A (Dispatcher.ensureTopic): %v", aRes.err)
+		t.Fatalf("первая команда (EnsureTopicForUser): %v", aRes.err)
 	}
 	bRes := <-bDone
 	if bRes.err != nil {
-		t.Fatalf("goroutine B (EnsureTopicForUser): %v", bRes.err)
+		t.Fatalf("вторая команда (EnsureTopicForUser): %v", bRes.err)
 	}
 
 	tgFake.mu.Lock()

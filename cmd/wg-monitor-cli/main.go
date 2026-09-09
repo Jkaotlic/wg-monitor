@@ -61,6 +61,8 @@ func main() {
 		cmdBindTGUser(os.Args[2:])
 	case "ensure-topics":
 		cmdEnsureTopics(os.Args[2:])
+	case "announce-dm-migration":
+		cmdAnnounceDMMigration(os.Args[2:])
 	case "bind-topic":
 		cmdBindTopic(os.Args[2:])
 	case "version":
