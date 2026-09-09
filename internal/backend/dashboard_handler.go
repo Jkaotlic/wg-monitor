@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -445,6 +446,26 @@ type dashboardSummary struct {
 	// не о чем сообщить, снаружи выглядят одинаково, и панель -- единственное
 	// место, где эту разницу видно без ssh на саму машину.
 	Watchdog *dashboardWatchdog `json:"watchdog,omitempty"`
+	// Notify -- дыры в доставке уведомлений. До переезда в личку их не
+	// существовало: тема группы принимала всех и всегда. Теперь бот может
+	// не иметь права написать человеку (Telegram отвечает 403, пока тот сам
+	// не заговорил), а у роутера может не оказаться ни владельца, ни
+	// операторов. Оба состояния тихие, и панель -- единственное место, где
+	// их видно.
+	Notify dashboardNotifyGaps `json:"notify"`
+}
+
+type dashboardNotifyGaps struct {
+	Unreachable []dashboardUnreachable `json:"unreachable"`
+	// RoutersWithoutRecipients -- имена роутеров, которым уведомление
+	// адресовать некому.
+	RoutersWithoutRecipients []string `json:"routers_without_recipients"`
+}
+
+type dashboardUnreachable struct {
+	TelegramUserID int64  `json:"telegram_user_id"`
+	LastError      string `json:"last_error"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type dashboardWatchdog struct {
@@ -587,9 +608,57 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			}
 			resp.Watchdog = wd
 		}
+		resp.Notify = buildDashboardNotifyGaps(d)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+// buildDashboardNotifyGaps собирает дыры в доставке. Списки всегда массивы,
+// даже пустые: панель их перебирает, а omitempty на срезе отдал бы null --
+// на этих граблях проект уже стоял в ленте происшествий.
+func buildDashboardNotifyGaps(d Deps) dashboardNotifyGaps {
+	gaps := dashboardNotifyGaps{
+		Unreachable:              []dashboardUnreachable{},
+		RoutersWithoutRecipients: []string{},
+	}
+	if d.DB == nil {
+		return gaps
+	}
+	targets, err := d.DB.Unreachable().List()
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("dashboard: unreachable list failed", "err", err)
+		}
+	} else {
+		for _, t := range targets {
+			gaps.Unreachable = append(gaps.Unreachable, dashboardUnreachable{
+				TelegramUserID: t.TelegramUserID,
+				LastError:      t.LastError,
+				UpdatedAt:      t.UpdatedAt.Format(time.RFC3339),
+			})
+		}
+	}
+	users, err := d.DB.Users().GetAll()
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("dashboard: users list failed", "err", err)
+		}
+		return gaps
+	}
+	for _, u := range users {
+		people, err := notify.RecipientsFor(d.DB, u.ID)
+		if err != nil {
+			if d.Logger != nil {
+				d.Logger.Warn("dashboard: recipients lookup failed", "user_id", u.ID, "err", err)
+			}
+			continue
+		}
+		if len(people) == 0 {
+			gaps.RoutersWithoutRecipients = append(gaps.RoutersWithoutRecipients, u.Nickname)
+		}
+	}
+	return gaps
 }
 
 func buildDashboardSummary(database *db.DB, now time.Time, policy dashboardStatusPolicy) (dashboardSummary, error) {

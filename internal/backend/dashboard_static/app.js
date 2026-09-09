@@ -54,6 +54,7 @@
     searchInput: document.getElementById("searchInput"),
     agentDrawer: document.getElementById("agentDrawer"),
     watchdogLine: document.getElementById("watchdogLine"),
+    notifyGapsLine: document.getElementById("notifyGapsLine"),
     deployModal: document.getElementById("deployModal"),
     deployTitle: document.getElementById("deployTitle"),
     deployVersionInput: document.getElementById("deployVersionInput"),
@@ -355,6 +356,7 @@
     els.kpiAlertsText.textContent = (totals.alerts || 0) ? "требуют внимания" : "hard-инцидентов нет";
     els.kpiDeploysText.textContent = (totals.pending_deploys || 0) ? "ждут подтверждения heartbeat" : "очередь deploy пустая";
     renderWatchdog(summary.watchdog);
+    renderNotifyGaps(summary.notify);
     els.summaryText.textContent = summarySentence(summary);
     renderHealthStrip(summary);
     const counts = filterCounts(summary);
@@ -527,6 +529,33 @@
   // Состояние сторожа heartbeat. Отсутствие тревог значит одно из двух: в
   // парке всё хорошо или сторож мёртв, -- и без этой строки различить их можно
   // было только по неприехавшему алерту, задним числом.
+  // Дыры в доставке уведомлений. После переезда в личку бот может физически
+  // не иметь права написать человеку -- Telegram отвечает 403, пока тот сам
+  // не заговорил, и починить это может только он сам. Пока уведомления шли в
+  // группу, такого состояния не было вовсе, поэтому строка новая: без неё
+  // человек молча перестаёт получать тревоги, и заметить это нечем.
+  function renderNotifyGaps(n) {
+    if (!els.notifyGapsLine) return;
+    if (!n) { els.notifyGapsLine.textContent = ""; els.notifyGapsLine.classList.remove("bad"); return; }
+    const unreachable = (n.unreachable || []).length;
+    const orphans = n.routers_without_recipients || [];
+    const parts = [];
+    if (unreachable) {
+      parts.push(unreachable + " " + pluralRu(unreachable,
+        "человек не получает уведомления", "человека не получают уведомления", "человек не получают уведомления"));
+    }
+    if (orphans.length) {
+      parts.push("некому доставить: " + orphans.join(", "));
+    }
+    if (!parts.length) {
+      els.notifyGapsLine.textContent = "Уведомления: доходят до всех";
+      els.notifyGapsLine.classList.remove("bad");
+      return;
+    }
+    els.notifyGapsLine.textContent = "Уведомления · " + parts.join(" · ");
+    els.notifyGapsLine.classList.add("bad");
+  }
+
   function renderWatchdog(wd) {
     if (!els.watchdogLine) return;
     if (!wd) { els.watchdogLine.textContent = ""; els.watchdogLine.classList.remove("bad"); return; }

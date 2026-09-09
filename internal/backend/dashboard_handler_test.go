@@ -1357,3 +1357,101 @@ func (s *dashboardActionSink) AwaitResult(_ context.Context, userID int64, id st
 	}
 	return &res, true
 }
+
+// После переезда в личку появились два состояния, которых раньше не
+// существовало: человек, которому бот не может написать, и роутер, у которого
+// вообще нет адресата. Раньше и то и другое принимала тема группы. Оба обязаны
+// быть видны оператору -- иначе тревога исчезает молча.
+func TestDashboardSummaryShowsNotifyGaps(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+
+	// Роутер без владельца и операторов -- слать некому.
+	if _, err := d.Users().Insert("router-orphan", "token-o", "1.1.1.1", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+	// Роутер с владельцем, которому бот не смог написать.
+	owned, err := d.Users().Insert("router-owned", "token-w", "2.2.2.2", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(owned, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Unreachable().Mark(1001, "bot can't initiate conversation with a user"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		DashboardToken: "secret",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got struct {
+		Notify struct {
+			Unreachable []struct {
+				TelegramUserID int64  `json:"telegram_user_id"`
+				LastError      string `json:"last_error"`
+			} `json:"unreachable"`
+			RoutersWithoutRecipients []string `json:"routers_without_recipients"`
+		} `json:"notify"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Notify.Unreachable) != 1 || got.Notify.Unreachable[0].TelegramUserID != 1001 {
+		t.Fatalf("недоступные=%v, ждали 1001", got.Notify.Unreachable)
+	}
+	if got.Notify.Unreachable[0].LastError == "" {
+		t.Fatal("без причины оператор не поймёт, что чинить")
+	}
+	if len(got.Notify.RoutersWithoutRecipients) != 1 || got.Notify.RoutersWithoutRecipients[0] != "router-orphan" {
+		t.Fatalf("роутеры без адресата=%v, ждали router-orphan", got.Notify.RoutersWithoutRecipients)
+	}
+}
+
+// Пустые списки обязаны быть массивами, а не null: панель их перебирает, и
+// omitempty на срезе уже ловил этот класс ошибок в ленте происшествий.
+func TestDashboardSummaryNotifyGapsAreArraysNotNull(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	owned, err := d.Users().Insert("router-owned", "token-w", "2.2.2.2", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().SetTelegramUserID(owned, 1001); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		DashboardToken: "secret",
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, `"unreachable":[]`) {
+		t.Fatalf("пустой список недоступных обязан быть массивом: %s", body)
+	}
+	if !strings.Contains(body, `"routers_without_recipients":[]`) {
+		t.Fatalf("пустой список роутеров без адресата обязан быть массивом: %s", body)
+	}
+}
