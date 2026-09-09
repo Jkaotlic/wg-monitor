@@ -82,9 +82,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
           openSheet(
             confirmSheet({
               routerID,
-              title: up ? `Выключить «${t.name}»?` : `Включить «${t.name}»?`,
+              title: up ? `Выключить «${t.title ?? t.name}»?` : `Включить «${t.title ?? t.name}»?`,
               body: up
-                ? `Роутер опустит интерфейс. Трафик, который шёл через «${t.name}», пойдёт по следующему звену цепочки или напрямую. Включить обратно — этой же кнопкой.`
+                ? `Роутер опустит интерфейс. Трафик, который шёл через «${t.title ?? t.name}», пойдёт по следующему звену цепочки или напрямую. Включить обратно — этой же кнопкой.`
                 : `Роутер поднимет интерфейс. Если он стоит в цепочке выше работающего, трафик перейдёт на него.`,
               action: 'tunnel_power',
               args: { tunnel_id: t.tunnelID ?? t.id, on: !up },
@@ -114,7 +114,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
           openSheet(
             confirmSheet({
               routerID,
-              title: `Перезапустить «${t.name}»?`,
+              title: `Перезапустить «${t.title ?? t.name}»?`,
               body: `Линия включена, но не поднялась. Роутер опустит и снова поднимет интерфейс — если дело в зависшем соединении, это его чинит. Трафик по цепочке идёт мимо неё и сейчас.`,
               action: 'tunnel_restart',
               args: { tunnel_id: t.tunnelID ?? t.id },
@@ -167,8 +167,13 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
             <StateTag>туннель поднят</StateTag>
-            <h2 class="traffic-title" style="margin-top:8px">{view.active.name}</h2>
-            {view.active.iface && <p class="data-row-code">интерфейс {view.active.iface}</p>}
+            <h2 class="traffic-title" style="margin-top:8px">{view.active.title}</h2>
+            {/* Идентификатор и интерфейс -- инженерия: они стоят подписью под
+                именем, а не вместо него. */}
+            <p class="data-row-code">
+              {view.active.code}
+              {view.active.iface ? ` · интерфейс ${view.active.iface}` : ''}
+            </p>
             <div class="stat-grid" style="margin:14px 0 16px">
               <Stat
                 label="рукопожатие"
@@ -230,6 +235,10 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             <Chain
               links={view.chain.map((c) => ({
                 ...c,
+                // Заголовок звена -- его роль; имя линии идёт подписью, и
+                // подписью человеческой: раньше у безымянной линии здесь
+                // стояло имя интерфейса вида OpkgTun11.
+                name: c.title,
                 title: CHAIN_TITLE[c.role] ?? 'Состояние неизвестно',
                 value: c.role === 'active' && c.handshakeAgeSec != null ? humanAge(c.handshakeAgeSec) : c.note,
                 action: chainAction(c),
@@ -248,8 +257,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             {view.unused.map((t) => (
               <div key={t.id} class="settings-row">
                 <DataRow
-                  title={t.name}
-                  code={t.id}
+                  title={t.title}
+                  code={t.code}
                   value={t.live === 'up' ? 'поднят' : t.live === 'down' ? 'выключен' : 'неизвестно'}
                   valueTone="muted"
                 />
@@ -286,7 +295,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
         <div style="margin-top:12px">
           <NavCard
             title="Заменить конфиг линии"
-            note={view.active.name}
+            note={view.active.title}
             onClick={() => setReplacing(view.active)}
           />
         </div>

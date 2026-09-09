@@ -38,6 +38,14 @@ const ROLE_NOTE = {
   unknown: 'роутер не сказал',
 }
 
+// Имя линии глазами человека. Пустое имя -- это отсутствие имени, а не повод
+// подставить идентификатор: «Линия без имени» честнее, чем «awg11», и не
+// притворяется, что awg11 кто-то так назвал.
+function lineTitle(name) {
+  const clean = (name ?? '').trim()
+  return clean === '' ? 'Линия без имени' : clean
+}
+
 export function tunnelsView(snapshot) {
   const empty = { active: null, policyName: '', chain: [], unused: [] }
   const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
@@ -56,6 +64,12 @@ export function tunnelsView(snapshot) {
   const active = {
     id: activeTunnel.id,
     name: activeTunnel.name || activeTunnel.id,
+    // title -- то, что читает человек; code -- то, что нужно инженеру и
+    // командам. Раньше это было одно поле, и у безымянной линии в заголовок
+    // вставал идентификатор: экран начинал говорить по-машинному ровно там,
+    // где человек ищет ответ.
+    title: lineTitle(activeTunnel.name),
+    code: activeTunnel.id,
     iface: activeTunnel.iface ?? '',
     live: tunnelLive(activeTunnel),
     handshakeAgeSec: activeTunnel.has_handshake ? (activeTunnel.handshake_age_sec ?? null) : null,
@@ -69,6 +83,8 @@ export function tunnelsView(snapshot) {
     return {
       tunnelID: link.tunnel_id ?? '',
       name: link.name || link.bind,
+      title: lineTitle(link.name),
+      code: link.tunnel_id || link.bind,
       bind: link.bind,
       role,
       note: ROLE_NOTE[role],
@@ -86,7 +102,14 @@ export function tunnelsView(snapshot) {
   // попадают -- предложить поднять провайдера было бы бессмысленно.
   const unused = tunnels
     .filter((t) => t.type === 'managed' && !inChain.has(t.id))
-    .map((t) => ({ id: t.id, name: t.name || t.id, live: tunnelLive(t), ndmsName: t.ndms_name ?? '' }))
+    .map((t) => ({
+      id: t.id,
+      name: t.name || t.id,
+      title: lineTitle(t.name),
+      code: t.id,
+      live: tunnelLive(t),
+      ndmsName: t.ndms_name ?? '',
+    }))
 
   return { active, policyName: policy.name ?? '', chain, unused }
 }
