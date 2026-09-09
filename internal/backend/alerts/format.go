@@ -15,7 +15,7 @@ import (
 //
 // Neighbors is optional context — short summaries of OTHER tunnels of the
 // same user. Used both as a source of correlation hints in the diagnose
-// helper and as a "других туннелей" hint in the advice line.
+// helper and as a "других линий" hint in the advice line.
 type HardArgs struct {
 	Nickname    string
 	CheckName   string
@@ -135,12 +135,12 @@ func writeTunnelRecoveryFooter(b *strings.Builder, d map[string]any) {
 	}
 	var parts []string
 	if rDNS > 0 {
-		parts = append(parts, fmt.Sprintf("%d DNS", rDNS))
+		parts = append(parts, fmt.Sprintf("%d по именам сайтов", rDNS))
 	}
 	if rStatic > 0 {
-		parts = append(parts, fmt.Sprintf("%d Static", rStatic))
+		parts = append(parts, fmt.Sprintf("%d по адресам", rStatic))
 	}
-	fmt.Fprintf(b, "\nВернулись правила: %s", strings.Join(parts, ", "))
+	fmt.Fprintf(b, "\nСнова работают правила: %s", strings.Join(parts, ", "))
 }
 
 // FormatRouterOffline renders a router-offline message (heartbeat watcher).
@@ -350,7 +350,7 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		if total > 0 && len(failed) > 0 && len(failed) < total {
 			return "Часть внешних сервисов недоступна"
 		}
-		return "Внешние сервисы недоступны через туннель"
+		return "Сервисы не открываются через обход"
 	}
 	return "Проверка " + checkName + " падает"
 }
@@ -403,9 +403,9 @@ func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns [
 func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 	if ep := strOrEmpty(d, "endpoint"); ep != "" {
 		if isp := strOrEmpty(d, "isp_interface"); isp != "" {
-			fmt.Fprintf(b, "  Сервер туннеля: %s (провайдерский выход: %s)\n", ep, isp)
+			fmt.Fprintf(b, "  Сервер линии: %s (выход провайдера: %s)\n", ep, isp)
 		} else {
-			fmt.Fprintf(b, "  Сервер туннеля: %s\n", ep)
+			fmt.Fprintf(b, "  Сервер линии: %s\n", ep)
 		}
 	}
 	if age, ok := intOrZero(d, "handshake_age_sec"); ok {
@@ -465,19 +465,13 @@ func writeTunnelLinkedRoutes(b *strings.Builder, d map[string]any) {
 	}
 	var parts []string
 	if rDNS > 0 {
-		switch {
-		case rHR > 0 && rHR == rDNS:
-			parts = append(parts, fmt.Sprintf("%d DNS (HR-Neo)", rDNS))
-		case rHR > 0:
-			parts = append(parts, fmt.Sprintf("%d DNS (HR-Neo: %d)", rDNS, rHR))
-		default:
-			parts = append(parts, fmt.Sprintf("%d DNS", rDNS))
-		}
+		parts = append(parts, fmt.Sprintf("%d по именам сайтов", rDNS))
 	}
 	if rStatic > 0 {
-		parts = append(parts, fmt.Sprintf("%d Static", rStatic))
+		parts = append(parts, fmt.Sprintf("%d по адресам", rStatic))
 	}
-	fmt.Fprintf(b, "  Связано правил: %s\n", strings.Join(parts, ", "))
+	_ = rHR // разбивка по механизму -- инженерная деталь, она живёт в приложении
+	fmt.Fprintf(b, "  Через эту линию идут правила: %s\n", strings.Join(parts, ", "))
 }
 
 func writeDNSWhatBroke(b *strings.Builder, d map[string]any, ns []NeighborSummary) {
@@ -694,11 +688,11 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 		}
 		return "То, что должно ходить через эту линию, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда."
 	case "hydraroute":
-		return "DNS/HR-Neo правила могут перестать направлять домены в нужные туннели; часть сайтов пойдёт обычным маршрутом или не откроется."
+		return "Правила по именам сайтов перестают направлять их в нужные линии: часть сайтов пойдёт напрямую или не откроется."
 	case "awg_manager", "awgmgr_api":
 		return "Интернет от этого не пропадает: линии работают сами по себе. Но кнопки в приложении — «Починить», перезапуск линии, правка маршрутов — могут не сработать, пока связь с роутером не вернётся."
 	case "external_reach":
-		return "Сервисы снаружи не открываются через выбранный туннель; проблема либо в самом туннеле, либо в маршрутизации через него."
+		return "Через эту линию сервисы не открываются: дело либо в самой линии, либо в правилах, которые через неё ведут."
 	}
 	return ""
 }
@@ -769,12 +763,12 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 			prefix = "Оба упавших DNS-сервера"
 		}
 		if neighborsAlive(ns) && len(ns) > 0 {
-			return fmt.Sprintf("%s идут через %s. Остальные туннели выглядят живыми, значит это не общий WAN. Скорее всего деградировал именно %s: DNS просто первым это заметил.", prefix, label, name)
+			return fmt.Sprintf("%s идут через %s. Остальные линии выглядят живыми, значит интернет на месте. Скорее всего испортилась именно %s -- поиск имён просто заметил это первым.", prefix, label, name)
 		}
 		if !neighborsAlive(ns) && len(ns) > 0 {
-			return fmt.Sprintf("%s идут через %s, и соседние туннели тоже не на связи. Похоже на проблему уровнем выше: WAN, провайдер или сам роутер.", prefix, label)
+			return fmt.Sprintf("%s идут через %s, и соседние линии тоже молчат. Похоже, дело не в линии, а выше: провайдер или сам роутер.", prefix, label)
 		}
-		return fmt.Sprintf("%s идут через %s. Похоже на сбой этого маршрута или туннеля, а не самого DNS.", prefix, label)
+		return fmt.Sprintf("%s идут через %s. Похоже на сбой самой линии или правила, а не поиска имён.", prefix, label)
 	}
 
 	// Если все упавшие endpoint'ы прибиты к одному ndms_name (= один туннель/интерфейс),
@@ -786,16 +780,16 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 		}
 		if neighborsAlive(ns) && len(ns) > 0 {
 			return fmt.Sprintf(
-				"Все упавшие DNS-серверы идут через один интерфейс — %s. Соседние туннели живы, так что это не WAN. Скорее всего деградировал именно %s — DNS просто первый это заметил.",
+				"Все молчащие серверы имён идут через одну линию — %s. Соседние линии живы, значит интернет на месте. Скорее всего испортилась именно %s.",
 				iface, iface)
 		}
 		if !neighborsAlive(ns) && len(ns) > 0 {
 			return fmt.Sprintf(
-				"Упавшие DNS-серверы идут через %s, и соседние туннели тоже не на связи. Похоже на проблему уровнем выше — WAN или провайдер.",
+				"Молчащие серверы имён идут через %s, и соседние линии тоже не отвечают. Похоже, дело выше — в провайдере или самом роутере.",
 				iface)
 		}
 		return fmt.Sprintf(
-			"Все упавшие DNS-серверы идут через один интерфейс — %s. Похоже на сбой именно этого туннеля, не самого DNS.",
+			"Все молчащие серверы имён идут через одну линию — %s. Похоже на сбой именно её, а не поиска имён.",
 			iface)
 	}
 
@@ -818,13 +812,13 @@ func diagnoseTunnel(d map[string]any, ns []NeighborSummary) string {
 
 	var parts []string
 	if hasConflict && conflict {
-		parts = append(parts, "На интерфейсе конфликт адресов — это почти всегда означает что туннель пытается подняться с тем же адресом что и другой интерфейс.")
+		parts = append(parts, "У линии конфликт адресов: она пытается подняться с тем же адресом, что и другая. Сама по себе такая линия не поднимется.")
 	}
 	switch {
 	case !hasAge:
-		parts = append(parts, "Обмена ключами не было ни разу с момента старта — туннель так и не поднялся. Чаще всего это неправильный адрес сервера, AWG-параметры или закрытый порт у провайдера.")
+		parts = append(parts, "Обмена ключами не было ни разу с момента запуска — линия так и не поднялась. Чаще всего дело в неверных настройках сервера или в том, что провайдер закрыл нужный порт.")
 	case age > 600:
-		parts = append(parts, fmt.Sprintf("Обмена ключами нет уже %s — туннель явно лежит, не просто моргнул.", humanAgeSec(age)))
+		parts = append(parts, fmt.Sprintf("Обмена ключами нет уже %s — линия точно лежит, а не моргнула.", humanAgeSec(age)))
 	case age > 180:
 		parts = append(parts, "Обмен ключами устарел, но не катастрофически. Возможно провайдер режет UDP, либо сервер туннеля временно недоступен.")
 	}
@@ -1263,16 +1257,21 @@ func humanAgeSec(s int) string {
 	return fmt.Sprintf("%dч %dм", h, rm)
 }
 
+// durFmt -- длительность по-русски. Английские «12m» и «2h30m» в тексте,
+// который читает владелец роутера, ничем не лучше остального жаргона.
 func durFmt(d time.Duration) string {
 	if d < time.Minute {
-		return "< 1m"
+		return "меньше минуты"
 	}
 	h := int(d.Hours())
 	m := int(d.Minutes()) % 60
 	if h > 0 {
-		return fmt.Sprintf("%dh%dm", h, m)
+		if m == 0 {
+			return fmt.Sprintf("%d ч", h)
+		}
+		return fmt.Sprintf("%d ч %d мин", h, m)
 	}
-	return fmt.Sprintf("%dm", m)
+	return fmt.Sprintf("%d мин", m)
 }
 
 // mscLoc возвращает один и тот же *time.Location, инициализированный лениво

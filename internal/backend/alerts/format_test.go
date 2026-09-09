@@ -24,7 +24,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 				},
 			},
 		})
-		if !strings.Contains(got, "Связано правил: 48 DNS (HR-Neo), 3 Static") {
+		if !strings.Contains(got, "Через эту линию идут правила: 48 по именам сайтов, 3 по адресам") {
 			t.Fatalf("missing linked-routes line:\n%s", got)
 		}
 	})
@@ -36,7 +36,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 				Details: map[string]any{"routes_dns": 10, "routes_dns_hr": 7, "routes_static": 0},
 			},
 		})
-		if !strings.Contains(got, "Связано правил: 10 DNS (HR-Neo: 7)") {
+		if !strings.Contains(got, "Через эту линию идут правила: 10 по именам сайтов") {
 			t.Fatalf("missing mixed-HR line:\n%s", got)
 		}
 		if strings.Contains(got, "Static") {
@@ -59,7 +59,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 			HardSince: time.Now(),
 			Check:     wire.Check{Details: map[string]any{"routes_static": 4}},
 		})
-		if !strings.Contains(got, "Связано правил: 4 Static") {
+		if !strings.Contains(got, "Через эту линию идут правила: 4 по адресам") {
 			t.Fatalf("missing static-only line:\n%s", got)
 		}
 	})
@@ -124,7 +124,7 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 		"🟡",
 		"Линия amnezia_for_awg2 не отвечает",
 		"На что обратить внимание:",
-		"Сервер туннеля: 198.51.100.21:37634", "провайдерский выход: eth3",
+		"Сервер линии: 198.51.100.21:37634", "выход провайдера: eth3",
 		"Последний обмен ключами:", "4 мин 37 с",
 		"Проверка связи: падает", "неудачных попыток 3 из 3",
 		"авто-рестартов: 2",
@@ -234,7 +234,7 @@ func TestFormatHardDNSPartialUsesHumanTunnelContext(t *testing.T) {
 	for _, want := range []string{
 		"plain 100.64.0.1:53 через Germany backup (Wireguard3 / nwg3) — сеть недоступна",
 		"Оба упавших DNS-сервера идут через Germany backup",
-		"Остальные туннели выглядят живыми",
+		"Остальные линии выглядят живыми",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -267,8 +267,8 @@ func TestFormatHardDNSAllFailedWithAliveNeighborsIsAdvisory(t *testing.T) {
 		"🟡",
 		"Роутер стал хуже находить сайты по имени",
 		"На что обратить внимание:",
-		"Остальные туннели выглядят живыми",
-		"это не общий WAN",
+		"Остальные линии выглядят живыми",
+		"интернет на месте",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
@@ -480,7 +480,7 @@ func TestFormatRecovery(t *testing.T) {
 		HardSince:   since,
 		RecoveredAt: since.Add(7 * time.Minute),
 	})
-	for _, want := range []string{"🟢", "vasya", "снова в норме", "Простой:", "7m"} {
+	for _, want := range []string{"🟢", "vasya", "снова в норме", "Простой:", "7 мин"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in %q", want, got)
 		}
@@ -507,7 +507,7 @@ func TestFormatRecovery_TunnelEchoesLinkedRoutesAndName(t *testing.T) {
 	if !strings.Contains(got, "primary") {
 		t.Errorf("recovery should mention tunnel name: %s", got)
 	}
-	if !strings.Contains(got, "Вернулись правила: 48 DNS, 3 Static") {
+	if !strings.Contains(got, "Снова работают правила: 48 по именам сайтов, 3 по адресам") {
 		t.Errorf("recovery footer with linked routes missing: %s", got)
 	}
 }
@@ -529,7 +529,7 @@ func TestFormatRecovery_TunnelWithoutDetails_StillRendersBare(t *testing.T) {
 
 func TestFormatRouterOffline(t *testing.T) {
 	got := FormatRouterOffline("vasya", 11*time.Minute)
-	for _, want := range []string{"vasya", "Роутер не на связи", "Что не работает:", "Что я думаю:", "Что делать:", "11m"} {
+	for _, want := range []string{"vasya", "Роутер не на связи", "Что не работает:", "Что я думаю:", "Что делать:", "11 мин"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("got: %s", got)
 		}
