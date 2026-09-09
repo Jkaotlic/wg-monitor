@@ -656,6 +656,23 @@ type fakeCmdSink struct {
 	commands      map[string]wire.Command
 	enqueued      []wire.Command
 	enqueuedUsers []int64
+	// active изображает занятость очереди: действие, по которому команда
+	// уже в работе, HasActiveCommand подтвердит.
+	active map[string]bool
+}
+
+func (f *fakeCmdSink) HasActiveCommand(userID int64, action string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.active[action]
+}
+
+func (f *fakeCmdSink) snapshotEnqueued() []wire.Command {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]wire.Command, len(f.enqueued))
+	copy(out, f.enqueued)
+	return out
 }
 
 func (f *fakeCmdSink) Dequeue(ctx context.Context, userID int64, hold time.Duration) (*wire.Command, bool) {

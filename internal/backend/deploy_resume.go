@@ -71,18 +71,7 @@ func ResumePendingDeploys(d *db.DB, sink deployEnqueuer, publicBaseURL, publicIP
 			}
 			continue
 		}
-		cmd := wire.Command{
-			ID:     id,
-			Action: "self_update",
-			Args: map[string]any{
-				"version":   target,
-				"repo_base": base + "/v1/releases/download",
-			},
-			IssuedAt: time.Now().UTC(),
-		}
-		if ip := strings.TrimSpace(publicIP); ip != "" {
-			cmd.Args["repo_resolve_ip"] = ip
-		}
+		cmd := buildSelfUpdateCommand(id, target, base, publicIP, time.Now().UTC())
 		dropped := sink.DropPending(u.ID, "self_update")
 		if len(dropped) > 0 && logger != nil {
 			logger.Info("resume deploys: сняли прежние команды обновления",

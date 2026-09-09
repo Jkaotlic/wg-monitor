@@ -902,6 +902,10 @@ func reportHandler(d Deps) http.HandlerFunc {
 						d.Logger.Warn("deploy notifier success", "nickname", nickname, "version", version, "err", err)
 					}
 				})
+			} else if update.PendingTarget != "" {
+				// Роутер на связи, а назначенное обновление всё ещё не
+				// доехало -- значит команда протухла, пока он спал.
+				requeueDeployOnWake(d, uid, nick, update.PendingTarget)
 			}
 		}
 		if d.PublicBaseURL != "" {
