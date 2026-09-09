@@ -17,6 +17,7 @@ import { Section } from '../ui/Section.jsx'
 import { ActionTile } from '../ui/ActionTile.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { tunnelHealth } from './tunnelHealth.js'
+import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
 import { RepairScreen } from './RepairScreen.jsx'
 import { useCommand } from '../useCommand.js'
 import { confirmSheet } from '../sheet.js'
@@ -588,8 +589,25 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
       .catch((err) => setError(err.message))
   }
 
+  // Экран живёт сам. Раньше данные грузились ровно один раз при входе, и
+  // строка «41 сек назад» через пять минут врала: человек смотрел на прошлое,
+  // поданное как настоящее. Опрос идёт только пока вкладка открыта -- Telegram
+  // держит мини-апп живым дольше, чем на него смотрят.
   useEffect(() => {
     loadData()
+    if (!shouldPulse({ visible: true, routerID: id })) return undefined
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') loadData()
+    }, PULSE_MS)
+    // Возврат к вкладке -- повод обновиться немедленно, а не ждать такта.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') loadData()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [id])
 
   function updateIncident(updated) {
@@ -718,7 +736,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         <Stat
           label="последний ответ"
           value={router.last_seen_age_sec != null ? humanAge(router.last_seen_age_sec) : null}
-          note={router.last_seen_age_sec != null ? 'назад' : 'роутер ещё не отвечал'}
+          note={freshnessLabel(router.last_seen_age_sec)}
           tone={asleep ? 'warn' : undefined}
         />
       </div>

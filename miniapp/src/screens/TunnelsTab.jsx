@@ -51,11 +51,17 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
 
   const view = tunnelsView(snapshot)
   const phase = snapshotState({ busy, error, result, snapshot })
-  // Обмен спрашивается отдельной командой и только по кнопке: ряд роутер
-  // ведёт сам, но тянуть его при каждом открытии экрана незачем -- вопрос
-  // «сколько прошло за сутки» задают редко и осознанно.
+  // Обмен подтягивается сам, как только известна активная линия. Раньше он
+  // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
+  // человека работу, которую мог сделать сам. Ряд роутер ведёт всё равно;
+  // кнопка осталась способом пересчитать принудительно.
   const traffic = useCommand(routerID)
   const trafficOut = traffic.result?.status === 'ok' ? trafficSummary(traffic.result.output) : null
+
+  const activeTunnelID = view.active?.id
+  useEffect(() => {
+    if (activeTunnelID) traffic.run('tunnel_traffic', { tunnel_id: activeTunnelID, period: '24h' }, deadline)
+  }, [routerID, activeTunnelID])
 
   // Включение и выключение идёт по идентификатору туннеля (tunnel_power,
   // awg-manager control/start|stop). Прежняя пара ndmc-действий умела только
