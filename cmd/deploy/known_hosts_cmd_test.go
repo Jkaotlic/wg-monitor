@@ -57,7 +57,7 @@ func TestListKnownHostAliases_ReturnsAllThree(t *testing.T) {
 	wantSet := map[string]bool{
 		"testkeen":     true,
 		"client_alice": true,
-		"192.168.0.1": true,
+		"192.168.0.1":  true,
 	}
 	if len(got) != len(wantSet) {
 		t.Fatalf("got %d aliases, want %d (%v)", len(got), len(wantSet), got)
@@ -107,7 +107,7 @@ func TestForgetKnownHost_MissingFile(t *testing.T) {
 func TestStripPort_Variants(t *testing.T) {
 	cases := map[string]string{
 		"testkeen:22":    "testkeen",
-		"192.168.0.1":   "192.168.0.1",
+		"192.168.0.1":    "192.168.0.1",
 		"192.168.0.1:22": "192.168.0.1",
 		"[::1]:2222":     "::1",
 		"bare_alias":     "bare_alias",

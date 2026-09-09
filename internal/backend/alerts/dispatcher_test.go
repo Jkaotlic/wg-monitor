@@ -122,7 +122,6 @@ func newDB(t *testing.T) *db.DB {
 	return d
 }
 
-
 func TestDispatcherHardPersistsStateWhenSendFails(t *testing.T) {
 	d := newDB(t)
 	tok := "9999000000000000000000000000000000000000000000000000000000000000"
@@ -157,7 +156,6 @@ func TestDispatcherHardPersistsStateWhenSendFails(t *testing.T) {
 		t.Fatalf("несостоявшаяся отправка не имеет права помечать тревогу отправленной: %+v", saved)
 	}
 }
-
 
 func TestDispatcherSoftFlapNoTGButCounted(t *testing.T) {
 	d := newDB(t)
@@ -231,8 +229,6 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 		}
 	}
 }
-
-
 
 func TestDispatcherRecoveryZeroesAcked(t *testing.T) {
 	d := newDB(t)
@@ -332,11 +328,9 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	}
 }
 
-
 type errStub string
 
 func (e errStub) Error() string { return string(e) }
-
 
 // TestDispatcherSurfacesNonHealableTGError: a TG error that is NOT a
 // stale-topic signal (e.g. 403 forbidden, 429 rate-limit, malformed) must
@@ -432,8 +426,6 @@ func TestCollectNeighbors_OmitsStaleTunnelRows(t *testing.T) {
 		t.Fatalf("stale neighbor leaked into alert context: %+v", got)
 	}
 }
-
-
 
 // TestDispatcherSetNow_OverridesLastAlertClock pins C14: Dispatcher exposes an
 // injectable Now seam (mirroring heartbeat.Watcher / realert.Poller /

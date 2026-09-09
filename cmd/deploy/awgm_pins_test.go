@@ -44,9 +44,9 @@ func TestAWGMPinStore_PersistsAcrossInstances(t *testing.T) {
 
 func TestAWGMHost(t *testing.T) {
 	cases := map[string]string{
-		"https://awg.example/":          "awg.example",
-		"https://AWG.Example:2222/x":     "awg.example",
-		"awg.example":                    "awg.example",
+		"https://awg.example/":       "awg.example",
+		"https://AWG.Example:2222/x": "awg.example",
+		"awg.example":                "awg.example",
 	}
 	for in, want := range cases {
 		if got := awgmHost(in); got != want {

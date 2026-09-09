@@ -275,4 +275,3 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 		LastAlertAt: &now,
 	})
 }
-

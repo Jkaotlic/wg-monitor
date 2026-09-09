@@ -574,7 +574,7 @@ func matrixStub(t *testing.T, withMatrix bool) *httptest.Server {
 		switch r.URL.Path {
 		case "/api/tunnels/all":
 			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
-				{"id":"awg10","name":"line-a","interfaceName":"opkgtun10","enabled":true,"status":"running","defaultRoute":true,"lastHandshake":"`+time.Now().UTC().Format(time.RFC3339)+`"}
+				{"id":"awg10","name":"line-a","interfaceName":"opkgtun10","enabled":true,"status":"running","defaultRoute":true,"lastHandshake":"` + time.Now().UTC().Format(time.RFC3339) + `"}
 			]}}`))
 		case "/api/dns-routes/list", "/api/static-routes/list":
 			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
