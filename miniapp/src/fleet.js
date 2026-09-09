@@ -1,9 +1,13 @@
-// Экран флота: сломанное сверху, состояние пяти служб точками.
+// Экран флота: сломанное сверху, состояние -- словами.
+//
+// Пять точек отсюда удалены вместе с легендой под списком. Легенда и была
+// доказательством, что прибор не читается: если под точками приходится
+// писать, что значит серая, значит точки не работают.
 //
 // Список открывают, когда что-то сломалось, поэтому порядок -- по срочности,
 // а строка отвечает не «сколько тревог», а «что именно не так»: число
 // человеку ничего не говорит, фраза говорит.
-import { humanAge, incidentCopy } from './labels.js'
+import { humanAge, incidentWhatPlain } from './labels.js'
 
 // Порядок -- по срочности, а не по id.
 const URGENCY = { alert: 0, offline: 1, sleeping: 2, online: 3 }
@@ -16,12 +20,6 @@ export function sortByUrgency(routers = []) {
     return (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru')
   })
 }
-
-// Пять служб в общем порядке (CHECK_ORDER в checksOrder.js). Порядок
-// фиксирован: точки, меняющиеся местами между обновлениями, перестают быть
-// прибором.
-const LAMPS = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels']
-const DOT_TONE = { ok: 'ok', fail: 'danger', warn: 'warn' }
 
 export function fleetRow(router) {
   const age = router?.last_seen_age_sec
@@ -43,19 +41,17 @@ export function fleetRow(router) {
 
   let sub
   if (incidents.length > 0) {
-    sub = incidentCopy(incidents[0].check_name).what
+    // Идентификатор линии в этом списке не значит ничего: у человека здесь
+    // нет ни снимка маршрутов, ни имён туннелей, чтобы понять, что такое
+    // awg12. Внутри роутера линия названа именем -- туда и идти.
+    sub = incidentWhatPlain(incidents[0].check_name)
   } else if (never) {
     sub = 'агент установлен, но отчётов от него не было'
   } else {
     sub = `отчёт ${humanAge(age)} назад`
   }
 
-  // Серая точка значит «роутер не сказал», а не «сломано»: службу, о которой
-  // не было ни одного отчёта, нельзя красить ни зелёным, ни красным.
-  const byName = new Map((router?.checks ?? []).map((c) => [c.check_name, c.status]))
-  const dots = LAMPS.map((key) => ({ key, tone: DOT_TONE[byName.get(key)] ?? 'off' }))
-
-  return { id: router?.id, nickname: router?.nickname ?? '', pill, sub, dots }
+  return { id: router?.id, nickname: router?.nickname ?? '', pill, sub }
 }
 
 // Групповой опрос флота. Одна кнопка, N роутеров -- и человек обязан видеть,

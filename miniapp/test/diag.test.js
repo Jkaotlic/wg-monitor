@@ -204,3 +204,35 @@ describe('exitCompare', () => {
     expect(c.verdict).toBe('Адреса ещё не измерены — нажмите «Сравнить адреса».')
   })
 })
+
+// Вкладка «Проверки» -- единственная, где машинное имя уместно: сюда идут
+// разбираться. Но «нет» напротив вопроса не говорит, ЧЕМ это грозит, а
+// человек рядом с инженером читает тот же экран.
+describe('checkRows -- что означает провал', () => {
+  it('упавшая проверка объясняет последствие человеческими словами', () => {
+    const rows = checkRows({ checks: [{ check_name: 'dns', status: 'fail' }], tunnels: [] })
+    const dns = rows.find((r) => r.key === 'dns')
+    expect(dns.consequence).toBe('Не определяются адреса сайтов')
+    expect(dns.code).toBe('dns')
+  })
+
+  // У работающей проверки последствия нет: дописывать «а если сломается,
+  // будет плохо» к зелёной строке -- это шум, а не ответ.
+  it('живая проверка последствия не несёт', () => {
+    const rows = checkRows({ checks: [{ check_name: 'dns', status: 'ok' }], tunnels: [] })
+    const dns = rows.find((r) => r.key === 'dns')
+    expect(dns.consequence).toBe('')
+  })
+
+  // Молчащий роутер -- это «не знаем», а не «сломано»: пугать человека
+  // последствием поломки, которой, может, и нет, нельзя.
+  it('у молчащего роутера последствий не выдумывается', () => {
+    const rows = checkRows({
+      checks: [{ check_name: 'dns', status: 'fail' }],
+      tunnels: [],
+      router: { status: 'offline' },
+    })
+    const dns = rows.find((r) => r.key === 'dns')
+    expect(dns.consequence).toBe('')
+  })
+})

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/timeline"
 )
 
 func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
@@ -333,8 +334,26 @@ type miniappTimelineEvent struct {
 	Timestamp string `json:"ts"`
 }
 
+// miniappTimelineIncident -- поломка глазами человека: что не работало, когда
+// и сколько. Имя не пересекается с miniappIncident из miniapp_actions.go: тот
+// про горящий инцидент и его заглушки, этот -- про прошедшую поломку в ленте.
+// Сырые события остаются под ?raw=1: они нужны тому, кто полез разбираться, а
+// не тому, кто спросил «что было».
+type miniappTimelineIncident struct {
+	CheckName string `json:"check_name"`
+	From      string `json:"from"`
+	To        string `json:"to,omitempty"`
+	DownSec   int    `json:"down_sec"`
+	Flaps     int    `json:"flaps"`
+	Ongoing   bool   `json:"ongoing"`
+}
+
 type miniappTimelineResp struct {
-	Events []miniappTimelineEvent `json:"events"`
+	// Оба массива едут всегда и пустыми, а не отсутствующими: пропущенный
+	// ключ приезжает на клиент как null, и экран, ждущий список, ломается на
+	// пустой истории -- ровно то, что проверяет TestMiniappTimelineEmptyIsArrayNotNull.
+	Incidents []miniappTimelineIncident `json:"incidents"`
+	Events    []miniappTimelineEvent    `json:"events"`
 	// Days is the window actually applied, not the one asked for -- the client
 	// prints it, so a clamped request must not be reported back as honoured.
 	Days      int  `json:"days"`
@@ -344,9 +363,13 @@ type miniappTimelineResp struct {
 const (
 	miniappTimelineDefaultDays = 7
 	miniappTimelineMaxDays     = 30
-	// Столько строк экран ещё способен показать осмысленно; всё, что сверх,
-	// помечается truncated -- молча показанная часть выглядела бы как целое.
+	// Потолок сырой ленты. При шести проверках в минуту это около полутора
+	// часов -- поэтому режим «как есть» обязан называть своё окно словами.
 	miniappTimelineMaxRows = 500
+	// Сколько строк читаем, чтобы свернуть неделю. Порядка суток флаппинга
+	// или недели спокойной жизни; упёрлись -- говорим truncated, а не
+	// показываем кусок как целое.
+	miniappTimelineMaxScanRows = 20000
 )
 
 // miniappTimelineDays reads the window from the query string. Anything absent,
@@ -377,24 +400,52 @@ func miniappRouterTimelineHandler(d Deps) http.HandlerFunc {
 		}
 		days := miniappTimelineDays(r.URL.Query().Get("days"))
 		since := time.Now().UTC().AddDate(0, 0, -days)
+		// Сырая лента отдаётся только по явной просьбе: она отвечает на
+		// вопрос «какая проверка моргнула», а экран спрашивает «что было».
+		raw := r.URL.Query().Get("raw") == "1"
+		limit := miniappTimelineMaxScanRows
+		if raw {
+			limit = miniappTimelineMaxRows
+		}
 		// Запрашиваем на одну строку больше предела: только так видно, что
 		// строки кончились не потому, что событий больше нет.
-		rows, err := d.DB.Events().ListAllSince(routerID, since, miniappTimelineMaxRows+1)
+		rows, err := d.DB.Events().ListAllSince(routerID, since, limit+1)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "timeline lookup failed")
 			return
 		}
-		resp := miniappTimelineResp{Events: []miniappTimelineEvent{}, Days: days}
-		if len(rows) > miniappTimelineMaxRows {
-			rows = rows[:miniappTimelineMaxRows]
+		resp := miniappTimelineResp{
+			Incidents: []miniappTimelineIncident{},
+			Events:    []miniappTimelineEvent{},
+			Days:      days,
+		}
+		if len(rows) > limit {
+			rows = rows[:limit]
 			resp.Truncated = true
 		}
-		for _, row := range rows {
-			resp.Events = append(resp.Events, miniappTimelineEvent{
-				CheckName: row.CheckName,
-				Status:    row.Status,
-				Timestamp: row.TS.UTC().Format(time.RFC3339),
-			})
+		if raw {
+			for _, row := range rows {
+				resp.Events = append(resp.Events, miniappTimelineEvent{
+					CheckName: row.CheckName,
+					Status:    row.Status,
+					Timestamp: row.TS.UTC().Format(time.RFC3339),
+				})
+			}
+		} else {
+			for _, inc := range timeline.Fold(rows, time.Now().UTC()) {
+				out := miniappTimelineIncident{
+					CheckName: inc.CheckName,
+					From:      inc.From.UTC().Format(time.RFC3339),
+					DownSec:   inc.DownSec,
+					Flaps:     inc.Flaps,
+					Ongoing:   inc.Ongoing,
+				}
+				// Конец, которого ещё не было, не записывается временем.
+				if !inc.To.IsZero() {
+					out.To = inc.To.UTC().Format(time.RFC3339)
+				}
+				resp.Incidents = append(resp.Incidents, out)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)

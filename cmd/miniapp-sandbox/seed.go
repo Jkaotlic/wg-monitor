@@ -56,6 +56,12 @@ func seed(d *db.DB, tgUserID int64) error {
 		if err := seedChecks(d, uid, seen, s.nick == "sandbox-broken"); err != nil {
 			return err
 		}
+		// История за неделю: без неё вкладка «Что было» открывается почти
+		// пустой, и ни свёрнутое моргание, ни тихий день проверить нечем --
+		// а это ровно то, ради чего лента переписана.
+		if err := seedHistory(d, uid, now, s.nick); err != nil {
+			return err
+		}
 		if err := d.Users().UpdateLastSeen(uid); err != nil {
 			return err
 		}
@@ -125,4 +131,44 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		}
 	}
 	return nil
+}
+
+// seedHistory набивает недельную историю происшествий: у здорового роутера
+// один короткий отвал, у сломанного -- моргание и идущая поломка, у
+// мобильного -- ничего, чтобы было видно тихие дни.
+//
+// Пишем ПАРЫ событий, а не срезы состояния: сворачивание на бэкенде ищет
+// именно пару «упало -- поднялось», и засев одиночными строками научил бы
+// песочницу неправде.
+func seedHistory(d *db.DB, uid int64, now time.Time, nick string) error {
+	pair := func(check string, start time.Time, down time.Duration) error {
+		if err := d.Events().Insert(uid, check, "fail", "{}", start); err != nil {
+			return err
+		}
+		return d.Events().Insert(uid, check, "ok", "{}", start.Add(down))
+	}
+
+	switch nick {
+	case "sandbox-home":
+		// Вчера четыре минуты не было интернета -- одна строка в ленте.
+		return pair("external_reach", now.Add(-26*time.Hour), 4*time.Minute)
+	case "sandbox-broken":
+		// Двенадцать морганий обхода блокировок внутри полутора часов: они
+		// обязаны схлопнуться в ОДНУ строку с числом раз.
+		for i := 0; i < 12; i++ {
+			start := now.Add(-3*time.Hour + time.Duration(i)*7*time.Minute)
+			if err := pair("hydraroute", start, time.Minute); err != nil {
+				return err
+			}
+		}
+		// Позавчерашний отвал панели -- отдельная новость, не слипается.
+		if err := pair("awg_manager", now.Add(-50*time.Hour), 12*time.Minute); err != nil {
+			return err
+		}
+		// Идущая поломка: конца у неё нет, и экран обязан сказать «идёт».
+		return d.Events().Insert(uid, "external_reach", "fail", "{}", now.Add(-40*time.Minute))
+	default:
+		// Тихая неделя -- тоже состояние экрана, и его надо видеть.
+		return nil
+	}
 }

@@ -119,7 +119,7 @@ export function parseDiag(output) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { humanAge, pluralRu } from './labels.js'
+import { humanAge, pluralRu, incidentCopy } from './labels.js'
 
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
@@ -244,12 +244,17 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
     else if (key === 'awg_manager') body = awgmRow(check)
     else body = tunnelsRow(check ?? null, tunnels)
     const answer = silent ? 'не знаем' : body.answer
+    const tone = silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted'
     rows.push({
       key,
       title: ROW_TITLES[key] ?? key,
       code: key,
       answer,
-      tone: silent ? 'muted' : body.tone ?? ANSWER_TONE[body.answer] ?? 'muted',
+      tone,
+      // Последствие пишется только у сломанного и только когда роутер на
+      // связи. «Нет» напротив вопроса не говорит, чем это грозит, а на
+      // молчащем роутере поломки может и не быть -- пугать ею нельзя.
+      consequence: tone === 'danger' ? incidentCopy(key).what : '',
       value: body.value,
     })
   }

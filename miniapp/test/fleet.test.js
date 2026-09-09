@@ -31,8 +31,9 @@ describe('sortByUrgency', () => {
   })
 })
 
-// Строка флота: имя, пилюля состояния, фраза о том, что не так, и пять точек
-// -- те же пять служб, что нарисованы лампами на экране роутера.
+// Строка флота: имя, пилюля состояния и фраза о том, что не так. Точек
+// больше нет -- они требовали легенды, а легенда и есть признание, что
+// прибор не читается.
 describe('fleetRow', () => {
   it('живой роутер без тревог говорит, когда отчитался', () => {
     const row = fleetRow({ id: 1, nickname: 'Дом', status: 'online', last_seen_age_sec: 42 })
@@ -62,23 +63,30 @@ describe('fleetRow', () => {
     expect(row.sub).toBe('агент установлен, но отчётов от него не было')
   })
 
-  it('пять точек идут в порядке ламп, а не в порядке ответа', () => {
+  // Идентификатор линии в списке роутеров не значит ничего: у человека тут
+  // нет ни снимка маршрутов, ни имён туннелей, чтобы понять, что такое awg12.
+  it('упавшая линия не приносит в список машинный идентификатор', () => {
     const row = fleetRow({
       id: 1, nickname: 'Дом', status: 'alert', last_seen_age_sec: 10,
+      active_incidents: [{ check_name: 'tunnel_awg12' }],
+    })
+    expect(row.sub).toBe('Одна из линий не отвечает')
+    expect(row.sub).not.toContain('awg12')
+  })
+
+  // Легенда -- доказательство, что прибор не читается: если под точками нужна
+  // подпись, что значит серая, точки не работают. Строка обязана отвечать
+  // словами, а не требовать расшифровки.
+  it('строка флота не несёт точек -- она отвечает словами', () => {
+    const row = fleetRow({
+      id: 1, nickname: 'Дом', status: 'online', last_seen_age_sec: 42,
       checks: [
-        { check_name: 'tunnels', status: 'ok' },
         { check_name: 'dns', status: 'ok' },
         { check_name: 'hydraroute', status: 'fail' },
       ],
     })
-    expect(row.dots.map((d) => d.key)).toEqual(['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels'])
-    expect(row.dots.map((d) => d.tone)).toEqual(['ok', 'off', 'danger', 'off', 'ok'])
-  })
-
-  // Серая точка -- «роутер не сказал», и это не то же самое, что «сломано».
-  it('без ответа про службу точка серая, а не красная', () => {
-    const row = fleetRow({ id: 1, nickname: 'Дом', status: 'online', last_seen_age_sec: 5 })
-    expect(row.dots.every((d) => d.tone === 'off')).toBe(true)
+    expect(row.dots).toBeUndefined()
+    expect(row.sub).toBe('отчёт 42 сек назад')
   })
 })
 

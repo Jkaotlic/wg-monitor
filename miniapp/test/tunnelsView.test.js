@@ -180,3 +180,46 @@ describe('роль звена различает выключенное и уп�
     expect(link.note).toBe('роутер не сказал')
   })
 })
+
+// Заголовок линии -- имя, которое дал человек. Когда имени нет, раньше на его
+// место вставал идентификатор (awg11) или имя интерфейса (OpkgTun11), и экран
+// начинал говорить по-машинному ровно там, где человек ищет ответ.
+describe('tunnelsView -- машинное имя за тап', () => {
+  const NONAME = {
+    policy_model: true,
+    tunnels: [
+      { id: 'awg11', name: '', iface: 'opkgtun11', type: 'managed', status: 'running' },
+      { id: 'awg20', name: '', iface: 'nwg0', type: 'managed', status: 'running' },
+    ],
+    policies: [
+      {
+        name: 'HydraRoute', dns: 3, via_vpn: true, active_tunnel_id: 'awg11',
+        interfaces: [
+          { bind: 'OpkgTun11', name: '', role: 'active', tunnel_id: 'awg11', via_vpn: true },
+        ],
+      },
+    ],
+    counts: {},
+  }
+
+  it('безымянная линия называется линией, а не идентификатором', () => {
+    const v = tunnelsView(NONAME)
+    expect(v.active.title).toBe('Линия без имени')
+    expect(v.active.title).not.toContain('awg11')
+    expect(v.active.code).toBe('awg11')
+  })
+
+  it('у звена цепочки идентификатор лежит отдельно от заголовка', () => {
+    const v = tunnelsView(NONAME)
+    expect(v.chain[0].title).toBe('Линия без имени')
+    expect(v.chain[0].code).toBe('awg11')
+  })
+
+  it('именованная линия показывает своё имя, идентификатор остаётся рядом', () => {
+    const v = tunnelsView(SNAP)
+    expect(v.active.title).toBe('awg3-work-via-ru1')
+    expect(v.active.code).toBe('awg11')
+    expect(v.chain[1].title).toBe('NetherlandsKerkradeS24')
+    expect(v.chain[1].code).toBe('awg20')
+  })
+})

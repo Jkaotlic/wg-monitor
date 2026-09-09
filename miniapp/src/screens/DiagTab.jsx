@@ -69,7 +69,7 @@ export function DiagTab({ routerID, asleep }) {
   return (
     <div class="screen">
       <div class="router-header">
-        <h1 class="screen-title">Диагностика</h1>
+        <h1 class="screen-title">Проверки</h1>
         <button type="button" class="btn btn-ghost" disabled={recheck.busy} onClick={load}>
           Обновить
         </button>
@@ -98,15 +98,20 @@ export function DiagTab({ routerID, asleep }) {
       <Section title="Что спросили и что ответили">
         <div class="card">
           {rows.map((r) => (
-            <DataRow
-              key={r.key}
-              dot={r.tone === 'ok' ? 'ok' : r.tone === 'danger' ? 'danger' : r.tone === 'warn' ? 'warn' : undefined}
-              title={r.title}
-              code={r.code}
-              value={r.answer}
-              valueSub={r.value}
-              valueTone={r.tone === 'muted' ? undefined : r.tone}
-            />
+            <div key={r.key}>
+              <DataRow
+                dot={r.tone === 'ok' ? 'ok' : r.tone === 'danger' ? 'danger' : r.tone === 'warn' ? 'warn' : undefined}
+                title={r.title}
+                code={r.code}
+                value={r.answer}
+                valueSub={r.value}
+                valueTone={r.tone === 'muted' ? undefined : r.tone}
+              />
+              {/* «Нет» напротив вопроса не говорит, ЧЕМ это грозит. Строка
+                  последствия появляется только у сломанного: у живой
+                  проверки она была бы шумом. */}
+              {r.consequence && <p class="diag-consequence">{r.consequence}</p>}
+            </div>
           ))}
           {/* Молчащий роутер -- не поломка сам по себе, но он делает всё выше
               вчерашним, и сказать это надо там же, где показания. */}
