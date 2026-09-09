@@ -72,8 +72,11 @@ export function fetchIncidentHistory(routerID, check) {
 
 // Лента событий роутера (/timeline), а не история одной проверки
 // (/incidents/{check}/history) -- см. комментарий у miniappTimelineResp.
-export function fetchTimeline(routerID, days = 7) {
-  return request(`/routers/${routerID}/timeline?days=${days}`)
+// raw=1 просит сырую ленту событий вместо свёрнутых происшествий: она нужна
+// тому, кто полез разбираться, и у неё свой потолок в пятьсот строк.
+export function fetchTimeline(routerID, days = 7, { raw = false } = {}) {
+  const suffix = raw ? '&raw=1' : ''
+  return request(`/routers/${routerID}/timeline?days=${days}${suffix}`)
 }
 
 export function fetchAccess(routerID) {

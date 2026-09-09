@@ -1927,6 +1927,62 @@ body {
 .ev-dot-warn { background: var(--warn); }
 .ev-dot-bad { background: var(--bad); }
 
+/* ============================================================
+   Происшествие в ленте «Что было»
+   ============================================================ */
+/* Строка происшествия крупнее строки сырого события: это новость, а не запись
+   журнала. Точка слева, а не справа как у .ev -- здесь нет колонки времени,
+   и метка состояния встаёт первой, откуда читают. */
+.inc {
+  display: flex;
+  gap: var(--sp-3);
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.inc:last-child { border-bottom: none; }
+
+.inc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  flex: none;
+  margin-top: 7px;
+  background: var(--led-off);
+}
+
+.inc-dot-warn { background: var(--warn); }
+.inc-dot-bad { background: var(--bad); }
+
+.inc-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.inc-title {
+  display: block;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+}
+
+.inc-detail {
+  display: block;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+  margin-top: 3px;
+}
+
+/* Тихий день -- это ответ, а не пустое место: неделя без единой строки
+   выглядит сломанной лентой, а не неделей, когда всё работало. Поэтому у него
+   есть своя строка, но без карточки: новостью он не является. */
+.day-quiet {
+  margin: 0;
+  padding: 2px 14px 6px;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
 /* Шестерёнка в шапке: зона нажатия 44 px, сама иконка мельче -- иначе она
    спорит с брендом и кнопкой флота за внимание. */
 .app-header-gear {
