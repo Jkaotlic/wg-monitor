@@ -274,6 +274,16 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	}
 
 	reasons := tunnelFailReasons(tu, pc, maxAge)
+	// Свежий ответ матрицы снимает единственную претензию «рукопожатие
+	// устарело»: линия, ответившая минуту назад, живая. Остальные причины
+	// (статус не running, конфликт адресов, провал pingCheck) матрица не
+	// отменяет -- они про саму линию, а не про её простой.
+	if matrixSaysAlive(matrix, tu.ID, time.Now()) {
+		reasons = dropStaleHandshakeReason(reasons)
+		if len(reasons) == 0 {
+			details["note"] = "рукопожатие устарело от простоя, но линия отвечает на пробу"
+		}
+	}
 	if len(reasons) == 0 {
 		return OK(name, start, details)
 	}
@@ -282,6 +292,18 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 		return OK(name, start, details)
 	}
 	return Fail(name, start, strings.Join(reasons, "; "), details)
+}
+
+// dropStaleHandshakeReason убирает из причин только «рукопожатие устарело».
+func dropStaleHandshakeReason(reasons []string) []string {
+	out := reasons[:0:0]
+	for _, r := range reasons {
+		if strings.HasPrefix(r, "handshake stale") {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func tunnelRouteFallbackUsable(tu awgmgr.Tunnel) bool {
@@ -326,6 +348,36 @@ func firstNonEmptyTunnel(values ...string) string {
 	}
 	return ""
 }
+
+// matrixSaysAlive -- матрица мониторинга awg-manager только что получила ответ
+// ЧЕРЕЗ эту линию.
+//
+// WireGuard не делает рукопожатий без трафика: у исправной линии, которой
+// сейчас не пользуются, оно стареет само по себе. Бьёт это ровно по резервным
+// линиям -- они простаивают по определению, и объявлять их упавшими из-за
+// возраста рукопожатия значит будить человека ради работающей линии.
+//
+// Матрица -- активная проба, а не косвенный признак: линия, ответившая
+// минуту назад, живая, что бы ни говорил возраст рукопожатия.
+func matrixSaysAlive(matrix *awgmgr.MonitoringMatrix, tunnelID string, now time.Time) bool {
+	if matrix == nil {
+		return false
+	}
+	if _, ok := matrix.BestLatency(tunnelID); !ok {
+		return false
+	}
+	// Устаревшая матрица ничего не доказывает: она могла быть снята до
+	// обрыва. Свежесть меряем по её же отметке времени.
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(matrix.UpdatedAt))
+	if err != nil {
+		return false
+	}
+	return now.Sub(ts) <= matrixFreshWindow
+}
+
+// matrixFreshWindow -- насколько свежей должна быть матрица, чтобы её ответу
+// можно было верить как доказательству живости.
+const matrixFreshWindow = 5 * time.Minute
 
 func tunnelFailReasons(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, maxAge time.Duration) []string {
 	var reasons []string

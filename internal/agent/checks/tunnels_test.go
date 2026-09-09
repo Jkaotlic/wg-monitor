@@ -643,3 +643,59 @@ func TestTunnelCheck_SurvivesMissingMatrix(t *testing.T) {
 		t.Fatal("без матрицы ключа быть не должно — пустое значение хуже отсутствия")
 	}
 }
+
+// Линия работает, но ею сейчас не пользуются: WireGuard не делает рукопожатий
+// без трафика, и у ИСПРАВНОЙ линии оно стареет само по себе. Бьёт это ровно
+// по резервным линиям -- они простаивают по определению.
+//
+// При этом матрица мониторинга активно пробит линию и только что получила
+// ответ. Линия, ответившая секунду назад, не может быть мёртвой, и объявлять
+// её упавшей из-за возраста рукопожатия -- ложная тревога.
+func TestTunnelsCheck_IdleTunnelAnsweringMatrixIsNotDown(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			// Рукопожатию час -- намного больше порога; статус running.
+			old := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"Амстердам","type":"awg","status":"running","enabled":true,"interfaceName":"nwg1","lastHandshake":"` + old + `"}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"tunnelId":"awg10","status":"disabled","method":"icmp","failCount":0,"failThreshold":3}
+			]}}`))
+		case "/api/dns-routes/list":
+			// На линии есть правила -- значит это не «неиспользуемый туннель»,
+			// который подавляется отдельно, а рабочая резервная линия.
+			_, _ = w.Write([]byte(`{"success":true,"data":[
+				{"id":"r1","routes":[{"interface":"nwg1","tunnelId":"nwg1"}]}
+			]}`))
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			// Матрица только что пробила линию: 84 мс, ответ есть.
+			now := time.Now().UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"success":true,"data":{"cells":[
+				{"targetId":"t1","tunnelId":"awg10","latencyMs":84,"ok":true,"ts":"` + now + `"}
+			],"updatedAt":"` + now + `"}}`))
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	chk := TunnelsCheck{Client: awgmgr.New(srv.URL)}
+	out := chk.Run(context.Background(), Deps{})
+	for _, c := range out {
+		if c.Name != "tunnel_awg10" {
+			continue
+		}
+		if c.Status != "ok" {
+			t.Fatalf("линия ответила матрице только что -- она живая, а не упавшая: %+v", c)
+		}
+		return
+	}
+	t.Fatalf("проверка tunnel_awg10 не выпущена; получили: %+v", out)
+}
