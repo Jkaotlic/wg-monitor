@@ -69,7 +69,7 @@ export function DiagTab({ routerID, asleep }) {
   return (
     <div class="screen">
       <div class="router-header">
-        <h1 class="screen-title">Диагностика</h1>
+        <h1 class="screen-title">Проверки</h1>
         <button type="button" class="btn btn-ghost" disabled={recheck.busy} onClick={load}>
           Обновить
         </button>

@@ -3,14 +3,14 @@
 // Сворачивание живёт на бэкенде -- клиент видит только пятьсот новейших строк
 // и посчитать по ним неделю не может. Здесь остаётся то, что и должно быть на
 // клиенте: как это назвать по-русски и как разложить по дням.
-import { incidentCopy, humanAge } from './labels.js'
+import { incidentWhatPlain, humanAge } from './labels.js'
 
 function hhmm(iso) {
   return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
 }
 
 export function incidentLine(incident) {
-  const { what } = incidentCopy(incident.check_name)
+  const what = incidentWhatPlain(incident.check_name)
   const from = hhmm(incident.from)
   const down = humanAge(incident.down_sec ?? 0)
 

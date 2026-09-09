@@ -7,7 +7,7 @@
 // Список открывают, когда что-то сломалось, поэтому порядок -- по срочности,
 // а строка отвечает не «сколько тревог», а «что именно не так»: число
 // человеку ничего не говорит, фраза говорит.
-import { humanAge, incidentCopy } from './labels.js'
+import { humanAge, incidentWhatPlain } from './labels.js'
 
 // Порядок -- по срочности, а не по id.
 const URGENCY = { alert: 0, offline: 1, sleeping: 2, online: 3 }
@@ -41,7 +41,10 @@ export function fleetRow(router) {
 
   let sub
   if (incidents.length > 0) {
-    sub = incidentCopy(incidents[0].check_name).what
+    // Идентификатор линии в этом списке не значит ничего: у человека здесь
+    // нет ни снимка маршрутов, ни имён туннелей, чтобы понять, что такое
+    // awg12. Внутри роутера линия названа именем -- туда и идти.
+    sub = incidentWhatPlain(incidents[0].check_name)
   } else if (never) {
     sub = 'агент установлен, но отчётов от него не было'
   } else {

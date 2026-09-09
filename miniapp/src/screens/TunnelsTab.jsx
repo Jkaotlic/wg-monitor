@@ -141,7 +141,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   return (
     <div class="screen">
       <div class="router-header">
-        <h1 class="screen-title">Туннели</h1>
+        <h1 class="screen-title">Линии</h1>
         <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => run('route_status', {}, deadline)}>
           {busy ? 'Читаю…' : 'Обновить'}
         </button>

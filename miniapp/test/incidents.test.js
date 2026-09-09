@@ -74,3 +74,16 @@ describe('groupIncidentsByDay', () => {
     expect(groups.every((g) => g.quiet)).toBe(true)
   })
 })
+
+// Лента живёт снаружи роутера: снимка маршрутов рядом нет, и идентификатор
+// линии человеку не говорит ничего.
+describe('incidentLine -- линия без идентификатора', () => {
+  it('упавшая линия называется линией, а не tunnel_awg12', () => {
+    const line = incidentLine({
+      check_name: 'tunnel_awg12', from: '2026-09-09T14:20:00Z', to: '2026-09-09T14:24:00Z',
+      down_sec: 240, flaps: 1, ongoing: false,
+    })
+    expect(line.title).toBe('Одна из линий не отвечает')
+    expect(line.title).not.toContain('awg12')
+  })
+})

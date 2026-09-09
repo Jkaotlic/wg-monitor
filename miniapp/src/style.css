@@ -2130,6 +2130,31 @@ body {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Открытый сейчас роутер помечен полосой слева, а не цветом строки: цвет в
+   этом списке уже занят состоянием. */
+.fleet-row-current {
+  box-shadow: inset 2px 0 0 var(--sig);
+}
+
+.fleet-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.fleet-name {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.fleet-sub {
+  display: block;
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  color: var(--dim);
+}
+
 /* ============================================================
    Починка линии
    ------------------------------------------------------------
