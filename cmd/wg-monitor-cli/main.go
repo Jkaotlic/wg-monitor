@@ -86,6 +86,7 @@ Usage:
   wg-monitor-cli bind-tg-user --nickname=NAME --tg-id=N [--db PATH]
   wg-monitor-cli bind-tg-user --nickname=NAME --clear [--db PATH]
   wg-monitor-cli ensure-topics --config=PATH [--nickname=NAME] [--db PATH] [--sleep-ms N]
+  wg-monitor-cli announce-dm-migration [--config=PATH] [--db PATH] [--dry-run]
   wg-monitor-cli version
 `
 }
