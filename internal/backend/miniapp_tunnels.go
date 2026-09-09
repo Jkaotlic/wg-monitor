@@ -39,6 +39,13 @@ type miniappTunnel struct {
 	HandshakeAgeSec *int   `json:"handshake_age_sec,omitempty"`
 	PingCheckStatus string `json:"ping_check_status,omitempty"`
 	PingLatencyMs   *int   `json:"ping_latency_ms,omitempty"`
+	// MatrixLatencyMs -- задержка ЧЕРЕЗ туннель из матрицы awg-manager 2.18,
+	// в отличие от PingLatencyMs, который меряет ping-check роутера и с целью
+	// вроде 8.8.8.8 утекает мимо туннеля. Указатель, а не число: отсутствие
+	// данных и «ноль миллисекунд» -- разные вещи, и вторая на экране читается
+	// как «мгновенно».
+	MatrixLatencyMs *int   `json:"matrix_latency_ms,omitempty"`
+	MatrixUpdatedAt string `json:"matrix_updated_at,omitempty"`
 	// DefaultRouteIntent: this tunnel claims to be the default route. Several
 	// tunnels can each claim it -- it is NOT the answer to "where does traffic go".
 	DefaultRouteIntent bool `json:"default_route_intent"`
@@ -63,6 +70,8 @@ type miniappTunnelDetails struct {
 	HandshakeAgeSec    *int   `json:"handshake_age_sec"`
 	PingCheckStatus    string `json:"ping_check_status"`
 	PingLastLatencyMs  *int   `json:"ping_check_last_latency_ms"`
+	MatrixLatencyMs    *int   `json:"matrix_latency_ms"`
+	MatrixUpdatedAt    string `json:"matrix_updated_at"`
 	DefaultRouteIntent bool   `json:"default_route_intent"`
 	IsActiveDefault    bool   `json:"is_active_default"`
 	ActiveDefaultKnown bool   `json:"active_default_known"`
@@ -103,6 +112,8 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 	out.HandshakeAgeSec = d.HandshakeAgeSec
 	out.PingCheckStatus = d.PingCheckStatus
 	out.PingLatencyMs = d.PingLastLatencyMs
+	out.MatrixLatencyMs = d.MatrixLatencyMs
+	out.MatrixUpdatedAt = d.MatrixUpdatedAt
 	out.DefaultRouteIntent = d.DefaultRouteIntent
 	out.ActiveDefaultKnown = d.ActiveDefaultKnown
 	out.IsActiveDefault = d.ActiveDefaultKnown && d.IsActiveDefault

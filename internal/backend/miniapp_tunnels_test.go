@@ -255,3 +255,42 @@ func TestMiniappDeriveTrafficVPNWinsDespiteUnknownSibling(t *testing.T) {
 		t.Fatalf("want egress awg12/amst, got %+v", got)
 	}
 }
+
+func TestMiniappTunnelFromEventProjectsMatrixLatency(t *testing.T) {
+	row := db.EventRow{
+		CheckName:   "tunnel_awg10",
+		Status:      "ok",
+		TS:          time.Date(2026, 9, 9, 9, 32, 23, 0, time.UTC),
+		DetailsJSON: `{"tunnel_id":"awg10","tunnel_name":"line-a","status":"running","enabled":true,"handshake_age_sec":21,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z"}`,
+	}
+
+	got, ok := miniappTunnelFromEvent(row)
+	if !ok {
+		t.Fatal("tunnel_ row must project")
+	}
+	if got.MatrixLatencyMs == nil || *got.MatrixLatencyMs != 84 {
+		t.Fatalf("matrix_latency_ms = %v, хотим 84", got.MatrixLatencyMs)
+	}
+	if got.MatrixUpdatedAt != "2026-09-09T09:32:23Z" {
+		t.Fatalf("время снимка не доехало: %q — задержка без возраста ничего не стоит", got.MatrixUpdatedAt)
+	}
+}
+
+// Линия со старого роутера приходит без задержки, и проекция обязана отдать её
+// как «нет данных», а не как ноль: ноль на экране читается как «мгновенно».
+func TestMiniappTunnelFromEventMatrixLatencyAbsentStaysNil(t *testing.T) {
+	row := db.EventRow{
+		CheckName:   "tunnel_awg10",
+		Status:      "ok",
+		TS:          time.Date(2026, 9, 9, 9, 32, 23, 0, time.UTC),
+		DetailsJSON: `{"tunnel_id":"awg10","tunnel_name":"line-a","status":"running","enabled":true,"handshake_age_sec":21}`,
+	}
+
+	got, ok := miniappTunnelFromEvent(row)
+	if !ok {
+		t.Fatal("tunnel_ row must project")
+	}
+	if got.MatrixLatencyMs != nil {
+		t.Fatalf("без данных поле обязано быть nil, получили %v", *got.MatrixLatencyMs)
+	}
+}
