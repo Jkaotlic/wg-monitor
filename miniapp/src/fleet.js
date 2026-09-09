@@ -1,4 +1,8 @@
-// Экран флота: сломанное сверху, состояние пяти служб точками.
+// Экран флота: сломанное сверху, состояние -- словами.
+//
+// Пять точек отсюда удалены вместе с легендой под списком. Легенда и была
+// доказательством, что прибор не читается: если под точками приходится
+// писать, что значит серая, значит точки не работают.
 //
 // Список открывают, когда что-то сломалось, поэтому порядок -- по срочности,
 // а строка отвечает не «сколько тревог», а «что именно не так»: число
@@ -16,12 +20,6 @@ export function sortByUrgency(routers = []) {
     return (a.nickname ?? '').localeCompare(b.nickname ?? '', 'ru')
   })
 }
-
-// Пять служб в общем порядке (CHECK_ORDER в checksOrder.js). Порядок
-// фиксирован: точки, меняющиеся местами между обновлениями, перестают быть
-// прибором.
-const LAMPS = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels']
-const DOT_TONE = { ok: 'ok', fail: 'danger', warn: 'warn' }
 
 export function fleetRow(router) {
   const age = router?.last_seen_age_sec
@@ -50,12 +48,7 @@ export function fleetRow(router) {
     sub = `отчёт ${humanAge(age)} назад`
   }
 
-  // Серая точка значит «роутер не сказал», а не «сломано»: службу, о которой
-  // не было ни одного отчёта, нельзя красить ни зелёным, ни красным.
-  const byName = new Map((router?.checks ?? []).map((c) => [c.check_name, c.status]))
-  const dots = LAMPS.map((key) => ({ key, tone: DOT_TONE[byName.get(key)] ?? 'off' }))
-
-  return { id: router?.id, nickname: router?.nickname ?? '', pill, sub, dots }
+  return { id: router?.id, nickname: router?.nickname ?? '', pill, sub }
 }
 
 // Групповой опрос флота. Одна кнопка, N роутеров -- и человек обязан видеть,

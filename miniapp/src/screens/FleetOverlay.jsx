@@ -4,13 +4,12 @@ import { Chip } from '../ui/Chip.jsx'
 import { sortByUrgency, fleetRow, batchProgress } from '../fleet.js'
 import { sendCommand, fetchCommandResult } from '../api.js'
 
-// Список роутеров: сломанное сверху, пять точек вместо цифр. Открывается
-// только у того, кому доступен не один роутер -- владельцу одного показывать
-// список незачем.
+// Список роутеров: сломанное сверху, состояние -- словами. Открывается только
+// у того, кому доступен не один роутер -- владельцу одного показывать список
+// незачем.
 //
-// Точки -- те же пять служб, что нарисованы лампами на экране роутера, и
-// значение у них то же самое. Серая значит «роутер не сказал»: службу, о
-// которой не было отчёта, нельзя красить ни зелёным, ни красным.
+// Пять точек и легенда под ними удалены: строка обязана отвечать сама, а не
+// отправлять человека к расшифровке цветов внизу экрана.
 export function FleetOverlay({ routers, currentID, onPick, onClose }) {
   const rows = sortByUrgency(routers).map(fleetRow)
   const broken = rows.filter((r) => r.pill.tone === 'danger').length
@@ -78,21 +77,12 @@ export function FleetOverlay({ routers, currentID, onPick, onClose }) {
                   <Chip tone={r.pill.tone}>{r.pill.text}</Chip>
                 </span>
                 <span class="fleet-sub">{r.sub}</span>
-                <span class="fleet-dots">
-                  {r.dots.map((d) => (
-                    <i key={d.key} class={`fleet-dot fleet-dot-${d.tone}`} />
-                  ))}
-                </span>
               </span>
               <svg class="list-row-chevron" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M 6 3 L 11 8 L 6 13" />
               </svg>
             </button>
           ))}
-          <p class="card-foot">
-            <b>Пять точек — пять служб роутера:</b> адреса сайтов, интернет, обход блокировок,
-            панель роутера, связь с ботом. Серая значит «роутер не сказал», а не «сломано».
-          </p>
         </div>
 
         {rows.length > 1 && (
