@@ -124,7 +124,7 @@ type fakeKeyboardSender struct {
 	nextID int64
 }
 
-func (f *fakeKeyboardSender) SendMessageWithKeyboard(_ context.Context, chatID int64, _ *int64, _, _ string, _ *int64, _ any) (int64, error) {
+func (f *fakeKeyboardSender) SendMessageWithKeyboard(_ context.Context, chatID int64, _ *int64, _, _ string, _ *int64, _ *tg.InlineKeyboardMarkup) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err, ok := f.fail[chatID]; ok {
@@ -145,7 +145,7 @@ func TestFanout_SendTrackedRemembersEachMessage(t *testing.T) {
 	}
 
 	s := &fakeKeyboardSender{}
-	n, err := NewFanout(d, s, quietLogger()).SendTracked(context.Background(), router, "tunnel_awg0", "линия упала", "HTML", "кнопки")
+	n, err := NewFanout(d, s, quietLogger()).SendTracked(context.Background(), router, "tunnel_awg0", "линия упала", "HTML", &tg.InlineKeyboardMarkup{})
 	if err != nil {
 		t.Fatal(err)
 	}

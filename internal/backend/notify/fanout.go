@@ -78,7 +78,7 @@ func (f *Fanout) noteSuccess(chatID int64) {
 // Sender'ом и не должны тащить лишнюю зависимость в свои тесты.
 type KeyboardSender interface {
 	Sender
-	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
+	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
 }
 
 // SendTracked рассылает тревогу и запоминает, кому какое сообщение ушло.
@@ -87,7 +87,7 @@ type KeyboardSender interface {
 //
 // Если отправитель не умеет кнопок, уведомление уходит без них: потерять
 // кнопку лучше, чем потерять тревогу.
-func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb any) (int, error) {
+func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
 	targets, err := RecipientsFor(f.d, routerUserID)
 	if err != nil {
 		return 0, err
