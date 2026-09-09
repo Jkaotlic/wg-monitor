@@ -366,6 +366,8 @@ func TestMiniappTimelineDeniedForStranger(t *testing.T) {
 	}
 }
 
+// Сырая лента отдаёт события свежими вперёд. Проверка переехала на ?raw=1
+// вместе с самими событиями: обычный ответ теперь про происшествия.
 func TestMiniappTimelineNewestFirst(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
 	now := time.Now().UTC()
@@ -381,7 +383,7 @@ func TestMiniappTimelineNewestFirst(t *testing.T) {
 	}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
 
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline?raw=1", ownedID), nil)
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -414,9 +416,12 @@ func TestMiniappTimelineEmptyIsArrayNotNull(t *testing.T) {
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	// Клиент делает .map по этому полю: null уронил бы экран.
-	if !strings.Contains(rec.Body.String(), `"events":[]`) {
+	// Клиент делает .map по этим полям: null уронил бы экран.
+	if !strings.Contains(rec.Body.String(), `"incidents":[]`) {
 		t.Fatalf("пустая история должна быть [], получили %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"events":[]`) {
+		t.Fatalf("пустая сырая лента должна быть [], получили %s", rec.Body.String())
 	}
 }
 
@@ -462,7 +467,7 @@ func TestMiniappTimelineTruncates(t *testing.T) {
 	}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
 
-	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline?raw=1", ownedID), nil)
 	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -542,5 +547,102 @@ func TestMiniappRoutersCarryServiceDots(t *testing.T) {
 	}
 	if _, present := byName["tunnel_awg12"]; present {
 		t.Fatal("проверка туннеля -- антенна, а не лампа: в списке точек её быть не должно")
+	}
+}
+
+// Экран обещает неделю -- значит и сворачивать надо неделю. Пятьсот новейших
+// строк при шести проверках в минуту это полтора часа, и на них длительность
+// поломки, начавшейся вчера, посчитать нечем.
+func TestMiniappTimelineFoldsIncidents(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now().UTC()
+	// Двенадцать морганий подряд -- одна новость.
+	for i := 0; i < 12; i++ {
+		start := now.Add(-time.Duration(60-5*i) * time.Minute)
+		if err := d.Events().Insert(ownedID, "hydraroute", "fail", "{}", start); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+		if err := d.Events().Insert(ownedID, "hydraroute", "ok", "{}", start.Add(time.Minute)); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappTimelineResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Incidents) != 1 {
+		t.Fatalf("хотим одно происшествие, получили %+v", resp.Incidents)
+	}
+	if resp.Incidents[0].Flaps != 12 {
+		t.Errorf("моргало %d раз, хотим 12", resp.Incidents[0].Flaps)
+	}
+	if len(resp.Events) != 0 {
+		t.Errorf("сырые события в обычном ответе не едут, получили %d", len(resp.Events))
+	}
+}
+
+// Сырая лента никуда не делась: тому, кто полез разбираться, нужны именно
+// строки с машинными именами.
+func TestMiniappTimelineRawKeepsEvents(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now().UTC()
+	if err := d.Events().Insert(ownedID, "dns", "fail", "{}", now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := d.Events().Insert(ownedID, "dns", "ok", "{}", now.Add(-time.Hour)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline?raw=1", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var resp miniappTimelineResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Events) != 2 {
+		t.Fatalf("сырая лента отдаёт события, получили %+v", resp.Events)
+	}
+	if len(resp.Incidents) != 0 {
+		t.Errorf("в сыром режиме происшествий нет, получили %+v", resp.Incidents)
+	}
+}
+
+// Идущая поломка приезжает без конца: конец, которого ещё не было, нельзя
+// записать временем.
+func TestMiniappTimelineOngoingHasNoEnd(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.Events().Insert(ownedID, "external_reach", "fail", "{}", time.Now().UTC().Add(-10*time.Minute)); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/timeline", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var resp miniappTimelineResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Incidents) != 1 || !resp.Incidents[0].Ongoing {
+		t.Fatalf("хотим идущее происшествие, получили %+v", resp.Incidents)
+	}
+	if resp.Incidents[0].To != "" {
+		t.Errorf("у идущего происшествия конца нет, получили %q", resp.Incidents[0].To)
 	}
 }
