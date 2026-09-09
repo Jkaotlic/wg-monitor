@@ -780,3 +780,37 @@ func TestSelfUpdate_ChecksumMismatchCleansUpTempFileAndLeavesBinaryUntouched(t *
 		t.Fatalf("the installed binary must stay untouched on a checksum mismatch, got %q", after)
 	}
 }
+
+// Запас места защищает раздел от заполнения под ноль -- и не имеет причин
+// расти вместе с самим разделом. Прежняя формула брала 10% ОТ РАЗДЕЛА, и
+// получалось тем строже, чем больше /opt: на 250 МБ она требовала 25 МБ
+// запаса плюс 8 МБ под бинарь, чтобы записать файл в два мегабайта.
+//
+// Роутеру с большим, но плотно занятым /opt это запрещало обновляться вовсе,
+// хотя места под бинарь хватало с запасом.
+func TestCheckSelfUpdateFreeSpaceHeadroomDoesNotGrowWithPartition(t *testing.T) {
+	old := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = old })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		// Раздел 250 МБ, свободно 20 МБ. Бинарь ~2 МБ, оценка 8 МБ --
+		// после записи останется 12 МБ, этого более чем достаточно.
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 256000 236000 20480 93% /opt\n"), nil
+	}
+	if err := checkSelfUpdateFreeSpace(context.Background()); err != nil {
+		t.Fatalf("20 МБ свободных хватает для бинаря в 2 МБ, отказ необоснован: %v", err)
+	}
+}
+
+// Но защита остаётся защитой: когда после записи раздел ушёл бы почти в ноль,
+// обновляться нельзя -- роутер рискует остаться без места на логи и базу.
+func TestCheckSelfUpdateFreeSpaceStillRefusesWhenTrulyTight(t *testing.T) {
+	old := SelfUpdateExec
+	t.Cleanup(func() { SelfUpdateExec = old })
+	SelfUpdateExec = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		// Свободно 9 МБ: после записи оценочных 8 МБ остался бы 1 МБ.
+		return []byte("Filesystem 1024-blocks Used Available Capacity Mounted on\n/dev/sda1 256000 246784 9216 96% /opt\n"), nil
+	}
+	if err := checkSelfUpdateFreeSpace(context.Background()); err == nil {
+		t.Fatal("на пустеющем разделе обновление обязано быть отклонено")
+	}
+}

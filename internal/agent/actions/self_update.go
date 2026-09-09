@@ -89,6 +89,13 @@ const (
 	// (opkg.go) uses, applied here to the estimated agent binary size
 	// instead of an opkg package set.
 	selfUpdateMinFreeRatioPct = 10
+	// selfUpdateMaxHeadroomKB -- потолок запаса: 8 МБ хватает любому разделу,
+	// чтобы пережить запись бинаря в пару мегабайт и не остаться без места.
+	selfUpdateMaxHeadroomKB = 8192
+	// selfUpdateMinHeadroomKB -- пол запаса: на совсем тесном /opt десять
+	// процентов вырождаются в пару сотен килобайт, и защита перестаёт
+	// защищать.
+	selfUpdateMinHeadroomKB = 2048
 )
 
 // SelfUpdate downloads the agent binary for the given release tag, verifies
@@ -329,12 +336,36 @@ func checkSelfUpdateFreeSpace(ctx context.Context) error {
 		return fmt.Errorf("self_update: df /opt: %w", err)
 	}
 	neededKB := int64(selfUpdateEstimatedBinaryKB)
-	headroomKB := totalKB * selfUpdateMinFreeRatioPct / 100
+	headroomKB := selfUpdateHeadroomKB(totalKB)
 	if freeKB-neededKB < headroomKB {
 		return fmt.Errorf("self_update: insufficient /opt space: %d KB free, need %d KB for the new binary plus %d KB headroom (%d KB total)",
 			freeKB, neededKB, headroomKB, totalKB)
 	}
 	return nil
+}
+
+// selfUpdateHeadroomKB -- сколько места обязано остаться свободным ПОСЛЕ
+// записи нового бинаря.
+//
+// Запас защищает раздел от заполнения под ноль: агенту нужно место под логи,
+// базу и временные файлы. Причин расти вместе с размером раздела у него нет,
+// а прежняя формула брала ровно 10% от него -- и получалась тем строже, чем
+// больше /opt. На разделе в 250 МБ она требовала 25 МБ запаса плюс 8 МБ под
+// бинарь, чтобы записать файл в два мегабайта: роутер с большим, но плотно
+// занятым /opt не мог обновиться вовсе.
+//
+// Поэтому те же 10%, но с потолком: больше selfUpdateMaxHeadroomKB запаса не
+// нужно никакому разделу, а меньше selfUpdateMinHeadroomKB не спасает от
+// заполнения даже маленький.
+func selfUpdateHeadroomKB(totalKB int64) int64 {
+	h := totalKB * selfUpdateMinFreeRatioPct / 100
+	if h > selfUpdateMaxHeadroomKB {
+		return selfUpdateMaxHeadroomKB
+	}
+	if h < selfUpdateMinHeadroomKB {
+		return selfUpdateMinHeadroomKB
+	}
+	return h
 }
 
 func httpGet(ctx context.Context, c *http.Client, url string) ([]byte, error) {
