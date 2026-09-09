@@ -17,10 +17,6 @@ type LifecycleSendTG interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
 }
 
-type lifecycleKeyboardTG interface {
-	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
-}
-
 const mobileWakeCooldown = 5 * time.Minute
 
 // WakeNotifier sends an adaptive 🚗 card to the router's TG-topic when a

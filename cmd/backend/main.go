@@ -166,12 +166,6 @@ func main() {
 		DiagMaxChars:              cfg.UI.DiagMaxChars,
 		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard != nil && *cfg.UI.CompatInlineKeyboard,
 	}
-	disp.WelcomeKeyboard = func() any {
-		return tg.ReplyKeyboardForTopic("per_router")
-	}
-	disp.WelcomeVisibleKeyboard = func() any {
-		return tg.OperatorMenuInlineKeyboardForTopic("per_router")
-	}
 	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
 	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
 	// Build upstream version cache from configured GitHub repos. Skip sources

@@ -47,16 +47,6 @@ type Dispatcher struct {
 	d   *db.DB
 	tg  TGSender
 	cfg Config
-	// WelcomeKeyboard returns the reply-keyboard markup to attach to the
-	// first message in a freshly-created per_router topic. Set by
-	// cmd/backend/main.go after construction (the Dispatcher doesn't
-	// import the callbacks UI snapshot to avoid a cycle). Nil disables
-	// welcome — used only by tests or admin-disabled flows.
-	WelcomeKeyboard func() any
-	// WelcomeVisibleKeyboard returns the inline visible menu that is posted
-	// after the bottom reply keyboard. Nil keeps the legacy one-message
-	// welcome for tests and compatibility callers.
-	WelcomeVisibleKeyboard func() any
 	// now is the injectable wall-clock seam (mirrors heartbeat.Watcher /
 	// realert.Poller / digest.Poller): production leaves it as time.Now,
 	// tests override via SetNow for deterministic HARD/offline timestamps.
