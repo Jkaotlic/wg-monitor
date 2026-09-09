@@ -27,7 +27,6 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
   const t = TONE[s.tunnel]
   const d = TONE[s.direct]
   const viaLabel = s.via || 'линия'
-  const latency = s.latencyMs != null ? `${s.latencyMs} мс` : ''
 
   return (
     <svg
@@ -73,7 +72,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
       </text>
       <text x="16" y="195" fill="var(--ink)" font-size="14" font-weight="600">{viaLabel}</text>
       <text x="16" y="215" fill={s.tunnel === 'down' ? t.label : 'var(--dim)'} font-size="11.5">
-        {latency && s.tunnel === 'up' ? `${TUNNEL_CAPTION.up} · ${latency}` : TUNNEL_CAPTION[s.tunnel]}
+        {TUNNEL_CAPTION[s.tunnel]}
       </text>
 
       <rect x="176" y="152" width="164" height="78" rx="14" fill="var(--surf)" stroke="var(--line)" />

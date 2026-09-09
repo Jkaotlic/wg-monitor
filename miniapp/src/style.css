@@ -2253,3 +2253,20 @@ body {
   width: 100%;
   margin-top: var(--sp-2);
 }
+
+/* Точка состояния в строке -- та же роль, что у метки: короткий ответ
+   «хорошо/внимание» рядом с текстом, который его объясняет. */
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  flex-shrink: 0;
+}
+
+.dot-ok {
+  background: var(--ok);
+}
+
+.dot-warn {
+  background: var(--warn);
+}

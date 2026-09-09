@@ -165,7 +165,10 @@ func (s *Settings) ActiveDefaultTunnelID() string {
 	return strings.TrimSpace(tag)
 }
 
-// CreateTunnelRequest is the body for POST /api/tunnels/create.
+// CreateTunnelRequest -- разобранный .conf. Раньше это было тело
+// POST /api/tunnels/create, но эндпоинт удалён в awg-manager 2.18.2, а импорт
+// давно идёт через /api/import/conf. Тип остался разбором конфига для
+// локальной проверки перед отправкой: ParseWGConf им валидирует текст.
 type CreateTunnelRequest struct {
 	Name         string          `json:"name"`
 	Type         string          `json:"type"`

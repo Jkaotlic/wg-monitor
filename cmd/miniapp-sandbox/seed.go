@@ -89,7 +89,7 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 	// Выдумывать свои бессмысленно: проекция их отбросит, и экран честно
 	// скажет «0 линий поднято» о поднятых туннелях -- то есть песочница
 	// станет учить неправде.
-	tunnelOK := `{"tunnel_id":"awg12","tunnel_name":"Амстердам","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"default_route_intent":true,"is_active_default":true,"active_default_known":true}`
+	tunnelOK := `{"tunnel_id":"awg12","tunnel_name":"Амстердам","status":"running","enabled":true,"handshake_age_sec":21,"ping_check_status":"ok","ping_check_last_latency_ms":38,"matrix_latency_ms":84,"matrix_updated_at":"2026-09-09T09:32:23Z","default_route_intent":true,"is_active_default":true,"active_default_known":true}`
 	tunnelBad := `{"tunnel_id":"awg12","tunnel_name":"Амстердам","status":"down","enabled":true,"handshake_age_sec":5400,"ping_check_status":"fail","default_route_intent":true,"is_active_default":false,"active_default_known":true,"note":"рукопожатия нет 90 минут"}`
 	rows := []struct {
 		name    string
@@ -102,7 +102,7 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		{"awg_manager", "ok", `{"version":"2.17.2","firmware":"4.3.9"}`},
 		{"external_reach", "ok", `{"targets_total":3,"targets_failed":[],"targets_degraded":[]}`},
 		{"tunnel_awg12", "ok", tunnelOK},
-		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"Франкфурт","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"active_default_known":true}`},
+		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"Франкфурт","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"matrix_latency_ms":226,"matrix_updated_at":"2026-09-09T09:32:23Z","active_default_known":true}`},
 	}
 	if broken {
 		rows[5].status = "fail"

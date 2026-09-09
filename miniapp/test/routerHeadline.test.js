@@ -140,3 +140,33 @@ describe('вердикт говорит правду о маршруте', () =>
     expect(h.tag).not.toMatch(/tunnel_|awg\d/)
   })
 })
+
+describe('упавшая линия при живом резерве', () => {
+  // Пугать «заблокированное не открывается», когда вторая линия работает и
+  // обход через неё идёт, — это ложная тревога. Человек побежит чинить то,
+  // что у него работает.
+  it('не объявляет обход сломанным, пока жива другая линия', () => {
+    const h = routerHeadline({
+      router: { status: 'online', last_seen_age_sec: 6 },
+      traffic: { mode: 'singbox' },
+      incidents: [{ check_name: 'tunnel_awg12' }],
+      tunnels: [
+        { tunnel_id: 'awg12', name: 'Амстердам', run_state: 'stopped' },
+        { tunnel_id: 'awg10', name: 'Франкфурт', run_state: 'running' },
+      ],
+    })
+    expect(h.tag).not.toMatch(/не открывается/)
+    expect(h.verdict).toMatch(/Франкфурт|запасн|другую/i)
+  })
+
+  // А вот когда живых линий не осталось -- это именно то, чем кажется.
+  it('без единой живой линии говорит прямо', () => {
+    const h = routerHeadline({
+      router: { status: 'online', last_seen_age_sec: 6 },
+      traffic: { mode: 'vpn' },
+      incidents: [{ check_name: 'tunnel_awg12' }],
+      tunnels: [{ tunnel_id: 'awg12', name: 'Амстердам', run_state: 'stopped' }],
+    })
+    expect(h.tag).toBe('заблокированное не открывается')
+  })
+})

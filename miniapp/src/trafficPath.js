@@ -12,25 +12,40 @@
 // Ветка считается живой только по факту. «Не знаем» -- полноценный третий
 // ответ: у молчащего роутера все показания вчерашние, и рисовать по ним
 // зелёное значит выдавать прошлое за настоящее.
-function tunnelBranch({ traffic, incidents, tunnels, stale }) {
+// Какая линия несёт обход. Обычно её называет сам роутер (egress_tunnel_id),
+// но на sing-box единого выхода нет: маршрут выбирается для каждого адреса.
+// Линия при этом существует, и писать «роутер не сказал» над поднятой линией
+// значило бы соврать -- берём первую работающую.
+function activeLine({ traffic, tunnels }) {
+  const named = tunnels?.find((x) => x.tunnel_id === traffic?.egress_tunnel_id)
+  if (named) return named
+  return tunnels?.find(isRunning) ?? null
+}
+
+// Жива ли линия -- по слову САМОГО РОУТЕРА (run_state), а не по вердикту
+// проверки: `status` в проекции несёт «ok|fail» конечного автомата, и путать
+// их значит рисовать зелёную ветку там, где линия остановлена.
+function isRunning(t) {
+  return t?.run_state === 'running'
+}
+
+function tunnelBranch({ line, incidents, stale }) {
   if (stale) return 'unknown'
-  const id = traffic?.egress_tunnel_id
-  if (incidents?.some((i) => i.check_name === `tunnel_${id}`)) return 'down'
-  const t = tunnels?.find((x) => x.tunnel_id === id)
-  if (!t) return 'unknown'
-  return t.status === 'running' ? 'up' : 'down'
+  if (!line) return 'unknown'
+  if (incidents?.some((i) => i.check_name === `tunnel_${line.tunnel_id}`)) return 'down'
+  return isRunning(line) ? 'up' : 'down'
 }
 
 export function pathState({ traffic, incidents = [], tunnels = [], stale = false } = {}) {
-  const tunnel = tunnelBranch({ traffic, incidents, tunnels, stale })
-  const t = tunnels.find((x) => x.tunnel_id === traffic?.egress_tunnel_id)
+  const t = activeLine({ traffic, tunnels })
+  const tunnel = tunnelBranch({ line: t, incidents, stale })
   return {
     tunnel,
     // Прямой поток не зависит от туннеля: он идёт мимо. Гасить его вместе с
     // упавшей линией значило бы говорить человеку «интернета нет», когда
     // банки и госуслуги у него работают.
     direct: stale ? 'unknown' : 'up',
-    via: traffic?.egress_tunnel_name || traffic?.egress_tunnel_id || '',
+    via: traffic?.egress_tunnel_name || t?.name || t?.tunnel_id || '',
     latencyMs: typeof t?.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
   }
 }

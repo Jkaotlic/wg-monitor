@@ -44,7 +44,7 @@ export function TabBar({ tab, onTab, tabs }) {
           onClick={() => onTab(key)}
         >
           {ICONS[key]}
-          {LABELS[key]}
+          {tabLabel(key)}
         </button>
       ))}
     </nav>

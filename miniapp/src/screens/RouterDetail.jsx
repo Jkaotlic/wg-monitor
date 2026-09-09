@@ -9,6 +9,7 @@ import {
 } from '../api.js'
 import { orderChecks } from '../checksOrder.js'
 import { TrafficPath } from '../components/TrafficPath.jsx'
+import { pathState } from '../trafficPath.js'
 import { routerHeadline, linesSummary } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -670,7 +671,12 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
   // Шапка -- главная новость экрана, и порядок её веток задан в
   // routerHeadline: молчащий роутер перебивает любое другое показание.
-  const headline = routerHeadline({ router, traffic, incidents })
+  const headline = routerHeadline({ router, traffic, incidents, tunnels })
+  const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
+  // Резерв -- любая работающая линия, кроме той, что несёт обход сейчас.
+  const backupLine = tunnels.find(
+    (t) => t.run_state === 'running' && (t.name || t.tunnel_id) !== path.via,
+  )
   const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
   const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
 
@@ -701,6 +707,25 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
             значило бы соврать ровно тем способом, против которого написана
             половина этого приложения: цифра выглядит достоверной именно
             потому, что она цифра. */}
+        {/* Задержка -- та, что меряется ЧЕРЕЗ туннель (матрица awg-manager),
+            а не ping-check роутера: у того цель достижима и мимо туннеля.
+            Её нет у роутеров с awg-manager старше 2.18, и тогда плитка честно
+            говорит «роутер не сказал», а не рисует ноль. */}
+        <Stat
+          label="задержка"
+          value={path.latencyMs != null && !headline.stale ? path.latencyMs : null}
+          unit="мс"
+          note={
+            headline.stale
+              ? 'данные устарели'
+              : path.latencyMs == null
+                ? 'роутер не сказал'
+                : path.latencyMs < 150
+                  ? 'быстро'
+                  : 'медленно'
+          }
+          tone={path.latencyMs != null && path.latencyMs >= 300 ? 'warn' : undefined}
+        />
         <Stat
           label="линий поднято"
           value={headline.stale || !tunnels.length ? null : liveCount}
@@ -713,12 +738,21 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
           }
           tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
         />
-        <Stat
-          label="последний ответ"
-          value={router.last_seen_age_sec != null ? humanAge(router.last_seen_age_sec) : null}
-          note={freshnessLabel(router.last_seen_age_sec)}
-          tone={asleep ? 'warn' : undefined}
-        />
+      </div>
+      {/* Резерв -- ответ на вопрос «а если эта линия ляжет». Раньше его не было
+          нигде, и человек узнавал ответ в момент падения. */}
+      <div class="card row" style="margin-top:12px">
+        <div>
+          <div class="row-title">{backupLine ? 'Запасная линия готова' : 'Запасной линии нет'}</div>
+          <div class="row-note">
+            {backupLine
+              ? backupLine.name
+                ? `«${backupLine.name}» подхватит, если эта замолчит`
+                : 'вторая линия подхватит, если эта замолчит'
+              : 'если линия ляжет, обход блокировок пропадёт до починки'}
+          </div>
+        </div>
+        <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
       </div>
       {/* Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
           что сломано, потом куда идёт трафик, потом состояние туннелей, и
