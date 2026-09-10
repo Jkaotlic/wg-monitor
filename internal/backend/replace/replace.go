@@ -581,13 +581,6 @@ func orUnknown(v string) string {
 	return v
 }
 
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
-}
-
 func newCmdID() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
