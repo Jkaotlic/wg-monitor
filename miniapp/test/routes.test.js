@@ -551,7 +551,7 @@ describe('подписи в списке правил', () => {
       ],
     })
     const byBind = Object.fromEntries(groups.map((g) => [g.bind, g.label]))
-    expect(byBind['policy:HydraRoute']).toBe('Политика «HydraRoute»')
+    expect(byBind['policy:HydraRoute']).toBe('Общий набор «HydraRoute»')
     // Имя интерфейса -- уже имя, его выдумывать не надо.
     expect(byBind['opkgtun11']).toBe('opkgtun11')
     expect(byBind['без привязки']).toBe('без привязки')

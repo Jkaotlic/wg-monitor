@@ -41,7 +41,7 @@ export function checkLabel(name) {
 const INCIDENT_COPY = {
   external_reach: {
     what: 'Нет доступа в интернет',
-    why: 'Роутер на связи и туннели подняты, но сайты снаружи не открываются. Обычно это провайдер или сторона VPN-сервера.',
+    why: 'Роутер на связи и линии подняты, но сайты снаружи не открываются. Обычно это провайдер или сторона VPN-сервера.',
   },
   dns: {
     what: 'Не определяются адреса сайтов',
@@ -53,11 +53,11 @@ const INCIDENT_COPY = {
   },
   awg_manager: {
     what: 'Нет связи с панелью роутера',
-    why: 'Агент не достучался до панели управления. Данные о туннелях могут устареть.',
+    why: 'Агент не достучался до панели роутера. Данные о линиях могут устареть.',
   },
   tunnels: {
     what: 'Не все линии на связи',
-    why: 'Часть туннелей не отвечает. Через них трафик не пойдёт — маршруты, которые на них завязаны, уйдут напрямую или не сработают.',
+    why: 'Часть линий не отвечает. Через них трафик не пойдёт — правила, которые на них завязаны, уйдут напрямую или не сработают.',
   },
   agent_heartbeat: {
     what: 'Роутер не выходит на связь',
@@ -78,7 +78,7 @@ export function incidentCopy(checkName) {
   if (checkName?.startsWith('tunnel_')) {
     return {
       what: `${checkLabel(checkName)} не отвечает`,
-      why: 'Обмен ключами не проходит — трафик через этот туннель не пойдёт.',
+      why: 'Обмен ключами не проходит — трафик через эту линию не пойдёт.',
     }
   }
   return { what: checkLabel(checkName), why: '' }
@@ -213,7 +213,7 @@ export function trafficLabel(traffic) {
     case 'direct':
       return {
         title: 'Трафик идёт напрямую',
-        detail: 'Ни один туннель не несёт основной маршрут — трафик уходит через провайдера',
+        detail: 'Ни одна линия не несёт основной маршрут — трафик уходит через провайдера',
       }
     case 'singbox':
       return {
@@ -223,7 +223,7 @@ export function trafficLabel(traffic) {
     default:
       return {
         title: 'Куда идёт трафик — неизвестно',
-        detail: 'Роутер пока не сообщает, какой туннель основной. Нажмите «Повторить проверку».',
+        detail: 'Роутер пока не сообщает, какая линия основная. Нажмите «Повторить проверку».',
       }
   }
 }
@@ -252,7 +252,7 @@ export const ACTION_LABELS = {
   silence24h: 'Сутки',
   silenceGroup: 'Не беспокоить',
   recheck: 'Повторить проверку',
-  restartTunnel: 'Перезапустить туннель',
+  restartTunnel: 'Перезапустить линию',
 }
 
 // What a dispatched agent command's result means, once the agent has
@@ -293,7 +293,7 @@ export function commandOutcomeLabel(action, result) {
     case 'timeout':
       return 'Роутер не ответил вовремя'
     case 'err': {
-      if (action === 'tunnel_restart') return 'Не удалось перезапустить туннель'
+      if (action === 'tunnel_restart') return 'Не удалось перезапустить линию'
       const output = result.output?.trim() || ''
       // Агент отвечает "unknown action: X", когда на роутере стоит версия
       // старше приложения. Человеку это читается как поломка приложения, а
@@ -354,7 +354,7 @@ function rebindOutcome(res) {
     const tail = why ? ` (${why})` : ''
     return `Перенесено ${moved} ${pluralRu(moved, 'правило', 'правила', 'правил')}, не удалось ${failed}${tail}`
   }
-  if (moved === 0) return 'Переносить было нечего: правил на этом туннеле нет'
+  if (moved === 0) return 'Переносить было нечего: правил на этой линии нет'
   return `Перенесено ${rulesCount(moved)}`
 }
 

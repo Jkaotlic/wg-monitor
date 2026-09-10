@@ -6,11 +6,11 @@ describe('stepTitle', () => {
   // роутере: он смотрит на этот список, пока линия меняется под ним.
   it('каждый шаг назван последствием', () => {
     expect(stepTitle('issue')).toBe('Выпускаем конфиг у провайдера')
-    expect(stepTitle('import')).toBe('Кладём новый туннель рядом с прежним')
+    expect(stepTitle('import')).toBe('Поднимаем новую линию рядом с прежней')
     expect(stepTitle('handshake')).toBe('Ждём, когда новая линия обменяется ключами')
-    expect(stepTitle('promote')).toBe('Переводим политику на новый туннель')
+    expect(stepTitle('promote')).toBe('Переводим правила на новую линию')
     expect(stepTitle('verify')).toBe('Проверяем, каким адресом видно снаружи')
-    expect(stepTitle('retire')).toBe('Выключаем прежний туннель')
+    expect(stepTitle('retire')).toBe('Выключаем прежнюю линию')
   })
 
   it('незнакомый шаг показывается как есть, а не теряется', () => {
@@ -28,7 +28,7 @@ describe('replaceView', () => {
       { name: 'handshake', status: 'pending' },
     ]))
     expect(v.running).toBe(true)
-    expect(v.current.title).toBe('Кладём новый туннель рядом с прежним')
+    expect(v.current.title).toBe('Поднимаем новую линию рядом с прежней')
     expect(v.steps).toHaveLength(3)
     expect(v.steps[0].tone).toBe('ok')
     expect(v.steps[1].tone).toBe('sig')

@@ -354,7 +354,9 @@ function lineNameByInterface(snapshot) {
 // Незнакомая привязка остаётся собой: выдумать ей имя нечем, а молчать хуже.
 function bindLabel(bind, byName) {
   const policy = /^policy:(.+)$/.exec(bind)
-  if (policy) return `Политика «${policy[1]}»`
+  // Привязка через набор правил роутера: человеку он известен как набор, а
+  // не как «политика» -- словарь движка маршрутизации.
+  if (policy) return `Общий набор «${policy[1]}»`
   const name = byName?.get(String(bind).trim().toLowerCase())
   return name || bind
 }

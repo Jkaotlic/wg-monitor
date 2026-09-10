@@ -27,7 +27,7 @@ describe('commandOutcomeLabel: маршруты', () => {
 
   it('переносить было нечего -- тоже ответ', () => {
     const out = JSON.stringify({ dns: { ok: 0, failed: 0 }, static: { ok: 0, failed: 0 }, hr_neo: { ok: 0, failed: 0 } })
-    expect(commandOutcomeLabel('route_rebind', ok(out))).toBe('Переносить было нечего: правил на этом туннеле нет')
+    expect(commandOutcomeLabel('route_rebind', ok(out))).toBe('Переносить было нечего: правил на этой линии нет')
   })
 
   it('повышение звена называет и порядок, и того, кто несёт трафик', () => {

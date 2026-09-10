@@ -45,3 +45,21 @@ describe('optionRows', () => {
     expect(optionRows(null)).toEqual([])
   })
 })
+
+// Панель бота, где отзывают выпущенные конфиги, доступна только админу:
+// команда /panel админская, а после переезда уведомлений в личку кнопок в
+// темах больше нет вовсе. Владелец роутера кабинет видит — и совет «отзовите
+// в боте» вёл его туда, куда он попасть не может.
+it('кончившиеся места не отправляют человека в бота', () => {
+  const s = accountSummary({
+    connected: true,
+    label: 'Amnezia Premium',
+    devices_max: 3,
+    devices_used: 3,
+    options: [{ id: 'nl', label: 'Нидерланды' }],
+  })
+  expect(s.canIssue).toBe(false)
+  expect(s.reason).not.toMatch(/в боте/i)
+  // Но сказать, что делать, всё равно надо: тупик без выхода хуже жаргона.
+  expect(s.reason).toMatch(/освобод/i)
+})

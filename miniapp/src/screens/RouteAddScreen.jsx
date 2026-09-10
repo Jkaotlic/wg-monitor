@@ -100,7 +100,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
         routerID,
         title: `Отправить «${summary.title}» в «${tunnel.name}»?`,
         body: summary.lines.length
-          ? `В туннель пойдёт: ${summary.lines.join(' · ')}`
+          ? `В обход пойдёт: ${summary.lines.join(' · ')}`
           : `Правило появится на роутере и будет вести в «${tunnel.name}».`,
         action: 'route_add',
         args: { ...summary.args, draft_hash: summary.hash },
@@ -121,7 +121,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
   }
 
   return (
-    <Overlay title="Отправить в туннель" backLabel={step === 'where' ? 'Маршруты' : 'Назад'} onBack={back}>
+    <Overlay title="Добавить сайт или адрес" backLabel={step === 'where' ? 'Маршруты' : 'Назад'} onBack={back}>
       <div class="screen">
         {step === 'where' && (
           <Section title="Куда вести трафик">
@@ -138,7 +138,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
               </ul>
             ) : (
               <div class="card">
-                <p class="traffic-detail">Роутер не сообщил ни одного своего туннеля — отправлять некуда.</p>
+                <p class="traffic-detail">Роутер не сообщил ни одной своей линии — отправлять некуда.</p>
               </div>
             )}
           </Section>
@@ -267,7 +267,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
             </div>
             {summary?.canApply && (
               <button type="button" class="btn btn-primary btn-wide" onClick={apply}>
-                Отправить в туннель
+                Отправить в обход
               </button>
             )}
           </Section>
