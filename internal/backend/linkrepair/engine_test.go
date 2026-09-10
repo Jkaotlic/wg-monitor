@@ -386,9 +386,12 @@ func TestRun_RouterFailuresReachOwnerAsWords(t *testing.T) {
 		want   []string // что человек обязан прочесть
 		forbid []string
 	}{
+		// Снимка нет — движок не знает, есть ли запасной VPN-туннель и
+		// подхватил ли он трафик. Утверждать «заблокированное не
+		// открывается» — врать наугад; честно — сказать, где это видно.
 		{"молчит на снимке", func(c *scriptedCommander) {
 			c.silent = map[string]bool{"route_status": true}
-		}, []string{"не ответил"}, nil},
+		}, []string{"не ответил", "запасной VPN-туннель"}, []string{"Заблокированное"}},
 		{"снимок не разобрался", func(c *scriptedCommander) {
 			c.snapshot = "<html>502 Bad Gateway</html>"
 		}, []string{"непонятн"}, nil},

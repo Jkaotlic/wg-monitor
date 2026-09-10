@@ -97,6 +97,9 @@ func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string) (string, boo
 type lineNames struct {
 	broken string
 	backup string
+	// noSnapshot — снимка от роутера нет (молчит или прислал непонятное):
+	// есть ли запасной VPN-туннель и подхватил ли он трафик, неизвестно.
+	noSnapshot bool
 }
 
 // namesFor берёт имена из того же снимка политики, где движок нашёл линии:
@@ -164,7 +167,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 		if brokenName == "" {
 			brokenName = sc.TunnelID
 		}
-		d.fail(ctx, jobID, req, StepFailover, lineNames{broken: brokenName}, err)
+		d.fail(ctx, jobID, req, StepFailover, lineNames{broken: brokenName, noSnapshot: !errors.Is(err, ErrNotInAnySet)}, err)
 		return
 	}
 	names := namesFor(pol, sc.TunnelID, backup)
@@ -357,6 +360,10 @@ func (d Deps) notifyResult(ctx context.Context, req StartReq, ok bool, names lin
 		// Через такой VPN-туннель правила не идут: пугать владельца
 		// «заблокированное не открывается» -- врать.
 		text = fmt.Sprintf("VPN-туннель «%s» упал. Чинить нечего: он не входит ни в один общий набор правил, и через него ничего не идёт.", line)
+	case names.noSnapshot:
+		// Снимка нет — неизвестно, подхватил ли трафик запасной VPN-туннель.
+		// «Заблокированное не открывается» тут было бы догадкой.
+		text = fmt.Sprintf("VPN-туннель «%s» упал, и поднять его не вышло: %v. Подхватил ли трафик запасной VPN-туннель, роутер не сообщил — это видно в приложении.", line, cause)
 	case ok && backup != "":
 		text = fmt.Sprintf("VPN-туннель «%s» падал. Увёл трафик на запасной VPN-туннель «%s», выпустил новый конфиг и вернул всё обратно — сейчас работает.", line, backup)
 	case ok:
