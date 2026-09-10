@@ -285,25 +285,30 @@ func (a *CommandAction) DispatchFromMessage(_ context.Context, action string, us
 
 // formatQueuedStatus is the user-facing label appended to the alert message
 // after a command-channel button is tapped. Plain action names map to icons.
+//
+// Под тревогой строку читает владелец в личке, поэтому подписи -- его
+// словами, а форма «Отправлено роутеру: …» согласуется с любым действием
+// («перезапуск … поставлено» -- нет). Из панели обслуживания нажимает админ,
+// и там перезапуск честно называет awg-manager.
 func formatQueuedStatus(action, checkName string) string {
 	if action == "restart_tunnel" && checkName == panelSentinel {
-		return "📤 🔁 Перезапуск awg-manager поставлено в очередь"
+		return "📤 Отправлено роутеру: 🔁 Перезапуск awg-manager"
 	}
 	if action == "tunnel_restart" {
-		return "📤 🔁 Перезапуск туннеля поставлено в очередь"
+		return "📤 Отправлено роутеру: 🔁 Перезапуск туннеля"
 	}
 	label := commandLabels[action]
 	if label == "" {
 		label = action
 	}
-	return fmt.Sprintf("📤 %s поставлено в очередь", label)
+	return fmt.Sprintf("📤 Отправлено роутеру: %s", label)
 }
 
 var commandLabels = map[string]string{
-	"restart_tunnel": "🔁 Перезапуск awg-manager",
+	"restart_tunnel": "🔁 Перезапуск VPN-туннелей",
 	"diag_now":       "📊 Диагностика",
-	"pingcheck_now":  "▶ Проверка связи",
-	"force_recheck":  "🔁 Повторная проверка",
+	"pingcheck_now":  "▶ Тест связи",
+	"force_recheck":  "🔄 Запрос отчёта",
 	"router_doctor":  "🩺 Проверка",
 	"opkg_upgrade":   "⬆ Обновление opkg",
 	"tunnel_enable":  "▶ Включить",

@@ -25,12 +25,17 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	}
 
 	if r.Status != "ok" {
-		token := strings.ToUpper(r.Status) // "ERR" / "LOCKED" / "TIMEOUT"
-		hintInput := token
-		if r.Status == "err" {
-			hintInput = r.Output
+		var summary, hint string
+		if alertButtonActions[action] {
+			summary, hint = ownerCommandFailure(r.Status, r.Output)
+		} else {
+			token := strings.ToUpper(r.Status) // "ERR" / "LOCKED" / "TIMEOUT"
+			hintInput := token
+			if r.Status == "err" {
+				hintInput = r.Output
+			}
+			summary, hint = HintFor(action, hintInput)
 		}
-		summary, hint := HintFor(action, hintInput)
 		card := Card{Badge: "❌", Label: label, Summary: summary, Hint: hint}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	}
@@ -45,6 +50,11 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 			Label:   label,
 			Summary: fmt.Sprintf("%s (за %dмс)", summary, r.DurationMs),
 		}
+		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
+	case "force_recheck":
+		// Агент отвечает «agent report kicked»: отчёт уже в пути, а слова --
+		// для лога.
+		card := Card{Badge: "", Label: label, Summary: "роутер пришлёт свежий отчёт в ближайшие секунды"}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "tunnel_enable", "tunnel_disable":
 		// Agent emits "interface <ndms> -> <up|down>\n<ndmc stdout>" — ndmc
@@ -122,6 +132,10 @@ func humanPingcheckResult(output string) string {
 		return "связь живая, " + lat
 	case low == "alive":
 		return "связь живая"
+	case strings.Contains(low, "triggered"):
+		// Нынешний агент не ждёт результата: проверку он только запускает
+		// («pingcheck-now triggered»), а итог приходит с отчётом.
+		return "проверка связи запущена — результат придёт со следующим отчётом роутера"
 	case strings.HasPrefix(low, "dead"):
 		return "связь не проходит"
 	case out == "":
@@ -139,12 +153,54 @@ func humanRestartResult(output string) string {
 		if i := strings.IndexByte(target, '\n'); i >= 0 {
 			target = strings.TrimSpace(target[:i])
 		}
-		return "туннель перезапущен: " + target
+		return "VPN-туннель перезапущен: " + target
 	}
 	if out == "" {
 		return "команда выполнена"
 	}
+	if low == "все туннели перезапущены" {
+		return "все VPN-туннели перезапущены"
+	}
 	return out
+}
+
+// alertButtonActions -- действия кнопок под тревогой и отчётом о
+// пробуждении. Ответ уходит в чат, где нажали, то есть владельцу в личку,
+// поэтому их ошибки говорят без советов админской панели (ssh, пути на
+// роутере, lock-файлы). Админ получает ту же фразу -- подробности у него в
+// логе агента.
+var alertButtonActions = map[string]bool{
+	"restart_tunnel": true,
+	"diag_now":       true,
+	"pingcheck_now":  true,
+	"force_recheck":  true,
+}
+
+// ownerCommandFailure -- отказ кнопки словами владельца: что случилось и
+// что он может сделать сам. Смысл, который владельцу полезен (отчёт ещё не
+// готов, диагностика не уложилась), сохраняется; инженерные подробности --
+// нет.
+func ownerCommandFailure(status, output string) (summary, hint string) {
+	const retry = "Повторите через минуту. Если не поможет — откройте приложение: там видно, что с роутером."
+	low := strings.ToLower(output)
+	switch {
+	case strings.Contains(output, "NO_REPORT") || strings.Contains(low, "no report available"):
+		return "отчёт ещё не готов", "Повторите через минуту — роутер не успел его подготовить."
+	case strings.Contains(output, "DIAG_TIMEOUT"):
+		return "диагностика не уложилась в 36 с",
+			"Роутер начал собирать отчёт, но не успел. Повторите — обычно это занимает от полуминуты до минуты."
+	case status == "timeout":
+		return "роутер не уложился в отведённое время", retry
+	case status == "locked":
+		return "на роутере идёт другая операция", "Подождите минуту и повторите."
+	case strings.Contains(output, "HTTP_401") || strings.Contains(output, "HTTP_403") || strings.Contains(low, "unauthorized"):
+		return "роутер не пускает агента", "Напишите тому, кто настраивал роутер: агенту нужно заново выдать доступ."
+	case strings.Contains(output, "HTTP_5") || strings.Contains(output, "HTTP_REFUSED") ||
+		strings.Contains(low, "connection refused") || strings.Contains(low, "dial tcp") || strings.Contains(low, "not configured"):
+		return "панель роутера не отвечает", retry
+	default:
+		return "роутер ответил ошибкой", retry
+	}
 }
 
 func formatPlainCommandOutput(label, summary, output string, maxChars int) []string {
@@ -258,13 +314,13 @@ func commandLabelHuman(action string) string {
 	case "pingcheck_now":
 		return "▶ Тест связи"
 	case "restart_tunnel":
-		return "🔁 Перезапуск awg-manager"
+		return "🔁 Перезапуск VPN-туннелей"
 	case "tunnel_restart":
 		return "🔁 Перезапуск туннеля"
 	case "opkg_upgrade":
 		return "⬆ Обновление пакетов"
 	case "force_recheck":
-		return "🔁 Force recheck"
+		return "🔄 Запрос отчёта"
 	case "check_via_tunnel":
 		return "🌍 Через туннель"
 	case "check_direct":

@@ -119,7 +119,9 @@ func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
 	if c.userID != 7 || c.cmdID != "fixed-id-1" || c.action != "restart_tunnel" || c.check != "tunnel_amnezia_for_awg2" {
 		t.Errorf("got %+v", c)
 	}
-	if !strings.Contains(statusLine, "Перезапуск awg-manager") || !strings.Contains(statusLine, "очередь") {
+	// Строка дописывается под тревогой в личке владельца: VPN-туннели, а не
+	// awg-manager, и без «перезапуск … поставлено» с несогласованным родом.
+	if !strings.Contains(statusLine, "Перезапуск VPN-туннелей") || !strings.Contains(statusLine, "Отправлено роутеру") {
 		t.Errorf("unexpected status line: %q", statusLine)
 	}
 }
@@ -157,7 +159,7 @@ func TestCommandAction_TunnelRestartEnqueuesWithNDMS(t *testing.T) {
 	if c.userID != 7 || c.cmdID != "fixed-id-2" || c.action != "tunnel_restart" || c.check != "tunnel_awg13" || c.ndms != "Wireguard3" {
 		t.Fatalf("got %+v", c)
 	}
-	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "очередь") {
+	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "Отправлено роутеру") {
 		t.Errorf("unexpected status line: %q", statusLine)
 	}
 }
@@ -204,10 +206,10 @@ func TestCommandAction_CommandActions(t *testing.T) {
 		action  string
 		wantSub string
 	}{
-		{"restart_tunnel", "Перезапуск awg-manager"},
+		{"restart_tunnel", "Перезапуск VPN-туннелей"},
 		{"diag_now", "Диагностика"},
-		{"pingcheck_now", "Проверка связи"},
-		{"force_recheck", "Повторная проверка"},
+		{"pingcheck_now", "Тест связи"},
+		{"force_recheck", "Запрос отчёта"},
 		{"opkg_upgrade", "opkg"},
 		{"router_doctor", "Проверка"},
 	}

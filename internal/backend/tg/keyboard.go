@@ -81,20 +81,22 @@ func HardAlertKeyboard(userID int64, checkName string, opts ...KeyboardOption) I
 	}
 	if o.tunnelActions {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "🔁 Перезапуск awg-manager", CallbackData: plainCD("restart_tunnel")},
+			// restart_tunnel перезапускает панель роутера, а с ней все
+			// VPN-туннели разом: владелец видит последствие, а не имя сервиса.
+			{Text: "🔁 Перезапустить VPN-туннели", CallbackData: plainCD("restart_tunnel")},
 			{Text: "📊 Диагностика", CallbackData: plainCD("diag_now")},
 			{Text: "▶ Тест связи", CallbackData: plainCD("pingcheck_now")},
 		})
 	}
 	if o.mobileActions {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "🔄 Дай отчёт сейчас", CallbackData: plainCD("force_recheck")},
+			{Text: "🔄 Запросить отчёт", CallbackData: plainCD("force_recheck")},
 		})
 	}
 	if o.hydraRouteActions {
 		rows = append(rows, []InlineKeyboardButton{
-			{Text: "▶ Запустить HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo_start", userID)},
-			{Text: "🔁 Перезапустить HR-Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo", userID)},
+			{Text: "▶ Запустить HydraRoute Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo_start", userID)},
+			{Text: "🔁 Перезапустить HydraRoute Neo", CallbackData: fmt.Sprintf("maint_restart:%d:hrneo", userID)},
 		})
 	}
 	if o.webAppURL != "" {

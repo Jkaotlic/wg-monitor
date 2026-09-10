@@ -89,13 +89,15 @@ func TestFormatCommandResult_PingcheckOneLiner(t *testing.T) {
 func TestFormatCommandResult_RestartTunnelOK(t *testing.T) {
 	r := wire.CommandResult{Status: "ok", Output: "все туннели перезапущены"}
 	chunks := FormatCommandResult("restart_tunnel", r, 3500)
-	if !strings.Contains(chunks[0], "Перезапуск awg-manager") {
-		t.Fatalf("global restart_tunnel should be labelled as awg-manager restart, got:\n%s", chunks[0])
+	// Кнопка перезапускает панель роутера, а с ней все VPN-туннели разом:
+	// подпись говорит обо всех, а не об одном.
+	if !strings.Contains(chunks[0], "Перезапуск VPN-туннелей") {
+		t.Fatalf("global restart_tunnel should be labelled as restart of all VPN tunnels, got:\n%s", chunks[0])
 	}
-	if strings.Contains(chunks[0], "Перезапуск туннеля") || strings.Contains(chunks[0], "туннель перезапущен") {
+	if strings.Contains(chunks[0], "Перезапуск туннеля") || strings.Contains(chunks[0], "VPN-туннель перезапущен") {
 		t.Fatalf("global restart_tunnel must not look like a per-tunnel restart, got:\n%s", chunks[0])
 	}
-	if !strings.Contains(chunks[0], "все туннели перезапущены") {
+	if !strings.Contains(chunks[0], "все VPN-туннели перезапущены") {
 		t.Errorf("global restart output should be preserved, got:\n%s", chunks[0])
 	}
 }

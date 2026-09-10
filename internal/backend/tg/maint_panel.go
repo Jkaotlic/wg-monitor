@@ -141,14 +141,17 @@ func RestartConfirmText(name, token string) string {
 	display := nameToDisplay(name)
 	var what string
 	switch name {
+	// hrneo и hrneo_start открываются кнопками из-под тревоги HydraRoute, то
+	// есть у владельца в личке: говорят его словами. Остальные варианты --
+	// только из панели обслуживания.
 	case "hrneo":
-		what = "  • DNS-routes на короткое время (~5 сек) перестанут резолвиться по правилам.\n" +
-			"  • Static-routes продолжат работать.\n" +
-			"  • Кратковременная просадка на доменах из ip.list."
+		what = "  • HydraRoute Neo — движок умной раздельной маршрутизации — перезапустится за несколько секунд.\n" +
+			"  • На это время правила по именам сайтов перестанут работать, потом всё вернётся само.\n" +
+			"  • Правила по адресам продолжат работать."
 	case "hrneo_start":
-		what = "  • HydraRoute-Neo будет запущен.\n" +
-			"  • DNS/HR-Neo правила начнут применяться после старта демона.\n" +
-			"  • Если сервис уже работает, команда безопасно завершится без лишних изменений."
+		what = "  • HydraRoute Neo — движок умной раздельной маршрутизации — будет запущен.\n" +
+			"  • Правила по именам сайтов снова начнут работать, как только он поднимется.\n" +
+			"  • Если он уже работает, ничего не изменится."
 	case "hrneo_stop":
 		what = "  • HydraRoute-Neo будет остановлен.\n" +
 			"  • DNS/HR-Neo правила временно перестанут маршрутизировать домены.\n" +
@@ -163,8 +166,17 @@ func RestartConfirmText(name, token string) string {
 			"  • Алерты придут сразу после reboot — это нормально.\n" +
 			"  • Кулдаун: 5 мин (повторное нажатие заблокировано)."
 	}
-	return fmt.Sprintf("🛠 Обслуживание\n\n⚠️ Перезапустить %s?\n\nЧто произойдёт:\n%s\n\nКод подтверждения: %s (живёт 5 мин)",
-		display, what, token)
+	// Заголовок называет то действие, которое подтверждают: кнопка
+	// «▶ Запустить HydraRoute Neo» не должна открывать «Перезапустить …?».
+	verb := "Перезапустить"
+	switch name {
+	case "hrneo_start":
+		verb = "Запустить"
+	case "hrneo_stop":
+		verb = "Остановить"
+	}
+	return fmt.Sprintf("🛠 Обслуживание\n\n⚠️ %s %s?\n\nЧто произойдёт:\n%s\n\nКод подтверждения: %s (живёт 5 мин)",
+		verb, display, what, token)
 }
 
 // RestartConfirmKeyboard is two buttons: Confirm (sends maint_confirm with
@@ -244,12 +256,8 @@ func FirmwareConfirmKeyboard(userID int64, token string) InlineKeyboardMarkup {
 // confirm screens.
 func nameToDisplay(name string) string {
 	switch name {
-	case "hrneo":
-		return "HydraRoute-Neo"
-	case "hrneo_start":
-		return "HydraRoute-Neo"
-	case "hrneo_stop":
-		return "HydraRoute-Neo"
+	case "hrneo", "hrneo_start", "hrneo_stop":
+		return "HydraRoute Neo"
 	case "awgmgr":
 		return "awg-manager"
 	case "router":

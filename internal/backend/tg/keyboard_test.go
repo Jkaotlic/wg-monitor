@@ -139,10 +139,10 @@ func TestHardAlertKeyboardHumanisedLabels(t *testing.T) {
 		"ack:42:tunnel_amnezia":            "✅ Понял",
 		"history:42:tunnel_amnezia":        "📋 История за 24ч",
 		"mute:42:tunnel_amnezia":           "🔇 Тихо до утра",
-		"restart_tunnel:42:tunnel_amnezia": "🔁 Перезапуск awg-manager",
+		"restart_tunnel:42:tunnel_amnezia": "🔁 Перезапустить VPN-туннели",
 		"diag_now:42:tunnel_amnezia":       "📊 Диагностика",
 		"pingcheck_now:42:tunnel_amnezia":  "▶ Тест связи",
-		"force_recheck:42:tunnel_amnezia":  "🔄 Дай отчёт сейчас",
+		"force_recheck:42:tunnel_amnezia":  "🔄 Запросить отчёт",
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {

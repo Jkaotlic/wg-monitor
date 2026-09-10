@@ -184,7 +184,7 @@ func TestMaintPanelKeyboard_OffersPostActionChecks(t *testing.T) {
 
 func TestRestartConfirmText_Hrneo(t *testing.T) {
 	text := RestartConfirmText("hrneo", "a1b2c3d4")
-	for _, want := range []string{"⚠️", "HydraRoute-Neo", "Код подтверждения: a1b2c3d4", "живёт 5 мин"} {
+	for _, want := range []string{"⚠️", "HydraRoute Neo", "Код подтверждения: a1b2c3d4", "живёт 5 мин"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
 		}

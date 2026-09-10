@@ -1854,8 +1854,8 @@ func TestRouterDispatchesCommandAction(t *testing.T) {
 	if sink.calls[0].action != "diag_now" || sink.calls[0].userID != uid {
 		t.Errorf("got %+v", sink.calls[0])
 	}
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "очередь") {
-		t.Errorf("expected edit containing 'очередь', got %v", f.edits)
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Отправлено роутеру") {
+		t.Errorf("expected edit containing 'Отправлено роутеру', got %v", f.edits)
 	}
 }
 
@@ -2583,8 +2583,8 @@ func TestRouterHandleCallback_MaintRestart_RendersConfirm(t *testing.T) {
 	if len(f.edits) != 1 {
 		t.Fatalf("expected 1 edit (confirm screen), got %d", len(f.edits))
 	}
-	if !strings.Contains(f.edits[0], "HydraRoute-Neo") {
-		t.Errorf("confirm screen should mention HydraRoute-Neo, got: %q", f.edits[0])
+	if !strings.Contains(f.edits[0], "HydraRoute Neo") {
+		t.Errorf("confirm screen should mention HydraRoute Neo, got: %q", f.edits[0])
 	}
 	// A pending entry must exist for this user.
 	r.pendingMaint.mu.Lock()
