@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
 func TestMiniappAccessReadComposesOwnerAndOperators(t *testing.T) {
@@ -202,5 +204,130 @@ func TestMiniappUnbindOwner(t *testing.T) {
 	u, _ := d.Users().GetByID(ownedID)
 	if u.TelegramUserID != nil {
 		t.Fatalf("users.telegram_user_id should be NULL after unbind, got %v", *u.TelegramUserID)
+	}
+}
+
+// --- Назначение владельца ---
+//
+// Роутер без владельца и операторов -- роутер, о поломках которого не узнает
+// никто (testkeen и vvarg жили так неделями). Назначить владельца может только
+// админ: по номеру человека или «меня» -- номером из своей сессии, не
+// доверяя номеру от клиента. Занятого владельца молча не заменить: сначала
+// «Отвязать».
+
+func putOwner(t *testing.T, h http.Handler, routerID int64, body string, asTGID int64) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPut, fmt.Sprintf("/v1/miniapp/routers/%d/access/owner", routerID), strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", asTGID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+func unownedRouter(t *testing.T, d *db.DB) int64 {
+	t.Helper()
+	id, err := d.Users().Insert("бесхозный", "6060606060606060606060606060606060606060606060606060606060606060", "198.51.100.20", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func ownerOf(t *testing.T, d *db.DB, routerID int64) int64 {
+	t.Helper()
+	u, err := d.Users().GetByID(routerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.TelegramUserID == nil {
+		return 0
+	}
+	return *u.TelegramUserID
+}
+
+func TestMiniappSetOwnerByID(t *testing.T) {
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	router := unownedRouter(t, d)
+
+	rec := putOwner(t, h, router, `{"telegram_user_id": 555}`, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappAccessResp
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Owner == nil || resp.Owner.TelegramUserID != 555 {
+		t.Fatalf("ответ не показывает нового владельца: %+v", resp.Owner)
+	}
+	if got := ownerOf(t, d, router); got != 555 {
+		t.Fatalf("владелец в базе = %d, ждали 555", got)
+	}
+}
+
+func TestMiniappSetOwnerMeUsesSessionID(t *testing.T) {
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	router := unownedRouter(t, d)
+
+	rec := putOwner(t, h, router, `{"me": true}`, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := ownerOf(t, d, router); got != 999 {
+		t.Fatalf("«назначить меня» записало %d, ждали номер из сессии 999", got)
+	}
+}
+
+func TestMiniappSetOwnerRefusesToReplaceExisting(t *testing.T) {
+	d, ownedID, _, ownerTGID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := putOwner(t, h, ownedID, `{"telegram_user_id": 555}`, 999)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("want 409 для занятого владельца, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "owner_exists") {
+		t.Fatalf("экрану нужен код причины owner_exists: %s", rec.Body.String())
+	}
+	if got := ownerOf(t, d, ownedID); got != ownerTGID {
+		t.Fatalf("владелец заменён молча: %d вместо %d", got, ownerTGID)
+	}
+}
+
+func TestMiniappSetOwnerForbiddenForNonAdmin(t *testing.T) {
+	d, _, _, ownerTGID := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	router := unownedRouter(t, d)
+
+	rec := putOwner(t, h, router, `{"me": true}`, ownerTGID)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("want 403, got %d", rec.Code)
+	}
+	if got := ownerOf(t, d, router); got != 0 {
+		t.Fatalf("не-админ стал владельцем: %d", got)
+	}
+}
+
+func TestMiniappSetOwnerRejectsBadID(t *testing.T) {
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	router := unownedRouter(t, d)
+
+	for _, body := range []string{`{"telegram_user_id": 0}`, `{"telegram_user_id": -5}`, `{}`, `{"me": false}`} {
+		if rec := putOwner(t, h, router, body, 999); rec.Code != http.StatusBadRequest {
+			t.Errorf("тело %s: want 400, got %d", body, rec.Code)
+		}
+	}
+	if got := ownerOf(t, d, router); got != 0 {
+		t.Fatalf("после плохих запросов появился владелец: %d", got)
+	}
+}
+
+func TestMiniappSetOwnerUnknownRouter404(t *testing.T) {
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	if rec := putOwner(t, h, 999999, `{"me": true}`, 999); rec.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", rec.Code)
 	}
 }

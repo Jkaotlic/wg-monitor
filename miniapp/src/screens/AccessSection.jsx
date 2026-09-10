@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchAccess, addOperator, removeOperator, unbindOwner } from '../api.js'
+import { fetchAccess, addOperator, removeOperator, unbindOwner, setOwner } from '../api.js'
 import { localSheet } from '../sheet.js'
 
 // Admin-only "Доступ" block on RouterDetail. Backend enforces admin
@@ -12,6 +12,7 @@ export function AccessSection({ routerID, openSheet }) {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState(null)
   const [newID, setNewID] = useState('')
+  const [ownerID, setOwnerID] = useState('')
 
   useEffect(() => {
     fetchAccess(routerID)
@@ -70,6 +71,39 @@ export function AccessSection({ routerID, openSheet }) {
       .finally(() => setBusy(false))
   }
 
+  // Назначение владельца -- номером человека или «меня»: тогда номер берёт
+  // бэкенд из сессии. Роутер без владельца и операторов -- роутер, о поломках
+  // которого не узнает никто, поэтому форма стоит прямо под этим
+  // предупреждением.
+  function assignOwner(owner) {
+    setBusy(true)
+    setActionError(null)
+    setOwner(routerID, owner)
+      .then((data) => {
+        setAccess(data)
+        setOwnerID('')
+      })
+      .catch((err) =>
+        setActionError(
+          err?.code === 'owner_exists'
+            ? 'У роутера уже есть владелец — сначала отвяжите его.'
+            : err.message,
+        ),
+      )
+      .finally(() => setBusy(false))
+  }
+
+  function handleAssignOwner(e) {
+    e.preventDefault()
+    const trimmed = ownerID.trim()
+    const id = Number(trimmed)
+    if (!trimmed || !Number.isInteger(id) || id <= 0) {
+      setActionError('Введите положительный числовой ID')
+      return
+    }
+    assignOwner({ telegram_user_id: id })
+  }
+
   if (loadError) return <p class="state state-error">{loadError}</p>
   if (access == null) return <p class="state">Загрузка…</p>
 
@@ -106,6 +140,29 @@ export function AccessSection({ routerID, openSheet }) {
             )}
           </li>
         </ul>
+        {!access.owner && (
+          <>
+            <form class="access-add-row" onSubmit={handleAssignOwner}>
+              <div class="field">
+                <label for="access-set-owner">Номер владельца в Telegram</label>
+                <input
+                  id="access-set-owner"
+                  type="text"
+                  inputmode="numeric"
+                  value={ownerID}
+                  disabled={busy}
+                  onInput={(e) => setOwnerID(e.currentTarget.value)}
+                />
+              </div>
+              <button class="btn btn-primary" type="submit" disabled={busy}>
+                Назначить
+              </button>
+            </form>
+            <button class="btn" type="button" disabled={busy} onClick={() => assignOwner({ me: true })}>
+              Назначить меня владельцем
+            </button>
+          </>
+        )}
       </div>
 
       <div class="access-group">

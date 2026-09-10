@@ -163,6 +163,66 @@ func miniappRemoveOperatorHandler(d Deps) http.HandlerFunc {
 	}
 }
 
+// miniappSetOwnerHandler назначает владельца роутеру, у которого его нет.
+//
+// Роутер без владельца и операторов -- роутер, о поломках которого не узнает
+// никто: уведомления идут в личку, слать некому. Раньше назначить владельца
+// можно было только нажатием в теме роутера в группе, а группы замолчали.
+//
+// Номер -- либо присланный, либо «меня» ({"me": true}): тогда он берётся из
+// сессии нажавшего, а не из тела запроса. Занятого владельца молча не
+// заменить: сначала «Отвязать» (DELETE), потом назначить -- так смена
+// владельца не случится одним случайным нажатием.
+func miniappSetOwnerHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		adminID, ok := miniappRequireAdmin(d, w, r)
+		if !ok {
+			return
+		}
+		routerID, ok := parseMiniappRouterID(r)
+		if !ok {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
+		var body struct {
+			TelegramUserID int64 `json:"telegram_user_id"`
+			Me             bool  `json:"me"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeJSONError(w, http.StatusBadRequest, "bad_request", "invalid body")
+			return
+		}
+		owner := body.TelegramUserID
+		if body.Me {
+			owner = adminID
+		}
+		if owner <= 0 {
+			writeJSONError(w, http.StatusBadRequest, "bad_owner_id", "telegram_user_id must be positive, or me=true")
+			return
+		}
+		user, err := d.DB.Users().GetByID(routerID)
+		if errors.Is(err, db.ErrUserNotFound) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		} else if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "router lookup failed")
+			return
+		}
+		if user.TelegramUserID != nil && *user.TelegramUserID != 0 {
+			writeJSONError(w, http.StatusConflict, "owner_exists", "router already has an owner; unbind first")
+			return
+		}
+		if err := d.DB.Users().SetTelegramUserID(routerID, owner); err != nil {
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "set owner failed")
+			return
+		}
+		if d.Logger != nil {
+			d.Logger.Info("miniapp owner set", "router_id", routerID, "owner", owner, "by", adminID)
+		}
+		miniappRespondAccess(d, w, routerID)
+	}
+}
+
 func miniappUnbindOwnerHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := miniappRequireAdmin(d, w, r); !ok {

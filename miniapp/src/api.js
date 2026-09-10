@@ -107,6 +107,16 @@ export function unbindOwner(routerID) {
   return request(`/routers/${routerID}/access/owner`, { method: 'DELETE' })
 }
 
+// Назначить владельца роутеру без владельца. owner -- { telegram_user_id }
+// или { me: true }: тогда номер бэкенд берёт из сессии нажавшего, а не из
+// тела запроса. Занятого владельца бэкенд не заменит (owner_exists).
+export function setOwner(routerID, owner) {
+  return request(`/routers/${routerID}/access/owner`, {
+    method: 'PUT',
+    body: JSON.stringify(owner),
+  })
+}
+
 // Dispatches an allowlisted agent command for a router. Resolves to the raw
 // body the backend sends on 202: { cmd_id }. That shape is wizardDeployResp
 // (wizard_handler.go:537-539) -- miniappCommandHandler (miniapp_commands.go)
