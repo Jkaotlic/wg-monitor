@@ -209,7 +209,7 @@ const ROW_TITLES = {
   external_reach: 'Сайты снаружи отвечают',
   hydraroute: 'Обход блокировок работает',
   awg_manager: 'Панель роутера отвечает',
-  tunnels: 'Туннели на связи',
+  tunnels: 'Линии на связи',
   agent_heartbeat: 'Роутер отчитался о себе',
 }
 

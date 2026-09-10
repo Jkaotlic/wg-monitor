@@ -64,6 +64,16 @@ export function snapshotState({ busy, error, result, snapshot } = {}) {
   return 'idle'
 }
 
+// rulesThrough -- сколько всего идёт через эту линию. Считается ровно так же,
+// как в её собственной строке (tunnelRows → total): в списке ниже видны
+// только явно названные правила, а через линию идут ещё и те, что приходят
+// из общего набора политики. Два разных счётчика на одном экране человек
+// читает как враньё, поэтому число здесь одно и то же.
+function rulesThrough(snapshot, tunnelID) {
+  const row = tunnelRows(snapshot).find((r) => r.id === tunnelID)
+  return row?.total ?? 0
+}
+
 export function routingVerdict(snapshot) {
   const partial = Boolean(snapshot?.warnings?.length)
 
@@ -91,11 +101,22 @@ export function routingVerdict(snapshot) {
 
   if (carrying.length === 1) {
     const t = carrying[0]
+    // Единого «весь трафик идёт туда-то» в этой системе не существует: через
+    // линию идёт только прописанное, остальное -- напрямую через провайдера.
+    // Прежний вердикт обещал общий ответ и расходился с главным экраном,
+    // который про это честен.
+    const n = rulesThrough(snapshot, t.id)
     return {
       mode: 'vpn',
       partial,
-      title: `Трафик идёт через «${t.name || t.id}»`,
-      detail: 'Этот туннель несёт основной маршрут.',
+      title: n > 0
+        ? `Обход идёт через «${t.name || t.id}»`
+        : `Линия «${t.name || t.id}» готова, но пуста`,
+      // Вторую половину модели -- «остальное напрямую» -- договаривает
+      // defaultDestination строкой ниже, и повторять её здесь незачем.
+      detail: n > 0
+        ? `В линию отправлено ${rulesCount(n)} — только они и идут через обход.`
+        : 'Через неё пока ничего не отправлено — весь трафик идёт напрямую.',
     }
   }
   if (carrying.length > 1) {
@@ -296,6 +317,7 @@ export function policyRows(snapshot) {
 // туннель", а не "какое правило под каким номером".
 export function rulesByBind(snapshot) {
   const rules = Array.isArray(snapshot?.rules) ? snapshot.rules : []
+  const byName = lineNameByInterface(snapshot)
   const byBind = new Map()
   for (const r of rules) {
     const key = r.bind || 'без привязки'
@@ -304,15 +326,37 @@ export function rulesByBind(snapshot) {
   }
   return [...byBind.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
-    .map(([bind, items]) => ({ bind, label: bindLabel(bind), rules: items }))
+    .map(([bind, items]) => ({ bind, label: bindLabel(bind, byName), rules: items }))
 }
 
-// Заголовок группы правил. "policy:HydraRoute" -- системный ключ привязки, и
-// человеку он не адресован; имя интерфейса, наоборот, уже имя и переписывать
-// его нечем.
-function bindLabel(bind) {
+// lineNameByInterface -- имя линии по имени её интерфейса. Регистр в снимке
+// приходит как попало («OpkgTun10» в правиле против «opkgtun10» у линии), и
+// узнавать линию это мешать не должно.
+function lineNameByInterface(snapshot) {
+  const out = new Map()
+  const tunnels = Array.isArray(snapshot?.tunnels) ? snapshot.tunnels : []
+  for (const t of tunnels) {
+    // Поле называется iface -- как в снимке роутера; interface в JS ключевое
+    // слово, и в проекции его нет.
+    const iface = (t.iface || '').trim().toLowerCase()
+    const name = (t.name || t.id || '').trim()
+    if (iface && name) out.set(iface, name)
+  }
+  return out
+}
+
+// Заголовок группы правил -- имя ЛИНИИ, через которую они идут.
+//
+// Раньше здесь стояло имя интерфейса («OpkgTun10»): системное имя, которого
+// человек нигде не видел. В приложении линия зовётся своим именем, и
+// раскладка «что куда ходит» обязана говорить тем же словарём.
+//
+// Незнакомая привязка остаётся собой: выдумать ей имя нечем, а молчать хуже.
+function bindLabel(bind, byName) {
   const policy = /^policy:(.+)$/.exec(bind)
-  return policy ? `Политика «${policy[1]}»` : bind
+  if (policy) return `Политика «${policy[1]}»`
+  const name = byName?.get(String(bind).trim().toLowerCase())
+  return name || bind
 }
 
 // Движок правила приезжает идентификатором ("hydraroute"). Показываем его тем
@@ -342,18 +386,18 @@ const HR_NEO = 'HR Neo'
 // Строка под туннелем. Правило одно: одно и то же число не повторяется.
 // Было "26 правил ведут сюда · 26 из них через политику · 26 через
 // HydraRoute" -- три одинаковых числа, из которых знание несёт первое.
+// Строка под линией. Механизм («через политику», «через HR Neo») и цепочка --
+// словарь движка маршрутизации: он уехал в «Подробности», а здесь остаётся
+// то, что человек понимает без объяснений, -- сколько всего через неё идёт.
 export function tunnelRuleSummary(row) {
   const total = row?.total ?? 0
-  if (total === 0) return 'правил на него нет'
-  const policyRules = row.policyRules ?? 0
-  const hrNeo = row.hrNeo ?? 0
-  // Про движок говорим, только когда он покрывает ЧАСТЬ правил: "26 из 26"
-  // не сообщает ничего сверх самого счётчика.
-  const hr = hrNeo > 0 && hrNeo < total ? ` · ${hrNeo} через ${HR_NEO}` : ''
-  const count = rulesCount(total)
-  if (policyRules === 0) return `${count} ${total === 1 ? 'ведёт' : 'ведут'} сюда${hr}`
-  if (policyRules === total) return `${count} — все через политику${hr}`
-  return `${count}, из них ${policyRules} через политику${hr}`
+  if (total === 0) return 'через неё пока ничего не идёт'
+  // Глагол согласуется с последней цифрой, а не с самим числом: «31 правило
+  // идёт», но «5 правил идут».
+  const d10 = total % 10
+  const d100 = total % 100
+  const one = d10 === 1 && d100 !== 11
+  return `${rulesCount(total)} ${one ? 'идёт' : 'идут'} через неё`
 }
 
 // Строка под политикой -- то же правило про повтор числа и то же имя движка.

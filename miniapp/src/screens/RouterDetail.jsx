@@ -780,7 +780,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
 
       <div style="margin-top:20px">
-        <NavCard title="Туннели и резерв" note={`${tunnels.length} лин.`} onClick={() => onTab?.('tunnels')} />
+        <NavCard title="Линии и резерв" note={`${tunnels.length} лин.`} onClick={() => onTab?.('tunnels')} />
       </div>
 
       <QuickActions

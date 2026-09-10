@@ -29,10 +29,46 @@ describe('routingVerdict', () => {
     expect(`${v.title} ${v.detail}`).toMatch(/sing-box/i)
   })
 
-  it('туннель с default_route -- трафик через VPN', () => {
-    const v = routingVerdict({ tunnels: [{ id: 'awg12', name: 'Amsterdam', default_route: true }] })
+  it('линия с default_route -- она несёт обход, но не «весь трафик»', () => {
+    const v = routingVerdict({
+      tunnels: [{ id: 'awg12', name: 'Amsterdam', iface: 'opkgtun12', default_route: true }],
+      counts: { awg12: { dns: 2 } },
+      rules: [
+        { bind: 'OpkgTun12', name: 'Figma' },
+        { bind: 'OpkgTun12', name: 'GitHub' },
+      ],
+    })
     expect(v.mode).toBe('vpn')
     expect(v.title).toMatch(/Amsterdam/)
+    // Единого «весь трафик идёт туда-то» в этой системе не существует:
+    // через линию идёт только прописанное, остальное -- напрямую. Экран,
+    // обещающий общий ответ, врёт -- и расходится с главным, который про
+    // это честен.
+    const text = `${v.title} ${v.detail}`
+    expect(text).not.toMatch(/Трафик идёт через/)
+    expect(text).not.toMatch(/несёт основной маршрут/)
+    // Вместо обещания -- счёт того, что реально идёт через линию. Число
+    // обязано совпадать с тем, что написано в её собственной строке ниже:
+    // два разных счётчика на одном экране человек читает как враньё.
+    expect(text).toMatch(/2 правила/)
+  })
+
+  // Шапка и строка линии считают одно и то же. Раньше шапка брала длину
+  // списка правил снимка (только явно названные), а строка линии -- полный
+  // счёт вместе с теми, что приходят из общего набора политики. На экране
+  // получалось «3 правила» сверху и «36 правил» строкой ниже.
+  it('шапка считает то же, что и строка линии', () => {
+    // Счёт линии приходит из counts снимка: явно названные правила плюс те,
+    // что даёт политика. В списке ниже видны только первые.
+    const snapshot = {
+      tunnels: [{ id: 'awg12', name: 'Amsterdam', iface: 'opkgtun12', default_route: true }],
+      counts: { awg12: { dns: 5, static: 1 } },
+      rules: [{ id: '1', bind: 'opkgtun12', name: 'Figma' }],
+    }
+    const v = routingVerdict(snapshot)
+    const row = tunnelRows(snapshot).find((r) => r.id === 'awg12')
+    const shown = tunnelRuleSummary(row).match(/\d+/)?.[0]
+    expect(`${v.title} ${v.detail}`).toContain(shown)
   })
 
   it('без default_route -- напрямую', () => {
@@ -392,37 +428,26 @@ describe('defaultRouteBadge', () => {
 })
 
 describe('tunnelRuleSummary', () => {
-  // Было: "26 правил ведут сюда · 26 из них через политику · 26 через
-  // HydraRoute" -- одно число три раза, и ни одно повторение не добавляет
-  // знания.
-  it('не повторяет одно и то же число', () => {
-    const line = tunnelRuleSummary({ total: 26, policyRules: 26, hrNeo: 26 })
-    expect(line).toBe('26 правил — все через политику')
-    expect(line.match(/26/g)).toHaveLength(1)
+  // Строка под линией отвечает на один вопрос: сколько через неё идёт.
+  // Раскладка по механизмам («через политику», «через HR Neo») -- словарь
+  // движка маршрутизации, и она уехала в «Подробности»: человек, который
+  // открыл экран узнать, куда ходит его трафик, читает первое и спотыкается
+  // о второе.
+  it('говорит сколько идёт через линию, без механизмов', () => {
+    expect(tunnelRuleSummary({ total: 26, policyRules: 26, hrNeo: 26 })).toBe('26 правил идут через неё')
+    expect(tunnelRuleSummary({ total: 31, policyRules: 26, hrNeo: 27 })).toBe('31 правило идёт через неё')
   })
 
-  it('разделяет собственные правила и правила политики, когда числа разные', () => {
-    expect(tunnelRuleSummary({ total: 31, policyRules: 26, hrNeo: 27 })).toBe(
-      '31 правило, из них 26 через политику · 27 через HR Neo',
-    )
+  it('склоняется по числу', () => {
+    expect(tunnelRuleSummary({ total: 1, policyRules: 0, hrNeo: 0 })).toBe('1 правило идёт через неё')
+    expect(tunnelRuleSummary({ total: 2, policyRules: 0, hrNeo: 0 })).toBe('2 правила идут через неё')
+    expect(tunnelRuleSummary({ total: 5, policyRules: 0, hrNeo: 0 })).toBe('5 правил идут через неё')
   })
 
-  it('без правил политики говорит просто про правила туннеля', () => {
-    expect(tunnelRuleSummary({ total: 5, policyRules: 0, hrNeo: 0 })).toBe('5 правил ведут сюда')
-    expect(tunnelRuleSummary({ total: 1, policyRules: 0, hrNeo: 0 })).toBe('1 правило ведёт сюда')
-    expect(tunnelRuleSummary({ total: 2, policyRules: 0, hrNeo: 0 })).toBe('2 правила ведут сюда')
-  })
-
-  it('пустой туннель', () => {
-    expect(tunnelRuleSummary({ total: 0, policyRules: 0, hrNeo: 0 })).toBe('правил на него нет')
-  })
-
-  // Движок зовётся так же, как одна из политик роутера, поэтому в тексте он
-  // называется тем же именем, что и на вкладке роутера -- «HR Neo».
-  it('движок называется HR Neo, а не HydraRoute', () => {
-    const line = tunnelRuleSummary({ total: 10, policyRules: 0, hrNeo: 4 })
-    expect(line).toContain('4 через HR Neo')
-    expect(line).not.toContain('HydraRoute')
+  // Пустая линия -- тоже ответ, и молчать о ней нельзя: человек должен
+  // видеть, что она заведена, но ничего не несёт.
+  it('пустая линия говорит об этом прямо', () => {
+    expect(tunnelRuleSummary({ total: 0, policyRules: 0, hrNeo: 0 })).toBe('через неё пока ничего не идёт')
   })
 })
 
@@ -530,6 +555,48 @@ describe('подписи в списке правил', () => {
     // Имя интерфейса -- уже имя, его выдумывать не надо.
     expect(byBind['opkgtun11']).toBe('opkgtun11')
     expect(byBind['без привязки']).toBe('без привязки')
+  })
+
+  // Заголовком группы стояло имя интерфейса -- «OpkgTun10», «opkgtun11».
+  // Человек его нигде не видел: в приложении линия зовётся своим именем, и
+  // раскладка «что куда ходит» обязана говорить тем же словарём.
+  it('группа правил подписана именем линии, а не интерфейса', () => {
+    const groups = rulesByBind({
+      tunnels: [
+        { id: 'awg12', name: 'Амстердам', iface: 'opkgtun12' },
+        { id: 'awg10', name: 'Франкфурт', iface: 'opkgtun10' },
+      ],
+      rules: [
+        { id: '1', bind: 'opkgtun12', name: 'Figma' },
+        { id: '2', bind: 'OpkgTun10', name: 'офисная сеть' },
+      ],
+    })
+    const labels = groups.map((g) => g.label)
+    expect(labels).toContain('Амстердам')
+    // Регистр интерфейса из снимка приходит как попало -- узнавать линию это
+    // мешать не должно.
+    expect(labels).toContain('Франкфурт')
+    expect(labels.join(' ')).not.toMatch(/opkgtun/i)
+  })
+
+  // Линия, которой в снимке нет, остаётся собой: выдумывать ей имя нечем,
+  // и молчать тоже нельзя.
+  it('незнакомая привязка показывается как есть', () => {
+    const groups = rulesByBind({
+      tunnels: [],
+      rules: [{ id: '1', bind: 'opkgtun99', name: 'что-то' }],
+    })
+    expect(groups[0].label).toBe('opkgtun99')
+  })
+
+  // Строка под линией говорила «36 правил, из них 32 через политику · 28
+  // через HR Neo». Механизм и цепочка -- словарь движка: они уехали в
+  // «Подробности», а здесь остаётся то, что человек понимает без объяснений.
+  it('строка линии считает правила без механизмов', () => {
+    const text = tunnelRuleSummary({ total: 36, policyRules: 32, hrNeo: 28 })
+    expect(text).toMatch(/36/)
+    expect(text).not.toMatch(/политик/i)
+    expect(text).not.toMatch(/HR Neo/i)
   })
 
   it('движок правила называется HR Neo, а не hydraroute', () => {

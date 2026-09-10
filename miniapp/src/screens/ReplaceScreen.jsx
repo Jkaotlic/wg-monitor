@@ -68,7 +68,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
   const showForm = view.idle && !starting
 
   return (
-    <Overlay title="Заменить конфиг" backLabel="Туннели" onBack={onClose}>
+    <Overlay title="Заменить конфиг" backLabel="Линии" onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">Заменить конфиг «{tunnel.name}»</h1>
         <p class="router-lastseen">

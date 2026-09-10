@@ -184,7 +184,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               ))}
               {fw.hint && <p class="card-foot">Роутер говорит: {fw.hint}</p>}
               <p class="card-foot">
-                Установка необратима: роутер скачает прошивку и перезагрузится. Туннели упадут на
+                Установка необратима: роутер скачает прошивку и перезагрузится. Линии упадут на
                 несколько минут, и вернуть прежнюю версию из приложения нельзя.
               </p>
             </div>
@@ -198,7 +198,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
                   confirmSheet({
                     routerID,
                     title: `Поставить прошивку ${fw.available}?`,
-                    body: `Роутер «${routerName}» скачает ${fw.available} вместо ${fw.current} и перезагрузится. Туннели упадут на несколько минут. Вернуть прежнюю версию из приложения нельзя.`,
+                    body: `Роутер «${routerName}» скачает ${fw.available} вместо ${fw.current} и перезагрузится. Линии упадут на несколько минут. Вернуть прежнюю версию из приложения нельзя.`,
                     action: 'firmware_install',
                     buttonLabel: 'Поставить и перезагрузить',
                     danger: true,
@@ -288,7 +288,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
           <div class="card">
             <p class="card-foot">
               <b>Роутер</b> — работает ли линия прямо сейчас и что с ней не так.{' '}
-              <b>Туннели</b> — какая линия несёт трафик, кто подхватит и что через неё уходит.{' '}
+              <b>Линии</b> — какая линия несёт трафик, кто подхватит и что через неё уходит.{' '}
               <b>Диагностика</b> — те же вопросы, заданные роутеру заново, и адрес, которым вас
               видно снаружи. <b>События</b> — что происходило за неделю.
             </p>

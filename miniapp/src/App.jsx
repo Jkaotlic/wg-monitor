@@ -119,7 +119,7 @@ export function App() {
       ? <AdminOverlay routerID={nav.routerID} onClose={() => dispatch({ type: 'overlay', overlay: null })} />
       : nav.overlay === 'routes' && nav.routerID != null
         ? (
-          <Overlay title="Маршруты" backLabel="Туннели" onBack={() => dispatch({ type: 'overlay', overlay: null })}>
+          <Overlay title="Маршруты" backLabel="Линии" onBack={() => dispatch({ type: 'overlay', overlay: null })}>
             <RoutesTab
               routerID={nav.routerID}
               asleep={asleep}

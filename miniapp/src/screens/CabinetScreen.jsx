@@ -54,7 +54,7 @@ export function CabinetScreen({ routerID, asleep, onClose, onIssued }) {
   }
 
   return (
-    <Overlay title="Кабинеты провайдеров" backLabel={pending ? 'Назад' : 'Туннели'} onBack={pending ? () => { setPending(null); setPhase('idle') } : onClose}>
+    <Overlay title="Кабинеты провайдеров" backLabel={pending ? 'Назад' : 'Линии'} onBack={pending ? () => { setPending(null); setPhase('idle') } : onClose}>
       <div class="screen">
         {error && <p class="state state-error">{error}</p>}
         {accounts == null && !error && <p class="state">Спрашиваем кабинеты…</p>}

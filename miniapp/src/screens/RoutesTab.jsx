@@ -77,7 +77,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
         routerID,
         title: `Убрать «${summary.title}»?`,
         body: summary.lines.length
-          ? `Перестанет уходить в туннель: ${summary.lines.join(' · ')}`
+          ? `Перестанет уходить в обход: ${summary.lines.join(' · ')}`
           : 'Правило исчезнет с роутера.',
         action: 'route_delete',
         args: { kind: pendingRule.kind, route_id: pendingRule.id, preview_hash: summary.hash },
@@ -116,7 +116,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
     const options = rebindTargets(rows, src.id)
     if (options.length === 0) return
     setPicker({
-      title: 'Куда перенести правила',
+      title: 'Куда перенести',
       subtitle: `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(src.total)})`,
       options: options.map((dst) => ({
         id: dst.id,
@@ -190,7 +190,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
           {busy ? 'Читаю…' : 'Обновить'}
         </button>
       </div>
-      <p class="router-lastseen">Решает, какой трафик идёт через VPN, а какой напрямую.</p>
+      <p class="router-lastseen">Что отправлено в обход, а что идёт напрямую через провайдера.</p>
 
       {phase === 'loading' && <p class="state">Роутер отвечает не мгновенно — читаем снимок…</p>}
       {phase === 'error' && <p class="state state-error">{error}</p>}
@@ -224,12 +224,12 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
           остальное здесь либо читается, либо правит уже существующее. */}
       {canMutate && (
         <button type="button" class="btn btn-primary btn-wide" onClick={() => setAdding(true)}>
-          Отправить в туннель
+          Добавить сайт или адрес
         </button>
       )}
 
       {snapshot && (
-        <Section title="Туннели в маршрутизации">
+        <Section title="Линии и что через них идёт">
           {tunnels.length ? (
             <ul class="card list-reset">
               {tunnels.map((t) => {
@@ -264,14 +264,21 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             </ul>
           ) : (
             <div class="card">
-              <p class="traffic-detail">Роутер не сообщил ни одного туннеля.</p>
+              <p class="traffic-detail">Роутер не сообщил ни одной линии.</p>
             </div>
           )}
         </Section>
       )}
 
+      {/* Цепочки, роли звеньев и счётчики механизмов -- словарь движка
+          маршрутизации. Владельцу роутера он не адресован, но оператору
+          нужен, поэтому не выброшен, а убран на шаг глубже: сверху ответ,
+          инженерия по тапу -- как на главном экране. */}
       {policies.length > 0 && (
-        <Section title="Политики">
+        <details class="checks-spoiler routes-details">
+          <summary class="section-title checks-spoiler-summary">
+            Подробности: порядок подхвата и механизмы
+          </summary>
           <ul class="card list-reset">
             {policies.map((p) => (
               <li key={p.name} class="row tunnel-row">
@@ -300,13 +307,13 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             ))}
           </ul>
           <p class="admin-note">
-            Первое доступное звено цепочки и несёт трафик политики, остальные ждут как резерв.
+            Первая работающая линия в списке и несёт трафик, остальные ждут как резерв.
           </p>
-        </Section>
+        </details>
       )}
 
       {groups.length > 0 && (
-        <Section title="Правила">
+        <Section title="Названные сайты и адреса">
           {groups.map((g) => (
             <div key={g.bind} class="rules-group">
               <h3 class="rules-bind">{g.label}</h3>
@@ -350,9 +357,9 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
 
       {snapshot && (
         <p class="admin-note">
-          Раскладка выше читается из политик доступа роутера — это то, куда трафик идёт на самом
-          деле. Каждую правку роутер сначала считает планом и показывает его целиком, и только
-          потом применяет; обратная кнопка есть у каждой.
+          Здесь названо только то, что отправлено в обход поимённо. Через линию идёт ещё и
+          общий набор — его видно в «Подробностях». Каждую правку роутер сначала показывает
+          планом целиком и только потом применяет; отменить можно любую.
         </p>
       )}
 

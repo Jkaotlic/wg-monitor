@@ -34,7 +34,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
       width="100%"
       class="traffic-path"
       role="img"
-      aria-label={`Схема: заблокированное идёт через «${viaLabel}», остальное напрямую`}
+      aria-label={`Схема: заблокированное идёт через линию «${viaLabel}», остальное напрямую`}
     >
       <rect x="103" y="2" width="136" height="42" rx="12" fill="var(--surf2)" stroke="var(--line)" />
       <g stroke="var(--dim)" stroke-width="1.4" fill="none" stroke-linecap="round">
@@ -68,7 +68,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
 
       <rect x="2" y="152" width="164" height="78" rx="14" fill={t.fill} stroke={t.border} />
       <text x="16" y="174" fill={t.label} font-family="var(--font-mono)" font-size="10" letter-spacing="0.06em">
-        {s.tunnel === 'down' ? 'ТУННЕЛЬ МОЛЧИТ' : 'ЧЕРЕЗ ТУННЕЛЬ'}
+        {s.tunnel === 'down' ? 'ЛИНИЯ МОЛЧИТ' : 'ЧЕРЕЗ ЛИНИЮ'}
       </text>
       <text x="16" y="195" fill="var(--ink)" font-size="14" font-weight="600">{viaLabel}</text>
       <text x="16" y="215" fill={s.tunnel === 'down' ? t.label : 'var(--dim)'} font-size="11.5">
