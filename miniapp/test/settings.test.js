@@ -181,6 +181,6 @@ describe('пороги без ключей конфига', () => {
     )
     const codes = rows.map((r) => r.code)
     expect(codes).toContain('awg-manager')
-    expect(codes).toContain('HR Neo')
+    expect(codes).toContain('HydraRoute Neo')
   })
 })

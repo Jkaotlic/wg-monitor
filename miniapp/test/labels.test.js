@@ -27,7 +27,7 @@ describe('commandOutcomeLabel: маршруты', () => {
 
   it('переносить было нечего -- тоже ответ', () => {
     const out = JSON.stringify({ dns: { ok: 0, failed: 0 }, static: { ok: 0, failed: 0 }, hr_neo: { ok: 0, failed: 0 } })
-    expect(commandOutcomeLabel('route_rebind', ok(out))).toBe('Переносить было нечего: правил на этой линии нет')
+    expect(commandOutcomeLabel('route_rebind', ok(out))).toBe('Переносить было нечего: правил на этом VPN-туннеле нет')
   })
 
   it('повышение звена называет и порядок, и того, кто несёт трафик', () => {
@@ -49,7 +49,29 @@ describe('commandOutcomeLabel: маршруты', () => {
       name: 'HydraRoute', active_tunnel_id: 'awg10',
       interfaces: [{ bind: 'OpkgTun10', name: 'main', role: 'active', tunnel_id: 'awg10' }],
     })
-    expect(commandOutcomeLabel('route_policy_promote', ok(out))).toBe('Правила политики «HydraRoute» идут через «main»')
+    expect(commandOutcomeLabel('route_policy_promote', ok(out))).toBe('Правила общего набора «HydraRoute» идут через «main»')
+  })
+
+  // Словарь: политика -- это «общий набор правил», звено цепочки человеку не
+  // адресовано. Итог повышения печатается сразу после нажатия, и все три его
+  // ветки обязаны говорить так же, как остальной экран.
+  it('итог повышения не говорит «политика» и «звено» ни в одной ветке', () => {
+    const branches = [
+      // первым встал выключенный, трафик ни через кого не идёт
+      { name: 'HydraRoute', active_tunnel_id: '', interfaces: [{ bind: 'OpkgTun10', name: 'main', tunnel_id: 'awg10' }] },
+      // первым встал один, трафик пока через другого
+      { name: 'HydraRoute', active_tunnel_id: 'awg11', interfaces: [
+        { bind: 'OpkgTun10', name: 'main', tunnel_id: 'awg10' },
+        { bind: 'OpkgTun11', name: 'work', tunnel_id: 'awg11' },
+      ] },
+      // трафик сдвинулся
+      { name: 'HydraRoute', active_tunnel_id: 'awg10', interfaces: [{ bind: 'OpkgTun10', name: 'main', tunnel_id: 'awg10' }] },
+    ]
+    for (const b of branches) {
+      const text = commandOutcomeLabel('route_policy_promote', ok(JSON.stringify(b)))
+      expect(text).toContain('«HydraRoute»')
+      expect(text).not.toMatch(/политик|звен/i)
+    }
   })
 
   it('правило создано -- называем его именем', () => {

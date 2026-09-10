@@ -26,7 +26,7 @@ var (
 	// оставили бы маршрутизацию в состоянии, которого не ждал никто.
 	ErrAlreadyRunning = errors.New("на этом роутере уже идёт починка или замена конфига")
 	ErrAutoDisabled   = errors.New("полуавтомат выключен владельцем")
-	ErrUnknownOrigin  = errors.New("не помним, каким конфигом поднята эта линия")
+	ErrUnknownOrigin  = errors.New("не помним, каким конфигом поднят этот VPN-туннель")
 )
 
 // OriginReader -- чем была поднята линия. Пустой ok означает «система этого
@@ -81,9 +81,9 @@ func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string) (string, boo
 	return "", false
 }
 
-// lineNames -- как линии называются для человека. Отчёт о починке уходит
-// владельцу в личку, и линии в нём обязаны звучать так, как он их назвал:
-// идентификатор («awg12») он нигде не видел.
+// lineNames -- как VPN-туннели называются для человека. Отчёт о починке
+// уходит владельцу в личку, и VPN-туннели в нём обязаны звучать полной формой
+// и так, как он их назвал: идентификатор («awg12») он нигде не видел.
 type lineNames struct {
 	broken string
 	backup string
@@ -190,7 +190,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 	if err != nil {
 		// Мастер замены уже пометил свой шаг провалившимся и откатился.
 		// Здесь остаётся сказать это человеку и закрыть задание.
-		d.step(jobID, StepFailback, provision.StepFailed, "линия не вернулась")
+		d.step(jobID, StepFailback, provision.StepFailed, "VPN-туннель не вернулся")
 		d.Store.Update(jobID, func(j *provision.Job) {
 			j.State = provision.StateFailed
 			j.Hint = err.Error()
@@ -201,7 +201,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 
 	// Шаг 3. Мастер замены уже поставил новую линию первым звеном политики --
 	// возврат состоялся. Шаг закрывается фактом, а не ещё одной командой.
-	d.step(jobID, StepFailback, provision.StepDone, "линия вернулась на место")
+	d.step(jobID, StepFailback, provision.StepDone, "VPN-туннель вернулся на место")
 	d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateSuccess })
 	d.notifyResult(ctx, req, true, names, nil)
 }
@@ -295,7 +295,8 @@ func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (
 			return pol, backup, nil
 		}
 	}
-	return wire.RoutePolicySummary{}, "", fmt.Errorf("линия %s не состоит ни в одной политике — чинить нечего", tunnelID)
+	// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
+	return wire.RoutePolicySummary{}, "", errors.New("VPN-туннель не входит ни в один общий набор правил — чинить нечего")
 }
 
 // notifyResult -- единственное место, где движок говорит с человеком.
@@ -312,13 +313,13 @@ func (d Deps) notifyResult(ctx context.Context, req StartReq, ok bool, names lin
 	var text string
 	switch {
 	case ok && backup != "":
-		text = fmt.Sprintf("Линия «%s» падала. Увёл трафик на «%s», выпустил новый конфиг и вернул всё обратно — сейчас работает.", line, backup)
+		text = fmt.Sprintf("VPN-туннель «%s» падал. Увёл трафик на запасной VPN-туннель «%s», выпустил новый конфиг и вернул всё обратно — сейчас работает.", line, backup)
 	case ok:
-		text = fmt.Sprintf("Линия «%s» падала. Выпустил новый конфиг — сейчас работает.", line)
+		text = fmt.Sprintf("VPN-туннель «%s» падал. Выпустил новый конфиг — сейчас работает.", line)
 	case backup != "":
-		text = fmt.Sprintf("Линия «%s» упала. Увёл трафик на «%s», обход блокировок работает. Поднять «%s» не смог: %v", line, backup, line, cause)
+		text = fmt.Sprintf("VPN-туннель «%s» упал. Увёл трафик на запасной VPN-туннель «%s», обход блокировок работает. Поднять VPN-туннель «%s» не смог: %v", line, backup, line, cause)
 	default:
-		text = fmt.Sprintf("Линия «%s» упала, и поднять её не вышло: %v. Заблокированное сейчас не открывается.", line, cause)
+		text = fmt.Sprintf("VPN-туннель «%s» упал, и поднять его не вышло: %v. Заблокированное сейчас не открывается.", line, cause)
 	}
 	d.Notify(ctx, req.RouterID, text)
 }

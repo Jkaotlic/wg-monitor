@@ -281,7 +281,7 @@ func evalTunnel(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, sta
 	if matrixSaysAlive(matrix, tu.ID, time.Now()) {
 		reasons = dropStaleHandshakeReason(reasons)
 		if len(reasons) == 0 {
-			details["note"] = "рукопожатие устарело от простоя, но линия отвечает на пробу"
+			details["note"] = "обмен ключами устарел от простоя, но VPN-туннель отвечает на пробу"
 		}
 	}
 	if len(reasons) == 0 {

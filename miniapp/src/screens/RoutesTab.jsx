@@ -111,7 +111,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
   // Перенос забирает ВСЁ, что ведёт в туннель, -- и правила, и политику,
   // которую он несёт (RouteRebind, route_rebind.go). Поэтому и спрашивается
   // он на строке туннеля, а не на группе правил: группа -- это привязка,
-  // а переносится линия целиком.
+  // а переносится VPN-туннель целиком.
   const askRebind = (src) => {
     const options = rebindTargets(rows, src.id)
     if (options.length === 0) return
@@ -149,17 +149,17 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
     }
     setPicker({
       title: 'Кто станет главным',
-      subtitle: `Сейчас правила политики идут через «${src.name}»`,
+      subtitle: `Сейчас правила общего набора идут через «${src.name}»`,
       options: targets.map((t) => ({
         id: `${t.policyName}:${t.tunnelID}`,
         title: t.tunnelName,
-        sub: `политика «${t.policyName}» · ${tunnelLiveLabel(t.live)}`,
+        sub: `общий набор «${t.policyName}» · ${tunnelLiveLabel(t.live)}`,
         pick: () =>
           confirmSheet({
             routerID,
             title: `Сделать «${t.tunnelName}» главным?`,
             body:
-              `Правила политики «${t.policyName}»${ruleText(t.policyName)} пойдут через «${t.tunnelName}» вместо «${src.name}». Вернуть обратно можно этой же кнопкой.` +
+              `Правила общего набора «${t.policyName}»${ruleText(t.policyName)} пойдут через «${t.tunnelName}» вместо «${src.name}». Вернуть обратно можно этой же кнопкой.` +
               (t.live === 'down'
                 ? ` «${t.tunnelName}» сейчас выключен: порядок сменится сразу, а трафик пойдёт через него не раньше, чем он поднимется.`
                 : ''),
@@ -229,7 +229,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
       )}
 
       {snapshot && (
-        <Section title="Линии и что через них идёт">
+        <Section title="VPN-туннели и что через них идёт">
           {tunnels.length ? (
             <ul class="card list-reset">
               {tunnels.map((t) => {
@@ -264,7 +264,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             </ul>
           ) : (
             <div class="card">
-              <p class="traffic-detail">Роутер не сообщил ни одной линии.</p>
+              <p class="traffic-detail">Роутер не сообщил ни одного VPN-туннеля.</p>
             </div>
           )}
         </Section>
@@ -307,7 +307,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             ))}
           </ul>
           <p class="admin-note">
-            Первая работающая линия в списке и несёт трафик, остальные ждут как резерв.
+            Первый работающий VPN-туннель в списке и несёт трафик, остальные ждут как резерв.
           </p>
         </details>
       )}
@@ -357,7 +357,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
 
       {snapshot && (
         <p class="admin-note">
-          Здесь названо только то, что отправлено в обход поимённо. Через линию идёт ещё и
+          Здесь названо только то, что отправлено в обход поимённо. Через VPN-туннель идёт ещё и
           общий набор — его видно в «Подробностях». Каждую правку роутер сначала показывает
           планом целиком и только потом применяет; отменить можно любую.
         </p>

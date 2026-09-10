@@ -92,7 +92,7 @@ describe('checkRows', () => {
     const byKey = rowsByKey(rows)
     expect(byKey.dns.answer).toBe('да')
     expect(byKey.dns.value).toBe('2 из 3 резолверов')
-    expect(byKey.hydraroute.value).toBe('26 правил HR Neo')
+    expect(byKey.hydraroute.value).toBe('26 правил HydraRoute Neo')
     expect(byKey.awg_manager.value).toBe('2.17.2')
     expect(byKey.external_reach.answer).toBe('нет')
     expect(byKey.external_reach.value).toBe('1 из 3 отвечает')

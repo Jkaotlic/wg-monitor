@@ -140,7 +140,7 @@ export function startReplace(routerID, body) {
   return request(`/routers/${routerID}/replace`, { method: 'POST', body: JSON.stringify(body) })
 }
 
-// Починка линии: запуск, состояние и выключатель полуавтомата. Состояние,
+// Починка VPN-туннеля: запуск, состояние и выключатель полуавтомата. Состояние,
 // как и у замены, спрашивается ПРО РОУТЕР: починку мог запустить сторож сам,
 // и идентификатора задания у экрана не будет вовсе.
 export function fetchRepairStatus(routerID) {

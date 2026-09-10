@@ -139,7 +139,7 @@ describe('подписи вкладок', () => {
   it('человеческие, а ключи прежние', () => {
     expect(TABS).toEqual(['router', 'tunnels', 'diag', 'events'])
     expect(tabLabel('router')).toBe('Сейчас')
-    expect(tabLabel('tunnels')).toBe('Линии')
+    expect(tabLabel('tunnels')).toBe('VPN-туннели')
     expect(tabLabel('diag')).toBe('Проверки')
     expect(tabLabel('events')).toBe('Что было')
   })

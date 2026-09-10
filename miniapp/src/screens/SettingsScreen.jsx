@@ -94,8 +94,8 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
         routerID,
         title: row.enabled ? `Выключить проверку связи у «${row.title}»?` : `Включить проверку связи у «${row.title}»?`,
         body: row.enabled
-          ? 'Роутер перестанет сам проверять эту линию и поднимать её. Тревога о падении по-прежнему придёт — по обмену ключами.'
-          : 'Роутер начнёт сам проверять линию и поднимать её, если ответа не будет.',
+          ? 'Роутер перестанет сам проверять этот VPN-туннель и поднимать его. Тревога о падении по-прежнему придёт — по обмену ключами.'
+          : 'Роутер начнёт сам проверять VPN-туннель и поднимать его, если ответа не будет.',
         action: 'pingcheck_toggle',
         args: { tunnel_id: row.tunnelID, enable: !row.enabled },
         buttonLabel: row.enabled ? 'Выключить' : 'Включить',
@@ -184,7 +184,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               ))}
               {fw.hint && <p class="card-foot">Роутер говорит: {fw.hint}</p>}
               <p class="card-foot">
-                Установка необратима: роутер скачает прошивку и перезагрузится. Линии упадут на
+                Установка необратима: роутер скачает прошивку и перезагрузится. VPN-туннели упадут на
                 несколько минут, и вернуть прежнюю версию из приложения нельзя.
               </p>
             </div>
@@ -198,7 +198,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
                   confirmSheet({
                     routerID,
                     title: `Поставить прошивку ${fw.available}?`,
-                    body: `Роутер «${routerName}» скачает ${fw.available} вместо ${fw.current} и перезагрузится. Линии упадут на несколько минут. Вернуть прежнюю версию из приложения нельзя.`,
+                    body: `Роутер «${routerName}» скачает ${fw.available} вместо ${fw.current} и перезагрузится. VPN-туннели упадут на несколько минут. Вернуть прежнюю версию из приложения нельзя.`,
                     action: 'firmware_install',
                     buttonLabel: 'Поставить и перезагрузить',
                     danger: true,
@@ -227,7 +227,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
         <Section title="Проверка связи">
           {pings.length === 0 ? (
             <div class="card">
-              <p class="traffic-detail">Роутер не сообщил ни одной линии.</p>
+              <p class="traffic-detail">Роутер не сообщил ни одного VPN-туннеля.</p>
             </div>
           ) : (
             <div class="card">
@@ -242,7 +242,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
                 </div>
               ))}
               <p class="card-foot">
-                Роутер сам проверяет линию и поднимает её, если ответа нет. Задержка — это
+                Роутер сам проверяет VPN-туннель и поднимает его, если ответа нет. Задержка — это
                 то, что он намерил последним замером.
               </p>
             </div>
@@ -259,7 +259,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               {doctor.busy ? 'Смотрим…' : 'Осмотр роутера'}
             </button>
             <button type="button" class="btn btn-ghost" disabled={hrneo.busy} onClick={() => hrneo.run('hrneo_doctor', {}, deadline)}>
-              {hrneo.busy ? 'Смотрим…' : 'Осмотр HR Neo'}
+              {hrneo.busy ? 'Смотрим…' : 'Осмотр HydraRoute Neo'}
             </button>
           </div>
           {(doctor.error || hrneo.error) && <p class="state state-error">{doctor.error || hrneo.error}</p>}
@@ -287,10 +287,10 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
         <Section title="Что умеет приложение">
           <div class="card">
             <p class="card-foot">
-              <b>Роутер</b> — работает ли линия прямо сейчас и что с ней не так.{' '}
-              <b>Линии</b> — какая линия несёт трафик, кто подхватит и что через неё уходит.{' '}
-              <b>Диагностика</b> — те же вопросы, заданные роутеру заново, и адрес, которым вас
-              видно снаружи. <b>События</b> — что происходило за неделю.
+              <b>Сейчас</b> — работает ли обход прямо сейчас и что с ним не так.{' '}
+              <b>VPN-туннели</b> — какой VPN-туннель несёт трафик, кто подхватит и что через него уходит.{' '}
+              <b>Проверки</b> — те же вопросы, заданные роутеру заново, и адрес, которым вас
+              видно снаружи. <b>Что было</b> — что происходило за неделю.
             </p>
             <p class="card-foot">
               Уведомления остаются у бота: приложение не может разбудить того, кто его не открыл.

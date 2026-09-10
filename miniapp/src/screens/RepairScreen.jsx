@@ -3,7 +3,7 @@ import { fetchRepairStatus, startRepair } from '../api.js'
 import { repairView } from '../repair.js'
 import { Overlay } from '../ui/Overlay.jsx'
 
-// Экран починки линии.
+// Экран починки VPN-туннеля.
 //
 // Операцией владеет бэкенд, а не экран: её мог запустить сторож сам, пока
 // приложение было закрыто. Поэтому экран сначала спрашивает состояние и

@@ -15,7 +15,7 @@ import (
 //
 // Neighbors is optional context — short summaries of OTHER tunnels of the
 // same user. Used both as a source of correlation hints in the diagnose
-// helper and as a "других линий" hint in the advice line.
+// helper and as a "других VPN-туннелей" hint in the advice line.
 type HardArgs struct {
 	Nickname    string
 	CheckName   string
@@ -111,7 +111,7 @@ func FormatRecovery(a RecoveryArgs) string {
 			writeTunnelRecoveryFooter(b, a.Check.Details)
 		})...)
 	}
-	meta := []string{KV("проверка", a.CheckName)}
+	meta := []string{KV("проверка", checkHumanName(a.CheckName))}
 	if !a.RecoveredAt.IsZero() {
 		meta = append(meta, KV("когда", a.RecoveredAt.In(mscLoc()).Format("02.01 15:04 МСК")))
 	}
@@ -213,7 +213,7 @@ func FormatRealert(args RealertArgs) string {
 		Label:   label,
 		Summary: tone.RealertPrefix + headline,
 		Meta: []string{
-			KV("проверка", args.CheckName),
+			KV("проверка", checkHumanName(args.CheckName)),
 			"с " + args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
 			durFmt(age) + " назад",
 			"напомню снова через " + shortDur(cadence),
@@ -304,22 +304,27 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 	return "🔴"
 }
 
+// hydraRouteExplained -- первое упоминание HydraRoute в тексте для владельца.
+// Само имя ему ничего не говорит; дальше по тексту -- просто «HydraRoute».
+const hydraRouteExplained = "HydraRoute (движок умной раздельной маршрутизации)"
+
 // categoryHeadline returns the human-readable problem statement for the
-// header — e.g. "DNS работает частично" / "Туннель amnezia_for_awg не на
-// связи". Replaces the old "<check name> — DOWN" pattern.
+// header — e.g. "Часть сайтов может не открываться по имени" /
+// "VPN-туннель «Франкфурт» не отвечает". Replaces the old
+// "<check name> — DOWN" pattern.
 func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
-		name := tunnelHumanName(d)
-		// Упавшая линия -- ещё не потерянный обход. Пока жива соседняя, трафик
-		// идёт через неё, и «не на связи» тревожным тоном гонит человека
-		// чинить то, что у него работает. Приложение в этот же момент пишет
-		// «работает на запасной линии» -- два голоса одной системы обязаны
-		// говорить одно и то же.
+		name := quotedTunnelName(d)
+		// Упавший VPN-туннель -- ещё не потерянный обход. Пока жив соседний,
+		// трафик идёт через него, и «не на связи» тревожным тоном гонит
+		// человека чинить то, что у него работает. Приложение в этот же момент
+		// говорит, что работает запасной VPN-туннель, -- два голоса одной
+		// системы обязаны говорить одно и то же.
 		if spare, ok := liveSpare(ns); ok {
-			return fmt.Sprintf("Линия %s упала, обход идёт через «%s»", name, spareHumanName(spare))
+			return fmt.Sprintf("VPN-туннель %s упал, обход идёт через «%s»", name, spareHumanName(spare))
 		}
-		return fmt.Sprintf("Линия %s не отвечает", name)
+		return fmt.Sprintf("VPN-туннель %s не отвечает", name)
 	case "dns":
 		total, _ := intOrZero(d, "endpoints")
 		failed, _ := intOrZero(d, "failed_count")
@@ -335,15 +340,15 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		running, _ := boolOrFalse(d, "running")
 		switch {
 		case !installed:
-			return "HydraRoute не установлен"
+			return hydraRouteExplained + " не установлен"
 		case !running:
-			return "HydraRoute остановлен"
+			return hydraRouteExplained + " остановлен"
 		}
-		return "HydraRoute даёт сбой"
+		return hydraRouteExplained + " даёт сбой"
 	case "awg_manager":
 		return "Панель управления роутера не отвечает"
 	case "awgmgr_api":
-		return "Бот не видит список линий роутера"
+		return "Бот не видит список VPN-туннелей роутера"
 	case "external_reach":
 		total, _ := intOrZero(d, "targets_total")
 		failed := mapsSlice(d, "targets_failed")
@@ -359,19 +364,19 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 	switch checkCategory(checkName) {
 	case "tunnel":
 		if d != nil {
-			if tname, _ := d["tunnel_name"].(string); tname != "" {
-				return "Линия " + tname + " снова работает"
+			if tname, _ := d["tunnel_name"].(string); strings.TrimSpace(tname) != "" {
+				return "VPN-туннель «" + strings.TrimSpace(tname) + "» снова работает"
 			}
 		}
-		return "Линия снова работает"
+		return "VPN-туннель снова работает"
 	case "dns":
 		return "Роутер снова находит сайты по имени"
 	case "hydraroute":
-		return "HydraRoute снова работает"
+		return hydraRouteExplained + " снова работает"
 	case "awg_manager":
 		return "Панель управления роутера снова отвечает"
 	case "awgmgr_api":
-		return "Бот снова видит список линий"
+		return "Бот снова видит список VPN-туннелей"
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
 	}
@@ -403,15 +408,15 @@ func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns [
 func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 	if ep := strOrEmpty(d, "endpoint"); ep != "" {
 		if isp := strOrEmpty(d, "isp_interface"); isp != "" {
-			fmt.Fprintf(b, "  Сервер линии: %s (выход провайдера: %s)\n", ep, isp)
+			fmt.Fprintf(b, "  Сервер VPN-туннеля: %s (выход провайдера: %s)\n", ep, isp)
 		} else {
-			fmt.Fprintf(b, "  Сервер линии: %s\n", ep)
+			fmt.Fprintf(b, "  Сервер VPN-туннеля: %s\n", ep)
 		}
 	}
 	if age, ok := intOrZero(d, "handshake_age_sec"); ok {
 		fmt.Fprintf(b, "  Последний обмен ключами: %s назад\n", humanAgeSec(age))
 	} else {
-		b.WriteString("  Туннель ни разу не установил связь\n")
+		b.WriteString("  VPN-туннель ни разу не установил связь\n")
 	}
 	if pc := strOrEmpty(d, "ping_check_status"); pc != "" {
 		fc, _ := intOrZero(d, "ping_check_fail_count")
@@ -471,7 +476,7 @@ func writeTunnelLinkedRoutes(b *strings.Builder, d map[string]any) {
 		parts = append(parts, fmt.Sprintf("%d по адресам", rStatic))
 	}
 	_ = rHR // разбивка по механизму -- инженерная деталь, она живёт в приложении
-	fmt.Fprintf(b, "  Через эту линию идут правила: %s\n", strings.Join(parts, ", "))
+	fmt.Fprintf(b, "  Через этот VPN-туннель идут правила: %s\n", strings.Join(parts, ", "))
 }
 
 func writeDNSWhatBroke(b *strings.Builder, d map[string]any, ns []NeighborSummary) {
@@ -567,7 +572,7 @@ func writeAwgmgrAPIWhatBroke(b *strings.Builder, d map[string]any) {
 		fmt.Fprintf(b, "  Ошибка API: %s\n", trimBodyDump(errStr))
 	}
 	if cnt, ok := intOrZero(d, "tunnel_count"); ok && cnt > 0 {
-		fmt.Fprintf(b, "  Туннелей видно: %d\n", cnt)
+		fmt.Fprintf(b, "  VPN-туннелей видно: %d\n", cnt)
 	}
 }
 
@@ -668,13 +673,13 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 	case "dns":
 		return "Домены могут не открываться или уходить не туда: сайты, приложения и правила HR-Neo зависят от DNS."
 	case "tunnel":
-		// Пока жива запасная линия, обход работает -- и человеку надо сказать
-		// именно это, а не пугать его тем, чего он не увидит. Но и молчать
-		// нельзя: запасная осталась одна, и вторая поломка оставит его без
-		// обхода вовсе.
+		// Пока жив запасной VPN-туннель, обход работает -- и человеку надо
+		// сказать именно это, а не пугать его тем, чего он не увидит. Но и
+		// молчать нельзя: запасной остался один, и вторая поломка оставит его
+		// без обхода вовсе.
 		if spare, ok := liveSpare(ns); ok {
-			return fmt.Sprintf("Пока ничего: обход идёт через запасную линию «%s», сайты открываются как обычно. "+
-				"Починить упавшую всё равно стоит — запасная осталась одна.", spareHumanName(spare))
+			return fmt.Sprintf("Пока ничего: обход идёт через запасной VPN-туннель «%s», сайты открываются как обычно. "+
+				"Починить упавший VPN-туннель всё равно стоит — запасной остался один.", spareHumanName(spare))
 		}
 		var parts []string
 		if rDNS, _ := intOrZero(d, "routes_dns"); rDNS > 0 {
@@ -684,15 +689,15 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 			parts = append(parts, fmt.Sprintf("%d правил по адресам", rStatic))
 		}
 		if len(parts) > 0 {
-			return "Через эту линию идут " + strings.Join(parts, " и ") + " — они не работают, пока линия не поднимется. Обычные сайты, банки и госуслуги открываются как всегда."
+			return "Через этот VPN-туннель идут " + strings.Join(parts, " и ") + " — они не работают, пока VPN-туннель не поднимется. Обычные сайты, банки и госуслуги открываются как всегда."
 		}
-		return "То, что должно ходить через эту линию, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда."
+		return "То, что должно ходить через этот VPN-туннель, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда."
 	case "hydraroute":
-		return "Правила по именам сайтов перестают направлять их в нужные линии: часть сайтов пойдёт напрямую или не откроется."
+		return "Правила по именам сайтов перестают направлять их в нужные VPN-туннели: часть сайтов пойдёт напрямую или не откроется."
 	case "awg_manager", "awgmgr_api":
-		return "Интернет от этого не пропадает: линии работают сами по себе. Но кнопки в приложении — «Починить», перезапуск линии, правка маршрутов — могут не сработать, пока связь с роутером не вернётся."
+		return "Интернет от этого не пропадает: VPN-туннели работают сами по себе. Но кнопки в приложении — «Починить», перезапуск VPN-туннеля, правка маршрутов — могут не сработать, пока связь с роутером не вернётся."
 	case "external_reach":
-		return "Через эту линию сервисы не открываются: дело либо в самой линии, либо в правилах, которые через неё ведут."
+		return "Через этот VPN-туннель сервисы не открываются: дело либо в самом VPN-туннеле, либо в правилах, которые через него ведут."
 	}
 	return ""
 }
@@ -723,7 +728,7 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 	case "awg_manager":
 		return "Панель роутера не ответила на запрос состояния. Обычно это значит, что она перезапускается или роутер сильно загружен."
 	case "awgmgr_api":
-		return "Список линий бот читает у панели роутера. Если она не отвечает — либо перезапускается, либо на роутере поменяли доступ к ней."
+		return "Список VPN-туннелей бот читает у панели роутера. Если она не отвечает — либо перезапускается, либо на роутере поменяли доступ к ней."
 	case "external_reach":
 		return diagnoseExternalReach(d, ns)
 	}
@@ -763,12 +768,12 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 			prefix = "Оба упавших DNS-сервера"
 		}
 		if neighborsAlive(ns) && len(ns) > 0 {
-			return fmt.Sprintf("%s идут через %s. Остальные линии выглядят живыми, значит интернет на месте. Скорее всего испортилась именно %s -- поиск имён просто заметил это первым.", prefix, label, name)
+			return fmt.Sprintf("%s идут через %s. Остальные VPN-туннели выглядят живыми, значит интернет на месте. Скорее всего испортился именно VPN-туннель «%s» — поиск имён просто заметил это первым.", prefix, label, name)
 		}
 		if !neighborsAlive(ns) && len(ns) > 0 {
-			return fmt.Sprintf("%s идут через %s, и соседние линии тоже молчат. Похоже, дело не в линии, а выше: провайдер или сам роутер.", prefix, label)
+			return fmt.Sprintf("%s идут через %s, и соседние VPN-туннели тоже молчат. Похоже, дело не в VPN-туннеле, а выше: провайдер или сам роутер.", prefix, label)
 		}
-		return fmt.Sprintf("%s идут через %s. Похоже на сбой самой линии или правила, а не поиска имён.", prefix, label)
+		return fmt.Sprintf("%s идут через %s. Похоже на сбой самого VPN-туннеля или правила, а не поиска имён.", prefix, label)
 	}
 
 	// Если все упавшие endpoint'ы прибиты к одному ndms_name (= один туннель/интерфейс),
@@ -780,16 +785,16 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 		}
 		if neighborsAlive(ns) && len(ns) > 0 {
 			return fmt.Sprintf(
-				"Все молчащие серверы имён идут через одну линию — %s. Соседние линии живы, значит интернет на месте. Скорее всего испортилась именно %s.",
-				iface, iface)
+				"Все молчащие серверы имён идут через один VPN-туннель — %s. Соседние VPN-туннели живы, значит интернет на месте. Скорее всего испортился именно он.",
+				iface)
 		}
 		if !neighborsAlive(ns) && len(ns) > 0 {
 			return fmt.Sprintf(
-				"Молчащие серверы имён идут через %s, и соседние линии тоже не отвечают. Похоже, дело выше — в провайдере или самом роутере.",
+				"Молчащие серверы имён идут через %s, и соседние VPN-туннели тоже не отвечают. Похоже, дело выше — в провайдере или самом роутере.",
 				iface)
 		}
 		return fmt.Sprintf(
-			"Все молчащие серверы имён идут через одну линию — %s. Похоже на сбой именно её, а не поиска имён.",
+			"Все молчащие серверы имён идут через один VPN-туннель — %s. Похоже на сбой именно этого VPN-туннеля, а не поиска имён.",
 			iface)
 	}
 
@@ -798,7 +803,7 @@ func diagnoseDNS(d map[string]any, ns []NeighborSummary) string {
 	}
 	if failedCount == total && total > 0 {
 		if len(ns) > 0 && neighborsAlive(ns) {
-			return "Серверы имён не ответили, но соседние линии живы. Похоже на проблему самого сервера имён или устаревшего правила, а не на пропавший интернет."
+			return "Серверы имён не ответили, но соседние VPN-туннели живы. Похоже на проблему самого сервера имён или устаревшего правила, а не на пропавший интернет."
 		}
 		return "Не отвечает ни один сервер имён. Либо у роутера пропал интернет, либо все эти серверы легли разом — что бывает редко."
 	}
@@ -812,24 +817,24 @@ func diagnoseTunnel(d map[string]any, ns []NeighborSummary) string {
 
 	var parts []string
 	if hasConflict && conflict {
-		parts = append(parts, "У линии конфликт адресов: она пытается подняться с тем же адресом, что и другая. Сама по себе такая линия не поднимется.")
+		parts = append(parts, "У VPN-туннеля конфликт адресов: он пытается подняться с тем же адресом, что и другой VPN-туннель. Сам по себе такой VPN-туннель не поднимется.")
 	}
 	switch {
 	case !hasAge:
-		parts = append(parts, "Обмена ключами не было ни разу с момента запуска — линия так и не поднялась. Чаще всего дело в неверных настройках сервера или в том, что провайдер закрыл нужный порт.")
+		parts = append(parts, "Обмена ключами не было ни разу с момента запуска — VPN-туннель так и не поднялся. Чаще всего дело в неверных настройках сервера или в том, что провайдер закрыл нужный порт.")
 	case age > 600:
-		parts = append(parts, fmt.Sprintf("Обмена ключами нет уже %s — линия точно лежит, а не моргнула.", humanAgeSec(age)))
+		parts = append(parts, fmt.Sprintf("Обмена ключами нет уже %s — VPN-туннель точно лежит, а не моргнул.", humanAgeSec(age)))
 	case age > 180:
-		parts = append(parts, "Обмен ключами устарел, но не катастрофически. Возможно провайдер режет UDP, либо сервер туннеля временно недоступен.")
+		parts = append(parts, "Обмен ключами устарел, но не катастрофически. Возможно, провайдер режет такой трафик, либо сервер VPN-туннеля временно недоступен.")
 	}
 	if pc == "dead" {
 		parts = append(parts, "Проверка связи показывает сбой — пакеты не доходят даже после авто-рестартов.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && neighborsAlive(ns) {
-		parts = append(parts, "Соседние туннели живы, так что WAN/роутер целы. Проблема локальная — этот сервер туннеля или его настройки.")
+		parts = append(parts, "Соседние VPN-туннели живы, так что интернет и роутер в порядке. Проблема локальная — сервер этого VPN-туннеля или его настройки.")
 	}
 	if len(parts) == 0 && len(ns) > 0 && !neighborsAlive(ns) {
-		parts = append(parts, "Соседние туннели тоже не на связи. Похоже на проблему уровнем выше — WAN, провайдер или сам роутер.")
+		parts = append(parts, "Соседние VPN-туннели тоже не на связи. Похоже на проблему уровнем выше — у провайдера или в самом роутере.")
 	}
 	return strings.Join(parts, " ")
 }
@@ -843,7 +848,7 @@ func diagnoseHydraRoute(d map[string]any) string {
 	case !running:
 		return "HydraRoute установлен, но демон не запущен. Видимо он упал или был остановлен вручную."
 	}
-	return "HydraRoute запущен, но проверка возвращает ошибку. Скорее всего сбой в конфиге — какое-то правило ссылается на несуществующий туннель."
+	return "HydraRoute запущен, но проверка возвращает ошибку. Скорее всего сбой в конфиге — какое-то правило ссылается на несуществующий VPN-туннель."
 }
 
 func diagnoseExternalReach(d map[string]any, ns []NeighborSummary) string {
@@ -852,12 +857,12 @@ func diagnoseExternalReach(d map[string]any, ns []NeighborSummary) string {
 	total, _ := intOrZero(d, "targets_total")
 	switch {
 	case total > 0 && len(failed) == total && iface != "":
-		return fmt.Sprintf("Через %s не достижимо ни одной цели — туннель не пропускает трафик наружу. Это либо сам туннель, либо его маршрутизация.", iface)
+		return fmt.Sprintf("Через VPN-туннель %s не открылся ни один сервис — он не пропускает трафик наружу. Дело либо в самом VPN-туннеле, либо в его маршрутизации.", iface)
 	case len(failed) > 0 && len(failed) < total:
 		return "Часть целей живы, часть нет — это похоже на блокировку конкретных сервисов, а не общий сбой связи."
 	}
 	if len(ns) > 0 && !neighborsAlive(ns) {
-		return "Соседние туннели тоже не на связи — похоже WAN или провайдер."
+		return "Соседние VPN-туннели тоже не на связи — похоже, дело в провайдере."
 	}
 	return ""
 }
@@ -885,7 +890,7 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 	rknSus, _ := intOrZero(d, "rkn_suspect")
 	rknProbed, _ := intOrZero(d, "rkn_probed")
 	if rknProbed > 0 && rknSus == rknProbed {
-		return "Похоже, провайдер подменяет ответы на запросы имён. Откройте приложение, экран «Маршруты» — там видно, через какую линию уходят эти запросы; их стоит увести в обход."
+		return "Похоже, провайдер подменяет ответы на запросы имён. Откройте приложение, экран «VPN-туннели» — там видно, через какой VPN-туннель уходят эти запросы; их стоит увести в обход."
 	}
 
 	failed := mapsSlice(d, "endpoints_detail")
@@ -908,9 +913,9 @@ func adviseDNS(d map[string]any, ns []NeighborSummary) string {
 		label := humanTunnelLabelByNDMS(iface, ns)
 		name := humanTunnelNameByNDMS(iface, ns)
 		if neighborsAlive(ns) {
-			return fmt.Sprintf("Откройте приложение, экран «Линии», и посмотрите %s — начните с её перезапуска.", label)
+			return fmt.Sprintf("Откройте приложение, экран «VPN-туннели», и найдите VPN-туннель %s — начните с его перезапуска.", label)
 		}
-		return fmt.Sprintf("Откройте приложение, экран «Проверки»: там видно, работает ли интернет напрямую. Если напрямую работает, а через обход нет — дело в линии %s.", name)
+		return fmt.Sprintf("Откройте приложение, экран «Проверки»: там видно, работает ли интернет напрямую. Если напрямую работает, а через обход нет — дело в VPN-туннеле «%s».", name)
 	}
 	return "Подождите минуту — сервер имён мог не ответить разово. Если не вернётся, откройте приложение: на экране «Сейчас» видно общую картину."
 }
@@ -919,21 +924,21 @@ func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 	age, hasAge := intOrZero(d, "handshake_age_sec")
 	conflict, hasConflict := boolOrFalse(d, "address_conflict")
 	if hasConflict && conflict {
-		return "У этой линии адрес совпал с другой линией — сама она не поднимется. Нажмите «Починить» в приложении: оно перевыпустит настройки линии заново."
+		return "У этого VPN-туннеля адрес совпал с адресом другого VPN-туннеля — сам он не поднимется. Нажмите «Починить» в приложении: оно перевыпустит настройки VPN-туннеля заново."
 	}
 	if !hasAge {
 		// Про увод трафика говорим только когда уводить есть куда: обещать
 		// обход, которого нет, -- то же враньё, что и молчать о нём.
 		if _, ok := liveSpare(ns); ok {
-			return "Нажмите «Починить» в приложении — оно уведёт трафик на запасную линию и перевыпустит настройки упавшей. Если и после этого связи нет, провайдер может резать такой трафик."
+			return "Нажмите «Починить» в приложении — оно уведёт трафик на запасной VPN-туннель и перевыпустит настройки упавшего VPN-туннеля. Если и после этого связи нет, провайдер может резать такой трафик."
 		}
-		return "Нажмите «Починить» в приложении — оно перевыпустит настройки линии заново. Если и после этого связи нет, провайдер может резать такой трафик."
+		return "Нажмите «Починить» в приложении — оно перевыпустит настройки VPN-туннеля заново. Если и после этого связи нет, провайдер может резать такой трафик."
 	}
 	var base string
 	if age > 600 {
 		base = "Нажмите «Починить» в приложении — обычно помогает."
 		if _, ok := liveSpare(ns); ok {
-			base += " Пока чинит, трафик пойдёт через запасную линию."
+			base += " Пока чинит, трафик пойдёт через запасной VPN-туннель."
 		}
 	} else {
 		base = "Подождите пару минут — связь могла моргнуть. Если не вернётся, нажмите «Починить» в приложении."
@@ -942,7 +947,7 @@ func adviseTunnel(d map[string]any, ns []NeighborSummary) string {
 	// у idle-туннеля устаревает сам по себе. Подсказываем включить активную
 	// проверку, чтобы отличать простой от настоящего обрыва.
 	if pingCheckIsDisabled(d) {
-		base += " Заодно включите проверку связи для этой линии на экране «Настройки»: сейчас она выключена, и бот судит о линии по косвенным признакам."
+		base += " Заодно включите проверку связи для этого VPN-туннеля на экране «Настройки»: сейчас она выключена, и бот судит о VPN-туннеле по косвенным признакам."
 	}
 	return base
 }
@@ -963,20 +968,22 @@ func adviseHydraRoute(d map[string]any) string {
 	case !running:
 		return "Умная маршрутизация остановлена. Обычно помогает перезагрузка роутера; если не помогла — напишите тому, кто его настраивал."
 	}
-	return "Откройте приложение, экран «Маршруты» — возможно, одно из правил ссылается на линию, которой больше нет."
+	return "Откройте приложение, экран «VPN-туннели» — возможно, одно из правил ссылается на VPN-туннель, которого больше нет."
 }
 
+// adviseExternalReach -- совет владельцу, а не оператору старой панели бота:
+// кнопок «🎛 Туннели» и «🇷🇺 Напрямую?» у него нет, есть приложение.
 func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
 	iface, _ := d["via_interface"].(string)
 	failed := mapsSlice(d, "targets_failed")
 	total, _ := intOrZero(d, "targets_total")
 	if total > 0 && len(failed) == total && iface != "" {
-		return fmt.Sprintf("Туннель %s не пропускает наружу. Нажми «🔁 Перезапуск туннеля» в его сообщении или открой 🎛 Туннели и перезапусти его оттуда.", iface)
+		return fmt.Sprintf("VPN-туннель %s не пропускает трафик наружу. Откройте приложение, экран «VPN-туннели», и нажмите «Починить» у этого VPN-туннеля.", iface)
 	}
 	if len(ns) > 0 && !neighborsAlive(ns) {
-		return "Сначала проверь WAN: 🇷🇺 Напрямую? — если и без туннеля наружу не выходит, проблема у провайдера."
+		return "Откройте приложение, экран «Проверки»: там видно, работает ли интернет напрямую. Если и напрямую наружу не выходит — дело у провайдера."
 	}
-	return "Открой 🎛 Туннели и проверь, через какой интерфейс уходит трафик до этих целей."
+	return "Откройте приложение, экран «VPN-туннели» — там видно, через какой VPN-туннель идёт трафик до этих сервисов."
 }
 
 // neighborsAlive returns true when at least one neighbor is in alive/ok status.
@@ -987,7 +994,7 @@ func adviseExternalReach(d map[string]any, ns []NeighborSummary) string {
 func checkHumanName(check string) string {
 	switch checkCategory(check) {
 	case "tunnel":
-		return "линия"
+		return "VPN-туннель"
 	case "dns":
 		return "поиск сайтов по имени"
 	case "hydraroute":
@@ -1003,9 +1010,9 @@ func checkHumanName(check string) string {
 	return check
 }
 
-// liveSpare -- первая живая соседняя линия. Это и есть тот обход, который
-// сейчас работает вместо упавшей: у роутера их обычно две, и вторая молчит
-// ровно до того момента, когда понадобится.
+// liveSpare -- первый живой соседний VPN-туннель. Это и есть тот обход,
+// который сейчас работает вместо упавшего: у роутера их обычно два, и второй
+// молчит ровно до того момента, когда понадобится.
 func liveSpare(ns []NeighborSummary) (NeighborSummary, bool) {
 	for _, n := range ns {
 		if isLiveStatus(n.Status) {
@@ -1015,8 +1022,11 @@ func liveSpare(ns []NeighborSummary) (NeighborSummary, bool) {
 	return NeighborSummary{}, false
 }
 
-// tunnelHumanName -- как линию называет человек. Идентификатор («awg12») он
-// нигде не видел; имя даёт ему то, что он узнает в приложении.
+// noTunnelName -- подпись VPN-туннеля, у которого нет ни имени, ни интерфейса.
+const noTunnelName = "без имени"
+
+// tunnelHumanName -- как VPN-туннель называет человек. Идентификатор
+// («awg12») он нигде не видел; имя даёт ему то, что он узнает в приложении.
 func tunnelHumanName(d map[string]any) string {
 	if tname, _ := d["tunnel_name"].(string); strings.TrimSpace(tname) != "" {
 		return strings.TrimSpace(tname)
@@ -1024,10 +1034,20 @@ func tunnelHumanName(d map[string]any) string {
 	if iface, _ := d["interface"].(string); strings.TrimSpace(iface) != "" {
 		return strings.TrimSpace(iface)
 	}
-	return "без имени"
+	return noTunnelName
 }
 
-// spareHumanName -- имя запасной линии для строки про обход.
+// quotedTunnelName -- имя VPN-туннеля для текста: в ёлочках, как в
+// приложении. Безымянному ёлочки не нужны: «без имени» -- не имя.
+func quotedTunnelName(d map[string]any) string {
+	name := tunnelHumanName(d)
+	if name == noTunnelName {
+		return name
+	}
+	return "«" + name + "»"
+}
+
+// spareHumanName -- имя запасного VPN-туннеля для строки про обход.
 func spareHumanName(n NeighborSummary) string {
 	if strings.TrimSpace(n.TunnelName) != "" {
 		return strings.TrimSpace(n.TunnelName)

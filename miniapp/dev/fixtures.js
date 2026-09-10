@@ -250,7 +250,7 @@ const DIAG_REPORT = {
 // Каталог наборов роутера (wire.RouteTemplates). На живом роутере их 87 в
 // семи категориях; здесь десяток в трёх -- ровно чтобы экран показал
 // группировку и разницу между набором с доменами и набором из одних
-// гео-тегов, которые без HR Neo не разворачиваются.
+// гео-тегов, которые без HydraRoute Neo не разворачиваются.
 const ROUTE_TEMPLATES = {
   templates: [
     { id: 'chatgpt', name: 'ChatGPT', category: 'ai', dns: ['chatgpt.com', 'openai.com', 'oaistatic.com'], hr_neo: ['geosite:OPENAI'] },
@@ -265,7 +265,7 @@ const ROUTE_TEMPLATES = {
     { id: 'vimeo', name: 'Vimeo', category: 'видео', dns: ['vimeo.com'] },
   ],
   // Живой роутер 2.17.2+r21 описывает 12 наборов из 87 правилами sing-box:
-  // применить их правилом DNS/HR-Neo нельзя, и агент их не отдаёт.
+  // применить их правилом DNS/HydraRoute Neo нельзя, и агент их не отдаёт.
   skipped: 12,
 }
 
@@ -327,12 +327,12 @@ export function replaceStatus() {
 
 function replaceDetail(name, job) {
   switch (name) {
-    case 'issue': return `конфиг получен, линия будет называться «${job.provider}_${job.option}»`
-    case 'import': return `новая линия «${job.provider}_${job.option}» поднята рядом с прежней`
-    case 'handshake': return 'ключами обменялась, канал живой'
+    case 'issue': return `конфиг получен, VPN-туннель будет называться «${job.provider}_${job.option}»`
+    case 'import': return `новый VPN-туннель «${job.provider}_${job.option}» поднят рядом с прежним`
+    case 'handshake': return 'ключами обменялся, канал живой'
     case 'promote': return `общий набор «HydraRoute» идёт через «${job.provider}_${job.option}»`
-    case 'verify': return 'через линию 203.0.113.19, напрямую 203.0.113.7'
-    default: return 'прежняя линия выключена и осталась на роутере'
+    case 'verify': return 'через VPN-туннель 203.0.113.19, напрямую 203.0.113.7'
+    default: return 'прежний VPN-туннель выключен и остался на роутере'
   }
 }
 

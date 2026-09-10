@@ -204,14 +204,14 @@ describe('tunnelsView -- машинное имя за тап', () => {
 
   it('безымянная линия называется линией, а не идентификатором', () => {
     const v = tunnelsView(NONAME)
-    expect(v.active.title).toBe('Линия без имени')
+    expect(v.active.title).toBe('VPN-туннель без имени')
     expect(v.active.title).not.toContain('awg11')
     expect(v.active.code).toBe('awg11')
   })
 
   it('у звена цепочки идентификатор лежит отдельно от заголовка', () => {
     const v = tunnelsView(NONAME)
-    expect(v.chain[0].title).toBe('Линия без имени')
+    expect(v.chain[0].title).toBe('VPN-туннель без имени')
     expect(v.chain[0].code).toBe('awg11')
   })
 

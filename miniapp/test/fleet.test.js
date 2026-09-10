@@ -70,7 +70,7 @@ describe('fleetRow', () => {
       id: 1, nickname: 'Дом', status: 'alert', last_seen_age_sec: 10,
       active_incidents: [{ check_name: 'tunnel_awg12' }],
     })
-    expect(row.sub).toBe('Одна из линий не отвечает')
+    expect(row.sub).toBe('Один из VPN-туннелей не отвечает')
     expect(row.sub).not.toContain('awg12')
   })
 

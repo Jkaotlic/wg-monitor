@@ -143,7 +143,10 @@ describe('templateChoice', () => {
   it('набор из одних гео-тегов без HR Neo применить нельзя, и экран говорит почему', () => {
     const c = templateChoice(GEO, { hrNeoRunning: false })
     expect(c.canApply).toBe(false)
-    expect(c.reason).toContain('HR Neo')
+    expect(c.reason).toContain('HydraRoute Neo')
+    // Имя движка человеку ничего не говорит -- рядом обязано стоять, что он делает.
+    expect(c.reason).toContain('движок умной раздельной маршрутизации')
+    expect(c.reason).not.toMatch(/HR Neo/)
   })
 })
 

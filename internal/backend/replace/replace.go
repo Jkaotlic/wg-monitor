@@ -254,7 +254,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		return errors.New("кабинет вернул пустой конфиг")
 	}
 	state.NewTunnelName = issued.TunnelName
-	d.step(jobID, StepIssue, provision.StepDone, "конфиг получен, линия будет называться «"+issued.TunnelName+"»")
+	d.step(jobID, StepIssue, provision.StepDone, "конфиг получен, VPN-туннель будет называться «"+issued.TunnelName+"»")
 
 	// 2. Импорт НОВЫМ туннелем: replace=false, прежний остаётся на месте.
 	d.step(jobID, StepImport, provision.StepActive, "кладём конфиг на роутер")
@@ -280,32 +280,33 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		}
 	}
 	// Всё, что дальше пишется в шаги, подсказку и личку, читает владелец, и
-	// линии в этом тексте называются так, как в приложении: именем.
-	// Идентификатор («awg21») он нигде, кроме мелкой подписи, не видел.
+	// VPN-туннели в этом тексте называются так, как в приложении: полной
+	// формой «VPN-туннель» и именем. Идентификатор («awg21») он нигде, кроме
+	// мелкой подписи, не видел.
 	if state.NewTunnelID == "" {
-		d.step(jobID, StepImport, provision.StepFailed, "роутер не подтвердил, что новая линия заведена")
-		return errors.New("роутер не подтвердил, что новая линия заведена")
+		d.step(jobID, StepImport, provision.StepFailed, "роутер не подтвердил, что новый VPN-туннель заведён")
+		return errors.New("роутер не подтвердил, что новый VPN-туннель заведён")
 	}
-	d.step(jobID, StepImport, provision.StepDone, "новая линия «"+state.NewTunnelName+"» поднята рядом с прежней")
+	d.step(jobID, StepImport, provision.StepDone, "новый VPN-туннель «"+state.NewTunnelName+"» поднят рядом с прежним")
 
-	// 3. Рукопожатие: без него линия не живая, что бы ни говорил статус.
-	d.step(jobID, StepHandshake, provision.StepActive, "ждём, когда линия обменяется ключами")
+	// 3. Рукопожатие: без него VPN-туннель не живой, что бы ни говорил статус.
+	d.step(jobID, StepHandshake, provision.StepActive, "ждём, когда VPN-туннель обменяется ключами")
 	if err := d.waitHandshake(ctx, req.RouterID, state.NewTunnelID, state.NewTunnelName); err != nil {
 		d.step(jobID, StepHandshake, provision.StepFailed, err.Error())
 		return err
 	}
-	d.step(jobID, StepHandshake, provision.StepDone, "ключами обменялась, канал живой")
+	d.step(jobID, StepHandshake, provision.StepDone, "ключами обменялся, канал живой")
 
 	// 4. Главным делаем звено в политике, а не глобальный маршрут по
 	// умолчанию: трафик, ради которого меняют конфиг, идёт политикой.
 	// Человеку политика известна как общий набор правил.
-	d.step(jobID, StepPromote, provision.StepActive, "переводим общий набор правил на новую линию")
+	d.step(jobID, StepPromote, provision.StepActive, "переводим общий набор правил на новый VPN-туннель")
 	if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
 		"policy_name": req.PolicyName,
 		"tunnel_id":   state.NewTunnelID,
 	}); err != nil {
 		d.step(jobID, StepPromote, provision.StepFailed, err.Error())
-		return fmt.Errorf("не удалось перевести общий набор на новую линию: %w", err)
+		return fmt.Errorf("не удалось перевести общий набор на новый VPN-туннель: %w", err)
 	}
 	state.Promoted = true
 	d.step(jobID, StepPromote, provision.StepDone, "общий набор «"+req.PolicyName+"» идёт через «"+state.NewTunnelName+"»")
@@ -321,7 +322,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 	d.step(jobID, StepVerify, provision.StepDone, verdict)
 
 	// 6. Прежний туннель выключается, но остаётся: откат возможен всегда.
-	d.step(jobID, StepRetire, provision.StepActive, "выключаем прежнюю линию")
+	d.step(jobID, StepRetire, provision.StepActive, "выключаем прежний VPN-туннель")
 	if _, err := d.command(ctx, req.RouterID, "tunnel_power", map[string]any{
 		"tunnel_id": req.OldTunnelID,
 		"on":        false,
@@ -329,10 +330,10 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		// Не провал операции: новый туннель уже несёт трафик. Прежний
 		// остался включённым -- это видно на экране туннелей, и выключить
 		// его можно там же.
-		d.step(jobID, StepRetire, provision.StepFailed, "прежняя линия осталась включённой: "+err.Error())
+		d.step(jobID, StepRetire, provision.StepFailed, "прежний VPN-туннель остался включённым: "+err.Error())
 		return nil
 	}
-	d.step(jobID, StepRetire, provision.StepDone, "прежняя линия выключена и осталась на роутере")
+	d.step(jobID, StepRetire, provision.StepDone, "прежний VPN-туннель выключен и остался на роутере")
 	return nil
 }
 
@@ -351,7 +352,7 @@ func (d Deps) finish(ctx context.Context, jobID string, req StartReq, state *run
 		j.Hint = "готово: общий набор «" + req.PolicyName + "» идёт через «" + state.NewTunnelName + "»"
 	})
 	d.notify(ctx, req.RouterID, fmt.Sprintf(
-		"Замена конфига завершена.\nНовая линия — «%s». Общий набор «%s» идёт через неё, прежняя линия выключена и осталась на роутере.",
+		"Замена конфига завершена.\nНовый VPN-туннель «%s» работает: общий набор «%s» идёт через него, прежний VPN-туннель выключен и остался на роутере.",
 		state.NewTunnelName, req.PolicyName))
 }
 
@@ -365,9 +366,9 @@ func (d Deps) rollback(ctx context.Context, jobID string, req StartReq, state *r
 			"policy_name": req.PolicyName,
 			"tunnel_id":   req.OldTunnelID,
 		}); err != nil {
-			notes = append(notes, "вернуть общий набор на прежнюю линию не удалось: "+err.Error())
+			notes = append(notes, "вернуть общий набор на прежний VPN-туннель не удалось: "+err.Error())
 		} else {
-			notes = append(notes, "общий набор снова идёт через прежнюю линию")
+			notes = append(notes, "общий набор снова идёт через прежний VPN-туннель")
 		}
 	}
 	if state.Imported && state.NewTunnelID != "" {
@@ -375,9 +376,9 @@ func (d Deps) rollback(ctx context.Context, jobID string, req StartReq, state *r
 			"tunnel_id": state.NewTunnelID,
 			"on":        false,
 		}); err != nil {
-			notes = append(notes, "выключить новую линию не удалось: "+err.Error())
+			notes = append(notes, "выключить новый VPN-туннель не удалось: "+err.Error())
 		} else {
-			notes = append(notes, "новая линия выключена и оставлена на роутере")
+			notes = append(notes, "новый VPN-туннель выключен и оставлен на роутере")
 		}
 	}
 	hint := cause.Error()
@@ -462,14 +463,14 @@ func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID, name 
 			if t.HasHandshake {
 				return nil
 			}
-			last = fmt.Sprintf("линия «%s» на роутере есть, но ключами ещё не обменялась", name)
+			last = fmt.Sprintf("VPN-туннель «%s» на роутере есть, но ключами ещё не обменялся", name)
 		}
 		if last == "" {
-			last = fmt.Sprintf("линии «%s» на роутере не видно", name)
+			last = fmt.Sprintf("VPN-туннеля «%s» на роутере не видно", name)
 		}
 		d.sleep(ctx, d.handshakeWait())
 	}
-	return errors.New("новая линия так и не обменялась ключами: " + last)
+	return errors.New("новый VPN-туннель так и не обменялся ключами: " + last)
 }
 
 // verifyExit -- критерий успеха. Одного рукопожатия недостаточно: оно бывает
@@ -487,12 +488,12 @@ func (d Deps) verifyExit(ctx context.Context, routerID int64) (string, error) {
 	via := exitIP(viaRes.Output)
 	direct := exitIP(directRes.Output)
 	if via == "" {
-		return "", errors.New("через новую линию адрес выхода не определился")
+		return "", errors.New("через новый VPN-туннель адрес выхода не определился")
 	}
 	if direct != "" && via == direct {
 		return "", fmt.Errorf("снаружи виден тот же адрес, что и напрямую (%s): трафик в обход не пошёл", via)
 	}
-	return fmt.Sprintf("через линию %s, напрямую %s", via, orUnknown(direct)), nil
+	return fmt.Sprintf("через VPN-туннель %s, напрямую %s", via, orUnknown(direct)), nil
 }
 
 func (d Deps) findTunnelByName(ctx context.Context, routerID int64, name string) (string, bool) {

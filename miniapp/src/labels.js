@@ -25,7 +25,7 @@ const CHECK_LABELS = {
 // for is shown as-is rather than mangled -- an honest unknown beats a wrong guess.
 export function checkLabel(name) {
   if (CHECK_LABELS[name]) return CHECK_LABELS[name]
-  if (name?.startsWith('tunnel_')) return `Туннель ${name.slice('tunnel_'.length)}`
+  if (name?.startsWith('tunnel_')) return `VPN-туннель ${name.slice('tunnel_'.length)}`
   return name
 }
 
@@ -41,7 +41,7 @@ export function checkLabel(name) {
 const INCIDENT_COPY = {
   external_reach: {
     what: 'Нет доступа в интернет',
-    why: 'Роутер на связи и линии подняты, но сайты снаружи не открываются. Обычно это провайдер или сторона VPN-сервера.',
+    why: 'Роутер на связи и VPN-туннели подняты, но сайты снаружи не открываются. Обычно это провайдер или сторона VPN-сервера.',
   },
   dns: {
     what: 'Не определяются адреса сайтов',
@@ -53,11 +53,11 @@ const INCIDENT_COPY = {
   },
   awg_manager: {
     what: 'Нет связи с панелью роутера',
-    why: 'Агент не достучался до панели роутера. Данные о линиях могут устареть.',
+    why: 'Агент не достучался до панели роутера. Данные о VPN-туннелях могут устареть.',
   },
   tunnels: {
-    what: 'Не все линии на связи',
-    why: 'Часть линий не отвечает. Через них трафик не пойдёт — правила, которые на них завязаны, уйдут напрямую или не сработают.',
+    what: 'Не все VPN-туннели на связи',
+    why: 'Часть VPN-туннелей не отвечает. Через них трафик не пойдёт — правила, которые на них завязаны, уйдут напрямую или не сработают.',
   },
   agent_heartbeat: {
     what: 'Роутер не выходит на связь',
@@ -68,7 +68,7 @@ const INCIDENT_COPY = {
 // checkName is either one of the four plain checks above or a `tunnel_<id>`
 // incident; both are handled here so IncidentCard never has to branch on the
 // name shape itself. Reuses checkLabel for the tunnel-id fallback (same
-// "Туннель <id>" text the id gets everywhere else) and for the
+// "VPN-туннель <id>" text the id gets everywhere else) and for the
 // never-seen-this-check fallback -- an incident this function has no specific
 // copy for gets checkLabel's honest name and an empty "why" rather than a
 // guessed explanation, the same rule checkLabel itself follows for a name it
@@ -78,20 +78,20 @@ export function incidentCopy(checkName) {
   if (checkName?.startsWith('tunnel_')) {
     return {
       what: `${checkLabel(checkName)} не отвечает`,
-      why: 'Обмен ключами не проходит — трафик через эту линию не пойдёт.',
+      why: 'Обмен ключами не проходит — трафик через этот VPN-туннель не пойдёт.',
     }
   }
   return { what: checkLabel(checkName), why: '' }
 }
 
-// Та же фраза, но БЕЗ машинного идентификатора линии.
+// Та же фраза, но БЕЗ машинного идентификатора VPN-туннеля.
 //
-// «Туннель awg12 не отвечает» уместно внутри роутера, где рядом лежит снимок
-// маршрутов и имена линий. В списке роутеров и в ленте «Что было» ничего
+// «VPN-туннель awg12 не отвечает» уместно внутри роутера, где рядом лежит снимок
+// маршрутов и имена VPN-туннелей. В списке роутеров и в ленте «Что было» ничего
 // этого нет, и awg12 человеку не говорит ничего -- значит и печатать его там
 // незачем.
 export function incidentWhatPlain(checkName) {
-  if (checkName?.startsWith('tunnel_')) return 'Одна из линий не отвечает'
+  if (checkName?.startsWith('tunnel_')) return 'Один из VPN-туннелей не отвечает'
   return incidentCopy(checkName).what
 }
 
@@ -104,7 +104,7 @@ const RECOVERY_COPY = {
   dns: 'Адреса сайтов снова определяются',
   hydraroute: 'Обход блокировок снова работает',
   awg_manager: 'Связь с панелью роутера восстановлена',
-  tunnels: 'Линии снова опрашиваются',
+  tunnels: 'VPN-туннели снова опрашиваются',
   agent_heartbeat: 'Роутер снова выходит на связь',
 }
 
@@ -213,7 +213,7 @@ export function trafficLabel(traffic) {
     case 'direct':
       return {
         title: 'Трафик идёт напрямую',
-        detail: 'Ни одна линия не несёт основной маршрут — трафик уходит через провайдера',
+        detail: 'Ни один VPN-туннель не несёт основной маршрут — трафик уходит через провайдера',
       }
     case 'singbox':
       return {
@@ -223,7 +223,7 @@ export function trafficLabel(traffic) {
     default:
       return {
         title: 'Куда идёт трафик — неизвестно',
-        detail: 'Роутер пока не сообщает, какая линия основная. Нажмите «Повторить проверку».',
+        detail: 'Роутер пока не сообщает, какой VPN-туннель основной. Нажмите «Повторить проверку».',
       }
   }
 }
@@ -233,7 +233,8 @@ export function trafficLabel(traffic) {
 // "force_recheck", "tunnel_restart", ttl values "1h"/"4h"/"24h" -- a future
 // screen maps those to these keys explicitly rather than by string equality).
 // Where a matching bot button exists, its wording wins: "Перезапустить
-// туннель" mirrors "🔁 Перезапустить туннель" (alerts/smart_reply.go:285,332)
+// VPN-туннель" mirrors "🔁 Перезапустить туннель" (alerts/smart_reply.go:285,332)
+// in the app's vocabulary, where the tunnel is always named in full,
 // and "Повторить проверку" mirrors "🩺 Повторить проверку"
 // (callbacks/notifier.go:142), both minus the emoji (this UI has its own
 // icons). "ack"/"mute" have no equivalent standalone Telegram button caption
@@ -252,7 +253,7 @@ export const ACTION_LABELS = {
   silence24h: 'Сутки',
   silenceGroup: 'Не беспокоить',
   recheck: 'Повторить проверку',
-  restartTunnel: 'Перезапустить линию',
+  restartTunnel: 'Перезапустить VPN-туннель',
 }
 
 // What a dispatched agent command's result means, once the agent has
@@ -293,7 +294,7 @@ export function commandOutcomeLabel(action, result) {
     case 'timeout':
       return 'Роутер не ответил вовремя'
     case 'err': {
-      if (action === 'tunnel_restart') return 'Не удалось перезапустить линию'
+      if (action === 'tunnel_restart') return 'Не удалось перезапустить VPN-туннель'
       const output = result.output?.trim() || ''
       // Агент отвечает "unknown action: X", когда на роутере стоит версия
       // старше приложения. Человеку это читается как поломка приложения, а
@@ -304,7 +305,7 @@ export function commandOutcomeLabel(action, result) {
       return output || 'Команда завершилась с ошибкой'
     }
     default:
-      if (action === 'tunnel_restart') return 'Туннель перезапущен'
+      if (action === 'tunnel_restart') return 'VPN-туннель перезапущен'
       return routeOutcomeLabel(action, result.output) || 'Готово'
   }
 }
@@ -354,7 +355,7 @@ function rebindOutcome(res) {
     const tail = why ? ` (${why})` : ''
     return `Перенесено ${moved} ${pluralRu(moved, 'правило', 'правила', 'правил')}, не удалось ${failed}${tail}`
   }
-  if (moved === 0) return 'Переносить было нечего: правил на этой линии нет'
+  if (moved === 0) return 'Переносить было нечего: правил на этом VPN-туннеле нет'
   return `Перенесено ${rulesCount(moved)}`
 }
 
@@ -369,12 +370,12 @@ function promoteOutcome(policy) {
   const linkName = (l) => l.name || l.bind
   const active = links.find((l) => l.tunnel_id && l.tunnel_id === policy.active_tunnel_id)
   if (!active) {
-    return `Первым звеном политики «${policy.name}» стал «${linkName(first)}», но доступного звена в цепочке сейчас нет`
+    return `«${linkName(first)}» теперь первый в общем наборе «${policy.name}», но сейчас ни одно подключение в наборе не работает`
   }
   if (active.bind !== first.bind) {
-    return `Первым звеном политики «${policy.name}» стал «${linkName(first)}», но трафик пока идёт через «${linkName(active)}»`
+    return `«${linkName(first)}» теперь первый в общем наборе «${policy.name}», но трафик пока идёт через «${linkName(active)}»`
   }
-  return `Правила политики «${policy.name}» идут через «${linkName(first)}»`
+  return `Правила общего набора «${policy.name}» идут через «${linkName(first)}»`
 }
 
 function applyOutcome(action, res) {

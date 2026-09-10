@@ -1,6 +1,7 @@
 package linkrepair
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,6 +29,9 @@ func TestAllow_FourthAttemptInSixHoursRefused(t *testing.T) {
 	}
 	if why == "" {
 		t.Fatal("отказ обязан объясняться словами -- их увидит человек")
+	}
+	if !strings.Contains(why, "VPN-туннель") || strings.Contains(strings.ToLower(why), "лини") {
+		t.Fatalf("отказ говорит словарём приложения -- VPN-туннель, а не линия: %q", why)
 	}
 }
 

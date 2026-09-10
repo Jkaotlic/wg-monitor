@@ -81,7 +81,7 @@ export function DiagTab({ routerID, asleep }) {
 
       <div class="stat-grid">
         <Stat
-          label="туннели"
+          label="VPN-туннели"
           value={data.tunnels.length ? `${tunnelsAlive} из ${data.tunnels.length}` : null}
           note={data.tunnels.length ? 'на связи' : 'роутер не сообщил ни одного'}
           tone={data.tunnels.length && tunnelsAlive === 0 ? 'danger' : undefined}
@@ -144,13 +144,13 @@ export function DiagTab({ routerID, asleep }) {
       <Section title="Каким адресом видно снаружи">
         <div class="card">
           <DataRow
-            title="Напрямую, мимо туннеля"
+            title="Напрямую, мимо VPN-туннеля"
             code="check_direct"
             value={exits.direct || (direct.busy ? 'меряем…' : 'не измерен')}
             valueTone={exits.direct ? undefined : 'muted'}
           />
           <DataRow
-            title="Через туннель"
+            title="Через VPN-туннель"
             code="check_via_tunnel"
             value={exits.viaTunnel || (viaTunnel.busy ? 'меряем…' : 'не измерен')}
             valueTone={exits.viaTunnel ? undefined : 'muted'}

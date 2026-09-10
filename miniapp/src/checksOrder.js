@@ -7,9 +7,9 @@
 // проверок.
 const CHECK_ORDER = ['dns', 'external_reach', 'hydraroute', 'awg_manager', 'tunnels']
 
-// Строки `tunnel_*` отфильтрованы намеренно: это ЛИНИИ, и у них своё место на
+// Строки `tunnel_*` отфильтрованы намеренно: это VPN-ТУННЕЛИ, и у них своё место на
 // экране. Бэкенд кладёт их в `checks` наравне со службами, поэтому без фильтра
-// каждая линия отрисовалась бы дважды -- разом и линией, и «службой».
+// каждый VPN-туннель отрисовался бы дважды -- разом и VPN-туннелем, и «службой».
 export function orderChecks(checks) {
   return (checks ?? [])
     .filter((c) => c?.check_name && !c.check_name.startsWith('tunnel_'))

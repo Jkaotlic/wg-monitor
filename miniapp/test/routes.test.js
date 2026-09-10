@@ -434,20 +434,20 @@ describe('tunnelRuleSummary', () => {
   // открыл экран узнать, куда ходит его трафик, читает первое и спотыкается
   // о второе.
   it('говорит сколько идёт через линию, без механизмов', () => {
-    expect(tunnelRuleSummary({ total: 26, policyRules: 26, hrNeo: 26 })).toBe('26 правил идут через неё')
-    expect(tunnelRuleSummary({ total: 31, policyRules: 26, hrNeo: 27 })).toBe('31 правило идёт через неё')
+    expect(tunnelRuleSummary({ total: 26, policyRules: 26, hrNeo: 26 })).toBe('26 правил идут через него')
+    expect(tunnelRuleSummary({ total: 31, policyRules: 26, hrNeo: 27 })).toBe('31 правило идёт через него')
   })
 
   it('склоняется по числу', () => {
-    expect(tunnelRuleSummary({ total: 1, policyRules: 0, hrNeo: 0 })).toBe('1 правило идёт через неё')
-    expect(tunnelRuleSummary({ total: 2, policyRules: 0, hrNeo: 0 })).toBe('2 правила идут через неё')
-    expect(tunnelRuleSummary({ total: 5, policyRules: 0, hrNeo: 0 })).toBe('5 правил идут через неё')
+    expect(tunnelRuleSummary({ total: 1, policyRules: 0, hrNeo: 0 })).toBe('1 правило идёт через него')
+    expect(tunnelRuleSummary({ total: 2, policyRules: 0, hrNeo: 0 })).toBe('2 правила идут через него')
+    expect(tunnelRuleSummary({ total: 5, policyRules: 0, hrNeo: 0 })).toBe('5 правил идут через него')
   })
 
   // Пустая линия -- тоже ответ, и молчать о ней нельзя: человек должен
   // видеть, что она заведена, но ничего не несёт.
   it('пустая линия говорит об этом прямо', () => {
-    expect(tunnelRuleSummary({ total: 0, policyRules: 0, hrNeo: 0 })).toBe('через неё пока ничего не идёт')
+    expect(tunnelRuleSummary({ total: 0, policyRules: 0, hrNeo: 0 })).toBe('через него пока ничего не идёт')
   })
 })
 
@@ -461,7 +461,7 @@ describe('policyRuleSummary', () => {
   })
 
   it('называет движок, только когда он покрывает часть правил', () => {
-    expect(policyRuleSummary({ rules: 10, hrNeo: 4 })).toBe('10 правил · 4 через HR Neo')
+    expect(policyRuleSummary({ rules: 10, hrNeo: 4 })).toBe('10 правил · 4 через HydraRoute Neo')
   })
 
   it('политика без правил', () => {
@@ -596,11 +596,13 @@ describe('подписи в списке правил', () => {
     const text = tunnelRuleSummary({ total: 36, policyRules: 32, hrNeo: 28 })
     expect(text).toMatch(/36/)
     expect(text).not.toMatch(/политик/i)
-    expect(text).not.toMatch(/HR Neo/i)
+    expect(text).not.toMatch(/HydraRoute|HR Neo/i)
+    // Словарь приложения: VPN-туннель не зовётся «линией».
+    expect(text).not.toMatch(/лини/i)
   })
 
-  it('движок правила называется HR Neo, а не hydraroute', () => {
-    expect(ruleBackendLabel('hydraroute')).toBe('HR Neo')
+  it('движок правила называется HydraRoute Neo, а не hydraroute', () => {
+    expect(ruleBackendLabel('hydraroute')).toBe('HydraRoute Neo')
     // Незнакомый движок эхом, а не проглочен -- то же правило честности,
     // что у checkLabel в labels.js.
     expect(ruleBackendLabel('ndms')).toBe('ndms')

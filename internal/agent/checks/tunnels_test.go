@@ -695,6 +695,12 @@ func TestTunnelsCheck_IdleTunnelAnsweringMatrixIsNotDown(t *testing.T) {
 		if c.Status != "ok" {
 			t.Fatalf("линия ответила матрице только что -- она живая, а не упавшая: %+v", c)
 		}
+		// Пометку проверки читает владелец -- словарь приложения: VPN-туннель
+		// и обмен ключами, а не линия и рукопожатие.
+		note, _ := c.Details["note"].(string)
+		if !strings.Contains(note, "VPN-туннель") || strings.Contains(note, "лини") || strings.Contains(note, "рукопожат") {
+			t.Fatalf("пометка говорит не словарём приложения: %q", note)
+		}
 		return
 	}
 	t.Fatalf("проверка tunnel_awg10 не выпущена; получили: %+v", out)

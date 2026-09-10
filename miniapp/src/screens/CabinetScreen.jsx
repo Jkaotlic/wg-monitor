@@ -38,7 +38,7 @@ export function CabinetScreen({ routerID, asleep, onClose, onIssued }) {
           setPhase('done')
           setOutcome(
             res.status === 'ok'
-              ? `Конфиг выпущен и импортирован как «${name}». Он появится в списке туннелей.`
+              ? `Конфиг выпущен и импортирован как «${name}». Он появится в списке VPN-туннелей.`
               : `Роутер не принял конфиг: ${res.output || res.status}`,
           )
           if (res.status === 'ok') onIssued?.()
@@ -46,7 +46,7 @@ export function CabinetScreen({ routerID, asleep, onClose, onIssued }) {
         }
       }
       setPhase('done')
-      setOutcome('Конфиг выпущен, но роутер пока не подтвердил импорт. Откройте экран туннелей позже.')
+      setOutcome('Конфиг выпущен, но роутер пока не подтвердил импорт. Откройте экран VPN-туннелей позже.')
     } catch (err) {
       setPhase('done')
       setOutcome(`Кабинет отказал: ${err.message}`)
@@ -54,7 +54,7 @@ export function CabinetScreen({ routerID, asleep, onClose, onIssued }) {
   }
 
   return (
-    <Overlay title="Кабинеты провайдеров" backLabel={pending ? 'Назад' : 'Линии'} onBack={pending ? () => { setPending(null); setPhase('idle') } : onClose}>
+    <Overlay title="Кабинеты провайдеров" backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={pending ? () => { setPending(null); setPhase('idle') } : onClose}>
       <div class="screen">
         {error && <p class="state state-error">{error}</p>}
         {accounts == null && !error && <p class="state">Спрашиваем кабинеты…</p>}
@@ -66,7 +66,7 @@ export function CabinetScreen({ routerID, asleep, onClose, onIssued }) {
               <DataRow title="Выпускаем" code={pending.option.id} value={pending.option.label} />
               <p class="card-foot">
                 Конфиг скачает сервер и сразу отдаст его роутеру — через приложение он не
-                проходит. На роутере появится новый туннель; прежние остаются на месте.
+                проходит. На роутере появится новый VPN-туннель; прежние остаются на месте.
                 {pending.option.note ? ' Этот конфиг уже выпускался: он будет перевыпущен, и старый перестанет работать.' : ''}
               </p>
             </div>

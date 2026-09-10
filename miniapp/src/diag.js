@@ -168,7 +168,7 @@ function reachRow(check) {
 
 function hydraRow(check) {
   const f = check.facts
-  // sing-box отменяет сам вопрос: маршрут выбирает он, а HR Neo в этот момент
+  // sing-box отменяет сам вопрос: маршрут выбирает он, а HydraRoute Neo в этот момент
   // ни при чём -- и «нет» здесь было бы враньём о поломке, которой нет.
   if (f?.singbox_router_active) {
     return { answer: 'не нужен', tone: 'muted', value: 'маршрутом занят sing-box' }
@@ -177,7 +177,7 @@ function hydraRow(check) {
   const n = f.routes_hr_neo
   return {
     answer: check.status === 'ok' ? 'да' : 'нет',
-    value: `${n} ${pluralRu(n, 'правило', 'правила', 'правил')} HR Neo`,
+    value: `${n} ${pluralRu(n, 'правило', 'правила', 'правил')} HydraRoute Neo`,
   }
 }
 
@@ -209,7 +209,7 @@ const ROW_TITLES = {
   external_reach: 'Сайты снаружи отвечают',
   hydraroute: 'Обход блокировок работает',
   awg_manager: 'Панель роутера отвечает',
-  tunnels: 'Линии на связи',
+  tunnels: 'VPN-туннели на связи',
   agent_heartbeat: 'Роутер отчитался о себе',
 }
 
@@ -312,13 +312,13 @@ export function exitCompare(directOutput, tunnelOutput) {
       direct,
       viaTunnel,
       works: false,
-      verdict: 'Снаружи виден тот же адрес, что и без туннеля: подмены нет, трафик идёт мимо VPN.',
+      verdict: 'Снаружи виден тот же адрес, что и без VPN-туннеля: подмены нет, трафик идёт мимо VPN.',
     }
   }
   return {
     direct,
     viaTunnel,
     works: true,
-    verdict: 'Адреса разные — обход работает: через линию наружу виден адрес VPN-сервера.',
+    verdict: 'Адреса разные — обход работает: через VPN-туннель наружу виден адрес VPN-сервера.',
   }
 }

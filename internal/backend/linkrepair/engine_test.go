@@ -303,11 +303,58 @@ func TestRun_NotificationUsesLineNames(t *testing.T) {
 	if strings.Contains(text, "awg12") || strings.Contains(text, "awg10") {
 		t.Fatalf("в личку ушёл идентификатор линии: %q", text)
 	}
+	// «Линия» отменена владельцем проекта: в каждом упоминании -- полная
+	// форма «VPN-туннель», и имя стоит за ней в ёлочках.
+	if !strings.Contains(text, "VPN-туннель «Дача»") {
+		t.Fatalf("владелец читает «VPN-туннель «Дача»»: %q", text)
+	}
+	if strings.Contains(strings.ToLower(text), "лини") {
+		t.Fatalf("«линия» в отчёте о починке: %q", text)
+	}
 	// Шаг на экране починки -- то же правило: человек видит его в приложении.
 	for _, st := range job.Steps {
 		if strings.Contains(st.Detail, "awg10") {
 			t.Fatalf("шаг %q показывает идентификатор: %q", st.Name, st.Detail)
 		}
+		if strings.Contains(strings.ToLower(st.Detail), "лини") {
+			t.Fatalf("шаг %q говорит «линия»: %q", st.Name, st.Detail)
+		}
+	}
+}
+
+// У отчёта четыре исхода, а сценарий выше проходит один. Каждый уходит в
+// личку, и в каждом VPN-туннель назван полной формой с именем в ёлочках.
+// Причина провала тоже уходит туда же -- поэтому и ошибки движка под сторожем.
+func TestNotifyResult_AllOutcomesSpeakVPNTunnel(t *testing.T) {
+	cases := []struct {
+		name  string
+		ok    bool
+		names lineNames
+		want  []string
+	}{
+		{"починил через резерв", true, lineNames{broken: "Дача", backup: "Работа"}, []string{"VPN-туннель «Дача»", "VPN-туннель «Работа»"}},
+		{"починил без резерва", true, lineNames{broken: "Дача"}, []string{"VPN-туннель «Дача»"}},
+		{"не поднял, резерв держит", false, lineNames{broken: "Дача", backup: "Работа"}, []string{"VPN-туннель «Дача»", "VPN-туннель «Работа»"}},
+		{"не поднял, резерва нет", false, lineNames{broken: "Дача"}, []string{"VPN-туннель «Дача»"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			d := Deps{Notify: func(_ context.Context, _ int64, text string) { got = text }}
+			var cause error
+			if !tc.ok {
+				cause = ErrUnknownOrigin
+			}
+			d.notifyResult(context.Background(), StartReq{RouterID: 1, CheckName: "tunnel_awg12"}, tc.ok, tc.names, cause)
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("нет %q в %q", w, got)
+				}
+			}
+			if strings.Contains(strings.ToLower(got), "лини") {
+				t.Errorf("«линия» в отчёте о починке: %q", got)
+			}
+		})
 	}
 }
 

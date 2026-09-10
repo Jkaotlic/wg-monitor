@@ -6,11 +6,11 @@ describe('stepTitle', () => {
   // роутере: он смотрит на этот список, пока линия меняется под ним.
   it('каждый шаг назван последствием', () => {
     expect(stepTitle('issue')).toBe('Выпускаем конфиг у провайдера')
-    expect(stepTitle('import')).toBe('Поднимаем новую линию рядом с прежней')
-    expect(stepTitle('handshake')).toBe('Ждём, когда новая линия обменяется ключами')
-    expect(stepTitle('promote')).toBe('Переводим правила на новую линию')
+    expect(stepTitle('import')).toBe('Поднимаем новый VPN-туннель рядом с прежним')
+    expect(stepTitle('handshake')).toBe('Ждём, когда новый VPN-туннель обменяется ключами')
+    expect(stepTitle('promote')).toBe('Переводим правила на новый VPN-туннель')
     expect(stepTitle('verify')).toBe('Проверяем, каким адресом видно снаружи')
-    expect(stepTitle('retire')).toBe('Выключаем прежнюю линию')
+    expect(stepTitle('retire')).toBe('Выключаем прежний VPN-туннель')
   })
 
   it('незнакомый шаг показывается как есть, а не теряется', () => {
@@ -28,7 +28,7 @@ describe('replaceView', () => {
       { name: 'handshake', status: 'pending' },
     ]))
     expect(v.running).toBe(true)
-    expect(v.current.title).toBe('Поднимаем новую линию рядом с прежней')
+    expect(v.current.title).toBe('Поднимаем новый VPN-туннель рядом с прежним')
     expect(v.steps).toHaveLength(3)
     expect(v.steps[0].tone).toBe('ok')
     expect(v.steps[1].tone).toBe('sig')
@@ -36,7 +36,7 @@ describe('replaceView', () => {
   })
 
   it('успех говорит, чем всё кончилось', () => {
-    const v = replaceView(job('success', [{ name: 'retire', status: 'done' }], 'готово: политика идёт через amnezia_nl'))
+    const v = replaceView(job('success', [{ name: 'retire', status: 'done' }], 'готово: общий набор «HydraRoute» идёт через «amnezia_nl»'))
     expect(v.running).toBe(false)
     expect(v.tone).toBe('ok')
     expect(v.headline).toContain('amnezia_nl')
@@ -47,10 +47,10 @@ describe('replaceView', () => {
   it('провал называет причину и состояние отката', () => {
     const v = replaceView(job('failed', [
       { name: 'verify', status: 'failed', detail: 'снаружи виден тот же адрес' },
-    ], 'снаружи виден тот же адрес (203.0.113.7): подмены нет. Откат: политика возвращена прежнему туннелю'))
+    ], 'снаружи виден тот же адрес, что и напрямую (203.0.113.7): трафик в обход не пошёл. Откат: общий набор снова идёт через прежний VPN-туннель'))
     expect(v.tone).toBe('danger')
     expect(v.headline).toContain('тот же адрес')
-    expect(v.rollback).toContain('политика возвращена')
+    expect(v.rollback).toContain('общий набор снова идёт')
   })
 
   it('замен не было — экран показывает форму, а не пустой список', () => {

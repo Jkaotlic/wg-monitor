@@ -7,7 +7,7 @@ import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 
-// Мастер замены конфига линии.
+// Мастер замены конфига VPN-туннеля.
 //
 // Экран не владеет операцией: она идёт в бэкенде и переживает его закрытие.
 // Поэтому при открытии он первым делом спрашивает, не идёт ли замена уже --
@@ -68,12 +68,12 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
   const showForm = view.idle && !starting
 
   return (
-    <Overlay title="Заменить конфиг" backLabel="Линии" onBack={onClose}>
+    <Overlay title="Заменить конфиг" backLabel="VPN-туннели" onBack={onClose}>
       <div class="screen">
         <h1 class="screen-title">Заменить конфиг «{tunnel.name}»</h1>
         <p class="router-lastseen">
-          Новая линия встанет рядом, и только когда она заработает, правила «{policyName}»
-          перейдёт на него. Прежний останется на роутере выключенным.
+          Новый VPN-туннель встанет рядом, и только когда он заработает, правила «{policyName}»
+          перейдут на него. Прежний останется на роутере выключенным.
         </p>
 
         {error && <p class="state state-error">{error}</p>}
@@ -121,9 +121,9 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
                   сверять не с чем. У политики опознаётся она сама -- по имени. */}
               <DataRow title="Набор правил" value={policyName} />
               <p class="card-foot">
-                Шесть шагов: выпустить настройки, поднять новую линию рядом, дождаться
+                Шесть шагов: выпустить настройки, поднять новый VPN-туннель рядом, дождаться
                 обмена ключами, перевести правила, проверить адрес выхода и только потом выключить
-                прежнюю. Не сработает любой шаг — откат вернёт всё как было, а прежняя линия
+                прежний. Не сработает любой шаг — откат вернёт всё как было, а прежний VPN-туннель
                 никуда не денется.
               </p>
             </div>

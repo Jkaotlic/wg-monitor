@@ -158,15 +158,16 @@ func ownerReads(job provision.Job, notes []string) []string {
 	return append(out, notes...)
 }
 
-// assertOwnerVocabulary -- словарь приложения. Там это линия с именем,
+// assertOwnerVocabulary -- словарь приложения. Там это VPN-туннель с именем,
 // которое дал владелец, а идентификатор («awg21») -- мелкая подпись; общий
-// набор правил, а не политика; обмен ключами, а не рукопожатие. Человек
+// набор правил, а не политика; обмен ключами, а не рукопожатие. «Линия»
+// отменена владельцем проекта: в каждом упоминании -- «VPN-туннель». Человек
 // переходит из сообщения в приложение и обязан найти там то, о чём читал.
 func assertOwnerVocabulary(t *testing.T, texts []string) {
 	t.Helper()
 	for _, text := range texts {
 		low := strings.ToLower(text)
-		for _, bad := range []string{"awg21", "awg11", "туннел", "политик", "рукопожат"} {
+		for _, bad := range []string{"awg21", "awg11", "лини", "политик", "рукопожат"} {
 			if strings.Contains(low, bad) {
 				t.Errorf("человек читает %q: %q", bad, text)
 			}
@@ -241,8 +242,8 @@ func TestReplace_HappyPath(t *testing.T) {
 		t.Fatalf("происхождение конфига не записано: %+v", origin.rows)
 	}
 	got := notes.wait(t, 1)
-	// Новую линию владелец найдёт в приложении по имени, а не по id=awg21.
-	if len(got) != 1 || !strings.Contains(got[0], "«amnezia_nl»") {
+	// Новый VPN-туннель владелец найдёт в приложении по имени, а не по id=awg21.
+	if len(got) != 1 || !strings.Contains(got[0], "VPN-туннель «amnezia_nl»") {
 		t.Fatalf("в личку не ушло внятное уведомление: %+v", got)
 	}
 	assertOwnerVocabulary(t, ownerReads(job, got))
@@ -263,7 +264,7 @@ func TestReplace_NoHandshakeRollsBack(t *testing.T) {
 	if job.State != provision.StateFailed {
 		t.Fatalf("state=%s", job.State)
 	}
-	if !strings.Contains(job.Hint, "обменялась ключами") {
+	if !strings.Contains(job.Hint, "обменялся ключами") {
 		t.Fatalf("подсказка не называет причину: %q", job.Hint)
 	}
 	assertOwnerVocabulary(t, ownerReads(job, notes.wait(t, 1)))

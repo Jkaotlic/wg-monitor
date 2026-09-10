@@ -10,7 +10,7 @@ import { ListRow } from '../ui/ListRow.jsx'
 import { Chip } from '../ui/Chip.jsx'
 
 // «Отправить в туннель» -- три шага в одном экране: куда, что и что из этого
-// выйдет. Порядок именно такой, потому что первым оператор выбирает линию, а
+// выйдет. Порядок именно такой, потому что первым оператор выбирает VPN-туннель, а
 // не механизм: вопрос "DNS или static" на этом экране не задаётся вовсе, он
 // читается из того, что человек написал (parseManualTargets).
 //
@@ -138,7 +138,7 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
               </ul>
             ) : (
               <div class="card">
-                <p class="traffic-detail">Роутер не сообщил ни одной своей линии — отправлять некуда.</p>
+                <p class="traffic-detail">Роутер не сообщил ни одного своего VPN-туннеля — отправлять некуда.</p>
               </div>
             )}
           </Section>

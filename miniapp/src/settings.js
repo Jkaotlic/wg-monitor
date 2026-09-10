@@ -18,7 +18,7 @@ function checksCount(n) {
 // роутера не может ни найти его, ни изменить. Экран говорит об этом словами,
 // а ключ рядом с числом остаётся шумом.
 //
-// Имена программ на самом роутере -- другое дело: «awg-manager» и «HR Neo»
+// Имена программ на самом роутере -- другое дело: «awg-manager» и «HydraRoute Neo»
 // человек видит в его собственной панели, и подпись помогает их узнать
 // (auditRows ниже).
 export function thresholdRows(settings) {
@@ -88,7 +88,7 @@ export function auditRows(output) {
     rows.push({
       key: 'hrneo',
       title: 'Обход блокировок',
-      code: 'HR Neo',
+      code: 'HydraRoute Neo',
       value: audit.hrneo_version || 'установлен',
       sub: audit.hrneo_running ? 'работает' : 'установлен, но не работает',
       tone: audit.hrneo_running ? 'ok' : 'warn',

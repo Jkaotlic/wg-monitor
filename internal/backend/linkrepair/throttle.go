@@ -68,7 +68,7 @@ func (a Attempts) Allow(nickname, checkName string) (bool, string) {
 		}
 	}
 	if fresh >= attemptLimit {
-		return false, fmt.Sprintf("линию уже чинили %d раза за 6 часов — дело не в ней", fresh)
+		return false, fmt.Sprintf("VPN-туннель уже чинили %d раза за 6 часов — дело не в нём", fresh)
 	}
 	return true, ""
 }

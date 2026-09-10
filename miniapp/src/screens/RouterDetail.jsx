@@ -185,7 +185,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           touch the router, so a muted tunnel incident must not lose the one
           button that can actually fix it. */}
       {/* Починка идёт первой и выглядит главной: она уводит трафик на резерв,
-          перевыпускает конфиг и возвращает линию на место. Перезапуск остаётся
+          перевыпускает конфиг и возвращает VPN-туннель на место. Перезапуск остаётся
           рядом как ручной инструмент -- он бесполезен, когда мертва удалённая
           сторона, но полезен, когда подвис сам туннель. */}
       {tunnelID && (
@@ -212,7 +212,7 @@ function IncidentCard({ routerID, incident, onUpdate, asleep, onDone, openSheet,
           args={{ tunnel_id: tunnelID }}
           label={ACTION_LABELS.restartTunnel}
           busyLabel="Перезапускаю…"
-          mutatingText={`Перезапустить ${checkLabel(incident.check_name).toLowerCase()}? Связь через него на несколько секунд прервётся.`}
+          mutatingText={`Перезапустить ${checkLabel(incident.check_name)}? Связь через него на несколько секунд прервётся.`}
           asleep={asleep}
           wrapClass="restart-block"
           onDone={onDone}
@@ -318,7 +318,7 @@ function QuickActions({ routerID, tunnels, traffic, asleep, onDone, openSheet, o
                 confirmSheet({
                   routerID,
                   title: ACTION_LABELS.restartTunnel,
-                  body: `Перезапустить туннель ${egress.name || egress.tunnel_id}? Связь через него на несколько секунд прервётся.`,
+                  body: `Перезапустить VPN-туннель «${egress.name || egress.tunnel_id}»? Связь через него на несколько секунд прервётся.`,
                   action: 'tunnel_restart',
                   args: { tunnel_id: egress.tunnel_id },
                   buttonLabel: 'Да, выполнить',
@@ -487,7 +487,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
       <h2 class="section-title">Проверить сейчас</h2>
       <div class="card">
         <p class="traffic-detail">
-          Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через линию обхода и напрямую.
+          Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через VPN-туннель обхода и напрямую.
         </p>
 
         {singboxMode && (
@@ -530,10 +530,10 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
         )}
 
         {!busy && !singboxMode && sameIP && (
-          <p class="compare-note compare-note-alert">Адреса совпадают — трафик идёт мимо туннеля.</p>
+          <p class="compare-note compare-note-alert">Адреса совпадают — трафик идёт мимо VPN-туннеля.</p>
         )}
         {!busy && !singboxMode && bothIPs && !sameIP && (
-          <p class="compare-note compare-note-good">Адреса разные — трафик действительно идёт через линию.</p>
+          <p class="compare-note compare-note-good">Адреса разные — трафик действительно идёт через VPN-туннель.</p>
         )}
       </div>
     </section>
@@ -673,7 +673,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   // routerHeadline: молчащий роутер перебивает любое другое показание.
   const headline = routerHeadline({ router, traffic, incidents, tunnels })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
-  // Резерв -- любая работающая линия, кроме той, что несёт обход сейчас.
+  // Резерв -- любой работающий VPN-туннель, кроме того, что несёт обход сейчас.
   const backupLine = tunnels.find(
     (t) => t.run_state === 'running' && (t.name || t.tunnel_id) !== path.via,
   )
@@ -702,7 +702,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
       {/* Два показания, ради которых экран открывают чаще всего. */}
       <div class="stat-grid" style="margin-top:12px">
-        {/* На молчащем роутере число поднятых линий -- это данные на момент
+        {/* На молчащем роутере число поднятых VPN-туннелей -- это данные на момент
             последнего отчёта, а не сейчас. Показать их как текущее показание
             значило бы соврать ровно тем способом, против которого написана
             половина этого приложения: цифра выглядит достоверной именно
@@ -727,29 +727,29 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
           tone={path.latencyMs != null && path.latencyMs >= 300 ? 'warn' : undefined}
         />
         <Stat
-          label="линий поднято"
+          label="VPN-туннели"
           value={headline.stale || !tunnels.length ? null : liveCount}
           note={
             headline.stale
               ? 'роутер молчит — данные устарели'
               : tunnels.length
-                ? `из ${tunnels.length} настроенных`
-                : 'роутер не сообщил туннели'
+                ? `поднято из ${tunnels.length} настроенных`
+                : 'роутер не сообщил ни одного'
           }
           tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
         />
       </div>
-      {/* Резерв -- ответ на вопрос «а если эта линия ляжет». Раньше его не было
+      {/* Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не было
           нигде, и человек узнавал ответ в момент падения. */}
       <div class="card row" style="margin-top:12px">
         <div>
-          <div class="row-title">{backupLine ? 'Запасная линия готова' : 'Запасной линии нет'}</div>
+          <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
           <div class="row-note">
             {backupLine
               ? backupLine.name
-                ? `«${backupLine.name}» подхватит, если эта замолчит`
-                : 'вторая линия подхватит, если эта замолчит'
-              : 'если линия ляжет, обход блокировок пропадёт до починки'}
+                ? `«${backupLine.name}» подхватит, если этот замолчит`
+                : 'второй VPN-туннель подхватит, если этот замолчит'
+              : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'}
           </div>
         </div>
         <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
@@ -780,7 +780,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
 
 
       <div style="margin-top:20px">
-        <NavCard title="Линии и резерв" note={`${tunnels.length} лин.`} onClick={() => onTab?.('tunnels')} />
+        <NavCard title="VPN-туннели и резерв" note={`${tunnels.length} шт.`} onClick={() => onTab?.('tunnels')} />
       </div>
 
       <QuickActions

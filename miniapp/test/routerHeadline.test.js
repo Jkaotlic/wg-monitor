@@ -96,21 +96,21 @@ describe('routerHeadline', () => {
   })
 })
 
-// Строка под корпусом роутера считала линии в две формы -- «1 линия» и всё
-// остальное «линии». На нуле выходило «0 линии из 2»: в приложении, где
+// Строка под корпусом роутера считала VPN-туннели в две формы -- «1 VPN-туннель»
+// и всё остальное «VPN-туннеля». На нуле выходило «0 VPN-туннеля из 2»: в приложении, где
 // человек сверяет показания с роутером, сломанное склонение читается как
 // сломанные данные.
 describe('linesSummary', () => {
-  it('склоняет линии по-русски', () => {
-    expect(linesSummary(0, 2)).toBe('0 линий из 2')
-    expect(linesSummary(1, 2)).toBe('1 линия из 2')
-    expect(linesSummary(2, 3)).toBe('2 линии из 3')
-    expect(linesSummary(5, 7)).toBe('5 линий из 7')
-    expect(linesSummary(21, 30)).toBe('21 линия из 30')
+  it('склоняет VPN-туннели по-русски', () => {
+    expect(linesSummary(0, 2)).toBe('0 VPN-туннелей из 2')
+    expect(linesSummary(1, 2)).toBe('1 VPN-туннель из 2')
+    expect(linesSummary(2, 3)).toBe('2 VPN-туннеля из 3')
+    expect(linesSummary(5, 7)).toBe('5 VPN-туннелей из 7')
+    expect(linesSummary(21, 30)).toBe('21 VPN-туннель из 30')
   })
 
   it('без туннелей говорит прямо, а не «0 из 0»', () => {
-    expect(linesSummary(0, 0)).toBe('Туннелей нет')
+    expect(linesSummary(0, 0)).toBe('VPN-туннелей нет')
   })
 })
 

@@ -19,12 +19,12 @@ const SHOTS = [
     name: 'sheet',
     overlay: true,
     steps: async (page) => {
-      await page.getByRole('button', { name: 'Перезапустить туннель' }).first().click({ timeout: 2000 })
+      await page.getByRole('button', { name: 'Перезапустить VPN-туннель' }).first().click({ timeout: 2000 })
     },
   },
-  // exact: обычное имя ловит ещё и карточку перехода "Туннели и резерв" на
+  // exact: обычное имя ловит ещё и карточку перехода "VPN-туннели и резерв" на
   // главном экране, и снимок падал на неоднозначности.
-  { name: 'tunnels', steps: async (page) => page.getByRole('button', { name: 'Туннели', exact: true }).click() },
+  { name: 'tunnels', steps: async (page) => page.getByRole('button', { name: 'VPN-туннели', exact: true }).click() },
   // Диагностика открывается сразу: числа берутся из того, что роутер уже
   // прислал, и команда нужна только чтобы переспросить.
   {
@@ -60,7 +60,7 @@ const SHOTS = [
     name: 'routes',
     overlay: true,
     steps: async (page) => {
-      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: 'VPN-туннели', exact: true }).click()
       await page.getByRole('button', { name: /Маршруты|Что уходит/ }).first().click({ timeout: 2000 })
       await page.waitForTimeout(900)
     },
@@ -69,7 +69,7 @@ const SHOTS = [
     name: 'route-catalog',
     overlay: true,
     steps: async (page) => {
-      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: 'VPN-туннели', exact: true }).click()
       await page.getByRole('button', { name: /Маршруты|Что уходит/ }).first().click({ timeout: 2000 })
       await page.waitForTimeout(900)
       await page.getByRole('button', { name: 'Отправить в туннель' }).first().click()
@@ -81,9 +81,9 @@ const SHOTS = [
     name: 'replace-running',
     overlay: true,
     steps: async (page) => {
-      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: 'VPN-туннели', exact: true }).click()
       await page.waitForTimeout(800)
-      await page.getByRole('button', { name: /Заменить конфиг линии/ }).click()
+      await page.getByRole('button', { name: /Заменить конфиг VPN-туннеля/ }).click()
       await page.waitForTimeout(700)
       await page.locator('.overlay').last().getByRole('button', { name: /Нидерланды/ }).click()
       await page.waitForTimeout(300)
@@ -95,9 +95,9 @@ const SHOTS = [
     name: 'cabinet',
     overlay: true,
     steps: async (page) => {
-      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: 'VPN-туннели', exact: true }).click()
       await page.waitForTimeout(800)
-      await page.getByRole('button', { name: /Новая линия из кабинета/ }).click()
+      await page.getByRole('button', { name: /Новый VPN-туннель из кабинета/ }).click()
       await page.waitForTimeout(800)
     },
   },
@@ -123,7 +123,7 @@ const SHOTS = [
     name: 'route-preview-blocked',
     overlay: true,
     steps: async (page) => {
-      await page.getByRole('button', { name: 'Туннели', exact: true }).click()
+      await page.getByRole('button', { name: 'VPN-туннели', exact: true }).click()
       await page.getByRole('button', { name: /Маршруты|Что уходит/ }).first().click({ timeout: 2000 })
       await page.waitForTimeout(900)
       await page.getByRole('button', { name: 'Отправить в туннель' }).first().click()

@@ -26,7 +26,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
   const s = pathState({ traffic, incidents, tunnels, stale })
   const t = TONE[s.tunnel]
   const d = TONE[s.direct]
-  const viaLabel = s.via || 'линия'
+  const viaLabel = s.via || 'VPN-туннель'
 
   return (
     <svg
@@ -34,7 +34,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
       width="100%"
       class="traffic-path"
       role="img"
-      aria-label={`Схема: заблокированное идёт через линию «${viaLabel}», остальное напрямую`}
+      aria-label={`Схема: заблокированное идёт через ${s.via ? `VPN-туннель «${s.via}»` : 'VPN-туннель'}, остальное напрямую`}
     >
       <rect x="103" y="2" width="136" height="42" rx="12" fill="var(--surf2)" stroke="var(--line)" />
       <g stroke="var(--dim)" stroke-width="1.4" fill="none" stroke-linecap="round">
@@ -51,7 +51,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
       <circle cx="133" cy="86" r="4" fill={stale ? 'var(--dim)' : 'var(--ok)'} />
       <text x="145" y="91" fill="var(--ink)" font-size="13" font-weight="600">Роутер</text>
 
-      {/* Ветка обхода: рвётся пунктиром, когда линия не отвечает. */}
+      {/* Ветка обхода: рвётся пунктиром, когда VPN-туннель не отвечает. */}
       <path
         d="M171 106v14c0 8-7 10-14 10H96c-8 0-12 4-12 12v10"
         stroke={t.stroke}
@@ -68,7 +68,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
 
       <rect x="2" y="152" width="164" height="78" rx="14" fill={t.fill} stroke={t.border} />
       <text x="16" y="174" fill={t.label} font-family="var(--font-mono)" font-size="10" letter-spacing="0.06em">
-        {s.tunnel === 'down' ? 'ЛИНИЯ МОЛЧИТ' : 'ЧЕРЕЗ ЛИНИЮ'}
+        {s.tunnel === 'down' ? 'VPN-ТУННЕЛЬ МОЛЧИТ' : 'ЧЕРЕЗ VPN-ТУННЕЛЬ'}
       </text>
       <text x="16" y="195" fill="var(--ink)" font-size="14" font-weight="600">{viaLabel}</text>
       <text x="16" y="215" fill={s.tunnel === 'down' ? t.label : 'var(--dim)'} font-size="11.5">
@@ -79,7 +79,7 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
       <text x="190" y="174" fill={stale ? 'var(--dim)' : 'var(--ok)'} font-family="var(--font-mono)" font-size="10" letter-spacing="0.06em">
         {stale ? 'НЕИЗВЕСТНО' : 'НАПРЯМУЮ'}
       </text>
-      <text x="190" y="195" fill="var(--ink)" font-size="14" font-weight="600">Без туннеля</text>
+      <text x="190" y="195" fill="var(--ink)" font-size="14" font-weight="600">Без VPN-туннеля</text>
       <text x="190" y="215" fill="var(--dim)" font-size="11.5">банки, госуслуги, ТВ</text>
     </svg>
   )

@@ -41,7 +41,7 @@ func TestFanout_SendsToEveryRecipient(t *testing.T) {
 	}
 
 	s := &fakeSender{}
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "линия упала", "HTML")
+	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "VPN-туннель упал", "HTML")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestFanout_OneFailureDoesNotStopTheRest(t *testing.T) {
 		Method: "sendMessage", Code: 403,
 		Description: "Forbidden: bot can't initiate conversation with a user",
 	}}}
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "линия упала", "HTML")
+	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "VPN-туннель упал", "HTML")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -146,7 +146,7 @@ func TestFanout_SendTrackedRemembersEachMessage(t *testing.T) {
 	}
 
 	s := &fakeKeyboardSender{}
-	n, err := NewFanout(d, s, quietLogger()).SendTracked(context.Background(), router, "tunnel_awg0", "линия упала", "HTML", &tg.InlineKeyboardMarkup{})
+	n, err := NewFanout(d, s, quietLogger()).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{})
 	if err != nil {
 		t.Fatal(err)
 	}

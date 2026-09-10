@@ -15,12 +15,12 @@ import { NavCard } from '../ui/NavCard.jsx'
 import { CabinetScreen } from './CabinetScreen.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
 
-// Туннели: какая линия несёт трафик, кто подхватит, если она замолчит, и что
+// VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
 // полей в снимке.
 //
-// Маршруты уехали отсюда на свой экран: сначала человек спрашивает "какая
-// линия поднята", и только потом -- "что через неё идёт".
+// Маршруты уехали отсюда на свой экран: сначала человек спрашивает "какой
+// VPN-туннель поднят", и только потом -- "что через него идёт".
 // Заголовок строки в цепочке. «Выключен вручную» на упавшем звене был
 // докладом о чужом решении там, где случилась поломка -- а это два разных
 // вывода и два разных действия.
@@ -51,7 +51,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
 
   const view = tunnelsView(snapshot)
   const phase = snapshotState({ busy, error, result, snapshot })
-  // Обмен подтягивается сам, как только известна активная линия. Раньше он
+  // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
   // человека работу, которую мог сделать сам. Ряд роутер ведёт всё равно;
   // кнопка осталась способом пересчитать принудительно.
@@ -68,7 +68,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   // NDMS-интерфейсы, и у opkg-туннеля кнопки не было вовсе -- хотя половина
   // туннелей живого роутера именно такие.
   //
-  // Активную линию отсюда не выключают: она несёт трафик прямо сейчас, и
+  // Активный VPN-туннель отсюда не выключают: он несёт трафик прямо сейчас, и
   // «выключить» на ней -- не переключатель, а обрыв. Для неё на главном
   // экране есть перезапуск.
   const toggleButton = (t) => {
@@ -115,7 +115,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             confirmSheet({
               routerID,
               title: `Перезапустить «${t.title ?? t.name}»?`,
-              body: `Линия включена, но не поднялась. Роутер опустит и снова поднимет интерфейс — если дело в зависшем соединении, это его чинит. Трафик по цепочке идёт мимо неё и сейчас.`,
+              body: `VPN-туннель включён, но не поднялся. Роутер опустит и снова поднимет интерфейс — если дело в зависшем соединении, это его чинит. Трафик по цепочке идёт мимо него и сейчас.`,
               action: 'tunnel_restart',
               args: { tunnel_id: t.tunnelID ?? t.id },
               buttonLabel: 'Перезапустить',
@@ -141,7 +141,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
   return (
     <div class="screen">
       <div class="router-header">
-        <h1 class="screen-title">Линии</h1>
+        <h1 class="screen-title">VPN-туннели</h1>
         <button type="button" class="btn btn-ghost" disabled={busy} onClick={() => run('route_status', {}, deadline)}>
           {busy ? 'Читаю…' : 'Обновить'}
         </button>
@@ -162,11 +162,11 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
       )}
 
       {view.active && (
-        <Section title="Линия, которая работает">
+        <Section title="VPN-туннель, который работает">
           <Hero>
             {/* Возраст рукопожатия живёт в плитке ниже. Повторять его здесь
                 значило бы назвать одно показание дважды и в разных единицах. */}
-            <StateTag>туннель поднят</StateTag>
+            <StateTag>VPN-туннель поднят</StateTag>
             <h2 class="traffic-title" style="margin-top:8px">{view.active.title}</h2>
             {/* Идентификатор и интерфейс -- инженерия: они стоят подписью под
                 именем, а не вместо него. */}
@@ -180,18 +180,18 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
                 value={view.active.handshakeAgeSec != null ? humanAge(view.active.handshakeAgeSec) : null}
                 note={view.active.handshakeAgeSec != null ? 'назад, канал живой' : 'роутер не сообщил'}
               />
-              <Stat label="несёт" value={view.active.rules} unit="назн." note={`политика ${view.policyName}`} />
+              <Stat label="несёт" value={view.active.rules} unit="назн." note={view.policyName ? `общий набор «${view.policyName}»` : undefined} />
             </div>
           </Hero>
         </Section>
       )}
 
       {snapshot && !view.active && (
-        <Section title="Линия, которая работает">
+        <Section title="VPN-туннель, который работает">
           <Hero cold>
-            <StateTag tone="danger">ни один туннель не несёт трафик</StateTag>
+            <StateTag tone="danger">ни один VPN-туннель не несёт трафик</StateTag>
             <p class="traffic-detail" style="padding-bottom:16px">
-              Трафик уходит через провайдера. Если так не задумано — поднимите линию на экране ниже.
+              Трафик уходит через провайдера. Если так не задумано — поднимите VPN-туннель на экране ниже.
             </p>
           </Hero>
         </Section>
@@ -235,8 +235,8 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             <Chain
               links={view.chain.map((c) => ({
                 ...c,
-                // Заголовок звена -- его роль; имя линии идёт подписью, и
-                // подписью человеческой: раньше у безымянной линии здесь
+                // Заголовок звена -- его роль; имя VPN-туннеля идёт подписью, и
+                // подписью человеческой: раньше у безымянного VPN-туннеля здесь
                 // стояло имя интерфейса вида OpkgTun11.
                 name: c.title,
                 title: CHAIN_TITLE[c.role] ?? 'Состояние неизвестно',
@@ -245,7 +245,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
               }))}
             />
             <p class="card-foot">
-              Линия поднимается одна за раз: замолчит верхняя — роутер возьмёт следующую.
+              Трафик несёт один VPN-туннель за раз: замолчит верхний — роутер возьмёт следующий.
             </p>
           </div>
         </Section>
@@ -282,19 +282,19 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
       {snapshot && (
         <div style="margin-top:12px">
           <NavCard
-            title="Новая линия из кабинета"
+            title="Новый VPN-туннель из кабинета"
             note="Amnezia · HideMy"
             onClick={() => setCabinets(true)}
           />
         </div>
       )}
 
-      {/* Замена конфига предлагается для работающей линии: смысл операции --
+      {/* Замена конфига предлагается для работающего VPN-туннеля: смысл операции --
           заменить то, чем сейчас ходит трафик, не потеряв прежний туннель. */}
       {view.active && view.policyName && (
         <div style="margin-top:12px">
           <NavCard
-            title="Заменить конфиг линии"
+            title="Заменить конфиг VPN-туннеля"
             note={view.active.title}
             onClick={() => setReplacing(view.active)}
           />

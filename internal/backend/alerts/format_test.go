@@ -1,6 +1,7 @@
 package alerts
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -24,7 +25,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 				},
 			},
 		})
-		if !strings.Contains(got, "Через эту линию идут правила: 48 по именам сайтов, 3 по адресам") {
+		if !strings.Contains(got, "Через этот VPN-туннель идут правила: 48 по именам сайтов, 3 по адресам") {
 			t.Fatalf("missing linked-routes line:\n%s", got)
 		}
 	})
@@ -36,7 +37,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 				Details: map[string]any{"routes_dns": 10, "routes_dns_hr": 7, "routes_static": 0},
 			},
 		})
-		if !strings.Contains(got, "Через эту линию идут правила: 10 по именам сайтов") {
+		if !strings.Contains(got, "Через этот VPN-туннель идут правила: 10 по именам сайтов") {
 			t.Fatalf("missing mixed-HR line:\n%s", got)
 		}
 		if strings.Contains(got, "Static") {
@@ -59,7 +60,7 @@ func TestFormatHardTunnelLinkedRoutes(t *testing.T) {
 			HardSince: time.Now(),
 			Check:     wire.Check{Details: map[string]any{"routes_static": 4}},
 		})
-		if !strings.Contains(got, "Через эту линию идут правила: 4 по адресам") {
+		if !strings.Contains(got, "Через этот VPN-туннель идут правила: 4 по адресам") {
 			t.Fatalf("missing static-only line:\n%s", got)
 		}
 	})
@@ -122,9 +123,9 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 	})
 	wants := []string{
 		"🟡",
-		"Линия amnezia_for_awg2 не отвечает",
+		"VPN-туннель «amnezia_for_awg2» не отвечает",
 		"На что обратить внимание:",
-		"Сервер линии: 198.51.100.21:37634", "выход провайдера: eth3",
+		"Сервер VPN-туннеля: 198.51.100.21:37634", "выход провайдера: eth3",
 		"Последний обмен ключами:", "4 мин 37 с",
 		"Проверка связи: падает", "неудачных попыток 3 из 3",
 		"авто-рестартов: 2",
@@ -234,7 +235,7 @@ func TestFormatHardDNSPartialUsesHumanTunnelContext(t *testing.T) {
 	for _, want := range []string{
 		"plain 100.64.0.1:53 через Germany backup (Wireguard3 / nwg3) — сеть недоступна",
 		"Оба упавших DNS-сервера идут через Germany backup",
-		"Остальные линии выглядят живыми",
+		"Остальные VPN-туннели выглядят живыми",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -267,7 +268,7 @@ func TestFormatHardDNSAllFailedWithAliveNeighborsIsAdvisory(t *testing.T) {
 		"🟡",
 		"Роутер стал хуже находить сайты по имени",
 		"На что обратить внимание:",
-		"Остальные линии выглядят живыми",
+		"Остальные VPN-туннели выглядят живыми",
 		"интернет на месте",
 	} {
 		if !strings.Contains(got, want) {
@@ -384,7 +385,7 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 	})
 	wants := []string{
 		"🟡",
-		"HydraRoute остановлен",
+		"HydraRoute (движок умной раздельной маршрутизации) остановлен",
 		"На что обратить внимание:",
 		"HydraRoute установлен, но сервис остановлен",
 		"Что может пострадать:",
@@ -443,7 +444,7 @@ func TestFormatHardWithNeighborsInfluencesDiagnosis(t *testing.T) {
 			{CheckName: "tunnel_awg12", TunnelName: "backup", Interface: "nwg1", Status: "alive", HandshakeAge: 12},
 		},
 	})
-	if !strings.Contains(got, "Соседние туннели живы") {
+	if !strings.Contains(got, "Соседние VPN-туннели живы") {
 		t.Errorf("missing neighbors-alive hypothesis:\n%s", got)
 	}
 	if !strings.Contains(got, "🟡") {
@@ -712,6 +713,17 @@ func TestAdviceNeverSendsOwnerWhereHeCannotGo(t *testing.T) {
 		{"реестр линий недоступен", "tunnels", map[string]any{}},
 		{"HydraRoute не установлен", "hydraroute", map[string]any{"installed": false}},
 		{"HydraRoute остановлен", "hydraroute", map[string]any{"installed": true, "running": false}},
+		{"сервисы не открываются через VPN-туннель", "external_reach", map[string]any{
+			"targets_total": 2, "via_interface": "nwg0",
+			"targets_failed": []any{
+				map[string]any{"name": "youtube", "err": "i/o timeout"},
+				map[string]any{"name": "telegram", "err": "i/o timeout"},
+			},
+		}},
+		{"часть сервисов не открывается", "external_reach", map[string]any{
+			"targets_total":  3,
+			"targets_failed": []any{map[string]any{"name": "youtube", "err": "i/o timeout"}},
+		}},
 	}
 
 	for _, tc := range cases {
@@ -769,6 +781,122 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 			for _, w := range jargon {
 				if strings.Contains(got, w) {
 					t.Errorf("жаргон %q в тексте для владельца:\n%s", w, got)
+				}
+			}
+		})
+	}
+}
+
+// «Линия» отменена владельцем проекта: в приложении это VPN-туннель, полной
+// формой в каждом упоминании. Голое «туннель» тоже не годится -- такого слова
+// в приложении нет. Сторож проходит тревогу, напоминание и восстановление по
+// всем веткам, которые говорят о VPN-туннелях, включая соседей и резерв.
+var bareTunnelRe = regexp.MustCompile(`(^|[^-])[Тт]уннел`)
+
+func assertSaysVPNTunnel(t *testing.T, what, got string) {
+	t.Helper()
+	if strings.Contains(strings.ToLower(got), "лини") {
+		t.Errorf("%s: «линия» в тексте для владельца:\n%s", what, got)
+	}
+	if bareTunnelRe.MatchString(got) {
+		t.Errorf("%s: голое «туннель» без «VPN-»:\n%s", what, got)
+	}
+}
+
+func TestAlertSaysVPNTunnelNotLine(t *testing.T) {
+	alive := []NeighborSummary{{CheckName: "tunnel_awg12", TunnelName: "Амстердам", NDMSName: "Wireguard3", Interface: "nwg3", Status: "alive"}}
+	dead := []NeighborSummary{{CheckName: "tunnel_awg12", TunnelName: "Амстердам", NDMSName: "Wireguard3", Interface: "nwg3", Status: "dead"}}
+	dnsViaOne := map[string]any{"endpoints": 2, "failed_count": 2, "endpoints_detail": []any{
+		map[string]any{"reachable": false, "type": "plain", "target": "198.51.100.53:53", "ndms_name": "Wireguard3", "err": "i/o timeout"},
+		map[string]any{"reachable": false, "type": "plain", "target": "203.0.113.53:53", "ndms_name": "Wireguard3", "err": "i/o timeout"},
+	}}
+	cases := []struct {
+		name  string
+		check string
+		d     map[string]any
+		ns    []NeighborSummary
+	}{
+		{"без обмена ключами, резерв жив", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт"}, alive},
+		{"без обмена ключами, резерва нет", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт"}, dead},
+		{"давно молчит, резерв жив", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900,
+			"routes_dns": 48, "routes_static": 3, "endpoint": "198.51.100.21:37634", "ping_check_status": "disabled"}, alive},
+		{"давно молчит, резерва нет", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "routes_dns": 48}, dead},
+		{"давно молчит, правил нет", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900}, nil},
+		{"обмен ключами устарел", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 300}, nil},
+		{"свежий обмен ключами, соседи живы", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 60}, alive},
+		{"свежий обмен ключами, соседи молчат", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 60}, dead},
+		{"конфликт адресов", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "address_conflict": true, "handshake_age_sec": 60}, nil},
+		{"имена сайтов через один VPN-туннель, соседи живы", "dns", dnsViaOne, alive},
+		{"имена сайтов через один VPN-туннель, соседи молчат", "dns", dnsViaOne, dead},
+		{"имена сайтов через один VPN-туннель, соседей нет", "dns", dnsViaOne, nil},
+		{"все серверы имён молчат, соседи живы", "dns", map[string]any{"endpoints": 2, "failed_count": 2}, alive},
+		{"подмена ответов", "dns", map[string]any{"endpoints": 2, "failed_count": 0, "rkn_probed": 2, "rkn_suspect": 2}, nil},
+		{"панель роутера", "awg_manager", map[string]any{}, nil},
+		{"список VPN-туннелей", "tunnels", map[string]any{"error": "timeout", "tunnel_count": 3}, nil},
+		{"HydraRoute сбоит", "hydraroute", map[string]any{"installed": true, "running": true}, nil},
+		{"сервисы не открываются", "external_reach", map[string]any{"targets_total": 2, "via_interface": "nwg0",
+			"targets_failed": []any{map[string]any{"name": "youtube", "err": "i/o timeout"}, map[string]any{"name": "telegram", "err": "i/o timeout"}}}, nil},
+		{"сервисы не открываются, соседи молчат", "external_reach", map[string]any{"targets_total": 3}, dead},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk := wire.Check{Name: tc.check, Status: "fail", Details: tc.d}
+			hard := FormatHard(HardArgs{Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(), Check: chk, Neighbors: tc.ns})
+			assertSaysVPNTunnel(t, "тревога", hard)
+			assertSaysVPNTunnel(t, "напоминание", FormatRealert(RealertArgs{
+				Nickname: "router-a", CheckName: tc.check, HardSince: time.Now(), RealertCount: 1, Check: chk, Neighbors: tc.ns,
+			}))
+			assertSaysVPNTunnel(t, "восстановление", FormatRecovery(RecoveryArgs{
+				Nickname: "router-a", CheckName: tc.check, HardSince: time.Now().Add(-time.Hour), RecoveredAt: time.Now(),
+				Check: wire.Check{Status: "ok", Details: tc.d},
+			}))
+			if strings.HasPrefix(tc.check, "tunnel_") && !strings.Contains(hard, "VPN-туннель «Франкфурт»") {
+				t.Errorf("VPN-туннель называется по имени в ёлочках:\n%s", hard)
+			}
+			if strings.HasPrefix(tc.check, "tunnel_") && tc.ns != nil && neighborsAlive(tc.ns) &&
+				!strings.Contains(hard, "запасной VPN-туннель «Амстердам»") {
+				t.Errorf("резерв -- запасной VPN-туннель, мужской род:\n%s", hard)
+			}
+		})
+	}
+	bare := FormatRecovery(RecoveryArgs{Nickname: "router-a", CheckName: "tunnel_awg11", HardSince: time.Now(), RecoveredAt: time.Now()})
+	assertSaysVPNTunnel(t, "восстановление без подробностей", bare)
+	if !strings.Contains(bare, "VPN-туннель снова работает") {
+		t.Errorf("голое восстановление тоже про VPN-туннель:\n%s", bare)
+	}
+}
+
+// HydraRoute владельцу ничего не говорит: это имя он видел разве что в панели
+// роутера. При первом упоминании в тексте -- пояснение, дальше просто имя:
+// объяснять одно и то же в каждой строке -- шум.
+func TestHydraRouteExplainedAtFirstMention(t *testing.T) {
+	const explained = "HydraRoute (движок умной раздельной маршрутизации)"
+	for _, st := range []struct {
+		name string
+		d    map[string]any
+	}{
+		{"не установлен", map[string]any{"installed": false}},
+		{"остановлен", map[string]any{"installed": true, "running": false}},
+		{"сбой", map[string]any{"installed": true, "running": true}},
+	} {
+		t.Run(st.name, func(t *testing.T) {
+			chk := wire.Check{Name: "hydraroute", Status: "fail", Details: st.d}
+			texts := map[string]string{
+				"тревога": FormatHard(HardArgs{Nickname: "router-a", CheckName: "hydraroute", HardSince: time.Now(), Check: chk}),
+				"напоминание": FormatRealert(RealertArgs{
+					Nickname: "router-a", CheckName: "hydraroute", HardSince: time.Now(), RealertCount: 1, Check: chk,
+				}),
+				"восстановление": FormatRecovery(RecoveryArgs{
+					Nickname: "router-a", CheckName: "hydraroute", HardSince: time.Now().Add(-time.Hour), RecoveredAt: time.Now(),
+				}),
+			}
+			for what, got := range texts {
+				first := strings.Index(got, "HydraRoute")
+				if first < 0 || !strings.HasPrefix(got[first:], explained) {
+					t.Errorf("%s: первое упоминание HydraRoute без пояснения:\n%s", what, got)
+				}
+				if n := strings.Count(got, "движок умной раздельной маршрутизации"); n != 1 {
+					t.Errorf("%s: пояснение HydraRoute должно стоять ровно один раз, стоит %d:\n%s", what, n, got)
 				}
 			}
 		})

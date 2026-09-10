@@ -83,7 +83,7 @@ describe('incidentLine -- линия без идентификатора', () =>
       check_name: 'tunnel_awg12', from: '2026-09-09T14:20:00Z', to: '2026-09-09T14:24:00Z',
       down_sec: 240, flaps: 1, ongoing: false,
     })
-    expect(line.title).toBe('Одна из линий не отвечает')
+    expect(line.title).toBe('Один из VPN-туннелей не отвечает')
     expect(line.title).not.toContain('awg12')
   })
 })
