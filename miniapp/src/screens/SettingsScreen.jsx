@@ -94,8 +94,8 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
         routerID,
         title: row.enabled ? `Выключить проверку связи у «${row.title}»?` : `Включить проверку связи у «${row.title}»?`,
         body: row.enabled
-          ? 'Роутер перестанет пинговать этот туннель и перезапускать его сам. Тревога о падении по-прежнему придёт — по рукопожатию.'
-          : 'Роутер начнёт пинговать туннель и перезапускать его сам, если ответа не будет.',
+          ? 'Роутер перестанет сам проверять эту линию и поднимать её. Тревога о падении по-прежнему придёт — по обмену ключами.'
+          : 'Роутер начнёт сам проверять линию и поднимать её, если ответа не будет.',
         action: 'pingcheck_toggle',
         args: { tunnel_id: row.tunnelID, enable: !row.enabled },
         buttonLabel: row.enabled ? 'Выключить' : 'Включить',
@@ -227,7 +227,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
         <Section title="Проверка связи">
           {pings.length === 0 ? (
             <div class="card">
-              <p class="traffic-detail">Роутер не сообщил ни одного туннеля.</p>
+              <p class="traffic-detail">Роутер не сообщил ни одной линии.</p>
             </div>
           ) : (
             <div class="card">
@@ -242,7 +242,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
                 </div>
               ))}
               <p class="card-foot">
-                Роутер сам пингует туннель и перезапускает его, если ответа нет. Задержка — это
+                Роутер сам проверяет линию и поднимает её, если ответа нет. Задержка — это
                 то, что он намерил последним замером.
               </p>
             </div>

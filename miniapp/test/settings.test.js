@@ -149,3 +149,38 @@ describe('firmwareRows', () => {
     expect(firmwareStatus('готово').known).toBe(false)
   })
 })
+
+describe('пороги без ключей конфига', () => {
+  // Под каждым порогом стоял путь в конфиге бэкенда --
+  // «heartbeat.stale_after_sec», «state.fail_threshold». Владелец роутера
+  // не может ни найти этот файл, ни изменить его: он живёт на сервере, где
+  // запущен бот. Экран это и объясняет словами, а сам ключ остаётся шумом.
+  //
+  // Имена программ на роутере -- другое дело: «awg-manager» и «HR Neo» видно
+  // в его собственной панели, и подпись помогает узнать их (auditRows).
+  it('строки порогов не несут технических ключей', () => {
+    const rows = thresholdRows({
+      silence_after_sec: 300,
+      alert_after_fails: 2,
+      recovery_after_oks: 2,
+      mobile: true,
+      offline_after_sec: 3600,
+      agent_version: 'v0.25.0',
+    })
+    expect(rows.length).toBeGreaterThan(0)
+    // Ни у одной строки порогов кода нет вовсе: все четыре -- про настройки
+    // бота, а не про программы на роутере.
+    for (const r of rows) {
+      expect(r.code ?? '').toBe('')
+    }
+  })
+
+  it('а имена программ на роутере подписью остаются', () => {
+    const rows = auditRows(
+      JSON.stringify({ awgmgr_version: '2.17.2', awgmgr_running: true, hrneo_installed: true }),
+    )
+    const codes = rows.map((r) => r.code)
+    expect(codes).toContain('awg-manager')
+    expect(codes).toContain('HR Neo')
+  })
+})

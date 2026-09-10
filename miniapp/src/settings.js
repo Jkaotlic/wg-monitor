@@ -13,6 +13,14 @@ function checksCount(n) {
   return `${n} ${pluralRu(n, 'проверка', 'проверки', 'проверок')} подряд`
 }
 
+// Пороги, по которым бот судит о роутере. Путь в конфиге («state.fail_threshold»)
+// здесь не показывается: файл живёт на сервере, где запущен бот, и владелец
+// роутера не может ни найти его, ни изменить. Экран говорит об этом словами,
+// а ключ рядом с числом остаётся шумом.
+//
+// Имена программ на самом роутере -- другое дело: «awg-manager» и «HR Neo»
+// человек видит в его собственной панели, и подпись помогает их узнать
+// (auditRows ниже).
 export function thresholdRows(settings) {
   if (!settings) return []
   const rows = []
@@ -20,7 +28,6 @@ export function thresholdRows(settings) {
     rows.push({
       key: 'silence',
       title: 'Считаем, что роутер молчит, после',
-      code: 'heartbeat.stale_after_sec',
       value: `${humanAge(settings.silence_after_sec)} без отчёта`,
     })
   }
@@ -30,7 +37,6 @@ export function thresholdRows(settings) {
     rows.push({
       key: 'offline',
       title: 'Считаем выключенным после',
-      code: 'mobile_offline_after_sec',
       value: `${humanAge(settings.offline_after_sec)} молчания`,
     })
   }
@@ -38,7 +44,6 @@ export function thresholdRows(settings) {
     rows.push({
       key: 'alert',
       title: 'Тревога, если проверка провалилась',
-      code: 'state.fail_threshold',
       value: checksCount(settings.alert_after_fails),
     })
   }
@@ -46,7 +51,6 @@ export function thresholdRows(settings) {
     rows.push({
       key: 'recovery',
       title: 'Отбой, если снова в порядке',
-      code: 'state.recovery_threshold',
       value: checksCount(settings.recovery_after_oks),
     })
   }
@@ -54,7 +58,6 @@ export function thresholdRows(settings) {
     rows.push({
       key: 'agent',
       title: 'Агент на роутере',
-      code: 'last_deployed_version',
       value: settings.agent_version,
     })
   }

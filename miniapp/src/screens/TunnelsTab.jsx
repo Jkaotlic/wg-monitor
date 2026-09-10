@@ -176,7 +176,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
             </p>
             <div class="stat-grid" style="margin:14px 0 16px">
               <Stat
-                label="рукопожатие"
+                label="обмен ключами"
                 value={view.active.handshakeAgeSec != null ? humanAge(view.active.handshakeAgeSec) : null}
                 note={view.active.handshakeAgeSec != null ? 'назад, канал живой' : 'роутер не сообщил'}
               />

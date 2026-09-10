@@ -7,7 +7,7 @@ describe('stepTitle', () => {
   it('каждый шаг назван последствием', () => {
     expect(stepTitle('issue')).toBe('Выпускаем конфиг у провайдера')
     expect(stepTitle('import')).toBe('Кладём новый туннель рядом с прежним')
-    expect(stepTitle('handshake')).toBe('Ждём рукопожатия новой линии')
+    expect(stepTitle('handshake')).toBe('Ждём, когда новая линия обменяется ключами')
     expect(stepTitle('promote')).toBe('Переводим политику на новый туннель')
     expect(stepTitle('verify')).toBe('Проверяем, каким адресом видно снаружи')
     expect(stepTitle('retire')).toBe('Выключаем прежний туннель')
