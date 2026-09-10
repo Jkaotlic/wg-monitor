@@ -8,6 +8,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -26,6 +27,9 @@ type WakeNotifier struct {
 	tg     LifecycleSendTG
 	chatID int64
 	notify lifecycleSink
+	// miniAppBaseURL -- адрес приложения для кнопки под отчётом. Пустой --
+	// кнопки нет, как и у тревог (alerts.Config.MiniAppBaseURL).
+	miniAppBaseURL string
 }
 
 func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *WakeNotifier {
@@ -37,6 +41,10 @@ func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *WakeNotifier 
 
 // SetNotifySink подменяет рассылку. Только для тестов.
 func (n *WakeNotifier) SetNotifySink(s lifecycleSink) { n.notify = s }
+
+// SetMiniAppBaseURL включает под отчётом кнопку приложения -- ту же, что под
+// тревогами: владелец идёт разбираться туда, а не в панель бота.
+func (n *WakeNotifier) SetMiniAppBaseURL(u string) { n.miniAppBaseURL = u }
 
 // lifecycleSink -- та часть веера, которой пользуются уведомления о сне и
 // пробуждении: обычная рассылка и рассылка с нижней клавиатурой.
@@ -60,7 +68,7 @@ func (n *WakeNotifier) SendWake(ctx context.Context, userID int64, nickname stri
 	}
 	card := RenderWakeReport(nickname, checks)
 	text := card.Render(CardOpts{MaxBytes: 3500})
-	_, err = n.notify.SendWithReplyKeyboard(ctx, userID, text, "", mobileWakeKeyboard(userID))
+	_, err = n.notify.SendWithReplyKeyboard(ctx, userID, text, "", mobileWakeKeyboard(userID, n.miniAppBaseURL))
 	if err != nil {
 		slog.Warn("wake notifier: send failed", "user_id", userID, "nickname", nickname, "err", err)
 	} else if err := n.db.KV().SetMobileWakeNotifiedAt(userID, now); err != nil {
@@ -104,27 +112,22 @@ func (n *SleepNotifier) SendSleeping(ctx context.Context, userID int64, nickname
 	return err
 }
 
-func mobileWakeKeyboard(userID int64) any {
-	return struct {
-		InlineKeyboard [][]struct {
-			Text         string `json:"text"`
-			CallbackData string `json:"callback_data"`
-		} `json:"inline_keyboard"`
-	}{
-		InlineKeyboard: [][]struct {
-			Text         string `json:"text"`
-			CallbackData string `json:"callback_data"`
-		}{
-			{
-				{Text: "Диагностика", CallbackData: "diag_now:" + formatUserID(userID) + ":_menu"},
-				{Text: "Повторить проверку", CallbackData: "force_recheck:" + formatUserID(userID) + ":_mobile"},
-			},
-			{
-				{Text: "🛣 Маршруты", CallbackData: "panel:" + formatUserID(userID) + ":push:routes"},
-				{Text: "HR-Neo проверка", CallbackData: "routes_hrneo_doctor:" + formatUserID(userID)},
-			},
-		},
+// mobileWakeKeyboard -- кнопки под отчётом о пробуждении. Их видит владелец в
+// личке, поэтому панели бота («🛣 Маршруты») и инженерного осмотра
+// («HR-Neo проверка») здесь нет: разбираться он идёт в приложение, той же
+// кнопкой, что под тревогами. «Повторить проверку» остаётся -- на неё
+// ссылается подсказка отчёта.
+func mobileWakeKeyboard(userID int64, miniAppBaseURL string) any {
+	rows := [][]tg.InlineKeyboardButton{{
+		{Text: "Диагностика", CallbackData: "diag_now:" + formatUserID(userID) + ":_menu"},
+		{Text: "Повторить проверку", CallbackData: "force_recheck:" + formatUserID(userID) + ":_mobile"},
+	}}
+	if miniAppBaseURL != "" {
+		rows = append(rows, []tg.InlineKeyboardButton{
+			{Text: "📱 Открыть в приложении", WebApp: &tg.WebAppInfo{URL: miniAppRouterURL(miniAppBaseURL, userID)}},
+		})
 	}
+	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func formatUserID(id int64) string {

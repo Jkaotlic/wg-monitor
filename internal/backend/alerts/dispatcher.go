@@ -41,6 +41,13 @@ type Config struct {
 	MiniAppBaseURL string
 }
 
+// miniAppRouterURL -- адрес экрана роутера в приложении. Один на тревоги и
+// отчёт о пробуждении: кнопка «Открыть в приложении» обязана вести в одно
+// и то же место, откуда бы её ни нажали.
+func miniAppRouterURL(base string, userID int64) string {
+	return fmt.Sprintf("%s/miniapp/?router=%d", strings.TrimRight(base, "/"), userID)
+}
+
 const NeighborFreshWindow = 5 * time.Minute
 
 type Dispatcher struct {
@@ -133,7 +140,7 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			opts = append(opts, tg.WithMobileActions())
 		}
 		if di.cfg.MiniAppBaseURL != "" {
-			opts = append(opts, tg.WithWebAppButton(fmt.Sprintf("%s/miniapp/?router=%d", strings.TrimRight(di.cfg.MiniAppBaseURL, "/"), userID)))
+			opts = append(opts, tg.WithWebAppButton(miniAppRouterURL(di.cfg.MiniAppBaseURL, userID)))
 		}
 		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
 		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb)

@@ -14,7 +14,7 @@ import (
 // agent_heartbeat is always excluded from the failure tally — it's a transport
 // check, not a router-health signal.
 func RenderWakeReport(nickname string, checks []wire.Check) Card {
-	var failed []string
+	var failed []wire.Check
 	healthChecks := 0
 	for _, c := range checks {
 		if c.Name == "agent_heartbeat" {
@@ -22,14 +22,17 @@ func RenderWakeReport(nickname string, checks []wire.Check) Card {
 		}
 		healthChecks++
 		if c.Status != "ok" {
-			failed = append(failed, c.Name)
+			failed = append(failed, c)
 		}
 	}
+	// Отчёт уходит владельцу в личку, и подсказки ведут туда, где он может
+	// действовать: кнопка «Повторить проверку» под отчётом и приложение.
+	// Панели бота (/panel, «📊 Что происходит?») у владельца нет.
 	if healthChecks == 0 {
 		return Card{
 			Badge:   "🚗⏳",
 			Summary: fmt.Sprintf("%s в сети, жду проверки сервисов", nickname),
-			Hint:    "Если через минуту статус не обновится, открой /panel и запусти 🩺 Проверку.",
+			Hint:    "Если через минуту статус не обновится, нажмите «Повторить проверку».",
 		}
 	}
 	if len(failed) == 0 {
@@ -39,25 +42,27 @@ func RenderWakeReport(nickname string, checks []wire.Check) Card {
 		}
 	}
 	var b strings.Builder
-	for i, name := range failed {
+	names := make([]string, 0, len(failed))
+	for i, c := range failed {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		fmt.Fprintf(&b, "• %s", wakeCheckLabel(name))
+		fmt.Fprintf(&b, "• %s", wakeCheckLabel(c))
+		names = append(names, c.Name)
 	}
-	if allWarmupFailures(failed) {
+	if allWarmupFailures(names) {
 		return Card{
 			Badge:   "🚗⏳",
 			Summary: fmt.Sprintf("%s в сети, сервисы ещё поднимаются", nickname),
 			Details: b.String(),
-			Hint:    "Подожди 1-2 минуты и нажми «Повторить проверку». Если снова останется жёлтым — открой диагностику, она покажет конкретный сервис.",
+			Hint:    "Подождите минуту-другую и нажмите «Повторить проверку». Если снова останется жёлтым — откройте приложение: там видно, что именно не работает.",
 		}
 	}
 	return Card{
 		Badge:   "🚗⚠",
 		Summary: fmt.Sprintf("%s в сети, есть проблемы", nickname),
 		Details: b.String(),
-		Hint:    "Нажми 📊 Что происходит? или открой /panel — там будет видно, что именно упало и какие кнопки ремонта доступны.",
+		Hint:    "Откройте приложение — там видно, что именно не работает и что можно починить.",
 	}
 }
 
@@ -83,25 +88,31 @@ func isWarmupCheck(name string) bool {
 	}
 }
 
-func wakeCheckLabel(name string) string {
-	switch name {
+// wakeCheckLabel -- что не так, словами приложения: VPN-туннель с именем
+// владельца, «поиск сайтов по имени» вместо DNS, «панель роутера» вместо
+// awg-manager, HydraRoute с пояснением.
+func wakeCheckLabel(c wire.Check) string {
+	switch c.Name {
 	case "tunnels":
-		return "список туннелей не читается"
+		return "список VPN-туннелей не читается"
 	case "dns_via_tunnel":
-		return "DNS не отвечает"
+		return "поиск сайтов по имени не отвечает"
 	}
-	switch checkCategory(name) {
+	switch checkCategory(c.Name) {
 	case "tunnel":
-		return "туннель не на связи"
+		if name := strings.TrimSpace(strOrEmpty(c.Details, "tunnel_name")); name != "" {
+			return "VPN-туннель «" + name + "» не на связи"
+		}
+		return "VPN-туннель не на связи"
 	case "dns":
-		return "DNS не отвечает"
+		return "поиск сайтов по имени не отвечает"
 	case "hydraroute":
-		return "HydraRoute не работает"
+		return "HydraRoute (движок умной раздельной маршрутизации) не работает"
 	case "awg_manager", "awgmgr_api":
-		return "awg-manager не отвечает"
+		return "панель роутера не отвечает"
 	case "external_reach":
-		return "внешние сервисы не открываются через туннель"
+		return "сервисы не открываются через обход"
 	default:
-		return name
+		return c.Name
 	}
 }

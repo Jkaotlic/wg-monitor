@@ -43,7 +43,7 @@ func TestRenderWakeReport_WithFailures_BulletDetails(t *testing.T) {
 	if !strings.Contains(card.Summary, "проблемы") {
 		t.Errorf("summary must mention проблемы, got %q", card.Summary)
 	}
-	if !strings.Contains(card.Details, "список туннелей не читается") || !strings.Contains(card.Details, "DNS не отвечает") || !strings.Contains(card.Details, "awg_handshake") {
+	if !strings.Contains(card.Details, "список VPN-туннелей не читается") || !strings.Contains(card.Details, "поиск сайтов по имени не отвечает") || !strings.Contains(card.Details, "awg_handshake") {
 		t.Errorf("details must list failing checks, got %q", card.Details)
 	}
 	if strings.Contains(card.Details, "external_reach") {
@@ -83,5 +83,48 @@ func TestRenderWakeReport_SkipsAgentHeartbeat(t *testing.T) {
 	}
 	if !strings.Contains(card.Summary, "жду проверки сервисов") {
 		t.Errorf("heartbeat-only summary should not claim all-ok: %q", card.Summary)
+	}
+}
+
+// Отчёт о пробуждении уходит владельцу в личку. Раньше он отправлял в /panel
+// и к «📊 Что происходит?» -- панели, которой у владельца нет, -- говорил на
+// «ты» и словами движка: «туннель», «DNS», «awg-manager».
+func TestRenderWakeReport_SpeaksToOwner(t *testing.T) {
+	states := []struct {
+		name   string
+		checks []wire.Check
+		want   []string
+	}{
+		{"ждёт проверок", []wire.Check{{Name: "agent_heartbeat", Status: "ok"}}, nil},
+		{"поднимается", []wire.Check{
+			{Name: "tunnels", Status: "fail"},
+			{Name: "hydraroute", Status: "fail"},
+			{Name: "tunnel_awg13", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт"}},
+		}, []string{"VPN-туннель «Франкфурт»", "движок умной раздельной маршрутизации"}},
+		{"есть проблемы", []wire.Check{
+			{Name: "dns_via_tunnel", Status: "fail"},
+			{Name: "awg_manager", Status: "fail"},
+			{Name: "external_reach", Status: "fail"},
+			{Name: "awg_handshake", Status: "fail"},
+		}, []string{"приложени"}},
+	}
+	// «открой », «нажми », «подожди » -- с пробелом: «откройте» законно.
+	forbid := []string{"/panel", "📊", "🩺", "открой ", "нажми ", "подожди ", "dns", "awg-manager"}
+	for _, st := range states {
+		t.Run(st.name, func(t *testing.T) {
+			text := RenderWakeReport("client-h", st.checks).Render(CardOpts{})
+			low := strings.ToLower(text)
+			for _, f := range forbid {
+				if strings.Contains(low, f) {
+					t.Errorf("владелец читает %q:\n%s", f, text)
+				}
+			}
+			for _, w := range st.want {
+				if !strings.Contains(text, w) {
+					t.Errorf("нет %q:\n%s", w, text)
+				}
+			}
+			assertSaysVPNTunnel(t, st.name, text)
+		})
 	}
 }

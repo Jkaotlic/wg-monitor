@@ -2,6 +2,7 @@ package alerts
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -117,5 +118,36 @@ func TestWakeNotifier_NoThreadID_SkipsSend(t *testing.T) {
 	}
 	if tg.text != "" {
 		t.Errorf("send must be skipped when topic missing; sent %q", tg.text)
+	}
+}
+
+// Кнопки под отчётом о пробуждении владелец видит в личке. «🛣 Маршруты»
+// открывала панель бота, «HR-Neo проверка» -- инженерный осмотр; разбираться
+// владелец идёт в приложение -- той же кнопкой, что под тревогами.
+// «Повторить проверку» остаётся: на неё ссылается подсказка отчёта.
+func TestMobileWakeKeyboard_LeadsOwnerToApp(t *testing.T) {
+	render := func(base string) string {
+		b, err := json.Marshal(mobileWakeKeyboard(42, base))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	for _, base := range []string{"https://example.com/", ""} {
+		kb := render(base)
+		for _, bad := range []string{"panel:", "routes_hrneo_doctor", "HR-Neo"} {
+			if strings.Contains(kb, bad) {
+				t.Errorf("база %q: под отчётом осталась старая панель %q: %s", base, bad, kb)
+			}
+		}
+		if !strings.Contains(kb, "force_recheck:42:_mobile") {
+			t.Errorf("база %q: пропала «Повторить проверку», а подсказка на неё ссылается: %s", base, kb)
+		}
+	}
+	if kb := render("https://example.com/"); !strings.Contains(kb, `"url":"https://example.com/miniapp/?router=42"`) {
+		t.Errorf("нет кнопки приложения с адресом роутера: %s", kb)
+	}
+	if kb := render(""); strings.Contains(kb, "web_app") {
+		t.Errorf("без адреса приложения кнопки быть не должно: %s", kb)
 	}
 }

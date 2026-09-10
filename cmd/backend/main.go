@@ -147,6 +147,7 @@ func main() {
 	// after MobileSleepAfter silence. Both no-op for static users / when
 	// telegram_thread_id is NULL.
 	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.ChatID)
+	wakeNotifier.SetMiniAppBaseURL(cfg.PublicBaseURL)
 	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.ChatID)
 	deployNotifier := alerts.NewDeployNotifier(d, tgClient, cfg.Telegram.ChatID)
 	watcher.SetSleepNotifier(sleepNotifier)
