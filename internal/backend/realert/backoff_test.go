@@ -64,7 +64,7 @@ func TestRealertSlowsDownAfterFirstDay(t *testing.T) {
 	if f2.count() != 1 {
 		t.Fatalf("через шесть часов напоминание должно уйти, отправлено %d", f2.count())
 	}
-	if !strings.Contains(f2.sent[0], "напомню снова через 6h") {
+	if !strings.Contains(f2.sent[0], "напомню снова через 6 ч") {
 		t.Errorf("карточка должна обещать следующий приход через 6ч: %q", f2.sent[0])
 	}
 }

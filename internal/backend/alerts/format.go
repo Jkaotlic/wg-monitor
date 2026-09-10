@@ -216,7 +216,7 @@ func FormatRealert(args RealertArgs) string {
 			KV("проверка", checkHumanName(args.CheckName)),
 			"с " + args.HardSince.In(mscLoc()).Format("02.01 15:04 МСК"),
 			durFmt(age) + " назад",
-			"напомню снова через " + shortDur(cadence),
+			"напомню снова через " + durFmt(cadence),
 			fmt.Sprintf("#%d", args.RealertCount),
 		},
 		Sections: sections,
@@ -423,12 +423,19 @@ func writeTunnelWhatBroke(b *strings.Builder, d map[string]any) {
 		ft, _ := intOrZero(d, "ping_check_fail_threshold")
 		var extras []string
 		if rc, _ := intOrZero(d, "ping_check_restart_count"); rc > 0 {
-			extras = append(extras, fmt.Sprintf("авто-рестартов: %d", rc))
+			extras = append(extras, fmt.Sprintf("автоперезапусков: %d", rc))
 		}
 		if lat, ok := intOrZero(d, "ping_check_last_latency_ms"); ok && lat > 0 {
-			extras = append(extras, fmt.Sprintf("последний ping %d мс", lat))
+			extras = append(extras, fmt.Sprintf("последний ответ за %d мс", lat))
 		}
-		fmt.Fprintf(b, "  Проверка связи: %s — неудачных попыток %d из %d", humanPingStatus(pc), fc, ft)
+		// Выключенная проверка ничего не пробовала: «0 из 0» -- счётчик, а не
+		// ответ. Попытки называются, только когда есть порог, до которого
+		// проверка их считает.
+		if pc == "disabled" || ft == 0 {
+			fmt.Fprintf(b, "  Проверка связи: %s", humanPingStatus(pc))
+		} else {
+			fmt.Fprintf(b, "  Проверка связи: %s — неудачных попыток %d из %d", humanPingStatus(pc), fc, ft)
+		}
 		if len(extras) > 0 {
 			fmt.Fprintf(b, " (%s)", strings.Join(extras, " · "))
 		}
@@ -683,13 +690,16 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 		}
 		var parts []string
 		if rDNS, _ := intOrZero(d, "routes_dns"); rDNS > 0 {
-			parts = append(parts, fmt.Sprintf("%d правил по именам сайтов", rDNS))
+			parts = append(parts, fmt.Sprintf("%d по именам сайтов", rDNS))
 		}
 		if rStatic, _ := intOrZero(d, "routes_static"); rStatic > 0 {
-			parts = append(parts, fmt.Sprintf("%d правил по адресам", rStatic))
+			parts = append(parts, fmt.Sprintf("%d по адресам", rStatic))
 		}
+		// «Правила: 1 по именам сайтов» -- та же форма, что в «На что обратить
+		// внимание»: с ней любое число звучит правильно, а «%d правил» давало
+		// «3 правил» и «идут 1 правило».
 		if len(parts) > 0 {
-			return "Через этот VPN-туннель идут " + strings.Join(parts, " и ") + " — они не работают, пока VPN-туннель не поднимется. Обычные сайты, банки и госуслуги открываются как всегда."
+			return "Через этот VPN-туннель идут правила: " + strings.Join(parts, " и ") + " — они не работают, пока VPN-туннель не поднимется. Обычные сайты, банки и госуслуги открываются как всегда."
 		}
 		return "То, что должно ходить через этот VPN-туннель, сейчас туда не доходит. Обычные сайты, банки и госуслуги открываются как всегда."
 	case "hydraroute":
@@ -844,9 +854,9 @@ func diagnoseHydraRoute(d map[string]any) string {
 	running, _ := boolOrFalse(d, "running")
 	switch {
 	case !installed:
-		return "HydraRoute не установлен — пакет hrneo либо отсутствует, либо удалён. Без него selective-роуты не работают."
+		return "HydraRoute не установлен — без него правила по именам сайтов не работают."
 	case !running:
-		return "HydraRoute установлен, но демон не запущен. Видимо он упал или был остановлен вручную."
+		return "HydraRoute установлен, но не запущен: скорее всего, он упал или его остановили вручную."
 	}
 	return "HydraRoute запущен, но проверка возвращает ошибку. Скорее всего сбой в конфиге — какое-то правило ссылается на несуществующий VPN-туннель."
 }
@@ -1102,25 +1112,6 @@ func humaniseNetErr(s string) string {
 		return s[:max] + "…"
 	}
 	return s
-}
-
-// shortDur renders a duration as "6h" / "30m" / "1h30m" — no fractional units.
-func shortDur(d time.Duration) string {
-	if d <= 0 {
-		return "0s"
-	}
-	h := int(d / time.Hour)
-	m := int((d % time.Hour) / time.Minute)
-	switch {
-	case h > 0 && m > 0:
-		return fmt.Sprintf("%dh%dm", h, m)
-	case h > 0:
-		return fmt.Sprintf("%dh", h)
-	case m > 0:
-		return fmt.Sprintf("%dm", m)
-	default:
-		return fmt.Sprintf("%ds", int(d/time.Second))
-	}
 }
 
 // checkCategory classifies a check name so the formatter can dispatch.

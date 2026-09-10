@@ -128,7 +128,7 @@ func TestFormatHardTunnelRichBody(t *testing.T) {
 		"Сервер VPN-туннеля: 198.51.100.21:37634", "выход провайдера: eth3",
 		"Последний обмен ключами:", "4 мин 37 с",
 		"Проверка связи: падает", "неудачных попыток 3 из 3",
-		"авто-рестартов: 2",
+		"автоперезапусков: 2",
 		"Параметры:", "nativewg", "AWG AWG2.0", "MTU 1280",
 		"Что может пострадать:",
 		"Что я думаю:",
@@ -389,7 +389,7 @@ func TestFormatHardHydraRouteBody(t *testing.T) {
 		"На что обратить внимание:",
 		"HydraRoute установлен, но сервис остановлен",
 		"Что может пострадать:",
-		"демон не запущен",
+		"установлен, но не запущен",
 		"перезагрузка роутера",
 	}
 	for _, w := range wants {
@@ -759,18 +759,27 @@ func TestOfflineAdviceIsForOwner(t *testing.T) {
 // Тревогу читает владелец роутера, а не инженер. Слова, которых он нигде не
 // видел, не объясняют поломку -- они её прячут.
 func TestAlertSpeaksHumanRussian(t *testing.T) {
+	// «hrneo», «selective», «демон» -- из разбора HydraRoute; «0 из 0» --
+	// счётчик попыток выключенной проверки связи, которая ничего не пробовала.
 	jargon := []string{"fails", "резолвинг", "heartbeat", "handshake", "апстрим",
-		"static-маршрут", "DoH", "/24", "WAN", "UDP"}
+		"static-маршрут", "DoH", "/24", "WAN", "UDP", "hrneo", "selective", "демон", "0 из 0",
+		"ping", "рестарт"}
 
 	cases := []struct {
 		name  string
 		check string
 		d     map[string]any
 	}{
-		{"линия", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "routes_dns": 48, "routes_static": 3}},
+		{"VPN-туннель", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "routes_dns": 48, "routes_static": 3}},
+		{"проверка связи выключена", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "ping_check_status": "disabled"}},
+		{"проверка связи включена", "tunnel_awg11", map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900,
+			"ping_check_status": "fail", "ping_check_fail_count": 2, "ping_check_fail_threshold": 3,
+			"ping_check_restart_count": 2, "ping_check_last_latency_ms": 120}},
 		{"имена сайтов", "dns", map[string]any{"endpoints": 2, "failed_count": 2, "rkn_probed": 2, "rkn_suspect": 2}},
 		{"панель роутера", "awg_manager", map[string]any{}},
-		{"реестр линий", "tunnels", map[string]any{}},
+		{"реестр VPN-туннелей", "tunnels", map[string]any{}},
+		{"HydraRoute не установлен", "hydraroute", map[string]any{"installed": false}},
+		{"HydraRoute остановлен", "hydraroute", map[string]any{"installed": true, "running": false}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -784,6 +793,37 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Число правил согласуется со словом. «3 правил по адресам» уходило в личку
+// из ветки без резерва, где правила перечислены: слово было вбито в шаблон.
+func TestAlertRulesCountAgrees(t *testing.T) {
+	d := map[string]any{"tunnel_name": "Франкфурт", "handshake_age_sec": 900, "routes_dns": 1, "routes_static": 3}
+	got := FormatHard(HardArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg11", HardSince: time.Now(), ConsecFails: 3,
+		Check: wire.Check{Name: "tunnel_awg11", Status: "fail", Details: d},
+	})
+	for _, wrong := range []string{"1 правил ", "3 правил ", "1 правила", "3 правило"} {
+		if strings.Contains(got, wrong) {
+			t.Errorf("число не согласовано со словом: %q\n%s", wrong, got)
+		}
+	}
+	if !strings.Contains(got, "3 по адресам") && !strings.Contains(got, "3 правила по адресам") {
+		t.Errorf("тревога не называет правила по адресам:\n%s", got)
+	}
+}
+
+// Напоминание обещает, когда напомнит снова, -- и обещает по-русски. «Через
+// 6h» -- запись для логов, а не для владельца.
+func TestRealertSaysWhenInRussian(t *testing.T) {
+	got := FormatRealert(RealertArgs{
+		Nickname: "router-a", CheckName: "tunnel_awg11", HardSince: time.Now().Add(-3 * time.Hour),
+		RealertCount: 1, RealertEvery: 6 * time.Hour,
+		Check: wire.Check{Name: "tunnel_awg11", Status: "fail", Details: map[string]any{"tunnel_name": "Франкфурт"}},
+	})
+	if !strings.Contains(got, "напомню снова через 6 ч") {
+		t.Errorf("срок напоминания не по-русски:\n%s", got)
 	}
 }
 
