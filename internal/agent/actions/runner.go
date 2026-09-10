@@ -616,6 +616,19 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			r.ForceRecheck(ctx)
 		}
 		return "ok", fmt.Sprintf("tunnel %s deleted", tunnelID), payload
+	case "tunnel_analyze":
+		// Проверка конфига до импорта (awg-manager 2.18.x). Старая панель
+		// ручки не знает — ответ supported=false, а не ошибка: мастер замены
+		// пропустит шаг, а не сорвёт замену.
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		confB64, _ := cmd.Args["conf"].(string)
+		out, err := AnalyzeTunnel(ctx, r.AwgClient, confB64)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "tunnel_import":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload

@@ -42,6 +42,7 @@ const KindReplaceConfig provision.JobKind = "replace_config"
 // Имена шагов. Экран печатает их словами, поэтому здесь -- ключи, а не текст.
 const (
 	StepIssue     = "issue"
+	StepAnalyze   = "analyze"
 	StepImport    = "import"
 	StepHandshake = "handshake"
 	StepPromote   = "promote"
@@ -133,6 +134,7 @@ const MinAgentVersion = "v0.18.0"
 func Steps() []provision.Step {
 	return []provision.Step{
 		{Name: StepIssue, Status: provision.StepPending},
+		{Name: StepAnalyze, Status: provision.StepPending},
 		{Name: StepImport, Status: provision.StepPending},
 		{Name: StepHandshake, Status: provision.StepPending},
 		{Name: StepPromote, Status: provision.StepPending},
@@ -256,6 +258,13 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 	state.NewTunnelName = issued.TunnelName
 	d.step(jobID, StepIssue, provision.StepDone, "конфиг получен, VPN-туннель будет называться «"+issued.TunnelName+"»")
 
+	// 1½. Проверка до импорта: примет ли модуль роутера этот конфиг. Пока на
+	// роутере ничего не заведено — это единственное место, где отказ ничего
+	// не стоит.
+	if err := d.analyze(ctx, jobID, req.RouterID, issued.Conf); err != nil {
+		return err
+	}
+
 	// 2. Импорт НОВЫМ туннелем: replace=false, прежний остаётся на месте.
 	d.step(jobID, StepImport, provision.StepActive, "кладём конфиг на роутер")
 	backend := issued.Backend
@@ -335,6 +344,63 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 	}
 	d.step(jobID, StepRetire, provision.StepDone, "прежний VPN-туннель выключен и остался на роутере")
 	return nil
+}
+
+// analyze спрашивает роутер (awg-manager 2.18.x), примет ли модуль этот
+// конфиг, — до импорта. Ошибки анализа останавливают замену: модуль отверг
+// бы конфиг, и новый VPN-туннель не поднялся бы. Замечания идут в описание
+// шага. Старый агент (не знает команды) и старая панель (supported=false)
+// проверку пропускают, но замену не срывают: проверить нечем — не значит,
+// что конфиг плох.
+func (d Deps) analyze(ctx context.Context, jobID string, routerID int64, conf []byte) error {
+	const skipped = "проверку конфига этот роутер пока не умеет — пропускаю"
+	d.step(jobID, StepAnalyze, provision.StepActive, "спрашиваем роутер, примет ли он конфиг")
+	res, err := d.command(ctx, routerID, "tunnel_analyze", map[string]any{
+		"conf": base64.StdEncoding.EncodeToString(conf),
+	})
+	if err != nil {
+		d.step(jobID, StepAnalyze, provision.StepDone, skipped)
+		return nil
+	}
+	var out struct {
+		Supported bool           `json:"supported"`
+		Errors    []analyzeIssue `json:"errors"`
+		Warnings  []analyzeIssue `json:"warnings"`
+	}
+	if json.Unmarshal([]byte(res.Output), &out) != nil || !out.Supported {
+		d.step(jobID, StepAnalyze, provision.StepDone, skipped)
+		return nil
+	}
+	if len(out.Errors) > 0 {
+		msgs := joinIssues(out.Errors)
+		d.step(jobID, StepAnalyze, provision.StepFailed, "роутер не примет этот конфиг: "+msgs)
+		return errors.New("роутер не примет выпущенный конфиг: " + msgs)
+	}
+	if len(out.Warnings) > 0 {
+		d.step(jobID, StepAnalyze, provision.StepDone, "конфиг подходит, но есть замечания: "+joinIssues(out.Warnings))
+		return nil
+	}
+	d.step(jobID, StepAnalyze, provision.StepDone, "конфиг подходит модулю роутера")
+	return nil
+}
+
+// analyzeIssue — ошибка или замечание анализа. Message awg-manager пишет
+// по-русски и для человека, поэтому оно уходит владельцу как есть.
+type analyzeIssue struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func joinIssues(issues []analyzeIssue) string {
+	msgs := make([]string, 0, len(issues))
+	for _, is := range issues {
+		if m := strings.TrimSpace(is.Message); m != "" {
+			msgs = append(msgs, m)
+		} else if is.Code != "" {
+			msgs = append(msgs, is.Code)
+		}
+	}
+	return strings.Join(msgs, "; ")
 }
 
 func (d Deps) finish(ctx context.Context, jobID string, req StartReq, state *runState) {

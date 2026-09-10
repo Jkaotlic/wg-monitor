@@ -5,7 +5,7 @@
 // VPN-туннель», и показывать их поштучно значит просить человека читать чеклист
 // инженера. Инженерная подробность не теряется -- она в detail каждого шага
 // и доступна на экране замены.
-const REISSUE = ['issue', 'import', 'handshake', 'promote', 'verify', 'retire']
+const REISSUE = ['issue', 'analyze', 'import', 'handshake', 'promote', 'verify', 'retire']
 
 const LABELS = {
   failover: 'Увожу трафик на запасной VPN-туннель',

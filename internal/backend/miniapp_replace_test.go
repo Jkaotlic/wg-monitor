@@ -98,7 +98,10 @@ func TestMiniappReplaceStartsAndReportsProgress(t *testing.T) {
 	if err := json.Unmarshal(statusRec.Body.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if status.JobID != started.JobID || len(status.Steps) != 6 {
+	// Семь шагов: выпуск, проверка конфига до импорта (awg-manager 2.18.x),
+	// импорт, обмен ключами, перевод набора, проверка адреса, выключение
+	// прежнего.
+	if status.JobID != started.JobID || len(status.Steps) != 7 {
 		t.Fatalf("статус = %+v", status)
 	}
 }

@@ -19,7 +19,7 @@ func TestScenarioFor_Tunnel(t *testing.T) {
 	// есть: перевыпуск -- это он и есть, дублировать его нельзя.
 	want := []string{
 		StepFailover,
-		replace.StepIssue, replace.StepImport, replace.StepHandshake,
+		replace.StepIssue, replace.StepAnalyze, replace.StepImport, replace.StepHandshake,
 		replace.StepPromote, replace.StepVerify, replace.StepRetire,
 		StepFailback,
 	}
