@@ -186,8 +186,8 @@ func (c *scriptedCommander) AwaitResult(_ context.Context, _ int64, id string, _
 	case "route_status":
 		out = `{"tunnels":[{"id":"awg21","name":"amnezia_nl","has_handshake":true}],` +
 			`"policies":[{"name":"HydraRoute","interfaces":[` +
-			`{"bind":"OpkgTun12","tunnel_id":"awg12","role":"active","available":false,"order":1},` +
-			`{"bind":"OpkgTun10","tunnel_id":"awg10","role":"fallback","available":true,"order":2}]}]}`
+			`{"bind":"OpkgTun12","name":"Дача","tunnel_id":"awg12","role":"active","available":false,"order":1},` +
+			`{"bind":"OpkgTun10","name":"Работа","tunnel_id":"awg10","role":"fallback","available":true,"order":2}]}]}`
 	case "tunnel_import":
 		out = `Туннель "amnezia_nl" создан (id=awg21)`
 	case "check_via_tunnel":
@@ -249,6 +249,65 @@ func TestRun_SingleNotification(t *testing.T) {
 	}
 	if !strings.Contains(notes[0], "Увёл трафик") {
 		t.Fatalf("сообщение не от починки: %q", notes[0])
+	}
+}
+
+// Отчёт о починке уходит владельцу в личку, и линии в нём обязаны
+// называться так, как он их назвал. Раньше в текст подставлялся
+// идентификатор: «Линия «awg12» падала. Увёл трафик на «awg10»» -- при том,
+// что комментарий над функцией прямо запрещал машинные имена. Тесты этого не
+// видели: в фейковом снимке у звеньев не было поля name вовсе.
+func TestRun_NotificationUsesLineNames(t *testing.T) {
+	cmd := &scriptedCommander{}
+	var mu sync.Mutex
+	var notes []string
+	collect := func(_ context.Context, _ int64, text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		notes = append(notes, text)
+	}
+
+	d := testDeps(t, nil)
+	d.Commands = cmd
+	d.Notify = collect
+	d.Replace = replace.Deps{
+		Store:          d.Store,
+		Commands:       cmd,
+		Cabinet:        scriptedCabinet{},
+		Origin:         noopOrigin{},
+		BaseCtx:        context.Background(),
+		AwaitStep:      time.Second,
+		HandshakeTries: 2,
+		HandshakeWait:  time.Millisecond,
+		Sleep:          func(context.Context, time.Duration) {},
+	}
+
+	id, err := d.Start(StartReq{
+		RouterID: 1, Nickname: "роутер", CheckName: "tunnel_awg12",
+		AgentVersion: "v0.19.7",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	job := waitDone(t, d, id)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(notes) != 1 {
+		t.Fatalf("сообщений: %d", len(notes))
+	}
+	text := notes[0]
+	if !strings.Contains(text, "«Дача»") || !strings.Contains(text, "«Работа»") {
+		t.Fatalf("в отчёте нет имён линий, какими их назвал владелец: %q", text)
+	}
+	if strings.Contains(text, "awg12") || strings.Contains(text, "awg10") {
+		t.Fatalf("в личку ушёл идентификатор линии: %q", text)
+	}
+	// Шаг на экране починки -- то же правило: человек видит его в приложении.
+	for _, st := range job.Steps {
+		if strings.Contains(st.Detail, "awg10") {
+			t.Fatalf("шаг %q показывает идентификатор: %q", st.Name, st.Detail)
+		}
 	}
 }
 

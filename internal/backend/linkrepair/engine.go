@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
@@ -80,6 +81,32 @@ func pickBackup(pol wire.RoutePolicySummary, brokenTunnelID string) (string, boo
 	return "", false
 }
 
+// lineNames -- как линии называются для человека. Отчёт о починке уходит
+// владельцу в личку, и линии в нём обязаны звучать так, как он их назвал:
+// идентификатор («awg12») он нигде не видел.
+type lineNames struct {
+	broken string
+	backup string
+}
+
+// namesFor берёт имена из того же снимка политики, где движок нашёл линии:
+// у каждого звена рядом с TunnelID лежит Name. Нет имени -- остаётся
+// идентификатор: выдумать его нечем, а промолчать хуже.
+func namesFor(pol wire.RoutePolicySummary, brokenID, backupID string) lineNames {
+	name := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		for _, iface := range pol.Interfaces {
+			if iface.TunnelID == id && strings.TrimSpace(iface.Name) != "" {
+				return strings.TrimSpace(iface.Name)
+			}
+		}
+		return id
+	}
+	return lineNames{broken: name(brokenID), backup: name(backupID)}
+}
+
 // Start заводит починку. Все отказы выдаются ДО замка и до первой команды:
 // это единственное место, где отказ ничего не стоит.
 func (d Deps) Start(req StartReq) (string, error) {
@@ -118,9 +145,11 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 
 	pol, backup, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
 	if err != nil {
-		d.fail(ctx, jobID, req, StepFailover, "", err)
+		// Политику не нашли -- имени линии взять неоткуда, остаётся её id.
+		d.fail(ctx, jobID, req, StepFailover, lineNames{broken: sc.TunnelID}, err)
 		return
 	}
+	names := namesFor(pol, sc.TunnelID, backup)
 
 	// Шаг 1. Увести трафик, пока чиним. Резерва может не быть -- это не
 	// провал: чинить всё равно надо, человек просто побудет без обхода.
@@ -130,10 +159,10 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 			"policy_name": pol.Name,
 			"tunnel_id":   backup,
 		}); err != nil {
-			d.fail(ctx, jobID, req, StepFailover, "", err)
+			d.fail(ctx, jobID, req, StepFailover, lineNames{broken: names.broken}, err)
 			return
 		}
-		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через «"+backup+"»")
+		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через «"+names.backup+"»")
 	} else {
 		d.step(jobID, StepFailover, provision.StepDone, "резерва нет — чиним как есть")
 	}
@@ -141,7 +170,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 	// Шаг 2. Замена конфига теми же параметрами, что были у упавшей линии.
 	provider, option, ok := d.Origin.Get(req.RouterID, sc.TunnelID)
 	if !ok {
-		d.fail(ctx, jobID, req, replace.StepIssue, backup, ErrUnknownOrigin)
+		d.fail(ctx, jobID, req, replace.StepIssue, names, ErrUnknownOrigin)
 		return
 	}
 	// Мастер замены внутри починки МОЛЧИТ. Его текст говорит про «замену
@@ -166,7 +195,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 			j.State = provision.StateFailed
 			j.Hint = err.Error()
 		})
-		d.notifyResult(ctx, req, sc, false, backup, err)
+		d.notifyResult(ctx, req, false, names, err)
 		return
 	}
 
@@ -174,7 +203,7 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 	// возврат состоялся. Шаг закрывается фактом, а не ещё одной командой.
 	d.step(jobID, StepFailback, provision.StepDone, "линия вернулась на место")
 	d.Store.Update(jobID, func(j *provision.Job) { j.State = provision.StateSuccess })
-	d.notifyResult(ctx, req, sc, true, backup, nil)
+	d.notifyResult(ctx, req, true, names, nil)
 }
 
 func (d Deps) now() time.Time {
@@ -233,7 +262,7 @@ func (d Deps) step(jobID, name string, status provision.StepStatus, detail strin
 	})
 }
 
-func (d Deps) fail(ctx context.Context, jobID string, req StartReq, step, backup string, cause error) {
+func (d Deps) fail(ctx context.Context, jobID string, req StartReq, step string, names lineNames, cause error) {
 	d.step(jobID, step, provision.StepFailed, cause.Error())
 	d.Store.Update(jobID, func(j *provision.Job) {
 		j.State = provision.StateFailed
@@ -242,8 +271,7 @@ func (d Deps) fail(ctx context.Context, jobID string, req StartReq, step, backup
 	if req.Auto {
 		_ = d.Attempts.Record(req.Nickname, req.CheckName, false)
 	}
-	sc, _ := ScenarioFor(req.CheckName)
-	d.notifyResult(ctx, req, sc, false, backup, cause)
+	d.notifyResult(ctx, req, false, names, cause)
 }
 
 // findPolicy ищет политику, в цепочке которой стоит упавшая линия, и
@@ -272,14 +300,15 @@ func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (
 
 // notifyResult -- единственное место, где движок говорит с человеком.
 // Машинных имён здесь нет и быть не может: это текст в личку.
-func (d Deps) notifyResult(ctx context.Context, req StartReq, sc Scenario, ok bool, backup string, cause error) {
+func (d Deps) notifyResult(ctx context.Context, req StartReq, ok bool, names lineNames, cause error) {
 	if d.Notify == nil {
 		return
 	}
-	line := sc.TunnelID
+	line := names.broken
 	if line == "" {
 		line = req.CheckName
 	}
+	backup := names.backup
 	var text string
 	switch {
 	case ok && backup != "":
