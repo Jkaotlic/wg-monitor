@@ -101,19 +101,44 @@ func (f *fakeOrigin) Record(routerID int64, tunnelID, tunnelName, provider, opti
 	return nil
 }
 
-func deps(t *testing.T, cmd *fakeCommander, cab Cabinet, origin *fakeOrigin, notes *[]string) Deps {
+// noteLog -- сообщения в личку, как их получил бы владелец. Мастер сначала
+// закрывает задание и только потом пишет, поэтому законченное задание ещё не
+// значит отправленное сообщение: читать его надо через wait, под замком.
+type noteLog struct {
+	mu    sync.Mutex
+	texts []string
+}
+
+func (n *noteLog) add(_ context.Context, _ int64, text string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.texts = append(n.texts, text)
+}
+
+func (n *noteLog) wait(t *testing.T, count int) []string {
 	t.Helper()
-	var mu sync.Mutex
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		n.mu.Lock()
+		got := append([]string(nil), n.texts...)
+		n.mu.Unlock()
+		if len(got) >= count {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("сообщений в личку меньше %d", count)
+	return nil
+}
+
+func deps(t *testing.T, cmd *fakeCommander, cab Cabinet, origin *fakeOrigin, notes *noteLog) Deps {
+	t.Helper()
 	return Deps{
-		Store:    provision.NewStore(),
-		Commands: cmd,
-		Cabinet:  cab,
-		Origin:   origin,
-		Notify: func(_ context.Context, _ int64, text string) {
-			mu.Lock()
-			defer mu.Unlock()
-			*notes = append(*notes, text)
-		},
+		Store:          provision.NewStore(),
+		Commands:       cmd,
+		Cabinet:        cab,
+		Origin:         origin,
+		Notify:         notes.add,
 		BaseCtx:        context.Background(),
 		AwaitStep:      time.Second,
 		HandshakeTries: 3,
@@ -122,9 +147,38 @@ func deps(t *testing.T, cmd *fakeCommander, cab Cabinet, origin *fakeOrigin, not
 	}
 }
 
+// ownerReads -- всё, что из мастера читает человек: детали шагов на экране
+// замены (и на экране починки, которая идёт через этот же мастер), итоговая
+// подсказка и сообщение в личку.
+func ownerReads(job provision.Job, notes []string) []string {
+	out := []string{job.Hint}
+	for _, s := range job.Steps {
+		out = append(out, s.Detail)
+	}
+	return append(out, notes...)
+}
+
+// assertOwnerVocabulary -- словарь приложения. Там это линия с именем,
+// которое дал владелец, а идентификатор («awg21») -- мелкая подпись; общий
+// набор правил, а не политика; обмен ключами, а не рукопожатие. Человек
+// переходит из сообщения в приложение и обязан найти там то, о чём читал.
+func assertOwnerVocabulary(t *testing.T, texts []string) {
+	t.Helper()
+	for _, text := range texts {
+		low := strings.ToLower(text)
+		for _, bad := range []string{"awg21", "awg11", "туннел", "политик", "рукопожат"} {
+			if strings.Contains(low, bad) {
+				t.Errorf("человек читает %q: %q", bad, text)
+			}
+		}
+	}
+}
+
 func waitJob(t *testing.T, d Deps, id string) provision.Job {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// 15 с, а не 3: под нагрузкой всего прогона фоновое задание не успевало,
+	// и такой же ожидатель в linkrepair флапал.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		job, ok := d.Store.Get(id)
 		if ok && job.State != provision.StateRunning {
@@ -153,8 +207,8 @@ func TestReplace_HappyPath(t *testing.T) {
 		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
 	}}
 	origin := &fakeOrigin{}
-	var notes []string
-	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, origin, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, origin, notes)
 
 	id, err := d.Start(startReq())
 	if err != nil {
@@ -186,9 +240,12 @@ func TestReplace_HappyPath(t *testing.T) {
 	if len(origin.rows) != 1 || !strings.HasPrefix(origin.rows[0], "awg21/amnezia_nl/amnezia/nl") {
 		t.Fatalf("происхождение конфига не записано: %+v", origin.rows)
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "amnezia_nl") {
-		t.Fatalf("в топик не ушло внятное уведомление: %+v", notes)
+	got := notes.wait(t, 1)
+	// Новую линию владелец найдёт в приложении по имени, а не по id=awg21.
+	if len(got) != 1 || !strings.Contains(got[0], "«amnezia_nl»") {
+		t.Fatalf("в личку не ушло внятное уведомление: %+v", got)
 	}
+	assertOwnerVocabulary(t, ownerReads(job, got))
 }
 
 // Рукопожатия нет: до политики дело не доходит, новый туннель выключается,
@@ -198,17 +255,18 @@ func TestReplace_NoHandshakeRollsBack(t *testing.T) {
 		replies:        map[string]wire.CommandResult{"tunnel_import": {Status: "ok", Output: "создан (id=awg21)"}},
 		handshakeAfter: 99,
 	}
-	var notes []string
-	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
 
 	id, _ := d.Start(startReq())
 	job := waitJob(t, d, id)
 	if job.State != provision.StateFailed {
 		t.Fatalf("state=%s", job.State)
 	}
-	if !strings.Contains(job.Hint, "рукопожат") {
+	if !strings.Contains(job.Hint, "обменялась ключами") {
 		t.Fatalf("подсказка не называет причину: %q", job.Hint)
 	}
+	assertOwnerVocabulary(t, ownerReads(job, notes.wait(t, 1)))
 	for _, a := range cmd.actions() {
 		if a == "route_policy_promote" {
 			t.Fatal("до политики дело доходить не должно: линия не поднялась")
@@ -228,8 +286,8 @@ func TestReplace_SameExitIPRollsBackPolicy(t *testing.T) {
 		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.7"},
 		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
 	}}
-	var notes []string
-	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
 
 	id, _ := d.Start(startReq())
 	job := waitJob(t, d, id)
@@ -253,9 +311,12 @@ func TestReplace_SameExitIPRollsBackPolicy(t *testing.T) {
 	if promotes != 2 || lastPromote["tunnel_id"] != "awg11" {
 		t.Fatalf("откат политики не сделан: promotes=%d last=%+v", promotes, lastPromote)
 	}
-	if !strings.Contains(strings.Join(notes, " "), "не удалась") {
-		t.Fatalf("в топик не ушло сообщение о провале: %+v", notes)
+	got := notes.wait(t, 1)
+	if !strings.Contains(strings.Join(got, " "), "не удалась") {
+		t.Fatalf("в личку не ушло сообщение о провале: %+v", got)
 	}
+	// Откат владелец читает так же, как успех: что с его линиями теперь.
+	assertOwnerVocabulary(t, ownerReads(job, got))
 }
 
 // Одна замена на роутер: вторая не заводится, а честно говорит, что идёт первая.
@@ -264,8 +325,8 @@ func TestReplace_OneAtATime(t *testing.T) {
 		replies:        map[string]wire.CommandResult{"tunnel_import": {Status: "ok", Output: "создан (id=awg21)"}},
 		handshakeAfter: 99,
 	}
-	var notes []string
-	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
 	d.HandshakeWait = 50 * time.Millisecond
 	d.Sleep = func(ctx context.Context, dur time.Duration) { time.Sleep(dur) }
 
@@ -282,8 +343,8 @@ func TestReplace_OneAtATime(t *testing.T) {
 // Кабинет отказал -- на роутер не уходит ничего вовсе.
 func TestReplace_CabinetFailureTouchesNothing(t *testing.T) {
 	cmd := &fakeCommander{}
-	var notes []string
-	d := deps(t, cmd, fakeCabinet{err: context.DeadlineExceeded}, &fakeOrigin{}, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{err: context.DeadlineExceeded}, &fakeOrigin{}, notes)
 
 	id, _ := d.Start(startReq())
 	job := waitJob(t, d, id)
@@ -306,8 +367,8 @@ func TestReplace_CabinetFailureTouchesNothing(t *testing.T) {
 func TestReplace_RefusesOldAgent(t *testing.T) {
 	cmd := &fakeCommander{}
 	cab := &countingCabinet{}
-	var notes []string
-	d := deps(t, cmd, cab, &fakeOrigin{}, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, cab, &fakeOrigin{}, notes)
 
 	req := startReq()
 	req.AgentVersion = "v0.14.4"
@@ -339,8 +400,8 @@ func TestReplace_AllowsCurrentAndUnknownAgent(t *testing.T) {
 			"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
 			"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
 		}}
-		var notes []string
-		d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+		notes := &noteLog{}
+		d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
 		req := startReq()
 		req.AgentVersion = v
 		// Неизвестную версию не запрещаем: агент мог не сообщить её вовсе, а
@@ -369,8 +430,8 @@ func TestRunOnJob_UsesCallerJobAndLock(t *testing.T) {
 		"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
 		"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
 	}}
-	var notes []string
-	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, &notes)
+	notes := &noteLog{}
+	d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
 	req := startReq()
 
 	if !d.Store.TryLock(req.Nickname) {

@@ -320,19 +320,19 @@ export function replaceStatus() {
     job_id: replaceJob.job_id,
     state: finished ? 'success' : 'running',
     running: !finished,
-    hint: finished ? `готово: трафик политики «HydraRoute» идёт через ${replaceJob.provider}_${replaceJob.option}` : '',
+    hint: finished ? `готово: общий набор «HydraRoute» идёт через «${replaceJob.provider}_${replaceJob.option}»` : '',
     steps,
   }
 }
 
 function replaceDetail(name, job) {
   switch (name) {
-    case 'issue': return `конфиг получен: ${job.provider}_${job.option}`
-    case 'import': return 'новый туннель awg21 создан рядом с прежним'
-    case 'handshake': return 'канал живой'
-    case 'promote': return 'политика «HydraRoute» идёт через новый туннель'
-    case 'verify': return 'через туннель 203.0.113.19, напрямую 203.0.113.7'
-    default: return 'прежний туннель выключен и остался на роутере'
+    case 'issue': return `конфиг получен, линия будет называться «${job.provider}_${job.option}»`
+    case 'import': return `новая линия «${job.provider}_${job.option}» поднята рядом с прежней`
+    case 'handshake': return 'ключами обменялась, канал живой'
+    case 'promote': return `общий набор «HydraRoute» идёт через «${job.provider}_${job.option}»`
+    case 'verify': return 'через линию 203.0.113.19, напрямую 203.0.113.7'
+    default: return 'прежняя линия выключена и осталась на роутере'
   }
 }
 

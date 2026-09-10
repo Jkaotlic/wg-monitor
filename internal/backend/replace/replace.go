@@ -254,7 +254,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		return errors.New("кабинет вернул пустой конфиг")
 	}
 	state.NewTunnelName = issued.TunnelName
-	d.step(jobID, StepIssue, provision.StepDone, "конфиг получен: "+issued.TunnelName)
+	d.step(jobID, StepIssue, provision.StepDone, "конфиг получен, линия будет называться «"+issued.TunnelName+"»")
 
 	// 2. Импорт НОВЫМ туннелем: replace=false, прежний остаётся на месте.
 	d.step(jobID, StepImport, provision.StepActive, "кладём конфиг на роутер")
@@ -279,32 +279,36 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 			state.NewTunnelID = id
 		}
 	}
+	// Всё, что дальше пишется в шаги, подсказку и личку, читает владелец, и
+	// линии в этом тексте называются так, как в приложении: именем.
+	// Идентификатор («awg21») он нигде, кроме мелкой подписи, не видел.
 	if state.NewTunnelID == "" {
-		d.step(jobID, StepImport, provision.StepFailed, "роутер не назвал идентификатор нового туннеля")
-		return errors.New("роутер не назвал идентификатор нового туннеля")
+		d.step(jobID, StepImport, provision.StepFailed, "роутер не подтвердил, что новая линия заведена")
+		return errors.New("роутер не подтвердил, что новая линия заведена")
 	}
-	d.step(jobID, StepImport, provision.StepDone, "новый туннель "+state.NewTunnelID+" создан рядом с прежним")
+	d.step(jobID, StepImport, provision.StepDone, "новая линия «"+state.NewTunnelName+"» поднята рядом с прежней")
 
 	// 3. Рукопожатие: без него линия не живая, что бы ни говорил статус.
-	d.step(jobID, StepHandshake, provision.StepActive, "ждём рукопожатия")
-	if err := d.waitHandshake(ctx, req.RouterID, state.NewTunnelID); err != nil {
+	d.step(jobID, StepHandshake, provision.StepActive, "ждём, когда линия обменяется ключами")
+	if err := d.waitHandshake(ctx, req.RouterID, state.NewTunnelID, state.NewTunnelName); err != nil {
 		d.step(jobID, StepHandshake, provision.StepFailed, err.Error())
 		return err
 	}
-	d.step(jobID, StepHandshake, provision.StepDone, "канал живой")
+	d.step(jobID, StepHandshake, provision.StepDone, "ключами обменялась, канал живой")
 
 	// 4. Главным делаем звено в политике, а не глобальный маршрут по
 	// умолчанию: трафик, ради которого меняют конфиг, идёт политикой.
-	d.step(jobID, StepPromote, provision.StepActive, "ставим первым звеном политики")
+	// Человеку политика известна как общий набор правил.
+	d.step(jobID, StepPromote, provision.StepActive, "переводим общий набор правил на новую линию")
 	if _, err := d.command(ctx, req.RouterID, "route_policy_promote", map[string]any{
 		"policy_name": req.PolicyName,
 		"tunnel_id":   state.NewTunnelID,
 	}); err != nil {
 		d.step(jobID, StepPromote, provision.StepFailed, err.Error())
-		return fmt.Errorf("не удалось сделать главным: %w", err)
+		return fmt.Errorf("не удалось перевести общий набор на новую линию: %w", err)
 	}
 	state.Promoted = true
-	d.step(jobID, StepPromote, provision.StepDone, "политика «"+req.PolicyName+"» идёт через новый туннель")
+	d.step(jobID, StepPromote, provision.StepDone, "общий набор «"+req.PolicyName+"» идёт через «"+state.NewTunnelName+"»")
 
 	// 5. Рукопожатия мало: оно бывает и при не ходящем трафике. Критерий --
 	// адрес выхода сменился и отличается от прямого.
@@ -317,7 +321,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 	d.step(jobID, StepVerify, provision.StepDone, verdict)
 
 	// 6. Прежний туннель выключается, но остаётся: откат возможен всегда.
-	d.step(jobID, StepRetire, provision.StepActive, "выключаем прежний туннель")
+	d.step(jobID, StepRetire, provision.StepActive, "выключаем прежнюю линию")
 	if _, err := d.command(ctx, req.RouterID, "tunnel_power", map[string]any{
 		"tunnel_id": req.OldTunnelID,
 		"on":        false,
@@ -325,10 +329,10 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 		// Не провал операции: новый туннель уже несёт трафик. Прежний
 		// остался включённым -- это видно на экране туннелей, и выключить
 		// его можно там же.
-		d.step(jobID, StepRetire, provision.StepFailed, "прежний туннель остался включённым: "+err.Error())
+		d.step(jobID, StepRetire, provision.StepFailed, "прежняя линия осталась включённой: "+err.Error())
 		return nil
 	}
-	d.step(jobID, StepRetire, provision.StepDone, "прежний туннель выключен и остался на роутере")
+	d.step(jobID, StepRetire, provision.StepDone, "прежняя линия выключена и осталась на роутере")
 	return nil
 }
 
@@ -344,11 +348,11 @@ func (d Deps) finish(ctx context.Context, jobID string, req StartReq, state *run
 	}
 	d.Store.Update(jobID, func(j *provision.Job) {
 		j.State = provision.StateSuccess
-		j.Hint = "готово: трафик политики «" + req.PolicyName + "» идёт через " + state.NewTunnelName
+		j.Hint = "готово: общий набор «" + req.PolicyName + "» идёт через «" + state.NewTunnelName + "»"
 	})
 	d.notify(ctx, req.RouterID, fmt.Sprintf(
-		"Замена конфига завершена.\nНовый туннель: %s (%s).\nПолитика «%s» идёт через него, прежний туннель выключен и остался на роутере.",
-		state.NewTunnelName, state.NewTunnelID, req.PolicyName))
+		"Замена конфига завершена.\nНовая линия — «%s». Общий набор «%s» идёт через неё, прежняя линия выключена и осталась на роутере.",
+		state.NewTunnelName, req.PolicyName))
 }
 
 // rollback возвращает роутер в исходное состояние: политику -- прежнему
@@ -361,9 +365,9 @@ func (d Deps) rollback(ctx context.Context, jobID string, req StartReq, state *r
 			"policy_name": req.PolicyName,
 			"tunnel_id":   req.OldTunnelID,
 		}); err != nil {
-			notes = append(notes, "вернуть политику прежнему туннелю не удалось: "+err.Error())
+			notes = append(notes, "вернуть общий набор на прежнюю линию не удалось: "+err.Error())
 		} else {
-			notes = append(notes, "политика возвращена прежнему туннелю")
+			notes = append(notes, "общий набор снова идёт через прежнюю линию")
 		}
 	}
 	if state.Imported && state.NewTunnelID != "" {
@@ -371,9 +375,9 @@ func (d Deps) rollback(ctx context.Context, jobID string, req StartReq, state *r
 			"tunnel_id": state.NewTunnelID,
 			"on":        false,
 		}); err != nil {
-			notes = append(notes, "выключить новый туннель не удалось: "+err.Error())
+			notes = append(notes, "выключить новую линию не удалось: "+err.Error())
 		} else {
-			notes = append(notes, "новый туннель выключен и оставлен на роутере")
+			notes = append(notes, "новая линия выключена и оставлена на роутере")
 		}
 	}
 	hint := cause.Error()
@@ -438,7 +442,9 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	return res, nil
 }
 
-func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID string) error {
+// waitHandshake ищет линию в снимке по идентификатору, а в текст для человека
+// кладёт её имя.
+func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID, name string) error {
 	last := ""
 	for i := 0; i < d.handshakeTries(); i++ {
 		res, err := d.command(ctx, routerID, "route_status", map[string]any{})
@@ -456,14 +462,14 @@ func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID string
 			if t.HasHandshake {
 				return nil
 			}
-			last = fmt.Sprintf("туннель %s есть, но рукопожатия ещё не было", tunnelID)
+			last = fmt.Sprintf("линия «%s» на роутере есть, но ключами ещё не обменялась", name)
 		}
 		if last == "" {
-			last = fmt.Sprintf("туннель %s не виден в снимке", tunnelID)
+			last = fmt.Sprintf("линии «%s» на роутере не видно", name)
 		}
 		d.sleep(ctx, d.handshakeWait())
 	}
-	return errors.New("рукопожатия так и не случилось: " + last)
+	return errors.New("новая линия так и не обменялась ключами: " + last)
 }
 
 // verifyExit -- критерий успеха. Одного рукопожатия недостаточно: оно бывает
@@ -481,12 +487,12 @@ func (d Deps) verifyExit(ctx context.Context, routerID int64) (string, error) {
 	via := exitIP(viaRes.Output)
 	direct := exitIP(directRes.Output)
 	if via == "" {
-		return "", errors.New("через туннель адрес выхода не определился")
+		return "", errors.New("через новую линию адрес выхода не определился")
 	}
 	if direct != "" && via == direct {
-		return "", fmt.Errorf("снаружи виден тот же адрес, что и без туннеля (%s): подмены нет", via)
+		return "", fmt.Errorf("снаружи виден тот же адрес, что и напрямую (%s): трафик в обход не пошёл", via)
 	}
-	return fmt.Sprintf("через туннель %s, напрямую %s", via, orUnknown(direct)), nil
+	return fmt.Sprintf("через линию %s, напрямую %s", via, orUnknown(direct)), nil
 }
 
 func (d Deps) findTunnelByName(ctx context.Context, routerID int64, name string) (string, bool) {
