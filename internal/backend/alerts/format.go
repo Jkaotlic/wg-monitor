@@ -143,18 +143,28 @@ func writeTunnelRecoveryFooter(b *strings.Builder, d map[string]any) {
 	fmt.Fprintf(b, "\nСнова работают правила: %s", strings.Join(parts, ", "))
 }
 
+// Слова о молчащем роутере. Первая тревога (FormatRouterOffline), напоминание
+// и восстановление по agent_heartbeat говорят об одном событии и обязаны
+// говорить одинаково: раньше напоминание приходило как «Проверка
+// agent_heartbeat падает».
+const (
+	routerOfflineHeadline  = "Роутер не на связи"
+	routerOfflineRecovered = "Роутер снова на связи"
+	routerOfflineAdvice    = "Проверьте, включён ли роутер и горят ли на нём лампочки. Если включён — проверьте, есть ли интернет у провайдера. Когда роутер вернётся, бот напишет сам."
+)
+
 // FormatRouterOffline renders a router-offline message (heartbeat watcher).
 // Includes a short hint at what to check first.
 func FormatRouterOffline(nickname string, since time.Duration) string {
 	return Card{
 		Badge:   "🔴",
 		Label:   fmt.Sprintf("[%s]", nickname),
-		Summary: "Роутер не на связи",
+		Summary: routerOfflineHeadline,
 		Meta:    []string{KV("молчит", durFmt(since.Round(time.Minute)))},
 		Sections: []CardSection{
 			{Title: "Что не работает", Lines: []string{"Роутер молчит " + durFmt(since.Round(time.Minute)) + " — за это время он не прислал ни одного отчёта."}},
 			{Title: "Что я думаю", Lines: []string{"Либо роутер выключен или перезагружается, либо у него пропал интернет."}},
-			{Title: "Что делать", Lines: []string{"Проверьте, включён ли роутер и горят ли на нём лампочки. Если включён — проверьте, есть ли интернет у провайдера. Когда роутер вернётся, бот напишет сам."}},
+			{Title: "Что делать", Lines: []string{routerOfflineAdvice}},
 		},
 	}.Render(CardOpts{})
 }
@@ -357,6 +367,9 @@ func categoryHeadline(checkName string, d map[string]any, ns []NeighborSummary) 
 		}
 		return "Сервисы не открываются через обход"
 	}
+	if checkName == "agent_heartbeat" {
+		return routerOfflineHeadline
+	}
 	return "Проверка " + checkName + " падает"
 }
 
@@ -380,6 +393,9 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
 	}
+	if checkName == "agent_heartbeat" {
+		return routerOfflineRecovered
+	}
 	return "Проверка " + checkName + " снова в норме"
 }
 
@@ -387,6 +403,13 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 // Translates raw Go errors into human labels (timeout/refused/no-route/etc.)
 // and drops internal IPs/socket pairs that operators flagged as noise.
 func writeWhatBroke(b *strings.Builder, checkName string, d map[string]any, ns []NeighborSummary) {
+	// Молчащий роутер подробностей не присылает по определению: общая
+	// строка «агент не прислал подробностей» тут неправда, он не прислал
+	// ничего.
+	if checkName == "agent_heartbeat" {
+		b.WriteString("  Роутер перестал присылать отчёты — что с ним сейчас, бот не знает.\n")
+		return
+	}
 	switch checkCategory(checkName) {
 	case "tunnel":
 		writeTunnelWhatBroke(b, d)
@@ -892,6 +915,9 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 		return "Само по себе это не мешает интернету. Откройте приложение — там на экране «Проверки» видно, вернулась ли связь с панелью роутера. Если не вернулась за полчаса, перезагрузите роутер."
 	case "external_reach":
 		return adviseExternalReach(d, ns)
+	}
+	if checkName == "agent_heartbeat" {
+		return routerOfflineAdvice
 	}
 	return "Откройте приложение — на экране «Сейчас» видно, что с роутером происходит."
 }
