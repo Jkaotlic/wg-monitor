@@ -1,30 +1,57 @@
 // Разбор отчёта awg-manager /api/diagnostics/result в карточки экрана.
 //
-// Форма ответа принадлежит awg-manager и между версиями меняется, поэтому
-// здесь ровно та же защитная стратегия, что у бэкенда в
-// internal/backend/alerts/diag_report.go: незнакомое поле молча пропускаем,
-// нераспознанный ответ не выдумываем, а показываем сырым.
+// Форма проверена на живом awg-manager 2.18.2 (10.09.2026): проверки лежат
+// плоским списком tests[], у проверок VPN-туннеля есть tunnelId и tunnelName.
+// Прежний разбор ждал выдуманную форму tunnels → {id → {проверка}} и не
+// находил ни одной проверки -- экран показывал только «Роутер» и «Канал
+// провайдера» с версией панели. Разбор тот же, что у бэкенда в
+// internal/backend/alerts/diag_report.go: сверху вердикт «всё ли в порядке»,
+// ниже -- только то, что не так, по VPN-туннелям с их именами. Нераспознанный
+// ответ не выдумываем, а показываем сырым.
 
+// Проверки awg-manager словами владельца -- те же, что у бэкенда.
 const TEST_LABELS = {
-  handshake: 'Обмен ключами',
-  dns: 'Определение адресов',
-  ping: 'Проверка связи',
-  route: 'Маршрутизация',
-  mtu: 'Размер пакета (MTU)',
-  external: 'Выход в интернет',
+  wan_connectivity: 'Интернет у провайдера',
+  ndms_health: 'Система роутера отвечает',
+  kernel_module: 'Модуль AmneziaWG',
+  clock_skew: 'Часы роутера',
+  direct_connectivity: 'Интернет напрямую',
+  singbox_runtime: 'Прокси-движок',
+  singbox_tunnel_connectivity: 'Связь через прокси-движок',
+  dns_resolve: 'Адрес сервера VPN-туннеля находится',
+  endpoint_reachable: 'Сервер VPN-туннеля отвечает',
+  endpoint_route_check: 'Путь до сервера VPN-туннеля',
+  awg_handshake: 'Обмен ключами свежий',
+  tunnel_connectivity: 'Интернет через VPN-туннель',
+  firewall_rules: 'Правила пропуска трафика',
+  config_parse: 'Настройки VPN-туннеля читаются',
+  interface_state_consistency: 'Состояние VPN-туннеля согласовано',
+  mtu_check: 'Размер пакета (MTU)',
+  proxy_health: 'Прокси-модуль AmneziaWG',
+  pingcheck_health: 'Проверка связи',
+  rp_filter: 'Фильтр обратного пути',
+  route_leak_check: 'Лишние маршруты',
+  dns_leak_check: 'Запросы имён не утекают мимо VPN-туннеля',
+  restart_cycle: 'Перезапуск VPN-туннеля',
 }
 
-function testLabel(slug) {
-  return TEST_LABELS[slug] ?? slug
+function testLabel(name, description) {
+  return TEST_LABELS[name] ?? (description || name)
 }
 
-// Провал на одном туннеле важнее успеха на остальных: экран должен показать
-// худший исход, а не средний.
-function aggregateTone(statuses) {
-  if (statuses.includes('fail')) return 'danger'
-  if (statuses.includes('skip') || statuses.includes('warn')) return 'warn'
-  if (statuses.every((s) => s === 'ok')) return 'ok'
-  return 'muted'
+// awg-manager пишет pass, экран говорит ok.
+function normStatus(s) {
+  const v = String(s ?? '').trim().toLowerCase()
+  if (v === 'pass' || v === 'ok' || v === 'success') return 'ok'
+  if (v === 'fail' || v === 'failed' || v === 'error') return 'fail'
+  if (v === 'warn' || v === 'warning') return 'warn'
+  if (v === 'skip' || v === 'skipped') return 'skip'
+  return v
+}
+
+// Имя VPN-туннеля, каким его назвал владелец; без имени -- идентификатор.
+function tunnelLabel(t) {
+  return String(t.tunnelName ?? '').trim() || String(t.tunnelId ?? '').trim()
 }
 
 export function parseDiag(output) {
@@ -40,65 +67,63 @@ export function parseDiag(output) {
   }
 
   const cards = []
+  const tests = Array.isArray(report.tests) ? report.tests.filter((t) => t && t.name) : []
 
-  const sys = report.system
-  if (sys && typeof sys === 'object') {
-    const parts = []
-    if (sys.appVersion) parts.push(`awg-manager ${sys.appVersion}`)
-    if (sys.keeneticOS) parts.push(`KeeneticOS ${sys.keeneticOS}`)
-    if (sys.uptime) parts.push(`работает ${sys.uptime}`)
-    if (sys.totalMemoryMB) parts.push(`память ${sys.totalMemoryMB} МБ`)
-    const moduleLoaded = sys.kernelModule?.loaded
-    cards.push({
-      key: 'system',
-      title: 'Роутер',
-      verdict: moduleLoaded === false ? 'модуль ядра не загружен' : 'отвечает',
-      tone: moduleLoaded === false ? 'danger' : 'ok',
-      detail: parts.join(' · '),
-    })
-  }
-
-  const wan = report.wan
-  if (wan && typeof wan === 'object') {
-    const ifaces = Object.entries(wan.interfaces ?? {})
-    cards.push({
-      key: 'wan',
-      title: 'Канал провайдера',
-      verdict: wan.anyUp ? 'есть связь' : 'связи нет',
-      tone: wan.anyUp ? 'ok' : 'danger',
-      detail: ifaces.length
-        ? ifaces.map(([id, i]) => `${i.label || id}: ${i.up ? 'поднят' : 'опущен'}`).join(' · ')
-        : 'интерфейсы не перечислены',
-    })
-  }
-
-  // Тесты приходят по туннелям: { tunnels: { <id>: { <slug>: {status, reason} } } }.
-  // Экран группирует их наоборот -- по проверке, потому что оператор ищет
-  // "что сломалось", а не "что там у awg12".
-  const bySlug = new Map()
-  for (const [tunnelID, sections] of Object.entries(report.tunnels ?? {})) {
-    for (const [slug, body] of Object.entries(sections ?? {})) {
-      if (!bySlug.has(slug)) bySlug.set(slug, [])
-      bySlug.get(slug).push({
-        tunnelID,
-        status: body?.status ?? 'unknown',
-        reason: body?.reason ?? '',
-      })
+  if (tests.length) {
+    let passed = 0
+    let failed = 0
+    let skipped = 0
+    for (const t of tests) {
+      const s = normStatus(t.status)
+      if (s === 'fail') failed++
+      else if (s === 'skip') skipped++
+      else passed++
     }
-  }
-  const slugs = [...bySlug.keys()].sort()
-  for (const slug of slugs) {
-    const rows = bySlug.get(slug).sort((a, b) => a.tunnelID.localeCompare(b.tunnelID))
-    const tone = aggregateTone(rows.map((r) => r.status))
-    const bad = rows.filter((r) => r.status !== 'ok')
+    const checked = passed + failed
     cards.push({
-      key: `test:${slug}`,
-      title: testLabel(slug),
-      verdict: bad.length === 0 ? 'всё в норме' : `проблема на ${bad.length} из ${rows.length}`,
-      tone,
-      detail: bad.length
-        ? bad.map((r) => `${r.tunnelID}: ${r.reason || r.status}`).join(' · ')
-        : rows.map((r) => r.tunnelID).join(' · '),
+      key: 'summary',
+      title: 'Итог',
+      verdict: failed ? `нашлись проблемы: ${failed} из ${checked}` : 'всё в порядке',
+      tone: failed ? 'danger' : 'ok',
+      detail:
+        `проверено ${checked} ${pluralRu(checked, 'пункт', 'пункта', 'пунктов')}` +
+        (skipped ? ` · пропущено ${skipped} — на этом роутере не нужны` : ''),
+    })
+  }
+
+  // Незагруженный модуль -- единственное из системной части, с чем владелец
+  // может что-то сделать сам.
+  const km = report.system?.kernelModule
+  if (km && km.exists && km.loaded === false) {
+    cards.push({
+      key: 'kernel',
+      title: 'Модуль AmneziaWG',
+      verdict: 'не загружен',
+      tone: 'danger',
+      detail: 'Может понадобиться перезагрузка роутера.',
+    })
+  }
+
+  // Только то, что не так, по проверке: человек ищет «что сломалось», а
+  // прошедшие проверки уже сосчитаны в итоге.
+  const bad = new Map()
+  for (const t of tests) {
+    const s = normStatus(t.status)
+    if (s !== 'fail' && s !== 'warn') continue
+    if (!bad.has(t.name)) bad.set(t.name, { label: testLabel(t.name, t.description), rows: [], worst: s })
+    const g = bad.get(t.name)
+    if (s === 'fail') g.worst = 'fail'
+    const where = tunnelLabel(t)
+    const what = String(t.detail ?? '').trim()
+    g.rows.push(where ? `VPN-туннель «${where}»${what ? `: ${what}` : ''}` : what)
+  }
+  for (const [name, g] of bad) {
+    cards.push({
+      key: `test:${name}`,
+      title: g.label,
+      verdict: g.worst === 'fail' ? 'сбой' : 'есть замечание',
+      tone: g.worst === 'fail' ? 'danger' : 'warn',
+      detail: g.rows.filter(Boolean).join(' · '),
     })
   }
 

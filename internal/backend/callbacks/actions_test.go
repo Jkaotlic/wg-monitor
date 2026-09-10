@@ -201,6 +201,22 @@ func TestCommandAction_TunnelDeleteForcesLegacyAWGCleanup(t *testing.T) {
 	}
 }
 
+// Диагностика awg-manager гоняет проверку restart_cycle — «Цикл Stop → Start»:
+// каждый VPN-туннель на секунду останавливается и поднимается снова. Владелец,
+// нажавший кнопку под тревогой, обязан узнать об этом до того, как связь
+// моргнёт, а не догадываться потом.
+func TestCommandAction_DiagWarnsAboutTunnelRestart(t *testing.T) {
+	sink := &fakeEnqueuer{}
+	a := NewCommandAction(sink, func() string { return "id-diag" })
+	s, err := a.Apply(context.Background(), nil, Args{Action: "diag_now", UserID: 1, CheckName: "tunnel_awg10"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s, "Диагностика") || !strings.Contains(s, "перезапустится") {
+		t.Fatalf("строка не предупреждает о перезапуске VPN-туннелей: %q", s)
+	}
+}
+
 func TestCommandAction_CommandActions(t *testing.T) {
 	cases := []struct {
 		action  string

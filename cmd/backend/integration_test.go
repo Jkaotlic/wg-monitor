@@ -606,7 +606,9 @@ func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
 		t.Errorf("runHits: want 1, got %d", rnh)
 	}
 
-	// 5. Assert rendered TG message contains diag card text and version.
+	// 5. Assert rendered TG message carries the parsed summary. The panel
+	// version is engineering: the owner's summary no longer shows it — it is
+	// enough that the parsed card arrived rather than raw JSON.
 	msg, ok := capTG.lastSent()
 	if !ok {
 		t.Fatal("no TG message captured")
@@ -614,8 +616,8 @@ func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
 	if !strings.Contains(msg.text, "📊 Диагностика") {
 		t.Errorf("TG text missing '📊 Диагностика': %q", msg.text)
 	}
-	if !strings.Contains(msg.text, "2.8.2") {
-		t.Errorf("TG text missing '2.8.2': %q", msg.text)
+	if !strings.Contains(msg.text, "отчёт получен") {
+		t.Errorf("TG text missing parsed summary 'отчёт получен': %q", msg.text)
 	}
 
 	// 6. Assert inline keyboard has "📄 Полный отчёт" with diag_raw callback.

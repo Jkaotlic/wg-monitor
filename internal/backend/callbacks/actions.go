@@ -297,6 +297,12 @@ func formatQueuedStatus(action, checkName string) string {
 	if action == "tunnel_restart" {
 		return "📤 Отправлено роутеру: 🔁 Перезапуск туннеля"
 	}
+	if action == "diag_now" {
+		// Диагностика awg-manager гоняет restart_cycle: каждый VPN-туннель на
+		// секунду останавливается и поднимается. Сказать об этом до того, как
+		// связь моргнёт, а не оставлять человека гадать потом.
+		return "📤 Отправлено роутеру: 📊 Диагностика — во время проверки каждый VPN-туннель на секунду перезапустится"
+	}
 	label := commandLabels[action]
 	if label == "" {
 		label = action

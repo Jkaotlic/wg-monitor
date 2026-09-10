@@ -11,20 +11,30 @@ import (
 
 func TestDiagTestExpand_CacheHit_RenderDetail(t *testing.T) {
 	dc := newDiagCache()
-	body := `{"tunnels":{"awg10":{"mtu":{"status":"fail","current":1280,"expected":1380,"reason":"frag"}}}}`
+	// Настоящая форма отчёта awg-manager 2.18.2: плоский tests[], у проверки
+	// VPN-туннеля — tunnelId и tunnelName.
+	body := `{"version":"1.0","tests":[` +
+		`{"name":"mtu_check","description":"MTU интерфейса","status":"fail","detail":"MTU = 1500, путь пропускает 1280","tunnelId":"awg10","tunnelName":"Дача"},` +
+		`{"name":"mtu_check","description":"MTU интерфейса","status":"pass","detail":"MTU = 1280","tunnelId":"awg11","tunnelName":"Работа"}]}`
 	tok := dc.Put(body, 5*time.Minute)
 	tgFake := &fakeDiagTG{}
 	a := NewDiagTestExpandAction(dc, tgFake)
 	q := &tg.CallbackQuery{ID: "qid", Message: tg.Message{Chat: tg.Chat{ID: 100}, MessageID: 200}}
-	args := Args{Action: "diag_test", UserID: 7, DiagRawToken: tok, DiagTestID: "mtu"}
+	args := Args{Action: "diag_test", UserID: 7, DiagRawToken: tok, DiagTestID: "mtu_check"}
 	_, err := a.Apply(context.Background(), q, args)
 	if err != nil {
 		t.Fatalf("unexpected: %v", err)
 	}
-	for _, want := range []string{"MTU интерфейса", "awg10", "1280", "1380", "frag", "К сводке"} {
+	// Страница проверки — шаг глубже сводки: здесь уже можно показать, что
+	// увидел роутер. Но проверка названа по-человечески, а VPN-туннель —
+	// именем владельца, не id.
+	for _, want := range []string{"Размер пакета", "VPN-туннель «Дача»", "VPN-туннель «Работа»", "MTU = 1500, путь пропускает 1280", "К сводке"} {
 		if !strings.Contains(tgFake.lastText, want) && !hasInKb(tgFake.lastKb, want) {
 			t.Errorf("missing %q in render or kb. text=%q", want, tgFake.lastText)
 		}
+	}
+	if strings.Contains(tgFake.lastText, "awg10") {
+		t.Errorf("страница проверки показывает id VPN-туннеля: %q", tgFake.lastText)
 	}
 }
 
@@ -45,7 +55,7 @@ func TestDiagTestExpand_CacheMiss(t *testing.T) {
 
 func TestDiagTestExpand_TestNotFound(t *testing.T) {
 	dc := newDiagCache()
-	body := `{"tunnels":{"awg10":{"mtu":{"status":"fail"}}}}`
+	body := `{"version":"1.0","tests":[{"name":"mtu_check","status":"fail","tunnelId":"awg10","tunnelName":"Дача"}]}`
 	tok := dc.Put(body, 5*time.Minute)
 	tgFake := &fakeDiagTG{}
 	a := NewDiagTestExpandAction(dc, tgFake)
@@ -91,7 +101,9 @@ func hasInKb(kb *tg.InlineKeyboardMarkup, want string) bool {
 
 func TestDiagBack_CacheHit_RendersSummary(t *testing.T) {
 	dc := newDiagCache()
-	body := `{"version":"1.0","generatedAt":"2026-05-14T12:00:00Z","durationMs":2559,"system":{"appVersion":"2.8.2","backend":"nativewg","totalMemoryMB":256}}`
+	body := `{"version":"1.0","generatedAt":"2026-05-14T12:00:00Z","durationMs":2559,"system":{"appVersion":"2.8.2","backend":"nativewg","totalMemoryMB":256},` +
+		`"tests":[{"name":"wan_connectivity","description":"WAN up с gateway","status":"pass","detail":"default via 10.0.0.1"},` +
+		`{"name":"awg_handshake","description":"Handshake свежий (<3 мин)","status":"pass","detail":"1 minute ago","tunnelId":"awg10","tunnelName":"Дача"}]}`
 	tok := dc.Put(body, 5*time.Minute)
 	tgFake := &fakeDiagTG{}
 	a := NewDiagBackAction(dc, tgFake)
@@ -103,8 +115,13 @@ func TestDiagBack_CacheHit_RendersSummary(t *testing.T) {
 	if !strings.Contains(tgFake.lastText, "Диагностика") {
 		t.Errorf("expected Диагностика in summary, got: %s", tgFake.lastText)
 	}
-	if !strings.Contains(tgFake.lastText, "2.8.2") {
-		t.Errorf("expected appVersion in details, got: %s", tgFake.lastText)
+	// «К сводке» возвращает ту же сводку владельцу, что пришла первой: ответ,
+	// всё ли в порядке, а не версию панели.
+	if !strings.Contains(tgFake.lastText, "всё в порядке") {
+		t.Errorf("сводка не отвечает, всё ли в порядке: %s", tgFake.lastText)
+	}
+	if strings.Contains(tgFake.lastText, "2.8.2") {
+		t.Errorf("версия панели — инженерия, её место в полном отчёте: %s", tgFake.lastText)
 	}
 }
 

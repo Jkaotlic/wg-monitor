@@ -3,7 +3,6 @@ package callbacks
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
@@ -80,27 +79,23 @@ func (a *DiagTestExpandAction) editNotFound(ctx context.Context, q *tg.CallbackQ
 	return a.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 }
 
+// renderTestDetail — страница одной проверки, на шаг глубже сводки. Здесь уже
+// можно показать, что увидел роутер: человек сюда пришёл сам, по кнопке. Но
+// проверка названа словами владельца, а VPN-туннель — его именем, не id.
 func renderTestDetail(d alerts.TestDetail) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "📊 Диагностика / %s\n\n", d.Label)
 	if len(d.PerTunnel) == 0 {
-		// Global test (no per-tunnel breakdown). Render just the aggregate.
-		fmt.Fprintf(&b, "%s статус: %s\n", iconForStatus(d.Status), humanDiagStatus(d.Status))
-		return b.String()
+		fmt.Fprintf(&b, "%s %s\n", iconForStatus(d.Status), humanDiagStatus(d.Status))
+		if d.Detail != "" {
+			fmt.Fprintf(&b, "   что увидел роутер: %s\n", d.Detail)
+		}
+		return strings.TrimRight(b.String(), "\n")
 	}
 	for _, p := range d.PerTunnel {
-		fmt.Fprintf(&b, "%s %s\n", iconForStatus(p.Status), p.TunnelLabel)
-		// Stable key order
-		keys := make([]string, 0, len(p.KeyValues))
-		for k := range p.KeyValues {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		for _, k := range keys {
-			fmt.Fprintf(&b, "   %s: %s\n", k, p.KeyValues[k])
-		}
+		fmt.Fprintf(&b, "%s VPN-туннель «%s» — %s\n", iconForStatus(p.Status), p.TunnelLabel, humanDiagStatus(p.Status))
 		if p.Reason != "" {
-			fmt.Fprintf(&b, "   причина: %s\n", p.Reason)
+			fmt.Fprintf(&b, "   что увидел роутер: %s\n", p.Reason)
 		}
 		b.WriteString("\n")
 	}
@@ -113,8 +108,10 @@ func humanDiagStatus(s string) string {
 		return "в норме"
 	case "fail":
 		return "сбой"
+	case "warn":
+		return "есть замечание"
 	case "skip":
-		return "пропущено"
+		return "пропущено — на этом роутере не нужно"
 	default:
 		return s
 	}
@@ -126,6 +123,8 @@ func iconForStatus(s string) string {
 		return "✅"
 	case "fail":
 		return "❌"
+	case "warn":
+		return "⚠"
 	case "skip":
 		return "⏭"
 	}
@@ -166,8 +165,14 @@ func (a *DiagBackAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Ar
 	if rawFallback {
 		text = "📊 Диагностика\n\n(не удалось распарсить — нажми «📄 Полный отчёт»)"
 	} else {
+		// ✅ — только когда сводка говорит «всё в порядке»: зелёная галка над
+		// «нашлись проблемы» противоречила бы самой себе.
+		badge := "✅"
+		if !strings.HasPrefix(summary, "всё в порядке") {
+			badge = "⚠"
+		}
 		card := alerts.Card{
-			Badge:   "✅",
+			Badge:   badge,
 			Label:   "Диагностика",
 			Summary: summary,
 			Details: strings.Join(bullets, "\n"),

@@ -8,7 +8,7 @@ import (
 )
 
 func TestFormatCommandResult_DiagOK_ParsedReport(t *testing.T) {
-	r := wire.CommandResult{Status: "ok", Output: fixtureDiagSuccess}
+	r := wire.CommandResult{Status: "ok", Output: diagJSON(t, loadDiagFixture(t))}
 	chunks := FormatCommandResult("diag_now", r, 3500)
 	if len(chunks) != 1 {
 		t.Fatalf("want 1 chunk, got %d", len(chunks))
@@ -17,11 +17,11 @@ func TestFormatCommandResult_DiagOK_ParsedReport(t *testing.T) {
 	if !strings.Contains(body, "📊 Диагностика") {
 		t.Errorf("missing label: %s", body)
 	}
-	if !strings.Contains(body, "📊") {
-		t.Errorf("expected 📊 badge: %s", body)
+	if !strings.Contains(body, "всё в порядке") {
+		t.Errorf("сводка не отвечает владельцу, всё ли в порядке: %s", body)
 	}
-	if !strings.Contains(body, "2.8.2") {
-		t.Errorf("expected parsed appVersion: %s", body)
+	if strings.Contains(body, "2.18.2") {
+		t.Errorf("версия панели — инженерия, её место в полном отчёте: %s", body)
 	}
 	if strings.Contains(body, "```") {
 		t.Errorf("parsed diag must not use code-fence: %s", body)

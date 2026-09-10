@@ -1,50 +1,72 @@
 import { describe, it, expect } from 'vitest'
 import { parseDiag, checkRows, exitCompare } from '../src/diag.js'
 
-// Форма ответа -- /api/diagnostics/result awg-manager, та же, что разбирает
-// бэкенд в internal/backend/alerts/diag_report.go (version 1.0).
+// Форма ответа -- /api/diagnostics/result awg-manager, проверенная на живом
+// 2.18.2 (10.09.2026): проверки лежат плоским списком tests[], у проверок
+// VPN-туннеля есть tunnelId и tunnelName. Прежний разбор ждал выдуманную
+// форму tunnels → {id → {проверка}} и не находил ни одной -- экран
+// показывал только «Роутер» и «Канал провайдера» с версией панели.
+// Бэкенд разбирает ту же форму в internal/backend/alerts/diag_report.go.
+const test = (name, status, extra = {}) => ({ name, description: name, status, detail: '', ...extra })
 const REPORT = JSON.stringify({
   version: '1.0',
   generatedAt: '2026-08-18T09:00:00Z',
-  durationMs: 2559,
-  system: {
-    appVersion: '2.16.4',
-    keeneticOS: '4.1.7',
-    uptime: '5 дней',
-    totalMemoryMB: 256,
-    kernelModule: { exists: true, loaded: true },
-  },
-  wan: {
-    anyUp: true,
-    interfaces: { ISP: { up: true, label: 'Провайдер' } },
-  },
-  tunnels: {
-    awg12: { handshake: { status: 'ok' }, dns: { status: 'fail', reason: 'таймаут' } },
-    awg10: { handshake: { status: 'ok' }, dns: { status: 'ok' } },
-  },
+  durationMs: 16416,
+  system: { appVersion: '2.18.2+r1', kernelModule: { exists: true, loaded: true } },
+  wan: { anyUp: true, interfaces: { eth3: { up: true, label: 'Провайдер' } } },
+  tests: [
+    test('wan_connectivity', 'pass', { detail: 'default via 10.0.0.1' }),
+    test('kernel_module', 'skip'),
+    test('awg_handshake', 'pass', { tunnelId: 'awg10', tunnelName: 'Дача' }),
+    test('awg_handshake', 'pass', { tunnelId: 'awg12', tunnelName: 'Работа' }),
+    test('tunnel_connectivity', 'fail', { tunnelId: 'awg12', tunnelName: 'Работа', detail: 'timeout after 5s' }),
+    test('tunnel_connectivity', 'pass', { tunnelId: 'awg10', tunnelName: 'Дача' }),
+  ],
+})
+const ALL_GOOD = JSON.stringify({
+  ...JSON.parse(REPORT),
+  tests: JSON.parse(REPORT).tests.map((t) => (t.status === 'fail' ? { ...t, status: 'pass' } : t)),
 })
 
 describe('parseDiag', () => {
   it('вытаскивает время сбора и длительность', () => {
     const d = parseDiag(REPORT)
     expect(d.generatedAt).toBe('2026-08-18T09:00:00Z')
-    expect(d.durationMs).toBe(2559)
+    expect(d.durationMs).toBe(16416)
   })
 
-  it('система и WAN становятся карточками', () => {
+  // Сверху -- ответ «всё ли в порядке», как на остальных экранах. Версия
+  // панели, модуль ядра и интерфейсы WAN владельцу не адресованы: они в
+  // полном отчёте ниже.
+  it('первая карточка -- вердикт, а не «Роутер» с версией панели', () => {
+    const cards = parseDiag(ALL_GOOD).cards
+    expect(cards[0].key).toBe('summary')
+    expect(cards[0].tone).toBe('ok')
+    expect(cards[0].verdict).toContain('всё в порядке')
+    const text = cards.map((c) => `${c.title} ${c.verdict} ${c.detail}`).join('\n')
+    expect(text).not.toMatch(/2\.18\.2|awg-manager|WAN|Канал провайдера/)
+  })
+
+  it('провал на одном VPN-туннеле: вердикт тревожный, карточка называет проверку и VPN-туннель по имени', () => {
     const cards = parseDiag(REPORT).cards
-    expect(cards.find((c) => c.key === 'system').detail).toContain('2.16.4')
-    expect(cards.find((c) => c.key === 'wan').tone).toBe('ok')
+    expect(cards[0].tone).toBe('danger')
+    expect(cards[0].verdict).toContain('нашлись проблемы')
+    const tc = cards.find((c) => c.key === 'test:tunnel_connectivity')
+    expect(tc.tone).toBe('danger')
+    expect(tc.title).toBe('Интернет через VPN-туннель')
+    expect(tc.detail).toContain('VPN-туннель «Работа»')
+    expect(tc.detail).toContain('timeout after 5s')
+    expect(tc.detail).not.toContain('awg12')
   })
 
-  it('проверка, провалившаяся хоть на одном туннеле, красится тревожно', () => {
-    const dns = parseDiag(REPORT).cards.find((c) => c.key === 'test:dns')
-    expect(dns.tone).toBe('danger')
-    expect(dns.detail).toContain('awg12')
+  it('прошедшие проверки отдельными карточками не шумят', () => {
+    expect(parseDiag(REPORT).cards.find((c) => c.key === 'test:awg_handshake')).toBeUndefined()
   })
 
-  it('проверка, прошедшая везде, зелёная', () => {
-    expect(parseDiag(REPORT).cards.find((c) => c.key === 'test:handshake').tone).toBe('ok')
+  it('незагруженный модуль AmneziaWG -- совет перезагрузить роутер', () => {
+    const d = parseDiag(JSON.stringify({ version: '1.0', system: { kernelModule: { exists: true, loaded: false } } }))
+    const text = d.cards.map((c) => `${c.verdict} ${c.detail}`).join('\n')
+    expect(text).toContain('перезагруз')
   })
 
   it('порядок карточек стабилен между разборами', () => {

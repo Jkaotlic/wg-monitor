@@ -3,27 +3,23 @@ package alerts
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
-	"time"
 )
 
-// ParseDiagReport extracts headline facts from the awg-manager
-// /api/diagnostics/result JSON (version "1.0"). Returns:
-//   - summary: one-line headline ("отчёт получен (2 559 мс)")
-//   - bullets: ordered display lines for Card.Details
-//   - rawFallback: true if JSON parse failed OR no documented field
-//     was present (caller should dump raw)
+// ParseDiagReport разбирает отчёт awg-manager /api/diagnostics/result
+// (версия "1.0") в сводку для владельца роутера. Возвращает:
+//   - summary: ответ одной строкой — всё ли в порядке и сколько проверено;
+//   - bullets: что именно не так, по VPN-туннелям с их именами;
+//   - rawFallback: true, если JSON не разобрался или в нём нет ни одного
+//     знакомого поля (вызывающий покажет отчёт сырым).
 //
-// Unknown fields are silently skipped.
+// Инженерия отчёта — версия панели, модуль ядра, интерфейсы WAN, журнал —
+// владельцу не адресована и живёт в полном отчёте по кнопке. В сводке
+// остаётся то, из чего человек делает вывод или действие.
 func ParseDiagReport(raw string) (summary string, bullets []string, rawFallback bool) {
 	var rep diagReportV1
 	if err := json.Unmarshal([]byte(raw), &rep); err != nil {
 		return "", nil, true
-	}
-	var generic map[string]any
-	if err := json.Unmarshal([]byte(raw), &generic); err == nil {
-		rep.LogHighlights = extractDiagLogHighlights(generic)
 	}
 	if !rep.hasAnyDocumentedField() {
 		return "", nil, true
@@ -31,24 +27,21 @@ func ParseDiagReport(raw string) (summary string, bullets []string, rawFallback 
 	return rep.renderSummary(), rep.renderBullets(), false
 }
 
+// diagReportV1 — то, что из отчёта нужно сводке. Форма проверена на живом
+// awg-manager 2.18.2 (10.09.2026): проверки лежат плоским списком tests[].
+// Прежний разбор ждал выдуманную форму tunnels → {id → {проверка}} и не
+// находил ни одной.
 type diagReportV1 struct {
-	Version       string         `json:"version"`
-	GeneratedAt   string         `json:"generatedAt"`
-	DurationMs    int64          `json:"durationMs"`
-	System        diagSystem     `json:"system"`
-	WAN           diagWAN        `json:"wan"`
-	Route         map[string]any `json:"route"`
-	LogHighlights []string       `json:"-"`
+	Version     string       `json:"version"`
+	GeneratedAt string       `json:"generatedAt"`
+	DurationMs  int64        `json:"durationMs"`
+	System      diagSystem   `json:"system"`
+	Tests       []diagTestV1 `json:"tests"`
 }
 
 type diagSystem struct {
-	AppVersion    string        `json:"appVersion"`
-	KeeneticOS    string        `json:"keeneticOS"`
-	Arch          string        `json:"arch"`
-	Backend       string        `json:"backend"`
-	TotalMemoryMB int64         `json:"totalMemoryMB"`
-	Uptime        string        `json:"uptime"`
-	KernelModule  diagKernelMod `json:"kernelModule"`
+	AppVersion   string        `json:"appVersion"`
+	KernelModule diagKernelMod `json:"kernelModule"`
 }
 
 type diagKernelMod struct {
@@ -56,352 +49,223 @@ type diagKernelMod struct {
 	Loaded bool `json:"loaded"`
 }
 
-type diagWAN struct {
-	AnyUp      bool                     `json:"anyUp"`
-	Interfaces map[string]diagInterface `json:"interfaces"`
-}
-
-type diagInterface struct {
-	Up    bool   `json:"up"`
-	Label string `json:"label"`
+// diagTestV1 — одна проверка из tests[]. Проверки VPN-туннеля несут tunnelId
+// и tunnelName; общие (связь с провайдером, часы роутера) — нет.
+type diagTestV1 struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Status      string `json:"status"` // pass | fail | skip | warn
+	Detail      string `json:"detail"`
+	TunnelID    string `json:"tunnelId"`
+	TunnelName  string `json:"tunnelName"`
 }
 
 func (r diagReportV1) hasAnyDocumentedField() bool {
-	if r.Version != "" || r.GeneratedAt != "" || r.DurationMs != 0 {
-		return true
-	}
-	if r.System.AppVersion != "" || r.System.Uptime != "" || r.System.TotalMemoryMB != 0 {
-		return true
-	}
-	if r.System.KernelModule.Exists || r.System.KernelModule.Loaded {
-		return true
-	}
-	if len(r.WAN.Interfaces) > 0 {
-		return true
-	}
-	if len(r.LogHighlights) > 0 {
-		return true
-	}
-	return false
+	return r.Version != "" || r.GeneratedAt != "" || r.DurationMs != 0 ||
+		r.System.AppVersion != "" || r.System.KernelModule.Exists || r.System.KernelModule.Loaded ||
+		len(r.Tests) > 0
 }
 
 func (r diagReportV1) renderSummary() string {
+	took := ""
 	if r.DurationMs > 0 {
-		return fmt.Sprintf("отчёт получен (%s мс)", thousandsRU(r.DurationMs))
+		took = fmt.Sprintf(" за %d с", (r.DurationMs+500)/1000)
 	}
-	return "отчёт получен"
+	if len(r.Tests) == 0 {
+		return "отчёт получен" + took
+	}
+	var passed, failed int
+	for _, t := range r.Tests {
+		switch normDiagStatus(t.Status) {
+		case "ok", "warn":
+			passed++
+		case "fail":
+			failed++
+		}
+	}
+	// Тире, а не двоеточие: карточка уже печатает «Диагностика: …», и два
+	// двоеточия подряд читаются как опечатка.
+	if failed == 0 {
+		return fmt.Sprintf("всё в порядке — проверено %d %s%s", passed, ruPlural(passed, "пункт", "пункта", "пунктов"), took)
+	}
+	return fmt.Sprintf("нашлись проблемы — %d из %d%s", failed, passed+failed, took)
 }
 
+// renderBullets — только то, что не так. Что именно увидел роутер, живёт на
+// странице проверки, на шаг глубже: в сводке сырая деталь владельцу ничего
+// не скажет.
 func (r diagReportV1) renderBullets() []string {
 	var out []string
-	if r.GeneratedAt != "" {
-		if t, err := time.Parse(time.RFC3339, r.GeneratedAt); err == nil {
-			out = append(out, "📅 Снято: "+t.UTC().Format("2006-01-02 15:04:05 UTC"))
-		}
+	if r.System.KernelModule.Exists && !r.System.KernelModule.Loaded {
+		out = append(out, "⚠ модуль AmneziaWG не загружен — может понадобиться перезагрузка роутера")
 	}
-	if r.System.AppVersion != "" || r.System.Backend != "" || r.System.TotalMemoryMB > 0 {
-		parts := []string{}
-		if r.System.AppVersion != "" {
-			parts = append(parts, "awg-manager "+r.System.AppVersion)
-		}
-		if r.System.Backend != "" {
-			parts = append(parts, "движок "+r.System.Backend)
-		}
-		if r.System.TotalMemoryMB > 0 {
-			parts = append(parts, fmt.Sprintf("память %d MB", r.System.TotalMemoryMB))
-		}
-		if len(parts) > 0 {
-			out = append(out, "⚙ "+strings.Join(parts, ", "))
-		}
-	}
-	if r.System.Uptime != "" {
-		out = append(out, "⏱ аптайм: "+r.System.Uptime)
-	}
-	if r.System.KernelModule.Exists || r.System.KernelModule.Loaded {
-		switch {
-		case r.System.KernelModule.Exists && r.System.KernelModule.Loaded:
-			out = append(out, "✅ модуль AWG загружен")
-		case r.System.KernelModule.Exists && !r.System.KernelModule.Loaded:
-			out = append(out, "⚠ модуль AWG есть, но не загружен; после обновления NativeWG может понадобиться перезагрузка роутера")
-		default:
-			out = append(out, "❌ модуль AWG не найден")
-		}
-	}
-	if len(r.WAN.Interfaces) > 0 {
-		out = append(out, "🌐 WAN: "+renderWANInterfaces(r.WAN.Interfaces))
-	}
-	if len(r.LogHighlights) > 0 {
-		out = append(out, "Logs: "+strings.Join(r.LogHighlights, " | "))
-	}
-	return out
-}
-
-func extractDiagLogHighlights(root map[string]any) []string {
-	var candidates []string
-	collectDiagLogCandidates(root, nil, &candidates)
-	seen := map[string]bool{}
-	var out []string
-	for _, line := range candidates {
-		line = compactDiagLine(line)
-		if line == "" || !isDiagInterestingLog(line) || seen[line] {
+	for _, t := range r.Tests {
+		st := normDiagStatus(t.Status)
+		if st != "fail" && st != "warn" {
 			continue
 		}
-		seen[line] = true
+		icon := "❌"
+		if st == "warn" {
+			icon = "⚠"
+		}
+		line := icon + " " + diagTestLabel(t.Name, t.Description)
+		if name := diagTunnelLabel(t); name != "" {
+			line += " — VPN-туннель «" + name + "»"
+		}
 		out = append(out, line)
-		if len(out) >= 3 {
-			break
-		}
 	}
 	return out
 }
 
-func collectDiagLogCandidates(v any, path []string, out *[]string) {
-	if pathContains(path, "singbox") || pathContains(path, "sing-box") {
-		return
-	}
-	inLogPath := pathContains(path, "log")
-	switch x := v.(type) {
-	case string:
-		if inLogPath {
-			*out = append(*out, x)
-		}
-	case []any:
-		for _, item := range x {
-			collectDiagLogCandidates(item, path, out)
-		}
-	case map[string]any:
-		if inLogPath {
-			if line := compactDiagLogObject(x); line != "" {
-				*out = append(*out, line)
-			}
-		}
-		for k, item := range x {
-			collectDiagLogCandidates(item, append(path, k), out)
-		}
-	}
-}
-
-func compactDiagLogObject(m map[string]any) string {
-	msg := firstStringField(m, "message", "msg", "text", "line")
-	if msg == "" {
-		return ""
-	}
-	level := firstStringField(m, "level", "severity")
-	if level == "" {
-		return msg
-	}
-	return level + " " + msg
-}
-
-func firstStringField(m map[string]any, keys ...string) string {
-	for _, k := range keys {
-		if s, ok := m[k].(string); ok {
-			return s
-		}
-	}
-	return ""
-}
-
-func pathContains(path []string, needle string) bool {
-	needle = strings.ToLower(needle)
-	for _, p := range path {
-		if strings.Contains(strings.ToLower(p), needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func compactDiagLine(s string) string {
-	s = strings.Join(strings.Fields(s), " ")
-	const max = 140
-	r := []rune(s)
-	if len(r) > max {
-		return string(r[:max-1]) + "…"
-	}
-	return s
-}
-
-func isDiagInterestingLog(s string) bool {
-	low := strings.ToLower(s)
-	for _, needle := range []string{"warn", "error", "fail", "panic", "iptables-restore", "amneziawg"} {
-		if strings.Contains(low, needle) {
-			return true
-		}
-	}
-	return false
-}
-
-func renderWANInterfaces(ifs map[string]diagInterface) string {
-	names := make([]string, 0, len(ifs))
-	for k := range ifs {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	parts := make([]string, 0, len(names))
-	for _, n := range names {
-		icon := "⚪"
-		if ifs[n].Up {
-			icon = "✅"
-		}
-		parts = append(parts, fmt.Sprintf("%s %s", icon, n))
-	}
-	return strings.Join(parts, " · ")
-}
-
-// TestDetail is one diag check (e.g., "MTU интерфейса"), aggregated
-// across tunnels. Slug ID is stable; Label is the human RU title used
-// in button text. PerTunnel may be empty for global tests like
-// "WAN up с gateway" — in that case the single aggregate KeyValues
-// + Reason on the parent are the detail.
+// TestDetail — одна проверка отчёта, собранная по всем VPN-туннелям. ID —
+// имя проверки в отчёте ("awg_handshake"), он же едет в кнопку разбора.
 type TestDetail struct {
-	ID        string            // "mtu" | "dns_leak" | "host_route" | ...
-	Label     string            // "MTU интерфейса"
-	Status    string            // "ok" | "fail" | "skip"
-	PerTunnel []PerTunnelDetail // empty for global tests
+	ID     string
+	Label  string // словами владельца: «Обмен ключами свежий»
+	Status string // ok | fail | skip | warn — худший по всем VPN-туннелям
+	// Detail — что увидел роутер, у общей проверки без VPN-туннеля.
+	Detail    string
+	PerTunnel []PerTunnelDetail
 }
 
-// PerTunnelDetail is the body of one tunnel's row inside a TestDetail.
+// PerTunnelDetail — та же проверка на одном VPN-туннеле.
 type PerTunnelDetail struct {
-	TunnelLabel string            // "awg10"
-	Status      string            // "ok" | "fail" | "skip"
-	KeyValues   map[string]string // ordered display fields (current, expected, ...)
-	Reason      string
+	TunnelLabel string // имя VPN-туннеля, каким его назвал владелец
+	Status      string
+	Reason      string // что увидел роутер
 }
 
-// testSlugLabels maps short slug IDs to user-facing Russian labels.
-// Slugs are stable across awg-mgr versions; labels track the screenshots.
-var testSlugLabels = map[string]string{
-	"mtu":               "MTU интерфейса",
-	"dns_leak":          "Проверка утечки DNS",
-	"dnsLeak":           "Проверка утечки DNS",
-	"host_route":        "Маршрут до сервера туннеля",
-	"hostRoute":         "Маршрут до сервера туннеля",
-	"iptables":          "Правила iptables",
-	"endpoint":          "Резолв сервера туннеля",
-	"endpoint_ping":     "Ping сервера туннеля",
-	"endpointPing":      "Ping сервера туннеля",
-	"handshake":         "Обмен ключами свежий",
-	"tunnel_conn":       "Связность через туннель",
-	"tunnelConn":        "Связность через туннель",
-	"awg_proxy":         "AWG Proxy статус",
-	"awgProxy":          "AWG Proxy статус",
-	"pingcheck":         "PingCheck статус",
-	"validate_cfg":      "Валидация конфига",
-	"validateCfg":       "Валидация конфига",
-	"state_consistency": "Согласованность состояния",
-	"stateConsistency":  "Согласованность состояния",
-}
-
-// ParseDiagTests extracts per-test details from the awg-mgr diag JSON.
-// Returns nil on parse error or if no recognised test sections are
-// present — callers should fall back to the existing summary path.
-//
-// TENTATIVE JSON shape (pending Task 1 preflight verification):
-//
-//	{ "tunnels": { "<tid>": { "<slug>": {"status":"...","reason":"...", ...kv} } } }
-//
-// When the actual awg-mgr 2.8.2 shape is verified on testkeen, this
-// function may need to be refit. Defensive failure mode: returns nil
-// so drill-down buttons simply don't appear; full diag JSON is still
-// accessible via the existing raw button.
+// ParseDiagTests собирает проверки отчёта по имени, в порядке отчёта:
+// awg-manager ставит их от общего к частному, и этот порядок осмыслен.
+// Возвращает nil, если JSON не разобрался; пустой список — если проверок в
+// отчёте нет (старая панель).
 func ParseDiagTests(raw string) []TestDetail {
-	var top struct {
-		Tunnels map[string]map[string]json.RawMessage `json:"tunnels"`
-	}
-	if err := json.Unmarshal([]byte(raw), &top); err != nil {
+	var rep diagReportV1
+	if err := json.Unmarshal([]byte(raw), &rep); err != nil {
 		return nil
 	}
-	if len(top.Tunnels) == 0 {
-		return nil
-	}
-	// Group by slug across tunnels.
-	bySlug := make(map[string]*TestDetail)
-	for tid, sections := range top.Tunnels {
-		for slug, body := range sections {
-			det, ok := bySlug[slug]
-			if !ok {
-				det = &TestDetail{
-					ID:    slug,
-					Label: testSlugLabels[slug],
-				}
-				if det.Label == "" {
-					det.Label = slug
-				}
-				bySlug[slug] = det
-			}
-			ptd := decodePerTunnel(tid, body)
-			det.PerTunnel = append(det.PerTunnel, ptd)
-		}
-	}
-	out := make([]TestDetail, 0, len(bySlug))
-	for _, det := range bySlug {
-		// Aggregate status: any fail → fail; else any skip → skip; else ok.
-		agg := "ok"
-		for _, p := range det.PerTunnel {
-			if p.Status == "fail" {
-				agg = "fail"
-				break
-			}
-			if p.Status == "skip" && agg == "ok" {
-				agg = "skip"
-			}
-		}
-		det.Status = agg
-		// Stable order within each test's tunnel list.
-		sort.Slice(det.PerTunnel, func(i, j int) bool {
-			return det.PerTunnel[i].TunnelLabel < det.PerTunnel[j].TunnelLabel
-		})
-		out = append(out, *det)
-	}
-	// Stable order across tests.
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
-}
-
-func decodePerTunnel(tid string, body json.RawMessage) PerTunnelDetail {
-	var generic map[string]any
-	if err := json.Unmarshal(body, &generic); err != nil {
-		return PerTunnelDetail{TunnelLabel: tid}
-	}
-	out := PerTunnelDetail{TunnelLabel: tid, KeyValues: map[string]string{}}
-	if s, ok := generic["status"].(string); ok {
-		out.Status = s
-	}
-	if r, ok := generic["reason"].(string); ok {
-		out.Reason = r
-	}
-	for k, v := range generic {
-		if k == "status" || k == "reason" {
+	var order []string
+	byName := map[string]*TestDetail{}
+	for _, t := range rep.Tests {
+		if t.Name == "" {
 			continue
 		}
-		// Strip trailing ".0" that float64 default-decoding adds for ints.
-		s := fmt.Sprintf("%v", v)
-		if f, ok := v.(float64); ok && f == float64(int64(f)) {
-			s = fmt.Sprintf("%d", int64(f))
+		det, ok := byName[t.Name]
+		if !ok {
+			det = &TestDetail{ID: t.Name, Label: diagTestLabel(t.Name, t.Description)}
+			byName[t.Name] = det
+			order = append(order, t.Name)
 		}
-		out.KeyValues[k] = s
+		st := normDiagStatus(t.Status)
+		det.Status = worseDiagStatus(det.Status, st)
+		if t.TunnelID == "" && strings.TrimSpace(t.TunnelName) == "" {
+			det.Detail = strings.TrimSpace(t.Detail)
+			continue
+		}
+		det.PerTunnel = append(det.PerTunnel, PerTunnelDetail{
+			TunnelLabel: diagTunnelLabel(t),
+			Status:      st,
+			Reason:      strings.TrimSpace(t.Detail),
+		})
+	}
+	out := make([]TestDetail, 0, len(order))
+	for _, n := range order {
+		out = append(out, *byName[n])
 	}
 	return out
 }
 
-// thousandsRU renders n with thin-space thousands separators
-// ("2 559" for 2559). Russian-locale convention.
-func thousandsRU(n int64) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
+// diagTestLabels — проверки awg-manager словами владельца. Описание из отчёта
+// («Handshake свежий (<3 мин)», «Правила iptables») — язык движка; оно
+// остаётся запасным для проверок, которых здесь ещё нет.
+var diagTestLabels = map[string]string{
+	"wan_connectivity":            "Интернет у провайдера",
+	"ndms_health":                 "Система роутера отвечает",
+	"kernel_module":               "Модуль AmneziaWG",
+	"clock_skew":                  "Часы роутера",
+	"direct_connectivity":         "Интернет напрямую",
+	"singbox_runtime":             "Прокси-движок",
+	"singbox_tunnel_connectivity": "Связь через прокси-движок",
+	"dns_resolve":                 "Адрес сервера VPN-туннеля находится",
+	"endpoint_reachable":          "Сервер VPN-туннеля отвечает",
+	"endpoint_route_check":        "Путь до сервера VPN-туннеля",
+	"awg_handshake":               "Обмен ключами свежий",
+	"tunnel_connectivity":         "Интернет через VPN-туннель",
+	"firewall_rules":              "Правила пропуска трафика",
+	"config_parse":                "Настройки VPN-туннеля читаются",
+	"interface_state_consistency": "Состояние VPN-туннеля согласовано",
+	"mtu_check":                   "Размер пакета (MTU)",
+	"proxy_health":                "Прокси-модуль AmneziaWG",
+	"pingcheck_health":            "Проверка связи",
+	"rp_filter":                   "Фильтр обратного пути",
+	"route_leak_check":            "Лишние маршруты",
+	"dns_leak_check":              "Запросы имён не утекают мимо VPN-туннеля",
+	"restart_cycle":               "Перезапуск VPN-туннеля",
+}
+
+func diagTestLabel(name, description string) string {
+	if l, ok := diagTestLabels[name]; ok {
+		return l
 	}
-	var b strings.Builder
-	first := len(s) % 3
-	if first > 0 {
-		b.WriteString(s[:first])
+	if d := strings.TrimSpace(description); d != "" {
+		return d
 	}
-	for i := first; i < len(s); i += 3 {
-		if b.Len() > 0 {
-			b.WriteRune(' ')
-		}
-		b.WriteString(s[i : i+3])
+	return name
+}
+
+// diagTunnelLabel — имя VPN-туннеля, каким его назвал владелец; без имени —
+// идентификатор: выдумать имя нечем, а промолчать хуже.
+func diagTunnelLabel(t diagTestV1) string {
+	if n := strings.TrimSpace(t.TunnelName); n != "" {
+		return n
 	}
-	return b.String()
+	return strings.TrimSpace(t.TunnelID)
+}
+
+// normDiagStatus сводит слова отчёта к ok | fail | skip | warn: awg-manager
+// пишет pass, а экраны и кнопки говорят ok.
+func normDiagStatus(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "pass", "ok", "success":
+		return "ok"
+	case "fail", "failed", "error":
+		return "fail"
+	case "warn", "warning":
+		return "warn"
+	case "skip", "skipped":
+		return "skip"
+	}
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// worseDiagStatus — худший из двух: провал на одном VPN-туннеле важнее
+// успеха на остальных, а пропуск не перекрывает ни того, ни другого.
+func worseDiagStatus(a, b string) string {
+	rank := map[string]int{"": -1, "skip": 0, "ok": 1, "warn": 2, "fail": 3}
+	ra, oka := rank[a]
+	rb, okb := rank[b]
+	if !oka {
+		ra = 1
+	}
+	if !okb {
+		rb = 1
+	}
+	if rb > ra {
+		return b
+	}
+	return a
+}
+
+// ruPlural — русское склонение по числу: 1 пункт, 2 пункта, 5 пунктов.
+func ruPlural(n int, one, few, many string) string {
+	mod10, mod100 := n%10, n%100
+	switch {
+	case mod100 >= 11 && mod100 <= 14:
+		return many
+	case mod10 == 1:
+		return one
+	case mod10 >= 2 && mod10 <= 4:
+		return few
+	}
+	return many
 }

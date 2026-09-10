@@ -240,7 +240,7 @@ func formatDiagSuccess(label, body string, maxChars int) []string {
 		Label:   label,
 		Summary: summary,
 		Details: strings.Join(bullets, "\n"),
-		Hint:    "Полные сырые данные доступны по кнопке ниже.",
+		Hint:    "Подробности по каждой проблеме — кнопками ниже. Полный отчёт — для того, кто настраивал роутер.",
 	}
 	return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 }

@@ -1,0 +1,283 @@
+{
+ "version": "1.0",
+ "generatedAt": "2026-09-10T16:59:06.6081588+03:00",
+ "durationMs": 16416,
+ "tests": [
+  {
+   "name": "wan_connectivity",
+   "description": "WAN up с gateway",
+   "status": "pass",
+   "detail": "default via 10.0.0.1 dev eth3  metric 1000 \n10.0.0.0/24 dev eth3  proto kernel  scope link  src 10.0.0.244 \n10.10.0.0/24 dev nwg1  proto kernel  scope link  src 10.10.0.1 \nENDPOINT-2 via 10.0.0.1 dev eth3 \nENDPOINT-1 via 10.0.0.1 dev eth3 \n192.168.31.0/24 dev br0  proto kernel  scope link  src 192.168.31.1"
+  },
+  {
+   "name": "ndms_health",
+   "description": "NDMS отвечает",
+   "status": "pass",
+   "detail": "5.2 Alpha 8"
+  },
+  {
+   "name": "kernel_module",
+   "description": "Модули AmneziaWG",
+   "status": "skip",
+   "detail": "Не требуется: NDMS обрабатывает обфускацию нативно"
+  },
+  {
+   "name": "clock_skew",
+   "description": "Расхождение времени с эталоном",
+   "status": "pass",
+   "detail": "Расхождение 1s (норма, источник: https://HOST-11/)"
+  },
+  {
+   "name": "direct_connectivity",
+   "description": "Direct связность (без прокси/туннеля)",
+   "status": "pass",
+   "detail": "Direct egress работает (HTTP 204)"
+  },
+  {
+   "name": "singbox_runtime",
+   "description": "Sing-box runtime",
+   "status": "skip",
+   "detail": "Sing-box не установлен"
+  },
+  {
+   "name": "singbox_tunnel_connectivity",
+   "description": "Sing-box туннели: связность",
+   "status": "skip",
+   "detail": "Sing-box не установлен"
+  },
+  {
+   "name": "dns_resolve",
+   "description": "Резолв endpoint",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "Endpoint уже IP-адрес"
+  },
+  {
+   "name": "endpoint_reachable",
+   "description": "Ping endpoint",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "Round-trip min/avg/max = 180.70/209.31/228.68 ms."
+  },
+  {
+   "name": "endpoint_route_check",
+   "description": "Host route до endpoint",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "ENDPOINT-1 via 10.0.0.1 dev eth3"
+  },
+  {
+   "name": "awg_handshake",
+   "description": "Handshake свежий (<3 мин)",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "1 minute, 43 seconds ago"
+  },
+  {
+   "name": "tunnel_connectivity",
+   "description": "Связность через туннель",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "IP: ENDPOINT-1 (via https://HOST-12)"
+  },
+  {
+   "name": "firewall_rules",
+   "description": "Правила iptables",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "3 правил для интерфейса"
+  },
+  {
+   "name": "config_parse",
+   "description": "Валидация конфига",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "Конфиг валиден"
+  },
+  {
+   "name": "interface_state_consistency",
+   "description": "Консистентность state",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "Status и kernel state согласованы"
+  },
+  {
+   "name": "mtu_check",
+   "description": "MTU интерфейса",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "MTU = 1280"
+  },
+  {
+   "name": "proxy_health",
+   "description": "AWG Proxy статус",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "skip",
+   "detail": "Kernel backend: proxy не используется"
+  },
+  {
+   "name": "pingcheck_health",
+   "description": "PingCheck статус",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "skip",
+   "detail": "PingCheck не включён"
+  },
+  {
+   "name": "rp_filter",
+   "description": "Reverse path filter",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "rp_filter=0 (off)"
+  },
+  {
+   "name": "dns_resolve",
+   "description": "Резолв endpoint",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "Endpoint уже IP-адрес"
+  },
+  {
+   "name": "endpoint_reachable",
+   "description": "Ping endpoint",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "Round-trip min/avg/max = 63.06/75.35/88.62 ms."
+  },
+  {
+   "name": "endpoint_route_check",
+   "description": "Host route до endpoint",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "ENDPOINT-2 via 10.0.0.1 dev eth3"
+  },
+  {
+   "name": "awg_handshake",
+   "description": "Handshake свежий (<3 мин)",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "1 minute, 5 seconds ago"
+  },
+  {
+   "name": "tunnel_connectivity",
+   "description": "Связность через туннель",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "IP: ENDPOINT-2 (via https://HOST-12)"
+  },
+  {
+   "name": "firewall_rules",
+   "description": "Правила iptables",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "3 правил для интерфейса"
+  },
+  {
+   "name": "config_parse",
+   "description": "Валидация конфига",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "Конфиг валиден"
+  },
+  {
+   "name": "interface_state_consistency",
+   "description": "Консистентность state",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "Status и kernel state согласованы"
+  },
+  {
+   "name": "mtu_check",
+   "description": "MTU интерфейса",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "MTU = 1280"
+  },
+  {
+   "name": "proxy_health",
+   "description": "AWG Proxy статус",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "skip",
+   "detail": "Kernel backend: proxy не используется"
+  },
+  {
+   "name": "pingcheck_health",
+   "description": "PingCheck статус",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "skip",
+   "detail": "PingCheck не включён"
+  },
+  {
+   "name": "rp_filter",
+   "description": "Reverse path filter",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "rp_filter=0 (off)"
+  },
+  {
+   "name": "route_leak_check",
+   "description": "Осиротевшие маршруты",
+   "status": "pass",
+   "detail": "Нет осиротевших маршрутов"
+  },
+  {
+   "name": "dns_leak_check",
+   "description": "DNS leak проверка",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "skip",
+   "detail": "DNS не настроен в конфигурации туннеля"
+  },
+  {
+   "name": "dns_leak_check",
+   "description": "DNS leak проверка",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "skip",
+   "detail": "DNS не настроен в конфигурации туннеля"
+  },
+  {
+   "name": "restart_cycle",
+   "description": "Цикл Stop -> Start",
+   "tunnelId": "awg10",
+   "tunnelName": "macmini3.1top-nl2",
+   "status": "pass",
+   "detail": "Stop: 0s, Start: 1s, handshake: OK"
+  },
+  {
+   "name": "restart_cycle",
+   "description": "Цикл Stop -> Start",
+   "tunnelId": "awg14",
+   "tunnelName": "macmini3.1top-hipvps",
+   "status": "pass",
+   "detail": "Stop: 0s, Start: 1s, handshake: OK"
+  }
+ ],
+ "system": {
+  "appVersion": "2.18.2+r1",
+  "backend": "kernel"
+ }
+}
