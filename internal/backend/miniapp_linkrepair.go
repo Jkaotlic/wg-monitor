@@ -70,6 +70,9 @@ func miniappRepairStartHandler(d Deps) http.HandlerFunc {
 			Nickname:     u.Nickname,
 			CheckName:    check,
 			AgentVersion: agentVersion,
+			// Приложение присылает только проверку; имя VPN-туннеля --
+			// из событий роутера, на случай если снимок не придёт.
+			TunnelName: miniappTunnelNameForCheck(d, routerID, check),
 		})
 		switch {
 		case errors.Is(err, linkrepair.ErrNoScenario):

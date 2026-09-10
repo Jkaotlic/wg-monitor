@@ -2282,6 +2282,42 @@ func TestHardTransition_StartsAutoRepair(t *testing.T) {
 	}
 }
 
+// Автозапуск держит в руках саму проверку, а в ней -- имя VPN-туннеля.
+// Починке оно нужно, когда снимок от роутера не придёт: иначе владелец
+// прочтёт в личке идентификатор «awg12».
+func TestHardTransition_PassesTunnelName(t *testing.T) {
+	var mu sync.Mutex
+	got := linkrepair.StartReq{}
+	srv, tok := hardReportEnv(t, "tunnel_awg12", func(req linkrepair.StartReq) (string, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		got = req
+		return "job-1", nil
+	})
+	body, _ := json.Marshal(wire.Report{
+		Timestamp:    time.Now().UTC().Truncate(time.Second),
+		AgentVersion: "v0.19.7",
+		Checks: []wire.Check{{Name: "tunnel_awg12", Status: "fail",
+			Details: map[string]any{"tunnel_name": "Дача"}}},
+	})
+	req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got.CheckName != "tunnel_awg12" {
+		t.Fatalf("починка не запустилась, CheckName=%q", got.CheckName)
+	}
+	if got.TunnelName != "Дача" {
+		t.Fatalf("имя VPN-туннеля не доехало до починки: %q", got.TunnelName)
+	}
+}
+
 // Молчащий роутер и пропавший интернет починку не запускают: сценария нет,
 // а дёргать движок впустую значит писать в журнал отказ на каждый провал.
 func TestHardTransition_SkipsUnfixable(t *testing.T) {

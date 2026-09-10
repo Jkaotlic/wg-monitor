@@ -401,7 +401,10 @@ func TestRun_RouterFailuresReachOwnerAsWords(t *testing.T) {
 		// лежит в том же снимке -- подставлять идентификатор незачем.
 		{"VPN-туннель вне наборов", func(c *scriptedCommander) {
 			c.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
-		}, []string{"VPN-туннель «Дача»", "чинить нечего"}, []string{"awg12"}},
+		}, []string{"VPN-туннель «Дача»", "чинить нечего", "ничего не идёт"},
+			// Через VPN-туннель вне наборов правила не идут: «заблокированное
+			// сейчас не открывается» тут неправда.
+			[]string{"awg12", "Заблокированное"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -455,6 +458,34 @@ func TestRun_RouterFailuresReachOwnerAsWords(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Снимок не пришёл -- имени VPN-туннеля из него не взять. Но запускающий его
+// знает: автозапуск держит в руках саму проверку, приложение -- последние
+// события роутера. Раньше в личку уходило «VPN-туннель «awg12» упал».
+func TestRun_NameFromCallerWhenNoSnapshot(t *testing.T) {
+	cmd := &scriptedCommander{silent: map[string]bool{"route_status": true}}
+	var mu sync.Mutex
+	var notes []string
+	d := testDeps(t, nil)
+	d.Commands = cmd
+	d.Notify = func(_ context.Context, _ int64, text string) {
+		mu.Lock()
+		defer mu.Unlock()
+		notes = append(notes, text)
+	}
+	id, err := d.Start(StartReq{
+		RouterID: 1, Nickname: "роутер", CheckName: "tunnel_awg12",
+		TunnelName: "Дача", AgentVersion: "v0.19.7",
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitDone(t, d, id)
+	got := waitNotes(t, &mu, &notes, 1)[0]
+	if !strings.Contains(got, "VPN-туннель «Дача»") || strings.Contains(got, "awg12") {
+		t.Fatalf("владелец читает не имя VPN-туннеля: %q", got)
 	}
 }
 

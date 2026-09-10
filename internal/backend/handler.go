@@ -847,9 +847,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 			// и уведомление.
 			if tr.Kind == state.Hard && d.StartLinkRepair != nil {
 				if _, ok := linkrepair.ScenarioFor(c.Name); ok {
+					// Имя VPN-туннеля -- из самой проверки: оно нужно починке,
+					// если снимок от роутера не придёт.
+					tunnelName, _ := c.Details["tunnel_name"].(string)
 					if _, err := d.StartLinkRepair(linkrepair.StartReq{
 						RouterID: uid, Nickname: nick, CheckName: c.Name,
 						AgentVersion: rep.AgentVersion, Auto: true,
+						TunnelName: tunnelName,
 					}); err != nil {
 						// Отказ здесь -- норма, а не авария: полуавтомат
 						// выключен владельцем, попытки исчерпаны, идёт замена.

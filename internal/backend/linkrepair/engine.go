@@ -27,6 +27,11 @@ var (
 	ErrAlreadyRunning = errors.New("на этом роутере уже идёт починка или замена конфига")
 	ErrAutoDisabled   = errors.New("полуавтомат выключен владельцем")
 	ErrUnknownOrigin  = errors.New("не помним, каким конфигом поднят этот VPN-туннель")
+	// ErrNotInAnySet -- VPN-туннель не стоит ни в одном общем наборе правил:
+	// через него ничего не идёт, и чинить нечего. Отдельной меткой, чтобы
+	// отчёт не пугал «заблокированное не открывается» -- для такого туннеля
+	// это неправда.
+	ErrNotInAnySet = errors.New("VPN-туннель не входит ни в один общий набор правил — чинить нечего")
 )
 
 // OriginReader -- чем была поднята линия. Пустой ok означает «система этого
@@ -62,6 +67,11 @@ type StartReq struct {
 	// выключатель полуавтомата и счётчик попыток: человек, нажавший
 	// «Починить», просил явно, и отказывать ему из-за счётчика неверно.
 	Auto bool
+	// TunnelName -- имя VPN-туннеля, каким его знает запускающий: автозапуск
+	// берёт его из самой проверки, приложение -- из последних событий
+	// роутера. Нужно, когда снимок не пришёл и имени взять больше неоткуда.
+	// Пустое -- не знает.
+	TunnelName string
 }
 
 // pickBackup выбирает линию, которой отдать трафик. Список интерфейсов
@@ -146,7 +156,11 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 	pol, backup, brokenName, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
 	if err != nil {
 		// Имя VPN-туннеля findPolicy достаёт из снимка и тогда, когда набора
-		// не нашлось. Не пришёл сам снимок -- взять имя неоткуда, остаётся id.
+		// не нашлось. Не пришёл сам снимок -- имя знает запускающий
+		// (req.TunnelName); не знает и он -- остаётся id.
+		if brokenName == "" {
+			brokenName = strings.TrimSpace(req.TunnelName)
+		}
 		if brokenName == "" {
 			brokenName = sc.TunnelID
 		}
@@ -323,7 +337,7 @@ func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (
 		}
 	}
 	// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
-	return pol, "", name, errors.New("VPN-туннель не входит ни в один общий набор правил — чинить нечего")
+	return pol, "", name, ErrNotInAnySet
 }
 
 // notifyResult -- единственное место, где движок говорит с человеком.
@@ -339,6 +353,10 @@ func (d Deps) notifyResult(ctx context.Context, req StartReq, ok bool, names lin
 	backup := names.backup
 	var text string
 	switch {
+	case errors.Is(cause, ErrNotInAnySet):
+		// Через такой VPN-туннель правила не идут: пугать владельца
+		// «заблокированное не открывается» -- врать.
+		text = fmt.Sprintf("VPN-туннель «%s» упал. Чинить нечего: он не входит ни в один общий набор правил, и через него ничего не идёт.", line)
 	case ok && backup != "":
 		text = fmt.Sprintf("VPN-туннель «%s» падал. Увёл трафик на запасной VPN-туннель «%s», выпустил новый конфиг и вернул всё обратно — сейчас работает.", line, backup)
 	case ok:
