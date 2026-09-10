@@ -116,7 +116,13 @@ export function App() {
         />
       )
     : nav.overlay === 'admin' && nav.routerID != null
-      ? <AdminOverlay routerID={nav.routerID} onClose={() => dispatch({ type: 'overlay', overlay: null })} />
+      ? (
+        <AdminOverlay
+          routerID={nav.routerID}
+          onClose={() => dispatch({ type: 'overlay', overlay: null })}
+          openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+        />
+      )
       : nav.overlay === 'routes' && nav.routerID != null
         ? (
           <Overlay title="Маршруты" backLabel="Линии" onBack={() => dispatch({ type: 'overlay', overlay: null })}>

@@ -178,7 +178,7 @@ describe('exitCompare', () => {
     expect(c.direct).toBe('203.0.113.7')
     expect(c.viaTunnel).toBe('203.0.113.19')
     expect(c.works).toBe(true)
-    expect(c.verdict).toContain('подмена работает')
+    expect(c.verdict).toContain('обход работает')
   })
 
   // Один и тот же адрес с обеих сторон -- туннель не несёт трафик, и молчать

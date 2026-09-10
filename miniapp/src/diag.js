@@ -319,6 +319,6 @@ export function exitCompare(directOutput, tunnelOutput) {
     direct,
     viaTunnel,
     works: true,
-    verdict: 'Адреса разные — подмена работает: через туннель наружу виден адрес VPN-сервера.',
+    verdict: 'Адреса разные — обход работает: через линию наружу виден адрес VPN-сервера.',
   }
 }

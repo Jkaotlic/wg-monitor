@@ -828,6 +828,19 @@ func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQu
 // callbacks per the 2026-04-30 policy reversal, but typing into the chat
 // is a one-operator surface).
 func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
+	// /myid отвечает кому угодно и откуда угодно -- до всех проверок доступа.
+	//
+	// Чтобы дать человеку доступ к роутеру, нужен его числовой номер в
+	// Telegram, а сам он его нигде не видит. Личные сообщения от посторонних
+	// бот отбрасывает молча, поэтому узнать номер было негде: добавить
+	// оператора мог только тот, кто умеет доставать id окольными путями.
+	//
+	// Ничего, кроме собственного номера отправителя, команда не сообщает,
+	// поэтому и пропуск ей нужен ровно один -- этот.
+	if cmd, _, ok := parseSlashCommand(m.Text); ok && cmd == "/myid" {
+		r.handleMyIDCommand(ctx, m)
+		return
+	}
 	// Add-operator FSM intercept: admin sends a qualifying message in DM
 	// with the bot while a pending FSM exists. Falls through to normal
 	// handlers otherwise.

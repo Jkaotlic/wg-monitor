@@ -487,7 +487,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
       <h2 class="section-title">Проверить сейчас</h2>
       <div class="card">
         <p class="traffic-detail">
-          Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через туннель и напрямую.
+          Запускает оба зонда сразу и показывает, под каким адресом роутер выходит в интернет через линию обхода и напрямую.
         </p>
 
         {singboxMode && (
@@ -533,7 +533,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
           <p class="compare-note compare-note-alert">Адреса совпадают — трафик идёт мимо туннеля.</p>
         )}
         {!busy && !singboxMode && bothIPs && !sameIP && (
-          <p class="compare-note compare-note-good">Адреса разные — трафик действительно идёт через туннель.</p>
+          <p class="compare-note compare-note-good">Адреса разные — трафик действительно идёт через линию.</p>
         )}
       </div>
     </section>

@@ -5,11 +5,11 @@ import { AccessSection } from './AccessSection.jsx'
 // подключение новых роутеров живут в браузерном дашборде и приедут сюда
 // отдельными фазами. Пустые пункты-заглушки не рисуем -- кнопка, которая
 // ничего не делает, хуже её отсутствия.
-export function AdminOverlay({ routerID, onClose }) {
+export function AdminOverlay({ routerID, onClose, openSheet }) {
   return (
     <Overlay title="Обслуживание и доступы" backLabel="Роутер" onBack={onClose}>
       <div class="screen">
-        <AccessSection routerID={routerID} />
+        <AccessSection routerID={routerID} openSheet={openSheet} />
         <p class="muted admin-note">
           Обслуживание пакетов, бэкапы и подключение новых роутеров пока живут в браузерном
           дашборде.

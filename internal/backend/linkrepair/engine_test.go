@@ -258,7 +258,12 @@ func (noopOrigin) Record(int64, string, string, string, string, time.Time) error
 
 func waitDone(t *testing.T, d Deps, jobID string) provision.Job {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	// Пятнадцать секунд, а не три: при полном прогоне пакеты идут
+	// параллельно, машина загружена, и трёх секунд иногда не хватало --
+	// тест падал через раз, не имея отношения к тому, что проверяет.
+	// Ожидание не удлиняет прогон: цикл выходит, как только задание
+	// завершилось.
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		job, ok := d.Store.Get(jobID)
 		if ok && job.State != provision.StateRunning {

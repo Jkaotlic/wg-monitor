@@ -104,3 +104,47 @@ func TestTopicHelpBody_SummaryMatchesVisibleReplyKeyboard(t *testing.T) {
 		}
 	}
 }
+
+// Чтобы дать человеку доступ к роутеру, нужен его числовой номер в Telegram.
+// Сам он этот номер нигде не видит, а личные сообщения от посторонних бот до
+// сих пор отбрасывал молча — узнать его было негде, и добавить оператора мог
+// только тот, кто умеет доставать id окольными путями.
+func TestMyID_AnswersStrangerInDM(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+
+	const stranger = int64(777001)
+	// Личка постороннего: ни доступа к роутерам, ни прав администратора.
+	msg := &tg.Message{Chat: tg.Chat{ID: stranger}, From: tg.User{ID: stranger}, Text: "/myid"}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("бот обязан ответить на /myid кому угодно, ответов: %d", len(f.sentMsgs))
+	}
+	if !strings.Contains(f.sentMsgs[0], "777001") {
+		t.Fatalf("в ответе нет самого номера:\n%s", f.sentMsgs[0])
+	}
+}
+
+// Команда сообщает номер ТОЛЬКО тому, кто её послал: чужой id она не выдаёт
+// ни при каких аргументах.
+func TestMyID_TellsOnlyOwnNumber(t *testing.T) {
+	d, _ := newTestDB(t)
+	f := &fakeRouterTG{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+
+	const stranger = int64(777002)
+	msg := &tg.Message{Chat: tg.Chat{ID: stranger}, From: tg.User{ID: stranger}, Text: "/myid 42"}
+	r.HandleMessage(context.Background(), msg)
+
+	if len(f.sentMsgs) != 1 {
+		t.Fatalf("ответов: %d", len(f.sentMsgs))
+	}
+	if strings.Contains(f.sentMsgs[0], "42\n") || strings.Contains(f.sentMsgs[0], " 42 ") {
+		t.Fatalf("команда выдала чужой номер:\n%s", f.sentMsgs[0])
+	}
+	if !strings.Contains(f.sentMsgs[0], "777002") {
+		t.Fatalf("в ответе нет номера отправителя:\n%s", f.sentMsgs[0])
+	}
+}

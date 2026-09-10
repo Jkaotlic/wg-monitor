@@ -237,3 +237,29 @@ func (r *Router) adminTopicHelp(ctx context.Context, m *tg.Message) {
 
 Подсказка: thread_id топика можно посмотреть в /list_users — он совпадает с message_thread_id из TG API.`)
 }
+
+// handleMyIDCommand сообщает человеку его собственный номер в Telegram.
+//
+// Номер нужен, чтобы владелец роутера мог дать ему доступ: в приложении на
+// экране «Доступ» добавление оператора спрашивает именно это число. Своего
+// номера человек не видит нигде, а спросить его больше не у кого.
+//
+// Отвечает туда же, откуда пришло, и только про отправителя: аргументы
+// команда игнорирует, чужой номер по ней не узнать.
+func (r *Router) handleMyIDCommand(ctx context.Context, m *tg.Message) {
+	if m == nil || m.From.ID == 0 {
+		return
+	}
+	text := fmt.Sprintf(
+		"Ваш номер в Telegram: %d\n\n"+
+			"Он нужен, чтобы вам дали доступ к роутеру: перешлите это число тому, "+
+			"кто им управляет — он добавит вас на экране «Доступ» в приложении.",
+		m.From.ID)
+	var thread *int64
+	if m.MessageThreadID != nil {
+		thread = m.MessageThreadID
+	}
+	if _, err := r.tg.SendMessage(ctx, m.Chat.ID, thread, text, "", nil); err != nil {
+		slog.Warn("myid: send failed", "chat", m.Chat.ID, "from", m.From.ID, "err", err)
+	}
+}
