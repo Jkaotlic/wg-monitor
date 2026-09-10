@@ -93,10 +93,21 @@ def login_if_needed(op, cfg):
         return
     if not ((cfg.get("login") or "") or (cfg.get("password") or "")):
         return
-    env = request(op, cfg, "POST", "/api/auth/login", {
-        "login": cfg.get("login") or "",
-        "password": cfg.get("password") or "",
-    })
+    try:
+        env = request(op, cfg, "POST", "/api/auth/login", {
+            "login": cfg.get("login") or "",
+            "password": cfg.get("password") or "",
+        })
+    except RelayError as e:
+        # awg-manager с выключенным входом (authEnabled=false) отвечает на
+        # /api/auth/login 405, панель без этой ручки — 404. Это «входа нет»,
+        # а не «пароль не подошёл»: установка шла дальше бы и без логина, а
+        # падала на первом шаге. Неверный пароль (401) — по-прежнему отказ.
+        msg = str(e)
+        if "HTTP 405" in msg or "HTTP 404" in msg:
+            print("WARN awgm login skipped (auth disabled): %s" % msg[:200], file=sys.stderr)
+            return
+        raise
     if env and env.get("success") is False:
         raise RelayError("awgm login: success=false")
 
