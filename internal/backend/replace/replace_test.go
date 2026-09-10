@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -22,6 +23,8 @@ type fakeCommander struct {
 	replies        map[string]wire.CommandResult // по действию
 	handshakeAfter int                           // сколько раз route_status ответит «рукопожатия нет»
 	statusCalls    int
+	silent         map[string]bool // действия, на которые роутер молчит
+	garbageStatus  bool            // route_status отвечает не снимком
 }
 
 func (f *fakeCommander) Enqueue(_ int64, cmd wire.Command) error {
@@ -40,7 +43,13 @@ func (f *fakeCommander) AwaitResult(_ context.Context, _ int64, id string, _ tim
 			action = c.Action
 		}
 	}
+	if f.silent[action] {
+		return nil, false
+	}
 	if action == "route_status" {
+		if f.garbageStatus {
+			return &wire.CommandResult{ID: id, Status: "ok", Output: "<html>502 Bad Gateway</html>"}, true
+		}
 		f.statusCalls++
 		snap := wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{
 			{ID: "awg21", Name: "amnezia_nl", HasHandshake: f.statusCalls > f.handshakeAfter},
@@ -172,7 +181,25 @@ func assertOwnerVocabulary(t *testing.T, texts []string) {
 				t.Errorf("человек читает %q: %q", bad, text)
 			}
 		}
+		if words := latinOutsideQuotes(text); len(words) > 0 {
+			t.Errorf("человек читает инженерию %v: %q", words, text)
+		}
 	}
+}
+
+// latinOutsideQuotes -- латинские слова вне ёлочек. Имена VPN-туннелей и
+// наборов владелец видит в ёлочках, «VPN» -- часть слова «VPN-туннель». Всё
+// остальное латиницей -- имя команды агента, ответ awg-manager или ошибка
+// разбора JSON: инженерия, которую владелец прочесть не может.
+var (
+	quotedRe    = regexp.MustCompile(`«[^»]*»`)
+	latinWordRe = regexp.MustCompile(`[A-Za-z]{2,}`)
+)
+
+func latinOutsideQuotes(text string) []string {
+	bare := quotedRe.ReplaceAllString(text, "«»")
+	bare = strings.ReplaceAll(bare, "VPN", "")
+	return latinWordRe.FindAllString(bare, -1)
 }
 
 func waitJob(t *testing.T, d Deps, id string) provision.Job {
@@ -412,6 +439,68 @@ func TestReplace_AllowsCurrentAndUnknownAgent(t *testing.T) {
 			t.Fatalf("версия %q: %v", v, err)
 		}
 		waitJob(t, d, id)
+	}
+}
+
+// Отказ роутера доходит до владельца: в подсказку на экране и в личку. Раньше
+// туда уезжал сырой ответ агента -- «route_policy_promote: роутер не ответил»,
+// «tunnel_import: awgmgr client not configured», ошибка разбора JSON. Имя
+// команды и инженерный английский -- в лог оператору, а человек читает, ЧТО
+// не вышло и почему, словами.
+func TestReplace_RouterFailuresReachOwnerAsWords(t *testing.T) {
+	base := func() map[string]wire.CommandResult {
+		return map[string]wire.CommandResult{
+			"tunnel_import":    {Status: "ok", Output: `✅ Туннель "amnezia_nl" создан (id=awg21)`},
+			"check_via_tunnel": {Status: "ok", Output: "Exit IP: 203.0.113.19"},
+			"check_direct":     {Status: "ok", Output: "Exit IP: 203.0.113.7"},
+		}
+	}
+	cases := []struct {
+		name  string
+		setup func(*fakeCommander)
+		want  []string // что подсказка обязана назвать
+	}{
+		{"молчит на переводе набора", func(f *fakeCommander) {
+			f.silent = map[string]bool{"route_policy_promote": true}
+		}, []string{"общий набор", "не ответил"}},
+		{"молчит на проверке адреса", func(f *fakeCommander) {
+			f.silent = map[string]bool{"check_via_tunnel": true}
+		}, []string{"адрес выхода", "не ответил"}},
+		{"молчит, пока ждём обмена ключами", func(f *fakeCommander) {
+			f.silent = map[string]bool{"route_status": true}
+		}, []string{"ключами", "не ответил"}},
+		{"агент отказал импорту", func(f *fakeCommander) {
+			f.replies["tunnel_import"] = wire.CommandResult{Status: "err", Output: "awgmgr client not configured"}
+		}, []string{"завести", "ошибкой"}},
+		{"агент не уложился", func(f *fakeCommander) {
+			f.replies["tunnel_import"] = wire.CommandResult{Status: "timeout", Output: "tunnel_import exceeded its execution timeout: signal: killed"}
+		}, []string{"завести", "не уложился"}},
+		{"снимок не разобрался", func(f *fakeCommander) {
+			f.garbageStatus = true
+		}, []string{"ключами", "непонятн"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &fakeCommander{replies: base()}
+			tc.setup(cmd)
+			notes := &noteLog{}
+			d := deps(t, cmd, fakeCabinet{conf: []byte("[Interface]\n")}, &fakeOrigin{}, notes)
+
+			id, err := d.Start(startReq())
+			if err != nil {
+				t.Fatal(err)
+			}
+			job := waitJob(t, d, id)
+			if job.State != provision.StateFailed {
+				t.Fatalf("state=%s hint=%q", job.State, job.Hint)
+			}
+			for _, w := range tc.want {
+				if !strings.Contains(job.Hint, w) {
+					t.Errorf("подсказка не называет %q: %q", w, job.Hint)
+				}
+			}
+			assertOwnerVocabulary(t, ownerReads(job, notes.wait(t, 1)))
+		})
 	}
 }
 

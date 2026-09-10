@@ -143,10 +143,14 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 		ctx = context.Background()
 	}
 
-	pol, backup, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
+	pol, backup, brokenName, err := d.findPolicy(ctx, req.RouterID, sc.TunnelID)
 	if err != nil {
-		// Политику не нашли -- имени линии взять неоткуда, остаётся её id.
-		d.fail(ctx, jobID, req, StepFailover, lineNames{broken: sc.TunnelID}, err)
+		// Имя VPN-туннеля findPolicy достаёт из снимка и тогда, когда набора
+		// не нашлось. Не пришёл сам снимок -- взять имя неоткуда, остаётся id.
+		if brokenName == "" {
+			brokenName = sc.TunnelID
+		}
+		d.fail(ctx, jobID, req, StepFailover, lineNames{broken: brokenName}, err)
 		return
 	}
 	names := namesFor(pol, sc.TunnelID, backup)
@@ -159,7 +163,8 @@ func (d Deps) run(jobID string, req StartReq, sc Scenario) {
 			"policy_name": pol.Name,
 			"tunnel_id":   backup,
 		}); err != nil {
-			d.fail(ctx, jobID, req, StepFailover, lineNames{broken: names.broken}, err)
+			d.fail(ctx, jobID, req, StepFailover, lineNames{broken: names.broken},
+				fmt.Errorf("увести трафик на запасной VPN-туннель «%s» не вышло: %w", names.backup, err))
 			return
 		}
 		d.step(jobID, StepFailover, provision.StepDone, "трафик идёт через «"+names.backup+"»")
@@ -238,16 +243,28 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	}
 	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: d.now().UTC()}
 	if err := d.Commands.Enqueue(routerID, cmd); err != nil {
-		return nil, fmt.Errorf("%s: очередь не приняла команду: %w", action, err)
+		d.logCommandFailure(action, "enqueue", err.Error())
+		return nil, errors.New(replace.CommandNotSent)
 	}
 	res, ok := d.Commands.AwaitResult(ctx, routerID, id, d.awaitStep())
 	if !ok || res == nil {
-		return nil, fmt.Errorf("роутер не ответил на %s", action)
+		d.logCommandFailure(action, "no answer", "")
+		return nil, errors.New(replace.RouterFailure(false, ""))
 	}
 	if res.Status != "ok" {
-		return nil, fmt.Errorf("%s: %s", action, res.Output)
+		d.logCommandFailure(action, res.Status, res.Output)
+		return nil, errors.New(replace.RouterFailure(true, res.Status))
 	}
 	return res, nil
+}
+
+// logCommandFailure -- то, что владельцу не показывают (какая команда, с
+// каким статусом, что ответил агент), остаётся оператору в логе. Причина
+// провала уходит в личку, и сырому ответу агента там не место.
+func (d Deps) logCommandFailure(action, status, output string) {
+	if d.Logger != nil {
+		d.Logger.Warn("linkrepair command failed", "action", action, "status", status, "output", strings.TrimSpace(output))
+	}
 }
 
 func (d Deps) step(jobID, name string, status provision.StepStatus, detail string) {
@@ -277,26 +294,36 @@ func (d Deps) fail(ctx context.Context, jobID string, req StartReq, step string,
 // findPolicy ищет политику, в цепочке которой стоит упавшая линия, и
 // подбирает ей замену. Снимок спрашивается у агента: бэкенд состав политик
 // не хранит.
-func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (wire.RoutePolicySummary, string, error) {
+//
+// name -- имя упавшего VPN-туннеля из того же снимка. Оно нужно и тогда, когда
+// набора не нашлось: причина уходит владельцу в личку, и идентификатор там
+// читать некому. Не пришёл снимок -- имени взять неоткуда, name пустое.
+func (d Deps) findPolicy(ctx context.Context, routerID int64, tunnelID string) (pol wire.RoutePolicySummary, backup, name string, err error) {
 	res, err := d.command(ctx, routerID, "route_status", map[string]any{})
 	if err != nil {
-		return wire.RoutePolicySummary{}, "", err
+		return pol, "", "", fmt.Errorf("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: %w", err)
 	}
 	var snap wire.RouteSnapshot
 	if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
-		return wire.RoutePolicySummary{}, "", fmt.Errorf("снимок маршрутизации не разобрался: %w", err)
+		d.logCommandFailure("route_status", "unparsable", err.Error())
+		return pol, "", "", errors.New("не узнали у роутера, в каком общем наборе правил этот VPN-туннель: " + replace.RouterGarbled)
 	}
-	for _, pol := range snap.Policies {
-		for _, iface := range pol.Interfaces {
+	for _, t := range snap.Tunnels {
+		if t.ID == tunnelID && strings.TrimSpace(t.Name) != "" {
+			name = strings.TrimSpace(t.Name)
+		}
+	}
+	for _, p := range snap.Policies {
+		for _, iface := range p.Interfaces {
 			if iface.TunnelID != tunnelID {
 				continue
 			}
-			backup, _ := pickBackup(pol, tunnelID)
-			return pol, backup, nil
+			backup, _ := pickBackup(p, tunnelID)
+			return p, backup, name, nil
 		}
 	}
 	// Причина уходит владельцу в личку: ни идентификатора, ни «политики».
-	return wire.RoutePolicySummary{}, "", errors.New("VPN-туннель не входит ни в один общий набор правил — чинить нечего")
+	return pol, "", name, errors.New("VPN-туннель не входит ни в один общий набор правил — чинить нечего")
 }
 
 // notifyResult -- единственное место, где движок говорит с человеком.

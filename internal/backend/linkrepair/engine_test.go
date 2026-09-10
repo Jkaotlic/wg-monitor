@@ -3,6 +3,7 @@ package linkrepair
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -167,6 +168,11 @@ type scriptedCommander struct {
 	mu      sync.Mutex
 	actions []string
 	last    string
+	// Отклонения от счастливого сценария; задаются до Start и дальше только
+	// читаются.
+	silent   map[string]bool               // действия, на которые роутер молчит
+	refuse   map[string]wire.CommandResult // действия, которым агент отказывает
+	snapshot string                        // ответ route_status вместо обычного
 }
 
 func (c *scriptedCommander) Enqueue(_ int64, cmd wire.Command) error {
@@ -181,6 +187,13 @@ func (c *scriptedCommander) AwaitResult(_ context.Context, _ int64, id string, _
 	c.mu.Lock()
 	action := c.last
 	c.mu.Unlock()
+	if c.silent[action] {
+		return nil, false
+	}
+	if res, ok := c.refuse[action]; ok {
+		res.ID = id
+		return &res, true
+	}
 	out := ""
 	switch action {
 	case "route_status":
@@ -188,6 +201,9 @@ func (c *scriptedCommander) AwaitResult(_ context.Context, _ int64, id string, _
 			`"policies":[{"name":"HydraRoute","interfaces":[` +
 			`{"bind":"OpkgTun12","name":"Дача","tunnel_id":"awg12","role":"active","available":false,"order":1},` +
 			`{"bind":"OpkgTun10","name":"Работа","tunnel_id":"awg10","role":"fallback","available":true,"order":2}]}]}`
+		if c.snapshot != "" {
+			out = c.snapshot
+		}
 	case "tunnel_import":
 		out = `Туннель "amnezia_nl" создан (id=awg21)`
 	case "check_via_tunnel":
@@ -241,6 +257,7 @@ func TestRun_SingleNotification(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	waitDone(t, d, id)
+	waitNotes(t, &mu, &notes, 1)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -290,6 +307,7 @@ func TestRun_NotificationUsesLineNames(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	job := waitDone(t, d, id)
+	waitNotes(t, &mu, &notes, 1)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -356,6 +374,122 @@ func TestNotifyResult_AllOutcomesSpeakVPNTunnel(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Отказ роутера уходит владельцу в личку причиной провала. Там не место
+// имени команды («роутер не ответил на route_status»), ошибке разбора JSON и
+// ответу агента на инженерном английском: всё это -- в лог оператору.
+func TestRun_RouterFailuresReachOwnerAsWords(t *testing.T) {
+	cases := []struct {
+		name   string
+		setup  func(*scriptedCommander)
+		want   []string // что человек обязан прочесть
+		forbid []string
+	}{
+		{"молчит на снимке", func(c *scriptedCommander) {
+			c.silent = map[string]bool{"route_status": true}
+		}, []string{"не ответил"}, nil},
+		{"снимок не разобрался", func(c *scriptedCommander) {
+			c.snapshot = "<html>502 Bad Gateway</html>"
+		}, []string{"непонятн"}, nil},
+		{"отказал уводу на резерв", func(c *scriptedCommander) {
+			c.refuse = map[string]wire.CommandResult{
+				"route_policy_promote": {Status: "err", Output: "HTTP_500 policy refers to missing interface"},
+			}
+		}, []string{"запасной VPN-туннель", "ошибкой"}, nil},
+		// Снимок пришёл, но в наборах этого VPN-туннеля нет. Имя его всё равно
+		// лежит в том же снимке -- подставлять идентификатор незачем.
+		{"VPN-туннель вне наборов", func(c *scriptedCommander) {
+			c.snapshot = `{"tunnels":[{"id":"awg12","name":"Дача"}],"policies":[]}`
+		}, []string{"VPN-туннель «Дача»", "чинить нечего"}, []string{"awg12"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := &scriptedCommander{}
+			tc.setup(cmd)
+			var mu sync.Mutex
+			var notes []string
+			d := testDeps(t, nil)
+			d.Commands = cmd
+			d.Notify = func(_ context.Context, _ int64, text string) {
+				mu.Lock()
+				defer mu.Unlock()
+				notes = append(notes, text)
+			}
+			d.Replace = replace.Deps{
+				Store: d.Store, Commands: cmd, Cabinet: scriptedCabinet{}, Origin: noopOrigin{},
+				BaseCtx: context.Background(), AwaitStep: time.Second,
+				HandshakeTries: 2, HandshakeWait: time.Millisecond,
+				Sleep: func(context.Context, time.Duration) {},
+			}
+
+			id, err := d.Start(StartReq{
+				RouterID: 1, Nickname: "роутер", CheckName: "tunnel_awg12",
+				AgentVersion: "v0.19.7",
+			})
+			if err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			job := waitDone(t, d, id)
+			if job.State != provision.StateFailed {
+				t.Fatalf("state=%s hint=%q", job.State, job.Hint)
+			}
+			texts := append([]string{job.Hint}, waitNotes(t, &mu, &notes, 1)...)
+			for _, st := range job.Steps {
+				texts = append(texts, st.Detail)
+			}
+			all := strings.Join(texts, "\n")
+			for _, w := range tc.want {
+				if !strings.Contains(all, w) {
+					t.Errorf("человек не прочёл %q:\n%s", w, all)
+				}
+			}
+			for _, f := range tc.forbid {
+				if strings.Contains(all, f) {
+					t.Errorf("человек прочёл %q:\n%s", f, all)
+				}
+			}
+			for _, text := range texts {
+				if words := latinOutsideQuotes(text); len(words) > 0 {
+					t.Errorf("человек читает инженерию %v: %q", words, text)
+				}
+			}
+		})
+	}
+}
+
+// waitNotes ждёт сообщений под тем же замком, под которым их пишут. Движок
+// закрывает задание раньше, чем пишет в личку, поэтому законченное задание
+// ещё не значит отправленное сообщение -- из-за этого TestRun_SingleNotification
+// флапал.
+func waitNotes(t *testing.T, mu *sync.Mutex, notes *[]string, count int) []string {
+	t.Helper()
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := append([]string(nil), (*notes)...)
+		mu.Unlock()
+		if len(got) >= count {
+			return got
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("сообщений в личку меньше %d", count)
+	return nil
+}
+
+// latinOutsideQuotes -- латинские слова вне ёлочек: имена VPN-туннелей
+// владелец видит в ёлочках, «VPN» -- часть слова «VPN-туннель», а всё прочее
+// латиницей -- инженерия, которую он прочесть не может.
+var (
+	quotedRe    = regexp.MustCompile(`«[^»]*»`)
+	latinWordRe = regexp.MustCompile(`[A-Za-z]{2,}`)
+)
+
+func latinOutsideQuotes(text string) []string {
+	bare := quotedRe.ReplaceAllString(text, "«»")
+	bare = strings.ReplaceAll(bare, "VPN", "")
+	return latinWordRe.FindAllString(bare, -1)
 }
 
 type noopOrigin struct{}

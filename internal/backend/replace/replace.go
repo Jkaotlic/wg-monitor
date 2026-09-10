@@ -270,7 +270,7 @@ func (d Deps) execute(ctx context.Context, jobID string, req StartReq, state *ru
 	})
 	if err != nil {
 		d.step(jobID, StepImport, provision.StepFailed, err.Error())
-		return fmt.Errorf("импорт не прошёл: %w", err)
+		return fmt.Errorf("новый VPN-туннель завести не вышло: %w", err)
 	}
 	state.Imported = true
 	state.NewTunnelID = tunnelIDFromImport(res.Output)
@@ -431,16 +431,54 @@ func (d Deps) command(ctx context.Context, routerID int64, action string, args m
 	}
 	cmd := wire.Command{ID: id, Action: action, Args: args, IssuedAt: d.now().UTC()}
 	if err := d.Commands.Enqueue(routerID, cmd); err != nil {
-		return nil, fmt.Errorf("%s: очередь не приняла команду: %w", action, err)
+		d.logCommandFailure(action, "enqueue", err.Error())
+		return nil, errors.New(CommandNotSent)
 	}
 	res, ok := d.Commands.AwaitResult(ctx, routerID, id, d.awaitStep())
 	if !ok || res == nil {
-		return nil, fmt.Errorf("%s: роутер не ответил за отведённое время", action)
+		d.logCommandFailure(action, "no answer", "")
+		return nil, errors.New(RouterFailure(false, ""))
 	}
 	if res.Status != "ok" {
-		return nil, fmt.Errorf("%s: %s", action, strings.TrimSpace(firstLine(res.Output)))
+		d.logCommandFailure(action, res.Status, res.Output)
+		return nil, errors.New(RouterFailure(true, res.Status))
 	}
 	return res, nil
+}
+
+// Тексты отказа роутера для владельца. Общие для мастера замены и починки:
+// обе говорят с роутером одной очередью, и одно событие обязано звучать
+// одинаково на обоих экранах.
+const (
+	CommandNotSent = "не удалось передать команду роутеру"
+	RouterGarbled  = "роутер прислал непонятный ответ"
+)
+
+// RouterFailure -- как отказ роутера звучит для владельца. Сырой ответ агента
+// -- имя команды, инженерный английский, текст ошибки awg-manager -- ему
+// ничего не говорит и уходит в лог оператору. Человеку достаётся фраза, а что
+// именно не вышло, называет вызывающий: «новый VPN-туннель завести не вышло:
+// роутер ответил ошибкой».
+func RouterFailure(answered bool, status string) string {
+	switch {
+	case !answered:
+		return "роутер не ответил за отведённое время"
+	case status == "timeout":
+		return "роутер не уложился в отведённое время"
+	case status == "locked":
+		return "на роутере идёт другая операция — повторите через минуту"
+	default:
+		return "роутер ответил ошибкой"
+	}
+}
+
+// logCommandFailure сохраняет то, что владельцу не показывают: какая команда,
+// с каким статусом и что ответил агент. Без этого оператору нечем разобрать
+// провал -- задание живёт в памяти и через полчаса сметается.
+func (d Deps) logCommandFailure(action, status, output string) {
+	if d.Logger != nil {
+		d.Logger.Warn("replace command failed", "action", action, "status", status, "output", strings.TrimSpace(output))
+	}
 }
 
 // waitHandshake ищет линию в снимке по идентификатору, а в текст для человека
@@ -450,11 +488,12 @@ func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID, name 
 	for i := 0; i < d.handshakeTries(); i++ {
 		res, err := d.command(ctx, routerID, "route_status", map[string]any{})
 		if err != nil {
-			return err
+			return fmt.Errorf("не узнали у роутера, обменялся ли новый VPN-туннель ключами: %w", err)
 		}
 		var snap wire.RouteSnapshot
 		if err := json.Unmarshal([]byte(res.Output), &snap); err != nil {
-			return fmt.Errorf("снимок маршрутизации не разобрался: %w", err)
+			d.logCommandFailure("route_status", "unparsable", err.Error())
+			return errors.New("не узнали у роутера, обменялся ли новый VPN-туннель ключами: " + RouterGarbled)
 		}
 		for _, t := range snap.Tunnels {
 			if t.ID != tunnelID {
@@ -479,11 +518,11 @@ func (d Deps) waitHandshake(ctx context.Context, routerID int64, tunnelID, name 
 func (d Deps) verifyExit(ctx context.Context, routerID int64) (string, error) {
 	viaRes, err := d.command(ctx, routerID, "check_via_tunnel", map[string]any{})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("адрес выхода через новый VPN-туннель проверить не вышло: %w", err)
 	}
 	directRes, err := d.command(ctx, routerID, "check_direct", map[string]any{})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("адрес выхода напрямую проверить не вышло: %w", err)
 	}
 	via := exitIP(viaRes.Output)
 	direct := exitIP(directRes.Output)
