@@ -261,8 +261,9 @@ func TestFanout_ChatNotFoundMarksUnreachable(t *testing.T) {
 		Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found",
 	}}}
 
-	if _, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", ""); err != nil && !errors.Is(err, ErrNoneDelivered) {
-		t.Fatalf("ошибка=%v", err)
+	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	if n != 0 || err != nil {
+		t.Fatalf("доставлено %d, ошибка %v; ждали 0 без ошибки -- слать некому", n, err)
 	}
 
 	un, err := d.Unreachable().List()
@@ -302,6 +303,17 @@ func TestFanout_OnlyUnreachableRecipientsIsNobodyToNotify(t *testing.T) {
 			n, err = f.SendTracked(context.Background(), router, "agent_heartbeat", "текст", "", &tg.InlineKeyboardMarkup{})
 			if n != 0 || err != nil {
 				t.Fatalf("SendTracked: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
+			}
+			// Путь напоминаний realert: ошибка здесь -- повтор на каждом тике.
+			n, err = f.SendKeyboard(context.Background(), router, "текст", "", &tg.InlineKeyboardMarkup{})
+			if n != 0 || err != nil {
+				t.Fatalf("SendKeyboard: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
+			}
+			// Отчёт о пробуждении мобильного. Фейк нижней клавиатуры не умеет,
+			// рассылка уходит в SendMessage -- через ту же проверку вердикта.
+			n, err = f.SendWithReplyKeyboard(context.Background(), router, "текст", "", struct{}{})
+			if n != 0 || err != nil {
+				t.Fatalf("SendWithReplyKeyboard: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
 			}
 		})
 	}
