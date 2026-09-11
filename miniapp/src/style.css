@@ -305,7 +305,11 @@
   color: var(--muted);
 }
 
+/* 44 px, как у .btn: поле -- тоже зона нажатия, и в 37 px палец попадает
+   в подпись или в кнопку под ним. */
 .field input {
+  box-sizing: border-box;
+  min-height: 44px;
   font-family: inherit;
   font-size: var(--fs-md);
   color: var(--text);
@@ -358,12 +362,27 @@ body {
    the top of this file (no --tg-* or hardcoded hex), same as the
    rest of the component vocabulary.
    ============================================================ */
+/* Отступ под заголовком несёт шапка целиком, а не заголовок внутри неё.
+   Раньше нижнее поле .screen-title (16 px) растягивало шапку, кнопка
+   «Обновить» в 44 px центровалась по этой высоте, и подзаголовок со своим
+   отрицательным верхним полем заезжал под её низ на 7 px. Теперь высоту
+   шапки задаёт самый высокий из двух -- кнопка, а подзаголовок начинается
+   под ней. */
 .router-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--sp-3);
+  margin-bottom: var(--sp-1);
+}
+
+.router-header .screen-title {
+  margin: 0;
+}
+
+.router-header + .router-lastseen {
+  margin-top: 0;
 }
 
 /* Vertical stack of standalone .card elements (one per incident).
@@ -1874,6 +1893,11 @@ body {
 .hint b {
   color: var(--ink);
   font-weight: 600;
+}
+
+/* Подпись из нескольких строк: отметка отчёта и обещание под ней. */
+.hint-line {
+  display: block;
 }
 
 /* Подвал карточки, когда он несёт плохую новость: «наружу виден тот же

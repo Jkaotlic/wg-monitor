@@ -136,6 +136,43 @@ export function parseDiag(output) {
   }
 }
 
+// --- Подпись под «Собрать отчёт» -------------------------------------------
+//
+// Десятичный разделитель у владельца -- запятая: «16.4 с» из toFixed читается
+// как дата или номер версии. Целые секунды -- без «,0», минута и дольше --
+// минутами: «95,4 с» человек пересчитывает в уме.
+function collectDuration(ms) {
+  const tenths = Math.round(ms / 100)
+  if (tenths < 1) return 'меньше 0,1 с'
+  if (tenths < 600) {
+    return tenths % 10 === 0 ? `${tenths / 10} с` : `${Math.floor(tenths / 10)},${tenths % 10} с`
+  }
+  const sec = Math.round(ms / 1000)
+  const min = Math.floor(sec / 60)
+  const rest = sec % 60
+  return rest ? `${min} мин ${rest} с` : `${min} мин`
+}
+
+export function reportStamp(iso, durationMs) {
+  if (!iso) return ''
+  const when = new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
+  return Number.isFinite(durationMs) && durationMs > 0
+    ? `${when} · сбор занял ${collectDuration(durationMs)}`
+    : when
+}
+
+const REPORT_HINT = 'Роутер проверит себя заново — это займёт до минуты. VPN-туннели при этом не перезапускаются.'
+const REPORT_CALM = 'VPN-туннели при сборе не перезапускаются.'
+
+// До отчёта подпись обещает, что туннели не тронут. После -- на её место
+// встаёт отметка, но обещание остаётся коротким хвостом: второе нажатие
+// должно быть таким же спокойным, как первое.
+export function reportHint(parsed) {
+  if (!parsed) return [REPORT_HINT]
+  const stamp = reportStamp(parsed.generatedAt, parsed.durationMs)
+  return stamp ? [stamp, REPORT_CALM] : [REPORT_CALM]
+}
+
 // --- Строки «что спросили и что ответили» ---------------------------------
 //
 // Экран диагностики отвечает не «какая из проверок моргнула», а «что из этого
