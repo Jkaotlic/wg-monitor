@@ -154,7 +154,7 @@ func (s *dotServer) serve(conn net.Conn, reply dotReply, answer [4]byte) {
 			}}
 		}
 		pkt, err := resp.Pack()
-		if err != nil {
+		if err != nil || len(pkt) > 0xFFFF { // 2-byte length prefix: never wrap
 			return
 		}
 		out := make([]byte, 2+len(pkt))
