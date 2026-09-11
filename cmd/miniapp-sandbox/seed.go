@@ -108,6 +108,9 @@ func seedChecks(d *db.DB, uid int64, ts time.Time, broken bool) error {
 		{"awg_manager", "ok", `{"version":"2.17.2","firmware":"4.3.9"}`},
 		{"external_reach", "ok", `{"targets_total":3,"targets_failed":[],"targets_degraded":[]}`},
 		{"tunnel_awg12", "ok", tunnelOK},
+		// Сторож своего DNS-сервера: проверка вне основного порядка экрана,
+		// и только на ней видно, что её имя переведено («Свой DNS-сервер»).
+		{"resolver_guard", "ok", `{}`},
 		{"tunnel_awg10", "ok", `{"tunnel_id":"awg10","tunnel_name":"Франкфурт","status":"running","enabled":true,"handshake_age_sec":48,"ping_check_status":"ok","ping_check_last_latency_ms":52,"matrix_latency_ms":226,"matrix_updated_at":"2026-09-09T09:32:23Z","active_default_known":true}`},
 	}
 	if broken {
