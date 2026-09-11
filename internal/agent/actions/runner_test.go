@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -84,11 +85,18 @@ func TestRunner_PingcheckNow_OK(t *testing.T) {
 func TestRunner_DiagNow_PassesThroughBody(t *testing.T) {
 	const wantPayload = `{"success":true,"data":{"summary":"4/4 green"}}`
 	cli := awgmgrFake(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/diagnostics/result" {
+		switch r.URL.Path {
+		case "/api/diagnostics/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("event: done\ndata: {\"type\":\"done\"}\n\n"))
+		case "/api/diagnostics/result":
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(wantPayload))
+		default:
 			t.Errorf("path: %q", r.URL.Path)
+			w.WriteHeader(404)
 		}
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(wantPayload))
 	}))
 	r := Runner{AwgClient: cli, Now: mockNow()}
 	res := r.Execute(context.Background(), wire.Command{ID: "c3", Action: "diag_now"})
@@ -1219,32 +1227,66 @@ func equalStrSlice(a, b []string) bool {
 	return true
 }
 
-// --- Task 5: diag_now auto-trigger + poll loop tests ---
+// --- Task 2 (v0.30): diag_now always runs fresh, never restarts tunnels ---
 
-// awgmgrFakeState backs a per-path fake server for diag_now auto-trigger
-// tests. Each call counts toward resultHits / runHits; the bodies are
-// supplied by callbacks so each test customises behaviour over hits.
+// awgmgrFakeState backs a per-path fake server for diag_now tests. Each
+// call counts toward streamHits/statusHits/resultHits and appends its kind
+// to hits (in call order); POST /api/diagnostics/run always fails the test
+// via t.Fatalf — that endpoint always restarts every VPN tunnel and DiagNow
+// must never reach it.
 type awgmgrFakeState struct {
+	mu         sync.Mutex
+	hits       []string
+	streamHits int
+	statusHits int
 	resultHits int
-	runHits    int
+	// streamStatus/streamBody answer GET /api/diagnostics/stream once,
+	// written and flushed as a single chunk when streamStatus == 200.
+	streamStatus int
+	streamBody   string
+	// statusBody answers GET /api/diagnostics/status; nil means the test
+	// never expects it to be hit.
+	statusBody func(hit int) (status int, body string)
 	resultBody func(hit int) (status int, body string)
-	runBody    func(hit int) (status int, body string)
 }
 
 func awgmgrFakeMulti(t *testing.T, state *awgmgrFakeState) *awgmgr.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/diagnostics/stream":
+			state.mu.Lock()
+			state.streamHits++
+			state.hits = append(state.hits, "stream")
+			state.mu.Unlock()
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(state.streamStatus)
+			if state.streamStatus == 200 {
+				_, _ = w.Write([]byte(state.streamBody))
+			}
+		case "/api/diagnostics/status":
+			state.mu.Lock()
+			state.statusHits++
+			hit := state.statusHits
+			state.hits = append(state.hits, "status")
+			state.mu.Unlock()
+			if state.statusBody == nil {
+				t.Fatalf("unexpected /api/diagnostics/status hit %d", hit)
+			}
+			s, b := state.statusBody(hit)
+			w.WriteHeader(s)
+			_, _ = w.Write([]byte(b))
 		case "/api/diagnostics/result":
+			state.mu.Lock()
 			state.resultHits++
-			s, b := state.resultBody(state.resultHits)
+			hit := state.resultHits
+			state.hits = append(state.hits, "result")
+			state.mu.Unlock()
+			s, b := state.resultBody(hit)
 			w.WriteHeader(s)
 			_, _ = w.Write([]byte(b))
 		case "/api/diagnostics/run":
-			state.runHits++
-			s, b := state.runBody(state.runHits)
-			w.WriteHeader(s)
-			_, _ = w.Write([]byte(b))
+			t.Fatalf("POST /api/diagnostics/run must never be called — it always restarts every VPN tunnel")
 		default:
 			t.Errorf("unexpected path: %q", r.URL.Path)
 			w.WriteHeader(404)
@@ -1254,100 +1296,87 @@ func awgmgrFakeMulti(t *testing.T, state *awgmgrFakeState) *awgmgr.Client {
 	return &awgmgr.Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
 }
 
-// newRunnerForTest constructs a Runner with the given awgmgr client and
-// poll-tuning fields set for fast unit-test execution.
-func newRunnerForTest(t *testing.T, cli *awgmgr.Client, pollEvery time.Duration, pollMax int) *Runner {
-	t.Helper()
-	return &Runner{
-		AwgClient:     cli,
-		Now:           mockNow(),
-		DiagPollEvery: pollEvery,
-		DiagPollMax:   pollMax,
-	}
-}
-
-func TestRunner_DiagNow_NoReport_TriggersAndPolls(t *testing.T) {
+func TestRunner_DiagNow_RunsFreshThenReadsResult(t *testing.T) {
 	state := &awgmgrFakeState{
-		resultBody: func(hit int) (int, string) {
-			if hit < 3 {
-				return 400, `{"error":true,"code":"NO_REPORT"}`
-			}
-			return 200, `{"system":{"appVersion":"2.8.2"}}`
-		},
-		runBody: func(_ int) (int, string) {
-			return 200, `{"success":true,"data":{"status":"running"}}`
+		streamStatus: 200,
+		streamBody:   "event: done\ndata: {\"type\":\"done\"}\n\n",
+		resultBody: func(_ int) (int, string) {
+			return 200, `{"system":{"appVersion":"2.18.2"}}`
 		},
 	}
 	cli := awgmgrFakeMulti(t, state)
-	r := newRunnerForTest(t, cli, 10*time.Millisecond, 12)
+	r := &Runner{AwgClient: cli, Now: mockNow()}
+
+	res, err := r.DiagNow(context.Background())
+	if err != nil {
+		t.Fatalf("DiagNow: %v", err)
+	}
+	if !strings.Contains(res, "2.18.2") {
+		t.Errorf("expected result body, got: %q", res)
+	}
+	if state.streamHits != 1 || state.resultHits != 1 {
+		t.Errorf("streamHits=%d resultHits=%d, want 1 and 1", state.streamHits, state.resultHits)
+	}
+	if !equalStrSlice(state.hits, []string{"stream", "result"}) {
+		t.Errorf("call order = %v, want [stream result]", state.hits)
+	}
+}
+
+func TestRunner_DiagNow_OldPanelFallsBackToLastReport(t *testing.T) {
+	state := &awgmgrFakeState{
+		streamStatus: 404, // old awg-manager: no stream endpoint at all
+		resultBody: func(_ int) (int, string) {
+			return 200, `{"system":{"appVersion":"2.8.2"}}`
+		},
+	}
+	cli := awgmgrFakeMulti(t, state)
+	r := &Runner{AwgClient: cli, Now: mockNow()}
 
 	res, err := r.DiagNow(context.Background())
 	if err != nil {
 		t.Fatalf("DiagNow: %v", err)
 	}
 	if !strings.Contains(res, "2.8.2") {
-		t.Errorf("expected final result body, got: %q", res)
-	}
-	if state.runHits != 1 {
-		t.Errorf("expected exactly 1 run call, got %d", state.runHits)
-	}
-	if state.resultHits < 3 {
-		t.Errorf("expected at least 3 result polls, got %d", state.resultHits)
+		t.Errorf("expected last report body, got: %q", res)
 	}
 }
 
-func TestRunner_DiagNow_ImmediateOK_NoTrigger(t *testing.T) {
+func TestRunner_DiagNow_OldPanelNoReportIsHonest(t *testing.T) {
 	state := &awgmgrFakeState{
+		streamStatus: 404,
 		resultBody: func(_ int) (int, string) {
-			return 200, `{"system":{"appVersion":"2.8.2"}}`
-		},
-		runBody: func(_ int) (int, string) {
-			t.Errorf("DiagRun should NOT be called when result is immediately OK")
-			return 200, ""
+			return 400, `{"error":true,"code":"NO_REPORT"}`
 		},
 	}
 	cli := awgmgrFakeMulti(t, state)
-	r := newRunnerForTest(t, cli, 10*time.Millisecond, 12)
+	r := &Runner{AwgClient: cli, Now: mockNow()}
 
-	if _, err := r.DiagNow(context.Background()); err != nil {
-		t.Fatalf("DiagNow: %v", err)
-	}
-	if state.runHits != 0 {
-		t.Errorf("expected 0 run calls, got %d", state.runHits)
-	}
-}
-
-func TestRunner_DiagNow_NoReport_TimeoutEmitsTypedToken(t *testing.T) {
-	state := &awgmgrFakeState{
-		resultBody: func(_ int) (int, string) {
-			return 400, `{"code":"NO_REPORT"}` // never resolves
-		},
-		runBody: func(_ int) (int, string) {
-			return 200, `{"success":true,"data":{"status":"running"}}`
-		},
-	}
-	cli := awgmgrFakeMulti(t, state)
-	r := newRunnerForTest(t, cli, 5*time.Millisecond, 3) // tight cap
 	_, err := r.DiagNow(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "DIAG_TIMEOUT") {
-		t.Errorf("expected DIAG_TIMEOUT, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "NO_REPORT") {
+		t.Errorf("expected honest NO_REPORT error, got: %v", err)
 	}
+	// The /run t.Fatalf guard in awgmgrFakeMulti already proves this, but
+	// spell it out: DiagNow must not have tried to trigger a run.
 }
 
-func TestRunner_DiagNow_NoReport_RunFails_BubblesError(t *testing.T) {
+func TestRunner_DiagNow_StreamErrorBubbles(t *testing.T) {
 	state := &awgmgrFakeState{
+		streamStatus: 200,
+		streamBody:   "event: error\ndata: {\"type\":\"error\",\"message\":\"panic: x\"}\n\n",
 		resultBody: func(_ int) (int, string) {
-			return 400, `{"code":"NO_REPORT"}`
-		},
-		runBody: func(_ int) (int, string) {
-			return 503, `{"error":true,"message":"awgmgr restarting"}`
+			t.Fatalf("DiagResult must not be called when DiagFresh reports a run error")
+			return 0, ""
 		},
 	}
 	cli := awgmgrFakeMulti(t, state)
-	r := newRunnerForTest(t, cli, 5*time.Millisecond, 12)
+	r := &Runner{AwgClient: cli, Now: mockNow()}
+
 	_, err := r.DiagNow(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "HTTP_503") {
-		t.Errorf("expected HTTP_503 bubble, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "DIAG_STREAM_ERROR") || !strings.Contains(err.Error(), "panic: x") {
+		t.Errorf("expected DIAG_STREAM_ERROR with 'panic: x', got: %v", err)
+	}
+	if state.resultHits != 0 {
+		t.Errorf("expected 0 result hits, got %d", state.resultHits)
 	}
 }
 

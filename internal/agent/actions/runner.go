@@ -2,7 +2,10 @@
 //
 // Execution maps:
 //   - restart_tunnel  → awgmgr.RestartAll
-//   - diag_now        → awgmgr GET /api/diagnostics/result (raw body)
+//   - diag_now        → awgmgr GET /api/diagnostics/stream?restart=false
+//     (fresh run, no VPN tunnel restarted) then GET /api/diagnostics/result
+//     (raw body); older panels without the stream endpoint fall back to
+//     whatever /api/diagnostics/result already has on record
 //   - pingcheck_now   → awgmgr.PingCheckNow
 //   - force_recheck   → caller-provided callback (typically reporter.SendOnce)
 //   - opkg_upgrade    → OpkgRunner.SmartUpgrade (opkg update + space check +
@@ -36,6 +39,7 @@ package actions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -65,12 +69,6 @@ type Runner struct {
 	Sleep                func(ctx context.Context, d time.Duration) error
 	AllowRouterReboot    bool // gates `service_restart router`
 	AllowFirmwareInstall bool // gates `firmware_install`
-	// DiagPollEvery is the interval between DiagResult polls after a DiagRun
-	// is triggered by a NO_REPORT response. Zero defaults to 3s.
-	DiagPollEvery time.Duration
-	// DiagPollMax is the maximum number of poll iterations before DiagNow
-	// returns a DIAG_TIMEOUT error. Zero defaults to 12 (= 36s budget).
-	DiagPollMax int
 	// ConfigPath is the path to the agent's config.yaml. Required for
 	// update_backend_url to rewrite the URL in-place.
 	ConfigPath string
@@ -118,6 +116,10 @@ const defaultActionTimeout = 45 * time.Second
 // in the same families that only read state or touch local files
 // (opkg_cron_status/logs/remove, entware_clean_status/run/logs/remove) are
 // deliberately left at the 45s default — they do not run opkg or the network.
+// diag_now additionally gets 75s: DiagFresh runs a full IncludeRestart=false
+// diagnostic pass over SSE (a live run measured 34 checks) plus a possible
+// /api/diagnostics/status poll fallback if the stream connection drops —
+// comfortably inside 75s, well outside the 45s default.
 var actionTimeoutOverrides = map[string]time.Duration{
 	"opkg_upgrade":          300 * time.Second,
 	"opkg_feed_disable":     300 * time.Second,
@@ -126,6 +128,7 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"tunnel_import":         300 * time.Second,
 	"self_update":           300 * time.Second,
 	"firmware_install":      600 * time.Second,
+	"diag_now":              75 * time.Second,
 }
 
 // actionTimeoutFor returns the production execution budget for action.
@@ -155,53 +158,26 @@ func (r *Runner) withActionTimeout(ctx context.Context, action string) (context.
 	return context.WithTimeout(ctx, r.actionTimeout(action))
 }
 
-// DiagNow fetches the awg-manager diagnostic report. If awg-manager
-// reports NO_REPORT, DiagNow auto-triggers a fresh run via DiagRun and
-// polls DiagResult every r.DiagPollEvery for up to r.DiagPollMax
-// iterations. Final outcomes:
-//   - immediate 200               → return body, nil
-//   - NO_REPORT → run → poll-succeeds → return body, nil
-//   - NO_REPORT → run-error       → return "", HTTP_NNN error
-//   - NO_REPORT → run → poll-never-resolves → return "", DIAG_TIMEOUT error
-//   - other GET error             → return "", that error (typed prefix preserved)
+// DiagNow always runs a fresh awg-manager diagnostic pass and returns its
+// report. DiagFresh drives that pass over SSE with IncludeRestart=false — no
+// VPN tunnel is stopped or started anywhere in it — then DiagNow reads the
+// finished report via DiagResult.
+//
+// On a build too old to serve the stream endpoint (ErrDiagStreamUnsupported,
+// awg-manager < 2.12), DiagNow falls back to whatever DiagResult already has
+// on record: the last report that build ever produced, or an honest
+// NO_REPORT error if there never was one. It never falls back to
+// POST /api/diagnostics/run — that call always sets IncludeRestart=true and
+// must not be reachable from here.
+//
+// Any other DiagFresh error (the run itself failed, or ctx expired while
+// DiagFresh waited for it) is returned as-is without touching DiagResult.
 func (r *Runner) DiagNow(ctx context.Context) (string, error) {
-	body, err := r.AwgClient.DiagResult(ctx)
-	if err == nil {
-		return body, nil
-	}
-	if !isNoReport(err) {
+	err := r.AwgClient.DiagFresh(ctx)
+	if err != nil && !errors.Is(err, awgmgr.ErrDiagStreamUnsupported) {
 		return "", err
 	}
-	if runErr := r.AwgClient.DiagRun(ctx); runErr != nil {
-		return "", runErr
-	}
-	every := r.DiagPollEvery
-	if every <= 0 {
-		every = 3 * time.Second
-	}
-	max := r.DiagPollMax
-	if max <= 0 {
-		max = 12
-	}
-	for i := 0; i < max; i++ {
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		case <-time.After(every):
-		}
-		body, err := r.AwgClient.DiagResult(ctx)
-		if err == nil {
-			return body, nil
-		}
-		if !isNoReport(err) {
-			return "", err
-		}
-	}
-	return "", fmt.Errorf("DIAG_TIMEOUT: triggered but no result after %d iterations", max)
-}
-
-func isNoReport(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "NO_REPORT")
+	return r.AwgClient.DiagResult(ctx)
 }
 
 func tunnelNotFoundError(err error) bool {

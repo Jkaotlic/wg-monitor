@@ -168,41 +168,6 @@ func TestClient_TunnelControlEndpoints(t *testing.T) {
 	}
 }
 
-func TestClient_DiagRun_HappyPath(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/diagnostics/run" {
-			t.Errorf("path: %q", r.URL.Path)
-		}
-		if r.Method != http.MethodPost {
-			t.Errorf("method: %q", r.Method)
-		}
-		if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
-			t.Errorf("missing X-Requested-With header")
-		}
-		w.WriteHeader(200)
-		_, _ = w.Write([]byte(`{"success":true,"data":{"status":"running"}}`))
-	}))
-	defer srv.Close()
-
-	c := &Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
-	if err := c.DiagRun(context.Background()); err != nil {
-		t.Errorf("DiagRun: %v", err)
-	}
-}
-
-func TestClient_DiagRun_BubblesHTTPError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(503)
-		_, _ = w.Write([]byte(`{"error":true,"message":"down"}`))
-	}))
-	defer srv.Close()
-	c := &Client{BaseURL: srv.URL, HTTP: &http.Client{Timeout: 2 * time.Second}}
-	err := c.DiagRun(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "HTTP_503") {
-		t.Errorf("expected HTTP_503 in error, got: %v", err)
-	}
-}
-
 func TestClient_DiagResult_TypedNoReportOnHTTP400(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(400)

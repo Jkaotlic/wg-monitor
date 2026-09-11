@@ -72,6 +72,23 @@ func TestFormatCommandResult_DiagErr_DiagTimeoutHint(t *testing.T) {
 	}
 }
 
+// v0.30 задача 2: DIAG_STREAM_ERROR приходит из runner.DiagNow → DiagFresh,
+// когда сам роутер не довёл свежую проверку до конца.
+func TestFormatCommandResult_DiagErr_DiagStreamErrorHint(t *testing.T) {
+	r := wire.CommandResult{Status: "err", Output: "DIAG_STREAM_ERROR: panic: x"}
+	chunks := FormatCommandResult("diag_now", r, 3500)
+	body := chunks[0]
+	if !strings.Contains(body, "не довёл") {
+		t.Errorf("summary should say the router didn't finish: %s", body)
+	}
+	if !strings.Contains(body, "через минуту") {
+		t.Errorf("hint should suggest retrying in a minute: %s", body)
+	}
+	if !strings.Contains(body, "💡") {
+		t.Errorf("body missing hint marker: %s", body)
+	}
+}
+
 func TestFormatCommandResult_PingcheckOneLiner(t *testing.T) {
 	r := wire.CommandResult{Status: "ok", Output: "alive 12 ms", DurationMs: 250}
 	chunks := FormatCommandResult("pingcheck_now", r, 3500)

@@ -25,6 +25,19 @@ func TestHintFor_DiagTimeout(t *testing.T) {
 	}
 }
 
+// v0.30 задача 2: DIAG_STREAM_ERROR приходит, когда сам роутер не довёл
+// свежую проверку до конца (агент.DiagFresh). DIAG_TIMEOUT остаётся
+// отдельным токеном — его всё ещё шлют старые агенты с прежним поведением.
+func TestHintFor_DiagStreamError(t *testing.T) {
+	sum, hint := HintFor("diag_now", "DIAG_STREAM_ERROR: panic: x")
+	if !strings.Contains(sum, "не довёл") {
+		t.Errorf("summary should say the router didn't finish: %q", sum)
+	}
+	if !strings.Contains(hint, "через минуту") {
+		t.Errorf("hint should suggest retrying in a minute: %q", hint)
+	}
+}
+
 func TestHintFor_AwgmgrUnavailable(t *testing.T) {
 	for _, code := range []string{"HTTP_502", "HTTP_503"} {
 		raw := code + ": awgmgr down"

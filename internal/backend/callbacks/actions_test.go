@@ -201,19 +201,26 @@ func TestCommandAction_TunnelDeleteForcesLegacyAWGCleanup(t *testing.T) {
 	}
 }
 
-// Диагностика awg-manager гоняет проверку restart_cycle — «Цикл Stop → Start»:
-// каждый VPN-туннель на секунду останавливается и поднимается снова. Владелец,
-// нажавший кнопку под тревогой, обязан узнать об этом до того, как связь
-// моргнёт, а не догадываться потом.
-func TestCommandAction_DiagWarnsAboutTunnelRestart(t *testing.T) {
+// v0.30 задача 2: диагностика всегда гоняет полную проверку заново
+// (/api/diagnostics/stream?restart=false) без IncludeRestart, так что ни
+// один VPN-туннель не перезапускается. Владелец, нажавший кнопку под
+// тревогой, должен узнать, что проверка идёт заново и связь при этом не
+// моргнёт — а не читать обещание перезапуска, которого больше не будет.
+func TestCommandAction_DiagSaysFreshWithoutRestart(t *testing.T) {
 	sink := &fakeEnqueuer{}
 	a := NewCommandAction(sink, func() string { return "id-diag" })
 	s, err := a.Apply(context.Background(), nil, Args{Action: "diag_now", UserID: 1, CheckName: "tunnel_awg10"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(s, "Диагностика") || !strings.Contains(s, "перезапустится") {
-		t.Fatalf("строка не предупреждает о перезапуске VPN-туннелей: %q", s)
+	if !strings.Contains(s, "Диагностика") {
+		t.Fatalf("строка не называет действие диагностикой: %q", s)
+	}
+	if !strings.Contains(s, "заново") || !strings.Contains(s, "не перезапускаются") {
+		t.Fatalf("строка должна сказать «заново» и «не перезапускаются»: %q", s)
+	}
+	if strings.Contains(s, "перезапустится") {
+		t.Fatalf("строка не должна обещать перезапуск: %q", s)
 	}
 }
 

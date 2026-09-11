@@ -189,6 +189,8 @@ func ownerCommandFailure(status, output string) (summary, hint string) {
 	case strings.Contains(output, "DIAG_TIMEOUT"):
 		return "диагностика не уложилась в 36 с",
 			"Роутер начал собирать отчёт, но не успел. Повторите — обычно это занимает от полуминуты до минуты."
+	case strings.Contains(output, "DIAG_STREAM_ERROR"):
+		return "роутер не довёл проверку до конца", "Попробуйте ещё раз через минуту."
 	case status == "timeout":
 		return "роутер не уложился в отведённое время", retry
 	case status == "locked":

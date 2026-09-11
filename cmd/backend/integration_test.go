@@ -476,16 +476,19 @@ func (c *capturingTG) lastSent() (tgSentMsg, bool) {
 	return c.sent[len(c.sent)-1], true
 }
 
-// TestIntegration_DiagNow_NoReportAutoTriggers verifies the diag auto-trigger
-// state machine end-to-end:
-//  1. Runner calls GET /api/diagnostics/result → 400+NO_REPORT.
-//  2. Runner auto-triggers POST /api/diagnostics/run → 200.
-//  3. Runner polls GET /api/diagnostics/result again → 200 with parseable body.
+// TestIntegration_DiagNow_FreshRunNoRestart verifies the diag_now state
+// machine end-to-end after v0.30's task 2: every tap runs a fresh diagnostic
+// pass and never restarts a VPN tunnel.
+//  1. Runner calls GET /api/diagnostics/stream?restart=false → SSE "done".
+//  2. Runner reads GET /api/diagnostics/result → 200 with parseable body.
+//  3. POST /api/diagnostics/run — the endpoint that always restarts every
+//     tunnel — is never hit (runHits == 0).
 //  4. Backend renders a Card with "📊 Диагностика" / "2.8.2" and an inline
 //     keyboard whose first row contains "📄 Полный отчёт" (callback diag_raw:…).
-func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
+func TestIntegration_DiagNow_FreshRunNoRestart(t *testing.T) {
 	var (
 		resultHits int
+		streamHits int
 		runHits    int
 		mu         sync.Mutex
 	)
@@ -493,17 +496,21 @@ func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch r.URL.Path {
+		case "/api/diagnostics/stream":
+			streamHits++
+			if got := r.URL.Query().Get("restart"); got != "false" {
+				t.Errorf("stream restart param: got %q, want %q", got, "false")
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte("event: done\ndata: {\"type\":\"done\"}\n\n"))
 		case "/api/diagnostics/result":
 			resultHits++
-			if resultHits == 1 {
-				w.WriteHeader(400)
-				_, _ = w.Write([]byte(`{"error":true,"code":"NO_REPORT"}`))
-				return
-			}
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(`{"system":{"appVersion":"2.8.2","uptime":"5m"}}`))
 		case "/api/diagnostics/run":
 			runHits++
+			t.Errorf("POST /api/diagnostics/run must never be called — it always restarts every VPN tunnel")
 			w.WriteHeader(200)
 			_, _ = w.Write([]byte(`{"success":true,"data":{"status":"running"}}`))
 		default:
@@ -565,7 +572,9 @@ func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
 	}
 	router.HandleCallback(context.Background(), q)
 
-	// 2. Agent polls command, runs with DiagPollEvery=5ms so poll loop is fast.
+	// 2. Agent polls command and runs it through a fresh Runner (no
+	// poll-tuning fields left to set — DiagFresh's own budget is the 75s
+	// diag_now action-timeout override, way more than this test needs).
 	agentClient := agent.NewClient(backendSrv.URL, tok, "test-agent-diag", 5*time.Second)
 	cmd, err := agentClient.PollCommand(context.Background(), 2)
 	if err != nil || cmd == nil {
@@ -576,9 +585,7 @@ func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
 	}
 
 	runner := &actions.Runner{
-		AwgClient:     awgmgr.New(awgFake.URL),
-		DiagPollEvery: 5 * time.Millisecond,
-		DiagPollMax:   20,
+		AwgClient: awgmgr.New(awgFake.URL),
 	}
 	res := runner.Execute(context.Background(), *cmd)
 	if res.Status != "ok" {
@@ -594,16 +601,21 @@ func TestIntegration_DiagNow_NoReportAutoTriggers(t *testing.T) {
 		t.Fatalf("expected at least 1 TG message, got %d", got)
 	}
 
-	// 4. Assert hit counters.
+	// 4. Assert hit counters: exactly one fresh stream run, one result read,
+	// and the tunnel-restarting /run endpoint untouched.
 	mu.Lock()
 	rh := resultHits
+	sh := streamHits
 	rnh := runHits
 	mu.Unlock()
-	if rh < 2 {
-		t.Errorf("resultHits: want >= 2, got %d (first returned NO_REPORT, second should return 200)", rh)
+	if sh != 1 {
+		t.Errorf("streamHits: want 1, got %d", sh)
 	}
-	if rnh != 1 {
-		t.Errorf("runHits: want 1, got %d", rnh)
+	if rh != 1 {
+		t.Errorf("resultHits: want 1, got %d", rh)
+	}
+	if rnh != 0 {
+		t.Errorf("runHits: want 0 (must never call /api/diagnostics/run), got %d", rnh)
 	}
 
 	// 5. Assert rendered TG message carries the parsed summary. The panel

@@ -64,6 +64,9 @@ func HintFor(action, statusOrRaw string) (summary, hint string) {
 		return "диагностика не уложилась в 36с",
 			"awg-manager запустил отчёт, но не успел его собрать за 36с. " +
 				"Попробуй ещё раз — обычно это занимает 30–60с."
+	case strings.Contains(s, "DIAG_STREAM_ERROR"):
+		return "роутер не довёл проверку до конца",
+			"Попробуйте ещё раз через минуту."
 	case strings.Contains(s, "HTTP_502") || strings.Contains(s, "HTTP_503"):
 		return "awg-manager недоступен",
 			"Зайди по SSH и выполни: `/opt/etc/init.d/S99awg-manager status`. " +

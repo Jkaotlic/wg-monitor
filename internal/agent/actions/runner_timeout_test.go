@@ -82,6 +82,10 @@ func TestActionTimeoutFor_Overrides(t *testing.T) {
 		{"self_update", 300 * time.Second},
 		// Long: firmware install triggers a reboot.
 		{"firmware_install", 600 * time.Second},
+		// Long: diag_now runs a full fresh IncludeRestart=false pass over
+		// SSE (34 checks on a live router) plus a possible status-poll
+		// fallback if the stream connection drops.
+		{"diag_now", 75 * time.Second},
 		// Quick: sibling actions in the same families that only read state or
 		// touch local files must stay at the default (proves we did not widen
 		// the whole family).
