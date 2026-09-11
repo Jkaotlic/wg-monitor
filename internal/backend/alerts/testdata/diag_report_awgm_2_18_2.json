@@ -49,7 +49,7 @@
    "name": "dns_resolve",
    "description": "Резолв endpoint",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "Endpoint уже IP-адрес"
   },
@@ -57,7 +57,7 @@
    "name": "endpoint_reachable",
    "description": "Ping endpoint",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "Round-trip min/avg/max = 180.70/209.31/228.68 ms."
   },
@@ -65,7 +65,7 @@
    "name": "endpoint_route_check",
    "description": "Host route до endpoint",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "ENDPOINT-1 via 10.0.0.1 dev eth3"
   },
@@ -73,7 +73,7 @@
    "name": "awg_handshake",
    "description": "Handshake свежий (<3 мин)",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "1 minute, 43 seconds ago"
   },
@@ -81,7 +81,7 @@
    "name": "tunnel_connectivity",
    "description": "Связность через туннель",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "IP: ENDPOINT-1 (via https://HOST-12)"
   },
@@ -89,7 +89,7 @@
    "name": "firewall_rules",
    "description": "Правила iptables",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "3 правил для интерфейса"
   },
@@ -97,7 +97,7 @@
    "name": "config_parse",
    "description": "Валидация конфига",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "Конфиг валиден"
   },
@@ -105,7 +105,7 @@
    "name": "interface_state_consistency",
    "description": "Консистентность state",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "Status и kernel state согласованы"
   },
@@ -113,7 +113,7 @@
    "name": "mtu_check",
    "description": "MTU интерфейса",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "MTU = 1280"
   },
@@ -121,7 +121,7 @@
    "name": "proxy_health",
    "description": "AWG Proxy статус",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "skip",
    "detail": "Kernel backend: proxy не используется"
   },
@@ -129,7 +129,7 @@
    "name": "pingcheck_health",
    "description": "PingCheck статус",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "skip",
    "detail": "PingCheck не включён"
   },
@@ -137,7 +137,7 @@
    "name": "rp_filter",
    "description": "Reverse path filter",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "rp_filter=0 (off)"
   },
@@ -145,7 +145,7 @@
    "name": "dns_resolve",
    "description": "Резолв endpoint",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "Endpoint уже IP-адрес"
   },
@@ -153,7 +153,7 @@
    "name": "endpoint_reachable",
    "description": "Ping endpoint",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "Round-trip min/avg/max = 63.06/75.35/88.62 ms."
   },
@@ -161,7 +161,7 @@
    "name": "endpoint_route_check",
    "description": "Host route до endpoint",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "ENDPOINT-2 via 10.0.0.1 dev eth3"
   },
@@ -169,7 +169,7 @@
    "name": "awg_handshake",
    "description": "Handshake свежий (<3 мин)",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "1 minute, 5 seconds ago"
   },
@@ -177,7 +177,7 @@
    "name": "tunnel_connectivity",
    "description": "Связность через туннель",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "IP: ENDPOINT-2 (via https://HOST-12)"
   },
@@ -185,7 +185,7 @@
    "name": "firewall_rules",
    "description": "Правила iptables",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "3 правил для интерфейса"
   },
@@ -193,7 +193,7 @@
    "name": "config_parse",
    "description": "Валидация конфига",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "Конфиг валиден"
   },
@@ -201,7 +201,7 @@
    "name": "interface_state_consistency",
    "description": "Консистентность state",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "Status и kernel state согласованы"
   },
@@ -209,7 +209,7 @@
    "name": "mtu_check",
    "description": "MTU интерфейса",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "MTU = 1280"
   },
@@ -217,7 +217,7 @@
    "name": "proxy_health",
    "description": "AWG Proxy статус",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "skip",
    "detail": "Kernel backend: proxy не используется"
   },
@@ -225,7 +225,7 @@
    "name": "pingcheck_health",
    "description": "PingCheck статус",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "skip",
    "detail": "PingCheck не включён"
   },
@@ -233,7 +233,7 @@
    "name": "rp_filter",
    "description": "Reverse path filter",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "rp_filter=0 (off)"
   },
@@ -247,7 +247,7 @@
    "name": "dns_leak_check",
    "description": "DNS leak проверка",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "skip",
    "detail": "DNS не настроен в конфигурации туннеля"
   },
@@ -255,7 +255,7 @@
    "name": "dns_leak_check",
    "description": "DNS leak проверка",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "skip",
    "detail": "DNS не настроен в конфигурации туннеля"
   },
@@ -263,7 +263,7 @@
    "name": "restart_cycle",
    "description": "Цикл Stop -> Start",
    "tunnelId": "awg10",
-   "tunnelName": "macmini3.1top-nl2",
+   "tunnelName": "vpn-nl",
    "status": "pass",
    "detail": "Stop: 0s, Start: 1s, handshake: OK"
   },
@@ -271,7 +271,7 @@
    "name": "restart_cycle",
    "description": "Цикл Stop -> Start",
    "tunnelId": "awg14",
-   "tunnelName": "macmini3.1top-hipvps",
+   "tunnelName": "vpn-reserve",
    "status": "pass",
    "detail": "Stop: 0s, Start: 1s, handshake: OK"
   }

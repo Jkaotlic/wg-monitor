@@ -78,7 +78,7 @@ func TestParseDiagTests_RealReport(t *testing.T) {
 		got[p.TunnelLabel] = p.Status
 	}
 	// VPN-туннель подписан именем, которое дал владелец, а не id=awg10.
-	if len(got) != 2 || got["macmini3.1top-nl2"] != "ok" || got["macmini3.1top-hipvps"] != "ok" {
+	if len(got) != 2 || got["vpn-nl"] != "ok" || got["vpn-reserve"] != "ok" {
 		t.Errorf("VPN-туннели проверки: %+v", got)
 	}
 
@@ -102,11 +102,11 @@ func TestParseDiagTests_FailingTunnel(t *testing.T) {
 	}
 	for _, p := range tc.PerTunnel {
 		switch p.TunnelLabel {
-		case "macmini3.1top-nl2":
+		case "vpn-nl":
 			if p.Status != "fail" || p.Reason != "timeout after 5s" {
 				t.Errorf("проваленный VPN-туннель: %+v", p)
 			}
-		case "macmini3.1top-hipvps":
+		case "vpn-reserve":
 			if p.Status != "ok" {
 				t.Errorf("исправный VPN-туннель: %+v", p)
 			}
@@ -145,7 +145,7 @@ func TestParseDiagReport_OwnerSummaryNamesFailure(t *testing.T) {
 		t.Errorf("сводка молчит о провале: %q", summary)
 	}
 	joined := strings.Join(bullets, "\n")
-	if !strings.Contains(joined, "Интернет через VPN-туннель") || !strings.Contains(joined, "VPN-туннель «macmini3.1top-nl2»") {
+	if !strings.Contains(joined, "Интернет через VPN-туннель") || !strings.Contains(joined, "VPN-туннель «vpn-nl»") {
 		t.Errorf("сводка не называет, что и где сломалось:\n%s", joined)
 	}
 	// Идентификатора владелец не видел нигде, а сырая деталь — на странице
