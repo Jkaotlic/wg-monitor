@@ -34,25 +34,36 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("tg %s: %s (code=%d)", e.Method, e.Description, e.Code)
 }
 
-// IsCantInitiateChat reports whether err means Telegram will not deliver to
-// this person's DM: the bot has never been spoken to, or it was blocked.
-// Both are 403 and both stay broken until the human acts — unlike a kick from
-// a group chat, which says nothing about that person's DM.
+// IsUnreachableChat reports whether err means Telegram will not deliver to
+// this person's DM: the bot has never been spoken to, it was blocked, the
+// account is gone, or the bot cannot see the chat at all. All of these stay
+// broken until the human acts — unlike a kick from a group chat, which says
+// nothing about that person's DM.
+//
+// The 403 cases are the classic closed door. "400 Bad Request: chat not found"
+// is the same door seen from the other side (the bot has no chat with this
+// id); on 11.09.2026 it made the heartbeat watcher resend an offline notice on
+// every scan. Every OTHER 400 is deliberately excluded: "message is too long",
+// "can't parse entities", a bad keyboard — those are our bugs in the message,
+// not the recipient's state, and must not be blamed on the person.
 //
 // Used by the notification fan-out to mark a recipient unreachable instead of
 // retrying forever against a door only the human can open.
-func IsCantInitiateChat(err error) bool {
+func IsUnreachableChat(err error) bool {
 	var ae *APIError
 	if !errors.As(err, &ae) {
 		return false
 	}
-	if ae.Code != 403 {
-		return false
-	}
 	d := strings.ToLower(ae.Description)
-	return strings.Contains(d, "can't initiate conversation") ||
-		strings.Contains(d, "bot was blocked by the user") ||
-		strings.Contains(d, "user is deactivated")
+	switch ae.Code {
+	case 403:
+		return strings.Contains(d, "can't initiate conversation") ||
+			strings.Contains(d, "bot was blocked by the user") ||
+			strings.Contains(d, "user is deactivated")
+	case 400:
+		return strings.Contains(d, "chat not found")
+	}
+	return false
 }
 
 // IsTopicNotFound reports whether err signals the target forum topic no

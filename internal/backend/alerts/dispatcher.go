@@ -246,8 +246,16 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	hardSince := now.Add(-since)
 	text := FormatRouterOffline(nickname, since)
 	kb := tg.AlertKeyboard(userID, "agent_heartbeat", tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID))
-	if _, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb); err != nil {
+	delivered, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb)
+	if err != nil {
 		return err
+	}
+	if delivered == 0 {
+		// Слать некому: владелец не привязан, операторов нет либо все
+		// недоступны. Как и у HARD-тревоги, это не сбой отправки -- сторож не
+		// должен повторять её на каждом обходе; видно это в сводке дашборда.
+		slog.Warn("«роутер не на связи» некому доставить",
+			"user_id", userID, "nickname", nickname)
 	}
 	return di.d.State().Save(userID, "agent_heartbeat", db.IncidentState{
 		UserID:           userID,

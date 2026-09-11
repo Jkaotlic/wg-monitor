@@ -21,6 +21,13 @@ type Sender interface {
 // «слать некому» (получателей ноль) намеренно: первое означает, что Telegram
 // или сеть подвели и тревогу надо повторить, второе -- что повторять её
 // некому и напоминания будут молотить впустую.
+//
+// Получатели, до которых не достучаться, пока человек сам не откроет дверь
+// (tg.IsUnreachableChat), считаются как «слать некому»: повтор на каждом
+// обходе их не вернёт. 11.09.2026 сторож ровно так слал «роутер не на связи»
+// в «chat not found» на каждом обходе -- 1112 ошибок из 1112 обходов. Такие
+// люди видны оператору в сводке дашборда (notify.unreachable), а отметку
+// снимает первая удачная доставка -- в срок обычного напоминания.
 var ErrNoneDelivered = errors.New("уведомление не доставлено ни одному получателю")
 
 // Fanout рассылает одно уведомление всем, кому оно адресовано.
@@ -53,8 +60,9 @@ func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode s
 	var lastErr error
 	for _, chatID := range targets {
 		if _, err := f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil); err != nil {
-			f.noteFailure(chatID, routerUserID, err)
-			lastErr = err
+			if !f.noteFailure(chatID, routerUserID, err) {
+				lastErr = err
+			}
 			continue
 		}
 		delivered++
@@ -63,15 +71,16 @@ func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode s
 	return f.result(delivered, len(targets), lastErr)
 }
 
-// result -- общий вердикт рассылки. Исходную ошибку Telegram оборачиваем
-// внутрь: по ней вызывающий разбирает, был ли это лимит частоты, и решает,
-// когда повторить.
+// result -- общий вердикт рассылки. lastErr -- последняя ошибка, которую есть
+// смысл повторять; недоступные получатели в неё не попадают. Поэтому «не дошло
+// никому, и все были недоступны» -- это ноль без ошибки, то есть «слать
+// некому», а не ErrNoneDelivered.
+//
+// Исходную ошибку Telegram оборачиваем внутрь: по ней вызывающий разбирает,
+// был ли это лимит частоты, и решает, когда повторить.
 func (f *Fanout) result(delivered, targets int, lastErr error) (int, error) {
-	if delivered == 0 && targets > 0 {
-		if lastErr != nil {
-			return 0, fmt.Errorf("%w: получателей %d: %w", ErrNoneDelivered, targets, lastErr)
-		}
-		return 0, fmt.Errorf("%w: получателей %d", ErrNoneDelivered, targets)
+	if delivered == 0 && lastErr != nil {
+		return 0, fmt.Errorf("%w: получателей %d: %w", ErrNoneDelivered, targets, lastErr)
 	}
 	return delivered, nil
 }
@@ -95,8 +104,9 @@ func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, par
 			_, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
 		}
 		if sendErr != nil {
-			f.noteFailure(chatID, routerUserID, sendErr)
-			lastErr = sendErr
+			if !f.noteFailure(chatID, routerUserID, sendErr) {
+				lastErr = sendErr
+			}
 			continue
 		}
 		delivered++
@@ -105,9 +115,12 @@ func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, par
 	return f.result(delivered, len(targets), lastErr)
 }
 
-// noteFailure -- общая обработка неудачной доставки.
-func (f *Fanout) noteFailure(chatID, routerUserID int64, err error) {
-	if tg.IsCantInitiateChat(err) {
+// noteFailure -- общая обработка неудачной доставки. Возвращает true, если
+// получатель недоступен до тех пор, пока сам не откроет дверь: такую ошибку
+// повторять бессмысленно, и в вердикт рассылки она не идёт.
+func (f *Fanout) noteFailure(chatID, routerUserID int64, err error) bool {
+	unreachable := tg.IsUnreachableChat(err)
+	if unreachable {
 		if markErr := f.d.Unreachable().Mark(chatID, err.Error()); markErr != nil && f.logger != nil {
 			f.logger.Warn("не удалось пометить недоступного", "telegram_user_id", chatID, "err", markErr)
 		}
@@ -116,6 +129,7 @@ func (f *Fanout) noteFailure(chatID, routerUserID int64, err error) {
 		f.logger.Warn("уведомление не доставлено",
 			"telegram_user_id", chatID, "router_user_id", routerUserID, "err", err)
 	}
+	return unreachable
 }
 
 // noteSuccess снимает отметку недоступности: человек подхватился.
@@ -156,8 +170,9 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 			mid, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
 		}
 		if sendErr != nil {
-			f.noteFailure(chatID, routerUserID, sendErr)
-			lastErr = sendErr
+			if !f.noteFailure(chatID, routerUserID, sendErr) {
+				lastErr = sendErr
+			}
 			continue
 		}
 		delivered++
@@ -223,8 +238,9 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 			_, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
 		}
 		if sendErr != nil {
-			f.noteFailure(chatID, routerUserID, sendErr)
-			lastErr = sendErr
+			if !f.noteFailure(chatID, routerUserID, sendErr) {
+				lastErr = sendErr
+			}
 			continue
 		}
 		delivered++

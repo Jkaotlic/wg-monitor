@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 
@@ -245,5 +246,92 @@ func TestFanout_KeepsUnderlyingError(t *testing.T) {
 	}
 	if got.Code != 429 {
 		t.Fatalf("код=%d, ждали 429", got.Code)
+	}
+}
+
+// «Bad Request: chat not found» -- та же закрытая дверь, что и 403: бот не
+// видит личку человека. Получатель обязан попасть в список недоступных, иначе
+// оператор в дашборде не узнает, почему тревоги по роутеру не доходят.
+func TestFanout_ChatNotFoundMarksUnreachable(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeSender{fail: map[int64]error{1001: &tg.APIError{
+		Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found",
+	}}}
+
+	if _, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", ""); err != nil && !errors.Is(err, ErrNoneDelivered) {
+		t.Fatalf("ошибка=%v", err)
+	}
+
+	un, err := d.Unreachable().List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(un) != 1 || un[0].TelegramUserID != 1001 {
+		t.Fatalf("недоступные=%v, ждали 1001", un)
+	}
+	if !strings.Contains(un[0].LastError, "chat not found") {
+		t.Fatalf("причина=%q, оператор не поймёт, что чинить", un[0].LastError)
+	}
+}
+
+// Все получатели -- за закрытой дверью, которую открывает только сам человек.
+// Это «слать некому», а не «Telegram подвёл»: повтор на каждом обходе ничего не
+// даст, кроме бесконечного счётчика ошибок. Вызывающий обязан получить ноль
+// доставленных без ошибки -- как при пустом списке получателей.
+func TestFanout_OnlyUnreachableRecipientsIsNobodyToNotify(t *testing.T) {
+	doors := map[string]error{
+		"chat not found": &tg.APIError{Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found"},
+		"заблокировал":   &tg.APIError{Method: "sendMessage", Code: 403, Description: "Forbidden: bot was blocked by the user"},
+	}
+	for name, doorErr := range doors {
+		t.Run(name, func(t *testing.T) {
+			d, router := newDB(t)
+			if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+				t.Fatal(err)
+			}
+			s := &fakeKeyboardSender{fakeSender: fakeSender{fail: map[int64]error{1001: doorErr}}}
+			f := NewFanout(d, s, quietLogger())
+
+			n, err := f.Send(context.Background(), router, "текст", "")
+			if n != 0 || err != nil {
+				t.Fatalf("Send: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
+			}
+			n, err = f.SendTracked(context.Background(), router, "agent_heartbeat", "текст", "", &tg.InlineKeyboardMarkup{})
+			if n != 0 || err != nil {
+				t.Fatalf("SendTracked: доставлено %d, ошибка %v; ждали 0 без ошибки", n, err)
+			}
+		})
+	}
+}
+
+// Один получатель недоступен, у другого -- сбой Telegram. Сбой другого
+// повторять есть смысл, значит это неуспех, а не «слать некому». Сбой нарочно
+// у первого получателя: вердикт по последней ошибке здесь бы соврал.
+func TestFanout_UnreachablePlusTransientFailureIsStillAnError(t *testing.T) {
+	d, router := newDB(t)
+	if err := d.Users().SetTelegramUserID(router, 1001); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RouterOperators().Add(router, 1002, 1001); err != nil {
+		t.Fatal(err)
+	}
+	s := &fakeSender{fail: map[int64]error{
+		1001: &tg.APIError{Method: "sendMessage", Code: 500, Description: "Internal Server Error"},
+		1002: &tg.APIError{Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found"},
+	}}
+
+	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	if n != 0 {
+		t.Fatalf("доставлено %d, ждали ноль", n)
+	}
+	if !errors.Is(err, ErrNoneDelivered) {
+		t.Fatalf("ошибка=%v, ждали ErrNoneDelivered: сбой у 1001 надо повторить", err)
+	}
+	var ae *tg.APIError
+	if !errors.As(err, &ae) || ae.Code != 500 {
+		t.Fatalf("ошибка=%v, внутри обязан лежать сбой, который стоит повторять (500)", err)
 	}
 }

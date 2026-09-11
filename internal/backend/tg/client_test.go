@@ -663,7 +663,7 @@ func TestSetCommandsMenuButton_OmitsWebAppFields(t *testing.T) {
 	}
 }
 
-func TestIsCantInitiateChat(t *testing.T) {
+func TestIsUnreachableChat(t *testing.T) {
 	cases := []struct {
 		name string
 		err  error
@@ -673,6 +673,24 @@ func TestIsCantInitiateChat(t *testing.T) {
 			Description: "Forbidden: bot can't initiate conversation with a user"}, true},
 		{"заблокировал бота", &APIError{Method: "sendMessage", Code: 403,
 			Description: "Forbidden: bot was blocked by the user"}, true},
+		{"аккаунт удалён", &APIError{Method: "sendMessage", Code: 403,
+			Description: "Forbidden: user is deactivated"}, true},
+		// Личка, которой бот не видит: человек не заговаривал с ботом или id
+		// не тот. Telegram отвечает 400, а не 403, но чинит это тоже только
+		// сам человек -- повторять отправку на каждом обходе бессмысленно.
+		{"чат не найден", &APIError{Method: "sendMessage", Code: 400,
+			Description: "Bad Request: chat not found"}, true},
+		// Остальные 400 -- наши ошибки в самом сообщении, а не состояние
+		// получателя. Пометить за них человека недоступным -- значит свалить
+		// на него собственный баг.
+		{"слишком длинное сообщение -- наш баг", &APIError{Method: "sendMessage", Code: 400,
+			Description: "Bad Request: message is too long"}, false},
+		{"сломанная разметка -- наш баг", &APIError{Method: "sendMessage", Code: 400,
+			Description: "Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 12"}, false},
+		{"сломанные кнопки -- наш баг", &APIError{Method: "sendMessage", Code: 400,
+			Description: "Bad Request: BUTTON_DATA_INVALID"}, false},
+		{"нет темы -- это про тему группы, не про личку", &APIError{Method: "sendMessage", Code: 400,
+			Description: "Bad Request: message thread not found"}, false},
 		{"выгнали из группы -- это про группу, не про личку", &APIError{Method: "sendMessage", Code: 403,
 			Description: "Forbidden: bot was kicked from the supergroup chat"}, false},
 		{"лимит частоты", &APIError{Method: "sendMessage", Code: 429, Description: "Too Many Requests"}, false},
@@ -681,8 +699,8 @@ func TestIsCantInitiateChat(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := IsCantInitiateChat(tc.err); got != tc.want {
-				t.Fatalf("IsCantInitiateChat=%v, ждали %v", got, tc.want)
+			if got := IsUnreachableChat(tc.err); got != tc.want {
+				t.Fatalf("IsUnreachableChat=%v, ждали %v", got, tc.want)
 			}
 		})
 	}
