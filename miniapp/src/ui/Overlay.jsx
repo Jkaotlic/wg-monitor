@@ -1,6 +1,10 @@
+import { Quoted } from './Q.jsx'
+
 // Оверлей -- слой поверх табов: список роутеров, администрирование.
 // Своя кнопка "назад" дублирует телеграмовскую сознательно: на десктопе
 // системной кнопки может не быть вовсе.
+//
+// Заголовок слоя бывает с именем -- через <Quoted>.
 export function Overlay({ title, backLabel = 'Назад', onBack, children }) {
   return (
     <div class="overlay">
@@ -11,7 +15,9 @@ export function Overlay({ title, backLabel = 'Назад', onBack, children }) {
           </svg>
           {backLabel}
         </button>
-        <span class="overlay-title">{title}</span>
+        <span class="overlay-title">
+          <Quoted text={title} />
+        </span>
       </div>
       <div class="overlay-body">{children}</div>
     </div>

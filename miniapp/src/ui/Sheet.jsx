@@ -117,7 +117,7 @@ export function Sheet({ sheet, asleep, onClose }) {
         {phase === 'done' && (
           <div class="sheet-result">
             <p class={`state${result.status === 'ok' ? '' : ' state-error'}`}>
-              {commandOutcomeLabel(sheet.action, result)}
+              <Quoted text={commandOutcomeLabel(sheet.action, result)} />
             </p>
             <button type="button" class="btn btn-primary" onClick={onClose}>Закрыть</button>
           </div>

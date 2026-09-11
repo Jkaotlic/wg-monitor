@@ -139,13 +139,13 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 		HRNeo: wire.HRStatus{Installed: true, Running: true},
 		Tunnels: []wire.TunnelMeta{
 			{
-				ID: "awg12", Name: "Амстердам", Iface: "opkgtun12", Type: "amneziawg",
+				ID: "awg12", Name: "vpn-nl", Iface: "opkgtun12", Type: "amneziawg",
 				Enabled: true, Available: true, Status: "up",
 				HasHandshake: true, HandshakeAge: 21, PingStatus: "ok",
 				DefaultRoute: true, RestartMethod: "control",
 			},
 			{
-				ID: "awg10", Name: "Франкфурт", Iface: "opkgtun10", Type: "amneziawg",
+				ID: "awg10", Name: "vpn-de", Iface: "opkgtun10", Type: "amneziawg",
 				Enabled: true, Available: true, Status: "down",
 				HasHandshake: true, HandshakeAge: 3600, PingStatus: "fail", PingFails: 4, PingFailMax: 5,
 				RestartMethod: "control",
@@ -165,10 +165,10 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 			{
 				Name: "HydraRoute", Description: "обход блокировок",
 				Interfaces: []wire.RoutePolicyInterface{
-					{Bind: "OpkgTun12", Name: "Амстердам", Role: "active", Available: true, Order: 1, TunnelID: "awg12", ViaVPN: true},
+					{Bind: "OpkgTun12", Name: "vpn-nl", Role: "active", Available: true, Order: 1, TunnelID: "awg12", ViaVPN: true},
 					// Резерв ДОСТУПЕН: иначе движку починки некуда уводить
 					// трафик, и весь сценарий с failover не отрепетировать.
-					{Bind: "OpkgTun10", Name: "Франкфурт", Role: "fallback", Available: true, Order: 2, TunnelID: "awg10", ViaVPN: true},
+					{Bind: "OpkgTun10", Name: "vpn-de", Role: "fallback", Available: true, Order: 2, TunnelID: "awg10", ViaVPN: true},
 				},
 				DNS: 32, HRNeo: 28, ActiveTunnelID: "awg12", ViaVPN: true,
 			},
@@ -244,8 +244,8 @@ func diagReport() map[string]any {
 			"dns":      map[string]any{"ok": true, "servers": []string{"1.1.1.1", "8.8.8.8"}},
 		},
 		"tunnels": []map[string]any{
-			{"id": "awg12", "name": "Амстердам", "status": "up", "handshakeAgeSec": 21},
-			{"id": "awg10", "name": "Франкфурт", "status": "down"},
+			{"id": "awg12", "name": "vpn-nl", "status": "up", "handshakeAgeSec": 21},
+			{"id": "awg10", "name": "vpn-de", "status": "down"},
 		},
 	}
 }

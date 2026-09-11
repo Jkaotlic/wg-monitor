@@ -1,16 +1,27 @@
+import { Quoted } from './Q.jsx'
+
 // Строка списка: заголовок, подпись под ним, необязательный правый слот и
 // шеврон у кликабельных строк.
 //
 // Кликабельная строка -- это кнопка внутри li, а не li с обработчиком:
 // иначе строка недоступна с клавиатуры и невидима для скринридера, а
 // мини-апп открывают и с десктопа тоже.
+//
+// Заголовок и подпись -- готовые строки, часто с именем в «ёлочках»
+// («общий набор «…»»): они идут через <Quoted>.
 export function ListRow({ title, sub, right, onClick, tone }) {
   const clickable = typeof onClick === 'function'
   const content = (
     <>
       <span class="list-row-main">
-        <span class="row-title">{title}</span>
-        {sub && <span class="list-row-sub">{sub}</span>}
+        <span class="row-title">
+          <Quoted text={title} />
+        </span>
+        {sub && (
+          <span class="list-row-sub">
+            <Quoted text={sub} />
+          </span>
+        )}
       </span>
       {right}
       {clickable && (

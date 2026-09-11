@@ -12,6 +12,7 @@ import { TrafficPath } from '../components/TrafficPath.jsx'
 import { pathState } from '../trafficPath.js'
 import { routerHeadline, linesSummary } from '../routerHeadline.js'
 import { Hero } from '../ui/Hero.jsx'
+import { Quoted } from '../ui/Q.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
@@ -120,7 +121,9 @@ function CommandButton({ routerID, action, args = {}, label, busyLabel, mutating
       </button>
       {busy && <p class="state">Ждём ответа от роутера…</p>}
       {result && (
-        <p class={`state${result.status === 'ok' ? '' : ' state-error'}`}>{commandOutcomeLabel(action, result)}</p>
+        <p class={`state${result.status === 'ok' ? '' : ' state-error'}`}>
+          <Quoted text={commandOutcomeLabel(action, result)} />
+        </p>
       )}
       {error && <p class="state state-error">{error}</p>}
     </div>
@@ -493,7 +496,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
         {singboxMode && (
           <p class="compare-note compare-note-caution">
             На этом роутере маршрут выбирается для каждого сайта отдельно (sing-box) — два адреса ниже не складываются в
-            общий ответ «весь трафик идёт туда-то».
+            общий ответ <Quoted text="«весь трафик идёт туда-то»" />.
           </p>
         )}
 
@@ -693,7 +696,9 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
       <Hero cold={headline.cold}>
         <StateTag tone={headline.tone}>{headline.tag}</StateTag>
         <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>
-        <p class="traffic-detail" style="margin-top:6px">{headline.verdict}</p>
+        <p class="traffic-detail" style="margin-top:6px">
+          <Quoted text={headline.verdict} />
+        </p>
         <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} />
         <div class="hero-bar">
           <span>
@@ -750,11 +755,15 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
         <div>
           <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
           <div class="row-note">
-            {backupLine
-              ? backupLine.name
-                ? `«${backupLine.name}» подхватит, если этот замолчит`
-                : 'второй VPN-туннель подхватит, если один замолчит'
-              : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'}
+            <Quoted
+              text={
+                backupLine
+                  ? backupLine.name
+                    ? `«${backupLine.name}» подхватит, если этот замолчит`
+                    : 'второй VPN-туннель подхватит, если один замолчит'
+                  : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'
+              }
+            />
           </div>
         </div>
         <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />

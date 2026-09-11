@@ -5,6 +5,7 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
+import { Quoted } from '../ui/Q.jsx'
 
 // Кабинеты провайдеров: выпустить конфиг и сразу положить его на роутер.
 //
@@ -71,7 +72,11 @@ export function CabinetScreen({ routerID, asleep, onClose, onIssued }) {
               </p>
             </div>
             {phase === 'running' && <p class="state">Кабинет выдаёт конфиг, роутер его принимает…</p>}
-            {phase === 'done' && <p class="state">{outcome}</p>}
+            {phase === 'done' && (
+              <p class="state">
+                <Quoted text={outcome} />
+              </p>
+            )}
             {phase !== 'running' && (
               <button type="button" class="btn btn-primary btn-wide" onClick={issue}>
                 {phase === 'done' ? 'Выпустить ещё раз' : 'Выпустить и положить на роутер'}

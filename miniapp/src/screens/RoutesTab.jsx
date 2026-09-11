@@ -450,7 +450,9 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
       {picker && (
         <Overlay title={picker.title} backLabel="Маршруты" onBack={() => setPicker(null)}>
           <div class="screen">
-            <p class="router-lastseen">{picker.subtitle}</p>
+            <p class="router-lastseen">
+              <Quoted text={picker.subtitle} />
+            </p>
             <ul class="card list-reset">
               {picker.options.map((o) => (
                 <ListRow
