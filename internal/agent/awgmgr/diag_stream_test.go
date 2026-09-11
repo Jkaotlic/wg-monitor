@@ -177,3 +177,54 @@ func TestDiagFresh_UsesSessionCookie(t *testing.T) {
 		t.Fatalf("DiagFresh: %v", err)
 	}
 }
+
+// TestDiagFresh_RelogsInWhenSessionExpires mirrors
+// TestClient_RelogsInWhenSessionExpires (client_test.go): every other
+// awgmgr call goes through do(), which clears a stale session cookie and
+// retries once via a fresh login on 401/403. DiagFresh must behave the same
+// way instead of leaving a self-healing session expiry to turn into a
+// persistent diag_now failure.
+func TestDiagFresh_RelogsInWhenSessionExpires(t *testing.T) {
+	var loginHits int
+	var streamHits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/auth/login":
+			loginHits++
+			http.SetCookie(w, &http.Cookie{Name: "awg_session", Value: fmt.Sprintf("session-%d", loginHits), Path: "/"})
+			_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+		case "/api/diagnostics/stream":
+			streamHits++
+			ck, err := r.Cookie("awg_session")
+			if err != nil {
+				t.Fatalf("missing session cookie: %v", err)
+			}
+			switch {
+			case streamHits == 1 && ck.Value == "session-1":
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`expired`))
+			case streamHits == 2 && ck.Value == "session-2":
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(200)
+				fmt.Fprint(w, "event: done\ndata: {\"type\":\"done\"}\n\n")
+			default:
+				t.Fatalf("unexpected stream request hit=%d cookie=%q", streamHits, ck.Value)
+			}
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	c.SetCredentials("admin", "secret")
+	if err := c.DiagFresh(context.Background()); err != nil {
+		t.Fatalf("DiagFresh: %v", err)
+	}
+	if loginHits != 2 {
+		t.Fatalf("login hits: got %d want 2", loginHits)
+	}
+	if streamHits != 2 {
+		t.Fatalf("stream hits: got %d want 2", streamHits)
+	}
+}

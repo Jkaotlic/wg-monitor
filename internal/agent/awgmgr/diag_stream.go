@@ -54,21 +54,18 @@ var diagStatusPollInterval = defaultDiagStatusPollInterval
 //     or the stream request could not even be made (HTTP_NNN: … / a network
 //     error) or ctx expired while waiting.
 func (c *Client) DiagFresh(ctx context.Context) error {
-	if err := c.ensureSession(ctx); err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/diagnostics/stream?restart=false", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	if ck := c.cookie(); ck != nil {
-		req.AddCookie(ck)
-	}
-
-	resp, err := c.streamHTTPClient().Do(req)
+	resp, err := c.authRetry(ctx, "GET diagnostics/stream", func(ctx context.Context) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/api/diagnostics/stream?restart=false", nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		if ck := c.cookie(); ck != nil {
+			req.AddCookie(ck)
+		}
+		return c.streamHTTPClient().Do(req)
+	})
 	if err != nil {
 		return fmt.Errorf("awgmgr GET diagnostics/stream: %w", err)
 	}

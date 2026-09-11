@@ -57,10 +57,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 			return nil, err
 		}
 	}
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := c.ensureSession(ctx); err != nil {
-			return nil, err
-		}
+	return c.authRetry(ctx, method+" "+path, func(ctx context.Context) (*http.Response, error) {
 		reqBody := io.Reader(nil)
 		if bodyBytes != nil {
 			reqBody = bytes.NewReader(bodyBytes)
@@ -77,7 +74,30 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 		if ck := c.cookie(); ck != nil {
 			req.AddCookie(ck)
 		}
-		resp, err := c.HTTP.Do(req)
+		return c.HTTP.Do(req)
+	})
+}
+
+// authRetry runs send (which must build a fresh request using the current
+// session cookie and issue it) up to twice, sharing the same
+// login/expiry-retry contract every awgmgr call relies on: ensureSession is
+// called before each attempt (a no-op once a cookie already exists), and if
+// the first attempt's response is 401/403 with credentials configured, the
+// stale session is cleared so the next ensureSession call logs in again
+// before send rebuilds the request with the fresh cookie.
+//
+// desc is used only in the "both attempts failed" error message (e.g.
+// "GET /api/tunnels/all" or "GET diagnostics/stream").
+//
+// do() and DiagFresh both go through this helper so a session expiring
+// mid-stream self-heals exactly like every other awgmgr call, instead of
+// leaving DiagFresh to reuse a stale cookie and fail diag_now forever.
+func (c *Client) authRetry(ctx context.Context, desc string, send func(ctx context.Context) (*http.Response, error)) (*http.Response, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := c.ensureSession(ctx); err != nil {
+			return nil, err
+		}
+		resp, err := send(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -88,7 +108,7 @@ func (c *Client) do(ctx context.Context, method, path string, body io.Reader, co
 		}
 		return resp, nil
 	}
-	return nil, fmt.Errorf("awgmgr %s %s: auth retry exhausted", method, path)
+	return nil, fmt.Errorf("awgmgr %s: auth retry exhausted", desc)
 }
 
 func (c *Client) cookie() *http.Cookie {
