@@ -585,18 +585,24 @@ func TestReportNotResumedSkipsResumer(t *testing.T) {
 	}
 }
 
-// resolver_guard -- не шумная проверка. Дребезг отсеял сам агент (провалы
-// подряд и cooldown перед переходом), и его fail -- уже случившийся переход
-// роутера на запасные DNS-серверы, а ok -- уже случившийся возврат. Ждать
-// ещё нескольких отчётов, прежде чем сказать об этом, бэкенду незачем.
+// resolver_guard -- не шумная проверка. Дребезг провалов отсеял сам агент
+// (провалы подряд и cooldown перед переходом), и его fail -- уже случившийся
+// переход роутера на запасные DNS-серверы. Ждать ещё нескольких отчётов,
+// прежде чем сказать об этом, бэкенду незачем: порог провала 1.
+//
+// Порог возврата -- обычный. no_live_fallback решается, пока роутер ещё на
+// своём DNS-сервере, и одна удачная проба без всякого cooldown делает
+// проверку ok. С порогом возврата 1 перемежающийся сервер (а там, где
+// провайдер режет запасные, так выглядит любой отказ) слал бы пару
+// HARD/восстановление каждые несколько отчётов.
 func TestResolverGuardUsesThresholdOne(t *testing.T) {
 	base := state.Thresholds{Fail: 3, Recovery: 2}
 	policy := AlertPolicy{NoisyFailThreshold: 6, NoisyRecoveryThreshold: 3}
 	if isNoisyCheck("resolver_guard") {
 		t.Fatal("resolver_guard must not be treated as a noisy dns_* check")
 	}
-	if got := thresholdsForCheck(base, policy, "resolver_guard"); got.Fail != 1 || got.Recovery != 1 {
-		t.Fatalf("resolver_guard thresholds=%+v, want Fail=1 Recovery=1", got)
+	if got := thresholdsForCheck(base, policy, "resolver_guard"); got.Fail != 1 || got.Recovery != base.Recovery {
+		t.Fatalf("resolver_guard thresholds=%+v, want Fail=1 Recovery=%d (base)", got, base.Recovery)
 	}
 	// Остальные проверки своих порогов не теряют.
 	if got := thresholdsForCheck(base, policy, "hydraroute"); got != base {
@@ -664,6 +670,73 @@ func TestReportResolverGuardGoesHardOnSecondFail(t *testing.T) {
 	defer disp.mu.Unlock()
 	if len(disp.calls) == 0 || disp.calls[len(disp.calls)-1] != state.Hard {
 		t.Fatalf("second resolver_guard fail should become hard; calls=%v", disp.calls)
+	}
+}
+
+// Одна удачная проба после HARD -- ещё не восстановление: no_live_fallback
+// снимается без cooldown, и перемежающийся сервер иначе давал бы пару
+// HARD/восстановление каждые несколько отчётов.
+func TestReportResolverGuardRecoversOnlyAfterSecondOK(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "3333333333333333333333333333333333333333333333333333333333333333"
+	_, _ = d.Users().Insert("guardbox2", tok, "198.51.100.10", "awg0")
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  disp,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+		AlertPolicy: AlertPolicy{NoisyFailThreshold: 6, NoisyRecoveryThreshold: 3},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	baseTS := time.Now().UTC()
+	seq := 0
+	post := func(t *testing.T, status string, details map[string]any) {
+		t.Helper()
+		seq++
+		body, _ := json.Marshal(wire.Report{
+			Timestamp:    baseTS.Add(time.Duration(seq) * time.Second),
+			AgentVersion: "test",
+			Checks:       []wire.Check{{Name: "resolver_guard", Status: status, Details: details}},
+		})
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status: %d", resp.StatusCode)
+		}
+	}
+	last := func() state.Kind {
+		disp.mu.Lock()
+		defer disp.mu.Unlock()
+		if len(disp.calls) == 0 {
+			return state.Noop
+		}
+		return disp.calls[len(disp.calls)-1]
+	}
+
+	noLive := map[string]any{"reason": "no_live_fallback"}
+	primary := map[string]any{"mode": "primary"}
+	post(t, "fail", noLive)
+	post(t, "fail", noLive)
+	if got := last(); got != state.Hard {
+		t.Fatalf("setup: second fail should be hard, last=%v", got)
+	}
+	post(t, "ok", primary)
+	if got := last(); got == state.Recovery {
+		t.Fatalf("one ok after hard must not recover resolver_guard (flapping no_live_fallback)")
+	}
+	post(t, "ok", primary)
+	if got := last(); got != state.Recovery {
+		t.Fatalf("second ok after hard should recover, last=%v", got)
 	}
 }
 

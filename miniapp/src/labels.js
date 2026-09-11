@@ -115,7 +115,8 @@ const RECOVERY_COPY = {
   awg_manager: 'Связь с панелью роутера восстановлена',
   tunnels: 'VPN-туннели снова опрашиваются',
   agent_heartbeat: 'Роутер снова выходит на связь',
-  resolver_guard: 'Роутер вернулся на свой DNS-сервер',
+  // Верно и когда роутер уходил на запасные, и когда оставался на своём.
+  resolver_guard: 'Свой DNS-сервер снова отвечает',
 }
 
 export function eventPhrase(checkName, status) {

@@ -105,7 +105,13 @@ func FormatHard(a HardArgs) string {
 func FormatRecovery(a RecoveryArgs) string {
 	d := a.RecoveredAt.Sub(a.HardSince).Round(time.Minute)
 	headline := recoveryHeadline(a.CheckName, a.Check.Details)
-	lines := []string{fmt.Sprintf("Простой: %s", durFmt(d))}
+	downtime := fmt.Sprintf("Простой: %s", durFmt(d))
+	if checkCategory(a.CheckName) == "resolver_guard" {
+		// Простоя могло и не быть: на запасных сайты открывались, а владельцу
+		// так и сказали. Не отвечал только свой DNS-сервер.
+		downtime = fmt.Sprintf("Свой DNS-сервер не отвечал: %s", durFmt(d))
+	}
+	lines := []string{downtime}
 	if strings.HasPrefix(a.CheckName, "tunnel_") {
 		lines = append(lines, linesFromWriter(func(b *strings.Builder) {
 			writeTunnelRecoveryFooter(b, a.Check.Details)
@@ -401,7 +407,10 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
 	case "resolver_guard":
-		return "Роутер вернулся на свой DNS-сервер"
+		// Бэкенд не знает, уходил ли роутер на запасные (fallback) или так и
+		// оставался на своём (no_live_fallback): верно в обоих случаях только
+		// «снова отвечает».
+		return "Свой DNS-сервер снова отвечает"
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineRecovered

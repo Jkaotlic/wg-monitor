@@ -816,6 +816,19 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 				t.Errorf("жаргон %q в тексте для владельца:\n%s", w, got)
 			}
 		}
+		// Бэкенд не знает, успел ли роутер уйти на запасные (fallback) или
+		// так и остался на своём (no_live_fallback): верно в обоих случаях
+		// только «снова отвечает». И «простоя» не было -- сайты могли всё
+		// это время открываться через запасные.
+		if !strings.Contains(got, "Свой DNS-сервер снова отвечает") {
+			t.Errorf("нет фразы о восстановлении:\n%s", got)
+		}
+		if strings.Contains(got, "Простой") {
+			t.Errorf("восстановление своего DNS-сервера говорит о простое:\n%s", got)
+		}
+		if !strings.Contains(got, "Свой DNS-сервер не отвечал: 20 мин") {
+			t.Errorf("нет длительности молчания своего DNS-сервера:\n%s", got)
+		}
 	})
 }
 
@@ -862,8 +875,11 @@ func TestResolverGuardAlertSaysWhatHappened(t *testing.T) {
 		Nickname: "router-a", CheckName: "resolver_guard", HardSince: since, RecoveredAt: since.Add(20 * time.Minute),
 		Check: wire.Check{Name: "resolver_guard", Status: "ok", Details: map[string]any{"mode": "primary"}},
 	})
-	if !strings.Contains(rec, "Роутер вернулся на свой DNS-сервер") {
-		t.Errorf("recovery: нет фразы о возврате:\n%s", rec)
+	if !strings.Contains(rec, "Свой DNS-сервер снова отвечает") {
+		t.Errorf("recovery: нет фразы о восстановлении:\n%s", rec)
+	}
+	if strings.Contains(rec, "Простой") || strings.Contains(rec, "Роутер вернулся") {
+		t.Errorf("recovery: обещает простой или возврат, которых могло не быть:\n%s", rec)
 	}
 
 	if got := wakeCheckLabel(wire.Check{Name: "resolver_guard", Status: "fail"}); !strings.Contains(got, "DNS-сервер") {

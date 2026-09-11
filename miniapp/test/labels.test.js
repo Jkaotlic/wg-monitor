@@ -159,7 +159,8 @@ describe('resolver_guard говорит «Свой DNS-сервер»', () => {
   })
 
   it('в журнале событий', () => {
-    expect(eventPhrase('resolver_guard', 'ok')).toBe('Роутер вернулся на свой DNS-сервер')
+    // Верно и когда роутер уходил на запасные, и когда оставался на своём.
+    expect(eventPhrase('resolver_guard', 'ok')).toBe('Свой DNS-сервер снова отвечает')
     expect(eventPhrase('resolver_guard', 'fail')).toBe('Свой DNS-сервер не отвечает')
   })
 })
