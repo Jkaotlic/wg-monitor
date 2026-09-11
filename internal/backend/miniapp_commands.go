@@ -248,8 +248,10 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 // miniappMaxCommandWaitSec caps the long-poll. Agents report on a ~68s median
 // cadence (measured 2026-07-06), and the command channel is a separate long-poll,
 // but a sleeping mobile router can take far longer -- so the client polls in
-// bounded hops rather than holding one socket open forever.
-const miniappMaxCommandWaitSec = 30
+// bounded hops rather than holding one socket open forever. Хоп обязан
+// укладываться под обрыв релея KeenDNS на 15-й секунде (см. maxCmdWait):
+// прежние 30 превращали каждую команду дольше 15 секунд в ошибку у владельца.
+const miniappMaxCommandWaitSec = int(maxCmdWait / time.Second)
 
 // miniappCommandResultHandler polls for the result of a command previously
 // dispatched via miniappCommandHandler. It is gated by the same per-router

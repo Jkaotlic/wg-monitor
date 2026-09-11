@@ -26,8 +26,12 @@ import (
 const (
 	maxReportBytes      = 64 * 1024
 	maxResultBytes      = 1024 * 1024
-	defaultCmdWait      = 30 * time.Second
-	maxCmdWait          = 60 * time.Second
+	// Долгое ожидание обязано укладываться под обрыв облачного релея KeenDNS
+	// (15 с): иначе пустой ответ 204 до агента не доходит, каждый простой
+	// считается ошибкой, а неотправленные результаты не переотправляются --
+	// агент делает это только после 204. Агент просит 30 с, сервер держит 12.
+	defaultCmdWait = 12 * time.Second
+	maxCmdWait     = 12 * time.Second
 	maxReportFutureSkew = 2 * time.Minute
 )
 
@@ -957,7 +961,7 @@ func checksSummaryRollup(checks []wire.Check) string {
 }
 
 // cmdGetHandler implements long-poll dequeue. ?wait=N caps the hold window
-// (seconds, default 30, max 60). 200+JSON when a command is ready, 204 on
+// (seconds, default and max 12 -- see maxCmdWait). 200+JSON when a command is ready, 204 on
 // timeout. Auth context provides the userID — agents only see their own queue.
 func cmdGetHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

@@ -1460,7 +1460,10 @@ func wizardCmdResultHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "nickname query param required")
 			return
 		}
-		wait := 30
+		// Тот же предел, что у опроса команд агентом: всё, что дольше, релей
+		// KeenDNS оборвёт на 15-й секунде вместо честного «ещё не готово».
+		maxWait := int(maxCmdWait / time.Second)
+		wait := maxWait
 		if w := r.URL.Query().Get("wait_sec"); w != "" {
 			if n, err := strconv.Atoi(w); err == nil {
 				wait = n
@@ -1469,8 +1472,8 @@ func wizardCmdResultHandler(d Deps) http.HandlerFunc {
 		if wait < 0 {
 			wait = 0
 		}
-		if wait > 60 {
-			wait = 60
+		if wait > maxWait {
+			wait = maxWait
 		}
 
 		u, err := d.DB.Users().GetByNickname(nickname)

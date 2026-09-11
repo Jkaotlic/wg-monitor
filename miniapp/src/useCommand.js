@@ -34,7 +34,7 @@ export function useCommand(routerID) {
     [],
   )
 
-  async function run(action, args = {}, { deadlineMs = 90_000, waitSec = 25 } = {}) {
+  async function run(action, args = {}, { deadlineMs = 90_000, waitSec = 10 } = {}) {
     if (!aliveRef.current) return null
     setBusy(true)
     setError(null)
@@ -43,8 +43,10 @@ export function useCommand(routerID) {
       const { cmd_id: id } = await sendCommand(routerID, action, args)
       const until = Date.now() + deadlineMs
       while (Date.now() < until) {
-        // Bounded hop: the backend caps wait_sec at 30 anyway
-        // (miniappMaxCommandWaitSec, miniapp_commands.go), but capping the
+        // Bounded hop: the backend caps wait_sec at 12 anyway
+        // (miniappMaxCommandWaitSec, miniapp_commands.go) -- релей KeenDNS
+        // рвёт всё, что дольше 15 секунд, и обрыв здесь читался бы как
+        // ошибка, а не «ещё не готово». Capping the
         // LAST hop to whatever time remains keeps the loop from overshooting
         // the deadline by a near-full hop when the deadline is close.
         const remainingSec = Math.max(1, Math.ceil((until - Date.now()) / 1000))
