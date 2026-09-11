@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { fetchRepairStatus, startRepair } from '../api.js'
 import { repairView } from '../repair.js'
 import { Overlay } from '../ui/Overlay.jsx'
+import { Quoted } from '../ui/Q.jsx'
 
 // Экран починки VPN-туннеля.
 //
@@ -86,7 +87,11 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
           ))}
         </ol>
 
-        {view.note ? <p class="repair-note">{view.note}</p> : null}
+        {view.note ? (
+          <p class="repair-note">
+            <Quoted text={view.note} />
+          </p>
+        ) : null}
 
         {/* Текст идёт за состоянием: «пока чиню» на законченной починке --
             неправда, а экран, который врёт в мелочи, не верят и в крупном. */}
@@ -105,7 +110,7 @@ export function RepairScreen({ routerID, checkName, lineName, onClose }) {
 
         {!running ? (
           <button class="btn btn-accent repair-start" onClick={start} disabled={starting}>
-            {starting ? 'Начинаю…' : view.done ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`}
+            <Quoted text={starting ? 'Начинаю…' : view.done ? 'Починить ещё раз' : `Починить «${lineName || checkName}»`} />
           </button>
         ) : null}
       </div>

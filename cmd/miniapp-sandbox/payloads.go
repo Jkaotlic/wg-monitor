@@ -39,6 +39,10 @@ func sandboxOutput(action string, args map[string]any) string {
 		return mustJSON(tunnelTraffic(argString(args, "tunnel_id", "awg12"), argString(args, "period", "24h")))
 	case "diag_report":
 		return mustJSON(diagReport())
+	case "diag_now":
+		return mustJSON(diagNowReport(time.Now()))
+	case "route_lookup":
+		return mustJSON(routeLookup(argString(args, "domain", "")))
 	// Мастер сверяет адреса выхода этими двумя командами (а не exit_ip_*):
 	// адрес через туннель обязан отличаться от прямого, иначе трафик мимо
 	// VPN, и шаг проверки честно проваливается.
@@ -135,13 +139,13 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 		HRNeo: wire.HRStatus{Installed: true, Running: true},
 		Tunnels: []wire.TunnelMeta{
 			{
-				ID: "awg12", Name: "Амстердам", Iface: "opkgtun12", Type: "amneziawg",
+				ID: "awg12", Name: "vpn-nl", Iface: "opkgtun12", Type: "amneziawg",
 				Enabled: true, Available: true, Status: "up",
 				HasHandshake: true, HandshakeAge: 21, PingStatus: "ok",
 				DefaultRoute: true, RestartMethod: "control",
 			},
 			{
-				ID: "awg10", Name: "Франкфурт", Iface: "opkgtun10", Type: "amneziawg",
+				ID: "awg10", Name: "vpn-de", Iface: "opkgtun10", Type: "amneziawg",
 				Enabled: true, Available: true, Status: "down",
 				HasHandshake: true, HandshakeAge: 3600, PingStatus: "fail", PingFails: 4, PingFailMax: 5,
 				RestartMethod: "control",
@@ -161,10 +165,10 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 			{
 				Name: "HydraRoute", Description: "обход блокировок",
 				Interfaces: []wire.RoutePolicyInterface{
-					{Bind: "OpkgTun12", Name: "Амстердам", Role: "active", Available: true, Order: 1, TunnelID: "awg12", ViaVPN: true},
+					{Bind: "OpkgTun12", Name: "vpn-nl", Role: "active", Available: true, Order: 1, TunnelID: "awg12", ViaVPN: true},
 					// Резерв ДОСТУПЕН: иначе движку починки некуда уводить
 					// трафик, и весь сценарий с failover не отрепетировать.
-					{Bind: "OpkgTun10", Name: "Франкфурт", Role: "fallback", Available: true, Order: 2, TunnelID: "awg10", ViaVPN: true},
+					{Bind: "OpkgTun10", Name: "vpn-de", Role: "fallback", Available: true, Order: 2, TunnelID: "awg10", ViaVPN: true},
 				},
 				DNS: 32, HRNeo: 28, ActiveTunnelID: "awg12", ViaVPN: true,
 			},
@@ -240,10 +244,87 @@ func diagReport() map[string]any {
 			"dns":      map[string]any{"ok": true, "servers": []string{"1.1.1.1", "8.8.8.8"}},
 		},
 		"tunnels": []map[string]any{
-			{"id": "awg12", "name": "Амстердам", "status": "up", "handshakeAgeSec": 21},
-			{"id": "awg10", "name": "Франкфурт", "status": "down"},
+			{"id": "awg12", "name": "vpn-nl", "status": "up", "handshakeAgeSec": 21},
+			{"id": "awg10", "name": "vpn-de", "status": "down"},
 		},
 	}
+}
+
+// Свежий отчёт diag_now -- форма awg-manager 2.18.2 (плоский tests[], у
+// проверок VPN-туннеля tunnelId/tunnelName), как в
+// internal/backend/alerts/testdata/diag_report_awgm_2_18_2.json. Проверок
+// restart_cycle нет намеренно: свежая диагностика туннели не перезапускает.
+func diagNowReport(now time.Time) map[string]any {
+	test := func(name, desc, status, detail string) map[string]any {
+		return map[string]any{"name": name, "description": desc, "status": status, "detail": detail}
+	}
+	tests := []map[string]any{
+		test("wan_connectivity", "WAN up с gateway", "pass", "default via 198.51.100.1 dev eth3"),
+		test("ndms_health", "NDMS отвечает", "pass", "5.2 Alpha 8"),
+		test("kernel_module", "Модули AmneziaWG", "skip", "Не требуется: NDMS обрабатывает обфускацию нативно"),
+		test("clock_skew", "Расхождение времени с эталоном", "pass", "Расхождение 1s (норма)"),
+		test("direct_connectivity", "Direct связность (без прокси/туннеля)", "pass", "Direct egress работает (HTTP 204)"),
+		test("singbox_runtime", "Sing-box runtime", "skip", "Sing-box не установлен"),
+	}
+	for i, tun := range []struct{ id, name, endpoint string }{
+		{"awg12", "vpn-nl", "203.0.113.21"},
+		{"awg10", "vpn-reserve", "203.0.113.22"},
+	} {
+		per := []map[string]any{
+			test("dns_resolve", "Резолв endpoint", "pass", "Endpoint уже IP-адрес"),
+			test("endpoint_reachable", "Ping endpoint", "pass", fmt.Sprintf("Round-trip min/avg/max = %d.10/%d.40/%d.90 ms.", 60+i*120, 75+i*130, 88+i*140)),
+			test("endpoint_route_check", "Host route до endpoint", "pass", tun.endpoint+" via 198.51.100.1 dev eth3"),
+			test("awg_handshake", "Handshake свежий (<3 мин)", "pass", "1 minute, 5 seconds ago"),
+			test("tunnel_connectivity", "Связность через туннель", "pass", "IP: "+tun.endpoint),
+			test("config_parse", "Валидация конфига", "pass", "Конфиг валиден"),
+			test("mtu_check", "MTU интерфейса", "pass", "MTU = 1280"),
+			test("pingcheck_health", "PingCheck статус", "skip", "PingCheck не включён"),
+			test("dns_leak_check", "DNS leak проверка", "skip", "DNS не настроен в конфигурации туннеля"),
+		}
+		for _, t := range per {
+			t["tunnelId"], t["tunnelName"] = tun.id, tun.name
+		}
+		tests = append(tests, per...)
+	}
+	tests = append(tests, test("route_leak_check", "Осиротевшие маршруты", "pass", "Нет осиротевших маршрутов"))
+	return map[string]any{
+		"version":     "1.0",
+		"generatedAt": now.Format(time.RFC3339),
+		"durationMs":  16416,
+		"tests":       tests,
+		"system":      map[string]any{"appVersion": "2.18.2+r1", "backend": "kernel"},
+	}
+}
+
+// Ответ route_lookup зависит только от имени сайта: снимки экрана обязаны
+// повторяться. На каждую ветку ответа -- своё имя; остальное уходит главным
+// выходом роутера, а он у песочницы -- провайдер (DefaultEgressDirect).
+func routeLookup(domain string) wire.RouteLookupResult {
+	viaNL := func(rule, pattern string) wire.RouteLookupMatch {
+		return wire.RouteLookupMatch{RuleName: rule, Pattern: pattern, Via: wire.LookupViaTunnel, TunnelID: "awg12", TunnelName: "vpn-nl"}
+	}
+	res := wire.RouteLookupResult{Domain: domain, Matches: []wire.RouteLookupMatch{}}
+	switch domain {
+	case "claude.ai":
+		res.Verdict, res.TunnelID, res.TunnelName = wire.LookupViaTunnel, "awg12", "vpn-nl"
+		res.Matches = append(res.Matches, viaNL("Все AI сервисы", "geosite:ANTHROPIC"))
+	case "example.org":
+		// Правил нет, а главный выход -- VPN-туннель: ответ «напрямую» здесь
+		// был бы враньём, и экран обязан это держать.
+		res.Verdict, res.ByDefault, res.TunnelID, res.TunnelName = wire.LookupViaTunnel, true, "awg12", "vpn-nl"
+	case "mixed.example.com":
+		res.Verdict = wire.LookupMixed
+		res.Matches = append(res.Matches,
+			viaNL("Все AI сервисы", "mixed.example.com"),
+			wire.RouteLookupMatch{RuleName: "Рабочие сайты", Pattern: "example.com", Via: wire.LookupViaDirect},
+		)
+	case "unknown.example.com":
+		res.Verdict = wire.LookupViaUnknown
+		res.Notes = []string{"hr_not_running"}
+	default: // example.com и всё прочее
+		res.Verdict, res.ByDefault = wire.LookupViaDirect, true
+	}
+	return res
 }
 
 // Строка для лога: аргументы команды в одну строчку, чтобы в консоли было

@@ -8,6 +8,7 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { Chip } from '../ui/Chip.jsx'
+import { Q } from '../ui/Q.jsx'
 
 // «Отправить в туннель» -- три шага в одном экране: куда, что и что из этого
 // выйдет. Порядок именно такой, потому что первым оператор выбирает VPN-туннель, а
@@ -146,7 +147,9 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
 
         {step === 'what' && (
           <>
-            <p class="router-lastseen">Пойдёт в «{tunnel.name}».</p>
+            <p class="router-lastseen">
+              Пойдёт в <Q>{tunnel.name}</Q>.
+            </p>
             <div class="seg">
               <button
                 type="button"
@@ -251,7 +254,9 @@ export function RouteAddScreen({ routerID, asleep, snapshot, openSheet, onClose,
               )}
               {summary && (
                 <>
-                  <p class="traffic-detail">Пойдёт в «{tunnel.name}»:</p>
+                  <p class="traffic-detail">
+                    Пойдёт в <Q>{tunnel.name}</Q>:
+                  </p>
                   {summary.targets && <p class="rules-target">{summary.targets}</p>}
                   {summary.notes.map((note) => (
                     <p key={note} class="traffic-note">{note}</p>

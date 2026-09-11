@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { fetchTimeline } from '../api.js'
 import { groupByDay } from '../events.js'
 import { incidentLine, groupIncidentsByDay } from '../incidents.js'
+import { Quoted } from '../ui/Q.jsx'
 
 const DAYS = 7
 
@@ -49,7 +50,7 @@ export function EventsTab({ routerID, routerName }) {
     <div class="screen">
       <h1 class="screen-title">Что было</h1>
       <p class="router-lastseen">
-        {routerName ? `Роутер «${routerName}» · ${DAYS} дней` : `За ${DAYS} дней`}
+        <Quoted text={routerName ? `Роутер «${routerName}» · ${DAYS} дней` : `За ${DAYS} дней`} />
       </p>
 
       <div class="filter-row">
@@ -105,7 +106,9 @@ function IncidentFeed({ data }) {
                     <span class={`inc-dot inc-dot-${line.tone}`} />
                     <span class="inc-main">
                       <b class="inc-title">{line.title}</b>
-                      <span class="inc-detail">{line.detail}</span>
+                      <span class="inc-detail">
+                        <Quoted text={line.detail} />
+                      </span>
                     </span>
                   </li>
                 )

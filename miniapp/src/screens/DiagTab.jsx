@@ -1,17 +1,12 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
-import { parseDiag, checkRows, exitCompare } from '../diag.js'
+import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
-
-function stamp(iso, durationMs) {
-  if (!iso) return ''
-  const when = new Date(iso).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' })
-  return durationMs ? `${when} · сбор занял ${(durationMs / 1000).toFixed(1)} с` : when
-}
+import { Quoted } from '../ui/Q.jsx'
 
 // Диагностика отвечает на вопрос «что из этого следует», а не «какая проверка
 // моргнула»: пять строк данных, у каждой -- ответ и измерение. Числа берутся
@@ -183,9 +178,11 @@ export function DiagTab({ routerID, asleep }) {
           {report.busy ? 'Собираем…' : 'Собрать отчёт'}
         </button>
         <p class="hint">
-          {parsedReport
-            ? stamp(parsedReport.generatedAt, parsedReport.durationMs)
-            : 'Роутер проверит себя заново — это займёт до минуты. VPN-туннели при этом не перезапускаются.'}
+          {reportHint(parsedReport).map((line) => (
+            <span key={line} class="hint-line">
+              {line}
+            </span>
+          ))}
         </p>
 
         {report.error && <p class="state state-error">{report.error}</p>}
@@ -201,7 +198,12 @@ export function DiagTab({ routerID, asleep }) {
                   <span class="row-title">{c.title}</span>
                   <span class={`diag-verdict diag-verdict-${c.tone}`}>{c.verdict}</span>
                 </div>
-                {c.detail && <p class="tunnel-sub">{c.detail}</p>}
+                {/* Строки карточки -- «VPN-туннель «имя»: …»: имя через <Quoted>. */}
+                {c.detail && (
+                  <p class="tunnel-sub">
+                    <Quoted text={c.detail} />
+                  </p>
+                )}
               </div>
             ))}
           </div>

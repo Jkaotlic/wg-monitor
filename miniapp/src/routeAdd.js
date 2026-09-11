@@ -1,4 +1,5 @@
 import { pluralRu } from './labels.js'
+import { plainHyphens } from './text.js'
 
 // Превью изменений маршрутизации: что именно уйдёт в туннель или исчезнет
 // из него. Чистые функции -- вся работа с планом агента живёт здесь, экран
@@ -77,7 +78,9 @@ export function deletePlanSummary(plan) {
 // написал, и вопрос "DNS или static" -- вопрос про механизм, а не про
 // последствие.
 export function parseManualTargets(text) {
-  const raw = String(text ?? '')
+  // Цель, скопированная из текста приложения, может нести U+2011 -- роутер
+  // такого дефиса в имени не примет.
+  const raw = plainHyphens(text)
     .split(/[\s,;]+/)
     .map((v) => v.trim())
     .filter(Boolean)

@@ -6,6 +6,7 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
+import { Q, Quoted } from '../ui/Q.jsx'
 
 // Мастер замены конфига VPN-туннеля.
 //
@@ -70,9 +71,11 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
   return (
     <Overlay title="Заменить конфиг" backLabel="VPN-туннели" onBack={onClose}>
       <div class="screen">
-        <h1 class="screen-title">Заменить конфиг «{tunnel.name}»</h1>
+        <h1 class="screen-title">
+          Заменить конфиг <Q>{tunnel.name}</Q>
+        </h1>
         <p class="router-lastseen">
-          Новый VPN-туннель встанет рядом, и только когда он заработает, правила «{policyName}»
+          Новый VPN-туннель встанет рядом, и только когда он заработает, правила <Q>{policyName}</Q>{' '}
           перейдут на него. Прежний останется на роутере выключенным.
         </p>
 
@@ -157,7 +160,9 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
                     </ul>
                   ) : (
                     <div class="card">
-                      <p class="traffic-detail">{summary.reason}</p>
+                      <p class="traffic-detail">
+                        <Quoted text={summary.reason} />
+                      </p>
                     </div>
                   )}
                 </Section>

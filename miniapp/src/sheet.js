@@ -1,3 +1,5 @@
+import { plainHyphens } from './text.js'
+
 // Описание шита -- данные, а не JSX: заводят его экраны, показывает оболочка,
 // и между ними ходит один объект. Само выполнение команды живёт внутри
 // компонента Sheet, поэтому здесь нет ни busy, ни result.
@@ -17,12 +19,14 @@ export function localSheet({ title, body, buttonLabel = 'Выполнить', da
 // защите от чужого пальца, а в паузе -- это единственное место, где он
 // читает, что именно произойдёт, до того как это произойдёт.
 //
-// Сравнение по сути: регистр и пробелы по краям человек воспроизводит
-// случайно, и отказ из-за них учил бы только злости.
+// Сравнение по сути: регистр, пробелы по краям и вид дефиса человек
+// воспроизводит случайно, и отказ из-за них учил бы только злости. Дефис
+// приводится с обеих сторон: имя роутера, скопированное из текста, может
+// нести U+2011, а набранное руками -- обычный.
 export function confirmReady(sheet, typed) {
-  const phrase = (sheet?.confirmPhrase ?? '').trim().toLowerCase()
+  const phrase = plainHyphens(sheet?.confirmPhrase ?? '').trim().toLowerCase()
   if (!phrase) return true
-  return String(typed ?? '').trim().toLowerCase() === phrase
+  return plainHyphens(typed).trim().toLowerCase() === phrase
 }
 
 // Фаза выводится из состояния useCommand, а не хранится отдельно: два

@@ -107,6 +107,8 @@
   font-weight: 700;
   line-height: var(--lh-tight);
   color: var(--text);
+  /* В заголовок попадает имя VPN-туннеля («Заменить конфиг «…»»). */
+  overflow-wrap: break-word;
 }
 
 .section {
@@ -305,7 +307,10 @@
   color: var(--muted);
 }
 
+/* 44 px, как у .btn: поле -- тоже зона нажатия, и в 37 px палец попадает
+   в подпись или в кнопку под ним. */
 .field input {
+  min-height: 44px;
   font-family: inherit;
   font-size: var(--fs-md);
   color: var(--text);
@@ -358,12 +363,27 @@ body {
    the top of this file (no --tg-* or hardcoded hex), same as the
    rest of the component vocabulary.
    ============================================================ */
+/* Отступ под заголовком несёт шапка целиком, а не заголовок внутри неё.
+   Раньше нижнее поле .screen-title (16 px) растягивало шапку, кнопка
+   «Обновить» в 44 px центровалась по этой высоте, и подзаголовок со своим
+   отрицательным верхним полем заезжал под её низ на 7 px. Теперь высоту
+   шапки задаёт самый высокий из двух -- кнопка, а подзаголовок начинается
+   под ней. */
 .router-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--sp-3);
+  margin-bottom: var(--sp-1);
+}
+
+.router-header .screen-title {
+  margin: 0;
+}
+
+.router-header + .router-lastseen {
+  margin-top: 0;
 }
 
 /* Vertical stack of standalone .card elements (one per incident).
@@ -481,6 +501,7 @@ body {
   margin: calc(-1 * var(--sp-2)) 0 0;
   font-size: var(--fs-sm);
   color: var(--muted);
+  overflow-wrap: break-word;
 }
 
 /* ---------------- Tunnels (§3.3) ----------------
@@ -572,12 +593,16 @@ body {
 /* ---------------- Traffic (§3.4) ----------------
    The headline answer, so it is the one piece of body copy on the screen set
    above --fs-md: it is what the operator opens the app to read. */
+/* overflow-wrap у текстов, куда попадают имена сайтов и VPN-туннелей: длинное
+   имя вроде discord-attachments-uploads-prd.storage.googleapis.com иначе
+   вытолкнуло бы страницу вбок на 360 px. */
 .traffic-title {
   margin: 0;
   font-size: var(--fs-lg);
   font-weight: 600;
   line-height: var(--lh-tight);
   color: var(--text);
+  overflow-wrap: break-word;
 }
 
 .traffic-detail {
@@ -585,6 +610,16 @@ body {
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
   color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+/* Имя в «ёлочках» (<Q>): короткое не рвётся по дефису -- inline-block
+   переносится только целиком; длинное, шире строки, переносится внутри себя.
+   Дефис в имени -- настоящий: скопированное совпадёт с тем, что на роутере. */
+.q {
+  display: inline-block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* The contested-default footnote: a real and common condition (the operator's
@@ -598,6 +633,7 @@ body {
   color: var(--text);
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
+  overflow-wrap: break-word;
 }
 
 .traffic-probe {
@@ -1070,6 +1106,7 @@ body {
   font-weight: 600;
   line-height: var(--lh-tight);
   color: var(--text);
+  overflow-wrap: break-word;
 }
 
 .sheet-body {
@@ -1077,6 +1114,7 @@ body {
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
   color: var(--muted);
+  overflow-wrap: break-word;
 }
 
 .sheet-note {
@@ -1762,6 +1800,7 @@ body {
   font-size: var(--fs-sm);
   line-height: var(--lh-normal);
   color: var(--ink);
+  overflow-wrap: break-word;
 }
 
 /* Кнопка внутри строки списка: не растягивается и держит 44 px по высоте. */
@@ -1874,6 +1913,11 @@ body {
 .hint b {
   color: var(--ink);
   font-weight: 600;
+}
+
+/* Подпись из нескольких строк: отметка отчёта и обещание под ней. */
+.hint-line {
+  display: block;
 }
 
 /* Подвал карточки, когда он несёт плохую новость: «наружу виден тот же
@@ -2109,10 +2153,6 @@ body {
    нельзя было проскочить взглядом. */
 .sheet-confirm {
   margin-top: var(--sp-4);
-}
-
-.sheet-confirm input {
-  min-height: 44px;
 }
 
 /* ============================================================
