@@ -185,7 +185,7 @@ export function DiagTab({ routerID, asleep }) {
         <p class="hint">
           {parsedReport
             ? stamp(parsedReport.generatedAt, parsedReport.durationMs)
-            : 'Роутер проверит сам себя и пришлёт отчёт — обычно это несколько секунд. Во время проверки каждый VPN-туннель на секунду перезапустится.'}
+            : 'Роутер пришлёт свой последний отчёт проверки — время отчёта будет указано. Если отчёта ещё нет, роутер проверит себя заново: это несколько секунд, и каждый VPN-туннель на секунду перезапустится.'}
         </p>
 
         {report.error && <p class="state state-error">{report.error}</p>}

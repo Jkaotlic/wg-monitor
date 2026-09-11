@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // ParseDiagReport разбирает отчёт awg-manager /api/diagnostics/result
@@ -86,9 +87,21 @@ func (r diagReportV1) renderSummary() string {
 	// Тире, а не двоеточие: карточка уже печатает «Диагностика: …», и два
 	// двоеточия подряд читаются как опечатка.
 	if failed == 0 {
-		return fmt.Sprintf("всё в порядке — проверено %d %s%s", passed, ruPlural(passed, "пункт", "пункта", "пунктов"), took)
+		return fmt.Sprintf("всё в порядке — проверено %d %s%s", passed, ruPlural(passed, "пункт", "пункта", "пунктов"), took) + r.renderStamp()
 	}
-	return fmt.Sprintf("нашлись проблемы — %d из %d%s", failed, passed+failed, took)
+	return fmt.Sprintf("нашлись проблемы — %d из %d%s", failed, passed+failed, took) + r.renderStamp()
+}
+
+// renderStamp -- когда снят отчёт. «Диагностика» отдаёт ПОСЛЕДНИЙ отчёт
+// роутера, и он может быть многочасовой давности: без времени сводка выдаёт
+// старое показание за свежее. Время -- роутера, в его поясе: так его видит
+// владелец в родной панели. Нет времени или не разобралось -- молчим.
+func (r diagReportV1) renderStamp() string {
+	at, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(r.GeneratedAt))
+	if err != nil {
+		return ""
+	}
+	return " · отчёт снят " + at.Format("02.01 в 15:04")
 }
 
 // renderBullets — только то, что не так. Что именно увидел роутер, живёт на
