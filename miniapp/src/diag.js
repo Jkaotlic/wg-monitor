@@ -144,7 +144,7 @@ export function parseDiag(output) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { humanAge, pluralRu, incidentCopy } from './labels.js'
+import { humanAge, pluralRu, incidentCopy, checkLabel } from './labels.js'
 
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
@@ -284,12 +284,13 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
     })
   }
   // Проверка, которой в порядке нет, всё равно приехала от роутера, и молчать
-  // о ней нельзя -- показываем в конце тем именем, что дал агент.
+  // о ней нельзя -- показываем в конце человеческим именем, если оно есть
+  // (resolver_guard -- «Свой DNS-сервер»), иначе тем, что дал агент.
   for (const c of checks ?? []) {
     if (ROW_ORDER.includes(c.check_name) || c.check_name.startsWith('tunnel_')) continue
     rows.push({
       key: c.check_name,
-      title: c.check_name,
+      title: checkLabel(c.check_name),
       code: c.check_name,
       answer: silent ? 'не знаем' : c.status === 'ok' ? 'да' : 'нет',
       tone: silent ? 'muted' : c.status === 'ok' ? 'ok' : 'danger',
