@@ -351,3 +351,27 @@ func TestUpdateAgentConfigClearsWatchdogBootstrapIP(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Ответ update_agent_config показывается на дашборде в панели результата
+// команды. Путь эндпоинта -- секрет, и печатать его там нельзя так же, как
+// в get_agent_config.
+func TestUpdateAgentConfigResultMasksWatchdogEndpoint(t *testing.T) {
+	path := writeSampleConfig(t)
+	_ = stubRestart(t)
+	msg, err := UpdateAgentConfig(context.Background(), map[string]any{
+		"dns_watchdog_endpoint": "https://dns.example.com/secret-path/dns-query",
+	}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(msg, "secret-path") || strings.Contains(msg, "dns-query") {
+		t.Fatalf("endpoint path leaked into command result: %q", msg)
+	}
+	if !strings.Contains(msg, "dns_watchdog.endpoint=https://dns.example.com/***") {
+		t.Fatalf("result should name the change with the masked endpoint: %q", msg)
+	}
+	raw, _ := os.ReadFile(path)
+	if !strings.Contains(string(raw), "https://dns.example.com/secret-path/dns-query") {
+		t.Fatalf("the real endpoint must still be written to config:\n%s", raw)
+	}
+}

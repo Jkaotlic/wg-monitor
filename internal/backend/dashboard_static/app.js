@@ -1742,7 +1742,8 @@
     // watchdog (every owner's) keep config.yaml without the block.
     if (watchdogEnabled !== Boolean(current.dns_watchdog_enabled)) args.dns_watchdog_enabled = watchdogEnabled;
     if (watchdogEndpoint) args.dns_watchdog_endpoint = watchdogEndpoint;
-    if (watchdogCanary && watchdogCanary !== (current.dns_watchdog_canary_domain || "")) args.dns_watchdog_canary_domain = watchdogCanary;
+    // Cleared canary field = back to the agent's default (example.com).
+    if (watchdogCanary !== (current.dns_watchdog_canary_domain || "")) args.dns_watchdog_canary_domain = watchdogCanary;
     if (watchdogBootstrapIP !== (current.dns_watchdog_bootstrap_ip || "")) args.dns_watchdog_bootstrap_ip = watchdogBootstrapIP;
     try {
       setActionState(nickname, "update_agent_config", "queued");

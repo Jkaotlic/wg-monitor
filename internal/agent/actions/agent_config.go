@@ -163,7 +163,12 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 		if err := setConfigValue(&doc, ch.section, ch.key, ch.value, ch.tag); err != nil {
 			return "", fmt.Errorf("update_agent_config: %w", err)
 		}
-		applied = append(applied, ch.section+"."+ch.key+"="+ch.value)
+		shown := ch.value
+		if ch.section == "dns_watchdog" && ch.key == "endpoint" {
+			// The command result lands on the dashboard: the path is the secret.
+			shown = maskDNSWatchdogEndpoint(shown)
+		}
+		applied = append(applied, ch.section+"."+ch.key+"="+shown)
 	}
 	out, err := yaml.Marshal(&doc)
 	if err != nil {
