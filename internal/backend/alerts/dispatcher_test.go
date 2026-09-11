@@ -184,7 +184,7 @@ func TestDispatcherSoftFlapNoTGButCounted(t *testing.T) {
 func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 	d := newDB(t)
 	tok := "3333333333333333333333333333333333333333333333333333333333333333"
-	uid, _ := d.Users().Insert("bob", tok, "2.2.2.2", "awg0")
+	uid, _ := d.Users().Insert("bob", tok, "198.51.100.2", "awg0")
 	if err := d.Users().SetTelegramUserID(uid, 1101); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 func TestDispatcherHardTunnelAlertHasNoCommandButtons(t *testing.T) {
 	d := newDB(t)
 	tok := "3333222222222222222222222222222222222222222222222222222222222222"
-	uid, _ := d.Users().Insert("commandless", tok, "2.2.2.2", "awg0")
+	uid, _ := d.Users().Insert("commandless", tok, "198.51.100.2", "awg0")
 	if err := d.Users().SetTelegramUserID(uid, 1110); err != nil {
 		t.Fatal(err)
 	}

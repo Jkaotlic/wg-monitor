@@ -12,7 +12,8 @@ deploy/**/*.local.*
 *.upx
 wg-monitor
 wg-monitor-backend
-miniapp-sandbox
+# Только бинарь в корне: без «/» правило глотало и исходники cmd/miniapp-sandbox/.
+/miniapp-sandbox
 
 # MCP / tool scratch output
 .playwright-mcp/
