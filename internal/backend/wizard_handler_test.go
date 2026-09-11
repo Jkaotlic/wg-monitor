@@ -1743,3 +1743,40 @@ func TestSanitizeRouteTargetsBounded(t *testing.T) {
 		t.Fatalf("целей %d, ожидалось 200", len(targets))
 	}
 }
+
+// «Куда пойдёт сайт»: до агента доезжает ровно имя сайта, в одном виде, и
+// ничего сверх него. Всё, что именем сайта не является, отбивается до очереди.
+func TestSanitizeRouteLookupArgs(t *testing.T) {
+	rec := httptest.NewRecorder()
+	got, ok := sanitizeWizardCommandArgs(rec, "route_lookup", map[string]any{"domain": "Claude.AI.", "лишнее": true})
+	if !ok {
+		t.Fatalf("отбил корректное имя: %s", rec.Body.String())
+	}
+	if len(got) != 1 || got["domain"] != "claude.ai" {
+		t.Fatalf("got = %v, ожидалось ровно {domain: claude.ai}", got)
+	}
+	bad := map[string]any{
+		"пусто":        "",
+		"пробел":       "a b.com",
+		"путь":         "x.com/path",
+		"порт":         "x.com:443",
+		"без точки":    "localhost",
+		"254 символа":  strings.Repeat("a", 250) + ".com",
+		"не строка":    42,
+		"одни пробелы": "   ",
+	}
+	for name, domain := range bad {
+		t.Run(name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			if got, ok := sanitizeWizardCommandArgs(rec, "route_lookup", map[string]any{"domain": domain}); ok {
+				t.Fatalf("пропустил %v: %v", domain, got)
+			}
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_domain") {
+				t.Fatalf("код %d, тело %s; ожидался 400 invalid_domain", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	if !dashboardCommandAllowlist["route_lookup"] {
+		t.Error("route_lookup обязан быть доступен и с дашборда")
+	}
+}

@@ -625,6 +625,8 @@ var dashboardCommandAllowlist = map[string]bool{
 	"check_direct":     true,
 	"check_via_tunnel": true,
 	"tunnel_analyze":   true,
+	// «Куда пойдёт сайт»: только чтение, аргумент -- одно имя сайта.
+	"route_lookup": true,
 	// NB: update_backend_url is intentionally NOT here. Re-pointing the fleet's
 	// backend domain from a browser session is fleet-takeover blast radius, so it
 	// stays gated to the wizard token / deploy CLI (see
@@ -917,6 +919,16 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 	switch action {
 	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "dns_reset":
 		return map[string]any{}, true
+	case "route_lookup":
+		// «Куда пойдёт сайт»: агенту уходит ровно имя сайта, в одном виде.
+		// Адрес с путём или портом и одиночное имя без точки -- не сайт; агент
+		// проверит ещё раз, но чужое до очереди не доезжает.
+		domain := strings.TrimRight(strings.ToLower(strings.TrimSpace(argString(args, "domain"))), ".")
+		if domain == "" || len(domain) > 253 || strings.ContainsAny(domain, " \t\r\n/:") || !strings.Contains(domain, ".") {
+			writeJSONError(w, http.StatusBadRequest, "invalid_domain", "domain must be a site name like example.com")
+			return nil, false
+		}
+		return map[string]any{"domain": domain}, true
 	case "opkg_cron_install", "entware_clean_install":
 		schedule, _ := args["schedule"].(string)
 		schedule = strings.TrimSpace(schedule)

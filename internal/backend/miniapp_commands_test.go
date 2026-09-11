@@ -44,6 +44,9 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// Включение/выключение по идентификатору: работает и там, где ndmc
 		// бессилен (opkg-туннель без имени в NDMS).
 		"tunnel_power",
+		// «Куда пойдёт сайт»: читающее, до агента доезжает только имя сайта
+		// (явная ветка sanitizeWizardCommandArgs).
+		"route_lookup",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -100,6 +103,42 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 
 // Every allowlisted action must also be a real wire action -- an allowlist entry
 // that the agent would reject is a latent 'nothing happens' bug.
+// «Куда пойдёт сайт» открыт мини-аппу, и до агента доезжает только имя сайта
+// в одном виде: всё прочее, что пришлёт клиент, отброшено, а негодное имя не
+// ставит в очередь ничего.
+func TestMiniappCommandsRouteLookupQueuesOnlyDomain(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID), bytes.NewReader([]byte(body)))
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post(`{"action":"route_lookup","args":{"domain":" Claude.AI. ","tunnel_id":"awg12","ndms_name":"Wireguard0"}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 {
+		t.Fatalf("в очереди %d команд, ожидалась одна", len(sink.enqueued))
+	}
+	cmd := sink.enqueued[0]
+	if cmd.Action != "route_lookup" || len(cmd.Args) != 1 || cmd.Args["domain"] != "claude.ai" {
+		t.Fatalf("агенту ушло %s %v, ожидалось ровно {domain: claude.ai}", cmd.Action, cmd.Args)
+	}
+
+	rec = post(`{"action":"route_lookup","args":{"domain":"x.com/path"}}`)
+	if rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte("invalid_domain")) {
+		t.Fatalf("want 400 invalid_domain, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 {
+		t.Fatal("негодное имя сайта ушло в очередь")
+	}
+}
+
 func TestMiniappCommandAllowlistEntriesAreValidWireActions(t *testing.T) {
 	for a := range miniappCommandAllowlist {
 		if !wire.IsValidCommandAction(a) {

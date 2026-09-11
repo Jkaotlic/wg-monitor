@@ -74,6 +74,9 @@ var miniappCommandAllowlist = map[string]bool{
 	"route_delete":         true,
 	"route_rebind":         true,
 	"route_policy_promote": true,
+	// «Куда пойдёт сайт»: только чтение, одинаково владельцу, оператору и
+	// админу. До агента доезжает ровно имя сайта -- явная ветка санитайзера.
+	"route_lookup": true,
 
 	// Обслуживание (фаза D1). Читающие, аргументов не берут вовсе: версии,
 	// два доктора и разовый прогон проверки связи. Раньше router_doctor был
