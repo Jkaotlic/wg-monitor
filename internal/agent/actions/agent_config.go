@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
@@ -35,7 +36,20 @@ var agentConfigWhitelist = []agentConfigField{
 	{"external_reach_fail_threshold", "external_reach", "fail_threshold", "int"},
 	{"allow_router_reboot", "maintenance", "allow_router_reboot", "bool"},
 	{"allow_firmware_install", "maintenance", "allow_firmware_install", "bool"},
+	// DNS-сторож (спека dns-watchdog, «Решения 11.09.2026»): удалённо правятся
+	// только эти четыре скаляра; пороги, интервал и список кандидатов -- в файле.
+	{"dns_watchdog_enabled", "dns_watchdog", "enabled", "bool"},
+	{"dns_watchdog_endpoint", "dns_watchdog", "endpoint", "string"},
+	{"dns_watchdog_canary_domain", "dns_watchdog", "canary_domain", "string"},
+	{"dns_watchdog_bootstrap_ip", "dns_watchdog", "bootstrap_ip", "string"},
 }
+
+// dnsWatchdogEndpointMax bounds the DoH endpoint URL a remote edit may write.
+const dnsWatchdogEndpointMax = 512
+
+// dnsWatchdogMaskedPath replaces the endpoint path in every view: the path is
+// the secret that opens the operator's own resolver.
+const dnsWatchdogMaskedPath = "/***"
 
 // agentConfigFile is the minimal subset of config.yaml we read back. yaml.v3
 // silently ignores the keys we don't list, so this parses any real config.
@@ -55,6 +69,12 @@ type agentConfigFile struct {
 		AllowRouterReboot    bool `yaml:"allow_router_reboot"`
 		AllowFirmwareInstall bool `yaml:"allow_firmware_install"`
 	} `yaml:"maintenance"`
+	DNSWatchdog struct {
+		Enabled      bool   `yaml:"enabled"`
+		Endpoint     string `yaml:"endpoint"`
+		CanaryDomain string `yaml:"canary_domain"`
+		BootstrapIP  string `yaml:"bootstrap_ip"`
+	} `yaml:"dns_watchdog"`
 }
 
 // AgentConfigView is the JSON the agent returns for agent_config_get. ConfigKind
@@ -68,6 +88,10 @@ type AgentConfigView struct {
 	ExternalReachFailThreshold int    `json:"external_reach_fail_threshold"`
 	AllowRouterReboot          bool   `json:"allow_router_reboot"`
 	AllowFirmwareInstall       bool   `json:"allow_firmware_install"`
+	DNSWatchdogEnabled         bool   `json:"dns_watchdog_enabled"`
+	DNSWatchdogEndpoint        string `json:"dns_watchdog_endpoint"` // masked: https://<host>/***
+	DNSWatchdogCanaryDomain    string `json:"dns_watchdog_canary_domain"`
+	DNSWatchdogBootstrapIP     string `json:"dns_watchdog_bootstrap_ip"`
 	ConfigPath                 string `json:"config_path"`
 }
 
@@ -94,6 +118,10 @@ func GetAgentConfig(configPath string) (string, error) {
 		ExternalReachFailThreshold: f.ExternalReach.FailThreshold,
 		AllowRouterReboot:          f.Maintenance.AllowRouterReboot,
 		AllowFirmwareInstall:       f.Maintenance.AllowFirmwareInstall,
+		DNSWatchdogEnabled:         f.DNSWatchdog.Enabled,
+		DNSWatchdogEndpoint:        maskDNSWatchdogEndpoint(f.DNSWatchdog.Endpoint),
+		DNSWatchdogCanaryDomain:    f.DNSWatchdog.CanaryDomain,
+		DNSWatchdogBootstrapIP:     f.DNSWatchdog.BootstrapIP,
 		ConfigPath:                 configPath,
 	}
 	b, err := json.Marshal(view)
@@ -145,6 +173,11 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 	var check agentConfigFile
 	if err := yaml.Unmarshal(out, &check); err != nil {
 		return "", fmt.Errorf("update_agent_config: result would not parse: %w", err)
+	}
+	// An enabled watchdog without a usable endpoint is a config the agent
+	// refuses at start — and a restart into it would cut off remote editing.
+	if check.DNSWatchdog.Enabled && validateDNSWatchdogEndpoint(check.DNSWatchdog.Endpoint) != nil {
+		return "", fmt.Errorf("update_agent_config: dns_watchdog_enabled needs dns_watchdog_endpoint (https://…) set first")
 	}
 	tmp := configPath + ".tmp"
 	if err := os.WriteFile(tmp, out, 0600); err != nil {
@@ -242,8 +275,60 @@ func validateAgentConfigString(arg, s string) error {
 		if len(s) > 64 {
 			return fmt.Errorf("update_agent_config: awgm_login too long (max 64)")
 		}
+	case "dns_watchdog_endpoint":
+		if err := validateDNSWatchdogEndpoint(s); err != nil {
+			return fmt.Errorf("update_agent_config: dns_watchdog_endpoint %v", err)
+		}
+	case "dns_watchdog_canary_domain":
+		// Empty = the agent's default canary (example.com).
+		if s != "" && !isComparableDomain(strings.ToLower(s)) {
+			return fmt.Errorf("update_agent_config: dns_watchdog_canary_domain must be a plain domain name")
+		}
+	case "dns_watchdog_bootstrap_ip":
+		// Empty = ask 77.88.8.8 for the endpoint host's address.
+		if s == "" {
+			return nil
+		}
+		if a, err := netip.ParseAddr(s); err != nil || !a.Is4() {
+			return fmt.Errorf("update_agent_config: dns_watchdog_bootstrap_ip must be an IPv4 address")
+		}
 	}
 	return nil
+}
+
+// validateDNSWatchdogEndpoint accepts only an absolute https URL with a host,
+// at most dnsWatchdogEndpointMax bytes. The masked form a view hands out is
+// refused explicitly: echoing it back would overwrite the real secret path.
+func validateDNSWatchdogEndpoint(s string) error {
+	if s == "" || len(s) > dnsWatchdogEndpointMax {
+		return fmt.Errorf("must be an https:// URL of at most %d characters", dnsWatchdogEndpointMax)
+	}
+	if strings.Contains(s, "***") {
+		return fmt.Errorf("is the masked value from agent_config_get, not the real endpoint")
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" {
+		return fmt.Errorf("must be an https:// URL of at most %d characters", dnsWatchdogEndpointMax)
+	}
+	return nil
+}
+
+// maskDNSWatchdogEndpoint keeps only scheme and host: "https://<host>/***".
+// Userinfo, path and query never leave the router through a view.
+func maskDNSWatchdogEndpoint(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return "***"
+	}
+	scheme := u.Scheme
+	if scheme == "" {
+		scheme = "https"
+	}
+	return scheme + "://" + u.Host + dnsWatchdogMaskedPath
 }
 
 // setConfigValue sets section.key = value (with the given yaml tag) in a parsed

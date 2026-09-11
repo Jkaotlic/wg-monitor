@@ -195,3 +195,159 @@ func TestRunnerAgentConfigGetDispatches(t *testing.T) {
 		t.Fatalf("output missing discriminator: %s", res.Output)
 	}
 }
+
+// DNS-сторож включается удалённо только на роутерах оператора, поэтому его
+// блок правится той же узкой дорогой, что и остальные безопасные ключи.
+func TestUpdateAgentConfigSetsDNSWatchdog(t *testing.T) {
+	path := writeSampleConfig(t)
+	restarted := stubRestart(t)
+
+	_, err := UpdateAgentConfig(context.Background(), map[string]any{
+		"dns_watchdog_enabled":       true,
+		"dns_watchdog_endpoint":      "https://dns.example.com/secret-path/dns-query",
+		"dns_watchdog_canary_domain": "example.org",
+		"dns_watchdog_bootstrap_ip":  "198.51.100.7",
+	}, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !*restarted {
+		t.Fatal("agent restart was not scheduled")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var full struct {
+		Backend struct {
+			URL string `yaml:"url"`
+		} `yaml:"backend"`
+		DNSWatchdog struct {
+			Enabled      bool   `yaml:"enabled"`
+			Endpoint     string `yaml:"endpoint"`
+			CanaryDomain string `yaml:"canary_domain"`
+			BootstrapIP  string `yaml:"bootstrap_ip"`
+		} `yaml:"dns_watchdog"`
+	}
+	if err := yaml.Unmarshal(raw, &full); err != nil {
+		t.Fatalf("result did not parse: %v\n%s", err, raw)
+	}
+	w := full.DNSWatchdog
+	if !w.Enabled || w.Endpoint != "https://dns.example.com/secret-path/dns-query" ||
+		w.CanaryDomain != "example.org" || w.BootstrapIP != "198.51.100.7" {
+		t.Fatalf("dns_watchdog block=%+v\n%s", w, raw)
+	}
+	if full.Backend.URL != "https://wgmonitor.example.com" {
+		t.Fatalf("backend block changed: %+v", full.Backend)
+	}
+}
+
+// Путь эндпоинта -- секрет: по нему любой получит доступ к своему DNS-серверу.
+// Ответ get_agent_config уходит на дашборд и в журнал команд, поэтому путь
+// в нём не печатается никогда.
+func TestGetAgentConfigMasksWatchdogEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg := sampleAgentConfig + `
+dns_watchdog:
+  enabled: true
+  endpoint: https://dns.example.com/very-secret-path/dns-query
+  canary_domain: example.org
+  bootstrap_ip: 198.51.100.7
+`
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := GetAgentConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "very-secret-path") || strings.Contains(out, "dns-query") {
+		t.Fatalf("endpoint path leaked into view: %s", out)
+	}
+	var v AgentConfigView
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.DNSWatchdogEndpoint != "https://dns.example.com/***" {
+		t.Fatalf("endpoint=%q, want masked https://dns.example.com/***", v.DNSWatchdogEndpoint)
+	}
+	if !v.DNSWatchdogEnabled || v.DNSWatchdogCanaryDomain != "example.org" || v.DNSWatchdogBootstrapIP != "198.51.100.7" {
+		t.Fatalf("view=%+v", v)
+	}
+}
+
+func TestGetAgentConfigWatchdogAbsentIsEmpty(t *testing.T) {
+	out, err := GetAgentConfig(writeSampleConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v AgentConfigView
+	if err := json.Unmarshal([]byte(out), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v.DNSWatchdogEnabled || v.DNSWatchdogEndpoint != "" {
+		t.Fatalf("absent block must read as off and empty: %+v", v)
+	}
+}
+
+func TestUpdateAgentConfigRejectsBadWatchdogValues(t *testing.T) {
+	cases := map[string]map[string]any{
+		"http endpoint":         {"dns_watchdog_endpoint": "http://dns.example.com/secret"},
+		"endpoint without host": {"dns_watchdog_endpoint": "https:///secret"},
+		"empty endpoint":        {"dns_watchdog_endpoint": ""},
+		"endpoint too long":     {"dns_watchdog_endpoint": "https://dns.example.com/" + strings.Repeat("a", 500)},
+		// Маска из get_agent_config, отправленная обратно, стёрла бы секрет.
+		"masked endpoint echoed": {"dns_watchdog_endpoint": "https://dns.example.com/***"},
+		"bad ip":                 {"dns_watchdog_bootstrap_ip": "198.51.100.300"},
+		"ipv6 bootstrap":         {"dns_watchdog_bootstrap_ip": "2001:db8::1"},
+		"hostname as ip":         {"dns_watchdog_bootstrap_ip": "dns.example.com"},
+		"bad domain":             {"dns_watchdog_canary_domain": "exa mple.com"},
+		"domain with path":       {"dns_watchdog_canary_domain": "example.com/x"},
+		"url as domain":          {"dns_watchdog_canary_domain": "https://example.com"},
+		"enabled wrong type":     {"dns_watchdog_enabled": "yes"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			path := writeSampleConfig(t)
+			_ = stubRestart(t)
+			before, _ := os.ReadFile(path)
+			if _, err := UpdateAgentConfig(context.Background(), args, path); err == nil {
+				t.Fatal("expected validation error")
+			}
+			after, _ := os.ReadFile(path)
+			if string(before) != string(after) {
+				t.Fatal("config must not change on validation failure")
+			}
+		})
+	}
+}
+
+// Включённый сторож без эндпоинта агент не загрузит -- и после перезапуска
+// роутер остался бы без агента, а значит и без удалённой правки. Такой
+// конфиг не пишется вовсе.
+func TestUpdateAgentConfigRefusesWatchdogWithoutEndpoint(t *testing.T) {
+	path := writeSampleConfig(t)
+	restarted := stubRestart(t)
+	before, _ := os.ReadFile(path)
+	_, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": true}, path)
+	if err == nil || !strings.Contains(err.Error(), "dns_watchdog_endpoint") {
+		t.Fatalf("err=%v, want refusal naming dns_watchdog_endpoint", err)
+	}
+	after, _ := os.ReadFile(path)
+	if string(before) != string(after) {
+		t.Fatal("config must not change when the watchdog would be enabled without an endpoint")
+	}
+	if *restarted {
+		t.Fatal("agent must not restart on a refused change")
+	}
+}
+
+// Пустой bootstrap_ip -- законное значение: «спросить адрес эндпоинта у
+// 77.88.8.8». Его можно выставить, чтобы убрать устаревший адрес.
+func TestUpdateAgentConfigClearsWatchdogBootstrapIP(t *testing.T) {
+	path := writeSampleConfig(t)
+	_ = stubRestart(t)
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_bootstrap_ip": ""}, path); err != nil {
+		t.Fatal(err)
+	}
+}
