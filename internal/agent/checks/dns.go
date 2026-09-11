@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
@@ -57,6 +58,9 @@ type DNS struct {
 	IfaceMap         map[string]string
 	IfaceMapProvider func(context.Context) (map[string]string, error)
 	RKNTestDomains   []string // empty → DefaultRKNTestDomains
+	// TLSConfig is the base config for DoT probes (cloned per probe, SNI set
+	// from the endpoint). nil → system roots; tests supply RootCAs.
+	TLSConfig *tls.Config
 }
 
 func (DNS) Name() string { return "dns" }
@@ -253,7 +257,9 @@ func (c DNS) probeOne(ctx context.Context, ep keenetic.DNSEndpoint, domain strin
 		_, err := ProbeDoH(ctx, ep.URL, domain, httpc, c.PerProbeTimeout)
 		return err
 	case "dot":
-		return fmt.Errorf("dot transport not implemented")
+		addr, sni := dotTarget(ep)
+		_, err := ProbeDoT(ctx, addr, sni, domain, c.TLSConfig, c.PerProbeTimeout)
+		return err
 	default:
 		return fmt.Errorf("unknown transport %q", ep.Type)
 	}
@@ -279,6 +285,11 @@ func (c DNS) resolveIPs(ctx context.Context, ep keenetic.DNSEndpoint, domain str
 		return out, nil
 	case "doh":
 		return ProbeDoH(ctx, ep.URL, domain, httpc, c.PerProbeTimeout)
+	case "dot":
+		// Without this branch a reachable DoT upstream would error here and be
+		// scored RKN-"suspect" — a false alarm moved, not removed.
+		addr, sni := dotTarget(ep)
+		return ProbeDoT(ctx, addr, sni, domain, c.TLSConfig, c.PerProbeTimeout)
 	default:
 		return nil, fmt.Errorf("transport %q not supported for RKN probe", ep.Type)
 	}
