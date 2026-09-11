@@ -4,6 +4,7 @@ package heartbeat
 import (
 	"context"
 	"log/slog"
+	"regexp"
 	"sync"
 	"time"
 
@@ -113,8 +114,12 @@ type Watcher struct {
 	notified      map[int64]time.Time
 	sleepNotified map[int64]time.Time
 	resumed       map[int64]time.Time
-	mu            sync.Mutex
-	wg            sync.WaitGroup
+	// Последняя неудачная отправка «роутер не на связи» -- под mu.
+	lastOfflineErrRouter string
+	lastOfflineErrText   string
+	lastOfflineErrAt     time.Time
+	mu                   sync.Mutex
+	wg                   sync.WaitGroup
 	// now is set once at construction (or by SetNow before Run starts) and
 	// read concurrently from scan/MarkResumed. Tests inject a deterministic
 	// clock; production keeps time.Now. The pointer write is single-shot;
@@ -200,6 +205,40 @@ func (w *Watcher) Run(ctx context.Context) {
 }
 
 func (w *Watcher) WaitForExit() { w.wg.Wait() }
+
+// LastOfflineError -- последняя неудачная отправка «роутер не на связи»: имя
+// роутера, текст ошибки без секретов и время. Пустые значения -- ни одна
+// отправка ещё не падала. Запись не сбрасывается удачной отправкой: время
+// рядом с last_scan_at само говорит, свежая это беда или вчерашняя.
+func (w *Watcher) LastOfflineError() (nickname, errText string, at time.Time) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lastOfflineErrRouter, w.lastOfflineErrText, w.lastOfflineErrAt
+}
+
+// maxOfflineErrorRunes -- потолок текста ошибки в сводке. Ответ Telegram бывает
+// длинным, а панели нужна причина, не весь ответ.
+const maxOfflineErrorRunes = 300
+
+var (
+	// Токен бота в URL Telegram API: bot<id>:<secret>.
+	reBotToken = regexp.MustCompile(`bot\d+:[A-Za-z0-9_-]+`)
+	// Любой token=... -- в query-строке, в тексте ошибки, где угодно.
+	reTokenParam = regexp.MustCompile(`(?i)(token=)[^\s&"';,)]+`)
+)
+
+// redactSecrets готовит текст ошибки к показу в панели: ошибка отправки может
+// нести URL Telegram API вместе с токеном бота, а сводка уходит за пределы
+// машины. Маскирует токены и обрезает до maxOfflineErrorRunes символов -- по
+// рунам, чтобы не разрезать русскую букву пополам.
+func redactSecrets(s string) string {
+	s = reBotToken.ReplaceAllString(s, "bot<redacted>")
+	s = reTokenParam.ReplaceAllString(s, "${1}<redacted>")
+	if r := []rune(s); len(r) > maxOfflineErrorRunes {
+		s = string(r[:maxOfflineErrorRunes])
+	}
+	return s
+}
 
 func (w *Watcher) scan(ctx context.Context) {
 	started := time.Now()
@@ -355,8 +394,14 @@ func (w *Watcher) scan(ctx context.Context) {
 			// Отправка не состоялась -- снимаем отметку, иначе следующий обход
 			// решит, что человек уже предупреждён, и роутер останется тихим до
 			// самого RenotifyEvery.
+			//
+			// Причину запоминаем для сводки панели: счётчик ошибок говорит «что-то
+			// падает», но не что именно, а docker-лог Pi удалённо недоступен.
 			w.mu.Lock()
 			delete(w.notified, u.ID)
+			w.lastOfflineErrRouter = u.Nickname
+			w.lastOfflineErrText = redactSecrets(err.Error())
+			w.lastOfflineErrAt = now
 			w.mu.Unlock()
 			continue
 		}

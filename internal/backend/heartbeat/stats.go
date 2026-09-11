@@ -23,6 +23,12 @@ type Stats struct {
 	// секунд назад» ничего не значит: это норма при шаге в минуту и тревога
 	// при шаге в пять секунд.
 	ScanEvery time.Duration `json:"scan_every_sec"`
+	// LastOfflineError* -- последняя неудачная отправка «роутер не на связи»:
+	// текст (без секретов, не длиннее maxOfflineErrorRunes), имя роутера и
+	// когда. Пусто, пока ни одна отправка не упала.
+	LastOfflineError       string    `json:"last_offline_error,omitempty"`
+	LastOfflineErrorRouter string    `json:"last_offline_error_router,omitempty"`
+	LastOfflineErrorAt     time.Time `json:"last_offline_error_at"`
 }
 
 // Snapshot читает счётчики процесса. Метод на Watcher, а не пакетная функция:
@@ -32,16 +38,20 @@ func (w *Watcher) Snapshot() Stats {
 	if unix := metricLastScanUnix.Value(); unix > 0 {
 		last = time.Unix(unix, 0).UTC()
 	}
+	router, errText, errAt := w.LastOfflineError()
 	return Stats{
-		ScansTotal:    metricScans.Value(),
-		LastScanAt:    last,
-		LastScanMs:    metricScanMillis.Value(),
-		StaleUsers:    metricStaleUsers.Value(),
-		Suppressed:    metricSuppressed.Value(),
-		OfflineSent:   metricOfflineSent.Value(),
-		OfflineErrors: metricOfflineErrors.Value(),
-		SleepSent:     metricSleepSent.Value(),
-		ScanEvery:     w.cfg.ScanEvery,
+		ScansTotal:             metricScans.Value(),
+		LastScanAt:             last,
+		LastScanMs:             metricScanMillis.Value(),
+		StaleUsers:             metricStaleUsers.Value(),
+		Suppressed:             metricSuppressed.Value(),
+		OfflineSent:            metricOfflineSent.Value(),
+		OfflineErrors:          metricOfflineErrors.Value(),
+		SleepSent:              metricSleepSent.Value(),
+		ScanEvery:              w.cfg.ScanEvery,
+		LastOfflineError:       errText,
+		LastOfflineErrorRouter: router,
+		LastOfflineErrorAt:     errAt,
 	}
 }
 

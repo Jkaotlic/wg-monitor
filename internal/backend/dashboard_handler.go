@@ -479,6 +479,13 @@ type dashboardWatchdog struct {
 	SleepSent     int64  `json:"sleep_sent_total"`
 	OfflineSent   int64  `json:"offline_sent_total"`
 	OfflineErrors int64  `json:"offline_errors_total"`
+	// LastOfflineError* -- почему не ушло последнее «роутер не на связи», по
+	// какому роутеру и когда. Без них offline_errors_total говорит только «что-то
+	// падает», а причина остаётся в docker-логе Pi, куда удалённо не попасть.
+	// Пусто, пока ни одна отправка не упала.
+	LastOfflineError       string `json:"last_offline_error,omitempty"`
+	LastOfflineErrorRouter string `json:"last_offline_error_router,omitempty"`
+	LastOfflineErrorAt     string `json:"last_offline_error_at,omitempty"`
 }
 
 type dashboardTelegramSummary struct {
@@ -605,6 +612,11 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			}
 			if !st.LastScanAt.IsZero() {
 				wd.LastScanAt = st.LastScanAt.Format(time.RFC3339)
+			}
+			if st.LastOfflineError != "" {
+				wd.LastOfflineError = st.LastOfflineError
+				wd.LastOfflineErrorRouter = st.LastOfflineErrorRouter
+				wd.LastOfflineErrorAt = st.LastOfflineErrorAt.UTC().Format(time.RFC3339)
 			}
 			resp.Watchdog = wd
 		}
