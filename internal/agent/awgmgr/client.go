@@ -191,6 +191,13 @@ func (c *Client) ensureSession(ctx context.Context) error {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
+	return c.getLimited(ctx, path, out, 1<<20)
+}
+
+// getLimited is get with an explicit body ceiling. A body cut at the ceiling
+// fails to decode, so the ceiling must fit the largest honest answer of the
+// endpoint -- geo-expand of a big category list is larger than 1 MiB.
+func (c *Client) getLimited(ctx context.Context, path string, out any, limit int64) error {
 	start := time.Now()
 	resp, err := c.do(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
@@ -199,7 +206,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	slog.Debug("awgmgr", "method", "GET", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return fmt.Errorf("awgmgr read %s: %w", path, err)
 	}

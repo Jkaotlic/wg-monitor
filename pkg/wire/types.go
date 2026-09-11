@@ -82,6 +82,7 @@ var validCommandActions = map[string]bool{
 	"tunnels_status":        true,
 	"route_rebind":          true,
 	"route_policy_promote":  true,
+	"route_lookup":          true,
 	"route_templates":       true,
 	"route_add_plan":        true,
 	"route_add":             true,

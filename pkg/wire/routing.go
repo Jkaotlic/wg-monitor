@@ -11,6 +11,43 @@ const RouteOtherID = "__other__"
 // not a tunnel id we failed to resolve.
 const DefaultEgressDirect = "direct"
 
+// Ответ route_lookup: куда пойдёт один сайт. Via у совпадения и Verdict у
+// ответа говорят одним словарём; LookupMixed бывает только у Verdict --
+// совпавшие правила ведут в разные места.
+const (
+	LookupViaTunnel  = "tunnel"
+	LookupViaDirect  = "direct"
+	LookupViaUnknown = "unknown"
+	LookupMixed      = "mixed"
+)
+
+// RouteLookupResult is the payload of a successful route_lookup
+// CommandResult: where one site goes according to the router's own rules.
+//
+// Notes carry codes, not prose — the screen turns them into words:
+// hr_not_running, policies_unknown, singbox_router, ip_rules_unchecked,
+// regexp_unchecked, geo_expand_failed:<TAG>.
+type RouteLookupResult struct {
+	Domain     string `json:"domain"`
+	Verdict    string `json:"verdict"` // tunnel | direct | unknown | mixed
+	TunnelID   string `json:"tunnel_id,omitempty"`
+	TunnelName string `json:"tunnel_name,omitempty"`
+	// ByDefault: ни одно правило сайт не назвало, и ответ -- главный выход
+	// роутера (RouteSnapshot.DefaultEgress).
+	ByDefault bool               `json:"by_default"`
+	Matches   []RouteLookupMatch `json:"matches"`
+	Notes     []string           `json:"notes,omitempty"`
+}
+
+// RouteLookupMatch is one rule that names the site.
+type RouteLookupMatch struct {
+	RuleName   string `json:"rule_name"`
+	Pattern    string `json:"pattern"` // "claude.ai" или "geosite:ANTHROPIC"
+	Via        string `json:"via"`     // tunnel | direct | unknown
+	TunnelID   string `json:"tunnel_id,omitempty"`
+	TunnelName string `json:"tunnel_name,omitempty"`
+}
+
 type HRStatus struct {
 	Installed bool `json:"installed"`
 	Running   bool `json:"running"`

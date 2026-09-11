@@ -135,6 +135,7 @@ func TestIsValidCommandAction(t *testing.T) {
 		"tunnel_restart":        true,
 		"tunnels_status":        true,
 		"hrneo_doctor":          true,
+		"route_lookup":          true,
 		"":                      false,
 		"reboot":                false,
 		"silence":               false, // not a command-channel action
