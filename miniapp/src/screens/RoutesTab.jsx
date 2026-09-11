@@ -24,6 +24,7 @@ import { ListRow } from '../ui/ListRow.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
 import { confirmSheet } from '../sheet.js'
 import { deletePlanSummary } from '../routeAdd.js'
+import { normalizeSiteInput, lookupAnswer, lookupRefusal } from '../routeLookup.js'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
@@ -67,6 +68,22 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
   // удаление правила, которого он не видит целиком, -- это удаление вслепую.
   const plan = useCommand(routerID)
   const [pendingRule, setPendingRule] = useState(null)
+
+  // «Куда пойдёт сайт» -- свой канал команд: ответ на вопрос не должен
+  // перетирать снимок экрана, а снимок -- ответ. Ответ показывается только
+  // для роутера, которого спросили: после смены роутера чужой ответ врёт.
+  const site = useCommand(routerID)
+  const [siteInput, setSiteInput] = useState('')
+  const [siteAskedFor, setSiteAskedFor] = useState(null)
+  const siteCurrent = siteAskedFor === routerID
+  const siteAnswer = siteCurrent && site.result?.status === 'ok' ? lookupAnswer(site.result.output) : null
+  const checkSite = (e) => {
+    e.preventDefault()
+    const domain = normalizeSiteInput(siteInput)
+    if (!domain || site.busy) return
+    setSiteAskedFor(routerID)
+    site.run('route_lookup', { domain }, deadline)
+  }
 
   useEffect(() => {
     if (!pendingRule || plan.result?.status !== 'ok') return
@@ -219,6 +236,45 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
           </div>
         </Section>
       )}
+
+      {/* Вопрос «а этот сайт куда?». Только чтение, поэтому виден и без
+          права менять; кнопка вторичная -- сигнальный цвет остаётся у
+          добавления. */}
+      <Section title="Куда пойдёт сайт">
+        <form class="card site-lookup" onSubmit={checkSite}>
+          <div class="field">
+            <label for="route-lookup-site">Сайт</label>
+            <input
+              id="route-lookup-site"
+              type="text"
+              inputmode="url"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck={false}
+              placeholder="например, claude.ai"
+              value={siteInput}
+              onInput={(e) => setSiteInput(e.currentTarget.value)}
+            />
+          </div>
+          <button type="submit" class="btn btn-ghost" disabled={site.busy || !normalizeSiteInput(siteInput)}>
+            {site.busy ? 'Проверяю…' : 'Проверить'}
+          </button>
+          {siteCurrent && site.error && <p class="state state-error">{lookupRefusal(site.error)}</p>}
+          {siteCurrent && site.result && site.result.status !== 'ok' && (
+            <p class="state state-error">{lookupRefusal(site.result.output)}</p>
+          )}
+          {siteAnswer && (
+            <div class={siteAnswer.tone === 'ok' ? 'site-answer' : 'site-answer traffic-note'}>
+              <p class="traffic-title">{siteAnswer.title}</p>
+              {siteAnswer.lines.map((line) => (
+                <p key={line} class="traffic-detail">
+                  {line}
+                </p>
+              ))}
+            </div>
+          )}
+        </form>
+      </Section>
 
       {/* Сигнальный цвет -- одному действию на экране, и это оно: всё
           остальное здесь либо читается, либо правит уже существующее. */}

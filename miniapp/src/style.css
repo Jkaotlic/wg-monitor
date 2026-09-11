@@ -604,6 +604,16 @@ body {
   margin-top: var(--sp-4);
 }
 
+/* «Куда пойдёт сайт»: поле и вторичная кнопка в одной карточке, ответ под
+   ними. Ответ с подвохом или без ответа -- на янтарной подложке traffic-note. */
+.site-lookup .btn {
+  margin-top: var(--sp-3);
+}
+
+.site-answer {
+  margin-top: var(--sp-4);
+}
+
 /* ---------------- Exit-IP compare (Task 13, §3.4) ----------------
    ExitCompareSection's own card content: the run button, the two probe
    blocks, and the note that actually answers the operator's question. Reuses
