@@ -3,6 +3,7 @@ package backend
 import (
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,10 @@ import (
 )
 
 const wizardMaxJSONBodyBytes = 64 << 10
+
+// dashboardAnalyzeMaxConfBytes -- предел конфига для tunnel_analyze после
+// декодирования base64.
+const dashboardAnalyzeMaxConfBytes = 16 << 10
 
 var (
 	enrollmentNicknameRe         = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
@@ -614,6 +619,12 @@ var dashboardCommandAllowlist = map[string]bool{
 	// — that whitelist lives agent-side in update_agent_config.
 	"agent_config_get":    true,
 	"update_agent_config": true,
+	// Проверки только на чтение: адрес выхода напрямую и через VPN-туннель и
+	// анализ конфига до импорта (awg-manager 2.18). Мастер замены зовёт их же,
+	// а прогнать их на живом роутере без Telegram было нечем.
+	"check_direct":     true,
+	"check_via_tunnel": true,
+	"tunnel_analyze":   true,
 	// NB: update_backend_url is intentionally NOT here. Re-pointing the fleet's
 	// backend domain from a browser session is fleet-takeover blast radius, so it
 	// stays gated to the wizard token / deploy CLI (see
@@ -945,6 +956,16 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 	case "route_templates":
 		// Каталог читается без параметров; всё, что прислал клиент, -- лишнее.
 		return map[string]any{}, true
+	case "tunnel_analyze":
+		// До агента доезжает только конфиг. Предел с запасом: конфиг
+		// WireGuard -- пара килобайт, а всё крупнее -- не конфиг.
+		conf := strings.TrimSpace(argString(args, "conf"))
+		raw, err := base64.StdEncoding.DecodeString(conf)
+		if conf == "" || err != nil || len(raw) > dashboardAnalyzeMaxConfBytes {
+			writeJSONError(w, http.StatusBadRequest, "invalid_conf", "conf must be non-empty base64 of at most 16 KiB")
+			return nil, false
+		}
+		return map[string]any{"conf": conf}, true
 	case "route_add", "route_add_plan":
 		kind := strings.ToLower(strings.TrimSpace(argString(args, "kind")))
 		if kind != "dns" && kind != "static" {
