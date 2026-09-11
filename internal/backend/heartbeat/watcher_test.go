@@ -3,13 +3,101 @@ package heartbeat
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
+
+// failingOffline -- отправка, которая всегда падает с заданной ошибкой.
+type failingOffline struct{ err error }
+
+func (f failingOffline) SendOffline(context.Context, int64, string, time.Duration) error {
+	return f.err
+}
+
+// В проде offline_errors_total рос на каждом обходе, а причина лежала только
+// в docker-логе Pi, куда оператор удалённо не дотягивается. Сторож обязан
+// помнить последнюю ошибку сам -- с именем роутера и без токена бота.
+func TestWatcherRemembersLastOfflineError(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	tok := "5555555555555555555555555555555555555555555555555555555555555555"
+	uid, err := d.Users().Insert("router-a", tok, "198.51.100.10", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	sendErr := errors.New(`telegram sendMessage: Post "https://api.telegram.org/bot123:ABC/sendMessage?token=s3cr3t-value": dial tcp: i/o timeout`)
+	w := NewWatcher(d, failingOffline{err: sendErr}, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+
+	if nick, text, at := w.LastOfflineError(); nick != "" || text != "" || !at.IsZero() {
+		t.Fatalf("до первой ошибки помнить нечего: %q %q %v", nick, text, at)
+	}
+
+	driveScan(w, now)
+
+	nick, text, at := w.LastOfflineError()
+	if nick != "router-a" {
+		t.Fatalf("роутер: %q, ждали router-a", nick)
+	}
+	if text == "" {
+		t.Fatal("причина потерялась")
+	}
+	for _, secret := range []string{"bot123:ABC", "ABC", "s3cr3t-value"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("в тексте ошибки утёк секрет %q: %s", secret, text)
+		}
+	}
+	if !strings.Contains(text, "i/o timeout") {
+		t.Fatalf("маскировка съела саму причину: %s", text)
+	}
+	if !at.Equal(now) {
+		t.Fatalf("время ошибки: %v, ждали %v", at, now)
+	}
+}
+
+// Ответ Telegram может быть длинным; в сводку идёт не больше 300 символов, и
+// обрезка не должна рвать многобайтные буквы.
+func TestWatcherLastOfflineErrorIsTruncated(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	tok := "6666666666666666666666666666666666666666666666666666666666666666"
+	uid, err := d.Users().Insert("router-b", tok, "198.51.100.11", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	long := errors.New(strings.Repeat("ошибка ", 200))
+	w := NewWatcher(d, failingOffline{err: long}, Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+
+	driveScan(w, now)
+
+	_, text, _ := w.LastOfflineError()
+	if n := len([]rune(text)); n == 0 || n > 300 {
+		t.Fatalf("длина текста %d символов, ждали 1..300", n)
+	}
+	if !strings.HasPrefix(text, "ошибка") || strings.ContainsRune(text, '�') {
+		t.Fatalf("обрезка испортила текст: %q", text)
+	}
+}
 
 type fakeOffline struct {
 	mu    sync.Mutex

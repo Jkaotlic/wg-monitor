@@ -15,8 +15,94 @@ import (
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
+
+// failingOfflineSender -- отправка «роутер не на связи», которая всегда падает.
+type failingOfflineSender struct{ err error }
+
+func (f failingOfflineSender) SendOffline(context.Context, int64, string, time.Duration) error {
+	return f.err
+}
+
+// offline_errors_total в проде равнялся scans_total: уведомление падало на
+// каждом обходе, а почему -- знал только docker-лог Pi. Сводка обязана назвать
+// причину и роутер сама, не выдав при этом токен бота.
+func TestDashboardSummaryShowsLastOfflineError(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	old := lookupDashboardLatestVersion
+	lookupDashboardLatestVersion = func(context.Context) (string, error) { return "", nil }
+	t.Cleanup(func() { lookupDashboardLatestVersion = old })
+
+	uid, err := d.Users().Insert("router-a", "token-a", "198.51.100.10", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := d.Events().Insert(uid, "agent_heartbeat", "ok", "", now.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	sendErr := errors.New(`telegram sendMessage: Post "https://api.telegram.org/bot123:ABC/sendMessage": Bad Request: chat not found`)
+	w := heartbeat.NewWatcher(d, failingOfflineSender{err: sendErr}, heartbeat.Config{StaleAfter: 5 * time.Minute, ScanEvery: time.Hour})
+	w.SetNow(func() time.Time { return now })
+
+	h := NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             d,
+		DashboardToken: "secret",
+		HeartbeatStats: w.Snapshot,
+	})
+	watchdog := func() map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+		req.Header.Set("Authorization", "Bearer secret")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+		}
+		var got struct {
+			Watchdog map[string]any `json:"watchdog"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Watchdog == nil {
+			t.Fatalf("блока watchdog нет: %s", rec.Body.String())
+		}
+		return got.Watchdog
+	}
+
+	// Ошибок ещё не было -- полей нет, панели нечего показывать.
+	before := watchdog()
+	for _, k := range []string{"last_offline_error", "last_offline_error_router", "last_offline_error_at"} {
+		if v, ok := before[k]; ok && v != "" {
+			t.Fatalf("до первой ошибки %s=%v, ждали пусто", k, v)
+		}
+	}
+
+	w.ScanForTest(context.Background())
+
+	after := watchdog()
+	text, _ := after["last_offline_error"].(string)
+	if !strings.Contains(text, "chat not found") {
+		t.Fatalf("last_offline_error=%q, ждали причину от Telegram", text)
+	}
+	if strings.Contains(text, "bot123:ABC") || strings.Contains(text, "ABC") {
+		t.Fatalf("в сводку утёк токен бота: %q", text)
+	}
+	if got := after["last_offline_error_router"]; got != "router-a" {
+		t.Fatalf("last_offline_error_router=%v, ждали router-a", got)
+	}
+	if got := after["last_offline_error_at"]; got != now.Format(time.RFC3339) {
+		t.Fatalf("last_offline_error_at=%v, ждали %s", got, now.Format(time.RFC3339))
+	}
+}
 
 func TestDashboardRoutesAbsentWhenTokenEmpty(t *testing.T) {
 	h := NewMux(Deps{})
