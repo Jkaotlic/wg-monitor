@@ -14,9 +14,28 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-// RouteStatus fetches the routing snapshot and returns it as a JSON-encoded
-// string suitable for wire.CommandResult.Output.
-func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
+// routeInputs is everything the router tells about its routing, read in one
+// go. route_status and route_lookup answer from the very same reading, so the
+// two screens cannot disagree about where a rule leads.
+type routeInputs struct {
+	hr              *awgmgr.HydraRouteStatus
+	tunnels         *awgmgr.TunnelsAll
+	routing         []awgmgr.RoutingTunnel
+	routingErr      error
+	dns             []awgmgr.DNSRoute
+	statics         []awgmgr.StaticRoute
+	settings        *awgmgr.Settings
+	policies        []awgmgr.AccessPolicy
+	policiesErr     error
+	polIfaces       []awgmgr.PolicyInterface
+	polIfacesErr    error
+	policiesUnknown bool
+}
+
+// fetchRouteInputs reads the routing inputs in parallel. HydraRoute status,
+// tunnels and both rule lists are fatal; the rest degrade into errors kept for
+// the caller (RouteStatus turns them into Warnings).
+func fetchRouteInputs(ctx context.Context, c *awgmgr.Client) (routeInputs, error) {
 	var (
 		hr           *awgmgr.HydraRouteStatus
 		tunnels      *awgmgr.TunnelsAll
@@ -62,7 +81,7 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		return "", err
+		return routeInputs{}, err
 	}
 	// "Эндпоинта нет" и "чтение упало" -- разные факты, и путать их нельзя.
 	// 404 означает сборку без политик: там привязка действительно живёт в
@@ -71,8 +90,25 @@ func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
 	// приписать правила default-туннелю по выдумке, которую фаза и удаляет.
 	// Путь записи (addTunnelToHydraRoutePolicies) различает эти два случая
 	// ровно так же; чтение обязано быть с ним согласовано.
-	policiesUnknown := policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr)
-	snap := buildRouteSnapshot(hr, tunnels, routing, dns, statics, activeDefaultTunnelID(settings), policies, polIfaces, policiesUnknown)
+	return routeInputs{
+		hr: hr, tunnels: tunnels, routing: routing, routingErr: routingErr,
+		dns: dns, statics: statics, settings: settings,
+		policies: policies, policiesErr: policiesErr,
+		polIfaces: polIfaces, polIfacesErr: polIfacesErr,
+		policiesUnknown: policiesErr != nil && !awgmgr.IsEndpointMissing(policiesErr),
+	}, nil
+}
+
+// RouteStatus fetches the routing snapshot and returns it as a JSON-encoded
+// string suitable for wire.CommandResult.Output.
+func RouteStatus(ctx context.Context, c *awgmgr.Client) (string, error) {
+	in, err := fetchRouteInputs(ctx, c)
+	if err != nil {
+		return "", err
+	}
+	settings, policies := in.settings, in.policies
+	routingErr, policiesErr, polIfacesErr := in.routingErr, in.policiesErr, in.polIfacesErr
+	snap := buildRouteSnapshot(in.hr, in.tunnels, in.routing, in.dns, in.statics, activeDefaultTunnelID(settings), policies, in.polIfaces, in.policiesUnknown)
 	if settings != nil && settings.SingboxRouterActive() {
 		snap.SingboxRouter = &wire.SingboxRouterStatus{
 			Enabled:    true,
@@ -119,7 +155,9 @@ func activeDefaultTunnelID(s *awgmgr.Settings) string {
 	return s.ActiveDefaultTunnelID()
 }
 
-// buildRouteSnapshot is the pure aggregation function: easy to test.
+// routeSnapshotBase builds what every rule's binding is read against: the
+// tunnels, the interface map, the main exit and the access policies. It is the
+// half of buildRouteSnapshot that route_lookup shares.
 //
 // activeDefaultID is the authoritative active default-route tunnel id (from
 // awg-manager settings.download.routeTag, "" when unknown). Several tunnels can
@@ -134,7 +172,7 @@ func activeDefaultTunnelID(s *awgmgr.Settings) string {
 // rules go to snap.Other rather than being credited to a tunnel by guesswork.
 // An empty policies slice with policiesUnknown=false is the honest old-build
 // case and keeps the legacy per-rule behaviour.
-func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string, policies []awgmgr.AccessPolicy, polIfaces []awgmgr.PolicyInterface, policiesUnknown bool) wire.RouteSnapshot {
+func routeSnapshotBase(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, activeDefaultID string, policies []awgmgr.AccessPolicy, polIfaces []awgmgr.PolicyInterface, policiesUnknown bool) (wire.RouteSnapshot, *routeEgressEnv) {
 	snap := wire.RouteSnapshot{Counts: make(map[string]wire.TunnelCounts)}
 	if hr != nil {
 		snap.HRNeo = wire.HRStatus{Installed: hr.Installed, Running: hr.Running}
@@ -252,6 +290,19 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 			policyIndex[strings.ToLower(strings.TrimSpace(p.Name))] = i
 		}
 	}
+	return snap, &routeEgressEnv{
+		byIface: byIface, defaultIface: defaultIface, tunnels: snap.Tunnels,
+		policyIndex: policyIndex, policies: snap.Policies, resolver: policyResolver,
+		policiesUnknown: policiesUnknown,
+	}
+}
+
+// buildRouteSnapshot is the pure aggregation function: easy to test. See
+// routeSnapshotBase for activeDefaultID and policiesUnknown; every enabled DNS
+// rule is credited where ruleEgress says it leads.
+func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll, routing []awgmgr.RoutingTunnel, dns []awgmgr.DNSRoute, statics []awgmgr.StaticRoute, activeDefaultID string, policies []awgmgr.AccessPolicy, polIfaces []awgmgr.PolicyInterface, policiesUnknown bool) wire.RouteSnapshot {
+	snap, env := routeSnapshotBase(hr, tunnels, routing, activeDefaultID, policies, polIfaces, policiesUnknown)
+	byIface := env.byIface
 
 	creditDNS := func(tid string, isHRNeo bool) {
 		c := snap.Counts[tid]
@@ -298,50 +349,20 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		isHR := isHydraRouteBackend(r)
 		ruleBind := ""
 		if r.Enabled {
-			if len(r.Routes) > 0 {
-				iface := firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
-				ruleBind = iface
-				if id, ok := byIface[iface]; ok {
-					creditDNS(id, isHR)
-				} else {
-					creditOther(isHR, false)
-				}
-			} else if idx, ok := policyIndex[strings.ToLower(strings.TrimSpace(r.HRPolicyName))]; policyModel && ok {
-				// Правило привязано политикой: чей это трафик, знает цепочка.
-				snap.Policies[idx].DNS++
+			bind, tunnelID, _, credit := ruleEgress(r, env)
+			ruleBind = bind
+			switch {
+			case credit.policy >= 0:
+				snap.Policies[credit.policy].DNS++
 				if isHR {
-					snap.Policies[idx].HRNeo++
+					snap.Policies[credit.policy].HRNeo++
 				}
-				ruleBind = "policy:" + snap.Policies[idx].Name
-			} else if bind, id, ok := hrNeoInterfaceBind(r, policyResolver); ok {
-				// Правило приколочено к интерфейсу, а не к политике.
-				ruleBind = bind
-				if id != "" {
-					creditDNS(id, isHR)
-				} else {
-					creditOther(isHR, false)
-				}
-			} else if policiesUnknown && isMovableHRNeoFallthrough(r) {
-				// Привязка такого правила лежит на политике, а политики не
-				// прочитались. Имя политики -- всё, что мы честно знаем;
-				// куда она ведёт, не знает никто, поэтому правило идёт в
-				// Other, а не туннелю по умолчанию.
-				ruleBind = routePolicyLabel(r)
+			case credit.legacyPolicy:
+				creditPolicy(r)
+			case credit.tunnel:
+				creditDNS(tunnelID, isHR)
+			default:
 				creditOther(isHR, false)
-			} else {
-				if isMovableHRNeoFallthrough(r) && len(r.HRPolicyInterfaces) > 0 {
-					ruleBind = routePolicyLabel(r)
-					creditPolicy(r)
-				} else if isMovableHRNeoFallthrough(r) && defaultIface != "" {
-					ruleBind = routePolicyBind(r, defaultIface, byIface)
-					if id, ok := byIface[ruleBind]; ok {
-						creditDNS(id, true)
-					} else {
-						creditOther(isHR, false)
-					}
-				} else {
-					creditOther(isHR, false)
-				}
 			}
 		} else if len(r.Routes) > 0 {
 			ruleBind = firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
@@ -367,6 +388,92 @@ func buildRouteSnapshot(hr *awgmgr.HydraRouteStatus, tunnels *awgmgr.TunnelsAll,
 		}))
 	}
 	return snap
+}
+
+// routeEgressEnv is what a rule's binding is resolved against. Built once by
+// routeSnapshotBase; read by ruleEgress for route_status and route_lookup alike.
+type routeEgressEnv struct {
+	byIface         map[string]string // alias → snapshot tunnel id
+	defaultIface    string            // egress of HR-Neo fall-through rules
+	tunnels         []wire.TunnelMeta
+	policyIndex     map[string]int // lowercased policy name → index in policies (policy model only)
+	policies        []wire.RoutePolicySummary
+	resolver        *policyIfaceResolver
+	policiesUnknown bool
+}
+
+// ruleCredit is which counter of the snapshot a rule belongs to. It is
+// route_status's business only; route_lookup needs just the egress.
+type ruleCredit struct {
+	policy       int  // index into env.policies (policy model), -1 otherwise
+	legacyPolicy bool // hrPolicyInterfaces fall-through: counted on its own policy row
+	tunnel       bool // counted on tunnelID; otherwise it is Other
+}
+
+// ruleEgress says where one ENABLED DNS rule sends its traffic.
+//
+// bind is the label the rule summary carries. tunnelID is the snapshot id the
+// traffic leaves through: one of our tunnels or another router exit (WAN), and
+// "" when it is not one of ours. known=false means nobody can say where the
+// rule leads -- not "the default tunnel", not "the provider".
+func ruleEgress(r awgmgr.DNSRoute, env *routeEgressEnv) (bind, tunnelID string, known bool, credit ruleCredit) {
+	credit.policy = -1
+	if len(r.Routes) > 0 {
+		iface := firstNonEmptyRoute(r.Routes[0].Interface, r.Routes[0].TunnelID)
+		id, ok := env.byIface[iface]
+		credit.tunnel = ok
+		return iface, id, ok, credit
+	}
+	if idx, ok := env.policyIndex[strings.ToLower(strings.TrimSpace(r.HRPolicyName))]; ok {
+		// Правило привязано политикой: чей это трафик, знает цепочка -- её
+		// первое живое звено. Живого звена нет -- не знает никто.
+		p := env.policies[idx]
+		credit.policy = idx
+		return "policy:" + p.Name, p.ActiveTunnelID, policyHasActiveLink(p), credit
+	}
+	if bind, id, ok := hrNeoInterfaceBind(r, env.resolver); ok {
+		// Правило приколочено к интерфейсу, а не к политике. Интерфейс, не
+		// являющийся нашим туннелем, -- выход мимо VPN.
+		credit.tunnel = id != ""
+		return bind, id, true, credit
+	}
+	if env.policiesUnknown && isMovableHRNeoFallthrough(r) {
+		// Привязка такого правила лежит на политике, а политики не
+		// прочитались. Имя политики -- всё, что мы честно знаем; куда она
+		// ведёт, не знает никто, поэтому правило идёт в Other, а не туннелю по
+		// умолчанию.
+		return routePolicyLabel(r), "", false, credit
+	}
+	if isMovableHRNeoFallthrough(r) && len(r.HRPolicyInterfaces) > 0 {
+		credit.legacyPolicy = true
+		for _, it := range routePolicyInterfaces(r.HRPolicyInterfaces, env.byIface, env.tunnels) {
+			if it.Role == "active" {
+				id := env.byIface[it.Bind]
+				return routePolicyLabel(r), id, id != "", credit
+			}
+		}
+		return routePolicyLabel(r), "", false, credit
+	}
+	if isMovableHRNeoFallthrough(r) && env.defaultIface != "" {
+		bind := routePolicyBind(r, env.defaultIface, env.byIface)
+		id, ok := env.byIface[bind]
+		credit.tunnel = ok
+		return bind, id, ok, credit
+	}
+	// Привязки нет. Правило HydraRoute Neo с набором «напрямую» ведёт к
+	// провайдеру; про остальное роутер не сказал ничего.
+	return "", "", isHydraRouteBackend(r) && isDirectProviderHRNeoPolicy(r), credit
+}
+
+// policyHasActiveLink reports whether some link of the policy chain is up and
+// carrying its traffic now.
+func policyHasActiveLink(p wire.RoutePolicySummary) bool {
+	for _, it := range p.Interfaces {
+		if it.Role == "active" {
+			return true
+		}
+	}
+	return false
 }
 
 // buildPolicySummary turns one access policy into the wire shape: the chain

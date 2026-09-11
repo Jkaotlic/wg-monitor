@@ -730,6 +730,22 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			return "err", err.Error(), payload
 		}
 		return "ok", out, payload
+	case "route_lookup":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		domain, _ := cmd.Args["domain"].(string)
+		target := normalizeRouteTarget(domain)
+		if target.Type != "domain" {
+			return "err", "route_lookup: invalid domain", payload
+		}
+		// Только чтение: замок routeMu не берётся. Вопрос «куда пойдёт сайт»
+		// не должен ждать чужой правки маршрутов, а правка -- его.
+		out, err := RouteLookup(ctx, r.AwgClient, target.Value)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "route_rebind":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
