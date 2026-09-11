@@ -573,12 +573,29 @@
     if (wd.sleep_sent_total) {
       parts.push("карточек «спит»: " + wd.sleep_sent_total);
     }
-    if (wd.offline_errors) {
-      parts.push("неудачных отправок: " + wd.offline_errors);
+    // Сводка отдаёт offline_errors_total; чтение поля без «_total» молча
+    // прятало число. Причина последней неудачи -- рядом: одно число говорит
+    // лишь «что-то не ушло», а не кому и почему. Всё уходит в textContent,
+    // так что текст ошибки от Telegram разметкой не станет.
+    if (wd.offline_errors_total) {
+      parts.push("неудачных отправок: " + wd.offline_errors_total);
+    }
+    if (wd.last_offline_error) {
+      const why = [wd.last_offline_error_router, formatClock(wd.last_offline_error_at), wd.last_offline_error];
+      parts.push("не ушло: " + why.filter(Boolean).join(" · "));
     }
     parts.push("обходов с запуска: " + (wd.scans_total || 0));
     els.watchdogLine.textContent = parts.join(" · ");
     els.watchdogLine.classList.toggle("bad", !wd.alive);
+  }
+
+  // formatClock -- «ЧЧ:ММ» по часам того, кто смотрит панель; нет времени
+  // или не разобралось -- пусто, и строка обходится без него.
+  function formatClock(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return "";
+    return d.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
   }
 
   function pluralRu(n, one, few, many) {

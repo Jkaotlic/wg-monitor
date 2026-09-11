@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -401,6 +402,34 @@ func TestDashboardStaticPollsOnlyResultNotReady(t *testing.T) {
 		if !strings.Contains(js, want) {
 			t.Fatalf("dashboard app.js missing result polling guard %q", want)
 		}
+	}
+}
+
+// TestDashboardStaticShowsWatchdogOfflineErrors: строка сторожа читает поля
+// сводки под их настоящими именами. Раньше она читала wd.offline_errors, а
+// сводка отдаёт offline_errors_total -- число неудачных отправок не
+// показывалось ни разу. Причина последней неудачи (last_offline_error*)
+// попадала в сводку, но на панель не выводилась вовсе.
+func TestDashboardStaticShowsWatchdogOfflineErrors(t *testing.T) {
+	jsBytes, err := dashboardStaticFS.ReadFile("dashboard_static/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(jsBytes)
+
+	for _, want := range []string{
+		`wd.offline_errors_total`,
+		`wd.last_offline_error`,
+		`wd.last_offline_error_router`,
+		`wd.last_offline_error_at`,
+		`"не ушло: "`,
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("dashboard app.js: строка сторожа не читает %q", want)
+		}
+	}
+	if regexp.MustCompile(`wd\.offline_errors\b`).MatchString(js) {
+		t.Fatal("dashboard app.js читает wd.offline_errors -- такого поля в сводке нет, есть offline_errors_total")
 	}
 }
 
