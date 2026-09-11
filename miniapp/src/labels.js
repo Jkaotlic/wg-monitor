@@ -317,9 +317,7 @@ export function commandOutcomeLabel(action, result) {
       // Агент отвечает "unknown action: X", когда на роутере стоит версия
       // старше приложения. Человеку это читается как поломка приложения, а
       // на деле это разница версий -- и чинится она обновлением агента.
-      if (/^unknown action:/i.test(output)) {
-        return 'Агент на этом роутере старше приложения и такого пока не умеет — обновите агента.'
-      }
+      if (/^unknown action:/i.test(output)) return AGENT_OLDER_THAN_APP
       return output || 'Команда завершилась с ошибкой'
     }
     default:
@@ -327,6 +325,11 @@ export function commandOutcomeLabel(action, result) {
       return routeOutcomeLabel(action, result.output) || 'Готово'
   }
 }
+
+// AGENT_OLDER_THAN_APP -- ответ агента «unknown action: X»: на роутере версия
+// старше приложения. Одни слова для любой команды, в том числе для вопроса
+// «Куда пойдёт сайт» (routeLookup.js, lookupRefusal).
+export const AGENT_OLDER_THAN_APP = 'Агент на этом роутере старше приложения и такого пока не умеет — обновите агента.'
 
 // Маршрутные команды отвечают не строкой, а payload'ом из pkg/wire/routing.go,
 // и "Готово" на нём -- не краткость, а потеря: перенос умеет пройти

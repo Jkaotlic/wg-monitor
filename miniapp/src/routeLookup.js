@@ -1,4 +1,5 @@
 import { plainHyphens } from './text.js'
+import { AGENT_OLDER_THAN_APP } from './labels.js'
 
 // «Куда пойдёт сайт»: чистые функции раздела на экране маршрутов. Агент
 // отвечает на route_lookup фактами и кодами (wire.RouteLookupResult), слова
@@ -88,22 +89,30 @@ export function lookupAnswer(result) {
   const rules = [...new Set(matches.map((m) => `правило «${m.rule_name}»`))]
   // Остановленный движок значит, что правила, на которые человек, возможно,
   // рассчитывает, не действуют: ответ верный, но повод насторожиться.
-  const tone = codes.includes('hr_not_running') ? 'warn' : 'ok'
+  //
+  // «Правил нет» при нераскрытом списке или непроверенных шаблонах значит
+  // лишь «не нашлось среди проверенного»: сайт может сидеть как раз там
+  // (claude.ai в geosite:ANTHROPIC на панели без раскрытия). «Неизвестно» --
+  // это ответ, догадка -- нет: здесь оговорка и warn, а не уверенное ok.
+  const unchecked = codes.some((c) => c === 'regexp_unchecked' || (typeof c === 'string' && c.startsWith(GEO_EXPAND_FAILED)))
+  const hedged = Boolean(r.by_default) && unchecked
+  const tone = codes.includes('hr_not_running') || hedged ? 'warn' : 'ok'
+  const noRule = hedged
+    ? `Правил для ${site} не нашлось, но часть правил проверить не удалось — сайт, скорее всего, пойдёт`
+    : `Правил для ${site} нет — сайт пойдёт`
 
   switch (r.verdict) {
     case 'tunnel':
       return {
         title: r.by_default
-          ? `Правил для ${site} нет — сайт пойдёт главным выходом роутера, через VPN-туннель «${tunnel}»`
+          ? `${noRule} главным выходом роутера, через VPN-туннель «${tunnel}»`
           : `${site} пойдёт через VPN-туннель «${tunnel}»`,
         lines: [...rules, ...notes],
         tone,
       }
     case 'direct':
       return {
-        title: r.by_default
-          ? `Правил для ${site} нет — сайт пойдёт напрямую через провайдера`
-          : `${site} пойдёт напрямую через провайдера`,
+        title: r.by_default ? `${noRule} напрямую через провайдера` : `${site} пойдёт напрямую через провайдера`,
         lines: [...rules, ...notes],
         tone,
       }
@@ -132,6 +141,10 @@ export function lookupAnswer(result) {
 // текст ошибки у api.js кода не несёт, и по одному тексту отказ сервера в
 // имени читался бы как «роутер не ответил».
 export function lookupRefusal(output, code) {
-  if (code === 'invalid_domain' || /invalid[ _]domain/i.test(String(output ?? ''))) return NOT_A_SITE
+  const text = String(output ?? '')
+  if (code === 'invalid_domain' || /invalid[ _]domain/i.test(text)) return NOT_A_SITE
+  // Агент старше приложения route_lookup не знает: «попробуйте ещё раз»
+  // было бы советом повторять вечно, чинится это обновлением агента.
+  if (/^unknown action:/i.test(text.trim())) return AGENT_OLDER_THAN_APP
   return 'Роутер не ответил на вопрос — попробуйте ещё раз'
 }

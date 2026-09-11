@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal } from '../src/routeLookup.js'
+import { commandOutcomeLabel } from '../src/labels.js'
 
 const NOT_A_SITE = 'Это не похоже на адрес сайта — нужно имя вроде claude.ai'
 
@@ -146,6 +147,37 @@ describe('lookupAnswer', () => {
     expect(a.tone).toBe('warn')
   })
 
+  // «Неизвестно» -- это ответ, догадка -- нет. Если роутер не раскрыл список
+  // (geosite:ANTHROPIC на панели без раскрытия) или правило записано
+  // шаблоном, «правил нет» -- лишь «не нашлось среди проверенного»: сайт
+  // может сидеть как раз в нераскрытом списке. Уверенный зелёный ответ здесь
+  // был бы уверенно неверным.
+  const HEDGE = 'не нашлось, но часть правил проверить не удалось — сайт, скорее всего, пойдёт'
+
+  it('правил не нашлось, но список не раскрыт -- ответ с оговоркой, не уверенный', () => {
+    const a = lookupAnswer(
+      answer({ verdict: 'direct', tunnel_id: '', tunnel_name: '', by_default: true, matches: [], notes: ['geo_expand_failed:ANTHROPIC'] }),
+    )
+    expect(a.title).toBe(`Правил для «claude.ai» ${HEDGE} напрямую через провайдера`)
+    expect(a.lines).toContain(NOTE_WORDS['geo_expand_failed:ANTHROPIC'])
+    expect(a.tone).toBe('warn')
+  })
+
+  it('правил не нашлось, но часть правил -- шаблоны: тоже оговорка, и главный выход назван', () => {
+    const a = lookupAnswer(answer({ by_default: true, matches: [], notes: ['regexp_unchecked'] }))
+    expect(a.title).toBe(`Правил для «claude.ai» ${HEDGE} главным выходом роутера, через VPN-туннель «vpn-nl»`)
+    expect(a.lines).toContain(NOTE_WORDS.regexp_unchecked)
+    expect(a.tone).toBe('warn')
+  })
+
+  it('без таких примечаний «правил нет» остаётся уверенным', () => {
+    for (const notes of [undefined, [], ['ip_rules_unchecked']]) {
+      const a = lookupAnswer(answer({ verdict: 'direct', tunnel_id: '', tunnel_name: '', by_default: true, matches: [], notes }))
+      expect(a.title).toBe('Правил для «claude.ai» нет — сайт пойдёт напрямую через провайдера')
+      expect(a.tone).toBe('ok')
+    }
+  })
+
   it('непонятный ответ -- «неизвестно», а не падение', () => {
     expect(lookupAnswer(null).tone).toBe('unknown')
     expect(lookupAnswer('не json').tone).toBe('unknown')
@@ -183,6 +215,17 @@ describe('lookupRefusal', () => {
 
   it('отказ агента по имени -- то же самое', () => {
     expect(lookupRefusal('route_lookup: invalid domain')).toBe(NOT_A_SITE)
+  })
+
+  // Агент v0.29 route_lookup не знает и отвечает «unknown action:
+  // route_lookup». «Попробуйте ещё раз» здесь -- совет повторять вечно: дело
+  // в версии, и чинится оно обновлением агента. Слова -- те же, что у любой
+  // другой команды на старом агенте (labels.js, commandOutcomeLabel).
+  it('старый агент не знает вопроса -- «обновите агента», а не «попробуйте ещё раз»', () => {
+    const old = commandOutcomeLabel('route_lookup', { status: 'err', output: 'unknown action: route_lookup' })
+    expect(old).toBe('Агент на этом роутере старше приложения и такого пока не умеет — обновите агента.')
+    expect(lookupRefusal('unknown action: route_lookup')).toBe(old)
+    expect(lookupRefusal('Unknown action: route_lookup', 'unknown')).toBe(old)
   })
 
   it('прочие отказы -- «роутер не ответил»', () => {
