@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
+import { Q, Quoted } from './Q.jsx'
 
 // Нижний шит -- единственное место, где приложение спрашивает "точно?" и
 // показывает ход выполнения. Команду он и запускает сам: раньше это жило
@@ -52,8 +53,14 @@ export function Sheet({ sheet, asleep, onClose }) {
       <div class="sheet-scrim" onClick={phase === 'running' ? undefined : onClose} />
       <div class="sheet">
         <div class="sheet-grip" />
-        <p class="sheet-title">{sheet.title}</p>
-        <p class="sheet-body">{sheet.body}</p>
+        {/* Заголовок и текст шита собирают экраны готовыми строками с
+            именами внутри; имена ложатся в <Q> здесь, в одном месте. */}
+        <p class="sheet-title">
+          <Quoted text={sheet.title} />
+        </p>
+        <p class="sheet-body">
+          <Quoted text={sheet.body} />
+        </p>
 
         {phase === 'confirm' && (
           <>
@@ -71,7 +78,9 @@ export function Sheet({ sheet, asleep, onClose }) {
             {localError && <p class="state state-error">{localError}</p>}
             {sheet.confirmPhrase && (
               <div class="field sheet-confirm">
-                <label for="sheet-confirm-input">Наберите «{sheet.confirmPhrase}», чтобы подтвердить</label>
+                <label for="sheet-confirm-input">
+                  Наберите <Q>{sheet.confirmPhrase}</Q>, чтобы подтвердить
+                </label>
                 <input
                   id="sheet-confirm-input"
                   type="text"

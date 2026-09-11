@@ -25,6 +25,7 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { confirmSheet } from '../sheet.js'
 import { deletePlanSummary } from '../routeAdd.js'
 import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, NOT_A_SITE } from '../routeLookup.js'
+import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
@@ -231,13 +232,19 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
       {verdict && (
         <Section title="Куда идёт трафик">
           <div class="card">
-            <p class="traffic-title">{verdict.title}</p>
-            <p class="traffic-detail">{verdict.detail}</p>
+            <p class="traffic-title">
+              <Quoted text={verdict.title} />
+            </p>
+            <p class="traffic-detail">
+              <Quoted text={verdict.detail} />
+            </p>
             {/* Вторая половина модели оператора: в туннель уходит только
                 названное, а всё остальное -- сюда. Этой строки на экране не
                 было вовсе, хотя без неё раскладка отвечает на половину
                 вопроса. */}
-            <p class="traffic-default">{defaultDestination(snapshot).text}</p>
+            <p class="traffic-default">
+              <Quoted text={defaultDestination(snapshot).text} />
+            </p>
             {verdict.partial && (
               <p class="traffic-note">
                 Снимок неполный: часть данных роутер не отдал ({snapshot.warnings.join('; ')}).
@@ -277,12 +284,17 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
           {siteCurrent && site.result && site.result.status !== 'ok' && (
             <p class="state state-error">{lookupRefusal(site.result.output)}</p>
           )}
+          {/* Имена сайта, VPN-туннеля и правила в ответе -- через <Quoted>:
+              короткое не рвётся по дефису, длинное переносится внутри себя,
+              а скопированное совпадает с тем, что на роутере. */}
           {siteAnswer && (
             <div class={siteAnswer.tone === 'ok' ? 'site-answer' : 'site-answer traffic-note'}>
-              <p class="traffic-title">{siteAnswer.title}</p>
+              <p class="traffic-title">
+                <Quoted text={siteAnswer.title} />
+              </p>
               {siteAnswer.lines.map((line) => (
                 <p key={line} class="traffic-detail">
-                  {line}
+                  <Quoted text={line} />
                 </p>
               ))}
             </div>
