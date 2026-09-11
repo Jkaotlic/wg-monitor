@@ -717,6 +717,7 @@ func TestAdviceNeverSendsOwnerWhereHeCannotGo(t *testing.T) {
 			"mode": "fallback", "reason": "fallback", "candidate": "198.51.100.53", "since": "2026-09-11T10:00:00Z",
 		}},
 		{"свой DNS-сервер молчит, запасных нет", "resolver_guard", map[string]any{"reason": "no_live_fallback"}},
+		{"запасные DNS-серверы не снялись", "resolver_guard", resolverGuardForeignLeftoverDetails()},
 		{"сервисы не открываются через VPN-туннель", "external_reach", map[string]any{
 			"targets_total": 2, "via_interface": "nwg0",
 			"targets_failed": []any{
@@ -788,6 +789,7 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 			"mode": "fallback", "reason": "fallback", "candidate": "198.51.100.53", "since": "2026-09-11T10:00:00Z",
 		}},
 		{"свой DNS-сервер, запасные недоступны", "resolver_guard", map[string]any{"reason": "no_live_fallback"}},
+		{"свой DNS-сервер, запасные не снялись", "resolver_guard", resolverGuardForeignLeftoverDetails()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -816,20 +818,61 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 				t.Errorf("жаргон %q в тексте для владельца:\n%s", w, got)
 			}
 		}
-		// Бэкенд не знает, успел ли роутер уйти на запасные (fallback) или
-		// так и остался на своём (no_live_fallback): верно в обоих случаях
-		// только «снова отвечает». И «простоя» не было -- сайты могли всё
-		// это время открываться через запасные.
-		if !strings.Contains(got, "Свой DNS-сервер снова отвечает") {
+		// При восстановлении у бэкенда есть только свежий ok-отчёт
+		// ({mode: primary}) -- причину поломки он не знает. Роутер мог уходить
+		// на запасные (fallback), оставаться на молчащем своём
+		// (no_live_fallback) или держать запасные рядом с отвечающим своим
+		// (foreign_leftover). Во всех трёх случаях верно только «снова работает
+		// через свой»: ни «снова отвечает», ни «не отвечал» -- в третьем свой
+		// отвечал всё время. И «простоя» не было.
+		if !strings.Contains(got, resolverGuardRecoveredHeadline) {
 			t.Errorf("нет фразы о восстановлении:\n%s", got)
 		}
-		if strings.Contains(got, "Простой") {
-			t.Errorf("восстановление своего DNS-сервера говорит о простое:\n%s", got)
+		for _, bad := range []string{"Простой", "снова отвечает", "не отвечал"} {
+			if strings.Contains(got, bad) {
+				t.Errorf("восстановление обещает то, чего могло не быть (%q):\n%s", bad, got)
+			}
 		}
-		if !strings.Contains(got, "Свой DNS-сервер не отвечал: 20 мин") {
-			t.Errorf("нет длительности молчания своего DNS-сервера:\n%s", got)
+		if !strings.Contains(got, "Неполадка длилась: 20 мин") {
+			t.Errorf("нет длительности неполадки:\n%s", got)
 		}
 	})
+}
+
+// resolverGuardForeignLeftoverDetails -- отчёт агента, когда роутер вернулся
+// на свой DNS-сервер, а запасные рядом с ним не снялись (v0.30, 4b раунд 4).
+func resolverGuardForeignLeftoverDetails() map[string]any {
+	return map[string]any{
+		"mode": "primary", "reason": "foreign_leftover", "since": "2026-09-11T10:00:00Z",
+		"leftover": []any{"https upstream https://cloudflare-dns.com/dns-query", "https upstream https://cloudflare-dns.com/dns-query domain tmdb.org"},
+	}
+}
+
+// Запасные DNS-серверы не снялись после возврата: свой отвечает, сайты
+// открываются, но часть запросов идёт мимо него и его фильтров. Тон --
+// «обратить внимание», как у перехода на запасные. Про молчащий свой сервер
+// здесь ни слова: он отвечает.
+func TestResolverGuardForeignLeftoverSaysWhatHappened(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname: "router-a", CheckName: "resolver_guard", HardSince: time.Now(), ConsecFails: 2,
+		Check: wire.Check{Name: "resolver_guard", Status: "fail", Details: resolverGuardForeignLeftoverDetails()},
+	})
+	for _, want := range []string{
+		"Запасные DNS-серверы не снялись — сайты открываются, но часть запросов идёт мимо фильтров",
+		"🟡", "11.09 13:00 МСК", "перезагрузите роутер",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("нет %q:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{"не отвечает", "cloudflare", "upstream", "tmdb.org", "🔴"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("лишнее или неверное (%q):\n%s", bad, got)
+		}
+	}
+	if lbl := wakeCheckLabel(wire.Check{Name: "resolver_guard", Status: "fail", Details: resolverGuardForeignLeftoverDetails()}); !strings.Contains(lbl, "запасные DNS-серверы не снялись") || strings.Contains(lbl, "не отвечает") {
+		t.Errorf("wake label=%q, want the fallback servers that stayed, not a silent own server", lbl)
+	}
 }
 
 // Сторож своего DNS-сервера говорит владельцу, что уже случилось с роутером
@@ -875,11 +918,11 @@ func TestResolverGuardAlertSaysWhatHappened(t *testing.T) {
 		Nickname: "router-a", CheckName: "resolver_guard", HardSince: since, RecoveredAt: since.Add(20 * time.Minute),
 		Check: wire.Check{Name: "resolver_guard", Status: "ok", Details: map[string]any{"mode": "primary"}},
 	})
-	if !strings.Contains(rec, "Свой DNS-сервер снова отвечает") {
+	if !strings.Contains(rec, "Роутер снова работает через свой DNS-сервер") {
 		t.Errorf("recovery: нет фразы о восстановлении:\n%s", rec)
 	}
-	if strings.Contains(rec, "Простой") || strings.Contains(rec, "Роутер вернулся") {
-		t.Errorf("recovery: обещает простой или возврат, которых могло не быть:\n%s", rec)
+	if strings.Contains(rec, "Простой") || strings.Contains(rec, "Роутер вернулся") || strings.Contains(rec, "снова отвечает") {
+		t.Errorf("recovery: обещает простой, возврат или молчание своего сервера, которых могло не быть:\n%s", rec)
 	}
 
 	if got := wakeCheckLabel(wire.Check{Name: "resolver_guard", Status: "fail"}); !strings.Contains(got, "DNS-сервер") {

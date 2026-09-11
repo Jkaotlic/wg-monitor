@@ -141,8 +141,10 @@ describe('agent_heartbeat говорит по-человечески', () => {
 
 // resolver_guard -- сторож своего DNS-сервера (спека dns-watchdog). Бот
 // говорит о нём «Свой DNS-сервер», и приложение обязано говорить так же:
-// два голоса одной системы -- одни слова. Причины (запасные живы или нет)
-// карточка не знает, поэтому «почему» честно называет оба исхода.
+// два голоса одной системы -- одни слова. Причины карточка не знает (у
+// инцидента только имя проверки), а их три: роутер ушёл на запасные, запасные
+// недоступны, запасные не снялись рядом с отвечающим своим. Поэтому «что»
+// не утверждает, что свой сервер молчит, а «почему» честно называет все три.
 describe('resolver_guard говорит «Свой DNS-сервер»', () => {
   const jargon = ['DoH', 'апстрим', 'резолвинг', 'resolver_guard']
 
@@ -152,15 +154,22 @@ describe('resolver_guard говорит «Свой DNS-сервер»', () => {
 
   it('в карточке тревоги -- что случилось и чем грозит', () => {
     const copy = incidentCopy('resolver_guard')
-    expect(copy.what).toBe('Свой DNS-сервер не отвечает')
+    expect(copy.what).toBe('Неполадка с DNS-серверами роутера')
     expect(copy.why).toContain('временно перешёл на запасные')
     expect(copy.why).toContain('сайты по имени могут не открываться')
+    // Слова бота для третьей причины (alerts/format.go, foreign_leftover).
+    expect(copy.why).toContain('запасные DNS-серверы не снялись — сайты открываются, но часть запросов идёт мимо фильтров')
     for (const w of jargon) expect(copy.what + ' ' + copy.why).not.toContain(w)
   })
 
   it('в журнале событий', () => {
-    // Верно и когда роутер уходил на запасные, и когда оставался на своём.
-    expect(eventPhrase('resolver_guard', 'ok')).toBe('Свой DNS-сервер снова отвечает')
-    expect(eventPhrase('resolver_guard', 'fail')).toBe('Свой DNS-сервер не отвечает')
+    // Верно при любой из трёх причин: и когда роутер уходил на запасные, и
+    // когда оставался на молчащем своём, и когда свой отвечал всё время.
+    expect(eventPhrase('resolver_guard', 'ok')).toBe('Роутер снова работает через свой DNS-сервер')
+    expect(eventPhrase('resolver_guard', 'fail')).toBe('Неполадка с DNS-серверами роутера')
+    for (const phrase of [eventPhrase('resolver_guard', 'ok'), eventPhrase('resolver_guard', 'fail')]) {
+      expect(phrase).not.toContain('не отвечает')
+      expect(phrase).not.toContain('снова отвечает')
+    }
   })
 })

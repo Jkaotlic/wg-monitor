@@ -108,8 +108,9 @@ func FormatRecovery(a RecoveryArgs) string {
 	downtime := fmt.Sprintf("Простой: %s", durFmt(d))
 	if checkCategory(a.CheckName) == "resolver_guard" {
 		// Простоя могло и не быть: на запасных сайты открывались, а владельцу
-		// так и сказали. Не отвечал только свой DNS-сервер.
-		downtime = fmt.Sprintf("Свой DNS-сервер не отвечал: %s", durFmt(d))
+		// так и сказали. И свой DNS-сервер мог отвечать всё это время -- когда
+		// не снялись запасные (foreign_leftover); причину здесь не знаем.
+		downtime = fmt.Sprintf("Неполадка длилась: %s", durFmt(d))
 	}
 	lines := []string{downtime}
 	if strings.HasPrefix(a.CheckName, "tunnel_") {
@@ -318,8 +319,9 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 		}
 	case "resolver_guard":
 		// Запасные DNS-серверы работают -- сайты открываются, это «обратить
-		// внимание», а не пожар. Запасных нет -- тревога.
-		if resolverGuardOnFallback(d) {
+		// внимание», а не пожар. Запасных нет -- тревога. Запасные не снялись
+		// рядом с отвечающим своим -- сайты тоже открываются.
+		if resolverGuardOnFallback(d) || resolverGuardForeignLeftover(d) {
 			return "🟡"
 		}
 	}
@@ -407,10 +409,12 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
 	case "resolver_guard":
-		// Бэкенд не знает, уходил ли роутер на запасные (fallback) или так и
-		// оставался на своём (no_live_fallback): верно в обоих случаях только
-		// «снова отвечает».
-		return "Свой DNS-сервер снова отвечает"
+		// При восстановлении у диспетчера есть только свежий ok-отчёт
+		// ({mode: primary}), причина поломки ему неизвестна. Роутер мог уходить
+		// на запасные (fallback), оставаться на молчащем своём
+		// (no_live_fallback) или держать запасные рядом с отвечающим своим
+		// (foreign_leftover) -- верно во всех трёх случаях только это.
+		return resolverGuardRecoveredHeadline
 	}
 	if checkName == "agent_heartbeat" {
 		return routerOfflineRecovered
@@ -661,17 +665,27 @@ func writeExternalReachWhatBroke(b *strings.Builder, d map[string]any) {
 }
 
 // Сторож своего DNS-сервера (проверка resolver_guard, спека dns-watchdog).
-// Агент присылает fail в двух случаях: роутер уже переведён на живой
-// запасной (reason=fallback, mode=fallback) или живых запасных нет и
-// настройки роутера не тронуты (reason=no_live_fallback). Заголовки -- из
-// спеки дословно: без «DoH», «апстрима» и «резолвинга».
+// Агент присылает fail в трёх случаях: роутер уже переведён на живой
+// запасной (reason=fallback, mode=fallback); живых запасных нет и настройки
+// роутера не тронуты (reason=no_live_fallback); роутер вернулся на свой, а
+// запасные рядом с ним не снялись и перехватывают часть запросов
+// (reason=foreign_leftover, mode=primary). Заголовки -- из спеки и решений
+// v0.30 дословно: без «DoH», «апстрима» и «резолвинга».
 const (
-	resolverGuardFallbackHeadline   = "Свой DNS-сервер не отвечает — роутер временно перешёл на запасные, сайты открываются"
-	resolverGuardNoFallbackHeadline = "Свой DNS-сервер не отвечает, а запасные недоступны — сайты по имени могут не открываться"
+	resolverGuardFallbackHeadline        = "Свой DNS-сервер не отвечает — роутер временно перешёл на запасные, сайты открываются"
+	resolverGuardNoFallbackHeadline      = "Свой DNS-сервер не отвечает, а запасные недоступны — сайты по имени могут не открываться"
+	resolverGuardForeignLeftoverHeadline = "Запасные DNS-серверы не снялись — сайты открываются, но часть запросов идёт мимо фильтров"
+	resolverGuardRecoveredHeadline       = "Роутер снова работает через свой DNS-сервер"
 )
 
 func resolverGuardNoFallback(d map[string]any) bool {
 	return strOrEmpty(d, "reason") == "no_live_fallback"
+}
+
+// resolverGuardForeignLeftover -- свой DNS-сервер отвечает и роутер на нём,
+// но запасные остались рядом: сайты открываются, фильтры своего обходятся.
+func resolverGuardForeignLeftover(d map[string]any) bool {
+	return strOrEmpty(d, "reason") == "foreign_leftover"
 }
 
 // resolverGuardOnFallback -- роутер уже работает через запасной. Без reason,
@@ -689,6 +703,8 @@ func resolverGuardHeadline(d map[string]any) string {
 	switch {
 	case resolverGuardNoFallback(d):
 		return resolverGuardNoFallbackHeadline
+	case resolverGuardForeignLeftover(d):
+		return resolverGuardForeignLeftoverHeadline
 	case resolverGuardOnFallback(d):
 		return resolverGuardFallbackHeadline
 	}
@@ -701,6 +717,11 @@ func writeResolverGuardWhatBroke(b *strings.Builder, d map[string]any) {
 	switch {
 	case resolverGuardNoFallback(d):
 		b.WriteString("  Роутер не дождался ответа от своего DNS-сервера, а запасные тоже не ответили — переключаться было некуда, настройки роутера не тронуты.\n")
+	case resolverGuardForeignLeftover(d):
+		b.WriteString("  Свой DNS-сервер отвечает, и роутер работает через него, но запасные DNS-серверы остались в настройках рядом с ним — часть адресов сайтов роутер узнаёт у них.\n")
+		if since, err := time.Parse(time.RFC3339, strOrEmpty(d, "since")); err == nil {
+			fmt.Fprintf(b, "  Так с %s.\n", since.In(mscLoc()).Format("02.01 15:04 МСК"))
+		}
 	case resolverGuardOnFallback(d):
 		b.WriteString("  Роутер не дождался ответа от своего DNS-сервера и сам переключился на запасные — адреса сайтов сейчас находят они.\n")
 		if since, err := time.Parse(time.RFC3339, strOrEmpty(d, "since")); err == nil {
@@ -807,6 +828,8 @@ func impactFor(checkName string, d map[string]any, ns []NeighborSummary) string 
 		switch {
 		case resolverGuardNoFallback(d):
 			return "Сайты и приложения могут не открываться: чтобы найти сайт по имени, роутеру сейчас не у кого спросить."
+		case resolverGuardForeignLeftover(d):
+			return "Сайты открываются. Но то, что настроено на вашем DNS-сервере, действует не для всех запросов: часть из них идёт через запасные, мимо него."
 		case resolverGuardOnFallback(d):
 			return "Пока ничего заметного: сайты открываются через запасные DNS-серверы. Но то, что настроено на вашем DNS-сервере, пока не действует."
 		}
@@ -847,6 +870,8 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 		switch {
 		case resolverGuardNoFallback(d):
 			return "Не отвечает ни свой DNS-сервер, ни запасные. Так бывает, когда у роутера пропал интернет целиком или провайдер мешает защищённым запросам имён."
+		case resolverGuardForeignLeftover(d):
+			return "Обычно так бывает, когда роутер не выполнил команду убрать запасные DNS-серверы после возврата на свой. Роутер повторяет её каждую минуту."
 		case resolverGuardOnFallback(d):
 			return "Обычно так бывает, когда недоступен сервер, на котором работает ваш DNS-сервер, или дорога до него. Роутер продолжает его проверять и вернётся сам, как только тот ответит."
 		}
@@ -1005,6 +1030,10 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 		switch {
 		case resolverGuardNoFallback(d):
 			return "Откройте приложение, экран «Проверки»: там видно, есть ли у роутера интернет. Если интернета нет — дело у провайдера. Если есть — напишите тому, кто настраивал DNS-сервер."
+		case resolverGuardForeignLeftover(d):
+			// Совет выполним: запасные сторож в сохранённые настройки не
+			// пишет никогда, перезагрузка их гарантированно снимает.
+			return "Ничего делать не нужно: роутер сам убирает запасные и пришлёт сообщение, когда закончит. Если за пару часов этого не случится — перезагрузите роутер: запасные DNS-серверы не записываются в его сохранённые настройки, и после перезагрузки их не будет."
 		case resolverGuardOnFallback(d):
 			return "Ничего делать не нужно: когда свой DNS-сервер снова ответит, роутер сам вернётся на него и пришлёт сообщение. Если этого не случится за пару часов — напишите тому, кто настраивал DNS-сервер."
 		}

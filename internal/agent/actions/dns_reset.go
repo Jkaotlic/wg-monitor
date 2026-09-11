@@ -174,6 +174,19 @@ func dnsProxyRemovalCommand(line string) (cmd string, ok bool) {
 	return "dns-proxy no " + f[0] + " upstream " + id, true
 }
 
+// DNSProxyRemovalCommand exports dnsProxyRemovalCommand for the DNS watchdog:
+// two upstream lines share an identifier — one removal drops both — exactly
+// when their removal commands are equal.
+func DNSProxyRemovalCommand(line string) (cmd string, ok bool) {
+	return dnsProxyRemovalCommand(line)
+}
+
+// ParseDNSProxyUpstreams exports parseDNSProxyUpstreams for the DNS watchdog,
+// which reads the router's live upstreams before and after every switch.
+func ParseDNSProxyUpstreams(runningConfig string) []string {
+	return parseDNSProxyUpstreams(runningConfig)
+}
+
 // ndmcStep runs one `ndmc -c <command>`, appends a ✓/✗ line plus any ndmc
 // output to b, and reports whether the command succeeded.
 func ndmcStep(ctx context.Context, exec ExecFunc, b *strings.Builder, command string) bool {

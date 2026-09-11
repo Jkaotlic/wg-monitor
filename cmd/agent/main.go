@@ -17,6 +17,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/cmdloop"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -91,6 +92,12 @@ func main() {
 			singleChecks = append(singleChecks, er)
 		}
 	}
+	// DNS watchdog (opt-in per router): the loop runs in its own goroutine
+	// below; resolver_guard only reports its snapshot.
+	dnsWatchdog, resolverGuard := buildDNSWatchdog(cfg, actions.DefaultExec, logger)
+	if resolverGuard != nil {
+		singleChecks = append(singleChecks, resolverGuard)
+	}
 	// MultiChecks emit per-tunnel results
 	multiChecks := []checks.MultiCheck{
 		checks.TunnelsCheck{
@@ -140,8 +147,79 @@ func main() {
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
 	go loop.Run(ctx)
 
+	// The watchdog's own probe, candidate probes and ndmc calls don't fit the
+	// reporter's 10 s per-check budget, so it is a loop of its own. On
+	// shutdown main waits for it to finish the step in progress — a switch
+	// runs to its end on a detached context — bounded so a hung ndmc can't
+	// hold the exit.
+	waitDNSWatchdog := runDNSWatchdog(ctx, dnsWatchdog, dnswatch.SwitchTimeout+10*time.Second, logger)
+
 	rep.Run(ctx)
+	waitDNSWatchdog()
 	logger.Info("stopped")
+}
+
+// runDNSWatchdog starts the watchdog loop (nil → nothing) and returns a
+// function that, once ctx is done, waits at most limit for the loop to finish
+// its current step, so a shutdown can't kill the process in the middle of a
+// switch.
+func runDNSWatchdog(ctx context.Context, w *dnswatch.Watcher, limit time.Duration, logger *slog.Logger) (wait func()) {
+	if w == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		w.Run(ctx)
+	}()
+	return func() {
+		t := time.NewTimer(limit)
+		defer t.Stop()
+		select {
+		case <-done:
+		case <-t.C:
+			logger.Warn("dns watchdog did not finish its step before shutdown", "waited", limit)
+		}
+	}
+}
+
+// dnsWatchdogConfig maps the agent's dns_watchdog block — already validated
+// and defaulted by LoadConfig — to the watchdog's runtime config.
+func dnsWatchdogConfig(cfg *agent.Config) dnswatch.Config {
+	w := cfg.DNSWatchdog
+	return dnswatch.Config{
+		Endpoint:          w.Endpoint,
+		CanaryDomain:      w.CanaryDomain,
+		RUCanary:          w.RUCanary,
+		BootstrapIP:       w.BootstrapIP,
+		Interval:          time.Duration(w.IntervalSec) * time.Second,
+		FailThreshold:     w.FailThreshold,
+		OKThreshold:       w.OKThreshold,
+		Cooldown:          time.Duration(w.CooldownSec) * time.Second,
+		MaxForeign:        w.MaxForeign,
+		RUZones:           w.RUZones,
+		RUCandidates:      w.RUCandidates,
+		ForeignCandidates: w.ForeignCandidates,
+		PinnedZones:       w.PinnedZones,
+		PinnedCandidate:   w.PinnedCandidate,
+		StatePath:         cfg.State.DNSWatchdogStatePath(),
+	}
+}
+
+// buildDNSWatchdog returns the DNS watchdog loop and its resolver_guard check
+// when the block is enabled, (nil, nil) otherwise. A block LoadConfig switched
+// off as unusable is logged as an error: silently off would pass for a
+// guarded router.
+func buildDNSWatchdog(cfg *agent.Config, exec actions.ExecFunc, logger *slog.Logger) (*dnswatch.Watcher, checks.Check) {
+	if cfg.DNSWatchdog.ConfigError != "" {
+		logger.Error("dns_watchdog disabled: config error", "err", cfg.DNSWatchdog.ConfigError)
+		return nil, nil
+	}
+	if !cfg.DNSWatchdog.Enabled {
+		return nil, nil
+	}
+	w := dnswatch.New(dnsWatchdogConfig(cfg), dnswatch.Deps{Exec: exec, Logger: logger})
+	return w, dnswatch.Check{Source: w}
 }
 
 func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) checks.Check {

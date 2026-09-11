@@ -2,6 +2,8 @@ package agent
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +11,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
 )
 
 var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
@@ -22,6 +26,111 @@ type Config struct {
 	ExternalReach ExternalReachConfig `yaml:"external_reach"`
 	Maintenance   MaintenanceConfig   `yaml:"maintenance"`
 	Logging       LoggingConfig       `yaml:"logging"`
+	DNSWatchdog   DNSWatchdogConfig   `yaml:"dns_watchdog"`
+}
+
+// DNSWatchdogConfig: the agent-side DNS watchdog (internal/agent/dnswatch).
+// When the router's own DoH resolver (Endpoint) stops answering, the watchdog
+// switches dns-proxy — in the live config only, never saved — to a split
+// fallback set (RU zones → Yandex, the rest → up to MaxForeign live foreign
+// resolvers, PinnedZones → PinnedCandidate) and switches back when the own
+// resolver recovers. Opt-in per router: an absent block means off.
+//
+// Defaults are applied by LoadConfig only to an enabled block. An enabled
+// block that is unusable (no https:// endpoint with a host, bad bootstrap_ip)
+// is switched off with ConfigError set, instead of failing the whole load:
+// update_agent_config writes YAML without LoadConfig, and an agent that exits
+// on start would cut the router off from the bot.
+//
+// The remote edit (update_agent_config) writes only enabled, endpoint,
+// canary_domain and bootstrap_ip; the lists live in the file.
+type DNSWatchdogConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	Endpoint      string `yaml:"endpoint"`       // https://host/<secret>, required when enabled
+	CanaryDomain  string `yaml:"canary_domain"`  // default "example.com" (foreign + own-resolver probes)
+	RUCanary      string `yaml:"ru_canary"`      // default "ya.ru" (RU candidate probes)
+	BootstrapIP   string `yaml:"bootstrap_ip"`   // endpoint host address; empty → plain DNS to 77.88.8.8:53
+	IntervalSec   int    `yaml:"interval_sec"`   // default 60
+	FailThreshold int    `yaml:"fail_threshold"` // default 2
+	OKThreshold   int    `yaml:"ok_threshold"`   // default 2
+	CooldownSec   int    `yaml:"cooldown_sec"`   // default 300
+	MaxForeign    int    `yaml:"max_foreign"`    // default 3
+
+	RUZones           []string `yaml:"ru_zones"`           // default dnswatch.DefaultRUZones
+	RUCandidates      []string `yaml:"ru_candidates"`      // default dnswatch.DefaultRUCandidates, in order
+	ForeignCandidates []string `yaml:"foreign_candidates"` // default dnswatch.DefaultForeignCandidates, in order
+	PinnedZones       []string `yaml:"pinned_zones"`       // default dnswatch.DefaultPinnedZones
+	PinnedCandidate   string   `yaml:"pinned_candidate"`   // default dnswatch.DefaultPinnedCandidate
+
+	// ConfigError is set by LoadConfig when an enabled block was switched off
+	// as unusable. It never contains the endpoint path (a credential).
+	ConfigError string `yaml:"-"`
+}
+
+// applyDNSWatchdogDefaults validates an enabled block and fills its defaults.
+// A disabled block is left untouched.
+func applyDNSWatchdogDefaults(w *DNSWatchdogConfig) {
+	if !w.Enabled {
+		return
+	}
+	if msg := dnsWatchdogConfigProblem(*w); msg != "" {
+		w.Enabled = false
+		w.ConfigError = msg
+		return
+	}
+	if w.CanaryDomain == "" {
+		w.CanaryDomain = "example.com"
+	}
+	if w.RUCanary == "" {
+		w.RUCanary = "ya.ru"
+	}
+	if w.IntervalSec <= 0 {
+		w.IntervalSec = 60
+	}
+	if w.FailThreshold <= 0 {
+		w.FailThreshold = 2
+	}
+	if w.OKThreshold <= 0 {
+		w.OKThreshold = 2
+	}
+	if w.CooldownSec <= 0 {
+		w.CooldownSec = 300
+	}
+	if w.MaxForeign <= 0 {
+		w.MaxForeign = 3
+	}
+	if len(w.RUZones) == 0 {
+		w.RUZones = append([]string(nil), dnswatch.DefaultRUZones...)
+	}
+	if len(w.RUCandidates) == 0 {
+		w.RUCandidates = append([]string(nil), dnswatch.DefaultRUCandidates...)
+	}
+	if len(w.ForeignCandidates) == 0 {
+		w.ForeignCandidates = append([]string(nil), dnswatch.DefaultForeignCandidates...)
+	}
+	if len(w.PinnedZones) == 0 {
+		w.PinnedZones = append([]string(nil), dnswatch.DefaultPinnedZones...)
+	}
+	if w.PinnedCandidate == "" {
+		w.PinnedCandidate = dnswatch.DefaultPinnedCandidate
+	}
+}
+
+// dnsWatchdogConfigProblem explains why an enabled block is unusable, or
+// returns "". The endpoint path is a credential: only the host may appear.
+func dnsWatchdogConfigProblem(w DNSWatchdogConfig) string {
+	ep := strings.TrimSpace(w.Endpoint)
+	if ep == "" {
+		return "dns_watchdog.endpoint is empty"
+	}
+	u, err := url.Parse(ep)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "dns_watchdog.endpoint must be an https:// URL with a host"
+	}
+	if w.BootstrapIP != "" && net.ParseIP(w.BootstrapIP) == nil {
+		return fmt.Sprintf("dns_watchdog.bootstrap_ip %q is not an IP address (endpoint host %s)", w.BootstrapIP, u.Hostname())
+	}
+	return ""
 }
 
 // LoggingConfig controls the agent's log destination. On Entware the S99 init
@@ -147,6 +256,12 @@ func (s StateConfig) CommandResultPath() string {
 	return filepath.Join(filepath.Dir(s.ResolvedPath()), "cmd-results.json")
 }
 
+// DNSWatchdogStatePath: where the DNS watchdog keeps its cooldown stamp and
+// the own-resolver lines it removed (next to the reporter state).
+func (s StateConfig) DNSWatchdogStatePath() string {
+	return filepath.Join(filepath.Dir(s.ResolvedPath()), "dns-watchdog-state.json")
+}
+
 type ChecksConfig struct {
 	AWG AWGCheckConfig `yaml:"awg"`
 	DNS DNSCheckConfig `yaml:"dns"`
@@ -248,5 +363,6 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 			}
 		}
 	}
+	applyDNSWatchdogDefaults(&cfg.DNSWatchdog)
 	return &cfg, nil
 }

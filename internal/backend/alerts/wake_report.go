@@ -113,6 +113,9 @@ func wakeCheckLabel(c wire.Check) string {
 	case "external_reach":
 		return "сервисы не открываются через обход"
 	case "resolver_guard":
+		if resolverGuardForeignLeftover(c.Details) {
+			return "запасные DNS-серверы не снялись" // свой отвечает
+		}
 		return "свой DNS-сервер не отвечает"
 	default:
 		return c.Name
