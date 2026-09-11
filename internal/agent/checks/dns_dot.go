@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"strconv"
 	"time"
@@ -51,6 +52,10 @@ func ProbeDoT(ctx context.Context, addr, sni, domain string, cfg *tls.Config, ti
 	if err != nil {
 		return nil, fmt.Errorf("pack query: %w", err)
 	}
+	frame, err := dotFrame(pkt)
+	if err != nil {
+		return nil, err
+	}
 
 	tc := &tls.Config{}
 	if cfg != nil {
@@ -66,9 +71,6 @@ func ProbeDoT(ctx context.Context, addr, sni, domain string, cfg *tls.Config, ti
 		_ = conn.SetDeadline(deadline)
 	}
 
-	frame := make([]byte, 2+len(pkt))
-	binary.BigEndian.PutUint16(frame, uint16(len(pkt)))
-	copy(frame[2:], pkt)
 	if _, err := conn.Write(frame); err != nil {
 		return nil, fmt.Errorf("dot: write: %w", err)
 	}
@@ -102,6 +104,21 @@ func ProbeDoT(ctx context.Context, addr, sni, domain string, cfg *tls.Config, ti
 		return nil, fmt.Errorf("dot: no A answers")
 	}
 	return out, nil
+}
+
+// dotFrame prefixes a DNS message with its 2-byte big-endian length, the
+// DNS-over-TCP framing DoT uses (RFC 7858 → RFC 1035 §4.2.2). A message that
+// does not fit in 2 bytes cannot be framed: refusing it beats a length that
+// silently wraps and desynchronises the stream.
+func dotFrame(msg []byte) ([]byte, error) {
+	n := len(msg) // one value for both the bound check and the conversion
+	if n > math.MaxUint16 {
+		return nil, fmt.Errorf("dot: message is %d bytes, DNS-over-TCP allows at most %d", n, math.MaxUint16)
+	}
+	frame := make([]byte, 2+n)
+	binary.BigEndian.PutUint16(frame, uint16(n))
+	copy(frame[2:], msg)
+	return frame, nil
 }
 
 // dotTarget maps a DoT endpoint from keenetic.ParseDNSEndpoints to ProbeDoT's
