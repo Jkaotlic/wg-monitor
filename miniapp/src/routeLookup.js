@@ -10,6 +10,11 @@ const NOTE_TEXT = {
   singbox_router: 'Трафиком управляет sing-box — он решает сам',
 }
 const GEO_EXPAND_FAILED = 'geo_expand_failed:'
+const EXIT_UNRECOGNIZED = 'exit_unrecognized:'
+
+// NOT_A_SITE -- одни и те же слова для имени, отбитого проверкой на экране,
+// сервером (400 invalid_domain) и агентом.
+export const NOT_A_SITE = 'Это не похоже на адрес сайта — нужно имя вроде claude.ai'
 
 // normalizeSiteInput оставляет от того, что вставил человек, одно имя сайта:
 // без схемы, пути, запроса, якоря, порта и хвостовой точки, в нижнем
@@ -22,10 +27,22 @@ export function normalizeSiteInput(raw) {
   return s.replace(/\.+$/, '').trim()
 }
 
+// looksLikeSite -- та же проверка, что у сервера (sanitizeWizardCommandArgs,
+// route_lookup): не пусто, не длиннее 253, есть точка, нет пробелов, «/» и
+// «:». Отбитое сервером не отправляется, а человек сразу слышит, что не так.
+// Решает всё равно сервер: это подсказка, а не граница.
+export function looksLikeSite(domain) {
+  const d = String(domain ?? '')
+  return d.length > 0 && d.length <= 253 && d.includes('.') && !/[\s/:]/.test(d)
+}
+
 function noteText(code) {
   if (typeof code !== 'string') return ''
   if (code.startsWith(GEO_EXPAND_FAILED)) {
     return `Роутер не раскрыл список «${code.slice(GEO_EXPAND_FAILED.length)}»`
+  }
+  if (code.startsWith(EXIT_UNRECOGNIZED)) {
+    return `Сайт уйдёт через подключение «${code.slice(EXIT_UNRECOGNIZED.length)}» — роутер не сказал, VPN-туннель это или провайдер`
   }
   return NOTE_TEXT[code] ?? ''
 }
@@ -107,9 +124,10 @@ export function lookupAnswer(result) {
 }
 
 // lookupRefusal -- слова для отказа: агент и сервер отвечают по-английски и
-// для людей не пишут.
-export function lookupRefusal(output) {
-  return /invalid[ _]domain/i.test(String(output ?? ''))
-    ? 'Это не похоже на имя сайта'
-    : 'Роутер не ответил на вопрос — попробуйте ещё раз'
+// для людей не пишут. code -- код ошибки сервера (useCommand errorCode):
+// текст ошибки у api.js кода не несёт, и по одному тексту отказ сервера в
+// имени читался бы как «роутер не ответил».
+export function lookupRefusal(output, code) {
+  if (code === 'invalid_domain' || /invalid[ _]domain/i.test(String(output ?? ''))) return NOT_A_SITE
+  return 'Роутер не ответил на вопрос — попробуйте ещё раз'
 }

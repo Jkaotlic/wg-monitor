@@ -24,7 +24,7 @@ import { ListRow } from '../ui/ListRow.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
 import { confirmSheet } from '../sheet.js'
 import { deletePlanSummary } from '../routeAdd.js'
-import { normalizeSiteInput, lookupAnswer, lookupRefusal } from '../routeLookup.js'
+import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, NOT_A_SITE } from '../routeLookup.js'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
@@ -75,12 +75,22 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
   const site = useCommand(routerID)
   const [siteInput, setSiteInput] = useState('')
   const [siteAskedFor, setSiteAskedFor] = useState(null)
+  const [siteProblem, setSiteProblem] = useState(null)
   const siteCurrent = siteAskedFor === routerID
   const siteAnswer = siteCurrent && site.result?.status === 'ok' ? lookupAnswer(site.result.output) : null
   const checkSite = (e) => {
     e.preventDefault()
     const domain = normalizeSiteInput(siteInput)
     if (!domain || site.busy) return
+    // То, что сервер отобьёт, не отправляется: человек сразу слышит, что не
+    // так с введённым, а не «роутер не ответил». Прежний ответ -- про другое
+    // имя, поэтому он прячется.
+    if (!looksLikeSite(domain)) {
+      setSiteProblem(NOT_A_SITE)
+      setSiteAskedFor(null)
+      return
+    }
+    setSiteProblem(null)
     setSiteAskedFor(routerID)
     site.run('route_lookup', { domain }, deadline)
   }
@@ -253,13 +263,17 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
               spellcheck={false}
               placeholder="например, claude.ai"
               value={siteInput}
-              onInput={(e) => setSiteInput(e.currentTarget.value)}
+              onInput={(e) => {
+                setSiteInput(e.currentTarget.value)
+                setSiteProblem(null)
+              }}
             />
           </div>
           <button type="submit" class="btn btn-ghost" disabled={site.busy || !normalizeSiteInput(siteInput)}>
             {site.busy ? 'Проверяю…' : 'Проверить'}
           </button>
-          {siteCurrent && site.error && <p class="state state-error">{lookupRefusal(site.error)}</p>}
+          {siteProblem && <p class="state state-error">{siteProblem}</p>}
+          {siteCurrent && site.error && <p class="state state-error">{lookupRefusal(site.error, site.errorCode)}</p>}
           {siteCurrent && site.result && site.result.status !== 'ok' && (
             <p class="state state-error">{lookupRefusal(site.result.output)}</p>
           )}

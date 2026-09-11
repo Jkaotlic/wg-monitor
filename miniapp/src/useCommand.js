@@ -21,6 +21,11 @@ export function useCommand(routerID) {
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState(null)
+  // Код отказа сервера (ApiError.code, например invalid_domain) рядом с
+  // текстом: текст у api.js -- «<путь> failed: 400», и по нему экран не
+  // отличит «ваш ввод не годится» от «роутер не ответил». error остаётся
+  // строкой -- на неё опираются все экраны.
+  const [errorCode, setErrorCode] = useState(null)
 
   // A sleeping-router deadline can run minutes long; if the screen is closed
   // (component unmounted) before it resolves, the in-flight poll must not
@@ -38,6 +43,7 @@ export function useCommand(routerID) {
     if (!aliveRef.current) return null
     setBusy(true)
     setError(null)
+    setErrorCode(null)
     setResult(null)
     try {
       const { cmd_id: id } = await sendCommand(routerID, action, args)
@@ -61,12 +67,15 @@ export function useCommand(routerID) {
         setError('Не дождались ответа за отведённое время. Если роутер спит, команда выполнится позже — откройте экран заново, чтобы увидеть результат.')
       }
     } catch (err) {
-      if (aliveRef.current) setError(err.message)
+      if (aliveRef.current) {
+        setError(err.message)
+        setErrorCode(err.code ?? null)
+      }
     } finally {
       if (aliveRef.current) setBusy(false)
     }
     return null
   }
 
-  return { busy, result, error, run }
+  return { busy, result, error, errorCode, run }
 }

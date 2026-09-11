@@ -360,6 +360,98 @@ func TestLookupRoute_RuleToProviderIsDirect(t *testing.T) {
 	}
 }
 
+// Живое звено общего набора -- системный WireGuard-интерфейс роутера, не наш
+// туннель (форма из живого 2.17.2: id "system:Wireguard4", iface "Wireguard4").
+// Это VPN-туннель, и ответ обязан совпасть с ответом для правила,
+// приколоченного к тому же интерфейсу напрямую: одно и то же подключение не
+// может быть «туннелем» при одной привязке и «провайдером» при другой.
+func TestLookupRoute_PolicyLinkSystemTunnel(t *testing.T) {
+	withSystemLink := func(rule awgmgr.DNSRoute) routeInputs {
+		in := lookupInputs(rule)
+		in.routing = append(in.routing, awgmgr.RoutingTunnel{
+			ID: "system:Wireguard4", Name: "vpn-office", Iface: "Wireguard4", Type: "system", Status: "up", Available: true,
+		})
+		in.policies = []awgmgr.AccessPolicy{{Name: "HydraRoute", Interfaces: []awgmgr.AccessPolicyInterface{
+			{Name: "Wireguard4", Label: "vpn-office", Order: 0}, {Name: "OpkgTun1", Label: "vpn-nl", Order: 1},
+		}}}
+		in.polIfaces = []awgmgr.PolicyInterface{
+			{Name: "Wireguard4", Label: "vpn-office", Up: true}, {Name: "OpkgTun1", Label: "vpn-nl", Up: true},
+		}
+		return in
+	}
+	pinned := lookupRoute("claude.ai", withSystemLink(awgmgr.DNSRoute{
+		ID: "ndms:AI", Name: "К интерфейсу", Backend: "ndms", Enabled: true,
+		Domains: []string{"claude.ai"}, Routes: boundTo("Wireguard4"),
+	}), noExpand(t))
+	if pinned.Verdict != wire.LookupViaTunnel || pinned.TunnelName != "vpn-office" {
+		t.Fatalf("приколоченное правило: %+v", pinned)
+	}
+	for name, rule := range map[string]awgmgr.DNSRoute{
+		"общий набор": {
+			ID: "hr:AI", Name: "Все AI сервисы", Backend: "hydraroute", Enabled: true,
+			Domains: []string{"claude.ai"}, HRPolicyName: "HydraRoute",
+		},
+		"имя интерфейса в правиле": {
+			ID: "hr:AI2", Name: "По интерфейсу", Backend: "hydraroute", Enabled: true,
+			Domains: []string{"claude.ai"}, HRPolicyName: "Wireguard4",
+		},
+	} {
+		got := lookupRoute("claude.ai", withSystemLink(rule), noExpand(t))
+		if got.Verdict != pinned.Verdict || got.TunnelID != pinned.TunnelID || got.TunnelName != pinned.TunnelName {
+			t.Errorf("%s: %+v, а приколоченное к тому же интерфейсу -- %+v", name, got, pinned)
+		}
+	}
+}
+
+// Живое звено набора -- подключение к провайдеру (в наборе оно зовётся
+// NDMS-именем, в каталоге выходов -- ярлыком, как на живом роутере). Это
+// «напрямую» по типу подключения, а не по пустому id туннеля.
+func TestLookupRoute_PolicyLinkWANIsDirect(t *testing.T) {
+	in := lookupInputs(awgmgr.DNSRoute{
+		ID: "hr:RU", Name: "Местные сайты", Backend: "hydraroute", Enabled: true,
+		Domains: []string{"example.com"}, HRPolicyName: "RU",
+	})
+	in.policies = []awgmgr.AccessPolicy{{Name: "RU", Interfaces: []awgmgr.AccessPolicyInterface{
+		{Name: "GigabitEthernet1", Label: "Провайдер", Order: 0},
+	}}}
+	in.polIfaces = []awgmgr.PolicyInterface{{Name: "GigabitEthernet1", Label: "Провайдер", Up: true}}
+	in.settings = &awgmgr.Settings{Download: awgmgr.SettingsDownload{RouteTag: "awg-awg1", RouteKind: "awg"}}
+	res := lookupRoute("example.com", in, noExpand(t))
+	if res.Verdict != wire.LookupViaDirect || res.ByDefault || res.TunnelID != "" || len(res.Notes) != 0 {
+		t.Fatalf("res = %+v", res)
+	}
+}
+
+// Живое звено -- мост гостевой сети, которого нет в каталоге выходов роутера.
+// Провайдер это или VPN, не знает никто: ответ «неизвестно» и почему, а не
+// «напрямую через провайдера».
+func TestLookupRoute_PolicyLinkUnrecognizedIsUnknown(t *testing.T) {
+	for name, rule := range map[string]awgmgr.DNSRoute{
+		"общий набор": {
+			ID: "hr:G", Name: "Гости", Backend: "hydraroute", Enabled: true,
+			Domains: []string{"example.com"}, HRPolicyName: "Guests",
+		},
+		"имя интерфейса в правиле": {
+			ID: "hr:B", Name: "Мост", Backend: "hydraroute", Enabled: true,
+			Domains: []string{"example.com"}, HRPolicyName: "Bridge1",
+		},
+	} {
+		in := lookupInputs(rule)
+		in.policies = []awgmgr.AccessPolicy{{Name: "Guests", Interfaces: []awgmgr.AccessPolicyInterface{
+			{Name: "Bridge1", Label: "Guest network", Order: 0},
+		}}}
+		in.polIfaces = []awgmgr.PolicyInterface{{Name: "Bridge1", Label: "Guest network", Up: true}}
+		res := lookupRoute("example.com", in, noExpand(t))
+		if res.Verdict != wire.LookupViaUnknown || res.ByDefault || len(res.Matches) != 1 || res.Matches[0].Via != wire.LookupViaUnknown {
+			t.Errorf("%s: %+v", name, res)
+			continue
+		}
+		if !slices.Contains(res.Notes, "exit_unrecognized:Guest network") {
+			t.Errorf("%s: notes = %v", name, res.Notes)
+		}
+	}
+}
+
 func TestRunner_RouteLookup_RejectsNonDomain(t *testing.T) {
 	r := &Runner{AwgClient: awgmgr.New("http://unused.invalid")}
 	for _, bad := range []string{"1.2.3.4/24", "", "geosite:ANTHROPIC"} {

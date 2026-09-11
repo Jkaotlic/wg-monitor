@@ -26,7 +26,8 @@ const (
 //
 // Notes carry codes, not prose — the screen turns them into words:
 // hr_not_running, policies_unknown, singbox_router, ip_rules_unchecked,
-// regexp_unchecked, geo_expand_failed:<TAG>.
+// regexp_unchecked, geo_expand_failed:<TAG>, exit_unrecognized:<NAME>
+// (подключение, по типу которого не сказать, VPN-туннель это или провайдер).
 type RouteLookupResult struct {
 	Domain     string `json:"domain"`
 	Verdict    string `json:"verdict"` // tunnel | direct | unknown | mixed

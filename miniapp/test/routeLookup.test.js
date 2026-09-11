@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeSiteInput, lookupAnswer, lookupRefusal } from '../src/routeLookup.js'
+import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal } from '../src/routeLookup.js'
+
+const NOT_A_SITE = 'Это не похоже на адрес сайта — нужно имя вроде claude.ai'
+
+// Та же проверка, что у сервера (sanitizeWizardCommandArgs, route_lookup):
+// то, что сервер отобьёт, до него не отправляется, а человек сразу слышит,
+// что не так с тем, что он ввёл.
+describe('looksLikeSite', () => {
+  it('имя сайта с точкой -- да', () => {
+    expect(looksLikeSite('claude.ai')).toBe(true)
+    expect(looksLikeSite('www.example.com')).toBe(true)
+  })
+
+  it('пустое, без точки, с пробелом, двоеточием, путём или длиннее 253 -- нет', () => {
+    for (const bad of ['', 'localhost', 'a b.com', 'x.com:abc', 'x.com/path', 'a'.repeat(250) + '.com']) {
+      expect(looksLikeSite(bad), bad).toBe(false)
+    }
+  })
+})
 
 describe('normalizeSiteInput', () => {
   it('оставляет от ссылки одно имя сайта', () => {
@@ -44,6 +62,8 @@ const NOTE_WORDS = {
   'geo_expand_failed:ANTHROPIC': 'Роутер не раскрыл список «ANTHROPIC»',
   policies_unknown: 'Роутер не отдал общие наборы правил',
   singbox_router: 'Трафиком управляет sing-box — он решает сам',
+  'exit_unrecognized:Guest network':
+    'Сайт уйдёт через подключение «Guest network» — роутер не сказал, VPN-туннель это или провайдер',
 }
 
 describe('lookupAnswer', () => {
@@ -153,8 +173,20 @@ describe('lookupAnswer', () => {
 })
 
 describe('lookupRefusal', () => {
-  it('отказ агента по имени -- «не похоже на имя сайта», по-русски', () => {
-    expect(lookupRefusal('route_lookup: invalid domain')).toBe('Это не похоже на имя сайта')
+  // Сервер отбивает имя кодом 400 invalid_domain, а текст ошибки у api.js --
+  // «<путь> failed: 400», без кода. Код приходит отдельно (useCommand
+  // errorCode), и именно по нему человек обязан услышать, что не так с
+  // введённым, а не «роутер не ответил».
+  it('отказ сервера 400 invalid_domain -- про адрес сайта, а не про роутер', () => {
+    expect(lookupRefusal('/routers/7/commands failed: 400', 'invalid_domain')).toBe(NOT_A_SITE)
+  })
+
+  it('отказ агента по имени -- то же самое', () => {
+    expect(lookupRefusal('route_lookup: invalid domain')).toBe(NOT_A_SITE)
+  })
+
+  it('прочие отказы -- «роутер не ответил»', () => {
     expect(lookupRefusal('awgmgr GET /api/dns-routes/list: HTTP 500')).toBe('Роутер не ответил на вопрос — попробуйте ещё раз')
+    expect(lookupRefusal('/routers/7/commands failed: 502', 'unknown')).toBe('Роутер не ответил на вопрос — попробуйте ещё раз')
   })
 })

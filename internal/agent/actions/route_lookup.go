@@ -19,6 +19,7 @@ const (
 	lookupNoteIPRulesUnchecked = "ip_rules_unchecked"
 	lookupNoteRegexpUnchecked  = "regexp_unchecked"
 	lookupNoteGeoExpandFailed  = "geo_expand_failed:" // + тег
+	lookupNoteExitUnrecognized = "exit_unrecognized:" // + имя подключения
 )
 
 // RouteLookup answers where one site goes according to the router's own rules
@@ -65,6 +66,7 @@ func lookupRoute(domain string, in routeInputs, expand func(tag string) ([]strin
 	// недействующими по такому поводу значило бы выдать догадку за факт.
 	hrStopped := in.hr != nil && !in.hr.Running
 	geo := &geoCache{expand: expand, cache: map[string]geoListEntry{}}
+	exits := lookupExits{env: env, catalogue: newPolicyIfaceResolver(snap.Tunnels, in.polIfaces), polIfaces: in.polIfaces}
 	var notes lookupNotes
 
 	for _, r := range in.dns {
@@ -81,8 +83,10 @@ func lookupRoute(domain string, in routeInputs, expand func(tag string) ([]strin
 			notes.add(unchecked...)
 			continue
 		}
-		_, tunnelID, known, _ := ruleEgress(r, env)
-		via, id, name := env.egressVia(tunnelID, known)
+		via, id, name, exitNote := exits.ruleVia(r)
+		if exitNote != "" {
+			notes.add(exitNote)
+		}
 		if via == wire.LookupViaUnknown && in.policiesUnknown {
 			notes.add(lookupNotePoliciesUnknown)
 		}
@@ -102,7 +106,11 @@ func lookupRoute(domain string, in routeInputs, expand func(tag string) ([]strin
 
 	if len(res.Matches) == 0 {
 		res.ByDefault = true
-		res.Verdict, res.TunnelID, res.TunnelName = env.defaultVia(snap.DefaultEgress)
+		var exitNote string
+		res.Verdict, res.TunnelID, res.TunnelName, exitNote = exits.defaultVia(snap.DefaultEgress)
+		if exitNote != "" {
+			notes.add(exitNote)
+		}
 	} else {
 		first := res.Matches[0]
 		res.Verdict, res.TunnelID, res.TunnelName = first.Via, first.TunnelID, first.TunnelName
@@ -119,41 +127,100 @@ func lookupRoute(domain string, in routeInputs, expand func(tag string) ([]strin
 	return res
 }
 
-// egressVia turns a rule's egress (ruleEgress) into the answer's vocabulary.
-// A known exit that is not a tunnel of ours is the provider; a tunnel id the
-// snapshot does not show is unknown -- naming a line the screen cannot show
-// would pass a guess off as a fact.
-func (e *routeEgressEnv) egressVia(tunnelID string, known bool) (via, id, name string) {
-	if !known {
-		return wire.LookupViaUnknown, "", ""
+// lookupExits turns where traffic leaves into the answer's vocabulary. The
+// words come from the TYPE of the exit in the router's own catalogue: managed
+// and system -- VPN-туннель, wan -- провайдер, anything else or not found --
+// неизвестно, with the exit named in a note. An empty tunnel id from ruleEgress
+// says only "not a tunnel of ours", and that is not the same as "provider": a
+// system WireGuard interface, a bridge or a guest network are not ours either.
+type lookupExits struct {
+	env *routeEgressEnv
+	// catalogue maps any exit name (NDMS name, iface, id, label) to a snapshot
+	// entry of ANY type. route_status's resolver knows our managed tunnels
+	// only -- for its counters "not ours" is all it needs to know.
+	catalogue *policyIfaceResolver
+	polIfaces []awgmgr.PolicyInterface
+}
+
+// ruleVia answers for one enabled rule naming the site. note is an
+// exit_unrecognized code when the exit could not be told apart.
+func (x lookupExits) ruleVia(r awgmgr.DNSRoute) (via, id, name, note string) {
+	bind, tunnelID, known, credit := ruleEgress(r, x.env)
+	switch {
+	case !known:
+		return wire.LookupViaUnknown, "", "", ""
+	case tunnelID != "":
+		return x.endpointVia(tunnelID)
+	case credit.policy >= 0:
+		// Живое звено общего набора -- не наш туннель. Что это за
+		// подключение, говорит его тип в каталоге роутера, а не догадка.
+		for _, link := range x.env.policies[credit.policy].Interfaces {
+			if link.Role == "active" {
+				return x.linkVia(link.Bind, link.Name)
+			}
+		}
+		return wire.LookupViaUnknown, "", "", ""
+	case bind != "":
+		// Правило приколочено к интерфейсу, который не наш туннель.
+		return x.linkVia(bind, x.label(bind))
 	}
-	if tunnelID == "" {
-		return wire.LookupViaDirect, "", ""
-	}
-	t, ok := routeTunnelByID(e.tunnels, tunnelID)
-	if !ok {
-		return wire.LookupViaUnknown, "", ""
-	}
-	switch strings.ToLower(strings.TrimSpace(t.Type)) {
-	case "managed", "system":
-		return wire.LookupViaTunnel, t.ID, t.Name
-	case "wan":
-		return wire.LookupViaDirect, "", ""
-	}
-	return wire.LookupViaUnknown, "", ""
+	// Правило HydraRoute Neo с набором «напрямую» (isDirectProviderHRNeoPolicy):
+	// провайдера здесь назвал сам роутер.
+	return wire.LookupViaDirect, "", "", ""
 }
 
 // defaultVia answers for a site no rule names: it goes wherever the router's
 // main exit (RouteSnapshot.DefaultEgress) goes. "" is the router's own silence
 // and stays unknown.
-func (e *routeEgressEnv) defaultVia(defaultEgress string) (via, id, name string) {
+func (x lookupExits) defaultVia(defaultEgress string) (via, id, name, note string) {
 	switch defaultEgress {
 	case "":
-		return wire.LookupViaUnknown, "", ""
+		return wire.LookupViaUnknown, "", "", ""
 	case wire.DefaultEgressDirect:
-		return wire.LookupViaDirect, "", ""
+		return wire.LookupViaDirect, "", "", ""
 	}
-	return e.egressVia(defaultEgress, true)
+	return x.endpointVia(defaultEgress)
+}
+
+// linkVia resolves an interface known only by name (a policy chain link, an
+// interface a rule is pinned to) through the catalogue of all exits. names go
+// strongest first; the last non-empty one is what the note shows a person.
+func (x lookupExits) linkVia(names ...string) (via, id, name, note string) {
+	if id, ok := x.catalogue.tunnelForNames(names...); ok {
+		return x.endpointVia(id)
+	}
+	shown := ""
+	for _, n := range names {
+		if n = strings.TrimSpace(n); n != "" {
+			shown = n
+		}
+	}
+	return wire.LookupViaUnknown, "", "", lookupNoteExitUnrecognized + shown
+}
+
+// endpointVia classifies a snapshot exit by its type.
+func (x lookupExits) endpointVia(tunnelID string) (via, id, name, note string) {
+	t, ok := routeTunnelByID(x.env.tunnels, tunnelID)
+	if !ok {
+		return wire.LookupViaUnknown, "", "", lookupNoteExitUnrecognized + tunnelID
+	}
+	switch strings.ToLower(strings.TrimSpace(t.Type)) {
+	case "managed", "system":
+		return wire.LookupViaTunnel, t.ID, t.Name, ""
+	case "wan":
+		return wire.LookupViaDirect, "", "", ""
+	}
+	return wire.LookupViaUnknown, "", "", lookupNoteExitUnrecognized + firstNonEmptyRoute(t.Name, t.ID)
+}
+
+// label is the human name the router gives a policy interface, "" if none.
+func (x lookupExits) label(name string) string {
+	for _, pi := range x.polIfaces {
+		if strings.EqualFold(strings.TrimSpace(pi.Name), strings.TrimSpace(name)) {
+			return pi.Label
+		}
+	}
+	return ""
 }
 
 // ruleNamesHost returns the first target of r that names host ("" when none
