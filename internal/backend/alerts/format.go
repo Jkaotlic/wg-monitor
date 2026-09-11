@@ -79,7 +79,9 @@ func FormatHard(a HardArgs) string {
 	meta := []string{
 		KV("проверка", checkHumanName(a.CheckName)),
 	}
-	if a.ConsecFails > 0 {
+	// «Без ответа» -- неправда для запасных, не снявшихся рядом со своим: свой
+	// DNS-сервер при этом может и отвечать.
+	if a.ConsecFails > 0 && !(checkCategory(a.CheckName) == "resolver_guard" && resolverGuardForeignLeftover(a.Check.Details)) {
 		meta = append(meta, fmt.Sprintf("проверок подряд без ответа: %d", a.ConsecFails))
 	}
 	if !a.HardSince.IsZero() {
@@ -106,13 +108,20 @@ func FormatRecovery(a RecoveryArgs) string {
 	d := a.RecoveredAt.Sub(a.HardSince).Round(time.Minute)
 	headline := recoveryHeadline(a.CheckName, a.Check.Details)
 	downtime := fmt.Sprintf("Простой: %s", durFmt(d))
+	var lines []string
 	if checkCategory(a.CheckName) == "resolver_guard" {
 		// Простоя могло и не быть: на запасных сайты открывались, а владельцу
 		// так и сказали. И свой DNS-сервер мог отвечать всё это время -- когда
 		// не снялись запасные (foreign_leftover); причину здесь не знаем.
 		downtime = fmt.Sprintf("Неполадка длилась: %s", durFmt(d))
+		if note := resolverGuardRecoveryNote(a.Check.Details); len(note) > 0 {
+			// Сторож перестал следить или ещё не прочитал роутер: кончилась ли
+			// неполадка, бот не знает -- знает только, сколько о ней сообщали.
+			lines = note
+			downtime = fmt.Sprintf("Сторож DNS сообщал о неполадке: %s", durFmt(d))
+		}
 	}
-	lines := []string{downtime}
+	lines = append(lines, downtime)
 	if strings.HasPrefix(a.CheckName, "tunnel_") {
 		lines = append(lines, linesFromWriter(func(b *strings.Builder) {
 			writeTunnelRecoveryFooter(b, a.Check.Details)
@@ -320,7 +329,7 @@ func categorySeverity(checkName string, d map[string]any, ns []NeighborSummary) 
 	case "resolver_guard":
 		// Запасные DNS-серверы работают -- сайты открываются, это «обратить
 		// внимание», а не пожар. Запасных нет -- тревога. Запасные не снялись
-		// рядом с отвечающим своим -- сайты тоже открываются.
+		// рядом со своим -- сайты тоже открываются.
 		if resolverGuardOnFallback(d) || resolverGuardForeignLeftover(d) {
 			return "🟡"
 		}
@@ -409,11 +418,19 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 	case "external_reach":
 		return "Внешние сервисы снова доступны"
 	case "resolver_guard":
-		// При восстановлении у диспетчера есть только свежий ok-отчёт
-		// ({mode: primary}), причина поломки ему неизвестна. Роутер мог уходить
-		// на запасные (fallback), оставаться на молчащем своём
-		// (no_live_fallback) или держать запасные рядом с отвечающим своим
-		// (foreign_leftover) -- верно во всех трёх случаях только это.
+		// При восстановлении у диспетчера есть только свежий ok-отчёт, причина
+		// поломки ему неизвестна. Роутер мог уходить на запасные (fallback),
+		// оставаться на молчащем своём (no_live_fallback) или держать запасные
+		// рядом со своим (foreign_leftover) -- верно во всех трёх случаях
+		// только «снова через свой». Но ok бывает и без своего сервера: сторож
+		// перестал следить (idle) или ещё не прочитал роутер (ready:false) --
+		// тогда и заголовок другой.
+		switch {
+		case resolverGuardIdle(d):
+			return resolverGuardIdleHeadline
+		case resolverGuardUnread(d):
+			return resolverGuardUnreadHeadline
+		}
 		return resolverGuardRecoveredHeadline
 	}
 	if checkName == "agent_heartbeat" {
@@ -676,16 +693,62 @@ const (
 	resolverGuardNoFallbackHeadline      = "Свой DNS-сервер не отвечает, а запасные недоступны — сайты по имени могут не открываться"
 	resolverGuardForeignLeftoverHeadline = "Запасные DNS-серверы не снялись — сайты открываются, но часть запросов идёт мимо фильтров"
 	resolverGuardRecoveredHeadline       = "Роутер снова работает через свой DNS-сервер"
+	resolverGuardIdleHeadline            = "Сторож DNS больше не следит: своего DNS-сервера нет в настройках роутера"
+	resolverGuardUnreadHeadline          = "Сторож DNS пока не прочитал настройки роутера"
+	resolverGuardIdleWatchAgain          = "Сторож DNS ничего не возвращает в настройки сам и снова начнёт следить, когда свой DNS-сервер там появится."
 )
 
 func resolverGuardNoFallback(d map[string]any) bool {
 	return strOrEmpty(d, "reason") == "no_live_fallback"
 }
 
-// resolverGuardForeignLeftover -- свой DNS-сервер отвечает и роутер на нём,
-// но запасные остались рядом: сайты открываются, фильтры своего обходятся.
+// resolverGuardForeignLeftover -- роутер на своём DNS-сервере, но запасные
+// остались рядом: сайты открываются, фильтры своего обходятся. Отвечает ли сам
+// свой сервер, отсюда не видно: в окне удержания запасные нарочно не снимают,
+// пока он молчит.
 func resolverGuardForeignLeftover(d map[string]any) bool {
 	return strOrEmpty(d, "reason") == "foreign_leftover"
+}
+
+// resolverGuardIdle -- ok-отчёт сторожа, который перестал следить: своего
+// DNS-сервера нет в настройках роутера (details.idle, спека dns-watchdog).
+func resolverGuardIdle(d map[string]any) bool {
+	idle, _ := boolOrFalse(d, "idle")
+	return idle
+}
+
+// resolverGuardUnread -- ok-отчёт сторожа, который после запуска агента ещё
+// не прочитал настройки роутера (details.ready=false): что там, неизвестно.
+func resolverGuardUnread(d map[string]any) bool {
+	ready, ok := d["ready"].(bool)
+	return ok && !ready
+}
+
+// resolverGuardRecoveryNote -- что сказать в итоге восстановления, когда ok
+// не значит «снова через свой». Пусто -- обычное восстановление.
+func resolverGuardRecoveryNote(d map[string]any) []string {
+	switch {
+	case resolverGuardIdle(d):
+		var out []string
+		switch strOrEmpty(d, "idle_reason") {
+		case "own_line_removed_by_hand":
+			out = append(out, "Свой DNS-сервер убрали из настроек роутера вручную. "+resolverGuardIdleWatchAgain)
+		case "record_dropped_manual_cleanup":
+			// Свою строку тут мог убрать и сам сторож при переходе на запасные --
+			// «свой убрали вручную» было бы неправдой. Вручную точно правили
+			// настройки DNS: ни своего, ни поставленных сторожем там нет.
+			out = append(out, "Настройки DNS на роутере поменяли вручную. "+resolverGuardIdleWatchAgain)
+		default:
+			out = append(out, resolverGuardIdleWatchAgain)
+		}
+		if hasNonEmptyList(d, "leftover") {
+			out = append(out, "В настройках остались запасные DNS-серверы, которые сторож ставил на время: пока своего DNS-сервера там нет, он их не убирает.")
+		}
+		return out
+	case resolverGuardUnread(d):
+		return []string{"После перезапуска агента сторож DNS ещё не прочитал настройки роутера и о неполадке не сообщает. Работает ли роутер через свой DNS-сервер, бот сейчас не знает."}
+	}
+	return nil
 }
 
 // resolverGuardOnFallback -- роутер уже работает через запасной. Без reason,
@@ -718,7 +781,9 @@ func writeResolverGuardWhatBroke(b *strings.Builder, d map[string]any) {
 	case resolverGuardNoFallback(d):
 		b.WriteString("  Роутер не дождался ответа от своего DNS-сервера, а запасные тоже не ответили — переключаться было некуда, настройки роутера не тронуты.\n")
 	case resolverGuardForeignLeftover(d):
-		b.WriteString("  Свой DNS-сервер отвечает, и роутер работает через него, но запасные DNS-серверы остались в настройках рядом с ним — часть адресов сайтов роутер узнаёт у них.\n")
+		// Не «свой отвечает»: в окне удержания запасные остаются, пока свой как
+		// раз молчит. Точно известно одно -- они стоят рядом со своим.
+		b.WriteString("  Запасные DNS-серверы остались в настройках роутера рядом со своим DNS-сервером — часть адресов сайтов роутер узнаёт у них.\n")
 		if since, err := time.Parse(time.RFC3339, strOrEmpty(d, "since")); err == nil {
 			fmt.Fprintf(b, "  Так с %s.\n", since.In(mscLoc()).Format("02.01 15:04 МСК"))
 		}
@@ -871,7 +936,9 @@ func diagnose(checkName string, d map[string]any, ns []NeighborSummary) string {
 		case resolverGuardNoFallback(d):
 			return "Не отвечает ни свой DNS-сервер, ни запасные. Так бывает, когда у роутера пропал интернет целиком или провайдер мешает защищённым запросам имён."
 		case resolverGuardForeignLeftover(d):
-			return "Обычно так бывает, когда роутер не выполнил команду убрать запасные DNS-серверы после возврата на свой. Роутер повторяет её каждую минуту."
+			// Не «каждую минуту»: интервал задаётся в конфиге, а пока свой
+			// DNS-сервер не отвечает на проверку, уборка нарочно ждёт.
+			return "Обычно так бывает, когда роутер не выполнил команду убрать запасные DNS-серверы после возврата на свой. Роутер повторяет попытку при каждой проверке, когда свой DNS-сервер отвечает."
 		case resolverGuardOnFallback(d):
 			return "Обычно так бывает, когда недоступен сервер, на котором работает ваш DNS-сервер, или дорога до него. Роутер продолжает его проверять и вернётся сам, как только тот ответит."
 		}
@@ -1031,9 +1098,10 @@ func suggestAction(checkName string, d map[string]any, ns []NeighborSummary) str
 		case resolverGuardNoFallback(d):
 			return "Откройте приложение, экран «Проверки»: там видно, есть ли у роутера интернет. Если интернета нет — дело у провайдера. Если есть — напишите тому, кто настраивал DNS-сервер."
 		case resolverGuardForeignLeftover(d):
-			// Совет выполним: запасные сторож в сохранённые настройки не
-			// пишет никогда, перезагрузка их гарантированно снимает.
-			return "Ничего делать не нужно: роутер сам убирает запасные и пришлёт сообщение, когда закончит. Если за пару часов этого не случится — перезагрузите роутер: запасные DNS-серверы не записываются в его сохранённые настройки, и после перезагрузки их не будет."
+			// Сторож меняет только текущие настройки и никогда их не сохраняет --
+			// это всё, что агент обещает. Если человек сохранил настройки в
+			// веб-панели, запасные переживут и перезагрузку.
+			return "Ничего делать не нужно: роутер сам убирает запасные и пришлёт сообщение, когда закончит. Если за пару часов этого не случится — перезагрузите роутер: сторож DNS сам никогда не сохраняет настройки роутера, и после перезагрузки поставленных им запасных не будет, если только настройки не сохраняли вручную в веб-панели роутера."
 		case resolverGuardOnFallback(d):
 			return "Ничего делать не нужно: когда свой DNS-сервер снова ответит, роутер сам вернётся на него и пришлёт сообщение. Если этого не случится за пару часов — напишите тому, кто настраивал DNS-сервер."
 		}
@@ -1313,6 +1381,18 @@ func strSlice(d map[string]any, key string) []string {
 		return out
 	}
 	return nil
+}
+
+// hasNonEmptyList: details[key] is a non-empty list -- []any after JSON, or
+// []string when a Go caller builds the details directly.
+func hasNonEmptyList(d map[string]any, key string) bool {
+	switch x := d[key].(type) {
+	case []any:
+		return len(x) > 0
+	case []string:
+		return len(x) > 0
+	}
+	return false
 }
 
 func mapsSlice(d map[string]any, key string) []map[string]any {

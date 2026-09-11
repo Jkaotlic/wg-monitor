@@ -930,6 +930,112 @@ func TestResolverGuardAlertSaysWhatHappened(t *testing.T) {
 	}
 }
 
+// Проверка сторожа становится ok и тогда, когда сторож перестал следить:
+// своего DNS-сервера нет в настройках роутера (idle). «Роутер снова работает
+// через свой DNS-сервер» тут неправда -- своего сервера в настройках нет. Свежий
+// ok-отчёт доходит до FormatRecovery, и текст обязан читать его details.
+func TestResolverGuardRecoveryWhenWatchdogStoppedWatching(t *testing.T) {
+	since := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	rec := func(d map[string]any) string {
+		return FormatRecovery(RecoveryArgs{
+			Nickname: "router-a", CheckName: "resolver_guard", HardSince: since, RecoveredAt: since.Add(20 * time.Minute),
+			Check: wire.Check{Name: "resolver_guard", Status: "ok", Details: d},
+		})
+	}
+	const back = "Роутер снова работает через свой DNS-сервер"
+
+	byHand := rec(map[string]any{
+		"mode": "primary", "idle": true, "idle_reason": "own_line_removed_by_hand",
+		"leftover": []any{"https upstream https://cloudflare-dns.com/dns-query"},
+	})
+	// Кончилась ли неполадка, бот не знает -- «Неполадка длилась» было бы
+	// обещанием. Точно известно только, сколько сторож о ней сообщал.
+	for _, want := range []string{"Сторож DNS больше не следит", "своего DNS-сервера нет в настройках роутера", "вручную", "остались запасные DNS-серверы", "Сторож DNS сообщал о неполадке: 20 мин"} {
+		if !strings.Contains(byHand, want) {
+			t.Errorf("own_line_removed_by_hand: нет %q:\n%s", want, byHand)
+		}
+	}
+	for _, bad := range []string{back, "cloudflare", "upstream", "Неполадка длилась"} {
+		if strings.Contains(byHand, bad) {
+			t.Errorf("own_line_removed_by_hand: лишнее (%q):\n%s", bad, byHand)
+		}
+	}
+
+	dropped := rec(map[string]any{"mode": "primary", "idle": true, "idle_reason": "record_dropped_manual_cleanup"})
+	for _, want := range []string{"Сторож DNS больше не следит", "своего DNS-сервера нет в настройках роутера", "вручную"} {
+		if !strings.Contains(dropped, want) {
+			t.Errorf("record_dropped_manual_cleanup: нет %q:\n%s", want, dropped)
+		}
+	}
+	// Запись сброшена -- запасных сторож за собой не оставил, и сказать про
+	// них нечего. А свою строку тут мог убрать и сам сторож при переходе на
+	// запасные, так что «свой сервер убрали вручную» было бы неправдой.
+	for _, bad := range []string{back, "остались запасные", "свой DNS-сервер убрали"} {
+		if strings.Contains(dropped, bad) {
+			t.Errorf("record_dropped_manual_cleanup: лишнее (%q):\n%s", bad, dropped)
+		}
+	}
+
+	// Без причины: своего сервера в настройках нет с самого запуска сторожа --
+	// правили ли их вручную, бот не знает.
+	plain := rec(map[string]any{"mode": "primary", "idle": true})
+	if !strings.Contains(plain, "Сторож DNS больше не следит") || strings.Contains(plain, "вручную") || strings.Contains(plain, back) {
+		t.Errorf("idle без причины: нужен честный текст без «вручную»:\n%s", plain)
+	}
+
+	// Сторож ещё не прочитал настройки роутера после перезапуска агента: что
+	// там сейчас, бот не знает -- и «снова работает» не обещает.
+	unread := rec(map[string]any{"mode": "primary", "ready": false})
+	if strings.Contains(unread, back) || !strings.Contains(unread, "не знает") {
+		t.Errorf("ready:false: не должен обещать возврат на свой сервер:\n%s", unread)
+	}
+
+	// Обычное восстановление говорит прежние слова.
+	if normal := rec(map[string]any{"mode": "primary"}); !strings.Contains(normal, back) {
+		t.Errorf("обычное восстановление: нет %q:\n%s", back, normal)
+	}
+}
+
+// foreign_leftover сторож может прислать и в окне удержания, когда свой
+// DNS-сервер как раз не отвечает: запасные тогда нарочно не снимаются. Текст
+// говорит только то, что известно точно, -- без «свой отвечает», без обещания
+// повтора «каждую минуту» (сторож ждёт, пока свой ответит, и интервал задаётся в
+// конфиге), без «не записываются в сохранённые настройки» (сохранить может
+// человек в веб-панели) и без счётчика «проверок подряд без ответа».
+func TestResolverGuardForeignLeftoverClaimsOnlyWhatIsCertain(t *testing.T) {
+	got := FormatHard(HardArgs{
+		Nickname: "router-a", CheckName: "resolver_guard", HardSince: time.Now(), ConsecFails: 2,
+		Check: wire.Check{Name: "resolver_guard", Status: "fail", Details: resolverGuardForeignLeftoverDetails()},
+	})
+	for _, want := range []string{
+		"Запасные DNS-серверы остались в настройках роутера рядом со своим DNS-сервером",
+		"при каждой проверке",
+		"сторож DNS сам никогда не сохраняет",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("нет %q:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{
+		"Свой DNS-сервер отвечает", "работает через него",
+		"каждую минуту",
+		"не записываются в его сохранённые настройки", "после перезагрузки их не будет",
+		"проверок подряд без ответа",
+	} {
+		if strings.Contains(got, bad) {
+			t.Errorf("утверждает то, чего бот не знает (%q):\n%s", bad, got)
+		}
+	}
+	// Счётчик уместен там, где свой сервер действительно молчит.
+	fallback := FormatHard(HardArgs{
+		Nickname: "router-a", CheckName: "resolver_guard", HardSince: time.Now(), ConsecFails: 2,
+		Check: wire.Check{Name: "resolver_guard", Status: "fail", Details: map[string]any{"mode": "fallback", "reason": "fallback"}},
+	})
+	if !strings.Contains(fallback, "проверок подряд без ответа: 2") {
+		t.Errorf("fallback: счётчик пропал:\n%s", fallback)
+	}
+}
+
 // Число правил согласуется со словом. «3 правил по адресам» уходило в личку
 // из ветки без резерва, где правила перечислены: слово было вбито в шаблон.
 func TestAlertRulesCountAgrees(t *testing.T) {
