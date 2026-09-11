@@ -585,6 +585,88 @@ func TestReportNotResumedSkipsResumer(t *testing.T) {
 	}
 }
 
+// resolver_guard -- не шумная проверка. Дребезг отсеял сам агент (провалы
+// подряд и cooldown перед переходом), и его fail -- уже случившийся переход
+// роутера на запасные DNS-серверы, а ok -- уже случившийся возврат. Ждать
+// ещё нескольких отчётов, прежде чем сказать об этом, бэкенду незачем.
+func TestResolverGuardUsesThresholdOne(t *testing.T) {
+	base := state.Thresholds{Fail: 3, Recovery: 2}
+	policy := AlertPolicy{NoisyFailThreshold: 6, NoisyRecoveryThreshold: 3}
+	if isNoisyCheck("resolver_guard") {
+		t.Fatal("resolver_guard must not be treated as a noisy dns_* check")
+	}
+	if got := thresholdsForCheck(base, policy, "resolver_guard"); got.Fail != 1 || got.Recovery != 1 {
+		t.Fatalf("resolver_guard thresholds=%+v, want Fail=1 Recovery=1", got)
+	}
+	// Остальные проверки своих порогов не теряют.
+	if got := thresholdsForCheck(base, policy, "hydraroute"); got != base {
+		t.Fatalf("hydraroute thresholds changed: %+v", got)
+	}
+	if got := thresholdsForCheck(base, policy, "dns"); got.Fail != 6 || got.Recovery != 3 {
+		t.Fatalf("dns lost its noisy thresholds: %+v", got)
+	}
+}
+
+// Через отчёты: переход ok→fail в автомате всегда мягкий, так что порог 1
+// означает HARD на втором отчёте подряд, а не на третьем, как у остальных.
+func TestReportResolverGuardGoesHardOnSecondFail(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	defer d.Close()
+	tok := "3232323232323232323232323232323232323232323232323232323232323232"
+	_, _ = d.Users().Insert("guardbox", tok, "198.51.100.9", "awg0")
+
+	disp := &fakeDisp{db: d}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  disp,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+		AlertPolicy: AlertPolicy{NoisyFailThreshold: 6, NoisyRecoveryThreshold: 3},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	baseTS := time.Now().UTC()
+	seq := 0
+	post := func(t *testing.T) {
+		t.Helper()
+		seq++
+		body, _ := json.Marshal(wire.Report{
+			Timestamp:    baseTS.Add(time.Duration(seq) * time.Second),
+			AgentVersion: "test",
+			Checks: []wire.Check{{Name: "resolver_guard", Status: "fail", Details: map[string]any{
+				"mode": "fallback", "reason": "fallback", "candidate": "198.51.100.53",
+			}}},
+		})
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("status: %d", resp.StatusCode)
+		}
+	}
+
+	post(t)
+	disp.mu.Lock()
+	for _, got := range disp.calls {
+		if got == state.Hard {
+			t.Fatalf("first resolver_guard fail is soft in the FSM, got hard: calls=%v", disp.calls)
+		}
+	}
+	disp.mu.Unlock()
+
+	post(t)
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	if len(disp.calls) == 0 || disp.calls[len(disp.calls)-1] != state.Hard {
+		t.Fatalf("second resolver_guard fail should become hard; calls=%v", disp.calls)
+	}
+}
+
 func TestReportNoisyDNSUsesHigherFailThreshold(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
