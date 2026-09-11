@@ -304,7 +304,11 @@ func TestUpdateAgentConfigRejectsBadWatchdogValues(t *testing.T) {
 		"bad domain":             {"dns_watchdog_canary_domain": "exa mple.com"},
 		"domain with path":       {"dns_watchdog_canary_domain": "example.com/x"},
 		"url as domain":          {"dns_watchdog_canary_domain": "https://example.com"},
-		"enabled wrong type":     {"dns_watchdog_enabled": "yes"},
+		// Однословное имя (localhost, intranet) не находится никогда: сторож
+		// считал бы свой DNS-сервер мёртвым вечно.
+		"single-label domain": {"dns_watchdog_canary_domain": "localhost"},
+		"single-label word":   {"dns_watchdog_canary_domain": "intranet"},
+		"enabled wrong type":  {"dns_watchdog_enabled": "yes"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -322,9 +326,10 @@ func TestUpdateAgentConfigRejectsBadWatchdogValues(t *testing.T) {
 	}
 }
 
-// Включённый сторож без эндпоинта агент не загрузит -- и после перезапуска
-// роутер остался бы без агента, а значит и без удалённой правки. Такой
-// конфиг не пишется вовсе.
+// Включённый сторож без эндпоинта не заработает: LoadConfig агента выключит
+// такой блок и только запишет ConfigError в журнал, так что после перезапуска
+// сторож молча остался бы выключенным. Такой конфиг не пишется вовсе -- отказ
+// виден на дашборде сразу.
 func TestUpdateAgentConfigRefusesWatchdogWithoutEndpoint(t *testing.T) {
 	path := writeSampleConfig(t)
 	restarted := stubRestart(t)

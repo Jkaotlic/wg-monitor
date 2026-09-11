@@ -1295,9 +1295,10 @@ func sanitizeAgentConfigArgs(w http.ResponseWriter, args map[string]any) (map[st
 	if v, ok := args["dns_watchdog_canary_domain"]; ok {
 		s, ok := v.(string)
 		s = strings.TrimSpace(s)
-		// Empty = the agent's default canary.
-		if !ok || (s != "" && !agentConfigDomainOK(s)) {
-			return reject("dns_watchdog_canary_domain (want a domain name)")
+		// Empty = the agent's default canary. A single-label name (localhost)
+		// never resolves: the watchdog would take the own resolver for dead.
+		if !ok || (s != "" && (!agentConfigDomainOK(s) || !strings.Contains(s, "."))) {
+			return reject("dns_watchdog_canary_domain (want a domain name with a dot, e.g. example.com)")
 		}
 		out["dns_watchdog_canary_domain"] = s
 	}

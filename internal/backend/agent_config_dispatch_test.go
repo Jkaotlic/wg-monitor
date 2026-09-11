@@ -140,7 +140,10 @@ func TestDashboardUpdateAgentConfigSanitizesWatchdogKeys(t *testing.T) {
 		"ipv6 bootstrap":         `{"dns_watchdog_bootstrap_ip":"2001:db8::1"}`,
 		"bad domain":             `{"dns_watchdog_canary_domain":"exa mple.com"}`,
 		"url as domain":          `{"dns_watchdog_canary_domain":"https://example.com"}`,
-		"enabled wrong type":     `{"dns_watchdog_enabled":"yes"}`,
+		// Однословное имя не находится никогда: сторож счёл бы свой
+		// DNS-сервер мёртвым навсегда.
+		"single-label domain": `{"dns_watchdog_canary_domain":"localhost"}`,
+		"enabled wrong type":  `{"dns_watchdog_enabled":"yes"}`,
 	}
 	for name, args := range bad {
 		t.Run(name, func(t *testing.T) {

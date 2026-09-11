@@ -130,7 +130,31 @@ func dnsWatchdogConfigProblem(w DNSWatchdogConfig) string {
 	if w.BootstrapIP != "" && net.ParseIP(w.BootstrapIP) == nil {
 		return fmt.Sprintf("dns_watchdog.bootstrap_ip %q is not an IP address (endpoint host %s)", w.BootstrapIP, u.Hostname())
 	}
+	// A single-label canary (localhost, intranet) never resolves on a public
+	// resolver: the watchdog would take the own resolver for dead forever.
+	if w.CanaryDomain != "" && !canaryDomainOK(w.CanaryDomain) {
+		return fmt.Sprintf("dns_watchdog.canary_domain %q must be a plain domain name with a dot, e.g. example.com (endpoint host %s)", w.CanaryDomain, u.Hostname())
+	}
 	return ""
+}
+
+// canaryDomainOK: a plain ASCII domain name of at least two labels — the same
+// shape update_agent_config accepts for dns_watchdog_canary_domain.
+func canaryDomainOK(s string) bool {
+	if len(s) > 253 || !strings.Contains(s, ".") {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // LoggingConfig controls the agent's log destination. On Entware the S99 init

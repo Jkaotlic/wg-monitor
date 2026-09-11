@@ -179,8 +179,10 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 	if err := yaml.Unmarshal(out, &check); err != nil {
 		return "", fmt.Errorf("update_agent_config: result would not parse: %w", err)
 	}
-	// An enabled watchdog without a usable endpoint is a config the agent
-	// refuses at start — and a restart into it would cut off remote editing.
+	// An enabled watchdog without a usable endpoint would not run: the agent's
+	// LoadConfig switches such a block off and only logs its ConfigError, so a
+	// restart into it would quietly leave the watchdog disabled. Refuse it
+	// here, where the command result reaches the dashboard.
 	if check.DNSWatchdog.Enabled && validateDNSWatchdogEndpoint(check.DNSWatchdog.Endpoint) != nil {
 		return "", fmt.Errorf("update_agent_config: dns_watchdog_enabled needs dns_watchdog_endpoint (https://…) set first")
 	}
@@ -285,9 +287,11 @@ func validateAgentConfigString(arg, s string) error {
 			return fmt.Errorf("update_agent_config: dns_watchdog_endpoint %v", err)
 		}
 	case "dns_watchdog_canary_domain":
-		// Empty = the agent's default canary (example.com).
-		if s != "" && !isComparableDomain(strings.ToLower(s)) {
-			return fmt.Errorf("update_agent_config: dns_watchdog_canary_domain must be a plain domain name")
+		// Empty = the agent's default canary (example.com). A single-label
+		// name (localhost, intranet) never resolves on a public resolver: the
+		// watchdog would take the own resolver for dead forever.
+		if s != "" && (!isComparableDomain(strings.ToLower(s)) || !strings.Contains(s, ".")) {
+			return fmt.Errorf("update_agent_config: dns_watchdog_canary_domain must be a plain domain name with a dot (e.g. example.com)")
 		}
 	case "dns_watchdog_bootstrap_ip":
 		// Empty = ask 77.88.8.8 for the endpoint host's address.

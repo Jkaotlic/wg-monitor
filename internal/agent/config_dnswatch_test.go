@@ -135,6 +135,10 @@ func TestLoadConfig_DNSWatchdogRequiresHTTPSEndpoint(t *testing.T) {
 		"no scheme":     "endpoint: dns.example.com/secret-path",
 		"no host":       "endpoint: https:///secret-path",
 		"bad bootstrap": "endpoint: https://dns.example.com/secret-path\n  bootstrap_ip: dns.example.com",
+		// Однословное контрольное имя не находится никогда -- свой DNS-сервер
+		// считался бы мёртвым вечно, а роутер жил бы на запасных.
+		"single-label canary": "endpoint: https://dns.example.com/secret-path\n  canary_domain: localhost",
+		"canary with space":   "endpoint: https://dns.example.com/secret-path\n  canary_domain: \"exa mple.com\"",
 	}
 	for name, line := range cases {
 		t.Run(name, func(t *testing.T) {
