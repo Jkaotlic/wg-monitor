@@ -111,6 +111,10 @@
     cfgAwgmLogin: document.getElementById("cfgAwgmLogin"),
     cfgAllowReboot: document.getElementById("cfgAllowReboot"),
     cfgAllowFirmware: document.getElementById("cfgAllowFirmware"),
+    cfgWatchdogEnabled: document.getElementById("cfgWatchdogEnabled"),
+    cfgWatchdogEndpoint: document.getElementById("cfgWatchdogEndpoint"),
+    cfgWatchdogCanary: document.getElementById("cfgWatchdogCanary"),
+    cfgWatchdogBootstrapIP: document.getElementById("cfgWatchdogBootstrapIP"),
     agentConfigError: document.getElementById("agentConfigError"),
     applyAgentConfigBtn: document.getElementById("applyAgentConfigBtn"),
     repairModal: document.getElementById("repairModal"),
@@ -831,7 +835,7 @@
     return `
         <section class="drawer-section">
           <h3>On-router config</h3>
-          <p class="drawer-note">Безопасные ключи config.yaml на самом роутере (interval, awg-manager, external_reach, maintenance). Load читает текущие, Edit перепишет конфиг и перезапустит агента. backend URL тут НЕ меняется — это wizard.</p>
+          <p class="drawer-note">Безопасные ключи config.yaml на самом роутере (interval, awg-manager, external_reach, maintenance, DNS watchdog). Load читает текущие, Edit перепишет конфиг и перезапустит агента. backend URL тут НЕ меняется — это wizard.</p>
           <div class="incident-list">
             ${agentConfigView ? '<span class="badge badge-success">loaded</span>' : '<span class="badge badge-muted">not loaded</span>'}
             ${agentConfigView && agentConfigView.interval_sec ? `<span class="badge badge-info">interval ${escapeHTML(String(agentConfigView.interval_sec))}s</span>` : ""}
@@ -1670,6 +1674,15 @@
     els.cfgAwgmLogin.value = cfg.awgm_login || "";
     els.cfgAllowReboot.value = cfg.allow_router_reboot ? "true" : "false";
     els.cfgAllowFirmware.value = cfg.allow_firmware_install ? "true" : "false";
+    els.cfgWatchdogEnabled.value = cfg.dns_watchdog_enabled ? "true" : "false";
+    // The agent never returns the endpoint path (it is the secret): the masked
+    // current value is only a hint, and an empty field means "keep it".
+    els.cfgWatchdogEndpoint.value = "";
+    els.cfgWatchdogEndpoint.placeholder = cfg.dns_watchdog_endpoint
+      ? cfg.dns_watchdog_endpoint + " (empty = keep)"
+      : "https://dns.example.com/<secret-path>";
+    els.cfgWatchdogCanary.value = cfg.dns_watchdog_canary_domain || "";
+    els.cfgWatchdogBootstrapIP.value = cfg.dns_watchdog_bootstrap_ip || "";
     els.agentConfigError.textContent = "";
     setButtonState(els.applyAgentConfigBtn, "idle");
     rememberFocus();
@@ -1697,6 +1710,23 @@
       els.agentConfigError.textContent = "external_reach fail threshold должен быть 1..20";
       return;
     }
+    const current = state.agentConfig.get(nickname) || {};
+    const watchdogEnabled = els.cfgWatchdogEnabled.value === "true";
+    const watchdogEndpoint = els.cfgWatchdogEndpoint.value.trim();
+    const watchdogCanary = els.cfgWatchdogCanary.value.trim();
+    const watchdogBootstrapIP = els.cfgWatchdogBootstrapIP.value.trim();
+    if (watchdogEndpoint.includes("***")) {
+      els.agentConfigError.textContent = "Это скрытое значение с роутера — впиши настоящий DNS watchdog endpoint или оставь поле пустым";
+      return;
+    }
+    if (watchdogEndpoint && !/^https:\/\/[^/\s]+/i.test(watchdogEndpoint)) {
+      els.agentConfigError.textContent = "DNS watchdog endpoint должен начинаться с https://";
+      return;
+    }
+    if (watchdogEnabled && !watchdogEndpoint && !current.dns_watchdog_endpoint) {
+      els.agentConfigError.textContent = "Чтобы включить DNS watchdog, нужен endpoint (https://…)";
+      return;
+    }
     els.agentConfigError.textContent = "";
     setButtonState(els.applyAgentConfigBtn, "waiting");
     const args = {
@@ -1708,6 +1738,12 @@
       allow_router_reboot: els.cfgAllowReboot.value === "true",
       allow_firmware_install: els.cfgAllowFirmware.value === "true"
     };
+    // DNS watchdog keys go only when changed: routers that never use the
+    // watchdog (every owner's) keep config.yaml without the block.
+    if (watchdogEnabled !== Boolean(current.dns_watchdog_enabled)) args.dns_watchdog_enabled = watchdogEnabled;
+    if (watchdogEndpoint) args.dns_watchdog_endpoint = watchdogEndpoint;
+    if (watchdogCanary && watchdogCanary !== (current.dns_watchdog_canary_domain || "")) args.dns_watchdog_canary_domain = watchdogCanary;
+    if (watchdogBootstrapIP !== (current.dns_watchdog_bootstrap_ip || "")) args.dns_watchdog_bootstrap_ip = watchdogBootstrapIP;
     try {
       setActionState(nickname, "update_agent_config", "queued");
       const res = await api(`/v1/dashboard/agents/${encodeURIComponent(nickname)}/commands`, {
@@ -2084,7 +2120,11 @@
         external_reach_enabled: value.external_reach_enabled,
         external_reach_fail_threshold: value.external_reach_fail_threshold,
         allow_router_reboot: value.allow_router_reboot,
-        allow_firmware_install: value.allow_firmware_install
+        allow_firmware_install: value.allow_firmware_install,
+        dns_watchdog_enabled: value.dns_watchdog_enabled,
+        dns_watchdog_endpoint: value.dns_watchdog_endpoint,
+        dns_watchdog_canary_domain: value.dns_watchdog_canary_domain,
+        dns_watchdog_bootstrap_ip: value.dns_watchdog_bootstrap_ip
       })
     ].join("");
   }

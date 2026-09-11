@@ -394,6 +394,29 @@
           </select>
         </label>
       </div>
+      <div class="form-section-title">DNS watchdog (только роутеры оператора)</div>
+      <p class="modal-note">Если свой DNS-сервер (DoH) перестал отвечать, агент временно переводит роутер на живой запасной и сам возвращает обратно. Путь endpoint — секрет: с роутера он приходит скрытым (<code>/***</code>), пустое поле его не трогает.</p>
+      <div class="form-grid">
+        <label class="form-field">
+          <span>dns_watchdog enabled</span>
+          <select id="cfgWatchdogEnabled">
+            <option value="true">on</option>
+            <option value="false">off</option>
+          </select>
+        </label>
+        <label class="form-field">
+          <span>dns_watchdog endpoint (https://…)</span>
+          <input id="cfgWatchdogEndpoint" type="url" autocomplete="off" spellcheck="false" placeholder="https://dns.example.com/&lt;secret-path&gt;">
+        </label>
+        <label class="form-field">
+          <span>dns_watchdog canary_domain</span>
+          <input id="cfgWatchdogCanary" type="text" autocomplete="off" spellcheck="false" placeholder="example.com">
+        </label>
+        <label class="form-field">
+          <span>dns_watchdog bootstrap_ip</span>
+          <input id="cfgWatchdogBootstrapIP" type="text" autocomplete="off" inputmode="decimal" placeholder="(empty = ask 77.88.8.8)">
+        </label>
+      </div>
       <div id="agentConfigError" class="form-error"></div>
       <div class="modal-actions">
         <button class="btn btn-ghost" type="button" data-close-agent-config>Cancel</button>
