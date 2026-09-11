@@ -29,6 +29,10 @@ type Config struct {
 	RealertEvery       time.Duration // default 6h
 	MobileRealertEvery time.Duration // default 6h
 	TickEvery          time.Duration // default 5min
+	// MiniAppBaseURL, when non-empty, adds an "Open in app" web_app button to
+	// STILL-DOWN reminders -- the same button and the same base URL as
+	// alerts.Config.MiniAppBaseURL. Empty omits the button entirely.
+	MiniAppBaseURL string
 }
 
 const (
@@ -270,22 +274,11 @@ func (p *Poller) tick(ctx context.Context) {
 			Neighbors:    neighbors,
 			RealertEvery: cadence,
 		})
-		// Mirror the original HARD alert's per-category action buttons so the
-		// STILL-DOWN reminder is just as actionable. Without this the reminder —
-		// which the operator is MORE likely to actually see than the original —
-		// shipped only the silence/ack/mute/history base row, forcing a dig into
-		// a panel to restart or diagnose. Keep in sync with alerts.Dispatcher.Handle.
-		var opts []tg.KeyboardOption
-		if strings.HasPrefix(sh.CheckName, "tunnel_") {
-			opts = append(opts, tg.WithTunnelActions())
-		}
-		if sh.CheckName == "hydraroute" {
-			opts = append(opts, tg.WithHydraRouteActions())
-		}
-		if u.IsMobile() && sh.CheckName == "agent_heartbeat" {
-			opts = append(opts, tg.WithMobileActions())
-		}
-		kb := tg.HardAlertKeyboard(sh.UserID, sh.CheckName, opts...)
+		// Тот же двухкнопочный набор, что и под исходной HARD-тревогой:
+		// открыть роутер в приложении (если база настроена) и отложить
+		// проверку на час. Keep in sync with alerts.Dispatcher.Handle.
+		appURL := tg.MiniAppRouterURL(p.cfg.MiniAppBaseURL, sh.UserID)
+		kb := tg.AlertKeyboard(sh.UserID, sh.CheckName, appURL)
 		_, err = p.notify.SendKeyboard(ctx, sh.UserID, text, "", &kb)
 		if err != nil {
 			if logIt, count := p.recordSendOutcome(sh.UserID, sh.CheckName, false); logIt {

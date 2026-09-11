@@ -107,7 +107,7 @@ func TestSendMessageWithKeyboard(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
-	kb := HardAlertKeyboard(1, "x")
+	kb := AlertKeyboard(1, "x", "")
 	mid, err := c.SendMessageWithKeyboard(context.Background(), 100, nil, "hi", "", nil, &kb)
 	if err != nil {
 		t.Fatal(err)

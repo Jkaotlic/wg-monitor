@@ -71,6 +71,20 @@ func newTestDB(t *testing.T) (*db.DB, int64) {
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
 
+func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, callback string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.CallbackData == callback {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func TestTickEmptyNoCalls(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeTG{}
@@ -138,11 +152,10 @@ func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 	if len(f.keyboards) != 1 || f.keyboards[0] == nil {
 		t.Fatalf("expected realert inline keyboard, got %+v", f.keyboards)
 	}
+	// STILL-DOWN reminder speaks the same dictionary as the original HARD
+	// alert now: только «Тише на час», без ack/mute/history.
 	want := map[string]bool{
-		"silence:" + itoa(uid) + ":dns:1h":  true,
-		"silence:" + itoa(uid) + ":dns:4h":  true,
-		"silence:" + itoa(uid) + ":dns:24h": true,
-		"ack:" + itoa(uid) + ":dns":         true,
+		"silence:" + itoa(uid) + ":dns:1h": true,
 	}
 	for _, row := range f.keyboards[0].InlineKeyboard {
 		for _, b := range row {
@@ -152,18 +165,24 @@ func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 	for cb := range want {
 		t.Errorf("missing realert button %s in %+v", cb, f.keyboards[0])
 	}
+	for _, row := range f.keyboards[0].InlineKeyboard {
+		for _, b := range row {
+			if b.CallbackData == "silence:"+itoa(uid)+":dns:4h" || b.CallbackData == "silence:"+itoa(uid)+":dns:24h" || b.CallbackData == "ack:"+itoa(uid)+":dns" {
+				t.Errorf("stale realert button survived simplification: %+v", b)
+			}
+		}
+	}
 }
 
-// TestTickTunnelRealertCarriesActionButtons proves a STILL-DOWN reminder for
-// a tunnel_* check carries the same per-tunnel action row (restart / diag /
-// pingcheck) as the original HARD alert. Previously the reminder shipped only
-// the silence/ack/mute/history base row, so an operator acting on the 6h-later
-// reminder (the one they're more likely to actually see) had no way to restart
-// or diagnose the tunnel without digging into a panel.
-func TestTickTunnelRealertCarriesActionButtons(t *testing.T) {
+// TestTickRealertCarriesOnlyAppAndSilence proves a STILL-DOWN reminder for a
+// tunnel_* check carries the same two-button keyboard as the original HARD
+// alert -- «Открыть в приложении» + «Тише на час». Previously the reminder
+// shipped extra per-tunnel action buttons (restart/diag/pingcheck); those
+// moved into the app along with everything else under alerts.
+func TestTickRealertCarriesOnlyAppAndSilence(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second, MiniAppBaseURL: "https://example.com"})
 
 	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
 	p.SetNow(func() time.Time { return now })
@@ -184,18 +203,32 @@ func TestTickTunnelRealertCarriesActionButtons(t *testing.T) {
 	if len(f.keyboards) != 1 || f.keyboards[0] == nil {
 		t.Fatalf("expected realert inline keyboard, got %+v", f.keyboards)
 	}
-	want := map[string]bool{
-		"restart_tunnel:" + itoa(uid) + ":tunnel_awg11": true,
-		"diag_now:" + itoa(uid) + ":tunnel_awg11":       true,
-		"pingcheck_now:" + itoa(uid) + ":tunnel_awg11":  true,
-	}
-	for _, row := range f.keyboards[0].InlineKeyboard {
+	kb := f.keyboards[0]
+	totalButtons := 0
+	var webAppURL string
+	forbidden := []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "maint_restart", "ack", "mute", "history"}
+	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
-			delete(want, b.CallbackData)
+			totalButtons++
+			if b.WebApp != nil {
+				webAppURL = b.WebApp.URL
+			}
+			for _, prefix := range forbidden {
+				if strings.HasPrefix(b.CallbackData, prefix) {
+					t.Errorf("tunnel realert carries removed command button: %+v", b)
+				}
+			}
 		}
 	}
-	for cb := range want {
-		t.Errorf("tunnel realert missing action button %s in %+v", cb, f.keyboards[0])
+	if totalButtons != 2 {
+		t.Fatalf("expected exactly 2 buttons (app + silence), got %d: %+v", totalButtons, kb)
+	}
+	wantURL := "https://example.com/miniapp/?router=" + itoa(uid)
+	if webAppURL != wantURL {
+		t.Errorf("web_app URL = %q, want %q", webAppURL, wantURL)
+	}
+	if !keyboardHasCallback(kb, "silence:"+itoa(uid)+":tunnel_awg11:1h") {
+		t.Errorf("missing silence button in %+v", kb)
 	}
 }
 

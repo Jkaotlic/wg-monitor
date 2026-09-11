@@ -65,8 +65,28 @@ func TestRenderWakeReport_StartupFailuresAreWarmup(t *testing.T) {
 	if !strings.Contains(card.Summary, "сервисы ещё поднимаются") {
 		t.Fatalf("warmup summary missing: %q", card.Summary)
 	}
-	if !strings.Contains(card.Hint, "минут") || !strings.Contains(card.Hint, "Повторить проверку") {
+	if !strings.Contains(card.Hint, "минут") || !strings.Contains(card.Hint, "приложени") {
 		t.Fatalf("warmup hint should explain what to do next: %q", card.Hint)
+	}
+}
+
+// Кнопка «Повторить проверку» под отчётом убрана вместе со всеми командными
+// кнопками под тревогами -- подсказки не имеют права ссылаться на кнопку,
+// которой больше нет.
+func TestRenderWakeReport_HintsDoNotReferenceRemovedButtons(t *testing.T) {
+	forbidden := []string{"Повторить проверку", "Диагностика"}
+	cases := [][]wire.Check{
+		nil,
+		{{Name: "tunnels", Status: "fail"}, {Name: "hydraroute", Status: "fail"}},
+		{{Name: "dns_via_tunnel", Status: "fail"}, {Name: "awg_manager", Status: "fail"}},
+	}
+	for _, checks := range cases {
+		card := RenderWakeReport("client-h", checks)
+		for _, bad := range forbidden {
+			if strings.Contains(card.Hint, bad) {
+				t.Errorf("подсказка отчёта ссылается на исчезнувшую кнопку %q: %q", bad, card.Hint)
+			}
+		}
 	}
 }
 

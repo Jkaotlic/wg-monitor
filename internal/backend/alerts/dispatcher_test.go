@@ -178,6 +178,9 @@ func TestDispatcherSoftFlapNoTGButCounted(t *testing.T) {
 	}
 }
 
+// TestDispatcherHARDIncludesKeyboard: под тревогой tunnel_awg11 ровно две
+// кнопки -- «Открыть в приложении» и «Тише на час». Все командные кнопки
+// (restart/diag/pingcheck/ack/mute/history) переехали в приложение.
 func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 	d := newDB(t)
 	tok := "3333333333333333333333333333333333333333333333333333333333333333"
@@ -186,13 +189,13 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	ftg := &fakeTG{topicID: 5555}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -200, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, ftg, Config{ChatID: -200, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
 
 	tr := state.Transition{
 		Kind: state.Hard,
 		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
 	}
-	if err := disp.Handle(context.Background(), uid, "bob", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "timeout"})); err != nil {
+	if err := disp.Handle(context.Background(), uid, "bob", "tunnel_awg11", tr, chk("tunnel_awg11", "fail", map[string]any{"error": "timeout"})); err != nil {
 		t.Fatalf("handle: %v", err)
 	}
 
@@ -208,23 +211,64 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 	if kb == nil {
 		t.Fatal("keyboard is nil")
 	}
-	// Spec §6.2: 2 rows, 4 buttons in row 1, 2 buttons in row 2 = 6 total
+	// Ровно приложение + тишина: 2 ряда по 1 кнопке = 2 всего.
 	if len(kb.InlineKeyboard) != 2 {
-		t.Fatalf("expected 2 keyboard rows, got %d", len(kb.InlineKeyboard))
+		t.Fatalf("expected 2 keyboard rows (app + silence), got %d: %+v", len(kb.InlineKeyboard), kb.InlineKeyboard)
 	}
 	totalButtons := 0
 	for _, row := range kb.InlineKeyboard {
 		totalButtons += len(row)
 	}
-	if totalButtons != 6 {
-		t.Fatalf("expected 6 buttons total, got %d", totalButtons)
+	if totalButtons != 2 {
+		t.Fatalf("expected 2 buttons total, got %d", totalButtons)
 	}
 
-	// Verify callback_data contains userID and checkName
+	// Кнопка с callback_data (тишина) обязана нести userID и checkName;
+	// кнопка приложения (web_app) callback_data не несёт вовсе.
 	for _, row := range kb.InlineKeyboard {
 		for _, btn := range row {
-			if !strings.Contains(btn.CallbackData, "awg_handshake") {
+			if btn.WebApp != nil {
+				continue
+			}
+			if !strings.Contains(btn.CallbackData, "tunnel_awg11") {
 				t.Errorf("button %q callback_data missing checkName: %s", btn.Text, btn.CallbackData)
+			}
+		}
+	}
+}
+
+// TestDispatcherHardTunnelAlertHasNoCommandButtons: ни одна кнопка под
+// тревогой туннеля не несёт callback_data команды панели -- всё это переехало
+// в приложение. Обработчики этих команд в callbacks/ остаются нетронутыми:
+// старые сообщения в чатах ещё их используют.
+func TestDispatcherHardTunnelAlertHasNoCommandButtons(t *testing.T) {
+	d := newDB(t)
+	tok := "3333222222222222222222222222222222222222222222222222222222222222"
+	uid, _ := d.Users().Insert("commandless", tok, "2.2.2.2", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1110); err != nil {
+		t.Fatal(err)
+	}
+	ftg := &fakeTG{topicID: 5555}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -200, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
+
+	tr := state.Transition{
+		Kind: state.Hard,
+		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+	}
+	if err := disp.Handle(context.Background(), uid, "commandless", "tunnel_awg11", tr, chk("tunnel_awg11", "fail", map[string]any{"error": "timeout"})); err != nil {
+		t.Fatalf("handle: %v", err)
+	}
+	kb := ftg.sentWithKeyboard[0].keyboard
+	if kb == nil {
+		t.Fatal("keyboard is nil")
+	}
+	forbidden := []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "maint_restart", "ack", "mute", "history"}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			for _, prefix := range forbidden {
+				if strings.HasPrefix(btn.CallbackData, prefix) {
+					t.Errorf("нашлась командная кнопка %q под тревогой туннеля: callback_data=%q", btn.Text, btn.CallbackData)
+				}
 			}
 		}
 	}
@@ -322,9 +366,41 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	if kb == nil {
 		t.Fatal("offline keyboard is nil")
 	}
-	if !keyboardHasCallback(kb, "silence:"+itoa(uid)+":agent_heartbeat:24h") ||
-		!keyboardHasCallback(kb, "mute:"+itoa(uid)+":agent_heartbeat") {
-		t.Fatalf("offline keyboard missing silence/mute controls: %#v", kb)
+	if !keyboardHasCallback(kb, "silence:"+itoa(uid)+":agent_heartbeat:1h") {
+		t.Fatalf("offline keyboard missing silence control: %#v", kb)
+	}
+}
+
+// TestSendOfflineCarriesAppButton: ROUTER OFFLINE тоже ведёт в приложение,
+// когда база настроена -- владелец идёт разбираться туда же, откуда бы ни
+// пришла тревога.
+func TestSendOfflineCarriesAppButton(t *testing.T) {
+	d := newDB(t)
+	tok := "5555111111111111111111111111111111111111111111111111111111111111"
+	uid, _ := d.Users().Insert("dora2", tok, "1.1.1.1", "awg0")
+	if err := d.Users().SetTelegramUserID(uid, 1108); err != nil {
+		t.Fatal(err)
+	}
+	ftg := &fakeTG{}
+	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
+	if err := disp.SendOffline(context.Background(), uid, "dora2", 12*time.Minute); err != nil {
+		t.Fatalf("SendOffline: %v", err)
+	}
+	if len(ftg.sentWithKeyboard) != 1 {
+		t.Fatalf("expected 1 keyboard message, got %d", len(ftg.sentWithKeyboard))
+	}
+	kb := ftg.sentWithKeyboard[0].keyboard
+	wantURL := fmt.Sprintf("https://example.com/miniapp/?router=%d", uid)
+	var got string
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if btn.WebApp != nil {
+				got = btn.WebApp.URL
+			}
+		}
+	}
+	if got != wantURL {
+		t.Fatalf("offline web_app button URL = %q, want %q", got, wantURL)
 	}
 }
 
@@ -509,29 +585,47 @@ func TestDispatcherHardIncludesMiniAppButtonWhenConfigured(t *testing.T) {
 }
 
 func TestDispatcherHardOmitsMiniAppButtonWhenNotConfigured(t *testing.T) {
-	d := newDB(t)
-	tok := "2222000000000000000000000000000000000000000000000000000000000000"
-	uid, _ := d.Users().Insert("no-miniapp-router", tok, "1.1.1.1", "awg0")
-	if err := d.Users().SetTelegramUserID(uid, 1103); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name string
+		base string
+	}{
+		{"empty base", ""},
+		{"http base rejected", "http://example.com"},
 	}
-	tgc := &fakeTG{topicID: 6666}
-	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
-
-	tr := state.Transition{
-		Kind: state.Hard,
-		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
-	}
-	if err := disp.Handle(context.Background(), uid, "no-miniapp-router", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
-		t.Fatalf("handle: %v", err)
-	}
-	kb := tgc.sentWithKeyboard[0].keyboard
-	for _, row := range kb.InlineKeyboard {
-		for _, btn := range row {
-			if btn.WebApp != nil {
-				t.Fatalf("unexpected web_app button: %+v", btn)
+	for i, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d := newDB(t)
+			tok := fmt.Sprintf("2222%060d", i)
+			uid, _ := d.Users().Insert("no-miniapp-router", tok, "1.1.1.1", "awg0")
+			if err := d.Users().SetTelegramUserID(uid, int64(1103+i)); err != nil {
+				t.Fatal(err)
 			}
-		}
+			tgc := &fakeTG{topicID: 6666}
+			disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: c.base})
+
+			tr := state.Transition{
+				Kind: state.Hard,
+				Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
+			}
+			if err := disp.Handle(context.Background(), uid, "no-miniapp-router", "awg_handshake", tr, chk("awg_handshake", "fail", map[string]any{"error": "details"})); err != nil {
+				t.Fatalf("handle: %v", err)
+			}
+			kb := tgc.sentWithKeyboard[0].keyboard
+			hasSilence := false
+			for _, row := range kb.InlineKeyboard {
+				for _, btn := range row {
+					if btn.WebApp != nil {
+						t.Fatalf("unexpected web_app button: %+v", btn)
+					}
+					if strings.HasPrefix(btn.CallbackData, "silence:") {
+						hasSilence = true
+					}
+				}
+			}
+			if !hasSilence {
+				t.Fatalf("silence button must remain even without app URL: %+v", kb)
+			}
+		})
 	}
 }
 

@@ -435,6 +435,7 @@ func main() {
 		RealertEvery:       time.Duration(cfg.State.RealertEverySec) * time.Second,
 		MobileRealertEvery: time.Duration(cfg.State.MobileRealertEverySec) * time.Second,
 		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
+		MiniAppBaseURL:     cfg.PublicBaseURL,
 	})
 	go func() {
 		if err := rp.Run(ctx); err != nil {

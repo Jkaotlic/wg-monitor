@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -122,32 +123,38 @@ func TestWakeNotifier_NoThreadID_SkipsSend(t *testing.T) {
 }
 
 // Кнопки под отчётом о пробуждении владелец видит в личке. «🛣 Маршруты»
-// открывала панель бота, «HR-Neo проверка» -- инженерный осмотр; разбираться
-// владелец идёт в приложение -- той же кнопкой, что под тревогами.
-// «Повторить проверку» остаётся: на неё ссылается подсказка отчёта.
+// открывала панель бота, «HR-Neo проверка» -- инженерный осмотр, «Диагностика»
+// и «Повторить проверку» вели в панель бота командами. Теперь под отчётом
+// ровно одна кнопка -- та же, что под тревогами: приложение. Без настроенной
+// базы кнопок нет вовсе (nil), а не пустая клавиатура.
 func TestMobileWakeKeyboard_LeadsOwnerToApp(t *testing.T) {
-	render := func(base string) string {
-		b, err := json.Marshal(mobileWakeKeyboard(42, base))
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(b)
+	kbWithBase := mobileWakeKeyboard(42, "https://example.com/")
+	b, err := json.Marshal(kbWithBase)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, base := range []string{"https://example.com/", ""} {
-		kb := render(base)
-		for _, bad := range []string{"panel:", "routes_hrneo_doctor", "HR-Neo"} {
-			if strings.Contains(kb, bad) {
-				t.Errorf("база %q: под отчётом осталась старая панель %q: %s", base, bad, kb)
-			}
-		}
-		if !strings.Contains(kb, "force_recheck:42:_mobile") {
-			t.Errorf("база %q: пропала «Повторить проверку», а подсказка на неё ссылается: %s", base, kb)
+	kb := string(b)
+	for _, bad := range []string{"panel:", "routes_hrneo_doctor", "HR-Neo", "diag_now", "force_recheck", "callback_data"} {
+		if strings.Contains(kb, bad) {
+			t.Errorf("под отчётом осталась старая командная кнопка %q: %s", bad, kb)
 		}
 	}
-	if kb := render("https://example.com/"); !strings.Contains(kb, `"url":"https://example.com/miniapp/?router=42"`) {
+	if !strings.Contains(kb, `"url":"https://example.com/miniapp/?router=42"`) {
 		t.Errorf("нет кнопки приложения с адресом роутера: %s", kb)
 	}
-	if kb := render(""); strings.Contains(kb, "web_app") {
-		t.Errorf("без адреса приложения кнопки быть не должно: %s", kb)
+	markup, ok := kbWithBase.(tg.InlineKeyboardMarkup)
+	if !ok {
+		t.Fatalf("expected tg.InlineKeyboardMarkup, got %T", kbWithBase)
+	}
+	total := 0
+	for _, row := range markup.InlineKeyboard {
+		total += len(row)
+	}
+	if total != 1 {
+		t.Fatalf("expected exactly 1 button (app), got %d: %+v", total, markup)
+	}
+
+	if kbNoBase := mobileWakeKeyboard(42, ""); kbNoBase != nil {
+		t.Errorf("без адреса приложения клавиатуры быть не должно, получили %+v", kbNoBase)
 	}
 }

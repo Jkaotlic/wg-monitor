@@ -41,13 +41,6 @@ type Config struct {
 	MiniAppBaseURL string
 }
 
-// miniAppRouterURL -- адрес экрана роутера в приложении. Один на тревоги и
-// отчёт о пробуждении: кнопка «Открыть в приложении» обязана вести в одно
-// и то же место, откуда бы её ни нажали.
-func miniAppRouterURL(base string, userID int64) string {
-	return fmt.Sprintf("%s/miniapp/?router=%d", strings.TrimRight(base, "/"), userID)
-}
-
 const NeighborFreshWindow = 5 * time.Minute
 
 type Dispatcher struct {
@@ -126,23 +119,12 @@ func (di *Dispatcher) Handle(ctx context.Context, userID int64, nickname, checkN
 			args.Neighbors = di.collectNeighbors(userID, checkName)
 		}
 		text := FormatHard(args)
-		// Per-category command-channel buttons:
-		// - tunnel_* checks → restart/diag/pingcheck (awg-manager actions on a tunnel)
-		// - mobile-router heartbeat → force_recheck (poke a 4G router into a fresh report)
-		var opts []tg.KeyboardOption
-		if strings.HasPrefix(checkName, "tunnel_") {
-			opts = append(opts, tg.WithTunnelActions())
-		}
-		if checkName == "hydraroute" {
-			opts = append(opts, tg.WithHydraRouteActions())
-		}
-		if args.IsMobile && checkName == "agent_heartbeat" {
-			opts = append(opts, tg.WithMobileActions())
-		}
-		if di.cfg.MiniAppBaseURL != "" {
-			opts = append(opts, tg.WithWebAppButton(miniAppRouterURL(di.cfg.MiniAppBaseURL, userID)))
-		}
-		kb := tg.HardAlertKeyboard(userID, checkName, opts...)
+		// Под тревогой ровно две кнопки: открыть роутер в приложении (когда
+		// база настроена) и отложить эту проверку на час. Командные кнопки
+		// (restart/diag/pingcheck/force_recheck/maint_restart) переехали в
+		// приложение; обработчики в callbacks/ остаются для старых сообщений.
+		appURL := tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID)
+		kb := tg.AlertKeyboard(userID, checkName, appURL)
 		delivered, err := di.notify.SendTracked(ctx, userID, checkName, text, "", &kb)
 		if err != nil {
 			return fmt.Errorf("HARD tg send %s/%s: %w", nickname, checkName, err)
@@ -263,11 +245,7 @@ func (di *Dispatcher) SendOffline(ctx context.Context, userID int64, nickname st
 	now := di.now()
 	hardSince := now.Add(-since)
 	text := FormatRouterOffline(nickname, since)
-	opts := []tg.KeyboardOption{}
-	if u, err := di.d.Users().GetByID(userID); err == nil && u != nil && u.IsMobile() {
-		opts = append(opts, tg.WithMobileActions())
-	}
-	kb := tg.HardAlertKeyboard(userID, "agent_heartbeat", opts...)
+	kb := tg.AlertKeyboard(userID, "agent_heartbeat", tg.MiniAppRouterURL(di.cfg.MiniAppBaseURL, userID))
 	if _, err := di.notify.SendTracked(ctx, userID, "agent_heartbeat", text, "", &kb); err != nil {
 		return err
 	}

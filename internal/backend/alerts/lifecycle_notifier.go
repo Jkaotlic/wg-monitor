@@ -2,7 +2,6 @@ package alerts
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -112,24 +111,17 @@ func (n *SleepNotifier) SendSleeping(ctx context.Context, userID int64, nickname
 	return err
 }
 
-// mobileWakeKeyboard -- кнопки под отчётом о пробуждении. Их видит владелец в
-// личке, поэтому панели бота («🛣 Маршруты») и инженерного осмотра
-// («HR-Neo проверка») здесь нет: разбираться он идёт в приложение, той же
-// кнопкой, что под тревогами. «Повторить проверку» остаётся -- на неё
-// ссылается подсказка отчёта.
+// mobileWakeKeyboard -- кнопка под отчётом о пробуждении. Владелец видит её в
+// личке: панели бота («🛣 Маршруты»), инженерного осмотра («HR-Neo проверка»),
+// «Диагностика» и «Повторить проверку» здесь больше нет -- разбираться он
+// идёт в приложение, той же кнопкой, что под тревогами. Без настроенной базы
+// кнопки нет вовсе (nil), а не пустая клавиатура.
 func mobileWakeKeyboard(userID int64, miniAppBaseURL string) any {
-	rows := [][]tg.InlineKeyboardButton{{
-		{Text: "Диагностика", CallbackData: "diag_now:" + formatUserID(userID) + ":_menu"},
-		{Text: "Повторить проверку", CallbackData: "force_recheck:" + formatUserID(userID) + ":_mobile"},
-	}}
-	if miniAppBaseURL != "" {
-		rows = append(rows, []tg.InlineKeyboardButton{
-			{Text: "📱 Открыть в приложении", WebApp: &tg.WebAppInfo{URL: miniAppRouterURL(miniAppBaseURL, userID)}},
-		})
+	url := tg.MiniAppRouterURL(miniAppBaseURL, userID)
+	if url == "" {
+		return nil
 	}
-	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
-func formatUserID(id int64) string {
-	return fmt.Sprintf("%d", id)
+	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: "📱 Открыть в приложении", WebApp: &tg.WebAppInfo{URL: url}},
+	}}}
 }

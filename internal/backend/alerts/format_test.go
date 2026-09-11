@@ -959,3 +959,28 @@ func TestControlPlaneAlertSpeaksAboutConsequence(t *testing.T) {
 		}
 	}
 }
+
+// Под тревогой остались только «Открыть в приложении» и «Тише на час»:
+// текст тревоги не имеет права ссылаться на командные кнопки, которых
+// больше нет (restart_tunnel/diag_now/pingcheck_now/force_recheck/ack/mute).
+func TestHardAndOfflineTextsDoNotReferenceRemovedButtons(t *testing.T) {
+	forbidden := []string{
+		"«Повторить проверку»", "«Диагностика»", "«Запустить диагностику»",
+		"«Тест связи»", "«Запросить отчёт»", "«Перезапустить VPN-туннели»",
+		"«Понял»", "«Тихо до утра»",
+	}
+	texts := map[string]string{
+		"FormatHard(tunnel)": FormatHard(HardArgs{
+			Nickname: "router-a", CheckName: "tunnel_awg11", HardSince: time.Now(),
+			Check: wire.Check{Name: "tunnel_awg11", Status: "fail", Details: map[string]any{"tunnel_name": "vpn-nl"}},
+		}),
+		"FormatRouterOffline": FormatRouterOffline("router-a", 11*time.Minute),
+	}
+	for label, got := range texts {
+		for _, bad := range forbidden {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s: ссылается на исчезнувшую кнопку %s:\n%s", label, bad, got)
+			}
+		}
+	}
+}
