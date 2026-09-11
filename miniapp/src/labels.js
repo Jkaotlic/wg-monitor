@@ -19,6 +19,9 @@ const CHECK_LABELS = {
   // так что без подписи она попадалась человеку чаще остальных -- и всюду
   // сырым идентификатором.
   agent_heartbeat: 'Отчёты от роутера',
+  // Сторож своего DNS-сервера (спека dns-watchdog). Бот зовёт его так же
+  // (checkHumanName в alerts/format.go).
+  resolver_guard: 'Свой DNS-сервер',
 }
 
 // Check names are identifiers, not prose. Anything we don't have a human name
@@ -63,6 +66,12 @@ const INCIDENT_COPY = {
     what: 'Роутер не выходит на связь',
     why: 'Агент перестал присылать отчёты. Всё, что показано о роутере, — данные на момент последнего отчёта, а не сейчас.',
   },
+  // Бот различает два исхода по details.reason (alerts/format.go); карточка
+  // знает только имя проверки, поэтому «почему» честно называет оба.
+  resolver_guard: {
+    what: 'Свой DNS-сервер не отвечает',
+    why: 'Обычно роутер временно перешёл на запасные DNS-серверы — сайты открываются, а когда свой снова ответит, роутер вернётся на него сам. Если и запасные недоступны, сайты по имени могут не открываться.',
+  },
 }
 
 // checkName is either one of the four plain checks above or a `tunnel_<id>`
@@ -106,6 +115,8 @@ const RECOVERY_COPY = {
   awg_manager: 'Связь с панелью роутера восстановлена',
   tunnels: 'VPN-туннели снова опрашиваются',
   agent_heartbeat: 'Роутер снова выходит на связь',
+  // Верно и когда роутер уходил на запасные, и когда оставался на своём.
+  resolver_guard: 'Свой DNS-сервер снова отвечает',
 }
 
 export function eventPhrase(checkName, status) {

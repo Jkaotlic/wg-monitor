@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -1197,6 +1198,46 @@ var agentConfigBoolArgs = map[string]bool{
 	"external_reach_enabled": true,
 	"allow_router_reboot":    true,
 	"allow_firmware_install": true,
+	"dns_watchdog_enabled":   true,
+}
+
+// agentConfigWatchdogEndpointMax mirrors actions.dnsWatchdogEndpointMax.
+const agentConfigWatchdogEndpointMax = 512
+
+// agentConfigWatchdogEndpointOK mirrors actions.validateDNSWatchdogEndpoint:
+// an absolute https URL with a host, at most 512 bytes, and never the masked
+// "https://<host>/***" form agent_config_get hands out — echoing that back
+// would overwrite the real secret path on the router.
+func agentConfigWatchdogEndpointOK(s string) bool {
+	if s == "" || len(s) > agentConfigWatchdogEndpointMax || strings.Contains(s, "***") {
+		return false
+	}
+	u, err := url.Parse(s)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.Hostname() != ""
+}
+
+// agentConfigDomainOK mirrors the agent's plain-domain check
+// (actions.isComparableDomain): ASCII labels, no scheme, path or wildcard.
+func agentConfigDomainOK(s string) bool {
+	if s == "" || len(s) > 253 || strings.ContainsAny(s, "/:*?[]\\") {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func agentConfigIPv4OK(s string) bool {
+	a, err := netip.ParseAddr(s)
+	return err == nil && a.Is4()
 }
 
 // sanitizeAgentConfigArgs validates and narrows update_agent_config args to the
@@ -1242,6 +1283,32 @@ func sanitizeAgentConfigArgs(w http.ResponseWriter, args map[string]any) (map[st
 			return reject("awgm_login")
 		}
 		out["awgm_login"] = strings.TrimSpace(s)
+	}
+	if v, ok := args["dns_watchdog_endpoint"]; ok {
+		s, ok := v.(string)
+		s = strings.TrimSpace(s)
+		if !ok || !agentConfigWatchdogEndpointOK(s) {
+			return reject("dns_watchdog_endpoint (want https:// URL, max 512)")
+		}
+		out["dns_watchdog_endpoint"] = s
+	}
+	if v, ok := args["dns_watchdog_canary_domain"]; ok {
+		s, ok := v.(string)
+		s = strings.TrimSpace(s)
+		// Empty = the agent's default canary.
+		if !ok || (s != "" && !agentConfigDomainOK(s)) {
+			return reject("dns_watchdog_canary_domain (want a domain name)")
+		}
+		out["dns_watchdog_canary_domain"] = s
+	}
+	if v, ok := args["dns_watchdog_bootstrap_ip"]; ok {
+		s, ok := v.(string)
+		s = strings.TrimSpace(s)
+		// Empty = the agent asks 77.88.8.8 for the endpoint host's address.
+		if !ok || (s != "" && !agentConfigIPv4OK(s)) {
+			return reject("dns_watchdog_bootstrap_ip (want IPv4)")
+		}
+		out["dns_watchdog_bootstrap_ip"] = s
 	}
 	for key := range agentConfigBoolArgs {
 		if v, ok := args[key]; ok {

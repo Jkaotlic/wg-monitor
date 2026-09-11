@@ -511,7 +511,22 @@ func thresholdsForUser(base state.Thresholds, mobileFailThreshold int, u *db.Use
 	return base
 }
 
+// resolverGuardCheck is the agent's DNS watchdog check (spec dns-watchdog).
+const resolverGuardCheck = "resolver_guard"
+
 func thresholdsForCheck(base state.Thresholds, policy AlertPolicy, checkName string) state.Thresholds {
+	// The agent already debounced resolver_guard failures (a fail streak plus a
+	// cooldown before every switch): each fail it reports is a switch to the
+	// fallback resolvers that has already happened, so the fail threshold is 1.
+	// The FSM's ok→fail step is still Soft, so HARD lands on the second
+	// consecutive report instead of the third. Recovery keeps the base value:
+	// no_live_fallback is decided while the router is still on its own
+	// resolver, and one good probe flips the check ok with no cooldown — a
+	// recovery threshold of 1 would let an intermittent server flap alerts.
+	if strings.EqualFold(strings.TrimSpace(checkName), resolverGuardCheck) {
+		base.Fail = 1
+		return base
+	}
 	if !isNoisyCheck(checkName) {
 		return base
 	}

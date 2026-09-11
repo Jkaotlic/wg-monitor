@@ -176,6 +176,24 @@ describe('checkRows', () => {
     expect(hr.value).toContain('sing-box')
   })
 
+  // Проверка вне порядка вопросов показывается в конце -- но человеческим
+  // именем, если оно есть: «resolver_guard» владельцу ничего не говорит.
+  // Незнакомое имя по-прежнему печатается как есть.
+  it('проверка вне порядка подписана человеческим именем, если оно есть', () => {
+    const rows = checkRows({
+      checks: [
+        { check_name: 'resolver_guard', status: 'fail', ts: '2026-09-11T10:00:00Z' },
+        { check_name: 'wifi_band', status: 'ok', ts: '2026-09-11T10:00:00Z' },
+      ],
+      tunnels: [],
+      router: ROUTER,
+    })
+    const byKey = rowsByKey(rows)
+    expect(byKey.resolver_guard.title).toBe('Свой DNS-сервер')
+    expect(byKey.resolver_guard.answer).toBe('нет')
+    expect(byKey.wifi_band.title).toBe('wifi_band')
+  })
+
   // Подмена DNS от РКН: проверка формально ok, но ответ на вопрос «сайты
   // открываются по имени» -- нет.
   it('подмена ответов резолверами не выдаётся за успех', () => {

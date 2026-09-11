@@ -112,6 +112,8 @@ func wakeCheckLabel(c wire.Check) string {
 		return "панель роутера не отвечает"
 	case "external_reach":
 		return "сервисы не открываются через обход"
+	case "resolver_guard":
+		return "свой DNS-сервер не отвечает"
 	default:
 		return c.Name
 	}

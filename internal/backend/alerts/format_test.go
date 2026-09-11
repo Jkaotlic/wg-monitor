@@ -713,6 +713,10 @@ func TestAdviceNeverSendsOwnerWhereHeCannotGo(t *testing.T) {
 		{"реестр линий недоступен", "tunnels", map[string]any{}},
 		{"HydraRoute не установлен", "hydraroute", map[string]any{"installed": false}},
 		{"HydraRoute остановлен", "hydraroute", map[string]any{"installed": true, "running": false}},
+		{"свой DNS-сервер молчит, работают запасные", "resolver_guard", map[string]any{
+			"mode": "fallback", "reason": "fallback", "candidate": "198.51.100.53", "since": "2026-09-11T10:00:00Z",
+		}},
+		{"свой DNS-сервер молчит, запасных нет", "resolver_guard", map[string]any{"reason": "no_live_fallback"}},
 		{"сервисы не открываются через VPN-туннель", "external_reach", map[string]any{
 			"targets_total": 2, "via_interface": "nwg0",
 			"targets_failed": []any{
@@ -780,6 +784,10 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 		{"реестр VPN-туннелей", "tunnels", map[string]any{}},
 		{"HydraRoute не установлен", "hydraroute", map[string]any{"installed": false}},
 		{"HydraRoute остановлен", "hydraroute", map[string]any{"installed": true, "running": false}},
+		{"свой DNS-сервер, запасные работают", "resolver_guard", map[string]any{
+			"mode": "fallback", "reason": "fallback", "candidate": "198.51.100.53", "since": "2026-09-11T10:00:00Z",
+		}},
+		{"свой DNS-сервер, запасные недоступны", "resolver_guard", map[string]any{"reason": "no_live_fallback"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -792,7 +800,90 @@ func TestAlertSpeaksHumanRussian(t *testing.T) {
 					t.Errorf("жаргон %q в тексте для владельца:\n%s", w, got)
 				}
 			}
+			if strings.Contains(got, tc.check) && !strings.HasPrefix(tc.check, "tunnel_") {
+				t.Errorf("имя проверки %q в тексте для владельца:\n%s", tc.check, got)
+			}
 		})
+	}
+	t.Run("свой DNS-сервер снова работает", func(t *testing.T) {
+		since := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+		got := FormatRecovery(RecoveryArgs{
+			Nickname: "router-a", CheckName: "resolver_guard", HardSince: since, RecoveredAt: since.Add(20 * time.Minute),
+			Check: wire.Check{Name: "resolver_guard", Status: "ok", Details: map[string]any{"mode": "primary"}},
+		})
+		for _, w := range append(jargon, "resolver_guard") {
+			if strings.Contains(got, w) {
+				t.Errorf("жаргон %q в тексте для владельца:\n%s", w, got)
+			}
+		}
+		// Бэкенд не знает, успел ли роутер уйти на запасные (fallback) или
+		// так и остался на своём (no_live_fallback): верно в обоих случаях
+		// только «снова отвечает». И «простоя» не было -- сайты могли всё
+		// это время открываться через запасные.
+		if !strings.Contains(got, "Свой DNS-сервер снова отвечает") {
+			t.Errorf("нет фразы о восстановлении:\n%s", got)
+		}
+		if strings.Contains(got, "Простой") {
+			t.Errorf("восстановление своего DNS-сервера говорит о простое:\n%s", got)
+		}
+		if !strings.Contains(got, "Свой DNS-сервер не отвечал: 20 мин") {
+			t.Errorf("нет длительности молчания своего DNS-сервера:\n%s", got)
+		}
+	})
+}
+
+// Сторож своего DNS-сервера говорит владельцу, что уже случилось с роутером
+// и чем это грозит, -- тремя фразами из спеки dns-watchdog. Запасные живы --
+// тон «обратить внимание»: сайты открываются. Запасных нет -- тревога.
+func TestResolverGuardAlertSaysWhatHappened(t *testing.T) {
+	hard := func(d map[string]any) string {
+		return FormatHard(HardArgs{
+			Nickname: "router-a", CheckName: "resolver_guard", HardSince: time.Now(), ConsecFails: 2,
+			Check: wire.Check{Name: "resolver_guard", Status: "fail", Details: d},
+		})
+	}
+
+	fallback := hard(map[string]any{"mode": "fallback", "reason": "fallback", "candidate": "198.51.100.53", "since": "2026-09-11T10:00:00Z"})
+	for _, want := range []string{
+		"Свой DNS-сервер не отвечает — роутер временно перешёл на запасные, сайты открываются",
+		"🟡", "свой DNS-сервер",
+	} {
+		if !strings.Contains(fallback, want) {
+			t.Errorf("fallback: нет %q:\n%s", want, fallback)
+		}
+	}
+	// Адрес запасного владельцу ничего не говорит.
+	if strings.Contains(fallback, "198.51.100.53") {
+		t.Errorf("fallback: адрес запасного в тексте для владельца:\n%s", fallback)
+	}
+
+	dead := hard(map[string]any{"reason": "no_live_fallback"})
+	for _, want := range []string{
+		"Свой DNS-сервер не отвечает, а запасные недоступны — сайты по имени могут не открываться",
+		"🔴",
+	} {
+		if !strings.Contains(dead, want) {
+			t.Errorf("no_live_fallback: нет %q:\n%s", want, dead)
+		}
+	}
+	if strings.Contains(dead, "сайты открываются") {
+		t.Errorf("no_live_fallback обещает, что сайты открываются:\n%s", dead)
+	}
+
+	since := time.Date(2026, 9, 11, 10, 0, 0, 0, time.UTC)
+	rec := FormatRecovery(RecoveryArgs{
+		Nickname: "router-a", CheckName: "resolver_guard", HardSince: since, RecoveredAt: since.Add(20 * time.Minute),
+		Check: wire.Check{Name: "resolver_guard", Status: "ok", Details: map[string]any{"mode": "primary"}},
+	})
+	if !strings.Contains(rec, "Свой DNS-сервер снова отвечает") {
+		t.Errorf("recovery: нет фразы о восстановлении:\n%s", rec)
+	}
+	if strings.Contains(rec, "Простой") || strings.Contains(rec, "Роутер вернулся") {
+		t.Errorf("recovery: обещает простой или возврат, которых могло не быть:\n%s", rec)
+	}
+
+	if got := wakeCheckLabel(wire.Check{Name: "resolver_guard", Status: "fail"}); !strings.Contains(got, "DNS-сервер") {
+		t.Errorf("wake label=%q, want words about the own DNS server", got)
 	}
 }
 

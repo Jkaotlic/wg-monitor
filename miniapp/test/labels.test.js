@@ -138,3 +138,29 @@ describe('agent_heartbeat говорит по-человечески', () => {
     expect(copy.why).toContain('отчёт')
   })
 })
+
+// resolver_guard -- сторож своего DNS-сервера (спека dns-watchdog). Бот
+// говорит о нём «Свой DNS-сервер», и приложение обязано говорить так же:
+// два голоса одной системы -- одни слова. Причины (запасные живы или нет)
+// карточка не знает, поэтому «почему» честно называет оба исхода.
+describe('resolver_guard говорит «Свой DNS-сервер»', () => {
+  const jargon = ['DoH', 'апстрим', 'резолвинг', 'resolver_guard']
+
+  it('в списке проверок', () => {
+    expect(checkLabel('resolver_guard')).toBe('Свой DNS-сервер')
+  })
+
+  it('в карточке тревоги -- что случилось и чем грозит', () => {
+    const copy = incidentCopy('resolver_guard')
+    expect(copy.what).toBe('Свой DNS-сервер не отвечает')
+    expect(copy.why).toContain('временно перешёл на запасные')
+    expect(copy.why).toContain('сайты по имени могут не открываться')
+    for (const w of jargon) expect(copy.what + ' ' + copy.why).not.toContain(w)
+  })
+
+  it('в журнале событий', () => {
+    // Верно и когда роутер уходил на запасные, и когда оставался на своём.
+    expect(eventPhrase('resolver_guard', 'ok')).toBe('Свой DNS-сервер снова отвечает')
+    expect(eventPhrase('resolver_guard', 'fail')).toBe('Свой DNS-сервер не отвечает')
+  })
+})
