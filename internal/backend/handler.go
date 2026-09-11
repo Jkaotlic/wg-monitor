@@ -24,14 +24,14 @@ import (
 )
 
 const (
-	maxReportBytes      = 64 * 1024
-	maxResultBytes      = 1024 * 1024
+	maxReportBytes = 64 * 1024
+	maxResultBytes = 1024 * 1024
 	// Долгое ожидание обязано укладываться под обрыв облачного релея KeenDNS
 	// (15 с): иначе пустой ответ 204 до агента не доходит, каждый простой
 	// считается ошибкой, а неотправленные результаты не переотправляются --
 	// агент делает это только после 204. Агент просит 30 с, сервер держит 12.
-	defaultCmdWait = 12 * time.Second
-	maxCmdWait     = 12 * time.Second
+	defaultCmdWait      = 12 * time.Second
+	maxCmdWait          = 12 * time.Second
 	maxReportFutureSkew = 2 * time.Minute
 )
 

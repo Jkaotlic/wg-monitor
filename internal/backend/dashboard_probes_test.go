@@ -73,8 +73,8 @@ func TestDashboardCommandDispatchRejectsBadAnalyzeConf(t *testing.T) {
 	// разбор аргументов, а не приёмник тела.
 	huge := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 20*1024)))
 	for name, body := range map[string]string{
-		"без конфига":  `{"action":"tunnel_analyze"}`,
-		"не base64":    `{"action":"tunnel_analyze","args":{"conf":"это не base64!"}}`,
+		"без конфига":     `{"action":"tunnel_analyze"}`,
+		"не base64":       `{"action":"tunnel_analyze","args":{"conf":"это не base64!"}}`,
 		"слишком большой": `{"action":"tunnel_analyze","args":{"conf":"` + huge + `"}}`,
 	} {
 		if rec := postDashboardProbe(h, body); rec.Code != http.StatusBadRequest {
