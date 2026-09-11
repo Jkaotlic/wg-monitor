@@ -191,3 +191,85 @@ func TestParsePlainNameServers(t *testing.T) {
 		}
 	}
 }
+
+// recordAllNDMC wraps fakeDNSExec so that EVERY ndmc command — reads included —
+// is visible to the test, not only the mutating ones fakeDNSExec records.
+func recordAllNDMC(f *fakeDNSExec, every *[]string) ExecFunc {
+	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		*every = append(*every, strings.Join(args, " "))
+		return f.exec(ctx, name, args...)
+	}
+}
+
+// TestApplyDNSProxyUpstreamsNeverSaves: the DNS watchdog changes only the live
+// (runtime) config. A saved config would survive a reboot and could leave the
+// router on the fallback resolver for good, so `system configuration save`
+// must never be issued here. Order: every removal first, then every add.
+func TestApplyDNSProxyUpstreamsNeverSaves(t *testing.T) {
+	f := &fakeDNSExec{runningConfig: sampleRunningConfig}
+	var every []string
+	remove := []string{
+		"https upstream https://dns.example.com/secret-path dnsm",
+		"tls upstream 198.51.100.53:853 sni dns.example.com",
+	}
+	add := []string{"tls upstream 203.0.113.53 sni dot.example.com"}
+
+	status, out := ApplyDNSProxyUpstreams(context.Background(), recordAllNDMC(f, &every), remove, add)
+	if status != "ok" {
+		t.Fatalf("status = %q, want ok\n%s", status, out)
+	}
+	want := []string{
+		"no dns-proxy https upstream https://dns.example.com/secret-path dnsm",
+		"no dns-proxy tls upstream 198.51.100.53:853 sni dns.example.com",
+		"dns-proxy tls upstream 203.0.113.53 sni dot.example.com",
+	}
+	if len(f.calls) != len(want) {
+		t.Fatalf("got %d calls, want %d\ngot:  %v\nwant: %v", len(f.calls), len(want), f.calls, want)
+	}
+	for i := range want {
+		if f.calls[i] != want[i] {
+			t.Errorf("call[%d] = %q, want %q", i, f.calls[i], want[i])
+		}
+	}
+	for _, c := range every {
+		if strings.Contains(c, "configuration save") {
+			t.Fatalf("runtime-only apply must never save the config, got ndmc %q (all: %v)", c, every)
+		}
+	}
+}
+
+func TestApplyDNSProxyUpstreamsPartialWhenCommandFails(t *testing.T) {
+	remove := []string{"https upstream https://dns.example.com/secret-path dnsm"}
+	add := []string{"tls upstream 203.0.113.53 sni dot.example.com"}
+	f := &fakeDNSExec{failOn: map[string]bool{"no dns-proxy " + remove[0]: true}}
+	var every []string
+
+	status, out := ApplyDNSProxyUpstreams(context.Background(), recordAllNDMC(f, &every), remove, add)
+	if status != "partial" {
+		t.Fatalf("status = %q, want partial\n%s", status, out)
+	}
+	if !strings.Contains(out, "✗ no dns-proxy "+remove[0]) {
+		t.Errorf("expected failure marker in transcript, got:\n%s", out)
+	}
+	// A failed removal must not abort the add, and still nothing is saved.
+	if last := f.calls[len(f.calls)-1]; last != "dns-proxy "+add[0] {
+		t.Errorf("add should still run after a failed removal, last call = %q", last)
+	}
+	for _, c := range every {
+		if strings.Contains(c, "configuration save") {
+			t.Fatalf("runtime-only apply must never save the config, got ndmc %q", c)
+		}
+	}
+}
+
+func TestApplyDNSProxyUpstreamsNothingToDo(t *testing.T) {
+	f := &fakeDNSExec{}
+	var every []string
+	status, out := ApplyDNSProxyUpstreams(context.Background(), recordAllNDMC(f, &every), nil, nil)
+	if status != "ok" {
+		t.Fatalf("status = %q, want ok\n%s", status, out)
+	}
+	if len(every) != 0 {
+		t.Fatalf("nothing to remove or add must mean no ndmc calls, got %v", every)
+	}
+}
