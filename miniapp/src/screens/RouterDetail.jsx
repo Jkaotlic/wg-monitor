@@ -674,9 +674,14 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   const headline = routerHeadline({ router, traffic, incidents, tunnels })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
   // Резерв -- любой работающий VPN-туннель, кроме того, что несёт обход сейчас.
-  const backupLine = tunnels.find(
-    (t) => t.run_state === 'running' && (t.name || t.tunnel_id) !== path.via,
-  )
+  // Когда несущий не назван (раздельная маршрутизация, выбирают правила),
+  // резерв есть, если живых больше одного, но назвать его -- угадать.
+  const running = tunnels.filter((t) => t.run_state === 'running')
+  const backupLine = path.via
+    ? running.find((t) => (t.name || t.tunnel_id) !== path.via)
+    : running.length > 1
+      ? { tunnel_id: '' }
+      : undefined
   const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
   const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
 
@@ -748,7 +753,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
             {backupLine
               ? backupLine.name
                 ? `«${backupLine.name}» подхватит, если этот замолчит`
-                : 'второй VPN-туннель подхватит, если этот замолчит'
+                : 'второй VPN-туннель подхватит, если один замолчит'
               : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'}
           </div>
         </div>

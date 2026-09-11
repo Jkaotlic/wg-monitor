@@ -58,6 +58,10 @@ type miniappTunnel struct {
 	ActiveDefaultKnown bool   `json:"active_default_known"`
 	Note               string `json:"note,omitempty"`
 	TS                 string `json:"ts,omitempty"`
+	// RoutesDNS / RoutesStatic -- сколько правил ведут в этот VPN-туннель.
+	// Нужны только для вывода «обход идёт правилами» и в мини-апп не уходят.
+	RoutesDNS    int `json:"-"`
+	RoutesStatic int `json:"-"`
 }
 
 // miniappTunnelDetails is the subset of the agent's details map we decode.
@@ -76,6 +80,8 @@ type miniappTunnelDetails struct {
 	IsActiveDefault    bool   `json:"is_active_default"`
 	ActiveDefaultKnown bool   `json:"active_default_known"`
 	Note               string `json:"note"`
+	RoutesDNS          int    `json:"routes_dns"`
+	RoutesStatic       int    `json:"routes_static"`
 }
 
 // miniappTunnelFromEvent projects one latest-event row into the mini app's
@@ -118,6 +124,8 @@ func miniappTunnelFromEvent(row db.EventRow) (miniappTunnel, bool) {
 	out.ActiveDefaultKnown = d.ActiveDefaultKnown
 	out.IsActiveDefault = d.ActiveDefaultKnown && d.IsActiveDefault
 	out.Note = d.Note
+	out.RoutesDNS = d.RoutesDNS
+	out.RoutesStatic = d.RoutesStatic
 	return out, true
 }
 
@@ -127,6 +135,7 @@ const (
 	miniappTrafficVPN     = "vpn"
 	miniappTrafficDirect  = "direct"
 	miniappTrafficSingbox = "singbox"
+	miniappTrafficSplit   = "split"
 	miniappTrafficUnknown = "unknown"
 )
 
@@ -142,9 +151,12 @@ type miniappTraffic struct {
 	ContestedDefault bool `json:"contested_default"`
 }
 
-// miniappHydraDetails decodes only the sing-box flag out of the hydraroute check.
+// miniappHydraDetails decodes the sing-box flag and whether HydraRoute is
+// executing any rules out of the hydraroute check.
 type miniappHydraDetails struct {
 	SingboxRouterActive bool `json:"singbox_router_active"`
+	Running             bool `json:"running"`
+	RoutesHRNeo         int  `json:"routes_hrneo"`
 }
 
 // miniappDeriveTraffic answers "direct or via VPN" from stored state alone.
@@ -171,12 +183,10 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 	}
 	out.ContestedDefault = claimed > 1
 
-	if row, ok := byCheck["hydraroute"]; ok {
-		var hd miniappHydraDetails
-		if json.Unmarshal([]byte(row.DetailsJSON), &hd) == nil && hd.SingboxRouterActive {
-			out.Mode = miniappTrafficSingbox
-			return out
-		}
+	var hd miniappHydraDetails
+	if row, ok := byCheck["hydraroute"]; ok && json.Unmarshal([]byte(row.DetailsJSON), &hd) == nil && hd.SingboxRouterActive {
+		out.Mode = miniappTrafficSingbox
+		return out
 	}
 
 	if len(tunnels) == 0 {
@@ -206,6 +216,50 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 		// unread tunnel is enough doubt to withhold "direct" and say "unknown"
 		// instead.
 		out.Mode = miniappTrafficDirect
+		// Главный выход напрямую -- ещё не «обход не работает». Это обычная
+		// раздельная маршрутизация: всё, что не названо правилами, идёт мимо
+		// VPN, а заблокированное уводят правила. Так настроены рабочий роутер
+		// и testkeen, и жёлтое «обход не работает» на них было неправдой.
+		if bypass, carrier := miniappBypassByRules(tunnels, hd); bypass {
+			out.Mode = miniappTrafficSplit
+			if carrier != nil {
+				out.EgressTunnelID = carrier.TunnelID
+				out.EgressTunnelName = carrier.Name
+			}
+		}
 	}
 	return out
+}
+
+// miniappBypassByRules: уводят ли правила заблокированное в работающий
+// VPN-туннель. Правило в лежащий VPN-туннель ничего не обходит, остановленный
+// HydraRoute правил не исполняет.
+//
+// carrier -- VPN-туннель, который несёт обход, и только когда он единственный
+// живой. При нескольких живых выбирает набор HydraRoute, а в проверках этого
+// нет: правила без явного маршрута агент приписывает первому заявившему
+// основной маршрут, и назвать любой -- угадать.
+func miniappBypassByRules(tunnels []miniappTunnel, hd miniappHydraDetails) (bool, *miniappTunnel) {
+	var live []*miniappTunnel
+	bypass := false
+	for i := range tunnels {
+		t := &tunnels[i]
+		if t.RunState != "running" {
+			continue
+		}
+		live = append(live, t)
+		if t.RoutesDNS+t.RoutesStatic > 0 {
+			bypass = true
+		}
+	}
+	if len(live) > 0 && hd.Running && hd.RoutesHRNeo > 0 {
+		bypass = true
+	}
+	if !bypass {
+		return false, nil
+	}
+	if len(live) == 1 {
+		return true, live[0]
+	}
+	return true, nil
 }

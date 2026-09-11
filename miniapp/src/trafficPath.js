@@ -39,13 +39,17 @@ function tunnelBranch({ line, incidents, stale }) {
 export function pathState({ traffic, incidents = [], tunnels = [], stale = false } = {}) {
   const t = activeLine({ traffic, tunnels })
   const tunnel = tunnelBranch({ line: t, incidents, stale })
+  // При раздельной маршрутизации без названного выхода VPN-туннель выбирают
+  // правила для каждого адреса. Ветка живая, но подписать её первым попавшимся
+  // именем и его задержкой значило бы угадать.
+  const guess = traffic?.mode === 'split' && t?.tunnel_id !== traffic?.egress_tunnel_id
   return {
     tunnel,
     // Прямой поток не зависит от туннеля: он идёт мимо. Гасить его вместе с
     // упавшим VPN-туннелем значило бы говорить человеку «интернета нет», когда
     // банки и госуслуги у него работают.
     direct: stale ? 'unknown' : 'up',
-    via: traffic?.egress_tunnel_name || t?.name || t?.tunnel_id || '',
-    latencyMs: typeof t?.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
+    via: guess ? '' : traffic?.egress_tunnel_name || t?.name || t?.tunnel_id || '',
+    latencyMs: !guess && typeof t?.matrix_latency_ms === 'number' ? t.matrix_latency_ms : null,
   }
 }

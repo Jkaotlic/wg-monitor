@@ -210,10 +210,17 @@ export function trafficLabel(traffic) {
         title: 'Трафик идёт через VPN',
         detail: `Весь исходящий трафик уходит через «${traffic.egress_tunnel_name || traffic.egress_tunnel_id}»`,
       }
+    case 'split':
+      return {
+        title: 'Обход идёт по правилам',
+        detail: traffic.egress_tunnel_name || traffic.egress_tunnel_id
+          ? `Заблокированное — через «${traffic.egress_tunnel_name || traffic.egress_tunnel_id}», остальное напрямую`
+          : 'Заблокированное — через VPN-туннели обхода, остальное напрямую',
+      }
     case 'direct':
       return {
         title: 'Трафик идёт напрямую',
-        detail: 'Ни один VPN-туннель не несёт основной маршрут — трафик уходит через провайдера',
+        detail: 'Ни одно правило не ведёт в работающий VPN-туннель — всё уходит напрямую через провайдера',
       }
     case 'singbox':
       return {
