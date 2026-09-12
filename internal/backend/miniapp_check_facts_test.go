@@ -128,3 +128,55 @@ func TestMiniappTunnelChecksCarryNoFacts(t *testing.T) {
 		}
 	}
 }
+
+// Экран обязан напечатать версию модуля ядра -- ровно её. В тех же details
+// рядом лежат адрес панели, IP роутера и память: это топология, и белый
+// список расширяется на версии, а не «заодно».
+func TestMiniappCheckFactsAwgManagerPinsExactKeySet(t *testing.T) {
+	facts := miniappCheckFactsFrom("awg_manager", `{
+		"version":"2.17.2","firmware":"4.3.5","keenetic_os":"KN-1811",
+		"kernel_module_version":"1.0.0","kernel_module_model":"KN-1811","kernel_module_loaded":true,
+		"router_ip":"198.51.100.7","base_url":"http://127.0.0.1:2222","total_memory_mb":256
+	}`)
+	if facts == nil {
+		t.Fatal("facts = nil: версии awg_manager обязаны доехать до экрана")
+	}
+	b, _ := json.Marshal(facts)
+	for _, want := range []string{"kmod_version", "kmod_model", "kmod_loaded"} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("поле %q не прошло белый список: %s", want, b)
+		}
+	}
+	for _, forbidden := range []string{"router_ip", "base_url", "total_memory_mb", "198.51.100.7"} {
+		if strings.Contains(string(b), forbidden) {
+			t.Errorf("в фактах мини-аппа утекло %q: %s", forbidden, b)
+		}
+	}
+}
+
+// Старый агент про модуль ядра молчит. Молчание рисуется как «неизвестно»,
+// а не как «не загружен»: второе -- это поломка, и выдумывать её нельзя.
+func TestMiniappCheckFactsKmodLoadedAbsentStaysUnknown(t *testing.T) {
+	facts := miniappCheckFactsFrom("awg_manager", `{"version":"2.17.2"}`)
+	if facts == nil {
+		t.Fatal("facts = nil: версия панели обязана доехать и без модуля ядра")
+	}
+	if facts.KmodLoaded != nil {
+		t.Error("отсутствие поля обязано отрисоваться как «неизвестно», а не как «не загружен»")
+	}
+}
+
+// А вот честное «не загружен» обязано доехать именно как false: это ответ
+// роутера, и экран должен его показать.
+func TestMiniappCheckFactsKmodLoadedFalseIsAnswer(t *testing.T) {
+	facts := miniappCheckFactsFrom("awg_manager", `{"version":"2.17.2","kernel_module_loaded":false}`)
+	if facts == nil {
+		t.Fatal("facts = nil")
+	}
+	if facts.KmodLoaded == nil {
+		t.Fatal("kmod_loaded = nil: «не загружен» выдан за «агент не сказал»")
+	}
+	if *facts.KmodLoaded {
+		t.Error("kmod_loaded = true, хотим false")
+	}
+}
