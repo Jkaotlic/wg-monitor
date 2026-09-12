@@ -116,6 +116,25 @@ var miniappCommandAllowlist = map[string]bool{
 	// чинить, а не менять прошивку на чужом устройстве.
 	"firmware_status":  true,
 	"firmware_install": true,
+
+	// Правка конфига агента (решение оператора № 3, отменяет D4 программы
+	// мини-аппа). Радиус router-global, поэтому границ у неё сразу три, и
+	// каждая независима от остальных:
+	//
+	//   - только админ бота (miniappAdminOnlyActions), отказ 404 not_found;
+	//   - пол версии агента с отказом по умолчанию
+	//     (miniappActionMinAgentVersion): старый агент не знает про новые
+	//     поля и сделает не то, что человек прочитал на экране;
+	//   - подтверждение набором имени роутера на экране.
+	//
+	// Аргументы проверяет уже написанная ветка sanitizeAgentConfigArgs
+	// (wizard_handler.go), а не ветка default: это закрытый whitelist полей,
+	// повторяющий агентский. backend.url и токен в него не входят намеренно
+	// и остаются на пути мастера и CLI -- перенаправить адрес бэкенда значит
+	// захватить весь парк, и запрет живёт на стороне агента, где его не
+	// обойти правкой сервера. update_backend_url сюда не переезжает вовсе.
+	"agent_config_get":    true,
+	"update_agent_config": true,
 }
 
 // miniappOwnerOnlyActions -- действия, которых оператору не положено. Список
@@ -186,6 +205,14 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 				"this action changes the device itself and is available to the router's owner only")
 			return
 		}
+		// Радиус router-global -- круг только админ бота, и отказ приходит
+		// как 404 not_found, а не 403: владельцу роутера незачем узнавать по
+		// коду ответа, что действие вообще существует. Тот же порядок, что у
+		// остальных админских срезов мини-аппа, и до поиска роутера.
+		if miniappAdminOnlyActions[req.Action] && !miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
 		commandArgs := req.Args
 		if miniappTunnelArgActions[req.Action] {
 			// The client sends tunnel_id, never ndms_name -- see the allowlist
@@ -243,6 +270,27 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "router lookup failed")
 			return
+		}
+		// Гейт по версии агента -- ПЕРВАЯ из двух независимых преград
+		// (решение оператора п. 10). Версия та, о которой роутер сообщил сам
+		// в последнем отчёте; отказ по умолчанию (agentAtLeast), то есть
+		// пустая и нечитаемая версия ЗАПРЕЩАЮТ действие.
+		//
+		// Отказ стоит до очереди, а не в ответе агента: старый агент не
+		// знает про новые поля, перепишет config.yaml по своим правилам и
+		// перезапустит себя, а «принято» о таком было бы обещанием того, что
+		// не случится. Вторая преграда -- экран, который для таких роутеров
+		// не рисуется вовсе; ни одна не заменяет другую.
+		if floor := miniappActionMinAgentVersion[req.Action]; floor != "" {
+			agentVersion := ""
+			if u.LastDeployedVersion != nil {
+				agentVersion = *u.LastDeployedVersion
+			}
+			if !agentAtLeast(agentVersion, floor) {
+				writeJSONError(w, http.StatusConflict, "agent_too_old",
+					"на роутере агент "+agentVersion+", этому действию нужен "+floor+" или новее")
+				return
+			}
 		}
 		enqueueAgentCommandForUser(w, d, u, req.Action, args)
 	}
