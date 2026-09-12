@@ -191,6 +191,31 @@ func TestProbeDoT_Answers(t *testing.T) {
 	}
 }
 
+// Строка `tls upstream <IP> sni <имя>` называет имя, по которому проверяется
+// сертификат. Пока dotTarget возвращала ep.Host, у резолвера без IP-SAN
+// выходил ложный FAIL: проверка сертификата шла по адресу, а не по имени.
+func TestDotTarget_UsesSNIWhenSet(t *testing.T) {
+	addr, sni := dotTarget(keenetic.DNSEndpoint{
+		Type: "dot", Host: "198.51.100.9", Port: 853, SNI: "dns.example.com",
+	})
+	if addr != "198.51.100.9:853" {
+		t.Errorf("addr = %q, want 198.51.100.9:853", addr)
+	}
+	if sni != "dns.example.com" {
+		t.Errorf("sni = %q, want dns.example.com — имя из строки конфига", sni)
+	}
+}
+
+func TestDotTarget_FallsBackToHostWithoutSNI(t *testing.T) {
+	addr, sni := dotTarget(keenetic.DNSEndpoint{Type: "dot", Host: "dns.example.com", Port: 853})
+	if addr != "dns.example.com:853" {
+		t.Errorf("addr = %q", addr)
+	}
+	if sni != "dns.example.com" {
+		t.Errorf("sni = %q, want сам хост, когда sni не задан", sni)
+	}
+}
+
 func TestProbeDoT_NXDOMAIN(t *testing.T) {
 	srv := startDoTServer(t, dotNXDOMAIN, [4]byte{})
 	got, err := ProbeDoT(context.Background(), srv.addr, dotTestSNI, "example.com", &tls.Config{RootCAs: srv.roots}, 2*time.Second)

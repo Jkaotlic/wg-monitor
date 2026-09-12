@@ -122,13 +122,19 @@ func dotFrame(msg []byte) ([]byte, error) {
 }
 
 // dotTarget maps a DoT endpoint from keenetic.ParseDNSEndpoints to ProbeDoT's
-// addr and SNI. DNSEndpoint carries no SNI (the parser keeps only host:port),
-// so the host itself is the name the certificate is checked against; for an
-// IP host crypto/tls verifies the certificate's IP SANs.
+// addr and SNI. The `sni` qualifier of a `tls upstream <host> sni <name>` line
+// IS the name the certificate must be issued for, so it wins when present;
+// without it the host itself is that name, and for an IP host crypto/tls
+// verifies the certificate's IP SANs. Checking an IP against a certificate
+// that has no IP SAN is exactly the false failure this branch prevents.
 func dotTarget(ep keenetic.DNSEndpoint) (addr, sni string) {
 	port := ep.Port
 	if port == 0 {
 		port = 853
 	}
-	return net.JoinHostPort(ep.Host, strconv.Itoa(port)), ep.Host
+	sni = ep.SNI
+	if sni == "" {
+		sni = ep.Host
+	}
+	return net.JoinHostPort(ep.Host, strconv.Itoa(port)), sni
 }
