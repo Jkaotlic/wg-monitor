@@ -108,6 +108,107 @@ dns-proxy
 	}
 }
 
+// Пятнадцать строк -- это форма, которую KeenOS правда держит в running-config
+// (проверено волной 0, шаг B5). До этой правки ParseDNSEndpoints узнавала шесть
+// из них, и проба DoT из v0.30 не работала ни по одному эталонному апстриму:
+// код был, входа для него не было.
+const dnsProxyFixture = `
+dns-proxy
+    tls upstream 8.8.8.8 sni dns.google
+    tls upstream 9.9.9.9 sni dns.quad9.net
+    tls upstream 1.1.1.1 sni cloudflare-dns.com
+    tls upstream common.dot.dns.yandex.net
+    tls upstream common.dot.dns.yandex.net domain ru
+    tls upstream common.dot.dns.yandex.net domain su
+    tls upstream common.dot.dns.yandex.net domain xn--p1ai
+    tls upstream common.dot.dns.yandex.net domain xn--80adxhks
+    tls upstream common.dot.dns.yandex.net domain xn--d1acj3b
+    tls upstream common.dot.dns.yandex.net domain xn--p1acf
+    tls upstream common.dot.dns.yandex.net domain tatar
+    tls upstream 94.140.14.14:853 sni dns.adguard-dns.com
+    https upstream https://dns.quad9.net/dns-query
+    https upstream https://cloudflare-dns.com/dns-query dnsm
+    https upstream https://common.dot.dns.yandex.net/dns-query domain ru
+!
+`
+
+func TestParseDNSEndpoints_SeesEveryReferenceLine(t *testing.T) {
+	got := ParseDNSEndpoints(dnsProxyFixture)
+	if len(got) != 15 {
+		t.Fatalf("разобрано %d строк из 15: %+v", len(got), got)
+	}
+}
+
+func TestParseDNSEndpoints_DoTWithoutPortDefaultsTo853(t *testing.T) {
+	got := ParseDNSEndpoints(dnsProxyFixture)
+	var found bool
+	for _, ep := range got {
+		if ep.Type == "dot" && ep.Host == "common.dot.dns.yandex.net" && ep.Zone == "" {
+			found = true
+			if ep.Port != 853 {
+				t.Errorf("порт %d, хотим 853 по умолчанию (как уже делает dns_dot.go:128-131)", ep.Port)
+			}
+		}
+	}
+	if !found {
+		t.Error("строка `tls upstream <host>` без порта не разобрана вовсе")
+	}
+}
+
+func TestParseDNSEndpoints_KeepsSNIAndZone(t *testing.T) {
+	got := ParseDNSEndpoints(dnsProxyFixture)
+	bySNI := map[string]DNSEndpoint{}
+	zones := map[string]bool{}
+	for _, ep := range got {
+		if ep.SNI != "" {
+			bySNI[ep.SNI] = ep
+		}
+		if ep.Zone != "" {
+			zones[ep.Zone] = true
+		}
+	}
+	if ep, ok := bySNI["dns.google"]; !ok || ep.Host != "8.8.8.8" || ep.Port != 853 {
+		t.Errorf("строка с sni разобрана как %+v", ep)
+	}
+	for _, z := range []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf", "tatar"} {
+		if !zones[z] {
+			t.Errorf("зона %q потеряна: зонность обязана быть представима", z)
+		}
+	}
+}
+
+func TestParseDNSEndpoints_ExplicitPortSurvives(t *testing.T) {
+	got := ParseDNSEndpoints(dnsProxyFixture)
+	for _, ep := range got {
+		if ep.Host == "94.140.14.14" {
+			if ep.Port != 853 || ep.SNI != "dns.adguard-dns.com" {
+				t.Errorf("явный порт и sni вместе разобраны как %+v", ep)
+			}
+			return
+		}
+	}
+	t.Error("строка с явным портом и sni не найдена")
+}
+
+func TestParseDNSEndpoints_DoHKeepsZoneAndIgnoresDNSM(t *testing.T) {
+	got := ParseDNSEndpoints(dnsProxyFixture)
+	var zoned, plain int
+	for _, ep := range got {
+		if ep.Type != "doh" {
+			continue
+		}
+		if ep.Zone == "ru" {
+			zoned++
+		}
+		if ep.URL == "https://cloudflare-dns.com/dns-query" && ep.Zone == "" {
+			plain++
+		}
+	}
+	if zoned != 1 || plain != 1 {
+		t.Errorf("doh: зонных %d (хотим 1), с dnsm без зоны %d (хотим 1)", zoned, plain)
+	}
+}
+
 func TestParseDNSEndpoints_IgnoresMalformed(t *testing.T) {
 	cfg := `
 ip name-server                          ` + // garbage line, missing fields
