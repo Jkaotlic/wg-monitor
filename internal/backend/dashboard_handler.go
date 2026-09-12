@@ -65,7 +65,7 @@ func DashboardAuthMiddleware(expected string, logger *slog.Logger) func(http.Han
 	}
 }
 
-func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
+func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimiter) {
 	staticFS, err := fs.Sub(dashboardStaticFS, "dashboard_static")
 	if err != nil {
 		panic(err)
@@ -75,7 +75,12 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	pageAuth := DashboardPageAuthMiddleware(d.DashboardToken)
 	mux.Handle("GET /dashboard", requestIDMiddleware()(http.RedirectHandler("/dashboard/", http.StatusFound)))
 	mux.Handle("GET /dashboard/login", requestIDMiddleware()(staticCacheHeadersForPage(dashboardLoginPageHandler())))
-	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(dashboardLoginHandler(d)))
+	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
+	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(entranceLimit(dashboardLoginHandler(d))))
+	// Обмен личной ссылки на обычную сессию дашборда. Вход публичный по
+	// построению -- гейт у него сам грант, поэтому лимит попыток здесь не
+	// украшение, а часть защиты.
+	mux.Handle("POST /v1/dashboard/web-link/redeem", requestIDMiddleware()(entranceLimit(webLinkRedeemHandler(d))))
 	mux.Handle("POST /v1/dashboard/logout", requestIDMiddleware()(dashboardLogoutHandler()))
 	mux.Handle("GET /dashboard/", requestIDMiddleware()(pageAuth(staticHandler)))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))

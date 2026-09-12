@@ -495,11 +495,16 @@ func NewMux(d Deps) http.Handler {
 		mux.Handle("POST /v1/wizard/agents/{nickname}/maintenance", reqID(wizAuth(wizardMaintenanceHandler(d))))
 		mux.Handle("GET /v1/wizard/cmd/{cmd_id}", reqID(wizAuth(wizardCmdResultHandler(d))))
 	}
+	// Лимит попыток на входах в систему. Один лимитер на все три входа
+	// (форма дашборда, обмен личной ссылки, сессия мини-аппа) намеренно:
+	// перебор ведётся с адреса, а не по одному эндпоинту, и считать его надо
+	// там же.
+	entrance := newRemoteRateLimiter(entranceRatePerSec, entranceBurst)
 	if d.DashboardToken != "" {
-		registerDashboardRoutes(mux, d)
+		registerDashboardRoutes(mux, d, entrance)
 	}
 	if d.TelegramBotToken != "" {
-		registerMiniappRoutes(mux, d)
+		registerMiniappRoutes(mux, d, entrance)
 	}
 	return mux
 }
