@@ -207,6 +207,61 @@ func TestDNS_ThresholdScalesWithDistinctEndpointCount(t *testing.T) {
 	}
 }
 
+// Потолок порога: нижний предел 2 не может быть больше самого числа
+// апстримов. Роутер с единственным резолвером -- обычное дело, и без потолка
+// его мёртвый резолвер не дал бы тревоги НИКОГДА: порог 2 при одной пробе
+// недостижим. Тревога обязана остаться возможной при любом числе апстримов.
+func TestDNS_SingleDeadResolverStillFails(t *testing.T) {
+	deadHost, deadPort := deadTCPAddr(t)
+
+	chk := DNS{
+		Endpoints: []keenetic.DNSEndpoint{
+			{Type: "dot", Host: deadHost, Port: deadPort},
+		},
+		TestDomain:      "example.com",
+		PerProbeTimeout: 500 * time.Millisecond,
+		// FailThreshold не задан: порог считает сама проверка.
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Details["endpoints"] != 1 || got.Details["failed_count"] != 1 {
+		t.Fatalf("endpoints=%v failed_count=%v, хотим 1 и 1: %+v",
+			got.Details["endpoints"], got.Details["failed_count"], got.Details)
+	}
+	if got.Status != "fail" {
+		t.Fatalf("единственный мёртвый резолвер обязан давать тревогу, иначе она умолкает навсегда: %+v", got)
+	}
+}
+
+// Порог, заданный оператором в конфиге, сильнее вычисленного: он доезжает до
+// проверки через buildDNSCheck и обязан побеждать формулу. Здесь вычисленный
+// порог был бы max(2,(2*2+2)/3)=2 и одного провала не хватило бы, а явная
+// единица делает тревогу из того же прогона.
+func TestDNS_ExplicitThresholdBeatsComputed(t *testing.T) {
+	server, stop := startMockUDPDNS(t, [4]byte{1, 2, 3, 4})
+	defer stop()
+	liveHost, livePort := splitHostPort(t, server)
+	deadHost, deadPort := deadTCPAddr(t)
+
+	chk := DNS{
+		Endpoints: []keenetic.DNSEndpoint{
+			{Type: "dot", Host: deadHost, Port: deadPort},
+			{Type: "plain", Host: liveHost, Port: livePort},
+		},
+		TestDomain:      "example.com",
+		FailThreshold:   1, // явно заданный оператором
+		IfaceDialFn:     func(_ string) *net.Dialer { return &net.Dialer{} },
+		PerProbeTimeout: 500 * time.Millisecond,
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Details["endpoints"] != 2 || got.Details["failed_count"] != 1 {
+		t.Fatalf("endpoints=%v failed_count=%v, хотим 2 и 1: %+v",
+			got.Details["endpoints"], got.Details["failed_count"], got.Details)
+	}
+	if got.Status != "fail" {
+		t.Fatalf("явный порог 1 обязан побеждать вычисленный 2: %+v", got)
+	}
+}
+
 func TestDNS_NoEndpoints_ReturnsOK(t *testing.T) {
 	chk := DNS{Endpoints: nil, TestDomain: "example.com", FailThreshold: 1}
 	got := chk.Run(context.Background(), Deps{})
