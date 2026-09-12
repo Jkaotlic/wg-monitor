@@ -265,8 +265,11 @@ checks:
 	if cfg.Checks.DNS.TestDomain != "example.com" {
 		t.Fatalf("TestDomain default not applied: got %q", cfg.Checks.DNS.TestDomain)
 	}
-	if cfg.Checks.DNS.FailThreshold != 1 {
-		t.Fatalf("FailThreshold default not applied: got %d, want 1", cfg.Checks.DNS.FailThreshold)
+	// Дефолт стал двойкой вместе с починкой парсера: он видит весь эталонный
+	// набор (15 строк вместо 6), и порог 1 означал бы тревогу от одного
+	// недоступного апстрима. Правка осознанная, а не регрессия.
+	if cfg.Checks.DNS.FailThreshold != 2 {
+		t.Fatalf("FailThreshold default not applied: got %d, want 2", cfg.Checks.DNS.FailThreshold)
 	}
 	// Endpoints can be empty; AutoDiscover has no default
 	if len(cfg.Checks.DNS.Endpoints) != 0 {
@@ -429,5 +432,46 @@ func TestLoggingConfig_ResolveFile(t *testing.T) {
 		if got != c.want {
 			t.Errorf("ResolveFile(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// writeTestConfig собирает минимальный валидный конфиг агента, дописывает к
+// нему extra (кусок YAML верхнего уровня, например секцию checks) и загружает.
+func writeTestConfig(t *testing.T, extra string) *Config {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+backend:
+  url: https://wgmonitor.example.com
+  token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
+agent:
+  nickname: testkeen
+  interval_sec: 60
+` + extra
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	return cfg
+}
+
+// Парсер начал видеть 15 апстримов вместо 6. При пороге 1 один недоступный
+// DoT-апстрим уронил бы проверку в FAIL по всему парку -- порог обязан
+// считаться от числа апстримов, как уже сделано для external_reach.
+func TestLoadConfig_DNSFailThresholdScalesWithEndpoints(t *testing.T) {
+	cfg := writeTestConfig(t, ``) // без секции checks.dns
+	if got := cfg.Checks.DNS.FailThreshold; got < 2 {
+		t.Errorf("порог dns = %d, хотим не меньше 2", got)
+	}
+}
+
+func TestLoadConfig_DNSFailThresholdRespectsExplicitValue(t *testing.T) {
+	cfg := writeTestConfig(t, "checks:\n  dns:\n    fail_threshold: 1\n")
+	if cfg.Checks.DNS.FailThreshold != 1 {
+		t.Errorf("явно заданный порог 1 перетёрт на %d", cfg.Checks.DNS.FailThreshold)
 	}
 }
