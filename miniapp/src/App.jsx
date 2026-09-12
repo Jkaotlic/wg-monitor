@@ -14,6 +14,7 @@ import { TabBar } from './ui/TabBar.jsx'
 import { RouterDetail } from './screens/RouterDetail.jsx'
 import { FleetOverlay } from './screens/FleetOverlay.jsx'
 import { AdminOverlay } from './screens/AdminOverlay.jsx'
+import { AgentConfigScreen } from './screens/AgentConfigScreen.jsx'
 import { NoAccess } from './screens/NoAccess.jsx'
 import { RoutesTab } from './screens/RoutesTab.jsx'
 import { SettingsScreen } from './screens/SettingsScreen.jsx'
@@ -122,6 +123,7 @@ export function App() {
           isAdmin={isAdmin}
           onClose={() => dispatch({ type: 'overlay', overlay: null })}
           openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+          onOpenAgentConfig={() => dispatch({ type: 'overlay', overlay: 'agentcfg' })}
         />
       )
       : nav.overlay === 'routes' && nav.routerID != null
@@ -134,7 +136,19 @@ export function App() {
             />
           </Overlay>
         )
-        : null
+        // Настройки агента лежат слоем глубже обслуживания: закрытие
+        // возвращает туда, откуда экран открыли, а не на таб роутера.
+        : nav.overlay === 'agentcfg' && nav.routerID != null
+          ? (
+            <AgentConfigScreen
+              routerID={nav.routerID}
+              routerName={current?.nickname}
+              asleep={asleep}
+              openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+              onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })}
+            />
+          )
+          : null
 
   return (
     <>

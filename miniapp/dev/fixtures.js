@@ -385,6 +385,43 @@ function routeAddPlan(args) {
 
 function commandResult(id) {
   const { action: lastAction, args: lastArgs } = commands.get(id) ?? { action: null, args: {} }
+  // Конфиг агента (actions.AgentConfigView). Путь своего DNS-сервера
+  // приезжает уже замаскированным -- маскирует его сам роутер, и в песочнице
+  // он обязан выглядеть так же, иначе «посмотрел в песочнице» ничего не
+  // значит. Пароля панели в ответе нет вовсе: бэкенд его не знает.
+  if (lastAction === 'agent_config_get') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 700,
+      output: JSON.stringify({
+        config_kind: 'agent',
+        interval_sec: 120,
+        awgm_base_url: 'http://192.168.31.1:8080',
+        awgm_login: 'admin',
+        external_reach_enabled: true,
+        external_reach_fail_threshold: 3,
+        allow_router_reboot: true,
+        allow_firmware_install: false,
+        dns_watchdog_enabled: false,
+        dns_watchdog_endpoint: 'https://dns.example.com/***',
+        dns_watchdog_canary_domain: 'example.com',
+        dns_watchdog_bootstrap_ip: '198.51.100.10',
+        config_path: '/opt/etc/wg-monitor/config.yaml',
+      }),
+    }
+  }
+  if (lastAction === 'update_agent_config') {
+    const applied = Object.entries(lastArgs ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ')
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1500,
+      output: `config updated (${applied}); restarting agent`,
+    }
+  }
   if (lastAction === 'version_audit') {
     return {
       id,
@@ -689,8 +726,11 @@ export function respond(method, path) {
       silence_after_sec: 120,
       alert_after_fails: 3,
       recovery_after_oks: 2,
-      agent_version: 'v0.16.0',
-      role: 'owner',
+      // Версия агента и роль -- то, по чему экран настроек агента решает,
+      // рисовать ли поля вообще: правка router-global (только админ), а
+      // агент ниже пола версии сделает не то, что показано.
+      agent_version: 'v0.31.0',
+      role: 'admin',
     }
   }
   if (rest.startsWith('/commands/')) return commandResult(rest.slice('/commands/'.length))

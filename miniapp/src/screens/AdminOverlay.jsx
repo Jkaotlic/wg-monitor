@@ -22,7 +22,7 @@ import {
 //
 // Парк видит только админ. Сервер отвечает 404 всем остальным, и этот
 // признак -- подсказка интерфейсу, а не граница доступа.
-export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet }) {
+export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, onOpenAgentConfig }) {
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
 
@@ -113,6 +113,21 @@ export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet }) 
                 {linkError && <p class="state state-error">{linkError}</p>}
               </>
             )}
+          </Section>
+        )}
+
+        {/* Настройки агента -- вход только у админа: радиус правки
+            router-global, и сервер ответит остальным 404. Сам экран
+            проверяет ещё и версию агента: у старого поля не рисуются. */}
+        {isAdmin && onOpenAgentConfig && (
+          <Section title="Настройки агента">
+            <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenAgentConfig}>
+              Открыть настройки агента
+            </button>
+            <p class="hint">
+              Как часто роутер отчитывается, адрес и логин его панели, что агенту разрешено делать
+              с устройством. Изменение перезапускает агента.
+            </p>
           </Section>
         )}
 
