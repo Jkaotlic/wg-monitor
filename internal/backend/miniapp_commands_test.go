@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -742,5 +744,157 @@ func TestMiniappCommandScreensNeverLeakRouterSecrets(t *testing.T) {
 				t.Errorf("%s: есть поле %q -- секреты уедут в него завтра", path, field)
 			}
 		}
+	}
+}
+
+// miniappRealQueueFleet -- парк с НАСТОЯЩЕЙ очередью вместо тестового стока.
+// Нужна там, где проверяется не ответ хендлера на подсунутые данные, а
+// поведение на стыке с очередью: срок жизни записей у неё свой, и тестовый
+// сток об этом ничего не знает.
+func miniappRealQueueFleet(t *testing.T) (*db.DB, int64, int64, *cmdpkg.Queue, http.Handler) {
+	t.Helper()
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	q := cmdpkg.New()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: q})
+	return d, ownedID, ownerTG, q, h
+}
+
+// miniappPollResult -- опрос результата команды от лица конкретного человека.
+func miniappPollResult(t *testing.T, h http.Handler, routerID, telegramUserID int64, cmdID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/v1/miniapp/routers/%d/commands/%s?wait_sec=0", routerID, cmdID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// Граница по роли на опросе результата не должна зависеть от записи о выдаче
+// команды.
+//
+// Queue.Sweep чистит issued по issuedAt, а results по recordedAt ОДНИМ
+// cutoff, и issuedAt всегда раньше recordedAt: результат записывается после
+// выдачи. Значит запись о выдаче вымётывается ПЕРВОЙ, и между ними есть окно
+// -- действие уже «неизвестно», а результат ещё жив. У спящего мобильного
+// роутера это окно длиной в задержку ответа, то есть минуты, при Sweep(1h) в
+// проде.
+//
+// Если гейт роли опирается на «действие известно», в этом окне он
+// превращается в разрешение по умолчанию, и владелец с идентификатором
+// команды читает адрес панели из админского ответа. Поэтому действие
+// хранится рядом с результатом и живёт ровно столько же.
+func TestMiniappResultRoleGateSurvivesSweep(t *testing.T) {
+	d, ownedID, ownerTG, q, h := miniappRealQueueFleet(t)
+	_ = d
+
+	// Админ читает конфиг агента.
+	rec := miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"agent_config_get"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("админ, чтение конфига: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+
+	// Агент забирает команду -- только теперь она «выдана».
+	got, ok := q.Dequeue(context.Background(), ownedID, 0)
+	if !ok || got.ID != issued.CmdID {
+		t.Fatalf("агент не забрал команду: %+v ok=%v", got, ok)
+	}
+
+	// Задержка ответа агента: именно она делает issuedAt раньше recordedAt.
+	time.Sleep(100 * time.Millisecond)
+	const panelURL = "http://198.51.100.7:8080"
+	if err := q.RecordResult(ownedID, wire.CommandResult{
+		ID:     issued.CmdID,
+		Status: "ok",
+		Output: `{"config_kind":"agent","awgm_base_url":"` + panelURL + `","awgm_login":"admin"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cutoff между выдачей и ответом: запись о выдаче уходит, результат живёт.
+	q.Sweep(50 * time.Millisecond)
+
+	// Положительная половина, и она здесь обязательна: если бы Sweep унёс и
+	// результат, отказ владельцу ничего не доказывал бы -- он пришёл бы как
+	// result_not_ready, и тест был бы зелёным вхолостую.
+	mine := miniappPollResult(t, h, ownedID, 999, issued.CmdID)
+	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(panelURL)) {
+		t.Fatalf("админ после Sweep: код %d тело %s, ожидались 200 и адрес панели (результат должен был выжить)",
+			mine.Code, mine.Body.String())
+	}
+
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		res := miniappPollResult(t, h, ownedID, who.tgID, issued.CmdID)
+		if res.Code != http.StatusNotFound {
+			t.Errorf("%s после Sweep: код %d тело %s, ожидался 404", who.name, res.Code, res.Body.String())
+		}
+		for _, secret := range []string{panelURL, "198.51.100.7", "awgm_base_url"} {
+			if bytes.Contains(res.Body.Bytes(), []byte(secret)) {
+				t.Errorf("%s после Sweep прочитал %q: %s", who.name, secret, res.Body.String())
+			}
+		}
+	}
+}
+
+// Второй набор ролей -- miniappOwnerOnlyActions (firmware_install) -- на
+// постановке проверяется (403 owner_only), и на опросе результата проверяется
+// тоже.
+//
+// Решение записано здесь намеренно: сегодня вывод firmware_install -- строка
+// «firmware install kicked; router will reboot», и «утечки нет» держится
+// только на том, каким этот вывод оказался. Такое обоснование перестаёт быть
+// правдой молча -- в тот день, когда агент начнёт возвращать в нём версию,
+// путь к прошивке или причину отказа. Граница ставится по роли действия, а не
+// по сегодняшней безобидности его вывода.
+func TestMiniappFirmwareResultDeniedToOperator(t *testing.T) {
+	_, ownedID, ownerTG, q, h := miniappRealQueueFleet(t)
+
+	// Ставит владелец: установка прошивки оператору запрещена и на постановке.
+	rec := miniappAgentConfigPost(t, h, ownedID, ownerTG, `{"action":"firmware_install"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("владелец, установка прошивки: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(context.Background(), ownedID, 0); !ok {
+		t.Fatal("агент не забрал команду установки прошивки")
+	}
+	const outcome = "firmware install kicked; router will reboot"
+	if err := q.RecordResult(ownedID, wire.CommandResult{ID: issued.CmdID, Status: "ok", Output: outcome}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := miniappPollResult(t, h, ownedID, 555, issued.CmdID)
+	if res.Code != http.StatusForbidden || !bytes.Contains(res.Body.Bytes(), []byte("owner_only")) {
+		t.Errorf("оператор, опрос результата прошивки: код %d тело %s, ожидался 403 owner_only", res.Code, res.Body.String())
+	}
+	if bytes.Contains(res.Body.Bytes(), []byte(outcome)) {
+		t.Errorf("оператор прочитал вывод установки прошивки: %s", res.Body.String())
+	}
+
+	// Владельцу -- приходит: иначе тест был бы зелёным и на экране, закрытом
+	// вообще для всех.
+	mine := miniappPollResult(t, h, ownedID, ownerTG, issued.CmdID)
+	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(outcome)) {
+		t.Fatalf("владелец, опрос результата прошивки: код %d тело %s, ожидались 200 и вывод", mine.Code, mine.Body.String())
 	}
 }

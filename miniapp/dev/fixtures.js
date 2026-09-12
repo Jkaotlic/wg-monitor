@@ -397,7 +397,7 @@ function commandResult(id) {
       output: JSON.stringify({
         config_kind: 'agent',
         interval_sec: 120,
-        awgm_base_url: 'http://192.168.31.1:8080',
+        awgm_base_url: 'http://198.51.100.7:8080',
         awgm_login: 'admin',
         external_reach_enabled: true,
         external_reach_fail_threshold: 3,

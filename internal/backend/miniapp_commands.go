@@ -339,22 +339,36 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 		// у которого есть идентификатор команды, дочитал бы адрес из чужого
 		// ответа, хотя саму команду поставить не может.
 		//
-		// Действие восстанавливается по идентификатору: настоящая очередь
-		// помнит выданные агенту команды (Queue.CommandByID читает issued), а
-		// результат существует только у выданной -- RecordResult отвергает
-		// результат невыданной команды. Поэтому «результат есть» и «действие
-		// известно» приходят вместе.
+		// Действие берётся у очереди и НЕ зависит от записи о выдаче:
+		// RecordResult кладёт action рядом с результатом, поэтому оно живёт
+		// ровно столько же, сколько сам результат.
 		//
-		// Отказ тот же, что на постановке -- 404 not_found: по коду ответа
-		// владельцу незачем узнавать, что действие существует. Команду, чьё
-		// действие очередь уже НЕ помнит, здесь не запрещаем: результата у
-		// такой тоже нет (ниже придёт result_not_ready), а запрет по незнанию
-		// сломал бы опрос обычных действий, чью запись вымело Sweep.
-		if cmd, known := d.CommandSink.CommandByID(routerID, cmdID); known &&
-			miniappAdminOnlyActions[cmd.Action] &&
-			!miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
-			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
-			return
+		// Раньше здесь стоял расчёт «действие забыто -- значит и результата
+		// нет», и он был НЕВЕРЕН: Sweep чистит issued по issuedAt, а results
+		// по recordedAt одним cutoff, и issuedAt всегда раньше. Запись о
+		// выдаче уходила первой, и гейт открывался ровно на время задержки
+		// ответа агента -- у спящего мобильного роутера это минуты. Сторожит
+		// TestMiniappResultRoleGateSurvivesSweep.
+		//
+		// Отказ повторяет постановку для каждого действия: admin-only -- 404
+		// not_found (по коду ответа владельцу незачем узнавать, что действие
+		// существует), owner-only -- 403 owner_only.
+		if cmd, known := d.CommandSink.CommandByID(routerID, cmdID); known {
+			if miniappAdminOnlyActions[cmd.Action] && !miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+				writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+				return
+			}
+			// Второй набор ролей проверяется тоже, а не только admin-only.
+			// Сегодня вывод firmware_install -- безобидная строка «firmware
+			// install kicked», но «не течёт, потому что вывод такой»
+			// перестаёт быть правдой молча: стоит агенту вернуть в нём
+			// версию, путь к образу или причину отказа. Граница ставится по
+			// роли действия, а не по сегодняшнему виду его вывода.
+			if miniappOwnerOnlyActions[cmd.Action] && !miniappIsOwner(d, telegramUserID, routerID) {
+				writeJSONError(w, http.StatusForbidden, "owner_only",
+					"this action changes the device itself and is available to the router's owner only")
+				return
+			}
 		}
 		wait := miniappMaxCommandWaitSec
 		if q := r.URL.Query().Get("wait_sec"); q != "" {
