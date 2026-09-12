@@ -84,12 +84,16 @@ var miniappUpdateComponents = map[string]bool{
 // miniappSnoozeFor -- «Отложить на неделю».
 const miniappSnoozeFor = 7 * 24 * time.Hour
 
-// versionAuditFromSnapshot восстанавливает форму ответа агента из снимка базы.
+// VersionAuditFromSnapshot восстанавливает форму ответа агента из снимка базы.
 //
 // Так сравнение обновлений идёт через ОДИН ComputeUpdates и для свежего ответа
 // роутера, и для снимка: второй сравниватель рядом разъехался бы с первым, и
 // панель в боте начала бы показывать не то, что экран в приложении.
-func versionAuditFromSnapshot(row db.RouterVersionRow) wire.VersionAudit {
+//
+// Экспортирована ради умного ответа бота (package callbacks): его блок
+// обновлений после рестарта бэкенда пустел, потому что читал только кэш в
+// памяти, и ему нужен тот же переход «снимок -> сравнение».
+func VersionAuditFromSnapshot(row db.RouterVersionRow) wire.VersionAudit {
 	return wire.VersionAudit{
 		AwgmgrVersion:   row.AwgmgrVersion,
 		AwgmgrBackend:   row.AwgmgrBackend,
@@ -138,7 +142,7 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 // показанные помечаем показанными. Иначе «отложить» отменялось бы самим
 // открытием экрана.
 func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, maySeeFirmware bool, now time.Time) miniappVersionsResp {
-	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, versionAuditFromSnapshot(row))
+	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
 	rebootHint := upstream.RebootHint(row.PrevKmodVersion, row.KmodVersion)
 
 	reminders := d.DB.UpdateReminders()
@@ -306,7 +310,7 @@ func miniappNewsVersion(r *http.Request, d Deps, component string, row db.Router
 		}
 		return row.KmodVersion
 	}
-	updates, _ := upstream.ComputeUpdates(r.Context(), d.Upstream, versionAuditFromSnapshot(row))
+	updates, _ := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
 	for _, u := range updates {
 		if u.Component == component {
 			return u.Available
