@@ -2581,7 +2581,11 @@ func (r *Router) SetUpstream(c *upstream.Cache) {
 // for the smart-reply Updates section. Single source of truth via the upstream
 // helper (LOGIC-09).
 func computeUpdates(ctx context.Context, up *upstream.Cache, va wire.VersionAudit) []alerts.UpdateAvailable {
-	infos := upstream.ComputeUpdates(ctx, up, va)
+	// Причины «неизвестно» здесь не рисуются намеренно: умный ответ -- это
+	// разговор о поломке, и отсутствие блока в нём не читается как «всё
+	// актуально». Про незнание словами говорят экраны (мини-апп и дашборд) и
+	// панель обслуживания -- те поверхности, которые человек открыл сам.
+	infos, _ := upstream.ComputeUpdates(ctx, up, va)
 	if len(infos) == 0 {
 		return nil
 	}

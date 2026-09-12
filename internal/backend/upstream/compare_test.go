@@ -1,8 +1,14 @@
 package upstream
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 func TestSoftwareNewerThan(t *testing.T) {
@@ -33,19 +39,145 @@ func TestSoftwareNewerThan(t *testing.T) {
 	}
 }
 
-func TestAwgManagerUpdateHint_NativeBoundaryNeedsReboot(t *testing.T) {
-	hint := AwgManagerUpdateHint("2.10.5", "2.10.7", "native")
-	for _, want := range []string{"NativeWG", "router reboot"} {
+// Подсказку про обновление панели читает владелец роутера, а не оператор
+// бэкенда: она обязана быть по-русски и говорить последствие. Прежний текст
+// («NativeWG update crosses 2.10.6; plan a router reboot…») нарушал оба
+// правила и вдобавок опирался на номер релиза, связь которого с модулем ядра
+// разведка 12.09.2026 подтвердить не смогла (шаг B9 волны 0).
+func TestAwgManagerUpdateHint_SpeaksRussianAboutConsequence(t *testing.T) {
+	hint := AwgManagerUpdateHint("2.17.2", "2.18.0")
+	for _, want := range []string{"может сменить модуль ядра", "VPN-туннели поднимутся только после перезагрузки роутера"} {
 		if !strings.Contains(hint, want) {
-			t.Fatalf("hint %q missing %q", hint, want)
+			t.Fatalf("подсказка %q не говорит про %q", hint, want)
+		}
+	}
+	for _, forbidden := range []string{"NativeWG", "reboot", "plan a router"} {
+		if strings.Contains(hint, forbidden) {
+			t.Fatalf("английский текст доехал до владельца: %s", hint)
 		}
 	}
 }
 
-func TestAwgManagerUpdateHint_SuppressedForKernelBackend(t *testing.T) {
-	if hint := AwgManagerUpdateHint("2.10.5", "2.10.7", "kernel"); hint != "" {
-		t.Fatalf("kernel backend must not get NativeWG reboot hint, got %q", hint)
+// Риск сменившегося модуля ядра одинаков на обоих движках: живой роутер с
+// activeBackend=kernel тоже несёт модуль ядра (замер 12.09.2026: kmod
+// 3.1.20260906 на KN-1811). Прежняя привязка подсказки к NativeWG-движку
+// молчала бы там, где последствие настоящее.
+func TestAwgManagerUpdateHint_NoUpdateNoHint(t *testing.T) {
+	if hint := AwgManagerUpdateHint("2.18.0", "2.18.0"); hint != "" {
+		t.Fatalf("без обновления подсказки быть не должно, got %q", hint)
 	}
+	if hint := AwgManagerUpdateHint("", "2.18.0"); hint != "" {
+		t.Fatalf("без известной версии на роутере подсказки быть не должно, got %q", hint)
+	}
+}
+
+// Пустой репозиторий, 403 от GitHub и настоящая свежесть выглядели одинаково.
+// Правило «неизвестно -- это ответ» здесь не соблюдалось ни на одной
+// поверхности: выключенный источник читался как «всё актуально».
+func TestComputeUpdates_UnconfiguredSourceIsUnknownNotFresh(t *testing.T) {
+	cache := NewCache(time.Hour, nil) // ни одного источника
+	updates, unknown := ComputeUpdates(context.Background(), cache, wire.VersionAudit{AwgmgrVersion: "2.17.2"})
+	if len(updates) != 0 {
+		t.Errorf("без источника не бывает обновлений: %+v", updates)
+	}
+	if !hasUnknown(unknown, "awgmgr", ReasonNotConfigured) {
+		t.Errorf("причина «источник не настроен» не названа: %+v", unknown)
+	}
+}
+
+// Недоступный GitHub -- это «мы не знаем», а не «обновлений нет». Молчать
+// здесь значит замолчать ровно тогда, когда новость нужнее всего.
+func TestComputeUpdates_GitHubErrorIsUnavailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+	cache := NewCache(time.Hour, []Source{{Name: "awgmgr", GitHubRepo: "example/awgmgr"}})
+	cache.api = srv.URL + "/%s"
+
+	updates, unknown := ComputeUpdates(context.Background(), cache, wire.VersionAudit{AwgmgrVersion: "2.17.2"})
+	if len(updates) != 0 {
+		t.Errorf("на отказе апстрима обновлений не бывает: %+v", updates)
+	}
+	if !hasUnknown(unknown, "awgmgr", ReasonUnavailable) {
+		t.Errorf("причина «апстрим недоступен» не названа: %+v", unknown)
+	}
+}
+
+func TestComputeUpdates_NoSnapshotIsItsOwnReason(t *testing.T) {
+	cache := NewCache(time.Hour, []Source{{Name: "awgmgr", GitHubRepo: "example/awgmgr"}})
+	_, unknown := ComputeUpdates(context.Background(), cache, wire.VersionAudit{})
+	if !hasUnknown(unknown, "awgmgr", ReasonNoSnapshot) {
+		t.Errorf("пустой снимок обязан давать свою причину: %+v", unknown)
+	}
+}
+
+// Старый агент про модуль ядра не сообщает вовсе, и это отдельное состояние:
+// не «модуль не загружен» и не «всё в порядке».
+func TestComputeUpdates_MissingKmodIsAgentTooOld(t *testing.T) {
+	_, unknown := ComputeUpdates(context.Background(), nil, wire.VersionAudit{AwgmgrVersion: "2.17.2"})
+	if !hasUnknown(unknown, "kmod", ReasonAgentTooOld) {
+		t.Errorf("молчание старого агента о модуле ядра не названо: %+v", unknown)
+	}
+	_, unknown = ComputeUpdates(context.Background(), nil, wire.VersionAudit{KmodVersion: "3.1.20260906"})
+	if hasUnknown(unknown, "kmod", ReasonAgentTooOld) {
+		t.Errorf("агент сказал про модуль ядра, а причина всё равно названа: %+v", unknown)
+	}
+}
+
+// Доступная прошивка приезжает от самого роутера, и GitHub к ней отношения не
+// имеет: выключенный источник апстрима не имеет права молчать про прошивку.
+func TestComputeUpdates_FirmwareComesFromRouterNotUpstream(t *testing.T) {
+	updates, _ := ComputeUpdates(context.Background(), nil, wire.VersionAudit{
+		FirmwareCurrent: "5.02.A.8.0-3",
+		FirmwareAvail:   "5.02.A.9.0-0",
+	})
+	var found bool
+	for _, u := range updates {
+		if u.Name == "KeeneticOS" && u.Available == "5.02.A.9.0-0" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("новость о прошивке не собралась без апстрима: %+v", updates)
+	}
+}
+
+// п.6: право сказать «нужна перезагрузка» даёт наблюдаемая смена модуля ядра,
+// а не номер релиза панели.
+func TestRebootHint_OnlyOnKernelModuleChange(t *testing.T) {
+	got := RebootHint("1.0.0", "1.1.0")
+	if got == "" {
+		t.Fatal("смена модуля ядра обязана давать предупреждение")
+	}
+	for _, want := range []string{"модуль ядра", "VPN-туннели", "перезагрузки роутера"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("подсказка не говорит про %q: %s", want, got)
+		}
+	}
+	for _, forbidden := range []string{"NativeWG", "reboot", "plan a router"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("английский текст доехал до владельца: %s", got)
+		}
+	}
+	if got := RebootHint("1.0.0", "1.0.0"); got != "" {
+		t.Errorf("без смены модуля предупреждения быть не должно: %q", got)
+	}
+	if got := RebootHint("", "1.0.0"); got != "" {
+		t.Errorf("первое знакомство с роутером -- не смена модуля: %q", got)
+	}
+	if got := RebootHint("1.0.0", ""); got != "" {
+		t.Errorf("замолчавший агент -- не смена модуля: %q", got)
+	}
+}
+
+func hasUnknown(list []Unknown, component, reason string) bool {
+	for _, u := range list {
+		if u.Component == component && u.Reason == reason {
+			return true
+		}
+	}
+	return false
 }
 
 func TestFirmwareNewerThan(t *testing.T) {

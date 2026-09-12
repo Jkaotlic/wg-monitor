@@ -215,7 +215,7 @@ func hrneoKnownInstalled(va wire.VersionAudit) bool {
 // Pure function so both the notifier (refresh path) and the router (instant
 // cached render in openMaintPanelMessage) can call it.
 func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore) tg.MaintPanelArgs {
-	infos := upstream.ComputeUpdates(ctx, up, va)
+	infos, _ := upstream.ComputeUpdates(ctx, up, va)
 	updates := make([]tg.UpdateLine, 0, len(infos))
 	for _, u := range infos {
 		updates = append(updates, tg.UpdateLine{Name: u.Name, Installed: u.Installed, Available: u.Available, Hint: u.Hint})
