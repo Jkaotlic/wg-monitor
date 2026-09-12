@@ -465,6 +465,13 @@
     const awg = agent.awgm_url
       ? `<span class="badge badge-info">URL saved</span><div class="cell-note">${escapeHTML(shortURL(agent.awgm_url))}</div>`
       : `<span class="badge badge-muted">no URL</span><div class="cell-note">быстрый вход недоступен</div>`;
+    // Кому пора обновляться -- по образцу строки версии бэкенда («доступна X»).
+    // Источник -- снимок версий роутера, поэтому строка не пустеет после
+    // рестарта. Пусто здесь значит «новостей нет»: про то, почему про какой-то
+    // компонент неизвестно, написано на экране самого роутера.
+    const routerUpdates = (agent.updates || [])
+      .map((u) => `${escapeHTML(u.name)}: доступна ${escapeHTML(u.available)}`)
+      .join("<br>");
     return `
       <tr class="${rowClass}" data-row-agent="${escapeAttr(agent.nickname)}">
         <td class="agent-cell">
@@ -474,7 +481,7 @@
           </div>
         </td>
         <td>${statusBadge(agent)}<div class="cell-note">${escapeHTML(statusText(agent))}</div></td>
-        <td><span class="badge badge-info">${escapeHTML(agent.agent_version || "-")}</span><div class="cell-note">${pending}</div></td>
+        <td><span class="badge badge-info">${escapeHTML(agent.agent_version || "-")}</span><div class="cell-note">${pending}</div>${routerUpdates ? `<div class="cell-note">${routerUpdates}</div>` : ""}</td>
         <td><span class="badge ${agent.has_topic ? "badge-success" : "badge-muted"}">${escapeHTML(groupLabel(agent.telegram_chat_id))}</span><div class="cell-note">${escapeHTML(topicLabel(agent.telegram_thread_id))}</div></td>
         <td>${awg}</td>
         <td><div class="incident-list">${incidents || '<span class="badge badge-success">clear</span>'}</div></td>
