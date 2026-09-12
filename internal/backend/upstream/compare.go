@@ -14,6 +14,12 @@ import (
 // smart-reply Updates section and the Maintenance panel rendering. Both UI
 // surfaces project this into their own struct (LOGIC-09).
 type UpdateInfo struct {
+	// Component -- устойчивый ключ ("awgmgr" | "hrneo" | "firmware"), тот же,
+	// которым говорят Unknown и состояние новости в базе. Name -- подпись для
+	// человека, и опираться на неё в коде нельзя: переименование подписи молча
+	// разъехалось бы с ключом новости, и «отложить» перестало бы попадать в ту
+	// строку, которую человек видел.
+	Component string
 	Name      string
 	Installed string
 	Available string
@@ -65,7 +71,12 @@ func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) ([]
 	case va.FirmwareCurrent == "":
 		unknown = append(unknown, Unknown{Component: "firmware", Reason: ReasonNoSnapshot})
 	case va.FirmwareAvail != "" && FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail):
-		out = append(out, UpdateInfo{Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail})
+		out = append(out, UpdateInfo{
+			Component: "firmware",
+			Name:      "KeeneticOS",
+			Installed: va.FirmwareCurrent,
+			Available: va.FirmwareAvail,
+		})
 	}
 
 	// Модуль ядра ни с чем не сравнивается: сравнения по парку сегодня нет, и
@@ -80,6 +91,7 @@ func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) ([]
 		unknown = append(unknown, Unknown{Component: "awgmgr", Reason: reason})
 	} else if SoftwareNewerThan(va.AwgmgrVersion, avail) {
 		out = append(out, UpdateInfo{
+			Component: "awgmgr",
 			Name:      "awg-manager",
 			Installed: va.AwgmgrVersion,
 			Available: avail,
@@ -90,7 +102,12 @@ func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) ([]
 	if avail, reason := latestFor(ctx, cache, "hrneo", va.HrneoVersion); reason != "" {
 		unknown = append(unknown, Unknown{Component: "hrneo", Reason: reason})
 	} else if SoftwareNewerThan(va.HrneoVersion, avail) {
-		out = append(out, UpdateInfo{Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: avail})
+		out = append(out, UpdateInfo{
+			Component: "hrneo",
+			Name:      "HydraRoute-Neo",
+			Installed: va.HrneoVersion,
+			Available: avail,
+		})
 	}
 
 	return out, unknown

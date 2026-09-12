@@ -58,6 +58,12 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/operators/{tgid}", reqID(auth(miniappRemoveOperatorHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/access/owner", reqID(auth(miniappUnbindOwnerHandler(d))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/access/owner", reqID(auth(miniappSetOwnerHandler(d))))
+	// Новости об обновлениях. Читают владелец, оператор и админ; новость о
+	// прошивке -- только владелец и админ. Решение «отложить/скрыть» касается
+	// всего роутера, поэтому его принимает владелец или админ -- гейт внутри
+	// обработчика, отказ 404 до поиска роутера.
+	mux.Handle("GET /v1/miniapp/routers/{id}/versions", reqID(auth(miniappRouterVersionsHandler(d))))
+	mux.Handle("PUT /v1/miniapp/routers/{id}/updates/{component}", reqID(auth(miniappUpdateReminderHandler(d))))
 }
 
 type miniappSessionReq struct {

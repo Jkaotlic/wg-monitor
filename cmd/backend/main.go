@@ -302,7 +302,11 @@ func main() {
 		TGNotifier:     notifier,
 		RoutesNotifier: routesNotifier,
 		MaintNotifier:  maintNotifier,
-		BulkNotifier:   cb,
+		// Тот же кэш, что у панели обслуживания в боте: второй поход в GitHub
+		// сжёг бы лимит анонимного API, а расхождение двух кэшей показывало бы
+		// на экране и в боте разные новости об одном роутере.
+		Upstream:     upCache,
+		BulkNotifier: cb,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
 		VPNCabinet:          cb,

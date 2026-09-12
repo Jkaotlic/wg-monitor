@@ -20,6 +20,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -413,6 +414,12 @@ type Deps struct {
 	// просто не появляется -- вместо нулей, которые читались бы как «сторож
 	// мёртв».
 	HeartbeatStats func() heartbeat.Stats
+	// Upstream -- кэш релизов апстрима (GitHub, TTL 12 ч). nil означает, что
+	// сравнивать не с чем, и экран обязан сказать «проверка обновлений не
+	// настроена», а не выглядеть как «всё актуально». Ходить в GitHub мимо
+	// этого кэша нельзя: лимит анонимного API -- 60 запросов в час, а ошибка
+	// кэшируется на 12 часов.
+	Upstream *upstream.Cache
 	// Provision holds the async router-provisioning engine's collaborators
 	// (Store + BaseCtx + Relay + LastSeen + Now + Logger — see
 	// internal/backend/provision.Deps). Zero value (nil Store) means the
