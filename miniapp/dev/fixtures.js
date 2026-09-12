@@ -568,11 +568,71 @@ function commandResult(id) {
   return { id, status: 'ok', duration_ms: 300, output: 'готово' }
 }
 
+// Сводка парка для админского экрана. Имена и адреса -- документационные:
+// настоящих имён машин и адресов в репозитории не бывает.
+const FLEET = {
+  generated_at: new Date().toISOString(),
+  totals: { routers: 3, online: 1, sleeping: 1, offline: 0, alerts: 1, pending_deploys: 1 },
+  backend: { version: 'v0.31.0', latest_version: 'v0.31.1', update_available: true },
+  routers: [
+    {
+      id: 1,
+      nickname: 'Дом',
+      status: 'alert',
+      last_seen_age_sec: 95,
+      incidents: ['dns'],
+      agent_version: 'v0.30.0',
+      awgmgr_version: '2.18.2',
+      firmware_current: '4.2.7',
+      update_hint: 'пора обновить: прошивка 4.3.0',
+    },
+    {
+      id: 2,
+      nickname: 'Дача',
+      status: 'sleeping',
+      last_seen_age_sec: 5400,
+      agent_version: 'v0.30.0',
+      awgmgr_version: '2.18.2',
+    },
+    {
+      id: 3,
+      nickname: 'Офис',
+      status: 'online',
+      last_seen_age_sec: 40,
+      agent_version: 'v0.29.0',
+      pending_version: 'v0.30.0',
+      awgmgr_version: '2.17.2',
+    },
+  ],
+  notify: {
+    unreachable: [{ telegram_user_id: 100, updated_at: new Date(Date.now() - 3600 * 1000).toISOString() }],
+    routers_without_recipients: ['Склад'],
+  },
+  watchdog: {
+    alive: true,
+    last_scan_at: new Date(Date.now() - 60 * 1000).toISOString(),
+    offline_errors: 0,
+  },
+}
+
 export function respond(method, path) {
   if (method === 'POST' && path === '/v1/miniapp/session') {
     return { ok: true, telegram_user_id: 42, is_admin: true }
   }
   if (path === '/v1/miniapp/routers') return { routers: ROUTERS }
+  // Админский экран парка и выдача ссылки в браузер: без них песочница
+  // показывала бы кнопку, которую нечем нажать.
+  if (path === '/v1/miniapp/fleet') return FLEET
+  if (method === 'POST' && path === '/v1/miniapp/web-link') {
+    return {
+      url: 'https://wg.example.com/dashboard/login#token=' + 'ab12'.repeat(16),
+      expires_at: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      notice:
+        'Ссылка личная и живёт 12 часов. Не пересылайте её: по ней всё это время открывается управление всем парком.',
+      limit_notice:
+        'Живыми остаются три последние ссылки: выдали новую — самая старая перестала работать.',
+    }
+  }
 
   // Идентификатор команды теперь не только из букв (dev-3), и хвост пути
   // обязан его пропускать -- иначе опрос результата уходит в никуда.

@@ -119,6 +119,7 @@ export function App() {
       ? (
         <AdminOverlay
           routerID={nav.routerID}
+          isAdmin={isAdmin}
           onClose={() => dispatch({ type: 'overlay', overlay: null })}
           openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
         />

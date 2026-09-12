@@ -57,9 +57,16 @@ type miniappFleetRouter struct {
 	UpdateHint string `json:"update_hint,omitempty"`
 }
 
+// miniappFleetUnreachable -- человек, которому бот не может написать.
+//
+// Текста ошибки Telegram здесь нет намеренно: «Forbidden: bot was blocked by
+// the user» -- машинная строка по-английски, а экрану нужно последствие
+// («не получит тревогу, пока сам не напишет боту»). Поэтому форма отличается
+// от дашбордной dashboardUnreachable, и это не случайность: совпади они
+// полем в поле -- следующее добавленное туда поле уехало бы в приложение
+// само собой.
 type miniappFleetUnreachable struct {
 	TelegramUserID int64  `json:"telegram_user_id"`
-	LastError      string `json:"last_error,omitempty"`
 	UpdatedAt      string `json:"updated_at,omitempty"`
 }
 
@@ -182,7 +189,6 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 		for _, t := range gaps.Unreachable {
 			resp.Notify.Unreachable = append(resp.Notify.Unreachable, miniappFleetUnreachable{
 				TelegramUserID: t.TelegramUserID,
-				LastError:      t.LastError,
 				UpdatedAt:      t.UpdatedAt,
 			})
 		}
