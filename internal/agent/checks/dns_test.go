@@ -60,8 +60,11 @@ func TestDNS_DoHOK(t *testing.T) {
 func TestDNS_AllFail_TriggersFail(t *testing.T) {
 	chk := DNS{
 		Endpoints: []keenetic.DNSEndpoint{
+			// Два РАЗЛИЧНЫХ мёртвых адреса: одинаковые строки теперь
+			// схлопывает дедупликация, и «упали оба» пришлось бы считать
+			// по одной пробе.
 			{Type: "plain", Host: "127.0.0.1", Port: 1},
-			{Type: "plain", Host: "127.0.0.1", Port: 1},
+			{Type: "plain", Host: "127.0.0.1", Port: 2},
 		},
 		TestDomain:      "example.com",
 		FailThreshold:   1,
@@ -95,6 +98,112 @@ func TestDNS_PartialFailUnderThreshold(t *testing.T) {
 	got := chk.Run(context.Background(), Deps{})
 	if got.Status != "ok" {
 		t.Fatalf("expected ok with 1/2 fail under threshold=2, got %+v", got)
+	}
+}
+
+// deadTCPAddr возвращает адрес, на котором точно никто не слушает: занимаем
+// порт и тут же отпускаем. Отказ приходит мгновенно, без ожидания таймаута.
+func deadTCPAddr(t *testing.T) (string, int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	host, port := splitHostPort(t, ln.Addr().String())
+	ln.Close()
+	return host, port
+}
+
+// В эталонном наборе один и тот же DoT-апстрим записан строкой на каждую
+// ру-зону -- восемь строк на один сервер. Без дедупликации падение ОДНОГО
+// сервера давало восемь провалов из пятнадцати и немедленный FAIL на всём
+// парке. Проба обязана идти по различным адресам, а не по строкам.
+func TestDNS_DeadHostRepeatedByZonesDoesNotFail(t *testing.T) {
+	server, stop := startMockUDPDNS(t, [4]byte{1, 2, 3, 4})
+	defer stop()
+	liveHost, livePort := splitHostPort(t, server)
+	deadHost, deadPort := deadTCPAddr(t)
+
+	var eps []keenetic.DNSEndpoint
+	for _, zone := range []string{"", "ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf", "tatar"} {
+		eps = append(eps, keenetic.DNSEndpoint{Type: "dot", Host: deadHost, Port: deadPort, Zone: zone})
+	}
+	eps = append(eps, keenetic.DNSEndpoint{Type: "plain", Host: liveHost, Port: livePort})
+
+	chk := DNS{
+		Endpoints:       eps,
+		TestDomain:      "example.com",
+		IfaceDialFn:     func(_ string) *net.Dialer { return &net.Dialer{} },
+		PerProbeTimeout: 500 * time.Millisecond,
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "ok" {
+		t.Fatalf("падение одного сервера, записанного восемью зонными строками, не должно ронять проверку: %+v", got)
+	}
+	if got.Details["endpoints"] != 2 {
+		t.Errorf("endpoints=%v, хотим 2 различных адреса вместо 9 строк", got.Details["endpoints"])
+	}
+	if got.Details["failed_count"] != 1 {
+		t.Errorf("failed_count=%v, хотим 1 (один упавший сервер, а не восемь строк)", got.Details["failed_count"])
+	}
+}
+
+// Обратный случай: упали все различные апстримы -- это настоящий отказ
+// резолвинга, и он обязан давать FAIL без порога из конфига.
+func TestDNS_AllDistinctHostsDownFails(t *testing.T) {
+	deadHost1, deadPort1 := deadTCPAddr(t)
+	deadHost2, deadPort2 := deadTCPAddr(t)
+
+	var eps []keenetic.DNSEndpoint
+	for _, zone := range []string{"", "ru", "su", "tatar"} {
+		eps = append(eps, keenetic.DNSEndpoint{Type: "dot", Host: deadHost1, Port: deadPort1, Zone: zone})
+	}
+	eps = append(eps, keenetic.DNSEndpoint{Type: "dot", Host: deadHost2, Port: deadPort2})
+
+	chk := DNS{
+		Endpoints:       eps,
+		TestDomain:      "example.com",
+		PerProbeTimeout: 500 * time.Millisecond,
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Status != "fail" {
+		t.Fatalf("все различные апстримы недоступны -- обязан быть fail: %+v", got)
+	}
+	if got.Details["failed_count"] != 2 || got.Details["endpoints"] != 2 {
+		t.Errorf("endpoints=%v failed_count=%v, хотим 2 и 2", got.Details["endpoints"], got.Details["failed_count"])
+	}
+}
+
+// Порог считается там, где число различных апстримов уже известно: формула
+// external_reach max(2, (N*2+2)/3). При 15 различных адресах это 10, поэтому
+// девять упавших -- ещё не отказ резолвинга, а прежний порог из конфига (2)
+// объявил бы тревогу по всему парку.
+func TestDNS_ThresholdScalesWithDistinctEndpointCount(t *testing.T) {
+	var eps []keenetic.DNSEndpoint
+	for i := 0; i < 9; i++ {
+		deadHost, deadPort := deadTCPAddr(t)
+		eps = append(eps, keenetic.DNSEndpoint{Type: "dot", Host: deadHost, Port: deadPort})
+	}
+	for i := 0; i < 6; i++ {
+		server, stop := startMockUDPDNS(t, [4]byte{1, 2, 3, 4})
+		defer stop()
+		host, port := splitHostPort(t, server)
+		eps = append(eps, keenetic.DNSEndpoint{Type: "plain", Host: host, Port: port})
+	}
+
+	chk := DNS{
+		Endpoints:       eps,
+		TestDomain:      "example.com",
+		IfaceDialFn:     func(_ string) *net.Dialer { return &net.Dialer{} },
+		PerProbeTimeout: 500 * time.Millisecond,
+	}
+	got := chk.Run(context.Background(), Deps{})
+	if got.Details["endpoints"] != 15 || got.Details["failed_count"] != 9 {
+		t.Fatalf("endpoints=%v failed_count=%v, хотим 15 и 9: %+v",
+			got.Details["endpoints"], got.Details["failed_count"], got.Details)
+	}
+	if got.Status != "ok" {
+		t.Fatalf("9 провалов из 15 при пороге max(2,(15*2+2)/3)=10 -- это ещё не отказ резолвинга: %+v", got)
 	}
 }
 

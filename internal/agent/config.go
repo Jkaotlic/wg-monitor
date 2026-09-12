@@ -366,15 +366,13 @@ func LoadConfig(path string, opts ...LoadOption) (*Config, error) {
 	if cfg.Checks.DNS.TestDomain == "" {
 		cfg.Checks.DNS.TestDomain = "example.com"
 	}
-	if cfg.Checks.DNS.FailThreshold <= 0 {
-		// Парсер видит весь эталонный набор (15 строк на типовом роутере), и
-		// порог 1 означал бы тревогу от одного недоступного апстрима на всём
-		// парке. Два -- минимум, при котором провал говорит о резолвинге, а не
-		// об одном сервере. Считать (N*2+2)/3, как для external_reach
-		// (:382-386), тут нечем: апстримы читаются с роутера уже после загрузки
-		// конфига, так что max(2, …) на этом шаге вырождается в двойку.
-		cfg.Checks.DNS.FailThreshold = 2
-	}
+	// У порога проверки dns дефолта здесь намеренно нет. Число апстримов
+	// известно только в момент прогона — они читаются с роутера
+	// (cmd/agent/main.go, EndpointProvider), а эталонный набор пишет один и тот
+	// же сервер строкой на каждую зону. Порог считает сама проверка по числу
+	// РАЗЛИЧНЫХ апстримов: max(2, (N*2+2)/3), образец — external_reach ниже.
+	// Ноль здесь означает «не задано»; заданное оператором значение проверка
+	// не трогает.
 	// If auto-discovery is on and the user didn't override RKN-test domains,
 	// supply the defaults so production agents get RKN-awareness without
 	// extra config plumbing.

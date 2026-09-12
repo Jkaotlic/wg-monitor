@@ -70,10 +70,6 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 	if c.PerProbeTimeout <= 0 {
 		c.PerProbeTimeout = 3 * time.Second
 	}
-	threshold := c.FailThreshold
-	if threshold <= 0 {
-		threshold = 1
-	}
 	httpc := c.HTTPClient
 	if httpc == nil {
 		httpc = http.DefaultClient
@@ -94,6 +90,13 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 			endpoints = append(endpoints, discovered...)
 		}
 	}
+	// Эталонный набор роутера пишет один и тот же апстрим строкой на каждую
+	// зону (`tls upstream <host> domain ru|su|tatar|…` — восемь строк на один
+	// сервер). Зона говорит, для каких имён роутер его выбирает, и на саму
+	// пробу не влияет, поэтому пробуем РАЗЛИЧНЫЕ адреса: иначе падение одного
+	// сервера считалось бы восемью провалами и роняло проверку по всему парку.
+	endpoints = dedupEndpoints(endpoints)
+
 	ifaceMapFresh := false
 	if c.IfaceMapProvider != nil {
 		if ifaceMap, err := c.IfaceMapProvider(ctx); err == nil {
@@ -110,6 +113,24 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 			details["discovery_error"] = endpointProviderErr.Error()
 		}
 		return OK(c.Name(), start, details)
+	}
+
+	// Порог считается здесь, а не в LoadConfig: число апстримов знает только
+	// этот прогон — они читаются с роутера через EndpointProvider. Формула та
+	// же, что у external_reach (external_reach.go:59-64), с нижним пределом 2,
+	// чтобы один недоступный апстрим из многих не был тревогой. Предел не
+	// может быть больше самого числа апстримов: иначе единственный резолвер
+	// роутера стал бы непадающим. Явно заданное в конфиге значение сильнее
+	// вычисленного.
+	threshold := c.FailThreshold
+	if threshold <= 0 {
+		threshold = (len(endpoints)*2 + 2) / 3
+		if threshold < 2 {
+			threshold = 2
+		}
+		if threshold > len(endpoints) {
+			threshold = len(endpoints)
+		}
 	}
 
 	type epResult struct {
@@ -231,6 +252,31 @@ func (c DNS) Run(ctx context.Context, _ Deps) wire.Check {
 			details)
 	}
 	return OK(c.Name(), start, details)
+}
+
+// probeKey — всё, что определяет саму пробу: транспорт, адрес, имя для
+// проверки сертификата и интерфейс, через который идёт запрос. Зона (`domain`)
+// в ключ не входит намеренно: она относится к выбору апстрима роутером, а не
+// к тому, куда и как стучится проба.
+func probeKey(ep keenetic.DNSEndpoint) string {
+	return fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%s",
+		ep.Type, ep.Host, ep.Port, ep.URL, ep.SNI, ep.NDMSName)
+}
+
+// dedupEndpoints оставляет по одной записи на каждую различную пробу, сохраняя
+// исходный порядок (endpoints_detail остаётся читаемым сверху вниз).
+func dedupEndpoints(eps []keenetic.DNSEndpoint) []keenetic.DNSEndpoint {
+	seen := make(map[string]struct{}, len(eps))
+	out := make([]keenetic.DNSEndpoint, 0, len(eps))
+	for _, ep := range eps {
+		k := probeKey(ep)
+		if _, dup := seen[k]; dup {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, ep)
+	}
+	return out
 }
 
 func epTarget(ep keenetic.DNSEndpoint) string {

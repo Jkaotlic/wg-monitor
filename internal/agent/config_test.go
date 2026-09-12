@@ -265,11 +265,11 @@ checks:
 	if cfg.Checks.DNS.TestDomain != "example.com" {
 		t.Fatalf("TestDomain default not applied: got %q", cfg.Checks.DNS.TestDomain)
 	}
-	// Дефолт стал двойкой вместе с починкой парсера: он видит весь эталонный
-	// набор (15 строк вместо 6), и порог 1 означал бы тревогу от одного
-	// недоступного апстрима. Правка осознанная, а не регрессия.
-	if cfg.Checks.DNS.FailThreshold != 2 {
-		t.Fatalf("FailThreshold default not applied: got %d, want 2", cfg.Checks.DNS.FailThreshold)
+	// Дефолта у порога здесь больше нет: его считает сама проверка по числу
+	// различных апстримов (checks/dns.go), потому что на этом шаге они ещё не
+	// прочитаны с роутера. Ноль означает «не задано».
+	if cfg.Checks.DNS.FailThreshold != 0 {
+		t.Fatalf("FailThreshold must stay unset for the check to compute it: got %d", cfg.Checks.DNS.FailThreshold)
 	}
 	// Endpoints can be empty; AutoDiscover has no default
 	if len(cfg.Checks.DNS.Endpoints) != 0 {
@@ -459,13 +459,15 @@ agent:
 	return cfg
 }
 
-// Парсер начал видеть 15 апстримов вместо 6. При пороге 1 один недоступный
-// DoT-апстрим уронил бы проверку в FAIL по всему парку -- порог обязан
-// считаться от числа апстримов, как уже сделано для external_reach.
-func TestLoadConfig_DNSFailThresholdScalesWithEndpoints(t *testing.T) {
+// Парсер начал видеть 15 апстримов вместо 6, и порог обязан считаться от их
+// числа. Считать его здесь нечем: апстримы читаются с роутера уже после
+// загрузки конфига, а эталонный набор пишет один и тот же сервер строкой на
+// каждую зону. Поэтому LoadConfig оставляет «не задано», а считает проверка —
+// TestDNS_ThresholdScalesWithDistinctEndpointCount в пакете checks.
+func TestLoadConfig_DNSFailThresholdLeftToCheck(t *testing.T) {
 	cfg := writeTestConfig(t, ``) // без секции checks.dns
-	if got := cfg.Checks.DNS.FailThreshold; got < 2 {
-		t.Errorf("порог dns = %d, хотим не меньше 2", got)
+	if got := cfg.Checks.DNS.FailThreshold; got != 0 {
+		t.Errorf("порог dns = %d, хотим 0 — «не задано», считает проверка", got)
 	}
 }
 
