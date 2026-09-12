@@ -149,3 +149,35 @@ CREATE TABLE IF NOT EXISTS alert_messages (
     sent_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, check_name, telegram_user_id)
 );
+
+-- Снимок версий на роутер: что стоит сейчас и что стояло до этого. Сказать
+-- «вышло обновление» по одному отчёту нельзя -- отчёт приносит только «стало»,
+-- а «было» не помнил никто: версии жили в кэше на пользователя, умиравшем с
+-- рестартом бэкенда (callbacks/maint_audit_cache.go). Отсюда и таблица.
+--
+-- Одна строка на роутер. Пустая строка означает «поле в этом источнике не
+-- приезжает»: version_audit знает HydraRoute Neo, обычный отчёт -- нет, и
+-- смешивать их надо дополнением, а не перезаписью пустым. NULL там, где
+-- значимо отсутствие (kmod_loaded, hrneo_installed): «агент не сказал» -- это
+-- не «не загружено».
+--
+-- Читается точечно по роутеру: в горячие events за этим лезть не надо вовсе.
+CREATE TABLE IF NOT EXISTS router_versions (
+    user_id             INTEGER   PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    awgmgr_version      TEXT      NOT NULL DEFAULT '',
+    awgmgr_backend      TEXT      NOT NULL DEFAULT '',   -- native/kernel: от него зависит смысл модуля ядра
+    hrneo_version       TEXT      NOT NULL DEFAULT '',
+    hrneo_installed     INTEGER,                          -- NULL = агент не сказал
+    firmware_current    TEXT      NOT NULL DEFAULT '',
+    firmware_avail      TEXT      NOT NULL DEFAULT '',
+    firmware_channel    TEXT      NOT NULL DEFAULT '',
+    keenetic_os         TEXT      NOT NULL DEFAULT '',
+    kmod_version        TEXT      NOT NULL DEFAULT '',
+    kmod_model          TEXT      NOT NULL DEFAULT '',
+    kmod_loaded         INTEGER,                          -- NULL = старый агент не сообщает
+    prev_awgmgr_version TEXT      NOT NULL DEFAULT '',    -- «было» для предупреждения о перезагрузке
+    prev_kmod_version   TEXT      NOT NULL DEFAULT '',
+    changed_at          TIMESTAMP,                        -- когда версия панели или модуля менялась
+    source              TEXT      NOT NULL,               -- 'report' | 'version_audit'
+    updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
