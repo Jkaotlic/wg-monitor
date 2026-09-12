@@ -422,6 +422,61 @@ func TestMiniappVersionsDismissedVersionDoesNotHideTheNext(t *testing.T) {
 	}
 }
 
+// «Скрыть» держится, даже когда рядом живёт прошлая нетронутая строка.
+//
+// Обратная сторона починки заслонки, и непокрытое место до этого теста.
+// Видимость обязана считаться по паре «компонент + версия». Если считать её
+// «есть ли у компонента хоть одна видимая строка», прошлая нетронутая новость
+// про 9.0-0 сделает компонент «видимым» и вернёт на экран новость про 10.0-0,
+// которую человек только что скрыл. Ни тест на заслонку, ни тест на «отложить»
+// такую реализацию не ловят: при ней заслонка как раз проходит, потому что
+// проверка стала слабее, а не строже.
+func TestMiniappVersionsDismissHoldsWhileOlderRowLives(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		FirmwareCurrent: "5.02.A.8.0-3",
+		FirmwareAvail:   "5.02.A.10.0-0",
+		Source:          "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Прошлая новость, которую человек не тронул: она остаётся видимой.
+	if err := d.UpdateReminders().Ensure(ownedID, "firmware", "5.02.A.9.0-0"); err != nil {
+		t.Fatal(err)
+	}
+	h := versionsMux(d)
+
+	// Новость про 10.0-0 видна (это починка заслонки), и человек её скрывает.
+	if _, resp := getVersions(t, h, ownedID, telegramUserID); !hasRow(resp.Rows, "firmware") {
+		t.Fatalf("новости про 5.02.A.10.0-0 нет -- проверять скрытие нечем: %+v", resp.Rows)
+	}
+	if rec := putReminder(t, h, ownedID, telegramUserID, "firmware", `{"action":"dismiss"}`); rec.Code != http.StatusOK {
+		t.Fatalf("скрыть не удалось: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Сценарий обязан быть настоящим: прошлая строка про 9.0-0 всё ещё в базе
+	// и не скрыта. Без этой проверки тест мог бы стать зелёным по посторонней
+	// причине -- если бы строка-заслонка почему-то исчезла.
+	list, err := d.UpdateReminders().ListFor(ownedID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var olderAlive bool
+	for _, rem := range list {
+		if rem.Component == "firmware" && rem.Version == "5.02.A.9.0-0" {
+			olderAlive = true
+		}
+	}
+	if !olderAlive {
+		t.Fatalf("прошлая строка исчезла -- сценарий не воспроизведён: %+v", list)
+	}
+
+	_, resp := getVersions(t, h, ownedID, telegramUserID)
+	if hasRow(resp.Rows, "firmware") {
+		t.Errorf("скрытая новость вернулась на экран из-за прошлой строки: %+v", resp.Rows)
+	}
+}
+
 // Несущий гейт: визит оператора не заводит состояние новости о прошивке.
 //
 // Гейт стоит дважды -- при заведении новости и при отрисовке, -- и каждый по
