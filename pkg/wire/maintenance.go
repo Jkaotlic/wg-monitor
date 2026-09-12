@@ -17,6 +17,15 @@ type VersionAudit struct {
 	FirmwareAvail   string `json:"firmware_avail,omitempty"`
 	HrneoUptime     string `json:"hrneo_uptime,omitempty"`
 	AwgmgrUptime    string `json:"awgmgr_uptime,omitempty"`
+	// Модуль ядра AmneziaWG. Обновление панели может его сменить, и тогда
+	// VPN-туннели поднимутся только после перезагрузки роутера -- значит
+	// сравнивать «было/стало» по нему надо, а раньше было нечем: данные
+	// лежали в SystemInfo, а в этот ответ не переносились.
+	KmodVersion string `json:"kmod_version,omitempty"`
+	KmodModel   string `json:"kmod_model,omitempty"`
+	// KmodLoaded -- указатель, потому что nil («агент старый и не сказал») и
+	// false («не загружен») -- разные ответы, и второй означает поломку.
+	KmodLoaded *bool `json:"kmod_loaded,omitempty"`
 }
 
 // FirmwareStatus is the agent's reply to a firmware_status command.

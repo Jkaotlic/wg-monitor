@@ -179,7 +179,14 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 		AwgmgrBackend:   sys.ActiveBackend,
 		AwgmgrRunning:   true,
 		FirmwareCurrent: sys.FirmwareVersion,
+		KmodVersion:     sys.KernelModuleVersion,
+		KmodModel:       sys.KernelModuleModel,
 	}
+	// SystemInfo получен -- значит про модуль ядра агент СКАЗАЛ, и «не
+	// загружен» здесь ответ, а не молчание. Указатель ставим всегда, иначе
+	// бэкенд не отличит выключенный модуль от старого агента.
+	kmodLoaded := sys.KernelModuleLoaded
+	out.KmodLoaded = &kmodLoaded
 	if hrErr == nil && hr != nil {
 		out.HrneoInstalled = hr.Installed
 		out.HrneoRunning = hr.Running
