@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterSettings, fetchRouterChecks, setRouterNotify } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
 import { useCommand } from '../useCommand.js'
 import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus } from '../settings.js'
+import { versionsRows, unknownLine, installedRows, rebootLine } from '../versions.js'
+import { humanAge } from '../labels.js'
 import { confirmSheet, localSheet } from '../sheet.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -19,6 +21,11 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   const [tunnels, setTunnels] = useState([])
   const [error, setError] = useState(null)
   const [showHelp, setShowHelp] = useState(false)
+  // Версии живут своим запросом: если срез не ответил, экран настроек обязан
+  // остаться рабочим, а не погаснуть целиком из-за новостей.
+  const [versions, setVersions] = useState(null)
+  const [versionsError, setVersionsError] = useState(null)
+  const [newsBusy, setNewsBusy] = useState(false)
 
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyError, setNotifyError] = useState(null)
@@ -40,8 +47,29 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
       .catch(() => setError('Не удалось прочитать настройки роутера.'))
   }
 
+  function loadVersions() {
+    return fetchRouterVersions(routerID)
+      .then((v) => {
+        setVersions(v)
+        setVersionsError(null)
+      })
+      .catch(() => setVersionsError('Не удалось прочитать версии роутера.'))
+  }
+
+  // «Отложить» и «скрыть» -- решение про весь роутер, и сервер пустит сюда
+  // только владельца и админа. Версию считает он же.
+  const hideNews = (component, action) => {
+    setNewsBusy(true)
+    setVersionsError(null)
+    return setUpdateReminder(routerID, component, action)
+      .then(() => loadVersions())
+      .catch(() => setVersionsError('Не удалось сохранить. Попробуйте ещё раз.'))
+      .finally(() => setNewsBusy(false))
+  }
+
   useEffect(() => {
     load()
+    loadVersions()
   }, [routerID])
 
   const auditOut = audit.result?.status === 'ok' ? auditRows(audit.result.output) : []
@@ -53,6 +81,16 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   // Оператору кнопку не рисуем вовсе -- сервер ему всё равно откажет, а
   // серая кнопка не объясняет, почему нельзя.
   const mayInstall = settings?.role === 'owner' || settings?.role === 'admin'
+  // Скрыть новость может тот же круг: строка живёт на роутере, и оператор
+  // убрал бы её с экрана владельца тоже.
+  const mayHideNews = settings?.role === 'owner' || settings?.role === 'admin'
+  const newsRows = versionsRows(versions)
+  // Метка времени обязательна рядом с «проверить не удалось»: обещание без
+  // неё говорит больше, чем мы знаем.
+  const checkedAgo = versions?.checked_at
+    ? `${humanAge(Math.max(0, Math.floor((Date.now() - new Date(versions.checked_at).getTime()) / 1000)))} назад`
+    : ''
+  const unknownLines = (versions?.unknown ?? []).map((u) => unknownLine(u.reason, checkedAgo)).filter(Boolean)
 
 
   // Выключение уведомлений -- единственное действие на этом экране, которое
@@ -152,9 +190,57 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
           {notifyError && <p class="state state-error">{notifyError}</p>}
         </Section>
 
+        <Section title="Обновления">
+          {rebootLine(versions) && <p class="state state-warn">{rebootLine(versions)}</p>}
+          {newsRows.length > 0 && (
+            <div class="card settings-card">
+              {newsRows.map((r) => (
+                <div key={r.key} class="settings-row">
+                  <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
+                  <p class="card-foot">{r.text}</p>
+                  {mayHideNews && (
+                    <div class="settings-actions">
+                      <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
+                        Отложить на неделю
+                      </button>
+                      <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
+                        Скрыть эту новость
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {/* Причины незнания -- отдельными строками. «Мы не знаем, что вышло»
+              и «обновлений нет» обязаны звучать по-разному: раньше и то, и
+              другое выглядело как отсутствие блока. */}
+          {unknownLines.length > 0 && (
+            <div class="card">
+              {unknownLines.map((line) => (
+                <p key={line} class="card-foot">{line}</p>
+              ))}
+            </div>
+          )}
+          {versions && newsRows.length === 0 && unknownLines.length === 0 && (
+            <div class="card">
+              <p class="card-foot">Обновлений нет: всё, что мы проверяем, на роутере свежее.</p>
+            </div>
+          )}
+          {installedRows(versions).length > 0 && (
+            <div class="card settings-card">
+              {installedRows(versions).map((r) => (
+                <DataRow key={r.key} dot={r.tone} title={r.title} code={r.code} value={r.value} valueSub={r.valueSub} valueTone={r.tone} />
+              ))}
+              {versions?.checked_at && <p class="card-foot">Роутер рассказал про версии {checkedAgo}.</p>}
+            </div>
+          )}
+          {versionsError && <p class="state state-error">{versionsError}</p>}
+        </Section>
+
         <Section title="Что стоит на роутере">
-          <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline)}>
-            {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии'}
+          <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })}>
+            {audit.busy ? 'Спрашиваем роутер…' : 'Сверить версии сейчас'}
           </button>
           {audit.error && <p class="state state-error">{audit.error}</p>}
           {audit.result && audit.result.status !== 'ok' && (

@@ -60,6 +60,25 @@ export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }
 
+// Снимок версий, вышедшие обновления и -- отдельно -- причины незнания.
+// Экран больше не зависит от нажатия: версии живут в базе и переживают
+// рестарт бэкенда.
+export function fetchRouterVersions(id) {
+  return request(`/routers/${id}/versions`)
+}
+
+// «Отложить на неделю» или «Скрыть эту новость». Решение касается всего
+// роутера (строка новости живёт на роутере, а не у человека), поэтому сервер
+// пустит сюда только владельца и админа. Версию, о которой речь, считает сам
+// сервер -- присланная клиентом могла бы спрятать выпуск, которого человек
+// не видел.
+export function setUpdateReminder(id, component, action, until) {
+  return request(`/routers/${id}/updates/${encodeURIComponent(component)}`, {
+    method: 'PUT',
+    body: JSON.stringify(until ? { action, until } : { action }),
+  })
+}
+
 export function silenceIncident(routerID, check, ttl) {
   return request(`/routers/${routerID}/incidents/${encodeURIComponent(check)}/silence`, {
     method: 'POST',
