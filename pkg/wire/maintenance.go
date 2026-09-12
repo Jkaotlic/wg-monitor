@@ -7,10 +7,20 @@ package wire
 // Backend uses it to render the Maintenance panel and to compute soft-warning
 // updates for the smart-reply.
 type VersionAudit struct {
-	AwgmgrVersion   string `json:"awgmgr_version"`
-	AwgmgrBackend   string `json:"awgmgr_backend,omitempty"`
-	AwgmgrRunning   bool   `json:"awgmgr_running,omitempty"`
-	HrneoInstalled  bool   `json:"hrneo_installed,omitempty"`
+	AwgmgrVersion string `json:"awgmgr_version"`
+	AwgmgrBackend string `json:"awgmgr_backend,omitempty"`
+	AwgmgrRunning bool   `json:"awgmgr_running,omitempty"`
+	// HrneoInstalled -- указатель по той же причине, что и KmodLoaded: опрос
+	// HydraRoute может не дать ответа, и тогда это nil («не знаем»), а не
+	// false («не установлен»). Пока здесь был обычный bool, один неудачный
+	// опрос затирал в снимке ранее известное «установлен», и экран потом
+	// устойчиво врал владельцу, у которого HydraRoute стоит и работает.
+	//
+	// Старую форму это не ломает. Агент с обычным bool и omitempty присылал
+	// true только когда HydraRoute действительно стоит -- такой true доезжает
+	// указателем; а отсутствие поля у него и раньше значило «не установлен
+	// ИЛИ опрос не удался», то есть ровно nil.
+	HrneoInstalled  *bool  `json:"hrneo_installed,omitempty"`
 	HrneoRunning    bool   `json:"hrneo_running,omitempty"`
 	HrneoVersion    string `json:"hrneo_version,omitempty"`
 	FirmwareCurrent string `json:"firmware_current"`

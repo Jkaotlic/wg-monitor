@@ -96,21 +96,22 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 
 // versionSnapshotFromAudit переводит ответ агента в снимок для базы.
 //
-// HrneoInstalled уезжает указателем: version_audit ответил, значит «не
-// установлен» здесь ответ, а не молчание. KmodLoaded приходит указателем уже
-// от агента -- старый агент про модуль ядра не говорит вовсе, и его nil
-// обязан доехать до базы неизвестностью.
+// HrneoInstalled и KmodLoaded приходят указателями уже от агента и уезжают в
+// базу КАК ЕСТЬ. Придумывать за них значение нельзя: nil означает, что опрос
+// не дал ответа, и слияние в Upsert пропускает такое поле мимо, сохраняя
+// известное. Пока здесь стоял `&hrneoInstalled`, снятый с обычного bool, один
+// неудачный опрос HydraRoute затирал ранее известное «установлен» на «не
+// установлен» -- это была порча накопленных данных, а не кривая надпись.
 //
 // Полей, которых version_audit не знает (KeeneticOS), мы не выдумываем:
 // пустая строка означает «этот источник такого не приносит», и Upsert
 // оставит на месте то, что уже принёс отчёт.
 func versionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
-	hrneoInstalled := va.HrneoInstalled
 	return db.RouterVersionSnapshot{
 		AwgmgrVersion:   va.AwgmgrVersion,
 		AwgmgrBackend:   va.AwgmgrBackend,
 		HrneoVersion:    va.HrneoVersion,
-		HrneoInstalled:  &hrneoInstalled,
+		HrneoInstalled:  va.HrneoInstalled,
 		FirmwareCurrent: va.FirmwareCurrent,
 		FirmwareAvail:   va.FirmwareAvail,
 		KmodVersion:     va.KmodVersion,
@@ -201,6 +202,14 @@ func (n *MaintPanelNotifier) enqueueFreshVersionAudit(userID int64, ref cmdpkg.M
 	}
 }
 
+// hrneoKnownInstalled -- «опрос ответил, и ответил «стоит»». Неизвестность
+// (nil) панель читает как «не стоит»: рисовать по молчанию «установлен» было
+// бы выдумкой. В снимке базы неизвестность при этом остаётся неизвестностью --
+// панель показывает сейчас, а база помнит.
+func hrneoKnownInstalled(va wire.VersionAudit) bool {
+	return va.HrneoInstalled != nil && *va.HrneoInstalled
+}
+
 // buildMaintPanelArgs assembles the renderer args from the cached
 // VersionAudit + upstream cache (for the Updates section) + cooldown state.
 // Pure function so both the notifier (refresh path) and the router (instant
@@ -213,10 +222,10 @@ func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudi
 	}
 	return tg.MaintPanelArgs{
 		Nickname:                  user.Nickname,
-		HrneoInstalled:            va.HrneoInstalled || va.HrneoVersion != "",
+		HrneoInstalled:            hrneoKnownInstalled(va) || va.HrneoVersion != "",
 		HrneoVersion:              va.HrneoVersion,
 		HrneoUptime:               va.HrneoUptime,
-		HrneoRunning:              va.HrneoRunning || (!va.HrneoInstalled && va.HrneoVersion != ""),
+		HrneoRunning:              va.HrneoRunning || (!hrneoKnownInstalled(va) && va.HrneoVersion != ""),
 		AwgmgrVersion:             va.AwgmgrVersion,
 		AwgmgrUptime:              va.AwgmgrUptime,
 		AwgmgrRunning:             va.AwgmgrRunning || va.AwgmgrVersion != "",

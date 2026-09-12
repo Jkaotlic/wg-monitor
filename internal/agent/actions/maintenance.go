@@ -188,7 +188,11 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 	kmodLoaded := sys.KernelModuleLoaded
 	out.KmodLoaded = &kmodLoaded
 	if hrErr == nil && hr != nil {
-		out.HrneoInstalled = hr.Installed
+		// Опрос УДАЛСЯ -- значит и «не установлен» здесь ответ, и он уезжает
+		// явным false. Не удался -- поле остаётся nil, и снимок в базе
+		// сохранит то, что знал раньше, вместо того чтобы затереть его.
+		hrneoInstalled := hr.Installed
+		out.HrneoInstalled = &hrneoInstalled
 		out.HrneoRunning = hr.Running
 		if hr.Installed && hrneoVer != "" {
 			out.HrneoVersion = hrneoVer

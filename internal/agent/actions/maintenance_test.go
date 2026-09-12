@@ -299,7 +299,10 @@ func TestVersionAudit_AllFields(t *testing.T) {
 	if !got.AwgmgrRunning {
 		t.Error("AwgmgrRunning should be true after successful SystemInfo")
 	}
-	if !got.HrneoInstalled {
+	if got.HrneoInstalled == nil {
+		t.Fatal("HrneoInstalled = nil: опрос удался, ответ обязан быть явным")
+	}
+	if !*got.HrneoInstalled {
 		t.Error("HrneoInstalled should reflect HydraRouteStatus.Installed")
 	}
 	if !got.HrneoRunning {
@@ -347,7 +350,12 @@ func TestVersionAudit_HrneoNotInstalled(t *testing.T) {
 	if got.HrneoVersion != "" {
 		t.Errorf("expected empty HrneoVersion when !Installed, got %q", got.HrneoVersion)
 	}
-	if got.HrneoInstalled {
+	// Опрос ответил «не установлен» -- это ОТВЕТ, и он обязан уехать явным
+	// false, а не превратиться в «не знаем».
+	if got.HrneoInstalled == nil {
+		t.Fatal("HrneoInstalled = nil: удавшийся опрос выдан за молчание")
+	}
+	if *got.HrneoInstalled {
 		t.Error("HrneoInstalled should be false when HydraRouteStatus reports not installed")
 	}
 	if got.HrneoRunning {
@@ -382,7 +390,7 @@ func TestVersionAudit_HrneoInstalledButStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VersionAudit: %v", err)
 	}
-	if !got.HrneoInstalled {
+	if got.HrneoInstalled == nil || !*got.HrneoInstalled {
 		t.Fatal("HrneoInstalled should be true")
 	}
 	if got.HrneoRunning {
