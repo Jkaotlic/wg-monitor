@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -84,7 +85,7 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 	// единственный, кто знает версию HydraRoute Neo и доступную прошивку.
 	// Ошибку только логируем: человек ждёт экран, а не отказ из-за базы.
 	if n.DB != nil {
-		if err := n.DB.RouterVersions().Upsert(user.ID, versionSnapshotFromAudit(va)); err != nil {
+		if err := n.DB.RouterVersions().Upsert(user.ID, backend.VersionSnapshotFromAudit(va)); err != nil {
 			slog.Warn("router versions upsert from version_audit", "user_id", user.ID, "err", err)
 		}
 	}
@@ -92,33 +93,6 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
-}
-
-// versionSnapshotFromAudit переводит ответ агента в снимок для базы.
-//
-// HrneoInstalled и KmodLoaded приходят указателями уже от агента и уезжают в
-// базу КАК ЕСТЬ. Придумывать за них значение нельзя: nil означает, что опрос
-// не дал ответа, и слияние в Upsert пропускает такое поле мимо, сохраняя
-// известное. Пока здесь стоял `&hrneoInstalled`, снятый с обычного bool, один
-// неудачный опрос HydraRoute затирал ранее известное «установлен» на «не
-// установлен» -- это была порча накопленных данных, а не кривая надпись.
-//
-// Полей, которых version_audit не знает (KeeneticOS), мы не выдумываем:
-// пустая строка означает «этот источник такого не приносит», и Upsert
-// оставит на месте то, что уже принёс отчёт.
-func versionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
-	return db.RouterVersionSnapshot{
-		AwgmgrVersion:   va.AwgmgrVersion,
-		AwgmgrBackend:   va.AwgmgrBackend,
-		HrneoVersion:    va.HrneoVersion,
-		HrneoInstalled:  va.HrneoInstalled,
-		FirmwareCurrent: va.FirmwareCurrent,
-		FirmwareAvail:   va.FirmwareAvail,
-		KmodVersion:     va.KmodVersion,
-		KmodModel:       va.KmodModel,
-		KmodLoaded:      va.KmodLoaded,
-		Source:          "version_audit",
-	}
 }
 
 // renderFirmware updates the firmware-status cache and re-renders the

@@ -1113,6 +1113,26 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		incCmdResult()
+		// Снимок версий из ответа version_audit. Пишется ДО relay и НЕ ЗАВИСИТ
+		// от него: relay случается только при наличии origin-ref, то есть когда
+		// человек нажал кнопку в Telegram. Суточный опрос (updatespoll) ставит
+		// команду сам, адресата у неё нет вовсе, и пока запись снимка жила
+		// внутри отрисовки панели обслуживания, ответ такого опроса терялся
+		// целиком -- поллер работал бы вхолостую.
+		//
+		// Действие берём из самой команды: в wire.CommandResult его нет, а
+		// угадывать по форме ответа значило бы разбирать как версии любой текст,
+		// который вернул роутер.
+		if d.DB != nil {
+			if cmd, found := d.CommandSink.CommandByID(uid, res.ID); found && cmd.Action == "version_audit" && res.Status == "ok" {
+				var va wire.VersionAudit
+				if err := json.Unmarshal([]byte(res.Output), &va); err != nil {
+					d.Logger.Warn("version_audit snapshot: decode failed", "nickname", nick, "cmd_id", res.ID, "err", err)
+				} else if err := d.DB.RouterVersions().Upsert(uid, VersionSnapshotFromAudit(va)); err != nil {
+					d.Logger.Warn("version_audit snapshot: upsert failed", "nickname", nick, "cmd_id", res.ID, "err", err)
+				}
+			}
+		}
 		// Relay result back to TG (or routes notifier) if a notifier is configured
 		// and we recorded the originating message. Async — must not stall the
 		// agent's POST on TG network latency.
