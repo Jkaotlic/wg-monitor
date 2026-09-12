@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -89,11 +90,21 @@ func (l *remoteRateLimiter) tokensAt(b *tokenBucket, now time.Time) float64 {
 	return tokens
 }
 
-// evictLocked освобождает место под новый адрес. Сначала уходят полные
-// ведёрки: у такого адреса лимит всё равно ничего не помнит. Если и после
-// этого места нет -- значит идёт распределённый перебор, и часть адресов
-// теряет свой счёт досрочно. Это честный размен: память бэкенда ограничена,
-// а безлимитная карта ведёрок уронила бы его целиком.
+// evictLocked освобождает место под новый адрес.
+//
+// Жертва выбирается НЕ произвольно, и это защита, а не оптимизация. Раньше
+// здесь удалялись случайные ключи, и этим открывался обход: залив карты
+// чужими адресами (для владельца одного IPv6 /64 он бесплатен) выбрасывал
+// ведёрко самого подбирающего, и счёт его попыток начинался заново.
+//
+// Правило: уходит тот, кому терять нечего. Сначала полные ведёрки -- лимит о
+// таком адресе всё равно ничего не помнит. Если места всё ещё нет, значит
+// идёт распределённый залив, и тогда уходят САМЫЕ ПОЛНЫЕ: наказанное ведёрко
+// (пустое) остаётся последним и переживает залив.
+//
+// Освобождается сразу четверть карты, поэтому сортировка приходится не на
+// каждую вставку, а раз на тысячу: под заливом это разница между «дорого» и
+// «незаметно».
 func (l *remoteRateLimiter) evictLocked(now time.Time) {
 	for key, b := range l.buckets {
 		if l.tokensAt(b, now) >= l.burst {
@@ -103,12 +114,21 @@ func (l *remoteRateLimiter) evictLocked(now time.Time) {
 	if len(l.buckets) < remoteRateLimiterMaxBuckets {
 		return
 	}
+	type victim struct {
+		key    string
+		tokens float64
+	}
+	victims := make([]victim, 0, len(l.buckets))
+	for key, b := range l.buckets {
+		victims = append(victims, victim{key: key, tokens: l.tokensAt(b, now)})
+	}
+	sort.Slice(victims, func(i, j int) bool { return victims[i].tokens > victims[j].tokens })
 	target := remoteRateLimiterMaxBuckets * 3 / 4
-	for key := range l.buckets {
+	for _, v := range victims {
 		if len(l.buckets) <= target {
 			return
 		}
-		delete(l.buckets, key)
+		delete(l.buckets, v.key)
 	}
 }
 

@@ -2,6 +2,8 @@ package backend
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -141,18 +143,105 @@ func TestWebLinkIsAddressedToOneTelegramUser(t *testing.T) {
 	}
 }
 
-// Грант -- не Bearer-токен: он открывает ровно один вход, и подставить его
-// в заголовок вместо токена дашборда нельзя.
+// Грант открывает ровно одну дверь -- обмен на сессию дашборда, и ни одну из
+// трёх остальных, куда в этом проекте предъявляют секреты.
+//
+// Чего тест НЕ утверждает: что мы «закрыли» Bearer-путь. Мы его и не
+// открывали -- сравнение там идёт с DashboardToken и с токенами агентов.
+// Тест сторожит будущую ошибку: попытку «унифицировать вход» так, чтобы
+// короткоживущий грант начал приниматься там, где ждут долгоживущий токен.
+// Двери взяты настоящие: сводка под Bearer, форма входа и приём отчётов.
 func TestWebLinkIsNotUsableAsBearer(t *testing.T) {
 	_, h := webLinkDeps(t, 999, nil)
 	token, _ := webLinkTokenFrom(t, issueWebLink(t, h, 999))
 
-	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("грант в Authorization: код %d, want 401 (тело %s)", rec.Code, rec.Body.String())
+	// 1. Bearer к дашборду -- там ждут dashboard-токен оператора.
+	summary := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	summary.Header.Set("Authorization", "Bearer "+token)
+	summaryRec := httptest.NewRecorder()
+	h.ServeHTTP(summaryRec, summary)
+	if summaryRec.Code != http.StatusUnauthorized {
+		t.Errorf("грант в Authorization к сводке: код %d, want 401 (тело %s)", summaryRec.Code, summaryRec.Body.String())
+	}
+
+	// 2. Форма входа дашборда -- настоящая дверь, куда секрет вставляют
+	// руками. Грант там не подходит: у неё свой токен и своё сравнение.
+	login := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", strings.NewReader(`{"token":"`+token+`"}`))
+	login.Header.Set("Content-Type", "application/json")
+	loginRec := httptest.NewRecorder()
+	h.ServeHTTP(loginRec, login)
+	if loginRec.Code != http.StatusUnauthorized {
+		t.Errorf("грант в форме входа: код %d, want 401 (тело %s)", loginRec.Code, loginRec.Body.String())
+	}
+	if dashboardCookieFrom(loginRec) != nil {
+		t.Error("форма входа выдала сессию по гранту")
+	}
+
+	// 3. Bearer агента: грант не должен сойти за токен роутера -- иначе он
+	// открывал бы приём отчётов от чужого имени.
+	report := httptest.NewRequest(http.MethodPost, "/v1/report", strings.NewReader(`{}`))
+	report.Header.Set("Authorization", "Bearer "+token)
+	report.Header.Set("Content-Type", "application/json")
+	reportRec := httptest.NewRecorder()
+	h.ServeHTTP(reportRec, report)
+	if reportRec.Code != http.StatusUnauthorized {
+		t.Errorf("грант как токен агента: код %d, want 401 (тело %s)", reportRec.Code, reportRec.Body.String())
+	}
+}
+
+// В базе лежит sha256, а не сам грант: база, утёкшая целиком, входа не даёт.
+//
+// Хэш здесь считается НЕЗАВИСИМО от нашей же webLinkHash -- иначе тест
+// остался бы зелёным, замени кто-нибудь хеширование тождеством.
+func TestWebLinkStoresHashNotTheGrantItself(t *testing.T) {
+	deps, h := webLinkDeps(t, 999, nil)
+	token, _ := webLinkTokenFrom(t, issueWebLink(t, h, 999))
+
+	var stored string
+	if err := deps.DB.SQL().QueryRow(`SELECT token_hash FROM web_links`).Scan(&stored); err != nil {
+		t.Fatalf("чтение строки гранта: %v", err)
+	}
+	if stored == token {
+		t.Fatal("в базе лежит сам грант: утёкшая база даёт вход в веб-управление")
+	}
+	if strings.Contains(stored, token) || strings.Contains(token, stored) {
+		t.Fatalf("хранимое значение -- часть гранта: %q", stored)
+	}
+	sum := sha256.Sum256([]byte(token))
+	if want := hex.EncodeToString(sum[:]); stored != want {
+		t.Fatalf("token_hash = %q, want sha256 гранта %q", stored, want)
+	}
+}
+
+// Длина и источник случайности гранта: 32 байта из crypto/rand, наружу --
+// 64 шестнадцатеричных символа. Короткий грант подбирается, и никакие гейты
+// вокруг этого не спасут.
+func TestWebLinkTokenIsThirtyTwoRandomBytes(t *testing.T) {
+	raw, hash, err := newWebLinkToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) != 64 {
+		t.Fatalf("длина гранта = %d символов, want 64 (32 байта в hex)", len(raw))
+	}
+	decoded, err := hex.DecodeString(raw)
+	if err != nil {
+		t.Fatalf("грант не шестнадцатеричный: %v", err)
+	}
+	if len(decoded) != 32 {
+		t.Fatalf("в гранте %d байт случайности, want 32", len(decoded))
+	}
+	sum := sha256.Sum256([]byte(raw))
+	if want := hex.EncodeToString(sum[:]); hash != want {
+		t.Fatalf("hash = %q, want sha256 гранта", hash)
+	}
+	// Два гранта подряд не совпадают: источник случайный, а не счётчик.
+	other, _, err := newWebLinkToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other == raw {
+		t.Fatal("два гранта подряд совпали -- источник случайности не случаен")
 	}
 }
 

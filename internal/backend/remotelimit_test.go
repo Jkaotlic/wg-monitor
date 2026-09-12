@@ -1,11 +1,21 @@
 package backend
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
+
+// floodAddr -- адреса для залива карты ведёрок. IPv6 из документационного
+// диапазона 2001:db8::/32: их бесплатно бесконечно много, и именно так
+// выглядит настоящий залив -- у владельца одного /64 адресов больше, чем у
+// нас памяти. Прежний помощник давал всего 256 разных хостов, поэтому карта
+// в тесте не переполнялась вовсе и вытеснение не проверялось ни разу.
+func floodAddr(i int) string {
+	return fmt.Sprintf("[2001:db8::%x]:40001", i)
+}
 
 func TestRemoteRateLimiterKeysByAddressNotByPort(t *testing.T) {
 	l := newRemoteRateLimiter(0.01, 1)
@@ -57,22 +67,93 @@ func TestRemoteRateLimiterRefillsOverTime(t *testing.T) {
 	}
 }
 
-// Лимитер стоит на публичных входах, и ключ у него -- чужой адрес. Значит
-// карта ведёрок не имеет права расти от перебора: иначе защита от подбора
-// становится способом съесть память бэкенда.
-func TestRemoteRateLimiterForgetsRefilledAddresses(t *testing.T) {
-	l := newRemoteRateLimiter(1, 1)
+// Обход вытеснением: подбирающий заливает карту чужими адресами, чтобы его
+// собственное пустое ведёрко выкинули и счёт попыток начался заново.
+//
+// Залив стоит ему ничего, поэтому жертву вытеснение обязано выбирать не
+// произвольно: уходить должны ПОЛНЫЕ ведёрки, которым лимит и так ничего не
+// помнит, а наказанное -- оставаться до последнего.
+func TestRemoteRateLimiterKeepsPenaltyThroughFlood(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 2) // один токен раз в сто секунд
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	const hammer = "198.51.100.7:40001"
+
+	l.Allow(hammer)
+	l.Allow(hammer)
+	if ok, _ := l.Allow(hammer); ok {
+		t.Fatal("запас попыток должен был кончиться")
+	}
+
+	// Залив: вдвое больше адресов, чем вмещает карта -- вытеснение случится
+	// заведомо, и не один раз.
+	for i := 0; i < remoteRateLimiterMaxBuckets*2; i++ {
+		l.Allow(floodAddr(i))
+	}
+
+	if ok, _ := l.Allow(hammer); ok {
+		t.Fatal("залив чужих адресов сбросил собственный счёт -- лимит обходится вытеснением")
+	}
+	if got := l.size(); got > remoteRateLimiterMaxBuckets {
+		t.Fatalf("ведёрок в памяти = %d, want не больше %d", got, remoteRateLimiterMaxBuckets)
+	}
+}
+
+// Обратная сторона того же правила: полные ведёрки забываются, и памяти
+// хватает. Новый человек при переполненной карте обязан войти -- иначе
+// защита от подбора сама стала бы способом запереть вход всем.
+func TestRemoteRateLimiterForgetsFullBucketsAndStillLetsNewcomersIn(t *testing.T) {
+	l := newRemoteRateLimiter(1, 5)
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
 	l.now = func() time.Time { return now }
 
-	for i := 0; i < remoteRateLimiterMaxBuckets+50; i++ {
-		l.Allow(testRemoteAddr(i))
+	for i := 0; i < remoteRateLimiterMaxBuckets+100; i++ {
+		l.Allow(floodAddr(i))
 	}
-	// Сутки спустя все ведёрки полны -- помнить о них нечего.
-	now = now.Add(24 * time.Hour)
-	l.Allow("198.51.100.7:40001")
+	// Час спустя все эти ведёрки полны -- помнить о них нечего.
+	now = now.Add(time.Hour)
+	if ok, _ := l.Allow("198.51.100.7:40001"); !ok {
+		t.Fatal("новый адрес не пустили при переполненной карте")
+	}
 	if got := l.size(); got > remoteRateLimiterMaxBuckets {
 		t.Fatalf("ведёрок в памяти = %d, want не больше %d", got, remoteRateLimiterMaxBuckets)
+	}
+}
+
+// Что лимитер видит за релеем -- зафиксировано намеренно, а не забыто.
+//
+// X-Forwarded-For не разбирается нигде: заголовок подделывается одной
+// строкой, и доверие к нему означало бы обход лимита вообще без залива.
+// Цена выбора названа вслух: за релеем KeenDNS RemoteAddr может оказаться
+// адресом релея для всех внешних клиентов сразу, и тогда ведёрко одно на
+// всех -- подбор не изолируется, а десять чужих неудач способны запереть
+// вход законному админу. Проверяется это на раскатке по журналу
+// «вход: слишком много попыток»: если remote у разных людей один и тот же,
+// ключ надо переводить на доверенный XFF от известного прокси.
+func TestRemoteRateLimiterIgnoresForwardedForBehindRelay(t *testing.T) {
+	l := newRemoteRateLimiter(0.01, 1)
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	l.now = func() time.Time { return now }
+	h := remoteRateLimitMiddleware(l, nil)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	hit := func(forwarded string) int {
+		req := httptest.NewRequest(http.MethodPost, "/v1/dashboard/login", nil)
+		req.RemoteAddr = "198.51.100.1:40001" // один и тот же релей
+		req.Header.Set("X-Forwarded-For", forwarded)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if code := hit("203.0.113.5"); code != http.StatusNoContent {
+		t.Fatalf("первая попытка = %d, want 204", code)
+	}
+	// Другой XFF, тот же RemoteAddr -- то же ведёрко: подделываемый
+	// заголовок ключом не становится.
+	if code := hit("203.0.113.6"); code != http.StatusTooManyRequests {
+		t.Fatalf("смена X-Forwarded-For обошла лимит: код %d, want 429", code)
 	}
 }
 
@@ -124,22 +205,4 @@ func TestRemoteRateLimiterNilIsPassThrough(t *testing.T) {
 	if rec.Code != http.StatusNoContent || hits != 1 {
 		t.Fatalf("выключенный лимитер: code=%d hits=%d", rec.Code, hits)
 	}
-}
-
-func testRemoteAddr(i int) string {
-	return "203.0.113." + itoaSmall(i%256) + ":" + itoaSmall(40000+i%1000)
-}
-
-func itoaSmall(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [8]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
 }
