@@ -99,12 +99,18 @@ func ParseDNSEndpoints(cfg string) []DNSEndpoint {
 		}
 		if m := reDoT.FindStringSubmatch(trimmed); m != nil {
 			port := 853
-			if m[2] != "" {
+			switch {
+			case m[2] != "":
 				p, err := strconv.Atoi(m[2])
 				if err != nil || p < 1 || p > 65535 {
 					continue
 				}
 				port = p
+			case strings.HasPrefix(m[3], ":"):
+				// `<host>:<мусор>` — порт написан, но не разобран. Подставить
+				// молча 853 значило бы проверять не тот адрес, что стоит в
+				// конфиге, поэтому строка отбрасывается целиком.
+				continue
 			}
 			sni, zone := parseQualifiers(m[3])
 			out = append(out, DNSEndpoint{Type: "dot", Host: m[1], Port: port, SNI: sni, Zone: zone})

@@ -209,6 +209,41 @@ func TestParseDNSEndpoints_DoHKeepsZoneAndIgnoresDNSM(t *testing.T) {
 	}
 }
 
+// Мусор в порте обязан отбрасывать строку целиком. Подмена его значением по
+// умолчанию означала бы, что проверка идёт не туда, куда написано в конфиге.
+func TestParseDNSEndpoints_RejectsGarbagePort(t *testing.T) {
+	cfg := `
+dns-proxy
+    tls upstream 1.1.1.1:abc dnss
+    tls upstream 2001:db8::1
+!
+`
+	if eps := ParseDNSEndpoints(cfg); len(eps) != 0 {
+		t.Fatalf("строка с мусором в порте принята: %+v", eps)
+	}
+}
+
+// Ради скобочной формы IPv6 в регулярке переставлен порядок альтернатив --
+// значит, она обязана быть покрыта тестом.
+func TestParseDNSEndpoints_IPv6BracketForm(t *testing.T) {
+	cfg := `
+dns-proxy
+    tls upstream [2001:db8::1] sni dns.example.com
+    tls upstream [2001:db8::2]:853 domain ru
+!
+`
+	eps := ParseDNSEndpoints(cfg)
+	if len(eps) != 2 {
+		t.Fatalf("разобрано %d строк из 2: %+v", len(eps), eps)
+	}
+	if eps[0].Host != "[2001:db8::1]" || eps[0].Port != 853 || eps[0].SNI != "dns.example.com" {
+		t.Errorf("IPv6 без порта разобран как %+v", eps[0])
+	}
+	if eps[1].Host != "[2001:db8::2]" || eps[1].Port != 853 || eps[1].Zone != "ru" {
+		t.Errorf("IPv6 с портом разобран как %+v", eps[1])
+	}
+}
+
 func TestParseDNSEndpoints_IgnoresMalformed(t *testing.T) {
 	cfg := `
 ip name-server                          ` + // garbage line, missing fields
