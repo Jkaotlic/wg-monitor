@@ -2100,6 +2100,10 @@ func TestReportFailedAwgManagerCheckKeepsSnapshot(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	before, err := d.RouterVersions().Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	h := NewMux(Deps{
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -2130,6 +2134,18 @@ func TestReportFailedAwgManagerCheckKeepsSnapshot(t *testing.T) {
 	}
 	if row.PrevAwgmgrVersion != "" {
 		t.Errorf("упавшая проверка сдвинула историю: prev=%q", row.PrevAwgmgrVersion)
+	}
+	// Сохранность значений держит и слияние в SQL, поэтому она гейт не
+	// сторожит вовсе. Сторожит вот это: Upsert двигает updated_at
+	// БЕЗУСЛОВНО, и без гейта упавшая проверка обновила бы «когда
+	// смотрели», не принеся ни одной версии. Экран задачи 4 печатает это
+	// время вслух.
+	if !row.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Errorf("упавшая проверка сдвинула «когда смотрели»: %v -> %v", before.UpdatedAt, row.UpdatedAt)
+	}
+	// И прямо о предмете гейта, без похода через HTTP.
+	if _, ok := versionSnapshotFromReport(`{"base_url":"http://127.0.0.1:2222"}`); ok {
+		t.Error("гейт пропустил details, в которых нет ни одной версии")
 	}
 }
 
