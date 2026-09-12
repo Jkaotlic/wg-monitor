@@ -132,7 +132,7 @@ func TestAgentStateRoundTripAWGMDeployFields(t *testing.T) {
 		Agents: []AgentState{{
 			Nickname:   "testkeen",
 			DeployMode: "awgm",
-			AWGMURL:    "https://awg.testkeen.keenetic.pro",
+			AWGMURL:    "https://awg.example.com",
 			AWGMAuth:   "router-admin",
 		}},
 	}
@@ -147,7 +147,7 @@ func TestAgentStateRoundTripAWGMDeployFields(t *testing.T) {
 	if ag == nil {
 		t.Fatal("agent missing")
 	}
-	if ag.DeployMode != "awgm" || ag.AWGMURL != "https://awg.testkeen.keenetic.pro" || ag.AWGMAuth != "router-admin" {
+	if ag.DeployMode != "awgm" || ag.AWGMURL != "https://awg.example.com" || ag.AWGMAuth != "router-admin" {
 		t.Fatalf("AWGM fields lost: %+v", ag)
 	}
 }
