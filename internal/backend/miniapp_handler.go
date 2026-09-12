@@ -38,6 +38,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	// Ссылка на веб-управление -- только админу; гейт внутри хендлера, отказ
 	// 404, как у остальных поверхностей мини-аппа.
 	mux.Handle("POST /v1/miniapp/web-link", reqID(auth(webLinkIssueHandler(d))))
+	// Сводка всего парка -- только админу: это проекция дашбордной сводки,
+	// и радиус у неё парковый, а не роутерный.
+	mux.Handle("GET /v1/miniapp/fleet", reqID(auth(miniappFleetHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
