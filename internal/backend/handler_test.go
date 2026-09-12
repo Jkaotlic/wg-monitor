@@ -1998,6 +1998,141 @@ func (f *fakeDeployNotifier) snapshot() []deployRec {
 	return out
 }
 
+// Версии роутера приезжают в каждом отчёте, а «было» помнит только база:
+// без снимка сказать «вышло обновление» физически нечем, и кэш в памяти
+// умирал с каждым рестартом бэкенда.
+func TestReportWritesVersionSnapshot(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "v.db"))
+	defer d.Close()
+	tok := strings.Repeat("cd", 32)
+	uid, _ := d.Users().Insert("router-v", tok, "198.51.100.10", "awg11")
+
+	h := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+	})
+	body, _ := json.Marshal(wire.Report{
+		Timestamp: time.Now().UTC(), AgentVersion: "t",
+		Checks: []wire.Check{{Name: "awg_manager", Status: "ok", Details: map[string]any{
+			"version": "2.17.2", "firmware": "4.3.5", "keenetic_os": "KN-1811",
+			"active_backend":        "kernel",
+			"kernel_module_version": "1.0.0",
+			"kernel_module_model":   "KN-1811",
+			"kernel_module_loaded":  true,
+		}}},
+	})
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	row, err := d.RouterVersions().Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.AwgmgrVersion != "2.17.2" || row.KmodVersion != "1.0.0" {
+		t.Errorf("снимок из отчёта не записан: %+v", row)
+	}
+	if row.Source != "report" {
+		t.Errorf("source = %q", row.Source)
+	}
+	if row.FirmwareCurrent != "4.3.5" || row.KeeneticOS != "KN-1811" || row.AwgmgrBackend != "kernel" {
+		t.Errorf("снимок неполон: %+v", row)
+	}
+	if row.KmodModel != "KN-1811" || row.KmodLoaded == nil || !*row.KmodLoaded {
+		t.Errorf("модуль ядра не записан: %+v", row)
+	}
+}
+
+// Отчёт старого агента без полей модуля ядра не ломает запись снимка.
+func TestReportFromOldAgentStillWritesSnapshot(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "v.db"))
+	defer d.Close()
+	tok := strings.Repeat("ce", 32)
+	uid, _ := d.Users().Insert("router-v", tok, "198.51.100.10", "awg11")
+
+	h := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+	})
+	body, _ := json.Marshal(wire.Report{
+		Timestamp: time.Now().UTC(), AgentVersion: "t",
+		Checks: []wire.Check{{Name: "awg_manager", Status: "ok", Details: map[string]any{
+			"version": "2.17.2", "firmware": "4.3.5",
+		}}},
+	})
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	row, err := d.RouterVersions().Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.AwgmgrVersion != "2.17.2" {
+		t.Errorf("снимок старого агента не записан: %+v", row)
+	}
+	if row.KmodLoaded != nil {
+		t.Error("у старого агента kmod_loaded обязан остаться неизвестным")
+	}
+}
+
+// Проверка упала -- в details лежит только адрес панели, версий там нет.
+// Такой отчёт не имеет права стереть то, что мы уже знали.
+func TestReportFailedAwgManagerCheckKeepsSnapshot(t *testing.T) {
+	d, _ := db.Open(filepath.Join(t.TempDir(), "v.db"))
+	defer d.Close()
+	tok := strings.Repeat("cf", 32)
+	uid, _ := d.Users().Insert("router-v", tok, "198.51.100.10", "awg11")
+	if err := d.RouterVersions().Upsert(uid, db.RouterVersionSnapshot{
+		AwgmgrVersion: "2.17.2", KmodVersion: "1.0.0", Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewMux(Deps{
+		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:         d,
+		Dispatcher: &fakeDisp{},
+	})
+	body, _ := json.Marshal(wire.Report{
+		Timestamp: time.Now().UTC(), AgentVersion: "t",
+		Checks: []wire.Check{{Name: "awg_manager", Status: "fail", Details: map[string]any{
+			"base_url": "http://127.0.0.1:2222",
+		}}},
+	})
+	req := httptest.NewRequest("POST", "/v1/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status: %d body=%s", w.Code, w.Body.String())
+	}
+
+	row, err := d.RouterVersions().Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.AwgmgrVersion != "2.17.2" || row.KmodVersion != "1.0.0" {
+		t.Errorf("упавшая проверка стёрла снимок: %+v", row)
+	}
+	if row.PrevAwgmgrVersion != "" {
+		t.Errorf("упавшая проверка сдвинула историю: prev=%q", row.PrevAwgmgrVersion)
+	}
+}
+
 func TestHandleReport_MobileResumed_TriggersWakeCard(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "h.db"))
 	defer d.Close()
