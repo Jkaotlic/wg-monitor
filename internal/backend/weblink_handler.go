@@ -35,8 +35,8 @@ const (
 
 	webLinkCopyNotice       = "Ссылка личная и живёт 12 часов. Не пересылайте её: по ней всё это время открывается управление всем парком."
 	webLinkCopyDead         = "Ссылка больше не действует — попросите новую."
-	webLinkCopyAdminOnly    = "Эта команда только для админа."
-	webLinkCopyNoPublicBase = "Публичный адрес не настроен по https — ссылку выдать нельзя."
+	WebLinkCopyAdminOnly    = "Эта команда только для админа."
+	WebLinkCopyNoPublicBase = "Публичный адрес не настроен по https — ссылку выдать нельзя."
 	webLinkCopyLimit        = "Живыми остаются три последние ссылки: выдали новую — самая старая перестала работать."
 )
 
@@ -155,7 +155,7 @@ func webLinkIssueHandler(d Deps) http.HandlerFunc {
 		}
 		grant, err := IssueWebLink(d.DB, telegramUserID, d.PublicBaseURL, d.Logger)
 		if errors.Is(err, ErrWebLinkNoPublicBase) {
-			writeJSONError(w, http.StatusConflict, "public_base_url_missing", webLinkCopyNoPublicBase)
+			writeJSONError(w, http.StatusConflict, "public_base_url_missing", WebLinkCopyNoPublicBase)
 			return
 		}
 		if err != nil {

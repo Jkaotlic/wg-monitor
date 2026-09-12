@@ -490,6 +490,7 @@ func Parse(data string) (Args, error) {
 			"awaken_confirm": true, "awaken_do": true, "close": true,
 			"help": true, "doctor_all": true, "audit_all": true,
 			"update_all_confirm": true, "update_all_do": true, "mobile": true,
+			"weblink": true,
 		}
 		if !validPanelScreens[screen] {
 			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)

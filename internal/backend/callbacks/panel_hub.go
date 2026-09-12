@@ -61,6 +61,8 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 		r.panelUpdateAllDo(ctx, q)
 	case "mobile":
 		r.panelMobileFleet(ctx, q)
+	case "weblink":
+		r.panelWebLink(ctx, q)
 	case "help":
 		r.panelHandleHelp(ctx, q, args)
 	default:

@@ -244,8 +244,8 @@ func TestWebLinkIssueRefusesWithoutHTTPSPublicBase(t *testing.T) {
 		if rec.Code != http.StatusConflict {
 			t.Fatalf("base=%q: код %d, want 409 (тело %s)", base, rec.Code, rec.Body.String())
 		}
-		if !strings.Contains(rec.Body.String(), webLinkCopyNoPublicBase) {
-			t.Fatalf("base=%q: отказ обязан сказать «%s», а сказал: %s", base, webLinkCopyNoPublicBase, rec.Body.String())
+		if !strings.Contains(rec.Body.String(), WebLinkCopyNoPublicBase) {
+			t.Fatalf("base=%q: отказ обязан сказать «%s», а сказал: %s", base, WebLinkCopyNoPublicBase, rec.Body.String())
 		}
 	}
 }
