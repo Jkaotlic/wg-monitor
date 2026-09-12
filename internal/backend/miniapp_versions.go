@@ -84,6 +84,22 @@ var miniappUpdateComponents = map[string]bool{
 // miniappSnoozeFor -- «Отложить на неделю».
 const miniappSnoozeFor = 7 * 24 * time.Hour
 
+// newsKey -- ключ новости: компонент И версия, про которую шла речь.
+//
+// Одним компонентом ключевать нельзя. ListFor отдаёт ВСЕ несокрытые строки
+// этого компонента, а прошлая, никем не скрытая новость живёт в базе до смены
+// версии. При ключе из одного компонента она перетирала запись о новой, и
+// сравнение на равенство не совпадало: вышедшее обновление не рисовалось
+// вовсе -- экран говорил «обновлений нет» при доступной прошивке.
+//
+// Нумерация делает это не краевым случаем, а обычным: строковое сравнение
+// ставит «5.02.A.9.0-0» ПОСЛЕ «5.02.A.10.0-0», а у панели «2.9.x» после
+// «2.19.x». То есть заслонка появлялась на первом же переходе через десяток.
+//
+// \x00 в разделителе -- чтобы склейка была однозначной: в компонентах и
+// версиях нулевого байта не бывает.
+func newsKey(component, version string) string { return component + "\x00" + version }
+
 // VersionAuditFromSnapshot восстанавливает форму ответа агента из снимка базы.
 //
 // Так сравнение обновлений идёт через ОДИН ComputeUpdates и для свежего ответа
@@ -161,14 +177,18 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 	}
 
 	// Что экран имеет право показать: отложенное и скрытое сюда не попадает.
-	visible := make(map[string]string)
+	//
+	// Множество по паре «компонент + версия», а не карта по компоненту:
+	// состояние «скрыто/отложено» относится к ТОЙ новости, о которой шла речь,
+	// и прошлая строка не имеет права заслонять новую (см. newsKey).
+	visible := make(map[string]bool)
 	if list, err := reminders.ListFor(routerID, now); err != nil {
 		if d.Logger != nil {
 			d.Logger.Warn("miniapp: update reminders list failed", "router_id", routerID, "err", err)
 		}
 	} else {
 		for _, rem := range list {
-			visible[rem.Component] = rem.Version
+			visible[newsKey(rem.Component, rem.Version)] = true
 		}
 	}
 
@@ -182,7 +202,7 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		if u.Component == "firmware" && !maySeeFirmware {
 			continue
 		}
-		if visible[u.Component] != u.Available {
+		if !visible[newsKey(u.Component, u.Available)] {
 			continue
 		}
 		resp.Rows = append(resp.Rows, miniappVersionRow{
@@ -203,7 +223,7 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		resp.Unknown = append(resp.Unknown, miniappUnknownRow{Component: u.Component, Reason: u.Reason})
 	}
 
-	if rebootHint != "" && visible["kmod_reboot"] == row.KmodVersion {
+	if rebootHint != "" && visible[newsKey("kmod_reboot", row.KmodVersion)] {
 		resp.RebootHint = rebootHint
 		if err := reminders.MarkShown(routerID, "kmod_reboot", row.KmodVersion); err != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp: reboot reminder mark shown failed", "router_id", routerID, "err", err)

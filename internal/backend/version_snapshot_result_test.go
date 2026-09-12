@@ -87,6 +87,56 @@ func TestCmdResultVersionAuditWritesSnapshotWithoutOriginRef(t *testing.T) {
 	}
 }
 
+// Неуспешный version_audit снимок не трогает.
+//
+// Гейт по статусу стоит в коде намеренно, и удаляться бесследно он не должен:
+// у упавшей команды в Output лежит текст ошибки, а не версии, и запись такого
+// ответа завела бы снимок с источником version_audit и пустыми полями.
+func TestCmdResultFailedAuditLeavesSnapshotAlone(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	tok := "4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f4f"
+	uid, err := d.Users().Insert("router-a", tok, "198.51.100.10", "awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sink := &fakeCmdSink{commands: map[string]wire.Command{
+		"updpoll-err": {ID: "updpoll-err", Action: "version_audit"},
+	}}
+	mux := NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Валидный JSON, но команда не выполнена: разбор пройдёт, и удержать запись
+	// может только гейт статуса.
+	body, _ := json.Marshal(wire.CommandResult{ID: "updpoll-err", Status: "err", Output: `{"awgmgr_version":"2.18.2"}`})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	row, err := d.RouterVersions().Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.UpdatedAt.IsZero() {
+		t.Errorf("снимок записан из неуспешной команды: %+v", row)
+	}
+}
+
 // Чужой по смыслу ответ снимок не трогает.
 //
 // Ответ firmware_status -- ВАЛИДНЫЙ JSON, и в wire.VersionAudit он разберётся

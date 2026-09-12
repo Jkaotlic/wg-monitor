@@ -110,6 +110,32 @@ describe('installedRows', () => {
     expect(installedRows({})).toEqual([])
     expect(installedRows(null)).toEqual([])
   })
+
+  // «Про загрузку модуля ядра ответа нет» и «модуль не загружен» -- разные
+  // состояния, ровно как у HydraRoute. false означает поломку, и выдавать
+  // молчание агента за неё нельзя: у владельца исправного роутера это была бы
+  // выдуманная авария.
+  it('про модуль ядра без ответа не пишет «не загружен»', () => {
+    const rows = installedRows({ installed: { kmod: '3.1.20260906' } })
+    const kmod = rows.find((r) => r.key === 'kmod')
+    expect(kmod.value).toBe('3.1.20260906')
+    for (const row of rows) {
+      expect(row.valueSub ?? '').not.toContain('не загружен')
+    }
+  })
+
+  it('а настоящее «не загружен» показывает', () => {
+    const rows = installedRows({ installed: { kmod: '3.1.20260906', kmod_loaded: false } })
+    const kmod = rows.find((r) => r.key === 'kmod')
+    expect(kmod.valueSub).toContain('не загружен')
+  })
+
+  it('версии модуля ядра нет вовсе — «сведений нет», а не «не загружен»', () => {
+    const rows = installedRows({ installed: { awgmgr: '2.18.2+r2' } })
+    const kmod = rows.find((r) => r.key === 'kmod')
+    expect(kmod.value).toBe('сведений нет')
+    expect(kmod.valueSub ?? '').not.toContain('не загружен')
+  })
 })
 
 describe('rebootLine', () => {
@@ -137,6 +163,14 @@ describe('тон текстов', () => {
   function prose() {
     const out = []
     for (const row of versionsRows(PAYLOAD)) out.push(row.text, row.title)
+    // Строка БЕЗ серверной подсказки: тогда последствие берётся из клиентской
+    // константы, и проверка тона наконец касается и её тоже. На payload с hint
+    // эта константа в проверяемые тексты не попадала вовсе, то есть половина
+    // проверки была вакуумной.
+    const noHint = versionsRows({
+      rows: [{ component: 'awgmgr', name: 'awg-manager', installed: '2.17.2', available: '2.18.0' }],
+    })
+    for (const row of noHint) out.push(row.text, row.title)
     for (const row of installedRows(PAYLOAD)) out.push(row.title)
     for (const reason of ['upstream_unavailable', 'upstream_not_configured', 'no_snapshot', 'agent_too_old']) {
       out.push(unknownLine(reason))

@@ -310,7 +310,125 @@ func TestMiniappUpdateReminderSnoozeHidesNewsFromScreen(t *testing.T) {
 
 // Строка новости живёт на роутере, а не у человека: «скрыть» решает за всех
 // получателей этого роутера, поэтому нажать может только владелец или админ.
+//
+// Компонент здесь ОБЯЗАН быть тем, по которому новость реально есть (прошивка:
+// её приносит сам роутер, и она видна при выключенном апстриме). На «awgmgr»
+// при выключенном источнике новости нет вовсе, и 404 приходил бы из ветки
+// «прятать нечего» -- такой тест был бы зелен и без гейта прав. Поэтому рядом
+// пинится 200 для владельца: без этой половины тест не различает разрешение и
+// отсутствие новости.
 func TestMiniappUpdateReminderOperatorCannotHideRouterNews(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	seedLiveSnapshot(t, d, ownedID)
+	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
+		t.Fatalf("grant operator: %v", err)
+	}
+	h := versionsMux(d)
+
+	// Оператору отказ -- именно по правам.
+	rec := putReminder(t, h, ownedID, 555, "firmware", `{"action":"dismiss"}`)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("оператор скрыл новость всему роутеру (код %d)", rec.Code)
+	}
+
+	// Владельцу на том же компоненте -- можно. Если и здесь 404, значит тест
+	// упёрся в «новости нет», а не в границу прав.
+	ownerRec := putReminder(t, h, ownedID, ownerTG, "firmware", `{"action":"dismiss"}`)
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("владелец не смог скрыть новость (код %d): %s -- тест не различает права и отсутствие новости",
+			ownerRec.Code, ownerRec.Body.String())
+	}
+}
+
+// Прошлая, никем не скрытая новость не имеет права заслонять новую.
+//
+// Нумерация KeeneticOS даёт инверсию на первом же переходе: строковое
+// сравнение ставит «5.02.A.9.0-0» ПОСЛЕ «5.02.A.10.0-0». Пока видимость
+// ключевалась одним компонентом, прошлая строка перетирала запись, совпадения
+// не происходило, и вышедшее обновление не рисовалось вовсе -- экран говорил
+// «обновлений нет» при доступной прошивке. Это отказ по главному критерию
+// задачи с другой стороны: не незнание выдано за ответ, а настоящая новость
+// выдана за её отсутствие.
+func TestMiniappVersionsNewerNewsIsNotShadowedByOldRow(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	yes := true
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		AwgmgrVersion:   "2.18.2+r2",
+		FirmwareCurrent: "5.02.A.8.0-3",
+		FirmwareAvail:   "5.02.A.10.0-0",
+		KmodVersion:     "3.1.20260906",
+		KmodLoaded:      &yes,
+		Source:          "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Прошлая новость: человек её просто не тронул. Ensure заводит такую
+	// строку на каждой отрисовке, так что она появляется сама.
+	if err := d.UpdateReminders().Ensure(ownedID, "firmware", "5.02.A.9.0-0"); err != nil {
+		t.Fatal(err)
+	}
+	h := versionsMux(d)
+
+	_, resp := getVersions(t, h, ownedID, telegramUserID)
+	var got *miniappVersionRow
+	for i := range resp.Rows {
+		if resp.Rows[i].Component == "firmware" {
+			got = &resp.Rows[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("новость про 5.02.A.10.0-0 заслонена прошлой строкой и не показана вовсе: %+v", resp.Rows)
+	}
+	if got.Available != "5.02.A.10.0-0" {
+		t.Errorf("показана не та версия: %+v", got)
+	}
+}
+
+// «Скрыть» относится к ТОЙ версии, о которой шла речь. Вышла следующая -- это
+// новая новость, и её видно снова, даже если её номер строкой меньше.
+func TestMiniappVersionsDismissedVersionDoesNotHideTheNext(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		FirmwareCurrent: "5.02.A.8.0-3",
+		FirmwareAvail:   "5.02.A.9.0-0",
+		Source:          "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := versionsMux(d)
+
+	// Увидели и скрыли новость про 9.0-0.
+	if _, resp := getVersions(t, h, ownedID, telegramUserID); !hasRow(resp.Rows, "firmware") {
+		t.Fatalf("новости про 5.02.A.9.0-0 нет: %+v", resp.Rows)
+	}
+	if rec := putReminder(t, h, ownedID, telegramUserID, "firmware", `{"action":"dismiss"}`); rec.Code != http.StatusOK {
+		t.Fatalf("скрыть не удалось: %d %s", rec.Code, rec.Body.String())
+	}
+	if _, resp := getVersions(t, h, ownedID, telegramUserID); hasRow(resp.Rows, "firmware") {
+		t.Fatalf("скрытая новость осталась на экране: %+v", resp.Rows)
+	}
+
+	// Вышла следующая прошивка.
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		FirmwareCurrent: "5.02.A.8.0-3",
+		FirmwareAvail:   "5.02.A.10.0-0",
+		Source:          "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, resp := getVersions(t, h, ownedID, telegramUserID)
+	if !hasRow(resp.Rows, "firmware") {
+		t.Errorf("новая новость считается уже скрытой: %+v", resp.Rows)
+	}
+}
+
+// Несущий гейт: визит оператора не заводит состояние новости о прошивке.
+//
+// Гейт стоит дважды -- при заведении новости и при отрисовке, -- и каждый по
+// отдельности достаточен, поэтому снятие одного экран не меняет. Наблюдаемое
+// следствие ИМЕННО гейта при Ensure -- строка в базе: оператор не имеет права
+// заводить новость про компонент, которого он не видит.
+func TestMiniappVersionsOperatorVisitCreatesNoFirmwareNews(t *testing.T) {
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	seedLiveSnapshot(t, d, ownedID)
 	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
@@ -318,9 +436,79 @@ func TestMiniappUpdateReminderOperatorCannotHideRouterNews(t *testing.T) {
 	}
 	h := versionsMux(d)
 
-	rec := putReminder(t, h, ownedID, 555, "awgmgr", `{"action":"dismiss"}`)
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("оператор скрыл новость всему роутеру (код %d)", rec.Code)
+	getVersions(t, h, ownedID, 555)
+
+	list, err := d.UpdateReminders().ListFor(ownedID, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rem := range list {
+		if rem.Component == "firmware" {
+			t.Errorf("визит оператора завёл новость о прошивке: %+v", rem)
+		}
+	}
+}
+
+// Второй гейт, отдельно: строка новости уже есть и видима (её завёл владелец),
+// и всё равно оператору она не рисуется. Здесь Ensure ничего не решает --
+// решает гейт при отрисовке.
+func TestMiniappVersionsOperatorSeesNoFirmwareRowEvenWhenNewsExists(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	seedLiveSnapshot(t, d, ownedID)
+	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
+		t.Fatalf("grant operator: %v", err)
+	}
+	h := versionsMux(d)
+
+	// Владелец открыл экран -- новость о прошивке заведена и видима.
+	if _, resp := getVersions(t, h, ownedID, ownerTG); !hasRow(resp.Rows, "firmware") {
+		t.Fatalf("владелец не увидел новость о прошивке: %+v", resp.Rows)
+	}
+
+	_, opResp := getVersions(t, h, ownedID, 555)
+	if hasRow(opResp.Rows, "firmware") {
+		t.Errorf("оператор увидел уже заведённую новость о прошивке: %+v", opResp.Rows)
+	}
+}
+
+// «Про загрузку модуля ядра ответа нет» и «модуль не загружен» -- разные
+// состояния. nil обязан уехать отсутствием ключа: false означает поломку, и
+// выдавать молчание агента за неё нельзя (тот же инвариант, что у HydraRoute).
+func TestMiniappVersionsNeverClaimsKmodUnloadedWhenUnknown(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		AwgmgrVersion: "2.18.2+r2",
+		KmodVersion:   "3.1.20260906", // версия есть, а про загрузку агент молчит
+		Source:        "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := versionsMux(d)
+
+	rec, _ := getVersions(t, h, ownedID, telegramUserID)
+	if strings.Contains(rec.Body.String(), "kmod_loaded") {
+		t.Errorf("неизвестность про загрузку модуля ядра уехала значением: %s", rec.Body.String())
+	}
+}
+
+// А настоящий отрицательный ответ агента доезжает: false -- это поломка, и
+// молчать о ней нельзя.
+func TestMiniappVersionsReportsKmodUnloadedWhenAgentSaidSo(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	no := false
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		AwgmgrVersion: "2.18.2+r2",
+		KmodVersion:   "3.1.20260906",
+		KmodLoaded:    &no,
+		Source:        "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := versionsMux(d)
+
+	rec, _ := getVersions(t, h, ownedID, telegramUserID)
+	if !strings.Contains(rec.Body.String(), `"kmod_loaded":false`) {
+		t.Errorf("агент сказал «не загружен», а в ответе этого нет: %s", rec.Body.String())
 	}
 }
 
