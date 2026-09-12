@@ -629,6 +629,69 @@ func TestMiniappAgentConfigDeniedToOwnerAndOperator(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("админ: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
 	}
+
+	// Адрес панели роутера приезжает на экран ТОЛЬКО в ответе агента на
+	// agent_config_get -- в срезах /v1/miniapp/* его нет вовсе. Значит
+	// граница по роли обязана стоять и на опросе результата, а не только на
+	// постановке команды: иначе владелец, у которого есть идентификатор
+	// команды, дочитал бы адрес панели из чужого ответа. Решение
+	// координатора: админу адрес показываем (он и так открыт ему в сводке
+	// дашборда), владельцу и оператору он не приходит ВОВСЕ -- не «приходит
+	// и не рисуется».
+	rec = miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"agent_config_get"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("админ, чтение конфига: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	const panelURL = "http://198.51.100.7:8080"
+	// Так это помнит настоящая очередь: результат существует только у
+	// команды, которую агент забрал (RecordResult отвергает результат
+	// невыданной команды), поэтому действие по идентификатору восстановимо.
+	sink.commands = map[string]wire.Command{
+		issued.CmdID: {ID: issued.CmdID, Action: "agent_config_get"},
+	}
+	sink.results = map[string]wire.CommandResult{
+		issued.CmdID: {
+			ID:     issued.CmdID,
+			Status: "ok",
+			Output: `{"config_kind":"agent","awgm_base_url":"` + panelURL + `","awgm_login":"admin"}`,
+		},
+	}
+	poll := func(telegramUserID int64) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/v1/miniapp/routers/%d/commands/%s?wait_sec=0", ownedID, issued.CmdID), nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		got := poll(who.tgID)
+		if got.Code != http.StatusNotFound {
+			t.Errorf("%s, опрос результата: код %d тело %s, ожидался 404", who.name, got.Code, got.Body.String())
+		}
+		// Ни значения, ни имени поля: имя поля в ответе означает, что
+		// значение приедет туда завтра.
+		for _, secret := range []string{panelURL, "198.51.100.7", "awgm_base_url"} {
+			if bytes.Contains(got.Body.Bytes(), []byte(secret)) {
+				t.Errorf("%s получил %q в ответе опроса: %s", who.name, secret, got.Body.String())
+			}
+		}
+	}
+	// Админу тот же результат приходит целиком -- иначе тест был бы зелёным
+	// и на экране, который не работает ни для кого.
+	mine := poll(999)
+	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(panelURL)) {
+		t.Fatalf("админ, опрос результата: код %d тело %s, ожидались 200 и адрес панели", mine.Code, mine.Body.String())
+	}
 }
 
 // Соседний срез -- /v1/dashboard/summary -- отдаёт ssh, креды панели и чат

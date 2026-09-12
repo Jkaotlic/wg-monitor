@@ -332,6 +332,30 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "cmd_id required")
 			return
 		}
+		// Граница по роли стоит и здесь, а не только на постановке команды.
+		// Ответ агента на agent_config_get несёт адрес панели роутера -- а
+		// это ровно то, чего владельцу в мини-аппе не показывают (ему
+		// «панель известна» и кнопка «Открыть»). Без этой проверки владелец,
+		// у которого есть идентификатор команды, дочитал бы адрес из чужого
+		// ответа, хотя саму команду поставить не может.
+		//
+		// Действие восстанавливается по идентификатору: настоящая очередь
+		// помнит выданные агенту команды (Queue.CommandByID читает issued), а
+		// результат существует только у выданной -- RecordResult отвергает
+		// результат невыданной команды. Поэтому «результат есть» и «действие
+		// известно» приходят вместе.
+		//
+		// Отказ тот же, что на постановке -- 404 not_found: по коду ответа
+		// владельцу незачем узнавать, что действие существует. Команду, чьё
+		// действие очередь уже НЕ помнит, здесь не запрещаем: результата у
+		// такой тоже нет (ниже придёт result_not_ready), а запрет по незнанию
+		// сломал бы опрос обычных действий, чью запись вымело Sweep.
+		if cmd, known := d.CommandSink.CommandByID(routerID, cmdID); known &&
+			miniappAdminOnlyActions[cmd.Action] &&
+			!miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
 		wait := miniappMaxCommandWaitSec
 		if q := r.URL.Query().Get("wait_sec"); q != "" {
 			if n, err := strconv.Atoi(q); err == nil {

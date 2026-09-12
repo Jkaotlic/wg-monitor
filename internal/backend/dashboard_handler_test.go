@@ -1425,9 +1425,14 @@ func setDashboardTestLastSeen(t *testing.T, d *db.DB, userID int64, ts time.Time
 }
 
 type dashboardActionSink struct {
-	enqueued       []wire.Command
-	enqueuedUsers  []int64
-	results        map[string]wire.CommandResult
+	enqueued      []wire.Command
+	enqueuedUsers []int64
+	results       map[string]wire.CommandResult
+	// commands -- выданные агенту команды по их идентификатору, как их
+	// помнит настоящая очередь (Queue.CommandByID читает issued). Карта
+	// заполняется только теми тестами, которым нужно «результат уже есть, и
+	// он от вот этого действия»; у остальных она nil, и поведение прежнее.
+	commands       map[string]wire.Command
 	awaitUserID    int64
 	awaitCmdID     string
 	droppedActions []string
@@ -1445,8 +1450,12 @@ func (s *dashboardActionSink) ConsumeOriginRef(int64, string) (cmdpkg.MessageRef
 	return cmdpkg.MessageRef{}, false
 }
 
-func (s *dashboardActionSink) CommandByID(int64, string) (wire.Command, bool) {
-	return wire.Command{}, false
+func (s *dashboardActionSink) CommandByID(_ int64, cmdID string) (wire.Command, bool) {
+	if s.commands == nil {
+		return wire.Command{}, false
+	}
+	cmd, ok := s.commands[cmdID]
+	return cmd, ok
 }
 
 func (s *dashboardActionSink) Enqueue(userID int64, cmd wire.Command) error {
