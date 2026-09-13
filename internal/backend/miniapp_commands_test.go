@@ -47,6 +47,11 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// «Куда пойдёт сайт»: читающее, до агента доезжает только имя сайта
 		// (явная ветка sanitizeWizardCommandArgs).
 		"route_lookup",
+		// «Открывается ли сайт с этого роутера»: читающее. Имя разрешается через
+		// dns-proxy роутера и идёт TCP на 443 -- ничего не меняется, поэтому
+		// смотреть вправе и оператор. До агента доезжает только имя сайта: ветка
+		// sanitizeWizardCommandArgs общая с route_lookup.
+		"dns_open",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {

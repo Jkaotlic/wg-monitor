@@ -628,6 +628,9 @@ var dashboardCommandAllowlist = map[string]bool{
 	"tunnel_analyze":   true,
 	// «Куда пойдёт сайт»: только чтение, аргумент -- одно имя сайта.
 	"route_lookup": true,
+	// «Открывается ли сайт»: только чтение, аргумент -- одно имя сайта.
+	// Нужно и аварийному входу без Telegram, иначе проверить сайт там нечем.
+	"dns_open": true,
 	// NB: update_backend_url is intentionally NOT here. Re-pointing the fleet's
 	// backend domain from a browser session is fleet-takeover blast radius, so it
 	// stays gated to the wizard token / deploy CLI (see
