@@ -918,8 +918,29 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "dns_reset":
+	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status":
 		return map[string]any{}, true
+	case "dns_reset":
+		// Сброс DNS принимает ровно один аргумент -- предпросмотр. Раньше он
+		// стоял среди «команд без аргументов», и dry_run не доезжал до агента
+		// вовсе: кнопка предпросмотра была бы невозможна. Наружу уходит ровно
+		// одно поле, всё остальное клиентское не доезжает.
+		raw, present := args["dry_run"]
+		if !present {
+			// Отсутствие ключа -- настоящий сброс: так работает кнопка
+			// дашборда сегодня, и менять её поведение молча нельзя.
+			return map[string]any{"dry_run": false}, true
+		}
+		dryRun, ok := raw.(bool)
+		if !ok {
+			// Значение неверного типа не приводим ни к чему. `false` означало
+			// бы разрушительный сброс там, где клиент просил предпросмотр, а
+			// `true` -- молчаливый отказ выполнить то, что человек нажал.
+			// Угадывать намерение сломанного клиента опаснее, чем отказать.
+			writeJSONError(w, http.StatusBadRequest, "invalid_dry_run", "dry_run must be a boolean")
+			return nil, false
+		}
+		return map[string]any{"dry_run": dryRun}, true
 	case "route_lookup":
 		// «Куда пойдёт сайт»: агенту уходит ровно имя сайта, в одном виде.
 		// Адрес с путём или портом и одиночное имя без точки -- не сайт; агент
