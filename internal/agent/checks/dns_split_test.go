@@ -108,8 +108,8 @@ func TestDNSSplit_LocalMatchingForeignReadsAsForeign(t *testing.T) {
 // Маршрут до самого резолвера Яндекса берётся у route_lookup -- второго такого
 // инструмента писать нельзя. Его неудача -- «неизвестно», а не выдумка.
 func TestDNSSplit_RouteComesFromRouteLookupAndDegradesToUnknown(t *testing.T) {
-	base := func(rl func(context.Context, string) (string, error)) DNSSplit {
-		return DNSSplit{
+	base := func(rl func(context.Context, string) (string, error)) *DNSSplit {
+		return &DNSSplit{
 			Zones:         []string{"ru"},
 			DefaultCanary: "canary.example.com",
 			YandexHost:    "common.dot.dns.yandex.net",
