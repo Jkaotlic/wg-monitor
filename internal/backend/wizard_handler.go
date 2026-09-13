@@ -941,10 +941,14 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 			return nil, false
 		}
 		return map[string]any{"dry_run": dryRun}, true
-	case "route_lookup":
-		// «Куда пойдёт сайт»: агенту уходит ровно имя сайта, в одном виде.
-		// Адрес с путём или портом и одиночное имя без точки -- не сайт; агент
-		// проверит ещё раз, но чужое до очереди не доезжает.
+	case "route_lookup", "dns_open":
+		// «Куда пойдёт сайт» и «открывается ли сайт»: агенту уходит ровно имя
+		// сайта, в одном виде. Адрес с путём или портом и одиночное имя без
+		// точки -- не сайт; агент проверит ещё раз, но чужое до очереди не
+		// доезжает.
+		//
+		// Ветка общая намеренно: проверка имени здесь одна и та же, а вторая её
+		// копия неизбежно разошлась бы с первой.
 		domain := strings.TrimRight(strings.ToLower(strings.TrimSpace(argString(args, "domain"))), ".")
 		if domain == "" || len(domain) > 253 || strings.ContainsAny(domain, " \t\r\n/:") || !strings.Contains(domain, ".") {
 			writeJSONError(w, http.StatusBadRequest, "invalid_domain", "domain must be a site name like example.com")

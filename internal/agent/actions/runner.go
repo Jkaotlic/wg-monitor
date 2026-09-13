@@ -735,6 +735,16 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		})
 		return s, o, payload
 
+	case "dns_open":
+		// «Открывается ли сайт с этого роутера»: только чтение. Пустое имя
+		// DNSOpen отвергает сам, не спрашивая роутер впустую.
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		domain, _ := cmd.Args["domain"].(string)
+		s, o := DNSOpen(ctx, r.Exec, domain)
+		return s, o, payload
+
 	case "route_status", "tunnels_status":
 		if r.AwgClient == nil {
 			return "err", "awgmgr client not configured", payload
