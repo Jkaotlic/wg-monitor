@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,6 +29,31 @@ func dnsLineKept(line string, keep []string) bool {
 		}
 	}
 	return false
+}
+
+// ownResolverHosts превращает адрес своего резолвера (cfg.DNSWatchdog.Endpoint,
+// вида https://host/<секрет>) в список хостов для KeepHosts. Знание о том, что
+// эндпоинт -- это URL, живёт здесь, а не в сборке агента.
+//
+// Секретный путь наружу не выносится: берётся только имя хоста. Пустой или
+// неразбираемый адрес -> защищать нечего, и это НЕ ошибка: сторож может быть не
+// настроен вовсе.
+func ownResolverHosts(endpoint string) []string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return nil
+	}
+	if u, err := url.Parse(endpoint); err == nil && u.Hostname() != "" {
+		return []string{u.Hostname()}
+	}
+	// Адрес без схемы URL не разбирает как хост, а в конфиге он допустим.
+	if host, _, err := net.SplitHostPort(endpoint); err == nil && host != "" {
+		return []string{host}
+	}
+	if !strings.ContainsAny(endpoint, "/: ") {
+		return []string{endpoint}
+	}
+	return nil
 }
 
 // writeDNSSnapshot кладёт конфиг «до» файлом на роутер и возвращает путь.

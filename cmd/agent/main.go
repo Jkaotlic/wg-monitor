@@ -142,6 +142,7 @@ func main() {
 		ConfigPath:           *configPath,
 		BackendURL:           cfg.Backend.URL,
 		Version:              Version,
+		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
 	}
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
