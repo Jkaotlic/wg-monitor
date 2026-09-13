@@ -12,9 +12,14 @@ import (
 // failOn return an error so partial-failure handling can be exercised.
 type fakeDNSExec struct {
 	runningConfig string
-	rcErr         error
-	failOn        map[string]bool
-	calls         []string
+	// afterConfig -- что роутер отдаёт при ПОВТОРНОМ чтении, то есть после
+	// применения. Без него подставной роутер принимал команды и не менялся, и
+	// подтверждение по факту честно считало такой прогон неудачным.
+	afterConfig string
+	rcErr       error
+	failOn      map[string]bool
+	calls       []string
+	reads       int
 }
 
 func (f *fakeDNSExec) exec(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -25,6 +30,10 @@ func (f *fakeDNSExec) exec(_ context.Context, name string, args ...string) ([]by
 	if cmd == "show running-config" {
 		if f.rcErr != nil {
 			return nil, f.rcErr
+		}
+		f.reads++
+		if f.reads > 1 && f.afterConfig != "" {
+			return []byte(f.afterConfig), nil
 		}
 		return []byte(f.runningConfig), nil
 	}
@@ -61,8 +70,8 @@ func wantReferenceAdds() []string {
 }
 
 func TestDNSResetRemovesExistingThenAppliesReferenceThenSaves(t *testing.T) {
-	f := &fakeDNSExec{runningConfig: sampleRunningConfig}
-	status, out := DNSReset(context.Background(), f.exec)
+	f := &fakeDNSExec{runningConfig: sampleRunningConfig, afterConfig: configAfterApplyWithPorts()}
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
 
 	if status != "ok" {
 		t.Fatalf("status = %q, want ok\n%s", status, out)
@@ -100,8 +109,8 @@ func TestDNSResetRemovesExistingThenAppliesReferenceThenSaves(t *testing.T) {
 }
 
 func TestDNSResetEmptyDNSProxyJustAppliesReference(t *testing.T) {
-	f := &fakeDNSExec{runningConfig: "system\n    hostname Keenetic\n!\n"}
-	status, out := DNSReset(context.Background(), f.exec)
+	f := &fakeDNSExec{runningConfig: "system\n    hostname Keenetic\n!\n", afterConfig: configAfterApplyWithPorts()}
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
 	if status != "ok" {
 		t.Fatalf("status = %q, want ok\n%s", status, out)
 	}
@@ -124,7 +133,7 @@ func TestDNSResetPartialWhenCommandFails(t *testing.T) {
 		runningConfig: sampleRunningConfig,
 		failOn:        map[string]bool{"dns-proxy no tls upstream 8.8.8.8": true},
 	}
-	status, out := DNSReset(context.Background(), f.exec)
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
 	if status != "partial" {
 		t.Fatalf("status = %q, want partial\n%s", status, out)
 	}
@@ -139,7 +148,7 @@ func TestDNSResetPartialWhenCommandFails(t *testing.T) {
 
 func TestDNSResetReadConfigError(t *testing.T) {
 	f := &fakeDNSExec{rcErr: fmt.Errorf("boom")}
-	status, out := DNSReset(context.Background(), f.exec)
+	status, out := DNSReset(context.Background(), f.exec, DNSResetOpts{})
 	if status != "err" {
 		t.Fatalf("status = %q, want err", status)
 	}

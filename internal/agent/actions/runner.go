@@ -718,7 +718,8 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		s, o := DNSReset(ctx, r.Exec)
+		dryRun, _ := cmd.Args["dry_run"].(bool)
+		s, o := DNSReset(ctx, r.Exec, DNSResetOpts{DryRun: dryRun})
 		return s, o, payload
 
 	case "route_status", "tunnels_status":
