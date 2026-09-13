@@ -5,20 +5,19 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 )
 
-// dnsReferenceUpstreams is the canonical DNS-over-TLS upstream set deployed by
-// DNSReset. Each entry is the ndmc sub-command spliced after "dns-proxy", i.e.
-// the agent runs `ndmc -c "dns-proxy <entry>"`. Mirrors the operator's reference
-// recipe (Google / Quad9 / Cloudflare global + Yandex for ru/su/рф zones).
-var dnsReferenceUpstreams = []string{
-	"tls upstream 8.8.8.8 sni dns.google",
-	"tls upstream 9.9.9.9 sni dns.quad9.net",
-	"tls upstream 1.1.1.1 sni cloudflare-dns.com",
-	"tls upstream common.dot.dns.yandex.net domain ru",
-	"tls upstream common.dot.dns.yandex.net domain su",
-	"tls upstream common.dot.dns.yandex.net domain xn--p1ai",
-}
+// dnsReferenceUpstreams -- набор, который ставит DNSReset. Каждая строка
+// подставляется после "dns-proxy": агент выполняет
+// `ndmc -c "dns-proxy <строка>"`.
+//
+// Своей таблицы здесь больше нет. Она была -- и разошлась со сторожем: тут
+// лежали три ру-зоны и Google, там семь зон и без Google. Значит «починить
+// DNS» кнопкой и «сторожить DNS» ставили на роутер разное, а человек считал,
+// что это одно и то же. Теперь обе формы выводятся из dnsref.
+var dnsReferenceUpstreams = dnsref.ReferenceDoTLines()
 
 // DNSReset brings a Keenetic/NetCraze router's DNS-proxy to the reference
 // DNS-over-TLS set: it wipes every existing `dns-proxy tls/https upstream`
