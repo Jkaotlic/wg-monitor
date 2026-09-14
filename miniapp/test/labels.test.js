@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandOutcomeLabel, checkLabel, checkStateLabel, legendLabel, incidentCopy } from '../src/labels.js'
+import { commandOutcomeLabel, checkLabel, checkState, guardVerdict, legendLabel, incidentCopy } from '../src/labels.js'
 
 // Результат маршрутной команды -- это JSON агента (pkg/wire/routing.go), а не
 // строка для человека. "Готово" на нём было бы враньём в двух случаях сразу:
@@ -175,14 +175,42 @@ describe('resolver_guard говорит «Свой DNS-сервер»', () => {
   })
 })
 
-// checkStateLabel -- подпись статуса в «Прочих проверках» (RouterDetail).
-// ok у сторожа своего DNS-сервера бывает и без ответа об исправности: details
-// несёт то, чего status не говорит.
-describe('checkStateLabel не путает "ok" с "работает"', () => {
-  it('подпись статуса не говорит «работает» про сторожа, который не следит', () => {
-    expect(checkStateLabel('ok', { idle: true })).toBe('не следит')
-    expect(checkStateLabel('ok', { ready: false })).toBe('ещё не прочитал настройки')
-    expect(checkStateLabel('ok', undefined)).toBe('работает')
-    expect(checkStateLabel('fail', { idle: true })).toBe('не работает')
+// guardVerdict -- один словарь исходов сторожа на оба экрана (diag.js:guardRow
+// и checkState ниже), чтобы idle/ready не читались по-разному в двух местах.
+describe('guardVerdict', () => {
+  it('семь исходов из status + details', () => {
+    expect(guardVerdict({ status: 'ok', details: { idle: true } })).toBe('idle')
+    expect(guardVerdict({ status: 'ok', details: { ready: false } })).toBe('unread')
+    expect(guardVerdict({ status: 'ok', details: {} })).toBe('ok')
+    expect(guardVerdict({ status: 'fail', details: { reason: 'foreign_leftover' } })).toBe('leftover')
+    expect(guardVerdict({ status: 'fail', details: { reason: 'fallback' } })).toBe('fallback')
+    expect(guardVerdict({ status: 'fail', details: { mode: 'fallback' } })).toBe('fallback')
+    expect(guardVerdict({ status: 'fail', details: { mode: 'fallback', reason: 'no_live_fallback' } })).toBe('down')
+    expect(guardVerdict({ status: 'fail', details: { reason: 'no_live_fallback' } })).toBe('down')
+    expect(guardVerdict({ status: 'pending', details: {} })).toBe('unknown')
+  })
+})
+
+// checkState -- подпись и тон строки в «Прочих проверках» (RouterDetail).
+// Сторож своего DNS-сервера читается по guardVerdict (семь исходов, включая
+// «не следит»/«ещё не прочитал» вместо «работает»); любая другая проверка --
+// по старому двухсловному правилу от status.
+describe('checkState — подпись и тон строки', () => {
+  const guard = (status, details) => ({ check_name: 'resolver_guard', status, details })
+
+  it('resolver_guard: все семь исходов guardVerdict', () => {
+    expect(checkState(guard('ok', undefined))).toEqual({ label: 'работает', tone: 'ok' })
+    expect(checkState(guard('fail', { mode: 'fallback', reason: 'fallback' }))).toEqual({ label: 'на запасных', tone: 'warn' })
+    expect(checkState(guard('fail', { reason: 'foreign_leftover' }))).toEqual({ label: 'запасные рядом', tone: 'warn' })
+    expect(checkState(guard('fail', { reason: 'no_live_fallback' }))).toEqual({ label: 'не работает', tone: 'danger' })
+    expect(checkState(guard('ok', { idle: true }))).toEqual({ label: 'не следит', tone: 'muted' })
+    expect(checkState(guard('ok', { ready: false }))).toEqual({ label: 'ещё не прочитал настройки', tone: 'muted' })
+    expect(checkState(guard('pending', {}))).toEqual({ label: 'pending', tone: 'muted' })
+  })
+
+  it('прочие проверки: старое двухсловное правило по status, сторожа не касается', () => {
+    expect(checkState({ check_name: 'dns', status: 'ok' })).toEqual({ label: 'работает', tone: 'ok' })
+    expect(checkState({ check_name: 'dns', status: 'fail' })).toEqual({ label: 'не работает', tone: 'danger' })
+    expect(checkState({ check_name: 'dns', status: 'pending' })).toEqual({ label: 'pending', tone: 'muted' })
   })
 })

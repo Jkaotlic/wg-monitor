@@ -181,7 +181,7 @@ export function reportHint(parsed) {
 // internal/backend/miniapp_check_facts.go); их отсутствие -- признак агента
 // постарше, и тогда честное измерение остаётся одно: когда мерили.
 
-import { humanAge, pluralRu, incidentCopy, checkLabel } from './labels.js'
+import { humanAge, pluralRu, incidentCopy, checkLabel, guardVerdict } from './labels.js'
 
 // Порядок вопросов, а не алфавит имён: сначала то, что человек замечает
 // первым (сайты не открываются), потом механизмы, и только в конце -- сам
@@ -352,24 +352,22 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
   return rows
 }
 
-// guardRow -- ответ строки «Свой DNS-сервер» по details сторожа, теми же
-// смыслами, что у бота (alerts/format.go): на запасных сайты открываются, это
-// жёлтое; красное -- только когда своего нет и запасного живого тоже.
+// guardRow -- ответ строки «Свой DNS-сервер» по вердикту сторожа (guardVerdict
+// в labels.js -- один словарь исходов на оба экрана), теми же смыслами, что у
+// бота (alerts/format.go): на запасных сайты открываются, это жёлтое; красное
+// -- только когда своего нет и запасного живого тоже.
+const GUARD_ROW = {
+  ok: { answer: 'да', tone: 'ok' },
+  fallback: { answer: 'на запасных', tone: 'warn' },
+  leftover: { answer: 'запасные рядом', tone: 'warn' },
+  down: { answer: 'нет', tone: 'danger' },
+  idle: { answer: 'не следит', tone: 'muted' },
+  unread: { answer: 'ещё не прочитал настройки', tone: 'muted' },
+  unknown: { answer: 'не знаем', tone: 'muted' },
+}
+
 export function guardRow(check) {
-  const d = check.details ?? {}
-  if (check.status === 'ok') {
-    if (d.idle) return { answer: 'не следит', tone: 'muted' }
-    if (d.ready === false) return { answer: 'ещё не прочитал настройки', tone: 'muted' }
-    return { answer: 'да', tone: 'ok' }
-  }
-  if (check.status === 'fail') {
-    if (d.reason === 'foreign_leftover') return { answer: 'запасные рядом', tone: 'warn' }
-    if (d.reason === 'fallback' || (d.mode === 'fallback' && d.reason !== 'no_live_fallback')) {
-      return { answer: 'на запасных', tone: 'warn' }
-    }
-    return { answer: 'нет', tone: 'danger' }
-  }
-  return { answer: 'не знаем', tone: 'muted' }
+  return GUARD_ROW[guardVerdict(check)]
 }
 
 // --- Два адреса выхода ----------------------------------------------------

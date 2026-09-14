@@ -27,7 +27,7 @@ import { confirmSheet } from '../sheet.js'
 import {
   ACTION_LABELS,
   checkLabel,
-  checkStateLabel,
+  checkState,
   commandOutcomeLabel,
   humanAge,
   incidentCopy,
@@ -607,7 +607,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   // returns below) because the disclosure state hooks that follow must run on
   // every render in the same order -- see the rules-of-hooks note below.
   const otherChecks = orderChecks(checks ?? [])
-  const otherChecksOkCount = otherChecks.filter((c) => c.status === 'ok').length
+  const otherChecksOkCount = otherChecks.filter((c) => checkState(c).tone === 'ok').length
   // Sorted names of the currently-failing internal checks -- a signature the
   // effect below compares across renders to detect the set *growing*, as
   // opposed to just being non-empty (see that effect for why "non-empty" is
@@ -826,14 +826,17 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
               Прочие проверки — {otherChecksOkCount} в норме
             </summary>
             <ul class="card list-reset">
-              {otherChecks.map((c) => (
-                <li key={c.check_name} class="row checks-row">
-                  <span class="row-title">{checkLabel(c.check_name)}</span>
-                  <span class={`checks-status checks-status-${c.status}`}>
-                    {checkStateLabel(c.status, c.details)} · {formatDateTime(c.ts)}
-                  </span>
-                </li>
-              ))}
+              {otherChecks.map((c) => {
+                const s = checkState(c)
+                return (
+                  <li key={c.check_name} class="row checks-row">
+                    <span class="row-title">{checkLabel(c.check_name)}</span>
+                    <span class={`checks-status checks-status-${s.tone}`}>
+                      {s.label} · {formatDateTime(c.ts)}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
           </details>
         </section>

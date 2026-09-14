@@ -111,22 +111,55 @@ export function incidentWhatPlain(checkName) {
   return incidentCopy(checkName).what
 }
 
-// Spoken form of a check's status, for the instrument's <desc> and for the
-// legend plate that names the same lamps. "не работает" is the spec's wording
-// for a failed check (§3.7). The fallback echoes an unrecognized status rather
-// than swallowing it -- same honesty rule as checkLabel above, and the one that
-// matters most here: a status this function hasn't seen yet must not be spoken
-// as either "работает" or "не работает".
-export function checkStateLabel(status, details) {
-  if (status === 'fail') return 'не работает'
-  if (status === 'ok') {
-    // ok у сторожа бывает и без ответа об исправности: он перестал следить
-    // или ещё не прочитал настройки. «Работает» было бы обещанием.
-    if (details?.idle) return 'не следит'
-    if (details?.ready === false) return 'ещё не прочитал настройки'
-    return 'работает'
+// guardVerdict -- один словарь исходов сторожа своего DNS-сервера, общий для
+// diag.js (guardRow, строка «Свой DNS-сервер» на экране диагностики) и
+// checkState ниже (строка resolver_guard в «Прочих проверках»). Раньше idle/
+// ready читались в двух местах двумя копиями одного правила -- разошлись бы
+// на первой же правке одной из них.
+export function guardVerdict(check) {
+  const d = check.details ?? {}
+  if (check.status === 'ok') {
+    if (d.idle) return 'idle'
+    if (d.ready === false) return 'unread'
+    return 'ok'
   }
-  return status ?? 'неизвестно'
+  if (check.status === 'fail') {
+    if (d.reason === 'foreign_leftover') return 'leftover'
+    if (d.reason === 'fallback' || (d.mode === 'fallback' && d.reason !== 'no_live_fallback')) {
+      return 'fallback'
+    }
+    return 'down'
+  }
+  return 'unknown'
+}
+
+const GUARD_STATE = {
+  ok: { label: 'работает', tone: 'ok' },
+  fallback: { label: 'на запасных', tone: 'warn' },
+  leftover: { label: 'запасные рядом', tone: 'warn' },
+  down: { label: 'не работает', tone: 'danger' },
+  idle: { label: 'не следит', tone: 'muted' },
+  unread: { label: 'ещё не прочитал настройки', tone: 'muted' },
+}
+
+// checkState -- подпись и цвет строки в «Прочих проверках» (RouterDetail).
+// "не работает" is the spec's wording for a failed check (§3.7). The fallback
+// echoes an unrecognized status rather than swallowing it -- same honesty
+// rule as checkLabel above: a status this function hasn't seen yet must not
+// be spoken as either "работает" or "не работает".
+//
+// resolver_guard -- жёлтая мини-апп, когда роутер уже работает с запасных
+// (в диагностике это тоже жёлтое), и "не следит"/"ещё не прочитал настройки"
+// вместо "работает": ok у сторожа не всегда значит исправность.
+export function checkState(check) {
+  if (check.check_name === 'resolver_guard') {
+    const state = GUARD_STATE[guardVerdict(check)]
+    if (state) return state
+    return { label: check.status ?? 'неизвестно', tone: 'muted' }
+  }
+  if (check.status === 'fail') return { label: 'не работает', tone: 'danger' }
+  if (check.status === 'ok') return { label: 'работает', tone: 'ok' }
+  return { label: check.status ?? 'неизвестно', tone: 'muted' }
 }
 
 // Mirrors alerts/format.go:700-710 (humanPingStatus) exactly, including its

@@ -780,8 +780,16 @@ body {
   color: var(--muted);
 }
 
-.checks-status-fail {
+.checks-status-danger {
   color: var(--danger);
+}
+
+.checks-status-warn {
+  color: var(--warn);
+}
+
+.checks-status-muted {
+  color: var(--muted);
 }
 
 /* ---------------- Прочие проверки spoiler (§3.6) ----------------

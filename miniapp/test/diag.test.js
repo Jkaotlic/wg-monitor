@@ -241,6 +241,33 @@ describe('checkRows', () => {
     expect(row.answer).toBe('на запасных')
     expect(row.tone).toBe('warn')
   })
+
+  // Исходы, которых первый прогон не проверял: reason отсутствует вовсе,
+  // reason явно исключает жёлтый, и статус, которого словарь не знает.
+  it('строка сторожа: реже встречающиеся исходы', () => {
+    const at = '2026-09-14T10:00:00Z'
+    const g = (status, details) => guardRow({ check_name: 'resolver_guard', status, ts: at, details })
+    // mode: fallback без reason -- всё равно жёлтое: сайты открываются с запасных.
+    expect(g('fail', { mode: 'fallback' })).toEqual({ answer: 'на запасных', tone: 'warn' })
+    // mode: fallback, но reason явно говорит "живого запасного нет" -- красное.
+    expect(g('fail', { mode: 'fallback', reason: 'no_live_fallback' })).toEqual({ answer: 'нет', tone: 'danger' })
+    // Статус вне ok/fail -- честное "не знаем", а не молчание.
+    expect(g('pending', {})).toEqual({ answer: 'не знаем', tone: 'muted' })
+  })
+
+  // Молчащий роутер: строка сторожа тоже «не знаем», даже когда details
+  // говорят «да» -- то же правило silent, что у остальных строк.
+  it('роутер молчит -- строка сторожа «не знаем», даже если details говорят «да»', () => {
+    const at = '2026-09-14T10:00:00Z'
+    const rows = checkRows({
+      checks: [{ check_name: 'resolver_guard', status: 'ok', ts: at, details: { mode: 'primary' } }],
+      tunnels: [],
+      router: { status: 'offline' },
+    })
+    const row = rowsByKey(rows).resolver_guard
+    expect(row.answer).toBe('не знаем')
+    expect(row.tone).toBe('muted')
+  })
 })
 
 // --- Два адреса выхода ----------------------------------------------------
