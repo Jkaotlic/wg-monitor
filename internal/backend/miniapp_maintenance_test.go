@@ -162,10 +162,8 @@ func TestMiniappTunnelTrafficRejectsUnknownTunnel(t *testing.T) {
 	}
 }
 
-// Прошивка. Чтение состояния доступно всем, у кого есть доступ к роутеру;
-// установка -- только владельцу: она необратима и перезагружает роутер, а
-// оператор -- это человек, которому дали смотреть и чинить, а не менять
-// прошивку на чужом устройстве.
+// Прошивка: и чтение состояния, и установка доступны всем, у кого есть доступ
+// к роутеру (решение оператора 14.09); установку держит набор имени роутера.
 func TestMiniappFirmwareStatusAllowedForOperator(t *testing.T) {
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
@@ -180,7 +178,7 @@ func TestMiniappFirmwareStatusAllowedForOperator(t *testing.T) {
 	}
 }
 
-func TestMiniappFirmwareInstallRefusedForOperator(t *testing.T) {
+func TestMiniappFirmwareInstallAllowedForOperator(t *testing.T) {
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
 		t.Fatalf("grant operator: %v", err)
@@ -188,12 +186,12 @@ func TestMiniappFirmwareInstallRefusedForOperator(t *testing.T) {
 	sink := &dashboardActionSink{}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
 
-	rec := postMiniappCommand(t, h, ownedID, 555, `{"action":"firmware_install","args":{}}`)
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("want 403 for operator, got %d: %s", rec.Code, rec.Body.String())
+	rec := postMiniappCommand(t, h, ownedID, 555, `{"action":"firmware_install","args":{},"confirm":"router-owned"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("want 202 for operator, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if len(sink.enqueued) != 0 {
-		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
+	if len(sink.enqueued) != 1 || sink.enqueued[0].Action != "firmware_install" {
+		t.Fatalf("enqueued = %+v", sink.enqueued)
 	}
 }
 
@@ -202,7 +200,7 @@ func TestMiniappFirmwareInstallAllowedForOwner(t *testing.T) {
 	sink := &dashboardActionSink{}
 	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
 
-	rec := postMiniappCommand(t, h, ownedID, telegramUserID, `{"action":"firmware_install","args":{"force":true}}`)
+	rec := postMiniappCommand(t, h, ownedID, telegramUserID, `{"action":"firmware_install","args":{"force":true},"confirm":"router-owned"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("want 202 for owner, got %d: %s", rec.Code, rec.Body.String())
 	}

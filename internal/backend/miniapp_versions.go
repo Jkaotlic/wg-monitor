@@ -126,10 +126,8 @@ func VersionAuditFromSnapshot(row db.RouterVersionRow) wire.VersionAudit {
 // miniappRouterVersionsHandler отдаёт экрану снимок версий, новости и причины
 // незнания.
 //
-// Читают владелец, оператор и админ. Новость о ПРОШИВКЕ видят только владелец
-// и админ: поставить её может лишь тот, кому принадлежит устройство
-// (miniappOwnerOnlyActions), и адресовать необратимую перезагрузку чужого
-// роутера тому, кто не имеет права её нажать, незачем.
+// Читают владелец, оператор и админ. Новости видят все трое: с цикла 1
+// прошивку ставят и операторы.
 func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
@@ -143,8 +141,7 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "versions lookup failed")
 			return
 		}
-		maySeeFirmware := miniappIsOwner(d, telegramUserID, routerID)
-		resp := miniappVersionsBody(r, d, routerID, row, maySeeFirmware, time.Now().UTC())
+		resp := miniappVersionsBody(r, d, routerID, row, time.Now().UTC())
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -157,15 +154,12 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 // спрашиваем, какие из них экран имеет право показать (ListFor), и только
 // показанные помечаем показанными. Иначе «отложить» отменялось бы самим
 // открытием экрана.
-func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, maySeeFirmware bool, now time.Time) miniappVersionsResp {
+func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, now time.Time) miniappVersionsResp {
 	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
 	rebootHint := upstream.RebootHint(row.PrevKmodVersion, row.KmodVersion)
 
 	reminders := d.DB.UpdateReminders()
 	for _, u := range updates {
-		if u.Component == "firmware" && !maySeeFirmware {
-			continue
-		}
 		if err := reminders.Ensure(routerID, u.Component, u.Available); err != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp: update reminder ensure failed", "router_id", routerID, "err", err)
 		}
@@ -199,9 +193,6 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		Unknown: []miniappUnknownRow{},
 	}
 	for _, u := range updates {
-		if u.Component == "firmware" && !maySeeFirmware {
-			continue
-		}
 		if !visible[newsKey(u.Component, u.Available)] {
 			continue
 		}
@@ -217,9 +208,6 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		}
 	}
 	for _, u := range unknown {
-		if u.Component == "firmware" && !maySeeFirmware {
-			continue
-		}
 		resp.Unknown = append(resp.Unknown, miniappUnknownRow{Component: u.Component, Reason: u.Reason})
 	}
 

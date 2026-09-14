@@ -990,6 +990,24 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "awgm_update", "hrneo_update", "opkg_upgrade":
+		// Что ставить, решает сам роутер (awg-manager и opkg). Всё, что
+		// прислал клиент, -- лишнее.
+		return map[string]any{}, true
+	case "service_restart":
+		name := strings.TrimSpace(argString(args, "name"))
+		if !miniappServiceRestartNames[name] {
+			writeJSONError(w, http.StatusBadRequest, "invalid_service", "name must be hrneo, awgmgr or router")
+			return nil, false
+		}
+		return map[string]any{"name": name}, true
+	case "opkg_feed_disable":
+		feed, ok := sanitizeOpkgFeedURL(argString(args, "url"))
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, "invalid_feed_url", "url must be an http(s) feed address")
+			return nil, false
+		}
+		return map[string]any{"url": feed}, true
 	case "firmware_status", "firmware_install":
 		// Установка прошивки не берёт аргументов вовсе: агент ставит то, что
 		// роутер сам считает доступным. Всё, что прислал клиент, -- лишнее.

@@ -51,3 +51,16 @@ func TestMiniappAgentConfigSetsAreDeliberate(t *testing.T) {
 		t.Error("чтение конфига агент умеет с давних версий: пол версии закрыл бы экран исправным роутерам")
 	}
 }
+
+func TestMiniappUpdateActionsHaveAgentFloor(t *testing.T) {
+	for _, a := range []string{"awgm_update", "hrneo_update"} {
+		if got := miniappActionMinAgentVersion[a]; got != "v0.32.0" {
+			t.Errorf("пол %s = %q, want v0.32.0", a, got)
+		}
+	}
+	for _, a := range []string{"opkg_upgrade", "opkg_feed_disable", "service_restart", "firmware_install"} {
+		if _, floored := miniappActionMinAgentVersion[a]; floored {
+			t.Errorf("%s агент умеет давно: пол закрыл бы кнопку исправным роутерам", a)
+		}
+	}
+}
