@@ -233,6 +233,100 @@ func TestMiniappEventsCarriesSplitAndGuardDetails(t *testing.T) {
 	}
 }
 
+// После выключения сторожа (или закрытия инцидента как watchdog_off) его
+// последняя строка resolver_guard остаётся в /events до 30 дней -- экран
+// продолжал бы рисовать «на запасных» или «работает» для сторожа, который
+// давно не бежит. agent_heartbeat едет с каждым отчётом агента, и все
+// проверки одного отчёта делят одну метку времени: если heartbeat приехал
+// ПОЗЖЕ последней строки resolver_guard, эта строка не текущий ответ, а
+// осколок прошлого отчёта.
+func TestMiniappEventsDropsResolverGuardStaleBeforeHeartbeat(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	guardTS := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	heartbeatTS := guardTS.Add(60 * time.Second)
+	if err := d.Events().Insert(ownedID, "resolver_guard", "ok", `{"mode":"fallback","reason":"fallback"}`, guardTS); err != nil {
+		t.Fatalf("insert resolver_guard: %v", err)
+	}
+	if err := d.Events().Insert(ownedID, "agent_heartbeat", "ok", "", heartbeatTS); err != nil {
+		t.Fatalf("insert agent_heartbeat: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp miniappRouterEventsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range resp.Checks {
+		if c.CheckName == "resolver_guard" {
+			t.Fatalf("resolver_guard старше heartbeat не должен попадать в checks: %+v", c)
+		}
+	}
+}
+
+// Строка сторожа и heartbeat из одного отчёта делят метку времени -- это
+// текущий ответ, и его показывать надо.
+func TestMiniappEventsKeepsResolverGuardAtSameTimeAsHeartbeat(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	ts := time.Date(2026, 9, 14, 9, 0, 0, 0, time.UTC)
+	if err := d.Events().Insert(ownedID, "resolver_guard", "ok", `{"mode":"primary","reason":""}`, ts); err != nil {
+		t.Fatalf("insert resolver_guard: %v", err)
+	}
+	if err := d.Events().Insert(ownedID, "agent_heartbeat", "ok", "", ts); err != nil {
+		t.Fatalf("insert agent_heartbeat: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp miniappRouterEventsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range resp.Checks {
+		if c.CheckName == "resolver_guard" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("resolver_guard одной метки времени с heartbeat должен остаться в checks")
+	}
+}
+
+// Без строки agent_heartbeat вообще (старый агент, ещё не прислал ни одного
+// отчёта после обновления) -- сравнивать не с чем, и resolver_guard остаётся.
+func TestMiniappEventsKeepsResolverGuardWhenNoHeartbeatRow(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	if err := d.Events().Insert(ownedID, "resolver_guard", "ok", `{"mode":"primary"}`, time.Now()); err != nil {
+		t.Fatalf("insert resolver_guard: %v", err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var resp miniappRouterEventsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range resp.Checks {
+		if c.CheckName == "resolver_guard" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("без строки agent_heartbeat resolver_guard должен остаться в checks")
+	}
+}
+
 func TestMiniappCheckDetailsGuardBools(t *testing.T) {
 	got := miniappCheckDetailsFrom("resolver_guard", `{"mode":"primary","idle":true,"idle_reason":"own_line_removed_by_hand","ready":false}`)
 	if got["idle"] != true || got["ready"] != false || got["idle_reason"] != "own_line_removed_by_hand" {

@@ -328,9 +328,31 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "events lookup failed")
 			return
 		}
+		// Every agent report carries agent_heartbeat, and all checks of one
+		// report share one timestamp. A resolver_guard row strictly older
+		// than the heartbeat row is not from the latest report — the check
+		// stopped coming (watchdog switched off, or its incident closed as
+		// watchdog_off) and its last row would otherwise sit here answering
+		// "на запасных"/"работает" for up to 30 days after it stopped being
+		// true. Only resolver_guard: a check that stopped coming is not a
+		// current answer for it, but tunnels have their own inventory logic
+		// (miniappTunnelFromEvent/miniappDeriveTraffic) and must not lose a
+		// tunnel row here.
+		var heartbeatTS time.Time
+		haveHeartbeat := false
+		for _, row := range rows {
+			if row.CheckName == "agent_heartbeat" {
+				heartbeatTS = row.TS
+				haveHeartbeat = true
+				break
+			}
+		}
 		resp := miniappRouterEventsResp{Tunnels: []miniappTunnel{}}
 		byCheck := make(map[string]db.EventRow, len(rows))
 		for _, row := range rows {
+			if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
+				continue
+			}
 			byCheck[row.CheckName] = row
 			resp.Checks = append(resp.Checks, miniappCheckStatus{
 				CheckName: row.CheckName,
