@@ -12,11 +12,18 @@
 package timeline
 
 import (
+	"encoding/json"
 	"sort"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
+
+// resolverGuardCheck mirrors internal/backend's own resolverGuardCheck
+// constant (handler.go). Duplicated rather than imported: this package sits
+// below backend (backend imports timeline, not the reverse), so it copies
+// the one string it needs instead of creating a cycle.
+const resolverGuardCheck = "resolver_guard"
 
 // FlapGap -- тишина, после которой новое падение считается новой новостью, а
 // не продолжением прежней. Короче -- один вечер разваливается на десяток
@@ -70,6 +77,15 @@ func foldCheck(check string, sorted []db.EventRow, now time.Time) []Incident {
 	var cur *Incident
 	for _, e := range sorted {
 		if e.Status == "ok" {
+			// A resolver_guard "ok" whose details say the watchdog has not
+			// read its settings yet is not an answer about DNS -- the report
+			// handler (handler.go, resolverGuardNotReady) skips such rows
+			// for the state-machine FSM too, so an open incident here must
+			// not close on one either: it would split one outage into two
+			// around a report that said nothing.
+			if check == resolverGuardCheck && resolverGuardRowNotReady(e) {
+				continue
+			}
 			if cur != nil {
 				cur.To = e.TS
 				cur.DownSec = int(e.TS.Sub(cur.From).Seconds())
@@ -90,6 +106,22 @@ func foldCheck(check string, sorted []db.EventRow, now time.Time) []Incident {
 		raw = append(raw, *cur)
 	}
 	return mergeFlaps(raw)
+}
+
+// resolverGuardRowNotReady parses details_json for "ready": false. Unparsable
+// details_json (old agent, empty string) is treated as a normal row -- ready
+// is reported false only, never assumed.
+func resolverGuardRowNotReady(e db.EventRow) bool {
+	if e.DetailsJSON == "" {
+		return false
+	}
+	var d struct {
+		Ready *bool `json:"ready"`
+	}
+	if err := json.Unmarshal([]byte(e.DetailsJSON), &d); err != nil {
+		return false
+	}
+	return d.Ready != nil && !*d.Ready
 }
 
 // mergeFlaps склеивает соседние происшествия одной проверки, между которыми

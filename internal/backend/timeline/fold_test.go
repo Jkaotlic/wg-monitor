@@ -13,6 +13,12 @@ func row(check, status string, offset time.Duration) db.EventRow {
 	return db.EventRow{CheckName: check, Status: status, TS: base.Add(offset)}
 }
 
+func rowDetails(check, status string, offset time.Duration, detailsJSON string) db.EventRow {
+	r := row(check, status, offset)
+	r.DetailsJSON = detailsJSON
+	return r
+}
+
 func TestFoldClosedPair(t *testing.T) {
 	got := Fold([]db.EventRow{
 		row("dns", "ok", 0),
@@ -151,6 +157,33 @@ func TestFoldCapsAtMaxIncidents(t *testing.T) {
 	// Обрезаем старое, а не свежее: человека интересует, что было недавно.
 	if !got[0].From.After(got[len(got)-1].From) {
 		t.Errorf("первым обязано идти свежее происшествие")
+	}
+}
+
+// Сторож иногда отвечает "ok", ещё не прочитав настройки после перезапуска
+// (details.ready=false) -- это не ответ о DNS (handler.go, resolverGuardNotReady
+// пропускает такие для автомата состояний), и Fold обязан согласиться: без
+// этого один отвал резался бы на два происшествия вокруг отчёта, который
+// ничего не сказал.
+func TestFoldIgnoresResolverGuardNotYetRead(t *testing.T) {
+	got := Fold([]db.EventRow{
+		rowDetails("resolver_guard", "fail", 0, ""),
+		rowDetails("resolver_guard", "ok", 5*time.Minute, `{"mode":"primary","ready":false}`),
+		rowDetails("resolver_guard", "fail", 10*time.Minute, ""),
+		rowDetails("resolver_guard", "ok", 15*time.Minute, `{"mode":"primary","ready":true}`),
+	}, base.Add(time.Hour))
+
+	if len(got) != 1 {
+		t.Fatalf("хотим одно происшествие, получили %+v", got)
+	}
+	if got[0].Ongoing {
+		t.Errorf("происшествие обязано быть закрыто последним настоящим ok: %+v", got[0])
+	}
+	if !got[0].To.Equal(base.Add(15 * time.Minute)) {
+		t.Errorf("конец обязан быть по последнему ok (15 мин), получили %v", got[0].To)
+	}
+	if got[0].DownSec != 15*60 {
+		t.Errorf("длилось %d с, хотим 900", got[0].DownSec)
 	}
 }
 
