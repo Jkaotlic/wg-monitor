@@ -16,9 +16,10 @@ import (
 // Нарисованная настройка, которой нет, хуже отсутствующей строки: по ней
 // человек считает, через сколько придёт тревога.
 //
-// Здесь только то, что живёт в backend.yaml и больше нигде. Версии панели и
-// прошивки экран берёт из фактов проверок (/events), и дублировать их сюда
-// значило бы завести второй источник правды об одном.
+// Здесь настройки бота из backend.yaml и признаки панели ЭТОГО роутера из
+// базы (как и role). Версии панели и прошивки экран берёт из фактов проверок
+// (/events), и дублировать их сюда значило бы завести второй источник правды
+// об одном.
 type miniappSettingsResp struct {
 	// SilenceAfterSec — сколько секунд без отчёта делают роутер «молчащим».
 	// Значение уже выбрано по типу роутера: у мобильного оно другое, и
@@ -39,6 +40,12 @@ type miniappSettingsResp struct {
 	// кто смотрит экран. У каждого получателя своё значение, поэтому оно и
 	// живёт в ответе экрана, а не в общих настройках роутера.
 	NotifyMuted bool `json:"notify_muted"`
+	// PanelKnown/PanelScope -- признаки панели awg-manager роутера, а НЕ её
+	// адрес: адрес не уезжает клиенту ни в каком ответе. Переход делает бэкенд
+	// по одноразовому билету (miniapp_panel_ticket.go). Видят владелец и
+	// админ; оператору роутера строки нет вовсе.
+	PanelKnown bool   `json:"panel_known,omitempty"`
+	PanelScope string `json:"panel_scope,omitempty"`
 }
 
 func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
@@ -91,6 +98,12 @@ func miniappRouterSettingsHandler(d Deps) http.HandlerFunc {
 		}
 		if u.LastDeployedVersion != nil {
 			resp.AgentVersion = *u.LastDeployedVersion
+		}
+		if role == "owner" || role == "admin" {
+			if raw, ok := panelAddress(u.AWGMURL); ok {
+				resp.PanelKnown = true
+				resp.PanelScope = panelScope(raw)
+			}
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
