@@ -1258,7 +1258,7 @@ func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user 
 		err error
 	)
 	if va, age, ok := r.auditCache.GetVersionAuditWithAge(user.ID); ok && age < maintCacheFreshFor {
-		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown, r.cfg.PublicBaseURL, m.Chat.ID)
+		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown, r.cfg.PublicBaseURL, m.Chat.ID, r.cfg.AdminUserID)
 		text := "🔄 обновляется в фоне…\n\n" + tg.MaintPanelText(args)
 		kb := tg.MaintPanelKeyboard(user.ID, args)
 		// SendMessageWithReplyKeyboard accepts an *InlineKeyboardMarkup —
@@ -2614,6 +2614,7 @@ func (r *Router) NewMaintNotifier(tgClient MaintEditTG, up *upstream.Cache) *Mai
 		// Кнопка «Панель роутера» ведёт на тот же публичный адрес, что и
 		// кнопки под тревогами.
 		MiniAppBaseURL: r.cfg.PublicBaseURL,
+		AdminUserID:    r.cfg.AdminUserID,
 	}
 }
 

@@ -1,8 +1,10 @@
 package backend
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -180,5 +182,30 @@ func TestPanelTicketUnknownAndRateLimited(t *testing.T) {
 	}
 	if !limited {
 		t.Error("подбор билетов не упёрся в лимит входов")
+	}
+}
+
+// Билет -- секрет в ПУТИ. Отказ по лимиту пишет путь в журнал, и живой билет
+// лежал бы в логах контейнера целиком, пока не истечёт.
+func TestPanelTicketNeverLoggedOnRateLimit(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	setAWGMURL(t, d, ownedID, testPanelURL)
+	var logs bytes.Buffer
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999,
+		Logger: slog.New(slog.NewTextHandler(&logs, nil))})
+	path := openPathOf(t, panelTicketIssue(t, h, ownedID, ownerTG))
+	ticket := strings.TrimPrefix(path, "/v1/panel/")
+
+	limited := false
+	for i := 0; i < entranceBurst+5; i++ {
+		if panelTicketVisit(h, http.MethodGet, path).Code == http.StatusTooManyRequests {
+			limited = true
+		}
+	}
+	if !limited {
+		t.Fatal("лимит не сработал — тест прошёл бы вхолостую")
+	}
+	if strings.Contains(logs.String(), ticket) {
+		t.Errorf("билет попал в журнал:\n%s", logs.String())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"sync"
@@ -150,6 +151,16 @@ func remoteRateKey(remote string) string {
 	return remote
 }
 
+// pathSecret -- длинная шестнадцатеричная строка в пути: так выглядит билет на
+// панель роутера (/v1/panel/<64 hex>) и любой будущий секрет в адресе.
+var pathSecret = regexp.MustCompile(`[0-9a-fA-F]{32,}`)
+
+// redactPathSecrets прячет секреты в пути перед записью в журнал: отказ по
+// лимиту не тратит билет, и путь целиком в журнале был бы рабочей ссылкой.
+func redactPathSecrets(path string) string {
+	return pathSecret.ReplaceAllString(path, "***")
+}
+
 // remoteRateLimitMiddleware ставит лимит попыток перед входом. Отказ говорит
 // словами и называет срок: человеку, у которого сорвалась связь, надо знать,
 // что он не заблокирован навсегда.
@@ -169,7 +180,7 @@ func remoteRateLimitMiddleware(l *remoteRateLimiter, logger *slog.Logger) func(h
 				if logger != nil {
 					logger.Warn("вход: слишком много попыток",
 						"remote", remoteRateKey(r.RemoteAddr),
-						"path", r.URL.Path,
+						"path", redactPathSecrets(r.URL.Path),
 						"retry_after_sec", secs,
 					)
 				}

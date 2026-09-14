@@ -36,6 +36,9 @@ type MaintPanelNotifier struct {
 	Sink     CommandEnqueuer
 	// MiniAppBaseURL -- публичный адрес бэкенда для кнопки «Панель роутера».
 	MiniAppBaseURL string
+	// AdminUserID -- админ бота: кнопку панели в его личке рисуем, как и
+	// владельцу. Оператору роутера -- нет.
+	AdminUserID int64
 }
 
 // NotifyCommandResult dispatches by ref.Action. Returns nil for unsupported
@@ -91,7 +94,7 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 			slog.Warn("router versions upsert from version_audit", "user_id", user.ID, "err", err)
 		}
 	}
-	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown, n.MiniAppBaseURL, ref.ChatID)
+	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown, n.MiniAppBaseURL, ref.ChatID, n.AdminUserID)
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
@@ -157,7 +160,7 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 		n.enqueueFreshVersionAudit(user.ID, ref, res)
 		return nil
 	}
-	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown, n.MiniAppBaseURL, ref.ChatID)
+	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown, n.MiniAppBaseURL, ref.ChatID, n.AdminUserID)
 	text := banner + "\n\n" + tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
@@ -187,11 +190,21 @@ func hrneoKnownInstalled(va wire.VersionAudit) bool {
 }
 
 // maintPanelAppURL -- адрес кнопки «Панель роутера» в панели обслуживания.
-// Пусто, когда кнопку рисовать нельзя: в группе (у групп chat_id
-// отрицательный) Telegram отвергает web_app-кнопку вместе со всем сообщением,
-// а без годного адреса панели мини-апп её не откроет.
-func maintPanelAppURL(base string, user *db.User, chatID int64) string {
+// Пусто, когда кнопку рисовать нельзя:
+//   - в группе (у групп chat_id отрицательный) Telegram отвергает web_app-кнопку
+//     вместе со всем сообщением;
+//   - в личке не владельца и не админа: оператор роутера в панель обслуживания
+//     попадает, а секции панели в настройках у него нет (решение оператора
+//     № 9), и кнопка была бы тупиком. В личке chat_id -- это Telegram ID того,
+//     кто смотрит;
+//   - без годного адреса панели мини-апп её не откроет.
+func maintPanelAppURL(base string, user *db.User, chatID, adminUserID int64) string {
 	if chatID <= 0 || user == nil || !backend.PanelKnown(user.AWGMURL) {
+		return ""
+	}
+	isAdmin := adminUserID != 0 && chatID == adminUserID
+	isOwner := user.TelegramUserID != nil && *user.TelegramUserID == chatID
+	if !isAdmin && !isOwner {
 		return ""
 	}
 	return tg.MiniAppRouterSettingsURL(base, user.ID)
@@ -205,7 +218,7 @@ func maintPanelAppURL(base string, user *db.User, chatID int64) string {
 // appBase и chatID нужны кнопке «Панель роутера»: она зависит от чата, в
 // котором рисуется панель, и живёт здесь, чтобы ни один путь отрисовки её не
 // потерял.
-func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore, appBase string, chatID int64) tg.MaintPanelArgs {
+func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore, appBase string, chatID, adminUserID int64) tg.MaintPanelArgs {
 	infos, _ := upstream.ComputeUpdates(ctx, up, va)
 	updates := make([]tg.UpdateLine, 0, len(infos))
 	for _, u := range infos {
@@ -225,6 +238,6 @@ func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudi
 		Updates:                   updates,
 		RouterCooldownRemaining:   cd.remaining(user.ID, "router_reboot"),
 		FirmwareCooldownRemaining: cd.remaining(user.ID, "firmware_install"),
-		PanelAppURL:               maintPanelAppURL(appBase, user, chatID),
+		PanelAppURL:               maintPanelAppURL(appBase, user, chatID, adminUserID),
 	}
 }

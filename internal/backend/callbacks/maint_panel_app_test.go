@@ -16,22 +16,38 @@ import (
 func TestMaintPanelAppURL(t *testing.T) {
 	good := "https://panel.example.com"
 	bad := "javascript:alert(1)"
-	user := &db.User{ID: 42, AWGMURL: &good}
-	const base = "https://wgm.example.com"
+	const (
+		base    = "https://wgm.example.com"
+		ownerTG = int64(123456)
+		adminTG = int64(999)
+		opTG    = int64(555)
+	)
+	owner := ownerTG
+	user := &db.User{ID: 42, AWGMURL: &good, TelegramUserID: &owner}
+	want := "https://wgm.example.com/miniapp/?router=42&open=settings"
 
-	if got := maintPanelAppURL(base, user, 123456); got != "https://wgm.example.com/miniapp/?router=42&open=settings" {
-		t.Errorf("личка: %q", got)
+	// В личке chat_id -- это Telegram ID того, кто смотрит панель.
+	if got := maintPanelAppURL(base, user, ownerTG, adminTG); got != want {
+		t.Errorf("личка владельца: %q", got)
 	}
-	if got := maintPanelAppURL(base, user, -1001234567890); got != "" {
+	if got := maintPanelAppURL(base, user, adminTG, adminTG); got != want {
+		t.Errorf("личка админа: %q", got)
+	}
+	// Оператор роутера в панель обслуживания попадает, а секции панели в
+	// настройках у него нет (решение оператора № 9): кнопка была бы тупиком.
+	if got := maintPanelAppURL(base, user, opTG, adminTG); got != "" {
+		t.Errorf("личка оператора: %q, хотим пусто", got)
+	}
+	if got := maintPanelAppURL(base, user, -1001234567890, adminTG); got != "" {
 		t.Errorf("группа: %q, хотим пусто", got)
 	}
-	if got := maintPanelAppURL(base, &db.User{ID: 42}, 123456); got != "" {
+	if got := maintPanelAppURL(base, &db.User{ID: 42, TelegramUserID: &owner}, ownerTG, adminTG); got != "" {
 		t.Errorf("без адреса панели: %q", got)
 	}
-	if got := maintPanelAppURL(base, &db.User{ID: 42, AWGMURL: &bad}, 123456); got != "" {
+	if got := maintPanelAppURL(base, &db.User{ID: 42, AWGMURL: &bad, TelegramUserID: &owner}, ownerTG, adminTG); got != "" {
 		t.Errorf("негодный адрес панели: %q", got)
 	}
-	if got := maintPanelAppURL("", user, 123456); got != "" {
+	if got := maintPanelAppURL("", user, ownerTG, adminTG); got != "" {
 		t.Errorf("без адреса приложения: %q", got)
 	}
 }
@@ -42,8 +58,9 @@ func TestMaintPanelAppURL(t *testing.T) {
 func TestNewMaintNotifierCarriesMiniAppBase(t *testing.T) {
 	d, _ := newTestDB(t)
 	r := NewRouter(d, &fakeRouterTGFull{}, Config{ChatID: -100, AdminUserID: 12345, PublicBaseURL: "https://wgm.example.com"})
-	if got := r.NewMaintNotifier(nil, nil).MiniAppBaseURL; got != "https://wgm.example.com" {
-		t.Errorf("MiniAppBaseURL = %q", got)
+	n := r.NewMaintNotifier(nil, nil)
+	if n.MiniAppBaseURL != "https://wgm.example.com" || n.AdminUserID != 12345 {
+		t.Errorf("MiniAppBaseURL = %q, AdminUserID = %d", n.MiniAppBaseURL, n.AdminUserID)
 	}
 }
 
@@ -51,8 +68,9 @@ func TestNewMaintNotifierCarriesMiniAppBase(t *testing.T) {
 // кнопка панели входит в них -- её нельзя потерять ни на одном пути.
 func TestBuildMaintPanelArgsCarriesPanelButton(t *testing.T) {
 	good := "https://panel.example.com"
-	user := &db.User{ID: 42, Nickname: "x", AWGMURL: &good}
-	args := buildMaintPanelArgs(context.Background(), user, wire.VersionAudit{}, nil, newCooldownStore(), "https://wgm.example.com", 123456)
+	owner := int64(123456)
+	user := &db.User{ID: 42, Nickname: "x", AWGMURL: &good, TelegramUserID: &owner}
+	args := buildMaintPanelArgs(context.Background(), user, wire.VersionAudit{}, nil, newCooldownStore(), "https://wgm.example.com", owner, 999)
 	if args.PanelAppURL != "https://wgm.example.com/miniapp/?router=42&open=settings" {
 		t.Errorf("PanelAppURL = %q", args.PanelAppURL)
 	}
