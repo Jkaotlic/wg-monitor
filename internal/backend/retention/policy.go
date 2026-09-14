@@ -120,11 +120,26 @@ func (p *Policy) prune(ctx context.Context) error {
 	} else {
 		orphanDeleted, _ = res.RowsAffected()
 	}
+	// Гранты на вход в веб-управление чистятся здесь же, а не своей
+	// горутиной: проход суточный, и второго расписания ради одной таблицы
+	// заводить незачем.
+	//
+	// Порог -- сутки ПОСЛЕ смерти ссылки, а не момент смерти: строка нужна,
+	// чтобы было с чем сверить журнал обмена, когда разбираются, кто и
+	// откуда входил.
+	webLinkCutoff := p.now().Add(-24 * time.Hour).UTC()
+	webLinksDeleted := int64(0)
+	if n, err := p.DB.WebLinks().PruneBefore(webLinkCutoff); err != nil {
+		p.Logger.Warn("retention: web_links prune failed", "err", err)
+	} else {
+		webLinksDeleted = n
+	}
 	p.Logger.Info("retention: pruned",
 		"before", cutoff.UTC(),
 		"events_deleted", deleted,
 		"daily_flaps_deleted", flapsDeleted,
-		"incident_orphans_deleted", orphanDeleted)
+		"incident_orphans_deleted", orphanDeleted,
+		"web_links_deleted", webLinksDeleted)
 	return nil
 }
 

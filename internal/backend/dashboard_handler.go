@@ -65,7 +65,7 @@ func DashboardAuthMiddleware(expected string, logger *slog.Logger) func(http.Han
 	}
 }
 
-func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
+func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimiter) {
 	staticFS, err := fs.Sub(dashboardStaticFS, "dashboard_static")
 	if err != nil {
 		panic(err)
@@ -75,7 +75,12 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps) {
 	pageAuth := DashboardPageAuthMiddleware(d.DashboardToken)
 	mux.Handle("GET /dashboard", requestIDMiddleware()(http.RedirectHandler("/dashboard/", http.StatusFound)))
 	mux.Handle("GET /dashboard/login", requestIDMiddleware()(staticCacheHeadersForPage(dashboardLoginPageHandler())))
-	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(dashboardLoginHandler(d)))
+	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
+	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(entranceLimit(dashboardLoginHandler(d))))
+	// Обмен личной ссылки на обычную сессию дашборда. Вход публичный по
+	// построению -- гейт у него сам грант, поэтому лимит попыток здесь не
+	// украшение, а часть защиты.
+	mux.Handle("POST /v1/dashboard/web-link/redeem", requestIDMiddleware()(entranceLimit(webLinkRedeemHandler(d))))
 	mux.Handle("POST /v1/dashboard/logout", requestIDMiddleware()(dashboardLogoutHandler()))
 	mux.Handle("GET /dashboard/", requestIDMiddleware()(pageAuth(staticHandler)))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))
@@ -412,6 +417,36 @@ const dashboardLoginHTML = `<!doctype html>
     </form>
   </main>
   <script>
+    const DEAD_LINK = "` + webLinkCopyDead + `";
+
+    // Вход по личной ссылке. Значение лежит во фрагменте адреса и потому не
+    // доходит до сервера само: страница достаёт его, стирает из адресной
+    // строки и обменивает POST'ом на обычную сессию дашборда. Переход по GET
+    // здесь не годится -- он положил бы грант в журнал сервера и в Referer
+    // соседних запросов.
+    (async () => {
+      const match = (window.location.hash || "").match(/(?:^|[#&])token=([A-Za-z0-9]+)/);
+      if (!match) return;
+      const token = match[1];
+      // Стираем фрагмент ДО обмена: даже если обмен не состоится, грант не
+      // должен остаться в адресной строке, в истории браузера и на экране.
+      history.replaceState(null, "", window.location.pathname);
+      const error = document.getElementById("error");
+      try {
+        const res = await fetch("/v1/dashboard/web-link/redeem", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({token})
+        });
+        if (!res.ok) throw new Error(DEAD_LINK);
+        window.location.href = "/dashboard/";
+      } catch (err) {
+        // Форма с токеном остаётся рядом: дашборд -- аварийный вход, и
+        // мёртвая ссылка не должна оставлять человека совсем без двери.
+        error.textContent = err.message || DEAD_LINK;
+      }
+    })();
+
     document.getElementById("loginForm").addEventListener("submit", async (event) => {
       event.preventDefault();
       const error = document.getElementById("error");

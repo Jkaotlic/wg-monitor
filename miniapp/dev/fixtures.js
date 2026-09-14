@@ -385,6 +385,43 @@ function routeAddPlan(args) {
 
 function commandResult(id) {
   const { action: lastAction, args: lastArgs } = commands.get(id) ?? { action: null, args: {} }
+  // Конфиг агента (actions.AgentConfigView). Путь своего DNS-сервера
+  // приезжает уже замаскированным -- маскирует его сам роутер, и в песочнице
+  // он обязан выглядеть так же, иначе «посмотрел в песочнице» ничего не
+  // значит. Пароля панели в ответе нет вовсе: бэкенд его не знает.
+  if (lastAction === 'agent_config_get') {
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 700,
+      output: JSON.stringify({
+        config_kind: 'agent',
+        interval_sec: 120,
+        awgm_base_url: 'http://198.51.100.7:8080',
+        awgm_login: 'admin',
+        external_reach_enabled: true,
+        external_reach_fail_threshold: 3,
+        allow_router_reboot: true,
+        allow_firmware_install: false,
+        dns_watchdog_enabled: false,
+        dns_watchdog_endpoint: 'https://dns.example.com/***',
+        dns_watchdog_canary_domain: 'example.com',
+        dns_watchdog_bootstrap_ip: '198.51.100.10',
+        config_path: '/opt/etc/wg-monitor/config.yaml',
+      }),
+    }
+  }
+  if (lastAction === 'update_agent_config') {
+    const applied = Object.entries(lastArgs ?? {})
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ')
+    return {
+      id,
+      status: 'ok',
+      duration_ms: 1500,
+      output: `config updated (${applied}); restarting agent`,
+    }
+  }
   if (lastAction === 'version_audit') {
     return {
       id,
@@ -568,11 +605,71 @@ function commandResult(id) {
   return { id, status: 'ok', duration_ms: 300, output: 'готово' }
 }
 
+// Сводка парка для админского экрана. Имена и адреса -- документационные:
+// настоящих имён машин и адресов в репозитории не бывает.
+const FLEET = {
+  generated_at: new Date().toISOString(),
+  totals: { routers: 3, online: 1, sleeping: 1, offline: 0, alerts: 1, pending_deploys: 1 },
+  backend: { version: 'v0.31.0', latest_version: 'v0.31.1', update_available: true },
+  routers: [
+    {
+      id: 1,
+      nickname: 'Дом',
+      status: 'alert',
+      last_seen_age_sec: 95,
+      incidents: ['dns'],
+      agent_version: 'v0.30.0',
+      awgmgr_version: '2.18.2',
+      firmware_current: '4.2.7',
+      update_hint: 'пора обновить: прошивка 4.3.0',
+    },
+    {
+      id: 2,
+      nickname: 'Дача',
+      status: 'sleeping',
+      last_seen_age_sec: 5400,
+      agent_version: 'v0.30.0',
+      awgmgr_version: '2.18.2',
+    },
+    {
+      id: 3,
+      nickname: 'Офис',
+      status: 'online',
+      last_seen_age_sec: 40,
+      agent_version: 'v0.29.0',
+      pending_version: 'v0.30.0',
+      awgmgr_version: '2.17.2',
+    },
+  ],
+  notify: {
+    unreachable: [{ telegram_user_id: 100, updated_at: new Date(Date.now() - 3600 * 1000).toISOString() }],
+    routers_without_recipients: ['Склад'],
+  },
+  watchdog: {
+    alive: true,
+    last_scan_at: new Date(Date.now() - 60 * 1000).toISOString(),
+    offline_errors: 0,
+  },
+}
+
 export function respond(method, path) {
   if (method === 'POST' && path === '/v1/miniapp/session') {
     return { ok: true, telegram_user_id: 42, is_admin: true }
   }
   if (path === '/v1/miniapp/routers') return { routers: ROUTERS }
+  // Админский экран парка и выдача ссылки в браузер: без них песочница
+  // показывала бы кнопку, которую нечем нажать.
+  if (path === '/v1/miniapp/fleet') return FLEET
+  if (method === 'POST' && path === '/v1/miniapp/web-link') {
+    return {
+      url: 'https://wg.example.com/dashboard/login#token=' + 'ab12'.repeat(16),
+      expires_at: new Date(Date.now() + 12 * 3600 * 1000).toISOString(),
+      notice:
+        'Ссылка личная и живёт 12 часов. Не пересылайте её: по ней всё это время открывается управление всем парком.',
+      limit_notice:
+        'Живыми остаются три последние ссылки: выдали новую — самая старая перестала работать.',
+    }
+  }
 
   // Идентификатор команды теперь не только из букв (dev-3), и хвост пути
   // обязан его пропускать -- иначе опрос результата уходит в никуда.
@@ -629,8 +726,11 @@ export function respond(method, path) {
       silence_after_sec: 120,
       alert_after_fails: 3,
       recovery_after_oks: 2,
-      agent_version: 'v0.16.0',
-      role: 'owner',
+      // Версия агента и роль -- то, по чему экран настроек агента решает,
+      // рисовать ли поля вообще: правка router-global (только админ), а
+      // агент ниже пола версии сделает не то, что показано.
+      agent_version: 'v0.31.0',
+      role: 'admin',
     }
   }
   if (rest.startsWith('/commands/')) return commandResult(rest.slice('/commands/'.length))

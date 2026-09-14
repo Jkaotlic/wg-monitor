@@ -12,9 +12,10 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/timeline"
 )
 
-func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
+func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimiter) {
 	reqID := requestIDMiddleware()
 	auth := MiniAppAuthMiddleware(d.TelegramBotToken, d.Logger)
+	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
 
 	staticFS, err := fs.Sub(miniappStaticFS, "miniapp_static")
 	if err != nil {
@@ -33,7 +34,13 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps) {
 	// into a catch-all and swallow every genuine 404.
 	mux.Handle("GET /{$}", reqID(http.RedirectHandler("/miniapp/", http.StatusFound)))
 
-	mux.Handle("POST /v1/miniapp/session", reqID(miniappSessionHandler(d)))
+	mux.Handle("POST /v1/miniapp/session", reqID(entranceLimit(miniappSessionHandler(d))))
+	// Ссылка на веб-управление -- только админу; гейт внутри хендлера, отказ
+	// 404, как у остальных поверхностей мини-аппа.
+	mux.Handle("POST /v1/miniapp/web-link", reqID(auth(webLinkIssueHandler(d))))
+	// Сводка всего парка -- только админу: это проекция дашбордной сводки,
+	// и радиус у неё парковый, а не роутерный.
+	mux.Handle("GET /v1/miniapp/fleet", reqID(auth(miniappFleetHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))

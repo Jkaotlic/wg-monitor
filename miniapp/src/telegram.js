@@ -24,6 +24,18 @@ export function paintChrome(palette) {
   tg.setBackgroundColor?.(palette.bg)
 }
 
+// Переход наружу, в настоящий браузер. Внутри Telegram обычная ссылка
+// открылась бы в его же вебвью -- а веб-управление именно тем и ценно, что
+// открывается снаружи приложения, когда приложение недоступно.
+export function openExternal(url) {
+  if (!url) return
+  if (inTelegram && tg?.openLink) {
+    tg.openLink(url)
+    return
+  }
+  window.open(url, '_blank', 'noopener')
+}
+
 export function onBackButtonClick(handler) {
   if (!tg) return () => {}
   tg.BackButton.onClick(handler)

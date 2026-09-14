@@ -39,6 +39,16 @@ var ErrUnissuedResult = errors.New("command result does not match an issued comm
 type resultEntry struct {
 	result     wire.CommandResult
 	recordedAt time.Time
+	// action -- действие команды, продублированное рядом с её результатом.
+	//
+	// Дубль не от лени: граница по роли на опросе результата
+	// (miniappCommandResultHandler) обязана знать действие, а запись о
+	// выдаче живёт МЕНЬШЕ результата. Sweep чистит issued по issuedAt, а
+	// results по recordedAt одним cutoff, и issuedAt всегда раньше -- значит
+	// issued вымётывается первым, и без этого поля действие становилось бы
+	// «неизвестным» при живом результате. Здесь оно живёт ровно столько же,
+	// сколько сам результат.
+	action string
 }
 
 type originEntry struct {
@@ -390,16 +400,20 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 		q.log().Debug("queue duplicate result ignored", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
 		return ErrDuplicateResult
 	}
-	if issuedBucket, ok := q.issued[userID]; !ok || issuedBucket[result.ID].cmd.ID == "" {
+	issuedBucket, ok := q.issued[userID]
+	if !ok || issuedBucket[result.ID].cmd.ID == "" {
 		q.mu.Unlock()
 		q.log().Warn("queue record result rejected", "reason", "cmd-not-issued", "user_id", userID, "cmd_id", result.ID)
 		return ErrUnissuedResult
 	}
+	// Действие берём здесь, где запись о выдаче ещё точно есть, и кладём
+	// рядом с результатом: переживать issued должно оно, а не наоборот.
+	action := issuedBucket[result.ID].cmd.Action
 	if bucket == nil {
 		bucket = make(map[string]resultEntry)
 		q.results[userID] = bucket
 	}
-	bucket[result.ID] = resultEntry{result: result, recordedAt: time.Now()}
+	bucket[result.ID] = resultEntry{result: result, recordedAt: time.Now(), action: action}
 	q.mu.Unlock()
 	q.signal.Broadcast()
 	q.log().Debug("queue record result", "user_id", userID, "cmd_id", result.ID, "status", result.Status)
@@ -409,18 +423,27 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 // CommandByID returns the command last dequeued for (userID, id). It lets the
 // result handler recover action/args for commands enqueued without a Telegram
 // origin ref, such as VPS deferred self_update jobs.
+//
+// Пока жив результат, действие узнаётся и по нему -- даже когда запись о
+// выдаче уже вымело Sweep (он чистит issued по issuedAt раньше, чем results
+// по recordedAt). Тогда возвращается команда с идентификатором и действием,
+// но без аргументов: аргументы живут только в issued, а звонящим за границей
+// по роли нужно именно действие. Без этого возврата граница на опросе
+// результата открывалась бы ровно в окно между выдачей и ответом агента.
 func (q *Queue) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	bucket, ok := q.issued[userID]
-	if !ok {
-		return wire.Command{}, false
+	if bucket, ok := q.issued[userID]; ok {
+		if entry, ok := bucket[cmdID]; ok {
+			return entry.cmd, true
+		}
 	}
-	entry, ok := bucket[cmdID]
-	if !ok {
-		return wire.Command{}, false
+	if bucket, ok := q.results[userID]; ok {
+		if entry, ok := bucket[cmdID]; ok && entry.action != "" {
+			return wire.Command{ID: cmdID, Action: entry.action}, true
+		}
 	}
-	return entry.cmd, true
+	return wire.Command{}, false
 }
 
 // HasActiveCommand сообщает, есть ли у пользователя команда этого действия

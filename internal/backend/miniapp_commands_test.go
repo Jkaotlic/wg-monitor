@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -47,6 +49,16 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// «Куда пойдёт сайт»: читающее, до агента доезжает только имя сайта
 		// (явная ветка sanitizeWizardCommandArgs).
 		"route_lookup",
+		// Правка конфига агента (решение оператора № 3, отменяет D4
+		// программы мини-аппа). Ушла из denied не потому, что стала
+		// безопаснее, а потому, что для неё завели три границы сразу:
+		// только админ (miniappAdminOnlyActions), пол версии агента с
+		// отказом по умолчанию (miniappActionMinAgentVersion) и
+		// подтверждение набором имени роутера на экране. Аргументы
+		// проверяет уже написанная ветка sanitizeAgentConfigArgs -- закрытый
+		// whitelist полей, куда backend.url не входит намеренно: перенаправить
+		// адрес бэкенда значит захватить весь парк.
+		"agent_config_get", "update_agent_config",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -63,8 +75,6 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"self_update",        // audited deploy flow
 		"tunnel_import",      // route/config mutation
 		"dns_reset",          // router-global; stays on the dashboard
-		"agent_config_get",
-		"update_agent_config",
 		"opkg_upgrade",
 		"entware_clean_run",
 		// Ответ несёт ndms_name каждого туннеля -- топологию, которую белый
@@ -484,13 +494,407 @@ func TestMiniappStillDeniesDangerousActions(t *testing.T) {
 	// владелец роутера (не оператор, не «кто-то с доступом») и подтверждение
 	// набором имени роутера вручную. Радиус её как был -- само устройство и
 	// перезагрузка, так и остался, и без обеих защит она сюда вернётся.
+	// update_agent_config ушла отсюда тем же порядком и по тому же образцу:
+	// границ у неё три -- только админ бота, пол версии агента с отказом по
+	// умолчанию и подтверждение набором имени роутера на экране. Радиус её
+	// как был -- конфиг агента и его перезапуск, так и остался, и без любой
+	// из трёх защит она сюда вернётся. Тест на каждую лежит рядом:
+	// TestMiniappAgentConfigDeniedToOwnerAndOperator,
+	// TestMiniappRefusesDangerousActionToOldAgent и agentConfig.test.js.
+	//
+	// update_backend_url не уезжает НИКОГДА: его белый список живёт на
+	// стороне агента, и перенаправление адреса бэкенда -- захват всего парка.
 	for _, action := range []string{
 		"tunnel_delete", "dns_reset", "update_backend_url", "tunnel_import",
-		"opkg_upgrade", "self_update", "update_agent_config",
+		"opkg_upgrade", "self_update",
 		"service_restart", "entware_clean_run",
 	} {
 		if miniappCommandAllowlist[action] {
 			t.Errorf("%s не должен быть доступен мини-аппу", action)
 		}
+	}
+}
+
+// miniappAgentConfigPost -- один вызов команды правки конфига от лица
+// конкретного человека. Отдельный помощник, потому что все три теста ниже
+// спрашивают одно: что ответил сервер и что после этого легло в очередь.
+func miniappAgentConfigPost(t *testing.T, h http.Handler, routerID, telegramUserID int64, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/commands", routerID), bytes.NewReader([]byte(body)))
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// ПЕРВАЯ из двух независимых преград (решение оператора п. 10): бэкенд не
+// ставит команду в очередь агенту ниже пола версии.
+//
+// Отказ приходит ДО очереди, а не в её ответе: старый агент не знает про
+// новые поля, перепишет config.yaml по своим правилам и перезапустит себя.
+// «Принято» о таком было бы обещанием того, что не случится.
+func TestMiniappRefusesDangerousActionToOldAgent(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.30.1"); err != nil {
+		t.Fatal(err)
+	}
+	rec := miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"update_agent_config","args":{"interval_sec":300}}`)
+	if rec.Code != http.StatusConflict || !bytes.Contains(rec.Body.Bytes(), []byte("agent_too_old")) {
+		t.Fatalf("агент v0.30.1: код %d тело %s, ожидался 409 agent_too_old", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("команда старому агенту всё-таки встала в очередь: %+v", sink.enqueued)
+	}
+
+	// Версия не сообщалась вовсе -- тот же отказ: «не знаю версию» означает
+	// «не знаю, что случится».
+	if _, err := d.SQL().Exec(`UPDATE users SET last_deployed_version=NULL WHERE id=?`, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	rec = miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"update_agent_config","args":{"interval_sec":300}}`)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("версия неизвестна: код %d тело %s, ожидался 409", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("команда агенту без версии встала в очередь: %+v", sink.enqueued)
+	}
+
+	// Чтение конфига агент умеет с давних версий: пол версии на него не
+	// распространяется, иначе экран закрылся бы исправным роутерам.
+	rec = miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"agent_config_get"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("чтение конфига у старого агента: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+
+	// А на агенте от пола и выше та же запись уходит -- без этой половины
+	// тест был бы зелёным и на экране, который не работает ни для кого.
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	rec = miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"update_agent_config","args":{"interval_sec":300}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("агент v0.31.0: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var wrote bool
+	for _, cmd := range sink.enqueued {
+		if cmd.Action == "update_agent_config" {
+			wrote = true
+			if cmd.Args["interval_sec"] != 300 {
+				t.Errorf("агенту ушло %v, ожидался interval_sec=300", cmd.Args)
+			}
+		}
+	}
+	if !wrote {
+		t.Fatalf("на агенте от пола и выше запись в очередь не встала: %+v", sink.enqueued)
+	}
+}
+
+// Радиус правки конфига router-global, поэтому круг -- только админ бота.
+// Отказ приходит как 404 not_found (как у остальных админских срезов
+// мини-аппа), а не 403: владельцу роутера незачем узнавать по коду ответа,
+// что действие вообще существует.
+func TestMiniappAgentConfigDeniedToOwnerAndOperator(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		for _, body := range []string{
+			`{"action":"agent_config_get"}`,
+			`{"action":"update_agent_config","args":{"interval_sec":300}}`,
+		} {
+			rec := miniappAgentConfigPost(t, h, ownedID, who.tgID, body)
+			if rec.Code != http.StatusNotFound || !bytes.Contains(rec.Body.Bytes(), []byte("not_found")) {
+				t.Errorf("%s, %s: код %d тело %s, ожидался 404 not_found", who.name, body, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("не-админ поставил команду в очередь: %+v", sink.enqueued)
+	}
+
+	// Админу -- проходит: без этой половины тест был бы зелёным и на экране,
+	// закрытом вообще для всех.
+	rec := miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"update_agent_config","args":{"interval_sec":300}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("админ: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+
+	// Адрес панели роутера приезжает на экран ТОЛЬКО в ответе агента на
+	// agent_config_get -- в срезах /v1/miniapp/* его нет вовсе. Значит
+	// граница по роли обязана стоять и на опросе результата, а не только на
+	// постановке команды: иначе владелец, у которого есть идентификатор
+	// команды, дочитал бы адрес панели из чужого ответа. Решение
+	// координатора: админу адрес показываем (он и так открыт ему в сводке
+	// дашборда), владельцу и оператору он не приходит ВОВСЕ -- не «приходит
+	// и не рисуется».
+	rec = miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"agent_config_get"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("админ, чтение конфига: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	const panelURL = "http://198.51.100.7:8080"
+	// Так это помнит настоящая очередь: результат существует только у
+	// команды, которую агент забрал (RecordResult отвергает результат
+	// невыданной команды), поэтому действие по идентификатору восстановимо.
+	sink.commands = map[string]wire.Command{
+		issued.CmdID: {ID: issued.CmdID, Action: "agent_config_get"},
+	}
+	sink.results = map[string]wire.CommandResult{
+		issued.CmdID: {
+			ID:     issued.CmdID,
+			Status: "ok",
+			Output: `{"config_kind":"agent","awgm_base_url":"` + panelURL + `","awgm_login":"admin"}`,
+		},
+	}
+	poll := func(telegramUserID int64) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/v1/miniapp/routers/%d/commands/%s?wait_sec=0", ownedID, issued.CmdID), nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		got := poll(who.tgID)
+		if got.Code != http.StatusNotFound {
+			t.Errorf("%s, опрос результата: код %d тело %s, ожидался 404", who.name, got.Code, got.Body.String())
+		}
+		// Ни значения, ни имени поля: имя поля в ответе означает, что
+		// значение приедет туда завтра.
+		for _, secret := range []string{panelURL, "198.51.100.7", "awgm_base_url"} {
+			if bytes.Contains(got.Body.Bytes(), []byte(secret)) {
+				t.Errorf("%s получил %q в ответе опроса: %s", who.name, secret, got.Body.String())
+			}
+		}
+	}
+	// Админу тот же результат приходит целиком -- иначе тест был бы зелёным
+	// и на экране, который не работает ни для кого.
+	mine := poll(999)
+	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(panelURL)) {
+		t.Fatalf("админ, опрос результата: код %d тело %s, ожидались 200 и адрес панели", mine.Code, mine.Body.String())
+	}
+}
+
+// Соседний срез -- /v1/dashboard/summary -- отдаёт ssh, креды панели и чат
+// уведомлений. Экран правки конфига читает настройки роутера, и форму оттуда
+// копировать нельзя: поля переписываются поимённо. Тест сторожит, что копии
+// не случилось ни в одном срезе, который читает этот экран.
+func TestMiniappCommandScreensNeverLeakRouterSecrets(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	const (
+		awgmURL     = "https://panel.example.com"
+		awgmAuth    = "Basic ZXhhbXBsZQ=="
+		sshHost     = "198.51.100.20"
+		expectedMAC = "02:00:00:00:00:01"
+		chatID      = -1009876543210
+	)
+	if _, err := d.SQL().Exec(
+		`UPDATE users SET awgm_url=?, awgm_auth=?, ssh_host=?, ssh_user=?, expected_mac=?, telegram_chat_id=? WHERE id=?`,
+		awgmURL, awgmAuth, sshHost, "root", expectedMAC, chatID, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: &dashboardActionSink{}})
+
+	for _, path := range []string{
+		fmt.Sprintf("/v1/miniapp/routers/%d/settings", ownedID),
+		fmt.Sprintf("/v1/miniapp/routers/%d", ownedID),
+		"/v1/miniapp/routers",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 999))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: код %d тело %s", path, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.Bytes()
+		for _, secret := range []string{awgmURL, awgmAuth, sshHost, expectedMAC, "-1009876543210"} {
+			if bytes.Contains(body, []byte(secret)) {
+				t.Errorf("%s: утекло значение %q: %s", path, secret, body)
+			}
+		}
+		// Ни значений, ни имён полей: имя поля в ответе означает, что
+		// значение приедет туда завтра, когда его кто-нибудь заполнит.
+		for _, field := range []string{"awgm_url", "awgm_auth", "panel_host", "ssh_host", "ssh_user", "expected_mac", "ndms_name", "telegram_chat_id"} {
+			if bytes.Contains(body, []byte(field)) {
+				t.Errorf("%s: есть поле %q -- секреты уедут в него завтра", path, field)
+			}
+		}
+	}
+}
+
+// miniappRealQueueFleet -- парк с НАСТОЯЩЕЙ очередью вместо тестового стока.
+// Нужна там, где проверяется не ответ хендлера на подсунутые данные, а
+// поведение на стыке с очередью: срок жизни записей у неё свой, и тестовый
+// сток об этом ничего не знает.
+func miniappRealQueueFleet(t *testing.T) (*db.DB, int64, int64, *cmdpkg.Queue, http.Handler) {
+	t.Helper()
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	q := cmdpkg.New()
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: q})
+	return d, ownedID, ownerTG, q, h
+}
+
+// miniappPollResult -- опрос результата команды от лица конкретного человека.
+func miniappPollResult(t *testing.T, h http.Handler, routerID, telegramUserID int64, cmdID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/v1/miniapp/routers/%d/commands/%s?wait_sec=0", routerID, cmdID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+// Граница по роли на опросе результата не должна зависеть от записи о выдаче
+// команды.
+//
+// Queue.Sweep чистит issued по issuedAt, а results по recordedAt ОДНИМ
+// cutoff, и issuedAt всегда раньше recordedAt: результат записывается после
+// выдачи. Значит запись о выдаче вымётывается ПЕРВОЙ, и между ними есть окно
+// -- действие уже «неизвестно», а результат ещё жив. У спящего мобильного
+// роутера это окно длиной в задержку ответа, то есть минуты, при Sweep(1h) в
+// проде.
+//
+// Если гейт роли опирается на «действие известно», в этом окне он
+// превращается в разрешение по умолчанию, и владелец с идентификатором
+// команды читает адрес панели из админского ответа. Поэтому действие
+// хранится рядом с результатом и живёт ровно столько же.
+func TestMiniappResultRoleGateSurvivesSweep(t *testing.T) {
+	d, ownedID, ownerTG, q, h := miniappRealQueueFleet(t)
+	_ = d
+
+	// Админ читает конфиг агента.
+	rec := miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"agent_config_get"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("админ, чтение конфига: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+
+	// Агент забирает команду -- только теперь она «выдана».
+	got, ok := q.Dequeue(context.Background(), ownedID, 0)
+	if !ok || got.ID != issued.CmdID {
+		t.Fatalf("агент не забрал команду: %+v ok=%v", got, ok)
+	}
+
+	// Задержка ответа агента: именно она делает issuedAt раньше recordedAt.
+	time.Sleep(100 * time.Millisecond)
+	const panelURL = "http://198.51.100.7:8080"
+	if err := q.RecordResult(ownedID, wire.CommandResult{
+		ID:     issued.CmdID,
+		Status: "ok",
+		Output: `{"config_kind":"agent","awgm_base_url":"` + panelURL + `","awgm_login":"admin"}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cutoff между выдачей и ответом: запись о выдаче уходит, результат живёт.
+	q.Sweep(50 * time.Millisecond)
+
+	// Положительная половина, и она здесь обязательна: если бы Sweep унёс и
+	// результат, отказ владельцу ничего не доказывал бы -- он пришёл бы как
+	// result_not_ready, и тест был бы зелёным вхолостую.
+	mine := miniappPollResult(t, h, ownedID, 999, issued.CmdID)
+	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(panelURL)) {
+		t.Fatalf("админ после Sweep: код %d тело %s, ожидались 200 и адрес панели (результат должен был выжить)",
+			mine.Code, mine.Body.String())
+	}
+
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		res := miniappPollResult(t, h, ownedID, who.tgID, issued.CmdID)
+		if res.Code != http.StatusNotFound {
+			t.Errorf("%s после Sweep: код %d тело %s, ожидался 404", who.name, res.Code, res.Body.String())
+		}
+		for _, secret := range []string{panelURL, "198.51.100.7", "awgm_base_url"} {
+			if bytes.Contains(res.Body.Bytes(), []byte(secret)) {
+				t.Errorf("%s после Sweep прочитал %q: %s", who.name, secret, res.Body.String())
+			}
+		}
+	}
+}
+
+// Второй набор ролей -- miniappOwnerOnlyActions (firmware_install) -- на
+// постановке проверяется (403 owner_only), и на опросе результата проверяется
+// тоже.
+//
+// Решение записано здесь намеренно: сегодня вывод firmware_install -- строка
+// «firmware install kicked; router will reboot», и «утечки нет» держится
+// только на том, каким этот вывод оказался. Такое обоснование перестаёт быть
+// правдой молча -- в тот день, когда агент начнёт возвращать в нём версию,
+// путь к прошивке или причину отказа. Граница ставится по роли действия, а не
+// по сегодняшней безобидности его вывода.
+func TestMiniappFirmwareResultDeniedToOperator(t *testing.T) {
+	_, ownedID, ownerTG, q, h := miniappRealQueueFleet(t)
+
+	// Ставит владелец: установка прошивки оператору запрещена и на постановке.
+	rec := miniappAgentConfigPost(t, h, ownedID, ownerTG, `{"action":"firmware_install"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("владелец, установка прошивки: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(context.Background(), ownedID, 0); !ok {
+		t.Fatal("агент не забрал команду установки прошивки")
+	}
+	const outcome = "firmware install kicked; router will reboot"
+	if err := q.RecordResult(ownedID, wire.CommandResult{ID: issued.CmdID, Status: "ok", Output: outcome}); err != nil {
+		t.Fatal(err)
+	}
+
+	res := miniappPollResult(t, h, ownedID, 555, issued.CmdID)
+	if res.Code != http.StatusForbidden || !bytes.Contains(res.Body.Bytes(), []byte("owner_only")) {
+		t.Errorf("оператор, опрос результата прошивки: код %d тело %s, ожидался 403 owner_only", res.Code, res.Body.String())
+	}
+	if bytes.Contains(res.Body.Bytes(), []byte(outcome)) {
+		t.Errorf("оператор прочитал вывод установки прошивки: %s", res.Body.String())
+	}
+
+	// Владельцу -- приходит: иначе тест был бы зелёным и на экране, закрытом
+	// вообще для всех.
+	mine := miniappPollResult(t, h, ownedID, ownerTG, issued.CmdID)
+	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(outcome)) {
+		t.Fatalf("владелец, опрос результата прошивки: код %d тело %s, ожидались 200 и вывод", mine.Code, mine.Body.String())
 	}
 }

@@ -93,6 +93,11 @@ var adminPanelHomeRows = [][]PanelHomeButton{
 		{Text: "🚗 Мобильные", CallbackData: "panel:0:mobile"},
 		{Text: "👥 Доступ", CallbackData: "access:0:home"},
 	},
+	// Вход в веб-управление живёт здесь, а не отдельной командой /admin:
+	// хаб уже админский, и второй командой пришлось бы заводить второй гейт.
+	{
+		{Text: "🌐 Открыть в браузере", CallbackData: "panel:0:weblink"},
+	},
 	{
 		{Text: "ℹ Помощь оператору", CallbackData: "panel:0:help:operator"},
 	},

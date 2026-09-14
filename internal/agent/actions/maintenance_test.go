@@ -424,6 +424,49 @@ func TestVersionAudit_SysInfoError(t *testing.T) {
 	}
 }
 
+// Версия модуля ядра приезжает в каждом отчёте (checks/awgmgr_check.go:33-35),
+// но в wire.VersionAudit её не было -- сравнить «было/стало» было физически нечем.
+func TestVersionAudit_CarriesKernelModuleFields(t *testing.T) {
+	awg := &fakeAwgInfo{sysInfo: awgmgr.SystemInfo{
+		Version: "2.18.0", ActiveBackend: "kernel", FirmwareVersion: "4.3.7",
+		KernelModuleVersion: "1.1.0", KernelModuleModel: "KN-1811", KernelModuleLoaded: true,
+	}}
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("ignored: остальные источники здесь не при чём")
+	}
+	va, err := VersionAudit(context.Background(), awg, exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if va.KmodVersion != "1.1.0" || va.KmodModel != "KN-1811" {
+		t.Errorf("модуль ядра не перенесён: %+v", va)
+	}
+	if va.KmodLoaded == nil || !*va.KmodLoaded {
+		t.Error("kmod_loaded обязан быть указателем со значением true")
+	}
+}
+
+// Модуль ядра не загружен -- это ответ, и он обязан отличаться от молчания
+// агента. Указатель на false, а не nil.
+func TestVersionAudit_KernelModuleNotLoadedIsAnswerNotSilence(t *testing.T) {
+	awg := &fakeAwgInfo{sysInfo: awgmgr.SystemInfo{
+		Version: "2.18.0", KernelModuleVersion: "1.1.0", KernelModuleLoaded: false,
+	}}
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("ignored")
+	}
+	va, err := VersionAudit(context.Background(), awg, exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if va.KmodLoaded == nil {
+		t.Fatal("kmod_loaded = nil: «не загружен» выдан за «агент не сказал»")
+	}
+	if *va.KmodLoaded {
+		t.Error("kmod_loaded = true, хотим false")
+	}
+}
+
 func TestParseProcStatStarttime(t *testing.T) {
 	cases := []struct {
 		name string

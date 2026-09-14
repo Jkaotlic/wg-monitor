@@ -149,3 +149,63 @@ CREATE TABLE IF NOT EXISTS alert_messages (
     sent_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, check_name, telegram_user_id)
 );
+
+-- Снимок версий на роутер: что стоит сейчас и что стояло до этого. Сказать
+-- «вышло обновление» по одному отчёту нельзя -- отчёт приносит только «стало»,
+-- а «было» не помнил никто: версии жили в кэше на пользователя, умиравшем с
+-- рестартом бэкенда (callbacks/maint_audit_cache.go). Отсюда и таблица.
+--
+-- Одна строка на роутер. Пустая строка означает «поле в этом источнике не
+-- приезжает»: version_audit знает HydraRoute Neo, обычный отчёт -- нет, и
+-- смешивать их надо дополнением, а не перезаписью пустым. NULL там, где
+-- значимо отсутствие (kmod_loaded, hrneo_installed): «агент не сказал» -- это
+-- не «не загружено».
+--
+-- Читается точечно по роутеру: в горячие events за этим лезть не надо вовсе.
+CREATE TABLE IF NOT EXISTS router_versions (
+    user_id             INTEGER   PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    awgmgr_version      TEXT      NOT NULL DEFAULT '',
+    awgmgr_backend      TEXT      NOT NULL DEFAULT '',   -- native/kernel: от него зависит смысл модуля ядра
+    hrneo_version       TEXT      NOT NULL DEFAULT '',
+    hrneo_installed     INTEGER,                          -- NULL = агент не сказал
+    firmware_current    TEXT      NOT NULL DEFAULT '',
+    firmware_avail      TEXT      NOT NULL DEFAULT '',
+    firmware_channel    TEXT      NOT NULL DEFAULT '',
+    keenetic_os         TEXT      NOT NULL DEFAULT '',
+    kmod_version        TEXT      NOT NULL DEFAULT '',
+    kmod_model          TEXT      NOT NULL DEFAULT '',
+    kmod_loaded         INTEGER,                          -- NULL = старый агент не сообщает
+    prev_awgmgr_version TEXT      NOT NULL DEFAULT '',    -- «было» для предупреждения о перезагрузке
+    prev_kmod_version   TEXT      NOT NULL DEFAULT '',
+    changed_at          TIMESTAMP,                        -- когда версия панели или модуля менялась
+    source              TEXT      NOT NULL,               -- 'report' | 'version_audit'
+    updated_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Грант на вход в веб-управление: ссылка, по которой дашборд открывается без
+-- ручного токена. Это вход в систему, поэтому в базе лежит только sha256
+-- случайного значения -- ровно как у users.token_hash; само значение уходит
+-- человеку один раз и больше нигде не хранится.
+--
+-- Почему таблица, а не подпись: подпись без состояния не даёт трёх вещей
+-- сразу -- срока, ТОЧЕЧНОГО отзыва (удалить одну строку) и лимита живых
+-- грантов. Отдельный секрет подписи поэтому не заводится вовсе.
+--
+-- Ссылка МНОГОРАЗОВАЯ до истечения срока (решение оператора): условия
+-- used_at IS NULL здесь нет как класса, и два одновременных предъявления --
+-- это два успеха, а не один. Роль снятой одноразовости взяли на себя журнал
+-- КАЖДОГО обмена (last_used_*, use_count), лимит живых грантов и точечный
+-- отзыв.
+--
+-- telegram_user_id -- кому выдана. При обмене он сверяется с админом из
+-- конфига, поэтому смена админа гасит все ссылки прежнего разом.
+CREATE TABLE IF NOT EXISTS web_links (
+    token_hash       TEXT      PRIMARY KEY,        -- sha256(hex) случайного значения
+    telegram_user_id INTEGER   NOT NULL,           -- кому выдана; redeem сверяет с админом из конфига
+    created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at       TIMESTAMP NOT NULL,           -- created_at + 12 часов
+    last_used_at     TIMESTAMP,                    -- NULL = ещё не предъявляли
+    last_used_remote TEXT,                         -- remote последнего предъявления, для журнала
+    use_count        INTEGER   NOT NULL DEFAULT 0  -- ссылка многоразовая: сколько раз обменяли
+);
+CREATE INDEX IF NOT EXISTS idx_web_links_user ON web_links(telegram_user_id, expires_at);

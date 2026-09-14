@@ -58,6 +58,58 @@ func newMaintNotifierTestRig(t *testing.T) (*fakeMaintTG, *MaintPanelNotifier, *
 	return tgFake, n, user, d
 }
 
+// version_audit -- второй источник снимка, и единственный, кто знает версию
+// HydraRoute Neo и доступную прошивку. До этого ответ агента ложился только
+// в кэш на пользователя, умиравший с рестартом бэкенда.
+func TestMaintNotifier_VersionAudit_WritesSnapshotToDB(t *testing.T) {
+	_, n, u, d := newMaintNotifierTestRig(t)
+	loaded := true
+	va := wire.VersionAudit{
+		AwgmgrVersion: "2.18.0", AwgmgrBackend: "kernel", AwgmgrRunning: true,
+		HrneoInstalled: true, HrneoVersion: "2.4.0",
+		FirmwareCurrent: "4.3.7", FirmwareAvail: "4.3.8",
+		KmodVersion: "1.1.0", KmodModel: "KN-1811", KmodLoaded: &loaded,
+	}
+	body, _ := json.Marshal(va)
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "version_audit"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, u.ID); err != nil {
+		t.Fatalf("NotifyCommandResult: %v", err)
+	}
+	row, err := d.RouterVersions().Get(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Source != "version_audit" {
+		t.Errorf("source = %q, хотим version_audit", row.Source)
+	}
+	if row.AwgmgrVersion != "2.18.0" || row.HrneoVersion != "2.4.0" || row.FirmwareAvail != "4.3.8" {
+		t.Errorf("снимок из version_audit неполон: %+v", row)
+	}
+	if row.KmodVersion != "1.1.0" || row.KmodLoaded == nil || !*row.KmodLoaded {
+		t.Errorf("модуль ядра не записан: %+v", row)
+	}
+}
+
+// Агент не ответил -- писать нечего: пустой снимок затёр бы известное
+// «неизвестным».
+func TestMaintNotifier_VersionAuditFailed_LeavesSnapshotAlone(t *testing.T) {
+	_, n, u, d := newMaintNotifierTestRig(t)
+	if err := d.RouterVersions().Upsert(u.ID, db.RouterVersionSnapshot{AwgmgrVersion: "2.17.2", Source: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "version_audit"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "error", Output: "timeout"}, u.ID); err != nil {
+		t.Fatalf("NotifyCommandResult: %v", err)
+	}
+	row, err := d.RouterVersions().Get(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.AwgmgrVersion != "2.17.2" || row.Source != "report" {
+		t.Errorf("неудачный аудит тронул снимок: %+v", row)
+	}
+}
+
 func TestMaintNotifier_VersionAudit_OK_RendersPanel(t *testing.T) {
 	tgFake, n, u, _ := newMaintNotifierTestRig(t)
 	va := wire.VersionAudit{AwgmgrVersion: "2.8.2", AwgmgrRunning: true, FirmwareCurrent: "5.0.0", HrneoInstalled: true, HrneoRunning: true, HrneoVersion: "2.4.0"}

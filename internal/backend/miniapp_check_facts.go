@@ -32,6 +32,13 @@ type miniappCheckFacts struct {
 	// awg_manager
 	Version  string `json:"version,omitempty"`
 	Firmware string `json:"firmware,omitempty"`
+	// Модуль ядра AmneziaWG: обновление панели может его сменить, и тогда
+	// туннели поднимутся только после перезагрузки роутера. KmodLoaded --
+	// указатель: молчание старого агента обязано отрисоваться как
+	// «неизвестно», а «не загружен» -- это уже поломка, и путать их нельзя.
+	KmodVersion string `json:"kmod_version,omitempty"`
+	KmodModel   string `json:"kmod_model,omitempty"`
+	KmodLoaded  *bool  `json:"kmod_loaded,omitempty"`
 	// external_reach
 	TargetsTotal    *int `json:"targets_total,omitempty"`
 	TargetsFailed   *int `json:"targets_failed,omitempty"`
@@ -54,8 +61,11 @@ type checkDetails struct {
 	ActiveBackend       string `json:"active_backend"`
 	SingboxRouterActive bool   `json:"singbox_router_active"`
 	// awg_manager (checks/awgmgr_check.go)
-	Version  string `json:"version"`
-	Firmware string `json:"firmware"`
+	Version     string `json:"version"`
+	Firmware    string `json:"firmware"`
+	KmodVersion string `json:"kernel_module_version"`
+	KmodModel   string `json:"kernel_module_model"`
+	KmodLoaded  *bool  `json:"kernel_module_loaded"`
 	// external_reach (checks/external_reach.go): провалы и деградации приезжают
 	// СПИСКАМИ объектов с именами и ошибками целей. Наружу идёт их количество:
 	// «1 из 3» — это ответ, а имена целей — то, чего мини-аппу знать незачем.
@@ -103,10 +113,16 @@ func miniappCheckFactsFrom(checkName, detailsJSON string) *miniappCheckFacts {
 			SingboxRouterActive: d.SingboxRouterActive,
 		}
 	case "awg_manager":
-		if d.Version == "" && d.Firmware == "" {
+		if d.Version == "" && d.Firmware == "" && d.KmodVersion == "" {
 			return nil
 		}
-		return &miniappCheckFacts{Version: d.Version, Firmware: d.Firmware}
+		return &miniappCheckFacts{
+			Version:     d.Version,
+			Firmware:    d.Firmware,
+			KmodVersion: d.KmodVersion,
+			KmodModel:   d.KmodModel,
+			KmodLoaded:  d.KmodLoaded,
+		}
 	case "external_reach":
 		if d.TargetsTotal == nil {
 			return nil

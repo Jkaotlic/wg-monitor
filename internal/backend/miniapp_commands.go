@@ -116,6 +116,25 @@ var miniappCommandAllowlist = map[string]bool{
 	// чинить, а не менять прошивку на чужом устройстве.
 	"firmware_status":  true,
 	"firmware_install": true,
+
+	// Правка конфига агента (решение оператора № 3, отменяет D4 программы
+	// мини-аппа). Радиус router-global, поэтому границ у неё сразу три, и
+	// каждая независима от остальных:
+	//
+	//   - только админ бота (miniappAdminOnlyActions), отказ 404 not_found;
+	//   - пол версии агента с отказом по умолчанию
+	//     (miniappActionMinAgentVersion): старый агент не знает про новые
+	//     поля и сделает не то, что человек прочитал на экране;
+	//   - подтверждение набором имени роутера на экране.
+	//
+	// Аргументы проверяет уже написанная ветка sanitizeAgentConfigArgs
+	// (wizard_handler.go), а не ветка default: это закрытый whitelist полей,
+	// повторяющий агентский. backend.url и токен в него не входят намеренно
+	// и остаются на пути мастера и CLI -- перенаправить адрес бэкенда значит
+	// захватить весь парк, и запрет живёт на стороне агента, где его не
+	// обойти правкой сервера. update_backend_url сюда не переезжает вовсе.
+	"agent_config_get":    true,
+	"update_agent_config": true,
 }
 
 // miniappOwnerOnlyActions -- действия, которых оператору не положено. Список
@@ -186,6 +205,14 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 				"this action changes the device itself and is available to the router's owner only")
 			return
 		}
+		// Радиус router-global -- круг только админ бота, и отказ приходит
+		// как 404 not_found, а не 403: владельцу роутера незачем узнавать по
+		// коду ответа, что действие вообще существует. Тот же порядок, что у
+		// остальных админских срезов мини-аппа, и до поиска роутера.
+		if miniappAdminOnlyActions[req.Action] && !miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+			return
+		}
 		commandArgs := req.Args
 		if miniappTunnelArgActions[req.Action] {
 			// The client sends tunnel_id, never ndms_name -- see the allowlist
@@ -244,6 +271,27 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "router lookup failed")
 			return
 		}
+		// Гейт по версии агента -- ПЕРВАЯ из двух независимых преград
+		// (решение оператора п. 10). Версия та, о которой роутер сообщил сам
+		// в последнем отчёте; отказ по умолчанию (agentAtLeast), то есть
+		// пустая и нечитаемая версия ЗАПРЕЩАЮТ действие.
+		//
+		// Отказ стоит до очереди, а не в ответе агента: старый агент не
+		// знает про новые поля, перепишет config.yaml по своим правилам и
+		// перезапустит себя, а «принято» о таком было бы обещанием того, что
+		// не случится. Вторая преграда -- экран, который для таких роутеров
+		// не рисуется вовсе; ни одна не заменяет другую.
+		if floor := miniappActionMinAgentVersion[req.Action]; floor != "" {
+			agentVersion := ""
+			if u.LastDeployedVersion != nil {
+				agentVersion = *u.LastDeployedVersion
+			}
+			if !agentAtLeast(agentVersion, floor) {
+				writeJSONError(w, http.StatusConflict, "agent_too_old",
+					"на роутере агент "+agentVersion+", этому действию нужен "+floor+" или новее")
+				return
+			}
+		}
 		enqueueAgentCommandForUser(w, d, u, req.Action, args)
 	}
 }
@@ -283,6 +331,44 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 		if cmdID == "" {
 			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, "cmd_id required")
 			return
+		}
+		// Граница по роли стоит и здесь, а не только на постановке команды.
+		// Ответ агента на agent_config_get несёт адрес панели роутера -- а
+		// это ровно то, чего владельцу в мини-аппе не показывают (ему
+		// «панель известна» и кнопка «Открыть»). Без этой проверки владелец,
+		// у которого есть идентификатор команды, дочитал бы адрес из чужого
+		// ответа, хотя саму команду поставить не может.
+		//
+		// Действие берётся у очереди и НЕ зависит от записи о выдаче:
+		// RecordResult кладёт action рядом с результатом, поэтому оно живёт
+		// ровно столько же, сколько сам результат.
+		//
+		// Раньше здесь стоял расчёт «действие забыто -- значит и результата
+		// нет», и он был НЕВЕРЕН: Sweep чистит issued по issuedAt, а results
+		// по recordedAt одним cutoff, и issuedAt всегда раньше. Запись о
+		// выдаче уходила первой, и гейт открывался ровно на время задержки
+		// ответа агента -- у спящего мобильного роутера это минуты. Сторожит
+		// TestMiniappResultRoleGateSurvivesSweep.
+		//
+		// Отказ повторяет постановку для каждого действия: admin-only -- 404
+		// not_found (по коду ответа владельцу незачем узнавать, что действие
+		// существует), owner-only -- 403 owner_only.
+		if cmd, known := d.CommandSink.CommandByID(routerID, cmdID); known {
+			if miniappAdminOnlyActions[cmd.Action] && !miniappIsAdmin(telegramUserID, d.TelegramAdminUserID) {
+				writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
+				return
+			}
+			// Второй набор ролей проверяется тоже, а не только admin-only.
+			// Сегодня вывод firmware_install -- безобидная строка «firmware
+			// install kicked», но «не течёт, потому что вывод такой»
+			// перестаёт быть правдой молча: стоит агенту вернуть в нём
+			// версию, путь к образу или причину отказа. Граница ставится по
+			// роли действия, а не по сегодняшнему виду его вывода.
+			if miniappOwnerOnlyActions[cmd.Action] && !miniappIsOwner(d, telegramUserID, routerID) {
+				writeJSONError(w, http.StatusForbidden, "owner_only",
+					"this action changes the device itself and is available to the router's owner only")
+				return
+			}
 		}
 		wait := miniappMaxCommandWaitSec
 		if q := r.URL.Query().Get("wait_sec"); q != "" {

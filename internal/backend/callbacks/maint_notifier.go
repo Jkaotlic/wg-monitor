@@ -79,10 +79,45 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 		return fmt.Errorf("decode version_audit: %w", err)
 	}
 	n.Audit.PutVersionAudit(user.ID, va)
+	// Второй источник снимка. Кэш строкой выше живёт до ближайшего рестарта,
+	// а сравнивать «было/стало» надо и после него; вдобавок version_audit --
+	// единственный, кто знает версию HydraRoute Neo и доступную прошивку.
+	// Ошибку только логируем: человек ждёт экран, а не отказ из-за базы.
+	if n.DB != nil {
+		if err := n.DB.RouterVersions().Upsert(user.ID, versionSnapshotFromAudit(va)); err != nil {
+			slog.Warn("router versions upsert from version_audit", "user_id", user.ID, "err", err)
+		}
+	}
 	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
+}
+
+// versionSnapshotFromAudit переводит ответ агента в снимок для базы.
+//
+// HrneoInstalled уезжает указателем: version_audit ответил, значит «не
+// установлен» здесь ответ, а не молчание. KmodLoaded приходит указателем уже
+// от агента -- старый агент про модуль ядра не говорит вовсе, и его nil
+// обязан доехать до базы неизвестностью.
+//
+// Полей, которых version_audit не знает (KeeneticOS), мы не выдумываем:
+// пустая строка означает «этот источник такого не приносит», и Upsert
+// оставит на месте то, что уже принёс отчёт.
+func versionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
+	hrneoInstalled := va.HrneoInstalled
+	return db.RouterVersionSnapshot{
+		AwgmgrVersion:   va.AwgmgrVersion,
+		AwgmgrBackend:   va.AwgmgrBackend,
+		HrneoVersion:    va.HrneoVersion,
+		HrneoInstalled:  &hrneoInstalled,
+		FirmwareCurrent: va.FirmwareCurrent,
+		FirmwareAvail:   va.FirmwareAvail,
+		KmodVersion:     va.KmodVersion,
+		KmodModel:       va.KmodModel,
+		KmodLoaded:      va.KmodLoaded,
+		Source:          "version_audit",
+	}
 }
 
 // renderFirmware updates the firmware-status cache and re-renders the

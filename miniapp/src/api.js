@@ -1,10 +1,15 @@
 const BASE = '/v1/miniapp'
 
 export class ApiError extends Error {
-  constructor(status, code, message) {
+  // serverMessage -- фраза, которую прислал сервер. Отдельным полем, а не
+  // вместо message: старые ответы бэкенда по-английски, и подставлять их
+  // человеку на экран нельзя. Новые поверхности говорят по-русски и сами
+  // решают, показать ли эту фразу вместо своей.
+  constructor(status, code, message, serverMessage = '') {
     super(message)
     this.status = status
     this.code = code
+    this.serverMessage = serverMessage
   }
 }
 
@@ -16,15 +21,17 @@ async function request(path, opts = {}) {
   })
   if (!res.ok) {
     let code = 'unknown'
+    let serverMessage = ''
     try {
       const body = await res.json()
       // Backend error bodies are { code, message } (writeJSONError,
       // internal/backend/handler.go:57-60) -- the field is "code", not "error".
       code = body.code ?? code
+      serverMessage = typeof body.message === 'string' ? body.message : ''
     } catch {
       // ignore non-JSON error bodies
     }
-    throw new ApiError(res.status, code, `${path} failed: ${res.status}`)
+    throw new ApiError(res.status, code, `${path} failed: ${res.status}`, serverMessage)
   }
   return res.json()
 }
@@ -39,6 +46,18 @@ export function fetchRouters() {
 
 export function fetchRouter(id) {
   return request(`/routers/${id}`)
+}
+
+// Сводка всего парка -- только для админа: сервер отвечает 404 всем
+// остальным, и экран этот вопрос не переспрашивает.
+export function fetchFleet() {
+  return request('/fleet')
+}
+
+// Личная ссылка на веб-управление. Ответ несёт и саму ссылку, и слова про
+// срок с лимитом: своих текстов про «12 часов» клиент не сочиняет.
+export function createWebLink() {
+  return request('/web-link', { method: 'POST' })
 }
 
 // Пороги, по которым бот судит об этом роутере (miniappSettingsResp). Живут

@@ -495,11 +495,16 @@ func NewMux(d Deps) http.Handler {
 		mux.Handle("POST /v1/wizard/agents/{nickname}/maintenance", reqID(wizAuth(wizardMaintenanceHandler(d))))
 		mux.Handle("GET /v1/wizard/cmd/{cmd_id}", reqID(wizAuth(wizardCmdResultHandler(d))))
 	}
+	// Лимит попыток на входах в систему. Один лимитер на все три входа
+	// (форма дашборда, обмен личной ссылки, сессия мини-аппа) намеренно:
+	// перебор ведётся с адреса, а не по одному эндпоинту, и считать его надо
+	// там же.
+	entrance := newRemoteRateLimiter(entranceRatePerSec, entranceBurst)
 	if d.DashboardToken != "" {
-		registerDashboardRoutes(mux, d)
+		registerDashboardRoutes(mux, d, entrance)
 	}
 	if d.TelegramBotToken != "" {
-		registerMiniappRoutes(mux, d)
+		registerMiniappRoutes(mux, d, entrance)
 	}
 	return mux
 }
@@ -762,6 +767,32 @@ func reportHandler(d Deps) http.HandlerFunc {
 			d.Logger.Warn("report tx commit", "nickname", nick, "err", err)
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "commit")
 			return
+		}
+
+		// Снимок версий роутера. Отчёт приносит только «стало», а «было»
+		// помнит одна база: кэш версий в памяти умирал с каждым рестартом
+		// бэкенда, и блок обновлений после него пустел.
+		//
+		// Пишем ПОСЛЕ commit намеренно: пул базы пришпилен к одному
+		// соединению, и запись внутри ещё открытой транзакции встала бы
+		// насмерть на своём же writer-локе.
+		//
+		// Ошибку только логируем: снимок — удобство, а не причина отвергнуть
+		// отчёт роутера. Стаявший отчёт пропускаем по той же причине, что и
+		// FSM: он рассказывает про прошлое и двигал бы историю версий назад.
+		if reportIsFresh {
+			for _, c := range dispatchChecks {
+				if c.Name != "awg_manager" {
+					continue
+				}
+				snap, ok := versionSnapshotFromReport(normaliseDetailsJSON(c.Details))
+				if !ok {
+					continue
+				}
+				if err := d.DB.RouterVersions().Upsert(uid, snap); err != nil {
+					d.Logger.Warn("router versions upsert", "nickname", nick, "err", err)
+				}
+			}
 		}
 
 		// Post-commit: FSM dispatch. Каждая итерация — отдельный State.Save
