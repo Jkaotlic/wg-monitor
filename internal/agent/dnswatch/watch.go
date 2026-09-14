@@ -334,7 +334,7 @@ func (w *Watcher) reconcile(ctx context.Context) bool {
 		w.adopt(ModePrimary, p, lines)
 		return true
 	case !goingToFallback(p):
-		w.ownLineRemovedByHand(p)
+		w.ownLineRemovedByHand(p, lines)
 		return false
 	case anyPresent(lines, p.Foreign):
 		w.adopt(ModeFallback, p, lines)
@@ -411,7 +411,7 @@ func (w *Watcher) cleanupStep(ctx context.Context, probeOK bool) {
 	}
 	if !w.proves(w.saved.Mode, lines) {
 		if w.saved.Mode == ModePrimary {
-			w.ownLineRemovedByHand(w.saved)
+			w.ownLineRemovedByHand(w.saved, lines)
 			return
 		}
 		w.saved.Pending = pendingFor(w.saved.Mode)
@@ -1011,7 +1011,11 @@ func goingToFallback(p persisted) bool {
 // fallback, and the own line is not put back: idle, saying why. The record of
 // lines is kept (nothing pending), so the cleanup resumes if the own line
 // comes back.
-func (w *Watcher) ownLineRemovedByHand(p persisted) {
+func (w *Watcher) ownLineRemovedByHand(p persisted, lines []string) {
+	// The recovery text says which fallback lines were left behind: that is
+	// what running-config holds now, not what the record remembered — the
+	// operator who removed the own line by hand may have removed those too.
+	p.Leftover = presentOf(lines, p.Leftover)
 	w.saved = p
 	w.saved.Mode, w.saved.Pending = ModePrimary, ""
 	w.save(w.saved)

@@ -313,6 +313,43 @@ func TestWatch_OwnLineRemovedByHandDuringCleanupGoesIdle(t *testing.T) {
 	}
 }
 
+// TestWatch_IdleLeftoverIsWhatIsStillOnTheRouter: primary with stuck leftovers;
+// the operator removes the own line AND all but one leftover by hand. The
+// watchdog goes idle, and the recovery text reads `leftover` from the check —
+// it must list only the line still in running-config, not the old record.
+func TestWatch_IdleLeftoverIsWhatIsStillOnTheRouter(t *testing.T) {
+	for _, restart := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restart=%v", restart), func(t *testing.T) {
+			h := stuckCloudflareReturn(t)
+			left := h.state().Leftover
+			if len(left) < 2 {
+				t.Fatalf("setup: need ≥2 leftovers, got %q", left)
+			}
+			kept := left[0]
+			h.r.stuck = map[string]bool{}
+			h.r.setLines(unrelated, kept)
+			if restart {
+				h.w = h.newWatcher()
+			}
+			var s Snapshot
+			for m := 1; m <= 3; m++ {
+				s = h.tick(time.Minute)
+			}
+			c := runCheck(t, h.w)
+			if !s.Idle || c.Details["idle_reason"] != idleOwnLineRemoved {
+				t.Fatalf("want idle own_line_removed_by_hand, got snapshot %+v check %#v", s, c.Details)
+			}
+			got, _ := c.Details["leftover"].([]string)
+			if len(got) != 1 {
+				t.Fatalf("leftover = %q, want only the line still on the router (%q)", got, kept)
+			}
+			if p := h.state(); len(p.Leftover) != 1 || p.Leftover[0] != kept {
+				t.Fatalf("saved leftover = %q, want [%q]", p.Leftover, kept)
+			}
+		})
+	}
+}
+
 // TestWatch_CrashDuringFoldForward: kill the agent before every ndmc call
 // after a return that left lines behind (RU: cleanup only; Cloudflare:
 // foreign_leftover) — two cleanup ticks retrying the stuck removal while the
