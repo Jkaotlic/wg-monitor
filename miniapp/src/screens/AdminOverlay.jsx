@@ -22,7 +22,7 @@ import {
 //
 // Парк видит только админ. Сервер отвечает 404 всем остальным, и этот
 // признак -- подсказка интерфейсу, а не граница доступа.
-export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, onOpenAgentConfig }) {
+export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, onOpenAgentConfig, onOpenDNSReset }) {
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
 
@@ -127,6 +127,20 @@ export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, on
             <p class="hint">
               Как часто роутер отчитывается, адрес и логин его панели, что агенту разрешено делать
               с устройством. Изменение перезапускает агента.
+            </p>
+          </Section>
+        )}
+
+        {/* Сброс DNS -- вход только у админа (радиус router-global, сервер
+            ответит остальным 404). Экран сам проверяет версию агента и
+            начинает с предпросмотра. */}
+        {isAdmin && onOpenDNSReset && (
+          <Section title="Сброс DNS">
+            <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenDNSReset}>
+              Открыть сброс DNS
+            </button>
+            <p class="hint">
+              Заменить DNS-серверы роутера эталонными. Сначала экран покажет, что изменится.
             </p>
           </Section>
         )}

@@ -15,6 +15,7 @@ import { RouterDetail } from './screens/RouterDetail.jsx'
 import { FleetOverlay } from './screens/FleetOverlay.jsx'
 import { AdminOverlay } from './screens/AdminOverlay.jsx'
 import { AgentConfigScreen } from './screens/AgentConfigScreen.jsx'
+import { DNSResetScreen } from './screens/DNSResetScreen.jsx'
 import { NoAccess } from './screens/NoAccess.jsx'
 import { RoutesTab } from './screens/RoutesTab.jsx'
 import { SettingsScreen } from './screens/SettingsScreen.jsx'
@@ -124,6 +125,7 @@ export function App() {
           onClose={() => dispatch({ type: 'overlay', overlay: null })}
           openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
           onOpenAgentConfig={() => dispatch({ type: 'overlay', overlay: 'agentcfg' })}
+          onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
         />
       )
       : nav.overlay === 'routes' && nav.routerID != null
@@ -148,7 +150,17 @@ export function App() {
               onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })}
             />
           )
-          : null
+          : nav.overlay === 'dnsreset' && nav.routerID != null
+            ? (
+              <DNSResetScreen
+                routerID={nav.routerID}
+                routerName={current?.nickname}
+                asleep={asleep}
+                openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
+                onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })}
+              />
+            )
+            : null
 
   return (
     <>

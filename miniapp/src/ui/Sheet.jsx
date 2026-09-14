@@ -42,6 +42,9 @@ export function Sheet({ sheet, asleep, onClose }) {
       return
     }
     run(sheet.action, sheet.args, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }).then((res) => {
+      // onResult -- любой исход, для экранов, которым нужен сам ответ роутера
+      // (сброс DNS: путь снимка, частичный успех). onDone -- только успех.
+      if (res && sheet.onResult) sheet.onResult(res)
       if (res?.status === 'ok' && sheet.onDone) sheet.onDone()
     })
   }
