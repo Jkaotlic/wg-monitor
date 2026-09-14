@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -62,5 +63,57 @@ func TestDispatchDNSResetHonoursDryRun(t *testing.T) {
 	}
 	if !strings.Contains(res.Output, "Заменим на эталонные") {
 		t.Errorf("предпросмотр не доехал до действия:\n%s", res.Output)
+	}
+}
+
+// Снимок «до» пишется в бою, а не только в тесте DNSReset. Раньше диспетчер не
+// передавал SnapshotDir вовсе, и DNSReset молча пропускал снимок: код был,
+// файла не было, экран обещал бы путь к несуществующему файлу. Кладём рядом с
+// конфигом агента -- /opt/etc/wg-monitor на роутере.
+func TestDispatchDNSResetWritesSnapshotNextToConfig(t *testing.T) {
+	const before = `dns-proxy
+    tls upstream 9.9.9.9:853 sni dns.quad9.net
+!
+`
+	dir := t.TempDir()
+	f := &replayDNSExec{configs: []string{before, configAfterApplyWithPorts()}}
+	var changed int
+	r := &Runner{Exec: f.exec, ConfigPath: filepath.Join(dir, "config.yaml"), DNSChanged: func() { changed++ }}
+
+	res := r.Execute(context.Background(), wire.Command{ID: "c1", Action: "dns_reset"})
+
+	files, _ := filepath.Glob(filepath.Join(dir, "dns-before-*.txt"))
+	if len(files) != 1 {
+		t.Fatalf("снимков «до» %d, ожидался 1:\n%s", len(files), res.Output)
+	}
+	if !strings.Contains(res.Output, "снимок «до»: "+files[0]) {
+		t.Errorf("путь снимка не назван в ответе — экрану нечего показать:\n%s", res.Output)
+	}
+	if changed != 1 {
+		t.Errorf("DNSChanged вызван %d раз, ожидался 1: проверка раздельного DNS отвечала бы по старым настройкам", changed)
+	}
+}
+
+// Предпросмотр не пишет ничего и не сбрасывает ничьих кешей: он ничего не менял.
+func TestDispatchDNSResetDryRunTouchesNothing(t *testing.T) {
+	const before = `dns-proxy
+    tls upstream 9.9.9.9:853 sni dns.quad9.net
+!
+`
+	dir := t.TempDir()
+	f := &replayDNSExec{configs: []string{before}}
+	var changed int
+	r := &Runner{Exec: f.exec, ConfigPath: filepath.Join(dir, "config.yaml"), DNSChanged: func() { changed++ }}
+
+	res := r.Execute(context.Background(), wire.Command{ID: "c1", Action: "dns_reset", Args: map[string]any{"dry_run": true}})
+
+	if files, _ := filepath.Glob(filepath.Join(dir, "dns-before-*.txt")); len(files) != 0 {
+		t.Errorf("предпросмотр записал снимок: %v", files)
+	}
+	if changed != 0 {
+		t.Errorf("предпросмотр вызвал DNSChanged %d раз", changed)
+	}
+	if !strings.Contains(res.Output, "Предпросмотр") {
+		t.Errorf("это был не предпросмотр:\n%s", res.Output)
 	}
 }

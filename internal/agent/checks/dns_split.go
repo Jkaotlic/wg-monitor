@@ -131,6 +131,15 @@ func (c *DNSSplit) Run(ctx context.Context, _ Deps) wire.Check {
 	return OK(c.Name(), start, details)
 }
 
+// Invalidate отпускает закешированный вердикт: следующий Run считает заново.
+// Зовётся после настоящего сброса DNS -- иначе проверка до десяти минут
+// рассказывала бы о настройках, которых на роутере уже нет.
+func (c *DNSSplit) Invalidate() {
+	c.mu.Lock()
+	c.cached = nil
+	c.mu.Unlock()
+}
+
 func (c *DNSSplit) now() time.Time {
 	if c.Now != nil {
 		return c.Now()

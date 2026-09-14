@@ -11,6 +11,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -97,4 +98,35 @@ func TestSingleChecks_IncludeDNSSplit(t *testing.T) {
 		names = append(names, c.Name())
 	}
 	t.Errorf("dns_split нет среди проверок отчёта (или она не по указателю — кеш не переживёт вызова): %v", names)
+}
+
+// После настоящего сброса DNS раннер зовёт хук, и тот обязан отпустить кеш
+// ИМЕННО той проверки, что стоит в отчёте, а не свежей копии.
+func TestDNSChangedHook_InvalidatesReportedSplit(t *testing.T) {
+	list := buildSingleChecks(&agent.Config{}, awgmgr.New("http://127.0.0.1:1"), nil)
+	var split *checks.DNSSplit
+	for _, c := range list {
+		if s, ok := c.(*checks.DNSSplit); ok {
+			split = s
+		}
+	}
+	if split == nil {
+		t.Fatal("dns_split нет в отчёте")
+	}
+	var reads int
+	split.Endpoints = func(context.Context) ([]keenetic.DNSEndpoint, error) { reads++; return nil, nil }
+	split.Resolve = func(context.Context, string, string) ([]string, error) { return []string{"198.51.100.7"}, nil }
+	split.RouteLookup = func(context.Context, string) (wire.RouteLookupResult, error) {
+		return wire.RouteLookupResult{Verdict: wire.LookupViaDirect}, nil
+	}
+	split.Run(context.Background(), checks.Deps{})
+	hook := dnsChangedHook(list)
+	if hook == nil {
+		t.Fatal("хук не собран — сброс DNS не отпустит кеш")
+	}
+	hook()
+	split.Run(context.Background(), checks.Deps{})
+	if reads != 2 {
+		t.Errorf("настройки прочитаны %d раз, ожидалось 2: хук не отпустил кеш проверки из отчёта", reads)
+	}
 }

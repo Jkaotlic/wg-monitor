@@ -137,6 +137,7 @@ func main() {
 		BackendURL:           cfg.Backend.URL,
 		Version:              Version,
 		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
+		DNSChanged:           dnsChangedHook(singleChecks),
 	}
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
@@ -234,6 +235,17 @@ func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog
 		}
 	}
 	return list
+}
+
+// dnsChangedHook -- что сделать после настоящего сброса DNS: отпустить кеш
+// проверки раздельного DNS, чтобы следующий отчёт рассказал о новых настройках.
+func dnsChangedHook(list []checks.Check) func() {
+	for _, c := range list {
+		if split, ok := c.(*checks.DNSSplit); ok {
+			return split.Invalidate
+		}
+	}
+	return nil
 }
 
 // dnsSplitInterval -- как часто пересчитывать вердикт раздельного DNS. Агент

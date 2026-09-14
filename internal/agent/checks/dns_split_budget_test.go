@@ -87,3 +87,29 @@ func TestDNSSplit_UnknownVerdictIsRetriedSooner(t *testing.T) {
 		t.Error("неудачный прогон закешировался на полный срок — «неизвестно» застыло бы надолго")
 	}
 }
+
+// После настоящего сброса DNS кеш обязан отпустить вердикт сразу, а не через
+// десять минут: иначе экран сброса проверял бы постусловия по старым настройкам.
+func TestDNSSplit_InvalidateForcesRecount(t *testing.T) {
+	var calls atomic.Int64
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+	c := &DNSSplit{
+		Zones:       []string{"ru"},
+		YandexHost:  testYandexHost,
+		Canary:      "ya.ru",
+		MinInterval: 10 * time.Minute,
+		Now:         func() time.Time { return now },
+		Endpoints: func(context.Context) ([]keenetic.DNSEndpoint, error) {
+			calls.Add(1)
+			return []keenetic.DNSEndpoint{{Type: "dot", Host: testYandexHost, Port: 853, Zone: "ru"}}, nil
+		},
+		Resolve: resolvesOK,
+	}
+	c.Run(context.Background(), Deps{})
+	after := calls.Load()
+	c.Invalidate()
+	c.Run(context.Background(), Deps{})
+	if calls.Load() == after {
+		t.Error("после Invalidate вердикт отдан из кеша")
+	}
+}

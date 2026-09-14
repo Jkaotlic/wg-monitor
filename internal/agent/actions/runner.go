@@ -42,6 +42,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -82,6 +83,10 @@ type Runner struct {
 	// Нужен сбросу DNS: снести свой резолвер значило бы увести сторожа в idle
 	// ровно тем действием, которым человек чинит DNS. Пусто -- защищать нечего.
 	OwnResolverEndpoint string
+	// DNSChanged зовётся после настоящего сброса DNS (не предпросмотра), когда
+	// настройки роутера могли измениться. Сборка агента отпускает здесь кеш
+	// проверки раздельного DNS. nil -- звать некого.
+	DNSChanged func()
 	// Version is the agent's own currently-running version (main.Version at
 	// process start — the same value reported as AgentVersion in
 	// heartbeats). self_update's downgrade guard refuses an older target
@@ -732,7 +737,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 			// кнопкой увело бы сторожа в idle ровно тем действием, которым
 			// человек чинит DNS.
 			KeepHosts: ownResolverHosts(r.OwnResolverEndpoint),
+			// Снимок «до» -- рядом с конфигом агента (/opt/etc/wg-monitor).
+			// Без этой строки DNSReset молча пропускает снимок, а экран
+			// обещал бы путь к файлу, которого нет.
+			SnapshotDir: dnsSnapshotDir(r.ConfigPath),
 		})
+		// «err» -- настройки не прочитались и ничего не менялось.
+		if !dryRun && s != "err" && r.DNSChanged != nil {
+			r.DNSChanged()
+		}
 		return s, o, payload
 
 	case "dns_open":
@@ -1145,4 +1158,13 @@ func stringSliceArg(v any) []string {
 	default:
 		return nil
 	}
+}
+
+// dnsSnapshotDir -- каталог снимков «до» сброса DNS: тот же, где лежит конфиг
+// агента. Пути конфига нет -- снимок не пишется, а ответ сброса говорит об этом.
+func dnsSnapshotDir(configPath string) string {
+	if configPath == "" {
+		return ""
+	}
+	return filepath.Dir(configPath)
 }
