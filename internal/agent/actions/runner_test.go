@@ -718,6 +718,7 @@ type stubOpkg struct {
 	retErr    error
 	smartFn   func(ctx context.Context) (string, string, wire.OpkgUpgradeResult)
 	disableFn func(ctx context.Context, url string) (string, string, wire.OpkgUpgradeResult)
+	hrneoFn   func(ctx context.Context) (string, string)
 }
 
 func (s *stubOpkg) DryRun(ctx context.Context) (status, output string) {
@@ -744,6 +745,13 @@ func (s *stubOpkg) DisableFeed(ctx context.Context, url string) (status, output 
 		return s.disableFn(ctx, url)
 	}
 	return "ok", "", payload
+}
+
+func (s *stubOpkg) HrneoUpdate(ctx context.Context) (status, output string) {
+	if s.hrneoFn != nil {
+		return s.hrneoFn(ctx)
+	}
+	return "ok", ""
 }
 
 // Sanity: errors.Is plumbing works for opkg run errors when unwrapping.
