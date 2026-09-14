@@ -2,6 +2,7 @@ import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { fetchRouter, fetchRouterChecks } from '../api.js'
 import { parseDiag, checkRows, exitCompare, reportHint } from '../diag.js'
+import { dnsSplitView } from '../dnsSplit.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Stat } from '../ui/Stat.jsx'
@@ -60,6 +61,7 @@ export function DiagTab({ routerID, asleep }) {
     viaTunnel.result?.status === 'ok' ? viaTunnel.result.output : null,
   )
   const measuring = direct.busy || viaTunnel.busy
+  const split = dnsSplitView(data.checks, { silent })
 
   return (
     <div class="screen">
@@ -135,6 +137,34 @@ export function DiagTab({ routerID, asleep }) {
       {recheck.result && recheck.result.status !== 'ok' && (
         <p class="state state-error">Роутер не переспросил: {recheck.result.output || recheck.result.status}</p>
       )}
+
+      {/* Кому роутер отдал русские зоны и как идут запросы к Яндексу. Ответ --
+          по настройкам роутера, а не замер, и оговорка стоит здесь же. */}
+      <Section title="Раздельный DNS">
+        <div class="card">
+          {split.missing && <p class="card-foot">{split.note}</p>}
+          {split.rows.map((r) => (
+            <DataRow
+              key={r.key}
+              dot={r.tone === 'muted' ? undefined : r.tone}
+              title={r.lead}
+              value={r.zones}
+              valueTone={r.tone === 'ok' ? undefined : r.tone}
+            />
+          ))}
+          {split.route && (
+            <p class={`diag-consequence${split.route.tone === 'warn' ? ' card-foot-bad' : ''}`}>
+              <Quoted text={split.route.text} />
+            </p>
+          )}
+          {split.resolves && <p class="diag-consequence card-foot-bad">{split.resolves.text}</p>}
+          {split.foot.map((line) => (
+            <p key={line} class="card-foot">
+              <Quoted text={line} />
+            </p>
+          ))}
+        </div>
+      </Section>
 
       <Section title="Каким адресом видно снаружи">
         <div class="card">

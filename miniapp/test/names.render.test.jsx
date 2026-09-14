@@ -133,3 +133,54 @@ describe('«Проверки»', () => {
     unmount(root)
   })
 })
+
+// Раздел «Раздельный DNS» на «Проверках»: имя VPN-туннеля в строке маршрута --
+// в .q, оговорка стоит рядом с ответом, у старого агента -- обещание, а не пустота.
+describe('«Проверки» — раздельный DNS', () => {
+  const dnsSplit = {
+    check_name: 'dns_split',
+    status: 'ok',
+    ts: '2026-09-14T10:00:00Z',
+    details: { zones: { ru: 'other', 'xn--p1ai': 'yandex_dot' }, resolves: 'ok', route: 'tunnel', route_tunnel: 'vpn-nl' },
+  }
+
+  function section(root) {
+    return [...root.querySelectorAll('section')].find((s) => s.textContent.includes('Раздельный DNS'))
+  }
+
+  it('зоны, маршрут с именем туннеля в .q и оговорка', async () => {
+    mocks.router = { router: ROUTERS[1] }
+    mocks.checks = { checks: [dnsSplit], tunnels: [] }
+    mocks.command = null
+    const root = await mount(<DiagTab routerID={2} />)
+
+    const s = section(root)
+    expect(s, 'раздела нет на экране').toBeTruthy()
+    // Строка данных: описание слева, зоны справа.
+    const rows = [...s.querySelectorAll('.data-row')].map((r) => [
+      r.querySelector('.data-row-main').textContent,
+      r.querySelector('.data-row-value').textContent,
+    ])
+    expect(rows).toEqual([
+      ['Отданы другому DNS-серверу, не Яндексу', '.ru'],
+      ['Яндекс, защищённое соединение', '.рф'],
+    ])
+    expect(s.textContent).toContain('Это вывод по настройкам роутера, а не замер трафика.')
+    expect([...s.querySelectorAll('.q')].map((q) => q.textContent)).toContain('«vpn-nl»')
+    // Вечное «да» в общем списке не появляется.
+    expect(root.textContent).not.toContain('dns_split')
+
+    expect(unprotectedNames(root)).toEqual([])
+    unmount(root)
+  })
+
+  it('старый агент -- «появится после обновления»', async () => {
+    mocks.router = { router: ROUTERS[1] }
+    mocks.checks = { checks: [], tunnels: [] }
+    mocks.command = null
+    const root = await mount(<DiagTab routerID={2} />)
+
+    expect(section(root).textContent).toContain('Эта проверка появится после обновления агента на роутере.')
+    unmount(root)
+  })
+})
