@@ -1,7 +1,10 @@
 package callbacks
 
 import (
+	"context"
 	"testing"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
@@ -41,5 +44,16 @@ func TestNewMaintNotifierCarriesMiniAppBase(t *testing.T) {
 	r := NewRouter(d, &fakeRouterTGFull{}, Config{ChatID: -100, AdminUserID: 12345, PublicBaseURL: "https://wgm.example.com"})
 	if got := r.NewMaintNotifier(nil, nil).MiniAppBaseURL; got != "https://wgm.example.com" {
 		t.Errorf("MiniAppBaseURL = %q", got)
+	}
+}
+
+// Все пути отрисовки панели обслуживания собирают аргументы одной функцией, и
+// кнопка панели входит в них -- её нельзя потерять ни на одном пути.
+func TestBuildMaintPanelArgsCarriesPanelButton(t *testing.T) {
+	good := "https://panel.example.com"
+	user := &db.User{ID: 42, Nickname: "x", AWGMURL: &good}
+	args := buildMaintPanelArgs(context.Background(), user, wire.VersionAudit{}, nil, newCooldownStore(), "https://wgm.example.com", 123456)
+	if args.PanelAppURL != "https://wgm.example.com/miniapp/?router=42&open=settings" {
+		t.Errorf("PanelAppURL = %q", args.PanelAppURL)
 	}
 }

@@ -1258,8 +1258,7 @@ func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user 
 		err error
 	)
 	if va, age, ok := r.auditCache.GetVersionAuditWithAge(user.ID); ok && age < maintCacheFreshFor {
-		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown)
-		args.PanelAppURL = maintPanelAppURL(r.cfg.PublicBaseURL, user, m.Chat.ID)
+		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown, r.cfg.PublicBaseURL, m.Chat.ID)
 		text := "🔄 обновляется в фоне…\n\n" + tg.MaintPanelText(args)
 		kb := tg.MaintPanelKeyboard(user.ID, args)
 		// SendMessageWithReplyKeyboard accepts an *InlineKeyboardMarkup —

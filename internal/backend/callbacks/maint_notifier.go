@@ -91,8 +91,7 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 			slog.Warn("router versions upsert from version_audit", "user_id", user.ID, "err", err)
 		}
 	}
-	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
-	args.PanelAppURL = maintPanelAppURL(n.MiniAppBaseURL, user, ref.ChatID)
+	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown, n.MiniAppBaseURL, ref.ChatID)
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
@@ -158,8 +157,7 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 		n.enqueueFreshVersionAudit(user.ID, ref, res)
 		return nil
 	}
-	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
-	args.PanelAppURL = maintPanelAppURL(n.MiniAppBaseURL, user, ref.ChatID)
+	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown, n.MiniAppBaseURL, ref.ChatID)
 	text := banner + "\n\n" + tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
@@ -203,7 +201,11 @@ func maintPanelAppURL(base string, user *db.User, chatID int64) string {
 // VersionAudit + upstream cache (for the Updates section) + cooldown state.
 // Pure function so both the notifier (refresh path) and the router (instant
 // cached render in openMaintPanelMessage) can call it.
-func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore) tg.MaintPanelArgs {
+//
+// appBase и chatID нужны кнопке «Панель роутера»: она зависит от чата, в
+// котором рисуется панель, и живёт здесь, чтобы ни один путь отрисовки её не
+// потерял.
+func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore, appBase string, chatID int64) tg.MaintPanelArgs {
 	infos, _ := upstream.ComputeUpdates(ctx, up, va)
 	updates := make([]tg.UpdateLine, 0, len(infos))
 	for _, u := range infos {
@@ -223,5 +225,6 @@ func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudi
 		Updates:                   updates,
 		RouterCooldownRemaining:   cd.remaining(user.ID, "router_reboot"),
 		FirmwareCooldownRemaining: cd.remaining(user.ID, "firmware_install"),
+		PanelAppURL:               maintPanelAppURL(appBase, user, chatID),
 	}
 }
