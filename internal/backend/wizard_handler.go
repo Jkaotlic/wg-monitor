@@ -543,10 +543,14 @@ type wizardDeployReq struct {
 
 type wizardDeployResp struct {
 	CmdID string `json:"cmd_id"`
-	// RouterAsleep / WakeWindowMin -- только у мини-аппа: роутер сейчас спит,
-	// и команда подождёт его WakeWindowMin минут, после чего отменится.
-	RouterAsleep  bool `json:"router_asleep,omitempty"`
-	WakeWindowMin int  `json:"wake_window_min,omitempty"`
+	// RouterAsleep / RouterStatus / WakeWindowMin -- только у мини-аппа:
+	// роутер сейчас спит или не на связи, и команда подождёт его WakeWindowMin
+	// минут, после чего отменится. RouterStatus -- "sleeping" или "offline"
+	// (M7): экран выбирает текст по конкретному статусу -- «проснётся» для
+	// sleeping, «появится» для offline, -- а не по одному сплющенному булеву.
+	RouterAsleep  bool   `json:"router_asleep,omitempty"`
+	RouterStatus  string `json:"router_status,omitempty"`
+	WakeWindowMin int    `json:"wake_window_min,omitempty"`
 }
 
 type backendUpdateRequest struct {

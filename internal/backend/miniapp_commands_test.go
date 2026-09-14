@@ -40,8 +40,9 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
 		"tunnel_traffic",
-		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
-		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
+		// Прошивка (фаза D2): и чтение, и установка -- всем с доступом к
+		// роутеру (решение оператора 14.09); установку держит набор имени
+		// роутера (miniappConfirmRequired), а не роль.
 		"firmware_status", "firmware_install",
 		// Включение/выключение по идентификатору: работает и там, где ndmc
 		// бессилен (opkg-туннель без имени в NDMS).
@@ -490,8 +491,9 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
 		"tunnel_traffic",
-		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
-		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
+		// Прошивка (фаза D2): и чтение, и установка -- всем с доступом к
+		// роутеру (решение оператора 14.09); установку держит набор имени
+		// роутера (miniappConfirmRequired), а не роль.
 		"firmware_status", "firmware_install",
 		// Включение/выключение по идентификатору: работает и там, где ndmc
 		// бессилен (opkg-туннель без имени в NDMS).

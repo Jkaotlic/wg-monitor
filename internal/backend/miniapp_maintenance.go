@@ -75,13 +75,17 @@ func (c *routerCooldown) release(routerID int64) {
 	delete(c.until, routerID)
 }
 
-// miniappWakeWindow -- спит ли роутер и сколько минут команда его подождёт.
-// Статус тот же, по которому экран флота пишет «спит»/«не на связи»
-// (dashboardAgentFromUser; App.jsx считает спящим оба).
-func miniappWakeWindow(d Deps, u *db.User, action string, now time.Time) (bool, int) {
-	status := dashboardAgentFromUser(*u, nil, now, dashboardStatusPolicyFromDeps(d)).Status
-	if status != "sleeping" && status != "offline" {
-		return false, 0
+// miniappWakeWindow -- спит ли роутер, каким именно статусом и сколько минут
+// команда его подождёт. Статус тот же, по которому экран флота пишет
+// «спит»/«не на связи» (dashboardAgentFromUser; App.jsx считает спящим оба),
+// и отдаётся ОТДЕЛЬНО от булева asleep (M7, fix round 1): «спит» и «не на
+// связи» -- разные тексты для владельца («проснётся» против «появится»), и
+// экран выбирает между ними по router_status, а не по одному сплющенному
+// признаку.
+func miniappWakeWindow(d Deps, u *db.User, action string, now time.Time) (asleep bool, status string, waitMin int) {
+	st := dashboardAgentFromUser(*u, nil, now, dashboardStatusPolicyFromDeps(d)).Status
+	if st != "sleeping" && st != "offline" {
+		return false, "", 0
 	}
-	return true, int(cmdpkg.CommandTTL(action) / time.Minute)
+	return true, st, int(cmdpkg.CommandTTL(action) / time.Minute)
 }

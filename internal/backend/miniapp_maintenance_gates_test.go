@@ -134,25 +134,59 @@ func TestMiniappRebootCooldown(t *testing.T) {
 
 // Спящему роутеру команда не откладывается до пробуждения: экран честно
 // говорит, сколько она его подождёт.
+type miniappEnqueueResp struct {
+	CmdID         string `json:"cmd_id"`
+	RouterAsleep  bool   `json:"router_asleep"`
+	RouterStatus  string `json:"router_status"`
+	WakeWindowMin int    `json:"wake_window_min"`
+}
+
 func TestMiniappCommandResponseSaysRouterAsleep(t *testing.T) {
 	d, ownedID, _, _, h := maintenanceFleet(t, "v0.32.0")
-	type enqueueResp struct {
-		CmdID         string `json:"cmd_id"`
-		RouterAsleep  bool   `json:"router_asleep"`
-		WakeWindowMin int    `json:"wake_window_min"`
-	}
 	rec := postMiniappCommand(t, h, ownedID, 555, `{"action":"hrneo_update"}`)
-	var resp enqueueResp
+	var resp miniappEnqueueResp
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || rec.Code != http.StatusAccepted {
 		t.Fatalf("код %d тело %s err %v", rec.Code, rec.Body.String(), err)
 	}
-	if resp.CmdID == "" || !resp.RouterAsleep || resp.WakeWindowMin != 10 {
-		t.Errorf("роутер без отчётов: %+v, ожидались router_asleep=true и 10 минут", resp)
+	if resp.CmdID == "" || !resp.RouterAsleep || resp.RouterStatus != "offline" || resp.WakeWindowMin != 10 {
+		t.Errorf("роутер без отчётов: %+v, ожидались router_asleep=true, router_status=offline и 10 минут", resp)
 	}
 
 	setDashboardTestLastSeen(t, d, ownedID, time.Now())
 	rec = postMiniappCommand(t, h, ownedID, 555, `{"action":"opkg_upgrade"}`)
 	if rec.Code != http.StatusAccepted || bytes.Contains(rec.Body.Bytes(), []byte("router_asleep")) {
 		t.Errorf("роутер на связи: код %d тело %s, признака сна быть не должно", rec.Code, rec.Body.String())
+	}
+}
+
+// M7 (fix round 1): «спит» и «не на связи» -- разные состояния для экрана
+// (разный текст для владельца), и ответ обязан их различать полем
+// router_status, а не сплющивать в один булев router_asleep.
+func TestMiniappCommandResponseDistinguishesSleepingFromOffline(t *testing.T) {
+	d, ownedID, _, _, h := maintenanceFleet(t, "v0.32.0")
+
+	// Офлайн: отчётов не было вовсе -- age==nil в dashboardAgentFromUser.
+	rec := postMiniappCommand(t, h, ownedID, 555, `{"action":"hrneo_update"}`)
+	var offline miniappEnqueueResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &offline); err != nil || rec.Code != http.StatusAccepted {
+		t.Fatalf("офлайн: код %d тело %s err %v", rec.Code, rec.Body.String(), err)
+	}
+	if !offline.RouterAsleep || offline.RouterStatus != "offline" {
+		t.Errorf("роутер без отчётов: %+v, ожидался router_status=offline", offline)
+	}
+
+	// Спящий: мобильный роутер, последний отчёт 40 минут назад -- внутри окна
+	// sleeping (30 мин -- 24 часа для mobile, dashboardStatusPolicy).
+	if _, err := d.SQL().Exec(`UPDATE users SET kind = 'mobile' WHERE id = ?`, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	setDashboardTestLastSeen(t, d, ownedID, time.Now().Add(-40*time.Minute))
+	rec = postMiniappCommand(t, h, ownedID, 555, `{"action":"opkg_upgrade"}`)
+	var sleeping miniappEnqueueResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &sleeping); err != nil || rec.Code != http.StatusAccepted {
+		t.Fatalf("спящий: код %d тело %s err %v", rec.Code, rec.Body.String(), err)
+	}
+	if !sleeping.RouterAsleep || sleeping.RouterStatus != "sleeping" {
+		t.Errorf("спящий мобильный роутер: %+v, ожидался router_status=sleeping", sleeping)
 	}
 }

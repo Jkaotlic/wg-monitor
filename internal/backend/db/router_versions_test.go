@@ -261,3 +261,50 @@ func TestRouterVersionsKmodLoadedVersionMergesAndSurvivesMigration(t *testing.T)
 		t.Errorf("после перезагрузки загруженная версия не обновилась: %q", row.KmodLoadedVersion)
 	}
 }
+
+// M2 (fix round 1): отчёт, который явно сообщил о состоянии модуля
+// (KmodLoadedVersionReported=true), обязан записать загруженную версию как
+// пришла, даже пустой строкой. Сценарий: kmod_version=3.2, kmod_loaded_version
+// был 3.1; следующий отчёт сообщил kernel_module_loaded (флаг взведён), но
+// версию не узнал (пусто) -- общее правило «пусто -- оставить прежнее» здесь
+// НЕ должно сработать, иначе после настоящей перезагрузки со транзиентно
+// пустым ответом RebootHint звал бы перезагрузку вечно.
+func TestRouterVersionsKmodLoadedVersionForcedEmptyWhenReported(t *testing.T) {
+	d, uid := newTestDBForVersions(t)
+	r := d.RouterVersions()
+	if err := r.Upsert(uid, RouterVersionSnapshot{
+		KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.1.20260906",
+		KmodLoadedVersionReported: true, Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Upsert(uid, RouterVersionSnapshot{
+		KmodLoadedVersion: "", KmodLoadedVersionReported: true, Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := r.Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.KmodLoadedVersion != "" {
+		t.Errorf("отчёт сообщил о модуле, но пустая версия не форсировалась: %q", row.KmodLoadedVersion)
+	}
+	if row.KmodVersion != "3.2.20260930" {
+		t.Errorf("установленная версия не должна была измениться: %q", row.KmodVersion)
+	}
+
+	// Без флага (version_audit или старый агент) пустая версия по-прежнему
+	// не стирает известное -- форс относится только к пути отчёта.
+	if err := r.Upsert(uid, RouterVersionSnapshot{
+		KmodLoadedVersion: "3.1.20260906", KmodLoadedVersionReported: true, Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Upsert(uid, RouterVersionSnapshot{Source: "version_audit"}); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ = r.Get(uid); row.KmodLoadedVersion != "3.1.20260906" {
+		t.Errorf("version_audit без флага стёр загруженную версию: %q", row.KmodLoadedVersion)
+	}
+}

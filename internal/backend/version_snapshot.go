@@ -57,7 +57,13 @@ func versionSnapshotFromReport(detailsJSON string) (db.RouterVersionSnapshot, bo
 		KmodModel:         d.KmodModel,
 		KmodLoaded:        d.KmodLoaded,
 		KmodLoadedVersion: d.KmodLoadedVersion,
-		Source:            "report",
+		// KmodLoadedVersionReported -- awg_manager явно сообщил о состоянии
+		// модуля (ключ kernel_module_loaded есть в JSON), и потому версию
+		// пишем как пришла, даже пустой строкой (M2, fix round 1): иначе
+		// транзиентно пустой ответ сразу после перезагрузки оставил бы
+		// старую версию, и RebootHint звал бы перезагрузку вечно.
+		KmodLoadedVersionReported: d.KmodLoaded != nil,
+		Source:                    "report",
 	}, true
 }
 
@@ -90,6 +96,10 @@ func VersionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
 		KmodModel:         va.KmodModel,
 		KmodLoaded:        va.KmodLoaded,
 		KmodLoadedVersion: va.KmodLoadedVersion,
-		Source:            "version_audit",
+		// KmodLoadedVersionReported остаётся false (нулевое значение)
+		// намеренно: version_audit не форсирует пустую загруженную версию --
+		// путь отчёта (versionSnapshotFromReport) единственный источник
+		// форса (M2, fix round 1).
+		Source: "version_audit",
 	}
 }

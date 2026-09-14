@@ -30,9 +30,21 @@ type RouterVersionSnapshot struct {
 	KmodModel       string
 	KmodLoaded      *bool
 	// KmodLoadedVersion -- версия модуля, которую держит ядро. Пусто -- источник
-	// её не принёс (старый агент или version_audit), и Upsert оставит известное.
+	// её не принёс (старый агент или version_audit), и Upsert оставит известное
+	// -- ЕСЛИ KmodLoadedVersionReported не взведён (см. ниже).
 	KmodLoadedVersion string
-	Source            string // "report" | "version_audit"
+	// KmodLoadedVersionReported -- источник ЯВНО сообщил о состоянии модуля
+	// (в отчёте есть ключ kernel_module_loaded), и потому Upsert обязан
+	// записать KmodLoadedVersion КАК ПРИШЛА, даже пустой строкой, а не
+	// применять общее правило «пусто -- оставить прежнее» (M2, fix round 1).
+	//
+	// Без этого флага отчёт сразу после настоящей перезагрузки, транзиентно
+	// пришедший с пустой загруженной версией, навсегда оставил бы старую
+	// версию в базе, и RebootHint звал бы перезагрузку вечно. Ставит его
+	// только путь отчёта (versionSnapshotFromReport) -- version_audit
+	// по-прежнему не стирает известное.
+	KmodLoadedVersionReported bool
+	Source                    string // "report" | "version_audit"
 }
 
 // RouterVersionRow -- снимок вместе с историей: «было» и когда менялось.
@@ -85,7 +97,11 @@ ON CONFLICT(user_id) DO UPDATE SET
   kmod_version     = CASE WHEN excluded.kmod_version     = '' THEN router_versions.kmod_version     ELSE excluded.kmod_version     END,
   kmod_model       = CASE WHEN excluded.kmod_model       = '' THEN router_versions.kmod_model       ELSE excluded.kmod_model       END,
   kmod_loaded      = CASE WHEN excluded.kmod_loaded    IS NULL THEN router_versions.kmod_loaded      ELSE excluded.kmod_loaded      END,
-  kmod_loaded_version = CASE WHEN excluded.kmod_loaded_version = '' THEN router_versions.kmod_loaded_version ELSE excluded.kmod_loaded_version END,
+  kmod_loaded_version = CASE
+      WHEN ? = 1 THEN excluded.kmod_loaded_version
+      WHEN excluded.kmod_loaded_version = '' THEN router_versions.kmod_loaded_version
+      ELSE excluded.kmod_loaded_version
+    END,
   prev_awgmgr_version = CASE
       WHEN excluded.awgmgr_version <> '' AND router_versions.awgmgr_version <> ''
        AND excluded.awgmgr_version <> router_versions.awgmgr_version
@@ -105,7 +121,7 @@ ON CONFLICT(user_id) DO UPDATE SET
 		userID, s.AwgmgrVersion, s.AwgmgrBackend, s.HrneoVersion, versionBoolArg(s.HrneoInstalled),
 		s.FirmwareCurrent, s.FirmwareAvail, s.FirmwareChannel, s.KeeneticOS,
 		s.KmodVersion, s.KmodModel, versionBoolArg(s.KmodLoaded),
-		s.Source, now, s.KmodLoadedVersion)
+		s.Source, now, s.KmodLoadedVersion, boolToIntArg(s.KmodLoadedVersionReported))
 	return err
 }
 
@@ -188,4 +204,14 @@ func versionBoolPtr(n sql.NullBool) *bool {
 	}
 	v := n.Bool
 	return &v
+}
+
+// boolToIntArg -- явный флаг (в отличие от versionBoolArg) не бывает
+// неизвестным: это не поле снимка, а «форсировать перезапись или нет»,
+// поэтому NULL здесь не нужен, только 0/1.
+func boolToIntArg(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

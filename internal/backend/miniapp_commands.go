@@ -350,7 +350,7 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		resp := wizardDeployResp{}
-		resp.RouterAsleep, resp.WakeWindowMin = miniappWakeWindow(d, u, req.Action, time.Now().UTC())
+		resp.RouterAsleep, resp.RouterStatus, resp.WakeWindowMin = miniappWakeWindow(d, u, req.Action, time.Now().UTC())
 		if !enqueueAgentCommandForUserResp(w, d, u, req.Action, args, resp) && reboot {
 			rebootCooldown.release(u.ID)
 		}
@@ -419,12 +419,14 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 				writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
 				return
 			}
-			// Второй набор ролей проверяется тоже, а не только admin-only.
-			// Сегодня вывод firmware_install -- безобидная строка «firmware
-			// install kicked», но «не течёт, потому что вывод такой»
-			// перестаёт быть правдой молча: стоит агенту вернуть в нём
-			// версию, путь к образу или причину отказа. Граница ставится по
-			// роли действия, а не по сегодняшнему виду его вывода.
+			// Второй гейт (miniappOwnerOnlyActions) проверяется тоже, а не
+			// только admin-only -- хотя сегодня карта пуста: обслуживание,
+			// включая firmware_install, открыто админу, владельцу и
+			// оператору (решение оператора 14.09), а необратимость держит
+			// набор имени роутера, а не роль. Код остаётся написанным на
+			// будущее: owner-only действие с чувствительным выводом заведётся
+			// в эту карту, а не отдельной веткой, и гейт прикроет его сразу и
+			// на постановке, и здесь, на опросе.
 			if miniappOwnerOnlyActions[cmd.Action] && !miniappIsOwner(d, telegramUserID, routerID) {
 				writeJSONError(w, http.StatusForbidden, "owner_only",
 					"this action changes the device itself and is available to the router's owner only")
