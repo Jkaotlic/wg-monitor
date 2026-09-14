@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { sendCommand, fetchCommandResult } from './api.js'
+import { asleepNote } from './maintenance.js'
 
 // Commands are asynchronous by nature: the backend queues them, the agent
 // picks them up on its own long-poll, and only then is there a result. A
@@ -26,6 +27,9 @@ export function useCommand(routerID) {
   // отличит «ваш ввод не годится» от «роутер не ответил». error остаётся
   // строкой -- на неё опираются все экраны.
   const [errorCode, setErrorCode] = useState(null)
+  // sleepNote -- «роутер спит, команда подождёт N минут»: сервер говорит это
+  // в ответе на постановку, и экран обязан пересказать, а не обещать ответ.
+  const [sleepNote, setSleepNote] = useState('')
 
   // A sleeping-router deadline can run minutes long; if the screen is closed
   // (component unmounted) before it resolves, the in-flight poll must not
@@ -39,14 +43,17 @@ export function useCommand(routerID) {
     [],
   )
 
-  async function run(action, args = {}, { deadlineMs = 90_000, waitSec = 10 } = {}) {
+  async function run(action, args = {}, { deadlineMs = 90_000, waitSec = 10, confirm = '' } = {}) {
     if (!aliveRef.current) return null
     setBusy(true)
     setError(null)
     setErrorCode(null)
     setResult(null)
+    setSleepNote('')
     try {
-      const { cmd_id: id } = await sendCommand(routerID, action, args)
+      const sent = await sendCommand(routerID, action, args, confirm)
+      const id = sent.cmd_id
+      if (aliveRef.current) setSleepNote(asleepNote(sent))
       const until = Date.now() + deadlineMs
       while (Date.now() < until) {
         // Bounded hop: the backend caps wait_sec at 12 anyway
@@ -77,5 +84,5 @@ export function useCommand(routerID) {
     return null
   }
 
-  return { busy, result, error, errorCode, run }
+  return { busy, result, error, errorCode, sleepNote, run }
 }
