@@ -19,7 +19,7 @@ const miniappRebootCooldown = 5 * time.Minute
 // активную кнопку, а сервер отказал бы. Общие случаи --
 // testdata/confirm_phrase_cases.json, их прогоняют оба набора тестов.
 func normalizeConfirmPhrase(s string) string {
-	s = strings.NewReplacer("‐", "-", "‑", "-").Replace(s)
+	s = strings.NewReplacer("\u2010", "-", "\u2011", "-").Replace(s)
 	return strings.ToLower(strings.TrimSpace(s))
 }
 

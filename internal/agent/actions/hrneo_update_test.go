@@ -129,9 +129,15 @@ func TestHrneoUpdate_LockBusy(t *testing.T) {
 	if err := os.WriteFile(o.LockPath, []byte("pid=other\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	status, _ := o.HrneoUpdate(context.Background())
+	status, out := o.HrneoUpdate(context.Background())
 	if status != "locked" || len(f.calls) != 0 {
 		t.Errorf("status=%q calls=%v", status, f.calls)
+	}
+	if out != "на роутере уже идёт другая операция с пакетами — повторите через пару минут" {
+		t.Errorf("lock text should be Russian and owner-facing, got %q", out)
+	}
+	if strings.Contains(out, "opkg") || strings.Contains(out, "lock file") {
+		t.Errorf("lock text must not leak internal opkg/lock-file names: %q", out)
 	}
 }
 

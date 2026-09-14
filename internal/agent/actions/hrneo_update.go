@@ -24,8 +24,8 @@ const hrneoSettle = 3 * time.Second
 // upgrade hrneo, перезапуск, постусловие «версия сменилась и HydraRoute
 // работает».
 func (o *OpkgRunner) HrneoUpdate(ctx context.Context) (status, output string) {
-	if held, age, ok := o.lockHeldFresh(); ok {
-		return "locked", fmt.Sprintf("opkg lock held by another op (age %v, lock file: %s)", age.Round(time.Second), held)
+	if _, _, ok := o.lockHeldFresh(); ok {
+		return "locked", "на роутере уже идёт другая операция с пакетами — повторите через пару минут"
 	}
 	if err := o.releaseStaleLock(); err != nil {
 		return "err", "clear stale lock: " + err.Error()

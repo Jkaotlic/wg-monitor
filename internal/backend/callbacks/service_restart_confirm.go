@@ -107,10 +107,10 @@ func makeMaintToken() string {
 }
 
 // botServiceRestartNames -- что бот ещё перезапускает сам: HydraRoute Neo
-// (кнопки панели маршрутов, цикл 4 программы) и awg-manager (старая кнопка
-// restart_tunnel под тревогой). Перезагрузка роутера, прошивка и пакеты
-// Entware переехали в мини-апп (цикл 1), и живой токен из старого сообщения
-// их в очередь не ставит.
+// (кнопки панели маршрутов, цикл 4 программы) и awg-manager (кнопка
+// «Перезагрузить awg-mgr» панели туннелей, callback restart_tunnel).
+// Перезагрузка роутера, прошивка и пакеты Entware переехали в мини-апп
+// (цикл 1), и живой токен из старого сообщения их в очередь не ставит.
 var botServiceRestartNames = map[string]bool{
 	"hrneo":       true,
 	"hrneo_start": true,
@@ -164,7 +164,9 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 	if maintName == "" && pm != nil {
 		maintName = pm.Name
 	}
-	return fmt.Sprintf("✅ запрос отправлен: %s", maintName), nil
+	// Тост -- человеку, поэтому имя службы человеческое (HydraRoute Neo /
+	// awg-manager), а не внутренний токен (hrneo_stop и т.п.).
+	return fmt.Sprintf("✅ запрос отправлен: %s", tg.NameToDisplay(maintName)), nil
 }
 
 // ensure MaintConfirmAction satisfies Action at compile time.

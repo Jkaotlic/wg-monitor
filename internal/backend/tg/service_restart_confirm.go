@@ -1,20 +1,22 @@
 // internal/backend/tg/service_restart_confirm.go
 //
 // Подтверждение перезапуска службы в боте. После цикла 1 бот перезапускает
-// только HydraRoute Neo (кнопки панели маршрутов) и awg-manager (старая кнопка
-// restart_tunnel под тревогой). Перезагрузка роутера, прошивка и пакеты
-// Entware -- в мини-аппе.
+// только HydraRoute Neo (кнопки панели маршрутов) и awg-manager (кнопка
+// «Перезагрузить awg-mgr» панели туннелей, callback restart_tunnel).
+// Перезагрузка роутера, прошивка и пакеты Entware -- в мини-аппе.
 package tg
 
 import "fmt"
 
 // RestartConfirmText is the warning shown after a restart tap.
 func RestartConfirmText(name, token string) string {
-	display := nameToDisplay(name)
+	display := NameToDisplay(name)
 	var what string
 	switch name {
-	// hrneo и hrneo_start открываются кнопками из-под тревоги HydraRoute, то
-	// есть у владельца в личке: говорят его словами.
+	// hrneo/hrneo_start/hrneo_stop открываются кнопками панели маршрутов
+	// (routes_notifier.go: карточка HR-Neo inventory/doctor), а не из-под
+	// тревоги -- поэтому и говорят словами того экрана, а не владельца в
+	// личке.
 	case "hrneo":
 		what = "  • HydraRoute Neo — движок умной раздельной маршрутизации — перезапустится за несколько секунд.\n" +
 			"  • На это время правила по именам сайтов перестанут работать, потом всё вернётся само.\n" +
@@ -54,8 +56,12 @@ func RestartConfirmKeyboard(userID int64, name, token string) InlineKeyboardMark
 	}}}
 }
 
-// nameToDisplay translates a service-name token into the human label.
-func nameToDisplay(name string) string {
+// NameToDisplay translates a service-name token into the human label
+// (hrneo/hrneo_start/hrneo_stop → "HydraRoute Neo", awgmgr → "awg-manager").
+// Exported so callers outside package tg (the maint_confirm toast in
+// internal/backend/callbacks) can show the same human name instead of the
+// raw internal token.
+func NameToDisplay(name string) string {
 	switch name {
 	case "hrneo", "hrneo_start", "hrneo_stop":
 		return "HydraRoute Neo"

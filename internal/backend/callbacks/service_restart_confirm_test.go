@@ -126,6 +126,14 @@ func TestMakeMaintToken_HexAndUnique(t *testing.T) {
 }
 
 func TestMaintConfirmAction_RestartsBotServices(t *testing.T) {
+	// Тост -- человеку: человеческое имя службы (HydraRoute Neo / awg-manager),
+	// а не внутренний токен (hrneo_stop и т.п.), см. tg.NameToDisplay.
+	wantDisplay := map[string]string{
+		"hrneo":       "HydraRoute Neo",
+		"hrneo_start": "HydraRoute Neo",
+		"hrneo_stop":  "HydraRoute Neo",
+		"awgmgr":      "awg-manager",
+	}
 	for _, name := range []string{"hrneo", "hrneo_start", "hrneo_stop", "awgmgr"} {
 		store := newPendingMaintStore()
 		sink := &fakeSink{}
@@ -136,8 +144,11 @@ func TestMaintConfirmAction_RestartsBotServices(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if !strings.Contains(status, name) {
-			t.Errorf("%s: status=%q", name, status)
+		if !strings.Contains(status, wantDisplay[name]) {
+			t.Errorf("%s: status=%q, want to contain %q", name, status, wantDisplay[name])
+		}
+		if strings.Contains(status, name) && name != wantDisplay[name] {
+			t.Errorf("%s: toast leaked internal token: status=%q", name, status)
 		}
 		if len(sink.enq) != 1 || sink.enq[0].Cmd.Action != "service_restart" || sink.enq[0].Cmd.Args["name"] != name {
 			t.Errorf("%s: enq=%+v", name, sink.enq)

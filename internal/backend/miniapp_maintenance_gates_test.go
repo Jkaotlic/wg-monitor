@@ -82,7 +82,7 @@ func TestMiniappFirmwareInstallRequiresConfirm(t *testing.T) {
 	if len(sink.enqueued) != 0 {
 		t.Fatalf("прошивка без верной фразы ушла агенту: %+v", sink.enqueued)
 	}
-	rec := postMiniappCommand(t, h, ownedID, 100, `{"action":"firmware_install","confirm":"  ROUTER‑OWNED "}`)
+	rec := postMiniappCommand(t, h, ownedID, 100, `{"action":"firmware_install","confirm":"  ROUTER\u2011OWNED "}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("верная фраза с другим регистром и неразрывным дефисом: код %d тело %s", rec.Code, rec.Body.String())
 	}
