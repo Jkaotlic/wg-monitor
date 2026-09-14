@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal } from '../src/routeLookup.js'
+import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, openAnswer } from '../src/routeLookup.js'
 import { commandOutcomeLabel } from '../src/labels.js'
 
 const NOT_A_SITE = 'Это не похоже на адрес сайта — нужно имя вроде claude.ai'
@@ -231,5 +231,48 @@ describe('lookupRefusal', () => {
   it('прочие отказы -- «роутер не ответил»', () => {
     expect(lookupRefusal('awgmgr GET /api/dns-routes/list: HTTP 500')).toBe('Роутер не ответил на вопрос — попробуйте ещё раз')
     expect(lookupRefusal('/routers/7/commands failed: 502', 'unknown')).toBe('Роутер не ответил на вопрос — попробуйте ещё раз')
+  })
+})
+
+// «Откроется ли сайт» (dns_open): агент разводит три исхода, потому что чинить
+// их разное -- имя не определилось (DNS) против «имя есть, сайт молчит»
+// (маршрут или блокировка). Слить их значило бы послать человека не туда.
+describe('openAnswer', () => {
+  it('открылся -- ok', () => {
+    expect(openAnswer({ status: 'ok', output: 'Имя example.com разрешилось в 203.0.113.5, сайт открылся (TCP 443).' }, 'example.com')).toEqual({
+      title: 'Сайт «example.com» откроется с этого роутера',
+      lines: ['Роутер узнал адрес сайта, и сайт принял соединение.'],
+      tone: 'ok',
+    })
+  })
+
+  it('имя есть, сайт молчит -- маршрут или блокировка, не DNS', () => {
+    expect(openAnswer({ status: 'partial', output: '…' }, 'example.com')).toEqual({
+      title: 'Адрес «example.com» есть, но сайт не отвечает',
+      lines: ['Роутер узнал адрес — дело в маршруте или блокировке, а не в DNS.'],
+      tone: 'warn',
+    })
+  })
+
+  it('имя не определилось -- настройка DNS, не маршрут', () => {
+    expect(openAnswer({ status: 'err', output: 'Имя example.com не разрешилось через dns-proxy роутера.' }, 'example.com')).toEqual({
+      title: 'Адрес сайта «example.com» не определился',
+      lines: ['Роутер не узнал адрес сайта — дело в настройке DNS, а не в маршруте.'],
+      tone: 'warn',
+    })
+  })
+
+  it('старый агент -- «обновите агента», а не «имя не определилось»', () => {
+    const a = openAnswer({ status: 'err', output: 'unknown action: dns_open' }, 'example.com')
+    expect(a.title).toBe('Агент на этом роутере старше приложения и такого пока не умеет — обновите агента.')
+    expect(a.tone).toBe('unknown')
+  })
+
+  it('без жаргона', () => {
+    const text = ['ok', 'partial', 'err']
+      .map((status) => openAnswer({ status, output: '' }, 'example.com'))
+      .flatMap((a) => [a.title, ...a.lines])
+      .join('\n')
+    for (const w of ['резолв', 'dns-proxy', 'TCP', '443', 'nslookup']) expect(text, w).not.toContain(w)
   })
 })

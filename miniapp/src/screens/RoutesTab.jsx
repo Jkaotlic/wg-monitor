@@ -24,7 +24,7 @@ import { ListRow } from '../ui/ListRow.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
 import { confirmSheet } from '../sheet.js'
 import { deletePlanSummary } from '../routeAdd.js'
-import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, NOT_A_SITE } from '../routeLookup.js'
+import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, openAnswer, NOT_A_SITE } from '../routeLookup.js'
 import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
 
@@ -79,21 +79,43 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
   const [siteProblem, setSiteProblem] = useState(null)
   const siteCurrent = siteAskedFor === routerID
   const siteAnswer = siteCurrent && site.result?.status === 'ok' ? lookupAnswer(site.result.output) : null
-  const checkSite = (e) => {
-    e.preventDefault()
+  // «Откроется ли сайт» (dns_open) -- второй вопрос про то же имя, со своим
+  // каналом: ответ «куда пойдёт» и ответ «откроется ли» -- разные ответы.
+  // Показывается один, последний заданный: два ответа про разные имена рядом
+  // читались бы как ответ про одно.
+  const opener = useCommand(routerID)
+  const [openAskedFor, setOpenAskedFor] = useState(null)
+  const openCurrent = openAskedFor?.routerID === routerID
+  const openResult = openCurrent && opener.result ? openAnswer(opener.result, openAskedFor.domain) : null
+  const siteBusy = site.busy || opener.busy
+
+  // askSite проверяет имя одинаково для обоих вопросов. То, что сервер отобьёт,
+  // не отправляется: человек сразу слышит, что не так с введённым, а не «роутер
+  // не ответил». Прежние ответы -- про другое имя, поэтому они прячутся.
+  const askSite = () => {
     const domain = normalizeSiteInput(siteInput)
-    if (!domain || site.busy) return
-    // То, что сервер отобьёт, не отправляется: человек сразу слышит, что не
-    // так с введённым, а не «роутер не ответил». Прежний ответ -- про другое
-    // имя, поэтому он прячется.
+    if (!domain || siteBusy) return null
+    setSiteAskedFor(null)
+    setOpenAskedFor(null)
     if (!looksLikeSite(domain)) {
       setSiteProblem(NOT_A_SITE)
-      setSiteAskedFor(null)
-      return
+      return null
     }
     setSiteProblem(null)
+    return domain
+  }
+  const checkSite = (e) => {
+    e.preventDefault()
+    const domain = askSite()
+    if (!domain) return
     setSiteAskedFor(routerID)
     site.run('route_lookup', { domain }, deadline)
+  }
+  const openSite = () => {
+    const domain = askSite()
+    if (!domain) return
+    setOpenAskedFor({ routerID, domain })
+    opener.run('dns_open', { domain }, deadline)
   }
 
   useEffect(() => {
@@ -276,9 +298,16 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
               }}
             />
           </div>
-          <button type="submit" class="btn btn-ghost" disabled={site.busy || !normalizeSiteInput(siteInput)}>
-            {site.busy ? 'Проверяю…' : 'Проверить'}
-          </button>
+          <div class="command-actions">
+            <button type="submit" class="btn btn-ghost" disabled={siteBusy || !normalizeSiteInput(siteInput)}>
+              {site.busy ? 'Проверяю…' : 'Проверить'}
+            </button>
+            {/* Откроется ли -- тоже только чтение: роутер узнаёт адрес своим
+                DNS и пробует соединиться, ничего не меняя. */}
+            <button type="button" class="btn btn-ghost" disabled={siteBusy || !normalizeSiteInput(siteInput)} onClick={openSite}>
+              {opener.busy ? 'Пробую…' : 'Откроется ли'}
+            </button>
+          </div>
           {siteProblem && <p class="state state-error">{siteProblem}</p>}
           {siteCurrent && site.error && <p class="state state-error">{lookupRefusal(site.error, site.errorCode)}</p>}
           {siteCurrent && site.result && site.result.status !== 'ok' && (
@@ -287,6 +316,19 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
           {/* Имена сайта, VPN-туннеля и правила в ответе -- через <Quoted>:
               короткое не рвётся по дефису, длинное переносится внутри себя,
               а скопированное совпадает с тем, что на роутере. */}
+          {openCurrent && opener.error && <p class="state state-error">{lookupRefusal(opener.error, opener.errorCode)}</p>}
+          {openResult && (
+            <div class={openResult.tone === 'ok' ? 'site-answer' : 'site-answer traffic-note'}>
+              <p class="traffic-title">
+                <Quoted text={openResult.title} />
+              </p>
+              {openResult.lines.map((line) => (
+                <p key={line} class="traffic-detail">
+                  {line}
+                </p>
+              ))}
+            </div>
+          )}
           {siteAnswer && (
             <div class={siteAnswer.tone === 'ok' ? 'site-answer' : 'site-answer traffic-note'}>
               <p class="traffic-title">
