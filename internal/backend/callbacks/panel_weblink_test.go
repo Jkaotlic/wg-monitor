@@ -122,15 +122,16 @@ func TestPanelWebLinkInDirectMessageGivesLinkAndSaysHowLongItLives(t *testing.T)
 	}
 }
 
-// Админ не настроен -- и хаб /panel в разрешённом чате открыт настежь:
-// router.go:356 пропускает всех, когда AdminUserID == 0. Это ровно тот
-// случай, который в бою выглядит как «доступ у всех»: пустой admin_user_id в
-// backend.yaml -- и админский хаб публичен для всей группы.
+// Админ не настроен -- и общий панельный гейт (router.go:356) отказывает
+// сразу, до кнопки веб-ссылки: с v0.31.1 он строгий, как «Доступ», и AdminUserID
+// == 0 больше не пропускает никого. Раньше здесь проверялся именно проигрыш
+// этого гейта -- своя проверка внутри panelWebLink (backend.WebLinkCopyAdminOnly)
+// была второй линией обороны на случай, если общая останется дырявой; теперь
+// первая линия и не пропускает нажатие до второй.
 //
 // Чат здесь групповой намеренно: в личке такой вызов до кнопки вообще не
 // доходит (adminPrivatePanel требует настроенного админа, а chatAllowed
-// личку не знает), и тест проверял бы чужой гейт. В разрешённом чате нажатие
-// доходит до кнопки -- и обязано получить отказ на ней самой.
+// личку не знает), и тест проверял бы чужой гейт.
 func TestPanelWebLinkRefusesWhenAdminIsNotConfigured(t *testing.T) {
 	d := newTestDBEmpty(t)
 	f := &fakeRouterTGFull{}
@@ -138,7 +139,7 @@ func TestPanelWebLinkRefusesWhenAdminIsNotConfigured(t *testing.T) {
 
 	r.HandleCallback(context.Background(), panelWebLinkQuery(777, -100))
 
-	if !containsStr(f.answers, backend.WebLinkCopyAdminOnly) {
+	if !containsStr(f.answers, "доступ только у админа") {
 		t.Fatalf("отказ не сказан словами: ответы %v", f.answers)
 	}
 	assertNoGrantAnywhere(t, f, d, 777)

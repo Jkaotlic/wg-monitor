@@ -353,7 +353,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		r.handleAccessCallback(ctx, q, args)
 		return
 	}
-	if args.Action == "panel" && args.PanelScreen != "help" && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
+	if args.Action == "panel" && args.PanelScreen != "help" && (r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
 		return
 	}
@@ -361,7 +361,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		r.handlePanelCallback(ctx, q, args)
 		return
 	}
-	if isSelfHostedAmneziaAdminAction(args.Action) && r.cfg.AdminUserID != 0 && q.From.ID != r.cfg.AdminUserID {
+	if isSelfHostedAmneziaAdminAction(args.Action) && (r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID) {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
 		return
 	}

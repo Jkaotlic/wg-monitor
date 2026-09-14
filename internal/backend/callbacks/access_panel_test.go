@@ -437,3 +437,19 @@ func TestAccess_HomeDBErrorRendersHint(t *testing.T) {
 		t.Errorf("error body should have ❌ + 💡, got: %s", body)
 	}
 }
+
+// Без заданного админа кнопки панели и self-hosted действия закрыты всем, как
+// у «Доступа». Прежде гейт открывал их при AdminUserID == 0 и держался только
+// на проверке конфига в другом файле.
+func TestPanelAndSelfHostedGateStrictWithoutAdmin(t *testing.T) {
+	for _, data := range []string{"panel:0:home", "amz_selfhosted_manage:0:_panel_"} {
+		d, _ := newTestDB(t)
+		tgFake := &fakeRouterTG{}
+		r := NewRouterWithSink(d, tgFake, &fakeEnqueuer{}, Config{ChatID: 7, AdminUserID: 0})
+		q := &tg.CallbackQuery{ID: "q1", From: tg.User{ID: 999}, Data: data, Message: tg.Message{Chat: tg.Chat{ID: 7}, MessageID: 1}}
+		r.HandleCallback(context.Background(), q)
+		if len(tgFake.answers) != 1 || !strings.Contains(tgFake.answers[0], "только у админа") || len(tgFake.edits) != 0 {
+			t.Errorf("%s: want отказ «только у админа» без правок, got answers=%q edits=%d", data, tgFake.answers, len(tgFake.edits))
+		}
+	}
+}
