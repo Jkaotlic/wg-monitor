@@ -455,3 +455,55 @@ func TestUpdateAgentConfigRefusesWhenWatchdogStateUnreadable(t *testing.T) {
 		t.Error("нечитаемая запись: want отказ")
 	}
 }
+
+// writeWatchdogBrokenConfig: enabled: true, но endpoint -- маска из
+// agent_config_get, а не настоящий адрес. LoadConfig такой блок не запустит
+// (dnsWatchdogConfigProblem), значит "was on" по одному только файловому
+// enabled -- ложь: сторож не бежит, некому чистить грязную запись.
+func writeWatchdogBrokenConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	block := "\ndns_watchdog:\n  enabled: true\n  endpoint: https://dns.example.com/***\n"
+	if err := os.WriteFile(path, []byte(sampleAgentConfig+block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Файл говорит enabled: true, но эндпойнт -- маска: LoadConfig такой блок
+// глушит сам, сторож не бежит. "Выключить" отражает реальность и не должно
+// упираться в отказ про "запасные" -- там некому было их держать.
+func TestUpdateAgentConfigAllowsDisablingWatchdogThatConfigLoaderWouldReject(t *testing.T) {
+	stubRestart(t)
+	fallback := writeWatchdogState(t, `{"mode":"fallback"}`)
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": false}, writeWatchdogBrokenConfig(t), fallback); err != nil {
+		t.Errorf("сломанный конфиг, выключение: want успех, got %v", err)
+	}
+}
+
+// Та же сломанная запись -- операторский путь наружу это не выключение, а
+// починка эндпойнта. Она тоже не должна упираться в отказ про "запасные".
+func TestUpdateAgentConfigAllowsFixingEndpointOfWatchdogThatConfigLoaderWouldReject(t *testing.T) {
+	stubRestart(t)
+	fallback := writeWatchdogState(t, `{"mode":"fallback"}`)
+	args := map[string]any{"dns_watchdog_endpoint": "https://dns2.example.com/new-secret-path"}
+	if _, err := UpdateAgentConfig(context.Background(), args, writeWatchdogBrokenConfig(t), fallback); err != nil {
+		t.Errorf("сломанный конфиг, починка endpoint: want успех, got %v", err)
+	}
+}
+
+// Настоящий endpoint в файле хранится с YAML-кавычками и пробелами по краям
+// ("  https://...  ") -- LoadConfig их обрезает перед проверкой, значит и
+// пост-проверка, и "was on" обязаны сравнивать по обрезанному значению, иначе
+// рабочий сторож ошибочно сочтут нерабочим или наоборот.
+func TestUpdateAgentConfigTrimsWatchdogEndpointBeforeChecks(t *testing.T) {
+	stubRestart(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	block := "\ndns_watchdog:\n  enabled: true\n  endpoint: \"  https://dns.example.com/secret-path/dns-query  \"\n"
+	if err := os.WriteFile(path, []byte(sampleAgentConfig+block), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"interval_sec": 90}, path, ""); err != nil {
+		t.Errorf("несвязанная правка при обрезаемом endpoint: want успех, got %v", err)
+	}
+}

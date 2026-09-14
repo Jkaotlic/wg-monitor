@@ -183,7 +183,7 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watch
 	// LoadConfig switches such a block off and only logs its ConfigError, so a
 	// restart into it would quietly leave the watchdog disabled. Refuse it
 	// here, where the command result reaches the dashboard.
-	if check.DNSWatchdog.Enabled && dnswatchcfg.ValidateEndpoint(check.DNSWatchdog.Endpoint) != nil {
+	if check.DNSWatchdog.Enabled && dnswatchcfg.ValidateEndpoint(strings.TrimSpace(check.DNSWatchdog.Endpoint)) != nil {
 		return "", fmt.Errorf("update_agent_config: dns_watchdog_enabled needs dns_watchdog_endpoint (https://…) set first")
 	}
 	if err := refuseStrandingWatchdog(before, check, watchdogStatePath); err != nil {
@@ -208,7 +208,14 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watch
 // The agent does not undo DNS itself (the own resolver may be the dead one):
 // it refuses, and says when it can be done.
 func refuseStrandingWatchdog(before, after agentConfigFile, statePath string) error {
-	wasOn := before.DNSWatchdog.Enabled
+	// A file that says enabled: true does not mean the watchdog runs: LoadConfig
+	// (dnsWatchdogConfigProblem) switches an unusable block off on load and only
+	// logs it. "Was on" has to mirror exactly what LoadConfig checks, or a
+	// config LoadConfig would already refuse locks every edit here forever.
+	wasOn := before.DNSWatchdog.Enabled &&
+		dnswatchcfg.ValidateEndpoint(strings.TrimSpace(before.DNSWatchdog.Endpoint)) == nil &&
+		dnswatchcfg.ValidateBootstrapIP(before.DNSWatchdog.BootstrapIP) == nil &&
+		dnswatchcfg.ValidateCanary(before.DNSWatchdog.CanaryDomain) == nil
 	turnsOff := wasOn && !after.DNSWatchdog.Enabled
 	moves := wasOn && after.DNSWatchdog.Enabled &&
 		strings.TrimSpace(before.DNSWatchdog.Endpoint) != strings.TrimSpace(after.DNSWatchdog.Endpoint)
