@@ -331,6 +331,9 @@ export function commandOutcomeLabel(action, result) {
     }
     default:
       if (action === 'tunnel_restart') return 'VPN-туннель перезапущен'
+      // Частичный сброс DNS -- не «готово»: часть команд роутер не принял,
+      // и что именно осталось, показывает экран сброса.
+      if (action === 'dns_reset' && result.status === 'partial') return 'Сброс DNS прошёл не целиком — подробности на экране'
       return routeOutcomeLabel(action, result.output) || 'Готово'
   }
 }
