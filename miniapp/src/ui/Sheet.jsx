@@ -2,6 +2,7 @@ import { useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
+import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
 
 // Нижний шит -- единственное место, где приложение спрашивает "точно?" и
@@ -12,7 +13,7 @@ import { Q, Quoted } from './Q.jsx'
 // и обещать быстрый ответ было бы враньём -- поэтому и текст другой, и
 // дедлайн ожидания шире.
 export function Sheet({ sheet, asleep, onClose }) {
-  const { busy, result, error, run } = useCommand(sheet.routerID)
+  const { busy, result, error, errorCode, sleepNote, run } = useCommand(sheet.routerID)
   // Локальное действие (sheet.perform) выполняет сам бэкенд, а не роутер:
   // ходу выполнения там неоткуда взяться, поэтому фаза остаётся «спросить»,
   // а кнопка на время запроса гаснет.
@@ -41,7 +42,10 @@ export function Sheet({ sheet, asleep, onClose }) {
         .finally(() => setLocalBusy(false))
       return
     }
-    run(sheet.action, sheet.args, { deadlineMs: asleep ? 6 * 60_000 : 90_000 }).then((res) => {
+    // Набранное имя уходит серверу: для прошивки и перезагрузки он сверяет
+    // его сам, и проверка на экране -- только пауза для человека.
+    const confirm = sheet.confirmPhrase ? typed : ''
+    run(sheet.action, sheet.args, { deadlineMs: commandDeadlineMs(sheet.action, asleep), confirm }).then((res) => {
       // onResult -- любой исход, для экранов, которым нужен сам ответ роутера
       // (сброс DNS: путь снимка, частичный успех). onDone -- только успех.
       if (res && sheet.onResult) sheet.onResult(res)
@@ -68,14 +72,14 @@ export function Sheet({ sheet, asleep, onClose }) {
         {phase === 'confirm' && (
           <>
             {asleep && !local && (
-              <p class="sheet-note">Роутер сейчас не на связи. Команда выполнится, когда он проснётся.</p>
+              <p class="sheet-note">Роутер сейчас не на связи. Команда подождёт его несколько минут и отменится, если он не проснётся.</p>
             )}
             {/* Локальное действие роутеру не уходит -- показывать имя команды
                 нечего, и строка «команда: undefined» была бы враньём. */}
             {!local && (
               <div class="sheet-command">
                 <span class="sheet-command-label">команда</span>
-                <span class="sheet-command-value">{sheet.action}</span>
+                <span class="sheet-command-value">{sheet.commandLabel || sheet.action}</span>
               </div>
             )}
             {localError && <p class="state state-error">{localError}</p>}
@@ -108,19 +112,22 @@ export function Sheet({ sheet, asleep, onClose }) {
         )}
 
         {phase === 'running' && (
-          <div class="sheet-running">
-            <svg class="spin" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
-              <circle cx="10" cy="10" r="8" opacity="0.2" />
-              <path d="M 10 2 a 8 8 0 0 1 8 8" />
-            </svg>
-            <span>выполняем на роутере…</span>
-          </div>
+          <>
+            <div class="sheet-running">
+              <svg class="spin" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+                <circle cx="10" cy="10" r="8" opacity="0.2" />
+                <path d="M 10 2 a 8 8 0 0 1 8 8" />
+              </svg>
+              <span>выполняем на роутере…</span>
+            </div>
+            {sleepNote && <p class="sheet-note">{sleepNote}</p>}
+          </>
         )}
 
         {phase === 'done' && (
           <div class="sheet-result">
             <p class={`state${result.status === 'ok' ? '' : ' state-error'}`}>
-              <Quoted text={commandOutcomeLabel(sheet.action, result)} />
+              <Quoted text={maintenanceOutcomeLabel(sheet.action, result, sheet.args) || commandOutcomeLabel(sheet.action, result)} />
             </p>
             <button type="button" class="btn btn-primary" onClick={onClose}>Закрыть</button>
           </div>
@@ -128,7 +135,7 @@ export function Sheet({ sheet, asleep, onClose }) {
 
         {phase === 'error' && (
           <div class="sheet-result">
-            <p class="state state-error">{error}</p>
+            <p class="state state-error">{commandErrorText(errorCode) || error}</p>
             <button type="button" class="btn btn-primary" onClick={onClose}>Закрыть</button>
           </div>
         )}

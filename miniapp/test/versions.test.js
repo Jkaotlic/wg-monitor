@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { versionsRows, unknownLine, installedRows, rebootLine } from '../src/versions.js'
+import { versionsRows, unknownLine, installedRows } from '../src/versions.js'
 
 // Ответ /routers/{id}/versions: снимок, новости и -- отдельно -- причины
 // незнания. Живые числа сняты с рабочего роутера 12.09.2026.
@@ -135,17 +135,6 @@ describe('installedRows', () => {
     const kmod = rows.find((r) => r.key === 'kmod')
     expect(kmod.value).toBe('сведений нет')
     expect(kmod.valueSub ?? '').not.toContain('не загружен')
-  })
-})
-
-describe('rebootLine', () => {
-  it('отдаёт предупреждение сервера как есть', () => {
-    expect(rebootLine({ reboot_hint: 'После обновления панели сменился модуль ядра AmneziaWG.' })).toContain('модуль ядра')
-  })
-
-  it('без повода молчит', () => {
-    expect(rebootLine({})).toBe('')
-    expect(rebootLine(null)).toBe('')
   })
 })
 
