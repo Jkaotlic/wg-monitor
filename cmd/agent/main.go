@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +19,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/agent/awgmgr"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/checks"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/cmdloop"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
 	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -82,16 +85,7 @@ func main() {
 	}
 
 	// Single-Check probes
-	singleChecks := []checks.Check{
-		checks.AwgManagerCheck{Client: awgClient},
-		checks.HydraRouteCheck{Client: awgClient},
-		buildDNSCheck(cfg, awgClient, logger),
-	}
-	if cfg.ExternalReach.Enabled {
-		if er := buildExternalReachCheck(cfg, awgClient, logger); er != nil {
-			singleChecks = append(singleChecks, er)
-		}
-	}
+	singleChecks := buildSingleChecks(cfg, awgClient, logger)
 	// DNS watchdog (opt-in per router): the loop runs in its own goroutine
 	// below; resolver_guard only reports its snapshot.
 	dnsWatchdog, resolverGuard := buildDNSWatchdog(cfg, actions.DefaultExec, logger)
@@ -221,6 +215,92 @@ func buildDNSWatchdog(cfg *agent.Config, exec actions.ExecFunc, logger *slog.Log
 	}
 	w := dnswatch.New(dnsWatchdogConfig(cfg), dnswatch.Deps{Exec: exec, Logger: logger})
 	return w, dnswatch.Check{Source: w}
+}
+
+// buildSingleChecks собирает одиночные проверки отчёта. Вынесено из main, чтобы
+// регистрацию каждой можно было проверить тестом: удалённая строка иначе
+// компилируется и молчит.
+func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) []checks.Check {
+	list := []checks.Check{
+		checks.AwgManagerCheck{Client: awgClient},
+		checks.HydraRouteCheck{Client: awgClient},
+		buildDNSCheck(cfg, awgClient, logger),
+		// По указателю: вердикт кешируется в самой проверке.
+		buildDNSSplitCheck(awgClient),
+	}
+	if cfg.ExternalReach.Enabled {
+		if er := buildExternalReachCheck(cfg, awgClient, logger); er != nil {
+			list = append(list, er)
+		}
+	}
+	return list
+}
+
+// dnsSplitInterval -- как часто пересчитывать вердикт раздельного DNS. Агент
+// отчитывается куда чаще, и десяток запросов в минуту на роутер был бы новым
+// постоянным фоном по всему парку.
+const dnsSplitInterval = 10 * time.Minute
+
+// buildDNSSplitCheck собирает читающую проверку раздельного DNS целиком из
+// эталона dnsref. Спрашиваются только зоны, у которых есть своя канарейка.
+func buildDNSSplitCheck(awgClient *awgmgr.Client) *checks.DNSSplit {
+	canaries := dnsref.ZoneCanaries()
+	var zones []string
+	for _, z := range dnsref.RUZones() {
+		if canaries[z] != "" {
+			zones = append(zones, z)
+		}
+	}
+	return &checks.DNSSplit{
+		Zones:        zones,
+		ZoneCanaries: canaries,
+		YandexHost:   dnsref.YandexDoTHost(),
+		Foreign:      dnsref.ForeignResolverIPs(),
+		Resolve:      resolveVia,
+		RouteLookup: dnsSplitRouteLookup(func(ctx context.Context, host string) (string, error) {
+			return actions.RouteLookup(ctx, awgClient, host)
+		}),
+		PerProbeTimeout: 2 * time.Second,
+		MinInterval:     dnsSplitInterval,
+	}
+}
+
+// dnsSplitRouteLookup превращает JSON-ответ route_lookup в структуру. Второго
+// инструмента маршрута не заводим: спрашиваем тот же, что и кнопка
+// «Куда пойдёт сайт».
+func dnsSplitRouteLookup(raw func(ctx context.Context, host string) (string, error)) func(context.Context, string) (wire.RouteLookupResult, error) {
+	return func(ctx context.Context, host string) (wire.RouteLookupResult, error) {
+		out, err := raw(ctx, host)
+		if err != nil {
+			return wire.RouteLookupResult{}, err
+		}
+		var res wire.RouteLookupResult
+		if err := json.Unmarshal([]byte(out), &res); err != nil {
+			return wire.RouteLookupResult{}, err
+		}
+		return res, nil
+	}
+}
+
+// resolveVia спрашивает имя у конкретного DNS-сервера обычным запросом.
+func resolveVia(ctx context.Context, server, name string) ([]string, error) {
+	addr := dnsServerAddr(server)
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, addr)
+		},
+	}
+	return r.LookupHost(ctx, name)
+}
+
+// dnsServerAddr дописывает 53-й порт туда, где его нет.
+func dnsServerAddr(server string) string {
+	if _, _, err := net.SplitHostPort(server); err == nil {
+		return server
+	}
+	return net.JoinHostPort(server, "53")
 }
 
 func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Logger) checks.Check {

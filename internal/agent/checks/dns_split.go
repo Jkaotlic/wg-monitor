@@ -43,8 +43,10 @@ type DNSSplit struct {
 	// можно было прогнать без сети.
 	Resolve func(ctx context.Context, server, name string) ([]string, error)
 	// RouteLookup -- «куда пойдёт хост»: берётся у actions.RouteLookup, второго
-	// такого инструмента писать нельзя. nil или ошибка -> «неизвестно».
-	RouteLookup func(ctx context.Context, host string) (string, error)
+	// такого инструмента писать нельзя. nil или ошибка -> «неизвестно». Ответ
+	// целиком, а не один вердикт: экрану нужно имя туннеля, чтобы назвать
+	// последствие.
+	RouteLookup func(ctx context.Context, host string) (wire.RouteLookupResult, error)
 
 	PerProbeTimeout time.Duration
 	// MinInterval -- как часто пересчитывать вердикт. 0 -- считать каждый раз
@@ -90,7 +92,7 @@ func (c *DNSSplit) Run(ctx context.Context, _ Deps) wire.Check {
 		}
 		zones[z] = v
 	}
-	route := c.routeVerdict(ctx)
+	route, tunnel := c.routeVerdict(ctx)
 	if route == "unknown" {
 		anyUnknown = true
 	}
@@ -99,6 +101,9 @@ func (c *DNSSplit) Run(ctx context.Context, _ Deps) wire.Check {
 		"zones":      zones,
 		"route":      route,
 		"checked_at": now.UTC().Format(time.RFC3339),
+	}
+	if route == wire.LookupViaTunnel && tunnel != "" {
+		details["route_tunnel"] = tunnel
 	}
 
 	hold := c.MinInterval
@@ -169,18 +174,23 @@ func (c *DNSSplit) zoneVerdict(ctx context.Context, zone string) string {
 
 // routeVerdict спрашивает, как идёт трафик до самого резолвера Яндекса: мимо
 // туннеля или через него. Свойство «мимо VPN» -- половина требования оператора,
-// вторая половина (транспорт DoT) видна проверке dns.
-func (c *DNSSplit) routeVerdict(ctx context.Context) string {
+// вторая половина (транспорт DoT) видна проверке dns. Второе значение -- имя
+// туннеля, когда путь идёт через него.
+func (c *DNSSplit) routeVerdict(ctx context.Context) (verdict, tunnel string) {
 	if c.RouteLookup == nil || c.YandexHost == "" {
-		return "unknown"
+		return "unknown", ""
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.probeTimeout())
 	defer cancel()
-	verdict, err := c.RouteLookup(ctx, c.YandexHost)
-	if err != nil || verdict == "" {
-		return "unknown"
+	res, err := c.RouteLookup(ctx, c.YandexHost)
+	if err != nil || res.Verdict == "" {
+		return "unknown", ""
 	}
-	return verdict
+	name := res.TunnelName
+	if name == "" {
+		name = res.TunnelID
+	}
+	return res.Verdict, name
 }
 
 func (c *DNSSplit) probe(ctx context.Context, server, name string) []string {

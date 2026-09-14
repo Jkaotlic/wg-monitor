@@ -119,3 +119,50 @@ func TestPinnedZonesCarriedByOwnCandidate(t *testing.T) {
 		t.Fatal("закреплённым зонам нечем резолвиться")
 	}
 }
+
+// Канарейка зоны обязана лежать В ЭТОЙ зоне. Спросить tatar через ya.ru значило
+// бы выдать вердикт про ru за вердикт про tatar — уверенная неправда на экране.
+// Зона без канарейки в проверку не попадает вовсе.
+func TestZoneCanariesLiveInTheirZone(t *testing.T) {
+	canaries := dnsref.ZoneCanaries()
+	if len(canaries) == 0 {
+		t.Fatal("канареек нет — проверке раздельного DNS нечем спрашивать")
+	}
+	ru := map[string]bool{}
+	for _, z := range dnsref.RUZones() {
+		ru[z] = true
+	}
+	for zone, name := range canaries {
+		if !ru[zone] {
+			t.Errorf("канарейка для %q, а такой ру-зоны в эталоне нет", zone)
+		}
+		if !strings.HasSuffix(name, "."+zone) {
+			t.Errorf("канарейка зоны %q = %q: имя лежит в другой зоне", zone, name)
+		}
+	}
+	if canaries["ru"] == "" {
+		t.Error("у зоны ru нет канарейки — ради неё (банки, госуслуги) проверка и заводилась")
+	}
+	canaries["ru"] = "сломано"
+	if dnsref.ZoneCanaries()["ru"] == "сломано" {
+		t.Error("ZoneCanaries отдаёт общую карту — правка у вызывающего портит источник")
+	}
+}
+
+// Заграничные адреса для обычных проб выводятся из заграничной части эталона, а
+// не живут третьим списком: сменили резолвер в эталоне — проверка спрашивает его.
+func TestForeignResolverIPsComeFromReference(t *testing.T) {
+	ips := dnsref.ForeignResolverIPs()
+	if len(ips) == 0 {
+		t.Fatal("заграничных адресов нет")
+	}
+	lines := strings.Join(dnsref.ReferenceDoTLines(), "\n")
+	for _, ip := range ips {
+		if !strings.Contains(lines, "tls upstream "+ip+" ") {
+			t.Errorf("адрес %q не из эталона ручного сброса", ip)
+		}
+		if strings.ContainsAny(ip, " /:") {
+			t.Errorf("адрес %q не голый IP", ip)
+		}
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // Проверка dns_split -- ЧИТАЮЩАЯ. Она не умеет FAIL вовсе: тревоги про DNS
@@ -108,7 +110,7 @@ func TestDNSSplit_LocalMatchingForeignReadsAsForeign(t *testing.T) {
 // Маршрут до самого резолвера Яндекса берётся у route_lookup -- второго такого
 // инструмента писать нельзя. Его неудача -- «неизвестно», а не выдумка.
 func TestDNSSplit_RouteComesFromRouteLookupAndDegradesToUnknown(t *testing.T) {
-	base := func(rl func(context.Context, string) (string, error)) *DNSSplit {
+	base := func(rl func(context.Context, string) (wire.RouteLookupResult, error)) *DNSSplit {
 		return &DNSSplit{
 			Zones:         []string{"ru"},
 			DefaultCanary: "canary.example.com",
@@ -120,16 +122,40 @@ func TestDNSSplit_RouteComesFromRouteLookupAndDegradesToUnknown(t *testing.T) {
 			RouteLookup: rl,
 		}
 	}
-	got := base(func(context.Context, string) (string, error) { return "direct", nil }).Run(context.Background(), Deps{})
+	got := base(func(context.Context, string) (wire.RouteLookupResult, error) {
+		return wire.RouteLookupResult{Verdict: wire.LookupViaDirect}, nil
+	}).Run(context.Background(), Deps{})
 	if got.Details["route"] != "direct" {
 		t.Errorf("route = %v, хотим direct", got.Details["route"])
 	}
-	got = base(func(context.Context, string) (string, error) { return "", errors.New("нет данных") }).Run(context.Background(), Deps{})
+	if _, ok := got.Details["route_tunnel"]; ok {
+		t.Errorf("route_tunnel при direct = %v: имени туннеля у прямого пути нет", got.Details["route_tunnel"])
+	}
+	got = base(func(context.Context, string) (wire.RouteLookupResult, error) {
+		return wire.RouteLookupResult{}, errors.New("нет данных")
+	}).Run(context.Background(), Deps{})
 	if got.Details["route"] != "unknown" {
 		t.Errorf("route при ошибке = %v, хотим unknown", got.Details["route"])
 	}
 	got = base(nil).Run(context.Background(), Deps{})
 	if got.Details["route"] != "unknown" {
 		t.Errorf("route без инструмента = %v, хотим unknown", got.Details["route"])
+	}
+}
+
+// Экран обязан назвать последствие по имени: «через VPN-туннель «vpn-nl» --
+// банки увидят не российский адрес». Без имени туннеля человеку нечего искать
+// в своих правилах.
+func TestDNSSplit_TunnelRouteCarriesTunnelName(t *testing.T) {
+	c := &DNSSplit{
+		Zones:      []string{"ru"},
+		YandexHost: "common.dot.dns.yandex.net",
+		RouteLookup: func(context.Context, string) (wire.RouteLookupResult, error) {
+			return wire.RouteLookupResult{Verdict: wire.LookupViaTunnel, TunnelID: "awg3", TunnelName: "vpn-nl"}, nil
+		},
+	}
+	got := c.Run(context.Background(), Deps{})
+	if got.Details["route"] != "tunnel" || got.Details["route_tunnel"] != "vpn-nl" {
+		t.Errorf("route = %v, route_tunnel = %v; хотим tunnel и vpn-nl", got.Details["route"], got.Details["route_tunnel"])
 	}
 }
