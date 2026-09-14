@@ -175,6 +175,7 @@ CREATE TABLE IF NOT EXISTS router_versions (
     kmod_version        TEXT      NOT NULL DEFAULT '',
     kmod_model          TEXT      NOT NULL DEFAULT '',
     kmod_loaded         INTEGER,                          -- NULL = старый агент не сообщает
+    kmod_loaded_version TEXT      NOT NULL DEFAULT '',    -- загруженная в ядро версия модуля; расходится с kmod_version -- нужна перезагрузка
     prev_awgmgr_version TEXT      NOT NULL DEFAULT '',    -- «было» для предупреждения о перезагрузке
     prev_kmod_version   TEXT      NOT NULL DEFAULT '',
     changed_at          TIMESTAMP,                        -- когда версия панели или модуля менялась

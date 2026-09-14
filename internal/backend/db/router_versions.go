@@ -29,7 +29,10 @@ type RouterVersionSnapshot struct {
 	KmodVersion     string
 	KmodModel       string
 	KmodLoaded      *bool
-	Source          string // "report" | "version_audit"
+	// KmodLoadedVersion -- версия модуля, которую держит ядро. Пусто -- источник
+	// её не принёс (старый агент или version_audit), и Upsert оставит известное.
+	KmodLoadedVersion string
+	Source            string // "report" | "version_audit"
 }
 
 // RouterVersionRow -- снимок вместе с историей: «было» и когда менялось.
@@ -51,7 +54,8 @@ func (d *DB) RouterVersions() *RouterVersionsRepo { return &RouterVersionsRepo{d
 const routerVersionsColumns = `user_id, awgmgr_version, awgmgr_backend, hrneo_version, hrneo_installed,
 	       firmware_current, firmware_avail, firmware_channel, keenetic_os,
 	       kmod_version, kmod_model, kmod_loaded,
-	       prev_awgmgr_version, prev_kmod_version, changed_at, source, updated_at`
+	       prev_awgmgr_version, prev_kmod_version, changed_at, source, updated_at,
+	       kmod_loaded_version`
 
 // Upsert записывает то, что узнал источник, и сам двигает историю.
 //
@@ -68,7 +72,7 @@ func (r *RouterVersionsRepo) Upsert(userID int64, s RouterVersionSnapshot) error
 	now := time.Now().UTC()
 	_, err := r.d.db.Exec(`
 INSERT INTO router_versions (`+routerVersionsColumns+`)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', NULL, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', NULL, ?, ?, ?)
 ON CONFLICT(user_id) DO UPDATE SET
   awgmgr_version   = CASE WHEN excluded.awgmgr_version   = '' THEN router_versions.awgmgr_version   ELSE excluded.awgmgr_version   END,
   awgmgr_backend   = CASE WHEN excluded.awgmgr_backend   = '' THEN router_versions.awgmgr_backend   ELSE excluded.awgmgr_backend   END,
@@ -81,6 +85,7 @@ ON CONFLICT(user_id) DO UPDATE SET
   kmod_version     = CASE WHEN excluded.kmod_version     = '' THEN router_versions.kmod_version     ELSE excluded.kmod_version     END,
   kmod_model       = CASE WHEN excluded.kmod_model       = '' THEN router_versions.kmod_model       ELSE excluded.kmod_model       END,
   kmod_loaded      = CASE WHEN excluded.kmod_loaded    IS NULL THEN router_versions.kmod_loaded      ELSE excluded.kmod_loaded      END,
+  kmod_loaded_version = CASE WHEN excluded.kmod_loaded_version = '' THEN router_versions.kmod_loaded_version ELSE excluded.kmod_loaded_version END,
   prev_awgmgr_version = CASE
       WHEN excluded.awgmgr_version <> '' AND router_versions.awgmgr_version <> ''
        AND excluded.awgmgr_version <> router_versions.awgmgr_version
@@ -100,7 +105,7 @@ ON CONFLICT(user_id) DO UPDATE SET
 		userID, s.AwgmgrVersion, s.AwgmgrBackend, s.HrneoVersion, versionBoolArg(s.HrneoInstalled),
 		s.FirmwareCurrent, s.FirmwareAvail, s.FirmwareChannel, s.KeeneticOS,
 		s.KmodVersion, s.KmodModel, versionBoolArg(s.KmodLoaded),
-		s.Source, now)
+		s.Source, now, s.KmodLoadedVersion)
 	return err
 }
 
@@ -152,7 +157,8 @@ func scanRouterVersionRow(scan func(...any) error) (RouterVersionRow, int64, err
 	err := scan(&userID, &out.AwgmgrVersion, &out.AwgmgrBackend, &out.HrneoVersion, &hrneoInst,
 		&out.FirmwareCurrent, &out.FirmwareAvail, &out.FirmwareChannel, &out.KeeneticOS,
 		&out.KmodVersion, &out.KmodModel, &kmodLoaded,
-		&prevAwgmgr, &prevKmodVer, &changedAt, &out.Source, &out.UpdatedAt)
+		&prevAwgmgr, &prevKmodVer, &changedAt, &out.Source, &out.UpdatedAt,
+		&out.KmodLoadedVersion)
 	if err != nil {
 		return RouterVersionRow{}, 0, err
 	}

@@ -61,9 +61,8 @@ type miniappVersionsResp struct {
 	Rows      []miniappVersionRow       `json:"rows"`
 	Unknown   []miniappUnknownRow       `json:"unknown"`
 	Installed *miniappInstalledVersions `json:"installed,omitempty"`
-	// RebootHint -- предупреждение о перезагрузке. Пусто, если повода нет:
-	// право сказать «нужна перезагрузка» даёт только наблюдаемая смена модуля
-	// ядра между снимками, а не номер версии панели.
+	// RebootHint -- предупреждение о перезагрузке: установленная версия модуля
+	// ядра расходится с загруженной. Пусто -- повода нет.
 	RebootHint string `json:"reboot_hint,omitempty"`
 	// CheckedAt -- когда роутер в последний раз рассказал про версии. Без
 	// метки времени строка о версиях обещает больше, чем мы знаем; снимка нет
@@ -111,15 +110,16 @@ func newsKey(component, version string) string { return component + "\x00" + ver
 // памяти, и ему нужен тот же переход «снимок -> сравнение».
 func VersionAuditFromSnapshot(row db.RouterVersionRow) wire.VersionAudit {
 	return wire.VersionAudit{
-		AwgmgrVersion:   row.AwgmgrVersion,
-		AwgmgrBackend:   row.AwgmgrBackend,
-		HrneoVersion:    row.HrneoVersion,
-		HrneoInstalled:  row.HrneoInstalled,
-		FirmwareCurrent: row.FirmwareCurrent,
-		FirmwareAvail:   row.FirmwareAvail,
-		KmodVersion:     row.KmodVersion,
-		KmodModel:       row.KmodModel,
-		KmodLoaded:      row.KmodLoaded,
+		AwgmgrVersion:     row.AwgmgrVersion,
+		AwgmgrBackend:     row.AwgmgrBackend,
+		HrneoVersion:      row.HrneoVersion,
+		HrneoInstalled:    row.HrneoInstalled,
+		FirmwareCurrent:   row.FirmwareCurrent,
+		FirmwareAvail:     row.FirmwareAvail,
+		KmodVersion:       row.KmodVersion,
+		KmodModel:         row.KmodModel,
+		KmodLoaded:        row.KmodLoaded,
+		KmodLoadedVersion: row.KmodLoadedVersion,
 	}
 }
 
@@ -156,7 +156,7 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 // открытием экрана.
 func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, now time.Time) miniappVersionsResp {
 	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
-	rebootHint := upstream.RebootHint(row.PrevKmodVersion, row.KmodVersion)
+	rebootHint := upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion)
 
 	reminders := d.DB.UpdateReminders()
 	for _, u := range updates {
@@ -313,7 +313,7 @@ func miniappUpdateReminderHandler(d Deps) http.HandlerFunc {
 // обновлении молча исчезла бы.
 func miniappNewsVersion(r *http.Request, d Deps, component string, row db.RouterVersionRow) string {
 	if component == "kmod_reboot" {
-		if upstream.RebootHint(row.PrevKmodVersion, row.KmodVersion) == "" {
+		if upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion) == "" {
 			return ""
 		}
 		return row.KmodVersion

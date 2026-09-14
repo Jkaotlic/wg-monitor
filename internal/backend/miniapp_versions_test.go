@@ -207,16 +207,13 @@ func TestMiniappVersionsSaysAgentTooOldAboutKernelModule(t *testing.T) {
 	}
 }
 
-// Смена модуля ядра между снимками -- наблюдаемый факт, и только он даёт право
-// сказать «нужна перезагрузка».
-func TestMiniappVersionsWarnsAboutKernelModuleChange(t *testing.T) {
+// Модуль сменили, ядро держит старый -- экран говорит о перезагрузке; после
+// перезагрузки версии совпали, и предупреждение гаснет само, без нажатий.
+func TestMiniappVersionsRebootHintFollowsLoadedModule(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
 	seedLiveSnapshot(t, d, ownedID)
-	// Панель обновили, и модуль ядра сменился.
 	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
-		AwgmgrVersion: "2.19.0",
-		KmodVersion:   "3.2.20260930",
-		Source:        "report",
+		AwgmgrVersion: "2.19.1", KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.1.20260906", Source: "report",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +224,15 @@ func TestMiniappVersionsWarnsAboutKernelModuleChange(t *testing.T) {
 		if !strings.Contains(resp.RebootHint, want) {
 			t.Errorf("предупреждение не говорит про %q: %q", want, resp.RebootHint)
 		}
+	}
+
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.2.20260930", Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, after := getVersions(t, h, ownedID, telegramUserID); after.RebootHint != "" {
+		t.Errorf("после перезагрузки предупреждение не погасло: %q", after.RebootHint)
 	}
 }
 

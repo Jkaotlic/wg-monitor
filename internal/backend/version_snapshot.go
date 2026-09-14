@@ -21,13 +21,14 @@ import (
 // KmodLoaded — указатель: старый агент поля не присылает, и его молчание
 // обязано остаться «неизвестно», а не превратиться в «не загружен».
 type awgManagerCheckDetails struct {
-	Version       string `json:"version"`
-	Firmware      string `json:"firmware"`
-	KeeneticOS    string `json:"keenetic_os"`
-	ActiveBackend string `json:"active_backend"`
-	KmodVersion   string `json:"kernel_module_version"`
-	KmodModel     string `json:"kernel_module_model"`
-	KmodLoaded    *bool  `json:"kernel_module_loaded"`
+	Version           string `json:"version"`
+	Firmware          string `json:"firmware"`
+	KeeneticOS        string `json:"keenetic_os"`
+	ActiveBackend     string `json:"active_backend"`
+	KmodVersion       string `json:"kernel_module_version"`
+	KmodModel         string `json:"kernel_module_model"`
+	KmodLoaded        *bool  `json:"kernel_module_loaded"`
+	KmodLoadedVersion string `json:"kernel_module_loaded_version"`
 }
 
 // versionSnapshotFromReport собирает снимок из details проверки awg_manager.
@@ -48,14 +49,15 @@ func versionSnapshotFromReport(detailsJSON string) (db.RouterVersionSnapshot, bo
 		return db.RouterVersionSnapshot{}, false
 	}
 	return db.RouterVersionSnapshot{
-		AwgmgrVersion:   d.Version,
-		AwgmgrBackend:   d.ActiveBackend,
-		FirmwareCurrent: d.Firmware,
-		KeeneticOS:      d.KeeneticOS,
-		KmodVersion:     d.KmodVersion,
-		KmodModel:       d.KmodModel,
-		KmodLoaded:      d.KmodLoaded,
-		Source:          "report",
+		AwgmgrVersion:     d.Version,
+		AwgmgrBackend:     d.ActiveBackend,
+		FirmwareCurrent:   d.Firmware,
+		KeeneticOS:        d.KeeneticOS,
+		KmodVersion:       d.KmodVersion,
+		KmodModel:         d.KmodModel,
+		KmodLoaded:        d.KmodLoaded,
+		KmodLoadedVersion: d.KmodLoadedVersion,
+		Source:            "report",
 	}, true
 }
 
@@ -78,15 +80,16 @@ func versionSnapshotFromReport(detailsJSON string) (db.RouterVersionSnapshot, bo
 // разъехавшись, дали бы разные снимки на разных путях об одном роутере.
 func VersionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
 	return db.RouterVersionSnapshot{
-		AwgmgrVersion:   va.AwgmgrVersion,
-		AwgmgrBackend:   va.AwgmgrBackend,
-		HrneoVersion:    va.HrneoVersion,
-		HrneoInstalled:  va.HrneoInstalled,
-		FirmwareCurrent: va.FirmwareCurrent,
-		FirmwareAvail:   va.FirmwareAvail,
-		KmodVersion:     va.KmodVersion,
-		KmodModel:       va.KmodModel,
-		KmodLoaded:      va.KmodLoaded,
-		Source:          "version_audit",
+		AwgmgrVersion:     va.AwgmgrVersion,
+		AwgmgrBackend:     va.AwgmgrBackend,
+		HrneoVersion:      va.HrneoVersion,
+		HrneoInstalled:    va.HrneoInstalled,
+		FirmwareCurrent:   va.FirmwareCurrent,
+		FirmwareAvail:     va.FirmwareAvail,
+		KmodVersion:       va.KmodVersion,
+		KmodModel:         va.KmodModel,
+		KmodLoaded:        va.KmodLoaded,
+		KmodLoadedVersion: va.KmodLoadedVersion,
+		Source:            "version_audit",
 	}
 }

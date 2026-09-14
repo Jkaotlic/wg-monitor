@@ -143,31 +143,26 @@ func TestComputeUpdates_FirmwareComesFromRouterNotUpstream(t *testing.T) {
 	}
 }
 
-// п.6: право сказать «нужна перезагрузка» даёт наблюдаемая смена модуля ядра,
-// а не номер релиза панели.
-func TestRebootHint_OnlyOnKernelModuleChange(t *testing.T) {
-	got := RebootHint("1.0.0", "1.1.0")
-	if got == "" {
-		t.Fatal("смена модуля ядра обязана давать предупреждение")
+// Право сказать «нужна перезагрузка» даёт расхождение установленного и
+// загруженного модуля ядра -- без истории снимков, и гаснет оно само.
+func TestRebootHint_InstalledVersusLoaded(t *testing.T) {
+	got := RebootHint("3.2.20260930", "3.1.20260906")
+	if got != "Сменился модуль ядра AmneziaWG — VPN-туннели поднимутся после перезагрузки роутера." {
+		t.Fatalf("текст: %q", got)
 	}
-	for _, want := range []string{"модуль ядра", "VPN-туннели", "перезагрузки роутера"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("подсказка не говорит про %q: %s", want, got)
-		}
-	}
-	for _, forbidden := range []string{"NativeWG", "reboot", "plan a router"} {
+	for _, forbidden := range []string{"NativeWG", "reboot", "панели"} {
 		if strings.Contains(got, forbidden) {
-			t.Errorf("английский текст доехал до владельца: %s", got)
+			t.Errorf("в тексте %q: %s", forbidden, got)
 		}
 	}
-	if got := RebootHint("1.0.0", "1.0.0"); got != "" {
-		t.Errorf("без смены модуля предупреждения быть не должно: %q", got)
-	}
-	if got := RebootHint("", "1.0.0"); got != "" {
-		t.Errorf("первое знакомство с роутером -- не смена модуля: %q", got)
-	}
-	if got := RebootHint("1.0.0", ""); got != "" {
-		t.Errorf("замолчавший агент -- не смена модуля: %q", got)
+	for _, tc := range [][2]string{
+		{"3.1.20260906", "3.1.20260906"}, // совпадают -- перезагружен
+		{"", "3.1.20260906"},             // установленная неизвестна
+		{"3.1.20260906", ""},             // старый агент загруженную не сообщает
+	} {
+		if got := RebootHint(tc[0], tc[1]); got != "" {
+			t.Errorf("RebootHint(%q, %q) = %q, want пусто", tc[0], tc[1], got)
+		}
 	}
 }
 
