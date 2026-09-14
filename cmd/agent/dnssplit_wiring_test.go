@@ -142,6 +142,9 @@ func TestBuildRunner_WiresDNSResetGuards(t *testing.T) {
 	if r.ConfigPath != "/opt/etc/wg-monitor/config.yaml" {
 		t.Errorf("ConfigPath = %q: снимок «до» не ляжет рядом с конфигом", r.ConfigPath)
 	}
+	if r.DNSWatchdogStatePath != cfg.State.DNSWatchdogStatePath() {
+		t.Errorf("DNSWatchdogStatePath = %q, want %q: без него отказ выключения сторожа молчит", r.DNSWatchdogStatePath, cfg.State.DNSWatchdogStatePath())
+	}
 	if r.OwnResolverEndpoint != cfg.DNSWatchdog.Endpoint {
 		t.Errorf("OwnResolverEndpoint = %q: сброс снёс бы свой резолвер", r.OwnResolverEndpoint)
 	}

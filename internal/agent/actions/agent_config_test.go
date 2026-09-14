@@ -77,7 +77,7 @@ func TestUpdateAgentConfigPatchesAndPreservesRest(t *testing.T) {
 		"interval_sec":        float64(90),
 		"allow_router_reboot": false,
 		"awgm_login":          "admin", // key present only as a comment → must be added
-	}, path)
+	}, path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestUpdateAgentConfigIgnoresNonWhitelistedKeys(t *testing.T) {
 		"url":      "https://evil.example",
 		"token":    "stolen",
 		"nickname": "hacked",
-	}, path)
+	}, path, "")
 	if err == nil || !strings.Contains(err.Error(), "no recognized settings") {
 		t.Fatalf("err=%v, want no-recognized-settings", err)
 	}
@@ -173,7 +173,7 @@ func TestUpdateAgentConfigRejectsBadValues(t *testing.T) {
 			path := writeSampleConfig(t)
 			_ = stubRestart(t)
 			before, _ := os.ReadFile(path)
-			if _, err := UpdateAgentConfig(context.Background(), args, path); err == nil {
+			if _, err := UpdateAgentConfig(context.Background(), args, path, ""); err == nil {
 				t.Fatal("expected validation error")
 			}
 			after, _ := os.ReadFile(path)
@@ -207,7 +207,7 @@ func TestUpdateAgentConfigSetsDNSWatchdog(t *testing.T) {
 		"dns_watchdog_endpoint":      "https://dns.example.com/secret-path/dns-query",
 		"dns_watchdog_canary_domain": "example.org",
 		"dns_watchdog_bootstrap_ip":  "198.51.100.7",
-	}, path)
+	}, path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +315,7 @@ func TestUpdateAgentConfigRejectsBadWatchdogValues(t *testing.T) {
 			path := writeSampleConfig(t)
 			_ = stubRestart(t)
 			before, _ := os.ReadFile(path)
-			if _, err := UpdateAgentConfig(context.Background(), args, path); err == nil {
+			if _, err := UpdateAgentConfig(context.Background(), args, path, ""); err == nil {
 				t.Fatal("expected validation error")
 			}
 			after, _ := os.ReadFile(path)
@@ -334,7 +334,7 @@ func TestUpdateAgentConfigRefusesWatchdogWithoutEndpoint(t *testing.T) {
 	path := writeSampleConfig(t)
 	restarted := stubRestart(t)
 	before, _ := os.ReadFile(path)
-	_, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": true}, path)
+	_, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": true}, path, "")
 	if err == nil || !strings.Contains(err.Error(), "dns_watchdog_endpoint") {
 		t.Fatalf("err=%v, want refusal naming dns_watchdog_endpoint", err)
 	}
@@ -352,7 +352,7 @@ func TestUpdateAgentConfigRefusesWatchdogWithoutEndpoint(t *testing.T) {
 func TestUpdateAgentConfigClearsWatchdogBootstrapIP(t *testing.T) {
 	path := writeSampleConfig(t)
 	_ = stubRestart(t)
-	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_bootstrap_ip": ""}, path); err != nil {
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_bootstrap_ip": ""}, path, ""); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -365,7 +365,7 @@ func TestUpdateAgentConfigResultMasksWatchdogEndpoint(t *testing.T) {
 	_ = stubRestart(t)
 	msg, err := UpdateAgentConfig(context.Background(), map[string]any{
 		"dns_watchdog_endpoint": "https://dns.example.com/secret-path/dns-query",
-	}, path)
+	}, path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,5 +378,80 @@ func TestUpdateAgentConfigResultMasksWatchdogEndpoint(t *testing.T) {
 	raw, _ := os.ReadFile(path)
 	if !strings.Contains(string(raw), "https://dns.example.com/secret-path/dns-query") {
 		t.Fatalf("the real endpoint must still be written to config:\n%s", raw)
+	}
+}
+
+const watchdogOnBlock = `
+dns_watchdog:
+  enabled: true
+  endpoint: https://dns.example.com/secret-path/dns-query
+`
+
+func writeWatchdogOnConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(sampleAgentConfig+watchdogOnBlock), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeWatchdogState(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "dns-watchdog-state.json")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// Сторож держит роутер на запасных: переключение живёт только в текущей
+// конфигурации, и выключенный сторож оставил бы роутер там до перезагрузки,
+// а смена endpoint сделала бы свою строку неузнаваемой. Агент отказывает,
+// конфиг не трогает и не перезапускается.
+func TestUpdateAgentConfigRefusesToDropAHoldingWatchdog(t *testing.T) {
+	for _, state := range []string{`{"mode":"fallback"}`, `{"mode":"primary","pending":"return"}`, `{"mode":"primary","leftover":["x"]}`} {
+		for name, args := range map[string]map[string]any{
+			"выключение":     {"dns_watchdog_enabled": false},
+			"смена endpoint": {"dns_watchdog_endpoint": "https://dns2.example.com/other-path"},
+		} {
+			path := writeWatchdogOnConfig(t)
+			before, _ := os.ReadFile(path)
+			restarted := stubRestart(t)
+			_, err := UpdateAgentConfig(context.Background(), args, path, writeWatchdogState(t, state))
+			if err == nil || !strings.Contains(err.Error(), "запасных") {
+				t.Errorf("%s при %s: want отказ со словом «запасных», got %v", name, state, err)
+			}
+			after, _ := os.ReadFile(path)
+			if string(after) != string(before) || *restarted {
+				t.Errorf("%s при %s: конфиг изменён или агент перезапущен", name, state)
+			}
+		}
+	}
+}
+
+// Чистая запись или её отсутствие -- выключать можно. Включение и смена
+// canary при грязной записи не запрещаются: они ничего не подвешивают.
+func TestUpdateAgentConfigAllowsSafeWatchdogEdits(t *testing.T) {
+	stubRestart(t)
+	clean := writeWatchdogState(t, `{"mode":"primary"}`)
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": false}, writeWatchdogOnConfig(t), clean); err != nil {
+		t.Errorf("чистая запись: %v", err)
+	}
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": false}, writeWatchdogOnConfig(t), ""); err != nil {
+		t.Errorf("без записи: %v", err)
+	}
+	dirty := writeWatchdogState(t, `{"mode":"fallback"}`)
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_canary_domain": "example.org"}, writeWatchdogOnConfig(t), dirty); err != nil {
+		t.Errorf("canary при fallback: %v", err)
+	}
+}
+
+// Запись есть, но не читается (права, каталог вместо файла) -- при сомнении
+// запрещаем.
+func TestUpdateAgentConfigRefusesWhenWatchdogStateUnreadable(t *testing.T) {
+	stubRestart(t)
+	if _, err := UpdateAgentConfig(context.Background(), map[string]any{"dns_watchdog_enabled": false}, writeWatchdogOnConfig(t), t.TempDir()); err == nil {
+		t.Error("нечитаемая запись: want отказ")
 	}
 }

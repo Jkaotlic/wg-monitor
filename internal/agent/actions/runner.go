@@ -73,6 +73,9 @@ type Runner struct {
 	// ConfigPath is the path to the agent's config.yaml. Required for
 	// update_backend_url to rewrite the URL in-place.
 	ConfigPath string
+	// DNSWatchdogStatePath is dns-watchdog-state.json. update_agent_config
+	// reads it to refuse switching off a watchdog that holds the router.
+	DNSWatchdogStatePath string
 	// BackendURL is the trusted command-plane origin from the agent config.
 	// self_update may use its same-origin /v1/releases/download mirror.
 	BackendURL string
@@ -958,7 +961,7 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		return "ok", out, payload
 	case "update_agent_config":
-		out, err := UpdateAgentConfig(ctx, cmd.Args, r.ConfigPath)
+		out, err := UpdateAgentConfig(ctx, cmd.Args, r.ConfigPath, r.DNSWatchdogStatePath)
 		if err != nil {
 			return "err", err.Error(), payload
 		}

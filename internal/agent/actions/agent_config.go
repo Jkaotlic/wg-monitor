@@ -137,7 +137,7 @@ type agentConfigChange struct {
 // config.yaml (preserving comments and untouched keys via the yaml.Node API),
 // then schedules an agent restart so the new values take effect. Only keys the
 // operator actually set are touched — a partial patch, never a full rewrite.
-func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string) (string, error) {
+func UpdateAgentConfig(_ context.Context, args map[string]any, configPath, watchdogStatePath string) (string, error) {
 	if configPath == "" {
 		return "", fmt.Errorf("update_agent_config: config path not set on runner")
 	}
@@ -156,6 +156,8 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		return "", fmt.Errorf("update_agent_config: parse config: %w", err)
 	}
+	var before agentConfigFile
+	_ = yaml.Unmarshal(raw, &before) // doc already parsed: the same bytes
 	applied := make([]string, 0, len(changes))
 	for _, ch := range changes {
 		if err := setConfigValue(&doc, ch.section, ch.key, ch.value, ch.tag); err != nil {
@@ -184,6 +186,9 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 	if check.DNSWatchdog.Enabled && dnswatchcfg.ValidateEndpoint(check.DNSWatchdog.Endpoint) != nil {
 		return "", fmt.Errorf("update_agent_config: dns_watchdog_enabled needs dns_watchdog_endpoint (https://…) set first")
 	}
+	if err := refuseStrandingWatchdog(before, check, watchdogStatePath); err != nil {
+		return "", err
+	}
 	tmp := configPath + ".tmp"
 	if err := os.WriteFile(tmp, out, 0600); err != nil {
 		return "", fmt.Errorf("update_agent_config: write temp: %w", err)
@@ -194,6 +199,30 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 	}
 	scheduleURLUpdateRestart()
 	return "config updated (" + strings.Join(applied, ", ") + "); restarting agent", nil
+}
+
+// refuseStrandingWatchdog: the watchdog's switches live only in the router's
+// running config. Switched off while it holds the router — on the fallback
+// resolvers, mid-switch or with its lines unsettled — it would leave the router
+// there until a reboot; a new endpoint would make its own line unrecognisable.
+// The agent does not undo DNS itself (the own resolver may be the dead one):
+// it refuses, and says when it can be done.
+func refuseStrandingWatchdog(before, after agentConfigFile, statePath string) error {
+	wasOn := before.DNSWatchdog.Enabled
+	turnsOff := wasOn && !after.DNSWatchdog.Enabled
+	moves := wasOn && after.DNSWatchdog.Enabled &&
+		strings.TrimSpace(before.DNSWatchdog.Endpoint) != strings.TrimSpace(after.DNSWatchdog.Endpoint)
+	if !turnsOff && !moves {
+		return nil
+	}
+	hold, err := dnswatchcfg.Hold(statePath)
+	if err != nil {
+		return fmt.Errorf("update_agent_config: не удалось прочитать состояние сторожа DNS, поэтому выключать его или менять сервер небезопасно: %v", err)
+	}
+	if hold == "" {
+		return nil
+	}
+	return fmt.Errorf("update_agent_config: сторож DNS сейчас держит роутер на запасных DNS-серверах или не закончил уборку после них. Выключить его или сменить сервер можно, когда он вернётся на свой сервер, или после перезагрузки роутера")
 }
 
 func normalizeAgentConfigChanges(args map[string]any) ([]agentConfigChange, error) {
