@@ -1555,7 +1555,7 @@ func TestCmdResult_OpkgResultRelaysThroughTGNotifier(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01"
-	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	d.Users().Insert("vasya", tok, "198.51.100.21", "awg0")
 
 	rc := &relayCapture{}
 	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "opkg_upgrade", ChatID: 1, MessageID: 2}}

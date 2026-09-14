@@ -78,7 +78,7 @@ type Args struct {
 	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
 	// "awaken_confirm" | "awaken_do" | "close".
 	PanelScreen string
-	// PanelKind is the panel type ("maint" | "routes" | "tunnels" | "status")
+	// PanelKind is the panel type ("routes" | "tunnels" | "status")
 	// for the "kind" and "push" screens.
 	PanelKind string
 	// AccessScreen identifies the access:* admin-panel screen for callbacks

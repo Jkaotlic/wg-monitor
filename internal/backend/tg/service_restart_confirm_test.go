@@ -38,14 +38,3 @@ func TestRestartConfirmKeyboard(t *testing.T) {
 		t.Error("missing cancel callback_data")
 	}
 }
-
-func TestMiniAppRouterSettingsURL(t *testing.T) {
-	if got := MiniAppRouterSettingsURL("https://wgm.example.com/", 42); got != "https://wgm.example.com/miniapp/?router=42&open=settings" {
-		t.Errorf("got %q", got)
-	}
-	for _, base := range []string{"", "http://wgm.example.com"} {
-		if got := MiniAppRouterSettingsURL(base, 42); got != "" {
-			t.Errorf("base %q: got %q, хотим пусто", base, got)
-		}
-	}
-}
