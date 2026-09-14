@@ -111,44 +111,21 @@ export function incidentWhatPlain(checkName) {
   return incidentCopy(checkName).what
 }
 
-// Восстановление -- это тоже новость, и говорить её надо тем же языком
-// последствий, что и поломку: incidentCopy отвечает на «что сломалось»,
-// эта пара -- на «что снова работает». Без неё журнал писал бы «dns: ok»,
-// то есть имя механизма и его внутренний статус.
-const RECOVERY_COPY = {
-  external_reach: 'Сайты снаружи снова отвечают',
-  dns: 'Адреса сайтов снова определяются',
-  hydraroute: 'Обход блокировок снова работает',
-  awg_manager: 'Связь с панелью роутера восстановлена',
-  tunnels: 'VPN-туннели снова опрашиваются',
-  agent_heartbeat: 'Роутер снова выходит на связь',
-  // Верно при любой из трёх причин: и когда роутер уходил на запасные, и
-  // когда оставался на молчащем своём, и когда свой отвечал, а запасные не
-  // снимались. Те же слова, что у бота (recoveryHeadline в alerts/format.go).
-  resolver_guard: 'Роутер снова работает через свой DNS-сервер',
-}
-
-export function eventPhrase(checkName, status) {
-  if (status === 'ok') {
-    if (RECOVERY_COPY[checkName]) return RECOVERY_COPY[checkName]
-    if (checkName?.startsWith('tunnel_')) return `${checkLabel(checkName)} снова поднят`
-    return `${checkLabel(checkName)} — снова в норме`
-  }
-  if (status === 'fail') return incidentCopy(checkName).what
-  // Неизвестное состояние -- это ответ, а не пробел: проверка что-то
-  // прислала, но словаря на это у нас нет.
-  return `${checkLabel(checkName)} — состояние «${status}»`
-}
-
 // Spoken form of a check's status, for the instrument's <desc> and for the
 // legend plate that names the same lamps. "не работает" is the spec's wording
 // for a failed check (§3.7). The fallback echoes an unrecognized status rather
 // than swallowing it -- same honesty rule as checkLabel above, and the one that
 // matters most here: a status this function hasn't seen yet must not be spoken
 // as either "работает" or "не работает".
-export function checkStateLabel(status) {
+export function checkStateLabel(status, details) {
   if (status === 'fail') return 'не работает'
-  if (status === 'ok') return 'работает'
+  if (status === 'ok') {
+    // ok у сторожа бывает и без ответа об исправности: он перестал следить
+    // или ещё не прочитал настройки. «Работает» было бы обещанием.
+    if (details?.idle) return 'не следит'
+    if (details?.ready === false) return 'ещё не прочитал настройки'
+    return 'работает'
+  }
   return status ?? 'неизвестно'
 }
 

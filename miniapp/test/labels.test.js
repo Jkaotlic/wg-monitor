@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandOutcomeLabel, checkLabel, eventPhrase, legendLabel, incidentCopy } from '../src/labels.js'
+import { commandOutcomeLabel, checkLabel, checkStateLabel, legendLabel, incidentCopy } from '../src/labels.js'
 
 // Результат маршрутной команды -- это JSON агента (pkg/wire/routing.go), а не
 // строка для человека. "Готово" на нём было бы враньём в двух случаях сразу:
@@ -123,9 +123,8 @@ describe('agent_heartbeat говорит по-человечески', () => {
     expect(checkLabel('agent_heartbeat')).toBe('Отчёты от роутера')
   })
 
-  it('в журнале событий', () => {
-    expect(eventPhrase('agent_heartbeat', 'ok')).toBe('Роутер снова выходит на связь')
-    expect(eventPhrase('agent_heartbeat', 'fail')).not.toContain('agent_heartbeat')
+  it('в журнале событий -- текст поломки не сырой идентификатор', () => {
+    expect(incidentCopy('agent_heartbeat').what).not.toContain('agent_heartbeat')
   })
 
   it('в легенде на корпусе', () => {
@@ -169,14 +168,21 @@ describe('resolver_guard говорит «Свой DNS-сервер»', () => {
     for (const w of jargon) expect(copy.what + ' ' + copy.why).not.toContain(w)
   })
 
-  it('в журнале событий', () => {
-    // Верно при любой из трёх причин: и когда роутер уходил на запасные, и
-    // когда оставался на молчащем своём, и когда свой отвечал всё время.
-    expect(eventPhrase('resolver_guard', 'ok')).toBe('Роутер снова работает через свой DNS-сервер')
-    expect(eventPhrase('resolver_guard', 'fail')).toBe('Неполадка с DNS-серверами роутера')
-    for (const phrase of [eventPhrase('resolver_guard', 'ok'), eventPhrase('resolver_guard', 'fail')]) {
-      expect(phrase).not.toContain('не отвечает')
-      expect(phrase).not.toContain('снова отвечает')
-    }
+  it('в журнале событий -- текст поломки', () => {
+    expect(incidentCopy('resolver_guard').what).toBe('Неполадка с DNS-серверами роутера')
+    expect(incidentCopy('resolver_guard').what).not.toContain('не отвечает')
+    expect(incidentCopy('resolver_guard').what).not.toContain('снова отвечает')
+  })
+})
+
+// checkStateLabel -- подпись статуса в «Прочих проверках» (RouterDetail).
+// ok у сторожа своего DNS-сервера бывает и без ответа об исправности: details
+// несёт то, чего status не говорит.
+describe('checkStateLabel не путает "ok" с "работает"', () => {
+  it('подпись статуса не говорит «работает» про сторожа, который не следит', () => {
+    expect(checkStateLabel('ok', { idle: true })).toBe('не следит')
+    expect(checkStateLabel('ok', { ready: false })).toBe('ещё не прочитал настройки')
+    expect(checkStateLabel('ok', undefined)).toBe('работает')
+    expect(checkStateLabel('fail', { idle: true })).toBe('не работает')
   })
 })

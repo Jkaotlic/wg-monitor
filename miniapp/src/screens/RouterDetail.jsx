@@ -830,7 +830,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
                 <li key={c.check_name} class="row checks-row">
                   <span class="row-title">{checkLabel(c.check_name)}</span>
                   <span class={`checks-status checks-status-${c.status}`}>
-                    {checkStateLabel(c.status)} · {formatDateTime(c.ts)}
+                    {checkStateLabel(c.status, c.details)} · {formatDateTime(c.ts)}
                   </span>
                 </li>
               ))}

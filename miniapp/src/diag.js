@@ -328,6 +328,18 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
     // dns_split всегда ok, в списке она читалась бы вечным «да»: у неё свой
     // раздел на экране (dnsSplit.js).
     if (c.check_name === 'dns_split') continue
+    if (c.check_name === 'resolver_guard') {
+      const g = guardRow(c)
+      rows.push({
+        key: c.check_name,
+        title: checkLabel(c.check_name),
+        code: c.check_name,
+        answer: silent ? 'не знаем' : g.answer,
+        tone: silent ? 'muted' : g.tone,
+        value: measuredAt(c.ts),
+      })
+      continue
+    }
     rows.push({
       key: c.check_name,
       title: checkLabel(c.check_name),
@@ -338,6 +350,26 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
     })
   }
   return rows
+}
+
+// guardRow -- ответ строки «Свой DNS-сервер» по details сторожа, теми же
+// смыслами, что у бота (alerts/format.go): на запасных сайты открываются, это
+// жёлтое; красное -- только когда своего нет и запасного живого тоже.
+export function guardRow(check) {
+  const d = check.details ?? {}
+  if (check.status === 'ok') {
+    if (d.idle) return { answer: 'не следит', tone: 'muted' }
+    if (d.ready === false) return { answer: 'ещё не прочитал настройки', tone: 'muted' }
+    return { answer: 'да', tone: 'ok' }
+  }
+  if (check.status === 'fail') {
+    if (d.reason === 'foreign_leftover') return { answer: 'запасные рядом', tone: 'warn' }
+    if (d.reason === 'fallback' || (d.mode === 'fallback' && d.reason !== 'no_live_fallback')) {
+      return { answer: 'на запасных', tone: 'warn' }
+    }
+    return { answer: 'нет', tone: 'danger' }
+  }
+  return { answer: 'не знаем', tone: 'muted' }
 }
 
 // --- Два адреса выхода ----------------------------------------------------

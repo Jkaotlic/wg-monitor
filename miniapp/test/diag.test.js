@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseDiag, checkRows, exitCompare } from '../src/diag.js'
+import { parseDiag, checkRows, exitCompare, guardRow } from '../src/diag.js'
 
 // Форма ответа -- /api/diagnostics/result awg-manager, проверенная на живом
 // 2.18.2 (10.09.2026): проверки лежат плоским списком tests[], у проверок
@@ -216,6 +216,30 @@ describe('checkRows', () => {
     const dns = rowsByKey(rows).dns
     expect(dns.tone).toBe('warn')
     expect(dns.value).toContain('подмен')
+  })
+
+  // На запасных сайты открываются -- это жёлтое, как 🟡 в боте, а не красное.
+  // «Не следит» и «ещё не прочитал» -- не «да»: об исправности сторож молчит.
+  it('строка сторожа говорит по details, а не по одному статусу', () => {
+    const at = '2026-09-14T10:00:00Z'
+    const g = (status, details) => guardRow({ check_name: 'resolver_guard', status, ts: at, details })
+    expect(g('fail', { mode: 'fallback', reason: 'fallback' })).toEqual({ answer: 'на запасных', tone: 'warn' })
+    expect(g('fail', { mode: 'primary', reason: 'foreign_leftover' })).toEqual({ answer: 'запасные рядом', tone: 'warn' })
+    expect(g('fail', { reason: 'no_live_fallback' })).toEqual({ answer: 'нет', tone: 'danger' })
+    expect(g('fail', undefined)).toEqual({ answer: 'нет', tone: 'danger' })
+    expect(g('ok', { mode: 'primary', idle: true })).toEqual({ answer: 'не следит', tone: 'muted' })
+    expect(g('ok', { mode: 'primary', ready: false })).toEqual({ answer: 'ещё не прочитал настройки', tone: 'muted' })
+    expect(g('ok', { mode: 'primary' })).toEqual({ answer: 'да', tone: 'ok' })
+
+    const rows = checkRows({
+      checks: [{ check_name: 'resolver_guard', status: 'fail', ts: at, details: { mode: 'fallback', reason: 'fallback' } }],
+      tunnels: [],
+      router: ROUTER,
+    })
+    const row = rowsByKey(rows).resolver_guard
+    expect(row.title).toBe('Свой DNS-сервер')
+    expect(row.answer).toBe('на запасных')
+    expect(row.tone).toBe('warn')
   })
 })
 
