@@ -115,11 +115,6 @@ type Router struct {
 	auditCache      *simpleAuditCache
 	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
 
-	// OPKG-feed repair plumbing. All in-memory; lost on restart (tokens are
-	// short-lived, 5 min TTL). SetOpkgRepair wires both at startup.
-	pendingOpkgRepair *pendingOpkgRepairStore
-	opkgRepairAction  Action
-
 	// Access-control panel plumbing. All in-memory; lost on restart.
 	pendingAddOperator       *pendingAddOperatorStore
 	pendingSelfHostedAmnezia *pendingSelfHostedAmneziaStore
@@ -172,21 +167,6 @@ func (r *Router) chatAllowed(chatID int64) bool {
 		}
 	}
 	return false
-}
-
-// SetOpkgRepair attaches the pendingOpkgRepair store and the OpkgRepairAction
-// handler. Called from cmd/backend at startup; both must be wired together
-// because the handler relay (in backend/handler.go) creates pending entries
-// and the action consumes them.
-func (r *Router) SetOpkgRepair(store *pendingOpkgRepairStore, action Action) {
-	r.pendingOpkgRepair = store
-	r.opkgRepairAction = action
-}
-
-// OpkgRepairStore exposes the store for the backend handler relay path,
-// which needs to register pending entries when rendering 🔧 buttons.
-func (r *Router) OpkgRepairStore() *pendingOpkgRepairStore {
-	return r.pendingOpkgRepair
 }
 
 // NewRouterWithSink builds a Router whose command-action callbacks enqueue
@@ -324,7 +304,7 @@ func newImportToken() string {
 // configured group chat may tap buttons. The chat-id check still rejects
 // callbacks coming from arbitrary chats where the bot may be lurking. We
 // log every callback's from.id for audit so post-hoc you can see who pushed
-// what — important since opkg_upgrade is enabled in the menu.
+// what.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	adminPrivatePanel := r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))
 	// Кнопка под тревогой в собственной личке -- законный источник нажатия:
@@ -389,9 +369,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 			return
 		}
 		action = r.command
-	case "opkg_upgrade":
-		r.handleOpkgUpgradeAsk(ctx, q, args)
-		return
 	case "tunnel_delete_ask":
 		r.handleTunnelDeleteAsk(ctx, q, args)
 		return
@@ -601,28 +578,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.diagBackAct != nil {
 			action = r.diagBackAct
 		}
-	case "opkg_disable":
-		if r.opkgRepairAction == nil {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ремонт фидов не настроен")
-			return
-		}
-		if r.handleOpkgDisableAsk(ctx, q, args) {
-			return
-		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "opkg repair session expired")
-		return
-	case "opkg_disable_confirm":
-		if r.opkgRepairAction == nil {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "opkg repair is not configured")
-			return
-		}
-		status, err := r.opkgRepairAction.Apply(ctx, q, args)
-		if err != nil {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, err.Error())
-			return
-		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, status)
-		return
 	case "compat_btn":
 		r.handleCompatBtn(ctx, q, args)
 		return
@@ -1959,23 +1914,6 @@ func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, ar
 	})
 	text := tg.RestartConfirmText(args.MaintName, tok)
 	kb := tg.RestartConfirmKeyboard(user.ID, args.MaintName, tok)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleOpkgUpgradeAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
-		return
-	}
-	tok := makeMaintToken()
-	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, ActorTGID: q.From.ID, Name: "opkg_upgrade", Token: tok,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.OpkgUpgradeConfirmText(tok)
-	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }

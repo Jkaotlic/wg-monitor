@@ -1884,31 +1884,6 @@ func TestRouterRestartTunnelRequiresAwgManagerConfirm(t *testing.T) {
 	}
 }
 
-func TestRouterOpkgUpgradeRequiresConfirm(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-opkg-upgrade",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "opkg_upgrade:" + itoa(uid) + ":_menu",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 0 {
-		t.Fatalf("opkg_upgrade callback must require confirmation before enqueue, got %+v", sink.calls)
-	}
-	if len(f.edits) != 1 {
-		t.Fatalf("expected opkg confirmation edit, got %v", f.edits)
-	}
-	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("maint_confirm:%d:opkg_upgrade:", uid)) {
-		t.Fatalf("confirm markup missing opkg_upgrade maint_confirm callback: %+v", f.editMarkups)
-	}
-}
-
 func TestRouterDispatchesInlineCheckViaTunnel(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -3400,94 +3375,30 @@ func TestRouterRoutesOpen_UsesCachedSnapshotOnlyWhileRefreshingLiveStatus(t *tes
 	}
 }
 
-// TestRouter_OpkgDisable_RequiresConfirm verifies the full dispatch path for
-// opkg_disable: the first tap renders a confirm screen, and only the confirm
-// callback consumes the token and enqueues opkg_feed_disable.
-func TestRouter_OpkgDisable_RequiresConfirm(t *testing.T) {
+// Обновление пакетов и отключение фида переехали в мини-апп. Старые кнопки в
+// истории чата отвечают «неизвестная кнопка» и ничего не ставят в очередь.
+func TestRouterOpkgCallbacksRemoved(t *testing.T) {
 	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	store := newPendingOpkgRepairStore()
-	store.put(&pendingOpkgRepair{
-		UserID:    uid,
-		URL:       "https://anonym-tsk.github.io/nfqws-keenetic/all",
-		Token:     "tok1",
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	r.SetOpkgRepair(store, NewOpkgRepairAction(sink, store, func() string { return "cmd-1" }))
-
-	// opkg_disable:<uid>:_menu:<token> — _menu suffix sets IsMenu=true so the
-	// router answers with the status toast and does NOT edit the message.
-	q := &tg.CallbackQuery{
-		ID:   "q1",
-		From: tg.User{ID: 12345},
-		// AdminUserID=12345 passes ACL; uid stored in the pending entry.
-		Data:    fmt.Sprintf("opkg_disable:%d:_menu:tok1", uid),
-		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 555},
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 0 {
-		t.Fatalf("first opkg_disable tap must not enqueue before confirm, got %+v", sink.calls)
-	}
-	if len(f.editMarkups) != 1 || !keyboardContainsCallback(f.editMarkups[0], fmt.Sprintf("opkg_disable_confirm:%d:_menu:tok1", uid)) {
-		t.Fatalf("first opkg_disable tap should render confirm callback, markups=%+v answers=%+v", f.editMarkups, f.answers)
-	}
-	assertNoEnglishDangerCopy(t, f.edits[0]+"\n"+markupButtonTexts(f.editMarkups[0]))
-	if !strings.Contains(f.edits[0], "Отключить opkg-фид") || !strings.Contains(markupButtonTexts(f.editMarkups[0]), "Да, отключить фид") {
-		t.Fatalf("opkg disable confirmation should use Russian copy, text=%q buttons=%q", f.edits[0], markupButtonTexts(f.editMarkups[0]))
-	}
-
-	q.ID = "q1-confirm"
-	q.Data = fmt.Sprintf("opkg_disable_confirm:%d:_menu:tok1", uid)
-	r.HandleCallback(context.Background(), q)
-
-	// The action must have enqueued exactly one opkg_feed_disable command.
-	if len(sink.calls) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
-	}
-	if sink.calls[0].action != "opkg_feed_disable" {
-		t.Errorf("enqueued action=%q, want opkg_feed_disable", sink.calls[0].action)
-	}
-	if sink.calls[0].userID != uid {
-		t.Errorf("enqueued userID=%d, want %d", sink.calls[0].userID, uid)
-	}
-	// IsMenu path: AnswerCallbackQuery with the status toast; no EditMessageText.
-	if len(f.answers) != 2 {
-		t.Fatalf("expected 2 AnswerCallbackQuery calls, got %d", len(f.answers))
-	}
-	f.answers = f.answers[1:]
-	if !strings.Contains(f.answers[0], "фид") {
-		t.Errorf("toast should mention фид, got %q", f.answers[0])
-	}
-	if len(f.edits) != 1 {
-		t.Errorf("opkg_disable should edit once for the confirm screen, got %d edits", len(f.edits))
-	}
-}
-
-// TestRouter_OpkgDisable_NilAction toasts "не настроен" when SetOpkgRepair
-// has not been called (action is nil).
-func TestRouter_OpkgDisable_NilAction(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouterWithSink(d, f, nil, Config{ChatID: -100, AdminUserID: 12345})
-	// Do NOT call r.SetOpkgRepair — action stays nil.
-
-	q := &tg.CallbackQuery{
-		ID:      "q2",
-		From:    tg.User{ID: 12345},
-		Data:    fmt.Sprintf("opkg_disable:%d:_menu:sometoken", uid),
-		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 1},
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.answers) != 1 {
-		t.Fatalf("expected 1 AnswerCallbackQuery, got %d", len(f.answers))
-	}
-	if !strings.Contains(f.answers[0], "не настроен") {
-		t.Errorf("expected 'не настроен' toast when action is nil, got %q", f.answers[0])
+	for _, data := range []string{
+		"opkg_upgrade:" + itoa(uid) + ":_menu",
+		"opkg_disable:" + itoa(uid) + ":_menu:abcd1234",
+		"opkg_disable_confirm:" + itoa(uid) + ":_menu:abcd1234",
+	} {
+		f := &fakeRouterTG{}
+		sink := &fakeEnqueuer{}
+		r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
+		r.HandleCallback(context.Background(), &tg.CallbackQuery{
+			ID:      "cbk-opkg",
+			From:    tg.User{ID: 12345},
+			Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
+			Data:    data,
+		})
+		if len(sink.calls) != 0 || len(f.edits) != 0 {
+			t.Errorf("%s: calls=%+v edits=%v", data, sink.calls, f.edits)
+		}
+		if len(f.answers) != 1 || f.answers[0] != "неизвестная кнопка" {
+			t.Errorf("%s: answers=%v, ожидалась «неизвестная кнопка»", data, f.answers)
+		}
 	}
 }
 
@@ -3546,13 +3457,6 @@ func TestCallbackUserFacingNotFoundToastsAreRussian(t *testing.T) {
 			name: "maint open missing user",
 			run: func(q *tg.CallbackQuery, args Args) {
 				r.handleMaintOpen(context.Background(), q, args)
-			},
-			args: Args{UserID: 999999},
-		},
-		{
-			name: "opkg upgrade missing user",
-			run: func(q *tg.CallbackQuery, args Args) {
-				r.handleOpkgUpgradeAsk(context.Background(), q, args)
 			},
 			args: Args{UserID: 999999},
 		},

@@ -62,9 +62,6 @@ type Args struct {
 	MaintName string
 	// MaintToken is the 8-hex confirm token for maint_confirm / maint_fw_confirm.
 	MaintToken string
-	// OpkgRepairToken is the 8-hex confirm token for opkg_disable callbacks
-	// originating from the "🔧 Отключить мёртвый фид" inline button.
-	OpkgRepairToken string
 	// DiagRawToken is the 8-hex token of a cached diag JSON body retrieved
 	// by the "📄 Полный отчёт" button under a diag result.
 	DiagRawToken string
@@ -131,7 +128,7 @@ var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
 	// command-channel actions: enqueue a wire.Command for the agent.
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
-	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true, "opkg_disable_confirm": true,
+	"force_recheck": true,
 	"router_doctor": true,
 	"tunnel_enable": true, "tunnel_disable": true, "tunnel_restart": true,
 	"tunnel_delete_ask": true, "tunnel_delete": true,
@@ -430,14 +427,6 @@ func Parse(data string) (Args, error) {
 		}
 		a.MaintName = "firmware"
 		a.MaintToken = parts[3]
-	case "opkg_disable", "opkg_disable_confirm":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
-		}
-		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.OpkgRepairToken = parts[3]
 	case "diag_raw":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)

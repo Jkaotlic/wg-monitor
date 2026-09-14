@@ -177,8 +177,6 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 		case "hrneo", "hrneo_start", "hrneo_stop", "awgmgr":
 			cmd.Action = "service_restart"
 			cmd.Args = map[string]any{"name": pm.Name}
-		case "opkg_upgrade":
-			cmd.Action = "opkg_upgrade"
 		case "router":
 			cmd.Action = "service_restart"
 			cmd.Args = map[string]any{"name": "router"}

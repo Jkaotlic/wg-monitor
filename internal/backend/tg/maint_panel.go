@@ -198,10 +198,6 @@ func RestartConfirmKeyboard(userID int64, name, token string) InlineKeyboardMark
 	}}}
 }
 
-func OpkgUpgradeConfirmText(token string) string {
-	return fmt.Sprintf("🛠 Обслуживание\n\n⚠️ Запустить opkg upgrade?\n\nЧто произойдет:\n  • агент выполнит opkg update, проверит свободное место в /opt и запустит opkg upgrade.\n  • обновление пакетов может перезапустить Entware-сервисы или кратко задеть роутерные утилиты.\n  • если фиды сломаны, результат предложит действия для ремонта фидов.\n\nКод подтверждения: %s (живёт 5 мин)", token)
-}
-
 // FirmwareScreenText shows current + available firmware. When Available is
 // empty, displays "актуальная" instead of an install hint.
 func FirmwareScreenText(nickname string, fs wire.FirmwareStatus) string {

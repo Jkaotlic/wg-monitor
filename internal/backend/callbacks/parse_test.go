@@ -97,7 +97,7 @@ func TestParseRouteTemplateCallbacks(t *testing.T) {
 }
 
 func TestParseCommandActions(t *testing.T) {
-	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor"} {
+	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "router_doctor"} {
 		data := action + ":42:tunnel_amnezia_for_awg2"
 		a, err := Parse(data)
 		if err != nil {
@@ -477,42 +477,10 @@ func TestParse_PanelKindRequiresKind(t *testing.T) {
 	}
 }
 
-func TestParse_OpkgDisable_Valid(t *testing.T) {
-	a, err := Parse("opkg_disable:12345:_menu:abcd1234")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.Action != "opkg_disable" {
-		t.Errorf("Action=%q", a.Action)
-	}
-	if a.UserID != 12345 {
-		t.Errorf("UserID=%d", a.UserID)
-	}
-	if a.OpkgRepairToken != "abcd1234" {
-		t.Errorf("OpkgRepairToken=%q", a.OpkgRepairToken)
-	}
-}
-
-func TestParse_OpkgDisable_MissingToken(t *testing.T) {
-	_, err := Parse("opkg_disable:12345:_menu:")
-	if err == nil {
-		t.Error("expected error for empty token")
-	}
-}
-
-func TestParse_OpkgDisable_NoTokenSegment(t *testing.T) {
-	_, err := Parse("opkg_disable:12345:_menu")
-	if err == nil {
-		t.Error("expected error for missing token segment")
-	}
-}
-
 func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 	for _, bad := range []string{
 		"maint_confirm:42:hrneo:x",
 		"maint_fw_confirm:42:_panel_:bad.token",
-		"opkg_disable:12345:_menu:bad/token",
-		"opkg_disable_confirm:12345:_menu:x",
 		"diag_raw:42:_panel_:bad.token",
 		"diag_back:42:_panel_:bad/token",
 		"diag_test:bad.token:mtu",
@@ -520,16 +488,6 @@ func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 		if _, err := Parse(bad); err == nil {
 			t.Errorf("%q should reject malformed callback token", bad)
 		}
-	}
-}
-
-func TestParse_OpkgDisableConfirm(t *testing.T) {
-	a, err := Parse("opkg_disable_confirm:12345:_menu:abcd1234")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.Action != "opkg_disable_confirm" || a.UserID != 12345 || a.OpkgRepairToken != "abcd1234" {
-		t.Fatalf("got %+v", a)
 	}
 }
 

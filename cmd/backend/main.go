@@ -214,14 +214,6 @@ func main() {
 	cb.SetDiagDrillDown()
 	pingcheckNotifier := cb.NewPingCheckNotifier()
 
-	// OPKG feed repair plumbing — store holds tokens for pending 🔧 button taps;
-	// action consumes them and enqueues opkg_feed_disable commands. Notifier
-	// renders the message + buttons when CommandResult comes back. All in-memory.
-	opkgRepairStore := callbacks.NewPendingOpkgRepairStore()
-	opkgRepairAction := callbacks.NewOpkgRepairAction(cmdQueue, opkgRepairStore, nil)
-	cb.SetOpkgRepair(opkgRepairStore, opkgRepairAction)
-	opkgNotifier := callbacks.NewOpkgResultNotifier(tgClient, uiSnap, opkgRepairStore, nil)
-
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
@@ -313,7 +305,6 @@ func main() {
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,
-		OpkgNotifier:        opkgNotifier,
 		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,
 		DeployNotifier:      deployNotifier,

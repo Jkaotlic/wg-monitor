@@ -256,33 +256,6 @@ func TestMaintConfirmAction_Firmware_AppliesCooldown(t *testing.T) {
 	}
 }
 
-func TestMaintConfirmAction_OpkgUpgrade(t *testing.T) {
-	store := newPendingMaintStore()
-	cd := newCooldownStore()
-	sink := &fakeSink{}
-	tok := makeMaintToken()
-	store.put(&pendingMaint{UserID: 1, Name: "opkg_upgrade", Token: tok, ExpiresAt: time.Now().Add(5 * time.Minute)})
-	a := NewMaintConfirmAction(sink, store, cd, func() string { return "cmd-opkg" })
-	q := &tg.CallbackQuery{From: tg.User{ID: 1}}
-	args := Args{Action: "maint_confirm", UserID: 1, MaintName: "opkg_upgrade", MaintToken: tok}
-	status, err := a.Apply(context.Background(), q, args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(status, "opkg_upgrade") {
-		t.Fatalf("status should mention opkg_upgrade, got %q", status)
-	}
-	if len(sink.enq) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.enq))
-	}
-	if sink.enq[0].Cmd.Action != "opkg_upgrade" {
-		t.Fatalf("Action=%q want opkg_upgrade", sink.enq[0].Cmd.Action)
-	}
-	if sink.enq[0].Cmd.Args != nil {
-		t.Fatalf("opkg_upgrade should not need args, got %+v", sink.enq[0].Cmd.Args)
-	}
-}
-
 func TestMaintConfirmAction_EnqueueFailureKeepsToken(t *testing.T) {
 	store := newPendingMaintStore()
 	cd := newCooldownStore()
