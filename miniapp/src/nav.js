@@ -47,6 +47,14 @@ export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
   return state
 }
 
+// deepLinkOverlay -- какой слой открыть по ссылке из бота. Только настройки и
+// только вместе с открытым роутером: кнопка «Панель роутера» ведёт туда, где
+// эта панель открывается. Любое другое значение игнорируется, а не угадывается.
+export function deepLinkOverlay(search, state) {
+  if (state?.routerID == null) return null
+  return new URLSearchParams(search).get('open') === 'settings' ? 'settings' : null
+}
+
 export function navReducer(state, action) {
   switch (action.type) {
     // Список роутеров приходит с сервера уже после первого рендера, поэтому

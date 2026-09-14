@@ -34,6 +34,8 @@ type MaintPanelNotifier struct {
 	Audit    *simpleAuditCache // updated with each version_audit / firmware_status
 	DB       *db.DB
 	Sink     CommandEnqueuer
+	// MiniAppBaseURL -- публичный адрес бэкенда для кнопки «Панель роутера».
+	MiniAppBaseURL string
 }
 
 // NotifyCommandResult dispatches by ref.Action. Returns nil for unsupported
@@ -90,6 +92,7 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 		}
 	}
 	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
+	args.PanelAppURL = maintPanelAppURL(n.MiniAppBaseURL, user, ref.ChatID)
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
@@ -156,6 +159,7 @@ func (n *MaintPanelNotifier) renderActionBanner(ctx context.Context, ref cmdpkg.
 		return nil
 	}
 	args := buildMaintPanelArgs(ctx, user, va, n.Up, n.Cooldown)
+	args.PanelAppURL = maintPanelAppURL(n.MiniAppBaseURL, user, ref.ChatID)
 	text := banner + "\n\n" + tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	if err := n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb); err != nil {
@@ -182,6 +186,17 @@ func (n *MaintPanelNotifier) enqueueFreshVersionAudit(userID int64, ref cmdpkg.M
 // панель показывает сейчас, а база помнит.
 func hrneoKnownInstalled(va wire.VersionAudit) bool {
 	return va.HrneoInstalled != nil && *va.HrneoInstalled
+}
+
+// maintPanelAppURL -- адрес кнопки «Панель роутера» в панели обслуживания.
+// Пусто, когда кнопку рисовать нельзя: в группе (у групп chat_id
+// отрицательный) Telegram отвергает web_app-кнопку вместе со всем сообщением,
+// а без годного адреса панели мини-апп её не откроет.
+func maintPanelAppURL(base string, user *db.User, chatID int64) string {
+	if chatID <= 0 || user == nil || !backend.PanelKnown(user.AWGMURL) {
+		return ""
+	}
+	return tg.MiniAppRouterSettingsURL(base, user.ID)
 }
 
 // buildMaintPanelArgs assembles the renderer args from the cached

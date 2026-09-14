@@ -43,6 +43,10 @@ type MaintPanelArgs struct {
 	Updates                   []UpdateLine
 	RouterCooldownRemaining   time.Duration
 	FirmwareCooldownRemaining time.Duration
+	// PanelAppURL -- web_app на настройки роутера в мини-аппе, где открывается
+	// панель awg-manager. Пусто -- кнопки нет: адрес панели не сохранён или
+	// панель открыта в группе, где Telegram web_app-кнопку не принимает.
+	PanelAppURL string
 }
 
 // MaintPanelText is the body of the Status screen.
@@ -112,7 +116,7 @@ func MaintPanelKeyboard(userID int64, a MaintPanelArgs) InlineKeyboardMarkup {
 		rebootLabel = "🕒 Кулдаун " + fmtCooldown(a.RouterCooldownRemaining)
 		rebootCD = cd("maint_open", "_panel_")
 	}
-	return InlineKeyboardMarkup{InlineKeyboard: [][]InlineKeyboardButton{
+	rows := [][]InlineKeyboardButton{
 		{
 			{Text: "🔁 Перезапустить hrneo", CallbackData: cd("maint_restart", "hrneo")},
 			{Text: "🔁 Перезапустить awg-manager", CallbackData: cd("maint_restart", "awgmgr")},
@@ -128,11 +132,17 @@ func MaintPanelKeyboard(userID int64, a MaintPanelArgs) InlineKeyboardMarkup {
 			{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
 			{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 		},
-		HelpRowFor("maint"),
-		{
-			{Text: "✖ Закрыть", CallbackData: cd("maint_close", "_panel_")},
-		},
-	}}
+	}
+	// Кнопка панели -- web_app, а не url: url-кнопка несла бы адрес панели в
+	// теле сообщения навсегда и с пересылкой. Адрес открывает мини-апп по
+	// одноразовому билету.
+	if a.PanelAppURL != "" {
+		rows = append(rows, []InlineKeyboardButton{{Text: "🔐 Панель роутера", WebApp: &WebAppInfo{URL: a.PanelAppURL}}})
+	}
+	rows = append(rows, HelpRowFor("maint"), []InlineKeyboardButton{
+		{Text: "✖ Закрыть", CallbackData: cd("maint_close", "_panel_")},
+	})
+	return InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 // RestartConfirmText is the warning shown after a "🔁 Restart X" tap. The

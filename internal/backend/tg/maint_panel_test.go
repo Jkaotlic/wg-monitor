@@ -331,3 +331,42 @@ func findCallbackData(kb InlineKeyboardMarkup, want string) bool {
 	}
 	return false
 }
+
+// Кнопка панели роутера -- web_app на экран настроек мини-аппа, а не url с
+// адресом: url-кнопка несла бы адрес в теле сообщения навсегда и с пересылкой.
+func TestMaintPanelKeyboard_PanelButtonOnlyWithAppURL(t *testing.T) {
+	const appURL = "https://wgm.example.com/miniapp/?router=42&open=settings"
+	kb := MaintPanelKeyboard(42, MaintPanelArgs{Nickname: "x", PanelAppURL: appURL})
+	var found bool
+	for _, row := range kb.InlineKeyboard {
+		for _, b := range row {
+			if b.WebApp != nil {
+				found = true
+				if b.WebApp.URL != appURL || b.Text != "🔐 Панель роутера" {
+					t.Errorf("кнопка %q -> %q", b.Text, b.WebApp.URL)
+				}
+			}
+		}
+	}
+	if !found {
+		t.Error("кнопки панели нет")
+	}
+	for _, row := range MaintPanelKeyboard(42, MaintPanelArgs{Nickname: "x"}).InlineKeyboard {
+		for _, b := range row {
+			if b.WebApp != nil {
+				t.Errorf("кнопка панели без адреса приложения: %+v", b)
+			}
+		}
+	}
+}
+
+func TestMiniAppRouterSettingsURL(t *testing.T) {
+	if got := MiniAppRouterSettingsURL("https://wgm.example.com/", 42); got != "https://wgm.example.com/miniapp/?router=42&open=settings" {
+		t.Errorf("got %q", got)
+	}
+	for _, base := range []string{"", "http://wgm.example.com"} {
+		if got := MiniAppRouterSettingsURL(base, 42); got != "" {
+			t.Errorf("base %q: got %q, хотим пусто", base, got)
+		}
+	}
+}

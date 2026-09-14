@@ -8,7 +8,7 @@ import {
 } from './telegram.js'
 import { applyPalette } from './theme.js'
 import { createSession, fetchRouters } from './api.js'
-import { initialNav, navReducer, backButtonVisible, TABS } from './nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, deepLinkOverlay } from './nav.js'
 import { Header } from './ui/Header.jsx'
 import { TabBar } from './ui/TabBar.jsx'
 import { RouterDetail } from './screens/RouterDetail.jsx'
@@ -56,10 +56,10 @@ export function App() {
       .then((data) => {
         const list = data.routers ?? []
         setRouters(list)
-        dispatch({
-          type: 'init',
-          state: initialNav({ routerIDs: list.map((r) => r.id), deepLinkID: deepLinkRouterID() }),
-        })
+        const start = initialNav({ routerIDs: list.map((r) => r.id), deepLinkID: deepLinkRouterID() })
+        dispatch({ type: 'init', state: start })
+        const overlay = deepLinkOverlay(window.location.search, start)
+        if (overlay) dispatch({ type: 'overlay', overlay })
         setStatus('ready')
       })
       .catch(() => setStatus('error'))

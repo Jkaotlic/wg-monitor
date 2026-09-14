@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS, tabLabel } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -146,5 +146,16 @@ describe('подписи вкладок', () => {
 
   it('незнакомый ключ не ломает вёрстку', () => {
     expect(tabLabel('нечто')).toBe('нечто')
+  })
+})
+
+// Кнопка «Панель роутера» из бота ведёт сразу в настройки роутера, а не на
+// главный экран, где настройки пришлось бы искать.
+describe('deepLinkOverlay', () => {
+  it('open=settings открывает настройки только вместе с роутером', () => {
+    expect(deepLinkOverlay('?router=7&open=settings', { routerID: 7 })).toBe('settings')
+    expect(deepLinkOverlay('?router=7&open=settings', { routerID: null })).toBe(null)
+    expect(deepLinkOverlay('?router=7', { routerID: 7 })).toBe(null)
+    expect(deepLinkOverlay('?router=7&open=admin', { routerID: 7 })).toBe(null)
   })
 })

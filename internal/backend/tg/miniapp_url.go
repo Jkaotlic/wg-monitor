@@ -20,3 +20,13 @@ func MiniAppRouterURL(base string, routerUserID int64) string {
 	base = strings.TrimRight(base, "/")
 	return fmt.Sprintf("%s/miniapp/?router=%d", base, routerUserID)
 }
+
+// MiniAppRouterSettingsURL -- настройки роутера в мини-аппе: там живёт секция
+// «Панель роутера». Тот же построитель, те же отказы (пустая и не-https база).
+func MiniAppRouterSettingsURL(base string, routerUserID int64) string {
+	u := MiniAppRouterURL(base, routerUserID)
+	if u == "" {
+		return ""
+	}
+	return u + "&open=settings"
+}
