@@ -100,6 +100,39 @@ describe('«Сброс DNS»', () => {
     root.remove()
   })
 
+  // Ответа на сброс может не быть вовсе (таймаут, спящий роутер), а команда
+  // тем временем уже в очереди. Кнопка закрывается в момент отправки, а не по
+  // приходу ответа: иначе второй сброс уходил бы без нового предпросмотра.
+  it('без ответа на сброс кнопка всё равно закрыта', async () => {
+    mocks.settings = { role: 'admin', agent_version: 'v0.31.0' }
+    mocks.calls = []
+    mocks.answers = { dns_reset: { status: 'ok', output: PREVIEW } }
+    let sheet = null
+    const root = await mount(<DNSResetScreen routerID={2} routerName="home" openSheet={(s) => (sheet = s)} onClose={() => {}} />)
+    await act(async () => button(root, 'Посмотреть, что изменится').click())
+    await flush()
+    await act(async () => button(root, 'Сбросить DNS').click())
+    expect(sheet).toBeTruthy()
+    // onResult так и не пришёл.
+    expect(button(root, 'Сбросить DNS').disabled).toBe(true)
+    render(null, root)
+    root.remove()
+  })
+
+  it('без имени роутера сброс не открывается: подтверждению нечего набирать', async () => {
+    mocks.settings = { role: 'admin', agent_version: 'v0.31.0' }
+    mocks.calls = []
+    mocks.answers = { dns_reset: { status: 'ok', output: PREVIEW } }
+    let opened = false
+    const root = await mount(<DNSResetScreen routerID={2} routerName="" openSheet={() => (opened = true)} onClose={() => {}} />)
+    await act(async () => button(root, 'Посмотреть, что изменится').click())
+    await flush()
+    expect(button(root, 'Сбросить DNS').disabled).toBe(true)
+    expect(opened).toBe(false)
+    render(null, root)
+    root.remove()
+  })
+
   it('ответ не предпросмотром -- громкое предупреждение и сброс закрыт', async () => {
     mocks.settings = { role: 'admin', agent_version: 'v0.31.0' }
     mocks.calls = []

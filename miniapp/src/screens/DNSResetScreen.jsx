@@ -70,6 +70,12 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   }
 
   function askReset() {
+    if (!routerName) return
+    // Кнопка закрывается в момент отправки, а не по приходу ответа: ответа
+    // может не быть вовсе (таймаут, спящий роутер), а команда уже в очереди.
+    // Отмена в шите тоже потребует нового предпросмотра -- для самого опасного
+    // действия цикла это правильная цена.
+    setPreviewFresh(false)
     openSheet(
       confirmSheet({
         routerID,
@@ -83,9 +89,6 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
         confirmPhrase: routerName || '',
         onResult: (res) => {
           setReset(parseReset(res))
-          // Следующий сброс -- только после нового предпросмотра: прежний
-          // рассказывал о настройках, которых на роутере уже нет.
-          setPreviewFresh(false)
           setAfter(null)
           if (res?.status !== 'err') loadAfter()
         },
@@ -135,7 +138,7 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
               <button
                 type="button"
                 class="btn btn-danger btn-wide"
-                disabled={!resetEnabled({ previewed: previewFresh })}
+                disabled={!routerName || !resetEnabled({ previewed: previewFresh })}
                 onClick={askReset}
               >
                 {T.resetButton}
