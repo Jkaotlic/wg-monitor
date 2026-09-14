@@ -712,7 +712,7 @@ func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T)
 		LastDeployedVersion: "v0.12.0-rc6",
 		LastDeploy:          "2026-05-24T10:20:30Z",
 		DeployMode:          "awgm",
-		AWGMURL:             "https://testkeen.keenetic.pro",
+		AWGMURL:             "https://panel.example.com",
 		AWGMAuth:            "api-key",
 		ExpectedMAC:         "aabbccddeeff",
 	}
@@ -730,7 +730,7 @@ func TestBuildMigrateUserUpsertSQLPreservesRawTokenHashAndMetadata(t *testing.T)
 		"'canary'",
 		"'2026-05-24T10:20:30Z'",
 		"'awgm'",
-		"'https://testkeen.keenetic.pro'",
+		"'https://panel.example.com'",
 		"'api-key'",
 		"'aabbccddeeff'",
 		"ON CONFLICT(nickname) DO UPDATE SET",
