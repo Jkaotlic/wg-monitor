@@ -123,12 +123,6 @@ export function installedRows(payload) {
   return rows
 }
 
-// Предупреждение о перезагрузке. Его считает сервер по наблюдаемой смене
-// модуля ядра между снимками -- клиент ничего не домысливает.
-export function rebootLine(payload) {
-  return payload?.reboot_hint ?? ''
-}
-
 function hrneoValue(inst) {
   if (inst.hrneo) return inst.hrneo
   if (inst.hrneo_installed === true) return 'установлен'

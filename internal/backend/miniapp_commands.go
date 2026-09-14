@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -116,12 +117,30 @@ var miniappCommandAllowlist = map[string]bool{
 	// opkg-туннеля имени в NDMS нет вовсе.
 	"tunnel_power": true,
 
-	// Прошивка (фаза D2). Чтение состояния -- всем, у кого есть доступ;
-	// установка -- только владельцу (miniappOwnerOnlyActions), потому что
-	// она необратима и перезагружает роутер. Оператору дали смотреть и
-	// чинить, а не менять прошивку на чужом устройстве.
+	// Прошивка (фаза D2). Чтение и установка -- всем, у кого есть доступ к
+	// роутеру: с цикла 1 ставят и операторы (решение оператора 14.09).
+	// Установка необратима и перезагружает роутер, поэтому её держат набор
+	// имени роутера, который бэкенд сверяет сам (miniappConfirmRequired), и
+	// отказ агента при allow_firmware_install=false.
 	"firmware_status":  true,
 	"firmware_install": true,
+
+	// Обслуживание и обновления (цикл 1 «бот без слеш-команд»). Кнопки
+	// переехали из панели обслуживания бота, круг у них тот же -- админ,
+	// владелец и операторы. Каждое router-local:
+	//
+	//   - awgm_update / hrneo_update -- обновление по решению самого роутера,
+	//     аргументов нет, пол версии агента v0.32.0;
+	//   - opkg_upgrade -- обновление пакетов Entware, аргументов нет;
+	//   - opkg_feed_disable -- один http(s)-адрес мёртвого фида
+	//     (sanitizeOpkgFeedURL);
+	//   - service_restart -- имя из miniappServiceRestartNames; перезагрузка
+	//     роутера требует набора имени и держит кулдаун.
+	"awgm_update":       true,
+	"hrneo_update":      true,
+	"opkg_upgrade":      true,
+	"opkg_feed_disable": true,
+	"service_restart":   true,
 
 	// Правка конфига агента (решение оператора № 3, отменяет D4 программы
 	// мини-аппа). Радиус router-global, поэтому границ у неё сразу три, и
@@ -159,12 +178,11 @@ var miniappCommandAllowlist = map[string]bool{
 	"update_agent_config": true,
 }
 
-// miniappOwnerOnlyActions -- действия, которых оператору не положено. Список
-// маленький намеренно: сюда попадает только то, что необратимо и меняет само
-// устройство, а не его настройку.
-var miniappOwnerOnlyActions = map[string]bool{
-	"firmware_install": true,
-}
+// miniappOwnerOnlyActions -- действия, которых оператору не положено. С цикла 1
+// список пуст: прошивку ставят и операторы (решение оператора 14.09). Карта и
+// её гейты на постановке и опросе остаются -- новое такое действие заводится
+// сюда, а не отдельной веткой.
+var miniappOwnerOnlyActions = map[string]bool{}
 
 // miniappTunnelArgActions -- действия, чей туннель адресуется идентификатором,
 // а имя NDMS-интерфейса подставляет сервер. Список общий, чтобы новое такое
@@ -192,6 +210,9 @@ var miniappNDMSRequiredActions = map[string]bool{
 type miniappCommandReq struct {
 	Action string         `json:"action"`
 	Args   map[string]any `json:"args"`
+	// Confirm -- набранное человеком имя роутера. Сверяется для необратимых
+	// действий (miniappConfirmRequired); остальным не нужно.
+	Confirm string `json:"confirm"`
 }
 
 // miniappCommandHandler dispatches an allowlisted agent command on behalf of a
@@ -199,6 +220,9 @@ type miniappCommandReq struct {
 // it is checked BEFORE the router is looked up so a stranger cannot probe which
 // ids exist (same ordering as the Phase 3 access endpoints).
 func miniappCommandHandler(d Deps) http.HandlerFunc {
+	// Окно перезагрузки живёт вместе с обработчиком: один мукс -- одно окно,
+	// и тесты с разными муксами не мешают друг другу.
+	rebootCooldown := newRouterCooldown(miniappRebootCooldown, time.Now)
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
 		routerID, ok := parseMiniappRouterID(r)
@@ -314,7 +338,22 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 				return
 			}
 		}
-		enqueueAgentCommandForUser(w, d, u, req.Action, args)
+		// Необратимое подтверждается набором имени роутера, и сверяет его
+		// сервер: проверка на экране -- пауза для человека, а не граница.
+		if miniappConfirmRequired(req.Action, args) && !confirmPhraseMatches(req.Confirm, u.Nickname) {
+			writeJSONError(w, http.StatusBadRequest, "confirm_mismatch", "имя роутера набрано неверно")
+			return
+		}
+		reboot := miniappIsRouterReboot(req.Action, args)
+		if reboot && !rebootCooldown.tryStart(u.ID) {
+			writeJSONError(w, http.StatusTooManyRequests, "reboot_cooldown", "роутер уже перезагружается")
+			return
+		}
+		resp := wizardDeployResp{}
+		resp.RouterAsleep, resp.RouterStatus, resp.WakeWindowMin = miniappWakeWindow(d, u, req.Action, time.Now().UTC())
+		if !enqueueAgentCommandForUserResp(w, d, u, req.Action, args, resp) && reboot {
+			rebootCooldown.release(u.ID)
+		}
 	}
 }
 
@@ -380,12 +419,14 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 				writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
 				return
 			}
-			// Второй набор ролей проверяется тоже, а не только admin-only.
-			// Сегодня вывод firmware_install -- безобидная строка «firmware
-			// install kicked», но «не течёт, потому что вывод такой»
-			// перестаёт быть правдой молча: стоит агенту вернуть в нём
-			// версию, путь к образу или причину отказа. Граница ставится по
-			// роли действия, а не по сегодняшнему виду его вывода.
+			// Второй гейт (miniappOwnerOnlyActions) проверяется тоже, а не
+			// только admin-only -- хотя сегодня карта пуста: обслуживание,
+			// включая firmware_install, открыто админу, владельцу и
+			// оператору (решение оператора 14.09), а необратимость держит
+			// набор имени роутера, а не роль. Код остаётся написанным на
+			// будущее: owner-only действие с чувствительным выводом заведётся
+			// в эту карту, а не отдельной веткой, и гейт прикроет его сразу и
+			// на постановке, и здесь, на опросе.
 			if miniappOwnerOnlyActions[cmd.Action] && !miniappIsOwner(d, telegramUserID, routerID) {
 				writeJSONError(w, http.StatusForbidden, "owner_only",
 					"this action changes the device itself and is available to the router's owner only")
@@ -476,4 +517,28 @@ func miniappResolveTunnelArgs(d Deps, routerID int64, tunnelID string) (map[stri
 		return args, true
 	}
 	return nil, false
+}
+
+// miniappServiceRestartNames -- что мини-апп вправе перезапустить. hrneo_start и
+// hrneo_stop агент тоже умеет, но экрану они не нужны, а список -- граница.
+var miniappServiceRestartNames = map[string]bool{
+	"hrneo":  true,
+	"awgmgr": true,
+	"router": true,
+}
+
+// sanitizeOpkgFeedURL -- адрес мёртвого фида для opkg_feed_disable. Агент только
+// закомментирует строку конфига с этим адресом, но чужое до очереди не доезжает:
+// один http(s)-адрес без логина, запроса и пробелов.
+func sanitizeOpkgFeedURL(raw string) (string, bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" || len(s) > 512 || strings.ContainsAny(s, " \t\r\n") {
+		return "", false
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	return s, true
 }

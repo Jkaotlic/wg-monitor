@@ -202,7 +202,7 @@ func TestRoutesPanelNotifier_RouteStatusErrorOffersRecoveryActions(t *testing.T)
 	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"routes_refresh", "routes_hrneo_doctor", "router_doctor", "maint_open"} {
+	for _, want := range []string{"routes_refresh", "routes_hrneo_doctor", "router_doctor"} {
 		if !keyboardHasCallback(tgFake.kb, want) {
 			t.Fatalf("route status error keyboard missing %q: %#v", want, tgFake.kb)
 		}
@@ -219,7 +219,7 @@ func TestRoutesPanelNotifier_RouteChangeErrorOffersRecoveryActions(t *testing.T)
 	if err := n.NotifyCommandResult(context.Background(), ref, res, uid); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"routes_open", "routes_refresh", "router_doctor", "maint_open"} {
+	for _, want := range []string{"routes_open", "routes_refresh", "router_doctor"} {
 		if !keyboardHasCallback(tgFake.kb, want) {
 			t.Fatalf("route change error keyboard missing %q: %#v", want, tgFake.kb)
 		}

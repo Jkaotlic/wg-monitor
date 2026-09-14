@@ -38,7 +38,7 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 		wantR1 int // row 1 button count (0 means "don't care")
 		wantR2 int
 	}{
-		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через туннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "⬆ Обновить пакеты", "🛠 Обслуживание", "🩺 Проверка"}, 2, 2},
+		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через туннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "🔐 Amnezia Premium", "🔑 HideMy.name", "🩺 Проверка"}, 2, 2},
 		{"summary", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"systemic", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"unknown", false, nil, 0, 0},
@@ -85,22 +85,12 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 	}
 }
 
-func TestReplyKeyboard_PerRouter_HasMaintButton(t *testing.T) {
-	v := ReplyKeyboardForTopic("per_router")
-	kb, ok := v.(*ReplyKeyboardMarkup)
-	if !ok {
-		t.Fatalf("type=%T, want *ReplyKeyboardMarkup", v)
-	}
-	found := false
-	for _, row := range kb.Keyboard {
-		for _, b := range row {
-			if b.Text == "🛠 Обслуживание" {
-				found = true
-			}
+func TestReplyKeyboard_PerRouter_HasNoMaintenanceButtons(t *testing.T) {
+	kb := ReplyKeyboardForTopic("per_router").(*ReplyKeyboardMarkup)
+	for _, gone := range []string{"🛠 Обслуживание", "⬆ Обновить пакеты"} {
+		if replyKeyboardHasText(kb, gone) {
+			t.Errorf("кнопка %q переехала в приложение, а в меню осталась: %+v", gone, kb.Keyboard)
 		}
-	}
-	if !found {
-		t.Error("🛠 Обслуживание button missing from per_router keyboard")
 	}
 }
 
@@ -136,8 +126,6 @@ func TestOperatorMenuInlineKeyboardForTopic_PerRouter(t *testing.T) {
 		{"🔑 HideMy.name", "compat_btn:0:hidemyname"},
 		{"🌍 Через туннель?", "compat_btn:0:via_tunnel"},
 		{"🇷🇺 Напрямую?", "compat_btn:0:direct"},
-		{"🛠 Обслуживание", "compat_btn:0:maint"},
-		{"⬆ Обновить пакеты", "compat_btn:0:opkg_upgrade"},
 	} {
 		if !inlineKeyboardHasButton(kb, want.text, want.cb) {
 			t.Fatalf("operator menu missing %q/%q: %+v", want.text, want.cb, kb.InlineKeyboard)

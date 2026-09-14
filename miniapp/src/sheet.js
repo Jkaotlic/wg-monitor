@@ -3,8 +3,10 @@ import { plainHyphens } from './text.js'
 // Описание шита -- данные, а не JSX: заводят его экраны, показывает оболочка,
 // и между ними ходит один объект. Само выполнение команды живёт внутри
 // компонента Sheet, поэтому здесь нет ни busy, ни result.
-export function confirmSheet({ routerID, title, body, action, args = {}, buttonLabel = 'Выполнить', danger = false, asleep = false, confirmPhrase = '', onDone, onResult }) {
-  return { routerID, title, body, action, args, buttonLabel, danger, asleep, confirmPhrase, onDone, onResult }
+// commandLabel -- как назвать команду на листе словами человека. Без него лист
+// покажет имя действия агента, а внутренних имён владельцу показывать нельзя.
+export function confirmSheet({ routerID, title, body, action, args = {}, buttonLabel = 'Выполнить', danger = false, asleep = false, confirmPhrase = '', commandLabel = '', onDone, onResult }) {
+  return { routerID, title, body, action, args, buttonLabel, danger, asleep, confirmPhrase, commandLabel, onDone, onResult }
 }
 
 // Подтверждение действия, которое человек делает СЕБЕ, а не роутеру:

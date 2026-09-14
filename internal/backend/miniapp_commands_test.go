@@ -40,8 +40,9 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
 		"tunnel_traffic",
-		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
-		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
+		// Прошивка (фаза D2): и чтение, и установка -- всем с доступом к
+		// роутеру (решение оператора 14.09); установку держит набор имени
+		// роутера (miniappConfirmRequired), а не роль.
 		"firmware_status", "firmware_install",
 		// Включение/выключение по идентификатору: работает и там, где ndmc
 		// бессилен (opkg-туннель без имени в NDMS).
@@ -73,6 +74,12 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// таким роутерам не рисуется, обязательный предпросмотр перед кнопкой
 		// сброса и подтверждение набором имени роутера. Снимок «до» пишет агент.
 		"dns_reset",
+		// Обслуживание и обновления (цикл 1 «бот без слеш-команд»): кнопки
+		// переехали из панели бота. Обновления -- без аргументов, awgm_update и
+		// hrneo_update за полом версии v0.32.0; service_restart -- только
+		// hrneo/awgmgr/router; перезагрузка и прошивка -- с набором имени,
+		// который сверяет бэкенд; opkg_feed_disable -- один http(s)-адрес.
+		"awgm_update", "hrneo_update", "opkg_upgrade", "opkg_feed_disable", "service_restart",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -88,7 +95,6 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_delete",      // irreversible
 		"self_update",        // audited deploy flow
 		"tunnel_import",      // route/config mutation
-		"opkg_upgrade",
 		"entware_clean_run",
 		// Ответ несёт ndms_name каждого туннеля -- топологию, которую белый
 		// список туннелей клиенту не отдаёт. Состояние проверки связи экран
@@ -485,8 +491,9 @@ func TestMiniappAllowsRouteManagement(t *testing.T) {
 		"tunnel_enable", "tunnel_disable", "pingcheck_toggle",
 		// Обмен по туннелю (фаза F): читающее, ряд ведёт сам роутер.
 		"tunnel_traffic",
-		// Прошивка (фаза D2): чтение -- всем с доступом, установка -- только
-		// владельцу (проверяется отдельно, miniappOwnerOnlyActions).
+		// Прошивка (фаза D2): и чтение, и установка -- всем с доступом к
+		// роутеру (решение оператора 14.09); установку держит набор имени
+		// роутера (miniappConfirmRequired), а не роль.
 		"firmware_status", "firmware_install",
 		// Включение/выключение по идентификатору: работает и там, где ndmc
 		// бессилен (opkg-туннель без имени в NDMS).
@@ -524,8 +531,7 @@ func TestMiniappStillDeniesDangerousActions(t *testing.T) {
 	// стороне агента, и перенаправление адреса бэкенда -- захват всего парка.
 	for _, action := range []string{
 		"tunnel_delete", "update_backend_url", "tunnel_import",
-		"opkg_upgrade", "self_update",
-		"service_restart", "entware_clean_run",
+		"self_update", "entware_clean_run",
 	} {
 		if miniappCommandAllowlist[action] {
 			t.Errorf("%s не должен быть доступен мини-аппу", action)
@@ -869,23 +875,15 @@ func TestMiniappResultRoleGateSurvivesSweep(t *testing.T) {
 	}
 }
 
-// Второй набор ролей -- miniappOwnerOnlyActions (firmware_install) -- на
-// постановке проверяется (403 owner_only), и на опросе результата проверяется
-// тоже.
-//
-// Решение записано здесь намеренно: сегодня вывод firmware_install -- строка
-// «firmware install kicked; router will reboot», и «утечки нет» держится
-// только на том, каким этот вывод оказался. Такое обоснование перестаёт быть
-// правдой молча -- в тот день, когда агент начнёт возвращать в нём версию,
-// путь к прошивке или причину отказа. Граница ставится по роли действия, а не
-// по сегодняшней безобидности его вывода.
-func TestMiniappFirmwareResultDeniedToOperator(t *testing.T) {
-	_, ownedID, ownerTG, q, h := miniappRealQueueFleet(t)
+// С цикла 1 прошивку ставят и операторы (решение оператора 14.09). Правило
+// «запрет на входе, выход открыт» теперь звучит так: итог читает тот, кто
+// вправе нажать, а посторонний -- нет.
+func TestMiniappFirmwareResultReadableByOperator(t *testing.T) {
+	_, ownedID, _, q, h := miniappRealQueueFleet(t)
 
-	// Ставит владелец: установка прошивки оператору запрещена и на постановке.
-	rec := miniappAgentConfigPost(t, h, ownedID, ownerTG, `{"action":"firmware_install"}`)
+	rec := miniappAgentConfigPost(t, h, ownedID, 555, `{"action":"firmware_install","confirm":"router-owned"}`)
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("владелец, установка прошивки: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+		t.Fatalf("оператор, установка прошивки: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
 	}
 	var issued struct {
 		CmdID string `json:"cmd_id"`
@@ -900,20 +898,11 @@ func TestMiniappFirmwareResultDeniedToOperator(t *testing.T) {
 	if err := q.RecordResult(ownedID, wire.CommandResult{ID: issued.CmdID, Status: "ok", Output: outcome}); err != nil {
 		t.Fatal(err)
 	}
-
-	res := miniappPollResult(t, h, ownedID, 555, issued.CmdID)
-	if res.Code != http.StatusForbidden || !bytes.Contains(res.Body.Bytes(), []byte("owner_only")) {
-		t.Errorf("оператор, опрос результата прошивки: код %d тело %s, ожидался 403 owner_only", res.Code, res.Body.String())
+	if res := miniappPollResult(t, h, ownedID, 555, issued.CmdID); res.Code != http.StatusOK || !bytes.Contains(res.Body.Bytes(), []byte(outcome)) {
+		t.Errorf("оператор, итог прошивки: код %d тело %s", res.Code, res.Body.String())
 	}
-	if bytes.Contains(res.Body.Bytes(), []byte(outcome)) {
-		t.Errorf("оператор прочитал вывод установки прошивки: %s", res.Body.String())
-	}
-
-	// Владельцу -- приходит: иначе тест был бы зелёным и на экране, закрытом
-	// вообще для всех.
-	mine := miniappPollResult(t, h, ownedID, ownerTG, issued.CmdID)
-	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(outcome)) {
-		t.Fatalf("владелец, опрос результата прошивки: код %d тело %s, ожидались 200 и вывод", mine.Code, mine.Body.String())
+	if res := miniappPollResult(t, h, ownedID, 777, issued.CmdID); res.Code != http.StatusNotFound || bytes.Contains(res.Body.Bytes(), []byte(outcome)) {
+		t.Errorf("посторонний, итог прошивки: код %d тело %s", res.Code, res.Body.String())
 	}
 }
 

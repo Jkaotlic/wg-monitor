@@ -216,3 +216,95 @@ func TestRouterVersionsGetMissingIsEmptyNotError(t *testing.T) {
 		t.Errorf("хотим пустой снимок, получили %+v", row)
 	}
 }
+
+// Загруженная версия модуля приходит только с отчётом; version_audit старого
+// агента её не несёт и не имеет права стереть. Старая база получает колонку
+// миграцией при открытии.
+func TestRouterVersionsKmodLoadedVersionMergesAndSurvivesMigration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "kmod.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec(`ALTER TABLE router_versions DROP COLUMN kmod_loaded_version`); err != nil {
+		t.Fatalf("имитация старой базы: %v", err)
+	}
+	_ = d.Close()
+
+	d, err = Open(path)
+	if err != nil {
+		t.Fatalf("открытие старой базы: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	uid, err := d.Users().Insert("router-a", "tok-a", "198.51.100.10", "awg11")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := d.RouterVersions()
+	if err := r.Upsert(uid, RouterVersionSnapshot{KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.1.20260906", Source: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Upsert(uid, RouterVersionSnapshot{AwgmgrVersion: "2.19.1", Source: "version_audit"}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := r.Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.KmodLoadedVersion != "3.1.20260906" {
+		t.Errorf("источник без загруженной версии стёр её: %q", row.KmodLoadedVersion)
+	}
+	if err := r.Upsert(uid, RouterVersionSnapshot{KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.2.20260930", Source: "report"}); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ = r.Get(uid); row.KmodLoadedVersion != "3.2.20260930" {
+		t.Errorf("после перезагрузки загруженная версия не обновилась: %q", row.KmodLoadedVersion)
+	}
+}
+
+// M2 (fix round 1): отчёт, который явно сообщил о состоянии модуля
+// (KmodLoadedVersionReported=true), обязан записать загруженную версию как
+// пришла, даже пустой строкой. Сценарий: kmod_version=3.2, kmod_loaded_version
+// был 3.1; следующий отчёт сообщил kernel_module_loaded (флаг взведён), но
+// версию не узнал (пусто) -- общее правило «пусто -- оставить прежнее» здесь
+// НЕ должно сработать, иначе после настоящей перезагрузки со транзиентно
+// пустым ответом RebootHint звал бы перезагрузку вечно.
+func TestRouterVersionsKmodLoadedVersionForcedEmptyWhenReported(t *testing.T) {
+	d, uid := newTestDBForVersions(t)
+	r := d.RouterVersions()
+	if err := r.Upsert(uid, RouterVersionSnapshot{
+		KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.1.20260906",
+		KmodLoadedVersionReported: true, Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Upsert(uid, RouterVersionSnapshot{
+		KmodLoadedVersion: "", KmodLoadedVersionReported: true, Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	row, err := r.Get(uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.KmodLoadedVersion != "" {
+		t.Errorf("отчёт сообщил о модуле, но пустая версия не форсировалась: %q", row.KmodLoadedVersion)
+	}
+	if row.KmodVersion != "3.2.20260930" {
+		t.Errorf("установленная версия не должна была измениться: %q", row.KmodVersion)
+	}
+
+	// Без флага (version_audit или старый агент) пустая версия по-прежнему
+	// не стирает известное -- форс относится только к пути отчёта.
+	if err := r.Upsert(uid, RouterVersionSnapshot{
+		KmodLoadedVersion: "3.1.20260906", KmodLoadedVersionReported: true, Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Upsert(uid, RouterVersionSnapshot{Source: "version_audit"}); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ = r.Get(uid); row.KmodLoadedVersion != "3.1.20260906" {
+		t.Errorf("version_audit без флага стёр загруженную версию: %q", row.KmodLoadedVersion)
+	}
+}

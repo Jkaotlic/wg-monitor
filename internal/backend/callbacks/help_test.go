@@ -82,11 +82,14 @@ func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
 		"🔑 HideMy.name",
 		"🌍 Через туннель?",
 		"🇷🇺 Напрямую?",
-		"🛠 Обслуживание",
-		"⬆ Обновить пакеты",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("per-router topic help missing visible button %q:\n%s", want, body)
+		}
+	}
+	for _, gone := range []string{"🛠 Обслуживание", "⬆ Обновить пакеты"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("per-router topic help still mentions removed button %q:\n%s", gone, body)
 		}
 	}
 }

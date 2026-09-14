@@ -8,7 +8,7 @@ import (
 func TestHelpForScreen_KnownScreens(t *testing.T) {
 	for _, screen := range []string{
 		"operator", "alerts", "fleet", "premium", "mobile",
-		"maint", "routes", "tunnels", "access", "diag", "status", "doctor", "pingcheck",
+		"routes", "tunnels", "access", "diag", "status", "doctor", "pingcheck",
 	} {
 		body := HelpForScreen(screen)
 		if body == "" {
@@ -108,12 +108,12 @@ func TestHelpForScreen_TunnelsDistinguishesRestartButtons(t *testing.T) {
 	}
 }
 
-func TestHelpRowFor_Maint(t *testing.T) {
-	row := HelpRowFor("maint")
+func TestHelpRowFor_Tunnels(t *testing.T) {
+	row := HelpRowFor("tunnels")
 	if len(row) != 1 {
 		t.Fatalf("want 1 button, got %d", len(row))
 	}
-	if row[0].CallbackData != "panel:0:help:maint" {
+	if row[0].CallbackData != "panel:0:help:tunnels" {
 		t.Errorf("bad callback data: %q", row[0].CallbackData)
 	}
 	if row[0].Text != "ℹ Помощь" {

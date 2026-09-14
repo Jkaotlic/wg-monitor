@@ -3,9 +3,26 @@ import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVer
 import { openExternal } from '../telegram.js'
 import { useCommand } from '../useCommand.js'
 import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelOpenURL } from '../settings.js'
-import { versionsRows, unknownLine, installedRows, rebootLine } from '../versions.js'
+import { versionsRows, unknownLine, installedRows } from '../versions.js'
 import { humanAge } from '../labels.js'
 import { confirmSheet, localSheet } from '../sheet.js'
+import {
+  MAINT_TEXTS,
+  mayMaintain,
+  updatesAgentReady,
+  updateRow,
+  hrneoButtonVisible,
+  awgmUpdateSheet,
+  hrneoUpdateSheet,
+  firmwareSheet,
+  rebootSheet,
+  restartSheet,
+  opkgUpgradeSheet,
+  feedDisableSheet,
+  opkgUpgradeOutcome,
+  refusalFromResult,
+  rebootBannerVisible,
+} from '../maintenance.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -14,8 +31,8 @@ import { DataRow } from '../ui/DataRow.jsx'
 //
 // Экран ничего не настраивает в самом приложении: настраивать там нечего.
 // Он показывает, по каким правилам бот судит об этом роутере (числа живут в
-// backend.yaml), что на роутере стоит из версий и что можно спросить у него
-// прямо сейчас.
+// backend.yaml), что на роутере стоит из версий, что можно спросить у него
+// прямо сейчас и -- с цикла 1 -- обновить, перезапустить и перезагрузить.
 export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClose }) {
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
   const [settings, setSettings] = useState(null)
@@ -35,9 +52,16 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyError, setNotifyError] = useState(null)
 
+  // Итоги листов обслуживания. Лист закрывается, а экран обязан помнить:
+  // обновление awg-manager с reboot_needed сразу зажигает плашку перезагрузки,
+  // мёртвый фид из итога пакетов даёт кнопку «Отключить фид», отказ агента
+  // меняет кнопку на объяснение.
+  const [awgmResult, setAwgmResult] = useState(null)
+  const [opkgResult, setOpkgResult] = useState(null)
+  const [refusals, setRefusals] = useState({})
+
   const audit = useCommand(routerID)
   const firmware = useCommand(routerID)
-  const install = useCommand(routerID)
   const doctor = useCommand(routerID)
   const hrneo = useCommand(routerID)
   const pingNow = useCommand(routerID)
@@ -95,19 +119,26 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
       .finally(() => setPanelBusy(false))
   }
 
+  const noteRefusal = (res) => {
+    const refusal = refusalFromResult(res)
+    if (refusal) setRefusals((prev) => ({ ...prev, [refusal.kind]: refusal.text }))
+  }
+
   const auditOut = audit.result?.status === 'ok' ? auditRows(audit.result.output) : []
   const doctorOut = doctor.result?.status === 'ok' ? doctorRows(doctor.result.output) : []
   const hrneoOut = hrneo.result?.status === 'ok' ? doctorRows(hrneo.result.output) : []
   const pings = pingRows(tunnels)
   const fw = firmware.result?.status === 'ok' ? firmwareStatus(firmware.result.output) : null
-  // Прошивку ставит только владелец: она необратима и перезагружает роутер.
-  // Оператору кнопку не рисуем вовсе -- сервер ему всё равно откажет, а
-  // серая кнопка не объясняет, почему нельзя.
-  const mayInstall = settings?.role === 'owner' || settings?.role === 'admin'
-  // Скрыть новость может тот же круг: строка живёт на роутере, и оператор
-  // убрал бы её с экрана владельца тоже.
+  // Обслуживание -- админу, владельцу и операторам: тот же круг, что у сервера.
+  // Прошивку с цикла 1 ставят и операторы (решение оператора 14.09).
+  const maintain = mayMaintain(settings)
+  const agentReady = updatesAgentReady(settings)
+  // Скрыть новость может только владелец и админ: строка живёт на роутере, и
+  // оператор убрал бы её с экрана владельца тоже.
   const mayHideNews = settings?.role === 'owner' || settings?.role === 'admin'
   const newsRows = versionsRows(versions)
+  const showReboot = rebootBannerVisible({ versions, awgmResult })
+  const opkgOut = opkgUpgradeOutcome(opkgResult)
   // Метка времени обязательна рядом с «проверить не удалось»: обещание без
   // неё говорит больше, чем мы знаем.
   const checkedAgo = versions?.checked_at
@@ -115,6 +146,29 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
     : ''
   const unknownLines = (versions?.unknown ?? []).map((u) => unknownLine(u.reason, checkedAgo)).filter(Boolean)
 
+  // Кнопка в строке новости -- по компоненту. Сырые строки новостей
+  // (versions.rows) несут installed/available, по ним и собирается лист.
+  const newsAction = (component) => {
+    if (!maintain || !openSheet) return null
+    if (component === 'awgmgr' && agentReady) {
+      const row = updateRow(versions, 'awgmgr')
+      return { label: 'Обновить awg-manager', open: () => openSheet(awgmUpdateSheet({ routerID, row, asleep, onResult: setAwgmResult })) }
+    }
+    if (component === 'hrneo' && agentReady && hrneoButtonVisible(versions)) {
+      const row = updateRow(versions, 'hrneo')
+      return { label: 'Обновить HydraRoute Neo', open: () => openSheet(hrneoUpdateSheet({ routerID, installed: row.installed, available: row.available, asleep })) }
+    }
+    // routerName ещё не пришло (fleet не догрузился) -- confirmReady на пустой
+    // фразе проходит без ввода (sheet.js), и сервер ответил бы confirm_mismatch.
+    if (component === 'firmware' && !refusals.firmware && routerName) {
+      const row = updateRow(versions, 'firmware')
+      return {
+        label: 'Установить прошивку',
+        open: () => openSheet(firmwareSheet({ routerID, routerName, current: row.installed, available: row.available, asleep, onResult: noteRefusal, onDone: load })),
+      }
+    }
+    return null
+  }
 
   // Выключение уведомлений -- единственное действие на этом экране, которое
   // человек делает СЕБЕ, а не роутеру. Поэтому и предупреждение здесь про
@@ -214,25 +268,33 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
         </Section>
 
         <Section title="Обновления">
-          {rebootLine(versions) && <p class="state state-warn">{rebootLine(versions)}</p>}
           {newsRows.length > 0 && (
             <div class="card settings-card">
-              {newsRows.map((r) => (
-                <div key={r.key} class="settings-row">
-                  <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
-                  <p class="card-foot">{r.text}</p>
-                  {mayHideNews && (
-                    <div class="settings-actions">
-                      <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
-                        Отложить на неделю
+              {newsRows.map((r) => {
+                const act = newsAction(r.component)
+                return (
+                  <div key={r.key} class="settings-row">
+                    <DataRow dot={r.tone} title={r.title} code={r.code} value={r.value} valueTone={r.tone} />
+                    <p class="card-foot">{r.text}</p>
+                    {act && (
+                      <button type="button" class={r.component === 'firmware' ? 'btn btn-danger btn-row' : 'btn btn-primary btn-row'} onClick={act.open}>
+                        {act.label}
                       </button>
-                      <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
-                        Скрыть эту новость
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ))}
+                    )}
+                    {r.component === 'firmware' && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
+                    {mayHideNews && (
+                      <div class="settings-actions">
+                        <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'snooze')}>
+                          Отложить на неделю
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-row" disabled={newsBusy} onClick={() => hideNews(r.component, 'dismiss')}>
+                          Скрыть эту новость
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
           {/* Причины незнания -- отдельными строками. «Мы не знаем, что вышло»
@@ -260,6 +322,62 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
           )}
           {versionsError && <p class="state state-error">{versionsError}</p>}
         </Section>
+
+        {maintain && openSheet && (
+          <Section title="Обслуживание">
+            {showReboot && (
+              <div class="card settings-card">
+                <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>
+                {refusals.reboot ? (
+                  <p class="hint">{refusals.reboot}</p>
+                ) : routerName ? (
+                  <button type="button" class="btn btn-danger btn-wide" onClick={() => openSheet(rebootSheet({ routerID, routerName, asleep, onResult: noteRefusal }))}>
+                    Перезагрузить роутер
+                  </button>
+                ) : null}
+              </div>
+            )}
+            {!agentReady && <p class="hint">{MAINT_TEXTS.tooOld}</p>}
+            {agentReady && hrneoButtonVisible(versions) && (
+              <button
+                type="button"
+                class="btn btn-ghost btn-wide"
+                onClick={() => openSheet(hrneoUpdateSheet({ routerID, installed: versions?.installed?.hrneo ?? '', asleep }))}
+              >
+                Проверить и обновить HydraRoute Neo
+              </button>
+            )}
+            {!hrneoButtonVisible(versions) && <p class="hint">{MAINT_TEXTS.hrneoMissing}</p>}
+            <div class="settings-actions">
+              <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'hrneo', asleep }))}>
+                Перезапустить HydraRoute
+              </button>
+              <button type="button" class="btn btn-ghost" onClick={() => openSheet(restartSheet({ routerID, name: 'awgmgr', asleep }))}>
+                Перезапустить awg-manager
+              </button>
+            </div>
+            <button type="button" class="btn btn-ghost btn-wide" onClick={() => openSheet(opkgUpgradeSheet({ routerID, asleep, onResult: setOpkgResult }))}>
+              Обновить пакеты Entware
+            </button>
+            {opkgOut && (
+              <div class="card settings-card">
+                <p class={opkgOut.tone === 'error' ? 'state state-error' : opkgOut.tone === 'warn' ? 'state state-warn' : 'state'}>{opkgOut.text}</p>
+                {opkgOut.failedFeeds.map((feed) => (
+                  <div key={feed.url} class="settings-row">
+                    <DataRow title="Источник пакетов не отвечает" value={feed.host} valueTone="warn" />
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-row settings-row-btn"
+                      onClick={() => openSheet(feedDisableSheet({ routerID, feed, asleep, onResult: setOpkgResult }))}
+                    >
+                      Отключить фид
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        )}
 
         <Section title="Что стоит на роутере">
           <button type="button" class="btn btn-ghost btn-wide" disabled={audit.busy} onClick={() => audit.run('version_audit', {}, deadline).then((res) => { if (res?.status === 'ok') loadVersions() })}>
@@ -322,39 +440,18 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               </p>
             </div>
           )}
-          {fw?.known && fw.updateAvailable && mayInstall && openSheet && (
+          {fw?.known && fw.updateAvailable && maintain && openSheet && !refusals.firmware && routerName && (
             <button
               type="button"
               class="btn btn-danger btn-wide"
               onClick={() =>
-                openSheet(
-                  confirmSheet({
-                    routerID,
-                    title: `Поставить прошивку ${fw.available}?`,
-                    body: `Роутер «${routerName}» скачает ${fw.available} вместо ${fw.current} и перезагрузится. VPN-туннели упадут на несколько минут. Вернуть прежнюю версию из приложения нельзя.`,
-                    action: 'firmware_install',
-                    buttonLabel: 'Поставить и перезагрузить',
-                    danger: true,
-                    asleep,
-                    // Набор имени роутера -- пауза, а не защита от чужого
-                    // пальца: это единственное место, где человек читает
-                    // последствие до того, как оно случится.
-                    confirmPhrase: routerName || '',
-                    onDone: load,
-                  }),
-                )
+                openSheet(firmwareSheet({ routerID, routerName, current: fw.current, available: fw.available, asleep, onResult: noteRefusal, onDone: load }))
               }
             >
               Установить прошивку
             </button>
           )}
-          {fw?.known && fw.updateAvailable && !mayInstall && (
-            <p class="hint">
-              Обновление доступно, но ставить прошивку может только владелец роутера — вы здесь
-              оператор.
-            </p>
-          )}
-          {install.error && <p class="state state-error">{install.error}</p>}
+          {fw?.known && fw.updateAvailable && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
         </Section>
 
         <Section title="Проверка связи">
@@ -423,7 +520,8 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               <b>Сейчас</b> — работает ли обход прямо сейчас и что с ним не так.{' '}
               <b>VPN-туннели</b> — какой VPN-туннель несёт трафик, кто подхватит и что через него уходит.{' '}
               <b>Проверки</b> — те же вопросы, заданные роутеру заново, и адрес, которым вас
-              видно снаружи. <b>Что было</b> — что происходило за неделю.
+              видно снаружи. <b>Что было</b> — что происходило за неделю.{' '}
+              <b>Настройки</b> — обновления, перезапуск служб и перезагрузка роутера.
             </p>
             <p class="card-foot">
               Уведомления остаются у бота: приложение не может разбудить того, кто его не открыл.

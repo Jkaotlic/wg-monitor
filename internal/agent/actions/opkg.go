@@ -39,6 +39,9 @@ type OpkgRunner struct {
 	// subdirectory of per-feed `.conf` files. Defaults to "/opt/etc" when
 	// empty — tests substitute t.TempDir() to point at a sandbox.
 	ConfigRoot string
+	// Sleep -- пауза перед проверкой «HydraRoute работает» после перезапуска.
+	// nil -- настоящий таймер; тесты подставляют мгновенную.
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
 // configRoot returns ConfigRoot or the production default.
@@ -135,8 +138,8 @@ func (o *OpkgRunner) SmartUpgrade(ctx context.Context) (status, output string, p
 	neededKB := int64(0)
 	if len(pkgs) > 0 {
 		neededKB = o.estimateInstallSizeKB(ctx, pkgs)
-		headroomKB := totalKB / 10 // require ≥ 10% free post-upgrade
-		if freeKB-neededKB < headroomKB {
+		// ≥ 10% свободного после обновления -- та же формула, что у HrneoUpdate.
+		if ok, headroomKB := spaceVerdict(freeKB, totalKB, neededKB); !ok {
 			return "err", fmt.Sprintf(
 				"❌ Не хватит места на /opt.\n"+
 					"Пакетов к обновлению: %d\n"+

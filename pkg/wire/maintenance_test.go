@@ -102,3 +102,40 @@ func TestFirmwareStatus_RoundTrip(t *testing.T) {
 		t.Fatalf("round-trip diverged:\n  in=%+v\n out=%+v", in, out)
 	}
 }
+
+// Перезагрузка нужна ровно тогда, когда обе версии модуля ядра известны и
+// расходятся. Молчание одной из сторон -- не повод пугать владельца.
+func TestRebootNeeded(t *testing.T) {
+	for _, tc := range []struct {
+		installed, loaded string
+		want              bool
+	}{
+		{"3.2.20260930", "3.1.20260906", true},
+		{"3.1.20260906", "3.1.20260906", false},
+		{"", "3.1.20260906", false},
+		{"3.1.20260906", "", false},
+		{"", "", false},
+	} {
+		if got := RebootNeeded(tc.installed, tc.loaded); got != tc.want {
+			t.Errorf("RebootNeeded(%q, %q) = %v, want %v", tc.installed, tc.loaded, got, tc.want)
+		}
+	}
+}
+
+func TestAwgmUpdateResultJSONShape(t *testing.T) {
+	b, err := json.Marshal(AwgmUpdateResult{Updated: true, From: "2.19.0", To: "2.19.1", KmodInstalled: "3.2", KmodLoaded: "3.1", RebootNeeded: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"updated":true,"from":"2.19.0","to":"2.19.1","kmod_installed":"3.2","kmod_loaded":"3.1","reboot_needed":true}`
+	if string(b) != want {
+		t.Errorf("got %s\nwant %s", b, want)
+	}
+	b, err = json.Marshal(HrneoUpdateResult{Updated: false, From: "3.18.3-1", To: "3.18.3-1", Running: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(b) != `{"updated":false,"from":"3.18.3-1","to":"3.18.3-1","running":true}` {
+		t.Errorf("hrneo shape: %s", b)
+	}
+}

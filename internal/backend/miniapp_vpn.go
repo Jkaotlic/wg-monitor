@@ -114,8 +114,9 @@ type miniappVPNIssueResp struct {
 // запрещена. Замена конфига — как раз починка: старый туннель остаётся на
 // месте, новый обратим выключением.
 //
-// Установка прошивки — другое дело и остаётся за владельцем
-// (miniappOwnerOnlyActions): она меняет само устройство и необратима.
+// Установка прошивки — другое дело: она меняет само устройство и необратима,
+// поэтому её держит не роль, а набор имени роутера (miniappConfirmRequired) —
+// с цикла 1 её тоже ставят и владелец, и оператор (решение оператора 14.09).
 func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())

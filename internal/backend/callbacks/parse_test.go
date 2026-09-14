@@ -97,7 +97,7 @@ func TestParseRouteTemplateCallbacks(t *testing.T) {
 }
 
 func TestParseCommandActions(t *testing.T) {
-	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "opkg_upgrade", "router_doctor"} {
+	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "router_doctor"} {
 		data := action + ":42:tunnel_amnezia_for_awg2"
 		a, err := Parse(data)
 		if err != nil {
@@ -324,22 +324,19 @@ func TestParse_MaintActions(t *testing.T) {
 		want    Args
 		wantErr bool
 	}{
-		{data: "maint_open:42:_panel_", want: Args{Action: "maint_open", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_close:42:_panel_", want: Args{Action: "maint_close", UserID: 42, CheckName: "_panel_", IsPanel: true}},
 		{data: "maint_restart:42:hrneo", want: Args{Action: "maint_restart", UserID: 42, CheckName: "hrneo", MaintName: "hrneo"}},
 		{data: "maint_restart:42:awgmgr", want: Args{Action: "maint_restart", UserID: 42, CheckName: "awgmgr", MaintName: "awgmgr"}},
-		{data: "maint_restart:42:router", want: Args{Action: "maint_restart", UserID: 42, CheckName: "router", MaintName: "router"}},
 		{data: "maint_confirm:42:hrneo:a1b2c3d4", want: Args{Action: "maint_confirm", UserID: 42, CheckName: "hrneo", MaintName: "hrneo", MaintToken: "a1b2c3d4"}},
-		{data: "maint_fw_open:42:_panel_", want: Args{Action: "maint_fw_open", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_fw_check:42:_panel_", want: Args{Action: "maint_fw_check", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_fw_install:42:_panel_", want: Args{Action: "maint_fw_install", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_fw_confirm:42:_panel_:deadbeef", want: Args{Action: "maint_fw_confirm", UserID: 42, CheckName: "_panel_", IsPanel: true, MaintName: "firmware", MaintToken: "deadbeef"}},
 		// negative cases
-		{data: "maint_restart:42", wantErr: true},             // missing name segment
-		{data: "maint_restart:42:_panel_", wantErr: true},     // sentinel as name is rejected
-		{data: "maint_confirm:42:hrneo", wantErr: true},       // missing token
-		{data: "maint_fw_confirm:42:_panel_", wantErr: true},  // missing token
-		{data: "maint_fw_confirm:42:_panel_:", wantErr: true}, // empty token
+		{data: "maint_restart:42", wantErr: true},
+		{data: "maint_restart:42:_panel_", wantErr: true},
+		{data: "maint_confirm:42:hrneo", wantErr: true},
+		{data: "maint_open:42:_panel_", wantErr: true},
+		{data: "maint_close:42:_panel_", wantErr: true},
+		{data: "maint_fw_open:42:_panel_", wantErr: true},
+		{data: "maint_fw_check:42:_panel_", wantErr: true},
+		{data: "maint_fw_install:42:_panel_", wantErr: true},
+		{data: "maint_fw_confirm:42:_panel_:deadbeef", wantErr: true},
 	}
 	for _, c := range cases {
 		t.Run(c.data, func(t *testing.T) {
@@ -371,13 +368,11 @@ func TestParse_PanelHome(t *testing.T) {
 	}
 }
 
-func TestParse_PanelKindMaint(t *testing.T) {
-	a, err := Parse("panel:0:kind:maint")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "kind" || a.PanelKind != "maint" {
-		t.Errorf("got %+v", a)
+func TestParse_PanelKindMaintRemoved(t *testing.T) {
+	for _, data := range []string{"panel:0:kind:maint", "panel:42:push:maint", "panel:0:help:maint"} {
+		if _, err := Parse(data); err == nil {
+			t.Errorf("%q: вид обслуживания удалён из хаба, разбор обязан отказать", data)
+		}
 	}
 }
 
@@ -479,42 +474,9 @@ func TestParse_PanelKindRequiresKind(t *testing.T) {
 	}
 }
 
-func TestParse_OpkgDisable_Valid(t *testing.T) {
-	a, err := Parse("opkg_disable:12345:_menu:abcd1234")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.Action != "opkg_disable" {
-		t.Errorf("Action=%q", a.Action)
-	}
-	if a.UserID != 12345 {
-		t.Errorf("UserID=%d", a.UserID)
-	}
-	if a.OpkgRepairToken != "abcd1234" {
-		t.Errorf("OpkgRepairToken=%q", a.OpkgRepairToken)
-	}
-}
-
-func TestParse_OpkgDisable_MissingToken(t *testing.T) {
-	_, err := Parse("opkg_disable:12345:_menu:")
-	if err == nil {
-		t.Error("expected error for empty token")
-	}
-}
-
-func TestParse_OpkgDisable_NoTokenSegment(t *testing.T) {
-	_, err := Parse("opkg_disable:12345:_menu")
-	if err == nil {
-		t.Error("expected error for missing token segment")
-	}
-}
-
 func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 	for _, bad := range []string{
 		"maint_confirm:42:hrneo:x",
-		"maint_fw_confirm:42:_panel_:bad.token",
-		"opkg_disable:12345:_menu:bad/token",
-		"opkg_disable_confirm:12345:_menu:x",
 		"diag_raw:42:_panel_:bad.token",
 		"diag_back:42:_panel_:bad/token",
 		"diag_test:bad.token:mtu",
@@ -522,16 +484,6 @@ func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 		if _, err := Parse(bad); err == nil {
 			t.Errorf("%q should reject malformed callback token", bad)
 		}
-	}
-}
-
-func TestParse_OpkgDisableConfirm(t *testing.T) {
-	a, err := Parse("opkg_disable_confirm:12345:_menu:abcd1234")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.Action != "opkg_disable_confirm" || a.UserID != 12345 || a.OpkgRepairToken != "abcd1234" {
-		t.Fatalf("got %+v", a)
 	}
 }
 

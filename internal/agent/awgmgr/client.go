@@ -366,6 +366,54 @@ func (c *Client) SystemInfo(ctx context.Context) (*SystemInfo, error) {
 	return &env.Data, nil
 }
 
+// UpdateCheck asks awg-manager whether a newer build of itself exists
+// (GET /api/system/update/check). force=true makes it ask upstream now
+// instead of answering from its cache.
+func (c *Client) UpdateCheck(ctx context.Context, force bool) (*UpdateCheck, error) {
+	path := "/api/system/update/check"
+	if force {
+		path += "?force=true"
+	}
+	var raw json.RawMessage
+	if err := c.get(ctx, path, &raw); err != nil {
+		return nil, err
+	}
+	var out UpdateCheck
+	if err := decodeMaybeEnvelope(raw, &out); err != nil {
+		return nil, fmt.Errorf("awgmgr %s: %w", path, err)
+	}
+	return &out, nil
+}
+
+// UpdateApply starts awg-manager's self-update (POST /api/system/update/apply
+// → {status:"updating"}). The daemon restarts right after: connection errors
+// on the next calls are expected, not failures.
+func (c *Client) UpdateApply(ctx context.Context) error {
+	return c.post(ctx, "/api/system/update/apply", nil, nil)
+}
+
+// decodeMaybeEnvelope decodes either {success,data} or a bare object into out.
+// The /system/update/* responses are not described as enveloped in the
+// openapi, and guessing one shape would break on the other.
+func decodeMaybeEnvelope(body []byte, out any) error {
+	var env struct {
+		Success *bool           `json:"success"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return fmt.Errorf("decode: %w", err)
+	}
+	if env.Success != nil {
+		if !*env.Success {
+			return fmt.Errorf("success=false")
+		}
+		if len(env.Data) > 0 && string(env.Data) != "null" {
+			return json.Unmarshal(env.Data, out)
+		}
+	}
+	return json.Unmarshal(body, out)
+}
+
 // HydraRouteStatus returns /api/system/hydraroute-status data.
 func (c *Client) HydraRouteStatus(ctx context.Context) (*HydraRouteStatus, error) {
 	var env Envelope[HydraRouteStatus]

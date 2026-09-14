@@ -215,10 +215,14 @@ export function setAutoRepair(routerID, enabled) {
   })
 }
 
-export function sendCommand(routerID, action, args = {}) {
+// confirm -- набранное человеком имя роутера. Сервер сверяет его сам для
+// необратимых действий (прошивка, перезагрузка) и отвечает confirm_mismatch;
+// пустое поле не отправляется вовсе.
+export function sendCommand(routerID, action, args = {}, confirm = '') {
+  const body = confirm ? { action, args, confirm } : { action, args }
   return request(`/routers/${routerID}/commands`, {
     method: 'POST',
-    body: JSON.stringify({ action, args }),
+    body: JSON.stringify(body),
   })
 }
 

@@ -27,14 +27,13 @@ func HelpForScreen(screen string) string {
   🩺 Проверка - безопасный doctor изнутри роутера
   🎛 Туннели - включить/выключить и увидеть handshake
   🛣 Маршруты - DNS/Static правила и перенос между туннелями
-  🛠 Обслуживание - версии, рестарты, прошивка, opkg
   📡 PingCheck - сторожевой ping и авто-рестарт туннеля
   🔐 Amnezia Premium / 🔑 HideMy.name - ключи, коды, выгрузка .conf и импорт
 
 Флот:
   self_update и массовые проверки запускает только админ. Успех обновления считается по heartbeat с новой версией, а не по самому факту нажатия.
 
-Подробности: help:premium, help:tunnels, help:routes, help:maint, help:pingcheck.` + "\n\nАктуальное меню из registry:\n" + OperatorMenuHelpText()
+Подробности: help:premium, help:tunnels, help:routes, help:pingcheck.` + "\n\nАктуальное меню из registry:\n" + OperatorMenuHelpText()
 	case "premium":
 		return `ℹ Premium cabinets
 
@@ -103,21 +102,6 @@ HideMy.name:
   1. не запускай массовые обновления вслепую
   2. проверь последний heartbeat и версию
   3. дождись выхода устройства в сеть или попроси владельца открыть приложение/сеть`
-	case "maint":
-		return `🛠 Обслуживание
-
-Что безопасно:
-  🔄 Проверить апдейты - только читает доступные версии
-  🩺 Проверка - читает состояние изнутри роутера
-
-Что меняет состояние:
-  🔁 Перезапустить hrneo - короткая пауза DNS/routing, обычно несколько секунд
-  🔁 Перезапустить awg-manager - API недоступен около 10 секунд, системные туннели не должны падать
-  🔁 Перезагрузить роутер - downtime около 2-3 минут, есть cooldown
-  📦 Прошивка - ставит KeeneticOS и включает reboot
-  ⬆ opkg upgrade - обновляет Entware-пакеты
-
-После нажатия жди результат из command queue. Если результата нет, сначала открой 🩺 Проверка.`
 	case "routes":
 		return `🛣 Маршруты
 

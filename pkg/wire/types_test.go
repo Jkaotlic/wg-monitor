@@ -306,3 +306,11 @@ func TestCommandResult_OmitsEmptyPayload(t *testing.T) {
 		t.Errorf("nil payload should be omitted, got %s", b)
 	}
 }
+
+func TestIsValidCommandAction_MaintenanceUpdates(t *testing.T) {
+	for _, a := range []string{"awgm_update", "hrneo_update"} {
+		if !IsValidCommandAction(a) {
+			t.Errorf("%s должен быть допустимым действием: без этого бэкенд не поставит команду в очередь", a)
+		}
+	}
+}

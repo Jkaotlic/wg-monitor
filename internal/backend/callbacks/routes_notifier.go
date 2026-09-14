@@ -511,8 +511,6 @@ func routeStatusErrorKeyboard(userID int64) tg.InlineKeyboardMarkup {
 	}, {
 		{Text: "HR-Neo проверка", CallbackData: fmt.Sprintf("routes_hrneo_doctor:%d:_panel_", userID)},
 		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
-	}, {
-		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 	}}}
 }
 
@@ -522,7 +520,6 @@ func routeErrorRecoveryKeyboard(userID int64) tg.InlineKeyboardMarkup {
 		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
 	}, {
 		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
-		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 	}}}
 }
 

@@ -27,17 +27,18 @@ func (a AwgManagerCheck) Run(ctx context.Context, _ Deps) wire.Check {
 		})
 	}
 	return OK("awg_manager", start, map[string]any{
-		"version":               info.Version,
-		"firmware":              info.FirmwareVersion,
-		"keenetic_os":           info.KeeneticOS,
-		"active_backend":        info.ActiveBackend,
-		"kernel_module_loaded":  info.KernelModuleLoaded,
-		"kernel_module_model":   info.KernelModuleModel,
-		"kernel_module_version": info.KernelModuleVersion,
-		"singbox_installed":     info.Singbox.Installed,
-		"singbox_version":       info.Singbox.Version,
-		"router_ip":             info.RouterIP,
-		"total_memory_mb":       info.TotalMemoryMB,
-		"is_low_memory":         info.IsLowMemory,
+		"version":                      info.Version,
+		"firmware":                     info.FirmwareVersion,
+		"keenetic_os":                  info.KeeneticOS,
+		"active_backend":               info.ActiveBackend,
+		"kernel_module_loaded":         info.KernelModuleLoaded,
+		"kernel_module_model":          info.KernelModuleModel,
+		"kernel_module_version":        info.KernelModuleVersion,
+		"kernel_module_loaded_version": info.KernelModuleLoadedVersion,
+		"singbox_installed":            info.Singbox.Installed,
+		"singbox_version":              info.Singbox.Version,
+		"router_ip":                    info.RouterIP,
+		"total_memory_mb":              info.TotalMemoryMB,
+		"is_low_memory":                info.IsLowMemory,
 	})
 }

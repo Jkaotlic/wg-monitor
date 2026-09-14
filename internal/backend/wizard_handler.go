@@ -543,6 +543,14 @@ type wizardDeployReq struct {
 
 type wizardDeployResp struct {
 	CmdID string `json:"cmd_id"`
+	// RouterAsleep / RouterStatus / WakeWindowMin -- только у мини-аппа:
+	// роутер сейчас спит или не на связи, и команда подождёт его WakeWindowMin
+	// минут, после чего отменится. RouterStatus -- "sleeping" или "offline"
+	// (M7): экран выбирает текст по конкретному статусу -- «проснётся» для
+	// sleeping, «появится» для offline, -- а не по одному сплющенному булеву.
+	RouterAsleep  bool   `json:"router_asleep,omitempty"`
+	RouterStatus  string `json:"router_status,omitempty"`
+	WakeWindowMin int    `json:"wake_window_min,omitempty"`
 }
 
 type backendUpdateRequest struct {
@@ -990,6 +998,24 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		return map[string]any{"lines": lines}, true
 	case "opkg_cron_remove", "entware_clean_run", "entware_clean_remove", "version_audit":
 		return map[string]any{}, true
+	case "awgm_update", "hrneo_update", "opkg_upgrade":
+		// Что ставить, решает сам роутер (awg-manager и opkg). Всё, что
+		// прислал клиент, -- лишнее.
+		return map[string]any{}, true
+	case "service_restart":
+		name := strings.TrimSpace(argString(args, "name"))
+		if !miniappServiceRestartNames[name] {
+			writeJSONError(w, http.StatusBadRequest, "invalid_service", "name must be hrneo, awgmgr or router")
+			return nil, false
+		}
+		return map[string]any{"name": name}, true
+	case "opkg_feed_disable":
+		feed, ok := sanitizeOpkgFeedURL(argString(args, "url"))
+		if !ok {
+			writeJSONError(w, http.StatusBadRequest, "invalid_feed_url", "url must be an http(s) feed address")
+			return nil, false
+		}
+		return map[string]any{"url": feed}, true
 	case "firmware_status", "firmware_install":
 		// Установка прошивки не берёт аргументов вовсе: агент ставит то, что
 		// роутер сам считает доступным. Всё, что прислал клиент, -- лишнее.
@@ -1483,10 +1509,17 @@ func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action s
 // silly. Callers do their own authorization before calling this: it enforces
 // none.
 func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any) {
+	enqueueAgentCommandForUserResp(w, d, u, action, args, wizardDeployResp{})
+}
+
+// enqueueAgentCommandForUserResp ставит команду и отвечает 202 телом resp с
+// выданным cmd_id. Возвращает, встала ли команда в очередь: мини-апп снимает
+// кулдаун перезагрузки, если нет.
+func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any, resp wizardDeployResp) bool {
 	id, err := newCmdID()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
-		return
+		return false
 	}
 	if args == nil {
 		args = map[string]any{}
@@ -1499,15 +1532,17 @@ func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, actio
 	}
 	if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
-		return
+		return false
 	}
 	if d.Logger != nil {
 		d.Logger.Info("agent command enqueued",
 			"nickname", u.Nickname, "user_id", u.ID, "cmd_id", id, "action", action)
 	}
+	resp.CmdID = id
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: id})
+	_ = json.NewEncoder(w).Encode(resp)
+	return true
 }
 
 // wizardCmdResultHandler returns the agent's CommandResult for a previously

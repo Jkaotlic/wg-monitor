@@ -97,12 +97,16 @@ var validCommandActions = map[string]bool{
 	"firmware_status":      true,
 	"firmware_install":     true,
 	"version_audit":        true,
-	"self_update":          true,
-	"router_doctor":        true,
-	"dns_reset":            true,
-	"update_backend_url":   true,
-	"agent_config_get":     true,
-	"update_agent_config":  true,
+	// Обновления по решению самого роутера (цикл 1 «обслуживание в мини-аппе»):
+	// awg-manager -- своим API, HydraRoute Neo -- через opkg.
+	"awgm_update":         true,
+	"hrneo_update":        true,
+	"self_update":         true,
+	"router_doctor":       true,
+	"dns_reset":           true,
+	"update_backend_url":  true,
+	"agent_config_get":    true,
+	"update_agent_config": true,
 }
 
 func IsValidCommandAction(a string) bool { return validCommandActions[a] }

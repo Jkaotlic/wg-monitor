@@ -518,3 +518,27 @@ func TestHasActiveCommand(t *testing.T) {
 		t.Fatal("протухшая команда не должна считаться активной")
 	}
 }
+
+// Обновления awg-manager и HydraRoute Neo ждут спящий роутер столько же,
+// сколько перезагрузка: 10 минут, и экран называет это число вслух.
+func TestCommandTTLMaintenanceActions(t *testing.T) {
+	for action, want := range map[string]time.Duration{
+		"awgm_update":      10 * time.Minute,
+		"hrneo_update":     10 * time.Minute,
+		"service_restart":  10 * time.Minute,
+		"firmware_install": 10 * time.Minute,
+		"self_update":      30 * time.Minute,
+		"opkg_upgrade":     15 * time.Minute,
+	} {
+		if got := CommandTTL(action); got != want {
+			t.Errorf("CommandTTL(%q) = %v, want %v", action, got, want)
+		}
+	}
+	cmd, err := New().prepareCommand(7, mkCmd("u1", "awgm_update"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cmd.ExpiresAt.Sub(cmd.IssuedAt); got != 10*time.Minute {
+		t.Errorf("срок awgm_update в очереди = %v, want 10m", got)
+	}
+}

@@ -53,8 +53,9 @@ func TestMiniappSettingsReportsLiveThresholds(t *testing.T) {
 	if resp.AgentVersion == "" {
 		t.Errorf("agent_version пуст: версия агента живёт в users и на экране обязана быть")
 	}
-	// Роль нужна экрану, чтобы не рисовать кнопку, которой сервер всё равно
-	// откажет: установка прошивки -- только владельцу.
+	// Роль нужна экрану для действий, чей круг уже общего доступа к роутеру
+	// (например PanelKnown/PanelScope -- только владелец и админ); установку
+	// прошивки с цикла 1 держит не роль, а набор имени роутера.
 	if resp.Role != "owner" {
 		t.Errorf("role = %q, want owner", resp.Role)
 	}

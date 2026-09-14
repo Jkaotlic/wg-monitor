@@ -84,6 +84,9 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 	case "restart_tunnel", "tunnel_restart":
 		card := Card{Badge: "", Label: label, Summary: humanRestartResult(r.Output)}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
+	case "service_restart":
+		card := Card{Badge: "", Label: label, Summary: humanServiceRestartResult(r.Output)}
+		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "tunnel_import":
 		summary := "готово"
 		if r.DurationMs > 0 {
@@ -164,16 +167,43 @@ func humanRestartResult(output string) string {
 	return out
 }
 
+// humanServiceRestartResult переводит вывод агента (service_restart:
+// runner.go, hrneo/awgmgr ветки, литералы "... sent") в русскую фразу
+// владельцу. Неизвестный вывод -- нейтральное «Служба перезапущена», а не
+// сырой текст агента.
+func humanServiceRestartResult(output string) string {
+	low := strings.ToLower(strings.TrimSpace(output))
+	switch {
+	case strings.HasPrefix(low, "hrneo restart sent"):
+		return "HydraRoute Neo перезапущен"
+	case strings.HasPrefix(low, "hrneo start sent"):
+		return "HydraRoute Neo запущен"
+	case strings.HasPrefix(low, "hrneo stop sent"):
+		return "HydraRoute Neo остановлен"
+	case strings.HasPrefix(low, "awg-manager restart sent"):
+		return "awg-manager перезапущен"
+	default:
+		return "Служба перезапущена"
+	}
+}
+
 // alertButtonActions -- действия кнопок под тревогой и отчётом о
 // пробуждении. Ответ уходит в чат, где нажали, то есть владельцу в личку,
 // поэтому их ошибки говорят без советов админской панели (ssh, пути на
 // роутере, lock-файлы). Админ получает ту же фразу -- подробности у него в
 // логе агента.
+//
+// service_restart -- кнопки перезапуска HydraRoute Neo и awg-manager из
+// панелей маршрутов и туннелей (после удаления MaintNotifier их итог тоже
+// идёт этим путём). Ошибка агента здесь -- сырой exec-вывод (`S99hrneo
+// restart: exit status 1`), и без ownerCommandFailure он утёк бы владельцу
+// как есть.
 var alertButtonActions = map[string]bool{
-	"restart_tunnel": true,
-	"diag_now":       true,
-	"pingcheck_now":  true,
-	"force_recheck":  true,
+	"restart_tunnel":  true,
+	"diag_now":        true,
+	"pingcheck_now":   true,
+	"force_recheck":   true,
+	"service_restart": true,
 }
 
 // ownerCommandFailure -- отказ кнопки словами владельца: что случилось и
@@ -317,6 +347,8 @@ func commandLabelHuman(action string) string {
 		return "▶ Тест связи"
 	case "restart_tunnel":
 		return "🔁 Перезапуск VPN-туннелей"
+	case "service_restart":
+		return "🔁 Перезапуск службы"
 	case "tunnel_restart":
 		return "🔁 Перезапуск туннеля"
 	case "opkg_upgrade":

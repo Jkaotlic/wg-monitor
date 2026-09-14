@@ -139,7 +139,6 @@ func TestNotifier_TunnelsStatusErrorOffersRecoveryActions(t *testing.T) {
 	for _, want := range []string{
 		"tunnels_refresh:42:_panel_",
 		"router_doctor:42:_menu",
-		"maint_open:42:_panel_",
 	} {
 		if !containsStr(flattenKbCallbacks(kb), want) {
 			t.Fatalf("tunnels status error keyboard missing %q: %+v", want, kb.InlineKeyboard)
@@ -174,7 +173,6 @@ func TestNotifier_TunnelImportErrorOffersRecoveryActions(t *testing.T) {
 	for _, want := range []string{
 		"tunnels_refresh:42:_panel_",
 		"router_doctor:42:_menu",
-		"maint_open:42:_panel_",
 	} {
 		if !containsStr(flattenKbCallbacks(kb), want) {
 			t.Fatalf("tunnel import error keyboard missing %q: %+v", want, kb.InlineKeyboard)
@@ -292,7 +290,6 @@ func TestNotifier_RouterDoctorResultOffersNextActions(t *testing.T) {
 	for _, want := range []string{
 		"tunnels_refresh:42:_panel_",
 		"routes_open:42:_panel_",
-		"maint_open:42:_panel_",
 	} {
 		if !containsStr(flattenKbCallbacks(kb), want) {
 			t.Fatalf("router doctor result keyboard missing %q: %+v", want, kb.InlineKeyboard)
@@ -322,7 +319,6 @@ func TestNotifier_RouterDoctorErrorOffersRecoveryActions(t *testing.T) {
 		"router_doctor:42:_menu",
 		"tunnels_refresh:42:_panel_",
 		"routes_open:42:_panel_",
-		"maint_open:42:_panel_",
 	} {
 		if !containsStr(flattenKbCallbacks(kb), want) {
 			t.Fatalf("router doctor error keyboard missing %q: %+v", want, kb.InlineKeyboard)
@@ -389,7 +385,6 @@ func TestNotifier_ConnectivityErrorOffersRecoveryActions(t *testing.T) {
 				"tunnels_refresh:42:_panel_",
 				"router_doctor:42:_menu",
 				"routes_open:42:_panel_",
-				"maint_open:42:_panel_",
 			} {
 				if !containsStr(flattenKbCallbacks(kb), want) {
 					t.Fatalf("%s error keyboard missing %q: %+v", action, want, kb.InlineKeyboard)
@@ -424,66 +419,6 @@ func TestNotifier_ForceRecheckResultOffersNextActions(t *testing.T) {
 	} {
 		if !containsStr(flattenKbCallbacks(kb), want) {
 			t.Fatalf("force_recheck result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestOpkgResultNotifier_UpgradeSuccessOffersNextActions(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewOpkgResultNotifier(f, UIConfigSnapshot{}, nil, func() string { return "deadbeef" })
-
-	err := n.NotifyOpkgResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "opkg_upgrade"},
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "opkg upgrade ok"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
-	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("opkg upgrade result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"maint_open:42:_panel_",
-		"router_doctor:42:_menu",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("opkg upgrade result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestOpkgResultNotifier_FeedDisableSuccessOffersRetryAndMaintenance(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewOpkgResultNotifier(f, UIConfigSnapshot{}, nil, func() string { return "deadbeef" })
-
-	err := n.NotifyOpkgResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "opkg_feed_disable"},
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "feed disabled"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
-	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("opkg feed disable result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"opkg_upgrade:42:_menu",
-		"maint_open:42:_panel_",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("opkg feed disable result keyboard missing %q: %+v", want, kb.InlineKeyboard)
 		}
 	}
 }

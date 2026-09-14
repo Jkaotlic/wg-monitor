@@ -108,17 +108,10 @@ type Router struct {
 	pendingRebindsMu    sync.Mutex
 	pendingRebinds      map[string]*pendingRebind // keyed by 8-hex token
 
-	// Maintenance panel plumbing (M6/M10/M11). All in-memory; lost on restart.
+	// Подтверждение перезапуска служб (hrneo / awgmgr). В памяти; теряется с рестартом.
 	pendingMaint    *pendingMaintStore
-	cooldown        *cooldownStore
 	maintConfirmAct Action
-	auditCache      *simpleAuditCache
 	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
-
-	// OPKG-feed repair plumbing. All in-memory; lost on restart (tokens are
-	// short-lived, 5 min TTL). SetOpkgRepair wires both at startup.
-	pendingOpkgRepair *pendingOpkgRepairStore
-	opkgRepairAction  Action
 
 	// Access-control panel plumbing. All in-memory; lost on restart.
 	pendingAddOperator       *pendingAddOperatorStore
@@ -174,21 +167,6 @@ func (r *Router) chatAllowed(chatID int64) bool {
 	return false
 }
 
-// SetOpkgRepair attaches the pendingOpkgRepair store and the OpkgRepairAction
-// handler. Called from cmd/backend at startup; both must be wired together
-// because the handler relay (in backend/handler.go) creates pending entries
-// and the action consumes them.
-func (r *Router) SetOpkgRepair(store *pendingOpkgRepairStore, action Action) {
-	r.pendingOpkgRepair = store
-	r.opkgRepairAction = action
-}
-
-// OpkgRepairStore exposes the store for the backend handler relay path,
-// which needs to register pending entries when rendering 🔧 buttons.
-func (r *Router) OpkgRepairStore() *pendingOpkgRepairStore {
-	return r.pendingOpkgRepair
-}
-
 // NewRouterWithSink builds a Router whose command-action callbacks enqueue
 // wire.Command into the provided sink for the agent to long-poll.
 func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Config) *Router {
@@ -227,9 +205,7 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.routeWizard = NewRouteWizardStore(5 * time.Minute)
 	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, r.putPendingRebind, defaultCmdID)
 	r.pendingMaint = newPendingMaintStore()
-	r.cooldown = newCooldownStore()
-	r.auditCache = newSimpleAuditCache()
-	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, r.cooldown, defaultCmdID)
+	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, defaultCmdID)
 	r.pendingAddOperator = newPendingAddOperatorStore()
 	r.pendingSelfHostedAmnezia = newPendingSelfHostedAmneziaStore()
 	r.pendingConfirms = newPendingConfirmStore()
@@ -324,7 +300,7 @@ func newImportToken() string {
 // configured group chat may tap buttons. The chat-id check still rejects
 // callbacks coming from arbitrary chats where the bot may be lurking. We
 // log every callback's from.id for audit so post-hoc you can see who pushed
-// what — important since opkg_upgrade is enabled in the menu.
+// what.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	adminPrivatePanel := r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))
 	// Кнопка под тревогой в собственной личке -- законный источник нажатия:
@@ -389,9 +365,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 			return
 		}
 		action = r.command
-	case "opkg_upgrade":
-		r.handleOpkgUpgradeAsk(ctx, q, args)
-		return
 	case "tunnel_delete_ask":
 		r.handleTunnelDeleteAsk(ctx, q, args)
 		return
@@ -556,27 +529,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.pingcheckToggleAct != nil {
 			action = r.pingcheckToggleAct
 		}
-	case "maint_open":
-		r.handleMaintOpen(ctx, q, args)
-		return
-	case "maint_close":
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
-		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
-		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, q.Message.Text, "", &empty)
-		return
 	case "maint_restart":
 		r.handleMaintRestart(ctx, q, args)
 		return
-	case "maint_fw_open":
-		r.handleMaintFwOpen(ctx, q, args)
-		return
-	case "maint_fw_check":
-		r.handleMaintFwCheck(ctx, q, args)
-		return
-	case "maint_fw_install":
-		r.handleMaintFwInstall(ctx, q, args)
-		return
-	case "maint_confirm", "maint_fw_confirm":
+	case "maint_confirm":
 		if r.maintConfirmAct != nil {
 			action = r.maintConfirmAct
 		}
@@ -601,28 +557,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		if r.diagBackAct != nil {
 			action = r.diagBackAct
 		}
-	case "opkg_disable":
-		if r.opkgRepairAction == nil {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "ремонт фидов не настроен")
-			return
-		}
-		if r.handleOpkgDisableAsk(ctx, q, args) {
-			return
-		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "opkg repair session expired")
-		return
-	case "opkg_disable_confirm":
-		if r.opkgRepairAction == nil {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "opkg repair is not configured")
-			return
-		}
-		status, err := r.opkgRepairAction.Apply(ctx, q, args)
-		if err != nil {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, err.Error())
-			return
-		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, status)
-		return
 	case "compat_btn":
 		r.handleCompatBtn(ctx, q, args)
 		return
@@ -881,7 +815,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 				r.handleHelpCommand(ctx, m)
 			case "/menu", "/keyboard":
 				r.handleKeyboardCommand(ctx, m)
-			case "/status", "/check", "/tunnels", "/routes", "/amnezia", "/hidemy", "/via", "/direct", "/maint", "/upgrade":
+			case "/status", "/check", "/tunnels", "/routes", "/amnezia", "/hidemy", "/via", "/direct":
 				r.handleRouterSlashCommand(ctx, m, kind, user)
 			}
 			return
@@ -952,22 +886,12 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"HideMy.name работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
-	case "🛠 Обслуживание":
-		if kind == "per_router" && user != nil {
-			r.openMaintPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
 	case "🌍 Через туннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
 			"⏳ Проверяю YouTube/Telegram/Instagram через туннель…")
 	case "🇷🇺 Напрямую?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
 			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
-	case "⬆ Обновить пакеты":
-		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
-			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
 	case "🩺 Проверка", "🩺 Домашний роутер":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
 			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
@@ -1048,14 +972,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 				"HideMy.name работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 		return true
-	case "/maint":
-		if kind == "per_router" && user != nil {
-			r.openMaintPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-		return true
 	case "/check":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
 			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
@@ -1067,10 +983,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 	case "/direct":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
 			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
-		return true
-	case "/upgrade":
-		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
-			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
 		return true
 	}
 	return false
@@ -1147,10 +1059,6 @@ func (r *Router) resolveTopicKind(chatID int64, threadID *int64) (string, *db.Us
 // "message to be replied not found (code=400)" and the operator never sees
 // the result. The ack message stays in the chat, so anchoring on it is safe.
 func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, kind string, user *db.User, action, ackText string) {
-	if action == "opkg_upgrade" {
-		r.handleOpkgUpgradeMessage(ctx, m, kind, user)
-		return
-	}
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
@@ -1242,51 +1150,6 @@ func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user
 	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
 	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
 		slog.Warn("route_status enqueue failed", "err", err)
-	}
-}
-
-// openMaintPanelMessage sends the initial Maintenance panel and enqueues a
-// fresh version_audit. When a recent (≤ maintCacheFreshFor) audit is cached,
-// the panel is rendered from cache instantly with a "🔄 обновляется в фоне…"
-// header — the MaintNotifier replaces it with fresh data when the agent
-// answers (typically within a second). With no usable cache, falls back to
-// the bare "обновляется…" placeholder.
-func (r *Router) openMaintPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
-	const maintCacheFreshFor = 5 * time.Minute
-	var (
-		mid int64
-		err error
-	)
-	if va, age, ok := r.auditCache.GetVersionAuditWithAge(user.ID); ok && age < maintCacheFreshFor {
-		args := buildMaintPanelArgs(ctx, user, va, r.upstream, r.cooldown, r.cfg.PublicBaseURL, m.Chat.ID, r.cfg.AdminUserID)
-		text := "🔄 обновляется в фоне…\n\n" + tg.MaintPanelText(args)
-		kb := tg.MaintPanelKeyboard(user.ID, args)
-		// SendMessageWithReplyKeyboard accepts an *InlineKeyboardMarkup —
-		// editMessageText works against inline-kb markups (unlike reply-kb).
-		mid, err = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
-	} else {
-		loadingText := alerts.Card{
-			Badge:   "⏳",
-			Label:   "🛠 Обслуживание",
-			Summary: "читаю версии и состояние сервисов",
-			Meta:    []string{alerts.KV("роутер", user.Nickname)},
-			Hint:    "Если экран не обновится, нажми «Проверить апдейты».",
-		}.Render(alerts.CardOpts{})
-		// IMPORTANT: no reply_markup — see openRoutesPanelMessage for the
-		// editMessageText/ReplyKeyboardMarkup incompatibility.
-		mid, err = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
-	}
-	if err != nil {
-		slog.Warn("maint panel send failed", "err", err)
-		return
-	}
-	if r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "version_audit", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		slog.Warn("version_audit enqueue failed", "err", err)
 	}
 }
 
@@ -1485,8 +1348,7 @@ func topicHelpBody(kind string) string {
 			"🛣 Маршруты — DNS/static правила, перенос и снапшот.\n" +
 			"🔐 Amnezia Premium — кабинеты и выгрузка .conf.\n" +
 			"🔑 HideMy.name — серверы и выгрузка AmneziaWG .conf.\n" +
-			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n" +
-			"🛠 Обслуживание / ⬆ Обновить пакеты — сервисные действия.\n\n" +
+			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n\n" +
 			"Если кнопка меняет состояние, бот поставит команду в очередь. Жди результат в этом топике и используй кнопки под результатом."
 	case "summary", "systemic":
 		return "Меню под сообщениями бота:\n" +
@@ -1527,15 +1389,9 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 		LastReportAge:   lastAge,
 		IsMobile:        user.IsMobile(),
 	}
-	// Кэш версий живёт в памяти и умирает с рестартом бэкенда, поэтому при
-	// холодном кэше блок обновлений берётся из снимка в базе. Иначе он пустел
-	// после каждой выкатки, а пустота читается как «всё актуально».
-	var cachedVA wire.VersionAudit
-	haveCached := false
-	if r.auditCache != nil {
-		cachedVA, haveCached = r.auditCache.GetVersionAudit(user.ID)
-	}
-	args.Updates = updatesFromCacheOrSnapshot(ctx, r.d, r.upstream, cachedVA, haveCached, user.ID)
+	// Кэша версий в памяти бота больше нет (он жил ради панели обслуживания):
+	// блок обновлений берётся из снимка в базе.
+	args.Updates = updatesFromCacheOrSnapshot(ctx, r.d, r.upstream, wire.VersionAudit{}, false, user.ID)
 	text, inline := alerts.FormatSmartReply(args)
 	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
 	// — TG accepts only one reply_markup per send. When FormatSmartReply
@@ -1938,46 +1794,19 @@ func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuer
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
 
-// ----- maint handlers -----
+// ----- service restart confirm -----
 
-// handleMaintOpen re-renders the maint panel: re-enqueues version_audit so
-// MaintNotifier (M11) edits the panel with fresh data when the agent answers.
-func (r *Router) handleMaintOpen(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, err := r.d.Users().GetByID(args.UserID)
-	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
-		return
-	}
-	if r.cmdSink == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command sink не подключён")
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "version_audit", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	loadingText := fmt.Sprintf("🛠 Обслуживание — %s\n   обновляется…", user.Nickname)
-	loadingKB := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", &loadingKB)
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось запросить статус")
-		r.renderMaintQueueError(ctx, q, user, "🛠 Обслуживание", "maint_open", err)
-		return
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-// handleMaintRestart renders the per-service confirm screen and stores a
-// pending token. For "router" name, also checks the existing cooldown
-// window and short-circuits with a toast if active.
+// handleMaintRestart рисует подтверждение перезапуска службы и кладёт токен.
+// Перезагрузка роутера переехала в мини-апп: старая кнопка отвечает словами,
+// а не подтверждением.
 func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, args Args) {
 	user, _ := r.d.Users().GetByID(args.UserID)
 	if user == nil {
 		return
 	}
-	if args.MaintName == "router" {
-		if rem := r.cooldown.remaining(user.ID, "router_reboot"); rem > 0 {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, fmt.Sprintf("🕒 кулдаун ещё %s", rem.Round(time.Second)))
-			return
-		}
+	if !botServiceRestartNames[args.MaintName] {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это действие переехало в приложение")
+		return
 	}
 	tok := makeMaintToken()
 	r.pendingMaint.put(&pendingMaint{
@@ -1986,122 +1815,6 @@ func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, ar
 	})
 	text := tg.RestartConfirmText(args.MaintName, tok)
 	kb := tg.RestartConfirmKeyboard(user.ID, args.MaintName, tok)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleOpkgUpgradeAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
-		return
-	}
-	tok := makeMaintToken()
-	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, ActorTGID: q.From.ID, Name: "opkg_upgrade", Token: tok,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.OpkgUpgradeConfirmText(tok)
-	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleOpkgUpgradeMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) {
-	if kind != "per_router" || user == nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		return
-	}
-	tok := makeMaintToken()
-	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, ActorTGID: m.From.ID, Name: "opkg_upgrade", Token: tok,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.OpkgUpgradeConfirmText(tok)
-	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
-}
-
-// handleMaintFwOpen renders the firmware screen using cached FirmwareStatus
-// when available, or triggers a fresh fetch via handleMaintFwCheck if not.
-func (r *Router) handleMaintFwOpen(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		return
-	}
-	fs, ok := r.auditCache.GetFirmwareStatus(user.ID)
-	if !ok {
-		// Fall back to a fresh fetch — same code path as Перепроверить.
-		r.handleMaintFwCheck(ctx, q, args)
-		return
-	}
-	cdRem := r.cooldown.remaining(user.ID, "firmware_install")
-	text := tg.FirmwareScreenText(user.Nickname, fs)
-	kb := tg.FirmwareScreenKeyboard(user.ID, fs, cdRem)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-// handleMaintFwCheck enqueues a firmware_status command and shows a loading
-// placeholder while we wait for the agent.
-func (r *Router) handleMaintFwCheck(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "firmware_status", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	loading := fmt.Sprintf("📦 Прошивка — %s\n   обновляется…", user.Nickname)
-	empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loading, "", &empty)
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось")
-		r.renderMaintQueueError(ctx, q, user, "📦 Прошивка", "maint_fw_check", err)
-		return
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) renderMaintQueueError(ctx context.Context, q *tg.CallbackQuery, user *db.User, label, retryAction string, err error) {
-	text := alerts.Card{
-		Badge:   "❌",
-		Label:   label,
-		Summary: "не получилось поставить команду в очередь",
-		Meta:    []string{alerts.KV("роутер", user.Nickname)},
-		Details: shortToast(err),
-		Hint:    "Повтори запрос. Если очередь снова недоступна, открой проверку роутера или список туннелей.",
-	}.Render(alerts.CardOpts{MaxBytes: 3900})
-	retryCallback := fmt.Sprintf("%s:%d:_panel_", retryAction, user.ID)
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🔄 Повторить", CallbackData: retryCallback},
-	}, {
-		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", user.ID)},
-		{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", user.ID)},
-	}, {
-		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", user.ID)},
-	}}}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-}
-
-// handleMaintFwInstall renders the firmware install confirm screen.
-// Cooldown check short-circuits with a toast.
-func (r *Router) handleMaintFwInstall(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		return
-	}
-	if rem := r.cooldown.remaining(user.ID, "firmware_install"); rem > 0 {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, fmt.Sprintf("🕒 кулдаун ещё %s", rem.Round(time.Second)))
-		return
-	}
-	tok := makeMaintToken()
-	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, ActorTGID: q.From.ID, Name: "firmware", Token: tok,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.FirmwareConfirmText(tok)
-	kb := tg.FirmwareConfirmKeyboard(user.ID, tok)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }
@@ -2598,24 +2311,6 @@ func computeUpdates(ctx context.Context, up *upstream.Cache, va wire.VersionAudi
 		out = append(out, alerts.UpdateAvailable{Name: u.Name, Installed: u.Installed, Available: u.Available, Hint: u.Hint})
 	}
 	return out
-}
-
-// NewMaintNotifier returns a MaintPanelNotifier wired to this router's
-// internal stores (cooldown, auditCache). Call once at startup with the
-// upstream cache and DB; pass the returned value into handler.Deps.MaintNotifier.
-func (r *Router) NewMaintNotifier(tgClient MaintEditTG, up *upstream.Cache) *MaintPanelNotifier {
-	return &MaintPanelNotifier{
-		TG:       tgClient,
-		Up:       up,
-		Cooldown: r.cooldown,
-		Audit:    r.auditCache,
-		DB:       r.d,
-		Sink:     r.cmdSink,
-		// Кнопка «Панель роутера» ведёт на тот же публичный адрес, что и
-		// кнопки под тревогами.
-		MiniAppBaseURL: r.cfg.PublicBaseURL,
-		AdminUserID:    r.cfg.AdminUserID,
-	}
 }
 
 // SetPingCheck wires the PingCheck panel actions. Called from cmd/backend/main.go

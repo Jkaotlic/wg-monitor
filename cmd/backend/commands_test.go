@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+)
 
 func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
@@ -13,8 +17,6 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 		"hidemy":   false,
 		"via":      false,
 		"direct":   false,
-		"maint":    false,
-		"upgrade":  false,
 		"menu":     false,
 		"keyboard": false,
 		"help":     false,
@@ -33,7 +35,7 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 
 func TestTelegramOperatorCommandMenuOrder(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
-	want := []string{"status", "check", "tunnels", "routes", "via", "direct", "amnezia", "hidemy", "maint", "upgrade", "menu", "keyboard", "help"}
+	want := []string{"status", "check", "tunnels", "routes", "via", "direct", "amnezia", "hidemy", "menu", "keyboard", "help"}
 	if len(cmds) < len(want) {
 		t.Fatalf("operator command count = %d, want at least %d: %+v", len(cmds), len(want), cmds)
 	}
@@ -72,6 +74,16 @@ func TestTelegramAdminCommandMenuIncludesAdminCommands(t *testing.T) {
 	for cmd, found := range want {
 		if !found {
 			t.Fatalf("admin command menu missing /%s; got %+v", cmd, cmds)
+		}
+	}
+}
+
+func TestTelegramCommandMenusDropMaintenance(t *testing.T) {
+	for _, cmds := range [][]tg.BotCommand{telegramOperatorCommandMenu(), telegramAdminCommandMenu()} {
+		for _, c := range cmds {
+			if c.Command == "maint" || c.Command == "upgrade" {
+				t.Errorf("/%s переехала в приложение, а осталась в меню: %+v", c.Command, cmds)
+			}
 		}
 	}
 }

@@ -61,9 +61,8 @@ type miniappVersionsResp struct {
 	Rows      []miniappVersionRow       `json:"rows"`
 	Unknown   []miniappUnknownRow       `json:"unknown"`
 	Installed *miniappInstalledVersions `json:"installed,omitempty"`
-	// RebootHint -- предупреждение о перезагрузке. Пусто, если повода нет:
-	// право сказать «нужна перезагрузка» даёт только наблюдаемая смена модуля
-	// ядра между снимками, а не номер версии панели.
+	// RebootHint -- предупреждение о перезагрузке: установленная версия модуля
+	// ядра расходится с загруженной. Пусто -- повода нет.
 	RebootHint string `json:"reboot_hint,omitempty"`
 	// CheckedAt -- когда роутер в последний раз рассказал про версии. Без
 	// метки времени строка о версиях обещает больше, чем мы знаем; снимка нет
@@ -111,25 +110,24 @@ func newsKey(component, version string) string { return component + "\x00" + ver
 // памяти, и ему нужен тот же переход «снимок -> сравнение».
 func VersionAuditFromSnapshot(row db.RouterVersionRow) wire.VersionAudit {
 	return wire.VersionAudit{
-		AwgmgrVersion:   row.AwgmgrVersion,
-		AwgmgrBackend:   row.AwgmgrBackend,
-		HrneoVersion:    row.HrneoVersion,
-		HrneoInstalled:  row.HrneoInstalled,
-		FirmwareCurrent: row.FirmwareCurrent,
-		FirmwareAvail:   row.FirmwareAvail,
-		KmodVersion:     row.KmodVersion,
-		KmodModel:       row.KmodModel,
-		KmodLoaded:      row.KmodLoaded,
+		AwgmgrVersion:     row.AwgmgrVersion,
+		AwgmgrBackend:     row.AwgmgrBackend,
+		HrneoVersion:      row.HrneoVersion,
+		HrneoInstalled:    row.HrneoInstalled,
+		FirmwareCurrent:   row.FirmwareCurrent,
+		FirmwareAvail:     row.FirmwareAvail,
+		KmodVersion:       row.KmodVersion,
+		KmodModel:         row.KmodModel,
+		KmodLoaded:        row.KmodLoaded,
+		KmodLoadedVersion: row.KmodLoadedVersion,
 	}
 }
 
 // miniappRouterVersionsHandler отдаёт экрану снимок версий, новости и причины
 // незнания.
 //
-// Читают владелец, оператор и админ. Новость о ПРОШИВКЕ видят только владелец
-// и админ: поставить её может лишь тот, кому принадлежит устройство
-// (miniappOwnerOnlyActions), и адресовать необратимую перезагрузку чужого
-// роутера тому, кто не имеет права её нажать, незачем.
+// Читают владелец, оператор и админ. Новости видят все трое: с цикла 1
+// прошивку ставят и операторы.
 func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
@@ -143,8 +141,7 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "versions lookup failed")
 			return
 		}
-		maySeeFirmware := miniappIsOwner(d, telegramUserID, routerID)
-		resp := miniappVersionsBody(r, d, routerID, row, maySeeFirmware, time.Now().UTC())
+		resp := miniappVersionsBody(r, d, routerID, row, time.Now().UTC())
 
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -157,15 +154,12 @@ func miniappRouterVersionsHandler(d Deps) http.HandlerFunc {
 // спрашиваем, какие из них экран имеет право показать (ListFor), и только
 // показанные помечаем показанными. Иначе «отложить» отменялось бы самим
 // открытием экрана.
-func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, maySeeFirmware bool, now time.Time) miniappVersionsResp {
+func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterVersionRow, now time.Time) miniappVersionsResp {
 	updates, unknown := upstream.ComputeUpdates(r.Context(), d.Upstream, VersionAuditFromSnapshot(row))
-	rebootHint := upstream.RebootHint(row.PrevKmodVersion, row.KmodVersion)
+	rebootHint := upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion)
 
 	reminders := d.DB.UpdateReminders()
 	for _, u := range updates {
-		if u.Component == "firmware" && !maySeeFirmware {
-			continue
-		}
 		if err := reminders.Ensure(routerID, u.Component, u.Available); err != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp: update reminder ensure failed", "router_id", routerID, "err", err)
 		}
@@ -199,9 +193,6 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		Unknown: []miniappUnknownRow{},
 	}
 	for _, u := range updates {
-		if u.Component == "firmware" && !maySeeFirmware {
-			continue
-		}
 		if !visible[newsKey(u.Component, u.Available)] {
 			continue
 		}
@@ -217,9 +208,6 @@ func miniappVersionsBody(r *http.Request, d Deps, routerID int64, row db.RouterV
 		}
 	}
 	for _, u := range unknown {
-		if u.Component == "firmware" && !maySeeFirmware {
-			continue
-		}
 		resp.Unknown = append(resp.Unknown, miniappUnknownRow{Component: u.Component, Reason: u.Reason})
 	}
 
@@ -325,7 +313,7 @@ func miniappUpdateReminderHandler(d Deps) http.HandlerFunc {
 // обновлении молча исчезла бы.
 func miniappNewsVersion(r *http.Request, d Deps, component string, row db.RouterVersionRow) string {
 	if component == "kmod_reboot" {
-		if upstream.RebootHint(row.PrevKmodVersion, row.KmodVersion) == "" {
+		if upstream.RebootHint(row.KmodVersion, row.KmodLoadedVersion) == "" {
 			return ""
 		}
 		return row.KmodVersion

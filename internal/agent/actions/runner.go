@@ -28,6 +28,10 @@
 //   - firmware_status  → ndmc components list parsed into wire.FirmwareStatus
 //   - firmware_install → ndmc components commit (gated on AllowFirmwareInstall)
 //   - version_audit    → composite of awgmgr SystemInfo + opkg + components list
+//   - awgm_update      → awg-manager self-update API, poll /api/system/info
+//     until the version changes (5 min)
+//   - hrneo_update     → opkg update/upgrade hrneo under the opkg lock, restart,
+//     postcondition: version changed and hrneo is running
 //   - router_doctor    → read-only router health snapshot for Telegram
 //   - dns_reset        → wipe dns-proxy DoT/DoH upstreams, apply reference DoT
 //     set, then `system configuration save` (ndmc, local exec)
@@ -58,6 +62,7 @@ type OpkgExecutor interface {
 	DryRun(ctx context.Context) (status, output string)
 	SmartUpgrade(ctx context.Context) (status, output string, payload wire.OpkgUpgradeResult)
 	DisableFeed(ctx context.Context, url string) (status, output string, payload wire.OpkgUpgradeResult)
+	HrneoUpdate(ctx context.Context) (status, output string)
 }
 
 // Runner is built once at agent startup and re-used per-command.
@@ -138,12 +143,18 @@ const defaultActionTimeout = 45 * time.Second
 var actionTimeoutOverrides = map[string]time.Duration{
 	"opkg_upgrade":          300 * time.Second,
 	"opkg_feed_disable":     300 * time.Second,
+	"hrneo_update":          300 * time.Second,
 	"opkg_cron_install":     300 * time.Second,
 	"entware_clean_install": 300 * time.Second,
 	"tunnel_import":         300 * time.Second,
 	"self_update":           300 * time.Second,
 	"firmware_install":      600 * time.Second,
 	"diag_now":              75 * time.Second,
+	// awgm_update: до 30с цикла "checking" + до 5 минут опроса после apply --
+	// бюджет с запасом шире (fix round 1, п.3), чтобы actionTimeout не срубил
+	// действие раньше, чем оно успеет сказать своё «не вернулся за 5 минут»
+	// или «ещё проверяет обновления» дословным текстом.
+	"awgm_update": 420 * time.Second,
 }
 
 // actionTimeoutFor returns the production execution budget for action.
@@ -361,6 +372,15 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		r.ForceRecheck(ctx)
 		return "ok", "agent report kicked", payload
+	case "awgm_update":
+		if r.AwgClient == nil {
+			return "err", "awgmgr client not configured", payload
+		}
+		out, err := AwgmUpdate(ctx, r.AwgClient, r.sleep, r.now)
+		if err != nil {
+			return "err", err.Error(), payload
+		}
+		return "ok", out, payload
 	case "opkg_upgrade":
 		if r.Opkg == nil {
 			return "err", "opkg runner not configured", payload
@@ -377,6 +397,12 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		}
 		s, o, p := r.Opkg.DisableFeed(ctx, url)
 		return s, o, p
+	case "hrneo_update":
+		if r.Opkg == nil {
+			return "err", "opkg runner not configured", payload
+		}
+		s, o := r.Opkg.HrneoUpdate(ctx)
+		return s, o, payload
 	case "opkg_cron_status", "opkg_cron_install", "opkg_cron_logs", "opkg_cron_remove":
 		if r.Exec == nil {
 			return "err", "exec not configured", payload

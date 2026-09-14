@@ -36,6 +36,10 @@ type VersionAudit struct {
 	// KmodLoaded -- указатель, потому что nil («агент старый и не сказал») и
 	// false («не загружен») -- разные ответы, и второй означает поломку.
 	KmodLoaded *bool `json:"kmod_loaded,omitempty"`
+	// KmodLoadedVersion -- версия модуля, которую держит ядро прямо сейчас.
+	// Расходится с KmodVersion -- модуль сменили, а ядро держит старый:
+	// VPN-туннели поднимутся только после перезагрузки роутера.
+	KmodLoadedVersion string `json:"kmod_loaded_version,omitempty"`
 }
 
 // FirmwareStatus is the agent's reply to a firmware_status command.
@@ -115,4 +119,29 @@ type TrafficPoint struct {
 	T  int64   `json:"t"`
 	RX float64 `json:"rx"`
 	TX float64 `json:"tx"`
+}
+
+// AwgmUpdateResult -- ответ действия awgm_update (JSON в CommandResult.Output).
+type AwgmUpdateResult struct {
+	Updated       bool   `json:"updated"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	KmodInstalled string `json:"kmod_installed"`
+	KmodLoaded    string `json:"kmod_loaded"`
+	RebootNeeded  bool   `json:"reboot_needed"`
+}
+
+// HrneoUpdateResult -- ответ действия hrneo_update (JSON в CommandResult.Output).
+type HrneoUpdateResult struct {
+	Updated bool   `json:"updated"`
+	From    string `json:"from"`
+	To      string `json:"to"`
+	Running bool   `json:"running"`
+}
+
+// RebootNeeded -- единое правило «нужна перезагрузка роутера»: обе версии
+// модуля ядра известны и расходятся. Им пользуются и агент (awgm_update), и
+// бэкенд (upstream.RebootHint), чтобы правило не разъехалось на две копии.
+func RebootNeeded(installed, loaded string) bool {
+	return installed != "" && loaded != "" && installed != loaded
 }

@@ -58,13 +58,10 @@ type Args struct {
 	RouteTemplateToken string
 	RouteTemplatePage  int
 	// MaintName is the target of a maint_restart / maint_confirm callback:
-	// "hrneo" | "awgmgr" | "router" | "firmware". Set by Parse for those actions.
+	// "hrneo" | "hrneo_start" | "hrneo_stop" | "awgmgr". Set by Parse for those actions.
 	MaintName string
-	// MaintToken is the 8-hex confirm token for maint_confirm / maint_fw_confirm.
+	// MaintToken is the 8-hex confirm token for maint_confirm.
 	MaintToken string
-	// OpkgRepairToken is the 8-hex confirm token for opkg_disable callbacks
-	// originating from the "🔧 Отключить мёртвый фид" inline button.
-	OpkgRepairToken string
 	// DiagRawToken is the 8-hex token of a cached diag JSON body retrieved
 	// by the "📄 Полный отчёт" button under a diag result.
 	DiagRawToken string
@@ -81,7 +78,7 @@ type Args struct {
 	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
 	// "awaken_confirm" | "awaken_do" | "close".
 	PanelScreen string
-	// PanelKind is the panel type ("maint" | "routes" | "tunnels" | "status")
+	// PanelKind is the panel type ("routes" | "tunnels" | "status")
 	// for the "kind" and "push" screens.
 	PanelKind string
 	// AccessScreen identifies the access:* admin-panel screen for callbacks
@@ -131,7 +128,7 @@ var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
 	// command-channel actions: enqueue a wire.Command for the agent.
 	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
-	"force_recheck": true, "opkg_upgrade": true, "opkg_disable": true, "opkg_disable_confirm": true,
+	"force_recheck": true,
 	"router_doctor": true,
 	"tunnel_enable": true, "tunnel_disable": true, "tunnel_restart": true,
 	"tunnel_delete_ask": true, "tunnel_delete": true,
@@ -150,11 +147,9 @@ var validActions = map[string]bool{
 	"routes_add_confirm": true, "routes_add_cancel": true,
 	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
 	"routes_hrneo": true, "routes_hrneo_doctor": true, "routes_snapshot": true,
-	// maintenance panel actions: open/close panel, restart services, firmware update.
-	"maint_open": true, "maint_close": true,
+	// перезапуск служб бота (hrneo / awgmgr): подтверждение и токен. Панель
+	// обслуживания целиком переехала в мини-апп.
 	"maint_restart": true, "maint_confirm": true,
-	"maint_fw_open": true, "maint_fw_check": true,
-	"maint_fw_install": true, "maint_fw_confirm": true,
 	// diag_raw: fetch cached raw diag JSON body for "📄 Полный отчёт" button.
 	"diag_raw": true,
 	// diag_back: re-render parsed diag summary inline ("« К сводке" button).
@@ -409,7 +404,7 @@ func Parse(data string) (Args, error) {
 		a.RouteDraftToken = parts[3]
 	case "maint_restart":
 		if len(parts) < 3 || parts[2] == "" || parts[2] == panelSentinel {
-			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr|router): %q", data)
+			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr): %q", data)
 		}
 		a.MaintName = parts[2]
 	case "maint_confirm":
@@ -421,23 +416,6 @@ func Parse(data string) (Args, error) {
 		}
 		a.MaintName = parts[2]
 		a.MaintToken = parts[3]
-	case "maint_fw_confirm":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("maint_fw_confirm requires token: %q", data)
-		}
-		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.MaintName = "firmware"
-		a.MaintToken = parts[3]
-	case "opkg_disable", "opkg_disable_confirm":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
-		}
-		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.OpkgRepairToken = parts[3]
 	case "diag_raw":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)
@@ -500,7 +478,7 @@ func Parse(data string) (Args, error) {
 			if len(parts) < 4 || parts[3] == "" {
 				return Args{}, fmt.Errorf("panel %s requires kind: %q", screen, data)
 			}
-			validKinds := map[string]bool{"maint": true, "routes": true, "tunnels": true, "status": true, "pingcheck": true, "doctor": true}
+			validKinds := map[string]bool{"routes": true, "tunnels": true, "status": true, "pingcheck": true, "doctor": true}
 			if !validKinds[parts[3]] {
 				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
 			}
@@ -512,7 +490,7 @@ func Parse(data string) (Args, error) {
 			}
 			validHelpScreens := map[string]bool{
 				"operator": true, "alerts": true, "fleet": true, "premium": true, "mobile": true,
-				"maint": true, "routes": true, "tunnels": true,
+				"routes": true, "tunnels": true,
 				"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
 			}
 			if !validHelpScreens[parts[3]] {

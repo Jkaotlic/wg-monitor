@@ -118,8 +118,8 @@ func TestMiniappVersionsNoSnapshotSaysSoInsteadOfFresh(t *testing.T) {
 	}
 }
 
-// Новость о прошивке адресована тому, кто один имеет право её нажать.
-func TestMiniappVersionsHidesFirmwareNewsFromOperator(t *testing.T) {
+// С цикла 1 прошивку ставят и операторы -- новость о ней адресована им тоже.
+func TestMiniappVersionsOperatorSeesFirmwareNews(t *testing.T) {
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	seedLiveSnapshot(t, d, ownedID)
 	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
@@ -128,27 +128,8 @@ func TestMiniappVersionsHidesFirmwareNewsFromOperator(t *testing.T) {
 	h := versionsMux(d)
 
 	_, resp := getVersions(t, h, ownedID, 555)
-	for _, r := range resp.Rows {
-		if r.Component == "firmware" {
-			t.Errorf("оператор видит новость о прошивке, которую ему не дадут поставить: %+v", r)
-		}
-	}
-	for _, u := range resp.Unknown {
-		if u.Component == "firmware" {
-			t.Errorf("оператору незачем и причина про прошивку: %+v", u)
-		}
-	}
-
-	// Владелец её при этом видит.
-	_, ownerResp := getVersions(t, h, ownedID, 100)
-	var seen bool
-	for _, r := range ownerResp.Rows {
-		if r.Component == "firmware" {
-			seen = true
-		}
-	}
-	if !seen {
-		t.Errorf("владелец обязан видеть новость о прошивке: %+v", ownerResp.Rows)
+	if !hasRow(resp.Rows, "firmware") {
+		t.Errorf("оператор не видит новость о прошивке, которую теперь может поставить: %+v", resp.Rows)
 	}
 }
 
@@ -226,16 +207,13 @@ func TestMiniappVersionsSaysAgentTooOldAboutKernelModule(t *testing.T) {
 	}
 }
 
-// Смена модуля ядра между снимками -- наблюдаемый факт, и только он даёт право
-// сказать «нужна перезагрузка».
-func TestMiniappVersionsWarnsAboutKernelModuleChange(t *testing.T) {
+// Модуль сменили, ядро держит старый -- экран говорит о перезагрузке; после
+// перезагрузки версии совпали, и предупреждение гаснет само, без нажатий.
+func TestMiniappVersionsRebootHintFollowsLoadedModule(t *testing.T) {
 	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
 	seedLiveSnapshot(t, d, ownedID)
-	// Панель обновили, и модуль ядра сменился.
 	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
-		AwgmgrVersion: "2.19.0",
-		KmodVersion:   "3.2.20260930",
-		Source:        "report",
+		AwgmgrVersion: "2.19.1", KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.1.20260906", Source: "report",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -246,6 +224,15 @@ func TestMiniappVersionsWarnsAboutKernelModuleChange(t *testing.T) {
 		if !strings.Contains(resp.RebootHint, want) {
 			t.Errorf("предупреждение не говорит про %q: %q", want, resp.RebootHint)
 		}
+	}
+
+	if err := d.RouterVersions().Upsert(ownedID, db.RouterVersionSnapshot{
+		KmodVersion: "3.2.20260930", KmodLoadedVersion: "3.2.20260930", Source: "report",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, after := getVersions(t, h, ownedID, telegramUserID); after.RebootHint != "" {
+		t.Errorf("после перезагрузки предупреждение не погасло: %q", after.RebootHint)
 	}
 }
 
@@ -474,55 +461,6 @@ func TestMiniappVersionsDismissHoldsWhileOlderRowLives(t *testing.T) {
 	_, resp := getVersions(t, h, ownedID, telegramUserID)
 	if hasRow(resp.Rows, "firmware") {
 		t.Errorf("скрытая новость вернулась на экран из-за прошлой строки: %+v", resp.Rows)
-	}
-}
-
-// Несущий гейт: визит оператора не заводит состояние новости о прошивке.
-//
-// Гейт стоит дважды -- при заведении новости и при отрисовке, -- и каждый по
-// отдельности достаточен, поэтому снятие одного экран не меняет. Наблюдаемое
-// следствие ИМЕННО гейта при Ensure -- строка в базе: оператор не имеет права
-// заводить новость про компонент, которого он не видит.
-func TestMiniappVersionsOperatorVisitCreatesNoFirmwareNews(t *testing.T) {
-	d, ownedID, _, _ := seedMiniappFleet(t)
-	seedLiveSnapshot(t, d, ownedID)
-	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
-		t.Fatalf("grant operator: %v", err)
-	}
-	h := versionsMux(d)
-
-	getVersions(t, h, ownedID, 555)
-
-	list, err := d.UpdateReminders().ListFor(ownedID, time.Now().UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, rem := range list {
-		if rem.Component == "firmware" {
-			t.Errorf("визит оператора завёл новость о прошивке: %+v", rem)
-		}
-	}
-}
-
-// Второй гейт, отдельно: строка новости уже есть и видима (её завёл владелец),
-// и всё равно оператору она не рисуется. Здесь Ensure ничего не решает --
-// решает гейт при отрисовке.
-func TestMiniappVersionsOperatorSeesNoFirmwareRowEvenWhenNewsExists(t *testing.T) {
-	d, ownedID, _, ownerTG := seedMiniappFleet(t)
-	seedLiveSnapshot(t, d, ownedID)
-	if err := d.RouterOperators().Add(ownedID, 555, 100); err != nil {
-		t.Fatalf("grant operator: %v", err)
-	}
-	h := versionsMux(d)
-
-	// Владелец открыл экран -- новость о прошивке заведена и видима.
-	if _, resp := getVersions(t, h, ownedID, ownerTG); !hasRow(resp.Rows, "firmware") {
-		t.Fatalf("владелец не увидел новость о прошивке: %+v", resp.Rows)
-	}
-
-	_, opResp := getVersions(t, h, ownedID, 555)
-	if hasRow(opResp.Rows, "firmware") {
-		t.Errorf("оператор увидел уже заведённую новость о прошивке: %+v", opResp.Rows)
 	}
 }
 

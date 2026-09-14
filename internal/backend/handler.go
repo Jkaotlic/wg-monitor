@@ -291,25 +291,9 @@ type RoutesNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
-// MaintNotifier is the subset used by cmdResultHandler when ref.Action is
-// version_audit / firmware_status / service_restart / firmware_install.
-// Implemented by callbacks.MaintPanelNotifier.
-type MaintNotifier interface {
-	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
-}
-
 // BulkNotifier updates one aggregate admin report for fleet-wide commands.
 type BulkNotifier interface {
 	NotifyBulkCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
-}
-
-// OpkgNotifier is the subset used by cmdResultHandler when ref.Action is
-// opkg_upgrade or opkg_feed_disable. Implemented by callbacks.Notifier via
-// the NotifyOpkgResult method. Receives userID so it can register pending
-// repair entries per FailedFeed URL before sending the TG message with
-// the inline 🔧 buttons.
-type OpkgNotifier interface {
-	NotifyOpkgResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64, maxChars int) error
 }
 
 // PingCheckNotifier is the subset used by cmdResultHandler when ref.Action is
@@ -335,9 +319,7 @@ type Deps struct {
 	CommandSink         CommandSink
 	TGNotifier          TGNotifier
 	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
-	MaintNotifier       MaintNotifier     // nil-safe (handler skips if nil)
 	BulkNotifier        BulkNotifier      // nil-safe (handler falls back to per-command relays)
-	OpkgNotifier        OpkgNotifier      // nil-safe (handler falls back to TGNotifier if nil)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
 	DeployNotifier      DeployNotifier    // nil-safe (handler skips deferred update notices)
@@ -1241,18 +1223,6 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					d.Logger.Warn("routes notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
-			case "version_audit", "firmware_status", "service_restart", "firmware_install":
-				if d.MaintNotifier != nil {
-					spawnRelayTimeout(d, "cmd-maint", 30*time.Second, func(ctx context.Context) {
-						if err := d.MaintNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
-							incTGError()
-							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("maint notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
-				}
 			case "pingcheck_status", "pingcheck_toggle":
 				if d.PingCheckNotifier != nil {
 					spawnRelayTimeout(d, "cmd-pingcheck", 30*time.Second, func(ctx context.Context) {
@@ -1263,34 +1233,6 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					})
 				} else {
 					d.Logger.Warn("pingcheck notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
-				}
-			case "opkg_upgrade", "opkg_feed_disable":
-				if d.OpkgNotifier != nil {
-					maxChars := d.UI.DiagMaxChars
-					if maxChars == 0 {
-						maxChars = 3500
-					}
-					spawnRelayTimeout(d, "cmd-opkg", 30*time.Second, func(ctx context.Context) {
-						if err := d.OpkgNotifier.NotifyOpkgResult(ctx, ref, res, uid, maxChars); err != nil {
-							incTGError()
-							d.Logger.Warn("opkg notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
-						}
-					})
-				} else if d.TGNotifier != nil {
-					// Graceful fallback: no repair buttons, but still relay the text.
-					maxChars := d.UI.DiagMaxChars
-					if maxChars == 0 {
-						maxChars = 3500
-					}
-					spawnRelayTimeout(d, "cmd-opkg-fallback", 30*time.Second, func(ctx context.Context) {
-						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, uid, maxChars); err != nil {
-							incTGError()
-							d.Logger.Warn("tg notify failed (opkg fallback)", "cmd_id", res.ID, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("opkg notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			default:

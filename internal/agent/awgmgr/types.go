@@ -82,23 +82,24 @@ type PingCheckStatus struct {
 
 // SystemInfo mirrors /api/system/info .data.
 type SystemInfo struct {
-	ActiveBackend       string  `json:"activeBackend"`
-	FirmwareVersion     string  `json:"firmwareVersion"`
-	GoArch              string  `json:"goArch"`
-	GoOS                string  `json:"goOS"`
-	IsAarch64           bool    `json:"isAarch64"`
-	IsLowMemory         bool    `json:"isLowMemory"`
-	IsOS5               bool    `json:"isOS5"`
-	KeeneticOS          string  `json:"keeneticOS"`
-	KernelModuleExists  bool    `json:"kernelModuleExists"`
-	KernelModuleLoaded  bool    `json:"kernelModuleLoaded"`
-	KernelModuleModel   string  `json:"kernelModuleModel"`
-	KernelModuleVersion string  `json:"kernelModuleVersion"`
-	RouterIP            string  `json:"routerIP"`
-	Singbox             Singbox `json:"singbox"`
-	SupportsPingCheck   bool    `json:"supportsPingCheck"`
-	TotalMemoryMB       int     `json:"totalMemoryMB"`
-	Version             string  `json:"version"`
+	ActiveBackend             string  `json:"activeBackend"`
+	FirmwareVersion           string  `json:"firmwareVersion"`
+	GoArch                    string  `json:"goArch"`
+	GoOS                      string  `json:"goOS"`
+	IsAarch64                 bool    `json:"isAarch64"`
+	IsLowMemory               bool    `json:"isLowMemory"`
+	IsOS5                     bool    `json:"isOS5"`
+	KeeneticOS                string  `json:"keeneticOS"`
+	KernelModuleExists        bool    `json:"kernelModuleExists"`
+	KernelModuleLoaded        bool    `json:"kernelModuleLoaded"`
+	KernelModuleModel         string  `json:"kernelModuleModel"`
+	KernelModuleVersion       string  `json:"kernelModuleVersion"`
+	KernelModuleLoadedVersion string  `json:"kernelModuleLoadedVersion"`
+	RouterIP                  string  `json:"routerIP"`
+	Singbox                   Singbox `json:"singbox"`
+	SupportsPingCheck         bool    `json:"supportsPingCheck"`
+	TotalMemoryMB             int     `json:"totalMemoryMB"`
+	Version                   string  `json:"version"`
 }
 
 type Singbox struct {
@@ -109,6 +110,16 @@ type Singbox struct {
 type HydraRouteStatus struct {
 	Installed bool `json:"installed"`
 	Running   bool `json:"running"`
+}
+
+// UpdateCheck mirrors GET /api/system/update/check (сверено с openapi.yaml
+// 14.09.2026). Остальные поля ответа (checkedAt, nextAutoInstallAt, …) агенту
+// не нужны.
+type UpdateCheck struct {
+	Available      bool   `json:"available"`
+	CurrentVersion string `json:"currentVersion"`
+	LatestVersion  string `json:"latestVersion"`
+	Checking       bool   `json:"checking"`
 }
 
 // Settings mirrors the subset of /api/settings/get .data we need. awg-manager

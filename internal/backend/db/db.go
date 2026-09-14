@@ -85,6 +85,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate users wizard portable metadata: %w", err)
 	}
+	if err := migrateRouterVersionsKmodLoaded(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate router_versions.kmod_loaded_version: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -212,6 +216,13 @@ func migrateWizardPortableMetadata(d *sql.DB) error {
 	}
 	return addColumnIfMissing(d, "users", "expected_mac",
 		`ALTER TABLE users ADD COLUMN expected_mac TEXT`)
+}
+
+// migrateRouterVersionsKmodLoaded добавляет загруженную версию модуля ядра в
+// снимок старых баз: CREATE TABLE IF NOT EXISTS существующую таблицу не меняет.
+func migrateRouterVersionsKmodLoaded(d *sql.DB) error {
+	return addColumnIfMissing(d, "router_versions", "kmod_loaded_version",
+		`ALTER TABLE router_versions ADD COLUMN kmod_loaded_version TEXT NOT NULL DEFAULT ''`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {

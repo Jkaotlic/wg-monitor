@@ -69,6 +69,10 @@ func agentSemver(s string) (string, bool) {
 var miniappActionMinAgentVersion = map[string]string{
 	"update_agent_config": "v0.31.0",
 	"dns_reset":           "v0.31.0",
+	// Действия цикла 1: старый агент ответил бы «unknown action», а экран
+	// обещал бы обновление, которого не будет.
+	"awgm_update":  "v0.32.0",
+	"hrneo_update": "v0.32.0",
 }
 
 // miniappAdminOnlyActions -- действия, чей радиус router-global: их видит и

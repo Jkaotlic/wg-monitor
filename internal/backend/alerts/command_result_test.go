@@ -213,6 +213,50 @@ func TestFormatCommandResult_ErrorBadge(t *testing.T) {
 	}
 }
 
+// service_restart -- итог кнопок «Перезапустить awg-mgr» / HR-Neo из панелей
+// маршрутов и туннелей (внутренний action остался "service_restart" после
+// удаления MaintNotifier, но рендерится он тем же путём, что и остальные
+// кнопки). Владельцу нельзя показывать сырой вывод агента (S99hrneo,
+// "sent") или имя действия английскими буквами.
+func TestFormatCommandResult_ServiceRestartOK(t *testing.T) {
+	cases := []struct {
+		output string
+		want   string
+	}{
+		{"hrneo restart sent\nsome init output", "HydraRoute Neo перезапущен"},
+		{"hrneo start sent\n", "HydraRoute Neo запущен"},
+		{"hrneo stop sent\n", "HydraRoute Neo остановлен"},
+		{"awg-manager restart sent\n", "awg-manager перезапущен"},
+		{"something unexpected", "Служба перезапущена"},
+	}
+	for _, c := range cases {
+		r := wire.CommandResult{Status: "ok", Output: c.output}
+		chunks := FormatCommandResult("service_restart", r, 3500)
+		body := chunks[0]
+		if !strings.Contains(body, c.want) {
+			t.Errorf("output=%q: want %q in:\n%s", c.output, c.want, body)
+		}
+		if strings.Contains(body, "service_restart") || strings.Contains(body, "hrneo") || strings.Contains(body, "S99") {
+			t.Errorf("output=%q: internal name leaked:\n%s", c.output, body)
+		}
+	}
+}
+
+func TestFormatCommandResult_ServiceRestartErr_NoRawLeak(t *testing.T) {
+	r := wire.CommandResult{Status: "err", Output: "S99hrneo restart: exit status 1"}
+	chunks := FormatCommandResult("service_restart", r, 3500)
+	body := chunks[0]
+	if !strings.Contains(body, "❌") {
+		t.Errorf("missing error badge: %s", body)
+	}
+	if strings.Contains(body, "service_restart") || strings.Contains(body, "S99hrneo") || strings.Contains(body, "hrneo") {
+		t.Errorf("internal name / raw agent output leaked to owner: %s", body)
+	}
+	if strings.Contains(body, "exit status") {
+		t.Errorf("raw exec error leaked to owner: %s", body)
+	}
+}
+
 func TestFormatCommandResult_RouterDoctorPlainText(t *testing.T) {
 	r := wire.CommandResult{Status: "ok", Output: "🩺 Проверка роутера\n✅ awg-manager API"}
 	chunks := FormatCommandResult("router_doctor", r, 3500)
