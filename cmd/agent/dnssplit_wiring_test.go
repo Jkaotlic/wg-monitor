@@ -14,37 +14,26 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-// Сборка берёт всё из эталона: зоны — только те, у которых есть своя
-// канарейка, и в порядке эталона; хост Яндекса и заграничные адреса — оттуда же.
+// Сборка берёт всё из эталона: все ру-зоны, хост Яндекса и канарейку живости.
 func TestBuildDNSSplitCheck_TakesEverythingFromReference(t *testing.T) {
 	c := buildDNSSplitCheck(awgmgr.New("http://127.0.0.1:1"))
 	if c == nil {
 		t.Fatal("проверка не собрана")
 	}
-	canaries := dnsref.ZoneCanaries()
-	var want []string
-	for _, z := range dnsref.RUZones() {
-		if canaries[z] != "" {
-			want = append(want, z)
-		}
-	}
-	if !slices.Equal(c.Zones, want) {
-		t.Errorf("зоны %v, хотим %v (только с канарейкой, порядок эталона)", c.Zones, want)
+	if !slices.Equal(c.Zones, dnsref.RUZones()) {
+		t.Errorf("зоны %v, хотим %v", c.Zones, dnsref.RUZones())
 	}
 	if c.YandexHost != dnsref.YandexDoTHost() {
 		t.Errorf("хост Яндекса %q, хотим %q", c.YandexHost, dnsref.YandexDoTHost())
 	}
-	if !slices.Equal(c.Foreign, dnsref.ForeignResolverIPs()) {
-		t.Errorf("заграничные %v, хотим %v", c.Foreign, dnsref.ForeignResolverIPs())
-	}
-	if c.DefaultCanary != "" {
-		t.Errorf("DefaultCanary = %q: зона без своей канарейки получила бы вердикт соседней", c.DefaultCanary)
+	if c.Canary != dnsref.RUCanary() {
+		t.Errorf("канарейка %q, хотим %q", c.Canary, dnsref.RUCanary())
 	}
 	if c.MinInterval != 10*time.Minute {
 		t.Errorf("MinInterval = %v, хотим 10m: агент отчитывается куда чаще", c.MinInterval)
 	}
-	if c.Resolve == nil || c.RouteLookup == nil {
-		t.Error("Resolve или RouteLookup не проведены — проверка всегда отвечала бы «неизвестно»")
+	if c.Endpoints == nil || c.Resolve == nil || c.RouteLookup == nil {
+		t.Error("Endpoints, Resolve или RouteLookup не проведены — проверка всегда отвечала бы «неизвестно»")
 	}
 }
 
@@ -77,8 +66,8 @@ func TestDNSSplitRouteLookup_ParsesRouteLookupAnswer(t *testing.T) {
 	}
 }
 
-// Адрес сервера для проб: у локального dns-proxy порт уже указан, у хоста
-// Яндекса и заграничных IP — нет, IPv6 берётся в скобки.
+// Адрес сервера для проб: у локального dns-proxy порт уже указан, у голого
+// адреса — нет, IPv6 берётся в скобки.
 func TestDNSServerAddr(t *testing.T) {
 	cases := map[string]string{
 		"127.0.0.1:53":              "127.0.0.1:53",

@@ -19,11 +19,6 @@
 // них. Второго места для тех же списков не заводим, иначе болезнь вернётся.
 package dnsref
 
-import (
-	"net"
-	"strings"
-)
-
 // Purpose -- зачем апстрим в наборе. Роль важна сама по себе: апстримы не
 // равны между собой, и проверка, считающая их равными, молчит при отказе того
 // единственного, что несёт все русские зоны.
@@ -69,14 +64,9 @@ var (
 	}
 )
 
-// zoneCanaries -- имя-канарейка на ру-зону для проверки dns_split. Имя обязано
-// лежать в своей зоне: ответ про ya.ru ничего не говорит о tatar. Зона без
-// надёжного имени сюда не пишется и в проверку не попадает — лучше промолчать
-// о зоне, чем выдать вердикт соседней.
-var zoneCanaries = map[string]string{
-	"ru":       "ya.ru",
-	"xn--p1ai": "xn--d1abbgf6aiiy.xn--p1ai", // президент.рф
-}
+// ruCanary -- имя в ру-зоне, которым проверка dns_split спрашивает dns-proxy
+// роутера, отвечает ли он вообще.
+const ruCanary = "ya.ru"
 
 const pinnedCandidate = "https upstream https://cloudflare-dns.com/dns-query"
 
@@ -113,28 +103,8 @@ func PinnedZones() []string { return copyOf(pinnedZones) }
 // PinnedCandidate -- резолвер, несущий PinnedZones, пока он жив.
 func PinnedCandidate() string { return pinnedCandidate }
 
-// ZoneCanaries -- копия карты «зона -> имя-канарейка».
-func ZoneCanaries() map[string]string {
-	out := make(map[string]string, len(zoneCanaries))
-	for k, v := range zoneCanaries {
-		out[k] = v
-	}
-	return out
-}
-
-// ForeignResolverIPs -- адреса заграничных резолверов из эталона ручного сброса,
-// для обычных проб на 53-й порт. Выводятся из строк, а не хранятся третьим
-// списком.
-func ForeignResolverIPs() []string {
-	var out []string
-	for _, line := range referenceForeignDoT {
-		f := strings.Fields(line)
-		if len(f) >= 3 && f[0] == "tls" && f[1] == "upstream" && net.ParseIP(f[2]) != nil {
-			out = append(out, f[2])
-		}
-	}
-	return out
-}
+// RUCanary -- имя для пробы живости раздельного DNS.
+func RUCanary() string { return ruCanary }
 
 func copyOf(src []string) []string {
 	out := make([]string, len(src))

@@ -7,18 +7,41 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
+const testYandexHost = "common.dot.dns.yandex.net"
+
+func endpointsOf(eps ...keenetic.DNSEndpoint) func(context.Context) ([]keenetic.DNSEndpoint, error) {
+	return func(context.Context) ([]keenetic.DNSEndpoint, error) { return eps, nil }
+}
+
+func resolvesOK(context.Context, string, string) ([]string, error) {
+	return []string{"198.51.100.7"}, nil
+}
+
+func zonesOf(t *testing.T, got wire.Check) map[string]string {
+	t.Helper()
+	zones, ok := got.Details["zones"].(map[string]string)
+	if !ok {
+		t.Fatalf("zones не карта строк: %#v", got.Details["zones"])
+	}
+	return zones
+}
+
 // Проверка dns_split -- ЧИТАЮЩАЯ. Она не умеет FAIL вовсе: тревоги про DNS
 // несут проверки dns и resolver_guard, и новая не имеет права ни разбудить
-// человека ночью, ни попасть в счётчик тревог.
-func TestDNSSplit_AllProbesFailStaysOKAndSaysUnknown(t *testing.T) {
-	c := DNSSplit{
-		Zones:         []string{"ru", "su"},
-		DefaultCanary: "canary.example.com",
-		YandexHost:    "common.dot.dns.yandex.net",
-		Foreign:       []string{"9.9.9.9"},
+// человека ночью, ни попасть в счётчик тревог. Настройки не прочитались и
+// роутер не резолвит -- это «неизвестно», а не поломка.
+func TestDNSSplit_NothingReadableStaysOKAndSaysUnknown(t *testing.T) {
+	c := &DNSSplit{
+		Zones:      []string{"ru", "su"},
+		YandexHost: testYandexHost,
+		Canary:     "ya.ru",
+		Endpoints: func(context.Context) ([]keenetic.DNSEndpoint, error) {
+			return nil, errors.New("ndmc недоступен")
+		},
 		Resolve: func(context.Context, string, string) ([]string, error) {
 			return nil, errors.New("сеть недоступна")
 		},
@@ -27,28 +50,97 @@ func TestDNSSplit_AllProbesFailStaysOKAndSaysUnknown(t *testing.T) {
 	if got.Status != "ok" {
 		t.Fatalf("status = %q: эта проверка не умеет FAIL вовсе", got.Status)
 	}
-	zones, _ := got.Details["zones"].(map[string]string)
+	zones := zonesOf(t, got)
 	if len(zones) != 2 {
-		t.Fatalf("зон в ответе %d, хотим 2: %#v", len(zones), got.Details["zones"])
+		t.Fatalf("зон в ответе %d, хотим 2: %#v", len(zones), zones)
 	}
 	for z, verdict := range zones {
 		if verdict != "unknown" {
 			t.Errorf("зона %s: %q, хотим unknown", z, verdict)
 		}
 	}
+	if got.Details["resolves"] != "fail" {
+		t.Errorf("resolves = %v, хотим fail", got.Details["resolves"])
+	}
 }
 
-// CDN отдаёт разным резолверам разные адреса: совпадение -- довод, а не
-// доказательство. Слова уверенности в ответе быть не должно никогда.
+// Зона отдана Яндексу по DoT -- ровно то, что просил оператор (транспорт).
+// Роутер мог записать строку в своей форме (регистр, точка в конце): узнаём
+// по смыслу, а не по написанию.
+func TestDNSSplit_ZoneOnYandexOverDoT(t *testing.T) {
+	c := &DNSSplit{
+		Zones:      []string{"ru", "xn--p1ai"},
+		YandexHost: testYandexHost,
+		Canary:     "ya.ru",
+		Endpoints: endpointsOf(
+			keenetic.DNSEndpoint{Type: "dot", Host: "9.9.9.9", Port: 853, SNI: "dns.quad9.net"},
+			keenetic.DNSEndpoint{Type: "dot", Host: testYandexHost, Port: 853, Zone: "ru"},
+			keenetic.DNSEndpoint{Type: "dot", Host: "Common.Dot.DNS.Yandex.net.", Port: 853, Zone: "XN--P1AI."},
+		),
+		Resolve: resolvesOK,
+	}
+	got := c.Run(context.Background(), Deps{})
+	zones := zonesOf(t, got)
+	for _, z := range []string{"ru", "xn--p1ai"} {
+		if zones[z] != "yandex_dot" {
+			t.Errorf("зона %s: %q, хотим yandex_dot", z, zones[z])
+		}
+	}
+	if got.Details["resolves"] != "ok" {
+		t.Errorf("resolves = %v, хотим ok", got.Details["resolves"])
+	}
+}
+
+// Остальные исходы различаются, потому что человеку чинить разное: Яндекс по
+// DoH (транспорт не тот), зона у чужого резолвера, зона поделена между Яндексом
+// и чужим (часть запросов уйдёт за границу), отдельного правила нет вовсе.
+func TestDNSSplit_ZoneVerdictsAreDistinct(t *testing.T) {
+	c := &DNSSplit{
+		Zones:      []string{"ru", "su", "tatar", "xn--p1acf"},
+		YandexHost: testYandexHost,
+		Canary:     "ya.ru",
+		Endpoints: endpointsOf(
+			keenetic.DNSEndpoint{Type: "doh", URL: "https://" + testYandexHost + "/dns-query", Zone: "ru"},
+			keenetic.DNSEndpoint{Type: "dot", Host: "1.1.1.1", Port: 853, Zone: "su"},
+			keenetic.DNSEndpoint{Type: "dot", Host: testYandexHost, Port: 853, Zone: "tatar"},
+			keenetic.DNSEndpoint{Type: "doh", URL: "https://dns.quad9.net/dns-query", Zone: "tatar"},
+			// общий апстрим без зоны за правило для зоны не считается
+			keenetic.DNSEndpoint{Type: "dot", Host: testYandexHost, Port: 853},
+		),
+		Resolve: resolvesOK,
+	}
+	zones := zonesOf(t, c.Run(context.Background(), Deps{}))
+	want := map[string]string{"ru": "yandex_doh", "su": "other", "tatar": "mixed", "xn--p1acf": "none"}
+	for z, w := range want {
+		if zones[z] != w {
+			t.Errorf("зона %s: %q, хотим %q", z, zones[z], w)
+		}
+	}
+}
+
+// Даже зона у чужого резолвера -- не FAIL: тревоги несут другие проверки.
+func TestDNSSplit_BrokenSplitIsStillOK(t *testing.T) {
+	c := &DNSSplit{
+		Zones:      []string{"ru"},
+		YandexHost: testYandexHost,
+		Canary:     "ya.ru",
+		Endpoints:  endpointsOf(keenetic.DNSEndpoint{Type: "dot", Host: "1.1.1.1", Port: 853, Zone: "ru"}),
+		Resolve:    resolvesOK,
+	}
+	if got := c.Run(context.Background(), Deps{}); got.Status != "ok" {
+		t.Fatalf("status = %q: даже поломка раздельной схемы не даёт FAIL", got.Status)
+	}
+}
+
+// Вердикт -- вывод по настройкам, а не замер. Слов уверенности в ответе быть не
+// должно никогда.
 func TestDNSSplit_NeverClaimsCertainty(t *testing.T) {
-	c := DNSSplit{
-		Zones:         []string{"ru"},
-		DefaultCanary: "canary.example.com",
-		YandexHost:    "common.dot.dns.yandex.net",
-		Foreign:       []string{"9.9.9.9"},
-		Resolve: func(_ context.Context, server, _ string) ([]string, error) {
-			return []string{"198.51.100.7"}, nil
-		},
+	c := &DNSSplit{
+		Zones:      []string{"ru"},
+		YandexHost: testYandexHost,
+		Canary:     "ya.ru",
+		Endpoints:  endpointsOf(keenetic.DNSEndpoint{Type: "dot", Host: testYandexHost, Port: 853, Zone: "ru"}),
+		Resolve:    resolvesOK,
 	}
 	b, _ := json.Marshal(c.Run(context.Background(), Deps{}).Details)
 	for _, word := range []string{"точно", "гарант", "доказан"} {
@@ -58,52 +150,23 @@ func TestDNSSplit_NeverClaimsCertainty(t *testing.T) {
 	}
 }
 
-// Адреса локального dns-proxy совпали с Яндексом и разошлись с заграничным --
-// «похоже, зона идёт через Яндекс». Это то свойство, ради которого оператор
-// просил раздельный DNS: банки и госуслуги должны видеть российский адрес.
-func TestDNSSplit_LocalMatchingYandexReadsAsYandex(t *testing.T) {
-	c := DNSSplit{
-		Zones:         []string{"ru"},
-		DefaultCanary: "canary.example.com",
-		YandexHost:    "common.dot.dns.yandex.net",
-		Foreign:       []string{"9.9.9.9"},
-		Resolve: func(_ context.Context, server, _ string) ([]string, error) {
-			switch server {
-			case "9.9.9.9":
-				return []string{"203.0.113.9"}, nil
-			default: // локальный и Яндекс отвечают одинаково
-				return []string{"198.51.100.7"}, nil
-			}
+// Проба живости спрашивает dns-proxy самого роутера, а не чужой сервер: важно,
+// что увидит человек за этим роутером.
+func TestDNSSplit_ResolveProbeAsksRouterProxy(t *testing.T) {
+	var server, name string
+	c := &DNSSplit{
+		Zones:      []string{"ru"},
+		YandexHost: testYandexHost,
+		Canary:     "ya.ru",
+		Endpoints:  endpointsOf(),
+		Resolve: func(_ context.Context, s, n string) ([]string, error) {
+			server, name = s, n
+			return []string{"198.51.100.7"}, nil
 		},
 	}
-	zones, _ := c.Run(context.Background(), Deps{}).Details["zones"].(map[string]string)
-	if zones["ru"] != "yandex" {
-		t.Errorf("зона ru: %q, хотим yandex", zones["ru"])
-	}
-}
-
-// Обратный случай: локальный резолвер отвечает как заграничный. Для ру-зоны это
-// и есть поломка раздельной схемы, и сказать о ней надо прямо -- но без FAIL.
-func TestDNSSplit_LocalMatchingForeignReadsAsForeign(t *testing.T) {
-	c := DNSSplit{
-		Zones:         []string{"ru"},
-		DefaultCanary: "canary.example.com",
-		YandexHost:    "common.dot.dns.yandex.net",
-		Foreign:       []string{"9.9.9.9"},
-		Resolve: func(_ context.Context, server, _ string) ([]string, error) {
-			if server == "common.dot.dns.yandex.net" {
-				return []string{"198.51.100.7"}, nil
-			}
-			return []string{"203.0.113.9"}, nil // локальный = заграничный
-		},
-	}
-	got := c.Run(context.Background(), Deps{})
-	if got.Status != "ok" {
-		t.Fatalf("status = %q: даже поломка раздельной схемы не даёт FAIL", got.Status)
-	}
-	zones, _ := got.Details["zones"].(map[string]string)
-	if zones["ru"] != "foreign" {
-		t.Errorf("зона ru: %q, хотим foreign", zones["ru"])
+	c.Run(context.Background(), Deps{})
+	if server != localResolver || name != "ya.ru" {
+		t.Errorf("спросили %q у %q, хотим ya.ru у %q", name, server, localResolver)
 	}
 }
 
@@ -112,13 +175,11 @@ func TestDNSSplit_LocalMatchingForeignReadsAsForeign(t *testing.T) {
 func TestDNSSplit_RouteComesFromRouteLookupAndDegradesToUnknown(t *testing.T) {
 	base := func(rl func(context.Context, string) (wire.RouteLookupResult, error)) *DNSSplit {
 		return &DNSSplit{
-			Zones:         []string{"ru"},
-			DefaultCanary: "canary.example.com",
-			YandexHost:    "common.dot.dns.yandex.net",
-			Foreign:       []string{"9.9.9.9"},
-			Resolve: func(context.Context, string, string) ([]string, error) {
-				return []string{"198.51.100.7"}, nil
-			},
+			Zones:       []string{"ru"},
+			YandexHost:  testYandexHost,
+			Canary:      "ya.ru",
+			Endpoints:   endpointsOf(),
+			Resolve:     resolvesOK,
 			RouteLookup: rl,
 		}
 	}
@@ -149,7 +210,7 @@ func TestDNSSplit_RouteComesFromRouteLookupAndDegradesToUnknown(t *testing.T) {
 func TestDNSSplit_TunnelRouteCarriesTunnelName(t *testing.T) {
 	c := &DNSSplit{
 		Zones:      []string{"ru"},
-		YandexHost: "common.dot.dns.yandex.net",
+		YandexHost: testYandexHost,
 		RouteLookup: func(context.Context, string) (wire.RouteLookupResult, error) {
 			return wire.RouteLookupResult{Verdict: wire.LookupViaTunnel, TunnelID: "awg3", TunnelName: "vpn-nl"}, nil
 		},

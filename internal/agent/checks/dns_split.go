@@ -2,43 +2,44 @@ package checks
 
 import (
 	"context"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/agent/keenetic"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-// DNSSplit -- читающая проверка раздельного DNS: идут ли русские зоны к
-// Яндексу, а остальное мимо него.
+// DNSSplit -- читающая проверка раздельного DNS: кому роутер отдал русские
+// зоны, каким транспортом, и идёт ли запрос к Яндексу мимо VPN-туннеля.
 //
 // Она НЕ УМЕЕТ FAIL вовсе, и это главное её свойство. Тревоги про DNS уже несут
 // проверки dns и resolver_guard; новая не имеет права ни разбудить человека
 // ночью, ни попасть в счётчик тревог. Её дело -- рассказать, а не поднять
 // тревогу, поэтому вердикт лежит в details, а статус всегда ok.
 //
-// Второе свойство -- честность формулировок. Совпадение адресов это ДОВОД, а не
-// доказательство: CDN отдаёт разным резолверам разные адреса, и на полностью
-// здоровой схеме ответы могут разойтись. Поэтому вердикты называются
-// «yandex» / «foreign» / «unknown», а слова уверенности («точно», «гарантирую»,
-// «доказано») в ответе не появляются никогда — экран обязан говорить «похоже».
+// Второе свойство -- честность источника. Зонный вердикт берётся из НАСТРОЕК
+// роутера (running-config), а не из сравнения ответов резолверов: живой прогон
+// 14.09.2026 показал, что Яндекс, Quad9 и Cloudflare отдают одинаковые адреса на
+// все крупные русские сайты, и сравнение ничего не различает. Поэтому экран
+// говорит «по настройкам роутера», а слова уверенности («точно», «гарантирую»,
+// «доказано») в ответе не появляются никогда. Настройки дополняет одна проба:
+// резолвит ли роутер вообще.
 //
-// Третье -- бюджет. У каждой проверки в отчёте агента жёсткий лимит времени, а
-// семь зон по три пробы это 21 обращение: подряд они в лимит не влезут. Поэтому
-// вердикт считается не чаще раза в MinInterval, а между пересчётами отдаётся из
-// кеша. Проверку держат по указателю: на копии структуры кеш не пережил бы
-// вызова.
+// Третье -- бюджет. Чтение running-config через ndmc не бесплатное, а агент
+// отчитывается куда чаще, чем меняются настройки. Поэтому вердикт считается не
+// чаще раза в MinInterval, а между пересчётами отдаётся из кеша. Проверку держат
+// по указателю: на копии структуры кеш не пережил бы вызова.
 type DNSSplit struct {
 	// Zones -- какие зоны проверяем (обычно dnsref.RUZones()).
 	Zones []string
-	// ZoneCanaries -- имя-канарейка на зону. Одной канарейки на семь зон не
-	// хватает: через неё нечем проверить ни tatar, ни xn--d1acj3b.
-	ZoneCanaries map[string]string
-	// DefaultCanary -- чем спрашивать зону, для которой своей канарейки нет.
-	DefaultCanary string
 	// YandexHost -- DoT-хост Яндекса (dnsref.YandexDoTHost()).
 	YandexHost string
-	// Foreign -- заграничные резолверы; спрашиваем первый доступный.
-	Foreign []string
+	// Canary -- имя, которым проверяем, что dns-proxy роутера вообще отвечает.
+	Canary string
+	// Endpoints читает апстримы dns-proxy из настроек роутера.
+	Endpoints func(ctx context.Context) ([]keenetic.DNSEndpoint, error)
 	// Resolve спрашивает имя у конкретного сервера. Внедряется, чтобы проверку
 	// можно было прогнать без сети.
 	Resolve func(ctx context.Context, server, name string) ([]string, error)
@@ -59,6 +60,16 @@ type DNSSplit struct {
 	cachedAt  time.Time
 	cacheHeld time.Duration
 }
+
+// Вердикты зоны. Различаются, потому что человеку чинить разное.
+const (
+	zoneYandexDoT = "yandex_dot" // Яндекс по DoT -- как задумано
+	zoneYandexDoH = "yandex_doh" // Яндекс, но транспорт не DoT
+	zoneMixed     = "mixed"      // поделена между Яндексом и чужим резолвером
+	zoneOther     = "other"      // отдана чужому резолверу
+	zoneNone      = "none"       // отдельного правила нет -- уходит на общие серверы
+	zoneUnknown   = "unknown"    // настройки не прочитались
+)
 
 func (c *DNSSplit) Name() string { return "dns_split" }
 
@@ -83,14 +94,16 @@ func (c *DNSSplit) Run(ctx context.Context, _ Deps) wire.Check {
 	}
 	c.mu.Unlock()
 
-	zones := make(map[string]string, len(c.Zones))
 	anyUnknown := false
-	for _, z := range c.Zones {
-		v := c.zoneVerdict(ctx, z)
-		if v == "unknown" {
+	zones := c.zoneVerdicts(ctx)
+	for _, v := range zones {
+		if v == zoneUnknown {
 			anyUnknown = true
 		}
-		zones[z] = v
+	}
+	resolves := c.resolveProbe(ctx)
+	if resolves != "ok" {
+		anyUnknown = true
 	}
 	route, tunnel := c.routeVerdict(ctx)
 	if route == "unknown" {
@@ -99,6 +112,7 @@ func (c *DNSSplit) Run(ctx context.Context, _ Deps) wire.Check {
 
 	details := map[string]any{
 		"zones":      zones,
+		"resolves":   resolves,
 		"route":      route,
 		"checked_at": now.UTC().Format(time.RFC3339),
 	}
@@ -131,50 +145,77 @@ func (c *DNSSplit) probeTimeout() time.Duration {
 	return 2 * time.Second
 }
 
-// zoneVerdict сравнивает ответ локального dns-proxy с ответами Яндекса и
-// заграничного резолвера. Любая неудача пробы -- «неизвестно»: выдумывать
-// вердикт по неполным данным хуже, чем честно сказать, что не знаем.
-func (c *DNSSplit) zoneVerdict(ctx context.Context, zone string) string {
-	canary := c.DefaultCanary
-	if v, ok := c.ZoneCanaries[zone]; ok && v != "" {
-		canary = v
+// zoneVerdicts читает настройки один раз на все зоны. Не прочиталось --
+// «неизвестно» для каждой: выдумывать вердикт хуже, чем честно не знать.
+func (c *DNSSplit) zoneVerdicts(ctx context.Context) map[string]string {
+	out := make(map[string]string, len(c.Zones))
+	var eps []keenetic.DNSEndpoint
+	ok := false
+	if c.Endpoints != nil {
+		var err error
+		eps, err = c.Endpoints(ctx)
+		ok = err == nil
 	}
-	if canary == "" || c.Resolve == nil {
-		return "unknown"
+	for _, z := range c.Zones {
+		if !ok {
+			out[z] = zoneUnknown
+			continue
+		}
+		out[z] = c.zoneVerdict(splitNormHost(z), eps)
 	}
+	return out
+}
 
-	local := c.probe(ctx, localResolver, canary)
-	if len(local) == 0 {
-		return "unknown"
-	}
-	yandex := c.probe(ctx, c.YandexHost, canary)
-	var foreign []string
-	for _, f := range c.Foreign {
-		if foreign = c.probe(ctx, f, canary); len(foreign) > 0 {
-			break
+// zoneVerdict сопоставляет строки по смыслу -- хост, зона, транспорт, -- а не
+// по написанию: роутер вправе записать строку в своей форме.
+func (c *DNSSplit) zoneVerdict(zone string, eps []keenetic.DNSEndpoint) string {
+	yandex := splitNormHost(c.YandexHost)
+	var yDoT, yDoH, other bool
+	for _, ep := range eps {
+		if ep.Zone == "" || splitNormHost(ep.Zone) != zone {
+			continue
+		}
+		switch {
+		case ep.Type == "dot" && splitNormHost(ep.Host) == yandex:
+			yDoT = true
+		case ep.Type == "doh" && splitDoHHost(ep.URL) == yandex:
+			yDoH = true
+		default:
+			other = true
 		}
 	}
-	if len(yandex) == 0 || len(foreign) == 0 {
-		return "unknown"
-	}
-
-	sameAsYandex := intersects(local, yandex)
-	sameAsForeign := intersects(local, foreign)
 	switch {
-	case sameAsYandex && !sameAsForeign:
-		return "yandex"
-	case sameAsForeign && !sameAsYandex:
-		return "foreign"
+	case other && (yDoT || yDoH):
+		return zoneMixed
+	case other:
+		return zoneOther
+	case yDoT:
+		return zoneYandexDoT
+	case yDoH:
+		return zoneYandexDoH
 	default:
-		// Совпало с обоими или ни с одним: CDN вправе так ответить, и это не
-		// повод что-то утверждать.
+		return zoneNone
+	}
+}
+
+// resolveProbe -- резолвит ли dns-proxy роутера вообще: настройки без живого
+// ответа ничего не стоят.
+func (c *DNSSplit) resolveProbe(ctx context.Context) string {
+	if c.Resolve == nil || c.Canary == "" {
 		return "unknown"
 	}
+	ctx, cancel := context.WithTimeout(ctx, c.probeTimeout())
+	defer cancel()
+	addrs, err := c.Resolve(ctx, localResolver, c.Canary)
+	if err != nil || len(addrs) == 0 {
+		return "fail"
+	}
+	return "ok"
 }
 
 // routeVerdict спрашивает, как идёт трафик до самого резолвера Яндекса: мимо
 // туннеля или через него. Свойство «мимо VPN» -- половина требования оператора,
-// вторая половина (транспорт DoT) видна проверке dns. Второе значение -- имя
+// вторая половина (транспорт DoT) видна по настройкам. Второе значение -- имя
 // туннеля, когда путь идёт через него.
 func (c *DNSSplit) routeVerdict(ctx context.Context) (verdict, tunnel string) {
 	if c.RouteLookup == nil || c.YandexHost == "" {
@@ -193,28 +234,14 @@ func (c *DNSSplit) routeVerdict(ctx context.Context) (verdict, tunnel string) {
 	return res.Verdict, name
 }
 
-func (c *DNSSplit) probe(ctx context.Context, server, name string) []string {
-	if server == "" {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, c.probeTimeout())
-	defer cancel()
-	addrs, err := c.Resolve(ctx, server, name)
-	if err != nil {
-		return nil
-	}
-	return addrs
+func splitNormHost(s string) string {
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(s)), ".")
 }
 
-func intersects(a, b []string) bool {
-	set := make(map[string]bool, len(a))
-	for _, v := range a {
-		set[v] = true
+func splitDoHHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
 	}
-	for _, v := range b {
-		if set[v] {
-			return true
-		}
-	}
-	return false
+	return splitNormHost(u.Hostname())
 }

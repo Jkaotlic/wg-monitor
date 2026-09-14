@@ -242,27 +242,32 @@ func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog
 const dnsSplitInterval = 10 * time.Minute
 
 // buildDNSSplitCheck собирает читающую проверку раздельного DNS целиком из
-// эталона dnsref. Спрашиваются только зоны, у которых есть своя канарейка.
+// эталона dnsref. Зоны читаются из настроек роутера, а не сравнением ответов
+// резолверов: те отдают на русские сайты одинаковые адреса.
 func buildDNSSplitCheck(awgClient *awgmgr.Client) *checks.DNSSplit {
-	canaries := dnsref.ZoneCanaries()
-	var zones []string
-	for _, z := range dnsref.RUZones() {
-		if canaries[z] != "" {
-			zones = append(zones, z)
-		}
-	}
 	return &checks.DNSSplit{
-		Zones:        zones,
-		ZoneCanaries: canaries,
-		YandexHost:   dnsref.YandexDoTHost(),
-		Foreign:      dnsref.ForeignResolverIPs(),
-		Resolve:      resolveVia,
+		Zones:      dnsref.RUZones(),
+		YandexHost: dnsref.YandexDoTHost(),
+		Canary:     dnsref.RUCanary(),
+		Endpoints:  readDNSEndpoints,
+		Resolve:    resolveVia,
 		RouteLookup: dnsSplitRouteLookup(func(ctx context.Context, host string) (string, error) {
 			return actions.RouteLookup(ctx, awgClient, host)
 		}),
 		PerProbeTimeout: 2 * time.Second,
 		MinInterval:     dnsSplitInterval,
 	}
+}
+
+// readDNSEndpoints читает апстримы DNS из running-config роутера.
+func readDNSEndpoints(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	rc, err := keenetic.NDMC{Runner: checks.OSExec{}}.Show(ctx, "running-config")
+	if err != nil {
+		return nil, err
+	}
+	return keenetic.ParseDNSEndpoints(rc), nil
 }
 
 // dnsSplitRouteLookup превращает JSON-ответ route_lookup в структуру. Второго
@@ -309,19 +314,12 @@ func buildDNSCheck(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog.Log
 	var endpoints []keenetic.DNSEndpoint
 	var endpointProvider func(context.Context) ([]keenetic.DNSEndpoint, error)
 	if dc.AutoDiscover {
-		runner := checks.OSExec{}
-		ndmc := keenetic.NDMC{Runner: runner}
 		endpointProvider = func(ctx context.Context) ([]keenetic.DNSEndpoint, error) {
-			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			rc, err := ndmc.Show(ctx, "running-config")
-			if err != nil {
-				if logger != nil {
-					logger.Warn("dns auto-discover skipped", "err", err)
-				}
-				return nil, err
+			eps, err := readDNSEndpoints(ctx)
+			if err != nil && logger != nil {
+				logger.Warn("dns auto-discover skipped", "err", err)
 			}
-			return keenetic.ParseDNSEndpoints(rc), nil
+			return eps, err
 		}
 	}
 
