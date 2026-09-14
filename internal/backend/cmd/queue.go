@@ -115,11 +115,18 @@ func defaultCommandTTL(action string) time.Duration {
 	switch action {
 	case "self_update":
 		return 30 * time.Minute
-	case "firmware_install", "service_restart":
+	case "firmware_install", "service_restart", "awgm_update", "hrneo_update":
 		return 10 * time.Minute
 	default:
 		return 15 * time.Minute
 	}
+}
+
+// CommandTTL -- сколько команда этого действия ждёт агента в очереди. Экспорт
+// нужен мини-аппу: ответ на постановку спящему роутеру называет это число
+// («выполнится, если он проснётся в течение N минут»).
+func CommandTTL(action string) time.Duration {
+	return defaultCommandTTL(action)
 }
 
 func commandExpired(cmd wire.Command, now time.Time) bool {
