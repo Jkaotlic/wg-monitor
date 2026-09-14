@@ -162,10 +162,10 @@ func TestLoadConfig_DNSWatchdogRequiresHTTPSEndpoint(t *testing.T) {
 // сторож, который гоняет пробы в никуда.
 func TestLoadConfig_DNSWatchdogRejectsWhatRemoteEditRejects(t *testing.T) {
 	for name, block := range map[string]string{
-		"ipv6 bootstrap": "  endpoint: https://dns.example.com/secret-path\n  bootstrap_ip: \"2001:db8::1\"\n",
-		"маска":          "  endpoint: https://dns.example.com/***\n",
+		"ipv6 bootstrap":  "  endpoint: https://dns.example.com/secret-path\n  bootstrap_ip: \"2001:db8::1\"\n",
+		"маска":           "  endpoint: https://dns.example.com/***\n",
 		"пустой hostname": "  endpoint: https://:443/secret-path\n",
-		"длинный":        "  endpoint: https://dns.example.com/" + strings.Repeat("a", 600) + "\n",
+		"длинный":         "  endpoint: https://dns.example.com/" + strings.Repeat("a", 600) + "\n",
 	} {
 		cfg := loadDNSWatchdogConfig(t, "\ndns_watchdog:\n  enabled: true\n"+block)
 		if cfg.DNSWatchdog.Enabled || cfg.DNSWatchdog.ConfigError == "" {

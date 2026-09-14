@@ -16,7 +16,7 @@ func TestValidateEndpoint(t *testing.T) {
 		{"https://dns.example.com/secret-path/dns-query", true},
 		{"", false},
 		{"http://dns.example.com/x", false},
-		{"https://:443/x", false},        // Host=":443", Hostname пуст
+		{"https://:443/x", false},              // Host=":443", Hostname пуст
 		{"https://dns.example.com/***", false}, // маска из agent_config_get
 		{long, false},
 		{"dns.example.com/x", false},
