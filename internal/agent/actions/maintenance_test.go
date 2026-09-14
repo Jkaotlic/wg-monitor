@@ -518,6 +518,22 @@ func TestVersionAudit_KernelModuleNotLoadedIsAnswerNotSilence(t *testing.T) {
 	}
 }
 
+func TestVersionAudit_CarriesLoadedKernelModuleVersion(t *testing.T) {
+	awg := &fakeAwgInfo{sysInfo: awgmgr.SystemInfo{
+		Version: "2.19.0+r2", KernelModuleVersion: "3.2.20260930", KernelModuleLoadedVersion: "3.1.20260906", KernelModuleLoaded: true,
+	}}
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("ignored")
+	}
+	va, err := VersionAudit(context.Background(), awg, exec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if va.KmodLoadedVersion != "3.1.20260906" {
+		t.Errorf("KmodLoadedVersion = %q", va.KmodLoadedVersion)
+	}
+}
+
 func TestParseProcStatStarttime(t *testing.T) {
 	cases := []struct {
 		name string

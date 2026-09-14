@@ -175,12 +175,13 @@ func VersionAudit(ctx context.Context, awg AwgInfoClient, exec ExecFunc) (wire.V
 		return wire.VersionAudit{}, fmt.Errorf("awgmgr SystemInfo: %w", sysErr)
 	}
 	out := wire.VersionAudit{
-		AwgmgrVersion:   sys.Version,
-		AwgmgrBackend:   sys.ActiveBackend,
-		AwgmgrRunning:   true,
-		FirmwareCurrent: sys.FirmwareVersion,
-		KmodVersion:     sys.KernelModuleVersion,
-		KmodModel:       sys.KernelModuleModel,
+		AwgmgrVersion:     sys.Version,
+		AwgmgrBackend:     sys.ActiveBackend,
+		AwgmgrRunning:     true,
+		FirmwareCurrent:   sys.FirmwareVersion,
+		KmodVersion:       sys.KernelModuleVersion,
+		KmodModel:         sys.KernelModuleModel,
+		KmodLoadedVersion: sys.KernelModuleLoadedVersion,
 	}
 	// SystemInfo получен -- значит про модуль ядра агент СКАЗАЛ, и «не
 	// загружен» здесь ответ, а не молчание. Указатель ставим всегда, иначе
