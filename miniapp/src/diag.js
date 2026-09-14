@@ -325,6 +325,9 @@ export function checkRows({ checks = [], tunnels = [], router = null } = {}) {
   // (resolver_guard -- «Свой DNS-сервер»), иначе тем, что дал агент.
   for (const c of checks ?? []) {
     if (ROW_ORDER.includes(c.check_name) || c.check_name.startsWith('tunnel_')) continue
+    // dns_split всегда ok, в списке она читалась бы вечным «да»: у неё свой
+    // раздел на экране (dnsSplit.js).
+    if (c.check_name === 'dns_split') continue
     rows.push({
       key: c.check_name,
       title: checkLabel(c.check_name),

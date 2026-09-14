@@ -628,6 +628,9 @@ var dashboardCommandAllowlist = map[string]bool{
 	"tunnel_analyze":   true,
 	// «Куда пойдёт сайт»: только чтение, аргумент -- одно имя сайта.
 	"route_lookup": true,
+	// «Открывается ли сайт»: только чтение, аргумент -- одно имя сайта.
+	// Нужно и аварийному входу без Telegram, иначе проверить сайт там нечем.
+	"dns_open": true,
 	// NB: update_backend_url is intentionally NOT here. Re-pointing the fleet's
 	// backend domain from a browser session is fleet-takeover blast radius, so it
 	// stays gated to the wizard token / deploy CLI (see
@@ -918,12 +921,37 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "dns_reset":
+	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status":
 		return map[string]any{}, true
-	case "route_lookup":
-		// «Куда пойдёт сайт»: агенту уходит ровно имя сайта, в одном виде.
-		// Адрес с путём или портом и одиночное имя без точки -- не сайт; агент
-		// проверит ещё раз, но чужое до очереди не доезжает.
+	case "dns_reset":
+		// Сброс DNS принимает ровно один аргумент -- предпросмотр. Раньше он
+		// стоял среди «команд без аргументов», и dry_run не доезжал до агента
+		// вовсе: кнопка предпросмотра была бы невозможна. Наружу уходит ровно
+		// одно поле, всё остальное клиентское не доезжает.
+		raw, present := args["dry_run"]
+		if !present {
+			// Отсутствие ключа -- настоящий сброс: так работает кнопка
+			// дашборда сегодня, и менять её поведение молча нельзя.
+			return map[string]any{"dry_run": false}, true
+		}
+		dryRun, ok := raw.(bool)
+		if !ok {
+			// Значение неверного типа не приводим ни к чему. `false` означало
+			// бы разрушительный сброс там, где клиент просил предпросмотр, а
+			// `true` -- молчаливый отказ выполнить то, что человек нажал.
+			// Угадывать намерение сломанного клиента опаснее, чем отказать.
+			writeJSONError(w, http.StatusBadRequest, "invalid_dry_run", "dry_run must be a boolean")
+			return nil, false
+		}
+		return map[string]any{"dry_run": dryRun}, true
+	case "route_lookup", "dns_open":
+		// «Куда пойдёт сайт» и «открывается ли сайт»: агенту уходит ровно имя
+		// сайта, в одном виде. Адрес с путём или портом и одиночное имя без
+		// точки -- не сайт; агент проверит ещё раз, но чужое до очереди не
+		// доезжает.
+		//
+		// Ветка общая намеренно: проверка имени здесь одна и та же, а вторая её
+		// копия неизбежно разошлась бы с первой.
 		domain := strings.TrimRight(strings.ToLower(strings.TrimSpace(argString(args, "domain"))), ".")
 		if domain == "" || len(domain) > 253 || strings.ContainsAny(domain, " \t\r\n/:") || !strings.Contains(domain, ".") {
 			writeJSONError(w, http.StatusBadRequest, "invalid_domain", "domain must be a site name like example.com")

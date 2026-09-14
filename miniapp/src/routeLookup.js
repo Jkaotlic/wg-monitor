@@ -148,3 +148,34 @@ export function lookupRefusal(output, code) {
   if (/^unknown action:/i.test(text.trim())) return AGENT_OLDER_THAN_APP
   return 'Роутер не ответил на вопрос — попробуйте ещё раз'
 }
+
+// openAnswer -- слова для ответа dns_open («Откроется ли сайт»). Исходы агента
+// разведены намеренно (internal/agent/actions/dns_open.go): err -- имя не
+// определилось, чинить DNS; partial -- имя есть, сайт молчит, чинить маршрут
+// или разбираться с блокировкой. Вывод агента человеку не показывается: там
+// адреса, порты и имена утилит.
+export function openAnswer(result, domain) {
+  const site = `«${domain || 'сайт'}»`
+  const output = String(result?.output ?? '').trim()
+  if (/^unknown action:/i.test(output)) return { title: AGENT_OLDER_THAN_APP, lines: [], tone: 'unknown' }
+  switch (result?.status) {
+    case 'ok':
+      return {
+        title: `Сайт ${site} откроется с этого роутера`,
+        lines: ['Роутер узнал адрес сайта, и сайт принял соединение.'],
+        tone: 'ok',
+      }
+    case 'partial':
+      return {
+        title: `Адрес ${site} есть, но сайт не отвечает`,
+        lines: ['Роутер узнал адрес — дело в маршруте или блокировке, а не в DNS.'],
+        tone: 'warn',
+      }
+    default:
+      return {
+        title: `Адрес сайта ${site} не определился`,
+        lines: ['Роутер не узнал адрес сайта — дело в настройке DNS, а не в маршруте.'],
+        tone: 'warn',
+      }
+  }
+}

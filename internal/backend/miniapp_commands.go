@@ -53,6 +53,10 @@ var miniappCommandAllowlist = map[string]bool{
 	"diag_now":       true,
 	"tunnels_status": true,
 	"route_status":   true,
+	// «Открывается ли сайт с этого роутера»: только чтение -- имя разрешается
+	// через dns-proxy роутера и идёт TCP на 443. Смотреть вправе и оператор:
+	// ничего не меняется.
+	"dns_open": true,
 	// Read-only probes; new for a browser session (wizard-only until now).
 	"check_via_tunnel": true,
 	"check_direct":     true,

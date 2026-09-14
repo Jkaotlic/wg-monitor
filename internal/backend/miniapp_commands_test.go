@@ -59,6 +59,11 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// whitelist полей, куда backend.url не входит намеренно: перенаправить
 		// адрес бэкенда значит захватить весь парк.
 		"agent_config_get", "update_agent_config",
+		// «Открывается ли сайт с этого роутера»: читающее. Имя разрешается через
+		// dns-proxy роутера и идёт TCP на 443 -- ничего не меняется, поэтому
+		// смотреть вправе и оператор. До агента доезжает только имя сайта: ветка
+		// sanitizeWizardCommandArgs общая с route_lookup.
+		"dns_open",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {

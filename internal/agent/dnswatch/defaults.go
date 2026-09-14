@@ -1,33 +1,30 @@
 package dnswatch
 
-// Fallback defaults mirror the operator's own AdGuard Home `upstream_dns`
-// (read live 11.09.2026): Russian zones go to Yandex, everything else goes to
-// a foreign pool raced in parallel, and a few CDN zones are pinned to
-// Cloudflare. Each entry is a dns-proxy line without the `dns-proxy` prefix,
-// exactly as it is added with `ndmc -c "dns-proxy <line>"`.
+import "github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
+
+// Дефолты сторожа. Своей таблицы здесь больше нет -- она выводится из dnsref,
+// единственного источника правды об эталонном раздельном DNS: русские зоны
+// идут к Яндексу, остальное к заграничному пулу вперегонки, несколько CDN-зон
+// закреплены за одним резолвером. Каждая строка -- команда dns-proxy без
+// префикса, ровно как её добавляют через `ndmc -c "dns-proxy <строка>"`.
+// Google отсутствует намеренно: он уводит CDN на американские узлы.
 //
-// Google is deliberately absent: it steers CDNs to US edges.
+// Копия таблицы жила здесь и в actions/dns_reset.go, и они разошлись: сторож
+// знал семь зон и не держал Google, ручной сброс -- три зоны и Google держал.
 //
-// agent.LoadConfig copies these into the agent config when the watchdog is
-// enabled and the list is not set; never modify them in place.
+// agent.LoadConfig копирует это в конфиг агента, когда сторож включён, а
+// список не задан. Значения -- СВОИ копии (dnsref отдаёт срезы копией),
+// поэтому правка конфигом не уезжает в источник правды.
 var (
-	DefaultRUZones = []string{"ru", "su", "xn--p1ai", "xn--80adxhks", "xn--d1acj3b", "xn--p1acf", "tatar"}
+	DefaultRUZones = dnsref.RUZones()
 
-	DefaultRUCandidates = []string{
-		"tls upstream common.dot.dns.yandex.net",
-		"https upstream https://common.dot.dns.yandex.net/dns-query",
-	}
+	DefaultRUCandidates = dnsref.RUCandidates()
 
-	DefaultForeignCandidates = []string{
-		"https upstream https://dns.quad9.net/dns-query",
-		"https upstream https://freedns.controld.com/p0",
-		"https upstream https://cloudflare-dns.com/dns-query",
-		"tls upstream 1.1.1.1 sni cloudflare-dns.com",
-		"tls upstream 9.9.9.9 sni dns.quad9.net",
-	}
+	DefaultForeignCandidates = dnsref.ForeignCandidates()
 
-	DefaultPinnedZones = []string{"themoviedb.org", "tmdb.org", "b-cdn.net", "phncdn.com", "pornhub.com", "rncdn7.com"}
+	DefaultPinnedZones = dnsref.PinnedZones()
 )
 
-// DefaultPinnedCandidate carries DefaultPinnedZones while it is live.
-const DefaultPinnedCandidate = "https upstream https://cloudflare-dns.com/dns-query"
+// DefaultPinnedCandidate несёт DefaultPinnedZones, пока жив. Переменная, а не
+// константа: значение приходит из dnsref функцией.
+var DefaultPinnedCandidate = dnsref.PinnedCandidate()

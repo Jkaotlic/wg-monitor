@@ -75,6 +75,13 @@ type Runner struct {
 	// BackendURL is the trusted command-plane origin from the agent config.
 	// self_update may use its same-origin /v1/releases/download mirror.
 	BackendURL string
+	// OwnResolverEndpoint -- адрес своего резолвера оператора
+	// (cfg.DNSWatchdog.Endpoint). Сюда приходит сырой URL: знание о том, что
+	// это URL, живёт в пакете actions, а не в сборке агента.
+	//
+	// Нужен сбросу DNS: снести свой резолвер значило бы увести сторожа в idle
+	// ровно тем действием, которым человек чинит DNS. Пусто -- защищать нечего.
+	OwnResolverEndpoint string
 	// Version is the agent's own currently-running version (main.Version at
 	// process start — the same value reported as AgentVersion in
 	// heartbeats). self_update's downgrade guard refuses an older target
@@ -718,7 +725,24 @@ func (r *Runner) dispatchWithPayload(ctx context.Context, cmd wire.Command) (sta
 		if r.Exec == nil {
 			return "err", "exec not configured", payload
 		}
-		s, o := DNSReset(ctx, r.Exec)
+		dryRun, _ := cmd.Args["dry_run"].(bool)
+		s, o := DNSReset(ctx, r.Exec, DNSResetOpts{
+			DryRun: dryRun,
+			// Свой резолвер оператора сбросом не сносим: иначе «починить DNS»
+			// кнопкой увело бы сторожа в idle ровно тем действием, которым
+			// человек чинит DNS.
+			KeepHosts: ownResolverHosts(r.OwnResolverEndpoint),
+		})
+		return s, o, payload
+
+	case "dns_open":
+		// «Открывается ли сайт с этого роутера»: только чтение. Пустое имя
+		// DNSOpen отвергает сам, не спрашивая роутер впустую.
+		if r.Exec == nil {
+			return "err", "exec not configured", payload
+		}
+		domain, _ := cmd.Args["domain"].(string)
+		s, o := DNSOpen(ctx, r.Exec, domain)
 		return s, o, payload
 
 	case "route_status", "tunnels_status":

@@ -22,6 +22,9 @@ const CHECK_LABELS = {
   // Сторож своего DNS-сервера (спека dns-watchdog). Бот зовёт его так же
   // (checkHumanName в alerts/format.go).
   resolver_guard: 'Свой DNS-сервер',
+  // Читающая проверка раздельного DNS (кому отданы русские зоны). Свой раздел
+  // на экране «Проверки».
+  dns_split: 'Раздельный DNS',
 }
 
 // Check names are identifiers, not prose. Anything we don't have a human name

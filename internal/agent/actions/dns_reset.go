@@ -5,20 +5,19 @@ import (
 	"fmt"
 	"net"
 	"strings"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnsref"
 )
 
-// dnsReferenceUpstreams is the canonical DNS-over-TLS upstream set deployed by
-// DNSReset. Each entry is the ndmc sub-command spliced after "dns-proxy", i.e.
-// the agent runs `ndmc -c "dns-proxy <entry>"`. Mirrors the operator's reference
-// recipe (Google / Quad9 / Cloudflare global + Yandex for ru/su/рф zones).
-var dnsReferenceUpstreams = []string{
-	"tls upstream 8.8.8.8 sni dns.google",
-	"tls upstream 9.9.9.9 sni dns.quad9.net",
-	"tls upstream 1.1.1.1 sni cloudflare-dns.com",
-	"tls upstream common.dot.dns.yandex.net domain ru",
-	"tls upstream common.dot.dns.yandex.net domain su",
-	"tls upstream common.dot.dns.yandex.net domain xn--p1ai",
-}
+// dnsReferenceUpstreams -- набор, который ставит DNSReset. Каждая строка
+// подставляется после "dns-proxy": агент выполняет
+// `ndmc -c "dns-proxy <строка>"`.
+//
+// Своей таблицы здесь больше нет. Она была -- и разошлась со сторожем: тут
+// лежали три ру-зоны и Google, там семь зон и без Google. Значит «починить
+// DNS» кнопкой и «сторожить DNS» ставили на роутер разное, а человек считал,
+// что это одно и то же. Теперь обе формы выводятся из dnsref.
+var dnsReferenceUpstreams = dnsref.ReferenceDoTLines()
 
 // DNSReset brings a Keenetic/NetCraze router's DNS-proxy to the reference
 // DNS-over-TLS set: it wipes every existing `dns-proxy tls/https upstream`
@@ -42,9 +41,29 @@ var dnsReferenceUpstreams = []string{
 // command succeeded, "partial" when some failed (e.g. an upstream that would
 // not negate), or "err" when the initial config read failed.
 //
-// DNSReset = the same removal/apply pass as ApplyDNSProxyUpstreams, plus the
-// save. Only this manual reset persists; the DNS watchdog never does.
-func DNSReset(ctx context.Context, exec ExecFunc) (status, output string) {
+// DNSResetOpts -- как выполнять сброс.
+type DNSResetOpts struct {
+	// DryRun -- предпросмотр: читает конфиг, показывает, что изменилось бы, и
+	// НЕ делает ничего: ни команды, ни файла. Человек нажал «посмотреть».
+	DryRun bool
+	// KeepHosts -- хосты, которые не удаляем. Прежде всего свой резолвер
+	// оператора: снести его сбросом значило бы увести сторожа в idle ровно тем
+	// действием, которым человек чинит DNS.
+	KeepHosts []string
+	// SnapshotDir -- куда лечь снимку «до». Транскрипт живёт час и архивом
+	// прежних настроек не годится; пусто -> снимок не пишется.
+	SnapshotDir string
+}
+
+// DNSReset = тот же проход «удалить/применить», что и ApplyDNSProxyUpstreams,
+// плюс сохранение. Сохраняет только ручной сброс; сторож -- никогда.
+//
+// Успехом считается не «команда не вернула ошибку», а СТРОКА, найденная в
+// конфиге после применения (решение оператора 13.09.2026 «делаем по факту»).
+// Ожидаемый вид строки в коде не закреплён: KeenOS вправе записать её иначе --
+// например дописать порт :853, -- и это то же самое по смыслу. Форма в коде
+// была бы допущением о чужой прошивке, молча протухающим при её обновлении.
+func DNSReset(ctx context.Context, exec ExecFunc, opts DNSResetOpts) (status, output string) {
 	rc, err := exec(ctx, "ndmc", "-c", "show running-config")
 	if err != nil {
 		return "err", fmt.Sprintf("read running-config failed: %v\n%s", err, strings.TrimSpace(string(rc)))
@@ -52,16 +71,60 @@ func DNSReset(ctx context.Context, exec ExecFunc) (status, output string) {
 	existing := parseDNSProxyUpstreams(string(rc))
 	plain := parsePlainNameServers(string(rc))
 
+	var remove, kept []string
+	for _, line := range existing {
+		if dnsLineKept(line, opts.KeepHosts) {
+			kept = append(kept, line)
+			continue
+		}
+		remove = append(remove, line)
+	}
+
 	var b strings.Builder
+	if opts.DryRun {
+		fmt.Fprintf(&b, "Предпросмотр сброса DNS — ничего не изменено\n\n")
+		fmt.Fprintf(&b, "Уберём (%d):\n", len(remove))
+		for _, l := range remove {
+			fmt.Fprintf(&b, "  − %s\n", l)
+		}
+		if len(kept) > 0 {
+			fmt.Fprintf(&b, "\nОставим как есть (%d):\n", len(kept))
+			for _, l := range kept {
+				fmt.Fprintf(&b, "  = %s\n", l)
+			}
+		}
+		fmt.Fprintf(&b, "\nЗаменим на эталонные (%d):\n", len(dnsReferenceUpstreams))
+		for _, l := range dnsReferenceUpstreams {
+			fmt.Fprintf(&b, "  + %s\n", l)
+		}
+		return "ok", b.String()
+	}
+
 	fmt.Fprintf(&b, "DNS reset → reference DoT\n\n")
+	if opts.SnapshotDir != "" {
+		if name, err := writeDNSSnapshot(opts.SnapshotDir, string(rc)); err != nil {
+			fmt.Fprintf(&b, "снимок «до» не записан: %v\n\n", err)
+		} else {
+			fmt.Fprintf(&b, "снимок «до»: %s\n\n", name)
+		}
+	}
+	if len(kept) > 0 {
+		fmt.Fprintf(&b, "оставлено как есть (%d):\n", len(kept))
+		for _, l := range kept {
+			fmt.Fprintf(&b, "  = %s\n", l)
+		}
+		b.WriteString("\n")
+	}
 	failures := applyDNSProxyUpstreams(ctx, exec, &b,
-		"remove existing dns-proxy upstreams", existing,
+		"remove existing dns-proxy upstreams", remove,
 		"apply reference upstreams", dnsReferenceUpstreams)
 
 	b.WriteString("\nsave:\n")
 	if !ndmcStep(ctx, exec, &b, "system configuration save") {
 		failures++
 	}
+
+	failures += confirmDNSReferenceApplied(ctx, exec, &b)
 
 	if len(plain) > 0 {
 		fmt.Fprintf(&b, "\nNOTE: %d per-interface name-server entr(y/ies) left untouched "+

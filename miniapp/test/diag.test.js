@@ -194,6 +194,17 @@ describe('checkRows', () => {
     expect(byKey.wifi_band.title).toBe('wifi_band')
   })
 
+  // dns_split всегда ok -- в общем списке она читалась бы вечным «да». У неё
+  // свой раздел на экране, в хвост списка она не попадает.
+  it('раздельный DNS не дублируется вечным «да» в общем списке', () => {
+    const rows = checkRows({
+      checks: [{ check_name: 'dns_split', status: 'ok', ts: '2026-09-14T10:00:00Z' }],
+      tunnels: [],
+      router: ROUTER,
+    })
+    expect(rows.map((r) => r.key)).not.toContain('dns_split')
+  })
+
   // Подмена DNS от РКН: проверка формально ok, но ответ на вопрос «сайты
   // открываются по имени» -- нет.
   it('подмена ответов резолверами не выдаётся за успех', () => {
