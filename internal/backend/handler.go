@@ -577,6 +577,69 @@ func suppressMobileResumeStartupFailure(u *db.User, resumed bool, c wire.Check) 
 	}
 }
 
+// resolverGuardWatchdogOff is the recovery reason alerts.FormatRecovery reads
+// for a watchdog that stopped reporting while its HARD was open.
+const resolverGuardWatchdogOff = "watchdog_off"
+
+// resolverGuardNotReady: the watchdog has not read the router's settings yet
+// (after an agent start, or while running-config is unreadable).
+func resolverGuardNotReady(c wire.Check) bool {
+	if !strings.EqualFold(strings.TrimSpace(c.Name), resolverGuardCheck) || c.Status != "ok" {
+		return false
+	}
+	ready, ok := c.Details["ready"].(bool)
+	return ok && !ready
+}
+
+// clearMissingResolverGuardHard closes an open resolver_guard HARD when a fresh
+// full report no longer carries the check: the watchdog was switched off by a
+// file edit, its config broke, or the agent was rolled back. Nothing else would
+// ever close it, and realert would remind about the fallback forever. A full
+// report is one with agent_heartbeat — the agent appends it to every report.
+func clearMissingResolverGuardHard(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool) {
+	if !reportIsFresh || d.DB == nil {
+		return
+	}
+	full := false
+	for _, c := range checks {
+		name := strings.TrimSpace(c.Name)
+		if strings.EqualFold(name, resolverGuardCheck) {
+			return
+		}
+		if name == "agent_heartbeat" {
+			full = true
+		}
+	}
+	if !full {
+		return
+	}
+	prev, err := d.DB.State().Get(userID, resolverGuardCheck)
+	if err != nil {
+		d.Logger.Warn("clear missing resolver_guard hard: state get", "nickname", nickname, "err", err)
+		return
+	}
+	if prev.CurrentStatus != "hard" {
+		return
+	}
+	next := prev
+	next.CurrentStatus = "ok"
+	next.ConsecutiveFails = 0
+	next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
+	next.HardSince = nil
+	next.Acked = false
+	check := wire.Check{Name: resolverGuardCheck, Status: "ok", Details: map[string]any{"reason": resolverGuardWatchdogOff}}
+	tr := state.Transition{Kind: state.Recovery, Next: next}
+	if d.Dispatcher != nil {
+		if err := d.Dispatcher.Handle(relayParent(d), userID, nickname, resolverGuardCheck, tr, check); err != nil {
+			d.Logger.Warn("clear missing resolver_guard hard: dispatch recovery", "nickname", nickname, "err", err)
+		}
+	} else if err := d.DB.State().Save(userID, resolverGuardCheck, next); err != nil {
+		d.Logger.Warn("clear missing resolver_guard hard: state save", "nickname", nickname, "err", err)
+		return
+	}
+	d.Logger.Info("cleared resolver_guard hard: check gone from a fresh report", "nickname", nickname)
+}
+
 func clearMissingTunnelHards(d Deps, userID int64, nickname string, checks []wire.Check, reportIsFresh bool) {
 	if !reportIsFresh || d.DB == nil {
 		return
@@ -842,6 +905,13 @@ func reportHandler(d Deps) http.HandlerFunc {
 				)
 				continue
 			}
+			if resolverGuardNotReady(c) {
+				// «Ещё не прочитал настройки» -- не ответ о DNS. Двигать автомат
+				// им нельзя: два таких ok закрывали аварию, которая не кончилась.
+				d.Logger.Info("skip resolver_guard not yet read",
+					"nickname", nick, "req_id", RequestIDFromContext(r.Context()))
+				continue
+			}
 			prev, err := d.DB.State().Get(uid, c.Name)
 			if err != nil {
 				d.Logger.Warn("state.Get", "err", err)
@@ -924,6 +994,7 @@ func reportHandler(d Deps) http.HandlerFunc {
 			}
 		}
 		clearMissingTunnelHards(d, uid, nick, rep.Checks, reportIsFresh)
+		clearMissingResolverGuardHard(d, uid, nick, rep.Checks, reportIsFresh)
 		// OBS-14: full check-summary INFO sampled to 1-in-10 reports + every
 		// resumed marker. Per-check status changes already emit dedicated
 		// FSM-transition logs (OBS-09); spamming Info every 60s for every

@@ -23,15 +23,17 @@ import (
 )
 
 type fakeDisp struct {
-	mu    sync.Mutex
-	calls []state.Kind
-	db    *db.DB
+	mu     sync.Mutex
+	calls  []state.Kind
+	checks []wire.Check
+	db     *db.DB
 }
 
-func (f *fakeDisp) Handle(_ context.Context, uid int64, _, check string, tr state.Transition, _ wire.Check) error {
+func (f *fakeDisp) Handle(_ context.Context, uid int64, _, check string, tr state.Transition, c wire.Check) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, tr.Kind)
+	f.checks = append(f.checks, c)
 	if f.db != nil {
 		return f.db.State().Save(uid, check, tr.Next)
 	}
@@ -2330,6 +2332,118 @@ func TestHandleReport_ClearsHardForTunnelMissingFromFreshInventory(t *testing.T)
 	if !foundRecovery {
 		t.Fatalf("missing tunnel hard must go through dispatcher recovery, calls=%v", disp.calls)
 	}
+}
+
+// guardReportHarness -- сервер отчётов и отправка отчёта с набором проверок.
+func guardReportHarness(t *testing.T, tok, nick string) (*fakeDisp, func(checks ...wire.Check), func(stale bool, checks ...wire.Check), *db.DB) {
+	t.Helper()
+	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	t.Cleanup(func() { d.Close() })
+	_, _ = d.Users().Insert(nick, tok, "198.51.100.11", "awg0")
+	disp := &fakeDisp{db: d}
+	srv := httptest.NewServer(NewMux(Deps{
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  disp,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
+		AlertPolicy: AlertPolicy{NoisyFailThreshold: 6, NoisyRecoveryThreshold: 3},
+	}))
+	t.Cleanup(srv.Close)
+	baseTS := time.Now().UTC()
+	seq := 0
+	send := func(stale bool, checks ...wire.Check) {
+		t.Helper()
+		seq++
+		ts := baseTS.Add(time.Duration(seq) * time.Second)
+		if stale {
+			ts = baseTS.Add(-24 * time.Hour)
+		}
+		body, _ := json.Marshal(wire.Report{Timestamp: ts, AgentVersion: "test", Checks: checks})
+		req, _ := http.NewRequest("POST", srv.URL+"/v1/report", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+	post := func(checks ...wire.Check) { send(false, checks...) }
+	return disp, post, send, d
+}
+
+var heartbeatCheck = wire.Check{Name: "agent_heartbeat", Status: "ok"}
+
+func guardFail() wire.Check {
+	return wire.Check{Name: "resolver_guard", Status: "fail", Details: map[string]any{"mode": "fallback", "reason": "fallback"}}
+}
+
+// Сторож выключили правкой файла посреди аварии: проверка просто пропала из
+// отчёта. Без закрытия realert напоминал бы о запасных вечно.
+func TestReportClosesResolverGuardHardWhenTheCheckIsGone(t *testing.T) {
+	disp, post, _, d := guardReportHarness(t, "3434343434343434343434343434343434343434343434343434343434343434", "guardgone")
+	post(heartbeatCheck, guardFail())
+	post(heartbeatCheck, guardFail())
+	uid := mustUserID(t, d, "guardgone")
+	if st, _ := d.State().Get(uid, "resolver_guard"); st.CurrentStatus != "hard" {
+		t.Fatalf("setup: want hard, got %q", st.CurrentStatus)
+	}
+	post(heartbeatCheck, wire.Check{Name: "dns", Status: "ok"})
+	if st, _ := d.State().Get(uid, "resolver_guard"); st.CurrentStatus != "ok" {
+		t.Fatalf("HARD сторожа не закрыт: %q", st.CurrentStatus)
+	}
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	last := disp.checks[len(disp.checks)-1]
+	if disp.calls[len(disp.calls)-1] != state.Recovery || last.Name != "resolver_guard" || last.Details["reason"] != "watchdog_off" {
+		t.Fatalf("want Recovery resolver_guard reason=watchdog_off, got %v %#v", disp.calls, last)
+	}
+}
+
+// Несвежий отчёт и отчёт без heartbeat (не от агента целиком) ничего не закрывают.
+func TestReportKeepsResolverGuardHardOnStaleOrPartialReport(t *testing.T) {
+	_, post, send, d := guardReportHarness(t, "3535353535353535353535353535353535353535353535353535353535353535", "guardkeep")
+	post(heartbeatCheck, guardFail())
+	post(heartbeatCheck, guardFail())
+	uid := mustUserID(t, d, "guardkeep")
+	send(true, heartbeatCheck)
+	post(wire.Check{Name: "dns", Status: "ok"})
+	if st, _ := d.State().Get(uid, "resolver_guard"); st.CurrentStatus != "hard" {
+		t.Fatalf("HARD закрыт несвежим или неполным отчётом: %q", st.CurrentStatus)
+	}
+}
+
+// «Ещё не прочитал настройки» -- не «здоров»: два таких ok подряд закрывали
+// инцидент, а когда чтение проходило, открывался новый с нуля.
+func TestReportResolverGuardNotReadyNeitherRecoversNorCloses(t *testing.T) {
+	disp, post, _, d := guardReportHarness(t, "3636363636363636363636363636363636363636363636363636363636363636", "guardunread")
+	post(heartbeatCheck, guardFail())
+	post(heartbeatCheck, guardFail())
+	uid := mustUserID(t, d, "guardunread")
+	before, _ := d.State().Get(uid, "resolver_guard")
+	notReady := wire.Check{Name: "resolver_guard", Status: "ok", Details: map[string]any{"mode": "primary", "ready": false}}
+	for i := 0; i < 3; i++ {
+		post(heartbeatCheck, notReady)
+	}
+	after, _ := d.State().Get(uid, "resolver_guard")
+	if after.CurrentStatus != "hard" || after.ConsecutiveOKs != before.ConsecutiveOKs {
+		t.Fatalf("ready:false сдвинул автомат: before %+v after %+v", before, after)
+	}
+	disp.mu.Lock()
+	defer disp.mu.Unlock()
+	for _, k := range disp.calls {
+		if k == state.Recovery {
+			t.Fatalf("ready:false дал восстановление: %v", disp.calls)
+		}
+	}
+}
+
+func mustUserID(t *testing.T, d *db.DB, nick string) int64 {
+	t.Helper()
+	u, err := d.Users().GetByNickname(nick)
+	if err != nil || u == nil {
+		t.Fatalf("user %s: %v", nick, err)
+	}
+	return u.ID
 }
 
 type contextWakeNotifier struct {
