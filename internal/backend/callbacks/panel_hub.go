@@ -140,8 +140,6 @@ func (r *Router) panelPublish(ctx context.Context, m *tg.Message, u *db.User, ki
 		return err
 	}
 	switch kind {
-	case "maint":
-		r.openMaintPanelMessage(ctx, m, u)
 	case "routes":
 		r.openRoutesPanelMessage(ctx, m, u)
 	case "tunnels":
@@ -323,7 +321,7 @@ func (r *Router) panelHandleHelp(ctx context.Context, q *tg.CallbackQuery, args 
 	}
 	var backCB string
 	switch args.PanelKind {
-	case "maint", "routes", "tunnels", "status", "pingcheck", "doctor":
+	case "routes", "tunnels", "status", "pingcheck", "doctor":
 		backCB = "panel:0:kind:" + args.PanelKind
 	default:
 		backCB = "panel:0:home"

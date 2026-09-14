@@ -881,7 +881,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 				r.handleHelpCommand(ctx, m)
 			case "/menu", "/keyboard":
 				r.handleKeyboardCommand(ctx, m)
-			case "/status", "/check", "/tunnels", "/routes", "/amnezia", "/hidemy", "/via", "/direct", "/maint", "/upgrade":
+			case "/status", "/check", "/tunnels", "/routes", "/amnezia", "/hidemy", "/via", "/direct":
 				r.handleRouterSlashCommand(ctx, m, kind, user)
 			}
 			return
@@ -952,22 +952,12 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"HideMy.name работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
-	case "🛠 Обслуживание":
-		if kind == "per_router" && user != nil {
-			r.openMaintPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
 	case "🌍 Через туннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
 			"⏳ Проверяю YouTube/Telegram/Instagram через туннель…")
 	case "🇷🇺 Напрямую?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
 			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
-	case "⬆ Обновить пакеты":
-		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
-			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
 	case "🩺 Проверка", "🩺 Домашний роутер":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
 			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
@@ -1048,14 +1038,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 				"HideMy.name работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 		return true
-	case "/maint":
-		if kind == "per_router" && user != nil {
-			r.openMaintPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-		return true
 	case "/check":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
 			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
@@ -1067,10 +1049,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 	case "/direct":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_direct",
 			"⏳ Проверяю Яндекс/VK/Mail.ru через прямой маршрут…")
-		return true
-	case "/upgrade":
-		r.dispatchConnectivityCheck(ctx, m, kind, user, "opkg_upgrade",
-			"⏳ Обновляю пакеты Entware (update + space check + upgrade)… это может занять минуту-две.")
 		return true
 	}
 	return false
@@ -1147,10 +1125,6 @@ func (r *Router) resolveTopicKind(chatID int64, threadID *int64) (string, *db.Us
 // "message to be replied not found (code=400)" and the operator never sees
 // the result. The ack message stays in the chat, so anchoring on it is safe.
 func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, kind string, user *db.User, action, ackText string) {
-	if action == "opkg_upgrade" {
-		r.handleOpkgUpgradeMessage(ctx, m, kind, user)
-		return
-	}
 	if kind != "per_router" || user == nil {
 		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
@@ -1485,8 +1459,7 @@ func topicHelpBody(kind string) string {
 			"🛣 Маршруты — DNS/static правила, перенос и снапшот.\n" +
 			"🔐 Amnezia Premium — кабинеты и выгрузка .conf.\n" +
 			"🔑 HideMy.name — серверы и выгрузка AmneziaWG .conf.\n" +
-			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n" +
-			"🛠 Обслуживание / ⬆ Обновить пакеты — сервисные действия.\n\n" +
+			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n\n" +
 			"Если кнопка меняет состояние, бот поставит команду в очередь. Жди результат в этом топике и используй кнопки под результатом."
 	case "summary", "systemic":
 		return "Меню под сообщениями бота:\n" +
@@ -2005,22 +1978,6 @@ func (r *Router) handleOpkgUpgradeAsk(ctx context.Context, q *tg.CallbackQuery, 
 	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleOpkgUpgradeMessage(ctx context.Context, m *tg.Message, kind string, user *db.User) {
-	if kind != "per_router" || user == nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		return
-	}
-	tok := makeMaintToken()
-	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, ActorTGID: m.From.ID, Name: "opkg_upgrade", Token: tok,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.OpkgUpgradeConfirmText(tok)
-	kb := tg.RestartConfirmKeyboard(user.ID, "opkg_upgrade", tok)
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, &kb)
 }
 
 // handleMaintFwOpen renders the firmware screen using cached FirmwareStatus

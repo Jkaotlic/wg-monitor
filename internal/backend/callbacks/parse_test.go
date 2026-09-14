@@ -371,13 +371,11 @@ func TestParse_PanelHome(t *testing.T) {
 	}
 }
 
-func TestParse_PanelKindMaint(t *testing.T) {
-	a, err := Parse("panel:0:kind:maint")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "kind" || a.PanelKind != "maint" {
-		t.Errorf("got %+v", a)
+func TestParse_PanelKindMaintRemoved(t *testing.T) {
+	for _, data := range []string{"panel:0:kind:maint", "panel:42:push:maint", "panel:0:help:maint"} {
+		if _, err := Parse(data); err == nil {
+			t.Errorf("%q: вид обслуживания удалён из хаба, разбор обязан отказать", data)
+		}
 	}
 }
 

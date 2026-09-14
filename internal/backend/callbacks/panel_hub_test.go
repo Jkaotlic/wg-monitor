@@ -38,7 +38,7 @@ func TestPanelHome_RendersHubMessage(t *testing.T) {
 		t.Fatalf("markup not InlineKeyboardMarkup: %T", got.markup)
 	}
 	flatCallbacks := flattenKbCallbacks(kb)
-	for _, want := range []string{"panel:0:audit_all", "panel:0:update_all_confirm", "panel:0:kind:status", "panel:0:kind:doctor", "panel:0:kind:tunnels", "panel:0:kind:routes", "panel:0:kind:pingcheck", "panel:0:kind:maint", "panel:0:doctor_all", "panel:0:awaken_confirm", "panel:0:help:operator", "panel:0:close"} {
+	for _, want := range []string{"panel:0:audit_all", "panel:0:update_all_confirm", "panel:0:kind:status", "panel:0:kind:doctor", "panel:0:kind:tunnels", "panel:0:kind:routes", "panel:0:kind:pingcheck", "panel:0:doctor_all", "panel:0:awaken_confirm", "panel:0:help:operator", "panel:0:close"} {
 		if !containsStr(flatCallbacks, want) {
 			t.Errorf("hub kb missing callback %q (have %v)", want, flatCallbacks)
 		}
@@ -567,13 +567,13 @@ func TestPanelHub_HelpScreen_EditsBody(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTGFull{}
 	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-	q := &tg.CallbackQuery{ID: "cbk", From: tg.User{ID: 12345}, Message: tg.Message{MessageID: 1, Chat: tg.Chat{ID: -100}}, Data: "panel:0:help:maint"}
+	q := &tg.CallbackQuery{ID: "cbk", From: tg.User{ID: 12345}, Message: tg.Message{MessageID: 1, Chat: tg.Chat{ID: -100}}, Data: "panel:0:help:tunnels"}
 	r.HandleCallback(context.Background(), q)
 	if len(f.edits) != 1 {
 		t.Fatalf("want 1 edit, got %d", len(f.edits))
 	}
-	if !strings.Contains(f.edits[0], "hrneo") {
-		t.Errorf("maint help body should mention hrneo:\n%s", f.edits[0])
+	if !strings.Contains(f.edits[0], "Туннели") {
+		t.Errorf("tunnels help body should mention Туннели:\n%s", f.edits[0])
 	}
 }
 

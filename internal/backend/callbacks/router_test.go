@@ -2418,65 +2418,33 @@ func TestRouterDispatchSmartReply_NeverReportedShowsSpecialMessage(t *testing.T)
 	}
 }
 
-// TestRouterHandleMessage_MaintButton verifies that tapping "🛠 Обслуживание"
-// in a per_router thread sends a loading placeholder and enqueues version_audit.
-func TestRouterHandleMessage_MaintButton(t *testing.T) {
+// Цикл 1: обслуживание переехало в мини-апп. Команды и кнопки меню бота
+// больше не отвечают -- ни админу, ни оператору, и ничего не ставят в очередь.
+func TestRouterHandleMessage_RemovedMaintenanceEntriesSilent(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
 		t.Fatal(err)
 	}
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
+	_ = d.Users().SetTelegramUserID(uid, 100)
+	_ = d.RouterOperators().Add(uid, 200, 12345)
 	tid := int64(55)
-	msg := &tg.Message{
-		MessageID:       99,
-		Chat:            tg.Chat{ID: -100},
-		From:            tg.User{ID: 12345},
-		MessageThreadID: &tid,
-		Text:            "🛠 Обслуживание",
-	}
-	r.HandleMessage(context.Background(), msg)
-
-	if len(f.sentMsgs) != 1 {
-		t.Fatalf("want 1 loading message sent, got %d: %v", len(f.sentMsgs), f.sentMsgs)
-	}
-	if !strings.Contains(f.sentMsgs[0], "Обслуживание") {
-		t.Errorf("loading text missing 'Обслуживание': %q", f.sentMsgs[0])
-	}
-	if len(sink.calls) != 1 {
-		t.Fatalf("want 1 enqueue (version_audit), got %d", len(sink.calls))
-	}
-	if sink.calls[0].action != "version_audit" {
-		t.Errorf("enqueued action=%q, want version_audit", sink.calls[0].action)
-	}
-	if sink.calls[0].userID != uid {
-		t.Errorf("enqueued userID=%d, want %d", sink.calls[0].userID, uid)
-	}
-}
-
-// TestRouterHandleMessage_MaintButton_WrongTopic verifies that the maint
-// button in a non-per_router thread sends an error message instead.
-func TestRouterHandleMessage_MaintButton_WrongTopic(t *testing.T) {
-	d, _ := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouterWithSink(d, f, nil, Config{ChatID: -100, AdminUserID: 12345})
-
-	// MessageThreadID nil → resolves to "unknown"
-	msg := &tg.Message{
-		MessageID: 10,
-		Chat:      tg.Chat{ID: -100},
-		From:      tg.User{ID: 12345},
-		Text:      "🛠 Обслуживание",
-	}
-	r.HandleMessage(context.Background(), msg)
-
-	if len(f.sentMsgs) != 1 {
-		t.Fatalf("want 1 error message, got %d", len(f.sentMsgs))
-	}
-	if !strings.Contains(f.sentMsgs[0], "топике пользователя") {
-		t.Errorf("error message missing expected text: %q", f.sentMsgs[0])
+	for _, from := range []int64{12345, 200} {
+		for _, text := range []string{"/maint", "/upgrade", "🛠 Обслуживание", "⬆ Обновить пакеты"} {
+			f := &fakeRouterTG{}
+			sink := &fakeEnqueuer{}
+			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+			r.HandleMessage(context.Background(), &tg.Message{
+				MessageID:       99,
+				Chat:            tg.Chat{ID: -100},
+				From:            tg.User{ID: from},
+				MessageThreadID: &tid,
+				Text:            text,
+			})
+			if len(f.sentMsgs) != 0 || len(f.sentMarkups) != 0 || len(f.edits) != 0 || len(sink.calls) != 0 {
+				t.Errorf("from=%d %q: бот ответил (msgs=%v markups=%d edits=%v calls=%+v)",
+					from, text, f.sentMsgs, len(f.sentMarkups), f.edits, sink.calls)
+			}
+		}
 	}
 }
 
@@ -3659,17 +3627,15 @@ func TestAclAllow_FormerOperatorDenied(t *testing.T) {
 
 // Operator (non-admin, listed in router_operators) taps a reply-keyboard
 // button in the router's per_router topic. Must pass the admin-gate in
-// HandleMessage and reach the maintenance-panel dispatch, mirroring the
-// admin path. Regression for the rc25 gap where operators could tap inline
-// buttons but not the reply-keyboard entries.
+// HandleMessage and reach the dispatch, mirroring the admin path.
+// Regression for the rc25 gap where operators could tap inline buttons but
+// not the reply-keyboard entries.
 func TestRouterHandleMessage_OperatorReplyKeyboard_InOwnTopic(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
 		t.Fatal(err)
 	}
-	// Bind a different owner so this user is not the operator we test below.
 	_ = d.Users().SetTelegramUserID(uid, 100)
-	// Operator: TG 200 whitelisted for this router.
 	if err := d.RouterOperators().Add(uid, 200, 42); err != nil {
 		t.Fatal(err)
 	}
@@ -3679,23 +3645,19 @@ func TestRouterHandleMessage_OperatorReplyKeyboard_InOwnTopic(t *testing.T) {
 	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
 
 	tid := int64(55)
-	msg := &tg.Message{
+	r.HandleMessage(context.Background(), &tg.Message{
 		MessageID:       99,
 		Chat:            tg.Chat{ID: -100},
 		From:            tg.User{ID: 200},
 		MessageThreadID: &tid,
-		Text:            "🛠 Обслуживание",
-	}
-	r.HandleMessage(context.Background(), msg)
+		Text:            "🩺 Проверка",
+	})
 
 	if len(f.sentMsgs) != 1 {
-		t.Fatalf("operator should reach maint dispatch; got sentMsgs=%d %v", len(f.sentMsgs), f.sentMsgs)
+		t.Fatalf("operator should reach doctor dispatch; got sentMsgs=%d %v", len(f.sentMsgs), f.sentMsgs)
 	}
-	if !strings.Contains(f.sentMsgs[0], "Обслуживание") {
-		t.Errorf("expected maint loading text, got %q", f.sentMsgs[0])
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "version_audit" {
-		t.Errorf("expected version_audit enqueue, got %+v", sink.calls)
+	if len(sink.calls) != 1 || sink.calls[0].action != "router_doctor" {
+		t.Errorf("expected router_doctor enqueue, got %+v", sink.calls)
 	}
 }
 
@@ -3813,7 +3775,7 @@ func TestRouterHandleMessage_OperatorBlocked_DifferentRouterTopic(t *testing.T) 
 		Chat:            tg.Chat{ID: -100},
 		From:            tg.User{ID: 200}, // operator of A, not B
 		MessageThreadID: &tid,
-		Text:            "🛠 Обслуживание",
+		Text:            "🩺 Проверка",
 	}
 	r.HandleMessage(context.Background(), msg)
 
@@ -3970,7 +3932,7 @@ func TestRouterHandleMessage_OperatorRoutesSlash_InOwnTopic(t *testing.T) {
 	}
 }
 
-func TestRouterHandleMessage_OperatorUpgradeSlashRequiresConfirm(t *testing.T) {
+func TestRouterHandleMessage_OperatorUpgradeSlashIgnored(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
 		t.Fatal(err)
@@ -3990,19 +3952,8 @@ func TestRouterHandleMessage_OperatorUpgradeSlashRequiresConfirm(t *testing.T) {
 		MessageThreadID: &tid,
 		Text:            "/upgrade",
 	})
-
-	if len(sink.calls) != 0 {
-		t.Fatalf("operator /upgrade must require confirmation before enqueue, got %+v", sink.calls)
-	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("operator /upgrade should render opkg confirmation, markups=%d msgs=%+v", len(f.sentMarkups), f.sentMsgs)
-	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok {
-		t.Fatalf("markup type = %T", f.sentMarkups[0])
-	}
-	if !markupHasCallbackPrefix(kb, fmt.Sprintf("maint_confirm:%d:opkg_upgrade:", uid)) {
-		t.Fatalf("operator /upgrade confirmation missing maint_confirm callback: %+v", kb.InlineKeyboard)
+	if len(sink.calls) != 0 || len(f.sentMsgs) != 0 || len(f.sentMarkups) != 0 {
+		t.Fatalf("/upgrade переехал в приложение и должен молчать: calls=%+v msgs=%v", sink.calls, f.sentMsgs)
 	}
 }
 
@@ -4149,7 +4100,7 @@ func TestRouterHandleMessage_OperatorBlocked_OutsideRouterTopic(t *testing.T) {
 		MessageID: 99,
 		Chat:      tg.Chat{ID: -100},
 		From:      tg.User{ID: 200},
-		Text:      "🛠 Обслуживание",
+		Text:      "🩺 Проверка",
 	}
 	r.HandleMessage(context.Background(), msg)
 

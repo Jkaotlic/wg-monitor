@@ -28,8 +28,6 @@ var routerMenuItems = []BotMenuItem{
 	{Code: "hidemyname", Label: "🔑 HideMy.name", Command: "hidemy", Description: "Кабинет HideMy.name"},
 	{Code: "via_tunnel", Label: "🌍 Через туннель?", Command: "via", Description: "Проверить связь через туннель"},
 	{Code: "direct", Label: "🇷🇺 Напрямую?", Command: "direct", Description: "Проверить прямую связь"},
-	{Code: "maint", Label: "🛠 Обслуживание", Command: "maint", Description: "Открыть обслуживание"},
-	{Code: "opkg_upgrade", Label: "⬆ Обновить пакеты", Command: "upgrade", Description: "Обновить пакеты Entware"},
 }
 
 var fleetMenuItems = []BotMenuItem{
@@ -61,8 +59,6 @@ var operatorCommandOrder = []string{
 	"direct",
 	"amnezia",
 	"hidemy",
-	"maint",
-	"upgrade",
 	"menu",
 	"keyboard",
 	"help",
@@ -74,7 +70,6 @@ var adminPanelRouterKindItems = []PanelKindItem{
 	{Kind: "tunnels", Label: "🎛 Туннели"},
 	{Kind: "routes", Label: "🛣 Маршруты"},
 	{Kind: "pingcheck", Label: "📡 PingCheck"},
-	{Kind: "maint", Label: "🛠 Обслуживание"},
 }
 
 var adminPanelHomeRows = [][]PanelHomeButton{
@@ -84,7 +79,8 @@ var adminPanelHomeRows = [][]PanelHomeButton{
 	},
 	panelKindButtonRow(adminPanelRouterKindItems[0], adminPanelRouterKindItems[1]),
 	panelKindButtonRow(adminPanelRouterKindItems[2], adminPanelRouterKindItems[3]),
-	panelKindButtonRow(adminPanelRouterKindItems[4], adminPanelRouterKindItems[5]),
+	// Обслуживание переехало в мини-апп (цикл 1): PingCheck остался один в ряду.
+	{{Text: adminPanelRouterKindItems[4].Label, CallbackData: "panel:0:kind:" + adminPanelRouterKindItems[4].Kind}},
 	{
 		{Text: "🩺 Все роутеры", CallbackData: "panel:0:doctor_all"},
 		{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},

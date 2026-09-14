@@ -500,7 +500,7 @@ func Parse(data string) (Args, error) {
 			if len(parts) < 4 || parts[3] == "" {
 				return Args{}, fmt.Errorf("panel %s requires kind: %q", screen, data)
 			}
-			validKinds := map[string]bool{"maint": true, "routes": true, "tunnels": true, "status": true, "pingcheck": true, "doctor": true}
+			validKinds := map[string]bool{"routes": true, "tunnels": true, "status": true, "pingcheck": true, "doctor": true}
 			if !validKinds[parts[3]] {
 				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
 			}
@@ -512,7 +512,7 @@ func Parse(data string) (Args, error) {
 			}
 			validHelpScreens := map[string]bool{
 				"operator": true, "alerts": true, "fleet": true, "premium": true, "mobile": true,
-				"maint": true, "routes": true, "tunnels": true,
+				"routes": true, "tunnels": true,
 				"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
 			}
 			if !validHelpScreens[parts[3]] {
