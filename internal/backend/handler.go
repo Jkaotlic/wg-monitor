@@ -591,6 +591,30 @@ func resolverGuardNotReady(c wire.Check) bool {
 	return ok && !ready
 }
 
+// closeHardAsRecovery builds the "recovery the automaton never produced"
+// state.Transition that clearMissingResolverGuardHard and
+// clearMissingTunnelHards both need (check gone from a fresh report, not a
+// real ok answer), dispatches it exactly like a normal recovery would, and
+// falls back to a plain state save when no dispatcher is wired (matches
+// every other call site in this file). Callers keep their own "is it
+// missing" logic and their own log lines — the error is returned so each
+// can log it with its own fields, and log the success line only when it is
+// nil.
+func closeHardAsRecovery(d Deps, userID int64, nickname, checkName, reason string, prev db.IncidentState) error {
+	next := prev
+	next.CurrentStatus = "ok"
+	next.ConsecutiveFails = 0
+	next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
+	next.HardSince = nil
+	next.Acked = false
+	check := wire.Check{Name: checkName, Status: "ok", Details: map[string]any{"reason": reason}}
+	tr := state.Transition{Kind: state.Recovery, Next: next}
+	if d.Dispatcher != nil {
+		return d.Dispatcher.Handle(relayParent(d), userID, nickname, checkName, tr, check)
+	}
+	return d.DB.State().Save(userID, checkName, next)
+}
+
 // clearMissingResolverGuardHard closes an open resolver_guard HARD when a fresh
 // full report no longer carries the check: the watchdog was switched off by a
 // file edit, its config broke, or the agent was rolled back. Nothing else would
@@ -621,20 +645,8 @@ func clearMissingResolverGuardHard(d Deps, userID int64, nickname string, checks
 	if prev.CurrentStatus != "hard" {
 		return
 	}
-	next := prev
-	next.CurrentStatus = "ok"
-	next.ConsecutiveFails = 0
-	next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
-	next.HardSince = nil
-	next.Acked = false
-	check := wire.Check{Name: resolverGuardCheck, Status: "ok", Details: map[string]any{"reason": resolverGuardWatchdogOff}}
-	tr := state.Transition{Kind: state.Recovery, Next: next}
-	if d.Dispatcher != nil {
-		if err := d.Dispatcher.Handle(relayParent(d), userID, nickname, resolverGuardCheck, tr, check); err != nil {
-			d.Logger.Warn("clear missing resolver_guard hard: dispatch recovery", "nickname", nickname, "err", err)
-		}
-	} else if err := d.DB.State().Save(userID, resolverGuardCheck, next); err != nil {
-		d.Logger.Warn("clear missing resolver_guard hard: state save", "nickname", nickname, "err", err)
+	if err := closeHardAsRecovery(d, userID, nickname, resolverGuardCheck, resolverGuardWatchdogOff, prev); err != nil {
+		d.Logger.Warn("clear missing resolver_guard hard: dispatch recovery", "nickname", nickname, "err", err)
 		return
 	}
 	d.Logger.Info("cleared resolver_guard hard: check gone from a fresh report", "nickname", nickname)
@@ -676,27 +688,8 @@ func clearMissingTunnelHards(d Deps, userID int64, nickname string, checks []wir
 		if prev.CurrentStatus != "hard" {
 			continue
 		}
-		next := prev
-		next.CurrentStatus = "ok"
-		next.ConsecutiveFails = 0
-		next.ConsecutiveOKs = prev.ConsecutiveOKs + 1
-		next.HardSince = nil
-		next.Acked = false
-		check := wire.Check{
-			Name:   row.CheckName,
-			Status: "ok",
-			Details: map[string]any{
-				"reason": "missing_from_fresh_tunnel_inventory",
-			},
-		}
-		tr := state.Transition{Kind: state.Recovery, Next: next}
-		if d.Dispatcher != nil {
-			if err := d.Dispatcher.Handle(relayParent(d), userID, nickname, row.CheckName, tr, check); err != nil {
-				d.Logger.Warn("clear missing tunnel hard: dispatch recovery", "nickname", nickname, "check", row.CheckName, "err", err)
-				continue
-			}
-		} else if err := d.DB.State().Save(userID, row.CheckName, next); err != nil {
-			d.Logger.Warn("clear missing tunnel hard: state save", "nickname", nickname, "check", row.CheckName, "err", err)
+		if err := closeHardAsRecovery(d, userID, nickname, row.CheckName, "missing_from_fresh_tunnel_inventory", prev); err != nil {
+			d.Logger.Warn("clear missing tunnel hard: dispatch recovery", "nickname", nickname, "check", row.CheckName, "err", err)
 			continue
 		}
 		d.Logger.Info("cleared missing tunnel hard",
