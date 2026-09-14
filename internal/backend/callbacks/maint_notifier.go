@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -84,7 +85,7 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 	// единственный, кто знает версию HydraRoute Neo и доступную прошивку.
 	// Ошибку только логируем: человек ждёт экран, а не отказ из-за базы.
 	if n.DB != nil {
-		if err := n.DB.RouterVersions().Upsert(user.ID, versionSnapshotFromAudit(va)); err != nil {
+		if err := n.DB.RouterVersions().Upsert(user.ID, backend.VersionSnapshotFromAudit(va)); err != nil {
 			slog.Warn("router versions upsert from version_audit", "user_id", user.ID, "err", err)
 		}
 	}
@@ -92,32 +93,6 @@ func (n *MaintPanelNotifier) renderStatus(ctx context.Context, ref cmdpkg.Messag
 	text := tg.MaintPanelText(args)
 	kb := tg.MaintPanelKeyboard(user.ID, args)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, text, "", &kb)
-}
-
-// versionSnapshotFromAudit переводит ответ агента в снимок для базы.
-//
-// HrneoInstalled уезжает указателем: version_audit ответил, значит «не
-// установлен» здесь ответ, а не молчание. KmodLoaded приходит указателем уже
-// от агента -- старый агент про модуль ядра не говорит вовсе, и его nil
-// обязан доехать до базы неизвестностью.
-//
-// Полей, которых version_audit не знает (KeeneticOS), мы не выдумываем:
-// пустая строка означает «этот источник такого не приносит», и Upsert
-// оставит на месте то, что уже принёс отчёт.
-func versionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
-	hrneoInstalled := va.HrneoInstalled
-	return db.RouterVersionSnapshot{
-		AwgmgrVersion:   va.AwgmgrVersion,
-		AwgmgrBackend:   va.AwgmgrBackend,
-		HrneoVersion:    va.HrneoVersion,
-		HrneoInstalled:  &hrneoInstalled,
-		FirmwareCurrent: va.FirmwareCurrent,
-		FirmwareAvail:   va.FirmwareAvail,
-		KmodVersion:     va.KmodVersion,
-		KmodModel:       va.KmodModel,
-		KmodLoaded:      va.KmodLoaded,
-		Source:          "version_audit",
-	}
 }
 
 // renderFirmware updates the firmware-status cache and re-renders the
@@ -201,22 +176,30 @@ func (n *MaintPanelNotifier) enqueueFreshVersionAudit(userID int64, ref cmdpkg.M
 	}
 }
 
+// hrneoKnownInstalled -- «опрос ответил, и ответил «стоит»». Неизвестность
+// (nil) панель читает как «не стоит»: рисовать по молчанию «установлен» было
+// бы выдумкой. В снимке базы неизвестность при этом остаётся неизвестностью --
+// панель показывает сейчас, а база помнит.
+func hrneoKnownInstalled(va wire.VersionAudit) bool {
+	return va.HrneoInstalled != nil && *va.HrneoInstalled
+}
+
 // buildMaintPanelArgs assembles the renderer args from the cached
 // VersionAudit + upstream cache (for the Updates section) + cooldown state.
 // Pure function so both the notifier (refresh path) and the router (instant
 // cached render in openMaintPanelMessage) can call it.
 func buildMaintPanelArgs(ctx context.Context, user *db.User, va wire.VersionAudit, up *upstream.Cache, cd *cooldownStore) tg.MaintPanelArgs {
-	infos := upstream.ComputeUpdates(ctx, up, va)
+	infos, _ := upstream.ComputeUpdates(ctx, up, va)
 	updates := make([]tg.UpdateLine, 0, len(infos))
 	for _, u := range infos {
 		updates = append(updates, tg.UpdateLine{Name: u.Name, Installed: u.Installed, Available: u.Available, Hint: u.Hint})
 	}
 	return tg.MaintPanelArgs{
 		Nickname:                  user.Nickname,
-		HrneoInstalled:            va.HrneoInstalled || va.HrneoVersion != "",
+		HrneoInstalled:            hrneoKnownInstalled(va) || va.HrneoVersion != "",
 		HrneoVersion:              va.HrneoVersion,
 		HrneoUptime:               va.HrneoUptime,
-		HrneoRunning:              va.HrneoRunning || (!va.HrneoInstalled && va.HrneoVersion != ""),
+		HrneoRunning:              va.HrneoRunning || (!hrneoKnownInstalled(va) && va.HrneoVersion != ""),
 		AwgmgrVersion:             va.AwgmgrVersion,
 		AwgmgrUptime:              va.AwgmgrUptime,
 		AwgmgrRunning:             va.AwgmgrRunning || va.AwgmgrVersion != "",

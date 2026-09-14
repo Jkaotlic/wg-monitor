@@ -209,3 +209,27 @@ CREATE TABLE IF NOT EXISTS web_links (
     use_count        INTEGER   NOT NULL DEFAULT 0  -- ссылка многоразовая: сколько раз обменяли
 );
 CREATE INDEX IF NOT EXISTS idx_web_links_user ON web_links(telegram_user_id, expires_at);
+
+-- Состояние новости об обновлении на экранах. Новость -- не тревога: у «вышла
+-- новая версия» нет потока ok/fail, и псевдо-инцидент в incident_state всплыл
+-- бы в списке тревог мини-аппа и в счётчике дашборда, то есть обновление
+-- выглядело бы поломкой. Отсюда своя таблица.
+--
+-- Ключ включает version: правило «одна новость на выпуск» держится схемой, а
+-- не кодом -- о той же версии второй строки не будет, а новая версия покажет
+-- себя сама. dismissed_at скрывает новость об ЭТОЙ версии, а не про компонент
+-- навсегда.
+--
+-- В личку из этой таблицы не уходит ничего: решение оператора 12.09.2026 --
+-- про обновления говорят только экраны, личка остаётся каналом поломок.
+CREATE TABLE IF NOT EXISTS router_update_reminders (
+    user_id       INTEGER   NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    component     TEXT      NOT NULL,   -- 'awgmgr' | 'hrneo' | 'firmware' | 'kmod_reboot'
+    version       TEXT      NOT NULL,   -- версия, о которой речь; для 'kmod_reboot' -- версия модуля
+    first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    shown_at      TIMESTAMP,            -- когда экран впервые показал
+    snoozed_until TIMESTAMP,            -- «отложить»
+    dismissed_at  TIMESTAMP,            -- «скрыть»
+    PRIMARY KEY (user_id, component, version)
+);
+CREATE INDEX IF NOT EXISTS idx_update_reminders_user ON router_update_reminders(user_id);

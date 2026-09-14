@@ -134,6 +134,30 @@ func (c *Cache) LatestAll() map[string]Entry {
 	return out
 }
 
+// Configured сообщает, заведён ли этот источник при старте. Пустой репозиторий
+// в конфиге молча не добавляет источник (cmd/backend/main.go:172-181), и на
+// экране это состояние выглядело ровно как «всё актуально». Разводить их
+// словами можно только зная состав источников -- сами имена репозиториев при
+// этом наружу не отдаются.
+func (c *Cache) Configured(name string) bool {
+	_, ok := c.sources[name]
+	return ok
+}
+
+// Checked -- когда этот источник опрашивали в последний раз (удачно или нет) и
+// опрашивали ли вообще. За этим стоит текст «проверить не удалось, последний
+// раз смотрели N назад»: обещание про свежесть без метки времени говорит
+// больше, чем мы знаем.
+func (c *Cache) Checked(name string) (time.Time, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	e, ok := c.data[name]
+	if !ok || e.FetchedAt.IsZero() {
+		return time.Time{}, false
+	}
+	return e.FetchedAt, true
+}
+
 func (c *Cache) fetch(ctx context.Context, repo string) (string, error) {
 	url := fmt.Sprintf(c.api, repo)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

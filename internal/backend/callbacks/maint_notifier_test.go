@@ -42,6 +42,10 @@ func (f *fakeMaintTG) lastText() string {
 	return f.edits[len(f.edits)-1].Text
 }
 
+// boolPtrForTest -- указатель на значение: hrneo_installed и kmod_loaded в
+// wire.VersionAudit указатели, потому что их отсутствие значимо.
+func boolPtrForTest(b bool) *bool { return &b }
+
 // newMaintNotifierTestRig creates a MaintPanelNotifier with a fresh in-memory
 // DB seeded with one user. It reuses the newTestDB helper from actions_test.go.
 func newMaintNotifierTestRig(t *testing.T) (*fakeMaintTG, *MaintPanelNotifier, *db.User, *db.DB) {
@@ -66,7 +70,7 @@ func TestMaintNotifier_VersionAudit_WritesSnapshotToDB(t *testing.T) {
 	loaded := true
 	va := wire.VersionAudit{
 		AwgmgrVersion: "2.18.0", AwgmgrBackend: "kernel", AwgmgrRunning: true,
-		HrneoInstalled: true, HrneoVersion: "2.4.0",
+		HrneoInstalled: boolPtrForTest(true), HrneoVersion: "2.4.0",
 		FirmwareCurrent: "4.3.7", FirmwareAvail: "4.3.8",
 		KmodVersion: "1.1.0", KmodModel: "KN-1811", KmodLoaded: &loaded,
 	}
@@ -87,6 +91,42 @@ func TestMaintNotifier_VersionAudit_WritesSnapshotToDB(t *testing.T) {
 	}
 	if row.KmodVersion != "1.1.0" || row.KmodLoaded == nil || !*row.KmodLoaded {
 		t.Errorf("модуль ядра не записан: %+v", row)
+	}
+}
+
+// Находка ревью: опрос HydraRoute не дал ответа, а снимок всё равно писал
+// «не установлен» -- и затирал ранее известное «установлен». Экран после
+// такого устойчиво врал бы владельцу, у которого HydraRoute стоит и работает.
+func TestMaintNotifier_VersionAuditWithoutHrneoAnswer_KeepsKnownInstalled(t *testing.T) {
+	_, n, u, d := newMaintNotifierTestRig(t)
+	yes := true
+	if err := d.RouterVersions().Upsert(u.ID, db.RouterVersionSnapshot{
+		AwgmgrVersion: "2.17.2", HrneoVersion: "2.4.0", HrneoInstalled: &yes,
+		Source: "version_audit",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// HRStatus не ответил: полей про hrneo в ответе агента нет вовсе.
+	body, _ := json.Marshal(wire.VersionAudit{
+		AwgmgrVersion: "2.18.0", AwgmgrRunning: true, FirmwareCurrent: "4.3.7",
+	})
+	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "version_audit"}
+	if err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, u.ID); err != nil {
+		t.Fatalf("NotifyCommandResult: %v", err)
+	}
+	row, err := d.RouterVersions().Get(u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.HrneoInstalled == nil {
+		t.Fatal("известное «установлен» стёрто в «неизвестно»")
+	}
+	if !*row.HrneoInstalled {
+		t.Error("неудачный опрос HydraRoute затёр известное true на false")
+	}
+	// Версия панели при этом обязана обновиться: сам-то аудит удался.
+	if row.AwgmgrVersion != "2.18.0" {
+		t.Errorf("версия панели не обновилась: %q", row.AwgmgrVersion)
 	}
 }
 
@@ -112,7 +152,7 @@ func TestMaintNotifier_VersionAuditFailed_LeavesSnapshotAlone(t *testing.T) {
 
 func TestMaintNotifier_VersionAudit_OK_RendersPanel(t *testing.T) {
 	tgFake, n, u, _ := newMaintNotifierTestRig(t)
-	va := wire.VersionAudit{AwgmgrVersion: "2.8.2", AwgmgrRunning: true, FirmwareCurrent: "5.0.0", HrneoInstalled: true, HrneoRunning: true, HrneoVersion: "2.4.0"}
+	va := wire.VersionAudit{AwgmgrVersion: "2.8.2", AwgmgrRunning: true, FirmwareCurrent: "5.0.0", HrneoInstalled: boolPtrForTest(true), HrneoRunning: true, HrneoVersion: "2.4.0"}
 	body, _ := json.Marshal(va)
 	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "version_audit"}
 	err := n.NotifyCommandResult(context.Background(), ref, wire.CommandResult{Status: "ok", Output: string(body)}, u.ID)
@@ -138,7 +178,7 @@ func TestMaintNotifier_VersionAudit_HrneoStopped(t *testing.T) {
 		AwgmgrVersion:   "2.8.2",
 		AwgmgrRunning:   true,
 		FirmwareCurrent: "5.0.0",
-		HrneoInstalled:  true,
+		HrneoInstalled:  boolPtrForTest(true),
 		HrneoRunning:    false,
 		HrneoVersion:    "2.4.0",
 	}

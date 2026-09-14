@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 // awgManagerCheckDetails — те поля details проверки awg_manager, из которых
@@ -56,4 +57,36 @@ func versionSnapshotFromReport(detailsJSON string) (db.RouterVersionSnapshot, bo
 		KmodLoaded:      d.KmodLoaded,
 		Source:          "report",
 	}, true
+}
+
+// VersionSnapshotFromAudit переводит ответ version_audit в снимок для базы.
+//
+// HrneoInstalled и KmodLoaded приходят указателями уже от агента и уезжают в
+// базу КАК ЕСТЬ. Придумывать за них значение нельзя: nil означает, что опрос не
+// дал ответа, и слияние в Upsert пропускает такое поле мимо, сохраняя известное.
+// Пока здесь стоял `&hrneoInstalled`, снятый с обычного bool, один неудачный
+// опрос HydraRoute затирал ранее известное «установлен» на «не установлен» --
+// это была порча накопленных данных, а не кривая надпись.
+//
+// Полей, которых version_audit не знает (KeeneticOS), мы не выдумываем: пустая
+// строка означает «этот источник такого не приносит», и Upsert оставит на месте
+// то, что уже принёс отчёт.
+//
+// Экспортирована потому, что вызывающих ровно два и они в разных пакетах: приём
+// результата команды (здесь, package backend) и отрисовка панели обслуживания
+// (package callbacks). Две копии одного отображения разъехались бы молча -- а
+// разъехавшись, дали бы разные снимки на разных путях об одном роутере.
+func VersionSnapshotFromAudit(va wire.VersionAudit) db.RouterVersionSnapshot {
+	return db.RouterVersionSnapshot{
+		AwgmgrVersion:   va.AwgmgrVersion,
+		AwgmgrBackend:   va.AwgmgrBackend,
+		HrneoVersion:    va.HrneoVersion,
+		HrneoInstalled:  va.HrneoInstalled,
+		FirmwareCurrent: va.FirmwareCurrent,
+		FirmwareAvail:   va.FirmwareAvail,
+		KmodVersion:     va.KmodVersion,
+		KmodModel:       va.KmodModel,
+		KmodLoaded:      va.KmodLoaded,
+		Source:          "version_audit",
+	}
 }

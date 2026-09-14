@@ -25,6 +25,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/retention"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/updatespoll"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 )
 
@@ -301,7 +302,11 @@ func main() {
 		TGNotifier:     notifier,
 		RoutesNotifier: routesNotifier,
 		MaintNotifier:  maintNotifier,
-		BulkNotifier:   cb,
+		// Тот же кэш, что у панели обслуживания в боте: второй поход в GitHub
+		// сжёг бы лимит анонимного API, а расхождение двух кэшей показывало бы
+		// на экране и в боте разные новости об одном роутере.
+		Upstream:     upCache,
+		BulkNotifier: cb,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
 		VPNCabinet:          cb,
@@ -457,6 +462,15 @@ func main() {
 		go dp.Run(ctx)
 		logger.Info("dead-man digest enabled", "hour_msk", cfg.Digest.HourMSK)
 	}
+
+	// Суточный опрос версий. Обычный отчёт приносит панель, прошивку,
+	// KeeneticOS и модуль ядра бесплатно, но про версию HydraRoute Neo и про
+	// ДОСТУПНУЮ прошивку не знает вовсе -- их знает только version_audit.
+	// Поллер доспрашивает ровно ради этих двух полей: не чаще раза в сутки,
+	// молчащим команду не ставит (у неё TTL, а мобильный роутер спит) и в
+	// GitHub не ходит ни разу -- сравнение живёт в общем upCache.
+	updPoller := updatespoll.NewPoller(d, cmdQueue, updatespoll.Config{})
+	go updPoller.Run(ctx)
 
 	go func() {
 		logger.Info("backend listening", "addr", cfg.Listen, "version", Version)

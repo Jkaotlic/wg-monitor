@@ -733,6 +733,31 @@ export function respond(method, path) {
       role: 'admin',
     }
   }
+  // Срез версий. Числа живые (рабочий роутер, 12.09.2026): панель 2.18.2+r2,
+  // HydraRoute 3.18.3, прошивка 5.02.A.8.0-3 при доступной 5.02.A.9.0-0.
+  // Источник апстрима в песочнице выключен -- ровно то состояние, в котором
+  // парк живёт сегодня, и экран обязан сказать об этом словами.
+  if (rest === '/versions') {
+    return {
+      rows: [
+        { component: 'firmware', name: 'KeeneticOS', installed: '5.02.A.8.0-3', available: '5.02.A.9.0-0' },
+      ],
+      unknown: [
+        { component: 'awgmgr', reason: 'upstream_not_configured' },
+        { component: 'hrneo', reason: 'upstream_not_configured' },
+      ],
+      installed: {
+        awgmgr: '2.18.2+r2',
+        hrneo: '3.18.3',
+        hrneo_installed: true,
+        firmware: '5.02.A.8.0-3',
+        keenetic_os: 'KN-1811',
+        kmod: '3.1.20260906',
+        kmod_loaded: true,
+      },
+      checked_at: nowISO(),
+    }
+  }
   if (rest.startsWith('/commands/')) return commandResult(rest.slice('/commands/'.length))
   if (rest === '/access') {
     return {

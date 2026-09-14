@@ -1527,11 +1527,15 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 		LastReportAge:   lastAge,
 		IsMobile:        user.IsMobile(),
 	}
+	// Кэш версий живёт в памяти и умирает с рестартом бэкенда, поэтому при
+	// холодном кэше блок обновлений берётся из снимка в базе. Иначе он пустел
+	// после каждой выкатки, а пустота читается как «всё актуально».
+	var cachedVA wire.VersionAudit
+	haveCached := false
 	if r.auditCache != nil {
-		if va, ok := r.auditCache.GetVersionAudit(user.ID); ok {
-			args.Updates = computeUpdates(ctx, r.upstream, va)
-		}
+		cachedVA, haveCached = r.auditCache.GetVersionAudit(user.ID)
 	}
+	args.Updates = updatesFromCacheOrSnapshot(ctx, r.d, r.upstream, cachedVA, haveCached, user.ID)
 	text, inline := alerts.FormatSmartReply(args)
 	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
 	// — TG accepts only one reply_markup per send. When FormatSmartReply
@@ -2581,7 +2585,11 @@ func (r *Router) SetUpstream(c *upstream.Cache) {
 // for the smart-reply Updates section. Single source of truth via the upstream
 // helper (LOGIC-09).
 func computeUpdates(ctx context.Context, up *upstream.Cache, va wire.VersionAudit) []alerts.UpdateAvailable {
-	infos := upstream.ComputeUpdates(ctx, up, va)
+	// Причины «неизвестно» здесь не рисуются намеренно: умный ответ -- это
+	// разговор о поломке, и отсутствие блока в нём не читается как «всё
+	// актуально». Про незнание словами говорят экраны (мини-апп и дашборд) и
+	// панель обслуживания -- те поверхности, которые человек открыл сам.
+	infos, _ := upstream.ComputeUpdates(ctx, up, va)
 	if len(infos) == 0 {
 		return nil
 	}

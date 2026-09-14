@@ -563,6 +563,10 @@ type dashboardSummaryAgent struct {
 	TelegramThreadID int64               `json:"telegram_thread_id"`
 	HasTopic         bool                `json:"has_topic"`
 	ActiveIncidents  []dashboardIncident `json:"active_incidents"`
+	// Updates -- кому в парке пора обновляться, из снимка версий. Пустой
+	// список означает «новостей нет»; про то, почему про какой-то компонент
+	// неизвестно, админ читает на экране самого роутера.
+	Updates []dashboardUpdateRow `json:"updates,omitempty"`
 }
 
 type dashboardIncident struct {
@@ -627,6 +631,9 @@ func dashboardSummaryHandler(d Deps) http.HandlerFunc {
 			latest = serverVersion
 		}
 		resp.LatestVersion = latest
+		// Кому в парке пора обновляться. Из снимка версий, не из GitHub по
+		// каждому роутеру: сравнение берётся из общего кэша апстрима.
+		dashboardRouterUpdates(r.Context(), d, resp.Agents)
 		resp.Telegram = dashboardTelegramSummary{
 			PrimaryChatID: d.TelegramPrimaryChatID,
 			ExtraChatIDs:  append([]int64(nil), d.TelegramExtraChatIDs...),

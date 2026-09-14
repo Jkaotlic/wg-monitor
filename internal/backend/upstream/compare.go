@@ -14,65 +14,157 @@ import (
 // smart-reply Updates section and the Maintenance panel rendering. Both UI
 // surfaces project this into their own struct (LOGIC-09).
 type UpdateInfo struct {
+	// Component -- устойчивый ключ ("awgmgr" | "hrneo" | "firmware"), тот же,
+	// которым говорят Unknown и состояние новости в базе. Name -- подпись для
+	// человека, и опираться на неё в коде нельзя: переименование подписи молча
+	// разъехалось бы с ключом новости, и «отложить» перестало бы попадать в ту
+	// строку, которую человек видел.
+	Component string
 	Name      string
 	Installed string
 	Available string
 	Hint      string
 }
 
-// ComputeUpdates produces the soft-warning list comparing a wire.VersionAudit
-// against the upstream cache. Pure-ish (passes ctx to Cache.Latest); nil-safe
-// for cache. Each caller projects to its UI struct after this returns.
-func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) []UpdateInfo {
-	var out []UpdateInfo
-	if va.FirmwareAvail != "" && FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail) {
-		out = append(out, UpdateInfo{Name: "KeeneticOS", Installed: va.FirmwareCurrent, Available: va.FirmwareAvail})
-	}
-	if cache == nil {
-		return out
-	}
-	if v, _ := cache.Latest(ctx, "awgmgr"); v != "" && SoftwareNewerThan(va.AwgmgrVersion, v) {
-		out = append(out, UpdateInfo{
-			Name:      "awg-manager",
-			Installed: va.AwgmgrVersion,
-			Available: v,
-			Hint:      AwgManagerUpdateHint(va.AwgmgrVersion, v, va.AwgmgrBackend),
-		})
-	}
-	if v, _ := cache.Latest(ctx, "hrneo"); v != "" && va.HrneoVersion != "" && SoftwareNewerThan(va.HrneoVersion, v) {
-		out = append(out, UpdateInfo{Name: "HydraRoute-Neo", Installed: va.HrneoVersion, Available: v})
-	}
-	return out
+// Причины, по которым про компонент нельзя сказать ничего. Список закрытый:
+// неизвестной причины наружу быть не может, иначе экран снова начнёт молчать
+// вместо ответа.
+//
+//   - ReasonNotConfigured -- источник обновлений выключен конфигом (пустой
+//     репозиторий в cmd/backend/main.go:172-181 молча не заводит источник);
+//   - ReasonUnavailable   -- источник настроен, но не ответил (403, сеть);
+//   - ReasonNoSnapshot    -- роутер ещё не рассказал, что у него стоит;
+//   - ReasonAgentTooOld   -- агент старый и про модуль ядра не сообщает.
+const (
+	ReasonNotConfigured = "upstream_not_configured"
+	ReasonUnavailable   = "upstream_unavailable"
+	ReasonNoSnapshot    = "no_snapshot"
+	ReasonAgentTooOld   = "agent_too_old"
+)
+
+// Unknown -- «про этот компонент мы не знаем, и вот почему».
+//
+// Component: "awgmgr" | "hrneo" | "firmware" | "kmod".
+type Unknown struct {
+	Component string
+	Reason    string
 }
 
-// AwgManagerUpdateHint returns release-aware operator notes for awg-manager.
-// The v2.10.6 NativeWG proxy/module update can require a router reboot after
-// upgrading from an older version; kernel-backed fleets do not need this note.
-func AwgManagerUpdateHint(installed, available, backend string) string {
-	if !isNativeWGBackend(backend) {
-		return ""
+// ComputeUpdates возвращает и «что вышло», и «почему неизвестно».
+//
+// Два возвращаемых значения, а не одно, потому что «обновлений нет» и «мы не
+// знаем» -- разные ответы, и молчать вторым нельзя. Пустой репозиторий, 403 от
+// GitHub и настоящая свежесть выглядели на экране одинаково: блока не было ни
+// в одном из трёх случаев. Теперь у каждой неизвестности есть имя, а у имени --
+// своя строка на экране.
+//
+// nil-safe для cache: cache == nil означает, что источников нет вовсе, то есть
+// ReasonNotConfigured, а не «всё актуально».
+func ComputeUpdates(ctx context.Context, cache *Cache, va wire.VersionAudit) ([]UpdateInfo, []Unknown) {
+	var out []UpdateInfo
+	var unknown []Unknown
+
+	// Прошивку приносит сам роутер (ndmc components list), и GitHub к ней
+	// отношения не имеет: выключенный источник апстрима про неё молчать не
+	// должен.
+	switch {
+	case va.FirmwareCurrent == "":
+		unknown = append(unknown, Unknown{Component: "firmware", Reason: ReasonNoSnapshot})
+	case va.FirmwareAvail != "" && FirmwareNewerThan(va.FirmwareCurrent, va.FirmwareAvail):
+		out = append(out, UpdateInfo{
+			Component: "firmware",
+			Name:      "KeeneticOS",
+			Installed: va.FirmwareCurrent,
+			Available: va.FirmwareAvail,
+		})
 	}
+
+	// Модуль ядра ни с чем не сравнивается: сравнения по парку сегодня нет, и
+	// право сказать «нужна перезагрузка» даёт только наблюдаемая смена поля
+	// между снимками (RebootHint). Здесь остаётся единственный честный ответ --
+	// агент про модуль вовсе не сообщает.
+	if va.KmodVersion == "" {
+		unknown = append(unknown, Unknown{Component: "kmod", Reason: ReasonAgentTooOld})
+	}
+
+	if avail, reason := latestFor(ctx, cache, "awgmgr", va.AwgmgrVersion); reason != "" {
+		unknown = append(unknown, Unknown{Component: "awgmgr", Reason: reason})
+	} else if SoftwareNewerThan(va.AwgmgrVersion, avail) {
+		out = append(out, UpdateInfo{
+			Component: "awgmgr",
+			Name:      "awg-manager",
+			Installed: va.AwgmgrVersion,
+			Available: avail,
+			Hint:      AwgManagerUpdateHint(va.AwgmgrVersion, avail),
+		})
+	}
+
+	if avail, reason := latestFor(ctx, cache, "hrneo", va.HrneoVersion); reason != "" {
+		unknown = append(unknown, Unknown{Component: "hrneo", Reason: reason})
+	} else if SoftwareNewerThan(va.HrneoVersion, avail) {
+		out = append(out, UpdateInfo{
+			Component: "hrneo",
+			Name:      "HydraRoute-Neo",
+			Installed: va.HrneoVersion,
+			Available: avail,
+		})
+	}
+
+	return out, unknown
+}
+
+// latestFor отвечает либо доступной версией, либо причиной, по которой её
+// узнать не удалось. Пустая причина означает, что ответ получен.
+//
+// Порядок проверок не случаен: сначала «роутер молчит» (нечего сравнивать),
+// потом «источник выключен» (нечем сравнивать), и только потом поход в кэш.
+// Иначе выключенный источник и молчащий роутер слились бы в одну причину.
+func latestFor(ctx context.Context, cache *Cache, source, installed string) (string, string) {
+	if installed == "" {
+		return "", ReasonNoSnapshot
+	}
+	if cache == nil || !cache.Configured(source) {
+		return "", ReasonNotConfigured
+	}
+	v, err := cache.Latest(ctx, source)
+	if err != nil || v == "" {
+		return "", ReasonUnavailable
+	}
+	return v, ""
+}
+
+// AwgManagerUpdateHint -- что обновление панели значит для владельца роутера.
+//
+// Текст по-русски и о последствии: подсказку читает человек, а не оператор
+// бэкенда. Прежняя английская формулировка про NativeWG и 2.10.6 нарушала
+// правило продукта и вдобавок опиралась на номер релиза -- связь релиза панели
+// со сменой модуля ядра разведка 12.09.2026 подтвердить не смогла (шаг B9:
+// сравнения по парку нет, поле выставлено наружу только этим циклом).
+//
+// Движок (kernel/native) в условии больше не участвует: живой роутер с
+// activeBackend=kernel тоже несёт модуль ядра (замер 12.09.2026: kmod
+// 3.1.20260906 на KN-1811), и молчать про него значило бы умолчать о настоящем
+// последствии. Формулировка «может сменить» честна для обоих движков: здесь мы
+// предупреждаем о риске, а о свершившейся смене говорит RebootHint.
+func AwgManagerUpdateHint(installed, available string) string {
 	if !SoftwareNewerThan(installed, available) {
 		return ""
 	}
-	if SoftwareNewerThan(installed, "2.10.6") && softwareAtLeast(available, "2.10.6") {
-		return "NativeWG update crosses 2.10.6; plan a router reboot after upgrade if tunnels do not come back cleanly."
-	}
-	return ""
+	return "Обновление может сменить модуль ядра, и VPN-туннели поднимутся только после перезагрузки роутера."
 }
 
-func isNativeWGBackend(backend string) bool {
-	b := strings.ToLower(strings.TrimSpace(backend))
-	return strings.Contains(b, "native") || strings.Contains(b, "nwg")
-}
-
-func softwareAtLeast(version, floor string) bool {
-	v := normalize(version)
-	f := normalize(floor)
-	if !semver.IsValid(v) || !semver.IsValid(f) {
-		return false
+// RebootHint отвечает по-русски и о последствии. Строится на наблюдаемом факте
+// смены модуля ядра между снимками, а не на номере версии панели.
+//
+// Пустая строка -- это «повода предупреждать нет». Пустой prevKmod означает
+// первое знакомство с роутером (сравнивать не с чем), пустой nowKmod -- что
+// агент про модуль замолчал; ни то, ни другое сменой не является.
+func RebootHint(prevKmod, nowKmod string) string {
+	if prevKmod == "" || nowKmod == "" || prevKmod == nowKmod {
+		return ""
 	}
-	return semver.Compare(v, f) >= 0
+	return "После обновления панели сменился модуль ядра AmneziaWG. " +
+		"VPN-туннели поднимутся только после перезагрузки роутера."
 }
 
 // SoftwareNewerThan returns true if `candidate` is strictly newer than

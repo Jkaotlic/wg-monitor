@@ -299,7 +299,10 @@ func TestVersionAudit_AllFields(t *testing.T) {
 	if !got.AwgmgrRunning {
 		t.Error("AwgmgrRunning should be true after successful SystemInfo")
 	}
-	if !got.HrneoInstalled {
+	if got.HrneoInstalled == nil {
+		t.Fatal("HrneoInstalled = nil: опрос удался, ответ обязан быть явным")
+	}
+	if !*got.HrneoInstalled {
 		t.Error("HrneoInstalled should reflect HydraRouteStatus.Installed")
 	}
 	if !got.HrneoRunning {
@@ -319,6 +322,49 @@ func TestVersionAudit_AllFields(t *testing.T) {
 	}
 	if got.AwgmgrUptime != "1д 3ч" {
 		t.Errorf("AwgmgrUptime=%q, want 1д 3ч", got.AwgmgrUptime)
+	}
+}
+
+// HRStatus не ответил -- это «не знаем», и указатель обязан остаться nil.
+//
+// Это ИСТОЧНИК инварианта: значение кладёт агент, а бэкенд его только
+// переносит. Пока этот путь не проверял ни один тест (поле hrErr в фейке было,
+// но его никто не задавал), правка агента могла вернуть прежнюю порчу данных --
+// неудачный опрос затирал бы в базе известное «установлен» -- и пройти весь
+// набор зелёным.
+func TestVersionAudit_HrneoStatusFailed_LeavesInstalledUnknown(t *testing.T) {
+	awg := &fakeAwgInfo{
+		sysInfo: awgmgr.SystemInfo{Version: "2.8.2", FirmwareVersion: "5.00.C.11.0-0"},
+		hrErr:   fmt.Errorf("HRStatus недоступен"),
+	}
+	exec := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch {
+		case name == "ndmc":
+			return []byte(ndmcComponentsListGolden_NoUpdate), nil
+		case name == "cat" && args[0] == "/proc/uptime":
+			return []byte(procUptimeGolden), nil
+		case name == "pidof" && args[0] == "awg-manager":
+			return []byte("1895\n"), nil
+		case name == "cat" && args[0] == "/proc/1895/stat":
+			return []byte(procStatAwgmgrGolden), nil
+		}
+		return nil, fmt.Errorf("unexpected: %s %v", name, args)
+	}
+	// Опрос hrneo -- best-effort: его отказ не имеет права уронить весь аудит.
+	got, err := VersionAudit(context.Background(), awg, exec)
+	if err != nil {
+		t.Fatalf("VersionAudit: %v", err)
+	}
+	if got.HrneoInstalled != nil {
+		t.Errorf("HrneoInstalled = %v: несработавший опрос выдан за ответ «не установлен»", *got.HrneoInstalled)
+	}
+	// А остальное обязано доехать -- иначе тест выродился бы в «аудит ничего
+	// не вернул», и nil выше ничего бы не доказывал.
+	if got.AwgmgrVersion != "2.8.2" {
+		t.Errorf("AwgmgrVersion=%q, хотим 2.8.2", got.AwgmgrVersion)
+	}
+	if got.HrneoVersion != "" {
+		t.Errorf("HrneoVersion=%q: версия без удавшегося опроса -- выдумка", got.HrneoVersion)
 	}
 }
 
@@ -347,7 +393,12 @@ func TestVersionAudit_HrneoNotInstalled(t *testing.T) {
 	if got.HrneoVersion != "" {
 		t.Errorf("expected empty HrneoVersion when !Installed, got %q", got.HrneoVersion)
 	}
-	if got.HrneoInstalled {
+	// Опрос ответил «не установлен» -- это ОТВЕТ, и он обязан уехать явным
+	// false, а не превратиться в «не знаем».
+	if got.HrneoInstalled == nil {
+		t.Fatal("HrneoInstalled = nil: удавшийся опрос выдан за молчание")
+	}
+	if *got.HrneoInstalled {
 		t.Error("HrneoInstalled should be false when HydraRouteStatus reports not installed")
 	}
 	if got.HrneoRunning {
@@ -382,7 +433,7 @@ func TestVersionAudit_HrneoInstalledButStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("VersionAudit: %v", err)
 	}
-	if !got.HrneoInstalled {
+	if got.HrneoInstalled == nil || !*got.HrneoInstalled {
 		t.Fatal("HrneoInstalled should be true")
 	}
 	if got.HrneoRunning {

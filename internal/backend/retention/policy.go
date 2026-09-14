@@ -97,6 +97,11 @@ func (p *Policy) runLoop(ctx context.Context, name string, every, initialDelay t
 	}
 }
 
+// updateRemindersKeepDismissed -- сколько живёт СКРЫТАЯ новость об обновлении.
+// Через 90 дней строка уже ничего не решает: та версия давно не последняя, а
+// новая версия завела бы свою строку (ключ включает версию).
+const updateRemindersKeepDismissed = 90 * 24 * time.Hour
+
 func (p *Policy) prune(ctx context.Context) error {
 	cutoff := p.now().Add(-time.Duration(p.Cfg.EventsDays) * 24 * time.Hour)
 	deleted, err := p.DB.Events().PruneBefore(cutoff)
@@ -134,12 +139,23 @@ func (p *Policy) prune(ctx context.Context) error {
 	} else {
 		webLinksDeleted = n
 	}
+	// Новости об обновлениях: чистим только давно СКРЫТЫЕ. Новость, которую
+	// никто не скрывал, живёт, пока не сменится версия, -- удалить её значило
+	// бы забыть про невыполненное обновление и показать его потом заново как
+	// свежее. Своей горутины здесь нет намеренно: строк столько же, сколько
+	// роутеров, и обслуживание у них общее с остальной базой.
+	remindersDeleted, remErr := p.DB.UpdateReminders().PruneDismissedBefore(p.now().Add(-updateRemindersKeepDismissed))
+	if remErr != nil {
+		p.Logger.Warn("retention: update reminders prune failed", "err", remErr)
+		remindersDeleted = 0
+	}
 	p.Logger.Info("retention: pruned",
 		"before", cutoff.UTC(),
 		"events_deleted", deleted,
 		"daily_flaps_deleted", flapsDeleted,
 		"incident_orphans_deleted", orphanDeleted,
-		"web_links_deleted", webLinksDeleted)
+		"web_links_deleted", webLinksDeleted,
+		"update_reminders_deleted", remindersDeleted)
 	return nil
 }
 
