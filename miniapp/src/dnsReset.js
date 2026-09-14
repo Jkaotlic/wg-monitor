@@ -14,6 +14,7 @@
 //      новый, ответ «ждём», а не прежнее «да».
 
 import { agentAtLeast } from './agentConfig.js'
+import { guardVerdict } from './labels.js'
 
 export const DNS_RESET_MIN_VERSION = 'v0.31.0'
 
@@ -144,10 +145,39 @@ export function postconditionRows({ before, after }) {
   const guardBefore = find(before, 'resolver_guard')
   const guard = find(after, 'resolver_guard')
   let guardRow
-  if (!guard && !guardBefore) guardRow = { value: 'сторож выключен', tone: 'muted' }
+  // Нет строки resolver_guard в свежем отчёте -- сторож выключен. Было ли что
+  // до сброса, не важно: после Fix 2 «мини-апп не показывает последнюю строку
+  // остановленного сторожа» у выключенного сторожа строки просто не будет,
+  // и это тот же самый «выключен», а не поломка.
+  if (!guard) guardRow = { value: 'сторож выключен', tone: 'muted' }
   else if (!fresh(guardBefore, guard, (c) => c.ts)) guardRow = { value: TEXTS.waiting, tone: 'muted' }
-  else if (guard.details?.idle) guardRow = { value: 'нет — сторож его потерял', tone: 'danger' }
-  else guardRow = { value: 'да', tone: 'ok' }
+  else {
+    // Один словарь исходов сторожа на всё приложение (guardVerdict,
+    // labels.js) -- раньше idle/ready читались здесь отдельной копией
+    // правила и разошлись бы с экраном диагностики при первой же правке.
+    switch (guardVerdict(guard)) {
+      case 'ok':
+        guardRow = { value: 'да', tone: 'ok' }
+        break
+      case 'idle':
+        guardRow = { value: 'нет — сторож его потерял', tone: 'danger' }
+        break
+      case 'unread':
+        guardRow = { value: 'ещё не прочитал настройки', tone: 'muted' }
+        break
+      case 'fallback':
+        guardRow = { value: 'на запасных', tone: 'warn' }
+        break
+      case 'leftover':
+        guardRow = { value: 'запасные рядом', tone: 'warn' }
+        break
+      case 'down':
+        guardRow = { value: 'нет', tone: 'danger' }
+        break
+      default:
+        guardRow = { value: TEXTS.waiting, tone: 'muted' }
+    }
+  }
   rows.push({ key: 'guard', title: 'Свой DNS-сервер остался на месте', ...guardRow })
 
   const zones = Object.values(d.zones ?? {})

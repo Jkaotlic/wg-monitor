@@ -125,7 +125,7 @@ describe('после сброса', () => {
 describe('три постусловия', () => {
   const before = [
     { check_name: 'dns_split', ts: '2026-09-14T10:00:00Z', details: { checked_at: '2026-09-14T10:00:00Z', zones: { ru: 'other' }, resolves: 'ok' } },
-    { check_name: 'resolver_guard', ts: '2026-09-14T10:00:00Z', details: {} },
+    { check_name: 'resolver_guard', status: 'ok', ts: '2026-09-14T10:00:00Z', details: {} },
   ]
 
   it('пока роутер не прислал новый отчёт -- ждём, а не «да»', () => {
@@ -140,7 +140,7 @@ describe('три постусловия', () => {
         ts: '2026-09-14T10:05:00Z',
         details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'yandex_dot', su: 'yandex_dot' }, resolves: 'ok' },
       },
-      { check_name: 'resolver_guard', ts: '2026-09-14T10:05:00Z', details: {} },
+      { check_name: 'resolver_guard', status: 'ok', ts: '2026-09-14T10:05:00Z', details: {} },
     ]
     expect(postconditionRows({ before, after })).toEqual([
       { key: 'resolves', title: 'Роутер отвечает на запросы имён сайтов', value: 'да', tone: 'ok' },
@@ -156,7 +156,7 @@ describe('три постусловия', () => {
         ts: '2026-09-14T10:05:00Z',
         details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'unknown', su: 'unknown' }, resolves: 'fail' },
       },
-      { check_name: 'resolver_guard', ts: '2026-09-14T10:05:00Z', details: { idle: true } },
+      { check_name: 'resolver_guard', status: 'ok', ts: '2026-09-14T10:05:00Z', details: { idle: true } },
     ]
     expect(postconditionRows({ before, after }).map((r) => [r.value, r.tone])).toEqual([
       ['нет', 'danger'],
@@ -169,6 +169,32 @@ describe('три постусловия', () => {
     const after = [{ check_name: 'dns_split', ts: '2026-09-14T10:05:00Z', details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'yandex_dot' }, resolves: 'ok' } }]
     const guard = postconditionRows({ before: [before[0]], after }).find((r) => r.key === 'guard')
     expect(guard).toEqual({ key: 'guard', title: 'Свой DNS-сервер остался на месте', value: 'сторож выключен', tone: 'muted' })
+  })
+
+  // После Fix 2 остановленный сторож просто перестаёт присылать строку -- та
+  // же «выключен», а не «пропал», хотя ДО сброса строка была.
+  it('строка была до сброса и пропала после -- тоже «сторож выключен», а не поломка', () => {
+    const after = [{ check_name: 'dns_split', ts: '2026-09-14T10:05:00Z', details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'yandex_dot' }, resolves: 'ok' } }]
+    const guard = postconditionRows({ before, after }).find((r) => r.key === 'guard')
+    expect(guard).toEqual({ key: 'guard', title: 'Свой DNS-сервер остался на месте', value: 'сторож выключен', tone: 'muted' })
+  })
+
+  it('сторож на запасных -- «на запасных», не «да»', () => {
+    const after = [
+      { check_name: 'dns_split', ts: '2026-09-14T10:05:00Z', details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'yandex_dot' }, resolves: 'ok' } },
+      { check_name: 'resolver_guard', status: 'fail', ts: '2026-09-14T10:05:00Z', details: { mode: 'fallback', reason: 'fallback' } },
+    ]
+    const guard = postconditionRows({ before, after }).find((r) => r.key === 'guard')
+    expect(guard).toEqual({ key: 'guard', title: 'Свой DNS-сервер остался на месте', value: 'на запасных', tone: 'warn' })
+  })
+
+  it('сторож ещё не прочитал настройки -- отдельная строка, не «да»', () => {
+    const after = [
+      { check_name: 'dns_split', ts: '2026-09-14T10:05:00Z', details: { checked_at: '2026-09-14T10:05:00Z', zones: { ru: 'yandex_dot' }, resolves: 'ok' } },
+      { check_name: 'resolver_guard', status: 'ok', ts: '2026-09-14T10:05:00Z', details: { ready: false } },
+    ]
+    const guard = postconditionRows({ before, after }).find((r) => r.key === 'guard')
+    expect(guard).toEqual({ key: 'guard', title: 'Свой DNS-сервер остался на месте', value: 'ещё не прочитал настройки', tone: 'muted' })
   })
 
   it('без жаргона', () => {
