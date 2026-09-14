@@ -69,19 +69,21 @@ func TestDNSSplit_NothingReadableStaysOKAndSaysUnknown(t *testing.T) {
 // по смыслу, а не по написанию.
 func TestDNSSplit_ZoneOnYandexOverDoT(t *testing.T) {
 	c := &DNSSplit{
-		Zones:      []string{"ru", "xn--p1ai"},
+		Zones:      []string{"ru", "xn--p1ai", "su"},
 		YandexHost: testYandexHost,
 		Canary:     "ya.ru",
 		Endpoints: endpointsOf(
 			keenetic.DNSEndpoint{Type: "dot", Host: "9.9.9.9", Port: 853, SNI: "dns.quad9.net"},
 			keenetic.DNSEndpoint{Type: "dot", Host: testYandexHost, Port: 853, Zone: "ru"},
 			keenetic.DNSEndpoint{Type: "dot", Host: "Common.Dot.DNS.Yandex.net.", Port: 853, Zone: "XN--P1AI."},
+			// Яндекс по адресу, узнаётся по имени сертификата.
+			keenetic.DNSEndpoint{Type: "dot", Host: "77.88.8.8", Port: 853, SNI: testYandexHost, Zone: "su"},
 		),
 		Resolve: resolvesOK,
 	}
 	got := c.Run(context.Background(), Deps{})
 	zones := zonesOf(t, got)
-	for _, z := range []string{"ru", "xn--p1ai"} {
+	for _, z := range []string{"ru", "xn--p1ai", "su"} {
 		if zones[z] != "yandex_dot" {
 			t.Errorf("зона %s: %q, хотим yandex_dot", z, zones[z])
 		}

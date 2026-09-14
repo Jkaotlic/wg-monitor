@@ -167,7 +167,8 @@ func (c *DNSSplit) zoneVerdicts(ctx context.Context) map[string]string {
 }
 
 // zoneVerdict сопоставляет строки по смыслу -- хост, зона, транспорт, -- а не
-// по написанию: роутер вправе записать строку в своей форме.
+// по написанию: роутер вправе записать строку в своей форме, а Яндекс -- адресом
+// с именем сертификата (sni).
 func (c *DNSSplit) zoneVerdict(zone string, eps []keenetic.DNSEndpoint) string {
 	yandex := splitNormHost(c.YandexHost)
 	var yDoT, yDoH, other bool
@@ -176,7 +177,7 @@ func (c *DNSSplit) zoneVerdict(zone string, eps []keenetic.DNSEndpoint) string {
 			continue
 		}
 		switch {
-		case ep.Type == "dot" && splitNormHost(ep.Host) == yandex:
+		case ep.Type == "dot" && (splitNormHost(ep.Host) == yandex || splitNormHost(ep.SNI) == yandex):
 			yDoT = true
 		case ep.Type == "doh" && splitDoHHost(ep.URL) == yandex:
 			yDoH = true
