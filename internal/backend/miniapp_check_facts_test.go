@@ -180,3 +180,65 @@ func TestMiniappCheckFactsKmodLoadedFalseIsAnswer(t *testing.T) {
 		t.Error("kmod_loaded = true, хотим false")
 	}
 }
+
+// Раздел «Раздельный DNS» и строка сторожа читают details. Эндпоинт отдавал
+// только facts, и в v0.31.0 раздел рисовался без зон. Details идут белым
+// списком: строки апстримов (с адресами серверов) до мини-аппа не доезжают.
+func TestMiniappEventsCarriesSplitAndGuardDetails(t *testing.T) {
+	d, ownedID, _, telegramUserID := seedMiniappFleet(t)
+	now := time.Now()
+	seed := map[string]string{
+		"dns_split":      `{"zones":{"ru":"yandex_dot","su":"other"},"resolves":"ok","route":"tunnel","route_tunnel":"vpn-nl","checked_at":"2026-09-14T10:00:00Z","debug_upstreams":["tls upstream 203.0.113.53:853"]}`,
+		"resolver_guard": `{"mode":"fallback","reason":"fallback","since":"2026-09-14T09:00:00Z","foreign":["https upstream https://cloudflare-dns.com/dns-query"],"ru":"tls upstream 203.0.113.54","leftover":["x-leftover-line"]}`,
+		"dns":            `{"endpoints":3,"failed_count":0}`,
+	}
+	for name, details := range seed {
+		if err := d.Events().Insert(ownedID, name, "ok", details, now); err != nil {
+			t.Fatalf("insert %s: %v", name, err)
+		}
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/events", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+	var resp miniappRouterEventsResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	by := map[string]miniappCheckStatus{}
+	for _, c := range resp.Checks {
+		by[c.CheckName] = c
+	}
+	split := by["dns_split"].Details
+	zones, _ := split["zones"].(map[string]any)
+	if zones["ru"] != "yandex_dot" || split["resolves"] != "ok" || split["route"] != "tunnel" || split["route_tunnel"] != "vpn-nl" || split["checked_at"] != "2026-09-14T10:00:00Z" {
+		t.Fatalf("dns_split details = %#v", split)
+	}
+	guard := by["resolver_guard"].Details
+	if guard["mode"] != "fallback" || guard["reason"] != "fallback" || guard["since"] != "2026-09-14T09:00:00Z" {
+		t.Fatalf("resolver_guard details = %#v", guard)
+	}
+	if by["dns"].Details != nil {
+		t.Fatalf("у dns details быть не должно: %#v", by["dns"].Details)
+	}
+	body := rec.Body.String()
+	for _, leak := range []string{"203.0.113", "cloudflare", "x-leftover-line", "debug_upstreams"} {
+		if strings.Contains(body, leak) {
+			t.Fatalf("%q утекло в мини-апп: %s", leak, body)
+		}
+	}
+}
+
+func TestMiniappCheckDetailsGuardBools(t *testing.T) {
+	got := miniappCheckDetailsFrom("resolver_guard", `{"mode":"primary","idle":true,"idle_reason":"own_line_removed_by_hand","ready":false}`)
+	if got["idle"] != true || got["ready"] != false || got["idle_reason"] != "own_line_removed_by_hand" {
+		t.Fatalf("got %#v", got)
+	}
+	if miniappCheckDetailsFrom("resolver_guard", "") != nil || miniappCheckDetailsFrom("dns", `{"mode":"x"}`) != nil {
+		t.Fatal("пустой details и чужая проверка -- nil")
+	}
+}

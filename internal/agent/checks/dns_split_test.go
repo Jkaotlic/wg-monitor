@@ -222,3 +222,28 @@ func TestDNSSplit_TunnelRouteCarriesTunnelName(t *testing.T) {
 		t.Errorf("route = %v, route_tunnel = %v; хотим tunnel и vpn-nl", got.Details["route"], got.Details["route_tunnel"])
 	}
 }
+
+// Бэкенд пропускает в мини-апп только эти ключи (miniappCheckDetailsFrom в
+// internal/backend/miniapp_check_facts.go). Новый или переименованный ключ
+// без правки белого списка до экрана не доедет -- тогда поправь оба места.
+func TestDNSSplit_DetailKeysMatchMiniappWhitelist(t *testing.T) {
+	c := &DNSSplit{
+		Zones:      []string{"ru"},
+		YandexHost: testYandexHost,
+		RouteLookup: func(context.Context, string) (wire.RouteLookupResult, error) {
+			return wire.RouteLookupResult{Verdict: wire.LookupViaTunnel, TunnelID: "awg3", TunnelName: "vpn-nl"}, nil
+		},
+	}
+	got := c.Run(context.Background(), Deps{})
+	allowed := map[string]bool{"zones": true, "resolves": true, "route": true, "route_tunnel": true, "checked_at": true}
+	for k := range got.Details {
+		if !allowed[k] {
+			t.Errorf("ключ %q не в белом списке мини-аппа", k)
+		}
+	}
+	for k := range allowed {
+		if _, ok := got.Details[k]; !ok {
+			t.Errorf("белый список ждёт %q, агент его не шлёт", k)
+		}
+	}
+}

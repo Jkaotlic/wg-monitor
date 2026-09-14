@@ -138,3 +138,51 @@ func miniappCheckFactsFrom(checkName, detailsJSON string) *miniappCheckFacts {
 		return nil
 	}
 }
+
+// miniappCheckDetailsFrom — белый список details для проверок, чей ответ экран
+// строит из формы, а не из чисел. Ключи совпадают с агентом:
+// checks/dns_split.go и dnswatch/check.go (их тесты держат этот набор).
+// Строки апстримов сторожа (foreign, ru, leftover, missing) несут адреса
+// серверов и наружу не идут.
+func miniappCheckDetailsFrom(checkName, detailsJSON string) map[string]any {
+	var strKeys, boolKeys []string
+	switch checkName {
+	case "dns_split":
+		strKeys = []string{"resolves", "route", "route_tunnel", "checked_at"}
+	case "resolver_guard":
+		strKeys = []string{"mode", "reason", "since", "idle_reason"}
+		boolKeys = []string{"idle", "ready"}
+	default:
+		return nil
+	}
+	if strings.TrimSpace(detailsJSON) == "" {
+		return nil
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal([]byte(detailsJSON), &raw) != nil {
+		return nil
+	}
+	out := map[string]any{}
+	for _, k := range strKeys {
+		var s string
+		if v, ok := raw[k]; ok && json.Unmarshal(v, &s) == nil && s != "" {
+			out[k] = s
+		}
+	}
+	for _, k := range boolKeys {
+		var b bool
+		if v, ok := raw[k]; ok && json.Unmarshal(v, &b) == nil {
+			out[k] = b
+		}
+	}
+	if checkName == "dns_split" {
+		var zones map[string]string
+		if v, ok := raw["zones"]; ok && json.Unmarshal(v, &zones) == nil && len(zones) > 0 {
+			out["zones"] = zones
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

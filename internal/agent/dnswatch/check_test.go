@@ -202,6 +202,28 @@ func TestCheck_ReadsTheLiveWatcher(t *testing.T) {
 	}
 }
 
+// Мини-апп рисует строку «Свой DNS-сервер» по mode, reason, since, idle,
+// idle_reason и ready (miniappCheckDetailsFrom в
+// internal/backend/miniapp_check_facts.go). Переименование ключа здесь молча
+// погасило бы экран.
+func TestCheck_KeysTheMiniappReads(t *testing.T) {
+	cases := []struct {
+		s    fixedSnapshot
+		want []string
+	}{
+		{fixedSnapshot{Ready: true, Idle: true, IdleReason: idleOwnLineRemoved, Mode: ModePrimary}, []string{"mode", "idle", "idle_reason"}},
+		{fixedSnapshot{Mode: ModePrimary}, []string{"mode", "ready"}},
+	}
+	for _, tc := range cases {
+		got := runCheck(t, tc.s)
+		for _, k := range tc.want {
+			if _, ok := got.Details[k]; !ok {
+				t.Errorf("snapshot %+v: нет ключа %q в %#v", tc.s, k, got.Details)
+			}
+		}
+	}
+}
+
 func anyStrings(v any) []string {
 	switch x := v.(type) {
 	case string:

@@ -290,6 +290,10 @@ type miniappCheckStatus struct {
 	// список, а не details_json как есть; nil означает «агент не сказал», и
 	// подменять его нулями нельзя.
 	Facts *miniappCheckFacts `json:"facts,omitempty"`
+	// Details — те поля details_json, по которым экран рисует ответ словами
+	// (раздел «Раздельный DNS», строка «Свой DNS-сервер»). Тоже белый список
+	// (miniappCheckDetailsFrom), только для этих двух проверок.
+	Details map[string]any `json:"details,omitempty"`
 }
 
 type miniappRouterEventsResp struct {
@@ -333,6 +337,7 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 				Status:    row.Status,
 				Timestamp: row.TS.UTC().Format(time.RFC3339),
 				Facts:     miniappCheckFactsFrom(row.CheckName, row.DetailsJSON),
+				Details:   miniappCheckDetailsFrom(row.CheckName, row.DetailsJSON),
 			})
 			if tu, ok := miniappTunnelFromEvent(row); ok {
 				resp.Tunnels = append(resp.Tunnels, tu)
