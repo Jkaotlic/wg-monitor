@@ -202,3 +202,31 @@ export function firmwareStatus(output) {
     hint: fw.hint ?? '',
   }
 }
+
+// Панель роутера. Адреса здесь нет и быть не может: сервер прислал только
+// признаки, а переход делает он же -- по одноразовому билету во внешнем
+// браузере (internal/backend/miniapp_panel_ticket.go).
+export function panelRow(settings) {
+  if (!settings?.panel_known) {
+    return {
+      known: false,
+      value: 'адрес не сохранён',
+      hint: 'Мы не знаем адрес панели этого роутера, поэтому открыть её из приложения нельзя.',
+    }
+  }
+  return {
+    known: true,
+    value: 'известна',
+    hint: settings.panel_scope === 'private' ? 'Адрес панели частный: она откроется только из домашней сети роутера.' : '',
+  }
+}
+
+// panelOpenURL -- абсолютный адрес билета для tg.openLink. Сервер отдаёт путь,
+// а не адрес: публичный адрес бэкенда за релеем знает браузер. Принимается
+// только путь этого же сайта -- чужой адрес в ответе значил бы, что ответ
+// подменён.
+export function panelOpenURL(openPath, origin) {
+  const p = String(openPath ?? '')
+  if (!p.startsWith('/v1/panel/') || p.startsWith('//')) return ''
+  return origin + p
+}

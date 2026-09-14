@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus } from '../src/settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelOpenURL } from '../src/settings.js'
 
 // Пороги живут в backend.yaml и больше нигде: экран печатает то, что прислал
 // сервер (miniappSettingsResp), а не числа из макета.
@@ -182,5 +182,47 @@ describe('пороги без ключей конфига', () => {
     const codes = rows.map((r) => r.code)
     expect(codes).toContain('awg-manager')
     expect(codes).toContain('HydraRoute Neo')
+  })
+})
+
+// Панель роутера: сервер присылает только признаки, адреса на экране нет и
+// быть не может. Переход -- по одноразовому билету во внешнем браузере.
+describe('panelRow', () => {
+  it('публичный адрес: «известна» и кнопка без оговорок', () => {
+    expect(panelRow({ panel_known: true, panel_scope: 'public' })).toEqual({ known: true, value: 'известна', hint: '' })
+  })
+
+  it('частный адрес: кнопка остаётся, но говорим про домашнюю сеть', () => {
+    expect(panelRow({ panel_known: true, panel_scope: 'private' })).toEqual({
+      known: true,
+      value: 'известна',
+      hint: 'Адрес панели частный: она откроется только из домашней сети роутера.',
+    })
+  })
+
+  // «Не опубликована наружу» запрещено: пустой адрес означает «у нас не
+  // сохранён», а не «не опубликована».
+  it('адреса нет: одна строка и никакой кнопки', () => {
+    const row = panelRow({})
+    expect(row).toEqual({ known: false, value: 'адрес не сохранён', hint: 'Мы не знаем адрес панели этого роутера, поэтому открыть её из приложения нельзя.' })
+    expect(row.hint).not.toContain('опубликован')
+  })
+
+  it('в строке нет ни адреса, ни хоста', () => {
+    expect(JSON.stringify(panelRow({ panel_known: true, panel_scope: 'public' }))).not.toMatch(/https?:|\.[a-z]/)
+  })
+})
+
+// tg.openLink принимает только абсолютный адрес, а сервер отдаёт путь: адрес
+// бэкенда за релеем знает браузер, а не сам бэкенд.
+describe('panelOpenURL', () => {
+  it('путь билета становится адресом того же сайта', () => {
+    expect(panelOpenURL('/v1/panel/' + 'ab'.repeat(32), 'https://wgm.example.com')).toBe('https://wgm.example.com/v1/panel/' + 'ab'.repeat(32))
+  })
+
+  it('чужой адрес вместо пути не принимается', () => {
+    expect(panelOpenURL('https://evil.example.com/x', 'https://wgm.example.com')).toBe('')
+    expect(panelOpenURL('//evil.example.com/v1/panel/x', 'https://wgm.example.com')).toBe('')
+    expect(panelOpenURL('', 'https://wgm.example.com')).toBe('')
   })
 })

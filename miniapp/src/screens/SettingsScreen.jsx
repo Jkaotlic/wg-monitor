@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVersions, setUpdateReminder } from '../api.js'
+import { fetchRouterSettings, fetchRouterChecks, setRouterNotify, fetchRouterVersions, setUpdateReminder, createPanelTicket } from '../api.js'
+import { openExternal } from '../telegram.js'
 import { useCommand } from '../useCommand.js'
-import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus } from '../settings.js'
+import { thresholdRows, auditRows, doctorRows, pingRows, firmwareStatus, panelRow, panelOpenURL } from '../settings.js'
 import { versionsRows, unknownLine, installedRows, rebootLine } from '../versions.js'
 import { humanAge } from '../labels.js'
 import { confirmSheet, localSheet } from '../sheet.js'
@@ -26,6 +27,10 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
   const [versions, setVersions] = useState(null)
   const [versionsError, setVersionsError] = useState(null)
   const [newsBusy, setNewsBusy] = useState(false)
+
+  const [panelBusy, setPanelBusy] = useState(false)
+  const [panelNote, setPanelNote] = useState('')
+  const [panelError, setPanelError] = useState('')
 
   const [notifyBusy, setNotifyBusy] = useState(false)
   const [notifyError, setNotifyError] = useState(null)
@@ -71,6 +76,24 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
     load()
     loadVersions()
   }, [routerID])
+
+  // Билет берётся в момент нажатия, а не заранее: он живёт минуту и
+  // одноразовый. Браузер открывается снаружи Telegram, где сессии приложения
+  // нет, -- поэтому и нужен билет.
+  const openPanel = () => {
+    setPanelBusy(true)
+    setPanelError('')
+    setPanelNote('')
+    return createPanelTicket(routerID)
+      .then((t) => {
+        const url = panelOpenURL(t?.open_path, window.location.origin)
+        if (!url) throw new Error('bad ticket')
+        openExternal(url)
+        setPanelNote('Панель откроется во внешнем браузере. Не открылась — нажмите кнопку ещё раз.')
+      })
+      .catch(() => setPanelError('Не удалось открыть панель. Попробуйте ещё раз.'))
+      .finally(() => setPanelBusy(false))
+  }
 
   const auditOut = audit.result?.status === 'ok' ? auditRows(audit.result.output) : []
   const doctorOut = doctor.result?.status === 'ok' ? doctorRows(doctor.result.output) : []
@@ -254,6 +277,30 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
             </div>
           )}
         </Section>
+
+        {/* Панель роутера -- владельцу и админу; оператору роутера секции нет
+            вовсе. Адреса на экране нет: только «известна» и кнопка. */}
+        {settings && (settings.role === 'owner' || settings.role === 'admin') && (() => {
+          const panel = panelRow(settings)
+          return (
+            <Section title="Панель роутера">
+              <div class="card settings-card">
+                <DataRow title="Панель роутера" value={panel.value} valueTone={panel.known ? 'ok' : 'muted'} />
+              </div>
+              {panel.hint && <p class="hint">{panel.hint}</p>}
+              {panel.known && (
+                <>
+                  <button type="button" class="btn btn-ghost btn-wide" disabled={panelBusy} onClick={openPanel}>
+                    {panelBusy ? 'Открываем…' : 'Открыть панель роутера'}
+                  </button>
+                  <p class="hint">Панель спросит свой логин и пароль — мы их не знаем и не храним.</p>
+                  {panelNote && <p class="hint">{panelNote}</p>}
+                  {panelError && <p class="state state-error">{panelError}</p>}
+                </>
+              )}
+            </Section>
+          )
+        })()}
 
         <Section title="Прошивка роутера">
           <button type="button" class="btn btn-ghost btn-wide" disabled={firmware.busy} onClick={() => firmware.run('firmware_status', {}, deadline)}>
