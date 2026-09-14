@@ -46,6 +46,13 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/timeline", reqID(auth(miniappRouterTimelineHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/settings", reqID(auth(miniappRouterSettingsHandler(d))))
+	// Панель роутера по одноразовому билету (miniapp_panel_ticket.go): выдача
+	// в сессии мини-аппа, страница и переход -- во внешнем браузере без
+	// сессии, поэтому под общим лимитом входов.
+	panelTickets := newPanelTicketStore()
+	mux.Handle("POST /v1/miniapp/routers/{id}/panel/ticket", reqID(auth(miniappPanelTicketHandler(d, panelTickets))))
+	mux.Handle("GET /v1/panel/{ticket}", reqID(entranceLimit(panelTicketPageHandler(panelTickets))))
+	mux.Handle("POST /v1/panel/{ticket}", reqID(entranceLimit(panelTicketRedeemHandler(d, panelTickets))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/notify", reqID(auth(miniappNotifyHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/vpn", reqID(auth(miniappVPNAccountsHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/vpn/issue", reqID(auth(miniappVPNIssueHandler(d))))
