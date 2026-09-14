@@ -151,6 +151,15 @@ describe('итоги', () => {
     expect(generic).toBe('Не удалось обновить awg-manager — роутер ответил ошибкой.')
   })
 
+  // Ruling M3: пока автоустановщик awg-manager сам считает обновление,
+  // action/awgm_update.go возвращает errAwgmStillChecking -- это не отказ
+  // роутера, и не должно читаться как "роутер ответил ошибкой".
+  it('awg-manager: ещё проверяет обновления -- не общая ошибка', () => {
+    expect(awgmUpdateText({ status: 'err', output: 'awg-manager ещё проверяет обновления — повторите через минуту' })).toBe(
+      'awg-manager ещё проверяет обновления — повторите через минуту.',
+    )
+  })
+
   it('HydraRoute Neo', () => {
     expect(hrneoUpdateText({ status: 'ok', output: '{"updated":true,"from":"3.18.3-1","to":"3.19.0-1","running":true}' })).toBe(
       'HydraRoute Neo обновлён: 3.18.3-1 → 3.19.0-1.',
@@ -196,6 +205,21 @@ describe('итоги', () => {
       text: MAINT_TEXTS.firmwareForbidden,
     })
     expect(refusalFromResult({ status: 'ok', output: 'router reboot disabled in agent config' })).toBeNull()
+  })
+
+  // Итог прошивки: агентский отказ по настройкам -- своей фразой (refusalFromResult),
+  // успех и любая ДРУГАЯ ошибка агента -- нейтральным текстом, без сырого
+  // вывода (например "ndmc components commit: exit status 1").
+  it('прошивка: отказ по настройкам, успех и прочая ошибка -- без сырого вывода агента', () => {
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'ok', output: 'firmware install started' })).toBe(
+      'Роутер ставит прошивку и перезагрузится.',
+    )
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'ndmc components commit: exit status 1' })).toBe(
+      'Не удалось поставить прошивку.',
+    )
+    expect(maintenanceOutcomeLabel('firmware_install', { status: 'err', output: 'firmware install disabled in agent config' })).toBe(
+      MAINT_TEXTS.firmwareForbidden,
+    )
   })
 
   it('maintenanceOutcomeLabel выбирает по действию и молчит о чужих', () => {

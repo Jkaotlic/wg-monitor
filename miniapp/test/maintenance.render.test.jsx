@@ -19,14 +19,14 @@ const AWGM_ROW = { component: 'awgmgr', name: 'awg-manager', installed: '2.19.0+
 const OPERATOR = { role: 'operator', agent_version: 'v0.32.0' }
 const VERSIONS = { rows: [AWGM_ROW], unknown: [], installed: { awgmgr: '2.19.0+r2', hrneo: '3.18.3', hrneo_installed: true } }
 
-async function mount({ settings = OPERATOR, versions = VERSIONS } = {}) {
+async function mount({ settings = OPERATOR, versions = VERSIONS, routerName = 'home' } = {}) {
   mocks.settings = settings
   mocks.versions = versions
   const sheets = []
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
-    render(<SettingsScreen routerID={2} routerName="home" asleep={false} openSheet={(s) => sheets.push(s)} onClose={() => {}} />, root)
+    render(<SettingsScreen routerID={2} routerName={routerName} asleep={false} openSheet={(s) => sheets.push(s)} onClose={() => {}} />, root)
   })
   await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
   return { root, sheets, unmount: () => { render(null, root); root.remove() } }
@@ -131,6 +131,22 @@ describe('обслуживание на экране настроек', () => {
     await click(button(root, 'Установить прошивку'))
     expect(sheets[0].action).toBe('firmware_install')
     expect(sheets[0].confirmPhrase).toBe('home')
+    unmount()
+  })
+
+  // Имя роутера ещё не пришло (fleet-список не догрузился) -- confirmReady
+  // на пустой фразе проходит без ввода (sheet.js), и сервер ответил бы
+  // confirm_mismatch. Кнопки, которые требуют набор имени, не должны
+  // рисоваться, пока имени нет.
+  it('имя роутера не загружено -- кнопок перезагрузки и прошивки нет', async () => {
+    const fwRow = { component: 'firmware', name: 'KeeneticOS', installed: '5.02.A.8.0-3', available: '5.02.A.9.0-0' }
+    const { root, unmount } = await mount({
+      routerName: '',
+      versions: { ...VERSIONS, rows: [fwRow], reboot_hint: 'x' },
+    })
+    expect(root.textContent).toContain(MAINT_TEXTS.rebootBanner)
+    expect(button(root, 'Перезагрузить роутер')).toBeUndefined()
+    expect(button(root, 'Установить прошивку')).toBeUndefined()
     unmount()
   })
 

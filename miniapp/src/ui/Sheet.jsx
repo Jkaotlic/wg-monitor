@@ -135,7 +135,12 @@ export function Sheet({ sheet, asleep, onClose }) {
 
         {phase === 'error' && (
           <div class="sheet-result">
-            <p class="state state-error">{commandErrorText(errorCode) || error}</p>
+            {/* errorCode приходит только от ApiError (api.js): сервер отказал
+                по коду, но для него ещё нет своей русской фразы. error там --
+                `${path} failed: ${status}`, инженерный текст для сети, не для
+                человека. Без кода (например таймаут ожидания) error уже несёт
+                готовую русскую фразу -- её и показываем. */}
+            <p class="state state-error">{commandErrorText(errorCode) || (errorCode ? 'Команда не отправлена' : error)}</p>
             <button type="button" class="btn btn-primary" onClick={onClose}>Закрыть</button>
           </div>
         )}

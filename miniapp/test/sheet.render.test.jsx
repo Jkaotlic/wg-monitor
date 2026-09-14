@@ -101,4 +101,19 @@ describe('лист команды', () => {
     render(null, root)
     root.remove()
   })
+
+  // commandErrorText не знает код -- значит, сервер отказал по причине, для
+  // которой ещё нет своей русской фразы. Показывать путь запроса ("/routers/5
+  // /commands failed: 400") нельзя -- это инженерный текст, а не ответ человеку.
+  it('отказ сервера с неизвестным кодом -- нейтральный текст, а не путь запроса', async () => {
+    mocks.sendReply = new ApiError(400, 'weird_unmapped_code', '/routers/2/commands failed: 400')
+    mocks.result = null
+    const root = await mount(confirmSheet({ routerID: 2, title: 't', body: 'b', action: 'service_restart', args: { name: 'hrneo' } }))
+    await act(async () => primary(root).click())
+    await flush()
+    expect(root.textContent).toContain('Команда не отправлена')
+    expect(root.textContent).not.toContain('/routers/2/commands failed')
+    render(null, root)
+    root.remove()
+  })
 })

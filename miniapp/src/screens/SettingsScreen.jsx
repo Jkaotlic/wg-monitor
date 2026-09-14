@@ -62,7 +62,6 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
 
   const audit = useCommand(routerID)
   const firmware = useCommand(routerID)
-  const install = useCommand(routerID)
   const doctor = useCommand(routerID)
   const hrneo = useCommand(routerID)
   const pingNow = useCommand(routerID)
@@ -159,7 +158,9 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
       const row = updateRow(versions, 'hrneo')
       return { label: 'Обновить HydraRoute Neo', open: () => openSheet(hrneoUpdateSheet({ routerID, installed: row.installed, available: row.available, asleep })) }
     }
-    if (component === 'firmware' && !refusals.firmware) {
+    // routerName ещё не пришло (fleet не догрузился) -- confirmReady на пустой
+    // фразе проходит без ввода (sheet.js), и сервер ответил бы confirm_mismatch.
+    if (component === 'firmware' && !refusals.firmware && routerName) {
       const row = updateRow(versions, 'firmware')
       return {
         label: 'Установить прошивку',
@@ -329,11 +330,11 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
                 <p class="state state-warn">{MAINT_TEXTS.rebootBanner}</p>
                 {refusals.reboot ? (
                   <p class="hint">{refusals.reboot}</p>
-                ) : (
+                ) : routerName ? (
                   <button type="button" class="btn btn-danger btn-wide" onClick={() => openSheet(rebootSheet({ routerID, routerName, asleep, onResult: noteRefusal }))}>
                     Перезагрузить роутер
                   </button>
-                )}
+                ) : null}
               </div>
             )}
             {!agentReady && <p class="hint">{MAINT_TEXTS.tooOld}</p>}
@@ -439,7 +440,7 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
               </p>
             </div>
           )}
-          {fw?.known && fw.updateAvailable && maintain && openSheet && !refusals.firmware && (
+          {fw?.known && fw.updateAvailable && maintain && openSheet && !refusals.firmware && routerName && (
             <button
               type="button"
               class="btn btn-danger btn-wide"
@@ -451,7 +452,6 @@ export function SettingsScreen({ routerID, routerName, asleep, openSheet, onClos
             </button>
           )}
           {fw?.known && fw.updateAvailable && maintain && refusals.firmware && <p class="hint">{refusals.firmware}</p>}
-          {install.error && <p class="state state-error">{install.error}</p>}
         </Section>
 
         <Section title="Проверка связи">

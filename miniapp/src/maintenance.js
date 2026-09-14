@@ -194,6 +194,10 @@ export function awgmUpdateText(result) {
   const out = String(result?.output ?? '')
   if (out.includes('не вернулся с новой версией')) return 'awg-manager не вернулся с новой версией за 5 минут.'
   if (out.includes('отказался обновляться')) return 'awg-manager отказался обновляться.'
+  // errAwgmStillChecking (action/awgm_update.go) -- автоустановщик awg-manager
+  // ещё считает результат сам; это не отказ роутера, и не должно звучать как
+  // общая ошибка.
+  if (out.includes('ещё проверяет')) return 'awg-manager ещё проверяет обновления — повторите через минуту.'
   return 'Не удалось обновить awg-manager — роутер ответил ошибкой.'
 }
 
@@ -305,8 +309,14 @@ export function maintenanceOutcomeLabel(action, result, args = {}) {
       return opkgUpgradeOutcome(result)?.text ?? ''
     case 'service_restart':
       return serviceRestartText(args?.name, result)
-    case 'firmware_install':
-      return refusalFromResult(result)?.text ?? ''
+    case 'firmware_install': {
+      // Отказ агента по настройкам -- своей фразой; любой другой исход не
+      // должен показывать сырой вывод агента (например
+      // "ndmc components commit: exit status 1").
+      const refusal = refusalFromResult(result)
+      if (refusal) return refusal.text
+      return result?.status === 'ok' ? 'Роутер ставит прошивку и перезагрузится.' : 'Не удалось поставить прошивку.'
+    }
     default:
       return ''
   }
