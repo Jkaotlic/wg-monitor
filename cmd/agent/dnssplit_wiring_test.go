@@ -130,3 +130,22 @@ func TestDNSChangedHook_InvalidatesReportedSplit(t *testing.T) {
 		t.Errorf("настройки прочитаны %d раз, ожидалось 2: хук не отпустил кеш проверки из отчёта", reads)
 	}
 }
+
+// Раннер из сборки агента несёт все три защиты сброса DNS: путь конфига (рядом
+// ляжет снимок «до»), свой резолвер оператора и хук сброса кеша.
+func TestBuildRunner_WiresDNSResetGuards(t *testing.T) {
+	cfg := &agent.Config{}
+	cfg.DNSWatchdog.Endpoint = "https://dns.example.com/path"
+	awg := awgmgr.New("http://127.0.0.1:1")
+	list := buildSingleChecks(cfg, awg, nil)
+	r := buildRunner(cfg, "/opt/etc/wg-monitor/config.yaml", awg, nil, nil, list)
+	if r.ConfigPath != "/opt/etc/wg-monitor/config.yaml" {
+		t.Errorf("ConfigPath = %q: снимок «до» не ляжет рядом с конфигом", r.ConfigPath)
+	}
+	if r.OwnResolverEndpoint != cfg.DNSWatchdog.Endpoint {
+		t.Errorf("OwnResolverEndpoint = %q: сброс снёс бы свой резолвер", r.OwnResolverEndpoint)
+	}
+	if r.DNSChanged == nil {
+		t.Error("DNSChanged не проведён: после сброса проверка раздельного DNS отвечала бы по старым настройкам")
+	}
+}

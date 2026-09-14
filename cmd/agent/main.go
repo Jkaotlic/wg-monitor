@@ -126,19 +126,7 @@ func main() {
 		LockTTL:  8 * time.Minute,
 		Exec:     actions.DefaultExec,
 	}
-	runner := &actions.Runner{
-		AwgClient:            awgClient,
-		ForceRecheck:         rep.ForceResumed,
-		Opkg:                 opkg,
-		Exec:                 actions.DefaultExec,
-		AllowRouterReboot:    cfg.Maintenance.AllowRouterReboot,
-		AllowFirmwareInstall: cfg.Maintenance.AllowFirmwareInstall,
-		ConfigPath:           *configPath,
-		BackendURL:           cfg.Backend.URL,
-		Version:              Version,
-		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
-		DNSChanged:           dnsChangedHook(singleChecks),
-	}
+	runner := buildRunner(cfg, *configPath, awgClient, opkg, rep.ForceResumed, singleChecks)
 	loop := cmdloop.New(client, runner, 30)
 	loop.SetResultCachePath(cfg.State.CommandResultPath())
 	go loop.Run(ctx)
@@ -235,6 +223,26 @@ func buildSingleChecks(cfg *agent.Config, awgClient *awgmgr.Client, logger *slog
 		}
 	}
 	return list
+}
+
+// buildRunner собирает исполнителя команд. Вынесено из main, чтобы проводку
+// защит сброса DNS (свой резолвер, снимок «до», сброс кеша проверки) можно было
+// проверить тестом: удалённое поле иначе компилируется и молчит.
+func buildRunner(cfg *agent.Config, configPath string, awgClient *awgmgr.Client, opkg *actions.OpkgRunner,
+	forceRecheck func(context.Context), singleChecks []checks.Check) *actions.Runner {
+	return &actions.Runner{
+		AwgClient:            awgClient,
+		ForceRecheck:         forceRecheck,
+		Opkg:                 opkg,
+		Exec:                 actions.DefaultExec,
+		AllowRouterReboot:    cfg.Maintenance.AllowRouterReboot,
+		AllowFirmwareInstall: cfg.Maintenance.AllowFirmwareInstall,
+		ConfigPath:           configPath,
+		BackendURL:           cfg.Backend.URL,
+		Version:              Version,
+		OwnResolverEndpoint:  cfg.DNSWatchdog.Endpoint,
+		DNSChanged:           dnsChangedHook(singleChecks),
+	}
 }
 
 // dnsChangedHook -- что сделать после настоящего сброса DNS: отпустить кеш
