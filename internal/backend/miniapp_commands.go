@@ -19,7 +19,7 @@ import (
 // session is any Telegram user resolved to a per-router role (admin / owner /
 // operator). So this list is scoped to "things the person who owns THIS router
 // should be able to do to THIS router", which both subtracts from the dashboard's
-// list (no dns_reset, no agent config editing, no opkg/entware maintenance) and
+// list (no opkg/entware maintenance) and
 // adds to it (tunnel probes and restart -- see below).
 //
 // Three entries widen the browser-session boundary that wizard_handler.go draws.
@@ -46,7 +46,9 @@ import (
 // the denied set. In particular update_backend_url is fleet-takeover blast radius
 // (same reasoning as the dashboard's hidden-update-url rejection), tunnel_delete
 // is irreversible, tunnel_enable/disable are configuration changes rather than
-// repairs, and dns_reset is router-global -- it stays with the admin's dashboard.
+// repairs. dns_reset and agent config editing are router-global and came in
+// only behind their own gates: admin-only, an agent version floor and a
+// confirming screen (see their entries below).
 var miniappCommandAllowlist = map[string]bool{
 	// Read-only, already trusted to the dashboard.
 	"force_recheck":  true,
@@ -137,6 +139,22 @@ var miniappCommandAllowlist = map[string]bool{
 	// и остаются на пути мастера и CLI -- перенаправить адрес бэкенда значит
 	// захватить весь парк, и запрет живёт на стороне агента, где его не
 	// обойти правкой сервера. update_backend_url сюда не переезжает вовсе.
+	// Сброс DNS (решение оператора № 5, отменяет D3 программы мини-аппа).
+	// Радиус router-global, поэтому границы те же, что у правки конфига, плюс
+	// обязательный предпросмотр:
+	//
+	//   - только админ бота (miniappAdminOnlyActions), отказ 404 not_found --
+	//     и на постановке, и на опросе результата;
+	//   - пол версии агента с отказом по умолчанию
+	//     (miniappActionMinAgentVersion): старый агент не знает dry_run и на
+	//     «посмотреть» сделал бы настоящий сброс, поэтому пол стоит и на
+	//     предпросмотре;
+	//   - экран, который таким роутерам не рисуется, кнопка сброса только
+	//     после предпросмотра и подтверждение набором имени роутера.
+	//
+	// Аргумент один -- dry_run, его проверяет ветка sanitizeWizardCommandArgs.
+	"dns_reset": true,
+
 	"agent_config_get":    true,
 	"update_agent_config": true,
 }

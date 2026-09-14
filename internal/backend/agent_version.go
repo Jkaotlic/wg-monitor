@@ -63,11 +63,12 @@ func agentSemver(s string) (string, bool) {
 // Пол стоит только у записи. Чтение конфига (agent_config_get) агент умеет с
 // давних версий, и пол на нём закрыл бы экран исправным роутерам.
 //
-// dns_reset попадёт сюда вместе со своим экраном (пункт бэклога о сбросе
-// DNS): его радиус router-global, а старый агент не знает про dry_run и
-// сделает настоящий сброс вместо предпросмотра.
+// dns_reset стоит здесь целиком, вместе с предпросмотром: его радиус
+// router-global, а старый агент не знает про dry_run и на «посмотреть, что
+// изменится» сделал бы настоящий сброс.
 var miniappActionMinAgentVersion = map[string]string{
 	"update_agent_config": "v0.31.0",
+	"dns_reset":           "v0.31.0",
 }
 
 // miniappAdminOnlyActions -- действия, чей радиус router-global: их видит и
@@ -81,4 +82,5 @@ var miniappActionMinAgentVersion = map[string]string{
 var miniappAdminOnlyActions = map[string]bool{
 	"agent_config_get":    true,
 	"update_agent_config": true,
+	"dns_reset":           true,
 }

@@ -64,6 +64,15 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// смотреть вправе и оператор. До агента доезжает только имя сайта: ветка
 		// sanitizeWizardCommandArgs общая с route_lookup.
 		"dns_open",
+		// Сброс DNS (решение оператора № 5, отменяет D3 программы мини-аппа).
+		// Ушёл из denied не потому, что стал безопаснее: радиус как был
+		// router-global. Границ у него пять, и каждая независима: только админ
+		// (miniappAdminOnlyActions), пол версии агента с отказом по умолчанию
+		// (miniappActionMinAgentVersion) -- старый агент не знает dry_run и
+		// сделал бы настоящий сброс вместо предпросмотра, -- экран, который
+		// таким роутерам не рисуется, обязательный предпросмотр перед кнопкой
+		// сброса и подтверждение набором имени роутера. Снимок «до» пишет агент.
+		"dns_reset",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -79,7 +88,6 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_delete",      // irreversible
 		"self_update",        // audited deploy flow
 		"tunnel_import",      // route/config mutation
-		"dns_reset",          // router-global; stays on the dashboard
 		"opkg_upgrade",
 		"entware_clean_run",
 		// Ответ несёт ndms_name каждого туннеля -- топологию, которую белый
@@ -507,10 +515,15 @@ func TestMiniappStillDeniesDangerousActions(t *testing.T) {
 	// TestMiniappAgentConfigDeniedToOwnerAndOperator,
 	// TestMiniappRefusesDangerousActionToOldAgent и agentConfig.test.js.
 	//
+	// dns_reset ушёл отсюда тем же порядком: только админ, пол версии агента
+	// в двух местах (бэкенд и экран), обязательный предпросмотр и
+	// подтверждение набором имени. Тесты: TestMiniappDNSResetRefusedToOldAgent,
+	// TestMiniappDNSResetDeniedToOwnerAndOperator, dnsReset.test.js.
+	//
 	// update_backend_url не уезжает НИКОГДА: его белый список живёт на
 	// стороне агента, и перенаправление адреса бэкенда -- захват всего парка.
 	for _, action := range []string{
-		"tunnel_delete", "dns_reset", "update_backend_url", "tunnel_import",
+		"tunnel_delete", "update_backend_url", "tunnel_import",
 		"opkg_upgrade", "self_update",
 		"service_restart", "entware_clean_run",
 	} {
@@ -901,5 +914,126 @@ func TestMiniappFirmwareResultDeniedToOperator(t *testing.T) {
 	mine := miniappPollResult(t, h, ownedID, ownerTG, issued.CmdID)
 	if mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(outcome)) {
 		t.Fatalf("владелец, опрос результата прошивки: код %d тело %s, ожидались 200 и вывод", mine.Code, mine.Body.String())
+	}
+}
+
+// ПЕРВАЯ преграда сброса DNS (бэкенд, отказ по умолчанию): агенту ниже пола
+// команда не ставится в очередь вовсе. Старый агент не знает про dry_run и на
+// «посмотреть, что изменится» сделал бы настоящий сброс -- поэтому отказ
+// касается и предпросмотра, а не только сброса.
+func TestMiniappDNSResetRefusedToOldAgent(t *testing.T) {
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	bodies := []string{
+		`{"action":"dns_reset","args":{"dry_run":true}}`,
+		`{"action":"dns_reset","args":{"dry_run":false}}`,
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.30.1"); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range bodies {
+		rec := miniappAgentConfigPost(t, h, ownedID, 999, body)
+		if rec.Code != http.StatusConflict || !bytes.Contains(rec.Body.Bytes(), []byte("agent_too_old")) {
+			t.Errorf("агент v0.30.1, %s: код %d тело %s, ожидался 409 agent_too_old", body, rec.Code, rec.Body.String())
+		}
+	}
+	if _, err := d.SQL().Exec(`UPDATE users SET last_deployed_version=NULL WHERE id=?`, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range bodies {
+		if rec := miniappAgentConfigPost(t, h, ownedID, 999, body); rec.Code != http.StatusConflict {
+			t.Errorf("версия неизвестна, %s: код %d, ожидался 409", body, rec.Code)
+		}
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("сброс DNS старому агенту встал в очередь: %+v", sink.enqueued)
+	}
+
+	// От пола и выше предпросмотр уходит, и dry_run доезжает как есть.
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := miniappAgentConfigPost(t, h, ownedID, 999, bodies[0]); rec.Code != http.StatusAccepted {
+		t.Fatalf("агент v0.31.0: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 || sink.enqueued[0].Action != "dns_reset" || sink.enqueued[0].Args["dry_run"] != true {
+		t.Fatalf("в очереди %+v, ожидался один dns_reset с dry_run=true", sink.enqueued)
+	}
+}
+
+// Радиус сброса DNS router-global -- круг только админ бота, отказ 404
+// not_found. И путь ЧТЕНИЯ закрыт так же, как постановка: в ответе агента
+// лежат строки DNS роутера и путь к снимку «до», и владелец с идентификатором
+// команды не должен дочитать их из чужого ответа.
+func TestMiniappDNSResetDeniedToOwnerAndOperator(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	if err := d.RouterOperators().Add(ownedID, 555, 999); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		for _, body := range []string{
+			`{"action":"dns_reset","args":{"dry_run":true}}`,
+			`{"action":"dns_reset","args":{"dry_run":false}}`,
+		} {
+			rec := miniappAgentConfigPost(t, h, ownedID, who.tgID, body)
+			if rec.Code != http.StatusNotFound || !bytes.Contains(rec.Body.Bytes(), []byte("not_found")) {
+				t.Errorf("%s, %s: код %d тело %s, ожидался 404 not_found", who.name, body, rec.Code, rec.Body.String())
+			}
+		}
+	}
+	if len(sink.enqueued) != 0 {
+		t.Fatalf("не-админ поставил сброс DNS в очередь: %+v", sink.enqueued)
+	}
+
+	rec := miniappAgentConfigPost(t, h, ownedID, 999, `{"action":"dns_reset","args":{"dry_run":true}}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("админ: код %d тело %s, ожидался 202", rec.Code, rec.Body.String())
+	}
+	var issued struct {
+		CmdID string `json:"cmd_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &issued); err != nil {
+		t.Fatal(err)
+	}
+	const snapshot = "/opt/etc/wg-monitor/dns-before-1757600000.txt"
+	sink.commands = map[string]wire.Command{issued.CmdID: {ID: issued.CmdID, Action: "dns_reset"}}
+	sink.results = map[string]wire.CommandResult{
+		issued.CmdID: {ID: issued.CmdID, Status: "ok", Output: "снимок «до»: " + snapshot + "\n  − tls upstream 198.51.100.9 sni resolver.example.com\n"},
+	}
+	poll := func(telegramUserID int64) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet,
+			fmt.Sprintf("/v1/miniapp/routers/%d/commands/%s?wait_sec=0", ownedID, issued.CmdID), nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", telegramUserID))
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, req)
+		return rr
+	}
+	for _, who := range []struct {
+		name string
+		tgID int64
+	}{{"владелец", ownerTG}, {"оператор", 555}} {
+		got := poll(who.tgID)
+		if got.Code != http.StatusNotFound {
+			t.Errorf("%s, опрос результата сброса: код %d тело %s, ожидался 404", who.name, got.Code, got.Body.String())
+		}
+		for _, secret := range []string{snapshot, "198.51.100.9", "resolver.example.com"} {
+			if bytes.Contains(got.Body.Bytes(), []byte(secret)) {
+				t.Errorf("%s дочитал %q из чужого ответа: %s", who.name, secret, got.Body.String())
+			}
+		}
+	}
+	if mine := poll(999); mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(snapshot)) {
+		t.Fatalf("админ, опрос результата: код %d тело %s, ожидались 200 и путь снимка", mine.Code, mine.Body.String())
 	}
 }
