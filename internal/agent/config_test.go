@@ -16,7 +16,7 @@ backend:
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 
 agent:
-  nickname: testkeen
+  nickname: router-a
   interval_sec: 60
 checks:
   awg:
@@ -34,7 +34,7 @@ checks:
 	if cfg.Backend.URL != "https://wgmonitor.example.com" {
 		t.Errorf("url: %q", cfg.Backend.URL)
 	}
-	if cfg.Agent.Nickname != "testkeen" {
+	if cfg.Agent.Nickname != "router-a" {
 		t.Errorf("nickname: %q", cfg.Agent.Nickname)
 	}
 	if cfg.Agent.Interval() != 60*time.Second {
@@ -53,7 +53,7 @@ backend:
   url: https://wgmonitor.example.com
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   awg:
     interface: awg0
@@ -103,7 +103,7 @@ backend:
   url: http://insecure.example
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   awg:
     interface: awg0
@@ -126,7 +126,7 @@ backend:
   url: http://127.0.0.1:18080
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   awg:
     interface: awg0
@@ -149,7 +149,7 @@ backend:
   url: https://wgmonitor.example.com
   token: 0123456789abcdef0123456789abcdef0123456789abcdef
 agent:
-  nickname: testkeen
+  nickname: router-a
   interval_sec: 30
 checks:
   awg:
@@ -192,7 +192,7 @@ func TestLoadConfig_MinimalNoAWGSection_OK(t *testing.T) {
 	path := filepath.Join(dir, "c.yaml")
 	body := `
 backend: { url: https://x.example, token: 0123456789abcdef0123456789abcdef0123456789abcdef }
-agent: { nickname: testkeen }
+agent: { nickname: router-a }
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -215,7 +215,7 @@ func TestLoadConfig_AwgManagerURLAliasAndPasswordFile(t *testing.T) {
 	path := filepath.Join(dir, "c.yaml")
 	body := `
 backend: { url: https://x.example, token: 0123456789abcdef0123456789abcdef0123456789abcdef }
-agent: { nickname: testkeen }
+agent: { nickname: router-a }
 awg_manager:
   url: http://127.0.0.1:3333
   login: admin
@@ -248,7 +248,7 @@ backend:
   url: https://wgmonitor.example.com
   token: 0123456789abcdef0123456789abcdef0123456789abcdef
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   awg:
     interface: awg0
@@ -288,7 +288,7 @@ func TestLoadConfig_AutoDiscoverEnablesRKNDefaults(t *testing.T) {
   url: https://wgmon.example.org
   token: 0123456789abcdef0123456789abcdef0123456789abcdef
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   dns:
     auto_discover: true
@@ -312,7 +312,7 @@ backend:
   url: https://wgmon.example.org
   token: abcdefghijklmnopqrstuvwxyz0123456789ABCD
 agent:
-  nickname: testkeen
+  nickname: router-a
   interval_sec: 60
 checks:
   awg:
@@ -335,7 +335,7 @@ backend:
   url: https://wgmonitor.example.com
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   awg:
     interface: awg0
@@ -365,7 +365,7 @@ backend:
   url: https://wgmonitor.example.com
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 agent:
-  nickname: testkeen
+  nickname: router-a
 checks:
   awg:
     interface: awg0
@@ -446,7 +446,7 @@ backend:
   url: https://wgmonitor.example.com
   token: deadbeefcafebabedeadbeefcafebabedeadbeefcafebabedeadbeefcafebabe
 agent:
-  nickname: testkeen
+  nickname: router-a
   interval_sec: 60
 ` + extra
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
