@@ -1477,7 +1477,7 @@ func TestCmdResult_ServiceRestartRelaysThroughTGNotifier(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
 	tok := "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02"
-	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
+	d.Users().Insert("vasya", tok, "198.51.100.20", "awg0")
 
 	rc := &relayCapture{}
 	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "service_restart", ChatID: 1, MessageID: 2}}
