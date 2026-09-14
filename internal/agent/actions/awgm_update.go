@@ -33,6 +33,11 @@ const (
 
 var errAwgmUpdateTimeout = errors.New("awg-manager не вернулся с новой версией за 5 минут")
 
+// errAwgmStillChecking -- ruling M3 + fix round 1, п.1: awg-manager отвечает
+// checking:true дольше 30с. Решать «уже последняя версия» по половинчатому
+// ответу значило бы соврать владельцу -- честнее сказать «попробуй позже».
+var errAwgmStillChecking = errors.New("awg-manager ещё проверяет обновления — повторите через минуту")
+
 // AwgmUpdate обновляет awg-manager его собственным API и ждёт, пока демон
 // вернётся с другой версией.
 //
@@ -49,28 +54,48 @@ func AwgmUpdate(ctx context.Context, cli AwgUpdateClient, sleep func(context.Con
 	if err != nil {
 		return "", fmt.Errorf("проверка обновления awg-manager: %w", err)
 	}
+	// Ruling M3 + fix round 1, п.1: первый запрос идёт с force=true (просим
+	// свежий расчёт); пока демон отвечает checking:true, он этот расчёт уже
+	// делает, и повторный force=true запустил бы его заново вхолостую --
+	// поэтому переспрашиваем со force=false. Не сошлось за 30с -- явная
+	// ошибка, а не тихое «уже последняя».
 	checkDeadline := now().Add(awgmCheckingTimeout)
 	for check.Checking && now().Before(checkDeadline) {
 		if err := sleep(ctx, awgmCheckingInterval); err != nil {
 			return "", err
 		}
-		check, err = cli.UpdateCheck(ctx, true)
+		check, err = cli.UpdateCheck(ctx, false)
 		if err != nil {
 			return "", fmt.Errorf("проверка обновления awg-manager: %w", err)
 		}
 	}
-
-	from := strings.TrimSpace(check.CurrentVersion)
-	if from == "" {
-		info, err := cli.SystemInfo(ctx)
-		if err != nil {
-			return "", fmt.Errorf("версия awg-manager: %w", err)
-		}
-		from = info.Version
+	if check.Checking {
+		return "", errAwgmStillChecking
 	}
+
 	if !check.Available {
+		from := strings.TrimSpace(check.CurrentVersion)
+		if from == "" {
+			info, err := cli.SystemInfo(ctx)
+			if err != nil {
+				return "", fmt.Errorf("версия awg-manager: %w", err)
+			}
+			from = info.Version
+		}
 		return encodeAwgmUpdate(wire.AwgmUpdateResult{From: from, To: from})
 	}
+
+	// Fix round 1, п.2: update/check.currentVersion и system/info.version --
+	// разные эндпоинты, форматы могут расходиться («2.19.0» vs «2.19.0+r2»).
+	// Базовую версию для постусловия читаем из SystemInfo ПРЯМО ПЕРЕД apply --
+	// тем же эндпоинтом и в том же формате, что и опрос после, иначе первое же
+	// расхождение форматов читалось бы как ложное «обновилось».
+	baseline, err := cli.SystemInfo(ctx)
+	if err != nil {
+		return "", fmt.Errorf("версия awg-manager: %w", err)
+	}
+	from := baseline.Version
+
 	if err := cli.UpdateApply(ctx); err != nil && awgmgrAuthOrNotFound(err) {
 		return "", fmt.Errorf("awg-manager отказался обновляться: %w", err)
 	}

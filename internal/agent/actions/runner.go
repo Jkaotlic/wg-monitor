@@ -150,9 +150,11 @@ var actionTimeoutOverrides = map[string]time.Duration{
 	"self_update":           300 * time.Second,
 	"firmware_install":      600 * time.Second,
 	"diag_now":              75 * time.Second,
-	// awgm_update ждёт возвращения демона до 5 минут; бюджет шире, чтобы
-	// своё «не вернулся за 5 минут» действие успело сказать само.
-	"awgm_update": 360 * time.Second,
+	// awgm_update: до 30с цикла "checking" + до 5 минут опроса после apply --
+	// бюджет с запасом шире (fix round 1, п.3), чтобы actionTimeout не срубил
+	// действие раньше, чем оно успеет сказать своё «не вернулся за 5 минут»
+	// или «ещё проверяет обновления» дословным текстом.
+	"awgm_update": 420 * time.Second,
 }
 
 // actionTimeoutFor returns the production execution budget for action.
