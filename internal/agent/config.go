@@ -2,7 +2,6 @@ package agent
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatch"
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatchcfg"
 )
 
 var nicknameRegexp = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,15}$`)
@@ -73,6 +73,7 @@ func applyDNSWatchdogDefaults(w *DNSWatchdogConfig) {
 	if !w.Enabled {
 		return
 	}
+	w.Endpoint = strings.TrimSpace(w.Endpoint)
 	if msg := dnsWatchdogConfigProblem(*w); msg != "" {
 		w.Enabled = false
 		w.ConfigError = msg
@@ -117,44 +118,27 @@ func applyDNSWatchdogDefaults(w *DNSWatchdogConfig) {
 }
 
 // dnsWatchdogConfigProblem explains why an enabled block is unusable, or
-// returns "". The endpoint path is a credential: only the host may appear.
+// returns "". The rules are dnswatchcfg's — the same update_agent_config
+// applies — so a hand-edited file is no softer than a remote edit. The
+// endpoint path is a credential: only the host may appear.
 func dnsWatchdogConfigProblem(w DNSWatchdogConfig) string {
-	ep := strings.TrimSpace(w.Endpoint)
-	if ep == "" {
+	if w.Endpoint == "" {
 		return "dns_watchdog.endpoint is empty"
 	}
-	u, err := url.Parse(ep)
-	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return "dns_watchdog.endpoint must be an https:// URL with a host"
+	if err := dnswatchcfg.ValidateEndpoint(w.Endpoint); err != nil {
+		return "dns_watchdog.endpoint " + err.Error()
 	}
-	if w.BootstrapIP != "" && net.ParseIP(w.BootstrapIP) == nil {
-		return fmt.Sprintf("dns_watchdog.bootstrap_ip %q is not an IP address (endpoint host %s)", w.BootstrapIP, u.Hostname())
+	host := ""
+	if u, err := url.Parse(w.Endpoint); err == nil {
+		host = u.Hostname()
 	}
-	// A single-label canary (localhost, intranet) never resolves on a public
-	// resolver: the watchdog would take the own resolver for dead forever.
-	if w.CanaryDomain != "" && !canaryDomainOK(w.CanaryDomain) {
-		return fmt.Sprintf("dns_watchdog.canary_domain %q must be a plain domain name with a dot, e.g. example.com (endpoint host %s)", w.CanaryDomain, u.Hostname())
+	if err := dnswatchcfg.ValidateBootstrapIP(w.BootstrapIP); err != nil {
+		return fmt.Sprintf("dns_watchdog.bootstrap_ip %q %v (endpoint host %s)", w.BootstrapIP, err, host)
+	}
+	if err := dnswatchcfg.ValidateCanary(w.CanaryDomain); err != nil {
+		return fmt.Sprintf("dns_watchdog.canary_domain %q %v (endpoint host %s)", w.CanaryDomain, err, host)
 	}
 	return ""
-}
-
-// canaryDomainOK: a plain ASCII domain name of at least two labels — the same
-// shape update_agent_config accepts for dns_watchdog_canary_domain.
-func canaryDomainOK(s string) bool {
-	if len(s) > 253 || !strings.Contains(s, ".") {
-		return false
-	}
-	for _, label := range strings.Split(s, ".") {
-		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
-		}
-		for _, r := range label {
-			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // LoggingConfig controls the agent's log destination. On Entware the S99 init

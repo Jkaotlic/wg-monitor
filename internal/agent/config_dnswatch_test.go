@@ -157,6 +157,35 @@ func TestLoadConfig_DNSWatchdogRequiresHTTPSEndpoint(t *testing.T) {
 	}
 }
 
+// Файл на роутере правят руками, и LoadConfig обязан быть не мягче удалённой
+// правки: принятый здесь IPv6 bootstrap или маска вместо пути запустили бы
+// сторож, который гоняет пробы в никуда.
+func TestLoadConfig_DNSWatchdogRejectsWhatRemoteEditRejects(t *testing.T) {
+	for name, block := range map[string]string{
+		"ipv6 bootstrap": "  endpoint: https://dns.example.com/secret-path\n  bootstrap_ip: \"2001:db8::1\"\n",
+		"маска":          "  endpoint: https://dns.example.com/***\n",
+		"пустой hostname": "  endpoint: https://:443/secret-path\n",
+		"длинный":        "  endpoint: https://dns.example.com/" + strings.Repeat("a", 600) + "\n",
+	} {
+		cfg := loadDNSWatchdogConfig(t, "\ndns_watchdog:\n  enabled: true\n"+block)
+		if cfg.DNSWatchdog.Enabled || cfg.DNSWatchdog.ConfigError == "" {
+			t.Errorf("%s: блок должен выключиться с ConfigError, got enabled=%v err=%q", name, cfg.DNSWatchdog.Enabled, cfg.DNSWatchdog.ConfigError)
+		}
+		if strings.Contains(cfg.DNSWatchdog.ConfigError, "secret-path") {
+			t.Errorf("%s: путь endpoint утёк в ConfigError: %q", name, cfg.DNSWatchdog.ConfigError)
+		}
+	}
+}
+
+// Пробелы вокруг endpoint раньше уходили в сторож как есть: ownID и маска
+// считались по строке, которой на роутере нет.
+func TestLoadConfig_DNSWatchdogTrimsEndpoint(t *testing.T) {
+	cfg := loadDNSWatchdogConfig(t, "\ndns_watchdog:\n  enabled: true\n  endpoint: \"  https://dns.example.com/secret-path  \"\n")
+	if !cfg.DNSWatchdog.Enabled || cfg.DNSWatchdog.Endpoint != "https://dns.example.com/secret-path" {
+		t.Fatalf("enabled=%v endpoint=%q err=%q", cfg.DNSWatchdog.Enabled, cfg.DNSWatchdog.Endpoint, cfg.DNSWatchdog.ConfigError)
+	}
+}
+
 func TestStateConfig_DNSWatchdogStatePath(t *testing.T) {
 	if got := (StateConfig{}).DNSWatchdogStatePath(); got != "/opt/var/wg-monitor/dns-watchdog-state.json" {
 		t.Errorf("default = %q", got)

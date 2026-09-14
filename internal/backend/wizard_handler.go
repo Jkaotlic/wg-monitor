@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatchcfg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/releaseorigin"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -1229,43 +1229,9 @@ var agentConfigBoolArgs = map[string]bool{
 	"dns_watchdog_enabled":   true,
 }
 
-// agentConfigWatchdogEndpointMax mirrors actions.dnsWatchdogEndpointMax.
-const agentConfigWatchdogEndpointMax = 512
-
-// agentConfigWatchdogEndpointOK mirrors actions.validateDNSWatchdogEndpoint:
-// an absolute https URL with a host, at most 512 bytes, and never the masked
-// "https://<host>/***" form agent_config_get hands out — echoing that back
-// would overwrite the real secret path on the router.
+// agentConfigWatchdogEndpointOK: the agent's own rule (dnswatchcfg), not a copy.
 func agentConfigWatchdogEndpointOK(s string) bool {
-	if s == "" || len(s) > agentConfigWatchdogEndpointMax || strings.Contains(s, "***") {
-		return false
-	}
-	u, err := url.Parse(s)
-	return err == nil && u.Scheme == "https" && u.Host != "" && u.Hostname() != ""
-}
-
-// agentConfigDomainOK mirrors the agent's plain-domain check
-// (actions.isComparableDomain): ASCII labels, no scheme, path or wildcard.
-func agentConfigDomainOK(s string) bool {
-	if s == "" || len(s) > 253 || strings.ContainsAny(s, "/:*?[]\\") {
-		return false
-	}
-	for _, label := range strings.Split(s, ".") {
-		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
-			return false
-		}
-		for _, r := range label {
-			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func agentConfigIPv4OK(s string) bool {
-	a, err := netip.ParseAddr(s)
-	return err == nil && a.Is4()
+	return dnswatchcfg.ValidateEndpoint(s) == nil
 }
 
 // sanitizeAgentConfigArgs validates and narrows update_agent_config args to the
@@ -1316,7 +1282,7 @@ func sanitizeAgentConfigArgs(w http.ResponseWriter, args map[string]any) (map[st
 		s, ok := v.(string)
 		s = strings.TrimSpace(s)
 		if !ok || !agentConfigWatchdogEndpointOK(s) {
-			return reject("dns_watchdog_endpoint (want https:// URL, max 512)")
+			return reject(fmt.Sprintf("dns_watchdog_endpoint (want https:// URL, max %d)", dnswatchcfg.EndpointMax))
 		}
 		out["dns_watchdog_endpoint"] = s
 	}
@@ -1325,7 +1291,7 @@ func sanitizeAgentConfigArgs(w http.ResponseWriter, args map[string]any) (map[st
 		s = strings.TrimSpace(s)
 		// Empty = the agent's default canary. A single-label name (localhost)
 		// never resolves: the watchdog would take the own resolver for dead.
-		if !ok || (s != "" && (!agentConfigDomainOK(s) || !strings.Contains(s, "."))) {
+		if !ok || dnswatchcfg.ValidateCanary(s) != nil {
 			return reject("dns_watchdog_canary_domain (want a domain name with a dot, e.g. example.com)")
 		}
 		out["dns_watchdog_canary_domain"] = s
@@ -1334,7 +1300,7 @@ func sanitizeAgentConfigArgs(w http.ResponseWriter, args map[string]any) (map[st
 		s, ok := v.(string)
 		s = strings.TrimSpace(s)
 		// Empty = the agent asks 77.88.8.8 for the endpoint host's address.
-		if !ok || (s != "" && !agentConfigIPv4OK(s)) {
+		if !ok || dnswatchcfg.ValidateBootstrapIP(s) != nil {
 			return reject("dns_watchdog_bootstrap_ip (want IPv4)")
 		}
 		out["dns_watchdog_bootstrap_ip"] = s

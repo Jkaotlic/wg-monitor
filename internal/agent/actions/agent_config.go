@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/netip"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Jkaotlic/wg-monitor/internal/agent/dnswatchcfg"
 )
 
 // Agent-side config editing. Lets the operator change a SAFE whitelist of
@@ -43,9 +44,6 @@ var agentConfigWhitelist = []agentConfigField{
 	{"dns_watchdog_canary_domain", "dns_watchdog", "canary_domain", "string"},
 	{"dns_watchdog_bootstrap_ip", "dns_watchdog", "bootstrap_ip", "string"},
 }
-
-// dnsWatchdogEndpointMax bounds the DoH endpoint URL a remote edit may write.
-const dnsWatchdogEndpointMax = 512
 
 // dnsWatchdogMaskedPath replaces the endpoint path in every view: the path is
 // the secret that opens the operator's own resolver.
@@ -183,7 +181,7 @@ func UpdateAgentConfig(_ context.Context, args map[string]any, configPath string
 	// LoadConfig switches such a block off and only logs its ConfigError, so a
 	// restart into it would quietly leave the watchdog disabled. Refuse it
 	// here, where the command result reaches the dashboard.
-	if check.DNSWatchdog.Enabled && validateDNSWatchdogEndpoint(check.DNSWatchdog.Endpoint) != nil {
+	if check.DNSWatchdog.Enabled && dnswatchcfg.ValidateEndpoint(check.DNSWatchdog.Endpoint) != nil {
 		return "", fmt.Errorf("update_agent_config: dns_watchdog_enabled needs dns_watchdog_endpoint (https://…) set first")
 	}
 	tmp := configPath + ".tmp"
@@ -283,41 +281,19 @@ func validateAgentConfigString(arg, s string) error {
 			return fmt.Errorf("update_agent_config: awgm_login too long (max 64)")
 		}
 	case "dns_watchdog_endpoint":
-		if err := validateDNSWatchdogEndpoint(s); err != nil {
+		if err := dnswatchcfg.ValidateEndpoint(s); err != nil {
 			return fmt.Errorf("update_agent_config: dns_watchdog_endpoint %v", err)
 		}
 	case "dns_watchdog_canary_domain":
-		// Empty = the agent's default canary (example.com). A single-label
-		// name (localhost, intranet) never resolves on a public resolver: the
-		// watchdog would take the own resolver for dead forever.
-		if s != "" && (!isComparableDomain(strings.ToLower(s)) || !strings.Contains(s, ".")) {
-			return fmt.Errorf("update_agent_config: dns_watchdog_canary_domain must be a plain domain name with a dot (e.g. example.com)")
+		// Empty = the agent's default canary (example.com).
+		if err := dnswatchcfg.ValidateCanary(s); err != nil {
+			return fmt.Errorf("update_agent_config: dns_watchdog_canary_domain %v", err)
 		}
 	case "dns_watchdog_bootstrap_ip":
 		// Empty = ask 77.88.8.8 for the endpoint host's address.
-		if s == "" {
-			return nil
+		if err := dnswatchcfg.ValidateBootstrapIP(s); err != nil {
+			return fmt.Errorf("update_agent_config: dns_watchdog_bootstrap_ip %v", err)
 		}
-		if a, err := netip.ParseAddr(s); err != nil || !a.Is4() {
-			return fmt.Errorf("update_agent_config: dns_watchdog_bootstrap_ip must be an IPv4 address")
-		}
-	}
-	return nil
-}
-
-// validateDNSWatchdogEndpoint accepts only an absolute https URL with a host,
-// at most dnsWatchdogEndpointMax bytes. The masked form a view hands out is
-// refused explicitly: echoing it back would overwrite the real secret path.
-func validateDNSWatchdogEndpoint(s string) error {
-	if s == "" || len(s) > dnsWatchdogEndpointMax {
-		return fmt.Errorf("must be an https:// URL of at most %d characters", dnsWatchdogEndpointMax)
-	}
-	if strings.Contains(s, "***") {
-		return fmt.Errorf("is the masked value from agent_config_get, not the real endpoint")
-	}
-	u, err := url.Parse(s)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.Hostname() == "" {
-		return fmt.Errorf("must be an https:// URL of at most %d characters", dnsWatchdogEndpointMax)
 	}
 	return nil
 }
