@@ -111,7 +111,6 @@ func pingcheckErrorRecoveryKeyboard(userID int64) tg.InlineKeyboardMarkup {
 		{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 	}, {
 		{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
-		{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 	}}}
 }
 

@@ -125,16 +125,12 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 				{Text: "🎛 Повторить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 			}, {
 				{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
-			}, {
-				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 			}}}
 		case "tunnel_import":
 			return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 				{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 			}, {
 				{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
-			}, {
-				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 			}}}
 		case "router_doctor":
 			return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
@@ -143,8 +139,6 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 				{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 			}, {
 				{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
-			}, {
-				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 			}}}
 		case "check_via_tunnel", "check_direct":
 			return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
@@ -155,8 +149,6 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 				{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
 			}, {
 				{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
-			}, {
-				{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 			}}}
 		}
 		return nil
@@ -195,8 +187,6 @@ func commandResultNextActionKeyboard(action, status string, userID int64) *tg.In
 			{Text: "🎛 Проверить туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
 		}, {
 			{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
-		}, {
-			{Text: "🛠 Обслуживание", CallbackData: fmt.Sprintf("maint_open:%d:_panel_", userID)},
 		}}}
 	case "check_via_tunnel", "check_direct":
 		return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{

@@ -1260,20 +1260,6 @@ func TestCmdResult_AcceptsLargeRouteSnapshot(t *testing.T) {
 	}
 }
 
-type fakeMaintNotifier struct {
-	mu     sync.Mutex
-	called int
-	action string
-}
-
-func (f *fakeMaintNotifier) NotifyCommandResult(_ context.Context, ref cmdpkg.MessageRef, _ wire.CommandResult, _ int64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.called++
-	f.action = ref.Action
-	return nil
-}
-
 type fakeBulkNotifier struct {
 	mu     sync.Mutex
 	called int
@@ -1485,29 +1471,28 @@ func TestCmdResult_DefaultRelayRespectsPoolBound(t *testing.T) {
 	waitRelayPoolEmpty(t)
 }
 
-func testCmdResultDispatchesMaintNotifier(t *testing.T, action string) {
-	t.Helper()
+// Панели обслуживания в боте нет: итог service_restart (кнопки HR-Neo в
+// панели маршрутов) уходит общим TGNotifier.
+func TestCmdResult_ServiceRestartRelaysThroughTGNotifier(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
-	tok := "bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01bb01"
+	tok := "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02"
 	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
 
-	mn := &fakeMaintNotifier{}
 	rc := &relayCapture{}
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: action, ChatID: 1, MessageID: 2}}
+	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "service_restart", ChatID: 1, MessageID: 2}}
 	mux := NewMux(Deps{
-		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:            d,
-		Dispatcher:    &fakeDisp{},
-		CommandSink:   sink,
-		TGNotifier:    rc,
-		MaintNotifier: mn,
-		Thresholds:    state.Thresholds{Fail: 3, Recovery: 2},
+		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:          d,
+		Dispatcher:  &fakeDisp{},
+		CommandSink: sink,
+		TGNotifier:  rc,
+		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	body, _ := json.Marshal(wire.CommandResult{ID: "m1", Status: "ok", Output: `{}`, DurationMs: 1})
+	body, _ := json.Marshal(wire.CommandResult{ID: "m1", Status: "ok", Output: "hrneo restart sent", DurationMs: 1})
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := http.DefaultClient.Do(req)
@@ -1518,30 +1503,9 @@ func testCmdResultDispatchesMaintNotifier(t *testing.T, action string) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status: %d", resp.StatusCode)
 	}
-
-	// Goroutine dispatch is async — poll briefly.
-	mnCalled := waitForRelay(t, func() int {
-		mn.mu.Lock()
-		defer mn.mu.Unlock()
-		return mn.called
-	}, 1, 500*time.Millisecond)
-	if mnCalled != 1 {
-		t.Errorf("MaintNotifier called %d times for action %q, want 1", mnCalled, action)
+	if got := waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond); got != 1 {
+		t.Errorf("TGNotifier: expected 1 chunk, got %d", got)
 	}
-
-	// TGNotifier must NOT be called for maint actions.
-	snap := rc.snapshot()
-	if len(snap.chunks) != 0 {
-		t.Errorf("generic TGNotifier called %d chunk(s) for %q, want 0", len(snap.chunks), action)
-	}
-}
-
-func TestCmdResult_DispatchesMaintNotifier_VersionAudit(t *testing.T) {
-	testCmdResultDispatchesMaintNotifier(t, "version_audit")
-}
-
-func TestCmdResult_DispatchesMaintNotifier_ServiceRestart(t *testing.T) {
-	testCmdResultDispatchesMaintNotifier(t, "service_restart")
 }
 
 // TestCmdResult_AcceptsUnknownStatus verifies forward-compat: a status not in

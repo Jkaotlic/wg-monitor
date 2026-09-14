@@ -13,14 +13,11 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-// pendingMaint is one queued maintenance confirmation. Created when the user
-// taps a destructive button (e.g. "🔁 Reboot router"); consumed when they tap
-// "✅ Подтвердить" within the TTL. After consume the entry is removed from
-// the store — replay is impossible.
+// pendingMaint is one queued service-restart confirmation (hrneo / awgmgr).
 type pendingMaint struct {
 	UserID    int64
 	ActorTGID int64
-	Name      string // "hrneo" | "awgmgr" | "router" | "firmware"
+	Name      string // одно из botServiceRestartNames
 	Token     string
 	ExpiresAt time.Time
 }
@@ -109,90 +106,45 @@ func makeMaintToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-// cooldownStore tracks per-user, per-action cooldown windows for destructive
-// ops (router reboot, firmware install). All in-memory; lost on backend
-// restart — acceptable since the cooldown window is at most 5 minutes and
-// the underlying side effect (reboot) takes about that long anyway.
-type cooldownStore struct {
-	mu sync.Mutex
-	m  map[cooldownKey]time.Time // value = expires-at
+// botServiceRestartNames -- что бот ещё перезапускает сам: HydraRoute Neo
+// (кнопки панели маршрутов, цикл 4 программы) и awg-manager (старая кнопка
+// restart_tunnel под тревогой). Перезагрузка роутера, прошивка и пакеты
+// Entware переехали в мини-апп (цикл 1), и живой токен из старого сообщения
+// их в очередь не ставит.
+var botServiceRestartNames = map[string]bool{
+	"hrneo":       true,
+	"hrneo_start": true,
+	"hrneo_stop":  true,
+	"awgmgr":      true,
 }
 
-type cooldownKey struct {
-	UserID int64
-	Action string // "router_reboot" | "firmware_install"
-}
-
-func newCooldownStore() *cooldownStore {
-	return &cooldownStore{m: make(map[cooldownKey]time.Time)}
-}
-
-func (s *cooldownStore) set(userID int64, action string, dur time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.m[cooldownKey{userID, action}] = time.Now().Add(dur)
-}
-
-// remaining returns the time left in the cooldown window, or 0 if there's
-// no active cooldown for this (userID, action). Expired entries are evicted
-// as a side effect.
-func (s *cooldownStore) remaining(userID int64, action string) time.Duration {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	k := cooldownKey{userID, action}
-	until, ok := s.m[k]
-	if !ok {
-		return 0
-	}
-	rem := time.Until(until)
-	if rem <= 0 {
-		delete(s.m, k)
-		return 0
-	}
-	return rem
-}
-
-// MaintConfirmAction implements the Action interface for the maint_confirm /
-// maint_fw_confirm callbacks. It atomically consumes the pending token,
-// enqueues the appropriate wire.Command for the agent, and applies a
-// per-user, per-action cooldown for destructive ops (router reboot, firmware
-// install). hrneo / awgmgr restarts are cheap and do not trigger cooldown.
+// MaintConfirmAction implements the Action interface for the maint_confirm
+// callback. It atomically consumes the pending token and enqueues
+// service_restart for one of botServiceRestartNames.
 type MaintConfirmAction struct {
 	sink  CommandEnqueuer
 	store *pendingMaintStore
-	cd    *cooldownStore
 	idGen func() string
 }
 
-func NewMaintConfirmAction(sink CommandEnqueuer, store *pendingMaintStore, cd *cooldownStore, idGen func() string) *MaintConfirmAction {
-	return &MaintConfirmAction{sink: sink, store: store, cd: cd, idGen: idGen}
+func NewMaintConfirmAction(sink CommandEnqueuer, store *pendingMaintStore, idGen func() string) *MaintConfirmAction {
+	return &MaintConfirmAction{sink: sink, store: store, idGen: idGen}
 }
 
 func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	cooldownAction := ""
 	maintName := ""
 	pm, ok, err := a.store.applyForActor(args.UserID, q.From.ID, args.MaintToken, func(pm *pendingMaint) error {
-		cmd := wire.Command{ID: a.idGen(), IssuedAt: time.Now().UTC()}
-		switch pm.Name {
-		case "hrneo", "hrneo_start", "hrneo_stop", "awgmgr":
-			cmd.Action = "service_restart"
-			cmd.Args = map[string]any{"name": pm.Name}
-		case "router":
-			cmd.Action = "service_restart"
-			cmd.Args = map[string]any{"name": "router"}
-			cooldownAction = "router_reboot"
-		case "firmware":
-			cmd.Action = "firmware_install"
-			cooldownAction = "firmware_install"
-		default:
+		if !botServiceRestartNames[pm.Name] {
 			return fmt.Errorf("unknown maint name: %q", pm.Name)
 		}
+		cmd := wire.Command{
+			ID:       a.idGen(),
+			Action:   "service_restart",
+			Args:     map[string]any{"name": pm.Name},
+			IssuedAt: time.Now().UTC(),
+		}
 		maintName = pm.Name
-		// EnqueueWithRef (а не голый Enqueue) — иначе ConsumeOriginRef в
-		// handler.go::cmdResultHandler возвращает false, MaintNotifier
-		// .NotifyCommandResult НЕ вызывается, и maint-панель оператора никогда
-		// не обновится после исполнения. Симметричный RebindConfirmAction
-		// делает это правильно — у нас был чистый asymmetry-bug (LOGIC-01).
+		// EnqueueWithRef (а не голый Enqueue) — иначе итог не вернётся в чат.
 		ref := cmdpkg.MessageRef{
 			ChatID:    q.Message.Chat.ID,
 			MessageID: q.Message.MessageID,
@@ -212,14 +164,8 @@ func (a *MaintConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, arg
 	if maintName == "" && pm != nil {
 		maintName = pm.Name
 	}
-	if cooldownAction != "" {
-		a.cd.set(args.UserID, cooldownAction, 5*time.Minute)
-	}
 	return fmt.Sprintf("✅ запрос отправлен: %s", maintName), nil
 }
 
 // ensure MaintConfirmAction satisfies Action at compile time.
 var _ Action = (*MaintConfirmAction)(nil)
-
-// suppress unused-import lint until callers wire cmdpkg.MessageRef.
-var _ cmdpkg.MessageRef

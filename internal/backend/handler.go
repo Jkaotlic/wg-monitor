@@ -291,13 +291,6 @@ type RoutesNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
-// MaintNotifier is the subset used by cmdResultHandler when ref.Action is
-// version_audit / firmware_status / service_restart / firmware_install.
-// Implemented by callbacks.MaintPanelNotifier.
-type MaintNotifier interface {
-	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
-}
-
 // BulkNotifier updates one aggregate admin report for fleet-wide commands.
 type BulkNotifier interface {
 	NotifyBulkCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
@@ -326,7 +319,6 @@ type Deps struct {
 	CommandSink         CommandSink
 	TGNotifier          TGNotifier
 	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
-	MaintNotifier       MaintNotifier     // nil-safe (handler skips if nil)
 	BulkNotifier        BulkNotifier      // nil-safe (handler falls back to per-command relays)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
@@ -1229,18 +1221,6 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 					})
 				} else {
 					d.Logger.Warn("routes notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
-				}
-			case "version_audit", "firmware_status", "service_restart", "firmware_install":
-				if d.MaintNotifier != nil {
-					spawnRelayTimeout(d, "cmd-maint", 30*time.Second, func(ctx context.Context) {
-						if err := d.MaintNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
-							incTGError()
-							d.Logger.Warn("maint notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("maint notifier not configured; result not relayed",
 						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
 				}
 			case "pingcheck_status", "pingcheck_toggle":

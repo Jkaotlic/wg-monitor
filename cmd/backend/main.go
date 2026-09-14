@@ -181,9 +181,7 @@ func main() {
 	}
 	upCache := upstream.NewCache(cfg.Upstream.CacheTTL, upSources)
 
-	// Build the callbacks router BEFORE the mux Deps so we can derive the
-	// MaintNotifier from it (its internal cooldown + audit cache stores
-	// must be shared between handlers and notifier).
+	// Build the callbacks router BEFORE the mux Deps: several notifiers derive from it.
 	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
 		ChatID:             cfg.Telegram.ChatID,
 		ExtraChatIDs:       cfg.Telegram.ExtraChatIDs,
@@ -209,7 +207,6 @@ func main() {
 	}
 	cb.SetUpstream(upCache)
 	notifier.DiagCache = cb.DiagCache()
-	maintNotifier := cb.NewMaintNotifier(tgClient, upCache)
 	cb.SetPingCheck(cmdQueue)
 	cb.SetDiagDrillDown()
 	pingcheckNotifier := cb.NewPingCheckNotifier()
@@ -293,10 +290,7 @@ func main() {
 		CommandSink:    cmdQueue,
 		TGNotifier:     notifier,
 		RoutesNotifier: routesNotifier,
-		MaintNotifier:  maintNotifier,
-		// Тот же кэш, что у панели обслуживания в боте: второй поход в GitHub
-		// сжёг бы лимит анонимного API, а расхождение двух кэшей показывало бы
-		// на экране и в боте разные новости об одном роутере.
+		// Тот же кэш, что у умного ответа бота: второй поход в GitHub сжёг бы лимит анонимного API.
 		Upstream:     upCache,
 		BulkNotifier: cb,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в

@@ -2494,26 +2494,6 @@ func makeCBQ(data string) *tg.CallbackQuery {
 	}
 }
 
-func TestRouterHandleCallback_MaintClose_ClearsKeyboard(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-
-	q := makeCBQ(fmt.Sprintf("maint_close:%d:_panel_", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.answers) != 1 || f.answers[0] != "закрыто" {
-		t.Errorf("expected answer='закрыто', got %v", f.answers)
-	}
-	if len(f.edits) != 1 {
-		t.Fatalf("expected 1 edit (empty keyboard), got %d", len(f.edits))
-	}
-	// text is preserved (the original message text)
-	if f.edits[0] != "panel text" {
-		t.Errorf("maint_close should preserve original text, got %q", f.edits[0])
-	}
-}
-
 func TestRouterHandleCallback_MaintRestart_RendersConfirm(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -2544,129 +2524,44 @@ func TestRouterHandleCallback_MaintRestart_RendersConfirm(t *testing.T) {
 	}
 }
 
-func TestRouterHandleCallback_MaintRestart_Router_CooldownBlocks(t *testing.T) {
+func TestRouterHandleCallback_MaintRestart_RouterMovedToApp(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
 	sink := &fakeEnqueuer{}
 	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
 
-	// Pre-set cooldown.
-	r.cooldown.set(uid, "router_reboot", 5*time.Minute)
+	r.HandleCallback(context.Background(), makeCBQ(fmt.Sprintf("maint_restart:%d:router", uid)))
 
-	q := makeCBQ(fmt.Sprintf("maint_restart:%d:router", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "кулдаун") {
-		t.Errorf("expected cooldown toast, got %v", f.answers)
+	if len(f.answers) != 1 || f.answers[0] != "это действие переехало в приложение" {
+		t.Errorf("answers=%v", f.answers)
 	}
-	// No confirm screen should be shown.
 	if len(f.edits) != 0 {
-		t.Errorf("cooldown path must NOT edit message, got %d edits", len(f.edits))
+		t.Errorf("подтверждения перезагрузки быть не должно, edits=%v", f.edits)
 	}
-	// No pendingMaint entry.
 	r.pendingMaint.mu.Lock()
 	count := len(r.pendingMaint.m)
 	r.pendingMaint.mu.Unlock()
 	if count != 0 {
-		t.Errorf("no pendingMaint should be created when blocked by cooldown, got %d", count)
+		t.Errorf("токен перезагрузки создан: %d", count)
 	}
 }
 
-func TestRouterHandleCallback_MaintFwOpen_FromCache(t *testing.T) {
+func TestRouterHandleCallback_RemovedMaintPanelCallbacksUnknown(t *testing.T) {
 	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-
-	// Pre-seed firmware status in the audit cache.
-	r.auditCache.PutFirmwareStatus(uid, wire.FirmwareStatus{Current: "5.0.1"})
-
-	q := makeCBQ(fmt.Sprintf("maint_fw_open:%d:_panel_", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 1 {
-		t.Fatalf("expected 1 edit (firmware screen), got %d", len(f.edits))
-	}
-	if !strings.Contains(f.edits[0], "📦 Прошивка") {
-		t.Errorf("firmware screen missing header, got: %q", f.edits[0])
-	}
-	if !strings.Contains(f.edits[0], "5.0.1") {
-		t.Errorf("firmware screen missing version 5.0.1, got: %q", f.edits[0])
-	}
-}
-
-func TestRouterHandleCallback_MaintFwOpen_NoCacheTriggersFwCheck(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	// No cache pre-seed — should fall through to handleMaintFwCheck.
-	q := makeCBQ(fmt.Sprintf("maint_fw_open:%d:_panel_", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.refs) != 1 {
-		t.Fatalf("expected 1 EnqueueWithRef call (firmware_status), got %d", len(sink.refs))
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "firmware_status" {
-		t.Errorf("expected firmware_status command, got %v", sink.calls)
-	}
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "📦 Прошивка") {
-		t.Errorf("expected loading edit with 📦 Прошивка, got %v", f.edits)
-	}
-}
-
-func TestRouterHandleCallback_MaintOpen_EnqueueFailRestoresRecoveryKeyboard(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	q := makeCBQ(fmt.Sprintf("maint_open:%d:_panel_", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) < 2 {
-		t.Fatalf("expected loading and recovery edits, got %d: %v", len(f.edits), f.edits)
-	}
-	lastText := f.edits[len(f.edits)-1]
-	if !strings.Contains(lastText, "Обслуживание") && !strings.Contains(lastText, "ÐžÐ±Ñ\u0081Ð»ÑƒÐ¶Ð¸Ð²Ð°Ð½Ð¸Ðµ") {
-		t.Fatalf("recovery edit should mention maintenance, got %q", lastText)
-	}
-	lastKB := f.editMarkups[len(f.editMarkups)-1]
-	for _, want := range []string{
+	for _, data := range []string{
 		fmt.Sprintf("maint_open:%d:_panel_", uid),
-		fmt.Sprintf("router_doctor:%d:_menu", uid),
-		fmt.Sprintf("tunnels_refresh:%d:_panel_", uid),
-	} {
-		if !markupHasCallback(lastKB, want) {
-			t.Fatalf("recovery keyboard missing %q: %+v", want, lastKB)
-		}
-	}
-}
-
-func TestRouterHandleCallback_MaintFwCheck_EnqueueFailRestoresRecoveryKeyboard(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	q := makeCBQ(fmt.Sprintf("maint_fw_check:%d:_panel_", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) < 2 {
-		t.Fatalf("expected loading and recovery edits, got %d: %v", len(f.edits), f.edits)
-	}
-	lastText := f.edits[len(f.edits)-1]
-	if !strings.Contains(lastText, "Прошивка") && !strings.Contains(lastText, "ÐŸÑ€Ð¾ÑˆÐ¸Ð²ÐºÐ°") {
-		t.Fatalf("recovery edit should mention firmware, got %q", lastText)
-	}
-	lastKB := f.editMarkups[len(f.editMarkups)-1]
-	for _, want := range []string{
+		fmt.Sprintf("maint_close:%d:_panel_", uid),
+		fmt.Sprintf("maint_fw_open:%d:_panel_", uid),
 		fmt.Sprintf("maint_fw_check:%d:_panel_", uid),
-		fmt.Sprintf("maint_open:%d:_panel_", uid),
-		fmt.Sprintf("router_doctor:%d:_menu", uid),
+		fmt.Sprintf("maint_fw_install:%d:_panel_", uid),
+		fmt.Sprintf("maint_fw_confirm:%d:_panel_:deadbeef", uid),
 	} {
-		if !markupHasCallback(lastKB, want) {
-			t.Fatalf("firmware recovery keyboard missing %q: %+v", want, lastKB)
+		f := &fakeRouterTG{}
+		sink := &fakeEnqueuer{}
+		r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
+		r.HandleCallback(context.Background(), makeCBQ(data))
+		if len(f.answers) != 1 || f.answers[0] != "неизвестная кнопка" || len(sink.calls) != 0 || len(f.edits) != 0 {
+			t.Errorf("%s: answers=%v calls=%+v edits=%v", data, f.answers, sink.calls, f.edits)
 		}
 	}
 }
@@ -3450,13 +3345,6 @@ func TestCallbackUserFacingNotFoundToastsAreRussian(t *testing.T) {
 			name: "routes open missing user",
 			run: func(q *tg.CallbackQuery, args Args) {
 				r.handleRoutesOpen(context.Background(), q, args, false)
-			},
-			args: Args{UserID: 999999},
-		},
-		{
-			name: "maint open missing user",
-			run: func(q *tg.CallbackQuery, args Args) {
-				r.handleMaintOpen(context.Background(), q, args)
 			},
 			args: Args{UserID: 999999},
 		},

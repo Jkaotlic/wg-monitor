@@ -58,9 +58,9 @@ type Args struct {
 	RouteTemplateToken string
 	RouteTemplatePage  int
 	// MaintName is the target of a maint_restart / maint_confirm callback:
-	// "hrneo" | "awgmgr" | "router" | "firmware". Set by Parse for those actions.
+	// "hrneo" | "hrneo_start" | "hrneo_stop" | "awgmgr". Set by Parse for those actions.
 	MaintName string
-	// MaintToken is the 8-hex confirm token for maint_confirm / maint_fw_confirm.
+	// MaintToken is the 8-hex confirm token for maint_confirm.
 	MaintToken string
 	// DiagRawToken is the 8-hex token of a cached diag JSON body retrieved
 	// by the "📄 Полный отчёт" button under a diag result.
@@ -147,11 +147,9 @@ var validActions = map[string]bool{
 	"routes_add_confirm": true, "routes_add_cancel": true,
 	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
 	"routes_hrneo": true, "routes_hrneo_doctor": true, "routes_snapshot": true,
-	// maintenance panel actions: open/close panel, restart services, firmware update.
-	"maint_open": true, "maint_close": true,
+	// перезапуск служб бота (hrneo / awgmgr): подтверждение и токен. Панель
+	// обслуживания целиком переехала в мини-апп.
 	"maint_restart": true, "maint_confirm": true,
-	"maint_fw_open": true, "maint_fw_check": true,
-	"maint_fw_install": true, "maint_fw_confirm": true,
 	// diag_raw: fetch cached raw diag JSON body for "📄 Полный отчёт" button.
 	"diag_raw": true,
 	// diag_back: re-render parsed diag summary inline ("« К сводке" button).
@@ -406,7 +404,7 @@ func Parse(data string) (Args, error) {
 		a.RouteDraftToken = parts[3]
 	case "maint_restart":
 		if len(parts) < 3 || parts[2] == "" || parts[2] == panelSentinel {
-			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr|router): %q", data)
+			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr): %q", data)
 		}
 		a.MaintName = parts[2]
 	case "maint_confirm":
@@ -417,15 +415,6 @@ func Parse(data string) (Args, error) {
 			return Args{}, err
 		}
 		a.MaintName = parts[2]
-		a.MaintToken = parts[3]
-	case "maint_fw_confirm":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("maint_fw_confirm requires token: %q", data)
-		}
-		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.MaintName = "firmware"
 		a.MaintToken = parts[3]
 	case "diag_raw":
 		if len(parts) < 4 || parts[3] == "" {

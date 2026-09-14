@@ -324,22 +324,19 @@ func TestParse_MaintActions(t *testing.T) {
 		want    Args
 		wantErr bool
 	}{
-		{data: "maint_open:42:_panel_", want: Args{Action: "maint_open", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_close:42:_panel_", want: Args{Action: "maint_close", UserID: 42, CheckName: "_panel_", IsPanel: true}},
 		{data: "maint_restart:42:hrneo", want: Args{Action: "maint_restart", UserID: 42, CheckName: "hrneo", MaintName: "hrneo"}},
 		{data: "maint_restart:42:awgmgr", want: Args{Action: "maint_restart", UserID: 42, CheckName: "awgmgr", MaintName: "awgmgr"}},
-		{data: "maint_restart:42:router", want: Args{Action: "maint_restart", UserID: 42, CheckName: "router", MaintName: "router"}},
 		{data: "maint_confirm:42:hrneo:a1b2c3d4", want: Args{Action: "maint_confirm", UserID: 42, CheckName: "hrneo", MaintName: "hrneo", MaintToken: "a1b2c3d4"}},
-		{data: "maint_fw_open:42:_panel_", want: Args{Action: "maint_fw_open", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_fw_check:42:_panel_", want: Args{Action: "maint_fw_check", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_fw_install:42:_panel_", want: Args{Action: "maint_fw_install", UserID: 42, CheckName: "_panel_", IsPanel: true}},
-		{data: "maint_fw_confirm:42:_panel_:deadbeef", want: Args{Action: "maint_fw_confirm", UserID: 42, CheckName: "_panel_", IsPanel: true, MaintName: "firmware", MaintToken: "deadbeef"}},
 		// negative cases
-		{data: "maint_restart:42", wantErr: true},             // missing name segment
-		{data: "maint_restart:42:_panel_", wantErr: true},     // sentinel as name is rejected
-		{data: "maint_confirm:42:hrneo", wantErr: true},       // missing token
-		{data: "maint_fw_confirm:42:_panel_", wantErr: true},  // missing token
-		{data: "maint_fw_confirm:42:_panel_:", wantErr: true}, // empty token
+		{data: "maint_restart:42", wantErr: true},
+		{data: "maint_restart:42:_panel_", wantErr: true},
+		{data: "maint_confirm:42:hrneo", wantErr: true},
+		{data: "maint_open:42:_panel_", wantErr: true},
+		{data: "maint_close:42:_panel_", wantErr: true},
+		{data: "maint_fw_open:42:_panel_", wantErr: true},
+		{data: "maint_fw_check:42:_panel_", wantErr: true},
+		{data: "maint_fw_install:42:_panel_", wantErr: true},
+		{data: "maint_fw_confirm:42:_panel_:deadbeef", wantErr: true},
 	}
 	for _, c := range cases {
 		t.Run(c.data, func(t *testing.T) {
@@ -480,7 +477,6 @@ func TestParse_PanelKindRequiresKind(t *testing.T) {
 func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 	for _, bad := range []string{
 		"maint_confirm:42:hrneo:x",
-		"maint_fw_confirm:42:_panel_:bad.token",
 		"diag_raw:42:_panel_:bad.token",
 		"diag_back:42:_panel_:bad/token",
 		"diag_test:bad.token:mtu",
