@@ -996,6 +996,44 @@ func TestResolverGuardRecoveryWhenWatchdogStoppedWatching(t *testing.T) {
 	}
 }
 
+// Зелёный кружок обещает «всё снова в порядке». Это правда только для
+// настоящего возврата на свой DNS-сервер. Сторож перестал следить, ещё не
+// прочитал роутер или выключен вовсе -- кончилась ли неполадка, бот не знает.
+func TestResolverGuardRecoveryBadgeOnlyGreenWhenBackOnOwn(t *testing.T) {
+	since := time.Date(2026, 9, 14, 10, 0, 0, 0, time.UTC)
+	rec := func(d map[string]any) string {
+		return FormatRecovery(RecoveryArgs{
+			Nickname: "router-a", CheckName: "resolver_guard", HardSince: since, RecoveredAt: since.Add(20 * time.Minute),
+			Check: wire.Check{Name: "resolver_guard", Status: "ok", Details: d},
+		})
+	}
+	back := rec(map[string]any{"mode": "primary"})
+	if !strings.Contains(back, "🟢") {
+		t.Errorf("настоящий возврат должен быть зелёным:\n%s", back)
+	}
+	for name, d := range map[string]map[string]any{
+		"idle":         {"mode": "primary", "idle": true},
+		"ready:false":  {"mode": "primary", "ready": false},
+		"watchdog_off": {"reason": "watchdog_off"},
+	} {
+		out := rec(d)
+		if strings.Contains(out, "🟢") || !strings.Contains(out, "🟡") {
+			t.Errorf("%s: want 🟡 без 🟢:\n%s", name, out)
+		}
+	}
+	off := rec(map[string]any{"reason": "watchdog_off"})
+	for _, want := range []string{"Сторож DNS больше не работает", "мог остаться на запасных DNS-серверах до перезагрузки", "Сторож DNS сообщал о неполадке: 20 мин"} {
+		if !strings.Contains(off, want) {
+			t.Errorf("watchdog_off: нет %q:\n%s", want, off)
+		}
+	}
+	for _, bad := range []string{"Роутер снова работает через свой DNS-сервер", "watchdog_off", "Неполадка длилась"} {
+		if strings.Contains(off, bad) {
+			t.Errorf("watchdog_off: лишнее %q:\n%s", bad, off)
+		}
+	}
+}
+
 // foreign_leftover сторож может прислать и в окне удержания, когда свой
 // DNS-сервер как раз не отвечает: запасные тогда нарочно не снимаются. Текст
 // говорит только то, что известно точно, -- без «свой отвечает», без обещания

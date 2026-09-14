@@ -131,8 +131,13 @@ func FormatRecovery(a RecoveryArgs) string {
 	if !a.RecoveredAt.IsZero() {
 		meta = append(meta, KV("когда", a.RecoveredAt.In(mscLoc()).Format("02.01 15:04 МСК")))
 	}
+	badge := "🟢"
+	if checkCategory(a.CheckName) == "resolver_guard" && len(resolverGuardRecoveryNote(a.Check.Details)) > 0 {
+		// Кончилась ли неполадка, бот не знает -- зелёный обещал бы это.
+		badge = "🟡"
+	}
 	return Card{
-		Badge:    "🟢",
+		Badge:    badge,
 		Label:    fmt.Sprintf("[%s]", a.Nickname),
 		Summary:  headline,
 		Meta:     meta,
@@ -426,6 +431,8 @@ func recoveryHeadline(checkName string, d map[string]any) string {
 		// перестал следить (idle) или ещё не прочитал роутер (ready:false) --
 		// тогда и заголовок другой.
 		switch {
+		case resolverGuardWatchdogOff(d):
+			return resolverGuardOffHeadline
 		case resolverGuardIdle(d):
 			return resolverGuardIdleHeadline
 		case resolverGuardUnread(d):
@@ -696,6 +703,7 @@ const (
 	resolverGuardIdleHeadline            = "Сторож DNS больше не следит: своего DNS-сервера нет в настройках роутера"
 	resolverGuardUnreadHeadline          = "Сторож DNS пока не прочитал настройки роутера"
 	resolverGuardIdleWatchAgain          = "Сторож DNS ничего не возвращает в настройки сам и снова начнёт следить, когда свой DNS-сервер там появится."
+	resolverGuardOffHeadline             = "Сторож DNS больше не работает"
 )
 
 func resolverGuardNoFallback(d map[string]any) bool {
@@ -724,10 +732,19 @@ func resolverGuardUnread(d map[string]any) bool {
 	return ok && !ready
 }
 
+// resolverGuardWatchdogOff -- восстановление, которое бэкенд собрал сам: HARD
+// был открыт, а свежий отчёт пришёл без проверки сторожа (выключен правкой
+// файла, сломан конфиг, агент откатили). Что с DNS роутера, никто не знает.
+func resolverGuardWatchdogOff(d map[string]any) bool {
+	return strOrEmpty(d, "reason") == "watchdog_off"
+}
+
 // resolverGuardRecoveryNote -- что сказать в итоге восстановления, когда ok
 // не значит «снова через свой». Пусто -- обычное восстановление.
 func resolverGuardRecoveryNote(d map[string]any) []string {
 	switch {
+	case resolverGuardWatchdogOff(d):
+		return []string{"Роутер мог остаться на запасных DNS-серверах до перезагрузки. Проверьте настройки DNS роутера или перезагрузите его."}
 	case resolverGuardIdle(d):
 		var out []string
 		switch strOrEmpty(d, "idle_reason") {
