@@ -220,6 +220,9 @@ type miniappCommandReq struct {
 // it is checked BEFORE the router is looked up so a stranger cannot probe which
 // ids exist (same ordering as the Phase 3 access endpoints).
 func miniappCommandHandler(d Deps) http.HandlerFunc {
+	// Окно перезагрузки живёт вместе с обработчиком: один мукс -- одно окно,
+	// и тесты с разными муксами не мешают друг другу.
+	rebootCooldown := newRouterCooldown(miniappRebootCooldown, time.Now)
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
 		routerID, ok := parseMiniappRouterID(r)
@@ -335,7 +338,22 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 				return
 			}
 		}
-		enqueueAgentCommandForUser(w, d, u, req.Action, args)
+		// Необратимое подтверждается набором имени роутера, и сверяет его
+		// сервер: проверка на экране -- пауза для человека, а не граница.
+		if miniappConfirmRequired(req.Action, args) && !confirmPhraseMatches(req.Confirm, u.Nickname) {
+			writeJSONError(w, http.StatusBadRequest, "confirm_mismatch", "имя роутера набрано неверно")
+			return
+		}
+		reboot := miniappIsRouterReboot(req.Action, args)
+		if reboot && !rebootCooldown.tryStart(u.ID) {
+			writeJSONError(w, http.StatusTooManyRequests, "reboot_cooldown", "роутер уже перезагружается")
+			return
+		}
+		resp := wizardDeployResp{}
+		resp.RouterAsleep, resp.WakeWindowMin = miniappWakeWindow(d, u, req.Action, time.Now().UTC())
+		if !enqueueAgentCommandForUserResp(w, d, u, req.Action, args, resp) && reboot {
+			rebootCooldown.release(u.ID)
+		}
 	}
 }
 

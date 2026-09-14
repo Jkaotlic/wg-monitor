@@ -1,0 +1,13 @@
+[
+  {"name": "точное совпадение", "phrase": "router-owned", "typed": "router-owned", "ok": true},
+  {"name": "другой регистр", "phrase": "router-owned", "typed": "ROUTER-OWNED", "ok": true},
+  {"name": "пробелы по краям", "phrase": "router-owned", "typed": "  router-owned  ", "ok": true},
+  {"name": "неразрывный дефис в наборе", "phrase": "router-owned", "typed": "router‑owned", "ok": true},
+  {"name": "дефис U+2010 в наборе", "phrase": "router-owned", "typed": "router‐owned", "ok": true},
+  {"name": "неразрывный дефис в имени", "phrase": "home‑1", "typed": "home-1", "ok": true},
+  {"name": "кириллица в другом регистре", "phrase": "Дача-2", "typed": "дача‑2", "ok": true},
+  {"name": "без дефиса", "phrase": "router-owned", "typed": "routerowned", "ok": false},
+  {"name": "подчёркивание вместо дефиса", "phrase": "router-owned", "typed": "router_owned", "ok": false},
+  {"name": "чужой роутер", "phrase": "router-owned", "typed": "router-other", "ok": false},
+  {"name": "пустой набор", "phrase": "router-owned", "typed": "", "ok": false}
+]

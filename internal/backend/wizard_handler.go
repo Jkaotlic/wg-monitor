@@ -543,6 +543,10 @@ type wizardDeployReq struct {
 
 type wizardDeployResp struct {
 	CmdID string `json:"cmd_id"`
+	// RouterAsleep / WakeWindowMin -- только у мини-аппа: роутер сейчас спит,
+	// и команда подождёт его WakeWindowMin минут, после чего отменится.
+	RouterAsleep  bool `json:"router_asleep,omitempty"`
+	WakeWindowMin int  `json:"wake_window_min,omitempty"`
 }
 
 type backendUpdateRequest struct {
@@ -1501,10 +1505,17 @@ func enqueueWizardAgentCommand(w http.ResponseWriter, d Deps, nickname, action s
 // silly. Callers do their own authorization before calling this: it enforces
 // none.
 func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any) {
+	enqueueAgentCommandForUserResp(w, d, u, action, args, wizardDeployResp{})
+}
+
+// enqueueAgentCommandForUserResp ставит команду и отвечает 202 телом resp с
+// выданным cmd_id. Возвращает, встала ли команда в очередь: мини-апп снимает
+// кулдаун перезагрузки, если нет.
+func enqueueAgentCommandForUserResp(w http.ResponseWriter, d Deps, u *db.User, action string, args map[string]any, resp wizardDeployResp) bool {
 	id, err := newCmdID()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
-		return
+		return false
 	}
 	if args == nil {
 		args = map[string]any{}
@@ -1517,15 +1528,17 @@ func enqueueAgentCommandForUser(w http.ResponseWriter, d Deps, u *db.User, actio
 	}
 	if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
-		return
+		return false
 	}
 	if d.Logger != nil {
 		d.Logger.Info("agent command enqueued",
 			"nickname", u.Nickname, "user_id", u.ID, "cmd_id", id, "action", action)
 	}
+	resp.CmdID = id
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: id})
+	_ = json.NewEncoder(w).Encode(resp)
+	return true
 }
 
 // wizardCmdResultHandler returns the agent's CommandResult for a previously
