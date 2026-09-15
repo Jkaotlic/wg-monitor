@@ -303,6 +303,29 @@ describe('«Парк»: обновление агента', () => {
     cleanup(root, sheet2.root)
   })
 
+  // Cross-batch (B6, backend review): агент ниже agentSelfUpdateFloor не
+  // умеет self_update вовсе -- сервер шлёт agent_behind=false и
+  // предупреждение «нужна переустановка». Раньше warning показывался только
+  // рядом с кнопкой «Обновить» (canUpdate), а у такого роутера её нет --
+  // предупреждение было невидимо.
+  it('слишком старый агент: предупреждение видно без кнопки «Обновить» и не в счётчике отставших', async () => {
+    reset()
+    mocks.fleet = {
+      ...FLEET,
+      routers: [
+        ...FLEET.routers,
+        router({ id: 21, nickname: 'antique', status: 'online', agent_version: 'v0.10.0', agent_behind: false, agent_update_warning: 'агент слишком старый — нужна переустановка' }),
+      ],
+    }
+    const { root } = await mountPark()
+    const row = rowOf(root, 'antique')
+    expect(row.textContent).toContain('Оговорка: агент слишком старый — нужна переустановка')
+    expect(buttons(row, 'Обновить агент')).toHaveLength(0)
+    // office (agent_behind:true) -- единственный в счётчике; antique его не увеличивает.
+    expect(root.textContent).toContain('Обновить всех отставших (1)')
+    cleanup(root)
+  })
+
   it('отставших нет -- кнопки массового обновления нет', async () => {
     reset()
     mocks.fleet = { ...FLEET, routers: [FLEET.routers[0], FLEET.routers[2]] }

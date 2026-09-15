@@ -362,7 +362,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                       <Quoted text={row.update.text} />
                     </p>
                   )}
-                  {row.warning && row.update.canUpdate && <p class="hint">Оговорка: {row.warning}</p>}
+                  {/* Не только рядом с кнопкой «Обновить»: у слишком старого
+                      агента (B6) canUpdate=false -- self_update ему
+                      недоступен вовсе, но именно поэтому предупреждение
+                      обязано быть видно, а не пропадать вместе с кнопкой. */}
+                  {row.warning && <p class="hint">Оговорка: {row.warning}</p>}
                   {(row.update.canUpdate || row.update.canCancel) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
