@@ -58,6 +58,32 @@ describe('подпись режима трафика', () => {
   })
 })
 
+// snekhaev, 07–15.09.2026: агент не дочитал правила обхода, и экран неделю писал
+// «трафик идёт напрямую, заблокированное не откроется». Бэкенд теперь отвечает
+// unknown с причиной. «Не сообщил, какой VPN-туннель основной» -- тоже неправда
+// (сообщил), а «повторить проверку» не поможет: повтор упрётся в тот же список.
+describe('правила обхода не прочитаны', () => {
+  const traffic = { mode: 'unknown', reason: 'rules_unreadable' }
+
+  it('шапка называет, чего не узнали, и не зовёт повторять', () => {
+    const h = routerHeadline({ router: ONLINE, traffic, tunnels: TWO_LIVE })
+    expect(h.tone).toBe('off')
+    expect(h.verdict).toMatch(/правила/i)
+    expect(h.verdict).not.toMatch(/не сообщил|заново|напрямую/)
+  })
+
+  it('подпись режима -- то же самое', () => {
+    const l = trafficLabel(traffic)
+    expect(l.title).toMatch(/неизвестно/i)
+    expect(l.detail).toMatch(/правила/i)
+    expect(l.detail).not.toMatch(/не сообщает|Повторить|напрямую/)
+  })
+
+  it('без причины -- прежний ответ «не сообщил»', () => {
+    expect(routerHeadline({ router: ONLINE, traffic: { mode: 'unknown' } }).verdict).toContain('не сообщил')
+  })
+})
+
 describe('схема пути при раздельной маршрутизации', () => {
   it('ветка обхода живая, но имя и задержку не угадывает', () => {
     const s = pathState({ traffic: { mode: 'split' }, tunnels: TWO_LIVE })

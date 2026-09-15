@@ -199,6 +199,47 @@ func TestTunnelsCheck_UnusedTunnelWithPingCheckDisabledDoesNotFailOnNoHandshake(
 	t.Fatalf("tunnel_awg10 check not emitted; got: %+v", out)
 }
 
+// Списки правил не прочитались (обрезанный ответ, 500): «у туннеля нет
+// правил» из этого не следует, и падение туннеля глушить нельзя. Иначе
+// роутер с большим списком молча теряет тревоги о своих VPN-туннелях.
+func TestTunnelsCheck_DoesNotSuppressFailureWhenRouteListsUnreadable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tunnels/all":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"id":"awg10","name":"carrier","type":"awg","status":"starting","enabled":true,"defaultRoute":true,"interfaceName":"nwg1"}
+			]}}`))
+		case "/api/pingcheck/status":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"tunnels":[
+				{"tunnelId":"awg10","status":"disabled","method":"icmp","failCount":0,"failThreshold":3}
+			]}}`))
+		case "/api/dns-routes/list":
+			w.WriteHeader(http.StatusInternalServerError)
+		case "/api/static-routes/list":
+			_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+		case "/api/settings/get":
+			_, _ = w.Write([]byte(`{"success":true,"data":{"download":{"routeTag":""}}}`))
+		case "/api/monitoring/matrix":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	out := TunnelsCheck{Client: awgmgr.New(srv.URL)}.Run(context.Background(), Deps{})
+	for _, c := range out {
+		if c.Name != "tunnel_awg10" {
+			continue
+		}
+		if c.Status != "fail" {
+			t.Fatalf("правила не прочитаны -- падение туннеля глушить нельзя: %+v", c)
+		}
+		return
+	}
+	t.Fatalf("tunnel_awg10 check not emitted; got: %+v", out)
+}
+
 func TestTunnelsCheck_EmitsRouteCountsInDetails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

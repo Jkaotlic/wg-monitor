@@ -13,6 +13,11 @@ import (
 // the backend does not depend on the agent's checks package.
 const miniappTunnelPrefix = "tunnel_"
 
+// miniappTunnelsInventoryCheck -- сводная проверка агента ("tunnels"): OK с
+// ней приходит в каждом отчёте, где awg-manager отдал список туннелей
+// (checks/tunnels.go). Без подчёркивания, то есть не строка туннеля.
+const miniappTunnelsInventoryCheck = "tunnels"
+
 // miniappTunnel is the per-tunnel projection the mini app is allowed to see.
 //
 // It is a WHITELIST, not a passthrough of events.details_json. The agent's
@@ -149,7 +154,15 @@ type miniappTraffic struct {
 	// we know the egress it explains why the other tunnel looks idle; when we
 	// don't, it is precisely why.
 	ContestedDefault bool `json:"contested_default"`
+	// Reason -- почему ответ «неизвестно», когда экрану есть что сказать
+	// точнее общего «роутер не сообщил». Пусто у остальных режимов.
+	Reason string `json:"reason,omitempty"`
 }
+
+// miniappTrafficReasonRulesUnreadable: агент не смог прочитать правила
+// маршрутизации (mechanism_probe_error в проверке hydraroute), и «правил нет»
+// из его нулей не следует.
+const miniappTrafficReasonRulesUnreadable = "rules_unreadable"
 
 // miniappHydraDetails decodes the sing-box flag and whether HydraRoute is
 // executing any rules out of the hydraroute check.
@@ -157,6 +170,10 @@ type miniappHydraDetails struct {
 	SingboxRouterActive bool `json:"singbox_router_active"`
 	Running             bool `json:"running"`
 	RoutesHRNeo         int  `json:"routes_hrneo"`
+	// MechanismProbeError: агент не дочитал списки правил, и счётчики выше --
+	// нули от незнания. 07.09.2026 на snekhaev список DNS-маршрутов перерос
+	// потолок чтения, и экран неделю писал «трафик идёт напрямую».
+	MechanismProbeError string `json:"mechanism_probe_error"`
 }
 
 // miniappDeriveTraffic answers "direct or via VPN" from stored state alone.
@@ -226,6 +243,11 @@ func miniappDeriveTraffic(tunnels []miniappTunnel, byCheck map[string]db.EventRo
 				out.EgressTunnelID = carrier.TunnelID
 				out.EgressTunnelName = carrier.Name
 			}
+		} else if hd.MechanismProbeError != "" {
+			// «Ни одно правило не ведёт в VPN» из непрочитанных правил не
+			// следует: говорим, чего не узнали, а не выдумываем «напрямую».
+			out.Mode = miniappTrafficUnknown
+			out.Reason = miniappTrafficReasonRulesUnreadable
 		}
 	}
 	return out

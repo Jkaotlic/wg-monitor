@@ -13,10 +13,17 @@ import (
 	"time"
 )
 
+// routeListMaxBody -- потолок тела списков правил. Общий потолок get (1 МиБ)
+// импортированные списки доменов и подсетей перерастают: 07.09.2026 на
+// snekhaev список DNS-маршрутов перестал читаться, агент считал правил ноль,
+// и экран неделю писал «трафик идёт напрямую». Не больше: список целиком
+// разбирается в память роутера.
+const routeListMaxBody = 8 << 20
+
 // ListDNSRoutes returns /api/dns-routes/list .data.
 func (c *Client) ListDNSRoutes(ctx context.Context) ([]DNSRoute, error) {
 	var env Envelope[[]DNSRoute]
-	if err := c.get(ctx, "/api/dns-routes/list", &env); err != nil {
+	if err := c.getLimited(ctx, "/api/dns-routes/list", &env, routeListMaxBody); err != nil {
 		return nil, err
 	}
 	if !env.Success {
@@ -59,7 +66,7 @@ func (c *Client) DeleteDNSRoute(ctx context.Context, id string) error {
 // ListStaticRoutes returns /api/static-routes/list .data.
 func (c *Client) ListStaticRoutes(ctx context.Context) ([]StaticRoute, error) {
 	var env Envelope[[]StaticRoute]
-	if err := c.get(ctx, "/api/static-routes/list", &env); err != nil {
+	if err := c.getLimited(ctx, "/api/static-routes/list", &env, routeListMaxBody); err != nil {
 		return nil, err
 	}
 	if !env.Success {
