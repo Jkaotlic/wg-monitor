@@ -9,7 +9,7 @@ import { act } from 'preact/test-utils'
 const mocks = vi.hoisted(() => ({
   fleet: null, fleetCalls: 0, updates: [], cancels: [], fleetUpdates: [],
   updateReply: null, cancelReply: null, fleetReply: null,
-  sent: [], results: {}, notify: [], notifyReply: null, notifyReplies: {},
+  sent: [], results: {}, resultResolvers: {}, notify: [], notifyReply: null, notifyReplies: {},
   // Первое чтение (на монтировании) всегда успевает -- иначе экран никогда
   // не покажет ни одной строки. Отказ этот флаг включает начиная со второго.
   fleetFailAfterFirst: false,
@@ -43,9 +43,14 @@ vi.mock('../src/api.js', async (importOriginal) => {
       mocks.sent.push({ routerID, action, args })
       return Promise.resolve({ cmd_id: `c${routerID}` })
     },
-    // Нет ответа в mocks.results -- обещание, которое не разрешается: цикл
-    // ждёт, не крутясь вхолостую до дедлайна по настоящим часам.
-    fetchCommandResult: (routerID) => (routerID in mocks.results ? Promise.resolve(mocks.results[routerID]) : new Promise(() => {})),
+    // Нет ответа в mocks.results -- обещание, которое тест может разрешить
+    // сам позже через mocks.resultResolvers[routerID](res); дефолт-резолвер
+    // на месте -- цикл не крутится вхолостую до дедлайна по настоящим часам,
+    // если тест его не трогает вовсе.
+    fetchCommandResult: (routerID) =>
+      routerID in mocks.results
+        ? Promise.resolve(mocks.results[routerID])
+        : new Promise((resolve) => { mocks.resultResolvers[routerID] = resolve }),
     setRouterNotify: (id, muted) => {
       mocks.notify.push({ id, muted })
       if (id in mocks.notifyReplies) return reply(mocks.notifyReplies[id])
@@ -78,6 +83,8 @@ const FLEET = {
 }
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+const DOCTOR_OK = ['🩺 Проверка роутера', '✅ awg-manager API: 2.19.1', '✅ tunnels: 2 up'].join('\n')
 
 async function mountPark({ onOpenRouter, currentID } = {}) {
   const sheets = []
@@ -125,6 +132,7 @@ function reset() {
   mocks.fleetUpdates = []
   mocks.sent = []
   mocks.results = {}
+  mocks.resultResolvers = {}
   mocks.notify = []
   mocks.notifyReply = null
   mocks.notifyReplies = {}
@@ -371,6 +379,50 @@ describe('«Парк»: массовые проверки', () => {
     expect(buttons(root, 'Аудит всех')[0].disabled).toBe(true)
     expect(root.textContent).toContain('Ответили 0 из 1…')
     cleanup(root)
+  })
+
+  // F1(b): двойной тап (два клика раньше, чем Preact перерисует disabled)
+  // не должен отправить вторую пачку поверх первой -- защита обязана быть
+  // синхронным ref-флагом, а не state, который обновится только на кадре позже.
+  it('двойной тап по «Проверить все» шлёт только одну пачку', async () => {
+    reset()
+    mocks.fleet = { ...FLEET, routers: [FLEET.routers[2]] } // один roundtrip -- car
+    const { root } = await mountPark()
+    const btn = buttons(root, 'Проверить все')[0]
+    await act(async () => {
+      btn.click()
+      btn.click() // синхронно, до перерисовки -- как настоящий двойной тап
+    })
+    expect(mocks.sent).toEqual([{ routerID: 15, action: 'router_doctor', args: {} }])
+    mocks.resultResolvers[15]({ id: 'c15', status: 'ok', output: DOCTOR_OK })
+    await flush()
+    await flush()
+    expect(root.textContent).toContain('Проверено 1 из 1, проблем не нашлось.')
+    cleanup(root)
+  })
+
+  // F1(a): уход с экрана прерывает цикл -- уже отправленные запросы
+  // доходят, а роутеры в очереди пула (сверх 3 сразу) не опрашиваются, и
+  // load() после аудита не зовётся на уже размонтированном экране.
+  it('уход с экрана прерывает пачку: очередь не идёт дальше, load() после нет', async () => {
+    reset()
+    const routers = [15, 16, 17, 18, 19].map((id) => ({ ...FLEET.routers[2], id, nickname: `r${id}` }))
+    mocks.fleet = { ...FLEET, routers }
+    const { root } = await mountPark()
+    await act(async () => buttons(root, 'Аудит всех')[0].click())
+    await flush()
+    expect(mocks.sent).toHaveLength(3) // пул на 3 -- 4-й и 5-й в очереди
+    expect(mocks.fleetCalls).toBe(1) // только монтирование
+    cleanup(root) // уход с экрана посреди пачки
+
+    const AUDIT_OK = JSON.stringify({ awgmgr_version: '2.19.1', awgmgr_running: true, firmware_current: '4.3.0', firmware_avail: '4.3.0' })
+    for (const id of [15, 16, 17]) mocks.resultResolvers[id]?.({ id: `c${id}`, status: 'ok', output: AUDIT_OK })
+    await flush()
+    await flush()
+    // Роутеры 18 и 19 стояли в очереди пула -- после отмены она не пошла дальше.
+    expect(mocks.sent).toHaveLength(3)
+    // Аудит перечитывает /fleet по завершении -- но экран уже размонтирован.
+    expect(mocks.fleetCalls).toBe(1)
   })
 })
 

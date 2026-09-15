@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -69,13 +69,36 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   const [linkLines, setLinkLines] = useState([])
   const [linkError, setLinkError] = useState(null)
 
+  // aliveRef -- экран мог уйти, пока fetchFleet ещё в пути: setState на
+  // размонтированном экране здесь не ошибка (Preact не ругается, в отличие
+  // от React), но и обещать честной не становится -- проверяем перед каждым
+  // применением ответа.
+  const aliveRef = useRef(true)
+  // Синхронный флаг занятости пачки: batch?.running -- state, он меняется
+  // только на следующем кадре, и второй тап до перерисовки прошёл бы мимо
+  // проверки. batchCancelRef.current.cancelled рвёт цикл при уходе с экрана
+  // -- runFleetBatch видит его в while-опросе и в очереди пула.
+  const batchRunningRef = useRef(false)
+  const batchCancelRef = useRef({ cancelled: false })
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+      batchCancelRef.current.cancelled = true
+    }
+  }, [])
+
   function load() {
     return fetchFleet()
       .then((data) => {
+        if (!aliveRef.current) return
         setFleet(data)
         setFleetError(null)
       })
-      .catch(() => setFleetError('Не удалось прочитать сводку парка.'))
+      .catch(() => {
+        if (aliveRef.current) setFleetError('Не удалось прочитать сводку парка.')
+      })
   }
 
   useEffect(() => {
@@ -156,16 +179,25 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   }
 
   async function runBatch(kind) {
-    if (!fleet || batch?.running) return
-    await runFleetBatch({
-      kind,
-      routers: fleet.routers ?? [],
-      send: sendCommand,
-      poll: fetchCommandResult,
-      onProgress: setBatch,
-    })
-    // Аудит обновляет снимок версий на сервере -- строки парка читают его же.
-    if (kind === 'audit') load()
+    if (!fleet || batchRunningRef.current) return
+    batchRunningRef.current = true
+    const signal = { cancelled: false }
+    batchCancelRef.current = signal
+    try {
+      await runFleetBatch({
+        kind,
+        routers: fleet.routers ?? [],
+        send: sendCommand,
+        poll: fetchCommandResult,
+        onProgress: (s) => { if (aliveRef.current) setBatch(s) },
+        signal,
+      })
+      // Аудит обновляет снимок версий на сервере -- строки парка читают его
+      // же, но только если экран ещё здесь: на размонтированном перечитывать нечего.
+      if (aliveRef.current && kind === 'audit') load()
+    } finally {
+      batchRunningRef.current = false
+    }
   }
 
   // Решение оператора: «отключить уведомления в личку от определённого
