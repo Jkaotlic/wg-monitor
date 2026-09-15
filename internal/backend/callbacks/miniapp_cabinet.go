@@ -136,7 +136,7 @@ func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (b
 // Имя осталось прежним ради вызывающих; адресат сменился с темы группы на
 // личку каждого получателя.
 func (r *Router) NotifyRouterTopic(ctx context.Context, routerID int64, text string) error {
-	if _, err := notify.NewFanout(r.d, r.tg, slog.Default(), 0).Send(ctx, routerID, text, ""); err != nil {
+	if _, err := notify.NewFanout(r.d, r.tg, slog.Default(), r.cfg.AdminUserID).Send(ctx, routerID, text, ""); err != nil {
 		return fmt.Errorf("notify router: %w", err)
 	}
 	return nil

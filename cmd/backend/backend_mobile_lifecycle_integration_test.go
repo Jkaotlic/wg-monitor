@@ -60,7 +60,7 @@ func TestIntegration_MobileLifecycle_WakeAndSleep(t *testing.T) {
 	const chatID = -100
 
 	// Wire the wake notifier exactly as cmd/backend/main.go would.
-	wake := alerts.NewWakeNotifier(d, capt, chatID)
+	wake := alerts.NewWakeNotifier(d, capt, chatID, 0)
 
 	// Simulate the handler's hook: Resumed=true on a mobile user → SendWake.
 	checks := []wire.Check{{Name: "tunnels", Status: "ok"}, {Name: "dns_via_tunnel", Status: "ok"}}
@@ -69,7 +69,7 @@ func TestIntegration_MobileLifecycle_WakeAndSleep(t *testing.T) {
 	}
 
 	// Wire watcher + sleep notifier; trigger a stale scan.
-	sleep := alerts.NewSleepNotifier(d, capt, chatID)
+	sleep := alerts.NewSleepNotifier(d, capt, chatID, 0)
 	w := heartbeat.NewWatcher(d, &noopOffline{}, heartbeat.Config{
 		MobileLifecycle:  true,
 		MobileSleepAfter: time.Second,

@@ -31,10 +31,10 @@ type WakeNotifier struct {
 	miniAppBaseURL string
 }
 
-func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *WakeNotifier {
+func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *WakeNotifier {
 	return &WakeNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
+		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }
 
@@ -86,10 +86,10 @@ type SleepNotifier struct {
 	notify lifecycleSink
 }
 
-func NewSleepNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *SleepNotifier {
+func NewSleepNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *SleepNotifier {
 	return &SleepNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
+		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }
 

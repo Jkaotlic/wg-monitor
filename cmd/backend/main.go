@@ -126,6 +126,7 @@ func main() {
 		FailThreshold:     cfg.State.FailThreshold,
 		RecoveryThreshold: cfg.State.RecoveryThreshold,
 		MiniAppBaseURL:    cfg.PublicBaseURL,
+		AdminUserID:       cfg.Telegram.AdminUserID,
 	})
 
 	mobileLifecycle := cfg.Heartbeat.MobileLifecycle == nil || *cfg.Heartbeat.MobileLifecycle
@@ -147,10 +148,10 @@ func main() {
 	// Mobile-lifecycle notifiers: wake-card on Resumed=true, one-shot sleep-info
 	// after MobileSleepAfter silence. Both no-op for static users / when
 	// telegram_thread_id is NULL.
-	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.ChatID)
+	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.ChatID, cfg.Telegram.AdminUserID)
 	wakeNotifier.SetMiniAppBaseURL(cfg.PublicBaseURL)
-	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.ChatID)
-	deployNotifier := alerts.NewDeployNotifier(d, tgClient, cfg.Telegram.ChatID)
+	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.ChatID, cfg.Telegram.AdminUserID)
+	deployNotifier := alerts.NewDeployNotifier(d, tgClient, cfg.Telegram.ChatID, cfg.Telegram.AdminUserID)
 	watcher.SetSleepNotifier(sleepNotifier)
 
 	cmdQueue := cmd.New()
@@ -426,6 +427,7 @@ func main() {
 		MobileRealertEvery: time.Duration(cfg.State.MobileRealertEverySec) * time.Second,
 		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
 		MiniAppBaseURL:     cfg.PublicBaseURL,
+		AdminUserID:        cfg.Telegram.AdminUserID,
 	})
 	go func() {
 		if err := rp.Run(ctx); err != nil {

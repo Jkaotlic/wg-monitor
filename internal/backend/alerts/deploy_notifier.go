@@ -20,10 +20,10 @@ type DeployNotifier struct {
 	notify notifySink
 }
 
-func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *DeployNotifier {
+func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *DeployNotifier {
 	return &DeployNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
+		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }
 
