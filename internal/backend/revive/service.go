@@ -126,6 +126,12 @@ type Service struct {
 	jobs   map[int64]string // routerID -> jobID идущей переустановки
 
 	wg sync.WaitGroup
+
+	// testBeforeCancelFinish, если задан, зовётся в Cancel между Get и
+	// Finish -- нужен только тесту гонки waiting->running (fix round 1,
+	// Important #1): без хука эту гонку нельзя воспроизвести детерминированно,
+	// так как Get и Finish -- два отдельных обращения к БД в одной горутине.
+	testBeforeCancelFinish func()
 }
 
 func New(cfg Config) (*Service, error) {
@@ -236,16 +242,6 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 		return Intent{}, ErrRunning
 	}
 
-	if asked != "" {
-		ok, err := s.cfg.DB.Users().SetAWGMURLIfEmpty(routerID, asked)
-		if err != nil {
-			return Intent{}, err
-		}
-		if !ok {
-			return Intent{}, ErrURLAlreadySet
-		}
-	}
-
 	nonce, ct, err := s.box.Seal(routerID, creds)
 	if err != nil {
 		return Intent{}, err
@@ -256,6 +252,10 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 		days = DefaultExpiryDays
 	}
 	expiry := time.Duration(days) * 24 * time.Hour
+	// Fix round 1, #2: Put -- ДО SetAWGMURLIfEmpty. Если Seal или Put упадут
+	// (DB-ошибка), адрес панели не осядет в users без единого намерения в
+	// базе: повторная постановка с тем же адресом не упрётся в
+	// awgm_url_already_set на пустом месте.
 	err = s.cfg.DB.Revive().Put(db.ReviveIntent{
 		RouterID: routerID, CreatedAt: now, ExpiresAt: now.Add(expiry), RequestedBy: req.RequestedBy,
 	}, nonce, ct)
@@ -265,6 +265,17 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 	if err != nil {
 		return Intent{}, err
 	}
+
+	if asked != "" {
+		ok, err := s.cfg.DB.Users().SetAWGMURLIfEmpty(routerID, asked)
+		if err != nil {
+			return Intent{}, err
+		}
+		if !ok {
+			return Intent{}, ErrURLAlreadySet
+		}
+	}
+
 	s.logger.Info("оживление агента поставлено", "router_id", routerID, "expires_at", now.Add(expiry), "requested_by", req.RequestedBy)
 
 	got, err := s.cfg.DB.Revive().Get(routerID)
@@ -281,18 +292,41 @@ func (s *Service) Cancel(ctx context.Context, routerID int64) (bool, error) {
 	if !s.Enabled() {
 		return false, ErrDisabled
 	}
-	if cur, err := s.cfg.DB.Revive().Get(routerID); err == nil && cur != nil && cur.Status == StatusRunning {
+	// Fix round 1, #1: ошибка Get раньше тихо проглатывалась (err == nil &&
+	// ...) -- Cancel просто шёл дальше к Finish, как если бы намерения не
+	// было. Теперь она возвращается как есть.
+	cur, err := s.cfg.DB.Revive().Get(routerID)
+	if err != nil {
+		return false, err
+	}
+	if cur != nil && cur.Status == StatusRunning {
 		return false, ErrRunning
+	}
+	if s.testBeforeCancelFinish != nil {
+		s.testBeforeCancelFinish()
 	}
 	ok, err := s.cfg.DB.Revive().Finish(routerID, []string{StatusWaiting}, StatusCancelled, "отменено", s.now())
 	if err != nil {
 		return false, err
 	}
-	s.forgetJob(routerID)
-	if ok {
-		s.logger.Info("оживление агента отменено", "router_id", routerID)
+	if !ok {
+		// Кто-то успел раньше: либо намерения уже нет, либо (гонка с
+		// воркером) его статус сменился на running между Get выше и этим
+		// Finish. forgetJob здесь недопустим ни в одном из случаев: у
+		// waiting-намерения задания ещё нет, а у running оно принадлежит
+		// воркеру и не должно теряться из-под него (fix round 1, #1).
+		after, err := s.cfg.DB.Revive().Get(routerID)
+		if err != nil {
+			return false, err
+		}
+		if after != nil && after.Status == StatusRunning {
+			return false, ErrRunning
+		}
+		return false, nil
 	}
-	return ok, nil
+	s.forgetJob(routerID)
+	s.logger.Info("оживление агента отменено", "router_id", routerID)
+	return true, nil
 }
 
 // StatusFor -- состояние для экрана; nil, если оживление не ставили.

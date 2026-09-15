@@ -97,7 +97,12 @@ func TestSchedule_ExpiresDays(t *testing.T) {
 	for _, c := range []struct {
 		days int
 		want time.Duration
-	}{{7, 7 * 24 * time.Hour}, {0, 30 * 24 * time.Hour}, {-3, 30 * 24 * time.Hour}, {90, 30 * 24 * time.Hour}} {
+	}{
+		{7, 7 * 24 * time.Hour}, {0, 30 * 24 * time.Hour}, {-3, 30 * 24 * time.Hour}, {90, 30 * 24 * time.Hour},
+		// Границы диапазона 1..30 (fix round 1, #3): 1 -- минимум как есть, 30 --
+		// максимум как есть, не путать с умолчанием.
+		{1, 24 * time.Hour}, {30, 30 * 24 * time.Hour},
+	} {
 		env := newEnv(t)
 		req := fixtureRequest()
 		req.ExpiresDays = c.days
@@ -201,6 +206,107 @@ func TestSchedule_SetsURLForRouterWithout(t *testing.T) {
 	}
 }
 
+// Fix round 1, #2: если Put не может записать секрет (DB-ошибка), адрес
+// панели не должен всё равно осесть в users -- иначе повтор постановки с тем
+// же адресом упирается в awgm_url_already_set без единого намерения в базе.
+func TestSchedule_URLNotCommittedIfPutFails(t *testing.T) {
+	env := newEnv(t)
+	env.clearAWGMURL(t)
+	if _, err := env.db.SQL().Exec(`DROP TABLE revive_secrets`); err != nil {
+		t.Fatal(err)
+	}
+	req := fixtureRequest()
+	req.AWGMURL = "https://awg.example.com"
+	if _, err := env.svc.Schedule(context.Background(), env.router, req); err == nil {
+		t.Fatal("ожидали ошибку постановки -- Put не может записать секрет без таблицы")
+	}
+	u, err := env.db.Users().GetByID(env.router)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.AWGMURL != nil {
+		t.Fatalf("адрес панели не должен сохраниться при неудачном Put: %v", *u.AWGMURL)
+	}
+}
+
+// Fix round 1, #3: постановка поверх waiting-намерения (после неудачной
+// попытки воркера) заменяет секрет и сбрасывает счётчик попыток -- старые
+// учётные данные не должны продолжать жить в базе.
+func TestSchedule_ReplacesWaitingIntent(t *testing.T) {
+	env := newEnv(t)
+	if _, err := env.svc.Schedule(context.Background(), env.router, fixtureRequest()); err != nil {
+		t.Fatal(err)
+	}
+	env.svc.Wait()
+	// Имитация неудачной попытки воркера: waiting -> running -> waiting,
+	// attempts становится 1.
+	if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+		t.Fatalf("mark running: %v %v", ok, err)
+	}
+	if ok, err := env.db.Revive().BackToWaiting(env.router, "первая попытка не удалась", testT0); !ok || err != nil {
+		t.Fatalf("back to waiting: %v %v", ok, err)
+	}
+	if in := env.intent(t); in.Attempts != 1 || in.Status != StatusWaiting {
+		t.Fatalf("предусловие сломано: %+v", in)
+	}
+
+	other := ScheduleRequest{RootPassword: "other-root-pw", AWGMLogin: "other-login", AWGMPassword: "other-panel-pw", AWGMAPIKey: "other-api-key", RequestedBy: 99}
+	got, err := env.svc.Schedule(context.Background(), env.router, other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attempts != 0 || got.RequestedBy != 99 || got.Status != StatusWaiting {
+		t.Fatalf("переустановка намерения не сбросила состояние: %+v", got)
+	}
+
+	nonce, ct, ok, err := env.db.Revive().Secret(env.router)
+	if err != nil || !ok {
+		t.Fatalf("секрет: %v %v", ok, err)
+	}
+	box, _ := NewBox(env.key)
+	creds, err := box.Open(env.router, nonce, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds.Equal(fixtureSecrets()) {
+		t.Fatal("старый секрет всё ещё расшифровывается -- не заменён новым")
+	}
+	if !creds.Equal(NewSecrets("other-root-pw", "other-login", "other-panel-pw", "other-api-key")) {
+		t.Fatalf("новый секрет не совпадает с тем, что передали: %+v", creds)
+	}
+}
+
+// Постановка поверх завершённого (failed) намерения -- то же самое: новый
+// секрет, попытки с нуля. Finish уже стёр старый секрет, так что это
+// одновременно проверка, что Put справляется с "секрета нет вовсе".
+func TestSchedule_ReplacesFailedIntent(t *testing.T) {
+	env := newEnv(t)
+	if _, err := env.svc.Schedule(context.Background(), env.router, fixtureRequest()); err != nil {
+		t.Fatal(err)
+	}
+	env.svc.Wait()
+	if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+		t.Fatalf("mark running: %v %v", ok, err)
+	}
+	if ok, err := env.db.Revive().Finish(env.router, []string{StatusRunning}, StatusFailed, "не дозвонились", testT0); !ok || err != nil {
+		t.Fatalf("finish -> failed: %v %v", ok, err)
+	}
+	if env.hasSecret(t) {
+		t.Fatal("предусловие: Finish обязан стереть секрет")
+	}
+
+	got, err := env.svc.Schedule(context.Background(), env.router, fixtureRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusWaiting || got.Attempts != 0 {
+		t.Fatalf("постановка поверх failed: %+v", got)
+	}
+	if !env.hasSecret(t) {
+		t.Fatal("новый секрет обязан появиться")
+	}
+}
+
 func TestCancel_WipesSecret(t *testing.T) {
 	env := newEnv(t)
 	if _, err := env.svc.Schedule(context.Background(), env.router, fixtureRequest()); err != nil {
@@ -242,6 +348,47 @@ func TestCancel_RunningRefused(t *testing.T) {
 	}
 	if in := env.intent(t); in.Status != StatusRunning {
 		t.Fatalf("отказ отмены не имеет права трогать статус: %+v", in)
+	}
+}
+
+// Fix round 1, #1: гонка между Cancel's Get (видит waiting) и Finish
+// (воркер успевает перевести в running первым) не должна ни терять jobID из
+// карты sync-состояния, ни возвращать (false, nil) вместо ErrRunning.
+func TestCancel_RaceToRunningReturnsErrRunning(t *testing.T) {
+	env := newEnv(t)
+	if _, err := env.svc.Schedule(context.Background(), env.router, fixtureRequest()); err != nil {
+		t.Fatal(err)
+	}
+	env.svc.Wait()
+	env.svc.setJob(env.router, "job-in-flight")
+	env.svc.testBeforeCancelFinish = func() {
+		if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+			t.Fatalf("гонка: mark running: %v %v", ok, err)
+		}
+	}
+
+	ok, err := env.svc.Cancel(context.Background(), env.router)
+	if ok || !errors.Is(err, ErrRunning) {
+		t.Fatalf("cancel в гонке waiting->running: ok=%v err=%v, want ErrRunning", ok, err)
+	}
+	if in := env.intent(t); in.Status != StatusRunning {
+		t.Fatalf("гонка не имеет права терять running: %+v", in)
+	}
+	if id, ok := env.svc.job(env.router); !ok || id != "job-in-flight" {
+		t.Fatalf("jobID потерян гонкой: id=%q ok=%v", id, ok)
+	}
+}
+
+// Fix round 1, #1: ошибка Get не должна тихо проглатываться -- раньше при
+// err != nil код проверки running просто пропускал её и шёл к Finish как
+// если бы намерения не было вовсе.
+func TestCancel_PropagatesGetError(t *testing.T) {
+	env := newEnv(t)
+	if _, err := env.db.SQL().Exec(`DROP TABLE revive_intents`); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := env.svc.Cancel(context.Background(), env.router); ok || err == nil {
+		t.Fatalf("cancel обязан вернуть ошибку Get, а не (false,nil): ok=%v err=%v", ok, err)
 	}
 }
 
