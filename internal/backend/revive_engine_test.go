@@ -156,16 +156,20 @@ func TestReviveLaunchError_Mapping(t *testing.T) {
 	cases := []struct {
 		code      string
 		permanent bool
+		// noAttempt -- Fix round 1, Minor #3 (мандатное ревью): движок занят
+		// ЧУЖИМ заданием на этом же роутере -- не вина оживления, попытка не
+		// тратится.
+		noAttempt bool
 	}{
-		{"no_awgm_url", true}, {"downgrade_rejected", true}, {"no_public_base_url", true},
-		{"provision_not_configured", true}, {"db_not_configured", true}, {"invalid_nickname", true}, {"invalid_kind", true},
-		{"already_running", false}, {"provision_already_running", false},
-		{"latest_version_failed", false}, {"checksums_failed", false}, {"internal_error", false},
+		{"no_awgm_url", true, false}, {"downgrade_rejected", true, false}, {"no_public_base_url", true, false},
+		{"provision_not_configured", true, false}, {"db_not_configured", true, false}, {"invalid_nickname", true, false}, {"invalid_kind", true, false},
+		{"already_running", false, true}, {"provision_already_running", false, true},
+		{"latest_version_failed", false, false}, {"checksums_failed", false, false}, {"internal_error", false, false},
 	}
 	for _, c := range cases {
 		le := reviveLaunchError(&repairStartError{Code: c.code, Message: "English detail " + reviveFixtureRoot})
-		if le.Permanent != c.permanent || le.Text == "" {
-			t.Fatalf("%s: %+v", c.code, le)
+		if le.Permanent != c.permanent || le.NoAttempt != c.noAttempt || le.Text == "" {
+			t.Fatalf("%s: %+v, want permanent=%v noAttempt=%v", c.code, le, c.permanent, c.noAttempt)
 		}
 		if reviveLatin.MatchString(le.Text) {
 			t.Fatalf("%s: латиница или сырой текст в причине: %q", c.code, le.Text)
@@ -456,5 +460,57 @@ func TestReviveEngine_LaunchDetachesFromCallerCtx(t *testing.T) {
 	}
 	if jobID == "" {
 		t.Fatal("нет jobID")
+	}
+}
+
+// Minor #4 (мандатное ревью): carry #6 утверждал в комментарии, что Launch
+// перечитывает строку роутера, а не бьёт по снимку воркера -- без теста на
+// то, что задание для терминала реально уходит с НОВЫМ адресом панели, а не
+// со старым. awgm_url меняется между постановкой (воркер прочитал бы
+// старый) и запуском.
+func TestReviveEngine_LaunchUsesCurrentAWGMURL(t *testing.T) {
+	relay := &fakeProvisionRelay{rc: 0}
+	d, database := newReinstallCoreDeps(t, relay)
+	u := seedReinstallRouter(t, database, "bronya", "https://awg-old.example.com", "")
+	stubVerifiedChecksums(t, map[string]string{"a": "b"})
+	e := NewReviveEngine(ReviveEngineDeps{DB: database, Provision: d.Provision, PublicBaseURL: d.PublicBaseURL, PublicIP: d.PublicIP})
+
+	if err := database.Users().UpdateDeployInfo("bronya", db.DeployInfo{AWGMURL: "https://awg-new.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	jobID, err := e.Launch(context.Background(), u.ID, revive.NewSecrets("x", "", "", ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForProvisionTerminal(t, d.Provision.Store, jobID, time.Second)
+	job := relay.capturedJobJSON()
+	if !bytes.Contains(job, []byte("https://awg-new.example.com")) {
+		t.Fatalf("задание обязано нести НОВЫЙ адрес панели: %s", job)
+	}
+	if bytes.Contains(job, []byte("awg-old")) {
+		t.Fatalf("задание не имеет права нести старый адрес панели: %s", job)
+	}
+}
+
+// Minor #4 (мандатное ревью): carry #6 -- AllowDowngrade всегда false,
+// сквозь адаптер. Роутер уже на версии новее запрошенной цели -- запуск
+// обязан отказать окончательным downgrade_rejected, а не тихо откатить агента.
+func TestReviveEngine_LaunchNeverAllowsDowngrade(t *testing.T) {
+	relay := &fakeProvisionRelay{rc: 0}
+	d, database := newReinstallCoreDeps(t, relay)
+	u := seedReinstallRouter(t, database, "bronya", "https://awg.example.com", "v9.9.9")
+	e := NewReviveEngine(ReviveEngineDeps{DB: database, Provision: d.Provision, PublicBaseURL: d.PublicBaseURL, PublicIP: d.PublicIP})
+
+	_, err := e.Launch(context.Background(), u.ID, revive.NewSecrets("x", "", "", ""), "v0.1.0")
+	if err == nil {
+		t.Fatal("даунгрейд обязан отказать")
+	}
+	le, ok := err.(*revive.LaunchError)
+	if !ok || !le.Permanent {
+		t.Fatalf("даунгрейд -- окончательный отказ: %v", err)
+	}
+	if relay.callCount() != 0 {
+		t.Fatal("даунгрейд обязан отказать до похода к терминалу роутера")
 	}
 }

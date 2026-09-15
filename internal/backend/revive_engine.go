@@ -140,7 +140,10 @@ func reviveLaunchError(serr *repairStartError) *revive.LaunchError {
 	case "invalid_nickname", "invalid_kind":
 		return &revive.LaunchError{Permanent: true, Text: "имя роутера не подходит для переустановки"}
 	case "already_running", "provision_already_running":
-		return &revive.LaunchError{Text: "на роутере уже идёт другая установка или ремонт"}
+		// NoAttempt (Fix round 1, Minor #3, мандатное ревью): движок занят
+		// ЧУЖИМ заданием на этом же роутере (дашборд уже чинит или ставит)
+		// -- не вина оживления, воркер не тратит на это одну из пяти попыток.
+		return &revive.LaunchError{NoAttempt: true, Text: "на роутере уже идёт другая установка или ремонт"}
 	case "latest_version_failed":
 		return &revive.LaunchError{Text: "не удалось узнать последнюю версию агента"}
 	case "checksums_failed":

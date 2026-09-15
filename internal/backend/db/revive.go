@@ -163,6 +163,22 @@ UPDATE revive_intents
 	return affectedOne(res, err)
 }
 
+// BackToWaitingNoAttempt -- как BackToWaiting, но дополнительно отменяет
+// попытку, которую MarkRunning уже засчитал в БД (attempts = attempts + 1
+// -- вплоть до вызова, до которого дело даже не успело толком дойти). Для
+// случая, когда запуск отказал не по вине оживления: движок переустановки
+// занят чужим заданием на этом же роутере (дашборд уже чинит/ставит) --
+// тратить на это одну из пяти попыток нечестно (Fix round 1, Minor #3).
+// MAX(attempts-1, 0) -- защита от ухода в минус при гонке/повторном вызове.
+func (r *ReviveRepo) BackToWaitingNoAttempt(routerID int64, lastError string, at time.Time) (bool, error) {
+	res, err := r.d.db.Exec(`
+UPDATE revive_intents
+   SET status = 'waiting', last_error = ?, reachable_probes = 0, reachable_since = NULL,
+       attempts = MAX(attempts - 1, 0), updated_at = ?
+ WHERE user_id = ? AND status = 'running'`, lastError, at.UTC(), routerID)
+	return affectedOne(res, err)
+}
+
 // Finish переводит намерение из одного из from в конечный статус to и в той
 // же транзакции стирает секрет. false -- статус уже не тот, ничего не тронуто.
 func (r *ReviveRepo) Finish(routerID int64, from []string, to, lastError string, at time.Time) (bool, error) {
@@ -204,6 +220,63 @@ UPDATE revive_intents
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// ExpireOverdue -- беспарольный сторож (Fix round 1, Important #2,
+// мандатное ревью). Решение оператора «затем стирается» обязано работать,
+// даже когда revive.key_file потерян или негоден и Service вообще не
+// собран: тут нет расшифровки, только перевод просроченных намерений
+// (waiting ИЛИ running -- запись не смотрит, идёт ли ещё сама
+// переустановка) в expired и удаление зашифрованного секрета. Строки, чей
+// срок ещё не истёк, не трогает -- если ключ вернётся, они доедут своим
+// чередом. Один проход -- одна транзакция: список ID, затем по каждому
+// UPDATE+DELETE, чтобы DELETE FROM revive_secrets бил точно по тем строкам,
+// что действительно истекли этим проходом, а не по формуле, которую было бы
+// легко рассинхронизировать с условием UPDATE.
+func (r *ReviveRepo) ExpireOverdue(now time.Time, lastError string) (int64, error) {
+	tx, err := r.d.db.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.Query(`
+SELECT user_id FROM revive_intents WHERE status IN ('waiting', 'running') AND expires_at < ?`, now.UTC())
+	if err != nil {
+		return 0, err
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return 0, err
+	}
+	rows.Close()
+	if len(ids) == 0 {
+		return 0, tx.Commit()
+	}
+
+	for _, id := range ids {
+		if _, err := tx.Exec(`
+UPDATE revive_intents SET status = 'expired', last_error = ?, updated_at = ?
+ WHERE user_id = ? AND status IN ('waiting', 'running')`, lastError, now.UTC(), id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.Exec(`DELETE FROM revive_secrets WHERE user_id = ?`, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return int64(len(ids)), nil
 }
 
 func scanReviveIntent(scan func(...any) error) (ReviveIntent, error) {

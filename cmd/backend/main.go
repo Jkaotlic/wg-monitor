@@ -23,6 +23,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/retention"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/updatespoll"
@@ -245,6 +246,13 @@ func main() {
 	reviveSvc := newReviveService(ctx, cfg, d, provisionDeps, tgClient, logger)
 	if reviveSvc != nil {
 		go reviveSvc.Run(ctx)
+	} else {
+		// Fix round 1, Important #2 (мандатное ревью): без ключа Service.Run
+		// никогда не пройдёт по базе, и просроченные секреты лежали бы в
+		// revive_secrets вечно -- решение оператора «затем стирается»
+		// действует и без ключа. Беспарольный сторож не расшифровывает
+		// ничего, ключ ему не нужен.
+		go revive.RunJanitor(ctx, d, time.Now, revive.DefaultJanitorEvery, logger.With("component", "revive-janitor"))
 	}
 
 	// Мастер замены конфига: задание из шести шагов с откатом. Store общий с

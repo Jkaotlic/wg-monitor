@@ -38,22 +38,42 @@ type launchCall struct {
 
 // fakeEngine -- движок переустановки. Итог одинаков для всех заданий и
 // задаётся тестом; lost=true -- задание «потерялось» (TTL/рестарт).
+//
+// launchBlock/launchEntered (Fix round 1, Important #1): дают тесту застать
+// Launch НА СЕРЕДИНЕ -- launchEntered закрывается сразу, как только Launch
+// вызван (то есть MarkRunning уже прошёл), а сам вызов виснет на
+// launchBlock, пока тест его не закроет. Так тест проверяет, что s.work
+// отпущен ДО похода в "сеть" (здесь -- до этого зависания), а не только
+// после него.
 type fakeEngine struct {
-	mu        sync.Mutex
-	launches  []launchCall
-	launchErr error
-	outcome   Outcome
-	lost      bool
+	mu            sync.Mutex
+	launches      []launchCall
+	launchErr     error
+	outcome       Outcome
+	lost          bool
+	launchBlock   chan struct{}
+	launchEntered chan struct{}
 }
 
 func (f *fakeEngine) Launch(_ context.Context, routerID int64, s Secrets, target string) (string, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.launches = append(f.launches, launchCall{routerID, s, target})
-	if f.launchErr != nil {
-		return "", f.launchErr
+	n := len(f.launches)
+	err := f.launchErr
+	block := f.launchBlock
+	entered := f.launchEntered
+	f.mu.Unlock()
+
+	if entered != nil {
+		close(entered)
 	}
-	return fmt.Sprintf("job-%d", len(f.launches)), nil
+	if block != nil {
+		<-block
+	}
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("job-%d", n), nil
 }
 
 func (f *fakeEngine) Outcome(string) (Outcome, bool) {

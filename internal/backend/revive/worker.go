@@ -36,36 +36,49 @@ func (s *Service) Tick(ctx context.Context) {
 }
 
 // checkOne -- ожидающее намерение: срок, живой агент, попытки, опрос, запуск.
+//
+// Fix round 1, Important #1 (мандатное ревью): держит s.work только на
+// быстрые операции этой функции (чтение из БД, опрос панели, запись итога
+// опроса) -- НЕ на весь launch. launch сам берёт и отпускает s.work: снимает
+// его сразу после MarkRunning, до похода Engine.Launch в сеть (версия и
+// чексуммы с GitHub, до 30 с). Строка уже "running" к этому моменту, и
+// put()/Cancel() отказывают конкурентам по статусу в БД, а не по этому
+// замку -- поэтому checkOne зовёт launch, уже отпустив s.work.
 func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	s.work.Lock()
-	defer s.work.Unlock()
 
 	in, err := s.cfg.DB.Revive().Get(routerID)
 	if err != nil || in == nil || in.Status != StatusWaiting {
+		s.work.Unlock()
 		return
 	}
 	u, err := s.cfg.DB.Users().GetByID(routerID)
 	if err != nil {
+		s.work.Unlock()
 		return // роутер удалён -- строку намерения уже убрал каскад
 	}
 	now := s.now()
 	waiting := []string{StatusWaiting}
 
 	if !now.Before(in.ExpiresAt) {
+		s.work.Unlock()
 		s.finish(ctx, routerID, waiting, StatusExpired, reasonExpired, noticeExpired(u.Nickname, in.ExpiresAt))
 		return
 	}
 	if s.agentFresh(u, now) {
+		s.work.Unlock()
 		s.finish(ctx, routerID, waiting, StatusDone, reasonAliveItself, noticeAliveItself(u.Nickname))
 		return
 	}
 	if in.Attempts >= s.cfg.MaxAttempts {
 		reason := orText(in.LastError, reasonUnknownFailure)
+		s.work.Unlock()
 		s.finish(ctx, routerID, waiting, StatusFailed, reason, noticeGaveUp(u.Nickname, in.Attempts, reason))
 		return
 	}
 	awgmURL := strings.TrimSpace(derefString(u.AWGMURL))
 	if awgmURL == "" {
+		s.work.Unlock()
 		s.finish(ctx, routerID, waiting, StatusFailed, reasonNoAWGMURL, noticeFailed(u.Nickname, reasonNoAWGMURL))
 		return
 	}
@@ -76,6 +89,7 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 		// панели: ничего не пишем и серию "панель отвечает" не трогаем --
 		// иначе выключение процесса гасило бы её так же, как настоящий сон
 		// роутера.
+		s.work.Unlock()
 		return
 	}
 	streak, since := 0, time.Time{}
@@ -90,9 +104,11 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	// сообщит человеку правильную причину (probeText различает эти состояния).
 	if err := s.cfg.DB.Revive().RecordProbe(routerID, now, state, streak, since); err != nil {
 		s.logger.Warn("оживление: итог опроса не записан", "router_id", routerID, "err", err)
+		s.work.Unlock()
 		return
 	}
 	if streak < s.cfg.ReachableProbes {
+		s.work.Unlock()
 		return
 	}
 	// Fix round 2, Minor #5: счёта в две подряд мало -- между ПЕРВЫМ и
@@ -103,15 +119,43 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	// заявленные спекой тридцать: since -- отметка ПЕРВОГО "reachable" серии
 	// (несёт её через RecordProbe независимо от того, кто именно опрашивал).
 	if now.Sub(since) < s.cfg.ConfirmGap {
+		s.work.Unlock()
 		return
 	}
 	in.ReachableProbes = streak
+	// s.work НЕ отпускаем здесь -- launch принимает эстафету, держа лок ещё
+	// через MarkRunning (Fix round 2, Important #1: без непрерывности отсюда
+	// до MarkRunning конкурентный Put() мог бы влезть между этим Get и
+	// записью итога и подменить строку под уже прочитанным `in` -- см.
+	// комментарий у launch). launch сам отпускает s.work, но не раньше.
 	s.launch(ctx, *in, u.Nickname)
 }
+
+// jobLaunching -- служебная метка в s.jobs на время асинхронного вызова
+// Engine.Launch (Fix round 1, Important #1). Между MarkRunning и возвратом
+// Launch у роутера уже нет замка s.work, и конкурентный pollOne того же Tick
+// обязан отличить "ещё запускается" от "задание потеряно" -- иначе он вернул
+// бы строку в waiting из-под ещё идущего Launch.
+const jobLaunching = "\x00launching"
 
 // launch -- waiting→running, расшифровка секрета в памяти, вызов движка.
 // Секреты не попадают ни в журнал, ни в last_error: туда идут только наши
 // русские причины и LaunchError.Text.
+//
+// Вызывается ТОЛЬКО из checkOne, которая уже держит s.work и передаёт
+// эстафету сюда без промежуточного Unlock/Lock (Fix round 2, Important #1:
+// между checkOne's Get и MarkRunning не должно быть ни одного момента без
+// замка, иначе конкурентный Put() мог бы влезть и подменить строку под уже
+// прочитанным, устаревшим `in` -- серия, попытки и TargetVersion ушли бы в
+// движок по чужим, старым числам). launch отпускает s.work РОВНО ОДИН РАЗ,
+// на каждом из своих путей выхода, и ни разу не берёт его заново -- после
+// MarkRunning дальнейший разбор итога (Secret/decrypt/Engine.Launch) синку
+// не нужен: строка уже "running", и put()/Cancel() отказывают конкурентам по
+// статусу в БД, а не по этому замку (Fix round 1, Important #1) -- поэтому
+// замок отпускается ДО похода Engine.Launch в сеть (до 30 с на версию и
+// чексуммы GitHub), а не после него: держать его на весь этот поход означало
+// бы упереться в 15-секундный обрыв HTTP на KeenDNS-реле для ЛЮБОГО другого
+// Schedule, ждущего того же s.work.
 //
 // Секрет читается из базы и расшифровывается ТОЛЬКО после MarkRunning: между
 // опросом и этим местом Schedule() мог переставить намерение и заменить
@@ -123,21 +167,27 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 // тот, что был на момент опроса.
 func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 	if _, busy := s.job(in.RouterID); busy {
+		s.work.Unlock()
 		return
 	}
 	now := s.now()
 	ok, err := s.cfg.DB.Revive().MarkRunning(in.RouterID, now)
 	if err != nil {
+		s.work.Unlock()
 		s.logger.Warn("оживление: запуск не отмечен", "router_id", in.RouterID, "err", err)
 		return
 	}
 	if !ok {
+		s.work.Unlock()
 		return
 	}
 	if s.testAfterMarkRunning != nil {
 		s.testAfterMarkRunning(in.RouterID)
 	}
 	attempts := in.Attempts + 1
+	s.setJob(in.RouterID, jobLaunching)
+	s.work.Unlock() // отсюда и дальше -- без замка, см. комментарий выше
+
 	running := []string{StatusRunning}
 
 	nonce, ct, found, err := s.cfg.DB.Revive().Secret(in.RouterID)
@@ -160,14 +210,23 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 	jobID, err := s.cfg.Engine.Launch(ctx, in.RouterID, creds, in.TargetVersion)
 	creds = Secrets{}
 	if err != nil {
-		reason, permanent := reasonLaunchFailed, false
+		reason, permanent, noAttempt := reasonLaunchFailed, false, false
 		var le *LaunchError
 		if errors.As(err, &le) {
-			reason, permanent = orText(le.Text, reasonLaunchFailed), le.Permanent
+			reason, permanent, noAttempt = orText(le.Text, reasonLaunchFailed), le.Permanent, le.NoAttempt
 		}
 		// err.Error() в журнал не идёт: чужая ошибка движка могла бы нести
 		// что угодно. Пишем только нашу причину.
-		s.logger.Warn("оживление: переустановка не запустилась", "router_id", in.RouterID, "attempt", attempts, "reason", reason)
+		s.logger.Warn("оживление: переустановка не запустилась", "router_id", in.RouterID, "attempt", attempts, "reason", reason, "no_attempt", noAttempt)
+		// Fix round 1, Minor #3: движок занят ЧУЖИМ заданием на этом же
+		// роутере (дашборд уже чинит/ставит) -- не вина оживления, тратить
+		// на это одну из пяти попыток нечестно. Permanent тут никогда не
+		// бывает вместе с NoAttempt (см. reviveLaunchError), но проверка
+		// !permanent -- на случай, если это когда-нибудь изменится.
+		if noAttempt && !permanent {
+			s.backToWaitingNoAttempt(in.RouterID, reason, s.now())
+			return
+		}
 		s.attemptFailed(ctx, in.RouterID, nick, attempts, reason, permanent)
 		return
 	}
@@ -188,6 +247,12 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	jobID, ok := s.job(routerID)
 	if !ok {
 		s.backToWaiting(routerID, reasonJobLost, now)
+		return
+	}
+	if jobID == jobLaunching {
+		// Launch этого роутера ещё готовится (Fix round 1, Important #1: s.work
+		// уже отпущен между MarkRunning и возвратом Engine.Launch) -- это не
+		// "потеряно", а "ещё не готово": подождать следующего обхода.
 		return
 	}
 	out, known := s.cfg.Engine.Outcome(jobID)
@@ -241,6 +306,22 @@ func (s *Service) backToWaiting(routerID int64, reason string, now time.Time) {
 	ok, err := s.cfg.DB.Revive().BackToWaiting(routerID, reason, now)
 	if err != nil {
 		s.logger.Warn("оживление: возврат в ожидание не записан", "router_id", routerID, "err", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	s.forgetJob(routerID)
+}
+
+// backToWaitingNoAttempt -- как backToWaiting, но для запуска, который отказал
+// не по вине оживления (Fix round 1, Minor #3: движок переустановки занят
+// чужим заданием на этом же роутере). BackToWaitingNoAttempt в БД отменяет
+// инкремент, который MarkRunning уже внёс, -- попытка не считается потраченной.
+func (s *Service) backToWaitingNoAttempt(routerID int64, reason string, now time.Time) {
+	ok, err := s.cfg.DB.Revive().BackToWaitingNoAttempt(routerID, reason, now)
+	if err != nil {
+		s.logger.Warn("оживление: возврат в ожидание без траты попытки не записан", "router_id", routerID, "err", err)
 		return
 	}
 	if !ok {

@@ -529,7 +529,20 @@ func TestTick_ReachableStreakFasterThanConfirmGapDoesNotLaunchYet(t *testing.T) 
 // от чужого числа, а TargetVersion в движок ушла бы старая. Здесь checkOne
 // намеренно застревает внутри опроса (канал releaseProbe), пока идёт
 // Schedule -- и мы проверяем, что Schedule ДОЖИДАЕТСЯ своей очереди (не
-// пролезает мимо s.work), а после гонки строка полностью свежая: без
+// пролезает мимо s.work): checkOne держит замок непрерывно от своего Get и
+// до MarkRunning включительно (launch, Fix round 1, Important #1, отпускает
+// его только ПОСЛЕ MarkRunning, а не раньше).
+//
+// Fix round 1, Important #1 (мандатное ревью) поменял, ЧТО именно видит
+// Schedule дальше: раньше s.work держался на весь launch (включая поход
+// Engine.Launch в сеть и запись итога), и Schedule был вынужден ждать, пока
+// вся попытка разрешится -- отсюда и старое имя теста. Теперь замок
+// отпускается сразу после MarkRunning, и Schedule, заставший саму попытку
+// (Launch ещё не вернулся -- он намеренно заблокирован ниже), обязана
+// честно увидеть "running" и получить ErrRunning -- это не порча данных, а
+// точный ответ "дождитесь итога". Как только попытка разрешится (здесь --
+// неудачей, 5-я из 5 -- переходит в failed, терминальный статус), повторный
+// Schedule обязан пройти по уже свободной строке, полностью свежей: без
 // унаследованных серии/попыток/версии и с новым, не стёртым секретом.
 func TestSchedule_DuringConcurrentCheckOne_WaitsAndDoesNotInheritStaleState(t *testing.T) {
 	env := newEnv(t)
@@ -545,8 +558,12 @@ func TestSchedule_DuringConcurrentCheckOne_WaitsAndDoesNotInheritStaleState(t *t
 	); err != nil {
 		t.Fatal(err)
 	}
+	launchBlock := make(chan struct{})
+	launchEntered := make(chan struct{})
 	env.engine.set(func(f *fakeEngine) {
 		f.launchErr = &LaunchError{Text: "временная неудача для теста гонки"}
+		f.launchBlock = launchBlock
+		f.launchEntered = launchEntered
 	})
 
 	probeEntered := make(chan struct{})
@@ -596,13 +613,30 @@ func TestSchedule_DuringConcurrentCheckOne_WaitsAndDoesNotInheritStaleState(t *t
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	close(releaseProbe) // checkOne дописывает итог по СВОЕЙ, ещё старой строке и завершается
-	<-tickDone
-	<-scheduleDone // теперь Schedule должен пройти по уже освободившейся строке
-	if scheduleErr != nil {
-		t.Fatalf("Schedule после гонки: %v", scheduleErr)
+	close(releaseProbe) // checkOne дописывает итог по СВОЕЙ, ещё старой строке, MarkRunning фиксирует "running"
+
+	select {
+	case <-launchEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("launch не дошёл до Engine.Launch")
 	}
-	env.svc.Wait() // дожидаемся confirmSoon, запущенного этим же Schedule
+
+	<-scheduleDone // put() уже мог взять освободившийся s.work и прочитать статус
+	if !errors.Is(scheduleErr, ErrRunning) {
+		t.Fatalf("Schedule, заставший саму попытку (Launch ещё не вернулся) -- ErrRunning, получили: %v", scheduleErr)
+	}
+
+	close(launchBlock) // отпускаем застрявший Launch: 5-я попытка из 5 -> finish(failed)
+	<-tickDone
+
+	// failed -- терминальный статус: как и waiting/cancelled/expired, ставить
+	// поверх него можно. Второй Schedule идёт по уже разрешившейся строке.
+	if _, err := env.svc.Schedule(context.Background(), env.router, ScheduleRequest{
+		RootPassword: "New-Root-After-Reschedule", RequestedBy: 77, ExpiresDays: 10,
+	}); err != nil {
+		t.Fatalf("Schedule после разрешения попытки: %v", err)
+	}
+	env.svc.Wait() // дожидаемся confirmSoon, запущенного этим Schedule
 
 	in := env.intent(t)
 	if in.Status != StatusWaiting || in.Attempts != 0 || in.ReachableProbes != 0 || in.TargetVersion != "" {
@@ -622,5 +656,123 @@ func TestSchedule_DuringConcurrentCheckOne_WaitsAndDoesNotInheritStaleState(t *t
 	}
 	if !got.Equal(NewSecrets("New-Root-After-Reschedule", "", "", "")) {
 		t.Fatal("после гонки секрет обязан быть новым, а не стёрт неудачным закрытием старой попытки")
+	}
+}
+
+// Fix round 1, Important #1 (мандатное ревью): s.work обязан отпускаться
+// сразу после MarkRunning, ДО похода Engine.Launch в сеть (в проде -- до 30 с
+// на версию/чексуммы GitHub) -- иначе Schedule для ДРУГОГО роутера ждал бы
+// чужого запуска, а KeenDNS обрывает HTTP на 15 с. Здесь Launch застревает
+// нарочно (fakeEngine.launchBlock), и тест проверяет, что Schedule и на
+// ТОТ ЖЕ роутер (обязан отказать ErrRunning -- статус уже "running", замок
+// тут ни при чём), и на ДРУГОЙ роутер проходят быстро, не дожидаясь, пока
+// застрявший Launch вернётся.
+func TestLaunch_ReleasesWorkLockDuringEngineLaunch(t *testing.T) {
+	env := newEnv(t)
+	env.probe.script(awgmstate.Reachable)
+	env.seedWaiting(t)
+
+	block := make(chan struct{})
+	entered := make(chan struct{})
+	env.engine.set(func(f *fakeEngine) { f.launchBlock = block; f.launchEntered = entered })
+
+	env.svc.Tick(context.Background()) // серия 1, без запуска
+	env.clock.Advance(DefaultConfirmGap)
+
+	tickDone := make(chan struct{})
+	go func() {
+		env.svc.Tick(context.Background()) // серия 2 -> launch, застревает в движке
+		close(tickDone)
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Launch не вызвался за разумное время")
+	}
+	// Строка уже "running" (MarkRunning прошёл до закрытия entered) -- дальше
+	// опрашивать "reachable" незачем: без этого второй роутер, случайно
+	// подхваченный собственным confirmSoon, попытался бы запуститься тоже и
+	// столкнулся бы с уже закрытым launchEntered.
+	env.probe.script(awgmstate.Offline)
+
+	done2 := make(chan struct{})
+	var err2 error
+	go func() {
+		_, err2 = env.svc.Schedule(context.Background(), env.router, fixtureRequest())
+		close(done2)
+	}()
+	select {
+	case <-done2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Schedule на тот же роутер ждёт замка, который держит чужой Launch")
+	}
+	if !errors.Is(err2, ErrRunning) {
+		t.Fatalf("Schedule на тот же роутер: err=%v, want ErrRunning", err2)
+	}
+
+	id2, err := env.db.Users().Insert("gachi", "tok-gachi", "198.51.100.21", "awg1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := env.db.Users().SetAWGMURLIfEmpty(id2, "https://awg2.example.com"); err != nil || !ok {
+		t.Fatalf("awgm_url: %v %v", ok, err)
+	}
+	done3 := make(chan struct{})
+	var err3 error
+	go func() {
+		_, err3 = env.svc.Schedule(context.Background(), id2, fixtureRequest())
+		close(done3)
+	}()
+	select {
+	case <-done3:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Schedule на другой роутер ждёт замка, который держит чужой Launch")
+	}
+	if err3 != nil {
+		t.Fatalf("Schedule на другой роутер: %v", err3)
+	}
+
+	close(block) // отпускаем застрявший Launch, чтобы горутина не висела
+	<-tickDone
+}
+
+// Fix round 1, Minor #3 (мандатное ревью): движок переустановки занят чужим
+// заданием на этом же роутере (LaunchError.NoAttempt -- дашборд уже чинит
+// или ставит) -- не вина оживления, тратить на это одну из пяти попыток
+// нечестно. Запуск возвращается в waiting БЕЗ инкремента attempts.
+func TestLaunch_NoAttemptLaunchErrorDoesNotConsumeAttempt(t *testing.T) {
+	env := newEnv(t)
+	env.panel(t, http.StatusOK)
+	env.seedWaiting(t)
+	env.engine.set(func(f *fakeEngine) {
+		f.launchErr = &LaunchError{NoAttempt: true, Text: "на роутере уже идёт другая установка или ремонт"}
+	})
+
+	env.tick(t)
+	env.tick(t) // запуск -> движок занят чужим заданием
+
+	in := env.intent(t)
+	if in.Status != StatusWaiting {
+		t.Fatalf("возврат в ожидание: %+v", in)
+	}
+	if in.Attempts != 0 {
+		t.Fatalf("попытка не должна была потратиться: %+v", in)
+	}
+	if in.LastError != "на роутере уже идёт другая установка или ремонт" {
+		t.Fatalf("причина: %+v", in)
+	}
+	if !env.hasSecret(t) {
+		t.Fatal("секрет остаётся -- попытка не окончательная")
+	}
+
+	// Повторные обходы могут пытаться сколько угодно раз -- ни один не
+	// исчерпывает лимит, пока движок занят чужим.
+	for i := 0; i < 10; i++ {
+		env.tick(t)
+	}
+	in = env.intent(t)
+	if in.Status != StatusWaiting || in.Attempts != 0 {
+		t.Fatalf("после десяти обходов всё ещё не потрачено ни одной попытки: %+v", in)
 	}
 }
