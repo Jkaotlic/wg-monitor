@@ -69,6 +69,13 @@ func (s *sandboxRevive) Schedule(_ context.Context, routerID int64, req revive.S
 	if s.noPanel[routerID] && req.AWGMURL == "" {
 		return revive.Intent{}, &revive.Error{Code: "no_awgm_url"}
 	}
+	// Та же проверка адреса, что в настоящем сервисе: только https и внешнее
+	// имя (финальное ревью 15.09, I1).
+	if req.AWGMURL != "" && s.noPanel[routerID] {
+		if _, ok := revive.NormalizePanelURL(req.AWGMURL); !ok {
+			return revive.Intent{}, &revive.Error{Code: "invalid_awgm_url"}
+		}
+	}
 	if s.noPanel[routerID] && req.AWGMURL != "" {
 		// Адрес записан -- дальше роутер как все: повтор с адресом отказывает.
 		s.noPanel[routerID] = false

@@ -467,6 +467,10 @@ func (s *Service) forgetJob(routerID int64) {
 	s.jobsMu.Unlock()
 }
 
+// NormalizePanelURL -- та же проверка для песочницы мини-аппа: её фейковый
+// сервис обязан отказывать ровно так же, иначе снимки учили бы неправде.
+func NormalizePanelURL(raw string) (string, bool) { return normalizeAWGMURL(raw) }
+
 // normalizeAWGMURL -- проверка адреса панели, пришедшего через постановку
 // (мини-апп). Уже записанные адреса (дашборд, мастер) заново не проверяются.
 //
