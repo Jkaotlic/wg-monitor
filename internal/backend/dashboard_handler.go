@@ -133,11 +133,7 @@ func dashboardCancelDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		var dropped int
-		if d.CommandSink != nil {
-			dropped = len(d.CommandSink.DropPending(u.ID, "self_update"))
-		}
-		cleared, err := d.DB.Users().ClearPendingDeploy(u.ID)
+		cleared, dropped, err := cancelAgentDeploy(d, u)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
