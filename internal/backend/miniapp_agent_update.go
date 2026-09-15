@@ -257,14 +257,17 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 		counts := map[string]int{}
 		for i := range users {
 			u := &users[i]
+			// agentUpdateVerdictFor держит Behind=false для агентов ниже
+			// agentSelfUpdateFloor (B6): такой роутер self_update не умеет
+			// вовсе, и ему тут не место -- ни в счётчике, ни в этом отчёте.
+			// Экран «Парк» покажет причину отдельно, через
+			// agent_update_warning (/fleet).
 			verdict := agentUpdateVerdictFor(stringValue(u.LastDeployedVersion), serverVersion)
 			if !verdict.Behind {
 				continue
 			}
 			row := miniappFleetAgentUpdateResult{RouterID: u.ID, Nickname: u.Nickname}
 			switch {
-			case verdict.TooOld:
-				row.Outcome, row.ReasonCode = "skipped", "agent_too_old"
 			case strings.TrimSpace(stringValue(u.PendingVersion)) != "":
 				row.Outcome, row.ReasonCode = "skipped", deployErrPending
 			default:

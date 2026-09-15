@@ -33,10 +33,19 @@ func agentUpdateVerdictFor(agentVersion, backendVersion string) agentUpdateVerdi
 	}
 	var v agentUpdateVerdict
 	v.TooOld = compareDashboardReleaseTags(agentVersion, agentSelfUpdateFloor) < 0
+	if v.TooOld {
+		// Ниже agentSelfUpdateFloor у агента нет self_update вовсе --
+		// Behind остаётся false: иначе /fleet считает такой роутер
+		// «отстающим», кнопка «Обновить» и счётчик «Обновить всех
+		// отставших (N)» обещают то, что кончится отказом agent_too_old
+		// (B6). Вместо этого -- прямое предупреждение: нужна переустановка.
+		v.Warning = "агент слишком старый — нужна переустановка"
+		return v
+	}
 	if _, ok := parseDashboardReleaseTagRank(strings.TrimSpace(backendVersion)); ok {
 		v.Behind = compareDashboardReleaseTags(agentVersion, strings.TrimSpace(backendVersion)) < 0
 	}
-	if !v.Behind || v.TooOld {
+	if !v.Behind {
 		return v
 	}
 	var warn []string

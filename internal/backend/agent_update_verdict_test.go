@@ -26,8 +26,14 @@ func TestAgentUpdateVerdictFor(t *testing.T) {
 		{agent: "v0.13.0-rc32", behind: true, warnHas: []string{"64 МБ"}},
 		// rc4 < rc32 числом, хотя строкой "rc4" > "rc32" -- ради этого случая
 		// сравнение не через x/mod/semver.
-		{agent: "v0.13.0-rc4", behind: true, tooOld: true},
-		{agent: "v0.12.9", behind: true, tooOld: true},
+		//
+		// B6: агент ниже agentSelfUpdateFloor не умеет self_update вовсе --
+		// Behind обязан остаться false (иначе кнопка «Обновить» и счётчик
+		// «Обновить всех отставших (N)» на /fleet обещают то, что кончится
+		// отказом agent_too_old), а предупреждение — говорить прямо, что
+		// нужна переустановка, а не «отстаёт от бэкенда».
+		{agent: "v0.13.0-rc4", tooOld: true, warnHas: []string{"слишком старый", "переустановка"}},
+		{agent: "v0.12.9", tooOld: true, warnHas: []string{"слишком старый", "переустановка"}},
 		{agent: "", unknown: true},
 		{agent: "dev", unknown: true},
 	}
@@ -46,8 +52,11 @@ func TestAgentUpdateVerdictFor(t *testing.T) {
 				t.Errorf("%q: в предупреждении %q лишнее %q", c.agent, got.Warning, s)
 			}
 		}
-		if (!c.behind || c.tooOld) && got.Warning != "" {
-			t.Errorf("%q: предупреждение там, где обновлять нечего или нельзя: %q", c.agent, got.Warning)
+		// Предупреждения не бывает, только когда обновлять нечего (не
+		// отстаёт) и переустановка тоже не нужна (не tooOld) -- у tooOld
+		// своё предупреждение (см. warnHas выше).
+		if !c.behind && !c.tooOld && got.Warning != "" {
+			t.Errorf("%q: предупреждение там, где обновлять нечего: %q", c.agent, got.Warning)
 		}
 		for _, banned := range []string{"self_update", "pending", "repo_base"} {
 			if strings.Contains(got.Warning, banned) {

@@ -399,6 +399,10 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 	if err := d.Users().UpdateLastSeen(onlineID); err != nil {
 		t.Fatal(err)
 	}
+	// B6: ниже agentSelfUpdateFloor -- self_update не умеет вовсе, Behind
+	// теперь false, и в массовом обновлении такой роутер не участвует
+	// (ни в счётчике, ни в этом отчёте) -- ему нужна переустановка, не
+	// кнопка «Обновить всех отставших».
 	add("router-ancient", "2", "v0.13.0-rc4")
 	pendingID := add("router-pending", "3", "v0.31.0")
 	if err := d.Users().MarkPendingDeploy(pendingID, "v0.32.0", "2026-09-15T10:00:00Z"); err != nil {
@@ -426,7 +430,6 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 	want := map[string][2]string{
 		"router-owned":   {"deferred", "router_asleep"},
 		"router-online":  {"queued", ""},
-		"router-ancient": {"skipped", "agent_too_old"},
 		"router-pending": {"skipped", "deploy_pending"},
 	}
 	if len(got) != len(want) {
@@ -437,6 +440,9 @@ func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
 		if !ok || r.Outcome != w[0] || r.ReasonCode != w[1] || r.ReasonText == "" {
 			t.Errorf("%s: %+v, ждали outcome=%s reason_code=%q", nick, r, w[0], w[1])
 		}
+	}
+	if _, ok := got["router-ancient"]; ok {
+		t.Errorf("router-ancient (ниже agentSelfUpdateFloor) не должен попадать в массовое обновление: %+v", got["router-ancient"])
 	}
 	if got["router-owned"].RouterID != ownedID {
 		t.Errorf("router_id: %+v", got["router-owned"])
