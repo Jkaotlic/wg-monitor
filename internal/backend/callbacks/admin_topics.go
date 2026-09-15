@@ -22,6 +22,7 @@ import (
 //	/this_is <nickname>            — bind THIS topic's thread_id to <nickname>
 //	/selfhosted                    — list/add/update self-hosted Amnezia VPS entries
 //	/topic_help                    — print the admin cheat-sheet
+//	/panel                         — say the panel moved to the mini app
 func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	cmd, arg, ok := parseSlashCommand(m.Text)
 	if !ok {
@@ -49,9 +50,16 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	case "/menu", "/keyboard":
 		r.handleKeyboardCommand(ctx, m)
 		return true
+	case "/panel":
+		r.adminReply(ctx, m, panelMovedText)
+		return true
 	}
 	return false
 }
+
+// panelMovedText -- ответ на набранную по привычке /panel: хаб в боте
+// удалён, панель живёт в мини-аппе.
+const panelMovedText = "Панель переехала в приложение: «Парк» в меню бота."
 
 func parseSlashCommand(text string) (cmd, arg string, ok bool) {
 	text = strings.TrimSpace(text)
