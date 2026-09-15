@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -334,23 +335,35 @@ func miniappRouterEventsHandler(d Deps) http.HandlerFunc {
 		// stopped coming (watchdog switched off, or its incident closed as
 		// watchdog_off) and its last row would otherwise sit here answering
 		// "на запасных"/"работает" for up to 30 days after it stopped being
-		// true. Only resolver_guard: a check that stopped coming is not a
-		// current answer for it, but tunnels have their own inventory logic
-		// (miniappTunnelFromEvent/miniappDeriveTraffic) and must not lose a
-		// tunnel row here.
-		var heartbeatTS time.Time
-		haveHeartbeat := false
+		// true.
+		//
+		// Tunnels are not judged by the heartbeat: when awg-manager does not
+		// answer, the agent sends tunnels=fail and no tunnel rows at all, and
+		// the last known tunnels must stay on screen. They are judged by the
+		// inventory instead -- an OK "tunnels" row lists what is on the router
+		// in that report, so a tunnel_* row strictly older than it did not come
+		// with it: the tunnel is gone (deleted, or replaced by the config
+		// wizard). Before this, deleted tunnels stayed for 30 days and the
+		// screen named a removed tunnel as the egress (vvarg, 15.09.2026).
+		var heartbeatTS, inventoryTS time.Time
+		haveHeartbeat, haveInventory := false, false
 		for _, row := range rows {
-			if row.CheckName == "agent_heartbeat" {
-				heartbeatTS = row.TS
-				haveHeartbeat = true
-				break
+			switch row.CheckName {
+			case "agent_heartbeat":
+				heartbeatTS, haveHeartbeat = row.TS, true
+			case miniappTunnelsInventoryCheck:
+				if row.Status == "ok" {
+					inventoryTS, haveInventory = row.TS, true
+				}
 			}
 		}
 		resp := miniappRouterEventsResp{Tunnels: []miniappTunnel{}}
 		byCheck := make(map[string]db.EventRow, len(rows))
 		for _, row := range rows {
 			if row.CheckName == resolverGuardCheck && haveHeartbeat && row.TS.Before(heartbeatTS) {
+				continue
+			}
+			if haveInventory && strings.HasPrefix(row.CheckName, miniappTunnelPrefix) && row.TS.Before(inventoryTS) {
 				continue
 			}
 			byCheck[row.CheckName] = row
