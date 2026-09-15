@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strconv"
@@ -57,39 +58,100 @@ func LoadKey(path string) ([]byte, error) {
 	return key, nil
 }
 
-// Secrets -- учётные данные для переустановки. Существует открытым текстом
-// только в памяти, между Open и вызовом движка. Все способы напечатать
-// значение маскируют его.
-type Secrets struct {
-	RootPassword string
-	AWGMLogin    string
-	AWGMPassword string
-	AWGMAPIKey   string
-}
-
-const maskedSecrets = "скрыто"
-
-func (Secrets) String() string               { return "revive.Secrets{" + maskedSecrets + "}" }
-func (s Secrets) GoString() string           { return s.String() }
-func (Secrets) LogValue() slog.Value         { return slog.StringValue(maskedSecrets) }
-func (Secrets) MarshalJSON() ([]byte, error) { return json.Marshal(maskedSecrets) }
-
-// Usable -- хватает ли данных хоть на один способ входа: root-пароль
-// терминала, API-ключ панели или пара логин+пароль панели.
-// Usable: root-пароль обязателен. Пре-флайт 15.09: движок переустановки без него отказывает
-// (provision_handler.go:466-471 root_password_required), а вход в панель -- дополнительный.
-func (s Secrets) Usable() bool {
-	return s.RootPassword != ""
-}
-
-// secretsWire -- форма, которая шифруется. Отдельная структура, потому что
-// у Secrets MarshalJSON намеренно маскирующий.
-type secretsWire struct {
+// secretsValues -- настоящие поля секрета: и внутреннее хранилище Secrets, и
+// форма, которая шифруется в Box.Seal/Open. json-теги нужны только для
+// второго -- наружу пакета этот тип не смотрит.
+type secretsValues struct {
 	RootPassword string `json:"root_password,omitempty"`
 	AWGMLogin    string `json:"awgm_login,omitempty"`
 	AWGMPassword string `json:"awgm_password,omitempty"`
 	AWGMAPIKey   string `json:"awgm_api_key,omitempty"`
 }
+
+// Secrets -- учётные данные для переустановки. Открытый текст лежит за
+// указателем на СТРОКУ (JSON secretsValues), а не в собственных полях
+// Secrets и не за указателем на структуру -- это не стиль, а требование
+// маскировки (fix round 1, Important #1). fmt/slog зовут
+// String/Format/LogValue/MarshalJSON только когда могут вызвать Interface()
+// на значении: для Secrets напрямую и для Secrets в ЭКСПОРТИРУЕМОМ поле
+// чужой структуры это так. Но когда Secrets лежит в НЕЭКСПОРТИРУЕМОМ поле
+// чужой структуры (так и будут устроены задания воркера, Task 5+),
+// Interface() вызвать нельзя, методы не срабатывают, и печать идёт
+// структурной reflection-веткой fmt в обход методов. Для большинства
+// глаголов (%v, %+v, %#v, %d) это безопасно и тогда: reflection просто
+// печатает адрес указателя. Но для глагола, для которого у *T нет
+// обработчика (например %s на указателе), fmt.badVerb сбрасывает глубину
+// рекурсии до 0 и на этой глубине САМ разыменовывает указатель -- если
+// цель указателя (Elem()) имеет вид Struct/Array/Slice/Map. Проверено
+// (fix round 1): с указателем на secretsValues это печатало пароли текстом.
+// Указатель на string под такое разыменование не попадает (String -- не
+// один из четырёх видов), поэтому пароли снова недостижимы. Открытый текст
+// достаётся только явными методами ниже.
+type Secrets struct {
+	blob *string
+}
+
+// NewSecrets собирает Secrets из открытых значений.
+func NewSecrets(rootPassword, awgmLogin, awgmPassword, awgmAPIKey string) Secrets {
+	return secretsFromValues(secretsValues{
+		RootPassword: rootPassword,
+		AWGMLogin:    awgmLogin,
+		AWGMPassword: awgmPassword,
+		AWGMAPIKey:   awgmAPIKey,
+	})
+}
+
+// secretsFromValues упаковывает поля в JSON-строку за указателем. Marshal
+// строк без циклов и каналов не отказывает, поэтому ошибку здесь глотать
+// безопасно -- в проде до неё дойти неоткуда.
+func secretsFromValues(v secretsValues) Secrets {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return Secrets{}
+	}
+	blob := string(b)
+	return Secrets{blob: &blob}
+}
+
+func (s Secrets) values() secretsValues {
+	if s.blob == nil {
+		return secretsValues{}
+	}
+	var v secretsValues
+	_ = json.Unmarshal([]byte(*s.blob), &v)
+	return v
+}
+
+func (s Secrets) RootPassword() string { return s.values().RootPassword }
+func (s Secrets) AWGMLogin() string    { return s.values().AWGMLogin }
+func (s Secrets) AWGMPassword() string { return s.values().AWGMPassword }
+func (s Secrets) AWGMAPIKey() string   { return s.values().AWGMAPIKey }
+
+// Equal сравнивает секреты по значению. Через == нельзя: поле blob --
+// указатель, и два секрета с одинаковыми паролями после раздельных
+// NewSecrets/Open никогда не окажутся одним и тем же указателем.
+func (s Secrets) Equal(o Secrets) bool { return s.values() == o.values() }
+
+const maskedSecrets = "скрыто"
+
+func (Secrets) String() string     { return "revive.Secrets{" + maskedSecrets + "}" }
+func (s Secrets) GoString() string { return s.String() }
+
+// Format перехватывает печать Secrets целиком. Stringer обслуживает только
+// %v/%s; без Format, например, %d печатает пароль внутри текста ошибки вида
+// "%!d(string=...)" (fix round 1, Important #1) -- Format отвечает за любой
+// глагол одинаково, не заглядывая в него.
+func (s Secrets) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, s.String()) }
+
+func (Secrets) LogValue() slog.Value         { return slog.StringValue(maskedSecrets) }
+func (Secrets) MarshalJSON() ([]byte, error) { return json.Marshal(maskedSecrets) }
+
+// Usable -- хватает ли данных на переустановку. Пре-флайт координатора
+// 15.09: движок переустановки без root-пароля отказывает
+// (provision_handler.go:466-471, root_password_required) -- вход в панель
+// awg-manager дополняет root, но не заменяет его. Usable требует ровно
+// RootPassword.
+func (s Secrets) Usable() bool { return s.RootPassword() != "" }
 
 // Box -- AES-256-GCM с AAD = десятичный user_id: шифртекст одного роутера,
 // переложенный в строку другого, не расшифруется.
@@ -113,7 +175,7 @@ func NewBox(key []byte) (*Box, error) {
 func aad(routerID int64) []byte { return []byte(strconv.FormatInt(routerID, 10)) }
 
 func (b *Box) Seal(routerID int64, s Secrets) (nonce, ciphertext []byte, err error) {
-	plain, err := json.Marshal(secretsWire(s))
+	plain, err := json.Marshal(s.values())
 	if err != nil {
 		return nil, nil, errors.New("секрет оживления не упакован")
 	}
@@ -134,9 +196,9 @@ func (b *Box) Open(routerID int64, nonce, ciphertext []byte) (Secrets, error) {
 		return Secrets{}, ErrSecretUnreadable
 	}
 	defer clear(plain)
-	var w secretsWire
+	var w secretsValues
 	if err := json.Unmarshal(plain, &w); err != nil {
 		return Secrets{}, ErrSecretUnreadable
 	}
-	return Secrets(w), nil
+	return secretsFromValues(w), nil
 }

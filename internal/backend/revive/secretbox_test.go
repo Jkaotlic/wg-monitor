@@ -23,7 +23,7 @@ const (
 )
 
 func fixtureSecrets() Secrets {
-	return Secrets{RootPassword: fixtureRoot, AWGMLogin: fixtureLogin, AWGMPassword: fixturePanel, AWGMAPIKey: fixtureAPIKey}
+	return NewSecrets(fixtureRoot, fixtureLogin, fixturePanel, fixtureAPIKey)
 }
 
 func assertNoFixtureSecret(t *testing.T, where string, got []byte) {
@@ -98,7 +98,7 @@ func TestBox_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != fixtureSecrets() {
+	if !got.Equal(fixtureSecrets()) {
 		t.Fatal("расшифровано не то, что зашифровано")
 	}
 	// Два шифрования одного и того же -- разные nonce и шифртекст.
@@ -162,15 +162,61 @@ func TestSecrets_Usable(t *testing.T) {
 		want bool
 	}{
 		{Secrets{}, false},
-		{Secrets{RootPassword: "x"}, true},
-		{Secrets{AWGMAPIKey: "k"}, false},
-		{Secrets{AWGMLogin: "admin"}, false},
-		{Secrets{AWGMLogin: "admin", AWGMPassword: "p"}, false},
-		{Secrets{RootPassword: "x", AWGMAPIKey: "k"}, true},
+		{NewSecrets("x", "", "", ""), true},
+		{NewSecrets("", "", "", "k"), false},
+		{NewSecrets("", "admin", "", ""), false},
+		{NewSecrets("", "admin", "p", ""), false},
+		{NewSecrets("x", "", "", "k"), true},
 	}
 	for i, c := range cases {
 		if got := c.s.Usable(); got != c.want {
 			t.Fatalf("case %d: Usable=%v, want %v", i, got, c.want)
 		}
 	}
+}
+
+// Fix round 1, Important #1: Secrets внутри чужой структуры -- в том числе
+// в НЕэкспортируемом поле, как будет у заданий воркера (Task 5+). fmt не
+// может вызвать Interface() на значении, добытом через неэкспортируемое
+// поле, поэтому String/GoString/LogValue/MarshalJSON не срабатывают и
+// reflection печатает поля Secrets как есть. %d -- отдельная ловушка даже
+// для значения на виду: Stringer обслуживает только %v/%s, а %d без
+// Formatter печатает пароль внутри текста "%!d(string=...)".
+type reviveJobExportedSecrets struct {
+	ID      int64
+	Secrets Secrets
+}
+
+type reviveJobUnexportedSecrets struct {
+	id      int64
+	secrets Secrets
+}
+
+func TestSecrets_NeverPrintThemselves_NestedInStruct(t *testing.T) {
+	s := fixtureSecrets()
+	exported := reviveJobExportedSecrets{ID: 1, Secrets: s}
+	unexported := reviveJobUnexportedSecrets{id: 1, secrets: s}
+
+	var buf bytes.Buffer
+	// Глагол -- через переменную: go vet статически не проверяет типы под
+	// динамический формат, а нас интересует настоящий рантайм-вывод fmt на
+	// эти сочетания (структура сама Formatter не реализует, и обычным
+	// литералом "%d"/"%s" vet отказался бы собирать пакет, хотя вопрос тут
+	// не в стиле printf, а в утечке пароля).
+	for _, verb := range []string{"%v", "%+v", "%#v", "%d", "%s"} {
+		fmt.Fprintf(&buf, verb, exported)
+		fmt.Fprintf(&buf, verb, unexported)
+	}
+
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("job", "job", exported)
+	slog.New(slog.NewTextHandler(&buf, nil)).Info("job", "job", unexported)
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("job", "job", exported)
+	slog.New(slog.NewJSONHandler(&buf, nil)).Info("job", "job", unexported)
+
+	jsExported, _ := json.Marshal(exported)
+	buf.Write(jsExported)
+	jsUnexported, _ := json.Marshal(unexported)
+	buf.Write(jsUnexported)
+
+	assertNoFixtureSecret(t, "Secrets, вложенный в структуру", buf.Bytes())
 }
