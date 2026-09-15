@@ -100,9 +100,23 @@ func miniappSyncAlertMessage(d Deps, r *http.Request, routerID int64, checkName,
 		}
 		return
 	}
+	// Кто выключил уведомления по роутеру, не получает по нему ничего, в том
+	// числе приписок к тревогам, пришедшим до выключения (spec D; final
+	// review M2). Не прочитали выключатели -- лучше промолчать всем, чем
+	// написать тому, кто просил тишины.
+	muted, err := d.DB.NotifyMutes().MutedBy(routerID)
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("miniapp: notify mutes lookup failed", "router_id", routerID, "err", err)
+		}
+		return
+	}
 	ctx := r.Context()
 	breadcrumb := statusLine + " (через приложение)"
 	for chatID, msgID := range msgs {
+		if muted[chatID] {
+			continue
+		}
 		if err := d.MiniappTG.EditMessageReplyMarkup(ctx, chatID, msgID, &miniappEmptyKeyboard); err != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp: strip alert buttons failed", "router_id", routerID, "telegram_user_id", chatID, "err", err)
 		}
