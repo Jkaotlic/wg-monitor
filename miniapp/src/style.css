@@ -2434,6 +2434,10 @@ body {
   color: var(--danger);
 }
 
+.park-update-ok {
+  color: var(--ok);
+}
+
 .park-actions {
   display: flex;
   flex-wrap: wrap;
