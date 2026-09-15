@@ -112,11 +112,18 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
     setLinkError(null)
     createWebLink()
       .then((grant) => {
+        // Не только setState: открывать ссылку в браузере на экране, который
+        // уже покинули, тоже не дело -- побочный эффект, не только строка.
+        if (!aliveRef.current) return
         setLinkLines(webLinkLines(grant))
         openExternal(grant.url)
       })
-      .catch((err) => setLinkError(err?.serverMessage || 'Не удалось выдать ссылку.'))
-      .finally(() => setLinkBusy(false))
+      .catch((err) => {
+        if (aliveRef.current) setLinkError(err?.serverMessage || 'Не удалось выдать ссылку.')
+      })
+      .finally(() => {
+        if (aliveRef.current) setLinkBusy(false)
+      })
   }
 
   function askUpdate(router) {
@@ -213,16 +220,22 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
       return next
     })
     return setRouterNotify(router.id, muted)
-      .then((resp) => setFleet((prev) => withNotifyMuted(prev, router.id, resp?.muted ?? muted)))
+      .then((resp) => {
+        if (aliveRef.current) setFleet((prev) => withNotifyMuted(prev, router.id, resp?.muted ?? muted))
+      })
       .catch((err) => {
-        setNotifyError((prev) => new Map(prev).set(router.id, 'Не удалось сохранить. Попробуйте ещё раз.'))
+        if (aliveRef.current) setNotifyError((prev) => new Map(prev).set(router.id, 'Не удалось сохранить. Попробуйте ещё раз.'))
         throw err
       })
-      .finally(() => setNotifyBusy((prev) => {
-        const next = new Set(prev)
-        next.delete(router.id)
-        return next
-      }))
+      .finally(() => {
+        if (aliveRef.current) {
+          setNotifyBusy((prev) => {
+            const next = new Set(prev)
+            next.delete(router.id)
+            return next
+          })
+        }
+      })
   }
 
   function toggleNotify(router) {

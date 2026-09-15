@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   // Первое чтение (на монтировании) всегда успевает -- иначе экран никогда
   // не покажет ни одной строки. Отказ этот флаг включает начиная со второго.
   fleetFailAfterFirst: false,
+  linkDeferred: false, linkResolver: null,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -26,7 +27,12 @@ vi.mock('../src/api.js', async (importOriginal) => {
       return Promise.resolve(mocks.fleet)
     },
     fetchAccess: () => Promise.resolve({ owner: null, operators: [] }),
-    createWebLink: () => Promise.resolve({ url: 'https://wg.example.com/x', notice: '', limit_notice: '' }),
+    // mocks.linkDeferred -- тест сам решает, когда ссылка «приедет», чтобы
+    // поймать момент между уходом с экрана и разрешением промиса.
+    createWebLink: () =>
+      mocks.linkDeferred
+        ? new Promise((resolve) => { mocks.linkResolver = resolve })
+        : Promise.resolve({ url: 'https://wg.example.com/x', notice: '', limit_notice: '' }),
     updateRouterAgent: (id, confirm, target) => {
       mocks.updates.push({ id, confirm, target })
       return reply(mocks.updateReply)
@@ -137,6 +143,8 @@ function reset() {
   mocks.notifyReply = null
   mocks.notifyReplies = {}
   mocks.fleetFailAfterFirst = false
+  mocks.linkDeferred = false
+  mocks.linkResolver = null
 }
 
 describe('«Парк»: обновление агента', () => {
@@ -603,5 +611,25 @@ describe('«Парк»: уведомлять меня', () => {
     await act(async () => buttons(rowOf(root, 'bronya'), 'Открыть роутер')[0].click())
     expect(opened).toEqual([11])
     cleanup(root)
+  })
+})
+
+// Fix round 1, Minor #4 (review-minors-miniapp.md): saveNotify и
+// openInBrowser не проверяли aliveRef -- в Preact это не падает, но
+// открывать ссылку в браузере (побочный эффект, не только setState) на
+// экране, который уже покинули, не должно происходить.
+describe('«Парк»: уход с экрана гасит отложенные действия', () => {
+  it('уход с экрана до ответа createWebLink -- ссылка не открывается, когда ответ пришёл позже', async () => {
+    reset()
+    mocks.linkDeferred = true
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const { root } = await mountPark()
+    await act(async () => buttons(root, 'Открыть в браузере')[0].click())
+    cleanup(root) // уход с экрана, пока createWebLink ещё в пути
+    mocks.linkResolver({ url: 'https://wg.example.com/x', notice: '', limit_notice: '' })
+    await flush()
+    await flush()
+    expect(openSpy).not.toHaveBeenCalled()
+    openSpy.mockRestore()
   })
 })

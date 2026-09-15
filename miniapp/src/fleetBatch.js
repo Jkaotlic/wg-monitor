@@ -147,10 +147,24 @@ function answeredCount(results) {
   return results.filter((r) => r.outcome === 'ok' || r.outcome === 'problems' || r.outcome === 'unparsed').length
 }
 
+function timeoutCount(results) {
+  return results.filter((r) => r.outcome === 'no_answer').length
+}
+
+function errorCount(results) {
+  return results.filter((r) => r.outcome === 'failed').length
+}
+
+// Пока пачка идёт, «сколько ответили» должно расти вместе с ходом пула --
+// иначе, пока часть уже завершившихся роутеров молчала или отказала, число
+// застывает ниже фактического хода, и человеку кажется, что пачка зависла
+// (review-minors-miniapp.md Minor #3). Считаем теми же исходами, что и итог
+// (answeredCount + таймауты + отказы), просто суммируя все, кто уже завершён.
 export function batchProgressLine(state) {
   if (!state || !state.running) return ''
-  const answered = answeredCount(state.results ?? [])
-  return `${pluralRu(answered, 'Ответил', 'Ответили', 'Ответили')} ${answered} из ${state.total}…`
+  const results = state.results ?? []
+  const finished = answeredCount(results) + timeoutCount(results) + errorCount(results)
+  return `${pluralRu(finished, 'Ответил', 'Ответили', 'Ответили')} ${finished} из ${state.total}…`
 }
 
 function doctorCounts({ fails, warns }) {

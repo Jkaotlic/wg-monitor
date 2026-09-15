@@ -266,7 +266,13 @@ describe('итог словами', () => {
   // (ok/problems/unparsed), а не по числу завершённых попыток. Таймаут
   // (no_answer) или отказ команды (failed) уже случились, но роутер не
   // «ответил» -- в счёт «Ответили N из M» они не идут ни там, ни там.
-  it('ход -- «ответили N из M…», считает так же, как итог (таймауты и отказы не в счёте)', () => {
+  // Fix round 1, Minor #3 (review-minors-miniapp.md): пока пачка идёт, строка
+  // хода считала только реальные ответы (ok/problems/unparsed) -- если часть
+  // уже завершившихся роутеров молчала или отказала, число застывало ниже
+  // фактического хода пула и выглядело так, будто пачка зависла. Теперь счёт
+  // -- все завершённые (ответили + не ответили + отказали), теми же
+  // подсчётами, что и итог (answeredCount), просто суммированными.
+  it('ход -- «ответили N из M…», считает ЗАВЕРШИВШИХСЯ (ответы + таймауты + отказы), не только ответы', () => {
     const running = (results) => ({ kind: 'doctor', total: 6, running: true, skipped: [], results })
     expect(batchProgressLine(running([{ id: 1, nickname: 'a', outcome: 'ok' }]))).toBe('Ответил 1 из 6…')
     expect(
@@ -278,7 +284,7 @@ describe('итог словами', () => {
           { id: 4, nickname: 'd', outcome: 'failed' },
         ]),
       ),
-    ).toBe('Ответили 2 из 6…')
+    ).toBe('Ответили 4 из 6…')
     expect(batchProgressLine(running([]))).toBe('Ответили 0 из 6…')
     expect(batchProgressLine(null)).toBe('')
     expect(batchProgressLine({ ...running([{ id: 1, nickname: 'a', outcome: 'ok' }]), running: false })).toBe('')
