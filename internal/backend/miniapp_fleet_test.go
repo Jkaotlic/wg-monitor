@@ -273,6 +273,52 @@ func TestMiniappFleetCarriesAgentUpdateState(t *testing.T) {
 	}
 }
 
+// B6: агент ниже agentSelfUpdateFloor не умеет self_update вовсе. /fleet не
+// должен считать его «отстающим» (agent_behind=false, иначе кнопка и
+// счётчик «Обновить всех отставших» обещали бы то, что кончится отказом
+// agent_too_old) и обязан отдать предупреждение про переустановку. Причина
+// прошлой (уже неактивной) попытки при этом не должна теряться -- сервер
+// review нашёл, что PendingLastErrorText требовал verdict.Behind, а у
+// слишком старого агента Behind всегда false.
+func TestMiniappFleetCarriesTooOldAgentWarningAndKeepsLastError(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	old := serverVersion
+	SetVersion("v0.33.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.12.0"); err != nil {
+		t.Fatal(err)
+	}
+	// Отметка обновления уже снята (сдались или отменили), причина осталась
+	// в базе -- как после giveUpPendingDeploy (deploy_attempts.go:154-167).
+	if _, err := d.SQL().Exec(`UPDATE users SET pending_last_error = 'download: HTTP 502' WHERE id = ?`, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(otherID, "v0.33.0"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, rec)
+	rows := map[int64]miniappFleetRouter{}
+	for _, r := range resp.Routers {
+		rows[r.ID] = r
+	}
+
+	owned := rows[ownedID]
+	if owned.AgentBehind {
+		t.Errorf("слишком старый агент не должен считаться «отстающим»: %+v", owned)
+	}
+	if !strings.Contains(owned.AgentUpdateWarning, "переустановка") {
+		t.Errorf("нет предупреждения про переустановку: %+v", owned)
+	}
+	if owned.PendingLastErrorText != "роутер не смог скачать обновление" {
+		t.Errorf("причина прошлой попытки потерялась: %+v", owned)
+	}
+}
+
 // Решение оператора 15.09: админ выключает уведомления по роутеру, «но и
 // одновременно при желании зайти глянуть, что не так». Парк показывает
 // выключатель честно и не прячет выключенный роутер.

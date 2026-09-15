@@ -219,7 +219,11 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			row.AgentUpdateWarning = verdict.Warning
 			if st, ok := pending[a.ID]; ok {
 				row.PendingAttempts = st.Attempts
-				if strings.TrimSpace(st.LastError) != "" && (st.Version != "" || verdict.Behind) {
+				// TooOld тоже держит причину: у него Behind всегда false
+				// (агент вообще не умеет self_update, B6), но прошлая
+				// попытка (например, до того как агент постарел настолько)
+				// не должна пропадать из строки.
+				if strings.TrimSpace(st.LastError) != "" && (st.Version != "" || verdict.Behind || verdict.TooOld) {
 					row.PendingLastErrorText = deployFailureText(st.LastError)
 				}
 			}
