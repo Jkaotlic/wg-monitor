@@ -358,3 +358,56 @@ func TestUsers_SetAWGMURLIfEmpty(t *testing.T) {
 		t.Fatalf("адрес: %v", u.AWGMURL)
 	}
 }
+
+// PutSettingURL -- намерение и адрес панели одной транзакцией (финальное
+// ревью, «конкурентная постановка»): адрес либо пуст и записывается, либо
+// уже тот же; другой адрес -- ErrReviveURLConflict, и ни намерение, ни
+// секрет не трогаются.
+func TestRevive_PutSettingURLIsAtomic(t *testing.T) {
+	d, id := newTestDBForRevive(t)
+	in := ReviveIntent{RouterID: id, CreatedAt: reviveT0, ExpiresAt: reviveT0.Add(24 * time.Hour), RequestedBy: 42}
+	if err := d.Revive().PutSettingURL(in, []byte("nonce-12byte"), []byte("cipher-1"), "https://awg.example.com"); err != nil {
+		t.Fatalf("первая постановка: %v", err)
+	}
+	u, _ := d.Users().GetByID(id)
+	if u.AWGMURL == nil || *u.AWGMURL != "https://awg.example.com" {
+		t.Fatalf("адрес: %v", u.AWGMURL)
+	}
+	// Тот же адрес -- не конфликт: повтор постановки проходит.
+	if err := d.Revive().PutSettingURL(in, []byte("nonce-12byte"), []byte("cipher-2"), "https://awg.example.com"); err != nil {
+		t.Fatalf("тот же адрес: %v", err)
+	}
+	before, _ := d.Revive().Get(id)
+	_, ctBefore, _, _ := d.Revive().Secret(id)
+
+	err := d.Revive().PutSettingURL(in, []byte("nonce-12byte"), []byte("cipher-3"), "https://other.example.com")
+	if !errors.Is(err, ErrReviveURLConflict) {
+		t.Fatalf("другой адрес: %v", err)
+	}
+	after, _ := d.Revive().Get(id)
+	_, ctAfter, _, _ := d.Revive().Secret(id)
+	if after.Generation != before.Generation || string(ctAfter) != string(ctBefore) {
+		t.Fatalf("конфликт адреса переписал намерение: gen %d->%d, секрет %q->%q", before.Generation, after.Generation, ctBefore, ctAfter)
+	}
+	u, _ = d.Users().GetByID(id)
+	if *u.AWGMURL != "https://awg.example.com" {
+		t.Fatalf("адрес переписан: %v", *u.AWGMURL)
+	}
+
+	// Поверх running -- ErrReviveRunning, и адрес не записывается.
+	d2, id2 := newTestDBForRevive(t)
+	putWaiting(t, d2, id2)
+	if ok, err := d2.Revive().MarkRunning(id2, reviveT0, 0); !ok || err != nil {
+		t.Fatalf("mark running: %v %v", ok, err)
+	}
+	if err := d2.Revive().PutSettingURL(in2(id2), []byte("n"), []byte("c"), "https://awg.example.com"); !errors.Is(err, ErrReviveRunning) {
+		t.Fatalf("поверх running: %v", err)
+	}
+	if u2, _ := d2.Users().GetByID(id2); u2.AWGMURL != nil {
+		t.Fatalf("адрес записан при отказе: %v", *u2.AWGMURL)
+	}
+}
+
+func in2(id int64) ReviveIntent {
+	return ReviveIntent{RouterID: id, CreatedAt: reviveT0, ExpiresAt: reviveT0.Add(24 * time.Hour), RequestedBy: 42}
+}

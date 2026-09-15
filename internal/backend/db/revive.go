@@ -21,6 +21,9 @@ const (
 // прежним паролем, и подмена секрета посреди неё ничего бы не дала.
 var ErrReviveRunning = errors.New("revive: переустановка уже идёт")
 
+// ErrReviveURLConflict -- у роутера уже записан другой адрес панели.
+var ErrReviveURLConflict = errors.New("revive: у роутера другой адрес панели")
+
 // ReviveIntent -- строка revive_intents. Нулевое время означает NULL.
 type ReviveIntent struct {
 	RouterID        int64
@@ -60,11 +63,45 @@ const reviveColumns = `user_id, status, target_version, created_at, updated_at, 
 // INSERT она 0) -- это и есть точка, где старое поколение перестаёт быть
 // действительным для условных записей воркера.
 func (r *ReviveRepo) Put(in ReviveIntent, nonce, ciphertext []byte) error {
+	return r.put(in, nonce, ciphertext, "")
+}
+
+// PutSettingURL -- Put и запись адреса панели одной транзакцией (финальное
+// ревью 15.09, конкурентная постановка на роутере без адреса). Адрес
+// записывается, если у роутера его нет; тот же адрес -- не конфликт; другой
+// -- ErrReviveURLConflict, и ни намерение, ни секрет, ни адрес не меняются.
+func (r *ReviveRepo) PutSettingURL(in ReviveIntent, nonce, ciphertext []byte, awgmURL string) error {
+	return r.put(in, nonce, ciphertext, awgmURL)
+}
+
+func (r *ReviveRepo) put(in ReviveIntent, nonce, ciphertext []byte, awgmURL string) error {
 	tx, err := r.d.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	if awgmURL != "" {
+		res, err := tx.Exec(
+			`UPDATE users SET awgm_url = ? WHERE id = ? AND (awgm_url IS NULL OR TRIM(awgm_url) = '')`,
+			awgmURL, in.RouterID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			var stored sql.NullString
+			if err := tx.QueryRow(`SELECT awgm_url FROM users WHERE id = ?`, in.RouterID).Scan(&stored); err != nil {
+				return err
+			}
+			if strings.TrimSpace(stored.String) != awgmURL {
+				return ErrReviveURLConflict
+			}
+		}
+	}
 
 	res, err := tx.Exec(`
 INSERT INTO revive_intents (user_id, status, target_version, created_at, updated_at, expires_at,
