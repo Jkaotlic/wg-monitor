@@ -63,6 +63,10 @@ type miniappFleetRouter struct {
 	PendingLastErrorText string `json:"pending_last_error_text"`
 	AgentBehind          bool   `json:"agent_behind"`
 	AgentUpdateWarning   string `json:"agent_update_warning"`
+	// NotifyMuted -- вызвавший админ выключил уведомления по этому роутеру.
+	// Без omitempty: переключателю нужно явное false. Роутер при этом в парке
+	// остаётся -- доступ к экранам от выключения не зависит.
+	NotifyMuted bool `json:"notify_muted"`
 }
 
 // miniappFleetUnreachable -- человек, которому бот не может написать.
@@ -142,6 +146,15 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			}
 			pending = nil
 		}
+		mutedByAdmin, err := d.DB.NotifyMutes().MutedRoutersOf(telegramUserID)
+		if err != nil {
+			// Как со снимком версий: экран обязан открыться. Переключатели
+			// покажут «включено», в журнале -- почему.
+			if d.Logger != nil {
+				d.Logger.Warn("сводка парка: выключатели уведомлений не прочитаны", "err", err)
+			}
+			mutedByAdmin = nil
+		}
 
 		// Пустой список, а не nil: клиент перебирает это поле, и null уронил
 		// бы экран в тот момент, когда в парке пока ни одного роутера.
@@ -165,6 +178,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				LastSeenAgeSec: a.LastSeenAgeSec,
 				AgentVersion:   a.AgentVersion,
 				PendingVersion: a.PendingVersion,
+				NotifyMuted:    mutedByAdmin[a.ID],
 			}
 			for _, inc := range a.ActiveIncidents {
 				row.Incidents = append(row.Incidents, inc.CheckName)

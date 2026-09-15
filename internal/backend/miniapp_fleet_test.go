@@ -272,3 +272,38 @@ func TestMiniappFleetCarriesAgentUpdateState(t *testing.T) {
 		}
 	}
 }
+
+// Решение оператора 15.09: админ выключает уведомления по роутеру, «но и
+// одновременно при желании зайти глянуть, что не так». Парк показывает
+// выключатель честно и не прячет выключенный роутер.
+func TestMiniappFleetCarriesNotifyMutedForCallingAdmin(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, ownedID, otherID, ownerTGID := seedMiniappFleet(t)
+	if err := d.NotifyMutes().SetMuted(999, ownedID, true); err != nil {
+		t.Fatal(err)
+	}
+	// Владелец выключил другой роутер -- это не выбор админа.
+	if err := d.NotifyMutes().SetMuted(ownerTGID, otherID, true); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, rec)
+	if len(resp.Routers) != 2 {
+		t.Fatalf("роутеров %d, ждали 2: выключенный роутер обязан остаться в парке", len(resp.Routers))
+	}
+	byID := map[int64]miniappFleetRouter{}
+	for _, row := range resp.Routers {
+		byID[row.ID] = row
+	}
+	if !byID[ownedID].NotifyMuted {
+		t.Errorf("router-owned: notify_muted=false, ждали true")
+	}
+	if byID[otherID].NotifyMuted {
+		t.Errorf("router-other: notify_muted=true -- чужое выключение попало в ответ админу")
+	}
+	if !strings.Contains(rec.Body.String(), `"notify_muted":false`) {
+		t.Errorf("явного false нет в теле -- клиент не отличит «включено» от «поле не пришло»: %s", rec.Body.String())
+	}
+}

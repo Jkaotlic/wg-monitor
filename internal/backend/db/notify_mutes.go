@@ -60,3 +60,24 @@ func (r *NotifyMutesRepo) MutedBy(userID int64) (map[int64]bool, error) {
 	}
 	return out, rows.Err()
 }
+
+// MutedRoutersOf -- роутеры, которые этот человек выключил. Экран парка
+// показывает админу переключатель у каждого роутера, и спрашивать базу по
+// роутеру было бы N запросов на одно открытие экрана.
+func (r *NotifyMutesRepo) MutedRoutersOf(telegramUserID int64) (map[int64]bool, error) {
+	rows, err := r.d.db.Query(
+		`SELECT user_id FROM router_notify_mutes WHERE telegram_user_id = ?`, telegramUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[int64]bool)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
