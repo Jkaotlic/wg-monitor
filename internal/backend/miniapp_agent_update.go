@@ -54,10 +54,21 @@ func writeMiniappDeployError(w http.ResponseWriter, status int, code, message st
 
 // miniappDeployErrorText -- отказ словами. Сервер отдаёт и код, и текст:
 // экран может показать текст как есть.
+//
+// Ключ -- обычно код ответа (JSON "code"/"error"), но для причин, у которых
+// один код прикрывает разные по смыслу тексты в разных маршрутах (массовое
+// обновление подтверждается словом «обновить», а не именем роутера; отказ
+// «не настроено» бывает по трём разным причинам), здесь отдельные,
+// не-wire ключи -- см. их комментарии ниже.
 func miniappDeployErrorText(code string) string {
 	switch code {
 	case "confirm_mismatch":
 		return "Имя роутера набрано неверно."
+	// fleet_confirm_mismatch -- тот же wire-код confirm_mismatch, но текст
+	// про слово «обновить», а не про имя роутера (B5c): массовое обновление
+	// подтверждается фразой, а не ником конкретного роутера.
+	case "fleet_confirm_mismatch":
+		return "Для подтверждения наберите «обновить»."
 	case "agent_too_old":
 		return "Агент на роутере слишком старый, чтобы обновиться сам: нужна переустановка."
 	case deployErrPending:
@@ -66,6 +77,14 @@ func miniappDeployErrorText(code string) string {
 		return "На роутере уже стоит версия новее выбранной."
 	case deployErrNoRelease:
 		return "Такой версии агента нет среди выпусков."
+	// Три причины "not_configured" (B5a): их нельзя было различить по тексту,
+	// хотя чинить их админу нужно по-разному. Wire-код у всех троих остаётся
+	// "not_configured" -- клиент по нему не ветвится (агентUpdate.js не знает
+	// этого кода и показывает общий текст), различие только в сообщении.
+	case "not_configured_db":
+		return "У сервера не настроена база данных."
+	case "not_configured_queue":
+		return "У сервера не настроена очередь команд."
 	case "not_configured":
 		return "У сервера не задан публичный адрес: обновлению неоткуда скачаться."
 	default:
@@ -91,17 +110,17 @@ func miniappAgentDeployOpts(d Deps, source string) (agentDeployOpts, bool) {
 
 func miniappLoadRouterForAdmin(d Deps, w http.ResponseWriter, r *http.Request) (*db.User, bool) {
 	if d.DB == nil {
-		writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
+		writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured_db"))
 		return nil, false
 	}
 	routerID, ok := parseMiniappRouterID(r)
 	if !ok {
-		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "router not found")
+		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден.")
 		return nil, false
 	}
 	u, err := d.DB.Users().GetByID(routerID)
 	if errors.Is(err, db.ErrUserNotFound) {
-		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "router not found")
+		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден.")
 		return nil, false
 	}
 	if err != nil {
@@ -137,7 +156,7 @@ func miniappAgentUpdateHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		if d.CommandSink == nil {
-			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
+			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured_queue"))
 			return
 		}
 		opts, ok := miniappAgentDeployOpts(d, "miniapp")
@@ -148,6 +167,15 @@ func miniappAgentUpdateHandler(d Deps) http.HandlerFunc {
 		target := strings.TrimSpace(req.TargetVersion)
 		if target == "" {
 			target = serverVersion
+		}
+		// Выпуска новее самого бэкенда просто не существует: мирор
+		// /v1/releases/download раздаёт то, что зеркалит бэкенд, и версии
+		// агента вперёд себя он предложить не может. agentDeployCore проверяет
+		// только ФОРМАТ тега (releaseorigin.ValidateReleaseTag), не его
+		// реальность (B5d).
+		if compareDashboardReleaseTags(target, serverVersion) > 0 {
+			writeMiniappDeployError(w, http.StatusConflict, deployErrNoRelease, miniappDeployErrorText(deployErrNoRelease))
+			return
 		}
 		res, derr := agentDeployCore(d, u, target, opts)
 		if derr != nil {
@@ -198,11 +226,15 @@ func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		if normalizeConfirmPhrase(req.Confirm) != fleetAgentUpdateConfirm {
-			writeMiniappDeployError(w, http.StatusBadRequest, "confirm_mismatch", "Для подтверждения наберите «обновить».")
+			writeMiniappDeployError(w, http.StatusBadRequest, "confirm_mismatch", miniappDeployErrorText("fleet_confirm_mismatch"))
 			return
 		}
-		if d.DB == nil || d.CommandSink == nil {
-			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
+		if d.DB == nil {
+			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured_db"))
+			return
+		}
+		if d.CommandSink == nil {
+			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured_queue"))
 			return
 		}
 		if _, ok := parseDashboardReleaseTagRank(serverVersion); !ok {

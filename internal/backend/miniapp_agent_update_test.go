@@ -167,6 +167,81 @@ func TestMiniappAgentUpdateRefusals(t *testing.T) {
 	}
 }
 
+// B5d: версии новее самого бэкенда среди выпусков быть не может -- зеркало
+// раздаёт то же, что зеркалит бэкенд. Раньше проверялся только формат тега.
+func TestMiniappAgentUpdateRefusesTargetNewerThanBackend(t *testing.T) {
+	_, ownedID, h, sink := agentUpdateTestMux(t)
+	rec := postMiniappJSON(t, h, fmt.Sprintf("/v1/miniapp/routers/%d/agent/update", ownedID),
+		`{"confirm":"router-owned","target_version":"v0.34.0"}`, 999)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	if code, errField, _ := decodeDeployError(t, rec); code != deployErrNoRelease || errField != deployErrNoRelease {
+		t.Fatalf("code=%q error=%q, ждали %q", code, errField, deployErrNoRelease)
+	}
+	if len(sink.snapshotEnqueued()) != 0 {
+		t.Fatal("версия впереди бэкенда поставила команду")
+	}
+}
+
+// B5a: "не настроено" бывает по трём разным причинам, и админу нужно знать,
+// по какой именно -- код not_configured/503 у всех троих общий, текст разный.
+func TestMiniappAgentUpdateNotConfiguredReasons(t *testing.T) {
+	cases := []struct {
+		name    string
+		build   func(d *db.DB) Deps
+		wantMsg string
+	}{
+		{"нет базы", func(*db.DB) Deps {
+			return Deps{TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999}
+		}, "база данных"},
+		{"нет очереди команд", func(d *db.DB) Deps {
+			return Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999}
+		}, "очередь команд"},
+		{"нет публичного адреса", func(d *db.DB) Deps {
+			return Deps{DB: d, CommandSink: &fakeCmdSink{}, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999}
+		}, "публичный адрес"},
+	}
+	old := serverVersion
+	SetVersion("v0.33.0")
+	t.Cleanup(func() { SetVersion(old) })
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, ownedID, _, _ := seedMiniappFleet(t)
+			if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+				t.Fatal(err)
+			}
+			h := NewMux(c.build(d))
+			rec := postMiniappJSON(t, h, fmt.Sprintf("/v1/miniapp/routers/%d/agent/update", ownedID), `{"confirm":"router-owned"}`, 999)
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+			}
+			code, errField, msg := decodeDeployError(t, rec)
+			if code != "not_configured" || errField != "not_configured" {
+				t.Fatalf("code=%q error=%q, ждали not_configured в обоих", code, errField)
+			}
+			if !strings.Contains(msg, c.wantMsg) {
+				t.Fatalf("текст %q не называет причину %q", msg, c.wantMsg)
+			}
+		})
+	}
+}
+
+// B5e: пустое и битое тело -- отказ 400 bad_request, а не 500 и не паника.
+func TestMiniappAgentUpdateBadRequestOnBrokenBody(t *testing.T) {
+	_, ownedID, h, _ := agentUpdateTestMux(t)
+	path := fmt.Sprintf("/v1/miniapp/routers/%d/agent/update", ownedID)
+	for _, body := range []string{"", "{", `{"confirm":`, "not json at all"} {
+		rec := postMiniappJSON(t, h, path, body, 999)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("тело %q: код %d, ждали 400", body, rec.Code)
+		}
+		if code, errField, _ := decodeDeployError(t, rec); code != "bad_request" || errField != "bad_request" {
+			t.Fatalf("тело %q: code=%q error=%q", body, code, errField)
+		}
+	}
+}
+
 func TestMiniappAgentUpdateCancel(t *testing.T) {
 	d, ownedID, h, _ := agentUpdateTestMux(t)
 	path := fmt.Sprintf("/v1/miniapp/routers/%d/agent/update/cancel", ownedID)
@@ -187,6 +262,40 @@ func TestMiniappAgentUpdateCancel(t *testing.T) {
 	}
 	if st, _ := d.Users().PendingDeploy(ownedID); st.Version != "" {
 		t.Fatalf("отметка осталась: %+v", st)
+	}
+}
+
+// B5b, B5e: отмена несуществующего роутера -- 404 с русским текстом, а не
+// 500, не паника и не английское "router not found".
+func TestMiniappAgentUpdateCancelNonexistentRouter(t *testing.T) {
+	_, _, h, _ := agentUpdateTestMux(t)
+	rec := postMiniappJSON(t, h, "/v1/miniapp/routers/424242/agent/update/cancel", `{}`, 999)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	if _, _, msg := decodeDeployError(t, rec); msg != "Роутер не найден." {
+		t.Fatalf("текст = %q, ждали «Роутер не найден.»", msg)
+	}
+}
+
+// B5e: владелец роутера (не админ) не может отменить обновление через этот
+// маршрут -- 404, как у остальных поверхностей мини-аппа, и отметка обязана
+// остаться нетронутой: отказ в доступе не должен иметь побочных эффектов.
+func TestMiniappAgentUpdateCancelByOwnerDeniedMarkStays(t *testing.T) {
+	d, ownedID, h, _ := agentUpdateTestMux(t)
+	if err := d.Users().MarkPendingDeploy(ownedID, "v0.33.0", "2026-09-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	rec := postMiniappJSON(t, h, fmt.Sprintf("/v1/miniapp/routers/%d/agent/update/cancel", ownedID), `{}`, 100)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("владельцу: код %d, ждали 404", rec.Code)
+	}
+	st, err := d.Users().PendingDeploy(ownedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Version != "v0.33.0" {
+		t.Fatalf("отмена не-админом изменила отметку: %+v", st)
 	}
 }
 
@@ -211,11 +320,47 @@ func TestMiniappFleetAgentUpdateNeedsConfirmWord(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("код %d", rec.Code)
 	}
-	if code, errField, _ := decodeDeployError(t, rec); code != "confirm_mismatch" || errField != "confirm_mismatch" {
+	code, errField, msg := decodeDeployError(t, rec)
+	if code != "confirm_mismatch" || errField != "confirm_mismatch" {
 		t.Fatalf("code=%q error=%q", code, errField)
+	}
+	// B5c: текст массового маршрута -- про слово «обновить», а не про имя
+	// роутера (тот текст живёт у одиночного маршрута confirm_mismatch).
+	if !strings.Contains(msg, "обновить") || strings.Contains(msg, "Имя роутера") {
+		t.Fatalf("текст несовпадения %q не про слово подтверждения", msg)
 	}
 	if len(sink.snapshotEnqueued()) != 0 {
 		t.Fatal("без подтверждения поставлены команды")
+	}
+}
+
+// B5e: 503 not_configured на массовом маршруте тоже, и тоже с текстом причины.
+func TestMiniappFleetAgentUpdateNotConfigured(t *testing.T) {
+	h := NewMux(Deps{TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	code, errField, msg := decodeDeployError(t, rec)
+	if code != "not_configured" || errField != "not_configured" {
+		t.Fatalf("code=%q error=%q", code, errField)
+	}
+	if !strings.Contains(msg, "база данных") {
+		t.Fatalf("текст %q не называет причину", msg)
+	}
+}
+
+// B5e: пустое и битое тело массового маршрута -- тоже 400 bad_request.
+func TestMiniappFleetAgentUpdateBadRequestOnBrokenBody(t *testing.T) {
+	_, _, h, _ := agentUpdateTestMux(t)
+	for _, body := range []string{"", "{", "not json at all"} {
+		rec := fleetUpdate(t, h, body, 999)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("тело %q: код %d, ждали 400", body, rec.Code)
+		}
+		if code, errField, _ := decodeDeployError(t, rec); code != "bad_request" || errField != "bad_request" {
+			t.Fatalf("тело %q: code=%q error=%q", body, code, errField)
+		}
 	}
 }
 
