@@ -60,6 +60,18 @@ describe('состояние обновления в строке роутера
     expect(agentUpdateState({ ...OFF_PENDING, status: 'alert', last_seen_age_sec: 1040226 }).text).toContain('поставится, когда роутер выйдет на связь')
   })
 
+  // Ledger #1: одна неудачная попытка, потом роутер выключили. Сервер
+  // повторит при выходе на связь, значит строка -- «ждёт включения», а не
+  // красное «не ставится». Причину прошлой попытки помним, но без тревоги.
+  it('выключенный с причиной прошлой неудачи -- всё равно ждёт включения', () => {
+    const s = agentUpdateState({ ...FAILING, status: 'offline', last_seen_age_sec: 345600 })
+    expect(s.tone).toBe('warn')
+    expect(s.text).toBe('ждёт включения: v0.33.0 поставится, когда роутер выйдет на связь · прошлая попытка: на роутере не хватает места')
+    expect(s.text).not.toContain('не ставится')
+    expect(s.canCancel).toBe(true)
+    expect(s.canUpdate).toBe(false)
+  })
+
   it('на связи и ставится -- говорит версию и число попыток с верным склонением', () => {
     expect(agentUpdateState(ONLINE_TRYING).text).toBe('ставится v0.33.0 · 2 попытки')
     expect(agentUpdateState({ ...ONLINE_TRYING, pending_attempts: 1 }).text).toBe('ставится v0.33.0 · 1 попытка')

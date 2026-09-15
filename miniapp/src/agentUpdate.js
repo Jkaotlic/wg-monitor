@@ -41,16 +41,19 @@ export function agentUpdateState(router) {
   const lastError = String(router?.pending_last_error_text ?? '').trim()
   if (pending) {
     const tail = tries > 0 ? ` · ${attempts(tries)}` : ''
-    if (lastError) {
-      return { tone: 'danger', text: `не ставится ${pending}: ${lastError}${tail}`, canUpdate: false, canCancel: true }
-    }
+    // Выключенный роутер проверяется ДО причины неудачи: отметка жива, сервер
+    // повторит при выходе на связь, и красное «не ставится» было бы неправдой.
     if (isAway(router)) {
+      const last = lastError ? ` · прошлая попытка: ${lastError}` : ''
       return {
         tone: 'warn',
-        text: `ждёт включения: ${pending} поставится, когда роутер выйдет на связь`,
+        text: `ждёт включения: ${pending} поставится, когда роутер выйдет на связь${last}`,
         canUpdate: false,
         canCancel: true,
       }
+    }
+    if (lastError) {
+      return { tone: 'danger', text: `не ставится ${pending}: ${lastError}${tail}`, canUpdate: false, canCancel: true }
     }
     return { tone: 'muted', text: `ставится ${pending}${tail}`, canUpdate: false, canCancel: true }
   }
