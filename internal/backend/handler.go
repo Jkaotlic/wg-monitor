@@ -1107,6 +1107,9 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 			"nickname", nick, "cmd_id", c.ID, "action", c.Action,
 			"req_id", RequestIDFromContext(r.Context()),
 		)
+		if c.Action == "self_update" {
+			countPendingDeployAttempt(d, uid, nick, commandVersionArg(*c))
+		}
 	}
 }
 
@@ -1257,24 +1260,14 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			}
 		} else {
 			if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
-				target := commandVersionArg(cmd)
-				if target != "" {
-					if _, err := d.DB.Users().ClearPendingDeployIfMatches(uid, target); err != nil {
-						d.Logger.Warn("clear pending deploy after self_update failure",
-							"nickname", nick, "cmd_id", res.ID, "target_version", target, "err", err)
-					}
+				output := res.Output
+				if strings.TrimSpace(output) == "" {
+					output = "status " + res.Status
 				}
-				if d.DeployNotifier != nil {
-					output := res.Output
-					nickname := nick
-					status := res.Status
-					spawnRelay(d, "deploy-result", func(ctx context.Context) {
-						if err := d.DeployNotifier.SendDeferredUpdate(ctx, uid, nickname, target, status, output); err != nil {
-							incTGError()
-							d.Logger.Warn("deploy notifier failed", "cmd_id", res.ID, "action", cmd.Action, "err", err)
-						}
-					})
-				}
+				// Неудача НЕ снимает отметку: намерение живёт в базе, досылка
+				// на контакте попробует снова. На пределе попыток -- сдаёмся
+				// и пишем людям (deploy_attempts.go).
+				recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
 			}
 		}
 	resultLogged:

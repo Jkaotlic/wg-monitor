@@ -16,14 +16,16 @@ func TestRenderDeferredUpdateSuccess(t *testing.T) {
 }
 
 func TestRenderDeferredUpdateFailure(t *testing.T) {
-	card := RenderDeferredUpdate("route4car4", "v0.13.0-rc53", "err", "download checksums.txt: HTTP 502")
+	card := RenderDeferredUpdate("route4car4", "v0.13.0-rc53", "err", "роутер не смог скачать обновление")
 	text := card.Render(CardOpts{MaxBytes: 1200})
-	for _, want := range []string{"route4car4", "не применилось", "v0.13.0-rc53", "HTTP 502", "pending очищен", "можно повторить update"} {
+	for _, want := range []string{"route4car4", "не ставится", "v0.13.0-rc53", "роутер не смог скачать обновление", "«Парк»"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("rendered failure missing %q: %q", want, text)
 		}
 	}
-	if strings.Contains(text, "попробует снова") {
-		t.Fatalf("failure text must not promise an automatic retry after pending deploy was cleared: %q", text)
+	for _, banned := range []string{"pending", "update", "self_update", "попробует снова"} {
+		if strings.Contains(text, banned) {
+			t.Fatalf("failure text contains %q: %q", banned, text)
+		}
 	}
 }

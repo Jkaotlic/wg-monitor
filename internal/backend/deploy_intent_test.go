@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -170,5 +171,130 @@ func TestPollDoesNotRepeatUpdateWhileInFlight(t *testing.T) {
 	}
 	if rec := s.poll(t); rec.Code != http.StatusNoContent {
 		t.Fatalf("второй опрос: код %d, тело %s -- обновление выдано повторно", rec.Code, rec.Body.String())
+	}
+}
+
+// withDeployNotifier пересобирает обработчик с записывающим уведомителем.
+func (s *sleptRouter) withDeployNotifier() *fakeDeployNotifier {
+	dn := &fakeDeployNotifier{}
+	s.h = NewMux(Deps{
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:             s.d,
+		Dispatcher:     &fakeDisp{},
+		CommandSink:    s.q,
+		DeployNotifier: dn,
+		PublicBaseURL:  "https://backend.example.com",
+	})
+	return dn
+}
+
+func (s sleptRouter) result(t *testing.T, cmdID, status, output string) {
+	t.Helper()
+	body, _ := json.Marshal(wire.CommandResult{ID: cmdID, Status: status, Output: output})
+	req := httptest.NewRequest(http.MethodPost, "/v1/cmd/result", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+s.tok)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	s.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("результат: код %d, тело %s", rec.Code, rec.Body.String())
+	}
+}
+
+func (s sleptRouter) pollUpdate(t *testing.T) wire.Command {
+	t.Helper()
+	rec := s.poll(t)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("ждали выдачу обновления, код %d", rec.Code)
+	}
+	var c wire.Command
+	if err := json.Unmarshal(rec.Body.Bytes(), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Action != "self_update" {
+		t.Fatalf("выдано %q, ждали self_update", c.Action)
+	}
+	return c
+}
+
+func waitDeployCalls(dn *fakeDeployNotifier, n int) []deployRec {
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(dn.snapshot()) >= n {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return dn.snapshot()
+}
+
+// Две неудачи -- тихие повторы с запомненной причиной; третья -- сдаёмся,
+// снимаем отметку и говорим людям роутера по-русски.
+func TestFailingUpdateRetriesThenGivesUpOnThird(t *testing.T) {
+	s := seedSleptRouter(t, "e5e500e5e500e5e500e5e500e5e500e5e500e5e500e5e500e5e500e5e500e5e5")
+	dn := s.withDeployNotifier()
+
+	for attempt := 1; attempt <= pendingDeployMaxAttempts; attempt++ {
+		c := s.pollUpdate(t)
+		st, err := s.d.Users().PendingDeploy(s.uid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Attempts != attempt {
+			t.Fatalf("после выдачи %d счёт попыток = %d", attempt, st.Attempts)
+		}
+		s.result(t, c.ID, "err", "download checksums.txt: HTTP 502")
+		if attempt < pendingDeployMaxAttempts {
+			if got := s.pendingVersion(t); got != sleptTarget {
+				t.Fatalf("неудача %d сняла отметку: %q", attempt, got)
+			}
+			if calls := dn.snapshot(); len(calls) != 0 {
+				t.Fatalf("неудача %d уже написала людям: %+v", attempt, calls)
+			}
+			// Имитируем истёкший TTL выданной команды: иначе HasActiveCommand
+			// законно не даёт повторить раньше чем через полчаса.
+			s.q.Sweep(time.Nanosecond)
+		}
+	}
+
+	if got := s.pendingVersion(t); got != "" {
+		t.Fatalf("после третьей неудачи отметка осталась: %q", got)
+	}
+	calls := waitDeployCalls(dn, 1)
+	if len(calls) != 1 {
+		t.Fatalf("ждали одно уведомление о сдаче, получили %d", len(calls))
+	}
+	if calls[0].target != sleptTarget || calls[0].output != "роутер не смог скачать обновление" {
+		t.Fatalf("уведомление: %+v", calls[0])
+	}
+	st, _ := s.d.Users().PendingDeploy(s.uid)
+	if st.Attempts != 3 || !strings.Contains(st.LastError, "HTTP 502") {
+		t.Fatalf("причина обязана остаться для экрана «Парк»: %+v", st)
+	}
+	s.q.Sweep(time.Nanosecond)
+	if rec := s.poll(t); rec.Code != http.StatusNoContent {
+		t.Fatalf("после сдачи обновление выдано снова: код %d", rec.Code)
+	}
+}
+
+// Три выдачи без итога (агент ушёл в перезагрузку, ответ потерян): четвёртый
+// контакт не ставит команду, а сдаётся с понятной причиной.
+func TestLostUpdateResultsGiveUpOnNextContact(t *testing.T) {
+	s := seedSleptRouter(t, "f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f6")
+	dn := s.withDeployNotifier()
+
+	for attempt := 1; attempt <= pendingDeployMaxAttempts; attempt++ {
+		s.pollUpdate(t)
+		s.q.Sweep(time.Nanosecond)
+	}
+	if rec := s.poll(t); rec.Code != http.StatusNoContent {
+		t.Fatalf("четвёртая выдача: код %d, ждали отказ от попыток", rec.Code)
+	}
+	if got := s.pendingVersion(t); got != "" {
+		t.Fatalf("отметка осталась после исчерпания попыток: %q", got)
+	}
+	calls := waitDeployCalls(dn, 1)
+	if len(calls) != 1 || !strings.Contains(calls[0].output, "версия не сменилась") {
+		t.Fatalf("уведомление о потерянных попытках: %+v", calls)
 	}
 }

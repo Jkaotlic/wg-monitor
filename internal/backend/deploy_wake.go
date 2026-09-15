@@ -66,6 +66,14 @@ func ensurePendingDeployQueued(d Deps, uid int64, nickname string, now time.Time
 	if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
 		return
 	}
+	if st.Attempts >= pendingDeployMaxAttempts {
+		reason := lostAttemptsText(st.Attempts)
+		if strings.TrimSpace(st.LastError) != "" {
+			reason = deployFailureText(st.LastError)
+		}
+		giveUpPendingDeploy(d, uid, nickname, st.Version, reason)
+		return
+	}
 	enqueuePendingDeploy(d, uid, nickname, st.Version, base, now)
 }
 

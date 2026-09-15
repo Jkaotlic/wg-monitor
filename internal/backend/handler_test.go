@@ -1588,7 +1588,9 @@ func TestCmdResult_OpkgResultRelaysThroughTGNotifier(t *testing.T) {
 	}
 }
 
-func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T) {
+// Первая неудача -- не повод будить людей и снимать отметку: причина
+// запоминается, досылка на контакте попробует снова.
+func TestCmdResult_FirstSelfUpdateFailureKeepsPendingQuietly(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail.db"))
 	defer d.Close()
 	tok := "eded00eded00eded00eded00eded00eded00eded00eded00eded00eded00eded"
@@ -1596,13 +1598,12 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc53", "2026-06-15T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := d.Users().IncrementPendingAttempts(uid, "v0.13.0-rc53"); err != nil {
+		t.Fatal(err)
+	}
 	deploy := &fakeDeployNotifier{}
 	sink := &fakeCmdSink{commands: map[string]wire.Command{
-		"cmd1": {
-			ID:     "cmd1",
-			Action: "self_update",
-			Args:   map[string]any{"version": "v0.13.0-rc53"},
-		},
+		"cmd1": {ID: "cmd1", Action: "self_update", Args: map[string]any{"version": "v0.13.0-rc53"}},
 	}}
 	h := NewMux(Deps{
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1620,34 +1621,20 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(deploy.snapshot()) == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
+	if calls := deploy.snapshot(); len(calls) != 0 {
+		t.Fatalf("первая неудача не должна писать людям: %+v", calls)
 	}
-	calls := deploy.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("want 1 deploy failure notification, got %d", len(calls))
-	}
-	if calls[0].userID != uid || calls[0].nickname != "client-h" || calls[0].target != "v0.13.0-rc53" || calls[0].status != "err" {
-		t.Fatalf("call mismatch: %+v", calls[0])
-	}
-	if !strings.Contains(calls[0].output, "HTTP 502") {
-		t.Fatalf("output missing failure details: %+v", calls[0])
-	}
-	u, err := d.Users().GetByID(uid)
+	st, err := d.Users().PendingDeploy(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("failed self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	if st.Version != "v0.13.0-rc53" || !strings.Contains(st.LastError, "HTTP 502") {
+		t.Fatalf("отметка и причина обязаны остаться: %+v", st)
 	}
 }
 
-func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t *testing.T) {
+func TestCmdResult_ThirdSelfUpdateFailureClearsPendingWithoutDeployNotifier(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail-no-notifier.db"))
 	defer d.Close()
 	tok := "eded01eded01eded01eded01eded01eded01eded01eded01eded01eded01eded"
@@ -1655,12 +1642,13 @@ func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t
 	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc53", "2026-06-15T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := d.Users().IncrementPendingAttempts(uid, "v0.13.0-rc53"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	sink := &fakeCmdSink{commands: map[string]wire.Command{
-		"cmd1": {
-			ID:     "cmd1",
-			Action: "self_update",
-			Args:   map[string]any{"version": "v0.13.0-rc53"},
-		},
+		"cmd1": {ID: "cmd1", Action: "self_update", Args: map[string]any{"version": "v0.13.0-rc53"}},
 	}}
 	h := NewMux(Deps{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1677,13 +1665,12 @@ func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-
 	u, err := d.Users().GetByID(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("failed self_update should clear matching pending deploy without notifier, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+		t.Fatalf("третья неудача обязана снять отметку и без уведомителя: version=%v since=%v", u.PendingVersion, u.PendingSince)
 	}
 }
 
