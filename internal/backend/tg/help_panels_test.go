@@ -56,7 +56,7 @@ func TestHelpForScreen_OperatorOverview(t *testing.T) {
 
 func TestHelpForScreen_OperatorMenuDoesNotRelyOnSlashDiscovery(t *testing.T) {
 	got := HelpForScreen("operator")
-	for _, want := range []string{"меню под сообщениями", "Оживить топики"} {
+	for _, want := range []string{"меню под сообщениями", "/keyboard"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("operator help should point to visible menu %q, got:\n%s", want, got)
 		}

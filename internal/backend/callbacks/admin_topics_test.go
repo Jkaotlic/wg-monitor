@@ -176,7 +176,7 @@ func TestAdminTopicHelp(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	help := f.sentMsgs[0]
-	for _, cmd := range []string{"/ensure_topics", "/recreate_topic", "/this_is", "/panel", "/topic_help"} {
+	for _, cmd := range []string{"/ensure_topics", "/recreate_topic", "/this_is", "/topic_help"} {
 		if !strings.Contains(help, cmd) {
 			t.Errorf("help missing %q in:\n%s", cmd, help)
 		}

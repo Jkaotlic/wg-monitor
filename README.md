@@ -35,16 +35,16 @@ English:
 - The bot startup also sets Telegram's blue `Menu` button to the command picker, so role-scoped slash commands are discoverable from the input bar.
 - Operators can recover both menu surfaces in their current router topic with `/menu` or `/keyboard`.
 - The operator command list includes `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, and `/help`.
-- Admin commands are registered in admin scopes only: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, and `/selfhosted`.
-- `/panel` contains the fleet hub, mass checks, update-all, access management, operator help, and "revive topics" action that re-sends the current visible menu to all router topics.
+- Admin commands are registered in admin scopes only: `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, and `/selfhosted`.
+- The fleet hub, agent updates, mass checks and access management live in the mini app ("Fleet" screen). The admin receives every router's notifications in a private chat; each carries a "🔕 Don't message me about this router" button, reversible from the "Fleet" screen.
 
 Русский:
 
 - В топиках роутеров есть постоянное видимое inline-меню; оно не зависит от того, показывает ли Telegram Desktop slash-команды.
 - Оператор может вернуть меню в текущем топике командами `/menu` или `/keyboard`.
 - В операторском меню есть `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, `/help`.
-- Админские команды регистрируются отдельно, только для admin scope: `/panel`, `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, `/selfhosted`.
-- В `/panel` живут хаб флота, массовые проверки, update-all, доступы, справка оператора и "оживить топики" - массовая переотправка актуального меню во все топики роутеров.
+- Админские команды регистрируются отдельно, только для admin scope: `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, `/selfhosted`.
+- Парк, обновления агентов, массовые проверки и доступы — в мини-аппе, экран «Парк». Админ получает в личку уведомления всех роутеров; под каждым — кнопка «🔕 Не писать мне про этот роутер», вернуть — на экране «Парк».
 
 ## Telegram Mini App
 
