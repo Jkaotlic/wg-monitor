@@ -770,3 +770,219 @@ func TestLaunch_NoAttemptLaunchErrorDoesNotConsumeAttempt(t *testing.T) {
 		t.Fatalf("после десяти обходов всё ещё не потрачено ни одной попытки: %+v", in)
 	}
 }
+
+// Fix round 2, Important A, тест (a) (мандатное ревью): checkOne отпускает
+// s.work ДО раннего выхода в finish (истёк/жив сам/попытки исчерпаны/нет
+// адреса). Регрессия round 1: Finish фильтровал только по статусу
+// ('waiting'), и Schedule, успевший переставить намерение в этой щели, был
+// бы закрыт finish'ем СТАРОЙ попытки вместе с её НОВЫМ секретом. Здесь
+// намерение уже просрочено -- checkOne пойдёт по раннему выходу "истёк" --
+// а finish застревает на testBeforeFinishWrite ровно в той точке, где
+// s.work уже отпущен, но запись ещё не прошла.
+func TestFinish_GenerationFenceProtectsFreshScheduleFromStaleExpiredClose(t *testing.T) {
+	env := newEnv(t)
+	env.seedWaiting(t)
+	if _, err := env.db.SQL().Exec(`UPDATE revive_intents SET expires_at = ? WHERE user_id = ?`,
+		env.clock.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano), env.router); err != nil {
+		t.Fatal(err)
+	}
+
+	proceed := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
+	env.svc.testBeforeFinishWrite = func() {
+		once.Do(func() { close(entered) })
+		<-proceed
+	}
+
+	tickDone := make(chan struct{})
+	go func() {
+		env.svc.Tick(context.Background())
+		close(tickDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("finish не дошёл до хука за разумное время")
+	}
+
+	// Пока finish "застрял" на СТАРОМ поколении, Schedule успевает
+	// переставить это же намерение -- например, админ вводит пароль заново,
+	// не дожидаясь истечения срока.
+	if _, err := env.svc.Schedule(context.Background(), env.router, ScheduleRequest{
+		RootPassword: "New-Root-While-Expiring", RequestedBy: 99, ExpiresDays: 10,
+	}); err != nil {
+		t.Fatalf("Schedule поверх waiting (не running) обязан пройти: %v", err)
+	}
+	env.svc.Wait() // дожидаемся confirmSoon этого Schedule (панель offline по умолчанию)
+
+	close(proceed) // отпускаем finish -- он попробует закрыть уже устаревшее поколение
+	<-tickDone
+
+	in := env.intent(t)
+	if in.Status != StatusWaiting {
+		t.Fatalf("НОВОЕ намерение обязано остаться waiting, а не быть закрыто finish'ем СТАРОГО поколения: %+v", in)
+	}
+	if !env.hasSecret(t) {
+		t.Fatal("секрет НОВОГО намерения обязан остаться -- finish не имел права его стереть")
+	}
+	nonce, ct, ok, err := env.db.Revive().Secret(env.router)
+	if err != nil || !ok {
+		t.Fatal("секрет пропал")
+	}
+	box, err := NewBox(env.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := box.Open(env.router, nonce, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(NewSecrets("New-Root-While-Expiring", "", "", "")) {
+		t.Fatal("секрет обязан быть НОВЫМ, а не унаследован от закрытой попытки")
+	}
+	if n := env.notifier.all(); len(n) != 0 {
+		t.Fatalf("уведомление о закрытии СТАРОГО (уже несуществующего) намерения не должно было уйти: %+v", n)
+	}
+}
+
+// Fix round 2, Important A, тест (b) (мандатное ревью): та же защита, но
+// finish вызван через launch -- attemptFailed(permanent=true) после
+// окончательного отказа движка. В отличие от раннего выхода checkOne (from
+// = waiting), здесь from = running, и Schedule физически не может создать
+// СВЕЖУЮ строку, пока статус ещё running (Put отказывает с ErrReviveRunning)
+// -- то есть до самой записи finish ни один Put не пройдёт. Тест проверяет
+// именно это: что generation в launch-пути корректно прокинут и не мешает
+// нормальному закрытию, и что Schedule, дождавшийся закрытия, затем спокойно
+// переставляет уже терминальное (failed) намерение без каких-либо следов
+// старой попытки.
+func TestFinish_GenerationFenceOnLaunchPathClosesCleanlyThenAllowsFreshSchedule(t *testing.T) {
+	env := newEnv(t)
+	env.panel(t, http.StatusOK)
+	env.seedWaiting(t)
+	env.engine.set(func(f *fakeEngine) {
+		f.launchErr = &LaunchError{Permanent: true, Text: "окончательный отказ для теста гонки"}
+	})
+
+	env.tick(t) // серия 1, без запуска
+
+	proceed := make(chan struct{})
+	entered := make(chan struct{})
+	var once sync.Once
+	env.svc.testBeforeFinishWrite = func() {
+		once.Do(func() { close(entered) })
+		<-proceed
+	}
+
+	tickDone := make(chan struct{})
+	go func() {
+		env.svc.Tick(context.Background()) // серия 2 -> запуск -> окончательный отказ -> finish, застревает
+		close(tickDone)
+	}()
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("finish не дошёл до хука за разумное время")
+	}
+
+	// Строка сейчас running -- Schedule обязан честно получить ErrRunning
+	// (генерация тут ни при чём: Put сам отказывает по статусу), а не
+	// проскочить мимо запись finish.
+	if _, err := env.svc.Schedule(context.Background(), env.router, ScheduleRequest{
+		RootPassword: "New-Root-After-Permanent-Failure", RequestedBy: 99, ExpiresDays: 10,
+	}); !errors.Is(err, ErrRunning) {
+		t.Fatalf("Schedule во время running обязан получить ErrRunning: %v", err)
+	}
+
+	close(proceed) // отпускаем finish -- закрывает по правильному, ещё действительному поколению
+	<-tickDone
+
+	in := env.intent(t)
+	if in.Status != StatusFailed {
+		t.Fatalf("окончательный отказ обязан закрыться как failed: %+v", in)
+	}
+
+	// Панель всё ещё "жива" (env.panel завёл настоящий httptest-прослойка
+	// как delegate), а launchErr всё ещё Permanent -- без этого confirmSoon,
+	// запущенный СЛЕДУЮЩИМ Schedule, тут же набрал бы две reachable-пробы и
+	// перезапустил бы движок на том же окончательном отказе, снова закрыв
+	// строку как failed ДО того, как тест успеет её проверить. Тест здесь
+	// про чистоту постановки, а не про вторую попытку -- снимаем delegate
+	// (script() сам по себе его не перекрывает) и переводим сценарий на
+	// "панель не отвечает".
+	env.probe.mu.Lock()
+	env.probe.delegate = nil
+	env.probe.mu.Unlock()
+	env.probe.script(awgmstate.Offline)
+
+	// Теперь Schedule поверх терминального намерения обязан пройти чисто.
+	if _, err := env.svc.Schedule(context.Background(), env.router, ScheduleRequest{
+		RootPassword: "New-Root-After-Permanent-Failure", RequestedBy: 99, ExpiresDays: 10,
+	}); err != nil {
+		t.Fatalf("Schedule после разрешения попытки: %v", err)
+	}
+	env.svc.Wait()
+
+	in = env.intent(t)
+	if in.Status != StatusWaiting || in.Attempts != 0 || in.TargetVersion != "" {
+		t.Fatalf("постановка после отказа обязана быть чистой: %+v", in)
+	}
+	nonce, ct, ok, err := env.db.Revive().Secret(env.router)
+	if err != nil || !ok {
+		t.Fatal("секрет пропал")
+	}
+	box, err := NewBox(env.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := box.Open(env.router, nonce, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(NewSecrets("New-Root-After-Permanent-Failure", "", "", "")) {
+		t.Fatal("секрет обязан быть НОВЫМ")
+	}
+}
+
+// Fix round 2, Important B, тест (c) (мандатное ревью): запись, переводящая
+// строку из running обратно в waiting после неудачной, но не окончательной
+// попытки, не проходит (имитация SQLite busy через testBackToWaitingErr).
+// job уже забыт безусловно -- следующий обход обязан увидеть "потеряно" и
+// восстановить намерение, а не зависнуть в running до перезапуска бэкенда.
+func TestBackToWaiting_DBWriteFailureAfterLaunchRecoversNextTick(t *testing.T) {
+	env := newEnv(t)
+	env.panel(t, http.StatusOK)
+	env.seedWaiting(t)
+	env.engine.set(func(f *fakeEngine) {
+		f.launchErr = &LaunchError{Text: "временная неудача"}
+	})
+
+	var mu sync.Mutex
+	failed := false
+	env.svc.testBackToWaitingErr = func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !failed {
+			failed = true
+			return errors.New("имитация: SQLite busy")
+		}
+		return nil
+	}
+
+	env.tick(t)
+	env.tick(t) // запуск -> launchErr -> attemptFailed -> backToWaiting -> запись "падает"
+
+	in := env.intent(t)
+	if in.Status != StatusRunning {
+		t.Fatalf("после неудачной записи строка обязана остаться running: %+v", in)
+	}
+	if _, ok := env.svc.job(env.router); ok {
+		t.Fatal("job обязан быть забыт СРАЗУ, даже при неудачной записи")
+	}
+
+	env.tick(t) // job уже забыт -> pollOne видит "потеряно" -> обратно в waiting
+	in = env.intent(t)
+	if in.Status != StatusWaiting {
+		t.Fatalf("после следующего обхода намерение обязано восстановиться: %+v", in)
+	}
+}
