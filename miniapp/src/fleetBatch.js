@@ -108,10 +108,16 @@ export async function runFleetBatch({
         // получает полные deadlineMs с СВОЕГО старта, а не остаток чужого.
         const until = now() + deadlineMs
         let res = null
-        while (now() < until) {
+        // signal?.cancelled -- иначе экран ушёл, а уже опрашиваемый роутер
+        // долбит poll() дальше до своего 90с дедлайна (Fix round 1, review
+        // Important #1): runPool останавливает только ОЧЕРЕДЬ, не активный опрос.
+        while (!signal?.cancelled && now() < until) {
           res = await poll(r.id, id, 10)
           if (res) break
         }
+        // Дальше результат не обрабатываем -- экран, ради которого опрашивали,
+        // уже ушёл: даже свежий res, подоспевший ровно на отмене, никому не нужен.
+        if (signal?.cancelled) return
         if (res && res.status !== 'ok') {
           entry = { id: r.id, nickname: r.nickname, outcome: 'failed' }
         } else if (res) {

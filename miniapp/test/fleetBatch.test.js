@@ -229,6 +229,34 @@ describe('уход с экрана прерывает цикл', () => {
     expect(sent.sort()).toEqual([1, 2, 3])
     await donePromise
   })
+
+  // Fix round 1, Important #1 (review-minors-miniapp.md): runPool проверяет
+  // signal только между задачами очереди -- роутер, УЖЕ опрашиваемый
+  // (while-цикл внутри воркера), долбил poll() дальше до своего 90с
+  // дедлайна, даже после отмены. Опрос всегда отвечает null (это не таймаут
+  // по часам -- единственный способ остановиться -- сама отмена), поэтому
+  // без фикса счётчик poll-вызовов рос бы и дальше третьего.
+  it('уже начатый опрос останавливается по отмене сразу, не ждёт своего дедлайна', async () => {
+    const signal = { cancelled: false }
+    let pollCalls = 0
+    let t = 0
+    const poll = () => {
+      pollCalls++
+      if (pollCalls === 3) signal.cancelled = true
+      t += 20_000 // без фикса цикл всё равно дойдёт до дедлайна (90с) -- тест не повиснет
+      return Promise.resolve(null)
+    }
+    await runFleetBatch({
+      kind: 'doctor',
+      routers: [R(1, 'a', 'online')],
+      send: (id) => Promise.resolve({ cmd_id: `c${id}` }),
+      poll,
+      now: () => t,
+      deadlineMs: 90_000,
+      signal,
+    })
+    expect(pollCalls).toBe(3)
+  })
 })
 
 describe('итог словами', () => {
