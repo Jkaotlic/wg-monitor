@@ -864,9 +864,13 @@ func provisionEngineStartError(err error) *repairStartError {
 
 // acquireProvisionMintLock takes the provisioning engine's per-nickname
 // single-flight lock so a token re-mint cannot race a concurrent
-// provision/reinstall for the same router. On contention it writes a 409 and
-// returns (nil, false). The lock is the SAME one provision.Deps.Start
-// acquires internally, so the caller MUST release before calling Start.
+// provision/reinstall for the same router (createAgentEnrollment overwrites
+// token_hash unconditionally, so a double-mint would desync the winning
+// job's raw token from the stored hash and break a live agent's auth). On
+// contention it writes a 409 and returns (nil, false). The lock is the SAME
+// one provision.Deps.Start acquires internally, so the caller MUST release
+// before calling Start. Callers hold Store non-nil (both mutating handlers
+// 503 on a nil Store up front), so this does not nil-guard it.
 func acquireProvisionMintLock(w http.ResponseWriter, store *provision.Store, nickname string) (release func(), ok bool) {
 	release, ok = tryProvisionMintLock(store, nickname)
 	if !ok {
