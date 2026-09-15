@@ -250,8 +250,11 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 		return Intent{}, err
 	}
 
+	// Пароли хранятся как введены: пробел -- законный символ пароля
+	// (решение координатора 15.09). Обрезка решает только «пусто или нет»
+	// (Usable); логин и ключ -- идентификаторы, их края срезаются.
 	creds := NewSecrets(
-		strings.TrimSpace(req.RootPassword),
+		req.RootPassword,
 		strings.TrimSpace(req.AWGMLogin),
 		req.AWGMPassword,
 		strings.TrimSpace(req.AWGMAPIKey),

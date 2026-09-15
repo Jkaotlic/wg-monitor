@@ -150,8 +150,9 @@ func (Secrets) MarshalJSON() ([]byte, error) { return json.Marshal(maskedSecrets
 // 15.09: движок переустановки без root-пароля отказывает
 // (provision_handler.go:466-471, root_password_required) -- вход в панель
 // awg-manager дополняет root, но не заменяет его. Usable требует ровно
-// RootPassword.
-func (s Secrets) Usable() bool { return s.RootPassword() != "" }
+// RootPassword. Пароль из одних пробелов -- всё равно что пустой; сам пароль
+// при этом хранится необрезанным.
+func (s Secrets) Usable() bool { return strings.TrimSpace(s.RootPassword()) != "" }
 
 // Box -- AES-256-GCM с AAD = десятичный user_id: шифртекст одного роутера,
 // переложенный в строку другого, не расшифруется.

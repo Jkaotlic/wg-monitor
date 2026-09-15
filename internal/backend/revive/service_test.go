@@ -54,7 +54,12 @@ func TestErrorCodes(t *testing.T) {
 func TestSchedule_StoresEncryptedSecretAndWaits(t *testing.T) {
 	env := newEnv(t)
 	req := fixtureRequest()
-	req.RootPassword = "  " + fixtureRoot + "  " // пробелы по краям root-пароля срезаются, как в дашборде
+	// Пробел -- законный символ пароля: пробелы по краям не срезаются, а
+	// хранятся как введены (решение координатора 15.09). Обрезка решает
+	// только «пусто или нет» -- см. «нет учётных данных» в TestSchedule_Errors.
+	spaced := "  " + fixtureRoot + " \t"
+	req.RootPassword = spaced
+	req.AWGMPassword = " " + fixturePanel + " "
 	got, err := env.svc.Schedule(context.Background(), env.router, req)
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +74,11 @@ func TestSchedule_StoresEncryptedSecretAndWaits(t *testing.T) {
 	}
 	box, _ := NewBox(env.key)
 	creds, err := box.Open(env.router, nonce, ct)
-	if err != nil || !creds.Equal(fixtureSecrets()) {
+	if err != nil || !creds.Equal(NewSecrets(spaced, fixtureLogin, " "+fixturePanel+" ", fixtureAPIKey)) {
 		t.Fatalf("расшифровка: %v", err)
+	}
+	if creds.RootPassword() != spaced || creds.AWGMPassword() != " "+fixturePanel+" " {
+		t.Fatalf("пароли после Seal/Open изменились: root %q, панель %q", creds.RootPassword(), creds.AWGMPassword())
 	}
 	assertNoFixtureSecret(t, "revive_intents", intentRowsDump(t, env.db))
 	assertNoFixtureSecret(t, "файлы базы", rawDBFiles(t, env.db))
