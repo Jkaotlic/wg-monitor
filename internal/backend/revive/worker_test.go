@@ -2,8 +2,10 @@ package revive
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -313,55 +315,312 @@ func TestTick_ProbeInvalidURLShowsTextAndNeverLaunches(t *testing.T) {
 	}
 }
 
-// Reviewer round 1, mandatory: секрет расшифровывается ТОЛЬКО после
-// MarkRunning. Между вторым (запускающим) опросом и launch()
-// имитируем конкурентный Schedule(), подменивший шифртекст в базе -- launch
-// обязан использовать актуальный на момент MarkRunning секрет, а не тот, что
-// мог быть у него "в руках" раньше (раньше в руках вообще ничего не было:
-// опрос панели секретов не касается).
+// Fix round 2, Minor #3: прежняя версия теста подменяла шифртекст ВНУТРИ
+// опроса -- то есть строго ДО MarkRunning в любом случае, поэтому реализация,
+// расшифровывающая секрет сразу после опроса (но до MarkRunning), тоже бы её
+// прошла. Здесь граница закреплена явным хуком testAfterMarkRunning: подмена
+// происходит ПОСЛЕ того, как MarkRunning уже отработал, и ДО чтения секрета.
 func TestTick_LaunchUsesSecretCurrentAtMarkRunningNotStale(t *testing.T) {
-	env := newEnv(t)
-	env.seedWaiting(t)
-	newSecrets := NewSecrets("New-Root-Pw-After-Reschedule", "", "", "")
+	t.Run("подмена после MarkRunning -- запуск получает новый секрет", func(t *testing.T) {
+		env := newEnv(t)
+		env.panel(t, http.StatusOK)
+		env.seedWaiting(t)
+		newSecrets := NewSecrets("New-Root-Pw-After-Reschedule", "", "", "")
 
-	calls := 0
-	env.probe.mu.Lock()
-	env.probe.delegate = func(context.Context, string) string {
-		calls++
-		if calls == 2 {
-			// Второй опрос -- тот самый, что запускает переустановку.
-			// Конкурентный Schedule() успевает переставить шифртекст между
-			// этим опросом и MarkRunning/Secret() внутри launch().
+		env.svc.testAfterMarkRunning = func(routerID int64) {
 			box, err := NewBox(env.key)
 			if err != nil {
 				t.Fatal(err)
 			}
-			nonce, ct, err := box.Seal(env.router, newSecrets)
+			nonce, ct, err := box.Seal(routerID, newSecrets)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := env.db.SQL().Exec(
 				`UPDATE revive_secrets SET nonce = ?, ciphertext = ? WHERE user_id = ?`,
-				nonce, ct, env.router,
+				nonce, ct, routerID,
 			); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return awgmstate.Reachable
+
+		env.tick(t) // серия 1
+		env.tick(t) // серия 2 -> запуск: хук подменяет шифртекст между MarkRunning и Secret()
+
+		got := env.engine.calls()
+		if len(got) != 1 {
+			t.Fatalf("запусков %d, ждали один", len(got))
+		}
+		if !got[0].Secrets.Equal(newSecrets) {
+			t.Fatal("запуск обязан использовать секрет, актуальный на момент MarkRunning, а не расшифрованный заранее")
+		}
+		if got[0].Secrets.Equal(fixtureSecrets()) {
+			t.Fatal("старый секрет не должен был уйти в движок после подмены")
+		}
+	})
+
+	// Подмена шифртекста ДО MarkRunning (во время опроса) не имеет права
+	// портить сам переход строки намерения: launch читает секрет заново уже
+	// после MarkRunning, так что для перехода waiting->running и счётчика
+	// попыток то, что было в revive_secrets на момент опроса, не имеет
+	// значения вовсе.
+	t.Run("подмена до MarkRunning -- переход строки намерения не портится", func(t *testing.T) {
+		env := newEnv(t)
+		env.seedWaiting(t)
+		swapped := false
+		env.probe.mu.Lock()
+		env.probe.delegate = func(context.Context, string) string {
+			if !swapped {
+				swapped = true
+				box, err := NewBox(env.key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				nonce, ct, err := box.Seal(env.router, NewSecrets("Swapped-Before-MarkRunning", "", "", ""))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := env.db.SQL().Exec(
+					`UPDATE revive_secrets SET nonce = ?, ciphertext = ? WHERE user_id = ?`,
+					nonce, ct, env.router,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return awgmstate.Reachable
+		}
+		env.probe.mu.Unlock()
+
+		env.tick(t) // серия 1, подмена происходит здесь
+		env.tick(t) // серия 2 -> запуск
+
+		in := env.intent(t)
+		if in.Status != StatusRunning || in.Attempts != 1 {
+			t.Fatalf("подмена секрета до MarkRunning не должна портить переход строки намерения: %+v", in)
+		}
+	})
+}
+
+// Fix round 2, Minor #1: раньше forgetJob в pollOne срабатывал ДО finish,
+// независимо от того, прошла ли запись в базу. Если Finish падал, job уже
+// забыт, а строка всё ещё running -- следующий обход видел "job lost" и
+// перезапускал переустановку тем же (для случая auth failure -- уже
+// известно плохим) паролем, съедая лишнюю попытку. Хук testFinishErr
+// подменяет собой Finish ровно один раз, воспроизводя эту ошибку
+// детерминированно.
+func TestTick_FinishDBErrorKeepsJobMarkedNoRelaunch(t *testing.T) {
+	env := newEnv(t)
+	env.panel(t, http.StatusOK)
+	env.seedWaiting(t)
+	env.tick(t)
+	env.tick(t) // запуск
+	env.engine.set(func(f *fakeEngine) { f.outcome = Outcome{Finished: true, Success: true, Version: "v0.34.0"} })
+
+	failed := false
+	env.svc.testFinishErr = func() error {
+		if failed {
+			return nil
+		}
+		failed = true
+		return errors.New("тестовая ошибка записи")
+	}
+
+	env.tick(t) // Finish "падает" -- ничего не должно меняться
+	if !failed {
+		t.Fatal("хук testFinishErr не сработал")
+	}
+	if in := env.intent(t); in.Status != StatusRunning {
+		t.Fatalf("после ошибки Finish статус должен остаться running: %+v", in)
+	}
+	if !env.hasSecret(t) {
+		t.Fatal("после ошибки Finish секрет не должен стираться")
+	}
+	if len(env.notifier.all()) != 0 {
+		t.Fatal("после ошибки Finish уведомления быть не должно")
+	}
+	if _, ok := env.svc.job(env.router); !ok {
+		t.Fatal("job должен остаться отмеченным после ошибки Finish")
+	}
+
+	env.tick(t) // теперь Finish проходит -- job больше не подменяется
+	if _, ok := env.svc.job(env.router); ok {
+		t.Fatal("job должен быть забыт после успешного Finish")
+	}
+	if len(env.engine.calls()) != 1 {
+		t.Fatal("job не должен был перезапускаться, пока Finish не прошёл")
+	}
+	in := env.intent(t)
+	if in.Status != StatusDone {
+		t.Fatalf("после успешного Finish: %+v", in)
+	}
+	if env.hasSecret(t) {
+		t.Fatal("после успеха секрет обязан быть стёрт")
+	}
+	if n := env.notifier.all(); len(n) != 1 {
+		t.Fatalf("уведомление после успешного Finish: %+v", n)
+	}
+}
+
+// Fix round 2, Minor #2: при остановке бэкенда Run передаёт уже отменённый
+// ctx. Строка к этому моменту уже терминальная и секрет уже стёрт --
+// уведомление не имеет права потеряться навсегда только из-за отменённого
+// ctx (Finish идемпотентен только один раз, повтора не будет).
+func TestTick_NotificationSentDespiteCancelledCallerCtx(t *testing.T) {
+	env := newEnv(t)
+	env.panel(t, http.StatusOK)
+	env.seedWaiting(t)
+	env.tick(t)
+	env.tick(t) // запуск
+	env.engine.set(func(f *fakeEngine) { f.outcome = Outcome{Finished: true, Success: true, Version: "v0.34.0"} })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // как при остановке бэкенда: ctx уже отменён до вызова Tick
+
+	env.svc.Tick(ctx)
+
+	n := env.notifier.all()
+	if len(n) != 1 || !strings.Contains(n[0].Text, "ожил") {
+		t.Fatalf("уведомление обязано уйти даже при отменённом ctx вызывающего: %+v", n)
+	}
+	if in := env.intent(t); in.Status != StatusDone {
+		t.Fatalf("%+v", in)
+	}
+}
+
+// Fix round 2, Minor #5: серии из двух "reachable" самой по себе мало --
+// между ПЕРВЫМ и ПОСЛЕДНИМ опросом серии должно пройти не меньше ConfirmGap
+// (иначе Tick, случайно попавший на тот же роутер почти сразу после
+// confirmSoon, засчитал бы вторую метку и запустил переустановку с разбросом
+// в секунду вместо заявленных спекой тридцати).
+func TestTick_ReachableStreakFasterThanConfirmGapDoesNotLaunchYet(t *testing.T) {
+	env := newEnv(t)
+	env.panel(t, http.StatusOK)
+	env.seedWaiting(t)
+
+	env.svc.Tick(context.Background()) // серия 1
+	if in := env.intent(t); in.ReachableProbes != 1 {
+		t.Fatalf("после первого опроса: %+v", in)
+	}
+
+	env.clock.Advance(time.Second) // куда меньше ConfirmGap (30 с)
+	env.svc.Tick(context.Background())
+	if in := env.intent(t); in.Status != StatusWaiting || in.ReachableProbes != 2 {
+		t.Fatalf("серия должна набраться и записаться: %+v", in)
+	}
+	if len(env.engine.calls()) != 0 {
+		t.Fatal("серия быстрее ConfirmGap не должна была запускать переустановку")
+	}
+
+	env.clock.Advance(DefaultConfirmGap) // теперь между первым и этим опросом прошло больше ConfirmGap
+	env.svc.Tick(context.Background())
+	calls := env.engine.calls()
+	if len(calls) != 1 {
+		t.Fatalf("запусков %d, ждали один после набора полного ConfirmGap", len(calls))
+	}
+	if in := env.intent(t); in.Status != StatusRunning {
+		t.Fatalf("%+v", in)
+	}
+}
+
+// Fix round 2, Important #1: Schedule не брала s.work, поэтому конкурентный
+// Put() мог прийти посреди checkOne (между его Get и записью итога) и
+// подменить строку под уже прочитанным, устаревшим `in`: серия набежала бы
+// на новую строку с чужой отметкой старта, счётчик попыток пересчитался бы
+// от чужого числа, а TargetVersion в движок ушла бы старая. Здесь checkOne
+// намеренно застревает внутри опроса (канал releaseProbe), пока идёт
+// Schedule -- и мы проверяем, что Schedule ДОЖИДАЕТСЯ своей очереди (не
+// пролезает мимо s.work), а после гонки строка полностью свежая: без
+// унаследованных серии/попыток/версии и с новым, не стёртым секретом.
+func TestSchedule_DuringConcurrentCheckOne_WaitsAndDoesNotInheritStaleState(t *testing.T) {
+	env := newEnv(t)
+	env.seedWaiting(t)
+	// Симулируем "предыдущий, ещё не завершённый цикл" намерения: попытка 4
+	// (одна до исчерпания при MaxAttempts=5), серия уже была 1, версия
+	// закреплена прошлой постановкой. reachable_since -- достаточно давно,
+	// чтобы ОДИН опрос в этом Tick сразу набрал и счёт, и ConfirmGap.
+	since := env.clock.Now().Add(-DefaultConfirmGap - time.Second)
+	if _, err := env.db.SQL().Exec(
+		`UPDATE revive_intents SET attempts = 4, reachable_probes = 1, reachable_since = ?, target_version = 'v-old' WHERE user_id = ?`,
+		since.UTC().Format(time.RFC3339Nano), env.router,
+	); err != nil {
+		t.Fatal(err)
+	}
+	env.engine.set(func(f *fakeEngine) {
+		f.launchErr = &LaunchError{Text: "временная неудача для теста гонки"}
+	})
+
+	probeEntered := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	var closeProbeEntered sync.Once
+	probeCalls := 0
+	env.probe.mu.Lock()
+	env.probe.delegate = func(context.Context, string) string {
+		// closeProbeEntered.Do: после гонки Schedule сама успешно отработает
+		// и запустит confirmSoon, который снова зовёт этот же делегат --
+		// probeEntered закрывать нужно только один раз, а <-releaseProbe на
+		// уже закрытом канале и так не блокирует. Вызовы Probe уже
+		// сериализованы через s.work (его держит либо checkOne, либо
+		// confirmSoon), поэтому счётчик без мьютекса безопасен. Только
+		// ПЕРВЫЙ (застрявший) опрос -- содержательный, "reachable" для
+		// СТАРОЙ строки; всё, что confirmSoon спросит уже про СВЕЖУЮ строку
+		// после Schedule, получает "offline" и не должно её трогать.
+		closeProbeEntered.Do(func() { close(probeEntered) })
+		<-releaseProbe
+		probeCalls++
+		if probeCalls == 1 {
+			return awgmstate.Reachable
+		}
+		return awgmstate.Offline
 	}
 	env.probe.mu.Unlock()
 
-	env.tick(t) // серия 1
-	env.tick(t) // серия 2 -> запуск, шифртекст подменён между опросом и MarkRunning
+	tickDone := make(chan struct{})
+	go func() {
+		env.svc.Tick(context.Background())
+		close(tickDone)
+	}()
+	<-probeEntered // checkOne держит s.work, застряв внутри опроса
 
-	got := env.engine.calls()
-	if len(got) != 1 {
-		t.Fatalf("запусков %d, ждали один", len(got))
+	scheduleDone := make(chan struct{})
+	var scheduleErr error
+	go func() {
+		_, scheduleErr = env.svc.Schedule(context.Background(), env.router, ScheduleRequest{
+			RootPassword: "New-Root-After-Reschedule", RequestedBy: 77, ExpiresDays: 10,
+		})
+		close(scheduleDone)
+	}()
+
+	select {
+	case <-scheduleDone:
+		t.Fatal("Schedule прошёл, не дождавшись, пока checkOne освободит s.work")
+	case <-time.After(100 * time.Millisecond):
 	}
-	if !got[0].Secrets.Equal(newSecrets) {
-		t.Fatal("запуск обязан использовать секрет, актуальный на момент MarkRunning, а не расшифрованный заранее")
+
+	close(releaseProbe) // checkOne дописывает итог по СВОЕЙ, ещё старой строке и завершается
+	<-tickDone
+	<-scheduleDone // теперь Schedule должен пройти по уже освободившейся строке
+	if scheduleErr != nil {
+		t.Fatalf("Schedule после гонки: %v", scheduleErr)
 	}
-	if got[0].Secrets.Equal(fixtureSecrets()) {
-		t.Fatal("старый секрет не должен был уйти в движок после подмены")
+	env.svc.Wait() // дожидаемся confirmSoon, запущенного этим же Schedule
+
+	in := env.intent(t)
+	if in.Status != StatusWaiting || in.Attempts != 0 || in.ReachableProbes != 0 || in.TargetVersion != "" {
+		t.Fatalf("постановка после гонки обязана быть чистой, без унаследованных серии/попыток/версии: %+v", in)
+	}
+	nonce, ct, ok, err := env.db.Revive().Secret(env.router)
+	if err != nil || !ok {
+		t.Fatalf("секрет после гонки: %v %v", ok, err)
+	}
+	box, err := NewBox(env.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := box.Open(env.router, nonce, ct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Equal(NewSecrets("New-Root-After-Reschedule", "", "", "")) {
+		t.Fatal("после гонки секрет обязан быть новым, а не стёрт неудачным закрытием старой попытки")
 	}
 }

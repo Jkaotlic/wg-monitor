@@ -95,6 +95,16 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	if streak < s.cfg.ReachableProbes {
 		return
 	}
+	// Fix round 2, Minor #5: счёта в две подряд мало -- между ПЕРВЫМ и
+	// ПОСЛЕДНИМ "reachable" серии должно пройти не меньше ConfirmGap. Без
+	// этой проверки посторонний Tick, случайно попавший на тот же роутер
+	// почти сразу после первого опроса confirmSoon, засчитывал бы второй
+	// ответ и запускал переустановку с разбросом в секунду, а не в
+	// заявленные спекой тридцать: since -- отметка ПЕРВОГО "reachable" серии
+	// (несёт её через RecordProbe независимо от того, кто именно опрашивал).
+	if now.Sub(since) < s.cfg.ConfirmGap {
+		return
+	}
 	in.ReachableProbes = streak
 	s.launch(ctx, *in, u.Nickname)
 }
@@ -123,6 +133,9 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 	}
 	if !ok {
 		return
+	}
+	if s.testAfterMarkRunning != nil {
+		s.testAfterMarkRunning(in.RouterID)
 	}
 	attempts := in.Attempts + 1
 	running := []string{StatusRunning}
@@ -179,14 +192,19 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	}
 	out, known := s.cfg.Engine.Outcome(jobID)
 	if !known {
-		s.forgetJob(routerID)
+		// Fix round 2, Minor #1: forgetJob здесь раньше стирал jobID из
+		// карты ДО backToWaiting, независимо от её итога. Если запись в базу
+		// после этого падала, строка оставалась running, а job уже забыт --
+		// следующий Tick снова увидел бы "job lost" и по кругу перевёл бы
+		// намерение обратно в waiting, СЪЕДАЯ по одной попытке за обход.
+		// forgetJob теперь только внутри backToWaiting/finish, и только
+		// когда соответствующая запись в базу действительно прошла.
 		s.backToWaiting(routerID, reasonJobLost, now)
 		return
 	}
 	if !out.Finished {
 		return
 	}
-	s.forgetJob(routerID)
 	nick := s.nickname(routerID)
 	running := []string{StatusRunning}
 	switch {
@@ -213,15 +231,40 @@ func (s *Service) attemptFailed(ctx context.Context, routerID int64, nick string
 	}
 }
 
+// backToWaiting -- running→waiting после неудачной, но не окончательной
+// попытки (или потерянного задания). forgetJob -- только если запись
+// действительно прошла (fix round 2, Minor #1): иначе job остаётся
+// отмеченным, и следующий Tick честно повторит ту же попытку записи, вместо
+// того чтобы молча забыть задание и перезапустить движок поверх ещё не
+// закрытого running.
 func (s *Service) backToWaiting(routerID int64, reason string, now time.Time) {
-	if _, err := s.cfg.DB.Revive().BackToWaiting(routerID, reason, now); err != nil {
+	ok, err := s.cfg.DB.Revive().BackToWaiting(routerID, reason, now)
+	if err != nil {
 		s.logger.Warn("оживление: возврат в ожидание не записан", "router_id", routerID, "err", err)
+		return
 	}
+	if !ok {
+		return
+	}
+	s.forgetJob(routerID)
 }
 
+// notifySendTimeout -- сколько ждём доставки уведомления о закрытии
+// намерения; не время самого закрытия (Finish уже записан).
+const notifySendTimeout = 5 * time.Second
+
 // finish -- условный переход в конечный статус со стиранием секрета. Одно
-// уведомление: второй закрывающий получает ok=false и молчит.
+// уведомление: второй закрывающий получает ok=false и молчит. forgetJob --
+// только после успешной записи в базу (fix round 2, Minor #1): падение
+// Finish не должно отдавать роутер под повторный запуск с тем же (возможно
+// уже известным плохим) паролем, пока строка ещё running.
 func (s *Service) finish(ctx context.Context, routerID int64, from []string, to, reason, notice string) {
+	if s.testFinishErr != nil {
+		if err := s.testFinishErr(); err != nil {
+			s.logger.Warn("оживление: закрытие не записано", "router_id", routerID, "status", to, "err", err)
+			return
+		}
+	}
 	ok, err := s.cfg.DB.Revive().Finish(routerID, from, to, reason, s.now())
 	if err != nil {
 		s.logger.Warn("оживление: закрытие не записано", "router_id", routerID, "status", to, "err", err)
@@ -235,7 +278,13 @@ func (s *Service) finish(ctx context.Context, routerID int64, from []string, to,
 	if s.cfg.Notifier == nil || notice == "" {
 		return
 	}
-	if _, err := s.cfg.Notifier.Send(ctx, routerID, notice, ""); err != nil {
+	// Fix round 2, Minor #2: строка уже терминальная и секрет уже стёрт --
+	// отправка не имеет права провалиться только потому, что вызывающий ctx
+	// (например, Run на остановке бэкенда) уже отменён: дедупликация Finish
+	// не даст повторить уведомление никогда, оно было бы потеряно навсегда.
+	sendCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifySendTimeout)
+	defer cancel()
+	if _, err := s.cfg.Notifier.Send(sendCtx, routerID, notice, ""); err != nil {
 		s.logger.Warn("оживление: уведомление не доставлено", "router_id", routerID, "err", err)
 	}
 }

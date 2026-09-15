@@ -132,6 +132,18 @@ type Service struct {
 	// Important #1): без хука эту гонку нельзя воспроизвести детерминированно,
 	// так как Get и Finish -- два отдельных обращения к БД в одной горутине.
 	testBeforeCancelFinish func()
+
+	// testAfterMarkRunning, если задан, зовётся в launch сразу после
+	// успешного MarkRunning, до чтения секрета -- нужен только тесту порядка
+	// "расшифровка строго после MarkRunning" (fix round 2, Minor #3): без
+	// хука эту границу нельзя пометить детерминированно.
+	testAfterMarkRunning func(routerID int64)
+
+	// testFinishErr, если задан и возвращает ошибку, подменяет собой вызов
+	// Revive().Finish в finish -- нужен только тесту "Finish упал, job не
+	// забыт, повторного запуска нет" (fix round 2, Minor #1): настоящую
+	// ошибку записи в sqlite посреди теста не воспроизвести детерминированно.
+	testFinishErr func() error
 }
 
 func New(cfg Config) (*Service, error) {
@@ -236,6 +248,29 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 	if s.agentFresh(u, now) {
 		return Intent{}, ErrAgentAlive
 	}
+
+	got, err := s.put(routerID, req.RequestedBy, creds, asked, req.ExpiresDays, now)
+	if err != nil {
+		return Intent{}, err
+	}
+	s.confirmSoon(routerID)
+	return got, nil
+}
+
+// put -- собственно запись намерения, под s.work: тем же замком, который
+// checkOne держит на весь обход одного намерения, включая опрос (до
+// ProbeTimeout). Fix round 2, Important #1: без этого замка конкурентный
+// Put() мог прийти посреди checkOne (между его Get и записью итога) и
+// подменить строку под уже прочитанным, устаревшим `in` -- серия, счётчик
+// попыток и TargetVersion, которые checkOne потом пишет или использует для
+// запуска, ушли бы на новую (переставленную) строку по чужим, старым
+// числам, а «попыток: 5» на исчерпанных стеклах попыток мог стереть свежий
+// пароль. Put -- быстрая операция, поэтому Schedule ждёт не дольше одного
+// обхода checkOne, что приемлемо (проба -- до ProbeTimeout).
+func (s *Service) put(routerID, requestedBy int64, creds Secrets, awgmURL string, expiresDays int, now time.Time) (Intent, error) {
+	s.work.Lock()
+	defer s.work.Unlock()
+
 	if cur, err := s.cfg.DB.Revive().Get(routerID); err != nil {
 		return Intent{}, err
 	} else if cur != nil && cur.Status == StatusRunning {
@@ -247,7 +282,7 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 		return Intent{}, err
 	}
 	// Срок: 1..30 дней; 0, отрицательное и больше 30 -- 30 (умолчание спеки).
-	days := req.ExpiresDays
+	days := expiresDays
 	if days <= 0 || days > DefaultExpiryDays {
 		days = DefaultExpiryDays
 	}
@@ -257,7 +292,7 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 	// базе: повторная постановка с тем же адресом не упрётся в
 	// awgm_url_already_set на пустом месте.
 	err = s.cfg.DB.Revive().Put(db.ReviveIntent{
-		RouterID: routerID, CreatedAt: now, ExpiresAt: now.Add(expiry), RequestedBy: req.RequestedBy,
+		RouterID: routerID, CreatedAt: now, ExpiresAt: now.Add(expiry), RequestedBy: requestedBy,
 	}, nonce, ct)
 	if errors.Is(err, db.ErrReviveRunning) {
 		return Intent{}, ErrRunning
@@ -266,8 +301,8 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 		return Intent{}, err
 	}
 
-	if asked != "" {
-		ok, err := s.cfg.DB.Users().SetAWGMURLIfEmpty(routerID, asked)
+	if awgmURL != "" {
+		ok, err := s.cfg.DB.Users().SetAWGMURLIfEmpty(routerID, awgmURL)
 		if err != nil {
 			return Intent{}, err
 		}
@@ -276,13 +311,12 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 		}
 	}
 
-	s.logger.Info("оживление агента поставлено", "router_id", routerID, "expires_at", now.Add(expiry), "requested_by", req.RequestedBy)
+	s.logger.Info("оживление агента поставлено", "router_id", routerID, "expires_at", now.Add(expiry), "requested_by", requestedBy)
 
 	got, err := s.cfg.DB.Revive().Get(routerID)
 	if err != nil || got == nil {
 		return Intent{}, errors.Join(errors.New("revive: намерение не прочиталось"), err)
 	}
-	s.confirmSoon(routerID)
 	return *got, nil
 }
 

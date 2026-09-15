@@ -83,7 +83,15 @@ type fakeNotifier struct {
 	sent []sentNotice
 }
 
-func (n *fakeNotifier) Send(_ context.Context, routerID int64, text, _ string) (int, error) {
+// Send отказывает на отменённом/просроченном ctx -- как отказал бы настоящий
+// http-based Notifier. Нужно, чтобы тест "уведомление уходит даже при
+// отменённом ctx вызывающего" (fix round 2, Minor #2) реально отличал
+// context.WithoutCancel от переданного как есть отменённого ctx, а не просто
+// молча писал в sent независимо от него.
+func (n *fakeNotifier) Send(ctx context.Context, routerID int64, text, _ string) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.sent = append(n.sent, sentNotice{routerID, text})
