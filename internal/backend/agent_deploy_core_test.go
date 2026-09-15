@@ -125,6 +125,18 @@ func TestCancelAgentDeployDropsQueueAndMark(t *testing.T) {
 	if err := d.Users().MarkPendingDeploy(u.ID, "v0.32.0", "2026-09-15T10:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	// Отмена -- не первый контакт: до неё уже была неудачная попытка,
+	// счётчик и причина в базе непустые (B3: cancel обязана обнулить их
+	// вместе с отметкой, а не только снять pending_version).
+	if _, _, err := d.Users().IncrementPendingAttempts(u.ID, "v0.32.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := d.Users().RecordPendingDeployError(u.ID, "v0.32.0", "download: HTTP 502"); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := d.Users().PendingDeploy(u.ID); st.Attempts == 0 || st.LastError == "" {
+		t.Fatalf("подготовка теста: попытка и причина должны быть записаны, got %+v", st)
+	}
 	sink := &dashboardActionSink{}
 	cleared, _, err := cancelAgentDeploy(Deps{DB: d, CommandSink: sink}, u)
 	if err != nil || !cleared {
@@ -133,8 +145,34 @@ func TestCancelAgentDeployDropsQueueAndMark(t *testing.T) {
 	if len(sink.droppedActions) != 1 || sink.droppedActions[0] != "self_update" {
 		t.Fatalf("очередь не почищена: %v", sink.droppedActions)
 	}
+	if st, _ := d.Users().PendingDeploy(u.ID); st.Attempts != 0 || st.LastError != "" {
+		t.Fatalf("отмена обязана обнулить счётчик попыток и причину: %+v", st)
+	}
 	cleared, _, err = cancelAgentDeploy(Deps{DB: d, CommandSink: sink}, u)
 	if err != nil || cleared {
 		t.Fatalf("повторная отмена: cleared=%v err=%v", cleared, err)
+	}
+}
+
+// B3: MarkPendingDeploy защищает атомарным WHERE, а не read-then-write --
+// поэтому гонку двух одновременных назначений одному роутеру можно
+// воспроизвести без горутин, просто держа второй вызов на СТАРОМ снимке u
+// (PendingVersion ещё nil), пока первый уже отметился в базе.
+func TestAgentDeployCoreConcurrentAssignHitsErrDeployPending(t *testing.T) {
+	d, u := coreTestRouter(t, "v0.31.0")
+	sink := &fakeCmdSink{}
+	opts := agentDeployOpts{RepoBaseURL: "https://backend.example.com"}
+
+	if _, derr := agentDeployCore(Deps{DB: d, CommandSink: sink}, u, "v0.32.0", opts); derr != nil {
+		t.Fatalf("первое назначение: %+v", derr)
+	}
+	// u -- всё ещё старый снимок без PendingVersion: ранняя проверка в
+	// agentDeployCore его пропустит, и гонку обязан поймать MarkPendingDeploy.
+	_, derr := agentDeployCore(Deps{DB: d, CommandSink: sink}, u, "v0.33.0", opts)
+	if derr == nil || derr.Code != deployErrPending || derr.Status != http.StatusConflict {
+		t.Fatalf("вторая (проигравшая гонку) постановка: %+v", derr)
+	}
+	if q := sink.snapshotEnqueued(); len(q) != 1 {
+		t.Fatalf("проигравшая гонку постановка не должна класть команду: %+v", q)
 	}
 }

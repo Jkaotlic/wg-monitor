@@ -1468,7 +1468,10 @@ func TestCmdResult_FirstSelfUpdateFailureKeepsPendingQuietly(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-	time.Sleep(50 * time.Millisecond)
+	// Без сна: recordPendingDeployFailure на первой неудаче вызывается
+	// синхронно из cmdResultHandler (giveUpPendingDeploy, который единственный
+	// шлёт уведомление, срабатывает только на исчерпанных попытках) -- к
+	// возврату ServeHTTP всё уже случилось или не случится вовсе (B3).
 	if calls := deploy.snapshot(); len(calls) != 0 {
 		t.Fatalf("первая неудача не должна писать людям: %+v", calls)
 	}
