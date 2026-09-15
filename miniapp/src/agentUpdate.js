@@ -71,6 +71,14 @@ export function agentUpdateState(router) {
       canCancel: false,
     }
   }
+  // Слишком старый агент (B6) никогда не «отстаёт» -- agent_behind у него
+  // всегда false, self_update ему недоступен вовсе (см. row.warning с
+  // «нужна переустановка», fleetAdmin.js). Ветку выше это обходит стороной,
+  // и без этой строки прошлая (уже неактивная) попытка молча терялась бы,
+  // хотя сервер её отдаёт (miniapp_fleet.go verdict.TooOld).
+  if (lastError) {
+    return { tone: 'warn', text: `прошлая попытка: ${lastError}`, canUpdate: false, canCancel: false }
+  }
   return { tone: 'ok', text: '', canUpdate: false, canCancel: false }
 }
 
@@ -78,8 +86,8 @@ export function agentUpdateState(router) {
 // однозначен. not_configured прикрывает три разные причины на сервере
 // (miniapp_agent_update.go: не настроена БД, не настроена очередь, не задан
 // публичный адрес) -- одна фраза здесь стёрла бы это различие, поэтому для
-// него (как для bad_request, internal и любого кода без своей записи здесь)
-// используется message сервера: он уже по-русски и уже различает причины.
+// него (как для bad_request и internal) используется message сервера: он
+// уже по-русски и уже различает причины.
 const ERROR_TEXT = {
   confirm_mismatch: 'Имя роутера набрано неверно — обновление не поставлено.',
   agent_too_old: 'Агент слишком старый, чтобы обновиться из приложения, — его нужно переустановить на роутере.',
@@ -89,10 +97,20 @@ const ERROR_TEXT = {
   not_found: 'Роутер не найден — закройте экран и откройте заново.',
 }
 
+// serverMessage доверяем как есть -- только для кодов, которые пишут
+// хендлеры обновления агента (miniapp_agent_update.go:63-93): их message
+// всегда по-русски. Отказ может прийти и раньше, из общей middleware --
+// например 401 "sign in required" на истёкшей сессии (miniapp_auth.go:198,
+// review-minors-miniapp.md Important #2) -- её message английский, и без
+// allowlist он утекал бы на лист как есть.
+const SERVER_MESSAGE_CODES = new Set(['not_configured', 'bad_request', 'internal'])
+
 function errorText(err) {
   const known = ERROR_TEXT[err?.code]
   if (known) return known
-  return String(err?.serverMessage ?? '').trim()
+  if (err?.status === 401) return 'Сессия истекла — откройте приложение заново.'
+  if (SERVER_MESSAGE_CODES.has(err?.code)) return String(err?.serverMessage ?? '').trim()
+  return ''
 }
 
 export function agentUpdateErrorText(err) {

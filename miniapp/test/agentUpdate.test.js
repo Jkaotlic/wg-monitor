@@ -104,6 +104,21 @@ describe('состояние обновления в строке роутера
     expect(agentUpdateState(FRESH)).toEqual({ tone: 'ok', text: '', canUpdate: false, canCancel: false })
   })
 
+  // Fix round 1, п.3 (review-minors-миниapp.md ⚠️ / final review B6): агент
+  // ниже agentSelfUpdateFloor не отстаёт (agent_behind=false, B6) -- ветка
+  // agent_behind не срабатывает, и раньше прошлая (уже неактивная) попытка
+  // молча терялась, хотя сервер её отдаёт (miniapp_fleet.go verdict.TooOld).
+  it('слишком старый агент, сдавшийся -- прошлая попытка не пропадает', () => {
+    const s = agentUpdateState({
+      ...FRESH, id: 20, nickname: 'antique', agent_behind: false, pending_version: '',
+      pending_last_error_text: 'роутер не смог скачать обновление',
+    })
+    expect(s.text).toBe('прошлая попытка: роутер не смог скачать обновление')
+    expect(s.tone).toBe('warn')
+    expect(s.canUpdate).toBe(false)
+    expect(s.canCancel).toBe(false)
+  })
+
   it('ни одна строка не несёт внутренних имён', () => {
     for (const r of [OFF_PENDING, ONLINE_TRYING, FAILING, BEHIND, FRESH, GAVE_UP]) {
       expect(agentUpdateState(r).text).not.toMatch(INTERNAL)
@@ -164,6 +179,25 @@ describe('отказы сервера словами', () => {
     expect(agentUpdateErrorText(new ApiError(500, 'internal', 'x failed: 500', 'Не удалось назначить обновление.'))).toBe(
       'Не удалось назначить обновление.',
     )
+  })
+
+  // Fix round 1, Important #2 (review-minors-miniapp.md): serverMessage
+  // раньше показывался для ЛЮБОГО незнакомого кода -- а сессия истекает не
+  // в хендлерах обновления, а в MiniAppAuthMiddleware (miniapp_auth.go:198),
+  // и её message английский: "sign in required". allowlist ограничивает
+  // фразу сервера кодами обновления агента (not_configured/bad_request/
+  // internal), у 401 -- своя русская фраза, у остального -- пусто.
+  it('401 (сессия истекла) -- русская фраза, а не message middleware', () => {
+    const expired = new ApiError(401, 'unauthorized', '/routers/1/agent/update failed: 401', 'sign in required')
+    expect(agentUpdateErrorText(expired)).toBe('Сессия истекла — откройте приложение заново.')
+    expect(fleetUpdateErrorText(expired)).toBe('Сессия истекла — откройте приложение заново.')
+    expect(agentUpdateErrorText(expired)).not.toMatch(/sign in/)
+  })
+
+  it('код вне контракта обновления -- пустая строка, даже если у него есть message', () => {
+    const foreign = new ApiError(500, 'some_other_middleware_code', 'x failed: 500', 'unexpected debug text')
+    expect(agentUpdateErrorText(foreign)).toBe('')
+    expect(fleetUpdateErrorText(foreign)).toBe('')
   })
 
   it('старый агент -- говорит, что нужна переустановка', () => {
