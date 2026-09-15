@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
@@ -58,4 +59,22 @@ func newReviveService(ctx context.Context, cfg *backend.Config, d *db.DB, provis
 	}
 	log.Info("оживление агента включено")
 	return svc
+}
+
+// waitBounded ждёт wait не дольше d. Остановка бэкенда (финальное ревью
+// 15.09, M2): фоновые проверки оживления, запущенные постановкой, не должны
+// писать в уже закрытую базу, но и зависшая проба панели не должна держать
+// процесс после SIGTERM. false -- не дождались.
+func waitBounded(wait func(), d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
 }

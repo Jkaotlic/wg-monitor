@@ -488,6 +488,11 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
+	// Фоновые проверки оживления (confirmSoon, уведомление итога) пишут в
+	// базу, а d.Close() отложен выше: ждём их, но ограниченно.
+	if reviveSvc != nil && !waitBounded(reviveSvc.Wait, 10*time.Second) {
+		logger.Warn("оживление: фоновые проверки не завершились за 10 с, останавливаемся без них")
+	}
 	watcher.WaitForExit()
 	rp.WaitForExit()
 	logger.Info("backend stopped")
