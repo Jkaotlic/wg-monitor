@@ -60,7 +60,12 @@ func main() {
 	dbPath := flag.String("db", "", "путь к базе (по умолчанию временный файл)")
 	tgUser := flag.Int64("tg-user", 4242, "telegram user id, от чьего имени открыт мини-апп")
 	keep := flag.Bool("keep", false, "не удалять временную базу при выходе")
+	version := flag.String("version", "v0.33.0", "версия бэкенда песочницы: от неё экран «Парк» считает отставших")
 	flag.Parse()
+
+	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
+	// экран «Парк» было бы нечем проверить.
+	backend.SetVersion(*version)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
