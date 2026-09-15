@@ -50,7 +50,7 @@ func TestRecover_RunningBecomesWaitingWithAttemptCounted(t *testing.T) {
 	env := newEnv(t)
 	env.panel(t, http.StatusOK)
 	env.seedWaiting(t)
-	if ok, _ := env.db.Revive().MarkRunning(env.router, env.clock.Now()); !ok {
+	if ok, _ := env.db.Revive().MarkRunning(env.router, env.clock.Now(), 0); !ok {
 		t.Fatal("mark running")
 	}
 	env.svc = env.newService(t, env.key) // «новый процесс»: карта заданий пуста

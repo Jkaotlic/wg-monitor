@@ -128,7 +128,13 @@ type Service struct {
 	work sync.Mutex
 
 	jobsMu sync.Mutex
-	jobs   map[int64]string // routerID -> jobID идущей переустановки
+	// jobs -- routerID -> задание идущей переустановки. since -- когда эта
+	// запись появилась (Fix round 2, мандатное ревью): pollOne считает
+	// jobLaunching, провисевшую дольше jobLaunchingTimeout, потерянной --
+	// защита от того, что запись, переводящая строку из running, никогда не
+	// прошла (SQLite busy и т.п.), а forgetJob по какой-то причине не
+	// дотянулся (сеть/паника) -- без этого intent завис бы до перезапуска.
+	jobs map[int64]jobEntry
 
 	wg sync.WaitGroup
 
@@ -149,6 +155,27 @@ type Service struct {
 	// забыт, повторного запуска нет" (fix round 2, Minor #1): настоящую
 	// ошибку записи в sqlite посреди теста не воспроизвести детерминированно.
 	testFinishErr func() error
+
+	// testBeforeFinishWrite, если задан, зовётся в самом начале finish --
+	// ПОСЛЕ того, как вызывающий (checkOne/launch/pollOne) уже отпустил
+	// s.work, но ДО forgetJob и записи в БД (Fix round 2, мандатное ревью).
+	// Нужен тестам гонки "Schedule успевает переставить намерение, пока
+	// finish ещё не записал итог по старому": без хука эту гонку нельзя
+	// воспроизвести детерминированно.
+	testBeforeFinishWrite func()
+
+	// testBackToWaitingErr, если задан и возвращает ошибку, подменяет собой
+	// вызов Revive().BackToWaiting[NoAttempt] -- нужен тесту "запись после
+	// Launch не прошла (SQLite busy), но intent восстанавливается на
+	// следующем обходе" (Fix round 2, Important B, мандатное ревью).
+	testBackToWaitingErr func() error
+}
+
+// jobEntry -- запись в карте s.jobs: сам идентификатор (или jobLaunching) и
+// момент, когда он туда попал.
+type jobEntry struct {
+	id    string
+	since time.Time
 }
 
 func New(cfg Config) (*Service, error) {
@@ -194,7 +221,7 @@ func New(cfg Config) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{cfg: cfg, box: box, logger: logger, jobs: map[int64]string{}}, nil
+	return &Service{cfg: cfg, box: box, logger: logger, jobs: map[int64]jobEntry{}}, nil
 }
 
 func (s *Service) Enabled() bool { return s != nil && s.box != nil }
@@ -345,7 +372,14 @@ func (s *Service) Cancel(ctx context.Context, routerID int64) (bool, error) {
 	if s.testBeforeCancelFinish != nil {
 		s.testBeforeCancelFinish()
 	}
-	ok, err := s.cfg.DB.Revive().Finish(routerID, []string{StatusWaiting}, StatusCancelled, "отменено", s.now())
+	// Fix round 2, мандатное ревью: поколение из cur (прочитанного выше) --
+	// если между этим Get и Finish Schedule успел переставить намерение,
+	// Finish обязан молча отступить, а не закрыть чужую, свежую попытку.
+	var generation int64
+	if cur != nil {
+		generation = cur.Generation
+	}
+	ok, err := s.cfg.DB.Revive().Finish(routerID, []string{StatusWaiting}, StatusCancelled, "отменено", s.now(), generation)
 	if err != nil {
 		return false, err
 	}
@@ -394,15 +428,23 @@ func (s *Service) agentFresh(u *db.User, now time.Time) bool {
 
 func (s *Service) setJob(routerID int64, jobID string) {
 	s.jobsMu.Lock()
-	s.jobs[routerID] = jobID
+	s.jobs[routerID] = jobEntry{id: jobID, since: s.now()}
 	s.jobsMu.Unlock()
 }
 
 func (s *Service) job(routerID int64) (string, bool) {
 	s.jobsMu.Lock()
 	defer s.jobsMu.Unlock()
-	id, ok := s.jobs[routerID]
-	return id, ok
+	e, ok := s.jobs[routerID]
+	return e.id, ok
+}
+
+// jobSince -- когда текущая запись в s.jobs появилась; false, если её нет.
+func (s *Service) jobSince(routerID int64) (time.Time, bool) {
+	s.jobsMu.Lock()
+	defer s.jobsMu.Unlock()
+	e, ok := s.jobs[routerID]
+	return e.since, ok
 }
 
 func (s *Service) forgetJob(routerID int64) {

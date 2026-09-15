@@ -59,7 +59,7 @@ func TestRevive_PutGetAndSecret(t *testing.T) {
 func TestRevive_PutReplacesWaitingButNotRunning(t *testing.T) {
 	d, id := newTestDBForRevive(t)
 	putWaiting(t, d, id)
-	if err := d.Revive().RecordProbe(id, reviveT0, "reachable", 1, reviveT0); err != nil {
+	if err := d.Revive().RecordProbe(id, reviveT0, "reachable", 1, reviveT0, 0); err != nil {
 		t.Fatal(err)
 	}
 	// Переставить ожидание -- можно: человек ввёл пароль заново.
@@ -71,12 +71,15 @@ func TestRevive_PutReplacesWaitingButNotRunning(t *testing.T) {
 	if got.ReachableProbes != 0 || got.LastProbeState != "" {
 		t.Fatalf("переставленное намерение обязано начаться с нуля: %+v", got)
 	}
+	if got.Generation != 1 {
+		t.Fatalf("Put -- это replace, поколение обязано вырасти: %+v", got)
+	}
 	_, ct, _, _ := d.Revive().Secret(id)
 	if string(ct) != "cipher2" {
 		t.Fatalf("секрет не заменён: %q", ct)
 	}
 
-	if ok, err := d.Revive().MarkRunning(id, reviveT0); err != nil || !ok {
+	if ok, err := d.Revive().MarkRunning(id, reviveT0, got.Generation); err != nil || !ok {
 		t.Fatalf("mark running: %v %v", ok, err)
 	}
 	err := d.Revive().Put(ReviveIntent{RouterID: id, CreatedAt: reviveT0, ExpiresAt: reviveT0.Add(time.Hour)},
@@ -93,17 +96,17 @@ func TestRevive_PutReplacesWaitingButNotRunning(t *testing.T) {
 func TestRevive_MarkRunningCountsAttemptOnce(t *testing.T) {
 	d, id := newTestDBForRevive(t)
 	putWaiting(t, d, id)
-	if ok, _ := d.Revive().MarkRunning(id, reviveT0); !ok {
+	if ok, _ := d.Revive().MarkRunning(id, reviveT0, 0); !ok {
 		t.Fatal("первый запуск обязан пройти")
 	}
-	if ok, _ := d.Revive().MarkRunning(id, reviveT0); ok {
+	if ok, _ := d.Revive().MarkRunning(id, reviveT0, 0); ok {
 		t.Fatal("второй запуск поверх running обязан вернуть false")
 	}
 	got, _ := d.Revive().Get(id)
 	if got.Status != ReviveRunning || got.Attempts != 1 {
 		t.Fatalf("%+v", got)
 	}
-	if ok, _ := d.Revive().BackToWaiting(id, "роутер не ответил вовремя", reviveT0); !ok {
+	if ok, _ := d.Revive().BackToWaiting(id, "роутер не ответил вовремя", reviveT0, 0); !ok {
 		t.Fatal("back to waiting")
 	}
 	got, _ = d.Revive().Get(id)
@@ -117,14 +120,14 @@ func TestRevive_FinishWipesSecretOnceAndOnlyFromExpectedStatus(t *testing.T) {
 	putWaiting(t, d, id)
 
 	// Из running закрыть нельзя: намерение ждёт, а не идёт.
-	if ok, _ := d.Revive().Finish(id, []string{ReviveRunning}, ReviveDone, "", reviveT0); ok {
+	if ok, _ := d.Revive().Finish(id, []string{ReviveRunning}, ReviveDone, "", reviveT0, 0); ok {
 		t.Fatal("переход не из того статуса обязан вернуть false")
 	}
 	if _, _, ok, _ := d.Revive().Secret(id); !ok {
 		t.Fatal("несостоявшийся переход не имеет права стирать секрет")
 	}
 
-	ok, err := d.Revive().Finish(id, []string{ReviveWaiting, ReviveRunning}, ReviveCancelled, "", reviveT0)
+	ok, err := d.Revive().Finish(id, []string{ReviveWaiting, ReviveRunning}, ReviveCancelled, "", reviveT0, 0)
 	if err != nil || !ok {
 		t.Fatalf("cancel: %v %v", ok, err)
 	}
@@ -132,7 +135,7 @@ func TestRevive_FinishWipesSecretOnceAndOnlyFromExpectedStatus(t *testing.T) {
 		t.Fatal("после отмены секрет обязан быть стёрт")
 	}
 	// Повторное закрытие -- false: уведомление не уйдёт дважды.
-	if ok, _ := d.Revive().Finish(id, []string{ReviveWaiting}, ReviveExpired, "", reviveT0); ok {
+	if ok, _ := d.Revive().Finish(id, []string{ReviveWaiting}, ReviveExpired, "", reviveT0, 0); ok {
 		t.Fatal("закрытое намерение не закрывается второй раз")
 	}
 	got, _ := d.Revive().Get(id)
@@ -141,10 +144,61 @@ func TestRevive_FinishWipesSecretOnceAndOnlyFromExpectedStatus(t *testing.T) {
 	}
 }
 
+// Fix round 2 (мандатное ревью): каждая условная запись воркера обязана
+// нести поколение, прочитанное на своём Get, и молча отступать, если оно уже
+// другое -- Schedule успел переставить намерение между чтением и записью.
+// Структурная защита вместо защиты временем удержания замка.
+func TestRevive_WritesRejectStaleGeneration(t *testing.T) {
+	d, id := newTestDBForRevive(t)
+	putWaiting(t, d, id) // generation = 0
+	stale := int64(1)    // заведомо неверное поколение
+
+	if err := d.Revive().RecordProbe(id, reviveT0, "reachable", 1, reviveT0, stale); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := d.Revive().Get(id); got.LastProbeState != "" {
+		t.Fatalf("RecordProbe с чужим поколением не имеет права записать: %+v", got)
+	}
+
+	if ok, err := d.Revive().MarkRunning(id, reviveT0, stale); err != nil || ok {
+		t.Fatalf("MarkRunning с чужим поколением обязан вернуть false: %v %v", ok, err)
+	}
+	if got, _ := d.Revive().Get(id); got.Status != ReviveWaiting {
+		t.Fatalf("статус не должен был смениться: %+v", got)
+	}
+
+	// Реальный запуск -- правильным поколением -- чтобы проверить BackToWaiting/Finish на чужом поколении.
+	if ok, err := d.Revive().MarkRunning(id, reviveT0, 0); err != nil || !ok {
+		t.Fatalf("mark running настоящим поколением: %v %v", ok, err)
+	}
+
+	if ok, err := d.Revive().BackToWaiting(id, "чужое поколение", reviveT0, stale); err != nil || ok {
+		t.Fatalf("BackToWaiting с чужим поколением обязан вернуть false: %v %v", ok, err)
+	}
+	if ok, err := d.Revive().BackToWaitingNoAttempt(id, "чужое поколение", reviveT0, stale); err != nil || ok {
+		t.Fatalf("BackToWaitingNoAttempt с чужим поколением обязан вернуть false: %v %v", ok, err)
+	}
+	if ok, err := d.Revive().Finish(id, []string{ReviveRunning}, ReviveFailed, "чужое поколение", reviveT0, stale); err != nil || ok {
+		t.Fatalf("Finish с чужим поколением обязан вернуть false: %v %v", ok, err)
+	}
+	got, _ := d.Revive().Get(id)
+	if got.Status != ReviveRunning || got.Attempts != 1 {
+		t.Fatalf("ни одна запись с чужим поколением не имела права тронуть строку: %+v", got)
+	}
+	if _, _, ok, _ := d.Revive().Secret(id); !ok {
+		t.Fatal("секрет обязан остаться -- Finish с чужим поколением его не стирал")
+	}
+
+	// Правильным поколением -- проходит.
+	if ok, err := d.Revive().BackToWaiting(id, "", reviveT0, got.Generation); err != nil || !ok {
+		t.Fatalf("BackToWaiting настоящим поколением обязан пройти: %v %v", ok, err)
+	}
+}
+
 func TestRevive_ResetRunningAndList(t *testing.T) {
 	d, id := newTestDBForRevive(t)
 	putWaiting(t, d, id)
-	_, _ = d.Revive().MarkRunning(id, reviveT0)
+	_, _ = d.Revive().MarkRunning(id, reviveT0, 0)
 
 	list, err := d.Revive().ListByStatus(ReviveRunning)
 	if err != nil || len(list) != 1 || list[0].RouterID != id {
@@ -181,14 +235,14 @@ func TestRevive_RouterDeleteCascades(t *testing.T) {
 func TestRevive_BackToWaitingNoAttemptUndoesMarkRunningIncrement(t *testing.T) {
 	d, id := newTestDBForRevive(t)
 	putWaiting(t, d, id)
-	if ok, _ := d.Revive().MarkRunning(id, reviveT0); !ok {
+	if ok, _ := d.Revive().MarkRunning(id, reviveT0, 0); !ok {
 		t.Fatal("mark running")
 	}
 	got, _ := d.Revive().Get(id)
 	if got.Attempts != 1 {
 		t.Fatalf("после MarkRunning: %+v", got)
 	}
-	if ok, err := d.Revive().BackToWaitingNoAttempt(id, "движок занят другим заданием", reviveT0); err != nil || !ok {
+	if ok, err := d.Revive().BackToWaitingNoAttempt(id, "движок занят другим заданием", reviveT0, got.Generation); err != nil || !ok {
 		t.Fatalf("back to waiting no attempt: %v %v", ok, err)
 	}
 	got, _ = d.Revive().Get(id)
@@ -202,20 +256,20 @@ func TestRevive_BackToWaitingNoAttemptUndoesMarkRunningIncrement(t *testing.T) {
 func TestRevive_BackToWaitingNoAttemptNeverGoesNegative(t *testing.T) {
 	d, id := newTestDBForRevive(t)
 	putWaiting(t, d, id)
-	if ok, _ := d.Revive().MarkRunning(id, reviveT0); !ok {
+	if ok, _ := d.Revive().MarkRunning(id, reviveT0, 0); !ok {
 		t.Fatal("mark running")
 	}
-	if ok, _ := d.Revive().BackToWaitingNoAttempt(id, "тест", reviveT0); !ok {
+	if ok, _ := d.Revive().BackToWaitingNoAttempt(id, "тест", reviveT0, 0); !ok {
 		t.Fatal("первый возврат")
 	}
-	if ok, _ := d.Revive().MarkRunning(id, reviveT0); !ok {
+	if ok, _ := d.Revive().MarkRunning(id, reviveT0, 0); !ok {
 		t.Fatal("mark running снова")
 	}
 	// Искусственно обнуляем attempts прямо в базе, чтобы проверить защиту от ухода в минус.
 	if _, err := d.SQL().Exec(`UPDATE revive_intents SET attempts = 0 WHERE user_id = ?`, id); err != nil {
 		t.Fatal(err)
 	}
-	if ok, _ := d.Revive().BackToWaitingNoAttempt(id, "тест2", reviveT0); !ok {
+	if ok, _ := d.Revive().BackToWaitingNoAttempt(id, "тест2", reviveT0, 0); !ok {
 		t.Fatal("второй возврат")
 	}
 	got, _ := d.Revive().Get(id)
@@ -249,7 +303,7 @@ func TestRevive_ExpireOverdueWipesOnlyOverdueWaitingAndRunning(t *testing.T) {
 	if err := d.Revive().Put(ReviveIntent{RouterID: runningID, CreatedAt: reviveT0, ExpiresAt: overdue}, []byte("nonce-12byte"), []byte("cipher-r")); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := d.Revive().MarkRunning(runningID, reviveT0); err != nil || !ok {
+	if ok, err := d.Revive().MarkRunning(runningID, reviveT0, 0); err != nil || !ok {
 		t.Fatalf("mark running: %v %v", ok, err)
 	}
 	if err := d.Revive().Put(ReviveIntent{RouterID: freshID, CreatedAt: reviveT0, ExpiresAt: fresh}, []byte("nonce-12byte"), []byte("cipher-f")); err != nil {

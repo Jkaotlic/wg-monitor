@@ -154,7 +154,7 @@ func TestSchedule_Errors(t *testing.T) {
 				t.Fatal(err)
 			}
 			env.svc.Wait()
-			if ok, _ := env.db.Revive().MarkRunning(env.router, testT0); !ok {
+			if ok, _ := env.db.Revive().MarkRunning(env.router, testT0, 0); !ok {
 				t.Fatal("mark running")
 			}
 		}, ErrRunning},
@@ -240,10 +240,10 @@ func TestSchedule_ReplacesWaitingIntent(t *testing.T) {
 	env.svc.Wait()
 	// Имитация неудачной попытки воркера: waiting -> running -> waiting,
 	// attempts становится 1.
-	if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+	if ok, err := env.db.Revive().MarkRunning(env.router, testT0, 0); !ok || err != nil {
 		t.Fatalf("mark running: %v %v", ok, err)
 	}
-	if ok, err := env.db.Revive().BackToWaiting(env.router, "первая попытка не удалась", testT0); !ok || err != nil {
+	if ok, err := env.db.Revive().BackToWaiting(env.router, "первая попытка не удалась", testT0, 0); !ok || err != nil {
 		t.Fatalf("back to waiting: %v %v", ok, err)
 	}
 	if in := env.intent(t); in.Attempts != 1 || in.Status != StatusWaiting {
@@ -285,10 +285,10 @@ func TestSchedule_ReplacesFailedIntent(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.svc.Wait()
-	if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+	if ok, err := env.db.Revive().MarkRunning(env.router, testT0, 0); !ok || err != nil {
 		t.Fatalf("mark running: %v %v", ok, err)
 	}
-	if ok, err := env.db.Revive().Finish(env.router, []string{StatusRunning}, StatusFailed, "не дозвонились", testT0); !ok || err != nil {
+	if ok, err := env.db.Revive().Finish(env.router, []string{StatusRunning}, StatusFailed, "не дозвонились", testT0, 0); !ok || err != nil {
 		t.Fatalf("finish -> failed: %v %v", ok, err)
 	}
 	if env.hasSecret(t) {
@@ -339,7 +339,7 @@ func TestCancel_RunningRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	env.svc.Wait()
-	if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+	if ok, err := env.db.Revive().MarkRunning(env.router, testT0, 0); !ok || err != nil {
 		t.Fatalf("mark running: %v %v", ok, err)
 	}
 	ok, err := env.svc.Cancel(context.Background(), env.router)
@@ -362,7 +362,7 @@ func TestCancel_RaceToRunningReturnsErrRunning(t *testing.T) {
 	env.svc.Wait()
 	env.svc.setJob(env.router, "job-in-flight")
 	env.svc.testBeforeCancelFinish = func() {
-		if ok, err := env.db.Revive().MarkRunning(env.router, testT0); !ok || err != nil {
+		if ok, err := env.db.Revive().MarkRunning(env.router, testT0, 0); !ok || err != nil {
 			t.Fatalf("гонка: mark running: %v %v", ok, err)
 		}
 	}
@@ -402,7 +402,7 @@ func TestStatusFor_RussianTextsWithoutSecrets(t *testing.T) {
 	}
 	env.svc.Wait()
 	probeAt := testT0.Add(time.Minute)
-	if err := env.db.Revive().RecordProbe(env.router, probeAt, awgmstate.Offline, 0, time.Time{}); err != nil {
+	if err := env.db.Revive().RecordProbe(env.router, probeAt, awgmstate.Offline, 0, time.Time{}, 0); err != nil {
 		t.Fatal(err)
 	}
 	v, err := env.svc.StatusFor(env.router)

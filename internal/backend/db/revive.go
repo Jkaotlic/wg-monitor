@@ -36,6 +36,14 @@ type ReviveIntent struct {
 	ReachableSince  time.Time
 	ReachableProbes int
 	RequestedBy     int64
+	// Generation -- растёт на каждый Put/replace (Fix round 2, мандатное
+	// ревью). Писать через MarkRunning/RecordProbe/BackToWaiting(+NoAttempt)/
+	// Finish можно только с ЭТИМ значением (условие AND generation = ? в
+	// каждом из них): если Schedule успел переставить намерение между чтением
+	// (Get) и записью воркера, поколение уже другое, запись не находит строку
+	// и тихо ничего не делает -- вместо того чтобы закрыть или переписать
+	// чужую, свежую попытку под старым снимком.
+	Generation int64
 }
 
 // ReviveRepo -- намерения оживления и их секреты.
@@ -44,11 +52,13 @@ type ReviveRepo struct{ d *DB }
 func (d *DB) Revive() *ReviveRepo { return &ReviveRepo{d: d} }
 
 const reviveColumns = `user_id, status, target_version, created_at, updated_at, expires_at, attempts,
-	last_error, last_probe_at, last_probe_state, reachable_since, reachable_probes, requested_by`
+	last_error, last_probe_at, last_probe_state, reachable_since, reachable_probes, requested_by, generation`
 
 // Put ставит намерение с нуля (waiting, попыток 0, опросов нет) и кладёт
 // секрет -- одной транзакцией. Поверх running -- ErrReviveRunning, и секрет
-// не трогается.
+// не трогается. generation растёт на каждый успешный Put (и на первую
+// INSERT она 0) -- это и есть точка, где старое поколение перестаёт быть
+// действительным для условных записей воркера.
 func (r *ReviveRepo) Put(in ReviveIntent, nonce, ciphertext []byte) error {
 	tx, err := r.d.db.Begin()
 	if err != nil {
@@ -59,14 +69,15 @@ func (r *ReviveRepo) Put(in ReviveIntent, nonce, ciphertext []byte) error {
 	res, err := tx.Exec(`
 INSERT INTO revive_intents (user_id, status, target_version, created_at, updated_at, expires_at,
                             attempts, last_error, last_probe_at, last_probe_state,
-                            reachable_since, reachable_probes, requested_by)
-VALUES (?, 'waiting', ?, ?, ?, ?, 0, '', NULL, '', NULL, 0, ?)
+                            reachable_since, reachable_probes, requested_by, generation)
+VALUES (?, 'waiting', ?, ?, ?, ?, 0, '', NULL, '', NULL, 0, ?, 0)
 ON CONFLICT(user_id) DO UPDATE SET
     status = 'waiting', target_version = excluded.target_version,
     created_at = excluded.created_at, updated_at = excluded.updated_at,
     expires_at = excluded.expires_at, attempts = 0, last_error = '',
     last_probe_at = NULL, last_probe_state = '', reachable_since = NULL,
-    reachable_probes = 0, requested_by = excluded.requested_by
+    reachable_probes = 0, requested_by = excluded.requested_by,
+    generation = revive_intents.generation + 1
 WHERE revive_intents.status <> 'running'`,
 		in.RouterID, in.TargetVersion, in.CreatedAt.UTC(), in.CreatedAt.UTC(), in.ExpiresAt.UTC(), in.RequestedBy)
 	if err != nil {
@@ -132,34 +143,42 @@ func (r *ReviveRepo) Secret(routerID int64) (nonce, ciphertext []byte, ok bool, 
 	return nonce, ciphertext, true, nil
 }
 
-// RecordProbe записывает итог опроса. Только для waiting: опрос, вернувшийся
-// после отмены или запуска, не имеет права переписать строку.
-func (r *ReviveRepo) RecordProbe(routerID int64, at time.Time, state string, reachableProbes int, reachableSince time.Time) error {
+// RecordProbe записывает итог опроса. Только для waiting и ровно того
+// поколения, что видел вызывающий на своём Get (Fix round 2, мандатное
+// ревью): опрос, вернувшийся после того, как Schedule успел переставить
+// намерение, не имеет права переписать чужую, уже другую строку статистикой
+// от старой.
+func (r *ReviveRepo) RecordProbe(routerID int64, at time.Time, state string, reachableProbes int, reachableSince time.Time, generation int64) error {
 	_, err := r.d.db.Exec(`
 UPDATE revive_intents
    SET last_probe_at = ?, last_probe_state = ?, reachable_probes = ?, reachable_since = ?, updated_at = ?
- WHERE user_id = ? AND status = 'waiting'`,
-		at.UTC(), state, reachableProbes, nullableTime(reachableSince), at.UTC(), routerID)
+ WHERE user_id = ? AND status = 'waiting' AND generation = ?`,
+		at.UTC(), state, reachableProbes, nullableTime(reachableSince), at.UTC(), routerID, generation)
 	return err
 }
 
 // MarkRunning -- waiting→running с засчитанной попыткой. false -- кто-то
-// успел раньше (второй запуск на тот же роутер не пройдёт).
-func (r *ReviveRepo) MarkRunning(routerID int64, at time.Time) (bool, error) {
+// успел раньше (второй запуск на тот же роутер не пройдёт), ИЛИ поколение
+// уже другое (Schedule переставил намерение между Get воркера и этим
+// вызовом, Fix round 2, мандатное ревью) -- в обоих случаях запускать
+// нечего, вызывающий обязан молча отступить.
+func (r *ReviveRepo) MarkRunning(routerID int64, at time.Time, generation int64) (bool, error) {
 	res, err := r.d.db.Exec(`
 UPDATE revive_intents SET status = 'running', attempts = attempts + 1, updated_at = ?
- WHERE user_id = ? AND status = 'waiting'`, at.UTC(), routerID)
+ WHERE user_id = ? AND status = 'waiting' AND generation = ?`, at.UTC(), routerID, generation)
 	return affectedOne(res, err)
 }
 
 // BackToWaiting -- running→waiting после неудачной, но не окончательной
 // попытки. Серия «панель отвечает» обнуляется: следующий запуск снова ждёт
-// двух опросов подряд.
-func (r *ReviveRepo) BackToWaiting(routerID int64, lastError string, at time.Time) (bool, error) {
+// двух опросов подряд. generation -- то же поколение, что видел вызывающий
+// на своём Get (Fix round 2, мандатное ревью); MarkRunning его не меняет,
+// так что это то же число, что было при запуске этой попытки.
+func (r *ReviveRepo) BackToWaiting(routerID int64, lastError string, at time.Time, generation int64) (bool, error) {
 	res, err := r.d.db.Exec(`
 UPDATE revive_intents
    SET status = 'waiting', last_error = ?, reachable_probes = 0, reachable_since = NULL, updated_at = ?
- WHERE user_id = ? AND status = 'running'`, lastError, at.UTC(), routerID)
+ WHERE user_id = ? AND status = 'running' AND generation = ?`, lastError, at.UTC(), routerID, generation)
 	return affectedOne(res, err)
 }
 
@@ -170,18 +189,26 @@ UPDATE revive_intents
 // занят чужим заданием на этом же роутере (дашборд уже чинит/ставит) --
 // тратить на это одну из пяти попыток нечестно (Fix round 1, Minor #3).
 // MAX(attempts-1, 0) -- защита от ухода в минус при гонке/повторном вызове.
-func (r *ReviveRepo) BackToWaitingNoAttempt(routerID int64, lastError string, at time.Time) (bool, error) {
+func (r *ReviveRepo) BackToWaitingNoAttempt(routerID int64, lastError string, at time.Time, generation int64) (bool, error) {
 	res, err := r.d.db.Exec(`
 UPDATE revive_intents
    SET status = 'waiting', last_error = ?, reachable_probes = 0, reachable_since = NULL,
        attempts = MAX(attempts - 1, 0), updated_at = ?
- WHERE user_id = ? AND status = 'running'`, lastError, at.UTC(), routerID)
+ WHERE user_id = ? AND status = 'running' AND generation = ?`, lastError, at.UTC(), routerID, generation)
 	return affectedOne(res, err)
 }
 
 // Finish переводит намерение из одного из from в конечный статус to и в той
-// же транзакции стирает секрет. false -- статус уже не тот, ничего не тронуто.
-func (r *ReviveRepo) Finish(routerID int64, from []string, to, lastError string, at time.Time) (bool, error) {
+// же транзакции стирает секрет. false -- статус уже не тот или поколение уже
+// другое (Fix round 2, мандатное ревью), ничего не тронуто.
+//
+// Поколение -- структурная защита вместо защиты временем удержания замка
+// воркера: без неё Schedule, успевший переставить намерение в щель между
+// Get воркера и этим вызовом (например, checkOne уже отпустила s.work перед
+// ранним выходом finish -- expired/agentFresh/maxAttempts/no-url), создал
+// бы СВЕЖУЮ строку с тем же статусом ('waiting'), и это Finish закрыл бы её
+// (и стёр её НОВЫЙ секрет) как будто это была та, старая строка.
+func (r *ReviveRepo) Finish(routerID int64, from []string, to, lastError string, at time.Time, generation int64) (bool, error) {
 	if len(from) == 0 {
 		return false, errors.New("revive: пустой список исходных статусов")
 	}
@@ -195,10 +222,11 @@ func (r *ReviveRepo) Finish(routerID int64, from []string, to, lastError string,
 	for _, s := range from {
 		args = append(args, s)
 	}
+	args = append(args, generation)
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(from)), ",")
 	res, err := tx.Exec(`
 UPDATE revive_intents SET status = ?, last_error = ?, updated_at = ?
- WHERE user_id = ? AND status IN (`+placeholders+`)`, args...)
+ WHERE user_id = ? AND status IN (`+placeholders+`) AND generation = ?`, args...)
 	ok, err := affectedOne(res, err)
 	if err != nil || !ok {
 		return false, err
@@ -285,7 +313,8 @@ func scanReviveIntent(scan func(...any) error) (ReviveIntent, error) {
 		probeAt, since sql.NullTime
 	)
 	err := scan(&in.RouterID, &in.Status, &in.TargetVersion, &in.CreatedAt, &in.UpdatedAt, &in.ExpiresAt,
-		&in.Attempts, &in.LastError, &probeAt, &in.LastProbeState, &since, &in.ReachableProbes, &in.RequestedBy)
+		&in.Attempts, &in.LastError, &probeAt, &in.LastProbeState, &since, &in.ReachableProbes, &in.RequestedBy,
+		&in.Generation)
 	if err != nil {
 		return ReviveIntent{}, err
 	}

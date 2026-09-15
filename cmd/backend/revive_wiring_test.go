@@ -93,7 +93,7 @@ func TestNewReviveService_RecoversLeftoverRunningIntents(t *testing.T) {
 	}, []byte("nonce-12byte"), []byte("cipher")); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := database.Revive().MarkRunning(id, now); err != nil || !ok {
+	if ok, err := database.Revive().MarkRunning(id, now, 0); err != nil || !ok {
 		t.Fatalf("mark running: %v %v", ok, err)
 	}
 	// Дальше -- "рестарт": задание в памяти прежнего процесса потеряно

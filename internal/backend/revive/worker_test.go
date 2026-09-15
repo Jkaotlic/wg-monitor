@@ -401,14 +401,20 @@ func TestTick_LaunchUsesSecretCurrentAtMarkRunningNotStale(t *testing.T) {
 	})
 }
 
-// Fix round 2, Minor #1: раньше forgetJob в pollOne срабатывал ДО finish,
-// независимо от того, прошла ли запись в базу. Если Finish падал, job уже
-// забыт, а строка всё ещё running -- следующий обход видел "job lost" и
-// перезапускал переустановку тем же (для случая auth failure -- уже
-// известно плохим) паролем, съедая лишнюю попытку. Хук testFinishErr
-// подменяет собой Finish ровно один раз, воспроизводя эту ошибку
-// детерминированно.
-func TestTick_FinishDBErrorKeepsJobMarkedNoRelaunch(t *testing.T) {
+// Fix round 2, Important B (мандатное ревью): раньше (fix round 2, Minor #1)
+// forgetJob в finish срабатывал ТОЛЬКО после успешной записи -- защита от
+// повторного "job lost" на каждом обходе при стабильно падающей записи. У
+// этой защиты обнаружилась своя, худшая цена: если запись падала (SQLite
+// busy, диск), job оставался отмеченным НАВСЕГДА -- pollOne видел бы его и
+// на каждом обходе заново пытался Outcome/запись, а строка так и осталась
+// бы running до перезапуска бэкенда. Теперь forgetJob безусловен: job
+// забывается сразу, ДО попытки записи. Цена обратная и меньшая -- если
+// запись действительно не прошла, следующий обход не сможет переспросить
+// итог у уже забытого job и увидит "потеряно", вернув намерение в waiting
+// (даже если запуск на самом деле уже завершился успехом) -- вместо того
+// чтобы зависнуть навсегда. Хук testFinishErr подменяет собой запись в базу
+// ровно один раз, воспроизводя эту ошибку детерминированно.
+func TestTick_FinishDBErrorForgetsJobImmediatelyAndRecoversNextTick(t *testing.T) {
 	env := newEnv(t)
 	env.panel(t, http.StatusOK)
 	env.seedWaiting(t)
@@ -425,39 +431,27 @@ func TestTick_FinishDBErrorKeepsJobMarkedNoRelaunch(t *testing.T) {
 		return errors.New("тестовая ошибка записи")
 	}
 
-	env.tick(t) // Finish "падает" -- ничего не должно меняться
+	env.tick(t) // Finish "падает" -- запись не проходит
 	if !failed {
 		t.Fatal("хук testFinishErr не сработал")
 	}
 	if in := env.intent(t); in.Status != StatusRunning {
-		t.Fatalf("после ошибки Finish статус должен остаться running: %+v", in)
+		t.Fatalf("после неудачной записи статус должен остаться running (запись не прошла): %+v", in)
 	}
 	if !env.hasSecret(t) {
-		t.Fatal("после ошибки Finish секрет не должен стираться")
+		t.Fatal("после неудачной записи секрет не должен стираться")
 	}
 	if len(env.notifier.all()) != 0 {
-		t.Fatal("после ошибки Finish уведомления быть не должно")
+		t.Fatal("после неудачной записи уведомления быть не должно")
 	}
-	if _, ok := env.svc.job(env.router); !ok {
-		t.Fatal("job должен остаться отмеченным после ошибки Finish")
+	if _, ok := env.svc.job(env.router); ok {
+		t.Fatal("job обязан быть забыт СРАЗУ, даже при неудачной записи (Fix round 2, Important B)")
 	}
 
-	env.tick(t) // теперь Finish проходит -- job больше не подменяется
-	if _, ok := env.svc.job(env.router); ok {
-		t.Fatal("job должен быть забыт после успешного Finish")
-	}
-	if len(env.engine.calls()) != 1 {
-		t.Fatal("job не должен был перезапускаться, пока Finish не прошёл")
-	}
+	env.tick(t) // job уже забыт -> pollOne видит "потеряно" -> обратно в waiting
 	in := env.intent(t)
-	if in.Status != StatusDone {
-		t.Fatalf("после успешного Finish: %+v", in)
-	}
-	if env.hasSecret(t) {
-		t.Fatal("после успеха секрет обязан быть стёрт")
-	}
-	if n := env.notifier.all(); len(n) != 1 {
-		t.Fatalf("уведомление после успешного Finish: %+v", n)
+	if in.Status != StatusWaiting {
+		t.Fatalf("после потери job намерение обязано восстановиться в waiting, а не зависнуть: %+v", in)
 	}
 }
 

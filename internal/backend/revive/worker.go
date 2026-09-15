@@ -37,13 +37,15 @@ func (s *Service) Tick(ctx context.Context) {
 
 // checkOne -- ожидающее намерение: срок, живой агент, попытки, опрос, запуск.
 //
-// Fix round 1, Important #1 (мандатное ревью): держит s.work только на
-// быстрые операции этой функции (чтение из БД, опрос панели, запись итога
-// опроса) -- НЕ на весь launch. launch сам берёт и отпускает s.work: снимает
-// его сразу после MarkRunning, до похода Engine.Launch в сеть (версия и
-// чексуммы с GitHub, до 30 с). Строка уже "running" к этому моменту, и
-// put()/Cancel() отказывают конкурентам по статусу в БД, а не по этому
-// замку -- поэтому checkOne зовёт launch, уже отпустив s.work.
+// Fix round 1, Important #1: держит s.work только на быстрые операции этой
+// функции (чтение из БД, опрос панели, запись итога опроса) -- НЕ на весь
+// launch. Ранние выходы (истёк/жив сам/попытки исчерпаны/нет адреса) отпускают
+// s.work ДО вызова finish -- окно без замка. Fix round 2 (мандатное ревью,
+// Regression A): именно в это окно Schedule может успеть переставить
+// намерение, и finish() с тем же (from='waiting') условием закрыл бы уже
+// ЧУЖУЮ, свежую строку. Защита теперь не временем удержания замка, а
+// поколением: finish получает in.Generation, прочитанное здесь же, и пишет
+// только если оно всё ещё то же самое -- иначе молча отступает.
 func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	s.work.Lock()
 
@@ -59,27 +61,28 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	}
 	now := s.now()
 	waiting := []string{StatusWaiting}
+	generation := in.Generation
 
 	if !now.Before(in.ExpiresAt) {
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusExpired, reasonExpired, noticeExpired(u.Nickname, in.ExpiresAt))
+		s.finish(ctx, routerID, waiting, StatusExpired, reasonExpired, noticeExpired(u.Nickname, in.ExpiresAt), generation)
 		return
 	}
 	if s.agentFresh(u, now) {
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusDone, reasonAliveItself, noticeAliveItself(u.Nickname))
+		s.finish(ctx, routerID, waiting, StatusDone, reasonAliveItself, noticeAliveItself(u.Nickname), generation)
 		return
 	}
 	if in.Attempts >= s.cfg.MaxAttempts {
 		reason := orText(in.LastError, reasonUnknownFailure)
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusFailed, reason, noticeGaveUp(u.Nickname, in.Attempts, reason))
+		s.finish(ctx, routerID, waiting, StatusFailed, reason, noticeGaveUp(u.Nickname, in.Attempts, reason), generation)
 		return
 	}
 	awgmURL := strings.TrimSpace(derefString(u.AWGMURL))
 	if awgmURL == "" {
 		s.work.Unlock()
-		s.finish(ctx, routerID, waiting, StatusFailed, reasonNoAWGMURL, noticeFailed(u.Nickname, reasonNoAWGMURL))
+		s.finish(ctx, routerID, waiting, StatusFailed, reasonNoAWGMURL, noticeFailed(u.Nickname, reasonNoAWGMURL), generation)
 		return
 	}
 
@@ -102,7 +105,7 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 	// ProbeInvalidURL (адрес панели не разбирается) идёт тем же путём, что и
 	// offline: серия обнуляется, запуск не происходит, но LastProbeText
 	// сообщит человеку правильную причину (probeText различает эти состояния).
-	if err := s.cfg.DB.Revive().RecordProbe(routerID, now, state, streak, since); err != nil {
+	if err := s.cfg.DB.Revive().RecordProbe(routerID, now, state, streak, since, generation); err != nil {
 		s.logger.Warn("оживление: итог опроса не записан", "router_id", routerID, "err", err)
 		s.work.Unlock()
 		return
@@ -138,6 +141,19 @@ func (s *Service) checkOne(ctx context.Context, routerID int64) {
 // бы строку в waiting из-под ещё идущего Launch.
 const jobLaunching = "\x00launching"
 
+// jobLaunchingTimeout -- сколько jobLaunching имеет право провисеть в
+// s.jobs, прежде чем pollOne сочтёт её потерянной (Fix round 2, Important B,
+// мандатное ревью). Это верхняя граница ТОЛЬКО на подготовку запуска
+// (расшифровка + Engine.Launch -- в текущем адаптере до 30 с на версию и
+// чексуммы GitHub), а не на саму установку: реальный jobID, однажды
+// полученный, живёт в карте сколько угодно -- его подтверждает
+// Engine.Outcome, а не время. Запас (2 минуты против 30 с) -- на случай
+// более медленного движка за тем же интерфейсом. Страховка на тот
+// маловероятный случай, если forgetJob почему-то не выполнился на пути
+// выхода launch (см. комментарий там) -- без нужды почти никогда не
+// сработает, но не даёт роутеру зависнуть в running до перезапуска бэкенда.
+const jobLaunchingTimeout = 2 * time.Minute
+
 // launch -- waiting→running, расшифровка секрета в памяти, вызов движка.
 // Секреты не попадают ни в журнал, ни в last_error: туда идут только наши
 // русские причины и LaunchError.Text.
@@ -149,7 +165,7 @@ const jobLaunching = "\x00launching"
 // прочитанным, устаревшим `in` -- серия, попытки и TargetVersion ушли бы в
 // движок по чужим, старым числам). launch отпускает s.work РОВНО ОДИН РАЗ,
 // на каждом из своих путей выхода, и ни разу не берёт его заново -- после
-// MarkRunning дальнейший разбор итога (Secret/decrypt/Engine.Launch) синку
+// MarkRunning дальнейший разбор итога (Secret/decrypt/Engine.Launch) замку
 // не нужен: строка уже "running", и put()/Cancel() отказывают конкурентам по
 // статусу в БД, а не по этому замку (Fix round 1, Important #1) -- поэтому
 // замок отпускается ДО похода Engine.Launch в сеть (до 30 с на версию и
@@ -157,21 +173,28 @@ const jobLaunching = "\x00launching"
 // бы упереться в 15-секундный обрыв HTTP на KeenDNS-реле для ЛЮБОГО другого
 // Schedule, ждущего того же s.work.
 //
+// Каждая запись здесь несёт in.Generation (Fix round 2, мандатное ревью) --
+// то же поколение, что checkOne прочитала на своём Get. MarkRunning его не
+// меняет, так что оно остаётся действительным для BackToWaiting/Finish в
+// конце этой же попытки; если бы намерение как-то успело смениться, эти
+// записи молча отступили бы вместо порчи чужой строки.
+//
 // Секрет читается из базы и расшифровывается ТОЛЬКО после MarkRunning: между
 // опросом и этим местом Schedule() мог переставить намерение и заменить
 // шифртекст (например, админ ввёл новый пароль заново, пока шли опросы).
-// MarkRunning защищён условием WHERE status = 'waiting': если Schedule уже
-// переставил намерение (и вернул его в waiting с новым секретом и счётчиком
-// попыток 0), эта запись обновит ИМЕННО актуальную строку, и Secret() ниже
-// прочитает уже новый шифртекст -- запуск использует текущий пароль, а не
-// тот, что был на момент опроса.
+// MarkRunning защищён условием WHERE status = 'waiting' AND generation = ?:
+// если Schedule уже переставил намерение (и вернул его в waiting с новым
+// секретом, счётчиком попыток 0 и новым поколением), это условие не
+// сработает, MarkRunning вернёт false, и launch тихо отступит -- вместо
+// того чтобы засчитать попытку и запустить движок по чужому, устаревшему
+// снимку.
 func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 	if _, busy := s.job(in.RouterID); busy {
 		s.work.Unlock()
 		return
 	}
 	now := s.now()
-	ok, err := s.cfg.DB.Revive().MarkRunning(in.RouterID, now)
+	ok, err := s.cfg.DB.Revive().MarkRunning(in.RouterID, now, in.Generation)
 	if err != nil {
 		s.work.Unlock()
 		s.logger.Warn("оживление: запуск не отмечен", "router_id", in.RouterID, "err", err)
@@ -193,17 +216,17 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 	nonce, ct, found, err := s.cfg.DB.Revive().Secret(in.RouterID)
 	if err != nil {
 		s.logger.Warn("оживление: секрет не прочитан из базы", "router_id", in.RouterID, "err", err)
-		s.attemptFailed(ctx, in.RouterID, nick, attempts, reasonLaunchFailed, false)
+		s.attemptFailed(ctx, in.RouterID, nick, attempts, reasonLaunchFailed, false, in.Generation)
 		return
 	}
 	if !found {
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonNoSecret, noticeFailed(nick, reasonNoSecret))
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonNoSecret, noticeFailed(nick, reasonNoSecret), in.Generation)
 		return
 	}
 	creds, err := s.box.Open(in.RouterID, nonce, ct)
 	if err != nil {
 		s.logger.Warn("оживление: секрет не расшифрован", "router_id", in.RouterID)
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonSecretUnreadable, noticeFailed(nick, reasonSecretUnreadable))
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonSecretUnreadable, noticeFailed(nick, reasonSecretUnreadable), in.Generation)
 		return
 	}
 
@@ -224,10 +247,10 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 		// бывает вместе с NoAttempt (см. reviveLaunchError), но проверка
 		// !permanent -- на случай, если это когда-нибудь изменится.
 		if noAttempt && !permanent {
-			s.backToWaitingNoAttempt(in.RouterID, reason, s.now())
+			s.backToWaitingNoAttempt(in.RouterID, reason, s.now(), in.Generation)
 			return
 		}
-		s.attemptFailed(ctx, in.RouterID, nick, attempts, reason, permanent)
+		s.attemptFailed(ctx, in.RouterID, nick, attempts, reason, permanent, in.Generation)
 		return
 	}
 	s.setJob(in.RouterID, jobID)
@@ -246,25 +269,29 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	now := s.now()
 	jobID, ok := s.job(routerID)
 	if !ok {
-		s.backToWaiting(routerID, reasonJobLost, now)
+		s.backToWaiting(routerID, reasonJobLost, now, in.Generation)
 		return
 	}
 	if jobID == jobLaunching {
-		// Launch этого роутера ещё готовится (Fix round 1, Important #1: s.work
-		// уже отпущен между MarkRunning и возвратом Engine.Launch) -- это не
-		// "потеряно", а "ещё не готово": подождать следующего обхода.
+		// Launch этого роутера ещё готовится (Fix round 1, Important #1:
+		// s.work уже отпущен между MarkRunning и возвратом Engine.Launch) --
+		// обычно это не "потеряно", а "ещё не готово": подождать следующего
+		// обхода. Но если jobLaunching висит в карте дольше
+		// jobLaunchingTimeout (Fix round 2, Important B) -- запись,
+		// переводящая строку из running, скорее всего не прошла (SQLite
+		// busy и т.п.), и без этой страховки intent завис бы до
+		// перезапуска: забываем метку и возвращаем намерение в waiting.
+		since, hasSince := s.jobSince(routerID)
+		if hasSince && now.Sub(since) > jobLaunchingTimeout {
+			s.logger.Warn("оживление: запуск завис дольше таймаута, считаем потерянным", "router_id", routerID)
+			s.forgetJob(routerID)
+			s.backToWaiting(routerID, reasonJobLost, now, in.Generation)
+		}
 		return
 	}
 	out, known := s.cfg.Engine.Outcome(jobID)
 	if !known {
-		// Fix round 2, Minor #1: forgetJob здесь раньше стирал jobID из
-		// карты ДО backToWaiting, независимо от её итога. Если запись в базу
-		// после этого падала, строка оставалась running, а job уже забыт --
-		// следующий Tick снова увидел бы "job lost" и по кругу перевёл бы
-		// намерение обратно в waiting, СЪЕДАЯ по одной попытке за обход.
-		// forgetJob теперь только внутри backToWaiting/finish, и только
-		// когда соответствующая запись в базу действительно прошла.
-		s.backToWaiting(routerID, reasonJobLost, now)
+		s.backToWaiting(routerID, reasonJobLost, now, in.Generation)
 		return
 	}
 	if !out.Finished {
@@ -274,60 +301,75 @@ func (s *Service) pollOne(ctx context.Context, routerID int64) {
 	running := []string{StatusRunning}
 	switch {
 	case out.Success:
-		s.finish(ctx, routerID, running, StatusDone, reasonRevived, noticeRevived(nick, out.Version))
+		s.finish(ctx, routerID, running, StatusDone, reasonRevived, noticeRevived(nick, out.Version), in.Generation)
 	case out.AuthFailed:
-		s.finish(ctx, routerID, running, StatusFailed, reasonAuthFailed, noticeAuthFailed(nick))
+		s.finish(ctx, routerID, running, StatusFailed, reasonAuthFailed, noticeAuthFailed(nick), in.Generation)
 	default:
-		s.attemptFailed(ctx, routerID, nick, in.Attempts, orText(out.Text, reasonUnknownFailure), false)
+		s.attemptFailed(ctx, routerID, nick, in.Attempts, orText(out.Text, reasonUnknownFailure), false, in.Generation)
 	}
 }
 
 // attemptFailed -- неудачная попытка: окончательная -> failed сразу;
 // исчерпаны попытки -> failed; иначе обратно в waiting.
-func (s *Service) attemptFailed(ctx context.Context, routerID int64, nick string, attempts int, reason string, permanent bool) {
+func (s *Service) attemptFailed(ctx context.Context, routerID int64, nick string, attempts int, reason string, permanent bool, generation int64) {
 	running := []string{StatusRunning}
 	switch {
 	case permanent:
-		s.finish(ctx, routerID, running, StatusFailed, reason, noticeFailed(nick, reason))
+		s.finish(ctx, routerID, running, StatusFailed, reason, noticeFailed(nick, reason), generation)
 	case attempts >= s.cfg.MaxAttempts:
-		s.finish(ctx, routerID, running, StatusFailed, reason, noticeGaveUp(nick, attempts, reason))
+		s.finish(ctx, routerID, running, StatusFailed, reason, noticeGaveUp(nick, attempts, reason), generation)
 	default:
-		s.backToWaiting(routerID, reason, s.now())
+		s.backToWaiting(routerID, reason, s.now(), generation)
 	}
 }
 
 // backToWaiting -- running→waiting после неудачной, но не окончательной
-// попытки (или потерянного задания). forgetJob -- только если запись
-// действительно прошла (fix round 2, Minor #1): иначе job остаётся
-// отмеченным, и следующий Tick честно повторит ту же попытку записи, вместо
-// того чтобы молча забыть задание и перезапустить движок поверх ещё не
-// закрытого running.
-func (s *Service) backToWaiting(routerID int64, reason string, now time.Time) {
-	ok, err := s.cfg.DB.Revive().BackToWaiting(routerID, reason, now)
+// попытки (или потерянного задания).
+//
+// Fix round 2, Important B (мандатное ревью): forgetJob -- БЕЗУСЛОВНО, ДО
+// записи в БД. Раньше (fix round 2, Minor #1) он был условным на успех
+// записи -- защита от повторного "job lost" на каждом обходе при стабильно
+// падающей записи. У этой защиты была своя цена: если запись падала (SQLite
+// busy, диск), jobLaunching/jobID оставался в карте НАВСЕГДА -- pollOne
+// видел бы его и либо молчал (jobLaunching), либо звал Outcome по чужому
+// jobID на каждом обходе, а строка оставалась running до перезапуска
+// бэкенда. Зависнуть навсегда хуже, чем изредка потратить лишнюю попытку на
+// повторной неудачной записи: пять попыток исчерпаются, и намерение
+// закроется честно, а не зависнет. jobLaunchingTimeout в pollOne -- вторая,
+// независимая страховка на тот же случай.
+func (s *Service) backToWaiting(routerID int64, reason string, now time.Time, generation int64) {
+	s.forgetJob(routerID)
+	if s.testBackToWaitingErr != nil {
+		if err := s.testBackToWaitingErr(); err != nil {
+			s.logger.Warn("оживление: возврат в ожидание не записан", "router_id", routerID, "err", err)
+			return
+		}
+	}
+	ok, err := s.cfg.DB.Revive().BackToWaiting(routerID, reason, now, generation)
 	if err != nil {
 		s.logger.Warn("оживление: возврат в ожидание не записан", "router_id", routerID, "err", err)
 		return
 	}
 	if !ok {
-		return
+		s.logger.Debug("оживление: возврат в ожидание пропущен -- поколение сменилось или статус уже не тот", "router_id", routerID)
 	}
-	s.forgetJob(routerID)
 }
 
 // backToWaitingNoAttempt -- как backToWaiting, но для запуска, который отказал
 // не по вине оживления (Fix round 1, Minor #3: движок переустановки занят
 // чужим заданием на этом же роутере). BackToWaitingNoAttempt в БД отменяет
-// инкремент, который MarkRunning уже внёс, -- попытка не считается потраченной.
-func (s *Service) backToWaitingNoAttempt(routerID int64, reason string, now time.Time) {
-	ok, err := s.cfg.DB.Revive().BackToWaitingNoAttempt(routerID, reason, now)
+// инкремент, который MarkRunning уже внёс. forgetJob -- безусловно, тем же
+// доводом, что у backToWaiting (Fix round 2, Important B).
+func (s *Service) backToWaitingNoAttempt(routerID int64, reason string, now time.Time, generation int64) {
+	s.forgetJob(routerID)
+	ok, err := s.cfg.DB.Revive().BackToWaitingNoAttempt(routerID, reason, now, generation)
 	if err != nil {
 		s.logger.Warn("оживление: возврат в ожидание без траты попытки не записан", "router_id", routerID, "err", err)
 		return
 	}
 	if !ok {
-		return
+		s.logger.Debug("оживление: возврат в ожидание (без попытки) пропущен -- поколение сменилось или статус уже не тот", "router_id", routerID)
 	}
-	s.forgetJob(routerID)
 }
 
 // notifySendTimeout -- сколько ждём доставки уведомления о закрытии
@@ -335,26 +377,38 @@ func (s *Service) backToWaitingNoAttempt(routerID int64, reason string, now time
 const notifySendTimeout = 5 * time.Second
 
 // finish -- условный переход в конечный статус со стиранием секрета. Одно
-// уведомление: второй закрывающий получает ok=false и молчит. forgetJob --
-// только после успешной записи в базу (fix round 2, Minor #1): падение
-// Finish не должно отдавать роутер под повторный запуск с тем же (возможно
-// уже известным плохим) паролем, пока строка ещё running.
-func (s *Service) finish(ctx context.Context, routerID int64, from []string, to, reason, notice string) {
+// уведомление: второй закрывающий получает ok=false и молчит.
+//
+// generation -- поколение, прочитанное вызывающим на своём Get (Fix round 2,
+// мандатное ревью): структурная защита вместо защиты временем удержания
+// замка. Без неё Schedule, успевший переставить намерение в щель между
+// чтением вызывающего и этой записью (checkOne уже отпустила s.work перед
+// ранним выходом -- expired/agentFresh/maxAttempts/no-url), создал бы
+// СВЕЖУЮ строку с тем же статусом, и Finish закрыл бы её (стерев её НОВЫЙ
+// секрет), как будто это была та, старая строка (Regression A).
+//
+// forgetJob -- безусловно, ДО записи (Fix round 2, Important B; тем же
+// доводом, что у backToWaiting).
+func (s *Service) finish(ctx context.Context, routerID int64, from []string, to, reason, notice string, generation int64) {
+	s.forgetJob(routerID)
+	if s.testBeforeFinishWrite != nil {
+		s.testBeforeFinishWrite()
+	}
 	if s.testFinishErr != nil {
 		if err := s.testFinishErr(); err != nil {
 			s.logger.Warn("оживление: закрытие не записано", "router_id", routerID, "status", to, "err", err)
 			return
 		}
 	}
-	ok, err := s.cfg.DB.Revive().Finish(routerID, from, to, reason, s.now())
+	ok, err := s.cfg.DB.Revive().Finish(routerID, from, to, reason, s.now(), generation)
 	if err != nil {
 		s.logger.Warn("оживление: закрытие не записано", "router_id", routerID, "status", to, "err", err)
 		return
 	}
 	if !ok {
+		s.logger.Debug("оживление: закрытие пропущено -- поколение сменилось или статус уже не тот", "router_id", routerID, "status", to)
 		return
 	}
-	s.forgetJob(routerID)
 	s.logger.Info("оживление агента закрыто, секрет стёрт", "router_id", routerID, "status", to)
 	if s.cfg.Notifier == nil || notice == "" {
 		return
