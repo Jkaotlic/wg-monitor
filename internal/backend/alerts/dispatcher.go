@@ -59,7 +59,7 @@ type Dispatcher struct {
 func NewDispatcher(d *db.DB, tgc TGSender, cfg Config) *Dispatcher {
 	return &Dispatcher{
 		d: d, tg: tgc, cfg: cfg, now: time.Now,
-		notify: notify.NewFanout(d, tgc, slog.Default()),
+		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
 	}
 }
 

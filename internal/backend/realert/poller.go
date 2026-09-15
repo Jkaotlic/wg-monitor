@@ -105,7 +105,7 @@ func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 	return &Poller{
 		d: d, tg: tg, cfg: cfg, now: time.Now,
 		sendFailCount: make(map[string]int),
-		notify:        notify.NewFanout(d, tg, slog.Default()),
+		notify:        notify.NewFanout(d, tg, slog.Default(), 0),
 	}
 }
 

@@ -42,7 +42,7 @@ func TestFanout_SendsToEveryRecipient(t *testing.T) {
 	}
 
 	s := &fakeSender{}
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "VPN-туннель упал", "HTML")
+	n, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "VPN-туннель упал", "HTML")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestFanout_OneFailureDoesNotStopTheRest(t *testing.T) {
 		Method: "sendMessage", Code: 403,
 		Description: "Forbidden: bot can't initiate conversation with a user",
 	}}}
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "VPN-туннель упал", "HTML")
+	n, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "VPN-туннель упал", "HTML")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestFanout_SuccessClearsUnreachable(t *testing.T) {
 	}
 
 	s := &fakeSender{}
-	if _, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "всё хорошо", "HTML"); err != nil {
+	if _, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "всё хорошо", "HTML"); err != nil {
 		t.Fatal(err)
 	}
 	un, err := d.Unreachable().List()
@@ -112,7 +112,7 @@ func TestFanout_SuccessClearsUnreachable(t *testing.T) {
 func TestFanout_NobodyToNotify(t *testing.T) {
 	d, router := newDB(t)
 	s := &fakeSender{}
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "HTML")
+	n, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "текст", "HTML")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestFanout_SendTrackedRemembersEachMessage(t *testing.T) {
 	}
 
 	s := &fakeKeyboardSender{}
-	n, err := NewFanout(d, s, quietLogger()).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{})
+	n, err := NewFanout(d, s, quietLogger(), 0).SendTracked(context.Background(), router, "tunnel_awg0", "VPN-туннель упал", "HTML", &tg.InlineKeyboardMarkup{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestFanout_ReplyToEachUsesOwnMessage(t *testing.T) {
 	// «починилось» обычным сообщением, а не остаться без него.
 
 	s := &replyCapturingSender{replies: map[int64]*int64{}}
-	if err := NewFanout(d, s, quietLogger()).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", ""); err != nil {
+	if err := NewFanout(d, s, quietLogger(), 0).ReplyToEach(context.Background(), router, "tunnel_awg0", "починилось", ""); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.replies) != 2 {
@@ -220,7 +220,7 @@ func TestFanout_AllFailedIsAnError(t *testing.T) {
 	s := &fakeSender{fail: map[int64]error{1001: &tg.APIError{
 		Method: "sendMessage", Code: 500, Description: "Internal Server Error",
 	}}}
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	n, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "текст", "")
 	if n != 0 {
 		t.Fatalf("доставлено %d, ждали ноль", n)
 	}
@@ -239,7 +239,7 @@ func TestFanout_KeepsUnderlyingError(t *testing.T) {
 	want := &tg.APIError{Method: "sendMessage", Code: 429, Description: "Too Many Requests", RetryAfter: 30}
 	s := &fakeSender{fail: map[int64]error{1001: want}}
 
-	_, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	_, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "текст", "")
 	var got *tg.APIError
 	if !errors.As(err, &got) {
 		t.Fatalf("ошибка=%v, из неё нельзя достать APIError", err)
@@ -261,7 +261,7 @@ func TestFanout_ChatNotFoundMarksUnreachable(t *testing.T) {
 		Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found",
 	}}}
 
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	n, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "текст", "")
 	if n != 0 || err != nil {
 		t.Fatalf("доставлено %d, ошибка %v; ждали 0 без ошибки -- слать некому", n, err)
 	}
@@ -294,7 +294,7 @@ func TestFanout_OnlyUnreachableRecipientsIsNobodyToNotify(t *testing.T) {
 				t.Fatal(err)
 			}
 			s := &fakeKeyboardSender{fakeSender: fakeSender{fail: map[int64]error{1001: doorErr}}}
-			f := NewFanout(d, s, quietLogger())
+			f := NewFanout(d, s, quietLogger(), 0)
 
 			n, err := f.Send(context.Background(), router, "текст", "")
 			if n != 0 || err != nil {
@@ -335,7 +335,7 @@ func TestFanout_UnreachablePlusTransientFailureIsStillAnError(t *testing.T) {
 		1002: &tg.APIError{Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found"},
 	}}
 
-	n, err := NewFanout(d, s, quietLogger()).Send(context.Background(), router, "текст", "")
+	n, err := NewFanout(d, s, quietLogger(), 0).Send(context.Background(), router, "текст", "")
 	if n != 0 {
 		t.Fatalf("доставлено %d, ждали ноль", n)
 	}

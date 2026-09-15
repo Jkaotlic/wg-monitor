@@ -23,7 +23,7 @@ type DeployNotifier struct {
 func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *DeployNotifier {
 	return &DeployNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default()),
+		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
 	}
 }
 

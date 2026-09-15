@@ -35,10 +35,32 @@ type Fanout struct {
 	d      *db.DB
 	s      Sender
 	logger *slog.Logger
+	// adminID -- Telegram-номер админа из конфига, 0 -- не настроен. Админ
+	// получает всё по всем роутерам (RecipientsFor), и только ему под каждым
+	// сообщением ряд «Не писать мне про этот роутер».
+	adminID int64
 }
 
-func NewFanout(d *db.DB, s Sender, logger *slog.Logger) *Fanout {
-	return &Fanout{d: d, s: s, logger: logger}
+func NewFanout(d *db.DB, s Sender, logger *slog.Logger, adminID int64) *Fanout {
+	return &Fanout{d: d, s: s, logger: logger, adminID: adminID}
+}
+
+func (f *Fanout) isAdmin(chatID int64) bool {
+	return f.adminID != 0 && chatID == f.adminID
+}
+
+// sendOne -- отправка одному адресату. Админу к клавиатуре дописывается ряд
+// выключения (или создаётся клавиатура из одного этого ряда). Остальным --
+// ровно прежний вызов: с кнопками, если они есть и отправитель их умеет,
+// иначе простым сообщением.
+func (f *Fanout) sendOne(ctx context.Context, chatID, routerUserID int64, text, parseMode string, replyTo *int64, kb *tg.InlineKeyboardMarkup) (int64, error) {
+	if f.isAdmin(chatID) {
+		kb = withAdminMuteRow(kb, routerUserID)
+	}
+	if ks, ok := f.s.(KeyboardSender); ok && kb != nil {
+		return ks.SendMessageWithKeyboard(ctx, chatID, nil, text, parseMode, replyTo, kb)
+	}
+	return f.s.SendMessage(ctx, chatID, nil, text, parseMode, replyTo)
 }
 
 // Send доставляет текст каждому получателю роутера и возвращает, скольким
@@ -52,14 +74,14 @@ func NewFanout(d *db.DB, s Sender, logger *slog.Logger) *Fanout {
 // Ошибку возвращает только невозможность СОСТАВИТЬ список получателей -- это
 // поломка базы, а не Telegram.
 func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID, 0)
+	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return 0, err
 	}
 	delivered := 0
 	var lastErr error
 	for _, chatID := range targets {
-		if _, err := f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil); err != nil {
+		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil); err != nil {
 			if !f.noteFailure(chatID, routerUserID, err) {
 				lastErr = err
 			}
@@ -89,20 +111,14 @@ func (f *Fanout) result(delivered, targets int, lastErr error) (int, error) {
 // напоминаниям: «починилось» обязано отвечать на корневую тревогу, а не на
 // последнее напоминание.
 func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID, 0)
+	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return 0, err
 	}
-	ks, hasKeyboard := f.s.(KeyboardSender)
 	delivered := 0
 	var lastErr error
 	for _, chatID := range targets {
-		var sendErr error
-		if hasKeyboard && kb != nil {
-			_, sendErr = ks.SendMessageWithKeyboard(ctx, chatID, nil, text, parseMode, nil, kb)
-		} else {
-			_, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
-		}
+		_, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb)
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
 				lastErr = sendErr
@@ -154,21 +170,14 @@ type KeyboardSender interface {
 // Если отправитель не умеет кнопок, уведомление уходит без них: потерять
 // кнопку лучше, чем потерять тревогу.
 func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID, 0)
+	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return 0, err
 	}
-	ks, hasKeyboard := f.s.(KeyboardSender)
 	delivered := 0
 	var lastErr error
 	for _, chatID := range targets {
-		var mid int64
-		var sendErr error
-		if hasKeyboard && kb != nil {
-			mid, sendErr = ks.SendMessageWithKeyboard(ctx, chatID, nil, text, parseMode, nil, kb)
-		} else {
-			mid, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
-		}
+		mid, sendErr := f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, kb)
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
 				lastErr = sendErr
@@ -190,7 +199,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 // получает обычное сообщение без привязки -- лучше без ветки переписки, чем
 // вообще без «починилось».
 func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error {
-	targets, err := RecipientsFor(f.d, routerUserID, 0)
+	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return err
 	}
@@ -203,7 +212,7 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 		if mid, ok := msgs[chatID]; ok {
 			replyTo = &mid
 		}
-		if _, err := f.s.SendMessage(ctx, chatID, nil, text, parseMode, replyTo); err != nil {
+		if _, err := f.sendOne(ctx, chatID, routerUserID, text, parseMode, replyTo, nil); err != nil {
 			f.noteFailure(chatID, routerUserID, err)
 			continue
 		}
@@ -223,7 +232,7 @@ type ReplyKeyboardSender interface {
 // её не умеет, уведомление уходит без панели: потерять кнопки лучше, чем
 // потерять сообщение.
 func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, markup any) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID, 0)
+	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
 		return 0, err
 	}
@@ -232,10 +241,13 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 	var lastErr error
 	for _, chatID := range targets {
 		var sendErr error
-		if hasKeyboard && markup != nil {
-			_, sendErr = rks.SendMessageWithReplyKeyboard(ctx, chatID, nil, text, parseMode, nil, markup)
+		m := f.replyMarkupFor(chatID, routerUserID, markup)
+		if hasKeyboard && m != nil {
+			_, sendErr = rks.SendMessageWithReplyKeyboard(ctx, chatID, nil, text, parseMode, nil, m)
 		} else {
-			_, sendErr = f.s.SendMessage(ctx, chatID, nil, text, parseMode, nil)
+			// Разметки нет или отправитель её не умеет: админ всё равно
+			// получает ряд выключения через sendOne.
+			_, sendErr = f.sendOne(ctx, chatID, routerUserID, text, parseMode, nil, nil)
 		}
 		if sendErr != nil {
 			if !f.noteFailure(chatID, routerUserID, sendErr) {
@@ -247,4 +259,22 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 		f.noteSuccess(chatID)
 	}
 	return f.result(delivered, len(targets), lastErr)
+}
+
+// replyMarkupFor -- разметка для адресата рассылки с нижней клавиатурой. Под
+// этим именем сегодня ходит и inline-клавиатура (отчёт о пробуждении, значение
+// tg.InlineKeyboardMarkup): к ней админу дописывается ряд выключения. Настоящую
+// нижнюю клавиатуру с inline-рядом в одном сообщении Telegram не совмещает --
+// она уходит как есть.
+func (f *Fanout) replyMarkupFor(chatID, routerUserID int64, markup any) any {
+	if !f.isAdmin(chatID) {
+		return markup
+	}
+	switch m := markup.(type) {
+	case tg.InlineKeyboardMarkup:
+		return *withAdminMuteRow(&m, routerUserID)
+	case *tg.InlineKeyboardMarkup:
+		return withAdminMuteRow(m, routerUserID)
+	}
+	return markup
 }

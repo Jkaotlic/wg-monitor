@@ -34,7 +34,7 @@ type WakeNotifier struct {
 func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *WakeNotifier {
 	return &WakeNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default()),
+		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
 	}
 }
 
@@ -89,7 +89,7 @@ type SleepNotifier struct {
 func NewSleepNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *SleepNotifier {
 	return &SleepNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default()),
+		notify: notify.NewFanout(d, tgc, slog.Default(), 0),
 	}
 }
 
