@@ -110,10 +110,18 @@ export function auditRows(output) {
   return rows
 }
 
-// Доктор отвечает строками "✅ имя — подробность". Экран разбирает их в
+// Доктор отвечает строками "✅ имя: подробность". Экран разбирает их в
 // строки данных: emoji -- это тон, имя -- фраза, подробность -- значение.
 const DOCTOR_TONE = { '✅': 'ok', '⚠️': 'warn', '⚠': 'warn', '❌': 'danger' }
 const VERDICT = { ok: 'в порядке', warn: 'внимание', danger: 'не работает' }
+
+function doctorSplit(body) {
+  const colon = body.indexOf(': ')
+  const dash = body.indexOf(' — ')
+  if (colon >= 0 && (dash < 0 || colon < dash)) return [colon, 2]
+  if (dash >= 0) return [dash, 3]
+  return [-1, 0]
+}
 
 export function doctorRows(output) {
   const lines = String(output ?? '').split('\n')
@@ -124,10 +132,12 @@ export function doctorRows(output) {
     if (!mark) continue
     const tone = DOCTOR_TONE[mark]
     const body = trimmed.slice(mark.length).trim()
-    // Разделитель у агента -- длинное тире с пробелами (formatDetail).
-    const at = body.indexOf(' — ')
+    // Агент пишет «имя: подробность» (router_doctor.go formatDetail), и в
+    // подробности бывают свои двоеточия -- режем по первому. Длинное тире --
+    // запасной разделитель старого формата; побеждает тот, что раньше.
+    const [at, sepLen] = doctorSplit(body)
     const title = at >= 0 ? body.slice(0, at).trim() : body
-    const detail = at >= 0 ? body.slice(at + 3).trim() : ''
+    const detail = at >= 0 ? body.slice(at + sepLen).trim() : ''
     rows.push({ key: `d${rows.length}`, title, value: detail || VERDICT[tone], tone })
   }
   return rows
