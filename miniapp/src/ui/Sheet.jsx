@@ -108,7 +108,7 @@ export function Sheet({ sheet, asleep, onClose }) {
                 disabled={!ready || localBusy}
                 onClick={start}
               >
-                {localBusy ? 'Сохраняем…' : sheet.buttonLabel}
+                {localBusy ? (sheet.busyLabel || 'Сохраняем…') : sheet.buttonLabel}
               </button>
             </div>
           </>

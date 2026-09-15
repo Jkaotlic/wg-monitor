@@ -208,6 +208,40 @@ describe('«Парк»: обновление агента', () => {
     cleanup(root, sheet.root)
   })
 
+  it('подпись занятости на листе: «Ставим…» для обновления, «Сохраняем…» для уведомлений по умолчанию', async () => {
+    reset()
+    // Промис перформа не разрешаем сразу -- ловим текст кнопки, пока он «занят».
+    let resolveUpdate
+    mocks.updateReply = new Promise((r) => { resolveUpdate = r })
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'office'), 'Обновить агент')[0].click())
+    const sheet = await mountSheet(sheets[0])
+    const input = sheet.root.querySelector('#sheet-confirm-input')
+    await act(async () => {
+      input.value = 'office'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    expect(buttons(sheet.root, 'Ставим…')).toHaveLength(1)
+    resolveUpdate({ queued: true, deferred: false, target_version: 'v0.33.0' })
+    await flush()
+    await flush()
+    cleanup(root, sheet.root)
+
+    reset()
+    let resolveNotify
+    mocks.notifyReply = new Promise((r) => { resolveNotify = r })
+    const mounted = await mountPark()
+    await act(async () => rowOf(mounted.root, 'car').querySelector('[role="switch"]').click())
+    const muteSheet = await mountSheet(mounted.sheets[0])
+    await act(async () => [...muteSheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    expect(buttons(muteSheet.root, 'Сохраняем…')).toHaveLength(1)
+    resolveNotify({ muted: true })
+    await flush()
+    await flush()
+    cleanup(mounted.root, muteSheet.root)
+  })
+
   it('отставших нет -- кнопки массового обновления нет', async () => {
     reset()
     mocks.fleet = { ...FLEET, routers: [FLEET.routers[0], FLEET.routers[2]] }

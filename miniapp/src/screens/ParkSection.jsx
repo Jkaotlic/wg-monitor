@@ -102,6 +102,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
         title: text.title,
         body: text.body,
         buttonLabel: 'Обновить',
+        busyLabel: 'Ставим…',
         confirmPhrase: router.nickname,
         errorText: agentUpdateErrorText,
         // Набранное имя уходит серверу: он сверяет его сам, проверка на листе --
@@ -138,6 +139,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
         title: text.title,
         body: text.body,
         buttonLabel: 'Обновить всех',
+        busyLabel: 'Ставим…',
         confirmPhrase: FLEET_UPDATE_PHRASE,
         errorText: fleetUpdateErrorText,
         perform: (typed) => updateFleetAgents(typed),

@@ -17,8 +17,11 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
 // набором. perform получает набранное (сервер сверяет его сам), onDone --
 // ответ сервера. errorText(err) -- фраза экрана для отказа по коду; пустая
 // строка значит «своей фразы нет», и лист скажет общее «не получилось».
-export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', errorText, perform, onDone }) {
-  return { title, body, buttonLabel, danger, confirmPhrase, errorText, perform, onDone, args: {} }
+// busyLabel -- подпись кнопки, пока perform выполняется («Ставим…» для
+// обновления агента, «Сохраняем…» для выключения уведомлений). Пустая строка
+// значит «своей подписи нет» -- Sheet.jsx покажет прежнюю по умолчанию.
+export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', errorText, busyLabel = '', perform, onDone }) {
+  return { title, body, buttonLabel, danger, confirmPhrase, errorText, busyLabel, perform, onDone, args: {} }
 }
 
 // Необратимое действие подтверждается набором, а не нажатием: человек

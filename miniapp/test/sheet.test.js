@@ -43,4 +43,14 @@ describe('localSheet', () => {
     const sheet = localSheet({ title: 't', body: 'b', errorText, perform: () => Promise.resolve() })
     expect(sheet.errorText({ code: 'deploy_pending' })).toBe('уже ждёт')
   })
+
+  // Подпись занятости у разных локальных действий разная: «Ставим…» для
+  // обновления агента не то же самое, что «Сохраняем…» для настройки. Экран
+  // задаёт её описанием листа, а не Sheet.jsx угадывает по действию.
+  it('подпись занятости -- из описания листа, по умолчанию прежняя', () => {
+    const withLabel = localSheet({ title: 't', body: 'b', busyLabel: 'Ставим…', perform: () => Promise.resolve() })
+    expect(withLabel.busyLabel).toBe('Ставим…')
+    const withoutLabel = localSheet({ title: 't', body: 'b', perform: () => Promise.resolve() })
+    expect(withoutLabel.busyLabel).toBe('')
+  })
 })
