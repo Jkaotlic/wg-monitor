@@ -63,8 +63,6 @@ func (r *Router) handlePanelCallback(ctx context.Context, q *tg.CallbackQuery, a
 		r.panelMobileFleet(ctx, q)
 	case "weblink":
 		r.panelWebLink(ctx, q)
-	case "help":
-		r.panelHandleHelp(ctx, q, args)
 	default:
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "экран ещё не готов")
 	}
@@ -298,42 +296,6 @@ func (r *Router) panelEditToHome(ctx context.Context, q *tg.CallbackQuery) {
 	text, kb := panelHomeMessage()
 	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb); err != nil {
 		slog.Warn("panel home edit failed", "err", err)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-// panelHandleHelp renders a static help body for the requested panel screen.
-// « Назад returns to the kind-pick screen (for maint/routes/status) or to home;
-// ✖ Закрыть clears the keyboard.
-func (r *Router) panelHandleHelp(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	body := tg.HelpForScreen(args.PanelKind)
-	if !r.isAdminTG(q.From.ID) {
-		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-			{
-				{Text: "✖ Закрыть", CallbackData: "close_panel:0:_panel_"},
-			},
-		}}
-		if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, body, "", &kb); err != nil {
-			slog.Warn("panel help edit failed", "err", err)
-		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-		return
-	}
-	var backCB string
-	switch args.PanelKind {
-	case "routes", "tunnels", "status", "pingcheck", "doctor":
-		backCB = "panel:0:kind:" + args.PanelKind
-	default:
-		backCB = "panel:0:home"
-	}
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-		{
-			{Text: "« Назад", CallbackData: backCB},
-			{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
-		},
-	}}
-	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, body, "", &kb); err != nil {
-		slog.Warn("panel help edit failed", "err", err)
 	}
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
 }

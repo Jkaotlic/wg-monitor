@@ -314,7 +314,7 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	// панели сюда не попадают (у них своё условие выше), а право на действие
 	// с роутером всё равно проверяет aclAllow по человеку.
 	routerButtonInDM := q.Message.Chat.ID == q.From.ID &&
-		!strings.HasPrefix(q.Data, "panel:") && !strings.HasPrefix(q.Data, "access:")
+		(isHelpCallback(q.Data) || (!strings.HasPrefix(q.Data, "panel:") && !strings.HasPrefix(q.Data, "access:")))
 	if !r.chatAllowed(q.Message.Chat.ID) && !adminPrivatePanel && !routerButtonInDM {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "wrong chat")
 		slog.Warn("rejected callback (chat-id)", "from", q.From.ID, "chat", q.Message.Chat.ID, "data", q.Data)
@@ -325,6 +325,10 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	if err != nil {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "неизвестная кнопка")
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
+		return
+	}
+	if args.Action == "panel" && args.PanelScreen == "help" {
+		r.handleHelpCallback(ctx, q, args.PanelKind)
 		return
 	}
 	if args.Action == "access" {

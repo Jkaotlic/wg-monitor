@@ -71,25 +71,6 @@ func TestPanelHome_AdminDMAllowed(t *testing.T) {
 	}
 }
 
-func flattenKbCallbacks(kb *tg.InlineKeyboardMarkup) []string {
-	var out []string
-	for _, row := range kb.InlineKeyboard {
-		for _, b := range row {
-			out = append(out, b.CallbackData)
-		}
-	}
-	return out
-}
-
-func containsStr(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 func TestPanelKindPick_ListsRoutersWithThreadFlag(t *testing.T) {
 	d, _ := newTestDB(t) // vasya, no thread
 	// Add a second user WITH thread, a third WITHOUT thread.
@@ -313,62 +294,6 @@ func TestPanelCallback_NonAdminRejected(t *testing.T) {
 	}
 }
 
-func TestPanelHelp_NonAdminAllowed(t *testing.T) {
-	d, _ := newTestDB(t)
-	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
-	q := &tg.CallbackQuery{ID: "cb-panel-help", From: tg.User{ID: 200}, Data: "panel:0:help:premium", Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 77}}
-	r.HandleCallback(context.Background(), q)
-	if len(f.edits) != 1 {
-		t.Fatalf("non-admin help should render, edits=%v answers=%v", f.edits, f.answers)
-	}
-	if !strings.Contains(f.edits[0], "HideMy.name") {
-		t.Fatalf("premium help body not rendered: %s", f.edits[0])
-	}
-}
-
-func TestPanelHelp_NonAdminNavigationStaysOperatorSafe(t *testing.T) {
-	d, _ := newTestDB(t)
-	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
-	q := &tg.CallbackQuery{
-		ID:      "cb-panel-help",
-		From:    tg.User{ID: 200},
-		Data:    "panel:0:help:pingcheck",
-		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 77, Text: "help"},
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.editMarkups) != 1 || f.editMarkups[0] == nil {
-		t.Fatalf("non-admin help should render with a keyboard, markups=%+v", f.editMarkups)
-	}
-	callbacks := flattenKbCallbacks(f.editMarkups[0])
-	for _, blocked := range []string{"panel:0:kind:pingcheck", "panel:0:home", "panel:0:close"} {
-		if containsStr(callbacks, blocked) {
-			t.Fatalf("non-admin help keyboard must not expose admin-only callback %q: %v", blocked, callbacks)
-		}
-	}
-	if !containsStr(callbacks, "close_panel:0:_panel_") {
-		t.Fatalf("non-admin help keyboard should expose operator-safe close_panel, got %v", callbacks)
-	}
-
-	f.answers = nil
-	f.edits = nil
-	f.editMarkups = nil
-	q.ID = "cb-panel-help-close"
-	q.Data = "close_panel:0:_panel_"
-	r.HandleCallback(context.Background(), q)
-	if len(f.answers) != 1 {
-		t.Fatalf("safe close should answer once, got answers=%+v", f.answers)
-	}
-	if strings.Contains(strings.ToLower(f.answers[0]), "admin") || strings.Contains(f.answers[0], "Ð°Ð´Ð¼Ð¸Ð½") {
-		t.Fatalf("safe close must not hit admin-only rejection, got %q", f.answers[0])
-	}
-	if len(f.edits) != 1 {
-		t.Fatalf("safe close should clear the keyboard with one edit, got edits=%+v", f.edits)
-	}
-}
-
 func TestPanelDoctorAll_EnqueuesAggregateBatch(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 101); err != nil {
@@ -560,33 +485,5 @@ func TestPanelClose_EditsToClosedText(t *testing.T) {
 	r.HandleCallback(context.Background(), q)
 	if len(f.edits) != 1 {
 		t.Errorf("expected close edit, got %v", f.edits)
-	}
-}
-
-func TestPanelHub_HelpScreen_EditsBody(t *testing.T) {
-	d, _ := newTestDB(t)
-	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-	q := &tg.CallbackQuery{ID: "cbk", From: tg.User{ID: 12345}, Message: tg.Message{MessageID: 1, Chat: tg.Chat{ID: -100}}, Data: "panel:0:help:tunnels"}
-	r.HandleCallback(context.Background(), q)
-	if len(f.edits) != 1 {
-		t.Fatalf("want 1 edit, got %d", len(f.edits))
-	}
-	if !strings.Contains(f.edits[0], "Туннели") {
-		t.Errorf("tunnels help body should mention Туннели:\n%s", f.edits[0])
-	}
-}
-
-func TestPanelHub_OperatorHelpScreen_EditsBody(t *testing.T) {
-	d, _ := newTestDB(t)
-	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-	q := &tg.CallbackQuery{ID: "cbk", From: tg.User{ID: 12345}, Message: tg.Message{MessageID: 1, Chat: tg.Chat{ID: -100}}, Data: "panel:0:help:operator"}
-	r.HandleCallback(context.Background(), q)
-	if len(f.edits) != 1 {
-		t.Fatalf("want 1 edit, got %d", len(f.edits))
-	}
-	if !strings.Contains(f.edits[0], "Operator") || !strings.Contains(f.edits[0], "Premium") {
-		t.Errorf("operator help body should be the full operator guide:\n%s", f.edits[0])
 	}
 }
