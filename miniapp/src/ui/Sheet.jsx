@@ -1,4 +1,4 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import { sheetPhase, confirmReady, initialFieldValues, fieldsReady } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
@@ -31,6 +31,18 @@ export function Sheet({ sheet, asleep, onClose }) {
   const fields = local && Array.isArray(sheet.fields) ? sheet.fields : []
   const [values, setValues] = useState(() => initialFieldValues(fields))
   const ready = confirmReady(sheet, typed) && fieldsReady(sheet, values)
+  // Уход листа со страницы (закрытие, смена другим листом, уход экрана) --
+  // введённое стирается и здесь: ссылка на объект значений могла пережить
+  // компонент в замыкании.
+  const valuesRef = useRef(values)
+  valuesRef.current = values
+  useEffect(
+    () => () => {
+      const live = valuesRef.current
+      for (const k of Object.keys(live ?? {})) live[k] = ''
+    },
+    [],
+  )
 
   function setField(name, value) {
     setValues((prev) => ({ ...prev, [name]: value }))
@@ -47,7 +59,13 @@ export function Sheet({ sheet, asleep, onClose }) {
       setLocalError(null)
       const typedNow = sheet.confirmPhrase ? typed : ''
       const submitted = fields.length ? values : {}
-      if (fields.length) setValues(initialFieldValues(fields))
+      if (fields.length) {
+        // Ссылка -- сразу на чистые значения: стирание при уходе листа не
+        // должно задеть снимок, который ещё не дошёл до perform.
+        const fresh = initialFieldValues(fields)
+        valuesRef.current = fresh
+        setValues(fresh)
+      }
       Promise.resolve()
         .then(() => sheet.perform(typedNow, submitted))
         .then((resp) => {
@@ -197,5 +215,20 @@ export function Sheet({ sheet, asleep, onClose }) {
         )}
       </div>
     </div>
+  )
+}
+
+// SheetHost -- лист поверх экрана, как его ставит App.jsx. key -- номер
+// экземпляра из navReducer: новый лист монтируется с чистыми полями, даже
+// если прежний не закрывали.
+export function SheetHost({ nav, dispatch }) {
+  if (!nav?.sheet) return null
+  return (
+    <Sheet
+      key={nav.sheetSeq ?? 0}
+      sheet={nav.sheet}
+      asleep={nav.sheet.asleep}
+      onClose={() => dispatch({ type: 'sheet', sheet: null })}
+    />
   )
 }

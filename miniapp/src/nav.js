@@ -71,8 +71,15 @@ export function navReducer(state, action) {
       return { ...state, routerID: action.id, tab: 'router', overlay: null, sheet: null }
     case 'overlay':
       return { ...state, overlay: action.overlay ?? null }
-    case 'sheet':
-      return { ...state, sheet: action.sheet ?? null }
+    case 'sheet': {
+      // sheetSeq -- номер экземпляра листа, ключ его компонента. Новый лист
+      // поверх открытого (без закрытия) обязан смонтироваться заново:
+      // иначе набранное в первом -- имя, пароль root -- переехало бы во
+      // второй, чужой роутер. Тот же объект листа номер не меняет.
+      const sheet = action.sheet ?? null
+      if (sheet && sheet !== state.sheet) return { ...state, sheet, sheetSeq: (state.sheetSeq ?? 0) + 1 }
+      return { ...state, sheet }
+    }
     case 'back':
       // Порядок закрытия -- сверху вниз по слоям: шит лежит поверх оверлея.
       if (state.sheet) return { ...state, sheet: null }
