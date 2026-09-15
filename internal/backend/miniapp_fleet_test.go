@@ -307,3 +307,52 @@ func TestMiniappFleetCarriesNotifyMutedForCallingAdmin(t *testing.T) {
 		t.Errorf("явного false нет в теле -- клиент не отличит «включено» от «поле не пришло»: %s", rec.Body.String())
 	}
 }
+
+// «На связи» решает сервер, тем же правилом, что и отложенное обновление
+// (miniappWakeWindow): статус без инцидентов. Роутер в тревоге, который давно
+// молчит, для обновления -- выключен, и клиент обязан это знать, а не
+// угадывать своим порогом (final review M1).
+func TestMiniappFleetCarriesAwayWithWakeWindowRule(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+	now := time.Now().UTC()
+	hardSince := now.Add(-3 * time.Hour)
+	if err := d.State().Save(ownedID, "dns", db.IncidentState{
+		UserID: ownedID, CheckName: "dns", CurrentStatus: "hard", ConsecutiveFails: 4, HardSince: &hardSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setDashboardTestLastSeen(t, d, ownedID, now.Add(-2*time.Hour))
+	setDashboardTestLastSeen(t, d, otherID, now.Add(-10*time.Second))
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("сводка парка: код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	var raw struct {
+		Routers []map[string]any `json:"routers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]map[string]any{}
+	for _, r := range raw.Routers {
+		got[r["nickname"].(string)] = r
+	}
+	owned, other := got["router-owned"], got["router-other"]
+	if owned["status"] != "alert" {
+		t.Fatalf("предпосылка: ждали статус alert, получили %v", owned["status"])
+	}
+	u, err := d.Users().GetByID(ownedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asleep, _, _ := miniappWakeWindow(Deps{DB: d}, u, "self_update", now)
+	if owned["away"] != asleep || owned["away"] != true {
+		t.Fatalf("тревожный роутер, молчит 2 ч: away=%v, правило отложенного обновления=%v", owned["away"], asleep)
+	}
+	if v, ok := other["away"]; !ok || v != false {
+		t.Fatalf("роутер на связи: away=%v (есть поле: %v), ждали явное false", v, ok)
+	}
+}

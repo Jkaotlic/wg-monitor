@@ -628,6 +628,7 @@ const FLEET = {
       agent_behind: true,
       agent_update_warning: '',
       notify_muted: false,
+      away: false,
     },
     {
       id: 2,
@@ -642,6 +643,7 @@ const FLEET = {
       agent_behind: true,
       agent_update_warning: 'старая проверка места: нужно ≈10% раздела /opt свободно',
       notify_muted: true,
+      away: true,
     },
     {
       id: 3,
@@ -656,6 +658,7 @@ const FLEET = {
       agent_update_warning: '',
       awgmgr_version: '2.17.2',
       notify_muted: false,
+      away: true,
     },
   ],
   notify: {
@@ -684,7 +687,7 @@ export function respond(method, path) {
         .map((r) => ({
           router_id: r.id,
           nickname: r.nickname,
-          outcome: r.status === 'online' || r.status === 'alert' ? 'queued' : 'deferred',
+          outcome: r.away ? 'deferred' : 'queued',
           reason_code: '',
           reason_text: '',
         })),

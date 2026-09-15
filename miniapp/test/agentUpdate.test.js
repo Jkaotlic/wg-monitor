@@ -10,6 +10,7 @@ import {
   fleetUpdateSheetText,
   fleetUpdateSummary,
   fleetUpdateErrorText,
+  isAway,
 } from '../src/agentUpdate.js'
 import { ApiError } from '../src/api.js'
 
@@ -107,6 +108,26 @@ describe('состояние обновления в строке роутера
     for (const r of [OFF_PENDING, ONLINE_TRYING, FAILING, BEHIND, FRESH, GAVE_UP]) {
       expect(agentUpdateState(r).text).not.toMatch(INTERNAL)
     }
+  })
+})
+
+// «На связи» решает сервер тем же правилом, что и отложенное обновление
+// (final review M1). Поле away побеждает клиентский порог в обе стороны;
+// без поля (старый бэкенд) остаётся прежнее правило.
+describe('isAway', () => {
+  it('поле сервера побеждает клиентский порог', () => {
+    // статичный роутер в тревоге молчит 7 минут: сервер уже отложит обновление
+    expect(isAway({ status: 'alert', last_seen_age_sec: 420, away: true })).toBe(true)
+    // мобильный в тревоге молчит 20 минут: сервер ещё шлёт команду
+    expect(isAway({ status: 'alert', last_seen_age_sec: 1200, away: false })).toBe(false)
+    expect(isAway({ status: 'offline', last_seen_age_sec: 7200, away: false })).toBe(false)
+  })
+
+  it('без поля -- прежнее правило', () => {
+    expect(isAway({ status: 'offline' })).toBe(true)
+    expect(isAway({ status: 'alert', last_seen_age_sec: 1200 })).toBe(true)
+    expect(isAway({ status: 'alert', last_seen_age_sec: 420 })).toBe(false)
+    expect(isAway({ status: 'online', last_seen_age_sec: 5000 })).toBe(false)
   })
 })
 

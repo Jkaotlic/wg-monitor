@@ -67,6 +67,11 @@ type miniappFleetRouter struct {
 	// Без omitempty: переключателю нужно явное false. Роутер при этом в парке
 	// остаётся -- доступ к экранам от выключения не зависит.
 	NotifyMuted bool `json:"notify_muted"`
+	// Away -- роутер не на связи для команд и обновления: то же правило, по
+	// которому сервер откладывает обновление (miniappWakeWindow -- статус без
+	// инцидентов). Считает сервер, чтобы лист, итог и строка парка не
+	// расходились с решением «отложено» (final review M1). Без omitempty.
+	Away bool `json:"away"`
 }
 
 // miniappFleetUnreachable -- человек, которому бот не может написать.
@@ -156,6 +161,21 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			mutedByAdmin = nil
 		}
 
+		// Строки users для правила «не на связи»: сводка отдаёт статус С
+		// инцидентами, а отложенное обновление решается статусом БЕЗ них.
+		users, err := d.DB.Users().GetAll()
+		if err != nil {
+			// Добавка к строке: без неё away берётся из статуса сводки.
+			if d.Logger != nil {
+				d.Logger.Warn("сводка парка: роутеры для признака «не на связи» не прочитаны", "err", err)
+			}
+			users = nil
+		}
+		usersByID := make(map[int64]int, len(users))
+		for i := range users {
+			usersByID[users[i].ID] = i
+		}
+
 		// Пустой список, а не nil: клиент перебирает это поле, и null уронил
 		// бы экран в тот момент, когда в парке пока ни одного роутера.
 		resp := miniappFleetResp{
@@ -179,6 +199,10 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				AgentVersion:   a.AgentVersion,
 				PendingVersion: a.PendingVersion,
 				NotifyMuted:    mutedByAdmin[a.ID],
+				Away:           a.Status == "sleeping" || a.Status == "offline",
+			}
+			if i, ok := usersByID[a.ID]; ok {
+				row.Away, _, _ = miniappWakeWindow(d, &users[i], "self_update", now)
 			}
 			for _, inc := range a.ActiveIncidents {
 				row.Incidents = append(row.Incidents, inc.CheckName)
