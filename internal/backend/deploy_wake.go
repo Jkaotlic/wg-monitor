@@ -16,6 +16,14 @@ type activeCommandChecker interface {
 	HasActiveCommand(userID int64, action string) bool
 }
 
+// activeEnqueueChecker -- атомарная «проверить и положить», нужна досылке при
+// пробуждении, чтобы закрыть окно между HasActiveCommand и Enqueue (B1).
+// Тот же узкий интерфейс-по-типу, что activeCommandChecker: расширять
+// CommandSink нельзя по той же причине (восемь десятков сборок в тестах).
+type activeEnqueueChecker interface {
+	EnqueueIfNoActive(userID int64, cmd wire.Command) (bool, error)
+}
+
 // buildSelfUpdateCommand собирает команду обновления агента. Тело одинаковое
 // у постановки после рестарта (deploy_resume.go) и у постановки при
 // пробуждении, поэтому живёт в одном месте.
@@ -80,24 +88,36 @@ func ensurePendingDeployQueued(d Deps, uid int64, nickname string, now time.Time
 		}
 		return
 	}
-	if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
-		return
-	}
 	if st.Attempts >= pendingDeployMaxAttempts {
 		// Не сдаёмся здесь -- см. комментарий над функцией. Просто не
-		// досылаем; решение примет отчёт, когда докажет версию.
+		// досылаем; решение примет отчёт, когда докажет версию. Активность всё
+		// равно проверяем -- при активной команде и без того нечего логировать
+		// каждый контакт молчаливым «ждём отчёт».
+		if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
+			return
+		}
 		if d.Logger != nil {
 			d.Logger.Info("deploy on contact: attempts exhausted; waiting for report to confirm version before giving up",
 				"nickname", nickname, "target_version", st.Version, "attempts", st.Attempts)
 		}
 		return
 	}
-	enqueuePendingDeploy(d, uid, nickname, st.Version, base, now)
+	enqueuePendingDeployIfNoActive(d, uid, nickname, st.Version, base, now)
 }
 
-// enqueuePendingDeploy кладёт свежую команду обновления. Прежняя протухшая
-// команда того же действия вытесняется очередью сама (queue.go supersede).
-func enqueuePendingDeploy(d Deps, uid int64, nickname, target, base string, now time.Time) bool {
+// enqueuePendingDeployIfNoActive кладёт свежую команду обновления, только
+// если для пользователя ещё нет активной self_update. Предпочитает
+// атомарную проверку-и-постановку очереди (activeEnqueueChecker): у
+// production-очереди (cmd.Queue) HasActiveCommand и Enqueue раздельными
+// вызовами оставляли окно двойной выдачи (B1) -- досылка при пробуждении
+// (эта функция) и опрос/отчёт, вызывающие её почти одновременно для одного
+// и того же роутера, оба видели «не занято» и оба ставили команду. Без
+// такого метода у CommandSink (тестовые дублёры) поведение прежнее:
+// раздельные проверка и постановка -- тесты этот путь и покрывают.
+//
+// Прежняя протухшая команда того же действия вытесняется очередью сама
+// (queue.go supersede) в обоих путях.
+func enqueuePendingDeployIfNoActive(d Deps, uid int64, nickname, target, base string, now time.Time) bool {
 	id, err := newCmdID()
 	if err != nil {
 		if d.Logger != nil {
@@ -106,6 +126,27 @@ func enqueuePendingDeploy(d Deps, uid int64, nickname, target, base string, now 
 		return false
 	}
 	cmd := buildSelfUpdateCommand(id, target, base, d.PublicIP, now)
+	if enq, ok := d.CommandSink.(activeEnqueueChecker); ok {
+		queued, err := enq.EnqueueIfNoActive(uid, cmd)
+		if err != nil {
+			if d.Logger != nil {
+				d.Logger.Warn("deploy on contact: enqueue failed",
+					"nickname", nickname, "target_version", target, "err", err)
+			}
+			return false
+		}
+		if !queued {
+			return false
+		}
+		if d.Logger != nil {
+			d.Logger.Info("deploy on contact: re-queued self_update",
+				"nickname", nickname, "user_id", uid, "target_version", target, "cmd_id", id)
+		}
+		return true
+	}
+	if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
+		return false
+	}
 	if err := d.CommandSink.Enqueue(uid, cmd); err != nil {
 		if d.Logger != nil {
 			d.Logger.Warn("deploy on contact: enqueue failed",
