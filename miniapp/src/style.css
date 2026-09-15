@@ -2376,3 +2376,41 @@ body {
 .dot-warn {
   background: var(--warn);
 }
+
+/* ============================================================
+   «Парк»: строка роутера с обновлением агента
+   ============================================================ */
+
+/* Строки парка разделены линией: под строкой данных живут версии, состояние
+   обновления и кнопки, и без разделителя они прилипают к соседнему роутеру. */
+.park-row + .park-row {
+  border-top: 1px solid var(--border);
+}
+
+/* Состояние обновления говорится словом; тон -- подсказка, а не смысл. */
+.park-update {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+.park-update-warn {
+  color: var(--warn);
+}
+
+.park-update-danger {
+  color: var(--danger);
+}
+
+.park-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0;
+}
+
+.park-result {
+  margin-top: var(--sp-2);
+}
