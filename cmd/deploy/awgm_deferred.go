@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/awgmstate"
 	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
@@ -150,40 +151,6 @@ type deferredAWGMStatusRow struct {
 	Path          string `json:"path"`
 }
 
-func classifyDeferredAWGMFailure(reason string) string {
-	s := strings.ToLower(strings.TrimSpace(reason))
-	switch {
-	case s == "":
-		return "pending"
-	case strings.Contains(s, "certificate is valid for") ||
-		strings.Contains(s, "x509:") ||
-		strings.Contains(s, "hostname") && strings.Contains(s, "certificate") ||
-		strings.Contains(s, "tls"):
-		return "tls_error"
-	case strings.Contains(s, "name or service not known") ||
-		strings.Contains(s, "no such host") ||
-		strings.Contains(s, "nxdomain") ||
-		strings.Contains(s, "temporary failure in name resolution"):
-		return "dns_error"
-	case strings.Contains(s, "http 401") ||
-		strings.Contains(s, "unauthorized") ||
-		strings.Contains(s, "http 403") ||
-		strings.Contains(s, "forbidden"):
-		return "auth_error"
-	case strings.Contains(s, "http 502") ||
-		strings.Contains(s, "http 503") ||
-		strings.Contains(s, "http 504") ||
-		strings.Contains(s, "service unavailable") ||
-		strings.Contains(s, "gateway timeout") ||
-		strings.Contains(s, "timeout") ||
-		strings.Contains(s, "connection refused") ||
-		strings.Contains(s, "connection reset"):
-		return "offline"
-	default:
-		return "pending"
-	}
-}
-
 func renderDeferredAWGMStatus(rows []deferredAWGMStatusRow) string {
 	if len(rows) == 0 {
 		return "no deferred AWGM jobs found"
@@ -228,7 +195,7 @@ func actionDeferredAWGMStatus(state *State, secrets *SecretStore) error {
 	}
 	for i := range rows {
 		if rows[i].State == "" || rows[i].State == "pending" {
-			rows[i].State = classifyDeferredAWGMFailure(rows[i].Reason)
+			rows[i].State = awgmstate.Classify(rows[i].Reason)
 		}
 	}
 	fmt.Println(renderDeferredAWGMStatus(rows))
