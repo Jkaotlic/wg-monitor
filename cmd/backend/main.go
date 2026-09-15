@@ -292,8 +292,7 @@ func main() {
 		TGNotifier:     notifier,
 		RoutesNotifier: routesNotifier,
 		// Тот же кэш, что у умного ответа бота: второй поход в GitHub сжёг бы лимит анонимного API.
-		Upstream:     upCache,
-		BulkNotifier: cb,
+		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
 		VPNCabinet:          cb,

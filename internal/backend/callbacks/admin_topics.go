@@ -37,9 +37,6 @@ func (r *Router) handleAdminCommand(ctx context.Context, m *tg.Message) bool {
 	case "/this_is":
 		r.adminThisIs(ctx, m, arg)
 		return true
-	case "/panel":
-		r.adminPanelOpen(ctx, m)
-		return true
 	case "/selfhosted":
 		r.adminSelfHostedAmnezia(ctx, m, arg)
 		return true
