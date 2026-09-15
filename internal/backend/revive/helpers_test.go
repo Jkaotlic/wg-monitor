@@ -6,8 +6,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -92,21 +96,28 @@ func (n *fakeNotifier) all() []sentNotice {
 	return append([]sentNotice(nil), n.sent...)
 }
 
-// scriptedProbe отдаёт состояния по очереди; последнее повторяется.
+// scriptedProbe отдаёт состояния по очереди (последнее повторяется) или, если
+// задан delegate, зовёт настоящий Prober -- так тесты воркера ходят в
+// httptest-панель.
 type scriptedProbe struct {
-	mu     sync.Mutex
-	states []string
-	calls  int
+	mu       sync.Mutex
+	states   []string
+	calls    int
+	delegate func(ctx context.Context, awgmURL string) string
 }
 
-func (p *scriptedProbe) Probe(context.Context, string) string {
+func (p *scriptedProbe) Probe(ctx context.Context, awgmURL string) string {
 	p.mu.Lock()
+	p.calls++
+	if d := p.delegate; d != nil {
+		p.mu.Unlock()
+		return d(ctx, awgmURL)
+	}
 	defer p.mu.Unlock()
-	i := p.calls
+	i := p.calls - 1
 	if i >= len(p.states) {
 		i = len(p.states) - 1
 	}
-	p.calls++
 	return p.states[i]
 }
 
@@ -278,4 +289,90 @@ func rawDBFiles(t *testing.T, d *db.DB) []byte {
 		out = append(out, b...)
 	}
 	return out
+}
+
+// testPanel -- панель роутера на httptest: отвечает кодами по очереди,
+// последний повторяется; запоминает заголовок авторизации каждого обращения.
+type testPanel struct {
+	mu    sync.Mutex
+	codes []int
+	auths []string
+}
+
+func (p *testPanel) hits() int { p.mu.Lock(); defer p.mu.Unlock(); return len(p.auths) }
+
+func (p *testPanel) authHeaders() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.auths...)
+}
+
+// panel поднимает httptest-панель, прописывает её адрес роутеру и включает
+// настоящий Prober вместо сценария.
+func (e *testEnv) panel(t *testing.T, codes ...int) *testPanel {
+	t.Helper()
+	p := &testPanel{codes: codes}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p.mu.Lock()
+		i := len(p.auths)
+		if i >= len(p.codes) {
+			i = len(p.codes) - 1
+		}
+		code := p.codes[i]
+		p.auths = append(p.auths, r.Header.Get("Authorization"))
+		p.mu.Unlock()
+		w.WriteHeader(code)
+	}))
+	t.Cleanup(srv.Close)
+	if _, err := e.db.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, srv.URL, e.router); err != nil {
+		t.Fatal(err)
+	}
+	prober := NewProber(time.Second)
+	e.probe.mu.Lock()
+	e.probe.delegate = prober.Probe
+	e.probe.mu.Unlock()
+	return p
+}
+
+// seedWaiting кладёт ожидающее намерение с секретами фикстуры в обход
+// Schedule (без фоновой проверки после постановки).
+func (e *testEnv) seedWaiting(t *testing.T) {
+	t.Helper()
+	box, err := NewBox(e.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, ct, err := box.Seal(e.router, fixtureSecrets())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := e.clock.Now()
+	if err := e.db.Revive().Put(db.ReviveIntent{
+		RouterID: e.router, CreatedAt: now, ExpiresAt: now.Add(30 * 24 * time.Hour), RequestedBy: 42,
+	}, nonce, ct); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// tick -- обход воркера и шаг часов на период опроса.
+func (e *testEnv) tick(t *testing.T) {
+	t.Helper()
+	e.svc.Tick(context.Background())
+	e.clock.Advance(DefaultProbeEvery)
+}
+
+var latinOutsideQuotes = regexp.MustCompile(`[A-Za-z]`)
+
+// assertOwnerText: вне «ёлочек» латиницы нет, внутренних имён нет.
+func assertOwnerText(t *testing.T, text string) {
+	t.Helper()
+	stripped := regexp.MustCompile(`«[^»]*»`).ReplaceAllString(text, "")
+	if latinOutsideQuotes.MatchString(stripped) {
+		t.Fatalf("латиница вне «ёлочек»: %q", text)
+	}
+	for _, bad := range []string{"awg", "relay", "backend", "heartbeat", "терминал"} {
+		if strings.Contains(strings.ToLower(text), bad) {
+			t.Fatalf("внутреннее имя %q в тексте: %q", bad, text)
+		}
+	}
 }
