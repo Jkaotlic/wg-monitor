@@ -282,6 +282,7 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 	if err != nil || got == nil {
 		return Intent{}, errors.Join(errors.New("revive: намерение не прочиталось"), err)
 	}
+	s.confirmSoon(routerID)
 	return *got, nil
 }
 
