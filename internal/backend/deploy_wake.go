@@ -36,7 +36,8 @@ func buildSelfUpdateCommand(id, target, publicBaseURL, publicIP string, now time
 }
 
 // ensurePendingDeployQueued -- досылка назначенного обновления, когда роутер
-// вышел на связь: перед выдачей команд в GET /v1/cmd и на отчёте.
+// вышел на связь: перед выдачей команд в GET /v1/cmd и на отчёте (в ветке
+// requeue, когда версия агента ещё не совпала с целью).
 //
 // Зачем перед выдачей: включившийся агент первым делом опрашивает команды и
 // только потом отчитывается (cmd/agent/main.go:132 против :141). Досылка
@@ -46,6 +47,13 @@ func buildSelfUpdateCommand(id, target, publicBaseURL, publicIP string, now time
 // она: пока стоит pending_version, каждый контакт без активной команды --
 // новая попытка. Двойную выдачу исключает HasActiveCommand: активной
 // считается и непротухшая в очереди, и выданная, пока не отжила свой TTL.
+//
+// Сдачу (give-up) эта функция НЕ решает: при исчерпанных попытках она просто
+// не досылает. Опрос вызывает её раньше первого отчёта и не знает версию
+// агента -- объявить «не ставится» здесь было бы преждевременно и давало бы
+// ложную тревогу для роутера, который на самом деле уже обновился, но ещё не
+// отчитался (review Important #1). Решение о сдаче -- только в handler.go на
+// отчёте, после того как версия агента доказана (giveUpIfExhausted).
 func ensurePendingDeployQueued(d Deps, uid int64, nickname string, now time.Time) {
 	base := strings.TrimRight(strings.TrimSpace(d.PublicBaseURL), "/")
 	if d.DB == nil || d.CommandSink == nil || base == "" {
@@ -76,11 +84,12 @@ func ensurePendingDeployQueued(d Deps, uid int64, nickname string, now time.Time
 		return
 	}
 	if st.Attempts >= pendingDeployMaxAttempts {
-		reason := lostAttemptsText(st.Attempts)
-		if strings.TrimSpace(st.LastError) != "" {
-			reason = deployFailureText(st.LastError)
+		// Не сдаёмся здесь -- см. комментарий над функцией. Просто не
+		// досылаем; решение примет отчёт, когда докажет версию.
+		if d.Logger != nil {
+			d.Logger.Info("deploy on contact: attempts exhausted; waiting for report to confirm version before giving up",
+				"nickname", nickname, "target_version", st.Version, "attempts", st.Attempts)
 		}
-		giveUpPendingDeploy(d, uid, nickname, st.Version, reason)
 		return
 	}
 	enqueuePendingDeploy(d, uid, nickname, st.Version, base, now)

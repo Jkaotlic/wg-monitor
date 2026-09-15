@@ -278,8 +278,10 @@ func TestFailingUpdateRetriesThenGivesUpOnThird(t *testing.T) {
 }
 
 // Три выдачи без итога (агент ушёл в перезагрузку, ответ потерян): четвёртый
-// контакт не ставит команду, а сдаётся с понятной причиной.
-func TestLostUpdateResultsGiveUpOnNextContact(t *testing.T) {
+// ОПРОС не сдаётся сам -- он не знает версию агента (review Important #1).
+// Сдача с понятной причиной происходит только на отчёте, когда версия
+// доказана и всё ещё не совпадает с целью.
+func TestLostUpdateResultsGiveUpOnlyAfterReportConfirmsOldVersion(t *testing.T) {
 	s := seedSleptRouter(t, "f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f600f6f6")
 	dn := s.withDeployNotifier()
 
@@ -288,10 +290,19 @@ func TestLostUpdateResultsGiveUpOnNextContact(t *testing.T) {
 		s.q.Sweep(time.Nanosecond)
 	}
 	if rec := s.poll(t); rec.Code != http.StatusNoContent {
-		t.Fatalf("четвёртая выдача: код %d, ждали отказ от попыток", rec.Code)
+		t.Fatalf("четвёртый опрос: код %d, ждали отказ от досылки", rec.Code)
 	}
+	if calls := dn.snapshot(); len(calls) != 0 {
+		t.Fatalf("опрос сдался сам, хотя версия агента ещё не доказана: %+v", calls)
+	}
+	if got := s.pendingVersion(t); got != sleptTarget {
+		t.Fatalf("опрос снял отметку: %q, ждали %q", got, sleptTarget)
+	}
+
+	s.report(t, "v0.31.0") // агент так и не обновился
+
 	if got := s.pendingVersion(t); got != "" {
-		t.Fatalf("отметка осталась после исчерпания попыток: %q", got)
+		t.Fatalf("отметка осталась после отчёта со старой версией: %q", got)
 	}
 	calls := waitDeployCalls(dn, 1)
 	if len(calls) != 1 || !strings.Contains(calls[0].output, "версия не сменилась") {
@@ -312,5 +323,111 @@ func TestContactDropsDeployIntentOlderThan90Days(t *testing.T) {
 	}
 	if got := s.pendingVersion(t); got != "" {
 		t.Fatalf("просроченная отметка осталась: %q", got)
+	}
+}
+
+// Опрос никогда не сдаётся сам: он не знает версию агента и не вправе
+// объявлять «не ставится» раньше первого отчёта. Иначе роутер, который
+// включился после рестарта бэкенда (очередь пуста) или после получасового
+// окна активной команды и уже стоит на цели, получает ложную тревогу
+// (review Important #1: deploy_wake.go:78).
+func TestPollWithExhaustedAttemptsNeverGivesUp(t *testing.T) {
+	s := seedSleptRouter(t, "07070707070707070707070707070707070707070707070707070707070707")
+	dn := s.withDeployNotifier()
+	for i := 0; i < pendingDeployMaxAttempts; i++ {
+		if _, _, err := s.d.Users().IncrementPendingAttempts(s.uid, sleptTarget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.d.Users().RecordPendingDeployError(s.uid, sleptTarget, "download checksums.txt: HTTP 502"); err != nil {
+		t.Fatal(err)
+	}
+
+	if rec := s.poll(t); rec.Code != http.StatusNoContent {
+		t.Fatalf("опрос с исчерпанными попытками выдал команду: код %d", rec.Code)
+	}
+	if calls := dn.snapshot(); len(calls) != 0 {
+		t.Fatalf("опрос сдался сам, хотя версия агента ещё не доказана: %+v", calls)
+	}
+	if got := s.pendingVersion(t); got != sleptTarget {
+		t.Fatalf("опрос снял отметку: %q, ждали %q", got, sleptTarget)
+	}
+	st, err := s.d.Users().PendingDeploy(s.uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Attempts != pendingDeployMaxAttempts {
+		t.Fatalf("опрос изменил счёт попыток: %d", st.Attempts)
+	}
+}
+
+// Отчёт видит версию агента и вправе решить: цель не подтвердилась и попытки
+// исчерпаны -- сдаёмся и пишем людям. Это то же самое место, где раньше
+// решал опрос, но теперь -- после доказанной версии.
+func TestReportWithOldVersionAndExhaustedAttemptsGivesUp(t *testing.T) {
+	s := seedSleptRouter(t, "08080808080808080808080808080808080808080808080808080808080808")
+	dn := s.withDeployNotifier()
+	for i := 0; i < pendingDeployMaxAttempts; i++ {
+		if _, _, err := s.d.Users().IncrementPendingAttempts(s.uid, sleptTarget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.d.Users().RecordPendingDeployError(s.uid, sleptTarget, "download checksums.txt: HTTP 502"); err != nil {
+		t.Fatal(err)
+	}
+
+	s.report(t, "v0.31.0") // старая версия -- цель не подтвердилась
+
+	if got := s.pendingVersion(t); got != "" {
+		t.Fatalf("после сдачи отметка осталась: %q", got)
+	}
+	calls := waitDeployCalls(dn, 1)
+	if len(calls) != 1 {
+		t.Fatalf("ждали одно уведомление о сдаче, получили %d", len(calls))
+	}
+	if calls[0].target != sleptTarget || calls[0].output != "роутер не смог скачать обновление" {
+		t.Fatalf("уведомление: %+v", calls[0])
+	}
+	st, err := s.d.Users().PendingDeploy(s.uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Attempts != pendingDeployMaxAttempts || !strings.Contains(st.LastError, "HTTP 502") {
+		t.Fatalf("причина обязана остаться для экрана «Парк»: %+v", st)
+	}
+}
+
+// Поздний отчёт с целевой версией после сдачи обязан стереть счёт попыток и
+// причину неудачи: иначе экран «Парк» вечно показывает «не ставится» для
+// роутера, который на самом деле уже обновился, просто отчитался с задержкой
+// (review Important #1, доп. требование контролёра).
+func TestReportConfirmingTargetAfterGiveUpClearsAttempts(t *testing.T) {
+	s := seedSleptRouter(t, "09090909090909090909090909090909090909090909090909090909090909")
+	dn := s.withDeployNotifier()
+	for i := 0; i < pendingDeployMaxAttempts; i++ {
+		if _, _, err := s.d.Users().IncrementPendingAttempts(s.uid, sleptTarget); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := s.d.Users().RecordPendingDeployError(s.uid, sleptTarget, "download checksums.txt: HTTP 502"); err != nil {
+		t.Fatal(err)
+	}
+	s.report(t, "v0.31.0")
+	waitDeployCalls(dn, 1)
+	if got := s.pendingVersion(t); got != "" {
+		t.Fatalf("отметка обязана быть снята после сдачи: %q", got)
+	}
+
+	s.report(t, sleptTarget) // роутер всё же доехал до цели, просто поздно
+
+	st, err := s.d.Users().PendingDeploy(s.uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Attempts != 0 || st.LastError != "" {
+		t.Fatalf("поздняя версия обязана стереть счёт и причину: %+v", st)
+	}
+	if calls := dn.snapshot(); len(calls) != 1 {
+		t.Fatalf("поздняя версия не должна слать второе уведомление: %+v", calls)
 	}
 }

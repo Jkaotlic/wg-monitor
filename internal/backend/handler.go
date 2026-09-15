@@ -1013,9 +1013,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 				})
 			} else if update.PendingTarget != "" {
-				// Роутер на связи, а назначенное обновление всё ещё не
-				// доехало -- команда протухла, пока он спал или был выключен.
-				ensurePendingDeployQueued(d, uid, nick, time.Now().UTC())
+				// Роутер на связи, версия агента уже доказана отчётом, а
+				// назначенное обновление всё ещё не доехало. Здесь и только
+				// здесь решается сдача: опрос версии не видит и права
+				// объявлять «не ставится» не имеет (review Important #1) --
+				// иначе только что обновившийся роутер получал бы ложную
+				// тревогу, если первый опрос пришёл раньше первого отчёта.
+				if !giveUpIfExhausted(d, uid, nick) {
+					ensurePendingDeployQueued(d, uid, nick, time.Now().UTC())
+				}
 			}
 		}
 		if d.PublicBaseURL != "" {

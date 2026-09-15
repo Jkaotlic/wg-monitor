@@ -764,11 +764,17 @@ func (u *UsersRepo) UpdateLastSeenAgentVersionResult(id int64, version string) (
 		}
 		return AgentVersionUpdate{}, fmt.Errorf("users.UpdateLastSeenAgentVersionResult select: %w", err)
 	}
+	// pending_attempts/pending_last_error сбрасываются и когда pending_version
+	// уже NULL: так бывает после сдачи (giveUpPendingDeploy снимает только
+	// саму отметку, счёт и причину оставляет для экрана «Парк»). Если агент
+	// позже всё-таки доехал до какой-то версии -- прошлый раунд неудач уже не
+	// про текущее состояние, и держать его вечно значит врать про роутер,
+	// который на самом деле обновился.
 	res, err := u.d.db.Exec(
 		`UPDATE users
 		    SET last_deployed_version = ?,
-		        pending_attempts = CASE WHEN pending_version = ? THEN 0 ELSE pending_attempts END,
-		        pending_last_error = CASE WHEN pending_version = ? THEN NULL ELSE pending_last_error END,
+		        pending_attempts = CASE WHEN pending_version = ? OR pending_version IS NULL THEN 0 ELSE pending_attempts END,
+		        pending_last_error = CASE WHEN pending_version = ? OR pending_version IS NULL THEN NULL ELSE pending_last_error END,
 		        pending_since = CASE WHEN pending_version = ? THEN NULL ELSE pending_since END,
 		        pending_version = CASE WHEN pending_version = ? THEN NULL ELSE pending_version END
 		  WHERE id = ?

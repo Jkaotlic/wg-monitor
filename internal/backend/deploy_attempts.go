@@ -110,6 +110,35 @@ func recordPendingDeployFailure(d Deps, uid int64, nickname, target, output stri
 	giveUpPendingDeploy(d, uid, nickname, target, deployFailureText(output))
 }
 
+// giveUpIfExhausted сдаётся, если попытки назначенного обновления уже
+// исчерпаны, и сообщает, сдался ли. Решение принимается только здесь --
+// на отчёте (handler.go), после того как версия агента доказана. Опрос
+// (deploy_wake.go) версии не знает и права объявлять «не ставится» не имеет:
+// иначе роутер, включившийся раньше своего первого отчёта, получал бы
+// ложную тревогу, даже если на самом деле уже стоит на цели (review
+// Important #1).
+func giveUpIfExhausted(d Deps, uid int64, nickname string) bool {
+	if d.DB == nil {
+		return false
+	}
+	st, err := d.DB.Users().PendingDeploy(uid)
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("deploy give-up check: read pending failed", "nickname", nickname, "err", err)
+		}
+		return false
+	}
+	if st.Version == "" || st.Attempts < pendingDeployMaxAttempts {
+		return false
+	}
+	reason := lostAttemptsText(st.Attempts)
+	if strings.TrimSpace(st.LastError) != "" {
+		reason = deployFailureText(st.LastError)
+	}
+	giveUpPendingDeploy(d, uid, nickname, st.Version, reason)
+	return true
+}
+
 // giveUpPendingDeploy снимает отметку, когда обновление заведомо не ставится,
 // и пишет людям роутера. Счёт попыток и сырую причину оставляет: экран «Парк»
 // показывает «не ставится: …», пока админ не назначит заново или не отменит.
