@@ -182,6 +182,10 @@ type testEnv struct {
 	probe    *scriptedProbe
 	logs     *syncBuffer
 	key      []byte
+	// panelURL -- адрес httptest-панели (http://127.0.0.1:...). Проверка
+	// безопасности адреса перед запуском пропускает РОВНО его: иначе тесты
+	// воркера с настоящим Prober не дошли бы до запуска.
+	panelURL string
 }
 
 func randomKey(t *testing.T) []byte {
@@ -236,7 +240,18 @@ func (e *testEnv) newService(t *testing.T, key []byte) *Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(svc.Wait)
+	e.allowTestPanel(svc)
 	return svc
+}
+
+func (e *testEnv) allowTestPanel(svc *Service) {
+	if e.panelURL == "" {
+		return
+	}
+	allowed := e.panelURL
+	svc.panelURLSafe = func(raw string) bool {
+		return raw == allowed || panelURLSafe(raw)
+	}
 }
 
 func (e *testEnv) setLastSeen(t *testing.T, ts time.Time) {
@@ -355,6 +370,8 @@ func (e *testEnv) panel(t *testing.T, codes ...int) *testPanel {
 	if _, err := e.db.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, srv.URL, e.router); err != nil {
 		t.Fatal(err)
 	}
+	e.panelURL = srv.URL
+	e.allowTestPanel(e.svc)
 	prober := NewProber(time.Second)
 	e.probe.mu.Lock()
 	e.probe.delegate = prober.Probe

@@ -213,6 +213,23 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 
 	running := []string{StatusRunning}
 
+	// verify-done 15.09 (решение координатора): адрес панели проверяется
+	// здесь, перед расшифровкой и запуском, на СВЕЖЕЙ строке роутера --
+	// постановка проверяет только адрес, введённый в мини-аппе, а записанный
+	// раньше дашбордом может быть http или локальным IP. Туда пароль root не
+	// уходит: запуска нет, намерение закрывается, секрет стирается.
+	u, err := s.cfg.DB.Users().GetByID(in.RouterID)
+	if err != nil {
+		s.logger.Warn("оживление: роутер не перечитан перед запуском", "router_id", in.RouterID, "err", err)
+		s.attemptFailed(ctx, in.RouterID, nick, attempts, reasonLaunchFailed, false, in.Generation)
+		return
+	}
+	if !s.panelURLSafe(strings.TrimSpace(derefString(u.AWGMURL))) {
+		s.logger.Warn("оживление: адрес панели небезопасен, запуск отменён", "router_id", in.RouterID)
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonUnsafeAWGMURL, noticeFailed(nick, reasonUnsafeAWGMURL), in.Generation)
+		return
+	}
+
 	nonce, ct, found, err := s.cfg.DB.Revive().Secret(in.RouterID)
 	if err != nil {
 		s.logger.Warn("оживление: секрет не прочитан из базы", "router_id", in.RouterID, "err", err)

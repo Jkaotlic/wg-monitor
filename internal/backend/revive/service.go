@@ -149,6 +149,11 @@ type Service struct {
 	// Schedule.
 	testBeforePut func()
 
+	// panelURLSafe -- можно ли слать учётные данные на записанный адрес панели
+	// (verify-done 15.09). По умолчанию -- та же проверка, что при постановке;
+	// тесты пакета пропускают свою httptest-панель.
+	panelURLSafe func(raw string) bool
+
 	// testAfterMarkRunning, если задан, зовётся в launch сразу после
 	// успешного MarkRunning, до чтения секрета -- нужен только тесту порядка
 	// "расшифровка строго после MarkRunning" (fix round 2, Minor #3): без
@@ -226,7 +231,7 @@ func New(cfg Config) (*Service, error) {
 	if logger == nil {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &Service{cfg: cfg, box: box, logger: logger, jobs: map[int64]jobEntry{}}, nil
+	return &Service{cfg: cfg, box: box, logger: logger, jobs: map[int64]jobEntry{}, panelURLSafe: panelURLSafe}, nil
 }
 
 func (s *Service) Enabled() bool { return s != nil && s.box != nil }
@@ -465,6 +470,14 @@ func (s *Service) forgetJob(routerID int64) {
 	s.jobsMu.Lock()
 	delete(s.jobs, routerID)
 	s.jobsMu.Unlock()
+}
+
+// panelURLSafe -- адрес панели проходит проверку постановки (https, внешнее
+// имя). Воркер зовёт её перед запуском на адресе, записанном КЕМ УГОДНО,
+// в том числе дашбордом до этого цикла.
+func panelURLSafe(raw string) bool {
+	_, ok := normalizeAWGMURL(raw)
+	return ok
 }
 
 // NormalizePanelURL -- та же проверка для песочницы мини-аппа: её фейковый

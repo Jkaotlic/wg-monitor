@@ -986,3 +986,42 @@ func TestBackToWaiting_DBWriteFailureAfterLaunchRecoversNextTick(t *testing.T) {
 		t.Fatalf("после следующего обхода намерение обязано восстановиться: %+v", in)
 	}
 }
+
+// verify-done 15.09 (решение координатора): проверка адреса при постановке
+// не видит адреса, записанного раньше через дашборд. Небезопасный записанный
+// адрес (http, локальный IP) -- запуска нет: пароль root туда не уходит.
+// Намерение закрывается неудачей с понятной причиной, секрет стирается,
+// человеку приходит уведомление. Опрос без учётных данных разрешён.
+func TestTick_UnsafeStoredPanelURLNeverLaunches(t *testing.T) {
+	for _, stored := range []string{"http://192.168.31.1:2222", "https://192.168.31.1", "http://awg.example.com"} {
+		t.Run(stored, func(t *testing.T) {
+			env := newEnv(t)
+			if _, err := env.db.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, stored, env.router); err != nil {
+				t.Fatal(err)
+			}
+			env.probe.script(awgmstate.Reachable)
+			env.seedWaiting(t)
+			for i := 0; i < 4; i++ {
+				env.tick(t)
+			}
+			if calls := env.engine.calls(); len(calls) != 0 {
+				t.Fatalf("запуск по небезопасному адресу: %d", len(calls))
+			}
+			in := env.intent(t)
+			if in == nil || in.Status != StatusFailed || in.LastError != reasonUnsafeAWGMURL {
+				t.Fatalf("намерение: %+v", in)
+			}
+			if env.hasSecret(t) {
+				t.Fatal("секрет не стёрт")
+			}
+			n := env.notifier.all()
+			if len(n) != 1 || !strings.Contains(n[0].Text, reasonUnsafeAWGMURL) {
+				t.Fatalf("уведомления: %+v", n)
+			}
+			if v, _ := env.svc.StatusFor(env.router); v.LastErrorText != "адрес панели небезопасный (нужен https и внешнее имя) — поменяйте его в веб-дашборде и поставьте оживление заново" {
+				t.Fatalf("текст для экрана: %q", v.LastErrorText)
+			}
+			assertNoFixtureSecret(t, "журнал", env.logs.Bytes())
+		})
+	}
+}
