@@ -269,23 +269,46 @@ describe('итог словами', () => {
   // Fix round 1, Minor #3 (review-minors-miniapp.md): пока пачка идёт, строка
   // хода считала только реальные ответы (ok/problems/unparsed) -- если часть
   // уже завершившихся роутеров молчала или отказала, число застывало ниже
-  // фактического хода пула и выглядело так, будто пачка зависла. Теперь счёт
-  // -- все завершённые (ответили + не ответили + отказали), теми же
-  // подсчётами, что и итог (answeredCount), просто суммированными.
-  it('ход -- «ответили N из M…», считает ЗАВЕРШИВШИХСЯ (ответы + таймауты + отказы), не только ответы', () => {
+  // фактического хода пула и выглядело так, будто пачка зависла. Fix round 1
+  // склеил его со «сколько уже завершилось» под тем же словом «Ответили» --
+  // а это уже враньё в другую сторону (независимая проверка): «Ответили 6 из
+  // 6» при 3 реальных ответах и 3 таймаутах. Теперь «Готово N» -- общий ход
+  // (что двигает счётчик, не выглядит зависшим), а «ответили»/«молчат»/
+  // «отказ» -- отдельные слова с их собственными, не смешанными числами;
+  // «ответили» -- дословно то же число, что «Проверено»/«ответили» в итоге.
+  it('ход -- «Готово N из M: ответили A, молчат T, отказ E…», «ответили» -- то же число, что и в итоге', () => {
     const running = (results) => ({ kind: 'doctor', total: 6, running: true, skipped: [], results })
-    expect(batchProgressLine(running([{ id: 1, nickname: 'a', outcome: 'ok' }]))).toBe('Ответил 1 из 6…')
+    const results = [
+      { id: 1, nickname: 'a', outcome: 'ok' },
+      { id: 2, nickname: 'b', outcome: 'problems', problems: { fails: 1, warns: 0 } },
+      { id: 3, nickname: 'c', outcome: 'unparsed' },
+      { id: 4, nickname: 'd', outcome: 'no_answer' },
+      { id: 5, nickname: 'e', outcome: 'no_answer' },
+      { id: 6, nickname: 'f', outcome: 'failed' },
+    ]
+    const progress = batchProgressLine(running(results))
+    const summary = batchSummary({ ...running(results), running: false })
+    expect(progress).toBe('Готово 6 из 6: ответили 3, молчат 2, отказ 1…')
+    expect(summary.headline).toBe('Проверено 3 из 6, проблемы у 1.')
+    // «ответили» -- буквально то же число, что «Проверено» в итоге, не два
+    // разных счёта под похожими словами.
+    expect(Number(progress.match(/ответили (\d+)/)[1])).toBe(Number(summary.headline.match(/Проверено (\d+)/)[1]))
+  })
+
+  it('ход: нулевые части опускаются -- только реальные ответы, только таймауты, только отказы', () => {
+    const running = (results) => ({ kind: 'doctor', total: 6, running: true, skipped: [], results })
+    expect(batchProgressLine(running([{ id: 1, nickname: 'a', outcome: 'ok' }]))).toBe('Готово 1 из 6: ответил 1…')
     expect(
       batchProgressLine(
         running([
-          { id: 1, nickname: 'a', outcome: 'ok' },
-          { id: 2, nickname: 'b', outcome: 'problems', problems: { fails: 1, warns: 0 } },
+          { id: 1, nickname: 'a', outcome: 'no_answer' },
+          { id: 2, nickname: 'b', outcome: 'no_answer' },
           { id: 3, nickname: 'c', outcome: 'no_answer' },
-          { id: 4, nickname: 'd', outcome: 'failed' },
         ]),
       ),
-    ).toBe('Ответили 4 из 6…')
-    expect(batchProgressLine(running([]))).toBe('Ответили 0 из 6…')
+    ).toBe('Готово 3 из 6: молчат 3…')
+    expect(batchProgressLine(running([{ id: 1, nickname: 'a', outcome: 'failed' }]))).toBe('Готово 1 из 6: отказ 1…')
+    expect(batchProgressLine(running([]))).toBe('Готово 0 из 6…')
     expect(batchProgressLine(null)).toBe('')
     expect(batchProgressLine({ ...running([{ id: 1, nickname: 'a', outcome: 'ok' }]), running: false })).toBe('')
   })

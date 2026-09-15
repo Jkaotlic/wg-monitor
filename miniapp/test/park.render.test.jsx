@@ -408,7 +408,7 @@ describe('«Парк»: массовые проверки', () => {
     await act(async () => buttons(root, 'Проверить все')[0].click())
     expect(buttons(root, 'Проверяем…')[0].disabled).toBe(true)
     expect(buttons(root, 'Аудит всех')[0].disabled).toBe(true)
-    expect(root.textContent).toContain('Ответили 0 из 1…')
+    expect(root.textContent).toContain('Готово 0 из 1…')
     cleanup(root)
   })
 

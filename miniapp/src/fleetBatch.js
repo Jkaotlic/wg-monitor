@@ -155,16 +155,25 @@ function errorCount(results) {
   return results.filter((r) => r.outcome === 'failed').length
 }
 
-// Пока пачка идёт, «сколько ответили» должно расти вместе с ходом пула --
-// иначе, пока часть уже завершившихся роутеров молчала или отказала, число
-// застывает ниже фактического хода, и человеку кажется, что пачка зависла
-// (review-minors-miniapp.md Minor #3). Считаем теми же исходами, что и итог
-// (answeredCount + таймауты + отказы), просто суммируя все, кто уже завершён.
+// F1(d) дословно: прогресс и итог называют «ответили» ОДНИМ И ТЕМ ЖЕ числом
+// (реальные ответы -- answeredCount, как в batchSummary), а таймауты и
+// отказы -- отдельными словами, а не растворены в «ответили». «Готово N из
+// M» -- общий ход (число двигается вместе с пулом, не выглядит зависшим:
+// review-minors-miniapp.md Minor #3), а «ответили»/«молчат»/«отказ» --
+// подробность через двоеточие, нулевые части опускаются.
 export function batchProgressLine(state) {
   if (!state || !state.running) return ''
   const results = state.results ?? []
-  const finished = answeredCount(results) + timeoutCount(results) + errorCount(results)
-  return `${pluralRu(finished, 'Ответил', 'Ответили', 'Ответили')} ${finished} из ${state.total}…`
+  const answered = answeredCount(results)
+  const timeouts = timeoutCount(results)
+  const errors = errorCount(results)
+  const finished = answered + timeouts + errors
+  const parts = []
+  if (answered) parts.push(`${pluralRu(answered, 'ответил', 'ответили', 'ответили')} ${answered}`)
+  if (timeouts) parts.push(`${pluralRu(timeouts, 'молчит', 'молчат', 'молчат')} ${timeouts}`)
+  if (errors) parts.push(`${pluralRu(errors, 'отказ', 'отказа', 'отказов')} ${errors}`)
+  const detail = parts.length ? `: ${parts.join(', ')}` : ''
+  return `Готово ${finished} из ${state.total}${detail}…`
 }
 
 function doctorCounts({ fails, warns }) {
