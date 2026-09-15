@@ -45,6 +45,7 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	// Обновление агента -- только админу, гейт внутри (404 не-админу).
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/update", reqID(auth(miniappAgentUpdateHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/update/cancel", reqID(auth(miniappAgentUpdateCancelHandler(d))))
+	mux.Handle("POST /v1/miniapp/fleet/agent/update", reqID(auth(miniappFleetAgentUpdateHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))

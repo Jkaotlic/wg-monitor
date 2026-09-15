@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -186,5 +187,154 @@ func TestMiniappAgentUpdateCancel(t *testing.T) {
 	}
 	if st, _ := d.Users().PendingDeploy(ownedID); st.Version != "" {
 		t.Fatalf("отметка осталась: %+v", st)
+	}
+}
+
+func fleetUpdate(t *testing.T, h http.Handler, body string, tg int64) *httptest.ResponseRecorder {
+	t.Helper()
+	return postMiniappJSON(t, h, "/v1/miniapp/fleet/agent/update", body, tg)
+}
+
+func TestMiniappFleetAgentUpdateHiddenFromNonAdmin(t *testing.T) {
+	_, _, h, sink := agentUpdateTestMux(t)
+	if rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 100); rec.Code != http.StatusNotFound {
+		t.Fatalf("владельцу: код %d, ждали 404", rec.Code)
+	}
+	if len(sink.snapshotEnqueued()) != 0 {
+		t.Fatal("не-админ поставил команды")
+	}
+}
+
+func TestMiniappFleetAgentUpdateNeedsConfirmWord(t *testing.T) {
+	_, _, h, sink := agentUpdateTestMux(t)
+	rec := fleetUpdate(t, h, `{"confirm":"обновит"}`, 999)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("код %d", rec.Code)
+	}
+	if code, errField, _ := decodeDeployError(t, rec); code != "confirm_mismatch" || errField != "confirm_mismatch" {
+		t.Fatalf("code=%q error=%q", code, errField)
+	}
+	if len(sink.snapshotEnqueued()) != 0 {
+		t.Fatal("без подтверждения поставлены команды")
+	}
+}
+
+func TestMiniappFleetAgentUpdateEmptyIsArray(t *testing.T) {
+	d, ownedID, h, _ := agentUpdateTestMux(t)
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.33.0"); err != nil {
+		t.Fatal(err)
+	}
+	rec := fleetUpdate(t, h, `{"confirm":" Обновить "}`, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"results":[]`) {
+		t.Fatalf("пустой итог обязан быть [], тело %s", rec.Body.String())
+	}
+}
+
+func TestMiniappFleetAgentUpdateOutcomes(t *testing.T) {
+	d, ownedID, h, sink := agentUpdateTestMux(t)
+	// router-owned: v0.31.0, ни разу не на связи -> отложено.
+	// router-other: версии нет -> в итоге не упоминается.
+	add := func(nick, tokChar, version string) int64 {
+		t.Helper()
+		id, err := d.Users().Insert(nick, strings.Repeat(tokChar, 64), "198.51.100.9", "awg0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if version != "" {
+			if err := d.Users().UpdateLastSeenAgentVersion(id, version); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return id
+	}
+	onlineID := add("router-online", "1", "v0.31.0")
+	if err := d.Users().UpdateLastSeen(onlineID); err != nil {
+		t.Fatal(err)
+	}
+	add("router-ancient", "2", "v0.13.0-rc4")
+	pendingID := add("router-pending", "3", "v0.31.0")
+	if err := d.Users().MarkPendingDeploy(pendingID, "v0.32.0", "2026-09-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	add("router-fresh", "4", "v0.33.0")
+
+	rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	var resp miniappFleetAgentUpdateResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]miniappFleetAgentUpdateResult{}
+	for _, r := range resp.Results {
+		got[r.Nickname] = r
+		for _, banned := range []string{"pending", "self_update"} {
+			if strings.Contains(r.ReasonText, banned) {
+				t.Errorf("%s: внутреннее имя в тексте %q", r.Nickname, r.ReasonText)
+			}
+		}
+	}
+	want := map[string][2]string{
+		"router-owned":   {"deferred", "router_asleep"},
+		"router-online":  {"queued", ""},
+		"router-ancient": {"skipped", "agent_too_old"},
+		"router-pending": {"skipped", "deploy_pending"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("в итоге %d роутеров, ждали %d: %+v", len(got), len(want), resp.Results)
+	}
+	for nick, w := range want {
+		r, ok := got[nick]
+		if !ok || r.Outcome != w[0] || r.ReasonCode != w[1] || r.ReasonText == "" {
+			t.Errorf("%s: %+v, ждали outcome=%s reason_code=%q", nick, r, w[0], w[1])
+		}
+	}
+	if got["router-owned"].RouterID != ownedID {
+		t.Errorf("router_id: %+v", got["router-owned"])
+	}
+	if n := len(sink.snapshotEnqueued()); n != 2 {
+		t.Fatalf("поставлено %d команд, ждали 2", n)
+	}
+}
+
+func TestMiniappFleetAgentUpdateReportsEnqueueError(t *testing.T) {
+	old := serverVersion
+	SetVersion("v0.33.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.31.0"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{
+		DB:                  d,
+		CommandSink:         failingEnqueueSink{err: errors.New("queue closed")},
+		TelegramBotToken:    "test-bot-token",
+		TelegramAdminUserID: 999,
+		PublicBaseURL:       "https://backend.example.com",
+	})
+	rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	var resp miniappFleetAgentUpdateResp
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Results) != 1 || resp.Results[0].Outcome != "error" || resp.Results[0].ReasonText == "" {
+		t.Fatalf("итог: %+v", resp.Results)
+	}
+}
+
+func TestMiniappFleetAgentUpdateWithoutReleaseVersion(t *testing.T) {
+	_, _, h, _ := agentUpdateTestMux(t)
+	SetVersion("unknown") // agentUpdateTestMux вернёт прежнюю в Cleanup
+	rec := fleetUpdate(t, h, `{"confirm":"обновить"}`, 999)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	if code, _, _ := decodeDeployError(t, rec); code != "no_release" {
+		t.Fatalf("code=%q", code)
 	}
 }

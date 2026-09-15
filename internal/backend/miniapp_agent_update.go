@@ -166,6 +166,107 @@ func miniappAgentUpdateHandler(d Deps) http.HandlerFunc {
 	}
 }
 
+// fleetAgentUpdateConfirm -- слово подтверждения массового обновления.
+const fleetAgentUpdateConfirm = "обновить"
+
+type miniappFleetAgentUpdateResult struct {
+	RouterID   int64  `json:"router_id"`
+	Nickname   string `json:"nickname"`
+	Outcome    string `json:"outcome"`
+	ReasonCode string `json:"reason_code"`
+	ReasonText string `json:"reason_text"`
+}
+
+type miniappFleetAgentUpdateResp struct {
+	Results []miniappFleetAgentUpdateResult `json:"results"`
+}
+
+// miniappFleetAgentUpdateHandler -- POST /v1/miniapp/fleet/agent/update.
+// Назначает обновление до версии бэкенда всем отставшим. Выключенный или
+// спящий роутер -- не ошибка: команда и отметка ждут его включения.
+func miniappFleetAgentUpdateHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		adminID, ok := miniappAdminOrNotFound(d, w, r)
+		if !ok {
+			return
+		}
+		var req struct {
+			Confirm string `json:"confirm"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, miniappAgentUpdateMaxBody)).Decode(&req); err != nil {
+			writeMiniappDeployError(w, http.StatusBadRequest, "bad_request", "Не удалось прочитать запрос.")
+			return
+		}
+		if normalizeConfirmPhrase(req.Confirm) != fleetAgentUpdateConfirm {
+			writeMiniappDeployError(w, http.StatusBadRequest, "confirm_mismatch", "Для подтверждения наберите «обновить».")
+			return
+		}
+		if d.DB == nil || d.CommandSink == nil {
+			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
+			return
+		}
+		if _, ok := parseDashboardReleaseTagRank(serverVersion); !ok {
+			writeMiniappDeployError(w, http.StatusConflict, deployErrNoRelease,
+				"Сервер собран без номера выпуска: обновлять агентов не до чего.")
+			return
+		}
+		opts, ok := miniappAgentDeployOpts(d, "miniapp-fleet")
+		if !ok {
+			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
+			return
+		}
+		users, err := d.DB.Users().GetAll()
+		if err != nil {
+			writeMiniappDeployError(w, http.StatusInternalServerError, errCodeInternal, miniappDeployErrorText(errCodeInternal))
+			return
+		}
+		now := time.Now().UTC()
+		resp := miniappFleetAgentUpdateResp{Results: []miniappFleetAgentUpdateResult{}}
+		counts := map[string]int{}
+		for i := range users {
+			u := &users[i]
+			verdict := agentUpdateVerdictFor(stringValue(u.LastDeployedVersion), serverVersion)
+			if !verdict.Behind {
+				continue
+			}
+			row := miniappFleetAgentUpdateResult{RouterID: u.ID, Nickname: u.Nickname}
+			switch {
+			case verdict.TooOld:
+				row.Outcome, row.ReasonCode = "skipped", "agent_too_old"
+			case strings.TrimSpace(stringValue(u.PendingVersion)) != "":
+				row.Outcome, row.ReasonCode = "skipped", deployErrPending
+			default:
+				if _, derr := agentDeployCore(d, u, serverVersion, opts); derr != nil {
+					if derr.Code == deployErrPending {
+						row.Outcome, row.ReasonCode = "skipped", deployErrPending
+					} else {
+						row.Outcome, row.ReasonCode = "error", derr.Code
+					}
+				} else if asleep, _, _ := miniappWakeWindow(d, u, "self_update", now); asleep {
+					row.Outcome, row.ReasonCode = "deferred", "router_asleep"
+					row.ReasonText = "Роутер не на связи: обновится, когда выйдет на связь."
+				} else {
+					row.Outcome = "queued"
+					row.ReasonText = "Обновление отправлено."
+				}
+			}
+			if row.ReasonText == "" {
+				row.ReasonText = miniappDeployErrorText(row.ReasonCode)
+			}
+			counts[row.Outcome]++
+			resp.Results = append(resp.Results, row)
+		}
+		if d.Logger != nil {
+			d.Logger.Info("miniapp fleet agent update",
+				"target_version", serverVersion, "by", adminID,
+				"queued", counts["queued"], "deferred", counts["deferred"],
+				"skipped", counts["skipped"], "error", counts["error"])
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(resp)
+	}
+}
+
 // miniappAgentUpdateCancelHandler -- POST /v1/miniapp/routers/{id}/agent/update/cancel.
 func miniappAgentUpdateCancelHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
