@@ -208,3 +208,67 @@ func TestMiniappFleetCarriesNotifyGaps(t *testing.T) {
 		t.Errorf("роутеры без адресатов = %v, want [router-orphan]", resp.Notify.RoutersWithoutRecipients)
 	}
 }
+
+// Экран «Парк» показывает, что с обновлением агента: сколько попыток, почему
+// не ставится, отстал ли агент и о чём предупредить. Причина -- по-русски,
+// сырой вывод агента в приложение не уезжает.
+func TestMiniappFleetCarriesAgentUpdateState(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	old := serverVersion
+	SetVersion("v0.33.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+
+	// router-owned: старый агент, обновление назначено, две попытки, мало места.
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.14.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(ownedID, "v0.33.0", "2026-09-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, _, err := d.Users().IncrementPendingAttempts(ownedID, "v0.33.0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := d.Users().RecordPendingDeployError(ownedID, "v0.33.0", "self_update: insufficient /opt space: 1200 KB free"); err != nil {
+		t.Fatal(err)
+	}
+	// router-other: уже на версии бэкенда, но в базе висит давняя причина.
+	if err := d.Users().UpdateLastSeenAgentVersion(otherID, "v0.33.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec(`UPDATE users SET pending_last_error = 'download: HTTP 502' WHERE id = ?`, otherID); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	body := rec.Body.String()
+	resp := fleetResponse(t, rec)
+	rows := map[int64]miniappFleetRouter{}
+	for _, r := range resp.Routers {
+		rows[r.ID] = r
+	}
+
+	owned := rows[ownedID]
+	if owned.PendingAttempts != 2 || !owned.AgentBehind ||
+		owned.PendingLastErrorText != "мало свободного места в разделе /opt" ||
+		!strings.Contains(owned.AgentUpdateWarning, "64 МБ") {
+		t.Errorf("router-owned: %+v", owned)
+	}
+	other := rows[otherID]
+	if other.AgentBehind || other.PendingLastErrorText != "" || other.AgentUpdateWarning != "" {
+		t.Errorf("router-other на версии бэкенда: %+v", other)
+	}
+	for _, raw := range []string{"insufficient", "HTTP 502", "self_update"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("в сводке парка сырой текст агента %q", raw)
+		}
+	}
+	for _, field := range []string{`"pending_attempts":0`, `"agent_behind":false`, `"pending_last_error_text":""`, `"agent_update_warning":""`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("форма строки непостоянна: нет %s в %s", field, body)
+		}
+	}
+}
