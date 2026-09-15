@@ -150,6 +150,16 @@ func TestSchedule_Errors(t *testing.T) {
 			env.clearAWGMURL(t)
 			req.AWGMURL = "ftp://awg.example.com"
 		}, ErrInvalidURL},
+		// Финальное ревью 15.09, I1: локальный адрес со стороны Pi ведёт в
+		// ЧУЖОЙ роутер (сетки совпадают), http -- пароль root открытым текстом.
+		{"http вместо https", func(t *testing.T, env *testEnv, req *ScheduleRequest) {
+			env.clearAWGMURL(t)
+			req.AWGMURL = "http://awg.example.com"
+		}, ErrInvalidURL},
+		{"локальный IP", func(t *testing.T, env *testEnv, req *ScheduleRequest) {
+			env.clearAWGMURL(t)
+			req.AWGMURL = "https://192.168.31.1:2222"
+		}, ErrInvalidURL},
 		{"адрес с паролем внутри", func(t *testing.T, env *testEnv, req *ScheduleRequest) {
 			env.clearAWGMURL(t)
 			req.AWGMURL = "https://admin:pw@example.com"
@@ -463,5 +473,124 @@ func TestProbeText(t *testing.T) {
 		if got := probeText(state); got != want {
 			t.Fatalf("probeText(%q) = %q, want %q", state, got, want)
 		}
+	}
+}
+
+// Финальное ревью 15.09, I1 (решение координатора): адрес панели, пришедший
+// через постановку, -- только https и только имя хоста. IP-литералы
+// отклоняются ВСЕ, не только частные: публичный IP роутера за NAT на
+// практике не панель, а разбор диапазонов (CGNAT, ULA, TEST-NET...) --
+// лишняя поверхность ошибки. Имена KeenDNS публичны и проходят. Локальные
+// имена (localhost, *.local, *.lan, *.home.arpa, *.internal, одно слово без
+// точки) резолвятся в сети Pi -- там чужой роутер.
+func TestNormalizeScheduleURL(t *testing.T) {
+	ok := map[string]string{
+		"https://router.example.com":         "https://router.example.com",
+		" https://name.example.org:2222/ ":   "https://name.example.org:2222",
+		"https://sub.router.example.net/api": "https://sub.router.example.net/api",
+	}
+	for in, want := range ok {
+		got, valid := normalizeAWGMURL(in)
+		if !valid || got != want {
+			t.Errorf("%q: got %q valid=%v, want %q", in, got, valid, want)
+		}
+	}
+	for _, in := range []string{
+		"http://router.example.com",
+		"ftp://router.example.com",
+		"router.example.com",
+		"https://",
+		"https://192.168.1.1",
+		"https://192.168.31.1:2222",
+		"https://10.0.0.1",
+		"https://172.16.5.4",
+		"https://198.51.100.7",
+		"https://127.0.0.1",
+		"https://169.254.1.1",
+		"https://0.0.0.0",
+		"https://203.0.113.14:2222",
+		"https://8.8.8.8",
+		"https://[::1]",
+		"https://[fd00::1]:2222",
+		"https://[fe80::1]",
+		"https://[2001:db8::1]",
+		"https://localhost",
+		"https://localhost.:2222",
+		"https://LOCALHOST",
+		"https://router.local",
+		"https://keenetic.lan",
+		"https://router.home.arpa",
+		"https://router.internal",
+		"https://foo.localhost",
+		"https://router",
+		"https://router.example.com.",
+		"https://admin:pw@example.com",
+		"https://router.example.com/?a=1",
+		"https://router.example.com/#x",
+	} {
+		if got, valid := normalizeAWGMURL(in); valid {
+			t.Errorf("%q принят как %q, ждали отказ", in, got)
+		}
+	}
+}
+
+// Финальное ревью 15.09: пока одна постановка ждёт замка, другой путь
+// (дашборд, соседняя постановка) успел записать адрес. Тот же адрес --
+// постановка проходит; другой -- ErrURLAlreadySet, и в базе нет ни
+// намерения, ни секрета от проигравшей постановки.
+func TestSchedule_URLRaceSameAddressSucceeds(t *testing.T) {
+	env := newEnv(t)
+	env.clearAWGMURL(t)
+	env.svc.testBeforePut = func() {
+		if ok, err := env.db.Users().SetAWGMURLIfEmpty(env.router, "https://awg.example.com"); !ok || err != nil {
+			t.Fatalf("гонка: %v %v", ok, err)
+		}
+	}
+	req := fixtureRequest()
+	req.AWGMURL = "https://awg.example.com/"
+	got, err := env.svc.Schedule(context.Background(), env.router, req)
+	env.svc.Wait()
+	if err != nil || got.Status != StatusWaiting {
+		t.Fatalf("тот же адрес после гонки: %+v %v", got, err)
+	}
+	if !env.hasSecret(t) {
+		t.Fatal("секрет не записан")
+	}
+}
+
+func TestSchedule_URLRaceOtherAddressLeavesNoIntent(t *testing.T) {
+	env := newEnv(t)
+	env.clearAWGMURL(t)
+	env.svc.testBeforePut = func() {
+		if ok, err := env.db.Users().SetAWGMURLIfEmpty(env.router, "https://other.example.com"); !ok || err != nil {
+			t.Fatalf("гонка: %v %v", ok, err)
+		}
+	}
+	req := fixtureRequest()
+	req.AWGMURL = "https://awg.example.com"
+	if _, err := env.svc.Schedule(context.Background(), env.router, req); !errors.Is(err, ErrURLAlreadySet) {
+		t.Fatalf("другой адрес после гонки: %v", err)
+	}
+	env.svc.Wait()
+	if in := env.intent(t); in != nil {
+		t.Fatalf("проигравшая постановка оставила намерение: %+v", in)
+	}
+	if env.hasSecret(t) {
+		t.Fatal("проигравшая постановка оставила секрет")
+	}
+	u, _ := env.db.Users().GetByID(env.router)
+	if u.AWGMURL == nil || *u.AWGMURL != "https://other.example.com" {
+		t.Fatalf("адрес: %v", u.AWGMURL)
+	}
+}
+
+// Тот же адрес, уже записанный раньше, -- не конфликт: двойное нажатие или
+// повтор с тем же адресом ставит, а не упирается в «уже записан».
+func TestSchedule_SameStoredAddressIsNotConflict(t *testing.T) {
+	env := newEnv(t)
+	req := fixtureRequest()
+	req.AWGMURL = "https://awg.example.com"
+	if _, err := env.svc.Schedule(context.Background(), env.router, req); err != nil {
+		t.Fatalf("тот же адрес: %v", err)
 	}
 }

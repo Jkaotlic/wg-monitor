@@ -590,7 +590,24 @@ func TestMiniappReviveProductionServicePath(t *testing.T) {
 	}
 	h := NewMux(Deps{DB: d, Logger: logger, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, Revive: svc})
 
-	body := reviveBody("router-owned", map[string]any{"awgm_url": "https://192.168.1.1:2222", "expires_days": 7})
+	// Финальное ревью 15.09, I1: локальный адрес, IP и http отказывают до
+	// любой записи -- с текстом, который говорит, какой адрес нужен.
+	for _, bad := range []string{"https://192.168.31.1:2222", "http://router.example.com", "https://203.0.113.14:2222", "https://router.local"} {
+		rec := postMiniappJSON(t, h, revivePath(ownedID), reviveBody("router-owned", map[string]any{"awgm_url": bad}), 999)
+		code, _, msg := decodeDeployError(t, rec)
+		if rec.Code != http.StatusBadRequest || code != "invalid_awgm_url" ||
+			msg != "Нужен внешний адрес панели с https — например, имя KeenDNS. Локальные адреса не подходят." {
+			t.Fatalf("адрес %q: %d %q %q", bad, rec.Code, code, msg)
+		}
+		if in, _ := d.Revive().Get(ownedID); in != nil {
+			t.Fatalf("адрес %q: намерение записано при отказе", bad)
+		}
+		if u, _ := d.Users().GetByID(ownedID); u.AWGMURL != nil {
+			t.Fatalf("адрес %q записан при отказе", bad)
+		}
+	}
+
+	body := reviveBody("router-owned", map[string]any{"awgm_url": "https://router.example.com:2222", "expires_days": 7})
 	rec := postMiniappJSON(t, h, revivePath(ownedID), body, 999)
 	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"status":"waiting"`) {
 		t.Fatalf("постановка: %d %s", rec.Code, rec.Body.String())
@@ -617,11 +634,17 @@ func TestMiniappReviveProductionServicePath(t *testing.T) {
 		t.Fatalf("опрос: %+v", row.Revive)
 	}
 
-	// Адрес уже записан: повтор с адресом -- 409 с русским текстом.
-	rec = postMiniappJSON(t, h, revivePath(ownedID), body, 999)
-	if code, _, _ := decodeDeployError(t, rec); rec.Code != http.StatusConflict || code != "awgm_url_already_set" {
-		t.Fatalf("повтор с адресом: %d %s", rec.Code, rec.Body.String())
+	// Адрес уже записан: повтор с ДРУГИМ адресом -- 409 с текстом, где его
+	// поменять; с тем же -- не конфликт (двойное нажатие).
+	rec = postMiniappJSON(t, h, revivePath(ownedID), reviveBody("router-owned", map[string]any{"awgm_url": "https://other.example.com"}), 999)
+	if code, _, msg := decodeDeployError(t, rec); rec.Code != http.StatusConflict || code != "awgm_url_already_set" ||
+		msg != "Адрес панели у роутера уже записан. Поменять его можно в веб-дашборде." {
+		t.Fatalf("повтор с другим адресом: %d %s", rec.Code, rec.Body.String())
 	}
+	if rec := postMiniappJSON(t, h, revivePath(ownedID), body, 999); rec.Code != http.StatusAccepted {
+		t.Fatalf("повтор с тем же адресом: %d %s", rec.Code, rec.Body.String())
+	}
+	svc.Wait()
 	assertNoReviveSecrets(t, "ответ 409", rec.Body.String())
 
 	// В базе -- только шифротекст.

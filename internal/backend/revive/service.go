@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
@@ -143,6 +144,10 @@ type Service struct {
 	// Important #1): без хука эту гонку нельзя воспроизвести детерминированно,
 	// так как Get и Finish -- два отдельных обращения к БД в одной горутине.
 	testBeforeCancelFinish func()
+	// testBeforePut, если задан, зовётся в put под замком перед записью:
+	// тест имитирует адрес панели, записанный другим путём после проверки в
+	// Schedule.
+	testBeforePut func()
 
 	// testAfterMarkRunning, если задан, зовётся в launch сразу после
 	// успешного MarkRunning, до чтения секрета -- нужен только тесту порядка
@@ -267,7 +272,10 @@ func (s *Service) Schedule(ctx context.Context, routerID int64, req ScheduleRequ
 	asked := strings.TrimSpace(req.AWGMURL)
 	switch {
 	case asked != "" && stored != "":
-		return Intent{}, ErrURLAlreadySet
+		// Тот же адрес -- не конфликт (двойное нажатие, повтор постановки).
+		if norm, ok := normalizeAWGMURL(asked); !ok || norm != stored {
+			return Intent{}, ErrURLAlreadySet
+		}
 	case asked == "" && stored == "":
 		return Intent{}, ErrNoAWGMURL
 	}
@@ -306,6 +314,9 @@ func (s *Service) put(routerID, requestedBy int64, creds Secrets, awgmURL string
 	s.work.Lock()
 	defer s.work.Unlock()
 
+	if s.testBeforePut != nil {
+		s.testBeforePut()
+	}
 	if cur, err := s.cfg.DB.Revive().Get(routerID); err != nil {
 		return Intent{}, err
 	} else if cur != nil && cur.Status == StatusRunning {
@@ -326,24 +337,24 @@ func (s *Service) put(routerID, requestedBy int64, creds Secrets, awgmURL string
 	// (DB-ошибка), адрес панели не осядет в users без единого намерения в
 	// базе: повторная постановка с тем же адресом не упрётся в
 	// awgm_url_already_set на пустом месте.
-	err = s.cfg.DB.Revive().Put(db.ReviveIntent{
-		RouterID: routerID, CreatedAt: now, ExpiresAt: now.Add(expiry), RequestedBy: requestedBy,
-	}, nonce, ct)
+	// Финальное ревью 15.09: намерение и адрес панели -- одной транзакцией.
+	// Раньше Put коммитился, а SetAWGMURLIfEmpty проигрывал адресу,
+	// записанному другим путём, -- и отказ уходил при живом намерении с чужим
+	// адресом. Теперь другой адрес откатывает всё, тот же -- не конфликт.
+	intent := db.ReviveIntent{RouterID: routerID, CreatedAt: now, ExpiresAt: now.Add(expiry), RequestedBy: requestedBy}
+	if awgmURL != "" {
+		err = s.cfg.DB.Revive().PutSettingURL(intent, nonce, ct, awgmURL)
+	} else {
+		err = s.cfg.DB.Revive().Put(intent, nonce, ct)
+	}
 	if errors.Is(err, db.ErrReviveRunning) {
 		return Intent{}, ErrRunning
 	}
+	if errors.Is(err, db.ErrReviveURLConflict) {
+		return Intent{}, ErrURLAlreadySet
+	}
 	if err != nil {
 		return Intent{}, err
-	}
-
-	if awgmURL != "" {
-		ok, err := s.cfg.DB.Users().SetAWGMURLIfEmpty(routerID, awgmURL)
-		if err != nil {
-			return Intent{}, err
-		}
-		if !ok {
-			return Intent{}, ErrURLAlreadySet
-		}
 	}
 
 	s.logger.Info("оживление агента поставлено", "router_id", routerID, "expires_at", now.Add(expiry), "requested_by", requestedBy)
@@ -456,13 +467,47 @@ func (s *Service) forgetJob(routerID int64) {
 	s.jobsMu.Unlock()
 }
 
+// normalizeAWGMURL -- проверка адреса панели, пришедшего через постановку
+// (мини-апп). Уже записанные адреса (дашборд, мастер) заново не проверяются.
+//
+// Финальное ревью 15.09, I1 (решение координатора): бэкенд живёт на Pi, чья
+// сеть совпадает с домашней сетью роутеров оператора, и 192.168.31.1 есть у
+// каждого. Локальный адрес привёл бы воркер в ЧУЖОЙ роутер: пароль root и
+// токен bronya ушли бы не туда, а с http -- ещё и открытым текстом. Поэтому:
+//   - только https;
+//   - только имя хоста: IP-литералы отклоняются ВСЕ (не только частные) --
+//     панель роутера снаружи достижима по имени KeenDNS, а разбор диапазонов
+//     (RFC1918, CGNAT, ULA, TEST-NET...) -- лишнее место для ошибки;
+//   - имя с точкой и не локальное: localhost, *.localhost, *.local, *.lan,
+//     *.home.arpa, *.internal резолвятся в сети Pi.
 func normalizeAWGMURL(raw string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" ||
-		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if err != nil || u.Scheme != "https" || u.Host == "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		return "", false
+	}
+	if !publicPanelHost(u.Hostname()) {
 		return "", false
 	}
 	return strings.TrimRight(u.String(), "/"), true
+}
+
+var localHostSuffixes = []string{".localhost", ".local", ".lan", ".home.arpa", ".internal"}
+
+func publicPanelHost(host string) bool {
+	h := strings.ToLower(host)
+	if h == "" || strings.HasSuffix(h, ".") || net.ParseIP(h) != nil {
+		return false
+	}
+	if h == "localhost" || !strings.Contains(h, ".") {
+		return false
+	}
+	for _, suf := range localHostSuffixes {
+		if strings.HasSuffix(h, suf) {
+			return false
+		}
+	}
+	return true
 }
 
 func derefString(p *string) string {

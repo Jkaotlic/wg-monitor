@@ -76,11 +76,11 @@ type miniappReviveRefusal struct {
 var miniappReviveRefusals = map[string]miniappReviveRefusal{
 	"revive_disabled":      {http.StatusServiceUnavailable, "Оживление агента не настроено на сервере."},
 	"no_awgm_url":          {http.StatusBadRequest, "У роутера не записан адрес панели — укажите его."},
-	"invalid_awgm_url":     {http.StatusBadRequest, "Адрес панели должен начинаться с http:// или https://."},
+	"invalid_awgm_url":     {http.StatusBadRequest, "Нужен внешний адрес панели с https — например, имя KeenDNS. Локальные адреса не подходят."},
 	"no_credentials":       {http.StatusBadRequest, "Нужен пароль root роутера."},
 	"revive_running":       {http.StatusConflict, "Оживление уже идёт — дождитесь итога."},
 	"router_not_found":     {http.StatusNotFound, "Роутер не найден."},
-	"awgm_url_already_set": {http.StatusConflict, "Адрес панели у роутера уже записан — поле адреса оставьте пустым."},
+	"awgm_url_already_set": {http.StatusConflict, "Адрес панели у роутера уже записан. Поменять его можно в веб-дашборде."},
 	"agent_alive":          {http.StatusConflict, "Агент на роутере отвечает — оживлять нечего."},
 }
 

@@ -186,13 +186,13 @@ func TestMiniappAgentReviveSchedules(t *testing.T) {
 func TestMiniappAgentRevivePassesPanelAddressAndRunningStatus(t *testing.T) {
 	_, ownedID, h, fake, _ := reviveTestMux(t)
 	fake.intent = revive.Intent{Status: "running", ExpiresAt: reviveTestExpires}
-	body := `{"root_password":"` + miniappReviveRoot + `","awgm_url":" https://192.168.1.1:2222 ","expires_days":7,"confirm":"router-owned"}`
+	body := `{"root_password":"` + miniappReviveRoot + `","awgm_url":" https://router.example.com:2222 ","expires_days":7,"confirm":"router-owned"}`
 	rec := postMiniappJSON(t, h, revivePath(ownedID), body, 999)
 	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"status":"running"`) {
 		t.Fatalf("код %d, тело %s", rec.Code, rec.Body.String())
 	}
 	got := fake.scheduled[0]
-	if got.AWGMURL != "https://192.168.1.1:2222" || got.ExpiresDays != 7 || got.AWGMLogin != "" || got.AWGMAPIKey != "" {
+	if got.AWGMURL != "https://router.example.com:2222" || got.ExpiresDays != 7 || got.AWGMLogin != "" || got.AWGMAPIKey != "" {
 		t.Fatalf("запрос к сервису: адрес %q срок %d", got.AWGMURL, got.ExpiresDays)
 	}
 }
