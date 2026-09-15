@@ -24,8 +24,24 @@ const FLEET = {
       awgmgr_version: '2.18.2',
       firmware_current: '4.2.7',
       update_hint: 'пора обновить: прошивка 4.3.0',
+      pending_attempts: 0,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
     },
-    { id: 2, nickname: 'Дача', status: 'sleeping', last_seen_age_sec: 4000, agent_version: 'v0.30.0' },
+    {
+      id: 2,
+      nickname: 'Дача',
+      status: 'sleeping',
+      last_seen_age_sec: 4000,
+      agent_version: 'v0.30.0',
+      pending_attempts: 0,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
+    },
     {
       id: 3,
       nickname: 'Офис',
@@ -33,6 +49,11 @@ const FLEET = {
       last_seen_age_sec: 30,
       agent_version: 'v0.29.0',
       pending_version: 'v0.30.0',
+      pending_attempts: 1,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
     },
   ],
   notify: {
@@ -94,10 +115,28 @@ describe('строки роутеров', () => {
     expect(rows.find((r) => r.id === 2).sub).toMatch(/не на связи|отчёт/)
   })
 
-  it('версии агента, панели и pending видны строкой', () => {
-    expect(rows[0].versions).toContain('v0.30.0')
-    expect(rows[0].versions).toContain('2.18.2')
-    expect(rows.find((r) => r.id === 3).versions).toContain('v0.30.0')
+  it('строка версий: агент рядом с бэкендом, панель и прошивка', () => {
+    expect(rows[0].versions).toBe('агент v0.30.0 · бэкенд v0.31.0 · панель 2.18.2 · прошивка 4.2.7')
+    expect(rows.find((r) => r.id === 3).versions).toBe('агент v0.29.0 · бэкенд v0.31.0')
+  })
+
+  it('обновление агента -- отдельным полем, а не в строке версий', () => {
+    const office = rows.find((r) => r.id === 3)
+    expect(office.versions).not.toContain('ставится')
+    expect(office.update.text).toBe('ставится v0.30.0 · 1 попытка')
+    expect(office.update.canCancel).toBe(true)
+    expect(rows.find((r) => r.id === 2).update.canUpdate).toBe(true)
+  })
+
+  it('строка несёт исходный роутер и оговорку сервера', () => {
+    const office = rows.find((r) => r.id === 3)
+    expect(office.router).toBe(FLEET.routers[2])
+    expect(office.warning).toBe('')
+  })
+
+  it('без версии бэкенда слово «бэкенд» не пишется', () => {
+    const [row] = fleetRouterRows({ routers: [{ id: 9, nickname: 'x', status: 'online', agent_version: 'v0.30.0' }] })
+    expect(row.versions).toBe('агент v0.30.0')
   })
 
   it('«пора обновить» приходит с сервера и не пересчитывается в клиенте', () => {
