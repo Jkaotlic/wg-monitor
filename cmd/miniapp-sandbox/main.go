@@ -156,7 +156,13 @@ func main() {
 		// песочница -- единственное место, где его можно писать в открытую.
 		DashboardToken: sandboxDashboardToken,
 		HeartbeatStats: watcher.Snapshot,
-		PublicBaseURL:  "http://" + *addr,
+		// Не сам адрес песочницы: configuredPublicBackendURL (wizard_handler.go)
+		// отбрасывает loopback/private хосты, и с "http://127.0.0.1:..." любое
+		// обновление агента -- одиночное и массовое -- отвечало бы 503
+		// not_configured, экрану было бы нечем поделиться с оператором.
+		// Фальшивый публичный хост никто не резолвит: фальшивый агент
+		// команду просто исполняет, адрес прошивки не скачивает.
+		PublicBaseURL: "https://sandbox.wg-monitor.example",
 	}
 	mux := backend.NewMux(deps)
 	initData := signInitData(sandboxBotToken, *tgUser, time.Now())
