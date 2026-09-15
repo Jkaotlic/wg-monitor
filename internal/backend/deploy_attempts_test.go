@@ -20,6 +20,13 @@ func TestDeployFailureTextSpeaksRussian(t *testing.T) {
 		{`self_update: unsupported GOARCH "386" (expected arm64 or mipsle)`, "архитектура роутера не поддерживается"},
 		{"download checksums.txt: HTTP 502 for https://backend.example.com/v1/releases/download/v0.32.0/checksums.txt", "роутер не смог скачать обновление"},
 		{`download wg-monitor-agent-linux-arm64: Get "https://backend.example.com": dial tcp: lookup backend.example.com: no such host`, "роутер не смог скачать обновление"},
+		// B2: сопоставление по голому слову "repo_base" было шире, чем сама
+		// ошибка агента (internal/agent/actions/self_update.go, единственный
+		// источник этого текста -- releaseorigin.ValidateRepoBaseForBackendURL,
+		// "... is not an allowed release origin"). Ошибка скачивания, чей URL
+		// сам содержит слово "repo_base" (например, хост зеркала так назвали),
+		// не должна перехватываться веткой «адрес не совпал».
+		{`download wg-monitor-agent-linux-arm64: Get "https://repo_base_mirror.example.com/v1/releases/download/v0.20.0/wg-monitor-agent-linux-arm64": dial tcp: lookup repo_base_mirror.example.com: no such host`, "роутер не смог скачать обновление"},
 		{"", "агент не сообщил причину"},
 		{"status err", "агент сообщил об ошибке установки"},
 	}

@@ -156,7 +156,7 @@ func main() {
 
 	cmdQueue := cmd.New()
 	cmdQueue.SetLogger(logger.With("component", "cmd_queue"))
-	backend.AttachDeployExpiryHandler(cmdQueue, d, logger)
+	backend.AttachDeployExpiryHandler(cmdQueue, logger)
 	// Очередь пустая после старта, а назначенные обновления записаны в базе:
 	// без этого роутер, которому обновление назначили до рестарта, оставался
 	// «в ожидании» навсегда -- команду ему уже никто не слал.

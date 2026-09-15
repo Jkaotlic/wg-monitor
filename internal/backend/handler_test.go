@@ -1532,7 +1532,7 @@ func TestExpiredSelfUpdateKeepsPendingDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	AttachDeployExpiryHandler(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	expired := wire.Command{
 		ID:        "cmd-expired",
 		Action:    "self_update",
@@ -1565,7 +1565,7 @@ func TestSupersededSelfUpdateKeepsPendingDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	AttachDeployExpiryHandler(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, id := range []string{"cmd-old", "cmd-new"} {
 		if err := q.Enqueue(uid, wire.Command{
 			ID:       id,

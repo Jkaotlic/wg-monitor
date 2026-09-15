@@ -4,7 +4,6 @@ import (
 	"log/slog"
 
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -21,8 +20,11 @@ type expiredCommandHandlerSetter interface {
 // первым делом опрашивал команды, натыкался на протухшую, и отметка исчезала
 // раньше, чем её увидел отчёт (bronya, gachimikhail: 11.09 -> 15.09.2026).
 // Новую команду положит досылка на контакте (deploy_wake.go).
-func AttachDeployExpiryHandler(q expiredCommandHandlerSetter, d *db.DB, logger *slog.Logger) {
-	if q == nil || d == nil {
+//
+// Параметр *db.DB здесь раньше был (снятие отметки жило в этом обработчике);
+// сейчас функция только логирует, базу не трогает -- сигнатура без него (B4).
+func AttachDeployExpiryHandler(q expiredCommandHandlerSetter, logger *slog.Logger) {
+	if q == nil {
 		return
 	}
 	q.SetExpiredCommandHandler(func(userID int64, cmd wire.Command) {

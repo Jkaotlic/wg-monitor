@@ -50,7 +50,7 @@ func seedSleptRouter(t *testing.T, tok string) sleptRouter {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, d, logger)
+	AttachDeployExpiryHandler(q, logger)
 	issued := time.Now().Add(-4 * 24 * time.Hour)
 	if err := q.Enqueue(uid, wire.Command{
 		ID:        "cmd-before-poweroff",

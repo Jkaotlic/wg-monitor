@@ -38,7 +38,11 @@ func deployFailureText(raw string) string {
 		return "агент не сообщил причину"
 	case strings.Contains(s, "insufficient /opt space"), strings.Contains(s, "df /opt"):
 		return "мало свободного места в разделе /opt"
-	case strings.Contains(s, "not an allowed release origin"), strings.Contains(s, "repo_base"), strings.Contains(s, "backend url"):
+	// Единственный источник этого текста -- releaseorigin.ValidateRepoBase*
+	// (см. internal/agent/actions/self_update.go, validateSelfUpdateRepoBase):
+	// голые "repo_base"/"backend url" были шире, чем сама ошибка, и ловили
+	// ошибку скачивания, чей URL сам содержал одно из этих слов (B2).
+	case strings.Contains(s, "not an allowed release origin"):
 		return "адрес загрузки не совпал с адресом сервера"
 	case strings.Contains(s, "sha256 mismatch"), strings.Contains(s, "signature"):
 		return "файл обновления не прошёл проверку подлинности"
