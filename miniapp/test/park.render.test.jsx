@@ -9,7 +9,10 @@ import { act } from 'preact/test-utils'
 const mocks = vi.hoisted(() => ({
   fleet: null, fleetCalls: 0, updates: [], cancels: [], fleetUpdates: [],
   updateReply: null, cancelReply: null, fleetReply: null,
-  sent: [], results: {}, notify: [], notifyReply: null,
+  sent: [], results: {}, notify: [], notifyReply: null, notifyReplies: {},
+  // Первое чтение (на монтировании) всегда успевает -- иначе экран никогда
+  // не покажет ни одной строки. Отказ этот флаг включает начиная со второго.
+  fleetFailAfterFirst: false,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -19,6 +22,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     ...real,
     fetchFleet: () => {
       mocks.fleetCalls++
+      if (mocks.fleetFailAfterFirst && mocks.fleetCalls > 1) return Promise.reject(new Error('boom'))
       return Promise.resolve(mocks.fleet)
     },
     fetchAccess: () => Promise.resolve({ owner: null, operators: [] }),
@@ -44,6 +48,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     fetchCommandResult: (routerID) => (routerID in mocks.results ? Promise.resolve(mocks.results[routerID]) : new Promise(() => {})),
     setRouterNotify: (id, muted) => {
       mocks.notify.push({ id, muted })
+      if (id in mocks.notifyReplies) return reply(mocks.notifyReplies[id])
       return reply(mocks.notifyReply ?? { muted })
     },
   }
@@ -122,6 +127,8 @@ function reset() {
   mocks.results = {}
   mocks.notify = []
   mocks.notifyReply = null
+  mocks.notifyReplies = {}
+  mocks.fleetFailAfterFirst = false
 }
 
 describe('«Парк»: обновление агента', () => {
@@ -240,6 +247,52 @@ describe('«Парк»: обновление агента', () => {
     await flush()
     await flush()
     cleanup(mounted.root, muteSheet.root)
+  })
+
+  // F2(c): перечитать /fleet после действия не всегда получается (сеть,
+  // сервер прилёг), но само действие уже прошло -- список не должен
+  // схлопнуться в один общий экран ошибки, только строки до него.
+  it('перечитать /fleet после действия не удалось -- строки остаются, ошибка чтения -- отдельной строкой', async () => {
+    reset()
+    mocks.cancelReply = { cleared: true }
+    mocks.fleetFailAfterFirst = true
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'bronya'), 'Отменить обновление')[0].click())
+    const sheet = await mountSheet(sheets[0])
+    await act(async () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await flush()
+    expect(root.textContent).toContain('Обновление «bronya» отменено.')
+    expect(rowOf(root, 'bronya')).toBeTruthy()
+    expect(rowOf(root, 'office')).toBeTruthy()
+    expect(rowOf(root, 'car')).toBeTruthy()
+    expect(root.textContent).toContain('Не удалось прочитать сводку парка.')
+    cleanup(root, sheet.root)
+  })
+
+  // F2(d): fleetResult (итог «Обновить всех») и notice (итог одиночного
+  // действия) -- разные панели над списком. Старая панель, оставшаяся от
+  // прошлого действия, рядом с новой читалась бы как «оба ещё актуальны».
+  it('notice и итог «Обновить всех» очищают друг друга при новом действии', async () => {
+    reset()
+    mocks.cancelReply = { cleared: true }
+    mocks.fleetReply = { results: [{ router_id: 14, nickname: 'office', outcome: 'deferred', reason_code: '', reason_text: '' }] }
+    const { root, sheets } = await mountPark()
+
+    await act(async () => buttons(root, 'Обновить всех отставших (1)')[0].click())
+    const sheet1 = await mountSheet(sheets[0])
+    await typeAndConfirm(sheet1.root, 'обновить')
+    expect(root.textContent).toContain('Обновление: ждёт включения 1.')
+    cleanup(sheet1.root)
+
+    await act(async () => buttons(rowOf(root, 'bronya'), 'Отменить обновление')[0].click())
+    const sheet2 = await mountSheet(sheets[1])
+    await act(async () => [...sheet2.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await flush()
+    expect(root.textContent).toContain('Обновление «bronya» отменено.')
+    expect(root.textContent).not.toContain('Обновление: ждёт включения 1.')
+    cleanup(root, sheet2.root)
   })
 
   it('отставших нет -- кнопки массового обновления нет', async () => {
@@ -388,6 +441,68 @@ describe('«Парк»: уведомлять меня', () => {
     expect(row.textContent).toContain('Не удалось сохранить. Попробуйте ещё раз.')
     expect(switchOf(row).getAttribute('aria-checked')).toBe('false')
     cleanup(root)
+  })
+
+  // F2(e): выключение (не включение обратно) идёт через лист подтверждения --
+  // отказ там срабатывает другим путём (Sheet.jsx local perform), и раньше
+  // этот путь не был проверен вовсе.
+  it('выключение, упавшее внутри листа подтверждения, -- ошибка у строки, переключатель остаётся включён', async () => {
+    reset()
+    mocks.notifyReply = new ApiError(500, 'internal', '/routers/15/notify failed: 500')
+    const { root, sheets } = await mountPark()
+    const row = rowOf(root, 'car')
+    expect(switchOf(row).getAttribute('aria-checked')).toBe('true')
+    await act(async () => switchOf(row).click())
+    expect(sheets).toHaveLength(1)
+    const sheet = await mountSheet(sheets[0])
+    await act(async () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await flush()
+    const after = rowOf(root, 'car')
+    expect(switchOf(after).getAttribute('aria-checked')).toBe('true')
+    expect(after.textContent).toContain('Не удалось сохранить. Попробуйте ещё раз.')
+    cleanup(root, sheet.root)
+  })
+
+  // F2(a): notifyBusy/notifyError живут по роутеру (map), а не одним общим
+  // значением -- иначе переключение второй строки гасило бы занятость и
+  // ошибку первой, хотя её запрос к серверу ещё не завершился.
+  it('переключение двух роутеров не мешает друг другу: занятость и ошибка -- по роутеру', async () => {
+    reset()
+    mocks.fleet = { ...FLEET, routers: [FLEET.routers[2], { ...FLEET.routers[2], id: 20, nickname: 'lux' }] }
+    let resolveCar
+    let rejectLux
+    mocks.notifyReplies = {
+      15: new Promise((r) => { resolveCar = r }),
+      20: new Promise((_, rej) => { rejectLux = rej }),
+    }
+    const { root, sheets } = await mountPark()
+    await act(async () => switchOf(rowOf(root, 'car')).click())
+    await act(async () => switchOf(rowOf(root, 'lux')).click())
+    expect(sheets).toHaveLength(2)
+    const sheetCar = await mountSheet(sheets[0])
+    const sheetLux = await mountSheet(sheets[1])
+    await act(async () => [...sheetCar.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await act(async () => [...sheetLux.root.querySelectorAll('.sheet-actions button')].pop().click())
+    expect(switchOf(rowOf(root, 'car')).disabled).toBe(true)
+    expect(switchOf(rowOf(root, 'lux')).disabled).toBe(true)
+
+    rejectLux(new ApiError(500, 'internal', '/routers/20/notify failed: 500'))
+    await flush()
+    await flush()
+    // lux settled with an error; car's own busy/error must be untouched by it.
+    expect(rowOf(root, 'lux').textContent).toContain('Не удалось сохранить. Попробуйте ещё раз.')
+    expect(switchOf(rowOf(root, 'lux')).getAttribute('aria-checked')).toBe('true')
+    expect(switchOf(rowOf(root, 'lux')).disabled).toBe(false)
+    expect(switchOf(rowOf(root, 'car')).disabled).toBe(true)
+    expect(rowOf(root, 'car').textContent).not.toContain('Не удалось сохранить')
+
+    resolveCar({ muted: true })
+    await flush()
+    await flush()
+    expect(switchOf(rowOf(root, 'car')).getAttribute('aria-checked')).toBe('false')
+    expect(switchOf(rowOf(root, 'car')).disabled).toBe(false)
+    cleanup(root, sheetCar.root, sheetLux.root)
   })
 
   it('«Открыть роутер» ведёт на экран роутера и у выключенного; у текущего кнопки нет', async () => {

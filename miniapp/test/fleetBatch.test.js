@@ -110,6 +110,9 @@ describe('цикл массовой команды', () => {
     expect(state.skipped).toEqual(['car', 'bronya'])
     const by = Object.fromEntries(state.results.map((r) => [r.nickname, r.outcome]))
     expect(by).toEqual({ home: 'ok', dacha: 'problems', garage: 'no_answer', shed: 'failed', barn: 'unparsed', lake: 'no_answer' })
+    // Каждая запись несёт router_id -- итог кладёт по нему ключ строки, а не по тексту.
+    const ids = Object.fromEntries(state.results.map((r) => [r.nickname, r.id]))
+    expect(ids).toEqual({ home: 1, dacha: 4, garage: 5, shed: 6, barn: 7, lake: 8 })
     expect(progress[0]).toMatchObject({ total: 6, done: 0, running: true })
     expect(progress.at(-1)).toMatchObject({ done: 6, running: false })
   })
@@ -135,28 +138,31 @@ describe('итог словами', () => {
     const s = batchSummary({
       ...base,
       results: [
-        { nickname: 'home', outcome: 'ok' },
-        { nickname: 'dacha', outcome: 'problems', problems: { fails: 1, warns: 2 } },
-        { nickname: 'garage', outcome: 'no_answer' },
-        { nickname: 'shed', outcome: 'failed' },
-        { nickname: 'barn', outcome: 'unparsed' },
-        { nickname: 'lake', outcome: 'no_answer' },
+        { id: 1, nickname: 'home', outcome: 'ok' },
+        { id: 4, nickname: 'dacha', outcome: 'problems', problems: { fails: 1, warns: 2 } },
+        { id: 5, nickname: 'garage', outcome: 'no_answer' },
+        { id: 6, nickname: 'shed', outcome: 'failed' },
+        { id: 7, nickname: 'barn', outcome: 'unparsed' },
+        { id: 8, nickname: 'lake', outcome: 'no_answer' },
       ],
     })
     expect(s.headline).toBe('Проверено 3 из 6, проблемы у 1.')
+    // Ключ строки -- router_id, не текст: две строки с одинаковым текстом
+    // (два «не ответил») не должны схлопнуться в один ключ React/Preact.
     expect(s.lines).toEqual([
-      '«barn»: ответ не разобран',
-      '«dacha»: 1 сбой, 2 замечания',
-      '«garage»: не ответил',
-      '«lake»: не ответил',
-      '«shed»: команда не выполнилась',
-      'Не на связи, пропущены: «car», «bronya».',
-      'Что именно не так — на экране роутера: «Настройки» → «Осмотр роутера».',
+      { id: 7, text: '«barn»: ответ не разобран' },
+      { id: 4, text: '«dacha»: 1 сбой, 2 замечания' },
+      { id: 5, text: '«garage»: не ответил' },
+      { id: 8, text: '«lake»: не ответил' },
+      { id: 6, text: '«shed»: команда не выполнилась' },
+      { id: 'skipped', text: 'Не на связи, пропущены: «car», «bronya».' },
+      { id: 'doctor-note', text: 'Что именно не так — на экране роутера: «Настройки» → «Осмотр роутера».' },
     ])
+    expect(new Set(s.lines.map((l) => l.id)).size).toBe(s.lines.length)
   })
 
   it('осмотр без проблем -- «проблем не нашлось», подсказки про экран нет', () => {
-    const s = batchSummary({ kind: 'doctor', total: 1, done: 1, running: false, skipped: [], results: [{ nickname: 'home', outcome: 'ok' }] })
+    const s = batchSummary({ kind: 'doctor', total: 1, done: 1, running: false, skipped: [], results: [{ id: 1, nickname: 'home', outcome: 'ok' }] })
     expect(s).toEqual({ headline: 'Проверено 1 из 1, проблем не нашлось.', lines: [] })
   })
 
@@ -164,12 +170,15 @@ describe('итог словами', () => {
     const s = batchSummary({
       kind: 'audit', total: 2, done: 2, running: false, skipped: ['car'],
       results: [
-        { nickname: 'home', outcome: 'ok' },
-        { nickname: 'dacha', outcome: 'problems', problems: ['Прошивка роутера — доступна 4.3.0'] },
+        { id: 1, nickname: 'home', outcome: 'ok' },
+        { id: 4, nickname: 'dacha', outcome: 'problems', problems: ['Прошивка роутера — доступна 4.3.0'] },
       ],
     })
     expect(s.headline).toBe('Аудит: ответили 2 из 2, внимания требует 1.')
-    expect(s.lines).toEqual(['«dacha»: Прошивка роутера — доступна 4.3.0', 'Не на связи, пропущен: «car».'])
+    expect(s.lines).toEqual([
+      { id: 4, text: '«dacha»: Прошивка роутера — доступна 4.3.0' },
+      { id: 'skipped', text: 'Не на связи, пропущен: «car».' },
+    ])
   })
 
   it('все не на связи -- говорит это, а не «проверено 0 из 0»', () => {
@@ -182,8 +191,8 @@ describe('итог словами', () => {
   })
 
   it('в итоге нет внутренних имён', () => {
-    const s = batchSummary({ ...base, results: [{ nickname: 'dacha', outcome: 'problems', problems: { fails: 5, warns: 11 } }] })
-    expect([s.headline, ...s.lines].join(' ')).not.toMatch(/router_doctor|version_audit|pingcheck|tunnels/)
-    expect(s.lines[0]).toBe('«dacha»: 5 сбоев, 11 замечаний')
+    const s = batchSummary({ ...base, results: [{ id: 4, nickname: 'dacha', outcome: 'problems', problems: { fails: 5, warns: 11 } }] })
+    expect([s.headline, ...s.lines.map((l) => l.text)].join(' ')).not.toMatch(/router_doctor|version_audit|pingcheck|tunnels/)
+    expect(s.lines[0]).toEqual({ id: 4, text: '«dacha»: 5 сбоев, 11 замечаний' })
   })
 })

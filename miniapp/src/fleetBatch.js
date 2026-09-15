@@ -66,7 +66,7 @@ export async function runFleetBatch({ kind, routers, send, poll, onProgress = ()
 
   await Promise.all(
     targets.map(async (r) => {
-      let entry = { nickname: r.nickname, outcome: 'no_answer' }
+      let entry = { id: r.id, nickname: r.nickname, outcome: 'no_answer' }
       try {
         const { cmd_id: id } = await send(r.id, action, {})
         const until = now() + deadlineMs
@@ -76,15 +76,15 @@ export async function runFleetBatch({ kind, routers, send, poll, onProgress = ()
           if (res) break
         }
         if (res && res.status !== 'ok') {
-          entry = { nickname: r.nickname, outcome: 'failed' }
+          entry = { id: r.id, nickname: r.nickname, outcome: 'failed' }
         } else if (res) {
           const problems = parse(res.output)
-          if (problems === null) entry = { nickname: r.nickname, outcome: 'unparsed' }
-          else if (hasProblems(kind, problems)) entry = { nickname: r.nickname, outcome: 'problems', problems }
-          else entry = { nickname: r.nickname, outcome: 'ok' }
+          if (problems === null) entry = { id: r.id, nickname: r.nickname, outcome: 'unparsed' }
+          else if (hasProblems(kind, problems)) entry = { id: r.id, nickname: r.nickname, outcome: 'problems', problems }
+          else entry = { id: r.id, nickname: r.nickname, outcome: 'ok' }
         }
       } catch {
-        entry = { nickname: r.nickname, outcome: 'no_answer' }
+        entry = { id: r.id, nickname: r.nickname, outcome: 'no_answer' }
       }
       state.results.push(entry)
       state.done += 1
@@ -120,7 +120,7 @@ export function batchSummary(state) {
   if (!state?.total) {
     return {
       headline: kind === 'doctor' ? 'Все роутеры не на связи — проверять некого.' : 'Все роутеры не на связи — сверять некого.',
-      lines: skipped.length ? [skippedLine(skipped)] : [],
+      lines: skipped.length ? [{ id: 'skipped', text: skippedLine(skipped) }] : [],
     }
   }
   const answered = results.filter((r) => r.outcome === 'ok' || r.outcome === 'problems' || r.outcome === 'unparsed').length
@@ -136,16 +136,21 @@ export function batchSummary(state) {
     headline = `Аудит: ответили ${answered} из ${state.total}, ${tail}.`
   }
 
+  // id -- router_id, не текст: у двух роутеров бывает одинаковый исход
+  // («не ответил»), и ключ строки в JSX не должен от этого схлопнуться.
   const lines = [...results]
     .filter((r) => r.outcome !== 'ok')
     .sort((a, b) => a.nickname.localeCompare(b.nickname, 'ru'))
-    .map((r) => {
-      if (r.outcome !== 'problems') return `«${r.nickname}»: ${OUTCOME_LINE[r.outcome]}`
-      return `«${r.nickname}»: ${kind === 'doctor' ? doctorCounts(r.problems) : r.problems.join('; ')}`
-    })
-  if (skipped.length) lines.push(skippedLine(skipped))
+    .map((r) => ({
+      id: r.id,
+      text:
+        r.outcome !== 'problems'
+          ? `«${r.nickname}»: ${OUTCOME_LINE[r.outcome]}`
+          : `«${r.nickname}»: ${kind === 'doctor' ? doctorCounts(r.problems) : r.problems.join('; ')}`,
+    }))
+  if (skipped.length) lines.push({ id: 'skipped', text: skippedLine(skipped) })
   if (kind === 'doctor' && withProblems) {
-    lines.push('Что именно не так — на экране роутера: «Настройки» → «Осмотр роутера».')
+    lines.push({ id: 'doctor-note', text: 'Что именно не так — на экране роутера: «Настройки» → «Осмотр роутера».' })
   }
   return { headline, lines }
 }

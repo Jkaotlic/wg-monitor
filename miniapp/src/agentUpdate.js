@@ -153,13 +153,16 @@ export function fleetUpdateSummary(results) {
   const list = results ?? []
   if (list.length === 0) return { headline: 'Отставших нет — обновлять некого.', lines: [] }
   const count = { queued: 0, deferred: 0, skipped: 0, error: 0 }
+  // id -- router_id, не текст: у двух роутеров бывает одинаковый исход,
+  // и ключ строки в JSX не должен от этого схлопнуться.
   const lines = []
   for (const r of list) {
     if (count[r?.outcome] != null) count[r.outcome]++
     const name = `«${r?.nickname ?? ''}»`
-    if (r?.outcome === 'deferred') lines.push(`${name}: поставится, когда роутер выйдет на связь`)
-    if (r?.outcome === 'skipped') lines.push(`${name}: пропущен — ${r.reason_text || 'причина не названа'}`)
-    if (r?.outcome === 'error') lines.push(`${name}: не получилось — ${r.reason_text || 'ошибка на сервере'}`)
+    const id = r?.router_id
+    if (r?.outcome === 'deferred') lines.push({ id, text: `${name}: поставится, когда роутер выйдет на связь` })
+    if (r?.outcome === 'skipped') lines.push({ id, text: `${name}: пропущен — ${r.reason_text || 'причина не названа'}` })
+    if (r?.outcome === 'error') lines.push({ id, text: `${name}: не получилось — ${r.reason_text || 'ошибка на сервере'}` })
   }
   const parts = []
   if (count.queued) parts.push(`поставлено ${count.queued}`)

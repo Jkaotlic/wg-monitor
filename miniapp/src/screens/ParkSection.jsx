@@ -59,10 +59,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   // ответивших, а роутеру пришли бы две команды подряд.
   const [batch, setBatch] = useState(null)
 
-  // Выключатель сохраняется по одному роутеру за раз; ошибка -- у той строки,
-  // где нажали, а не общей фразой над списком.
-  const [notifyBusy, setNotifyBusy] = useState(null)
-  const [notifyError, setNotifyError] = useState(null)
+  // По роутеру (Map), не одним значением на экран: переключение одной строки
+  // не должно гасить занятость или ошибку другой, чей запрос к серверу ещё
+  // не вернулся.
+  const [notifyBusy, setNotifyBusy] = useState(() => new Set())
+  const [notifyError, setNotifyError] = useState(() => new Map())
 
   const [linkBusy, setLinkBusy] = useState(false)
   const [linkLines, setLinkLines] = useState([])
@@ -110,6 +111,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
         // сервер ставит свою собственную.
         perform: (typed) => updateRouterAgent(router.id, typed),
         onDone: (resp) => {
+          setFleetResult(null)
           setNotice(agentUpdateDoneText(resp, router.nickname))
           load()
         },
@@ -125,6 +127,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
         buttonLabel: 'Отменить обновление',
         perform: () => cancelRouterAgentUpdate(router.id),
         onDone: (resp) => {
+          setFleetResult(null)
           setNotice(agentCancelDoneText(resp, router.nickname))
           load()
         },
@@ -144,6 +147,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
         errorText: fleetUpdateErrorText,
         perform: (typed) => updateFleetAgents(typed),
         onDone: (resp) => {
+          setNotice('')
           setFleetResult(fleetUpdateSummary(resp?.results))
           load()
         },
@@ -169,15 +173,24 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   // Выключение спрашивает «точно?» (как на экране настроек), включение
   // обратно -- сразу: вернуть сообщения нельзя сделать по ошибке во вред.
   function saveNotify(router, muted) {
-    setNotifyBusy(router.id)
-    setNotifyError(null)
+    setNotifyBusy((prev) => new Set(prev).add(router.id))
+    setNotifyError((prev) => {
+      if (!prev.has(router.id)) return prev
+      const next = new Map(prev)
+      next.delete(router.id)
+      return next
+    })
     return setRouterNotify(router.id, muted)
       .then((resp) => setFleet((prev) => withNotifyMuted(prev, router.id, resp?.muted ?? muted)))
       .catch((err) => {
-        setNotifyError({ id: router.id, text: 'Не удалось сохранить. Попробуйте ещё раз.' })
+        setNotifyError((prev) => new Map(prev).set(router.id, 'Не удалось сохранить. Попробуйте ещё раз.'))
         throw err
       })
-      .finally(() => setNotifyBusy(null))
+      .finally(() => setNotifyBusy((prev) => {
+        const next = new Set(prev)
+        next.delete(router.id)
+        return next
+      }))
   }
 
   function toggleNotify(router) {
@@ -204,13 +217,18 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
 
   return (
     <Section title="Парк">
-      {fleetError ? (
+      {/* Отказ первого чтения -- когда rows ещё нет вовсе, показывать нечего,
+          кроме ошибки. Отказ ПОВТОРНОГО чтения (после действия) не должен
+          стирать уже показанный список -- ошибка тогда идёт отдельной
+          строкой рядом с ним, а не вместо него. */}
+      {fleetError && !fleet ? (
         <p class="state state-error">{fleetError}</p>
       ) : !fleet ? (
         <p class="state">Загрузка…</p>
       ) : (
         <>
           <p class="router-lastseen">{fleetHeadline(fleet)}</p>
+          {fleetError && <p class="state state-error">{fleetError}</p>}
 
           <div class="card">
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
@@ -227,8 +245,8 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                 <b>{fleetResult.headline}</b>
               </p>
               {fleetResult.lines.map((line) => (
-                <p class="hint" key={line}>
-                  <Quoted text={line} />
+                <p class="hint" key={line.id}>
+                  <Quoted text={line.text} />
                 </p>
               ))}
             </div>
@@ -263,8 +281,8 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                     <b>{summary.headline}</b>
                   </p>
                   {summary.lines.map((line) => (
-                    <p class="hint" key={line}>
-                      <Quoted text={line} />
+                    <p class="hint" key={line.id}>
+                      <Quoted text={line.text} />
                     </p>
                   ))}
                 </div>
@@ -288,7 +306,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                       role="switch"
                       aria-checked={row.notify.on ? 'true' : 'false'}
                       class="park-switch"
-                      disabled={notifyBusy === row.id}
+                      disabled={notifyBusy.has(row.id)}
                       onClick={() => toggleNotify(row.router)}
                     >
                       <span class="park-switch-track" aria-hidden="true">
@@ -303,7 +321,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                     )}
                   </div>
                   {row.notify.note && <p class="hint">{row.notify.note}</p>}
-                  {notifyError?.id === row.id && <p class="state state-error">{notifyError.text}</p>}
+                  {notifyError.has(row.id) && <p class="state state-error">{notifyError.get(row.id)}</p>}
                   {(row.versions || row.hint) && (
                     <p class="hint">{[row.versions, row.hint].filter(Boolean).join(' · ')}</p>
                   )}
