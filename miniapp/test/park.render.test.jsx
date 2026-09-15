@@ -74,12 +74,12 @@ const FLEET = {
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
-async function mountPark() {
+async function mountPark({ onOpenRouter, currentID } = {}) {
   const sheets = []
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
-    render(<ParkSection openSheet={(s) => sheets.push(s)} />, root)
+    render(<ParkSection openSheet={(s) => sheets.push(s)} onOpenRouter={onOpenRouter} currentID={currentID} />, root)
   })
   await flush()
   return { root, sheets }
@@ -283,6 +283,101 @@ describe('«Парк»: массовые проверки', () => {
     expect(buttons(root, 'Проверяем…')[0].disabled).toBe(true)
     expect(buttons(root, 'Аудит всех')[0].disabled).toBe(true)
     expect(root.textContent).toContain('Ответили 0 из 1…')
+    cleanup(root)
+  })
+})
+
+describe('«Парк»: уведомлять меня', () => {
+  const switchOf = (row) => row.querySelector('[role="switch"]')
+  // office: спящий, отстающий, уведомления выключены.
+  const MUTED_FLEET = () => ({
+    ...FLEET,
+    routers: FLEET.routers.map((r) => (r.id === 14 ? { ...r, notify_muted: true } : r)),
+  })
+
+  it('выключенный роутер остаётся в списке, с кнопками и примечанием', async () => {
+    reset()
+    mocks.fleet = MUTED_FLEET()
+    const { root } = await mountPark({ onOpenRouter: () => {} })
+    const row = rowOf(root, 'office')
+    expect(row).toBeTruthy()
+    expect(switchOf(row).getAttribute('aria-checked')).toBe('false')
+    expect(row.textContent).toContain('Бот не пишет вам про этот роутер. Его экраны открываются как обычно.')
+    expect(buttons(row, 'Обновить агент')[0].disabled).toBe(false)
+    expect(buttons(row, 'Открыть роутер')[0].disabled).toBe(false)
+    expect(root.textContent).toContain('Обновить всех отставших (1)')
+    cleanup(root)
+  })
+
+  it('выключение -- через лист, после него роутер на месте и переключатель выключен', async () => {
+    reset()
+    mocks.notifyReply = { muted: true }
+    const { root, sheets } = await mountPark()
+    const row = rowOf(root, 'car')
+    expect(switchOf(row).getAttribute('aria-checked')).toBe('true')
+    await act(async () => switchOf(row).click())
+    expect(mocks.notify).toEqual([])
+    expect(sheets[0].title).toBe('Не уведомлять вас про «car»?')
+    const sheet = await mountSheet(sheets[0])
+    await act(async () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await flush()
+    expect(mocks.notify).toEqual([{ id: 15, muted: true }])
+    const after = rowOf(root, 'car')
+    expect(after).toBeTruthy()
+    expect(switchOf(after).getAttribute('aria-checked')).toBe('false')
+    expect(root.querySelectorAll('.park-row')).toHaveLength(3)
+    cleanup(root, sheet.root)
+  })
+
+  it('включение обратно -- сразу, без листа', async () => {
+    reset()
+    mocks.fleet = MUTED_FLEET()
+    mocks.notifyReply = { muted: false }
+    const { root, sheets } = await mountPark()
+    await act(async () => switchOf(rowOf(root, 'office')).click())
+    await flush()
+    expect(sheets).toEqual([])
+    expect(mocks.notify).toEqual([{ id: 14, muted: false }])
+    expect(switchOf(rowOf(root, 'office')).getAttribute('aria-checked')).toBe('true')
+    cleanup(root)
+  })
+
+  it('сбой сохранения -- фраза у строки, переключатель не соврал', async () => {
+    reset()
+    mocks.fleet = MUTED_FLEET()
+    mocks.notifyReply = new ApiError(500, 'internal', '/routers/14/notify failed: 500')
+    const { root } = await mountPark()
+    await act(async () => switchOf(rowOf(root, 'office')).click())
+    await flush()
+    const row = rowOf(root, 'office')
+    expect(row.textContent).toContain('Не удалось сохранить. Попробуйте ещё раз.')
+    expect(switchOf(row).getAttribute('aria-checked')).toBe('false')
+    cleanup(root)
+  })
+
+  it('«Открыть роутер» ведёт на экран роутера и у выключенного; у текущего кнопки нет', async () => {
+    reset()
+    mocks.fleet = MUTED_FLEET()
+    const opened = []
+    const { root } = await mountPark({ onOpenRouter: (id) => opened.push(id), currentID: 15 })
+    await act(async () => buttons(rowOf(root, 'office'), 'Открыть роутер')[0].click())
+    expect(opened).toEqual([14])
+    expect(buttons(rowOf(root, 'car'), 'Открыть роутер')).toHaveLength(0)
+    cleanup(root)
+  })
+
+  it('AdminOverlay пробрасывает переход на роутер', async () => {
+    reset()
+    const opened = []
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => {
+      render(<AdminOverlay routerID={15} isAdmin onClose={() => {}} openSheet={() => {}} onOpenRouter={(id) => opened.push(id)} />, root)
+    })
+    await flush()
+    await act(async () => buttons(rowOf(root, 'bronya'), 'Открыть роутер')[0].click())
+    expect(opened).toEqual([11])
     cleanup(root)
   })
 })

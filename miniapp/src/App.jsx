@@ -126,6 +126,7 @@ export function App() {
           openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
           onOpenAgentConfig={() => dispatch({ type: 'overlay', overlay: 'agentcfg' })}
           onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
+          onOpenRouter={(id) => dispatch({ type: 'router', id })}
         />
       )
       : nav.overlay === 'routes' && nav.routerID != null

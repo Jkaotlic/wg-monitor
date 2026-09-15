@@ -71,6 +71,7 @@ export function fleetRouterRows(fleet) {
       // склеенное в строку версий «ставится vX» кнопкам не за что держаться.
       update: agentUpdateState(router),
       warning: router?.agent_update_warning ?? '',
+      notify: notifySwitch(router),
       router,
     }))
 }
@@ -145,4 +146,36 @@ function shortTime(iso) {
 // на экране она превращается в то, что пересылают.
 export function webLinkLines(grant) {
   return [grant?.notice, grant?.limit_notice].filter(Boolean)
+}
+
+// «Уведомлять меня» -- личный выключатель админа по роутеру.
+//
+// Решение оператора: «отключить уведомления в личку от определённого роутера,
+// но и одновременно при желании зайти глянуть, что не так». Выключатель
+// касается ТОЛЬКО сообщений: роутер остаётся в парке, кнопки и экраны
+// работают. Поэтому ни одна функция здесь не фильтрует список.
+export function notifySwitch(router) {
+  const muted = Boolean(router?.notify_muted)
+  return {
+    on: !muted,
+    note: muted ? 'Бот не пишет вам про этот роутер. Его экраны открываются как обычно.' : '',
+  }
+}
+
+export function notifyMuteSheetText(router) {
+  const name = router?.nickname ?? ''
+  return {
+    title: `Не уведомлять вас про «${name}»?`,
+    body:
+      `Бот перестанет писать вам в личку про «${name}»: тревоги, «починилось», «не на связи». ` +
+      'Роутер останется в парке, его экраны открываются как обычно. Вернуть — этим же переключателем.',
+  }
+}
+
+export function withNotifyMuted(fleet, routerID, muted) {
+  if (!fleet) return fleet
+  return {
+    ...fleet,
+    routers: (fleet.routers ?? []).map((r) => (r.id === routerID ? { ...r, notify_muted: muted } : r)),
+  }
 }

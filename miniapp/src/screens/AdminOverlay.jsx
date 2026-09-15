@@ -7,11 +7,11 @@ import { ParkSection } from './ParkSection.jsx'
 //
 // «Парк» -- своя секция (ParkSection.jsx): там обновление агентов и
 // массовые действия. Здесь -- только входы в экраны радиуса одного роутера.
-export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, onOpenAgentConfig, onOpenDNSReset }) {
+export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, onOpenAgentConfig, onOpenDNSReset, onOpenRouter }) {
   return (
     <Overlay title="Обслуживание и доступы" backLabel="Роутер" onBack={onClose}>
       <div class="screen">
-        {isAdmin && <ParkSection openSheet={openSheet} />}
+        {isAdmin && <ParkSection openSheet={openSheet} onOpenRouter={onOpenRouter} currentID={routerID} />}
 
         {/* Настройки агента -- вход только у админа: радиус правки
             router-global, и сервер ответит остальным 404. Сам экран

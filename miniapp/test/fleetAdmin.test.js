@@ -7,6 +7,9 @@ import {
   notifyGapLines,
   watchdogLine,
   webLinkLines,
+  notifySwitch,
+  notifyMuteSheetText,
+  withNotifyMuted,
 } from '../src/fleetAdmin.js'
 
 const FLEET = {
@@ -191,5 +194,44 @@ describe('ссылка в браузер', () => {
   it('ссылку саму на экране не повторяем: она уже ушла в браузер', () => {
     const lines = webLinkLines({ url: 'https://wg.example.com/dashboard/login#token=deadbeef' })
     expect(lines.join(' ')).not.toContain('#token=')
+  })
+})
+
+describe('«уведомлять меня»', () => {
+  const on = { id: 5, nickname: 'car', status: 'alert', notify_muted: false, agent_behind: true, pending_version: '' }
+  const off = { ...on, id: 6, nickname: 'bronya', notify_muted: true }
+
+  it('включено -- без примечания; выключено -- примечание, что экраны открываются как обычно', () => {
+    expect(notifySwitch(on)).toEqual({ on: true, note: '' })
+    expect(notifySwitch(off)).toEqual({
+      on: false,
+      note: 'Бот не пишет вам про этот роутер. Его экраны открываются как обычно.',
+    })
+    expect(notifySwitch({ id: 7, nickname: 'x' }).on).toBe(true)
+  })
+
+  it('лист выключения называет последствие и что роутер не пропадёт', () => {
+    const t = notifyMuteSheetText(on)
+    expect(t.title).toBe('Не уведомлять вас про «car»?')
+    expect(t.body).toContain('Бот перестанет писать вам в личку про «car»')
+    expect(t.body).toContain('Роутер останется в парке, его экраны открываются как обычно.')
+  })
+
+  it('выключение не убирает роутер и не трогает его остальные поля', () => {
+    const fleet = { backend: { version: 'v0.33.0' }, routers: [on, off] }
+    const next = withNotifyMuted(fleet, 5, true)
+    expect(next).not.toBe(fleet)
+    expect(next.routers).toHaveLength(2)
+    expect(next.routers[0]).toEqual({ ...on, notify_muted: true })
+    expect(next.routers[1]).toBe(off)
+    expect(next.backend).toBe(fleet.backend)
+    expect(fleet.routers[0].notify_muted).toBe(false)
+    expect(withNotifyMuted(null, 5, true)).toBeNull()
+  })
+
+  it('строка парка несёт переключатель', () => {
+    const rows = fleetRouterRows({ routers: [off] })
+    expect(rows[0].notify.on).toBe(false)
+    expect(rows[0].name).toBe('bronya')
   })
 })

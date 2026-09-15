@@ -10,6 +10,7 @@ import {
   updateFleetAgents,
   sendCommand,
   fetchCommandResult,
+  setRouterNotify,
 } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { localSheet } from '../sheet.js'
@@ -18,8 +19,10 @@ import {
   fleetHeadline,
   fleetRouterRows,
   notifyGapLines,
+  notifyMuteSheetText,
   watchdogLine,
   webLinkLines,
+  withNotifyMuted,
 } from '../fleetAdmin.js'
 import {
   FLEET_UPDATE_PHRASE,
@@ -44,7 +47,7 @@ import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetB
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
-export function ParkSection({ openSheet }) {
+export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
   // Итог последнего действия с одним роутером -- одна строка над списком:
@@ -55,6 +58,11 @@ export function ParkSection({ openSheet }) {
   // Массовая проверка -- одна на экран: две одновременно смешали бы счёт
   // ответивших, а роутеру пришли бы две команды подряд.
   const [batch, setBatch] = useState(null)
+
+  // Выключатель сохраняется по одному роутеру за раз; ошибка -- у той строки,
+  // где нажали, а не общей фразой над списком.
+  const [notifyBusy, setNotifyBusy] = useState(null)
+  const [notifyError, setNotifyError] = useState(null)
 
   const [linkBusy, setLinkBusy] = useState(false)
   const [linkLines, setLinkLines] = useState([])
@@ -154,6 +162,38 @@ export function ParkSection({ openSheet }) {
     if (kind === 'audit') load()
   }
 
+  // Решение оператора: «отключить уведомления в личку от определённого
+  // роутера, но и одновременно при желании зайти глянуть, что не так».
+  // Выключение спрашивает «точно?» (как на экране настроек), включение
+  // обратно -- сразу: вернуть сообщения нельзя сделать по ошибке во вред.
+  function saveNotify(router, muted) {
+    setNotifyBusy(router.id)
+    setNotifyError(null)
+    return setRouterNotify(router.id, muted)
+      .then((resp) => setFleet((prev) => withNotifyMuted(prev, router.id, resp?.muted ?? muted)))
+      .catch((err) => {
+        setNotifyError({ id: router.id, text: 'Не удалось сохранить. Попробуйте ещё раз.' })
+        throw err
+      })
+      .finally(() => setNotifyBusy(null))
+  }
+
+  function toggleNotify(router) {
+    if (router.notify_muted) {
+      saveNotify(router, false).catch(() => {})
+      return
+    }
+    const text = notifyMuteSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Не уведомлять',
+        perform: () => saveNotify(router, true),
+      }),
+    )
+  }
+
   const rows = fleet ? fleetRouterRows(fleet) : []
   const gaps = fleet ? notifyGapLines(fleet) : []
   const watchdog = fleet ? watchdogLine(fleet) : ''
@@ -240,6 +280,28 @@ export function ParkSection({ openSheet }) {
               {rows.map((row) => (
                 <div class="park-row" key={row.id}>
                   <DataRow title={row.name} value={row.state} valueSub={row.sub} />
+                  <div class="park-row-controls">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={row.notify.on ? 'true' : 'false'}
+                      class="park-switch"
+                      disabled={notifyBusy === row.id}
+                      onClick={() => toggleNotify(row.router)}
+                    >
+                      <span class="park-switch-track" aria-hidden="true">
+                        <span class="park-switch-thumb" />
+                      </span>
+                      <span>уведомлять меня</span>
+                    </button>
+                    {onOpenRouter && row.id !== currentID && (
+                      <button type="button" class="btn btn-ghost btn-row" onClick={() => onOpenRouter(row.id)}>
+                        Открыть роутер
+                      </button>
+                    )}
+                  </div>
+                  {row.notify.note && <p class="hint">{row.notify.note}</p>}
+                  {notifyError?.id === row.id && <p class="state state-error">{notifyError.text}</p>}
                   {(row.versions || row.hint) && (
                     <p class="hint">{[row.versions, row.hint].filter(Boolean).join(' · ')}</p>
                   )}
