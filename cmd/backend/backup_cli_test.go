@@ -205,3 +205,56 @@ func tarMember(t *testing.T, gzBody []byte, name string) []byte {
 		return body
 	}
 }
+
+// Ключ оживления агента живёт отдельно от базы: бэкап с базой и конфигом не
+// должен нести его ни отдельным файлом, ни внутри другого. Иначе утёкший
+// бэкап расшифровывал бы пароли роутеров из revive_secrets.
+func TestRunBackupCommandDoesNotCarryReviveKey(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "state.db")
+	initBackupTestDB(t, dbPath)
+	botPath := filepath.Join(dir, "bot-token.txt")
+	passPath := filepath.Join(dir, "backup-passphrase.txt")
+	keyPath := filepath.Join(dir, "revive.key")
+	cfgPath := filepath.Join(dir, "backend.yaml")
+	outDir := filepath.Join(dir, "backups")
+
+	const reviveKey = "q2V2aXZlLWtleS1maXh0dXJlLTMyLWJ5dGVzLWxvbmch" // фикстура, не настоящий ключ
+	mustWrite(t, botPath, "bot-secret-token\n")
+	mustWrite(t, passPath, "backup password\n")
+	mustWrite(t, keyPath, reviveKey+"\n")
+	mustWrite(t, cfgPath, "listen: 127.0.0.1:8080\n"+
+		"db_path: "+slash(dbPath)+"\n"+
+		"telegram:\n"+
+		"  bot_token_file: "+slash(botPath)+"\n"+
+		"  chat_id: -1001\n"+
+		"  admin_user_id: 42\n"+
+		"revive:\n"+
+		"  key_file: "+slash(keyPath)+"\n")
+
+	if err := runBackupCommand([]string{
+		"--config", cfgPath, "--passphrase-file", passPath, "--out-dir", outDir, "--test-kdf",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	files, err := filepath.Glob(filepath.Join(outDir, "wg-monitor-full-backup-*.tgz.enc"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("backup files=%v err=%v", files, err)
+	}
+	blob, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := backup.Decrypt(blob, []byte("backup password"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name := range tarMembers(t, plain) {
+		if strings.Contains(name, "revive") {
+			t.Fatalf("в бэкапе файл ключа оживления: %s", name)
+		}
+		if bytes.Contains(tarMember(t, plain, name), []byte(reviveKey)) {
+			t.Fatalf("ключ оживления попал в бэкап внутри %s", name)
+		}
+	}
+}

@@ -67,6 +67,58 @@ continues to accept `Authorization: Bearer <token>` for scripted operator calls.
 If `enabled: true` is set but the token file is missing or empty, the backend
 refuses to start.
 
+## Agent Revive Key (оживление агента)
+
+Оживление переустанавливает агента на роутере, который был выключен: админ один раз
+вводит пароль root или вход в панель роутера в мини-аппе, бэкенд хранит его
+зашифрованным до успеха, отмены или срока и затем стирает. Шифрование — AES-256-GCM,
+ключ лежит **отдельным файлом**, а не в базе: база или ночной бэкап без этого файла
+паролей не раскрывают. Без ключа бэкенд работает как раньше, а экран отвечает
+«оживление не настроено на сервере».
+
+> Создание ключа и перезапуск — изменение продакшена. Выполнять только с явного «да»
+> оператора.
+
+Docker-раскладка (Pi): каталог бэкенда содержит `config/backend.yaml`, `secrets/`,
+`data/`, `docker-compose.yml`; внутри контейнера `secrets/` смонтирован как `/secrets`.
+**Перед записью ключа проверить монтирование `secrets/` в `docker-compose.yml`** — если
+том не смонтирован или смонтирован не туда, ключ уйдёт мимо контейнера, и после
+перезапуска бэкенд его не найдёт.
+
+```bash
+cd <каталог бэкенда>
+umask 077
+head -c 32 /dev/urandom | base64 > secrets/revive.key
+chmod 600 secrets/revive.key
+ls -l secrets/            # владелец revive.key должен совпадать с соседними файлами токенов
+```
+
+Если владелец отличается от остальных файлов в `secrets/`, выровнять его по соседу
+(`sudo chown --reference=secrets/<файл токена бота> secrets/revive.key`).
+
+В `config/backend.yaml`:
+
+```yaml
+revive:
+  key_file: /secrets/revive.key
+```
+
+Перезапустить контейнер бэкенда (`docker compose restart` в каталоге бэкенда) и
+проверить журнал: строка `оживление агента включено`. Строка
+`оживление агента выключено` с причиной означает, что файл не найден или длина ключа
+не 32 байта.
+
+VPS-раскладка (systemd): тот же файл в `/etc/wg-monitor/revive.key`
+(`install -o wgmonitor -g wgmonitor -m 600 /dev/null /etc/wg-monitor/revive.key`,
+затем `head -c 32 /dev/urandom | base64 | sudo tee /etc/wg-monitor/revive.key >/dev/null`),
+`key_file: /etc/wg-monitor/revive.key`, `sudo systemctl restart wg-monitor-backend`.
+
+Ключ **не входит** в ночной зашифрованный бэкап (это проверяет тест
+`TestRunBackupCommandDoesNotCarryReviveKey`). Потеря ключа не ломает ничего, кроме
+ожидающих оживлений: они закроются как «пароль на сервере не расшифровывается —
+поставьте оживление заново». Замена ключа действует так же. Копировать ключ рядом с
+бэкапом базы нельзя — это сводит шифрование на нет.
+
 ## Add A Router
 
 Use `[3] Routers`, then the add/re-enroll action.
