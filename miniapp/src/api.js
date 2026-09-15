@@ -103,6 +103,19 @@ export function updateFleetAgents(confirm) {
   return request('/fleet/agent/update', { method: 'POST', body: JSON.stringify({ confirm }) })
 }
 
+// Оживление агента: пароль уходит один раз, в теле этого POST, и больше
+// клиентом не читается -- сервер его не возвращает никаким маршрутом. Тело
+// собирает revive.js (пустых полей в нём нет).
+export function reviveRouterAgent(routerID, body) {
+  return request(`/routers/${routerID}/agent/revive`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+// Отмена оживления: сервер перестаёт ждать роутер и стирает пароль.
+// cleared=false -- снимать было нечего, это не ошибка.
+export function cancelRouterAgentRevive(routerID) {
+  return request(`/routers/${routerID}/agent/revive`, { method: 'DELETE' })
+}
+
 export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }
