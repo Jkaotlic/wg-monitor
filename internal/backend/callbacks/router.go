@@ -302,6 +302,12 @@ func newImportToken() string {
 // log every callback's from.id for audit so post-hoc you can see who pushed
 // what.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
+	// Кнопка выключения уведомлений админа: из лички, двумя полями -- до
+	// проверки чата и до Parse (notify_mute_callback.go).
+	if isAdminMuteCallback(q.Data) {
+		r.handleAdminMuteCallback(ctx, q)
+		return
+	}
 	adminPrivatePanel := r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))
 	// Кнопка под тревогой в собственной личке -- законный источник нажатия:
 	// уведомления переехали из тем группы туда. Пропуск узкий: админские
