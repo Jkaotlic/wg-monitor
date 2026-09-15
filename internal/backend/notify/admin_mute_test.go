@@ -115,7 +115,10 @@ func TestFanout_EveryMethodGivesAdminMuteRowOnly(t *testing.T) {
 		// reply -- метод шлёт через нижнюю клавиатуру, разметку смотреть там.
 		reply bool
 	}{
-		{"Send", func(f *Fanout, r int64) error { _, err := f.Send(context.Background(), r, "текст", ""); return err }, false},
+		{"Send", func(f *Fanout, r int64) error {
+			_, err := f.Send(context.Background(), r, "текст", "")
+			return err
+		}, false},
 		{"SendKeyboard/nil", func(f *Fanout, r int64) error {
 			_, err := f.SendKeyboard(context.Background(), r, "текст", "", nil)
 			return err
