@@ -7,6 +7,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alertaction"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -18,6 +19,18 @@ import (
 // the callback router's post-action edits already rely on
 // (internal/backend/callbacks/router.go).
 var miniappEmptyKeyboard = tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
+
+// adminOnlyMuteKeyboard -- клавиатура из одного ряда «Не писать мне про этот
+// роутер» (B7a). Под тревогой у админа этот ряд есть всегда (рассылка
+// дописывает его поверх обычных кнопок, notify.withAdminMuteRow) — полная
+// зачистка до miniappEmptyKeyboard, как у остальных получателей, стирала бы
+// его: владелец, снявший тревогу через приложение, молча забирал бы у
+// админа кнопку выключения до следующей тревоги по этому роутеру.
+func adminOnlyMuteKeyboard(routerUserID int64) *tg.InlineKeyboardMarkup {
+	return &tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+		{Text: notify.AdminMuteButtonText, CallbackData: notify.AdminMuteCallbackData(routerUserID)},
+	}}}
+}
 
 // miniappIncident is the enriched incident shape exposed by the mini-app:
 // includes current suppression state so the UI can render "silenced until X" /
@@ -117,7 +130,13 @@ func miniappSyncAlertMessage(d Deps, r *http.Request, routerID int64, checkName,
 		if muted[chatID] {
 			continue
 		}
-		if err := d.MiniappTG.EditMessageReplyMarkup(ctx, chatID, msgID, &miniappEmptyKeyboard); err != nil && d.Logger != nil {
+		kb := &miniappEmptyKeyboard
+		if d.TelegramAdminUserID != 0 && chatID == d.TelegramAdminUserID {
+			// Админу -- не пустая клавиатура, а ряд выключения (B7a): под
+			// тревогой он есть всегда, и полная зачистка стирала бы его.
+			kb = adminOnlyMuteKeyboard(routerID)
+		}
+		if err := d.MiniappTG.EditMessageReplyMarkup(ctx, chatID, msgID, kb); err != nil && d.Logger != nil {
 			d.Logger.Warn("miniapp: strip alert buttons failed", "router_id", routerID, "telegram_user_id", chatID, "err", err)
 		}
 		mid := msgID

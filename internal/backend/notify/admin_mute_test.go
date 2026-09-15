@@ -138,6 +138,20 @@ func TestFanout_EveryMethodGivesAdminMuteRowOnly(t *testing.T) {
 			_, err := f.SendWithReplyKeyboard(context.Background(), r, "текст", "", *baseKB())
 			return err
 		}, true},
+		// B7b: mobileWakeKeyboard возвращает nil, когда miniAppBaseURL не
+		// настроен (lifecycle_notifier.go) -- без своей кнопки. Админ обязан
+		// всё равно получить ряд выключения: replyMarkupFor не находит для
+		// nil-разметки ни один case и отдаёт markup как есть (тоже nil), и
+		// тогда SendWithReplyKeyboard падает в sendOne, который дописывает
+		// ряд админу независимо от того, что было в исходной разметке (см.
+		// комментарий "Разметки нет или отправитель её не умеет" в fanout.go).
+		// Путь другой, чем у SendWithReplyKeyboard/inline (там m != nil, и
+		// разметка уходит через SendMessageWithReplyKeyboard) -- поэтому итог
+		// смотрим в s.inline, а не в s.reply, reply=false.
+		{"SendWithReplyKeyboard/nil", func(f *Fanout, r int64) error {
+			_, err := f.SendWithReplyKeyboard(context.Background(), r, "текст", "", nil)
+			return err
+		}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
