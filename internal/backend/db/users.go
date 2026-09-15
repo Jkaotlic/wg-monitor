@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -539,7 +540,8 @@ func (u *UsersRepo) UpdateDeployInfo(nickname string, info DeployInfo) error {
 func (u *UsersRepo) MarkPendingDeploy(id int64, targetVersion, pendingSince string) error {
 	res, err := u.d.db.Exec(
 		`UPDATE users
-		    SET pending_version = ?, pending_since = ?
+		    SET pending_version = ?, pending_since = ?,
+		        pending_attempts = 0, pending_last_error = NULL
 		  WHERE id = ?
 		    AND (pending_version IS NULL OR pending_version = '')`,
 		targetVersion, pendingSince, id,
@@ -608,7 +610,122 @@ func (u *UsersRepo) ClearPendingDeploy(id int64) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	// Счёт попыток и причину неудачи сбрасываем отдельно и безусловно: после
+	// сдачи отметки уже нет, а причина ещё висит, и отмена обязана убрать и её.
+	// cleared при этом по-прежнему говорит только про отметку.
+	if _, err := u.d.db.Exec(
+		`UPDATE users SET pending_attempts = 0, pending_last_error = NULL
+		  WHERE id = ? AND (pending_attempts != 0 OR pending_last_error IS NOT NULL)`, id); err != nil {
+		return false, fmt.Errorf("users.ClearPendingDeploy attempts: %w", err)
+	}
 	return n > 0, nil
+}
+
+// MaxPendingLastErrorBytes -- сколько текста ошибки агента храним. Хвост
+// вывода длиннее экрана и тревоги, а база -- не журнал.
+const MaxPendingLastErrorBytes = 1000
+
+// PendingDeployState -- назначенное обновление агента целиком.
+type PendingDeployState struct {
+	Version   string // пусто -- отметки нет
+	Since     string // RFC3339, как писал MarkPendingDeploy
+	Attempts  int    // сколько раз команда уходила агенту
+	LastError string // сырой текст последней неудачи, до MaxPendingLastErrorBytes
+}
+
+// PendingDeploy читает назначенное обновление одного роутера.
+func (u *UsersRepo) PendingDeploy(id int64) (PendingDeployState, error) {
+	var version, since, lastErr sql.NullString
+	var attempts int
+	err := u.d.db.QueryRow(
+		`SELECT pending_version, pending_since, pending_attempts, pending_last_error FROM users WHERE id = ?`, id,
+	).Scan(&version, &since, &attempts, &lastErr)
+	if errors.Is(err, sql.ErrNoRows) {
+		return PendingDeployState{}, ErrUserNotFound
+	}
+	if err != nil {
+		return PendingDeployState{}, fmt.Errorf("users.PendingDeploy: %w", err)
+	}
+	return PendingDeployState{
+		Version:   strings.TrimSpace(version.String),
+		Since:     since.String,
+		Attempts:  attempts,
+		LastError: lastErr.String,
+	}, nil
+}
+
+// PendingDeployStates -- то же для всего парка одним запросом (экран «Парк»).
+func (u *UsersRepo) PendingDeployStates() (map[int64]PendingDeployState, error) {
+	rows, err := u.d.db.Query(
+		`SELECT id, pending_version, pending_since, pending_attempts, pending_last_error FROM users`)
+	if err != nil {
+		return nil, fmt.Errorf("users.PendingDeployStates: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]PendingDeployState)
+	for rows.Next() {
+		var id int64
+		var version, since, lastErr sql.NullString
+		var attempts int
+		if err := rows.Scan(&id, &version, &since, &attempts, &lastErr); err != nil {
+			return nil, fmt.Errorf("users.PendingDeployStates scan: %w", err)
+		}
+		out[id] = PendingDeployState{
+			Version:   strings.TrimSpace(version.String),
+			Since:     since.String,
+			Attempts:  attempts,
+			LastError: lastErr.String,
+		}
+	}
+	return out, rows.Err()
+}
+
+// IncrementPendingAttempts засчитывает выдачу команды обновления агенту.
+// Двигает счёт, только если отметка всё ещё указывает на эту цель: выдача
+// команды прошлой цели к новой постановке отношения не имеет.
+func (u *UsersRepo) IncrementPendingAttempts(id int64, targetVersion string) (int, bool, error) {
+	if strings.TrimSpace(targetVersion) == "" {
+		return 0, false, nil
+	}
+	var n int
+	err := u.d.db.QueryRow(
+		`UPDATE users SET pending_attempts = pending_attempts + 1
+		  WHERE id = ? AND pending_version = ?
+		  RETURNING pending_attempts`, id, targetVersion,
+	).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("users.IncrementPendingAttempts: %w", err)
+	}
+	return n, true, nil
+}
+
+// RecordPendingDeployError запоминает, чем кончилась неудачная попытка, и
+// возвращает текущий счёт попыток. Отметку НЕ снимает: решение сдаться
+// принимает вызывающий по счёту.
+func (u *UsersRepo) RecordPendingDeployError(id int64, targetVersion, errText string) (int, bool, error) {
+	if strings.TrimSpace(targetVersion) == "" {
+		return 0, false, nil
+	}
+	errText = strings.TrimSpace(errText)
+	if len(errText) > MaxPendingLastErrorBytes {
+		errText = strings.ToValidUTF8(errText[:MaxPendingLastErrorBytes], "")
+	}
+	var n int
+	err := u.d.db.QueryRow(
+		`UPDATE users SET pending_last_error = ?
+		  WHERE id = ? AND pending_version = ?
+		  RETURNING pending_attempts`, errText, id, targetVersion,
+	).Scan(&n)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("users.RecordPendingDeployError: %w", err)
+	}
+	return n, true, nil
 }
 
 // UpdateLastSeenAgentVersion advances users.last_deployed_version to the
@@ -650,11 +767,13 @@ func (u *UsersRepo) UpdateLastSeenAgentVersionResult(id int64, version string) (
 	res, err := u.d.db.Exec(
 		`UPDATE users
 		    SET last_deployed_version = ?,
+		        pending_attempts = CASE WHEN pending_version = ? THEN 0 ELSE pending_attempts END,
+		        pending_last_error = CASE WHEN pending_version = ? THEN NULL ELSE pending_last_error END,
 		        pending_since = CASE WHEN pending_version = ? THEN NULL ELSE pending_since END,
 		        pending_version = CASE WHEN pending_version = ? THEN NULL ELSE pending_version END
 		  WHERE id = ?
 		    AND (COALESCE(last_deployed_version, '') != ? OR pending_version = ?)`,
-		version, version, version, id, version, version,
+		version, version, version, version, version, id, version, version,
 	)
 	if err != nil {
 		return AgentVersionUpdate{}, fmt.Errorf("users.UpdateLastSeenAgentVersion: %w", err)
