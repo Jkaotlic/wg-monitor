@@ -411,6 +411,10 @@ type Deps struct {
 	// функция выключена: нет revive.key_file или ключ не той длины; маршруты
 	// мини-аппа отвечают revive_disabled. Методы безопасны на nil.
 	Revive *revive.Service
+	// ReviveOverride подменяет Revive для маршрутов мини-аппа: тесты и
+	// песочница подставляют фейк без ключа шифрования и без воркера. В
+	// проде пусто -- маршруты берут Revive.
+	ReviveOverride ReviveAPI
 }
 
 type AlertPolicy struct {
