@@ -410,6 +410,9 @@ func TestReviveEngine_LaunchUsesBackendVersionWhenTagged(t *testing.T) {
 // на всю установку, постановка нового оживления зависала бы на те же минуты,
 // а KeenDNS-реле обрубает HTTP на 15 секундах.
 func TestReviveEngine_LaunchReturnsBeforeInstallFinishes(t *testing.T) {
+	// Версия -- заглушкой: без неё запуск идёт в api.github.com и проходит
+	// только на сети или на кэше провала, оставленном соседним тестом.
+	stubLatestVersion(t, "v0.34.1")
 	block := make(chan struct{})
 	defer close(block) // не оставлять горутину relay висеть после теста
 	relay := &fakeProvisionRelay{rc: 0, block: block}
@@ -445,6 +448,9 @@ func TestReviveEngine_LaunchReturnsBeforeInstallFinishes(t *testing.T) {
 // остановился ровно в момент запуска" не должна ронять уже начатую
 // переустановку.
 func TestReviveEngine_LaunchDetachesFromCallerCtx(t *testing.T) {
+	// Версия -- заглушкой: без неё запуск идёт в api.github.com и проходит
+	// только на сети или на кэше провала, оставленном соседним тестом.
+	stubLatestVersion(t, "v0.34.1")
 	relay := &fakeProvisionRelay{rc: 0}
 	d, database := newReinstallCoreDeps(t, relay)
 	u := seedReinstallRouter(t, database, "bronya", "https://awg.example.com", "")
@@ -469,6 +475,9 @@ func TestReviveEngine_LaunchDetachesFromCallerCtx(t *testing.T) {
 // со старым. awgm_url меняется между постановкой (воркер прочитал бы
 // старый) и запуском.
 func TestReviveEngine_LaunchUsesCurrentAWGMURL(t *testing.T) {
+	// Версия -- заглушкой: без неё запуск идёт в api.github.com и проходит
+	// только на сети или на кэше провала, оставленном соседним тестом.
+	stubLatestVersion(t, "v0.34.1")
 	relay := &fakeProvisionRelay{rc: 0}
 	d, database := newReinstallCoreDeps(t, relay)
 	u := seedReinstallRouter(t, database, "bronya", "https://awg-old.example.com", "")
@@ -497,6 +506,9 @@ func TestReviveEngine_LaunchUsesCurrentAWGMURL(t *testing.T) {
 // сквозь адаптер. Роутер уже на версии новее запрошенной цели -- запуск
 // обязан отказать окончательным downgrade_rejected, а не тихо откатить агента.
 func TestReviveEngine_LaunchNeverAllowsDowngrade(t *testing.T) {
+	// Версия -- заглушкой: без неё запуск идёт в api.github.com и проходит
+	// только на сети или на кэше провала, оставленном соседним тестом.
+	stubLatestVersion(t, "v0.34.1")
 	relay := &fakeProvisionRelay{rc: 0}
 	d, database := newReinstallCoreDeps(t, relay)
 	u := seedReinstallRouter(t, database, "bronya", "https://awg.example.com", "v9.9.9")
