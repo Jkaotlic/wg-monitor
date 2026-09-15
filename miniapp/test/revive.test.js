@@ -118,6 +118,12 @@ describe('оживление: лист', () => {
     expect(known.find((f) => f.name === 'root_password').label).not.toContain('необязательно')
     const bronya = reviveFields(off({ nickname: 'bronya', panel_address_known: false }))
     expect(bronya.map((f) => f.name)).toContain('awgm_url')
+    // Финальное ревью 15.09, I1: подсказка не зовёт вводить локальный адрес --
+    // со стороны сервера он ведёт в чужой роутер.
+    const addr = bronya.find((f) => f.name === 'awgm_url')
+    expect(addr.placeholder).toMatch(/^https:\/\/[a-z]/)
+    expect(addr.placeholder).not.toMatch(/\d+\.\d+\.\d+\.\d+|localhost|\.local\b|\.lan\b/)
+    expect(addr.label).toContain('KeenDNS')
     // Поле без признака (старый сервер) -- адрес не спрашиваем.
     expect(reviveFields(off({ panel_address_known: undefined })).map((f) => f.name)).not.toContain('awgm_url')
     for (const f of bronya) {
@@ -140,7 +146,7 @@ describe('оживление: лист', () => {
     const bronya = reviveReady(off({ panel_address_known: false }))
     expect(bronya({ root_password: 'x' })).toBe(false)
     expect(bronya({ root_password: 'x', awgm_url: '  ' })).toBe(false)
-    expect(bronya({ root_password: 'x', awgm_url: 'https://192.168.1.1' })).toBe(true)
+    expect(bronya({ root_password: 'x', awgm_url: 'https://router.example.com' })).toBe(true)
   })
 
   it('тело запроса: пустых полей нет, пароль не обрезан, срок числом, адрес -- только когда спрашивали', () => {
@@ -148,8 +154,8 @@ describe('оживление: лист', () => {
       .toEqual({ confirm: 'Bronya', expires_days: 7, root_password: ' pa ss ' })
     expect(reviveRequestBody({ root_password: 'r', awgm_login: ' admin ', awgm_password: 'p', awgm_url: 'https://x' }, 'car', off()))
       .toEqual({ confirm: 'car', expires_days: 30, root_password: 'r', awgm_login: 'admin', awgm_password: 'p' })
-    expect(reviveRequestBody({ root_password: 'r', awgm_api_key: ' k ', awgm_url: ' https://192.168.1.1 ', expires_days: '14' }, 'bronya', off({ panel_address_known: false })))
-      .toEqual({ confirm: 'bronya', expires_days: 14, root_password: 'r', awgm_api_key: 'k', awgm_url: 'https://192.168.1.1' })
+    expect(reviveRequestBody({ root_password: 'r', awgm_api_key: ' k ', awgm_url: ' https://router.example.com ', expires_days: '14' }, 'bronya', off({ panel_address_known: false })))
+      .toEqual({ confirm: 'bronya', expires_days: 14, root_password: 'r', awgm_api_key: 'k', awgm_url: 'https://router.example.com' })
   })
 
   it('текст листа: имя роутера, без внутренних имён; про адрес -- только у bronya; предупреждение про пароль', () => {
@@ -167,8 +173,8 @@ describe('оживление: лист', () => {
       confirm_mismatch: 'Имя роутера набрано неверно — оживление не поставлено.',
       revive_disabled: REVIVE_NOT_CONFIGURED,
       no_awgm_url: 'У роутера не записан адрес панели — укажите его.',
-      invalid_awgm_url: 'Адрес панели должен начинаться с http:// или https://.',
-      awgm_url_already_set: 'Адрес панели у роутера уже записан — закройте лист и откройте заново.',
+      invalid_awgm_url: 'Нужен внешний адрес панели с https — например, имя KeenDNS. Локальные адреса не подходят.',
+      awgm_url_already_set: 'Адрес панели у роутера уже записан. Поменять его можно в веб-дашборде.',
       no_credentials: 'Нужен пароль root роутера.',
       agent_alive: 'Агент на роутере отвечает — оживлять нечего.',
       not_found: 'Роутер не найден — закройте экран и откройте заново.',
@@ -186,11 +192,14 @@ describe('оживление: лист', () => {
     expect(reviveErrorText(new ApiError(502, 'unknown', 'x', 'Bad Gateway'))).toBe('')
   })
 
-  it('итог: ждёт -- «переустановится, когда выйдет на связь» с датой; запущено сразу -- так и сказано', () => {
+  // Финальное ревью 15.09, M4: сервер отвечает на постановку всегда
+  // «waiting» (запуск идёт уже после ответа), поэтому текста «запущено сразу»
+  // нет -- любой ответ говорит «поставлено».
+  it('итог: «переустановится, когда выйдет на связь» с датой, при любом статусе ответа', () => {
     expect(reviveDoneText({ status: 'waiting', expires_at: '2026-10-15T12:00:00Z' }, 'bronya'))
       .toBe('Оживление «bronya» поставлено: агент переустановится, когда роутер выйдет на связь. Ждём до 15.10.2026.')
     expect(reviveDoneText({ status: 'running', expires_at: '2026-10-15T12:00:00Z' }, 'bronya'))
-      .toBe('Оживление «bronya» запущено: роутер на связи, агент ставится заново.')
+      .toBe('Оживление «bronya» поставлено: агент переустановится, когда роутер выйдет на связь. Ждём до 15.10.2026.')
   })
 
   it('отмена: лист и итог словами', () => {

@@ -738,10 +738,10 @@ describe('«Парк»: оживление агента', () => {
     expect(sheet.root.querySelector('#sheet-field-root_password').type).toBe('password')
     expect(sheet.root.querySelector('#sheet-field-expires_days').value).toBe('30')
     await fillField(sheet.root, 'root_password', SECRET)
-    await fillField(sheet.root, 'awgm_url', ' https://192.168.1.1 ')
+    await fillField(sheet.root, 'awgm_url', ' https://router.example.com ')
     await typeAndConfirm(sheet.root, 'Bronya')
     expect(mocks.revives).toEqual([
-      { id: 22, body: { confirm: 'Bronya', expires_days: 30, root_password: SECRET, awgm_url: 'https://192.168.1.1' } },
+      { id: 22, body: { confirm: 'Bronya', expires_days: 30, root_password: SECRET, awgm_url: 'https://router.example.com' } },
     ])
     expect(sheet.closed()).toBe(1)
     await flush()

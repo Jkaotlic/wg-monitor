@@ -105,7 +105,10 @@ export function reviveFields(router) {
     { name: 'awgm_api_key', label: 'Ключ панели роутера (необязательно)', type: 'password' },
   ]
   if (asksPanelAddress(router)) {
-    fields.push({ name: 'awgm_url', label: 'Адрес панели роутера', type: 'text', placeholder: 'https://192.168.1.1' })
+    // Только внешний адрес (финальное ревью 15.09, I1): сервер живёт в той же
+    // домашней сети, что и роутеры, и локальный адрес привёл бы его в чужой
+    // роутер. Сервер такой адрес отклоняет; подсказка его и не предлагает.
+    fields.push({ name: 'awgm_url', label: 'Внешний адрес панели роутера (KeenDNS)', type: 'text', placeholder: 'https://router.example.com' })
   }
   fields.push({ name: 'expires_days', label: 'Ждать роутер', type: 'select', options: REVIVE_EXPIRY_OPTIONS, initial: REVIVE_DEFAULT_DAYS })
   return fields
@@ -114,7 +117,8 @@ export function reviveFields(router) {
 export function reviveReady(router) {
   const needsAddress = asksPanelAddress(router)
   return (values = {}) => {
-    // Сервер обрезает пароль root по краям: из одних пробелов он пустой.
+    // Пароль из одних пробелов сервер считает пустым; сам пароль уходит и
+    // хранится как введён -- пробел законный символ.
     if (trimmed(values.root_password) === '') return false
     return !needsAddress || trimmed(values.awgm_url) !== ''
   }
@@ -138,8 +142,8 @@ const ERROR_TEXT = {
   confirm_mismatch: 'Имя роутера набрано неверно — оживление не поставлено.',
   revive_disabled: REVIVE_NOT_CONFIGURED,
   no_awgm_url: 'У роутера не записан адрес панели — укажите его.',
-  invalid_awgm_url: 'Адрес панели должен начинаться с http:// или https://.',
-  awgm_url_already_set: 'Адрес панели у роутера уже записан — закройте лист и откройте заново.',
+  invalid_awgm_url: 'Нужен внешний адрес панели с https — например, имя KeenDNS. Локальные адреса не подходят.',
+  awgm_url_already_set: 'Адрес панели у роутера уже записан. Поменять его можно в веб-дашборде.',
   no_credentials: 'Нужен пароль root роутера.',
   agent_alive: 'Агент на роутере отвечает — оживлять нечего.',
   not_found: 'Роутер не найден — закройте экран и откройте заново.',
@@ -168,8 +172,9 @@ function dayOf(iso) {
   return `${pad(t.getUTCDate())}.${pad(t.getUTCMonth() + 1)}.${t.getUTCFullYear()}`
 }
 
+// Сервер отвечает на постановку всегда «waiting»: проверка и запуск идут уже
+// после ответа (Service.put, confirmSoon). Текста «запущено сразу» нет.
 export function reviveDoneText(resp, nickname) {
-  if (resp?.status === 'running') return `Оживление «${nickname}» запущено: роутер на связи, агент ставится заново.`
   const until = dayOf(resp?.expires_at)
   return `Оживление «${nickname}» поставлено: агент переустановится, когда роутер выйдет на связь.${until ? ` Ждём до ${until}.` : ''}`
 }
