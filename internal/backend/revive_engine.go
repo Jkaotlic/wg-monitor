@@ -111,6 +111,13 @@ func (e *reviveEngine) Outcome(jobID string) (revive.Outcome, bool) {
 	// нет и не должно быть (carry #2, мандатное ревью): посторонняя ошибка,
 	// в которой случайно встретились эти цифры, не должна выглядеть как
 	// "пароль не подошёл" и стирать ещё годный секрет раньше времени.
+	//
+	// Оговорка (verify-done 15.09): «структурное» оно только для этого
+	// адаптера. Сам HintAuthFailed выводится из ТЕКСТА ошибки relay
+	// (provision/runner.go, terminalConnectHint: подстроки auth_failed,
+	// unauthorized, 401, 403...) -- у relay нет кода ошибки. Сигнал поэтому
+	// не полностью структурный: посторонний текст с «401» внутри даст ложный
+	// «пароль не подошёл», а новая формулировка отказа входа -- пропуск.
 	if job.Hint == provision.HintAuthFailed {
 		return revive.Outcome{Finished: true, AuthFailed: true, Text: "пароль не подошёл"}, true
 	}
