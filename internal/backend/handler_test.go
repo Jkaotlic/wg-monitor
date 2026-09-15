@@ -1687,7 +1687,9 @@ func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t
 	}
 }
 
-func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
+// Протухшая команда -- выброшенный носитель, а не отказ от намерения:
+// отметка остаётся, досылка на контакте положит новую.
+func TestExpiredSelfUpdateKeepsPendingDeploy(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-expired.db"))
 	defer d.Close()
 	tok := "eded22eded22eded22eded22eded22eded22eded22eded22eded22eded22eded"
@@ -1714,12 +1716,13 @@ func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("expired self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc200" {
+		t.Fatalf("протухшая команда сняла отметку: version=%v", u.PendingVersion)
 	}
 }
 
-func TestSupersededSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
+// Вытеснение прежней команды новой -- тоже не отказ от намерения.
+func TestSupersededSelfUpdateKeepsPendingDeploy(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-superseded.db"))
 	defer d.Close()
 	tok := "eded33eded33eded33eded33eded33eded33eded33eded33eded33eded33eded"
@@ -1729,30 +1732,22 @@ func TestSupersededSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 	}
 	q := cmdpkg.New()
 	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	oldUpdate := wire.Command{
-		ID:       "cmd-old",
-		Action:   "self_update",
-		Args:     map[string]any{"version": "v0.13.0-rc200"},
-		IssuedAt: time.Now().UTC(),
-	}
-	newUpdate := wire.Command{
-		ID:       "cmd-new",
-		Action:   "self_update",
-		Args:     map[string]any{"version": "v0.13.0-rc201"},
-		IssuedAt: time.Now().UTC(),
-	}
-	if err := q.Enqueue(uid, oldUpdate); err != nil {
-		t.Fatalf("enqueue old self_update: %v", err)
-	}
-	if err := q.Enqueue(uid, newUpdate); err != nil {
-		t.Fatalf("enqueue new self_update: %v", err)
+	for _, id := range []string{"cmd-old", "cmd-new"} {
+		if err := q.Enqueue(uid, wire.Command{
+			ID:       id,
+			Action:   "self_update",
+			Args:     map[string]any{"version": "v0.13.0-rc200"},
+			IssuedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
 	}
 	u, err := d.Users().GetByID(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("superseded self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc200" {
+		t.Fatalf("вытесненная команда сняла отметку: version=%v", u.PendingVersion)
 	}
 }
 

@@ -35,50 +35,61 @@ func buildSelfUpdateCommand(id, target, publicBaseURL, publicIP string, now time
 	return cmd
 }
 
-// requeueDeployOnWake кладёт назначенное обновление обратно в очередь, когда
-// роутер вышел на связь.
+// ensurePendingDeployQueued -- досылка назначенного обновления, когда роутер
+// вышел на связь: перед выдачей команд в GET /v1/cmd и на отчёте.
 //
-// Зачем: команда self_update живёт в очереди тридцать минут и выбрасывается в
-// тот момент, когда агент за ней придёт. Мобильный роутер спит часами -- он
-// приходил ровно за протухшей командой и получал пустоту, а отметка «ждёт
-// обновления» снималась сама. Обновить такой роутер кнопкой было невозможно
-// в принципе: один из мобильных просидел на версии четырёхмесячной давности,
-// хотя деплой ему назначали не раз.
+// Зачем перед выдачей: включившийся агент первым делом опрашивает команды и
+// только потом отчитывается (cmd/agent/main.go:132 против :141). Досылка
+// только на отчёте опаздывала на весь первый опрос.
 //
 // Намерение оператора хранится в базе, поэтому источником правды остаётся
-// она: пока стоит pending_version, каждое пробуждение -- новая попытка.
-// Отметку здесь не трогаем; её снимут те, кто и снимал раньше -- совпавшая
-// версия в отчёте или провал команды.
-func requeueDeployOnWake(d Deps, uid int64, nickname, target string) {
-	if d.CommandSink == nil || strings.TrimSpace(target) == "" {
-		return
-	}
+// она: пока стоит pending_version, каждый контакт без активной команды --
+// новая попытка. Двойную выдачу исключает HasActiveCommand: активной
+// считается и непротухшая в очереди, и выданная, пока не отжила свой TTL.
+func ensurePendingDeployQueued(d Deps, uid int64, nickname string, now time.Time) {
 	base := strings.TrimRight(strings.TrimSpace(d.PublicBaseURL), "/")
-	if base == "" {
+	if d.DB == nil || d.CommandSink == nil || base == "" {
 		// Без публичного адреса ссылку на бинарь собрать нечем -- агент по
 		// такой команде ничего не скачает.
+		return
+	}
+	st, err := d.DB.Users().PendingDeploy(uid)
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("deploy on contact: read pending", "nickname", nickname, "err", err)
+		}
+		return
+	}
+	if st.Version == "" {
 		return
 	}
 	if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
 		return
 	}
+	enqueuePendingDeploy(d, uid, nickname, st.Version, base, now)
+}
+
+// enqueuePendingDeploy кладёт свежую команду обновления. Прежняя протухшая
+// команда того же действия вытесняется очередью сама (queue.go supersede).
+func enqueuePendingDeploy(d Deps, uid int64, nickname, target, base string, now time.Time) bool {
 	id, err := newCmdID()
 	if err != nil {
 		if d.Logger != nil {
-			d.Logger.Warn("deploy on wake: id gen failed", "nickname", nickname, "err", err)
+			d.Logger.Warn("deploy on contact: id gen failed", "nickname", nickname, "err", err)
 		}
-		return
+		return false
 	}
-	cmd := buildSelfUpdateCommand(id, target, base, d.PublicIP, time.Now().UTC())
+	cmd := buildSelfUpdateCommand(id, target, base, d.PublicIP, now)
 	if err := d.CommandSink.Enqueue(uid, cmd); err != nil {
 		if d.Logger != nil {
-			d.Logger.Warn("deploy on wake: enqueue failed",
+			d.Logger.Warn("deploy on contact: enqueue failed",
 				"nickname", nickname, "target_version", target, "err", err)
 		}
-		return
+		return false
 	}
 	if d.Logger != nil {
-		d.Logger.Info("deploy on wake: re-queued self_update",
+		d.Logger.Info("deploy on contact: re-queued self_update",
 			"nickname", nickname, "user_id", uid, "target_version", target, "cmd_id", id)
 	}
+	return true
 }

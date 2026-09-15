@@ -2,6 +2,7 @@ package backend
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -132,5 +133,42 @@ func TestPoweredOffRouterKeepsDeployIntent_ReportBeforePoll(t *testing.T) {
 	}
 	if !s.q.HasActiveCommand(s.uid, "self_update") {
 		t.Errorf("после включения у роутера нет команды обновления")
+	}
+}
+
+// Включившийся роутер получает обновление на ПЕРВОМ же опросе -- свежей
+// командой, а не протухшей, с тем же адресом загрузки.
+func TestPoweredOffRouterGetsUpdateOnFirstPoll(t *testing.T) {
+	s := seedSleptRouter(t, "c3c300c3c300c3c300c3c300c3c300c3c300c3c300c3c300c3c300c3c300c3c3")
+
+	rec := s.poll(t)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("первый опрос: код %d, ждали 200 с командой обновления", rec.Code)
+	}
+	var got wire.Command
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Action != "self_update" || got.Args["version"] != sleptTarget {
+		t.Fatalf("выдано %s %v, ждали self_update %s", got.Action, got.Args["version"], sleptTarget)
+	}
+	if got.ID == "cmd-before-poweroff" {
+		t.Fatal("выдана протухшая команда")
+	}
+	if got.Args["repo_base"] != "https://backend.example.com/v1/releases/download" {
+		t.Fatalf("repo_base=%v", got.Args["repo_base"])
+	}
+}
+
+// Агент опрашивает каждые 12 секунд. Пока выданная команда в работе, второй
+// опрос не имеет права выдать ещё одну.
+func TestPollDoesNotRepeatUpdateWhileInFlight(t *testing.T) {
+	s := seedSleptRouter(t, "d4d400d4d400d4d400d4d400d4d400d4d400d4d400d4d400d4d400d4d400d4d4")
+
+	if rec := s.poll(t); rec.Code != http.StatusOK {
+		t.Fatalf("первый опрос: код %d", rec.Code)
+	}
+	if rec := s.poll(t); rec.Code != http.StatusNoContent {
+		t.Fatalf("второй опрос: код %d, тело %s -- обновление выдано повторно", rec.Code, rec.Body.String())
 	}
 }

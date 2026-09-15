@@ -1014,8 +1014,8 @@ func reportHandler(d Deps) http.HandlerFunc {
 				})
 			} else if update.PendingTarget != "" {
 				// Роутер на связи, а назначенное обновление всё ещё не
-				// доехало -- значит команда протухла, пока он спал.
-				requeueDeployOnWake(d, uid, nick, update.PendingTarget)
+				// доехало -- команда протухла, пока он спал или был выключен.
+				ensurePendingDeployQueued(d, uid, nick, time.Now().UTC())
 			}
 		}
 		if d.PublicBaseURL != "" {
@@ -1085,6 +1085,9 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
+		// Досылка ДО выдачи: включившийся агент приходит сюда раньше первого
+		// отчёта, и протухшая команда в голове очереди иначе ушла бы в пустоту.
+		ensurePendingDeployQueued(d, uid, nick, time.Now().UTC())
 		c, ok := d.CommandSink.Dequeue(r.Context(), uid, wait)
 		if !ok {
 			w.WriteHeader(http.StatusNoContent)
