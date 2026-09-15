@@ -74,8 +74,12 @@ export function agentUpdateState(router) {
   return { tone: 'ok', text: '', canUpdate: false, canCancel: false }
 }
 
-// Коды отказа -- из ядра деплоя бэкенда. Неизвестный код -- пустая строка:
-// лист скажет общее «не получилось», а не путь запроса.
+// Коды отказа -- из ядра деплоя бэкенда. Своя фраза -- только там, где код
+// однозначен. not_configured прикрывает три разные причины на сервере
+// (miniapp_agent_update.go: не настроена БД, не настроена очередь, не задан
+// публичный адрес) -- одна фраза здесь стёрла бы это различие, поэтому для
+// него (как для bad_request, internal и любого кода без своей записи здесь)
+// используется message сервера: он уже по-русски и уже различает причины.
 const ERROR_TEXT = {
   confirm_mismatch: 'Имя роутера набрано неверно — обновление не поставлено.',
   agent_too_old: 'Агент слишком старый, чтобы обновиться из приложения, — его нужно переустановить на роутере.',
@@ -85,8 +89,14 @@ const ERROR_TEXT = {
   not_found: 'Роутер не найден — закройте экран и откройте заново.',
 }
 
+function errorText(err) {
+  const known = ERROR_TEXT[err?.code]
+  if (known) return known
+  return String(err?.serverMessage ?? '').trim()
+}
+
 export function agentUpdateErrorText(err) {
-  return ERROR_TEXT[err?.code] ?? ''
+  return errorText(err)
 }
 
 export function agentUpdateDoneText(resp, nickname) {
@@ -135,7 +145,8 @@ export function fleetUpdateSheetText(fleet) {
 }
 
 export function fleetUpdateErrorText(err) {
-  return err?.code === 'confirm_mismatch' ? `Слово «${FLEET_UPDATE_PHRASE}» набрано неверно — ничего не поставлено.` : ''
+  if (err?.code === 'confirm_mismatch') return `Слово «${FLEET_UPDATE_PHRASE}» набрано неверно — ничего не поставлено.`
+  return errorText(err)
 }
 
 export function fleetUpdateSummary(results) {

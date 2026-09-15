@@ -142,10 +142,28 @@ describe('отказы сервера словами', () => {
     }
   })
 
-  it('неизвестный код -- пустая строка, лист скажет общее', () => {
+  it('неизвестный код без фразы сервера -- пустая строка, лист скажет общее', () => {
     expect(agentUpdateErrorText(new ApiError(500, 'internal', 'x'))).toBe('')
     expect(agentUpdateErrorText(new Error('network'))).toBe('')
     expect(agentUpdateErrorText(undefined)).toBe('')
+  })
+
+  // not_configured прикрывает три разные причины на сервере (B5a): у базы, у
+  // очереди, у публичного адреса. Свою фразу для этого кода клиент не
+  // заводит -- иначе различие потерялось бы. bad_request и internal -- тоже
+  // общие коды с фразой сервера, а не своей.
+  it('not_configured/bad_request/internal -- показывает фразу сервера, а не одну на все причины', () => {
+    const dbDown = new ApiError(503, 'not_configured', 'x failed: 503', 'У сервера не настроена база данных.')
+    const noPublicAddr = new ApiError(503, 'not_configured', 'x failed: 503', 'У сервера не задан публичный адрес: обновлению неоткуда скачаться.')
+    expect(agentUpdateErrorText(dbDown)).toBe('У сервера не настроена база данных.')
+    expect(agentUpdateErrorText(noPublicAddr)).toBe('У сервера не задан публичный адрес: обновлению неоткуда скачаться.')
+    expect(agentUpdateErrorText(dbDown)).not.toBe(agentUpdateErrorText(noPublicAddr))
+    expect(agentUpdateErrorText(new ApiError(400, 'bad_request', 'x failed: 400', 'Не удалось прочитать запрос.'))).toBe(
+      'Не удалось прочитать запрос.',
+    )
+    expect(agentUpdateErrorText(new ApiError(500, 'internal', 'x failed: 500', 'Не удалось назначить обновление.'))).toBe(
+      'Не удалось назначить обновление.',
+    )
   })
 
   it('старый агент -- говорит, что нужна переустановка', () => {
@@ -243,9 +261,12 @@ describe('обновить всех отставших', () => {
     expect(skipped.headline).toBe('Обновление: пропущено 2.')
   })
 
-  it('неверное слово -- своя фраза, прочие отказы -- общее', () => {
+  it('неверное слово -- своя фраза; прочие отказы -- фраза сервера, если есть', () => {
     expect(fleetUpdateErrorText({ code: 'confirm_mismatch' })).toBe('Слово «обновить» набрано неверно — ничего не поставлено.')
     expect(fleetUpdateErrorText({ code: 'internal' })).toBe('')
+    expect(
+      fleetUpdateErrorText(new ApiError(500, 'internal', 'x failed: 500', 'Не удалось назначить обновление.')),
+    ).toBe('Не удалось назначить обновление.')
   })
 
   it('пустой итог -- «обновлять некого», а не пустая строка', () => {
