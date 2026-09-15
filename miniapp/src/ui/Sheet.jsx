@@ -20,9 +20,7 @@ export function Sheet({ sheet, asleep, onClose }) {
   const local = typeof sheet.perform === 'function'
   const [localBusy, setLocalBusy] = useState(false)
   const [localError, setLocalError] = useState(null)
-  const phase = local
-    ? sheetPhase({ busy: false, result: null, error: localError })
-    : sheetPhase({ busy, result, error })
+  const phase = local ? 'confirm' : sheetPhase({ busy, result, error })
   // Набранное подтверждение живёт здесь, а не в описании шита: описание --
   // это то, что задумал экран, а набранное -- то, что делает человек прямо
   // сейчас, и смешивать их значило бы переписывать намерение вводом.
@@ -33,12 +31,17 @@ export function Sheet({ sheet, asleep, onClose }) {
     if (local) {
       setLocalBusy(true)
       setLocalError(null)
-      Promise.resolve(sheet.perform())
-        .then(() => {
-          if (sheet.onDone) sheet.onDone()
+      const typedNow = sheet.confirmPhrase ? typed : ''
+      Promise.resolve()
+        .then(() => sheet.perform(typedNow))
+        .then((resp) => {
+          if (sheet.onDone) sheet.onDone(resp)
           onClose()
         })
-        .catch(() => setLocalError('Не получилось. Попробуйте ещё раз.'))
+        .catch((err) => {
+          const text = typeof sheet.errorText === 'function' ? sheet.errorText(err) : ''
+          setLocalError(text || 'Не получилось. Попробуйте ещё раз.')
+        })
         .finally(() => setLocalBusy(false))
       return
     }

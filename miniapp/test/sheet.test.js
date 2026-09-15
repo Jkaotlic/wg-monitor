@@ -30,4 +30,17 @@ describe('localSheet', () => {
     expect(sheet.action).toBe('diag_now')
     expect(sheet.perform).toBeUndefined()
   })
+
+  it('локальный лист может требовать набор имени', () => {
+    const sheet = localSheet({ title: 't', body: 'b', confirmPhrase: 'bronya', perform: () => Promise.resolve() })
+    expect(sheet.confirmPhrase).toBe('bronya')
+    expect(confirmReady(sheet, '')).toBe(false)
+    expect(confirmReady(sheet, ' BRONYA ')).toBe(true)
+  })
+
+  it('текст отказа по коду экран передаёт функцией', () => {
+    const errorText = (err) => (err?.code === 'deploy_pending' ? 'уже ждёт' : '')
+    const sheet = localSheet({ title: 't', body: 'b', errorText, perform: () => Promise.resolve() })
+    expect(sheet.errorText({ code: 'deploy_pending' })).toBe('уже ждёт')
+  })
 })
