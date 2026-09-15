@@ -291,11 +291,6 @@ type RoutesNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
-// BulkNotifier updates one aggregate admin report for fleet-wide commands.
-type BulkNotifier interface {
-	NotifyBulkCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
-}
-
 // PingCheckNotifier is the subset used by cmdResultHandler when ref.Action is
 // pingcheck_status or pingcheck_toggle. Implemented by callbacks.PingCheckPanelNotifier.
 type PingCheckNotifier interface {
@@ -319,7 +314,6 @@ type Deps struct {
 	CommandSink         CommandSink
 	TGNotifier          TGNotifier
 	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
-	BulkNotifier        BulkNotifier      // nil-safe (handler falls back to per-command relays)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
 	DeployNotifier      DeployNotifier    // nil-safe (handler skips deferred update notices)
@@ -1208,20 +1202,6 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		// agent's POST on TG network latency.
 		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
 			incCmdResultRelay()
-			if ref.BulkID != "" {
-				if d.BulkNotifier != nil {
-					spawnRelayTimeout(d, "cmd-bulk", 30*time.Second, func(ctx context.Context) {
-						if err := d.BulkNotifier.NotifyBulkCommandResult(ctx, ref, res, uid); err != nil {
-							incTGError()
-							d.Logger.Warn("bulk notifier failed", "cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("bulk notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "nickname", nick)
-				}
-				goto resultLogged
-			}
 			switch ref.Action {
 			case "route_status", "tunnels_status", "route_rebind", "route_templates", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory", "hrneo_doctor":
 				if d.RoutesNotifier != nil {
@@ -1276,7 +1256,6 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
 			}
 		}
-	resultLogged:
 		d.Logger.Info("cmd result",
 			"nickname", nick, "cmd_id", res.ID, "status", res.Status,
 			"duration_ms", res.DurationMs,

@@ -26,8 +26,6 @@ type MessageRef struct {
 	MessageID int64
 	ThreadID  *int64
 	Action    string
-	BulkID    string
-	BulkNick  string
 }
 
 // resultEntry / originEntry pair their payload with a creation timestamp so
