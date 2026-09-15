@@ -48,3 +48,18 @@ func TestListDNSRoutes_BodyOverOneMiB(t *testing.T) {
 		t.Fatalf("len = %d, want %d", len(got), lists)
 	}
 }
+
+// Тело больше потолка -- явная ошибка с размером, а не «unexpected end of JSON
+// input», по которому причину не узнать из отчёта.
+func TestListDNSRoutes_BodyOverCeilingNamesTheSize(t *testing.T) {
+	body := `{"success":true,"data":[{"id":"big","domains":["` + strings.Repeat("a", routeListMaxBody) + `"]}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	_, err := New(srv.URL).ListDNSRoutes(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("want «larger than» error, got %v", err)
+	}
+}
