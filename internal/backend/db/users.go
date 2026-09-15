@@ -818,3 +818,20 @@ func (u *UsersRepo) HasAnyOperatorOrOwnerBinding(tgUserID int64) (bool, error) {
 	}
 	return true, nil
 }
+
+// SetAWGMURLIfEmpty записывает адрес панели роутеру, у которого его нет.
+// Условие в самом UPDATE: адрес, появившийся между проверкой и записью, не
+// перезаписывается. false -- адрес уже был.
+func (u *UsersRepo) SetAWGMURLIfEmpty(id int64, awgmURL string) (bool, error) {
+	res, err := u.d.db.Exec(
+		`UPDATE users SET awgm_url = ? WHERE id = ? AND (awgm_url IS NULL OR TRIM(awgm_url) = '')`,
+		awgmURL, id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
