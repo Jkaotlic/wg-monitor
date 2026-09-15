@@ -61,6 +61,8 @@ func main() {
 	tgUser := flag.Int64("tg-user", 4242, "telegram user id, от чьего имени открыт мини-апп")
 	keep := flag.Bool("keep", false, "не удалять временную базу при выходе")
 	version := flag.String("version", "v0.33.0", "версия бэкенда песочницы: от неё экран «Парк» считает отставших")
+	reviveOn := flag.Bool("revive", true, "оживление агента настроено на сервере (false -- экран скажет «не настроено»)")
+	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
 	flag.Parse()
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
@@ -87,9 +89,12 @@ func main() {
 	}
 	defer d.Close()
 
-	if err := seed(d, *tgUser); err != nil {
+	ids, err := seed(d, *tgUser)
+	if err != nil {
 		fatal(err)
 	}
+	reviver := newSandboxRevive(*reviveOn, map[int64]bool{ids["sandbox-bronya"]: true})
+	reviver.seedState(ids["sandbox-off"], *reviveState, time.Now().UTC())
 	sink := &fakeAgent{}
 
 	// Настоящий сторож heartbeat: без него строка о нём в панели пуста, и
@@ -163,6 +168,9 @@ func main() {
 		// Фальшивый публичный хост никто не резолвит: фальшивый агент
 		// команду просто исполняет, адрес прошивки не скачивает.
 		PublicBaseURL: "https://sandbox.wg-monitor.example",
+		// Оживление -- фейк в памяти: ключа шифрования в песочнице нет, и
+		// заводить его ради экрана незачем.
+		ReviveOverride: reviver,
 	}
 	mux := backend.NewMux(deps)
 	initData := signInitData(sandboxBotToken, *tgUser, time.Now())

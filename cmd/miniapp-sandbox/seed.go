@@ -13,8 +13,9 @@ import (
 // агентом и выключенный роутер с отложенным обновлением агента. Без этого
 // экраны открываются пустыми, и половину вёрстки нечем проверить -- а пустой
 // экран как раз и не показывает ошибок разметки.
-func seed(d *db.DB, tgUserID int64) error {
+func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 	now := time.Now().UTC()
+	ids := map[string]int64{}
 
 	type routerSpec struct {
 		nick     string
@@ -32,52 +33,62 @@ func seed(d *db.DB, tgUserID int64) error {
 		// «Парк» видно «ждёт включения» -- ровно случай оператора 15.09
 		// («три необновлённых роутера выключены»).
 		{"sandbox-off", "static", "v0.30.0", 96 * time.Hour, "owner"},
+		// Выключенный роутер без адреса панели -- случай bronya из парка
+		// 15.09: оживлению нужен адрес, и лист обязан его спросить.
+		{"sandbox-bronya", "static", "v0.29.0", 240 * time.Hour, "owner"},
 	}
 
 	for i, s := range specs {
 		token := strings.Repeat(fmt.Sprintf("%d", i+1), 64)
 		uid, err := d.Users().InsertWithKind(s.nick, token, "203.0.113."+fmt.Sprint(10+i), "nwg1", s.kind)
 		if err != nil {
-			return fmt.Errorf("%s: %w", s.nick, err)
+			return nil, fmt.Errorf("%s: %w", s.nick, err)
 		}
+		ids[s.nick] = uid
 		if err := d.Users().UpdateTelegramTopic(uid, -100500, int64(100+i)); err != nil {
-			return err
+			return nil, err
 		}
 		if err := d.Users().UpdateLastSeenAgentVersion(uid, s.version); err != nil {
-			return err
+			return nil, err
 		}
 		// Владелец роутера привязывается через users.telegram_user_id,
 		// оператор -- отдельной строкой в router_operators. В песочнице нужны
 		// оба пути: у них разные права, и экран настроек показывает разное.
 		if s.role == "owner" {
 			if err := d.Users().SetTelegramUserID(uid, tgUserID); err != nil {
-				return err
+				return nil, err
 			}
 		} else if err := d.RouterOperators().Add(uid, tgUserID, tgUserID); err != nil {
-			return err
+			return nil, err
 		}
 
 		seen := now.Add(-s.lastSeen)
 		if err := seedChecks(d, uid, seen, s.nick == "sandbox-broken"); err != nil {
-			return err
+			return nil, err
 		}
 		// История за неделю: без неё вкладка «Что было» открывается почти
 		// пустой, и ни свёрнутое моргание, ни тихий день проверить нечем --
 		// а это ровно то, ради чего лента переписана.
 		if err := seedHistory(d, uid, now, s.nick); err != nil {
-			return err
+			return nil, err
 		}
 		if err := d.Users().UpdateLastSeen(uid); err != nil {
-			return err
+			return nil, err
 		}
-		if s.nick == "sandbox-off" {
+		if s.nick == "sandbox-off" || s.nick == "sandbox-bronya" {
 			// UpdateLastSeen выше ставит «сейчас»; выключенному нужен старый
 			// отчёт, иначе сводка посчитает его живым.
 			if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, seen.UTC().Format(time.RFC3339), uid); err != nil {
-				return err
+				return nil, err
 			}
+		}
+		if s.nick == "sandbox-off" {
 			if err := d.Users().MarkPendingDeploy(uid, "v0.33.0", now.Add(-72*time.Hour).Format(time.RFC3339)); err != nil {
-				return err
+				return nil, err
+			}
+			// Адрес панели записан: в приложение уходит только признак.
+			if _, err := d.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, "https://203.0.113.14:2222", uid); err != nil {
+				return nil, err
 			}
 		}
 		if s.nick == "sandbox-broken" {
@@ -87,7 +98,7 @@ func seed(d *db.DB, tgUserID int64) error {
 				UserID: uid, CheckName: "tunnel_awg12", CurrentStatus: "hard",
 				ConsecutiveFails: 4, HardSince: &hardSince, LastAlertAt: &lastAlert,
 			}); err != nil {
-				return err
+				return nil, err
 			}
 		}
 		// Провайдер и вариант -- ровно те, какими их пишет мастер замены
@@ -95,10 +106,10 @@ func seed(d *db.DB, tgUserID int64) error {
 		// ним же, и разойтись они не имеют права.
 		if err := d.TunnelOrigins().Record(uid, "awg12", "vpn-nl",
 			"amnezia", "nl", now.Add(-72*time.Hour), tgUserID); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return ids, nil
 }
 
 // seedChecks кладёт по одному событию на проверку -- ровно те имена и ключи
