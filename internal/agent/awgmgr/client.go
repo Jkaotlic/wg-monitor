@@ -206,12 +206,18 @@ func (c *Client) getLimited(ctx context.Context, path string, out any, limit int
 	}
 	defer resp.Body.Close()
 	slog.Debug("awgmgr", "method", "GET", "path", path, "status", resp.StatusCode, "duration_ms", time.Since(start).Milliseconds())
-	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	// Байт сверх потолка читается, чтобы отличить «ответ больше потолка» от
+	// битого JSON: обрезанное тело иначе выглядит как загадочное
+	// «unexpected end of JSON input», и причина неделю не видна в отчёте.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return fmt.Errorf("awgmgr read %s: %w", path, err)
 	}
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("awgmgr %s: HTTP %d: %s", path, resp.StatusCode, snippet(body))
+	}
+	if int64(len(body)) > limit {
+		return fmt.Errorf("awgmgr %s: response larger than %d bytes", path, limit)
 	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return fmt.Errorf("awgmgr %s: decode: %w (body=%s)", path, err, snippet(body))

@@ -97,7 +97,11 @@ func (t TunnelsCheck) Run(ctx context.Context, _ Deps) []wire.Check {
 		if tu.Type != "" && tu.Type != "awg" && tu.Type != "wg" {
 			continue
 		}
-		out = append(out, evalTunnel(tu, pcByID[tu.ID], routeCounts[tu.InterfaceName], start, maxAge, activeDefaultID, matrix))
+		rc := routeCounts[tu.InterfaceName]
+		// nil -- списки правил не прочитались: ноль у туннеля тогда значит
+		// «не знаем», а не «правил нет».
+		rc.Unknown = routeCounts == nil
+		out = append(out, evalTunnel(tu, pcByID[tu.ID], rc, start, maxAge, activeDefaultID, matrix))
 	}
 	return out
 }
@@ -108,6 +112,9 @@ type routeCounts struct {
 	DNS    int // total DNS rules pointing at this iface (explicit + fall-through credit)
 	DNSHR  int // subset of DNS that are HR-Neo (backend=hydraroute)
 	Static int // static-IP rules pointing at this iface
+	// Unknown: the rule lists could not be read, so the zeros above are
+	// ignorance, not "no rules attached".
+	Unknown bool
 }
 
 // tallyRouteCounts queries dns-routes + static-routes and returns counts per
@@ -315,7 +322,9 @@ func tunnelRouteFallbackUsable(tu awgmgr.Tunnel) bool {
 }
 
 func suppressUnusedTunnelFailure(tu awgmgr.Tunnel, pc awgmgr.PingCheckTunnel, rc routeCounts, reasons []string) bool {
-	if rc.DNS != 0 || rc.Static != 0 {
+	// «Туннель без правил» из непрочитанных списков не следует: глушить его
+	// падение значило бы молча терять тревоги на роутере с большим списком.
+	if rc.Unknown || rc.DNS != 0 || rc.Static != 0 {
 		return false
 	}
 	if !pingCheckDisabled(tu, pc) {
