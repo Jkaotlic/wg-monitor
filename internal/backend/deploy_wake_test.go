@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
@@ -30,7 +31,7 @@ func TestReportOnWakeRequeuesPendingDeploy(t *testing.T) {
 		LastDeployedVersion: "v0.14.1",
 		Ring:                "stable",
 		PendingVersion:      "v0.22.0",
-		PendingSince:        "2026-09-09T10:51:23Z",
+		PendingSince:        time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +96,7 @@ func TestReportOnWakeDoesNotStackCommands(t *testing.T) {
 		Arch:                "arm64",
 		LastDeployedVersion: "v0.14.1",
 		PendingVersion:      "v0.22.0",
-		PendingSince:        "2026-09-09T10:51:23Z",
+		PendingSince:        time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 	}); err != nil {
 		t.Fatal(err)
 	}

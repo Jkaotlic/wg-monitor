@@ -63,6 +63,15 @@ func ensurePendingDeployQueued(d Deps, uid int64, nickname string, now time.Time
 	if st.Version == "" {
 		return
 	}
+	if pendingDeployExpired(st.Since, now) {
+		cleared, err := d.DB.Users().ClearPendingDeploy(uid)
+		if d.Logger != nil {
+			d.Logger.Info("deploy on contact: pending deploy older than 90 days dropped",
+				"nickname", nickname, "target_version", st.Version, "pending_since", st.Since,
+				"cleared", cleared, "err", err)
+		}
+		return
+	}
 	if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
 		return
 	}

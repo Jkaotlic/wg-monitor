@@ -5,6 +5,7 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // pendingDeployMaxAttempts -- сколько раз команда обновления уходит агенту,
@@ -12,6 +13,21 @@ import (
 // Без предела роутер, на котором своп заведомо падает, получал бы команду
 // каждые полчаса вечно, а люди так и не узнали бы, что происходит.
 const pendingDeployMaxAttempts = 3
+
+// pendingDeployMaxAge -- сколько живёт намерение обновить роутер. Роутер,
+// включённый через квартал, обновлять «по старой памяти» нельзя: за это время
+// цель могла устареть, а человек -- забыть, что назначал.
+const pendingDeployMaxAge = 90 * 24 * time.Hour
+
+// pendingDeployExpired -- просрочено ли намерение. Нечитаемая дата просрочкой
+// не считается: снимать то, чего не можем прочесть, нельзя.
+func pendingDeployExpired(since string, now time.Time) bool {
+	ts, err := time.Parse(time.RFC3339, strings.TrimSpace(since))
+	if err != nil {
+		return false
+	}
+	return now.Sub(ts) > pendingDeployMaxAge
+}
 
 // deployFailureText -- причина неудачи по-русски. Строка агента машинная и
 // английская; людям и экрану «Парк» нужно последствие, без внутренних имён.

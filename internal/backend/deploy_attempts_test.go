@@ -3,6 +3,7 @@ package backend
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 // Причина неудачи уходит людям и на экран «Парк». Машинная строка агента
@@ -31,6 +32,25 @@ func TestDeployFailureTextSpeaksRussian(t *testing.T) {
 			if strings.Contains(got, banned) {
 				t.Errorf("в тексте для людей %q есть %q", got, banned)
 			}
+		}
+	}
+}
+
+func TestPendingDeployExpired(t *testing.T) {
+	now := time.Date(2026, 12, 20, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		since string
+		want  bool
+	}{
+		{now.Add(-91 * 24 * time.Hour).Format(time.RFC3339), true},
+		{now.Add(-90*24*time.Hour - time.Second).Format(time.RFC3339), true},
+		{now.Add(-89 * 24 * time.Hour).Format(time.RFC3339), false},
+		{"", false},
+		{"вчера", false},
+	}
+	for _, c := range cases {
+		if got := pendingDeployExpired(c.since, now); got != c.want {
+			t.Errorf("pendingDeployExpired(%q) = %v, ждали %v", c.since, got, c.want)
 		}
 	}
 }

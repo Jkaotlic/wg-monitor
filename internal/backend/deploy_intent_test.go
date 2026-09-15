@@ -298,3 +298,19 @@ func TestLostUpdateResultsGiveUpOnNextContact(t *testing.T) {
 		t.Fatalf("уведомление о потерянных попытках: %+v", calls)
 	}
 }
+
+// Намерение трёхмесячной давности -- уже не намерение: роутер включили через
+// квартал, и обновлять его «по старой памяти» нельзя.
+func TestContactDropsDeployIntentOlderThan90Days(t *testing.T) {
+	s := seedSleptRouter(t, "a7a700a7a700a7a700a7a700a7a700a7a700a7a700a7a700a7a700a7a700a7a7")
+	old := time.Now().UTC().Add(-91 * 24 * time.Hour).Format(time.RFC3339)
+	if _, err := s.d.SQL().Exec(`UPDATE users SET pending_since = ? WHERE id = ?`, old, s.uid); err != nil {
+		t.Fatal(err)
+	}
+	if rec := s.poll(t); rec.Code != http.StatusNoContent {
+		t.Fatalf("просроченное намерение выдано: код %d", rec.Code)
+	}
+	if got := s.pendingVersion(t); got != "" {
+		t.Fatalf("просроченная отметка осталась: %q", got)
+	}
+}

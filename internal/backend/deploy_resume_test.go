@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -57,7 +58,7 @@ func TestResumePendingDeploys_ReenqueuesAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", "2026-08-21T08:13:42Z"); err != nil {
+	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -111,7 +112,7 @@ func TestResumePendingDeploys_NeedsPublicBaseURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", "2026-08-21T08:13:42Z"); err != nil {
+	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	sink := &recordingEnqueuer{}
@@ -136,7 +137,7 @@ func TestResumePendingDeploys_ReplacesInsteadOfPilingUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", "2026-08-21T08:13:42Z"); err != nil {
+	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)); err != nil {
 		t.Fatal(err)
 	}
 	sink := &recordingEnqueuer{}
@@ -150,5 +151,54 @@ func TestResumePendingDeploys_ReplacesInsteadOfPilingUp(t *testing.T) {
 	}
 	if len(sink.sent) != 3 {
 		t.Fatalf("поставлено %d команд", len(sink.sent))
+	}
+}
+
+func TestResumePendingDeploys_DropsIntentOlderThan90Days(t *testing.T) {
+	d := resumeTestDB(t)
+	uid, err := d.Users().Insert("vasya", strings.Repeat("e", 64), "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-91 * 24 * time.Hour).Format(time.RFC3339)
+	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", old); err != nil {
+		t.Fatal(err)
+	}
+	sink := &recordingEnqueuer{}
+	if n := ResumePendingDeploys(d, sink, "https://wgmonitor.example", "", nil); n != 0 {
+		t.Fatalf("возобновлено %d, ждали 0", n)
+	}
+	if len(sink.sent) != 0 {
+		t.Fatalf("просроченное намерение ушло в очередь: %d", len(sink.sent))
+	}
+	u, _ := d.Users().GetByID(uid)
+	if u.PendingVersion != nil {
+		t.Fatalf("просроченная отметка осталась: %v", *u.PendingVersion)
+	}
+}
+
+// Исчерпанные попытки при старте не возобновляем: сдаться с уведомлением
+// должен первый контакт роутера, у которого есть чем написать людям.
+func TestResumePendingDeploys_LeavesExhaustedAttemptsToContact(t *testing.T) {
+	d := resumeTestDB(t)
+	uid, err := d.Users().Insert("vasya", strings.Repeat("f", 64), "1.1.1.1", "awg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(uid, "v0.18.5", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := d.Users().IncrementPendingAttempts(uid, "v0.18.5"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sink := &recordingEnqueuer{}
+	if n := ResumePendingDeploys(d, sink, "https://wgmonitor.example", "", nil); n != 0 {
+		t.Fatalf("возобновлено %d, ждали 0", n)
+	}
+	u, _ := d.Users().GetByID(uid)
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.18.5" {
+		t.Fatalf("отметку при старте трогать нельзя: %v", u.PendingVersion)
 	}
 }
