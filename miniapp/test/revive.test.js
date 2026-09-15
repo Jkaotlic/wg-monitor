@@ -56,7 +56,7 @@ describe('оживление: строка роутера', () => {
   })
 
   it('оживляется: без кнопок', () => {
-    expect(reviveState(off({ revive: rv({ status: 'running' }) }), fleet())).toEqual({ tone: 'muted', text: 'оживляется…', canRevive: false, canCancel: false })
+    expect(reviveState(off({ revive: rv({ status: 'running' }) }), fleet())).toEqual({ tone: 'sig', text: 'оживляется…', canRevive: false, canCancel: false })
   })
 
   it('ожил: зелёная строка, у роутера на связи кнопки нет', () => {

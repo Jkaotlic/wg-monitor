@@ -2438,6 +2438,11 @@ body {
   color: var(--ok);
 }
 
+/* Оживление идёт прямо сейчас: сигнальный цвет системы, а не приглушённый. */
+.park-update-sig {
+  color: var(--sig);
+}
+
 .park-actions {
   display: flex;
   flex-wrap: wrap;

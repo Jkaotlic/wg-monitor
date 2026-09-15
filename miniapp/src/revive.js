@@ -63,7 +63,7 @@ export function reviveState(router, fleet) {
     case 'running':
       // Установка уже идёт на роутере: отмена посреди неё оставила бы роутер
       // без агента вовсе, поэтому кнопки нет.
-      return { tone: 'muted', text: 'оживляется…', canRevive: false, canCancel: false }
+      return { tone: 'sig', text: 'оживляется…', canRevive: false, canCancel: false }
     case 'done':
       return { tone: 'ok', text: 'ожил', canRevive: canStart, canCancel: false }
     case 'failed':

@@ -714,6 +714,8 @@ describe('«Парк»: оживление агента', () => {
     const { root } = await mountPark()
     expect(rowOf(root, 'r-running').textContent).toContain('оживление: оживляется…')
     expect(rowOf(root, 'r-running').querySelectorAll('.park-actions button')).toHaveLength(0)
+    // Идёт прямо сейчас -- сигнальный цвет, не приглушённый «ничего не происходит».
+    expect(rowOf(root, 'r-running').querySelector('.park-update-sig')).not.toBeNull()
     expect(rowOf(root, 'r-done').textContent).toContain('оживление: ожил')
     expect(rowOf(root, 'r-done').querySelector('.park-update-ok')).not.toBeNull()
     expect(rowOf(root, 'r-expired').textContent).toContain('оживление: срок истёк')
