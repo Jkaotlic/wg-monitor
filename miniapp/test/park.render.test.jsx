@@ -6,7 +6,11 @@ import { dirname, join } from 'node:path'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
-const mocks = vi.hoisted(() => ({ fleet: null, fleetCalls: 0, updates: [], cancels: [], fleetUpdates: [], updateReply: null, cancelReply: null, fleetReply: null }))
+const mocks = vi.hoisted(() => ({
+  fleet: null, fleetCalls: 0, updates: [], cancels: [], fleetUpdates: [],
+  updateReply: null, cancelReply: null, fleetReply: null,
+  sent: [], results: {}, notify: [], notifyReply: null,
+}))
 
 vi.mock('../src/api.js', async (importOriginal) => {
   const real = await importOriginal()
@@ -30,6 +34,17 @@ vi.mock('../src/api.js', async (importOriginal) => {
     updateFleetAgents: (confirm) => {
       mocks.fleetUpdates.push(confirm)
       return reply(mocks.fleetReply)
+    },
+    sendCommand: (routerID, action, args) => {
+      mocks.sent.push({ routerID, action, args })
+      return Promise.resolve({ cmd_id: `c${routerID}` })
+    },
+    // Нет ответа в mocks.results -- обещание, которое не разрешается: цикл
+    // ждёт, не крутясь вхолостую до дедлайна по настоящим часам.
+    fetchCommandResult: (routerID) => (routerID in mocks.results ? Promise.resolve(mocks.results[routerID]) : new Promise(() => {})),
+    setRouterNotify: (id, muted) => {
+      mocks.notify.push({ id, muted })
+      return reply(mocks.notifyReply ?? { muted })
     },
   }
 })
@@ -103,6 +118,10 @@ function reset() {
   mocks.updates = []
   mocks.cancels = []
   mocks.fleetUpdates = []
+  mocks.sent = []
+  mocks.results = {}
+  mocks.notify = []
+  mocks.notifyReply = null
 }
 
 describe('«Парк»: обновление агента', () => {
@@ -219,5 +238,51 @@ describe('устаревший текст про дашборд', () => {
     const here = dirname(fileURLToPath(import.meta.url))
     const src = readFileSync(join(here, '../src/screens/RouterDetail.jsx'), 'utf8')
     expect(src).not.toContain('обслуживание пока в дашборде')
+  })
+})
+
+describe('«Парк»: массовые проверки', () => {
+  // FLEET: bronya -- offline, office -- sleeping, car -- online.
+  it('«Проверить все»: осмотр уходит только роутеру на связи, пропущенные названы, итог словами', async () => {
+    reset()
+    mocks.results = { 15: { id: 'c15', status: 'ok', output: '🩺 Проверка роутера\n✅ awg-manager API: 2.19.1\n❌ tunnels: awg12 down' } }
+    const { root } = await mountPark()
+    await act(async () => buttons(root, 'Проверить все')[0].click())
+    await flush()
+    await flush()
+    expect(mocks.sent).toEqual([{ routerID: 15, action: 'router_doctor', args: {} }])
+    expect(root.textContent).toContain('Проверено 1 из 1, проблемы у 1.')
+    expect(root.textContent).toContain('«car»: 1 сбой')
+    expect(root.textContent).toContain('Не на связи, пропущены: «bronya», «office».')
+    expect(root.textContent).not.toMatch(/router_doctor|tunnels/)
+    expect(mocks.fleetCalls).toBe(1)
+    cleanup(root)
+  })
+
+  it('«Аудит всех»: сверка версий, после неё список перечитан', async () => {
+    reset()
+    mocks.results = {
+      15: { id: 'c15', status: 'ok', output: JSON.stringify({ awgmgr_version: '2.19.1', awgmgr_running: true, firmware_current: '4.2.7', firmware_avail: '4.3.0' }) },
+    }
+    const { root } = await mountPark()
+    await act(async () => buttons(root, 'Аудит всех')[0].click())
+    await flush()
+    await flush()
+    expect(mocks.sent).toEqual([{ routerID: 15, action: 'version_audit', args: {} }])
+    expect(root.textContent).toContain('Аудит: ответили 1 из 1, внимания требует 1.')
+    expect(root.textContent).toContain('«car»: Прошивка роутера — доступна 4.3.0')
+    expect(mocks.fleetCalls).toBe(2)
+    cleanup(root)
+  })
+
+  it('пока идёт одна проверка, обе кнопки погашены', async () => {
+    reset()
+    mocks.results = {} // ответа нет -- опрос не разрешается
+    const { root } = await mountPark()
+    await act(async () => buttons(root, 'Проверить все')[0].click())
+    expect(buttons(root, 'Проверяем…')[0].disabled).toBe(true)
+    expect(buttons(root, 'Аудит всех')[0].disabled).toBe(true)
+    expect(root.textContent).toContain('Ответили 0 из 1…')
+    cleanup(root)
   })
 })

@@ -8,6 +8,8 @@ import {
   updateRouterAgent,
   cancelRouterAgentUpdate,
   updateFleetAgents,
+  sendCommand,
+  fetchCommandResult,
 } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { localSheet } from '../sheet.js'
@@ -30,6 +32,7 @@ import {
   fleetUpdateSummary,
   fleetUpdateErrorText,
 } from '../agentUpdate.js'
+import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
 // агентов. Раньше экран был читающим, а обновление агента жило в боте и
@@ -48,6 +51,10 @@ export function ParkSection({ openSheet }) {
   // лист к этому моменту уже закрыт, а человек должен увидеть, чем кончилось.
   const [notice, setNotice] = useState('')
   const [fleetResult, setFleetResult] = useState(null)
+
+  // Массовая проверка -- одна на экран: две одновременно смешали бы счёт
+  // ответивших, а роутеру пришли бы две команды подряд.
+  const [batch, setBatch] = useState(null)
 
   const [linkBusy, setLinkBusy] = useState(false)
   const [linkLines, setLinkLines] = useState([])
@@ -134,6 +141,19 @@ export function ParkSection({ openSheet }) {
     )
   }
 
+  async function runBatch(kind) {
+    if (!fleet || batch?.running) return
+    await runFleetBatch({
+      kind,
+      routers: fleet.routers ?? [],
+      send: sendCommand,
+      poll: fetchCommandResult,
+      onProgress: setBatch,
+    })
+    // Аудит обновляет снимок версий на сервере -- строки парка читают его же.
+    if (kind === 'audit') load()
+  }
+
   const rows = fleet ? fleetRouterRows(fleet) : []
   const gaps = fleet ? notifyGapLines(fleet) : []
   const watchdog = fleet ? watchdogLine(fleet) : ''
@@ -174,6 +194,44 @@ export function ParkSection({ openSheet }) {
           {notice && (
             <p class="hint">
               <Quoted text={notice} />
+            </p>
+          )}
+
+          <div class="settings-actions park-batch">
+            {['doctor', 'audit'].map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                class="btn btn-ghost"
+                disabled={Boolean(batch?.running)}
+                onClick={() => runBatch(kind)}
+              >
+                {batch?.running && batch.kind === kind ? BATCH[kind].busy : BATCH[kind].idle}
+              </button>
+            ))}
+          </div>
+          {batch?.running ? (
+            <p class="hint">{batchProgressLine(batch)}</p>
+          ) : batch ? (
+            (() => {
+              const summary = batchSummary(batch)
+              return (
+                <div class="park-result">
+                  <p class="hint">
+                    <b>{summary.headline}</b>
+                  </p>
+                  {summary.lines.map((line) => (
+                    <p class="hint" key={line}>
+                      <Quoted text={line} />
+                    </p>
+                  ))}
+                </div>
+              )
+            })()
+          ) : (
+            <p class="hint">
+              Осмотр и сверка версий на каждом роутере на связи. Ничего не меняют; выключенные и
+              спящие пропускаются.
             </p>
           )}
 

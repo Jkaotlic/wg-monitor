@@ -2414,3 +2414,7 @@ body {
 .park-result {
   margin-top: var(--sp-2);
 }
+
+.park-batch {
+  margin-top: var(--sp-3);
+}
