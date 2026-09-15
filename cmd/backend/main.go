@@ -238,6 +238,15 @@ func main() {
 		Logger:   logger.With("component", "provision"),
 	}
 
+	// Оживление агента на выключенном роутере (цикл 2б). Без ключа -- nil, и
+	// маршруты мини-аппа отвечают revive_disabled. Recover (внутри
+	// newReviveService) отрабатывает синхронно, ДО того как Deps.Revive
+	// вообще станет виден HTTP-обработчикам ниже (carry #5).
+	reviveSvc := newReviveService(ctx, cfg, d, provisionDeps, tgClient, logger)
+	if reviveSvc != nil {
+		go reviveSvc.Run(ctx)
+	}
+
 	// Мастер замены конфига: задание из шести шагов с откатом. Store общий с
 	// провижном намеренно -- блокировка в нём по имени роутера, и ставить
 	// агента заново посреди замены конфига было бы нельзя в любом случае.
@@ -329,6 +338,7 @@ func main() {
 		PublicBaseURL:             cfg.PublicBaseURL,
 		PublicIP:                  cfg.PublicIP,
 		Provision:                 provisionDeps,
+		Revive:                    reviveSvc,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,

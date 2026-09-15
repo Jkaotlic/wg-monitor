@@ -18,6 +18,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
@@ -406,6 +407,10 @@ type Deps struct {
 	// cmd/backend/main.go, including BaseCtx = the process's own long-lived
 	// context and a ticker driving Store.Sweep (see provision/job.go).
 	Provision provision.Deps
+	// Revive -- оживление агента на выключенном роутере (cycle 2б). nil --
+	// функция выключена: нет revive.key_file или ключ не той длины; маршруты
+	// мини-аппа отвечают revive_disabled. Методы безопасны на nil.
+	Revive *revive.Service
 }
 
 type AlertPolicy struct {
