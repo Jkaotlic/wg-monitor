@@ -121,6 +121,14 @@ func giveUpIfExhausted(d Deps, uid int64, nickname string) bool {
 	if d.DB == nil {
 		return false
 	}
+	// Выданная команда ещё в работе: агент качает или меняет бинарь, а
+	// отчёт идёт параллельно со старой версией. Сдаваться рано -- своп может
+	// пройти, и тогда люди получили бы ложное «не ставится» без последующего
+	// «обновлено» (final review I1). Потерянная попытка перестаёт быть
+	// активной по TTL, и сдача случится на первом отчёте после него.
+	if checker, ok := d.CommandSink.(activeCommandChecker); ok && checker.HasActiveCommand(uid, "self_update") {
+		return false
+	}
 	st, err := d.DB.Users().PendingDeploy(uid)
 	if err != nil {
 		if d.Logger != nil {

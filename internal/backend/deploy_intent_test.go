@@ -431,3 +431,48 @@ func TestReportConfirmingTargetAfterGiveUpClearsAttempts(t *testing.T) {
 		t.Fatalf("поздняя версия не должна слать второе уведомление: %+v", calls)
 	}
 }
+
+// Третья выдача ещё в работе: агент качает и меняет бинарь, а его отчёт идёт
+// параллельно со старой версией. Сдаваться в этот момент нельзя -- иначе люди
+// получают «не ставится», своп проходит, а уведомления об успехе уже не будет
+// (final review I1). Сдача законна только когда выданная команда отжила TTL.
+func TestReportDuringThirdAttemptInFlightDoesNotGiveUp(t *testing.T) {
+	s := seedSleptRouter(t, "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a")
+	dn := s.withDeployNotifier()
+	for i := 0; i < pendingDeployMaxAttempts-1; i++ {
+		if _, _, err := s.d.Users().IncrementPendingAttempts(s.uid, sleptTarget); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s.pollUpdate(t) // третья выдача
+	st, err := s.d.Users().PendingDeploy(s.uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Attempts != pendingDeployMaxAttempts {
+		t.Fatalf("после третьей выдачи счёт попыток = %d", st.Attempts)
+	}
+
+	s.report(t, "v0.31.0") // агент ещё на старой версии, своп в процессе
+	time.Sleep(50 * time.Millisecond)
+	if calls := dn.snapshot(); len(calls) != 0 {
+		t.Fatalf("отчёт сдался, пока третья попытка ещё в работе: %+v", calls)
+	}
+	if got := s.pendingVersion(t); got != sleptTarget {
+		t.Fatalf("отчёт снял отметку во время третьей попытки: %q", got)
+	}
+
+	s.q.Sweep(time.Nanosecond) // выданная команда отжила TTL, ответа нет
+	s.report(t, "v0.31.0")
+
+	if got := s.pendingVersion(t); got != "" {
+		t.Fatalf("после истёкшей третьей попытки отметка осталась: %q", got)
+	}
+	waitDeployCalls(dn, 1)
+	time.Sleep(50 * time.Millisecond)
+	calls := dn.snapshot()
+	if len(calls) != 1 || !strings.Contains(calls[0].output, "версия не сменилась") {
+		t.Fatalf("ждали ровно одно уведомление о потерянных попытках: %+v", calls)
+	}
+}
