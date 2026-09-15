@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
@@ -22,7 +23,30 @@ const (
 	adminMuteAdminOnly = "Эта кнопка только для админа."
 	adminMuteNoRouter  = "Этого роутера больше нет."
 	adminMuteFailed    = "Не получилось выключить — попробуйте ещё раз."
+	adminMuteUnknown   = "Неизвестная кнопка."
 )
+
+// adminMuteToastMaxLen -- предел текста тоста ответа на callback у Telegram
+// Bot API (см. tg/client.go:225 и то же число в callbacks/router.go).
+const adminMuteToastMaxLen = 200
+
+// adminMuteDoneToast -- готовый тост про выключенный роутер, обрезанный так,
+// чтобы весь текст уложился в adminMuteToastMaxLen символов (B8). Ник
+// роутера -- пользовательский ввод без ограничения длины на стороне базы;
+// без обрезки длинный ник ломал бы отправку тоста целиком, а не только его
+// хвост.
+func adminMuteDoneToast(nickname string) string {
+	fixed := fmt.Sprintf(adminMuteDoneFmt, "")
+	budget := adminMuteToastMaxLen - utf8.RuneCountInString(fixed)
+	nick := []rune(nickname)
+	if budget < 0 {
+		budget = 0
+	}
+	if len(nick) > budget {
+		nick = nick[:budget]
+	}
+	return fmt.Sprintf(adminMuteDoneFmt, string(nick))
+}
 
 // isAdminMuteCallback -- данные этой кнопки. Разбираются до Parse: у кнопки
 // два поля ("nmute:<router_id>"), а Parse требует минимум три.
@@ -39,7 +63,7 @@ func (r *Router) handleAdminMuteCallback(ctx context.Context, q *tg.CallbackQuer
 	}
 	routerID, ok := notify.ParseAdminMuteCallback(q.Data)
 	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "неизвестная кнопка")
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, adminMuteUnknown)
 		slog.Warn("nmute: испорченные данные", "data", q.Data)
 		return
 	}
@@ -59,5 +83,5 @@ func (r *Router) handleAdminMuteCallback(ctx context.Context, q *tg.CallbackQuer
 		return
 	}
 	slog.Info("nmute: админ выключил уведомления по роутеру", "router_id", routerID, "nickname", u.Nickname)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, fmt.Sprintf(adminMuteDoneFmt, u.Nickname))
+	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, adminMuteDoneToast(u.Nickname))
 }

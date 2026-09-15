@@ -44,29 +44,21 @@ func (r *NotifyMutesRepo) SetMuted(telegramUserID, userID int64, muted bool) err
 // MutedBy -- все, кто заглушил этот роутер. Один запрос вместо N проверок на
 // каждой рассылке: получателей у роутера немного, но тревоги идут пачками.
 func (r *NotifyMutesRepo) MutedBy(userID int64) (map[int64]bool, error) {
-	rows, err := r.d.db.Query(
-		`SELECT telegram_user_id FROM router_notify_mutes WHERE user_id = ?`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make(map[int64]bool)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		out[id] = true
-	}
-	return out, rows.Err()
+	return r.scanIDSet(`SELECT telegram_user_id FROM router_notify_mutes WHERE user_id = ?`, userID)
 }
 
 // MutedRoutersOf -- роутеры, которые этот человек выключил. Экран парка
 // показывает админу переключатель у каждого роутера, и спрашивать базу по
 // роутеру было бы N запросов на одно открытие экрана.
 func (r *NotifyMutesRepo) MutedRoutersOf(telegramUserID int64) (map[int64]bool, error) {
-	rows, err := r.d.db.Query(
-		`SELECT user_id FROM router_notify_mutes WHERE telegram_user_id = ?`, telegramUserID)
+	return r.scanIDSet(`SELECT user_id FROM router_notify_mutes WHERE telegram_user_id = ?`, telegramUserID)
+}
+
+// scanIDSet -- общий сканер однострочных int64-запросов MutedBy/MutedRoutersOf
+// (B8): у обоих было по одинаковому циклу query→scan→map, различался только
+// сам SQL.
+func (r *NotifyMutesRepo) scanIDSet(query string, arg int64) (map[int64]bool, error) {
+	rows, err := r.d.db.Query(query, arg)
 	if err != nil {
 		return nil, err
 	}

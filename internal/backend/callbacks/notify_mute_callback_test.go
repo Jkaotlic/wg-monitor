@@ -3,7 +3,9 @@ package callbacks
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
@@ -96,7 +98,8 @@ func TestAdminMuteCallback_UnknownRouter(t *testing.T) {
 	}
 }
 
-// Испорченные данные -- обычный ответ «неизвестная кнопка», как у Parse.
+// Испорченные данные -- обычный ответ, как у остальных тостов кнопки: с
+// заглавной буквы и точкой (B8).
 func TestAdminMuteCallback_MalformedData(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTGFull{}
@@ -104,7 +107,35 @@ func TestAdminMuteCallback_MalformedData(t *testing.T) {
 
 	r.HandleCallback(context.Background(), muteQuery(42, 42, "nmute:abc"))
 
-	if len(f.answers) != 1 || f.answers[0] != "неизвестная кнопка" {
-		t.Fatalf("ответы %q, ждали «неизвестная кнопка»", f.answers)
+	if len(f.answers) != 1 || f.answers[0] != adminMuteUnknown {
+		t.Fatalf("ответы %q, ждали %q", f.answers, adminMuteUnknown)
+	}
+}
+
+// B8: у Telegram тост callback-ответа ограничен 200 символами
+// (tg/client.go:225). Ник роутера попадает в тост как есть -- длинный ник
+// обязан быть обрезан так, чтобы весь текст уложился в лимит, а не просто
+// уйти как есть и получить отказ Bot API.
+func TestAdminMuteCallback_LongNicknameToastFitsTelegramLimit(t *testing.T) {
+	d, _ := newTestDB(t)
+	longNick := strings.Repeat("оченьдлинноеимяроутера", 20) // далеко за 200 символов
+	uid, err := d.Users().Insert(longNick, "rawtoken2", "1.1.1.2", "nwg0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeRouterTGFull{}
+	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+
+	r.HandleCallback(context.Background(), muteQuery(42, 42, fmt.Sprintf("nmute:%d", uid)))
+
+	if len(f.answers) != 1 {
+		t.Fatalf("ответов %d, ждали 1: %q", len(f.answers), f.answers)
+	}
+	got := f.answers[0]
+	if n := utf8.RuneCountInString(got); n > 200 {
+		t.Fatalf("тост длиной %d символов превышает лимит Telegram (200): %q", n, got)
+	}
+	if !strings.HasPrefix(got, "Больше не пишу про «оченьдлинноеимяроутера") {
+		t.Fatalf("тост не называет обрезанный ник: %q", got)
 	}
 }
