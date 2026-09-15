@@ -74,9 +74,8 @@ func SignatureRequiredForVersion(version string) bool {
 // internal/agent/actions.SelfUpdate's downgrade guard can reuse this exact
 // compare (releasesig is already an agent-side dependency for
 // SignatureRequiredForVersion/VerifyChecksumsSignature) instead of adding a
-// fourth local copy of the same rank/compare pair already duplicated in
-// internal/backend/dashboard_handler.go (compareDashboardReleaseTags) and
-// internal/backend/callbacks/fleet_batch.go (compareReleaseTagsLocal).
+// third local copy of the same rank/compare pair already duplicated in
+// internal/backend/dashboard_handler.go (compareDashboardReleaseTags).
 func CompareReleaseTags(a, b string) (cmp int, ok bool) {
 	ar, aok := releaseRank(a)
 	br, bok := releaseRank(b)
