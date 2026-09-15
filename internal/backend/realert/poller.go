@@ -33,6 +33,9 @@ type Config struct {
 	// STILL-DOWN reminders -- the same button and the same base URL as
 	// alerts.Config.MiniAppBaseURL. Empty omits the button entirely.
 	MiniAppBaseURL string
+	// AdminUserID -- Telegram-номер админа, 0 -- не настроен. Напоминания
+	// тоже уходят админу (решение оператора 15.09: «всё подряд»).
+	AdminUserID int64
 }
 
 const (
@@ -105,7 +108,7 @@ func NewPoller(d *db.DB, tg TGSender, cfg Config) *Poller {
 	return &Poller{
 		d: d, tg: tg, cfg: cfg, now: time.Now,
 		sendFailCount: make(map[string]int),
-		notify:        notify.NewFanout(d, tg, slog.Default()),
+		notify:        notify.NewFanout(d, tg, slog.Default(), cfg.AdminUserID),
 	}
 }
 

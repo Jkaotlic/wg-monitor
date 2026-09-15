@@ -2376,3 +2376,103 @@ body {
 .dot-warn {
   background: var(--warn);
 }
+
+/* ============================================================
+   «Парк»: строка роутера с обновлением агента
+   ============================================================ */
+
+/* Строки парка разделены линией: под строкой данных живут версии, состояние
+   обновления и кнопки, и без разделителя они прилипают к соседнему роутеру. */
+.park-row + .park-row {
+  border-top: 1px solid var(--border);
+}
+
+/* Состояние обновления говорится словом; тон -- подсказка, а не смысл. */
+.park-update {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--muted);
+  overflow-wrap: break-word;
+}
+
+.park-update-warn {
+  color: var(--warn);
+}
+
+.park-update-danger {
+  color: var(--danger);
+}
+
+.park-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0;
+}
+
+.park-result {
+  margin-top: var(--sp-2);
+}
+
+.park-batch {
+  margin-top: var(--sp-3);
+}
+
+/* Под строкой роутера: «уведомлять меня» и переход на его экран. */
+.park-row-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+/* Переключатель -- кнопка с role=switch: состояние читается и глазами, и
+   экранным диктором (aria-checked). 44 px по высоте, как у кнопок строки. */
+.park-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.park-switch:disabled {
+  opacity: 0.6;
+}
+
+.park-switch-track {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background 0.15s;
+}
+
+.park-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink);
+  transition: transform 0.15s;
+}
+
+.park-switch[aria-checked='true'] .park-switch-track {
+  background: var(--ok);
+}
+
+.park-switch[aria-checked='true'] .park-switch-thumb {
+  transform: translateX(16px);
+}

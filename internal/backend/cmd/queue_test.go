@@ -519,6 +519,88 @@ func TestHasActiveCommand(t *testing.T) {
 	}
 }
 
+// EnqueueIfNoActive -- атомарная замена HasActiveCommand+Enqueue: раздельные
+// вызовы оставляли окно между проверкой и постановкой, где параллельный
+// контакт (опрос и отчёт почти одновременно, B1) тоже видел «не занято» и
+// тоже ставил команду. Здесь гоняем N параллельных попыток и требуем, чтобы
+// ровно одна прошла и в очереди осталась ровно одна команда.
+func TestQueue_EnqueueIfNoActive_ConcurrentOnlyOneWins(t *testing.T) {
+	q := New()
+	const uid = int64(9)
+	const N = 20
+	var wg sync.WaitGroup
+	results := make([]bool, N)
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			queued, err := q.EnqueueIfNoActive(uid, mkCmd("cand-"+string(rune('a'+i)), "self_update"))
+			if err != nil {
+				t.Errorf("EnqueueIfNoActive: %v", err)
+				return
+			}
+			results[i] = queued
+		}(i)
+	}
+	wg.Wait()
+
+	wins := 0
+	for _, ok := range results {
+		if ok {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Fatalf("ровно один вызов должен был поставить команду, получили %d из %d", wins, N)
+	}
+	if !q.HasActiveCommand(uid, "self_update") {
+		t.Fatal("после единственной победившей постановки команда должна быть активна")
+	}
+	n := 0
+	for {
+		if _, ok := q.Dequeue(context.Background(), uid, 5*time.Millisecond); !ok {
+			break
+		}
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("в очереди должна была остаться ровно одна команда, дошло %d", n)
+	}
+}
+
+// Занятое действие отказывает сразу, а на другое действие или на другого
+// пользователя постановка проходит как обычно.
+func TestQueue_EnqueueIfNoActive_RespectsExistingActiveAndScope(t *testing.T) {
+	q := New()
+	const uid = int64(11)
+	if err := q.Enqueue(uid, mkCmd("first", "self_update")); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := q.EnqueueIfNoActive(uid, mkCmd("second", "self_update"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued {
+		t.Fatal("self_update уже в очереди -- вторая постановка не должна пройти")
+	}
+	// Другое действие тому же пользователю не занято.
+	queued, err = q.EnqueueIfNoActive(uid, mkCmd("diag", "diag_now"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !queued {
+		t.Fatal("diag_now не занят -- постановка должна пройти")
+	}
+	// Тот же action другому пользователю тоже не занят.
+	queued, err = q.EnqueueIfNoActive(uid+1, mkCmd("other-user", "self_update"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !queued {
+		t.Fatal("у другого пользователя self_update не занят -- постановка должна пройти")
+	}
+}
+
 // Обновления awg-manager и HydraRoute Neo ждут спящий роутер столько же,
 // сколько перезагрузка: 10 минут, и экран называет это число вслух.
 func TestCommandTTLMaintenanceActions(t *testing.T) {

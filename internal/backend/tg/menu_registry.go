@@ -9,16 +9,6 @@ type BotMenuItem struct {
 	Description string
 }
 
-type PanelKindItem struct {
-	Kind  string
-	Label string
-}
-
-type PanelHomeButton struct {
-	Text         string
-	CallbackData string
-}
-
 var routerMenuItems = []BotMenuItem{
 	{Code: "smart_reply", Label: "📊 Что происходит?", Command: "status", Description: "Статус этого роутера"},
 	{Code: "router_doctor", Label: "🩺 Проверка", Command: "check", Description: "Проверить роутер изнутри"},
@@ -42,7 +32,6 @@ var utilityCommandItems = []BotMenuItem{
 }
 
 var adminCommandItems = []BotMenuItem{
-	{Command: "panel", Description: "Открыть панель управления"},
 	{Command: "ensure_topics", Description: "Создать темы для всех роутеров"},
 	{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
 	{Command: "this_is", Description: "Привязать этот топик к роутеру"},
@@ -64,44 +53,6 @@ var operatorCommandOrder = []string{
 	"help",
 }
 
-var adminPanelRouterKindItems = []PanelKindItem{
-	{Kind: "status", Label: "📊 Статус"},
-	{Kind: "doctor", Label: "🩺 Проверка"},
-	{Kind: "tunnels", Label: "🎛 Туннели"},
-	{Kind: "routes", Label: "🛣 Маршруты"},
-	{Kind: "pingcheck", Label: "📡 PingCheck"},
-}
-
-var adminPanelHomeRows = [][]PanelHomeButton{
-	{
-		{Text: "🔎 Аудит всех", CallbackData: "panel:0:audit_all"},
-		{Text: "⬆ Обновить все", CallbackData: "panel:0:update_all_confirm"},
-	},
-	panelKindButtonRow(adminPanelRouterKindItems[0], adminPanelRouterKindItems[1]),
-	panelKindButtonRow(adminPanelRouterKindItems[2], adminPanelRouterKindItems[3]),
-	// Обслуживание переехало в мини-апп (цикл 1): PingCheck остался один в ряду.
-	{{Text: adminPanelRouterKindItems[4].Label, CallbackData: "panel:0:kind:" + adminPanelRouterKindItems[4].Kind}},
-	{
-		{Text: "🩺 Все роутеры", CallbackData: "panel:0:doctor_all"},
-		{Text: "🪄 Оживить топики", CallbackData: "panel:0:awaken_confirm"},
-	},
-	{
-		{Text: "🚗 Мобильные", CallbackData: "panel:0:mobile"},
-		{Text: "👥 Доступ", CallbackData: "access:0:home"},
-	},
-	// Вход в веб-управление живёт здесь, а не отдельной командой /admin:
-	// хаб уже админский, и второй командой пришлось бы заводить второй гейт.
-	{
-		{Text: "🌐 Открыть в браузере", CallbackData: "panel:0:weblink"},
-	},
-	{
-		{Text: "ℹ Помощь оператору", CallbackData: "panel:0:help:operator"},
-	},
-	{
-		{Text: "✖ Закрыть", CallbackData: "panel:0:close"},
-	},
-}
-
 func RouterMenuItems() []BotMenuItem {
 	return cloneMenuItems(routerMenuItems)
 }
@@ -118,37 +69,7 @@ func OperatorBotCommands() []BotCommand {
 func AdminBotCommands() []BotCommand {
 	items := append(cloneMenuItems(routerMenuItems), utilityCommandItems...)
 	items = append(items, adminCommandItems...)
-	return commandsFromItemsInOrder(items, append(operatorCommandOrder, "panel", "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted"))
-}
-
-func AdminPanelRouterKindItems() []PanelKindItem {
-	out := make([]PanelKindItem, len(adminPanelRouterKindItems))
-	copy(out, adminPanelRouterKindItems)
-	return out
-}
-
-func AdminPanelKindLabel(kind string) string {
-	for _, item := range adminPanelRouterKindItems {
-		if item.Kind == kind {
-			return item.Label
-		}
-	}
-	return ""
-}
-
-func AdminPanelHomeKeyboard() InlineKeyboardMarkup {
-	rows := make([][]InlineKeyboardButton, 0, len(adminPanelHomeRows))
-	for _, row := range adminPanelHomeRows {
-		buttons := make([]InlineKeyboardButton, 0, len(row))
-		for _, b := range row {
-			buttons = append(buttons, InlineKeyboardButton{
-				Text:         b.Text,
-				CallbackData: b.CallbackData,
-			})
-		}
-		rows = append(rows, buttons)
-	}
-	return InlineKeyboardMarkup{InlineKeyboard: rows}
+	return commandsFromItemsInOrder(items, append(operatorCommandOrder, "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted"))
 }
 
 func OperatorMenuHelpText() string {
@@ -197,11 +118,4 @@ func cloneMenuItems(items []BotMenuItem) []BotMenuItem {
 	out := make([]BotMenuItem, len(items))
 	copy(out, items)
 	return out
-}
-
-func panelKindButtonRow(left, right PanelKindItem) []PanelHomeButton {
-	return []PanelHomeButton{
-		{Text: left.Label, CallbackData: "panel:0:kind:" + left.Kind},
-		{Text: right.Label, CallbackData: "panel:0:kind:" + right.Kind},
-	}
 }

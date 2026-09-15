@@ -50,7 +50,7 @@ func TestTelegramOperatorCommandMenuExcludesAdminCommands(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
 	for _, c := range cmds {
 		switch c.Command {
-		case "panel", "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted":
+		case "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted":
 			t.Fatalf("operator command menu must not expose admin command /%s: %+v", c.Command, cmds)
 		}
 	}
@@ -59,7 +59,6 @@ func TestTelegramOperatorCommandMenuExcludesAdminCommands(t *testing.T) {
 func TestTelegramAdminCommandMenuIncludesAdminCommands(t *testing.T) {
 	cmds := telegramAdminCommandMenu()
 	want := map[string]bool{
-		"panel":          false,
 		"ensure_topics":  false,
 		"recreate_topic": false,
 		"this_is":        false,
@@ -83,6 +82,16 @@ func TestTelegramCommandMenusDropMaintenance(t *testing.T) {
 		for _, c := range cmds {
 			if c.Command == "maint" || c.Command == "upgrade" {
 				t.Errorf("/%s переехала в приложение, а осталась в меню: %+v", c.Command, cmds)
+			}
+		}
+	}
+}
+
+func TestTelegramCommandMenusDropPanel(t *testing.T) {
+	for _, cmds := range [][]tg.BotCommand{telegramOperatorCommandMenu(), telegramAdminCommandMenu()} {
+		for _, c := range cmds {
+			if c.Command == "panel" {
+				t.Errorf("/panel переехала в приложение, а осталась в меню: %+v", cmds)
 			}
 		}
 	}

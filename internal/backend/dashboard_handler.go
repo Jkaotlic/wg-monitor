@@ -133,11 +133,7 @@ func dashboardCancelDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		var dropped int
-		if d.CommandSink != nil {
-			dropped = len(d.CommandSink.DropPending(u.ID, "self_update"))
-		}
-		cleared, err := d.DB.Users().ClearPendingDeploy(u.ID)
+		cleared, dropped, err := cancelAgentDeploy(d, u)
 		if err != nil {
 			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
@@ -701,7 +697,9 @@ func buildDashboardNotifyGaps(d Deps) dashboardNotifyGaps {
 		return gaps
 	}
 	for _, u := range users {
-		people, err := notify.RecipientsFor(d.DB, u.ID)
+		// Без админа: он слышит все роутеры, и с ним этот список был бы пуст
+		// всегда (notify.OwnerAndOperators).
+		people, err := notify.OwnerAndOperators(d.DB, u.ID)
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Warn("dashboard: recipients lookup failed", "user_id", u.ID, "err", err)

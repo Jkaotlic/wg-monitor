@@ -7,8 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
+	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
@@ -30,7 +33,7 @@ func TestReportOnWakeRequeuesPendingDeploy(t *testing.T) {
 		LastDeployedVersion: "v0.14.1",
 		Ring:                "stable",
 		PendingVersion:      "v0.22.0",
-		PendingSince:        "2026-09-09T10:51:23Z",
+		PendingSince:        time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +98,7 @@ func TestReportOnWakeDoesNotStackCommands(t *testing.T) {
 		Arch:                "arm64",
 		LastDeployedVersion: "v0.14.1",
 		PendingVersion:      "v0.22.0",
-		PendingSince:        "2026-09-09T10:51:23Z",
+		PendingSince:        time.Now().UTC().Add(-time.Hour).Format(time.RFC3339),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -120,5 +123,61 @@ func TestReportOnWakeDoesNotStackCommands(t *testing.T) {
 	}
 	if got := len(sink.snapshotEnqueued()); got != 0 {
 		t.Fatalf("команда уже в работе, ждали 0 новых, получили %d", got)
+	}
+}
+
+// B1: опрос и отчёт одного роутера почти одновременно оба зовут
+// ensurePendingDeployQueued. На НАСТОЯЩЕЙ очереди (cmd.Queue, не дублёре) без
+// атомарной постановки оба вызова успевали увидеть «не занято» и оба ставили
+// self_update: одна команда уже уходила агенту (issued), вторая оставалась в
+// pending -- вытеснить первую supersede не мог, её там уже не было. Итог --
+// две активные команды на одно намерение вместо одной.
+func TestEnsurePendingDeployQueued_ConcurrentContactsEnqueueOnce(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	uid, err := d.Users().InsertWithKind("mobile-router",
+		"cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd00cdcd", "1.1.1.1", "awg0", db.KindMobile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(uid, "v0.22.0", time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+
+	q := cmdpkg.New()
+	dep := Deps{
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:            d,
+		CommandSink:   q,
+		PublicBaseURL: "https://backend.example.com",
+	}
+
+	const N = 20
+	var wg sync.WaitGroup
+	now := time.Now().UTC()
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ensurePendingDeployQueued(dep, uid, "mobile-router", now)
+		}()
+	}
+	wg.Wait()
+
+	if !q.HasActiveCommand(uid, "self_update") {
+		t.Fatal("после параллельной досылки должна остаться ровно одна активная команда")
+	}
+	n := 0
+	for {
+		if _, ok := q.Dequeue(t.Context(), uid, 5*time.Millisecond); !ok {
+			break
+		}
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("параллельные контакты поставили %d команд self_update, ждали 1", n)
 	}
 }

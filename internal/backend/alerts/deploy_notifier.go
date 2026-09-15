@@ -20,10 +20,10 @@ type DeployNotifier struct {
 	notify notifySink
 }
 
-func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64) *DeployNotifier {
+func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *DeployNotifier {
 	return &DeployNotifier{
 		db: d, tg: tgc, chatID: chatID,
-		notify: notify.NewFanout(d, tgc, slog.Default()),
+		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }
 
@@ -57,16 +57,15 @@ func RenderDeferredUpdate(nickname, targetVersion, status, output string) Card {
 			Meta:    []string{KV("версия", targetVersion), KV("подтверждение", "heartbeat с новой версией")},
 		}
 	}
-	output = strings.TrimSpace(output)
-	if output == "" {
-		output = "агент вернул статус " + strings.TrimSpace(status)
+	reason := strings.TrimSpace(output)
+	if reason == "" {
+		reason = "агент не сообщил причину"
 	}
 	return Card{
 		Badge:   "⬆️⚠️",
-		Summary: fmt.Sprintf("%s: отложенное обновление агента не применилось", nickname),
-		Meta:    []string{KV("цель", targetVersion), KV("статус", strings.TrimSpace(status))},
-		Details: truncateDeployOutput(output, 700),
-		Hint:    "pending очищен для этой версии: можно повторить update после проверки детали выше. Если снова падает — запусти проверку роутера или обнови агент вручную.",
+		Summary: fmt.Sprintf("Обновление агента на %s не ставится: %s", nickname, truncateDeployOutput(reason, 300)),
+		Meta:    []string{KV("версия", targetVersion)},
+		Hint:    "Попытки прекращены. Назначить заново или посмотреть причину — в приложении, экран «Парк».",
 	}
 }
 

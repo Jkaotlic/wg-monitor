@@ -7,6 +7,9 @@ import {
   notifyGapLines,
   watchdogLine,
   webLinkLines,
+  notifySwitch,
+  notifyMuteSheetText,
+  withNotifyMuted,
 } from '../src/fleetAdmin.js'
 
 const FLEET = {
@@ -24,8 +27,24 @@ const FLEET = {
       awgmgr_version: '2.18.2',
       firmware_current: '4.2.7',
       update_hint: 'пора обновить: прошивка 4.3.0',
+      pending_attempts: 0,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
     },
-    { id: 2, nickname: 'Дача', status: 'sleeping', last_seen_age_sec: 4000, agent_version: 'v0.30.0' },
+    {
+      id: 2,
+      nickname: 'Дача',
+      status: 'sleeping',
+      last_seen_age_sec: 4000,
+      agent_version: 'v0.30.0',
+      pending_attempts: 0,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
+    },
     {
       id: 3,
       nickname: 'Офис',
@@ -33,6 +52,11 @@ const FLEET = {
       last_seen_age_sec: 30,
       agent_version: 'v0.29.0',
       pending_version: 'v0.30.0',
+      pending_attempts: 1,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
     },
   ],
   notify: {
@@ -94,10 +118,28 @@ describe('строки роутеров', () => {
     expect(rows.find((r) => r.id === 2).sub).toMatch(/не на связи|отчёт/)
   })
 
-  it('версии агента, панели и pending видны строкой', () => {
-    expect(rows[0].versions).toContain('v0.30.0')
-    expect(rows[0].versions).toContain('2.18.2')
-    expect(rows.find((r) => r.id === 3).versions).toContain('v0.30.0')
+  it('строка версий: агент рядом с бэкендом, панель и прошивка', () => {
+    expect(rows[0].versions).toBe('агент v0.30.0 · бэкенд v0.31.0 · панель 2.18.2 · прошивка 4.2.7')
+    expect(rows.find((r) => r.id === 3).versions).toBe('агент v0.29.0 · бэкенд v0.31.0')
+  })
+
+  it('обновление агента -- отдельным полем, а не в строке версий', () => {
+    const office = rows.find((r) => r.id === 3)
+    expect(office.versions).not.toContain('ставится')
+    expect(office.update.text).toBe('ставится v0.30.0 · 1 попытка')
+    expect(office.update.canCancel).toBe(true)
+    expect(rows.find((r) => r.id === 2).update.canUpdate).toBe(true)
+  })
+
+  it('строка несёт исходный роутер и оговорку сервера', () => {
+    const office = rows.find((r) => r.id === 3)
+    expect(office.router).toBe(FLEET.routers[2])
+    expect(office.warning).toBe('')
+  })
+
+  it('без версии бэкенда слово «бэкенд» не пишется', () => {
+    const [row] = fleetRouterRows({ routers: [{ id: 9, nickname: 'x', status: 'online', agent_version: 'v0.30.0' }] })
+    expect(row.versions).toBe('агент v0.30.0')
   })
 
   it('«пора обновить» приходит с сервера и не пересчитывается в клиенте', () => {
@@ -152,5 +194,44 @@ describe('ссылка в браузер', () => {
   it('ссылку саму на экране не повторяем: она уже ушла в браузер', () => {
     const lines = webLinkLines({ url: 'https://wg.example.com/dashboard/login#token=deadbeef' })
     expect(lines.join(' ')).not.toContain('#token=')
+  })
+})
+
+describe('«уведомлять меня»', () => {
+  const on = { id: 5, nickname: 'car', status: 'alert', notify_muted: false, agent_behind: true, pending_version: '' }
+  const off = { ...on, id: 6, nickname: 'bronya', notify_muted: true }
+
+  it('включено -- без примечания; выключено -- примечание, что экраны открываются как обычно', () => {
+    expect(notifySwitch(on)).toEqual({ on: true, note: '' })
+    expect(notifySwitch(off)).toEqual({
+      on: false,
+      note: 'Бот не пишет вам про этот роутер. Его экраны открываются как обычно.',
+    })
+    expect(notifySwitch({ id: 7, nickname: 'x' }).on).toBe(true)
+  })
+
+  it('лист выключения называет последствие и что роутер не пропадёт', () => {
+    const t = notifyMuteSheetText(on)
+    expect(t.title).toBe('Не уведомлять вас про «car»?')
+    expect(t.body).toContain('Бот перестанет писать вам в личку про «car»')
+    expect(t.body).toContain('Роутер останется в парке, его экраны открываются как обычно.')
+  })
+
+  it('выключение не убирает роутер и не трогает его остальные поля', () => {
+    const fleet = { backend: { version: 'v0.33.0' }, routers: [on, off] }
+    const next = withNotifyMuted(fleet, 5, true)
+    expect(next).not.toBe(fleet)
+    expect(next.routers).toHaveLength(2)
+    expect(next.routers[0]).toEqual({ ...on, notify_muted: true })
+    expect(next.routers[1]).toBe(off)
+    expect(next.backend).toBe(fleet.backend)
+    expect(fleet.routers[0].notify_muted).toBe(false)
+    expect(withNotifyMuted(null, 5, true)).toBeNull()
+  })
+
+  it('строка парка несёт переключатель', () => {
+    const rows = fleetRouterRows({ routers: [off] })
+    expect(rows[0].notify.on).toBe(false)
+    expect(rows[0].name).toBe('bronya')
   })
 })

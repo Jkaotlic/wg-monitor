@@ -208,3 +208,197 @@ func TestMiniappFleetCarriesNotifyGaps(t *testing.T) {
 		t.Errorf("роутеры без адресатов = %v, want [router-orphan]", resp.Notify.RoutersWithoutRecipients)
 	}
 }
+
+// Экран «Парк» показывает, что с обновлением агента: сколько попыток, почему
+// не ставится, отстал ли агент и о чём предупредить. Причина -- по-русски,
+// сырой вывод агента в приложение не уезжает.
+func TestMiniappFleetCarriesAgentUpdateState(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	old := serverVersion
+	SetVersion("v0.33.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+
+	// router-owned: старый агент, обновление назначено, две попытки, мало места.
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.14.1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().MarkPendingDeploy(ownedID, "v0.33.0", "2026-09-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, _, err := d.Users().IncrementPendingAttempts(ownedID, "v0.33.0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, _, err := d.Users().RecordPendingDeployError(ownedID, "v0.33.0", "self_update: insufficient /opt space: 1200 KB free"); err != nil {
+		t.Fatal(err)
+	}
+	// router-other: уже на версии бэкенда, но в базе висит давняя причина.
+	if err := d.Users().UpdateLastSeenAgentVersion(otherID, "v0.33.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec(`UPDATE users SET pending_last_error = 'download: HTTP 502' WHERE id = ?`, otherID); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	body := rec.Body.String()
+	resp := fleetResponse(t, rec)
+	rows := map[int64]miniappFleetRouter{}
+	for _, r := range resp.Routers {
+		rows[r.ID] = r
+	}
+
+	owned := rows[ownedID]
+	if owned.PendingAttempts != 2 || !owned.AgentBehind ||
+		owned.PendingLastErrorText != "мало свободного места в разделе /opt" ||
+		!strings.Contains(owned.AgentUpdateWarning, "64 МБ") {
+		t.Errorf("router-owned: %+v", owned)
+	}
+	other := rows[otherID]
+	if other.AgentBehind || other.PendingLastErrorText != "" || other.AgentUpdateWarning != "" {
+		t.Errorf("router-other на версии бэкенда: %+v", other)
+	}
+	for _, raw := range []string{"insufficient", "HTTP 502", "self_update"} {
+		if strings.Contains(body, raw) {
+			t.Errorf("в сводке парка сырой текст агента %q", raw)
+		}
+	}
+	for _, field := range []string{`"pending_attempts":0`, `"agent_behind":false`, `"pending_last_error_text":""`, `"agent_update_warning":""`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("форма строки непостоянна: нет %s в %s", field, body)
+		}
+	}
+}
+
+// B6: агент ниже agentSelfUpdateFloor не умеет self_update вовсе. /fleet не
+// должен считать его «отстающим» (agent_behind=false, иначе кнопка и
+// счётчик «Обновить всех отставших» обещали бы то, что кончится отказом
+// agent_too_old) и обязан отдать предупреждение про переустановку. Причина
+// прошлой (уже неактивной) попытки при этом не должна теряться -- сервер
+// review нашёл, что PendingLastErrorText требовал verdict.Behind, а у
+// слишком старого агента Behind всегда false.
+func TestMiniappFleetCarriesTooOldAgentWarningAndKeepsLastError(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	old := serverVersion
+	SetVersion("v0.33.0")
+	t.Cleanup(func() { SetVersion(old) })
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.12.0"); err != nil {
+		t.Fatal(err)
+	}
+	// Отметка обновления уже снята (сдались или отменили), причина осталась
+	// в базе -- как после giveUpPendingDeploy (deploy_attempts.go:154-167).
+	if _, err := d.SQL().Exec(`UPDATE users SET pending_last_error = 'download: HTTP 502' WHERE id = ?`, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(otherID, "v0.33.0"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, rec)
+	rows := map[int64]miniappFleetRouter{}
+	for _, r := range resp.Routers {
+		rows[r.ID] = r
+	}
+
+	owned := rows[ownedID]
+	if owned.AgentBehind {
+		t.Errorf("слишком старый агент не должен считаться «отстающим»: %+v", owned)
+	}
+	if !strings.Contains(owned.AgentUpdateWarning, "переустановка") {
+		t.Errorf("нет предупреждения про переустановку: %+v", owned)
+	}
+	if owned.PendingLastErrorText != "роутер не смог скачать обновление" {
+		t.Errorf("причина прошлой попытки потерялась: %+v", owned)
+	}
+}
+
+// Решение оператора 15.09: админ выключает уведомления по роутеру, «но и
+// одновременно при желании зайти глянуть, что не так». Парк показывает
+// выключатель честно и не прячет выключенный роутер.
+func TestMiniappFleetCarriesNotifyMutedForCallingAdmin(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, ownedID, otherID, ownerTGID := seedMiniappFleet(t)
+	if err := d.NotifyMutes().SetMuted(999, ownedID, true); err != nil {
+		t.Fatal(err)
+	}
+	// Владелец выключил другой роутер -- это не выбор админа.
+	if err := d.NotifyMutes().SetMuted(ownerTGID, otherID, true); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, rec)
+	if len(resp.Routers) != 2 {
+		t.Fatalf("роутеров %d, ждали 2: выключенный роутер обязан остаться в парке", len(resp.Routers))
+	}
+	byID := map[int64]miniappFleetRouter{}
+	for _, row := range resp.Routers {
+		byID[row.ID] = row
+	}
+	if !byID[ownedID].NotifyMuted {
+		t.Errorf("router-owned: notify_muted=false, ждали true")
+	}
+	if byID[otherID].NotifyMuted {
+		t.Errorf("router-other: notify_muted=true -- чужое выключение попало в ответ админу")
+	}
+	if !strings.Contains(rec.Body.String(), `"notify_muted":false`) {
+		t.Errorf("явного false нет в теле -- клиент не отличит «включено» от «поле не пришло»: %s", rec.Body.String())
+	}
+}
+
+// «На связи» решает сервер, тем же правилом, что и отложенное обновление
+// (miniappWakeWindow): статус без инцидентов. Роутер в тревоге, который давно
+// молчит, для обновления -- выключен, и клиент обязан это знать, а не
+// угадывать своим порогом (final review M1).
+func TestMiniappFleetCarriesAwayWithWakeWindowRule(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+	now := time.Now().UTC()
+	hardSince := now.Add(-3 * time.Hour)
+	if err := d.State().Save(ownedID, "dns", db.IncidentState{
+		UserID: ownedID, CheckName: "dns", CurrentStatus: "hard", ConsecutiveFails: 4, HardSince: &hardSince,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setDashboardTestLastSeen(t, d, ownedID, now.Add(-2*time.Hour))
+	setDashboardTestLastSeen(t, d, otherID, now.Add(-10*time.Second))
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+
+	rec := fleetRequest(t, h, 999)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("сводка парка: код %d, тело %s", rec.Code, rec.Body.String())
+	}
+	var raw struct {
+		Routers []map[string]any `json:"routers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]map[string]any{}
+	for _, r := range raw.Routers {
+		got[r["nickname"].(string)] = r
+	}
+	owned, other := got["router-owned"], got["router-other"]
+	if owned["status"] != "alert" {
+		t.Fatalf("предпосылка: ждали статус alert, получили %v", owned["status"])
+	}
+	u, err := d.Users().GetByID(ownedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	asleep, _, _ := miniappWakeWindow(Deps{DB: d}, u, "self_update", now)
+	if owned["away"] != asleep || owned["away"] != true {
+		t.Fatalf("тревожный роутер, молчит 2 ч: away=%v, правило отложенного обновления=%v", owned["away"], asleep)
+	}
+	if v, ok := other["away"]; !ok || v != false {
+		t.Fatalf("роутер на связи: away=%v (есть поле: %v), ждали явное false", v, ok)
+	}
+}

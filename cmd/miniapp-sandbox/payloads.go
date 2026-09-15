@@ -50,6 +50,28 @@ func sandboxOutput(action string, args map[string]any) string {
 		return "Проверка напрямую\nExit IP: 203.0.113.1"
 	case "check_via_tunnel", "exit_ip_tunnel", "exit_ip":
 		return "Проверка через туннель\nExit IP: 203.0.113.9"
+	// Осмотр -- тем форматом, каким его пишет агент
+	// (internal/agent/actions/router_doctor.go): одно замечание, чтобы итог
+	// «Проверить все» на экране «Парк» показывал ветку «проблемы у N».
+	case "router_doctor":
+		return strings.Join([]string{
+			"🩺 Проверка роутера",
+			"✅ awg-manager API: 2.19.1",
+			"✅ tunnels: 2 up",
+			"⚠️ pingcheck: disabled",
+		}, "\n")
+	// Аудит -- настоящим wire.VersionAudit: доступна новая прошивка.
+	case "version_audit":
+		installed := true
+		return mustJSON(wire.VersionAudit{
+			AwgmgrVersion:   "2.19.1",
+			AwgmgrRunning:   true,
+			HrneoInstalled:  &installed,
+			HrneoRunning:    true,
+			HrneoVersion:    "3.18.3",
+			FirmwareCurrent: "4.2.7",
+			FirmwareAvail:   "4.3.0",
+		})
 	case "recheck":
 		return "проверки перезапущены"
 	default:

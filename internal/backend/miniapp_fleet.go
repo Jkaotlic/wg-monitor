@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
@@ -55,6 +56,22 @@ type miniappFleetRouter struct {
 	// что сравнение версий у прошивки Keenetic не semver, и второй его копии
 	// в клиенте быть не должно.
 	UpdateHint string `json:"update_hint,omitempty"`
+	// Состояние обновления агента. Причина неудачи -- уже по-русски
+	// (deployFailureText): сырой вывод агента в приложение не уезжает.
+	// Без omitempty: форма строки постоянная, клиент не гадает об отсутствии.
+	PendingAttempts      int    `json:"pending_attempts"`
+	PendingLastErrorText string `json:"pending_last_error_text"`
+	AgentBehind          bool   `json:"agent_behind"`
+	AgentUpdateWarning   string `json:"agent_update_warning"`
+	// NotifyMuted -- вызвавший админ выключил уведомления по этому роутеру.
+	// Без omitempty: переключателю нужно явное false. Роутер при этом в парке
+	// остаётся -- доступ к экранам от выключения не зависит.
+	NotifyMuted bool `json:"notify_muted"`
+	// Away -- роутер не на связи для команд и обновления: то же правило, по
+	// которому сервер откладывает обновление (miniappWakeWindow -- статус без
+	// инцидентов). Считает сервер, чтобы лист, итог и строка парка не
+	// расходились с решением «отложено» (final review M1). Без omitempty.
+	Away bool `json:"away"`
 }
 
 // miniappFleetUnreachable -- человек, которому бот не может написать.
@@ -126,6 +143,38 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			}
 			versions = nil
 		}
+		pending, err := d.DB.Users().PendingDeployStates()
+		if err != nil {
+			// Как и снимок версий -- добавка к строке: экран обязан открыться.
+			if d.Logger != nil {
+				d.Logger.Warn("сводка парка: состояние обновлений не прочитано", "err", err)
+			}
+			pending = nil
+		}
+		mutedByAdmin, err := d.DB.NotifyMutes().MutedRoutersOf(telegramUserID)
+		if err != nil {
+			// Как со снимком версий: экран обязан открыться. Переключатели
+			// покажут «включено», в журнале -- почему.
+			if d.Logger != nil {
+				d.Logger.Warn("сводка парка: выключатели уведомлений не прочитаны", "err", err)
+			}
+			mutedByAdmin = nil
+		}
+
+		// Строки users для правила «не на связи»: сводка отдаёт статус С
+		// инцидентами, а отложенное обновление решается статусом БЕЗ них.
+		users, err := d.DB.Users().GetAll()
+		if err != nil {
+			// Добавка к строке: без неё away берётся из статуса сводки.
+			if d.Logger != nil {
+				d.Logger.Warn("сводка парка: роутеры для признака «не на связи» не прочитаны", "err", err)
+			}
+			users = nil
+		}
+		usersByID := make(map[int64]int, len(users))
+		for i := range users {
+			usersByID[users[i].ID] = i
+		}
 
 		// Пустой список, а не nil: клиент перебирает это поле, и null уронил
 		// бы экран в тот момент, когда в парке пока ни одного роутера.
@@ -149,6 +198,11 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				LastSeenAgeSec: a.LastSeenAgeSec,
 				AgentVersion:   a.AgentVersion,
 				PendingVersion: a.PendingVersion,
+				NotifyMuted:    mutedByAdmin[a.ID],
+				Away:           a.Status == "sleeping" || a.Status == "offline",
+			}
+			if i, ok := usersByID[a.ID]; ok {
+				row.Away, _, _ = miniappWakeWindow(d, &users[i], "self_update", now)
 			}
 			for _, inc := range a.ActiveIncidents {
 				row.Incidents = append(row.Incidents, inc.CheckName)
@@ -158,6 +212,19 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				row.FirmwareCurrent = snap.FirmwareCurrent
 				if upstream.FirmwareNewerThan(snap.FirmwareCurrent, snap.FirmwareAvail) {
 					row.UpdateHint = "пора обновить: прошивка " + snap.FirmwareAvail
+				}
+			}
+			verdict := agentUpdateVerdictFor(a.AgentVersion, serverVersion)
+			row.AgentBehind = verdict.Behind
+			row.AgentUpdateWarning = verdict.Warning
+			if st, ok := pending[a.ID]; ok {
+				row.PendingAttempts = st.Attempts
+				// TooOld тоже держит причину: у него Behind всегда false
+				// (агент вообще не умеет self_update, B6), но прошлая
+				// попытка (например, до того как агент постарел настолько)
+				// не должна пропадать из строки.
+				if strings.TrimSpace(st.LastError) != "" && (st.Version != "" || verdict.Behind || verdict.TooOld) {
+					row.PendingLastErrorText = deployFailureText(st.LastError)
 				}
 			}
 			resp.Routers = append(resp.Routers, row)

@@ -622,23 +622,43 @@ const FLEET = {
       awgmgr_version: '2.18.2',
       firmware_current: '4.2.7',
       update_hint: 'пора обновить: прошивка 4.3.0',
+      pending_version: '',
+      pending_attempts: 0,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
+      notify_muted: false,
+      away: false,
     },
     {
       id: 2,
       nickname: 'Дача',
       status: 'sleeping',
       last_seen_age_sec: 5400,
-      agent_version: 'v0.30.0',
+      agent_version: 'v0.24.1',
       awgmgr_version: '2.18.2',
+      pending_version: 'v0.31.0',
+      pending_attempts: 2,
+      pending_last_error_text: 'на роутере не хватает места',
+      agent_behind: true,
+      agent_update_warning: 'старая проверка места: нужно ≈10% раздела /opt свободно',
+      notify_muted: true,
+      away: true,
     },
     {
       id: 3,
       nickname: 'Офис',
-      status: 'online',
-      last_seen_age_sec: 40,
+      status: 'offline',
+      last_seen_age_sec: 7200,
       agent_version: 'v0.29.0',
-      pending_version: 'v0.30.0',
+      pending_version: 'v0.31.0',
+      pending_attempts: 0,
+      pending_last_error_text: '',
+      agent_behind: true,
+      agent_update_warning: '',
       awgmgr_version: '2.17.2',
+      notify_muted: false,
+      away: true,
     },
   ],
   notify: {
@@ -660,6 +680,19 @@ export function respond(method, path) {
   // Админский экран парка и выдача ссылки в браузер: без них песочница
   // показывала бы кнопку, которую нечем нажать.
   if (path === '/v1/miniapp/fleet') return FLEET
+  if (method === 'POST' && path === '/v1/miniapp/fleet/agent/update') {
+    return {
+      results: FLEET.routers
+        .filter((r) => r.agent_behind && !r.pending_version)
+        .map((r) => ({
+          router_id: r.id,
+          nickname: r.nickname,
+          outcome: r.away ? 'deferred' : 'queued',
+          reason_code: '',
+          reason_text: '',
+        })),
+    }
+  }
   if (method === 'POST' && path === '/v1/miniapp/web-link') {
     return {
       url: 'https://wg.example.com/dashboard/login#token=' + 'ab12'.repeat(16),
@@ -678,6 +711,10 @@ export function respond(method, path) {
   const id = Number(m[1])
   const rest = m[2] ?? ''
   const router = ROUTERS.find((r) => r.id === id) ?? ROUTERS[0]
+  if (method === 'POST' && rest === '/agent/update') {
+    return { queued: true, deferred: router.status === 'offline' || router.status === 'sleeping', target_version: FLEET.backend.version }
+  }
+  if (method === 'POST' && rest === '/agent/update/cancel') return { cleared: true }
 
   if (rest === '' || rest === '/') return { router, incidents: id === 1 ? INCIDENTS : [] }
   if (rest === '/events') {

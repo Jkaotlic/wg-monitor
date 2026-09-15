@@ -291,11 +291,6 @@ type RoutesNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
-// BulkNotifier updates one aggregate admin report for fleet-wide commands.
-type BulkNotifier interface {
-	NotifyBulkCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
-}
-
 // PingCheckNotifier is the subset used by cmdResultHandler when ref.Action is
 // pingcheck_status or pingcheck_toggle. Implemented by callbacks.PingCheckPanelNotifier.
 type PingCheckNotifier interface {
@@ -319,7 +314,6 @@ type Deps struct {
 	CommandSink         CommandSink
 	TGNotifier          TGNotifier
 	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
-	BulkNotifier        BulkNotifier      // nil-safe (handler falls back to per-command relays)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
 	DeployNotifier      DeployNotifier    // nil-safe (handler skips deferred update notices)
@@ -1013,9 +1007,15 @@ func reportHandler(d Deps) http.HandlerFunc {
 					}
 				})
 			} else if update.PendingTarget != "" {
-				// Роутер на связи, а назначенное обновление всё ещё не
-				// доехало -- значит команда протухла, пока он спал.
-				requeueDeployOnWake(d, uid, nick, update.PendingTarget)
+				// Роутер на связи, версия агента уже доказана отчётом, а
+				// назначенное обновление всё ещё не доехало. Здесь и только
+				// здесь решается сдача: опрос версии не видит и права
+				// объявлять «не ставится» не имеет (review Important #1) --
+				// иначе только что обновившийся роутер получал бы ложную
+				// тревогу, если первый опрос пришёл раньше первого отчёта.
+				if !giveUpIfExhausted(d, uid, nick) {
+					ensurePendingDeployQueued(d, uid, nick, time.Now().UTC())
+				}
 			}
 		}
 		if d.PublicBaseURL != "" {
@@ -1085,6 +1085,9 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 		}
 		uid := UserIDFromContext(r.Context())
 		nick := NicknameFromContext(r.Context())
+		// Досылка ДО выдачи: включившийся агент приходит сюда раньше первого
+		// отчёта, и протухшая команда в голове очереди иначе ушла бы в пустоту.
+		ensurePendingDeployQueued(d, uid, nick, time.Now().UTC())
 		c, ok := d.CommandSink.Dequeue(r.Context(), uid, wait)
 		if !ok {
 			w.WriteHeader(http.StatusNoContent)
@@ -1104,6 +1107,9 @@ func cmdGetHandler(d Deps) http.HandlerFunc {
 			"nickname", nick, "cmd_id", c.ID, "action", c.Action,
 			"req_id", RequestIDFromContext(r.Context()),
 		)
+		if c.Action == "self_update" {
+			countPendingDeployAttempt(d, uid, nick, commandVersionArg(*c))
+		}
 	}
 }
 
@@ -1196,20 +1202,6 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 		// agent's POST on TG network latency.
 		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
 			incCmdResultRelay()
-			if ref.BulkID != "" {
-				if d.BulkNotifier != nil {
-					spawnRelayTimeout(d, "cmd-bulk", 30*time.Second, func(ctx context.Context) {
-						if err := d.BulkNotifier.NotifyBulkCommandResult(ctx, ref, res, uid); err != nil {
-							incTGError()
-							d.Logger.Warn("bulk notifier failed", "cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("bulk notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "bulk_id", ref.BulkID, "nickname", nick)
-				}
-				goto resultLogged
-			}
 			switch ref.Action {
 			case "route_status", "tunnels_status", "route_rebind", "route_templates", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory", "hrneo_doctor":
 				if d.RoutesNotifier != nil {
@@ -1254,27 +1246,16 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 			}
 		} else {
 			if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
-				target := commandVersionArg(cmd)
-				if target != "" {
-					if _, err := d.DB.Users().ClearPendingDeployIfMatches(uid, target); err != nil {
-						d.Logger.Warn("clear pending deploy after self_update failure",
-							"nickname", nick, "cmd_id", res.ID, "target_version", target, "err", err)
-					}
+				output := res.Output
+				if strings.TrimSpace(output) == "" {
+					output = "status " + res.Status
 				}
-				if d.DeployNotifier != nil {
-					output := res.Output
-					nickname := nick
-					status := res.Status
-					spawnRelay(d, "deploy-result", func(ctx context.Context) {
-						if err := d.DeployNotifier.SendDeferredUpdate(ctx, uid, nickname, target, status, output); err != nil {
-							incTGError()
-							d.Logger.Warn("deploy notifier failed", "cmd_id", res.ID, "action", cmd.Action, "err", err)
-						}
-					})
-				}
+				// Неудача НЕ снимает отметку: намерение живёт в базе, досылка
+				// на контакте попробует снова. На пределе попыток -- сдаёмся
+				// и пишем людям (deploy_attempts.go).
+				recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
 			}
 		}
-	resultLogged:
 		d.Logger.Info("cmd result",
 			"nickname", nick, "cmd_id", res.ID, "status", res.Status,
 			"duration_ms", res.DurationMs,

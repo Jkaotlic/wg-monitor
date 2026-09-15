@@ -2,14 +2,18 @@ package backend
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 // seedHardIncident adds a HARD incident for the owned router so mutating
@@ -203,5 +207,112 @@ func TestMiniappSilenceRejectsNonHardIncident(t *testing.T) {
 	st, _ := d.State().Get(ownedID, "tunnel_a")
 	if st.SilencedUntil != nil {
 		t.Fatal("unexpected silenced_until was persisted for non-hard incident")
+	}
+}
+
+// recordingMiniappTG записывает, в какие чаты синхронизация тревоги писала.
+type recordingMiniappTG struct {
+	mu      sync.Mutex
+	edits   map[int64]int
+	sends   map[int64]int
+	markups map[int64]*tg.InlineKeyboardMarkup // последняя разметка EditMessageReplyMarkup на чат
+}
+
+func (f *recordingMiniappTG) EditMessageReplyMarkup(_ context.Context, chatID, _ int64, kb *tg.InlineKeyboardMarkup) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.edits[chatID]++
+	if f.markups != nil {
+		f.markups[chatID] = kb
+	}
+	return nil
+}
+
+func (f *recordingMiniappTG) SendMessage(_ context.Context, chatID int64, _ *int64, _, _ string, _ *int64) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sends[chatID]++
+	return 1, nil
+}
+
+// Админ получил тревогу, потом выключил уведомления по роутеру. Владелец
+// действует из приложения: админу -- ни правки, ни «(через приложение)»,
+// владельцу -- как раньше (spec D: выключивший не получает по роутеру ничего;
+// final review M2).
+func TestMiniappSyncSkipsChatsThatMutedRouter(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	const adminTG = 999
+	seedHardIncident(t, d, ownedID, "dns")
+	if err := d.AlertMessages().Put(ownedID, "dns", ownerTG, 501); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AlertMessages().Put(ownedID, "dns", adminTG, 502); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.NotifyMutes().SetMuted(adminTG, ownedID, true); err != nil {
+		t.Fatal(err)
+	}
+	fake := &recordingMiniappTG{edits: map[int64]int{}, sends: map[int64]int{}}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: adminTG, MiniappTG: fake})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/dns/ack", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", ownerTG))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if fake.edits[adminTG] != 0 || fake.sends[adminTG] != 0 {
+		t.Fatalf("админ выключил уведомления, но синхронизация ему писала: edits=%d sends=%d", fake.edits[adminTG], fake.sends[adminTG])
+	}
+	if fake.edits[ownerTG] != 1 || fake.sends[ownerTG] != 1 {
+		t.Fatalf("владелец обязан получить синхронизацию: edits=%d sends=%d", fake.edits[ownerTG], fake.sends[ownerTG])
+	}
+}
+
+// B7a: владелец действует из мини-аппа -- miniappSyncAlertMessage снимает
+// кнопки со всех сообщений тревоги, включая админское. У всех, кроме
+// админа, это правильно очищает клавиатуру целиком (miniappEmptyKeyboard).
+// У админа под тревогой всегда есть ряд «Не писать мне про этот роутер»
+// (notify.withAdminMuteRow, добавляется при рассылке) -- его синхронизация
+// не должна стирать, иначе админ теряет кнопку выключения, пока владелец
+// сам не откроет и не закроет тревогу в приложении.
+func TestMiniappSyncKeepsAdminMuteRowInsteadOfEmptyKeyboard(t *testing.T) {
+	d, ownedID, _, ownerTG := seedMiniappFleet(t)
+	const adminTG = 999
+	seedHardIncident(t, d, ownedID, "dns")
+	if err := d.AlertMessages().Put(ownedID, "dns", ownerTG, 501); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.AlertMessages().Put(ownedID, "dns", adminTG, 502); err != nil {
+		t.Fatal(err)
+	}
+	fake := &recordingMiniappTG{edits: map[int64]int{}, sends: map[int64]int{}, markups: map[int64]*tg.InlineKeyboardMarkup{}}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: adminTG, MiniappTG: fake})
+
+	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/v1/miniapp/routers/%d/incidents/dns/ack", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", ownerTG))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	ownerKB := fake.markups[ownerTG]
+	if ownerKB == nil || len(ownerKB.InlineKeyboard) != 0 {
+		t.Fatalf("у владельца клавиатура обязана стать пустой: %+v", ownerKB)
+	}
+	adminKB := fake.markups[adminTG]
+	if adminKB == nil || len(adminKB.InlineKeyboard) != 1 {
+		t.Fatalf("у админа должен остаться ровно один ряд (выключения): %+v", adminKB)
+	}
+	row := adminKB.InlineKeyboard[0]
+	if len(row) != 1 || row[0].Text != notify.AdminMuteButtonText || row[0].CallbackData != notify.AdminMuteCallbackData(ownedID) {
+		t.Fatalf("у админа не ряд выключения этого роутера: %+v", adminKB)
 	}
 }

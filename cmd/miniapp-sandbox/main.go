@@ -60,7 +60,12 @@ func main() {
 	dbPath := flag.String("db", "", "путь к базе (по умолчанию временный файл)")
 	tgUser := flag.Int64("tg-user", 4242, "telegram user id, от чьего имени открыт мини-апп")
 	keep := flag.Bool("keep", false, "не удалять временную базу при выходе")
+	version := flag.String("version", "v0.33.0", "версия бэкенда песочницы: от неё экран «Парк» считает отставших")
 	flag.Parse()
+
+	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
+	// экран «Парк» было бы нечем проверить.
+	backend.SetVersion(*version)
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
@@ -151,7 +156,13 @@ func main() {
 		// песочница -- единственное место, где его можно писать в открытую.
 		DashboardToken: sandboxDashboardToken,
 		HeartbeatStats: watcher.Snapshot,
-		PublicBaseURL:  "http://" + *addr,
+		// Не сам адрес песочницы: configuredPublicBackendURL (wizard_handler.go)
+		// отбрасывает loopback/private хосты, и с "http://127.0.0.1:..." любое
+		// обновление агента -- одиночное и массовое -- отвечало бы 503
+		// not_configured, экрану было бы нечем поделиться с оператором.
+		// Фальшивый публичный хост никто не резолвит: фальшивый агент
+		// команду просто исполняет, адрес прошивки не скачивает.
+		PublicBaseURL: "https://sandbox.wg-monitor.example",
 	}
 	mux := backend.NewMux(deps)
 	initData := signInitData(sandboxBotToken, *tgUser, time.Now())

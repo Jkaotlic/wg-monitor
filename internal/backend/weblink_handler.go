@@ -35,12 +35,8 @@ const (
 
 	webLinkCopyNotice       = "Ссылка личная и живёт 12 часов. Не пересылайте её: по ней всё это время открывается управление всем парком."
 	webLinkCopyDead         = "Ссылка больше не действует — попросите новую."
-	WebLinkCopyAdminOnly    = "Эта команда только для админа."
 	WebLinkCopyNoPublicBase = "Публичный адрес не настроен по https — ссылку выдать нельзя."
 	webLinkCopyLimit        = "Живыми остаются три последние ссылки: выдали новую — самая старая перестала работать."
-	// WebLinkCopyOnlyInDM говорит последствие, а не правило: в общем чате
-	// ссылку увидят все, кто там сидит, поэтому бот её туда не отправляет.
-	WebLinkCopyOnlyInDM = "В общем чате ссылку увидят все — напишите боту в личку и нажмите там /panel."
 )
 
 // webLinkNow -- часы выдачи и обмена. Отдельные от dashboardNow: срок
@@ -105,8 +101,9 @@ func webLinkContains(hashes []string, hash string) bool {
 
 // IssueWebLink выдаёт человеку личную ссылку на веб-управление.
 //
-// Экспортирована ради бота: кнопка «Открыть в браузере» живёт в хабе /panel
-// (пакет callbacks), и второй копии выдачи там быть не должно.
+// Экспортирована, чтобы у выдачи была одна копия на все входы (сейчас это
+// POST дашборда и мини-аппа); хаб /panel, где жила кнопка бота, уехал в
+// приложение.
 func IssueWebLink(database *db.DB, telegramUserID int64, publicBaseURL string, logger *slog.Logger) (WebLinkGrant, error) {
 	base := strings.TrimRight(strings.TrimSpace(publicBaseURL), "/")
 	// Только https: ссылка несёт вход в систему, и по http её увидит любой

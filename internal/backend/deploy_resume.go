@@ -58,10 +58,34 @@ func ResumePendingDeploys(d *db.DB, sink deployEnqueuer, publicBaseURL, publicIP
 		}
 		return 0
 	}
+	states, err := d.Users().PendingDeployStates()
+	if err != nil {
+		if logger != nil {
+			logger.Warn("resume deploys: read attempts failed", "err", err)
+		}
+		states = nil
+	}
+	now := time.Now().UTC()
 	resumed := 0
 	for _, u := range users {
 		target := strings.TrimSpace(stringValue(u.PendingVersion))
 		if target == "" {
+			continue
+		}
+		if pendingDeployExpired(stringValue(u.PendingSince), now) {
+			cleared, clearErr := d.Users().ClearPendingDeploy(u.ID)
+			if logger != nil {
+				logger.Info("resume deploys: pending deploy older than 90 days dropped",
+					"nickname", u.Nickname, "target_version", target,
+					"pending_since", stringValue(u.PendingSince), "cleared", cleared, "err", clearErr)
+			}
+			continue
+		}
+		if st, ok := states[u.ID]; ok && st.Attempts >= pendingDeployMaxAttempts {
+			if logger != nil {
+				logger.Info("resume deploys: attempts exhausted; left to next contact",
+					"nickname", u.Nickname, "target_version", target, "attempts", st.Attempts)
+			}
 			continue
 		}
 		id, err := newCmdID()
@@ -71,7 +95,7 @@ func ResumePendingDeploys(d *db.DB, sink deployEnqueuer, publicBaseURL, publicIP
 			}
 			continue
 		}
-		cmd := buildSelfUpdateCommand(id, target, base, publicIP, time.Now().UTC())
+		cmd := buildSelfUpdateCommand(id, target, base, publicIP, now)
 		dropped := sink.DropPending(u.ID, "self_update")
 		if len(dropped) > 0 && logger != nil {
 			logger.Info("resume deploys: сняли прежние команды обновления",

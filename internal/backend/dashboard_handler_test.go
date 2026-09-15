@@ -1579,3 +1579,41 @@ func TestDashboardSummaryNotifyGapsAreArraysNotNull(t *testing.T) {
 		t.Fatalf("пустой список роутеров без адресата обязан быть массивом: %s", body)
 	}
 }
+
+// Админ теперь получатель всех роутеров. Если сводка посчитает его, «роутеры
+// без получателей» опустеют навсегда, и сирота снова станет невидимым.
+func TestDashboardSummaryRoutersWithoutRecipientsIgnoresAdmin(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.Users().Insert("router-orphan", "token-o", "198.51.100.1", "awg0"); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewMux(Deps{
+		Logger:              slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DB:                  d,
+		DashboardToken:      "secret",
+		TelegramAdminUserID: 9000,
+	})
+	req := httptest.NewRequest(http.MethodGet, "/v1/dashboard/summary", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		Notify struct {
+			RoutersWithoutRecipients []string `json:"routers_without_recipients"`
+		} `json:"notify"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Notify.RoutersWithoutRecipients) != 1 || got.Notify.RoutersWithoutRecipients[0] != "router-orphan" {
+		t.Fatalf("роутеры без адресата=%v, ждали router-orphan при настроенном админе", got.Notify.RoutersWithoutRecipients)
+	}
+}

@@ -89,6 +89,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate router_versions.kmod_loaded_version: %w", err)
 	}
+	if err := migratePendingAttempts(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate users.pending_attempts: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -223,6 +227,19 @@ func migrateWizardPortableMetadata(d *sql.DB) error {
 func migrateRouterVersionsKmodLoaded(d *sql.DB) error {
 	return addColumnIfMissing(d, "router_versions", "kmod_loaded_version",
 		`ALTER TABLE router_versions ADD COLUMN kmod_loaded_version TEXT NOT NULL DEFAULT ''`)
+}
+
+// migratePendingAttempts добавляет счёт попыток назначенного обновления агента
+// и последнюю ошибку. Намерение обновиться живёт в базе, а команда в очереди --
+// одноразовый носитель, поэтому и счёт живёт здесь: очередь в памяти умирает
+// с рестартом бэкенда.
+func migratePendingAttempts(d *sql.DB) error {
+	if err := addColumnIfMissing(d, "users", "pending_attempts",
+		`ALTER TABLE users ADD COLUMN pending_attempts INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	return addColumnIfMissing(d, "users", "pending_last_error",
+		`ALTER TABLE users ADD COLUMN pending_last_error TEXT`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {

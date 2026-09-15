@@ -695,66 +695,19 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "user_not_found", "nickname not registered")
 			return
 		}
-		// Anti-downgrade floor: reject a target older than the version the
-		// agent's own heartbeat last reported (users.last_deployed_version),
-		// unless the operator explicitly opts in. Mirrors the provisioning
-		// install/repair path's isVersionDowngrade guard (same helper, so
-		// rc9-vs-rc10 compares correctly — see its doc comment) so this
-		// legacy self_update-over-/v1/cmd deploy path cannot be used to slip
-		// an older, previously-patched build past an operator who forgot
-		// this flag existed here too.
-		if !req.AllowDowngrade && isVersionDowngrade(req.TargetVersion, stringValue(u.LastDeployedVersion)) {
-			writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
-				fmt.Sprintf("target version %s is older than the currently installed %s — pass allow_downgrade to override",
-					req.TargetVersion, stringValue(u.LastDeployedVersion)))
+		res, derr := agentDeployCore(d, u, req.TargetVersion, agentDeployOpts{
+			RepoBaseURL:    repoBaseURL,
+			ResolveIP:      func() string { return wizardRepoResolveIPForBackendURL(r, repoBaseURL) },
+			AllowDowngrade: req.AllowDowngrade,
+			Source:         "wizard",
+		})
+		if derr != nil {
+			writeJSONError(w, derr.Status, derr.Code, derr.Message)
 			return
-		}
-		if pending := strings.TrimSpace(stringValue(u.PendingVersion)); pending != "" {
-			writeJSONError(w, http.StatusConflict, "deploy_pending", "agent already has pending deploy "+pending)
-			return
-		}
-
-		id, err := newCmdID()
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
-			return
-		}
-		issuedAt := time.Now().UTC()
-		cmd := wire.Command{
-			ID:     id,
-			Action: "self_update",
-			Args: map[string]any{
-				"version":   req.TargetVersion,
-				"repo_base": repoBaseURL + "/v1/releases/download",
-			},
-			IssuedAt: issuedAt,
-		}
-		if ip := wizardRepoResolveIPForBackendURL(r, repoBaseURL); ip != "" {
-			cmd.Args["repo_resolve_ip"] = ip
-		}
-		if err := d.DB.Users().MarkPendingDeploy(u.ID, req.TargetVersion, issuedAt.Format(time.RFC3339)); err != nil {
-			if errors.Is(err, db.ErrDeployPending) {
-				writeJSONError(w, http.StatusConflict, "deploy_pending", "agent already has pending deploy")
-				return
-			}
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-			return
-		}
-		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
-			if _, clearErr := d.DB.Users().ClearPendingDeployIfMatches(u.ID, req.TargetVersion); clearErr != nil && d.Logger != nil {
-				d.Logger.Warn("rollback pending deploy after enqueue failure",
-					"nickname", nickname, "user_id", u.ID, "target_version", req.TargetVersion, "err", clearErr)
-			}
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
-			return
-		}
-		if d.Logger != nil {
-			d.Logger.Info("wizard deploy enqueued",
-				"nickname", nickname, "user_id", u.ID, "cmd_id", id, "target_version", req.TargetVersion)
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: id})
+		_ = json.NewEncoder(w).Encode(wizardDeployResp{CmdID: res.CmdID})
 	}
 }
 

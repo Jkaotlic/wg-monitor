@@ -8,6 +8,7 @@
 // срок ссылки приходят с сервера. Вторая копия сравнения версий разошлась бы
 // с первой, а второй текст про 12 часов -- с тем, что сказал бот.
 import { humanAge, incidentWhatPlain, pluralRu } from './labels.js'
+import { agentUpdateState } from './agentUpdate.js'
 
 export const EMPTY_PARK = 'В парке нет ни одного роутера.'
 
@@ -49,6 +50,7 @@ export function backendRow(fleet) {
 
 export function fleetRouterRows(fleet) {
   const list = fleet?.routers ?? []
+  const backendVersion = fleet?.backend?.version ?? ''
   return [...list]
     .sort((a, b) => {
       const ua = URGENCY[a?.status] ?? 99
@@ -61,10 +63,16 @@ export function fleetRouterRows(fleet) {
       name: router?.nickname ?? '',
       state: STATE_WORD[router?.status] ?? router?.status ?? '',
       sub: routerSub(router),
-      versions: versionsLine(router),
+      versions: versionsLine(router, backendVersion),
       // Готовая фраза сервера. Пустая строка -- это «обновлять нечего», а не
       // «мы не знаем»: про незнание сервер говорит отдельно.
       hint: router?.update_hint ?? '',
+      // Обновление агента -- своим полем: у строки про него есть кнопки, и
+      // склеенное в строку версий «ставится vX» кнопкам не за что держаться.
+      update: agentUpdateState(router),
+      warning: router?.agent_update_warning ?? '',
+      notify: notifySwitch(router),
+      router,
     }))
 }
 
@@ -79,10 +87,14 @@ function routerSub(router) {
   return `отчёт ${humanAge(age)} назад`
 }
 
-function versionsLine(router) {
+// «агент X · бэкенд Y» стоят рядом намеренно: отставание видно глазом, без
+// второго экрана и без сравнения версий в клиенте.
+function versionsLine(router, backendVersion) {
   const parts = []
-  if (router?.agent_version) parts.push(`агент ${router.agent_version}`)
-  if (router?.pending_version) parts.push(`ставится ${router.pending_version}`)
+  if (router?.agent_version) {
+    parts.push(`агент ${router.agent_version}`)
+    if (backendVersion) parts.push(`бэкенд ${backendVersion}`)
+  }
   if (router?.awgmgr_version) parts.push(`панель ${router.awgmgr_version}`)
   if (router?.firmware_current) parts.push(`прошивка ${router.firmware_current}`)
   return parts.join(' · ')
@@ -134,4 +146,36 @@ function shortTime(iso) {
 // на экране она превращается в то, что пересылают.
 export function webLinkLines(grant) {
   return [grant?.notice, grant?.limit_notice].filter(Boolean)
+}
+
+// «Уведомлять меня» -- личный выключатель админа по роутеру.
+//
+// Решение оператора: «отключить уведомления в личку от определённого роутера,
+// но и одновременно при желании зайти глянуть, что не так». Выключатель
+// касается ТОЛЬКО сообщений: роутер остаётся в парке, кнопки и экраны
+// работают. Поэтому ни одна функция здесь не фильтрует список.
+export function notifySwitch(router) {
+  const muted = Boolean(router?.notify_muted)
+  return {
+    on: !muted,
+    note: muted ? 'Бот не пишет вам про этот роутер. Его экраны открываются как обычно.' : '',
+  }
+}
+
+export function notifyMuteSheetText(router) {
+  const name = router?.nickname ?? ''
+  return {
+    title: `Не уведомлять вас про «${name}»?`,
+    body:
+      `Бот перестанет писать вам в личку про «${name}»: тревоги, «починилось», «не на связи». ` +
+      'Роутер останется в парке, его экраны открываются как обычно. Вернуть — этим же переключателем.',
+  }
+}
+
+export function withNotifyMuted(fleet, routerID, muted) {
+  if (!fleet) return fleet
+  return {
+    ...fleet,
+    routers: (fleet.routers ?? []).map((r) => (r.id === routerID ? { ...r, notify_muted: muted } : r)),
+  }
 }

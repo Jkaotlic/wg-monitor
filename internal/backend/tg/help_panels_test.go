@@ -20,6 +20,31 @@ func TestHelpForScreen_KnownScreens(t *testing.T) {
 	}
 }
 
+// B9: экран `mobile` описывал удалённый экран бота (мобильные роутеры
+// показывает теперь только мини-апп, экран «Парк»), и ни одна кнопка на него
+// больше не ведёт (grep по HelpRowFor/CallbackData -- see final-review #40).
+// Возвращает общий текст, как у любого незнакомого экрана.
+func TestHelpForScreen_MobileScreenRemoved(t *testing.T) {
+	got := HelpForScreen("mobile")
+	for _, gone := range []string{"last seen", "ring / pending", "Мобильные роутеры"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("экран mobile всё ещё описывает удалённый функционал (%q):\n%s", gone, got)
+		}
+	}
+	if got != HelpForScreen("totally_made_up") {
+		t.Errorf("экран mobile обязан отвечать так же, как незнакомый экран: %q", got)
+	}
+}
+
+// B9: экран `access` тоже без кнопок, но текст не удаляли -- добавили
+// указание, что список роутеров и владельцев смотреть в приложении.
+func TestHelpForScreen_AccessPointsToApp(t *testing.T) {
+	got := HelpForScreen("access")
+	if !strings.Contains(got, "в приложении") {
+		t.Errorf("экран access обязан упоминать приложение:\n%s", got)
+	}
+}
+
 func TestHelpForScreen_UnknownReturnsGeneric(t *testing.T) {
 	body := HelpForScreen("totally_made_up")
 	if !strings.Contains(body, "Помощь") {
@@ -56,7 +81,7 @@ func TestHelpForScreen_OperatorOverview(t *testing.T) {
 
 func TestHelpForScreen_OperatorMenuDoesNotRelyOnSlashDiscovery(t *testing.T) {
 	got := HelpForScreen("operator")
-	for _, want := range []string{"меню под сообщениями", "Оживить топики"} {
+	for _, want := range []string{"меню под сообщениями", "/keyboard"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("operator help should point to visible menu %q, got:\n%s", want, got)
 		}

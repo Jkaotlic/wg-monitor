@@ -39,6 +39,10 @@ type Config struct {
 	// HARD alert cards deep-linking into the Telegram Mini App for this
 	// router. Empty disables the button entirely (unchanged behaviour).
 	MiniAppBaseURL string
+	// AdminUserID -- Telegram-номер админа, 0 -- не настроен. Админ получает
+	// все уведомления по всем роутерам (решение оператора 15.09) и под каждым
+	// -- кнопку выключения по роутеру (notify.Fanout).
+	AdminUserID int64
 }
 
 const NeighborFreshWindow = 5 * time.Minute
@@ -59,7 +63,7 @@ type Dispatcher struct {
 func NewDispatcher(d *db.DB, tgc TGSender, cfg Config) *Dispatcher {
 	return &Dispatcher{
 		d: d, tg: tgc, cfg: cfg, now: time.Now,
-		notify: notify.NewFanout(d, tgc, slog.Default()),
+		notify: notify.NewFanout(d, tgc, slog.Default(), cfg.AdminUserID),
 	}
 }
 

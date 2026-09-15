@@ -172,7 +172,6 @@ English:
 - The default operator scope intentionally excludes admin-only commands, so operators on desktop clients see only topic-safe actions.
 - Router-topic menus are generated from the same menu registry as reply keyboards, compat inline keyboards, slash commands, and operator help.
 - `/menu` and `/keyboard` re-send both menu surfaces in the active router topic: first the bottom reply keyboard, then the visible inline fallback.
-- Admins can open `/panel` and use "Revive topics" to re-send both menu surfaces to every router topic that has a Telegram thread ID. The result screen reports sent, failed, and skipped-no-topic counts.
 
 Русский:
 
@@ -181,7 +180,6 @@ English:
 - В default scope нет админских команд, поэтому операторы в desktop-клиентах видят только безопасные действия текущего топика.
 - Видимое меню топика строится из общего registry: из него же собираются reply keyboard, compat inline keyboard, slash-команды и операторская справка.
 - `/menu` и `/keyboard` заново присылают актуальное меню в текущий топик роутера.
-- Админ может открыть `/panel` и нажать "Оживить топики": бот переотправит актуальное меню во все топики роутеров с Telegram thread ID и покажет счётчики отправлено / ошибок / без топика.
 
 ## Doctor And Sync
 

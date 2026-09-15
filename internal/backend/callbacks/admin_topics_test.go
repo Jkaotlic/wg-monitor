@@ -176,7 +176,7 @@ func TestAdminTopicHelp(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	help := f.sentMsgs[0]
-	for _, cmd := range []string{"/ensure_topics", "/recreate_topic", "/this_is", "/panel", "/topic_help"} {
+	for _, cmd := range []string{"/ensure_topics", "/recreate_topic", "/this_is", "/topic_help"} {
 		if !strings.Contains(help, cmd) {
 			t.Errorf("help missing %q in:\n%s", cmd, help)
 		}
@@ -332,23 +332,5 @@ func TestAdmin_EnsureTopics_FailsRendersHint(t *testing.T) {
 	body := f.sentMsgs[0]
 	if !strings.Contains(body, "❌") || !strings.Contains(body, "💡") {
 		t.Errorf("error reply should contain ❌ badge AND 💡 hint, got: %s", body)
-	}
-}
-
-// TestPanel_AdminOnlyGate verifies /panel from a non-admin user produces
-// zero side effects — the HandleMessage admin-gate stops it before
-// handleAdminCommand even runs.
-func TestPanel_AdminOnlyGate(t *testing.T) {
-	d, _ := newTestDB(t)
-	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-
-	msg := &tg.Message{
-		MessageID: 90, Chat: tg.Chat{ID: -100}, From: tg.User{ID: 99999},
-		Text: "/panel",
-	}
-	r.HandleMessage(context.Background(), msg)
-	if len(f.rkSends) != 0 || len(f.sentMsgs) != 0 {
-		t.Errorf("non-admin /panel must be ignored; rkSends=%d sentMsgs=%d", len(f.rkSends), len(f.sentMsgs))
 	}
 }

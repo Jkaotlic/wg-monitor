@@ -19,7 +19,7 @@ func TestHelp_AdminGetsFullBody(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	body := f.sentMsgs[0]
-	for _, want := range []string{"Алерты", "Кнопки в топике", "Админ-команды", "/panel", "Amnezia Premium", "HideMy.name", ".conf"} {
+	for _, want := range []string{"Алерты", "Кнопки в топике", "Админ-команды", "в приложении", "Amnezia Premium", "HideMy.name", ".conf"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("admin /help missing %q in body:\n%s", want, body)
 		}
@@ -149,5 +149,34 @@ func TestMyID_TellsOnlyOwnNumber(t *testing.T) {
 	}
 	if !strings.Contains(f.sentMsgs[0], "777002") {
 		t.Fatalf("в ответе нет номера отправителя:\n%s", f.sentMsgs[0])
+	}
+}
+
+// /panel и «Оживить топики» уехали из бота (цикл 2). Ни один текст, который
+// бот показывает человеку, не должен отсылать туда, где ничего нет.
+func TestBotTextsDoNotSendPeopleToRemovedPanel(t *testing.T) {
+	var texts []string
+	for _, cmd := range []string{"/help", "/topic_help"} {
+		d, _ := newTestDB(t)
+		f := &fakeRouterTG{}
+		r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+		r.HandleMessage(context.Background(), &tg.Message{Chat: tg.Chat{ID: -100}, From: tg.User{ID: 42}, Text: cmd})
+		if len(f.sentMsgs) != 1 {
+			t.Fatalf("%s: ответов %d, ждали 1", cmd, len(f.sentMsgs))
+		}
+		texts = append(texts, f.sentMsgs[0])
+	}
+	for _, screen := range []string{
+		"operator", "alerts", "fleet", "premium", "mobile",
+		"routes", "tunnels", "access", "diag", "status", "doctor", "pingcheck",
+	} {
+		texts = append(texts, tg.HelpForScreen(screen))
+	}
+	for _, text := range texts {
+		for _, gone := range []string{"/panel", "Оживить топики", "Обновить все", "Все роутеры"} {
+			if strings.Contains(text, gone) {
+				t.Errorf("текст отсылает к ушедшему %q:\n%s", gone, text)
+			}
+		}
 	}
 }

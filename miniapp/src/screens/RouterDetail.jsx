@@ -847,7 +847,7 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
           <ul class="card list-reset">
             <ListRow
               title="Обслуживание и доступы"
-              sub="владелец, операторы; обслуживание пока в дашборде"
+              sub="парк, обновление агентов, владелец и операторы"
               onClick={onOpenAdmin}
             />
           </ul>

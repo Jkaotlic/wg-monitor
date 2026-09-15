@@ -92,6 +92,24 @@ describe('doctorRows', () => {
   it('незнакомый вывод показывается как есть, а не теряется', () => {
     expect(doctorRows('что-то пошло не так')).toEqual([])
   })
+
+  // Настоящий агент (router_doctor.go formatDetail) пишет «имя: подробность»,
+  // и подробность сама может нести двоеточия -- резать по первому (final review I2).
+  it('строки настоящего агента режутся по первому «: »', () => {
+    const rows = doctorRows([
+      '🩺 Router doctor',
+      '✅ default route: via 10.0.0.1',
+      '⚠️ pingcheck: disabled',
+      '❌ awg-manager API: dial tcp 127.0.0.1:2222: connect: connection refused',
+      '✅ sing-box',
+    ].join('\n'))
+    expect(rows).toEqual([
+      { key: 'd0', title: 'default route', value: 'via 10.0.0.1', tone: 'ok' },
+      { key: 'd1', title: 'pingcheck', value: 'disabled', tone: 'warn' },
+      { key: 'd2', title: 'awg-manager API', value: 'dial tcp 127.0.0.1:2222: connect: connection refused', tone: 'danger' },
+      { key: 'd3', title: 'sing-box', value: 'в порядке', tone: 'ok' },
+    ])
+  })
 })
 
 // Проверка связи читается из проекции туннеля: ответ pingcheck_status несёт

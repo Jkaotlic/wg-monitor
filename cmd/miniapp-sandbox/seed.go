@@ -9,9 +9,10 @@ import (
 )
 
 // seed набивает базу парком, на котором видно все состояния мини-аппа: живой
-// роутер, роутер с горящим инцидентом, мобильный в спячке и роутер со старым
-// агентом. Без этого экраны открываются пустыми, и половину вёрстки нечем
-// проверить -- а пустой экран как раз и не показывает ошибок разметки.
+// роутер, роутер с горящим инцидентом, мобильный в спячке, роутер со старым
+// агентом и выключенный роутер с отложенным обновлением агента. Без этого
+// экраны открываются пустыми, и половину вёрстки нечем проверить -- а пустой
+// экран как раз и не показывает ошибок разметки.
 func seed(d *db.DB, tgUserID int64) error {
 	now := time.Now().UTC()
 
@@ -27,6 +28,10 @@ func seed(d *db.DB, tgUserID int64) error {
 		{"sandbox-broken", "static", "v0.18.5", 3 * time.Minute, "owner"},
 		{"sandbox-car", "mobile", "v0.17.2", 4 * time.Hour, "operator"},
 		{"sandbox-legacy", "static", "v0.14.4", 90 * time.Second, "operator"},
+		// Выключенный роутер с отложенным обновлением агента: так на экране
+		// «Парк» видно «ждёт включения» -- ровно случай оператора 15.09
+		// («три необновлённых роутера выключены»).
+		{"sandbox-off", "static", "v0.30.0", 96 * time.Hour, "owner"},
 	}
 
 	for i, s := range specs {
@@ -64,6 +69,16 @@ func seed(d *db.DB, tgUserID int64) error {
 		}
 		if err := d.Users().UpdateLastSeen(uid); err != nil {
 			return err
+		}
+		if s.nick == "sandbox-off" {
+			// UpdateLastSeen выше ставит «сейчас»; выключенному нужен старый
+			// отчёт, иначе сводка посчитает его живым.
+			if _, err := d.SQL().Exec(`UPDATE users SET last_seen_at = ? WHERE id = ?`, seen.UTC().Format(time.RFC3339), uid); err != nil {
+				return err
+			}
+			if err := d.Users().MarkPendingDeploy(uid, "v0.33.0", now.Add(-72*time.Hour).Format(time.RFC3339)); err != nil {
+				return err
+			}
 		}
 		if s.nick == "sandbox-broken" {
 			hardSince := now.Add(-2 * time.Hour)

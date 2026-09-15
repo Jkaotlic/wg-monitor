@@ -358,16 +358,6 @@ func TestParse_MaintActions(t *testing.T) {
 	}
 }
 
-func TestParse_PanelHome(t *testing.T) {
-	a, err := Parse("panel:0:home")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.Action != "panel" || a.PanelScreen != "home" || a.UserID != 0 {
-		t.Errorf("got %+v", a)
-	}
-}
-
 func TestParse_PanelKindMaintRemoved(t *testing.T) {
 	for _, data := range []string{"panel:0:kind:maint", "panel:42:push:maint", "panel:0:help:maint"} {
 		if _, err := Parse(data); err == nil {
@@ -376,101 +366,9 @@ func TestParse_PanelKindMaintRemoved(t *testing.T) {
 	}
 }
 
-func TestParse_PanelPush(t *testing.T) {
-	a, err := Parse("panel:42:push:routes")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "push" || a.PanelKind != "routes" || a.UserID != 42 {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelKindTunnels(t *testing.T) {
-	a, err := Parse("panel:0:kind:tunnels")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "kind" || a.PanelKind != "tunnels" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelNoTopic(t *testing.T) {
-	a, err := Parse("panel:7:no_topic")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "no_topic" || a.UserID != 7 {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelAwakenConfirm(t *testing.T) {
-	a, err := Parse("panel:0:awaken_confirm")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "awaken_confirm" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelAwakenDo(t *testing.T) {
-	a, err := Parse("panel:0:awaken_do")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "awaken_do" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelMobile(t *testing.T) {
-	a, err := Parse("panel:0:mobile")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "mobile" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelClose(t *testing.T) {
-	a, err := Parse("panel:0:close")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "close" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelDoctorAll(t *testing.T) {
-	a, err := Parse("panel:0:doctor_all")
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if a.PanelScreen != "doctor_all" {
-		t.Errorf("got %+v", a)
-	}
-}
-
 func TestParse_PanelRejectsUnknownScreen(t *testing.T) {
 	if _, err := Parse("panel:0:wat"); err == nil {
 		t.Error("expected error for unknown screen")
-	}
-}
-
-func TestParse_PanelRejectsUnknownKind(t *testing.T) {
-	if _, err := Parse("panel:0:kind:lol"); err == nil {
-		t.Error("expected error for unknown kind")
-	}
-}
-
-func TestParse_PanelKindRequiresKind(t *testing.T) {
-	if _, err := Parse("panel:0:kind"); err == nil {
-		t.Error("expected error for kind screen without kind value")
 	}
 }
 
@@ -483,103 +381,6 @@ func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 	} {
 		if _, err := Parse(bad); err == nil {
 			t.Errorf("%q should reject malformed callback token", bad)
-		}
-	}
-}
-
-func TestParse_Access_Home(t *testing.T) {
-	a, err := Parse("access:0:home")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.Action != "access" || a.AccessScreen != "home" {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_Router(t *testing.T) {
-	a, err := Parse("access:0:router:42")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.AccessScreen != "router" || a.AccessRouterID != 42 {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_Add(t *testing.T) {
-	a, err := Parse("access:0:add:42")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.AccessScreen != "add" || a.AccessRouterID != 42 {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_RemoveOp(t *testing.T) {
-	a, err := Parse("access:0:remove_op:42:1234567890")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.AccessScreen != "remove_op" || a.AccessRouterID != 42 || a.AccessOperatorTGID != 1234567890 {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_RemoveOpConfirm(t *testing.T) {
-	a, err := Parse("access:0:remove_op_confirm:42:1234567890")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.AccessScreen != "remove_op_confirm" || a.AccessRouterID != 42 || a.AccessOperatorTGID != 1234567890 {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_UnbindOwner(t *testing.T) {
-	a, err := Parse("access:0:unbind_owner:42")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.AccessScreen != "unbind_owner" || a.AccessRouterID != 42 {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_UnbindOwnerConfirm(t *testing.T) {
-	a, err := Parse("access:0:unbind_owner_confirm:42")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.AccessScreen != "unbind_owner_confirm" || a.AccessRouterID != 42 {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_CancelAdd(t *testing.T) {
-	a, err := Parse("access:0:cancel_add")
-	if err != nil {
-		t.Fatalf("err: %v", err)
-	}
-	if a.Action != "access" || a.AccessScreen != "cancel_add" {
-		t.Errorf("a=%+v", a)
-	}
-}
-
-func TestParse_Access_Errors(t *testing.T) {
-	for _, bad := range []string{
-		"access:0:bogus",            // unknown screen
-		"access:0:router",           // missing router id
-		"access:0:router:",          // empty router id
-		"access:0:router:abc",       // non-numeric
-		"access:0:remove_op:42",     // missing tg id
-		"access:0:remove_op:42:abc", // non-numeric tg id
-		"access:0:add",              // missing router id
-		"access:0:unbind_owner",     // missing router id
-	} {
-		if _, err := Parse(bad); err == nil {
-			t.Errorf("%q should have errored", bad)
 		}
 	}
 }
@@ -682,26 +483,6 @@ func TestParse_DiagTest(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if a.Action != "diag_test" || a.DiagRawToken != "abcd1234" || a.DiagTestID != "mtu" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelKindPingCheck(t *testing.T) {
-	a, err := Parse("panel:0:kind:pingcheck")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.PanelKind != "pingcheck" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_PanelKindDoctor(t *testing.T) {
-	a, err := Parse("panel:0:kind:doctor")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.PanelKind != "doctor" {
 		t.Errorf("got %+v", a)
 	}
 }
@@ -942,5 +723,23 @@ func TestParse_HideMyActionsRequireCodeID(t *testing.T) {
 		if _, err := Parse(data); err == nil {
 			t.Fatalf("expected error for %q", data)
 		}
+	}
+}
+
+// От хаба /panel в разборе осталась одна справка; доступы -- целиком в приложении.
+func TestParse_PanelOnlyHelpSurvives(t *testing.T) {
+	for _, data := range []string{
+		"panel:0:home", "panel:0:kind:tunnels", "panel:42:push:routes", "panel:7:no_topic",
+		"panel:0:awaken_confirm", "panel:0:awaken_do", "panel:0:mobile", "panel:0:close",
+		"panel:0:doctor_all", "panel:0:audit_all", "panel:0:update_all_confirm",
+		"panel:0:update_all_do", "panel:0:weblink",
+		"access:0:home", "access:0:router:42", "access:0:cancel_add",
+	} {
+		if _, err := Parse(data); err == nil {
+			t.Errorf("Parse(%q) принят, а экрана больше нет", data)
+		}
+	}
+	if a, err := Parse("panel:0:help:tunnels"); err != nil || a.PanelScreen != "help" || a.PanelKind != "tunnels" {
+		t.Fatalf("справка перестала разбираться: %+v, %v", a, err)
 	}
 }

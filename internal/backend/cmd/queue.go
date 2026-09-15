@@ -26,8 +26,6 @@ type MessageRef struct {
 	MessageID int64
 	ThreadID  *int64
 	Action    string
-	BulkID    string
-	BulkNick  string
 }
 
 // resultEntry / originEntry pair their payload with a creation timestamp so
@@ -466,9 +464,16 @@ func (q *Queue) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
 // ближайшего Sweep. Порог -- собственный TTL действия: после него попытка
 // считается потерянной, и следующий отчёт вправе начать заново.
 func (q *Queue) HasActiveCommand(userID int64, action string) bool {
-	now := time.Now()
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	return q.hasActiveCommandLocked(userID, action, time.Now())
+}
+
+// hasActiveCommandLocked -- тело HasActiveCommand, вызываемое уже под q.mu.
+// Отдельная функция нужна EnqueueIfNoActive: проверка и постановка обязаны
+// разделить одну блокировку, иначе между ними остаётся окно (см. его
+// комментарий).
+func (q *Queue) hasActiveCommandLocked(userID int64, action string, now time.Time) bool {
 	for _, c := range q.pending[userID] {
 		if c.Action == action && !commandExpired(c, now) {
 			return true
@@ -481,6 +486,37 @@ func (q *Queue) HasActiveCommand(userID int64, action string) bool {
 		}
 	}
 	return false
+}
+
+// EnqueueIfNoActive кладёт cmd, только если у userID сейчас нет активной
+// команды того же действия (см. HasActiveCommand). Атомарная замена паре
+// раздельных вызовов HasActiveCommand+Enqueue (deploy_wake.go): у раздельных
+// вызовов было окно между проверкой и постановкой, где второй параллельный
+// контакт (например опрос и отчёт одного роутера почти одновременно) тоже
+// успевал увидеть «не занято» и тоже поставить команду -- к тому моменту
+// первая уже могла уйти из pending в issued (её выдал Dequeue), и supersede
+// в enqueueLocked её не находил, так что в очереди оказывались две self_update
+// разом (B1, минус backend, 2026-09-15).
+//
+// Возвращает (true, nil), когда постановка прошла, и (false, nil), когда
+// действие уже занято -- это не ошибка, а нормальный исход досылки.
+func (q *Queue) EnqueueIfNoActive(userID int64, cmd wire.Command) (bool, error) {
+	cmd, err := q.prepareCommand(userID, cmd)
+	if err != nil {
+		return false, err
+	}
+	q.mu.Lock()
+	if q.hasActiveCommandLocked(userID, cmd.Action, time.Now()) {
+		q.mu.Unlock()
+		return false, nil
+	}
+	pendingLen, dropped := q.enqueueLocked(userID, cmd)
+	onDrop := q.onDrop
+	q.mu.Unlock()
+	q.signal.Broadcast()
+	notifyDroppedCommands(userID, onDrop, dropped)
+	q.log().Debug("queue enqueue if no active", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
+	return true, nil
 }
 
 // AwaitResult blocks until RecordResult lands a matching (userID,id) entry,

@@ -81,6 +81,28 @@ export function setRouterNotify(id, muted) {
   })
 }
 
+// Обновление агента на роутере -- действие бэкенда, а не команда из белого
+// списка: сервер сам сверяет набранное имя, запрещает откат и ставит
+// отметку, которая доживает до включения выключенного роутера. Цель версии
+// по умолчанию считает сервер (его собственная версия), поэтому поле уходит
+// только когда экран его явно выбрал.
+export function updateRouterAgent(routerID, confirm, targetVersion = '') {
+  const body = targetVersion ? { confirm, target_version: targetVersion } : { confirm }
+  return request(`/routers/${routerID}/agent/update`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+// Снять отложенное обновление. cleared=false -- снимать было нечего (уже
+// поставилось или сняли раньше), и это не ошибка.
+export function cancelRouterAgentUpdate(routerID) {
+  return request(`/routers/${routerID}/agent/update/cancel`, { method: 'POST' })
+}
+
+// Обновить всех отставших. Итог -- по роутеру: поставлено, ждёт включения,
+// пропущено с причиной или ошибка. Слово подтверждения сервер сверяет сам.
+export function updateFleetAgents(confirm) {
+  return request('/fleet/agent/update', { method: 'POST', body: JSON.stringify({ confirm }) })
+}
+
 export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }

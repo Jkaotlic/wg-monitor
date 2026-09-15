@@ -599,3 +599,32 @@ func TestNeighborSummaries_ReturnsSiblingsWithDetails(t *testing.T) {
 		t.Error("queried tunnel must be excluded from neighbor list")
 	}
 }
+
+// Напоминания -- тоже «всё подряд» для админа: роутер чужой, админ получает
+// напоминание с кнопкой выключения, владелец -- без неё.
+func TestTickRealertReachesAdmin(t *testing.T) {
+	d, uid := newTestDB(t) // владелец 6001
+	f := &fakeTG{}
+	now := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
+	stageIncident(t, d, uid, now, 5*time.Hour, 70*time.Minute)
+	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second, AdminUserID: 9000})
+	p.SetNow(func() time.Time { return now })
+
+	p.tick(context.Background())
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	byChat := map[int64]*tg.InlineKeyboardMarkup{}
+	for i, c := range f.chats {
+		byChat[c] = f.keyboards[i]
+	}
+	if len(f.chats) != 2 {
+		t.Fatalf("напоминаний %d в чаты %v, ждали владельцу и админу", len(f.chats), f.chats)
+	}
+	if !keyboardHasCallback(byChat[9000], "nmute:"+itoa(uid)) {
+		t.Fatalf("у админа нет кнопки выключения: %+v", byChat[9000])
+	}
+	if keyboardHasCallback(byChat[6001], "nmute:"+itoa(uid)) {
+		t.Fatal("у владельца кнопка выключения админа")
+	}
+}

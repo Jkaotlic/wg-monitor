@@ -113,8 +113,7 @@ type Router struct {
 	maintConfirmAct Action
 	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
 
-	// Access-control panel plumbing. All in-memory; lost on restart.
-	pendingAddOperator       *pendingAddOperatorStore
+	// Ожидающие шаги мастеров. All in-memory; lost on restart.
 	pendingSelfHostedAmnezia *pendingSelfHostedAmneziaStore
 	pendingConfirms          *pendingConfirmStore
 
@@ -131,8 +130,6 @@ type Router struct {
 	// diag drill-down (C-drilldown).
 	diagDrillAct Action
 	diagBackAct  Action
-
-	fleetBatches *fleetBatchStore
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
@@ -206,11 +203,9 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, r.putPendingRebind, defaultCmdID)
 	r.pendingMaint = newPendingMaintStore()
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, defaultCmdID)
-	r.pendingAddOperator = newPendingAddOperatorStore()
 	r.pendingSelfHostedAmnezia = newPendingSelfHostedAmneziaStore()
 	r.pendingConfirms = newPendingConfirmStore()
 	r.diagCache = newDiagCache()
-	r.fleetBatches = newFleetBatchStore()
 	return r
 }
 
@@ -302,14 +297,18 @@ func newImportToken() string {
 // log every callback's from.id for audit so post-hoc you can see who pushed
 // what.
 func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
-	adminPrivatePanel := r.cfg.AdminUserID != 0 && q.From.ID == r.cfg.AdminUserID && q.Message.Chat.ID == q.From.ID && (strings.HasPrefix(q.Data, "panel:") || strings.HasPrefix(q.Data, "access:"))
-	// Кнопка под тревогой в собственной личке -- законный источник нажатия:
-	// уведомления переехали из тем группы туда. Пропуск узкий: админские
-	// панели сюда не попадают (у них своё условие выше), а право на действие
-	// с роутером всё равно проверяет aclAllow по человеку.
-	routerButtonInDM := q.Message.Chat.ID == q.From.ID &&
-		!strings.HasPrefix(q.Data, "panel:") && !strings.HasPrefix(q.Data, "access:")
-	if !r.chatAllowed(q.Message.Chat.ID) && !adminPrivatePanel && !routerButtonInDM {
+	// Кнопка выключения уведомлений админа: из лички, двумя полями -- до
+	// проверки чата и до Parse (notify_mute_callback.go).
+	if isAdminMuteCallback(q.Data) {
+		r.handleAdminMuteCallback(ctx, q)
+		return
+	}
+	// Кнопка в собственной личке -- законный источник нажатия: уведомления
+	// переехали из тем группы туда. Право на действие с роутером всё равно
+	// проверяет aclAllow по человеку. Админских панелей в боте больше нет
+	// (цикл 2), и отдельного пропуска для них не нужно.
+	routerButtonInDM := q.Message.Chat.ID == q.From.ID
+	if !r.chatAllowed(q.Message.Chat.ID) && !routerButtonInDM {
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "wrong chat")
 		slog.Warn("rejected callback (chat-id)", "from", q.From.ID, "chat", q.Message.Chat.ID, "data", q.Data)
 		return
@@ -321,20 +320,9 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		slog.Warn("malformed callback_data", "data", q.Data, "err", err)
 		return
 	}
-	if args.Action == "access" {
-		if r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID {
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
-			return
-		}
-		r.handleAccessCallback(ctx, q, args)
-		return
-	}
-	if args.Action == "panel" && args.PanelScreen != "help" && (r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID) {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
-		return
-	}
+	// От хаба /panel осталась одна справка (help_callback.go).
 	if args.Action == "panel" {
-		r.handlePanelCallback(ctx, q, args)
+		r.handleHelpCallback(ctx, q, args.PanelKind)
 		return
 	}
 	if isSelfHostedAmneziaAdminAction(args.Action) && (r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID) {
@@ -775,15 +763,6 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		r.handleMyIDCommand(ctx, m)
 		return
 	}
-	// Add-operator FSM intercept: admin sends a qualifying message in DM
-	// with the bot while a pending FSM exists. Falls through to normal
-	// handlers otherwise.
-	if r.cfg.AdminUserID != 0 && m.From.ID == r.cfg.AdminUserID && m.Chat.ID == m.From.ID {
-		if p, ok := r.pendingAddOperator.get(m.From.ID); ok {
-			r.processAddOperatorMessage(ctx, m, p)
-			return
-		}
-	}
 	adminDM := r.cfg.AdminUserID != 0 && m.From.ID == r.cfg.AdminUserID && m.Chat.ID == m.From.ID
 	if !r.chatAllowed(m.Chat.ID) && !adminDM {
 		return
@@ -806,7 +785,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			return
 		}
 		// The router actor passes the gate. Skip handleAdminCommand entirely —
-		// slash commands (/ensure_topics, /this_is, /panel, ...) stay admin-only.
+		// slash commands (/ensure_topics, /this_is, ...) stay admin-only.
 		// Owners/operators get safe router-scoped slash commands, plus /help
 		// and /keyboard as personal-recovery actions scoped to their own topic.
 		if cmd, _, ok := parseSlashCommand(m.Text); ok {

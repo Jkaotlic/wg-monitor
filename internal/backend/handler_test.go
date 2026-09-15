@@ -1260,162 +1260,9 @@ func TestCmdResult_AcceptsLargeRouteSnapshot(t *testing.T) {
 	}
 }
 
-type fakeBulkNotifier struct {
-	mu     sync.Mutex
-	called int
-	bulkID string
-	action string
-}
-
-func (f *fakeBulkNotifier) NotifyBulkCommandResult(_ context.Context, ref cmdpkg.MessageRef, _ wire.CommandResult, _ int64) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.called++
-	f.bulkID = ref.BulkID
-	f.action = ref.Action
-	return nil
-}
-
-func TestCmdResult_DispatchesBulkNotifier(t *testing.T) {
-	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	defer d.Close()
-	tok := "bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01bc01"
-	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-
-	bn := &fakeBulkNotifier{}
-	rc := &relayCapture{}
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "router_doctor", ChatID: 1, MessageID: 2, BulkID: "fleet-1", BulkNick: "vasya"}}
-	mux := NewMux(Deps{
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:           d,
-		Dispatcher:   &fakeDisp{},
-		CommandSink:  sink,
-		TGNotifier:   rc,
-		BulkNotifier: bn,
-		Thresholds:   state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	body, _ := json.Marshal(wire.CommandResult{ID: "bulk-cmd", Status: "ok", Output: "doctor ok", DurationMs: 1})
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-
-	got := waitForRelay(t, func() int {
-		bn.mu.Lock()
-		defer bn.mu.Unlock()
-		return bn.called
-	}, 1, 500*time.Millisecond)
-	if got != 1 {
-		t.Fatalf("BulkNotifier called %d times, want 1", got)
-	}
-	if len(rc.snapshot().chunks) != 0 {
-		t.Fatalf("bulk result should suppress generic relay, got %+v", rc.snapshot().chunks)
-	}
-}
-
-// TestCmdResult_BulkRelayRespectsPoolBound pins C4: the bulk-result relay
-// goroutine spawned by cmdResultHandler must share the bounded relaySem pool
-// with spawnRelay (not a raw `go func`), so a fleet-wide bulk-result storm
-// can't spawn unbounded TG-calling goroutines. Saturate the pool the same
-// way any other relay site would, post a bulk cmd result, and assert
-// BulkNotifier is NOT invoked while the pool is full — proving the goroutine
-// went through the shared semaphore instead of firing unconditionally. Then
-// drain the pool and confirm the same kind of request relays normally.
-func TestCmdResult_BulkRelayRespectsPoolBound(t *testing.T) {
-	waitRelayPoolEmpty(t)
-	fillDeps := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
-	// t.Cleanup (not defer) so a t.Fatalf mid-test still unblocks the fillers
-	// instead of leaking 32 goroutines that would wedge relaySem for every
-	// later test in this package.
-	t.Cleanup(closeRelease)
-	for i := 0; i < relayConcurrencyLimit; i++ {
-		spawnRelay(fillDeps, "fill", func(ctx context.Context) { <-release })
-	}
-
-	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	tok := "bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01bd01"
-	if _, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0"); err != nil {
-		t.Fatal(err)
-	}
-	bn := &fakeBulkNotifier{}
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "router_doctor", ChatID: 1, MessageID: 2, BulkID: "fleet-1", BulkNick: "vasya"}}
-	mux := NewMux(Deps{
-		Logger:       slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:           d,
-		Dispatcher:   &fakeDisp{},
-		CommandSink:  sink,
-		BulkNotifier: bn,
-		Thresholds:   state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	post := func(id string) *http.Response {
-		body, _ := json.Marshal(wire.CommandResult{ID: id, Status: "ok", Output: "doctor ok", DurationMs: 1})
-		req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+tok)
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resp
-	}
-
-	resp := post("bulk-cmd-1")
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-
-	// The result POST itself must return promptly regardless of relay-pool
-	// state (async relay must never block the agent's request). Give a
-	// would-be unbounded goroutine ample time to run before asserting.
-	time.Sleep(150 * time.Millisecond)
-	bn.mu.Lock()
-	called := bn.called
-	bn.mu.Unlock()
-	if called != 0 {
-		t.Fatalf("BulkNotifier called %d time(s) while relay pool was saturated (limit=%d); want 0 (relay must be dropped, not spawned unbounded)", called, relayConcurrencyLimit)
-	}
-
-	closeRelease()
-	waitRelayPoolEmpty(t)
-
-	// Once the pool drains, the same bulk result path must relay normally.
-	sink.mu.Lock()
-	sink.originRef = &cmdpkg.MessageRef{Action: "router_doctor", ChatID: 1, MessageID: 2, BulkID: "fleet-1", BulkNick: "vasya"}
-	sink.mu.Unlock()
-	resp = post("bulk-cmd-2")
-	resp.Body.Close()
-	got := waitForRelay(t, func() int {
-		bn.mu.Lock()
-		defer bn.mu.Unlock()
-		return bn.called
-	}, 1, 500*time.Millisecond)
-	if got != 1 {
-		t.Fatalf("BulkNotifier called %d times after pool drained, want 1", got)
-	}
-}
-
-// TestCmdResult_DefaultRelayRespectsPoolBound is the same proof as above for
+// TestCmdResult_DefaultRelayRespectsPoolBound is the pool-bound proof for
 // the generic TGNotifier ("default" case) relay — the highest-traffic of the
-// 7 cmd-result relay sites, since it fires for any action without a
+// cmd-result relay sites, since it fires for any action without a
 // specialized notifier.
 func TestCmdResult_DefaultRelayRespectsPoolBound(t *testing.T) {
 	waitRelayPoolEmpty(t)
@@ -1588,7 +1435,9 @@ func TestCmdResult_OpkgResultRelaysThroughTGNotifier(t *testing.T) {
 	}
 }
 
-func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T) {
+// Первая неудача -- не повод будить людей и снимать отметку: причина
+// запоминается, досылка на контакте попробует снова.
+func TestCmdResult_FirstSelfUpdateFailureKeepsPendingQuietly(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail.db"))
 	defer d.Close()
 	tok := "eded00eded00eded00eded00eded00eded00eded00eded00eded00eded00eded"
@@ -1596,13 +1445,12 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc53", "2026-06-15T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	if _, _, err := d.Users().IncrementPendingAttempts(uid, "v0.13.0-rc53"); err != nil {
+		t.Fatal(err)
+	}
 	deploy := &fakeDeployNotifier{}
 	sink := &fakeCmdSink{commands: map[string]wire.Command{
-		"cmd1": {
-			ID:     "cmd1",
-			Action: "self_update",
-			Args:   map[string]any{"version": "v0.13.0-rc53"},
-		},
+		"cmd1": {ID: "cmd1", Action: "self_update", Args: map[string]any{"version": "v0.13.0-rc53"}},
 	}}
 	h := NewMux(Deps{
 		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1620,34 +1468,23 @@ func TestCmdResult_NoOriginSelfUpdateFailure_NotifiesDeferredUpdate(t *testing.T
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(deploy.snapshot()) == 1 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	// Без сна: recordPendingDeployFailure на первой неудаче вызывается
+	// синхронно из cmdResultHandler (giveUpPendingDeploy, который единственный
+	// шлёт уведомление, срабатывает только на исчерпанных попытках) -- к
+	// возврату ServeHTTP всё уже случилось или не случится вовсе (B3).
+	if calls := deploy.snapshot(); len(calls) != 0 {
+		t.Fatalf("первая неудача не должна писать людям: %+v", calls)
 	}
-	calls := deploy.snapshot()
-	if len(calls) != 1 {
-		t.Fatalf("want 1 deploy failure notification, got %d", len(calls))
-	}
-	if calls[0].userID != uid || calls[0].nickname != "client-h" || calls[0].target != "v0.13.0-rc53" || calls[0].status != "err" {
-		t.Fatalf("call mismatch: %+v", calls[0])
-	}
-	if !strings.Contains(calls[0].output, "HTTP 502") {
-		t.Fatalf("output missing failure details: %+v", calls[0])
-	}
-	u, err := d.Users().GetByID(uid)
+	st, err := d.Users().PendingDeploy(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("failed self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	if st.Version != "v0.13.0-rc53" || !strings.Contains(st.LastError, "HTTP 502") {
+		t.Fatalf("отметка и причина обязаны остаться: %+v", st)
 	}
 }
 
-func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t *testing.T) {
+func TestCmdResult_ThirdSelfUpdateFailureClearsPendingWithoutDeployNotifier(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail-no-notifier.db"))
 	defer d.Close()
 	tok := "eded01eded01eded01eded01eded01eded01eded01eded01eded01eded01eded"
@@ -1655,12 +1492,13 @@ func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t
 	if err := d.Users().MarkPendingDeploy(uid, "v0.13.0-rc53", "2026-06-15T12:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
+	for i := 0; i < 3; i++ {
+		if _, _, err := d.Users().IncrementPendingAttempts(uid, "v0.13.0-rc53"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	sink := &fakeCmdSink{commands: map[string]wire.Command{
-		"cmd1": {
-			ID:     "cmd1",
-			Action: "self_update",
-			Args:   map[string]any{"version": "v0.13.0-rc53"},
-		},
+		"cmd1": {ID: "cmd1", Action: "self_update", Args: map[string]any{"version": "v0.13.0-rc53"}},
 	}}
 	h := NewMux(Deps{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -1677,17 +1515,18 @@ func TestCmdResult_NoOriginSelfUpdateFailureClearsPendingWithoutDeployNotifier(t
 	if w.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 	}
-
 	u, err := d.Users().GetByID(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("failed self_update should clear matching pending deploy without notifier, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+		t.Fatalf("третья неудача обязана снять отметку и без уведомителя: version=%v since=%v", u.PendingVersion, u.PendingSince)
 	}
 }
 
-func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
+// Протухшая команда -- выброшенный носитель, а не отказ от намерения:
+// отметка остаётся, досылка на контакте положит новую.
+func TestExpiredSelfUpdateKeepsPendingDeploy(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-expired.db"))
 	defer d.Close()
 	tok := "eded22eded22eded22eded22eded22eded22eded22eded22eded22eded22eded"
@@ -1696,7 +1535,7 @@ func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	AttachDeployExpiryHandler(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	expired := wire.Command{
 		ID:        "cmd-expired",
 		Action:    "self_update",
@@ -1714,12 +1553,13 @@ func TestExpiredSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("expired self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc200" {
+		t.Fatalf("протухшая команда сняла отметку: version=%v", u.PendingVersion)
 	}
 }
 
-func TestSupersededSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
+// Вытеснение прежней команды новой -- тоже не отказ от намерения.
+func TestSupersededSelfUpdateKeepsPendingDeploy(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-superseded.db"))
 	defer d.Close()
 	tok := "eded33eded33eded33eded33eded33eded33eded33eded33eded33eded33eded"
@@ -1728,31 +1568,23 @@ func TestSupersededSelfUpdateClearsMatchingPendingDeploy(t *testing.T) {
 		t.Fatal(err)
 	}
 	q := cmdpkg.New()
-	AttachDeployExpiryHandler(q, d, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	oldUpdate := wire.Command{
-		ID:       "cmd-old",
-		Action:   "self_update",
-		Args:     map[string]any{"version": "v0.13.0-rc200"},
-		IssuedAt: time.Now().UTC(),
-	}
-	newUpdate := wire.Command{
-		ID:       "cmd-new",
-		Action:   "self_update",
-		Args:     map[string]any{"version": "v0.13.0-rc201"},
-		IssuedAt: time.Now().UTC(),
-	}
-	if err := q.Enqueue(uid, oldUpdate); err != nil {
-		t.Fatalf("enqueue old self_update: %v", err)
-	}
-	if err := q.Enqueue(uid, newUpdate); err != nil {
-		t.Fatalf("enqueue new self_update: %v", err)
+	AttachDeployExpiryHandler(q, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	for _, id := range []string{"cmd-old", "cmd-new"} {
+		if err := q.Enqueue(uid, wire.Command{
+			ID:       id,
+			Action:   "self_update",
+			Args:     map[string]any{"version": "v0.13.0-rc200"},
+			IssuedAt: time.Now().UTC(),
+		}); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
 	}
 	u, err := d.Users().GetByID(uid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if u.PendingVersion != nil || u.PendingSince != nil {
-		t.Fatalf("superseded self_update should clear matching pending deploy, got version=%v since=%v", u.PendingVersion, u.PendingSince)
+	if u.PendingVersion == nil || *u.PendingVersion != "v0.13.0-rc200" {
+		t.Fatalf("вытесненная команда сняла отметку: version=%v", u.PendingVersion)
 	}
 }
 

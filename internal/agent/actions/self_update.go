@@ -291,11 +291,10 @@ func detectAgentArch() (string, error) {
 // in this project's release-tag order (major.minor.patch, then RC number).
 // Delegates to releasesig.CompareReleaseTags — already an agent-side
 // dependency for SignatureRequiredForVersion/VerifyChecksumsSignature —
-// rather than adding a fourth local copy of the same rank/compare pair
+// rather than adding a third local copy of the same rank/compare pair
 // already duplicated in internal/backend/dashboard_handler.go
 // (compareDashboardReleaseTags, used by the wizard deploy paths' own
-// isVersionDowngrade) and internal/backend/callbacks/fleet_batch.go
-// (compareReleaseTagsLocal). See CompareReleaseTags's doc comment for why
+// isVersionDowngrade). See CompareReleaseTags's doc comment for why
 // golang.org/x/mod/semver is deliberately not used here either (it would
 // rank "-rc9" after "-rc10").
 //

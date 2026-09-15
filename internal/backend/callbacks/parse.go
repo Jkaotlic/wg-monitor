@@ -74,24 +74,11 @@ type Args struct {
 	// DiagTestID is the short slug ("mtu", "dns_leak", ...) identifying
 	// which test was tapped on a diag drill-down. Set for diag_test action.
 	DiagTestID string
-	// PanelScreen identifies the panel-hub screen for callbacks where
-	// Action == "panel". One of: "home" | "kind" | "push" | "no_topic" |
-	// "awaken_confirm" | "awaken_do" | "close".
+	// PanelScreen -- для Action == "panel" всегда "help": от хаба /panel
+	// осталась одна справка под панелями роутера (help_callback.go).
 	PanelScreen string
-	// PanelKind is the panel type ("routes" | "tunnels" | "status")
-	// for the "kind" and "push" screens.
+	// PanelKind -- экран справки ("tunnels", "routes", "pingcheck", ...).
 	PanelKind string
-	// AccessScreen identifies the access:* admin-panel screen for callbacks
-	// where Action == "access". One of: "home" | "router" | "add" |
-	// "remove_op" | "remove_op_confirm" | "unbind_owner" |
-	// "unbind_owner_confirm" | "cancel_add".
-	AccessScreen string
-	// AccessRouterID is the users.id of the router whose access list is
-	// being viewed/modified. Set for "router" / "add" / "remove_op" /
-	// "remove_op_confirm" / "unbind_owner" / "unbind_owner_confirm" screens.
-	AccessRouterID int64
-	// AccessOperatorTGID is the target operator's TG user ID for remove_op.
-	AccessOperatorTGID int64
 	// AmneziaKeyID identifies one stored Premium key inside the router topic.
 	AmneziaKeyID string
 	// AmneziaCountryCode is the lower-case country code for Amnezia Premium
@@ -163,10 +150,8 @@ var validActions = map[string]bool{
 	// short code lives in CheckName and is mapped back to the original
 	// label by tg.CompatBtnTextByCode.
 	"compat_btn": true,
-	// admin panel hub — multi-screen inline-kb dispatcher.
+	// справка «ℹ Помощь» под панелями роутера (help_callback.go).
 	"panel": true,
-	// admin access-control panel — per-router operator whitelist.
-	"access": true,
 	// Amnezia Premium cabinet.
 	"amz_refresh": true, "amz_open": true, "amz_countries": true, "amz_delete": true,
 	"amz_delete_confirm": true, "amz_dl": true, "amz_dl_confirm": true,
@@ -462,81 +447,24 @@ func Parse(data string) (Args, error) {
 		a.DiagTestID = parts[3]
 	}
 	if action == "panel" {
-		screen := parts[2]
-		validPanelScreens := map[string]bool{
-			"home": true, "kind": true, "push": true, "no_topic": true,
-			"awaken_confirm": true, "awaken_do": true, "close": true,
-			"help": true, "doctor_all": true, "audit_all": true,
-			"update_all_confirm": true, "update_all_do": true, "mobile": true,
-			"weblink": true,
+		// От хаба /panel осталась одна справка: её кнопки стоят на панелях
+		// роутера до цикла 4. Остальные экраны уехали в приложение.
+		if parts[2] != "help" {
+			return Args{}, fmt.Errorf("panel: unknown screen %q", parts[2])
 		}
-		if !validPanelScreens[screen] {
-			return Args{}, fmt.Errorf("panel: unknown screen %q", screen)
+		if len(parts) < 4 || parts[3] == "" {
+			return Args{}, fmt.Errorf("panel help requires screen: %q", data)
 		}
-		a.PanelScreen = screen
-		if screen == "kind" || screen == "push" {
-			if len(parts) < 4 || parts[3] == "" {
-				return Args{}, fmt.Errorf("panel %s requires kind: %q", screen, data)
-			}
-			validKinds := map[string]bool{"routes": true, "tunnels": true, "status": true, "pingcheck": true, "doctor": true}
-			if !validKinds[parts[3]] {
-				return Args{}, fmt.Errorf("panel %s: unknown kind %q", screen, parts[3])
-			}
-			a.PanelKind = parts[3]
+		validHelpScreens := map[string]bool{
+			"operator": true, "alerts": true, "fleet": true, "premium": true, "mobile": true,
+			"routes": true, "tunnels": true,
+			"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
 		}
-		if screen == "help" {
-			if len(parts) < 4 || parts[3] == "" {
-				return Args{}, fmt.Errorf("panel help requires screen: %q", data)
-			}
-			validHelpScreens := map[string]bool{
-				"operator": true, "alerts": true, "fleet": true, "premium": true, "mobile": true,
-				"routes": true, "tunnels": true,
-				"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
-			}
-			if !validHelpScreens[parts[3]] {
-				return Args{}, fmt.Errorf("panel help: unknown screen %q", parts[3])
-			}
-			// Reuse PanelKind as transport for the help-target screen name.
-			a.PanelKind = parts[3]
+		if !validHelpScreens[parts[3]] {
+			return Args{}, fmt.Errorf("panel help: unknown screen %q", parts[3])
 		}
-	}
-	if action == "access" {
-		screen := parts[2]
-		validAccessScreens := map[string]bool{
-			"home": true, "router": true, "add": true,
-			"remove_op": true, "remove_op_confirm": true,
-			"unbind_owner": true, "unbind_owner_confirm": true,
-			"cancel_add": true,
-		}
-		if !validAccessScreens[screen] {
-			return Args{}, fmt.Errorf("access: unknown screen %q", screen)
-		}
-		a.AccessScreen = screen
-		switch screen {
-		case "router", "add", "unbind_owner", "unbind_owner_confirm":
-			if len(parts) < 4 || parts[3] == "" {
-				return Args{}, fmt.Errorf("access %s requires router id: %q", screen, data)
-			}
-			rid, err := strconv.ParseInt(parts[3], 10, 64)
-			if err != nil {
-				return Args{}, fmt.Errorf("access %s: bad router id %q", screen, parts[3])
-			}
-			a.AccessRouterID = rid
-		case "remove_op", "remove_op_confirm":
-			if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-				return Args{}, fmt.Errorf("access %s requires router id and tg id: %q", screen, data)
-			}
-			rid, err := strconv.ParseInt(parts[3], 10, 64)
-			if err != nil {
-				return Args{}, fmt.Errorf("access %s: bad router id %q", screen, parts[3])
-			}
-			tgid, err := strconv.ParseInt(parts[4], 10, 64)
-			if err != nil {
-				return Args{}, fmt.Errorf("access %s: bad tg id %q", screen, parts[4])
-			}
-			a.AccessRouterID = rid
-			a.AccessOperatorTGID = tgid
-		}
+		a.PanelScreen = "help"
+		a.PanelKind = parts[3]
 	}
 	if strings.HasPrefix(action, "amz_") {
 		switch action {
