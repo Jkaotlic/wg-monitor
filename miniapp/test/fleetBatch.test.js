@@ -125,13 +125,135 @@ describe('цикл массовой команды', () => {
   })
 })
 
+// Промисы, которые открывает и закрывает тест -- нужны, чтобы поймать
+// момент, когда сразу несколько роутеров опрашиваются одновременно, и
+// проверить, что дедлайн у роутера, вставшего в очередь, начинается от его
+// собственного старта, а не от начала всей пачки.
+function controlledPoll() {
+  const pending = new Map()
+  let open = 0
+  let peak = 0
+  return {
+    open: () => open,
+    peak: () => peak,
+    poll: (id) =>
+      new Promise((resolve) => {
+        open++
+        peak = Math.max(peak, open)
+        pending.set(id, (result) => {
+          open--
+          resolve(result)
+        })
+      }),
+    settle: (id, result) => {
+      const fn = pending.get(id)
+      pending.delete(id)
+      fn(result)
+    },
+  }
+}
+const flushMicrotasks = () => new Promise((r) => setTimeout(r, 0))
+
+describe('одновременность опроса', () => {
+  it('не больше 3 роутеров сразу -- остальные ждут своей очереди', async () => {
+    const net = controlledPoll()
+    const routers = [1, 2, 3, 4, 5].map((id) => R(id, `r${id}`, 'online'))
+    const donePromise = runFleetBatch({
+      kind: 'doctor', routers, send: (id) => Promise.resolve({ cmd_id: `c${id}` }), poll: net.poll, now: () => 0,
+    })
+    await flushMicrotasks()
+    expect(net.open()).toBe(3)
+    expect(net.peak()).toBe(3)
+    net.settle(1, { id: 'c1', status: 'ok', output: DOCTOR_OK })
+    await flushMicrotasks()
+    expect(net.open()).toBe(3) // 4-й занял освободившееся место
+    net.settle(2, { id: 'c2', status: 'ok', output: DOCTOR_OK })
+    net.settle(3, { id: 'c3', status: 'ok', output: DOCTOR_OK })
+    await flushMicrotasks()
+    expect(net.open()).toBe(2) // 4-й ещё идёт, 5-й тоже успел встать в работу
+    net.settle(4, { id: 'c4', status: 'ok', output: DOCTOR_OK })
+    net.settle(5, { id: 'c5', status: 'ok', output: DOCTOR_OK })
+    const state = await donePromise
+    expect(state.done).toBe(5)
+    expect(net.peak()).toBeLessThanOrEqual(3)
+  })
+
+  it('дедлайн роутера, вставшего в очередь, считается от его собственного старта', async () => {
+    // Часы -- общие внедрённые: t растёт на 30с при каждом опросе, кто бы ни
+    // опрашивал. concurrency=1 делает порядок детерминированным: 2-й роутер
+    // стартует только когда 1-й уже исчерпал все 90с (t=90000).
+    let t = 0
+    const now = () => t
+    const poll = () => {
+      t += 30_000
+      return Promise.resolve(null) // молчит все три попытки -- таймаут
+    }
+    const send = (id) => Promise.resolve({ cmd_id: `c${id}` })
+    const state = await runFleetBatch({
+      kind: 'doctor',
+      routers: [R(1, 'a', 'online'), R(2, 'b', 'online')],
+      send, poll, now, concurrency: 1,
+    })
+    // Если бы дедлайн 2-го считался от старта пачки (t=0), у него осталось
+    // бы 0мс на старте (t уже 90000) -- ни одного опроса, outcome остался бы
+    // no_answer без единого вызова poll на его счету. При верном отсчёте
+    // (от t=90000) у него тоже есть полные 90с -- три попытки, как у 1-го.
+    expect(t).toBe(180_000)
+    expect(state.results.map((r) => r.outcome)).toEqual(['no_answer', 'no_answer'])
+  })
+})
+
+describe('уход с экрана прерывает цикл', () => {
+  it('после отмены новые роутеры не опрашиваются; уже начатые -- доходят', async () => {
+    const net = controlledPoll()
+    const routers = [1, 2, 3, 4, 5].map((id) => R(id, `r${id}`, 'online'))
+    const sent = []
+    const signal = { cancelled: false }
+    const donePromise = runFleetBatch({
+      kind: 'doctor',
+      routers,
+      send: (id) => { sent.push(id); return Promise.resolve({ cmd_id: `c${id}` }) },
+      poll: net.poll,
+      now: () => 0,
+      signal,
+    })
+    await flushMicrotasks()
+    expect(sent.sort()).toEqual([1, 2, 3])
+    signal.cancelled = true
+    net.settle(1, { id: 'c1', status: 'ok', output: DOCTOR_OK })
+    net.settle(2, { id: 'c2', status: 'ok', output: DOCTOR_OK })
+    net.settle(3, { id: 'c3', status: 'ok', output: DOCTOR_OK })
+    await flushMicrotasks()
+    await flushMicrotasks()
+    // 4 и 5 в очереди так и не стартовали -- send для них не звался.
+    expect(sent.sort()).toEqual([1, 2, 3])
+    await donePromise
+  })
+})
+
 describe('итог словами', () => {
   const base = { kind: 'doctor', total: 6, done: 6, running: false, skipped: ['car', 'bronya'] }
 
-  it('ход -- «ответили N из M…»', () => {
-    expect(batchProgressLine({ ...base, done: 2, running: true })).toBe('Ответили 2 из 6…')
-    expect(batchProgressLine({ ...base, done: 1, running: true })).toBe('Ответил 1 из 6…')
+  // F1(d): строка хода и итог считают одинаково -- по реальным ответам
+  // (ok/problems/unparsed), а не по числу завершённых попыток. Таймаут
+  // (no_answer) или отказ команды (failed) уже случились, но роутер не
+  // «ответил» -- в счёт «Ответили N из M» они не идут ни там, ни там.
+  it('ход -- «ответили N из M…», считает так же, как итог (таймауты и отказы не в счёте)', () => {
+    const running = (results) => ({ kind: 'doctor', total: 6, running: true, skipped: [], results })
+    expect(batchProgressLine(running([{ id: 1, nickname: 'a', outcome: 'ok' }]))).toBe('Ответил 1 из 6…')
+    expect(
+      batchProgressLine(
+        running([
+          { id: 1, nickname: 'a', outcome: 'ok' },
+          { id: 2, nickname: 'b', outcome: 'problems', problems: { fails: 1, warns: 0 } },
+          { id: 3, nickname: 'c', outcome: 'no_answer' },
+          { id: 4, nickname: 'd', outcome: 'failed' },
+        ]),
+      ),
+    ).toBe('Ответили 2 из 6…')
+    expect(batchProgressLine(running([]))).toBe('Ответили 0 из 6…')
     expect(batchProgressLine(null)).toBe('')
+    expect(batchProgressLine({ ...running([{ id: 1, nickname: 'a', outcome: 'ok' }]), running: false })).toBe('')
   })
 
   it('осмотр: проверено N, проблемы у M, по роутерам -- числа, отсортировано по имени', () => {

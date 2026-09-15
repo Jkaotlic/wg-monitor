@@ -49,7 +49,40 @@ function hasProblems(kind, problems) {
   return problems.length > 0
 }
 
-export async function runFleetBatch({ kind, routers, send, poll, onProgress = () => {}, deadlineMs = 90_000, now = () => Date.now() }) {
+// Опрашивать не больше MAX_CONCURRENT роутеров разом: пачка на весь парк
+// (десятки роутеров) не должна бить по awg-manager и очереди команд одним
+// залпом. Место освобождается по одному -- следующий роутер стартует и
+// получает свой полный дедлайн от СВОЕГО старта, а не от начала пачки.
+const MAX_CONCURRENT = 3
+
+// Пул с ограничением: `limit` воркеров тянут задачи по очереди, следующая
+// начинается только когда предыдущая в этом воркере закончилась. `signal`
+// (необязательный) даёт экрану оборвать цикл: воркер проверяет его перед
+// каждой новой задачей и просто останавливается -- задачи, уже начатые,
+// доходят до конца, а очередь дальше не идёт.
+async function runPool(items, limit, worker, signal) {
+  let idx = 0
+  async function next() {
+    while (idx < items.length) {
+      if (signal?.cancelled) return
+      const i = idx++
+      await worker(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, next))
+}
+
+export async function runFleetBatch({
+  kind,
+  routers,
+  send,
+  poll,
+  onProgress = () => {},
+  deadlineMs = 90_000,
+  now = () => Date.now(),
+  concurrency = MAX_CONCURRENT,
+  signal,
+}) {
   const { action } = BATCH[kind]
   const parse = PARSE[kind]
   const { targets, skipped } = batchTargets(routers)
@@ -64,11 +97,15 @@ export async function runFleetBatch({ kind, routers, send, poll, onProgress = ()
   const snapshot = () => ({ ...state, results: [...state.results] })
   onProgress(snapshot())
 
-  await Promise.all(
-    targets.map(async (r) => {
+  await runPool(
+    targets,
+    concurrency,
+    async (r) => {
       let entry = { id: r.id, nickname: r.nickname, outcome: 'no_answer' }
       try {
         const { cmd_id: id } = await send(r.id, action, {})
+        // Дедлайн -- от этого момента: роутер, простоявший в очереди пула,
+        // получает полные deadlineMs с СВОЕГО старта, а не остаток чужого.
         const until = now() + deadlineMs
         let res = null
         while (now() < until) {
@@ -90,14 +127,24 @@ export async function runFleetBatch({ kind, routers, send, poll, onProgress = ()
       state.done += 1
       state.running = state.done < state.total
       onProgress(snapshot())
-    }),
+    },
+    signal,
   )
   return snapshot()
 }
 
+// «Ответили» -- реальный ответ роутера (ok/problems/unparsed), не число
+// завершённых попыток: таймаут и отказ команды уже случились, но роутер не
+// ответил, и считать их «ответом» здесь означало бы врать раньше времени
+// то же самое, что итог (batchSummary) скажет в конце.
+function answeredCount(results) {
+  return results.filter((r) => r.outcome === 'ok' || r.outcome === 'problems' || r.outcome === 'unparsed').length
+}
+
 export function batchProgressLine(state) {
   if (!state || !state.running) return ''
-  return `${pluralRu(state.done, 'Ответил', 'Ответили', 'Ответили')} ${state.done} из ${state.total}…`
+  const answered = answeredCount(state.results ?? [])
+  return `${pluralRu(answered, 'Ответил', 'Ответили', 'Ответили')} ${answered} из ${state.total}…`
 }
 
 function doctorCounts({ fails, warns }) {
@@ -123,7 +170,7 @@ export function batchSummary(state) {
       lines: skipped.length ? [{ id: 'skipped', text: skippedLine(skipped) }] : [],
     }
   }
-  const answered = results.filter((r) => r.outcome === 'ok' || r.outcome === 'problems' || r.outcome === 'unparsed').length
+  const answered = answeredCount(results)
   const withProblems = results.filter((r) => r.outcome === 'problems').length
 
   let headline
