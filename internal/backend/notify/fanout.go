@@ -52,7 +52,7 @@ func NewFanout(d *db.DB, s Sender, logger *slog.Logger) *Fanout {
 // Ошибку возвращает только невозможность СОСТАВИТЬ список получателей -- это
 // поломка базы, а не Telegram.
 func (f *Fanout) Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID)
+	targets, err := RecipientsFor(f.d, routerUserID, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -89,7 +89,7 @@ func (f *Fanout) result(delivered, targets int, lastErr error) (int, error) {
 // напоминаниям: «починилось» обязано отвечать на корневую тревогу, а не на
 // последнее напоминание.
 func (f *Fanout) SendKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID)
+	targets, err := RecipientsFor(f.d, routerUserID, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -154,7 +154,7 @@ type KeyboardSender interface {
 // Если отправитель не умеет кнопок, уведомление уходит без них: потерять
 // кнопку лучше, чем потерять тревогу.
 func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName, text, parseMode string, kb *tg.InlineKeyboardMarkup) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID)
+	targets, err := RecipientsFor(f.d, routerUserID, 0)
 	if err != nil {
 		return 0, err
 	}
@@ -190,7 +190,7 @@ func (f *Fanout) SendTracked(ctx context.Context, routerUserID int64, checkName,
 // получает обычное сообщение без привязки -- лучше без ветки переписки, чем
 // вообще без «починилось».
 func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName, text, parseMode string) error {
-	targets, err := RecipientsFor(f.d, routerUserID)
+	targets, err := RecipientsFor(f.d, routerUserID, 0)
 	if err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ type ReplyKeyboardSender interface {
 // её не умеет, уведомление уходит без панели: потерять кнопки лучше, чем
 // потерять сообщение.
 func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, markup any) (int, error) {
-	targets, err := RecipientsFor(f.d, routerUserID)
+	targets, err := RecipientsFor(f.d, routerUserID, 0)
 	if err != nil {
 		return 0, err
 	}
