@@ -53,4 +53,38 @@ describe('Esc на листе', () => {
     await esc()
     expect(onClose).not.toHaveBeenCalled()
   })
+
+  it('локальный лист во время запроса: Esc, затемнение и «Отмена» не закрывают', async () => {
+    const onClose = vi.fn()
+    let finish
+    const perform = () => new Promise((r) => { finish = r })
+    const root = await mount(localSheet({ title: 'Оживить?', body: '', perform }), onClose)
+    await act(async () => [...root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await esc()
+    await act(async () => root.querySelector('.sheet-scrim').click())
+    await act(async () => [...root.querySelectorAll('.sheet-actions button')].find((b) => b.textContent === 'Отмена').click())
+    expect(onClose).not.toHaveBeenCalled()
+    await act(async () => finish({ ok: true }))
+    await flush()
+    expect(onClose).toHaveBeenCalledTimes(1)
+    render(null, root)
+    root.remove()
+  })
+
+  it('ответ пришёл после ухода листа -- чужой лист не закрывается, onDone зовётся', async () => {
+    const onClose = vi.fn()
+    const onDone = vi.fn()
+    let finish
+    const perform = () => new Promise((r) => { finish = r })
+    const root = await mount(localSheet({ title: 'Оживить?', body: '', perform, onDone }), onClose)
+    await act(async () => [...root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    render(null, root)
+    root.remove()
+    await act(async () => finish({ ok: true }))
+    await flush()
+    expect(onDone).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })
