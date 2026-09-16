@@ -187,3 +187,25 @@ func TestMiniappWhoAmIForBothIdentities(t *testing.T) {
 		t.Fatalf("без куки: код %d", rec.Code)
 	}
 }
+
+// «Выйти» в веб-управлении выходит совсем: кука мини-аппа главнее куки
+// дашборда, и оставь её -- следующий запрос вернул бы человека обратно.
+func TestDashboardLogoutClearsBothSessions(t *testing.T) {
+	h := webMux(t)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/dashboard/logout", nil))
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("код %d", rec.Code)
+	}
+	cleared := map[string]bool{}
+	for _, c := range rec.Result().Cookies() {
+		if c.MaxAge < 0 && c.Value == "" && c.Path == "/" {
+			cleared[c.Name] = true
+		}
+	}
+	for _, name := range []string{dashboardSessionCookieName, miniappSessionCookieName} {
+		if !cleared[name] {
+			t.Errorf("кука %s не погашена: %+v", name, rec.Result().Cookies())
+		}
+	}
+}

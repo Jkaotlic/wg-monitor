@@ -206,14 +206,18 @@ func dashboardLoginHandler(d Deps) http.Handler {
 
 func dashboardLogoutHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.SetCookie(w, &http.Cookie{
-			Name:     dashboardSessionCookieName,
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-		})
+		// Гасим и куку мини-аппа: в веб-управлении она главнее куки дашборда,
+		// и оставленная вернула бы человека в приложение сразу после «Выйти».
+		for _, name := range []string{dashboardSessionCookieName, miniappSessionCookieName} {
+			http.SetCookie(w, &http.Cookie{
+				Name:     name,
+				Value:    "",
+				Path:     "/",
+				MaxAge:   -1,
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 }

@@ -1,7 +1,6 @@
 package backend
 
 import (
-	"bytes"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -24,7 +23,7 @@ func webShellHTML(index []byte) ([]byte, bool) {
 	out := make([]byte, 0, len(index))
 	out = append(out, index[:loc[0]]...)
 	out = append(out, index[loc[1]:]...)
-	return bytes.Clone(out), true
+	return out, true
 }
 
 // webShellHandler читает index.html бандла один раз: он вшит в бинарь и до
