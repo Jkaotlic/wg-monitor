@@ -1,0 +1,27 @@
+import { TABS } from '../nav.js'
+import { Header } from './Header.jsx'
+import { TabBar } from './TabBar.jsx'
+import { SheetHost } from './Sheet.jsx'
+import { OverlayHost } from '../screens/OverlayHost.jsx'
+import { TabBody } from '../screens/TabBody.jsx'
+
+// Телефонная раскладка -- та же, что была до веб-управления: шапка, вкладки
+// внизу, оверлей крышкой, лист снизу.
+export function PhoneLayout({ nav, dispatch, routers, isAdmin, onLogout }) {
+  return (
+    <>
+      <Header
+        fleetVisible={routers.length > 1}
+        onFleet={() => dispatch({ type: 'overlay', overlay: 'fleet' })}
+        onSettings={nav.routerID != null ? () => dispatch({ type: 'overlay', overlay: 'settings' }) : undefined}
+        onLogout={onLogout}
+      />
+      <div class="app-body">
+        <TabBody nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
+      </div>
+      <TabBar tabs={TABS} tab={nav.tab} onTab={(tab) => dispatch({ type: 'tab', tab })} />
+      <OverlayHost nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
+      <SheetHost nav={nav} dispatch={dispatch} />
+    </>
+  )
+}

@@ -53,6 +53,21 @@ export function Sheet({ sheet, asleep, onClose }) {
     onClose()
   }
 
+  // Esc на широком экране -- то же, что клик по затемнению: до запуска
+  // закрывает, во время выполнения молчит (обрывать наблюдение за ушедшей на
+  // роутер командой случайной клавишей -- плохая идея).
+  const escRef = useRef(null)
+  escRef.current = () => {
+    if (phase !== 'running') close()
+  }
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') escRef.current?.()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   function start() {
     if (local) {
       setLocalBusy(true)

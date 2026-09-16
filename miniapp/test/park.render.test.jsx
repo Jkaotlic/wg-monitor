@@ -78,6 +78,7 @@ const { ParkSection } = await import('../src/screens/ParkSection.jsx')
 const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
 const { Sheet } = await import('../src/ui/Sheet.jsx')
 const { ApiError } = await import('../src/api.js')
+const { AppContext } = await import('../src/appContext.js')
 
 // Форма -- miniappFleetResp (miniapp_fleet.go) с полями частей 1-2.
 const router = (over) => ({
@@ -843,6 +844,41 @@ describe('«Парк»: оживление агента', () => {
     expect(buttons(root, 'Оживить агент')).toHaveLength(0)
     expect(buttons(root, 'Отменить оживление')).toHaveLength(0)
     expect(rowOf(root, 'caredns-oldcar').textContent).toContain('оживление: ждёт роутер')
+    cleanup(root)
+  })
+})
+
+describe('«Парк» в веб-управлении', () => {
+  async function mountParkIn(mode) {
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => {
+      render(
+        <AppContext.Provider value={{ mode, wide: false }}>
+          <ParkSection openSheet={() => {}} />
+        </AppContext.Provider>,
+        root,
+      )
+    })
+    await flush()
+    return root
+  }
+
+  it('web: «Открыть в браузере» нет, есть ссылка на классическое веб-управление', async () => {
+    reset()
+    const root = await mountParkIn('web')
+    expect(buttons(root, 'Открыть в браузере')).toEqual([])
+    const link = root.querySelector('a.park-classic')
+    expect(link.getAttribute('href')).toBe('/dashboard/classic/')
+    expect(link.textContent).toBe('Установка агента на новый роутер, приглашения и раскатка бэкенда — пока в классическом веб-управлении')
+    cleanup(root)
+  })
+
+  it('Telegram: кнопка на месте, ссылки нет', async () => {
+    reset()
+    const root = await mountParkIn('telegram')
+    expect(buttons(root, 'Открыть в браузере')).toHaveLength(1)
+    expect(root.querySelector('a.park-classic')).toBe(null)
     cleanup(root)
   })
 })
