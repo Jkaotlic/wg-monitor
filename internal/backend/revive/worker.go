@@ -237,13 +237,13 @@ func (s *Service) launch(ctx context.Context, in db.ReviveIntent, nick string) {
 		return
 	}
 	if !found {
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonNoSecret, noticeFailed(nick, reasonNoSecret), in.Generation)
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonNoStoredEntry, noticeFailed(nick, reasonNoStoredEntry), in.Generation)
 		return
 	}
 	creds, err := s.box.Open(in.RouterID, nonce, ct)
 	if err != nil {
 		s.logger.Warn("оживление: секрет не расшифрован", "router_id", in.RouterID)
-		s.finish(ctx, in.RouterID, running, StatusFailed, reasonSecretUnreadable, noticeFailed(nick, reasonSecretUnreadable), in.Generation)
+		s.finish(ctx, in.RouterID, running, StatusFailed, reasonEntryUnreadable, noticeFailed(nick, reasonEntryUnreadable), in.Generation)
 		return
 	}
 

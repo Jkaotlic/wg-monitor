@@ -192,6 +192,16 @@ type reviveJobUnexportedSecrets struct {
 	secrets Secrets
 }
 
+// reviveJobUnexportedSecretsWrapper даёт json.Marshal экспортируемое поле,
+// иначе staticcheck (SA9005) справедливо указывает, что маршалить структуру
+// вовсе без экспортируемых полей бессмысленно -- encoding/json и так ничего
+// не напишет. Смысл теста не в этом: он проверяет, что Secrets, спрятанный в
+// НЕЭКСПОРТИРУЕМОМ поле, не всплывает, даже когда сама структура лежит внутри
+// значения с экспортируемым полем на виду.
+type reviveJobUnexportedSecretsWrapper struct {
+	Job reviveJobUnexportedSecrets
+}
+
 func TestSecrets_NeverPrintThemselves_NestedInStruct(t *testing.T) {
 	s := fixtureSecrets()
 	exported := reviveJobExportedSecrets{ID: 1, Secrets: s}
@@ -215,7 +225,7 @@ func TestSecrets_NeverPrintThemselves_NestedInStruct(t *testing.T) {
 
 	jsExported, _ := json.Marshal(exported)
 	buf.Write(jsExported)
-	jsUnexported, _ := json.Marshal(unexported)
+	jsUnexported, _ := json.Marshal(reviveJobUnexportedSecretsWrapper{Job: unexported})
 	buf.Write(jsUnexported)
 
 	assertNoFixtureSecret(t, "Secrets, вложенный в структуру", buf.Bytes())

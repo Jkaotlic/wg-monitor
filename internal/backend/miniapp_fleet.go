@@ -205,7 +205,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 		reviveSvc := miniappRevive(d)
 		resp := miniappFleetResp{
 			GeneratedAt:   now.Format(time.RFC3339),
-			ReviveEnabled: reviveSvc != nil && reviveSvc.Enabled(),
+			ReviveEnabled: miniappReviveEnabled(d),
 			Routers:       []miniappFleetRouter{},
 			Totals: miniappFleetTotals{
 				Routers:        summary.Totals.Agents,

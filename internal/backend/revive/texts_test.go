@@ -12,7 +12,7 @@ func TestNoticeTexts_SpeakToOwner(t *testing.T) {
 		noticeRevived("bronya", ""),
 		noticeAliveItself("bronya"),
 		noticeAuthFailed("bronya"),
-		noticeFailed("bronya", reasonNoSecret),
+		noticeFailed("bronya", reasonNoStoredEntry),
 		noticeGaveUp("bronya", 5, "роутер не смог скачать агент"),
 		noticeExpired("bronya", time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)),
 	}
@@ -25,8 +25,8 @@ func TestNoticeTexts_SpeakToOwner(t *testing.T) {
 			t.Fatalf("человек должен знать, что пароль стёрт: %q", text)
 		}
 	}
-	for _, reason := range []string{reasonRevived, reasonAliveItself, reasonAuthFailed, reasonExpired, reasonNoSecret,
-		reasonSecretUnreadable, reasonNoAWGMURL, reasonLaunchFailed, reasonJobLost, reasonUnknownFailure} {
+	for _, reason := range []string{reasonRevived, reasonAliveItself, reasonAuthFailed, reasonExpired, reasonNoStoredEntry,
+		reasonEntryUnreadable, reasonNoAWGMURL, reasonLaunchFailed, reasonJobLost, reasonUnknownFailure} {
 		assertOwnerText(t, reason)
 	}
 	if !strings.Contains(noticeAuthFailed("bronya"), "пароль не подошёл — поставьте оживление заново") {

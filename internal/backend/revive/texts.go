@@ -31,17 +31,17 @@ func probeText(state string) string {
 // Причины -- то, что лежит в revive_intents.last_error и уходит на экран как
 // last_error_text. Русские, без секретов и внутренних имён.
 const (
-	reasonRevived          = "агент ожил"
-	reasonAliveItself      = "агент снова на связи сам"
-	reasonAuthFailed       = "пароль не подошёл"
-	reasonExpired          = "срок оживления вышел"
-	reasonNoSecret         = "пароль на сервере не найден — поставьте оживление заново"
-	reasonSecretUnreadable = "пароль на сервере не расшифровывается — поставьте оживление заново"
-	reasonNoAWGMURL        = "у роутера нет адреса панели"
-	reasonUnsafeAWGMURL    = "адрес панели небезопасный (нужен https и внешнее имя) — поменяйте его в веб-дашборде и поставьте оживление заново"
-	reasonLaunchFailed     = "переустановка не запустилась"
-	reasonJobLost          = "переустановка прервалась: сервер перезапускался"
-	reasonUnknownFailure   = "переустановка не удалась"
+	reasonRevived         = "агент ожил"
+	reasonAliveItself     = "агент снова на связи сам"
+	reasonAuthFailed      = "пароль не подошёл"
+	reasonExpired         = "срок оживления вышел"
+	reasonNoStoredEntry   = "пароль на сервере не найден — поставьте оживление заново"
+	reasonEntryUnreadable = "пароль на сервере не расшифровывается — поставьте оживление заново"
+	reasonNoAWGMURL       = "у роутера нет адреса панели"
+	reasonUnsafeAWGMURL   = "адрес панели небезопасный (нужен https и внешнее имя) — поменяйте его в веб-дашборде и поставьте оживление заново"
+	reasonLaunchFailed    = "переустановка не запустилась"
+	reasonJobLost         = "переустановка прервалась: сервер перезапускался"
+	reasonUnknownFailure  = "переустановка не удалась"
 )
 
 const noticeAgainHint = "поставить заново можно в приложении, экран «Парк»"

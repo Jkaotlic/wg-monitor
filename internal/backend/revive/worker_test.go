@@ -230,7 +230,7 @@ func TestTick_WrongKeyFailsWithoutLaunch(t *testing.T) {
 	env.tick(t)
 	env.tick(t)
 	in := env.intent(t)
-	if in.Status != StatusFailed || in.LastError != reasonSecretUnreadable {
+	if in.Status != StatusFailed || in.LastError != reasonEntryUnreadable {
 		t.Fatalf("%+v", in)
 	}
 	if len(env.engine.calls()) != 0 {
