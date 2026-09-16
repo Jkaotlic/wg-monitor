@@ -69,19 +69,19 @@ export function App() {
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
   useEffect(() => {
-    setBackButtonVisible(backButtonVisible(nav))
+    setBackButtonVisible(backButtonVisible(nav, { wide }))
     return onBackButtonClick(() => dispatch({ type: 'back' }))
-  }, [nav.overlay, nav.sheet])
+  }, [nav.overlay, nav.sheet, wide])
 
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== 'Escape' || typingTarget(e.target)) return
-      const action = escapeAction(nav)
+      const action = escapeAction(nav, { wide })
       if (action) dispatch(action)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [nav.overlay, nav.sheet])
+  }, [nav.overlay, nav.sheet, wide])
 
   let body
   if (boot.status === 'loading') {

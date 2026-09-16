@@ -105,13 +105,21 @@ export function navReducer(state, action) {
   }
 }
 
-export function backButtonVisible(state) {
-  return Boolean(state.sheet || state.overlay)
+// visibleOverlay -- слой, который человек видит. На широкой раскладке список
+// роутеров («fleet») -- это боковая колонка, а не крышка: состояние остаётся
+// (сузил окно -- список на месте), но закрывать «назад» или Esc там нечего.
+function visibleOverlay(state, { wide = false } = {}) {
+  const overlay = state?.overlay ?? null
+  return wide && overlay === 'fleet' ? null : overlay
+}
+
+export function backButtonVisible(state, opts) {
+  return Boolean(state.sheet || visibleOverlay(state, opts))
 }
 
 // escapeAction -- что делает Esc. Лист подтверждения закрывает себя сам: он
 // знает, идёт ли уже команда (тогда Esc не должен обрывать наблюдение).
-export function escapeAction(state) {
+export function escapeAction(state, opts) {
   if (state?.sheet) return null
-  return state?.overlay ? { type: 'back' } : null
+  return visibleOverlay(state, opts) ? { type: 'back' } : null
 }

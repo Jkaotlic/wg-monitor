@@ -196,3 +196,25 @@ describe('escapeAction', () => {
     expect(escapeAction({ overlay: null, sheet: null })).toBe(null)
   })
 })
+
+// На широкой раскладке список роутеров -- боковая колонка, слой «fleet»
+// невидим. Кнопка «назад» и Esc над ним закрывали бы то, чего не видно.
+describe('невидимый список роутеров на широком экране', () => {
+  it('«назад» не показывается, Esc ничего не делает', () => {
+    const s = { routerID: null, tab: 'router', overlay: 'fleet', sheet: null }
+    expect(backButtonVisible(s, { wide: true })).toBe(false)
+    expect(escapeAction(s, { wide: true })).toBe(null)
+  })
+
+  it('на телефоне -- как было', () => {
+    const s = { routerID: null, tab: 'router', overlay: 'fleet', sheet: null }
+    expect(backButtonVisible(s)).toBe(true)
+    expect(escapeAction(s)).toEqual({ type: 'back' })
+  })
+
+  it('прочие слои и лист на широком экране видны', () => {
+    expect(backButtonVisible({ overlay: 'settings', sheet: null }, { wide: true })).toBe(true)
+    expect(backButtonVisible({ overlay: 'fleet', sheet: { title: 'x' } }, { wide: true })).toBe(true)
+    expect(escapeAction({ overlay: 'admin', sheet: null }, { wide: true })).toEqual({ type: 'back' })
+  })
+})
