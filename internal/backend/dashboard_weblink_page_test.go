@@ -10,7 +10,7 @@ import (
 func dashboardLoginPage(t *testing.T) string {
 	t.Helper()
 	h := NewMux(Deps{DashboardToken: "dashboard-secret"})
-	req := httptest.NewRequest(http.MethodGet, "/dashboard/login", nil)
+	req := httptest.NewRequest(http.MethodGet, "/dashboard/classic/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
