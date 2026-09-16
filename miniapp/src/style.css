@@ -2769,15 +2769,18 @@ body {
   .side-link:disabled { opacity: 0.45; cursor: default; }
 
   /* --- Основная область --- */
+  /* Основная область прижата к колонке роутеров (отступ 40 px), а не
+     центрирована: на 1920 центровка оставляла пустоту с обеих сторон, и
+     одноколоночные вкладки висели в воздухе. Пустота теперь только справа. */
   .main {
     min-width: 0;
-    padding: 0 var(--sp-6) calc(var(--sp-6) * 1.5);
+    padding: 0 var(--sp-6) calc(var(--sp-6) * 1.5) 40px;
   }
 
   .main-head,
   .main-content {
     max-width: 1180px;
-    margin-inline: auto;
+    margin-inline: 0;
   }
 
   .main-head {
@@ -2937,12 +2940,12 @@ body {
     flex-direction: column;
     align-items: flex-start;
     gap: var(--sp-2);
-    padding: var(--sp-5) var(--sp-6) var(--sp-4);
+    padding: var(--sp-5) var(--sp-6) var(--sp-4) 40px;
     border-bottom: none;
   }
 
   .wide-shell .overlay .overlay-body {
-    padding: 0 var(--sp-6) var(--sp-6);
+    padding: 0 var(--sp-6) var(--sp-6) 40px;
   }
 
   .wide-shell .overlay .overlay-body > * {
@@ -3012,6 +3015,33 @@ body {
   .wide-shell .traffic-path {
     max-width: 440px;
     margin-inline: auto;
+  }
+
+  /* Свечение героя на телефоне стоит над строкой-вердиктом и почти не
+     видно; на широкой карточке оно ложилось пятном под текст. Здесь оно
+     сдвинуто к схеме (узел «Роутер») и приглушено. */
+  .wide-shell .hero::after {
+    top: 38%;
+    width: 240px;
+    height: 150px;
+    opacity: 0.6;
+  }
+
+  /* Карточка тревоги в правой колонке: «Починить» и «Перезапустить
+     VPN-туннель» -- одной ширины, во всю, с зазором 8 px. На телефоне
+     перезапуск остаётся по ширине текста. */
+  .wide-shell .restart-block {
+    margin-top: var(--sp-2);
+  }
+
+  .wide-shell .restart-block > .btn {
+    width: 100%;
+  }
+
+  /* Надзаголовок раздела и строка итога под ним (Парк): 4 px между ними,
+     12 px до карточки. На телефоне строка прижата вплотную к карточке. */
+  .wide-shell .section-head + .router-lastseen {
+    margin: calc(-1 * var(--sp-1)) 0 var(--sp-3);
   }
 
   /* --- Лист подтверждения: модальное окно --- */
