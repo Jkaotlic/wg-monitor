@@ -2988,6 +2988,14 @@ body {
     display: none;
   }
 
+  /* Слой внутри экрана (замена конфига) несёт свой заголовок точнее
+     заголовка слоя: «Заменить конфиг «vpn-nl»» под «Заменить конфиг». На
+     телефоне первый мелкий и в строке с «назад», здесь оба были бы крупными
+     -- остаётся тот, что с именем. */
+  .wide-shell .overlay:not(.main-content > .overlay):has(> .overlay-body > .screen > .screen-title:first-child) > .overlay-head > .overlay-title {
+    display: none;
+  }
+
   .wide-shell .overlay-body > .screen > :first-child,
   .wide-shell .overlay-body > .screen > .screen-title:first-child + * {
     margin-top: 0;
