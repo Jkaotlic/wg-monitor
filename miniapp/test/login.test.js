@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { ApiError } from '../src/api.js'
 import {
   takeHashToken,
-  redeemFromHash,
   loginErrorText,
   bootFailure,
   SESSION_EXPIRED_TEXT,
@@ -33,26 +32,6 @@ describe('токен из ссылки', () => {
     expect(log).toEqual([])
   })
 
-  it('хэш стирается ДО запроса -- токен не остаётся в истории при ошибке', async () => {
-    const log = []
-    const p = redeemFromHash({
-      location: fakeLocation('/dashboard/login#token=t1'),
-      history: fakeHistory(log),
-      redeem: (t) => {
-        log.push(['redeem', t])
-        return Promise.reject(new ApiError(401, 'unauthorized', 'x', 'Ссылка больше не действует — попросите новую.'))
-      },
-    })
-    await expect(p).rejects.toBeInstanceOf(ApiError)
-    expect(log).toEqual([['replace', '/dashboard/login'], ['redeem', 't1']])
-  })
-
-  it('без токена -- null, запроса нет', () => {
-    const log = []
-    const p = redeemFromHash({ location: fakeLocation('/dashboard/login'), history: fakeHistory(log), redeem: () => log.push('redeem') })
-    expect(p).toBe(null)
-    expect(log).toEqual([])
-  })
 })
 
 describe('тексты ошибок входа', () => {

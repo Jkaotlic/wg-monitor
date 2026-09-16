@@ -4,7 +4,7 @@ import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
 const mocks = vi.hoisted(() => ({
-  session: null, sessionCalls: 0, tgSession: null, routers: null, logouts: 0, logins: [],
+  session: null, sessionCalls: 0, sessionHashes: [], tgSession: null, routers: null, logouts: 0, logins: [], redeems: [],
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -16,6 +16,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     __real: real,
     fetchSession: () => {
       mocks.sessionCalls++
+      mocks.sessionHashes.push(window.location.hash)
       return reply(typeof mocks.session === 'function' ? mocks.session() : mocks.session)
     },
     createSession: () => reply(mocks.tgSession),
@@ -23,6 +24,10 @@ vi.mock('../src/api.js', async (importOriginal) => {
     dashboardLogout: () => {
       mocks.logouts++
       return Promise.resolve(null)
+    },
+    redeemWebLink: (t) => {
+      mocks.redeems.push(t)
+      return Promise.resolve({ ok: true })
     },
     dashboardLogin: (t) => {
       mocks.logins.push(t)
@@ -74,6 +79,8 @@ beforeEach(() => {
   mocks.routers = { routers: ROUTERS }
   mocks.logouts = 0
   mocks.logins = []
+  mocks.redeems = []
+  mocks.sessionHashes = []
 })
 
 afterEach(() => vi.unstubAllGlobals())
@@ -175,6 +182,57 @@ describe('оболочка: веб-управление', () => {
     await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
     await flush()
     expect(root.textContent).toContain('Сейчас 2')
+    cleanup(root)
+  })
+})
+
+describe('личная ссылка и кука', () => {
+  it('токен из ссылки снимается с адреса до первого запроса, даже если сервер молчит', async () => {
+    mocks.session = new TypeError('Failed to fetch')
+    const root = await mountAt('/dashboard/login?router=2#token=raw-1')
+    expect(mocks.sessionHashes).toEqual([''])
+    expect(window.location.hash).toBe('')
+    expect(window.location.search).toBe('?router=2')
+    expect(root.textContent).toContain('Сервер не отвечает')
+    expect(mocks.redeems).toEqual([])
+    // Сервер ожил: сессии нет -- токен из памяти обменивается, место открывается.
+    let n = 0
+    mocks.session = () => (n++ === 0 ? new ApiError(401, 'unauthorized', 'x') : { ok: true, is_admin: true, via: 'web' })
+    await act(async () => button(root, 'Повторить').click())
+    await flush()
+    await flush()
+    await flush()
+    expect(mocks.redeems).toEqual(['raw-1'])
+    expect(root.textContent).toContain('Сейчас 2')
+    cleanup(root)
+  })
+
+  it('токен ссылки используется один раз: после выхода форма, а не повторный обмен', async () => {
+    let n = 0
+    mocks.session = () => (n++ === 0 ? new ApiError(401, 'unauthorized', 'x') : { ok: true, is_admin: true, via: 'web' })
+    const root = await mountAt('/dashboard/login#token=raw-2')
+    await flush()
+    expect(mocks.redeems).toEqual(['raw-2'])
+    await act(async () => button(root, 'Выйти').click())
+    await flush()
+    expect(root.querySelector('#login-token')).toBeTruthy()
+    expect(mocks.redeems).toEqual(['raw-2'])
+    cleanup(root)
+  })
+
+  it('вход прошёл, а сессии нет -- браузер не сохранил куку', async () => {
+    mocks.session = new ApiError(401, 'unauthorized', 'x')
+    const root = await mountAt('/dashboard/')
+    const input = root.querySelector('#login-token')
+    await act(async () => {
+      input.value = 'tok'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => root.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
+    await flush()
+    await flush()
+    expect(mocks.logins).toEqual(['tok'])
+    expect(root.textContent).toContain('Вход прошёл, но браузер не сохранил сессию')
     cleanup(root)
   })
 })

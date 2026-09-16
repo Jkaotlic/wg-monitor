@@ -2,14 +2,19 @@
 
 export const SESSION_EXPIRED_TEXT = 'Сессия закончилась — войдите снова'
 export const ADMIN_NOT_CONFIGURED_TEXT = 'На сервере не задан администратор — вход в веб-управление невозможен'
+// Вход или обмен ссылки удался, а следующий же запрос сессии -- 401: кука не
+// легла (запрет кук для сайта, приватный режим с блокировкой). Без этой фразы
+// человек видел бы ту же форму и вводил бы верный токен по кругу.
+export const COOKIE_NOT_SAVED_TEXT = 'Вход прошёл, но браузер не сохранил сессию — разрешите куки для этого сайта и войдите снова'
 
 const LINK_DEAD_TEXT = 'Ссылка больше не действует — попросите новую.'
 const RATE_LIMITED_TEXT = 'Слишком много попыток, подождите минуту'
 const SERVER_DOWN_TEXT = 'Сервер не отвечает'
 
 // Личная ссылка приходит как /dashboard/login#token=<raw>. Токен стирается из
-// адреса сразу, до любого запроса: при ошибке обмена он не должен остаться ни
-// в строке адреса, ни в истории браузера.
+// адреса сразу, до любого запроса (оболочка зовёт это синхронно при первом
+// рендере): ни при ошибке обмена, ни при молчащем сервере он не должен
+// остаться ни в строке адреса, ни в истории браузера.
 export function takeHashToken(loc = window.location, hist = window.history) {
   const hash = loc?.hash ?? ''
   if (!hash.startsWith('#')) return ''
@@ -17,12 +22,6 @@ export function takeHashToken(loc = window.location, hist = window.history) {
   if (!token) return ''
   hist.replaceState(null, '', (loc.pathname ?? '') + (loc.search ?? ''))
   return token
-}
-
-export function redeemFromHash({ location, history, redeem }) {
-  const token = takeHashToken(location, history)
-  if (!token) return null
-  return redeem(token)
 }
 
 function isNetworkError(err) {

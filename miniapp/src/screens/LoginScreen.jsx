@@ -1,23 +1,26 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { dashboardLogin, redeemWebLink } from '../api.js'
-import { loginErrorText, redeemFromHash } from '../login.js'
+import { loginErrorText } from '../login.js'
 
 // Вход в веб-управление. Два пути: личная ссылка из мини-аппа (токен в
 // хэше, обмен без участия человека) и токен доступа руками. Ссылка, которая
 // не сработала, не оставляет человека в тупике: под ошибкой та же форма.
-export function LoginScreen({ notice = '', onSuccess }) {
+export function LoginScreen({ notice = '', linkToken = '', onLinkUsed, onSuccess }) {
   const [token, setToken] = useState('')
   const [busy, setBusy] = useState(false)
   const [redeeming, setRedeeming] = useState(false)
   const [error, setError] = useState('')
   const alive = useRef(true)
 
+  // Токен ссылки оболочка сняла с адреса ещё до первого запроса и держит в
+  // памяти. Обмен -- один раз: onLinkUsed забывает токен, чтобы после выхода
+  // или истечения сессии экран входа не менял мёртвую ссылку снова.
   useEffect(() => {
     alive.current = true
-    const pending = redeemFromHash({ location: window.location, history: window.history, redeem: redeemWebLink })
-    if (pending) {
+    if (linkToken) {
+      onLinkUsed?.()
       setRedeeming(true)
-      pending
+      redeemWebLink(linkToken)
         .then(() => {
           if (alive.current) onSuccess()
         })

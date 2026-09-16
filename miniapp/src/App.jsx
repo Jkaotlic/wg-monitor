@@ -1,4 +1,4 @@
-import { useEffect, useReducer } from 'preact/hooks'
+import { useEffect, useReducer, useState } from 'preact/hooks'
 import { initTelegram, onBackButtonClick, paintChrome, setBackButtonVisible } from './telegram.js'
 import { applyPalette } from './theme.js'
 import { setUnauthorizedHandler } from './api.js'
@@ -6,6 +6,7 @@ import { initialNav, navReducer, backButtonVisible, escapeAction } from './nav.j
 import { navFromURL } from './navUrl.js'
 import { useNavURL } from './useNavURL.js'
 import { appMode } from './mode.js'
+import { takeHashToken } from './login.js'
 import { useWide } from './useWide.js'
 import { AppContext } from './appContext.js'
 import { useBoot } from './useBoot.js'
@@ -26,6 +27,10 @@ export function App() {
   // Режим не меняется за жизнь страницы: /dashboard и /miniapp -- разные входы.
   const mode = appMode(window.location.pathname)
   const wide = useWide()
+  // Токен личной ссылки снимается с адреса синхронно, в первом рендере -- до
+  // любого запроса. Иначе при молчащем сервере он висел бы в адресе и
+  // истории, пока не откроется экран входа. Дальше живёт только в памяти.
+  const [linkToken, setLinkToken] = useState(() => (mode === 'web' ? takeHashToken() : ''))
   const [nav, dispatch] = useReducer(navReducer, initialNav())
   const boot = useBoot(mode, {
     onReady: (list) => dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id)) }),
@@ -86,7 +91,14 @@ export function App() {
   } else if (boot.status === 'down') {
     body = <ServerDown onRetry={() => boot.start()} />
   } else if (boot.status === 'login') {
-    body = <LoginScreen notice={boot.notice} onSuccess={() => boot.start()} />
+    body = (
+      <LoginScreen
+        notice={boot.notice}
+        linkToken={linkToken}
+        onLinkUsed={() => setLinkToken('')}
+        onSuccess={() => boot.start({ afterLogin: true })}
+      />
+    )
   } else if (boot.routers.length === 0) {
     // Доступ мог появиться, пока приложение было открыто: экран пустого доступа
     // умеет переспросить, и тогда оболочка продолжает как при обычном входе.

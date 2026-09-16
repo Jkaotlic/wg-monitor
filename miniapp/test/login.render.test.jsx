@@ -105,24 +105,29 @@ describe('экран входа', () => {
     cleanup(root)
   })
 
-  it('ссылка: хэш стёрт до обмена, успех зовёт onSuccess без формы', async () => {
-    window.history.replaceState(null, '', '/dashboard/login?router=3#token=raw-1')
+  it('ссылка: токен приходит свойством, обмен сразу, успех зовёт onSuccess без формы', async () => {
     const onSuccess = vi.fn()
-    const root = await mount(<LoginScreen onSuccess={onSuccess} />)
+    const onLinkUsed = vi.fn()
+    const root = await mount(<LoginScreen linkToken="raw-1" onLinkUsed={onLinkUsed} onSuccess={onSuccess} />)
     expect(mocks.redeems).toEqual(['raw-1'])
-    expect(mocks.order).toEqual([['redeem', '']])
-    expect(window.location.pathname + window.location.search + window.location.hash).toBe('/dashboard/login?router=3')
+    expect(onLinkUsed).toHaveBeenCalledTimes(1)
     expect(onSuccess).toHaveBeenCalledTimes(1)
     cleanup(root)
   })
 
-  it('мёртвая ссылка: фраза сервера и форма для токена', async () => {
-    window.history.replaceState(null, '', '/dashboard/login#token=old')
-    mocks.redeemReply = new ApiError(401, 'unauthorized', 'x', 'Ссылка больше не действует — попросите новую.')
+  it('без токена обмена нет, даже если в адресе остался хэш', async () => {
+    window.history.replaceState(null, '', '/dashboard/login#token=stale')
     const root = await mount(<LoginScreen onSuccess={() => {}} />)
+    expect(mocks.redeems).toEqual([])
+    expect(root.querySelector('#login-token')).toBeTruthy()
+    cleanup(root)
+  })
+
+  it('мёртвая ссылка: фраза сервера и форма для токена', async () => {
+    mocks.redeemReply = new ApiError(401, 'unauthorized', 'x', 'Ссылка больше не действует — попросите новую.')
+    const root = await mount(<LoginScreen linkToken="old" onSuccess={() => {}} />)
     expect(root.querySelector('.login-error').textContent).toBe('Ссылка больше не действует — попросите новую.')
     expect(root.querySelector('#login-token')).toBeTruthy()
-    expect(window.location.hash).toBe('')
     cleanup(root)
   })
 
