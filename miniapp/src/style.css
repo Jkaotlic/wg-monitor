@@ -2576,8 +2576,12 @@ body {
   line-height: var(--lh-normal);
 }
 
+/* Под полем, а не посреди карточки: у .state свои поля и центровка для
+   пустых экранов, здесь они разрывали форму. */
 .login-error {
   margin: calc(-1 * var(--sp-2)) 0 0;
+  padding: 0;
+  text-align: left;
   font-size: var(--fs-sm);
 }
 
@@ -2919,21 +2923,30 @@ body {
     }
   }
 
-  /* --- Оверлеи в основной области --- */
+  /* --- Оверлеи ---
+     Слой из адреса (OverlayHost) стоит в основной области прямо под шапкой:
+     колонка роутеров остаётся на виду. Слои, которые экраны открывают у себя
+     внутри (починка, замена конфига, кабинет, добавление маршрута), остаются
+     крышкой -- но только над основной областью, не над колонкой: встроенные
+     в карточку, они сжались бы до ширины правой колонки «Сейчас». */
   .wide-shell .overlay {
-    position: static;
-    inset: auto;
-    z-index: auto;
-    display: block;
-    background: transparent;
+    left: 288px;
   }
 
-  .wide-shell .overlay-head {
+  .wide-shell .overlay .overlay-head {
     flex-direction: column;
     align-items: flex-start;
     gap: var(--sp-2);
-    padding: 0 0 var(--sp-5);
+    padding: var(--sp-5) var(--sp-6) var(--sp-4);
     border-bottom: none;
+  }
+
+  .wide-shell .overlay .overlay-body {
+    padding: 0 var(--sp-6) var(--sp-6);
+  }
+
+  .wide-shell .overlay .overlay-body > * {
+    max-width: 820px;
   }
 
   .wide-shell .overlay-back {
@@ -2951,9 +2964,40 @@ body {
     line-height: var(--lh-tight);
   }
 
-  .wide-shell .overlay-body {
+  .wide-shell .main-content > .overlay {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    display: block;
+    background: transparent;
+  }
+
+  .wide-shell .main-content > .overlay > .overlay-head {
+    padding: 0 0 var(--sp-5);
+  }
+
+  .wide-shell .main-content > .overlay > .overlay-body {
     overflow: visible;
-    padding-bottom: 0;
+    padding: 0;
+  }
+
+  /* Экраны слоёв начинают с собственного заголовка -- имени роутера или
+     того же слова, что в заголовке слоя. На широком экране имя уже стоит в
+     шапке, слово -- строкой выше: третий крупный заголовок подряд лишний. */
+  .wide-shell .main-content > .overlay > .overlay-body > .screen > .screen-title {
+    display: none;
+  }
+
+  .wide-shell .overlay-body > .screen > :first-child,
+  .wide-shell .overlay-body > .screen > .screen-title:first-child + * {
+    margin-top: 0;
+  }
+
+  /* Схема пути нарисована под ширину телефона (viewBox 342): растянутая на
+     всю карточку, она печатает подписи крупнее заголовка экрана. */
+  .wide-shell .traffic-path {
+    max-width: 440px;
+    margin-inline: auto;
   }
 
   /* --- Лист подтверждения: модальное окно --- */
@@ -3048,11 +3092,13 @@ body {
 
   .fleet-card:hover { background: var(--surf2); border-color: var(--border-strong); }
 
+  /* Плашка всегда под именем: при узких карточках она то влезала в строку,
+     то нет, и соседние карточки выглядели по-разному. */
   .fleet-card-head {
     display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: var(--sp-2);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
   }
 
   .fleet-card-sub {
@@ -3061,6 +3107,18 @@ body {
   }
 
   .fleet-home-recheck .hint { margin-top: var(--sp-2); }
+
+  /* Парк под сводкой -- отдельный большой раздел, а не ещё одна строка
+     после «Опросить все». */
+  .fleet-home-park {
+    margin-top: var(--sp-6);
+    padding-top: var(--sp-5);
+    border-top: 1px solid var(--line);
+  }
+
+  .fleet-home-park > .section:first-child {
+    margin-top: 0;
+  }
 
   /* --- Наведение и фокус (в телефонной раскладке наведения нет) --- */
   .wide-shell :is(.nav-card, .action-tile, .list-row-btn):hover {
