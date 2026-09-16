@@ -13,6 +13,8 @@ import { NoAccess } from './screens/NoAccess.jsx'
 import { LoginScreen } from './screens/LoginScreen.jsx'
 import { ServerDown } from './ui/ServerDown.jsx'
 import { PhoneLayout } from './ui/PhoneLayout.jsx'
+import { WideLayout } from './ui/WideLayout.jsx'
+import { PULSE_MS } from './pulse.js'
 
 // Поле ввода -- не место для Esc-закрытия слоя: человек набирает маршрут или
 // имя и теряет набранное одним промахом. Лист подтверждения ловит Esc сам.
@@ -47,6 +49,17 @@ export function App() {
     if (mode !== 'web' || boot.status !== 'ready') return undefined
     return setUnauthorizedHandler(() => boot.expire())
   }, [mode, boot.status])
+
+  // Колонка роутеров на широком экране видна всегда, и слова состояния в ней
+  // не должны застывать на моменте входа: список переспрашивается тем же
+  // пульсом, что экран роутера, и только пока вкладка браузера видна.
+  useEffect(() => {
+    if (!wide || boot.status !== 'ready') return undefined
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') boot.refreshRouters()
+    }, PULSE_MS)
+    return () => clearInterval(timer)
+  }, [wide, boot.status])
 
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
@@ -86,15 +99,14 @@ export function App() {
       />
     )
   } else {
-    body = (
-      <PhoneLayout
-        nav={nav}
-        dispatch={dispatch}
-        routers={boot.routers}
-        isAdmin={boot.isAdmin}
-        onLogout={mode === 'web' ? () => boot.logout() : undefined}
-      />
-    )
+    const layout = {
+      nav,
+      dispatch,
+      routers: boot.routers,
+      isAdmin: boot.isAdmin,
+      onLogout: mode === 'web' ? () => boot.logout() : undefined,
+    }
+    body = wide ? <WideLayout mode={mode} {...layout} /> : <PhoneLayout {...layout} />
   }
 
   return <AppContext.Provider value={{ mode, wide }}>{body}</AppContext.Provider>

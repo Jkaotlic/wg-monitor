@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useContext, useEffect, useRef, useState } from 'preact/hooks'
 import {
   fetchRouter,
   fetchRouterChecks,
@@ -24,6 +24,7 @@ import { shouldPulse, freshnessLabel, PULSE_MS } from '../pulse.js'
 import { RepairScreen } from './RepairScreen.jsx'
 import { useCommand } from '../useCommand.js'
 import { confirmSheet } from '../sheet.js'
+import { AppContext } from '../appContext.js'
 import {
   ACTION_LABELS,
   checkLabel,
@@ -545,6 +546,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
 
 
 export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
+  const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
   const [checks, setChecks] = useState(null)
@@ -688,171 +690,218 @@ export function RouterDetail({ id, isAdmin, onOpenAdmin, openSheet, onTab }) {
   const egress = tunnels.find((t) => t.tunnel_id === traffic?.egress_tunnel_id)
   const liveCount = tunnels.filter((t) => tunnelStateLabel(t) === 'работает').length
 
-  return (
-    <div class="screen">
-      {/* Схема живёт внутри шапки: рисунок и вывод под ним -- одно
-          высказывание, а не картинка и подпись к ней. Холодная подсветка
-          включается тем же признаком, что и тон метки. */}
-      <Hero cold={headline.cold}>
-        <StateTag tone={headline.tone}>{headline.tag}</StateTag>
-        <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>
-        <p class="traffic-detail" style="margin-top:6px">
-          <Quoted text={headline.verdict} />
-        </p>
-        <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} />
-        <div class="hero-bar">
-          <span>
-            {headline.stale
-              ? 'показания на момент последнего отчёта'
-              : linesSummary(liveCount, tunnels.length)}
-          </span>
-          {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}
-        </div>
-      </Hero>
-
-      {/* Два показания, ради которых экран открывают чаще всего. */}
-      <div class="stat-grid" style="margin-top:12px">
-        {/* На молчащем роутере число поднятых VPN-туннелей -- это данные на момент
-            последнего отчёта, а не сейчас. Показать их как текущее показание
-            значило бы соврать ровно тем способом, против которого написана
-            половина этого приложения: цифра выглядит достоверной именно
-            потому, что она цифра. */}
-        {/* Задержка -- та, что меряется ЧЕРЕЗ туннель (матрица awg-manager),
-            а не ping-check роутера: у того цель достижима и мимо туннеля.
-            Её нет у роутеров с awg-manager старше 2.18, и тогда плитка честно
-            говорит «роутер не сказал», а не рисует ноль. */}
-        <Stat
-          label="задержка"
-          value={path.latencyMs != null && !headline.stale ? path.latencyMs : null}
-          unit="мс"
-          note={
-            headline.stale
-              ? 'данные устарели'
-              : path.latencyMs == null
-                ? 'роутер не сказал'
-                : path.latencyMs < 150
-                  ? 'быстро'
-                  : 'медленно'
-          }
-          tone={path.latencyMs != null && path.latencyMs >= 300 ? 'warn' : undefined}
-        />
-        <Stat
-          label="VPN-туннели"
-          value={headline.stale || !tunnels.length ? null : liveCount}
-          note={
-            headline.stale
-              ? 'роутер молчит — данные устарели'
-              : tunnels.length
-                ? `поднято из ${tunnels.length} настроенных`
-                : 'роутер не сообщил ни одного'
-          }
-          tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
-        />
+  // Схема живёт внутри шапки: рисунок и вывод под ним -- одно высказывание,
+  // а не картинка и подпись к ней. Холодная подсветка включается тем же
+  // признаком, что и тон метки. На широком экране имя роутера уже стоит в
+  // шапке основной области, и второй раз его не пишем.
+  const heroBlock = (
+    <Hero cold={headline.cold}>
+      <StateTag tone={headline.tone}>{headline.tag}</StateTag>
+      {!wide && <h1 class="screen-title" style="margin:8px 0 0">{router.nickname}</h1>}
+      <p class="traffic-detail" style="margin-top:6px">
+        <Quoted text={headline.verdict} />
+      </p>
+      <TrafficPath traffic={traffic} incidents={incidents} tunnels={tunnels} stale={headline.stale} />
+      <div class="hero-bar">
+        <span>
+          {headline.stale
+            ? 'показания на момент последнего отчёта'
+            : linesSummary(liveCount, tunnels.length)}
+        </span>
+        {egress ? <b>{egress.name || egress.tunnel_id}</b> : null}
       </div>
-      {/* Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не было
-          нигде, и человек узнавал ответ в момент падения. */}
-      <div class="card row" style="margin-top:12px">
-        <div>
-          <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
-          <div class="row-note">
-            <Quoted
-              text={
-                backupLine
-                  ? backupLine.name
-                    ? `«${backupLine.name}» подхватит, если этот замолчит`
-                    : 'второй VPN-туннель подхватит, если один замолчит'
-                  : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'
-              }
-            />
-          </div>
-        </div>
-        <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
-      </div>
-      {/* Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
-          что сломано, потом куда идёт трафик, потом состояние туннелей, и
-          только затем действия. Тревога -- единственное, ради чего экран
-          вообще открывают в плохой день, поэтому она выше прибора. */}
-      {incidents.length > 0 && (
-        <section class="section">
-          <h2 class="section-title">Активные тревоги</h2>
-          <ul class="list-reset card-stack">
-            {incidents.map((inc, i) => (
-              <IncidentCard
-                key={inc.check_name}
-                routerID={id}
-                incident={inc}
-                whySuppressed={i === 0 && headline.tone === 'danger'}
-                onUpdate={updateIncident}
-                asleep={asleep}
-                onDone={loadData}
-                openSheet={openSheet}
-              />
-            ))}
-          </ul>
-        </section>
-      )}
+    </Hero>
+  )
 
-
-      <div style="margin-top:20px">
-        <NavCard title="VPN-туннели и резерв" note={`${tunnels.length} шт.`} onClick={() => onTab?.('tunnels')} />
-      </div>
-
-      <QuickActions
-        routerID={id}
-        tunnels={tunnels}
-        traffic={traffic}
-        asleep={asleep}
-        onDone={loadData}
-        openSheet={openSheet}
-        onTab={onTab}
+  // Два показания, ради которых экран открывают чаще всего.
+  const statsBlock = (
+    <div class="stat-grid" style="margin-top:12px">
+      {/* На молчащем роутере число поднятых VPN-туннелей -- это данные на момент
+          последнего отчёта, а не сейчас. Показать их как текущее показание
+          значило бы соврать ровно тем способом, против которого написана
+          половина этого приложения: цифра выглядит достоверной именно
+          потому, что она цифра. */}
+      {/* Задержка -- та, что меряется ЧЕРЕЗ туннель (матрица awg-manager),
+          а не ping-check роутера: у того цель достижима и мимо туннеля.
+          Её нет у роутеров с awg-manager старше 2.18, и тогда плитка честно
+          говорит «роутер не сказал», а не рисует ноль. */}
+      <Stat
+        label="задержка"
+        value={path.latencyMs != null && !headline.stale ? path.latencyMs : null}
+        unit="мс"
+        note={
+          headline.stale
+            ? 'данные устарели'
+            : path.latencyMs == null
+              ? 'роутер не сказал'
+              : path.latencyMs < 150
+                ? 'быстро'
+                : 'медленно'
+        }
+        tone={path.latencyMs != null && path.latencyMs >= 300 ? 'warn' : undefined}
       />
+      <Stat
+        label="VPN-туннели"
+        value={headline.stale || !tunnels.length ? null : liveCount}
+        note={
+          headline.stale
+            ? 'роутер молчит — данные устарели'
+            : tunnels.length
+              ? `поднято из ${tunnels.length} настроенных`
+              : 'роутер не сообщил ни одного'
+        }
+        tone={!headline.stale && tunnels.length && liveCount === 0 ? 'danger' : undefined}
+      />
+    </div>
+  )
 
-      <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
+  // Резерв -- ответ на вопрос «а если этот VPN-туннель ляжет». Раньше его не
+  // было нигде, и человек узнавал ответ в момент падения.
+  const backupBlock = (
+    <div class="card row" style="margin-top:12px">
+      <div>
+        <div class="row-title">{backupLine ? 'Запасной VPN-туннель готов' : 'Запасного VPN-туннеля нет'}</div>
+        <div class="row-note">
+          <Quoted
+            text={
+              backupLine
+                ? backupLine.name
+                  ? `«${backupLine.name}» подхватит, если этот замолчит`
+                  : 'второй VPN-туннель подхватит, если один замолчит'
+                : 'если VPN-туннель ляжет, обход блокировок пропадёт до починки'
+            }
+          />
+        </div>
+      </div>
+      <span class={backupLine ? 'dot dot-ok' : 'dot dot-warn'} />
+    </div>
+  )
 
-      {otherChecks.length > 0 && (
-        <section class="section">
-          {/* Controlled disclosure: `open` is driven by `spoilerOpen` state, and
-              `onToggle` mirrors every native toggle back into it, so Preact's
-              tracked previous `open` prop never desyncs from the live DOM (see
-              the long comment above `spoilerOpen`'s declaration). The effect up
-              there forces this back open whenever the failing-check set grows,
-              even if the reader had manually collapsed it. */}
-          <details
-            class="checks-spoiler"
-            open={spoilerOpen}
-            onToggle={(e) => setSpoilerOpen(e.currentTarget.open)}
-          >
-            <summary class="section-title checks-spoiler-summary">
-              Прочие проверки — {otherChecksOkCount} в норме
-            </summary>
-            <ul class="card list-reset">
-              {otherChecks.map((c) => {
-                const s = checkState(c)
-                return (
-                  <li key={c.check_name} class="row checks-row">
-                    <span class="row-title">{checkLabel(c.check_name)}</span>
-                    <span class={`checks-status checks-status-${s.tone}`}>
-                      {s.label} · {formatDateTime(c.ts)}
-                    </span>
-                  </li>
-                )
-              })}
-            </ul>
-          </details>
-        </section>
-      )}
-
-      {isAdmin && (
-        <Section title="Администрирование">
-          <ul class="card list-reset">
-            <ListRow
-              title="Обслуживание и доступы"
-              sub="парк, обновление агентов, владелец и операторы"
-              onClick={onOpenAdmin}
+  const incidentsBlock =
+    incidents.length > 0 ? (
+      <section class="section">
+        <h2 class="section-title">Активные тревоги</h2>
+        <ul class="list-reset card-stack">
+          {incidents.map((inc, i) => (
+            <IncidentCard
+              key={inc.check_name}
+              routerID={id}
+              incident={inc}
+              whySuppressed={i === 0 && headline.tone === 'danger'}
+              onUpdate={updateIncident}
+              asleep={asleep}
+              onDone={loadData}
+              openSheet={openSheet}
             />
+          ))}
+        </ul>
+      </section>
+    ) : null
+
+  const tunnelsNavBlock = (
+    <div style="margin-top:20px">
+      <NavCard title="VPN-туннели и резерв" note={`${tunnels.length} шт.`} onClick={() => onTab?.('tunnels')} />
+    </div>
+  )
+
+  const quickBlock = (
+    <QuickActions
+      routerID={id}
+      tunnels={tunnels}
+      traffic={traffic}
+      asleep={asleep}
+      onDone={loadData}
+      openSheet={openSheet}
+      onTab={onTab}
+    />
+  )
+
+  const compareBlock = <ExitCompareSection routerID={id} traffic={traffic} asleep={asleep} />
+
+  const checksBlock =
+    otherChecks.length > 0 ? (
+      <section class="section">
+        {/* Controlled disclosure: `open` is driven by `spoilerOpen` state, and
+            `onToggle` mirrors every native toggle back into it, so Preact's
+            tracked previous `open` prop never desyncs from the live DOM (see
+            the long comment above `spoilerOpen`'s declaration). The effect up
+            there forces this back open whenever the failing-check set grows,
+            even if the reader had manually collapsed it. */}
+        <details
+          class="checks-spoiler"
+          open={spoilerOpen}
+          onToggle={(e) => setSpoilerOpen(e.currentTarget.open)}
+        >
+          <summary class="section-title checks-spoiler-summary">
+            Прочие проверки — {otherChecksOkCount} в норме
+          </summary>
+          <ul class="card list-reset">
+            {otherChecks.map((c) => {
+              const s = checkState(c)
+              return (
+                <li key={c.check_name} class="row checks-row">
+                  <span class="row-title">{checkLabel(c.check_name)}</span>
+                  <span class={`checks-status checks-status-${s.tone}`}>
+                    {s.label} · {formatDateTime(c.ts)}
+                  </span>
+                </li>
+              )
+            })}
           </ul>
-        </Section>
-      )}
+        </details>
+      </section>
+    ) : null
+
+  const adminBlock = isAdmin ? (
+    <Section title="Администрирование">
+      <ul class="card list-reset">
+        <ListRow
+          title="Обслуживание и доступы"
+          sub="парк, обновление агентов, владелец и операторы"
+          onClick={onOpenAdmin}
+        />
+      </ul>
+    </Section>
+  ) : null
+
+  if (!wide) {
+    // Порядок блоков -- по срочности вопроса, а не по красоте: сначала то,
+    // что сломано, потом куда идёт трафик, потом состояние туннелей, и
+    // только затем действия. Тревога -- единственное, ради чего экран
+    // вообще открывают в плохой день, поэтому она выше прибора.
+    return (
+      <div class="screen">
+        {heroBlock}
+        {statsBlock}
+        {backupBlock}
+        {incidentsBlock}
+        {tunnelsNavBlock}
+        {quickBlock}
+        {compareBlock}
+        {checksBlock}
+        {adminBlock}
+      </div>
+    )
+  }
+
+  // Широкий экран: слева -- что происходит (схема пути, плитки, резерв,
+  // сравнение выходов, прочие проверки), справа -- что с этим делать
+  // (тревоги, быстрые действия, обслуживание). Порядок внутри колонок тот же.
+  return (
+    <div class="screen now-grid">
+      <div class="now-main">
+        {heroBlock}
+        {statsBlock}
+        {backupBlock}
+        {tunnelsNavBlock}
+        {compareBlock}
+        {checksBlock}
+      </div>
+      <div class="now-side">
+        {incidentsBlock}
+        {quickBlock}
+        {adminBlock}
+      </div>
     </div>
   )
 }

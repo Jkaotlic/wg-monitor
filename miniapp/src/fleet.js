@@ -64,3 +64,24 @@ export function batchProgress(state) {
   if (failed === 0) return `Опрошены все ${total}`
   return `Ответили ${ok} из ${total}, не ответил${failed === 1 ? '' : 'и'} ${failed}`
 }
+
+// Сводка парка для широкого экрана, когда роутер не выбран: три числа и
+// карточки того, что требует рук. Молчащий -- отдельно от тревоги: у
+// тревоги есть что чинить, у молчащего сначала надо вернуть связь.
+function bucket(router) {
+  if (router?.last_seen_age_sec == null) return 'silent'
+  if (router.status === 'alert') return 'attention'
+  if (router.status === 'offline' || router.status === 'sleeping') return 'silent'
+  return 'ok'
+}
+
+export function fleetSummary(routers = []) {
+  const sorted = sortByUrgency(routers)
+  const out = { total: sorted.length, ok: 0, attention: 0, silent: 0, broken: [] }
+  for (const r of sorted) {
+    const b = bucket(r)
+    out[b]++
+    if (b !== 'ok') out.broken.push(fleetRow(r))
+  }
+  return out
+}
