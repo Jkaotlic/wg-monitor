@@ -1084,6 +1084,10 @@ body {
   border-top-right-radius: var(--radius);
   padding: var(--sp-2) var(--sp-4) calc(var(--sp-5) + env(safe-area-inset-bottom, 0px));
   animation: sheet-up 180ms ease-out;
+  /* Шит с формой выше экрана телефона: прокручивается сам, кнопки не уходят
+     за край. */
+  max-height: calc(100dvh - var(--sp-5));
+  overflow-y: auto;
 }
 
 @keyframes sheet-up {
@@ -2163,6 +2167,32 @@ body {
   margin-top: var(--sp-4);
 }
 
+/* Поля формы в шите (оживление агента): столбиком, с тем же шагом, что у
+   остальных полей. select -- той же высоты, что input: палец не должен
+   промахиваться мимо срока. */
+.sheet-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin-top: var(--sp-4);
+}
+
+.field select {
+  min-height: 44px;
+  font-family: inherit;
+  font-size: var(--fs-md);
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+
+.field select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* ============================================================
    Экран флота
    ============================================================ */
@@ -2402,6 +2432,15 @@ body {
 
 .park-update-danger {
   color: var(--danger);
+}
+
+.park-update-ok {
+  color: var(--ok);
+}
+
+/* Оживление идёт прямо сейчас: сигнальный цвет системы, а не приглушённый. */
+.park-update-sig {
+  color: var(--sig);
 }
 
 .park-actions {

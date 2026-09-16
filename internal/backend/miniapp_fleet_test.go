@@ -1,7 +1,12 @@
 package backend
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -9,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Jkaotlic/wg-monitor/internal/awgmstate"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 )
 
 // Админский экран парка в мини-аппе. Источник -- ПРОЕКЦИЯ сводки дашборда,
@@ -401,4 +408,277 @@ func TestMiniappFleetCarriesAwayWithWakeWindowRule(t *testing.T) {
 	if v, ok := other["away"]; !ok || v != false {
 		t.Fatalf("роутер на связи: away=%v (есть поле: %v), ждали явное false", v, ok)
 	}
+}
+
+// Оживление в строке парка: поимённая проекция IntentView, null там, где его
+// не ставили, и признак «адрес панели известен» без самого адреса.
+func TestMiniappFleetCarriesReviveState(t *testing.T) {
+	d, ownedID, h, fake, _ := reviveTestMux(t)
+	var otherID int64
+	users, _ := d.Users().GetAll()
+	for _, u := range users {
+		if u.ID != ownedID {
+			otherID = u.ID
+		}
+	}
+	if _, err := d.SQL().Exec(`UPDATE users SET awgm_url = ? WHERE id = ?`, "https://panel.example.com", otherID); err != nil {
+		t.Fatal(err)
+	}
+	probeAt := time.Date(2026, 9, 15, 9, 58, 0, 0, time.UTC)
+	fake.views[ownedID] = &revive.IntentView{
+		Status: "waiting", ExpiresAt: reviveTestExpires, Attempts: 2,
+		LastErrorText: "панель не ответила вовремя", LastProbeText: "не отвечает", LastProbeAt: probeAt,
+	}
+
+	rec := fleetRequest(t, h, 999)
+	body := rec.Body.String()
+	resp := fleetResponse(t, rec)
+	if !resp.ReviveEnabled || !strings.Contains(body, `"revive_enabled":true`) {
+		t.Fatalf("revive_enabled: %s", body)
+	}
+	rows := map[int64]miniappFleetRouter{}
+	for _, r := range resp.Routers {
+		rows[r.ID] = r
+	}
+	got := rows[ownedID].Revive
+	want := &miniappFleetRevive{
+		Status: "waiting", ExpiresAt: "2026-10-15T12:00:00Z", Attempts: 2,
+		LastErrorText: "панель не ответила вовремя", LastProbeText: "не отвечает", LastProbeAt: "2026-09-15T09:58:00Z",
+	}
+	if got == nil || *got != *want {
+		t.Fatalf("revive router-owned: %+v", got)
+	}
+	if rows[otherID].Revive != nil {
+		t.Fatalf("revive router-other: %+v", rows[otherID].Revive)
+	}
+	if rows[ownedID].PanelAddressKnown || !rows[otherID].PanelAddressKnown {
+		t.Fatalf("panel_address_known: owned=%v other=%v", rows[ownedID].PanelAddressKnown, rows[otherID].PanelAddressKnown)
+	}
+	// Форма постоянная: null и false приходят явно.
+	for _, field := range []string{`"revive":null`, `"panel_address_known":false`, `"panel_address_known":true`} {
+		if !strings.Contains(body, field) {
+			t.Errorf("нет %s в %s", field, body)
+		}
+	}
+	if strings.Contains(body, "panel.example.com") {
+		t.Fatalf("адрес панели уехал в сводку: %s", body)
+	}
+}
+
+func TestMiniappFleetReviveZeroProbeTimeIsEmpty(t *testing.T) {
+	_, ownedID, h, fake, _ := reviveTestMux(t)
+	fake.views[ownedID] = &revive.IntentView{Status: "running", ExpiresAt: reviveTestExpires}
+	resp := fleetResponse(t, fleetRequest(t, h, 999))
+	for _, r := range resp.Routers {
+		if r.ID == ownedID && (r.Revive == nil || r.Revive.LastProbeAt != "" || r.Revive.Status != "running") {
+			t.Fatalf("revive: %+v", r.Revive)
+		}
+	}
+}
+
+func TestMiniappFleetReviveDisabledShape(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, ownedID, _, _ := seedMiniappFleet(t)
+
+	// Сервиса нет вовсе: выключено, у всех null.
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	body := fleetRequest(t, h, 999).Body.String()
+	if !strings.Contains(body, `"revive_enabled":false`) || strings.Count(body, `"revive":null`) != 2 {
+		t.Fatalf("без сервиса: %s", body)
+	}
+
+	// Сервис есть, но выключен (ключа нет): кнопки не будет, а намерение,
+	// поставленное до выключения, всё равно видно.
+	fake := &fakeRevive{views: map[int64]*revive.IntentView{
+		ownedID: {Status: "waiting", ExpiresAt: reviveTestExpires},
+	}}
+	h = NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, ReviveOverride: fake})
+	resp := fleetResponse(t, fleetRequest(t, h, 999))
+	if resp.ReviveEnabled {
+		t.Fatal("revive_enabled=true у выключенного сервиса")
+	}
+	seen := false
+	for _, r := range resp.Routers {
+		if r.ID == ownedID {
+			seen = r.Revive != nil && r.Revive.Status == "waiting"
+		}
+	}
+	if !seen {
+		t.Fatal("намерение выключенного сервиса пропало из строки")
+	}
+}
+
+// Сбой чтения состояния -- добавка к строке, а не сама строка: экран
+// обязан открыться, а текст ошибки в журнал не идёт.
+func TestMiniappFleetReviveStatusErrorKeepsScreen(t *testing.T) {
+	_, _, h, fake, logs := reviveTestMux(t)
+	fake.statusErr = fmt.Errorf("sql: %s", miniappReviveRoot)
+	rec := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, rec)
+	for _, r := range resp.Routers {
+		if r.Revive != nil {
+			t.Fatalf("revive при сбое чтения: %+v", r.Revive)
+		}
+	}
+	assertNoReviveSecrets(t, "журнал", logs.String())
+}
+
+// Путь чтения результата: админ ставит оживление с паролями, дальше пароли
+// ищутся во всём, что после этого читается, а владелец роутера не видит
+// оживления нигде.
+func TestMiniappReviveNeverReachesReadPaths(t *testing.T) {
+	_, ownedID, h, fake, logs := reviveTestMux(t)
+	if rec := postMiniappJSON(t, h, revivePath(ownedID), reviveBody("router-owned", nil), 999); rec.Code != http.StatusAccepted {
+		t.Fatalf("постановка: %d %s", rec.Code, rec.Body.String())
+	}
+	fake.views[ownedID] = &revive.IntentView{Status: "waiting", ExpiresAt: reviveTestExpires, LastProbeText: "не отвечает"}
+
+	admin := fleetRequest(t, h, 999)
+	if admin.Code != http.StatusOK {
+		t.Fatalf("админ: %d", admin.Code)
+	}
+	assertNoReviveSecrets(t, "/fleet админу", admin.Body.String())
+
+	if rec := fleetRequest(t, h, 100); rec.Code != http.StatusNotFound {
+		t.Fatalf("/fleet владельцу: %d", rec.Code)
+	}
+	for _, path := range []string{"/v1/miniapp/routers", fmt.Sprintf("/v1/miniapp/routers/%d", ownedID)} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", 100))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s владельцу: %d %s", path, rec.Code, rec.Body.String())
+		}
+		for _, leak := range []string{"revive", "last_probe", "panel_address_known"} {
+			if strings.Contains(rec.Body.String(), leak) {
+				t.Errorf("%s владельцу: есть %q: %s", path, leak, rec.Body.String())
+			}
+		}
+		assertNoReviveSecrets(t, path, rec.Body.String())
+	}
+	assertNoReviveSecrets(t, "журнал", logs.String())
+}
+
+// reviveNoLaunchEngine -- движок, который не должен понадобиться: роутер
+// «не отвечает», до переустановки дело не доходит.
+type reviveNoLaunchEngine struct{ t *testing.T }
+
+func (e reviveNoLaunchEngine) Launch(context.Context, int64, revive.Secrets, string) (string, error) {
+	e.t.Error("переустановка запущена у неотвечающего роутера")
+	return "", errors.New("не должно вызываться")
+}
+
+func (reviveNoLaunchEngine) Outcome(string) (revive.Outcome, bool) { return revive.Outcome{}, false }
+
+// Прод-путь: настоящий *revive.Service в Deps.Revive (без ReviveOverride).
+// Постановка, сводка, повтор с адресом, отмена -- и ни одного пароля ни в
+// ответах, ни в журнале, ни открытым текстом в базе.
+func TestMiniappReviveProductionServicePath(t *testing.T) {
+	stubLatestVersion(t, "v0.33.0")
+	d, ownedID, _, _ := seedMiniappFleet(t)
+	logs := &bytes.Buffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	svc, err := revive.New(revive.Config{
+		DB: d, Key: bytes.Repeat([]byte{7}, revive.KeySize), Engine: reviveNoLaunchEngine{t},
+		Probe:  func(context.Context, string) string { return awgmstate.Offline },
+		Sleep:  func(context.Context, time.Duration) bool { return true },
+		Logger: logger,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, Logger: logger, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, Revive: svc})
+
+	// Финальное ревью 15.09, I1: локальный адрес, IP и http отказывают до
+	// любой записи -- с текстом, который говорит, какой адрес нужен.
+	for _, bad := range []string{"https://192.168.31.1:2222", "http://router.example.com", "https://203.0.113.14:2222", "https://router.local"} {
+		rec := postMiniappJSON(t, h, revivePath(ownedID), reviveBody("router-owned", map[string]any{"awgm_url": bad}), 999)
+		code, _, msg := decodeDeployError(t, rec)
+		if rec.Code != http.StatusBadRequest || code != "invalid_awgm_url" ||
+			msg != "Нужен внешний адрес панели с https — например, имя KeenDNS. Локальные адреса не подходят." {
+			t.Fatalf("адрес %q: %d %q %q", bad, rec.Code, code, msg)
+		}
+		if in, _ := d.Revive().Get(ownedID); in != nil {
+			t.Fatalf("адрес %q: намерение записано при отказе", bad)
+		}
+		if u, _ := d.Users().GetByID(ownedID); u.AWGMURL != nil {
+			t.Fatalf("адрес %q записан при отказе", bad)
+		}
+	}
+
+	body := reviveBody("router-owned", map[string]any{"awgm_url": "https://router.example.com:2222", "expires_days": 7})
+	rec := postMiniappJSON(t, h, revivePath(ownedID), body, 999)
+	if rec.Code != http.StatusAccepted || !strings.Contains(rec.Body.String(), `"status":"waiting"`) {
+		t.Fatalf("постановка: %d %s", rec.Code, rec.Body.String())
+	}
+	assertNoReviveSecrets(t, "ответ 202", rec.Body.String())
+	svc.Wait()
+
+	fleet := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, fleet)
+	assertNoReviveSecrets(t, "/fleet", fleet.Body.String())
+	if !resp.ReviveEnabled {
+		t.Fatal("revive_enabled=false у включённого сервиса")
+	}
+	var row *miniappFleetRouter
+	for i := range resp.Routers {
+		if resp.Routers[i].ID == ownedID {
+			row = &resp.Routers[i]
+		}
+	}
+	if row == nil || row.Revive == nil || row.Revive.Status != "waiting" || !row.PanelAddressKnown {
+		t.Fatalf("строка после постановки: %+v", row)
+	}
+	if row.Revive.LastProbeText != "роутер не отвечает" || row.Revive.LastProbeAt == "" {
+		t.Fatalf("опрос: %+v", row.Revive)
+	}
+
+	// Адрес уже записан: повтор с ДРУГИМ адресом -- 409 с текстом, где его
+	// поменять; с тем же -- не конфликт (двойное нажатие).
+	rec = postMiniappJSON(t, h, revivePath(ownedID), reviveBody("router-owned", map[string]any{"awgm_url": "https://other.example.com"}), 999)
+	if code, _, msg := decodeDeployError(t, rec); rec.Code != http.StatusConflict || code != "awgm_url_already_set" ||
+		msg != "Адрес панели у роутера уже записан. Поменять его можно в веб-дашборде." {
+		t.Fatalf("повтор с другим адресом: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := postMiniappJSON(t, h, revivePath(ownedID), body, 999); rec.Code != http.StatusAccepted {
+		t.Fatalf("повтор с тем же адресом: %d %s", rec.Code, rec.Body.String())
+	}
+	svc.Wait()
+	assertNoReviveSecrets(t, "ответ 409", rec.Body.String())
+
+	// В базе -- только шифротекст.
+	var dump strings.Builder
+	rows, err := d.SQL().Query(`SELECT * FROM revive_intents`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cols, _ := rows.Columns()
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range vals {
+			fmt.Fprintf(&dump, "%s|", v)
+		}
+	}
+	_ = rows.Close()
+	assertNoReviveSecrets(t, "revive_intents", dump.String())
+
+	rec = deleteMiniapp(t, h, revivePath(ownedID), 999)
+	if rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != `{"cleared":true}` {
+		t.Fatalf("отмена: %d %s", rec.Code, rec.Body.String())
+	}
+	resp = fleetResponse(t, fleetRequest(t, h, 999))
+	for _, r := range resp.Routers {
+		if r.ID == ownedID && (r.Revive == nil || r.Revive.Status != "cancelled") {
+			t.Fatalf("после отмены: %+v", r.Revive)
+		}
+	}
+	assertNoReviveSecrets(t, "журнал", logs.String())
 }

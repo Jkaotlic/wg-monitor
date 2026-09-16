@@ -234,3 +234,41 @@ CREATE TABLE IF NOT EXISTS router_update_reminders (
     PRIMARY KEY (user_id, component, version)
 );
 CREATE INDEX IF NOT EXISTS idx_update_reminders_user ON router_update_reminders(user_id);
+
+-- Оживление агента (цикл 2б). Одна строка на роутер: намерение переустановить
+-- агента, когда роутер снова появится. Секретов здесь нет ни байта -- таблицу
+-- читают экраны. Статус меняется только условными переходами, поэтому
+-- уведомление о закрытии уходит один раз.
+CREATE TABLE IF NOT EXISTS revive_intents (
+    user_id          INTEGER   PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    target_version   TEXT      NOT NULL DEFAULT '',   -- пусто = версия бэкенда на момент запуска
+    status           TEXT      NOT NULL CHECK (status IN ('waiting','running','done','failed','cancelled','expired')),
+    created_at       TIMESTAMP NOT NULL,
+    updated_at       TIMESTAMP NOT NULL,
+    expires_at       TIMESTAMP NOT NULL,
+    attempts         INTEGER   NOT NULL DEFAULT 0,    -- засчитывается в момент запуска
+    last_error       TEXT      NOT NULL DEFAULT '',   -- русский текст для экрана, без секретов
+    last_probe_at    TIMESTAMP,
+    last_probe_state TEXT      NOT NULL DEFAULT '',   -- offline|reachable|auth_error|tls_error|dns_error
+    reachable_since  TIMESTAMP,
+    reachable_probes INTEGER   NOT NULL DEFAULT 0,    -- сколько опросов подряд панель отвечает
+    requested_by     INTEGER   NOT NULL DEFAULT 0,    -- Telegram-номер поставившего
+    -- generation (Fix round 2, мандатное ревью): растёт на каждый Put/replace.
+    -- Каждая запись, меняющая или трогающая строку, которую воркер прочитал
+    -- РАНЬШЕ (RecordProbe, MarkRunning, BackToWaiting(+NoAttempt), Finish),
+    -- обязана нести "AND generation = ?" с поколением из своего Get -- иначе
+    -- Schedule, успевший переставить намерение в щель между чтением и записью
+    -- воркера, был бы закрыт или переписан под чужим, устаревшим снимком
+    -- (структурная защита вместо защиты только временем удержания замка).
+    generation       INTEGER   NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_revive_intents_status ON revive_intents(status);
+
+-- Секрет оживления: AES-256-GCM от JSON с паролями, AAD = user_id. Ключ лежит
+-- в файле revive.key_file, а не в базе и не в бэкапе: утёкшая база без ключа
+-- не расшифровывается. Строка стирается при done|failed|cancelled|expired.
+CREATE TABLE IF NOT EXISTS revive_secrets (
+    user_id    INTEGER PRIMARY KEY REFERENCES revive_intents(user_id) ON DELETE CASCADE,
+    nonce      BLOB    NOT NULL,
+    ciphertext BLOB    NOT NULL
+);

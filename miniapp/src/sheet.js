@@ -20,8 +20,24 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
 // busyLabel -- подпись кнопки, пока perform выполняется («Ставим…» для
 // обновления агента, «Сохраняем…» для выключения уведомлений). Пустая строка
 // значит «своей подписи нет» -- Sheet.jsx покажет прежнюю по умолчанию.
-export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', errorText, busyLabel = '', perform, onDone }) {
-  return { title, body, buttonLabel, danger, confirmPhrase, errorText, busyLabel, perform, onDone, args: {} }
+//
+// fields -- поля формы листа (пароль, логин, срок). Значения полей живут
+// только в состоянии Sheet.jsx: описание листа лежит в состоянии App, и
+// введённый пароль не должен туда попасть. perform получает их вторым
+// аргументом -- снимком на момент нажатия. fieldsReady(values) -- когда
+// кнопка может загореться; note -- предупреждение под полями.
+export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '' }) {
+  return { title, body, buttonLabel, danger, confirmPhrase, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, args: {} }
+}
+
+export function initialFieldValues(fields) {
+  const values = {}
+  for (const f of fields ?? []) values[f.name] = f.initial ?? ''
+  return values
+}
+
+export function fieldsReady(sheet, values) {
+  return typeof sheet?.fieldsReady === 'function' ? Boolean(sheet.fieldsReady(values ?? {})) : true
 }
 
 // Необратимое действие подтверждается набором, а не нажатием: человек

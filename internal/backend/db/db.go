@@ -93,6 +93,10 @@ func Open(path string) (*DB, error) {
 		d.Close()
 		return nil, fmt.Errorf("migrate users.pending_attempts: %w", err)
 	}
+	if err := migrateReviveGeneration(d); err != nil {
+		d.Close()
+		return nil, fmt.Errorf("migrate revive_intents.generation: %w", err)
+	}
 	// Surface where the DB lives and whether this is a fresh init — useful for
 	// distinguishing "file vanished" from "first deploy" in journalctl (OBS-23).
 	slog.Info("db opened", "path", path, "preexisting", existed)
@@ -240,6 +244,14 @@ func migratePendingAttempts(d *sql.DB) error {
 	}
 	return addColumnIfMissing(d, "users", "pending_last_error",
 		`ALTER TABLE users ADD COLUMN pending_last_error TEXT`)
+}
+
+// migrateReviveGeneration добавляет revive_intents.generation (Fix round 2,
+// мандатное ревью): базы, у которых таблица уже существует со времён Task 3
+// (до этой колонки), получают её через ALTER, а не теряют содержимое.
+func migrateReviveGeneration(d *sql.DB) error {
+	return addColumnIfMissing(d, "revive_intents", "generation",
+		`ALTER TABLE revive_intents ADD COLUMN generation INTEGER NOT NULL DEFAULT 0`)
 }
 
 func addColumnIfMissing(d *sql.DB, table, column, alter string) error {

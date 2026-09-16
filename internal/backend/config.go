@@ -39,6 +39,7 @@ type Config struct {
 	HideMy            HideMyConfig             `yaml:"hidemyname"`
 	Digest            DigestConfig             `yaml:"digest"`
 	Repair            RepairConfig             `yaml:"repair"`
+	Revive            ReviveConfig             `yaml:"revive"`
 }
 
 // DigestConfig controls the daily "dead-man" digest (🟢 monitor alive, N/M
@@ -54,6 +55,17 @@ type RepairConfig struct {
 	// маршрутизацию и тратить слоты в платных кабинетах разом на всём парке.
 	// Владелец каждого роутера может включить его себе независимо.
 	AutoDefault bool `yaml:"auto_default"`
+}
+
+// ReviveConfig -- оживление агента на выключенном роутере.
+//
+// KeyFile -- файл с 32 байтами ключа в base64 (secrets/revive.key на Pi).
+// Намеренно отдельный файл, а не поле в базе: утёкшая база или бэкап без
+// этого файла не расшифровывают пароли. Файла нет или длина не та --
+// бэкенд стартует, а функция выключена (LoadConfig ключ не читает, это
+// делает main через revive.LoadKey).
+type ReviveConfig struct {
+	KeyFile string `yaml:"key_file"`
 }
 
 type DigestConfig struct {

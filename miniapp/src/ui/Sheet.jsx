@@ -1,6 +1,6 @@
-import { useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { sheetPhase, confirmReady } from '../sheet.js'
+import { sheetPhase, confirmReady, initialFieldValues, fieldsReady } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
 import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
@@ -25,18 +25,52 @@ export function Sheet({ sheet, asleep, onClose }) {
   // это то, что задумал экран, а набранное -- то, что делает человек прямо
   // сейчас, и смешивать их значило бы переписывать намерение вводом.
   const [typed, setTyped] = useState('')
-  const ready = confirmReady(sheet, typed)
+  // Поля формы (оживление агента: пароль, логин, срок). Значения -- здесь, а
+  // не в описании листа: описание лежит в состоянии App, и пароль не должен
+  // туда попасть. Стираются при отправке (до ответа) и при закрытии.
+  const fields = local && Array.isArray(sheet.fields) ? sheet.fields : []
+  const [values, setValues] = useState(() => initialFieldValues(fields))
+  const ready = confirmReady(sheet, typed) && fieldsReady(sheet, values)
+  // Уход листа со страницы (закрытие, смена другим листом, уход экрана) --
+  // введённое стирается и здесь: ссылка на объект значений могла пережить
+  // компонент в замыкании.
+  const valuesRef = useRef(values)
+  valuesRef.current = values
+  useEffect(
+    () => () => {
+      const live = valuesRef.current
+      for (const k of Object.keys(live ?? {})) live[k] = ''
+    },
+    [],
+  )
+
+  function setField(name, value) {
+    setValues((prev) => ({ ...prev, [name]: value }))
+  }
+
+  function close() {
+    if (fields.length) setValues(initialFieldValues(fields))
+    onClose()
+  }
 
   function start() {
     if (local) {
       setLocalBusy(true)
       setLocalError(null)
       const typedNow = sheet.confirmPhrase ? typed : ''
+      const submitted = fields.length ? values : {}
+      if (fields.length) {
+        // Ссылка -- сразу на чистые значения: стирание при уходе листа не
+        // должно задеть снимок, который ещё не дошёл до perform.
+        const fresh = initialFieldValues(fields)
+        valuesRef.current = fresh
+        setValues(fresh)
+      }
       Promise.resolve()
-        .then(() => sheet.perform(typedNow))
+        .then(() => sheet.perform(typedNow, submitted))
         .then((resp) => {
           if (sheet.onDone) sheet.onDone(resp)
-          onClose()
+          close()
         })
         .catch((err) => {
           const text = typeof sheet.errorText === 'function' ? sheet.errorText(err) : ''
@@ -60,7 +94,7 @@ export function Sheet({ sheet, asleep, onClose }) {
     <div class="sheet-layer">
       {/* Подложка закрывает шит только до запуска: обрывать наблюдение за
           уже ушедшей на роутер командой случайным тапом мимо -- плохая идея. */}
-      <div class="sheet-scrim" onClick={phase === 'running' ? undefined : onClose} />
+      <div class="sheet-scrim" onClick={phase === 'running' ? undefined : close} />
       <div class="sheet">
         <div class="sheet-grip" />
         {/* Заголовок и текст шита собирают экраны готовыми строками с
@@ -85,6 +119,38 @@ export function Sheet({ sheet, asleep, onClose }) {
                 <span class="sheet-command-value">{sheet.commandLabel || sheet.action}</span>
               </div>
             )}
+            {fields.length > 0 && (
+              <div class="sheet-fields">
+                {fields.map((f) => (
+                  <div class="field" key={f.name}>
+                    <label for={`sheet-field-${f.name}`}>{f.label}</label>
+                    {f.type === 'select' ? (
+                      <select
+                        id={`sheet-field-${f.name}`}
+                        value={values[f.name] ?? ''}
+                        onChange={(e) => setField(f.name, e.currentTarget.value)}
+                      >
+                        {(f.options ?? []).map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        id={`sheet-field-${f.name}`}
+                        type={f.type === 'password' ? 'password' : 'text'}
+                        autocomplete="off"
+                        autocapitalize="off"
+                        spellcheck={false}
+                        placeholder={f.placeholder ?? ''}
+                        value={values[f.name] ?? ''}
+                        onInput={(e) => setField(f.name, e.currentTarget.value)}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {local && sheet.note && <p class="sheet-note">{sheet.note}</p>}
             {localError && <p class="state state-error">{localError}</p>}
             {sheet.confirmPhrase && (
               <div class="field sheet-confirm">
@@ -101,7 +167,7 @@ export function Sheet({ sheet, asleep, onClose }) {
               </div>
             )}
             <div class="sheet-actions">
-              <button type="button" class="btn btn-ghost" onClick={onClose}>Отмена</button>
+              <button type="button" class="btn btn-ghost" onClick={close}>Отмена</button>
               <button
                 type="button"
                 class={`btn ${sheet.danger ? 'btn-danger' : 'btn-primary'}`}
@@ -149,5 +215,20 @@ export function Sheet({ sheet, asleep, onClose }) {
         )}
       </div>
     </div>
+  )
+}
+
+// SheetHost -- лист поверх экрана, как его ставит App.jsx. key -- номер
+// экземпляра из navReducer: новый лист монтируется с чистыми полями, даже
+// если прежний не закрывали.
+export function SheetHost({ nav, dispatch }) {
+  if (!nav?.sheet) return null
+  return (
+    <Sheet
+      key={nav.sheetSeq ?? 0}
+      sheet={nav.sheet}
+      asleep={nav.sheet.asleep}
+      onClose={() => dispatch({ type: 'sheet', sheet: null })}
+    />
   )
 }

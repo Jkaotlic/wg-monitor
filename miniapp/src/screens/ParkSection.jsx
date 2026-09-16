@@ -7,6 +7,8 @@ import {
   createWebLink,
   updateRouterAgent,
   cancelRouterAgentUpdate,
+  reviveRouterAgent,
+  cancelRouterAgentRevive,
   updateFleetAgents,
   sendCommand,
   fetchCommandResult,
@@ -35,6 +37,19 @@ import {
   fleetUpdateSummary,
   fleetUpdateErrorText,
 } from '../agentUpdate.js'
+import {
+  REVIVE_SECRET_NOTE,
+  reviveState,
+  reviveNotConfiguredLine,
+  reviveSheetText,
+  reviveFields,
+  reviveReady,
+  reviveRequestBody,
+  reviveErrorText,
+  reviveDoneText,
+  reviveCancelSheetText,
+  reviveCancelDoneText,
+} from '../revive.js'
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
@@ -44,6 +59,13 @@ import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetB
 // Решение оператора: «три необновлённых роутера выключены — нужно иметь
 // возможность обновлять … в пендинг». Поэтому «Обновить агент» у выключенного
 // роутера не гаснет: намерение ставится на сервере и доживает до включения.
+//
+// Оживление агента (цикл 2б) -- тот же случай, шаг дальше: агент на
+// выключенном роутере мёртв, и сервер переустановит его сам, когда роутер
+// появится. Решение оператора: «Полный автомат: пароль root или вход в
+// панель awg-manager вводится один раз при постановке, хранится на Pi
+// зашифрованным до успеха, отмены или срока, затем стирается.» Пароль
+// вводится на листе и в состояние экрана не попадает (Sheet.jsx).
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
@@ -165,6 +187,49 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
     )
   }
 
+  function askRevive(router) {
+    const text = reviveSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Оживить',
+        busyLabel: 'Ставим…',
+        confirmPhrase: router.nickname,
+        fields: reviveFields(router),
+        fieldsReady: reviveReady(router),
+        note: REVIVE_SECRET_NOTE,
+        errorText: reviveErrorText,
+        // values -- снимок полей листа; тело собирает revive.js, и дальше
+        // этого вызова пароль в экране не живёт.
+        perform: (typed, values) => reviveRouterAgent(router.id, reviveRequestBody(values, typed, router)),
+        onDone: (resp) => {
+          setFleetResult(null)
+          setNotice(reviveDoneText(resp, router.nickname))
+          load()
+        },
+      }),
+    )
+  }
+
+  function askReviveCancel(router) {
+    const text = reviveCancelSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Отменить оживление',
+        errorText: reviveErrorText,
+        perform: () => cancelRouterAgentRevive(router.id),
+        onDone: (resp) => {
+          setFleetResult(null)
+          setNotice(reviveCancelDoneText(resp, router.nickname))
+          load()
+        },
+      }),
+    )
+  }
+
   function askUpdateAll() {
     const text = fleetUpdateSheetText(fleet)
     openSheet(
@@ -259,6 +324,8 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   const watchdog = fleet ? watchdogLine(fleet) : ''
   const backend = fleet ? backendRow(fleet) : null
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
+  const revives = new Map(rows.map((row) => [row.id, reviveState(row.router, fleet)]))
+  const reviveOff = fleet ? reviveNotConfiguredLine(fleet) : ''
 
   return (
     <Section title="Парк">
@@ -340,9 +407,12 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
             </p>
           )}
 
+          {reviveOff && <p class="hint">{reviveOff}</p>}
           {rows.length > 0 && (
             <div class="card">
-              {rows.map((row) => (
+              {rows.map((row) => {
+                const rv = revives.get(row.id)
+                return (
                 <div class="park-row" key={row.id}>
                   <DataRow title={row.name} value={row.state} valueSub={row.sub} />
                   <div class="park-row-controls">
@@ -380,7 +450,12 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                       недоступен вовсе, но именно поэтому предупреждение
                       обязано быть видно, а не пропадать вместе с кнопкой. */}
                   {row.warning && <p class="hint">Оговорка: {row.warning}</p>}
-                  {(row.update.canUpdate || row.update.canCancel) && (
+                  {/* «оживление:» -- рядом стоит строка обновления, и одинокое
+                      «ожил» или «срок истёк» читалось бы как про обновление. */}
+                  {rv.text && (
+                    <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
+                  )}
+                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
@@ -392,10 +467,21 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                           Отменить обновление
                         </button>
                       )}
+                      {rv.canRevive && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askRevive(row.router)}>
+                          Оживить агент
+                        </button>
+                      )}
+                      {rv.canCancel && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askReviveCancel(row.router)}>
+                          Отменить оживление
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
 

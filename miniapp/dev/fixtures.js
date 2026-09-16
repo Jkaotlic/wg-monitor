@@ -611,6 +611,7 @@ const FLEET = {
   generated_at: new Date().toISOString(),
   totals: { routers: 3, online: 1, sleeping: 1, offline: 0, alerts: 1, pending_deploys: 1 },
   backend: { version: 'v0.31.0', latest_version: 'v0.31.1', update_available: true },
+  revive_enabled: true,
   routers: [
     {
       id: 1,
@@ -629,6 +630,8 @@ const FLEET = {
       agent_update_warning: '',
       notify_muted: false,
       away: false,
+      panel_address_known: true,
+      revive: null,
     },
     {
       id: 2,
@@ -644,6 +647,15 @@ const FLEET = {
       agent_update_warning: 'старая проверка места: нужно ≈10% раздела /opt свободно',
       notify_muted: true,
       away: true,
+      panel_address_known: true,
+      revive: {
+        status: 'waiting',
+        expires_at: new Date(Date.now() + 27 * 86400 * 1000).toISOString(),
+        attempts: 0,
+        last_error_text: '',
+        last_probe_text: 'не отвечает',
+        last_probe_at: new Date(Date.now() - 120 * 1000).toISOString(),
+      },
     },
     {
       id: 3,
@@ -659,6 +671,9 @@ const FLEET = {
       awgmgr_version: '2.17.2',
       notify_muted: false,
       away: true,
+      // Адреса панели нет -- случай bronya: лист оживления его спросит.
+      panel_address_known: false,
+      revive: null,
     },
   ],
   notify: {
@@ -693,6 +708,11 @@ export function respond(method, path) {
         })),
     }
   }
+  const reviveMatch = path.match(/^\/v1\/miniapp\/routers\/(\d+)\/agent\/revive$/)
+  if (reviveMatch && method === 'POST') {
+    return { status: 'waiting', expires_at: new Date(Date.now() + 30 * 86400 * 1000).toISOString() }
+  }
+  if (reviveMatch && method === 'DELETE') return { cleared: true }
   if (method === 'POST' && path === '/v1/miniapp/web-link') {
     return {
       url: 'https://wg.example.com/dashboard/login#token=' + 'ab12'.repeat(16),

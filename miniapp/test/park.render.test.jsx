@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   // не покажет ни одной строки. Отказ этот флаг включает начиная со второго.
   fleetFailAfterFirst: false,
   linkDeferred: false, linkResolver: null,
+  revives: [], reviveReply: null, reviveCancels: [], reviveCancelReply: null,
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -40,6 +41,14 @@ vi.mock('../src/api.js', async (importOriginal) => {
     cancelRouterAgentUpdate: (id) => {
       mocks.cancels.push(id)
       return reply(mocks.cancelReply)
+    },
+    reviveRouterAgent: (id, body) => {
+      mocks.revives.push({ id, body })
+      return reply(mocks.reviveReply)
+    },
+    cancelRouterAgentRevive: (id) => {
+      mocks.reviveCancels.push(id)
+      return reply(mocks.reviveCancelReply)
     },
     updateFleetAgents: (confirm) => {
       mocks.fleetUpdates.push(confirm)
@@ -145,6 +154,10 @@ function reset() {
   mocks.fleetFailAfterFirst = false
   mocks.linkDeferred = false
   mocks.linkResolver = null
+  mocks.revives = []
+  mocks.reviveReply = null
+  mocks.reviveCancels = []
+  mocks.reviveCancelReply = null
 }
 
 describe('«Парк»: обновление агента', () => {
@@ -631,5 +644,205 @@ describe('«Парк»: уход с экрана гасит отложенные
     await flush()
     expect(openSpy).not.toHaveBeenCalled()
     openSpy.mockRestore()
+  })
+})
+
+describe('«Парк»: оживление агента', () => {
+  const SECRET = 'root-Пароль-9f3kq'
+  const rv = (over) => ({
+    status: 'waiting', expires_at: '2026-10-15T12:00:00Z', attempts: 0,
+    last_error_text: '', last_probe_text: '', last_probe_at: '', ...over,
+  })
+  // Парк 15.09: caredns-oldcar (адрес панели есть), bronya (адреса нет),
+  // gachimikhail (тревога при молчании -- away с сервера).
+  const FLEET_REVIVE = {
+    ...FLEET,
+    generated_at: '2026-09-15T10:00:00Z',
+    revive_enabled: true,
+    routers: [
+      router({ id: 21, nickname: 'caredns-oldcar', status: 'offline', away: true, last_seen_age_sec: 900000, agent_version: 'v0.24.1', panel_address_known: true,
+        revive: rv({ last_probe_text: 'не отвечает', last_probe_at: '2026-09-15T09:58:00Z' }) }),
+      router({ id: 22, nickname: 'bronya', status: 'offline', away: true, last_seen_age_sec: 900000, agent_version: '', panel_address_known: false, revive: null }),
+      router({ id: 23, nickname: 'gachimikhail', status: 'alert', away: true, last_seen_age_sec: 1036800, panel_address_known: true,
+        revive: rv({ status: 'failed', last_error_text: 'пароль не подошёл' }) }),
+      router({ id: 15, nickname: 'car', panel_address_known: true, revive: null }),
+    ],
+  }
+  const INTERNAL = /awgm|root_password|api_key|revive|waiting|running|probe|intent/
+
+  async function fillField(sheetRoot, name, value) {
+    const el = sheetRoot.querySelector(`#sheet-field-${name}`)
+    await act(async () => {
+      el.value = value
+      el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }))
+    })
+  }
+
+  it('строки: ждёт с отменой, «не вышло» с повтором, у роутера без намерения -- «Оживить», у живого -- ничего', async () => {
+    reset()
+    mocks.fleet = FLEET_REVIVE
+    const { root } = await mountPark()
+    const oldcar = rowOf(root, 'caredns-oldcar')
+    expect(oldcar.textContent).toContain('оживление: ждёт роутер · проверка 2 мин назад: не отвечает')
+    expect(buttons(oldcar, 'Отменить оживление')).toHaveLength(1)
+    expect(buttons(oldcar, 'Оживить агент')).toHaveLength(0)
+    const bronya = rowOf(root, 'bronya')
+    expect(buttons(bronya, 'Оживить агент')).toHaveLength(1)
+    expect(bronya.textContent).not.toContain('оживление:')
+    const gachi = rowOf(root, 'gachimikhail')
+    expect(gachi.textContent).toContain('оживление: не вышло: пароль не подошёл')
+    expect(gachi.querySelector('.park-update-danger')).not.toBeNull()
+    expect(buttons(gachi, 'Оживить агент')).toHaveLength(1)
+    const car = rowOf(root, 'car')
+    expect(buttons(car, 'Оживить агент')).toHaveLength(0)
+    expect(car.textContent).not.toContain('оживление')
+    expect(root.textContent).not.toContain('не настроено на сервере')
+    expect(root.textContent).not.toMatch(INTERNAL)
+    cleanup(root)
+  })
+
+  it('оживляется, ожил, срок истёк -- словами', async () => {
+    reset()
+    mocks.fleet = {
+      ...FLEET_REVIVE,
+      routers: [
+        router({ id: 31, nickname: 'r-running', status: 'offline', away: true, revive: rv({ status: 'running' }) }),
+        router({ id: 32, nickname: 'r-done', status: 'online', away: false, revive: rv({ status: 'done' }) }),
+        router({ id: 33, nickname: 'r-expired', status: 'offline', away: true, revive: rv({ status: 'expired' }) }),
+      ],
+    }
+    const { root } = await mountPark()
+    expect(rowOf(root, 'r-running').textContent).toContain('оживление: оживляется…')
+    expect(rowOf(root, 'r-running').querySelectorAll('.park-actions button')).toHaveLength(0)
+    // Идёт прямо сейчас -- сигнальный цвет, не приглушённый «ничего не происходит».
+    expect(rowOf(root, 'r-running').querySelector('.park-update-sig')).not.toBeNull()
+    expect(rowOf(root, 'r-done').textContent).toContain('оживление: ожил')
+    expect(rowOf(root, 'r-done').querySelector('.park-update-ok')).not.toBeNull()
+    expect(rowOf(root, 'r-expired').textContent).toContain('оживление: срок истёк')
+    expect(buttons(rowOf(root, 'r-expired'), 'Оживить агент')).toHaveLength(1)
+    cleanup(root)
+  })
+
+  it('bronya: лист с паролем и адресом панели, тело запроса, итог словами, пароль нигде не остался', async () => {
+    reset()
+    mocks.fleet = FLEET_REVIVE
+    mocks.reviveReply = { status: 'waiting', expires_at: '2026-10-15T12:00:00Z' }
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'bronya'), 'Оживить агент')[0].click())
+    expect(sheets).toHaveLength(1)
+    expect(sheets[0].title).toBe('Оживить агент на «bronya»?')
+    expect(sheets[0].confirmPhrase).toBe('bronya')
+    expect(sheets[0].note).toBe('Пароль хранится на сервере зашифрованным до оживления, потом стирается.')
+    const sheet = await mountSheet(sheets[0])
+    expect(sheet.root.querySelector('#sheet-field-awgm_url')).not.toBeNull()
+    expect(sheet.root.querySelector('#sheet-field-root_password').type).toBe('password')
+    expect(sheet.root.querySelector('#sheet-field-expires_days').value).toBe('30')
+    await fillField(sheet.root, 'root_password', SECRET)
+    await fillField(sheet.root, 'awgm_url', ' https://router.example.com ')
+    await typeAndConfirm(sheet.root, 'Bronya')
+    expect(mocks.revives).toEqual([
+      { id: 22, body: { confirm: 'Bronya', expires_days: 30, root_password: SECRET, awgm_url: 'https://router.example.com' } },
+    ])
+    expect(sheet.closed()).toBe(1)
+    await flush()
+    expect(root.textContent).toContain('Оживление «bronya» поставлено: агент переустановится, когда роутер выйдет на связь. Ждём до 15.10.2026.')
+    expect(mocks.fleetCalls).toBe(2)
+    expect(JSON.stringify(sheets[0])).not.toContain(SECRET)
+    expect(root.innerHTML).not.toContain(SECRET)
+    expect(sheet.root.innerHTML).not.toContain(SECRET)
+    cleanup(root, sheet.root)
+  })
+
+  it('роутер с известным адресом панели -- поля адреса нет; без пароля root кнопка не горит даже со входом в панель', async () => {
+    reset()
+    mocks.fleet = FLEET_REVIVE
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'gachimikhail'), 'Оживить агент')[0].click())
+    const sheet = await mountSheet(sheets[0])
+    expect(sheet.root.querySelector('#sheet-field-awgm_url')).toBeNull()
+    const input = sheet.root.querySelector('#sheet-confirm-input')
+    await act(async () => {
+      input.value = 'gachimikhail'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const primary = () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop()
+    expect(primary().disabled).toBe(true)
+    await fillField(sheet.root, 'awgm_login', 'admin')
+    await fillField(sheet.root, 'awgm_password', 'p')
+    await fillField(sheet.root, 'awgm_api_key', 'k')
+    expect(primary().disabled).toBe(true)
+    await fillField(sheet.root, 'root_password', 'r')
+    expect(primary().disabled).toBe(false)
+    expect([...sheet.root.querySelectorAll('#sheet-field-expires_days option')].map((o) => o.value)).toEqual(['7', '14', '30'])
+    cleanup(root, sheet.root)
+  })
+
+  it('отказ сервера -- фраза на листе, лист не закрыт, код не показан, пароль стёрт', async () => {
+    reset()
+    mocks.fleet = FLEET_REVIVE
+    mocks.reviveReply = new ApiError(409, 'agent_alive', '/routers/23/agent/revive failed: 409', 'Агент на роутере отвечает — оживлять нечего.')
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'gachimikhail'), 'Оживить агент')[0].click())
+    const sheet = await mountSheet(sheets[0])
+    // Пре-флайт 15.09: пароль root обязателен, вход в панель -- в дополнение.
+    await fillField(sheet.root, 'root_password', SECRET)
+    await fillField(sheet.root, 'awgm_login', 'admin')
+    await fillField(sheet.root, 'awgm_password', SECRET)
+    await fillField(sheet.root, 'expires_days', '14')
+    await typeAndConfirm(sheet.root, 'gachimikhail')
+    expect(mocks.revives[0].body).toEqual({ confirm: 'gachimikhail', expires_days: 14, root_password: SECRET, awgm_login: 'admin', awgm_password: SECRET })
+    expect(sheet.root.textContent).toContain('Агент на роутере отвечает — оживлять нечего.')
+    expect(sheet.root.textContent).not.toContain('agent_alive')
+    expect(sheet.closed()).toBe(0)
+    expect(sheet.root.querySelector('#sheet-field-awgm_password').value).toBe('')
+    expect(sheet.root.querySelector('#sheet-field-root_password').value).toBe('')
+    expect(sheet.root.innerHTML).not.toContain(SECRET)
+    expect(JSON.stringify(sheets[0])).not.toContain(SECRET)
+    cleanup(root, sheet.root)
+  })
+
+  it('отмена оживления: без набора, итог словами, список перечитан', async () => {
+    reset()
+    mocks.fleet = FLEET_REVIVE
+    mocks.reviveCancelReply = { cleared: true }
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'caredns-oldcar'), 'Отменить оживление')[0].click())
+    expect(sheets[0].title).toBe('Отменить оживление агента на «caredns-oldcar»?')
+    expect(sheets[0].confirmPhrase).toBe('')
+    const sheet = await mountSheet(sheets[0])
+    await act(async () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await flush()
+    expect(mocks.reviveCancels).toEqual([21])
+    expect(root.textContent).toContain('Оживление «caredns-oldcar» отменено, пароль стёрт.')
+    expect(mocks.fleetCalls).toBe(2)
+    cleanup(root, sheet.root)
+  })
+
+  it('отмена во время переустановки -- фраза экрана, лист не закрыт', async () => {
+    reset()
+    mocks.fleet = FLEET_REVIVE
+    mocks.reviveCancelReply = new ApiError(409, 'revive_running', '/routers/21/agent/revive failed: 409', 'Оживление уже идёт — дождитесь итога.')
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'caredns-oldcar'), 'Отменить оживление')[0].click())
+    const sheet = await mountSheet(sheets[0])
+    await act(async () => [...sheet.root.querySelectorAll('.sheet-actions button')].pop().click())
+    await flush()
+    await flush()
+    expect(sheet.root.textContent).toContain('Оживление уже идёт — дождитесь итога.')
+    expect(sheet.root.textContent).not.toContain('revive_running')
+    expect(sheet.closed()).toBe(0)
+    cleanup(root, sheet.root)
+  })
+
+  it('оживление не настроено на сервере: одна строка, ни одной кнопки оживления, ход виден', async () => {
+    reset()
+    mocks.fleet = { ...FLEET_REVIVE, revive_enabled: false }
+    const { root } = await mountPark()
+    expect(root.textContent.split('Оживление агента не настроено на сервере.')).toHaveLength(2)
+    expect(buttons(root, 'Оживить агент')).toHaveLength(0)
+    expect(buttons(root, 'Отменить оживление')).toHaveLength(0)
+    expect(rowOf(root, 'caredns-oldcar').textContent).toContain('оживление: ждёт роутер')
+    cleanup(root)
   })
 })

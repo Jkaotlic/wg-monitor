@@ -648,3 +648,16 @@ func TestVerifyPollInterval_IsPositive(t *testing.T) {
 		t.Fatalf("verifyPollInterval = %v, must be a fixed positive constant", verifyPollInterval)
 	}
 }
+
+// Адаптер оживления узнаёт «пароль не подошёл» по этой константе. Текст
+// обязан остаться прежним: его видит дашборд.
+func TestHintAuthFailedIsTerminalAuthHint(t *testing.T) {
+	if HintAuthFailed != "root-пароль или awgm-логин не подошёл" {
+		t.Fatalf("текст подсказки изменился: %q", HintAuthFailed)
+	}
+	for _, msg := range []string{"auth_failed", "HTTP 401", "unauthorized"} {
+		if got := terminalConnectHint(errors.New(msg)); got != HintAuthFailed {
+			t.Fatalf("%q -> %q", msg, got)
+		}
+	}
+}

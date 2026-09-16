@@ -496,3 +496,24 @@ heartbeat:
 		t.Errorf("MobileSleepAfterSec: want clamp to 1800, got %d", cfg.Heartbeat.MobileSleepAfterSec)
 	}
 }
+
+func TestLoadConfigReviveKeyFileIsOptional(t *testing.T) {
+	dir := t.TempDir()
+	tokPath := writeFile(t, dir, "tok", "secret-bot-token-xyz")
+	cfgPath := writeFile(t, dir, "c.yaml", `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -1003651873378
+  admin_user_id: 136513775
+revive:
+  key_file: `+filepath.Join(dir, "missing-revive.key")+`
+`)
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("нет файла ключа -- функция выключена, но бэкенд обязан стартовать: %v", err)
+	}
+	if cfg.Revive.KeyFile != filepath.Join(dir, "missing-revive.key") {
+		t.Fatalf("revive.key_file: %q", cfg.Revive.KeyFile)
+	}
+}

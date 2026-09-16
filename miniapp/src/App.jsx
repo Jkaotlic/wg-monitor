@@ -23,7 +23,7 @@ import { TunnelsTab } from './screens/TunnelsTab.jsx'
 import { Overlay } from './ui/Overlay.jsx'
 import { DiagTab } from './screens/DiagTab.jsx'
 import { EventsTab } from './screens/EventsTab.jsx'
-import { Sheet } from './ui/Sheet.jsx'
+import { SheetHost } from './ui/Sheet.jsx'
 
 function deepLinkRouterID() {
   const params = new URLSearchParams(window.location.search)
@@ -196,13 +196,7 @@ export function App() {
       </div>
       <TabBar tabs={TABS} tab={nav.tab} onTab={(tab) => dispatch({ type: 'tab', tab })} />
       {overlay}
-      {nav.sheet && (
-        <Sheet
-          sheet={nav.sheet}
-          asleep={nav.sheet.asleep}
-          onClose={() => dispatch({ type: 'sheet', sheet: null })}
-        />
-      )}
+      <SheetHost nav={nav} dispatch={dispatch} />
     </>
   )
 }

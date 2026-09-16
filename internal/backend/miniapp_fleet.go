@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 )
 
@@ -36,6 +37,20 @@ type miniappFleetBackend struct {
 	Version         string `json:"version"`
 	LatestVersion   string `json:"latest_version,omitempty"`
 	UpdateAvailable bool   `json:"update_available"`
+}
+
+// miniappFleetRevive -- оживление агента в строке парка. Поимённая проекция
+// revive.IntentView: паролей там нет, и каждое новое поле придётся дописать
+// руками. Тексты причины и опроса сервис части 1 уже отдаёт по-русски.
+type miniappFleetRevive struct {
+	Status        string `json:"status"`
+	ExpiresAt     string `json:"expires_at"`
+	Attempts      int    `json:"attempts"`
+	LastErrorText string `json:"last_error_text"`
+	LastProbeText string `json:"last_probe_text"`
+	// Пустая строка -- опроса ещё не было. Экран считает «N мин назад» от
+	// generated_at этого же ответа, а не от своих часов.
+	LastProbeAt string `json:"last_probe_at"`
 }
 
 // miniappFleetRouter -- одна строка парка. Ни ssh, ни адреса панели, ни
@@ -72,6 +87,12 @@ type miniappFleetRouter struct {
 	// инцидентов). Считает сервер, чтобы лист, итог и строка парка не
 	// расходились с решением «отложено» (final review M1). Без omitempty.
 	Away bool `json:"away"`
+	// PanelAddressKnown -- у роутера записан адрес панели. Самого адреса в
+	// приложении нет (TestMiniappFleetNeverLeaksRouterSecrets): листу
+	// оживления нужно только решить, спрашивать ли его (bronya).
+	PanelAddressKnown bool `json:"panel_address_known"`
+	// Revive -- оживление агента; null, когда его не ставили. Без omitempty.
+	Revive *miniappFleetRevive `json:"revive"`
 }
 
 // miniappFleetUnreachable -- человек, которому бот не может написать.
@@ -109,6 +130,9 @@ type miniappFleetResp struct {
 	Routers     []miniappFleetRouter  `json:"routers"`
 	Notify      miniappFleetNotify    `json:"notify"`
 	Watchdog    *miniappFleetWatchdog `json:"watchdog,omitempty"`
+	// ReviveEnabled -- сервер умеет оживлять (есть ключ). false -- экран
+	// говорит «не настроено» и кнопку не показывает.
+	ReviveEnabled bool `json:"revive_enabled"`
 }
 
 // miniappFleetHandler -- GET /v1/miniapp/fleet. Только админу: радиус у
@@ -178,9 +202,11 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 
 		// Пустой список, а не nil: клиент перебирает это поле, и null уронил
 		// бы экран в тот момент, когда в парке пока ни одного роутера.
+		reviveSvc := miniappRevive(d)
 		resp := miniappFleetResp{
-			GeneratedAt: now.Format(time.RFC3339),
-			Routers:     []miniappFleetRouter{},
+			GeneratedAt:   now.Format(time.RFC3339),
+			ReviveEnabled: reviveSvc != nil && reviveSvc.Enabled(),
+			Routers:       []miniappFleetRouter{},
 			Totals: miniappFleetTotals{
 				Routers:        summary.Totals.Agents,
 				Online:         summary.Totals.Online,
@@ -203,6 +229,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			}
 			if i, ok := usersByID[a.ID]; ok {
 				row.Away, _, _ = miniappWakeWindow(d, &users[i], "self_update", now)
+				row.PanelAddressKnown = users[i].AWGMURL != nil && strings.TrimSpace(*users[i].AWGMURL) != ""
 			}
 			for _, inc := range a.ActiveIncidents {
 				row.Incidents = append(row.Incidents, inc.CheckName)
@@ -225,6 +252,18 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				// не должна пропадать из строки.
 				if strings.TrimSpace(st.LastError) != "" && (st.Version != "" || verdict.Behind || verdict.TooOld) {
 					row.PendingLastErrorText = deployFailureText(st.LastError)
+				}
+			}
+			if reviveSvc != nil {
+				view, err := reviveSvc.StatusFor(a.ID)
+				if err != nil {
+					// Добавка к строке: экран обязан открыться. Текст ошибки
+					// не пишем -- правило файла оживления, только факт.
+					if d.Logger != nil {
+						d.Logger.Warn("сводка парка: состояние оживления не прочитано", "router_id", a.ID)
+					}
+				} else if view != nil {
+					row.Revive = miniappFleetReviveFrom(view)
 				}
 			}
 			resp.Routers = append(resp.Routers, row)
@@ -282,4 +321,18 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		_ = json.NewEncoder(w).Encode(resp)
 	}
+}
+
+func miniappFleetReviveFrom(v *revive.IntentView) *miniappFleetRevive {
+	out := &miniappFleetRevive{
+		Status:        v.Status,
+		ExpiresAt:     v.ExpiresAt.UTC().Format(time.RFC3339),
+		Attempts:      v.Attempts,
+		LastErrorText: v.LastErrorText,
+		LastProbeText: v.LastProbeText,
+	}
+	if !v.LastProbeAt.IsZero() {
+		out.LastProbeAt = v.LastProbeAt.UTC().Format(time.RFC3339)
+	}
+	return out
 }

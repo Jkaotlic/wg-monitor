@@ -549,65 +549,107 @@ func dashboardHandleRepairRepoint(w http.ResponseWriter, r *http.Request, d Deps
 // bootstrap_install against an already-enrolled nickname: same shape as
 // provision-install, but awgm_url comes from the stored row (the repair
 // request carries no awgm_url of its own) and the enrollment token is
-// re-minted fresh.
+// re-minted fresh. The body lives in startRepairReinstall so the agent-revive
+// worker (internal/backend/revive) can run the exact same engine call without
+// an HTTP request; this handler only maps its typed error onto the response.
 func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d Deps, nickname string, user *db.User, req dashboardRepairReq) {
-	awgmURL := strings.TrimSpace(stringValue(user.AWGMURL))
-	if err := validateDashboardAWGMURL(awgmURL); err != nil || awgmURL == "" {
-		writeJSONError(w, http.StatusBadRequest, "no_awgm_url",
-			"agent has no AWG Manager URL — reinstall runs over the awg-manager terminal, set awgm_url first")
+	jobID, version, serr := startRepairReinstall(r.Context(), d, nickname, user, reinstallInput{
+		RootPassword:   req.RootPassword,
+		AWGMLogin:      req.AWGMLogin,
+		AWGMPassword:   req.AWGMPassword,
+		AWGMAPIKey:     req.AWGMAPIKey,
+		Version:        req.Version,
+		AllowDowngrade: req.AllowDowngrade,
+	})
+	if serr != nil {
+		writeJSONError(w, serr.Status, serr.Code, serr.Message)
 		return
 	}
+	if d.Logger != nil {
+		d.Logger.Info("dashboard repair: reinstall started", "nickname", nickname, "job_id", jobID, "version", version)
+	}
+	respondProvisionJobStarted(w, d, jobID, provision.KindRepairReinstall)
+}
 
-	version, err := resolveProvisionVersion(r.Context(), req.Version)
+// reinstallInput -- учётные данные и версия для одной переустановки. Живёт
+// только в памяти на время вызова; ни одно поле не пишется в журнал.
+type reinstallInput struct {
+	RootPassword   string
+	AWGMLogin      string
+	AWGMPassword   string
+	AWGMAPIKey     string
+	Version        string
+	AllowDowngrade bool
+}
+
+// repairStartError -- отказ запуска переустановки: HTTP-статус и код, которые
+// дашборд отдаёт как есть, а оживление переводит в русский текст.
+type repairStartError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *repairStartError) Error() string { return e.Code + ": " + e.Message }
+
+// startRepairReinstall -- тело переустановки без HTTP. Порядок проверок тот
+// же, что был в обработчике: адрес панели, версия, запрет даунгрейда до
+// похода за checksums, публичный адрес, замок до перевыпуска токена, коммит
+// токена только после config_written.
+func startRepairReinstall(ctx context.Context, d Deps, nickname string, user *db.User, in reinstallInput) (jobID, version string, serr *repairStartError) {
+	if d.DB == nil {
+		return "", "", &repairStartError{http.StatusServiceUnavailable, "db_not_configured", "db not configured"}
+	}
+	if d.Provision.Store == nil {
+		return "", "", &repairStartError{http.StatusServiceUnavailable, "provision_not_configured", "provisioning engine not configured"}
+	}
+	awgmURL := strings.TrimSpace(stringValue(user.AWGMURL))
+	if err := validateDashboardAWGMURL(awgmURL); err != nil || awgmURL == "" {
+		return "", "", &repairStartError{http.StatusBadRequest, "no_awgm_url",
+			"agent has no AWG Manager URL — reinstall runs over the awg-manager terminal, set awgm_url first"}
+	}
+
+	version, err := resolveProvisionVersion(ctx, in.Version)
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "latest_version_failed", err.Error())
-		return
+		return "", "", &repairStartError{http.StatusBadGateway, "latest_version_failed", err.Error()}
 	}
 	// Anti-downgrade before the checksums network fetch — same fail-fast order
 	// as dashboardHandleProvisionInstall. user.LastDeployedVersion is already
-	// in hand (dashboardRepairHandler's shared GetByNickname), so rejecting a
-	// downgrade (e.g. rolling back a bad deploy without the explicit override)
-	// costs nothing and skips a wasted GitHub round trip.
-	if !req.AllowDowngrade && isVersionDowngrade(version, stringValue(user.LastDeployedVersion)) {
-		writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
+	// in hand, so rejecting a downgrade costs nothing and skips a wasted
+	// GitHub round trip.
+	if !in.AllowDowngrade && isVersionDowngrade(version, stringValue(user.LastDeployedVersion)) {
+		return "", "", &repairStartError{http.StatusBadRequest, "downgrade_rejected",
 			fmt.Sprintf("target version %s is older than the currently installed %s — pass allow_downgrade to override",
-				version, stringValue(user.LastDeployedVersion)))
-		return
+				version, stringValue(user.LastDeployedVersion))}
 	}
 
-	sums, err := verifiedChecksumsFetcher(r.Context(), releaseDownloadBase, version)
+	sums, err := verifiedChecksumsFetcher(ctx, releaseDownloadBase, version)
 	if err != nil {
-		writeJSONError(w, http.StatusBadGateway, "checksums_failed", err.Error())
-		return
+		return "", "", &repairStartError{http.StatusBadGateway, "checksums_failed", err.Error()}
 	}
 
 	backendURL := strings.TrimRight(strings.TrimSpace(d.PublicBaseURL), "/")
 	if backendURL == "" {
-		writeJSONError(w, http.StatusInternalServerError, "no_public_base_url", "backend PublicBaseURL is not configured")
-		return
+		return "", "", &repairStartError{http.StatusInternalServerError, "no_public_base_url", "backend PublicBaseURL is not configured"}
 	}
 
 	// Single-flight lock BEFORE the token re-mint (see acquireProvisionMintLock):
 	// two concurrent reinstalls of the same nickname must not both re-mint and
-	// desync the winning job's raw token from the stored hash. Held only across
-	// the mint + job-JSON build (no network); released right before Start so
-	// Start's own TryLock re-acquires it. The guarded release covers every
-	// error path below and is a no-op once handed off to Start.
-	release, ok := acquireProvisionMintLock(w, d.Provision.Store, nickname)
+	// desync the winning job's raw token from the stored hash. Released right
+	// before Start so Start's own TryLock re-acquires it.
+	release, ok := tryProvisionMintLock(d.Provision.Store, nickname)
 	if !ok {
-		return
+		return "", "", &repairStartError{http.StatusConflict, "provision_already_running",
+			"provisioning already in progress for this router"}
 	}
 	defer release()
 
-	// Re-mint the enrollment token: the DB only keeps the hash, and a fresh
-	// config.yaml needs the raw token (mirrors dashboardDeployRouterHandler's
-	// existing re-mint-on-every-install convention). The DB write itself is
-	// deferred to the config_written commit hook (see runProvisionInstallCore's
-	// doc) so a failed reinstall never rotates a live agent's token.
+	// Re-mint the enrollment token; the DB write is deferred to the
+	// config_written commit hook so a failed reinstall never rotates a live
+	// agent's token.
 	rawToken, _, kind, err := mintProvisionToken(nickname, user.Kind)
 	if err != nil {
-		writeProvisionEnrollmentError(w, err)
-		return
+		return "", "", provisionEnrollmentStartError(err)
 	}
 	commit := func() error {
 		_, err := d.DB.Users().UpsertEnrollment(nickname, rawToken, kind, int64Value(user.TelegramThreadID))
@@ -616,11 +658,11 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 
 	job := awgmInstallJob{
 		BaseURL:           awgmURL,
-		APIKey:            strings.TrimSpace(req.AWGMAPIKey),
-		Login:             strings.TrimSpace(req.AWGMLogin),
-		Password:          req.AWGMPassword,
+		APIKey:            strings.TrimSpace(in.AWGMAPIKey),
+		Login:             strings.TrimSpace(in.AWGMLogin),
+		Password:          in.AWGMPassword,
 		TerminalUser:      defaultProvisionTerminalUser,
-		TerminalPassword:  req.RootPassword,
+		TerminalPassword:  in.RootPassword,
 		Mode:              "bootstrap_install",
 		Nickname:          nickname,
 		TargetVersion:     version,
@@ -633,13 +675,12 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 	}
 	jobJSON, err := json.Marshal(job)
 	if err != nil {
-		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-		return
+		return "", "", &repairStartError{http.StatusInternalServerError, errCodeInternal, err.Error()}
 	}
 
 	// Hand the single-flight lock off to Start (same nickname, same goroutine).
 	release()
-	jobID, err := d.Provision.Start(provision.StartReq{
+	jobID, err = d.Provision.Start(provision.StartReq{
 		Kind:          provision.KindRepairReinstall,
 		Nickname:      nickname,
 		RelayPath:     resolvedRelayPath(d),
@@ -651,13 +692,9 @@ func dashboardHandleRepairReinstall(w http.ResponseWriter, r *http.Request, d De
 		CommitToken:   commit,
 	})
 	if err != nil {
-		writeProvisionStartError(w, err)
-		return
+		return "", "", provisionEngineStartError(err)
 	}
-	if d.Logger != nil {
-		d.Logger.Info("dashboard repair: reinstall started", "nickname", nickname, "job_id", jobID, "version", version)
-	}
-	respondProvisionJobStarted(w, d, jobID, provision.KindRepairReinstall)
+	return jobID, version, nil
 }
 
 // respondProvisionJobStarted writes the {job_id, steps} response shared by
@@ -791,52 +828,63 @@ func lookupExistingUser(database *db.DB, nickname string) (*db.User, error) {
 // use — kept name-compatible with the request field this endpoint actually
 // has (agent_kind, not kind — kind is the register/provision selector here).
 func writeProvisionEnrollmentError(w http.ResponseWriter, err error) {
+	e := provisionEnrollmentStartError(err)
+	writeJSONError(w, e.Status, e.Code, e.Message)
+}
+
+// provisionEnrollmentStartError -- то же отображение без HTTP.
+func provisionEnrollmentStartError(err error) *repairStartError {
 	switch {
 	case errors.Is(err, errEnrollmentInvalidNickname):
-		writeJSONError(w, http.StatusBadRequest, "invalid_nickname", "nickname must match ^[a-z][a-z0-9_-]{1,15}$")
+		return &repairStartError{http.StatusBadRequest, "invalid_nickname", "nickname must match ^[a-z][a-z0-9_-]{1,15}$"}
 	case errors.Is(err, errEnrollmentInvalidKind):
-		writeJSONError(w, http.StatusBadRequest, "invalid_kind", "agent_kind must be static or mobile")
+		return &repairStartError{http.StatusBadRequest, "invalid_kind", "agent_kind must be static or mobile"}
 	default:
-		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return &repairStartError{http.StatusInternalServerError, errCodeInternal, err.Error()}
 	}
 }
 
 // writeProvisionStartError maps provision.Deps.Start's only documented
 // failure mode (ErrAlreadyRunning) to 409 Conflict, handing its already
-// operator-friendly Error() text straight through — the same convention
-// agent_revive.go's dashboardReviveAgentHandler uses for a relay error's
-// Error() text today (see runner.go's ErrAlreadyRunning doc). This can only
-// fire in the few-ns gap between a mutating handler releasing the pre-mint
-// lock and Start re-acquiring it (acquireProvisionMintLock closes the wide
-// window); it is the same "already running for this router" condition, just
-// caught one lock-hop later.
+// operator-friendly Error() text straight through. This can only fire in the
+// few-ns gap between a mutating handler releasing the pre-mint lock and Start
+// re-acquiring it (acquireProvisionMintLock closes the wide window).
 func writeProvisionStartError(w http.ResponseWriter, err error) {
+	e := provisionEngineStartError(err)
+	writeJSONError(w, e.Status, e.Code, e.Message)
+}
+
+// provisionEngineStartError -- то же отображение без HTTP.
+func provisionEngineStartError(err error) *repairStartError {
 	if errors.Is(err, provision.ErrAlreadyRunning) {
-		writeJSONError(w, http.StatusConflict, "already_running", err.Error())
-		return
+		return &repairStartError{http.StatusConflict, "already_running", err.Error()}
 	}
-	writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+	return &repairStartError{http.StatusInternalServerError, errCodeInternal, err.Error()}
 }
 
 // acquireProvisionMintLock takes the provisioning engine's per-nickname
 // single-flight lock so a token re-mint cannot race a concurrent
 // provision/reinstall for the same router (createAgentEnrollment overwrites
-// token_hash unconditionally, so a double-mint would desync the winning job's
-// raw token from the stored hash and break a live agent's auth). On success
-// it returns an idempotent release func — safe to call BOTH via defer on the
-// error paths AND explicitly right before handing off to Start — and true. On
-// contention it writes a 409 and returns (nil, false).
-//
-// This is the SAME lock provision.Deps.Start acquires internally, so the
-// caller MUST release before calling Start: releasing first, in the same
-// goroutine, avoids a self-deadlock and shrinks the double-mint window from
-// two network round trips (version + checksums) to a few nanoseconds. Callers
-// hold Store non-nil (both mutating handlers 503 on a nil Store up front), so
-// this does not nil-guard it.
+// token_hash unconditionally, so a double-mint would desync the winning
+// job's raw token from the stored hash and break a live agent's auth). On
+// contention it writes a 409 and returns (nil, false). The lock is the SAME
+// one provision.Deps.Start acquires internally, so the caller MUST release
+// before calling Start. Callers hold Store non-nil (both mutating handlers
+// 503 on a nil Store up front), so this does not nil-guard it.
 func acquireProvisionMintLock(w http.ResponseWriter, store *provision.Store, nickname string) (release func(), ok bool) {
-	if !store.TryLock(nickname) {
+	release, ok = tryProvisionMintLock(store, nickname)
+	if !ok {
 		writeJSONError(w, http.StatusConflict, "provision_already_running",
 			"provisioning already in progress for this router")
+		return nil, false
+	}
+	return release, true
+}
+
+// tryProvisionMintLock -- замок без HTTP. release идемпотентен: его безопасно
+// звать и через defer, и явно перед Start.
+func tryProvisionMintLock(store *provision.Store, nickname string) (release func(), ok bool) {
+	if !store.TryLock(nickname) {
 		return nil, false
 	}
 	released := false

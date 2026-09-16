@@ -23,6 +23,7 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/realert"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/replace"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/retention"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/state"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/updatespoll"
@@ -238,6 +239,22 @@ func main() {
 		Logger:   logger.With("component", "provision"),
 	}
 
+	// Оживление агента на выключенном роутере (цикл 2б). Без ключа -- nil, и
+	// маршруты мини-аппа отвечают revive_disabled. Recover (внутри
+	// newReviveService) отрабатывает синхронно, ДО того как Deps.Revive
+	// вообще станет виден HTTP-обработчикам ниже (carry #5).
+	reviveSvc := newReviveService(ctx, cfg, d, provisionDeps, tgClient, logger)
+	if reviveSvc != nil {
+		go reviveSvc.Run(ctx)
+	} else {
+		// Fix round 1, Important #2 (мандатное ревью): без ключа Service.Run
+		// никогда не пройдёт по базе, и просроченные секреты лежали бы в
+		// revive_secrets вечно -- решение оператора «затем стирается»
+		// действует и без ключа. Беспарольный сторож не расшифровывает
+		// ничего, ключ ему не нужен.
+		go revive.RunJanitor(ctx, d, time.Now, revive.DefaultJanitorEvery, logger.With("component", "revive-janitor"))
+	}
+
 	// Мастер замены конфига: задание из шести шагов с откатом. Store общий с
 	// провижном намеренно -- блокировка в нём по имени роутера, и ставить
 	// агента заново посреди замены конфига было бы нельзя в любом случае.
@@ -329,6 +346,7 @@ func main() {
 		PublicBaseURL:             cfg.PublicBaseURL,
 		PublicIP:                  cfg.PublicIP,
 		Provision:                 provisionDeps,
+		Revive:                    reviveSvc,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,
@@ -470,6 +488,11 @@ func main() {
 	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutCancel()
 	_ = srv.Shutdown(shutCtx)
+	// Фоновые проверки оживления (confirmSoon, уведомление итога) пишут в
+	// базу, а d.Close() отложен выше: ждём их, но ограниченно.
+	if reviveSvc != nil && !waitBounded(reviveSvc.Wait, 10*time.Second) {
+		logger.Warn("оживление: фоновые проверки не завершились за 10 с, останавливаемся без них")
+	}
 	watcher.WaitForExit()
 	rp.WaitForExit()
 	logger.Info("backend stopped")

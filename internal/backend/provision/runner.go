@@ -401,6 +401,12 @@ func hintFor(step string, relayErr error) string {
 	}
 }
 
+// HintAuthFailed -- подсказка задания, чей терминал отказал во входе
+// (неверный root-пароль или вход в панель). Экспортирована для оживления
+// агента: по ней ошибка авторизации отличается от прочих и намерение
+// закрывается сразу, без повторов. Текст видит дашборд -- не менять.
+const HintAuthFailed = "root-пароль или awgm-логин не подошёл"
+
 // terminalConnectHint distinguishes the two relay-reported terminal_connected
 // failure classes the design spec calls out by keying off relayErr's text —
 // there is no structured error code from the relay to switch on instead
@@ -417,7 +423,7 @@ func terminalConnectHint(relayErr error) string {
 		return "AWG Manager terminal занят — закрой сессию в web-UI и повтори"
 	case strings.Contains(msg, "auth_failed") || strings.Contains(msg, "success=false") ||
 		strings.Contains(msg, "unauthorized") || strings.Contains(msg, "401") || strings.Contains(msg, "403"):
-		return "root-пароль или awgm-логин не подошёл"
+		return HintAuthFailed
 	default:
 		return "не удалось подключиться к AWG Manager terminal — проверь awgm_url и доступность роутера"
 	}
