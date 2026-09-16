@@ -179,7 +179,7 @@ func main() {
 	fmt.Printf("  база:   %s\n", path)
 	fmt.Printf("  адрес:  http://%s/miniapp/\n", *addr)
 	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
-	fmt.Printf("  дашборд: http://%s/dashboard/ (токен %s)\n\n", *addr, sandboxDashboardToken)
+	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), старый дашборд: /dashboard/classic/\n\n", *addr, sandboxDashboardToken)
 
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)

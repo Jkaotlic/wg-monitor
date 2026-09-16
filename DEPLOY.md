@@ -37,8 +37,15 @@ shows it to the operator for password-manager storage.
 
 ## VPS Dashboard
 
-`wg-monitor-backend` can serve an optional local-assets dashboard at `/dashboard/`.
-It uses the same backend command queue and deploy endpoints as the wizard:
+`wg-monitor-backend` can serve optional browser control at `/dashboard/`:
+
+- `/dashboard/` — the mini app itself in a regular browser (no Telegram needed);
+  sign in with the dashboard token or a personal link issued from the mini app
+  «Настройки». The browser session acts as the configured Telegram admin.
+- `/dashboard/classic/` — the legacy dashboard described below, kept until its
+  functions move into the app.
+
+The legacy dashboard uses the same backend command queue and deploy endpoints as the wizard:
 fleet summary, safe agent commands, AWG Manager service restart, agent
 self-update, backend-update queueing, and command-result polling.
 
@@ -59,8 +66,8 @@ dashboard:
   token_file: /etc/wg-monitor/dashboard-token.txt
 ```
 
-Restart `wg-monitor-backend` and open `https://<backend-domain>/dashboard/`.
-Open `/dashboard/login` and paste the token there. The backend validates it and
+Restart `wg-monitor-backend` and open `https://<backend-domain>/dashboard/`
+(or `/dashboard/classic/login` for the legacy dashboard) and paste the token there. The backend validates it and
 sets an `HttpOnly`, `SameSite=Strict` `wg_dashboard_session` cookie; the browser
 does not store the dashboard token in local storage. The JSON dashboard API also
 continues to accept `Authorization: Bearer <token>` for scripted operator calls.
