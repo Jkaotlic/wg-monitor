@@ -2515,3 +2515,574 @@ body {
 .park-switch[aria-checked='true'] .park-switch-thumb {
   transform: translateX(16px);
 }
+
+/* ============================================================
+   Веб-управление: экран входа, мостик к классическому
+   ------------------------------------------------------------
+   Живёт на любой ширине: в браузер заходят и с телефона.
+   ============================================================ */
+.login {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: var(--sp-5) var(--sp-4);
+  background:
+    radial-gradient(120% 60% at 50% 0%, color-mix(in srgb, var(--sig) 7%, transparent), transparent 60%),
+    var(--bg);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-5);
+  background: var(--surf);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-hero);
+}
+
+.login-brand {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.login-title {
+  margin: 0;
+  font-size: var(--fs-xxl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  color: var(--ink);
+}
+
+.login-lead {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.login-notice {
+  margin: 0;
+  padding: var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+  color: var(--warn);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+}
+
+.login-error {
+  margin: calc(-1 * var(--sp-2)) 0 0;
+  font-size: var(--fs-sm);
+}
+
+.login :is(button, input):focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 2px;
+}
+
+.park-classic {
+  display: block;
+  margin-top: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--accent);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  text-decoration: none;
+}
+
+.park-classic:hover,
+.park-classic:focus-visible {
+  background: var(--surf2);
+}
+
+.app-header-logout {
+  color: var(--dim);
+}
+
+/* ============================================================
+   Широкая раскладка (≥ 1024 px): браузер и развёрнутый Telegram Desktop
+   ------------------------------------------------------------
+   Не растянутый телефон: колонка роутеров слева, панели карточками на
+   фоне, воздух 24–32 px. Всё под классом оболочки wide-shell -- телефонные правила выше
+   не тронуты, а оболочку с этим классом рисует только WideLayout.
+   ============================================================ */
+@media (min-width: 1024px) {
+  .wide-shell {
+    display: grid;
+    grid-template-columns: 288px minmax(0, 1fr);
+    min-height: 100dvh;
+    background: var(--bg);
+  }
+
+  /* --- Боковая колонка --- */
+  .side {
+    position: sticky;
+    top: 0;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-5);
+    padding: var(--sp-6) var(--sp-4) var(--sp-5);
+    background: var(--surf);
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+  }
+
+  .side-brand {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 var(--sp-3);
+  }
+
+  .side-brand-name {
+    font-family: var(--font-mono);
+    font-size: var(--fs-md);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--ink);
+  }
+
+  .side-brand-mode {
+    font-size: var(--fs-xs);
+    color: var(--dim);
+  }
+
+  .side-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 var(--sp-3);
+    margin-bottom: calc(-1 * var(--sp-3));
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  .side-count {
+    font-family: var(--font-mono);
+  }
+
+  .side-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .side-row,
+  .side-link {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    width: 100%;
+    padding: 10px var(--sp-3);
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--ink);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+
+  .side-row:hover,
+  .side-link:hover:not(:disabled) {
+    background: var(--surf2);
+  }
+
+  .side-row-current {
+    background: color-mix(in srgb, var(--sig) 8%, transparent);
+    box-shadow: inset 2px 0 0 var(--sig);
+  }
+
+  .side-row-current:hover {
+    background: color-mix(in srgb, var(--sig) 12%, transparent);
+  }
+
+  .side-dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin-top: 7px;
+    border-radius: 50%;
+    background: var(--dim);
+  }
+
+  .side-dot-ok { background: var(--ok); }
+  .side-dot-warn { background: var(--warn); }
+  .side-dot-danger { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 20%, transparent); }
+  .side-dot-muted { background: var(--dim); }
+
+  .side-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+  }
+
+  .side-row-name {
+    font-size: var(--fs-md);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .side-row-state {
+    font-size: var(--fs-xs);
+    color: var(--dim);
+  }
+
+  .side-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-top: var(--sp-4);
+    border-top: 1px solid var(--line);
+  }
+
+  .side-link {
+    align-items: center;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--dim);
+  }
+
+  .side-link:hover:not(:disabled) { color: var(--ink); }
+  .side-link-active { color: var(--sig); }
+  .side-link:disabled { opacity: 0.45; cursor: default; }
+
+  /* --- Основная область --- */
+  .main {
+    min-width: 0;
+    padding: 0 var(--sp-6) calc(var(--sp-6) * 1.5);
+  }
+
+  .main-head,
+  .main-content {
+    max-width: 1180px;
+    margin-inline: auto;
+  }
+
+  .main-head {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-4) var(--sp-5);
+    padding: var(--sp-5) 0 var(--sp-4);
+    background: var(--bg);
+    border-bottom: 1px solid var(--line);
+  }
+
+  .main-head-id {
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+
+  .main-head-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--sp-2) var(--sp-3);
+  }
+
+  .main-head-name {
+    margin: 0;
+    font-size: calc(var(--fs-xl) + 4px);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+
+  .main-head-sub {
+    margin: 4px 0 0;
+    font-size: var(--fs-sm);
+    color: var(--dim);
+  }
+
+  .main-tabs {
+    display: flex;
+    gap: 2px;
+    padding: 4px;
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-pill);
+  }
+
+  .main-tab {
+    min-height: 36px;
+    padding: 0 var(--sp-4);
+    border: none;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--dim);
+    font-family: inherit;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast);
+  }
+
+  .main-tab:hover { color: var(--ink); background: var(--surf2); }
+  .main-tab-active,
+  .main-tab-active:hover { background: var(--sig); color: var(--on-sig); }
+
+  .main-gear {
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: var(--surf);
+    color: var(--dim);
+    cursor: pointer;
+    transition: color var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .main-gear:hover { color: var(--ink); border-color: var(--border-strong); }
+
+  .main-content {
+    padding-top: var(--sp-5);
+  }
+
+  /* Длинные списки читаются хуже в ширину: одна колонка до 820 px, прижата
+     к левому краю под шапкой, чтобы край заголовка и край текста совпадали. */
+  .main-content-narrow > * {
+    max-width: 820px;
+  }
+
+  .wide-shell .screen {
+    padding: 0;
+  }
+
+  .wide-shell .screen-title {
+    font-size: calc(var(--fs-xl) + 4px);
+    margin-bottom: var(--sp-5);
+  }
+
+  .wide-shell .section {
+    margin-top: var(--sp-6);
+  }
+
+  /* --- «Сейчас» --- */
+  .now-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-5);
+    align-items: start;
+  }
+
+  .now-main,
+  .now-side {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    min-width: 0;
+  }
+
+  /* Отступы между блоками задаёт gap колонки; встроенные margin-top у
+     плиток и резерва (style="margin-top:12px") здесь лишние. */
+  .now-main > *,
+  .now-side > *,
+  .now-side > .section:first-child {
+    margin-top: 0 !important;
+  }
+
+  @media (min-width: 1200px) {
+    .now-grid {
+      grid-template-columns: minmax(0, 7fr) minmax(320px, 5fr);
+      gap: var(--sp-6);
+    }
+  }
+
+  @media (max-width: 1199px) {
+    .now-grid {
+      max-width: 820px;
+    }
+  }
+
+  /* --- Оверлеи в основной области --- */
+  .wide-shell .overlay {
+    position: static;
+    inset: auto;
+    z-index: auto;
+    display: block;
+    background: transparent;
+  }
+
+  .wide-shell .overlay-head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
+    padding: 0 0 var(--sp-5);
+    border-bottom: none;
+  }
+
+  .wide-shell .overlay-back {
+    padding: 6px var(--sp-3) 6px var(--sp-2);
+    margin-left: calc(-1 * var(--sp-2));
+    border-radius: var(--radius-pill);
+    transition: background var(--transition-fast);
+  }
+
+  .wide-shell .overlay-back:hover { background: var(--surf2); }
+
+  .wide-shell .overlay-title {
+    font-size: calc(var(--fs-xl) + 4px);
+    font-weight: 700;
+    line-height: var(--lh-tight);
+  }
+
+  .wide-shell .overlay-body {
+    overflow: visible;
+    padding-bottom: 0;
+  }
+
+  /* --- Лист подтверждения: модальное окно --- */
+  .wide-shell .sheet-layer {
+    justify-content: center;
+    align-items: center;
+    padding: var(--sp-6);
+  }
+
+  .wide-shell .sheet-scrim {
+    background: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(2px);
+  }
+
+  .wide-shell .sheet {
+    width: 520px;
+    max-width: 100%;
+    max-height: calc(100dvh - 2 * var(--sp-6));
+    padding: var(--sp-6);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-hero);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+    animation: modal-in 160ms ease-out;
+  }
+
+  .wide-shell .sheet-grip { display: none; }
+
+  .wide-shell .sheet-actions {
+    justify-content: flex-end;
+  }
+
+  .wide-shell .sheet-actions .btn {
+    flex: 0 0 auto;
+    min-width: 140px;
+  }
+
+  /* --- Сводка парка --- */
+  .fleet-counts {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--sp-4);
+  }
+
+  .fleet-count {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-5);
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-top: 2px solid var(--line);
+    border-radius: var(--radius);
+  }
+
+  .fleet-count-ok { border-top-color: var(--ok); }
+  .fleet-count-attention { border-top-color: var(--bad); }
+  .fleet-count-silent { border-top-color: var(--warn); }
+
+  .fleet-count-value {
+    font-family: var(--font-mono);
+    font-size: 2.25rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--ink);
+  }
+
+  .fleet-count-label {
+    font-size: var(--fs-sm);
+    color: var(--dim);
+  }
+
+  .fleet-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--sp-3);
+  }
+
+  .fleet-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    padding: var(--sp-4);
+    background: var(--surf);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--ink);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition-fast), border-color var(--transition-fast);
+  }
+
+  .fleet-card:hover { background: var(--surf2); border-color: var(--border-strong); }
+
+  .fleet-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--sp-2);
+  }
+
+  .fleet-card-sub {
+    font-size: var(--fs-sm);
+    color: var(--dim);
+  }
+
+  .fleet-home-recheck .hint { margin-top: var(--sp-2); }
+
+  /* --- Наведение и фокус (в телефонной раскладке наведения нет) --- */
+  .wide-shell :is(.nav-card, .action-tile, .list-row-btn):hover {
+    background: var(--surf2);
+  }
+
+  .wide-shell .btn-ghost:hover:not(:disabled) {
+    background: var(--surf2);
+  }
+
+  .wide-shell .btn-primary:hover:not(:disabled),
+  .wide-shell .btn-danger:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+
+  .wide-shell :is(button, a, summary, select, input, textarea):focus-visible {
+    outline: 2px solid var(--sig);
+    outline-offset: 2px;
+  }
+}
+
+@keyframes modal-in {
+  from { transform: translateY(8px) scale(0.98); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
