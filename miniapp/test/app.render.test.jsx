@@ -195,4 +195,22 @@ describe('оболочка: Telegram', () => {
     expect(window.location.pathname + window.location.search).toBe('/miniapp/?router=2')
     cleanup(root)
   })
+
+  it('401 посреди работы -- в Telegram нет ни экрана входа, ни «Сессия закончилась»', async () => {
+    const root = await mountAt('/miniapp/?router=2')
+    vi.stubGlobal('fetch', async () => ({ ok: false, status: 401, json: async () => ({ code: 'unauthorized' }) }))
+    await act(async () => { await real.fetchRouter(2).catch(() => {}) })
+    await flush()
+    expect(root.textContent).not.toContain('Токен доступа')
+    expect(root.textContent).not.toContain('Сессия закончилась')
+    expect(root.textContent).toContain('Сейчас 2')
+    cleanup(root)
+  })
+
+  it('ссылка из тревоги: tab=routes и open=settings открываются и в Telegram', async () => {
+    const root = await mountAt('/miniapp/?router=2&tab=routes&open=settings')
+    expect(root.querySelector('.app-body .stub').textContent).toBe('VPN-туннели')
+    expect(root.querySelector('.stub-settings')).toBeTruthy()
+    cleanup(root)
+  })
 })
