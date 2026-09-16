@@ -66,6 +66,32 @@ describe('useNavURL', () => {
     render(null, root)
   })
 
+  it('popstate на нормализуемый адрес -- замена, а не новая запись: «вперёд» не стирается', async () => {
+    const root = await mount()
+    const before = window.history.length
+    window.history.replaceState(null, '', '/dashboard/?router=99&tab=diag')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    // Роутера 99 нет -- адрес приводится к списку, но истории не прибавляется.
+    expect(api.nav.routerID).toBe(null)
+    expect(window.location.pathname + window.location.search).toBe('/dashboard/')
+    expect(window.history.length).toBe(before)
+    // Следующее обычное действие снова пишет запись.
+    await act(async () => api.dispatch({ type: 'router', id: 3 }))
+    expect(window.location.search).toBe('?router=3')
+    expect(window.history.length).toBe(before + 1)
+    render(null, root)
+  })
+
+  it('popstate с псевдонимом tab=routes -- адрес заменяется на tab=tunnels', async () => {
+    const root = await mount()
+    const before = window.history.length
+    window.history.replaceState(null, '', '/dashboard/?router=7&tab=routes')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(window.location.search).toBe('?router=7&tab=tunnels')
+    expect(window.history.length).toBe(before)
+    render(null, root)
+  })
+
   it('выключенный (Telegram) адрес не трогает', async () => {
     window.history.replaceState(null, '', '/miniapp/?router=7')
     const root = await mount(false)

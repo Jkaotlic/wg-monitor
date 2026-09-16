@@ -28,8 +28,17 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], basePath = '
 
   useEffect(() => {
     if (!enabled) return undefined
-    const onPop = () => dispatch({ type: 'init', state: navFromURL(window.location.search, idsRef.current) })
+    // «Назад»/«вперёд» браузера: навигация берётся из адреса, а нормализованный
+    // адрес (удалённый роутер, старый tab=routes) пишется сразу заменой. Иначе
+    // эффект выше счёл бы его новым местом и сделал pushState -- а новая запись
+    // стирает историю «вперёд».
+    const onPop = () => {
+      const state = navFromURL(window.location.search, idsRef.current)
+      const next = basePath + urlFromNav(state)
+      if (next !== window.location.pathname + window.location.search) window.history.replaceState(null, '', next)
+      dispatch({ type: 'init', state })
+    }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
-  }, [enabled])
+  }, [enabled, basePath])
 }
