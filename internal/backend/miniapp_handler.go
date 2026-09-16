@@ -15,7 +15,7 @@ import (
 
 func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimiter) {
 	reqID := requestIDMiddleware()
-	auth := MiniAppAuthMiddleware(d.TelegramBotToken, d.Logger)
+	auth := MiniAppAuthMiddleware(d.TelegramBotToken, d.DashboardToken, d.TelegramAdminUserID, d.Logger)
 	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
 
 	staticFS, err := fs.Sub(miniappStaticFS, "miniapp_static")
@@ -36,6 +36,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("GET /{$}", reqID(http.RedirectHandler("/miniapp/", http.StatusFound)))
 
 	mux.Handle("POST /v1/miniapp/session", reqID(entranceLimit(miniappSessionHandler(d))))
+	// Кто я -- для браузерного входа: там нет initData, и сессия уже есть
+	// (кука дашборда). Telegram-клиент этим маршрутом не пользуется.
+	mux.Handle("GET /v1/miniapp/session", reqID(auth(miniappWhoAmIHandler(d))))
 	// Ссылка на веб-управление -- только админу; гейт внутри хендлера, отказ
 	// 404, как у остальных поверхностей мини-аппа.
 	mux.Handle("POST /v1/miniapp/web-link", reqID(auth(webLinkIssueHandler(d))))
@@ -94,9 +97,10 @@ type miniappSessionReq struct {
 }
 
 type miniappSessionResp struct {
-	OK             bool  `json:"ok"`
-	TelegramUserID int64 `json:"telegram_user_id"`
-	IsAdmin        bool  `json:"is_admin"`
+	OK             bool       `json:"ok"`
+	TelegramUserID int64      `json:"telegram_user_id"`
+	IsAdmin        bool       `json:"is_admin"`
+	Via            miniappVia `json:"via"`
 }
 
 func miniappSessionHandler(d Deps) http.HandlerFunc {
@@ -120,6 +124,22 @@ func miniappSessionHandler(d Deps) http.HandlerFunc {
 			OK:             true,
 			TelegramUserID: user.ID,
 			IsAdmin:        miniappIsAdmin(user.ID, d.TelegramAdminUserID),
+			Via:            miniappViaTelegram,
+		})
+	}
+}
+
+// miniappWhoAmIHandler -- кто я для уже открытой сессии (кука мини-аппа или
+// кука веб-управления); новой куки не выпускает.
+func miniappWhoAmIHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, _ := miniappUserFromContext(r.Context())
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_ = json.NewEncoder(w).Encode(miniappSessionResp{
+			OK:             true,
+			TelegramUserID: uid,
+			IsAdmin:        miniappIsAdmin(uid, d.TelegramAdminUserID),
+			Via:            miniappViaFromContext(r.Context()),
 		})
 	}
 }
