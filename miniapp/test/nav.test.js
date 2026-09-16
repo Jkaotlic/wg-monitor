@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, normalizeTab, escapeAction } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -152,10 +152,47 @@ describe('подписи вкладок', () => {
 // Кнопка «Панель роутера» из бота ведёт сразу в настройки роутера, а не на
 // главный экран, где настройки пришлось бы искать.
 describe('deepLinkOverlay', () => {
-  it('open=settings открывает настройки только вместе с роутером', () => {
-    expect(deepLinkOverlay('?router=7&open=settings', { routerID: 7 })).toBe('settings')
-    expect(deepLinkOverlay('?router=7&open=settings', { routerID: null })).toBe(null)
+  it('открывает любой оверлей роутера, но только вместе с роутером', () => {
+    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset']) {
+      expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(o)
+      expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: null })).toBe(null)
+    }
+    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset'])
+  })
+
+  it('без open и с неизвестным open -- ничего', () => {
     expect(deepLinkOverlay('?router=7', { routerID: 7 })).toBe(null)
-    expect(deepLinkOverlay('?router=7&open=admin', { routerID: 7 })).toBe(null)
+    expect(deepLinkOverlay('?router=7&open=fleet', { routerID: 7 })).toBe(null)
+    expect(deepLinkOverlay('?router=7&open=rm-rf', { routerID: 7 })).toBe(null)
+  })
+})
+
+describe('вкладка с закрытием оверлея', () => {
+  it('closeOverlay закрывает оверлей и лист', () => {
+    const s = { routerID: 1, tab: 'router', overlay: 'settings', sheet: { title: 'x' } }
+    expect(navReducer(s, { type: 'tab', tab: 'diag', closeOverlay: true })).toEqual({ routerID: 1, tab: 'diag', overlay: null, sheet: null })
+  })
+
+  it('без closeOverlay поведение прежнее', () => {
+    const s = { routerID: 1, tab: 'router', overlay: 'settings', sheet: null }
+    expect(navReducer(s, { type: 'tab', tab: 'diag' }).overlay).toBe('settings')
+  })
+
+  it('неизвестная вкладка не закрывает и оверлей', () => {
+    const s = { routerID: 1, tab: 'router', overlay: 'settings', sheet: null }
+    expect(navReducer(s, { type: 'tab', tab: 'nope', closeOverlay: true })).toBe(s)
+  })
+
+  it('normalizeTab знает псевдоним routes', () => {
+    expect(normalizeTab('routes')).toBe('tunnels')
+    expect(normalizeTab('diag')).toBe('diag')
+  })
+})
+
+describe('escapeAction', () => {
+  it('Esc закрывает оверлей, лист оставляет самому листу', () => {
+    expect(escapeAction({ overlay: 'settings', sheet: null })).toEqual({ type: 'back' })
+    expect(escapeAction({ overlay: 'settings', sheet: { title: 'x' } })).toBe(null)
+    expect(escapeAction({ overlay: null, sheet: null })).toBe(null)
   })
 })
