@@ -2,6 +2,7 @@ package tg
 
 import (
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -29,4 +30,35 @@ func MiniAppURL(base string) string {
 		return ""
 	}
 	return strings.TrimRight(base, "/") + "/miniapp/"
+}
+
+// MiniAppRouterTabURL -- экран роутера сразу на вкладке и слое: кнопка
+// «Открыть в приложении» под панелями бота, откуда ушли VPN-туннели и
+// маршруты (цикл 4). tab -- ключ вкладки (router|tunnels|diag|events), open --
+// слой (routes, settings, …) или "". Ключи -- адреса мини-аппа (miniapp/src/nav.js,
+// TABS и OPEN_OVERLAYS). Не https -- пусто.
+func MiniAppRouterTabURL(base string, routerUserID int64, tab, open string) string {
+	u := MiniAppRouterURL(base, routerUserID)
+	if u == "" {
+		return ""
+	}
+	if tab != "" {
+		u += "&tab=" + url.QueryEscape(tab)
+	}
+	if open != "" {
+		u += "&open=" + url.QueryEscape(open)
+	}
+	return u
+}
+
+// IsPrivateChat -- личка с человеком. У Telegram id лички положительный (он
+// же id человека), у групп и каналов -- отрицательный. Кнопку web_app Telegram
+// принимает только в личке.
+func IsPrivateChat(chatID int64) bool {
+	return chatID > 0
+}
+
+// OpenInAppButton -- кнопка web_app «Открыть в приложении» с готовым адресом.
+func OpenInAppButton(appURL string) InlineKeyboardButton {
+	return InlineKeyboardButton{Text: "📱 Открыть в приложении", WebApp: &WebAppInfo{URL: appURL}}
 }

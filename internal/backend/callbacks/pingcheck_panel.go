@@ -35,6 +35,9 @@ type PingCheckEditTG interface {
 type PingCheckPanelNotifier struct {
 	TG PingCheckEditTG
 	DB *db.DB
+	// AppBaseURL -- публичный адрес бэкенда: в личке под ошибкой -- кнопка
+	// «Открыть в приложении» вместо ушедших панелей туннелей и маршрутов.
+	AppBaseURL string
 }
 
 // NotifyCommandResult dispatches on ref.Action. Returns nil for actions
@@ -99,19 +102,24 @@ func (n *PingCheckPanelNotifier) renderErr(ctx context.Context, ref cmdpkg.Messa
 		Hint:    hint,
 	}
 	body := card.Render(alerts.CardOpts{MaxBytes: 3500})
-	kb := pingcheckErrorRecoveryKeyboard(user.ID)
+	appURL := ""
+	if tg.IsPrivateChat(ref.ChatID) {
+		appURL = tg.MiniAppRouterTabURL(n.AppBaseURL, user.ID, "tunnels", "")
+	}
+	kb := pingcheckErrorRecoveryKeyboard(user.ID, appURL)
 	return n.TG.EditMessageText(ctx, ref.ChatID, ref.MessageID, body, "", &kb)
 }
 
-func pingcheckErrorRecoveryKeyboard(userID int64) tg.InlineKeyboardMarkup {
-	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
+func pingcheckErrorRecoveryKeyboard(userID int64, appURL string) tg.InlineKeyboardMarkup {
+	rows := [][]tg.InlineKeyboardButton{{
 		{Text: "🔄 Повторить", CallbackData: fmt.Sprintf("pingcheck_open:%d:_panel_", userID)},
 	}, {
 		{Text: "🩺 Проверка", CallbackData: fmt.Sprintf("router_doctor:%d:_menu", userID)},
-		{Text: "🎛 Туннели", CallbackData: fmt.Sprintf("tunnels_refresh:%d:_panel_", userID)},
-	}, {
-		{Text: "🛣 Маршруты", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", userID)},
-	}}}
+	}}
+	if appURL != "" {
+		rows = append(rows, []tg.InlineKeyboardButton{tg.OpenInAppButton(appURL)})
+	}
+	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 // decodePingCheckStatus converts the awg-mgr passthrough JSON into the

@@ -1208,6 +1208,11 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 	// Кэша версий в памяти бота больше нет (он жил ради панели обслуживания):
 	// блок обновлений берётся из снимка в базе.
 	args.Updates = updatesFromCacheOrSnapshot(ctx, r.d, r.upstream, wire.VersionAudit{}, false, user.ID)
+	// Перезапуск и удаление VPN-туннелей и маршруты -- в приложении (цикл 4).
+	// Кнопку web_app Telegram принимает только в личке.
+	if tg.IsPrivateChat(m.Chat.ID) {
+		args.AppURL = tg.MiniAppRouterTabURL(r.cfg.PublicBaseURL, user.ID, "tunnels", "")
+	}
 	text, inline := alerts.FormatSmartReply(args)
 	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
 	// — TG accepts only one reply_markup per send. When FormatSmartReply
@@ -2147,7 +2152,7 @@ func (r *Router) SetDiagDrillDown() {
 // NewPingCheckNotifier returns a PingCheckPanelNotifier wired against this
 // router's TG client and DB. Pass the returned value into handler.Deps.PingCheckNotifier.
 func (r *Router) NewPingCheckNotifier() *PingCheckPanelNotifier {
-	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d}
+	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d, AppBaseURL: r.cfg.PublicBaseURL}
 }
 
 // shortToast -- текст ошибки, укороченный под всплывашку Telegram (200 знаков).

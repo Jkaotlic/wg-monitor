@@ -204,13 +204,12 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 			t.Errorf("Degraded missing %q in:\n%s", want, text)
 		}
 	}
-	// inline kb: single row [Перезапуск][Тест связи] — details button removed.
+	// inline kb: [Тест связи]; перезапуск туннеля -- в приложении (цикл 4).
 	if len(kb.InlineKeyboard) < 1 {
 		t.Fatalf("Degraded keyboard rows: %d, want ≥1", len(kb.InlineKeyboard))
 	}
 	want := map[string]bool{
-		"tunnel_restart:7:tunnel_awg11:Wireguard3": true,
-		"pingcheck_now:7:tunnel_awg11":             true,
+		"pingcheck_now:7:tunnel_awg11": true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
@@ -219,53 +218,6 @@ func TestFormatSmartReply_Degraded(t *testing.T) {
 	}
 	for k := range want {
 		t.Errorf("Degraded missing button: %s", k)
-	}
-}
-
-func TestFormatSmartReply_DoesNotFallbackTunnelRestartToAwgManagerRestart(t *testing.T) {
-	cases := []struct {
-		name string
-		args SmartReplyArgs
-	}{
-		{
-			name: "degraded",
-			args: SmartReplyArgs{
-				Nickname:      "vasya",
-				UserID:        7,
-				LastReportAge: 10 * time.Second,
-				Tunnels: []TunnelView{{
-					Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 200, PingStatus: "ok",
-				}},
-			},
-		},
-		{
-			name: "hard",
-			args: SmartReplyArgs{
-				Nickname:      "vasya",
-				UserID:        7,
-				LastReportAge: 10 * time.Second,
-				Tunnels:       []TunnelView{{Name: "amnezia", CheckName: "tunnel_awg11", HandshakeAge: 250, PingStatus: "dead"}},
-				ActiveIncidents: []IncidentView{{
-					CheckName: "tunnel_awg11",
-					HardSince: time.Now().Add(-4 * time.Minute),
-					FailCount: 5,
-				}},
-			},
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, kb := FormatSmartReply(tc.args)
-			if hasSmartReplyCallbackPrefix(kb, "restart_tunnel:") {
-				t.Fatalf("missing NDMSName must not fallback to awg-manager restart, kb=%+v", kb)
-			}
-			if hasSmartReplyButtonText(kb, "Перезапустить туннель") {
-				t.Fatalf("missing NDMSName must not render per-tunnel restart button, kb=%+v", kb)
-			}
-			if !hasSmartReplyCallbackPrefix(kb, "tunnels_refresh:") {
-				t.Fatalf("missing NDMSName should offer live tunnels panel instead, kb=%+v", kb)
-			}
-		})
 	}
 }
 
@@ -324,12 +276,11 @@ func TestFormatSmartReply_Hard(t *testing.T) {
 			t.Errorf("Hard missing %q in:\n%s", want, text)
 		}
 	}
-	// inline kb must contain restart + diag + silence (details/last_report
-	// buttons were removed in 2026-05-06 — no working handler).
+	// inline kb must contain diag + silence (details/last_report buttons were
+	// removed in 2026-05-06; restart moved to the app in cycle 4).
 	want := map[string]bool{
-		"tunnel_restart:7:tunnel_awg11:Wireguard3": true,
-		"diag_now:7:tunnel_awg11":                  true,
-		"silence:7:tunnel_awg11:1h":                true,
+		"diag_now:7:tunnel_awg11":   true,
+		"silence:7:tunnel_awg11:1h": true,
 	}
 	for _, row := range kb.InlineKeyboard {
 		for _, b := range row {
@@ -369,8 +320,8 @@ func TestFormatSmartReply_HardDNSShowsHumanIncidentDetails(t *testing.T) {
 		"2 из 4 DNS-серверов не отвечают",
 		"Germany backup (Wireguard3 / nwg3)",
 		"RKN-блокировок не видно",
-		"Открой 🎛 Туннели",
-		"затем 🛣 Маршруты",
+		"Открой VPN-туннели в приложении",
+		"в «Маршрутах», перенеси DNS/HR-Neo правила",
 	} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q in:\n%s", want, text)
@@ -531,27 +482,49 @@ func TestFormatSmartReply_EmptyUpdatesHidesSection(t *testing.T) {
 	}
 }
 
-func TestFormatSmartReply_MultiTunnelHardSplit(t *testing.T) {
-	a := SmartReplyArgs{
-		Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
-		Tunnels: []TunnelView{
-			{Name: "amnezia", CheckName: "tunnel_awg11", NDMSName: "Wireguard1", HandshakeAge: 250, PingStatus: "dead"},
-			{Name: "secondary", CheckName: "tunnel_awg12", NDMSName: "Wireguard2", HandshakeAge: 200, PingStatus: "dead"},
+// Цикл 4: панель VPN-туннелей и её перезапуск ушли из бота. Ни одна строка
+// умного ответа не ведёт в удалённые кнопки -- с именем NDMS и без, при одной
+// тревоге и при нескольких туннелях; кнопка приложения -- последним рядом и
+// только если адрес передан.
+func TestFormatSmartReply_NoRemovedTunnelButtons(t *testing.T) {
+	const appURL = "https://wgmon.example.com/miniapp/?router=7&tab=tunnels"
+	cases := map[string]SmartReplyArgs{
+		"degraded": {
+			Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+			Tunnels: []TunnelView{
+				{Name: "amnezia", CheckName: "tunnel_awg11", NDMSName: "Wireguard3", HandshakeAge: 200, PingStatus: "ok"},
+				{Name: "opkg", CheckName: "tunnel_awg12", HandshakeAge: 200, PingStatus: "ok"},
+			},
 		},
-		ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-2 * time.Minute), FailCount: 5}},
+		"hard": {
+			Nickname: "vasya", UserID: 7, LastReportAge: 10 * time.Second,
+			Tunnels: []TunnelView{
+				{Name: "amnezia", CheckName: "tunnel_awg11", NDMSName: "Wireguard1", HandshakeAge: 250, PingStatus: "dead"},
+				{Name: "secondary", CheckName: "tunnel_awg12", NDMSName: "Wireguard2", HandshakeAge: 200, PingStatus: "dead"},
+			},
+			ActiveIncidents: []IncidentView{{CheckName: "tunnel_awg11", HardSince: time.Now().Add(-2 * time.Minute), FailCount: 5}},
+		},
 	}
-	_, kb := FormatSmartReply(a)
-	// must have at least one row per tunnel for restart
-	want := map[string]bool{
-		"tunnel_restart:7:tunnel_awg11:Wireguard1": true,
-		"tunnel_restart:7:tunnel_awg12:Wireguard2": true,
-	}
-	for _, row := range kb.InlineKeyboard {
-		for _, b := range row {
-			delete(want, b.CallbackData)
-		}
-	}
-	for k := range want {
-		t.Errorf("multi-tunnel missing %s", k)
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			for _, url := range []string{"", appURL} {
+				args.AppURL = url
+				text, kb := FormatSmartReply(args)
+				for _, prefix := range []string{"tunnel_restart:", "restart_tunnel:", "tunnels_refresh:", "routes_open:"} {
+					if hasSmartReplyCallbackPrefix(kb, prefix) {
+						t.Fatalf("кнопка удалённой панели %q: %+v", prefix, kb)
+					}
+				}
+				if hasSmartReplyButtonText(kb, "Перезапуск") || strings.Contains(text, "🎛") || strings.Contains(text, "🛣") {
+					t.Fatalf("умный ответ отсылает в удалённую панель:\n%s\n%+v", text, kb)
+				}
+				rows := kb.InlineKeyboard
+				last := rows[len(rows)-1]
+				hasApp := len(last) == 1 && last[0].WebApp != nil && last[0].WebApp.URL == appURL
+				if hasApp != (url != "") {
+					t.Fatalf("AppURL=%q: последний ряд %+v", url, last)
+				}
+			}
+		})
 	}
 }

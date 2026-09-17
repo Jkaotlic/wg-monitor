@@ -198,7 +198,7 @@ func main() {
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
 	cb.SetRoutesCache(routesCache)
-	notifier.TunnelsRefreshSink = cmdQueue
+	notifier.AppBaseURL = cfg.PublicBaseURL
 	routesNotifier := &callbacks.RoutesPanelNotifier{
 		TG:    tgClient,
 		Cache: routesCache,
