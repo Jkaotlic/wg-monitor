@@ -198,3 +198,21 @@ describe('блок HydraRoute Neo', () => {
     render(null, root)
   })
 })
+
+// Ревью цикла 4: пришли переносить, а переносить некуда или нечего -- сказать.
+describe('переход к переносу без вариантов', () => {
+  it('других VPN-туннелей нет -- «переносить некуда»', async () => {
+    mocks.answers.route_status = { status: 'ok', output: JSON.stringify({ ...SNAP, tunnels: [SNAP.tunnels[0]], other: { dns: 0, static: 0 } }) }
+    const { root } = await mount({ rebindFrom: 'nwg1' })
+    expect(root.querySelector('.overlay')).toBe(null)
+    expect(root.querySelector('.routes-rebind-none').textContent).toBe('Переносить некуда — сначала добавьте другой VPN-туннель.')
+    render(null, root)
+  })
+
+  it('своих правил нет и главным делать нечего -- «переносить нечего»', async () => {
+    const { root } = await mount({ rebindFrom: 'nwg2' })
+    expect(root.querySelector('.overlay')).toBe(null)
+    expect(root.querySelector('.routes-rebind-none').textContent).toBe('На «spare» нет своих правил — переносить нечего.')
+    render(null, root)
+  })
+})

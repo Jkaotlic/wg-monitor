@@ -40,6 +40,17 @@ describe('конфиг не утекает', () => {
   // Контракт части 1: токен предпросмотра стоит в пути опроса
   // GET tunnels/import/{token} -- это его единственное место в адресе.
   // Конфиг в адрес не попадает никогда.
+  // Ревью: конфиг не должен попасть ключом объекта (состояние, параметры
+  // слоя, спред) -- ни в экране загрузки, ни в навигации.
+  it('ключей conf / conf_b64 вне api.js нет', () => {
+    for (const f of ['screens/ConfImportScreen.jsx', 'screens/TunnelsTab.jsx', 'screens/TabBody.jsx', 'screens/OverlayHost.jsx', 'nav.js', 'navUrl.js', 'confImport.js']) {
+      const src = read(f)
+      expect(src, f).not.toMatch(/\bconf_b64\b/)
+      expect(src, f).not.toMatch(/[{,]\s*conf\s*[:,}]/)
+      expect(src, f).not.toMatch(/\.\.\.\s*conf(Ref)?\b/)
+    }
+  })
+
   it('в api.js конфиг уходит только телом, токен -- только в путь опроса', () => {
     const api = read('api.js')
     const templates = api.match(/`[^`]*`/g) ?? []

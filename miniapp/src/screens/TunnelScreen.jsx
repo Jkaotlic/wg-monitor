@@ -9,6 +9,8 @@ import {
   deleteRefusal,
   deleteErrorText,
   deleteOutcome,
+  tunnelAbsence,
+  refusalKey,
   mayManageTunnels,
   TUNNEL_TEXTS,
 } from '../tunnelDelete.js'
@@ -32,7 +34,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
   const last = useRef(fresh)
   if (fresh) last.current = fresh
   const card = fresh ?? last.current
-  const [outcome, setOutcome] = useState(null)
+  const [storedOutcome, setOutcome] = useState(null)
   const alive = useRef(true)
   useEffect(
     () => () => {
@@ -41,9 +43,17 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
     [],
   )
 
+  // Отказ сервера держится, пока снимок тот же: поменялись правила, главный
+  // выход или цепочка -- экран снова решает по свежему снимку.
+  const currentKey = refusalKey(fresh, snapshot)
+  const outcome = storedOutcome?.kind && fresh && storedOutcome.key !== currentKey ? null : storedOutcome
+
   const manage = mayManageTunnels(role) && typeof openSheet === 'function'
   const block = deleteBlock(fresh)
   const refusalKind = outcome?.kind ?? ''
+
+  const refusalKeyRef = useRef('')
+  refusalKeyRef.current = currentKey
 
   function askDelete() {
     const target = card
@@ -62,21 +72,18 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
         confirmStrict: false,
         errorText: deleteErrorText,
         perform: async (typed) => {
+          let sent
           try {
             // Сервер ждёт свежий снимок роутера несколько секунд и, не
             // дождавшись, отвечает state:"checking" -- тот же запрос
             // повторяется; второй команды роутеру повтор не ставит.
-            const { resp: sent, settled } = await repeatWhilePending(() => deleteTunnel(routerID, target.id, typed), {
+            const out = await repeatWhilePending(() => deleteTunnel(routerID, target.id, typed), {
               pending: (r) => r?.state === 'checking',
               alive: () => alive.current,
             })
             if (!alive.current) return null
-            if (!settled || !sent?.cmd_id) throw Object.assign(new Error('checking_timeout'), { code: 'checking_timeout' })
-            const result = await waitCommand(routerID, sent.cmd_id, {
-              deadlineMs: waitDeadlineMs(asleep || sent.router_asleep === true),
-              alive: () => alive.current,
-            })
-            return { result }
+            if (!out.settled || !out.resp?.cmd_id) throw Object.assign(new Error('checking_timeout'), { code: 'checking_timeout' })
+            sent = out.resp
           } catch (err) {
             // Отказ по снимку -- не ошибка листа: лист закрывается, а экран
             // говорит причину и предлагает перенос.
@@ -84,11 +91,23 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
             if (refusal) return { refusal }
             throw err
           }
+          // Команда уже в очереди: сорвавшееся ожидание -- не «ничего не
+          // удалено», а «роутер пока не ответил».
+          let result = null
+          try {
+            result = await waitCommand(routerID, sent.cmd_id, {
+              deadlineMs: waitDeadlineMs(asleep || sent.router_asleep === true),
+              alive: () => alive.current,
+            })
+          } catch {
+            result = null
+          }
+          return { result }
         },
         onDone: (resp) => {
           if (!alive.current || !resp) return
           if (resp.refusal) {
-            setOutcome({ tone: 'error', text: resp.refusal.text, kind: resp.refusal.kind, done: false })
+            setOutcome({ tone: 'error', text: resp.refusal.text, kind: resp.refusal.kind, done: false, key: refusalKeyRef.current })
             return
           }
           setOutcome(deleteOutcome(resp.result, target.name))
@@ -99,10 +118,11 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
   }
 
   if (!card) {
+    const foreign = tunnelAbsence(snapshot, tunnelID) === 'foreign'
     return (
       <Overlay title="VPN-туннель" backLabel="VPN-туннели" onBack={onClose}>
         <div class="screen tunnel-screen">
-          <p class="state">{TUNNEL_TEXTS.gone}</p>
+          <p class="state">{foreign ? TUNNEL_TEXTS.notManaged : TUNNEL_TEXTS.gone}</p>
         </div>
       </Overlay>
     )
@@ -128,7 +148,8 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
         </div>
 
         <Section title="Удалить VPN-туннель">
-          {!manage && <p class="hint">{TUNNEL_TEXTS.manageOnly}</p>}
+          {/* Роль ещё не пришла -- молчать: слова о правах были бы догадкой. */}
+          {!manage && role && <p class="hint">{TUNNEL_TEXTS.manageOnly}</p>}
           {manage && block && !outcome && (
             <>
               <div class="card tunnel-block">
@@ -139,7 +160,8 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
               {block.kind === 'rules' && toRoutes}
             </>
           )}
-          {manage && fresh && !block && !outcome?.done && !refusalKind && (
+          {/* Команда ушла, а ответа нет (tone warn) -- второй раз не предлагать. */}
+          {manage && fresh && !block && !outcome?.done && !refusalKind && outcome?.tone !== 'warn' && (
             <>
               <p class="hint">{TUNNEL_TEXTS.deleteHint}</p>
               <button type="button" class="btn btn-danger btn-wide tunnel-delete" onClick={askDelete}>
@@ -152,7 +174,7 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
               <Quoted text={outcome.text} />
             </p>
           )}
-          {refusalKind === 'rules' && toRoutes}
+          {(refusalKind === 'rules' || refusalKind === 'chain') && toRoutes}
           {outcome?.done && (
             <button type="button" class="btn btn-primary btn-wide" onClick={onClose}>
               К списку VPN-туннелей

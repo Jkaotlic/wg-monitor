@@ -5,7 +5,7 @@ import { act } from 'preact/test-utils'
 
 // «Загрузить конфиг .conf»: выбор файла, имя, предпросмотр, «Добавить как
 // новый». Содержимое конфига не должно оказаться ни в DOM, ни во втором запросе.
-const mocks = vi.hoisted(() => ({ calls: [], answers: {}, role: 'owner', api: [], previewReply: null, pollReplies: [], confirmReply: null, result: null }))
+const mocks = vi.hoisted(() => ({ calls: [], answers: {}, role: 'owner', api: [], previewReply: null, pollReplies: [], confirmReply: null, result: null, reader: null }))
 
 vi.mock('../src/useCommand.js', async () => {
   const { useState } = await import('preact/hooks')
@@ -45,7 +45,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     },
     fetchCommandResult: (routerID, cmdID) => {
       mocks.api.push(['result', routerID, cmdID])
-      return Promise.resolve(mocks.result)
+      return mocks.result instanceof Error ? Promise.reject(mocks.result) : Promise.resolve(mocks.result)
     },
   }
 })
@@ -60,6 +60,12 @@ vi.mock('../src/commandWait.js', async (importOriginal) => {
       return real.repeatWhilePending(once, { ...opts, sleep: () => Promise.resolve(), now: () => (t += 10_000) })
     },
   }
+})
+
+// Чтение файла -- по желанию теста: гонку двух выборов надо уметь развести.
+vi.mock('../src/confImport.js', async (importOriginal) => {
+  const real = await importOriginal()
+  return { ...real, readConfBase64: (file, R) => (mocks.reader ? mocks.reader(file) : real.readConfBase64(file, R)) }
 })
 
 const { TunnelsTab } = await import('../src/screens/TunnelsTab.jsx')
@@ -143,6 +149,7 @@ beforeEach(() => {
   mocks.previewReply = structuredClone(PREVIEW)
   mocks.pollReplies = []
   mocks.confirmReply = null
+  mocks.reader = null
   mocks.result = { status: 'ok', output: '' }
 })
 
@@ -229,7 +236,7 @@ describe('загрузка .conf', () => {
     await openImport(root)
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
-    expect(root.textContent).toContain('Роутер пока не закончил проверку')
+    expect(root.textContent).toContain('Проверка ещё идёт: роутер пока не закончил её')
     expect(byText(root, 'Добавить как новый').disabled).toBe(true)
     mocks.pollReplies = [structuredClone(PREVIEW)]
     await click(root, 'Проверить ещё раз')
@@ -308,6 +315,102 @@ describe('загрузка .conf', () => {
     expect(root.textContent).toContain('Роутер не примет этот конфиг: ключ пира повреждён.')
     expect(byText(root, 'Добавить как новый')).toBeFalsy()
     expect(byText(root, 'Проверить конфиг').disabled).toBe(true)
+    render(null, root)
+  })
+
+})
+
+// Ревью цикла 4.
+describe('загрузка .conf: ревью', () => {
+  it('поле файла без фильтра accept: Telegram на телефоне иначе не даёт выбрать .conf', async () => {
+    const root = await mount()
+    await openImport(root)
+    expect(root.querySelector('.conf-pick-input').hasAttribute('accept')).toBe(false)
+    render(null, root)
+  })
+
+  it('команда ушла, а ожидание сорвалось -- итог «ушла на роутер», а не «попробуйте ещё»', async () => {
+    mocks.result = new Error('502')
+    const root = await mount()
+    await openImport(root)
+    await pickFile(root, new File([CONF], 'home.conf'))
+    await click(root, 'Проверить конфиг')
+    const before = routeStatusCalls()
+    await click(root, 'Добавить как новый')
+    expect(root.querySelector('.tunnel-outcome').textContent).toBe('Команда ушла на роутер, но он пока не ответил. Загляните в список VPN-туннелей через минуту.')
+    expect(byText(root, 'К списку VPN-туннелей')).toBeTruthy()
+    expect(byText(root, 'Добавить как новый')).toBeFalsy()
+    expect(routeStatusCalls()).toBe(before + 1)
+    render(null, root)
+  })
+
+  it('двойное касание «Добавить» -- одна команда', async () => {
+    const root = await mount()
+    await openImport(root)
+    await pickFile(root, new File([CONF], 'home.conf'))
+    await click(root, 'Проверить конфиг')
+    const b = byText(root, 'Добавить как новый')
+    await act(async () => {
+      b.click()
+      b.click()
+    })
+    await flushMany()
+    expect(mocks.api.filter((c) => c[0] === 'confirm')).toHaveLength(1)
+    render(null, root)
+  })
+
+  it('два выбора подряд -- в проверку уходит последний файл', async () => {
+    let releaseFirst
+    mocks.reader = (file) =>
+      file.name === 'first.conf' ? new Promise((resolve) => (releaseFirst = () => resolve(btoa('first')))) : Promise.resolve(btoa('second'))
+    const root = await mount()
+    await openImport(root)
+    await pickFile(root, new File([CONF], 'first.conf'))
+    await pickFile(root, new File([CONF], 'second.conf'))
+    await act(async () => releaseFirst())
+    await flushMany()
+    await click(root, 'Проверить конфиг')
+    expect(mocks.api[0][2].confB64).toBe(btoa('second'))
+    render(null, root)
+  })
+
+  it('отказ проверки -- имя файла стёрто, сказано выбрать заново', async () => {
+    mocks.previewReply = new ApiError(500, 'unknown', 'x')
+    const root = await mount()
+    await openImport(root)
+    await pickFile(root, new File([CONF], 'home.conf'))
+    await click(root, 'Проверить конфиг')
+    expect(root.querySelector('.conf-file-name')).toBe(null)
+    expect(root.textContent).toContain('Не получилось. Попробуйте ещё раз. Выберите файл заново.')
+    expect(root.querySelector('.conf-pick').textContent).toContain('Выбрать файл .conf')
+    render(null, root)
+  })
+
+  it('analysis_pending при подтверждении -- проверка ещё идёт, опрос продолжается', async () => {
+    mocks.confirmReply = new ApiError(409, 'analysis_pending', 'x')
+    mocks.pollReplies = [{ ...structuredClone(PREVIEW), state: 'analyzing', can_confirm: false }, structuredClone(PREVIEW)]
+    const root = await mount()
+    await openImport(root)
+    await pickFile(root, new File([CONF], 'home.conf'))
+    await click(root, 'Проверить конфиг')
+    await click(root, 'Добавить как новый')
+    expect(mocks.api.map((c) => c[0])).toEqual(['preview', 'confirm', 'poll', 'poll'])
+    expect(root.querySelector('[role="alert"]')).toBe(null)
+    mocks.confirmReply = null
+    await click(root, 'Добавить как новый')
+    expect(root.querySelector('.tunnel-outcome').textContent).toContain('добавлен')
+    render(null, root)
+  })
+
+  it('analysis_pending на опросе -- как «ещё проверяет»', async () => {
+    mocks.previewReply = { ...structuredClone(PREVIEW), state: 'analyzing', can_confirm: false }
+    mocks.pollReplies = [new ApiError(409, 'analysis_pending', 'x'), structuredClone(PREVIEW)]
+    const root = await mount()
+    await openImport(root)
+    await pickFile(root, new File([CONF], 'home.conf'))
+    await click(root, 'Проверить конфиг')
+    expect(root.querySelector('[role="alert"]')).toBe(null)
+    expect(byText(root, 'Добавить как новый').disabled).toBe(false)
     render(null, root)
   })
 })

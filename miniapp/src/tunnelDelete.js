@@ -18,6 +18,9 @@ export const TUNNEL_TEXTS = {
   // Сервер ждёт свежий снимок роутера и отвечает «ещё проверяю»; клиент
   // повторяет запрос около двух минут и сдаётся этими словами.
   checkingTimeout: 'Роутер не отвечает — проверьте, что он на связи. Ничего не удалено.',
+  // Свой текст на случай, когда сервер не прислал фразу к tunnel_in_policy_chain.
+  inChain: 'Этот VPN-туннель стоит в цепочке общего набора перед работающим — сначала перенесите правила или замените конфиг мастером.',
+  notManaged: 'Этот VPN-туннель создан не через awg-manager — удалите его в панели роутера.',
 }
 
 export function mayManageTunnels(role) {
@@ -26,8 +29,33 @@ export function mayManageTunnels(role) {
 
 // Только свои VPN-туннели (type managed): удалять сервер разрешает только их,
 // остальные отвечают tunnel_not_managed.
+// Тип и имя -- как читает сервер: тип без учёта регистра, имя с обрезкой по
+// краям (пустое -- id). Имя здесь же и фраза подтверждения удаления.
+function isManaged(type) {
+  return String(type ?? '').trim().toLowerCase() === 'managed'
+}
+
 export function tunnelList(snapshot) {
-  return tunnelRows(snapshot).filter((r) => r.type === 'managed')
+  const names = new Map((snapshot?.tunnels ?? []).map((t) => [t.id, String(t.name ?? '').trim()]))
+  return tunnelRows(snapshot)
+    .filter((r) => isManaged(r.type))
+    .map((r) => ({ ...r, name: names.get(r.id) || r.id }))
+}
+
+// Почему карточки нет: VPN-туннель в снимке есть, но не свой (NDMS-интерфейс,
+// оставленный мастером замены), -- или его нет вовсе.
+export function tunnelAbsence(snapshot, tunnelID) {
+  const t = (snapshot?.tunnels ?? []).find((x) => x.id === tunnelID)
+  return t && !isManaged(t.type) ? 'foreign' : 'gone'
+}
+
+// Отпечаток того, на чём держался отказ сервера: правила VPN-туннеля, главный
+// выход и цепочки общих наборов. Снимок поменялся -- отказ больше не про него,
+// и экран снова решает по свежему снимку.
+export function refusalKey(card, snapshot) {
+  if (!card) return ''
+  const chains = (snapshot?.policies ?? []).map((p) => (p.interfaces ?? []).map((i) => `${i.tunnel_id || i.bind}:${i.role}`).join(',')).join(';')
+  return `${card.total}|${card.isDefault}|${String(snapshot?.default_egress ?? '').trim()}|${chains}`
 }
 
 // Карточка VPN-туннеля. Главный выход -- default_egress снимка (авторитетный
@@ -78,6 +106,9 @@ function refusalRulesTotal(rules) {
 // привязана кнопка переноса, поэтому фраза сервера здесь не подставляется.
 export function deleteRefusal(err, card) {
   if (err?.code === 'tunnel_has_rules') return { kind: 'rules', text: rulesBlockText(refusalRulesTotal(err.data?.rules)) }
+  // Упавший VPN-туннель стоит в цепочке общего набора перед работающим: у
+  // сервера своя точная фраза (какой набор), она и показывается.
+  if (err?.code === 'tunnel_in_policy_chain') return { kind: 'chain', text: err.serverMessage || TUNNEL_TEXTS.inChain }
   if (err?.code === 'tunnel_is_default') return { kind: 'default', text: defaultBlockText(card?.name ?? '') }
   return null
 }
