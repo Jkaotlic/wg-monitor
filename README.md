@@ -21,7 +21,7 @@ The current deploy path does **not** require the operator to join every router n
 - Per-minute agent reports from every router to the VPS backend.
 - Telegram alerts and per-router topics.
 - Telegram control panels for tunnels, routes, diagnostics, maintenance, operators, Premium cabinets, and package updates.
-- Optional VPS dashboard at `/dashboard/` for fleet status, safe command dispatch, and backend-mediated deploy actions.
+- Web control at `/dashboard/` — the same mini app in a regular browser (token or personal link sign-in); the legacy dashboard lives at `/dashboard/classic/` until its functions move into the app.
 - AWG Manager integration for tunnel state, route management, terminal bootstrap, and diagnostics.
 - Backend-mediated agent updates, so deployed agents can update without direct SSH from the operator machine.
 - Safer tunnel health: disabled PingCheck is shown as a warning/unknown signal, not as a hard "tunnel is dead" verdict by itself.
@@ -71,7 +71,11 @@ English:
 **Чего в мини-аппе пока нет:** изменения маршрутов (появится, когда система
 научится верно читать привязку правил к политикам awg-manager), обслуживания
 пакетов, бэкапов, кабинетов провайдеров и подключения новых роутеров. Всё это
-пока в браузерном дашборде `/dashboard/`.
+пока в старом браузерном дашборде `/dashboard/classic/`.
+
+Новые функции управления пишутся один раз — в `miniapp/`: `/dashboard/` в браузере
+открывает то же приложение. В `internal/backend/dashboard_static/` новых функций
+не добавлять.
 
 ### Дизайн и сборка
 

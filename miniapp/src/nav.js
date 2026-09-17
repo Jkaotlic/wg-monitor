@@ -11,6 +11,16 @@ export const TABS = ['router', 'tunnels', 'diag', 'events']
 // и открыть по нему не тот экран молча было бы хуже, чем не открыть вовсе.
 const TAB_ALIASES = { routes: 'tunnels' }
 
+export function normalizeTab(tab) {
+  return TAB_ALIASES[tab] ?? tab
+}
+
+// Оверлеи, которые можно открыть по адресу. Все они -- слои над выбранным
+// роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
+// Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
+// тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
+export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset']
+
 // Подписи отделены от ключей намеренно. Ключ -- это адрес, по которому в
 // приложение приходят deep-link'и из тревог, отправленных месяцы назад;
 // подпись -- слова для человека. Менять их вместе значило бы ломать ссылки
@@ -47,12 +57,13 @@ export function initialNav({ routerIDs = [], deepLinkID = null } = {}) {
   return state
 }
 
-// deepLinkOverlay -- какой слой открыть по ссылке из бота. Только настройки и
-// только вместе с открытым роутером: кнопка «Панель роутера» ведёт туда, где
-// эта панель открывается. Любое другое значение игнорируется, а не угадывается.
+// deepLinkOverlay -- какой слой открыть по адресу. Только вместе с открытым
+// роутером и только из OPEN_OVERLAYS: любое другое значение игнорируется, а
+// не угадывается.
 export function deepLinkOverlay(search, state) {
   if (state?.routerID == null) return null
-  return new URLSearchParams(search).get('open') === 'settings' ? 'settings' : null
+  const open = new URLSearchParams(search).get('open')
+  return OPEN_OVERLAYS.includes(open) ? open : null
 }
 
 export function navReducer(state, action) {
@@ -64,8 +75,12 @@ export function navReducer(state, action) {
     case 'init':
       return action.state ?? state
     case 'tab': {
-      const tab = TAB_ALIASES[action.tab] ?? action.tab
-      return TABS.includes(tab) ? { ...state, tab } : state
+      const tab = normalizeTab(action.tab)
+      if (!TABS.includes(tab)) return state
+      // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
+      // вкладку -- это уход со слоя, а не смена вкладки под ним.
+      if (action.closeOverlay) return { ...state, tab, overlay: null, sheet: null }
+      return { ...state, tab }
     }
     case 'router':
       return { ...state, routerID: action.id, tab: 'router', overlay: null, sheet: null }
@@ -90,6 +105,21 @@ export function navReducer(state, action) {
   }
 }
 
-export function backButtonVisible(state) {
-  return Boolean(state.sheet || state.overlay)
+// visibleOverlay -- слой, который человек видит. На широкой раскладке список
+// роутеров («fleet») -- это боковая колонка, а не крышка: состояние остаётся
+// (сузил окно -- список на месте), но закрывать «назад» или Esc там нечего.
+function visibleOverlay(state, { wide = false } = {}) {
+  const overlay = state?.overlay ?? null
+  return wide && overlay === 'fleet' ? null : overlay
+}
+
+export function backButtonVisible(state, opts) {
+  return Boolean(state.sheet || visibleOverlay(state, opts))
+}
+
+// escapeAction -- что делает Esc. Лист подтверждения закрывает себя сам: он
+// знает, идёт ли уже команда (тогда Esc не должен обрывать наблюдение).
+export function escapeAction(state, opts) {
+  if (state?.sheet) return null
+  return visibleOverlay(state, opts) ? { type: 'back' } : null
 }

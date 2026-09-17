@@ -36,14 +36,17 @@ export function TrafficPath({ traffic, incidents, tunnels, stale }) {
       role="img"
       aria-label={`Схема: заблокированное идёт через ${s.via ? `VPN-туннель «${s.via}»` : 'VPN-туннель'}, остальное напрямую`}
     >
-      <rect x="103" y="2" width="136" height="42" rx="12" fill="var(--surf2)" stroke="var(--line)" />
+      {/* Плашка по ширине содержимого: значки (49) + зазор (9) + подпись
+          (~97 при 12px IBM Plex Sans) + поля по 15. Прежние 136 обрезали
+          подпись -- она вылезала за рамку на любой ширине экрана. */}
+      <rect x="78" y="2" width="186" height="42" rx="12" fill="var(--surf2)" stroke="var(--line)" />
       <g stroke="var(--dim)" stroke-width="1.4" fill="none" stroke-linecap="round">
-        <rect x="118" y="15" width="10" height="15" rx="2" />
-        <rect x="134" y="17" width="15" height="11" rx="1.6" />
-        <path d="M132 30h19" />
-        <circle cx="161" cy="22.5" r="6" />
+        <rect x="93" y="15" width="10" height="15" rx="2" />
+        <rect x="109" y="17" width="15" height="11" rx="1.6" />
+        <path d="M107 30h19" />
+        <circle cx="136" cy="22.5" r="6" />
       </g>
-      <text x="176" y="27" fill="var(--dim)" font-size="12">Ваши устройства</text>
+      <text x="151" y="27" fill="var(--dim)" font-size="12">Ваши устройства</text>
 
       <path d="M171 44v22" stroke="rgba(255,255,255,0.18)" stroke-width="1.5" />
 

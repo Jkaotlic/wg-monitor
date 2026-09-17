@@ -1,4 +1,5 @@
 const BASE = '/v1/miniapp'
+const DASHBOARD = '/v1/dashboard'
 
 export class ApiError extends Error {
   // serverMessage -- фраза, которую прислал сервер. Отдельным полем, а не
@@ -13,8 +14,23 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, opts = {}) {
-  const res = await fetch(BASE + path, {
+// 401 посреди работы в веб-управлении значит «кука дашборда истекла»:
+// оболочка переводит человека на экран входа, сохраняя место в адресе.
+// Обработчик ставит только оболочка web; в Telegram его нет, и поведение
+// прежнее. /session сюда не входит: там 401 -- обычный ответ «не вошёл».
+let onUnauthorized = null
+
+export function setUnauthorizedHandler(fn) {
+  onUnauthorized = fn
+  return () => {
+    if (onUnauthorized === fn) onUnauthorized = null
+  }
+}
+
+async function request(path, opts = {}, base = BASE) {
+  // Content-Type уходит всегда, и у DELETE без тела тоже: в веб-управлении
+  // бэкенд отвергает не-GET без JSON-заголовка (защита от межсайтовой формы).
+  const res = await fetch(base + path, {
     ...opts,
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json', ...(opts.headers ?? {}) },
@@ -31,13 +47,34 @@ async function request(path, opts = {}) {
     } catch {
       // ignore non-JSON error bodies
     }
+    if (res.status === 401 && base === BASE && path !== '/session' && onUnauthorized) onUnauthorized()
     throw new ApiError(res.status, code, `${path} failed: ${res.status}`, serverMessage)
   }
+  if (res.status === 204) return null
   return res.json()
 }
 
 export function createSession(initData) {
   return request('/session', { method: 'POST', body: JSON.stringify({ init_data: initData }) })
+}
+
+// Кто я -- по куке мини-аппа или куке веб-управления. В браузере это
+// единственный способ узнать, вошёл ли человек: initData там нет.
+export function fetchSession() {
+  return request('/session')
+}
+
+export function dashboardLogin(token) {
+  return request('/login', { method: 'POST', body: JSON.stringify({ token }) }, DASHBOARD)
+}
+
+// Обмен личной ссылки из мини-аппа на куку веб-управления.
+export function redeemWebLink(token) {
+  return request('/web-link/redeem', { method: 'POST', body: JSON.stringify({ token }) }, DASHBOARD)
+}
+
+export function dashboardLogout() {
+  return request('/logout', { method: 'POST' }, DASHBOARD)
 }
 
 export function fetchRouters() {

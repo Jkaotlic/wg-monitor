@@ -20,7 +20,7 @@ import (
 func TestStaticShellIsRevalidatedAndHashedAssetsAreCached(t *testing.T) {
 	h := NewMux(Deps{TelegramBotToken: "test-bot-token", DashboardToken: "dash-token"})
 
-	shells := []string{"/miniapp/", "/dashboard/login"}
+	shells := []string{"/miniapp/", "/dashboard/", "/dashboard/login", "/dashboard/classic/login"}
 	for _, path := range shells {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		rec := httptest.NewRecorder()

@@ -166,7 +166,7 @@ func TestMiniAppAuthMiddleware(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := MiniAppAuthMiddleware("test-bot-token", nil)(inner)
+	handler := MiniAppAuthMiddleware("test-bot-token", "", 0, nil)(inner)
 
 	noCookie := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
 	rec := httptest.NewRecorder()

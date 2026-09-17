@@ -418,7 +418,9 @@ func TestWebLinkRedeemGivesTheUsualDashboardSession(t *testing.T) {
 		t.Fatal("cookie дашборда не выдана")
 	}
 
-	page := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	// /dashboard/ теперь оболочка без авторизации -- сессию проверяет
+	// только старый дашборд.
+	page := httptest.NewRequest(http.MethodGet, "/dashboard/classic/", nil)
 	page.AddCookie(cookie)
 	pageRec := httptest.NewRecorder()
 	h.ServeHTTP(pageRec, page)

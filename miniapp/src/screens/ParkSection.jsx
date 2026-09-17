@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'preact/hooks'
+import { useContext, useEffect, useRef, useState } from 'preact/hooks'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { Quoted } from '../ui/Q.jsx'
@@ -16,6 +16,7 @@ import {
 } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { localSheet } from '../sheet.js'
+import { AppContext } from '../appContext.js'
 import {
   backendRow,
   fleetHeadline,
@@ -70,6 +71,7 @@ import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetB
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
 export function ParkSection({ openSheet, onOpenRouter, currentID }) {
+  const { mode } = useContext(AppContext)
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
   // Итог последнего действия с одним роутером -- одна строка над списком:
@@ -498,15 +500,26 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
 
           {watchdog && <p class="hint">Сторож парка: {watchdog}</p>}
 
-          <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
-            {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}
-          </button>
-          {linkLines.map((line) => (
-            <p class="hint" key={line}>
-              {line}
-            </p>
-          ))}
-          {linkError && <p class="state state-error">{linkError}</p>}
+          {/* В браузере личная ссылка на браузер бессмысленна -- человек уже
+              здесь. Вместо неё мостик к тому, что ещё не переехало (цикл 2
+              удалит строку вместе с переездом). */}
+          {mode === 'web' ? (
+            <a class="park-classic" href="/dashboard/classic/">
+              Установка агента на новый роутер, приглашения и раскатка бэкенда — пока в классическом веб-управлении
+            </a>
+          ) : (
+            <>
+              <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
+                {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}
+              </button>
+              {linkLines.map((line) => (
+                <p class="hint" key={line}>
+                  {line}
+                </p>
+              ))}
+              {linkError && <p class="state state-error">{linkError}</p>}
+            </>
+          )}
         </>
       )}
     </Section>

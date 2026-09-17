@@ -188,17 +188,82 @@ func miniappUserFromContext(ctx context.Context) (int64, bool) {
 	return v, ok
 }
 
+// miniappVia -- откуда пришла личность: подпись Telegram или браузерный вход
+// в веб-управление. Права от этого не зависят -- по via решается только
+// защита от межсайтовых запросов и что показать человеку.
+type miniappVia string
+
+const (
+	miniappViaTelegram miniappVia = "telegram"
+	miniappViaWeb      miniappVia = "web"
+)
+
+type miniappViaCtxKey struct{}
+
+func miniappViaFromContext(ctx context.Context) miniappVia {
+	if v, ok := ctx.Value(miniappViaCtxKey{}).(miniappVia); ok {
+		return v
+	}
+	return miniappViaTelegram
+}
+
+// miniappIdentify -- кто пришёл на /v1/miniapp/*. Кука мини-аппа называет
+// человека и потому главнее; кука дашборда -- это вход админа из браузера
+// (веб-управление = тот же мини-апп), и человеком для неё служит админ из
+// конфига. Bearer-токен дашборда сюда намеренно не пускается: браузеру он не
+// нужен, а вечный токен в заголовке -- лишняя дверь.
+func miniappIdentify(r *http.Request, botToken, dashboardToken string, adminID int64) (int64, miniappVia, string) {
+	if uid, ok := miniappSessionUserID(r, botToken); ok {
+		return uid, miniappViaTelegram, ""
+	}
+	if dashboardToken == "" || !dashboardSessionValid(r, dashboardToken) {
+		return 0, "", "unauthorized"
+	}
+	if adminID == 0 {
+		return 0, "", "admin_not_configured"
+	}
+	return adminID, miniappViaWeb, ""
+}
+
+// miniappWebJSONOnly: браузерная кука уходит с любым запросом к сайту, поэтому
+// запись из браузера требует application/json -- его не умеет отправить ни
+// межсайтовая форма, ни простой запрос без предварительной проверки CORS.
+func miniappWebJSONOnly(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	ct := r.Header.Get("Content-Type")
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	return strings.TrimSpace(ct) == "application/json"
+}
+
 // MiniAppAuthMiddleware gates /v1/miniapp/* (except the session-mint endpoint
-// itself) behind a valid session cookie minted by miniappSessionHandler.
-func MiniAppAuthMiddleware(botToken string, logger *slog.Logger) func(http.Handler) http.Handler {
+// itself) behind a valid session cookie minted by miniappSessionHandler, or a
+// dashboard session cookie (browser entry, identity = configured admin).
+func MiniAppAuthMiddleware(botToken, dashboardToken string, adminID int64, logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			telegramUserID, ok := miniappSessionUserID(r, botToken)
-			if !ok {
+			telegramUserID, via, code := miniappIdentify(r, botToken, dashboardToken, adminID)
+			if code == "admin_not_configured" {
+				if logger != nil {
+					logger.Warn("веб-управление: вход есть, админ в конфиге не задан", "path", r.URL.Path)
+				}
+				writeJSONError(w, http.StatusUnauthorized, code, "admin not configured")
+				return
+			}
+			if code != "" {
 				writeJSONError(w, http.StatusUnauthorized, "unauthorized", "sign in required")
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(contextWithMiniappUser(r.Context(), telegramUserID)))
+			if via == miniappViaWeb && !miniappWebJSONOnly(r) {
+				writeJSONError(w, http.StatusUnsupportedMediaType, errCodeUnsupportedCT, "expected application/json")
+				return
+			}
+			ctx := contextWithMiniappUser(r.Context(), telegramUserID)
+			ctx = context.WithValue(ctx, miniappViaCtxKey{}, via)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }

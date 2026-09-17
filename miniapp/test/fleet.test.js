@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { sortByUrgency, fleetRow, batchProgress } from '../src/fleet.js'
+import { sortByUrgency, fleetRow, batchProgress, fleetSummary } from '../src/fleet.js'
 
 const r = (id, status, nickname = 'r' + id) => ({ id, status, nickname })
 
@@ -107,5 +107,26 @@ describe('batchProgress', () => {
 
   it('до запуска — пусто, а не «0 из 0»', () => {
     expect(batchProgress(null)).toBe('')
+  })
+})
+
+describe('fleetSummary', () => {
+  it('считает в порядке / требуют внимания / молчат и отдаёт сломанные по срочности', () => {
+    const list = [
+      { id: 1, nickname: 'Дача', status: 'online', last_seen_age_sec: 20 },
+      { id: 2, nickname: 'Дом', status: 'alert', last_seen_age_sec: 12, active_incidents: [{ check_name: 'hydraroute' }] },
+      { id: 3, nickname: 'Офис', status: 'offline', last_seen_age_sec: 7200 },
+      { id: 4, nickname: 'Машина', status: 'sleeping', last_seen_age_sec: 3600 },
+      { id: 5, nickname: 'Новый', status: 'offline', last_seen_age_sec: null },
+    ]
+    const s = fleetSummary(list)
+    expect({ total: s.total, ok: s.ok, attention: s.attention, silent: s.silent }).toEqual({ total: 5, ok: 1, attention: 1, silent: 3 })
+    expect(s.broken.map((r) => r.id)).toEqual([2, 5, 3, 4])
+    expect(s.broken[0].pill).toEqual({ tone: 'danger', text: 'тревога' })
+  })
+
+  it('пустой парк', () => {
+    expect(fleetSummary([])).toEqual({ total: 0, ok: 0, attention: 0, silent: 0, broken: [] })
+    expect(fleetSummary()).toEqual({ total: 0, ok: 0, attention: 0, silent: 0, broken: [] })
   })
 })

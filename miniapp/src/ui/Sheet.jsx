@@ -48,10 +48,42 @@ export function Sheet({ sheet, asleep, onClose }) {
     setValues((prev) => ({ ...prev, [name]: value }))
   }
 
+  // Смонтирован ли лист. Ответ локального действия может прийти, когда лист
+  // уже ушёл, а на его месте открыт другой: закрыть тогда -- значит закрыть
+  // чужой лист.
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
+
+  // Лист занят: команда ушла на роутер или локальное действие ждёт ответа
+  // сервера (пароль root оживления уже отправлен). Закрыть его в это время --
+  // оставить человека без ответа на то, что он уже сделал.
+  const locked = phase === 'running' || localBusy
+
   function close() {
     if (fields.length) setValues(initialFieldValues(fields))
     onClose()
   }
+
+  function dismiss() {
+    if (!locked) close()
+  }
+
+  // Esc -- то же, что клик по затемнению и «Отмена»: пока лист не занят,
+  // закрывает, во время выполнения молчит.
+  const escRef = useRef(null)
+  escRef.current = dismiss
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') escRef.current?.()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   function start() {
     if (local) {
@@ -70,13 +102,16 @@ export function Sheet({ sheet, asleep, onClose }) {
         .then(() => sheet.perform(typedNow, submitted))
         .then((resp) => {
           if (sheet.onDone) sheet.onDone(resp)
-          close()
+          if (alive.current) close()
         })
         .catch((err) => {
+          if (!alive.current) return
           const text = typeof sheet.errorText === 'function' ? sheet.errorText(err) : ''
           setLocalError(text || 'Не получилось. Попробуйте ещё раз.')
         })
-        .finally(() => setLocalBusy(false))
+        .finally(() => {
+          if (alive.current) setLocalBusy(false)
+        })
       return
     }
     // Набранное имя уходит серверу: для прошивки и перезагрузки он сверяет
@@ -94,7 +129,7 @@ export function Sheet({ sheet, asleep, onClose }) {
     <div class="sheet-layer">
       {/* Подложка закрывает шит только до запуска: обрывать наблюдение за
           уже ушедшей на роутер командой случайным тапом мимо -- плохая идея. */}
-      <div class="sheet-scrim" onClick={phase === 'running' ? undefined : close} />
+      <div class="sheet-scrim" onClick={locked ? undefined : dismiss} />
       <div class="sheet">
         <div class="sheet-grip" />
         {/* Заголовок и текст шита собирают экраны готовыми строками с
@@ -167,7 +202,7 @@ export function Sheet({ sheet, asleep, onClose }) {
               </div>
             )}
             <div class="sheet-actions">
-              <button type="button" class="btn btn-ghost" onClick={close}>Отмена</button>
+              <button type="button" class="btn btn-ghost" disabled={localBusy} onClick={dismiss}>Отмена</button>
               <button
                 type="button"
                 class={`btn ${sheet.danger ? 'btn-danger' : 'btn-primary'}`}

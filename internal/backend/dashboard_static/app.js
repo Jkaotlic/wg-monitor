@@ -181,7 +181,7 @@
     if (!res.ok) {
       const message = body && (body.message || body.error) ? (body.message || body.error) : String(body || res.statusText);
       if (res.status === 401) {
-        window.location.href = "/dashboard/login";
+        window.location.href = "/dashboard/classic/login";
         return null;
       }
       const error = new Error(message);
@@ -935,7 +935,7 @@
     try {
       await fetch("/v1/dashboard/logout", { method: "POST", credentials: "same-origin" });
     } finally {
-      window.location.href = "/dashboard/login";
+      window.location.href = "/dashboard/classic/login";
     }
   }
 
@@ -1523,7 +1523,7 @@
         if (jobPollToken !== token) return; // superseded/stopped while awaiting
         poll.busy = false;
         if (!job) {
-          // api() hands back null on a 401 (it redirects to /dashboard/login
+          // api() hands back null on a 401 (it redirects to /dashboard/classic/login
           // itself rather than throwing) — nothing to render, and no point
           // continuing to poll a session that's going away.
           stopJobPoll();

@@ -259,15 +259,15 @@ func TestDashboardSummaryRouteRequiresAuth(t *testing.T) {
 func TestDashboardStaticRequiresSessionAndServesEmbeddedApp(t *testing.T) {
 	h := NewMux(Deps{DashboardToken: "secret"})
 
-	pageReq := httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	pageReq := httptest.NewRequest(http.MethodGet, "/dashboard/classic/", nil)
 	pageRec := httptest.NewRecorder()
 	h.ServeHTTP(pageRec, pageReq)
-	if pageRec.Code != http.StatusFound || pageRec.Header().Get("Location") != "/dashboard/login" {
+	if pageRec.Code != http.StatusFound || pageRec.Header().Get("Location") != "/dashboard/classic/login" {
 		t.Fatalf("unauth page: want 302 to login, got %d location=%q body=%s",
 			pageRec.Code, pageRec.Header().Get("Location"), pageRec.Body.String())
 	}
 
-	loginPageReq := httptest.NewRequest(http.MethodGet, "/dashboard/login", nil)
+	loginPageReq := httptest.NewRequest(http.MethodGet, "/dashboard/classic/login", nil)
 	loginPageRec := httptest.NewRecorder()
 	h.ServeHTTP(loginPageRec, loginPageReq)
 	if loginPageRec.Code != http.StatusOK {
@@ -297,7 +297,7 @@ func TestDashboardStaticRequiresSessionAndServesEmbeddedApp(t *testing.T) {
 		t.Fatalf("want session cookie, got %+v", cookies)
 	}
 
-	pageReq = httptest.NewRequest(http.MethodGet, "/dashboard/", nil)
+	pageReq = httptest.NewRequest(http.MethodGet, "/dashboard/classic/", nil)
 	pageReq.AddCookie(cookies[0])
 	pageRec = httptest.NewRecorder()
 	h.ServeHTTP(pageRec, pageReq)
@@ -311,7 +311,7 @@ func TestDashboardStaticRequiresSessionAndServesEmbeddedApp(t *testing.T) {
 		t.Fatalf("dashboard html missing app title")
 	}
 
-	cssReq := httptest.NewRequest(http.MethodGet, "/dashboard/app.css", nil)
+	cssReq := httptest.NewRequest(http.MethodGet, "/dashboard/classic/app.css", nil)
 	cssReq.AddCookie(cookies[0])
 	cssRec := httptest.NewRecorder()
 	h.ServeHTTP(cssRec, cssReq)
@@ -347,9 +347,9 @@ func TestDashboardStaticContainsPolishedOperatorUI(t *testing.T) {
 		return rec.Body.String()
 	}
 
-	page := get("/dashboard/")
-	js := get("/dashboard/app.js")
-	css := get("/dashboard/app.css")
+	page := get("/dashboard/classic/")
+	js := get("/dashboard/classic/app.js")
+	css := get("/dashboard/classic/app.css")
 
 	for _, want := range []string{"Provision router", "agentDrawer", "provisionModal", "AWG Manager URL", "Поставить сейчас", "Только зарегать токен", "Root-пароль роутера", `data-filter="sleeping"`} {
 		if !strings.Contains(page, want) {

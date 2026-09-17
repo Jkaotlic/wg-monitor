@@ -1,42 +1,41 @@
 import { useEffect, useReducer, useState } from 'preact/hooks'
-import {
-  initTelegram,
-  getInitData,
-  onBackButtonClick,
-  paintChrome,
-  setBackButtonVisible,
-} from './telegram.js'
+import { initTelegram, onBackButtonClick, paintChrome, setBackButtonVisible } from './telegram.js'
 import { applyPalette } from './theme.js'
-import { createSession, fetchRouters } from './api.js'
-import { initialNav, navReducer, backButtonVisible, TABS, deepLinkOverlay } from './nav.js'
-import { Header } from './ui/Header.jsx'
-import { TabBar } from './ui/TabBar.jsx'
-import { RouterDetail } from './screens/RouterDetail.jsx'
-import { FleetOverlay } from './screens/FleetOverlay.jsx'
-import { AdminOverlay } from './screens/AdminOverlay.jsx'
-import { AgentConfigScreen } from './screens/AgentConfigScreen.jsx'
-import { DNSResetScreen } from './screens/DNSResetScreen.jsx'
+import { setUnauthorizedHandler } from './api.js'
+import { initialNav, navReducer, backButtonVisible, escapeAction } from './nav.js'
+import { navFromURL } from './navUrl.js'
+import { useNavURL } from './useNavURL.js'
+import { appMode } from './mode.js'
+import { takeHashToken } from './login.js'
+import { useWide } from './useWide.js'
+import { AppContext } from './appContext.js'
+import { useBoot } from './useBoot.js'
 import { NoAccess } from './screens/NoAccess.jsx'
-import { RoutesTab } from './screens/RoutesTab.jsx'
-import { SettingsScreen } from './screens/SettingsScreen.jsx'
-import { TunnelsTab } from './screens/TunnelsTab.jsx'
-import { Overlay } from './ui/Overlay.jsx'
-import { DiagTab } from './screens/DiagTab.jsx'
-import { EventsTab } from './screens/EventsTab.jsx'
-import { SheetHost } from './ui/Sheet.jsx'
+import { LoginScreen } from './screens/LoginScreen.jsx'
+import { ServerDown } from './ui/ServerDown.jsx'
+import { PhoneLayout } from './ui/PhoneLayout.jsx'
+import { WideLayout } from './ui/WideLayout.jsx'
+import { PULSE_MS } from './pulse.js'
 
-function deepLinkRouterID() {
-  const params = new URLSearchParams(window.location.search)
-  const raw = params.get('router')
-  const id = raw ? Number(raw) : NaN
-  return Number.isFinite(id) ? id : null
+// Поле ввода -- не место для Esc-закрытия слоя: человек набирает маршрут или
+// имя и теряет набранное одним промахом. Лист подтверждения ловит Esc сам.
+function typingTarget(el) {
+  return Boolean(el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT'))
 }
 
 export function App() {
-  const [status, setStatus] = useState('loading')
-  const [isAdmin, setIsAdmin] = useState(false)
-  const [routers, setRouters] = useState([])
-  const [nav, dispatch] = useReducer(navReducer, initialNav({ routerIDs: [], deepLinkID: null }))
+  // Режим не меняется за жизнь страницы: /dashboard и /miniapp -- разные входы.
+  const mode = appMode(window.location.pathname)
+  const wide = useWide()
+  // Токен личной ссылки снимается с адреса синхронно, в первом рендере -- до
+  // любого запроса. Иначе при молчащем сервере он висел бы в адресе и
+  // истории, пока не откроется экран входа. Дальше живёт только в памяти.
+  const [linkToken, setLinkToken] = useState(() => (mode === 'web' ? takeHashToken() : ''))
+  const [nav, dispatch] = useReducer(navReducer, initialNav())
+  const boot = useBoot(mode, {
+    onReady: (list) => dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id)) }),
+  })
+  const routerIDs = boot.routers.map((r) => r.id)
 
   useEffect(() => {
     initTelegram()
@@ -44,159 +43,83 @@ export function App() {
     // схемы больше нет: Telegram может сколько угодно переключаться между
     // светлой и тёмной -- приложение остаётся тёмным намеренно.
     paintChrome(applyPalette())
-    // Сессия и список роутеров грузятся вместе: без списка нельзя решить,
-    // открывать ли конкретный роутер, показывать список или экран пустого
-    // доступа -- а решать это один раз при входе честнее, чем перерешать
-    // на каждом рендере.
-    createSession(getInitData())
-      .then((s) => {
-        setIsAdmin(!!s.is_admin)
-        return fetchRouters()
-      })
-      .then((data) => {
-        const list = data.routers ?? []
-        setRouters(list)
-        const start = initialNav({ routerIDs: list.map((r) => r.id), deepLinkID: deepLinkRouterID() })
-        dispatch({ type: 'init', state: start })
-        const overlay = deepLinkOverlay(window.location.search, start)
-        if (overlay) dispatch({ type: 'overlay', overlay })
-        setStatus('ready')
-      })
-      .catch(() => setStatus('error'))
+    boot.start()
   }, [])
+
+  useNavURL({ enabled: mode === 'web' && boot.status === 'ready', nav, dispatch, routerIDs })
+
+  // 401 посреди работы в браузере -- истекла кука: на экран входа, место в
+  // адресе остаётся, после входа useBoot откроет его снова.
+  useEffect(() => {
+    if (mode !== 'web' || boot.status !== 'ready') return undefined
+    return setUnauthorizedHandler(() => boot.expire())
+  }, [mode, boot.status])
+
+  // Колонка роутеров на широком экране видна всегда, и слова состояния в ней
+  // не должны застывать на моменте входа: список переспрашивается тем же
+  // пульсом, что экран роутера, и только пока вкладка браузера видна.
+  useEffect(() => {
+    if (!wide || boot.status !== 'ready') return undefined
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') boot.refreshRouters()
+    }, PULSE_MS)
+    return () => clearInterval(timer)
+  }, [wide, boot.status])
 
   // Кнопкой "назад" владеет оболочка, а не экраны: слоёв несколько, кнопка
   // одна, и порядок их закрытия описан в navReducer.
   useEffect(() => {
-    setBackButtonVisible(backButtonVisible(nav))
+    setBackButtonVisible(backButtonVisible(nav, { wide }))
     return onBackButtonClick(() => dispatch({ type: 'back' }))
-  }, [nav.overlay, nav.sheet])
+  }, [nav.overlay, nav.sheet, wide])
 
-  if (status === 'loading') return <p class="state">Загрузка…</p>
-  if (status === 'error') {
-    return (
-      <p class="state state-error">
-        Не удалось войти. Откройте mini-app из Telegram заново.
-      </p>
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || typingTarget(e.target)) return
+      const action = escapeAction(nav, { wide })
+      if (action) dispatch(action)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [nav.overlay, nav.sheet, wide])
+
+  let body
+  if (boot.status === 'loading') {
+    body = <p class="state">Загрузка…</p>
+  } else if (boot.status === 'error') {
+    body = <p class="state state-error">Не удалось войти. Откройте mini-app из Telegram заново.</p>
+  } else if (boot.status === 'down') {
+    body = <ServerDown onRetry={() => boot.start()} />
+  } else if (boot.status === 'login') {
+    body = (
+      <LoginScreen
+        notice={boot.notice}
+        linkToken={linkToken}
+        onLinkUsed={() => setLinkToken('')}
+        onSuccess={() => boot.start({ afterLogin: true })}
+      />
     )
-  }
-  // Доступ мог появиться, пока приложение было открыто: экран пустого доступа
-  // умеет переспросить, и тогда оболочка продолжает как при обычном входе.
-  if (routers.length === 0) {
-    return (
+  } else if (boot.routers.length === 0) {
+    // Доступ мог появиться, пока приложение было открыто: экран пустого доступа
+    // умеет переспросить, и тогда оболочка продолжает как при обычном входе.
+    body = (
       <NoAccess
         onRetry={(list) => {
-          setRouters(list)
-          dispatch({ type: 'init', state: initialNav({ routerIDs: list.map((r) => r.id), deepLinkID: deepLinkRouterID() }) })
+          dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id)) })
+          boot.setRouters(list)
         }}
       />
     )
+  } else {
+    const layout = {
+      nav,
+      dispatch,
+      routers: boot.routers,
+      isAdmin: boot.isAdmin,
+      onLogout: mode === 'web' ? () => boot.logout() : undefined,
+    }
+    body = wide ? <WideLayout mode={mode} {...layout} /> : <PhoneLayout {...layout} />
   }
 
-  // Статус берём из списка флота: экраны табов не грузят карточку роутера
-  // сами, а спящему роутеру нужно обещать отложенный ответ, а не мгновенный.
-  const current = routers.find((r) => r.id === nav.routerID)
-  const asleep = current?.status === 'offline' || current?.status === 'sleeping'
-
-  const overlay = nav.overlay === 'fleet'
-    ? (
-      <FleetOverlay
-        routers={routers}
-        currentID={nav.routerID}
-        onPick={(id) => dispatch({ type: 'router', id })}
-        onClose={() => dispatch({ type: 'overlay', overlay: null })}
-      />
-    )
-    : nav.overlay === 'settings' && nav.routerID != null
-      ? (
-        <SettingsScreen
-          routerID={nav.routerID}
-          routerName={current?.nickname}
-          asleep={asleep}
-          openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-          onClose={() => dispatch({ type: 'overlay', overlay: null })}
-        />
-      )
-    : nav.overlay === 'admin' && nav.routerID != null
-      ? (
-        <AdminOverlay
-          routerID={nav.routerID}
-          isAdmin={isAdmin}
-          onClose={() => dispatch({ type: 'overlay', overlay: null })}
-          openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-          onOpenAgentConfig={() => dispatch({ type: 'overlay', overlay: 'agentcfg' })}
-          onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
-          onOpenRouter={(id) => dispatch({ type: 'router', id })}
-        />
-      )
-      : nav.overlay === 'routes' && nav.routerID != null
-        ? (
-          <Overlay title="Маршруты" backLabel="VPN-туннели" onBack={() => dispatch({ type: 'overlay', overlay: null })}>
-            <RoutesTab
-              routerID={nav.routerID}
-              asleep={asleep}
-              openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-            />
-          </Overlay>
-        )
-        // Настройки агента лежат слоем глубже обслуживания: закрытие
-        // возвращает туда, откуда экран открыли, а не на таб роутера.
-        : nav.overlay === 'agentcfg' && nav.routerID != null
-          ? (
-            <AgentConfigScreen
-              routerID={nav.routerID}
-              routerName={current?.nickname}
-              asleep={asleep}
-              openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-              onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })}
-            />
-          )
-          : nav.overlay === 'dnsreset' && nav.routerID != null
-            ? (
-              <DNSResetScreen
-                routerID={nav.routerID}
-                routerName={current?.nickname}
-                asleep={asleep}
-                openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-                onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })}
-              />
-            )
-            : null
-
-  return (
-    <>
-      <Header
-        fleetVisible={routers.length > 1}
-        onFleet={() => dispatch({ type: 'overlay', overlay: 'fleet' })}
-        onSettings={nav.routerID != null ? () => dispatch({ type: 'overlay', overlay: 'settings' }) : undefined}
-      />
-      <div class="app-body">
-        {nav.routerID == null ? (
-          <p class="state">Выберите роутер в списке.</p>
-        ) : nav.tab === 'router' ? (
-          <RouterDetail
-            id={nav.routerID}
-            isAdmin={isAdmin}
-            onOpenAdmin={() => dispatch({ type: 'overlay', overlay: 'admin' })}
-            openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-            onTab={(tab) => dispatch({ type: 'tab', tab })}
-          />
-        ) : nav.tab === 'tunnels' ? (
-          <TunnelsTab
-            routerID={nav.routerID}
-            asleep={asleep}
-            onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
-            openSheet={(sheet) => dispatch({ type: 'sheet', sheet })}
-          />
-        ) : nav.tab === 'diag' ? (
-          <DiagTab routerID={nav.routerID} asleep={asleep} />
-        ) : (
-          <EventsTab routerID={nav.routerID} routerName={current?.nickname} />
-        )}
-      </div>
-      <TabBar tabs={TABS} tab={nav.tab} onTab={(tab) => dispatch({ type: 'tab', tab })} />
-      {overlay}
-      <SheetHost nav={nav} dispatch={dispatch} />
-    </>
-  )
+  return <AppContext.Provider value={{ mode, wide }}>{body}</AppContext.Provider>
 }

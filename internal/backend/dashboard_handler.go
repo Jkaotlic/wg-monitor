@@ -70,11 +70,19 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLim
 	if err != nil {
 		panic(err)
 	}
-	staticHandler := staticCacheHeaders(http.StripPrefix("/dashboard/", http.FileServer(http.FS(staticFS))))
+	// Старый дашборд доживает на /dashboard/classic/ до переезда его функций
+	// в приложение (цикл 2 программы web-is-miniapp); новых функций сюда не
+	// добавлять -- они пишутся один раз, в miniapp/.
+	staticHandler := staticCacheHeaders(http.StripPrefix("/dashboard/classic/", http.FileServer(http.FS(staticFS))))
 	dashAuth := DashboardAuthMiddleware(d.DashboardToken, d.Logger)
 	pageAuth := DashboardPageAuthMiddleware(d.DashboardToken)
 	mux.Handle("GET /dashboard", requestIDMiddleware()(http.RedirectHandler("/dashboard/", http.StatusFound)))
-	mux.Handle("GET /dashboard/login", requestIDMiddleware()(staticCacheHeadersForPage(dashboardLoginPageHandler())))
+	// Веб-управление = мини-апп в браузере: оболочка данных не несёт, как
+	// /miniapp/, поэтому без авторизации; вход делает само приложение.
+	shell := webShellHandler(d.Logger)
+	mux.Handle("GET /dashboard/{$}", requestIDMiddleware()(shell))
+	mux.Handle("GET /dashboard/login", requestIDMiddleware()(shell))
+	mux.Handle("GET /dashboard/classic/login", requestIDMiddleware()(staticCacheHeadersForPage(dashboardLoginPageHandler())))
 	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
 	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(entranceLimit(dashboardLoginHandler(d))))
 	// Обмен личной ссылки на обычную сессию дашборда. Вход публичный по
@@ -82,7 +90,7 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLim
 	// украшение, а часть защиты.
 	mux.Handle("POST /v1/dashboard/web-link/redeem", requestIDMiddleware()(entranceLimit(webLinkRedeemHandler(d))))
 	mux.Handle("POST /v1/dashboard/logout", requestIDMiddleware()(dashboardLogoutHandler()))
-	mux.Handle("GET /dashboard/", requestIDMiddleware()(pageAuth(staticHandler)))
+	mux.Handle("GET /dashboard/classic/", requestIDMiddleware()(pageAuth(staticHandler)))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))
 	mux.Handle("POST /v1/dashboard/enrollments", requestIDMiddleware()(dashAuth(dashboardEnrollmentHandler(d))))
 	mux.Handle("PUT /v1/dashboard/agents/{nickname}", requestIDMiddleware()(dashAuth(dashboardEditAgentHandler(d))))
@@ -160,7 +168,7 @@ func DashboardPageAuthMiddleware(expected string) func(http.Handler) http.Handle
 				next.ServeHTTP(w, r)
 				return
 			}
-			http.Redirect(w, r, "/dashboard/login", http.StatusFound)
+			http.Redirect(w, r, "/dashboard/classic/login", http.StatusFound)
 		})
 	}
 }
@@ -198,14 +206,18 @@ func dashboardLoginHandler(d Deps) http.Handler {
 
 func dashboardLogoutHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		http.SetCookie(w, &http.Cookie{
-			Name:     dashboardSessionCookieName,
-			Value:    "",
-			Path:     "/",
-			MaxAge:   -1,
-			HttpOnly: true,
-			SameSite: http.SameSiteStrictMode,
-		})
+		// Гасим и куку мини-аппа: в веб-управлении она главнее куки дашборда,
+		// и оставленная вернула бы человека в приложение сразу после «Выйти».
+		for _, name := range []string{dashboardSessionCookieName, miniappSessionCookieName} {
+			http.SetCookie(w, &http.Cookie{
+				Name:     name,
+				Value:    "",
+				Path:     "/",
+				MaxAge:   -1,
+				HttpOnly: true,
+				SameSite: http.SameSiteStrictMode,
+			})
+		}
 		w.WriteHeader(http.StatusNoContent)
 	})
 }
@@ -435,7 +447,7 @@ const dashboardLoginHTML = `<!doctype html>
           body: JSON.stringify({token})
         });
         if (!res.ok) throw new Error(DEAD_LINK);
-        window.location.href = "/dashboard/";
+        window.location.href = "/dashboard/classic/";
       } catch (err) {
         // Форма с токеном остаётся рядом: дашборд -- аварийный вход, и
         // мёртвая ссылка не должна оставлять человека совсем без двери.
@@ -455,7 +467,7 @@ const dashboardLoginHTML = `<!doctype html>
           body: JSON.stringify({token})
         });
         if (!res.ok) throw new Error("Неверный token");
-        window.location.href = "/dashboard/";
+        window.location.href = "/dashboard/classic/";
       } catch (err) {
         error.textContent = err.message || "Login failed";
       }
