@@ -2998,6 +2998,74 @@ body {
   70% { box-shadow: 0 0 0 8px rgba(200, 242, 74, 0); }
 }
 
+/* --- Поиск и фильтры списка роутеров (цикл 2) --- */
+.filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.filter-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surf2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+}
+
+.filter-search::placeholder {
+  color: var(--dim);
+}
+
+.filter-search:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 1px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.filter-chip-active {
+  border-color: var(--sig);
+  color: var(--text);
+  background: var(--surf2);
+}
+
+.filter-chip-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}
+
+.filter-empty {
+  margin: var(--sp-2) 0;
+  color: var(--dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+}
+
 /* ============================================================
    Широкая раскладка (≥ 1024 px): браузер и развёрнутый Telegram Desktop
    ------------------------------------------------------------
@@ -3549,6 +3617,34 @@ body {
 
   .fleet-home-park > .section:first-child {
     margin-top: 0;
+  }
+
+  /* --- Поиск в боковой колонке (цикл 2): компактно, чипы переносятся --- */
+  .side-filter {
+    margin-bottom: calc(-1 * var(--sp-2));
+    padding: 0 var(--sp-1);
+  }
+
+  .side-filter .filter-bar {
+    margin-bottom: 0;
+  }
+
+  .side-filter .filter-search {
+    font-size: var(--fs-sm);
+  }
+
+  .side-filter .filter-chip {
+    padding: 2px var(--sp-2);
+    font-size: var(--fs-xs);
+  }
+
+  .side-list .filter-empty {
+    padding: 0 var(--sp-3);
+  }
+
+  .wide-shell .filter-chip:hover {
+    color: var(--text);
+    background: var(--surf2);
   }
 
   /* --- Наведение и фокус (в телефонной раскладке наведения нет) --- */

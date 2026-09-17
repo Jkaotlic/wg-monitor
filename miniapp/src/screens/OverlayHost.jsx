@@ -44,7 +44,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
   const reloadRouters = () => Promise.resolve(refreshRouters ? refreshRouters() : undefined)
 
   if (nav.overlay === 'fleet') {
-    return <FleetOverlay routers={routers} currentID={nav.routerID} onPick={(id) => dispatch({ type: 'router', id })} onClose={close} />
+    return <FleetOverlay routers={routers} currentID={nav.routerID} onPick={(id) => dispatch({ type: 'router', id })} onClose={close} shortcut={!nav.sheet} />
   }
 
   if (FLEET_OVERLAYS.includes(nav.overlay)) {

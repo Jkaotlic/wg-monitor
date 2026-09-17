@@ -1,13 +1,20 @@
-import { sortByUrgency, fleetRow } from '../fleet.js'
+import { fleetRow } from '../fleet.js'
+import { emptyFilterText } from '../fleetFilter.js'
+import { useFleetFilter } from '../useFleetFilter.js'
+import { FleetFilterBar } from './FleetFilterBar.jsx'
 
-// Боковая колонка широкой раскладки: бренд, список роутеров (тот же порядок и
-// те же слова, что в «Моих роутерах»), внизу Парк и выход. Колонка нужна и
-// при одном роутере: Парк и «Выйти» живут здесь.
+// Боковая колонка широкой раскладки: бренд, поиск и список роутеров (тот же
+// порядок и те же слова, что в «Моих роутерах»), внизу Парк и выход. Колонка
+// нужна и при одном роутере: Парк и «Выйти» живут здесь.
 //
 // «Парк» не гаснет никогда: Парк -- про весь флот и от выбранного роутера не
 // зависит. Куда он ведёт при пустом выборе, решает оболочка (WideLayout).
-export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick, onPark, onLogout }) {
-  const rows = sortByUrgency(routers).map(fleetRow)
+//
+// Поиск -- только когда искать есть в чём (два роутера и больше).
+export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick, onPark, onLogout, shortcut = true }) {
+  const f = useFleetFilter(routers)
+  const rows = f.view.visible.map(fleetRow)
+  const searchable = (routers?.length ?? 0) > 1
   return (
     <aside class="side">
       <div class="side-brand">
@@ -17,8 +24,20 @@ export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick,
 
       <div class="side-head">
         <span>Роутеры</span>
-        <span class="side-count">{rows.length}</span>
+        <span class="side-count">{routers?.length ?? 0}</span>
       </div>
+      {searchable && (
+        <div class="side-filter">
+          <FleetFilterBar
+            query={f.query}
+            filter={f.filter}
+            counts={f.view.counts}
+            onQuery={f.setQuery}
+            onFilter={f.setFilter}
+            shortcut={shortcut}
+          />
+        </div>
+      )}
       <nav class="side-list" aria-label="Роутеры">
         {rows.map((r) => (
           <button
@@ -35,6 +54,14 @@ export function Sidebar({ mode, routers, currentID, isAdmin, parkActive, onPick,
             </span>
           </button>
         ))}
+        {searchable && rows.length === 0 && (
+          <p class="filter-empty">
+            {emptyFilterText({ query: f.query, filter: f.filter })}{' '}
+            <button type="button" class="btn btn-ghost btn-row" onClick={f.reset}>
+              Сбросить
+            </button>
+          </p>
+        )}
       </nav>
 
       {(isAdmin || mode === 'web') && (

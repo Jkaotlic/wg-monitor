@@ -44,6 +44,7 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
         onPick={(id) => dispatch({ type: 'router', id })}
         onPark={openPark}
         onLogout={onLogout}
+        shortcut={!nav.sheet}
       />
       <main class="main">
         {current ? (
