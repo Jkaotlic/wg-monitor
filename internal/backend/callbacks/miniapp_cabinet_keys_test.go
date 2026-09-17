@@ -262,3 +262,49 @@ func TestIssueConfigHideMyErrorNeverCarriesCode(t *testing.T) {
 		t.Fatalf("ошибка выпуска: %v", err)
 	}
 }
+
+// Выпущенная страна, которой кабинет больше не предлагает, всё равно видна с
+// issued:true: иначе её нельзя отозвать, а при полной подписке -- тупик.
+func TestAmneziaAccountListsIssuedCountryMissingFromAvailable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"active_device_count":2,"max_device_count":2,
+				"available_countries":[{"server_country_code":"nl","server_country_name":"Netherlands"}],
+				"issued_configs":[
+					{"server_country_code":"NL","source_type":"country_config"},
+					{"server_country_code":"de","server_country_name":"Germany","source_type":"country_config"},
+					{"server_country_code":"se","source_type":"country_config"},
+					{"server_country_code":"fi","source_type":"gateway_config"}]}}`))
+		default:
+			t.Errorf("неожиданный путь %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	r := &Router{cfg: Config{AmneziaBaseURL: srv.URL, AmneziaSecretsPath: filepath.Join(t.TempDir(), "amnezia-premium.json")}}
+	if _, err := r.addAmneziaKeyLabeled(7, "vpn://acc-key-0001", ""); err != nil {
+		t.Fatal(err)
+	}
+	acc, err := r.Account(context.Background(), 7, providerAmnezia)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]backend.VPNOption{}
+	for _, o := range acc.Options {
+		if _, dup := got[o.ID]; dup {
+			t.Fatalf("страна дважды: %+v", acc.Options)
+		}
+		got[o.ID] = o
+	}
+	if len(got) != 3 || !got["nl"].Issued || got["nl"].Label != "Netherlands" {
+		t.Fatalf("options = %+v", acc.Options)
+	}
+	if !got["de"].Issued || got["de"].Label != "Germany" || !got["se"].Issued || got["se"].Label != "SE" {
+		t.Fatalf("выпущенные вне доступных: %+v", acc.Options)
+	}
+	if _, ok := got["fi"]; ok {
+		t.Fatalf("gateway-конфиг -- не страна подписки: %+v", acc.Options)
+	}
+}

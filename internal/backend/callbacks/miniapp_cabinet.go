@@ -89,16 +89,28 @@ func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (
 	acc.EndsAt = info.SubscriptionEndDate
 	acc.DevicesUsed = info.ActiveDeviceCount
 	acc.DevicesMax = info.MaxDeviceCount
-	issued := make(map[string]bool, len(info.IssuedConfigs))
-	for _, c := range info.IssuedConfigs {
-		issued[strings.ToLower(c.CountryCode)] = true
-	}
+	// Слот подписки занимает только country_config -- тот же набор, по
+	// которому считается «слот занят» и который умеет отзывать кабинет.
+	issued := amneziaIssuedCountrySet(info)
+	listed := make(map[string]bool, len(info.AvailableCountries))
 	for _, c := range info.AvailableCountries {
-		acc.Options = append(acc.Options, backend.VPNOption{
-			ID:     strings.ToLower(c.Code),
-			Label:  c.Name,
-			Issued: issued[strings.ToLower(c.Code)],
-		})
+		code := strings.ToLower(c.Code)
+		listed[code] = true
+		acc.Options = append(acc.Options, backend.VPNOption{ID: code, Label: c.Name, Issued: issued[code]})
+	}
+	// Выпущенная страна, которую кабинет больше не предлагает, всё равно
+	// показывается: иначе её нельзя отозвать, и при полной подписке тупик.
+	for _, c := range info.IssuedConfigs {
+		code := strings.ToLower(strings.TrimSpace(c.CountryCode))
+		if c.SourceType != "country_config" || code == "" || listed[code] {
+			continue
+		}
+		listed[code] = true
+		label := strings.TrimSpace(c.CountryName)
+		if label == "" {
+			label = strings.ToUpper(code)
+		}
+		acc.Options = append(acc.Options, backend.VPNOption{ID: code, Label: label, Issued: true})
 	}
 	if len(acc.Options) == 0 {
 		acc.Note = "Кабинет не назвал ни одной доступной страны."
