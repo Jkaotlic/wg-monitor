@@ -314,7 +314,9 @@ func main() {
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
 		VPNCabinet: cb,
 		// Ключи и коды кабинетов для мини-аппа -- тот же callbacks.Router.
-		VPNCabinetKeys:      cb,
+		VPNCabinetKeys: cb,
+		// Свои VPN-серверы -- только админу в мини-аппе.
+		SelfHosted:          newSelfHostedService(cfg.SelfHostedAmnezia, logger),
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
@@ -66,6 +67,29 @@ func miniappSendConfHandler(d Deps) http.HandlerFunc {
 				return
 			}
 			miniappSendConfDocument(d, w, r, u.ID, tgUser, provider, option, issued.TunnelName+".conf", u.Nickname+" — "+issued.TunnelName, issued.Conf)
+		case "selfhosted":
+			if !miniappIsAdmin(tgUser, d.TelegramAdminUserID) {
+				writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден")
+				return
+			}
+			if d.SelfHosted == nil {
+				writeMiniappCabinetError(w, http.StatusServiceUnavailable, "selfhosted_not_configured")
+				return
+			}
+			instID := strings.TrimSpace(req.InstanceID)
+			if instID == "" {
+				writeMiniappCabinetError(w, http.StatusBadRequest, "missing_instance")
+				return
+			}
+			// Каждый файл -- новый клиент на своём сервере (отзыва пиров пока
+			// нет -- бэклог); экран предупреждает об этом до нажатия.
+			issued, inst, err := d.SelfHosted.Issue(r.Context(), instID, miniappSelfHostedClientName(u.Nickname))
+			if err != nil {
+				miniappSelfHostedIssueError(d, w, err)
+				return
+			}
+			name := selfhostedamnezia.TunnelName(inst.ID, u.Nickname)
+			miniappSendConfDocument(d, w, r, u.ID, tgUser, provider, inst.ID, name+".conf", u.Nickname+" — свой сервер «"+inst.Label+"»", issued.Config)
 		default:
 			writeMiniappCabinetError(w, http.StatusBadRequest, "unknown_provider")
 		}

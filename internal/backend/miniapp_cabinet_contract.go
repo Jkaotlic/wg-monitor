@@ -58,6 +58,8 @@ type VPNCabinetKeys interface {
 // SelfHostedVPS -- свои VPN-серверы (реализует *selfhostedamnezia.Service).
 type SelfHostedVPS interface {
 	List() ([]selfhostedamnezia.Instance, error)
+	// Defaults -- чем заполняются пустые поля формы (без адресов и пароля).
+	Defaults() selfhostedamnezia.Config
 	Create(inst selfhostedamnezia.Instance) error
 	Update(id string, inst selfhostedamnezia.Instance) error
 	SetEnabled(id string, enabled bool) error

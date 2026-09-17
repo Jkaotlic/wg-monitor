@@ -90,6 +90,14 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/revoke", reqID(auth(miniappCabinetRevokeHandler(d))))
 	// .conf документом в личку нажавшему: админ и владелец, свой сервер -- админ.
 	mux.Handle("POST /v1/miniapp/routers/{id}/vpn/send-conf", reqID(auth(miniappSendConfHandler(d))))
+	// Свои VPN-серверы (цикл 3): только админ, гейт внутри (404), тело формы
+	// несёт пароль SSH -- middleware его не читают, обработчики не логируют.
+	mux.Handle("GET /v1/miniapp/selfhosted", reqID(auth(miniappSelfHostedListHandler(d))))
+	mux.Handle("POST /v1/miniapp/selfhosted", reqID(auth(miniappSelfHostedCreateHandler(d))))
+	mux.Handle("PUT /v1/miniapp/selfhosted/{inst}", reqID(auth(miniappSelfHostedUpdateHandler(d))))
+	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/toggle", reqID(auth(miniappSelfHostedToggleHandler(d))))
+	mux.Handle("DELETE /v1/miniapp/selfhosted/{inst}", reqID(auth(miniappSelfHostedDeleteHandler(d))))
+	mux.Handle("POST /v1/miniapp/selfhosted/{inst}/check", reqID(auth(miniappSelfHostedCheckHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStartHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStatusHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/repair", reqID(auth(miniappRepairStartHandler(d))))

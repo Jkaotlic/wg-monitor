@@ -3,7 +3,9 @@ package selfhostedamnezia
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -303,4 +305,130 @@ func hasControl(s string) bool {
 		}
 	}
 	return false
+}
+
+// checkTimeout -- сколько ждать одну попытку «Проверить подключение».
+const checkTimeout = 25 * time.Second
+
+// Check -- одна попытка войти и выполнить `docker exec <контейнер> true`.
+// Пароль при сохранении не проверяется (решение 3: внешние баны и
+// чувствительность панели), поэтому проверка -- только по кнопке и без
+// повторов. Неудача -- не ошибка метода, а ответ словами.
+func (s *Service) Check(ctx context.Context, id string) (CheckResult, error) {
+	inst, err := s.find(id)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	cfg := s.legacy.ProviderConfig(inst)
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	if _, err := s.newRunner(cfg).Run(ctx, []string{"true"}, nil); err != nil {
+		return CheckResult{OK: false, Message: checkFailureText(cfg, err)}, nil
+	}
+	return CheckResult{OK: true, Message: fmt.Sprintf("Подключение есть: контейнер «%s» отвечает", cfg.Container)}, nil
+}
+
+func checkFailureText(cfg Config, err error) string {
+	msg := err.Error()
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "Сервер не ответил за 25 секунд — проверьте адрес и порт SSH"
+	case strings.HasPrefix(msg, "ssh dial"):
+		return "Сервер не отвечает по SSH — проверьте адрес и порт SSH"
+	case strings.HasPrefix(msg, "ssh auth"):
+		return "SSH не принял пользователя или пароль"
+	case strings.HasPrefix(msg, "ssh session"):
+		return "Вход по SSH прошёл, но сессия не открылась — повторите позже"
+	case cfg.SSHHost == "":
+		return fmt.Sprintf("Контейнер «%s» на этом сервере не отвечает — проверьте имя контейнера", cfg.Container)
+	default:
+		return fmt.Sprintf("Вход по SSH есть, но контейнер «%s» не отвечает — проверьте имя контейнера", cfg.Container)
+	}
+}
+
+// Defaults -- чем заполняются пустые поля инстанса: подсказки формы. Секция
+// YAML тоже умолчание (ProviderConfig), но адресов и пароля здесь нет.
+func (s *Service) Defaults() Config {
+	c := s.legacy.withDefaults()
+	if c.SSHPort == 0 {
+		c.SSHPort = 22
+	}
+	if c.SSHUser == "" {
+		c.SSHUser = "root"
+	}
+	c.SSHHost, c.SSHPassword, c.EndpointHost, c.EndpointPort = "", "", "", 0
+	return c
+}
+
+// ValidInstanceID -- подходит ли имя под правило id инстанса.
+func ValidInstanceID(id string) bool { return instanceIDRe.MatchString(id) }
+
+// MigrateLegacyPassword -- одноразовый перенос amnezia_selfhosted.ssh_password
+// из backend.yaml в файл своих серверов (решение 11). Файла нет -- он
+// создаётся из секции YAML, как раньше её на лету показывал LoadStore. Файл
+// есть -- пароль (и адрес SSH, если своего нет) дописывается инстансам без
+// своего пароля: они и так ходили по SSH с паролем из YAML (ProviderConfig),
+// так что поведение выпуска не меняется.
+func MigrateLegacyPassword(path string, legacy Config) (bool, error) {
+	if strings.TrimSpace(legacy.SSHPassword) == "" {
+		return false, nil
+	}
+	if strings.TrimSpace(path) == "" {
+		path = legacy.StorePathOrDefault()
+	}
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		inst, ok := legacy.LegacyInstance()
+		if !ok {
+			return false, nil
+		}
+		return true, SaveStore(path, Store{Version: 1, ActiveID: inst.ID, Instances: []Instance{inst}})
+	} else if err != nil {
+		return false, err
+	}
+	st, err := LoadStore(path, legacy)
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for i := range st.Instances {
+		inst := &st.Instances[i]
+		if inst.SSHPassword != "" {
+			continue
+		}
+		if inst.SSHHost == "" {
+			if strings.TrimSpace(legacy.SSHHost) == "" {
+				continue
+			}
+			inst.SSHHost, inst.SSHPort, inst.SSHUser = legacy.SSHHost, legacy.SSHPort, legacy.SSHUser
+		}
+		inst.SSHPassword = legacy.SSHPassword
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, SaveStore(path, st)
+}
+
+// TunnelName -- имя VPN-туннеля на роутере для конфига своего сервера,
+// «<инстанс>_<роутер>», ровно как его выпускал бот (safeSelfHostedTunnelName).
+func TunnelName(instanceID, nickname string) string {
+	s := strings.ToLower(instanceID + "_" + nickname)
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-_")
+	if out == "" || out[0] < 'a' || out[0] > 'z' {
+		out = "selfhosted-" + out
+	}
+	if len(out) > 32 {
+		out = out[:32]
+	}
+	return out
 }

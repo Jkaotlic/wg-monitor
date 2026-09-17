@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -222,5 +225,123 @@ func TestServiceIssueRefusesMissingAndDisabled(t *testing.T) {
 	}
 	if err := s.Delete("home"); !errors.Is(err, ErrInstanceNotFound) {
 		t.Fatalf("повторное удаление: %v", err)
+	}
+}
+
+type checkRunner struct {
+	err   error
+	calls int32
+	args  []string
+}
+
+func (r *checkRunner) Run(_ context.Context, args []string, _ []byte) ([]byte, error) {
+	atomic.AddInt32(&r.calls, 1)
+	r.args = append([]string{}, args...)
+	return nil, r.err
+}
+
+// «Проверить подключение» -- одна попытка и ответ словами. Пароль в ответ не
+// попадает никогда.
+func TestServiceCheckOneAttemptInWords(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		ok   bool
+		want string
+	}{
+		{"всё хорошо", nil, true, "контейнер «amnezia-awg2» отвечает"},
+		{"нет SSH", errors.New("ssh dial 203.0.113.7:22: connect: connection refused"), false, "не отвечает по SSH"},
+		{"пароль", errors.New("ssh auth 203.0.113.7:22: ssh: unable to authenticate"), false, "пароль"},
+		{"контейнер", errors.New("remote docker true: Error: No such container: amnezia-awg2"), false, "контейнер «amnezia-awg2» не отвечает"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService(t)
+			runner := &checkRunner{err: tc.err}
+			s.newRunner = func(Config) Runner { return runner }
+			inst := homeInstance()
+			inst.SSHHost, inst.SSHPassword = "203.0.113.7", "SECRET-SSH-MUST-NOT-LEAK"
+			if err := s.Create(inst); err != nil {
+				t.Fatal(err)
+			}
+			res, err := s.Check(context.Background(), "home")
+			if err != nil || res.OK != tc.ok || !strings.Contains(res.Message, tc.want) {
+				t.Fatalf("res=%+v err=%v", res, err)
+			}
+			if strings.Contains(res.Message, "SECRET-SSH") {
+				t.Fatal("пароль в ответе проверки")
+			}
+			if atomic.LoadInt32(&runner.calls) != 1 || len(runner.args) != 1 || runner.args[0] != "true" {
+				t.Fatalf("ждали одну попытку `true`: calls=%d args=%v", runner.calls, runner.args)
+			}
+		})
+	}
+	s := newTestService(t)
+	if _, err := s.Check(context.Background(), "nope"); !errors.Is(err, ErrInstanceNotFound) {
+		t.Fatalf("нет сервера: %v", err)
+	}
+}
+
+func TestServiceDefaultsHideAddressesAndPassword(t *testing.T) {
+	s := NewService(filepath.Join(t.TempDir(), "s.json"), Config{Container: "my-awg", SSHHost: "203.0.113.7", SSHPassword: "SECRET-YAML", EndpointHost: "vpn.example.com"})
+	def := s.Defaults()
+	if def.Container != "my-awg" || def.Interface != "awg0" || def.SSHPort != 22 || def.SSHUser != "root" || len(def.DNS) == 0 {
+		t.Fatalf("умолчания: %+v", def)
+	}
+	if def.SSHPassword != "" || def.SSHHost != "" || def.EndpointHost != "" {
+		t.Fatalf("в умолчаниях адреса или пароль: %+v", def)
+	}
+}
+
+func TestMigrateLegacyPassword(t *testing.T) {
+	legacy := Config{Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 47567, SSHHost: "203.0.113.7", SSHPassword: "SECRET-YAML-PASS"}
+
+	path := filepath.Join(t.TempDir(), "s.json")
+	if migrated, err := MigrateLegacyPassword(path, Config{}); migrated || err != nil {
+		t.Fatalf("без пароля в YAML переносить нечего: %v %v", migrated, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("без пароля файл не создаётся")
+	}
+
+	// Файла нет -- он создаётся из секции YAML, как её показывал LoadStore.
+	migrated, err := MigrateLegacyPassword(path, legacy)
+	if !migrated || err != nil {
+		t.Fatalf("перенос в новый файл: %v %v", migrated, err)
+	}
+	st, err := LoadStore(path, Config{})
+	if err != nil || len(st.Instances) != 1 || st.Instances[0].SSHPassword != "SECRET-YAML-PASS" || st.Instances[0].SSHHost != "203.0.113.7" {
+		t.Fatalf("файл после переноса: %+v err=%v", st, err)
+	}
+	if migrated, err := MigrateLegacyPassword(path, legacy); migrated || err != nil {
+		t.Fatalf("второй запуск ничего не меняет: %v %v", migrated, err)
+	}
+
+	// Файл есть: пароль дописывается тем, кто ходил по SSH с паролем из YAML.
+	path2 := filepath.Join(t.TempDir(), "s2.json")
+	if err := SaveStore(path2, Store{Version: 1, Instances: []Instance{
+		{ID: "home", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 1},
+		{ID: "work", Enabled: true, EndpointHost: "vpn2.example.com", EndpointPort: 2, SSHHost: "203.0.113.9", SSHPassword: "own"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if migrated, err := MigrateLegacyPassword(path2, legacy); !migrated || err != nil {
+		t.Fatalf("перенос в существующий файл: %v %v", migrated, err)
+	}
+	st, _ = LoadStore(path2, Config{})
+	if st.Instances[0].SSHPassword != "SECRET-YAML-PASS" || st.Instances[0].SSHHost != "203.0.113.7" || st.Instances[1].SSHPassword != "own" {
+		t.Fatalf("после переноса: %+v", st.Instances)
+	}
+}
+
+func TestTunnelNameAndValidInstanceID(t *testing.T) {
+	if got := TunnelName("home", "router-owned"); got != "home_router-owned" {
+		t.Fatalf("TunnelName = %q", got)
+	}
+	if got := TunnelName("9x", "Дача"); !strings.HasPrefix(got, "selfhosted-") || len(got) > 32 {
+		t.Fatalf("TunnelName с неподходящим началом = %q", got)
+	}
+	if !ValidInstanceID("home") || ValidInstanceID("Bad!") || ValidInstanceID("h") {
+		t.Fatal("ValidInstanceID")
 	}
 }

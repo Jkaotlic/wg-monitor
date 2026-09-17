@@ -117,6 +117,10 @@ func (f *fakeSelfHosted) List() ([]selfhostedamnezia.Instance, error) {
 	return append([]selfhostedamnezia.Instance{}, f.instances...), nil
 }
 
+func (f *fakeSelfHosted) Defaults() selfhostedamnezia.Config {
+	return selfhostedamnezia.Config{Container: "amnezia-awg2", Interface: "awg0", ConfigPath: "/opt/amnezia/awg/awg0.conf", DNS: []string{"1.1.1.1"}, SSHPort: 22, SSHUser: "root"}
+}
+
 func (f *fakeSelfHosted) find(id string) int {
 	for i, inst := range f.instances {
 		if inst.ID == id {

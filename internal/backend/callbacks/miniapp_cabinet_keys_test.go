@@ -227,3 +227,18 @@ func TestIssueConfigErrorNeverCarriesKey(t *testing.T) {
 		t.Fatalf("ошибка выпуска: %v", err)
 	}
 }
+
+// Кабинет callbacks.Router -- источник конфигов для мастера замены и движка
+// починки. Своего сервера в нём нет и быть не должно (решение 8).
+func TestIssueConfigRefusesSelfHosted(t *testing.T) {
+	r, calls := newCabinetKeysRouter(t)
+	if _, err := r.IssueConfig(context.Background(), 7, "selfhosted", "home"); err == nil {
+		t.Fatal("IssueConfig выпустил конфиг своего сервера")
+	}
+	if _, err := r.Account(context.Background(), 7, "selfhosted"); err == nil {
+		t.Fatal("Account знает свой сервер")
+	}
+	if atomic.LoadInt32(calls) != 0 {
+		t.Fatal("кабинеты не должны были спрашиваться")
+	}
+}
