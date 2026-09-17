@@ -175,7 +175,7 @@ func TestDeps_Start_SuccessRunsAllStepsAndVerifiesOnline(t *testing.T) {
 		t.Errorf("arch_detected Detail = %q, want %q", got, "arm64")
 	}
 	if got := stepDetail(job.Steps, StepVerifyOnline); got == "" {
-		t.Error("verify_online Detail is empty, want a non-empty \"first report Ns ago\"-style detail")
+		t.Error("verify_online Detail is empty, want a non-empty \"первый отчёт N с назад\"-style detail")
 	}
 	if job.Hint != "" {
 		t.Errorf("Hint = %q, want empty on success", job.Hint)
