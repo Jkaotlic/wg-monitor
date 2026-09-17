@@ -163,6 +163,10 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		issued, err := d.VPNCabinet.IssueConfig(r.Context(), routerID, provider, optionID)
+		if errors.Is(err, ErrVPNSlotBusy) {
+			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
+			return
+		}
 		if err != nil {
 			writeJSONError(w, http.StatusBadGateway, "cabinet_failed", err.Error())
 			return

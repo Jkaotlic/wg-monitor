@@ -44,9 +44,9 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 			return backend.VPNIssuedConfig{}, fmt.Errorf("ключ Amnezia Premium не сохранён для этого роутера")
 		}
 		country := strings.ToLower(strings.TrimSpace(optionID))
-		conf, err := r.downloadAmneziaConfig(ctx, key, country)
+		conf, err := r.issueAmneziaConfig(ctx, key, country)
 		if err != nil {
-			return backend.VPNIssuedConfig{}, err
+			return backend.VPNIssuedConfig{}, redactCabinetError(err, key)
 		}
 		return backend.VPNIssuedConfig{TunnelName: "amnezia_" + country, Conf: conf, Backend: "nativewg"}, nil
 	case providerHideMy:
@@ -56,11 +56,11 @@ func (r *Router) IssueConfig(ctx context.Context, routerID int64, provider, opti
 		}
 		server, err := r.hideMyServerByID(ctx, stored.AccessCode, optionID)
 		if err != nil {
-			return backend.VPNIssuedConfig{}, err
+			return backend.VPNIssuedConfig{}, redactCabinetError(err, stored.AccessCode)
 		}
 		conf, err := r.downloadHideMyConfig(ctx, stored.AccessCode, server.IP)
 		if err != nil {
-			return backend.VPNIssuedConfig{}, err
+			return backend.VPNIssuedConfig{}, redactCabinetError(err, stored.AccessCode)
 		}
 		return backend.VPNIssuedConfig{
 			TunnelName: "hidemy_" + safeConfigSlug(server.ID),

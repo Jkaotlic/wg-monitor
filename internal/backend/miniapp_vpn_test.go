@@ -182,3 +182,18 @@ func TestMiniappTunnelImportStillDeniedFromClient(t *testing.T) {
 		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
 	}
 }
+
+// Выпуск в занятый слот -- отказ словами с предложением отозвать, и ни одной
+// команды агенту.
+func TestMiniappVPNIssueSlotBusy(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.cab.err = ErrVPNSlotBusy
+	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"fi"}`)
+	code, msg, _ := cabinetErrorBody(t, rec)
+	if rec.Code != http.StatusConflict || code != "slot_busy" || !strings.Contains(msg, "отзовите") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if len(env.sink.enqueued) != 0 {
+		t.Fatalf("команда ушла агенту: %+v", env.sink.enqueued)
+	}
+}

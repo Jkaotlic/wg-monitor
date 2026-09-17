@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -303,5 +304,53 @@ func miniappCabinetSecretResult(d Deps, w http.ResponseWriter, routerID int64, p
 	default:
 		miniappCabinetLogger(d).Error("кабинет: ключ не изменён", "router_id", routerID, "provider", provider, "err", err)
 		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
+	}
+}
+
+// miniappCountryRe -- код страны кабинета, как его пишет кнопка бота
+// (callbackCodeRe), в нижнем регистре.
+var miniappCountryRe = regexp.MustCompile(`^[a-z0-9_-]{2,16}$`)
+
+// miniappCabinetRevokeHandler освобождает слот подписки Amnezia (решение 7):
+// админ и владелец, подтверждение набором имени роутера.
+func miniappCabinetRevokeHandler(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u, ok := miniappCabinetRouter(d, w, r, miniappCabinetOwner)
+		if !ok {
+			return
+		}
+		if d.VPNCabinetKeys == nil {
+			writeMiniappCabinetError(w, http.StatusServiceUnavailable, "cabinets_not_configured")
+			return
+		}
+		var body struct {
+			Country string `json:"country"`
+			Confirm string `json:"confirm"`
+		}
+		if !decodeMiniappCabinetBody(w, r, &body) {
+			return
+		}
+		if !confirmPhraseMatches(body.Confirm, u.Nickname) {
+			writeMiniappCabinetError(w, http.StatusBadRequest, "confirm_mismatch")
+			return
+		}
+		country := strings.ToLower(strings.TrimSpace(body.Country))
+		if !miniappCountryRe.MatchString(country) {
+			writeMiniappCabinetError(w, http.StatusBadRequest, "invalid_country")
+			return
+		}
+		err := d.VPNCabinetKeys.RevokeSlot(r.Context(), u.ID, country)
+		switch {
+		case err == nil:
+			miniappCabinetLogger(d).Info("кабинет: слот отозван", "router_id", u.ID, "country", country)
+			writeMiniappCabinetJSON(w, http.StatusOK, struct {
+				Country string `json:"country"`
+			}{Country: country})
+		case errors.Is(err, ErrCabinetSecretNotFound):
+			writeMiniappCabinetError(w, http.StatusConflict, "cabinet_not_connected")
+		default:
+			miniappCabinetLogger(d).Warn("кабинет: отзыв слота не прошёл", "router_id", u.ID, "country", country, "err", err)
+			writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")
+		}
 	}
 }

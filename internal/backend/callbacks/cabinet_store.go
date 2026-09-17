@@ -1,9 +1,12 @@
 package callbacks
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 )
 
 // Замки хранилищ кабинетов. Запись идёт «прочитать -- изменить -- записать»
@@ -46,3 +49,13 @@ func redactSecret(text, secret string) string {
 }
 
 var vpnKeyFragmentRe = regexp.MustCompile(`(?i)vpn://[^\s"'\\]*`)
+
+// redactCabinetError -- ошибка кабинета без секрета: её текст уходит в ответ
+// выпуска и в журналы мастера замены. Отказ по слотам сохраняется как есть --
+// по нему обработчики выбирают код ответа.
+func redactCabinetError(err error, secret string) error {
+	if err == nil || errors.Is(err, backend.ErrVPNSlotBusy) {
+		return err
+	}
+	return errors.New(redactSecret(err.Error(), secret))
+}

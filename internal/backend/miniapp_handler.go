@@ -87,6 +87,9 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/hidemy/codes", reqID(auth(miniappCabinetAddHandler(d, "hidemyname"))))
 	mux.Handle("PUT /v1/miniapp/routers/{id}/cabinets/hidemy/active", reqID(auth(miniappCabinetActiveHandler(d, "hidemyname"))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/cabinets/hidemy/codes/{secret_id}", reqID(auth(miniappCabinetDeleteHandler(d, "hidemyname"))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/revoke", reqID(auth(miniappCabinetRevokeHandler(d))))
+	// .conf документом в личку нажавшему: админ и владелец, свой сервер -- админ.
+	mux.Handle("POST /v1/miniapp/routers/{id}/vpn/send-conf", reqID(auth(miniappSendConfHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStartHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStatusHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/repair", reqID(auth(miniappRepairStartHandler(d))))

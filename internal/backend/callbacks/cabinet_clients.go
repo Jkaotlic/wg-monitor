@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/amnezia"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 )
@@ -65,4 +66,41 @@ func (r *Router) downloadHideMyConfig(ctx context.Context, accessCode, serverIP 
 		return nil, errors.New("downloaded config does not look like WireGuard conf")
 	}
 	return conf, nil
+}
+
+// issueAmneziaConfig -- выпуск страны одним входом в кабинет: аккаунт,
+// проверка слота, скачивание. Уже выпущенная страна слота не занимает и
+// скачивается повторно.
+func (r *Router) issueAmneziaConfig(ctx context.Context, key, country string) ([]byte, error) {
+	client := amnezia.New(r.cfg.AmneziaBaseURL)
+	if err := client.Login(ctx, key); err != nil {
+		return nil, err
+	}
+	info, err := client.AccountInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if amneziaSlotBusy(info, country) {
+		return nil, backend.ErrVPNSlotBusy
+	}
+	conf, err := client.DownloadConfig(ctx, country)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(string(conf), "[Interface]") {
+		return nil, errors.New("downloaded config does not look like WireGuard conf")
+	}
+	return conf, nil
+}
+
+// amneziaSlotBusy -- новая страна при полных слотах подписки. Кабинет без
+// предела (max 0) слотов не считает.
+func amneziaSlotBusy(info *amnezia.AccountInfo, country string) bool {
+	if info == nil || info.MaxDeviceCount <= 0 {
+		return false
+	}
+	if amneziaIssuedCountrySet(info)[strings.ToLower(strings.TrimSpace(country))] {
+		return false
+	}
+	return info.ActiveDeviceCount >= info.MaxDeviceCount
 }

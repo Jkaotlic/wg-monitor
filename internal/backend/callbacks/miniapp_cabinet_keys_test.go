@@ -171,3 +171,59 @@ func TestMiniappCabinetNotesDoNotSendPeopleToBot(t *testing.T) {
 		}
 	}
 }
+
+// Бот перед выпуском смотрел, не заняты ли слоты подписки; мини-апп -- нет.
+// Теперь проверка в самом IssueConfig: новая страна при полных слотах не
+// скачивается, уже выпущенная -- скачивается повторно.
+func TestIssueConfigAmneziaRefusesBusySlot(t *testing.T) {
+	var downloads int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"message":"ok"}`))
+		case "/api/account-info":
+			_, _ = w.Write([]byte(`{"data":{"active_device_count":2,"max_device_count":2,"available_countries":[{"server_country_code":"nl"},{"server_country_code":"fi"}],"issued_configs":[{"server_country_code":"NL","source_type":"country_config"},{"server_country_code":"de","source_type":"country_config"}]}}`))
+		case "/api/download-config":
+			atomic.AddInt32(&downloads, 1)
+			_, _ = w.Write([]byte("[Interface]\nPrivateKey = x\n\n[Peer]\nPublicKey = y\n"))
+		default:
+			t.Errorf("неожиданный путь %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	r := &Router{cfg: Config{AmneziaBaseURL: srv.URL, AmneziaSecretsPath: filepath.Join(t.TempDir(), "amnezia-premium.json")}}
+	if _, err := r.addAmneziaKeyLabeled(7, "vpn://slot-key-0001", ""); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := r.IssueConfig(ctx, 7, providerAmnezia, "fi"); !errors.Is(err, backend.ErrVPNSlotBusy) {
+		t.Fatalf("новая страна при полных слотах: %v", err)
+	}
+	if atomic.LoadInt32(&downloads) != 0 {
+		t.Fatal("при занятых слотах конфиг скачиваться не должен")
+	}
+	issued, err := r.IssueConfig(ctx, 7, providerAmnezia, "NL")
+	if err != nil || issued.TunnelName != "amnezia_nl" || atomic.LoadInt32(&downloads) != 1 {
+		t.Fatalf("выпущенная страна: %+v err=%v downloads=%d", issued, err, downloads)
+	}
+}
+
+// Ошибка выпуска уходит в ответ /vpn/issue и в журнал мастера замены: ключа в
+// ней быть не должно, даже если кабинет вернул его в теле отказа.
+func TestIssueConfigErrorNeverCarriesKey(t *testing.T) {
+	const key = "vpn://SECRET-ISSUE-KEY-MUST-NOT-LEAK"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"bad ` + string(body) + `"}`))
+	}))
+	defer srv.Close()
+	r := &Router{cfg: Config{AmneziaBaseURL: srv.URL, AmneziaSecretsPath: filepath.Join(t.TempDir(), "amnezia-premium.json")}}
+	if _, err := r.addAmneziaKeyLabeled(7, key, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.IssueConfig(context.Background(), 7, providerAmnezia, "nl")
+	if err == nil || strings.Contains(err.Error(), "SECRET-ISSUE") {
+		t.Fatalf("ошибка выпуска: %v", err)
+	}
+}

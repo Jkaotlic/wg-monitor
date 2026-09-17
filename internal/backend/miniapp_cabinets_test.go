@@ -480,3 +480,34 @@ func TestMiniappCabinetTextsAreRussian(t *testing.T) {
 		t.Fatal("неизвестный код -- общий текст")
 	}
 }
+
+func TestMiniappCabinetRevoke(t *testing.T) {
+	env := newCabinetEnv(t)
+	const path = "/v1/miniapp/routers/{id}/cabinets/amnezia/revoke"
+	rec := env.do(t, cabOperator, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "not_found" {
+		t.Fatalf("оператору отзыв закрыт: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"de","confirm":"другой"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "confirm_mismatch" || len(env.keys.revoked) != 0 {
+		t.Fatalf("неверное подтверждение: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"d e","confirm":"router-owned"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "invalid_country" {
+		t.Fatalf("страна: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabOwner, http.MethodPost, path, `{"country":"DE","confirm":" Router-Owned "}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"country":"de"`) || len(env.keys.revoked) != 1 || env.keys.revoked[0] != "de" {
+		t.Fatalf("отзыв: %d %s %v", rec.Code, rec.Body.String(), env.keys.revoked)
+	}
+	env.keys.revokeErr = ErrCabinetSecretNotFound
+	rec = env.do(t, cabAdmin, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "cabinet_not_connected" {
+		t.Fatalf("без ключа: %d %s", rec.Code, rec.Body.String())
+	}
+	env.keys.revokeErr = errors.New("amnezia revoke-country-config: HTTP 500: boom")
+	rec = env.do(t, cabAdmin, http.MethodPost, path, `{"country":"de","confirm":"router-owned"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "cabinet_failed" || strings.Contains(msg, "boom") {
+		t.Fatalf("сбой кабинета: %d %s", rec.Code, rec.Body.String())
+	}
+}

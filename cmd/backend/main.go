@@ -343,12 +343,14 @@ func main() {
 		TelegramPrimaryChatID:     cfg.Telegram.ChatID,
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
 		MiniappTG:                 tgClient,
-		MuteCutoffHour:            muteCutoffHour,
-		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),
-		PublicBaseURL:             cfg.PublicBaseURL,
-		PublicIP:                  cfg.PublicIP,
-		Provision:                 provisionDeps,
-		Revive:                    reviveSvc,
+		// Файл .conf в личку нажавшему (кабинет роутера в мини-аппе).
+		MiniappDocs:       tgClient,
+		MuteCutoffHour:    muteCutoffHour,
+		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
+		PublicBaseURL:     cfg.PublicBaseURL,
+		PublicIP:          cfg.PublicIP,
+		Provision:         provisionDeps,
+		Revive:            reviveSvc,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,
