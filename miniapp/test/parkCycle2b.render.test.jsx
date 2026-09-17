@@ -369,3 +369,27 @@ describe('без адреса панели awg-manager', () => {
     cleanup(root)
   })
 })
+
+describe('«Другая версия…»: сервер считает откатом то, что клиент -- обновлением', () => {
+  it('после downgrade_rejected появляется переключатель, повтор уходит с allow_downgrade', async () => {
+    const { ApiError } = await import('../src/api.js')
+    mocks.updateReply = new ApiError(400, 'downgrade_rejected', 'x', 'Это откат версии — подтвердите откат')
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'home'), 'Другая версия…')[0].click())
+    const s = await mountSheet(sheets[0])
+    await fill(s.root, '#sheet-field-target_version', 'v0.36.0')
+    await fill(s.root, '#sheet-confirm-input', 'home')
+    expect(s.root.querySelector('#sheet-field-allow_downgrade')).toBe(null)
+    await act(async () => primary(s.root).click())
+    await flush()
+    expect(s.root.querySelector('#sheet-field-allow_downgrade')).not.toBe(null)
+    expect(primary(s.root).disabled).toBe(true)
+    mocks.updateReply = { queued: true, deferred: false, target_version: 'v0.36.0' }
+    await fill(s.root, '#sheet-field-allow_downgrade', true)
+    await act(async () => primary(s.root).click())
+    await flush()
+    expect(mocks.updates.at(-1)).toEqual({ id: 22, confirm: 'home', target: 'v0.36.0', allow: true })
+    cleanup(s.root)
+    cleanup(root)
+  })
+})

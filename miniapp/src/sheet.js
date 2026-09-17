@@ -39,6 +39,15 @@ export function initialFieldValues(fields) {
   return values
 }
 
+// Значения после отправки: всё стирается (пароли), кроме полей с keep: true --
+// несекретного ввода вроде версии, который после отказа сервера перенабирать
+// незачем.
+export function keptFieldValues(fields, values) {
+  const fresh = initialFieldValues(fields)
+  for (const f of fields ?? []) if (f.keep === true && f.type !== 'password') fresh[f.name] = values?.[f.name] ?? fresh[f.name]
+  return fresh
+}
+
 export function fieldsReady(sheet, values) {
   return typeof sheet?.fieldsReady === 'function' ? Boolean(sheet.fieldsReady(values ?? {})) : true
 }

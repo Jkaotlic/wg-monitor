@@ -310,3 +310,13 @@ describe('обновить всех отставших', () => {
     expect(fleetUpdateSummary(undefined)).toEqual({ headline: 'Отставших нет — обновлять некого.', lines: [] })
   })
 })
+
+describe('downgrade_rejected у «Обновить агент» и «Обновить всех»', () => {
+  it('ведёт в «Другая версия…»', async () => {
+    const { agentUpdateErrorText, fleetUpdateErrorText } = await import('../src/agentUpdate.js')
+    const { ApiError } = await import('../src/api.js')
+    const err = new ApiError(400, 'downgrade_rejected', 'x')
+    expect(agentUpdateErrorText(err)).toBe('На роутере агент новее — поставьте версию через «Другая версия…».')
+    expect(fleetUpdateErrorText(err)).toBe('На роутере агент новее — поставьте версию через «Другая версия…».')
+  })
+})

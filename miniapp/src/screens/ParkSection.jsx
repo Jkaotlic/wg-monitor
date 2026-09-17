@@ -61,6 +61,7 @@ import {
   otherVersionFields,
   otherVersionReady,
   otherVersionRequest,
+  otherVersionErrorText,
 } from '../agentVersionPick.js'
 import {
   JOB_SECRET_NOTE,
@@ -216,6 +217,8 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
   function askOtherVersion(router) {
     const backendVersion = fleet?.backend?.version ?? ''
     const text = otherVersionSheetText(router, backendVersion)
+    // Общее состояние листа: отказ downgrade_rejected открывает переключатель.
+    const memo = {}
     openSheet(
       localSheet({
         title: text.title,
@@ -224,11 +227,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
         busyLabel: 'Ставим…',
         danger: true,
         confirmPhrase: router.nickname,
-        fields: otherVersionFields(router, backendVersion),
-        fieldsReady: otherVersionReady(router, backendVersion),
-        errorText: agentUpdateErrorText,
+        fields: otherVersionFields(router, backendVersion, memo),
+        fieldsReady: otherVersionReady(router, backendVersion, memo),
+        errorText: otherVersionErrorText(memo),
         perform: (typed, values) => {
-          const req = otherVersionRequest(values, router, backendVersion)
+          const req = otherVersionRequest(values, router, backendVersion, memo)
           return updateRouterAgent(router.id, typed, req.targetVersion, req.allowDowngrade)
         },
         onDone: (resp) => {

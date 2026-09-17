@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { ApiError } from '../src/api.js'
 import {
   parseVersion,
   normalizeVersion,
@@ -9,6 +10,7 @@ import {
   otherVersionFields,
   otherVersionReady,
   otherVersionRequest,
+  otherVersionErrorText,
 } from '../src/agentVersionPick.js'
 
 const HOME = { id: 22, nickname: 'home', agent_version: 'v0.35.0', pending_version: '' }
@@ -108,5 +110,40 @@ describe('лист «Другая версия»', () => {
   it('запрос: разрешение отката уходит только вместе с откатом', () => {
     expect(otherVersionRequest({ target_version: '0.34.0', allow_downgrade: true }, HOME, BACKEND)).toEqual({ targetVersion: 'v0.34.0', allowDowngrade: true })
     expect(otherVersionRequest({ target_version: 'v0.36.0', allow_downgrade: true }, HOME, BACKEND)).toEqual({ targetVersion: 'v0.36.0', allowDowngrade: false })
+  })
+})
+
+describe('rc сравнивается числом', () => {
+  it('rc10 новее rc9', () => {
+    expect(compareVersions('v0.36.0-rc10', 'v0.36.0-rc9')).toBe(1)
+    expect(compareVersions('v0.36.0-rc9', 'v0.36.0-rc10')).toBe(-1)
+    expect(compareVersions('v0.36.0-rc2', 'v0.36.0-rc2')).toBe(0)
+  })
+})
+
+// Сервер сравнивает с last_deployed_version, клиент -- с agent_version: они
+// могут разойтись. После downgrade_rejected переключатель отката появляется
+// и для версии, которую клиент считал обновлением.
+describe('после downgrade_rejected', () => {
+  it('переключатель виден, готовность требует его, запрос несёт allow_downgrade', () => {
+    const memo = {}
+    const [, allow] = otherVersionFields(HOME, BACKEND, memo)
+    const ready = otherVersionReady(HOME, BACKEND, memo)
+    const up = { target_version: 'v0.36.0', allow_downgrade: false }
+    expect(allow.showIf(up)).toBe(false)
+    expect(ready(up)).toBe(true)
+    const text = otherVersionErrorText(memo)(new ApiError(400, 'downgrade_rejected', 'x', 'Это откат версии — подтвердите откат'))
+    expect(text).toBe('Это откат версии — подтвердите откат.')
+    expect(memo.rejected).toBe(true)
+    expect(allow.showIf(up)).toBe(true)
+    expect(ready(up)).toBe(false)
+    expect(ready({ ...up, allow_downgrade: true })).toBe(true)
+    expect(otherVersionRequest({ ...up, allow_downgrade: true }, HOME, BACKEND, memo)).toEqual({ targetVersion: 'v0.36.0', allowDowngrade: true })
+  })
+
+  it('прочие отказы -- тексты обновления агента, переключатель не трогают', () => {
+    const memo = {}
+    expect(otherVersionErrorText(memo)(new ApiError(409, 'no_release', 'x'))).toBe('Не нашлось выпуска агента этой версии — обновлять не на что.')
+    expect(memo.rejected).toBeFalsy()
   })
 })

@@ -11,6 +11,7 @@
 // (downgrade_rejected без allow_downgrade).
 
 import { validAgentVersion } from './formRules.js'
+import { agentUpdateErrorText } from './agentUpdate.js'
 
 // Разбор -- ради сравнения по числам; годность набранного решает общее
 // правило formRules.js (vN.N.N и vN.N.N-rcN), то же, что у мастера.
@@ -38,6 +39,10 @@ export function compareVersions(a, b) {
   if (pa.pre === pb.pre) return 0
   if (!pa.pre) return 1
   if (!pb.pre) return -1
+  // rc10 новее rc9: номер предрелиза -- число, а не строка.
+  const na = /^rc(\d+)$/.exec(pa.pre)
+  const nb = /^rc(\d+)$/.exec(pb.pre)
+  if (na && nb) return Number(na[1]) === Number(nb[1]) ? 0 : Number(na[1]) > Number(nb[1]) ? 1 : -1
   return pa.pre < pb.pre ? -1 : 1
 }
 
@@ -79,12 +84,21 @@ function pickFor(values, router, backend) {
   return versionPick(values?.target_version, { current: router?.agent_version ?? '', backend })
 }
 
-export function otherVersionFields(router, backend) {
+// memo -- общее состояние одного листа: memo.rejected ставит отказ сервера
+// downgrade_rejected. Сервер сравнивает с last_deployed_version, клиент -- с
+// agent_version, и они могут разойтись: после такого отказа откат нужно
+// разрешить и для версии, которую клиент считал обновлением.
+function needsAllow(p, memo) {
+  return p.ok && (p.downgrade || memo?.rejected === true)
+}
+
+export function otherVersionFields(router, backend, memo = {}) {
   return [
     {
       name: 'target_version',
       label: 'Версия агента',
       type: 'text',
+      keep: true,
       placeholder: normalizeVersion(backend) || 'v0.36.0',
       hint: (values) => pickFor(values, router, backend).hint,
     },
@@ -93,20 +107,32 @@ export function otherVersionFields(router, backend) {
       label: 'Это откат — разрешить',
       type: 'toggle',
       initial: false,
-      showIf: (values) => pickFor(values, router, backend).downgrade,
+      showIf: (values) => needsAllow(pickFor(values, router, backend), memo),
     },
   ]
 }
 
-export function otherVersionReady(router, backend) {
+export function otherVersionReady(router, backend, memo = {}) {
   return (values = {}) => {
     const p = pickFor(values, router, backend)
     if (!p.ok) return false
-    return !p.downgrade || values.allow_downgrade === true
+    return !needsAllow(p, memo) || values.allow_downgrade === true
   }
 }
 
-export function otherVersionRequest(values, router, backend) {
+export function otherVersionRequest(values, router, backend, memo = {}) {
   const p = pickFor(values, router, backend)
-  return { targetVersion: p.version, allowDowngrade: p.downgrade && values?.allow_downgrade === true }
+  return { targetVersion: p.version, allowDowngrade: needsAllow(p, memo) && values?.allow_downgrade === true }
+}
+
+// Тексты отказов листа: downgrade_rejected здесь -- просьба разрешить откат
+// (и открывает переключатель), остальное -- как у «Обновить агент».
+export function otherVersionErrorText(memo = {}) {
+  return (err) => {
+    if (err?.code === 'downgrade_rejected') {
+      memo.rejected = true
+      return 'Это откат версии — подтвердите откат.'
+    }
+    return agentUpdateErrorText(err)
+  }
 }
