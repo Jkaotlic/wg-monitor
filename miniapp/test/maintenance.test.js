@@ -277,3 +277,19 @@ describe('ответы сервера и ожидание', () => {
     expect(rebootBannerVisible({ versions: null, awgmResult: null })).toBe(false)
   })
 })
+
+// Цикл 4: запуск и остановка HydraRoute Neo из «Маршрутов».
+describe('запуск и остановка HydraRoute Neo', () => {
+  it('итог словами, отказ -- своей фразой на каждое действие', () => {
+    expect(serviceRestartText('hrneo_start', { status: 'ok', output: '' })).toBe('HydraRoute Neo запущен: правила по имени сайта снова работают.')
+    expect(serviceRestartText('hrneo_stop', { status: 'ok', output: '' })).toBe('HydraRoute Neo остановлен: правила по имени сайта не работают до запуска.')
+    expect(serviceRestartText('hrneo_start', { status: 'err', output: 'exit status 1' })).toBe('Не удалось запустить HydraRoute Neo.')
+    expect(serviceRestartText('hrneo_stop', { status: 'err', output: 'exit status 1' })).toBe('Не удалось остановить HydraRoute Neo.')
+    expect(serviceRestartText('hrneo', { status: 'err', output: 'exit status 1' })).toBe('Не удалось перезапустить HydraRoute Neo.')
+    expect(serviceRestartText('router', { status: 'err', output: 'exit status 1' })).toBe('Не удалось перезагрузить роутер.')
+  })
+
+  it('старый агент -- общие слова про версию', () => {
+    expect(maintenanceOutcomeLabel('service_restart', { status: 'err', output: 'unknown action: service_restart' }, { name: 'hrneo_stop' })).toBe(AGENT_OLDER_THAN_APP)
+  })
+})
