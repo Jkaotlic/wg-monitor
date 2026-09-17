@@ -24,10 +24,15 @@ body {
 }
 a { color: var(--sig); }
 .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+.head { padding-bottom: 4px; }
 .head h1 { margin: 0; font-size: 1.375rem; line-height: 1.25; }
 .lead { margin: 6px 0 0; color: var(--dim); font-size: 0.875rem; overflow-wrap: anywhere; }
 .state { margin: 0; color: var(--dim); font-size: 0.875rem; min-height: 1.2em; }
 .state.bad { color: var(--bad); }
+/* Пустые строки состояния места не занимают: иначе между заголовком и
+   карточкой, полем и кнопкой висят дыры. */
+.state:empty, .err:empty, .note:empty { display: none; }
+#app { display: flex; flex-direction: column; gap: 16px; }
 .card { background: var(--surf); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
 .card h2 { margin: 0 0 12px; font-size: 1.0625rem; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
@@ -38,7 +43,7 @@ label.check { display: flex; align-items: center; gap: 8px; color: var(--ink); f
 input[type="text"], input[type="password"] {
   width: 100%; min-height: 44px; padding: 0 12px; border-radius: 10px;
   border: 1px solid var(--line); background: var(--surf2); color: var(--ink);
-  font: inherit; font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font: inherit; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
 }
 input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--sig); outline-offset: 2px; }
 input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--sig); }
@@ -55,12 +60,13 @@ input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--sig); }
 .rows div { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
 .rows div:first-child { border-top: 0; padding-top: 0; }
 .rows dt { color: var(--dim); }
-.rows dd { margin: 0; text-align: right; font-family: ui-monospace, "SF Mono", Consolas, monospace; overflow-wrap: anywhere; }
-.nums { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
-.nums div { background: var(--surf2); border-radius: 10px; padding: 10px 12px; }
-.nums dt { color: var(--dim); font-size: 0.8125rem; }
+.rows dd { margin: 0; text-align: right; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow-wrap: anywhere; }
+.nums { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(84px, 1fr)); gap: 8px; }
+.nums div { background: var(--surf2); border-radius: 10px; padding: 10px; min-width: 0; }
+.nums dt { color: var(--dim); font-size: 0.8125rem; white-space: nowrap; }
 .nums dd { margin: 2px 0 0; font-size: 1.375rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 @media (min-width: 1024px) {
   .wrap { padding-top: 48px; }
-  .head h1 { font-size: 1.625rem; }
+  .head { padding-bottom: 4px; }
+.head h1 { font-size: 1.625rem; }
 }

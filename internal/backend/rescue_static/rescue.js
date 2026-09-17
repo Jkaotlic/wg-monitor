@@ -57,8 +57,9 @@ function showApp() {
 function watchdogLine(wd) {
   const parts = [wd.alive ? 'работает' : `не работает${wd.reason ? ` (${wd.reason})` : ''}`]
   if (wd.last_scan_at) parts.push(`последний обход ${when(wd.last_scan_at)}`)
-  parts.push(`молчат ${num(wd.stale_users)}`)
-  parts.push(`заглушено ${num(wd.suppressed_users)}`)
+  // Неразрывный пробел: число не отрывается от подписи при переносе.
+  parts.push(`молчат\u00a0${num(wd.stale_users)}`)
+  parts.push(`заглушено\u00a0${num(wd.suppressed_users)}`)
   return `Сторож: ${parts.join(' · ')}`
 }
 
