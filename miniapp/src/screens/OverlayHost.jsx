@@ -103,6 +103,10 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
           onOpenPackages={() => dispatch({ type: 'overlay', overlay: 'packages' })}
           onOpenRouter={(id) => dispatch({ type: 'router', id })}
+          onOpenRouterConnection={(id) => {
+            dispatch({ type: 'router', id })
+            dispatch({ type: 'overlay', overlay: 'agentconn' })
+          }}
         />
       )
     case 'routes':

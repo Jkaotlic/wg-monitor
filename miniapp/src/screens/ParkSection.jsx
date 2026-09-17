@@ -65,6 +65,8 @@ import {
 import {
   JOB_SECRET_NOTE,
   reinstallAllowed,
+  reinstallNeedsPanel,
+  PANEL_ADDRESS_MISSING,
   reinstallSheetText,
   reinstallFields,
   reinstallReady,
@@ -90,7 +92,7 @@ import {
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
-export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
+export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onOpenConnection }) {
   const { mode } = useContext(AppContext)
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
@@ -573,6 +575,9 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                       <Quoted text={row.update.text} />
                     </p>
                   )}
+                  {/* Переустановка идёт через терминал панели: без её адреса
+                      сервер откажет, поэтому вместо кнопки -- где его задать. */}
+                  {reinstallNeedsPanel(row.router) && <p class="hint">{PANEL_ADDRESS_MISSING}</p>}
                   {routerDelayLines(row.router).map((line) => (
                     <p key={line.key} class={`park-update park-delay park-update-${line.tone}`}>
                       {line.text}
@@ -588,7 +593,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                   {rv.text && (
                     <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
                   )}
-                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router) || reinstallAllowed(row.router)) && (
+                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router) || reinstallAllowed(row.router) || (reinstallNeedsPanel(row.router) && onOpenConnection)) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
@@ -603,6 +608,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                       {row.update.canCancel && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askCancel(row.router)}>
                           Отменить обновление
+                        </button>
+                      )}
+                      {reinstallNeedsPanel(row.router) && onOpenConnection && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => onOpenConnection(row.id)}>
+                          Подключение агента
                         </button>
                       )}
                       {reinstallAllowed(row.router) && (

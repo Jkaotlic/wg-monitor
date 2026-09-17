@@ -9,7 +9,7 @@ import { ParkSection } from './ParkSection.jsx'
 // Админу под сводкой -- Парк целиком: он про весь флот, а не про один
 // роутер, и ждать выбора роутера, чтобы до него добраться, незачем.
 // «Парк» в боковой колонке при пустом выборе ведёт сюда (id="park").
-export function FleetHome({ routers, onPick, isAdmin = false, openSheet, openLayer }) {
+export function FleetHome({ routers, onPick, isAdmin = false, openSheet, openLayer, onOpenConnection }) {
   const s = fleetSummary(routers)
   const { batch, recheckAll } = useFleetRecheck(routers)
   return (
@@ -62,7 +62,7 @@ export function FleetHome({ routers, onPick, isAdmin = false, openSheet, openLay
 
       {isAdmin && (
         <div class="fleet-home-park" id="park">
-          <ParkSection openSheet={openSheet} onOpenRouter={onPick} currentID={null} openLayer={openLayer} />
+          <ParkSection openSheet={openSheet} onOpenRouter={onPick} currentID={null} openLayer={openLayer} onOpenConnection={onOpenConnection} />
         </div>
       )}
     </div>

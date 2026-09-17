@@ -188,6 +188,14 @@ describe('OverlayHost: слои парка', () => {
     cleanup(root)
   })
 
+  it('Парк в Обслуживании: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'admin' }))
+    const root = await mount(h.node)
+    mocks.props.park.onOpenConnection(2)
+    expect(h.actions.slice(-2)).toEqual([{ type: 'router', id: 2 }, { type: 'overlay', overlay: 'agentconn' }])
+    cleanup(root)
+  })
+
   it('Обслуживание не-админу: входа в подключение нет', async () => {
     const h = host(nav({ routerID: 1, overlay: 'admin' }), { isAdmin: false })
     const root = await mount(h.node)
