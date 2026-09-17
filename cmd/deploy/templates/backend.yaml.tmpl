@@ -8,19 +8,13 @@ db_path: /var/lib/wg-monitor/state.db
 # token. Agents/users live in the SQLite DB at db_path — managed via
 # `wg-monitor-cli add-user` (called by the wizard's [4] Add Router action)
 # — and are NOT mirrored here.
+#
+# Группа с темами больше не нужна: бот пишет уведомления в личку владельцу и
+# операторам роутера, всё управление -- в приложении. chat_id и extra_chat_ids
+# не нужны; в старых конфигах они безвредны -- бот использует chat_id один раз
+# на старте, чтобы стереть в группе меню команд.
 telegram:
   bot_token_file: /etc/wg-monitor/bot-token.txt
-  chat_id: {{.ChatID}}
-  # Additional operator supergroups allowed to use the same bot. Routers must
-  # be bound to one of these chats with `wg-monitor-cli bind-topic --chat-id`.
-{{if .ExtraChatIDs}}
-  extra_chat_ids:
-{{range .ExtraChatIDs}}
-    - {{.}}
-{{end}}
-{{else}}
-  extra_chat_ids: []
-{{end}}
   admin_user_id: {{.AdminUserID}}
 
 state:
@@ -41,8 +35,8 @@ heartbeat:
   resume_grace_sec: 120
   scan_interval_sec: 30
 
-# Soft-warning Updates section sources for the Maintenance panel +
-# 📊 Что происходит? smart-reply. Empty repo → that source is silently
+# Источники новостей об обновлениях для экранов приложения.
+# Empty repo → that source is silently
 # skipped (no false-positive warnings). Cache TTL defaults to 12h.
 upstream:
   awgmgr_repo: "hoaxisr/awg-manager"
@@ -70,14 +64,6 @@ amnezia_premium:
 # /var/lib/wg-monitor/amnezia-selfhosted.json at startup, and the backend logs
 # a warning until it is removed from this file.
 
-# UI tweaks. compat_inline_keyboard duplicates the per-topic ReplyKeyboardMarkup
-# as inline buttons under bot replies. This is the default because TG Desktop
-# often drops bottom ReplyKeyboard buttons inside forum topics; inline buttons
-# render consistently on Desktop and mobile. Set false only if you prefer the
-# mobile-style bottom keyboard and do not need Desktop forum-topic reliability.
-ui:
-  compat_inline_keyboard: true
-
 # VPS dashboard: serves /dashboard/ (the mini app), /dashboard/rescue/ (emergency page) and /v1/dashboard/* from wg-monitor-backend.
 # Keep disabled until /etc/wg-monitor/dashboard-token.txt exists with mode 0600.
 # If enabled=true and the file is missing or empty, backend startup fails closed.
@@ -96,8 +82,8 @@ wizard:
   # the backend locally, so future backend updates do not require SSH reachability.
   backend_update_file: /var/lib/wg-monitor/backend-update.json
 
-# Dead-man digest: once-a-day "🟢 Монитор жив — N/M роутеров онлайн" to the
-# primary chat. Its ABSENCE is the signal — if the digest stops arriving, the
+# Dead-man digest: once-a-day "🟢 Монитор жив — N/M роутеров онлайн" админу в
+# личку. Its ABSENCE is the signal — if the digest stops arriving, the
 # backend is down. Opt-in; pair with an external probe
 # (docs/external-uptime-probe.md) for a hard guarantee outside the failure domain.
 digest:

@@ -58,7 +58,7 @@ func TestDigest_SendsOncePerDayWithOnlineCount(t *testing.T) {
 	}
 
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
+	p := NewPoller(d, f, Config{AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
 	p.SetNow(func() time.Time { return fixedNow })
 
 	p.TickForTest(context.Background())
@@ -88,7 +88,7 @@ func TestDigest_SilentOutsideConfiguredHour(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
+	p := NewPoller(d, f, Config{AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
 	// 10:00 MSK ≠ configured 09:00 → no send.
 	p.SetNow(func() time.Time { return fixedNow.Add(time.Hour) })
 
@@ -111,7 +111,7 @@ func TestDigest_GoesToAdminDM(t *testing.T) {
 	}
 
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
+	p := NewPoller(d, f, Config{AdminUserID: 500, HourMSK: 9, OnlineWindow: 10 * time.Minute})
 	p.SetNow(func() time.Time { return fixedNow })
 
 	p.TickForTest(context.Background())

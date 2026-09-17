@@ -25,7 +25,7 @@ func muteQuery(from, chat int64, data string) *tg.CallbackQuery {
 func TestAdminMuteCallback_AdminMutesRouterIdempotently(t *testing.T) {
 	d, uid := newTestDB(t) // роутер vasya
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 	want := "Больше не пишу про «vasya». Вернуть — в приложении, «Парк»."
 
 	for press := 1; press <= 2; press++ {
@@ -54,7 +54,7 @@ func TestAdminMuteCallback_RejectsNonAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 
 	r.HandleCallback(context.Background(), muteQuery(100, 100, fmt.Sprintf("nmute:%d", uid)))
 
@@ -73,7 +73,7 @@ func TestAdminMuteCallback_RejectsNonAdmin(t *testing.T) {
 func TestAdminMuteCallback_NoAdminConfiguredRejectsEveryone(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100})
+	r := NewRouter(d, f, Config{})
 
 	r.HandleCallback(context.Background(), muteQuery(42, 42, fmt.Sprintf("nmute:%d", uid)))
 
@@ -89,7 +89,7 @@ func TestAdminMuteCallback_NoAdminConfiguredRejectsEveryone(t *testing.T) {
 func TestAdminMuteCallback_UnknownRouter(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 
 	r.HandleCallback(context.Background(), muteQuery(42, 42, "nmute:99999"))
 
@@ -103,7 +103,7 @@ func TestAdminMuteCallback_UnknownRouter(t *testing.T) {
 func TestAdminMuteCallback_MalformedData(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 
 	r.HandleCallback(context.Background(), muteQuery(42, 42, "nmute:abc"))
 
@@ -124,7 +124,7 @@ func TestAdminMuteCallback_LongNicknameToastFitsTelegramLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 
 	r.HandleCallback(context.Background(), muteQuery(42, 42, fmt.Sprintf("nmute:%d", uid)))
 

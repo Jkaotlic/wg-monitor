@@ -25,7 +25,6 @@ type TGSender interface {
 }
 
 type Config struct {
-	ChatID             int64
 	RealertEvery       time.Duration // default 6h
 	MobileRealertEvery time.Duration // default 6h
 	TickEvery          time.Duration // default 5min

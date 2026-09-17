@@ -9,7 +9,6 @@
 | Linux amd64 VPS | Backend, SQLite state, Caddy/TLS reverse proxy |
 | Domain for VPS | Public HTTPS backend URL |
 | Telegram bot | Alerts and control UI |
-| Telegram forum group | One topic per router |
 | Keenetic router | KeeneticOS 4/5 with Entware installed |
 | AWG Manager | Publicly reachable through KeenDNS or another HTTPS domain |
 
@@ -18,7 +17,7 @@
 1. Download the deploy wizard from <https://github.com/Jkaotlic/wg-monitor/releases>.
 2. Run `wg-monitor-deploy`.
 3. Choose `[1] VPS / backend`.
-4. Enter VPS host, SSH auth, domain, Telegram bot token, chat ID, and admin user ID.
+4. Enter VPS host, SSH auth, domain, Telegram bot token, and admin user ID.
 5. The wizard installs backend service files, config, Caddy route, and backend enrollment API.
 
 After install, the wizard records backend version and deploy time in `wizard.toml`.
@@ -161,7 +160,6 @@ Use `[3] Routers`, then the add/re-enroll action.
 The wizard asks for:
 
 - Router nickname.
-- Telegram topic ID.
 - Public AWG Manager URL.
 - AWG Manager API key, or web login/password fallback.
 - Entware terminal login/password when the terminal bridge needs credentials.
@@ -254,19 +252,15 @@ The wizard compares `wizard.toml`, backend `/healthz`, and the latest GitHub rel
 
 English:
 
-- The backend registers two command surfaces at startup: the default operator command set and a scoped admin command set.
-- The backend also sets the bot chat menu button on every start. With `public_base_url` on HTTPS it becomes a `web_app` button opening the mini app at `<public_base_url>/miniapp/`; without it (or on plain HTTP, which Telegram refuses to open as a web app) it falls back to Telegram's `commands` menu. Either way the button is re-applied at startup, so a button set by hand in BotFather does not survive a restart — change `public_base_url` instead.
-- The default operator scope intentionally excludes admin-only commands, so operators on desktop clients see only topic-safe actions.
-- Router-topic menus are generated from the same menu registry as reply keyboards, compat inline keyboards, slash commands, and operator help.
-- `/menu` and `/keyboard` re-send both menu surfaces in the active router topic: first the bottom reply keyboard, then the visible inline fallback.
+- The backend clears the bot's command menu at every start in all three scopes it ever used: default, the admin's private chat and (when `telegram.chat_id` is still present in the config) that group's admin member scope. There are no slash commands left.
+- The chat menu button is re-applied at every start: with `public_base_url` on HTTPS it is a `web_app` button opening `<public_base_url>/miniapp/`. Without HTTPS the button is left untouched — there is no command list behind it any more.
+- `telegram.chat_id` and `telegram.extra_chat_ids` are optional. They are used once at startup to clear the group's command menu and are shown in the dashboard summary; nothing else reads them. A group can be deleted by hand after the rollout.
 
 Русский:
 
-- Backend при старте регистрирует две поверхности команд: обычную операторскую и scoped admin-команды.
-- Кнопка меню приватного чата на каждом старте ставится заново: при `public_base_url` по HTTPS это `web_app`-кнопка «Открыть приложение» на `<public_base_url>/miniapp/`, иначе -- список команд. Кнопка, выставленная руками в BotFather, до следующего рестарта не доживёт. Топиков в группе это не касается: TG показывает кнопку меню только в приватном чате.
-- В default scope нет админских команд, поэтому операторы в desktop-клиентах видят только безопасные действия текущего топика.
-- Видимое меню топика строится из общего registry: из него же собираются reply keyboard, compat inline keyboard, slash-команды и операторская справка.
-- `/menu` и `/keyboard` заново присылают актуальное меню в текущий топик роутера.
+- Бэкенд на каждом старте стирает меню команд во всех трёх областях, в которые когда-либо его ставил: по умолчанию, личка админа и (если `telegram.chat_id` ещё есть в конфиге) админ-участник этой группы. Слеш-команд не осталось.
+- Кнопка меню ставится заново на каждом старте: при `public_base_url` по HTTPS это `web_app`-кнопка на `<public_base_url>/miniapp/`. Без HTTPS кнопку не трогаем — списка команд за ней больше нет.
+- `telegram.chat_id` и `telegram.extra_chat_ids` необязательны: они нужны один раз на старте, чтобы стереть меню команд в группе, и показываются в сводке дашборда. Группу можно удалить руками после раскатки.
 
 ## Doctor And Sync
 

@@ -24,7 +24,7 @@ func stageIncident(t *testing.T, d *db.DB, uid int64, now time.Time, age, sinceL
 }
 
 func pollerAt(d *db.DB, f *fakeTG, now time.Time) *Poller {
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: time.Hour, TickEvery: time.Second})
 	p.SetNow(func() time.Time { return now })
 	return p
 }
@@ -94,7 +94,7 @@ func TestRealertBackoffNeverShortensConfiguredCadence(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
 	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 48 * time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: 48 * time.Hour, TickEvery: time.Second})
 	p.SetNow(func() time.Time { return now })
 	stageIncident(t, d, uid, now, 30*time.Hour, 7*time.Hour)
 

@@ -21,7 +21,6 @@ func TestUpdatesNeverReachDirectMessages(t *testing.T) {
 		"miniapp_versions.go",
 		"version_snapshot.go",
 		"dashboard_updates.go",
-		filepath.Join("callbacks", "updates_snapshot.go"),
 		filepath.Join("updatespoll", "poller.go"),
 		filepath.Join("db", "update_reminders.go"),
 		filepath.Join("upstream", "compare.go"),

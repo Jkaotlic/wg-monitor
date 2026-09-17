@@ -2,21 +2,15 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"regexp"
-	"time"
 
-	backendpkg "github.com/Jkaotlic/wg-monitor/internal/backend"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
 var Version = "0.5.0-awgmgr-pivot"
@@ -38,33 +32,20 @@ func main() {
 		exitIP := fs.String("expected-exit-ip", "", "expected exit IPv4 when probing through the tunnel")
 		backendURL := fs.String("backend-url", envOr("WGM_BACKEND_URL", "https://wgmonitor.example.com"), "backend HTTPS URL printed in install hint (env WGM_BACKEND_URL)")
 		kind := fs.String("kind", db.KindStatic, "router kind: static (home/office, default) or mobile (4G in-vehicle)")
-		ensureTopic := fs.Bool("ensure-topic", false, "create the TG forum topic for this user immediately (requires --config)")
-		configPath := fs.String("config", "", "backend config.yaml (required with --ensure-topic; supplies chat_id and bot_token)")
 		_ = fs.Parse(os.Args[2:])
 		if err := runAddUser(addUserOpts{
 			DBPath: *dbPath, Nickname: *nick, AWGIface: *iface,
-			ExpectedExitIP: *exitIP, BackendURL: *backendURL, Kind: *kind,
-			EnsureTopic: *ensureTopic, ConfigPath: *configPath, Out: os.Stdout,
+			ExpectedExitIP: *exitIP, BackendURL: *backendURL, Kind: *kind, Out: os.Stdout,
 		}); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
 		}
 	case "show-discovered-dns":
 		cmdShowDiscoveredDNS(os.Args[2:])
-	case "init-menu":
-		cmdInitMenu(os.Args[2:])
 	case "list-users":
 		cmdListUsers(os.Args[2:])
-	case "set-topic":
-		cmdSetTopic(os.Args[2:])
 	case "bind-tg-user":
 		cmdBindTGUser(os.Args[2:])
-	case "ensure-topics":
-		cmdEnsureTopics(os.Args[2:])
-	case "announce-dm-migration":
-		cmdAnnounceDMMigration(os.Args[2:])
-	case "bind-topic":
-		cmdBindTopic(os.Args[2:])
 	case "version":
 		fmt.Println(Version)
 	default:
@@ -77,16 +58,11 @@ func usage() string {
 	return `wg-monitor-cli — onboarding CLI
 
 Usage:
-  wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL] [--ensure-topic --config PATH]
+  wg-monitor-cli add-user --nickname=NAME --awg-iface=IFACE --expected-exit-ip=IP [--kind static|mobile] [--db PATH] [--backend-url URL]
   wg-monitor-cli list-users [--db PATH]
-  wg-monitor-cli bind-topic --nickname=NAME --thread-id=N [--db PATH]
-  wg-monitor-cli bind-topic --nickname=NAME --clear [--db PATH]
   wg-monitor-cli show-discovered-dns [--awg-manager-url URL] [--ndmc PATH]
-  wg-monitor-cli set-topic --kind=summary|systemic --thread-id=N [--db PATH]
   wg-monitor-cli bind-tg-user --nickname=NAME --tg-id=N [--db PATH]
   wg-monitor-cli bind-tg-user --nickname=NAME --clear [--db PATH]
-  wg-monitor-cli ensure-topics --config=PATH [--nickname=NAME] [--db PATH] [--sleep-ms N]
-  wg-monitor-cli announce-dm-migration [--config=PATH] [--db PATH] [--dry-run]
   wg-monitor-cli version
 `
 }
@@ -98,13 +74,7 @@ type addUserOpts struct {
 	ExpectedExitIP string
 	BackendURL     string
 	Kind           string
-	// EnsureTopic=true creates the TG forum topic for the new user
-	// immediately after Insert, so HARD alerts don't have to wait for the
-	// first incident to materialise the topic. Requires ConfigPath
-	// (chat_id + bot_token come from there).
-	EnsureTopic bool
-	ConfigPath  string
-	Out         io.Writer
+	Out            io.Writer
 }
 
 func runAddUser(o addUserOpts) error {
@@ -167,30 +137,7 @@ checks:
     #   - { type: doh, url: "https://dns.example/dns-query" }
     #   - { type: plain, host: 1.1.1.1, port: 53, ndms_name: Wireguard0 }
 `, o.BackendURL, rawToken, o.Nickname, o.AWGIface, o.ExpectedExitIP)
-	if o.EnsureTopic {
-		if o.ConfigPath == "" {
-			fmt.Fprintln(o.Out, "\n! --ensure-topic requires --config=PATH — skipping topic creation.")
-			return nil
-		}
-		cfg, cerr := backendpkg.LoadConfig(o.ConfigPath)
-		if cerr != nil {
-			fmt.Fprintf(o.Out, "\n! --ensure-topic: load config failed: %v — skipping topic creation.\n", cerr)
-			return nil
-		}
-		tgClient := &tg.Client{
-			BaseURL: tg.DefaultBaseURL,
-			Token:   cfg.Telegram.BotToken,
-			HTTP:    &http.Client{Timeout: 30 * time.Second},
-		}
-		ref, terr := alerts.EnsureTopicForUser(context.Background(), tgClient, d, cfg.Telegram.ChatID, id, false)
-		if terr != nil {
-			fmt.Fprintf(o.Out, "\n! --ensure-topic: createForumTopic failed: %v\n  (You can retry with: wg-monitor-cli ensure-topics --config=%s --nickname=%s)\n", terr, o.ConfigPath, o.Nickname)
-			return nil
-		}
-		fmt.Fprintf(o.Out, "\nTelegram topic created: chat_id=%d thread_id=%d\n", ref.ChatID, ref.ThreadID)
-		return nil
-	}
-	fmt.Fprintf(o.Out, "\nThe Telegram topic for this user will be created automatically on the first HARD alert.\n  (Tip: create it now with `wg-monitor-cli ensure-topics --config=PATH --nickname=%s`)\n", o.Nickname)
+	fmt.Fprintf(o.Out, "\nДальше: человек открывает бота, жмёт /start и присылает свой Telegram ID; привязать владельца -- `wg-monitor-cli bind-tg-user --nickname=%s --tg-id=N`.\n", o.Nickname)
 	return nil
 }
 

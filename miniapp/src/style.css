@@ -2111,54 +2111,35 @@ body {
 }
 
 /* ============================================================
-   Шаги (первый вход)
+   Пустой доступ (первый вход)
    ============================================================ */
-.steps {
-  display: flex;
-  flex-direction: column;
-}
-
-.step {
-  display: flex;
-  gap: var(--sp-3);
+.noaccess-id {
+  margin: 0;
   padding: var(--sp-3) 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.step:last-child { border-bottom: none; }
-
-.step-num {
-  width: 22px;
-  height: 22px;
-  border-radius: var(--radius-pill);
-  flex: none;
-  background: color-mix(in srgb, var(--sig) 14%, transparent);
-  color: var(--sig);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.step-main {
-  flex: 1;
-  min-width: 0;
   font-size: var(--fs-md);
-  font-weight: 500;
-  line-height: var(--lh-tight);
+  line-height: var(--lh-normal);
 }
 
-/* Пояснение к шагу -- обычной фразой, а не кодом: это объяснение человеку,
-   а не идентификатор. */
-.step-note {
-  display: block;
-  text-decoration: none;
-  margin-top: 3px;
-  font-size: var(--fs-sm);
-  font-weight: 400;
-  line-height: var(--lh-normal);
-  color: var(--dim);
+.noaccess-id-label {
+  margin: 0;
+}
+
+/* Номер -- то, что человек передаёт администратору: он стоит отдельной
+   строкой рядом с кнопкой «Скопировать» и читается как значение, а не как
+   часть фразы. */
+.noaccess-id-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  margin: var(--sp-2) 0 0;
+}
+
+.noaccess-id-value {
+  font-size: var(--fs-lg);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  color: var(--sig);
 }
 
 /* Поле подтверждения в шите: между текстом последствия и кнопкой, чтобы его

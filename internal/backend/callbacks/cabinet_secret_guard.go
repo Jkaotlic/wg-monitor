@@ -38,10 +38,8 @@ func cabinetSecretKind(text string) string {
 }
 
 // handleCabinetSecretMessage -- true, если сообщение было секретом и
-// обработано. Ключ vpn:// и ssh_password= ловятся в личке с ботом (любого
-// человека) и в разрешённых группах; в чужих группах бот молчит. Цифровой
-// код -- только в личке: в группе 10-20 цифр -- это и телефон, и Telegram ID,
-// и удалять такое сообщение нельзя (решение контроллера цикла 3).
+// обработано. Сторож работает только в личке с ботом (цикл 5: в группах бот
+// ничего не делает); HandleMessage зовёт его уже после проверки лички.
 func (r *Router) handleCabinetSecretMessage(ctx context.Context, m *tg.Message) bool {
 	kind := cabinetSecretKind(m.Text)
 	if kind == "" {
@@ -49,13 +47,6 @@ func (r *Router) handleCabinetSecretMessage(ctx context.Context, m *tg.Message) 
 		kind = cabinetSecretKind(m.Caption)
 	}
 	if kind == "" {
-		return false
-	}
-	private := m.Chat.ID == m.From.ID
-	if kind == "hidemy_code" && !private {
-		return false
-	}
-	if !private && !r.chatAllowed(m.Chat.ID) {
 		return false
 	}
 	deleted := false
@@ -71,8 +62,7 @@ func (r *Router) handleCabinetSecretMessage(ctx context.Context, m *tg.Message) 
 	if !deleted {
 		text = cabinetMovedKeptText
 	}
-	// Кнопку web_app Telegram разрешает только в личке.
-	if url := tg.MiniAppURL(r.cfg.PublicBaseURL); private && url != "" {
+	if url := tg.MiniAppURL(r.cfg.PublicBaseURL); url != "" {
 		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
 			{Text: cabinetOpenAppButton, WebApp: &tg.WebAppInfo{URL: url}},
 		}}}

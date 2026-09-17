@@ -68,7 +68,6 @@ type doctorOptions struct {
 type doctorBackendYAML struct {
 	Telegram struct {
 		BotTokenFile string `yaml:"bot_token_file"`
-		ChatID       int64  `yaml:"chat_id"`
 		AdminUserID  int64  `yaml:"admin_user_id"`
 	} `yaml:"telegram"`
 }
@@ -364,9 +363,6 @@ func doctorBackend(state *State, secrets *SecretStore, t *doctorTally) {
 			t.ok("backend.yaml парсится")
 			if by.Telegram.BotTokenFile == "" {
 				t.failf("backend.yaml: telegram.bot_token_file пустое (config-loader откажется стартовать)")
-			}
-			if by.Telegram.ChatID == 0 {
-				t.failf("backend.yaml: telegram.chat_id == 0")
 			}
 			if by.Telegram.AdminUserID == 0 {
 				t.failf("backend.yaml: telegram.admin_user_id == 0")

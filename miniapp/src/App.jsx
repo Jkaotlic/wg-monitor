@@ -104,6 +104,7 @@ export function App() {
     // умеет переспросить, и тогда оболочка продолжает как при обычном входе.
     body = (
       <NoAccess
+        telegramUserID={boot.telegramUserID}
         onRetry={(list) => {
           dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: boot.isAdmin }) })
           boot.setRouters(list)

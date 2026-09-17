@@ -37,7 +37,7 @@ func TestNotifyRouterTopicReachesAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &chatsRouterTG{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 
 	if err := r.NotifyRouterTopic(context.Background(), uid, "Линия починена"); err != nil {
 		t.Fatal(err)

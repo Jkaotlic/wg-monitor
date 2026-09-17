@@ -41,10 +41,6 @@ func (s *doorTG) SendMessageWithReplyKeyboard(context.Context, int64, *int64, st
 	return s.send()
 }
 
-func (s *doorTG) CreateForumTopic(context.Context, int64, string, int) (int64, error) {
-	return 0, nil
-}
-
 func (s *doorTG) open() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,7 +76,7 @@ func TestOfflineToUnreachableOnlyRecipientDoesNotHammer(t *testing.T) {
 	}
 
 	door := &doorTG{err: &tg.APIError{Method: "sendMessage", Code: 400, Description: "Bad Request: chat not found"}}
-	disp := NewDispatcher(d, door, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, door, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	const scanEvery = 30 * time.Second
 	w := heartbeat.NewWatcher(d, disp, heartbeat.Config{
 		StaleAfter:    5 * time.Minute,

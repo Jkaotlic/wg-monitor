@@ -51,8 +51,6 @@ func (s *chatsTG) SendMessageWithReplyKeyboard(_ context.Context, chatID int64, 
 	return s.note(chatID, nil)
 }
 
-func (s *chatsTG) CreateForumTopic(context.Context, int64, string, int) (int64, error) { return 0, nil }
-
 func (s *chatsTG) got(chatID int64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -85,25 +83,25 @@ func TestAlertsEveryKindReachesAdminOfForeignRouter(t *testing.T) {
 		run  func(t *testing.T, d *db.DB, s *chatsTG, uid int64)
 	}{
 		{"не на связи", func(t *testing.T, d *db.DB, s *chatsTG, uid int64) {
-			disp := NewDispatcher(d, s, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, AdminUserID: testAdminTG})
+			disp := NewDispatcher(d, s, Config{FailThreshold: 3, RecoveryThreshold: 2, AdminUserID: testAdminTG})
 			if err := disp.SendOffline(context.Background(), uid, "router-a", 10*time.Minute); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{"пробуждение", func(t *testing.T, d *db.DB, s *chatsTG, uid int64) {
-			n := NewWakeNotifier(d, s, -100, testAdminTG)
+			n := NewWakeNotifier(d, s, testAdminTG)
 			if err := n.SendWake(context.Background(), uid, "router-a", []wire.Check{{Name: "tunnels", Status: "ok"}}); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{"сон", func(t *testing.T, d *db.DB, s *chatsTG, uid int64) {
-			n := NewSleepNotifier(d, s, -100, testAdminTG)
+			n := NewSleepNotifier(d, s, testAdminTG)
 			if err := n.SendSleeping(context.Background(), uid, "router-a", time.Now().Add(-time.Hour)); err != nil {
 				t.Fatal(err)
 			}
 		}},
 		{"отложенный деплой", func(t *testing.T, d *db.DB, s *chatsTG, uid int64) {
-			n := NewDeployNotifier(d, s, -100, testAdminTG)
+			n := NewDeployNotifier(d, s, testAdminTG)
 			if err := n.SendDeferredUpdate(context.Background(), uid, "router-a", "v0.33.0", "ok", ""); err != nil {
 				t.Fatal(err)
 			}

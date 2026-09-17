@@ -37,7 +37,6 @@ import (
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend"
-	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
@@ -65,6 +64,7 @@ func main() {
 	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
 	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
+	noAccess := flag.Bool("no-access", false, "открыть мини-апп человеком без доступа: парк принадлежит другому, экран «Роутер ещё не привязан» с Telegram ID")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
 	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
@@ -107,7 +107,14 @@ func main() {
 	updatePath := filepath.Join(updateDir, "backend-update.json")
 	go watchBackendUpdate(context.Background(), updatePath, *backendUpdate == "apply")
 
-	ids, err := seed(d, *tgUser)
+	// Без доступа парк принадлежит другому человеку: так открывается экран
+	// пустого доступа, и он единственный, который иначе нечем посмотреть.
+	seedOwner := *tgUser
+	if *noAccess {
+		seedOwner = *tgUser + 1000
+		*asAdmin = false
+	}
+	ids, err := seed(d, seedOwner)
 	if err != nil {
 		fatal(err)
 	}
@@ -426,11 +433,6 @@ func (f *fakeAgent) Dequeue(_ context.Context, _ int64, _ time.Duration) (*wire.
 }
 func (f *fakeAgent) RecordResult(_ int64, _ wire.CommandResult) error { return nil }
 
-// Ссылку на исходное сообщение в Telegram песочница не хранит: связывать
-// ответ не с чем, бота здесь нет.
-func (f *fakeAgent) ConsumeOriginRef(_ int64, _ string) (cmdpkg.MessageRef, bool) {
-	return cmdpkg.MessageRef{}, false
-}
 func (f *fakeAgent) DropPending(_ int64, _ string) []wire.Command { return nil }
 
 func key(userID int64, id string) string { return strconv.FormatInt(userID, 10) + "/" + id }

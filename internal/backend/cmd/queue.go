@@ -1,10 +1,10 @@
 // Package cmd is the in-memory command channel between backend and agents.
 //
-// Lifetime: a TG admin taps a button → callbacks.Router enqueues a wire.Command
-// for that user → agent's long-poll GET /v1/cmd dequeues → agent runs the
-// action → POST /v1/cmd/result lands here. Backend restart drops the queue;
-// admin re-taps the button if needed (acceptable: no command persists money
-// or external state until the agent runs it).
+// Жизнь команды: мини-апп (или дашборд) ставит wire.Command человеку → агент
+// забирает её долгим опросом GET /v1/cmd → выполняет → POST /v1/cmd/result
+// возвращает итог сюда, и его забирает опрос того, кто команду поставил.
+// Рестарт бэкенда очередь теряет: человек повторяет действие (ничего денежного
+// и внешнего команда не меняет, пока агент её не выполнил).
 package cmd
 
 import (
@@ -17,20 +17,9 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-// MessageRef identifies the originating TG message for a command — chat, the
-// message that carried the inline button, the optional topic, and the action
-// name (copied from cmd.Action so the result-handler can format the relay
-// without re-fetching the queued command).
-type MessageRef struct {
-	ChatID    int64
-	MessageID int64
-	ThreadID  *int64
-	Action    string
-}
-
-// resultEntry / originEntry pair their payload with a creation timestamp so
-// the Sweep janitor can evict stale entries (LOGIC-02). Without this both
-// maps grew without bound for the lifetime of the backend process.
+// resultEntry пара́ет полезную нагрузку с временем создания, чтобы уборщик
+// Sweep вымётывал протухшее (LOGIC-02). Без этого карта росла бы всё время
+// жизни процесса.
 var ErrDuplicateResult = errors.New("duplicate command result")
 var ErrUnissuedResult = errors.New("command result does not match an issued command")
 
@@ -49,11 +38,6 @@ type resultEntry struct {
 	action string
 }
 
-type originEntry struct {
-	ref        MessageRef
-	enqueuedAt time.Time
-}
-
 type commandEntry struct {
 	cmd      wire.Command
 	issuedAt time.Time
@@ -63,17 +47,14 @@ type commandEntry struct {
 // their TTL expired at dequeue time or because a newer command superseded them.
 type ExpiredCommandHandler func(userID int64, cmd wire.Command)
 
-// Queue is per-user FIFO queues plus a per-(user,id) result map plus a
-// per-(user,id) origin map. Concurrent-safe. Single mutex is fine —
-// operations are short and the fleet is ~10 users, not 10k.
+// Queue is per-user FIFO queues plus a per-(user,id) result map.
+// Concurrent-safe. Single mutex is fine — operations are short and the fleet
+// is ~10 users, not 10k.
 type Queue struct {
 	mu      sync.Mutex
 	pending map[int64][]wire.Command // userID → FIFO
 	results map[int64]map[string]resultEntry
 	issued  map[int64]map[string]commandEntry
-	// origins maps (userID → cmd.ID → originEntry). Populated by
-	// EnqueueWithRef; consumed by the cmd-result handler to relay TG replies.
-	origins map[int64]map[string]originEntry
 	signal  *sync.Cond // signals on Enqueue and RecordResult
 	onDrop  ExpiredCommandHandler
 	logger  *slog.Logger // optional; nil → slog.Default()
@@ -103,7 +84,6 @@ func New() *Queue {
 		pending: make(map[int64][]wire.Command),
 		results: make(map[int64]map[string]resultEntry),
 		issued:  make(map[int64]map[string]commandEntry),
-		origins: make(map[int64]map[string]originEntry),
 	}
 	q.signal = sync.NewCond(&q.mu)
 	return q
@@ -153,24 +133,12 @@ func (q *Queue) prepareCommand(userID int64, cmd wire.Command) (wire.Command, er
 	return cmd, nil
 }
 
-func (q *Queue) deleteOriginLocked(userID int64, cmdID string) {
-	bucket, ok := q.origins[userID]
-	if !ok {
-		return
-	}
-	delete(bucket, cmdID)
-	if len(bucket) == 0 {
-		delete(q.origins, userID)
-	}
-}
-
 func (q *Queue) enqueueLocked(userID int64, cmd wire.Command) (int, []wire.Command) {
 	var dropped []wire.Command
 	if supersedesPending(cmd.Action) {
 		filtered := q.pending[userID][:0]
 		for _, existing := range q.pending[userID] {
 			if existing.Action == cmd.Action {
-				q.deleteOriginLocked(userID, existing.ID)
 				dropped = append(dropped, existing)
 				continue
 			}
@@ -193,67 +161,6 @@ func notifyDroppedCommands(userID int64, h ExpiredCommandHandler, dropped []wire
 	for _, cmd := range dropped {
 		h(userID, cmd)
 	}
-}
-
-// EnqueueWithRef is Enqueue + records MessageRef (with ref.Action populated
-// from cmd.Action) so that when the agent posts CommandResult later, the
-// backend can reply to the original message. Bare Enqueue does not touch
-// origins.
-func (q *Queue) EnqueueWithRef(userID int64, cmd wire.Command, ref MessageRef) error {
-	cmd, err := q.prepareCommand(userID, cmd)
-	if err != nil {
-		return err
-	}
-	ref.Action = cmd.Action
-	q.mu.Lock()
-	pendingLen, dropped := q.enqueueLocked(userID, cmd)
-	bucket, ok := q.origins[userID]
-	if !ok {
-		bucket = make(map[string]originEntry)
-		q.origins[userID] = bucket
-	}
-	bucket[cmd.ID] = originEntry{ref: ref, enqueuedAt: time.Now()}
-	onDrop := q.onDrop
-	q.mu.Unlock()
-	q.signal.Broadcast()
-	notifyDroppedCommands(userID, onDrop, dropped)
-	q.log().Debug("queue enqueue", "user_id", userID, "cmd_id", cmd.ID, "action", cmd.Action, "pending", pendingLen)
-	return nil
-}
-
-// OriginRef returns the MessageRef stored at EnqueueWithRef time, or
-// (zero, false) if the command was enqueued without ref or already consumed.
-func (q *Queue) OriginRef(userID int64, cmdID string) (MessageRef, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	bucket, ok := q.origins[userID]
-	if !ok {
-		return MessageRef{}, false
-	}
-	r, ok := bucket[cmdID]
-	return r.ref, ok
-}
-
-// ConsumeOriginRef is OriginRef + delete in one shot. Use from the result
-// handler so the same ref isn't relayed twice if RecordResult somehow fires
-// twice for the same command id. Result-map cleanup is handled separately by
-// Sweep so AwaitResult-using callers (tests, future inline-toast UIs) can
-// still read the result after the relay path has consumed the origin.
-func (q *Queue) ConsumeOriginRef(userID int64, cmdID string) (MessageRef, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	bucket, ok := q.origins[userID]
-	if !ok {
-		return MessageRef{}, false
-	}
-	r, ok := bucket[cmdID]
-	if ok {
-		delete(bucket, cmdID)
-		if len(bucket) == 0 {
-			delete(q.origins, userID)
-		}
-	}
-	return r.ref, ok
 }
 
 // Enqueue appends cmd to userID's queue and wakes any waiter.
@@ -289,7 +196,6 @@ func (q *Queue) DropPending(userID int64, action string) []wire.Command {
 	filtered := queue[:0]
 	for _, existing := range queue {
 		if existing.Action == action {
-			q.deleteOriginLocked(userID, existing.ID)
 			dropped = append(dropped, existing)
 			continue
 		}
@@ -354,12 +260,6 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 			}
 			if commandExpired(head, time.Now()) {
 				q.log().Warn("queue drop expired command", "user_id", userID, "cmd_id", head.ID, "action", head.Action)
-				if bucket, ok := q.origins[userID]; ok {
-					delete(bucket, head.ID)
-					if len(bucket) == 0 {
-						delete(q.origins, userID)
-					}
-				}
 				if h := q.onDrop; h != nil {
 					q.mu.Unlock()
 					h(userID, head)
@@ -569,27 +469,16 @@ func (q *Queue) AwaitResult(ctx context.Context, userID int64, id string, timeou
 	}
 }
 
-// Sweep evicts origin and result entries older than ttl. Caller drives the
+// Sweep evicts result and issued entries older than ttl. Caller drives the
 // schedule (see cmd/backend/main.go); not auto-spawned to keep the package
-// dependency-free of context plumbing. Returns the number of entries evicted.
-func (q *Queue) Sweep(ttl time.Duration) (origins, results int) {
+// dependency-free of context plumbing. Returns the number of results evicted.
+func (q *Queue) Sweep(ttl time.Duration) (results int) {
 	if ttl <= 0 {
-		return 0, 0
+		return 0
 	}
 	cutoff := time.Now().Add(-ttl)
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	for uid, bucket := range q.origins {
-		for id, e := range bucket {
-			if e.enqueuedAt.Before(cutoff) {
-				delete(bucket, id)
-				origins++
-			}
-		}
-		if len(bucket) == 0 {
-			delete(q.origins, uid)
-		}
-	}
 	for uid, bucket := range q.results {
 		for id, e := range bucket {
 			if e.recordedAt.Before(cutoff) {
@@ -611,5 +500,5 @@ func (q *Queue) Sweep(ttl time.Duration) (origins, results int) {
 			delete(q.issued, uid)
 		}
 	}
-	return origins, results
+	return results
 }

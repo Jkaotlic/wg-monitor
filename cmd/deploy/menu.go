@@ -298,8 +298,7 @@ func routerMenuItems() []menuItem {
 		{Key: "2", Title: "Re-enroll / переустановить", Help: "когда нажимать: потерян token, переезд, сломан агент; выдаст новый token и заново выполнит bootstrap"},
 		{Key: "3", Title: "Удалить агента", Help: "когда нажимать: нужно снести wg-monitor с роутера или убрать ошибочную установку"},
 		{Key: "4", Title: "Показать роутеры", Help: "когда нажимать: быстро посмотреть, кого wizard знает локально"},
-		{Key: "5", Title: "Telegram group/topic", Help: "when to use: allow a separate Telegram supergroup and bind a router topic to it"},
-		{Key: "6", Title: "Оживить (redeploy + backend URL)", Help: "когда нажимать: роутер офлайн после смены домена backend; по SSH чинит backend.url, накатывает свежий агент и рестартует"},
+		{Key: "5", Title: "Оживить (redeploy + backend URL)", Help: "когда нажимать: роутер офлайн после смены домена backend; по SSH чинит backend.url, накатывает свежий агент и рестартует"},
 	}
 }
 
@@ -370,10 +369,6 @@ func runRouterMenu(state *State, statePath string, secrets *SecretStore, dl *Dow
 		case "4":
 			printKnownRouters(state)
 		case "5":
-			runActionAndSave(state, statePath, secrets, func() error {
-				return actionTelegramGroup(state, secrets, "")
-			})
-		case "6":
 			nick := strings.TrimSpace(Ask("Никнейм роутера для оживления (Enter — если он один)", ""))
 			runActionAndSave(state, statePath, secrets, func() error {
 				return actionUpdateAgent(state, secrets, dl, nick, true)
@@ -381,7 +376,7 @@ func runRouterMenu(state *State, statePath string, secrets *SecretStore, dl *Dow
 		case "B", "Q", "":
 			return
 		default:
-			PrintFail("Не понял. Введи 1-6 или B.")
+			PrintFail("Не понял. Введи 1-5 или B.")
 		}
 		fmt.Println()
 		Ask("[Enter] чтобы вернуться в раздел Роутеры", "")

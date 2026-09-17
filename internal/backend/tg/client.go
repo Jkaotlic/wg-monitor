@@ -170,25 +170,6 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, threadID *int64,
 	return out.MessageID, nil
 }
 
-type createTopicReq struct {
-	ChatID    int64  `json:"chat_id"`
-	Name      string `json:"name"`
-	IconColor int    `json:"icon_color,omitempty"`
-}
-
-type createTopicResult struct {
-	MessageThreadID int64 `json:"message_thread_id"`
-}
-
-func (c *Client) CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int) (int64, error) {
-	body, _ := json.Marshal(createTopicReq{ChatID: chatID, Name: name, IconColor: iconColor})
-	var out createTopicResult
-	if err := c.call(ctx, "createForumTopic", body, &out); err != nil {
-		return 0, err
-	}
-	return out.MessageThreadID, nil
-}
-
 type sendMessageWithKBReq struct {
 	ChatID           int64                 `json:"chat_id"`
 	MessageThreadID  *int64                `json:"message_thread_id,omitempty"`
@@ -284,11 +265,9 @@ type sendMessageWithRMReq struct {
 }
 
 // SendMessageWithReplyKeyboard sends a message with any kind of reply_markup
-// payload. markup may be:
-//   - *InlineKeyboardMarkup
-//   - *ReplyKeyboardMarkup
-//   - *ReplyKeyboardRemove
-//   - nil (no reply_markup field)
+// payload. markup may be *InlineKeyboardMarkup or nil (no reply_markup field).
+// Нижних клавиатур у бота больше нет (цикл 5), но имя метода осталось прежним
+// ради вызывающих.
 //
 // We marshal first, then forward as RawMessage so json.Marshal produces the
 // canonical TG payload regardless of which variant was passed.
@@ -489,14 +468,8 @@ func (c *Client) SetMyCommandsWithScope(ctx context.Context, cmds []BotCommand, 
 	return c.call(ctx, "setMyCommands", body, nil)
 }
 
-func (c *Client) SetCommandsMenuButton(ctx context.Context) error {
-	body, _ := json.Marshal(setChatMenuButtonReq{MenuButton: menuButton{Type: "commands"}})
-	return c.call(ctx, "setChatMenuButton", body, nil)
-}
-
 // SetWebAppMenuButton points the private-chat menu button at the mini app.
-// Same endpoint as SetCommandsMenuButton and equally idempotent -- TG keeps
-// only the last button, so the two calls are alternatives, never a pair.
+// Идемпотентно: TG держит только последнюю кнопку.
 //
 // Scope note: this sets the DEFAULT button, which TG shows in private chats
 // with the bot. Group and forum-topic chats do not render it at all, so the

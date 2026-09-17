@@ -225,25 +225,6 @@ func TestQueue_EnqueueNotifiesSupersededSelfUpdate(t *testing.T) {
 	}
 }
 
-func TestQueue_EnqueueSupersedesSelfUpdateOrigin(t *testing.T) {
-	q := New()
-	first := mkCmd("old-update", "self_update")
-	second := mkCmd("new-update", "self_update")
-	if err := q.EnqueueWithRef(7, first, MessageRef{ChatID: 1, MessageID: 10}); err != nil {
-		t.Fatalf("enqueue first: %v", err)
-	}
-	if err := q.EnqueueWithRef(7, second, MessageRef{ChatID: 1, MessageID: 11}); err != nil {
-		t.Fatalf("enqueue second: %v", err)
-	}
-
-	if _, ok := q.OriginRef(7, "old-update"); ok {
-		t.Fatal("superseded self_update must not keep a stale origin ref")
-	}
-	if ref, ok := q.OriginRef(7, "new-update"); !ok || ref.MessageID != 11 {
-		t.Fatalf("new self_update origin missing or wrong: %+v ok=%v", ref, ok)
-	}
-}
-
 func TestQueue_CommandByIDReturnsDequeuedCommand(t *testing.T) {
 	q := New()
 	cmd := wire.Command{
@@ -394,62 +375,6 @@ func issueCommandForTest(t *testing.T, q *Queue, userID int64, cmd wire.Command)
 	got, ok := q.Dequeue(context.Background(), userID, time.Second)
 	if !ok || got == nil || got.ID != cmd.ID {
 		t.Fatalf("dequeue issued command got=%+v ok=%v", got, ok)
-	}
-}
-
-func TestQueueEnqueueWithRefAndLookup(t *testing.T) {
-	q := New()
-	tid := int64(11)
-	ref := MessageRef{ChatID: -100, MessageID: 99, ThreadID: &tid}
-	cmd := wire.Command{ID: "abc", Action: "diag_now", IssuedAt: time.Now()}
-	if err := q.EnqueueWithRef(7, cmd, ref); err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
-	got, ok := q.OriginRef(7, "abc")
-	if !ok {
-		t.Fatalf("OriginRef miss")
-	}
-	if got.ChatID != -100 || got.MessageID != 99 || got.ThreadID == nil || *got.ThreadID != 11 {
-		t.Errorf("ref mismatch: %+v", got)
-	}
-	// Action must be copied from cmd.Action (consumed in T16 by relay).
-	if got.Action != "diag_now" {
-		t.Errorf("Action not copied: %q", got.Action)
-	}
-	// Bare Enqueue still works and does NOT record a ref.
-	if err := q.Enqueue(7, wire.Command{ID: "no-ref", Action: "diag_now", IssuedAt: time.Now()}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := q.OriginRef(7, "no-ref"); ok {
-		t.Errorf("bare Enqueue should NOT record ref")
-	}
-}
-
-func TestQueueConsumeOriginRefDeletes(t *testing.T) {
-	q := New()
-	cmd := wire.Command{ID: "once", Action: "diag_now", IssuedAt: time.Now()}
-	ref := MessageRef{ChatID: -100, MessageID: 50}
-	_ = q.EnqueueWithRef(3, cmd, ref)
-	got, ok := q.ConsumeOriginRef(3, "once")
-	if !ok || got.MessageID != 50 {
-		t.Fatalf("first consume miss: %+v ok=%v", got, ok)
-	}
-	if _, ok := q.ConsumeOriginRef(3, "once"); ok {
-		t.Errorf("second consume should miss after delete")
-	}
-}
-
-func TestQueueConsumeOriginRefRemovesEmptyBucket(t *testing.T) {
-	q := New()
-	cmd := wire.Command{ID: "once", Action: "diag_now", IssuedAt: time.Now()}
-	if err := q.EnqueueWithRef(7, cmd, MessageRef{ChatID: 1, MessageID: 2}); err != nil {
-		t.Fatalf("enqueue: %v", err)
-	}
-	if _, ok := q.ConsumeOriginRef(7, "once"); !ok {
-		t.Fatal("origin ref not consumed")
-	}
-	if _, ok := q.origins[7]; ok {
-		t.Fatalf("empty origin bucket should be removed: %+v", q.origins)
 	}
 }
 

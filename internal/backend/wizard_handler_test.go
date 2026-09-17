@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -1385,10 +1384,6 @@ func (s failingEnqueueSink) Dequeue(context.Context, int64, time.Duration) (*wir
 }
 
 func (s failingEnqueueSink) RecordResult(int64, wire.CommandResult) error { return nil }
-
-func (s failingEnqueueSink) ConsumeOriginRef(int64, string) (cmd.MessageRef, bool) {
-	return cmd.MessageRef{}, false
-}
 
 func (s failingEnqueueSink) CommandByID(int64, string) (wire.Command, bool) {
 	return wire.Command{}, false

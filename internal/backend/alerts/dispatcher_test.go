@@ -25,14 +25,10 @@ type fakeTG struct {
 	sent             []sentMsg
 	sentWithKeyboard []sentKBMsg
 	welcomeSends     []welcomeSend
-	topicCalls       []topicCall
-	topicID          int64
-	topicErr         error
 	// sendErrOnce, when non-nil, is returned by the next Send*; it is then
 	// cleared so the subsequent call succeeds. Lets tests simulate a
 	// transient TG failure (e.g. "thread not found") with retry.
-	sendErrOnce    error
-	topicCallCount int
+	sendErrOnce error
 }
 
 type sentMsg struct {
@@ -57,11 +53,6 @@ type welcomeSend struct {
 	markup   any
 }
 
-type topicCall struct {
-	chatID int64
-	name   string
-}
-
 func (f *fakeTG) SendMessage(_ context.Context, chatID int64, threadID *int64, text, _ string, replyTo *int64) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -84,20 +75,6 @@ func (f *fakeTG) SendMessageWithKeyboard(_ context.Context, chatID int64, thread
 		return 0, err
 	}
 	return int64(len(f.sentWithKeyboard) + 1000), nil
-}
-
-func (f *fakeTG) CreateForumTopic(_ context.Context, chatID int64, name string, _ int) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.topicErr != nil {
-		return 0, f.topicErr
-	}
-	f.topicCallCount++
-	f.topicCalls = append(f.topicCalls, topicCall{chatID: chatID, name: name})
-	if f.topicID == 0 {
-		return 4242, nil
-	}
-	return f.topicID, nil
 }
 
 func (f *fakeTG) SendMessageWithReplyKeyboard(_ context.Context, chatID int64, threadID *int64, text, _ string, _ *int64, markup any) (int64, error) {
@@ -133,7 +110,7 @@ func TestDispatcherHardPersistsStateWhenSendFails(t *testing.T) {
 	// ушла никому и обязана быть повторена. Состояние при этом сохраняется:
 	// иначе следующий fail-репорт снова пересёк бы порог и выдал дубль.
 	tgc := &fakeTG{sendErrOnce: errStub("telegram rate limited")}
-	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2})
 
 	hardSince := time.Now().Add(-2 * time.Minute).UTC()
 	tr := state.Transition{
@@ -162,7 +139,7 @@ func TestDispatcherSoftFlapNoTGButCounted(t *testing.T) {
 	tok := "2222222222222222222222222222222222222222222222222222222222222222"
 	uid, _ := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
 	tg := &fakeTG{}
-	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, tg, Config{FailThreshold: 3, RecoveryThreshold: 2})
 
 	tr := state.Transition{Kind: state.SoftFlap, Next: db.IncidentState{CurrentStatus: "ok"}}
 	if err := disp.Handle(context.Background(), uid, "vasya", "awg_handshake", tr, chk("awg_handshake", "fail", nil)); err != nil {
@@ -188,8 +165,8 @@ func TestDispatcherHARDIncludesKeyboard(t *testing.T) {
 	if err := d.Users().SetTelegramUserID(uid, 1101); err != nil {
 		t.Fatal(err)
 	}
-	ftg := &fakeTG{topicID: 5555}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -200, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
+	ftg := &fakeTG{}
+	disp := NewDispatcher(d, ftg, Config{FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
 
 	tr := state.Transition{
 		Kind: state.Hard,
@@ -248,8 +225,8 @@ func TestDispatcherHardTunnelAlertHasNoCommandButtons(t *testing.T) {
 	if err := d.Users().SetTelegramUserID(uid, 1110); err != nil {
 		t.Fatal(err)
 	}
-	ftg := &fakeTG{topicID: 5555}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -200, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
+	ftg := &fakeTG{}
+	disp := NewDispatcher(d, ftg, Config{FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
 
 	tr := state.Transition{
 		Kind: state.Hard,
@@ -290,7 +267,7 @@ func TestDispatcherRecoveryZeroesAcked(t *testing.T) {
 	})
 
 	ftg := &fakeTG{}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -300, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, ftg, Config{FailThreshold: 3, RecoveryThreshold: 2})
 
 	tr := state.Transition{
 		Kind: state.Recovery,
@@ -342,7 +319,7 @@ func TestSendOffline_HappyPath(t *testing.T) {
 	}
 	d.Users().UpdateThreadID(uid, 8888)
 	ftg := &fakeTG{}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, ftg, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	if err := disp.SendOffline(context.Background(), uid, "dora", 12*time.Minute); err != nil {
 		t.Fatalf("SendOffline: %v", err)
 	}
@@ -382,7 +359,7 @@ func TestSendOfflineCarriesAppButton(t *testing.T) {
 		t.Fatal(err)
 	}
 	ftg := &fakeTG{}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
+	disp := NewDispatcher(d, ftg, Config{FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://example.com"})
 	if err := disp.SendOffline(context.Background(), uid, "dora2", 12*time.Minute); err != nil {
 		t.Fatalf("SendOffline: %v", err)
 	}
@@ -423,7 +400,7 @@ func TestDispatcherSurfacesNonHealableTGError(t *testing.T) {
 	ftg := &fakeTG{
 		sendErrOnce: &tg.APIError{Method: "sendMessage", Description: "Forbidden: bot was kicked", Code: 403},
 	}
-	disp := NewDispatcher(d, ftg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, ftg, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	tr := state.Transition{
 		Kind: state.Hard,
 		Next: db.IncidentState{CurrentStatus: "hard", ConsecutiveFails: 3, HardSince: ptrT(time.Now())},
@@ -511,8 +488,8 @@ func TestDispatcherSetNow_OverridesLastAlertClock(t *testing.T) {
 	d := newDB(t)
 	tok := "3333333333333333333333333333333333333333333333333333333333333333"
 	uid, _ := d.Users().Insert("clockuser", tok, "1.1.1.1", "awg0")
-	tg := &fakeTG{topicID: 555}
-	disp := NewDispatcher(d, tg, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	tg := &fakeTG{}
+	disp := NewDispatcher(d, tg, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	disp.SetNow(func() time.Time { return fixed })
 
@@ -556,8 +533,8 @@ func TestDispatcherHardIncludesMiniAppButtonWhenConfigured(t *testing.T) {
 	if err := d.Users().SetTelegramUserID(uid, 1102); err != nil {
 		t.Fatal(err)
 	}
-	tgc := &fakeTG{topicID: 5555}
-	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://wg.example.test"})
+	tgc := &fakeTG{}
+	disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: "https://wg.example.test"})
 
 	tr := state.Transition{
 		Kind: state.Hard,
@@ -600,8 +577,8 @@ func TestDispatcherHardOmitsMiniAppButtonWhenNotConfigured(t *testing.T) {
 			if err := d.Users().SetTelegramUserID(uid, int64(1103+i)); err != nil {
 				t.Fatal(err)
 			}
-			tgc := &fakeTG{topicID: 6666}
-			disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: c.base})
+			tgc := &fakeTG{}
+			disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2, MiniAppBaseURL: c.base})
 
 			tr := state.Transition{
 				Kind: state.Hard,
@@ -661,7 +638,7 @@ func TestDispatcherHardFansOutToDMs(t *testing.T) {
 	tok := "8888000000000000000000000000000000000000000000000000000000000000"
 	uid, _ := d.Users().Insert("router-a", tok, "1.1.1.1", "awg0")
 	tgc := &fakeTG{}
-	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	sink := &recordingSink{delivers: 2}
 	disp.SetNotifySink(sink)
 
@@ -684,9 +661,6 @@ func TestDispatcherHardFansOutToDMs(t *testing.T) {
 		t.Fatalf("в тему группы ушло %d+%d сообщений, ждали ноль",
 			len(tgc.sent), len(tgc.sentWithKeyboard))
 	}
-	if len(tgc.topicCalls) != 0 {
-		t.Fatalf("тему создавали %d раз, при рассылке в личку она не нужна", len(tgc.topicCalls))
-	}
 }
 
 // «Починилось» приходит ответом каждому, и переписка по проверке забывается.
@@ -698,7 +672,7 @@ func TestDispatcherRecoveryRepliesToEach(t *testing.T) {
 		t.Fatal(err)
 	}
 	tgc := &fakeTG{}
-	disp := NewDispatcher(d, tgc, Config{ChatID: -100, FailThreshold: 3, RecoveryThreshold: 2})
+	disp := NewDispatcher(d, tgc, Config{FailThreshold: 3, RecoveryThreshold: 2})
 	sink := &recordingSink{}
 	disp.SetNotifySink(sink)
 

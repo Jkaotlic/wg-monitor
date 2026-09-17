@@ -273,23 +273,10 @@ type DeployNotifier interface {
 type CommandSink interface {
 	Dequeue(ctx context.Context, userID int64, holdTimeout time.Duration) (*wire.Command, bool)
 	RecordResult(userID int64, result wire.CommandResult) error
-	ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.MessageRef, bool)
 	CommandByID(userID int64, cmdID string) (wire.Command, bool)
 	Enqueue(userID int64, cmd wire.Command) error
 	DropPending(userID int64, action string) []wire.Command
 	AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool)
-}
-
-// TGNotifier posts command-result text back to the originating TG message.
-// Implemented by callbacks.Notifier; nil-safe (handler skips relay if absent).
-type TGNotifier interface {
-	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error
-}
-
-// PingCheckNotifier is the subset used by cmdResultHandler when ref.Action is
-// pingcheck_status or pingcheck_toggle. Implemented by callbacks.PingCheckPanelNotifier.
-type PingCheckNotifier interface {
-	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
 }
 
 // MiniappTGClient is the narrow Telegram capability the mini-app alert-action
@@ -307,11 +294,8 @@ type Deps struct {
 	Dispatcher          Dispatcher
 	Resumer             Resumer
 	CommandSink         CommandSink
-	TGNotifier          TGNotifier
-	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
-	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
-	DeployNotifier      DeployNotifier    // nil-safe (handler skips deferred update notices)
-	UI                  UIConfig
+	WakeNotifier        WakeNotifier   // nil-safe (handler skips if nil or user is static)
+	DeployNotifier      DeployNotifier // nil-safe (handler skips deferred update notices)
 	Thresholds          state.Thresholds
 	AlertPolicy         AlertPolicy
 	MobileFailThreshold int
@@ -1211,52 +1195,19 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
-		// Relay result back to TG (or the PingCheck panel) if a notifier is configured
-		// and we recorded the originating message. Async — must not stall the
-		// agent's POST on TG network latency.
-		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
-			incCmdResultRelay()
-			switch ref.Action {
-			case "pingcheck_status", "pingcheck_toggle":
-				if d.PingCheckNotifier != nil {
-					spawnRelayTimeout(d, "cmd-pingcheck", 30*time.Second, func(ctx context.Context) {
-						if err := d.PingCheckNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
-							incTGError()
-							d.Logger.Warn("pingcheck notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("pingcheck notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
-				}
-			default:
-				if d.TGNotifier != nil {
-					maxChars := d.UI.DiagMaxChars
-					if maxChars == 0 {
-						maxChars = 3500
-					}
-					spawnRelayTimeout(d, "cmd-default", 30*time.Second, func(ctx context.Context) {
-						if err := d.TGNotifier.NotifyCommandResult(ctx, ref, ref.Action, res, uid, maxChars); err != nil {
-							incTGError()
-							d.Logger.Warn("tg notify failed", "cmd_id", res.ID, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("tg notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
-				}
+		// Кнопок в боте больше нет (цикл 5): итог команды забирает тот, кто её
+		// поставил, -- мини-апп своим опросом. Пересылать его в Telegram
+		// некуда и незачем.
+		//
+		// Кроме одного: у назначенного обновления агента адресата нет вовсе
+		// (команду ставит бэкенд сам), и неудачу надо запомнить -- досылка на
+		// контакте попробует снова, а на пределе попыток напишет людям.
+		if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
+			output := res.Output
+			if strings.TrimSpace(output) == "" {
+				output = "status " + res.Status
 			}
-		} else {
-			if cmd, ok := d.CommandSink.CommandByID(uid, res.ID); ok && cmd.Action == "self_update" && res.Status != "ok" {
-				output := res.Output
-				if strings.TrimSpace(output) == "" {
-					output = "status " + res.Status
-				}
-				// Неудача НЕ снимает отметку: намерение живёт в базе, досылка
-				// на контакте попробует снова. На пределе попыток -- сдаёмся
-				// и пишем людям (deploy_attempts.go).
-				recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
-			}
+			recordPendingDeployFailure(d, uid, nick, commandVersionArg(cmd), output)
 		}
 		d.Logger.Info("cmd result",
 			"nickname", nick, "cmd_id", res.ID, "status", res.Status,

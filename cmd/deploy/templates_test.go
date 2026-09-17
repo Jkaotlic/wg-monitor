@@ -12,8 +12,6 @@ import (
 func TestRenderBackendYAML(t *testing.T) {
 	got, err := RenderBackendYAML(BackendParams{
 		PublicBaseURL: "https://wg.example.test",
-		ChatID:        -1001,
-		ExtraChatIDs:  []int64{-1002, -1003},
 		AdminUserID:   42,
 	})
 	if err != nil {
@@ -27,10 +25,6 @@ func TestRenderBackendYAML(t *testing.T) {
 	for _, want := range []string{
 		`bot_token_file: /etc/wg-monitor/bot-token.txt`,
 		`public_base_url: "https://wg.example.test"`,
-		`chat_id: -1001`,
-		`extra_chat_ids:`,
-		`- -1002`,
-		`- -1003`,
 		`admin_user_id: 42`,
 		`dashboard:`,
 		`enabled: false`,
@@ -43,54 +37,11 @@ func TestRenderBackendYAML(t *testing.T) {
 	// agents/users belong in the DB, not the yaml — make sure we didn't
 	// accidentally re-introduce the legacy section that the running
 	// backend's config loader silently ignores.
-	for _, dont := range []string{"agents:", `bot_token:`} {
+	// Группы больше нет (цикл 5): шаблон не должен заводить её заново -- ни
+	// chat_id, ни списка групп, ни настроек клавиатур бота.
+	for _, dont := range []string{"agents:", `bot_token:`, "chat_id:", "extra_chat_ids:", "compat_inline_keyboard"} {
 		if strings.Contains(s, dont) {
 			t.Errorf("rendered yaml unexpectedly contains %q\nfull:\n%s", dont, s)
-		}
-	}
-}
-
-func TestEnsureYAMLTelegramExtraChatID(t *testing.T) {
-	raw := []byte("listen: 127.0.0.1:8080\ntelegram:\n  chat_id: -1001\n  extra_chat_ids: []\n  admin_user_id: 42\n")
-	updated, changed, err := ensureYAMLTelegramExtraChatID(raw, -1002)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !changed {
-		t.Fatal("expected yaml to change")
-	}
-	s := string(updated)
-	for _, want := range []string{
-		"telegram:",
-		"chat_id: -1001",
-		"extra_chat_ids:",
-		"- -1002",
-		"admin_user_id: 42",
-	} {
-		if !strings.Contains(s, want) {
-			t.Fatalf("patched yaml missing %q\n%s", want, s)
-		}
-	}
-	again, changed, err := ensureYAMLTelegramExtraChatID(updated, -1002)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed {
-		t.Fatalf("second patch should be idempotent:\n%s", string(again))
-	}
-}
-
-func TestExtractThreadIDFromEnsureTopicsOutput(t *testing.T) {
-	for _, tc := range []struct {
-		out  string
-		want int
-	}{
-		{out: "+ created client-g - chat_id=-1002 topic id=777\n", want: 777},
-		{out: "= skip client-g - already has topic id=888 (use --force to rebuild)\n", want: 888},
-		{out: "Done: 0 created, 0 skipped, 0 failed\n", want: 0},
-	} {
-		if got := extractThreadIDFromEnsureTopicsOutput(tc.out); got != tc.want {
-			t.Fatalf("extractThreadIDFromEnsureTopicsOutput(%q)=%d, want %d", tc.out, got, tc.want)
 		}
 	}
 }
