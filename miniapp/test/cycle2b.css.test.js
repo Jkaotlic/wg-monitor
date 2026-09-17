@@ -61,3 +61,11 @@ describe('Парк: сторож и отложенное, CSS', () => {
     }
   })
 })
+
+describe('лист: переключатель и подсказка поля, CSS', () => {
+  it('классы оформлены на любой ширине', () => {
+    for (const sel of ['.sheet-toggle-label', '.sheet-toggle-label input', '.sheet-field-hint']) {
+      expect(rule(outside, `\n${sel}`), sel).not.toBe(null)
+    }
+  })
+})

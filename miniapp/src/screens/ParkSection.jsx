@@ -54,6 +54,13 @@ import {
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
 import { watchdogLine, routerDelayLines } from '../watchdogLine.js'
+import {
+  canPickVersion,
+  otherVersionSheetText,
+  otherVersionFields,
+  otherVersionReady,
+  otherVersionRequest,
+} from '../agentVersionPick.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
 // агентов. Раньше экран был читающим, а обновление агента жило в боте и
@@ -185,6 +192,35 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
         onDone: (resp) => {
           setFleetResult(null)
           setNotice(agentCancelDoneText(resp, router.nickname))
+          load()
+        },
+      }),
+    )
+  }
+
+  // «Другая версия…» -- своя цель, в том числе откат (спека, п. 6). Откат
+  // разрешается переключателем на листе; решает всё равно сервер.
+  function askOtherVersion(router) {
+    const backendVersion = fleet?.backend?.version ?? ''
+    const text = otherVersionSheetText(router, backendVersion)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Поставить',
+        busyLabel: 'Ставим…',
+        danger: true,
+        confirmPhrase: router.nickname,
+        fields: otherVersionFields(router, backendVersion),
+        fieldsReady: otherVersionReady(router, backendVersion),
+        errorText: agentUpdateErrorText,
+        perform: (typed, values) => {
+          const req = otherVersionRequest(values, router, backendVersion)
+          return updateRouterAgent(router.id, typed, req.targetVersion, req.allowDowngrade)
+        },
+        onDone: (resp) => {
+          setFleetResult(null)
+          setNotice(agentUpdateDoneText(resp, router.nickname))
           load()
         },
       }),
@@ -510,11 +546,16 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                   {rv.text && (
                     <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
                   )}
-                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel) && (
+                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router)) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
                           Обновить агент
+                        </button>
+                      )}
+                      {canPickVersion(row.router) && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askOtherVersion(row.router)}>
+                          Другая версия…
                         </button>
                       )}
                       {row.update.canCancel && (

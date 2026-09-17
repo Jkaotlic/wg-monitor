@@ -26,13 +26,16 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
 // введённый пароль не должен туда попасть. perform получает их вторым
 // аргументом -- снимком на момент нажатия. fieldsReady(values) -- когда
 // кнопка может загореться; note -- предупреждение под полями.
+// Поле может быть переключателем (type: 'toggle', значение boolean), может
+// появляться по условию (showIf(values)) и нести подсказку, которая следует
+// вводу (hint(values)): «Это откат: на роутере v0.35.0».
 export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '' }) {
   return { title, body, buttonLabel, danger, confirmPhrase, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, args: {} }
 }
 
 export function initialFieldValues(fields) {
   const values = {}
-  for (const f of fields ?? []) values[f.name] = f.initial ?? ''
+  for (const f of fields ?? []) values[f.name] = f.initial ?? (f.type === 'toggle' ? false : '')
   return values
 }
 

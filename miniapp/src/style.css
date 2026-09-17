@@ -2177,6 +2177,27 @@ body {
   margin-top: var(--sp-4);
 }
 
+.sheet-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sheet-toggle-label input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--sig);
+}
+
+.sheet-field-hint {
+  margin: var(--sp-1) 0 0;
+}
+
+
 .field select {
   min-height: 44px;
   font-family: inherit;

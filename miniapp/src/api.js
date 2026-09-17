@@ -123,8 +123,11 @@ export function setRouterNotify(id, muted) {
 // отметку, которая доживает до включения выключенного роутера. Цель версии
 // по умолчанию считает сервер (его собственная версия), поэтому поле уходит
 // только когда экран его явно выбрал.
-export function updateRouterAgent(routerID, confirm, targetVersion = '') {
+// allowDowngrade -- человек разрешил откат на листе «Другая версия»; без
+// него сервер откажет downgrade_rejected. Поле уходит только со значением true.
+export function updateRouterAgent(routerID, confirm, targetVersion = '', allowDowngrade = false) {
   const body = targetVersion ? { confirm, target_version: targetVersion } : { confirm }
+  if (targetVersion && allowDowngrade) body.allow_downgrade = true
   return request(`/routers/${routerID}/agent/update`, { method: 'POST', body: JSON.stringify(body) })
 }
 
