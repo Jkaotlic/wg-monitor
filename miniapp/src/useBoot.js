@@ -7,7 +7,7 @@ import { COOKIE_NOT_SAVED_TEXT, SESSION_EXPIRED_TEXT, bootFailure } from './logi
 // роутер, показать список или экран пустого доступа. В Telegram личность
 // доказывает initData, в браузере -- кука веб-управления (GET /session).
 export function useBoot(mode, { onReady } = {}) {
-  const [state, setState] = useState({ status: 'loading', isAdmin: false, routers: [], notice: '' })
+  const [state, setState] = useState({ status: 'loading', isAdmin: false, telegramUserID: 0, routers: [], notice: '' })
   const readyRef = useRef(onReady)
   readyRef.current = onReady
 
@@ -30,7 +30,9 @@ export function useBoot(mode, { onReady } = {}) {
         // До setState: навигация из адреса и статус «готово» -- один рендер,
         // иначе синхронизация адреса успела бы стереть место пустой навигацией.
         readyRef.current?.(list, { isAdmin: Boolean(s?.is_admin) })
-        setState({ status: 'ready', isAdmin: Boolean(s?.is_admin), routers: list, notice: '' })
+        // Номер человека в Telegram нужен экрану пустого доступа: его он
+        // просит передать администратору, и взять его больше неоткуда.
+        setState({ status: 'ready', isAdmin: Boolean(s?.is_admin), telegramUserID: Number(s?.telegram_user_id) || 0, routers: list, notice: '' })
       })
       .catch((err) => {
         if (my !== gen.current) return
@@ -51,7 +53,7 @@ export function useBoot(mode, { onReady } = {}) {
     gen.current++
     return dashboardLogout()
       .catch(() => null)
-      .then(() => setState({ status: 'login', isAdmin: false, routers: [], notice: '' }))
+      .then(() => setState({ status: 'login', isAdmin: false, telegramUserID: 0, routers: [], notice: '' }))
   }
 
   function setRouters(list) {
