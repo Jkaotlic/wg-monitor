@@ -15,7 +15,7 @@ var miniappTunnelTexts = map[string]string{
 	"invalid_tunnel_id":       "VPN-туннель не распознан — обновите экран",
 	"router_failed":           "Роутер не отдал список правил — повторите через минуту",
 	"router_garbled":          "Роутер прислал непонятный ответ — обновите агента и повторите",
-	"tunnel_not_found":        "Такого VPN-туннеля на роутере уже нет — обновите экран",
+	"tunnel_not_found":        "Роутер не сообщает этот VPN-туннель — обновите экран; если он остался в панели awg-manager, удалите его там",
 	"tunnel_not_managed":      "Это подключение роутера, а не VPN-туннель awg-manager — удалить его отсюда нельзя",
 	"confirm_mismatch":        "Имя VPN-туннеля набрано неверно",
 	"snapshot_partial":        "Роутер отдал неполный список правил — удалять вслепую нельзя, повторите через минуту",
@@ -57,6 +57,18 @@ func miniappRulesCount(n int) string {
 // writeMiniappTunnelHasRules -- отказ с числом и разбивкой: экран показывает
 // message как есть, а rules нужны кнопке «Перенести».
 func writeMiniappTunnelHasRules(w http.ResponseWriter, rules miniappTunnelRules) {
+	writeMiniappTunnelRulesRefusal(w, "tunnel_has_rules",
+		fmt.Sprintf("На этом VPN-туннеле %s — сначала перенесите их на другой VPN-туннель", miniappRulesCount(rules.Total)), rules)
+}
+
+// writeMiniappTunnelInPolicyChain -- отказ для туннеля, стоящего в цепочке
+// политики перед активным звеном (miniappTunnelPolicyChainRules).
+func writeMiniappTunnelInPolicyChain(w http.ResponseWriter, name string, rules miniappTunnelRules) {
+	writeMiniappTunnelRulesRefusal(w, "tunnel_in_policy_chain",
+		fmt.Sprintf("VPN-туннель «%s» стоит в цепочке общего набора правил (%s) перед активным выходом — сначала перенесите правила или замените его через мастер замены", name, miniappRulesCount(rules.Total)), rules)
+}
+
+func writeMiniappTunnelRulesRefusal(w http.ResponseWriter, code, message string, rules miniappTunnelRules) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusConflict)
 	_ = json.NewEncoder(w).Encode(struct {
@@ -64,10 +76,5 @@ func writeMiniappTunnelHasRules(w http.ResponseWriter, rules miniappTunnelRules)
 		Error   string             `json:"error"`
 		Message string             `json:"message"`
 		Rules   miniappTunnelRules `json:"rules"`
-	}{
-		Code:    "tunnel_has_rules",
-		Error:   "tunnel_has_rules",
-		Message: fmt.Sprintf("На этом VPN-туннеле %s — сначала перенесите их на другой VPN-туннель", miniappRulesCount(rules.Total)),
-		Rules:   rules,
-	})
+	}{Code: code, Error: code, Message: message, Rules: rules})
 }

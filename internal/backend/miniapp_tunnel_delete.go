@@ -103,8 +103,20 @@ func miniappTunnelDeleteHandler(d Deps, questions *miniappAgentQuestions) http.H
 			writeMiniappTunnelError(w, http.StatusConflict, "tunnel_is_default")
 			return
 		}
+		// Роутер главный выход не назвал -- решает единственный претендент
+		// с default_route (ревью цикла 4).
+		if strings.TrimSpace(snap.DefaultEgress) == "" {
+			if id, sole := miniappSoleDefaultClaimant(snap); sole && id == tunnel.ID {
+				writeMiniappTunnelError(w, http.StatusConflict, "tunnel_is_default")
+				return
+			}
+		}
 		if rules := miniappTunnelRuleCount(snap, tunnel.ID); rules.Total > 0 {
 			writeMiniappTunnelHasRules(w, rules)
+			return
+		}
+		if rules := miniappTunnelPolicyChainRules(snap, tunnel.ID); rules.Total > 0 {
+			writeMiniappTunnelInPolicyChain(w, name, rules)
 			return
 		}
 		args := map[string]any{"tunnel_id": tunnel.ID}

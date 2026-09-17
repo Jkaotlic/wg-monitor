@@ -297,3 +297,128 @@ func TestMiniappTunnelDeleteWithoutQueue(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Ревью цикла 4: упавший VPN-туннель, стоящий в цепочке политики РАНЬШЕ
+// активного звена (или активного звена нет вовсе), правил по формуле экрана
+// не несёт -- но после удаления политика навсегда останется на WAN. Такой
+// туннель не удаляется: отказ tunnel_in_policy_chain с числом правил
+// политики. Резервное звено ПОСЛЕ активного удаление не блокирует.
+func policyChainSnapshot(ifaces []wire.RoutePolicyInterface, active string) wire.RouteSnapshot {
+	snap := tunnelDeleteSnapshot()
+	snap.Tunnels = append(snap.Tunnels, wire.TunnelMeta{ID: "awg18", Name: "vpn-x", Iface: "nwg18", Type: "managed", Enabled: true, Status: "down"})
+	snap.Policies = []wire.RoutePolicySummary{{Name: "Семья", DNS: 5, HRNeo: 2, ActiveTunnelID: active, Interfaces: ifaces}}
+	return snap
+}
+
+func TestMiniappTunnelDeleteRefusesTunnelAheadInPolicyChain(t *testing.T) {
+	cases := []struct {
+		name   string
+		snap   wire.RouteSnapshot
+		refuse bool
+	}{
+		{"упал первым, активен WAN", policyChainSnapshot([]wire.RoutePolicyInterface{
+			{Bind: "nwg18", TunnelID: "awg18", Role: "unavailable", Order: 1},
+			{Bind: "ISP", Role: "active", Order: 2},
+		}, ""), true},
+		{"упал первым, активно запасное звено", policyChainSnapshot([]wire.RoutePolicyInterface{
+			{Bind: "nwg18", TunnelID: "awg18", Role: "unavailable", Order: 1},
+			{Bind: "nwg14", TunnelID: "awg14", Role: "active", Order: 2},
+		}, "awg14"), true},
+		{"единственное звено, активного нет", policyChainSnapshot([]wire.RoutePolicyInterface{
+			{Bind: "nwg18", TunnelID: "awg18", Role: "unavailable", Order: 1},
+		}, ""), true},
+		{"резерв после активного", policyChainSnapshot([]wire.RoutePolicyInterface{
+			{Bind: "nwg14", TunnelID: "awg14", Role: "active", Order: 1},
+			{Bind: "nwg18", TunnelID: "awg18", Role: "fallback", Order: 2},
+		}, "awg14"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env, sink := newTunnelEnv(t, routeStatusAnswer(tc.snap))
+			rec := postTunnelDelete(t, env, cabOwner, "awg18", "vpn-x")
+			if !tc.refuse {
+				if rec.Code != http.StatusAccepted || tunnelStateBody(t, rec).State != "queued" {
+					t.Fatalf("%d %s", rec.Code, rec.Body.String())
+				}
+				return
+			}
+			var body struct {
+				Code    string             `json:"code"`
+				Error   string             `json:"error"`
+				Message string             `json:"message"`
+				Rules   miniappTunnelRules `json:"rules"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != http.StatusConflict || body.Code != "tunnel_in_policy_chain" || body.Error != body.Code ||
+				body.Rules.Total != 5 || !strings.Contains(body.Message, "«vpn-x»") || !strings.Contains(body.Message, "мастер замены") {
+				t.Fatalf("%d %s", rec.Code, rec.Body.String())
+			}
+			for _, a := range sink.actions() {
+				if a == "tunnel_delete" {
+					t.Fatalf("удаление ушло роутеру: %v", sink.actions())
+				}
+			}
+		})
+	}
+}
+
+// Ревью цикла 4: роутер не назвал главный выход (default_egress пуст) -- тогда
+// главным считается единственный включённый не лежащий VPN-туннель с
+// default_route (правило routingVerdict в routes.js). Претендентов больше
+// одного или он лежит -- выход не определён, удаление не блокируется.
+func TestMiniappTunnelDeleteEmptyEgressSingleClaimant(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*wire.RouteSnapshot)
+		refuse bool
+	}{
+		{"единственный претендент", func(s *wire.RouteSnapshot) { s.Tunnels[2].DefaultRoute, s.Tunnels[2].Status = true, "up" }, true},
+		{"статус неизвестен", func(s *wire.RouteSnapshot) { s.Tunnels[2].DefaultRoute = true }, true},
+		{"претендент лежит", func(s *wire.RouteSnapshot) { s.Tunnels[2].DefaultRoute, s.Tunnels[2].Status = true, "down" }, false},
+		{"претендент выключен", func(s *wire.RouteSnapshot) { s.Tunnels[2].DefaultRoute, s.Tunnels[2].Enabled = true, false }, false},
+		{"двое претендентов", func(s *wire.RouteSnapshot) {
+			s.Tunnels[2].DefaultRoute = true
+			s.Tunnels[3].DefaultRoute = true
+		}, false},
+		{"претендент другой", func(s *wire.RouteSnapshot) { s.Tunnels[3].DefaultRoute = true }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snap := tunnelDeleteSnapshot()
+			snap.DefaultEgress = ""
+			tc.mutate(&snap)
+			env, _ := newTunnelEnv(t, routeStatusAnswer(snap))
+			rec := postTunnelDelete(t, env, cabOwner, "awg14", "vpn-spare")
+			if tc.refuse {
+				if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "tunnel_is_default" {
+					t.Fatalf("%d %s", rec.Code, rec.Body.String())
+				}
+				return
+			}
+			if rec.Code != http.StatusAccepted || tunnelStateBody(t, rec).State != "queued" {
+				t.Fatalf("%d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+	// default_egress == "direct" -- роутер сказал сам: флаги не решают.
+	snap := tunnelDeleteSnapshot()
+	snap.DefaultEgress = wire.DefaultEgressDirect
+	snap.Tunnels[2].DefaultRoute, snap.Tunnels[2].Status = true, "up"
+	env, _ := newTunnelEnv(t, routeStatusAnswer(snap))
+	if rec := postTunnelDelete(t, env, cabOwner, "awg14", "vpn-spare"); rec.Code != http.StatusAccepted {
+		t.Fatalf("direct: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Ревью цикла 4: агент не кладёт в снимок туннель без интерфейса, и отличить
+// его от уже удалённого нельзя -- текст говорит, где удалить руками.
+func TestMiniappTunnelDeleteNotFoundPointsToAWGManager(t *testing.T) {
+	env, _ := newTunnelEnv(t, routeStatusAnswer(tunnelDeleteSnapshot()))
+	rec := postTunnelDelete(t, env, cabOwner, "awg99", "awg99")
+	if code, message, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "tunnel_not_found" ||
+		!strings.Contains(message, "не сообщает") || !strings.Contains(message, "awg-manager") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
