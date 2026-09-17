@@ -8,6 +8,8 @@ import {
   deleteRefusal,
   deleteErrorText,
   deleteOutcome,
+  tunnelAbsence,
+  refusalKey,
   TUNNEL_TEXTS,
 } from '../src/tunnelDelete.js'
 import { ApiError } from '../src/api.js'
@@ -146,5 +148,50 @@ describe('лист и ответы сервера', () => {
 
   it('словарь: VPN-туннель полной формой', () => {
     for (const t of Object.values(TUNNEL_TEXTS)) expect(t).not.toMatch(/(^|[^-])туннел/i)
+  })
+})
+
+// Ревью цикла 4: правки после серверного ревью и ревью фронтенда.
+describe('ревью: сверка с сервером', () => {
+  it('type и имя -- как на сервере: без учёта регистра и с обрезкой', () => {
+    const snap = { tunnels: [{ id: 'nwg7', name: '  spare  ', type: ' Managed ' }, { id: 'nwg8', name: '   ', type: 'MANAGED' }] }
+    expect(tunnelList(snap).map((r) => [r.id, r.name])).toEqual([
+      ['nwg7', 'spare'],
+      ['nwg8', 'nwg8'],
+    ])
+    expect(tunnelCard(snap, 'nwg7')).toMatchObject({ name: 'spare' })
+  })
+
+  it('пустой default_egress -- кнопку не прячем, решает сервер', () => {
+    expect(deleteBlock(tunnelCard({ ...SNAP, default_egress: '' }, 'nwg2'))).toBe(null)
+  })
+
+  it('упавший VPN-туннель в цепочке общего набора -- фраза сервера и переход к переносу', () => {
+    const card = tunnelCard(SNAP, 'nwg2')
+    expect(deleteRefusal(new ApiError(409, 'tunnel_in_policy_chain', 'x', 'VPN-туннель стоит в цепочке «VPN» перед работающим.', '', { rules: 5 }), card)).toEqual({
+      kind: 'chain',
+      text: 'VPN-туннель стоит в цепочке «VPN» перед работающим.',
+    })
+    expect(deleteRefusal(new ApiError(409, 'tunnel_in_policy_chain', 'x'), card)).toEqual({ kind: 'chain', text: TUNNEL_TEXTS.inChain })
+  })
+
+  it('не свой VPN-туннель и пропавший -- разные слова', () => {
+    expect(tunnelAbsence(SNAP, 'ISP')).toBe('foreign')
+    expect(tunnelAbsence({ tunnels: [{ id: 'Wireguard0', type: 'ndms' }] }, 'Wireguard0')).toBe('foreign')
+    expect(tunnelAbsence(SNAP, 'nope')).toBe('gone')
+    expect(tunnelAbsence(null, 'nwg1')).toBe('gone')
+    expect(TUNNEL_TEXTS.notManaged).toBe('Этот VPN-туннель создан не через awg-manager — удалите его в панели роутера.')
+  })
+
+  it('отказ устаревает, когда в снимке поменялись правила, главный выход или цепочка', () => {
+    const key = refusalKey(tunnelCard(SNAP, 'nwg2'), SNAP)
+    expect(refusalKey(tunnelCard(SNAP, 'nwg2'), structuredClone(SNAP))).toBe(key)
+    expect(refusalKey(tunnelCard({ ...SNAP, counts: { nwg2: { dns: 1 } } }, 'nwg2'), SNAP)).not.toBe(key)
+    const egress = { ...SNAP, default_egress: 'nwg2' }
+    expect(refusalKey(tunnelCard(egress, 'nwg2'), egress)).not.toBe(key)
+    const chain = structuredClone(SNAP)
+    chain.policies[0].interfaces[1].role = 'unavailable'
+    expect(refusalKey(tunnelCard(chain, 'nwg2'), chain)).not.toBe(key)
+    expect(refusalKey(null, SNAP)).toBe('')
   })
 })

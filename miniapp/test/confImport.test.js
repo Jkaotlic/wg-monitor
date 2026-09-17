@@ -10,6 +10,8 @@ import {
   previewView,
   importErrorText,
   importOutcome,
+  withPickAgain,
+  IMPORT_POLL_DEADLINE_MS,
   IMPORT_TEXTS,
 } from '../src/confImport.js'
 import { ApiError } from '../src/api.js'
@@ -173,5 +175,24 @@ describe('ошибки и итог', () => {
     expect(IMPORT_TEXTS.privacy).toContain('приватный ключ')
     expect(IMPORT_TEXTS.notAnalyzed).toContain('v0.28')
     for (const t of Object.values(IMPORT_TEXTS)) expect(t).not.toMatch(/(^|[^-])туннел/i)
+  })
+})
+
+// Ревью цикла 4.
+describe('ревью: опрос и повторный выбор файла', () => {
+  it('опрос предпросмотра кончается раньше, чем живёт токен (5 минут)', () => {
+    expect(IMPORT_POLL_DEADLINE_MS).toBe(4 * 60_000)
+  })
+
+  it('analysis_pending -- проверка ещё идёт', () => {
+    expect(importErrorText(new ApiError(409, 'analysis_pending', 'x'))).toBe('Проверка ещё идёт — роутер пока не закончил проверять конфиг.')
+    expect(IMPORT_TEXTS.analyzing).toMatch(/^Проверка ещё идёт/)
+    expect(IMPORT_TEXTS.analyzeSlow).toMatch(/^Проверка ещё идёт/)
+  })
+
+  it('после отказа проверки -- выбрать файл заново, без повтора слов', () => {
+    expect(withPickAgain('Сервер не ответил — попробуйте ещё раз.')).toBe('Сервер не ответил — попробуйте ещё раз. Выберите файл заново.')
+    expect(withPickAgain('Проверка устарела: с неё прошло больше 5 минут. Выберите файл заново.')).toBe('Проверка устарела: с неё прошло больше 5 минут. Выберите файл заново.')
+    expect(withPickAgain('')).toBe('Выберите файл заново.')
   })
 })

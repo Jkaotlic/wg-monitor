@@ -9,6 +9,8 @@ import {
   previewView,
   importErrorText,
   importOutcome,
+  withPickAgain,
+  IMPORT_POLL_DEADLINE_MS,
   IMPORT_TEXTS,
 } from '../confImport.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -19,6 +21,8 @@ import { Quoted } from '../ui/Q.jsx'
 
 // Коды, после которых этот конфиг уже не добавить: файл выбирается заново.
 const RESTART_CODES = new Set(['preview_expired', 'conf_rejected'])
+// Коды «роутер ещё проверяет»: не ошибка, а повод опрашивать дальше.
+const PENDING_CODES = new Set(['preview_not_ready', 'analysis_pending'])
 
 // «Загрузить конфиг .conf»: свой конфиг встаёт на роутер НОВЫМ VPN-туннелем.
 // Локальный слой вкладки, в адрес не пишется.
@@ -42,6 +46,12 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
   const [error, setError] = useState('')
   const [outcome, setOutcome] = useState(null)
   const alive = useRef(true)
+  // Номер выбора файла: чтение прежнего файла, закончившееся после нового
+  // выбора, отбрасывается.
+  const pickSeq = useRef(0)
+  // Защита от двойного касания «Добавить»: состояние обновится только после
+  // рендера, а второе касание успевает раньше.
+  const adding = useRef(false)
   useEffect(
     () => () => {
       alive.current = false
@@ -75,6 +85,7 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
     // Поле очищается сразу: выбранный файл не висит в форме, а повторный выбор
     // того же файла снова вызовет onChange.
     input.value = ''
+    const seq = ++pickSeq.current
     forget()
     setPreview(null)
     setOutcome(null)
@@ -87,21 +98,23 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
     if (!name.trim()) setName(suggestTunnelName(file.name))
     try {
       const b64 = await readConfBase64(file)
-      if (!alive.current) return
+      if (!alive.current || seq !== pickSeq.current) return
       confRef.current = b64
       setHasConf(true)
     } catch {
-      if (alive.current) setFileProblem(IMPORT_TEXTS.readFailed)
+      if (alive.current && seq === pickSeq.current) setFileProblem(IMPORT_TEXTS.readFailed)
     }
   }
 
   function failed(err) {
-    setError(importErrorText(err))
     if (RESTART_CODES.has(err?.code)) {
+      setError(withPickAgain(importErrorText(err)))
+      setFileName('')
       setPreview(null)
       setPhase('pick')
       return true
     }
+    setError(importErrorText(err))
     return false
   }
 
@@ -112,9 +125,16 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
     let last = resp
     if (resp?.state === 'analyzing' && resp.token) {
       setPreview({ view: previewView(resp), token: resp.token, name: resp.name || wanted })
-      const { resp: polled } = await repeatWhilePending(() => fetchTunnelImport(routerID, resp.token), {
+      // 409 analysis_pending на опросе -- то же «ещё проверяет».
+      const once = () =>
+        fetchTunnelImport(routerID, resp.token).catch((err) => {
+          if (err?.code === 'analysis_pending') return { ...resp, state: 'analyzing' }
+          throw err
+        })
+      const { resp: polled } = await repeatWhilePending(once, {
         pending: (r) => r?.state === 'analyzing',
-        deadlineMs: waitDeadlineMs(asleep),
+        // Токен живёт 5 минут -- опрос кончается раньше, и спящему роутеру тоже.
+        deadlineMs: IMPORT_POLL_DEADLINE_MS,
         alive: () => alive.current,
       })
       if (!alive.current) return
@@ -139,7 +159,20 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
       await settle(resp, wanted)
     } catch (err) {
       if (!alive.current) return
-      setError(importErrorText(err))
+      // Проверка ещё идёт под уже выданным токеном -- опрашивать его.
+      if (err?.code === 'analysis_pending' && err.data?.token) {
+        try {
+          await settle({ token: err.data.token, name: wanted, state: 'analyzing' }, wanted)
+          return
+        } catch (again) {
+          if (!alive.current) return
+          err = again
+        }
+      }
+      // Конфиг уже стёрт с клиента: файл выбирается заново, и прежнее имя
+      // файла не должно обещать, что он ещё здесь.
+      setError(withPickAgain(importErrorText(err)))
+      setFileName('')
       setPreview(null)
       setPhase('pick')
     }
@@ -162,32 +195,46 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
   }
 
   async function add() {
-    if (!preview?.token || !preview.view.canConfirm || busy) return
+    if (adding.current || !preview?.token || !preview.view.canConfirm || busy) return
+    adding.current = true
     const { token, name: wanted } = preview
     setPreview((p) => (p ? { ...p, token: '' } : p))
     setPhase('adding')
     setError('')
+    let sent
     try {
-      const sent = await confirmTunnelImport(routerID, token)
-      const tunnelName = sent?.tunnel_name || wanted
-      const result = await waitCommand(routerID, sent.cmd_id, {
-        deadlineMs: waitDeadlineMs(asleep || sent?.router_asleep === true),
-        alive: () => alive.current,
-      })
-      if (!alive.current) return
-      setOutcome(importOutcome(result, tunnelName))
-      setPhase('done')
-      onImported?.()
+      sent = await confirmTunnelImport(routerID, token)
     } catch (err) {
+      adding.current = false
       if (!alive.current) return
-      if (failed(err)) return
-      setPreview((p) => (p ? { ...p, token } : p))
-      if (err?.code === 'preview_not_ready') {
+      if (PENDING_CODES.has(err?.code)) {
+        // Роутер ещё проверяет: не ошибка -- показать «Проверка ещё идёт» и
+        // опрашивать дальше.
+        setPreview((p) => (p ? { ...p, token, view: { ...p.view, analyzing: true, canConfirm: false } } : p))
         await recheckToken(token, wanted)
         return
       }
+      if (failed(err)) return
+      setPreview((p) => (p ? { ...p, token } : p))
       setPhase('preview')
+      return
     }
+    // Команда уже в очереди: сорвавшееся ожидание -- не «попробуйте ещё», а
+    // «роутер пока не ответил».
+    let result = null
+    try {
+      result = await waitCommand(routerID, sent.cmd_id, {
+        deadlineMs: waitDeadlineMs(asleep || sent?.router_asleep === true),
+        alive: () => alive.current,
+      })
+    } catch {
+      result = null
+    }
+    adding.current = false
+    if (!alive.current) return
+    setOutcome(importOutcome(result, sent?.tunnel_name || wanted))
+    setPhase('done')
+    onImported?.()
   }
 
   const stillAnalyzing = Boolean(view?.analyzing)
@@ -201,10 +248,12 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
         {phase !== 'done' && !preview && (
           <Section title="Файл">
             {/* Поле лежит прозрачным слоем поверх кнопки: касание попадает в
-                само поле, программный click() некоторые webview блокируют. */}
+                само поле, программный click() некоторые webview блокируют.
+                Фильтра accept нет: Telegram на iOS и Android с ним не даёт
+                выбрать .conf; расширение и размер проверяет confFileProblem. */}
             <label class={`btn btn-ghost btn-wide conf-pick${busy ? ' conf-pick-off' : ''}`}>
               {fileName ? IMPORT_TEXTS.pickAnother : IMPORT_TEXTS.pick}
-              <input type="file" accept=".conf" class="conf-pick-input" disabled={busy} onChange={pick} />
+              <input type="file" class="conf-pick-input" disabled={busy} onChange={pick} />
             </label>
             {fileName && !fileProblem && <p class="hint conf-file-name">{`Файл: ${fileName}`}</p>}
             {fileProblem && (

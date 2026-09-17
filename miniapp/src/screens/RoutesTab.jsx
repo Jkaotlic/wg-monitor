@@ -267,14 +267,20 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
   // Пришли с экрана VPN-туннеля «перенести правила»: открыть выбор цели один
   // раз, как только снимок позволяет менять. Правила только общего набора
   // переносятся сменой главного звена -- тогда открывается она.
+  // Ни переноса, ни смены главного -- сказать словами, а не молчать.
   const focused = useRef('')
+  const [rebindNone, setRebindNone] = useState('')
   useEffect(() => {
     if (!rebindFrom || focused.current === rebindFrom || !canMutate) return
     focused.current = rebindFrom
+    setRebindNone('')
     const row = rows.find((r) => r.id === rebindFrom)
     if (!row) return
-    if (canRebindTunnel(row) && rebindTargets(rows, row.id).length > 0) askRebind(row)
+    const targets = rebindTargets(rows, row.id)
+    if (canRebindTunnel(row) && targets.length > 0) askRebind(row)
     else if (promoteTargets(snapshot, row.id).length > 0) askPromote(row)
+    else if (targets.length === 0) setRebindNone('Переносить некуда — сначала добавьте другой VPN-туннель.')
+    else setRebindNone(`На «${row.name}» нет своих правил — переносить нечего.`)
   }, [snapshot, rebindFrom])
 
   return (
@@ -399,6 +405,11 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
 
       {snapshot && (
         <Section title="VPN-туннели и что через них идёт">
+          {rebindNone && (
+            <p class="state routes-rebind-none" role="status">
+              <Quoted text={rebindNone} />
+            </p>
+          )}
           {tunnels.length || other ? (
             <ul class="card list-reset">
               {tunnels.map((t) => {
