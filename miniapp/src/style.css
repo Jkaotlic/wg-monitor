@@ -2998,6 +2998,31 @@ body {
   70% { box-shadow: 0 0 0 8px rgba(200, 242, 74, 0); }
 }
 
+.park-watchdog {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.park-watchdog-line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--text);
+}
+
+.park-watchdog .hint {
+  margin-top: var(--sp-1);
+}
+
+.park-watchdog-warn .park-watchdog-line {
+  color: var(--warn);
+}
+
+.park-watchdog-danger .park-watchdog-line {
+  color: var(--danger);
+}
+
 /* --- Поиск и фильтры списка роутеров (цикл 2) --- */
 .filter-bar {
   display: flex;

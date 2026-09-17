@@ -5,7 +5,6 @@ import {
   backendRow,
   fleetRouterRows,
   notifyGapLines,
-  watchdogLine,
   webLinkLines,
   notifySwitch,
   notifyMuteSheetText,
@@ -164,18 +163,6 @@ describe('дыры уведомлений', () => {
   it('дыр нет -- строк нет, а не «всё хорошо» пустым списком', () => {
     expect(notifyGapLines({ notify: { unreachable: [], routers_without_recipients: [] } })).toEqual([])
     expect(notifyGapLines({})).toEqual([])
-  })
-})
-
-describe('сторож парка', () => {
-  it('говорит, когда был обход и сколько отправок сорвалось', () => {
-    const line = watchdogLine(FLEET)
-    expect(line).toContain('обход')
-    expect(line).toContain('2')
-  })
-
-  it('сторожа в сборке нет -- строки нет, а не «сторож мёртв»', () => {
-    expect(watchdogLine({})).toBe('')
   })
 })
 

@@ -49,3 +49,15 @@ describe('поиск и фильтры: CSS', () => {
     expect(block.body).toMatch(/\.side-filter \.filter-chip\s*\{/)
   })
 })
+
+describe('Парк: сторож и отложенное, CSS', () => {
+  it('мостика на классическое больше нет', () => {
+    expect(css.includes('.park-classic')).toBe(false)
+  })
+
+  it('строка сторожа оформлена на любой ширине', () => {
+    for (const sel of ['.park-watchdog', '.park-watchdog-line', '.park-watchdog-warn .park-watchdog-line', '.park-watchdog-danger .park-watchdog-line']) {
+      expect(rule(outside, `\n${sel}`), sel).not.toBe(null)
+    }
+  })
+})

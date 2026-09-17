@@ -24,7 +24,6 @@ import {
   fleetRouterRows,
   notifyGapLines,
   notifyMuteSheetText,
-  watchdogLine,
   webLinkLines,
   withNotifyMuted,
 } from '../fleetAdmin.js'
@@ -54,6 +53,7 @@ import {
 } from '../revive.js'
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
 import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
+import { watchdogLine, routerDelayLines } from '../watchdogLine.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
 // агентов. Раньше экран был читающим, а обновление агента жило в боте и
@@ -346,7 +346,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
 
   const rows = fleet ? fleetRouterRows(fleet) : []
   const gaps = fleet ? notifyGapLines(fleet) : []
-  const watchdog = fleet ? watchdogLine(fleet) : ''
+  const watchdog = fleet ? watchdogLine(fleet) : null
   const backend = fleet ? backendRow(fleet) : null
   const deployOffer = fleet ? backendDeployOffer(fleet) : null
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
@@ -370,6 +370,16 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
 
           <div class="card park-backend">
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
+            {/* Сторож -- рядом с бэкендом: это его процесс, и «молчат N»
+                читается как ответ на «кто сейчас не на связи», а не как
+                сноска под списком. */}
+            {watchdog && (
+              <div class={`park-watchdog park-watchdog-${watchdog.tone}`}>
+                <p class="park-watchdog-line">Сторож: {watchdog.text}</p>
+                {watchdog.alarm && <p class="state state-error">{watchdog.alarm}</p>}
+                {watchdog.sub && <p class="hint">{watchdog.sub}</p>}
+              </div>
+            )}
             {deployOffer && openLayer && (
               <div class="park-backend-actions">
                 <button type="button" class="btn btn-ghost btn-row" onClick={askBackendDeploy}>
@@ -485,6 +495,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                       <Quoted text={row.update.text} />
                     </p>
                   )}
+                  {routerDelayLines(row.router).map((line) => (
+                    <p key={line.key} class={`park-update park-delay park-update-${line.tone}`}>
+                      {line.text}
+                    </p>
+                  ))}
                   {/* Не только рядом с кнопкой «Обновить»: у слишком старого
                       агента (B6) canUpdate=false -- self_update ему
                       недоступен вовсе, но именно поэтому предупреждение
@@ -535,8 +550,6 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
               ))}
             </>
           )}
-
-          {watchdog && <p class="hint">Сторож парка: {watchdog}</p>}
 
           {/* В браузере личная ссылка на браузер бессмысленна -- человек уже
               здесь. Мостика в классическое веб-управление больше нет: всё,
