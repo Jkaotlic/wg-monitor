@@ -2,6 +2,17 @@ import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { AccessSection } from './AccessSection.jsx'
 import { ParkSection } from './ParkSection.jsx'
+import { repointRouterAgent } from '../api.js'
+import { localSheet } from '../sheet.js'
+import {
+  JOB_SECRET_NOTE,
+  repointSheetText,
+  repointFields,
+  repointReady,
+  repointRequestBody,
+  repointJobTitle,
+  jobStartErrorText,
+} from '../agentJobs.js'
 
 // Администрирование: парк целиком и доступы к этому роутеру.
 //
@@ -9,7 +20,35 @@ import { ParkSection } from './ParkSection.jsx'
 // бэкенда, добавление роутера и массовые действия. openLayer открывает слои
 // парка (мастер, ход работы, ожидание раскатки) с возвратом сюда. Здесь --
 // только входы в экраны радиуса одного роутера.
-export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenRouter }) {
+//
+// «Опасное» свёрнуто (спека, п. 8): перенаправление уводит роутер с этого
+// сервера, и случайно раскрыть его пролистыванием нельзя. Запуск ведёт на
+// «Ход работы» через openLayer (возврат -- сюда же).
+export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenRouter }) {
+  const router = { id: routerID, nickname: routerName }
+
+  function askRepoint() {
+    const text = repointSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Перенаправить',
+        busyLabel: 'Запускаем…',
+        danger: true,
+        confirmPhrase: routerName,
+        fields: repointFields(),
+        fieldsReady: repointReady,
+        note: JOB_SECRET_NOTE,
+        errorText: jobStartErrorText,
+        perform: (typed, values) => repointRouterAgent(routerID, repointRequestBody(values, typed)),
+        onDone: (resp) => {
+          if (resp?.job_id && openLayer) openLayer('job', { jobId: resp.job_id, title: repointJobTitle(router) })
+        },
+      }),
+    )
+  }
+
   return (
     <Overlay title="Обслуживание и доступы" backLabel="Роутер" onBack={onClose}>
       <div class="screen">
@@ -59,6 +98,18 @@ export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, op
         )}
 
         <AccessSection routerID={routerID} openSheet={openSheet} />
+
+        {isAdmin && routerName && (
+          <details class="danger-zone">
+            <summary>Опасное</summary>
+            <Section title="Перенаправить агента">
+              <p class="hint">Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть.</p>
+              <button type="button" class="btn btn-danger btn-wide" onClick={askRepoint}>
+                Перенаправить агента
+              </button>
+            </Section>
+          </details>
+        )}
       </div>
     </Overlay>
   )

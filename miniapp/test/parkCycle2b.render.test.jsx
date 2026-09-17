@@ -222,3 +222,119 @@ describe('Парк: другая версия агента', () => {
     cleanup(root)
   })
 })
+
+const SECRET = 'root-Пароль-9f3kq'
+
+describe('Парк: переустановить агент сейчас', () => {
+  it('кнопка -- только у роутеров на связи', async () => {
+    const { root } = await mountPark({ openLayer: () => {} })
+    expect(buttons(rowOf(root, 'home'), 'Переустановить агент')).toHaveLength(1)
+    expect(buttons(rowOf(root, 'car'), 'Переустановить агент')).toHaveLength(1)
+    expect(buttons(rowOf(root, 'bronya'), 'Переустановить агент')).toHaveLength(0)
+    cleanup(root)
+  })
+
+  it('пароль и ник -- запуск, «Ход работы» открыт; пароля нет ни в листе, ни в консоли', async () => {
+    const opened = []
+    const log = vi.spyOn(console, 'log')
+    const error = vi.spyOn(console, 'error')
+    const { root, sheets } = await mountPark({ openLayer: (overlay, params) => opened.push([overlay, params]) })
+    await act(async () => buttons(rowOf(root, 'home'), 'Переустановить агент')[0].click())
+    const sheet = sheets[0]
+    expect(sheet.confirmPhrase).toBe('home')
+    expect(sheet.danger).toBe(true)
+    expect(sheet.note).toBe('Пароли уходят на сервер один раз и не сохраняются.')
+    const s = await mountSheet(sheet)
+    for (const input of s.root.querySelectorAll('input')) expect(input.getAttribute('autocomplete')).toBe('off')
+    await fill(s.root, '#sheet-confirm-input', 'home')
+    expect(primary(s.root).disabled).toBe(true)
+    await fill(s.root, '#sheet-field-root_password', SECRET)
+    expect(primary(s.root).disabled).toBe(false)
+    await act(async () => primary(s.root).click())
+    await flush()
+    await flush()
+    expect(mocks.reinstalls).toEqual([
+      { id: 22, body: { root_password: SECRET, awgm_login: '', awgm_password: '', awgm_api_key: '', version: '', confirm: 'home' } },
+    ])
+    expect(opened).toEqual([['job', { jobId: 'job-1', title: 'Переустановка агента на «home»' }]])
+    expect(JSON.stringify(sheet)).not.toContain(SECRET)
+    expect(JSON.stringify(opened)).not.toContain(SECRET)
+    for (const call of [...log.mock.calls, ...error.mock.calls]) expect(JSON.stringify(call)).not.toContain(SECRET)
+    log.mockRestore()
+    error.mockRestore()
+    cleanup(s.root)
+    cleanup(root)
+  })
+
+  it('отказ сервера -- его русское сообщение на листе, «Ход работы» не открыт', async () => {
+    const { ApiError } = await import('../src/api.js')
+    mocks.reinstallReply = new ApiError(409, 'router_offline', 'x', 'Роутер не на связи — переустановка сейчас невозможна.')
+    const opened = []
+    const { root, sheets } = await mountPark({ openLayer: (overlay, params) => opened.push([overlay, params]) })
+    await act(async () => buttons(rowOf(root, 'home'), 'Переустановить агент')[0].click())
+    const s = await mountSheet(sheets[0])
+    await fill(s.root, '#sheet-field-root_password', 'pw')
+    await fill(s.root, '#sheet-confirm-input', 'home')
+    await act(async () => primary(s.root).click())
+    await flush()
+    expect(s.root.querySelector('.state-error').textContent).toBe('Роутер не на связи — переустановка сейчас невозможна.')
+    expect(opened).toEqual([])
+    cleanup(s.root)
+    cleanup(root)
+  })
+})
+
+describe('Обслуживание: перенаправить агента', () => {
+  async function mountAdmin(openLayer) {
+    const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
+    const sheets = []
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => {
+      render(
+        <AdminOverlay routerID={22} routerName="home" isAdmin onClose={() => {}} openSheet={(s) => sheets.push(s)} openLayer={openLayer} />,
+        root,
+      )
+    })
+    await flush()
+    return { root, sheets }
+  }
+
+  it('свёрнуто под «Опасное»; адрес без https не пускает; запуск открывает «Ход работы»', async () => {
+    const opened = []
+    const { root, sheets } = await mountAdmin((overlay, params) => opened.push([overlay, params]))
+    const zone = root.querySelector('details.danger-zone')
+    expect(zone.open).toBe(false)
+    expect(zone.querySelector('summary').textContent).toBe('Опасное')
+    expect(zone.textContent).toContain('Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть.')
+    await act(async () => buttons(zone, 'Перенаправить агента')[0].click())
+    const s = await mountSheet(sheets[0])
+    expect(sheets[0].confirmPhrase).toBe('home')
+    await fill(s.root, '#sheet-field-root_password', 'pw')
+    await fill(s.root, '#sheet-confirm-input', 'home')
+    expect(s.root.querySelector('.sheet-field-hint').textContent).toBe('Пусто — текущий публичный адрес этого сервера.')
+    await fill(s.root, '#sheet-field-new_backend_url', 'http://wg2.example.com')
+    expect(primary(s.root).disabled).toBe(true)
+    await fill(s.root, '#sheet-field-new_backend_url', 'https://wg2.example.com')
+    expect(primary(s.root).disabled).toBe(false)
+    await act(async () => primary(s.root).click())
+    await flush()
+    await flush()
+    expect(mocks.repoints).toEqual([
+      { id: 22, body: { root_password: 'pw', new_backend_url: 'https://wg2.example.com', awgm_login: '', awgm_password: '', awgm_api_key: '', confirm: 'home' } },
+    ])
+    expect(opened).toEqual([['job', { jobId: 'job-2', title: 'Перенаправление агента «home»' }]])
+    cleanup(s.root)
+    cleanup(root)
+  })
+
+  it('не админу «Опасного» нет', async () => {
+    const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
+    const root = document.createElement('div')
+    document.body.appendChild(root)
+    await act(async () => render(<AdminOverlay routerID={22} routerName="home" isAdmin={false} onClose={() => {}} openSheet={() => {}} />, root))
+    await flush()
+    expect(root.querySelector('details.danger-zone')).toBe(null)
+    cleanup(root)
+  })
+})

@@ -156,6 +156,17 @@ export function cancelRouterAgentRevive(routerID) {
   return request(`/routers/${routerID}/agent/revive`, { method: 'DELETE' })
 }
 
+// Переустановка агента сейчас и перенаправление на другой бэкенд. Пароли
+// уходят один раз, в теле этого POST; ответ -- {job_id} для «Хода работы».
+// Тело собирает agentJobs.js.
+export function reinstallRouterAgent(routerID, body) {
+  return request(`/routers/${routerID}/agent/reinstall`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function repointRouterAgent(routerID, body) {
+  return request(`/routers/${routerID}/agent/repoint`, { method: 'POST', body: JSON.stringify(body) })
+}
+
 export function fetchRouterChecks(id) {
   return request(`/routers/${id}/events`)
 }

@@ -9,6 +9,7 @@ import {
   cancelRouterAgentUpdate,
   reviveRouterAgent,
   cancelRouterAgentRevive,
+  reinstallRouterAgent,
   updateFleetAgents,
   sendCommand,
   fetchCommandResult,
@@ -61,6 +62,16 @@ import {
   otherVersionReady,
   otherVersionRequest,
 } from '../agentVersionPick.js'
+import {
+  JOB_SECRET_NOTE,
+  reinstallAllowed,
+  reinstallSheetText,
+  reinstallFields,
+  reinstallReady,
+  reinstallRequestBody,
+  reinstallJobTitle,
+  jobStartErrorText,
+} from '../agentJobs.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
 // агентов. Раньше экран был читающим, а обновление агента жило в боте и
@@ -265,6 +276,37 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
           setFleetResult(null)
           setNotice(reviveCancelDoneText(resp, router.nickname))
           load()
+        },
+      }),
+    )
+  }
+
+  // Переустановка сейчас (спека, п. 7) -- только роутеру на связи; спящему
+  // есть «Оживить агент». Сервер отвечает {job_id}, и человек сразу
+  // переходит на «Ход работы»: итог установки живёт там, а не в строке.
+  function askReinstall(router) {
+    const text = reinstallSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Переустановить',
+        busyLabel: 'Запускаем…',
+        danger: true,
+        confirmPhrase: router.nickname,
+        fields: reinstallFields(),
+        fieldsReady: reinstallReady,
+        note: JOB_SECRET_NOTE,
+        errorText: jobStartErrorText,
+        perform: (typed, values) => reinstallRouterAgent(router.id, reinstallRequestBody(values, typed)),
+        onDone: (resp) => {
+          // «Ход работы» части 2: openLayer сам знает, куда вернуть «назад».
+          if (resp?.job_id && openLayer) {
+            openLayer('job', { jobId: resp.job_id, title: reinstallJobTitle(router) })
+            return
+          }
+          setFleetResult(null)
+          setNotice(`Переустановка агента на «${router.nickname}» запущена.`)
         },
       }),
     )
@@ -546,7 +588,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                   {rv.text && (
                     <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
                   )}
-                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router)) && (
+                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router) || reinstallAllowed(row.router)) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
@@ -561,6 +603,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
                       {row.update.canCancel && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askCancel(row.router)}>
                           Отменить обновление
+                        </button>
+                      )}
+                      {reinstallAllowed(row.router) && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askReinstall(row.router)}>
+                          Переустановить агент
                         </button>
                       )}
                       {rv.canRevive && (

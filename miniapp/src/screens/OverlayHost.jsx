@@ -91,6 +91,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
       return (
         <AdminOverlay
           routerID={nav.routerID}
+          routerName={current?.nickname}
           isAdmin={isAdmin}
           onClose={close}
           openSheet={openSheet}

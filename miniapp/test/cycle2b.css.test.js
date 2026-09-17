@@ -69,3 +69,11 @@ describe('лист: переключатель и подсказка поля, C
     }
   })
 })
+
+describe('«Опасное» в Обслуживании, CSS', () => {
+  it('свёрнутый блок оформлен на любой ширине', () => {
+    for (const sel of ['.danger-zone', '.danger-zone > summary', '.danger-zone[open] > summary']) {
+      expect(rule(outside, `\n${sel}`), sel).not.toBe(null)
+    }
+  })
+})

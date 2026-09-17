@@ -3044,6 +3044,31 @@ body {
   color: var(--danger);
 }
 
+.danger-zone {
+  margin-top: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.danger-zone > summary {
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.danger-zone[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.danger-zone > .section {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
 /* --- Поиск и фильтры списка роутеров (цикл 2) --- */
 .filter-bar {
   display: flex;
