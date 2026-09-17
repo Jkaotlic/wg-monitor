@@ -89,6 +89,8 @@ func rescuePageHandler() http.Handler {
 		h.Set("Cache-Control", "no-store")
 		h.Set("Content-Security-Policy", page.csp)
 		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
 		_, _ = w.Write(page.body)
 	})
 }

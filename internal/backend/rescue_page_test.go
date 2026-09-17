@@ -44,6 +44,12 @@ func TestRescuePageServedWithoutSessionAsLoginState(t *testing.T) {
 	if xf := rec.Header().Get("X-Frame-Options"); xf != "DENY" {
 		t.Errorf("X-Frame-Options=%q", xf)
 	}
+	if v := rec.Header().Get("X-Content-Type-Options"); v != "nosniff" {
+		t.Errorf("X-Content-Type-Options=%q, want nosniff", v)
+	}
+	if v := rec.Header().Get("Referrer-Policy"); v != "no-referrer" {
+		t.Errorf("Referrer-Policy=%q, want no-referrer", v)
+	}
 	body := rec.Body.String()
 	for _, want := range []string{
 		"wg-monitor · аварийная страница",

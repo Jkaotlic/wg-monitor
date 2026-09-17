@@ -85,7 +85,7 @@ function render(s) {
   syncDeploy()
 }
 
-async function load() {
+async function load(afterLogin) {
   setState('Загрузка сводки…')
   let res
   try {
@@ -96,7 +96,8 @@ async function load() {
   }
   if (res.status === 401) {
     setState('')
-    showLogin('')
+    // Вход только что принят, а сводка -- 401: кука не легла (запрещены куки).
+    showLogin(afterLogin ? 'Вход принят, но браузер не сохранил сессию — разрешите куки для этого сайта' : '')
     return
   }
   if (!res.ok) {
@@ -132,7 +133,7 @@ el('login-form').addEventListener('submit', async (e) => {
     })
     if (res.ok) {
       el('token').value = ''
-      await load()
+      await load(true)
       return
     }
     if (res.status === 401) {
@@ -171,7 +172,11 @@ function syncDeploy() {
   el('d-go').disabled = deploying || !target || el('d-confirm').value.trim() !== target
 }
 
-el('d-version').addEventListener('input', syncDeploy)
+el('d-version').addEventListener('input', () => {
+  // Разрешение на откат относится к набранной версии: новая версия -- заново.
+  el('d-downgrade').checked = false
+  syncDeploy()
+})
 el('d-confirm').addEventListener('input', syncDeploy)
 
 function deployErrorText(status, body) {
@@ -183,6 +188,7 @@ function deployErrorText(status, body) {
 
 el('deploy-form').addEventListener('submit', async (e) => {
   e.preventDefault()
+  if (deploying) return
   const target = el('d-version').value.trim()
   if (!target || el('d-confirm').value.trim() !== target) {
     setNote('d-status', 'Наберите версию ещё раз в поле подтверждения', 'warn')
@@ -190,6 +196,15 @@ el('deploy-form').addEventListener('submit', async (e) => {
   }
   deploying = true
   syncDeploy()
+  // Та же версия, что работает: старый процесс сразу ответит ею на /healthz,
+  // и «Готово» появилось бы до перезапуска. Такую заявку не отправляем.
+  const running = await runningVersion()
+  if (running && running === target) {
+    deploying = false
+    syncDeploy()
+    setNote('d-status', 'Эта версия уже работает', 'warn')
+    return
+  }
   setNote('d-status', 'Отправляем заявку…')
   let res
   try {
@@ -217,6 +232,12 @@ el('deploy-form').addEventListener('submit', async (e) => {
   }
   setNote('d-status', deployErrorText(res.status, await readJSON(res)), 'bad')
 })
+
+async function runningVersion() {
+  const res = await fetch('/healthz', { cache: 'no-store' }).catch(() => null)
+  const health = res && res.ok ? await readJSON(res) : null
+  return (health && health.version) || ''
+}
 
 async function waitFor(target) {
   const started = Date.now()
