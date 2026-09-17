@@ -397,3 +397,76 @@ func TestMiniappTunnelImportWithoutQueue(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Ревью цикла 4: у человека на роутере не больше одного неотвеченного анализа.
+// Повтор того же файла -- тот же токен и без второго tunnel_analyze; другой
+// файл, пока роутер молчит, -- 409 analysis_pending; когда роутер ответил,
+// новый файл принимается.
+func TestMiniappTunnelImportOnePendingAnalysis(t *testing.T) {
+	env, sink := newTunnelEnv(t, nil)
+	first := importRespBody(t, postImport(t, env, cabOwner, importBody("vpn-new", importConfFixture)))
+	if first.State != "analyzing" {
+		t.Fatalf("первый: %+v", first)
+	}
+	again := importRespBody(t, postImport(t, env, cabOwner, importBody(" VPN-new", importConfFixture)))
+	if again.Token != first.Token || again.State != "analyzing" || len(sink.enqueued) != 1 {
+		t.Fatalf("повтор того же файла: %+v очередь %v", again, sink.actions())
+	}
+	other := strings.Replace(importConfFixture, "MTU = 1280", "MTU = 1420", 1)
+	rec := postImport(t, env, cabOwner, importBody("vpn-other", other))
+	if code, message, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "analysis_pending" || message == "" {
+		t.Fatalf("другой файл: %d %s", rec.Code, rec.Body.String())
+	}
+	if len(sink.enqueued) != 1 {
+		t.Fatalf("лишний анализ: %v", sink.actions())
+	}
+	// У другого человека -- свой предпросмотр.
+	if rec := postImport(t, env, cabAdmin, importBody("vpn-admin", other)); rec.Code != http.StatusOK {
+		t.Fatalf("админ: %d %s", rec.Code, rec.Body.String())
+	}
+	sink.results = map[string]wire.CommandResult{sink.enqueued[0].ID: {ID: sink.enqueued[0].ID, Status: "ok", Output: `{"supported":true}`}}
+	next := importRespBody(t, postImport(t, env, cabOwner, importBody("vpn-other", other)))
+	if next.Token == "" || next.Token == first.Token || next.Name != "vpn-other" {
+		t.Fatalf("после ответа роутера: %+v", next)
+	}
+}
+
+// Неотвеченный анализ старше окна переиспользования вопроса (2 мин) не держит
+// человека: роутер, молчавший две минуты, спрашивается заново и новым файлом.
+func TestMiniappImportPreviewsPendingWindow(t *testing.T) {
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	s := newMiniappImportPreviews(5*time.Minute, func() time.Time { return now })
+	tok, _ := s.put(miniappImportEntry{routerID: 1, tgUser: 100, name: "a", state: miniappImportAnalyzing})
+	if got, _, ok := s.pending(1, 100, 2*time.Minute); !ok || got != tok {
+		t.Fatalf("свежий анализ: %q %v", got, ok)
+	}
+	if _, _, ok := s.pending(1, 200, 2*time.Minute); ok {
+		t.Fatal("чужой человек")
+	}
+	now = now.Add(2*time.Minute + time.Second)
+	if _, _, ok := s.pending(1, 100, 2*time.Minute); ok {
+		t.Fatal("анализ старше окна держит человека")
+	}
+}
+
+// Ревью цикла 4: имя проверяется и на подтверждении -- за пять минут
+// предпросмотра роутер мог завести туннель с тем же именем.
+func TestMiniappTunnelImportConfirmRechecksName(t *testing.T) {
+	env, sink := newTunnelEnv(t, analyzeAnswer("ok", `{"supported":true}`))
+	body := importRespBody(t, postImport(t, env, cabOwner, importBody("vpn-new", importConfFixture)))
+	if !body.CanConfirm {
+		t.Fatalf("предпросмотр: %+v", body)
+	}
+	if err := env.d.Events().Insert(env.ownedID, "tunnel_awg30", "ok", `{"tunnel_id":"awg30","tunnel_name":"vpn-new"}`, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	rec := confirmImport(t, env, cabOwner, body.Token)
+	if code, _, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusConflict || code != "name_taken" {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	for _, a := range sink.actions() {
+		if a == "tunnel_import" {
+			t.Fatal("импорт ушёл роутеру")
+		}
+	}
+}

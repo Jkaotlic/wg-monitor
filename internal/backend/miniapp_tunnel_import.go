@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -173,6 +174,7 @@ type miniappImportEntry struct {
 	state    string
 	analyzed bool
 	note     string
+	created  time.Time
 	expires  time.Time
 }
 
@@ -203,9 +205,29 @@ func (s *miniappImportPreviews) put(e miniappImportEntry) (string, error) {
 			delete(s.m, k)
 		}
 	}
+	e.created = now
 	e.expires = now.Add(s.ttl)
 	s.m[token] = &e
 	return token, nil
+}
+
+// pending -- неотвеченный анализ человека на роутере, заданный не раньше
+// window назад (ревью цикла 4: не больше одного такого на человека). Старше
+// окна -- вопрос роутеру и так задаётся заново, и держать человека незачем.
+func (s *miniappImportPreviews) pending(routerID, tgUser int64, window time.Duration) (string, miniappImportEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for token, e := range s.m {
+		if e.routerID != routerID || e.tgUser != tgUser || e.state != miniappImportAnalyzing {
+			continue
+		}
+		if !now.Before(e.expires) || now.Sub(e.created) > window {
+			continue
+		}
+		return token, *e, true
+	}
+	return "", miniappImportEntry{}, false
 }
 
 func (s *miniappImportPreviews) lookupLocked(token string, routerID, tgUser int64) (*miniappImportEntry, bool) {
@@ -404,6 +426,20 @@ func miniappTunnelImportHandler(d Deps, previews *miniappImportPreviews, questio
 			return
 		}
 		tgUser, _ := miniappUserFromContext(r.Context())
+		// Не больше одного неотвеченного анализа на человека и роутер (ревью
+		// цикла 4): повтор того же файла -- тот же предпросмотр, другой файл
+		// ждёт ответа роутера на прежний.
+		if pendingToken, pendingEntry, busy := previews.pending(u.ID, tgUser, miniappAgentAskReuse); busy {
+			pendingEntry = miniappImportAnalyze(r.Context(), d, previews, questions, pendingToken, pendingEntry)
+			if pendingEntry.name == name && bytes.Equal(pendingEntry.conf, conf) {
+				writeMiniappCabinetJSON(w, http.StatusOK, miniappImportRespFrom(pendingToken, pendingEntry))
+				return
+			}
+			if pendingEntry.state == miniappImportAnalyzing {
+				writeMiniappTunnelError(w, http.StatusConflict, "analysis_pending")
+				return
+			}
+		}
 		entry := miniappImportEntry{routerID: u.ID, tgUser: tgUser, name: name, conf: conf, preview: preview, state: miniappImportAnalyzing}
 		version := ""
 		if u.LastDeployedVersion != nil {
@@ -476,6 +512,12 @@ func miniappTunnelImportConfirmHandler(d Deps, previews *miniappImportPreviews, 
 		}
 		if !miniappImportRespFrom(token, entry).CanConfirm {
 			writeMiniappTunnelError(w, http.StatusConflict, "conf_rejected")
+			return
+		}
+		// Имя -- и на подтверждении: за пять минут предпросмотра роутер мог
+		// завести VPN-туннель с тем же именем (ревью цикла 4).
+		if miniappTunnelNameTaken(d, u.ID, entry.name) {
+			writeMiniappTunnelError(w, http.StatusConflict, "name_taken")
 			return
 		}
 		entry, ok = previews.take(token, u.ID, tgUser)
