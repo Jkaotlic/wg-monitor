@@ -15,7 +15,6 @@ import {
   TUNNEL_TEXTS,
 } from '../tunnelDelete.js'
 import { tunnelRuleSummary } from '../routes.js'
-import { tunnelLiveLabel } from '../labels.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
@@ -141,10 +140,12 @@ export function TunnelScreen({ routerID, asleep, snapshot, tunnelID, role, openS
           <Quoted text={`«${card.name}»`} />
         </h1>
         <div class="card">
-          <DataRow title="Состояние" code={card.id} value={fresh ? tunnelLiveLabel(card.live) : 'нет в снимке роутера'} />
-          <DataRow title="Интерфейс" value={card.iface || 'роутер не сообщил'} />
-          <DataRow title="Правила" value={tunnelRuleSummary(card)} />
-          {card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
+          <DataRow title="Состояние" code={card.id} value={fresh ? card.stateLabel : outcome?.done ? 'удалён с роутера' : 'нет в снимке роутера'} />
+          {/* Пропавший из снимка VPN-туннель: прежние интерфейс и правила
+              были бы вчерашней картиной. */}
+          {fresh && <DataRow title="Интерфейс" value={card.iface || 'роутер не сообщил'} />}
+          {fresh && <DataRow title="Правила" value={tunnelRuleSummary(card)} />}
+          {fresh && card.egressKnown && <DataRow title="Главный выход роутера" value={card.isDefault ? 'этот VPN-туннель' : 'другой'} />}
         </div>
 
         <Section title="Удалить VPN-туннель">

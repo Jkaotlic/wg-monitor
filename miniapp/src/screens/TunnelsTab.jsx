@@ -7,7 +7,7 @@ import { tunnelsView } from '../tunnelsView.js'
 import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
 import { IMPORT_TEXTS } from '../confImport.js'
 import { trafficSummary } from '../traffic.js'
-import { humanAge, tunnelLiveLabel } from '../labels.js'
+import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Hero } from '../ui/Hero.jsx'
 import { StateTag } from '../ui/StateTag.jsx'
@@ -314,7 +314,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
               <ListRow
                 key={t.id}
                 title={t.name}
-                sub={`${tunnelLiveLabel(t.live)} · ${tunnelRuleSummary(t)}`}
+                sub={`${t.stateLabel} · ${tunnelRuleSummary(t)}`}
                 onClick={() => setInspecting(t.id)}
               />
             ))}

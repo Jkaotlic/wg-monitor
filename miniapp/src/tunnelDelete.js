@@ -5,8 +5,8 @@
 // клиенту не верит. Клиент считает то же заранее и так же, как сервер
 // (miniappTunnelRuleCount -- порт tunnelRows), чтобы не предлагать кнопку,
 // которая заведомо получит отказ, -- и говорит теми же словами, что при отказе.
-import { tunnelRows } from './routes.js'
-import { rulesCount } from './labels.js'
+import { tunnelRows, tunnelSwitchedOff } from './routes.js'
+import { rulesCount, tunnelLiveLabel } from './labels.js'
 import { commandOutcome } from './commandWait.js'
 
 export const TUNNEL_TEXTS = {
@@ -36,10 +36,18 @@ function isManaged(type) {
 }
 
 export function tunnelList(snapshot) {
-  const names = new Map((snapshot?.tunnels ?? []).map((t) => [t.id, String(t.name ?? '').trim()]))
+  const meta = new Map((snapshot?.tunnels ?? []).map((t) => [t.id, t]))
   return tunnelRows(snapshot)
     .filter((r) => isManaged(r.type))
-    .map((r) => ({ ...r, name: names.get(r.id) || r.id }))
+    .map((r) => ({ ...r, name: String(meta.get(r.id)?.name ?? '').trim() || r.id, stateLabel: stateLabel(r.live, meta.get(r.id)) }))
+}
+
+// Состояние словами. «Выключен» -- только выключенный настройкой: включённый,
+// но не поднявшийся VPN-туннель «не отвечает» (так же его зовёт цепочка
+// подхвата), и чинят его перезапуском, а не включением.
+function stateLabel(live, t) {
+  if (live === 'down' && !tunnelSwitchedOff(t)) return 'не отвечает'
+  return tunnelLiveLabel(live)
 }
 
 // Почему карточки нет: VPN-туннель в снимке есть, но не свой (NDMS-интерфейс,

@@ -216,3 +216,26 @@ describe('переход к переносу без вариантов', () => {
     render(null, root)
   })
 })
+
+// Приёмка цикла 4: HydraRoute Neo не разрывает VPN-туннели и их «Подробности»,
+// лист переноса называет команду словами.
+describe('приёмка: «Маршруты»', () => {
+  it('блок HydraRoute Neo -- после «Подробностей», лист переноса без имени команды', async () => {
+    mocks.answers.route_status = {
+      status: 'ok',
+      output: JSON.stringify({
+        ...SNAP,
+        policies: [{ name: 'VPN', dns: 1, interfaces: [{ bind: 'nwg1', name: 'amsterdam', role: 'active', tunnel_id: 'nwg1', via_vpn: true }] }],
+      }),
+    }
+    const { root, seen } = await mount()
+    const details = root.querySelector('details.routes-details')
+    const hr = [...root.querySelectorAll('.section')].find((s) => s.querySelector('.section-title')?.textContent === HRNEO_TEXTS.title)
+    expect(details && hr).toBeTruthy()
+    expect(details.compareDocumentPosition(hr) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    await act(async () => byText(tunnelRow(root, 'amsterdam'), 'Перенести всё').click())
+    await pickTarget(root, 'spare')
+    expect(seen.sheets.at(-1).commandLabel).toBe('перенос правил')
+    render(null, root)
+  })
+})

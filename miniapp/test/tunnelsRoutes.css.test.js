@@ -26,7 +26,7 @@ describe('CSS VPN-туннелей и маршрутов (цикл 4)', () => {
     for (const sel of [
       '.tunnel-block {', '.tunnel-outcome {', '.conf-pick {', '.conf-pick-input {', '.conf-pick:focus-within {', '.conf-pick-off {',
       '.conf-file-name {', '.conf-problems {', '.conf-problem {', '.conf-problem:first-child {', '.conf-problem-error {', '.conf-problem-warn {',
-      '.hrneo-status {', '.hrneo-actions {', '.hrneo-actions .btn {', '.hrneo-rules {', '.routes-other .row-title {', '.replace-leftover {',
+      '.hrneo-status {', '.hrneo-actions {', '.hrneo-actions .btn {', '.hrneo-rules {', '.routes-other .row-title {', '.replace-leftover {', '.conf-import .field {',
     ]) {
       expect(outside.includes(sel), sel).toBe(true)
     }

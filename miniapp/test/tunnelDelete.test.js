@@ -195,3 +195,18 @@ describe('ревью: сверка с сервером', () => {
     expect(refusalKey(null, SNAP)).toBe('')
   })
 })
+
+// Приёмка цикла 4: состояние словами -- «выключен» только когда выключили.
+describe('приёмка: состояние VPN-туннеля', () => {
+  it('включён, но не поднялся -- «не отвечает», а не «выключен»', () => {
+    const snap = {
+      tunnels: [
+        { id: 'a', name: 'up', type: 'managed', status: 'running', enabled: true },
+        { id: 'b', name: 'off', type: 'managed', status: 'disabled', enabled: false },
+        { id: 'c', name: 'fail', type: 'managed', status: 'down', enabled: true },
+        { id: 'd', name: 'odd', type: 'managed', status: '' },
+      ],
+    }
+    expect(tunnelList(snap).map((r) => r.stateLabel)).toEqual(['работает', 'выключен', 'не отвечает', 'состояние неизвестно'])
+  })
+})

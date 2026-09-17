@@ -414,3 +414,11 @@ describe('загрузка .conf: ревью', () => {
     render(null, root)
   })
 })
+
+describe('приёмка: вход в загрузку', () => {
+  it('подпись карточки -- какие конфиги подходят', async () => {
+    const root = await mount()
+    expect(importCard(root).querySelector('.nav-card-note').textContent).toBe('WireGuard · AmneziaWG')
+    render(null, root)
+  })
+})

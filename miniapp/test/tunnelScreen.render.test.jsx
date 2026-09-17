@@ -231,7 +231,9 @@ describe('экран VPN-туннеля', () => {
     ])
     expect(root.querySelector('.tunnel-outcome').textContent).toBe('VPN-туннель «spare» удалён.')
     expect(routeStatusCalls()).toBe(before + 1)
-    expect(root.querySelector('.tunnel-screen').textContent).toContain('нет в снимке роутера')
+    // Удалённый VPN-туннель: прежние интерфейс и правила не показываются.
+    expect(root.querySelector('.tunnel-screen').textContent).toContain('удалён с роутера')
+    expect(root.querySelector('.tunnel-screen').textContent).not.toContain('Интерфейс')
     expect(byText(root, 'Удалить VPN-туннель')).toBeFalsy()
     expect(byText(root, 'К списку VPN-туннелей')).toBeTruthy()
     render(null, root)

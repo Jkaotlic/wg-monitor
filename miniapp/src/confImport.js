@@ -19,7 +19,7 @@ const NAME_RULE = 'латиница в нижнем регистре, цифры
 
 export const IMPORT_TEXTS = {
   title: 'Загрузить конфиг .conf',
-  navNote: 'добавить новым VPN-туннелем',
+  navNote: 'WireGuard · AmneziaWG',
   intro: 'Конфиг WireGuard или AmneziaWG встанет на роутер новым VPN-туннелем рядом с остальными. Работающие VPN-туннели и правила он не трогает.',
   pick: 'Выбрать файл .conf',
   pickAnother: 'Выбрать другой файл',

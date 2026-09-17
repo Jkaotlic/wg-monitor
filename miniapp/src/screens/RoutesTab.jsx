@@ -155,6 +155,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
         action: 'route_delete',
         args: { kind: pendingRule.kind, route_id: pendingRule.id, preview_hash: summary.hash },
         buttonLabel: 'Убрать',
+        commandLabel: 'удаление правила',
         danger: true,
         asleep,
         onDone: refresh,
@@ -211,6 +212,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
               action: 'route_rebind',
               args: { src_tunnel_id: src.id, dst_tunnel_id: dst.id },
               buttonLabel: 'Перенести',
+              commandLabel: 'перенос правил',
               asleep,
               onDone: refresh,
             }),
@@ -248,6 +250,7 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
             action: 'route_policy_promote',
             args: { policy_name: t.policyName, tunnel_id: t.tunnelID },
             buttonLabel: 'Сделать главным',
+            commandLabel: 'смена главного VPN-туннеля',
             asleep,
             onDone: refresh,
           }),
@@ -467,9 +470,6 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
         </Section>
       )}
 
-      {snapshot && (
-        <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
-      )}
 
       {/* Цепочки, роли звеньев и счётчики механизмов -- словарь движка
           маршрутизации. Владельцу роутера он не адресован, но оператору
@@ -511,6 +511,10 @@ export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
             Первый работающий VPN-туннель в списке и несёт трафик, остальные ждут как резерв.
           </p>
         </details>
+      )}
+
+      {snapshot && (
+        <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
       )}
 
       {groups.length > 0 && (
