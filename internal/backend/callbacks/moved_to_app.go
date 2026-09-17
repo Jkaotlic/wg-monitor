@@ -89,3 +89,39 @@ func (r *Router) handleConfDocument(ctx context.Context, m *tg.Message) bool {
 	}
 	return true
 }
+
+// movedToAppTexts -- кнопки старой нижней клавиатуры, ушедшие в приложение.
+// Сравнение -- без учёта регистра и пробелов по краям; вариант без эмодзи --
+// на случай клиента, который его срезал.
+var movedToAppTexts = map[string]bool{
+	"🎛 туннели":  true,
+	"🛣 маршруты": true,
+	"туннели":    true,
+	"маршруты":   true,
+}
+
+// handleMovedToAppText -- true, если сообщение было нажатием старой кнопки
+// «🎛 Туннели» / «🛣 Маршруты» и на него ответили (ревью цикла 4). Круг тот
+// же, что у сторожа .conf: личка с любым человеком и разрешённые группы.
+// Роутеру ничего не уходит, сообщение человека не трогается.
+func (r *Router) handleMovedToAppText(ctx context.Context, m *tg.Message) bool {
+	if m.Document != nil || !movedToAppTexts[strings.ToLower(strings.TrimSpace(m.Text))] {
+		return false
+	}
+	private := m.Chat.ID == m.From.ID
+	if !private && !r.chatAllowed(m.Chat.ID) {
+		return false
+	}
+	// Кнопку web_app Telegram разрешает только в личке.
+	if url := tg.MiniAppURL(r.cfg.PublicBaseURL); private && url != "" {
+		kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{tg.OpenInAppButton(url)}}}
+		if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, movedToAppToast, "", nil, &kb); err != nil {
+			slog.Warn("старая кнопка туннелей: ответ не отправлен", "chat", m.Chat.ID, "err", err)
+		}
+		return true
+	}
+	if _, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, movedToAppToast, "", nil); err != nil {
+		slog.Warn("старая кнопка туннелей: ответ не отправлен", "chat", m.Chat.ID, "err", err)
+	}
+	return true
+}

@@ -480,6 +480,11 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	if r.handleConfDocument(ctx, m) {
 		return
 	}
+	// Старая нижняя клавиатура «🎛 Туннели» / «🛣 Маршруты» -- подсказка, куда
+	// это переехало (ревью цикла 4).
+	if r.handleMovedToAppText(ctx, m) {
+		return
+	}
 	// /myid отвечает кому угодно и откуда угодно -- до всех проверок доступа.
 	//
 	// Чтобы дать человеку доступ к роутеру, нужен его числовой номер в

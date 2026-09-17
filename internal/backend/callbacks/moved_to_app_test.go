@@ -122,8 +122,9 @@ func TestConfDocumentDeleteFails(t *testing.T) {
 	}
 }
 
-// /tunnels, /routes, кнопки нижнего меню и «explain» ушли: ни админу, ни
-// оператору бот на них больше ничего не отвечает.
+// /tunnels, /routes и «explain» ушли: ни админу, ни оператору бот на них
+// больше ничего не отвечает. Кнопки старой нижней клавиатуры отвечают
+// подсказкой -- TestOldReplyKeyboardTunnelsRoutesAnswerMovedToApp.
 func TestRemovedTunnelsRoutesCommandsAreSilent(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
@@ -133,7 +134,7 @@ func TestRemovedTunnelsRoutesCommandsAreSilent(t *testing.T) {
 	_ = d.RouterOperators().Add(uid, 200, 12345)
 	tid := int64(55)
 	for _, from := range []int64{12345, 200} {
-		for _, text := range []string{"/tunnels", "/routes", "🎛 Туннели", "🛣 Маршруты", "explain example.com", "vpn-new"} {
+		for _, text := range []string{"/tunnels", "/routes", "explain example.com", "vpn-new"} {
 			f := &fakeRouterTG{}
 			sink := &fakeEnqueuer{}
 			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
@@ -195,5 +196,56 @@ func TestParse_RemovedTunnelsRoutesCallbacksAreUnknown(t *testing.T) {
 	}
 	if _, err := Parse("close_panel:0:_panel_"); err != nil {
 		t.Fatalf("close_panel нужен справке: %v", err)
+	}
+}
+
+// Ревью цикла 4: у людей осталась старая нижняя клавиатура с «🎛 Туннели» и
+// «🛣 Маршруты». Нажатие -- короткий ответ «Это теперь в приложении»: в личке с
+// кнопкой приложения, в разрешённой группе -- текстом, в чужой -- молчание.
+// Роутеру ничего не уходит.
+func TestOldReplyKeyboardTunnelsRoutesAnswerMovedToApp(t *testing.T) {
+	d, _ := newTestDB(t)
+	cases := []struct {
+		name         string
+		chatID, from int64
+		text         string
+		want         string // "button" | "text" | ""
+	}{
+		{"туннели в группе", -100, 200, "🎛 Туннели", "text"},
+		{"маршруты в группе", -100, 12345, "🛣 Маршруты", "text"},
+		{"без эмодзи", -100, 200, " маршруты ", "text"},
+		{"в личке", 777, 777, "Туннели", "button"},
+		{"чужая группа", -555, 200, "🎛 Туннели", ""},
+		{"обычная переписка", -100, 200, "туннели опять лежат", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeRouterTGFull{}
+			sink := &fakeEnqueuer{}
+			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, PublicBaseURL: "https://wgmon.example.com"})
+			tid := int64(55)
+			r.HandleMessage(context.Background(), &tg.Message{MessageID: 9, Chat: tg.Chat{ID: tc.chatID}, From: tg.User{ID: tc.from}, MessageThreadID: &tid, Text: tc.text})
+			if len(sink.calls) != 0 {
+				t.Fatalf("роутеру ушло: %+v", sink.calls)
+			}
+			switch tc.want {
+			case "":
+				if len(f.sentMsgs)+len(f.rkSends) != 0 {
+					t.Fatalf("лишний ответ: %q %+v", f.sentMsgs, f.rkSends)
+				}
+			case "text":
+				if len(f.sentMsgs) != 1 || f.sentMsgs[0] != movedToAppToast || len(f.rkSends) != 0 {
+					t.Fatalf("ответ в группе: %q %+v", f.sentMsgs, f.rkSends)
+				}
+			case "button":
+				if len(f.rkSends) != 1 || f.rkSends[0].text != movedToAppToast {
+					t.Fatalf("ответ в личке: %q %+v", f.sentMsgs, f.rkSends)
+				}
+				kb, ok := f.rkSends[0].markup.(*tg.InlineKeyboardMarkup)
+				if !ok || kb.InlineKeyboard[0][0].WebApp == nil || kb.InlineKeyboard[0][0].WebApp.URL != "https://wgmon.example.com/miniapp/" {
+					t.Fatalf("кнопка: %+v", f.rkSends[0].markup)
+				}
+			}
+		})
 	}
 }

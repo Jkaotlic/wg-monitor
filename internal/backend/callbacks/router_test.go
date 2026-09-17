@@ -718,7 +718,7 @@ func TestRouterHandleMessage_RemovedMaintenanceEntriesSilent(t *testing.T) {
 	_ = d.RouterOperators().Add(uid, 200, 12345)
 	tid := int64(55)
 	for _, from := range []int64{12345, 200} {
-		for _, text := range []string{"/maint", "/upgrade", "🛠 Обслуживание", "⬆ Обновить пакеты", "/tunnels", "/routes", "🎛 Туннели", "🛣 Маршруты"} {
+		for _, text := range []string{"/maint", "/upgrade", "🛠 Обслуживание", "⬆ Обновить пакеты", "/tunnels", "/routes"} {
 			f := &fakeRouterTG{}
 			sink := &fakeEnqueuer{}
 			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
