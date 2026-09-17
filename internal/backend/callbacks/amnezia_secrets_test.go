@@ -15,11 +15,11 @@ func TestAmneziaSecretsStoreMultipleKeysAndActive(t *testing.T) {
 	if got, err := r.getAmneziaKey(7); err != nil || got != "" {
 		t.Fatalf("missing key = %q, err=%v", got, err)
 	}
-	first, err := r.addAmneziaKey(7, "vpn://first")
+	first, err := r.addAmneziaKeyLabeled(7, "vpn://first", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := r.addAmneziaKey(7, "vpn://second")
+	second, err := r.addAmneziaKeyLabeled(7, "vpn://second", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestAmneziaSecretsReadsLegacySingleKey(t *testing.T) {
 	if got, err := r.getAmneziaKey(7); err != nil || got != "vpn://legacy" {
 		t.Fatalf("active legacy key = %q, err=%v", got, err)
 	}
-	if _, err := r.addAmneziaKey(7, "vpn://new"); err != nil {
+	if _, err := r.addAmneziaKeyLabeled(7, "vpn://new", ""); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(path)
@@ -101,7 +101,7 @@ func TestAmneziaSecretsRejectsNonVPNKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "amnezia-premium.json")
 	r := &Router{cfg: Config{AmneziaSecretsPath: path}}
 
-	if _, err := r.addAmneziaKey(7, "not-a-key"); err == nil {
+	if _, err := r.addAmneziaKeyLabeled(7, "not-a-key", ""); err == nil {
 		t.Fatal("expected non-vpn key to fail")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {

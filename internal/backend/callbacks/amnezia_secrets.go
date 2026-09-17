@@ -67,10 +67,6 @@ func (r *Router) listAmneziaKeys(userID int64) (amneziaRouterKeys, error) {
 	return keys, nil
 }
 
-func (r *Router) addAmneziaKey(userID int64, vpnKey string) (amneziaStoredKey, error) {
-	return r.addAmneziaKeyLabeled(userID, vpnKey, "")
-}
-
 // addAmneziaKeyLabeled сохраняет ключ под замком файла и делает его активным.
 // Тот же ключ второй раз не заводится: обновляются подпись (если задана) и
 // активность.

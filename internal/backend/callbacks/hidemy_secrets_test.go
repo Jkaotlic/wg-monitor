@@ -14,11 +14,11 @@ func TestHideMySecretsStoreMultipleCodesAndActive(t *testing.T) {
 	if got, err := r.getHideMyCode(7); err != nil || got != "" {
 		t.Fatalf("empty get = %q, %v", got, err)
 	}
-	first, err := r.addHideMyCode(7, "123456789012345")
+	first, err := r.addHideMyCodeLabeled(7, "123456789012345", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := r.addHideMyCode(7, "987654321098765")
+	second, err := r.addHideMyCodeLabeled(7, "987654321098765", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestHideMySecretsStoreMultipleCodesAndActive(t *testing.T) {
 func TestHideMySecretsRejectsNonNumericCode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hidemyname.json")
 	r := &Router{cfg: Config{HideMySecretsPath: path}}
-	if _, err := r.addHideMyCode(7, "vpn://not-hidemy"); err == nil {
+	if _, err := r.addHideMyCodeLabeled(7, "vpn://not-hidemy", ""); err == nil {
 		t.Fatal("expected invalid code error")
 	}
 }
@@ -59,7 +59,7 @@ func TestHideMySecretsRejectsNonNumericCode(t *testing.T) {
 func TestHideMySecretsWriteStructuredJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hidemyname.json")
 	r := &Router{cfg: Config{HideMySecretsPath: path}}
-	if _, err := r.addHideMyCode(7, "123456789012345"); err != nil {
+	if _, err := r.addHideMyCodeLabeled(7, "123456789012345", ""); err != nil {
 		t.Fatal(err)
 	}
 	body, err := os.ReadFile(path)

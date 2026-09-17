@@ -84,10 +84,6 @@ func (r *Router) listHideMyCodes(userID int64) (hideMyCodes, error) {
 	return codes, nil
 }
 
-func (r *Router) addHideMyCode(userID int64, accessCode string) (hideMyStoredCode, error) {
-	return r.addHideMyCodeLabeled(userID, accessCode, "")
-}
-
 // addHideMyCodeLabeled -- как addAmneziaKeyLabeled, для кодов HideMy.name.
 func (r *Router) addHideMyCodeLabeled(userID int64, accessCode, label string) (hideMyStoredCode, error) {
 	accessCode = strings.TrimSpace(accessCode)
