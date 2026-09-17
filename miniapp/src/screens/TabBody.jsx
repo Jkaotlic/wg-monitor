@@ -8,6 +8,10 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
   if (nav.routerID == null) return <p class="state">Выберите роутер в списке.</p>
   const { current, asleep } = routerContext(routers, nav.routerID)
   const openSheet = (sheet) => dispatch({ type: 'sheet', sheet })
+  // Переход к переносу с экрана VPN-туннеля: «Маршруты» сами откроют выбор
+  // цели. Id VPN-туннеля живёт в параметрах слоя, в адрес пишется только
+  // open=routes.
+  const openRebind = (tunnelID) => dispatch({ type: 'overlay', overlay: 'routes', params: { rebindFrom: tunnelID } })
   switch (nav.tab) {
     case 'router':
       return (
@@ -25,8 +29,10 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           routerID={nav.routerID}
           asleep={asleep}
           onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
+          onOpenRebind={openRebind}
           onOpenCabinet={() => dispatch({ type: 'overlay', overlay: 'cabinet' })}
           cabinetOpen={nav.overlay === 'cabinet'}
+          routesOpen={nav.overlay === 'routes'}
           openSheet={openSheet}
         />
       )

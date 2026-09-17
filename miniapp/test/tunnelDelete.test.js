@@ -130,6 +130,7 @@ describe('лист и ответы сервера', () => {
     expect(deleteErrorText(new Error('net'))).toBe('Сервер не ответил — ничего не удалено. Попробуйте ещё раз.')
     expect(deleteErrorText(new ApiError(500, 'unknown', 'x'))).toBe('')
     expect(TUNNEL_TEXTS.checkingTimeout).toBe('Роутер не отвечает — проверьте, что он на связи. Ничего не удалено.')
+    expect(deleteErrorText(Object.assign(new Error('checking_timeout'), { code: 'checking_timeout' }))).toBe(TUNNEL_TEXTS.checkingTimeout)
   })
 
   it('итог команды', () => {
