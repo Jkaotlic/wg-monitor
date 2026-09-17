@@ -3355,6 +3355,10 @@ body {
   margin-top: var(--sp-3);
 }
 
+.selfhosted-form .card + .field-hint {
+  margin-top: var(--sp-2);
+}
+
 .card + .cabinet-options {
   margin-top: var(--sp-3);
 }

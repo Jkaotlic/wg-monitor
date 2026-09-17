@@ -331,12 +331,21 @@ describe('кабинет роутера: страны и отзыв', () => {
     cleanup(root)
   })
 
-  it('доступная страна -- со стрелкой, погашенная -- без', async () => {
+  it('стрелка -- у доступной страны без «Отозвать»; у погашенной и рядом с «Отозвать» -- нет', async () => {
+    let { root } = await mount()
+    const main = (r, label) => [...r.querySelectorAll('.cabinet-option-main')].find((b) => b.textContent.includes(label))
+    expect(main(root, 'Германия').querySelector('.list-row-chevron')).toBeTruthy()
+    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBe(null)
+    cleanup(root)
+
     mocks.accounts[0].devices_used = 3
-    const { root } = await mount()
-    const main = (label) => [...root.querySelectorAll('.cabinet-option-main')].find((b) => b.textContent.includes(label))
-    expect(main('Нидерланды').querySelector('.list-row-chevron')).toBeTruthy()
-    expect(main('Германия').querySelector('.list-row-chevron')).toBe(null)
+    root = (await mount()).root
+    expect(main(root, 'Германия').querySelector('.list-row-chevron')).toBe(null)
+    cleanup(root)
+
+    mocks.role = 'operator'
+    root = (await mount()).root
+    expect(main(root, 'Нидерланды').querySelector('.list-row-chevron')).toBeTruthy()
     cleanup(root)
   })
 
