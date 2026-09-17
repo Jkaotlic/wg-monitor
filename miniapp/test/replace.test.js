@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { replaceView, stepTitle, startErrorText, stepValue } from '../src/replace.js'
+import { replaceView, stepTitle, startErrorText, stepValue, replaceLeftover } from '../src/replace.js'
 
 describe('stepTitle', () => {
   // Человеку показывают не имена шагов движка, а то, что происходит на
@@ -110,5 +110,42 @@ describe('stepValue', () => {
       expect(stepValue('active', running)).toBe('идёт')
       expect(stepValue('failed', running)).toBe('не вышло')
     }
+  })
+})
+
+// Мастер оставляет VPN-туннель на роутере всегда: прежний при успехе, новый --
+// при откате. Разбираться с ним человек идёт на экран этого VPN-туннеля.
+describe('replaceLeftover', () => {
+  const tunnel = { id: 'nwg1', name: 'amsterdam' }
+
+  it('не начиналась или идёт -- ничего', () => {
+    expect(replaceLeftover(replaceView(null), tunnel)).toBe(null)
+    expect(replaceLeftover(replaceView({ job_id: 'j', state: 'running', running: true, steps: [] }), tunnel)).toBe(null)
+  })
+
+  it('успех -- прежний VPN-туннель на своём экране', () => {
+    expect(replaceLeftover(replaceView({ job_id: 'j', state: 'success', steps: [], hint: 'готово' }), tunnel)).toEqual({
+      tunnelID: 'nwg1',
+      button: 'К VPN-туннелю «amsterdam»',
+      text: 'Прежний VPN-туннель «amsterdam» остался на роутере выключенным. Разбираться с ним — оставить про запас или удалить — будете на его собственном экране.',
+    })
+  })
+
+  it('откат оставил новый -- к списку', () => {
+    const job = {
+      job_id: 'j',
+      state: 'failed',
+      steps: [],
+      hint: 'новый VPN-туннель не обменялся ключами. Откат: общий набор снова идёт через прежний VPN-туннель; новый VPN-туннель выключен и оставлен на роутере',
+    }
+    expect(replaceLeftover(replaceView(job), tunnel)).toEqual({
+      tunnelID: null,
+      button: 'К списку VPN-туннелей',
+      text: 'Новый VPN-туннель выключен и оставлен на роутере. Разбираться с ним — удалить или попробовать снова — будете на его собственном экране в списке VPN-туннелей.',
+    })
+  })
+
+  it('провал без оставленного VPN-туннеля -- ничего', () => {
+    expect(replaceLeftover(replaceView({ job_id: 'j', state: 'failed', steps: [], hint: 'кабинет не ответил' }), tunnel)).toBe(null)
   })
 })

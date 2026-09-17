@@ -6,7 +6,7 @@
 // подтверждением и откатом, она относится к фазе рабочего места оператора.
 // Пока экран только показывает.
 
-import { rulesCount } from './labels.js'
+import { rulesCount, pluralRu } from './labels.js'
 
 // Жив ли туннель прямо сейчас. Судить об этом можно ТОЛЬКО по status:
 // поле enabled в снимке отвечает на другой вопрос -- годится ли интерфейс
@@ -480,4 +480,66 @@ export function canRebindTunnel(row) {
   if (!row || row.type !== 'managed') return false
   const own = (row.total ?? 0) - (row.policyRules ?? 0)
   return own > 0
+}
+
+// Правила без VPN-туннеля -- то, что снимок складывает в other (привязки к WAN
+// и системным интерфейсам). Бот переносил их источником __other__; в приложении
+// это строка «Напрямую (WAN)» в списке раскладки, с тем же переносом. Целью
+// __other__ быть не может: агент не умеет переносить «в WAN» (сервер отвечает
+// invalid_route_id), и rebindTargets её не предлагает -- строки нет в rows.
+export const OTHER_SOURCE_ID = '__other__'
+export const OTHER_SOURCE_NAME = 'Напрямую (WAN)'
+
+export function otherSourceRow(snapshot) {
+  const o = snapshot?.other ?? {}
+  const total = (o.dns ?? 0) + (o.static ?? 0)
+  if (total <= 0) return null
+  return {
+    id: OTHER_SOURCE_ID,
+    name: OTHER_SOURCE_NAME,
+    type: 'other',
+    live: 'unknown',
+    defaultRoute: false,
+    total,
+    policyRules: 0,
+    hrNeo: o.hr_neo ?? 0,
+  }
+}
+
+// Глагол согласуется с последней цифрой: «21 правило идёт», «4 правила идут».
+function singular(n) {
+  return n % 10 === 1 && n % 100 !== 11
+}
+
+export function otherSourceSummary(row) {
+  const total = row?.total ?? 0
+  return `${rulesCount(total)} ${singular(total) ? 'идёт' : 'идут'} мимо VPN-туннелей, напрямую через провайдера`
+}
+
+// Текст листа переноса. «Откат» бота был обратным переносом, который уносит и
+// правила, уже стоявшие на цели, -- экран говорит это до нажатия и с числом.
+// Считаются только СВОИ правила цели: правила общего набора перенос не трогает
+// ни туда, ни обратно (canRebindTunnel).
+export function rebindSheetText(src, dst) {
+  const title = `Перенести всё в «${dst.name}»?`
+  const n = src?.total ?? 0
+  if (src?.id === OTHER_SOURCE_ID) {
+    return {
+      title,
+      body: `${rulesCount(n)} из «${OTHER_SOURCE_NAME}» ${singular(n) ? 'пойдёт' : 'пойдут'} через VPN-туннель «${dst.name}». Обратно в «${OTHER_SOURCE_NAME}» приложение правила не переносит.`,
+    }
+  }
+  const moved = `${rulesCount(n)} ${singular(n) ? 'уедет' : 'уедут'} из «${src.name}» в «${dst.name}». В «${src.name}» не останется ничего.`
+  const already = Math.max(0, (dst.total ?? 0) - (dst.policyRules ?? 0))
+  const undo =
+    already > 0
+      ? `Отменить можно обратным переносом, но он заберёт и ${rulesCount(already)}, ${pluralRu(already, 'которое уже было', 'которые уже были', 'которые уже были')} на «${dst.name}».`
+      : `Отменить можно обратным переносом с «${dst.name}».`
+  return { title, body: `${moved} ${undo}` }
+}
+
+// Имя VPN-туннеля по привязке правила (интерфейсу); незнакомое -- как есть.
+export function bindTunnelName(snapshot, bind) {
+  const key = String(bind ?? '').trim().toLowerCase()
+  return lineNameByInterface(snapshot).get(key) || String(bind ?? '')
 }

@@ -262,8 +262,18 @@ export function opkgUpgradeOutcome(result) {
 
 const SERVICE_OK = {
   hrneo: 'HydraRoute Neo перезапущен.',
+  hrneo_start: 'HydraRoute Neo запущен: правила по имени сайта снова работают.',
+  hrneo_stop: 'HydraRoute Neo остановлен: правила по имени сайта не работают до запуска.',
   awgmgr: 'awg-manager перезапущен.',
   router: 'Роутер уходит в перезагрузку — вернётся через две–три минуты.',
+}
+
+// Отказ -- своими словами на действие: «не удалось перезапустить» на кнопке
+// «Остановить» называло бы не то, что человек нажал.
+const SERVICE_FAIL = {
+  hrneo_start: 'Не удалось запустить HydraRoute Neo.',
+  hrneo_stop: 'Не удалось остановить HydraRoute Neo.',
+  router: 'Не удалось перезагрузить роутер.',
 }
 
 const SERVICE_NAME = { hrneo: 'HydraRoute Neo', awgmgr: 'awg-manager', router: 'роутер' }
@@ -272,7 +282,7 @@ export function serviceRestartText(name, result) {
   if (result?.status === 'ok') return SERVICE_OK[name] ?? 'Готово.'
   const refusal = refusalFromResult(result)
   if (refusal) return refusal.text
-  if (name === 'router') return 'Не удалось перезагрузить роутер.'
+  if (SERVICE_FAIL[name]) return SERVICE_FAIL[name]
   return `Не удалось перезапустить ${SERVICE_NAME[name] ?? 'службу'}.`
 }
 
