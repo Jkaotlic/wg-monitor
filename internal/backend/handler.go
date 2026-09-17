@@ -415,6 +415,11 @@ type Deps struct {
 	// песочница подставляют фейк без ключа шифрования и без воркера. В
 	// проде пусто -- маршруты берут Revive.
 	ReviveOverride ReviveAPI
+	// ReleaseChecksumsOverride подменяет проверенную подписью загрузку
+	// checksums.txt для установки и переустановки агента. Только песочница и
+	// тесты: у песочницы нет ни GitHub, ни роутера. cmd/backend это поле не
+	// заполняет никогда -- сторожит TestBackendMainNeverOverridesReleaseChecksums.
+	ReleaseChecksumsOverride func(ctx context.Context, base, version string) (map[string]string, error)
 }
 
 type AlertPolicy struct {

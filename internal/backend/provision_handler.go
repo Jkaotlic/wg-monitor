@@ -37,8 +37,18 @@ const defaultProvisionTerminalUser = "root"
 // releaseChecksumsFetcher (release_checksums.go) for the older, unsigned
 // path. Production code never reassigns this; every provision/reinstall path
 // MUST go through the signature-verified helper, never the older unsigned
-// fetchReleaseChecksums.
+// fetchReleaseChecksums -- через provisionChecksums; подмена там же только для
+// песочницы.
 var verifiedChecksumsFetcher = verifiedReleaseChecksums
+
+// provisionChecksums -- чем проверять выпуск: подмена песочницы, если задана,
+// иначе проверка подписи. Прод подмены не знает (см. поле Deps).
+func provisionChecksums(d Deps) func(context.Context, string, string) (map[string]string, error) {
+	if d.ReleaseChecksumsOverride != nil {
+		return d.ReleaseChecksumsOverride
+	}
+	return verifiedChecksumsFetcher
+}
 
 // dashboardProvisionReq is the body for POST /v1/dashboard/provision. Kind
 // selects register (mint token + persist metadata, no relay) vs provision
@@ -321,7 +331,7 @@ func startProvisionInstall(ctx context.Context, d Deps, p provisionInstallCorePa
 			fmt.Sprintf("target version %s is older than the currently installed %s — pass allow_downgrade to override",
 				version, stringValue(p.Existing.LastDeployedVersion))}
 	}
-	sums, err := verifiedChecksumsFetcher(ctx, releaseDownloadBase, version)
+	sums, err := provisionChecksums(d)(ctx, releaseDownloadBase, version)
 	if err != nil {
 		return "", "", &repairStartError{http.StatusBadGateway, "checksums_failed", err.Error()}
 	}
@@ -654,7 +664,7 @@ func startRepairReinstall(ctx context.Context, d Deps, nickname string, user *db
 				version, stringValue(user.LastDeployedVersion))}
 	}
 
-	sums, err := verifiedChecksumsFetcher(ctx, releaseDownloadBase, version)
+	sums, err := provisionChecksums(d)(ctx, releaseDownloadBase, version)
 	if err != nil {
 		return "", "", &repairStartError{http.StatusBadGateway, "checksums_failed", err.Error()}
 	}

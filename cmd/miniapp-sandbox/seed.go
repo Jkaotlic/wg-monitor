@@ -82,6 +82,16 @@ func seed(d *db.DB, tgUserID int64) (map[string]int64, error) {
 				return nil, err
 			}
 		}
+		if s.nick != "sandbox-off" && s.nick != "sandbox-bronya" {
+			// Адрес панели у живых роутеров: переустановка и перенаправление
+			// агента (цикл 2) идут через терминал панели и без адреса честно
+			// отказывают no_awgm_url -- экран «Ход работы» было бы нечем
+			// проверить. У sandbox-bronya адреса нет намеренно (см. выше).
+			if _, err := d.SQL().Exec(`UPDATE users SET awgm_url = ?, awgm_auth = ? WHERE id = ?`,
+				fmt.Sprintf("https://203.0.113.%d:2222", 10+i), "web", uid); err != nil {
+				return nil, err
+			}
+		}
 		if s.nick == "sandbox-off" {
 			if err := d.Users().MarkPendingDeploy(uid, "v0.33.0", now.Add(-72*time.Hour).Format(time.RFC3339)); err != nil {
 				return nil, err

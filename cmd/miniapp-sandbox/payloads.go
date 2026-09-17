@@ -20,6 +20,10 @@ import (
 // ветку из десяти -- поэтому здесь лежат данные, а не заглушки.
 func sandboxOutput(action string, args map[string]any) string {
 	switch action {
+	case "opkg_cron_status", "opkg_cron_install", "opkg_cron_logs", "opkg_cron_remove":
+		return mustJSON(sandboxOpkgCron(action, args))
+	case "entware_clean_status", "entware_clean_install", "entware_clean_run", "entware_clean_logs", "entware_clean_remove":
+		return mustJSON(sandboxEntwareClean(action, args))
 	case "route_status":
 		return mustJSON(routeSnapshot(routerState()))
 	case "tunnel_import":

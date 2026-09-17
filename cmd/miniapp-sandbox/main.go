@@ -63,6 +63,7 @@ func main() {
 	version := flag.String("version", "v0.33.0", "версия бэкенда песочницы: от неё экран «Парк» считает отставших")
 	reviveOn := flag.Bool("revive", true, "оживление агента настроено на сервере (false -- экран скажет «не настроено»)")
 	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
+	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
 	flag.Parse()
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
@@ -88,6 +89,18 @@ func main() {
 		fatal(err)
 	}
 	defer d.Close()
+
+	// Файл заявки раскатки бэкенда -- во временном каталоге, как у юнита
+	// обновления в проде; его подбирает watchBackendUpdate.
+	updateDir, err := os.MkdirTemp("", "wgm-sandbox-update-")
+	if err != nil {
+		fatal(err)
+	}
+	if !*keep {
+		defer os.RemoveAll(updateDir)
+	}
+	updatePath := filepath.Join(updateDir, "backend-update.json")
+	go watchBackendUpdate(context.Background(), updatePath, *backendUpdate == "apply")
 
 	ids, err := seed(d, *tgUser)
 	if err != nil {
@@ -171,6 +184,18 @@ func main() {
 		// Оживление -- фейк в памяти: ключа шифрования в песочнице нет, и
 		// заводить его ради экрана незачем.
 		ReviveOverride: reviver,
+		// Мастер «Добавить роутер», переустановка и перенаправление -- на
+		// настоящем движке заданий; Store общий с мастером замены, как в проде
+		// (cmd/backend/main.go: provisionStore).
+		Provision: provision.Deps{
+			Store:    replaceEngine.Store,
+			BaseCtx:  context.Background(),
+			Relay:    sandboxRelay,
+			LastSeen: sandboxLastSeen,
+			Logger:   logger,
+		},
+		ReleaseChecksumsOverride: sandboxChecksums,
+		BackendUpdatePath:        updatePath,
 	}
 	mux := backend.NewMux(deps)
 	initData := signInitData(sandboxBotToken, *tgUser, time.Now())
@@ -179,7 +204,8 @@ func main() {
 	fmt.Printf("  база:   %s\n", path)
 	fmt.Printf("  адрес:  http://%s/miniapp/\n", *addr)
 	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
-	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), старый дашборд: /dashboard/classic/\n\n", *addr, sandboxDashboardToken)
+	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), старый дашборд: /dashboard/classic/\n", *addr, sandboxDashboardToken)
+	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n\n", *backendUpdate, updatePath)
 
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)
