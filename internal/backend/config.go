@@ -30,7 +30,6 @@ type Config struct {
 	Dashboard         DashboardConfig          `yaml:"dashboard"`
 	Heartbeat         HeartbeatConfig          `yaml:"heartbeat"`
 	State             StateConfig              `yaml:"state"`
-	UI                UIConfig                 `yaml:"ui"`
 	Upstream          UpstreamConfig           `yaml:"upstream"`
 	Retention         RetentionConfig          `yaml:"retention"`
 	RateLimit         RateLimitConfig          `yaml:"rate_limit"`
@@ -125,8 +124,11 @@ type RetentionConfig struct {
 }
 
 type TelegramConfig struct {
-	BotTokenFile string  `yaml:"bot_token_file"`
-	BotToken     string  `yaml:"-"`
+	BotTokenFile string `yaml:"bot_token_file"`
+	BotToken     string `yaml:"-"`
+	// ChatID и ExtraChatIDs -- наследство группы с темами (цикл 5 её убрал).
+	// Не обязательны и ни на что не влияют, кроме двух вещей: на старте бот
+	// стирает в группе меню команд, а дашборд показывает их в сводке.
 	ChatID       int64   `yaml:"chat_id"`
 	ExtraChatIDs []int64 `yaml:"extra_chat_ids"`
 	AdminUserID  int64   `yaml:"admin_user_id"`
@@ -178,29 +180,6 @@ type StateConfig struct {
 	MuteCutoffHour *int `yaml:"mute_cutoff_hour"`
 }
 
-// UIConfig controls v0.6.0 ReplyKeyboard / smart-reply behaviour (spec §8).
-type UIConfig struct {
-	// DeleteUserCommandMessages — bot deletes the operator's
-	// "📊 Что происходит?" message after the smart-reply is composed.
-	// Disable (set to `false` in YAML) if the bot lacks `can_delete_messages`
-	// admin right. Pointer type so omitted YAML defaults to true while
-	// explicit `false` is honoured.
-	DeleteUserCommandMessages *bool `yaml:"delete_user_command_messages"`
-	// SmartReplyWithKeyboard — re-attach the topic-appropriate ReplyKeyboard
-	// to every smart-reply message (mitigation for desktop-client bug
-	// where ReplyKeyboard intermittently disappears). Pointer type so
-	// explicit `false` is honoured.
-	SmartReplyWithKeyboard *bool `yaml:"smart_reply_with_keyboard"`
-	// DiagMaxChars — soft cap for code-fenced diag output before pagination
-	// kicks in. TG raw limit is 4096; 3500 leaves room for fence and prefix.
-	DiagMaxChars int `yaml:"diag_max_chars"`
-	// CompatInlineKeyboard — replace the persistent ReplyKeyboardMarkup with
-	// equivalent inline buttons attached to every bot reply. Workaround for
-	// TG Desktop dropping the bottom-keyboard panel in forum topics. Pointer
-	// type so omitted YAML defaults to true while explicit false is honoured.
-	CompatInlineKeyboard *bool `yaml:"compat_inline_keyboard"`
-}
-
 func LoadConfig(path string) (*Config, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
@@ -236,9 +215,6 @@ func LoadConfig(path string) (*Config, error) {
 	cfg.Telegram.BotToken = strings.TrimSpace(string(tokBytes))
 	if cfg.Telegram.BotToken == "" {
 		return nil, fmt.Errorf("bot_token_file is empty")
-	}
-	if cfg.Telegram.ChatID == 0 {
-		return nil, fmt.Errorf("telegram.chat_id is required")
 	}
 	if cfg.Telegram.AdminUserID == 0 {
 		return nil, fmt.Errorf("telegram.admin_user_id is required")
@@ -325,23 +301,6 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if cfg.RateLimit.ReportBurst == 0 {
 		cfg.RateLimit.ReportBurst = 5
-	}
-	// UI defaults: pointer types let us distinguish "field omitted" (nil → apply default)
-	// from "field explicitly set to false" (honour the user's choice).
-	if cfg.UI.DeleteUserCommandMessages == nil {
-		v := true
-		cfg.UI.DeleteUserCommandMessages = &v
-	}
-	if cfg.UI.SmartReplyWithKeyboard == nil {
-		v := true
-		cfg.UI.SmartReplyWithKeyboard = &v
-	}
-	if cfg.UI.DiagMaxChars == 0 {
-		cfg.UI.DiagMaxChars = 3500
-	}
-	if cfg.UI.CompatInlineKeyboard == nil {
-		v := true
-		cfg.UI.CompatInlineKeyboard = &v
 	}
 	if cfg.Upstream.CacheTTL == 0 {
 		cfg.Upstream.CacheTTL = 12 * time.Hour

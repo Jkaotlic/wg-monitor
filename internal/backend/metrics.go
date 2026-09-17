@@ -22,7 +22,6 @@ var (
 	metricAuthRejected       = expvar.NewInt("wgm_auth_rejected_total")
 	metricCmdEnqueued        = expvar.NewInt("wgm_cmd_enqueued_total")
 	metricCmdResultRecorded  = expvar.NewInt("wgm_cmd_result_recorded_total")
-	metricCmdResultRelayed   = expvar.NewInt("wgm_cmd_result_relayed_total")
 	metricTGSendErrors       = expvar.NewInt("wgm_tg_send_errors_total")
 )
 
@@ -43,7 +42,6 @@ func addReportDup(n int)  { metricReportsDuplicate.Add(int64(n)) }
 func incAuthReject()      { metricAuthRejected.Add(1) }
 func incCmdEnqueued()     { metricCmdEnqueued.Add(1) }
 func incCmdResult()       { metricCmdResultRecorded.Add(1) }
-func incCmdResultRelay()  { metricCmdResultRelayed.Add(1) }
 func incTGError()         { metricTGSendErrors.Add(1) }
 
 // reportSeenTracker remembers the last "info-logged" timestamp per nickname

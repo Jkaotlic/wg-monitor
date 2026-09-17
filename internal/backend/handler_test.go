@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/linkrepair"
@@ -809,7 +808,6 @@ type fakeCmdSink struct {
 	dequeueWaitMs int
 	results       []wire.CommandResult
 	resultErr     error
-	originRef     *cmdpkg.MessageRef // returned once by ConsumeOriginRef when set
 	commands      map[string]wire.Command
 	enqueued      []wire.Command
 	enqueuedUsers []int64
@@ -857,17 +855,6 @@ func (f *fakeCmdSink) RecordResult(userID int64, r wire.CommandResult) error {
 	return nil
 }
 
-func (f *fakeCmdSink) ConsumeOriginRef(userID int64, cmdID string) (cmdpkg.MessageRef, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.originRef == nil {
-		return cmdpkg.MessageRef{}, false
-	}
-	r := *f.originRef
-	f.originRef = nil // consume
-	return r, true
-}
-
 func (f *fakeCmdSink) CommandByID(userID int64, cmdID string) (wire.Command, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -890,133 +877,6 @@ func (f *fakeCmdSink) DropPending(int64, string) []wire.Command {
 }
 func (f *fakeCmdSink) AwaitResult(ctx context.Context, userID int64, id string, timeout time.Duration) (*wire.CommandResult, bool) {
 	return nil, false
-}
-
-type relayCapture struct {
-	mu      sync.Mutex
-	chunks  []string
-	chatID  int64
-	thread  *int64
-	replyTo int64
-	action  string
-}
-
-func (rc *relayCapture) NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	rc.chatID = ref.ChatID
-	rc.thread = ref.ThreadID
-	rc.replyTo = ref.MessageID
-	rc.action = action
-	rc.chunks = append(rc.chunks, alerts.FormatCommandResult(action, result, maxChars)...)
-	return nil
-}
-
-type relaySnapshot struct {
-	chunks  []string
-	chatID  int64
-	thread  *int64
-	replyTo int64
-	action  string
-}
-
-func (rc *relayCapture) snapshot() relaySnapshot {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	out := relaySnapshot{
-		chatID:  rc.chatID,
-		thread:  rc.thread,
-		replyTo: rc.replyTo,
-		action:  rc.action,
-	}
-	out.chunks = append(out.chunks, rc.chunks...)
-	return out
-}
-
-func TestCmdResultRelayedToTG(t *testing.T) {
-	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	defer d.Close()
-	tok := "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
-	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-
-	tid := int64(11)
-	sink := &fakeCmdSink{
-		originRef: &cmdpkg.MessageRef{
-			ChatID: -100, MessageID: 42, ThreadID: &tid, Action: "diag_now",
-		},
-	}
-	rc := &relayCapture{}
-	mux := NewMux(Deps{
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:          d,
-		Dispatcher:  &fakeDisp{},
-		CommandSink: sink,
-		TGNotifier:  rc,
-		UI:          UIConfig{DiagMaxChars: 3500},
-		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	body, _ := json.Marshal(wire.CommandResult{ID: "abc", Status: "ok", Output: "diagnostics: all green"})
-	req, _ := http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-
-	// Relay is async (goroutine). Poll briefly.
-	waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond)
-
-	got := rc.snapshot()
-	if len(got.chunks) != 1 {
-		t.Fatalf("want 1 relay chunk, got %d", len(got.chunks))
-	}
-	if got.chatID != -100 || got.replyTo != 42 || got.thread == nil || *got.thread != 11 {
-		t.Errorf("ref mis-routed: chatID=%d reply=%d thread=%v", got.chatID, got.replyTo, got.thread)
-	}
-	if got.action != "diag_now" {
-		t.Errorf("action mismatch: %q", got.action)
-	}
-	if !strings.Contains(got.chunks[0], "diagnostics: all green") {
-		t.Errorf("output missing: %s", got.chunks[0])
-	}
-}
-
-func TestCmdResultNoRelayWhenNotifierNil(t *testing.T) {
-	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	defer d.Close()
-	tok := "1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f1f"
-	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
-
-	sink := &fakeCmdSink{
-		originRef: &cmdpkg.MessageRef{ChatID: -100, MessageID: 42, Action: "diag_now"},
-	}
-	mux := NewMux(Deps{
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:          d,
-		Dispatcher:  &fakeDisp{},
-		CommandSink: sink,
-		// TGNotifier intentionally nil
-		Thresholds: state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	body, _ := json.Marshal(wire.CommandResult{ID: "abc", Status: "ok"})
-	req, _ := http.NewRequest("POST", srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, _ := http.DefaultClient.Do(req)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-	// No assertion on relay — just must not panic / 500.
 }
 
 func TestCmdGet_ReturnsQueuedCommand(t *testing.T) {
@@ -1168,7 +1028,7 @@ func TestCmdResult_AcceptsLargeRouteSnapshot(t *testing.T) {
 	tok := "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01"
 	d.Users().Insert("vasya", tok, "1.1.1.1", "awg0")
 
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "route_status", ChatID: 1, MessageID: 2}}
+	sink := &fakeCmdSink{}
 	mux := NewMux(Deps{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DB:          d,
@@ -1197,106 +1057,6 @@ func TestCmdResult_AcceptsLargeRouteSnapshot(t *testing.T) {
 	}
 }
 
-// TestCmdResult_DefaultRelayRespectsPoolBound is the pool-bound proof for
-// the generic TGNotifier ("default" case) relay — the highest-traffic of the
-// cmd-result relay sites, since it fires for any action without a
-// specialized notifier.
-func TestCmdResult_DefaultRelayRespectsPoolBound(t *testing.T) {
-	waitRelayPoolEmpty(t)
-	fillDeps := Deps{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), ShutdownCtx: context.Background()}
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	closeRelease := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(closeRelease)
-	for i := 0; i < relayConcurrencyLimit; i++ {
-		spawnRelay(fillDeps, "fill", func(ctx context.Context) { <-release })
-	}
-
-	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	tok := "be01be01be01be01be01be01be01be01be01be01be01be01be01be01be01be01"
-	if _, err := d.Users().Insert("vasya", tok, "1.1.1.1", "awg0"); err != nil {
-		t.Fatal(err)
-	}
-	rc := &relayCapture{}
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "diag_now", ChatID: 1, MessageID: 2}}
-	mux := NewMux(Deps{
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:          d,
-		Dispatcher:  &fakeDisp{},
-		CommandSink: sink,
-		TGNotifier:  rc,
-		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	body, _ := json.Marshal(wire.CommandResult{ID: "d1", Status: "ok", Output: "diag ok", DurationMs: 1})
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-
-	time.Sleep(150 * time.Millisecond)
-	if chunks := rc.snapshot().chunks; len(chunks) != 0 {
-		t.Fatalf("default TGNotifier relayed %d chunk(s) while relay pool was saturated; want 0 (dropped)", len(chunks))
-	}
-
-	closeRelease()
-	waitRelayPoolEmpty(t)
-}
-
-// Панели обслуживания в боте нет: итог service_restart (кнопки HR-Neo в
-// панели маршрутов) уходит общим TGNotifier.
-func TestCmdResult_ServiceRestartRelaysThroughTGNotifier(t *testing.T) {
-	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	defer d.Close()
-	tok := "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02"
-	d.Users().Insert("vasya", tok, "198.51.100.20", "awg0")
-
-	rc := &relayCapture{}
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "service_restart", ChatID: 1, MessageID: 2}}
-	mux := NewMux(Deps{
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:          d,
-		Dispatcher:  &fakeDisp{},
-		CommandSink: sink,
-		TGNotifier:  rc,
-		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	body, _ := json.Marshal(wire.CommandResult{ID: "m1", Status: "ok", Output: "hrneo restart sent", DurationMs: 1})
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-	if got := waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond); got != 1 {
-		t.Errorf("TGNotifier: expected 1 chunk, got %d", got)
-	}
-}
-
-// TestCmdResult_AcceptsUnknownStatus verifies forward-compat: a status not in
-// wire.validCommandResultStatuses is logged but accepted (200), so a future
-// agent emitting "partial"/"rate_limited"/etc. doesn't lose its result during
-// a rolling fleet upgrade. Empty status is still rejected (400) — that's a
-// real client bug, not schema evolution.
 func TestCmdResult_AcceptsUnknownStatus(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
 	defer d.Close()
@@ -1335,45 +1095,6 @@ func TestCmdResult_AcceptsUnknownStatus(t *testing.T) {
 	}
 }
 
-func TestCmdResult_OpkgResultRelaysThroughTGNotifier(t *testing.T) {
-	d, _ := db.Open(filepath.Join(t.TempDir(), "t.db"))
-	defer d.Close()
-	tok := "dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01dd01"
-	d.Users().Insert("vasya", tok, "198.51.100.21", "awg0")
-
-	rc := &relayCapture{}
-	sink := &fakeCmdSink{originRef: &cmdpkg.MessageRef{Action: "opkg_upgrade", ChatID: 1, MessageID: 2}}
-	mux := NewMux(Deps{
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:          d,
-		Dispatcher:  &fakeDisp{},
-		CommandSink: sink,
-		TGNotifier:  rc,
-		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	body, _ := json.Marshal(wire.CommandResult{ID: "op2", Status: "ok", Output: "✅ обновлено"})
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/cmd/result", bytes.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+tok)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status: %d", resp.StatusCode)
-	}
-
-	got := waitForRelay(t, func() int { return len(rc.snapshot().chunks) }, 1, 500*time.Millisecond)
-	if got != 1 {
-		t.Errorf("TGNotifier fallback: expected 1 chunk, got %d", got)
-	}
-}
-
-// Первая неудача -- не повод будить людей и снимать отметку: причина
-// запоминается, досылка на контакте попробует снова.
 func TestCmdResult_FirstSelfUpdateFailureKeepsPendingQuietly(t *testing.T) {
 	d, _ := db.Open(filepath.Join(t.TempDir(), "cmd-self-update-fail.db"))
 	defer d.Close()

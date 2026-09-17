@@ -32,14 +32,6 @@ import (
 
 var Version = "0.8.0-tunnel-import"
 
-func telegramOperatorCommandMenu() []tg.BotCommand {
-	return tg.OperatorBotCommands()
-}
-
-func telegramAdminCommandMenu() []tg.BotCommand {
-	return tg.AdminBotCommands()
-}
-
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "backup" {
 		if err := runBackupCommand(os.Args[2:]); err != nil {
@@ -87,38 +79,20 @@ func main() {
 		LongPollHTTP: &http.Client{Timeout: 90 * time.Second},
 		Logger:       logger.With("component", "tg"),
 	}
-	// Register scoped slash-command menus so operators see router commands by
-	// default while the admin gets fleet/topic-management commands.
+	// Меню команд стирается во всех трёх областях, а кнопка меню ведёт в
+	// приложение. Группа (если она ещё задана в конфиге) нужна ровно здесь и
+	// больше нигде -- очистить в ней меню и забыть.
 	smcCtx, smcCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := tgClient.SetMyCommands(smcCtx, telegramOperatorCommandMenu()); err != nil {
-		logger.Warn("setMyCommands operator failed (non-fatal)", "err", err)
+	for _, err := range clearBotCommandMenus(smcCtx, tgClient, cfg.Telegram.AdminUserID, cfg.Telegram.ChatID) {
+		logger.Warn("setMyCommands cleanup failed (non-fatal)", "err", err)
 	}
-	// Кнопка меню приватного чата ведёт в мини-апп, когда он снаружи доступен,
-	// и остаётся списком команд, когда нет. Ставится на каждом старте намеренно:
-	// иначе кнопка, выставленная руками через BotFather, жила бы до первого
-	// рестарта и молча пропадала. Групповые топики этим не задеты -- TG
-	// показывает кнопку меню только в приватном чате с ботом.
+	// Кнопка меню приватного чата ведёт в мини-апп. Ставится на каждом старте
+	// намеренно: иначе кнопка, выставленная руками через BotFather, жила бы до
+	// первого рестарта. Без https-адреса кнопку не трогаем вовсе -- списка
+	// команд за ней больше нет.
 	if miniURL := miniAppMenuURL(cfg.PublicBaseURL); miniURL != "" {
 		if err := tgClient.SetWebAppMenuButton(smcCtx, MiniAppMenuButtonText, miniURL); err != nil {
 			logger.Warn("setChatMenuButton web_app failed (non-fatal)", "err", err, "url", miniURL)
-		}
-	} else if err := tgClient.SetCommandsMenuButton(smcCtx); err != nil {
-		logger.Warn("setChatMenuButton commands failed (non-fatal)", "err", err)
-	}
-	adminCommands := telegramAdminCommandMenu()
-	if cfg.Telegram.AdminUserID != 0 {
-		if err := tgClient.SetMyCommandsWithScope(smcCtx, adminCommands, tg.BotCommandScope{
-			Type:   "chat_member",
-			ChatID: cfg.Telegram.ChatID,
-			UserID: cfg.Telegram.AdminUserID,
-		}); err != nil {
-			logger.Warn("setMyCommands admin group scope failed (non-fatal)", "err", err)
-		}
-		if err := tgClient.SetMyCommandsWithScope(smcCtx, adminCommands, tg.BotCommandScope{
-			Type:   "chat",
-			ChatID: cfg.Telegram.AdminUserID,
-		}); err != nil {
-			logger.Warn("setMyCommands admin private scope failed (non-fatal)", "err", err)
 		}
 	}
 	smcCancel()
@@ -293,7 +267,6 @@ func main() {
 		StartLinkRepair:     repairEngine.Start,
 		WakeNotifier:        wakeNotifier,
 		DeployNotifier:      deployNotifier,
-		UI:                  cfg.UI,
 		Thresholds:          state.Thresholds{Fail: cfg.State.FailThreshold, Recovery: cfg.State.RecoveryThreshold},
 		AlertPolicy:         backend.AlertPolicy{NoisyFailThreshold: cfg.State.NoisyFailThreshold, NoisyRecoveryThreshold: cfg.State.NoisyRecoveryThreshold},
 		MobileFailThreshold: cfg.State.MobileFailThreshold,
@@ -339,19 +312,13 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// notifyDegradation surfaces a fatal background-goroutine exit to the
-	// admin via TG. Без этого backend продолжал отвечать /healthz=200 пока
-	// alert dispatcher / realert poller / callbacks router молча умерли —
-	// операторы узнавали о проблеме только когда переставали приходить
-	// уведомления. ctx canceled (SIGTERM/Int) → nil notify (graceful).
-	notifyDegradation := func(component string, err error) {
-		if err == nil || ctx.Err() != nil {
+	// Отвалившаяся фоновая горутина -- в личку админа (degradation.go).
+	// Отмена ctx (SIGTERM/Int) -- это штатная остановка, а не поломка.
+	notifyDegradationTG := func(component string, err error) {
+		if ctx.Err() != nil {
 			return
 		}
-		text := "🛑 *backend " + component + " exited*\n```\n" + err.Error() + "\n```\nрестарт нужен."
-		alertCtx, alertCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer alertCancel()
-		if _, sendErr := tgClient.SendMessage(alertCtx, cfg.Telegram.ChatID, nil, text, "MarkdownV2", nil); sendErr != nil {
+		if sendErr := notifyDegradation(tgClient, cfg.Telegram.AdminUserID, component, err); sendErr != nil {
 			logger.Error("degradation TG alert failed", "component", component, "err", sendErr)
 		}
 	}
@@ -410,7 +377,7 @@ func main() {
 	go func() {
 		if err := cb.Run(ctx); err != nil {
 			logger.Error("callbacks router exited", "err", err)
-			notifyDegradation("callbacks router", err)
+			notifyDegradationTG("callbacks router", err)
 		}
 	}()
 
@@ -425,7 +392,7 @@ func main() {
 	go func() {
 		if err := rp.Run(ctx); err != nil {
 			logger.Error("realert poller exited", "err", err)
-			notifyDegradation("realert poller", err)
+			notifyDegradationTG("realert poller", err)
 		}
 	}()
 

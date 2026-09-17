@@ -186,17 +186,40 @@ telegram:
 	}
 }
 
-func TestLoadConfigRejectsMissingChatID(t *testing.T) {
+// Группы больше нет (цикл 5): конфиг без chat_id стартует, а старый конфиг с
+// chat_id читается по-прежнему -- значение живёт только ради очистки меню
+// команд в группе и поля telegram в сводке дашборда.
+func TestLoadConfigChatIDIsOptional(t *testing.T) {
 	dir := t.TempDir()
 	tokPath := writeFile(t, dir, "tok", "x")
-	cfgPath := writeFile(t, dir, "c.yaml", `
+	cfg, err := LoadConfig(writeFile(t, dir, "c.yaml", `
 db_path: /tmp/state.db
 telegram:
   bot_token_file: `+tokPath+`
   admin_user_id: 1
-`)
-	if _, err := LoadConfig(cfgPath); err == nil {
-		t.Fatal("expected chat_id required")
+`))
+	if err != nil {
+		t.Fatalf("конфиг без chat_id не стартовал: %v", err)
+	}
+	if cfg.Telegram.ChatID != 0 {
+		t.Fatalf("ChatID = %d, want 0", cfg.Telegram.ChatID)
+	}
+	old, err := LoadConfig(writeFile(t, dir, "old.yaml", `
+db_path: /tmp/state.db
+telegram:
+  bot_token_file: `+tokPath+`
+  chat_id: -100500
+  extra_chat_ids: [-100501]
+  admin_user_id: 1
+ui:
+  compat_inline_keyboard: true
+  diag_max_chars: 3000
+`))
+	if err != nil {
+		t.Fatalf("старый конфиг с группой и ui перестал читаться: %v", err)
+	}
+	if old.Telegram.ChatID != -100500 {
+		t.Fatalf("ChatID = %d, want -100500", old.Telegram.ChatID)
 	}
 }
 
@@ -247,73 +270,6 @@ state:
 	}
 	if *cfg.State.MuteCutoffHour != 0 {
 		t.Errorf("MuteCutoffHour: got %d, want 0 (honoured, not defaulted to 9)", *cfg.State.MuteCutoffHour)
-	}
-}
-
-func TestConfigUIDefaults(t *testing.T) {
-	dir := t.TempDir()
-	tokPath := writeFile(t, dir, "tok", "abc")
-	cfgPath := writeFile(t, dir, "c.yaml", `
-listen: ":8080"
-db_path: /tmp/x.db
-telegram:
-  bot_token_file: `+tokPath+`
-  chat_id: -100
-  admin_user_id: 1
-`)
-	c, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.UI.DeleteUserCommandMessages == nil || !*c.UI.DeleteUserCommandMessages {
-		t.Errorf("DeleteUserCommandMessages should default true")
-	}
-	if c.UI.SmartReplyWithKeyboard == nil || !*c.UI.SmartReplyWithKeyboard {
-		t.Errorf("SmartReplyWithKeyboard should default true")
-	}
-	if c.UI.DiagMaxChars != 3500 {
-		t.Errorf("DiagMaxChars default = %d, want 3500", c.UI.DiagMaxChars)
-	}
-	if c.UI.CompatInlineKeyboard == nil || !*c.UI.CompatInlineKeyboard {
-		t.Errorf("CompatInlineKeyboard should default true")
-	}
-}
-
-// TestConfigUIRespectsExplicitFalse is a regression test for I-1 (T11 follow-up):
-// the previous bool-default pattern silently overwrote `false` back to `true`,
-// breaking the documented escape hatch when an operator wants to disable
-// message deletion (no `can_delete_messages` admin right) or the keyboard
-// re-attachment. With *bool we must honour explicit false.
-func TestConfigUIRespectsExplicitFalse(t *testing.T) {
-	dir := t.TempDir()
-	tokPath := writeFile(t, dir, "tok", "abc")
-	cfgPath := writeFile(t, dir, "c.yaml", `
-listen: ":8080"
-db_path: /tmp/x.db
-telegram:
-  bot_token_file: `+tokPath+`
-  chat_id: -100
-  admin_user_id: 1
-ui:
-  delete_user_command_messages: false
-  smart_reply_with_keyboard: false
-  compat_inline_keyboard: false
-`)
-	c, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.UI.DeleteUserCommandMessages == nil || *c.UI.DeleteUserCommandMessages {
-		t.Errorf("DeleteUserCommandMessages: explicit false should be honoured, got %v",
-			c.UI.DeleteUserCommandMessages)
-	}
-	if c.UI.SmartReplyWithKeyboard == nil || *c.UI.SmartReplyWithKeyboard {
-		t.Errorf("SmartReplyWithKeyboard: explicit false should be honoured, got %v",
-			c.UI.SmartReplyWithKeyboard)
-	}
-	if c.UI.CompatInlineKeyboard == nil || *c.UI.CompatInlineKeyboard {
-		t.Errorf("CompatInlineKeyboard: explicit false should be honoured, got %v",
-			c.UI.CompatInlineKeyboard)
 	}
 }
 

@@ -1,104 +1,80 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
 
-func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
-	cmds := telegramOperatorCommandMenu()
-	want := map[string]bool{
-		"status":   false,
-		"check":    false,
-		"via":      false,
-		"direct":   false,
-		"menu":     false,
-		"keyboard": false,
-		"help":     false,
+type scopeCall struct {
+	cmds  []tg.BotCommand
+	scope tg.BotCommandScope
+}
+
+type fakeCommandSetter struct {
+	calls []scopeCall
+	err   error
+}
+
+func (f *fakeCommandSetter) SetMyCommands(_ context.Context, cmds []tg.BotCommand) error {
+	f.calls = append(f.calls, scopeCall{cmds: cmds, scope: tg.BotCommandScope{Type: "default"}})
+	return f.err
+}
+
+func (f *fakeCommandSetter) SetMyCommandsWithScope(_ context.Context, cmds []tg.BotCommand, scope tg.BotCommandScope) error {
+	f.calls = append(f.calls, scopeCall{cmds: cmds, scope: scope})
+	return f.err
+}
+
+// Слеш-команд у бота больше нет: меню стирается во всех трёх областях, в
+// которые бот его когда-либо ставил. Пропустить область -- значит оставить в
+// ней навсегда меню из команд, которых нет.
+func TestClearBotCommandMenus_AllThreeScopes(t *testing.T) {
+	f := &fakeCommandSetter{}
+	if errs := clearBotCommandMenus(context.Background(), f, 42, -100500); len(errs) != 0 {
+		t.Fatalf("errs = %v", errs)
 	}
-	for _, c := range cmds {
-		if _, ok := want[c.Command]; ok {
-			want[c.Command] = true
+	want := []tg.BotCommandScope{
+		{Type: "default"},
+		{Type: "chat", ChatID: 42},
+		{Type: "chat_member", ChatID: -100500, UserID: 42},
+	}
+	if len(f.calls) != len(want) {
+		t.Fatalf("вызовов %d, ждали %d: %+v", len(f.calls), len(want), f.calls)
+	}
+	for i, w := range want {
+		if f.calls[i].scope != w {
+			t.Errorf("область %d = %+v, ждали %+v", i, f.calls[i].scope, w)
 		}
-	}
-	for cmd, found := range want {
-		if !found {
-			t.Fatalf("telegram command menu missing /%s; got %+v", cmd, cmds)
+		if len(f.calls[i].cmds) != 0 {
+			t.Errorf("область %d: список команд не пуст: %+v", i, f.calls[i].cmds)
 		}
 	}
 }
 
-func TestTelegramOperatorCommandMenuOrder(t *testing.T) {
-	cmds := telegramOperatorCommandMenu()
-	want := []string{"status", "check", "via", "direct", "menu", "keyboard", "help"}
-	if len(cmds) < len(want) {
-		t.Fatalf("operator command count = %d, want at least %d: %+v", len(cmds), len(want), cmds)
+// Группы в конфиге нет -- областей две, и это не ошибка.
+func TestClearBotCommandMenus_WithoutGroup(t *testing.T) {
+	f := &fakeCommandSetter{}
+	if errs := clearBotCommandMenus(context.Background(), f, 42, 0); len(errs) != 0 {
+		t.Fatalf("errs = %v", errs)
 	}
-	for i, command := range want {
-		if cmds[i].Command != command {
-			t.Fatalf("operator command[%d] = /%s, want /%s; got %+v", i, cmds[i].Command, command, cmds)
+	if len(f.calls) != 2 {
+		t.Fatalf("вызовов %d, ждали 2: %+v", len(f.calls), f.calls)
+	}
+	for _, c := range f.calls {
+		if c.scope.Type == "chat_member" {
+			t.Fatalf("без группы область chat_member не трогаем: %+v", c)
 		}
 	}
 }
 
-func TestTelegramOperatorCommandMenuExcludesAdminCommands(t *testing.T) {
-	cmds := telegramOperatorCommandMenu()
-	for _, c := range cmds {
-		switch c.Command {
-		case "ensure_topics", "recreate_topic", "this_is", "topic_help":
-			t.Fatalf("operator command menu must not expose admin command /%s: %+v", c.Command, cmds)
-		}
-	}
-}
-
-func TestTelegramAdminCommandMenuIncludesAdminCommands(t *testing.T) {
-	cmds := telegramAdminCommandMenu()
-	want := map[string]bool{
-		"ensure_topics":  false,
-		"recreate_topic": false,
-		"this_is":        false,
-		"topic_help":     false,
-	}
-	for _, c := range cmds {
-		if _, ok := want[c.Command]; ok {
-			want[c.Command] = true
-		}
-	}
-	for cmd, found := range want {
-		if !found {
-			t.Fatalf("admin command menu missing /%s; got %+v", cmd, cmds)
-		}
-	}
-}
-
-func TestTelegramCommandMenusDropMaintenance(t *testing.T) {
-	for _, cmds := range [][]tg.BotCommand{telegramOperatorCommandMenu(), telegramAdminCommandMenu()} {
-		for _, c := range cmds {
-			if c.Command == "maint" || c.Command == "upgrade" {
-				t.Errorf("/%s переехала в приложение, а осталась в меню: %+v", c.Command, cmds)
-			}
-		}
-	}
-}
-
-func TestTelegramCommandMenusDropPanel(t *testing.T) {
-	for _, cmds := range [][]tg.BotCommand{telegramOperatorCommandMenu(), telegramAdminCommandMenu()} {
-		for _, c := range cmds {
-			if c.Command == "panel" {
-				t.Errorf("/panel переехала в приложение, а осталась в меню: %+v", cmds)
-			}
-		}
-	}
-}
-
-func TestTelegramCommandMenusDropCabinets(t *testing.T) {
-	for _, cmds := range [][]tg.BotCommand{telegramOperatorCommandMenu(), telegramAdminCommandMenu()} {
-		for _, c := range cmds {
-			switch c.Command {
-			case "amnezia", "hidemy", "selfhosted", "cancel":
-				t.Errorf("/%s переехала в приложение, а осталась в меню: %+v", c.Command, cmds)
-			}
-		}
+// Ошибки Telegram не фатальны: бот работает и без меню, а вызывающий их
+// логирует -- и обязан узнать про каждую.
+func TestClearBotCommandMenus_ErrorsAreReturned(t *testing.T) {
+	f := &fakeCommandSetter{err: errors.New("429 Too Many Requests")}
+	if errs := clearBotCommandMenus(context.Background(), f, 42, -100500); len(errs) != 3 {
+		t.Fatalf("ошибок %d, ждали 3: %v", len(errs), errs)
 	}
 }
