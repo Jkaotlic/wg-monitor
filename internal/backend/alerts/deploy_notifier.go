@@ -16,13 +16,12 @@ import (
 type DeployNotifier struct {
 	db     *db.DB
 	tg     LifecycleSendTG
-	chatID int64
 	notify notifySink
 }
 
-func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *DeployNotifier {
+func NewDeployNotifier(d *db.DB, tgc LifecycleSendTG, adminID int64) *DeployNotifier {
 	return &DeployNotifier{
-		db: d, tg: tgc, chatID: chatID,
+		db: d, tg: tgc,
 		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }

@@ -40,7 +40,7 @@ func TestWakeNotifier_SendsToOwnerDM(t *testing.T) {
 	}
 
 	tg := &fakeSendTG{}
-	wn := NewWakeNotifier(d, tg, -100, 0)
+	wn := NewWakeNotifier(d, tg, 0)
 	checks := []wire.Check{{Name: "tunnels", Status: "ok"}}
 	if err := wn.SendWake(context.Background(), uid, "client-h", checks); err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestWakeNotifier_SkipsMutedRecipient(t *testing.T) {
 	}
 
 	tg := &fakeSendTG{}
-	wn := NewWakeNotifier(d, tg, -100, 0)
+	wn := NewWakeNotifier(d, tg, 0)
 	if err := wn.SendWake(context.Background(), uid, "tenantcar", []wire.Check{{Name: "tunnels", Status: "ok"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestSleepNotifier_SendsToOwnerDM(t *testing.T) {
 	}
 
 	tg := &fakeSendTG{}
-	sn := NewSleepNotifier(d, tg, -100, 0)
+	sn := NewSleepNotifier(d, tg, 0)
 	if err := sn.SendSleeping(context.Background(), uid, "sleeper", time.Now().Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestWakeNotifier_NoThreadID_SkipsSend(t *testing.T) {
 	// no UpdateThreadID — TelegramThreadID stays NULL
 
 	tg := &fakeSendTG{}
-	wn := NewWakeNotifier(d, tg, -100, 0)
+	wn := NewWakeNotifier(d, tg, 0)
 	if err := wn.SendWake(context.Background(), uid, "orphan", nil); err != nil {
 		t.Fatal(err)
 	}

@@ -97,7 +97,6 @@ func main() {
 	}
 	smcCancel()
 	disp := alerts.NewDispatcher(d, tgClient, alerts.Config{
-		ChatID:            cfg.Telegram.ChatID,
 		FailThreshold:     cfg.State.FailThreshold,
 		RecoveryThreshold: cfg.State.RecoveryThreshold,
 		MiniAppBaseURL:    cfg.PublicBaseURL,
@@ -123,10 +122,10 @@ func main() {
 	// Mobile-lifecycle notifiers: wake-card on Resumed=true, one-shot sleep-info
 	// after MobileSleepAfter silence. Both no-op for static users / when
 	// telegram_thread_id is NULL.
-	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.ChatID, cfg.Telegram.AdminUserID)
+	wakeNotifier := alerts.NewWakeNotifier(d, tgClient, cfg.Telegram.AdminUserID)
 	wakeNotifier.SetMiniAppBaseURL(cfg.PublicBaseURL)
-	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.ChatID, cfg.Telegram.AdminUserID)
-	deployNotifier := alerts.NewDeployNotifier(d, tgClient, cfg.Telegram.ChatID, cfg.Telegram.AdminUserID)
+	sleepNotifier := alerts.NewSleepNotifier(d, tgClient, cfg.Telegram.AdminUserID)
+	deployNotifier := alerts.NewDeployNotifier(d, tgClient, cfg.Telegram.AdminUserID)
 	watcher.SetSleepNotifier(sleepNotifier)
 
 	cmdQueue := cmd.New()
@@ -382,7 +381,6 @@ func main() {
 	}()
 
 	rp := realert.NewPoller(d, tgClient, realert.Config{
-		ChatID:             cfg.Telegram.ChatID,
 		RealertEvery:       time.Duration(cfg.State.RealertEverySec) * time.Second,
 		MobileRealertEvery: time.Duration(cfg.State.MobileRealertEverySec) * time.Second,
 		TickEvery:          time.Duration(cfg.State.RealertTickSec) * time.Second,
@@ -401,7 +399,6 @@ func main() {
 	// visible. Disabled by default; a real external probe stays recommended.
 	if cfg.Digest.Enabled {
 		dp := digest.NewPoller(d, tgClient, digest.Config{
-			ChatID:       cfg.Telegram.ChatID,
 			AdminUserID:  cfg.Telegram.AdminUserID,
 			HourMSK:      cfg.Digest.HourMSK,
 			OnlineWindow: time.Duration(cfg.Digest.OnlineWindowSec) * time.Second,

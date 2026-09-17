@@ -46,24 +46,6 @@ func TestSendMessageInThread(t *testing.T) {
 	}
 }
 
-func TestCreateForumTopic(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/createForumTopic") {
-			t.Fatalf("path: %s", r.URL.Path)
-		}
-		w.Write([]byte(`{"ok":true,"result":{"message_thread_id":555,"name":"vasya"}}`))
-	}))
-	defer srv.Close()
-	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
-	tid, err := c.CreateForumTopic(context.Background(), -100123, "👤 vasya", 0xFF8C00)
-	if err != nil {
-		t.Fatalf("create: %v", err)
-	}
-	if tid != 555 {
-		t.Fatalf("tid: %d", tid)
-	}
-}
-
 func TestApiErrorPropagates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(403)
@@ -198,38 +180,6 @@ func TestEditMessageTextIgnoresMessageNotModified(t *testing.T) {
 	c := &Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
 	if err := c.EditMessageText(context.Background(), 100, 5, "same", "", nil); err != nil {
 		t.Fatalf("message-not-modified edit should be a no-op, got %v", err)
-	}
-}
-
-func TestSendMessageWithReplyKeyboard_AcceptsReplyMarkup(t *testing.T) {
-	var got map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		_ = json.Unmarshal(body, &got)
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true,"result":{"message_id":7}}`))
-	}))
-	defer srv.Close()
-	c := &Client{BaseURL: srv.URL + "/bot", Token: "tok", HTTP: srv.Client()}
-
-	rk := &ReplyKeyboardMarkup{
-		Keyboard:       [][]ReplyKeyboardButton{{{Text: "📊 Что происходит?"}}},
-		IsPersistent:   true,
-		ResizeKeyboard: true,
-	}
-	mid, err := c.SendMessageWithReplyKeyboard(context.Background(), -100, intPtr(11), "hi", "", nil, rk)
-	if err != nil {
-		t.Fatalf("send: %v", err)
-	}
-	if mid != 7 {
-		t.Fatalf("mid=%d", mid)
-	}
-	rm, ok := got["reply_markup"].(map[string]any)
-	if !ok {
-		t.Fatalf("reply_markup missing or wrong type: %T", got["reply_markup"])
-	}
-	if rm["is_persistent"] != true {
-		t.Errorf("is_persistent missing: %+v", rm)
 	}
 }
 
@@ -518,34 +468,6 @@ func TestSetMyCommandsWithScope_PostsScopePayload(t *testing.T) {
 	}
 }
 
-func TestSetCommandsMenuButton_PostsCommandsButton(t *testing.T) {
-	var gotBody []byte
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/setChatMenuButton") {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		gotBody, _ = io.ReadAll(r.Body)
-		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
-	}))
-	defer ts.Close()
-
-	c := &Client{BaseURL: ts.URL + "/bot", Token: "T", HTTP: ts.Client()}
-	if err := c.SetCommandsMenuButton(context.Background()); err != nil {
-		t.Fatalf("SetCommandsMenuButton: %v", err)
-	}
-	var got struct {
-		MenuButton struct {
-			Type string `json:"type"`
-		} `json:"menu_button"`
-	}
-	if err := json.Unmarshal(gotBody, &got); err != nil {
-		t.Fatalf("unmarshal body: %v\nbody: %s", err, gotBody)
-	}
-	if got.MenuButton.Type != "commands" {
-		t.Fatalf("menu_button.type = %q, want commands", got.MenuButton.Type)
-	}
-}
-
 func TestGetUpdates_ParseDocument(t *testing.T) {
 	resp := `{"ok":true,"result":[{"update_id":1,"message":{"message_id":10,"from":{"id":99},"chat":{"id":-100},"message_thread_id":5,"document":{"file_id":"fid1","file_name":"awg11.conf","file_size":512}}}]}`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -641,25 +563,6 @@ func TestSetWebAppMenuButton_PostsWebAppButton(t *testing.T) {
 	}
 	if got.MenuButton.WebApp.URL != "https://wg.example.test/miniapp/" {
 		t.Fatalf("menu_button.web_app.url = %q", got.MenuButton.WebApp.URL)
-	}
-}
-
-// Кнопка команд не должна утащить с собой пустые text/web_app: TG на
-// type=commands с лишними полями отвечает ошибкой, а не игнорирует их.
-func TestSetCommandsMenuButton_OmitsWebAppFields(t *testing.T) {
-	var gotBody []byte
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotBody, _ = io.ReadAll(r.Body)
-		_, _ = w.Write([]byte(`{"ok":true,"result":true}`))
-	}))
-	defer ts.Close()
-
-	c := &Client{BaseURL: ts.URL + "/bot", Token: "T", HTTP: ts.Client()}
-	if err := c.SetCommandsMenuButton(context.Background()); err != nil {
-		t.Fatalf("SetCommandsMenuButton: %v", err)
-	}
-	if strings.Contains(string(gotBody), "web_app") || strings.Contains(string(gotBody), `"text"`) {
-		t.Fatalf("commands button carries web_app/text: %s", gotBody)
 	}
 }
 

@@ -392,6 +392,9 @@ func (u *UsersRepo) UpdateLastSeen(id int64) error {
 	return err
 }
 
+// UpdateThreadID пишет номер темы группы. Тем в боте больше нет (цикл 5), но
+// колонка жива: её показывает мастер развёртывания и дашборд, а провижн
+// переносит при переустановке.
 func (u *UsersRepo) UpdateThreadID(id, threadID int64) error {
 	_, err := u.d.db.Exec(`UPDATE users SET telegram_thread_id = ? WHERE id = ?`, threadID, id)
 	return err
@@ -426,52 +429,6 @@ func (u *UsersRepo) SetTelegramUserID(id, tgUserID int64) error {
 	}
 	_, err := u.d.db.Exec(`UPDATE users SET telegram_user_id = ? WHERE id = ?`, tgUserID, id)
 	return err
-}
-
-// ClearThreadID nulls out telegram_thread_id for a user. Used by the
-// dispatcher's self-heal path: when sendMessage reports the cached topic
-// no longer exists in TG, we clear the id so the next ensureTopic call
-// invokes createForumTopic and persists a fresh id.
-func (u *UsersRepo) ClearThreadID(id int64) error {
-	_, err := u.d.db.Exec(`UPDATE users SET telegram_thread_id = NULL WHERE id = ?`, id)
-	return err
-}
-
-// GetByThreadID looks up a user by their assigned Telegram forum-topic id.
-// Used by the callbacks router to map an incoming Message's
-// message_thread_id to the owning user (per-router topic). Returns
-// ErrUserNotFound when no user owns this topic.
-func (u *UsersRepo) GetByThreadID(threadID int64) (*User, error) {
-	row := u.d.db.QueryRow(`SELECT `+userColsFull+` FROM users WHERE telegram_thread_id = ?`, threadID)
-	got, err := scanUserFull(row)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
-	return got, nil
-}
-
-// GetByChatThreadID looks up a router by the Telegram group and forum topic.
-// Rows with NULL telegram_chat_id are treated as belonging to defaultChatID.
-func (u *UsersRepo) GetByChatThreadID(chatID, threadID, defaultChatID int64) (*User, error) {
-	row := u.d.db.QueryRow(
-		`SELECT `+userColsFull+` FROM users
-		  WHERE telegram_thread_id = ?
-		    AND (telegram_chat_id = ? OR (telegram_chat_id IS NULL AND ? = ?))
-		  ORDER BY CASE WHEN telegram_chat_id = ? THEN 0 ELSE 1 END, id
-		  LIMIT 1`,
-		threadID, chatID, chatID, defaultChatID, chatID,
-	)
-	got, err := scanUserFull(row)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
-	return got, nil
 }
 
 // DeployInfo carries the wizard-side metadata pushed via

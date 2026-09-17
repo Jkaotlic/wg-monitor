@@ -24,16 +24,15 @@ const mobileWakeCooldown = 5 * time.Minute
 type WakeNotifier struct {
 	db     *db.DB
 	tg     LifecycleSendTG
-	chatID int64
 	notify lifecycleSink
 	// miniAppBaseURL -- адрес приложения для кнопки под отчётом. Пустой --
 	// кнопки нет, как и у тревог (alerts.Config.MiniAppBaseURL).
 	miniAppBaseURL string
 }
 
-func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *WakeNotifier {
+func NewWakeNotifier(d *db.DB, tgc LifecycleSendTG, adminID int64) *WakeNotifier {
 	return &WakeNotifier{
-		db: d, tg: tgc, chatID: chatID,
+		db: d, tg: tgc,
 		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }
@@ -82,13 +81,12 @@ func (n *WakeNotifier) SendWake(ctx context.Context, userID int64, nickname stri
 type SleepNotifier struct {
 	db     *db.DB
 	tg     LifecycleSendTG
-	chatID int64
 	notify lifecycleSink
 }
 
-func NewSleepNotifier(d *db.DB, tgc LifecycleSendTG, chatID int64, adminID int64) *SleepNotifier {
+func NewSleepNotifier(d *db.DB, tgc LifecycleSendTG, adminID int64) *SleepNotifier {
 	return &SleepNotifier{
-		db: d, tg: tgc, chatID: chatID,
+		db: d, tg: tgc,
 		notify: notify.NewFanout(d, tgc, slog.Default(), adminID),
 	}
 }

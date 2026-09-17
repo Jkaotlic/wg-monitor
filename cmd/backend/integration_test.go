@@ -81,13 +81,12 @@ func TestStage2EndToEnd(t *testing.T) {
 	// BaseURL + Token + "/" + method → srv.URL + "/bot" + "t" + "/sendMessage"
 	tgC := &tg.Client{BaseURL: srv.URL + "/bot", Token: "t", HTTP: srv.Client()}
 	disp := alerts.NewDispatcher(d, tgC, alerts.Config{
-		ChatID:            -100,
 		FailThreshold:     3,
 		RecoveryThreshold: 2,
 	})
 	router := callbacks.NewRouter(d, tgC, callbacks.Config{AdminUserID: 555})
 	poller := realert.NewPoller(d, tgC, realert.Config{
-		ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second,
+		RealertEvery: 6 * time.Hour, TickEvery: time.Second,
 	})
 
 	// 4. Trigger 3 fails → HARD.

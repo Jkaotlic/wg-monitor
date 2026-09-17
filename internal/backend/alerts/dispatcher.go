@@ -19,7 +19,6 @@ type TGSender interface {
 	SendMessage(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64) (int64, error)
 	SendMessageWithKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup *tg.InlineKeyboardMarkup) (int64, error)
 	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
-	CreateForumTopic(ctx context.Context, chatID int64, name string, iconColor int) (int64, error)
 }
 
 // notifySink -- та часть notify.Fanout, которой пользуется диспетчер.
@@ -32,7 +31,6 @@ type notifySink interface {
 }
 
 type Config struct {
-	ChatID            int64
 	FailThreshold     int
 	RecoveryThreshold int
 	// MiniAppBaseURL, when non-empty, adds an "Open in app" web_app button to

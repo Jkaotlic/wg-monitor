@@ -88,7 +88,7 @@ func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, callback string) bool {
 func TestTickEmptyNoCalls(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
 	p.tick(context.Background())
 	if len(f.sent) != 0 {
 		t.Errorf("expected 0 sends, got %d", len(f.sent))
@@ -98,7 +98,7 @@ func TestTickEmptyNoCalls(t *testing.T) {
 func TestTickStaleHardSendsRealert(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
 
 	hardSince := time.Now().Add(-7 * time.Hour)
 	lastAlert := time.Now().Add(-7 * time.Hour)
@@ -131,7 +131,7 @@ func TestTickStaleHardSendsRealert(t *testing.T) {
 func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: time.Hour, TickEvery: time.Second})
 
 	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
 	p.SetNow(func() time.Time { return now })
@@ -182,7 +182,7 @@ func TestTickDNSRealertCarriesSilenceKeyboard(t *testing.T) {
 func TestTickRealertCarriesOnlyAppAndSilence(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second, MiniAppBaseURL: "https://example.com"})
+	p := NewPoller(d, f, Config{RealertEvery: time.Hour, TickEvery: time.Second, MiniAppBaseURL: "https://example.com"})
 
 	now := time.Date(2026, 5, 26, 10, 0, 0, 0, time.UTC)
 	p.SetNow(func() time.Time { return now })
@@ -261,7 +261,7 @@ func TestLastKnownCheckLogsMalformedDetailsJSON(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100})
+	p := NewPoller(d, &fakeTG{}, Config{})
 	got := p.lastKnownCheck(uid, "dns")
 
 	if got.Name != "dns" || got.Status != "fail" {
@@ -283,7 +283,6 @@ func TestTickMobileHardUsesMobileRealertCadence(t *testing.T) {
 	}
 	f := &fakeTG{}
 	p := NewPoller(d, f, Config{
-		ChatID:             -100,
 		RealertEvery:       time.Hour,
 		MobileRealertEvery: 6 * time.Hour,
 		TickEvery:          time.Second,
@@ -321,7 +320,7 @@ func TestTickMobileHardUsesMobileRealertCadence(t *testing.T) {
 func TestTickSilencedSkipped(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
 
 	hardSince := time.Now().Add(-7 * time.Hour)
 	lastAlert := time.Now().Add(-7 * time.Hour)
@@ -343,7 +342,7 @@ func TestTickSilencedSkipped(t *testing.T) {
 func TestTickAckedSkipped(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
 
 	hardSince := time.Now().Add(-7 * time.Hour)
 	lastAlert := time.Now().Add(-7 * time.Hour)
@@ -364,7 +363,7 @@ func TestTickAckedSkipped(t *testing.T) {
 func TestTickSendErrorPreservesLastAlertAt(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{sendErr: errors.New("tg flap")}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Second})
 
 	hardSince := time.Now().Add(-7 * time.Hour)
 	origLastAlert := time.Now().Add(-7 * time.Hour)
@@ -399,7 +398,7 @@ func TestTickStopsBatchOnTelegramRateLimit(t *testing.T) {
 		Description: "Too Many Requests",
 		RetryAfter:  30 * time.Second,
 	}}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second})
+	p := NewPoller(d, f, Config{RealertEvery: time.Hour, TickEvery: time.Second})
 
 	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.UTC)
 	p.SetNow(func() time.Time { return now })
@@ -454,7 +453,7 @@ func TestTickStopsBatchOnTelegramRateLimit(t *testing.T) {
 func TestPoller_Run_FiresOncePerInterval(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeTG{}
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: 25 * time.Millisecond})
+	p := NewPoller(d, f, Config{RealertEvery: 6 * time.Hour, TickEvery: 25 * time.Millisecond})
 
 	hardSince := time.Now().Add(-7 * time.Hour)
 	lastAlert := time.Now().Add(-7 * time.Hour)
@@ -492,7 +491,7 @@ func TestPoller_Run_FiresOncePerInterval(t *testing.T) {
 
 func TestPoller_Run_ExitsImmediatelyOnCancelledContext(t *testing.T) {
 	d, _ := newTestDB(t)
-	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before Run starts the loop
@@ -513,7 +512,7 @@ func TestPoller_Run_ExitsImmediatelyOnCancelledContext(t *testing.T) {
 // TEST-03: neighborSummaries was 9.5%. Cover all three branches.
 func TestNeighborSummaries_NonTunnelReturnsNil(t *testing.T) {
 	d, uid := newTestDB(t)
-	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
 
 	if got := p.neighborSummaries(uid, "awg_handshake"); got != nil {
 		t.Fatalf("non-tunnel check should return nil, got %v", got)
@@ -525,7 +524,7 @@ func TestNeighborSummaries_NonTunnelReturnsNil(t *testing.T) {
 
 func TestNeighborSummaries_DNSGetsTunnelContext(t *testing.T) {
 	d, uid := newTestDB(t)
-	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
 	now := time.Now().UTC()
 	if err := d.Events().Insert(uid, "tunnel_awg13", "ok", `{"tunnel_name":"Germany backup","ndms_name":"Wireguard3","interface":"nwg3","handshake_age_sec":12}`, now); err != nil {
 		t.Fatal(err)
@@ -542,7 +541,7 @@ func TestNeighborSummaries_DNSGetsTunnelContext(t *testing.T) {
 
 func TestNeighborSummaries_NoNeighborsReturnsEmpty(t *testing.T) {
 	d, uid := newTestDB(t)
-	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
 
 	// No tunnel_* events at all → LatestEventsByPrefix returns empty slice.
 	got := p.neighborSummaries(uid, "tunnel_awg11")
@@ -553,7 +552,7 @@ func TestNeighborSummaries_NoNeighborsReturnsEmpty(t *testing.T) {
 
 func TestNeighborSummaries_ReturnsSiblingsWithDetails(t *testing.T) {
 	d, uid := newTestDB(t)
-	p := NewPoller(d, &fakeTG{}, Config{ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
+	p := NewPoller(d, &fakeTG{}, Config{RealertEvery: 6 * time.Hour, TickEvery: time.Hour})
 
 	// Three tunnel_* events; one is the queried check (must be excluded), two
 	// are siblings — one with full details JSON, one with empty details.
@@ -607,7 +606,7 @@ func TestTickRealertReachesAdmin(t *testing.T) {
 	f := &fakeTG{}
 	now := time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
 	stageIncident(t, d, uid, now, 5*time.Hour, 70*time.Minute)
-	p := NewPoller(d, f, Config{ChatID: -100, RealertEvery: time.Hour, TickEvery: time.Second, AdminUserID: 9000})
+	p := NewPoller(d, f, Config{RealertEvery: time.Hour, TickEvery: time.Second, AdminUserID: 9000})
 	p.SetNow(func() time.Time { return now })
 
 	p.tick(context.Background())
