@@ -80,6 +80,12 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// hrneo/awgmgr/router; перезагрузка и прошивка -- с набором имени,
 		// который сверяет бэкенд; opkg_feed_disable -- один http(s)-адрес.
 		"awgm_update", "hrneo_update", "opkg_upgrade", "opkg_feed_disable", "service_restart",
+		// Пакеты по расписанию (спека цикла 2, п. 9): переехали из старого
+		// дашборда. Радиус router-global -- только админ (miniappAdminOnlyActions),
+		// аргументы -- явные ветки sanitizeWizardCommandArgs (расписание HH:MM,
+		// число строк журнала 1..300).
+		"opkg_cron_status", "opkg_cron_install", "opkg_cron_logs", "opkg_cron_remove",
+		"entware_clean_status", "entware_clean_install", "entware_clean_run", "entware_clean_logs", "entware_clean_remove",
 	}
 	for _, a := range allowed {
 		if !miniappCommandAllowlist[a] {
@@ -95,7 +101,6 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		"tunnel_delete",      // irreversible
 		"self_update",        // audited deploy flow
 		"tunnel_import",      // route/config mutation
-		"entware_clean_run",
 		// Ответ несёт ndms_name каждого туннеля -- топологию, которую белый
 		// список туннелей клиенту не отдаёт. Состояние проверки связи экран
 		// берёт из проекции туннеля, а не из этого ответа.
@@ -527,11 +532,16 @@ func TestMiniappStillDeniesDangerousActions(t *testing.T) {
 	// подтверждение набором имени. Тесты: TestMiniappDNSResetRefusedToOldAgent,
 	// TestMiniappDNSResetDeniedToOwnerAndOperator, dnsReset.test.js.
 	//
+	// entware_clean_run ушёл отсюда с циклом 2 (спека, п. 9): пакеты по
+	// расписанию переехали из старого дашборда. Радиус router-global --
+	// только админ (miniappAdminOnlyActions), владельцу и оператору 404 и на
+	// постановке, и на опросе. Тест: TestMiniappCommandsPackageScheduleAdminOnly.
+	//
 	// update_backend_url не уезжает НИКОГДА: его белый список живёт на
 	// стороне агента, и перенаправление адреса бэкенда -- захват всего парка.
 	for _, action := range []string{
 		"tunnel_delete", "update_backend_url", "tunnel_import",
-		"self_update", "entware_clean_run",
+		"self_update",
 	} {
 		if miniappCommandAllowlist[action] {
 			t.Errorf("%s не должен быть доступен мини-аппу", action)
@@ -1024,5 +1034,64 @@ func TestMiniappDNSResetDeniedToOwnerAndOperator(t *testing.T) {
 	}
 	if mine := poll(999); mine.Code != http.StatusOK || !bytes.Contains(mine.Body.Bytes(), []byte(snapshot)) {
 		t.Fatalf("админ, опрос результата: код %d тело %s, ожидались 200 и путь снимка", mine.Code, mine.Body.String())
+	}
+}
+
+// Пакеты по расписанию (спека цикла 2, п. 9): радиус router-global, круг --
+// только админ; владельцу 404 и на постановке, и на опросе результата.
+func TestMiniappCommandsPackageScheduleAdminOnly(t *testing.T) {
+	d, ownedID, _, ownerID := seedMiniappFleet(t)
+	sink := &dashboardActionSink{}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, CommandSink: sink})
+	path := fmt.Sprintf("/v1/miniapp/routers/%d/commands", ownedID)
+	post := func(uid int64, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader([]byte(body)))
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", uid))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	cases := []struct {
+		body   string
+		action string
+		args   map[string]any
+	}{
+		{`{"action":"opkg_cron_status","args":{"lines":999}}`, "opkg_cron_status", map[string]any{"lines": 300}},
+		{`{"action":"opkg_cron_install","args":{"schedule":"03:15","extra":"x"}}`, "opkg_cron_install", map[string]any{"schedule": "03:15"}},
+		{`{"action":"opkg_cron_logs","args":{"lines":100}}`, "opkg_cron_logs", map[string]any{"lines": 100}},
+		{`{"action":"opkg_cron_remove","args":{"x":1}}`, "opkg_cron_remove", map[string]any{}},
+		{`{"action":"entware_clean_status"}`, "entware_clean_status", map[string]any{"lines": 80}},
+		{`{"action":"entware_clean_install","args":{"schedule":"05:15"}}`, "entware_clean_install", map[string]any{"schedule": "05:15"}},
+		{`{"action":"entware_clean_run"}`, "entware_clean_run", map[string]any{}},
+		{`{"action":"entware_clean_logs","args":{"lines":100}}`, "entware_clean_logs", map[string]any{"lines": 100}},
+		{`{"action":"entware_clean_remove"}`, "entware_clean_remove", map[string]any{}},
+	}
+	for _, c := range cases {
+		if rec := post(ownerID, c.body); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s владельцу: код %d (%s)", c.action, rec.Code, rec.Body.String())
+		}
+		rec := post(999, c.body)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("%s админу: код %d (%s)", c.action, rec.Code, rec.Body.String())
+		}
+		last := sink.enqueued[len(sink.enqueued)-1]
+		if last.Action != c.action || fmt.Sprint(last.Args) != fmt.Sprint(c.args) {
+			t.Fatalf("агенту ушло %s %v, ждали %s %v", last.Action, last.Args, c.action, c.args)
+		}
+	}
+	if len(sink.enqueued) != len(cases) {
+		t.Fatalf("в очереди %d команд, ждали %d (владелец не ставит ни одной)", len(sink.enqueued), len(cases))
+	}
+	if rec := post(999, `{"action":"opkg_cron_install","args":{"schedule":"03:15; reboot"}}`); rec.Code != http.StatusBadRequest || !bytes.Contains(rec.Body.Bytes(), []byte("invalid_schedule")) {
+		t.Fatalf("негодное расписание: код %d (%s)", rec.Code, rec.Body.String())
+	}
+
+	sink.commands = map[string]wire.Command{"cmd-opkg": {ID: "cmd-opkg", Action: "opkg_cron_logs"}}
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/v1/miniapp/routers/%d/commands/cmd-opkg?wait_sec=0", ownedID), nil)
+	req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", ownerID))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("опрос результата владельцем: код %d", rec.Code)
 	}
 }

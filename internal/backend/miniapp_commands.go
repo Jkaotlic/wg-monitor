@@ -20,8 +20,7 @@ import (
 // session is any Telegram user resolved to a per-router role (admin / owner /
 // operator). So this list is scoped to "things the person who owns THIS router
 // should be able to do to THIS router", which both subtracts from the dashboard's
-// list (no opkg/entware maintenance) and
-// adds to it (tunnel probes and restart -- see below).
+// list and adds to it (tunnel probes and restart -- see below).
 //
 // Three entries widen the browser-session boundary that wizard_handler.go draws.
 // Each is justified against the trust precedent dns_reset established
@@ -176,6 +175,22 @@ var miniappCommandAllowlist = map[string]bool{
 
 	"agent_config_get":    true,
 	"update_agent_config": true,
+
+	// Пакеты по расписанию (спека цикла 2, п. 9): переехали из старого
+	// дашборда, где они были всегда. Радиус router-global (cron и очистка
+	// /opt), поэтому круг -- только админ (miniappAdminOnlyActions), отказ
+	// 404 и на постановке, и на опросе результата. Аргументы -- явные ветки
+	// sanitizeWizardCommandArgs: расписание HH:MM или пять полей cron, число
+	// строк журнала 1..300; всё прочее клиентское до агента не доезжает.
+	"opkg_cron_status":      true,
+	"opkg_cron_install":     true,
+	"opkg_cron_logs":        true,
+	"opkg_cron_remove":      true,
+	"entware_clean_status":  true,
+	"entware_clean_install": true,
+	"entware_clean_run":     true,
+	"entware_clean_logs":    true,
+	"entware_clean_remove":  true,
 }
 
 // miniappOwnerOnlyActions -- действия, которых оператору не положено. С цикла 1

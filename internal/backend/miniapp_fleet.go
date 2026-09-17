@@ -53,6 +53,22 @@ type miniappFleetRevive struct {
 	LastProbeAt string `json:"last_probe_at"`
 }
 
+// miniappFleetLastDeploy -- последняя раскатка агента консольным deploy: когда
+// (users.last_deploy), какая версия сейчас, и нет ли ошибки у ждущего
+// обновления. Никаких адресов и доступов.
+type miniappFleetLastDeploy struct {
+	Version string `json:"version"`
+	At      string `json:"at"`
+	OK      bool   `json:"ok"`
+}
+
+// miniappFleetIncident -- свёртка активных тревог роутера для строки парка:
+// с какого времени (самая ранняя) и сколько раз подряд (наибольшее).
+type miniappFleetIncident struct {
+	HardSince string `json:"hard_since"`
+	FailCount int    `json:"fail_count"`
+}
+
 // miniappFleetRouter -- одна строка парка. Ни ssh, ни адреса панели, ни
 // чата уведомлений здесь нет и быть не может.
 type miniappFleetRouter struct {
@@ -93,6 +109,13 @@ type miniappFleetRouter struct {
 	PanelAddressKnown bool `json:"panel_address_known"`
 	// Revive -- оживление агента; null, когда его не ставили. Без omitempty.
 	Revive *miniappFleetRevive `json:"revive"`
+	// PendingSince -- когда назначено ждущее обновление; null -- не ждёт.
+	PendingSince *string `json:"pending_since"`
+	// LastDeploy -- null, если раскатки не было. Без omitempty: форма строки
+	// постоянная.
+	LastDeploy *miniappFleetLastDeploy `json:"last_deploy"`
+	// Incident -- null без активных тревог.
+	Incident *miniappFleetIncident `json:"incident"`
 }
 
 // miniappFleetUnreachable -- человек, которому бот не может написать.
@@ -114,13 +137,19 @@ type miniappFleetNotify struct {
 }
 
 type miniappFleetWatchdog struct {
-	Alive                  bool   `json:"alive"`
-	Reason                 string `json:"reason,omitempty"`
-	LastScanAt             string `json:"last_scan_at,omitempty"`
-	OfflineErrors          int64  `json:"offline_errors"`
-	LastOfflineError       string `json:"last_offline_error,omitempty"`
-	LastOfflineErrorRouter string `json:"last_offline_error_router,omitempty"`
-	LastOfflineErrorAt     string `json:"last_offline_error_at,omitempty"`
+	Alive           bool   `json:"alive"`
+	Reason          string `json:"reason,omitempty"`
+	ScansTotal      int64  `json:"scans_total"`
+	StaleUsers      int64  `json:"stale_users"`
+	SuppressedUsers int64  `json:"suppressed_users"`
+	LastScanMs      int64  `json:"last_scan_ms"`
+	// LastScanAt -- когда был последний обход (RFC3339); null -- обхода ещё
+	// не было. Ключ есть всегда: клиент не гадает об отсутствии.
+	LastScanAt             *string `json:"last_scan_at"`
+	OfflineErrors          int64   `json:"offline_errors"`
+	LastOfflineError       string  `json:"last_offline_error,omitempty"`
+	LastOfflineErrorRouter string  `json:"last_offline_error_router,omitempty"`
+	LastOfflineErrorAt     string  `json:"last_offline_error_at,omitempty"`
 }
 
 type miniappFleetResp struct {
@@ -254,6 +283,18 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 					row.PendingLastErrorText = deployFailureText(st.LastError)
 				}
 			}
+			if a.PendingVersion != "" && strings.TrimSpace(a.PendingSince) != "" {
+				since := a.PendingSince
+				row.PendingSince = &since
+			}
+			if at := strings.TrimSpace(a.LastDeploy); at != "" {
+				ld := &miniappFleetLastDeploy{Version: a.AgentVersion, At: at, OK: true}
+				if st, ok := pending[a.ID]; ok && strings.TrimSpace(st.LastError) != "" {
+					ld.OK = false
+				}
+				row.LastDeploy = ld
+			}
+			row.Incident = miniappFleetIncidentFrom(a.ActiveIncidents)
 			if reviveSvc != nil {
 				view, err := reviveSvc.StatusFor(a.ID)
 				if err != nil {
@@ -303,12 +344,17 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 			st := d.HeartbeatStats()
 			verdict := heartbeat.Judge(st, now)
 			wd := &miniappFleetWatchdog{
-				Alive:         verdict.Alive,
-				Reason:        verdict.Reason,
-				OfflineErrors: st.OfflineErrors,
+				Alive:           verdict.Alive,
+				Reason:          verdict.Reason,
+				OfflineErrors:   st.OfflineErrors,
+				ScansTotal:      st.ScansTotal,
+				StaleUsers:      st.StaleUsers,
+				SuppressedUsers: st.Suppressed,
+				LastScanMs:      st.LastScanMs,
 			}
 			if !st.LastScanAt.IsZero() {
-				wd.LastScanAt = st.LastScanAt.UTC().Format(time.RFC3339)
+				at := st.LastScanAt.UTC().Format(time.RFC3339)
+				wd.LastScanAt = &at
 			}
 			if st.LastOfflineError != "" {
 				wd.LastOfflineError = st.LastOfflineError
@@ -333,6 +379,23 @@ func miniappFleetReviveFrom(v *revive.IntentView) *miniappFleetRevive {
 	}
 	if !v.LastProbeAt.IsZero() {
 		out.LastProbeAt = v.LastProbeAt.UTC().Format(time.RFC3339)
+	}
+	return out
+}
+
+func miniappFleetIncidentFrom(incidents []dashboardIncident) *miniappFleetIncident {
+	if len(incidents) == 0 {
+		return nil
+	}
+	out := &miniappFleetIncident{}
+	for _, inc := range incidents {
+		// RFC3339 в UTC сравнивается как строка.
+		if inc.HardSince != "" && (out.HardSince == "" || inc.HardSince < out.HardSince) {
+			out.HardSince = inc.HardSince
+		}
+		if inc.FailCount > out.FailCount {
+			out.FailCount = inc.FailCount
+		}
 	}
 	return out
 }

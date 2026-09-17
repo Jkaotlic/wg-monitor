@@ -87,4 +87,14 @@ var miniappAdminOnlyActions = map[string]bool{
 	"agent_config_get":    true,
 	"update_agent_config": true,
 	"dns_reset":           true,
+	// Пакеты по расписанию (цикл 2, п. 9).
+	"opkg_cron_status":      true,
+	"opkg_cron_install":     true,
+	"opkg_cron_logs":        true,
+	"opkg_cron_remove":      true,
+	"entware_clean_status":  true,
+	"entware_clean_install": true,
+	"entware_clean_run":     true,
+	"entware_clean_logs":    true,
+	"entware_clean_remove":  true,
 }
