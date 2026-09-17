@@ -141,6 +141,7 @@ describe('ожидание раскатки на широком экране', (
 describe('осмотр приёмки, круг 2', () => {
   it('адрес бэкенда на экране токена переносится под подпись, а не сжимает её', () => {
     expect(rule(outside, '\n.token-backend .data-row')).toMatch(/flex-wrap:\s*wrap/)
+    expect(rule(outside, '\n.token-backend .data-row-main')).toMatch(/flex-shrink:\s*0/)
   })
 
   it('поиск в «Моих роутерах» отделён от строки итога', () => {

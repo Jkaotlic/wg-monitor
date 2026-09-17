@@ -2798,7 +2798,12 @@ body {
   flex-wrap: wrap;
 }
 
+.token-backend .data-row-main {
+  flex-shrink: 0;
+}
+
 .token-backend .data-row-value {
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
