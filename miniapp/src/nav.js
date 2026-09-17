@@ -60,6 +60,12 @@ function withoutParams(state) {
   return rest
 }
 
+function withoutSheetBusy(state) {
+  if (!('sheetBusy' in state)) return state
+  const { sheetBusy: _drop, ...rest } = state
+  return rest
+}
+
 // Подписи отделены от ключей намеренно. Ключ -- это адрес, по которому в
 // приложение приходят deep-link'и из тревог, отправленных месяцы назад;
 // подпись -- слова для человека. Менять их вместе значило бы ломать ссылки
@@ -137,8 +143,15 @@ export function navReducer(state, action) {
       // иначе набранное в первом -- имя, пароль root -- переехало бы во
       // второй, чужой роутер. Тот же объект листа номер не меняет.
       const sheet = action.sheet ?? null
-      if (sheet && sheet !== state.sheet) return { ...state, sheet, sheetSeq: (state.sheetSeq ?? 0) + 1 }
-      return { ...state, sheet }
+      // Занятость принадлежит листу: новый лист или закрытие её снимают.
+      const rest = sheet === state.sheet ? state : withoutSheetBusy(state)
+      if (sheet && sheet !== state.sheet) return { ...rest, sheet, sheetSeq: (state.sheetSeq ?? 0) + 1 }
+      return { ...rest, sheet }
+    }
+    case 'sheetBusy': {
+      // Лист занят (запрос ушёл): «назад» его не закрывает. Ставит сам лист.
+      if (!state.sheet) return state
+      return action.busy ? { ...state, sheetBusy: true } : withoutSheetBusy(state)
     }
     // Закрепить мастер на время отправки. Флаг живёт в параметрах слоя и
     // уходит вместе с ним; паролей там по-прежнему нет.
@@ -149,7 +162,7 @@ export function navReducer(state, action) {
     }
     case 'back': {
       // Порядок закрытия -- сверху вниз по слоям: шит лежит поверх оверлея.
-      if (state.sheet) return { ...state, sheet: null }
+      if (state.sheet) return state.sheetBusy ? state : { ...state, sheet: null }
       if (navPinned(state)) return state
       if (!state.overlay) return state
       // returnParams -- параметры слоя, куда возвращаемся: экран сервера

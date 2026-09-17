@@ -4,7 +4,9 @@ import { initialNav, normalizeTab, deepLinkOverlay, TABS, OPEN_OVERLAYS, URL_FLE
 // ?router=<id>&tab=<tab>&open=<overlay>. Лист подтверждения в адрес не
 // попадает никогда: обновление страницы не должно заново спрашивать «точно
 // перезагрузить?» -- и тем более не должно выглядеть так, будто спрашивает.
-export function navFromURL(search, routerIDs = []) {
+// isAdmin -- слои парка с адресом (свои серверы) открываются только админу:
+// остальным сервер ответит 404, и адрес ведёт на обычный экран.
+export function navFromURL(search, routerIDs = [], { isAdmin = false } = {}) {
   const params = new URLSearchParams(search ?? '')
   const raw = params.get('router')
   const id = raw ? Number(raw) : NaN
@@ -14,7 +16,7 @@ export function navFromURL(search, routerIDs = []) {
   // Слой парка с адресом («Свои VPN-серверы») открывается и без роутера.
   // Возврат -- в «Обслуживание», если роутер выбран (Парк живёт там), иначе
   // к сводке.
-  if (URL_FLEET_OVERLAYS.includes(open)) {
+  if (isAdmin && URL_FLEET_OVERLAYS.includes(open)) {
     if (state.routerID != null && TABS.includes(tab)) state.tab = tab
     state.overlay = open
     state.overlayParams = { returnTo: state.routerID != null ? 'admin' : null }

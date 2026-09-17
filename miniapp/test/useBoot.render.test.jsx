@@ -28,6 +28,21 @@ function Probe() {
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
 describe('useBoot', () => {
+  it('onReady узнаёт, админ ли вошедший -- навигация из адреса зависит от этого', async () => {
+    const seen = []
+    function ReadyProbe() {
+      boot = useBoot('web', { onReady: (list, info) => seen.push([list.length, info]) })
+      return null
+    }
+    mocks.routersCalls = 0
+    const root = document.createElement('div')
+    await act(async () => render(<ReadyProbe />, root))
+    await act(async () => { await boot.start() })
+    expect(seen).toEqual([[1, { isAdmin: true }]])
+    render(null, root)
+    mocks.routersCalls = 0
+  })
+
   it('ответ обновления списка после «Выйти» не возвращает роутеры', async () => {
     const root = document.createElement('div')
     await act(async () => render(<Probe />, root))
