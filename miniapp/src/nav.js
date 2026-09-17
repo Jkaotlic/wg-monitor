@@ -19,7 +19,28 @@ export function normalizeTab(tab) {
 // роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
 // Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
 // тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
-export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset']
+export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn']
+
+// Слои всего парка, а не роутера: мастер «Добавить роутер», «Ход работы»,
+// ожидание раскатки бэкенда. Открываются и без выбранного роутера и в адрес
+// не пишутся: мастер держит введённые пароли, ход работы -- номер задания,
+// которое через 30 минут исчезнет, а ожидание раскатки после перезагрузки
+// бессмысленно. Параметры слоя -- nav.overlayParams; returnTo -- слой, куда
+// вернуть «назад». Паролей в параметрах не бывает никогда.
+export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy']
+
+// Слои, которые «назад» и Esc не закрывают: во время раскатки бэкенда уходить
+// некуда -- приложение без сервера не работает, а экран сам перезагрузит
+// страницу или предложит «Вернуться» после таймаута.
+export const PINNED_OVERLAYS = ['backenddeploy']
+
+// Параметры принадлежат слою: вместе с ним они уходят целиком (ключа нет),
+// а не остаются null -- так прежние снимки навигации не меняют форму.
+function withoutParams(state) {
+  if (!state || !('overlayParams' in state)) return state
+  const { overlayParams: _drop, ...rest } = state
+  return rest
+}
 
 // Подписи отделены от ключей намеренно. Ключ -- это адрес, по которому в
 // приложение приходят deep-link'и из тревог, отправленных месяцы назад;
@@ -79,13 +100,16 @@ export function navReducer(state, action) {
       if (!TABS.includes(tab)) return state
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
-      if (action.closeOverlay) return { ...state, tab, overlay: null, sheet: null }
+      if (action.closeOverlay) return { ...withoutParams(state), tab, overlay: null, sheet: null }
       return { ...state, tab }
     }
     case 'router':
-      return { ...state, routerID: action.id, tab: 'router', overlay: null, sheet: null }
-    case 'overlay':
-      return { ...state, overlay: action.overlay ?? null }
+      return { ...withoutParams(state), routerID: action.id, tab: 'router', overlay: null, sheet: null }
+    case 'overlay': {
+      const overlay = action.overlay ?? null
+      const next = { ...withoutParams(state), overlay }
+      return overlay && action.params ? { ...next, overlayParams: action.params } : next
+    }
     case 'sheet': {
       // sheetSeq -- номер экземпляра листа, ключ его компонента. Новый лист
       // поверх открытого (без закрытия) обязан смонтироваться заново:
@@ -98,7 +122,8 @@ export function navReducer(state, action) {
     case 'back':
       // Порядок закрытия -- сверху вниз по слоям: шит лежит поверх оверлея.
       if (state.sheet) return { ...state, sheet: null }
-      if (state.overlay) return { ...state, overlay: null }
+      if (PINNED_OVERLAYS.includes(state.overlay)) return state
+      if (state.overlay) return { ...withoutParams(state), overlay: state.overlayParams?.returnTo ?? null }
       return state
     default:
       return state
@@ -114,12 +139,15 @@ function visibleOverlay(state, { wide = false } = {}) {
 }
 
 export function backButtonVisible(state, opts) {
-  return Boolean(state.sheet || visibleOverlay(state, opts))
+  if (state?.sheet) return true
+  const overlay = visibleOverlay(state, opts)
+  return Boolean(overlay) && !PINNED_OVERLAYS.includes(overlay)
 }
 
 // escapeAction -- что делает Esc. Лист подтверждения закрывает себя сам: он
 // знает, идёт ли уже команда (тогда Esc не должен обрывать наблюдение).
 export function escapeAction(state, opts) {
   if (state?.sheet) return null
-  return visibleOverlay(state, opts) ? { type: 'back' } : null
+  const overlay = visibleOverlay(state, opts)
+  return overlay && !PINNED_OVERLAYS.includes(overlay) ? { type: 'back' } : null
 }

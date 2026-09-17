@@ -307,3 +307,42 @@ export function fetchCommandResult(routerID, cmdID, waitSec = 10) {
     throw err
   })
 }
+
+// Раскатка бэкенда до версии. confirm -- набранная человеком версия: сервер
+// сверяет её сам, проверка на листе -- только пауза. Отката отсюда нет.
+export function deployBackend(targetVersion, confirm) {
+  return request('/backend/deploy', {
+    method: 'POST',
+    body: JSON.stringify({ target_version: targetVersion, confirm }),
+  })
+}
+
+// /healthz живёт вне /v1/miniapp и отвечает без входа: во время раскатки
+// бэкенд перезапускается, и спрашивать его «кто ты» можно только здесь.
+// Кэш запрещён: иначе браузер покажет прежнюю версию после перезапуска.
+export function fetchHealth() {
+  return request('/healthz', { cache: 'no-store' }, '')
+}
+
+// Добавление роутера: kind "provision" -- установка сейчас (202 {job_id}),
+// "register" -- только токен (201 {raw_token, …}). Тело собирает
+// provisionWizard.js; пароли уходят один раз, этим запросом.
+export function startProvision(body) {
+  return request('/provision', { method: 'POST', body: JSON.stringify(body) })
+}
+
+// Ход задания установки/переустановки/перенаправления. 404 -- задание
+// истекло (сервер хранит итог 30 минут).
+export function fetchJob(jobID) {
+  return request(`/jobs/${encodeURIComponent(jobID)}`)
+}
+
+// Как сервер добирается до роутера: панель awg-manager, SSH, раскатка, MAC.
+// Только админ; /fleet эти поля намеренно не отдаёт.
+export function fetchAgentConnection(routerID) {
+  return request(`/routers/${routerID}/agent/connection`)
+}
+
+export function saveAgentConnection(routerID, body) {
+  return request(`/routers/${routerID}/agent/connection`, { method: 'PUT', body: JSON.stringify(body) })
+}
