@@ -109,6 +109,10 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	// вместе с муксом, как окно перезагрузки у /commands.
 	tunnelQuestions := newMiniappAgentQuestions(miniappAgentAskWait, miniappAgentAskReuse, time.Now)
 	mux.Handle("POST /v1/miniapp/routers/{id}/tunnels/{tunnel_id}/delete", reqID(auth(miniappTunnelDeleteHandler(d, tunnelQuestions))))
+	importPreviews := newMiniappImportPreviews(miniappImportTTL, time.Now)
+	mux.Handle("POST /v1/miniapp/routers/{id}/tunnels/import", reqID(auth(miniappTunnelImportHandler(d, importPreviews, tunnelQuestions))))
+	mux.Handle("GET /v1/miniapp/routers/{id}/tunnels/import/{token}", reqID(auth(miniappTunnelImportPreviewHandler(d, importPreviews, tunnelQuestions))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/tunnels/import/confirm", reqID(auth(miniappTunnelImportConfirmHandler(d, importPreviews, tunnelQuestions))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/silence", reqID(auth(miniappSilenceHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/ack", reqID(auth(miniappAckHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/incidents/{check}/mute", reqID(auth(miniappMuteHandler(d))))
