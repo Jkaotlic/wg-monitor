@@ -29,6 +29,7 @@ import { Q, Quoted } from '../ui/Q.jsx'
 import { TextField, SelectField, ChoiceList } from '../ui/FormField.jsx'
 import { CopyButton } from '../ui/CopyButton.jsx'
 
+const SECRETS_CLEARED_TEXT = 'Пароли стёрты после отправки — введите заново.'
 const NO_JOB_ID_TEXT = 'Сервер не вернул номер задания — проверьте Парк: установка могла начаться.'
 
 // Мастер «Добавить роутер» -- лист-экран, а не модалка: полей много.
@@ -47,6 +48,9 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
   const [typed, setTyped] = useState('')
   const [busy, setBusy] = useState(false)
   const [token, setToken] = useState(null)
+  // Отказ сервера после отправки: пароли уже стёрты, и шаг «Доступ» говорит,
+  // почему поля пустые.
+  const [secretsCleared, setSecretsCleared] = useState(false)
 
   const alive = useRef(true)
   const valuesRef = useRef(values)
@@ -138,6 +142,7 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
         if (!alive.current) return
         setStep(provisionErrorStep(err, path))
         setError(provisionErrorText(err))
+        if (path === 'install') setSecretsCleared(true)
         setTyped('')
       })
       .finally(() => {
@@ -201,6 +206,7 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
               placeholder="последняя"
               hint="Пусто — последняя версия. Своя пишется так: v0.36.0."
             />
+            {secretsCleared && <p class="wizard-warn wizard-secrets-cleared">{SECRETS_CLEARED_TEXT}</p>}
             <p class="wizard-note">{PROVISION_SECRET_NOTE}</p>
           </div>
         )}

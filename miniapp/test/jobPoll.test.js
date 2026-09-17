@@ -102,3 +102,36 @@ describe('pollJob', () => {
     expect(states).toEqual(['loading'])
   })
 })
+
+describe('отказ доступа -- выход сразу, словами сервера', () => {
+  it('401, 403, 503 и прочие 4xx кроме 404 -- denied без повторов', () => {
+    for (const status of [401, 403, 400, 409, 503]) {
+      const s = jobPollStep({ phase: 'live', job: running, failures: 0 }, { type: 'error', status, message: 'Нет доступа' })
+      expect(s.phase, String(status)).toBe('denied')
+      expect(s.message).toBe('Нет доступа')
+      expect(jobPollDone(s)).toBe(true)
+      expect(jobReconnecting(s)).toBe(false)
+    }
+    expect(jobPollStep(jobPollStart(), { type: 'error', status: 502 }).phase).toBe('loading')
+    expect(jobPollStep(jobPollStart(), { type: 'error', status: 0 }).phase).toBe('loading')
+  })
+
+  it('pollJob отдаёт serverMessage и больше не спрашивает', async () => {
+    let asked = 0
+    const final = await pollJob({
+      jobId: 'j1',
+      fetchJob: async () => {
+        asked++
+        const e = new Error('x')
+        e.status = 403
+        e.serverMessage = 'Только админ'
+        throw e
+      },
+      sleep: async () => {},
+      onState: () => {},
+      signal: { cancelled: false },
+    })
+    expect(asked).toBe(1)
+    expect(final).toMatchObject({ phase: 'denied', message: 'Только админ' })
+  })
+})

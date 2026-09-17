@@ -40,7 +40,7 @@ export function WideLayout({ mode, nav, dispatch, routers, isAdmin, onLogout, re
         routers={routers}
         currentID={nav.routerID}
         isAdmin={isAdmin}
-        parkActive={PARK_OVERLAYS.includes(nav.overlay)}
+        parkActive={Boolean(isAdmin) && PARK_OVERLAYS.includes(nav.overlay)}
         onPick={(id) => dispatch({ type: 'router', id })}
         onPark={openPark}
         onLogout={onLogout}

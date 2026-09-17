@@ -189,7 +189,7 @@ export function Sheet({ sheet, asleep, onClose }) {
                       <input
                         id={`sheet-field-${f.name}`}
                         type={f.type === 'password' ? 'password' : 'text'}
-                        autocomplete="off"
+                        autocomplete={f.type === 'password' ? 'new-password' : 'off'}
                         autocapitalize="off"
                         spellcheck={false}
                         placeholder={f.placeholder ?? ''}

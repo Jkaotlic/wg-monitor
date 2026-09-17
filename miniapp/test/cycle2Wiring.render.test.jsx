@@ -216,6 +216,12 @@ describe('раскладки', () => {
     cleanup(root)
   })
 
+  it('заглушка «Пакеты» не-админу не подсвечивает Парк', async () => {
+    const root = await mount(<WideLayout mode="web" nav={nav({ routerID: 1, overlay: 'packages' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)
+    expect(root.querySelector('.side-link-active')).toBe(null)
+    cleanup(root)
+  })
+
   it('широкая без роутера: Парк под сводкой открывает слои с возвратом null', async () => {
     const actions = []
     const root = await mount(<WideLayout mode="web" nav={nav({})} dispatch={(a) => actions.push(a)} routers={ROUTERS} isAdmin />)

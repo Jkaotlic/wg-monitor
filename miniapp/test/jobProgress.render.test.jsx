@@ -95,6 +95,15 @@ describe('«Ход работы»', () => {
     cleanup(root)
   })
 
+  it('403 -- слова сервера, опрос остановлен', async () => {
+    mocks.replies = [new ApiError(403, 'forbidden', 'x', 'Это действие только для админа')]
+    const { root } = await mount()
+    expect(root.querySelector('.job-status').textContent).toBe('Это действие только для админа')
+    expect(mocks.asked).toHaveLength(1)
+    expect(button(root, 'Закрыть')).toBeTruthy()
+    cleanup(root)
+  })
+
   it('404 -- задание истекло, больше не спрашиваем', async () => {
     mocks.replies = [new ApiError(404, 'job_not_found', 'x', 'Задание не найдено или истекло')]
     const { root } = await mount()

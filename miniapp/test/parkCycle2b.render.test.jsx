@@ -248,7 +248,9 @@ describe('Парк: переустановить агент сейчас', () =>
     expect(sheet.danger).toBe(true)
     expect(sheet.note).toBe('Пароли уходят на сервер один раз и не сохраняются.')
     const s = await mountSheet(sheet)
-    for (const input of s.root.querySelectorAll('input')) expect(input.getAttribute('autocomplete')).toBe('off')
+    for (const input of s.root.querySelectorAll('input')) {
+      expect(input.getAttribute('autocomplete')).toBe(input.type === 'password' ? 'new-password' : 'off')
+    }
     await fill(s.root, '#sheet-confirm-input', 'home')
     expect(primary(s.root).disabled).toBe(true)
     await fill(s.root, '#sheet-field-root_password', SECRET)

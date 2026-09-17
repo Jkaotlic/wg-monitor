@@ -169,7 +169,7 @@ describe('мастер «Добавить роутер»', () => {
     await fill(root, 'wizard-root-password', ROOT_PW)
     const rootInput = root.querySelector('#wizard-root-password')
     expect(rootInput.getAttribute('type')).toBe('password')
-    expect(rootInput.getAttribute('autocomplete')).toBe('off')
+    expect(rootInput.getAttribute('autocomplete')).toBe('new-password')
 
     // Вход в веб по умолчанию: без логина и пароля панели дальше нельзя.
     expect(root.querySelector('#wizard-awgm-auth').value).toBe('web')
@@ -218,6 +218,7 @@ describe('мастер «Добавить роутер»', () => {
     expect(progress(root)).toBe('Шаг 3 из 4 · Доступ к роутеру')
     expect(errorText(root)).toBe('Нужен пароль root')
     expect(root.querySelector('#wizard-root-password').value).toBe('')
+    expect(root.querySelector('.wizard-secrets-cleared').textContent).toBe('Пароли стёрты после отправки — введите заново.')
     expect(root.querySelector('#wizard-awgm-url').value).toBe('https://router.example.com')
     cleanup(root)
   })

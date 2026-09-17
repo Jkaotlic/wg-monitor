@@ -22,6 +22,15 @@ export function validAgentVersion(v) {
   return AGENT_VERSION_RE.test(trimmed(v))
 }
 
+// Набранная версия в виде сервера: «0.36.0» дописывается до «v0.36.0»;
+// негодное -- пустая строка. Одна на мастер и листы.
+export function normalizeAgentVersion(v) {
+  const s = trimmed(v)
+  if (!s) return ''
+  const withV = /^\d/.test(s) ? `v${s}` : s
+  return AGENT_VERSION_RE.test(withV) ? withV : ''
+}
+
 // Как validateDashboardAWGMURL на сервере: абсолютный http(s) с хостом.
 export function validHttpURL(v) {
   const s = trimmed(v)

@@ -10,7 +10,7 @@
 // Сравнение здесь -- только чтобы вовремя спросить; решает сервер
 // (downgrade_rejected без allow_downgrade).
 
-import { validAgentVersion } from './formRules.js'
+import { normalizeAgentVersion } from './formRules.js'
 import { agentUpdateErrorText } from './agentUpdate.js'
 
 // Разбор -- ради сравнения по числам; годность набранного решает общее
@@ -50,8 +50,8 @@ export function versionPick(input, { current = '', backend = '' } = {}) {
   const example = normalizeVersion(backend) || 'v0.36.0'
   const raw = String(input ?? '').trim()
   if (!raw) return { version: '', state: 'empty', ok: false, downgrade: false, hint: `Наберите версию агента, например ${example}.` }
-  const version = normalizeVersion(raw)
-  if (!version || !validAgentVersion(version)) return { version: '', state: 'invalid', ok: false, downgrade: false, hint: `Версия пишется так: ${example}.` }
+  const version = normalizeAgentVersion(raw)
+  if (!version) return { version: '', state: 'invalid', ok: false, downgrade: false, hint: `Версия пишется так: ${example}.` }
   if (backend && compareVersions(version, backend) === 1) {
     return { version, state: 'ahead', ok: false, downgrade: false, hint: `Выпуска новее бэкенда (${backend}) нет.` }
   }

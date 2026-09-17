@@ -351,6 +351,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
         buttonLabel: 'Обновить бэкенд',
         busyLabel: 'Отправляем…',
         confirmPhrase: offer.target,
+        confirmStrict: true,
         errorText: backendDeployErrorText,
         perform: (typed) => deployBackend(offer.target, typed),
         onDone: (resp) => openLayer('backenddeploy', { targetVersion: resp?.target_version || offer.target }),

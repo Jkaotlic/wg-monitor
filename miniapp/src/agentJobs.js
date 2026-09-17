@@ -8,8 +8,7 @@
 // момент нажатия и уходят в тело одного POST.
 //
 import { isAway } from './agentUpdate.js'
-import { normalizeVersion } from './agentVersionPick.js'
-import { validAgentVersion } from './formRules.js'
+import { normalizeAgentVersion } from './formRules.js'
 import { jobTitle } from './jobSteps.js'
 
 export const JOB_SECRET_NOTE = 'Пароли уходят на сервер один раз и не сохраняются.'
@@ -19,12 +18,9 @@ const URL_HINT = 'Нужен адрес с https://, например https://wg
 
 const trimmed = (v) => String(v ?? '').trim()
 
-// Набранная версия: «0.35.0» дописывается до «v0.35.0», годность -- общим
-// правилом formRules.js (vN.N.N, vN.N.N-rcN). Негодная -- пустая строка.
-function goodVersion(v) {
-  const n = normalizeVersion(v)
-  return n && validAgentVersion(n) ? n : ''
-}
+// Набранная версия: «0.35.0» дописывается до «v0.35.0» общим правилом
+// formRules.js (как в мастере). Негодная -- пустая строка.
+const goodVersion = normalizeAgentVersion
 
 const PANEL_FIELDS = [
   { name: 'awgm_login', label: 'Логин панели (если панель требует вход)', type: 'text' },

@@ -26,7 +26,9 @@ export function JobProgress({ jobId, title, backLabel = 'Назад', onClose, o
   }, [view?.finished])
 
   let body
-  if (poll.phase === 'expired') {
+  if (poll.phase === 'denied') {
+    body = <p class="job-status job-status-bad">{poll.message || JOB_TEXTS.denied}</p>
+  } else if (poll.phase === 'expired') {
     body = (
       <>
         <p class="job-status job-status-bad">{JOB_TEXTS.expired}</p>
@@ -77,7 +79,7 @@ export function JobProgress({ jobId, title, backLabel = 'Назад', onClose, o
     )
   }
 
-  const finished = poll.phase === 'expired' || poll.phase === 'lost' || Boolean(view?.finished)
+  const finished = poll.phase === 'expired' || poll.phase === 'lost' || poll.phase === 'denied' || Boolean(view?.finished)
 
   return (
     <Overlay title={title} backLabel={backLabel} onBack={onClose}>
