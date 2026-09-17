@@ -81,6 +81,8 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLim
 	toRescue := requestIDMiddleware()(http.RedirectHandler(dashboardRescuePath, http.StatusFound))
 	mux.Handle("GET /dashboard/classic", toRescue)
 	mux.Handle("GET /dashboard/classic/{rest...}", toRescue)
+	mux.Handle("GET /dashboard/rescue", toRescue)
+	mux.Handle("GET "+dashboardRescuePath+"{$}", requestIDMiddleware()(rescuePageHandler()))
 	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
 	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(entranceLimit(dashboardLoginHandler(d))))
 	// Обмен личной ссылки на обычную сессию дашборда. Вход публичный по

@@ -1,0 +1,66 @@
+/* Аварийная страница. Токены -- копия miniapp/src/style.css (сверяет
+   TestRescueCSSTokensMatchMiniappStyle). Шрифты системные: внешних ресурсов
+   у страницы нет по построению. */
+:root {
+  --bg: #0c1013;
+  --surf: #141a1f;
+  --surf2: #1b2229;
+  --ink: #eef3f5;
+  --dim: #8f9ea8;
+  --line: rgba(255,255,255,0.09);
+  --sig: #c8f24a;
+  --ok: #5fd08a;
+  --warn: #ffbf3d;
+  --bad: #ff6a58;
+  --on-sig: #0d1204;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); }
+body {
+  font: 15px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+a { color: var(--sig); }
+.wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; display: flex; flex-direction: column; gap: 16px; }
+.head h1 { margin: 0; font-size: 1.375rem; line-height: 1.25; }
+.lead { margin: 6px 0 0; color: var(--dim); font-size: 0.875rem; overflow-wrap: anywhere; }
+.state { margin: 0; color: var(--dim); font-size: 0.875rem; min-height: 1.2em; }
+.state.bad { color: var(--bad); }
+.card { background: var(--surf); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+.card h2 { margin: 0 0 12px; font-size: 1.0625rem; }
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.card-head h2 { margin: 0; }
+form { display: flex; flex-direction: column; gap: 8px; }
+label { color: var(--dim); font-size: 0.8125rem; }
+label.check { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 0.875rem; margin: 4px 0; }
+input[type="text"], input[type="password"] {
+  width: 100%; min-height: 44px; padding: 0 12px; border-radius: 10px;
+  border: 1px solid var(--line); background: var(--surf2); color: var(--ink);
+  font: inherit; font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
+input:focus-visible, button:focus-visible, a:focus-visible { outline: 2px solid var(--sig); outline-offset: 2px; }
+input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--sig); }
+.btn { min-height: 44px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); font: inherit; font-weight: 600; cursor: pointer; }
+.btn-primary { background: var(--sig); color: var(--on-sig); border-color: var(--sig); margin-top: 4px; }
+.btn-ghost { background: transparent; color: var(--ink); min-height: 36px; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.err { margin: 0; min-height: 1.2em; color: var(--bad); font-size: 0.875rem; }
+.note { margin: 8px 0 0; color: var(--dim); font-size: 0.875rem; overflow-wrap: anywhere; }
+.note.ok { color: var(--ok); }
+.note.warn { color: var(--warn); }
+.note.bad { color: var(--bad); }
+.rows { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.rows div { display: flex; justify-content: space-between; gap: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.rows div:first-child { border-top: 0; padding-top: 0; }
+.rows dt { color: var(--dim); }
+.rows dd { margin: 0; text-align: right; font-family: ui-monospace, "SF Mono", Consolas, monospace; overflow-wrap: anywhere; }
+.nums { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.nums div { background: var(--surf2); border-radius: 10px; padding: 10px 12px; }
+.nums dt { color: var(--dim); font-size: 0.8125rem; }
+.nums dd { margin: 2px 0 0; font-size: 1.375rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+@media (min-width: 1024px) {
+  .wrap { padding-top: 48px; }
+  .head h1 { font-size: 1.625rem; }
+}

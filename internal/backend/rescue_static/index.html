@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="robots" content="noindex">
+<title>wg-monitor · аварийная страница</title>
+<link rel="icon" href="data:,">
+<style>{{RESCUE_CSS}}</style>
+</head>
+<body>
+<main class="wrap">
+  <header class="head">
+    <h1>wg-monitor · аварийная страница</h1>
+    <p class="lead">Если приложение не открывается. Обычное управление — <a href="/dashboard/">/dashboard/</a></p>
+  </header>
+
+  <p id="state" class="state" role="status"></p>
+
+  <section id="login" class="card">
+    <h2>Вход</h2>
+    <form id="login-form" novalidate>
+      <label for="token">Токен доступа</label>
+      <input id="token" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false">
+      <p id="login-error" class="err" role="alert"></p>
+      <button id="login-btn" type="submit" class="btn btn-primary">Войти</button>
+    </form>
+  </section>
+
+  <div id="app" hidden>
+    <section class="card">
+      <div class="card-head">
+        <h2>Бэкенд</h2>
+        <button id="logout" type="button" class="btn btn-ghost">Выйти</button>
+      </div>
+      <dl class="rows">
+        <div><dt>Версия</dt><dd id="b-version">—</dd></div>
+        <div><dt>Последняя опубликованная</dt><dd id="b-latest">—</dd></div>
+        <div><dt>Сводка на</dt><dd id="b-generated">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>Парк</h2>
+      <dl class="nums">
+        <div><dt>всего</dt><dd id="f-agents">—</dd></div>
+        <div><dt>на связи</dt><dd id="f-online">—</dd></div>
+        <div><dt>спят</dt><dd id="f-sleeping">—</dd></div>
+        <div><dt>молчат</dt><dd id="f-offline">—</dd></div>
+        <div><dt>с тревогой</dt><dd id="f-alerts">—</dd></div>
+      </dl>
+      <p id="f-watchdog" class="note" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2>Раскатка бэкенда</h2>
+      <form id="deploy-form" novalidate>
+        <label for="d-version">Версия</label>
+        <input id="d-version" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="v0.37.0">
+        <label class="check"><input id="d-downgrade" type="checkbox"> Это откат — разрешить</label>
+        <label for="d-confirm">Подтверждение: наберите версию ещё раз</label>
+        <input id="d-confirm" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button id="d-go" type="submit" class="btn btn-primary" disabled>Раскатить</button>
+        <p id="d-status" class="note" role="status"></p>
+      </form>
+    </section>
+  </div>
+</main>
+<script>{{RESCUE_JS}}</script>
+</body>
+</html>
