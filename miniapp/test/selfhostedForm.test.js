@@ -21,6 +21,9 @@ import {
   errorFieldKey,
   sshWipeWarning,
   SSH_WIPE_TEXT,
+  SSH_CHANGED_TEXT,
+  sshAddressChanged,
+  sshHostWarning,
   SELFHOSTED_TEXTS,
 } from '../src/selfhostedForm.js'
 import { ApiError } from '../src/api.js'
@@ -262,3 +265,35 @@ describe('ошибка поля и стирание пароля', () => {
     expect(sshWipeWarning(null, { ...v, ssh_host: '' })).toBe('')
   })
 })
+
+describe('смена адреса SSH', () => {
+  const v = instanceFormValues(INST)
+
+  it('адрес, порт или пользователь -- смена; пустые порт и пользователь -- 22 и root', () => {
+    expect(sshAddressChanged(INST, v)).toBe(false)
+    expect(sshAddressChanged(INST, { ...v, ssh_port: '', ssh_user: '' })).toBe(false)
+    expect(sshAddressChanged(INST, { ...v, ssh_host: '203.0.113.11' })).toBe(true)
+    expect(sshAddressChanged(INST, { ...v, ssh_port: '2222' })).toBe(true)
+    expect(sshAddressChanged(INST, { ...v, ssh_user: 'admin' })).toBe(true)
+    // Стёртый адрес -- не смена, а стирание (своё предупреждение).
+    expect(sshAddressChanged(INST, { ...v, ssh_host: '' })).toBe(false)
+    expect(sshAddressChanged({ ...INST, ssh_host: '' }, { ...v, ssh_host: '203.0.113.11' })).toBe(false)
+    expect(sshAddressChanged(null, v)).toBe(false)
+  })
+
+  it('проверка: сменили адрес -- пароль обязателен', () => {
+    const changed = { ...v, ssh_port: '2222' }
+    expect(validateInstance(changed, { isNew: false, passwordSet: true, saved: INST })).toBe(SSH_CHANGED_TEXT)
+    expect(validateInstance({ ...changed, ssh_password: 'pw' }, { isNew: false, passwordSet: true, saved: INST })).toBe('')
+    expect(validateInstance(v, { isNew: false, passwordSet: true, saved: INST })).toBe('')
+  })
+
+  it('предупреждение под адресом: стирание или смена', () => {
+    expect(SSH_CHANGED_TEXT).toBe('Адрес SSH изменён — введите пароль заново')
+    expect(sshHostWarning(INST, v)).toBe('')
+    expect(sshHostWarning(INST, { ...v, ssh_host: '' })).toBe(SSH_WIPE_TEXT)
+    expect(sshHostWarning(INST, { ...v, ssh_user: 'admin' })).toBe(SSH_CHANGED_TEXT)
+    expect(sshHostWarning({ ...INST, password_set: false }, { ...v, ssh_user: 'admin' })).toBe('')
+  })
+})
+
