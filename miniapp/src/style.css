@@ -3500,6 +3500,11 @@ body {
   color: var(--danger);
 }
 
+.conf-blocking {
+  padding: var(--sp-3) 0 0;
+  text-align: left;
+}
+
 .conf-problem-warn {
   color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
 }
@@ -4241,9 +4246,14 @@ body {
     min-width: 160px;
   }
 
-  .wide-shell .tunnel-delete,
+  .wide-shell .tunnel-delete {
+    max-width: 360px;
+  }
+
+  /* Кнопки встают в ряд -- между ними воздух, как в .selfhosted-actions. */
   .wide-shell .conf-import .btn-wide {
     max-width: 360px;
+    margin-right: var(--sp-2);
   }
 }
 

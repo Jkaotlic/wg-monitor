@@ -302,7 +302,7 @@ export function ConfImportScreen({ routerID, asleep, snapshot, onClose, onImport
               </ul>
             )}
             {view.blocking && (
-              <p class="state state-error" role="alert">
+              <p class="state state-error conf-blocking" role="alert">
                 {IMPORT_TEXTS.blocking}
               </p>
             )}

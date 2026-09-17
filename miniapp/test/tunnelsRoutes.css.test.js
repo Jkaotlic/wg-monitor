@@ -26,7 +26,7 @@ describe('CSS VPN-туннелей и маршрутов (цикл 4)', () => {
     for (const sel of [
       '.tunnel-block {', '.tunnel-outcome {', '.conf-pick {', '.conf-pick-input {', '.conf-pick:focus-within {', '.conf-pick-off {',
       '.conf-file-name {', '.conf-problems {', '.conf-problem {', '.conf-problem:first-child {', '.conf-problem-error {', '.conf-problem-warn {',
-      '.hrneo-status {', '.hrneo-actions {', '.hrneo-actions .btn {', '.hrneo-rules {', '.routes-other .row-title {', '.replace-leftover {', '.conf-import .field {',
+      '.hrneo-status {', '.hrneo-actions {', '.hrneo-actions .btn {', '.hrneo-rules {', '.routes-other .row-title {', '.replace-leftover {', '.conf-import .field {', '.conf-blocking {',
     ]) {
       expect(outside.includes(sel), sel).toBe(true)
     }
@@ -49,7 +49,7 @@ describe('CSS VPN-туннелей и маршрутов (цикл 4)', () => {
 
   it('широкая раскладка -- в том же единственном блоке', () => {
     expect(css.split(OPEN).length - 1).toBe(1)
-    for (const sel of ['.wide-shell .hrneo-actions .btn {', '.wide-shell .tunnel-delete,', '.wide-shell .conf-import .btn-wide {']) {
+    for (const sel of ['.wide-shell .hrneo-actions .btn {', '.wide-shell .tunnel-delete {', '.wide-shell .conf-import .btn-wide {']) {
       expect(wide.body.includes(sel), sel).toBe(true)
       expect(outside.includes(sel), sel).toBe(false)
     }
@@ -61,5 +61,17 @@ describe('CSS VPN-туннелей и маршрутов (цикл 4)', () => {
     const end = outside.indexOf('.replace-leftover {', start)
     expect(end).toBeGreaterThan(start)
     expect(outside.slice(start, end)).not.toMatch(/#[0-9a-f]{3,8}\b/i)
+  })
+})
+
+describe('приёмка цикла 4, круг 2', () => {
+  it('широкая раскладка: кнопки экрана загрузки не слипаются', () => {
+    const i = wide.body.indexOf('.wide-shell .conf-import .btn-wide {')
+    expect(wide.body.slice(i, wide.body.indexOf('}', i))).toMatch(/margin-right:\s*var\(--sp-2\)/)
+  })
+
+  it('отказ роутера принять конфиг -- по левому краю, как карточки над ним', () => {
+    const i = outside.indexOf('.conf-blocking {')
+    expect(outside.slice(i, outside.indexOf('}', i))).toMatch(/text-align:\s*left/)
   })
 })

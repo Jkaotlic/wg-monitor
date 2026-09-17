@@ -272,7 +272,7 @@ describe('загрузка .conf', () => {
     await pickFile(root, new File([CONF], 'home.conf'))
     await click(root, 'Проверить конфиг')
     expect(root.querySelector('.conf-problem-error').textContent).toBe('Ключ пира повреждён')
-    expect(root.textContent).toContain('Роутер не примет этот конфиг')
+    expect(root.querySelector('.conf-blocking').textContent).toContain('Роутер не примет этот конфиг')
     expect(byText(root, 'Добавить как новый').disabled).toBe(true)
     render(null, root)
   })
