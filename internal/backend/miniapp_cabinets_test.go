@@ -515,3 +515,33 @@ func TestMiniappCabinetRevoke(t *testing.T) {
 		t.Fatalf("сбой кабинета: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+// Тела с секретами принимаются только как JSON (как у /vpn/issue): форма из
+// чужой страницы с text/plain не доходит ни до кабинета, ни до хранилища.
+func TestMiniappCabinetBodiesRequireJSON(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.vps.instances = []selfhostedamnezia.Instance{{ID: "dacha", Label: "Дом", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 1}}
+	routes := []struct{ method, path, body string }{
+		{http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/keys", `{"vpn_key":"vpn://SECRET-KEY-abcd1234"}`},
+		{http.MethodPut, "/v1/miniapp/routers/{id}/cabinets/hidemy/active", `{"id":"c1"}`},
+		{http.MethodPost, "/v1/miniapp/routers/{id}/cabinets/amnezia/revoke", `{"country":"de","confirm":"router-owned"}`},
+		{http.MethodPost, "/v1/miniapp/routers/{id}/vpn/send-conf", `{"provider":"amnezia","option_id":"nl"}`},
+		{http.MethodPost, "/v1/miniapp/selfhosted", `{"id":"work","endpoint_host":"vpn2.example.com","endpoint_port":1}`},
+		{http.MethodPut, "/v1/miniapp/selfhosted/dacha", `{"endpoint_host":"vpn.example.com","endpoint_port":2}`},
+		{http.MethodPost, "/v1/miniapp/selfhosted/dacha/toggle", `{"enabled":false}`},
+		{http.MethodDelete, "/v1/miniapp/selfhosted/dacha", `{"confirm":"дом"}`},
+	}
+	for _, rt := range routes {
+		req := httptest.NewRequest(rt.method, strings.ReplaceAll(rt.path, "{id}", strconv.FormatInt(env.ownedID, 10)), strings.NewReader(rt.body))
+		req.Header.Set("Content-Type", "text/plain")
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", cabAdmin))
+		rec := httptest.NewRecorder()
+		env.h.ServeHTTP(rec, req)
+		if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusUnsupportedMediaType || code == "" || msg == "" {
+			t.Errorf("%s %s: %d %s", rt.method, rt.path, rec.Code, rec.Body.String())
+		}
+	}
+	if len(env.keys.added)+len(env.keys.revoked)+len(env.docs.sent) != 0 || len(env.vps.instances) != 1 || !env.vps.instances[0].Enabled || env.vps.instances[0].EndpointPort != 1 {
+		t.Fatalf("тело не-JSON всё равно исполнено: keys=%+v docs=%+v vps=%+v", env.keys, env.docs.sent, env.vps.instances)
+	}
+}

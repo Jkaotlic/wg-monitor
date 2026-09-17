@@ -31,6 +31,7 @@ const miniappHiddenValue = "[скрыто]"
 var miniappCabinetTexts = map[string]string{
 	errCodeBadJSON:              "Не удалось прочитать запрос",
 	errCodeInternal:             "Не получилось на стороне сервера — повторите позже",
+	errCodeUnsupportedCT:        "Запрос должен быть в формате JSON",
 	"not_found":                 "Роутер не найден",
 	"cabinets_not_configured":   "Кабинеты VPN на сервере не настроены",
 	"invalid_key":               "Ключ Amnezia Premium начинается с vpn:// — скопируйте его целиком",
@@ -75,7 +76,13 @@ func writeMiniappCabinetJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// decodeMiniappCabinetBody -- тело только JSON (как у /vpn/issue: пустой
+// Content-Type принимается ради старых клиентов) и не больше предела.
 func decodeMiniappCabinetBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if ct := strings.TrimSpace(strings.SplitN(r.Header.Get("Content-Type"), ";", 2)[0]); ct != "" && !strings.EqualFold(ct, "application/json") {
+		writeMiniappCabinetError(w, http.StatusUnsupportedMediaType, errCodeUnsupportedCT)
+		return false
+	}
 	if err := json.NewDecoder(io.LimitReader(r.Body, miniappCabinetMaxBody)).Decode(dst); err != nil {
 		writeMiniappCabinetError(w, http.StatusBadRequest, errCodeBadJSON)
 		return false
