@@ -71,14 +71,6 @@ func (r *Router) sendAmneziaPremiumPanel(ctx context.Context, chatID int64, thre
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID, text, "", replyTo, &kb)
 }
 
-func (r *Router) fetchAmneziaAccount(ctx context.Context, key string) (*amnezia.AccountInfo, error) {
-	client := amnezia.New(r.cfg.AmneziaBaseURL)
-	if err := client.Login(ctx, key); err != nil {
-		return nil, err
-	}
-	return client.AccountInfo(ctx)
-}
-
 func (r *Router) sendAmneziaAccount(ctx context.Context, chatID int64, threadID *int64, replyTo *int64, user *db.User, key amneziaStoredKey, info *amnezia.AccountInfo, viewerID int64) {
 	text := amnezia.FormatAccountSummary(user.Nickname+" / "+key.Label, info)
 	kb := amneziaKeyboard(user.ID, key.ID, info)
@@ -237,19 +229,6 @@ func amneziaCountryLabel(c amnezia.Country) string {
 		label = c.Name
 	}
 	return label
-}
-
-func amneziaIssuedCountrySet(info *amnezia.AccountInfo) map[string]bool {
-	issued := map[string]bool{}
-	if info == nil {
-		return issued
-	}
-	for _, item := range info.IssuedConfigs {
-		if item.SourceType == "country_config" {
-			issued[strings.ToLower(item.CountryCode)] = true
-		}
-	}
-	return issued
 }
 
 func (r *Router) handleAmneziaRefresh(ctx context.Context, q *tg.CallbackQuery, args Args) {
@@ -547,14 +526,6 @@ func (r *Router) downloadAmneziaConfig(ctx context.Context, key, country string)
 		return nil, errors.New("downloaded config does not look like WireGuard conf")
 	}
 	return conf, nil
-}
-
-func (r *Router) revokeAmneziaCountryConfig(ctx context.Context, key, country string) error {
-	client := amnezia.New(r.cfg.AmneziaBaseURL)
-	if err := client.Login(ctx, key); err != nil {
-		return err
-	}
-	return client.RevokeCountryConfig(ctx, country)
 }
 
 func shortToast(err error) string {

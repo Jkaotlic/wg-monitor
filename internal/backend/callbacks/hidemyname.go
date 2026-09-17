@@ -3,7 +3,6 @@ package callbacks
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -325,29 +324,4 @@ func (r *Router) handleHideMyDownloadConfirm(ctx context.Context, q *tg.Callback
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "конфиг выгружен, импорт в очереди")
 	text, kb := hideMyImportQueuedView(user.ID, args.HideMyCodeID, docWarn)
 	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-}
-
-func (r *Router) hideMyServerByID(ctx context.Context, accessCode, serverID string) (hidemy.Server, error) {
-	client := hidemy.New(r.cfg.HideMyBaseURL)
-	servers, err := client.ServerList(ctx, accessCode)
-	if err != nil {
-		return hidemy.Server{}, err
-	}
-	server, ok := hidemy.FindServer(servers, serverID)
-	if !ok {
-		return hidemy.Server{}, fmt.Errorf("hidemy server not found")
-	}
-	return server, nil
-}
-
-func (r *Router) downloadHideMyConfig(ctx context.Context, accessCode, serverIP string) ([]byte, error) {
-	client := hidemy.New(r.cfg.HideMyBaseURL)
-	conf, err := client.DownloadAmneziaWG20Config(ctx, accessCode, serverIP)
-	if err != nil {
-		return nil, err
-	}
-	if !strings.Contains(string(conf), "[Interface]") || !strings.Contains(string(conf), "[Peer]") {
-		return nil, errors.New("downloaded config does not look like WireGuard conf")
-	}
-	return conf, nil
 }

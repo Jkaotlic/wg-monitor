@@ -1,6 +1,7 @@
 package callbacks
 
 import (
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -34,10 +35,14 @@ func cabinetSecretMask(secret string) string {
 
 // redactSecret убирает секрет из текста ошибки перед журналом: ошибки
 // кабинета бывают с кусками запроса и ответа.
+//
+// Кроме самого секрета прячется любой кусок «vpn://…»: ответ кабинета в
+// ошибке обрезается (snippet), и обрезанный ключ целиком уже не совпал бы.
 func redactSecret(text, secret string) string {
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
-		return text
+	if secret = strings.TrimSpace(secret); secret != "" {
+		text = strings.ReplaceAll(text, secret, cabinetHiddenValue)
 	}
-	return strings.ReplaceAll(text, secret, cabinetHiddenValue)
+	return vpnKeyFragmentRe.ReplaceAllString(text, cabinetHiddenValue)
 }
+
+var vpnKeyFragmentRe = regexp.MustCompile(`(?i)vpn://[^\s"'\\]*`)

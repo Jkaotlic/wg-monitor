@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -19,6 +20,10 @@ func TestCabinetSecretMaskAndRedact(t *testing.T) {
 	}
 	if got := redactSecret("amnezia login: bad vpn://SECRET-X", "vpn://SECRET-X"); got != "amnezia login: bad [скрыто]" {
 		t.Fatalf("redact = %q", got)
+	}
+	// Обрезанный кабинетом ключ целиком с секретом не совпадает -- прячется всё равно.
+	if got := redactSecret(`amnezia login: HTTP 401: {"vpnKey":"vpn://SECRET-TRUNC...`, "vpn://SECRET-TRUNCATED-FULL-KEY"); strings.Contains(got, "SECRET") {
+		t.Fatalf("обрезанный ключ не спрятан: %q", got)
 	}
 	if got := redactSecret("text", ""); got != "text" {
 		t.Fatalf("пустой секрет ничего не заменяет: %q", got)

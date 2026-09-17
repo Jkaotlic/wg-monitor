@@ -312,7 +312,9 @@ func main() {
 		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
-		VPNCabinet:          cb,
+		VPNCabinet: cb,
+		// Ключи и коды кабинетов для мини-аппа -- тот же callbacks.Router.
+		VPNCabinetKeys:      cb,
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,

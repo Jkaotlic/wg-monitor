@@ -76,12 +76,12 @@ func (r *Router) amneziaAccountForMiniapp(ctx context.Context, routerID int64) (
 	acc := backend.VPNAccount{Provider: providerAmnezia, Label: "Amnezia Premium"}
 	key, err := r.getAmneziaKeyByID(routerID, "")
 	if err != nil || key == "" {
-		acc.Note = "Ключ кабинета не сохранён. Отправьте его боту в теме роутера — приложение ключи не спрашивает."
+		acc.Note = "Ключ кабинета не сохранён — добавьте ключ vpn:// кнопкой «Добавить ключ»."
 		return acc, nil
 	}
 	info, err := r.fetchAmneziaAccount(ctx, key)
 	if err != nil {
-		acc.Note = "Кабинет не ответил: " + err.Error()
+		acc.Note = "Кабинет не ответил: " + redactSecret(err.Error(), key)
 		return acc, nil
 	}
 	acc.Connected = true
@@ -110,12 +110,12 @@ func (r *Router) hideMyAccountForMiniapp(ctx context.Context, routerID int64) (b
 	acc := backend.VPNAccount{Provider: providerHideMy, Label: "HideMy.name"}
 	stored, ok := r.hideMyStoredCode(routerID, "")
 	if !ok {
-		acc.Note = "Код доступа не сохранён. Отправьте его боту в теме роутера — приложение коды не спрашивает."
+		acc.Note = "Код доступа не сохранён — добавьте его кнопкой «Добавить код»."
 		return acc, nil
 	}
 	servers, err := hidemy.New(r.cfg.HideMyBaseURL).ServerList(ctx, stored.AccessCode)
 	if err != nil {
-		acc.Note = "Кабинет не ответил: " + err.Error()
+		acc.Note = "Кабинет не ответил: " + redactSecret(err.Error(), stored.AccessCode)
 		return acc, nil
 	}
 	acc.Connected = true

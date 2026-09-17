@@ -78,6 +78,15 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("PUT /v1/miniapp/routers/{id}/notify", reqID(auth(miniappNotifyHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/vpn", reqID(auth(miniappVPNAccountsHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/vpn/issue", reqID(auth(miniappVPNIssueHandler(d))))
+	// Кабинеты VPN (цикл 3): ключи Amnezia и коды HideMy. Гейт роли внутри
+	// (404), тела с секретами middleware не читают, обработчики не логируют.
+	mux.Handle("GET /v1/miniapp/routers/{id}/cabinets", reqID(auth(miniappCabinetsHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/amnezia/keys", reqID(auth(miniappCabinetAddHandler(d, "amnezia"))))
+	mux.Handle("PUT /v1/miniapp/routers/{id}/cabinets/amnezia/active", reqID(auth(miniappCabinetActiveHandler(d, "amnezia"))))
+	mux.Handle("DELETE /v1/miniapp/routers/{id}/cabinets/amnezia/keys/{secret_id}", reqID(auth(miniappCabinetDeleteHandler(d, "amnezia"))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/cabinets/hidemy/codes", reqID(auth(miniappCabinetAddHandler(d, "hidemyname"))))
+	mux.Handle("PUT /v1/miniapp/routers/{id}/cabinets/hidemy/active", reqID(auth(miniappCabinetActiveHandler(d, "hidemyname"))))
+	mux.Handle("DELETE /v1/miniapp/routers/{id}/cabinets/hidemy/codes/{secret_id}", reqID(auth(miniappCabinetDeleteHandler(d, "hidemyname"))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStartHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/replace", reqID(auth(miniappReplaceStatusHandler(d))))
 	mux.Handle("POST /v1/miniapp/routers/{id}/repair", reqID(auth(miniappRepairStartHandler(d))))
