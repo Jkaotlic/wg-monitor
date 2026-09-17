@@ -16,6 +16,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/awgmstate"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/revive"
 )
 
@@ -681,4 +682,93 @@ func TestMiniappReviveProductionServicePath(t *testing.T) {
 		}
 	}
 	assertNoReviveSecrets(t, "журнал", logs.String())
+}
+
+// Сторож и отложенное (спека цикла 2, п. 10): только нечувствительные поля.
+func TestMiniappFleetPendingLastDeployIncidentAndWatchdog(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, ownedID, otherID, _ := seedMiniappFleet(t)
+	if err := d.Users().MarkPendingDeploy(ownedID, "v0.32.0", "2026-09-15T10:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.SQL().Exec(`UPDATE users SET last_deploy = ?, last_deployed_version = ?, pending_last_error = ? WHERE id = ?`,
+		"2026-09-10T08:00:00Z", "v0.31.0", "curl: (22) 404", ownedID); err != nil {
+		t.Fatal(err)
+	}
+	early := time.Date(2026, 9, 16, 9, 0, 0, 0, time.UTC)
+	late := early.Add(time.Hour)
+	for _, inc := range []db.IncidentState{
+		{UserID: ownedID, CheckName: "dns", CurrentStatus: "hard", HardSince: &late, ConsecutiveFails: 3},
+		{UserID: ownedID, CheckName: "tunnel_a", CurrentStatus: "hard", HardSince: &early, ConsecutiveFails: 7},
+	} {
+		if err := d.State().Save(ownedID, inc.CheckName, inc); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats := heartbeat.Stats{ScansTotal: 42, StaleUsers: 2, Suppressed: 1, LastScanMs: 15, LastScanAt: time.Now().Add(-10 * time.Second), ScanEvery: time.Minute}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999, HeartbeatStats: func() heartbeat.Stats { return stats }})
+
+	rec := fleetRequest(t, h, 999)
+	resp := fleetResponse(t, rec)
+	if wd := resp.Watchdog; wd == nil || wd.ScansTotal != 42 || wd.StaleUsers != 2 || wd.SuppressedUsers != 1 || wd.LastScanMs != 15 ||
+		wd.LastScanAt == nil || *wd.LastScanAt != stats.LastScanAt.UTC().Format(time.RFC3339) {
+		t.Fatalf("сторож: %+v", resp.Watchdog)
+	}
+	var owned *miniappFleetRouter
+	for i := range resp.Routers {
+		if resp.Routers[i].ID == ownedID {
+			owned = &resp.Routers[i]
+		}
+	}
+	if owned == nil {
+		t.Fatal("нет строки router-owned")
+	}
+	if owned.PendingSince == nil || *owned.PendingSince != "2026-09-15T10:00:00Z" {
+		t.Fatalf("pending_since: %v", owned.PendingSince)
+	}
+	if owned.LastDeploy == nil || *owned.LastDeploy != (miniappFleetLastDeploy{Version: "v0.31.0", At: "2026-09-10T08:00:00Z", OK: false}) {
+		t.Fatalf("last_deploy: %+v", owned.LastDeploy)
+	}
+	if owned.Incident == nil || *owned.Incident != (miniappFleetIncident{HardSince: "2026-09-16T09:00:00Z", FailCount: 7}) {
+		t.Fatalf("incident: %+v", owned.Incident)
+	}
+
+	// Пустое -- явный null, а не отсутствие ключа: клиент не гадает.
+	var raw struct {
+		Routers []map[string]json.RawMessage `json:"routers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range raw.Routers {
+		if string(row["id"]) != fmt.Sprint(otherID) {
+			continue
+		}
+		for _, key := range []string{"pending_since", "last_deploy", "incident"} {
+			if v, ok := row[key]; !ok || string(v) != "null" {
+				t.Errorf("router-other %s = %s (есть=%v), ждали null", key, v, ok)
+			}
+		}
+	}
+
+	if _, err := d.SQL().Exec(`UPDATE users SET pending_last_error = NULL WHERE id = ?`, ownedID); err != nil {
+		t.Fatal(err)
+	}
+	resp = fleetResponse(t, fleetRequest(t, h, 999))
+	for _, r := range resp.Routers {
+		if r.ID == ownedID && (r.LastDeploy == nil || !r.LastDeploy.OK) {
+			t.Fatalf("без ошибки попытки ok=true: %+v", r.LastDeploy)
+		}
+	}
+}
+
+func TestMiniappFleetWatchdogLastScanAtNullBeforeFirstScan(t *testing.T) {
+	stubLatestVersion(t, "v0.31.0")
+	d, _, _, _ := seedMiniappFleet(t)
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999,
+		HeartbeatStats: func() heartbeat.Stats { return heartbeat.Stats{ScanEvery: time.Minute} }})
+	rec := fleetRequest(t, h, 999)
+	if !strings.Contains(rec.Body.String(), `"last_scan_at":null`) {
+		t.Fatalf("до первого обхода ждали last_scan_at:null: %s", rec.Body.String())
+	}
 }

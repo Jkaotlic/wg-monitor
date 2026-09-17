@@ -19,7 +19,37 @@ export function normalizeTab(tab) {
 // роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
 // Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
 // тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
-export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset']
+export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages']
+
+// Слои всего парка, а не роутера: мастер «Добавить роутер», «Ход работы»,
+// ожидание раскатки бэкенда. Открываются и без выбранного роутера и в адрес
+// не пишутся: мастер держит введённые пароли, ход работы -- номер задания,
+// которое через 30 минут исчезнет, а ожидание раскатки после перезагрузки
+// бессмысленно. Параметры слоя -- nav.overlayParams; returnTo -- слой, куда
+// вернуть «назад». Паролей в параметрах не бывает никогда.
+export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy']
+
+// Слои, которые «назад» и Esc не закрывают: во время раскатки бэкенда уходить
+// некуда -- приложение без сервера не работает, а экран сам перезагрузит
+// страницу или предложит «Вернуться» после таймаута.
+export const PINNED_OVERLAYS = ['backenddeploy']
+
+// navPinned -- можно ли сейчас уйти со слоя. Ожидание раскатки закреплено
+// всегда; мастер «Добавить роутер» -- пока запрос в пути (overlayParams.pinned):
+// уход в этот момент терял бы номер задания и выпущенный токен. Закреплённый
+// слой не отпускают ни «назад», ни Esc, ни выбор роутера или вкладки, ни
+// «назад» браузера; выпускает только действие overlay с unpin: true.
+export function navPinned(state) {
+  return PINNED_OVERLAYS.includes(state?.overlay) || state?.overlayParams?.pinned === true
+}
+
+// Параметры принадлежат слою: вместе с ним они уходят целиком (ключа нет),
+// а не остаются null -- так прежние снимки навигации не меняют форму.
+function withoutParams(state) {
+  if (!state || !('overlayParams' in state)) return state
+  const { overlayParams: _drop, ...rest } = state
+  return rest
+}
 
 // Подписи отделены от ключей намеренно. Ключ -- это адрес, по которому в
 // приложение приходят deep-link'и из тревог, отправленных месяцы назад;
@@ -73,19 +103,25 @@ export function navReducer(state, action) {
     // в useReducer -- иначе выбор "открыть роутер или показать список"
     // пришлось бы делать до того, как известно, что доступно.
     case 'init':
+      if (action.source === 'popstate' && navPinned(state)) return state
       return action.state ?? state
     case 'tab': {
       const tab = normalizeTab(action.tab)
-      if (!TABS.includes(tab)) return state
+      if (!TABS.includes(tab) || navPinned(state)) return state
       // Вкладки широкой раскладки видны и над открытым оверлеем: нажатие на
       // вкладку -- это уход со слоя, а не смена вкладки под ним.
-      if (action.closeOverlay) return { ...state, tab, overlay: null, sheet: null }
+      if (action.closeOverlay) return { ...withoutParams(state), tab, overlay: null, sheet: null }
       return { ...state, tab }
     }
     case 'router':
-      return { ...state, routerID: action.id, tab: 'router', overlay: null, sheet: null }
-    case 'overlay':
-      return { ...state, overlay: action.overlay ?? null }
+      if (navPinned(state)) return state
+      return { ...withoutParams(state), routerID: action.id, tab: 'router', overlay: null, sheet: null }
+    case 'overlay': {
+      if (navPinned(state) && !action.unpin) return state
+      const overlay = action.overlay ?? null
+      const next = { ...withoutParams(state), overlay }
+      return overlay && action.params ? { ...next, overlayParams: action.params } : next
+    }
     case 'sheet': {
       // sheetSeq -- номер экземпляра листа, ключ его компонента. Новый лист
       // поверх открытого (без закрытия) обязан смонтироваться заново:
@@ -95,10 +131,18 @@ export function navReducer(state, action) {
       if (sheet && sheet !== state.sheet) return { ...state, sheet, sheetSeq: (state.sheetSeq ?? 0) + 1 }
       return { ...state, sheet }
     }
+    // Закрепить мастер на время отправки. Флаг живёт в параметрах слоя и
+    // уходит вместе с ним; паролей там по-прежнему нет.
+    case 'pin': {
+      if (state.overlay !== 'provision') return state
+      const { pinned: _drop, ...params } = state.overlayParams ?? {}
+      return { ...state, overlayParams: action.pinned ? { ...params, pinned: true } : params }
+    }
     case 'back':
       // Порядок закрытия -- сверху вниз по слоям: шит лежит поверх оверлея.
       if (state.sheet) return { ...state, sheet: null }
-      if (state.overlay) return { ...state, overlay: null }
+      if (navPinned(state)) return state
+      if (state.overlay) return { ...withoutParams(state), overlay: state.overlayParams?.returnTo ?? null }
       return state
     default:
       return state
@@ -114,12 +158,15 @@ function visibleOverlay(state, { wide = false } = {}) {
 }
 
 export function backButtonVisible(state, opts) {
-  return Boolean(state.sheet || visibleOverlay(state, opts))
+  if (state?.sheet) return true
+  const overlay = visibleOverlay(state, opts)
+  return Boolean(overlay) && !navPinned(state)
 }
 
 // escapeAction -- что делает Esc. Лист подтверждения закрывает себя сам: он
 // знает, идёт ли уже команда (тогда Esc не должен обрывать наблюдение).
 export function escapeAction(state, opts) {
   if (state?.sheet) return null
-  return visibleOverlay(state, opts) ? { type: 'back' } : null
+  const overlay = visibleOverlay(state, opts)
+  return overlay && !navPinned(state) ? { type: 'back' } : null
 }

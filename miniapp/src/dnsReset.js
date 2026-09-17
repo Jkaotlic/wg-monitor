@@ -18,6 +18,21 @@ import { guardVerdict } from './labels.js'
 
 export const DNS_RESET_MIN_VERSION = 'v0.31.0'
 
+// Эталон ручного сброса -- зеркало internal/agent/dnsref/dnsref.go
+// (referenceForeignDoT, ruZones, yandexDoTHost). Своей таблицы у экрана быть
+// не должно: старый дашборд держал свою и разошёлся с агентом. Расхождение
+// ловит test/dnsReference.test.js, читая dnsref.go.
+export const DNS_REFERENCE_FOREIGN = ['tls upstream 9.9.9.9 sni dns.quad9.net', 'tls upstream 1.1.1.1 sni cloudflare-dns.com']
+export const DNS_REFERENCE_RU_ZONES = ['ru', 'su', 'xn--p1ai', 'xn--80adxhks', 'xn--d1acj3b', 'xn--p1acf', 'tatar']
+export const DNS_REFERENCE_YANDEX = 'common.dot.dns.yandex.net'
+
+// Команды в том виде, в каком их выполняет агент: ndmc -c "dns-proxy <строка>",
+// затем сохранение конфигурации.
+export function dnsReferenceCommands() {
+  const lines = [...DNS_REFERENCE_FOREIGN, ...DNS_REFERENCE_RU_ZONES.map((z) => `tls upstream ${DNS_REFERENCE_YANDEX} domain ${z}`)]
+  return [...lines.map((l) => `ndmc -c "dns-proxy ${l}"`), 'ndmc -c "system configuration save"'].join('\n')
+}
+
 const TEXTS = {
   intro:
     'Сброс заменит DNS-серверы роутера эталонными: русские зоны — Яндексу по защищённому соединению, остальное — заграничным серверам. Свой DNS-сервер останется.',
@@ -29,6 +44,12 @@ const TEXTS = {
   confirmTail: 'Роутер заменит свои DNS-серверы эталонными и сохранит настройки.',
   waiting: 'ждём отчёта',
   checkAgain: 'Проверить ещё раз',
+  manualTitle: 'Команды для ручного прогона',
+  manualIntro:
+    'Эталонный набор для терминала роутера — тот же, что ставит кнопка сброса. Команды добавляют серверы, но не снимают прежние: перед прогоном уберите старые строки dns-proxy, иначе будут дубли.',
+  copyButton: 'Скопировать команды',
+  copied: 'Команды скопированы.',
+  copyFailed: 'Не удалось скопировать — выделите текст вручную.',
 }
 
 export function dnsResetScreenTexts() {

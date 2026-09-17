@@ -51,7 +51,7 @@ describe('широкая раскладка в style.css', () => {
 
   it('экран входа оформлен на любой ширине', () => {
     const outside = css.slice(0, block.start) + css.slice(block.end)
-    for (const sel of ['.login {', '.login-card {', '.login-notice {', '.park-classic {']) {
+    for (const sel of ['.login {', '.login-card {', '.login-notice {']) {
       expect(outside.includes(sel), sel).toBe(true)
     }
   })

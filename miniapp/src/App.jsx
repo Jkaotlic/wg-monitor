@@ -117,6 +117,9 @@ export function App() {
       routers: boot.routers,
       isAdmin: boot.isAdmin,
       onLogout: mode === 'web' ? () => boot.logout() : undefined,
+      // Слои парка переспрашивают список роутеров: после установки агента
+      // новый роутер должен появиться в колонке и открыться по кнопке.
+      refreshRouters: () => boot.refreshRouters(),
     }
     body = wide ? <WideLayout mode={mode} {...layout} /> : <PhoneLayout {...layout} />
   }

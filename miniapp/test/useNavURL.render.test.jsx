@@ -57,6 +57,19 @@ describe('useNavURL', () => {
     render(null, root)
   })
 
+  it('«назад» браузера над закреплённым мастером: навигация на месте, адрес возвращён', async () => {
+    const root = await mount()
+    await act(async () => api.dispatch({ type: 'overlay', overlay: 'admin' }))
+    await act(async () => api.dispatch({ type: 'overlay', overlay: 'provision', params: { returnTo: 'admin' } }))
+    await act(async () => api.dispatch({ type: 'pin', pinned: true }))
+    const pinnedNav = api.nav
+    window.history.replaceState(null, '', '/dashboard/?router=7&tab=diag')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(api.nav).toBe(pinnedNav)
+    expect(window.location.search).toBe('?router=7&tab=diag&open=admin')
+    render(null, root)
+  })
+
   it('popstate перечитывает навигацию из адреса', async () => {
     const root = await mount()
     window.history.replaceState(null, '', '/dashboard/?router=3&open=admin')

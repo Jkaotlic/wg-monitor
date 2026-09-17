@@ -70,3 +70,21 @@ describe('круговое свойство', () => {
     expect(navFromURL(urlFromNav(s), IDS).sheet).toBe(null)
   })
 })
+
+describe('слои без адреса', () => {
+  it('мастер и ход работы в адрес не пишутся -- пишется слой, откуда их открыли', () => {
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'provision', overlayParams: { returnTo: 'admin' }, sheet: null })).toBe('?router=7&open=admin')
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'job', overlayParams: { jobId: 'secret-job', title: 'x', returnTo: null }, sheet: null })).toBe('?router=7')
+    expect(urlFromNav({ routerID: null, tab: 'router', overlay: 'backenddeploy', overlayParams: { targetVersion: 'v0.36.0' }, sheet: null })).toBe('')
+  })
+
+  it('returnTo не из списка адресов не пишется', () => {
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'job', overlayParams: { returnTo: 'provision' }, sheet: null })).toBe('?router=7')
+  })
+
+  it('подключение агента -- в адресе и открывается по нему', () => {
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'agentconn', sheet: null })).toBe('?router=7&open=agentconn')
+    expect(navFromURL('?router=7&open=agentconn', IDS).overlay).toBe('agentconn')
+    expect(navFromURL('?router=7&open=provision', IDS).overlay).toBe(null)
+  })
+})

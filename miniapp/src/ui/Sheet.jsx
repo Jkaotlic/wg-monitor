@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { sheetPhase, confirmReady, initialFieldValues, fieldsReady } from '../sheet.js'
+import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldValues } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
 import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
@@ -94,7 +94,7 @@ export function Sheet({ sheet, asleep, onClose }) {
       if (fields.length) {
         // Ссылка -- сразу на чистые значения: стирание при уходе листа не
         // должно задеть снимок, который ещё не дошёл до perform.
-        const fresh = initialFieldValues(fields)
+        const fresh = keptFieldValues(fields, values)
         valuesRef.current = fresh
         setValues(fresh)
       }
@@ -156,7 +156,23 @@ export function Sheet({ sheet, asleep, onClose }) {
             )}
             {fields.length > 0 && (
               <div class="sheet-fields">
-                {fields.map((f) => (
+                {fields
+                  .filter((f) => typeof f.showIf !== 'function' || f.showIf(values))
+                  .map((f) =>
+                  f.type === 'toggle' ? (
+                  <div class="field sheet-toggle" key={f.name}>
+                    <label class="sheet-toggle-label" for={`sheet-field-${f.name}`}>
+                      <input
+                        id={`sheet-field-${f.name}`}
+                        type="checkbox"
+                        autocomplete="off"
+                        checked={values[f.name] === true}
+                        onChange={(e) => setField(f.name, e.currentTarget.checked)}
+                      />
+                      <span>{f.label}</span>
+                    </label>
+                  </div>
+                  ) : (
                   <div class="field" key={f.name}>
                     <label for={`sheet-field-${f.name}`}>{f.label}</label>
                     {f.type === 'select' ? (
@@ -173,7 +189,7 @@ export function Sheet({ sheet, asleep, onClose }) {
                       <input
                         id={`sheet-field-${f.name}`}
                         type={f.type === 'password' ? 'password' : 'text'}
-                        autocomplete="off"
+                        autocomplete={f.type === 'password' ? 'new-password' : 'off'}
                         autocapitalize="off"
                         spellcheck={false}
                         placeholder={f.placeholder ?? ''}
@@ -181,8 +197,12 @@ export function Sheet({ sheet, asleep, onClose }) {
                         onInput={(e) => setField(f.name, e.currentTarget.value)}
                       />
                     )}
+                    {typeof f.hint === 'function' && f.hint(values) && (
+                      <p class="hint sheet-field-hint">{f.hint(values)}</p>
+                    )}
                   </div>
-                ))}
+                  ),
+                )}
               </div>
             )}
             {local && sheet.note && <p class="sheet-note">{sheet.note}</p>}

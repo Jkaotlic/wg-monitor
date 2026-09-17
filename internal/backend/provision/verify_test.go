@@ -50,13 +50,13 @@ func TestVerifyOnline_ReturnsOKWhenReportArrivesAfterSince(t *testing.T) {
 	if !ok {
 		t.Fatal("ok = false, want true once lastSeen reports a time after `since`")
 	}
-	if !strings.Contains(detail, "report") {
-		t.Errorf("detail = %q, want it to contain %q", detail, "report")
+	if !strings.Contains(detail, "первый отчёт") {
+		t.Errorf("detail = %q, want it to contain %q", detail, "первый отчёт")
 	}
-	// Exact value pinned to the spec's own example ("first report 4s ago"):
+	// Exact value pinned: деталь показывается человеку в «Ходе работы» по-русски.
 	// clock is at since+5s (start=since+2s, one 3s poll) when the fresh
 	// report at since+1s is observed, so now-seen == 4s.
-	if want := "first report 4s ago"; detail != want {
+	if want := "первый отчёт 4 с назад"; detail != want {
 		t.Errorf("detail = %q, want %q", detail, want)
 	}
 	if calls != 2 {
@@ -148,5 +148,21 @@ func TestVerifyOnline_HonorsAlreadyCanceledContext(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Errorf("lastSeen called %d times, want exactly 1 — the canceled ctx must short-circuit the loop right after the first poll", calls)
+	}
+}
+
+// Часы Pi и время отчёта агента расходятся: отчёт «из будущего» -- не
+// «-1 с назад», а «только что».
+func TestVerifyOnlineDetailFutureReportIsJustNow(t *testing.T) {
+	since := time.Unix(1_000_000, 0)
+	now := since.Add(2 * time.Second)
+	detail, ok := VerifyOnline(context.Background(), "router1", since, time.Minute, time.Second,
+		func(string) (time.Time, bool) { return now.Add(time.Second), true },
+		func() time.Time { return now }, func(time.Duration) {})
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if want := "первый отчёт только что"; detail != want {
+		t.Errorf("detail = %q, want %q", detail, want)
 	}
 }

@@ -53,6 +53,16 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	// Тело POST несёт пароль: middleware тела не читают, хендлер его не логирует.
 	mux.Handle("POST /v1/miniapp/routers/{id}/agent/revive", reqID(auth(miniappAgentReviveHandler(d))))
 	mux.Handle("DELETE /v1/miniapp/routers/{id}/agent/revive", reqID(auth(miniappAgentReviveCancelHandler(d))))
+	// Админские операции цикла 2 (веб-управление = мини-апп): гейт админа
+	// внутри, отказ 404. Тела с паролями middleware не читают, обработчики не
+	// логируют.
+	mux.Handle("POST /v1/miniapp/backend/deploy", reqID(auth(miniappBackendDeployHandler(d))))
+	mux.Handle("GET /v1/miniapp/jobs/{job_id}", reqID(auth(miniappJobHandler(d))))
+	mux.Handle("POST /v1/miniapp/provision", reqID(auth(miniappProvisionHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/agent/reinstall", reqID(auth(miniappAgentReinstallHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/agent/repoint", reqID(auth(miniappAgentRepointHandler(d))))
+	mux.Handle("GET /v1/miniapp/routers/{id}/agent/connection", reqID(auth(miniappAgentConnectionGetHandler(d))))
+	mux.Handle("PUT /v1/miniapp/routers/{id}/agent/connection", reqID(auth(miniappAgentConnectionPutHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
@@ -156,11 +166,16 @@ func miniappIsAdmin(telegramUserID, adminUserID int64) bool {
 }
 
 type miniappRouterSummary struct {
-	ID              int64               `json:"id"`
-	Nickname        string              `json:"nickname"`
-	Status          string              `json:"status"`
-	LastSeenAt      *time.Time          `json:"last_seen_at,omitempty"`
-	LastSeenAgeSec  *int64              `json:"last_seen_age_sec,omitempty"`
+	ID             int64      `json:"id"`
+	Nickname       string     `json:"nickname"`
+	Status         string     `json:"status"`
+	LastSeenAt     *time.Time `json:"last_seen_at,omitempty"`
+	LastSeenAgeSec *int64     `json:"last_seen_age_sec,omitempty"`
+	// AgentVersion и Kind -- для поиска и фильтров списка (спека цикла 2,
+	// п. 11). Не доступы: видны всем, кто видит роутер. Без omitempty --
+	// неизвестная версия приходит пустой строкой.
+	AgentVersion    string              `json:"agent_version"`
+	Kind            string              `json:"kind"`
 	ActiveIncidents []dashboardIncident `json:"active_incidents,omitempty"`
 	// Checks -- состояние пяти служб роутера, тех самых, что на его экране
 	// нарисованы лампами. Экран флота показывает их точками, и без них он
@@ -215,6 +230,8 @@ func miniappRouterSummaryFromAgent(a dashboardSummaryAgent) miniappRouterSummary
 		Status:          a.Status,
 		LastSeenAt:      a.LastSeenAt,
 		LastSeenAgeSec:  a.LastSeenAgeSec,
+		AgentVersion:    a.AgentVersion,
+		Kind:            a.Kind,
 		ActiveIncidents: a.ActiveIncidents,
 	}
 }

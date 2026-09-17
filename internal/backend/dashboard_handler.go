@@ -1169,6 +1169,24 @@ type dashboardEditAgentReq struct {
 	ExpectedMAC      string `json:"expected_mac"`
 }
 
+// validateAgentEdit -- проверки правки метаданных роутера без HTTP; общие у
+// дашборда и мини-аппа. Нормализует Kind и Arch на месте.
+func validateAgentEdit(req *dashboardEditAgentReq) *repairStartError {
+	req.Kind = strings.TrimSpace(req.Kind)
+	if req.Kind != "" && !db.IsValidKind(req.Kind) {
+		return &repairStartError{http.StatusBadRequest, "invalid_kind", "kind must be static or mobile"}
+	}
+	arch, err := normalizeAgentDeployArch(req.Arch)
+	if err != nil {
+		return &repairStartError{http.StatusBadRequest, "invalid_arch", err.Error()}
+	}
+	req.Arch = arch
+	if err := validateDashboardAWGMURL(req.AWGMURL); err != nil {
+		return &repairStartError{http.StatusBadRequest, "invalid_awgm_url", err.Error()}
+	}
+	return nil
+}
+
 // dashboardEditAgentHandler updates an existing agent's router/deploy metadata
 // (AWG Manager URL = router domain, SSH host, arch, ring, deploy mode, expected
 // MAC, telegram topic) without re-enrolling. It merges with the current row so
@@ -1198,19 +1216,8 @@ func dashboardEditAgentHandler(d Deps) http.HandlerFunc {
 		if !decodeWizardJSON(w, r, &req) {
 			return
 		}
-		req.Kind = strings.TrimSpace(req.Kind)
-		if req.Kind != "" && !db.IsValidKind(req.Kind) {
-			writeJSONError(w, http.StatusBadRequest, "invalid_kind", "kind must be static or mobile")
-			return
-		}
-		arch, err := normalizeAgentDeployArch(req.Arch)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid_arch", err.Error())
-			return
-		}
-		req.Arch = arch
-		if err := validateDashboardAWGMURL(req.AWGMURL); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid_awgm_url", err.Error())
+		if serr := validateAgentEdit(&req); serr != nil {
+			writeJSONError(w, serr.Status, serr.Code, serr.Message)
 			return
 		}
 		current, err := d.DB.Users().GetByNickname(nickname)

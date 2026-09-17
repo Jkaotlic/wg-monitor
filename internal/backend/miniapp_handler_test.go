@@ -646,3 +646,51 @@ func TestMiniappTimelineOngoingHasNoEnd(t *testing.T) {
 		t.Errorf("у идущего происшествия конца нет, получили %q", resp.Incidents[0].To)
 	}
 }
+
+// Версия агента и тип -- для поиска и фильтров списка (спека цикла 2, п. 11).
+// Это не доступы: их видит каждый, кто видит роутер. Адреса панели и ssh в
+// списке по-прежнему нет ни значением, ни именем поля.
+func TestMiniappRoutersCarryAgentVersionAndKind(t *testing.T) {
+	d, ownedID, _, ownerID := seedMiniappFleet(t)
+	if err := d.Users().UpdateDeployInfo("router-owned", db.DeployInfo{Kind: db.KindMobile, AWGMURL: "https://panel.example.com", SSHHost: "198.51.100.20"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Users().UpdateLastSeenAgentVersion(ownedID, "v0.35.0"); err != nil {
+		t.Fatal(err)
+	}
+	h := NewMux(Deps{DB: d, TelegramBotToken: "test-bot-token", TelegramAdminUserID: 999})
+	for _, uid := range []int64{ownerID, 999} {
+		req := httptest.NewRequest(http.MethodGet, "/v1/miniapp/routers", nil)
+		req.AddCookie(miniappSessionCookieFor(t, "test-bot-token", uid))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("uid %d: код %d", uid, rec.Code)
+		}
+		body := rec.Body.String()
+		var resp miniappRoutersResp
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, r := range resp.Routers {
+			if r.ID == ownedID {
+				found = true
+				if r.AgentVersion != "v0.35.0" || r.Kind != db.KindMobile {
+					t.Errorf("uid %d: agent_version=%q kind=%q", uid, r.AgentVersion, r.Kind)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("uid %d: нет router-owned в списке", uid)
+		}
+		for _, leak := range []string{"panel.example.com", "198.51.100.20", "awgm_url", "ssh_host"} {
+			if strings.Contains(body, leak) {
+				t.Errorf("uid %d: в списке роутеров есть %q", uid, leak)
+			}
+		}
+		if uid == 999 && !strings.Contains(body, `"agent_version":""`) {
+			t.Errorf("неизвестная версия должна приходить пустой строкой, а не пропадать: %s", body)
+		}
+	}
+}

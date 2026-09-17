@@ -46,7 +46,7 @@ type LastSeenFunc func(nick string) (time.Time, bool)
 // timeout or shutdown (e.g. the job's own server-owned context) can abort
 // the poll promptly instead of riding out the full budget.
 //
-// detail is only populated on success, e.g. "first report 4s ago" (for
+// detail is only populated on success, e.g. "первый отчёт 4 с назад" (for
 // display in the job's verify_online Step.Detail); a failed verify —
 // budget exhausted or ctx done — returns "" since there is nothing yet to
 // report. ok false is the signal the engine uses to map this step to the
@@ -57,7 +57,7 @@ func VerifyOnline(ctx context.Context, nick string, since time.Time, budget, pol
 	for {
 		n := now()
 		if seen, found := lastSeen(nick); found && seen.After(since) {
-			return fmt.Sprintf("first report %ds ago", int(n.Sub(seen).Seconds())), true
+			return firstReportDetail(n.Sub(seen)), true
 		}
 		if ctx.Err() != nil {
 			return "", false
@@ -67,4 +67,15 @@ func VerifyOnline(ctx context.Context, nick string, since time.Time, budget, pol
 		}
 		sleep(poll)
 	}
+}
+
+// firstReportDetail -- деталь шага verify_online для человека («Ход работы»
+// показывает её как есть). Отчёт «из будущего» (часы роутера и сервера
+// расходятся) -- «только что», а не «-1 с назад».
+func firstReportDetail(age time.Duration) string {
+	sec := int(age.Seconds())
+	if sec <= 0 {
+		return "первый отчёт только что"
+	}
+	return fmt.Sprintf("первый отчёт %d с назад", sec)
 }

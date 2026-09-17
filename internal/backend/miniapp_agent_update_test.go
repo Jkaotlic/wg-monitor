@@ -489,3 +489,33 @@ func TestMiniappFleetAgentUpdateWithoutReleaseVersion(t *testing.T) {
 		t.Fatalf("code=%q", code)
 	}
 }
+
+// Своя версия ниже текущей -- откат: без явного allow_downgrade отказ словами,
+// с ним -- обычное назначение (спека цикла 2, п. 6).
+func TestMiniappAgentUpdateAllowsDowngradeOnlyWhenAsked(t *testing.T) {
+	_, ownedID, h, sink := agentUpdateTestMux(t)
+	path := fmt.Sprintf("/v1/miniapp/routers/%d/agent/update", ownedID)
+
+	rec := postMiniappJSON(t, h, path, `{"confirm":"router-owned","target_version":"v0.30.0"}`, 999)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("без разрешения: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	if code, _, msg := decodeDeployError(t, rec); code != "downgrade_rejected" || msg != miniappAdminOpsErrorText("downgrade_rejected") {
+		t.Fatalf("отказ: code=%q msg=%q", code, msg)
+	}
+	if len(sink.snapshotEnqueued()) != 0 {
+		t.Fatal("отказ поставил команду")
+	}
+
+	rec = postMiniappJSON(t, h, path, `{"confirm":"router-owned","target_version":"v0.30.0","allow_downgrade":true}`, 999)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("с разрешением: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp miniappAgentUpdateResp
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || resp.TargetVersion != "v0.30.0" {
+		t.Fatalf("ответ %s err=%v", rec.Body.String(), err)
+	}
+	if q := sink.snapshotEnqueued(); len(q) != 1 || q[0].Args["version"] != "v0.30.0" {
+		t.Fatalf("очередь: %+v", q)
+	}
+}

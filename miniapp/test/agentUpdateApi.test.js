@@ -26,6 +26,14 @@ describe('обновление агента: запросы', () => {
     expect(calls[0].body).toEqual({ confirm: 'bronya', target_version: 'v0.32.0' })
   })
 
+  it('разрешение отката уходит полем allow_downgrade, только когда оно есть', async () => {
+    const calls = stubFetch({ queued: true, deferred: false, target_version: 'v0.34.0' })
+    await updateRouterAgent(7, 'bronya', 'v0.34.0', true)
+    await updateRouterAgent(7, 'bronya', 'v0.36.0', false)
+    expect(calls[0].body).toEqual({ confirm: 'bronya', target_version: 'v0.34.0', allow_downgrade: true })
+    expect(calls[1].body).toEqual({ confirm: 'bronya', target_version: 'v0.36.0' })
+  })
+
   it('отмена -- POST без тела на .../agent/update/cancel', async () => {
     const calls = stubFetch({ cleared: true }, { status: 200 })
     expect(await cancelRouterAgentUpdate(7)).toEqual({ cleared: true })
