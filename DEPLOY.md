@@ -42,12 +42,10 @@ shows it to the operator for password-manager storage.
 - `/dashboard/` — the mini app itself in a regular browser (no Telegram needed);
   sign in with the dashboard token or a personal link issued from the mini app
   «Настройки». The browser session acts as the configured Telegram admin.
-- `/dashboard/classic/` — the legacy dashboard described below, kept until its
-  functions move into the app.
-
-The legacy dashboard uses the same backend command queue and deploy endpoints as the wizard:
-fleet summary, safe agent commands, AWG Manager service restart, agent
-self-update, backend-update queueing, and command-result polling.
+- `/dashboard/rescue/` — emergency page for when the app bundle does not load:
+  one self-contained response (no external resources, strict CSP), token sign-in,
+  backend version and fleet counts, and backend rollout to another version
+  (with explicit downgrade opt-in). Old `/dashboard/classic/…` bookmarks redirect here.
 
 The dashboard is disabled by default. To enable it on the VPS:
 
@@ -67,7 +65,7 @@ dashboard:
 ```
 
 Restart `wg-monitor-backend` and open `https://<backend-domain>/dashboard/`
-(or `/dashboard/classic/login` for the legacy dashboard) and paste the token there. The backend validates it and
+(or `/dashboard/rescue/` if the app does not load) and paste the token there. The backend validates it and
 sets an `HttpOnly`, `SameSite=Strict` `wg_dashboard_session` cookie; the browser
 does not store the dashboard token in local storage. The JSON dashboard API also
 continues to accept `Authorization: Bearer <token>` for scripted operator calls.
@@ -182,13 +180,13 @@ No SSTP/WireGuard connection from the operator machine to the router LAN is requ
 ### From the dashboard (no wizard machine needed)
 
 For a router that already has AWG Manager reachable on its public domain, you can
-install the agent straight from the dashboard: open the agent's drawer →
-**Recovery** → **Deploy to router**. Enter the AWG Manager auth (api-key or
-login/password) and the router root password. The backend re-mints the enrollment
-token, resolves the latest stable version (or a version you type), and drives the
-AWG Manager terminal to download the agent, write `config.yaml`, install the init
-service, and start it. Credentials are used once and never stored. The router must
-already be enrolled (Add agent) with its `awgm_url` set.
+install the agent straight from web control: open `/dashboard/` → «Парк» →
+«Добавить роутер» for a new router, or «Переустановить агент» on an existing
+router row. Enter the AWG Manager auth and the router root password when asked.
+The backend re-mints the enrollment token, resolves the latest stable version
+(or a version you choose), and drives the AWG Manager terminal to download the
+agent, write `config.yaml`, install the init service, and start it. Credentials
+are used once and never stored.
 
 ## Move Old Routers To A New VPS
 
