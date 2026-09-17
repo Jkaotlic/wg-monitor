@@ -19,7 +19,7 @@ export function normalizeTab(tab) {
 // роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
 // Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
 // тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
-export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages']
+export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']
 
 // Слои всего парка, а не роутера: мастер «Добавить роутер», «Ход работы»,
 // ожидание раскатки бэкенда. Открываются и без выбранного роутера и в адрес
@@ -27,7 +27,16 @@ export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsres
 // которое через 30 минут исчезнет, а ожидание раскатки после перезагрузки
 // бессмысленно. Параметры слоя -- nav.overlayParams; returnTo -- слой, куда
 // вернуть «назад». Паролей в параметрах не бывает никогда.
-export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy']
+// «Свои VPN-серверы» (selfhosted) и экран одного сервера (selfhostedinst) --
+// тоже слои парка: серверы общие для всех роутеров. Параметры экрана
+// сервера -- id сервера и returnParams (куда вернуть сам список); SSH-пароля
+// в параметрах не бывает никогда.
+export const FLEET_OVERLAYS = ['provision', 'job', 'backenddeploy', 'selfhosted', 'selfhostedinst']
+
+// Слои парка, которые всё же пишутся в адрес: список своих серверов -- это
+// место, а не процесс, и закладка на него имеет смысл. Открывается и без
+// выбранного роутера (?open=selfhosted).
+export const URL_FLEET_OVERLAYS = ['selfhosted']
 
 // Слои, которые «назад» и Esc не закрывают: во время раскатки бэкенда уходить
 // некуда -- приложение без сервера не работает, а экран сам перезагрузит
@@ -138,12 +147,17 @@ export function navReducer(state, action) {
       const { pinned: _drop, ...params } = state.overlayParams ?? {}
       return { ...state, overlayParams: action.pinned ? { ...params, pinned: true } : params }
     }
-    case 'back':
+    case 'back': {
       // Порядок закрытия -- сверху вниз по слоям: шит лежит поверх оверлея.
       if (state.sheet) return { ...state, sheet: null }
       if (navPinned(state)) return state
-      if (state.overlay) return { ...withoutParams(state), overlay: state.overlayParams?.returnTo ?? null }
-      return state
+      if (!state.overlay) return state
+      // returnParams -- параметры слоя, куда возвращаемся: экран сервера
+      // возвращает на список, и списку нужен его собственный returnTo.
+      const params = state.overlayParams
+      const next = { ...withoutParams(state), overlay: params?.returnTo ?? null }
+      return next.overlay && params?.returnParams ? { ...next, overlayParams: params.returnParams } : next
+    }
     default:
       return state
   }
