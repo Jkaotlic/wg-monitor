@@ -9,6 +9,10 @@ import { JobProgress } from './JobProgress.jsx'
 import { BackendDeployWait } from './BackendDeployWait.jsx'
 import { AgentConnectionScreen } from './AgentConnectionScreen.jsx'
 import { PackagesScreen } from './PackagesScreen.jsx'
+import { CabinetScreen } from './CabinetScreen.jsx'
+import { SelfhostedScreen } from './SelfhostedScreen.jsx'
+import { SelfhostedInstanceScreen } from './SelfhostedInstanceScreen.jsx'
+import { SELFHOSTED_TEXTS } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { FLEET_OVERLAYS } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
@@ -21,10 +25,12 @@ export function routerContext(routers, routerID) {
   return { current, asleep }
 }
 
-// Подпись «назад» у слоя парка -- куда он вернёт: в Обслуживание роутера
-// или к сводке роутеров (широкий экран без выбранного роутера).
+// Подпись «назад» у слоя парка -- куда он вернёт: в Обслуживание роутера,
+// на список своих серверов или к сводке роутеров (широкий экран без роутера).
 export function returnLabel(returnTo) {
-  return returnTo === 'admin' ? 'Обслуживание' : 'Роутеры'
+  if (returnTo === 'admin') return 'Обслуживание'
+  if (returnTo === 'selfhosted') return 'Свои серверы'
+  return 'Роутеры'
 }
 
 // Слой поверх вкладок. Один выбор для обеих раскладок: телефонная кладёт его
@@ -50,8 +56,16 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
 
   if (FLEET_OVERLAYS.includes(nav.overlay)) {
     // Сервер ответит не-админу 404 на всё, что внутри; рисовать пустой мастер
-    // незачем.
-    if (!isAdmin) return null
+    // незачем. Список своих серверов открывается и по адресу -- там слова
+    // вместо пустоты.
+    if (!isAdmin) {
+      if (nav.overlay !== 'selfhosted') return null
+      return (
+        <Overlay title={SELFHOSTED_TEXTS.title} backLabel="Назад" onBack={close}>
+          <p class="state">{SELFHOSTED_TEXTS.adminOnly}</p>
+        </Overlay>
+      )
+    }
     switch (nav.overlay) {
       case 'provision':
         return (
@@ -78,6 +92,29 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
               reloadRouters()
             }}
             onOpenRouter={(id) => reloadRouters().then(() => dispatch({ type: 'router', id }))}
+          />
+        )
+      // Свои VPN-серверы: список знает, откуда его открыли; экран сервера
+      // возвращает на список вместе с этим возвратом (returnParams).
+      // SSH-пароля в параметрах нет -- только id сервера.
+      case 'selfhosted':
+        return (
+          <SelfhostedScreen
+            backLabel={returnLabel(returnTo)}
+            onClose={leave}
+            onOpenInstance={(id) =>
+              dispatch({ type: 'overlay', overlay: 'selfhostedinst', params: { instanceId: id, returnTo: 'selfhosted', returnParams: { returnTo } } })
+            }
+          />
+        )
+      case 'selfhostedinst':
+        return (
+          <SelfhostedInstanceScreen
+            key={params.instanceId ?? ''}
+            instanceId={params.instanceId ?? ''}
+            backLabel={returnLabel('selfhosted')}
+            openSheet={openSheet}
+            onClose={() => dispatch({ type: 'overlay', overlay: 'selfhosted', params: params.returnParams ?? { returnTo: null } })}
           />
         )
       default:
@@ -109,6 +146,11 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           }}
         />
       )
+    // Кабинеты VPN роутера -- слой с адресом (?open=cabinet): обновление
+    // страницы возвращает сюда же. Вкладка кабинета и выбранный вариант в
+    // адрес не пишутся.
+    case 'cabinet':
+      return <CabinetScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={close} />
     case 'routes':
       return (
         <Overlay title="Маршруты" backLabel="VPN-туннели" onBack={close}>

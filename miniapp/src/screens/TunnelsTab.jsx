@@ -12,7 +12,7 @@ import { Stat } from '../ui/Stat.jsx'
 import { Chain } from '../ui/Chain.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
-import { CabinetScreen } from './CabinetScreen.jsx'
+import { useOnClose } from '../useOnClose.js'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
@@ -32,13 +32,17 @@ const CHAIN_TITLE = {
   unknown: 'Состояние неизвестно',
 }
 
-export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
-  const [cabinets, setCabinets] = useState(false)
+// Кабинет -- слой навигации (cabinet), а не внутреннее состояние вкладки:
+// его адрес переживает обновление страницы, и «назад» Telegram закрывает его.
+export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCabinet, cabinetOpen = false }) {
   const [replacing, setReplacing] = useState(null)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
   const deadline = { deadlineMs: asleep ? 6 * 60_000 : 90_000 }
+
+  // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
+  useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
 
   useEffect(() => {
     setSnapshot(null)
@@ -279,12 +283,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
         </div>
       )}
 
-      {snapshot && (
+      {snapshot && onOpenCabinet && (
         <div style="margin-top:12px">
           <NavCard
             title="Новый VPN-туннель из кабинета"
             note="Amnezia · HideMy"
-            onClick={() => setCabinets(true)}
+            onClick={onOpenCabinet}
           />
         </div>
       )}
@@ -308,15 +312,6 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet }) {
           policyName={view.policyName}
           onClose={() => setReplacing(null)}
           onDone={() => run('route_status', {}, deadline)}
-        />
-      )}
-
-      {cabinets && (
-        <CabinetScreen
-          routerID={routerID}
-          asleep={asleep}
-          onClose={() => setCabinets(false)}
-          onIssued={() => run('route_status', {}, deadline)}
         />
       )}
     </div>

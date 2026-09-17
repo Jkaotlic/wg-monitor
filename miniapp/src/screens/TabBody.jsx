@@ -25,6 +25,8 @@ export function TabBody({ nav, dispatch, routers, isAdmin }) {
           routerID={nav.routerID}
           asleep={asleep}
           onOpenRoutes={() => dispatch({ type: 'overlay', overlay: 'routes' })}
+          onOpenCabinet={() => dispatch({ type: 'overlay', overlay: 'cabinet' })}
+          cabinetOpen={nav.overlay === 'cabinet'}
           openSheet={openSheet}
         />
       )

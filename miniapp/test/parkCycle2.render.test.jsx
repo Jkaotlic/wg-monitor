@@ -111,6 +111,17 @@ describe('Парк: добавить роутер', () => {
     cleanup(root)
   })
 
+  it('«Свои VPN-серверы» открывает список; без openLayer кнопки нет', async () => {
+    const { root, layers } = await mountPark()
+    await act(async () => button(root, 'Свои VPN-серверы').click())
+    expect(layers).toEqual([['selfhosted', undefined]])
+    cleanup(root)
+
+    const bare = await mountPark({ withLayer: false })
+    expect(button(bare.root, 'Свои VPN-серверы')).toBeFalsy()
+    cleanup(bare.root)
+  })
+
   it('без openLayer (старые вызовы) новых кнопок нет', async () => {
     const { root } = await mountPark({ withLayer: false })
     expect(button(root, 'Добавить роутер')).toBeFalsy()
