@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -987,10 +986,6 @@ func (s *dashboardActionSink) Dequeue(context.Context, int64, time.Duration) (*w
 
 func (s *dashboardActionSink) RecordResult(int64, wire.CommandResult) error {
 	return nil
-}
-
-func (s *dashboardActionSink) ConsumeOriginRef(int64, string) (cmdpkg.MessageRef, bool) {
-	return cmdpkg.MessageRef{}, false
 }
 
 func (s *dashboardActionSink) CommandByID(_ int64, cmdID string) (wire.Command, bool) {

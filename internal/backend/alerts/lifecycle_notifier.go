@@ -45,7 +45,8 @@ func (n *WakeNotifier) SetNotifySink(s lifecycleSink) { n.notify = s }
 func (n *WakeNotifier) SetMiniAppBaseURL(u string) { n.miniAppBaseURL = u }
 
 // lifecycleSink -- та часть веера, которой пользуются уведомления о сне и
-// пробуждении: обычная рассылка и рассылка с нижней клавиатурой.
+// пробуждении: обычная рассылка и рассылка с кнопками под сообщением
+// (tg.InlineKeyboardMarkup; нижних клавиатур у бота нет с цикла 5).
 type lifecycleSink interface {
 	Send(ctx context.Context, routerUserID int64, text, parseMode string) (int, error)
 	SendWithReplyKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, markup any) (int, error)

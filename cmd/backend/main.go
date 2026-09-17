@@ -337,9 +337,9 @@ func main() {
 	}
 	go retentionPolicy.Run(ctx)
 
-	// Janitor: evict origin/result entries from the in-memory cmd.Queue older
-	// than 1h. Production relay-path purges origins on consume; this guards
-	// against the orphan-result and crashed-agent cases (LOGIC-02).
+	// Уборщик: раз в 15 минут выметает из очереди в памяти итоги и записи о
+	// выдаче старше часа. Итог забирает опрос мини-аппа, но осиротевший ответ
+	// и упавший агент оставили бы запись навсегда (LOGIC-02).
 	go func() {
 		t := time.NewTicker(15 * time.Minute)
 		defer t.Stop()
@@ -348,8 +348,8 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if o, r := cmdQueue.Sweep(1 * time.Hour); o > 0 || r > 0 {
-					logger.Debug("cmd queue swept", "origins", o, "results", r)
+				if r := cmdQueue.Sweep(1 * time.Hour); r > 0 {
+					logger.Debug("cmd queue swept", "results", r)
 				}
 			}
 		}

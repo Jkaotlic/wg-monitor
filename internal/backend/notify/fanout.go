@@ -221,16 +221,18 @@ func (f *Fanout) ReplyToEach(ctx context.Context, routerUserID int64, checkName,
 	return nil
 }
 
-// ReplyKeyboardSender -- отправка с нижней клавиатурой. Ею пользуется отчёт о
-// пробуждении мобильного роутера: там кнопки не под сообщением, а панелью.
+// ReplyKeyboardSender -- отправка с любым reply_markup. Нижних клавиатур у
+// бота больше нет (цикл 5): сюда всегда приходит tg.InlineKeyboardMarkup --
+// кнопки под сообщением, как под тревогой. Имя метода осталось прежним ради
+// вызывающих (см. tg/client.go, SendMessageWithReplyKeyboard).
 type ReplyKeyboardSender interface {
 	Sender
 	SendMessageWithReplyKeyboard(ctx context.Context, chatID int64, threadID *int64, text, parseMode string, replyTo *int64, markup any) (int64, error)
 }
 
-// SendWithReplyKeyboard рассылает текст с нижней клавиатурой. Если отправитель
-// её не умеет, уведомление уходит без панели: потерять кнопки лучше, чем
-// потерять сообщение.
+// SendWithReplyKeyboard рассылает текст с кнопками под сообщением. Если
+// отправитель reply_markup не умеет, уведомление уходит без кнопок: потерять
+// кнопки лучше, чем потерять сообщение.
 func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, text, parseMode string, markup any) (int, error) {
 	targets, err := RecipientsFor(f.d, routerUserID, f.adminID)
 	if err != nil {
@@ -261,11 +263,10 @@ func (f *Fanout) SendWithReplyKeyboard(ctx context.Context, routerUserID int64, 
 	return f.result(delivered, len(targets), lastErr)
 }
 
-// replyMarkupFor -- разметка для адресата рассылки с нижней клавиатурой. Под
-// этим именем сегодня ходит и inline-клавиатура (отчёт о пробуждении, значение
-// tg.InlineKeyboardMarkup): к ней админу дописывается ряд выключения. Настоящую
-// нижнюю клавиатуру с inline-рядом в одном сообщении Telegram не совмещает --
-// она уходит как есть.
+// replyMarkupFor -- разметка для конкретного адресата рассылки. Приходит сюда
+// tg.InlineKeyboardMarkup (отчёт о пробуждении), и админу к ней дописывается
+// ряд «🔕 Не писать мне про этот роутер». Разметку другого вида (её сегодня
+// никто не шлёт) метод отдаёт как есть.
 func (f *Fanout) replyMarkupFor(chatID, routerUserID int64, markup any) any {
 	if !f.isAdmin(chatID) {
 		return markup
