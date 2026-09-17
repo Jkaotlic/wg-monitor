@@ -711,12 +711,68 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 	}
 }
 
+// backendUpdateInput -- заявка на раскатку бэкенда. RepoBase ленивая: дашборд
+// берёт адрес из заголовков прокси, и отказ по версии не должен зависеть от
+// того, получилось ли это.
+type backendUpdateInput struct {
+	TargetVersion  string
+	AllowDowngrade bool
+	RepoBase       func() (base, resolveIP string, ok bool)
+	Now            time.Time
+}
+
+// queueBackendUpdate -- раскатка бэкенда без HTTP: проверить тег и запрет
+// отката (от версии работающего бинаря), записать файл заявки, который
+// подхватывает systemd-юнит обновления.
+func queueBackendUpdate(d Deps, in backendUpdateInput) (backendUpdateRequest, *repairStartError) {
+	if strings.TrimSpace(d.BackendUpdatePath) == "" {
+		return backendUpdateRequest{}, &repairStartError{http.StatusServiceUnavailable, "backend_update_not_configured", "backend update queue not configured"}
+	}
+	targetVersion, err := releaseorigin.ValidateReleaseTag(in.TargetVersion)
+	if err != nil {
+		return backendUpdateRequest{}, &repairStartError{http.StatusBadRequest, errCodeBadJSON, err.Error()}
+	}
+	// Anti-downgrade floor: reject a target older than the currently running
+	// backend binary (serverVersion, set once at startup via SetVersion)
+	// unless the operator explicitly opts in. Same isVersionDowngrade helper
+	// as the agent deploy and provisioning paths, so rc9-vs-rc10 compares
+	// correctly instead of sorting lexically.
+	if !in.AllowDowngrade && isVersionDowngrade(targetVersion, serverVersion) {
+		return backendUpdateRequest{}, &repairStartError{http.StatusBadRequest, "downgrade_rejected",
+			fmt.Sprintf("target version %s is older than the running backend %s — pass allow_downgrade to override",
+				targetVersion, serverVersion)}
+	}
+	base, resolveIP, ok := in.RepoBase()
+	if !ok {
+		return backendUpdateRequest{}, &repairStartError{http.StatusBadRequest, errCodeBadJSON,
+			"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL"}
+	}
+	now := in.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	req := backendUpdateRequest{
+		TargetVersion:     targetVersion,
+		RepoBase:          base + "/v1/releases/download",
+		RepoResolveIP:     resolveIP,
+		TrustedBackendURL: base,
+		RequestedAt:       now.UTC().Format(time.RFC3339),
+		AllowDowngrade:    in.AllowDowngrade,
+	}
+	if err := writeBackendUpdateRequest(d.BackendUpdatePath, req); err != nil {
+		return backendUpdateRequest{}, &repairStartError{http.StatusInternalServerError, errCodeInternal, err.Error()}
+	}
+	return req, nil
+}
+
 func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
 			return
 		}
+		// Прежний код дашборда (internal), не backend_update_not_configured:
+		// старый клиент его знает.
 		if strings.TrimSpace(d.BackendUpdatePath) == "" {
 			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "backend update queue not configured")
 			return
@@ -724,40 +780,23 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 		if !requireJSONContentType(w, r) {
 			return
 		}
-		var req backendUpdateRequest
-		if !decodeWizardJSON(w, r, &req) {
+		var body backendUpdateRequest
+		if !decodeWizardJSON(w, r, &body) {
 			return
 		}
-		targetVersion, err := releaseorigin.ValidateReleaseTag(req.TargetVersion)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON, err.Error())
-			return
-		}
-		req.TargetVersion = targetVersion
-		// Anti-downgrade floor: reject a target older than the currently
-		// running backend binary (serverVersion, set once at startup via
-		// SetVersion) unless the operator explicitly opts in. Same
-		// isVersionDowngrade helper as the agent deploy path above and the
-		// provisioning install/repair flow, so rc9-vs-rc10 compares
-		// correctly instead of sorting lexically.
-		if !req.AllowDowngrade && isVersionDowngrade(req.TargetVersion, serverVersion) {
-			writeJSONError(w, http.StatusBadRequest, "downgrade_rejected",
-				fmt.Sprintf("target version %s is older than the running backend %s — pass allow_downgrade to override",
-					req.TargetVersion, serverVersion))
-			return
-		}
-		repoBaseURL, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
-		if !ok {
-			writeJSONError(w, http.StatusBadRequest, errCodeBadJSON,
-				"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL")
-			return
-		}
-		req.RepoBase = repoBaseURL + "/v1/releases/download"
-		req.RepoResolveIP = wizardRepoResolveIPForBackendURL(r, repoBaseURL)
-		req.TrustedBackendURL = repoBaseURL
-		req.RequestedAt = time.Now().UTC().Format(time.RFC3339)
-		if err := writeBackendUpdateRequest(d.BackendUpdatePath, req); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		req, serr := queueBackendUpdate(d, backendUpdateInput{
+			TargetVersion:  body.TargetVersion,
+			AllowDowngrade: body.AllowDowngrade,
+			RepoBase: func() (string, string, bool) {
+				base, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
+				if !ok {
+					return "", "", false
+				}
+				return base, wizardRepoResolveIPForBackendURL(r, base), true
+			},
+		})
+		if serr != nil {
+			writeJSONError(w, serr.Status, serr.Code, serr.Message)
 			return
 		}
 		if d.Logger != nil {
