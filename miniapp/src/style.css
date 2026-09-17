@@ -3436,6 +3436,110 @@ body {
 }
 
 /* ============================================================
+   VPN-туннели и маршруты (цикл 4 «бот без слеш-команд»)
+   ------------------------------------------------------------
+   Экран VPN-туннеля с удалением, загрузка своего .conf, блок
+   HydraRoute Neo и источник «Напрямую (WAN)» в маршрутах.
+   ============================================================ */
+.tunnel-block {
+  margin-bottom: var(--sp-3);
+}
+
+.tunnel-outcome {
+  padding: var(--sp-3) var(--sp-4);
+  text-align: left;
+}
+
+.conf-pick {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+/* Поле выбора файла -- прозрачным слоем поверх кнопки: касание попадает в
+   само поле, программный click() по скрытому полю некоторые webview режут. */
+.conf-pick-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.conf-pick:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.conf-pick-off {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.conf-file-name {
+  overflow-wrap: anywhere;
+}
+
+.conf-problems {
+  margin-top: var(--sp-3);
+}
+
+.conf-problem {
+  padding: var(--sp-2) 14px;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  border-top: 1px solid var(--line);
+}
+
+.conf-problem:first-child {
+  border-top: 0;
+}
+
+.conf-problem-error {
+  color: var(--danger);
+}
+
+.conf-blocking {
+  padding: var(--sp-3) 0 0;
+  text-align: left;
+}
+
+.conf-problem-warn {
+  color: color-mix(in srgb, var(--warn) 80%, var(--text) 20%);
+}
+
+.hrneo-status {
+  margin-bottom: var(--sp-2);
+}
+
+.hrneo-actions {
+  margin-top: var(--sp-3);
+}
+
+.hrneo-actions .btn {
+  flex: 1 1 140px;
+  min-height: 44px;
+}
+
+.hrneo-rules {
+  margin-top: var(--sp-4);
+}
+
+.routes-other .row-title {
+  color: var(--muted);
+}
+
+.replace-leftover {
+  margin-top: var(--sp-3);
+}
+
+/* Поле имени -- отдельной группой под подсказкой о приватном ключе. */
+.conf-import .field {
+  margin-top: var(--sp-4);
+}
+
+/* ============================================================
    Широкая раскладка (≥ 1024 px): браузер и развёрнутый Telegram Desktop
    ------------------------------------------------------------
    Не растянутый телефон: колонка роутеров слева, панели карточками на
@@ -4135,6 +4239,21 @@ body {
   .wide-shell .selfhosted-actions .btn {
     flex: none;
     min-width: 160px;
+  }
+
+  .wide-shell .hrneo-actions .btn {
+    flex: none;
+    min-width: 160px;
+  }
+
+  .wide-shell .tunnel-delete {
+    max-width: 360px;
+  }
+
+  /* Кнопки встают в ряд -- между ними воздух, как в .selfhosted-actions. */
+  .wide-shell .conf-import .btn-wide {
+    max-width: 360px;
+    margin-right: var(--sp-2);
   }
 }
 

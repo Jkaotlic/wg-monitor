@@ -66,7 +66,10 @@ func main() {
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
 	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
+	homeAgent := flag.String("home-agent", "", "версия агента sandbox-home (по умолчанию из seed, v0.18.5 -- анализ .conf пропускается словами; v0.38.0 -- роутер проверяет конфиг)")
+	egress := flag.String("egress", "direct", "главный выход роутера sandbox-*: direct или id VPN-туннеля (awg14 -- пустой vpn-spare станет главным, удаление ответит tunnel_is_default)")
 	flag.Parse()
+	setSandboxEgress(*egress)
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
 	// экран «Парк» было бы нечем проверить.
@@ -107,6 +110,11 @@ func main() {
 	ids, err := seed(d, *tgUser)
 	if err != nil {
 		fatal(err)
+	}
+	if *homeAgent != "" {
+		if err := d.Users().UpdateLastSeenAgentVersion(ids["sandbox-home"], *homeAgent); err != nil {
+			fatal(err)
+		}
 	}
 	reviver := newSandboxRevive(*reviveOn, map[int64]bool{ids["sandbox-bronya"]: true})
 	reviver.seedState(ids["sandbox-off"], *reviveState, time.Now().UTC())
@@ -213,7 +221,8 @@ func main() {
 	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
 	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), аварийная страница: /dashboard/rescue/\n", *addr, sandboxDashboardToken)
 	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n", *backendUpdate, updatePath)
-	fmt.Printf("  кабинеты: ключ с «bad» и код с «000» кабинет не принимает; слоты Amnezia 2/2 (fi -- «отзовите»); свои серверы home и reserve; личка: -dm=%s\n\n", *dm)
+	fmt.Printf("  кабинеты: ключ с «bad» и код с «000» кабинет не принимает; слоты Amnezia 2/2 (fi -- «отзовите»); свои серверы home и reserve; личка: -dm=%s\n", *dm)
+	fmt.Printf("  VPN-туннели: пустой vpn-spare (awg14) удаляется, vpn-nl и vpn-de -- с правилами; .conf со строкой BADCONF роутер не примет, с WARNCONF -- с замечанием; главный выход: -egress=%s\n\n", *egress)
 
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)

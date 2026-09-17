@@ -2,7 +2,6 @@ package callbacks
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -102,11 +101,11 @@ func (f *fakeEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref cmdpk
 	return nil
 }
 
-func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
+func TestCommandAction_RouterDoctorEnqueues(t *testing.T) {
 	sink := &fakeEnqueuer{}
 	a := NewCommandAction(sink, func() string { return "fixed-id-1" })
 	statusLine, err := a.Apply(context.Background(), nil, Args{
-		Action: "restart_tunnel", UserID: 7, CheckName: "tunnel_amnezia_for_awg2",
+		Action: "router_doctor", UserID: 7, CheckName: "tunnel_amnezia_for_awg2",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,88 +114,12 @@ func TestCommandAction_RestartTunnelEnqueues(t *testing.T) {
 		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
 	}
 	c := sink.calls[0]
-	if c.userID != 7 || c.cmdID != "fixed-id-1" || c.action != "restart_tunnel" || c.check != "tunnel_amnezia_for_awg2" {
+	if c.userID != 7 || c.cmdID != "fixed-id-1" || c.action != "router_doctor" || c.check != "tunnel_amnezia_for_awg2" {
 		t.Errorf("got %+v", c)
 	}
-	// Строка дописывается под тревогой в личке владельца: VPN-туннели, а не
-	// awg-manager, и без «перезапуск … поставлено» с несогласованным родом.
-	if !strings.Contains(statusLine, "Перезапуск VPN-туннелей") || !strings.Contains(statusLine, "Отправлено роутеру") {
+	// Строка дописывается под тревогой в личке владельца: «Отправлено роутеру: …».
+	if !strings.Contains(statusLine, "Проверка") || !strings.Contains(statusLine, "Отправлено роутеру") {
 		t.Errorf("unexpected status line: %q", statusLine)
-	}
-}
-
-func TestCommandAction_RestartPanelLabelsAwgManager(t *testing.T) {
-	sink := &fakeEnqueuer{}
-	a := NewCommandAction(sink, func() string { return "fixed-id-1" })
-	statusLine, err := a.Apply(context.Background(), nil, Args{
-		Action: "restart_tunnel", UserID: 7, CheckName: panelSentinel,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(statusLine, "awg-manager") {
-		t.Fatalf("panel restart should name awg-manager, got %q", statusLine)
-	}
-	if strings.Contains(statusLine, "Перезапуск туннеля") {
-		t.Fatalf("panel restart must not look like a per-tunnel restart: %q", statusLine)
-	}
-}
-
-func TestCommandAction_TunnelRestartEnqueuesWithNDMS(t *testing.T) {
-	sink := &fakeEnqueuer{}
-	a := NewCommandAction(sink, func() string { return "fixed-id-2" })
-	statusLine, err := a.Apply(context.Background(), nil, Args{
-		Action: "tunnel_restart", UserID: 7, CheckName: "tunnel_awg13", NDMSName: "Wireguard3",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sink.calls) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
-	}
-	c := sink.calls[0]
-	if c.userID != 7 || c.cmdID != "fixed-id-2" || c.action != "tunnel_restart" || c.check != "tunnel_awg13" || c.ndms != "Wireguard3" {
-		t.Fatalf("got %+v", c)
-	}
-	if !strings.Contains(statusLine, "Перезапуск туннеля") || !strings.Contains(statusLine, "Отправлено роутеру") {
-		t.Errorf("unexpected status line: %q", statusLine)
-	}
-}
-
-func TestCommandAction_TunnelDeleteUsesExplicitTunnelID(t *testing.T) {
-	sink := &fakeEnqueuer{}
-	a := NewCommandAction(sink, func() string { return "fixed-del" })
-	_, err := a.Apply(context.Background(), nil, Args{
-		Action: "tunnel_delete", UserID: 7, CheckName: "tunnel_opkgtun10", TunnelID: "kernel-real-id",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sink.calls) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
-	}
-	if got := sink.calls[0].tunnel; got != "kernel-real-id" {
-		t.Fatalf("tunnel_id=%q, want explicit kernel-real-id; call=%+v", got, sink.calls[0])
-	}
-	if sink.calls[0].force {
-		t.Fatalf("kernel tunnel must not request legacy cleanup: %+v", sink.calls[0])
-	}
-}
-
-func TestCommandAction_TunnelDeleteForcesLegacyAWGCleanup(t *testing.T) {
-	sink := &fakeEnqueuer{}
-	a := NewCommandAction(sink, func() string { return "fixed-del-awg" })
-	_, err := a.Apply(context.Background(), nil, Args{
-		Action: "tunnel_delete", UserID: 7, CheckName: "tunnel_awg10", TunnelID: "awg10",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sink.calls) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
-	}
-	if !sink.calls[0].force {
-		t.Fatalf("legacy awg delete should request force cleanup: %+v", sink.calls[0])
 	}
 }
 
@@ -228,7 +151,6 @@ func TestCommandAction_CommandActions(t *testing.T) {
 		action  string
 		wantSub string
 	}{
-		{"restart_tunnel", "Перезапуск VPN-туннелей"},
 		{"diag_now", "Диагностика"},
 		{"pingcheck_now", "Тест связи"},
 		{"force_recheck", "Запрос отчёта"},
@@ -430,259 +352,3 @@ func (f *fakeTGForHistory) SendMessage(ctx context.Context, chatID int64, thread
 
 // Ensure db import is used (newTestDB already uses it, but keep explicit).
 var _ *db.DB
-
-func TestImportAction_Apply_Replace(t *testing.T) {
-	pending := map[int64]*pendingUpload{
-		42: {ConfB64: "abc", Name: "awg11", Token: "tok1", ExpiresAt: time.Now().Add(time.Minute)},
-	}
-	sink := &fakeEnqueuer{}
-	a := &ImportAction{
-		sink: sink,
-		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) {
-			if uid == 42 && token == "tok1" {
-				up := pending[uid]
-				delete(pending, uid)
-				return up, true
-			}
-			return nil, false
-		},
-		idGen: func() string { return "fixed-id" },
-	}
-	q := &tg.CallbackQuery{
-		ID:      "cbq1",
-		From:    tg.User{ID: 42},
-		Message: tg.Message{MessageID: 10, Chat: tg.Chat{ID: -100}},
-		Data:    "tunnel_import_replace:42:awg11:tok1",
-	}
-	args := Args{Action: "tunnel_import_replace", UserID: 42, CheckName: "awg11", ImportToken: "tok1"}
-	status, err := a.Apply(context.Background(), q, args)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(status, "awg11") {
-		t.Errorf("status: %q", status)
-	}
-	if !strings.Contains(status, "проверяю") {
-		t.Errorf("status should tell operator that tunnel start is being checked, got %q", status)
-	}
-	// EnqueueWithRef was called — check via refs slice
-	if len(sink.refs) == 0 {
-		t.Fatal("no EnqueueWithRef call")
-	}
-	// Action and args stored in calls (EnqueueWithRef delegates to Enqueue)
-	if len(sink.calls) == 0 {
-		t.Fatal("no enqueue call recorded")
-	}
-	lastCall := sink.calls[len(sink.calls)-1]
-	if lastCall.action != "tunnel_import" {
-		t.Errorf("cmd action: %q", lastCall.action)
-	}
-	if lastCall.backend != "nativewg" {
-		t.Errorf("cmd backend: %q, want nativewg", lastCall.backend)
-	}
-	if len(pending) != 0 {
-		t.Error("pending should be consumed")
-	}
-}
-
-func TestImportAction_Apply_Expired(t *testing.T) {
-	sink := &fakeEnqueuer{}
-	a := &ImportAction{
-		sink:      sink,
-		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) { return nil, false },
-		idGen:     func() string { return "x" },
-	}
-	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: -100}}}
-	_, err := a.Apply(context.Background(), q, Args{Action: "tunnel_import_replace", UserID: 99})
-	if err == nil || !strings.Contains(err.Error(), "истекла") {
-		t.Errorf("expected expiry error, got %v", err)
-	}
-}
-
-func TestImportAction_Apply_ForeignThreadDoesNotConsume(t *testing.T) {
-	ownThread := int64(11)
-	foreignThread := int64(22)
-	pending := map[int64]*pendingUpload{
-		42: {ConfB64: "abc", Name: "awg11", Token: "tok1", ThreadID: &ownThread, ExpiresAt: time.Now().Add(time.Minute)},
-	}
-	sink := &fakeEnqueuer{}
-	a := &ImportAction{
-		sink: sink,
-		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) {
-			up, ok := pending[uid]
-			if !ok || up.Token != token || !sameThread(up.ThreadID, threadID) {
-				return nil, false
-			}
-			delete(pending, uid)
-			return up, true
-		},
-		idGen: func() string { return "fixed-id" },
-	}
-	q := &tg.CallbackQuery{
-		ID:      "cbq-foreign-thread",
-		From:    tg.User{ID: 42},
-		Message: tg.Message{MessageID: 10, Chat: tg.Chat{ID: -100}, MessageThreadID: &foreignThread},
-		Data:    "tunnel_import_replace:42:_panel_:tok1",
-	}
-
-	_, err := a.Apply(context.Background(), q, Args{Action: "tunnel_import_replace", UserID: 42, CheckName: "_panel_", ImportToken: "tok1"})
-
-	if err == nil {
-		t.Fatal("expected foreign-thread import to be rejected")
-	}
-	if len(pending) != 1 {
-		t.Fatalf("pending upload must remain for original topic, pending=%v", pending)
-	}
-	if len(sink.calls) != 0 || len(sink.refs) != 0 {
-		t.Fatalf("foreign-thread import must not enqueue, calls=%v refs=%v", sink.calls, sink.refs)
-	}
-}
-
-func TestImportAction_Apply_EnqueueFailureKeepsPendingUpload(t *testing.T) {
-	pending := map[int64]*pendingUpload{
-		42: {ConfB64: "abc", Name: "awg11", Token: "tok1", ExpiresAt: time.Now().Add(time.Minute)},
-	}
-	sink := &fakeEnqueuer{err: errors.New("queue down")}
-	a := &ImportAction{
-		sink: sink,
-		consumeFn: func(uid int64, token string, threadID *int64) (*pendingUpload, bool) {
-			if uid == 42 && token == "tok1" {
-				up := pending[uid]
-				delete(pending, uid)
-				return up, true
-			}
-			return nil, false
-		},
-		restoreFn: func(uid int64, up *pendingUpload) {
-			pending[uid] = up
-		},
-		idGen: func() string { return "fixed-id" },
-	}
-	q := &tg.CallbackQuery{
-		ID:      "cbq-retry",
-		From:    tg.User{ID: 42},
-		Message: tg.Message{MessageID: 10, Chat: tg.Chat{ID: -100}},
-	}
-	args := Args{Action: "tunnel_import_replace", UserID: 42, ImportToken: "tok1"}
-
-	if _, err := a.Apply(context.Background(), q, args); err == nil {
-		t.Fatal("expected enqueue error")
-	}
-	if len(pending) != 1 {
-		t.Fatalf("pending upload should be restored after enqueue failure, pending=%v", pending)
-	}
-	sink.err = nil
-	if _, err := a.Apply(context.Background(), q, args); err != nil {
-		t.Fatalf("retry should enqueue after queue recovers: %v", err)
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "tunnel_import" {
-		t.Fatalf("retry should enqueue tunnel_import, calls=%+v", sink.calls)
-	}
-	if len(pending) != 0 {
-		t.Fatalf("pending upload should be consumed after successful retry, pending=%v", pending)
-	}
-}
-
-// fakeRebindEnqueuer is a minimal CommandEnqueuer that records the last
-// enqueued action and args. Used by RebindConfirmAction tests only.
-type fakeRebindEnqueuer struct {
-	lastAction string
-	lastArgs   map[string]any
-	err        error
-}
-
-func (f *fakeRebindEnqueuer) Enqueue(userID int64, cmd wire1.Command) error {
-	f.lastAction = cmd.Action
-	f.lastArgs = cmd.Args
-	return nil
-}
-
-func (f *fakeRebindEnqueuer) EnqueueWithRef(userID int64, cmd wire1.Command, ref cmdpkg.MessageRef) error {
-	if f.err != nil {
-		return f.err
-	}
-	f.lastAction = cmd.Action
-	f.lastArgs = cmd.Args
-	return nil
-}
-
-func TestRebindConfirmAction_TokenMissing(t *testing.T) {
-	a := &RebindConfirmAction{
-		consumeFn: func(int64, int64, string) (*pendingRebind, bool) { return nil, false },
-		idGen:     func() string { return "id1" },
-	}
-	q := &tg.CallbackQuery{Message: tg.Message{Chat: tg.Chat{ID: 1}}}
-	_, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "x"})
-	if err == nil {
-		t.Errorf("expected error when token unknown")
-	}
-}
-
-func TestRebindConfirmAction_HappyPath(t *testing.T) {
-	pr := &pendingRebind{
-		SrcID: "t1", DstID: "t2",
-		Token:     "tok1",
-		ExpiresAt: time.Now().Add(time.Minute),
-	}
-	consumed := false
-	sink := &fakeRebindEnqueuer{}
-	a := &RebindConfirmAction{
-		consumeFn: func(uid, actorTGID int64, token string) (*pendingRebind, bool) {
-			if uid == 42 && actorTGID == 99 && token == "tok1" && !consumed {
-				consumed = true
-				return pr, true
-			}
-			return nil, false
-		},
-		idGen: func() string { return "id1" },
-		sink:  sink,
-	}
-	q := &tg.CallbackQuery{From: tg.User{ID: 99}, Message: tg.Message{Chat: tg.Chat{ID: 1}, MessageID: 7}}
-	_, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sink.lastAction != "route_rebind" {
-		t.Errorf("enqueued %q, want route_rebind", sink.lastAction)
-	}
-	if sink.lastArgs["src_tunnel_id"] != "t1" || sink.lastArgs["dst_tunnel_id"] != "t2" {
-		t.Errorf("args: %+v", sink.lastArgs)
-	}
-}
-
-func TestRebindConfirmAction_EnqueueFailureKeepsToken(t *testing.T) {
-	pr := &pendingRebind{
-		SrcID: "t1", DstID: "t2",
-		Token:     "tok1",
-		ExpiresAt: time.Now().Add(time.Minute),
-	}
-	pending := pr
-	sink := &fakeRebindEnqueuer{err: errors.New("queue down")}
-	a := &RebindConfirmAction{
-		consumeFn: func(uid, actorTGID int64, token string) (*pendingRebind, bool) {
-			if uid == 42 && actorTGID == 99 && token == "tok1" && pending != nil {
-				got := pending
-				pending = nil
-				return got, true
-			}
-			return nil, false
-		},
-		restoreFn: func(pr *pendingRebind) {
-			pending = pr
-		},
-		idGen: func() string { return "id1" },
-		sink:  sink,
-	}
-	q := &tg.CallbackQuery{From: tg.User{ID: 99}, Message: tg.Message{Chat: tg.Chat{ID: 1}, MessageID: 7}}
-
-	if _, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"}); err == nil {
-		t.Fatal("expected enqueue error")
-	}
-	sink.err = nil
-	if _, err := a.Apply(context.Background(), q, Args{Action: "routes_confirm", UserID: 42, RebindToken: "tok1", RebindSrcID: "t1", RebindDstID: "t2"}); err != nil {
-		t.Fatalf("second confirm should retry after enqueue failure: %v", err)
-	}
-	if sink.lastAction != "route_rebind" {
-		t.Fatalf("lastAction=%q", sink.lastAction)
-	}
-}

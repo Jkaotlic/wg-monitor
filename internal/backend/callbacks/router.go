@@ -2,10 +2,6 @@ package callbacks
 
 import (
 	"context"
-	cryptoRand "crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,11 +9,9 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
-	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
@@ -87,29 +81,15 @@ func (ui UIConfigSnapshot) KeyboardForTopic(kind string) any {
 }
 
 type Router struct {
-	d            *db.DB
-	tg           TGClient
-	cfg          Config
-	silence      *SilenceAction
-	ack          *AckAction
-	mute         *MuteAction
-	history      *HistoryAction
-	command      *CommandAction
-	importAction *ImportAction
-	pendingMu    sync.Mutex
-	pending      map[int64]*pendingUpload
-
-	routesCache         *RoutesCache
-	routeWizard         *RouteWizardStore
-	rebindConfirmAction Action
-	cmdSink             CommandEnqueuer // saved for routes_open/refresh enqueue paths
-	pendingRebindsMu    sync.Mutex
-	pendingRebinds      map[string]*pendingRebind // keyed by 8-hex token
-
-	// Подтверждение перезапуска служб (hrneo / awgmgr). В памяти; теряется с рестартом.
-	pendingMaint    *pendingMaintStore
-	maintConfirmAct Action
-	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
+	d        *db.DB
+	tg       TGClient
+	cfg      Config
+	silence  *SilenceAction
+	ack      *AckAction
+	mute     *MuteAction
+	history  *HistoryAction
+	command  *CommandAction
+	upstream *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
 
 	// diagCache stores raw diag_now result bodies so "📄 Полный отчёт"
 	// inline-button taps can fetch the body without re-running the diagnostic.
@@ -127,20 +107,9 @@ type Router struct {
 }
 
 // NewRouter builds a Router without a command-channel sink. Command-action
-// callbacks (restart_tunnel/diag_now/...) will toast an error.
+// callbacks (diag_now/router_doctor/...) will toast an error.
 func NewRouter(d *db.DB, tgClient TGClient, cfg Config) *Router {
 	return NewRouterWithSink(d, tgClient, nil, cfg)
-}
-
-// SetRoutesCache attaches the per-user RoutesCache. Called from cmd/backend
-// during startup so the router can serve cached snapshots for routes_open
-// callbacks without re-querying the agent each time.
-func (r *Router) SetRoutesCache(c *RoutesCache) {
-	r.routesCache = c
-}
-
-func (r *Router) RouteWizardStore() *RouteWizardStore {
-	return r.routeWizard
 }
 
 func (r *Router) chatAllowed(chatID int64) bool {
@@ -165,38 +134,12 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 		d:       d,
 		tg:      tgClient,
 		cfg:     cfg,
-		pending: make(map[int64]*pendingUpload),
 		silence: NewSilenceAction(d),
 		ack:     NewAckAction(d),
 		mute:    NewMuteAction(d, cfg.MuteCutoffHour),
 		history: NewHistoryAction(d, tgClient, cfg.ChatID),
 		command: NewCommandAction(sink, nil),
 	}
-	r.importAction = &ImportAction{
-		sink: sink,
-		consumeFn: func(userID int64, token string, threadID *int64) (*pendingUpload, bool) {
-			r.pendingMu.Lock()
-			defer r.pendingMu.Unlock()
-			up, ok := r.pending[userID]
-			if !ok || up.Token != token || time.Now().After(up.ExpiresAt) || up.Name == "" || !sameThread(up.ThreadID, threadID) {
-				return nil, false
-			}
-			delete(r.pending, userID)
-			return up, true
-		},
-		restoreFn: func(userID int64, up *pendingUpload) {
-			r.pendingMu.Lock()
-			defer r.pendingMu.Unlock()
-			r.pending[userID] = up
-		},
-		idGen: defaultCmdID,
-	}
-	r.cmdSink = sink
-	r.pendingRebinds = make(map[string]*pendingRebind)
-	r.routeWizard = NewRouteWizardStore(5 * time.Minute)
-	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, r.putPendingRebind, defaultCmdID)
-	r.pendingMaint = newPendingMaintStore()
-	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, defaultCmdID)
 	r.diagCache = newDiagCache()
 	return r
 }
@@ -268,18 +211,6 @@ func (r *Router) saveOffset(offset int64) error {
 	return r.d.KV().Set("last_update_id", strconv.FormatInt(offset, 10))
 }
 
-func (r *Router) storePending(userID int64, up *pendingUpload) {
-	r.pendingMu.Lock()
-	defer r.pendingMu.Unlock()
-	r.pending[userID] = up
-}
-
-func newImportToken() string {
-	var b [4]byte
-	_, _ = cryptoRand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
 // HandleCallback applies allowlist, parses, dispatches to action, edits message.
 // Exposed for tests.
 //
@@ -293,6 +224,13 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	// проверки чата и до Parse (notify_mute_callback.go).
 	if isAdminMuteCallback(q.Data) {
 		r.handleAdminMuteCallback(ctx, q)
+		return
+	}
+	// Кнопки панелей туннелей, маршрутов и перезапуска служб ушли в
+	// приложение (цикл 4), а сообщения с ними остались в чатах: ответ
+	// словами, до проверки чата -- тост ничего не раскрывает и не меняет.
+	if isMovedToAppCallback(q.Data) {
+		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, movedToAppToast)
 		return
 	}
 	// Кнопка в собственной личке -- законный источник нажатия: уведомления
@@ -331,97 +269,13 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		action = r.mute
 	case "history":
 		action = r.history
-	case "restart_tunnel":
-		args.MaintName = "awgmgr"
-		r.handleMaintRestart(ctx, q, args)
-		return
-	case "diag_now", "pingcheck_now", "force_recheck", "router_doctor",
-		"tunnel_enable", "tunnel_disable", "tunnel_restart", "tunnel_delete", "check_via_tunnel", "check_direct":
-		if r.guardStaleTunnelPanelAction(ctx, q, args) {
-			return
-		}
+	case "diag_now", "pingcheck_now", "force_recheck", "router_doctor", "check_via_tunnel", "check_direct":
 		action = r.command
-	case "tunnel_delete_ask":
-		r.handleTunnelDeleteAsk(ctx, q, args)
-		return
-	case "tunnel_import_replace", "tunnel_import_add":
-		if r.importAction != nil {
-			action = r.importAction
-		}
-	case "tunnels_refresh":
-		// Re-read the live list from the agent. Event history is only a
-		// fallback; a deleted tunnel must not linger after refresh.
-		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
-			r.refreshTunnelsPanelCallback(ctx, q, u)
-		}
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обновляю")
-		return
-	case "routes_open", "routes_refresh":
-		r.handleRoutesOpen(ctx, q, args, args.Action == "routes_refresh")
-		return
-	case "routes_rebind":
-		r.handleRoutesRebindStart(ctx, q, args)
-		return
-	case "routes_pick":
-		r.handleRoutesRebindPick(ctx, q, args)
-		return
-	case "routes_rollback":
-		r.handleRoutesRollback(ctx, q, args)
-		return
-	case "routes_back":
-		r.handleRoutesOpen(ctx, q, args, false)
-		return
-	case "routes_add":
-		r.handleRoutesAddStart(ctx, q, args)
-		return
-	case "routes_add_type":
-		r.handleRoutesAddType(ctx, q, args)
-		return
-	case "routes_add_tunnel":
-		r.handleRoutesAddTunnel(ctx, q, args)
-		return
-	case "routes_tpl_load":
-		r.handleRoutesTemplateLoad(ctx, q, args)
-		return
-	case "routes_tpl_page":
-		r.handleRoutesTemplatePage(ctx, q, args)
-		return
-	case "routes_tpl_pick":
-		r.handleRoutesTemplatePick(ctx, q, args)
-		return
-	case "routes_add_confirm":
-		r.handleRoutesAddConfirm(ctx, q, args)
-		return
-	case "routes_add_cancel":
-		r.handleRoutesAddCancel(ctx, q, args)
-		return
-	case "routes_del":
-		r.handleRoutesDelete(ctx, q, args)
-		return
-	case "routes_del_confirm":
-		r.handleRoutesDeleteConfirm(ctx, q, args)
-		return
-	case "routes_del_cancel":
-		r.handleRoutesDeleteCancel(ctx, q, args)
-		return
-	case "routes_hrneo":
-		r.handleRoutesHRNeo(ctx, q, args)
-		return
-	case "routes_hrneo_doctor":
-		r.handleRoutesHRNeoDoctor(ctx, q, args)
-		return
-	case "routes_snapshot":
-		r.handleRoutesSnapshot(ctx, q, args)
-		return
-	case "routes_close", "close_panel":
+	case "close_panel":
 		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "закрыто")
 		empty := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
 		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, q.Message.Text, "", &empty)
 		return
-	case "routes_confirm":
-		if r.rebindConfirmAction != nil {
-			action = r.rebindConfirmAction
-		}
 	case "pingcheck_open":
 		if r.pingcheckOpenAct != nil {
 			action = r.pingcheckOpenAct
@@ -429,13 +283,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	case "pingcheck_toggle":
 		if r.pingcheckToggleAct != nil {
 			action = r.pingcheckToggleAct
-		}
-	case "maint_restart":
-		r.handleMaintRestart(ctx, q, args)
-		return
-	case "maint_confirm":
-		if r.maintConfirmAct != nil {
-			action = r.maintConfirmAct
 		}
 	case "diag_raw":
 		body, ok := r.diagCache.Get(args.DiagRawToken)
@@ -532,9 +379,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 // but bound owners/operators cannot run controls from the summary/main group.
 func (r *Router) aclAllow(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
 	if args.UserID == 0 {
-		if args.Action == "routes_close" {
-			return r.aclAllowLegacyRoutesClose(ctx, q, args)
-		}
 		return true
 	}
 	user, err := r.d.Users().GetByID(args.UserID)
@@ -617,29 +461,6 @@ func routerTopicRequiredBeforeNonAdminCallback(action string) bool {
 	return action != "" && action != "history"
 }
 
-func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
-	if q.Message.MessageThreadID == nil {
-		return true
-	}
-	user, err := r.d.Users().GetByChatThreadID(q.Message.Chat.ID, *q.Message.MessageThreadID, r.cfg.ChatID)
-	if err != nil {
-		if !errors.Is(err, db.ErrUserNotFound) {
-			slog.Warn("acl: legacy routes close topic lookup failed, allowing", "thread", *q.Message.MessageThreadID, "err", err)
-		}
-		return true
-	}
-	if user.TelegramUserID != nil && *user.TelegramUserID == q.From.ID {
-		return true
-	}
-	if r.d.RouterOperators().HasAccess(user.ID, q.From.ID) {
-		return true
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это не твой роутер")
-	slog.Warn("acl: rejected legacy untargeted routes close",
-		"from", q.From.ID, "router_user_id", user.ID, "thread", *q.Message.MessageThreadID, "data", q.Data, "action", args.Action)
-	return false
-}
-
 // HandleMessage dispatches an incoming text Message: chat/admin gate, topic
 // resolution, then the appropriate smart-reply / operations action.
 //
@@ -652,6 +473,16 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	// любых проверок доступа и даже до /myid (иначе «/myid vpn://…» оставит
 	// ключ в чате): он не должен висеть в переписке ни у кого.
 	if r.handleCabinetSecretMessage(ctx, m) {
+		return
+	}
+	// .conf с приватным ключом бот больше не импортирует (цикл 4): файл
+	// удаляется из переписки, человеку -- куда идти.
+	if r.handleConfDocument(ctx, m) {
+		return
+	}
+	// Старая нижняя клавиатура «🎛 Туннели» / «🛣 Маршруты» -- подсказка, куда
+	// это переехало (ревью цикла 4).
+	if r.handleMovedToAppText(ctx, m) {
 		return
 	}
 	// /myid отвечает кому угодно и откуда угодно -- до всех проверок доступа.
@@ -698,7 +529,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 				r.handleHelpCommand(ctx, m)
 			case "/menu", "/keyboard":
 				r.handleKeyboardCommand(ctx, m)
-			case "/status", "/check", "/tunnels", "/routes", "/via", "/direct":
+			case "/status", "/check", "/via", "/direct":
 				r.handleRouterSlashCommand(ctx, m, kind, user)
 			}
 			return
@@ -716,11 +547,6 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		return
 	}
 	kind, user := r.resolveTopicKind(m.Chat.ID, m.MessageThreadID)
-	// Document handler — before text switch.
-	if m.Document != nil {
-		r.handleDocumentUpload(ctx, m, kind, user)
-		return
-	}
 	if r.handleRouterSlashCommand(ctx, m, kind, user) {
 		return
 	}
@@ -731,20 +557,6 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя или в Сводке.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-	case "🎛 Туннели":
-		if kind == "per_router" && user != nil {
-			r.openTunnelsPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-	case "🛣 Маршруты":
-		if kind == "per_router" && user != nil {
-			r.openRoutesPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🌍 Через туннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
@@ -764,15 +576,6 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 			r.dispatchFleetHealth(ctx, m, kind)
 		}
 	default:
-		if r.handlePendingRouteReply(ctx, m, user) {
-			return
-		}
-		if r.handleRouteExplainReply(ctx, m, kind, user) {
-			return
-		}
-		if r.handlePendingNameReply(ctx, m, user) {
-			return
-		}
 		// Ignore — could be operator chatting; don't delete.
 		return
 	}
@@ -800,22 +603,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 		return true
-	case "/tunnels":
-		if kind == "per_router" && user != nil {
-			r.openTunnelsPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-		return true
-	case "/routes":
-		if kind == "per_router" && user != nil {
-			r.openRoutesPanelMessage(ctx, m, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-		return true
 	case "/check":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "router_doctor",
 			"⏳ Проверяю роутер изнутри: awg-manager, туннели, pingcheck и процессы…")
@@ -834,38 +621,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 
 func isFleetTopic(kind string) bool {
 	return kind == "summary" || kind == "systemic"
-}
-
-func (r *Router) handleRouteExplainReply(ctx context.Context, m *tg.Message, kind string, user *db.User) bool {
-	if kind != "per_router" || user == nil || r.routesCache == nil {
-		return false
-	}
-	target, ok := parseRouteExplainText(m.Text)
-	if !ok {
-		return false
-	}
-	snap, found := r.routesCache.Get(user.ID)
-	if !found {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"Сначала обнови маршруты, потом отправь: explain example.com", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return true
-	}
-	text := tg.RouteExplainText(user.Nickname, target, snap)
-	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, text, "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-	return true
-}
-
-func parseRouteExplainText(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	prefixes := []string{"explain ", "route ", "куда "}
-	low := strings.ToLower(text)
-	for _, p := range prefixes {
-		if strings.HasPrefix(low, p) {
-			target := strings.TrimSpace(text[len(p):])
-			return target, target != ""
-		}
-	}
-	return "", false
 }
 
 // resolveTopicKind classifies a thread id into "per_router" / "summary" /
@@ -923,248 +678,14 @@ func (r *Router) dispatchConnectivityCheck(ctx context.Context, m *tg.Message, k
 	}
 }
 
-func (r *Router) openTunnelsPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
-	loadingText := alerts.Card{
-		Badge:   "⏳",
-		Label:   "🎛 Туннели",
-		Summary: "читаю живой список с роутера",
-		Meta:    []string{alerts.KV("роутер", user.Nickname)},
-		Hint:    "Если экран не обновится, нажми «Обновить».",
-	}.Render(alerts.CardOpts{})
-	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
-	if err != nil {
-		slog.Warn("tunnels panel send failed", "err", err)
-		return
-	}
-	if r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "tunnels_status", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		slog.Warn("tunnels_status enqueue failed", "err", err)
-	}
-}
-
-func (r *Router) refreshTunnelsPanelCallback(ctx context.Context, q *tg.CallbackQuery, user *db.User) {
-	loadingText := alerts.Card{
-		Badge:   "⏳",
-		Label:   "🎛 Туннели",
-		Summary: "обновляю живой список с роутера",
-		Meta:    []string{alerts.KV("роутер", user.Nickname)},
-	}.Render(alerts.CardOpts{})
-	if err := r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", nil); err != nil {
-		slog.Warn("tunnels refresh edit failed", "err", err)
-	}
-	if r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "tunnels_status", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		slog.Warn("tunnels_status enqueue failed", "err", err)
-	}
-}
-
-// openRoutesPanelMessage sends the initial Routes panel as a fresh message
-// (so subsequent edits target this MessageID) and enqueues route_status.
-// The cmd-result handler edits when the agent answers.
-func (r *Router) openRoutesPanelMessage(ctx context.Context, m *tg.Message, user *db.User) {
-	loadingText := alerts.Card{
-		Badge:   "⏳",
-		Label:   "🛣 Маршруты",
-		Summary: "читаю правила с роутера",
-		Meta:    []string{alerts.KV("роутер", user.Nickname)},
-		Hint:    "Если экран не обновится, нажми «Обновить».",
-	}.Render(alerts.CardOpts{})
-	// IMPORTANT: send WITHOUT a reply_markup. TG refuses editMessageText on
-	// messages whose reply_markup is a ReplyKeyboardMarkup (only inline-kb
-	// markups are editable). RoutesNotifier needs to edit this message in
-	// place, so we forgo the per-message keyboard re-attach here — the
-	// bottom panel persists from the user's previous message anyway.
-	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, loadingText, "", nil)
-	if err != nil {
-		slog.Warn("routes panel send failed", "err", err)
-		return
-	}
-	if r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "route_status", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: m.Chat.ID, MessageID: mid, ThreadID: m.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		slog.Warn("route_status enqueue failed", "err", err)
-	}
-}
-
-// buildTunnelsPanel renders from the live route/tunnel snapshot cache when
-// available. The event-history branch is only a legacy fallback for callers
-// that cannot enqueue a fresh tunnels_status command.
-func (r *Router) buildTunnelsPanel(u *db.User) (string, tg.InlineKeyboardMarkup) {
-	if r.routesCache != nil {
-		if snap, ok := r.routesCache.Get(u.ID); ok {
-			entries := tunnelEntriesFromRouteSnapshot(snap)
-			return tg.TunnelsPanelText(u.Nickname, entries), tg.TunnelsPanelKeyboard(u.ID, entries)
-		}
-	}
-	// Stale-entity elision: only show tunnels whose latest event is at most
-	// 3 agent cycles old (~3 min). When awg-manager removes a tunnel, the
-	// agent stops emitting events for it; without this filter the dead
-	// tunnel sticks in the panel forever as "last known state".
-	freshSince := time.Now().Add(-3 * time.Minute)
-	rows, err := r.d.Events().LatestEventsByPrefixSince(u.ID, "tunnel_", freshSince)
-	if err != nil {
-		slog.Warn("buildTunnelsPanel: events lookup failed", "err", err, "user", u.ID)
-	}
-	entries := make([]tg.TunnelPanelEntry, 0, len(rows))
-	for _, row := range rows {
-		var det map[string]any
-		if row.DetailsJSON != "" && row.DetailsJSON != "null" {
-			_ = json.Unmarshal([]byte(row.DetailsJSON), &det)
-		}
-		// `enabled` may not be present in older events — default to true so we
-		// don't accidentally render a stale entry as disabled (the rest of the
-		// row will still surface real state via Status / handshake).
-		enabled := true
-		if v, ok := det["enabled"].(bool); ok {
-			enabled = v
-		}
-		entries = append(entries, tg.TunnelPanelEntry{
-			TunnelID:     strOrEmpty(det, "tunnel_id"),
-			Name:         strOrEmpty(det, "tunnel_name"),
-			CheckName:    row.CheckName,
-			Interface:    strOrEmpty(det, "interface"),
-			NDMSName:     strOrEmpty(det, "ndms_name"),
-			Enabled:      enabled,
-			Status:       strOrEmpty(det, "status"),
-			HandshakeAge: intOrZero(det, "handshake_age_sec"),
-		})
-	}
-	return tg.TunnelsPanelText(u.Nickname, entries), tg.TunnelsPanelKeyboard(u.ID, entries)
-}
-
-func (r *Router) handleTunnelDeleteAsk(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	if r.routesCache != nil {
-		if snap, ok := r.routesCache.Get(args.UserID); ok {
-			if entry, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName); found {
-				if tunnelPanelActionIsStale(args, entry) {
-					r.refreshStaleTunnelPanelAction(ctx, q, args, "список устарел; обновляю")
-					return
-				}
-				text := tg.TunnelDeleteConfirmText(entry)
-				kb := tg.TunnelDeleteConfirmKeyboard(args.UserID, entry)
-				_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-				_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-				return
-			}
-			if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
-				r.refreshTunnelsPanelCallback(ctx, q, u)
-			}
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "туннеля уже нет; обновляю список")
-			return
-		}
-	}
-	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil && r.cmdSink != nil {
-		r.refreshTunnelsPanelCallback(ctx, q, u)
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала обновляю живой список")
-		return
-	}
-	entry := tg.TunnelPanelEntry{
-		TunnelID:  args.TunnelID,
-		Name:      strings.TrimPrefix(args.CheckName, "tunnel_"),
-		CheckName: args.CheckName,
-		NDMSName:  args.NDMSName,
-	}
-	text := tg.TunnelDeleteConfirmText(entry)
-	kb := tg.TunnelDeleteConfirmKeyboard(args.UserID, entry)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) guardStaleTunnelPanelAction(ctx context.Context, q *tg.CallbackQuery, args Args) bool {
-	switch args.Action {
-	case "tunnel_enable", "tunnel_disable", "tunnel_restart", "tunnel_delete":
-	default:
-		return false
-	}
-	if r.routesCache == nil {
-		return false
-	}
-	snap, ok := r.routesCache.Get(args.UserID)
-	if !ok {
-		if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil && r.cmdSink != nil {
-			r.refreshTunnelsPanelCallback(ctx, q, u)
-			_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала обновляю живой список")
-			return true
-		}
-		return false
-	}
-	entry, found := tunnelPanelEntryFromRouteSnapshot(snap, args.CheckName)
-	if found && !tunnelPanelActionIsStale(args, entry) {
-		return false
-	}
-	if found {
-		r.refreshStaleTunnelPanelAction(ctx, q, args, "список устарел; обновляю")
-		return true
-	}
-	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
-		r.refreshTunnelsPanelCallback(ctx, q, u)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "туннеля уже нет; обновляю список")
-	return true
-}
-
-func (r *Router) refreshStaleTunnelPanelAction(ctx context.Context, q *tg.CallbackQuery, args Args, toast string) {
-	if u, err := r.d.Users().GetByID(args.UserID); err == nil && u != nil {
-		r.refreshTunnelsPanelCallback(ctx, q, u)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
-}
-
-func tunnelPanelActionIsStale(args Args, entry tg.TunnelPanelEntry) bool {
-	if args.Action == "tunnel_delete" || args.Action == "tunnel_delete_ask" {
-		argsTunnelID := strings.TrimSpace(args.TunnelID)
-		entryTunnelID := strings.TrimSpace(entry.TunnelID)
-		if argsTunnelID != "" && entryTunnelID != "" && argsTunnelID != entryTunnelID {
-			return true
-		}
-		if strings.TrimSpace(args.NDMSName) != "" && strings.TrimSpace(entry.NDMSName) != "" &&
-			strings.TrimSpace(args.NDMSName) != strings.TrimSpace(entry.NDMSName) {
-			return true
-		}
-	} else if strings.TrimSpace(args.NDMSName) != strings.TrimSpace(entry.NDMSName) {
-		return true
-	}
-	switch args.Action {
-	case "tunnel_disable":
-		return !entry.Enabled
-	case "tunnel_enable":
-		return entry.Enabled
-	}
-	return false
-}
-
-func (r *Router) BuildTunnelsPanelByUserID(userID int64) (string, tg.InlineKeyboardMarkup, bool) {
-	u, err := r.d.Users().GetByID(userID)
-	if err != nil || u == nil {
-		if err != nil {
-			slog.Warn("BuildTunnelsPanelByUserID: user lookup failed", "err", err, "user", userID)
-		}
-		return "", tg.InlineKeyboardMarkup{}, false
-	}
-	text, kb := r.buildTunnelsPanel(u)
-	return text, kb, true
-}
-
 func topicHelpBody(kind string) string {
 	switch kind {
 	case "per_router":
 		return "Меню роутера под сообщениями бота:\n" +
 			"📊 Что происходит? — короткая сводка и безопасный следующий шаг.\n" +
 			"🩺 Проверка — doctor изнутри роутера, без изменений.\n" +
-			"🎛 Туннели — живой статус, включить/выключить, awg-manager.\n" +
-			"🛣 Маршруты — DNS/static правила, перенос и снапшот.\n" +
 			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n\n" +
+			"VPN-туннели и маршруты — в приложении: роутер → «VPN-туннели».\n\n" +
 			"Если кнопка меняет состояние, бот поставит команду в очередь. Жди результат в этом топике и используй кнопки под результатом."
 	case "summary", "systemic":
 		return "Меню под сообщениями бота:\n" +
@@ -1208,6 +729,11 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 	// Кэша версий в памяти бота больше нет (он жил ради панели обслуживания):
 	// блок обновлений берётся из снимка в базе.
 	args.Updates = updatesFromCacheOrSnapshot(ctx, r.d, r.upstream, wire.VersionAudit{}, false, user.ID)
+	// Перезапуск и удаление VPN-туннелей и маршруты -- в приложении (цикл 4).
+	// Кнопку web_app Telegram принимает только в личке.
+	if tg.IsPrivateChat(m.Chat.ID) {
+		args.AppURL = tg.MiniAppRouterTabURL(r.cfg.PublicBaseURL, user.ID, "tunnels", "")
+	}
 	text, inline := alerts.FormatSmartReply(args)
 	// ReplyKeyboard cannot coexist with InlineKeyboard on a single message
 	// — TG accepts only one reply_markup per send. When FormatSmartReply
@@ -1227,15 +753,11 @@ func (r *Router) dispatchSmartReply(ctx context.Context, m *tg.Message, user *db
 	}
 }
 
-// collectTunnelViews builds []alerts.TunnelView for smart-reply. Prefer the
-// live route/tunnel snapshot cache so deleted tunnels do not stay visible in
-// manual status; fall back to recent events when no live snapshot exists yet.
+// collectTunnelViews builds []alerts.TunnelView for smart-reply from the
+// latest tunnel_* events of the last three minutes: a deleted tunnel stops
+// reporting and drops out. The live route snapshot cache went away with the
+// bot's routes panel (cycle 4).
 func (r *Router) collectTunnelViews(userID int64) []alerts.TunnelView {
-	if r.routesCache != nil {
-		if snap, ok := r.routesCache.Get(userID); ok {
-			return tunnelViewsFromRouteSnapshot(snap)
-		}
-	}
 	rows, err := r.d.Events().LatestEventsByPrefixSince(userID, "tunnel_", time.Now().Add(-3*time.Minute))
 	if err != nil {
 		slog.Warn("collectTunnelViews: query failed", "err", err, "user", userID)
@@ -1283,17 +805,8 @@ func (r *Router) collectActiveIncidents(userID int64) []alerts.IncidentView {
 		slog.Warn("collectActiveIncidents: query failed", "err", err, "user", userID)
 		return nil
 	}
-	var liveTunnelChecks map[string]bool
-	if r.routesCache != nil {
-		if snap, ok := r.routesCache.Get(userID); ok {
-			liveTunnelChecks = tunnelCheckNamesFromRouteSnapshot(snap)
-		}
-	}
 	out := make([]alerts.IncidentView, 0, len(rows))
 	for _, row := range rows {
-		if liveTunnelChecks != nil && strings.HasPrefix(row.CheckName, "tunnel_") && !liveTunnelChecks[row.CheckName] {
-			continue
-		}
 		var details map[string]any
 		if ev, ok, err := r.d.Events().LatestEvent(userID, row.CheckName); err == nil && ok && ev.DetailsJSON != "" {
 			_ = json.Unmarshal([]byte(ev.DetailsJSON), &details)
@@ -1406,99 +919,6 @@ func (r *Router) dispatchFleetHealth(ctx context.Context, m *tg.Message, kind st
 	_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID, b.String(), "", nil, r.cfg.UI.KeyboardForTopic(kind))
 }
 
-const maxUploadedTunnelConfigBytes = 50 * 1024
-
-func (r *Router) handleDocumentUpload(ctx context.Context, m *tg.Message, kind string, user *db.User) {
-	slog.Info("document-upload", "file", m.Document.FileName, "size", m.Document.FileSize, "kind", kind, "has_user", user != nil)
-	if kind != "per_router" || user == nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"конфиги принимаются только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		return
-	}
-	if m.Document.FileSize > maxUploadedTunnelConfigBytes {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"файл слишком большой (максимум 50 КБ для .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return
-	}
-	filePath, err := r.tg.GetFile(ctx, m.Document.FileID)
-	if err != nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"не удалось получить файл: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return
-	}
-	data, err := r.tg.DownloadFile(ctx, filePath)
-	if err != nil {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"не удалось скачать файл: "+err.Error(), "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return
-	}
-	if len(data) > maxUploadedTunnelConfigBytes {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"файл слишком большой (максимум 50 КБ для .conf).", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return
-	}
-	confB64 := base64.StdEncoding.EncodeToString(data)
-	suggested := sanitizeTunnelName(strings.TrimSuffix(m.Document.FileName, ".conf"))
-	token := newImportToken()
-	up := &pendingUpload{
-		ConfB64:       confB64,
-		SuggestedName: suggested,
-		ThreadID:      m.MessageThreadID,
-		Token:         token,
-		ExpiresAt:     time.Now().Add(5 * time.Minute),
-	}
-	if isValidTunnelName(suggested) {
-		up.Name = suggested
-		r.storePending(user.ID, up)
-		r.sendImportConfirmation(ctx, m.Chat.ID, m.MessageThreadID, user.ID, suggested, token)
-	} else {
-		r.storePending(user.ID, up)
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			fmt.Sprintf("📁 Получен файл «%s». Как назвать туннель? (a-z0-9_-, начинается с буквы, предложение: %q)",
-				m.Document.FileName, suggested),
-			"", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-	}
-}
-
-func (r *Router) sendImportConfirmation(ctx context.Context, chatID int64, threadID *int64, userID int64, name, token string) {
-	kb := tg.InlineKeyboardMarkup{
-		InlineKeyboard: [][]tg.InlineKeyboardButton{
-			{{Text: fmt.Sprintf("🔄 Заменить %s", name),
-				CallbackData: fmt.Sprintf("tunnel_import_replace:%d:%s:%s", userID, panelSentinel, token)}},
-			{{Text: "➕ Добавить как новый",
-				CallbackData: fmt.Sprintf("tunnel_import_add:%d:%s:%s", userID, panelSentinel, token)}},
-		},
-	}
-	if _, err := r.tg.SendMessageWithReplyKeyboard(ctx, chatID, threadID,
-		fmt.Sprintf("📁 Конфиг для туннеля «%s». Что делать?", name),
-		"", nil, &kb); err != nil {
-		slog.Warn("sendImportConfirmation failed", "err", err, "name", name)
-	}
-}
-
-func (r *Router) handlePendingNameReply(ctx context.Context, m *tg.Message, user *db.User) bool {
-	if user == nil {
-		return false
-	}
-	r.pendingMu.Lock()
-	up, ok := r.pending[user.ID]
-	r.pendingMu.Unlock()
-	if !ok || time.Now().After(up.ExpiresAt) || up.Name != "" {
-		return false
-	}
-	name := sanitizeTunnelName(m.Text)
-	if !isValidTunnelName(name) {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			fmt.Sprintf("Имя %q не подходит (нужно a-z0-9_-, начинается с буквы). Попробуй снова.", m.Text),
-			"", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return true
-	}
-	up.Name = name
-	r.storePending(user.ID, up)
-	r.sendImportConfirmation(ctx, m.Chat.ID, m.MessageThreadID, user.ID, name, up.Token)
-	return true
-}
-
 // humanAgeDur is a local copy of alerts.humanAgeDur (private there). Keeping
 // it local avoids exporting an alerts symbol just for this caller.
 func humanAgeDur(d time.Duration) string {
@@ -1513,595 +933,6 @@ func humanAgeDur(d time.Duration) string {
 		return fmt.Sprintf("%dм", s/60)
 	}
 	return fmt.Sprintf("%dч", s/3600)
-}
-
-// ----- pendingRebind helpers -----
-
-func (r *Router) putPendingRebind(pr *pendingRebind) {
-	r.pendingRebindsMu.Lock()
-	defer r.pendingRebindsMu.Unlock()
-	if r.pendingRebinds == nil {
-		r.pendingRebinds = make(map[string]*pendingRebind)
-	}
-	r.pendingRebinds[pr.Token] = pr
-}
-
-func (r *Router) consumePendingRebindForActor(userID, actorTGID int64, token string) (*pendingRebind, bool) {
-	r.pendingRebindsMu.Lock()
-	defer r.pendingRebindsMu.Unlock()
-	pr, ok := r.pendingRebinds[token]
-	if !ok {
-		return nil, false
-	}
-	// Don't delete on UserID mismatch — другой member чата не должен
-	// иметь возможности DoS'нуть owner'у его подтверждение (BUG-04).
-	if pr.UserID != userID {
-		return nil, false
-	}
-	if pr.ActorTGID != 0 && pr.ActorTGID != actorTGID {
-		return nil, false
-	}
-	if time.Now().After(pr.ExpiresAt) {
-		delete(r.pendingRebinds, token)
-		return nil, false
-	}
-	delete(r.pendingRebinds, token)
-	return pr, true
-}
-
-// ----- routes handlers -----
-
-// handleRoutesOpen renders Screen 2 and always enqueues route_status so the
-// panel is replaced by live AWG Manager state when the agent answers. A recent
-// cache is only a temporary panel while the fresh read is in flight.
-func (r *Router) handleRoutesOpen(ctx context.Context, q *tg.CallbackQuery, args Args, force bool) {
-	user, err := r.d.Users().GetByID(args.UserID)
-	if err != nil || user == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "роутер не найден")
-		return
-	}
-	if !force && r.routesCache != nil {
-		if snap, ok := r.routesCache.Get(user.ID); ok {
-			text := "🔄 обновляю живые данные с роутера...\n\n" + tg.RoutesPanelText(user.Nickname, snap)
-			kb := routesRefreshingKeyboard(user.ID)
-			_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-		}
-	}
-	if r.cmdSink == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "command sink не подключён")
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "route_status", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	loadingText := fmt.Sprintf("🛣 Маршруты — %s\n   обновляется…", user.Nickname)
-	loadingKB := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{}}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, loadingText, "", &loadingKB)
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		slog.Warn("routes_open: enqueue failed", "err", err)
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не получилось запросить статус")
-		return
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func routesRefreshingKeyboard(userID int64) tg.InlineKeyboardMarkup {
-	return tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", userID)},
-		{Text: "Закрыть", CallbackData: fmt.Sprintf("routes_close:%d:_panel_", userID)},
-	}}}
-}
-
-func (r *Router) handleRoutesRebindStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		return
-	}
-	if r.routesCache == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
-		return
-	}
-	snap, ok := r.routesCache.Get(user.ID)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
-		return
-	}
-	text, kb := tg.RebindPickKeyboard(user.ID, args.RebindSrcID, snap)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-// ----- service restart confirm -----
-
-// handleMaintRestart рисует подтверждение перезапуска службы и кладёт токен.
-// Перезагрузка роутера переехала в мини-апп: старая кнопка отвечает словами,
-// а не подтверждением.
-func (r *Router) handleMaintRestart(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		return
-	}
-	if !botServiceRestartNames[args.MaintName] {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "это действие переехало в приложение")
-		return
-	}
-	tok := makeMaintToken()
-	r.pendingMaint.put(&pendingMaint{
-		UserID: user.ID, ActorTGID: q.From.ID, Name: args.MaintName, Token: tok,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.RestartConfirmText(args.MaintName, tok)
-	kb := tg.RestartConfirmKeyboard(user.ID, args.MaintName, tok)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-// ----- routes rebind handlers -----
-
-func (r *Router) handleRoutesRebindPick(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		return
-	}
-	if args.RebindSrcID == args.RebindDstID {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "src == dst — нечего переносить")
-		return
-	}
-	if r.routesCache == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
-		return
-	}
-	snap, ok := r.routesCache.Get(user.ID)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй ещё раз")
-		return
-	}
-	token := makeRebindToken()
-	r.putPendingRebind(&pendingRebind{
-		UserID: user.ID, ActorTGID: q.From.ID, SrcID: args.RebindSrcID, DstID: args.RebindDstID,
-		Token: token, ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.RebindPreviewText(snap, args.RebindSrcID, args.RebindDstID, token)
-	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindSrcID, args.RebindDstID, token)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesRollback(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil {
-		return
-	}
-	if args.RebindSrcID == "" || args.RebindDstID == "" {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "rollback parameters missing")
-		return
-	}
-	if args.RebindSrcID == args.RebindDstID {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "src == dst — нечего откатывать")
-		return
-	}
-	token := makeRebindToken()
-	r.putPendingRebind(&pendingRebind{
-		UserID:    user.ID,
-		ActorTGID: q.From.ID,
-		SrcID:     args.RebindDstID,
-		DstID:     args.RebindSrcID,
-		Token:     token, ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	text := tg.RebindRollbackConfirmText(args.RebindSrcID, args.RebindDstID, token)
-	kb := tg.RebindPreviewKeyboard(user.ID, args.RebindDstID, args.RebindSrcID, token)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesAddStart(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	text := "🛣 Добавить маршрут\n\nЧто направляем:\n  • DNS / HR-Neo — домены через выбранный туннель\n  • Static CIDR — IP/подсети через выбранный туннель"
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-		{{Text: "DNS (NDMS)", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns", args.UserID)}},
-		{{Text: "DNS / HR-Neo", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:dns_hr", args.UserID)}},
-		{{Text: "Static CIDR", CallbackData: fmt.Sprintf("routes_add_type:%d:_panel_:static", args.UserID)}},
-		{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", args.UserID)}},
-	}}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesAddType(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routesCache == nil || r.routeWizard == nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "маршруты ещё не загружены")
-		return
-	}
-	snap, ok := r.routesCache.Get(user.ID)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй снова")
-		return
-	}
-	if args.RouteUseHRNeo && !(snap.HRNeo.Installed && snap.HRNeo.Running) {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "HR-Neo не работает; выбери DNS (NDMS) или запусти HR-Neo")
-		return
-	}
-	draft := r.routeWizard.PutAddDraft(RouteAddDraft{
-		UserID: user.ID, ActorTGID: q.From.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID,
-		Kind: args.RouteKind, UseHRNeo: args.RouteUseHRNeo,
-	})
-	rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Tunnels)+1)
-	for _, t := range snap.Tunnels {
-		rows = append(rows, []tg.InlineKeyboardButton{{
-			Text:         t.Name,
-			CallbackData: fmt.Sprintf("routes_add_tunnel:%d:_panel_:%s:%s", user.ID, draft.Token, t.ID),
-		}})
-	}
-	rows = append(rows, []tg.InlineKeyboardButton{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", user.ID, draft.Token)}})
-	text := "🛣 Добавить маршрут\n\nКуда вести трафик:\n  • выбери туннель, через который должны идти эти домены или IP"
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: rows}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesAddTunnel(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routeWizard == nil {
-		return
-	}
-	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
-		return
-	}
-	draft.TunnelID = args.RebindDstID
-	r.routeWizard.PutAddDraft(draft)
-	text := "🛣 Добавить маршрут\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — домены или IP\n\nМожно также выбрать готовый шаблон AWG Manager кнопкой ниже.\n\nПример:\nmedia\nexample.com\napi.example.com"
-	if draft.Kind == "static" {
-		text = "🛣 Добавить static route\n\nОтправь одним сообщением:\n  • первая строка — название правила\n  • следующие строки — CIDR/IP цели\n\nПример:\ncorp\n10.10.0.0/16\n192.0.2.7"
-	}
-	kb := routeAddInputKeyboard(user.ID, draft)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func routeAddInputKeyboard(userID int64, draft RouteAddDraft) tg.InlineKeyboardMarkup {
-	rows := [][]tg.InlineKeyboardButton{}
-	if draft.Kind == "dns" {
-		rows = append(rows, []tg.InlineKeyboardButton{{
-			Text:         "📚 AWG Manager templates",
-			CallbackData: fmt.Sprintf("routes_tpl_load:%d:_panel_:%s", userID, draft.Token),
-		}})
-	}
-	rows = append(rows, []tg.InlineKeyboardButton{{
-		Text:         "↩ Отмена",
-		CallbackData: fmt.Sprintf("routes_add_cancel:%d:_panel_:%s", userID, draft.Token),
-	}})
-	return tg.InlineKeyboardMarkup{InlineKeyboard: rows}
-}
-
-func (r *Router) handleRoutesTemplateLoad(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
-		return
-	}
-	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
-	if !ok || draft.TunnelID == "" {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
-		return
-	}
-	if draft.Kind != "dns" {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "templates are available for DNS routes")
-		return
-	}
-	cmd := wire.Command{ID: fmt.Sprintf("route_templates:%s:%s", draft.Token, defaultCmdID()), Action: "route_templates", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "route_templates"}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Loading AWG Manager templates...", "", nil)
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Не удалось поставить загрузку шаблонов в очередь: "+err.Error(), "", nil)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesTemplatePage(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routeWizard == nil {
-		return
-	}
-	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
-	if !ok || draft.TunnelID == "" {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
-		return
-	}
-	catalog, ok := r.routeWizard.GetTemplateCatalogForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "templates expired")
-		return
-	}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID, Action: "route_templates"}
-	if err := renderRouteTemplatesPage(ctx, r.tg, r.routeWizard, ref, user, draft, args.RouteDraftToken, catalog.Templates, args.RouteTemplatePage); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, shortToast(err))
-		return
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesTemplatePick(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
-		return
-	}
-	tpl, ok := r.routeWizard.GetTemplateTokenForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteTemplateToken)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "template expired")
-		return
-	}
-	draft, ok := r.routeWizard.GetAddDraftForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken)
-	if !ok || draft.TunnelID == "" {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "draft expired")
-		return
-	}
-	draft.TemplateID = tpl.TemplateID
-	draft.Name = ""
-	draft.Targets = nil
-	draft = r.routeWizard.PutAddDraft(draft)
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Готовлю preview шаблона "+tpl.TemplateName+"...", "", nil)
-	if err := r.enqueueRouteAddPlan(user, q.Message.Chat.ID, q.Message.MessageID, q.Message.MessageThreadID, draft); err != nil {
-		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "Не удалось поставить проверку маршрута в очередь: "+err.Error(), "", nil)
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handlePendingRouteReply(ctx context.Context, m *tg.Message, user *db.User) bool {
-	if user == nil || r.routeWizard == nil {
-		return false
-	}
-	draft, ok := r.routeWizard.GetOpenAddDraftForActor(user.ID, m.From.ID, m.MessageThreadID, user.ID)
-	if !ok || draft.TunnelID == "" {
-		return false
-	}
-	templateID := parseRouteTemplateReply(m.Text)
-	name, targets := "", []string(nil)
-	if templateID == "" {
-		name, targets = parseRouteAddReply(m.Text)
-	}
-	if templateID == "" && (name == "" || len(targets) == 0) {
-		_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-			"Не понял маршрут.\n\nФормат:\n  • первая строка — название\n  • ниже хотя бы одна цель: домен, IP или CIDR\n\nДля готового правила выбери шаблон AWG Manager кнопкой в мастере.", "", nil, r.cfg.UI.KeyboardForTopic("per_router"))
-		return true
-	}
-	draft.Name = name
-	draft.Targets = targets
-	draft.TemplateID = templateID
-	draft = r.routeWizard.PutAddDraft(draft)
-	if r.cmdSink == nil {
-		return true
-	}
-	ack := "⏳ Проверяю, не конфликтует ли маршрут с уже существующими правилами…"
-	mid, err := r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, ack, "", nil)
-	if err != nil {
-		mid = m.MessageID
-	}
-	if err := r.enqueueRouteAddPlan(user, m.Chat.ID, mid, m.MessageThreadID, draft); err != nil {
-		_, _ = r.tg.SendMessage(ctx, m.Chat.ID, m.MessageThreadID, "Не удалось поставить проверку маршрута в очередь: "+err.Error(), "", nil)
-	}
-	return true
-}
-
-func (r *Router) enqueueRouteAddPlan(user *db.User, chatID, messageID int64, threadID *int64, draft RouteAddDraft) error {
-	if r.cmdSink == nil {
-		return nil
-	}
-	cmd := wire.Command{
-		ID:       fmt.Sprintf("route_add_plan:%s:%s", draft.Token, defaultCmdID()),
-		Action:   "route_add_plan",
-		IssuedAt: time.Now().UTC(),
-		Args: map[string]any{
-			"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
-			"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "template_id": draft.TemplateID,
-		},
-	}
-	ref := cmdpkg.MessageRef{ChatID: chatID, MessageID: messageID, ThreadID: threadID, Action: "route_add_plan"}
-	return r.cmdSink.EnqueueWithRef(user.ID, cmd, ref)
-}
-
-func (r *Router) handleRoutesAddConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
-		return
-	}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	ok, err := r.routeWizard.ApplyAddConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken, func(draft RouteAddDraft) error {
-		cmd := wire.Command{ID: defaultCmdID(), Action: "route_add", IssuedAt: time.Now().UTC(), Args: map[string]any{
-			"kind": draft.Kind, "name": draft.Name, "tunnel_id": draft.TunnelID,
-			"targets": draft.Targets, "use_hr_neo": draft.UseHRNeo, "template_id": draft.TemplateID, "draft_hash": draft.PreviewHash,
-		}}
-		return r.cmdSink.EnqueueWithRef(user.ID, cmd, ref)
-	})
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
-		return
-	}
-	if err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
-		return
-	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Применяю изменение маршрута…", "", nil)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesAddCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	if r.routeWizard != nil {
-		r.routeWizard.CancelAddDraftForActor(args.UserID, q.From.ID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
-	}
-	r.handleRoutesOpen(ctx, q, args, false)
-}
-
-func (r *Router) handleRoutesDelete(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routesCache == nil || r.routeWizard == nil {
-		return
-	}
-	snap, ok := r.routesCache.Get(user.ID)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "обнови маршруты и попробуй снова")
-		return
-	}
-	if args.RouteToken == "_list_" {
-		rows := make([][]tg.InlineKeyboardButton, 0, len(snap.Rules)+1)
-		for _, rule := range snap.Rules {
-			token := r.routeWizard.PutRouteToken(RouteToken{UserID: user.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rule.Kind, RouteID: rule.ID, PreviewHash: routeHash(rule)})
-			label := rule.Name
-			if label == "" {
-				label = rule.ID
-			}
-			rows = append(rows, []tg.InlineKeyboardButton{{Text: label, CallbackData: fmt.Sprintf("routes_del:%d:_panel_:%s", user.ID, token)}})
-		}
-		rows = append(rows, []tg.InlineKeyboardButton{{Text: "↩ Отмена", CallbackData: fmt.Sprintf("routes_back:%d:_panel_", user.ID)}})
-		_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "🛣 Удалить маршрут\n\nВыбери одно правило для удаления.", "", &tg.InlineKeyboardMarkup{InlineKeyboard: rows})
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-		return
-	}
-	rt, ok := r.routeWizard.GetRouteToken(user.ID, q.Message.MessageThreadID, user.ID, args.RouteToken)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "выбор маршрута устарел")
-		return
-	}
-	draft := r.routeWizard.PutDeleteDraft(RouteDeleteDraft{UserID: user.ID, ActorTGID: q.From.ID, ThreadID: q.Message.MessageThreadID, RouterID: user.ID, Kind: rt.Kind, RouteID: rt.RouteID, PreviewHash: rt.PreviewHash})
-	cmd := wire.Command{ID: fmt.Sprintf("route_delete_plan:%s:%s", draft.Token, defaultCmdID()), Action: "route_delete_plan", IssuedAt: time.Now().UTC(), Args: map[string]any{
-		"kind": rt.Kind, "route_id": rt.RouteID,
-	}}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
-		return
-	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Готовлю превью удаления…", "", nil)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesDeleteConfirm(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routeWizard == nil || r.cmdSink == nil {
-		return
-	}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	ok, err := r.routeWizard.ApplyDeleteConfirmForActor(user.ID, q.From.ID, q.Message.MessageThreadID, user.ID, args.RouteDraftToken, args.RouteConfirmToken, func(draft RouteDeleteDraft) error {
-		cmd := wire.Command{ID: defaultCmdID(), Action: "route_delete", IssuedAt: time.Now().UTC(), Args: map[string]any{
-			"kind": draft.Kind, "route_id": draft.RouteID, "preview_hash": draft.PreviewHash,
-		}}
-		return r.cmdSink.EnqueueWithRef(user.ID, cmd, ref)
-	})
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "превью устарело")
-		return
-	}
-	if err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
-		return
-	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Удаляю маршрут…", "", nil)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesDeleteCancel(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	if r.routeWizard != nil {
-		r.routeWizard.CancelDeleteDraftForActor(args.UserID, q.From.ID, q.Message.MessageThreadID, args.UserID, args.RouteDraftToken)
-	}
-	r.handleRoutesOpen(ctx, q, args, false)
-}
-
-func (r *Router) handleRoutesHRNeo(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "hrneo_inventory", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
-		return
-	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Загружаю HR-Neo правила…", "", nil)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesHRNeoDoctor(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.cmdSink == nil {
-		return
-	}
-	cmd := wire.Command{ID: defaultCmdID(), Action: "hrneo_doctor", IssuedAt: time.Now().UTC()}
-	ref := cmdpkg.MessageRef{Action: "hrneo_doctor", ChatID: q.Message.Chat.ID, MessageID: q.Message.MessageID, ThreadID: q.Message.MessageThreadID}
-	if err := r.cmdSink.EnqueueWithRef(user.ID, cmd, ref); err != nil {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "не удалось поставить задачу")
-		return
-	}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, "⏳ Проверяю HR-Neo…", "", nil)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func (r *Router) handleRoutesSnapshot(ctx context.Context, q *tg.CallbackQuery, args Args) {
-	user, _ := r.d.Users().GetByID(args.UserID)
-	if user == nil || r.routesCache == nil {
-		return
-	}
-	snap, ok := r.routesCache.Get(user.ID)
-	if !ok {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "сначала обнови маршруты")
-		return
-	}
-	text := tg.RouteSnapshotText(user.Nickname, snap)
-	kb := tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{{
-		{Text: "🛣 К маршрутам", CallbackData: fmt.Sprintf("routes_open:%d:_panel_", user.ID)},
-		{Text: "🔁 Обновить", CallbackData: fmt.Sprintf("routes_refresh:%d:_panel_", user.ID)},
-	}}}
-	_ = r.tg.EditMessageText(ctx, q.Message.Chat.ID, q.Message.MessageID, text, "", &kb)
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "")
-}
-
-func parseRouteAddReply(text string) (string, []string) {
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	if len(lines) == 1 {
-		parts := strings.SplitN(lines[0], ":", 2)
-		if len(parts) == 2 {
-			return strings.TrimSpace(parts[0]), splitRouteTargets(parts[1])
-		}
-		return "", nil
-	}
-	name := strings.TrimSpace(lines[0])
-	targets := splitRouteTargets(strings.Join(lines[1:], "\n"))
-	return name, targets
-}
-
-func parseRouteTemplateReply(text string) string {
-	text = strings.TrimSpace(text)
-	if strings.Contains(text, "\n") {
-		return ""
-	}
-	for _, prefix := range []string{"template:", "template=", "шаблон:", "шаблон="} {
-		if v, ok := strings.CutPrefix(strings.ToLower(text), prefix); ok {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
-func splitRouteTargets(text string) []string {
-	fields := strings.FieldsFunc(text, func(r rune) bool {
-		return r == '\n' || r == ',' || r == ';' || r == ' ' || r == '\t'
-	})
-	out := make([]string, 0, len(fields))
-	seen := make(map[string]bool)
-	for _, field := range fields {
-		field = strings.TrimSpace(field)
-		if field == "" || seen[field] {
-			continue
-		}
-		seen[field] = true
-		out = append(out, field)
-	}
-	return out
-}
-
-func routeHash(v any) string {
-	b, _ := json.Marshal(v)
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:8])
 }
 
 // SetUpstream attaches the upstream version cache used by smart-reply
@@ -2147,14 +978,5 @@ func (r *Router) SetDiagDrillDown() {
 // NewPingCheckNotifier returns a PingCheckPanelNotifier wired against this
 // router's TG client and DB. Pass the returned value into handler.Deps.PingCheckNotifier.
 func (r *Router) NewPingCheckNotifier() *PingCheckPanelNotifier {
-	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d}
-}
-
-// shortToast -- текст ошибки, укороченный под всплывашку Telegram (200 знаков).
-func shortToast(err error) string {
-	msg := err.Error()
-	if len(msg) > 180 {
-		return msg[:180]
-	}
-	return msg
+	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d, AppBaseURL: r.cfg.PublicBaseURL}
 }

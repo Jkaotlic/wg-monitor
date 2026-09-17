@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
 import { accountSummary, optionRows } from '../cabinet.js'
-import { replaceView, startErrorText, stepValue } from '../replace.js'
+import { replaceView, startErrorText, stepValue, replaceLeftover } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { ListRow } from '../ui/ListRow.jsx'
@@ -20,7 +20,9 @@ const POLL_MS = 3000
 
 // onOpenCabinet -- открыть кабинет роутера: там владелец и админ отзывают
 // выпущенную страну, когда в подписке нет мест.
-export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet }) {
+// onOpenTunnel(tunnelID|null) -- к экрану VPN-туннеля, который мастер оставил на
+// роутере (null -- к списку): разбираться с ним человек будет там.
+export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet, onOpenTunnel }) {
   const [job, setJob] = useState(null)
   const [accounts, setAccounts] = useState(null)
   const [pick, setPick] = useState(null)
@@ -60,6 +62,7 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
   }, [routerID])
 
   const view = replaceView(job)
+  const leftover = onOpenTunnel ? replaceLeftover(view, tunnel) : null
 
   function start() {
     if (!pick) return
@@ -109,6 +112,23 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, o
               )}
               {view.rollback && <p class="card-foot">Откат: {view.rollback}</p>}
             </div>
+            {leftover && (
+              <div class="card replace-leftover">
+                <p class="traffic-detail">
+                  <Quoted text={leftover.text} />
+                </p>
+                <button
+                  type="button"
+                  class="btn btn-ghost btn-wide"
+                  onClick={() => {
+                    onDone?.()
+                    onOpenTunnel(leftover.tunnelID)
+                  }}
+                >
+                  <Quoted text={leftover.button} />
+                </button>
+              </div>
+            )}
             {view.running ? (
               <p class="hint">
                 Можно закрыть приложение: замена идёт на сервере и договорит сама. Бот напишет в

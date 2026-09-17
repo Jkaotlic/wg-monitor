@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { parseRouteSnapshot, snapshotState } from '../routes.js'
+import { fetchRouterSettings } from '../api.js'
+import { parseRouteSnapshot, snapshotState, tunnelRuleSummary } from '../routes.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
+import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { IMPORT_TEXTS } from '../confImport.js'
 import { trafficSummary } from '../traffic.js'
 import { humanAge } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
@@ -13,7 +16,10 @@ import { Chain } from '../ui/Chain.jsx'
 import { DataRow } from '../ui/DataRow.jsx'
 import { NavCard } from '../ui/NavCard.jsx'
 import { useOnClose } from '../useOnClose.js'
+import { ListRow } from '../ui/ListRow.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
+import { TunnelScreen } from './TunnelScreen.jsx'
+import { ConfImportScreen } from './ConfImportScreen.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -34,8 +40,19 @@ const CHAIN_TITLE = {
 
 // Кабинет -- слой навигации (cabinet), а не внутреннее состояние вкладки:
 // его адрес переживает обновление страницы, и «назад» Telegram закрывает его.
-export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCabinet, cabinetOpen = false }) {
+// onOpenRebind(tunnelID) -- «Маршруты» с выбором цели переноса для этого
+// VPN-туннеля. routesOpen -- слой «Маршрутов» открыт поверх вкладки: после его
+// закрытия снимок перечитывается, правила могли уехать.
+export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openSheet, onOpenCabinet, cabinetOpen = false, routesOpen = false }) {
   const [replacing, setReplacing] = useState(null)
+  // Экран VPN-туннеля -- локальный слой, как мастер замены: в адрес не пишется.
+  const [inspecting, setInspecting] = useState(null)
+  // Роль решает, рисовать ли удаление и загрузку конфига; не узнали -- кнопок
+  // нет, граница всё равно на сервере.
+  const [role, setRole] = useState('')
+  // Загрузка .conf -- тоже локальный слой: содержимое конфига не должно
+  // оказаться в навигации даже случайно.
+  const [importing, setImporting] = useState(false)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
@@ -43,10 +60,23 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCa
 
   // Кабинет закрыт -- в нём мог появиться новый VPN-туннель: переспросить.
   useOnClose(cabinetOpen, () => run('route_status', {}, deadline))
+  useOnClose(routesOpen, () => run('route_status', {}, deadline))
 
   useEffect(() => {
     setSnapshot(null)
+    setInspecting(null)
+    setImporting(false)
+    setRole('')
     run('route_status', {}, deadline)
+    let alive = true
+    fetchRouterSettings(routerID)
+      .then((s) => {
+        if (alive) setRole(s?.role ?? '')
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
   }, [routerID])
 
   useEffect(() => {
@@ -54,6 +84,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCa
   }, [result])
 
   const view = tunnelsView(snapshot)
+  const list = tunnelList(snapshot)
   const phase = snapshotState({ busy, error, result, snapshot })
   // Обмен подтягивается сам, как только известен активный VPN-туннель. Раньше он
   // ждал кнопки, и карточка держала «неизвестно» -- то есть экран просил у
@@ -273,6 +304,24 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCa
         </Section>
       )}
 
+      {/* Все свои VPN-туннели -- вход на экран каждого: там удаление. Цепочка
+          и «не используются» выше отвечают на другие вопросы и не содержат
+          всех VPN-туннелей сразу. */}
+      {list.length > 0 && (
+        <Section title={`${TUNNEL_TEXTS.listTitle} · ${list.length}`}>
+          <ul class="card list-reset">
+            {list.map((t) => (
+              <ListRow
+                key={t.id}
+                title={t.name}
+                sub={`${t.stateLabel} · ${tunnelRuleSummary(t)}`}
+                onClick={() => setInspecting(t.id)}
+              />
+            ))}
+          </ul>
+        </Section>
+      )}
+
       {view.active && (
         <div style="margin-top:24px">
           <NavCard
@@ -290,6 +339,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCa
             note="Amnezia · HideMy"
             onClick={onOpenCabinet}
           />
+        </div>
+      )}
+
+      {snapshot && mayManageTunnels(role) && (
+        <div style="margin-top:12px">
+          <NavCard title={IMPORT_TEXTS.title} note={IMPORT_TEXTS.navNote} onClick={() => setImporting(true)} />
         </div>
       )}
 
@@ -320,6 +375,34 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCa
                 }
               : undefined
           }
+          onOpenTunnel={(tunnelID) => {
+            setReplacing(null)
+            if (tunnelID) setInspecting(tunnelID)
+          }}
+        />
+      )}
+
+      {inspecting && (
+        <TunnelScreen
+          routerID={routerID}
+          asleep={asleep}
+          snapshot={snapshot}
+          tunnelID={inspecting}
+          role={role}
+          openSheet={openSheet}
+          onClose={() => setInspecting(null)}
+          onChanged={() => run('route_status', {}, deadline)}
+          onOpenRebind={onOpenRebind}
+        />
+      )}
+
+      {importing && (
+        <ConfImportScreen
+          routerID={routerID}
+          asleep={asleep}
+          snapshot={snapshot}
+          onClose={() => setImporting(false)}
+          onImported={() => run('route_status', {}, deadline)}
         />
       )}
     </div>

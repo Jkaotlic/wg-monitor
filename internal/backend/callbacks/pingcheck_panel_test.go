@@ -76,7 +76,7 @@ func TestPingCheckPanelNotifier_Status_AgentErr(t *testing.T) {
 		t.Fatalf("GetByID(%d): %v", uid, err)
 	}
 	tgFake := &fakePingCheckTG{}
-	n := &PingCheckPanelNotifier{TG: tgFake, DB: d}
+	n := &PingCheckPanelNotifier{TG: tgFake, DB: d, AppBaseURL: "https://wgmon.example.com"}
 
 	res := wire.CommandResult{Status: "err", Output: "HTTP_REFUSED: dial tcp"}
 	ref := cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "pingcheck_status"}
@@ -87,9 +87,31 @@ func TestPingCheckPanelNotifier_Status_AgentErr(t *testing.T) {
 	if !strings.Contains(tgFake.lastText, "агент не ответил") {
 		t.Errorf("expected err banner, got: %s", tgFake.lastText)
 	}
-	for _, want := range []string{"pingcheck_open", "router_doctor", "tunnels_refresh", "routes_open"} {
+	for _, want := range []string{"pingcheck_open", "router_doctor"} {
 		if !keyboardHasCallback(tgFake.lastKb, want) {
 			t.Fatalf("pingcheck status error keyboard missing %q: %#v", want, tgFake.lastKb)
+		}
+	}
+	// Цикл 4: панелей туннелей и маршрутов в боте нет -- в личке вместо них
+	// кнопка приложения, в группе -- ничего.
+	for _, gone := range []string{"tunnels_refresh", "routes_open"} {
+		if keyboardHasCallback(tgFake.lastKb, gone) {
+			t.Fatalf("кнопка удалённой панели %q: %#v", gone, tgFake.lastKb)
+		}
+	}
+	last := tgFake.lastKb.InlineKeyboard[len(tgFake.lastKb.InlineKeyboard)-1]
+	if len(last) != 1 || last[0].WebApp == nil || last[0].WebApp.URL != "https://wgmon.example.com/miniapp/?router="+itoa(uid)+"&tab=tunnels" {
+		t.Fatalf("в личке -- кнопка приложения: %+v", last)
+	}
+	ref.ChatID = -100
+	if err := n.NotifyCommandResult(context.Background(), ref, res, user.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range tgFake.lastKb.InlineKeyboard {
+		for _, b := range row {
+			if b.WebApp != nil {
+				t.Fatalf("в группе web_app: %+v", b)
+			}
 		}
 	}
 }
@@ -235,4 +257,20 @@ func TestPingCheckInflightStore_TTLEvicts(t *testing.T) {
 	if !s.tryClaim(7, "awg10", 10*time.Millisecond) {
 		t.Fatal("after TTL the slot must be free again")
 	}
+}
+
+// keyboardHasCallback -- есть ли кнопка с действием prefix (callback_data
+// «prefix:…»). Жил в routes_notifier_test.go, удалённом в цикле 4.
+func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, prefix string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix+":") {
+				return true
+			}
+		}
+	}
+	return false
 }

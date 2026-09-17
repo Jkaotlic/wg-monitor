@@ -11,8 +11,6 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 	want := map[string]bool{
 		"status":   false,
 		"check":    false,
-		"tunnels":  false,
-		"routes":   false,
 		"via":      false,
 		"direct":   false,
 		"menu":     false,
@@ -33,7 +31,7 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 
 func TestTelegramOperatorCommandMenuOrder(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
-	want := []string{"status", "check", "tunnels", "routes", "via", "direct", "menu", "keyboard", "help"}
+	want := []string{"status", "check", "via", "direct", "menu", "keyboard", "help"}
 	if len(cmds) < len(want) {
 		t.Fatalf("operator command count = %d, want at least %d: %+v", len(cmds), len(want), cmds)
 	}

@@ -33,6 +33,8 @@ func TestMiniappCommandAllowlistContents(t *testing.T) {
 		// Обслуживание (фаза D1). Четыре читающих: версии, два доктора и
 		// разовый прогон проверки связи. Аргументов не берут вовсе.
 		"version_audit", "router_doctor", "hrneo_doctor", "pingcheck_now",
+		// Список правил HydraRoute Neo (цикл 4): только чтение, без аргументов.
+		"hrneo_inventory",
 		// Три мутирующих, все router-local и обратимые своей же парой.
 		// Радиус ограничен тем же резолвером, что у tunnel_restart: клиент
 		// присылает tunnel_id, ndms_name сервер достаёт из событий этого

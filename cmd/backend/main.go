@@ -171,7 +171,6 @@ func main() {
 		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard != nil && *cfg.UI.CompatInlineKeyboard,
 	}
 	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
-	routesCache := &callbacks.RoutesCache{TTL: 30 * time.Second}
 	// Build upstream version cache from configured GitHub repos. Skip sources
 	// without a configured repo — graceful "no warning" beats fabricated data.
 	var upSources []upstream.Source
@@ -197,15 +196,7 @@ func main() {
 		HideMyBaseURL:      cfg.HideMy.BaseURL,
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
-	cb.SetRoutesCache(routesCache)
-	notifier.TunnelsRefreshSink = cmdQueue
-	routesNotifier := &callbacks.RoutesPanelNotifier{
-		TG:    tgClient,
-		Cache: routesCache,
-		DB:    d,
-		Store: cb.RouteWizardStore(),
-		Sink:  cmdQueue,
-	}
+	notifier.AppBaseURL = cfg.PublicBaseURL
 	cb.SetUpstream(upCache)
 	notifier.DiagCache = cb.DiagCache()
 	cb.SetPingCheck(cmdQueue)
@@ -306,7 +297,6 @@ func main() {
 		Resumer:        watcher,
 		CommandSink:    cmdQueue,
 		TGNotifier:     notifier,
-		RoutesNotifier: routesNotifier,
 		// Тот же кэш, что у умного ответа бота: второй поход в GitHub сжёг бы лимит анонимного API.
 		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в

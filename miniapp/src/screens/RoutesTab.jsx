@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
 import {
   parseRouteSnapshot,
@@ -16,7 +16,12 @@ import {
   rebindTargets,
   promoteTargets,
   canRebindTunnel,
+  OTHER_SOURCE_ID,
+  otherSourceRow,
+  otherSourceSummary,
+  rebindSheetText,
 } from '../routes.js'
+import { fetchRouterSettings } from '../api.js'
 import { rulesCount, tunnelLiveLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
 import { Chip } from '../ui/Chip.jsx'
@@ -27,6 +32,7 @@ import { deletePlanSummary } from '../routeAdd.js'
 import { normalizeSiteInput, looksLikeSite, lookupAnswer, lookupRefusal, openAnswer, NOT_A_SITE } from '../routeLookup.js'
 import { Quoted } from '../ui/Q.jsx'
 import { RouteAddScreen } from './RouteAddScreen.jsx'
+import { HrneoBlock } from './HrneoBlock.jsx'
 
 const KIND_LABEL = { dns: 'по имени сайта', static: 'по адресу сети' }
 const POLICY_ROLE_LABEL = {
@@ -46,8 +52,25 @@ function ruleTargets(rule) {
 // доступа роутера, поэтому тому, что показано, можно верить, а тому, что
 // меняется, -- тем более: каждая правка идёт через превью от агента и
 // подтверждение в шите, и каждая обратима другой кнопкой этого же экрана.
-export function RoutesTab({ routerID, asleep, openSheet }) {
+// rebindFrom -- VPN-туннель, с экрана которого пришли переносить правила:
+// выбор цели открывается сам, как только есть снимок.
+export function RoutesTab({ routerID, asleep, openSheet, rebindFrom = '' }) {
   const { busy, result, error, run } = useCommand(routerID)
+  // Роль -- для кнопок HydraRoute Neo: запуск и остановка у владельца и админа,
+  // перезапуск -- тем же кругом, что в Настройках.
+  const [role, setRole] = useState('')
+  useEffect(() => {
+    setRole('')
+    let alive = true
+    fetchRouterSettings(routerID)
+      .then((s) => {
+        if (alive) setRole(s?.role ?? '')
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [routerID])
   const [snapshot, setSnapshot] = useState(null)
   // Спящий роутер отвечает минутами, и дедлайн у всех команд экрана один:
   // разные сроки на соседних кнопках -- это разное поведение без причины.
@@ -132,6 +155,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
         action: 'route_delete',
         args: { kind: pendingRule.kind, route_id: pendingRule.id, preview_hash: summary.hash },
         buttonLabel: 'Убрать',
+        commandLabel: 'удаление правила',
         danger: true,
         asleep,
         onDone: refresh,
@@ -157,6 +181,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
   const rows = tunnelRows(snapshot)
   const tunnels = visibleTunnelRows(rows)
   const groups = rulesByBind(snapshot)
+  const other = otherSourceRow(snapshot)
 
   // Перенос забирает ВСЁ, что ведёт в туннель, -- и правила, и политику,
   // которую он несёт (RouteRebind, route_rebind.go). Поэтому и спрашивается
@@ -167,23 +192,32 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
     if (options.length === 0) return
     setPicker({
       title: 'Куда перенести',
-      subtitle: `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(src.total)})`,
-      options: options.map((dst) => ({
-        id: dst.id,
-        title: dst.name,
-        sub: `${tunnelLiveLabel(dst.live)} · ${tunnelRuleSummary(dst)}`,
-        pick: () =>
-          confirmSheet({
-            routerID,
-            title: `Перенести всё в «${dst.name}»?`,
-            body: `${rulesCount(src.total)} уедут из «${src.name}» в «${dst.name}». В «${src.name}» не останется ничего — вернуть можно этой же кнопкой на «${dst.name}».`,
-            action: 'route_rebind',
-            args: { src_tunnel_id: src.id, dst_tunnel_id: dst.id },
-            buttonLabel: 'Перенести',
-            asleep,
-            onDone: refresh,
-          }),
-      })),
+      subtitle:
+        src.id === OTHER_SOURCE_ID
+          ? `Всё, что сейчас идёт напрямую через провайдера (${rulesCount(src.total)})`
+          : `Всё, что сейчас ведёт в «${src.name}» (${rulesCount(src.total)})`,
+      options: options.map((dst) => {
+        // Текст -- честный: обратный перенос унесёт и правила, уже стоявшие
+        // на цели, а из «Напрямую (WAN)» обратной дороги в приложении нет.
+        const text = rebindSheetText(src, dst)
+        return {
+          id: dst.id,
+          title: dst.name,
+          sub: `${tunnelLiveLabel(dst.live)} · ${tunnelRuleSummary(dst)}`,
+          pick: () =>
+            confirmSheet({
+              routerID,
+              title: text.title,
+              body: text.body,
+              action: 'route_rebind',
+              args: { src_tunnel_id: src.id, dst_tunnel_id: dst.id },
+              buttonLabel: 'Перенести',
+              commandLabel: 'перенос правил',
+              asleep,
+              onDone: refresh,
+            }),
+        }
+      }),
     })
   }
 
@@ -216,6 +250,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             action: 'route_policy_promote',
             args: { policy_name: t.policyName, tunnel_id: t.tunnelID },
             buttonLabel: 'Сделать главным',
+            commandLabel: 'смена главного VPN-туннеля',
             asleep,
             onDone: refresh,
           }),
@@ -231,6 +266,25 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
     snapshot != null &&
     !(snapshot.warnings?.length) &&
     !snapshot.singbox_router?.enabled
+
+  // Пришли с экрана VPN-туннеля «перенести правила»: открыть выбор цели один
+  // раз, как только снимок позволяет менять. Правила только общего набора
+  // переносятся сменой главного звена -- тогда открывается она.
+  // Ни переноса, ни смены главного -- сказать словами, а не молчать.
+  const focused = useRef('')
+  const [rebindNone, setRebindNone] = useState('')
+  useEffect(() => {
+    if (!rebindFrom || focused.current === rebindFrom || !canMutate) return
+    focused.current = rebindFrom
+    setRebindNone('')
+    const row = rows.find((r) => r.id === rebindFrom)
+    if (!row) return
+    const targets = rebindTargets(rows, row.id)
+    if (canRebindTunnel(row) && targets.length > 0) askRebind(row)
+    else if (promoteTargets(snapshot, row.id).length > 0) askPromote(row)
+    else if (targets.length === 0) setRebindNone('Переносить некуда — сначала добавьте другой VPN-туннель.')
+    else setRebindNone(`На «${row.name}» нет своих правил — переносить нечего.`)
+  }, [snapshot, rebindFrom])
 
   return (
     <div class="screen">
@@ -354,7 +408,12 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
 
       {snapshot && (
         <Section title="VPN-туннели и что через них идёт">
-          {tunnels.length ? (
+          {rebindNone && (
+            <p class="state routes-rebind-none" role="status">
+              <Quoted text={rebindNone} />
+            </p>
+          )}
+          {tunnels.length || other ? (
             <ul class="card list-reset">
               {tunnels.map((t) => {
                 const badge = defaultRouteBadge(t)
@@ -385,6 +444,23 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
                   </li>
                 )
               })}
+              {/* Правила без VPN-туннеля: переносятся тем же листом, источник
+                  __other__ -- как у бота. */}
+              {other && (
+                <li key={OTHER_SOURCE_ID} class="row tunnel-row routes-other">
+                  <span class="tunnel-name">
+                    <span class="row-title">{other.name}</span>
+                  </span>
+                  <span class="tunnel-sub">{otherSourceSummary(other)}</span>
+                  {canMutate && rebindTargets(rows, OTHER_SOURCE_ID).length > 0 && (
+                    <span class="row-actions">
+                      <button type="button" class="btn btn-ghost btn-row" onClick={() => askRebind(other)}>
+                        Перенести всё
+                      </button>
+                    </span>
+                  )}
+                </li>
+              )}
             </ul>
           ) : (
             <div class="card">
@@ -393,6 +469,7 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
           )}
         </Section>
       )}
+
 
       {/* Цепочки, роли звеньев и счётчики механизмов -- словарь движка
           маршрутизации. Владельцу роутера он не адресован, но оператору
@@ -434,6 +511,10 @@ export function RoutesTab({ routerID, asleep, openSheet }) {
             Первый работающий VPN-туннель в списке и несёт трафик, остальные ждут как резерв.
           </p>
         </details>
+      )}
+
+      {snapshot && (
+        <HrneoBlock routerID={routerID} asleep={asleep} snapshot={snapshot} role={role} openSheet={openSheet} onChanged={refresh} />
       )}
 
       {groups.length > 0 && (

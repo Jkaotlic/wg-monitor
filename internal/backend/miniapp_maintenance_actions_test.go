@@ -65,7 +65,6 @@ func TestMiniappMaintenanceActionsOpenToOperator(t *testing.T) {
 func TestMiniappServiceRestartRejectsForeignName(t *testing.T) {
 	_, ownedID, _, sink, h := maintenanceFleet(t, "v0.32.0")
 	for _, body := range []string{
-		`{"action":"service_restart","args":{"name":"hrneo_stop"}}`,
 		`{"action":"service_restart","args":{"name":"wat"}}`,
 		`{"action":"service_restart","args":{}}`,
 	} {

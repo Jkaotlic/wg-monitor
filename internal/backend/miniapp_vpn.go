@@ -22,8 +22,9 @@ import (
 // Главное свойство контракта: СОДЕРЖИМОЕ КОНФИГА НАРУЖУ НЕ ХОДИТ. Клиент
 // присылает только выбор (провайдер и страна), сервер сам скачивает конфиг и
 // сам кладёт его в команду агенту. Поэтому tunnel_import и остаётся вне
-// allowlist мини-аппа: единственный путь конфига на роутер -- этот, а не
-// «клиент прислал файл».
+// allowlist мини-аппа: конфиг попадает на роутер только сервером -- выпуском
+// из кабинета (здесь) или файлом, который админ или владелец загрузил сам,
+// после предпросмотра и только новым VPN-туннелем (miniapp_tunnel_import.go).
 type VPNCabinet interface {
 	Account(ctx context.Context, routerID int64, provider string) (VPNAccount, error)
 	IssueConfig(ctx context.Context, routerID int64, provider, optionID string) (VPNIssuedConfig, error)

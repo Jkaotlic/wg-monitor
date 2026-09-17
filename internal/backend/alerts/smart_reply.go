@@ -83,6 +83,11 @@ type SmartReplyArgs struct {
 	// Updates is the optional list of outdated components surfaced as a soft
 	// warning. Empty slice (or nil) → section is hidden.
 	Updates []UpdateAvailable
+	// AppURL -- кнопка «Открыть в приложении» последним рядом у «есть
+	// подозрения» и «есть проблема»: перезапуск и удаление VPN-туннелей и
+	// маршруты переехали туда (цикл 4). Пусто -- кнопки нет (группа: web_app
+	// Telegram принимает только в личке; или адрес не https).
+	AppURL string
 }
 
 const (
@@ -217,18 +222,6 @@ func incidentDisplayName(inc IncidentView, tunnels []TunnelView) string {
 func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 	state := ClassifyState(a)
 	plainCD := func(action, cn string) string { return fmt.Sprintf("%s:%d:%s", action, a.UserID, cn) }
-	tunnelCD := func(action string, t TunnelView) string {
-		return fmt.Sprintf("%s:%d:%s:%s", action, a.UserID, t.CheckName, t.NDMSName)
-	}
-	tunnelsPanelCD := func() string { return fmt.Sprintf("tunnels_refresh:%d:_panel_", a.UserID) }
-	incidentTunnel := func(checkName string) (TunnelView, bool) {
-		for _, t := range a.Tunnels {
-			if t.CheckName == checkName {
-				return t, true
-			}
-		}
-		return TunnelView{}, false
-	}
 	silenceCD := func(cn, ttl string) string { return fmt.Sprintf("silence:%d:%s:%s", a.UserID, cn, ttl) }
 	visibleIncidents := activeIncidentsForDisplay(a)
 
@@ -280,20 +273,11 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 		b.WriteString("Сейчас это не показываем как красный алерт, но внимание нужно.\n\nДействия:")
 		var rows [][]tg.InlineKeyboardButton
 		for _, t := range problems {
-			row := []tg.InlineKeyboardButton{}
-			if strings.TrimSpace(t.NDMSName) != "" {
-				label := "🔁 Перезапустить туннель"
-				if len(problems) > 1 {
-					label = "🔁 Перезапуск " + t.Name
-				}
-				row = append(row, tg.InlineKeyboardButton{Text: label, CallbackData: tunnelCD("tunnel_restart", t)})
-			}
-			row = append(row, tg.InlineKeyboardButton{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)})
-			if strings.TrimSpace(t.NDMSName) == "" {
-				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Туннели", CallbackData: tunnelsPanelCD()})
-			}
-			rows = append(rows, row)
+			rows = append(rows, []tg.InlineKeyboardButton{
+				{Text: "▶ Проверить связь", CallbackData: plainCD("pingcheck_now", t.CheckName)},
+			})
 		}
+		rows = appendOpenInAppRow(rows, a.AppURL)
 		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
@@ -317,8 +301,9 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 			b.WriteString("\n  • " + line)
 		}
 		var rows [][]tg.InlineKeyboardButton
-		seen := map[string]bool{}
-		// Buttons per active incident (carries silence button)
+		// Кнопки на каждую активную тревогу. Перезапуск VPN-туннеля ушёл в
+		// приложение вместе с панелью туннелей (цикл 4): здесь -- диагностика
+		// и «замолчать», остальное -- кнопкой приложения.
 		for _, inc := range visibleIncidents {
 			if !strings.HasPrefix(inc.CheckName, "tunnel_") {
 				rows = append(rows, []tg.InlineKeyboardButton{
@@ -327,32 +312,14 @@ func FormatSmartReply(a SmartReplyArgs) (string, tg.InlineKeyboardMarkup) {
 				})
 				continue
 			}
-			row := []tg.InlineKeyboardButton{}
-			if t, ok := incidentTunnel(inc.CheckName); ok && strings.TrimSpace(t.NDMSName) != "" {
-				row = append(row, tg.InlineKeyboardButton{Text: "🔁 Перезапустить туннель", CallbackData: tunnelCD("tunnel_restart", t)})
-			}
-			row = append(row, tg.InlineKeyboardButton{Text: "📊 Запустить диагностику", CallbackData: plainCD("diag_now", inc.CheckName)})
-			if len(row) == 1 {
-				row = append(row, tg.InlineKeyboardButton{Text: "🎛 Туннели", CallbackData: tunnelsPanelCD()})
-			}
-			rows = append(rows, row)
+			rows = append(rows, []tg.InlineKeyboardButton{
+				{Text: "📊 Запустить диагностику", CallbackData: plainCD("diag_now", inc.CheckName)},
+			})
 			rows = append(rows, []tg.InlineKeyboardButton{
 				{Text: "⏸ Замолчать на час", CallbackData: silenceCD(inc.CheckName, "1h")},
 			})
-			seen[inc.CheckName] = true
 		}
-		// Restart-only row for any tunnel that isn't already covered by an incident
-		// (multi-tunnel case where some tunnels are degraded but no HARD yet,
-		// while at least one other has a HARD — the user expects a restart
-		// button for ALL tunnels they can see).
-		for _, t := range a.Tunnels {
-			if seen[t.CheckName] || t.CheckName == "" || strings.TrimSpace(t.NDMSName) == "" {
-				continue
-			}
-			rows = append(rows, []tg.InlineKeyboardButton{
-				{Text: "🔁 Перезапуск " + t.Name, CallbackData: tunnelCD("tunnel_restart", t)},
-			})
-		}
+		rows = appendOpenInAppRow(rows, a.AppURL)
 		appendUpdatesSection(&b, a.Updates)
 		return b.String(), tg.InlineKeyboardMarkup{InlineKeyboard: rows}
 
@@ -428,12 +395,12 @@ func smartReplyActionHints(incidents []IncidentView) []string {
 	for _, inc := range incidents {
 		switch {
 		case checkCategory(inc.CheckName) == "dns":
-			add("Открой 🎛 Туннели и проверь живой туннель/интерфейс из строки выше.")
-			add("Если туннель выключен или удалён, затем 🛣 Маршруты: перенеси DNS/HR-Neo правила на живой туннель.")
+			add("Открой VPN-туннели в приложении и проверь живой туннель/интерфейс из строки выше.")
+			add("Если туннель выключен или удалён — там же, в «Маршрутах», перенеси DNS/HR-Neo правила на живой туннель.")
 		case strings.HasPrefix(inc.CheckName, "tunnel_"):
-			add("Для туннеля ниже можно запустить перезапуск или диагностику; если он больше не нужен — открой 🎛 Туннели.")
+			add("Для туннеля ниже можно запустить диагностику; перезапустить или удалить его — в приложении, вкладка «VPN-туннели».")
 		case inc.CheckName == "hydraroute":
-			add("Открой 🛣 Маршруты: проверь HR-Neo и правила, которые завязаны на него.")
+			add("Открой «Маршруты» в приложении: проверь HR-Neo и правила, которые завязаны на него.")
 		default:
 			add("Запусти 🩺 Проверку, чтобы обновить диагностику перед ручными правками.")
 		}
@@ -487,4 +454,13 @@ func appendUpdatesSection(b *strings.Builder, updates []UpdateAvailable) {
 			fmt.Fprintf(b, "    подсказка: %s\n", u.Hint)
 		}
 	}
+}
+
+// appendOpenInAppRow -- кнопка приложения последним рядом. Пустой адрес --
+// без кнопки.
+func appendOpenInAppRow(rows [][]tg.InlineKeyboardButton, appURL string) [][]tg.InlineKeyboardButton {
+	if appURL == "" {
+		return rows
+	}
+	return append(rows, []tg.InlineKeyboardButton{tg.OpenInAppButton(appURL)})
 }

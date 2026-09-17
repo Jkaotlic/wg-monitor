@@ -97,7 +97,7 @@ func FormatCommandResult(action string, r wire.CommandResult, maxChars int) []st
 			Label:   label,
 			Summary: summary,
 			Details: strings.TrimSpace(r.Output),
-			Hint:    "Если это новый туннель и на старом были правила, открой 🛣 Маршруты, чтобы перенести правила на новый конфиг.",
+			Hint:    "Если это новый VPN-туннель и на старом были правила, перенесите их в приложении: «Маршруты» → перенос правил.",
 		}
 		return []string{card.Render(CardOpts{MaxBytes: maxChars})}
 	case "check_via_tunnel", "check_direct", "router_doctor":

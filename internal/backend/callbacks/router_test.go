@@ -2,10 +2,7 @@ package callbacks
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +10,6 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
-	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
 type fakeRouterTG struct {
@@ -89,122 +85,6 @@ func (f *fakeRouterTG) DownloadFile(_ context.Context, _ string) ([]byte, error)
 
 func ptrInt64(v int64) *int64 { return &v }
 
-func TestHandleDocumentUploadRejectsOversizeDownloadedBody(t *testing.T) {
-	f := &fakeRouterTG{
-		filePath: "documents/huge.conf",
-		fileData: []byte(strings.Repeat("A", (50*1024)+1)),
-	}
-	r := &Router{
-		tg:      f,
-		pending: make(map[int64]*pendingUpload),
-	}
-	threadID := int64(11)
-	user := &db.User{ID: 7, Nickname: "testkeen"}
-	msg := &tg.Message{
-		Chat:            tg.Chat{ID: -100},
-		MessageThreadID: &threadID,
-		Document: &tg.Document{
-			FileID:   "file-1",
-			FileName: "huge.conf",
-			FileSize: 1,
-		},
-	}
-
-	r.handleDocumentUpload(context.Background(), msg, "per_router", user)
-
-	if len(r.pending) != 0 {
-		t.Fatalf("oversize downloaded body stored as pending upload: %+v", r.pending)
-	}
-	if len(f.sentMsgs) == 0 || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], "50") || !strings.Contains(f.sentMsgs[len(f.sentMsgs)-1], ".conf") {
-		t.Fatalf("expected oversize warning, got messages=%q", f.sentMsgs)
-	}
-}
-
-// routeAwareRoundTripper stands in for the whole TG Bot API + file-CDN over
-// a single http.Client without any real network I/O: getFile succeeds, the
-// file download fails at the transport level (simulating a transient
-// network blip while downloading an uploaded .conf — the exact scenario
-// that used to leak the bot-token, see client.go DownloadFile), and
-// sendMessage succeeds while recording the outgoing request body so the
-// test can inspect exactly what text would have reached the chat.
-type routeAwareRoundTripper struct {
-	mu           sync.Mutex
-	sendMessages [][]byte
-}
-
-func (rt *routeAwareRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	path := req.URL.Path
-	switch {
-	case strings.HasSuffix(path, "/getFile"):
-		return stubJSONResponse(`{"ok":true,"result":{"file_path":"documents/x.conf"}}`), nil
-	case strings.Contains(path, "/file/bot"):
-		return nil, errors.New("simulated dial failure")
-	case strings.HasSuffix(path, "/sendMessage"):
-		body, _ := io.ReadAll(req.Body)
-		rt.mu.Lock()
-		rt.sendMessages = append(rt.sendMessages, body)
-		rt.mu.Unlock()
-		return stubJSONResponse(`{"ok":true,"result":{"message_id":1}}`), nil
-	default:
-		return nil, fmt.Errorf("routeAwareRoundTripper: unexpected request path %s", path)
-	}
-}
-
-func stubJSONResponse(body string) *http.Response {
-	return &http.Response{
-		StatusCode: 200,
-		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     make(http.Header),
-	}
-}
-
-// TestHandleDocumentUploadDownloadFailureDoesNotLeakBotTokenToChat is the
-// end-to-end regression for the DownloadFile bot-token redaction fix: it
-// wires the REAL tg.Client (not a fake) into the router so the request URLs
-// are built exactly as production does, forces a transport failure on the
-// file-CDN download, and asserts the resulting "не удалось скачать файл: "
-// chat message — captured from the literal outgoing sendMessage HTTP body —
-// never contains the bot token.
-func TestHandleDocumentUploadDownloadFailureDoesNotLeakBotTokenToChat(t *testing.T) {
-	const token = "123456:SECRETTOKEN"
-	rt := &routeAwareRoundTripper{}
-	client := &tg.Client{
-		BaseURL: tg.DefaultBaseURL,
-		Token:   token,
-		HTTP:    &http.Client{Transport: rt},
-	}
-	r := &Router{
-		tg:      client,
-		pending: make(map[int64]*pendingUpload),
-	}
-	threadID := int64(11)
-	user := &db.User{ID: 7, Nickname: "testkeen"}
-	msg := &tg.Message{
-		Chat:            tg.Chat{ID: -100},
-		MessageThreadID: &threadID,
-		Document: &tg.Document{
-			FileID:   "file-1",
-			FileName: "awg11.conf",
-			FileSize: 100,
-		},
-	}
-
-	r.handleDocumentUpload(context.Background(), msg, "per_router", user)
-
-	rt.mu.Lock()
-	defer rt.mu.Unlock()
-	if len(rt.sendMessages) == 0 {
-		t.Fatal("expected a sendMessage call reporting the download failure")
-	}
-	last := string(rt.sendMessages[len(rt.sendMessages)-1])
-	if strings.Contains(last, token) {
-		t.Fatalf("bot token leaked into chat-bound sendMessage body: %s", last)
-	}
-	if !strings.Contains(last, "не удалось скачать файл") {
-		t.Fatalf("expected download-failure text, got: %s", last)
-	}
-}
-
 func markupHasCallback(kb *tg.InlineKeyboardMarkup, want string) bool {
 	if kb == nil {
 		return false
@@ -217,36 +97,6 @@ func markupHasCallback(kb *tg.InlineKeyboardMarkup, want string) bool {
 		}
 	}
 	return false
-}
-
-func markupHasCallbackPrefix(kb *tg.InlineKeyboardMarkup, wantPrefix string) bool {
-	if kb == nil {
-		return false
-	}
-	for _, row := range kb.InlineKeyboard {
-		for _, btn := range row {
-			if strings.HasPrefix(btn.CallbackData, wantPrefix) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func firstCallbackWithPrefix(t *testing.T, kb *tg.InlineKeyboardMarkup, wantPrefix string) string {
-	t.Helper()
-	if kb == nil {
-		t.Fatalf("nil keyboard, want callback prefix %q", wantPrefix)
-	}
-	for _, row := range kb.InlineKeyboard {
-		for _, btn := range row {
-			if strings.HasPrefix(btn.CallbackData, wantPrefix) {
-				return btn.CallbackData
-			}
-		}
-	}
-	t.Fatalf("keyboard missing callback prefix %q: %+v", wantPrefix, kb.InlineKeyboard)
-	return ""
 }
 
 func TestRouterDispatchesSilence(t *testing.T) {
@@ -485,33 +335,6 @@ func TestACL_AllowsAdminCommandCallbackBeforeRouterTopic(t *testing.T) {
 	}
 }
 
-func TestRouterRejectsLegacyRoutesCloseFromNonOwnerInRouterTopic(t *testing.T) {
-	d, uid := newTestDB(t)
-	if err := d.Users().UpdateThreadID(uid, 77); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.Users().SetTelegramUserID(uid, 111); err != nil {
-		t.Fatal(err)
-	}
-	f := &fakeRouterTG{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-	q := &tg.CallbackQuery{
-		ID:      "routes-close-legacy",
-		From:    tg.User{ID: 999},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: ptrInt64(77), Text: "routes panel"},
-		Data:    "routes_close:0:_panel_",
-	}
-
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 0 {
-		t.Fatalf("legacy routes_close:0 must not let non-owner close router panel, edits=%v", f.edits)
-	}
-	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "роутер") {
-		t.Fatalf("expected router ACL rejection toast, answers=%v", f.answers)
-	}
-}
-
 func keyboardContainsCallback(kb *tg.InlineKeyboardMarkup, callback string) bool {
 	if kb == nil {
 		return false
@@ -606,31 +429,6 @@ func TestRouterDispatchesCommandAction(t *testing.T) {
 	}
 }
 
-func TestRouterRestartTunnelRequiresAwgManagerConfirm(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-restart",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
-		Data:    "restart_tunnel:" + itoa(uid) + ":tunnel_amnezia_for_awg2",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 0 {
-		t.Fatalf("restart_tunnel callback must require confirmation before enqueue, got %+v", sink.calls)
-	}
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "awg-manager") {
-		t.Fatalf("expected awg-manager confirmation edit, got %v", f.edits)
-	}
-	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("maint_confirm:%d:awgmgr:", uid)) {
-		t.Fatalf("confirm markup missing awgmgr maint_confirm callback: %+v", f.editMarkups)
-	}
-}
-
 func TestRouterDispatchesInlineCheckViaTunnel(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTG{}
@@ -650,237 +448,6 @@ func TestRouterDispatchesInlineCheckViaTunnel(t *testing.T) {
 	}
 	if sink.calls[0].action != "check_via_tunnel" || sink.calls[0].userID != uid {
 		t.Fatalf("got %+v", sink.calls[0])
-	}
-}
-
-func TestRouterPanelCommandDoesNotEditStaleSnapshot(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-toggle",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "tunnel_disable:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
-	}
-	if sink.calls[0].action != "tunnel_disable" {
-		t.Fatalf("action = %q, want tunnel_disable", sink.calls[0].action)
-	}
-	if len(f.answers) != 1 {
-		t.Fatalf("expected answer toast, got %d", len(f.answers))
-	}
-	if len(f.edits) != 0 {
-		t.Fatalf("panel callback should not edit stale DB snapshot, got edits=%v", f.edits)
-	}
-}
-
-func TestRouterPanelTunnelRestartEnqueuesWithNDMS(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-restart-tunnel",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "tunnel_restart:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 1 {
-		t.Fatalf("expected 1 enqueue, got %d", len(sink.calls))
-	}
-	if sink.calls[0].action != "tunnel_restart" || sink.calls[0].ndms != "Wireguard3" {
-		t.Fatalf("call = %+v, want action=tunnel_restart ndms=Wireguard3", sink.calls[0])
-	}
-	if len(f.answers) != 1 {
-		t.Fatalf("expected answer toast, got %d", len(f.answers))
-	}
-	if len(f.edits) != 0 {
-		t.Fatalf("panel callback should not edit stale DB snapshot, got edits=%v", f.edits)
-	}
-}
-
-func TestRouterTunnelToggleStaleButtonRefreshesInsteadOfCommand(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0", Enabled: true,
-	}}})
-	r.SetRoutesCache(cache)
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-toggle-stale",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "tunnel_disable:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
-		t.Fatalf("stale toggle should enqueue only live refresh, got %+v", sink.calls)
-	}
-	if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
-		t.Fatalf("stale toggle should refresh panel, edits=%v", f.edits)
-	}
-}
-
-func TestRouterTunnelPanelActionStaleNDMSRefreshesInsteadOfCommand(t *testing.T) {
-	for _, action := range []string{"tunnel_disable", "tunnel_restart", "tunnel_delete"} {
-		t.Run(action, func(t *testing.T) {
-			d, uid := newTestDB(t)
-			f := &fakeRouterTG{}
-			sink := &fakeEnqueuer{}
-			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-			cache := &RoutesCache{TTL: time.Minute}
-			cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-				ID: "awg13", Name: "de", Iface: "nwg9", NDMSName: "Wireguard9", Enabled: true,
-			}}})
-			r.SetRoutesCache(cache)
-
-			q := &tg.CallbackQuery{
-				ID:      "cbk-stale-ndms",
-				From:    tg.User{ID: 12345},
-				Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-				Data:    action + ":" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-			}
-			r.HandleCallback(context.Background(), q)
-
-			if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
-				t.Fatalf("stale %s should enqueue only live refresh, got %+v", action, sink.calls)
-			}
-			if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
-				t.Fatalf("stale %s should refresh panel, edits=%v", action, f.edits)
-			}
-		})
-	}
-}
-
-func TestRouterTunnelToggleStaleEnabledStateRefreshesInsteadOfCommand(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		action         string
-		currentEnabled bool
-	}{
-		{name: "disable already disabled", action: "tunnel_disable", currentEnabled: false},
-		{name: "enable already enabled", action: "tunnel_enable", currentEnabled: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			d, uid := newTestDB(t)
-			f := &fakeRouterTG{}
-			sink := &fakeEnqueuer{}
-			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-			cache := &RoutesCache{TTL: time.Minute}
-			cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-				ID: "awg13", Name: "de", Iface: "nwg3", NDMSName: "Wireguard3", Enabled: tc.currentEnabled,
-			}}})
-			r.SetRoutesCache(cache)
-
-			q := &tg.CallbackQuery{
-				ID:      "cbk-stale-enabled",
-				From:    tg.User{ID: 12345},
-				Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-				Data:    tc.action + ":" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-			}
-			r.HandleCallback(context.Background(), q)
-
-			if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
-				t.Fatalf("stale %s should enqueue only live refresh, got %+v", tc.action, sink.calls)
-			}
-			if len(f.edits) != 1 || strings.Contains(f.edits[0], "очередь") {
-				t.Fatalf("stale %s should refresh panel, edits=%v", tc.action, f.edits)
-			}
-		})
-	}
-}
-
-func TestRouterTunnelDeleteAskRendersConfirm(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-		ID: "awg13", Name: "de", Iface: "nwg3", NDMSName: "Wireguard3", Enabled: true,
-	}}})
-	r.SetRoutesCache(cache)
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-delete-ask",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "tunnel_delete_ask:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Удалить туннель") {
-		t.Fatalf("expected delete confirmation edit, got %v", f.edits)
-	}
-	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_awg13:Wireguard3:awg13") {
-		t.Fatalf("confirm markup missing tunnel_delete callback: %+v", f.editMarkups)
-	}
-}
-
-func TestRouterTunnelDeleteAskRendersConfirmWithoutNDMSName(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-		ID: "kernel-real-id", Name: "kernel", Iface: "opkgtun10", Enabled: true,
-	}}})
-	r.SetRoutesCache(cache)
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-delete-ask-kernel",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "tunnel_delete_ask:" + itoa(uid) + ":tunnel_kernel-real-id::kernel-real-id",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "kernel") {
-		t.Fatalf("expected delete confirmation edit, got %v", f.edits)
-	}
-	if len(f.editMarkups) != 1 || !markupHasCallback(f.editMarkups[0], "tunnel_delete:"+itoa(uid)+":tunnel_kernel-real-id::kernel-real-id") {
-		t.Fatalf("confirm markup missing explicit tunnel_id callback: %+v", f.editMarkups)
-	}
-}
-
-func TestRouterTunnelDeleteAskStaleButtonRefreshesInsteadOfConfirm(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0", Enabled: true,
-	}}})
-	r.SetRoutesCache(cache)
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-delete-stale",
-		From:    tg.User{ID: 12345},
-		Message: tg.Message{MessageID: 7, Chat: tg.Chat{ID: -100}, Text: "panel"},
-		Data:    "tunnel_delete_ask:" + itoa(uid) + ":tunnel_awg13:Wireguard3",
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 1 || strings.Contains(f.edits[0], "Удалить туннель") {
-		t.Fatalf("stale delete button must refresh panel instead of confirm, edits=%v", f.edits)
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
-		t.Fatalf("stale delete button should enqueue live refresh, got %+v", sink.calls)
 	}
 }
 
@@ -1151,7 +718,7 @@ func TestRouterHandleMessage_RemovedMaintenanceEntriesSilent(t *testing.T) {
 	_ = d.RouterOperators().Add(uid, 200, 12345)
 	tid := int64(55)
 	for _, from := range []int64{12345, 200} {
-		for _, text := range []string{"/maint", "/upgrade", "🛠 Обслуживание", "⬆ Обновить пакеты"} {
+		for _, text := range []string{"/maint", "/upgrade", "🛠 Обслуживание", "⬆ Обновить пакеты", "/tunnels", "/routes"} {
 			f := &fakeRouterTG{}
 			sink := &fakeEnqueuer{}
 			r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
@@ -1185,52 +752,6 @@ func TestCollectTunnelViewsDropsStaleEvents(t *testing.T) {
 	}
 }
 
-func TestCollectTunnelViewsPrefersLiveRouteSnapshot(t *testing.T) {
-	d, uid := newTestDB(t)
-	r := NewRouterWithSink(d, &fakeRouterTG{}, nil, Config{})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0",
-		Enabled: true, Status: "running", HasHandshake: true, HandshakeAge: 8,
-		PingStatus: "ok", PingFails: 0, PingFailMax: 3,
-	}}})
-	r.SetRoutesCache(cache)
-	if err := d.Events().Insert(uid, "tunnel_deleted", "ok", `{"tunnel_name":"deleted","interface":"nwg9"}`, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-
-	views := r.collectTunnelViews(uid)
-	if len(views) != 1 || views[0].Name != "live" || views[0].CheckName != "tunnel_awg10" {
-		t.Fatalf("want live cache tunnel only, got %+v", views)
-	}
-}
-
-func TestCollectActiveIncidentsDropsDeletedTunnelWhenLiveSnapshotExists(t *testing.T) {
-	d, uid := newTestDB(t)
-	r := NewRouterWithSink(d, &fakeRouterTG{}, nil, Config{})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{Tunnels: []wire.TunnelMeta{{
-		ID: "awg10", Name: "live", Iface: "nwg0", NDMSName: "Wireguard0", Enabled: true,
-	}}})
-	r.SetRoutesCache(cache)
-	hs := time.Now().Add(-10 * time.Minute)
-	if err := d.State().Save(uid, "tunnel_awg13", db.IncidentState{
-		UserID: uid, CheckName: "tunnel_awg13", CurrentStatus: "hard", ConsecutiveFails: 5, HardSince: &hs,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.State().Save(uid, "dns", db.IncidentState{
-		UserID: uid, CheckName: "dns", CurrentStatus: "hard", ConsecutiveFails: 5, HardSince: &hs,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	incidents := r.collectActiveIncidents(uid)
-	if len(incidents) != 1 || incidents[0].CheckName != "dns" {
-		t.Fatalf("want only non-tunnel incident after live cache excludes deleted tunnel, got %+v", incidents)
-	}
-}
-
 // makeCBQ builds a minimal CallbackQuery for the given callback_data string.
 func makeCBQ(data string) *tg.CallbackQuery {
 	return &tg.CallbackQuery{
@@ -1238,58 +759,6 @@ func makeCBQ(data string) *tg.CallbackQuery {
 		From:    tg.User{ID: 12345},
 		Message: tg.Message{MessageID: 42, Chat: tg.Chat{ID: -100}, Text: "panel text"},
 		Data:    data,
-	}
-}
-
-func TestRouterHandleCallback_MaintRestart_RendersConfirm(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	q := makeCBQ(fmt.Sprintf("maint_restart:%d:hrneo", uid))
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 1 {
-		t.Fatalf("expected 1 edit (confirm screen), got %d", len(f.edits))
-	}
-	if !strings.Contains(f.edits[0], "HydraRoute Neo") {
-		t.Errorf("confirm screen should mention HydraRoute Neo, got: %q", f.edits[0])
-	}
-	// A pending entry must exist for this user.
-	r.pendingMaint.mu.Lock()
-	var found *pendingMaint
-	for _, p := range r.pendingMaint.m {
-		if p.UserID == uid && p.Name == "hrneo" {
-			found = p
-			break
-		}
-	}
-	r.pendingMaint.mu.Unlock()
-	if found == nil {
-		t.Error("pendingMaint entry not created for hrneo restart")
-	}
-}
-
-func TestRouterHandleCallback_MaintRestart_RouterMovedToApp(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	r.HandleCallback(context.Background(), makeCBQ(fmt.Sprintf("maint_restart:%d:router", uid)))
-
-	if len(f.answers) != 1 || f.answers[0] != "это действие переехало в приложение" {
-		t.Errorf("answers=%v", f.answers)
-	}
-	if len(f.edits) != 0 {
-		t.Errorf("подтверждения перезагрузки быть не должно, edits=%v", f.edits)
-	}
-	r.pendingMaint.mu.Lock()
-	count := len(r.pendingMaint.m)
-	r.pendingMaint.mu.Unlock()
-	if count != 0 {
-		t.Errorf("токен перезагрузки создан: %d", count)
 	}
 }
 
@@ -1647,29 +1116,6 @@ func TestACL_UnboundWithoutTopicRejectsCallback(t *testing.T) {
 	}
 }
 
-func TestRouterConsumePendingRebindWrongActorRejectedWithoutConsuming(t *testing.T) {
-	r := &Router{}
-	r.putPendingRebind(&pendingRebind{
-		UserID:    42,
-		ActorTGID: 111,
-		SrcID:     "old",
-		DstID:     "new",
-		Token:     "tok1",
-		ExpiresAt: time.Now().Add(time.Minute),
-	})
-
-	if _, ok := r.consumePendingRebindForActor(42, 222, "tok1"); ok {
-		t.Fatal("wrong actor should not consume pending rebind")
-	}
-	got, ok := r.consumePendingRebindForActor(42, 111, "tok1")
-	if !ok {
-		t.Fatal("right actor should still consume pending rebind")
-	}
-	if got.SrcID != "old" || got.DstID != "new" {
-		t.Fatalf("bad pending rebind: %+v", got)
-	}
-}
-
 func TestACL_AdminCannotUseRouterScopedCallbackFromForeignTopic(t *testing.T) {
 	d, uid := newTestDB(t)
 	const ownThread = int64(4242)
@@ -1694,326 +1140,6 @@ func TestACL_AdminCannotUseRouterScopedCallbackFromForeignTopic(t *testing.T) {
 	}
 	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "топик этого роутера") {
 		t.Fatalf("expected foreign-topic rejection toast, got %v", f.answers)
-	}
-}
-
-func TestRouterRoutesAddType_HRNeoUnavailableDoesNotSilentlyDowngradeToNDMS(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
-	cache := &RoutesCache{TTL: time.Hour}
-	cache.Put(uid, wire.RouteSnapshot{
-		HRNeo: wire.HRStatus{Installed: true, Running: false},
-		Tunnels: []wire.TunnelMeta{{
-			ID: "eth3", Name: "WAN", Iface: "eth3", Enabled: true, Available: true,
-		}},
-	})
-	r.SetRoutesCache(cache)
-
-	tid := int64(11)
-	q := &tg.CallbackQuery{
-		ID:   "cb-routes-add-hr",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_add_type:%d:_panel_:dns_hr", uid),
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.answers) != 1 || !strings.Contains(f.answers[0], "HR-Neo") {
-		t.Fatalf("expected HR-Neo unavailable answer, got answers=%v", f.answers)
-	}
-	if len(f.edits) != 0 {
-		t.Fatalf("must not advance wizard and silently create NDMS draft, edits=%v", f.edits)
-	}
-}
-
-func TestRouterRoutesAddTunnelOffersAWGManagerTemplatesButton(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-	cache := &RoutesCache{TTL: time.Hour}
-	cache.Put(uid, wire.RouteSnapshot{
-		HRNeo: wire.HRStatus{Installed: true, Running: true},
-		Tunnels: []wire.TunnelMeta{{
-			ID: "awg11", Name: "exit", Iface: "nwg5", Enabled: true, Available: true,
-		}},
-	})
-	r.SetRoutesCache(cache)
-
-	tid := int64(11)
-	r.HandleCallback(context.Background(), &tg.CallbackQuery{
-		ID:   "cb-add-type",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_add_type:%d:_panel_:dns_hr", uid),
-	})
-	tunnelCallback := firstCallbackWithPrefix(t, f.editMarkups[0], fmt.Sprintf("routes_add_tunnel:%d:_panel_:", uid))
-
-	r.HandleCallback(context.Background(), &tg.CallbackQuery{
-		ID:   "cb-add-tunnel",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: tunnelCallback,
-	})
-
-	if len(f.editMarkups) < 2 || !markupHasCallbackPrefix(f.editMarkups[1], fmt.Sprintf("routes_tpl_load:%d:_panel_:", uid)) {
-		t.Fatalf("expected template load button after tunnel pick, markups=%#v", f.editMarkups)
-	}
-	if strings.Contains(f.edits[len(f.edits)-1], "template:") {
-		t.Fatalf("operator-facing prompt must not ask for raw template:id, got %q", f.edits[len(f.edits)-1])
-	}
-}
-
-func TestRouterRoutesTemplateLoadEnqueuesCatalogCommand(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-	tid := int64(11)
-	draft := r.RouteWizardStore().PutAddDraft(RouteAddDraft{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		Kind: "dns", TunnelID: "awg11", UseHRNeo: true,
-	})
-
-	r.HandleCallback(context.Background(), &tg.CallbackQuery{
-		ID:   "cb-load-tpl",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_tpl_load:%d:_panel_:%s", uid, draft.Token),
-	})
-
-	if len(sink.calls) != 1 || sink.calls[0].action != "route_templates" {
-		t.Fatalf("expected route_templates enqueue, got %+v", sink.calls)
-	}
-	if len(f.edits) != 1 || !strings.Contains(strings.ToLower(f.edits[0]), "template") {
-		t.Fatalf("expected loading edit for templates, got %v", f.edits)
-	}
-}
-
-func TestRouterRoutesTemplatePickEnqueuesPreviewFromButton(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-	tid := int64(11)
-	draft := r.RouteWizardStore().PutAddDraft(RouteAddDraft{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		Kind: "dns", TunnelID: "awg11", UseHRNeo: true,
-	})
-	tplToken := r.RouteWizardStore().PutTemplateToken(RouteTemplateToken{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		DraftToken: draft.Token, TemplateID: "youtube", TemplateName: "YouTube",
-	})
-
-	r.HandleCallback(context.Background(), &tg.CallbackQuery{
-		ID:   "cb-pick-tpl",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:%s", uid, draft.Token, tplToken),
-	})
-
-	if len(sink.calls) != 1 || sink.calls[0].action != "route_add_plan" {
-		t.Fatalf("expected route_add_plan enqueue, got %+v", sink.calls)
-	}
-	if got, _ := sink.calls[0].args["template_id"].(string); got != "youtube" {
-		t.Fatalf("template_id = %q, want youtube; args=%+v", got, sink.calls[0].args)
-	}
-	if got, _ := sink.calls[0].args["tunnel_id"].(string); got != "awg11" {
-		t.Fatalf("tunnel_id = %q, want awg11; args=%+v", got, sink.calls[0].args)
-	}
-}
-
-func TestRouterRoutesTemplatePageRendersStoredCatalog(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	r := NewRouterWithSink(d, f, &fakeEnqueuer{}, Config{ChatID: -100, AdminUserID: 12345})
-	tid := int64(11)
-	store := r.RouteWizardStore()
-	store.TokenFunc = fixedTokens("draft1")
-	draft := store.PutAddDraft(RouteAddDraft{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		Kind: "dns", TunnelID: "awg11",
-	})
-	templates := []wire.RouteTemplate{}
-	for i := 1; i <= 11; i++ {
-		templates = append(templates, wire.RouteTemplate{
-			ID: "svc" + itoa(int64(i)), Name: "Service " + itoa(int64(i)), DNS: []string{"svc.example"},
-		})
-	}
-	store.PutTemplateCatalog(RouteTemplateCatalog{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		DraftToken: draft.Token, Templates: templates,
-	})
-
-	r.HandleCallback(context.Background(), &tg.CallbackQuery{
-		ID:   "cb-page-tpl",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_tpl_page:%d:_panel_:%s:1", uid, draft.Token),
-	})
-
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "Service 9") || strings.Contains(f.edits[0], "- Service 1 -") {
-		t.Fatalf("expected second template page, edits=%q", f.edits)
-	}
-	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_tpl_pick:%d:_panel_:%s:", uid, draft.Token)) {
-		t.Fatalf("expected pick buttons on stored catalog page, markups=%#v", f.editMarkups)
-	}
-	if len(f.answers) != 1 {
-		t.Fatalf("expected callback answer, got %v", f.answers)
-	}
-}
-
-func TestRouterRoutesAddConfirmKeepsDraftWhenEnqueueFails(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-	tid := int64(11)
-	store := r.RouteWizardStore()
-	store.TokenFunc = fixedTokens("draft1", "confirm1")
-	draft := store.PutAddDraft(RouteAddDraft{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		Kind: "dns", Name: "media", TunnelID: "awg11", Targets: []string{"example.com"},
-	})
-	confirmed, ok := store.SetAddConfirm(uid, &tid, uid, draft.Token, "hash1")
-	if !ok {
-		t.Fatal("expected confirm token")
-	}
-	q := &tg.CallbackQuery{
-		ID:   "cb-route-add-confirm",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_add_confirm:%d:_panel_:%s:%s", uid, draft.Token, confirmed.ConfirmToken),
-	}
-
-	r.HandleCallback(context.Background(), q)
-	sink.err = nil
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 1 || sink.calls[0].action != "route_add" {
-		t.Fatalf("same confirm should enqueue after transient failure, calls=%+v answers=%v", sink.calls, f.answers)
-	}
-}
-
-func TestRouterRoutesDeleteConfirmKeepsDraftWhenEnqueueFails(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{err: fmt.Errorf("queue down")}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-	tid := int64(11)
-	store := r.RouteWizardStore()
-	store.TokenFunc = fixedTokens("draft1", "confirm1")
-	draft := store.PutDeleteDraft(RouteDeleteDraft{
-		UserID: uid, ActorTGID: 12345, ThreadID: &tid, RouterID: uid,
-		Kind: "dns", RouteID: "rule1", PreviewHash: "hash1",
-	})
-	confirmed, ok := store.SetDeleteConfirm(uid, &tid, uid, draft.Token, "hash1")
-	if !ok {
-		t.Fatal("expected confirm token")
-	}
-	q := &tg.CallbackQuery{
-		ID:   "cb-route-del-confirm",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_del_confirm:%d:_panel_:%s:%s", uid, draft.Token, confirmed.ConfirmToken),
-	}
-
-	r.HandleCallback(context.Background(), q)
-	sink.err = nil
-	r.HandleCallback(context.Background(), q)
-
-	if len(sink.calls) != 1 || sink.calls[0].action != "route_delete" {
-		t.Fatalf("same confirm should enqueue after transient failure, calls=%+v answers=%v", sink.calls, f.answers)
-	}
-}
-
-func TestRouterRoutesRollback_RendersReverseConfirmWithoutCache(t *testing.T) {
-	d, uid := newTestDB(t)
-	if err := d.Users().UpdateThreadID(uid, 11); err != nil {
-		t.Fatal(err)
-	}
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-
-	tid := int64(11)
-	q := &tg.CallbackQuery{
-		ID:   "cb-routes-rollback",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_rollback:%d:old:new", uid),
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) != 1 {
-		t.Fatalf("rollback should render confirmation edit, got edits=%v", f.edits)
-	}
-	if !strings.Contains(f.edits[0], "new") || !strings.Contains(f.edits[0], "old") {
-		t.Fatalf("rollback confirm text should mention reverse direction, got %q", f.edits[0])
-	}
-	if len(f.editMarkups) != 1 || !markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_confirm:%d:new:old:", uid)) {
-		t.Fatalf("rollback confirm should point to reverse routes_confirm, markup=%#v", f.editMarkups)
-	}
-	if len(sink.calls) != 0 {
-		t.Fatalf("rollback must require explicit confirmation before enqueue, got calls=%+v", sink.calls)
-	}
-}
-
-func TestRouterRoutesOpen_UsesCachedSnapshotOnlyWhileRefreshingLiveStatus(t *testing.T) {
-	d, uid := newTestDB(t)
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 12345})
-	cache := &RoutesCache{TTL: time.Minute}
-	cache.Put(uid, wire.RouteSnapshot{
-		Tunnels: []wire.TunnelMeta{{ID: "old", Name: "old-tunnel", Iface: "nwg-old"}},
-		Counts:  map[string]wire.TunnelCounts{"old": {DNS: 1}},
-	})
-	r.SetRoutesCache(cache)
-
-	tid := int64(11)
-	q := &tg.CallbackQuery{
-		ID:   "cb-routes-open",
-		From: tg.User{ID: 12345},
-		Message: tg.Message{
-			MessageID: 7, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-		},
-		Data: fmt.Sprintf("routes_open:%d:_panel_", uid),
-	}
-	r.HandleCallback(context.Background(), q)
-
-	if len(f.edits) == 0 || !strings.Contains(f.edits[0], "old-tunnel") {
-		t.Fatalf("cached snapshot should render as temporary panel, edits=%v", f.edits)
-	}
-	if !strings.Contains(f.edits[0], "обнов") {
-		t.Fatalf("temporary cached panel should say it is refreshing live data, got %q", f.edits[0])
-	}
-	if len(f.editMarkups) == 0 || markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_rebind:%d:", uid)) ||
-		markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_add:%d:", uid)) ||
-		markupHasCallbackPrefix(f.editMarkups[0], fmt.Sprintf("routes_del:%d:", uid)) {
-		t.Fatalf("temporary cached panel must not expose route mutation buttons, markup=%#v", f.editMarkups)
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "route_status" {
-		t.Fatalf("routes_open must enqueue live route_status even with cache, got %+v", sink.calls)
 	}
 }
 
@@ -2085,13 +1211,6 @@ func TestCallbackUserFacingNotFoundToastsAreRussian(t *testing.T) {
 			name: "acl missing router",
 			run: func(q *tg.CallbackQuery, args Args) {
 				r.aclAllow(context.Background(), q, args)
-			},
-			args: Args{UserID: 999999},
-		},
-		{
-			name: "routes open missing user",
-			run: func(q *tg.CallbackQuery, args Args) {
-				r.handleRoutesOpen(context.Background(), q, args, false)
 			},
 			args: Args{UserID: 999999},
 		},
@@ -2313,67 +1432,6 @@ func TestRouterHandleMessage_OperatorStatusSlash_InOwnTopic(t *testing.T) {
 	}
 }
 
-func TestRouterHandleMessage_OperatorTunnelsSlash_InOwnTopic(t *testing.T) {
-	d, uid := newTestDB(t)
-	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
-		t.Fatal(err)
-	}
-	_ = d.Users().SetTelegramUserID(uid, 100)
-	_ = d.RouterOperators().Add(uid, 200, 42)
-
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
-
-	tid := int64(55)
-	r.HandleMessage(context.Background(), &tg.Message{
-		MessageID:       99,
-		Chat:            tg.Chat{ID: -100},
-		From:            tg.User{ID: 200},
-		MessageThreadID: &tid,
-		Text:            "/tunnels",
-	})
-
-	if len(f.sentMsgs) != 1 {
-		t.Fatalf("operator /tunnels should send loading panel, got %d sends", len(f.sentMsgs))
-	}
-	if !strings.Contains(f.sentMsgs[0], "Туннели") || !strings.Contains(f.sentMsgs[0], "читаю") {
-		t.Fatalf("operator /tunnels should use live loading path, got %q", f.sentMsgs[0])
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
-		t.Fatalf("operator /tunnels should enqueue tunnels_status, got %+v", sink.calls)
-	}
-}
-
-func TestRouterHandleMessage_OperatorRoutesSlash_InOwnTopic(t *testing.T) {
-	d, uid := newTestDB(t)
-	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
-		t.Fatal(err)
-	}
-	_ = d.Users().SetTelegramUserID(uid, 100)
-	_ = d.RouterOperators().Add(uid, 200, 42)
-
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	r := NewRouterWithSink(d, f, sink, Config{ChatID: -100, AdminUserID: 42})
-
-	tid := int64(55)
-	r.HandleMessage(context.Background(), &tg.Message{
-		MessageID:       99,
-		Chat:            tg.Chat{ID: -100},
-		From:            tg.User{ID: 200},
-		MessageThreadID: &tid,
-		Text:            "/routes",
-	})
-
-	if len(f.sentMsgs) != 1 || !strings.Contains(f.sentMsgs[0], "Маршруты") {
-		t.Fatalf("operator /routes should render routes loading message, got %#v", f.sentMsgs)
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "route_status" {
-		t.Fatalf("operator /routes should enqueue route_status, got %+v", sink.calls)
-	}
-}
-
 func TestRouterHandleMessage_OperatorUpgradeSlashIgnored(t *testing.T) {
 	d, uid := newTestDB(t)
 	if err := d.Users().UpdateThreadID(uid, 55); err != nil {
@@ -2432,7 +1490,7 @@ func TestRouterHandleMessage_OperatorKeyboardCommandWithBotSuffix(t *testing.T) 
 		t.Fatalf("/keyboard must first bind the bottom reply keyboard, markup=%T %+v", f.rkSends[0].markup, f.rkSends[0].markup)
 	}
 	kb, ok := f.rkSends[1].markup.(*tg.InlineKeyboardMarkup)
-	if !ok || !keyboardContainsCallback(kb, "compat_btn:0:tunnels") || keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") || keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
+	if !ok || !keyboardContainsCallback(kb, "compat_btn:0:smart_reply") || keyboardContainsCallback(kb, "compat_btn:0:tunnels") || keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") || keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
 		t.Fatalf("/keyboard must also send the full visible operator menu, markup=%T %+v", f.rkSends[1].markup, f.rkSends[1].markup)
 	}
 }

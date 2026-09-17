@@ -7,12 +7,15 @@ export class ApiError extends Error {
   // человеку на экран нельзя. Новые поверхности говорят по-русски и сами
   // решают, показать ли эту фразу вместо своей.
   // field -- поле формы, которое сервер отверг (invalid_field своих серверов).
-  constructor(status, code, message, serverMessage = '', field = '') {
+  // data -- тело ответа целиком: отказ удаления VPN-туннеля несёт разбивку
+  // правил (tunnel_has_rules {rules}), и экрану нужно именно оно.
+  constructor(status, code, message, serverMessage = '', field = '', data = null) {
     super(message)
     this.status = status
     this.code = code
     this.serverMessage = serverMessage
     this.field = field
+    this.data = data
   }
 }
 
@@ -41,8 +44,10 @@ async function request(path, opts = {}, base = BASE) {
     let code = 'unknown'
     let serverMessage = ''
     let field = ''
+    let data = null
     try {
       const body = await res.json()
+      data = body && typeof body === 'object' ? body : null
       // Backend error bodies are { code, message } (writeJSONError,
       // internal/backend/handler.go:57-60) -- the field is "code", not "error".
       code = body.code ?? code
@@ -52,7 +57,7 @@ async function request(path, opts = {}, base = BASE) {
       // ignore non-JSON error bodies
     }
     if (res.status === 401 && base === BASE && path !== '/session' && onUnauthorized) onUnauthorized()
-    throw new ApiError(res.status, code, `${path} failed: ${res.status}`, serverMessage, field)
+    throw new ApiError(res.status, code, `${path} failed: ${res.status}`, serverMessage, field, data)
   }
   if (res.status === 204) return null
   return res.json()
@@ -446,4 +451,39 @@ export function deleteSelfhosted(id, confirm) {
 
 export function checkSelfhosted(id) {
   return request(`/selfhosted/${encodeURIComponent(id)}/check`, { method: 'POST' })
+}
+
+// VPN-туннели (цикл 4 «бот без слеш-команд»). Удаление необратимо: confirm --
+// набранное имя VPN-туннеля, сервер сверяет его сам и сам считает правила по
+// свежему снимку агента. Пока снимка нет, ответ -- {state:"checking"}, и тот
+// же запрос повторяется (repeatWhilePending); итог -- {state:"queued", cmd_id}.
+export function deleteTunnel(routerID, tunnelID, confirm) {
+  return request(`/routers/${routerID}/tunnels/${encodeURIComponent(tunnelID)}/delete`, {
+    method: 'POST',
+    body: JSON.stringify({ confirm }),
+  })
+}
+
+// Загрузка своего .conf. Конфиг (в нём приватный ключ) уходит один раз, телом
+// этого POST, в base64; сервер держит его под одноразовым токеном
+// предпросмотра и обратно не отдаёт. В адрес запроса он не попадает никогда.
+export function previewTunnelImport(routerID, { name, confB64 }) {
+  return request(`/routers/${routerID}/tunnels/import`, {
+    method: 'POST',
+    body: JSON.stringify({ name, conf_b64: confB64 }),
+  })
+}
+
+// Предпросмотр, пока роутер проверяет конфиг (state:"analyzing"). Токен --
+// одноразовый, привязан к роутеру и человеку; конфига в ответе нет.
+export function fetchTunnelImport(routerID, previewID) {
+  return request(`/routers/${routerID}/tunnels/import/${encodeURIComponent(previewID)}`)
+}
+
+// «Добавить как новый»: сервер берёт конфиг по токену и ставит команду агенту.
+export function confirmTunnelImport(routerID, previewID) {
+  return request(`/routers/${routerID}/tunnels/import/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ token: previewID }),
+  })
 }

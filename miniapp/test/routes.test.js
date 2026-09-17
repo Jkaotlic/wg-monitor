@@ -16,6 +16,11 @@ import {
   rebindTargets,
   canRebindTunnel,
   snapshotState,
+  OTHER_SOURCE_ID,
+  otherSourceRow,
+  otherSourceSummary,
+  rebindSheetText,
+  bindTunnelName,
 } from '../src/routes.js'
 
 // Форма снимка -- wire.RouteSnapshot (pkg/wire/routing.go): tunnels[],
@@ -823,5 +828,70 @@ describe('snapshotState', () => {
 
   it('ничего ещё не спрашивали', () => {
     expect(snapshotState({})).toBe('idle')
+  })
+})
+
+// Цикл 4: перенос из «Напрямую (WAN)» и честный текст об обратном переносе.
+describe('источник «Напрямую (WAN)»', () => {
+  it('строка есть, только когда в снимке есть правила без VPN-туннеля', () => {
+    expect(otherSourceRow({ other: { dns: 3, static: 1, hr_neo: 2 } })).toEqual({
+      id: OTHER_SOURCE_ID,
+      name: 'Напрямую (WAN)',
+      type: 'other',
+      live: 'unknown',
+      defaultRoute: false,
+      total: 4,
+      policyRules: 0,
+      hrNeo: 2,
+    })
+    expect(OTHER_SOURCE_ID).toBe('__other__')
+    expect(otherSourceRow({ other: { dns: 0, static: 0 } })).toBe(null)
+    expect(otherSourceRow({})).toBe(null)
+    expect(otherSourceRow(null)).toBe(null)
+  })
+
+  it('подпись согласует глагол с числом', () => {
+    expect(otherSourceSummary({ total: 4 })).toBe('4 правила идут мимо VPN-туннелей, напрямую через провайдера')
+    expect(otherSourceSummary({ total: 21 })).toBe('21 правило идёт мимо VPN-туннелей, напрямую через провайдера')
+  })
+})
+
+describe('rebindSheetText', () => {
+  const src = { id: 'nwg1', name: 'amsterdam', total: 3, policyRules: 0 }
+
+  it('из «Напрямую (WAN)» -- обратного переноса нет, так и сказано', () => {
+    const other = otherSourceRow({ other: { dns: 3, static: 1 } })
+    expect(rebindSheetText(other, { id: 'nwg2', name: 'spare', total: 0, policyRules: 0 })).toEqual({
+      title: 'Перенести всё в «spare»?',
+      body: '4 правила из «Напрямую (WAN)» пойдут через VPN-туннель «spare». Обратно в «Напрямую (WAN)» приложение правила не переносит.',
+    })
+  })
+
+  it('цель пустая -- отменить можно обратным переносом', () => {
+    expect(rebindSheetText(src, { id: 'nwg2', name: 'spare', total: 0, policyRules: 0 }).body).toBe(
+      '3 правила уедут из «amsterdam» в «spare». В «amsterdam» не останется ничего. Отменить можно обратным переносом с «spare».',
+    )
+  })
+
+  it('на цели уже есть свои правила -- обратный перенос заберёт и их, с числом', () => {
+    expect(rebindSheetText(src, { id: 'nwg3', name: 'old-home', total: 2, policyRules: 0 }).body).toBe(
+      '3 правила уедут из «amsterdam» в «old-home». В «amsterdam» не останется ничего. Отменить можно обратным переносом, но он заберёт и 2 правила, которые уже были на «old-home».',
+    )
+    expect(rebindSheetText({ ...src, total: 1 }, { id: 'nwg3', name: 'x', total: 6, policyRules: 5 }).body).toBe(
+      '1 правило уедет из «amsterdam» в «x». В «amsterdam» не останется ничего. Отменить можно обратным переносом, но он заберёт и 1 правило, которое уже было на «x».',
+    )
+  })
+
+  it('правила общего набора на цели обратный перенос не трогает -- их не считаем', () => {
+    expect(rebindSheetText(src, { id: 'nwg3', name: 'x', total: 5, policyRules: 5 }).body).toMatch(/Отменить можно обратным переносом с «x»\.$/)
+  })
+})
+
+describe('bindTunnelName', () => {
+  it('интерфейс -- имя VPN-туннеля без учёта регистра, незнакомое -- как есть', () => {
+    const snap = { tunnels: [{ id: 'awg10', name: 'Amsterdam', iface: 'opkgtun10' }] }
+    expect(bindTunnelName(snap, 'OpkgTun10')).toBe('Amsterdam')
+    expect(bindTunnelName(snap, 'ISP')).toBe('ISP')
+    expect(bindTunnelName(null, 'ISP')).toBe('ISP')
   })
 })

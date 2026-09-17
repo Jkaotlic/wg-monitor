@@ -154,7 +154,9 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
     case 'routes':
       return (
         <Overlay title="Маршруты" backLabel="VPN-туннели" onBack={close}>
-          <RoutesTab routerID={nav.routerID} asleep={asleep} openSheet={openSheet} />
+          {/* rebindFrom -- VPN-туннель, с экрана которого пришли переносить
+              правила: «Маршруты» сами откроют выбор цели. */}
+          <RoutesTab routerID={nav.routerID} asleep={asleep} openSheet={openSheet} rebindFrom={params.rebindFrom ?? ''} />
         </Overlay>
       )
     // Настройки агента, подключение агента и сброс DNS лежат слоем глубже

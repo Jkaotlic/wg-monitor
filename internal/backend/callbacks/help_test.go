@@ -81,8 +81,6 @@ func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
 	for _, want := range []string{
 		"📊 Что происходит?",
 		"🩺 Проверка",
-		"🎛 Туннели",
-		"🛣 Маршруты",
 		"🌍 Через туннель?",
 		"🇷🇺 Напрямую?",
 	} {
@@ -90,7 +88,7 @@ func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
 			t.Errorf("per-router topic help missing visible button %q:\n%s", want, body)
 		}
 	}
-	for _, gone := range []string{"🛠 Обслуживание", "⬆ Обновить пакеты", "🔐 Amnezia Premium", "🔑 HideMy.name"} {
+	for _, gone := range []string{"🛠 Обслуживание", "⬆ Обновить пакеты", "🔐 Amnezia Premium", "🔑 HideMy.name", "🎛 Туннели", "🛣 Маршруты"} {
 		if strings.Contains(body, gone) {
 			t.Errorf("per-router topic help still mentions removed button %q:\n%s", gone, body)
 		}
@@ -171,12 +169,12 @@ func TestBotTextsDoNotSendPeopleToRemovedPanel(t *testing.T) {
 	}
 	for _, screen := range []string{
 		"operator", "alerts", "fleet", "premium", "mobile",
-		"routes", "tunnels", "access", "diag", "status", "doctor", "pingcheck",
+		"access", "diag", "status", "doctor", "pingcheck",
 	} {
 		texts = append(texts, tg.HelpForScreen(screen))
 	}
 	for _, text := range texts {
-		for _, gone := range []string{"/panel", "Оживить топики", "Обновить все", "Все роутеры"} {
+		for _, gone := range []string{"/panel", "Оживить топики", "Обновить все", "Все роутеры", "🎛 Туннели", "🛣 Маршруты", "help:tunnels", "help:routes", "/tunnels", "/routes"} {
 			if strings.Contains(text, gone) {
 				t.Errorf("текст отсылает к ушедшему %q:\n%s", gone, text)
 			}

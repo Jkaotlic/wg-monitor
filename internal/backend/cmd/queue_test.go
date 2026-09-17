@@ -624,3 +624,24 @@ func TestCommandTTLMaintenanceActions(t *testing.T) {
 		t.Errorf("срок awgm_update в очереди = %v, want 10m", got)
 	}
 }
+
+// ResultRecordedAt -- когда очередь записала результат: мини-апп по нему
+// отличает свежий снимок роутера от ответа минутной давности.
+func TestQueue_ResultRecordedAt(t *testing.T) {
+	q := New()
+	if _, ok := q.ResultRecordedAt(7, "c1"); ok {
+		t.Fatal("результата ещё нет")
+	}
+	issueCommandForTest(t, q, 7, wire.Command{ID: "c1", Action: "route_status"})
+	before := time.Now()
+	if err := q.RecordResult(7, wire.CommandResult{ID: "c1", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	at, ok := q.ResultRecordedAt(7, "c1")
+	if !ok || at.Before(before) || time.Since(at) > time.Second {
+		t.Fatalf("at=%v ok=%v", at, ok)
+	}
+	if _, ok := q.ResultRecordedAt(8, "c1"); ok {
+		t.Fatal("результат чужого роутера")
+	}
+}

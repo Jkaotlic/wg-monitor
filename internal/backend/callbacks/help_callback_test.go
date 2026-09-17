@@ -27,9 +27,10 @@ func containsStr(ss []string, s string) bool {
 	return false
 }
 
-// Кнопки «ℹ Помощь» живут на панелях роутера до цикла 4. Тест берёт их из
-// настоящих построителей клавиатур, а не из списка строк: переименование или
-// удаление обработчика ловится здесь, а не у человека в чате.
+// Кнопки «ℹ Помощь» живут на панелях PingCheck и диагностики (справка
+// туннелей и маршрутов ушла с панелями в цикле 4). Тест берёт их из настоящих
+// построителей клавиатур, а не из списка строк: переименование или удаление
+// обработчика ловится здесь, а не у человека в чате.
 func TestHelpCallback_EveryRealHelpButtonStillAnswers(t *testing.T) {
 	var datas []string
 	collect := func(kb tg.InlineKeyboardMarkup) {
@@ -41,14 +42,10 @@ func TestHelpCallback_EveryRealHelpButtonStillAnswers(t *testing.T) {
 			}
 		}
 	}
-	collect(tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
-		tg.HelpRowFor("tunnels"), // tg/tunnels_panel.go:203
-		tg.HelpRowFor("routes"),  // tg/routes_panel.go:281
-	}})
 	collect(tg.DiagResultKeyboard("err", 42, "")) // tg/diag_keyboard.go:26
 	collect(tg.PingCheckPanelKeyboard(42, nil))   // tg/pingcheck_panel.go:144
-	if len(datas) != 4 {
-		t.Fatalf("кнопок справки %d (%v), ждали 4", len(datas), datas)
+	if len(datas) != 2 {
+		t.Fatalf("кнопок справки %d (%v), ждали 2", len(datas), datas)
 	}
 
 	for _, data := range datas {

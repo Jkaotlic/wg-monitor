@@ -10,237 +10,6 @@ import (
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
-func TestNotifier_TunnelResultQueuesLivePanelRefresh(t *testing.T) {
-	f := &fakeRouterTG{}
-	sink := &fakeEnqueuer{}
-	n := NewNotifier(f)
-	n.TunnelsRefreshSink = sink
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnel_disable"},
-		"tunnel_disable",
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "interface Wireguard3 -> down"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMsgs) != 1 {
-		t.Fatalf("sent messages = %d, want 1", len(f.sentMsgs))
-	}
-	if len(f.edits) != 0 {
-		t.Fatalf("must not render stale event-based panel after mutation, edits = %#v", f.edits)
-	}
-	if len(sink.calls) != 1 || sink.calls[0].action != "tunnels_status" {
-		t.Fatalf("expected live tunnels_status refresh, got %+v", sink.calls)
-	}
-	if len(sink.refs) != 1 || sink.refs[0].chatID != 100 || sink.refs[0].messageID != 200 {
-		t.Fatalf("refresh should target the original panel ref, got %+v", sink.refs)
-	}
-}
-
-func TestNotifier_TunnelImportResultOffersNextActions(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnel_import"},
-		"tunnel_import",
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: `✅ Туннель "newtun" создан (id=awg99)`},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMsgs) != 0 {
-		t.Fatalf("sent messages = %d, want 0; tunnel import result should edit the checking message", len(f.sentMsgs))
-	}
-	if len(f.edits) != 1 {
-		t.Fatalf("edits = %d, want 1", len(f.edits))
-	}
-	if !strings.Contains(f.edits[0], "newtun") {
-		t.Fatalf("edited result should mention imported tunnel, got %q", f.edits[0])
-	}
-	if len(f.editMarkups) != 1 {
-		t.Fatalf("edit markups = %d, want 1", len(f.editMarkups))
-	}
-	kb := f.editMarkups[0]
-	if kb == nil {
-		t.Fatal("tunnel import result edit should carry inline next-action keyboard")
-	}
-	for _, want := range []string{
-		"tunnels_refresh:42:_panel_",
-		"check_via_tunnel:42:_panel_",
-		"routes_open:42:_panel_",
-		"pingcheck_open:42:_panel_",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("tunnel import result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestNotifier_TunnelsStatusResultOffersRouteTransferNextAction(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnels_status"},
-		"tunnels_status",
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: `✅ amnezia_nl поднят
-✅ old_default поднят`},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
-	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("tunnels status result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"routes_open:42:_panel_",
-		"pingcheck_open:42:_panel_",
-		"router_doctor:42:_menu",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("tunnels status result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestNotifier_TunnelsStatusErrorOffersRecoveryActions(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnels_status"},
-		"tunnels_status",
-		wire.CommandResult{ID: "cmd1", Status: "err", Output: "awg-manager timeout"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMarkups) != 1 {
-		t.Fatalf("sent markups = %d, want 1", len(f.sentMarkups))
-	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("tunnels status error should carry inline recovery keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"tunnels_refresh:42:_panel_",
-		"router_doctor:42:_menu",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("tunnels status error keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestNotifier_TunnelImportErrorOffersRecoveryActions(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "tunnel_import"},
-		"tunnel_import",
-		wire.CommandResult{ID: "cmd1", Status: "err", Output: "awg-manager refused import"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(f.sentMsgs) != 0 {
-		t.Fatalf("sent messages = %d, want 0; tunnel import error should edit the checking message", len(f.sentMsgs))
-	}
-	if len(f.edits) != 1 {
-		t.Fatalf("edits = %d, want 1", len(f.edits))
-	}
-	kb := f.editMarkups[0]
-	if kb == nil {
-		t.Fatal("tunnel import error edit should carry inline recovery keyboard")
-	}
-	for _, want := range []string{
-		"tunnels_refresh:42:_panel_",
-		"router_doctor:42:_menu",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("tunnel import error keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestNotifier_RestartTunnelResultOffersNextActions(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "restart_tunnel"},
-		"restart_tunnel",
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "restart queued"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("restart result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"tunnels_refresh:42:_panel_",
-		"pingcheck_open:42:_panel_",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("restart result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestNotifier_TunnelMutationResultOffersNextActions(t *testing.T) {
-	for _, action := range []string{"tunnel_enable", "tunnel_disable", "tunnel_delete"} {
-		t.Run(action, func(t *testing.T) {
-			f := &fakeRouterTG{}
-			n := NewNotifier(f)
-
-			err := n.NotifyCommandResult(context.Background(),
-				cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: action},
-				action,
-				wire.CommandResult{ID: "cmd1", Status: "ok", Output: "tunnel mutation ok"},
-				42,
-				3500,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-			if !ok || kb == nil {
-				t.Fatalf("%s result should carry inline next-action keyboard, got %T", action, f.sentMarkups[0])
-			}
-			for _, want := range []string{
-				"tunnels_refresh:42:_panel_",
-				"routes_open:42:_panel_",
-				"pingcheck_open:42:_panel_",
-			} {
-				if !containsStr(flattenKbCallbacks(kb), want) {
-					t.Fatalf("%s result keyboard missing %q: %+v", action, want, kb.InlineKeyboard)
-				}
-			}
-		})
-	}
-}
-
 func TestNotifier_PingCheckResultOffersNextActions(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewNotifier(f)
@@ -269,156 +38,94 @@ func TestNotifier_PingCheckResultOffersNextActions(t *testing.T) {
 	}
 }
 
-func TestNotifier_RouterDoctorResultOffersNextActions(t *testing.T) {
+// testAppBase -- публичный адрес бэкенда в тестах; кнопка ведёт роутер 42.
+const testAppBase = "https://wgmon.example.com"
+
+const testAppTunnelsURL = "https://wgmon.example.com/miniapp/?router=42&tab=tunnels"
+
+// notifyForTest -- итог одной команды: что легло в первую разметку.
+func notifyForTest(t *testing.T, chatID int64, action, status string) any {
+	t.Helper()
 	f := &fakeRouterTG{}
 	n := NewNotifier(f)
-
+	n.AppBaseURL = testAppBase
 	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "router_doctor"},
-		"router_doctor",
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "doctor ok"},
+		cmdpkg.MessageRef{ChatID: chatID, MessageID: 200, Action: action},
+		action,
+		wire.CommandResult{ID: "cmd1", Status: status, Output: action + " " + status},
 		42,
 		3500,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("router doctor result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
+	if len(f.sentMarkups) == 0 {
+		t.Fatalf("%s/%s: ничего не отправлено", action, status)
 	}
-	for _, want := range []string{
-		"tunnels_refresh:42:_panel_",
-		"routes_open:42:_panel_",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("router doctor result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
+	return f.sentMarkups[0]
 }
 
-func TestNotifier_RouterDoctorErrorOffersRecoveryActions(t *testing.T) {
-	f := &fakeRouterTG{}
-	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "router_doctor"},
-		"router_doctor",
-		wire.CommandResult{ID: "cmd1", Status: "err", Output: "awg-manager refused"},
-		42,
-		3500,
-	)
-	if err != nil {
-		t.Fatal(err)
+// Цикл 4: панели туннелей и маршрутов ушли из бота. Под итогами команд нет
+// ни tunnels_refresh, ни routes_open; в личке вместо них -- кнопка
+// приложения, в группе -- ничего (web_app там Telegram не принимает).
+func TestNotifier_ResultKeyboardsLeadToAppNotRemovedPanels(t *testing.T) {
+	cases := []struct {
+		action, status string
+		want           []string
+	}{
+		{"router_doctor", "ok", nil},
+		{"router_doctor", "err", []string{"router_doctor:42:_menu"}},
+		{"check_via_tunnel", "ok", []string{"pingcheck_open:42:_panel_", "router_doctor:42:_menu"}},
+		{"check_direct", "err", []string{"pingcheck_open:42:_panel_", "router_doctor:42:_menu"}},
+		{"force_recheck", "ok", []string{"router_doctor:42:_menu"}},
+		{"pingcheck_now", "ok", []string{"pingcheck_open:42:_panel_", "diag_now:42:_menu"}},
 	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("router doctor error should carry inline recovery keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"router_doctor:42:_menu",
-		"tunnels_refresh:42:_panel_",
-		"routes_open:42:_panel_",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("router doctor error keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
-	}
-}
-
-func TestNotifier_ConnectivityResultOffersNextActions(t *testing.T) {
-	for _, action := range []string{"check_via_tunnel", "check_direct"} {
-		t.Run(action, func(t *testing.T) {
-			f := &fakeRouterTG{}
-			n := NewNotifier(f)
-
-			err := n.NotifyCommandResult(context.Background(),
-				cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: action},
-				action,
-				wire.CommandResult{ID: "cmd1", Status: "ok", Output: "connectivity ok"},
-				42,
-				3500,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
+	for _, tc := range cases {
+		t.Run(tc.action+"/"+tc.status, func(t *testing.T) {
+			kb, ok := notifyForTest(t, 100, tc.action, tc.status).(*tg.InlineKeyboardMarkup)
 			if !ok || kb == nil {
-				t.Fatalf("%s result should carry inline next-action keyboard, got %T", action, f.sentMarkups[0])
+				t.Fatalf("в личке ждали инлайн-клавиатуру")
 			}
-			for _, want := range []string{
-				"pingcheck_open:42:_panel_",
-				"tunnels_refresh:42:_panel_",
-				"router_doctor:42:_menu",
-				"routes_open:42:_panel_",
-			} {
-				if !containsStr(flattenKbCallbacks(kb), want) {
-					t.Fatalf("%s result keyboard missing %q: %+v", action, want, kb.InlineKeyboard)
+			got := flattenKbCallbacks(kb)
+			for _, want := range tc.want {
+				if !containsStr(got, want) {
+					t.Errorf("нет %q: %v", want, got)
+				}
+			}
+			for _, cb := range got {
+				if strings.HasPrefix(cb, "tunnels_refresh:") || strings.HasPrefix(cb, "routes_open:") {
+					t.Errorf("кнопка удалённой панели: %q", cb)
+				}
+			}
+			last := kb.InlineKeyboard[len(kb.InlineKeyboard)-1]
+			if len(last) != 1 || last[0].WebApp == nil || last[0].WebApp.URL != testAppTunnelsURL {
+				t.Errorf("последний ряд -- кнопка приложения: %+v", last)
+			}
+
+			group := notifyForTest(t, -100, tc.action, tc.status)
+			if gkb, ok := group.(*tg.InlineKeyboardMarkup); ok {
+				for _, row := range gkb.InlineKeyboard {
+					for _, b := range row {
+						if b.WebApp != nil || strings.HasPrefix(b.CallbackData, "tunnels_refresh:") || strings.HasPrefix(b.CallbackData, "routes_open:") {
+							t.Errorf("в группе: %+v", b)
+						}
+					}
 				}
 			}
 		})
 	}
 }
 
-func TestNotifier_ConnectivityErrorOffersRecoveryActions(t *testing.T) {
-	for _, action := range []string{"check_via_tunnel", "check_direct"} {
-		t.Run(action, func(t *testing.T) {
-			f := &fakeRouterTG{}
-			n := NewNotifier(f)
-
-			err := n.NotifyCommandResult(context.Background(),
-				cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: action},
-				action,
-				wire.CommandResult{ID: "cmd1", Status: "err", Output: "connection refused"},
-				42,
-				3500,
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-			kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-			if !ok || kb == nil {
-				t.Fatalf("%s error should carry inline recovery keyboard, got %T", action, f.sentMarkups[0])
-			}
-			for _, want := range []string{
-				"pingcheck_open:42:_panel_",
-				"tunnels_refresh:42:_panel_",
-				"router_doctor:42:_menu",
-				"routes_open:42:_panel_",
-			} {
-				if !containsStr(flattenKbCallbacks(kb), want) {
-					t.Fatalf("%s error keyboard missing %q: %+v", action, want, kb.InlineKeyboard)
-				}
-			}
-		})
-	}
-}
-
-func TestNotifier_ForceRecheckResultOffersNextActions(t *testing.T) {
+// Без публичного адреса кнопки приложения нет и в личке, а итог проверки
+// роутера уходит с обычной клавиатурой темы.
+func TestNotifier_NoAppURLNoAppButton(t *testing.T) {
 	f := &fakeRouterTG{}
 	n := NewNotifier(f)
-
-	err := n.NotifyCommandResult(context.Background(),
-		cmdpkg.MessageRef{ChatID: 100, MessageID: 200, Action: "force_recheck"},
-		"force_recheck",
-		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "report sent"},
-		42,
-		3500,
-	)
-	if err != nil {
+	if err := n.NotifyCommandResult(context.Background(), cmdpkg.MessageRef{ChatID: 100, MessageID: 200}, "router_doctor",
+		wire.CommandResult{ID: "cmd1", Status: "ok", Output: "doctor ok"}, 42, 3500); err != nil {
 		t.Fatal(err)
 	}
-	kb, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("force_recheck result should carry inline next-action keyboard, got %T", f.sentMarkups[0])
-	}
-	for _, want := range []string{
-		"router_doctor:42:_menu",
-		"tunnels_refresh:42:_panel_",
-		"routes_open:42:_panel_",
-	} {
-		if !containsStr(flattenKbCallbacks(kb), want) {
-			t.Fatalf("force_recheck result keyboard missing %q: %+v", want, kb.InlineKeyboard)
-		}
+	if _, ok := f.sentMarkups[0].(*tg.InlineKeyboardMarkup); ok {
+		t.Fatalf("без адреса и без кнопок инлайн-клавиатуры быть не должно: %+v", f.sentMarkups[0])
 	}
 }

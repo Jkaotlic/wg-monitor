@@ -71,34 +71,8 @@ func TestParseHistory(t *testing.T) {
 	}
 }
 
-func TestParseRouteTemplateCallbacks(t *testing.T) {
-	load, err := Parse("routes_tpl_load:42:_panel_:draft1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if load.Action != "routes_tpl_load" || load.UserID != 42 || load.RouteDraftToken != "draft1" || !load.IsPanel {
-		t.Fatalf("bad template load args: %+v", load)
-	}
-
-	pick, err := Parse("routes_tpl_pick:42:_panel_:draft1:tpl1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if pick.Action != "routes_tpl_pick" || pick.RouteDraftToken != "draft1" || pick.RouteTemplateToken != "tpl1" || !pick.IsPanel {
-		t.Fatalf("bad template pick args: %+v", pick)
-	}
-
-	page, err := Parse("routes_tpl_page:42:_panel_:draft1:2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if page.Action != "routes_tpl_page" || page.RouteDraftToken != "draft1" || page.RouteTemplatePage != 2 || !page.IsPanel {
-		t.Fatalf("bad template page args: %+v", page)
-	}
-}
-
 func TestParseCommandActions(t *testing.T) {
-	for _, action := range []string{"restart_tunnel", "diag_now", "pingcheck_now", "force_recheck", "router_doctor"} {
+	for _, action := range []string{"diag_now", "pingcheck_now", "force_recheck", "router_doctor"} {
 		data := action + ":42:tunnel_amnezia_for_awg2"
 		a, err := Parse(data)
 		if err != nil {
@@ -115,32 +89,6 @@ func TestParseCommandActions(t *testing.T) {
 		}
 		if a.TTL != 0 {
 			t.Errorf("%s: command actions must not carry TTL, got %v", data, a.TTL)
-		}
-	}
-}
-
-func TestParseTunnelPanelCallbacks(t *testing.T) {
-	for _, action := range []string{"tunnel_restart", "tunnel_delete_ask", "tunnel_delete"} {
-		data := action + ":42:tunnel_awg13:Wireguard3:awg13"
-		a, err := Parse(data)
-		if err != nil {
-			t.Fatalf("%s: %v", data, err)
-		}
-		if a.Action != action || a.UserID != 42 || a.CheckName != "tunnel_awg13" || a.NDMSName != "Wireguard3" || a.TunnelID != "awg13" || !a.IsPanel {
-			t.Fatalf("%s: got %+v", data, a)
-		}
-	}
-}
-
-func TestParseTunnelDeleteAllowsTunnelIDWithoutNDMSName(t *testing.T) {
-	for _, action := range []string{"tunnel_delete_ask", "tunnel_delete"} {
-		data := action + ":42:tunnel_kernel-10::kernel-10"
-		a, err := Parse(data)
-		if err != nil {
-			t.Fatalf("%s: %v", data, err)
-		}
-		if a.Action != action || a.UserID != 42 || a.CheckName != "tunnel_kernel-10" || a.NDMSName != "" || a.TunnelID != "kernel-10" || !a.IsPanel {
-			t.Fatalf("%s: got %+v", data, a)
 		}
 	}
 }
@@ -162,172 +110,16 @@ func TestParseMalformed(t *testing.T) {
 	}
 }
 
-func TestParse_TunnelImportReplace(t *testing.T) {
-	args, err := Parse("tunnel_import_replace:42:_panel_:a1b2c3d4")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if args.Action != "tunnel_import_replace" {
-		t.Errorf("action: %q", args.Action)
-	}
-	if args.UserID != 42 {
-		t.Errorf("uid: %d", args.UserID)
-	}
-	if args.CheckName != panelSentinel {
-		t.Errorf("check: %q", args.CheckName)
-	}
-	if !args.IsPanel {
-		t.Error("expected import callback to be panel scoped")
-	}
-	if args.ImportToken != "a1b2c3d4" {
-		t.Errorf("token: %q", args.ImportToken)
-	}
-}
-
-func TestParse_TunnelImportAdd(t *testing.T) {
-	args, err := Parse("tunnel_import_add:7:_panel_:deadbeef")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if args.Action != "tunnel_import_add" || args.CheckName != panelSentinel || !args.IsPanel || args.ImportToken != "deadbeef" {
-		t.Errorf("args: %+v", args)
-	}
-}
-
-func TestParse_TunnelImportMissingToken(t *testing.T) {
-	_, err := Parse("tunnel_import_replace:42:_panel_")
-	if err == nil {
-		t.Error("expected error for missing token")
-	}
-}
-
-func TestParse_TunnelImportRejectsNameInCallbackData(t *testing.T) {
-	_, err := Parse("tunnel_import_replace:42:long-tunnel-name:a1b2c3d4")
-	if err == nil {
-		t.Error("expected error when import callback carries tunnel name instead of panel sentinel")
-	}
-}
-
-func TestParse_TunnelImportTokenOnlyShapeFitsTelegramLimit(t *testing.T) {
-	data := "tunnel_import_replace:9223372036854775807:_panel_:deadbeef"
-	if len(data) > 64 {
-		t.Fatalf("callback_data length=%d, want <=64: %s", len(data), data)
-	}
-	if _, err := Parse(data); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestParse_RoutesActions(t *testing.T) {
-	cases := []struct {
-		data    string
-		action  string
-		token   string
-		isPanel bool
-	}{
-		{"routes_open:42:_panel_", "routes_open", "", true},
-		{"routes_refresh:42:_panel_", "routes_refresh", "", true},
-		{"routes_rebind:42:t1", "routes_rebind", "", false},
-		{"routes_pick:42:t1:t2", "routes_pick", "", false},
-		{"routes_confirm:42:t1:t2:abc12345", "routes_confirm", "abc12345", false},
-		{"routes_rollback:42:t1:t2", "routes_rollback", "", false},
-		{"routes_close:0:_panel_", "routes_close", "", true},
-		{"close_panel:42:_panel_", "close_panel", "", true},
-		{"routes_back:42:_panel_", "routes_back", "", true},
-	}
-	for _, tc := range cases {
-		args, err := Parse(tc.data)
-		if err != nil {
-			t.Errorf("%s: %v", tc.data, err)
-			continue
-		}
-		if args.Action != tc.action {
-			t.Errorf("%s: action=%s", tc.data, args.Action)
-		}
-		if tc.token != "" && args.RebindToken != tc.token {
-			t.Errorf("%s: token=%q want %q", tc.data, args.RebindToken, tc.token)
-		}
-		if args.IsPanel != tc.isPanel {
-			t.Errorf("%s: isPanel=%v want %v", tc.data, args.IsPanel, tc.isPanel)
-		}
-	}
-}
-
-func TestParse_RoutesConfirm_MissingToken(t *testing.T) {
-	_, err := Parse("routes_confirm:42:t1:t2")
-	if err == nil {
-		t.Errorf("expected error for missing token")
-	}
-}
-
-func TestParse_RoutesTokensRejectMalformedCodes(t *testing.T) {
-	for _, bad := range []string{
-		"routes_confirm:42:t1:t2:x",
-		"routes_add_confirm:42:_panel_:draft1:bad.token",
-		"routes_add_cancel:42:_panel_:bad/token",
-		"routes_del:42:_panel_:bad.token",
-		"routes_del_confirm:42:_panel_:draft2:bad/token",
-		"routes_del_cancel:42:_panel_:x",
-	} {
-		if _, err := Parse(bad); err == nil {
-			t.Errorf("%q should reject malformed callback token", bad)
-		}
-	}
-}
-
-func TestParse_RouteAddDeletePreviewCallbacks(t *testing.T) {
-	cases := []struct {
-		data         string
-		action       string
-		draftToken   string
-		confirmToken string
-		routeToken   string
-	}{
-		{"routes_add_confirm:42:_panel_:draft1:confirm1", "routes_add_confirm", "draft1", "confirm1", ""},
-		{"routes_add_cancel:42:_panel_:draft1", "routes_add_cancel", "draft1", "", ""},
-		{"routes_del:42:_panel_:rt1", "routes_del", "", "", "rt1"},
-		{"routes_del_confirm:42:_panel_:draft2:confirm2", "routes_del_confirm", "draft2", "confirm2", ""},
-		{"routes_del_cancel:42:_panel_:draft2", "routes_del_cancel", "draft2", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.data, func(t *testing.T) {
-			got, err := Parse(tc.data)
-			if err != nil {
-				t.Fatalf("Parse failed: %v", err)
-			}
-			if got.Action != tc.action || got.RouteDraftToken != tc.draftToken || got.RouteConfirmToken != tc.confirmToken || got.RouteToken != tc.routeToken {
-				t.Fatalf("got %+v", got)
-			}
-		})
-	}
-}
-
-func TestParse_RouteAddTypeDistinguishesNDMSAndHRNeo(t *testing.T) {
-	ndms, err := Parse("routes_add_type:42:_panel_:dns")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ndms.RouteKind != "dns" || ndms.RouteUseHRNeo {
-		t.Fatalf("ndms args = %+v, want dns without HR-Neo", ndms)
-	}
-	hr, err := Parse("routes_add_type:42:_panel_:dns_hr")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hr.RouteKind != "dns" || !hr.RouteUseHRNeo {
-		t.Fatalf("hr args = %+v, want dns with HR-Neo", hr)
-	}
-}
-
 func TestParse_MaintActions(t *testing.T) {
 	cases := []struct {
 		data    string
 		want    Args
 		wantErr bool
 	}{
-		{data: "maint_restart:42:hrneo", want: Args{Action: "maint_restart", UserID: 42, CheckName: "hrneo", MaintName: "hrneo"}},
-		{data: "maint_restart:42:awgmgr", want: Args{Action: "maint_restart", UserID: 42, CheckName: "awgmgr", MaintName: "awgmgr"}},
-		{data: "maint_confirm:42:hrneo:a1b2c3d4", want: Args{Action: "maint_confirm", UserID: 42, CheckName: "hrneo", MaintName: "hrneo", MaintToken: "a1b2c3d4"}},
+		// Перезапуск служб ушёл в приложение вместе с панелями (цикл 4).
+		{data: "maint_restart:42:hrneo", wantErr: true},
+		{data: "maint_restart:42:awgmgr", wantErr: true},
+		{data: "maint_confirm:42:hrneo:a1b2c3d4", wantErr: true},
 		// negative cases
 		{data: "maint_restart:42", wantErr: true},
 		{data: "maint_restart:42:_panel_", wantErr: true},
@@ -375,7 +167,6 @@ func TestParse_PanelRejectsUnknownScreen(t *testing.T) {
 
 func TestParse_MaintOpkgDiagTokensRejectMalformedCodes(t *testing.T) {
 	for _, bad := range []string{
-		"maint_confirm:42:hrneo:x",
 		"diag_raw:42:_panel_:bad.token",
 		"diag_back:42:_panel_:bad/token",
 		"diag_test:bad.token:mtu",
@@ -436,26 +227,6 @@ func TestParse_PingCheckOpen(t *testing.T) {
 		t.Fatalf("unexpected: %v", err)
 	}
 	if a.Action != "pingcheck_open" || a.UserID != 42 || !a.IsPanel {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_RoutesSnapshot(t *testing.T) {
-	a, err := Parse("routes_snapshot:42:_panel_")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "routes_snapshot" || a.UserID != 42 || !a.IsPanel {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_RoutesHRNeoDoctor(t *testing.T) {
-	a, err := Parse("routes_hrneo_doctor:42:_panel_")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "routes_hrneo_doctor" || a.UserID != 42 || !a.IsPanel {
 		t.Errorf("got %+v", a)
 	}
 }
@@ -550,7 +321,7 @@ func TestParse_PanelOnlyHelpSurvives(t *testing.T) {
 			t.Errorf("Parse(%q) принят, а экрана больше нет", data)
 		}
 	}
-	if a, err := Parse("panel:0:help:tunnels"); err != nil || a.PanelScreen != "help" || a.PanelKind != "tunnels" {
+	if a, err := Parse("panel:0:help:pingcheck"); err != nil || a.PanelScreen != "help" || a.PanelKind != "pingcheck" {
 		t.Fatalf("справка перестала разбираться: %+v, %v", a, err)
 	}
 }

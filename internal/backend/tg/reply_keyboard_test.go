@@ -39,7 +39,7 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 		wantR1 int // row 1 button count (0 means "don't care")
 		wantR2 int
 	}{
-		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через туннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "🩺 Проверка"}, 2, 2},
+		{"per_router", true, []string{"📊 Что происходит?", "🌍 Через туннель?", "🇷🇺 Напрямую?", "🩺 Проверка"}, 2, 2},
 		{"summary", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"systemic", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"unknown", false, nil, 0, 0},
@@ -106,8 +106,6 @@ func TestOperatorMenuInlineKeyboardForTopic_PerRouter(t *testing.T) {
 	}{
 		{"📊 Что происходит?", "compat_btn:0:smart_reply"},
 		{"🩺 Проверка", "compat_btn:0:router_doctor"},
-		{"🎛 Туннели", "compat_btn:0:tunnels"},
-		{"🛣 Маршруты", "compat_btn:0:routes"},
 		{"🌍 Через туннель?", "compat_btn:0:via_tunnel"},
 		{"🇷🇺 Напрямую?", "compat_btn:0:direct"},
 	} {
@@ -187,5 +185,28 @@ func TestMiniAppURL(t *testing.T) {
 	}
 	if MiniAppURL("http://wgmon.example.com") != "" || MiniAppURL("") != "" {
 		t.Fatal("не https -- пусто")
+	}
+}
+
+// Туннели и маршруты переехали в приложение (цикл 4): ни в нижнем меню, ни в
+// инлайн-меню, ни в командах бота их нет.
+func TestBotMenusHaveNoTunnelsRoutes(t *testing.T) {
+	kb := ReplyKeyboardForTopic("per_router").(*ReplyKeyboardMarkup)
+	for _, gone := range []string{"🎛 Туннели", "🛣 Маршруты"} {
+		if replyKeyboardHasText(kb, gone) {
+			t.Errorf("кнопка %q переехала в приложение, а в меню осталась", gone)
+		}
+	}
+	for _, code := range []string{"tunnels", "routes"} {
+		if got := CompatBtnTextByCode(code); got != "" {
+			t.Errorf("compat-код %q всё ещё знает кнопку %q", code, got)
+		}
+	}
+	for _, cmds := range [][]BotCommand{OperatorBotCommands(), AdminBotCommands()} {
+		for _, c := range cmds {
+			if c.Command == "tunnels" || c.Command == "routes" {
+				t.Errorf("/%s переехала в приложение, а осталась в меню", c.Command)
+			}
+		}
 	}
 }

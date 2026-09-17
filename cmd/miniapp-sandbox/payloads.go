@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -32,6 +33,22 @@ func sandboxOutput(action string, args map[string]any) string {
 		// значит проверять экран на ответе, которого не бывает.
 		id := importTunnel(argString(args, "name", "amnezia_nl"))
 		return fmt.Sprintf("✅ Туннель %q создан (id=%s)", argString(args, "name", "amnezia_nl"), id)
+	case "tunnel_analyze":
+		return mustJSON(sandboxAnalyze(argString(args, "conf", "")))
+	case "tunnel_delete":
+		id := argString(args, "tunnel_id", "")
+		deleteTunnel(id)
+		return fmt.Sprintf("tunnel %s deleted", id)
+	case "hrneo_inventory":
+		return mustJSON(hrneoInventory(routerState()))
+	case "service_restart":
+		name := argString(args, "name", "")
+		switch name {
+		case "hrneo_start", "hrneo_stop":
+			setHRNeoRunning(name == "hrneo_start")
+			return "hrneo " + strings.TrimPrefix(name, "hrneo_") + " sent"
+		}
+		return "песочница: service_restart " + name + " выполнен"
 	case "route_policy_promote":
 		promoteTunnel(argString(args, "tunnel_id", ""))
 		return "политика переведена на " + argString(args, "tunnel_id", "")
@@ -104,29 +121,94 @@ func mustJSON(v any) string {
 // Состояние «роутера» между командами. Мастер замены -- цепочка из шести
 // шагов, и каждый следующий смотрит на последствия предыдущего: без памяти
 // песочница проверяла бы только первый.
+//
+// Цикл 4: VPN-туннель можно удалить (deleted), HydraRoute Neo -- остановить
+// и запустить (hrneoStopped), главный выход роутера задаётся флагом -egress.
 var sandboxRouter = struct {
-	mu       sync.Mutex
-	imported []wire.TunnelMeta
-	active   string
-	disabled map[string]bool
-	nextID   int
-}{active: "awg12", disabled: map[string]bool{}, nextID: 21}
+	mu           sync.Mutex
+	imported     []wire.TunnelMeta
+	active       string
+	disabled     map[string]bool
+	deleted      map[string]bool
+	hrneoStopped bool
+	egress       string
+	nextID       int
+}{active: "awg12", disabled: map[string]bool{}, deleted: map[string]bool{}, egress: wire.DefaultEgressDirect, nextID: 21}
 
 type routerSnapshotState struct {
-	imported []wire.TunnelMeta
-	active   string
-	disabled map[string]bool
+	imported     []wire.TunnelMeta
+	active       string
+	disabled     map[string]bool
+	deleted      map[string]bool
+	hrneoStopped bool
+	egress       string
 }
 
 func routerState() routerSnapshotState {
 	sandboxRouter.mu.Lock()
 	defer sandboxRouter.mu.Unlock()
-	st := routerSnapshotState{active: sandboxRouter.active, disabled: map[string]bool{}}
+	st := routerSnapshotState{active: sandboxRouter.active, disabled: map[string]bool{}, deleted: map[string]bool{},
+		hrneoStopped: sandboxRouter.hrneoStopped, egress: sandboxRouter.egress}
 	st.imported = append(st.imported, sandboxRouter.imported...)
 	for k, v := range sandboxRouter.disabled {
 		st.disabled[k] = v
 	}
+	for k, v := range sandboxRouter.deleted {
+		st.deleted[k] = v
+	}
 	return st
+}
+
+// setSandboxEgress -- главный выход роутера: "direct" или id VPN-туннеля
+// (флаг -egress). С -egress=awg14 пустой «vpn-spare» -- главный выход, и
+// удаление отвечает tunnel_is_default.
+func setSandboxEgress(egress string) {
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	sandboxRouter.egress = egress
+}
+
+func deleteTunnel(id string) {
+	if id == "" {
+		return
+	}
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	sandboxRouter.deleted[id] = true
+}
+
+func setHRNeoRunning(on bool) {
+	sandboxRouter.mu.Lock()
+	defer sandboxRouter.mu.Unlock()
+	sandboxRouter.hrneoStopped = !on
+}
+
+// sandboxAnalyze -- ответ tunnel_analyze в форме агента (actions/analyze.go):
+// конфиг со строкой BADCONF модуль «не примет», с WARNCONF -- примет с
+// замечанием, прочие -- чистые.
+func sandboxAnalyze(confB64 string) map[string]any {
+	raw, _ := base64.StdEncoding.DecodeString(confB64)
+	conf := string(raw)
+	out := map[string]any{"supported": true, "version": "2.0", "errors": []any{}, "warnings": []any{}}
+	if strings.Contains(conf, "BADCONF") {
+		out["errors"] = []any{map[string]string{"code": "h1_h2_overlap", "message": "H1 и H2 пересекаются: модуль роутера такой конфиг не примет"}}
+	}
+	if strings.Contains(conf, "WARNCONF") {
+		out["warnings"] = []any{map[string]string{"code": "mtu_low", "message": "MTU меньше 1280: возможны обрывы на больших пакетах"}}
+	}
+	return out
+}
+
+// hrneoInventory -- правила HydraRoute Neo в форме wire.HRNeoInventory.
+func hrneoInventory(st routerSnapshotState) wire.HRNeoInventory {
+	return wire.HRNeoInventory{
+		Status: wire.HRStatus{Installed: true, Running: !st.hrneoStopped},
+		Rules: []wire.HRNeoRule{
+			{ID: "hr-figma", Name: "Figma", Enabled: true, Mode: "policy", PolicyName: "HydraRoute", Domains: []string{"figma.com", "figmausercontent.com"}},
+			{ID: "hr-github", Name: "GitHub", Enabled: true, Mode: "policy", PolicyName: "HydraRoute", Domains: []string{"github.com", "githubusercontent.com"}, Routes: []string{"203.0.113.0/24"}},
+			{ID: "hr-old", Name: "Старое правило", Enabled: false, Bind: "OpkgTun10", Domains: []string{"old.example.com"}},
+		},
+	}
 }
 
 func importTunnel(name string) string {
@@ -162,20 +244,30 @@ func setTunnelPower(id string, on bool) {
 
 func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 	snap := wire.RouteSnapshot{
-		HRNeo: wire.HRStatus{Installed: true, Running: true},
+		HRNeo: wire.HRStatus{Installed: true, Running: !st.hrneoStopped},
 		Tunnels: []wire.TunnelMeta{
 			{
-				ID: "awg12", Name: "vpn-nl", Iface: "opkgtun12", Type: "amneziawg",
+				ID: "awg12", Name: "vpn-nl", Iface: "opkgtun12", Type: "managed",
 				Enabled: true, Available: true, Status: "up",
 				HasHandshake: true, HandshakeAge: 21, PingStatus: "ok",
 				DefaultRoute: true, RestartMethod: "control",
 			},
 			{
-				ID: "awg10", Name: "vpn-de", Iface: "opkgtun10", Type: "amneziawg",
+				ID: "awg10", Name: "vpn-de", Iface: "opkgtun10", Type: "managed",
 				Enabled: true, Available: true, Status: "down",
 				HasHandshake: true, HandshakeAge: 3600, PingStatus: "fail", PingFails: 4, PingFailMax: 5,
 				RestartMethod: "control",
 			},
+			// Пустой VPN-туннель: правил нет, в цепочке политики его нет --
+			// его и удаляют на приёмке (цикл 4).
+			{
+				ID: "awg14", Name: "vpn-spare", Iface: "opkgtun14", Type: "managed",
+				Enabled: true, Available: true, Status: "up",
+				HasHandshake: true, HandshakeAge: 40, PingStatus: "ok",
+				RestartMethod: "control",
+			},
+			// Подключение провайдера: VPN-туннелем не является, удалить нельзя.
+			{ID: "ISP", Name: "Провайдер", Iface: "ISP", Type: "ndms", Enabled: true, Available: true, RestartMethod: "none"},
 		},
 		// Правила привязаны ЛИБО к интерфейсу, либо к политике -- эти
 		// множества не пересекаются (сверено с живым роутером: у него
@@ -204,10 +296,17 @@ func routeSnapshot(st routerSnapshotState) wire.RouteSnapshot {
 			{Name: "GitHub", Bind: "OpkgTun12", Backend: "hydraroute", Kind: "dns", Enabled: true},
 			{Name: "офисная сеть", Bind: "OpkgTun10", Backend: "ndms", Kind: "static", Enabled: true},
 		},
-		DefaultEgress: wire.DefaultEgressDirect,
+		DefaultEgress: st.egress,
 		PolicyModel:   true,
 	}
 	snap.Tunnels = append(snap.Tunnels, st.imported...)
+	kept := snap.Tunnels[:0]
+	for _, t := range snap.Tunnels {
+		if !st.deleted[t.ID] {
+			kept = append(kept, t)
+		}
+	}
+	snap.Tunnels = kept
 	for i := range snap.Tunnels {
 		if st.disabled[snap.Tunnels[i].ID] {
 			snap.Tunnels[i].Enabled = false
@@ -361,6 +460,12 @@ func argsLine(args map[string]any) string {
 	}
 	parts := make([]string, 0, len(args))
 	for k, v := range args {
+		// Конфиг несёт приватный ключ: в консоль -- только размер.
+		if k == "conf" {
+			s, _ := v.(string)
+			parts = append(parts, fmt.Sprintf("conf=[скрыто, %d знаков base64]", len(s)))
+			continue
+		}
 		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
 	}
 	return strings.Join(parts, " ")
