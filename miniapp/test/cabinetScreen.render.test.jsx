@@ -331,6 +331,15 @@ describe('кабинет роутера: страны и отзыв', () => {
     cleanup(root)
   })
 
+  it('доступная страна -- со стрелкой, погашенная -- без', async () => {
+    mocks.accounts[0].devices_used = 3
+    const { root } = await mount()
+    const main = (label) => [...root.querySelectorAll('.cabinet-option-main')].find((b) => b.textContent.includes(label))
+    expect(main('Нидерланды').querySelector('.list-row-chevron')).toBeTruthy()
+    expect(main('Германия').querySelector('.list-row-chevron')).toBe(null)
+    cleanup(root)
+  })
+
   it('мест нет: выпущенную страну можно выпустить заново и прислать .conf', async () => {
     mocks.accounts[0].devices_used = 3
     const { root, sheets } = await mount()
@@ -372,6 +381,9 @@ describe('кабинет роутера: выпуск', () => {
     await act(async () => button(root, 'Выпустить и положить на роутер').click())
     await flush()
     expect(root.querySelector('.cabinet-outcome').textContent).toBe('Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.')
+    // Неудача -- «попробовать ещё раз», а не «выпустить ещё раз».
+    expect(button(root, 'Попробовать ещё раз')).toBeTruthy()
+    expect(button(root, 'Выпустить ещё раз')).toBeFalsy()
     await act(async () => button(root, 'Выбрать, что отозвать').click())
     expect(buttons(root, 'Отозвать')).toHaveLength(1)
     cleanup(root)

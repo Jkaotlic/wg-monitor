@@ -139,7 +139,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
       // Ошибка про пароль -- у поля пароля: туда и вводить.
       setError('')
       setNotice('')
-      setFieldError({ key: 'ssh_password', text: problem })
+      setFieldError({ key: 'ssh_password', text: 'Введите пароль SSH заново.' })
       return
     }
     if (problem) {
@@ -322,7 +322,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                         value={values[f.key]}
                         placeholder={fieldPlaceholder(f, defaults)}
                         inputMode={f.inputMode}
-                        hint={f.kind === 'password' ? passwordHint(inst, { isNew }) : f.hint}
+                        hint={f.kind === 'password' ? passwordHint(inst, { isNew }, values) : f.hint}
                         error={fieldError?.key === f.key ? fieldError.text : ''}
                         warn={f.key === 'ssh_host' && !isNew ? sshHostWarning(inst, values) : ''}
                         onInput={(v) => set(f.key, v)}

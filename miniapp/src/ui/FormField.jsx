@@ -27,7 +27,8 @@ export function TextField({ id, label, value, onInput, type = 'text', placeholde
         </p>
       )}
       {warn && <p class="field-warn">{warn}</p>}
-      {hint && <p class="field-hint">{hint}</p>}
+      {/* Под ошибкой подсказка молчит: две строки под полем спорили бы. */}
+      {hint && !error && <p class="field-hint">{hint}</p>}
     </div>
   )
 }

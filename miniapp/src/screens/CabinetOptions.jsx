@@ -57,10 +57,19 @@ export function CabinetOptions({ routerID, routerName, kind, account, perms, ope
                 disabled={!summary.canIssue || !o.available}
                 onClick={() => onPick({ provider: VPN_PROVIDER[kind], title: summary.title, option: o })}
               >
-                <span class="row-title">
-                  <Quoted text={o.label} />
+                <span class="list-row-main">
+                  <span class="row-title">
+                    <Quoted text={o.label} />
+                  </span>
+                  {o.note && <span class="list-row-sub">{o.note}</span>}
                 </span>
-                {o.note && <span class="list-row-sub">{o.note}</span>}
+                {/* Стрелка -- только у того, что можно выбрать: погашенная
+                    страна не зовёт нажать. */}
+                {summary.canIssue && o.available && (
+                  <svg class="list-row-chevron" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M 6 3 L 11 8 L 6 13" />
+                  </svg>
+                )}
               </button>
               {revocable && o.issued && (
                 <button type="button" class="btn btn-ghost btn-row cabinet-danger" onClick={() => revoke(o)}>

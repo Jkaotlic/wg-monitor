@@ -64,6 +64,7 @@ func main() {
 	reviveOn := flag.Bool("revive", true, "оживление агента настроено на сервере (false -- экран скажет «не настроено»)")
 	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
+	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
 	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	flag.Parse()
 
@@ -174,7 +175,7 @@ func main() {
 		Thresholds:            state.Thresholds{Fail: 2, Recovery: 2},
 		MuteCutoffHour:        23,
 		TelegramBotToken:      sandboxBotToken,
-		TelegramAdminUserID:   *tgUser,
+		TelegramAdminUserID:   sandboxAdminID(*tgUser, *asAdmin),
 		TelegramPrimaryChatID: -100500,
 		// Дашборд поднимается тем же токеном, что напечатан при старте:
 		// песочница -- единственное место, где его можно писать в открытую.
@@ -217,6 +218,15 @@ func main() {
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)
 	}
+}
+
+// sandboxAdminID -- админ песочницы: сам tg-user или посторонний id, чтобы
+// увидеть экраны глазами владельца и оператора.
+func sandboxAdminID(tgUser int64, asAdmin bool) int64 {
+	if asAdmin {
+		return tgUser
+	}
+	return tgUser + 1
 }
 
 // offlineToLog -- «отправка» тревоги в песочнице: строка в консоли вместо

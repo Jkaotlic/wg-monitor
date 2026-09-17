@@ -423,7 +423,9 @@ describe('смена адреса SSH и перечитывание', () => {
     await click(button(root, 'Сохранить'))
     expect(calls('update')).toEqual([])
     const pw = root.querySelector('#sh-ssh_password')
-    expect(pw.closest('.field').querySelector('.field-error-text').textContent).toBe('Адрес SSH изменён — введите пароль заново')
+    expect(pw.closest('.field').querySelector('.field-error-text').textContent).toBe('Введите пароль SSH заново.')
+    // Подсказка под полем с ошибкой не дублирует её и не спорит с ней.
+    expect(pw.closest('.field').querySelector('.field-hint')).toBe(null)
     await fill(root, 'sh-ssh_password', 'new-pw')
     await click(button(root, 'Сохранить'))
     expect(calls('update')).toHaveLength(1)

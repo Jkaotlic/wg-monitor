@@ -3355,15 +3355,18 @@ body {
   margin-top: var(--sp-3);
 }
 
+.card + .cabinet-options {
+  margin-top: var(--sp-3);
+}
+
 .cabinet-option-main {
   flex: 1 1 160px;
   min-width: 0;
   min-height: 44px;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 2px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
   padding: 0;
   border: 0;
   background: transparent;

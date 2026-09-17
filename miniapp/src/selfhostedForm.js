@@ -149,8 +149,10 @@ export function selfhostedIssueRows(instances) {
   return instanceRows(instances).filter((r) => r.enabled)
 }
 
-export function passwordHint(inst, { isNew }) {
+// values -- текущая форма: сменённый вход SSH делает сохранённый пароль чужим.
+export function passwordHint(inst, { isNew }, values = null) {
   if (isNew) return 'Пароль SSH хранится на сервере и наружу не отдаётся.'
+  if (inst?.password_set && values && sshAddressChanged(inst, values)) return 'Сохранённый пароль был для прежнего входа — введите пароль заново.'
   return inst?.password_set ? 'Пароль задан. Пустое поле оставит его как есть.' : 'Пароль не задан.'
 }
 

@@ -207,6 +207,9 @@ describe('тексты экрана сервера', () => {
     expect(passwordHint(INST, { isNew: false })).toBe('Пароль задан. Пустое поле оставит его как есть.')
     expect(passwordHint({ ...INST, password_set: false }, { isNew: false })).toBe('Пароль не задан.')
     expect(passwordHint(null, { isNew: true })).toBe('Пароль SSH хранится на сервере и наружу не отдаётся.')
+    // Вход SSH сменён -- «оставит как есть» было бы неправдой.
+    expect(passwordHint(INST, { isNew: false }, { ...instanceFormValues(INST), ssh_port: '2222' })).toBe('Сохранённый пароль был для прежнего входа — введите пароль заново.')
+    expect(passwordHint(INST, { isNew: false }, instanceFormValues(INST))).toBe('Пароль задан. Пустое поле оставит его как есть.')
   })
 
   it('проверка подключения', () => {

@@ -20,6 +20,8 @@ import { Quoted } from '../ui/Q.jsx'
 // отправляет бот лично нажавшему; на листе сказано, что в файле приватный ключ.
 export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIssued, onBusy, onBackToList }) {
   const [phase, setPhase] = useState('idle')
+  // Выпуск не удался: кнопка повтора говорит «попробовать», а не «выпустить ещё».
+  const [failed, setFailed] = useState(false)
   const [outcome, setOutcome] = useState('')
   const [offerRevoke, setOfferRevoke] = useState(false)
   const [sendNotice, setSendNotice] = useState('')
@@ -38,6 +40,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
   async function issue() {
     setPhase('running')
     setOutcome('')
+    setFailed(false)
     setOfferRevoke(false)
     setSendNotice('')
     const args = issueArgs(pending)
@@ -55,6 +58,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
               : `Роутер не принял конфиг: ${res.output || res.status}`,
           )
           if (res.status === 'ok') onIssued?.()
+          else setFailed(true)
           return
         }
       }
@@ -65,6 +69,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
       if (!alive.current) return
       const failure = issueFailure(err, perms, pending.provider)
       setPhase('done')
+      setFailed(true)
       setOutcome(failure.text)
       setOfferRevoke(failure.offerRevoke)
     }
@@ -113,7 +118,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
       )}
       {phase !== 'running' && (
         <button type="button" class="btn btn-primary btn-wide" onClick={issue}>
-          {phase === 'done' ? 'Выпустить ещё раз' : 'Выпустить и положить на роутер'}
+          {phase !== 'done' ? 'Выпустить и положить на роутер' : failed ? 'Попробовать ещё раз' : 'Выпустить ещё раз'}
         </button>
       )}
       {perms.sendConf && phase !== 'running' && (
