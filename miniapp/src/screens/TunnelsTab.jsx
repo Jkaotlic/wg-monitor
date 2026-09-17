@@ -4,7 +4,8 @@ import { fetchRouterSettings } from '../api.js'
 import { parseRouteSnapshot, snapshotState, tunnelRuleSummary } from '../routes.js'
 import { confirmSheet } from '../sheet.js'
 import { tunnelsView } from '../tunnelsView.js'
-import { tunnelList, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { tunnelList, mayManageTunnels, TUNNEL_TEXTS } from '../tunnelDelete.js'
+import { IMPORT_TEXTS } from '../confImport.js'
 import { trafficSummary } from '../traffic.js'
 import { humanAge, tunnelLiveLabel } from '../labels.js'
 import { Section } from '../ui/Section.jsx'
@@ -18,6 +19,7 @@ import { useOnClose } from '../useOnClose.js'
 import { ListRow } from '../ui/ListRow.jsx'
 import { ReplaceScreen } from './ReplaceScreen.jsx'
 import { TunnelScreen } from './TunnelScreen.jsx'
+import { ConfImportScreen } from './ConfImportScreen.jsx'
 
 // VPN-туннели: какой из них несёт трафик, кто подхватит, если он замолчит, и что
 // не используется. Порядок блоков -- порядок вопросов оператора, а не порядок
@@ -48,6 +50,9 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   // Роль решает, рисовать ли удаление и загрузку конфига; не узнали -- кнопок
   // нет, граница всё равно на сервере.
   const [role, setRole] = useState('')
+  // Загрузка .conf -- тоже локальный слой: содержимое конфига не должно
+  // оказаться в навигации даже случайно.
+  const [importing, setImporting] = useState(false)
   const { busy, result, error, run } = useCommand(routerID)
   const [snapshot, setSnapshot] = useState(null)
 
@@ -60,6 +65,7 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
   useEffect(() => {
     setSnapshot(null)
     setInspecting(null)
+    setImporting(false)
     setRole('')
     run('route_status', {}, deadline)
     let alive = true
@@ -336,6 +342,12 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
         </div>
       )}
 
+      {snapshot && mayManageTunnels(role) && (
+        <div style="margin-top:12px">
+          <NavCard title={IMPORT_TEXTS.title} note={IMPORT_TEXTS.navNote} onClick={() => setImporting(true)} />
+        </div>
+      )}
+
       {/* Замена конфига предлагается для работающего VPN-туннеля: смысл операции --
           заменить то, чем сейчас ходит трафик, не потеряв прежний туннель. */}
       {view.active && view.policyName && (
@@ -381,6 +393,16 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, onOpenRebind, openS
           onClose={() => setInspecting(null)}
           onChanged={() => run('route_status', {}, deadline)}
           onOpenRebind={onOpenRebind}
+        />
+      )}
+
+      {importing && (
+        <ConfImportScreen
+          routerID={routerID}
+          asleep={asleep}
+          snapshot={snapshot}
+          onClose={() => setImporting(false)}
+          onImported={() => run('route_status', {}, deadline)}
         />
       )}
     </div>
