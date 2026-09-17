@@ -56,12 +56,19 @@ retention:
   vacuum_interval: 168h
   wal_checkpoint_every: 1h
 
-# Amnezia Premium cabinet helper. vpn:// keys are stored outside state.db so
-# the Telegram backup archive does not include subscription secrets.
+# Amnezia Premium cabinet helper. vpn:// keys are added in the mini app
+# (router -> Cabinet) and stored outside state.db, so the Telegram backup
+# archive does not include subscription secrets.
 amnezia_premium:
   secrets_path: /var/lib/wg-monitor/amnezia-premium.json
   # base_url may be left empty: backend resolves the official CP mirror.
   base_url: ""
+
+# HideMy.name access codes are added in the mini app as well.
+# Self-hosted VPN servers (amnezia_selfhosted) are managed by the admin in the
+# mini app. Do not put ssh_password here: a legacy value is copied into
+# /var/lib/wg-monitor/amnezia-selfhosted.json at startup, and the backend logs
+# a warning until it is removed from this file.
 
 # UI tweaks. compat_inline_keyboard duplicates the per-topic ReplyKeyboardMarkup
 # as inline buttons under bot replies. This is the default because TG Desktop

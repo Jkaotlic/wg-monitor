@@ -64,6 +64,7 @@ func main() {
 	reviveOn := flag.Bool("revive", true, "оживление агента настроено на сервере (false -- экран скажет «не настроено»)")
 	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
+	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	flag.Parse()
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
@@ -158,10 +159,15 @@ func main() {
 	}
 
 	deps := backend.Deps{
-		Logger:                logger,
-		DB:                    d,
-		CommandSink:           sink,
-		VPNCabinet:            cabinet,
+		Logger:      logger,
+		DB:          d,
+		CommandSink: sink,
+		VPNCabinet:  cabinet,
+		// Кабинеты роутера (ключи, коды, отзыв), свои серверы и личка --
+		// фейки: приёмка экранов кабинета без кабинетов, VPS и Telegram.
+		VPNCabinetKeys:        cabinet,
+		SelfHosted:            newSandboxSelfHosted(),
+		MiniappDocs:           sandboxDocs{unreachable: *dm == "unreachable"},
 		Replace:               replaceEngine,
 		LinkRepair:            repairEngine,
 		StartLinkRepair:       repairEngine.Start,
@@ -205,7 +211,8 @@ func main() {
 	fmt.Printf("  адрес:  http://%s/miniapp/\n", *addr)
 	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
 	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), аварийная страница: /dashboard/rescue/\n", *addr, sandboxDashboardToken)
-	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n\n", *backendUpdate, updatePath)
+	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n", *backendUpdate, updatePath)
+	fmt.Printf("  кабинеты: ключ с «bad» и код с «000» кабинет не принимает; слоты Amnezia 2/2 (fi -- «отзовите»); свои серверы home и reserve; личка: -dm=%s\n\n", *dm)
 
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)
