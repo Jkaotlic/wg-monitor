@@ -20,6 +20,7 @@ const miniappAdminOpsMaxBody = 64 << 10
 // miniappAdminOpsTexts -- отказ словами для человека. Ключ -- код ответа,
 // кроме backend_downgrade_rejected: у раскатки бэкенда тот же wire-код
 // downgrade_rejected, но откат там не подтверждается, а запрещён.
+// #nosec G101 -- тексты отказов для человека, не учётные данные
 var miniappAdminOpsTexts = map[string]string{
 	errCodeBadJSON:                  "Не удалось прочитать запрос",
 	errCodeInternal:                 "Не получилось на стороне сервера — повторите позже",

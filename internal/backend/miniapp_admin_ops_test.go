@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +38,9 @@ func newAdminOpsEnv(t *testing.T, mods ...func(*Deps)) *adminOpsEnv {
 	SetVersion("v0.36.0")
 	t.Cleanup(func() { SetVersion(old) })
 	stubLatestVersion(t, "v0.36.0")
-	stubVerifiedChecksums(t, map[string]string{"wg-monitor-agent-linux-arm64": "cafebabe"})
+	stubVerifiedChecksums(t, manualInstallSums)
+	// Адрес зеркала резолвится так же, как у дашборда: сеть в тестах не нужна.
+	stubRepoResolve(t, map[string]string{"backend.example.com": "203.0.113.5"})
 	d, ownedID, _, _ := seedMiniappFleet(t)
 	env := &adminOpsEnv{
 		d:          d,
@@ -277,4 +280,60 @@ func TestMiniappJob(t *testing.T) {
 
 	noEngine := newAdminOpsEnv(t, func(d *Deps) { d.Provision = provision.Deps{} })
 	assertOpsError(t, "без движка", miniappDo(t, noEngine.h, http.MethodGet, "/v1/miniapp/jobs/"+known.ID, "", 999), http.StatusServiceUnavailable, "provision_not_configured")
+}
+
+// stubRepoResolve -- DNS для адреса зеркала раскатки бэкенда.
+func stubRepoResolve(t *testing.T, hosts map[string]string) {
+	t.Helper()
+	old := lookupHostForRepoResolve
+	lookupHostForRepoResolve = func(host string) ([]string, error) {
+		if ip, ok := hosts[host]; ok {
+			return []string{ip}, nil
+		}
+		return nil, errors.New("no such host")
+	}
+	t.Cleanup(func() { lookupHostForRepoResolve = old })
+}
+
+// Мини-апп и дашборд пишут одну и ту же заявку: адрес зеркала и IP для него
+// считает ядро queueBackendUpdate, а не каждый обработчик по-своему.
+func TestMiniappBackendDeployMatchesDashboardRequest(t *testing.T) {
+	env := newAdminOpsEnv(t, func(d *Deps) { d.PublicIP = "198.51.100.77"; d.WizardToken = "wiz-secret" })
+	rec := miniappDo(t, env.h, http.MethodPost, "/v1/miniapp/backend/deploy", `{"target_version":"v0.37.0","confirm":"v0.37.0"}`, 999)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("мини-апп: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	fromMiniapp := readBackendUpdate(t, env.updatePath)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/wizard/backend/deploy", strings.NewReader(`{"target_version":"v0.37.0"}`))
+	req.Header.Set("Authorization", "Bearer wiz-secret")
+	req.Header.Set("Content-Type", "application/json")
+	req.Host = "192.168.0.87"
+	rec = httptest.NewRecorder()
+	env.h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("дашборд: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	fromDashboard := readBackendUpdate(t, env.updatePath)
+
+	if fromMiniapp.RepoResolveIP != "203.0.113.5" {
+		t.Fatalf("мини-апп взял не DNS адреса зеркала: %+v", fromMiniapp)
+	}
+	fromMiniapp.RequestedAt, fromDashboard.RequestedAt = "", ""
+	if fromMiniapp != fromDashboard {
+		t.Fatalf("заявки разошлись:\nмини-апп %+v\nдашборд  %+v", fromMiniapp, fromDashboard)
+	}
+}
+
+func readBackendUpdate(t *testing.T, path string) backendUpdateRequest {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out backendUpdateRequest
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

@@ -161,7 +161,8 @@ func TestQueueBackendUpdate_WithoutHTTP(t *testing.T) {
 	t.Cleanup(func() { SetVersion(old) })
 	path := filepath.Join(t.TempDir(), "backend-update.json")
 	d := Deps{BackendUpdatePath: path}
-	repo := func() (string, string, bool) { return "https://backend.example.com", "203.0.113.5", true }
+	stubRepoResolve(t, map[string]string{"backend.example.com": "203.0.113.5"})
+	repo := func() (string, bool) { return "https://backend.example.com", true }
 	now := time.Date(2026, 9, 17, 10, 0, 0, 0, time.UTC)
 
 	if _, serr := queueBackendUpdate(Deps{}, backendUpdateInput{TargetVersion: "v0.37.0", RepoBase: repo}); serr == nil || serr.Code != "backend_update_not_configured" || serr.Status != http.StatusServiceUnavailable {
@@ -173,7 +174,7 @@ func TestQueueBackendUpdate_WithoutHTTP(t *testing.T) {
 	if _, serr := queueBackendUpdate(d, backendUpdateInput{TargetVersion: "v0.35.0", RepoBase: repo}); serr == nil || serr.Code != "downgrade_rejected" {
 		t.Fatalf("откат: %+v", serr)
 	}
-	noRepo := func() (string, string, bool) { return "", "", false }
+	noRepo := func() (string, bool) { return "", false }
 	if _, serr := queueBackendUpdate(d, backendUpdateInput{TargetVersion: "v0.37.0", RepoBase: noRepo}); serr == nil || serr.Code != errCodeBadJSON {
 		t.Fatalf("адрес: %+v", serr)
 	}

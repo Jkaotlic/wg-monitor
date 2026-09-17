@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 
 	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
@@ -14,17 +15,27 @@ import (
 //
 // Скрипт повторяет установку relay (internal/awgmrelay/awgm-relay.py,
 // build_deferred_bootstrap_script): та же версия, что у бэкенда, с его же
-// зеркала; sha256 сверяется по checksums.txt; config.yaml -- тех же ключей,
-// что пишет relay; init-скрипт -- из installtmpl. Подпись checksums.txt на
-// роутере не проверяется (нечем): файл и бинарь приходят с этого же сервера по
-// https, а сервер свою копию подписью проверяет при установке через панель.
+// зеркала; config.yaml -- тех же ключей, что пишет relay; init-скрипт -- из
+// installtmpl.
 //
-// Пусто -- бэкенд собран без номера выпуска или без публичного адреса:
-// скачивать нечего и неоткуда, экран покажет только токен.
-func buildManualInstallCommand(backendURL, nickname, rawToken, version string) string {
+// Бинарь качается через зеркало /v1/releases/download, а оно подпись выпуска
+// не проверяет (release_proxy.go). Поэтому checksums.txt тем же путём на
+// роутере не скачивается -- сверка с ним ничего бы не защищала. Суммы sums
+// сервер получает сам через проверку подписи (provisionChecksums) и вписывает
+// в скрипт константами по архитектурам; роутер сверяет с ними sha256 бинаря.
+//
+// Пусто -- скачивать нечего, неоткуда или не с чем сверить: бэкенд без номера
+// выпуска, адрес не https, нет проверенной суммы для одной из архитектур.
+// Экран тогда покажет только токен.
+func buildManualInstallCommand(backendURL, nickname, rawToken, version string, sums map[string]string) string {
 	base := strings.TrimRight(strings.TrimSpace(backendURL), "/")
 	tag, err := releaseorigin.ValidateReleaseTag(strings.TrimSpace(version))
-	if base == "" || err != nil {
+	if err != nil || !strings.HasPrefix(base, "https://") || len(base) == len("https://") {
+		return ""
+	}
+	wantArm64 := strings.ToLower(strings.TrimSpace(sums["wg-monitor-agent-linux-arm64"]))
+	wantMipsle := strings.ToLower(strings.TrimSpace(sums["wg-monitor-agent-linux-mipsle"]))
+	if !sha256HexRe.MatchString(wantArm64) || !sha256HexRe.MatchString(wantMipsle) {
 		return ""
 	}
 	config := strings.Join([]string{
@@ -75,11 +86,12 @@ func buildManualInstallCommand(backendURL, nickname, rawToken, version string) s
 		`  elif command -v wget >/dev/null 2>&1; then wget -q "$1" -O "$2"`,
 		`  else echo "wg-monitor: нет ни curl, ни wget"; exit 12; fi`,
 		`}`,
+		`case "$ARCH" in`,
+		`  arm64) WANT=` + shellSingleQuote(wantArm64) + ` ;;`,
+		`  mipsle) WANT=` + shellSingleQuote(wantMipsle) + ` ;;`,
+		`esac`,
 		`fetch "$BASE/$ASSET" /opt/tmp/wg-monitor.new`,
-		`fetch "$BASE/checksums.txt" /opt/tmp/wg-monitor.sums`,
-		`WANT=$(awk -v a="$ASSET" '$2==a || $2=="*"a {print $1}' /opt/tmp/wg-monitor.sums)`,
 		`GOT=$(sha256sum /opt/tmp/wg-monitor.new | awk '{print $1}')`,
-		`rm -f /opt/tmp/wg-monitor.sums`,
 		`if [ -z "$WANT" ] || [ "$WANT" != "$GOT" ]; then echo "wg-monitor: контрольная сумма не совпала"; rm -f /opt/tmp/wg-monitor.new; exit 14; fi`,
 		`chmod 755 /opt/tmp/wg-monitor.new`,
 		`mv /opt/tmp/wg-monitor.new /opt/bin/wg-monitor`,
@@ -102,3 +114,7 @@ func yamlQuoted(s string) string {
 	raw, _ := json.Marshal(s)
 	return string(raw)
 }
+
+// sha256HexRe -- сумма sha256 строкой: 64 шестнадцатеричных знака. Всё прочее в
+// скрипт не вписывается, даже в кавычках.
+var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)

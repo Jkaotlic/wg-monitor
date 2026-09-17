@@ -53,9 +53,13 @@ type miniappFleetRevive struct {
 	LastProbeAt string `json:"last_probe_at"`
 }
 
-// miniappFleetLastDeploy -- последняя раскатка агента консольным deploy: когда
-// (users.last_deploy), какая версия сейчас, и нет ли ошибки у ждущего
-// обновления. Никаких адресов и доступов.
+// miniappFleetLastDeploy -- последняя раскатка агента. At -- users.last_deploy:
+// его пишет только консольный deploy, раскатки из приложения и дашборда его не
+// двигают. Version -- версия агента из последнего отчёта, а не версия той
+// раскатки. OK -- НЕ «раскатка удалась»: false значит только, что у ждущего
+// обновления записана ошибка последней попытки (users.pending_last_error);
+// true -- такой ошибки нет, в том числе когда ничего и не ждёт. Никаких
+// адресов и доступов.
 type miniappFleetLastDeploy struct {
 	Version string `json:"version"`
 	At      string `json:"at"`
@@ -288,6 +292,7 @@ func miniappFleetHandler(d Deps) http.HandlerFunc {
 				row.PendingSince = &since
 			}
 			if at := strings.TrimSpace(a.LastDeploy); at != "" {
+				// OK -- только «у ждущего обновления нет ошибки попытки», см. тип.
 				ld := &miniappFleetLastDeploy{Version: a.AgentVersion, At: at, OK: true}
 				if st, ok := pending[a.ID]; ok && strings.TrimSpace(st.LastError) != "" {
 					ld.OK = false

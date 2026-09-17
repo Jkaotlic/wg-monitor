@@ -118,6 +118,16 @@ func TestMiniappProvisionRegisterReturnsTokenOnce(t *testing.T) {
 	if !strings.Contains(resp.InstallCommand, resp.RawToken) || !strings.Contains(resp.InstallCommand, "/v0.36.0'") {
 		t.Fatalf("команда установки без токена или версии: %s", resp.InstallCommand)
 	}
+	// Суммы -- проверенные сервером (подмена verifiedChecksumsFetcher в стенде),
+	// вписанные в скрипт; checksums.txt на роутере не качается.
+	for _, sum := range manualInstallSums {
+		if !strings.Contains(resp.InstallCommand, sum) {
+			t.Fatalf("в команде нет проверенной суммы %s", sum)
+		}
+	}
+	if strings.Contains(resp.InstallCommand, "checksums.txt") {
+		t.Fatal("команда качает checksums.txt")
+	}
 	if strings.Contains(env.logs.String(), resp.RawToken) {
 		t.Fatal("токен попал в журнал")
 	}
@@ -206,5 +216,67 @@ func TestMiniappProvisionReqHidesSecretsWhenPrinted(t *testing.T) {
 	req := miniappProvisionReq{RootPassword: miniappReviveRoot, AWGMLogin: miniappReviveLogin, AWGMPassword: miniappRevivePanel, AWGMAPIKey: miniappReviveKey}
 	for _, s := range []string{req.String(), req.GoString(), req.LogValue().String()} {
 		assertNoReviveSecrets(t, "miniappProvisionReq", s)
+	}
+}
+
+// Проверенные суммы не получены -- токен выдаётся, команды нет: скрипт без
+// сверки с подписанным выпуском экран не показывает.
+func TestMiniappProvisionRegisterWithoutVerifiedSumsGivesTokenOnly(t *testing.T) {
+	env := newAdminOpsEnv(t)
+	orig := verifiedChecksumsFetcher
+	verifiedChecksumsFetcher = func(context.Context, string, string) (map[string]string, error) {
+		return nil, errors.New("signature mismatch")
+	}
+	t.Cleanup(func() { verifiedChecksumsFetcher = orig })
+	rec := miniappDo(t, env.h, http.MethodPost, provisionPath, provisionBody(map[string]any{"kind": "register"}), 999)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("код %d (%s)", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		RawToken       string `json:"raw_token"`
+		InstallCommand string `json:"install_command"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || len(resp.RawToken) != 64 {
+		t.Fatalf("ответ %s err=%v", rec.Body.String(), err)
+	}
+	if resp.InstallCommand != "" || !strings.Contains(rec.Body.String(), `"install_command":""`) {
+		t.Fatalf("без проверенных сумм ждали пустую команду: %q", resp.InstallCommand)
+	}
+}
+
+// Приглашение перевыпускает токен -- под тем же замком, что установка: иначе
+// идущая установка этого роутера закоммитит токен, который приглашение уже
+// переписало.
+func TestMiniappProvisionRegisterRefusedWhileInstallRuns(t *testing.T) {
+	env := newAdminOpsEnv(t)
+	if !env.store.TryLock("router-new") {
+		t.Fatal("замок занят до теста")
+	}
+	rec := miniappDo(t, env.h, http.MethodPost, provisionPath, provisionBody(map[string]any{"kind": "register"}), 999)
+	assertOpsError(t, "приглашение при идущей установке", rec, http.StatusConflict, "provision_already_running")
+	env.store.Unlock("router-new")
+	if _, err := env.d.Users().GetByNickname("router-new"); !errors.Is(err, db.ErrUserNotFound) {
+		t.Fatalf("отказ создал роутер: %v", err)
+	}
+	if rec := miniappDo(t, env.h, http.MethodPost, provisionPath, provisionBody(map[string]any{"kind": "register"}), 999); rec.Code != http.StatusCreated {
+		t.Fatalf("после снятия замка: код %d (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// Повторное приглашение ещё не выходившего на связь роутера без типа не
+// сбрасывает «в машине» в «дома».
+func TestMiniappProvisionReinviteKeepsKind(t *testing.T) {
+	env := newAdminOpsEnv(t)
+	first := provisionBody(map[string]any{"kind": "register", "agent_kind": "mobile"})
+	if rec := miniappDo(t, env.h, http.MethodPost, provisionPath, first, 999); rec.Code != http.StatusCreated {
+		t.Fatalf("первое приглашение: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	again := provisionBody(map[string]any{"kind": "register", "agent_kind": ""})
+	if rec := miniappDo(t, env.h, http.MethodPost, provisionPath, again, 999); rec.Code != http.StatusCreated {
+		t.Fatalf("повторное приглашение: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	u, err := env.d.Users().GetByNickname("router-new")
+	if err != nil || u.Kind != db.KindMobile {
+		t.Fatalf("тип после повторного приглашения: %+v err=%v", u, err)
 	}
 }

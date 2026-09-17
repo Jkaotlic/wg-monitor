@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/provision"
+	"github.com/Jkaotlic/wg-monitor/internal/releaseorigin"
 )
 
 // Мастер «Добавить роутер» (спека цикла 2, п. 2-3). Два пути одного маршрута:
@@ -107,6 +109,23 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 				writeMiniappOpsError(w, http.StatusBadRequest, "invalid_awgm_url")
 				return
 			}
+			// Приглашение перевыпускает токен -- под тем же замком, что
+			// установка и переустановка: идущая установка этого роутера иначе
+			// закоммитила бы на config_written токен, который приглашение уже
+			// переписало. Без движка замка нет, и гонку делить не с кем.
+			if d.Provision.Store != nil {
+				release, locked := tryProvisionMintLock(d.Provision.Store, nickname)
+				if !locked {
+					writeMiniappOpsError(w, http.StatusConflict, "provision_already_running")
+					return
+				}
+				defer release()
+			}
+			// Повторное приглашение без типа не сбрасывает «в машине» в «дома»:
+			// createAgentEnrollment пустой тип считает static.
+			if agentKind == "" && existing != nil {
+				agentKind = existing.Kind
+			}
 			enrollment, serr := registerAgent(d, registerAgentInput{
 				Nickname: nickname, AgentKind: agentKind, AWGMURL: awgmURL, AWGMAuth: awgmAuth,
 			})
@@ -114,6 +133,7 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 				writeMiniappStartError(w, serr)
 				return
 			}
+			installCommand := miniappManualInstallCommand(r.Context(), d, backendURL, enrollment)
 			if d.Logger != nil {
 				d.Logger.Info("miniapp provision: register", "nickname", enrollment.Nickname, "by", adminID)
 			}
@@ -124,7 +144,7 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 				Nickname:       enrollment.Nickname,
 				RawToken:       enrollment.RawToken,
 				BackendURL:     backendURL,
-				InstallCommand: buildManualInstallCommand(backendURL, enrollment.Nickname, enrollment.RawToken, serverVersion),
+				InstallCommand: installCommand,
 			})
 			return
 		}
@@ -170,4 +190,22 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(miniappProvisionStartResp{JobID: jobID, Nickname: nickname})
 	}
+}
+
+// miniappManualInstallCommand -- команда установки руками с суммами, которые
+// сервер проверил подписью выпуска. Не получилось -- пусто: токен выдан, а
+// скрипт без проверенных сумм экран не показывает.
+func miniappManualInstallCommand(ctx context.Context, d Deps, backendURL string, enrollment wizardEnrollmentResp) string {
+	tag, err := releaseorigin.ValidateReleaseTag(serverVersion)
+	if err != nil {
+		return ""
+	}
+	sums, err := provisionChecksums(d)(ctx, releaseDownloadBase, tag)
+	if err != nil {
+		if d.Logger != nil {
+			d.Logger.Warn("miniapp provision: register without install command", "nickname", enrollment.Nickname, "reason", "checksums_failed")
+		}
+		return ""
+	}
+	return buildManualInstallCommand(backendURL, enrollment.Nickname, enrollment.RawToken, tag, sums)
 }

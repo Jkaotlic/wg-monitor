@@ -47,8 +47,8 @@ func miniappBackendDeployHandler(d Deps) http.HandlerFunc {
 		}
 		queued, serr := queueBackendUpdate(d, backendUpdateInput{
 			TargetVersion: target,
-			RepoBase: func() (string, string, bool) {
-				return base, strings.TrimSpace(d.PublicIP), true
+			RepoBase: func() (string, bool) {
+				return base, true
 			},
 		})
 		if serr != nil {

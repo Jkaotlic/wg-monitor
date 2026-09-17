@@ -340,6 +340,17 @@ func wizardRepoResolveIPForBackendURL(r *http.Request, backendURL string) string
 	return wizardRepoResolveIPForHost(host)
 }
 
+// repoResolveIPForBackendURL -- IP, по которому юнит обновления скачивает
+// выпуск с зеркала base: DNS хоста из адреса. Общий у дашборда и мини-аппа
+// (queueBackendUpdate): адрес base у обоих всегда с хостом.
+func repoResolveIPForBackendURL(base string) string {
+	u, err := url.Parse(strings.TrimSpace(base))
+	if err != nil {
+		return ""
+	}
+	return wizardRepoResolveIPForHost(u.Host)
+}
+
 func wizardRepoResolveIPForHost(host string) string {
 	host = hostOnly(host)
 	if host == "" || isNonPublicHost(host) {
@@ -717,7 +728,7 @@ func wizardDeployHandler(d Deps) http.HandlerFunc {
 type backendUpdateInput struct {
 	TargetVersion  string
 	AllowDowngrade bool
-	RepoBase       func() (base, resolveIP string, ok bool)
+	RepoBase       func() (base string, ok bool)
 	Now            time.Time
 }
 
@@ -742,7 +753,7 @@ func queueBackendUpdate(d Deps, in backendUpdateInput) (backendUpdateRequest, *r
 			fmt.Sprintf("target version %s is older than the running backend %s — pass allow_downgrade to override",
 				targetVersion, serverVersion)}
 	}
-	base, resolveIP, ok := in.RepoBase()
+	base, ok := in.RepoBase()
 	if !ok {
 		return backendUpdateRequest{}, &repairStartError{http.StatusBadRequest, errCodeBadJSON,
 			"public backend host required for deploy; set X-Forwarded-Host/X-Forwarded-Proto or call the public wizard URL"}
@@ -754,7 +765,7 @@ func queueBackendUpdate(d Deps, in backendUpdateInput) (backendUpdateRequest, *r
 	req := backendUpdateRequest{
 		TargetVersion:     targetVersion,
 		RepoBase:          base + "/v1/releases/download",
-		RepoResolveIP:     resolveIP,
+		RepoResolveIP:     repoResolveIPForBackendURL(base),
 		TrustedBackendURL: base,
 		RequestedAt:       now.UTC().Format(time.RFC3339),
 		AllowDowngrade:    in.AllowDowngrade,
@@ -787,12 +798,8 @@ func wizardBackendDeployHandler(d Deps) http.HandlerFunc {
 		req, serr := queueBackendUpdate(d, backendUpdateInput{
 			TargetVersion:  body.TargetVersion,
 			AllowDowngrade: body.AllowDowngrade,
-			RepoBase: func() (string, string, bool) {
-				base, ok := wizardDeployBackendURL(r, d.PublicBaseURL)
-				if !ok {
-					return "", "", false
-				}
-				return base, wizardRepoResolveIPForBackendURL(r, base), true
+			RepoBase: func() (string, bool) {
+				return wizardDeployBackendURL(r, d.PublicBaseURL)
 			},
 		})
 		if serr != nil {
