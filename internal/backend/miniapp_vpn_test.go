@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -180,5 +181,37 @@ func TestMiniappTunnelImportStillDeniedFromClient(t *testing.T) {
 	}
 	if len(sink.enqueued) != 0 {
 		t.Fatalf("ничего не должно уйти агенту: %+v", sink.enqueued)
+	}
+}
+
+// Выпуск в занятый слот -- отказ словами с предложением отозвать, и ни одной
+// команды агенту.
+func TestMiniappVPNIssueSlotBusy(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.cab.err = ErrVPNSlotBusy
+	rec := env.do(t, cabOperator, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"fi"}`)
+	code, msg, _ := cabinetErrorBody(t, rec)
+	if rec.Code != http.StatusConflict || code != "slot_busy" || !strings.Contains(msg, "отзовите") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	if len(env.sink.enqueued) != 0 {
+		t.Fatalf("команда ушла агенту: %+v", env.sink.enqueued)
+	}
+}
+
+// Текст ошибки кабинета наружу не уходит: ответ -- код и русский текст из
+// таблицы, сам текст -- только в журнал (как у send-conf).
+func TestMiniappVPNIssueCabinetFailedHidesCabinetText(t *testing.T) {
+	env := newCabinetEnv(t)
+	env.cab.err = errors.New("amnezia login: HTTP 401: RAW-CABINET-TEXT-MUST-NOT-LEAK")
+	rec := env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"nl"}`)
+	code, msg, _ := cabinetErrorBody(t, rec)
+	if rec.Code != http.StatusBadGateway || code != "cabinet_failed" || msg != miniappCabinetErrorText("cabinet_failed") || strings.Contains(rec.Body.String(), "RAW-CABINET") {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	env.cab.err, env.cab.conf = nil, nil
+	rec = env.do(t, cabOwner, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"amnezia","option_id":"nl"}`)
+	if code, msg, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusBadGateway || code != "cabinet_failed" || msg != miniappCabinetErrorText("cabinet_failed") {
+		t.Fatalf("пустой конфиг: %d %s", rec.Code, rec.Body.String())
 	}
 }

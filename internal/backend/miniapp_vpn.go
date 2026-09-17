@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
+	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
 
@@ -98,6 +100,8 @@ func miniappVPNAccountsHandler(d Deps) http.HandlerFunc {
 type miniappVPNIssueReq struct {
 	Provider string `json:"provider"`
 	OptionID string `json:"option_id"`
+	// InstanceID -- свой сервер при provider "selfhosted" (только админ).
+	InstanceID string `json:"instance_id"`
 }
 
 type miniappVPNIssueResp struct {
@@ -117,6 +121,10 @@ type miniappVPNIssueResp struct {
 // Установка прошивки — другое дело: она меняет само устройство и необратима,
 // поэтому её держит не роль, а набор имени роутера (miniappConfirmRequired) —
 // с цикла 1 её тоже ставят и владелец, и оператор (решение оператора 14.09).
+//
+// Исключение -- свой сервер (provider "selfhosted", цикл 3): он общий на весь
+// парк, и каждый выпуск создаёт на нём клиента, поэтому только админ
+// (miniappVPNIssueSelfHosted).
 func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		telegramUserID, _ := miniappUserFromContext(r.Context())
@@ -125,7 +133,7 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			writeJSONError(w, http.StatusNotFound, "not_found", "router not found")
 			return
 		}
-		if d.VPNCabinet == nil || d.CommandSink == nil {
+		if d.CommandSink == nil {
 			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "vpn cabinets are not configured")
 			return
 		}
@@ -137,6 +145,16 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		provider := strings.ToLower(strings.TrimSpace(req.Provider))
+		// Свой сервер -- другая роль (только админ), а провайдер виден лишь
+		// из тела; поэтому сужение прав -- здесь, сразу после разбора.
+		if provider == "selfhosted" {
+			miniappVPNIssueSelfHosted(d, w, r, telegramUserID, routerID, req)
+			return
+		}
+		if d.VPNCabinet == nil {
+			writeJSONError(w, http.StatusServiceUnavailable, errCodeInternal, "vpn cabinets are not configured")
+			return
+		}
 		known := false
 		for _, p := range miniappVPNProviders {
 			if p == provider {
@@ -163,38 +181,25 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		issued, err := d.VPNCabinet.IssueConfig(r.Context(), routerID, provider, optionID)
+		if errors.Is(err, ErrVPNSlotBusy) {
+			writeMiniappCabinetError(w, http.StatusConflict, "slot_busy")
+			return
+		}
 		if err != nil {
-			writeJSONError(w, http.StatusBadGateway, "cabinet_failed", err.Error())
+			// Текст ошибки кабинета -- только в журнал (реализация кабинета
+			// уже убрала из него ключ и код); человеку -- слова из таблицы.
+			miniappCabinetLogger(d).Warn("выпуск: кабинет не выдал конфиг", "router_id", routerID, "provider", provider, "option", optionID, "err", err)
+			writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")
 			return
 		}
 		if len(issued.Conf) == 0 {
-			writeJSONError(w, http.StatusBadGateway, "cabinet_failed", "cabinet returned an empty config")
+			miniappCabinetLogger(d).Warn("выпуск: кабинет вернул пустой конфиг", "router_id", routerID, "provider", provider, "option", optionID)
+			writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")
 			return
 		}
-		backend := issued.Backend
-		if backend == "" {
-			backend = "nativewg"
-		}
-		cmdID, err := newCmdID()
+		cmdID, err := miniappEnqueueTunnelImport(d, u.ID, issued.Conf, issued.TunnelName, issued.Backend)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "id gen: "+err.Error())
-			return
-		}
-		// replace: true повторяет поведение бота -- выпуск той же страны
-		// заменяет прежний туннель с тем же именем, а не плодит второй.
-		cmd := wire.Command{
-			ID:     cmdID,
-			Action: "tunnel_import",
-			Args: map[string]any{
-				"conf":    base64.StdEncoding.EncodeToString(issued.Conf),
-				"name":    issued.TunnelName,
-				"replace": true,
-				"backend": backend,
-			},
-			IssuedAt: time.Now().UTC(),
-		}
-		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, "enqueue: "+err.Error())
+			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
 			return
 		}
 		if d.Logger != nil {
@@ -205,4 +210,78 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(miniappVPNIssueResp{CmdID: cmdID, TunnelName: issued.TunnelName})
 	}
+}
+
+// miniappVPNIssueSelfHosted -- выпуск на свой сервер (цикл 3, решение 8).
+// Сервер общий, каждый выпуск -- новый клиент на нём: только админ.
+//
+// Происхождение туннеля здесь не пишется намеренно: движок починки
+// перевыпускает линию по происхождению, а перевыпуск на своём сервере --
+// ещё один клиент. Своего сервера нет и в miniappVPNProviders, поэтому мастер
+// замены его тоже не выпускает (TestSelfHostedIsNotAReplaceOrRepairProvider).
+func miniappVPNIssueSelfHosted(d Deps, w http.ResponseWriter, r *http.Request, tgUser, routerID int64, req miniappVPNIssueReq) {
+	if !miniappIsAdmin(tgUser, d.TelegramAdminUserID) {
+		writeMiniappDeployError(w, http.StatusNotFound, "not_found", "Роутер не найден")
+		return
+	}
+	if d.SelfHosted == nil {
+		writeMiniappCabinetError(w, http.StatusServiceUnavailable, "selfhosted_not_configured")
+		return
+	}
+	instID := strings.TrimSpace(req.InstanceID)
+	if instID == "" {
+		writeMiniappCabinetError(w, http.StatusBadRequest, "missing_instance")
+		return
+	}
+	u, err := d.DB.Users().GetByID(routerID)
+	if errors.Is(err, db.ErrUserNotFound) || (err == nil && u == nil) {
+		writeMiniappCabinetError(w, http.StatusNotFound, "not_found")
+		return
+	}
+	if err != nil {
+		writeMiniappCabinetError(w, http.StatusInternalServerError, errCodeInternal)
+		return
+	}
+	issued, inst, err := d.SelfHosted.Issue(r.Context(), instID, miniappSelfHostedClientName(u.Nickname))
+	if err != nil {
+		miniappSelfHostedIssueError(d, w, err)
+		return
+	}
+	tunnelName := selfhostedamnezia.TunnelName(inst.ID, u.Nickname)
+	cmdID, err := miniappEnqueueTunnelImport(d, u.ID, issued.Config, tunnelName, "nativewg")
+	if err != nil {
+		writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
+		return
+	}
+	miniappCabinetLogger(d).Info("miniapp vpn config issued",
+		"nickname", u.Nickname, "user_id", u.ID, "provider", "selfhosted", "instance", inst.ID, "address", issued.Address, "cmd_id", cmdID)
+	writeMiniappCabinetJSON(w, http.StatusAccepted, miniappVPNIssueResp{CmdID: cmdID, TunnelName: tunnelName})
+}
+
+// miniappEnqueueTunnelImport кладёт конфиг в команду агенту. replace:true
+// повторяет поведение бота: выпуск того же имени заменяет прежний туннель, а
+// не плодит второй.
+func miniappEnqueueTunnelImport(d Deps, routerID int64, conf []byte, tunnelName, importBackend string) (string, error) {
+	if importBackend == "" {
+		importBackend = "nativewg"
+	}
+	cmdID, err := newCmdID()
+	if err != nil {
+		return "", fmt.Errorf("id gen: %w", err)
+	}
+	cmd := wire.Command{
+		ID:     cmdID,
+		Action: "tunnel_import",
+		Args: map[string]any{
+			"conf":    base64.StdEncoding.EncodeToString(conf),
+			"name":    tunnelName,
+			"replace": true,
+			"backend": importBackend,
+		},
+		IssuedAt: time.Now().UTC(),
+	}
+	if err := d.CommandSink.Enqueue(routerID, cmd); err != nil {
+		return "", fmt.Errorf("enqueue: %w", err)
+	}
+	return cmdID, nil
 }

@@ -20,7 +20,8 @@ The current deploy path does **not** require the operator to join every router n
 
 - Per-minute agent reports from every router to the VPS backend.
 - Telegram alerts and per-router topics.
-- Telegram control panels for tunnels, routes, diagnostics, maintenance, operators, Premium cabinets, and package updates.
+- Telegram control panels for tunnels, routes and diagnostics.
+- VPN cabinets in the mini app: Amnezia Premium keys and HideMy.name codes per router (add, pick active, delete, revoke a country slot, issue and import, send the .conf to your Telegram DM) and self-hosted VPN servers (admin only: add, edit, enable, delete, check SSH, issue). Secrets are entered only in the app; the bot deletes a `vpn://` key or SSH password pasted into chat (a numeric code only in a private chat with the bot).
 - Web control at `/dashboard/` — the same mini app in a regular browser (token or personal link sign-in); if the app itself fails to load, `/dashboard/rescue/` is a self-contained emergency page (sign-in, fleet summary, backend rollout).
 - AWG Manager integration for tunnel state, route management, terminal bootstrap, and diagnostics.
 - Backend-mediated agent updates, so deployed agents can update without direct SSH from the operator machine.
@@ -34,16 +35,17 @@ English:
 - Router topics get both a bottom reply keyboard and an always-visible inline fallback menu. This keeps mobile and desktop clients usable even when Telegram hides one of the surfaces.
 - The bot startup also sets Telegram's blue `Menu` button to the command picker, so role-scoped slash commands are discoverable from the input bar.
 - Operators can recover both menu surfaces in their current router topic with `/menu` or `/keyboard`.
-- The operator command list includes `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, and `/help`.
-- Admin commands are registered in admin scopes only: `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, and `/selfhosted`.
+- The operator command list includes `/status`, `/check`, `/tunnels`, `/routes`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, and `/help`.
+- Admin commands are registered in admin scopes only: `/ensure_topics`, `/recreate_topic`, `/this_is`, and `/topic_help`.
 - The fleet hub, agent updates, mass checks and access management live in the mini app ("Fleet" screen). The admin receives every router's notifications in a private chat; each carries a "🔕 Don't message me about this router" button, reversible from the "Fleet" screen.
 
 Русский:
 
 - В топиках роутеров есть постоянное видимое inline-меню; оно не зависит от того, показывает ли Telegram Desktop slash-команды.
 - Оператор может вернуть меню в текущем топике командами `/menu` или `/keyboard`.
-- В операторском меню есть `/status`, `/check`, `/tunnels`, `/routes`, `/amnezia`, `/hidemy`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, `/help`.
-- Админские команды регистрируются отдельно, только для admin scope: `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`, `/selfhosted`.
+- В операторском меню есть `/status`, `/check`, `/tunnels`, `/routes`, `/via`, `/direct`, `/maint`, `/upgrade`, `/menu`, `/keyboard`, `/help`.
+- Админские команды регистрируются отдельно, только для admin scope: `/ensure_topics`, `/recreate_topic`, `/this_is`, `/topic_help`.
+- Кабинеты VPN — в мини-аппе: ключи Amnezia Premium и коды HideMy.name роутера (добавить, выбрать активный, удалить, отозвать страну, выпустить и подключить, прислать .conf в личку) и свои VPN-серверы (только админ). Ключи, коды и пароли вводятся только в приложении; ключ vpn:// или пароль, присланный в чат, бот удаляет (цифровой код — только в личке с ботом).
 - Парк, обновления агентов, массовые проверки и доступы — в мини-аппе, экран «Парк». Админ получает в личку уведомления всех роутеров; под каждым — кнопка «🔕 Не писать мне про этот роутер», вернуть — на экране «Парк».
 
 ## Telegram Mini App

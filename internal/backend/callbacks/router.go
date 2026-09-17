@@ -19,7 +19,6 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
 	cmdpkg "github.com/Jkaotlic/wg-monitor/internal/backend/cmd"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/selfhostedamnezia"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/upstream"
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
@@ -51,7 +50,6 @@ type Config struct {
 	UI                 UIConfigSnapshot
 	AmneziaBaseURL     string
 	AmneziaSecretsPath string
-	SelfHostedAmnezia  selfhostedamnezia.Config
 	HideMyBaseURL      string
 	HideMySecretsPath  string
 }
@@ -112,10 +110,6 @@ type Router struct {
 	pendingMaint    *pendingMaintStore
 	maintConfirmAct Action
 	upstream        *upstream.Cache // used by dispatchSmartReply for Updates section (M12)
-
-	// Ожидающие шаги мастеров. All in-memory; lost on restart.
-	pendingSelfHostedAmnezia *pendingSelfHostedAmneziaStore
-	pendingConfirms          *pendingConfirmStore
 
 	// diagCache stores raw diag_now result bodies so "📄 Полный отчёт"
 	// inline-button taps can fetch the body without re-running the diagnostic.
@@ -203,8 +197,6 @@ func NewRouterWithSink(d *db.DB, tgClient TGClient, sink CommandEnqueuer, cfg Co
 	r.rebindConfirmAction = NewRebindConfirmAction(sink, r.consumePendingRebindForActor, r.putPendingRebind, defaultCmdID)
 	r.pendingMaint = newPendingMaintStore()
 	r.maintConfirmAct = NewMaintConfirmAction(sink, r.pendingMaint, defaultCmdID)
-	r.pendingSelfHostedAmnezia = newPendingSelfHostedAmneziaStore()
-	r.pendingConfirms = newPendingConfirmStore()
 	r.diagCache = newDiagCache()
 	return r
 }
@@ -325,10 +317,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		r.handleHelpCallback(ctx, q, args.PanelKind)
 		return
 	}
-	if isSelfHostedAmneziaAdminAction(args.Action) && (r.cfg.AdminUserID == 0 || q.From.ID != r.cfg.AdminUserID) {
-		_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "доступ только у админа")
-		return
-	}
 	if !r.aclAllow(ctx, q, args) {
 		return
 	}
@@ -370,81 +358,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 		return
 	case "routes_open", "routes_refresh":
 		r.handleRoutesOpen(ctx, q, args, args.Action == "routes_refresh")
-		return
-	case "amz_refresh":
-		r.handleAmneziaRefresh(ctx, q, args)
-		return
-	case "amz_open":
-		r.handleAmneziaOpen(ctx, q, args)
-		return
-	case "amz_countries":
-		r.handleAmneziaCountries(ctx, q, args)
-		return
-	case "amz_delete":
-		r.handleAmneziaDeleteAsk(ctx, q, args)
-		return
-	case "amz_delete_confirm":
-		r.handleAmneziaDeleteConfirm(ctx, q, args)
-		return
-	case "amz_dl":
-		r.handleAmneziaDownloadAsk(ctx, q, args)
-		return
-	case "amz_dl_confirm":
-		r.handleAmneziaDownloadConfirm(ctx, q, args)
-		return
-	case "amz_revoke":
-		r.handleAmneziaRevokeAsk(ctx, q, args)
-		return
-	case "amz_revoke_confirm":
-		r.handleAmneziaRevokeConfirm(ctx, q, args)
-		return
-	case "amz_selfhosted_issue":
-		r.handleSelfHostedAmneziaIssue(ctx, q, args)
-		return
-	case "amz_selfhosted_confirm":
-		r.handleSelfHostedAmneziaConfirm(ctx, q, args)
-		return
-	case "amz_selfhosted_manage":
-		r.handleSelfHostedAmneziaManage(ctx, q, args)
-		return
-	case "amz_selfhosted_add":
-		r.handleSelfHostedAmneziaStartAdd(ctx, q, args)
-		return
-	case "amz_selfhosted_edit":
-		r.handleSelfHostedAmneziaStartEdit(ctx, q, args)
-		return
-	case "amz_selfhosted_toggle":
-		r.handleSelfHostedAmneziaToggle(ctx, q, args)
-		return
-	case "amz_selfhosted_delete":
-		r.handleSelfHostedAmneziaDelete(ctx, q, args)
-		return
-	case "amz_selfhosted_delete_confirm":
-		r.handleSelfHostedAmneziaDeleteConfirm(ctx, q, args)
-		return
-	case "amz_selfhosted_cancel":
-		r.handleSelfHostedAmneziaCancel(ctx, q, args)
-		return
-	case "hmn_refresh":
-		r.handleHideMyRefresh(ctx, q, args)
-		return
-	case "hmn_open":
-		r.handleHideMyOpen(ctx, q, args)
-		return
-	case "hmn_page":
-		r.handleHideMyPage(ctx, q, args)
-		return
-	case "hmn_delete":
-		r.handleHideMyDeleteAsk(ctx, q, args)
-		return
-	case "hmn_delete_confirm":
-		r.handleHideMyDeleteConfirm(ctx, q, args)
-		return
-	case "hmn_dl":
-		r.handleHideMyDownloadAsk(ctx, q, args)
-		return
-	case "hmn_dl_confirm":
-		r.handleHideMyDownloadConfirm(ctx, q, args)
 		return
 	case "routes_rebind":
 		r.handleRoutesRebindStart(ctx, q, args)
@@ -598,21 +511,6 @@ func (r *Router) HandleCallback(ctx context.Context, q *tg.CallbackQuery) {
 	}
 }
 
-func isSelfHostedAmneziaAdminAction(action string) bool {
-	switch action {
-	case "amz_selfhosted_manage", "amz_selfhosted_add", "amz_selfhosted_edit",
-		"amz_selfhosted_toggle", "amz_selfhosted_delete", "amz_selfhosted_delete_confirm",
-		"amz_selfhosted_cancel":
-		return true
-	default:
-		return false
-	}
-}
-
-func (r *Router) isAdminTG(userID int64) bool {
-	return r.cfg.AdminUserID == 0 || userID == r.cfg.AdminUserID
-}
-
 // aclAllow gates a callback by owner identity. Returns true to proceed,
 // false to short-circuit (the function itself sends the toast and logs).
 //
@@ -750,6 +648,12 @@ func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQu
 // callbacks per the 2026-04-30 policy reversal, but typing into the chat
 // is a one-operator surface).
 func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
+	// Секрет кабинета, присланный в чат по старой привычке, удаляется до
+	// любых проверок доступа и даже до /myid (иначе «/myid vpn://…» оставит
+	// ключ в чате): он не должен висеть в переписке ни у кого.
+	if r.handleCabinetSecretMessage(ctx, m) {
+		return
+	}
 	// /myid отвечает кому угодно и откуда угодно -- до всех проверок доступа.
 	//
 	// Чтобы дать человеку доступ к роутеру, нужен его числовой номер в
@@ -794,7 +698,7 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 				r.handleHelpCommand(ctx, m)
 			case "/menu", "/keyboard":
 				r.handleKeyboardCommand(ctx, m)
-			case "/status", "/check", "/tunnels", "/routes", "/amnezia", "/hidemy", "/via", "/direct":
+			case "/status", "/check", "/tunnels", "/routes", "/via", "/direct":
 				r.handleRouterSlashCommand(ctx, m, kind, user)
 			}
 			return
@@ -811,19 +715,10 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		}
 		return
 	}
-	if isAdmin && r.handlePendingSelfHostedAmneziaMessage(ctx, m) {
-		return
-	}
 	kind, user := r.resolveTopicKind(m.Chat.ID, m.MessageThreadID)
 	// Document handler — before text switch.
 	if m.Document != nil {
 		r.handleDocumentUpload(ctx, m, kind, user)
-		return
-	}
-	if r.handleAmneziaKeyMessage(ctx, m, kind, user) {
-		return
-	}
-	if r.handleHideMyCodeMessage(ctx, m, kind, user) {
 		return
 	}
 	if r.handleRouterSlashCommand(ctx, m, kind, user) {
@@ -850,20 +745,6 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике пользователя.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-	case "🔐 Amnezia Premium", "Amnezia Premium":
-		if kind == "per_router" && user != nil {
-			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user, m.From.ID)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"Amnezia Premium работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-	case "🔑 HideMy.name", "HideMy.name":
-		if kind == "per_router" && user != nil {
-			r.sendHideMyPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"HideMy.name работает только в топике роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 	case "🌍 Через туннель?":
 		r.dispatchConnectivityCheck(ctx, m, kind, user, "check_via_tunnel",
@@ -933,22 +814,6 @@ func (r *Router) handleRouterSlashCommand(ctx context.Context, m *tg.Message, ki
 		} else {
 			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
 				"эта команда работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-		return true
-	case "/amnezia":
-		if kind == "per_router" && user != nil {
-			r.sendAmneziaPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user, m.From.ID)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"Amnezia Premium работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
-		}
-		return true
-	case "/hidemy":
-		if kind == "per_router" && user != nil {
-			r.sendHideMyPremiumPanel(ctx, m.Chat.ID, m.MessageThreadID, nil, user)
-		} else {
-			_, _ = r.tg.SendMessageWithReplyKeyboard(ctx, m.Chat.ID, m.MessageThreadID,
-				"HideMy.name работает только в топике конкретного роутера.", "", nil, r.cfg.UI.KeyboardForTopic(kind))
 		}
 		return true
 	case "/check":
@@ -1256,32 +1121,6 @@ func (r *Router) refreshStaleTunnelPanelAction(ctx context.Context, q *tg.Callba
 	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, toast)
 }
 
-func (r *Router) putPendingConfirm(q *tg.CallbackQuery, userID int64, action, target string) string {
-	token := makeMaintToken()
-	r.pendingConfirms.put(&pendingConfirm{
-		UserID:    userID,
-		ActorTGID: q.From.ID,
-		ThreadID:  cloneInt64Ptr(q.Message.MessageThreadID),
-		Action:    action,
-		Target:    target,
-		Token:     token,
-		ExpiresAt: time.Now().Add(5 * time.Minute),
-	})
-	return token
-}
-
-func (r *Router) takePendingConfirm(ctx context.Context, q *tg.CallbackQuery, args Args, target string) (*pendingConfirm, bool) {
-	if p, ok := r.pendingConfirms.consume(args.UserID, q.From.ID, q.Message.MessageThreadID, args.Action, target, args.ConfirmToken); ok {
-		return p, true
-	}
-	_ = r.tg.AnswerCallbackQuery(ctx, q.ID, "подтверждение устарело")
-	return nil, false
-}
-
-func (r *Router) restorePendingConfirm(p *pendingConfirm) {
-	r.pendingConfirms.restore(p)
-}
-
 func tunnelPanelActionIsStale(args Args, entry tg.TunnelPanelEntry) bool {
 	if args.Action == "tunnel_delete" || args.Action == "tunnel_delete_ask" {
 		argsTunnelID := strings.TrimSpace(args.TunnelID)
@@ -1325,8 +1164,6 @@ func topicHelpBody(kind string) string {
 			"🩺 Проверка — doctor изнутри роутера, без изменений.\n" +
 			"🎛 Туннели — живой статус, включить/выключить, awg-manager.\n" +
 			"🛣 Маршруты — DNS/static правила, перенос и снапшот.\n" +
-			"🔐 Amnezia Premium — кабинеты и выгрузка .conf.\n" +
-			"🔑 HideMy.name — серверы и выгрузка AmneziaWG .conf.\n" +
 			"🌍 Через туннель? / 🇷🇺 Напрямую? — проверки связности.\n\n" +
 			"Если кнопка меняет состояние, бот поставит команду в очередь. Жди результат в этом топике и используй кнопки под результатом."
 	case "summary", "systemic":
@@ -2311,4 +2148,13 @@ func (r *Router) SetDiagDrillDown() {
 // router's TG client and DB. Pass the returned value into handler.Deps.PingCheckNotifier.
 func (r *Router) NewPingCheckNotifier() *PingCheckPanelNotifier {
 	return &PingCheckPanelNotifier{TG: r.tg, DB: r.d}
+}
+
+// shortToast -- текст ошибки, укороченный под всплывашку Telegram (200 знаков).
+func shortToast(err error) string {
+	msg := err.Error()
+	if len(msg) > 180 {
+		return msg[:180]
+	}
+	return msg
 }

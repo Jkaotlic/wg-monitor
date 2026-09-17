@@ -88,3 +88,58 @@ describe('слои без адреса', () => {
     expect(navFromURL('?router=7&open=provision', IDS).overlay).toBe(null)
   })
 })
+
+describe('кабинет и свои серверы в адресе', () => {
+  const ADMIN = { isAdmin: true }
+
+  // Не-админу список своих серверов не открывается и по адресу: сервер ответит
+  // 404, а на широкой раскладке без роутера слой встал бы вместо сводки.
+  it('не-админ: ?open=selfhosted не открывает слой', () => {
+    expect(pick(navFromURL('?open=selfhosted', IDS))).toEqual({ routerID: null, tab: 'router', overlay: 'fleet', sheet: null })
+    expect(pick(navFromURL('?open=selfhosted', IDS, { isAdmin: false }))).toEqual({ routerID: null, tab: 'router', overlay: 'fleet', sheet: null })
+    expect(pick(navFromURL('?router=7&open=selfhosted', IDS))).toEqual({ routerID: 7, tab: 'router', overlay: null, sheet: null })
+    expect(pick(navFromURL('?open=selfhosted', [5]))).toEqual({ routerID: 5, tab: 'router', overlay: null, sheet: null })
+  })
+
+  it('кабинет роутера пишется и читается', () => {
+    expect(urlFromNav({ routerID: 7, tab: 'tunnels', overlay: 'cabinet', sheet: null })).toBe('?router=7&tab=tunnels&open=cabinet')
+    const s = navFromURL('?router=7&tab=tunnels&open=cabinet', IDS)
+    expect(pick(s)).toEqual({ routerID: 7, tab: 'tunnels', overlay: 'cabinet', sheet: null })
+  })
+
+  it('свои серверы без роутера -- ?open=selfhosted, возврат к сводке', () => {
+    expect(urlFromNav({ routerID: null, tab: 'router', overlay: 'selfhosted', overlayParams: { returnTo: null }, sheet: null })).toBe('?open=selfhosted')
+    const s = navFromURL('?open=selfhosted', IDS, ADMIN)
+    expect(pick(s)).toEqual({ routerID: null, tab: 'router', overlay: 'selfhosted', sheet: null })
+    expect(s.overlayParams).toEqual({ returnTo: null })
+  })
+
+  it('свои серверы с роутером -- возврат в «Обслуживание»', () => {
+    expect(urlFromNav({ routerID: 7, tab: 'router', overlay: 'selfhosted', overlayParams: { returnTo: 'admin' }, sheet: null })).toBe('?router=7&open=selfhosted')
+    const s = navFromURL('?router=7&open=selfhosted', IDS, ADMIN)
+    expect(pick(s)).toEqual({ routerID: 7, tab: 'router', overlay: 'selfhosted', sheet: null })
+    expect(s.overlayParams).toEqual({ returnTo: 'admin' })
+  })
+
+  it('экран сервера в адрес не пишется -- остаётся список; id сервера в адресе нет', () => {
+    const inst = { routerID: null, tab: 'router', overlay: 'selfhostedinst', overlayParams: { instanceId: 'ams', returnTo: 'selfhosted', returnParams: { returnTo: null } }, sheet: null }
+    expect(urlFromNav(inst)).toBe('?open=selfhosted')
+    expect(urlFromNav({ ...inst, routerID: 7 })).toBe('?router=7&open=selfhosted')
+    expect(navFromURL('?open=selfhostedinst', IDS, ADMIN).overlay).toBe('fleet')
+  })
+
+  it('один роутер: ?open=selfhosted открывает список поверх него', () => {
+    const s = navFromURL('?open=selfhosted', [5], ADMIN)
+    expect(pick(s)).toEqual({ routerID: 5, tab: 'router', overlay: 'selfhosted', sheet: null })
+    expect(s.overlayParams).toEqual({ returnTo: 'admin' })
+  })
+
+  it('круг для своих серверов', () => {
+    for (const s of [
+      { routerID: null, tab: 'router', overlay: 'selfhosted', overlayParams: { returnTo: null }, sheet: null },
+      { routerID: 7, tab: 'diag', overlay: 'selfhosted', overlayParams: { returnTo: 'admin' }, sheet: null },
+    ]) {
+      expect(urlFromNav(navFromURL(urlFromNav(s), IDS, ADMIN))).toBe(urlFromNav(s))
+    }
+  })
+})

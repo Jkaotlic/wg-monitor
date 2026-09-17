@@ -14,8 +14,6 @@ var routerMenuItems = []BotMenuItem{
 	{Code: "router_doctor", Label: "🩺 Проверка", Command: "check", Description: "Проверить роутер изнутри"},
 	{Code: "tunnels", Label: "🎛 Туннели", Command: "tunnels", Description: "Открыть туннели"},
 	{Code: "routes", Label: "🛣 Маршруты", Command: "routes", Description: "Открыть маршруты"},
-	{Code: "amnezia_premium", Label: "🔐 Amnezia Premium", Command: "amnezia", Description: "Кабинет Amnezia Premium"},
-	{Code: "hidemyname", Label: "🔑 HideMy.name", Command: "hidemy", Description: "Кабинет HideMy.name"},
 	{Code: "via_tunnel", Label: "🌍 Через туннель?", Command: "via", Description: "Проверить связь через туннель"},
 	{Code: "direct", Label: "🇷🇺 Напрямую?", Command: "direct", Description: "Проверить прямую связь"},
 }
@@ -36,7 +34,6 @@ var adminCommandItems = []BotMenuItem{
 	{Command: "recreate_topic", Description: "Пересоздать тему текущего роутера"},
 	{Command: "this_is", Description: "Привязать этот топик к роутеру"},
 	{Command: "topic_help", Description: "Шпаргалка по управлению темами"},
-	{Command: "selfhosted", Description: "Self-hosted Amnezia VPS"},
 }
 
 var operatorCommandOrder = []string{
@@ -46,8 +43,6 @@ var operatorCommandOrder = []string{
 	"routes",
 	"via",
 	"direct",
-	"amnezia",
-	"hidemy",
 	"menu",
 	"keyboard",
 	"help",
@@ -69,7 +64,7 @@ func OperatorBotCommands() []BotCommand {
 func AdminBotCommands() []BotCommand {
 	items := append(cloneMenuItems(routerMenuItems), utilityCommandItems...)
 	items = append(items, adminCommandItems...)
-	return commandsFromItemsInOrder(items, append(operatorCommandOrder, "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted"))
+	return commandsFromItemsInOrder(items, append(operatorCommandOrder, "ensure_topics", "recreate_topic", "this_is", "topic_help"))
 }
 
 func OperatorMenuHelpText() string {

@@ -64,6 +64,8 @@ func main() {
 	reviveOn := flag.Bool("revive", true, "оживление агента настроено на сервере (false -- экран скажет «не настроено»)")
 	reviveState := flag.String("revive-state", "waiting", "состояние оживления у sandbox-off: waiting|running|done|failed|expired")
 	backendUpdate := flag.String("backend-update", "apply", "заявка на раскатку бэкенда: apply -- через 5 с сменить версию (экран «Готово»), ignore -- молчать (экран «не ответил за 5 минут»)")
+	asAdmin := flag.Bool("admin", true, "открыть мини-апп админом; false -- tg-user остаётся владельцем и оператором своих роутеров, но не админом (приёмка прав)")
+	dm := flag.String("dm", "ok", "личка для «Прислать .conf»: ok -- документ в журнал, unreachable -- бот не может написать (экран «нажмите /start»)")
 	flag.Parse()
 
 	// Без версии бэкенд песочницы -- «unknown», и ни один агент не отстаёт:
@@ -158,17 +160,22 @@ func main() {
 	}
 
 	deps := backend.Deps{
-		Logger:                logger,
-		DB:                    d,
-		CommandSink:           sink,
-		VPNCabinet:            cabinet,
+		Logger:      logger,
+		DB:          d,
+		CommandSink: sink,
+		VPNCabinet:  cabinet,
+		// Кабинеты роутера (ключи, коды, отзыв), свои серверы и личка --
+		// фейки: приёмка экранов кабинета без кабинетов, VPS и Telegram.
+		VPNCabinetKeys:        cabinet,
+		SelfHosted:            newSandboxSelfHosted(),
+		MiniappDocs:           sandboxDocs{unreachable: *dm == "unreachable"},
 		Replace:               replaceEngine,
 		LinkRepair:            repairEngine,
 		StartLinkRepair:       repairEngine.Start,
 		Thresholds:            state.Thresholds{Fail: 2, Recovery: 2},
 		MuteCutoffHour:        23,
 		TelegramBotToken:      sandboxBotToken,
-		TelegramAdminUserID:   *tgUser,
+		TelegramAdminUserID:   sandboxAdminID(*tgUser, *asAdmin),
 		TelegramPrimaryChatID: -100500,
 		// Дашборд поднимается тем же токеном, что напечатан при старте:
 		// песочница -- единственное место, где его можно писать в открытую.
@@ -205,11 +212,21 @@ func main() {
 	fmt.Printf("  адрес:  http://%s/miniapp/\n", *addr)
 	fmt.Printf("  открыть: http://%s/miniapp/\n", *addr)
 	fmt.Printf("  веб-управление: http://%s/dashboard/ (токен %s), аварийная страница: /dashboard/rescue/\n", *addr, sandboxDashboardToken)
-	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n\n", *backendUpdate, updatePath)
+	fmt.Printf("  мастер «Добавить роутер»: ник с «fail» -- провал установки; раскатка бэкенда: -backend-update=%s, заявка %s\n", *backendUpdate, updatePath)
+	fmt.Printf("  кабинеты: ключ с «bad» и код с «000» кабинет не принимает; слоты Amnezia 2/2 (fi -- «отзовите»); свои серверы home и reserve; личка: -dm=%s\n\n", *dm)
 
 	if err := http.ListenAndServe(*addr, withTelegramStub(mux, initData)); err != nil {
 		fatal(err)
 	}
+}
+
+// sandboxAdminID -- админ песочницы: сам tg-user или посторонний id, чтобы
+// увидеть экраны глазами владельца и оператора.
+func sandboxAdminID(tgUser int64, asAdmin bool) int64 {
+	if asAdmin {
+		return tgUser
+	}
+	return tgUser + 1
 }
 
 // offlineToLog -- «отправка» тревоги в песочнице: строка в консоли вместо

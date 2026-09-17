@@ -2,9 +2,11 @@
 // Лист подтверждения рисует свои поля сам (Sheet.jsx); классы те же -- .field,
 // чтобы поле везде выглядело одинаково. Значение живёт у экрана-владельца:
 // поле его не хранит, и пароль не уходит дальше экрана.
-export function TextField({ id, label, value, onInput, type = 'text', placeholder = '', hint = '', inputMode }) {
+// error -- слова сервера об этом поле (поле подсвечено); warn -- предупреждение
+// о последствиях ввода, не ошибка.
+export function TextField({ id, label, value, onInput, type = 'text', placeholder = '', hint = '', inputMode, error = '', warn = '' }) {
   return (
-    <div class="field">
+    <div class={error ? 'field field-error' : 'field'}>
       <label for={id}>{label}</label>
       <input
         id={id}
@@ -15,9 +17,18 @@ export function TextField({ id, label, value, onInput, type = 'text', placeholde
         inputMode={inputMode}
         placeholder={placeholder}
         value={value ?? ''}
+        aria-invalid={error ? 'true' : undefined}
+        aria-describedby={error ? `${id}-error` : undefined}
         onInput={(e) => onInput(e.currentTarget.value)}
       />
-      {hint && <p class="field-hint">{hint}</p>}
+      {error && (
+        <p class="field-error-text" id={`${id}-error`} role="alert">
+          {error}
+        </p>
+      )}
+      {warn && <p class="field-warn">{warn}</p>}
+      {/* Под ошибкой подсказка молчит: две строки под полем спорили бы. */}
+      {hint && !error && <p class="field-hint">{hint}</p>}
     </div>
   )
 }

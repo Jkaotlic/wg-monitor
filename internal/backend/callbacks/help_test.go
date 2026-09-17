@@ -19,7 +19,7 @@ func TestHelp_AdminGetsFullBody(t *testing.T) {
 		t.Fatalf("want 1 help reply, got %d", len(f.sentMsgs))
 	}
 	body := f.sentMsgs[0]
-	for _, want := range []string{"Алерты", "Кнопки в топике", "Админ-команды", "в приложении", "Amnezia Premium", "HideMy.name", ".conf"} {
+	for _, want := range []string{"Алерты", "Кнопки в топике", "Админ-команды", "в приложении", "Кабинеты VPN"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("admin /help missing %q in body:\n%s", want, body)
 		}
@@ -47,9 +47,14 @@ func TestHelp_OperatorGetsOperatorBody(t *testing.T) {
 	if strings.Contains(body, "/panel —") || strings.Contains(body, "Админ-команды") {
 		t.Errorf("operator help must NOT include admin section:\n%s", body)
 	}
-	for _, want := range []string{"Кнопки в топике", "очередь", "/menu", "/amnezia", "/hidemy", "Amnezia Premium", "HideMy.name"} {
+	for _, want := range []string{"Кнопки в топике", "очередь", "/menu", "Кабинеты VPN"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("operator help missing %q:\n%s", want, body)
+		}
+	}
+	for _, gone := range []string{"/amnezia", "/hidemy", "пришли vpn://"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("справка учит старому пути %q:\n%s", gone, body)
 		}
 	}
 }
@@ -78,8 +83,6 @@ func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
 		"🩺 Проверка",
 		"🎛 Туннели",
 		"🛣 Маршруты",
-		"🔐 Amnezia Premium",
-		"🔑 HideMy.name",
 		"🌍 Через туннель?",
 		"🇷🇺 Напрямую?",
 	} {
@@ -87,7 +90,7 @@ func TestTopicHelpBody_PerRouterMatchesVisibleReplyKeyboard(t *testing.T) {
 			t.Errorf("per-router topic help missing visible button %q:\n%s", want, body)
 		}
 	}
-	for _, gone := range []string{"🛠 Обслуживание", "⬆ Обновить пакеты"} {
+	for _, gone := range []string{"🛠 Обслуживание", "⬆ Обновить пакеты", "🔐 Amnezia Premium", "🔑 HideMy.name"} {
 		if strings.Contains(body, gone) {
 			t.Errorf("per-router topic help still mentions removed button %q:\n%s", gone, body)
 		}

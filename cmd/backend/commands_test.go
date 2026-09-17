@@ -13,8 +13,6 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 		"check":    false,
 		"tunnels":  false,
 		"routes":   false,
-		"amnezia":  false,
-		"hidemy":   false,
 		"via":      false,
 		"direct":   false,
 		"menu":     false,
@@ -35,7 +33,7 @@ func TestTelegramCommandMenuIncludesOperatorSlashCommands(t *testing.T) {
 
 func TestTelegramOperatorCommandMenuOrder(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
-	want := []string{"status", "check", "tunnels", "routes", "via", "direct", "amnezia", "hidemy", "menu", "keyboard", "help"}
+	want := []string{"status", "check", "tunnels", "routes", "via", "direct", "menu", "keyboard", "help"}
 	if len(cmds) < len(want) {
 		t.Fatalf("operator command count = %d, want at least %d: %+v", len(cmds), len(want), cmds)
 	}
@@ -50,7 +48,7 @@ func TestTelegramOperatorCommandMenuExcludesAdminCommands(t *testing.T) {
 	cmds := telegramOperatorCommandMenu()
 	for _, c := range cmds {
 		switch c.Command {
-		case "ensure_topics", "recreate_topic", "this_is", "topic_help", "selfhosted":
+		case "ensure_topics", "recreate_topic", "this_is", "topic_help":
 			t.Fatalf("operator command menu must not expose admin command /%s: %+v", c.Command, cmds)
 		}
 	}
@@ -63,7 +61,6 @@ func TestTelegramAdminCommandMenuIncludesAdminCommands(t *testing.T) {
 		"recreate_topic": false,
 		"this_is":        false,
 		"topic_help":     false,
-		"selfhosted":     false,
 	}
 	for _, c := range cmds {
 		if _, ok := want[c.Command]; ok {
@@ -92,6 +89,17 @@ func TestTelegramCommandMenusDropPanel(t *testing.T) {
 		for _, c := range cmds {
 			if c.Command == "panel" {
 				t.Errorf("/panel переехала в приложение, а осталась в меню: %+v", cmds)
+			}
+		}
+	}
+}
+
+func TestTelegramCommandMenusDropCabinets(t *testing.T) {
+	for _, cmds := range [][]tg.BotCommand{telegramOperatorCommandMenu(), telegramAdminCommandMenu()} {
+		for _, c := range cmds {
+			switch c.Command {
+			case "amnezia", "hidemy", "selfhosted", "cancel":
+				t.Errorf("/%s переехала в приложение, а осталась в меню: %+v", c.Command, cmds)
 			}
 		}
 	}

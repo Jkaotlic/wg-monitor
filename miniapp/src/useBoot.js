@@ -29,7 +29,7 @@ export function useBoot(mode, { onReady } = {}) {
         if (my !== gen.current) return
         // До setState: навигация из адреса и статус «готово» -- один рендер,
         // иначе синхронизация адреса успела бы стереть место пустой навигацией.
-        readyRef.current?.(list)
+        readyRef.current?.(list, { isAdmin: Boolean(s?.is_admin) })
         setState({ status: 'ready', isAdmin: Boolean(s?.is_admin), routers: list, notice: '' })
       })
       .catch((err) => {

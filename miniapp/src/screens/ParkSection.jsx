@@ -486,6 +486,14 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
             </button>
           )}
 
+          {/* Свои VPN-серверы -- общие для всего парка, поэтому живут здесь,
+              а не в кабинете роутера; оттуда с них только выпускают. */}
+          {openLayer && (
+            <button type="button" class="btn btn-ghost btn-wide park-selfhosted" onClick={() => openLayer('selfhosted')}>
+              Свои VPN-серверы
+            </button>
+          )}
+
           {behind > 0 && (
             <button type="button" class="btn btn-primary btn-wide" onClick={askUpdateAll}>
               Обновить всех отставших ({behind})

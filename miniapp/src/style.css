@@ -3277,6 +3277,165 @@ body {
 }
 
 /* ============================================================
+   Кабинеты VPN и свои серверы (цикл 3 «бот без слеш-команд»)
+   ------------------------------------------------------------
+   Вкладки кабинета, ключи и коды с кнопками в строке, страны с «Отозвать»,
+   экран своего сервера. Кнопки в строке переносятся под текст на узком
+   экране, но держат 44 px по высоте.
+   ============================================================ */
+.segment-tabs {
+  display: flex;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  margin: 0 0 var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+}
+
+.segment-tab {
+  flex: 1;
+  min-height: 36px;
+  padding: var(--sp-1) var(--sp-3);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.segment-tab-on {
+  background: var(--surf2);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--sig);
+}
+
+.segment-tab:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 1px;
+}
+
+.cabinet-notice {
+  margin: 0 0 var(--sp-3);
+  color: var(--ok);
+}
+
+.cabinet-secret,
+.cabinet-option {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.cabinet-secret .list-row-main {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.cabinet-secret-active .row-title {
+  color: var(--sig);
+}
+
+.cabinet-secret-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.cabinet-danger {
+  color: var(--danger);
+}
+
+.cabinet-add,
+.selfhosted-add {
+  margin-top: var(--sp-3);
+}
+
+.selfhosted-form .card + .field-hint {
+  margin-top: var(--sp-2);
+}
+
+.card + .cabinet-options {
+  margin-top: var(--sp-3);
+}
+
+.cabinet-option-main {
+  flex: 1 1 160px;
+  min-width: 0;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cabinet-option-main:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.cabinet-outcome {
+  padding: var(--sp-4);
+}
+
+.cabinet-send {
+  margin-top: var(--sp-2);
+}
+
+.selfhosted-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0 var(--sp-2);
+}
+
+.selfhosted-check {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+}
+
+.selfhosted-check-ok {
+  color: var(--ok);
+}
+
+.selfhosted-check-bad {
+  color: var(--danger);
+}
+
+.field-error input {
+  border-color: var(--danger);
+}
+
+.field-error-text {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--danger);
+}
+
+.field-warn {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--warn);
+}
+
+.park-selfhosted {
+  margin-top: var(--sp-2);
+}
+
+/* ============================================================
    Широкая раскладка (≥ 1024 px): браузер и развёрнутый Telegram Desktop
    ------------------------------------------------------------
    Не растянутый телефон: колонка роутеров слева, панели карточками на
@@ -3953,6 +4112,29 @@ body {
 
   .wide-shell .job-details summary:hover {
     text-decoration: underline;
+  }
+
+  .wide-shell .segment-tabs {
+    display: inline-flex;
+    min-width: 360px;
+  }
+
+  .wide-shell .segment-tab:hover:not(.segment-tab-on) {
+    color: var(--text);
+  }
+
+  .wide-shell .cabinet-option-main:hover:not(:disabled) .row-title {
+    text-decoration: underline;
+  }
+
+  .wide-shell .cabinet-secret-actions,
+  .wide-shell .selfhosted-actions {
+    justify-content: flex-end;
+  }
+
+  .wide-shell .selfhosted-actions .btn {
+    flex: none;
+    min-width: 160px;
   }
 }
 

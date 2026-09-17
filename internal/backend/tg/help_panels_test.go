@@ -72,7 +72,7 @@ func TestHelpForScreen_Doctor(t *testing.T) {
 
 func TestHelpForScreen_OperatorOverview(t *testing.T) {
 	got := HelpForScreen("operator")
-	for _, want := range []string{"Operator", "queue", "Premium", "self_update", "help:premium"} {
+	for _, want := range []string{"Operator", "queue", "self_update", "в приложении"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in operator help body:\n%s", want, got)
 		}
@@ -99,15 +99,6 @@ func TestHelpForScreen_OperatorIncludesRegistryMenuItems(t *testing.T) {
 		}
 		if !strings.Contains(got, item.Label) {
 			t.Fatalf("operator help missing registry menu item %q:\n%s", item.Label, got)
-		}
-	}
-}
-
-func TestHelpForScreen_Premium(t *testing.T) {
-	got := HelpForScreen("premium")
-	for _, want := range []string{"Amnezia Premium", "HideMy.name", ".conf", "AmneziaWG 2.0", "secret"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in premium help body:\n%s", want, got)
 		}
 	}
 }
@@ -143,5 +134,19 @@ func TestHelpRowFor_Tunnels(t *testing.T) {
 	}
 	if row[0].Text != "ℹ Помощь" {
 		t.Errorf("bad text: %q", row[0].Text)
+	}
+}
+
+func TestHelpForScreen_PremiumPointsToApp(t *testing.T) {
+	got := HelpForScreen("premium")
+	for _, want := range []string{"приложени", "Amnezia Premium", "HideMy.name", "удалит"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in premium help body:\n%s", want, got)
+		}
+	}
+	for _, gone := range []string{"пришли vpn://", "access code в топик", "Выгрузить .conf"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("справка учит старому пути %q:\n%s", gone, got)
+		}
 	}
 }

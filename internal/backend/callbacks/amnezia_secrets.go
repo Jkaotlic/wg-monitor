@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 )
 
 const defaultAmneziaSecretsPath = "/var/lib/wg-monitor/amnezia-premium.json" // #nosec G101 -- filesystem path for the secret store, not credential material.
@@ -55,22 +57,6 @@ func (r *Router) getAmneziaKeyByID(userID int64, keyID string) (string, error) {
 	return "", nil
 }
 
-func (r *Router) amneziaStoredKey(userID int64, keyID string) (amneziaStoredKey, bool) {
-	keys, err := r.listAmneziaKeys(userID)
-	if err != nil {
-		return amneziaStoredKey{}, false
-	}
-	if strings.TrimSpace(keyID) == "" || keyID == "active" {
-		keyID = keys.ActiveID
-	}
-	for _, key := range keys.Keys {
-		if key.ID == keyID {
-			return key, true
-		}
-	}
-	return amneziaStoredKey{}, false
-}
-
 func (r *Router) listAmneziaKeys(userID int64) (amneziaRouterKeys, error) {
 	env, err := readAmneziaSecrets(r.amneziaSecretsPath())
 	if err != nil {
@@ -81,12 +67,17 @@ func (r *Router) listAmneziaKeys(userID int64) (amneziaRouterKeys, error) {
 	return keys, nil
 }
 
-func (r *Router) addAmneziaKey(userID int64, vpnKey string) (amneziaStoredKey, error) {
+// addAmneziaKeyLabeled сохраняет ключ под замком файла и делает его активным.
+// Тот же ключ второй раз не заводится: обновляются подпись (если задана) и
+// активность.
+func (r *Router) addAmneziaKeyLabeled(userID int64, vpnKey, label string) (amneziaStoredKey, error) {
 	vpnKey = strings.TrimSpace(vpnKey)
 	if !strings.HasPrefix(vpnKey, "vpn://") {
-		return amneziaStoredKey{}, fmt.Errorf("amnezia premium key must start with vpn://")
+		return amneziaStoredKey{}, backend.ErrCabinetSecretInvalid
 	}
+	label = strings.TrimSpace(label)
 	path := r.amneziaSecretsPath()
+	defer lockCabinetStore(path)()
 	env, err := readAmneziaSecrets(path)
 	if err != nil {
 		return amneziaStoredKey{}, err
@@ -98,7 +89,9 @@ func (r *Router) addAmneziaKey(userID int64, vpnKey string) (amneziaStoredKey, e
 	for i, existing := range keys.Keys {
 		if existing.ID == id {
 			keys.Keys[i].VPNKey = vpnKey
-			if keys.Keys[i].Label == "" {
+			if label != "" {
+				keys.Keys[i].Label = label
+			} else if keys.Keys[i].Label == "" {
 				keys.Keys[i].Label = fmt.Sprintf("Ключ #%d", i+1)
 			}
 			keys.ActiveID = id
@@ -106,19 +99,40 @@ func (r *Router) addAmneziaKey(userID int64, vpnKey string) (amneziaStoredKey, e
 			return keys.Keys[i], writeAmneziaSecrets(path, env)
 		}
 	}
-	key := amneziaStoredKey{
-		ID:     id,
-		Label:  fmt.Sprintf("Ключ #%d", len(keys.Keys)+1),
-		VPNKey: vpnKey,
+	if label == "" {
+		label = fmt.Sprintf("Ключ #%d", len(keys.Keys)+1)
 	}
+	key := amneziaStoredKey{ID: id, Label: label, VPNKey: vpnKey}
 	keys.Keys = append(keys.Keys, key)
 	keys.ActiveID = id
 	env.Routers[routerID] = keys
 	return key, writeAmneziaSecrets(path, env)
 }
 
+// setActiveAmneziaKey -- какой ключ кабинет роутера берёт для показа и выпуска.
+func (r *Router) setActiveAmneziaKey(userID int64, keyID string) error {
+	path := r.amneziaSecretsPath()
+	defer lockCabinetStore(path)()
+	env, err := readAmneziaSecrets(path)
+	if err != nil {
+		return err
+	}
+	routerID := strconv.FormatInt(userID, 10)
+	keys := env.Routers[routerID]
+	normalizeAmneziaRouterKeys(&keys)
+	for _, key := range keys.Keys {
+		if key.ID == keyID {
+			keys.ActiveID = keyID
+			env.Routers[routerID] = keys
+			return writeAmneziaSecrets(path, env)
+		}
+	}
+	return backend.ErrCabinetSecretNotFound
+}
+
 func (r *Router) deleteAmneziaKey(userID int64, keyID string) error {
 	path := r.amneziaSecretsPath()
+	defer lockCabinetStore(path)()
 	env, err := readAmneziaSecrets(path)
 	if err != nil {
 		return err
@@ -128,11 +142,16 @@ func (r *Router) deleteAmneziaKey(userID int64, keyID string) error {
 	normalizeAmneziaRouterKeys(&keys)
 	next := keys.Keys[:0]
 	deletedActive := keys.ActiveID == keyID
+	found := false
 	for _, key := range keys.Keys {
 		if key.ID == keyID {
+			found = true
 			continue
 		}
 		next = append(next, key)
+	}
+	if !found {
+		return backend.ErrCabinetSecretNotFound
 	}
 	keys.Keys = next
 	if len(keys.Keys) == 0 {

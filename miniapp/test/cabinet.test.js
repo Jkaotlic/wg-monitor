@@ -22,7 +22,24 @@ describe('accountSummary', () => {
       options: [{ id: 'nl', label: 'Нидерланды' }],
     })
     expect(s.canIssue).toBe(false)
+    expect(s.full).toBe(true)
     expect(s.reason).toContain('мест')
+  })
+
+  // Сервер (amneziaSlotBusy) выпущенную страну пускает и при полной подписке:
+  // она уже занимает своё место. Гасить её нельзя.
+  it('полная подписка: выпущенная страна доступна, новые -- нет', () => {
+    const acc = {
+      provider: 'amnezia', connected: true, devices_used: 3, devices_max: 3,
+      options: [{ id: 'nl', label: 'Нидерланды', issued: true }, { id: 'de', label: 'Германия' }],
+    }
+    const s = accountSummary(acc)
+    expect(s.canIssue).toBe(true)
+    expect(s.full).toBe(true)
+    expect(s.reason).toContain('выпуск новых стран закрыт')
+    expect(s.fullNote).toBe('Свободных мест в подписке нет — выпуск новых стран закрыт.')
+    expect(optionRows(acc).map((o) => [o.id, o.available])).toEqual([['nl', true], ['de', false]])
+    expect(optionRows({ ...acc, devices_used: 1 }).map((o) => o.available)).toEqual([true, true])
   })
 
   // Неподключённый кабинет -- состояние, а не поломка: у него своя фраза, и
@@ -37,8 +54,8 @@ describe('accountSummary', () => {
 describe('optionRows', () => {
   it('уже выпущенное помечено, чтобы не выпускать второй раз вслепую', () => {
     const rows = optionRows({ options: [{ id: 'nl', label: 'Нидерланды' }, { id: 'de', label: 'Германия', issued: true }] })
-    expect(rows[0]).toEqual({ id: 'nl', label: 'Нидерланды', note: '' })
-    expect(rows[1].note).toBe('уже выпущен')
+    expect(rows[0]).toEqual({ id: 'nl', label: 'Нидерланды', note: '', issued: false, available: true })
+    expect(rows[1]).toEqual({ id: 'de', label: 'Германия', note: 'уже выпущен', issued: true, available: true })
   })
 
   it('пустой список остаётся пустым, а не выдумывает строки', () => {
@@ -46,20 +63,46 @@ describe('optionRows', () => {
   })
 })
 
-// Панель бота, где отзывают выпущенные конфиги, доступна только админу:
-// команда /panel админская, а после переезда уведомлений в личку кнопок в
-// темах больше нет вовсе. Владелец роутера кабинет видит — и совет «отзовите
-// в боте» вёл его туда, куда он попасть не может.
-it('кончившиеся места не отправляют человека в бота', () => {
-  const s = accountSummary({
+// Отзыв теперь живёт в кабинете приложения, и его видят админ и владелец.
+// Им текст говорит «отзовите ниже»; остальным -- кто это может, а не «в боте».
+describe('кончились места', () => {
+  const full = {
     connected: true,
     label: 'Amnezia Premium',
     devices_max: 3,
     devices_used: 3,
-    options: [{ id: 'nl', label: 'Нидерланды' }],
+    options: [{ id: 'nl', label: 'Нидерланды', issued: true }],
+  }
+
+  it('может отозвать -- «отзовите ниже»', () => {
+    const s = accountSummary(full, { canRevoke: true })
+    expect(s.canIssue).toBe(true)
+    expect(s.reason).toBe('Свободных мест в подписке нет — выпуск новых стран закрыт. Уже выпущенные можно выпустить заново. Освободите место — отзовите одну из выпущенных стран ниже.')
   })
-  expect(s.canIssue).toBe(false)
-  expect(s.reason).not.toMatch(/в боте/i)
-  // Но сказать, что делать, всё равно надо: тупик без выхода хуже жаргона.
-  expect(s.reason).toMatch(/освобод/i)
+
+  it('не может -- кто может; без второго аргумента так же', () => {
+    const text = 'Свободных мест в подписке нет — выпуск новых стран закрыт. Уже выпущенные можно выпустить заново. Освободить место может владелец роутера или администратор: для этого отзывается одна из выпущенных стран.'
+    expect(accountSummary(full, { canRevoke: false }).reason).toBe(text)
+    expect(accountSummary(full).reason).toBe(text)
+  })
+
+  it('ни одного текста про бота', () => {
+    for (const opts of [{ canRevoke: true }, { canRevoke: false }]) {
+      expect(accountSummary(full, opts).reason).not.toMatch(/бот/i)
+      expect(accountSummary(full, opts).reason).toMatch(/освобод/i)
+    }
+  })
+})
+
+// Состояние подписки кабинет присылает словом по-английски; человеку его
+// показывают по-русски, а незнакомое слово -- как есть.
+describe('состояние подписки словами', () => {
+  const base = { connected: true, label: 'Amnezia Premium' }
+  it('active и expired переводятся', () => {
+    expect(accountSummary({ ...base, status: 'active' }).lines).toContain('Подписка активна')
+    expect(accountSummary({ ...base, status: 'expired' }).lines).toContain('Подписка закончилась')
+  })
+  it('незнакомое состояние -- как пришло', () => {
+    expect(accountSummary({ ...base, status: 'trial' }).lines).toContain('Подписка: trial')
+  })
 })

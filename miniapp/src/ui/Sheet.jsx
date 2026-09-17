@@ -12,7 +12,9 @@ import { Q, Quoted } from './Q.jsx'
 // asleep приходит от экрана: роутер, который сейчас спит, отвечает не сразу,
 // и обещать быстрый ответ было бы враньём -- поэтому и текст другой, и
 // дедлайн ожидания шире.
-export function Sheet({ sheet, asleep, onClose }) {
+// onBusy(locked) -- лист занят или освободился: оболочка не даёт «назад»
+// Telegram закрыть его, пока ответ в пути.
+export function Sheet({ sheet, asleep, onClose, onBusy }) {
   const { busy, result, error, errorCode, sleepNote, run } = useCommand(sheet.routerID)
   // Локальное действие (sheet.perform) выполняет сам бэкенд, а не роутер:
   // ходу выполнения там неоткуда взяться, поэтому фаза остаётся «спросить»,
@@ -63,6 +65,14 @@ export function Sheet({ sheet, asleep, onClose }) {
   // сервера (пароль root оживления уже отправлен). Закрыть его в это время --
   // оставить человека без ответа на то, что он уже сделал.
   const locked = phase === 'running' || localBusy
+  const busyRef = useRef(onBusy)
+  busyRef.current = onBusy
+  const wasLocked = useRef(false)
+  useEffect(() => {
+    if (locked === wasLocked.current) return
+    wasLocked.current = locked
+    busyRef.current?.(locked)
+  }, [locked])
 
   function close() {
     if (fields.length) setValues(initialFieldValues(fields))
@@ -284,6 +294,7 @@ export function SheetHost({ nav, dispatch }) {
       sheet={nav.sheet}
       asleep={nav.sheet.asleep}
       onClose={() => dispatch({ type: 'sheet', sheet: null })}
+      onBusy={(busy) => dispatch({ type: 'sheetBusy', busy })}
     />
   )
 }

@@ -208,7 +208,7 @@ func TestAdminEnsureTopics_SendsWelcomeForFreshTopic(t *testing.T) {
 		}
 		if strings.HasPrefix(s.text, "📌 Видимое меню роутера vasya") {
 			kb, ok := s.markup.(*tg.InlineKeyboardMarkup)
-			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") {
+			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:routes") || keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") {
 				t.Fatalf("welcome must also carry visible operator menu, markup=%T %+v", s.markup, s.markup)
 			}
 			visibleCount++
@@ -248,7 +248,7 @@ func TestAdminRecreateTopic_SendsWelcomeAfterRebuild(t *testing.T) {
 		}
 		if strings.HasPrefix(s.text, "📌 Видимое меню роутера vasya") {
 			kb, ok := s.markup.(*tg.InlineKeyboardMarkup)
-			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
+			if !ok || !keyboardContainsCallback(kb, "compat_btn:0:routes") || keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
 				t.Fatalf("welcome must also carry visible operator menu, markup=%T %+v", s.markup, s.markup)
 			}
 			visibleCount++
@@ -306,9 +306,12 @@ func TestMenuCommand_ToleratesBotnameSuffixAndRepushesKeyboard(t *testing.T) {
 	if !ok {
 		t.Fatalf("/menu second send should attach visible inline menu, markup=%T", f.rkSends[1].markup)
 	}
-	if !keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") ||
-		!keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
-		t.Fatalf("/menu visible menu missing premium buttons: %+v", kb.InlineKeyboard)
+	if !keyboardContainsCallback(kb, "compat_btn:0:tunnels") || !keyboardContainsCallback(kb, "compat_btn:0:routes") {
+		t.Fatalf("/menu visible menu missing router buttons: %+v", kb.InlineKeyboard)
+	}
+	// Кабинеты переехали в приложение (цикл 3): в меню их нет.
+	if keyboardContainsCallback(kb, "compat_btn:0:amnezia_premium") || keyboardContainsCallback(kb, "compat_btn:0:hidemyname") {
+		t.Fatalf("/menu visible menu still has cabinet buttons: %+v", kb.InlineKeyboard)
 	}
 }
 

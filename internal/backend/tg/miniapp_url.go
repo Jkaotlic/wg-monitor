@@ -20,3 +20,13 @@ func MiniAppRouterURL(base string, routerUserID int64) string {
 	base = strings.TrimRight(base, "/")
 	return fmt.Sprintf("%s/miniapp/?router=%d", base, routerUserID)
 }
+
+// MiniAppURL -- адрес мини-аппа целиком, без роутера: кнопка web_app в личке.
+// Не https -- пусто, по той же причине, что у MiniAppRouterURL.
+func MiniAppURL(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" || !strings.HasPrefix(base, "https://") {
+		return ""
+	}
+	return strings.TrimRight(base, "/") + "/miniapp/"
+}

@@ -194,7 +194,6 @@ func main() {
 		UI:                 uiSnap,
 		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
 		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,
-		SelfHostedAmnezia:  cfg.SelfHostedAmnezia,
 		HideMyBaseURL:      cfg.HideMy.BaseURL,
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
@@ -312,7 +311,11 @@ func main() {
 		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
-		VPNCabinet:          cb,
+		VPNCabinet: cb,
+		// Ключи и коды кабинетов для мини-аппа -- тот же callbacks.Router.
+		VPNCabinetKeys: cb,
+		// Свои VPN-серверы -- только админу в мини-аппе.
+		SelfHosted:          newSelfHostedService(cfg.SelfHostedAmnezia, logger),
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,
@@ -341,12 +344,14 @@ func main() {
 		TelegramPrimaryChatID:     cfg.Telegram.ChatID,
 		TelegramExtraChatIDs:      cfg.Telegram.ExtraChatIDs,
 		MiniappTG:                 tgClient,
-		MuteCutoffHour:            muteCutoffHour,
-		BackendUpdatePath:         backend.DefaultBackendUpdatePath(cfg),
-		PublicBaseURL:             cfg.PublicBaseURL,
-		PublicIP:                  cfg.PublicIP,
-		Provision:                 provisionDeps,
-		Revive:                    reviveSvc,
+		// Файл .conf в личку нажавшему (кабинет роутера в мини-аппе).
+		MiniappDocs:       tgClient,
+		MuteCutoffHour:    muteCutoffHour,
+		BackendUpdatePath: backend.DefaultBackendUpdatePath(cfg),
+		PublicBaseURL:     cfg.PublicBaseURL,
+		PublicIP:          cfg.PublicIP,
+		Provision:         provisionDeps,
+		Revive:            reviveSvc,
 	})
 	srv := &http.Server{
 		Addr:    cfg.Listen,
