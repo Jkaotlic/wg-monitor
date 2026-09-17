@@ -194,7 +194,6 @@ func main() {
 		UI:                 uiSnap,
 		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
 		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,
-		SelfHostedAmnezia:  cfg.SelfHostedAmnezia,
 		HideMyBaseURL:      cfg.HideMy.BaseURL,
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})

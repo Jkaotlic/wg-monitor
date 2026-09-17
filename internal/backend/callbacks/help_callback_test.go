@@ -44,12 +44,11 @@ func TestHelpCallback_EveryRealHelpButtonStillAnswers(t *testing.T) {
 	collect(tg.InlineKeyboardMarkup{InlineKeyboard: [][]tg.InlineKeyboardButton{
 		tg.HelpRowFor("tunnels"), // tg/tunnels_panel.go:203
 		tg.HelpRowFor("routes"),  // tg/routes_panel.go:281
-		premiumHelpRow(),         // callbacks/amnezia_premium.go:24
 	}})
 	collect(tg.DiagResultKeyboard("err", 42, "")) // tg/diag_keyboard.go:26
 	collect(tg.PingCheckPanelKeyboard(42, nil))   // tg/pingcheck_panel.go:144
-	if len(datas) != 5 {
-		t.Fatalf("кнопок справки %d (%v), ждали 5", len(datas), datas)
+	if len(datas) != 4 {
+		t.Fatalf("кнопок справки %d (%v), ждали 4", len(datas), datas)
 	}
 
 	for _, data := range datas {
@@ -120,7 +119,7 @@ func TestHelpCallback_WorksInPrivateChat(t *testing.T) {
 
 	r.HandleCallback(context.Background(), q)
 
-	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "HideMy.name") {
+	if len(f.edits) != 1 || !strings.Contains(f.edits[0], "в приложение") {
 		t.Fatalf("справка в личке не показана: edits=%q answers=%q", f.edits, f.answers)
 	}
 }

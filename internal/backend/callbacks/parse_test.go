@@ -1,6 +1,7 @@
 package callbacks
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -536,196 +537,6 @@ func TestParse_DiagBack_RequiresToken(t *testing.T) {
 	}
 }
 
-func TestParse_AmneziaDownload(t *testing.T) {
-	a, err := Parse("amz_dl:42:_panel_:keyabc:DE")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "amz_dl" || !a.IsPanel || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
-		t.Errorf("got %+v", a)
-	}
-
-	a, err = Parse("amz_dl_confirm:42:_panel_:keyabc:DE:tok123")
-	if err != nil {
-		t.Fatalf("confirm with token unexpected: %v", err)
-	}
-	if a.Action != "amz_dl_confirm" || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" || a.ConfirmToken != "tok123" {
-		t.Errorf("confirm got %+v", a)
-	}
-}
-
-func TestParse_AmneziaDownloadRejectsBadCountry(t *testing.T) {
-	if _, err := Parse("amz_dl_confirm:42:_panel_:keyabc:bad country"); err == nil {
-		t.Error("expected err on bad country code")
-	}
-}
-
-func TestParse_AmneziaDownloadLegacyActiveKey(t *testing.T) {
-	a, err := Parse("amz_dl:42:_panel_:DE")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.AmneziaKeyID != "" || a.AmneziaCountryCode != "de" {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_AmneziaRevokeCountry(t *testing.T) {
-	a, err := Parse("amz_revoke:42:_panel_:keyabc:DE")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "amz_revoke" || !a.IsPanel || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
-		t.Errorf("got %+v", a)
-	}
-
-	a, err = Parse("amz_revoke_confirm:42:_panel_:keyabc:DE")
-	if err != nil {
-		t.Fatalf("confirm unexpected: %v", err)
-	}
-	if a.Action != "amz_revoke_confirm" || a.AmneziaKeyID != "keyabc" || a.AmneziaCountryCode != "de" {
-		t.Errorf("confirm got %+v", a)
-	}
-
-	a, err = Parse("amz_revoke_confirm:42:_panel_:keyabc:DE:tok123")
-	if err != nil {
-		t.Fatalf("confirm with token unexpected: %v", err)
-	}
-	if a.ConfirmToken != "tok123" {
-		t.Errorf("confirm token = %q", a.ConfirmToken)
-	}
-}
-
-func TestParse_SelfHostedAmneziaID(t *testing.T) {
-	a, err := Parse("amz_selfhosted_confirm:42:_panel_:home")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "amz_selfhosted_confirm" || !a.IsPanel || a.SelfHostedAmneziaID != "home" {
-		t.Fatalf("got %+v", a)
-	}
-
-	a, err = Parse("amz_selfhosted_confirm:42:_panel_:home:tok123")
-	if err != nil {
-		t.Fatalf("with token unexpected: %v", err)
-	}
-	if a.ConfirmToken != "tok123" {
-		t.Fatalf("confirm token = %q", a.ConfirmToken)
-	}
-
-	a, err = Parse("amz_selfhosted_delete_confirm:42:_panel_:home:tok456")
-	if err != nil {
-		t.Fatalf("delete confirm with token unexpected: %v", err)
-	}
-	if a.Action != "amz_selfhosted_delete_confirm" || a.SelfHostedAmneziaID != "home" || a.ConfirmToken != "tok456" {
-		t.Fatalf("delete confirm got %+v", a)
-	}
-}
-
-func TestParse_SelfHostedAmneziaManageAndToggle(t *testing.T) {
-	a, err := Parse("amz_selfhosted_manage:42:_panel_")
-	if err != nil {
-		t.Fatalf("manage unexpected: %v", err)
-	}
-	if a.Action != "amz_selfhosted_manage" || !a.IsPanel {
-		t.Fatalf("manage got %+v", a)
-	}
-
-	a, err = Parse("amz_selfhosted_toggle:42:_panel_:home:0")
-	if err != nil {
-		t.Fatalf("toggle unexpected: %v", err)
-	}
-	if a.SelfHostedAmneziaID != "home" || a.SelfHostedAmneziaEnabled {
-		t.Fatalf("toggle got %+v", a)
-	}
-}
-
-func TestParse_AmneziaKeyActions(t *testing.T) {
-	for _, data := range []string{
-		"amz_open:42:_panel_:keyabc",
-		"amz_delete:42:_panel_:keyabc",
-		"amz_delete_confirm:42:_panel_:keyabc",
-	} {
-		t.Run(data, func(t *testing.T) {
-			a, err := Parse(data)
-			if err != nil {
-				t.Fatalf("unexpected: %v", err)
-			}
-			if a.AmneziaKeyID != "keyabc" {
-				t.Fatalf("key id = %q", a.AmneziaKeyID)
-			}
-		})
-	}
-
-	a, err := Parse("amz_delete_confirm:42:_panel_:keyabc:tok123")
-	if err != nil {
-		t.Fatalf("delete confirm with token unexpected: %v", err)
-	}
-	if a.Action != "amz_delete_confirm" || a.AmneziaKeyID != "keyabc" || a.ConfirmToken != "tok123" {
-		t.Fatalf("delete confirm got %+v", a)
-	}
-}
-
-func TestParse_AmneziaCountriesPage(t *testing.T) {
-	a, err := Parse("amz_countries:42:_panel_:keyabc:2")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "amz_countries" || a.AmneziaKeyID != "keyabc" || a.AmneziaPage != 2 {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_HideMyDownload(t *testing.T) {
-	a, err := Parse("hmn_dl:42:_panel_:codeabc:srv123")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "hmn_dl" || !a.IsPanel || a.HideMyCodeID != "codeabc" || a.HideMyServerID != "srv123" {
-		t.Errorf("got %+v", a)
-	}
-
-	a, err = Parse("hmn_dl_confirm:42:_panel_:codeabc:srv123:tok123")
-	if err != nil {
-		t.Fatalf("confirm with token unexpected: %v", err)
-	}
-	if a.HideMyCodeID != "codeabc" || a.HideMyServerID != "srv123" || a.ConfirmToken != "tok123" {
-		t.Errorf("confirm got %+v", a)
-	}
-}
-
-func TestParse_HideMyDeleteConfirmToken(t *testing.T) {
-	a, err := Parse("hmn_delete_confirm:42:_panel_:codeabc:tok123")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.Action != "hmn_delete_confirm" || a.HideMyCodeID != "codeabc" || a.ConfirmToken != "tok123" {
-		t.Fatalf("got %+v", a)
-	}
-}
-
-func TestParse_HideMyPage(t *testing.T) {
-	a, err := Parse("hmn_page:42:_panel_:codeabc:2")
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
-	}
-	if a.HideMyCodeID != "codeabc" || a.HideMyPage != 2 {
-		t.Errorf("got %+v", a)
-	}
-}
-
-func TestParse_HideMyActionsRequireCodeID(t *testing.T) {
-	for _, data := range []string{
-		"hmn_open:42:_panel_",
-		"hmn_delete:42:_panel_:bad code",
-		"hmn_dl_confirm:42:_panel_:codeabc:bad server",
-	} {
-		if _, err := Parse(data); err == nil {
-			t.Fatalf("expected error for %q", data)
-		}
-	}
-}
-
 // От хаба /panel в разборе осталась одна справка; доступы -- целиком в приложении.
 func TestParse_PanelOnlyHelpSurvives(t *testing.T) {
 	for _, data := range []string{
@@ -741,5 +552,22 @@ func TestParse_PanelOnlyHelpSurvives(t *testing.T) {
 	}
 	if a, err := Parse("panel:0:help:tunnels"); err != nil || a.PanelScreen != "help" || a.PanelKind != "tunnels" {
 		t.Fatalf("справка перестала разбираться: %+v, %v", a, err)
+	}
+}
+
+func TestParse_CabinetCallbacksAreUnknown(t *testing.T) {
+	for _, data := range []string{
+		"amz_refresh:42:_panel_", "amz_open:42:_panel_:abc123", "amz_dl:42:_panel_:key1:de",
+		"amz_revoke_confirm:42:_panel_:key1:de:tok", "amz_selfhosted_manage:42:_panel_",
+		"amz_selfhosted_issue:42:_panel_:home", "amz_selfhosted_cancel:42:_panel_",
+		"hmn_refresh:42:_panel_", "hmn_dl_confirm:42:_panel_:code1:srv1:tok",
+	} {
+		if _, err := Parse(data); err == nil || !strings.Contains(err.Error(), "unknown action") {
+			t.Errorf("%s: err=%v", data, err)
+		}
+	}
+	// Справка premium остаётся: кнопки с ней висят в старых сообщениях.
+	if _, err := Parse("panel:0:help:premium"); err != nil {
+		t.Fatalf("panel:0:help:premium: %v", err)
 	}
 }

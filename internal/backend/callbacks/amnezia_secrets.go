@@ -57,22 +57,6 @@ func (r *Router) getAmneziaKeyByID(userID int64, keyID string) (string, error) {
 	return "", nil
 }
 
-func (r *Router) amneziaStoredKey(userID int64, keyID string) (amneziaStoredKey, bool) {
-	keys, err := r.listAmneziaKeys(userID)
-	if err != nil {
-		return amneziaStoredKey{}, false
-	}
-	if strings.TrimSpace(keyID) == "" || keyID == "active" {
-		keyID = keys.ActiveID
-	}
-	for _, key := range keys.Keys {
-		if key.ID == keyID {
-			return key, true
-		}
-	}
-	return amneziaStoredKey{}, false
-}
-
 func (r *Router) listAmneziaKeys(userID int64) (amneziaRouterKeys, error) {
 	env, err := readAmneziaSecrets(r.amneziaSecretsPath())
 	if err != nil {

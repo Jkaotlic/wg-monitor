@@ -2,6 +2,7 @@ package tg
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -38,7 +39,7 @@ func TestReplyKeyboardForTopic(t *testing.T) {
 		wantR1 int // row 1 button count (0 means "don't care")
 		wantR2 int
 	}{
-		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через туннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "🔐 Amnezia Premium", "🔑 HideMy.name", "🩺 Проверка"}, 2, 2},
+		{"per_router", true, []string{"📊 Что происходит?", "🎛 Туннели", "🌍 Через туннель?", "🇷🇺 Напрямую?", "🛣 Маршруты", "🩺 Проверка"}, 2, 2},
 		{"summary", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"systemic", true, []string{"📋 Список юзеров", "📊 Здоровье флота"}, 2, 0},
 		{"unknown", false, nil, 0, 0},
@@ -94,21 +95,6 @@ func TestReplyKeyboard_PerRouter_HasNoMaintenanceButtons(t *testing.T) {
 	}
 }
 
-func TestReplyKeyboard_PerRouter_PremiumButtonsAreActionLabeled(t *testing.T) {
-	kb := ReplyKeyboardForTopic("per_router").(*ReplyKeyboardMarkup)
-	for _, want := range []string{"🔐 Amnezia Premium", "🔑 HideMy.name"} {
-		if !replyKeyboardHasText(kb, want) {
-			t.Fatalf("per-router keyboard missing premium action label %q: %+v", want, kb.Keyboard)
-		}
-	}
-	if got := CompatBtnTextByCode("amnezia_premium"); got != "🔐 Amnezia Premium" {
-		t.Fatalf("compat amnezia label = %q", got)
-	}
-	if got := CompatBtnTextByCode("hidemyname"); got != "🔑 HideMy.name" {
-		t.Fatalf("compat hidemy label = %q", got)
-	}
-}
-
 func TestOperatorMenuInlineKeyboardForTopic_PerRouter(t *testing.T) {
 	kb := OperatorMenuInlineKeyboardForTopic("per_router")
 	if kb == nil {
@@ -122,8 +108,6 @@ func TestOperatorMenuInlineKeyboardForTopic_PerRouter(t *testing.T) {
 		{"🩺 Проверка", "compat_btn:0:router_doctor"},
 		{"🎛 Туннели", "compat_btn:0:tunnels"},
 		{"🛣 Маршруты", "compat_btn:0:routes"},
-		{"🔐 Amnezia Premium", "compat_btn:0:amnezia_premium"},
-		{"🔑 HideMy.name", "compat_btn:0:hidemyname"},
 		{"🌍 Через туннель?", "compat_btn:0:via_tunnel"},
 		{"🇷🇺 Напрямую?", "compat_btn:0:direct"},
 	} {
@@ -170,4 +154,38 @@ func contains(haystack, needle string) bool {
 		}
 		return false
 	})()
+}
+
+func TestBotMenusHaveNoCabinets(t *testing.T) {
+	kb := ReplyKeyboardForTopic("per_router").(*ReplyKeyboardMarkup)
+	for _, gone := range []string{"🔐 Amnezia Premium", "🔑 HideMy.name"} {
+		if replyKeyboardHasText(kb, gone) {
+			t.Errorf("кнопка %q переехала в приложение, а в меню осталась", gone)
+		}
+	}
+	for _, code := range []string{"amnezia_premium", "hidemyname"} {
+		if got := CompatBtnTextByCode(code); got != "" {
+			t.Errorf("compat-код %q всё ещё знает кнопку %q", code, got)
+		}
+	}
+	for _, cmds := range [][]BotCommand{OperatorBotCommands(), AdminBotCommands()} {
+		for _, c := range cmds {
+			switch c.Command {
+			case "amnezia", "hidemy", "selfhosted", "cancel":
+				t.Errorf("/%s переехала в приложение, а осталась в меню", c.Command)
+			}
+		}
+	}
+	if strings.Contains(OperatorMenuHelpText(), "Amnezia") {
+		t.Errorf("справка меню упоминает кабинет: %s", OperatorMenuHelpText())
+	}
+}
+
+func TestMiniAppURL(t *testing.T) {
+	if got := MiniAppURL(" https://wgmon.example.com/ "); got != "https://wgmon.example.com/miniapp/" {
+		t.Fatalf("MiniAppURL = %q", got)
+	}
+	if MiniAppURL("http://wgmon.example.com") != "" || MiniAppURL("") != "" {
+		t.Fatal("не https -- пусто")
+	}
 }
