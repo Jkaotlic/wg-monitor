@@ -21,6 +21,15 @@ import (
 // Снимок с warnings -- неполный: привязка правил политик в нём могла не
 // прочитаться, и «правил нет» по нему было бы догадкой.
 
+// Ревью цикла 4: решение принимается только по снимку, записанному не раньше
+// 30 секунд назад, а команда удаления ждёт роутер в очереди 2 минуты, а не
+// общие 15: проснувшийся через десять минут роутер не должен удалять туннель
+// по проверке, которая с тех пор могла устареть.
+const (
+	miniappTunnelDeleteSnapshotMaxAge = 30 * time.Second
+	miniappTunnelDeleteTTL            = 2 * time.Minute
+)
+
 type miniappTunnelDeleteReq struct {
 	Confirm string `json:"confirm"`
 }
@@ -57,7 +66,7 @@ func miniappTunnelDeleteHandler(d Deps, questions *miniappAgentQuestions) http.H
 			return
 		}
 		log := miniappCabinetLogger(d)
-		res, answered, err := questions.ask(r.Context(), d.CommandSink, u.ID, "route_status", "route_status", nil)
+		res, answered, err := questions.askFresh(r.Context(), d.CommandSink, u.ID, "route_status", "route_status", nil, miniappTunnelDeleteSnapshotMaxAge)
 		if err != nil {
 			log.Warn("удаление VPN-туннеля: снимок не запрошен", "router_id", u.ID, "err", err)
 			writeMiniappTunnelError(w, http.StatusInternalServerError, errCodeInternal)
@@ -128,7 +137,8 @@ func miniappTunnelDeleteHandler(d Deps, questions *miniappAgentQuestions) http.H
 			writeMiniappTunnelError(w, http.StatusInternalServerError, errCodeInternal)
 			return
 		}
-		cmd := wire.Command{ID: cmdID, Action: "tunnel_delete", Args: args, IssuedAt: time.Now().UTC()}
+		issued := time.Now().UTC()
+		cmd := wire.Command{ID: cmdID, Action: "tunnel_delete", Args: args, IssuedAt: issued, ExpiresAt: issued.Add(miniappTunnelDeleteTTL)}
 		if err := d.CommandSink.Enqueue(u.ID, cmd); err != nil {
 			log.Warn("удаление VPN-туннеля: команда не встала в очередь", "router_id", u.ID, "err", err)
 			writeMiniappTunnelError(w, http.StatusInternalServerError, errCodeInternal)
@@ -136,6 +146,10 @@ func miniappTunnelDeleteHandler(d Deps, questions *miniappAgentQuestions) http.H
 		}
 		resp := miniappTunnelStateResp{State: "queued", CmdID: cmdID}
 		resp.RouterAsleep, resp.RouterStatus, resp.WakeWindowMin = miniappWakeWindow(d, u, "tunnel_delete", time.Now().UTC())
+		if resp.RouterAsleep {
+			// Окно ожидания -- собственный срок команды, а не общий по действию.
+			resp.WakeWindowMin = int(miniappTunnelDeleteTTL / time.Minute)
+		}
 		log.Info("miniapp tunnel delete queued", "router_id", u.ID, "nickname", u.Nickname, "tunnel_id", tunnel.ID, "cmd_id", cmdID)
 		writeMiniappCabinetJSON(w, http.StatusAccepted, resp)
 	}

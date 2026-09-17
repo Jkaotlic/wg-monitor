@@ -86,3 +86,30 @@ func TestMiniappAgentQuestionsEnqueueError(t *testing.T) {
 		t.Fatalf("после ошибки очереди вопрос не задан заново: %v", got)
 	}
 }
+
+// askFresh: ответ старше maxAge решению не годится -- вопрос задаётся заново
+// и считается неотвеченным.
+func TestMiniappAgentQuestionsFreshAnswerOnly(t *testing.T) {
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	q := newMiniappAgentQuestions(time.Second, 2*time.Minute, func() time.Time { return now })
+	sink := &agentScriptSink{}
+	_, _, _ = q.askFresh(context.Background(), sink, 7, "route_status", "route_status", nil, 30*time.Second)
+	first := sink.enqueued[0].ID
+	sink.results = map[string]wire.CommandResult{first: {ID: first, Status: "ok", Output: "{}"}}
+	sink.recorded = map[string]time.Time{first: now.Add(-31 * time.Second)}
+	if _, answered, err := q.askFresh(context.Background(), sink, 7, "route_status", "route_status", nil, 30*time.Second); answered || err != nil {
+		t.Fatalf("устаревший ответ принят: answered=%v err=%v", answered, err)
+	}
+	if got := sink.actions(); len(got) != 2 {
+		t.Fatalf("ждали второй вопрос: %v", got)
+	}
+	second := sink.enqueued[1].ID
+	sink.results[second] = wire.CommandResult{ID: second, Status: "ok", Output: "{}"}
+	sink.recorded[second] = now.Add(-5 * time.Second)
+	if res, answered, err := q.askFresh(context.Background(), sink, 7, "route_status", "route_status", nil, 30*time.Second); !answered || err != nil || res.ID != second {
+		t.Fatalf("свежий ответ: res=%v answered=%v err=%v", res, answered, err)
+	}
+	if got := sink.actions(); len(got) != 2 {
+		t.Fatalf("лишний вопрос: %v", got)
+	}
+}

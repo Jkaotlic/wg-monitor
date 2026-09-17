@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Jkaotlic/wg-monitor/pkg/wire"
 )
@@ -16,6 +17,18 @@ import (
 type agentScriptSink struct {
 	dashboardActionSink
 	answer func(cmd wire.Command) (wire.CommandResult, bool)
+	// recorded -- когда «очередь» записала результат; нет записи -- только что.
+	recorded map[string]time.Time
+}
+
+func (s *agentScriptSink) ResultRecordedAt(_ int64, id string) (time.Time, bool) {
+	if at, ok := s.recorded[id]; ok {
+		return at, true
+	}
+	if _, ok := s.results[id]; ok {
+		return time.Now(), true
+	}
+	return time.Time{}, false
 }
 
 func (s *agentScriptSink) Enqueue(userID int64, cmd wire.Command) error {
@@ -420,5 +433,42 @@ func TestMiniappTunnelDeleteNotFoundPointsToAWGManager(t *testing.T) {
 	if code, message, _ := cabinetErrorBody(t, rec); rec.Code != http.StatusNotFound || code != "tunnel_not_found" ||
 		!strings.Contains(message, "не сообщает") || !strings.Contains(message, "awg-manager") {
 		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Ревью цикла 4: решение об удалении -- только по снимку не старше 30 секунд.
+// Ответ, пролежавший дольше (клиент вернулся к «проверяю» через минуту),
+// спрашивается заново; а сама команда удаления живёт в очереди 2 минуты, а не
+// 15: проснувшийся роутер не должен удалять по давно устаревшей проверке.
+func TestMiniappTunnelDeleteStaleSnapshotAsksAgain(t *testing.T) {
+	env, sink := newTunnelEnv(t, nil)
+	if rec := postTunnelDelete(t, env, cabOwner, "awg14", "vpn-spare"); tunnelStateBody(t, rec).State != "checking" {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	b, _ := json.Marshal(tunnelDeleteSnapshot())
+	first := sink.enqueued[0].ID
+	sink.results = map[string]wire.CommandResult{first: {ID: first, Status: "ok", Output: string(b)}}
+	sink.recorded = map[string]time.Time{first: time.Now().Add(-time.Minute)}
+	rec := postTunnelDelete(t, env, cabOwner, "awg14", "vpn-spare")
+	if rec.Code != http.StatusAccepted || tunnelStateBody(t, rec).State != "checking" {
+		t.Fatalf("устаревший снимок: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := sink.actions(); len(got) != 2 || got[1] != "route_status" {
+		t.Fatalf("ждали новый вопрос: %v", got)
+	}
+	second := sink.enqueued[1].ID
+	sink.results[second] = wire.CommandResult{ID: second, Status: "ok", Output: string(b)}
+	rec = postTunnelDelete(t, env, cabOwner, "awg14", "vpn-spare")
+	body := tunnelStateBody(t, rec)
+	if rec.Code != http.StatusAccepted || body.State != "queued" {
+		t.Fatalf("свежий снимок: %d %s", rec.Code, rec.Body.String())
+	}
+	del := sink.enqueued[len(sink.enqueued)-1]
+	if del.Action != "tunnel_delete" || del.IssuedAt.IsZero() || del.ExpiresAt.Sub(del.IssuedAt) != 2*time.Minute {
+		t.Fatalf("команда: %s issued=%v expires=%v", del.Action, del.IssuedAt, del.ExpiresAt)
+	}
+	// Роутер в тестовом парке не на связи: окно ожидания -- те же 2 минуты.
+	if body.RouterAsleep && body.WakeWindowMin != 2 {
+		t.Fatalf("окно ожидания: %+v", body)
 	}
 }

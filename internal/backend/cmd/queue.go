@@ -425,6 +425,20 @@ func (q *Queue) RecordResult(userID int64, result wire.CommandResult) error {
 	return nil
 }
 
+// ResultRecordedAt -- когда очередь записала результат команды (userID, id).
+// false -- результата нет (ещё не пришёл или уже выметен Sweep). Мини-апп по
+// этому времени отличает свежий ответ роутера от пролежавшего: решение об
+// удалении VPN-туннеля принимается только по свежему снимку.
+func (q *Queue) ResultRecordedAt(userID int64, id string) (time.Time, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	r, ok := q.results[userID][id]
+	if !ok {
+		return time.Time{}, false
+	}
+	return r.recordedAt, true
+}
+
 // CommandByID returns the command last dequeued for (userID, id). It lets the
 // result handler recover action/args for commands enqueued without a Telegram
 // origin ref, such as VPS deferred self_update jobs.

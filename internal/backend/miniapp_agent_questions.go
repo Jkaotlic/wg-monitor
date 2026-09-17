@@ -40,47 +40,87 @@ func newMiniappAgentQuestions(wait, reuse time.Duration, now func() time.Time) *
 	return &miniappAgentQuestions{wait: wait, reuse: reuse, now: now, open: map[string]miniappAgentQuestion{}}
 }
 
+// commandResultTimer -- когда очередь записала результат. Узкий интерфейс по
+// типу, а не метод CommandSink (как activeCommandChecker, deploy_wake.go):
+// расширение CommandSink сломало бы десятки тестовых очередей.
+type commandResultTimer interface {
+	ResultRecordedAt(userID int64, id string) (time.Time, bool)
+}
+
 // ask -- ответ агента на action или answered=false, если он не пришёл за
 // wait. key отделяет вопросы одного роутера друг от друга. Полученный ответ
 // закрывает вопрос: следующий ask спросит роутер заново. err -- только
 // отказ очереди (или генератора id): вопрос тогда не открыт.
 func (q *miniappAgentQuestions) ask(ctx context.Context, sink CommandSink, routerID int64, key, action string, args map[string]any) (*wire.CommandResult, bool, error) {
-	full := fmt.Sprintf("%d/%s", routerID, key)
-	now := q.now()
+	return q.askFresh(ctx, sink, routerID, key, action, args, 0)
+}
 
+// askFresh -- ask, которому годится только ответ, записанный очередью не
+// раньше maxAge назад (0 -- любой). Пролежавший ответ закрывает вопрос, роутеру
+// уходит новый, и возвращается answered=false: решать по снимку минутной
+// давности нельзя (ревью цикла 4). Очередь, не умеющая сказать время записи
+// (тестовые фейки), считается свежей; очередь, умеющая, но не нашедшая записи
+// (результат выметен), -- нет.
+func (q *miniappAgentQuestions) askFresh(ctx context.Context, sink CommandSink, routerID int64, key, action string, args map[string]any, maxAge time.Duration) (*wire.CommandResult, bool, error) {
+	full := fmt.Sprintf("%d/%s", routerID, key)
+	if args == nil {
+		args = map[string]any{}
+	}
+	for attempt := 0; ; attempt++ {
+		open, err := q.openQuestion(sink, routerID, full, action, args)
+		if err != nil {
+			return nil, false, err
+		}
+		res, answered := sink.AwaitResult(ctx, routerID, open.cmdID, q.wait)
+		if !answered || res == nil {
+			return nil, false, nil
+		}
+		q.mu.Lock()
+		if cur, ok := q.open[full]; ok && cur.cmdID == open.cmdID {
+			delete(q.open, full)
+		}
+		q.mu.Unlock()
+		if maxAge <= 0 || q.answerFresh(sink, routerID, open.cmdID, maxAge) {
+			return res, true, nil
+		}
+		if attempt > 0 {
+			// Только что заданный вопрос отвечен устаревшим ответом -- так не
+			// бывает у настоящей очереди; не крутиться.
+			return nil, false, nil
+		}
+	}
+}
+
+func (q *miniappAgentQuestions) answerFresh(sink CommandSink, routerID int64, cmdID string, maxAge time.Duration) bool {
+	timer, ok := sink.(commandResultTimer)
+	if !ok {
+		return true
+	}
+	at, known := timer.ResultRecordedAt(routerID, cmdID)
+	return known && q.now().Sub(at) <= maxAge
+}
+
+// openQuestion -- открытый вопрос по ключу или новый, поставленный в очередь.
+func (q *miniappAgentQuestions) openQuestion(sink CommandSink, routerID int64, full, action string, args map[string]any) (miniappAgentQuestion, error) {
+	now := q.now()
 	q.mu.Lock()
+	defer q.mu.Unlock()
 	for k, open := range q.open {
 		if now.Sub(open.asked) > q.reuse {
 			delete(q.open, k)
 		}
 	}
-	open, ok := q.open[full]
-	if !ok {
-		id, err := newCmdID()
-		if err != nil {
-			q.mu.Unlock()
-			return nil, false, fmt.Errorf("id gen: %w", err)
-		}
-		if args == nil {
-			args = map[string]any{}
-		}
-		if err := sink.Enqueue(routerID, wire.Command{ID: id, Action: action, Args: args, IssuedAt: now.UTC()}); err != nil {
-			q.mu.Unlock()
-			return nil, false, fmt.Errorf("enqueue %s: %w", action, err)
-		}
-		open = miniappAgentQuestion{cmdID: id, asked: now}
-		q.open[full] = open
+	if open, ok := q.open[full]; ok {
+		return open, nil
 	}
-	q.mu.Unlock()
-
-	res, answered := sink.AwaitResult(ctx, routerID, open.cmdID, q.wait)
-	if !answered || res == nil {
-		return nil, false, nil
+	id, err := newCmdID()
+	if err != nil {
+		return miniappAgentQuestion{}, fmt.Errorf("id gen: %w", err)
 	}
-	q.mu.Lock()
-	if cur, ok := q.open[full]; ok && cur.cmdID == open.cmdID {
-		delete(q.open, full)
+	if err := sink.Enqueue(routerID, wire.Command{ID: id, Action: action, Args: args, IssuedAt: now.UTC()}); err != nil {
+		return miniappAgentQuestion{}, fmt.Errorf("enqueue %s: %w", action, err)
 	}
-	q.mu.Unlock()
-	return res, true, nil
+	open := miniappAgentQuestion{cmdID: id, asked: now}
+	q.open[full] = open
+	return open, nil
 }
