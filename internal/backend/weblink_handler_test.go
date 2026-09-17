@@ -418,14 +418,13 @@ func TestWebLinkRedeemGivesTheUsualDashboardSession(t *testing.T) {
 		t.Fatal("cookie дашборда не выдана")
 	}
 
-	// /dashboard/ теперь оболочка без авторизации -- сессию проверяет
-	// только старый дашборд.
-	page := httptest.NewRequest(http.MethodGet, "/dashboard/classic/", nil)
-	page.AddCookie(cookie)
-	pageRec := httptest.NewRecorder()
-	h.ServeHTTP(pageRec, page)
-	if pageRec.Code != http.StatusOK {
-		t.Fatalf("страница дашборда по этой cookie: код %d", pageRec.Code)
+	// Сессия та самая: мост веб-управления узнаёт её как вход админа.
+	who := httptest.NewRequest(http.MethodGet, "/v1/miniapp/session", nil)
+	who.AddCookie(cookie)
+	whoRec := httptest.NewRecorder()
+	h.ServeHTTP(whoRec, who)
+	if whoRec.Code != http.StatusOK || !strings.Contains(whoRec.Body.String(), `"via":"web"`) {
+		t.Fatalf("сессия по этой cookie: код %d тело %s", whoRec.Code, whoRec.Body.String())
 	}
 }
 

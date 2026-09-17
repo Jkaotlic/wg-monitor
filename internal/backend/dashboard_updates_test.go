@@ -103,19 +103,3 @@ func TestDashboardSummaryCarriesUpdateNewsFromSnapshot(t *testing.T) {
 		t.Errorf("сводка не говорит, что роутеру пора обновить прошивку: %+v", agent.Updates)
 	}
 }
-
-// Собранная страница дашборда действительно рисует эту строку. Тесты бандла
-// здесь пинят подстроки намеренно: Go-тесты зелены и при пустом бандле, а
-// человек смотрит на страницу.
-func TestDashboardStaticRendersRouterUpdateNews(t *testing.T) {
-	jsBytes, err := dashboardStaticFS.ReadFile("dashboard_static/app.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	js := string(jsBytes)
-	for _, want := range []string{"agent.updates", "доступна"} {
-		if !strings.Contains(js, want) {
-			t.Errorf("страница дашборда не рисует новость об обновлении роутера: нет %q", want)
-		}
-	}
-}

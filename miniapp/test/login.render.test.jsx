@@ -105,6 +105,23 @@ describe('экран входа', () => {
     cleanup(root)
   })
 
+  it('внизу -- мелкая ссылка на аварийную страницу', async () => {
+    const root = await mount(<LoginScreen onSuccess={() => {}} />)
+    const link = root.querySelector('.login-rescue a')
+    expect(link).not.toBe(null)
+    expect(link.getAttribute('href')).toBe('/dashboard/rescue/')
+    expect(link.textContent).toBe('Приложение не работает? Аварийная страница')
+    cleanup(root)
+  })
+
+  it('ссылка на аварийную страницу есть и во время обмена личной ссылки', async () => {
+    mocks.redeemReply = new Promise(() => {})
+    const root = await mount(<LoginScreen linkToken="abc" onLinkUsed={() => {}} onSuccess={() => {}} />)
+    expect(root.textContent).toContain('Проверяем ссылку…')
+    expect(root.querySelector('.login-rescue a')?.getAttribute('href')).toBe('/dashboard/rescue/')
+    cleanup(root)
+  })
+
   it('ссылка: токен приходит свойством, обмен сразу, успех зовёт onSuccess без формы', async () => {
     const onSuccess = vi.fn()
     const onLinkUsed = vi.fn()

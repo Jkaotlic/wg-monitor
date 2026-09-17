@@ -1,5 +1,5 @@
 // «Подключение агента»: как сервер добирается до роутера. Форма, перенесённая
-// из «Edit agent» старого дашборда (dashboard_static/app.js:1627-1684).
+// из «Edit agent» старого дашборда (удалён в v0.37).
 // Пароли здесь не живут вовсе: сервер их не хранит.
 import { AWGM_AUTH_OPTIONS } from './provisionWizard.js'
 import { validHttpURL } from './formRules.js'

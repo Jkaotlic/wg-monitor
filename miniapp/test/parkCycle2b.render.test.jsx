@@ -151,18 +151,23 @@ describe('Парк: сторож и отложенное', () => {
   })
 })
 
-describe('Парк: мостика на классическое веб-управление больше нет', () => {
-  it('web: ни «Открыть в браузере», ни ссылки на /dashboard/classic/', async () => {
+describe('Парк: ссылка на аварийную страницу вместо мостика на классическое', () => {
+  it('web: ни «Открыть в браузере», ни /dashboard/classic/, есть «Аварийная страница» в карточке бэкенда', async () => {
     const { root } = await mountPark({ mode: 'web' })
     expect(buttons(root, 'Открыть в браузере')).toEqual([])
     expect(root.querySelector('a[href^="/dashboard/classic"]')).toBe(null)
     expect(root.textContent).not.toContain('классическом')
+    const link = root.querySelector('.park-backend a.park-rescue')
+    expect(link).not.toBe(null)
+    expect(link.getAttribute('href')).toBe('/dashboard/rescue/')
+    expect(link.textContent).toBe('Аварийная страница')
     cleanup(root)
   })
 
-  it('Telegram: «Открыть в браузере» на месте', async () => {
+  it('Telegram: «Открыть в браузере» на месте, ссылки на аварийную страницу нет', async () => {
     const { root } = await mountPark({ mode: 'telegram' })
     expect(buttons(root, 'Открыть в браузере')).toHaveLength(1)
+    expect(root.querySelector('a[href^="/dashboard/rescue"]')).toBe(null)
     cleanup(root)
   })
 })

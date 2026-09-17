@@ -50,34 +50,15 @@ func TestDashboardServesMiniappShellWithoutTelegramSDK(t *testing.T) {
 	}
 }
 
-func TestDashboardClassicStaysBehindSession(t *testing.T) {
+// Старый дашборд удалён (цикл 3). Закладки на него ведут на аварийную
+// страницу -- без куки и без проверки сессии: редирект данных не несёт.
+func TestDashboardClassicRedirectsToRescue(t *testing.T) {
 	h := NewMux(Deps{DashboardToken: "secret"})
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dashboard/classic/", nil))
-	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/dashboard/classic/login" {
-		t.Fatalf("без куки: код %d location=%q", rec.Code, rec.Header().Get("Location"))
-	}
-
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/dashboard/classic/login", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"/dashboard/classic/"`) {
-		t.Fatalf("старая страница входа: код %d", rec.Code)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/dashboard/classic/", nil)
-	req.AddCookie(dashboardSessionCookie(req, "secret"))
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `src="./app.js"`) {
-		t.Fatalf("с кукой: код %d", rec.Code)
-	}
-
-	req = httptest.NewRequest(http.MethodGet, "/dashboard/classic/app.js", nil)
-	req.AddCookie(dashboardSessionCookie(req, "secret"))
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"/dashboard/classic/login"`) {
-		t.Fatalf("app.js: код %d, редирект входа не переведён на classic", rec.Code)
+	for _, path := range []string{"/dashboard/classic", "/dashboard/classic/", "/dashboard/classic/login", "/dashboard/classic/app.js", "/dashboard/classic/vendor/inter.css"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/dashboard/rescue/" {
+			t.Errorf("%s: код %d location=%q, want 302 /dashboard/rescue/", path, rec.Code, rec.Header().Get("Location"))
+		}
 	}
 }

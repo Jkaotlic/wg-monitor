@@ -91,6 +91,12 @@ export function LoginScreen({ notice = '', linkToken = '', onLinkUsed, onSuccess
             </button>
           </>
         )}
+        {/* Если само приложение не грузится, сюда человек не дойдёт; ссылка
+            нужна тому, кто дошёл, но дальше экран ломается. Страница
+            аварийная: без бандла, вход и раскатка бэкенда. */}
+        <p class="login-rescue">
+          <a href="/dashboard/rescue/">Приложение не работает? Аварийная страница</a>
+        </p>
       </form>
     </div>
   )
