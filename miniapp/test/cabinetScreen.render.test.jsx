@@ -312,12 +312,29 @@ describe('кабинет роутера: страны и отзыв', () => {
     cleanup(root)
   })
 
-  it('мест нет -- страны видны, выпуск закрыт, «Отозвать» есть', async () => {
+  it('мест нет -- новые страны закрыты, выпущенная активна, «Отозвать» есть', async () => {
     mocks.accounts[0].devices_used = 3
     const { root } = await mount()
+    expect(root.textContent).toContain('выпуск новых стран закрыт')
     expect(root.textContent).toContain('Освободите место — отзовите одну из выпущенных стран ниже')
-    for (const b of root.querySelectorAll('.cabinet-option-main')) expect(b.disabled).toBe(true)
+    const main = (label) => [...root.querySelectorAll('.cabinet-option-main')].find((b) => b.textContent.includes(label))
+    expect(main('Германия').disabled).toBe(true)
+    expect(main('Нидерланды').disabled).toBe(false)
     expect(buttons(root, 'Отозвать')).toHaveLength(1)
+    cleanup(root)
+  })
+
+  it('мест нет: выпущенную страну можно выпустить заново и прислать .conf', async () => {
+    mocks.accounts[0].devices_used = 3
+    const { root, sheets } = await mount()
+    await pickOption(root, 'Нидерланды')
+    expect(button(root, 'Выпустить и положить на роутер')).toBeTruthy()
+    await act(async () => button(root, 'Прислать .conf в личку').click())
+    expect(sheets[0].title).toBe('Прислать .conf в личку?')
+    await act(async () => button(root, 'Выпустить и положить на роутер').click())
+    await flush()
+    await flush()
+    expect(calls('issue')).toEqual([['issue', 7, 'amnezia', 'nl', '']])
     cleanup(root)
   })
 })

@@ -22,7 +22,24 @@ describe('accountSummary', () => {
       options: [{ id: 'nl', label: 'Нидерланды' }],
     })
     expect(s.canIssue).toBe(false)
+    expect(s.full).toBe(true)
     expect(s.reason).toContain('мест')
+  })
+
+  // Сервер (amneziaSlotBusy) выпущенную страну пускает и при полной подписке:
+  // она уже занимает своё место. Гасить её нельзя.
+  it('полная подписка: выпущенная страна доступна, новые -- нет', () => {
+    const acc = {
+      provider: 'amnezia', connected: true, devices_used: 3, devices_max: 3,
+      options: [{ id: 'nl', label: 'Нидерланды', issued: true }, { id: 'de', label: 'Германия' }],
+    }
+    const s = accountSummary(acc)
+    expect(s.canIssue).toBe(true)
+    expect(s.full).toBe(true)
+    expect(s.reason).toContain('выпуск новых стран закрыт')
+    expect(s.fullNote).toBe('Свободных мест в подписке нет — выпуск новых стран закрыт.')
+    expect(optionRows(acc).map((o) => [o.id, o.available])).toEqual([['nl', true], ['de', false]])
+    expect(optionRows({ ...acc, devices_used: 1 }).map((o) => o.available)).toEqual([true, true])
   })
 
   // Неподключённый кабинет -- состояние, а не поломка: у него своя фраза, и
@@ -37,8 +54,8 @@ describe('accountSummary', () => {
 describe('optionRows', () => {
   it('уже выпущенное помечено, чтобы не выпускать второй раз вслепую', () => {
     const rows = optionRows({ options: [{ id: 'nl', label: 'Нидерланды' }, { id: 'de', label: 'Германия', issued: true }] })
-    expect(rows[0]).toEqual({ id: 'nl', label: 'Нидерланды', note: '', issued: false })
-    expect(rows[1]).toEqual({ id: 'de', label: 'Германия', note: 'уже выпущен', issued: true })
+    expect(rows[0]).toEqual({ id: 'nl', label: 'Нидерланды', note: '', issued: false, available: true })
+    expect(rows[1]).toEqual({ id: 'de', label: 'Германия', note: 'уже выпущен', issued: true, available: true })
   })
 
   it('пустой список остаётся пустым, а не выдумывает строки', () => {
@@ -59,12 +76,12 @@ describe('кончились места', () => {
 
   it('может отозвать -- «отзовите ниже»', () => {
     const s = accountSummary(full, { canRevoke: true })
-    expect(s.canIssue).toBe(false)
-    expect(s.reason).toBe('Свободных мест в подписке нет. Освободите место — отзовите одну из выпущенных стран ниже, и выпуск откроется.')
+    expect(s.canIssue).toBe(true)
+    expect(s.reason).toBe('Свободных мест в подписке нет — выпуск новых стран закрыт. Уже выпущенные можно выпустить заново. Освободите место — отзовите одну из выпущенных стран ниже.')
   })
 
   it('не может -- кто может; без второго аргумента так же', () => {
-    const text = 'Свободных мест в подписке нет. Освободить место может владелец роутера или администратор: для этого отзывается одна из выпущенных стран.'
+    const text = 'Свободных мест в подписке нет — выпуск новых стран закрыт. Уже выпущенные можно выпустить заново. Освободить место может владелец роутера или администратор: для этого отзывается одна из выпущенных стран.'
     expect(accountSummary(full, { canRevoke: false }).reason).toBe(text)
     expect(accountSummary(full).reason).toBe(text)
   })

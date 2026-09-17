@@ -312,6 +312,14 @@ export function TunnelsTab({ routerID, asleep, onOpenRoutes, openSheet, onOpenCa
           policyName={view.policyName}
           onClose={() => setReplacing(null)}
           onDone={() => run('route_status', {}, deadline)}
+          onOpenCabinet={
+            onOpenCabinet
+              ? () => {
+                  setReplacing(null)
+                  onOpenCabinet()
+                }
+              : undefined
+          }
         />
       )}
     </div>

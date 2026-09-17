@@ -45,7 +45,7 @@ export function CabinetOptions({ routerID, routerName, kind, account, perms, ope
         ))}
         {/* Подвал отделяется линией от того, что над ним; без строк над ним
             это просто фраза в карточке. */}
-        {!summary.canIssue && <p class={summary.lines.length ? 'card-foot' : 'traffic-detail'}>{summary.reason}</p>}
+        {(!summary.canIssue || summary.full) && <p class={summary.lines.length ? 'card-foot' : 'traffic-detail'}>{summary.reason}</p>}
       </div>
       {options.length > 0 && (
         <ul class="card list-reset cabinet-options">
@@ -54,7 +54,7 @@ export function CabinetOptions({ routerID, routerName, kind, account, perms, ope
               <button
                 type="button"
                 class="cabinet-option-main"
-                disabled={!summary.canIssue}
+                disabled={!summary.canIssue || !o.available}
                 onClick={() => onPick({ provider: VPN_PROVIDER[kind], title: summary.title, option: o })}
               >
                 <span class="row-title">
