@@ -104,7 +104,7 @@ export function PackagesCard({ kind, routerID, asleep }) {
 
           {cmd.busy && <p class="hint">{packagesBusyText(verb)}</p>}
           {cmd.sleepNote && <p class="hint">{cmd.sleepNote}</p>}
-          {outcome && <p class={`state${failed ? ' state-error' : ''}`}>{outcome}</p>}
+          {outcome && <p class={`result-note${failed ? ' result-note-error' : ''}`}>{outcome}</p>}
           {cmd.error && (
             <p class="state state-error">{commandErrorText(cmd.errorCode) || (cmd.errorCode ? 'Команда не отправлена.' : cmd.error)}</p>
           )}

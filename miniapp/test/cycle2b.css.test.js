@@ -101,3 +101,38 @@ describe('«Скопировать команды», CSS', () => {
     expect(rule(outside, '\n.dns-copy')).not.toBe(null)
   })
 })
+
+describe('осмотр приёмки: CSS', () => {
+  it('итог действия -- строкой у кнопки, а не пустым экраном по центру', () => {
+    expect(rule(outside, '\n.result-note')).toMatch(/text-align:\s*left/)
+    expect(rule(outside, '\n.result-note-error')).not.toBe(null)
+  })
+
+  it('переключатель листа -- обычной строкой, не надписью поля', () => {
+    expect(rule(outside, '\n.sheet-toggle-label')).toMatch(/text-transform:\s*none/)
+  })
+
+  it('команда установки не растягивает экран токена', () => {
+    expect(rule(outside, '\n.token-command')).toMatch(/max-height/)
+  })
+
+  it('строка сторожа -- без второй линии и с отступом строки данных', () => {
+    const wd = rule(outside, '\n.park-watchdog')
+    expect(wd).not.toMatch(/border-top/)
+    expect(wd).toMatch(/padding:\s*var\(--sp-3\) 14px 0/)
+  })
+
+  it('подсказка провала задания -- карточкой', () => {
+    expect(rule(outside, '\n.job-hint')).toMatch(/border-left/)
+  })
+
+  it('«Опасное» на широком экране без лишнего отступа секции', () => {
+    expect(block.body).toMatch(/\.wide-shell \.danger-zone > \.section\s*\{\s*margin-top:\s*0/)
+  })
+})
+
+describe('ожидание раскатки на широком экране', () => {
+  it('на всю ширину: ограничение основной области его не касается', () => {
+    expect(block.body).toMatch(/\.main-content-narrow > \.deploy-wait\s*\{\s*max-width:\s*none/)
+  })
+})

@@ -190,8 +190,8 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
             <button type="button" class="btn btn-ghost btn-wide dns-copy" onClick={copyCommands}>
               {T.copyButton}
             </button>
-            {copyState === 'ok' && <p class="state">{T.copied}</p>}
-            {copyState === 'fail' && <p class="state state-error">{T.copyFailed}</p>}
+            {copyState === 'ok' && <p class="result-note">{T.copied}</p>}
+            {copyState === 'fail' && <p class="result-note result-note-error">{T.copyFailed}</p>}
           </Section>
         )}
       </div>
