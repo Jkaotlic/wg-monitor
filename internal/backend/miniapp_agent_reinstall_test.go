@@ -193,3 +193,42 @@ func TestMiniappReinstallAndRepointReqHideSecrets(t *testing.T) {
 		assertNoReviveSecrets(t, "печать запроса", s)
 	}
 }
+
+// Пароль root с пробелом по краю доходит до задания как есть; одни пробелы --
+// root_password_required. И у переустановки, и у перенаправления.
+func TestMiniappReinstallAndRepointKeepRootPasswordVerbatim(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path func(int64) string
+		read func(t *testing.T, raw []byte) (root, panel string)
+	}{
+		{"переустановка", reinstallPath, func(t *testing.T, raw []byte) (string, string) {
+			var j awgmInstallJob
+			if err := json.Unmarshal(raw, &j); err != nil {
+				t.Fatal(err)
+			}
+			return j.TerminalPassword, j.Password
+		}},
+		{"перенаправление", repointPath, func(t *testing.T, raw []byte) (string, string) {
+			var j awgmReviveJob
+			if err := json.Unmarshal(raw, &j); err != nil {
+				t.Fatal(err)
+			}
+			return j.TerminalPassword, j.Password
+		}},
+	} {
+		env, _ := reinstallEnv(t)
+		p := tc.path(env.ownedID)
+		assertOpsError(t, tc.name+": одни пробелы", miniappDo(t, env.h, http.MethodPost, p,
+			secretsBody(map[string]any{"confirm": "router-owned", "root_password": "   "}), 999), http.StatusBadRequest, "root_password_required")
+		rec := miniappDo(t, env.h, http.MethodPost, p,
+			secretsBody(map[string]any{"confirm": "router-owned", "root_password": " pa ss ", "awgm_password": " panel pw "}), 999)
+		if rec.Code != http.StatusAccepted {
+			t.Fatalf("%s: код %d (%s)", tc.name, rec.Code, rec.Body.String())
+		}
+		waitForProvisionTerminal(t, env.store, decodeJobStart(t, tc.name, rec.Body.Bytes()), time.Second)
+		if root, panel := tc.read(t, env.relay.capturedJobJSON()); root != " pa ss " || panel != " panel pw " {
+			t.Fatalf("%s: пароли изменены по дороге: root=%q panel=%q", tc.name, root, panel)
+		}
+	}
+}

@@ -157,8 +157,9 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 			writeMiniappOpsError(w, http.StatusBadRequest, "no_awgm_url")
 			return
 		}
-		rootPassword := strings.TrimSpace(req.RootPassword)
-		if rootPassword == "" {
+		// Пустоту проверяем по обрезанному, в задание уходит набранное как
+		// есть: пароль root с пробелом по краю -- тоже пароль.
+		if strings.TrimSpace(req.RootPassword) == "" {
 			writeMiniappOpsError(w, http.StatusBadRequest, "root_password_required")
 			return
 		}
@@ -167,10 +168,10 @@ func miniappProvisionHandler(d Deps) http.HandlerFunc {
 			AgentKind:    agentKind,
 			AWGMURL:      awgmURL,
 			AWGMAuth:     awgmAuth,
-			RootPassword: rootPassword,
+			RootPassword: req.RootPassword,
 			AWGMLogin:    strings.TrimSpace(req.AWGMLogin),
 			AWGMPassword: req.AWGMPassword,
-			AWGMAPIKey:   strings.TrimSpace(req.AWGMAPIKey),
+			AWGMAPIKey:   req.AWGMAPIKey,
 			Version:      miniappAgentVersionOrServer(req.Version),
 			Existing:     existing,
 		})

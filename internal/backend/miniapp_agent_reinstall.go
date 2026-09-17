@@ -75,16 +75,17 @@ func miniappAgentReinstallHandler(d Deps) http.HandlerFunc {
 			writeMiniappOpsError(w, http.StatusConflict, "router_offline")
 			return
 		}
-		rootPassword := strings.TrimSpace(req.RootPassword)
-		if rootPassword == "" {
+		// Пустоту проверяем по обрезанному, в задание уходит набранное как
+		// есть: пароль root с пробелом по краю -- тоже пароль.
+		if strings.TrimSpace(req.RootPassword) == "" {
 			writeMiniappOpsError(w, http.StatusBadRequest, "root_password_required")
 			return
 		}
 		jobID, version, serr := startRepairReinstall(r.Context(), d, u.Nickname, u, reinstallInput{
-			RootPassword: rootPassword,
+			RootPassword: req.RootPassword,
 			AWGMLogin:    strings.TrimSpace(req.AWGMLogin),
 			AWGMPassword: req.AWGMPassword,
-			AWGMAPIKey:   strings.TrimSpace(req.AWGMAPIKey),
+			AWGMAPIKey:   req.AWGMAPIKey,
 			Version:      miniappAgentVersionOrServer(req.Version),
 		})
 		if serr != nil {
@@ -123,13 +124,14 @@ func miniappAgentRepointHandler(d Deps) http.HandlerFunc {
 			writeMiniappOpsError(w, http.StatusBadRequest, "confirm_mismatch")
 			return
 		}
-		rootPassword := strings.TrimSpace(req.RootPassword)
-		if rootPassword == "" {
+		// Пустоту проверяем по обрезанному, в задание уходит набранное как
+		// есть: пароль root с пробелом по краю -- тоже пароль.
+		if strings.TrimSpace(req.RootPassword) == "" {
 			writeMiniappOpsError(w, http.StatusBadRequest, "root_password_required")
 			return
 		}
 		jobID, newURL, serr := startRepairRepoint(d, u.Nickname, u, repointInput{
-			RootPassword:  rootPassword,
+			RootPassword:  req.RootPassword,
 			NewBackendURL: req.NewBackendURL,
 			AWGMLogin:     req.AWGMLogin,
 			AWGMPassword:  req.AWGMPassword,

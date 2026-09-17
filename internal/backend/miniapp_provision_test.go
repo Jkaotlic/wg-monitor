@@ -280,3 +280,30 @@ func TestMiniappProvisionReinviteKeepsKind(t *testing.T) {
 		t.Fatalf("тип после повторного приглашения: %+v err=%v", u, err)
 	}
 }
+
+// Пароль root с пробелом по краю -- тоже пароль: пустоту проверяем по
+// обрезанному, в задание уходит набранное как есть.
+func TestMiniappProvisionKeepsRootPasswordVerbatim(t *testing.T) {
+	env := newAdminOpsEnv(t)
+	assertOpsError(t, "одни пробелы", miniappDo(t, env.h, http.MethodPost, provisionPath,
+		provisionBody(map[string]any{"root_password": "   "}), 999), http.StatusBadRequest, "root_password_required")
+	rec := miniappDo(t, env.h, http.MethodPost, provisionPath,
+		provisionBody(map[string]any{"root_password": " pa ss ", "awgm_password": " panel pw "}), 999)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("установка: код %d (%s)", rec.Code, rec.Body.String())
+	}
+	var start struct {
+		JobID string `json:"job_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &start); err != nil {
+		t.Fatal(err)
+	}
+	waitForProvisionTerminal(t, env.store, start.JobID, time.Second)
+	var captured awgmInstallJob
+	if err := json.Unmarshal(env.relay.capturedJobJSON(), &captured); err != nil {
+		t.Fatal(err)
+	}
+	if captured.TerminalPassword != " pa ss " || captured.Password != " panel pw " {
+		t.Fatalf("пароли изменены по дороге: root=%q panel=%q", captured.TerminalPassword, captured.Password)
+	}
+}
