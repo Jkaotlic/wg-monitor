@@ -184,7 +184,7 @@ describe('выпуск', () => {
 
   it('объяснение: кабинет, перевыпуск, свой сервер', () => {
     expect(issueExplain(amz)).toBe('Конфиг скачает сервер и сразу отдаст его роутеру — через приложение он не проходит. На роутере появится новый VPN-туннель; прежние остаются на месте.')
-    expect(issueExplain(again)).toBe('Конфиг скачает сервер и сразу отдаст его роутеру — через приложение он не проходит. На роутере появится новый VPN-туннель; прежние остаются на месте. Этот конфиг уже выпускался: он будет перевыпущен, и старый перестанет работать.')
+    expect(issueExplain(again)).toBe('Конфиг скачает сервер и сразу отдаст его роутеру — через приложение он не проходит. На роутере появится новый VPN-туннель; прежние остаются на месте. Эта страна уже выпускалась: конфиг будет скачан заново.')
     expect(issueExplain(own)).toBe('Сервер создаст на «Амстердам» нового клиента и сразу отдаст конфиг роутеру — через приложение он не проходит. На роутере появится новый VPN-туннель; прежние остаются на месте.')
   })
 
@@ -200,6 +200,9 @@ describe('выпуск', () => {
       text: 'Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.',
       offerRevoke: true,
     })
+    // Отзыв есть только у Amnezia: у других провайдеров предложения нет.
+    expect(issueFailure(busy, { revoke: true }, 'hidemyname')).toEqual({ text: 'Свободных мест в подписке нет.', offerRevoke: false })
+    expect(issueFailure(busy, { revoke: true }, 'amnezia').offerRevoke).toBe(true)
     expect(issueFailure(busy, { revoke: false })).toEqual({
       text: 'Свободных мест в подписке нет. Отозвать выпущенную страну может владелец роутера или администратор.',
       offerRevoke: false,
@@ -207,12 +210,19 @@ describe('выпуск', () => {
   })
 
   it('прочие отказы: фраза сервера или общая', () => {
-    expect(issueFailure(new ApiError(502, 'cabinet_failed', 'x', 'Кабинет недоступен'), { revoke: true })).toEqual({ text: 'Кабинет отказал: Кабинет недоступен', offerRevoke: false })
+    expect(issueFailure(new ApiError(502, 'cabinet_failed', 'x', 'Кабинет не ответил — повторите позже'), { revoke: true })).toEqual({ text: 'Кабинет не ответил — повторите позже', offerRevoke: false })
     expect(issueFailure(new Error('/routers/7/vpn/issue failed: 502'), {})).toEqual({ text: 'Не получилось выпустить конфиг. Попробуйте ещё раз.', offerRevoke: false })
     // Новые коды (свой сервер) несут готовый русский текст -- без приставки «Кабинет отказал».
     expect(issueFailure(new ApiError(409, 'instance_disabled', 'x', 'Сервер выключен.'), {})).toEqual({ text: 'Сервер выключен.', offerRevoke: false })
     // Старые коды выпуска отвечают по-английски -- человеку своя фраза.
     expect(issueFailure(new ApiError(400, 'missing_option', 'x', 'option_id is required'), {})).toEqual({ text: 'Не получилось выпустить конфиг. Попробуйте ещё раз.', offerRevoke: false })
+    // Слова сервера -- только у кодов, которые точно говорят по-русски.
+    for (const code of ['not_found', 'internal', 'request_too_large', 'bad_json', 'unknown_provider', 'whatever']) {
+      expect(issueFailure(new ApiError(400, code, 'x', 'router not found'), {}).text, code).toBe('Не получилось выпустить конфиг. Попробуйте ещё раз.')
+    }
+    for (const code of ['selfhosted_failed', 'selfhosted_not_configured', 'instance_not_found', 'instance_not_ready', 'missing_instance', 'dm_unreachable', 'invalid_field']) {
+      expect(issueFailure(new ApiError(409, code, 'x', 'Русские слова'), {}).text, code).toBe('Русские слова')
+    }
   })
 })
 

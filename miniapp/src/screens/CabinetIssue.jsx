@@ -59,7 +59,7 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
       setOutcome('Конфиг выпущен, но роутер пока не подтвердил импорт. Откройте экран VPN-туннелей позже.')
     } catch (err) {
       if (!alive.current) return
-      const failure = issueFailure(err, perms)
+      const failure = issueFailure(err, perms, pending.provider)
       setPhase('done')
       setOutcome(failure.text)
       setOfferRevoke(failure.offerRevoke)

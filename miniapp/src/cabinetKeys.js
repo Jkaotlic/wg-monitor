@@ -179,7 +179,7 @@ export function issueExplain(pending) {
     pending?.provider === 'selfhosted'
       ? `Сервер создаст на «${pending.option.label}» нового клиента и сразу отдаст конфиг роутеру — ${ISSUE_BASE}`
       : `Конфиг скачает сервер и сразу отдаст его роутеру — ${ISSUE_BASE}`
-  return pending?.option?.note ? `${base} Этот конфиг уже выпускался: он будет перевыпущен, и старый перестанет работать.` : base
+  return pending?.option?.note ? `${base} Эта страна уже выпускалась: конфиг будет скачан заново.` : base
 }
 
 // Свой сервер выбирается целиком -- «варианта» внутри него нет, поэтому и
@@ -193,14 +193,21 @@ export function issueArgs(pending) {
   }
 }
 
-// Старые коды выпуска (до цикла 3) несут английский message: показывать его
-// человеку нельзя. cabinet_failed -- слова кабинета, как было; остальные --
-// своя фраза. Новые коды (свой сервер, личка) говорят по-русски сами.
-const ISSUE_LEGACY_CODES = new Set(['unknown_provider', 'missing_option', 'bad_json'])
+// Слова сервера показываются только у кодов, которые точно говорят
+// по-русски (таблица miniappCabinetTexts). Общие отказы (not_found, internal,
+// request_too_large…) приходят из старых обработчиков по-английски --
+// им своя фраза.
+const ISSUE_RU_CODES = new Set(['slot_busy', 'cabinet_failed', 'dm_unreachable', 'missing_instance', 'invalid_field'])
 
-export function issueFailure(err, perms) {
+function issueCodeSpeaksRussian(code) {
+  return typeof code === 'string' && (ISSUE_RU_CODES.has(code) || code.startsWith('selfhosted_') || code.startsWith('instance_'))
+}
+
+// provider -- откуда выпуск: отзыв страны есть только у Amnezia.
+export function issueFailure(err, perms, provider = 'amnezia') {
   if (err?.code === 'slot_busy') {
-    const canRevoke = Boolean(perms?.revoke)
+    if (provider !== 'amnezia') return { text: 'Свободных мест в подписке нет.', offerRevoke: false }
+    const canRevoke = Boolean(perms?.revoke) && provider === 'amnezia'
     return {
       text: canRevoke
         ? 'Свободных мест в подписке нет. Отзовите одну из выпущенных стран — и выпуск пройдёт.'
@@ -209,11 +216,7 @@ export function issueFailure(err, perms) {
     }
   }
   const generic = 'Не получилось выпустить конфиг. Попробуйте ещё раз.'
-  let text = generic
-  if (err?.serverMessage && !ISSUE_LEGACY_CODES.has(err.code)) {
-    text = err.code === 'cabinet_failed' ? `Кабинет отказал: ${err.serverMessage}` : err.serverMessage
-  }
-  return { text, offerRevoke: false }
+  return { text: err?.serverMessage && issueCodeSpeaksRussian(err.code) ? err.serverMessage : generic, offerRevoke: false }
 }
 
 export function sendConfSheetText(pending) {
