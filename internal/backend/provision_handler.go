@@ -812,8 +812,8 @@ func isVersionDowngrade(target, current string) bool {
 // (versions, pending markers) and metadata this request shape has no fields
 // for (ssh/ring/arch/mac; the engine auto-detects arch and always uses the
 // awgm/relay path, per the provisioning-rework design spec) are preserved
-// from it rather than blanked, matching dashboardEditDeployInfo/
-// dashboardDeployInfoFromEnrollmentReq's existing merge-safe convention.
+// from it rather than blanked, matching dashboardEditDeployInfo's merge-safe
+// convention.
 //
 // Takes plain fields rather than dashboardProvisionReq (its only caller until
 // Task 10) so dashboardDeployRouterHandler's differently-shaped request —

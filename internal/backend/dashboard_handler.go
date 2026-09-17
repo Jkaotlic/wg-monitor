@@ -13,7 +13,6 @@ import (
 	"github.com/Jkaotlic/wg-monitor/internal/backend/heartbeat"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/notify"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -65,24 +64,23 @@ func DashboardAuthMiddleware(expected string, logger *slog.Logger) func(http.Han
 	}
 }
 
+// dashboardRescuePath -- аварийная страница (цикл 3): вход, если приложение
+// не грузится. Сюда же ведут закладки на удалённый старый дашборд.
+const dashboardRescuePath = "/dashboard/rescue/"
+
 func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimiter) {
-	staticFS, err := fs.Sub(dashboardStaticFS, "dashboard_static")
-	if err != nil {
-		panic(err)
-	}
-	// Старый дашборд доживает на /dashboard/classic/ до переезда его функций
-	// в приложение (цикл 2 программы web-is-miniapp); новых функций сюда не
-	// добавлять -- они пишутся один раз, в miniapp/.
-	staticHandler := staticCacheHeaders(http.StripPrefix("/dashboard/classic/", http.FileServer(http.FS(staticFS))))
 	dashAuth := DashboardAuthMiddleware(d.DashboardToken, d.Logger)
-	pageAuth := DashboardPageAuthMiddleware(d.DashboardToken)
 	mux.Handle("GET /dashboard", requestIDMiddleware()(http.RedirectHandler("/dashboard/", http.StatusFound)))
 	// Веб-управление = мини-апп в браузере: оболочка данных не несёт, как
 	// /miniapp/, поэтому без авторизации; вход делает само приложение.
 	shell := webShellHandler(d.Logger)
 	mux.Handle("GET /dashboard/{$}", requestIDMiddleware()(shell))
 	mux.Handle("GET /dashboard/login", requestIDMiddleware()(shell))
-	mux.Handle("GET /dashboard/classic/login", requestIDMiddleware()(staticCacheHeadersForPage(dashboardLoginPageHandler())))
+	// Старый дашборд удалён: всё, что в нём было, живёт в приложении. Старые
+	// закладки -- на аварийную страницу.
+	toRescue := requestIDMiddleware()(http.RedirectHandler(dashboardRescuePath, http.StatusFound))
+	mux.Handle("GET /dashboard/classic", toRescue)
+	mux.Handle("GET /dashboard/classic/{rest...}", toRescue)
 	entranceLimit := remoteRateLimitMiddleware(entrance, d.Logger)
 	mux.Handle("POST /v1/dashboard/login", requestIDMiddleware()(entranceLimit(dashboardLoginHandler(d))))
 	// Обмен личной ссылки на обычную сессию дашборда. Вход публичный по
@@ -90,9 +88,7 @@ func registerDashboardRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLim
 	// украшение, а часть защиты.
 	mux.Handle("POST /v1/dashboard/web-link/redeem", requestIDMiddleware()(entranceLimit(webLinkRedeemHandler(d))))
 	mux.Handle("POST /v1/dashboard/logout", requestIDMiddleware()(dashboardLogoutHandler()))
-	mux.Handle("GET /dashboard/classic/", requestIDMiddleware()(pageAuth(staticHandler)))
 	mux.Handle("GET /v1/dashboard/summary", requestIDMiddleware()(dashAuth(dashboardSummaryHandler(d))))
-	mux.Handle("POST /v1/dashboard/enrollments", requestIDMiddleware()(dashAuth(dashboardEnrollmentHandler(d))))
 	mux.Handle("PUT /v1/dashboard/agents/{nickname}", requestIDMiddleware()(dashAuth(dashboardEditAgentHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy", requestIDMiddleware()(dashAuth(wizardDeployHandler(d))))
 	mux.Handle("POST /v1/dashboard/agents/{nickname}/deploy/cancel", requestIDMiddleware()(dashAuth(dashboardCancelDeployHandler(d))))
@@ -157,27 +153,6 @@ func dashboardCancelDeployHandler(d Deps) http.HandlerFunc {
 			DroppedCommands int  `json:"dropped_commands"`
 		}{OK: true, Cleared: cleared, DroppedCommands: dropped})
 	}
-}
-
-// DashboardPageAuthMiddleware protects the browser app itself. The JSON API
-// accepts the same session cookie through DashboardAuthMiddleware.
-func DashboardPageAuthMiddleware(expected string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if dashboardSessionValid(r, expected) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			http.Redirect(w, r, "/dashboard/classic/login", http.StatusFound)
-		})
-	}
-}
-
-func dashboardLoginPageHandler() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(dashboardLoginHTML))
-	})
 }
 
 func dashboardLoginHandler(d Deps) http.Handler {
@@ -307,174 +282,6 @@ func requestIsHTTPS(r *http.Request) bool {
 	}
 	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
-
-const dashboardLoginHTML = `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dashboard Login</title>
-  <link rel="icon" href="data:,">
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      min-height: 100vh;
-      margin: 0;
-      display: grid;
-      place-items: center;
-      background:
-        linear-gradient(180deg, rgba(37, 99, 235, .14), rgba(37, 99, 235, 0) 330px),
-        #f4f7fb;
-      color: #111827;
-      font-family: "Segoe UI", "Aptos", sans-serif;
-    }
-    main {
-      width: min(430px, calc(100vw - 32px));
-      border: 1px solid #d9e2ef;
-      border-top: 4px solid #2563eb;
-      border-radius: 8px;
-      background: #fff;
-      box-shadow: 0 22px 60px rgba(16,24,40,.14);
-      padding: 24px;
-    }
-    .mark {
-      display: grid;
-      width: 48px;
-      height: 48px;
-      place-items: center;
-      border-radius: 8px;
-      background: #111827;
-      color: #91caff;
-      font-weight: 900;
-      margin-bottom: 18px;
-    }
-    .eyebrow {
-      color: #667085;
-      font-size: 12px;
-      font-weight: 900;
-      letter-spacing: 0;
-      text-transform: uppercase;
-    }
-    h1 {
-      margin: 4px 0 8px;
-      font-size: 28px;
-      line-height: 1.12;
-      letter-spacing: 0;
-    }
-    p {
-      margin: 0 0 18px;
-      color: #667085;
-      line-height: 1.5;
-    }
-    label {
-      display: grid;
-      gap: 7px;
-      color: #344054;
-      font-size: 12px;
-      font-weight: 900;
-      text-transform: uppercase;
-    }
-    input {
-      width: 100%;
-      min-height: 44px;
-      border: 1px solid #d9e2ef;
-      border-radius: 8px;
-      padding: 0 12px;
-      font: inherit;
-      outline: none;
-    }
-    input:focus {
-      border-color: #77a7ff;
-      box-shadow: 0 0 0 3px rgba(37, 99, 235, .16);
-    }
-    button {
-      width: 100%;
-      min-height: 44px;
-      margin-top: 14px;
-      border: 0;
-      border-radius: 8px;
-      background: #2563eb;
-      color: #fff;
-      cursor: pointer;
-      font: inherit;
-      font-weight: 900;
-      box-shadow: 0 12px 28px rgba(37,99,235,.25);
-    }
-    .error {
-      min-height: 20px;
-      margin-top: 12px;
-      color: #b42318;
-      font-size: 13px;
-      font-weight: 800;
-    }
-  </style>
-</head>
-<body>
-  <main>
-    <div class="mark">WG</div>
-    <div class="eyebrow">protected area</div>
-    <h1>Dashboard Login</h1>
-    <p>Введите dashboard token. Сервер выдаст HttpOnly session cookie, сам токен в UI храниться не будет.</p>
-    <form id="loginForm">
-      <label>
-        Token
-        <input id="tokenInput" type="password" autocomplete="current-password" autofocus>
-      </label>
-      <button type="submit">Open Dashboard</button>
-      <div id="error" class="error"></div>
-    </form>
-  </main>
-  <script>
-    const DEAD_LINK = "` + webLinkCopyDead + `";
-
-    // Вход по личной ссылке. Значение лежит во фрагменте адреса и потому не
-    // доходит до сервера само: страница достаёт его, стирает из адресной
-    // строки и обменивает POST'ом на обычную сессию дашборда. Переход по GET
-    // здесь не годится -- он положил бы грант в журнал сервера и в Referer
-    // соседних запросов.
-    (async () => {
-      const match = (window.location.hash || "").match(/(?:^|[#&])token=([A-Za-z0-9]+)/);
-      if (!match) return;
-      const token = match[1];
-      // Стираем фрагмент ДО обмена: даже если обмен не состоится, грант не
-      // должен остаться в адресной строке, в истории браузера и на экране.
-      history.replaceState(null, "", window.location.pathname);
-      const error = document.getElementById("error");
-      try {
-        const res = await fetch("/v1/dashboard/web-link/redeem", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({token})
-        });
-        if (!res.ok) throw new Error(DEAD_LINK);
-        window.location.href = "/dashboard/classic/";
-      } catch (err) {
-        // Форма с токеном остаётся рядом: дашборд -- аварийный вход, и
-        // мёртвая ссылка не должна оставлять человека совсем без двери.
-        error.textContent = err.message || DEAD_LINK;
-      }
-    })();
-
-    document.getElementById("loginForm").addEventListener("submit", async (event) => {
-      event.preventDefault();
-      const error = document.getElementById("error");
-      error.textContent = "";
-      const token = document.getElementById("tokenInput").value.trim();
-      try {
-        const res = await fetch("/v1/dashboard/login", {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          body: JSON.stringify({token})
-        });
-        if (!res.ok) throw new Error("Неверный token");
-        window.location.href = "/dashboard/classic/";
-      } catch (err) {
-        error.textContent = err.message || "Login failed";
-      }
-    });
-  </script>
-</body>
-</html>`
 
 type dashboardSummary struct {
 	Status        string                   `json:"status"`
@@ -1060,98 +867,6 @@ func dashboardLastSeenAge(user db.User, now time.Time) *int64 {
 	return &age
 }
 
-type dashboardEnrollmentReq struct {
-	Nickname           string `json:"nickname"`
-	Kind               string `json:"kind"`
-	TelegramChatID     int64  `json:"telegram_chat_id"`
-	TelegramThreadID   int64  `json:"telegram_thread_id"`
-	CustomTelegramChat bool   `json:"custom_telegram_chat"`
-	DeployMode         string `json:"deploy_mode"`
-	AWGMURL            string `json:"awgm_url"`
-	AWGMAuth           string `json:"awgm_auth"`
-	SSHHost            string `json:"ssh_host"`
-	SSHPort            int64  `json:"ssh_port"`
-	SSHUser            string `json:"ssh_user"`
-	Arch               string `json:"arch"`
-	Ring               string `json:"ring"`
-	ExpectedMAC        string `json:"expected_mac"`
-}
-
-type dashboardEnrollmentResp struct {
-	Nickname         string `json:"nickname"`
-	BackendURL       string `json:"backend_url"`
-	RawToken         string `json:"raw_token"`
-	TelegramChatID   int64  `json:"telegram_chat_id"`
-	TelegramThreadID int64  `json:"telegram_thread_id"`
-	Message          string `json:"message"`
-}
-
-func dashboardEnrollmentHandler(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSONError(w, http.StatusMethodNotAllowed, errCodeMethodNotAll, "method not allowed")
-			return
-		}
-		if d.DB == nil {
-			writeJSONError(w, http.StatusServiceUnavailable, "db_not_configured", "db not configured")
-			return
-		}
-		if !requireJSONContentType(w, r) {
-			return
-		}
-		var req dashboardEnrollmentReq
-		if !decodeWizardJSON(w, r, &req) {
-			return
-		}
-		arch, err := normalizeAgentDeployArch(req.Arch)
-		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid_arch", err.Error())
-			return
-		}
-		req.Arch = arch
-		if err := validateDashboardAWGMURL(req.AWGMURL); err != nil {
-			writeJSONError(w, http.StatusBadRequest, "invalid_awgm_url", err.Error())
-			return
-		}
-		if !dashboardTelegramChatAllowed(d, req.TelegramChatID, req.CustomTelegramChat) {
-			writeJSONError(w, http.StatusBadRequest, "invalid_telegram_chat", "telegram chat is not allowed")
-			return
-		}
-		enrollment, userID, err := createAgentEnrollment(d.DB, req.Nickname, req.Kind, req.TelegramThreadID)
-		if err != nil {
-			switch {
-			case errors.Is(err, errEnrollmentInvalidNickname):
-				writeJSONError(w, http.StatusBadRequest, "invalid_nickname", "nickname must match ^[a-z][a-z0-9_-]{1,15}$")
-			case errors.Is(err, errEnrollmentInvalidKind):
-				writeJSONError(w, http.StatusBadRequest, "invalid_kind", "kind must be static or mobile")
-			default:
-				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-			}
-			return
-		}
-		if err := d.DB.Users().UpdateTelegramTopic(userID, req.TelegramChatID, req.TelegramThreadID); err != nil {
-			writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-			return
-		}
-		if dashboardEnrollmentHasDeployInfo(req) {
-			if err := d.DB.Users().UpdateDeployInfo(enrollment.Nickname, dashboardDeployInfoFromEnrollmentReq(d.DB, enrollment.Nickname, req)); err != nil {
-				writeJSONError(w, http.StatusInternalServerError, errCodeInternal, err.Error())
-				return
-			}
-		}
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(dashboardEnrollmentResp{
-			Nickname:         enrollment.Nickname,
-			BackendURL:       wizardEnrollmentBackendURL(r, d.PublicBaseURL),
-			RawToken:         enrollment.RawToken,
-			TelegramChatID:   req.TelegramChatID,
-			TelegramThreadID: req.TelegramThreadID,
-			Message:          "Agent enrollment created. Save the token now; it will not be shown once this panel is closed.",
-		})
-	}
-}
-
 // dashboardEditAgentReq carries the operator-editable router/deploy metadata.
 // System-managed fields (versions, pending deploy markers) are intentionally
 // absent — the handler preserves them from the current row.
@@ -1293,78 +1008,6 @@ func validateDashboardAWGMURL(raw string) error {
 		return fmt.Errorf("AWG Manager URL scheme must be http or https")
 	}
 	return nil
-}
-
-func dashboardEnrollmentHasDeployInfo(req dashboardEnrollmentReq) bool {
-	return req.DeployMode != "" || req.AWGMURL != "" || req.AWGMAuth != "" || req.SSHHost != "" ||
-		req.SSHPort != 0 || req.SSHUser != "" || req.Arch != "" || req.Ring != "" || req.ExpectedMAC != ""
-}
-
-func dashboardDeployInfoFromEnrollmentReq(database *db.DB, nickname string, req dashboardEnrollmentReq) db.DeployInfo {
-	info := db.DeployInfo{
-		Kind:        req.Kind,
-		ThreadID:    req.TelegramThreadID,
-		SSHHost:     strings.TrimSpace(req.SSHHost),
-		SSHPort:     req.SSHPort,
-		SSHUser:     strings.TrimSpace(req.SSHUser),
-		Arch:        strings.TrimSpace(req.Arch),
-		Ring:        strings.TrimSpace(req.Ring),
-		DeployMode:  strings.TrimSpace(req.DeployMode),
-		AWGMURL:     strings.TrimSpace(req.AWGMURL),
-		AWGMAuth:    strings.TrimSpace(req.AWGMAuth),
-		ExpectedMAC: strings.TrimSpace(req.ExpectedMAC),
-	}
-	if database == nil {
-		return info
-	}
-	current, err := database.Users().GetByNickname(nickname)
-	if err != nil {
-		return info
-	}
-	if info.SSHHost == "" {
-		info.SSHHost = stringValue(current.SSHHost)
-	}
-	if info.SSHPort == 0 {
-		info.SSHPort = int64Value(current.SSHPort)
-	}
-	if info.SSHUser == "" {
-		info.SSHUser = stringValue(current.SSHUser)
-	}
-	if info.Arch == "" {
-		info.Arch = stringValue(current.Arch)
-	}
-	info.LastDeployedVersion = stringValue(current.LastDeployedVersion)
-	if info.Ring == "" {
-		info.Ring = stringValue(current.Ring)
-	}
-	info.PendingVersion = stringValue(current.PendingVersion)
-	info.PendingSince = stringValue(current.PendingSince)
-	info.LastDeploy = stringValue(current.LastDeploy)
-	if info.DeployMode == "" {
-		info.DeployMode = stringValue(current.DeployMode)
-	}
-	if info.AWGMURL == "" {
-		info.AWGMURL = stringValue(current.AWGMURL)
-	}
-	if info.AWGMAuth == "" {
-		info.AWGMAuth = stringValue(current.AWGMAuth)
-	}
-	if info.ExpectedMAC == "" {
-		info.ExpectedMAC = stringValue(current.ExpectedMAC)
-	}
-	return info
-}
-
-func dashboardTelegramChatAllowed(d Deps, chatID int64, custom bool) bool {
-	if chatID == 0 || chatID == d.TelegramPrimaryChatID {
-		return true
-	}
-	for _, extra := range d.TelegramExtraChatIDs {
-		if chatID == extra {
-			return true
-		}
-	}
-	return custom
 }
 
 func stringValue(v *string) string {
