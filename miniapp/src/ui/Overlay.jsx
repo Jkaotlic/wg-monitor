@@ -5,11 +5,13 @@ import { Quoted } from './Q.jsx'
 // системной кнопки может не быть вовсе.
 //
 // Заголовок слоя бывает с именем -- через <Quoted>.
+//
+// Без onBack кнопка погашена: слой закреплён (мастер во время отправки).
 export function Overlay({ title, backLabel = 'Назад', onBack, children }) {
   return (
     <div class="overlay">
       <div class="overlay-head">
-        <button type="button" class="overlay-back" onClick={onBack}>
+        <button type="button" class="overlay-back" onClick={onBack} disabled={!onBack}>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M 10 3 L 5 8 L 10 13" />
           </svg>

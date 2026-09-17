@@ -115,7 +115,9 @@ describe('OverlayHost: слои парка', () => {
     const p = mocks.props.provision
     expect(p.backLabel).toBe('Обслуживание')
     p.onStarted({ jobId: 'j1', nickname: 'dacha-1' })
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'admin' } })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'admin' }, unpin: true })
+    p.onBusy(true)
+    expect(h.actions.pop()).toEqual({ type: 'pin', pinned: true })
     p.onClose()
     expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
     p.onRegistered()
@@ -145,7 +147,7 @@ describe('OverlayHost: слои парка', () => {
     const root = await mount(h.node)
     expect(root.querySelector('.stub-deploy').textContent).toBe('раскатка v0.36.0')
     mocks.props.deploy.onBack()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin', unpin: true })
     cleanup(root)
   })
 

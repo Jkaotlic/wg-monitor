@@ -29,11 +29,18 @@ import { Q, Quoted } from '../ui/Q.jsx'
 import { TextField, SelectField, ChoiceList } from '../ui/FormField.jsx'
 import { CopyButton } from '../ui/CopyButton.jsx'
 
+const NO_JOB_ID_TEXT = 'Сервер не вернул номер задания — проверьте Парк: установка могла начаться.'
+
 // Мастер «Добавить роутер» -- лист-экран, а не модалка: полей много.
 // Введённое живёт только здесь, в состоянии экрана: навигация (nav) знает лишь,
 // что мастер открыт. Пароли стираются при отправке -- до ответа сервера -- и
 // при уходе с экрана; наружу (onStarted) уходят номер задания и ник.
-export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, onRegistered }) {
+//
+// Пока запрос в пути, мастер закреплён (onBusy -> nav 'pin'): уйти с него
+// нельзя ни одним путём, иначе запущенное задание осталось бы без «Хода
+// работы», а выпущенный токен -- непоказанным. Если экран всё же размонтирован
+// (смена раскладки), номер задания доходит до onStarted всё равно.
+export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, onRegistered, onBusy }) {
   const [values, setValues] = useState(initialWizardValues)
   const [step, setStep] = useState('path')
   const [error, setError] = useState('')
@@ -101,21 +108,33 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
     const body = provisionRequestBody(values, typed)
     const path = values.path
     setBusy(true)
+    onBusy?.(true)
     setError('')
     const fresh = clearSecrets(values)
     valuesRef.current = fresh
     setValues(fresh)
     startProvision(body)
       .then((resp) => {
-        if (!alive.current) return
         if (body.kind === 'register') {
-          setToken(tokenResultView(resp))
+          if (alive.current) setToken(tokenResultView(resp))
+          onBusy?.(false)
           onRegistered?.()
           return
         }
-        onStarted({ jobId: resp?.job_id, nickname: resp?.nickname || body.nickname })
+        if (!resp?.job_id) {
+          onBusy?.(false)
+          if (!alive.current) return
+          setStep('confirm')
+          setError(NO_JOB_ID_TEXT)
+          setTyped('')
+          return
+        }
+        // Номер задания уходит и с размонтированного экрана: задание уже
+        // запущено, и «Ход работы» -- единственное место, где виден итог.
+        onStarted({ jobId: resp.job_id, nickname: resp?.nickname || body.nickname })
       })
       .catch((err) => {
+        onBusy?.(false)
         if (!alive.current) return
         setStep(provisionErrorStep(err, path))
         setError(provisionErrorText(err))
@@ -135,7 +154,7 @@ export function ProvisionWizard({ backLabel = 'Назад', onClose, onStarted, 
   if (token) return <TokenResult token={token} onClose={onClose} />
 
   return (
-    <Overlay title="Добавить роутер" backLabel={backLabel} onBack={onClose}>
+    <Overlay title="Добавить роутер" backLabel={backLabel} onBack={busy ? undefined : onClose}>
       <form class="screen wizard" onSubmit={onSubmit} autocomplete="off" noValidate>
         <h1 class="screen-title">Добавить роутер</h1>
         <p class="wizard-progress">
