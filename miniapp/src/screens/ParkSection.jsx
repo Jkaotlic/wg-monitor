@@ -13,6 +13,7 @@ import {
   sendCommand,
   fetchCommandResult,
   setRouterNotify,
+  deployBackend,
 } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { localSheet } from '../sheet.js'
@@ -52,6 +53,7 @@ import {
   reviveCancelDoneText,
 } from '../revive.js'
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
+import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
 // агентов. Раньше экран был читающим, а обновление агента жило в боте и
@@ -70,7 +72,7 @@ import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetB
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
-export function ParkSection({ openSheet, onOpenRouter, currentID }) {
+export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
   const { mode } = useContext(AppContext)
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
@@ -252,6 +254,27 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
     )
   }
 
+  // Раскатка бэкенда: подтверждение набором версии, дальше -- полноэкранное
+  // ожидание (слой backenddeploy). Сервер перезапустится, и приложению на это
+  // время некуда вернуться; отката отсюда нет.
+  function askBackendDeploy() {
+    const offer = backendDeployOffer(fleet)
+    if (!offer || !openLayer) return
+    const text = backendDeploySheetText(offer.target)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Обновить бэкенд',
+        busyLabel: 'Отправляем…',
+        confirmPhrase: offer.target,
+        errorText: backendDeployErrorText,
+        perform: (typed) => deployBackend(offer.target, typed),
+        onDone: (resp) => openLayer('backenddeploy', { targetVersion: resp?.target_version || offer.target }),
+      }),
+    )
+  }
+
   async function runBatch(kind) {
     if (!fleet || batchRunningRef.current) return
     batchRunningRef.current = true
@@ -325,6 +348,7 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
   const gaps = fleet ? notifyGapLines(fleet) : []
   const watchdog = fleet ? watchdogLine(fleet) : ''
   const backend = fleet ? backendRow(fleet) : null
+  const deployOffer = fleet ? backendDeployOffer(fleet) : null
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
   const revives = new Map(rows.map((row) => [row.id, reviveState(row.router, fleet)]))
   const reviveOff = fleet ? reviveNotConfiguredLine(fleet) : ''
@@ -344,9 +368,23 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
           <p class="router-lastseen">{fleetHeadline(fleet)}</p>
           {fleetError && <p class="state state-error">{fleetError}</p>}
 
-          <div class="card">
+          <div class="card park-backend">
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
+            {deployOffer && openLayer && (
+              <div class="park-backend-actions">
+                <button type="button" class="btn btn-ghost btn-row" onClick={askBackendDeploy}>
+                  {deployOffer.label}
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Новый роутер: мастер -- слой парка, открывается с возвратом сюда. */}
+          {openLayer && (
+            <button type="button" class="btn btn-ghost btn-wide park-add" onClick={() => openLayer('provision')}>
+              Добавить роутер
+            </button>
+          )}
 
           {behind > 0 && (
             <button type="button" class="btn btn-primary btn-wide" onClick={askUpdateAll}>
@@ -501,13 +539,9 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
           {watchdog && <p class="hint">Сторож парка: {watchdog}</p>}
 
           {/* В браузере личная ссылка на браузер бессмысленна -- человек уже
-              здесь. Вместо неё мостик к тому, что ещё не переехало (цикл 2
-              удалит строку вместе с переездом). */}
-          {mode === 'web' ? (
-            <a class="park-classic" href="/dashboard/classic/">
-              Установка агента на новый роутер, приглашения и раскатка бэкенда — пока в классическом веб-управлении
-            </a>
-          ) : (
+              здесь. Мостика в классическое веб-управление больше нет: всё,
+              что там было, переехало сюда (цикл 2). */}
+          {mode !== 'web' && (
             <>
               <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
                 {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}

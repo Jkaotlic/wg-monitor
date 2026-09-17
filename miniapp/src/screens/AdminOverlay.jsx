@@ -5,13 +5,15 @@ import { ParkSection } from './ParkSection.jsx'
 
 // Администрирование: парк целиком и доступы к этому роутеру.
 //
-// «Парк» -- своя секция (ParkSection.jsx): там обновление агентов и
-// массовые действия. Здесь -- только входы в экраны радиуса одного роутера.
-export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, onOpenAgentConfig, onOpenDNSReset, onOpenRouter }) {
+// «Парк» -- своя секция (ParkSection.jsx): там обновление агентов, раскатка
+// бэкенда, добавление роутера и массовые действия. openLayer открывает слои
+// парка (мастер, ход работы, ожидание раскатки) с возвратом сюда. Здесь --
+// только входы в экраны радиуса одного роутера.
+export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenRouter }) {
   return (
     <Overlay title="Обслуживание и доступы" backLabel="Роутер" onBack={onClose}>
       <div class="screen">
-        {isAdmin && <ParkSection openSheet={openSheet} onOpenRouter={onOpenRouter} currentID={routerID} />}
+        {isAdmin && <ParkSection openSheet={openSheet} onOpenRouter={onOpenRouter} currentID={routerID} openLayer={openLayer} />}
 
         {/* Настройки агента -- вход только у админа: радиус правки
             router-global, и сервер ответит остальным 404. Сам экран
@@ -24,6 +26,20 @@ export function AdminOverlay({ routerID, isAdmin = false, onClose, openSheet, on
             <p class="hint">
               Как часто роутер отчитывается, адрес и логин его панели, что агенту разрешено делать
               с устройством. Изменение перезапускает агента.
+            </p>
+          </Section>
+        )}
+
+        {/* Подключение агента -- то, что хранит сервер: как он добирается до
+            роутера. Только админ; правка агента не перезапускает. */}
+        {isAdmin && onOpenAgentConnection && (
+          <Section title="Подключение агента">
+            <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenAgentConnection}>
+              Открыть подключение агента
+            </button>
+            <p class="hint">
+              Адрес панели awg-manager, SSH, способ раскатки и MAC роутера — как сервер добирается
+              до этого роутера.
             </p>
           </Section>
         )}

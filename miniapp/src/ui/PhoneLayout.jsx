@@ -7,7 +7,7 @@ import { TabBody } from '../screens/TabBody.jsx'
 
 // Телефонная раскладка -- та же, что была до веб-управления: шапка, вкладки
 // внизу, оверлей крышкой, лист снизу.
-export function PhoneLayout({ nav, dispatch, routers, isAdmin, onLogout }) {
+export function PhoneLayout({ nav, dispatch, routers, isAdmin, onLogout, refreshRouters }) {
   return (
     <>
       <Header
@@ -20,7 +20,7 @@ export function PhoneLayout({ nav, dispatch, routers, isAdmin, onLogout }) {
         <TabBody nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
       </div>
       <TabBar tabs={TABS} tab={nav.tab} onTab={(tab) => dispatch({ type: 'tab', tab })} />
-      <OverlayHost nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} />
+      <OverlayHost nav={nav} dispatch={dispatch} routers={routers} isAdmin={isAdmin} refreshRouters={refreshRouters} />
       <SheetHost nav={nav} dispatch={dispatch} />
     </>
   )
