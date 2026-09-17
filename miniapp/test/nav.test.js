@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, normalizeTab, escapeAction, navPinned } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, URL_FLEET_OVERLAYS, normalizeTab, escapeAction, navPinned } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -153,11 +153,11 @@ describe('подписи вкладок', () => {
 // главный экран, где настройки пришлось бы искать.
 describe('deepLinkOverlay', () => {
   it('открывает любой оверлей роутера, но только вместе с роутером', () => {
-    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages']) {
+    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet']) {
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(o)
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: null })).toBe(null)
     }
-    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages'])
+    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages', 'cabinet'])
   })
 
   it('без open и с неизвестным open -- ничего', () => {
@@ -225,7 +225,7 @@ describe('слои парка', () => {
   const base = { routerID: null, tab: 'router', overlay: null, sheet: null }
 
   it('список слоёв парка', () => {
-    expect(FLEET_OVERLAYS).toEqual(['provision', 'job', 'backenddeploy'])
+    expect(FLEET_OVERLAYS).toEqual(['provision', 'job', 'backenddeploy', 'selfhosted', 'selfhostedinst'])
   })
 
   it('параметры слоя кладутся рядом с ним и уходят вместе с ним', () => {
@@ -306,5 +306,44 @@ describe('закреплённый слой', () => {
     const job = navReducer(busyWizard, { type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 't', returnTo: 'admin' }, unpin: true })
     expect(job).toEqual({ ...base, overlay: 'job', overlayParams: { jobId: 'j1', title: 't', returnTo: 'admin' } })
     expect(navReducer(deploy, { type: 'overlay', overlay: 'admin', unpin: true })).toEqual({ ...base, overlay: 'admin' })
+  })
+})
+
+// Кабинеты и свои серверы (цикл 3 «бот без слеш-команд»).
+describe('кабинет и свои серверы', () => {
+  const base = { routerID: null, tab: 'router', overlay: null, sheet: null }
+
+  it('слой с адресом среди слоёв парка -- только список серверов', () => {
+    expect(URL_FLEET_OVERLAYS).toEqual(['selfhosted'])
+    for (const o of URL_FLEET_OVERLAYS) expect(FLEET_OVERLAYS).toContain(o)
+  })
+
+  it('кабинет открывается по адресу вместе с роутером', () => {
+    expect(deepLinkOverlay('?router=7&open=cabinet', { routerID: 7 })).toBe('cabinet')
+    expect(deepLinkOverlay('?router=7&open=cabinet', { routerID: null })).toBe(null)
+  })
+
+  it('«назад» с экрана сервера -- на список с его собственным возвратом', () => {
+    const s = {
+      ...base,
+      routerID: 3,
+      overlay: 'selfhostedinst',
+      overlayParams: { instanceId: 'ams', returnTo: 'selfhosted', returnParams: { returnTo: 'admin' } },
+    }
+    const list = navReducer(s, { type: 'back' })
+    expect(list).toEqual({ ...base, routerID: 3, overlay: 'selfhosted', overlayParams: { returnTo: 'admin' } })
+    expect(navReducer(list, { type: 'back' })).toEqual({ ...base, routerID: 3, overlay: 'admin' })
+  })
+
+  it('returnParams без returnTo не создают слой из ничего', () => {
+    const s = { ...base, overlay: 'selfhosted', overlayParams: { returnTo: null, returnParams: { returnTo: 'admin' } } }
+    const back = navReducer(s, { type: 'back' })
+    expect(back).toEqual(base)
+    expect('overlayParams' in back).toBe(false)
+  })
+
+  it('лист поверх экрана сервера закрывается первым', () => {
+    const s = { ...base, overlay: 'selfhostedinst', overlayParams: { instanceId: 'ams', returnTo: 'selfhosted' }, sheet: { title: 'Удалить?' } }
+    expect(navReducer(s, { type: 'back' })).toEqual({ ...s, sheet: null })
   })
 })

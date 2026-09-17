@@ -254,18 +254,23 @@ export function setOwner(routerID, owner) {
 // which encodes `wizardDeployResp{CmdID: id}`. The key is "cmd_id", NOT
 // "command_id" -- callers must destructure { cmd_id } or they'll silently get
 // undefined and poll `/commands/undefined` forever.
-// Кабинеты провайдеров: что подключено и что можно выпустить. Ключей
-// кабинета клиент не видит и не отправляет -- они живут у бота.
+// Кабинеты провайдеров: подписка и что можно выпустить. Ключей и кодов
+// кабинета этот ответ не несёт -- они вводятся на экране кабинета
+// (addCabinetSecret) и наружу не отдаются никогда, даже маской здесь.
 export function fetchVPNAccounts(routerID) {
   return request(`/routers/${routerID}/vpn`)
 }
 
 // Выпуск конфига: наружу уходит ТОЛЬКО выбор. Конфиг скачивает сервер и сам
 // кладёт его в команду агенту; в ответ приезжает идентификатор команды.
-export function issueVPNConfig(routerID, provider, optionID) {
+// instanceID -- свой сервер (только админ); у кабинетов провайдеров его нет,
+// и ключ в теле не появляется вовсе.
+export function issueVPNConfig(routerID, provider, optionID, instanceID = '') {
+  const body = { provider, option_id: optionID }
+  if (instanceID) body.instance_id = instanceID
   return request(`/routers/${routerID}/vpn/issue`, {
     method: 'POST',
-    body: JSON.stringify({ provider, option_id: optionID }),
+    body: JSON.stringify(body),
   })
 }
 
@@ -359,4 +364,82 @@ export function fetchAgentConnection(routerID) {
 
 export function saveAgentConnection(routerID, body) {
   return request(`/routers/${routerID}/agent/connection`, { method: 'PUT', body: JSON.stringify(body) })
+}
+
+// Кабинеты роутера (цикл 3 «бот без слеш-команд»): ключи Amnezia Premium и
+// коды HideMy.name вводятся в приложении. Секрет уходит только телом POST
+// по HTTPS и не возвращается никогда -- в ответах маска. В адрес запроса,
+// журнал и консоль он не попадает.
+const CABINET_SECRET_PATH = { amnezia: 'keys', hidemy: 'codes' }
+const CABINET_SECRET_FIELD = { amnezia: 'vpn_key', hidemy: 'access_code' }
+
+function cabinetKind(kind) {
+  if (!Object.hasOwn(CABINET_SECRET_PATH, kind)) throw new Error(`unknown cabinet: ${kind}`)
+  return kind
+}
+
+export function fetchCabinets(routerID) {
+  return request(`/routers/${routerID}/cabinets`)
+}
+
+export function addCabinetSecret(routerID, kind, secret, label = '') {
+  const k = cabinetKind(kind)
+  return request(`/routers/${routerID}/cabinets/${k}/${CABINET_SECRET_PATH[k]}`, {
+    method: 'POST',
+    body: JSON.stringify({ [CABINET_SECRET_FIELD[k]]: secret, label }),
+  })
+}
+
+export function setCabinetActive(routerID, kind, id) {
+  const k = cabinetKind(kind)
+  return request(`/routers/${routerID}/cabinets/${k}/active`, { method: 'PUT', body: JSON.stringify({ id }) })
+}
+
+export function deleteCabinetSecret(routerID, kind, id) {
+  const k = cabinetKind(kind)
+  return request(`/routers/${routerID}/cabinets/${k}/${CABINET_SECRET_PATH[k]}/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+// Отзыв выпущенной страны освобождает место в подписке. confirm -- набранное
+// имя роутера: сервер сверяет его сам.
+export function revokeAmneziaSlot(routerID, country, confirm) {
+  return request(`/routers/${routerID}/cabinets/amnezia/revoke`, {
+    method: 'POST',
+    body: JSON.stringify({ country, confirm }),
+  })
+}
+
+// .conf в личку нажавшему: файл отправляет бот, через приложение содержимое
+// конфига не проходит (контракт miniapp_vpn.go). Выбор -- option_id, как у
+// выпуска (сверка с частью 1).
+export function sendVPNConf(routerID, { provider, option = '', instanceID = '' }) {
+  const body = { provider, option_id: option }
+  if (instanceID) body.instance_id = instanceID
+  return request(`/routers/${routerID}/vpn/send-conf`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+// Свои VPN-серверы -- только админ. SSH-пароль уходит только телом POST/PUT
+// и только когда введён: пустое поле значит «не менять», и ключа в теле нет.
+export function fetchSelfhosted() {
+  return request('/selfhosted')
+}
+
+export function createSelfhosted(body) {
+  return request('/selfhosted', { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function updateSelfhosted(id, body) {
+  return request(`/selfhosted/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) })
+}
+
+export function toggleSelfhosted(id, enabled) {
+  return request(`/selfhosted/${encodeURIComponent(id)}/toggle`, { method: 'POST', body: JSON.stringify({ enabled }) })
+}
+
+export function deleteSelfhosted(id, confirm) {
+  return request(`/selfhosted/${encodeURIComponent(id)}`, { method: 'DELETE', body: JSON.stringify({ confirm }) })
+}
+
+export function checkSelfhosted(id) {
+  return request(`/selfhosted/${encodeURIComponent(id)}/check`, { method: 'POST' })
 }
