@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validNickname, validAgentVersion, validHttpURL, NICKNAME_RULE } from '../src/formRules.js'
+import { validNickname, validAgentVersion, validHttpURL, NICKNAME_RULE, normalizeAgentVersion } from '../src/formRules.js'
 
 describe('имя роутера -- как на сервере ^[a-z][a-z0-9_-]{1,15}$', () => {
   it('годные', () => {
@@ -34,5 +34,16 @@ describe('адрес http(s)', () => {
     for (const v of ['router.example.com', 'ftp://router.example.com', 'https://', 'javascript:alert(1)', '', null]) {
       expect(validHttpURL(v), String(v)).toBe(false)
     }
+  })
+})
+
+describe('normalizeAgentVersion -- одна на мастер и листы', () => {
+  it('буква v дописывается, негодное -- пусто', () => {
+    expect(normalizeAgentVersion(' 0.36.0 ')).toBe('v0.36.0')
+    expect(normalizeAgentVersion('v0.36.0-rc2')).toBe('v0.36.0-rc2')
+    expect(normalizeAgentVersion('0.36.0-beta')).toBe('')
+    expect(normalizeAgentVersion('latest')).toBe('')
+    expect(normalizeAgentVersion('')).toBe('')
+    expect(normalizeAgentVersion(null)).toBe('')
   })
 })

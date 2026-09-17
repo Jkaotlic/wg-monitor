@@ -61,8 +61,9 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
             onRegistered={() => {
               reloadRouters()
             }}
+            onBusy={(pinned) => dispatch({ type: 'pin', pinned })}
             onStarted={({ jobId, nickname }) =>
-              dispatch({ type: 'overlay', overlay: 'job', params: { jobId, title: jobTitle('provision', nickname), returnTo } })
+              dispatch({ type: 'overlay', overlay: 'job', params: { jobId, title: jobTitle('provision', nickname), returnTo }, unpin: true })
             }
           />
         )
@@ -80,7 +81,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           />
         )
       default:
-        return <BackendDeployWait targetVersion={params.targetVersion} onBack={leave} />
+        return <BackendDeployWait targetVersion={params.targetVersion} onBack={() => dispatch({ type: 'overlay', overlay: returnTo, unpin: true })} />
     }
   }
 
@@ -102,6 +103,10 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
           onOpenPackages={() => dispatch({ type: 'overlay', overlay: 'packages' })}
           onOpenRouter={(id) => dispatch({ type: 'router', id })}
+          onOpenRouterConnection={(id) => {
+            dispatch({ type: 'router', id })
+            dispatch({ type: 'overlay', overlay: 'agentconn' })
+          }}
         />
       )
     case 'routes':

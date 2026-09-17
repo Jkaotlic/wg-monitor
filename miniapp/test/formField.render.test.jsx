@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 import { TextField, SelectField, ChoiceList } from '../src/ui/FormField.jsx'
@@ -27,7 +27,8 @@ describe('TextField', () => {
     const root = await mount(<TextField id="f-root" label="Пароль root" type="password" value="" onInput={(v) => got.push(v)} hint="один раз" />)
     const input = root.querySelector('#f-root')
     expect(input.getAttribute('type')).toBe('password')
-    expect(input.getAttribute('autocomplete')).toBe('off')
+    // new-password: иначе браузер подставит сохранённый пароль сайта.
+    expect(input.getAttribute('autocomplete')).toBe('new-password')
     expect(input.getAttribute('autocapitalize')).toBe('off')
     // В jsdom нет свойства spellcheck (браузеры его знают): Preact тогда
     // снимает атрибут у false, и проверять нечего. Свойство подставлено
@@ -105,5 +106,25 @@ describe('CopyButton', () => {
     await flush()
     expect(root.querySelector('.copy-fail').textContent).toBe('Не удалось скопировать — выделите текст вручную')
     cleanup(root)
+  })
+})
+
+describe('CopyButton: один таймер', () => {
+  it('повторное нажатие не даёт первому таймеру погасить «Скопировано» раньше срока', async () => {
+    vi.useFakeTimers()
+    try {
+      const root = await mount(<CopyButton text="t" copy={async () => true} />)
+      const btn = root.querySelector('button')
+      await act(async () => btn.click())
+      await act(async () => { await vi.advanceTimersByTimeAsync(1500) })
+      await act(async () => btn.click())
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+      expect(btn.textContent).toBe('Скопировано')
+      await act(async () => { await vi.advanceTimersByTimeAsync(1100) })
+      expect(btn.textContent).toBe('Скопировать')
+      cleanup(root)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -3,12 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render } from 'preact'
 import { act } from 'preact/test-utils'
 
-const mocks = vi.hoisted(() => ({ bodies: [], reply: null }))
+const mocks = vi.hoisted(() => ({ bodies: [], reply: null, pending: null }))
 
 vi.mock('../src/api.js', async (importOriginal) => ({
   ...(await importOriginal()),
   startProvision: (body) => {
     mocks.bodies.push(JSON.parse(JSON.stringify(body)))
+    if (mocks.pending) return mocks.pending
     return mocks.reply instanceof Error ? Promise.reject(mocks.reply) : Promise.resolve(mocks.reply)
   },
 }))
@@ -39,7 +40,7 @@ async function fill(root, id, value) {
 }
 
 async function mount() {
-  const calls = { closed: 0, started: [], registered: 0 }
+  const calls = { closed: 0, started: [], registered: 0, busy: [] }
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
@@ -49,6 +50,7 @@ async function mount() {
         onClose={() => calls.closed++}
         onStarted={(arg) => calls.started.push(arg)}
         onRegistered={() => calls.registered++}
+        onBusy={(b) => calls.busy.push(b)}
       />,
       root,
     )
@@ -68,7 +70,18 @@ async function toConfirm(root, { path, nick = 'dacha-1', kind = 'Дома' }) {
 beforeEach(() => {
   mocks.bodies = []
   mocks.reply = null
+  mocks.pending = null
 })
+
+function deferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
 
 describe('мастер «Добавить роутер»', () => {
   it('шаг 1: без выбора дальше не пускает; путь «токен» -- три шага', async () => {
@@ -156,7 +169,7 @@ describe('мастер «Добавить роутер»', () => {
     await fill(root, 'wizard-root-password', ROOT_PW)
     const rootInput = root.querySelector('#wizard-root-password')
     expect(rootInput.getAttribute('type')).toBe('password')
-    expect(rootInput.getAttribute('autocomplete')).toBe('off')
+    expect(rootInput.getAttribute('autocomplete')).toBe('new-password')
 
     // Вход в веб по умолчанию: без логина и пароля панели дальше нельзя.
     expect(root.querySelector('#wizard-awgm-auth').value).toBe('web')
@@ -205,6 +218,7 @@ describe('мастер «Добавить роутер»', () => {
     expect(progress(root)).toBe('Шаг 3 из 4 · Доступ к роутеру')
     expect(errorText(root)).toBe('Нужен пароль root')
     expect(root.querySelector('#wizard-root-password').value).toBe('')
+    expect(root.querySelector('.wizard-secrets-cleared').textContent).toBe('Пароли стёрты после отправки — введите заново.')
     expect(root.querySelector('#wizard-awgm-url').value).toBe('https://router.example.com')
     cleanup(root)
   })
@@ -220,6 +234,84 @@ describe('мастер «Добавить роутер»', () => {
     expect(errorText(root)).toBe('Установка агентов на сервере не настроена')
     expect(root.querySelector('#wizard-confirm-input').value).toBe('')
     expect(button(root, 'Выдать токен').disabled).toBe(true)
+    cleanup(root)
+  })
+})
+
+describe('мастер во время отправки', () => {
+  async function toSubmit(root, path) {
+    await toConfirm(root, { path })
+    if (path === 'Установить агента сейчас') {
+      await fill(root, 'wizard-awgm-url', 'https://router.example.com')
+      await fill(root, 'wizard-root-password', ROOT_PW)
+      await fill(root, 'wizard-awgm-auth', 'none')
+      await click(button(root, 'Дальше'))
+    }
+    await fill(root, 'wizard-confirm-input', 'dacha-1')
+  }
+
+  it('«назад» слоя и «Назад» мастера не закрывают; слой закреплён; job_id доходит', async () => {
+    const d = deferred()
+    mocks.pending = d.promise
+    const { root, calls } = await mount()
+    await toSubmit(root, 'Установить агента сейчас')
+    await click(button(root, 'Установить'))
+    expect(calls.busy).toEqual([true])
+    await click(root.querySelector('.overlay-back'))
+    expect(root.querySelector('.overlay-back').disabled).toBe(true)
+    expect(button(root, 'Назад').disabled).toBe(true)
+    expect(calls.closed).toBe(0)
+    await act(async () => d.resolve({ job_id: 'j77', nickname: 'dacha-1' }))
+    await flush()
+    expect(calls.started).toEqual([{ jobId: 'j77', nickname: 'dacha-1' }])
+    cleanup(root)
+  })
+
+  it('экран размонтирован до ответа -- «Ход работы» всё равно открывается', async () => {
+    const d = deferred()
+    mocks.pending = d.promise
+    const { root, calls } = await mount()
+    await toSubmit(root, 'Установить агента сейчас')
+    await click(button(root, 'Установить'))
+    cleanup(root)
+    await act(async () => d.resolve({ job_id: 'j78', nickname: 'dacha-1' }))
+    await flush()
+    expect(calls.started).toEqual([{ jobId: 'j78', nickname: 'dacha-1' }])
+  })
+
+  it('токен: закрепление снимается, когда токен уже на экране', async () => {
+    const d = deferred()
+    mocks.pending = d.promise
+    const { root, calls } = await mount()
+    await toSubmit(root, 'Только выдать токен')
+    await click(button(root, 'Выдать токен'))
+    expect(calls.busy).toEqual([true])
+    await act(async () => d.resolve({ nickname: 'dacha-1', raw_token: 'tok-1', backend_url: 'https://wg.example.com', install_command: 'sh' }))
+    await flush()
+    expect(root.querySelector('.token-value').textContent).toBe('tok-1')
+    expect(calls.busy).toEqual([true, false])
+    cleanup(root)
+  })
+
+  it('отказ -- закрепление снимается', async () => {
+    mocks.reply = new ApiError(503, 'provision_not_configured', 'x')
+    const { root, calls } = await mount()
+    await toSubmit(root, 'Только выдать токен')
+    await click(button(root, 'Выдать токен'))
+    await flush()
+    expect(calls.busy).toEqual([true, false])
+    cleanup(root)
+  })
+
+  it('ответ без job_id -- слова, а не «Ход работы» пустого задания', async () => {
+    mocks.reply = { nickname: 'dacha-1' }
+    const { root, calls } = await mount()
+    await toSubmit(root, 'Установить агента сейчас')
+    await click(button(root, 'Установить'))
+    await flush()
+    expect(calls.started).toEqual([])
+    expect(errorText(root)).toBe('Сервер не вернул номер задания — проверьте Парк: установка могла начаться.')
+    expect(calls.busy).toEqual([true, false])
     cleanup(root)
   })
 })

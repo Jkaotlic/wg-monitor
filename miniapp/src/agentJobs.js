@@ -1,15 +1,14 @@
 // Переустановка агента сейчас и перенаправление агента на другой бэкенд:
 // поля листа, готовность, тела запросов, тексты. Только чистые функции.
 //
-// Оба действия запускают задание на сервере (SSH на роутер) и отвечают
+// Оба действия запускают задание на сервере -- через терминал панели
+// awg-manager (provision_handler.go, no_awgm_url), не по SSH -- и отвечают
 // {job_id}; дальше человек смотрит «Ход работы» (часть 2, openLayer('job')). Пароли вводятся
 // полями листа и живут только в Sheet.jsx: сюда они приходят снимком на
 // момент нажатия и уходят в тело одного POST.
 //
-// «Панель роутера» -- так её называет остальной мини-апп (revive.js).
 import { isAway } from './agentUpdate.js'
-import { normalizeVersion } from './agentVersionPick.js'
-import { validAgentVersion } from './formRules.js'
+import { normalizeAgentVersion } from './formRules.js'
 import { jobTitle } from './jobSteps.js'
 
 export const JOB_SECRET_NOTE = 'Пароли уходят на сервер один раз и не сохраняются.'
@@ -19,17 +18,14 @@ const URL_HINT = 'Нужен адрес с https://, например https://wg
 
 const trimmed = (v) => String(v ?? '').trim()
 
-// Набранная версия: «0.35.0» дописывается до «v0.35.0», годность -- общим
-// правилом formRules.js (vN.N.N, vN.N.N-rcN). Негодная -- пустая строка.
-function goodVersion(v) {
-  const n = normalizeVersion(v)
-  return n && validAgentVersion(n) ? n : ''
-}
+// Набранная версия: «0.35.0» дописывается до «v0.35.0» общим правилом
+// formRules.js (как в мастере). Негодная -- пустая строка.
+const goodVersion = normalizeAgentVersion
 
 const PANEL_FIELDS = [
-  { name: 'awgm_login', label: 'Логин панели роутера (необязательно)', type: 'text' },
-  { name: 'awgm_password', label: 'Пароль панели роутера (необязательно)', type: 'password' },
-  { name: 'awgm_api_key', label: 'Ключ панели роутера (необязательно)', type: 'password' },
+  { name: 'awgm_login', label: 'Логин панели (если панель требует вход)', type: 'text' },
+  { name: 'awgm_password', label: 'Пароль панели (если панель требует вход)', type: 'password' },
+  { name: 'awgm_api_key', label: 'Ключ API панели (если панель требует вход)', type: 'password' },
 ]
 
 // Пароли не обрезаются: пробел может быть частью пароля. Логин и ключ --
@@ -42,10 +38,23 @@ function panelBody(values) {
   }
 }
 
+// Без записанного адреса панели сервер откажет no_awgm_url: вместо кнопки
+// экран говорит, где этот адрес задать.
+export const PANEL_ADDRESS_MISSING = 'Сначала задайте адрес панели в «Подключении агента».'
+
+export function panelAddressMissing(router) {
+  return router?.panel_address_known === false
+}
+
 // Только роутеру на связи (спека, п. 7): спящему и молчащему есть «Оживить
-// агент», который дождётся его появления.
+// агент», который дождётся его появления. И только с адресом панели.
+// Роутер на связи, но адреса панели нет: вместо кнопки -- строка и переход.
+export function reinstallNeedsPanel(router) {
+  return Boolean(router) && !isAway(router) && panelAddressMissing(router)
+}
+
 export function reinstallAllowed(router) {
-  return Boolean(router) && !isAway(router)
+  return Boolean(router) && !isAway(router) && !panelAddressMissing(router)
 }
 
 export function reinstallSheetText(router) {
@@ -53,8 +62,8 @@ export function reinstallSheetText(router) {
   return {
     title: `Переустановить агент на «${name}» сейчас?`,
     body:
-      `Сервер зайдёт на «${name}» по SSH и поставит агента заново. Проверки замолчат на пару минут, VPN-туннели не трогаются. ` +
-      'Нужен пароль root; вход в панель роутера — по желанию. Ход установки откроется сразу после запуска.',
+      `Сервер зайдёт на «${name}» через терминал панели awg-manager и поставит агента заново. Проверки замолчат на пару минут, VPN-туннели не трогаются. ` +
+      'Нужен пароль root; логин или ключ панели — если панель требует вход. Ход установки откроется сразу после запуска.',
   }
 }
 
@@ -109,7 +118,7 @@ export function repointSheetText(router) {
     title: `Перенаправить агента «${name}» на другой сервер?`,
     body:
       'Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть. ' +
-      'Сервер зайдёт на роутер по SSH и перепишет адрес в настройках агента. Нужен пароль root.',
+      'Сервер зайдёт на роутер через терминал панели awg-manager и перепишет адрес в настройках агента. Нужен пароль root.',
   }
 }
 

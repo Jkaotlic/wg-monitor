@@ -4,7 +4,7 @@
 //
 // Группа Telegram и тема не спрашиваются (группы уходят, решение оператора
 // 14.09): уведомления идут в личку, владельца назначают потом в «Доступ».
-import { NICKNAME_RE, NICKNAME_RULE, validAgentVersion, validHttpURL } from './formRules.js'
+import { NICKNAME_RE, NICKNAME_RULE, normalizeAgentVersion, validHttpURL } from './formRules.js'
 
 export const PROVISION_PATHS = [
   {
@@ -96,7 +96,7 @@ export function stepError(step, values) {
         return 'Для входа в веб нужны логин и пароль панели.'
       }
       if (values.awgmAuth === 'api-key' && trimmed(values.awgmAPIKey) === '') return 'Нужен ключ API панели.'
-      if (trimmed(values.version) !== '' && !validAgentVersion(values.version)) return 'Версия пишется так: v0.36.0. Пусто — последняя.'
+      if (trimmed(values.version) !== '' && !normalizeAgentVersion(values.version)) return 'Версия пишется так: v0.36.0. Пусто — последняя.'
       return ''
     }
     default:
@@ -136,7 +136,7 @@ export function provisionSummary(values) {
     { label: 'Панель awg-manager', value: trimmed(values.awgmURL) },
     { label: 'Вход в панель', value: AWGM_AUTH_OPTIONS.find((o) => o.value === values.awgmAuth)?.label ?? '' },
     { label: 'Пароль root', value: trimmed(values.rootPassword) ? 'введён' : 'не введён' },
-    { label: 'Версия агента', value: trimmed(values.version) || 'последняя' },
+    { label: 'Версия агента', value: normalizeAgentVersion(values.version) || trimmed(values.version) || 'последняя' },
   )
   return rows
 }
@@ -154,7 +154,7 @@ export function provisionRequestBody(values, typed) {
   body.awgm_url = trimmed(values.awgmURL)
   body.awgm_auth = values.awgmAuth
   body.root_password = values.rootPassword
-  body.version = trimmed(values.version)
+  body.version = normalizeAgentVersion(values.version)
   if (values.awgmAuth === 'web') {
     body.awgm_login = trimmed(values.awgmLogin)
     body.awgm_password = values.awgmPassword
@@ -170,6 +170,8 @@ const ERROR_STEP = {
   no_awgm_url: 'access',
   root_password_required: 'access',
   latest_version_failed: 'access',
+  invalid_awgm_url: 'access',
+  nickname_taken: 'router',
   checksums_failed: 'access',
 }
 

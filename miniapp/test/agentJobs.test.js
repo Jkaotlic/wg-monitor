@@ -3,6 +3,9 @@ import { ApiError } from '../src/api.js'
 import { jobTitle } from '../src/jobSteps.js'
 import {
   JOB_SECRET_NOTE,
+  PANEL_ADDRESS_MISSING,
+  panelAddressMissing,
+  reinstallNeedsPanel,
   reinstallAllowed,
   reinstallSheetText,
   reinstallFields,
@@ -120,5 +123,32 @@ describe('отказы запуска задания', () => {
     expect(jobStartErrorText(new ApiError(401, 'unauthorized', 'x', 'sign in required'))).toBe('Сессия истекла — войдите заново.')
     expect(jobStartErrorText(new ApiError(502, 'unknown', 'x', ''))).toBe('')
     expect(jobStartErrorText(new Error('Failed to fetch'))).toBe('')
+  })
+})
+
+// Переустановка и перенаправление идут через терминал панели awg-manager
+// (provision_handler.go: no_awgm_url), а не по SSH.
+describe('через терминал панели awg-manager', () => {
+  it('без адреса панели кнопки нет -- есть строка про «Подключение агента»', () => {
+    expect(panelAddressMissing({ ...HOME, panel_address_known: false })).toBe(true)
+    expect(panelAddressMissing({ ...HOME, panel_address_known: true })).toBe(false)
+    expect(panelAddressMissing(HOME)).toBe(false)
+    expect(reinstallAllowed({ ...HOME, panel_address_known: false })).toBe(false)
+    expect(reinstallNeedsPanel({ ...HOME, panel_address_known: false })).toBe(true)
+    expect(reinstallNeedsPanel({ ...HOME, panel_address_known: false, away: true })).toBe(false)
+    expect(PANEL_ADDRESS_MISSING).toBe('Сначала задайте адрес панели в «Подключении агента».')
+  })
+
+  it('тексты -- про терминал панели, не про SSH; вход -- если панель требует', () => {
+    for (const t of [reinstallSheetText(HOME), repointSheetText(HOME)]) {
+      expect(t.body).toContain('через терминал панели awg-manager')
+      expect(t.body).not.toContain('SSH')
+    }
+    const labels = reinstallFields().filter((f) => f.name.startsWith('awgm_')).map((f) => f.label)
+    expect(labels).toEqual([
+      'Логин панели (если панель требует вход)',
+      'Пароль панели (если панель требует вход)',
+      'Ключ API панели (если панель требует вход)',
+    ])
   })
 })

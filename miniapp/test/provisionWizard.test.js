@@ -174,6 +174,8 @@ describe('ошибки', () => {
 
   it('отказ возвращает на шаг, где поле', () => {
     expect(provisionErrorStep(e('invalid_nickname'), 'install')).toBe('router')
+    expect(provisionErrorStep(e('nickname_taken'), 'token')).toBe('router')
+    expect(provisionErrorStep(e('invalid_awgm_url'), 'install')).toBe('access')
     expect(provisionErrorStep(e('provision_already_running'), 'install')).toBe('router')
     expect(provisionErrorStep(e('root_password_required'), 'install')).toBe('access')
     expect(provisionErrorStep(e('checksums_failed'), 'install')).toBe('access')
@@ -207,5 +209,13 @@ describe('экран токена', () => {
   it('слова', () => {
     expect(TOKEN_TEXTS.once).toBe('Токен показывается один раз: закроете экран — увидеть его снова будет нельзя.')
     expect(TOKEN_TEXTS.after).toBe('Владельца роутеру назначают потом — в «Обслуживание и доступы» → «Доступ».')
+  })
+})
+
+describe('версия в мастере -- как в листе', () => {
+  it('0.36.0 дописывается до v0.36.0 и проходит проверку', () => {
+    expect(stepError('access', install({ version: '0.36.0' }))).toBe('')
+    expect(provisionRequestBody(install({ version: ' 0.36.0 ' }), 'dacha-1').version).toBe('v0.36.0')
+    expect(provisionSummary(install({ version: '0.36.0' }))[6]).toEqual({ label: 'Версия агента', value: 'v0.36.0' })
   })
 })

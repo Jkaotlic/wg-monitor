@@ -68,7 +68,7 @@ describe('поля листа: форма', () => {
     const root = await mount(reviveLike())
     const pass = root.querySelector('#sheet-field-root_password')
     expect(pass.type).toBe('password')
-    expect(pass.getAttribute('autocomplete')).toBe('off')
+    expect(pass.getAttribute('autocomplete')).toBe('new-password')
     expect(root.querySelector('#sheet-field-awgm_login').type).toBe('text')
     expect(root.querySelector('#sheet-field-expires_days').tagName).toBe('SELECT')
     expect(root.querySelector('#sheet-field-expires_days').value).toBe('30')

@@ -36,11 +36,14 @@ describe('значения формы', () => {
   it('список выбора держит и незнакомое текущее значение', () => {
     const mode = CONNECTION_GROUPS[2].fields.find((f) => f.key === 'deploy_mode')
     const values = connectionSelectOptions(mode, 'awgm').map((o) => o.value)
-    expect(values).toEqual(['', 'awgm', 'pull', 'ssh', 'deferred-awgm'])
+    // Значение уже есть -- «не задано» не предлагаем: очистить поле нельзя,
+    // сервер оставит прежнее.
+    expect(values).toEqual(['awgm', 'pull', 'ssh', 'deferred-awgm'])
+    expect(connectionSelectOptions(mode, '').map((o) => o.value)).toEqual(['', 'awgm', 'pull', 'ssh', 'deferred-awgm'])
     const custom = connectionSelectOptions(mode, 'legacy')
     expect(custom[custom.length - 1]).toEqual({ value: 'legacy', label: 'legacy' })
     const auth = CONNECTION_GROUPS[0].fields.find((f) => f.key === 'awgm_auth')
-    expect(connectionSelectOptions(auth, 'web').map((o) => o.value)).toEqual(['', 'web', 'api-key', 'none'])
+    expect(connectionSelectOptions(auth, 'web').map((o) => o.value)).toEqual(['web', 'api-key', 'none'])
   })
 })
 

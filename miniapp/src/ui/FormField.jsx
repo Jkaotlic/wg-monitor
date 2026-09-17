@@ -9,7 +9,7 @@ export function TextField({ id, label, value, onInput, type = 'text', placeholde
       <input
         id={id}
         type={type === 'password' ? 'password' : 'text'}
-        autocomplete="off"
+        autocomplete={type === 'password' ? 'new-password' : 'off'}
         autocapitalize="off"
         spellcheck={false}
         inputMode={inputMode}

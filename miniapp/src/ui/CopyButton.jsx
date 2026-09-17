@@ -6,9 +6,13 @@ import { copyText } from '../clipboard.js'
 export function CopyButton({ text, label = 'Скопировать', copy = copyText }) {
   const [state, setState] = useState('idle')
   const alive = useRef(true)
+  // Один таймер на кнопку: повторное нажатие сбрасывает прежний, иначе он
+  // погасил бы новое «Скопировано» раньше срока.
+  const timer = useRef(null)
   useEffect(
     () => () => {
       alive.current = false
+      clearTimeout(timer.current)
     },
     [],
   )
@@ -19,7 +23,8 @@ export function CopyButton({ text, label = 'Скопировать', copy = copy
       .then((ok) => {
         if (!alive.current) return
         setState(ok ? 'ok' : 'fail')
-        setTimeout(() => {
+        clearTimeout(timer.current)
+        timer.current = setTimeout(() => {
           if (alive.current) setState('idle')
         }, 2000)
       })

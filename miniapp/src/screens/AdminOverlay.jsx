@@ -1,11 +1,13 @@
+import { useEffect, useState } from 'preact/hooks'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
 import { AccessSection } from './AccessSection.jsx'
 import { ParkSection } from './ParkSection.jsx'
-import { repointRouterAgent } from '../api.js'
+import { fetchAgentConnection, repointRouterAgent } from '../api.js'
 import { localSheet } from '../sheet.js'
 import {
   JOB_SECRET_NOTE,
+  PANEL_ADDRESS_MISSING,
   repointSheetText,
   repointFields,
   repointReady,
@@ -24,8 +26,27 @@ import {
 // «Опасное» свёрнуто (спека, п. 8): перенаправление уводит роутер с этого
 // сервера, и случайно раскрыть его пролистыванием нельзя. Запуск ведёт на
 // «Ход работы» через openLayer (возврат -- сюда же).
-export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages, onOpenRouter }) {
+export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages, onOpenRouter, onOpenRouterConnection }) {
   const router = { id: routerID, nickname: routerName }
+
+  // Перенаправление идёт через терминал панели awg-manager: без записанного
+  // адреса панели сервер откажет no_awgm_url. Адрес знает только
+  // «Подключение агента» (админский маршрут) -- спрашиваем его. null --
+  // неизвестно (не ответил): тогда кнопка есть, и решит сервер.
+  const [panelKnown, setPanelKnown] = useState(null)
+  useEffect(() => {
+    if (!isAdmin || !routerName) return undefined
+    let alive = true
+    setPanelKnown(null)
+    fetchAgentConnection(routerID)
+      .then((conn) => {
+        if (alive) setPanelKnown(Boolean(String(conn?.awgm_url ?? '').trim()))
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [routerID, isAdmin, routerName])
 
   function askRepoint() {
     const text = repointSheetText(router)
@@ -52,7 +73,15 @@ export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClo
   return (
     <Overlay title="Обслуживание и доступы" backLabel="Роутер" onBack={onClose}>
       <div class="screen">
-        {isAdmin && <ParkSection openSheet={openSheet} onOpenRouter={onOpenRouter} currentID={routerID} openLayer={openLayer} />}
+        {isAdmin && (
+          <ParkSection
+            openSheet={openSheet}
+            onOpenRouter={onOpenRouter}
+            currentID={routerID}
+            openLayer={openLayer}
+            onOpenConnection={onOpenRouterConnection}
+          />
+        )}
 
         {/* Настройки агента -- вход только у админа: радиус правки
             router-global, и сервер ответит остальным 404. Сам экран
@@ -115,9 +144,20 @@ export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClo
             <summary>Опасное</summary>
             <Section title="Перенаправить агента">
               <p class="hint">Агент начнёт отправлять отчёты на другой сервер. Этот сервер перестанет его видеть.</p>
-              <button type="button" class="btn btn-danger btn-wide" onClick={askRepoint}>
-                Перенаправить агента
-              </button>
+              {panelKnown === false ? (
+                <>
+                  <p class="hint">{PANEL_ADDRESS_MISSING}</p>
+                  {onOpenAgentConnection && (
+                    <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenAgentConnection}>
+                      Подключение агента
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button type="button" class="btn btn-danger btn-wide" onClick={askRepoint}>
+                  Перенаправить агента
+                </button>
+              )}
             </Section>
           </details>
         )}

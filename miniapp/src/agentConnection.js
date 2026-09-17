@@ -70,9 +70,14 @@ export function connectionFormValues(resp) {
 // Текущее значение, которого нет в списке (старая запись, новый режим
 // сервера), остаётся выбранным: иначе select молча показал бы «не задано»,
 // и сохранение стёрло бы то, чего человек не трогал.
+//
+// Значение уже есть -- «не задано» не предлагаем: пустое поле сервер
+// понимает как «оставить прежнее», и очистка молча не сработала бы.
 export function connectionSelectOptions(field, current) {
-  const options = field?.options ?? []
-  if (!current || options.some((o) => o.value === current)) return options
+  const all = field?.options ?? []
+  if (!current) return all
+  const options = all.filter((o) => o.value !== '')
+  if (options.some((o) => o.value === current)) return options
   return [...options, { value: current, label: current }]
 }
 

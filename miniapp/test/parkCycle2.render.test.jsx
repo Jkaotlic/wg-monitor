@@ -126,3 +126,27 @@ describe('Парк: добавить роутер', () => {
     cleanup(root)
   })
 })
+
+describe('Парк: подтверждение раскатки -- строго, как на сервере', () => {
+  it('регистр и вид дефиса не прощаются, пробелы по краям -- да; формат подсказан', async () => {
+    const { root, sheets } = await mountPark()
+    await act(async () => root.querySelector('.park-backend-actions button').click())
+    expect(sheets[0].confirmStrict).toBe(true)
+    expect(sheets[0].body).toContain('Наберите версию точно: v0.36.0')
+    const sheetRoot = document.createElement('div')
+    document.body.appendChild(sheetRoot)
+    await act(async () => render(<Sheet sheet={sheets[0]} asleep={false} onClose={() => {}} />, sheetRoot))
+    const input = sheetRoot.querySelector('#sheet-confirm-input')
+    const typeIt = async (v) => act(async () => {
+      input.value = v
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const btn = () => [...sheetRoot.querySelectorAll('.sheet-actions button')].pop()
+    await typeIt('V0.36.0')
+    expect(btn().disabled).toBe(true)
+    await typeIt(' v0.36.0 ')
+    expect(btn().disabled).toBe(false)
+    cleanup(sheetRoot)
+    cleanup(root)
+  })
+})

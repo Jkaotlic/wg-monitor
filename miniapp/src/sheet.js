@@ -29,14 +29,26 @@ export function confirmSheet({ routerID, title, body, action, args = {}, buttonL
 // Поле может быть переключателем (type: 'toggle', значение boolean), может
 // появляться по условию (showIf(values)) и нести подсказку, которая следует
 // вводу (hint(values)): «Это откат: на роутере v0.35.0».
-export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '' }) {
-  return { title, body, buttonLabel, danger, confirmPhrase, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, args: {} }
+//
+// confirmStrict -- набор сверяется строго, как на сервере (только пробелы по
+// краям): раскатка бэкенда сравнивает версию без поблажек регистра и дефиса.
+export function localSheet({ title, body, buttonLabel = 'Выполнить', danger = false, confirmPhrase = '', confirmStrict = false, errorText, busyLabel = '', perform, onDone, fields = [], fieldsReady, note = '' }) {
+  return { title, body, buttonLabel, danger, confirmPhrase, confirmStrict, errorText, busyLabel, perform, onDone, fields, fieldsReady, note, args: {} }
 }
 
 export function initialFieldValues(fields) {
   const values = {}
   for (const f of fields ?? []) values[f.name] = f.initial ?? (f.type === 'toggle' ? false : '')
   return values
+}
+
+// Значения после отправки: всё стирается (пароли), кроме полей с keep: true --
+// несекретного ввода вроде версии, который после отказа сервера перенабирать
+// незачем.
+export function keptFieldValues(fields, values) {
+  const fresh = initialFieldValues(fields)
+  for (const f of fields ?? []) if (f.keep === true && f.type !== 'password') fresh[f.name] = values?.[f.name] ?? fresh[f.name]
+  return fresh
 }
 
 export function fieldsReady(sheet, values) {
@@ -53,6 +65,10 @@ export function fieldsReady(sheet, values) {
 // приводится с обеих сторон: имя роутера, скопированное из текста, может
 // нести U+2011, а набранное руками -- обычный.
 export function confirmReady(sheet, typed) {
+  if (sheet?.confirmStrict) {
+    const exact = String(sheet.confirmPhrase ?? '').trim()
+    return !exact || String(typed ?? '').trim() === exact
+  }
   const phrase = plainHyphens(sheet?.confirmPhrase ?? '').trim().toLowerCase()
   if (!phrase) return true
   return plainHyphens(typed).trim().toLowerCase() === phrase

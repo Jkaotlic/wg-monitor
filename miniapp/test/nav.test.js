@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, normalizeTab, escapeAction } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, normalizeTab, escapeAction, navPinned } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -264,5 +264,47 @@ describe('слои парка', () => {
     const s = { ...base, routerID: 1, overlay: 'job', overlayParams: { jobId: 'j' } }
     expect('overlayParams' in navReducer(s, { type: 'router', id: 2 })).toBe(false)
     expect(navReducer(s, { type: 'tab', tab: 'diag', closeOverlay: true })).toEqual({ routerID: 1, tab: 'diag', overlay: null, sheet: null })
+  })
+})
+
+// Закреплённый слой: ожидание раскатки всегда, мастер -- пока идёт отправка.
+// Уйти с него нельзя ни «назад», ни Esc, ни выбором роутера или вкладки, ни
+// «назад» браузера; выпускает только действие с unpin.
+describe('закреплённый слой', () => {
+  const base = { routerID: 3, tab: 'router', overlay: null, sheet: null }
+  const deploy = { ...base, overlay: 'backenddeploy', overlayParams: { targetVersion: 'v0.36.0', returnTo: 'admin' } }
+  const busyWizard = { ...base, overlay: 'provision', overlayParams: { returnTo: 'admin', pinned: true } }
+
+  it('navPinned: раскатка всегда, мастер -- только с pinned', () => {
+    expect(navPinned(deploy)).toBe(true)
+    expect(navPinned(busyWizard)).toBe(true)
+    expect(navPinned({ ...base, overlay: 'provision', overlayParams: { returnTo: 'admin' } })).toBe(false)
+    expect(navPinned(base)).toBe(false)
+  })
+
+  it('pin/unpin мастера кладёт флаг в параметры слоя', () => {
+    const s = navReducer({ ...base, overlay: 'provision', overlayParams: { returnTo: 'admin' } }, { type: 'pin', pinned: true })
+    expect(s.overlayParams).toEqual({ returnTo: 'admin', pinned: true })
+    expect(navReducer(s, { type: 'pin', pinned: false }).overlayParams).toEqual({ returnTo: 'admin' })
+    expect(navReducer(base, { type: 'pin', pinned: true })).toBe(base)
+  })
+
+  for (const [name, s] of [['раскатка', deploy], ['мастер в работе', busyWizard]]) {
+    it(`${name}: назад, Esc, роутер, вкладка, чужой слой и popstate -- без изменений`, () => {
+      expect(navReducer(s, { type: 'back' })).toBe(s)
+      expect(backButtonVisible(s)).toBe(false)
+      expect(escapeAction(s, { wide: true })).toBe(null)
+      expect(navReducer(s, { type: 'router', id: 9 })).toBe(s)
+      expect(navReducer(s, { type: 'tab', tab: 'diag', closeOverlay: true })).toBe(s)
+      expect(navReducer(s, { type: 'tab', tab: 'diag' })).toBe(s)
+      expect(navReducer(s, { type: 'overlay', overlay: 'admin' })).toBe(s)
+      expect(navReducer(s, { type: 'init', state: base, source: 'popstate' })).toBe(s)
+    })
+  }
+
+  it('действие с unpin выпускает: мастер -- в «Ход работы», раскатка -- «Вернуться»', () => {
+    const job = navReducer(busyWizard, { type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 't', returnTo: 'admin' }, unpin: true })
+    expect(job).toEqual({ ...base, overlay: 'job', overlayParams: { jobId: 'j1', title: 't', returnTo: 'admin' } })
+    expect(navReducer(deploy, { type: 'overlay', overlay: 'admin', unpin: true })).toEqual({ ...base, overlay: 'admin' })
   })
 })

@@ -54,3 +54,13 @@ describe('localSheet', () => {
     expect(withoutLabel.busyLabel).toBe('')
   })
 })
+
+describe('confirmReady: строгий набор', () => {
+  it('confirmStrict -- только пробелы по краям', async () => {
+    const { confirmReady } = await import('../src/sheet.js')
+    const sheet = { confirmPhrase: 'v0.36.0', confirmStrict: true }
+    expect(confirmReady(sheet, ' v0.36.0 ')).toBe(true)
+    expect(confirmReady(sheet, 'V0.36.0')).toBe(false)
+    expect(confirmReady({ confirmPhrase: 'dacha-1', confirmStrict: true }, 'dacha‑1')).toBe(false)
+  })
+})

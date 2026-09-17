@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'preact/hooks'
 import { useCommand } from '../useCommand.js'
-import { sheetPhase, confirmReady, initialFieldValues, fieldsReady } from '../sheet.js'
+import { sheetPhase, confirmReady, initialFieldValues, fieldsReady, keptFieldValues } from '../sheet.js'
 import { commandOutcomeLabel } from '../labels.js'
 import { maintenanceOutcomeLabel, commandErrorText, commandDeadlineMs } from '../maintenance.js'
 import { Q, Quoted } from './Q.jsx'
@@ -94,7 +94,7 @@ export function Sheet({ sheet, asleep, onClose }) {
       if (fields.length) {
         // Ссылка -- сразу на чистые значения: стирание при уходе листа не
         // должно задеть снимок, который ещё не дошёл до perform.
-        const fresh = initialFieldValues(fields)
+        const fresh = keptFieldValues(fields, values)
         valuesRef.current = fresh
         setValues(fresh)
       }
@@ -189,7 +189,7 @@ export function Sheet({ sheet, asleep, onClose }) {
                       <input
                         id={`sheet-field-${f.name}`}
                         type={f.type === 'password' ? 'password' : 'text'}
-                        autocomplete="off"
+                        autocomplete={f.type === 'password' ? 'new-password' : 'off'}
                         autocapitalize="off"
                         spellcheck={false}
                         placeholder={f.placeholder ?? ''}

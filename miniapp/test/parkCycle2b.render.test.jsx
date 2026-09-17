@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   reinstallReply: null,
   repoints: [],
   repointReply: null,
+  conn: { awgm_url: 'https://router.example.com' },
 }))
 
 vi.mock('../src/api.js', async (importOriginal) => {
@@ -23,6 +24,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     ...real,
     fetchFleet: () => Promise.resolve(mocks.fleet),
     fetchAccess: () => Promise.resolve({ owner: null, operators: [] }),
+    fetchAgentConnection: () => Promise.resolve(mocks.conn),
     updateRouterAgent: (id, confirm, target, allow) => {
       mocks.updates.push({ id, confirm, target, allow })
       return reply(mocks.updateReply)
@@ -65,14 +67,14 @@ export const FLEET = {
 
 export const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)) })
 
-export async function mountPark({ mode = 'telegram', openLayer } = {}) {
+export async function mountPark({ mode = 'telegram', openLayer, onOpenConnection } = {}) {
   const sheets = []
   const root = document.createElement('div')
   document.body.appendChild(root)
   await act(async () => {
     render(
       <AppContext.Provider value={{ mode, wide: false }}>
-        <ParkSection openSheet={(s) => sheets.push(s)} openLayer={openLayer} />
+        <ParkSection openSheet={(s) => sheets.push(s)} openLayer={openLayer} onOpenConnection={onOpenConnection} />
       </AppContext.Provider>,
       root,
     )
@@ -117,6 +119,7 @@ beforeEach(() => {
   mocks.reinstallReply = { job_id: 'job-1' }
   mocks.repoints = []
   mocks.repointReply = { job_id: 'job-2' }
+  mocks.conn = { awgm_url: 'https://router.example.com' }
 })
 
 describe('Парк: сторож и отложенное', () => {
@@ -245,7 +248,9 @@ describe('Парк: переустановить агент сейчас', () =>
     expect(sheet.danger).toBe(true)
     expect(sheet.note).toBe('Пароли уходят на сервер один раз и не сохраняются.')
     const s = await mountSheet(sheet)
-    for (const input of s.root.querySelectorAll('input')) expect(input.getAttribute('autocomplete')).toBe('off')
+    for (const input of s.root.querySelectorAll('input')) {
+      expect(input.getAttribute('autocomplete')).toBe(input.type === 'password' ? 'new-password' : 'off')
+    }
     await fill(s.root, '#sheet-confirm-input', 'home')
     expect(primary(s.root).disabled).toBe(true)
     await fill(s.root, '#sheet-field-root_password', SECRET)
@@ -284,21 +289,22 @@ describe('Парк: переустановить агент сейчас', () =>
   })
 })
 
+async function mountAdmin(openLayer, onOpenAgentConnection) {
+  const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
+  const sheets = []
+  const root = document.createElement('div')
+  document.body.appendChild(root)
+  await act(async () => {
+    render(
+      <AdminOverlay routerID={22} routerName="home" isAdmin onClose={() => {}} openSheet={(s) => sheets.push(s)} openLayer={openLayer} onOpenAgentConnection={onOpenAgentConnection} />,
+      root,
+    )
+  })
+  await flush()
+  return { root, sheets }
+}
+
 describe('Обслуживание: перенаправить агента', () => {
-  async function mountAdmin(openLayer) {
-    const { AdminOverlay } = await import('../src/screens/AdminOverlay.jsx')
-    const sheets = []
-    const root = document.createElement('div')
-    document.body.appendChild(root)
-    await act(async () => {
-      render(
-        <AdminOverlay routerID={22} routerName="home" isAdmin onClose={() => {}} openSheet={(s) => sheets.push(s)} openLayer={openLayer} />,
-        root,
-      )
-    })
-    await flush()
-    return { root, sheets }
-  }
 
   it('свёрнуто под «Опасное»; адрес без https не пускает; запуск открывает «Ход работы»', async () => {
     const opened = []
@@ -335,6 +341,57 @@ describe('Обслуживание: перенаправить агента', ()
     await act(async () => render(<AdminOverlay routerID={22} routerName="home" isAdmin={false} onClose={() => {}} openSheet={() => {}} />, root))
     await flush()
     expect(root.querySelector('details.danger-zone')).toBe(null)
+    cleanup(root)
+  })
+})
+
+describe('без адреса панели awg-manager', () => {
+  it('Парк: вместо «Переустановить агент» -- строка и переход в «Подключение агента»', async () => {
+    mocks.fleet = { ...FLEET, routers: FLEET.routers.map((r) => (r.nickname === 'car' ? { ...r, panel_address_known: false } : r)) }
+    const opened = []
+    const { root } = await mountPark({ openLayer: () => {}, onOpenConnection: (id) => opened.push(id) })
+    const car = rowOf(root, 'car')
+    expect(buttons(car, 'Переустановить агент')).toHaveLength(0)
+    expect(car.textContent).toContain('Сначала задайте адрес панели в «Подключении агента».')
+    await act(async () => buttons(car, 'Подключение агента')[0].click())
+    expect(opened).toEqual([23])
+    expect(buttons(rowOf(root, 'home'), 'Переустановить агент')).toHaveLength(1)
+    cleanup(root)
+  })
+
+  it('Обслуживание: адреса нет -- вместо «Перенаправить агента» строка и переход', async () => {
+    mocks.conn = { awgm_url: '' }
+    let openedConn = 0
+    const { root } = await mountAdmin(() => {}, () => openedConn++)
+    const zone = root.querySelector('details.danger-zone')
+    expect(buttons(zone, 'Перенаправить агента')).toHaveLength(0)
+    expect(zone.textContent).toContain('Сначала задайте адрес панели в «Подключении агента».')
+    await act(async () => buttons(zone, 'Подключение агента')[0].click())
+    expect(openedConn).toBe(1)
+    cleanup(root)
+  })
+})
+
+describe('«Другая версия…»: сервер считает откатом то, что клиент -- обновлением', () => {
+  it('после downgrade_rejected появляется переключатель, повтор уходит с allow_downgrade', async () => {
+    const { ApiError } = await import('../src/api.js')
+    mocks.updateReply = new ApiError(400, 'downgrade_rejected', 'x', 'Это откат версии — подтвердите откат')
+    const { root, sheets } = await mountPark()
+    await act(async () => buttons(rowOf(root, 'home'), 'Другая версия…')[0].click())
+    const s = await mountSheet(sheets[0])
+    await fill(s.root, '#sheet-field-target_version', 'v0.36.0')
+    await fill(s.root, '#sheet-confirm-input', 'home')
+    expect(s.root.querySelector('#sheet-field-allow_downgrade')).toBe(null)
+    await act(async () => primary(s.root).click())
+    await flush()
+    expect(s.root.querySelector('#sheet-field-allow_downgrade')).not.toBe(null)
+    expect(primary(s.root).disabled).toBe(true)
+    mocks.updateReply = { queued: true, deferred: false, target_version: 'v0.36.0' }
+    await fill(s.root, '#sheet-field-allow_downgrade', true)
+    await act(async () => primary(s.root).click())
+    await flush()
+    expect(mocks.updates.at(-1)).toEqual({ id: 22, confirm: 'home', target: 'v0.36.0', allow: true })
+    cleanup(s.root)
     cleanup(root)
   })
 })

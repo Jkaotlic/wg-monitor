@@ -63,3 +63,27 @@ describe('поле-переключатель, showIf и подсказка', ()
     root.remove()
   })
 })
+
+describe('поле keep переживает отправку', () => {
+  it('после отказа значение keep на месте, остальные стёрты', async () => {
+    const fields = [
+      { name: 'version', label: 'Версия', type: 'text', keep: true },
+      { name: 'pw', label: 'Пароль', type: 'password' },
+    ]
+    const sheet = localSheet({ title: 't', body: 'b', fields, perform: () => Promise.reject(new Error('x')) })
+    const root = await mount(sheet)
+    for (const [id, v] of [['version', 'v1.2.3'], ['pw', 'secret']]) {
+      const el = root.querySelector(`#sheet-field-${id}`)
+      await act(async () => {
+        el.value = v
+        el.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+    }
+    await act(async () => primary(root).click())
+    await flush()
+    expect(root.querySelector('#sheet-field-version').value).toBe('v1.2.3')
+    expect(root.querySelector('#sheet-field-pw').value).toBe('')
+    render(null, root)
+    root.remove()
+  })
+})

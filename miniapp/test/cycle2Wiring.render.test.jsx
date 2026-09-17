@@ -115,7 +115,9 @@ describe('OverlayHost: слои парка', () => {
     const p = mocks.props.provision
     expect(p.backLabel).toBe('Обслуживание')
     p.onStarted({ jobId: 'j1', nickname: 'dacha-1' })
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'admin' } })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка агента на «dacha-1»', returnTo: 'admin' }, unpin: true })
+    p.onBusy(true)
+    expect(h.actions.pop()).toEqual({ type: 'pin', pinned: true })
     p.onClose()
     expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
     p.onRegistered()
@@ -145,7 +147,7 @@ describe('OverlayHost: слои парка', () => {
     const root = await mount(h.node)
     expect(root.querySelector('.stub-deploy').textContent).toBe('раскатка v0.36.0')
     mocks.props.deploy.onBack()
-    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin' })
+    expect(h.actions.pop()).toEqual({ type: 'overlay', overlay: 'admin', unpin: true })
     cleanup(root)
   })
 
@@ -186,6 +188,14 @@ describe('OverlayHost: слои парка', () => {
     cleanup(root)
   })
 
+  it('Парк в Обслуживании: «Подключение агента» другого роутера -- выбрать роутер и открыть слой', async () => {
+    const h = host(nav({ routerID: 1, overlay: 'admin' }))
+    const root = await mount(h.node)
+    mocks.props.park.onOpenConnection(2)
+    expect(h.actions.slice(-2)).toEqual([{ type: 'router', id: 2 }, { type: 'overlay', overlay: 'agentconn' }])
+    cleanup(root)
+  })
+
   it('Обслуживание не-админу: входа в подключение нет', async () => {
     const h = host(nav({ routerID: 1, overlay: 'admin' }), { isAdmin: false })
     const root = await mount(h.node)
@@ -203,6 +213,12 @@ describe('раскладки', () => {
     expect(root.querySelector('.main-content.main-content-narrow .stub-provision')).toBeTruthy()
     expect(root.querySelector('.fleet-home')).toBe(null)
     expect(root.querySelector('.side-link.side-link-active').textContent).toBe('Парк')
+    cleanup(root)
+  })
+
+  it('заглушка «Пакеты» не-админу не подсвечивает Парк', async () => {
+    const root = await mount(<WideLayout mode="web" nav={nav({ routerID: 1, overlay: 'packages' })} dispatch={() => {}} routers={ROUTERS} isAdmin={false} />)
+    expect(root.querySelector('.side-link-active')).toBe(null)
     cleanup(root)
   })
 
