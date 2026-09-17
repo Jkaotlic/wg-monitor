@@ -2,6 +2,7 @@ package backend
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -212,8 +213,32 @@ func TestSelfHostedIsNotAReplaceOrRepairProvider(t *testing.T) {
 	}
 	deps, ownedID, tgUser := replaceDeps(t)
 	rec := postReplace(t, NewMux(deps), ownedID, tgUser, `{"provider":"selfhosted","option_id":"dacha","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
-	if rec.Code != http.StatusBadRequest {
+	var body struct {
+		Code string `json:"code"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &body)
+	if rec.Code != http.StatusBadRequest || body.Code != "unknown_provider" {
 		t.Fatalf("мастер замены принял свой сервер: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Движок починки перевыпускает линию по её происхождению. Выпуск на свой
+// сервер происхождения не пишет -- значит, починке нечем его перевыпустить
+// (а если строка когда-нибудь появится, callbacks.Router.IssueConfig
+// «selfhosted» всё равно откажет: TestIssueConfigRefusesSelfHosted).
+func TestSelfHostedIssueLeavesNoOriginForRepair(t *testing.T) {
+	env := newCabinetEnv(t)
+	seedVPS(env)
+	rec := env.do(t, cabAdmin, http.MethodPost, "/v1/miniapp/routers/{id}/vpn/issue", `{"provider":"selfhosted","instance_id":"dacha"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("%d %s", rec.Code, rec.Body.String())
+	}
+	origins, err := env.d.TunnelOrigins().List(env.ownedID)
+	if err != nil || len(origins) != 0 {
+		t.Fatalf("выпуск на свой сервер записал происхождение: %+v err=%v", origins, err)
+	}
+	if _, _, ok := LinkRepairOrigin(env.d).Get(env.ownedID, "dacha_router-owned"); ok {
+		t.Fatal("починка видит происхождение своего сервера")
 	}
 }
 
