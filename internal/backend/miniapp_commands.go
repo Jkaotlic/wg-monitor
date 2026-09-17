@@ -97,7 +97,10 @@ var miniappCommandAllowlist = map[string]bool{
 	"version_audit": true,
 	"router_doctor": true,
 	"hrneo_doctor":  true,
-	"pingcheck_now": true,
+	// Список правил HydraRoute Neo (цикл 4): только чтение, аргументов нет.
+	// Видят все, у кого есть доступ к роутеру.
+	"hrneo_inventory": true,
+	"pingcheck_now":   true,
 
 	// Три мутирующих. Радиус тот же, что у tunnel_restart, и ограничен так
 	// же: клиент присылает tunnel_id, ndms_name сервер достаёт из событий
@@ -317,6 +320,13 @@ func miniappCommandHandler(d Deps) http.HandlerFunc {
 		if !ok {
 			return
 		}
+		// Узкий круг по аргументам, а не по имени действия: запуск и остановка
+		// HydraRoute Neo -- только админ и владелец (цикл 4, решение 1).
+		if miniappOwnerOnlyCommand(req.Action, args) && !miniappIsOwner(d, telegramUserID, routerID) {
+			writeJSONError(w, http.StatusForbidden, "owner_only",
+				"this action changes the device itself and is available to the router's owner only")
+			return
+		}
 		// miniappRouterAllowed's admin branch grants access without checking that
 		// routerID actually exists (miniappIsAdmin short-circuits before
 		// RouterAccessRole), so an admin hitting a stale/typo'd id can still reach
@@ -442,7 +452,7 @@ func miniappCommandResultHandler(d Deps) http.HandlerFunc {
 			// будущее: owner-only действие с чувствительным выводом заведётся
 			// в эту карту, а не отдельной веткой, и гейт прикроет его сразу и
 			// на постановке, и здесь, на опросе.
-			if miniappOwnerOnlyActions[cmd.Action] && !miniappIsOwner(d, telegramUserID, routerID) {
+			if (miniappOwnerOnlyActions[cmd.Action] || miniappOwnerOnlyCommand(cmd.Action, cmd.Args)) && !miniappIsOwner(d, telegramUserID, routerID) {
 				writeJSONError(w, http.StatusForbidden, "owner_only",
 					"this action changes the device itself and is available to the router's owner only")
 				return
@@ -534,12 +544,29 @@ func miniappResolveTunnelArgs(d Deps, routerID int64, tunnelID string) (map[stri
 	return nil, false
 }
 
-// miniappServiceRestartNames -- что мини-апп вправе перезапустить. hrneo_start и
-// hrneo_stop агент тоже умеет, но экрану они не нужны, а список -- граница.
+// miniappServiceRestartNames -- что мини-апп вправе перезапустить, запустить
+// или остановить. Список -- граница: имя вне него до агента не доезжает.
+// hrneo_start и hrneo_stop добавлены циклом 4 (блок HydraRoute Neo во
+// вкладке «Маршруты») и уже круга остальных (miniappOwnerOnlyCommand).
 var miniappServiceRestartNames = map[string]bool{
-	"hrneo":  true,
-	"awgmgr": true,
-	"router": true,
+	"hrneo":       true,
+	"hrneo_start": true,
+	"hrneo_stop":  true,
+	"awgmgr":      true,
+	"router":      true,
+}
+
+// miniappOwnerOnlyCommand -- действие, которое оператору не положено из-за
+// аргументов: запуск и остановка HydraRoute Neo. Остановка выключает правила
+// по имени сайта на весь роутер, поэтому круг -- админ и владелец, как у
+// удаления VPN-туннеля (цикл 4, решение 1). Проверяется и на постановке, и на
+// опросе результата.
+func miniappOwnerOnlyCommand(action string, args map[string]any) bool {
+	if action != "service_restart" {
+		return false
+	}
+	name, _ := args["name"].(string)
+	return name == "hrneo_start" || name == "hrneo_stop"
 }
 
 // sanitizeOpkgFeedURL -- адрес мёртвого фида для opkg_feed_disable. Агент только

@@ -928,7 +928,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		args = map[string]any{}
 	}
 	switch action {
-	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status":
+	case "diag_now", "force_recheck", "check_via_tunnel", "check_direct", "pingcheck_now", "pingcheck_status", "router_doctor", "hrneo_doctor", "route_status", "tunnels_status", "hrneo_inventory":
 		return map[string]any{}, true
 	case "dns_reset":
 		// Сброс DNS принимает ровно один аргумент -- предпросмотр. Раньше он
@@ -1004,7 +1004,7 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 	case "service_restart":
 		name := strings.TrimSpace(argString(args, "name"))
 		if !miniappServiceRestartNames[name] {
-			writeJSONError(w, http.StatusBadRequest, "invalid_service", "name must be hrneo, awgmgr or router")
+			writeJSONError(w, http.StatusBadRequest, "invalid_service", "name must be hrneo, hrneo_start, hrneo_stop, awgmgr or router")
 			return nil, false
 		}
 		return map[string]any{"name": name}, true
@@ -1116,6 +1116,13 @@ func sanitizeWizardCommandArgs(w http.ResponseWriter, action string, args map[st
 		}
 		if src == dst {
 			writeJSONError(w, http.StatusBadRequest, "same_route_id", "src_tunnel_id and dst_tunnel_id must be different")
+			return nil, false
+		}
+		// «Без туннеля» (WAN/system) -- только источник: агент собирает такие
+		// правила по всем прочим интерфейсам, а перенести их «в WAN» не умеет
+		// (RouteRebind резолвит dst как настоящий интерфейс).
+		if dst == wire.RouteOtherID {
+			writeJSONError(w, http.StatusBadRequest, "invalid_route_id", "dst_tunnel_id cannot be the WAN/system bucket")
 			return nil, false
 		}
 		return map[string]any{"src_tunnel_id": src, "dst_tunnel_id": dst}, true
