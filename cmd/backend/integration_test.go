@@ -85,9 +85,7 @@ func TestStage2EndToEnd(t *testing.T) {
 		FailThreshold:     3,
 		RecoveryThreshold: 2,
 	})
-	router := callbacks.NewRouter(d, tgC, callbacks.Config{
-		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
-	})
+	router := callbacks.NewRouter(d, tgC, callbacks.Config{AdminUserID: 555})
 	poller := realert.NewPoller(d, tgC, realert.Config{
 		ChatID: -100, RealertEvery: 6 * time.Hour, TickEvery: time.Second,
 	})
@@ -223,17 +221,11 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 	backendSrv := httptest.NewServer(mux)
 	defer backendSrv.Close()
 
-	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
-		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
-	})
-
-	q := &tg.CallbackQuery{
-		ID:      "cbk-force-recheck",
-		From:    tg.User{ID: 555},
-		Message: tg.Message{MessageID: 4242, Chat: tg.Chat{ID: -100}, Text: "🔴 alert"},
-		Data:    fmt.Sprintf("force_recheck:%d:agent_heartbeat", uid),
+	// Команды ставит мини-апп (кнопок в боте больше нет, цикл 5): очередь
+	// напрямую -- тот же путь, что у /v1/miniapp/routers/{id}/commands.
+	if err := queue.Enqueue(uid, wire.Command{ID: "cmd-force-recheck", Action: "force_recheck", Args: map[string]any{}, IssuedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
 	}
-	router.HandleCallback(context.Background(), q)
 
 	agentClient := agent.NewClient(backendSrv.URL, tok, "test-agent", 5*time.Second)
 	cmd, err := agentClient.PollCommand(context.Background(), 2)
@@ -270,210 +262,11 @@ func TestCommandChannelEndToEnd(t *testing.T) {
 	}
 }
 
-// TestCommandResultRelayEndToEnd extends TestCommandChannelEndToEnd to cover
-// the v0.6.0 relay path: after the agent POSTs result, the backend must invoke
-// the configured TGNotifier with a MessageRef whose MessageID equals the
-// original alert message id. This is the test that closes the "жму diag —
-// молчит" symptom against regression.
-func TestCommandResultRelayEndToEnd(t *testing.T) {
-	tmp := t.TempDir() + "/relay.db"
-	d, err := db.Open(tmp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer d.Close()
-	const tok = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-	uid, err := d.Users().Insert("vasya", tok, "1.2.3.4", "nwg0")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	queue := bcmd.New()
-
-	rec := &recordingNotifier{}
-	mux := backend.NewMux(backend.Deps{
-		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
-		DB:          d,
-		Dispatcher:  noopDispatcher{},
-		CommandSink: queue,
-		TGNotifier:  rec,
-		UI:          backend.UIConfig{DiagMaxChars: 3500},
-		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
-	})
-	backendSrv := httptest.NewServer(mux)
-	defer backendSrv.Close()
-
-	awgFake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/diagnostics/result" {
-			w.WriteHeader(200)
-			_, _ = w.Write([]byte(`{"success":true,"data":"diagnostics: all OK"}`))
-			return
-		}
-		w.WriteHeader(404)
-	}))
-	defer awgFake.Close()
-
-	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
-		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
-	})
-
-	// 1. Operator taps Diag on the original alert message_id=4242.
-	tid := int64(11)
-	q := &tg.CallbackQuery{
-		ID:   "cbk-diag",
-		From: tg.User{ID: 555},
-		Message: tg.Message{
-			MessageID: 4242, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-			Text: "🔴 [vasya] tunnel_amnezia — DOWN",
-		},
-		Data: fmt.Sprintf("diag_now:%d:tunnel_amnezia_for_awg2", uid),
-	}
-	router.HandleCallback(context.Background(), q)
-
-	// 2. Agent polls + runs + posts.
-	agentClient := agent.NewClient(backendSrv.URL, tok, "test-agent", 5*time.Second)
-	cmd, err := agentClient.PollCommand(context.Background(), 2)
-	if err != nil || cmd == nil {
-		t.Fatalf("PollCommand: %v cmd=%+v", err, cmd)
-	}
-	runner := &actions.Runner{AwgClient: awgmgr.New(awgFake.URL)}
-	res := runner.Execute(context.Background(), *cmd)
-	if res.Status != "ok" {
-		t.Fatalf("expected ok, got %+v", res)
-	}
-	if err := agentClient.PostResult(context.Background(), res); err != nil {
-		t.Fatalf("PostResult: %v", err)
-	}
-
-	// 3. Wait for the async relay to fire (handler kicks goroutine).
-	if got := waitForRelay(t, rec.calls, 1, 2*time.Second); got != 1 {
-		t.Fatalf("expected 1 NotifyCommandResult call, got %d", got)
-	}
-	got := rec.last()
-	if got.ref.ChatID != -100 || got.ref.MessageID != 4242 {
-		t.Errorf("ref mis-routed: chat=%d msg=%d (want -100, 4242)", got.ref.ChatID, got.ref.MessageID)
-	}
-	if got.ref.ThreadID == nil || *got.ref.ThreadID != 11 {
-		t.Errorf("thread id lost: %+v", got.ref.ThreadID)
-	}
-	if got.action != "diag_now" {
-		t.Errorf("action: got %q want diag_now", got.action)
-	}
-}
-
-type recordingNotifier struct {
-	mu      sync.Mutex
-	records []notifyCall
-}
-
-type notifyCall struct {
-	ref      bcmd.MessageRef
-	action   string
-	result   wire.CommandResult
-	maxChars int
-}
-
-func (r *recordingNotifier) NotifyCommandResult(ctx context.Context, ref bcmd.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.records = append(r.records, notifyCall{ref: ref, action: action, result: result, maxChars: maxChars})
-	return nil
-}
-
-func (r *recordingNotifier) calls() int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return len(r.records)
-}
-
-func (r *recordingNotifier) last() notifyCall {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.records[len(r.records)-1]
-}
-
 // noopDispatcher: minimal Dispatcher impl (this test doesn't exercise the FSM).
 type noopDispatcher struct{}
 
 func (noopDispatcher) Handle(_ context.Context, _ int64, _, _ string, _ state.Transition, _ wire.Check) error {
 	return nil
-}
-
-// noopTG fulfils callbacks.TGClient. HandleCallback calls AnswerCallbackQuery
-// and EditMessageText after a successful action; we ignore both for this test.
-type noopTG struct{}
-
-func (noopTG) SendMessage(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64) (int64, error) {
-	return 1, nil
-}
-func (noopTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _ *int64, _ string, _ string, _ *int64, _ any) (int64, error) {
-	return 1, nil
-}
-func (noopTG) DeleteMessage(_ context.Context, _, _ int64) error        { return nil }
-func (noopTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
-func (noopTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
-	return nil
-}
-func (noopTG) GetUpdates(_ context.Context, _ int64, _ int) ([]tg.Update, error) {
-	return nil, nil
-}
-func (noopTG) GetFile(_ context.Context, _ string) (string, error)      { return "", nil }
-func (noopTG) DownloadFile(_ context.Context, _ string) ([]byte, error) { return nil, nil }
-func (noopTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
-	return 0, nil
-}
-
-// capturingTG is a TGClient that records SendMessageWithReplyKeyboard calls
-// so tests can assert on rendered text and markup.
-type capturingTG struct {
-	mu   sync.Mutex
-	sent []tgSentMsg
-}
-
-type tgSentMsg struct {
-	text   string
-	markup any
-}
-
-func (c *capturingTG) SendMessage(_ context.Context, _ int64, _ *int64, text, _ string, _ *int64) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.sent = append(c.sent, tgSentMsg{text: text})
-	return int64(len(c.sent)), nil
-}
-func (c *capturingTG) SendMessageWithReplyKeyboard(_ context.Context, _ int64, _ *int64, text, _ string, _ *int64, markup any) (int64, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.sent = append(c.sent, tgSentMsg{text: text, markup: markup})
-	return int64(len(c.sent)), nil
-}
-func (c *capturingTG) DeleteMessage(_ context.Context, _, _ int64) error        { return nil }
-func (c *capturingTG) AnswerCallbackQuery(_ context.Context, _, _ string) error { return nil }
-func (c *capturingTG) EditMessageText(_ context.Context, _, _ int64, _ string, _ string, _ *tg.InlineKeyboardMarkup) error {
-	return nil
-}
-func (c *capturingTG) GetUpdates(_ context.Context, _ int64, _ int) ([]tg.Update, error) {
-	return nil, nil
-}
-func (c *capturingTG) GetFile(_ context.Context, _ string) (string, error)      { return "", nil }
-func (c *capturingTG) DownloadFile(_ context.Context, _ string) ([]byte, error) { return nil, nil }
-func (c *capturingTG) CreateForumTopic(_ context.Context, _ int64, _ string, _ int) (int64, error) {
-	return 0, nil
-}
-
-func (c *capturingTG) calls() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.sent)
-}
-
-func (c *capturingTG) lastSent() (tgSentMsg, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.sent) == 0 {
-		return tgSentMsg{}, false
-	}
-	return c.sent[len(c.sent)-1], true
 }
 
 // TestIntegration_DiagNow_FreshRunNoRestart verifies the diag_now state
@@ -536,41 +329,20 @@ func TestIntegration_DiagNow_FreshRunNoRestart(t *testing.T) {
 
 	queue := bcmd.New()
 
-	// Real callbacks.Notifier with a capturing TG so we can inspect rendered text + markup.
-	capTG := &capturingTG{}
-	notifier := callbacks.NewNotifier(capTG)
-
-	router := callbacks.NewRouterWithSink(d, noopTG{}, queue, callbacks.Config{
-		ChatID: -100, AdminUserID: 555, MuteCutoffHour: 9,
-	})
-	// Share the diagCache between router and notifier so the "Полный отчёт"
-	// token written by the notifier is retrievable via the router (standard main.go wiring).
-	notifier.DiagCache = router.DiagCache()
-
 	mux := backend.NewMux(backend.Deps{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DB:          d,
 		Dispatcher:  noopDispatcher{},
 		CommandSink: queue,
-		TGNotifier:  notifier,
-		UI:          backend.UIConfig{DiagMaxChars: 3500},
 		Thresholds:  state.Thresholds{Fail: 3, Recovery: 2},
 	})
 	backendSrv := httptest.NewServer(mux)
 	defer backendSrv.Close()
 
-	// 1. Operator taps Diag on the original alert message.
-	tid := int64(22)
-	q := &tg.CallbackQuery{
-		ID:   "cbk-diag-autotrigger",
-		From: tg.User{ID: 555},
-		Message: tg.Message{
-			MessageID: 5050, Chat: tg.Chat{ID: -100}, MessageThreadID: &tid,
-			Text: "🔴 [natasha] tunnel_amnezia — DOWN",
-		},
-		Data: fmt.Sprintf("diag_now:%d:tunnel_amnezia_for_awg2", uid),
+	// 1. Команду ставит мини-апп своим маршрутом -- очередь напрямую.
+	if err := queue.Enqueue(uid, wire.Command{ID: "cmd-diag-now", Action: "diag_now", Args: map[string]any{}, IssuedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
 	}
-	router.HandleCallback(context.Background(), q)
 
 	// 2. Agent polls command and runs it through a fresh Runner (no
 	// poll-tuning fields left to set — DiagFresh's own budget is the 75s
@@ -596,9 +368,9 @@ func TestIntegration_DiagNow_FreshRunNoRestart(t *testing.T) {
 		t.Fatalf("PostResult: %v", err)
 	}
 
-	// 3. Wait for the async relay to fire.
-	if got := waitForRelay(t, capTG.calls, 1, 3*time.Second); got < 1 {
-		t.Fatalf("expected at least 1 TG message, got %d", got)
+	// 3. Итог записан в очередь -- его заберёт опрос мини-аппа.
+	if got, ok := queue.AwaitResult(context.Background(), uid, cmd.ID, time.Second); !ok || got == nil || got.Status != "ok" {
+		t.Fatalf("итог diag_now не записан: %+v", got)
 	}
 
 	// 4. Assert hit counters: exactly one fresh stream run, one result read,
@@ -616,39 +388,5 @@ func TestIntegration_DiagNow_FreshRunNoRestart(t *testing.T) {
 	}
 	if rnh != 0 {
 		t.Errorf("runHits: want 0 (must never call /api/diagnostics/run), got %d", rnh)
-	}
-
-	// 5. Assert rendered TG message carries the parsed summary. The panel
-	// version is engineering: the owner's summary no longer shows it — it is
-	// enough that the parsed card arrived rather than raw JSON.
-	msg, ok := capTG.lastSent()
-	if !ok {
-		t.Fatal("no TG message captured")
-	}
-	if !strings.Contains(msg.text, "📊 Диагностика") {
-		t.Errorf("TG text missing '📊 Диагностика': %q", msg.text)
-	}
-	if !strings.Contains(msg.text, "отчёт получен") {
-		t.Errorf("TG text missing parsed summary 'отчёт получен': %q", msg.text)
-	}
-
-	// 6. Assert inline keyboard has "📄 Полный отчёт" with diag_raw callback.
-	kb, ok := msg.markup.(*tg.InlineKeyboardMarkup)
-	if !ok || kb == nil {
-		t.Fatalf("expected *tg.InlineKeyboardMarkup, got %T (%v)", msg.markup, msg.markup)
-	}
-	if len(kb.InlineKeyboard) == 0 {
-		t.Fatal("inline keyboard has no rows")
-	}
-	firstRow := kb.InlineKeyboard[0]
-	foundRaw := false
-	for _, btn := range firstRow {
-		if strings.Contains(btn.Text, "Полный отчёт") || strings.HasPrefix(btn.CallbackData, "diag_raw:") {
-			foundRaw = true
-			break
-		}
-	}
-	if !foundRaw {
-		t.Errorf("inline keyboard first row missing 'Полный отчёт' / diag_raw: button; got %+v", firstRow)
 	}
 }

@@ -164,13 +164,6 @@ func main() {
 	if n := backend.ResumePendingDeploys(d, cmdQueue, cfg.PublicBaseURL, cfg.PublicIP, logger); n > 0 {
 		logger.Info("pending deploys re-queued after restart", "count", n)
 	}
-	uiSnap := callbacks.UIConfigSnapshot{
-		DeleteUserCommandMessages: cfg.UI.DeleteUserCommandMessages != nil && *cfg.UI.DeleteUserCommandMessages,
-		SmartReplyWithKeyboard:    cfg.UI.SmartReplyWithKeyboard != nil && *cfg.UI.SmartReplyWithKeyboard,
-		DiagMaxChars:              cfg.UI.DiagMaxChars,
-		CompatInlineKeyboard:      cfg.UI.CompatInlineKeyboard != nil && *cfg.UI.CompatInlineKeyboard,
-	}
-	notifier := callbacks.NewNotifierWithUI(tgClient, uiSnap)
 	// Build upstream version cache from configured GitHub repos. Skip sources
 	// without a configured repo — graceful "no warning" beats fabricated data.
 	var upSources []upstream.Source
@@ -182,26 +175,16 @@ func main() {
 	}
 	upCache := upstream.NewCache(cfg.Upstream.CacheTTL, upSources)
 
-	// Build the callbacks router BEFORE the mux Deps: several notifiers derive from it.
-	cb := callbacks.NewRouterWithSink(d, tgClient, cmdQueue, callbacks.Config{
-		ChatID:             cfg.Telegram.ChatID,
-		ExtraChatIDs:       cfg.Telegram.ExtraChatIDs,
+	// Бот и кабинеты -- один callbacks.Router: кабинеты мини-аппа, мастер
+	// замены и уведомления о починке берут его же.
+	cb := callbacks.NewRouter(d, tgClient, callbacks.Config{
 		AdminUserID:        cfg.Telegram.AdminUserID,
-		MuteCutoffHour:     muteCutoffHour,
-		BackendVersion:     Version,
 		PublicBaseURL:      cfg.PublicBaseURL,
-		UI:                 uiSnap,
 		AmneziaBaseURL:     cfg.Amnezia.BaseURL,
 		AmneziaSecretsPath: cfg.Amnezia.SecretsPath,
 		HideMyBaseURL:      cfg.HideMy.BaseURL,
 		HideMySecretsPath:  cfg.HideMy.SecretsPath,
 	})
-	notifier.AppBaseURL = cfg.PublicBaseURL
-	cb.SetUpstream(upCache)
-	notifier.DiagCache = cb.DiagCache()
-	cb.SetPingCheck(cmdQueue)
-	cb.SetDiagDrillDown()
-	pingcheckNotifier := cb.NewPingCheckNotifier()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -296,8 +279,7 @@ func main() {
 		Dispatcher:     disp,
 		Resumer:        watcher,
 		CommandSink:    cmdQueue,
-		TGNotifier:     notifier,
-		// Тот же кэш, что у умного ответа бота: второй поход в GitHub сжёг бы лимит анонимного API.
+		// Кэш релизов апстрима: второй поход в GitHub сжёг бы лимит анонимного API.
 		Upstream: upCache,
 		// Кабинеты провайдеров для мини-аппа: ключи и клиенты живут в
 		// callbacks.Router, и он же реализует контракт backend.VPNCabinet.
@@ -309,7 +291,6 @@ func main() {
 		Replace:             replaceEngine,
 		LinkRepair:          repairEngine,
 		StartLinkRepair:     repairEngine.Start,
-		PingCheckNotifier:   pingcheckNotifier,
 		WakeNotifier:        wakeNotifier,
 		DeployNotifier:      deployNotifier,
 		UI:                  cfg.UI,

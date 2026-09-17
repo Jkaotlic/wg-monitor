@@ -21,17 +21,13 @@ func TestCabinetSecretInChatIsDeletedAndAnswered(t *testing.T) {
 		wantButton   bool
 	}{
 		{"ключ в личке", 777, 777, "vpn://SECRET-KEY-MUST-NOT-LEAK", true, true},
-		{"ключ в группе", -100, 42, "vpn://SECRET-KEY-MUST-NOT-LEAK", true, false},
 		{"код в личке", 777, 777, "123456789012345", true, true},
-		// Цифры в группе -- не трогать: это бывают телефоны и Telegram ID
-		// (решение контроллера цикла 3). Код удаляется только в личке.
-		{"цифры в группе", -100, 42, "123456789012345", false, false},
-		{"телефон в группе от владельца", -100, 200, "79161234567", false, false},
 		{"пароль SSH в личке админа", 42, 42, "id=dacha ssh_host=203.0.113.7 ssh_password=SECRET-PASS", true, true},
-		{"пароль SSH в группе", -100, 42, "id=dacha ssh_password=SECRET-PASS", true, false},
-		{"ключ в чужой группе", -555, 42, "vpn://SECRET-KEY", false, false},
-		// /myid отвечает до всех проверок -- секрет рядом с ней всё равно удаляется.
-		{"ключ рядом с /myid", 777, 777, "/myid vpn://SECRET-KEY-MUST-NOT-LEAK", true, true},
+		// Цикл 5: в группах бот ничего не делает, сторож -- тоже.
+		{"ключ в группе", -100, 42, "vpn://SECRET-KEY-MUST-NOT-LEAK", false, false},
+		{"пароль SSH в группе", -100, 42, "id=dacha ssh_password=SECRET-PASS", false, false},
+		// /start отвечает после сторожа -- секрет рядом с ней всё равно удаляется.
+		{"ключ рядом с /start", 777, 777, "/start vpn://SECRET-KEY-MUST-NOT-LEAK", true, true},
 		{"обычный текст", 777, 777, "привет", false, false},
 		{"короткое число", 777, 777, "12345", false, false},
 	}
@@ -39,7 +35,7 @@ func TestCabinetSecretInChatIsDeletedAndAnswered(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			d, _ := newTestDB(t)
 			f := &fakeRouterTGFull{}
-			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42, PublicBaseURL: "https://wgmon.example.com"})
+			r := NewRouter(d, f, Config{AdminUserID: 42, PublicBaseURL: "https://wgmon.example.com"})
 			r.HandleMessage(context.Background(), &tg.Message{MessageID: 55, Chat: tg.Chat{ID: tc.chatID}, From: tg.User{ID: tc.from}, Text: tc.text})
 
 			gotDelete := len(f.deleted) == 1 && f.deleted[0].msgID == 55 && f.deleted[0].chatID == tc.chatID
@@ -47,7 +43,8 @@ func TestCabinetSecretInChatIsDeletedAndAnswered(t *testing.T) {
 				t.Fatalf("удаление: %+v, ждали %v", f.deleted, tc.wantDelete)
 			}
 			if !tc.wantDelete {
-				if len(f.sentMsgs)+len(f.rkSends) != 0 {
+				// Ответ на /start -- не ответ сторожа: он проверяется своими тестами.
+				if !strings.HasPrefix(strings.TrimSpace(tc.text), "/start") && len(f.sentMsgs)+len(f.rkSends) != 0 {
 					t.Fatalf("лишний ответ: %q %+v", f.sentMsgs, f.rkSends)
 				}
 				return
@@ -63,9 +60,8 @@ func TestCabinetSecretInChatIsDeletedAndAnswered(t *testing.T) {
 				}
 				text = f.rkSends[0].text
 			} else {
-				// web_app-кнопку Telegram разрешает только в личке.
 				if len(f.sentMsgs) != 1 || len(f.rkSends) != 0 {
-					t.Fatalf("в группе -- текст без кнопки: %+v %q", f.rkSends, f.sentMsgs)
+					t.Fatalf("ждали текст без кнопки: %+v %q", f.rkSends, f.sentMsgs)
 				}
 				text = f.sentMsgs[0]
 			}
@@ -79,33 +75,10 @@ func TestCabinetSecretInChatIsDeletedAndAnswered(t *testing.T) {
 func TestCabinetSecretGuardWhenDeleteFailsOrNoAppURL(t *testing.T) {
 	d, _ := newTestDB(t)
 	f := &fakeRouterTGFull{deleteErr: errors.New("message can't be deleted")}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 	r.HandleMessage(context.Background(), &tg.Message{MessageID: 56, Chat: tg.Chat{ID: 777}, From: tg.User{ID: 777}, Text: "vpn://SECRET-KEY"})
 	if len(f.sentMsgs) != 1 || !strings.Contains(f.sentMsgs[0], "Удалите") || len(f.rkSends) != 0 {
 		t.Fatalf("без адреса приложения и без удаления: %q %+v", f.sentMsgs, f.rkSends)
-	}
-}
-
-// Команды и кнопки кабинетов из бота удалены: ни админу, ни владельцу бот на
-// них больше ничего не отвечает.
-func TestRemovedCabinetCommandsAndButtonsAreSilent(t *testing.T) {
-	for _, text := range []string{"/amnezia", "/hidemy", "/selfhosted", "/selfhosted add id=home", "/cancel", "🔐 Amnezia Premium", "🔑 HideMy.name", "Amnezia Premium", "HideMy.name"} {
-		for _, from := range []int64{42, 200} {
-			d, uid := newTestDB(t)
-			if err := d.Users().UpdateThreadID(uid, 55); err != nil {
-				t.Fatal(err)
-			}
-			if err := d.Users().SetTelegramUserID(uid, 200); err != nil {
-				t.Fatal(err)
-			}
-			f := &fakeRouterTGFull{}
-			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
-			tid := int64(55)
-			r.HandleMessage(context.Background(), &tg.Message{MessageID: 9, Chat: tg.Chat{ID: -100}, From: tg.User{ID: from}, MessageThreadID: &tid, Text: text})
-			if len(f.sentMsgs)+len(f.rkSends) != 0 {
-				t.Errorf("%q от %d: бот ответил %q %+v", text, from, f.sentMsgs, f.rkSends)
-			}
-		}
 	}
 }
 
@@ -113,7 +86,7 @@ func TestRemovedCabinetCommandsAndButtonsAreSilent(t *testing.T) {
 func TestOldCabinetButtonAnswersUnknown(t *testing.T) {
 	d, uid := newTestDB(t)
 	f := &fakeRouterTGFull{}
-	r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+	r := NewRouter(d, f, Config{AdminUserID: 42})
 	r.HandleCallback(context.Background(), &tg.CallbackQuery{ID: "cb", From: tg.User{ID: 42}, Data: "amz_refresh:" + itoa(uid) + ":_panel_",
 		Message: tg.Message{Chat: tg.Chat{ID: -100}, MessageID: 7}})
 	if len(f.answers) != 1 || f.answers[0] != "неизвестная кнопка" || len(f.edits) != 0 {
@@ -128,17 +101,14 @@ func TestCabinetSecretInCaptionIsDeleted(t *testing.T) {
 		chatID  int64
 		caption string
 	}{
-		{"ключ в подписи к файлу в группе", -100, "vpn://SECRET-KEY-IN-CAPTION"},
-		{"код в подписи в личке", 777, "123456789012345"},
+		{"ключ в подписи к файлу", 777, "vpn://SECRET-KEY-IN-CAPTION"},
+		{"код в подписи", 777, "123456789012345"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			d, _ := newTestDB(t)
 			f := &fakeRouterTGFull{}
-			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
-			from := int64(42)
-			if tc.chatID > 0 {
-				from = tc.chatID
-			}
+			r := NewRouter(d, f, Config{AdminUserID: 42})
+			from := tc.chatID
 			r.HandleMessage(context.Background(), &tg.Message{MessageID: 57, Chat: tg.Chat{ID: tc.chatID}, From: tg.User{ID: from},
 				Caption: tc.caption, Document: &tg.Document{FileID: "f1", FileName: "x.conf"}})
 			if len(f.deleted) != 1 || f.deleted[0].msgID != 57 {

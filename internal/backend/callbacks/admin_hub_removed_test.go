@@ -2,48 +2,10 @@ package callbacks
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 )
-
-// Хаб /panel уехал в приложение (цикл 2). Команда больше ничего не открывает
-// ни в личке админа, ни в группе -- только говорит, куда переехала панель.
-func TestAdminSlashPanelNoLongerOpensHub(t *testing.T) {
-	for _, chat := range []int64{12345, -100} {
-		d, _ := newTestDB(t)
-		f := &fakeRouterTGFull{}
-		r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345, MuteCutoffHour: 9})
-
-		r.HandleMessage(context.Background(), &tg.Message{
-			MessageID: 61, Chat: tg.Chat{ID: chat}, From: tg.User{ID: 12345}, Text: "/panel",
-		})
-
-		for _, s := range f.rkSends {
-			if strings.Contains(s.text, "Панель управления") {
-				t.Fatalf("chat=%d: /panel всё ещё открывает хаб: %q", chat, s.text)
-			}
-		}
-		for _, s := range f.sentMsgs {
-			if strings.Contains(s, "Панель управления") {
-				t.Fatalf("chat=%d: /panel всё ещё открывает хаб: %q", chat, s)
-			}
-		}
-		// Мышечная память админа: вместо тишины -- короткий ответ, куда
-		// переехала панель, и никакой клавиатуры (final review, ledger #38).
-		f.mu.Lock()
-		sent, markups, rk := append([]string(nil), f.sentMsgs...), len(f.sentMarkups), len(f.rkSends)
-		f.mu.Unlock()
-		const want = "Панель переехала в приложение: «Парк» в меню бота."
-		if len(sent) != 1 || sent[0] != want {
-			t.Fatalf("chat=%d: ответ на /panel = %q, ждали один %q", chat, sent, want)
-		}
-		if markups != 0 || rk != 0 {
-			t.Fatalf("chat=%d: /panel прислал клавиатуру: markups=%d rk=%d", chat, markups, rk)
-		}
-	}
-}
 
 // Кнопки хаба и доступов остались в старых сообщениях. Нажатие отвечает
 // «неизвестная кнопка» и ничего не делает -- ни правок, ни очереди.
@@ -56,7 +18,7 @@ func TestOldHubAndAccessButtonsAreUnknown(t *testing.T) {
 		t.Run(data, func(t *testing.T) {
 			d, _ := newTestDB(t)
 			f := &fakeRouterTGFull{}
-			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 12345})
+			r := NewRouter(d, f, Config{AdminUserID: 12345})
 
 			r.HandleCallback(context.Background(), &tg.CallbackQuery{
 				ID: "cb-old", From: tg.User{ID: 12345}, Data: data,
