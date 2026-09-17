@@ -41,10 +41,6 @@ func (s *doorTG) SendMessageWithReplyKeyboard(context.Context, int64, *int64, st
 	return s.send()
 }
 
-func (s *doorTG) CreateForumTopic(context.Context, int64, string, int) (int64, error) {
-	return 0, nil
-}
-
 func (s *doorTG) open() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

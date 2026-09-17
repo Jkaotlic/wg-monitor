@@ -51,8 +51,6 @@ func (s *chatsTG) SendMessageWithReplyKeyboard(_ context.Context, chatID int64, 
 	return s.note(chatID, nil)
 }
 
-func (s *chatsTG) CreateForumTopic(context.Context, int64, string, int) (int64, error) { return 0, nil }
-
 func (s *chatsTG) got(chatID int64) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
