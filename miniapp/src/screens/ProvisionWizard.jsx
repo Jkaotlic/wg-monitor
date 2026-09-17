@@ -277,7 +277,7 @@ function TokenResult({ token, onClose }) {
           <code class="token-value">{token.token}</code>
           <CopyButton text={token.token} />
         </div>
-        <div class="card">
+        <div class="card token-backend">
           <DataRow title="Адрес бэкенда" value={token.backendURL} />
         </div>
         {token.installCommand && (

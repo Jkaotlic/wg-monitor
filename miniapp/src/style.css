@@ -2189,6 +2189,14 @@ body {
   cursor: pointer;
 }
 
+.field label.sheet-toggle-label {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+}
+
 .sheet-toggle-label input {
   width: 20px;
   height: 20px;
@@ -2785,6 +2793,15 @@ body {
   user-select: all;
 }
 
+/* Длинный адрес бэкенда уходит под подпись, а не сжимает её в столбик. */
+.token-backend .data-row {
+  flex-wrap: wrap;
+}
+
+.token-backend .data-row-value {
+  overflow-wrap: anywhere;
+}
+
 .token-command {
   display: block;
   max-height: 240px;
@@ -3148,6 +3165,11 @@ body {
   flex-direction: column;
   gap: var(--sp-2);
   margin-bottom: var(--sp-3);
+}
+
+/* В «Моих роутерах» поиск стоит под строкой итога -- отступ от неё. */
+.screen > .filter-bar {
+  margin-top: var(--sp-3);
 }
 
 .filter-search {

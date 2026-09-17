@@ -109,7 +109,8 @@ describe('осмотр приёмки: CSS', () => {
   })
 
   it('переключатель листа -- обычной строкой, не надписью поля', () => {
-    expect(rule(outside, '\n.sheet-toggle-label')).toMatch(/text-transform:\s*none/)
+    // .field label (0,1,1) сильнее одиночного класса -- правило обязано быть не слабее.
+    expect(rule(outside, '\n.field label.sheet-toggle-label')).toMatch(/text-transform:\s*none/)
   })
 
   it('команда установки не растягивает экран токена', () => {
@@ -134,5 +135,15 @@ describe('осмотр приёмки: CSS', () => {
 describe('ожидание раскатки на широком экране', () => {
   it('на всю ширину: ограничение основной области его не касается', () => {
     expect(block.body).toMatch(/\.main-content-narrow > \.deploy-wait\s*\{\s*max-width:\s*none/)
+  })
+})
+
+describe('осмотр приёмки, круг 2', () => {
+  it('адрес бэкенда на экране токена переносится под подпись, а не сжимает её', () => {
+    expect(rule(outside, '\n.token-backend .data-row')).toMatch(/flex-wrap:\s*wrap/)
+  })
+
+  it('поиск в «Моих роутерах» отделён от строки итога', () => {
+    expect(rule(outside, '\n.screen > .filter-bar')).toMatch(/margin-top/)
   })
 })
