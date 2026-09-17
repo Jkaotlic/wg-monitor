@@ -258,3 +258,19 @@ func TestPingCheckInflightStore_TTLEvicts(t *testing.T) {
 		t.Fatal("after TTL the slot must be free again")
 	}
 }
+
+// keyboardHasCallback -- есть ли кнопка с действием prefix (callback_data
+// «prefix:…»). Жил в routes_notifier_test.go, удалённом в цикле 4.
+func keyboardHasCallback(kb *tg.InlineKeyboardMarkup, prefix string) bool {
+	if kb == nil {
+		return false
+	}
+	for _, row := range kb.InlineKeyboard {
+		for _, btn := range row {
+			if strings.HasPrefix(btn.CallbackData, prefix+":") {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -286,12 +286,6 @@ type TGNotifier interface {
 	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, action string, result wire.CommandResult, userID int64, maxChars int) error
 }
 
-// RoutesNotifier is the subset used by cmdResultHandler when ref.Action is
-// route_status or route_rebind. Implemented by callbacks.RoutesPanelNotifier.
-type RoutesNotifier interface {
-	NotifyCommandResult(ctx context.Context, ref cmdpkg.MessageRef, res wire.CommandResult, userID int64) error
-}
-
 // PingCheckNotifier is the subset used by cmdResultHandler when ref.Action is
 // pingcheck_status or pingcheck_toggle. Implemented by callbacks.PingCheckPanelNotifier.
 type PingCheckNotifier interface {
@@ -314,7 +308,6 @@ type Deps struct {
 	Resumer             Resumer
 	CommandSink         CommandSink
 	TGNotifier          TGNotifier
-	RoutesNotifier      RoutesNotifier    // nil-safe (handler skips if nil)
 	PingCheckNotifier   PingCheckNotifier // nil-safe (handler skips if nil)
 	WakeNotifier        WakeNotifier      // nil-safe (handler skips if nil or user is static)
 	DeployNotifier      DeployNotifier    // nil-safe (handler skips deferred update notices)
@@ -1218,24 +1211,12 @@ func cmdResultHandler(d Deps) http.HandlerFunc {
 				}
 			}
 		}
-		// Relay result back to TG (or routes notifier) if a notifier is configured
+		// Relay result back to TG (or the PingCheck panel) if a notifier is configured
 		// and we recorded the originating message. Async — must not stall the
 		// agent's POST on TG network latency.
 		if ref, ok := d.CommandSink.ConsumeOriginRef(uid, res.ID); ok {
 			incCmdResultRelay()
 			switch ref.Action {
-			case "route_status", "tunnels_status", "route_rebind", "route_templates", "route_add_plan", "route_add", "route_delete_plan", "route_delete", "hrneo_inventory", "hrneo_doctor":
-				if d.RoutesNotifier != nil {
-					spawnRelayTimeout(d, "cmd-routes", 30*time.Second, func(ctx context.Context) {
-						if err := d.RoutesNotifier.NotifyCommandResult(ctx, ref, res, uid); err != nil {
-							incTGError()
-							d.Logger.Warn("routes notifier failed", "cmd_id", res.ID, "action", ref.Action, "err", err)
-						}
-					})
-				} else {
-					d.Logger.Warn("routes notifier not configured; result not relayed",
-						"cmd_id", res.ID, "action", ref.Action, "nickname", nick)
-				}
 			case "pingcheck_status", "pingcheck_toggle":
 				if d.PingCheckNotifier != nil {
 					spawnRelayTimeout(d, "cmd-pingcheck", 30*time.Second, func(ctx context.Context) {

@@ -8,7 +8,7 @@ import (
 func TestHelpForScreen_KnownScreens(t *testing.T) {
 	for _, screen := range []string{
 		"operator", "alerts", "fleet", "premium", "mobile",
-		"routes", "tunnels", "access", "diag", "status", "doctor", "pingcheck",
+		"access", "diag", "status", "doctor", "pingcheck",
 	} {
 		body := HelpForScreen(screen)
 		if body == "" {
@@ -100,40 +100,6 @@ func TestHelpForScreen_OperatorIncludesRegistryMenuItems(t *testing.T) {
 		if !strings.Contains(got, item.Label) {
 			t.Fatalf("operator help missing registry menu item %q:\n%s", item.Label, got)
 		}
-	}
-}
-
-func TestHelpForScreen_RoutesMatchesWANSystemRebind(t *testing.T) {
-	got := HelpForScreen("routes")
-	for _, want := range []string{"NDMS", "HydraRoute-Neo", "WAN/system", "отдельной кнопкой", "preview"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("missing %q in routes help body:\n%s", want, got)
-		}
-	}
-	if strings.Contains(got, "не трогаются") {
-		t.Errorf("routes help must not say WAN/system is untouchable anymore:\n%s", got)
-	}
-}
-
-func TestHelpForScreen_TunnelsDistinguishesRestartButtons(t *testing.T) {
-	got := HelpForScreen("tunnels")
-	for _, want := range []string{"🔁 <имя>", "конкретный туннель", "выкл→вкл", "🔁 awg-mgr", "менеджер awg-manager"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("tunnels help should explain restart distinction, missing %q in:\n%s", want, got)
-		}
-	}
-}
-
-func TestHelpRowFor_Tunnels(t *testing.T) {
-	row := HelpRowFor("tunnels")
-	if len(row) != 1 {
-		t.Fatalf("want 1 button, got %d", len(row))
-	}
-	if row[0].CallbackData != "panel:0:help:tunnels" {
-		t.Errorf("bad callback data: %q", row[0].CallbackData)
-	}
-	if row[0].Text != "ℹ Помощь" {
-		t.Errorf("bad text: %q", row[0].Text)
 	}
 }
 

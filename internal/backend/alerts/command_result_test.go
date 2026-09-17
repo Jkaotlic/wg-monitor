@@ -168,7 +168,7 @@ func TestFormatCommandResult_TunnelImportShowsNextStep(t *testing.T) {
 		t.Fatalf("want 1 chunk, got %d", len(chunks))
 	}
 	body := chunks[0]
-	for _, want := range []string{"Импорт конфига", "newtun", "за 1м 06с", "Проверка запуска", "handshake=none", "🛣 Маршруты", "перенести правила"} {
+	for _, want := range []string{"Импорт конфига", "newtun", "за 1м 06с", "Проверка запуска", "handshake=none", "в приложении", "перенос правил"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
 		}

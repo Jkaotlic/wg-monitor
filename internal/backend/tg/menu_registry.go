@@ -12,8 +12,6 @@ type BotMenuItem struct {
 var routerMenuItems = []BotMenuItem{
 	{Code: "smart_reply", Label: "📊 Что происходит?", Command: "status", Description: "Статус этого роутера"},
 	{Code: "router_doctor", Label: "🩺 Проверка", Command: "check", Description: "Проверить роутер изнутри"},
-	{Code: "tunnels", Label: "🎛 Туннели", Command: "tunnels", Description: "Открыть туннели"},
-	{Code: "routes", Label: "🛣 Маршруты", Command: "routes", Description: "Открыть маршруты"},
 	{Code: "via_tunnel", Label: "🌍 Через туннель?", Command: "via", Description: "Проверить связь через туннель"},
 	{Code: "direct", Label: "🇷🇺 Напрямую?", Command: "direct", Description: "Проверить прямую связь"},
 }
@@ -39,8 +37,6 @@ var adminCommandItems = []BotMenuItem{
 var operatorCommandOrder = []string{
 	"status",
 	"check",
-	"tunnels",
-	"routes",
 	"via",
 	"direct",
 	"menu",

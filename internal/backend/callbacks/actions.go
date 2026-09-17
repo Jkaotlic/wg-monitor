@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/Jkaotlic/wg-monitor/internal/backend/alertaction"
@@ -211,18 +210,6 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 	if args.NDMSName != "" {
 		cmdArgs["ndms_name"] = args.NDMSName
 	}
-	if args.Action == "tunnel_delete" {
-		tunnelID := strings.TrimSpace(args.TunnelID)
-		if tunnelID == "" && strings.HasPrefix(args.CheckName, "tunnel_") {
-			tunnelID = strings.TrimPrefix(args.CheckName, "tunnel_")
-		}
-		if tunnelID != "" {
-			cmdArgs["tunnel_id"] = tunnelID
-			if legacyAWGCallbackTunnelID(tunnelID) {
-				cmdArgs["force_legacy_cleanup"] = true
-			}
-		}
-	}
 	cmd := wire.Command{
 		ID:       a.idGen(),
 		Action:   args.Action,
@@ -245,19 +232,6 @@ func (a *CommandAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Arg
 		return "", fmt.Errorf("enqueue %s: %w", args.Action, err)
 	}
 	return formatQueuedStatus(args.Action, args.CheckName), nil
-}
-
-func legacyAWGCallbackTunnelID(id string) bool {
-	id = strings.TrimSpace(id)
-	if !strings.HasPrefix(id, "awg") || len(id) == len("awg") {
-		return false
-	}
-	for _, r := range id[len("awg"):] {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // DispatchFromMessage enqueues a command originating from a *text* message
@@ -288,15 +262,9 @@ func (a *CommandAction) DispatchFromMessage(_ context.Context, action string, us
 //
 // Под тревогой строку читает владелец в личке, поэтому подписи -- его
 // словами, а форма «Отправлено роутеру: …» согласуется с любым действием
-// («перезапуск … поставлено» -- нет). Из панели обслуживания нажимает админ,
-// и там перезапуск честно называет awg-manager.
-func formatQueuedStatus(action, checkName string) string {
-	if action == "restart_tunnel" && checkName == panelSentinel {
-		return "📤 Отправлено роутеру: 🔁 Перезапуск awg-manager"
-	}
-	if action == "tunnel_restart" {
-		return "📤 Отправлено роутеру: 🔁 Перезапуск туннеля"
-	}
+// («перезапуск … поставлено» -- нет). Второй аргумент (имя проверки) нужен
+// был только кнопкам панели туннелей, ушедшим в приложение (цикл 4).
+func formatQueuedStatus(action, _ string) string {
 	if action == "diag_now" {
 		// v0.30 задача 2: агент всегда гоняет полную проверку заново через
 		// /api/diagnostics/stream?restart=false (runner.DiagNow → DiagFresh) --
@@ -313,15 +281,11 @@ func formatQueuedStatus(action, checkName string) string {
 }
 
 var commandLabels = map[string]string{
-	"restart_tunnel": "🔁 Перезапуск VPN-туннелей",
-	"diag_now":       "📊 Диагностика",
-	"pingcheck_now":  "▶ Тест связи",
-	"force_recheck":  "🔄 Запрос отчёта",
-	"router_doctor":  "🩺 Проверка",
-	"opkg_upgrade":   "⬆ Обновление opkg",
-	"tunnel_enable":  "▶ Включить",
-	"tunnel_disable": "⏸ Выключить",
-	"tunnel_delete":  "🗑 Удалить",
+	"diag_now":      "📊 Диагностика",
+	"pingcheck_now": "▶ Тест связи",
+	"force_recheck": "🔄 Запрос отчёта",
+	"router_doctor": "🩺 Проверка",
+	"opkg_upgrade":  "⬆ Обновление opkg",
 }
 
 func humanEventStatus(status string) string {
@@ -333,125 +297,4 @@ func humanEventStatus(status string) string {
 	default:
 		return status
 	}
-}
-
-// pendingRebind holds a scheduled rebind awaiting Confirm. Stored in
-// Router.pendingRebinds keyed by token; consumed by RebindConfirmAction.
-// Mirrors pendingUpload in lifetime semantics: token+TTL, single use.
-type pendingRebind struct {
-	UserID    int64
-	ActorTGID int64
-	SrcID     string
-	DstID     string
-	Token     string
-	ExpiresAt time.Time
-}
-
-// RebindConfirmAction handles routes_confirm:<uid>:<src>:<dst>:<token>. It
-// consumes the pendingRebind by token and enqueues a route_rebind wire.Command.
-type RebindConfirmAction struct {
-	sink      CommandEnqueuer
-	consumeFn func(userID, actorTGID int64, token string) (*pendingRebind, bool)
-	restoreFn func(*pendingRebind)
-	idGen     func() string
-}
-
-func NewRebindConfirmAction(sink CommandEnqueuer, consume func(int64, int64, string) (*pendingRebind, bool), restore func(*pendingRebind), idGen func() string) *RebindConfirmAction {
-	return &RebindConfirmAction{sink: sink, consumeFn: consume, restoreFn: restore, idGen: idGen}
-}
-
-func (a *RebindConfirmAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	pr, ok := a.consumeFn(args.UserID, q.From.ID, args.RebindToken)
-	if !ok {
-		return "", errors.New("сессия истекла или не найдена; открой панель заново")
-	}
-	if pr.SrcID != args.RebindSrcID || pr.DstID != args.RebindDstID {
-		a.restorePendingRebind(pr)
-		return "", errors.New("параметры переноса правил не совпадают с подтверждением")
-	}
-	cmd := wire.Command{
-		ID:     a.idGen(),
-		Action: "route_rebind",
-		Args: map[string]any{
-			"src_tunnel_id": pr.SrcID,
-			"dst_tunnel_id": pr.DstID,
-		},
-		IssuedAt: time.Now().UTC(),
-	}
-	ref := cmdpkg.MessageRef{
-		ChatID:    q.Message.Chat.ID,
-		MessageID: q.Message.MessageID,
-		ThreadID:  q.Message.MessageThreadID,
-	}
-	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-		a.restorePendingRebind(pr)
-		return "", fmt.Errorf("не удалось поставить перенос правил в очередь: %w", err)
-	}
-	return "🛣 запускаем перенос…", nil
-}
-
-func (a *RebindConfirmAction) restorePendingRebind(pr *pendingRebind) {
-	if a.restoreFn != nil && pr != nil {
-		a.restoreFn(pr)
-	}
-}
-
-// makeRebindToken returns 8 hex chars cryptographically random.
-func makeRebindToken() string {
-	var b [4]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
-
-// pendingUpload holds a downloaded .conf while the admin confirms what to do.
-// Stored in Router.pending keyed by userID; consumed by ImportAction.
-type pendingUpload struct {
-	ConfB64       string
-	Name          string // empty = still waiting for admin to type tunnel name
-	SuggestedName string // sanitized from filename, shown in "how to name?" prompt
-	ThreadID      *int64
-	Token         string    // 8-hex random, embedded in callback_data
-	ExpiresAt     time.Time // 5 min from upload
-}
-
-// ImportAction handles tunnel_import_replace / tunnel_import_add callback buttons.
-// It looks up the pending conf upload, then enqueues a tunnel_import wire.Command.
-type ImportAction struct {
-	sink      CommandEnqueuer
-	consumeFn func(userID int64, token string, threadID *int64) (*pendingUpload, bool)
-	restoreFn func(userID int64, up *pendingUpload)
-	idGen     func() string
-}
-
-func (a *ImportAction) Apply(ctx context.Context, q *tg.CallbackQuery, args Args) (string, error) {
-	up, ok := a.consumeFn(args.UserID, args.ImportToken, q.Message.MessageThreadID)
-	if !ok {
-		return "", fmt.Errorf("загрузка истекла или не найдена; отправь конфиг заново")
-	}
-	replace := args.Action == "tunnel_import_replace"
-	cmd := wire.Command{
-		ID:     a.idGen(),
-		Action: "tunnel_import",
-		Args: map[string]any{
-			"conf":    up.ConfB64,
-			"name":    up.Name,
-			"replace": replace,
-			"backend": "nativewg",
-		},
-		IssuedAt: time.Now().UTC(),
-	}
-	ref := cmdpkg.MessageRef{
-		ChatID:    q.Message.Chat.ID,
-		MessageID: q.Message.MessageID,
-		ThreadID:  q.Message.MessageThreadID,
-	}
-	if err := a.sink.EnqueueWithRef(args.UserID, cmd, ref); err != nil {
-		a.restorePendingUpload(args.UserID, up)
-		return "", fmt.Errorf("enqueue tunnel_import: %w", err)
-	}
-	verb := "добавление"
-	if replace {
-		verb = "замена"
-	}
-	return fmt.Sprintf("⏳ Конфиг принят (%s %q). Агент импортирует конфиг и запускает туннель; проверяю status/handshake, это может занять до 10 секунд.", verb, up.Name), nil
 }

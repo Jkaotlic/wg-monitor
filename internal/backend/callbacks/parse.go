@@ -32,36 +32,13 @@ type Args struct {
 	// and continue to lose their keyboard on first tap.
 	IsMenu bool
 	// NDMSName is the Keenetic interface id ("Wireguard0") tucked into the
-	// 4th colon-segment of tunnel_enable/disable callbacks. Empty for any
-	// other action — the agent's runner needs it to call ndmc.
+	// 4th colon-segment of pingcheck_toggle callbacks. Empty for any other
+	// action — the agent's runner needs it to call ndmc.
 	NDMSName string
-	// TunnelID is the awg-manager id transported by tunnel panel callbacks.
-	TunnelID string
-	// IsPanel marks callbacks originating from the Tunnels Panel (CheckName
-	// ends in "_panel_"). The router uses this to refresh the panel inline
-	// instead of editing the original alert message.
+	// IsPanel marks callbacks whose CheckName is the "_panel_" sentinel
+	// (PingCheck panel, close_panel). The router answers such taps with a
+	// toast and leaves the message in place.
 	IsPanel bool
-	// ImportToken is set for tunnel_import_replace / tunnel_import_add callbacks.
-	// It is an 8-hex-char random token that ties the callback to the pending upload.
-	ImportToken string
-	// RebindToken is set for routes_confirm callbacks. 8 hex chars, 5-min TTL.
-	RebindToken string
-	// RebindSrcID / RebindDstID parsed from routes_pick / routes_confirm.
-	RebindSrcID string
-	RebindDstID string
-	// Route add/delete wizard tokens and short fields.
-	RouteKind          string
-	RouteUseHRNeo      bool
-	RouteDraftToken    string
-	RouteConfirmToken  string
-	RouteToken         string
-	RouteTemplateToken string
-	RouteTemplatePage  int
-	// MaintName is the target of a maint_restart / maint_confirm callback:
-	// "hrneo" | "hrneo_start" | "hrneo_stop" | "awgmgr". Set by Parse for those actions.
-	MaintName string
-	// MaintToken is the 8-hex confirm token for maint_confirm.
-	MaintToken string
 	// DiagRawToken is the 8-hex token of a cached diag JSON body retrieved
 	// by the "📄 Полный отчёт" button under a diag result.
 	DiagRawToken string
@@ -87,36 +64,21 @@ type Args struct {
 // FSM check names never carry this suffix (synthetic + reserved).
 const menuSuffix = "_menu"
 
-// panelSentinel is the CheckName placeholder used by Tunnels-Panel global
-// buttons (restart / refresh) where there is no per-tunnel target.
+// panelSentinel is the CheckName placeholder used by panel-global buttons
+// (PingCheck refresh, close) where there is no per-check target.
 const panelSentinel = "_panel_"
 
 var validActions = map[string]bool{
 	"silence": true, "ack": true, "mute": true, "history": true,
-	// command-channel actions: enqueue a wire.Command for the agent.
-	"restart_tunnel": true, "diag_now": true, "pingcheck_now": true,
-	"force_recheck": true,
-	"router_doctor": true,
-	"tunnel_enable": true, "tunnel_disable": true, "tunnel_restart": true,
-	"tunnel_delete_ask": true, "tunnel_delete": true,
+	// command-channel actions: enqueue a wire.Command for the agent. Панели
+	// туннелей, маршрутов и перезапуска служб ушли в приложение (цикл 4);
+	// их старые кнопки отвечают тостом (moved_to_app.go).
+	"diag_now": true, "pingcheck_now": true,
+	"force_recheck":    true,
+	"router_doctor":    true,
 	"check_via_tunnel": true, "check_direct": true,
-	// backend-only callback (no agent action): re-render Tunnels-panel inline.
-	"tunnels_refresh": true,
-	// tunnel import confirmation buttons (sent after conf upload review).
-	"tunnel_import_replace": true,
-	"tunnel_import_add":     true,
-	// routes panel actions: browse, rebind, and confirm route changes.
-	"routes_open": true, "routes_rebind": true,
-	"routes_pick": true, "routes_confirm": true, "routes_rollback": true, "routes_refresh": true,
-	"routes_back": true, "routes_close": true, "close_panel": true,
-	"routes_add": true, "routes_add_type": true, "routes_add_tunnel": true,
-	"routes_tpl_load": true, "routes_tpl_pick": true, "routes_tpl_page": true,
-	"routes_add_confirm": true, "routes_add_cancel": true,
-	"routes_del": true, "routes_del_confirm": true, "routes_del_cancel": true,
-	"routes_hrneo": true, "routes_hrneo_doctor": true, "routes_snapshot": true,
-	// перезапуск служб бота (hrneo / awgmgr): подтверждение и токен. Панель
-	// обслуживания целиком переехала в мини-апп.
-	"maint_restart": true, "maint_confirm": true,
+	// закрыть справку.
+	"close_panel": true,
 	// diag_raw: fetch cached raw diag JSON body for "📄 Полный отчёт" button.
 	"diag_raw": true,
 	// diag_back: re-render parsed diag summary inline ("« К сводке" button).
@@ -140,9 +102,8 @@ var callbackCodeRe = regexp.MustCompile(`^[A-Za-z0-9_-]{2,16}$`)
 // (vs. local DB-only actions like silence/ack/mute/history).
 func IsCommandAction(a string) bool {
 	switch a {
-	case "restart_tunnel", "diag_now", "pingcheck_now", "force_recheck",
-		"opkg_upgrade", "tunnel_enable", "tunnel_disable", "tunnel_restart", "tunnel_delete",
-		"check_via_tunnel", "check_direct", "router_doctor":
+	case "diag_now", "pingcheck_now", "force_recheck",
+		"opkg_upgrade", "check_via_tunnel", "check_direct", "router_doctor":
 		return true
 	}
 	return false
@@ -187,187 +148,7 @@ func Parse(data string) (Args, error) {
 		}
 		a.TTL = ttl
 	}
-	if action == "tunnel_enable" || action == "tunnel_disable" || action == "tunnel_restart" || action == "tunnel_delete_ask" || action == "tunnel_delete" {
-		if len(parts) >= 5 {
-			a.TunnelID = strings.TrimSpace(parts[4])
-		}
-		if len(parts) < 4 || parts[3] == "" {
-			if (action == "tunnel_delete_ask" || action == "tunnel_delete") && a.TunnelID != "" {
-				a.IsPanel = true
-				return a, nil
-			}
-			return Args{}, fmt.Errorf("%s requires ndms_name: %q", action, data)
-		}
-		// Whitelist NDMS interface names: alphanumerics + underscore/hyphen.
-		// Защищаемся от пробельных символов в значении, которые потом
-		// передаются в `ndmc -c "interface <ndms> <state>"` на роутере —
-		// внутренний токенизатор ndmc может разделить аргумент и переопределить
-		// команду (SEC-02). Источник значения — events JSON от агента,
-		// то есть от awg-manager API; формат шире чем нужно нам.
-		if !ndmsNameRe.MatchString(parts[3]) {
-			return Args{}, fmt.Errorf("%s: ndms_name %q must match ^[A-Za-z0-9_-]{1,32}$", action, parts[3])
-		}
-		a.NDMSName = parts[3]
-		a.IsPanel = true
-	}
-	if action == "tunnel_import_replace" || action == "tunnel_import_add" {
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("%s requires token: %q", action, data)
-		}
-		if parts[2] != panelSentinel {
-			return Args{}, fmt.Errorf("%s requires %q sentinel, not tunnel name: %q", action, panelSentinel, data)
-		}
-		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.ImportToken = parts[3]
-	}
 	switch action {
-	case "routes_rebind":
-		if len(parts) >= 3 && parts[2] != "" && parts[2] != panelSentinel {
-			a.RebindSrcID = parts[2]
-		}
-	case "routes_pick":
-		if len(parts) < 4 {
-			return Args{}, fmt.Errorf("routes_pick requires src and dst: %q", data)
-		}
-		a.RebindSrcID = parts[2]
-		a.RebindDstID = parts[3]
-	case "routes_rollback":
-		if len(parts) < 4 {
-			return Args{}, fmt.Errorf("routes_rollback requires src and dst: %q", data)
-		}
-		a.RebindSrcID = parts[2]
-		a.RebindDstID = parts[3]
-	case "routes_confirm":
-		if len(parts) < 5 || parts[4] == "" {
-			return Args{}, fmt.Errorf("routes_confirm requires token: %q", data)
-		}
-		if err := requireCallbackCode(action, "token", parts[4]); err != nil {
-			return Args{}, err
-		}
-		a.RebindSrcID = parts[2]
-		a.RebindDstID = parts[3]
-		a.RebindToken = parts[4]
-	case "routes_add_type":
-		if len(parts) < 4 {
-			return Args{}, fmt.Errorf("routes_add_type requires dns|dns_hr|static: %q", data)
-		}
-		switch parts[3] {
-		case "dns":
-			a.RouteKind = "dns"
-		case "dns_hr":
-			a.RouteKind = "dns"
-			a.RouteUseHRNeo = true
-		case "static":
-			a.RouteKind = "static"
-		default:
-			return Args{}, fmt.Errorf("routes_add_type requires dns|dns_hr|static: %q", data)
-		}
-	case "routes_add_tunnel":
-		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-			return Args{}, fmt.Errorf("routes_add_tunnel requires draft token and tunnel id: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-		a.RebindDstID = parts[4]
-	case "routes_tpl_load":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("routes_tpl_load requires draft token: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-	case "routes_tpl_pick":
-		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-			return Args{}, fmt.Errorf("routes_tpl_pick requires draft and template tokens: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		if err := requireCallbackCode(action, "template token", parts[4]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-		a.RouteTemplateToken = parts[4]
-	case "routes_tpl_page":
-		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-			return Args{}, fmt.Errorf("routes_tpl_page requires draft token and page: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		page, err := strconv.Atoi(parts[4])
-		if err != nil || page < 0 {
-			return Args{}, fmt.Errorf("routes_tpl_page: bad page %q", parts[4])
-		}
-		a.RouteDraftToken = parts[3]
-		a.RouteTemplatePage = page
-	case "routes_add_confirm":
-		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-			return Args{}, fmt.Errorf("routes_add_confirm requires draft and confirm tokens: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		if err := requireCallbackCode(action, "confirm token", parts[4]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-		a.RouteConfirmToken = parts[4]
-	case "routes_add_cancel":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("routes_add_cancel requires draft token: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-	case "routes_del":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("routes_del requires route token: %q", data)
-		}
-		if err := requireCallbackCode(action, "route token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.RouteToken = parts[3]
-	case "routes_del_confirm":
-		if len(parts) < 5 || parts[3] == "" || parts[4] == "" {
-			return Args{}, fmt.Errorf("routes_del_confirm requires draft and confirm tokens: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		if err := requireCallbackCode(action, "confirm token", parts[4]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-		a.RouteConfirmToken = parts[4]
-	case "routes_del_cancel":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("routes_del_cancel requires draft token: %q", data)
-		}
-		if err := requireCallbackCode(action, "draft token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.RouteDraftToken = parts[3]
-	case "maint_restart":
-		if len(parts) < 3 || parts[2] == "" || parts[2] == panelSentinel {
-			return Args{}, fmt.Errorf("maint_restart requires name (hrneo|awgmgr): %q", data)
-		}
-		a.MaintName = parts[2]
-	case "maint_confirm":
-		if len(parts) < 4 || parts[3] == "" {
-			return Args{}, fmt.Errorf("maint_confirm requires token: %q", data)
-		}
-		if err := requireCallbackCode(action, "token", parts[3]); err != nil {
-			return Args{}, err
-		}
-		a.MaintName = parts[2]
-		a.MaintToken = parts[3]
 	case "diag_raw":
 		if len(parts) < 4 || parts[3] == "" {
 			return Args{}, fmt.Errorf("diag_raw requires token: %q", data)
@@ -424,7 +205,6 @@ func Parse(data string) (Args, error) {
 		}
 		validHelpScreens := map[string]bool{
 			"operator": true, "alerts": true, "fleet": true, "premium": true, "mobile": true,
-			"routes": true, "tunnels": true,
 			"access": true, "diag": true, "status": true, "pingcheck": true, "doctor": true,
 		}
 		if !validHelpScreens[parts[3]] {
