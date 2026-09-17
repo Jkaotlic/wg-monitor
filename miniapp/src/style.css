@@ -3104,6 +3104,17 @@ body {
   cursor: pointer;
 }
 
+.dns-commands {
+  max-height: none;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.dns-copy {
+  margin-top: var(--sp-2);
+}
+
+
 
 /* --- Поиск и фильтры списка роутеров (цикл 2) --- */
 .filter-bar {

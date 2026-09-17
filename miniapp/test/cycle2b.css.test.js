@@ -94,3 +94,10 @@ describe('«Пакеты по расписанию», CSS', () => {
     expect(rule(block.body, '\n  .wide-shell .packages-log')).toMatch(/max-height/)
   })
 })
+
+describe('«Скопировать команды», CSS', () => {
+  it('блок команд переносит длинные строки и оформлен на любой ширине', () => {
+    expect(rule(outside, '\n.dns-commands')).toMatch(/overflow-wrap:\s*anywhere/)
+    expect(rule(outside, '\n.dns-copy')).not.toBe(null)
+  })
+})
