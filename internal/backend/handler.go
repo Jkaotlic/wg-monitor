@@ -359,6 +359,13 @@ type Deps struct {
 	// HideMy.name) и выпускает из них конфиги. nil-safe: без него экран
 	// кабинетов отвечает «не настроено», а не падает.
 	VPNCabinet VPNCabinet
+	// VPNCabinetKeys -- ключи и коды кабинетов роутера для мини-аппа
+	// (реализует callbacks.Router). nil -- маршруты кабинета отвечают 503.
+	VPNCabinetKeys VPNCabinetKeys
+	// SelfHosted -- свои VPN-серверы (selfhostedamnezia.Service). nil -- 503.
+	SelfHosted SelfHostedVPS
+	// MiniappDocs -- .conf документом в личку нажавшему (*tg.Client). nil -- 503.
+	MiniappDocs MiniappDocSender
 	// TelegramBotToken and TelegramAdminUserID enable /v1/miniapp/* endpoints
 	// when TelegramBotToken is non-empty. Set from cfg.Telegram.BotToken and
 	// cfg.Telegram.AdminUserID by main. Empty BotToken → endpoints not

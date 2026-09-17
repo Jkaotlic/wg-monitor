@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Jkaotlic/wg-monitor/internal/backend"
 	"github.com/Jkaotlic/wg-monitor/internal/backend/hidemy"
 )
 
@@ -84,11 +85,18 @@ func (r *Router) listHideMyCodes(userID int64) (hideMyCodes, error) {
 }
 
 func (r *Router) addHideMyCode(userID int64, accessCode string) (hideMyStoredCode, error) {
+	return r.addHideMyCodeLabeled(userID, accessCode, "")
+}
+
+// addHideMyCodeLabeled -- как addAmneziaKeyLabeled, для кодов HideMy.name.
+func (r *Router) addHideMyCodeLabeled(userID int64, accessCode, label string) (hideMyStoredCode, error) {
 	accessCode = strings.TrimSpace(accessCode)
 	if !hidemy.ValidAccessCode(accessCode) {
-		return hideMyStoredCode{}, fmt.Errorf("hidemy access code must be 10-20 digits")
+		return hideMyStoredCode{}, backend.ErrCabinetSecretInvalid
 	}
+	label = strings.TrimSpace(label)
 	path := r.hideMySecretsPath()
+	defer lockCabinetStore(path)()
 	env, err := readHideMySecrets(path)
 	if err != nil {
 		return hideMyStoredCode{}, err
@@ -100,23 +108,49 @@ func (r *Router) addHideMyCode(userID int64, accessCode string) (hideMyStoredCod
 	for i, existing := range codes.Codes {
 		if existing.ID == id {
 			codes.Codes[i].AccessCode = accessCode
-			if codes.Codes[i].Label == "" {
-				codes.Codes[i].Label = fmt.Sprintf("Code #%d", i+1)
+			if label != "" {
+				codes.Codes[i].Label = label
+			} else if codes.Codes[i].Label == "" {
+				codes.Codes[i].Label = fmt.Sprintf("Код #%d", i+1)
 			}
 			codes.ActiveID = id
 			env.Routers[routerID] = codes
 			return codes.Codes[i], writeHideMySecrets(path, env)
 		}
 	}
-	code := hideMyStoredCode{ID: id, Label: fmt.Sprintf("Code #%d", len(codes.Codes)+1), AccessCode: accessCode}
+	if label == "" {
+		label = fmt.Sprintf("Код #%d", len(codes.Codes)+1)
+	}
+	code := hideMyStoredCode{ID: id, Label: label, AccessCode: accessCode}
 	codes.Codes = append(codes.Codes, code)
 	codes.ActiveID = id
 	env.Routers[routerID] = codes
 	return code, writeHideMySecrets(path, env)
 }
 
+func (r *Router) setActiveHideMyCode(userID int64, codeID string) error {
+	path := r.hideMySecretsPath()
+	defer lockCabinetStore(path)()
+	env, err := readHideMySecrets(path)
+	if err != nil {
+		return err
+	}
+	routerID := strconv.FormatInt(userID, 10)
+	codes := env.Routers[routerID]
+	normalizeHideMyCodes(&codes)
+	for _, code := range codes.Codes {
+		if code.ID == codeID {
+			codes.ActiveID = codeID
+			env.Routers[routerID] = codes
+			return writeHideMySecrets(path, env)
+		}
+	}
+	return backend.ErrCabinetSecretNotFound
+}
+
 func (r *Router) deleteHideMyCode(userID int64, codeID string) error {
 	path := r.hideMySecretsPath()
+	defer lockCabinetStore(path)()
 	env, err := readHideMySecrets(path)
 	if err != nil {
 		return err
@@ -126,11 +160,16 @@ func (r *Router) deleteHideMyCode(userID int64, codeID string) error {
 	normalizeHideMyCodes(&codes)
 	next := codes.Codes[:0]
 	deletedActive := codes.ActiveID == codeID
+	found := false
 	for _, code := range codes.Codes {
 		if code.ID == codeID {
+			found = true
 			continue
 		}
 		next = append(next, code)
+	}
+	if !found {
+		return backend.ErrCabinetSecretNotFound
 	}
 	codes.Codes = next
 	if len(codes.Codes) == 0 {
@@ -233,7 +272,7 @@ func normalizeHideMyCodes(codes *hideMyCodes) {
 		}
 		seen[code.ID] = true
 		if code.Label == "" {
-			code.Label = fmt.Sprintf("Code #%d", i+1)
+			code.Label = fmt.Sprintf("Код #%d", i+1)
 		}
 		if code.ID == codes.ActiveID {
 			activeSeen = true
