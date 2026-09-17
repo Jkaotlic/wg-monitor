@@ -373,9 +373,8 @@ func ValidInstanceID(id string) bool { return instanceIDRe.MatchString(id) }
 // MigrateLegacyPassword -- одноразовый перенос amnezia_selfhosted.ssh_password
 // из backend.yaml в файл своих серверов (решение 11). Файла нет -- он
 // создаётся из секции YAML, как раньше её на лету показывал LoadStore. Файл
-// есть -- пароль (и адрес SSH, если своего нет) дописывается инстансам без
-// своего пароля: они и так ходили по SSH с паролем из YAML (ProviderConfig),
-// так что поведение выпуска не меняется.
+// есть -- пароль дописывается только инстансам с тем же SSH-адресом, что в
+// YAML, и без своего пароля. Адрес SSH никому не добавляется.
 func MigrateLegacyPassword(path string, legacy Config) (bool, error) {
 	if strings.TrimSpace(legacy.SSHPassword) == "" {
 		return false, nil
@@ -397,16 +396,14 @@ func MigrateLegacyPassword(path string, legacy Config) (bool, error) {
 		return false, err
 	}
 	changed := false
+	legacyHost := strings.TrimSpace(legacy.SSHHost)
 	for i := range st.Instances {
 		inst := &st.Instances[i]
-		if inst.SSHPassword != "" {
+		// Только тот, кто уже ходит по SSH на адрес из YAML и своего пароля не
+		// имеет. Инстансу без SSH адрес не придумывается, чужому адресу пароль
+		// из YAML не отдаётся. Второй запуск ничего не находит -- перенос один раз.
+		if inst.SSHPassword != "" || inst.SSHHost == "" || inst.SSHHost != legacyHost {
 			continue
-		}
-		if inst.SSHHost == "" {
-			if strings.TrimSpace(legacy.SSHHost) == "" {
-				continue
-			}
-			inst.SSHHost, inst.SSHPort, inst.SSHUser = legacy.SSHHost, legacy.SSHPort, legacy.SSHUser
 		}
 		inst.SSHPassword = legacy.SSHPassword
 		changed = true

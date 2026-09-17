@@ -317,20 +317,37 @@ func TestMigrateLegacyPassword(t *testing.T) {
 		t.Fatalf("второй запуск ничего не меняет: %v %v", migrated, err)
 	}
 
-	// Файл есть: пароль дописывается тем, кто ходил по SSH с паролем из YAML.
+	// Файл есть: пароль дописывается только инстансу с тем же SSH-адресом, что
+	// в YAML, и без своего пароля. Инстансу без SSH адрес не добавляется, чужой
+	// адрес пароль из YAML не получает, свой пароль не трогается.
 	path2 := filepath.Join(t.TempDir(), "s2.json")
 	if err := SaveStore(path2, Store{Version: 1, Instances: []Instance{
 		{ID: "home", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 1},
-		{ID: "work", Enabled: true, EndpointHost: "vpn2.example.com", EndpointPort: 2, SSHHost: "203.0.113.9", SSHPassword: "own"},
+		{ID: "other", Enabled: true, EndpointHost: "vpn3.example.com", EndpointPort: 3, SSHHost: "198.51.100.5"},
+		{ID: "same", Enabled: true, EndpointHost: "vpn4.example.com", EndpointPort: 4, SSHHost: "203.0.113.7"},
+		{ID: "work", Enabled: true, EndpointHost: "vpn2.example.com", EndpointPort: 2, SSHHost: "203.0.113.7", SSHPassword: "own"},
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if migrated, err := MigrateLegacyPassword(path2, legacy); !migrated || err != nil {
-		t.Fatalf("перенос в существующий файл: %v %v", migrated, err)
-	}
-	st, _ = LoadStore(path2, Config{})
-	if st.Instances[0].SSHPassword != "SECRET-YAML-PASS" || st.Instances[0].SSHHost != "203.0.113.7" || st.Instances[1].SSHPassword != "own" {
-		t.Fatalf("после переноса: %+v", st.Instances)
+	for run := 1; run <= 2; run++ {
+		migrated, err := MigrateLegacyPassword(path2, legacy)
+		if err != nil || migrated != (run == 1) {
+			t.Fatalf("запуск %d: migrated=%v err=%v", run, migrated, err)
+		}
+		st, _ = LoadStore(path2, Config{})
+		byID := map[string]Instance{}
+		for _, inst := range st.Instances {
+			byID[inst.ID] = inst
+		}
+		if h := byID["home"]; h.SSHHost != "" || h.SSHPassword != "" {
+			t.Fatalf("запуск %d: инстанс без SSH получил SSH: %+v", run, h)
+		}
+		if o := byID["other"]; o.SSHPassword != "" {
+			t.Fatalf("запуск %d: чужой адрес получил пароль из YAML: %+v", run, o)
+		}
+		if byID["same"].SSHPassword != "SECRET-YAML-PASS" || byID["work"].SSHPassword != "own" {
+			t.Fatalf("запуск %d: %+v", run, st.Instances)
+		}
 	}
 }
 
