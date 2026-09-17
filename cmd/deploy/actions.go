@@ -16,8 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Jkaotlic/wg-monitor/internal/backend/alerts"
-	"github.com/Jkaotlic/wg-monitor/internal/backend/tg"
 	"github.com/Jkaotlic/wg-monitor/internal/installtmpl"
 )
 
@@ -1248,7 +1246,6 @@ func actionInstallAgentAWGM(state *State, secrets *SecretStore, dl *Downloader, 
 			PrintWarn(report.Message)
 			return err
 		}
-		ensureTopicAfterSuccessfulInstall(state, secrets, ag)
 		pushToVPSBestEffort(state, secrets, *ag)
 		PrintOK(report.Message)
 		return nil
@@ -1272,17 +1269,6 @@ func runAWGMStartAfterTokenCommit(useVPSBootstrap bool, state *State, secrets *S
 		return runAWGMBootstrapViaVPSFunc(state, secrets, ag, apiKey, login, pass, terminalUser, terminalPass, startScript)
 	}
 	return runAWGMBootstrapDirectFunc(awgm, startScript, terminalUser, terminalPass)
-}
-
-var autoCreateForumTopicFunc = autoCreateForumTopic
-
-func ensureTopicAfterSuccessfulInstall(state *State, secrets *SecretStore, ag *AgentState) {
-	if ag == nil || ag.ThreadID != 0 {
-		return
-	}
-	if tid := autoCreateForumTopicFunc(state, secrets, ag.Nickname); tid > 0 {
-		ag.ThreadID = tid
-	}
 }
 
 func applyAWGMDeploySuccess(ag *AgentState, info *AWGMSystemInfo, version, authMode string, publicAWGMViaVPS bool, now time.Time) {
@@ -1663,7 +1649,6 @@ func actionInstallAgentLegacySSH(state *State, secrets *SecretStore, dl *Downloa
 		PrintWarn(report.Message)
 		return err
 	}
-	ensureTopicAfterSuccessfulInstall(state, secrets, ag)
 	// Best-effort sync push so other wizard PCs see this deploy.
 	if a := state.FindAgent(ag.Nickname); a != nil {
 		pushToVPSBestEffort(state, secrets, *a)
@@ -1704,9 +1689,6 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	state.Backend.Domain = cleanPromptDefaultLeak(Ask("Домен бэкенда (например wgmon.example.com)", state.Backend.Domain))
 	caddyEmail := cleanPromptDefaultLeak(Ask("Email для Let's Encrypt", "admin@"+state.Backend.Domain))
 
-	if state.Telegram.ChatID == 0 {
-		state.Telegram.ChatID = parseInt64Or(Ask("Telegram chat_id (отрицательное число)", ""), 0)
-	}
 	if state.Telegram.AdminUserID == 0 {
 		state.Telegram.AdminUserID = parseInt64Or(Ask("Telegram admin user_id (твой User ID)", ""), 0)
 	}
@@ -1737,10 +1719,10 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	// прод (другой chat_id/admin_user_id, устаревший токен из disk-cache, и т.п.).
 	existingInstall := existingInstallDetected(s)
 	if existingInstall {
-		existingChat, existingAdmin := readDeployedTelegramMeta(s)
+		_, existingAdmin := readDeployedTelegramMeta(s)
 		PrintWarn("на VPS уже установлен wg-monitor-backend:")
-		PrintInfo(fmt.Sprintf("  существующий chat_id=%d admin_user_id=%d", existingChat, existingAdmin))
-		PrintInfo(fmt.Sprintf("  будет записан chat_id=%d admin_user_id=%d", state.Telegram.ChatID, state.Telegram.AdminUserID))
+		PrintInfo(fmt.Sprintf("  существующий admin_user_id=%d", existingAdmin))
+		PrintInfo(fmt.Sprintf("  будет записан admin_user_id=%d", state.Telegram.AdminUserID))
 		ans := strings.ToLower(strings.TrimSpace(Ask("перезаписать backend.yaml + bot-token.txt + unit? [y/N]", "n")))
 		if ans != "y" && ans != "yes" {
 			return fmt.Errorf("install-backend aborted by user (existing install detected)")
@@ -1759,8 +1741,6 @@ func actionInstallBackend(state *State, secrets *SecretStore, dl *Downloader) er
 	PrintStep(4, 15, "backend.yaml")
 	yamlBytes, err := RenderBackendYAML(BackendParams{
 		PublicBaseURL: "https://" + strings.TrimSpace(state.Backend.Domain),
-		ChatID:        state.Telegram.ChatID,
-		ExtraChatIDs:  normalizeExtraChatIDs(state.Telegram.ExtraChatIDs, state.Telegram.ChatID),
 		AdminUserID:   state.Telegram.AdminUserID,
 	})
 	if err != nil {
@@ -2050,22 +2030,7 @@ func actionAddRouter(state *State, secrets *SecretStore, dl *Downloader) error {
 		return fmt.Errorf("AWG Manager URL required")
 	}
 
-	// Telegram-топик: если ag.ThreadID == 0, пытаемся создать через Bot API.
-	// Если chat_id не задан или Bot API возвращает ошибку — оставляем 0;
-	// топик создастся автоматически на первом hard-alert от агента.
-	PrintStep(2, 3, "Telegram форум-топик")
-	if ag.ThreadID == 0 {
-		threadID := autoCreateForumTopic(state, secrets, nick)
-		if threadID != 0 {
-			ag.ThreadID = threadID
-		} else {
-			PrintInfo("thread_id=0 — топик создастся автоматически на первом hard-alert")
-		}
-	} else {
-		PrintInfo(fmt.Sprintf("thread_id=%d уже сохранён, пропускаю createForumTopic", ag.ThreadID))
-	}
-
-	PrintStep(3, 3, "Установить агента на роутер")
+	PrintStep(2, 2, "Установить агента на роутер")
 	return actionInstallAgentAWGM(state, secrets, dl, nick)
 }
 
@@ -2607,41 +2572,6 @@ func chooseAgentForAction(state *State, nickname, label string) (*AgentState, er
 // reopen.
 func shellSingleQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// autoCreateForumTopic tries to create a Telegram forum topic for the new
-// router via createForumTopic Bot API. Returns 0 on any failure (missing
-// bot token, missing chat_id, network error, bot lacks manage_topics, chat
-// is not a forum) — caller should fall back to a manual prompt.
-//
-// Failure printing is best-effort PrintWarn; the calling flow stays alive.
-func autoCreateForumTopic(state *State, secrets *SecretStore, nick string) int {
-	if state.Telegram.ChatID == 0 {
-		PrintWarn("telegram chat_id не задан в wizard.toml — не могу создать топик автоматически")
-		return 0
-	}
-	tok, _ := secrets.Get("WG_BOT_TOKEN", "Telegram bot token", nil)
-	if tok == "" {
-		PrintWarn("WG_BOT_TOKEN не задан — не могу создать топик автоматически")
-		return 0
-	}
-	cli := &tg.Client{
-		BaseURL: tg.DefaultBaseURL,
-		Token:   tok,
-		HTTP:    &http.Client{Timeout: 15 * time.Second},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	id, err := cli.CreateForumTopic(ctx, state.Telegram.ChatID, nick, 0)
-	if err != nil {
-		PrintWarn("createForumTopic не удался (" + err.Error() + ") — спрошу thread_id вручную")
-		return 0
-	}
-	if err := alerts.SendWelcome(ctx, cli, state.Telegram.ChatID, id, nick, tg.OperatorMenuInlineKeyboardForTopic("per_router")); err != nil {
-		PrintWarn("welcome в новый топик не ушёл (" + err.Error() + ") — топик всё равно создан")
-	}
-	PrintOK(fmt.Sprintf("создан топик thread_id=%d", id))
-	return int(id)
 }
 
 // --- helpers ---

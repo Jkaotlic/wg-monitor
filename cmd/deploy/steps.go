@@ -506,10 +506,10 @@ func backendBackupEnableCommand() string {
 	return "systemctl daemon-reload && systemctl enable --now wg-monitor-backup.timer"
 }
 
-// readDeployedTelegramMeta extracts chat_id and admin_user_id from the
-// currently-deployed /etc/wg-monitor/backend.yaml on the VPS. Used by
-// install-backend's preflight to show the operator what they're about to
-// overwrite. Best-effort — returns 0/0 on any failure.
+// readDeployedTelegramMeta -- admin_user_id (и chat_id старых конфигов) из
+// установленного на VPS /etc/wg-monitor/backend.yaml. Нужен предполётной
+// проверке install-backend: показать, что будет перезаписано. Best-effort --
+// 0/0 при любой неудаче.
 func readDeployedTelegramMeta(s *SSH) (chatID, adminUserID int64) {
 	out, ok := readRemoteFile(s, "/etc/wg-monitor/backend.yaml")
 	if !ok {

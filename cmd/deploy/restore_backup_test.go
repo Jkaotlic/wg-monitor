@@ -347,3 +347,36 @@ wizard:
   backend_update_file: /var/lib/wg-monitor/backend-update.json
 `
 }
+
+// Группы больше нет (цикл 5): backend.yaml без chat_id -- нормальный конфиг,
+// и восстановление на него обязано соглашаться. Админ по-прежнему обязателен:
+// без него бэкенд не стартует.
+func TestValidateRestoreBackendYAMLAcceptsMissingChatID(t *testing.T) {
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.yaml")
+	if err := os.WriteFile(good, []byte(`db_path: /var/lib/wg-monitor/state.db
+telegram:
+  bot_token_file: /etc/wg-monitor/bot-token.txt
+  admin_user_id: 42
+wizard:
+  token_file: /etc/wg-monitor/wizard-token.txt
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRestoreBackendYAML(good); err != nil {
+		t.Fatalf("конфиг без chat_id отвергнут: %v", err)
+	}
+
+	noAdmin := filepath.Join(dir, "no-admin.yaml")
+	if err := os.WriteFile(noAdmin, []byte(`db_path: /var/lib/wg-monitor/state.db
+telegram:
+  bot_token_file: /etc/wg-monitor/bot-token.txt
+wizard:
+  token_file: /etc/wg-monitor/wizard-token.txt
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateRestoreBackendYAML(noAdmin); err == nil {
+		t.Fatal("конфиг без admin_user_id принят: бэкенд с ним не стартует")
+	}
+}

@@ -156,26 +156,6 @@ func main() {
 		runCLIAction("revive-agent", func() error { return actionUpdateAgent(state, secrets, dl, agentFlag, true) })
 	case "add-router":
 		runCLIAction("add-router", func() error { return actionAddRouter(state, secrets, dl) })
-	case "telegram-group", "bind-telegram-group":
-		agentFlag := ""
-		for i := 1; i < len(args); i++ {
-			switch args[i] {
-			case "--agent":
-				if i+1 < len(args) {
-					agentFlag = args[i+1]
-					i++
-				}
-			default:
-				fmt.Fprintf(os.Stderr, "%s: unknown option %s\n", args[0], args[i])
-				fmt.Fprintln(os.Stderr, "usage: wg-monitor-deploy telegram-group [--agent <nick>]")
-				os.Exit(2)
-			}
-		}
-		if agentFlag != "" && state.FindAgent(agentFlag) == nil {
-			fmt.Fprintf(os.Stderr, "telegram-group: agent %q not found in wizard.toml\n", agentFlag)
-			os.Exit(2)
-		}
-		runCLIAction("telegram-group", func() error { return actionTelegramGroup(state, secrets, agentFlag) })
 	case "sync-vps", "sync":
 		runCLIAction("sync-vps", func() error { return actionSyncVPS(state, secrets) })
 	case "adopt-backend", "adopt-vps", "bind-backend":
@@ -459,8 +439,6 @@ Commands:
                                check latest release and update selected backend/agents
   update-backend               update only backend
   add-router                   enroll via VPS and install through AWG Manager/KeenDNS
-  telegram-group [--agent <nick>]
-                               allow a separate TG supergroup and bind router topic
   install-agent --agent <nick> install/reinstall through AWG Manager/KeenDNS
   update-agent [--agent <nick>]
   revive-agent --agent <nick>    redeploy over SSH + fix backend.url (offline after domain change)

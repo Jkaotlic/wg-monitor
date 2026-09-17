@@ -17,8 +17,6 @@ var templatesFS embed.FS
 // not via this template.
 type BackendParams struct {
 	PublicBaseURL string
-	ChatID        int64
-	ExtraChatIDs  []int64
 	AdminUserID   int64
 }
 

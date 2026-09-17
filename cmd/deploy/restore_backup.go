@@ -43,7 +43,6 @@ type restoreBackendConfig struct {
 	DBPath   string `yaml:"db_path"`
 	Telegram struct {
 		BotTokenFile string `yaml:"bot_token_file"`
-		ChatID       int64  `yaml:"chat_id"`
 		AdminUserID  int64  `yaml:"admin_user_id"`
 	} `yaml:"telegram"`
 	Wizard struct {
@@ -214,9 +213,6 @@ func validateRestoreBackendYAML(path string) error {
 	if strings.TrimSpace(cfg.Telegram.BotTokenFile) != restoreRemoteBotTokenPath {
 		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file must be %s for this restore flow, got %q", restoreRemoteBotTokenPath, strings.TrimSpace(cfg.Telegram.BotTokenFile))
 	}
-	if cfg.Telegram.ChatID == 0 {
-		return fmt.Errorf("validate backend.yaml: telegram.chat_id is required")
-	}
 	if cfg.Telegram.AdminUserID == 0 {
 		return fmt.Errorf("validate backend.yaml: telegram.admin_user_id is required")
 	}
@@ -243,9 +239,9 @@ func validateRestoreBackendYAMLForImport(path string) error {
 	if strings.TrimSpace(cfg.Telegram.BotTokenFile) == "" {
 		return fmt.Errorf("validate backend.yaml: telegram.bot_token_file is required")
 	}
-	if cfg.Telegram.ChatID == 0 && cfg.Telegram.AdminUserID == 0 {
-		return fmt.Errorf("validate backend.yaml: telegram.chat_id or telegram.admin_user_id is required")
-	}
+	// Кто админ -- здесь не проверяем: импорт принимает и очень старые
+	// архивы, где в backend.yaml была только группа. Строгая проверка живёт
+	// в validateRestoreBackendYAML, по которому идёт восстановление на VPS.
 	return nil
 }
 
@@ -417,15 +413,9 @@ func restoreBackupToNewVPS(state *State, secrets *SecretStore, dl *Downloader, b
 	state.Backend.Domain = cleanPromptDefaultLeak(Ask("New backend domain", state.Backend.Domain))
 	caddyEmail := cleanPromptDefaultLeak(Ask("Email for Let's Encrypt", "admin@"+state.Backend.Domain))
 
-	chatID, adminID := parseTelegramMetaFromYAMLFile(backup.BackendYAMLPath)
-	if state.Telegram.ChatID == 0 {
-		state.Telegram.ChatID = chatID
-	}
+	adminID := parseAdminUserIDFromYAMLFile(backup.BackendYAMLPath)
 	if state.Telegram.AdminUserID == 0 {
 		state.Telegram.AdminUserID = adminID
-	}
-	if state.Telegram.ChatID == 0 {
-		state.Telegram.ChatID = parseInt64Or(Ask("Telegram chat_id", ""), 0)
 	}
 	if state.Telegram.AdminUserID == 0 {
 		state.Telegram.AdminUserID = parseInt64Or(Ask("Telegram admin user_id", ""), 0)
@@ -624,19 +614,18 @@ func restoredBackendVerificationResult(activeOut string, activeErr error, domain
 	return nil
 }
 
-func parseTelegramMetaFromYAMLFile(path string) (chatID, adminUserID int64) {
+// parseAdminUserIDFromYAMLFile -- admin_user_id из backend.yaml архива.
+// Группы больше нет (цикл 5): chat_id из архива никому не нужен.
+func parseAdminUserIDFromYAMLFile(path string) (adminUserID int64) {
 	body, err := os.ReadFile(path)
 	if err != nil {
-		return 0, 0
+		return 0
 	}
 	for _, raw := range strings.Split(string(body), "\n") {
 		line := strings.TrimSpace(raw)
-		if rest, ok := strings.CutPrefix(line, "chat_id:"); ok {
-			chatID = parseInt64Or(strings.TrimSpace(rest), 0)
-		}
 		if rest, ok := strings.CutPrefix(line, "admin_user_id:"); ok {
 			adminUserID = parseInt64Or(strings.TrimSpace(rest), 0)
 		}
 	}
-	return chatID, adminUserID
+	return adminUserID
 }
