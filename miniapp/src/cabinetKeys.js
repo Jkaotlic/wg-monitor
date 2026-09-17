@@ -245,4 +245,5 @@ export const CABINET_TEXTS = {
   instancesError: 'Не удалось прочитать список своих серверов.',
   backToList: 'Выбрать, что отозвать',
   issueRunning: 'Выпускаем конфиг, роутер его принимает…',
+  roleError: 'Не удалось узнать ваши права.',
 }

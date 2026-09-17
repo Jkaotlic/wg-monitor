@@ -18,7 +18,7 @@ import { Quoted } from '../ui/Q.jsx'
 // скачивает сервер и сам кладёт его в команду агенту -- через приложение он
 // не проходит. «Прислать .conf в личку» (админ и владелец) -- файл
 // отправляет бот лично нажавшему; на листе сказано, что в файле приватный ключ.
-export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIssued, onBackToList }) {
+export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIssued, onBusy, onBackToList }) {
   const [phase, setPhase] = useState('idle')
   const [outcome, setOutcome] = useState('')
   const [offerRevoke, setOfferRevoke] = useState(false)
@@ -30,6 +30,10 @@ export function CabinetIssue({ routerID, asleep, pending, perms, openSheet, onIs
     },
     [],
   )
+  // Экран кабинета гасит «назад», пока выпуск идёт.
+  useEffect(() => {
+    onBusy?.(phase === 'running')
+  }, [phase])
 
   async function issue() {
     setPhase('running')

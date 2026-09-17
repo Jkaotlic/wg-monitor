@@ -26,13 +26,17 @@ vi.mock('../src/api.js', async (importOriginal) => {
     ...real,
     fetchCabinets: (id) => {
       log('cabinets', id)
+      if (mocks.cabinetsFail) return Promise.reject(mocks.cabinetsFail)
       return Promise.resolve(structuredClone(mocks.cabinets))
     },
     fetchVPNAccounts: (id) => {
       log('vpn', id)
       return Promise.resolve({ accounts: structuredClone(mocks.accounts) })
     },
-    fetchRouterSettings: () => Promise.resolve({ role: mocks.role }),
+    fetchRouterSettings: () => {
+      log('settings')
+      return mocks.settingsFail ? Promise.reject(new Error('net')) : Promise.resolve({ role: mocks.role })
+    },
     fetchSelfhosted: () => {
       log('selfhosted')
       return Promise.resolve({ instances: structuredClone(mocks.instances) })
@@ -55,6 +59,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
     },
     issueVPNConfig: (id, provider, option, instance) => {
       log('issue', id, provider, option, instance)
+      if (mocks.issueReply === 'hang') return new Promise(() => {})
       return reply(mocks.issueReply, { cmd_id: 'c1', tunnel_name: 'amnezia_de' })
     },
     fetchCommandResult: () => Promise.resolve(mocks.result ?? { status: 'ok', output: '' }),
@@ -165,6 +170,8 @@ beforeEach(() => {
   mocks.cabinets = structuredClone(CABINETS)
   mocks.accounts = structuredClone(ACCOUNTS)
   mocks.role = 'owner'
+  mocks.settingsFail = false
+  mocks.cabinetsFail = null
   mocks.instances = []
   mocks.calls = []
   mocks.addReply = null
@@ -438,3 +445,56 @@ describe('кабинет роутера: выпуск', () => {
     cleanup(root)
   })
 })
+
+describe('кабинет роутера: права, загрузка, перечитывание', () => {
+  it('права не прочитались -- слова и «Повторить», кнопок правки нет; повтор возвращает их', async () => {
+    mocks.settingsFail = true
+    const { root } = await mount()
+    expect(root.textContent).toContain('Не удалось узнать ваши права.')
+    expect(button(root, 'Добавить ключ')).toBeFalsy()
+    mocks.settingsFail = false
+    await act(async () => button(root, 'Повторить').click())
+    await flush()
+    await flush()
+    expect(root.textContent).not.toContain('Не удалось узнать ваши права.')
+    expect(button(root, 'Добавить ключ')).toBeTruthy()
+    expect(calls('settings')).toHaveLength(2)
+    cleanup(root)
+  })
+
+  it('кабинеты на сервере не настроены -- слова сервера', async () => {
+    mocks.cabinetsFail = new ApiError(503, 'cabinets_not_configured', 'x', 'Кабинеты VPN на сервере не настроены')
+    const { root } = await mount()
+    expect(root.querySelector('.state-error').textContent).toBe('Кабинеты VPN на сервере не настроены')
+    cleanup(root)
+  })
+
+  it('пока выпуск идёт, «назад» погашен', async () => {
+    mocks.issueReply = 'hang'
+    const { root } = await mount()
+    await pickOption(root, 'Германия')
+    expect(root.querySelector('.overlay-back').disabled).toBe(false)
+    await act(async () => button(root, 'Выпустить и положить на роутер').click())
+    await flush()
+    expect(root.querySelector('.overlay-back').disabled).toBe(true)
+    cleanup(root)
+  })
+
+  it('после успешного выпуска и после возврата к списку кабинет перечитан', async () => {
+    const { root } = await mount()
+    expect(calls('cabinets')).toHaveLength(1)
+    await pickOption(root, 'Германия')
+    await act(async () => button(root, 'Выпустить и положить на роутер').click())
+    await flush()
+    await flush()
+    expect(calls('cabinets')).toHaveLength(2)
+    expect(calls('vpn')).toHaveLength(2)
+    await act(async () => root.querySelector('.overlay-back').click())
+    await flush()
+    expect(calls('cabinets')).toHaveLength(3)
+    expect(calls('vpn')).toHaveLength(3)
+    expect(root.querySelector('.segment-tabs')).toBeTruthy()
+    cleanup(root)
+  })
+})
+

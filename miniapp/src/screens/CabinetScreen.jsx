@@ -24,6 +24,10 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   const [tab, setTab] = useState('amnezia')
   const [pending, setPending] = useState(null)
   const [notice, setNotice] = useState('')
+  // Права не прочитались: без роли экран молча стал бы «только чтение».
+  const [roleError, setRoleError] = useState(false)
+  // Выпуск идёт: «назад» гаснет, чтобы не бросить его на полпути.
+  const [issuing, setIssuing] = useState(false)
 
   const alive = useRef(true)
   useEffect(
@@ -50,8 +54,10 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
             })
         }
       })
-      .catch(() => {
-        if (alive.current) setLoadError(CABINET_TEXTS.loadError)
+      .catch((err) => {
+        if (!alive.current) return
+        // Кабинеты не настроены -- состояние сервера, и он сам его называет.
+        setLoadError(err?.code === 'cabinets_not_configured' && err.serverMessage ? err.serverMessage : CABINET_TEXTS.loadError)
       })
     fetchVPNAccounts(routerID)
       .then((resp) => {
@@ -72,13 +78,35 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
     setPending(null)
     setNotice('')
     setRole('')
+    setIssuing(false)
+    loadRole()
+    load()
+  }, [routerID])
+
+  function loadRole() {
+    setRoleError(false)
     fetchRouterSettings(routerID)
       .then((s) => {
         if (alive.current) setRole(s?.role ?? '')
       })
-      .catch(() => {})
+      .catch(() => {
+        if (alive.current) setRoleError(true)
+      })
+  }
+
+  // Уход с экрана выпуска: подписка могла измениться (занятые места,
+  // выпущенные страны) -- кабинет перечитывается.
+  function leaveIssue() {
+    setPending(null)
+    setIssuing(false)
+    setAccounts(null)
     load()
-  }, [routerID])
+  }
+
+  function issued() {
+    onIssued?.()
+    load()
+  }
 
   // Ключ добавлен, выбран, удалён или страна отозвана: итог -- строкой над
   // вкладкой, кабинеты и подписка -- заново (активный ключ мог смениться).
@@ -110,8 +138,9 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
           pending={pending}
           perms={perms}
           openSheet={openSheet}
-          onIssued={onIssued}
-          onBackToList={() => setPending(null)}
+          onIssued={issued}
+          onBusy={setIssuing}
+          onBackToList={leaveIssue}
         />
       )
     }
@@ -156,8 +185,20 @@ export function CabinetScreen({ routerID, routerName = '', asleep = false, openS
   }
 
   return (
-    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={pending ? () => setPending(null) : onClose}>
-      <div class="screen cabinet">{body()}</div>
+    <Overlay title={title} backLabel={pending ? 'Назад' : 'VPN-туннели'} onBack={issuing ? undefined : pending ? leaveIssue : onClose}>
+      <div class="screen cabinet">
+        {roleError && (
+          <div class="card cabinet-role-error">
+            <p class="state state-error" role="alert">
+              {CABINET_TEXTS.roleError}
+            </p>
+            <button type="button" class="btn btn-ghost btn-wide" onClick={loadRole}>
+              Повторить
+            </button>
+          </div>
+        )}
+        {body()}
+      </div>
     </Overlay>
   )
 }
