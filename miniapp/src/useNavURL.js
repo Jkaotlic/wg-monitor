@@ -8,10 +8,12 @@ import { navPinned } from './nav.js'
 // Первая синхронизация -- replaceState: открытие страницы не должно
 // оставлять в истории лишнюю запись, по которой «назад» ведёт на то же самое.
 // Она же переводит /dashboard/login в /dashboard/ после входа.
-export function useNavURL({ enabled, nav, dispatch, routerIDs = [], basePath = '/dashboard/' }) {
+export function useNavURL({ enabled, nav, dispatch, routerIDs = [], isAdmin = false, basePath = '/dashboard/' }) {
   const synced = useRef(false)
   const idsRef = useRef(routerIDs)
   idsRef.current = routerIDs
+  const adminRef = useRef(isAdmin)
+  adminRef.current = isAdmin
   const navRef = useRef(nav)
   navRef.current = nav
 
@@ -42,7 +44,7 @@ export function useNavURL({ enabled, nav, dispatch, routerIDs = [], basePath = '
         window.history.pushState(null, '', basePath + urlFromNav(navRef.current))
         return
       }
-      const state = navFromURL(window.location.search, idsRef.current)
+      const state = navFromURL(window.location.search, idsRef.current, { isAdmin: adminRef.current })
       const next = basePath + urlFromNav(state)
       if (next !== window.location.pathname + window.location.search) window.history.replaceState(null, '', next)
       dispatch({ type: 'init', state, source: 'popstate' })

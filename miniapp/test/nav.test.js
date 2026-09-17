@@ -347,3 +347,35 @@ describe('кабинет и свои серверы', () => {
     expect(navReducer(s, { type: 'back' })).toEqual({ ...s, sheet: null })
   })
 })
+
+// «Назад» Telegram не закрывает занятый лист: запрос уже ушёл, и человек
+// остался бы без ответа на то, что сделал (M8 ревью цикла 3).
+describe('занятый лист', () => {
+  const base = { routerID: 1, tab: 'router', overlay: 'cabinet', sheet: null }
+  const sheet = { title: 'Удалить?' }
+
+  it('sheetBusy помечает открытый лист; без листа -- ничего', () => {
+    expect(navReducer(base, { type: 'sheetBusy', busy: true })).toBe(base)
+    const open = navReducer(base, { type: 'sheet', sheet })
+    const busy = navReducer(open, { type: 'sheetBusy', busy: true })
+    expect(busy.sheetBusy).toBe(true)
+    const free = navReducer(busy, { type: 'sheetBusy', busy: false })
+    expect('sheetBusy' in free).toBe(false)
+  })
+
+  it('«назад» не закрывает занятый лист и не трогает слой под ним', () => {
+    const busy = navReducer(navReducer(base, { type: 'sheet', sheet }), { type: 'sheetBusy', busy: true })
+    expect(navReducer(busy, { type: 'back' })).toBe(busy)
+    const free = navReducer(busy, { type: 'sheetBusy', busy: false })
+    expect(navReducer(free, { type: 'back' }).sheet).toBe(null)
+  })
+
+  it('закрытие листа самим листом снимает занятость', () => {
+    const busy = navReducer(navReducer(base, { type: 'sheet', sheet }), { type: 'sheetBusy', busy: true })
+    const closed = navReducer(busy, { type: 'sheet', sheet: null })
+    expect(closed.sheet).toBe(null)
+    expect('sheetBusy' in closed).toBe(false)
+    expect(navReducer(closed, { type: 'back' }).overlay).toBe(null)
+  })
+})
+

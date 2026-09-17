@@ -33,7 +33,7 @@ export function App() {
   const [linkToken, setLinkToken] = useState(() => (mode === 'web' ? takeHashToken() : ''))
   const [nav, dispatch] = useReducer(navReducer, initialNav())
   const boot = useBoot(mode, {
-    onReady: (list) => dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id)) }),
+    onReady: (list, info) => dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: info?.isAdmin === true }) }),
   })
   const routerIDs = boot.routers.map((r) => r.id)
 
@@ -46,7 +46,7 @@ export function App() {
     boot.start()
   }, [])
 
-  useNavURL({ enabled: mode === 'web' && boot.status === 'ready', nav, dispatch, routerIDs })
+  useNavURL({ enabled: mode === 'web' && boot.status === 'ready', nav, dispatch, routerIDs, isAdmin: boot.isAdmin })
 
   // 401 посреди работы в браузере -- истекла кука: на экран входа, место в
   // адресе остаётся, после входа useBoot откроет его снова.
@@ -105,7 +105,7 @@ export function App() {
     body = (
       <NoAccess
         onRetry={(list) => {
-          dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id)) })
+          dispatch({ type: 'init', state: navFromURL(window.location.search, list.map((r) => r.id), { isAdmin: boot.isAdmin }) })
           boot.setRouters(list)
         }}
       />

@@ -96,7 +96,7 @@ function validPort(v) {
 // (пусто -- короткое имя), адрес SSH тоже (пусто -- контейнер на той же
 // машине); пароль обязателен, только когда адрес SSH задан, а пароля ещё нет
 // (passwordSet -- password_set сохранённого сервера).
-export function validateInstance(values, { isNew, passwordSet = false }) {
+export function validateInstance(values, { isNew, passwordSet = false, saved = null }) {
   if (isNew && !INSTANCE_ID_RE.test(trimmed(values.id))) {
     return 'Короткое имя: строчная латиница, цифры, «-» и «_», от 2 до 16 знаков, первая — буква.'
   }
@@ -106,6 +106,8 @@ export function validateInstance(values, { isNew, passwordSet = false }) {
   if (sshPort && !validPort(sshPort)) return 'Порт SSH — число от 1 до 65535.'
   const needPassword = trimmed(values.ssh_host) !== '' && (isNew || !passwordSet)
   if (needPassword && !values.ssh_password) return 'Укажите пароль SSH.'
+  // Сохранённый пароль -- только для того же входа (сервер проверяет так же).
+  if (!isNew && !values.ssh_password && sshAddressChanged(saved, values)) return SSH_CHANGED_TEXT
   return ''
 }
 
@@ -223,3 +225,29 @@ export function sshWipeWarning(inst, values) {
   if (!inst?.ssh_host || inst.password_set !== true) return ''
   return trimmed(values?.ssh_host) === '' ? SSH_WIPE_TEXT : ''
 }
+
+export const SSH_CHANGED_TEXT = 'Адрес SSH изменён — введите пароль заново'
+
+function sshLogin(v) {
+  const host = typeof v?.ssh_host === 'string' ? v.ssh_host.trim() : ''
+  const port = Number(String(v?.ssh_port ?? '').trim()) || 22
+  const user = (typeof v?.ssh_user === 'string' ? v.ssh_user.trim() : '') || 'root'
+  return { host, port, user }
+}
+
+// Вход SSH сменился: адрес, порт или пользователь (пустые -- 22 и root, как
+// на сервере). Стёртый адрес -- не смена, у него своё предупреждение.
+export function sshAddressChanged(inst, values) {
+  const was = sshLogin(inst)
+  const now = sshLogin(values)
+  if (!was.host || !now.host) return false
+  return was.host !== now.host || was.port !== now.port || was.user !== now.user
+}
+
+// Предупреждение под адресом SSH сохранённого сервера с паролем.
+export function sshHostWarning(inst, values) {
+  const wipe = sshWipeWarning(inst, values)
+  if (wipe) return wipe
+  return inst?.password_set === true && sshAddressChanged(inst, values) ? SSH_CHANGED_TEXT : ''
+}
+

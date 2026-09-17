@@ -24,6 +24,7 @@ vi.mock('../src/api.js', async (importOriginal) => {
   return {
     ...real,
     fetchSelfhosted: () =>
+      mocks.calls.push(['list']) &&
       mocks.loadFail ? Promise.reject(new Error('net')) : Promise.resolve({ instances: structuredClone(mocks.instances), defaults: structuredClone(mocks.defaults) }),
     createSelfhosted: (body) => {
       log('create', body)
@@ -33,6 +34,17 @@ vi.mock('../src/api.js', async (importOriginal) => {
     },
     updateSelfhosted: (id, body) => {
       log('update', id, body)
+      // Удачная правка ложится в «сервер» так же, как у настоящего: экран
+      // перечитывает список после сохранения.
+      if (!mocks.updateReply) {
+        const inst = mocks.instances.find((i) => i.id === id)
+        if (inst) {
+          const { ssh_password: pw, ...rest } = body
+          Object.assign(inst, rest)
+          if (pw) inst.password_set = true
+          if (rest.ssh_host === '') Object.assign(inst, { ssh_user: '', ssh_port: 0, password_set: false })
+        }
+      }
       return reply(mocks.updateReply, null)
     },
     toggleSelfhosted: (id, enabled) => {
@@ -398,6 +410,38 @@ describe('стёртый адрес SSH', () => {
     expect(root.textContent).toContain('Пароль не задан.')
     expect(root.textContent).not.toContain('Без адреса SSH сохранённый пароль будет удалён')
     cleanup(sheetRoot)
+    cleanup(root)
+  })
+})
+
+describe('смена адреса SSH и перечитывание', () => {
+  it('сменили порт SSH -- предупреждение под адресом, без пароля не сохраняется', async () => {
+    const { root } = await mountInstance('ams')
+    await fill(root, 'sh-ssh_port', '2222')
+    const warn = root.querySelector('#sh-ssh_host').closest('.field').querySelector('.field-warn')
+    expect(warn.textContent).toBe('Адрес SSH изменён — введите пароль заново')
+    await click(button(root, 'Сохранить'))
+    expect(calls('update')).toEqual([])
+    const pw = root.querySelector('#sh-ssh_password')
+    expect(pw.closest('.field').querySelector('.field-error-text').textContent).toBe('Адрес SSH изменён — введите пароль заново')
+    await fill(root, 'sh-ssh_password', 'new-pw')
+    await click(button(root, 'Сохранить'))
+    expect(calls('update')).toHaveLength(1)
+    expect(calls('update')[0][2].ssh_password).toBe('new-pw')
+    cleanup(root)
+  })
+
+  it('после сохранения сервер перечитан: новое название в заголовке', async () => {
+    const { root } = await mountInstance('ams')
+    expect(calls('list')).toHaveLength(1)
+    await fill(root, 'sh-label', 'Амстердам-2')
+    mocks.instances[0].label = 'Амстердам-2'
+    mocks.instances[0].ssh_user = 'root'
+    await click(button(root, 'Сохранить'))
+    await flush()
+    expect(calls('list')).toHaveLength(2)
+    expect(root.querySelector('.overlay-title').textContent).toBe('Сервер «Амстердам-2»')
+    expect(root.querySelector('.connection-notice').textContent).toBe('Сохранено.')
     cleanup(root)
   })
 })

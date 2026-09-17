@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks'
-import { fetchVPNAccounts, fetchReplaceStatus, startReplace } from '../api.js'
+import { fetchVPNAccounts, fetchReplaceStatus, startReplace, fetchRouterSettings } from '../api.js'
 import { accountSummary, optionRows } from '../cabinet.js'
 import { replaceView, startErrorText, stepValue } from '../replace.js'
 import { Overlay } from '../ui/Overlay.jsx'
@@ -18,12 +18,16 @@ import { Q, Quoted } from '../ui/Q.jsx'
 // не после: именно это свойство делает операцию обратимой.
 const POLL_MS = 3000
 
-export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone }) {
+// onOpenCabinet -- открыть кабинет роутера: там владелец и админ отзывают
+// выпущенную страну, когда в подписке нет мест.
+export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone, onOpenCabinet }) {
   const [job, setJob] = useState(null)
   const [accounts, setAccounts] = useState(null)
   const [pick, setPick] = useState(null)
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
+  // Отзывать может владелец и админ; роль не узнали -- кнопки нет, слова те же.
+  const [canRevoke, setCanRevoke] = useState(false)
 
   useEffect(() => {
     let alive = true
@@ -35,6 +39,12 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
         .catch(() => {})
     }
     poll()
+    setCanRevoke(false)
+    fetchRouterSettings(routerID)
+      .then((st) => {
+        if (alive) setCanRevoke(st?.role === 'admin' || st?.role === 'owner')
+      })
+      .catch(() => {})
     const timer = setInterval(poll, POLL_MS)
     fetchVPNAccounts(routerID)
       .then((data) => {
@@ -144,9 +154,23 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
             {accounts == null && !error && <p class="state">Спрашиваем кабинеты…</p>}
             {(accounts ?? []).map((acc) => {
               const summary = accountSummary(acc)
-              const options = optionRows(acc)
+              const options = optionRows(acc).filter((o) => o.available)
+              const openCabinet = summary.full && canRevoke && onOpenCabinet
+              const fullBlock = summary.full && (
+                <div class="card">
+                  <p class="traffic-detail">
+                    <Quoted text={openCabinet ? `${summary.fullNote} Освободить место можно в кабинете: отзовите одну из выпущенных стран.` : summary.reason} />
+                  </p>
+                  {openCabinet && (
+                    <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenCabinet}>
+                      Открыть кабинет
+                    </button>
+                  )}
+                </div>
+              )
               return (
                 <Section key={acc.provider} title={summary.title}>
+                  {fullBlock}
                   {summary.canIssue ? (
                     <ul class="card list-reset">
                       {options.map((o) => (
@@ -159,11 +183,13 @@ export function ReplaceScreen({ routerID, tunnel, policyName, onClose, onDone })
                       ))}
                     </ul>
                   ) : (
-                    <div class="card">
-                      <p class="traffic-detail">
-                        <Quoted text={summary.reason} />
-                      </p>
-                    </div>
+                    !summary.full && (
+                      <div class="card">
+                        <p class="traffic-detail">
+                          <Quoted text={summary.reason} />
+                        </p>
+                      </div>
+                    )
                   )}
                 </Section>
               )

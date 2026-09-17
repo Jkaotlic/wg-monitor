@@ -18,7 +18,9 @@ import {
   selfhostedErrorText,
   errorFieldKey,
   sshWipeWarning,
+  sshHostWarning,
   SSH_WIPE_TEXT,
+  SSH_CHANGED_TEXT,
 } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -86,6 +88,24 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
       })
   }, [instanceId])
 
+  // После сохранения -- сервер заново: он чистит поля (пустой адрес SSH
+  // стирает пользователя и порт, пустое название становится коротким именем).
+  // Пароль в форме к этому моменту уже пуст.
+  function reload() {
+    fetchSelfhosted()
+      .then((resp) => {
+        if (!alive.current) return
+        const found = (resp?.instances ?? []).find((i) => String(i.id) === instanceId)
+        if (!found) return
+        const v = instanceFormValues(found)
+        setDefaults(resp?.defaults ?? null)
+        setInst(found)
+        setInitial(v)
+        setValues(v)
+      })
+      .catch(() => {})
+  }
+
   // Отвергнутое поле -- в фокус: человек сразу видит, что править.
   useEffect(() => {
     if (fieldError) document.getElementById(`sh-${fieldError.key}`)?.focus()
@@ -114,7 +134,14 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
   function save(e) {
     e.preventDefault()
     if (!values || busy) return
-    const problem = validateInstance(values, { isNew, passwordSet: inst?.password_set === true })
+    const problem = validateInstance(values, { isNew, passwordSet: inst?.password_set === true, saved: inst })
+    if (problem === SSH_CHANGED_TEXT) {
+      // Ошибка про пароль -- у поля пароля: туда и вводить.
+      setError('')
+      setNotice('')
+      setFieldError({ key: 'ssh_password', text: problem })
+      return
+    }
     if (problem) {
       setError(problem)
       setNotice('')
@@ -152,6 +179,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
         password_set: body.ssh_host === '' ? false : passwordSent || prev?.password_set === true,
       }))
       setNotice(SELFHOSTED_TEXTS.saved)
+      reload()
     }
 
     if (wipe) {
@@ -296,7 +324,7 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                         inputMode={f.inputMode}
                         hint={f.kind === 'password' ? passwordHint(inst, { isNew }) : f.hint}
                         error={fieldError?.key === f.key ? fieldError.text : ''}
-                        warn={f.key === 'ssh_host' && !isNew ? sshWipeWarning(inst, values) : ''}
+                        warn={f.key === 'ssh_host' && !isNew ? sshHostWarning(inst, values) : ''}
                         onInput={(v) => set(f.key, v)}
                       />
                     ))}
