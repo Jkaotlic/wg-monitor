@@ -42,6 +42,15 @@ single-purpose VPS is the common case.
   temp + rename, `0600`); issuing a config on a self-hosted server holds a
   per-server lock so two clients never get the same address.
 
+Known limits of the chat guard (not fixed in v0.38):
+
+- Edited messages are not checked: the bot does not receive `edited_message`
+  updates, so a secret added by editing an old message stays in the chat.
+- A code is recognised only as a message (or file caption) that is nothing but
+  10-20 digits. A code with spaces or other text around it is not deleted.
+- The guard sees only chats the bot is in; a secret sent anywhere else is
+  outside its reach.
+
 Backlog (not in v0.38): encrypt these JSON files with the AES-GCM key already
 used by agent revive; pin the self-hosted SSH host key (TOFU) instead of
 `InsecureIgnoreHostKey`; revoke a peer on a self-hosted server.

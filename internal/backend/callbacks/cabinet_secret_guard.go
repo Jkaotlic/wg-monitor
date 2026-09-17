@@ -45,6 +45,10 @@ func cabinetSecretKind(text string) string {
 func (r *Router) handleCabinetSecretMessage(ctx context.Context, m *tg.Message) bool {
 	kind := cabinetSecretKind(m.Text)
 	if kind == "" {
+		// Подпись к файлу или фото висит в чате так же, как текст.
+		kind = cabinetSecretKind(m.Caption)
+	}
+	if kind == "" {
 		return false
 	}
 	private := m.Chat.ID == m.From.ID

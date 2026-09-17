@@ -118,3 +118,30 @@ func TestOldCabinetButtonAnswersUnknown(t *testing.T) {
 		t.Fatalf("answers=%q edits=%q", f.answers, f.edits)
 	}
 }
+
+// Секрет в подписи к файлу или фото виден в чате так же, как в тексте.
+func TestCabinetSecretInCaptionIsDeleted(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		chatID  int64
+		caption string
+	}{
+		{"ключ в подписи к файлу в группе", -100, "vpn://SECRET-KEY-IN-CAPTION"},
+		{"код в подписи в личке", 777, "123456789012345"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, _ := newTestDB(t)
+			f := &fakeRouterTGFull{}
+			r := NewRouter(d, f, Config{ChatID: -100, AdminUserID: 42})
+			from := int64(42)
+			if tc.chatID > 0 {
+				from = tc.chatID
+			}
+			r.HandleMessage(context.Background(), &tg.Message{MessageID: 57, Chat: tg.Chat{ID: tc.chatID}, From: tg.User{ID: from},
+				Caption: tc.caption, Document: &tg.Document{FileID: "f1", FileName: "x.conf"}})
+			if len(f.deleted) != 1 || f.deleted[0].msgID != 57 {
+				t.Fatalf("подпись с секретом не удалена: %+v", f.deleted)
+			}
+		})
+	}
+}

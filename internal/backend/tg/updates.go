@@ -19,13 +19,16 @@ type CallbackQuery struct {
 }
 
 type Message struct {
-	MessageID       int64     `json:"message_id"`
-	Chat            Chat      `json:"chat"`
-	From            User      `json:"from"`
-	MessageThreadID *int64    `json:"message_thread_id,omitempty"`
-	Text            string    `json:"text"`
-	Document        *Document `json:"document,omitempty"`
-	ForwardFrom     *User     `json:"forward_from,omitempty"`
+	MessageID       int64  `json:"message_id"`
+	Chat            Chat   `json:"chat"`
+	From            User   `json:"from"`
+	MessageThreadID *int64 `json:"message_thread_id,omitempty"`
+	Text            string `json:"text"`
+	// Caption -- подпись к файлу или фото; сторож секретов кабинетов
+	// проверяет её так же, как текст.
+	Caption     string    `json:"caption,omitempty"`
+	Document    *Document `json:"document,omitempty"`
+	ForwardFrom *User     `json:"forward_from,omitempty"`
 }
 
 // Document represents a TG file attachment on a Message.
