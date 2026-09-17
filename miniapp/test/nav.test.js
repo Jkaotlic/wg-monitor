@@ -153,11 +153,11 @@ describe('подписи вкладок', () => {
 // главный экран, где настройки пришлось бы искать.
 describe('deepLinkOverlay', () => {
   it('открывает любой оверлей роутера, но только вместе с роутером', () => {
-    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn']) {
+    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages']) {
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(o)
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: null })).toBe(null)
     }
-    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn'])
+    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages'])
   })
 
   it('без open и с неизвестным open -- ничего', () => {

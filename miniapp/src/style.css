@@ -3069,6 +3069,42 @@ body {
   padding: var(--sp-3) var(--sp-4) var(--sp-4);
 }
 
+.packages-card + .packages-card {
+  margin-top: var(--sp-2);
+}
+
+.packages-time {
+  margin-top: var(--sp-3);
+}
+
+.packages-time input {
+  max-width: 160px;
+  font-family: var(--font-mono);
+}
+
+.packages-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.packages-log {
+  max-height: 320px;
+  overflow-wrap: anywhere;
+}
+
+.packages-details {
+  margin-top: var(--sp-2);
+}
+
+.packages-details > summary {
+  color: var(--dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+
 /* --- Поиск и фильтры списка роутеров (цикл 2) --- */
 .filter-bar {
   display: flex;
@@ -3716,6 +3752,11 @@ body {
   .wide-shell .filter-chip:hover {
     color: var(--text);
     background: var(--surf2);
+  }
+
+  /* --- «Пакеты по расписанию»: журнал на широком экране длиннее --- */
+  .wide-shell .packages-log {
+    max-height: 480px;
   }
 
   /* --- Наведение и фокус (в телефонной раскладке наведения нет) --- */

@@ -77,3 +77,20 @@ describe('«Опасное» в Обслуживании, CSS', () => {
     }
   })
 })
+
+describe('«Пакеты по расписанию», CSS', () => {
+  it('классы экрана -- вне блока широкой раскладки', () => {
+    for (const sel of ['.packages-card + .packages-card', '.packages-time input', '.packages-actions', '.packages-log', '.packages-details > summary']) {
+      expect(rule(outside, `\n${sel}`), sel).not.toBe(null)
+    }
+  })
+
+  it('кнопки переносятся, журнал не раздвигает страницу вбок', () => {
+    expect(rule(outside, '\n.packages-actions')).toMatch(/flex-wrap:\s*wrap/)
+    expect(rule(outside, '\n.packages-log')).toMatch(/overflow-wrap:\s*anywhere/)
+  })
+
+  it('на широком экране журналу больше высоты', () => {
+    expect(rule(block.body, '\n  .wide-shell .packages-log')).toMatch(/max-height/)
+  })
+})

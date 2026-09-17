@@ -19,7 +19,7 @@ export function normalizeTab(tab) {
 // роутером; список роутеров («fleet») сюда не входит: это выбор, а не место.
 // Прежде ссылка открывала только настройки (кнопка «Панель роутера» в
 // тревоге); веб-управлению нужны обновление страницы и закладки на любой слой.
-export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn']
+export const OPEN_OVERLAYS = ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages']
 
 // Слои всего парка, а не роутера: мастер «Добавить роутер», «Ход работы»,
 // ожидание раскатки бэкенда. Открываются и без выбранного роутера и в адрес

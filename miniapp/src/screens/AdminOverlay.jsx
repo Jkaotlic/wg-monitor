@@ -24,7 +24,7 @@ import {
 // «Опасное» свёрнуто (спека, п. 8): перенаправление уводит роутер с этого
 // сервера, и случайно раскрыть его пролистыванием нельзя. Запуск ведёт на
 // «Ход работы» через openLayer (возврат -- сюда же).
-export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenRouter }) {
+export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClose, openSheet, openLayer, onOpenAgentConfig, onOpenAgentConnection, onOpenDNSReset, onOpenPackages, onOpenRouter }) {
   const router = { id: routerID, nickname: routerName }
 
   function askRepoint() {
@@ -93,6 +93,17 @@ export function AdminOverlay({ routerID, routerName = '', isAdmin = false, onClo
             </button>
             <p class="hint">
               Заменить DNS-серверы роутера эталонными. Сначала экран покажет, что изменится.
+            </p>
+          </Section>
+        )}
+
+        {isAdmin && onOpenPackages && (
+          <Section title="Пакеты по расписанию">
+            <button type="button" class="btn btn-ghost btn-wide" onClick={onOpenPackages}>
+              Открыть пакеты по расписанию
+            </button>
+            <p class="hint">
+              Обновление пакетов Entware и очистка Entware по расписанию на самом роутере.
             </p>
           </Section>
         )}

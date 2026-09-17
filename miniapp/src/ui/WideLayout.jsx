@@ -6,7 +6,7 @@ import { TabBody } from '../screens/TabBody.jsx'
 import { FleetHome } from '../screens/FleetHome.jsx'
 import { FLEET_OVERLAYS } from '../nav.js'
 
-const PARK_OVERLAYS = ['admin', 'agentcfg', 'agentconn', 'dnsreset', ...FLEET_OVERLAYS]
+const PARK_OVERLAYS = ['admin', 'agentcfg', 'agentconn', 'dnsreset', 'packages', ...FLEET_OVERLAYS]
 
 // Широкая раскладка: колонка роутеров слева, справа шапка с вкладками и
 // содержимое. Оверлеи открываются в основной области -- список роутеров

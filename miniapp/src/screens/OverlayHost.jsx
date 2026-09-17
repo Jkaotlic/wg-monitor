@@ -8,6 +8,7 @@ import { ProvisionWizard } from './ProvisionWizard.jsx'
 import { JobProgress } from './JobProgress.jsx'
 import { BackendDeployWait } from './BackendDeployWait.jsx'
 import { AgentConnectionScreen } from './AgentConnectionScreen.jsx'
+import { PackagesScreen } from './PackagesScreen.jsx'
 import { Overlay } from '../ui/Overlay.jsx'
 import { FLEET_OVERLAYS } from '../nav.js'
 import { jobTitle } from '../jobSteps.js'
@@ -99,6 +100,7 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
           onOpenAgentConfig={() => dispatch({ type: 'overlay', overlay: 'agentcfg' })}
           onOpenAgentConnection={() => dispatch({ type: 'overlay', overlay: 'agentconn' })}
           onOpenDNSReset={() => dispatch({ type: 'overlay', overlay: 'dnsreset' })}
+          onOpenPackages={() => dispatch({ type: 'overlay', overlay: 'packages' })}
           onOpenRouter={(id) => dispatch({ type: 'router', id })}
         />
       )
@@ -125,6 +127,16 @@ export function OverlayHost({ nav, dispatch, routers, isAdmin, refreshRouters })
       return <AgentConnectionScreen routerID={nav.routerID} routerName={current?.nickname} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
     case 'dnsreset':
       return <DNSResetScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} openSheet={openSheet} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
+    case 'packages':
+      // Как и подключение агента: адрес может открыть и не-админ.
+      if (!isAdmin) {
+        return (
+          <Overlay title="Пакеты по расписанию" backLabel="Назад" onBack={close}>
+            <p class="state">Этот экран доступен только администратору.</p>
+          </Overlay>
+        )
+      }
+      return <PackagesScreen routerID={nav.routerID} routerName={current?.nickname} asleep={asleep} onClose={() => dispatch({ type: 'overlay', overlay: 'admin' })} />
     default:
       return null
   }
