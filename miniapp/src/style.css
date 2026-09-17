@@ -2622,6 +2622,28 @@ body {
   outline-offset: 2px;
 }
 
+/* Запасной вход: мелко и внизу, чтобы не спорить с формой. */
+.login-rescue {
+  margin: 0;
+  text-align: center;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.login-rescue a,
+.park-rescue {
+  color: var(--dim);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.login-rescue a:focus-visible,
+.park-rescue:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 2px;
+}
+
 .app-header-logout {
   color: var(--dim);
 }
@@ -3052,6 +3074,12 @@ body {
   display: flex;
   justify-content: flex-end;
   padding: var(--sp-3) 14px 0;
+}
+
+.park-rescue {
+  display: inline-block;
+  padding: var(--sp-2) 14px var(--sp-1);
+  font-size: var(--fs-xs);
 }
 
 .park-add {

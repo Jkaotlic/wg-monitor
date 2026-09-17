@@ -471,6 +471,12 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
                 </button>
               </div>
             )}
+            {/* Только в браузере: в Telegram адреса /dashboard/ нет. */}
+            {mode === 'web' && (
+              <a class="park-rescue" href="/dashboard/rescue/">
+                Аварийная страница
+              </a>
+            )}
           </div>
 
           {/* Новый роутер: мастер -- слой парка, открывается с возвратом сюда. */}
@@ -654,8 +660,8 @@ export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer, onO
           )}
 
           {/* В браузере личная ссылка на браузер бессмысленна -- человек уже
-              здесь. Мостика в классическое веб-управление больше нет: всё,
-              что там было, переехало сюда (цикл 2). */}
+              здесь. Классического веб-управления больше нет (цикл 3); запасной
+              вход -- аварийная страница из карточки бэкенда. */}
           {mode !== 'web' && (
             <>
               <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
