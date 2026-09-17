@@ -6,11 +6,13 @@ export class ApiError extends Error {
   // вместо message: старые ответы бэкенда по-английски, и подставлять их
   // человеку на экран нельзя. Новые поверхности говорят по-русски и сами
   // решают, показать ли эту фразу вместо своей.
-  constructor(status, code, message, serverMessage = '') {
+  // field -- поле формы, которое сервер отверг (invalid_field своих серверов).
+  constructor(status, code, message, serverMessage = '', field = '') {
     super(message)
     this.status = status
     this.code = code
     this.serverMessage = serverMessage
+    this.field = field
   }
 }
 
@@ -38,17 +40,19 @@ async function request(path, opts = {}, base = BASE) {
   if (!res.ok) {
     let code = 'unknown'
     let serverMessage = ''
+    let field = ''
     try {
       const body = await res.json()
       // Backend error bodies are { code, message } (writeJSONError,
       // internal/backend/handler.go:57-60) -- the field is "code", not "error".
       code = body.code ?? code
       serverMessage = typeof body.message === 'string' ? body.message : ''
+      field = typeof body.field === 'string' ? body.field : ''
     } catch {
       // ignore non-JSON error bodies
     }
     if (res.status === 401 && base === BASE && path !== '/session' && onUnauthorized) onUnauthorized()
-    throw new ApiError(res.status, code, `${path} failed: ${res.status}`, serverMessage)
+    throw new ApiError(res.status, code, `${path} failed: ${res.status}`, serverMessage, field)
   }
   if (res.status === 204) return null
   return res.json()

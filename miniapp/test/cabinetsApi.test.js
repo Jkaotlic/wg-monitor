@@ -128,6 +128,17 @@ describe('кабинеты роутера: запросы', () => {
 })
 
 describe('свои серверы: запросы', () => {
+  it('invalid_field -- ApiError несёт поле', async () => {
+    stubFetch({ code: 'invalid_field', message: 'Порт вне диапазона', field: 'endpoint_port' }, { ok: false, status: 400 })
+    const err = await createSelfhosted({ id: 'ams' }).catch((e) => e)
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err.field).toBe('endpoint_port')
+    expect(err.serverMessage).toBe('Порт вне диапазона')
+    stubFetch({ code: 'not_found', message: 'x' }, { ok: false, status: 404 })
+    expect((await fetchSelfhosted().catch((e) => e)).field).toBe('')
+  })
+
+
   it('список, создание, правка', async () => {
     let calls = stubFetch({ instances: [] })
     await fetchSelfhosted()

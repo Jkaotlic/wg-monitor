@@ -16,6 +16,9 @@ import {
   deleteInstanceSheetText,
   deleteConfirmPhrase,
   selfhostedErrorText,
+  errorFieldKey,
+  sshWipeWarning,
+  SSH_WIPE_TEXT,
 } from '../selfhostedForm.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -43,6 +46,8 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [check, setCheck] = useState(null)
+  // Поле, которое отверг сервер (invalid_field): { key, text }.
+  const [fieldError, setFieldError] = useState(null)
   const [toggling, setToggling] = useState(false)
 
   const alive = useRef(true)
@@ -81,7 +86,26 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
       })
   }, [instanceId])
 
+  // Отвергнутое поле -- в фокус: человек сразу видит, что править.
+  useEffect(() => {
+    if (fieldError) document.getElementById(`sh-${fieldError.key}`)?.focus()
+  }, [fieldError])
+
+  // Отказ сервера: у знакомого поля слова под ним, иначе -- над формой.
+  // Короткое имя у сохранённого сервера не показывается -- его ошибка тоже над формой.
+  function showFailure(err) {
+    const key = errorFieldKey(err)
+    if (key && (isNew || key !== 'id')) {
+      setError('')
+      setFieldError({ key, text: selfhostedErrorText(err) })
+      return
+    }
+    setFieldError(null)
+    setError(selfhostedErrorText(err))
+  }
+
   function set(key, value) {
+    setFieldError((prev) => (prev?.key === key ? null : prev))
     setValues((prev) => ({ ...prev, [key]: value }))
     setError('')
     setNotice('')
@@ -102,18 +126,56 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
       return
     }
     const body = instanceRequestBody(values, { isNew })
+    // Адрес SSH стёрт у сервера с паролем: сервер сотрёт и пароль. Введённый
+    // пароль без адреса не хранится -- в тело он не идёт вовсе.
+    const wipe = !isNew && sshWipeWarning(inst, values) !== ''
+    if (wipe) delete body.ssh_password
     const passwordSent = 'ssh_password' in body
     // Тело сериализуется при вызове; дальше пароль не нужен ни в теле, ни
     // в поле.
-    const pending = isNew ? createSelfhosted(body) : updateSelfhosted(instanceId, body)
+    const send = () => (isNew ? createSelfhosted(body) : updateSelfhosted(instanceId, body))
+    const pending = wipe ? null : send()
     delete body.ssh_password
     const cleared = { ...values, ssh_password: '' }
     values.ssh_password = ''
     valuesRef.current = cleared
     setValues(cleared)
-    setBusy(true)
     setError('')
     setNotice('')
+    setFieldError(null)
+
+    const saved = () => {
+      setInitial(cleared)
+      setInst((prev) => ({
+        ...prev,
+        ssh_host: body.ssh_host,
+        password_set: body.ssh_host === '' ? false : passwordSent || prev?.password_set === true,
+      }))
+      setNotice(SELFHOSTED_TEXTS.saved)
+    }
+
+    if (wipe) {
+      openSheet(
+        localSheet({
+          title: 'Сохранить без адреса SSH?',
+          body: `${SSH_WIPE_TEXT}. Пользователь и порт SSH тоже сотрутся, а выпуск пойдёт через контейнер на той же машине, что и сервер wg-monitor.`,
+          buttonLabel: 'Сохранить',
+          busyLabel: 'Сохраняем…',
+          danger: true,
+          errorText: (err) => {
+            if (alive.current) showFailure(err)
+            return selfhostedErrorText(err)
+          },
+          perform: send,
+          onDone: () => {
+            if (alive.current) saved()
+          },
+        }),
+      )
+      return
+    }
+
+    setBusy(true)
     pending
       .then(() => {
         if (!alive.current) return
@@ -121,12 +183,10 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
           onClose()
           return
         }
-        setInitial(cleared)
-        if (passwordSent) setInst((prev) => ({ ...prev, password_set: true }))
-        setNotice(SELFHOSTED_TEXTS.saved)
+        saved()
       })
       .catch((err) => {
-        if (alive.current) setError(selfhostedErrorText(err))
+        if (alive.current) showFailure(err)
       })
       .finally(() => {
         if (alive.current) setBusy(false)
@@ -235,6 +295,8 @@ export function SelfhostedInstanceScreen({ instanceId = '', backLabel = 'Сво�
                         placeholder={fieldPlaceholder(f, defaults)}
                         inputMode={f.inputMode}
                         hint={f.kind === 'password' ? passwordHint(inst, { isNew }) : f.hint}
+                        error={fieldError?.key === f.key ? fieldError.text : ''}
+                        warn={f.key === 'ssh_host' && !isNew ? sshWipeWarning(inst, values) : ''}
                         onInput={(v) => set(f.key, v)}
                       />
                     ))}

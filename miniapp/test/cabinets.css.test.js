@@ -28,6 +28,7 @@ describe('CSS кабинетов и своих серверов', () => {
       '.cabinet-notice {', '.cabinet-secret-active .row-title {', '.cabinet-secret-actions {', '.cabinet-danger {',
       '.cabinet-option-main {', '.cabinet-option-main:disabled {', '.cabinet-outcome {', '.cabinet-send {',
       '.selfhosted-actions {', '.selfhosted-check {', '.selfhosted-check-ok {', '.selfhosted-check-bad {', '.park-selfhosted {',
+      '.field-error input {', '.field-error-text {', '.field-warn {',
     ]) {
       expect(outside.includes(sel), sel).toBe(true)
     }

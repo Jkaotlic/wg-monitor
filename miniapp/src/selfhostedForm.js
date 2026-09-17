@@ -206,3 +206,20 @@ const SELFHOSTED_ERRORS = {
 export function selfhostedErrorText(err) {
   return err?.serverMessage || SELFHOSTED_ERRORS[err?.code] || 'Не получилось. Попробуйте ещё раз.'
 }
+
+// Поле формы, которое отверг сервер (400 invalid_field с field). Незнакомое
+// поле -- пусто: тогда слова сервера показываются над формой, как прежде.
+export function errorFieldKey(err) {
+  if (err?.code !== 'invalid_field') return ''
+  const key = typeof err.field === 'string' ? err.field : ''
+  return key && (INSTANCE_KEYS.includes(key) || key === 'ssh_password') ? key : ''
+}
+
+export const SSH_WIPE_TEXT = 'Без адреса SSH сохранённый пароль будет удалён'
+
+// Сервер без адреса SSH пароля не хранит: PUT с пустым ssh_host стирает
+// пользователя, порт и пароль. Предупреждаем, только когда терять есть что.
+export function sshWipeWarning(inst, values) {
+  if (!inst?.ssh_host || inst.password_set !== true) return ''
+  return trimmed(values?.ssh_host) === '' ? SSH_WIPE_TEXT : ''
+}

@@ -18,6 +18,9 @@ import {
   deleteInstanceSheetText,
   deleteConfirmPhrase,
   selfhostedErrorText,
+  errorFieldKey,
+  sshWipeWarning,
+  SSH_WIPE_TEXT,
   SELFHOSTED_TEXTS,
 } from '../src/selfhostedForm.js'
 import { ApiError } from '../src/api.js'
@@ -236,5 +239,26 @@ describe('тексты экрана сервера', () => {
     expect(SELFHOSTED_TEXTS.title).toBe('Свои VPN-серверы')
     const all = Object.values(SELFHOSTED_TEXTS).join(' ')
     expect(all).not.toMatch(/self-?hosted|боту|в боте/i)
+  })
+})
+
+describe('ошибка поля и стирание пароля', () => {
+  it('errorFieldKey: только invalid_field и известное поле формы', () => {
+    expect(errorFieldKey(new ApiError(400, 'invalid_field', 'x', 'm', 'endpoint_port'))).toBe('endpoint_port')
+    expect(errorFieldKey(new ApiError(400, 'invalid_field', 'x', 'm', 'ssh_password'))).toBe('ssh_password')
+    expect(errorFieldKey(new ApiError(400, 'invalid_field', 'x', 'm', 'nope'))).toBe('')
+    expect(errorFieldKey(new ApiError(400, 'invalid_field', 'x', 'm'))).toBe('')
+    expect(errorFieldKey(new ApiError(409, 'instance_exists', 'x', 'm', 'id'))).toBe('')
+    expect(errorFieldKey(null)).toBe('')
+  })
+
+  it('sshWipeWarning: был адрес SSH и пароль, адрес стёрт', () => {
+    expect(SSH_WIPE_TEXT).toBe('Без адреса SSH сохранённый пароль будет удалён')
+    const v = instanceFormValues(INST)
+    expect(sshWipeWarning(INST, { ...v, ssh_host: '  ' })).toBe(SSH_WIPE_TEXT)
+    expect(sshWipeWarning(INST, v)).toBe('')
+    expect(sshWipeWarning({ ...INST, password_set: false }, { ...v, ssh_host: '' })).toBe('')
+    expect(sshWipeWarning({ ...INST, ssh_host: '' }, { ...v, ssh_host: '' })).toBe('')
+    expect(sshWipeWarning(null, { ...v, ssh_host: '' })).toBe('')
   })
 })

@@ -3406,6 +3406,24 @@ body {
   color: var(--danger);
 }
 
+.field-error input {
+  border-color: var(--danger);
+}
+
+.field-error-text {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--danger);
+}
+
+.field-warn {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--warn);
+}
+
 .park-selfhosted {
   margin-top: var(--sp-2);
 }
