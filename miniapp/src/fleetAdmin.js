@@ -116,28 +116,6 @@ export function notifyGapLines(fleet) {
   return lines
 }
 
-// Сторож парка. Пустая строка означает «сторожа в этой сборке нет» -- и это
-// честнее, чем нарисовать мёртвого сторожа там, где его просто не подключали.
-export function watchdogLine(fleet) {
-  const watchdog = fleet?.watchdog
-  if (!watchdog) return ''
-  const parts = []
-  parts.push(watchdog.last_scan_at ? `последний обход ${shortTime(watchdog.last_scan_at)}` : 'обхода ещё не было')
-  const errors = watchdog.offline_errors ?? 0
-  parts.push(
-    errors
-      ? `${errors} ${pluralRu(errors, 'отправка не ушла', 'отправки не ушли', 'отправок не ушло')}`
-      : 'отправки уходят',
-  )
-  return parts.join(', ')
-}
-
-function shortTime(iso) {
-  const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return ''
-  return at.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-}
-
 // Что сказать человеку про выданную ссылку. Текст берётся из ответа сервера:
 // срок и лимит живут в одном месте, и бот с приложением не могут разойтись в
 // том, сколько ссылка живёт.

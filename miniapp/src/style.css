@@ -2177,6 +2177,27 @@ body {
   margin-top: var(--sp-4);
 }
 
+.sheet-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.sheet-toggle-label input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--sig);
+}
+
+.sheet-field-hint {
+  margin: var(--sp-1) 0 0;
+}
+
+
 .field select {
   min-height: 44px;
   font-family: inherit;
@@ -2590,25 +2611,577 @@ body {
   outline-offset: 2px;
 }
 
-.park-classic {
-  display: block;
-  margin-top: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius);
-  color: var(--accent);
-  font-size: var(--fs-sm);
-  line-height: var(--lh-normal);
-  text-decoration: none;
+.app-header-logout {
+  color: var(--dim);
 }
 
-.park-classic:hover,
-.park-classic:focus-visible {
+/* ============================================================
+   Цикл 2: мастер «Добавить роутер», «Ход работы», раскатка бэкенда,
+   подключение агента. Все ширины; широкая раскладка дополняет их в
+   блоке ≥ 1024 px. Телефонные правила прежних экранов не тронуты.
+   ============================================================ */
+.field-hint {
+  margin: 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.wizard-progress {
+  margin: calc(-1 * var(--sp-2)) 0 var(--sp-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.02em;
+  color: var(--dim);
+}
+
+.wizard-fields,
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.choice-list {
+  display: grid;
+  gap: var(--sp-2);
+}
+
+.wizard-fields .choice-list {
+  margin-top: var(--sp-1);
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 56px;
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surf);
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.choice:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.choice-on {
+  border-color: var(--sig);
   background: var(--surf2);
 }
 
-.app-header-logout {
+.choice-mark {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.choice-on .choice-mark {
+  border-color: var(--sig);
+  box-shadow: inset 0 0 0 3px var(--surf2), inset 0 0 0 9px var(--sig);
+}
+
+.choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.choice-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+}
+
+.choice-sub {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
   color: var(--dim);
+}
+
+.wizard-note,
+.wizard-warn {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+}
+
+.wizard-note {
+  background: var(--surf2);
+  color: var(--dim);
+}
+
+.wizard-warn {
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+
+.wizard-summary {
+  padding: 0;
+  margin-bottom: var(--sp-4);
+}
+
+.wizard-summary .data-row:last-child {
+  border-bottom: none;
+}
+
+.wizard-summary .data-row-value {
+  overflow-wrap: anywhere;
+}
+
+.wizard-error {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--bad);
+}
+
+.wizard-actions {
+  display: flex;
+  gap: var(--sp-3);
+  margin-top: var(--sp-5);
+}
+
+.wizard-actions .btn {
+  flex: 1;
+}
+
+/* Токен и команда -- моноширинно, целиком выделяются одним касанием. */
+.token-block {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: var(--sp-3) 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.token-block code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.token-block .copy {
+  align-self: flex-start;
+}
+
+.copy {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.copy-fail {
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--warn);
+}
+
+/* «Ход работы» */
+.job-status {
+  margin: 0 0 var(--sp-3);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+}
+
+.job-status-running { color: var(--ink); }
+.job-status-ok { color: var(--ok); }
+.job-status-bad { color: var(--bad); }
+
+.job-reconnecting {
+  margin: 0 0 var(--sp-3);
+  color: var(--warn);
+}
+
+.job-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surf);
+}
+
+.job-step {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--line2);
+}
+
+.job-step:last-child {
+  border-bottom: none;
+}
+
+.job-step-mark {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 5px;
+  border: 2px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+
+.job-step-done .job-step-mark {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.job-step-active .job-step-mark {
+  border-color: var(--sig);
+  background: var(--sig);
+}
+
+.job-step-failed .job-step-mark {
+  border-color: var(--bad);
+  background: var(--bad);
+}
+
+.job-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.job-step-label {
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--ink);
+}
+
+.job-step-pending .job-step-label { color: var(--dim); }
+.job-step-active .job-step-label { font-weight: 600; }
+.job-step-failed .job-step-label { color: var(--bad); }
+
+.job-step-detail {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+
+.job-hint {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--ink);
+}
+
+.job-details {
+  margin-top: var(--sp-3);
+}
+
+.job-details summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.job-tail {
+  max-height: 320px;
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-3);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  margin-top: var(--sp-5);
+}
+
+.job-actions .btn {
+  flex: 1;
+}
+
+/* Раскатка бэкенда: слой на весь экран поверх листа (z-index 30) и
+   боковой колонки -- без сервера приложению показывать нечего. */
+.deploy-wait {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-4);
+  background: var(--bg);
+}
+
+.deploy-wait-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  max-width: 440px;
+  padding: var(--sp-6) var(--sp-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-hero);
+  background: var(--surf);
+  text-align: center;
+}
+
+.deploy-wait-pulse {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  background: var(--sig);
+}
+
+.deploy-wait-ok .deploy-wait-pulse { background: var(--ok); }
+.deploy-wait-bad .deploy-wait-pulse { background: var(--bad); }
+
+.deploy-wait-title {
+  margin: 0;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  overflow-wrap: anywhere;
+}
+
+.deploy-wait-line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--dim);
+}
+
+.deploy-wait-card .btn {
+  min-width: 180px;
+  margin-top: var(--sp-3);
+}
+
+/* Парк: раскатка бэкенда и новый роутер */
+.park-backend-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--sp-3);
+}
+
+.park-add {
+  margin-top: var(--sp-3);
+}
+
+/* «Подключение агента» */
+.connection-keep {
+  margin-top: var(--sp-4);
+}
+
+.connection-notice {
+  color: var(--ok);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .job-step-active .job-step-mark,
+  .deploy-wait-running .deploy-wait-pulse {
+    animation: job-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes job-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(200, 242, 74, 0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(200, 242, 74, 0); }
+}
+
+.park-watchdog {
+  margin-top: var(--sp-3);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--line);
+}
+
+.park-watchdog-line {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
+  color: var(--text);
+}
+
+.park-watchdog .hint {
+  margin-top: var(--sp-1);
+}
+
+.park-watchdog-warn .park-watchdog-line {
+  color: var(--warn);
+}
+
+.park-watchdog-danger .park-watchdog-line {
+  color: var(--danger);
+}
+
+.danger-zone {
+  margin-top: var(--sp-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.danger-zone > summary {
+  padding: var(--sp-3) var(--sp-4);
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.danger-zone[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.danger-zone > .section {
+  margin: 0;
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
+.packages-card + .packages-card {
+  margin-top: var(--sp-2);
+}
+
+.packages-time {
+  margin-top: var(--sp-3);
+}
+
+.packages-time input {
+  max-width: 160px;
+  font-family: var(--font-mono);
+}
+
+.packages-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.packages-log {
+  max-height: 320px;
+  overflow-wrap: anywhere;
+}
+
+.packages-details {
+  margin-top: var(--sp-2);
+}
+
+.packages-details > summary {
+  color: var(--dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.dns-commands {
+  max-height: none;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.dns-copy {
+  margin-top: var(--sp-2);
+}
+
+
+
+/* --- Поиск и фильтры списка роутеров (цикл 2) --- */
+.filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-3);
+}
+
+.filter-search {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surf2);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-md);
+}
+
+.filter-search::placeholder {
+  color: var(--dim);
+}
+
+.filter-search:focus-visible {
+  outline: 2px solid var(--sig);
+  outline-offset: 1px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.filter-chip-active {
+  border-color: var(--sig);
+  color: var(--text);
+  background: var(--surf2);
+}
+
+.filter-chip-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--dim);
+}
+
+.filter-empty {
+  margin: var(--sp-2) 0;
+  color: var(--dim);
+  font-size: var(--fs-sm);
+  line-height: var(--lh-normal);
 }
 
 /* ============================================================
@@ -3164,6 +3737,39 @@ body {
     margin-top: 0;
   }
 
+  /* --- Поиск в боковой колонке (цикл 2): компактно, чипы переносятся --- */
+  .side-filter {
+    margin-bottom: calc(-1 * var(--sp-2));
+    padding: 0 var(--sp-1);
+  }
+
+  .side-filter .filter-bar {
+    margin-bottom: 0;
+  }
+
+  .side-filter .filter-search {
+    font-size: var(--fs-sm);
+  }
+
+  .side-filter .filter-chip {
+    padding: 2px var(--sp-2);
+    font-size: var(--fs-xs);
+  }
+
+  .side-list .filter-empty {
+    padding: 0 var(--sp-3);
+  }
+
+  .wide-shell .filter-chip:hover {
+    color: var(--text);
+    background: var(--surf2);
+  }
+
+  /* --- «Пакеты по расписанию»: журнал на широком экране длиннее --- */
+  .wide-shell .packages-log {
+    max-height: 480px;
+  }
+
   /* --- Наведение и фокус (в телефонной раскладке наведения нет) --- */
   .wide-shell :is(.nav-card, .action-tile, .list-row-btn):hover {
     background: var(--surf2);
@@ -3181,6 +3787,56 @@ body {
   .wide-shell :is(button, a, summary, select, input, textarea):focus-visible {
     outline: 2px solid var(--sig);
     outline-offset: 2px;
+  }
+
+  /* --- Цикл 2: мастер, ход работы, подключение агента --- */
+  /* Заголовок экрана в слое скрыт (он в шапке слоя) -- шаг мастера встаёт
+     на его место без отрицательного отступа. */
+  .wide-shell .wizard-progress {
+    margin-top: 0;
+  }
+
+  .wide-shell .choice-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .wide-shell .choice:hover {
+    background: var(--surf2);
+  }
+
+  .wide-shell .wizard-actions {
+    justify-content: flex-end;
+  }
+
+  .wide-shell .job-actions {
+    justify-content: flex-end;
+  }
+
+  .wide-shell .wizard-actions .btn,
+  .wide-shell .job-actions .btn {
+    flex: none;
+    min-width: 160px;
+  }
+
+  .wide-shell .connection .form-group {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--sp-4) var(--sp-5);
+  }
+
+  .wide-shell .token-block {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--sp-4);
+  }
+
+  .wide-shell .token-block .copy {
+    flex: none;
+  }
+
+  .wide-shell .job-details summary:hover {
+    text-decoration: underline;
   }
 }
 

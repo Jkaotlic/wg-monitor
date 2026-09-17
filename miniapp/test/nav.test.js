@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, normalizeTab, escapeAction } from '../src/nav.js'
+import { initialNav, navReducer, backButtonVisible, TABS, tabLabel, deepLinkOverlay, OPEN_OVERLAYS, FLEET_OVERLAYS, normalizeTab, escapeAction } from '../src/nav.js'
 
 describe('initialNav', () => {
   it('открывает роутер из deep-link', () => {
@@ -153,17 +153,18 @@ describe('подписи вкладок', () => {
 // главный экран, где настройки пришлось бы искать.
 describe('deepLinkOverlay', () => {
   it('открывает любой оверлей роутера, но только вместе с роутером', () => {
-    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset']) {
+    for (const o of ['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages']) {
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(o)
       expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: null })).toBe(null)
     }
-    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset'])
+    expect(OPEN_OVERLAYS).toEqual(['settings', 'admin', 'routes', 'agentcfg', 'dnsreset', 'agentconn', 'packages'])
   })
 
   it('без open и с неизвестным open -- ничего', () => {
     expect(deepLinkOverlay('?router=7', { routerID: 7 })).toBe(null)
     expect(deepLinkOverlay('?router=7&open=fleet', { routerID: 7 })).toBe(null)
     expect(deepLinkOverlay('?router=7&open=rm-rf', { routerID: 7 })).toBe(null)
+    for (const o of FLEET_OVERLAYS) expect(deepLinkOverlay(`?router=7&open=${o}`, { routerID: 7 })).toBe(null)
   })
 })
 
@@ -216,5 +217,52 @@ describe('невидимый список роутеров на широком �
     expect(backButtonVisible({ overlay: 'settings', sheet: null }, { wide: true })).toBe(true)
     expect(backButtonVisible({ overlay: 'fleet', sheet: { title: 'x' } }, { wide: true })).toBe(true)
     expect(escapeAction({ overlay: 'admin', sheet: null }, { wide: true })).toEqual({ type: 'back' })
+  })
+})
+// Слои всего парка: мастер «Добавить роутер», «Ход работы», ожидание раскатки
+// бэкенда. Открываются и без роутера и знают, куда вернуться.
+describe('слои парка', () => {
+  const base = { routerID: null, tab: 'router', overlay: null, sheet: null }
+
+  it('список слоёв парка', () => {
+    expect(FLEET_OVERLAYS).toEqual(['provision', 'job', 'backenddeploy'])
+  })
+
+  it('параметры слоя кладутся рядом с ним и уходят вместе с ним', () => {
+    const s = navReducer(base, { type: 'overlay', overlay: 'job', params: { jobId: 'j1', title: 'Установка', returnTo: 'admin' } })
+    expect(s).toEqual({ ...base, overlay: 'job', overlayParams: { jobId: 'j1', title: 'Установка', returnTo: 'admin' } })
+    const plain = navReducer(s, { type: 'overlay', overlay: 'admin' })
+    expect(plain).toEqual({ ...base, overlay: 'admin' })
+    expect('overlayParams' in plain).toBe(false)
+  })
+
+  it('«назад» со слоя парка -- туда, откуда пришли', () => {
+    const s = { ...base, routerID: 3, overlay: 'provision', overlayParams: { returnTo: 'admin' } }
+    const back = navReducer(s, { type: 'back' })
+    expect(back).toEqual({ ...base, routerID: 3, overlay: 'admin' })
+    const fromHome = navReducer({ ...base, overlay: 'job', overlayParams: { jobId: 'j', returnTo: null } }, { type: 'back' })
+    expect(fromHome).toEqual(base)
+  })
+
+  it('ожидание раскатки не закрывается «назад» и Esc', () => {
+    const s = { ...base, overlay: 'backenddeploy', overlayParams: { targetVersion: 'v0.36.0', returnTo: null } }
+    expect(navReducer(s, { type: 'back' })).toBe(s)
+    expect(backButtonVisible(s)).toBe(false)
+    expect(backButtonVisible(s, { wide: true })).toBe(false)
+    expect(escapeAction(s)).toBe(null)
+  })
+
+  it('прочие слои парка -- «назад» видна, Esc закрывает', () => {
+    for (const overlay of ['provision', 'job']) {
+      const s = { ...base, overlay, overlayParams: { returnTo: null } }
+      expect(backButtonVisible(s)).toBe(true)
+      expect(escapeAction(s, { wide: true })).toEqual({ type: 'back' })
+    }
+  })
+
+  it('смена роутера и вкладка с закрытием стирают параметры', () => {
+    const s = { ...base, routerID: 1, overlay: 'job', overlayParams: { jobId: 'j' } }
+    expect('overlayParams' in navReducer(s, { type: 'router', id: 2 })).toBe(false)
+    expect(navReducer(s, { type: 'tab', tab: 'diag', closeOverlay: true })).toEqual({ routerID: 1, tab: 'diag', overlay: null, sheet: null })
   })
 })

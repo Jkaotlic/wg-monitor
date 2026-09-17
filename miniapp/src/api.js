@@ -123,8 +123,11 @@ export function setRouterNotify(id, muted) {
 // отметку, которая доживает до включения выключенного роутера. Цель версии
 // по умолчанию считает сервер (его собственная версия), поэтому поле уходит
 // только когда экран его явно выбрал.
-export function updateRouterAgent(routerID, confirm, targetVersion = '') {
+// allowDowngrade -- человек разрешил откат на листе «Другая версия»; без
+// него сервер откажет downgrade_rejected. Поле уходит только со значением true.
+export function updateRouterAgent(routerID, confirm, targetVersion = '', allowDowngrade = false) {
   const body = targetVersion ? { confirm, target_version: targetVersion } : { confirm }
+  if (targetVersion && allowDowngrade) body.allow_downgrade = true
   return request(`/routers/${routerID}/agent/update`, { method: 'POST', body: JSON.stringify(body) })
 }
 
@@ -151,6 +154,17 @@ export function reviveRouterAgent(routerID, body) {
 // cleared=false -- снимать было нечего, это не ошибка.
 export function cancelRouterAgentRevive(routerID) {
   return request(`/routers/${routerID}/agent/revive`, { method: 'DELETE' })
+}
+
+// Переустановка агента сейчас и перенаправление на другой бэкенд. Пароли
+// уходят один раз, в теле этого POST; ответ -- {job_id} для «Хода работы».
+// Тело собирает agentJobs.js.
+export function reinstallRouterAgent(routerID, body) {
+  return request(`/routers/${routerID}/agent/reinstall`, { method: 'POST', body: JSON.stringify(body) })
+}
+
+export function repointRouterAgent(routerID, body) {
+  return request(`/routers/${routerID}/agent/repoint`, { method: 'POST', body: JSON.stringify(body) })
 }
 
 export function fetchRouterChecks(id) {
@@ -306,4 +320,43 @@ export function fetchCommandResult(routerID, cmdID, waitSec = 10) {
     if (err instanceof ApiError && err.status === 404 && err.code === 'result_not_ready') return null
     throw err
   })
+}
+
+// Раскатка бэкенда до версии. confirm -- набранная человеком версия: сервер
+// сверяет её сам, проверка на листе -- только пауза. Отката отсюда нет.
+export function deployBackend(targetVersion, confirm) {
+  return request('/backend/deploy', {
+    method: 'POST',
+    body: JSON.stringify({ target_version: targetVersion, confirm }),
+  })
+}
+
+// /healthz живёт вне /v1/miniapp и отвечает без входа: во время раскатки
+// бэкенд перезапускается, и спрашивать его «кто ты» можно только здесь.
+// Кэш запрещён: иначе браузер покажет прежнюю версию после перезапуска.
+export function fetchHealth() {
+  return request('/healthz', { cache: 'no-store' }, '')
+}
+
+// Добавление роутера: kind "provision" -- установка сейчас (202 {job_id}),
+// "register" -- только токен (201 {raw_token, …}). Тело собирает
+// provisionWizard.js; пароли уходят один раз, этим запросом.
+export function startProvision(body) {
+  return request('/provision', { method: 'POST', body: JSON.stringify(body) })
+}
+
+// Ход задания установки/переустановки/перенаправления. 404 -- задание
+// истекло (сервер хранит итог 30 минут).
+export function fetchJob(jobID) {
+  return request(`/jobs/${encodeURIComponent(jobID)}`)
+}
+
+// Как сервер добирается до роутера: панель awg-manager, SSH, раскатка, MAC.
+// Только админ; /fleet эти поля намеренно не отдаёт.
+export function fetchAgentConnection(routerID) {
+  return request(`/routers/${routerID}/agent/connection`)
+}
+
+export function saveAgentConnection(routerID, body) {
+  return request(`/routers/${routerID}/agent/connection`, { method: 'PUT', body: JSON.stringify(body) })
 }

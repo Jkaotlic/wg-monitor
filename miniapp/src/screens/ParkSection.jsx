@@ -9,10 +9,12 @@ import {
   cancelRouterAgentUpdate,
   reviveRouterAgent,
   cancelRouterAgentRevive,
+  reinstallRouterAgent,
   updateFleetAgents,
   sendCommand,
   fetchCommandResult,
   setRouterNotify,
+  deployBackend,
 } from '../api.js'
 import { openExternal } from '../telegram.js'
 import { localSheet } from '../sheet.js'
@@ -23,7 +25,6 @@ import {
   fleetRouterRows,
   notifyGapLines,
   notifyMuteSheetText,
-  watchdogLine,
   webLinkLines,
   withNotifyMuted,
 } from '../fleetAdmin.js'
@@ -52,6 +53,25 @@ import {
   reviveCancelDoneText,
 } from '../revive.js'
 import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetBatch.js'
+import { backendDeployOffer, backendDeploySheetText, backendDeployErrorText } from '../backendDeploy.js'
+import { watchdogLine, routerDelayLines } from '../watchdogLine.js'
+import {
+  canPickVersion,
+  otherVersionSheetText,
+  otherVersionFields,
+  otherVersionReady,
+  otherVersionRequest,
+} from '../agentVersionPick.js'
+import {
+  JOB_SECRET_NOTE,
+  reinstallAllowed,
+  reinstallSheetText,
+  reinstallFields,
+  reinstallReady,
+  reinstallRequestBody,
+  reinstallJobTitle,
+  jobStartErrorText,
+} from '../agentJobs.js'
 
 // «Парк» -- админский экран всего парка: состояние, версии и обслуживание
 // агентов. Раньше экран был читающим, а обновление агента жило в боте и
@@ -70,7 +90,7 @@ import { BATCH, runFleetBatch, batchProgressLine, batchSummary } from '../fleetB
 //
 // Парк видит только админ: сервер отвечает 404 всем остальным, и этот признак
 // в клиенте -- подсказка интерфейсу, а не граница доступа.
-export function ParkSection({ openSheet, onOpenRouter, currentID }) {
+export function ParkSection({ openSheet, onOpenRouter, currentID, openLayer }) {
   const { mode } = useContext(AppContext)
   const [fleet, setFleet] = useState(null)
   const [fleetError, setFleetError] = useState(null)
@@ -189,6 +209,35 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
     )
   }
 
+  // «Другая версия…» -- своя цель, в том числе откат (спека, п. 6). Откат
+  // разрешается переключателем на листе; решает всё равно сервер.
+  function askOtherVersion(router) {
+    const backendVersion = fleet?.backend?.version ?? ''
+    const text = otherVersionSheetText(router, backendVersion)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Поставить',
+        busyLabel: 'Ставим…',
+        danger: true,
+        confirmPhrase: router.nickname,
+        fields: otherVersionFields(router, backendVersion),
+        fieldsReady: otherVersionReady(router, backendVersion),
+        errorText: agentUpdateErrorText,
+        perform: (typed, values) => {
+          const req = otherVersionRequest(values, router, backendVersion)
+          return updateRouterAgent(router.id, typed, req.targetVersion, req.allowDowngrade)
+        },
+        onDone: (resp) => {
+          setFleetResult(null)
+          setNotice(agentUpdateDoneText(resp, router.nickname))
+          load()
+        },
+      }),
+    )
+  }
+
   function askRevive(router) {
     const text = reviveSheetText(router)
     openSheet(
@@ -232,6 +281,37 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
     )
   }
 
+  // Переустановка сейчас (спека, п. 7) -- только роутеру на связи; спящему
+  // есть «Оживить агент». Сервер отвечает {job_id}, и человек сразу
+  // переходит на «Ход работы»: итог установки живёт там, а не в строке.
+  function askReinstall(router) {
+    const text = reinstallSheetText(router)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Переустановить',
+        busyLabel: 'Запускаем…',
+        danger: true,
+        confirmPhrase: router.nickname,
+        fields: reinstallFields(),
+        fieldsReady: reinstallReady,
+        note: JOB_SECRET_NOTE,
+        errorText: jobStartErrorText,
+        perform: (typed, values) => reinstallRouterAgent(router.id, reinstallRequestBody(values, typed)),
+        onDone: (resp) => {
+          // «Ход работы» части 2: openLayer сам знает, куда вернуть «назад».
+          if (resp?.job_id && openLayer) {
+            openLayer('job', { jobId: resp.job_id, title: reinstallJobTitle(router) })
+            return
+          }
+          setFleetResult(null)
+          setNotice(`Переустановка агента на «${router.nickname}» запущена.`)
+        },
+      }),
+    )
+  }
+
   function askUpdateAll() {
     const text = fleetUpdateSheetText(fleet)
     openSheet(
@@ -248,6 +328,27 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
           setFleetResult(fleetUpdateSummary(resp?.results))
           load()
         },
+      }),
+    )
+  }
+
+  // Раскатка бэкенда: подтверждение набором версии, дальше -- полноэкранное
+  // ожидание (слой backenddeploy). Сервер перезапустится, и приложению на это
+  // время некуда вернуться; отката отсюда нет.
+  function askBackendDeploy() {
+    const offer = backendDeployOffer(fleet)
+    if (!offer || !openLayer) return
+    const text = backendDeploySheetText(offer.target)
+    openSheet(
+      localSheet({
+        title: text.title,
+        body: text.body,
+        buttonLabel: 'Обновить бэкенд',
+        busyLabel: 'Отправляем…',
+        confirmPhrase: offer.target,
+        errorText: backendDeployErrorText,
+        perform: (typed) => deployBackend(offer.target, typed),
+        onDone: (resp) => openLayer('backenddeploy', { targetVersion: resp?.target_version || offer.target }),
       }),
     )
   }
@@ -323,8 +424,9 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
 
   const rows = fleet ? fleetRouterRows(fleet) : []
   const gaps = fleet ? notifyGapLines(fleet) : []
-  const watchdog = fleet ? watchdogLine(fleet) : ''
+  const watchdog = fleet ? watchdogLine(fleet) : null
   const backend = fleet ? backendRow(fleet) : null
+  const deployOffer = fleet ? backendDeployOffer(fleet) : null
   const behind = fleet ? fleetUpdateTargets(fleet).length : 0
   const revives = new Map(rows.map((row) => [row.id, reviveState(row.router, fleet)]))
   const reviveOff = fleet ? reviveNotConfiguredLine(fleet) : ''
@@ -344,9 +446,33 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
           <p class="router-lastseen">{fleetHeadline(fleet)}</p>
           {fleetError && <p class="state state-error">{fleetError}</p>}
 
-          <div class="card">
+          <div class="card park-backend">
             <DataRow title="Бэкенд" value={backend.value} valueSub={backend.sub} />
+            {/* Сторож -- рядом с бэкендом: это его процесс, и «молчат N»
+                читается как ответ на «кто сейчас не на связи», а не как
+                сноска под списком. */}
+            {watchdog && (
+              <div class={`park-watchdog park-watchdog-${watchdog.tone}`}>
+                <p class="park-watchdog-line">Сторож: {watchdog.text}</p>
+                {watchdog.alarm && <p class="state state-error">{watchdog.alarm}</p>}
+                {watchdog.sub && <p class="hint">{watchdog.sub}</p>}
+              </div>
+            )}
+            {deployOffer && openLayer && (
+              <div class="park-backend-actions">
+                <button type="button" class="btn btn-ghost btn-row" onClick={askBackendDeploy}>
+                  {deployOffer.label}
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Новый роутер: мастер -- слой парка, открывается с возвратом сюда. */}
+          {openLayer && (
+            <button type="button" class="btn btn-ghost btn-wide park-add" onClick={() => openLayer('provision')}>
+              Добавить роутер
+            </button>
+          )}
 
           {behind > 0 && (
             <button type="button" class="btn btn-primary btn-wide" onClick={askUpdateAll}>
@@ -447,6 +573,11 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                       <Quoted text={row.update.text} />
                     </p>
                   )}
+                  {routerDelayLines(row.router).map((line) => (
+                    <p key={line.key} class={`park-update park-delay park-update-${line.tone}`}>
+                      {line.text}
+                    </p>
+                  ))}
                   {/* Не только рядом с кнопкой «Обновить»: у слишком старого
                       агента (B6) canUpdate=false -- self_update ему
                       недоступен вовсе, но именно поэтому предупреждение
@@ -457,16 +588,26 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
                   {rv.text && (
                     <p class={`park-update park-update-${rv.tone}`}>оживление: {rv.text}</p>
                   )}
-                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel) && (
+                  {(row.update.canUpdate || row.update.canCancel || rv.canRevive || rv.canCancel || canPickVersion(row.router) || reinstallAllowed(row.router)) && (
                     <div class="park-actions">
                       {row.update.canUpdate && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askUpdate(row.router)}>
                           Обновить агент
                         </button>
                       )}
+                      {canPickVersion(row.router) && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askOtherVersion(row.router)}>
+                          Другая версия…
+                        </button>
+                      )}
                       {row.update.canCancel && (
                         <button type="button" class="btn btn-ghost btn-row" onClick={() => askCancel(row.router)}>
                           Отменить обновление
+                        </button>
+                      )}
+                      {reinstallAllowed(row.router) && (
+                        <button type="button" class="btn btn-ghost btn-row" onClick={() => askReinstall(row.router)}>
+                          Переустановить агент
                         </button>
                       )}
                       {rv.canRevive && (
@@ -498,16 +639,10 @@ export function ParkSection({ openSheet, onOpenRouter, currentID }) {
             </>
           )}
 
-          {watchdog && <p class="hint">Сторож парка: {watchdog}</p>}
-
           {/* В браузере личная ссылка на браузер бессмысленна -- человек уже
-              здесь. Вместо неё мостик к тому, что ещё не переехало (цикл 2
-              удалит строку вместе с переездом). */}
-          {mode === 'web' ? (
-            <a class="park-classic" href="/dashboard/classic/">
-              Установка агента на новый роутер, приглашения и раскатка бэкенда — пока в классическом веб-управлении
-            </a>
-          ) : (
+              здесь. Мостика в классическое веб-управление больше нет: всё,
+              что там было, переехало сюда (цикл 2). */}
+          {mode !== 'web' && (
             <>
               <button type="button" class="btn btn-ghost btn-wide" disabled={linkBusy} onClick={openInBrowser}>
                 {linkBusy ? 'Выдаём ссылку…' : 'Открыть в браузере'}

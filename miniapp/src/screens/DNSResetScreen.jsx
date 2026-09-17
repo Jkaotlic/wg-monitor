@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'preact/hooks'
 import { fetchRouterChecks, fetchRouterSettings } from '../api.js'
 import { useCommand } from '../useCommand.js'
+// Помощник копирования части 2 (тот же, что у экрана токена).
+import { copyText } from '../clipboard.js'
 import { confirmSheet } from '../sheet.js'
 import { Overlay } from '../ui/Overlay.jsx'
 import { Section } from '../ui/Section.jsx'
@@ -9,6 +11,7 @@ import {
   dnsResetAvailable,
   dnsResetConfirmBody,
   dnsResetScreenTexts,
+  dnsReferenceCommands,
   doneText,
   parsePreview,
   parseReset,
@@ -37,6 +40,12 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
   const [after, setAfter] = useState(null)
   const [previewFresh, setPreviewFresh] = useState(false)
   const [reset, setReset] = useState(null)
+  // '' -- ещё не копировали, 'ok' / 'fail' -- итог последнего нажатия.
+  const [copyState, setCopyState] = useState('')
+
+  function copyCommands() {
+    copyText(dnsReferenceCommands()).then((ok) => setCopyState(ok ? 'ok' : 'fail'))
+  }
   const preview = useCommand(routerID)
   const recheck = useCommand(routerID)
 
@@ -170,6 +179,20 @@ export function DNSResetScreen({ routerID, routerName, asleep, openSheet, onClos
               </Section>
             )}
           </>
+        )}
+        {/* Ручной прогон нужен и тогда, когда кнопки сброса нет (старый
+            агент): команды не зависят от версии агента. Только админу --
+            как и весь экран. */}
+        {settings && settings.role === 'admin' && (
+          <Section title={T.manualTitle}>
+            <p class="hint">{T.manualIntro}</p>
+            <pre class="raw-dump dns-commands">{dnsReferenceCommands()}</pre>
+            <button type="button" class="btn btn-ghost btn-wide dns-copy" onClick={copyCommands}>
+              {T.copyButton}
+            </button>
+            {copyState === 'ok' && <p class="state">{T.copied}</p>}
+            {copyState === 'fail' && <p class="state state-error">{T.copyFailed}</p>}
+          </Section>
         )}
       </div>
     </Overlay>

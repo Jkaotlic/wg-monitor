@@ -864,13 +864,11 @@ describe('«Парк» в веб-управлении', () => {
     return root
   }
 
-  it('web: «Открыть в браузере» нет, есть ссылка на классическое веб-управление', async () => {
+  it('web: ни «Открыть в браузере», ни ссылки на классическое веб-управление', async () => {
     reset()
     const root = await mountParkIn('web')
     expect(buttons(root, 'Открыть в браузере')).toEqual([])
-    const link = root.querySelector('a.park-classic')
-    expect(link.getAttribute('href')).toBe('/dashboard/classic/')
-    expect(link.textContent).toBe('Установка агента на новый роутер, приглашения и раскатка бэкенда — пока в классическом веб-управлении')
+    expect(root.querySelector('a.park-classic')).toBe(null)
     cleanup(root)
   })
 

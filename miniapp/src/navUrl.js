@@ -21,6 +21,10 @@ export function urlFromNav(nav) {
   const params = new URLSearchParams()
   params.set('router', String(nav.routerID))
   if (nav.tab && nav.tab !== 'router') params.set('tab', nav.tab)
-  if (OPEN_OVERLAYS.includes(nav.overlay)) params.set('open', nav.overlay)
+  // Слой без адреса (мастер, ход работы) оставляет в адресе слой, откуда его
+  // открыли: обновление страницы вернёт туда, а не на пустой роутер, и
+  // открытие мастера не добавляет запись в историю браузера.
+  const open = OPEN_OVERLAYS.includes(nav.overlay) ? nav.overlay : nav.overlayParams?.returnTo
+  if (OPEN_OVERLAYS.includes(open)) params.set('open', open)
   return '?' + params.toString()
 }
