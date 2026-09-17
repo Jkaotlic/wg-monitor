@@ -30,6 +30,8 @@ func TestCabinetSecretInChatIsDeletedAndAnswered(t *testing.T) {
 		{"пароль SSH в личке админа", 42, 42, "id=dacha ssh_host=203.0.113.7 ssh_password=SECRET-PASS", true, true},
 		{"пароль SSH в группе", -100, 42, "id=dacha ssh_password=SECRET-PASS", true, false},
 		{"ключ в чужой группе", -555, 42, "vpn://SECRET-KEY", false, false},
+		// /myid отвечает до всех проверок -- секрет рядом с ней всё равно удаляется.
+		{"ключ рядом с /myid", 777, 777, "/myid vpn://SECRET-KEY-MUST-NOT-LEAK", true, true},
 		{"обычный текст", 777, 777, "привет", false, false},
 		{"короткое число", 777, 777, "12345", false, false},
 	}

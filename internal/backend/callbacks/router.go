@@ -648,6 +648,12 @@ func (r *Router) aclAllowLegacyRoutesClose(ctx context.Context, q *tg.CallbackQu
 // callbacks per the 2026-04-30 policy reversal, but typing into the chat
 // is a one-operator surface).
 func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
+	// Секрет кабинета, присланный в чат по старой привычке, удаляется до
+	// любых проверок доступа и даже до /myid (иначе «/myid vpn://…» оставит
+	// ключ в чате): он не должен висеть в переписке ни у кого.
+	if r.handleCabinetSecretMessage(ctx, m) {
+		return
+	}
 	// /myid отвечает кому угодно и откуда угодно -- до всех проверок доступа.
 	//
 	// Чтобы дать человеку доступ к роутеру, нужен его числовой номер в
@@ -659,11 +665,6 @@ func (r *Router) HandleMessage(ctx context.Context, m *tg.Message) {
 	// поэтому и пропуск ей нужен ровно один -- этот.
 	if cmd, _, ok := parseSlashCommand(m.Text); ok && cmd == "/myid" {
 		r.handleMyIDCommand(ctx, m)
-		return
-	}
-	// Секрет кабинета, присланный в чат по старой привычке, удаляется до
-	// любых проверок доступа: он не должен висеть в переписке ни у кого.
-	if r.handleCabinetSecretMessage(ctx, m) {
 		return
 	}
 	adminDM := r.cfg.AdminUserID != 0 && m.From.ID == r.cfg.AdminUserID && m.Chat.ID == m.From.ID
