@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -213,5 +214,34 @@ func TestSelfHostedIsNotAReplaceOrRepairProvider(t *testing.T) {
 	rec := postReplace(t, NewMux(deps), ownedID, tgUser, `{"provider":"selfhosted","option_id":"dacha","old_tunnel_id":"awg11","policy_name":"HydraRoute"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("мастер замены принял свой сервер: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Настоящий сервис за маршрутом: смена SSH-адреса без нового пароля --
+// 400 invalid_field по полю ssh_password, а не тихий перенос старого пароля.
+func TestMiniappSelfHostedUpdateNewSSHTargetNeedsPassword(t *testing.T) {
+	svc := selfhostedamnezia.NewService(filepath.Join(t.TempDir(), "s.json"), selfhostedamnezia.Config{})
+	if err := svc.Create(selfhostedamnezia.Instance{ID: "dacha", Enabled: true, EndpointHost: "vpn.example.com", EndpointPort: 1,
+		SSHHost: "203.0.113.7", SSHPassword: "SECRET-SSH-MUST-NOT-LEAK"}); err != nil {
+		t.Fatal(err)
+	}
+	env := newCabinetEnv(t, func(d *Deps) { d.SelfHosted = svc })
+	rec := env.do(t, cabAdmin, http.MethodPut, "/v1/miniapp/selfhosted/dacha",
+		`{"endpoint_host":"vpn.example.com","endpoint_port":1,"ssh_host":"198.51.100.9","ssh_password":""}`)
+	if code, msg, field := cabinetErrorBody(t, rec); rec.Code != http.StatusBadRequest || code != "invalid_field" || field != "ssh_password" || strings.Contains(msg, "SECRET") {
+		t.Fatalf("смена адреса: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = env.do(t, cabAdmin, http.MethodPut, "/v1/miniapp/selfhosted/dacha",
+		`{"label":"Дача","endpoint_host":"vpn.example.com","endpoint_port":1,"ssh_host":"203.0.113.7","ssh_password":""}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("тот же адрес: %d %s", rec.Code, rec.Body.String())
+	}
+	insts, _ := svc.List()
+	if insts[0].SSHPassword != "SECRET-SSH-MUST-NOT-LEAK" {
+		t.Fatal("пароль того же входа потерян")
+	}
+	rec = env.do(t, cabAdmin, http.MethodPut, "/v1/miniapp/selfhosted/dacha", `{"endpoint_host":"vpn.example.com","endpoint_port":1,"ssh_host":""}`)
+	if insts, _ = svc.List(); rec.Code != http.StatusNoContent || insts[0].SSHPassword != "" || insts[0].SSHHost != "" {
+		t.Fatalf("стёртый адрес: %d %+v", rec.Code, insts[0])
 	}
 }

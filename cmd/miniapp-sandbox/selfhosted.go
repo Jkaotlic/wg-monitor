@@ -108,7 +108,11 @@ func (s *sandboxSelfHosted) Update(id string, inst selfhostedamnezia.Instance) e
 	}
 	inst.Enabled = s.instances[i].Enabled
 	if inst.SSHHost != "" && inst.SSHPassword == "" {
-		inst.SSHPassword = s.instances[i].SSHPassword
+		cur := s.instances[i]
+		if inst.SSHHost != cur.SSHHost || inst.SSHPort != cur.SSHPort || inst.SSHUser != cur.SSHUser {
+			return &selfhostedamnezia.FieldError{Field: "ssh_password", Reason: "Адрес SSH изменён — введите пароль заново"}
+		}
+		inst.SSHPassword = cur.SSHPassword
 	}
 	if err := selfhostedamnezia.ValidateInstance(inst); err != nil {
 		return err

@@ -113,6 +113,13 @@ func (s *Service) Update(id string, inst Instance) error {
 			}
 			inst.Enabled = cur.Enabled
 			if inst.SSHHost != "" && inst.SSHPassword == "" {
+				// Сохранённый пароль -- только для того же входа. Сменили адрес,
+				// порт или пользователя -- пароль вводится заново: иначе проверка
+				// подключения отправила бы его на другой сервер, а host key не
+				// проверяется (InsecureIgnoreHostKey).
+				if inst.SSHHost != cur.SSHHost || inst.SSHPort != cur.SSHPort || inst.SSHUser != cur.SSHUser {
+					return &FieldError{Field: "ssh_password", Reason: "Адрес SSH изменён — введите пароль заново"}
+				}
 				inst.SSHPassword = cur.SSHPassword
 			}
 			if err := ValidateInstance(inst); err != nil {

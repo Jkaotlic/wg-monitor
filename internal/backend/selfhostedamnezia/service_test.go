@@ -74,14 +74,14 @@ func TestServiceCreateUpdateKeepsPasswordAndValidates(t *testing.T) {
 		t.Fatalf("умолчания SSH не проставлены: %+v", got)
 	}
 
-	// Пустой пароль при изменении -- «не менять».
+	// Пустой пароль при изменении того же SSH-входа -- «не менять».
 	upd := homeInstance()
-	upd.Label, upd.SSHHost = "Дача", "203.0.113.8"
+	upd.Label, upd.SSHHost = "Дача", "203.0.113.7"
 	if err := s.Update("home", upd); err != nil {
 		t.Fatal(err)
 	}
 	got, _ = s.List()
-	if got[0].Label != "Дача" || got[0].SSHHost != "203.0.113.8" || got[0].SSHPassword != "SECRET-SSH-MUST-NOT-LEAK" {
+	if got[0].Label != "Дача" || got[0].SSHHost != "203.0.113.7" || got[0].SSHPassword != "SECRET-SSH-MUST-NOT-LEAK" {
 		t.Fatalf("после изменения: %+v", got[0])
 	}
 
@@ -343,5 +343,59 @@ func TestTunnelNameAndValidInstanceID(t *testing.T) {
 	}
 	if !ValidInstanceID("home") || ValidInstanceID("Bad!") || ValidInstanceID("h") {
 		t.Fatal("ValidInstanceID")
+	}
+}
+
+// Сохранённый пароль уходит только на тот SSH, к которому его вводили: при
+// смене адреса, порта или пользователя пустое поле пароля -- отказ, иначе
+// «Проверить подключение» отправила бы пароль на чужой сервер (host key не
+// проверяется).
+func TestServiceUpdateKeepsPasswordOnlyForSameSSHTarget(t *testing.T) {
+	base := homeInstance()
+	base.SSHHost, base.SSHPort, base.SSHUser, base.SSHPassword = "203.0.113.7", 22, "root", "SECRET-SSH-MUST-NOT-LEAK"
+	cases := []struct {
+		name string
+		mod  func(*Instance)
+	}{
+		{"адрес", func(i *Instance) { i.SSHHost = "203.0.113.99" }},
+		{"порт", func(i *Instance) { i.SSHPort = 2222 }},
+		{"пользователь", func(i *Instance) { i.SSHUser = "admin" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService(t)
+			if err := s.Create(base); err != nil {
+				t.Fatal(err)
+			}
+			upd := base
+			upd.SSHPassword = ""
+			tc.mod(&upd)
+			var fe *FieldError
+			if err := s.Update("home", upd); !errors.As(err, &fe) || fe.Field != "ssh_password" || !strings.Contains(fe.Reason, "заново") {
+				t.Fatalf("смена SSH без пароля: %v", err)
+			}
+			got, _ := s.List()
+			if got[0].SSHHost != "203.0.113.7" {
+				t.Fatalf("отказ всё равно сохранил: %+v", got[0])
+			}
+			upd.SSHPassword = "new-pass"
+			if err := s.Update("home", upd); err != nil {
+				t.Fatalf("с новым паролем: %v", err)
+			}
+		})
+	}
+	s := newTestService(t)
+	if err := s.Create(base); err != nil {
+		t.Fatal(err)
+	}
+	same := base
+	same.SSHPassword, same.SSHPort, same.SSHUser = "", 0, "" // 0 и "" -- те же умолчания 22/root
+	same.Label = "Дача"
+	if err := s.Update("home", same); err != nil {
+		t.Fatalf("без смены SSH: %v", err)
+	}
+	got, _ := s.List()
+	if got[0].SSHPassword != "SECRET-SSH-MUST-NOT-LEAK" {
+		t.Fatalf("пароль не сохранён: %+v", got[0])
 	}
 }
