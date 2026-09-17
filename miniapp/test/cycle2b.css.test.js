@@ -115,6 +115,12 @@ describe('осмотр приёмки: CSS', () => {
 
   it('команда установки не растягивает экран токена', () => {
     expect(rule(outside, '\n.token-command')).toMatch(/max-height/)
+    // Строки скрипта не рвутся: прокрутка вбок только внутри блока.
+    const cmd = rule(outside, '\n.token-block .token-command')
+    expect(cmd).toMatch(/white-space:\s*pre;/)
+    expect(cmd).toMatch(/overflow-x:\s*auto/)
+    expect(cmd).toMatch(/overflow-wrap:\s*normal/)
+    expect(rule(outside, '\n.token-block code')).toMatch(/min-width:\s*0/)
   })
 
   it('строка сторожа -- без второй линии и с отступом строки данных', () => {
@@ -140,8 +146,16 @@ describe('ожидание раскатки на широком экране', (
 
 describe('осмотр приёмки, круг 2', () => {
   it('адрес бэкенда на экране токена переносится под подпись, а не сжимает её', () => {
-    expect(rule(outside, '\n.token-backend .data-row')).toMatch(/flex-wrap:\s*wrap/)
-    expect(rule(outside, '\n.token-backend .data-row-main')).toMatch(/flex-shrink:\s*0/)
+    // Телефон: подпись над значением, адрес моноширинным с переносом по символу.
+    const row = rule(outside, '\n.token-backend .data-row')
+    expect(row).toMatch(/flex-direction:\s*column/)
+    const value = rule(outside, '\n.token-backend .data-row-value')
+    expect(value).toMatch(/font-family:\s*var\(--font-mono\)/)
+    expect(value).toMatch(/white-space:\s*normal/)
+    expect(value).toMatch(/word-break:\s*break-all/)
+    expect(value).toMatch(/text-align:\s*left/)
+    // Широкая раскладка: снова в строку.
+    expect(block.body).toMatch(/\.wide-shell \.token-backend \.data-row\s*\{\s*flex-direction:\s*row/)
   })
 
   it('поиск в «Моих роутерах» отделён от строки итога', () => {

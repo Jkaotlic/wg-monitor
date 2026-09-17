@@ -2791,20 +2791,31 @@ body {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   user-select: all;
+  min-width: 0;
 }
 
-/* Длинный адрес бэкенда уходит под подпись, а не сжимает её в столбик. */
+/* Скрипт установки: строки не рвутся посередине, вбок прокручивается только
+   сам блок -- страница не ездит. */
+.token-block .token-command {
+  white-space: pre;
+  overflow-x: auto;
+  overflow-wrap: normal;
+}
+
+/* Адрес бэкенда на телефоне -- под подписью: рядом подпись ломалась по
+   словам. Адрес моноширинный и переносится по любому символу. */
 .token-backend .data-row {
-  flex-wrap: wrap;
-}
-
-.token-backend .data-row-main {
-  flex-shrink: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-1);
 }
 
 .token-backend .data-row-value {
-  min-width: 0;
-  overflow-wrap: anywhere;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  white-space: normal;
+  word-break: break-all;
+  text-align: left;
 }
 
 .token-command {
@@ -3826,6 +3837,20 @@ body {
   /* --- «Пакеты по расписанию»: журнал на широком экране длиннее --- */
   .wide-shell .packages-log {
     max-height: 480px;
+  }
+
+  /* Экран токена: на широком экране адрес бэкенда снова в строку с подписью. */
+  .wide-shell .token-backend .data-row {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .wide-shell .token-backend .data-row-value {
+    text-align: right;
+  }
+
+  .wide-shell .token-block .token-command {
+    flex: 1;
   }
 
   /* «Опасное»: секция внутри свёрнутого блока -- без отступа секции экрана. */
