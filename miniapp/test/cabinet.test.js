@@ -93,3 +93,16 @@ describe('кончились места', () => {
     }
   })
 })
+
+// Состояние подписки кабинет присылает словом по-английски; человеку его
+// показывают по-русски, а незнакомое слово -- как есть.
+describe('состояние подписки словами', () => {
+  const base = { connected: true, label: 'Amnezia Premium' }
+  it('active и expired переводятся', () => {
+    expect(accountSummary({ ...base, status: 'active' }).lines).toContain('Подписка активна')
+    expect(accountSummary({ ...base, status: 'expired' }).lines).toContain('Подписка закончилась')
+  })
+  it('незнакомое состояние -- как пришло', () => {
+    expect(accountSummary({ ...base, status: 'trial' }).lines).toContain('Подписка: trial')
+  })
+})

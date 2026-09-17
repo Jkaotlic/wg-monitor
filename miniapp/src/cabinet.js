@@ -30,7 +30,7 @@ export function accountSummary(account, { canRevoke = false } = {}) {
     }
   }
   const lines = []
-  if (account.status) lines.push(`Подписка: ${account.status}`)
+  if (account.status) lines.push(subscriptionLine(account.status))
   if (account.ends_at) lines.push(`Действует до ${account.ends_at}`)
   if (account.devices_max) lines.push(`Устройств занято ${account.devices_used ?? 0} из ${account.devices_max}`)
 
@@ -67,4 +67,16 @@ export function optionRows(account) {
     // При полной подписке доступна только уже выпущенная страна.
     available: !full || o.issued === true,
   }))
+}
+
+// Кабинет присылает состояние подписки английским словом. Знакомые слова --
+// по-русски; незнакомое показываем как есть, а не прячем.
+const SUBSCRIPTION_WORDS = {
+  active: 'Подписка активна',
+  expired: 'Подписка закончилась',
+  inactive: 'Подписка не активна',
+}
+
+function subscriptionLine(status) {
+  return SUBSCRIPTION_WORDS[String(status).toLowerCase()] ?? `Подписка: ${status}`
 }
