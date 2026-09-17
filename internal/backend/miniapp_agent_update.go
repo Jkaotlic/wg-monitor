@@ -21,6 +21,9 @@ const miniappAgentUpdateMaxBody = 4096
 type miniappAgentUpdateReq struct {
 	Confirm       string `json:"confirm"`
 	TargetVersion string `json:"target_version"`
+	// AllowDowngrade -- админ сам выбрал версию ниже текущей и подтвердил
+	// откат (спека цикла 2, п. 6). Без него agentDeployCore отказывает.
+	AllowDowngrade bool `json:"allow_downgrade"`
 }
 
 type miniappAgentUpdateResp struct {
@@ -74,7 +77,7 @@ func miniappDeployErrorText(code string) string {
 	case deployErrPending:
 		return "Обновление этому роутеру уже назначено."
 	case deployErrDowngrade:
-		return "На роутере уже стоит версия новее выбранной."
+		return miniappAdminOpsErrorText(deployErrDowngrade)
 	case deployErrNoRelease:
 		return "Такой версии агента нет среди выпусков."
 	// Три причины "not_configured" (B5a): их нельзя было различить по тексту,
@@ -164,6 +167,7 @@ func miniappAgentUpdateHandler(d Deps) http.HandlerFunc {
 			writeMiniappDeployError(w, http.StatusServiceUnavailable, "not_configured", miniappDeployErrorText("not_configured"))
 			return
 		}
+		opts.AllowDowngrade = req.AllowDowngrade
 		target := strings.TrimSpace(req.TargetVersion)
 		if target == "" {
 			target = serverVersion

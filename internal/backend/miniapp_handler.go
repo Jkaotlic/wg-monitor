@@ -59,6 +59,8 @@ func registerMiniappRoutes(mux *http.ServeMux, d Deps, entrance *remoteRateLimit
 	mux.Handle("POST /v1/miniapp/backend/deploy", reqID(auth(miniappBackendDeployHandler(d))))
 	mux.Handle("GET /v1/miniapp/jobs/{job_id}", reqID(auth(miniappJobHandler(d))))
 	mux.Handle("POST /v1/miniapp/provision", reqID(auth(miniappProvisionHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/agent/reinstall", reqID(auth(miniappAgentReinstallHandler(d))))
+	mux.Handle("POST /v1/miniapp/routers/{id}/agent/repoint", reqID(auth(miniappAgentRepointHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers", reqID(auth(miniappRoutersHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}", reqID(auth(miniappRouterDetailHandler(d))))
 	mux.Handle("GET /v1/miniapp/routers/{id}/events", reqID(auth(miniappRouterEventsHandler(d))))
