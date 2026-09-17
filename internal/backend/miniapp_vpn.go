@@ -186,11 +186,15 @@ func miniappVPNIssueHandler(d Deps) http.HandlerFunc {
 			return
 		}
 		if err != nil {
-			writeJSONError(w, http.StatusBadGateway, "cabinet_failed", err.Error())
+			// Текст ошибки кабинета -- только в журнал (реализация кабинета
+			// уже убрала из него ключ и код); человеку -- слова из таблицы.
+			miniappCabinetLogger(d).Warn("выпуск: кабинет не выдал конфиг", "router_id", routerID, "provider", provider, "option", optionID, "err", err)
+			writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")
 			return
 		}
 		if len(issued.Conf) == 0 {
-			writeJSONError(w, http.StatusBadGateway, "cabinet_failed", "cabinet returned an empty config")
+			miniappCabinetLogger(d).Warn("выпуск: кабинет вернул пустой конфиг", "router_id", routerID, "provider", provider, "option", optionID)
+			writeMiniappCabinetError(w, http.StatusBadGateway, "cabinet_failed")
 			return
 		}
 		cmdID, err := miniappEnqueueTunnelImport(d, u.ID, issued.Conf, issued.TunnelName, issued.Backend)

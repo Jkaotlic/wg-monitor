@@ -138,3 +138,27 @@ func TestHideMySecretsLabelActiveAndNotFound(t *testing.T) {
 		t.Fatalf("неверный вид: %v", err)
 	}
 }
+
+// Три формы утечки, которые не ловила простая замена: ключ в JSON-экранировании,
+// тело ключа без «vpn://» после обрезки ответа и часть цифр кода HideMy.
+func TestRedactSecretCatchesEscapedTruncatedAndPartial(t *testing.T) {
+	const key = "vpn://AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH-SECRET-BODY"
+	cases := []struct{ name, text, secret, leak string }{
+		{"JSON-экранирование", `amnezia login: HTTP 401: {"vpnKey":"vpn:\/\/AAAABBBBCCCCDDDDEEEE"}`, key, "AAAABBBB"},
+		{"тело без префикса", `amnezia login: HTTP 401: {"echo":"...CCCCDDDDEEEEFFFFGGGGHH...`, key, "CCCCDDDDEEEEFFFF"},
+		{"часть цифр кода", `hidemy serverlist: HTTP 403: code 1234567890123 rejected`, "123456789012345", "1234567890"},
+		{"цифры кода целиком другой длины", `hidemy: bad code 98765432109876`, "", "9876543210"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redactSecret(tc.text, tc.secret)
+			if strings.Contains(got, tc.leak) || !strings.Contains(got, cabinetHiddenValue) {
+				t.Fatalf("утечка: %q", got)
+			}
+		})
+	}
+	// Обычный текст ошибки без секрета не портится.
+	if got := redactSecret("amnezia login: HTTP 502: bad gateway", key); got != "amnezia login: HTTP 502: bad gateway" {
+		t.Fatalf("испорчен обычный текст: %q", got)
+	}
+}

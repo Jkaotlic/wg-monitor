@@ -242,3 +242,23 @@ func TestIssueConfigRefusesSelfHosted(t *testing.T) {
 		t.Fatal("кабинеты не должны были спрашиваться")
 	}
 }
+
+// То же для HideMy.name: мастер замены пишет текст ошибки выпуска в шаг, и
+// кода (даже его части) там быть не должно.
+func TestIssueConfigHideMyErrorNeverCarriesCode(t *testing.T) {
+	const code = "123456789012345"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"error":"bad code ` + r.PostFormValue("code")[:12] + `"}`))
+	}))
+	defer srv.Close()
+	r := &Router{cfg: Config{HideMyBaseURL: srv.URL, HideMySecretsPath: filepath.Join(t.TempDir(), "hidemyname.json")}}
+	if _, err := r.addHideMyCodeLabeled(7, code, ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err := r.IssueConfig(context.Background(), 7, providerHideMy, "a1b2c3d4e5f6")
+	if err == nil || strings.Contains(err.Error(), "1234567890") {
+		t.Fatalf("ошибка выпуска: %v", err)
+	}
+}
