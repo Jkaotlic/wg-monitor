@@ -160,7 +160,7 @@ describe('мастер «Добавить роутер»', () => {
     const { root, calls } = await mount()
     await toConfirm(root, { path: 'Установить агента сейчас', kind: 'В машине' })
     expect(progress(root)).toBe('Шаг 3 из 4 · Доступ к роутеру')
-    expect(root.textContent).toContain('Пароль уходит на сервер один раз и не сохраняется.')
+    expect(root.textContent).toContain('пароль root сохранится там зашифрованным')
 
     await click(button(root, 'Дальше'))
     expect(errorText(root)).toBe('Нужен адрес панели awg-manager: https://…')
