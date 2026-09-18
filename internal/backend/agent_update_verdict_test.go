@@ -3,6 +3,9 @@ package backend
 import (
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Jkaotlic/wg-monitor/internal/backend/db"
 )
 
 func TestAgentUpdateVerdictFor(t *testing.T) {
@@ -74,5 +77,46 @@ func TestAgentUpdateVerdictWithUnknownBackend(t *testing.T) {
 	}
 	if got := agentUpdateVerdictFor("v0.12.0", "unknown"); !got.TooOld {
 		t.Fatalf("слишком старый агент остаётся слишком старым и без версии бэкенда: %+v", got)
+	}
+}
+
+// «Давно не обновлялся» -- один признак на весь сервер (v0.45): агент ниже
+// agentSelfUpdateFloor ИЛИ молчит дольше 30 дней и отстаёт от бэкенда.
+func TestAgentLongNotUpdated(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	ago := func(d time.Duration) *time.Time { t := now.Add(-d); return &t }
+	ver := func(v string) *string { return &v }
+	const backendV = "v0.45.0"
+	day := 24 * time.Hour
+	cases := []struct {
+		name     string
+		version  *string
+		lastSeen *time.Time
+		want     bool
+	}{
+		{"слишком старый на связи", ver("v0.12.9"), ago(time.Minute), true},
+		{"слишком старый, молчит", ver("v0.13.0-rc4"), ago(40 * day), true},
+		{"отстаёт и молчит 31 день", ver("v0.44.0"), ago(31 * day), true},
+		{"отстаёт, молчит ровно 30 дней", ver("v0.44.0"), ago(30 * day), false},
+		{"отстаёт, но на связи", ver("v0.44.0"), ago(time.Hour), false},
+		{"свежий и молчит 60 дней", ver("v0.45.0"), ago(60 * day), false},
+		{"версия неизвестна", nil, ago(60 * day), false},
+		{"мусор вместо версии", ver("dev"), ago(60 * day), false},
+		{"отстаёт, ни разу не выходил на связь", ver("v0.44.0"), nil, false},
+		{"на границе self_update", ver(agentSelfUpdateFloor), ago(time.Minute), false},
+	}
+	for _, c := range cases {
+		u := &db.User{LastDeployedVersion: c.version, LastSeenAt: c.lastSeen}
+		if got := agentLongNotUpdated(u, backendV, now); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	// Бэкенд без тега выпуска (dev-сборка) -- «отстаёт» не определить, но
+	// слишком старый остаётся слишком старым.
+	if agentLongNotUpdated(&db.User{LastDeployedVersion: ver("v0.44.0"), LastSeenAt: ago(60 * day)}, "unknown", now) {
+		t.Error("dev-бэкенд: отставание не определено, а признак true")
+	}
+	if !agentLongNotUpdated(&db.User{LastDeployedVersion: ver("v0.12.0"), LastSeenAt: ago(time.Minute)}, "unknown", now) {
+		t.Error("dev-бэкенд: слишком старый агент потерян")
 	}
 }

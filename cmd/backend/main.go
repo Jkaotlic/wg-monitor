@@ -192,6 +192,11 @@ func main() {
 	reviveSvc := newReviveService(ctx, cfg, d, provisionDeps, tgClient, logger)
 	if reviveSvc != nil {
 		go reviveSvc.Run(ctx)
+		// Авто-оживление давно не обновлявшихся (v0.45): по сохранённому
+		// паролю root, рядом с воркером оживления.
+		go backend.RunAutoRevive(ctx, backend.AutoReviveDeps{
+			DB: d, Revive: reviveSvc, CommandSink: cmdQueue, Logger: logger.With("component", "auto-revive"),
+		})
 	} else {
 		// Fix round 1, Important #2 (мандатное ревью): без ключа Service.Run
 		// никогда не пройдёт по базе, и просроченные секреты лежали бы в
