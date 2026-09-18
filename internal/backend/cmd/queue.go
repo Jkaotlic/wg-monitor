@@ -41,6 +41,10 @@ type resultEntry struct {
 type commandEntry struct {
 	cmd      wire.Command
 	issuedAt time.Time
+	// activeUntil -- до какого момента выданная команда держит досылку.
+	// Ноль -- по TTL действия (прежнее поведение). Ставит ReleaseActive,
+	// когда агент уже ответил и держать повтор до конца TTL незачем.
+	activeUntil time.Time
 }
 
 // ExpiredCommandHandler observes commands dropped before issue, either because
@@ -395,11 +399,42 @@ func (q *Queue) hasActiveCommandLocked(userID int64, action string, now time.Tim
 	}
 	ttl := defaultCommandTTL(action)
 	for _, e := range q.issued[userID] {
-		if e.cmd.Action == action && now.Sub(e.issuedAt) < ttl {
+		if e.cmd.Action != action {
+			continue
+		}
+		if !e.activeUntil.IsZero() {
+			if now.Before(e.activeUntil) {
+				return true
+			}
+			continue
+		}
+		if now.Sub(e.issuedAt) < ttl {
 			return true
 		}
 	}
 	return false
+}
+
+// ReleaseActive отпускает выданную команду раньше её TTL: через cooldown она
+// перестаёт считаться активной, и досылка вправе положить новую. Нужна
+// ответу «прокси релизов занят» (backend/deploy_attempts.go): агент уже
+// вернул результат, а ждать полчаса TTL ради повтора -- значит обновлять парк
+// до вечера. Продлить активность дальше TTL нельзя. false -- такой выданной
+// команды нет.
+func (q *Queue) ReleaseActive(userID int64, cmdID string, cooldown time.Duration) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	e, ok := q.issued[userID][cmdID]
+	if !ok {
+		return false
+	}
+	until := time.Now().Add(cooldown)
+	if ttlEnd := e.issuedAt.Add(defaultCommandTTL(e.cmd.Action)); until.After(ttlEnd) {
+		until = ttlEnd
+	}
+	e.activeUntil = until
+	q.issued[userID][cmdID] = e
+	return true
 }
 
 // EnqueueIfNoActive кладёт cmd, только если у userID сейчас нет активной

@@ -570,3 +570,31 @@ func TestQueue_ResultRecordedAt(t *testing.T) {
 		t.Fatal("результат чужого роутера")
 	}
 }
+
+// Агент ответил «прокси занят»: команда закончена, и досылка вправе
+// повторить её после короткой паузы, а не ждать полчаса TTL.
+func TestQueue_ReleaseActiveShortensWindow(t *testing.T) {
+	q := New()
+	if err := q.Enqueue(7, mkCmd("su1", "self_update")); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := q.Dequeue(context.Background(), 7, 10*time.Millisecond); !ok {
+		t.Fatal("dequeue")
+	}
+	if !q.HasActiveCommand(7, "self_update") {
+		t.Fatal("выданная команда обязана быть активной")
+	}
+	if !q.ReleaseActive(7, "su1", time.Hour) {
+		t.Fatal("выданную команду не нашли")
+	}
+	if !q.HasActiveCommand(7, "self_update") {
+		t.Fatal("во время паузы команда ещё активна")
+	}
+	q.ReleaseActive(7, "su1", 0)
+	if q.HasActiveCommand(7, "self_update") {
+		t.Fatal("после паузы команда больше не держит досылку")
+	}
+	if q.ReleaseActive(7, "nope", 0) {
+		t.Fatal("чужой идентификатор не должен находиться")
+	}
+}
