@@ -62,6 +62,15 @@ type Queue struct {
 	signal  *sync.Cond // signals on Enqueue and RecordResult
 	onDrop  ExpiredCommandHandler
 	logger  *slog.Logger // optional; nil → slog.Default()
+	// limits -- потолок одновременных выдач по действию (SetDispatchLimit).
+	limits map[string]dispatchLimit
+}
+
+// dispatchLimit -- сколько команд действия может быть в работе у всего парка
+// разом: выдана агенту, ответа нет, и с выдачи прошло меньше window.
+type dispatchLimit struct {
+	max    int
+	window time.Duration
 }
 
 // SetLogger overrides the queue's structured logger. Used by main to inject
@@ -74,6 +83,45 @@ func (q *Queue) SetExpiredCommandHandler(h ExpiredCommandHandler) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.onDrop = h
+}
+
+// SetDispatchLimit ограничивает, скольким агентам разом выдаётся action.
+// Сверх потолка команда остаётся в очереди (и считается активной -- досылка
+// вторую не положит), а опрос отдаёт следующую за ней команду другого
+// действия. Место освобождает ответ агента или истёкшее window -- агент мог
+// уйти в перезагрузку, не ответив. max <= 0 снимает ограничение.
+func (q *Queue) SetDispatchLimit(action string, maxInFlight int, window time.Duration) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if maxInFlight <= 0 {
+		delete(q.limits, action)
+		return
+	}
+	if q.limits == nil {
+		q.limits = make(map[string]dispatchLimit)
+	}
+	q.limits[action] = dispatchLimit{max: maxInFlight, window: window}
+}
+
+// dispatchBlockedLocked -- упёрлось ли действие в потолок одновременных выдач.
+func (q *Queue) dispatchBlockedLocked(action string, now time.Time) bool {
+	lim, ok := q.limits[action]
+	if !ok {
+		return false
+	}
+	n := 0
+	for uid, bucket := range q.issued {
+		for id, e := range bucket {
+			if e.cmd.Action != action || now.Sub(e.issuedAt) >= lim.window {
+				continue
+			}
+			if _, answered := q.results[uid][id]; answered {
+				continue
+			}
+			n++
+		}
+	}
+	return n >= lim.max
 }
 
 func (q *Queue) log() *slog.Logger {
@@ -246,16 +294,26 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for {
-		if cmds := q.pending[userID]; len(cmds) > 0 {
-			head := cmds[0]
-			// Realloc when slack >= 4× live entries to release the underlying
-			// array (BUG-22). Stays an O(1) amortised pop in the steady-state
-			// small-queue case.
-			tail := cmds[1:]
-			if len(tail) > 16 && cap(tail) > 4*len(tail) {
-				fresh := make([]wire.Command, len(tail))
-				copy(fresh, tail)
-				tail = fresh
+		if idx := q.nextDispatchableLocked(userID, time.Now()); idx >= 0 {
+			cmds := q.pending[userID]
+			head := cmds[idx]
+			var tail []wire.Command
+			if idx == 0 {
+				// Realloc when slack >= 4× live entries to release the underlying
+				// array (BUG-22). Stays an O(1) amortised pop in the steady-state
+				// small-queue case.
+				tail = cmds[1:]
+				if len(tail) > 16 && cap(tail) > 4*len(tail) {
+					fresh := make([]wire.Command, len(tail))
+					copy(fresh, tail)
+					tail = fresh
+				}
+			} else {
+				// Придержанная команда (SetDispatchLimit) остаётся на своём месте,
+				// забираем стоящую за ней.
+				tail = make([]wire.Command, 0, len(cmds)-1)
+				tail = append(tail, cmds[:idx]...)
+				tail = append(tail, cmds[idx+1:]...)
 			}
 			if len(tail) == 0 {
 				delete(q.pending, userID)
@@ -284,6 +342,18 @@ func (q *Queue) Dequeue(ctx context.Context, userID int64, holdTimeout time.Dura
 		}
 		q.signal.Wait()
 	}
+}
+
+// nextDispatchableLocked -- индекс первой команды userID, которую можно
+// отдать сейчас: протухшую (её Dequeue выбросит) или не упёршуюся в потолок
+// выдач. -1 -- отдавать нечего.
+func (q *Queue) nextDispatchableLocked(userID int64, now time.Time) int {
+	for i, c := range q.pending[userID] {
+		if commandExpired(c, now) || !q.dispatchBlockedLocked(c.Action, now) {
+			return i
+		}
+	}
+	return -1
 }
 
 // RecordResult stores result under (userID, result.ID) and wakes any AwaitResult waiter.

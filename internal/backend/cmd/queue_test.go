@@ -598,3 +598,84 @@ func TestQueue_ReleaseActiveShortensWindow(t *testing.T) {
 		t.Fatal("чужой идентификатор не должен находиться")
 	}
 }
+
+// Размазывание раздачи: не больше двух роутеров разом качают бинарь. Третий
+// получает свою self_update, только когда один из двух ответил; команды
+// других действий у него при этом не застревают.
+func TestQueue_DispatchLimitStaggersSelfUpdate(t *testing.T) {
+	q := New()
+	q.SetDispatchLimit("self_update", 2, time.Hour)
+	for uid := int64(1); uid <= 3; uid++ {
+		if err := q.Enqueue(uid, mkCmd("su"+string(rune('0'+uid)), "self_update")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx := context.Background()
+	for uid := int64(1); uid <= 2; uid++ {
+		if c, ok := q.Dequeue(ctx, uid, 10*time.Millisecond); !ok || c.Action != "self_update" {
+			t.Fatalf("роутер %d: ждали self_update, получили %v %v", uid, c, ok)
+		}
+	}
+	if c, ok := q.Dequeue(ctx, 3, 10*time.Millisecond); ok {
+		t.Fatalf("третий получил %q при двух в раздаче", c.ID)
+	}
+	if !q.HasActiveCommand(3, "self_update") {
+		t.Fatal("придержанная команда обязана оставаться активной: иначе досылка положит вторую")
+	}
+	// Другое действие обходит придержанную self_update.
+	if err := q.Enqueue(3, mkCmd("diag", "diag_now")); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := q.Dequeue(ctx, 3, 10*time.Millisecond); !ok || c.ID != "diag" {
+		t.Fatalf("diag_now застрял за придержанной self_update: %v %v", c, ok)
+	}
+	// Первый ответил -- место освободилось.
+	if err := q.RecordResult(1, wire.CommandResult{ID: "su1", Status: "ok"}); err != nil {
+		t.Fatal(err)
+	}
+	if c, ok := q.Dequeue(ctx, 3, 10*time.Millisecond); !ok || c.ID != "su3" {
+		t.Fatalf("третий после освобождения: %v %v", c, ok)
+	}
+}
+
+// Ждущий опрос просыпается, когда место освобождается, а не только по таймеру.
+func TestQueue_DispatchLimitWakesWaiterOnResult(t *testing.T) {
+	q := New()
+	q.SetDispatchLimit("self_update", 1, time.Hour)
+	_ = q.Enqueue(1, mkCmd("a", "self_update"))
+	_ = q.Enqueue(2, mkCmd("b", "self_update"))
+	if _, ok := q.Dequeue(context.Background(), 1, 10*time.Millisecond); !ok {
+		t.Fatal("первый")
+	}
+	got := make(chan *wire.Command, 1)
+	go func() {
+		c, _ := q.Dequeue(context.Background(), 2, 5*time.Second)
+		got <- c
+	}()
+	time.Sleep(50 * time.Millisecond)
+	_ = q.RecordResult(1, wire.CommandResult{ID: "a", Status: "err"})
+	select {
+	case c := <-got:
+		if c == nil || c.ID != "b" {
+			t.Fatalf("получили %v", c)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ждущий не проснулся по освобождению места")
+	}
+}
+
+// Потерянная раздача (агент ушёл в перезагрузку без ответа) держит место не
+// дольше окна.
+func TestQueue_DispatchLimitWindowFreesLostSlot(t *testing.T) {
+	q := New()
+	q.SetDispatchLimit("self_update", 1, 30*time.Millisecond)
+	_ = q.Enqueue(1, mkCmd("a", "self_update"))
+	_ = q.Enqueue(2, mkCmd("b", "self_update"))
+	if _, ok := q.Dequeue(context.Background(), 1, 10*time.Millisecond); !ok {
+		t.Fatal("первый")
+	}
+	time.Sleep(40 * time.Millisecond)
+	if c, ok := q.Dequeue(context.Background(), 2, 10*time.Millisecond); !ok || c.ID != "b" {
+		t.Fatalf("окно истекло, а место не освободилось: %v %v", c, ok)
+	}
+}
