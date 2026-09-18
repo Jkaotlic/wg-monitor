@@ -10,10 +10,12 @@ import { fleetRow } from '../src/fleet.js'
 // схема и заголовок угадывали РАЗНЫЕ туннели. Фикстура -- обезличенный снимок
 // ответов прода (до новых полей egress/reserve).
 
-function screen(traffic) {
+// reserveOnlyAlert -- признак строки /routers: сервер нового бэкенда ставит
+// его, когда все тревоги -- по запасным звеньям несущего.
+function screen(traffic, reserveOnlyAlert = false) {
   const { router, incidents } = SNAP
   const { tunnels } = SNAP.events
-  const headline = routerHeadline({ router, traffic, incidents, tunnels })
+  const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
   const reserve = reserveLine({ traffic, incidents, tunnels, via: path.via })
   return { headline, path, reserve }
@@ -46,7 +48,7 @@ describe('реплей workrouter 18.09: агент назвал несущег�
     egress_tunnel_name: 'vpn-hip',
     reserve_tunnel_ids: [],
   }
-  const s = screen(traffic)
+  const s = screen(traffic, true)
 
   it('ветка VPN зелёная, через несущего, с его задержкой', () => {
     expect(s.path.tunnel).toBe('up')
@@ -94,7 +96,7 @@ describe('несущий известен', () => {
   it('упал один из двух запасных -- тег не говорит «резерва нет»', () => {
     const three = [...tunnels, { tunnel_id: 'awg15', name: 'fi', run_state: 'running', status: 'ok' }]
     const traffic = { mode: 'split', egress_tunnel_id: 'awg10', egress_tunnel_name: 'nl2', reserve_tunnel_ids: ['awg15'] }
-    const h = routerHeadline({ router: ONLINE, traffic, incidents: [{ check_name: 'tunnel_awg14' }], tunnels: three })
+    const h = routerHeadline({ router: ONLINE, traffic, incidents: [{ check_name: 'tunnel_awg14' }], tunnels: three, reserveOnlyAlert: true })
     expect(h.tone).toBe('warn')
     expect(h.tag).not.toMatch(/резерва нет/)
     expect(h.verdict).toContain('«nl2»')
@@ -106,7 +108,7 @@ describe('reserve_tunnel_ids -- omitempty', () => {
   // маршрутизации отсутствие поля значит «живых запасных нет».
   it('поля нет при названном несущем -- резерва нет, а не «любой running»', () => {
     const traffic = { ...SNAP.events.traffic, egress_tunnel_id: 'awg14', egress_tunnel_name: 'vpn-hip' }
-    const s = screen(traffic)
+    const s = screen(traffic, true)
     expect(s.reserve).toBeUndefined()
     expect(s.headline.tag).toBe('всё работает, резерва нет')
   })

@@ -552,7 +552,7 @@ function ExitCompareSection({ routerID, traffic, asleep }) {
 }
 
 
-export function RouterDetail({ id, panelURL, openSheet, onTab }) {
+export function RouterDetail({ id, panelURL, reserveOnlyAlert, openSheet, onTab }) {
   const { wide } = useContext(AppContext)
   const [router, setRouter] = useState(null)
   const [incidents, setIncidents] = useState([])
@@ -638,7 +638,9 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
 
   // Шапка -- главная новость экрана, и порядок её веток задан в
   // routerHeadline: молчащий роутер перебивает любое другое показание.
-  const headline = routerHeadline({ router, traffic, incidents, tunnels })
+  // reserveOnlyAlert -- из строки списка роутеров: «всё работает, резерва
+  // нет» говорим только по слову сервера (он видит политики целиком).
+  const headline = routerHeadline({ router, traffic, incidents, tunnels, reserveOnlyAlert })
   const path = pathState({ traffic, incidents, tunnels, stale: headline.stale })
   // Резерв -- живые запасные звенья политики несущего (reserve_tunnel_ids от
   // бэкенда), а у старых агентов -- любой живой VPN-туннель, кроме несущего.
@@ -755,7 +757,7 @@ export function RouterDetail({ id, panelURL, openSheet, onTab }) {
               key={inc.check_name}
               routerID={id}
               incident={inc}
-              whySuppressed={i === 0 && headline.tone === 'danger'}
+              whySuppressed={inc.check_name === headline.check && headline.tone === 'danger'}
               onUpdate={updateIncident}
               asleep={asleep}
               onDone={loadData}
