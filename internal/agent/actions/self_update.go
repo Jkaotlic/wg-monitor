@@ -683,7 +683,7 @@ func httpGetWithFallback(ctx context.Context, primary, fallback *http.Client, ur
 	}
 	body, fallbackErr := httpGetLimited(ctx, fallback, url, limit)
 	if fallbackErr != nil {
-		return nil, fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+		return nil, fmt.Errorf("%w; retry via %s failed: %w", err, fallbackLabel, fallbackErr)
 	}
 	return body, nil
 }
@@ -698,7 +698,7 @@ func httpGetToFileWithFallback(ctx context.Context, primary, fallback *http.Clie
 	}
 	sha, fallbackErr := httpGetToFile(ctx, fallback, rawURL, dst, maxBytes)
 	if fallbackErr != nil {
-		return "", fmt.Errorf("%w; retry via %s failed: %v", err, fallbackLabel, fallbackErr)
+		return "", fmt.Errorf("%w; retry via %s failed: %w", err, fallbackLabel, fallbackErr)
 	}
 	return sha, nil
 }
